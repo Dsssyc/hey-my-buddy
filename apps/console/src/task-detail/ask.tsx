@@ -22,9 +22,9 @@ export function Ask({ inquiry, highlighted = false }: { inquiry: Inquiry; highli
   return <div ref={ref} data-inquiry-id={inquiry.inquiryId} data-highlighted={highlighted} className="transition-colors duration-150 data-[highlighted=true]:bg-selected-row data-[highlighted=true]:ring-1 data-[highlighted=true]:ring-ring motion-reduce:transition-none">
     <Node mark="ask">
       <Quote>
-        <div className="flex items-baseline gap-2 text-xs text-ink3">
-          <span className="min-w-0">{t("inquiry.head")} · <Moment at={inquiry.createdAt} /></span>
-          <span className="ml-auto">{explanation && !endedReason && (inquiry.state === "discarded" || inquiry.state === "unavailable")
+        <div className="flex flex-wrap items-baseline gap-x-2 gap-y-1 text-xs text-ink3">
+          <span className="shrink-0 whitespace-nowrap">{t("inquiry.head")} · <Moment at={inquiry.createdAt} /></span>
+          <span className="min-w-0 flex-auto">{explanation && !endedReason && (inquiry.state === "discarded" || inquiry.state === "unavailable")
             ? <Hint text={explanation}><span tabIndex={0} className="rounded-sm underline decoration-dotted underline-offset-2 outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50">{word}</span></Hint>
             : word}</span>
         </div>

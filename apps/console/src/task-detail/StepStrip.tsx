@@ -8,6 +8,7 @@ import { Button } from "@/components/ui/button";
 import type { MacroTaskTimeline, TimelineRow } from "../macro-task-types";
 import { buddyColorsFor } from "../timeline/buddyColors";
 import { Axis, Track } from "../timeline/Tracks";
+import { CONCLUSION_OUTSET_PX as SLACK } from "../timeline/ConclusionMark";
 import { timelineScaleInput } from "../timeline/scale";
 import { useTimelineZoom } from "../timeline/useTimelineZoom";
 import { useTimelineGestures } from "../timeline/useTimelineGestures";
@@ -19,7 +20,6 @@ import { SETTLING_EVENTS, stepForItem } from "./steps";
 import type { Step, Steps } from "./steps";
 import { modelEffort } from "./names";
 
-const SLACK = 8;
 const STRIP_PX = 44;
 
 /** Where a step's slice sits, from recorded facts only; a step with no instant of its own anchors on the wait that leads to it. */

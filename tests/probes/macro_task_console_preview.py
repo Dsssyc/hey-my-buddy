@@ -601,19 +601,19 @@ def integration(integration_id: str, artifact_id: str, attempt_id: str, host: st
 
 
 def message(message_id: str, attempt_id: str | None, question: str, *, author: str, created: str, state: str,
-            reason: dict | None = None, note: str | None = None,
+            reason: dict | None = None,
             delivered: str | None = None, answer: str | None = None,
             answered: str | None = None, delivery_mode: str | None = None) -> dict:
     """One inquiry as ``message_list`` returns it; ``taskId`` is set when the run is assembled."""
     return {"messageId": message_id, "taskId": None, "attemptId": attempt_id, "inquiryId": message_id,
-            "direction": "question", "author": author, "recipient": "worker",
+            "direction": "question", "author": host_actor(author),
             "question": question, "questionBytes": len(question.encode()),
-            "questionSha256": digest(f"question-{message_id}"), "state": state, "reason": reason, "note": note,
+            "questionSha256": digest(f"question-{message_id}"), "state": state, "reason": reason,
             "delivery": ({**({"deliveredAt": delivered} if delivered else {}),
                           **({"admittedDelivery": delivery_mode} if delivery_mode else {})} or None),
             "answer": ({"text": answer, "bytes": len(answer.encode()), "via": "tool", "toolCallId": None,
                         "at": answered, "truncated": False, "source": "native"} if answer else None),
-            "attempts": 1, "createdAt": created, "updatedAt": answered or delivered or created, "revision": 2}
+            "createdAt": created, "updatedAt": answered or delivered or created, "revision": 2}
 
 
 def continuation(continuation_id: str, attempt_id: str, text: str, *, request_id: str | None,
@@ -2861,6 +2861,9 @@ REQUIRED_KEYS = {
                       "requestId", "artifactId"},
     "MacroTaskTimeline": {"macroTask", "observedAt", "cursor", "rows", "spans", "events", "totals",
                           "truncated", "filtered", "scopeComplete"},
+    "Message": {"messageId", "taskId", "attemptId", "inquiryId", "direction", "author", "question",
+                "questionBytes", "questionSha256", "state", "reason", "delivery", "answer",
+                "createdAt", "updatedAt", "revision"},
 }
 
 
@@ -3172,7 +3175,17 @@ def validate_fixtures() -> list[str]:
     for entry in FIXTURES["runs"].values():
         view = workflow_get({"runId": entry["runId"], "includeAudit": True, "routingHistory": {}})
         problems.extend(reason_problems(view, registry))
-        problems.extend(reason_problems(message_list({"runId": entry["runId"]}), registry))
+        inquiries = message_list({"runId": entry["runId"]})
+        problems.extend(reason_problems(inquiries, registry))
+        for inquiry in inquiries["messages"]:
+            # Match store._message_view, including its structured actor and the
+            # removal of recipient, attempts and authored notes in schema 28.
+            if set(inquiry) != REQUIRED_KEYS["Message"]:
+                problems.append(f"{inquiry['messageId']}: message view keys drifted")
+            author = inquiry.get("author")
+            if (not isinstance(author, dict) or set(author) != {"role", "id"}
+                    or not all(isinstance(value, str) and value for value in author.values())):
+                problems.append(f"{inquiry['messageId']}: message author must be a structured actor")
         if "waitReason" in view:
             problems.append(f"{entry['runId']}: retired waitReason must be absent")
         if entry["kind"] == "decision":

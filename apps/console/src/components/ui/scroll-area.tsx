@@ -7,6 +7,7 @@ function ScrollArea({
   children,
   viewportProps,
   orientation = "vertical",
+  reserveScrollbarGutter = false,
   type = "auto",
   scrollHideDelay = 600,
   onScrollCapture,
@@ -15,6 +16,8 @@ function ScrollArea({
   viewportProps?: Omit<React.ComponentProps<typeof ScrollAreaPrimitive.Viewport>, "className"> & { className?: string } & Record<`data-${string}`, string | undefined>
   /** "both" adds the horizontal scrollbar beside the vertical one. */
   orientation?: "vertical" | "both"
+  /** Keep the custom vertical scrollbar outside the viewport's measured width. */
+  reserveScrollbarGutter?: boolean
 }) {
   const { className: viewportClassName, ...viewportRest } = viewportProps ?? {}
   const [scrolling, setScrolling] = React.useState(false)
@@ -33,7 +36,7 @@ function ScrollArea({
       type={type}
       scrollHideDelay={scrollHideDelay}
       onScrollCapture={recordScroll}
-      className={cn("group/scroll-area relative", className)}
+      className={cn("group/scroll-area relative [--scrollbar-size:--spacing(2.5)]", reserveScrollbarGutter && "pr-(--scrollbar-size)", className)}
       {...props}
     >
       <ScrollAreaPrimitive.Viewport
@@ -65,9 +68,9 @@ function ScrollBar({
       className={cn(
         "pointer-events-none flex touch-none p-px opacity-0 transition-[opacity,color] duration-150 motion-reduce:transition-none select-none group-hover/scroll-area:pointer-events-auto group-hover/scroll-area:opacity-100 group-data-[scrolling=true]/scroll-area:pointer-events-auto group-data-[scrolling=true]/scroll-area:opacity-100",
         orientation === "vertical" &&
-          "h-full w-2.5 border-l border-l-transparent",
+          "h-full w-(--scrollbar-size) border-l border-l-transparent",
         orientation === "horizontal" &&
-          "h-2.5 flex-col border-t border-t-transparent",
+          "h-(--scrollbar-size) flex-col border-t border-t-transparent",
         className
       )}
       {...props}

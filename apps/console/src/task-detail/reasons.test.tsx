@@ -25,11 +25,11 @@ describe("program reasons alongside authored notes", () => {
       <Ask inquiry={inquiry({ state: "unavailable", reason: beforeQueue })} />
       <Ask inquiry={inquiry({ state: "unavailable", reason: afterDelivery })} />
     </TooltipProvider>);
-    expect(screen.getByText("在 Worker 下次检查点时送达，现在尚未送达")).toBeTruthy();
+    expect(screen.getByText("在 Worker 下次检查点时送达，现在尚未送达。")).toBeTruthy();
     expect(screen.getByText("此回合已结束，问询未排入。")).toBeTruthy();
     expect(screen.getByText("问询已送达，但 Worker 在回合结束前没有答复。")).toBeTruthy();
     act(() => setLanguageChoice("en"));
-    expect(screen.getByText("Will be delivered at the Worker's next checkpoint; not delivered yet")).toBeTruthy();
+    expect(screen.getByText("Will be delivered at the Worker's next checkpoint; not delivered yet.")).toBeTruthy();
     expect(screen.getByText("The turn had ended before the inquiry could be queued.")).toBeTruthy();
     expect(screen.getByText("The inquiry was delivered, but the Worker did not answer before the turn ended.")).toBeTruthy();
   });
