@@ -270,14 +270,13 @@ def _frozen_facts(frozen: dict) -> dict:
 
 def current_router(connection, *, frozen: dict | None = None, after_index: int = -1,
                    now: str | None = None) -> RouterResolution:
-    """The one read-only resolution entry for every Router role plane.
+    """Read-only resolution of the current buddy for the routing plane.
 
     Walks the ordered settings list from ``after_index + 1`` strictly forward and
     returns the first eligible buddy that is outside its skip window. Reading never
     writes: skip windows, retry-in-progress facts and per-buddy streaks are projected
     from recorded facts only, and a still-unavailable preflight is recorded by the
-    caller, never here. Maintenance and portrait planes reuse this entry instead of
-    keeping their own current selection.
+    caller, never here.
 
     ``frozen`` continues one request inside its own snapshot: the frozen list,
     identities, mode, budget and interval are used unchanged and later

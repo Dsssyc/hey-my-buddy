@@ -4,7 +4,9 @@ import unittest
 
 from blackboard.tasks.test_workflow import WorkflowTestCase, BUDDY
 from support import FakeClock
-from hey_my_buddy.blackboard.routing.evidence import candidate_facts, round_classification, NEITHER
+from hey_my_buddy.blackboard.routing.evidence import (
+    NEITHER, candidate_facts, domain_statistics, round_classification,
+)
 from hey_my_buddy.protocol.stop import TERMINATION_REASONS
 from hey_my_buddy.protocol.usage import normalize_token_usage
 
@@ -82,6 +84,32 @@ class RoutingEvidenceTests(WorkflowTestCase):
             self.assertEqual(db.total_changes, changes)
         return list(value.values())
 
+    def domain_facts(self, *buddies):
+        rows = [{"buddy_id": str(index), **buddy} for index, buddy in enumerate(buddies or (BUDDY,))]
+        with self.board_.store.db.read() as db:
+            changes = db.total_changes
+            value = domain_statistics(db, rows)
+            self.assertEqual(db.total_changes, changes)
+        return list(value.values())
+
+    def classify(self, assignments, nodes):
+        with self.board_.store.db.write() as db:
+            maintenance_run_id = "fixture-maintenance"
+            db.execute(
+                "INSERT INTO maintenance_runs(maintenance_run_id,trigger_type,buddy_id,task_id,state,started_at,finished_at)"
+                " VALUES(?,'manual','fixture-buddy',?,'completed',?,?)",
+                (maintenance_run_id, assignments[0][0]["runId"], self.clock(), self.clock()))
+            for node_id, parent_id, merged_into_id in nodes:
+                db.execute(
+                    "INSERT INTO domain_nodes(node_id,name,definition,parent_id,merged_into_id,maintenance_run_id)"
+                    " VALUES(?,?,?,?,?,?)",
+                    (node_id, node_id, f"{node_id} expertise", parent_id, merged_into_id, maintenance_run_id))
+            for run, node_id, task_type in assignments:
+                db.execute(
+                    "INSERT INTO micro_task_classifications(run_id,domain_node_id,task_type,maintenance_run_id)"
+                    " VALUES(?,?,?,?)",
+                    (run["runId"], node_id, task_type, maintenance_run_id))
+
     def test_no_data_is_explicit_and_provider_changes_share_only_kind_statistics(self):
         empty = self.facts()[0]
         self.assertEqual(empty["statistics"]["samples"], 0)
@@ -100,6 +128,58 @@ class RoutingEvidenceTests(WorkflowTestCase):
                          "failureRate": 0, "medianDeliverySeconds": 12, "usage": NO_USAGE})
         self.assertEqual(other_effort["statistics"]["samples"], 0)
         self.assertEqual(other_harness["statistics"]["samples"], 0)
+
+    def test_domain_statistics_roll_up_descendants_and_follow_merge_target(self):
+        child, _ = self.end_turn(self.new_run(), seconds=10, usage=self.usage(10, 2, 3))
+        self.accept_run(self.board_, child)
+        merged, _ = self.end_turn(self.new_run(), seconds=20, usage=self.usage(30, 6, 9))
+        self.accept_run(self.board_, merged)
+        failed, _ = self.end_turn(self.new_run(), seconds=30, failed=True)
+        self.conclude(failed)
+        unclassified, _ = self.end_turn(self.new_run(), seconds=40)
+        self.accept_run(self.board_, unclassified)
+        self.classify(
+            [(child, "child", "create"), (merged, "old", "debug"), (failed, "sibling", "create")],
+            [("root", None, None), ("child", "root", None), ("sibling", "root", None),
+             ("old", None, "sibling")])
+
+        same, other_provider, other_kind = self.domain_facts(
+            BUDDY, {**BUDDY, "provider": "other"}, {**BUDDY, "effort": "high"})
+        self.assertEqual(same["overall"], self.facts()[0]["statistics"])
+        self.assertEqual(same["overall"], other_provider["overall"])
+        self.assertEqual(same["byDomain"], other_provider["byDomain"])
+        self.assertEqual((other_kind["overall"]["samples"], other_kind["byDomain"],
+                          other_kind["byDomainTaskType"]), (0, {}, {}))
+        self.assertEqual(same["overall"]["samples"], 4)
+        self.assertEqual(set(same["byDomain"]), {"root", "child", "sibling"})
+        root = same["byDomain"]["root"]
+        self.assertEqual((root["samples"], root["successes"], root["failures"],
+                          root["firstPassRate"], root["failureRate"]), (3, 2, 1, 2 / 3, 1 / 3))
+        self.assertEqual(root["medianDeliverySeconds"], 15)
+        self.assertEqual(root["usage"], {"samples": 2, "medianInputTokens": 20,
+                                          "medianCachedInputTokens": 4, "medianOutputTokens": 6})
+        self.assertEqual(same["byDomain"]["child"]["samples"], 1)
+        self.assertEqual(same["byDomain"]["sibling"]["samples"], 2)
+        self.assertEqual(set(same["byDomainTaskType"]["root"]), {"create", "debug"})
+        self.assertEqual(same["byDomainTaskType"]["root"]["create"]["samples"], 2)
+        self.assertEqual(same["byDomainTaskType"]["sibling"]["debug"]["samples"], 1)
+        self.assertEqual(same["byDomainTaskType"]["sibling"]["create"]["failureRate"], 1)
+        self.assertNotIn("old", same["byDomainTaskType"])
+
+    def test_domain_cell_retains_rework_and_complete_usage_rule(self):
+        run, _ = self.end_turn(self.new_run(), seconds=3, usage=self.usage(10, 2, 3))
+        self.continue_run(self.board_, run, command_id="review-domain")
+        run, _ = self.end_turn(run, seconds=5, usage=self.usage(20, 4, 5, completeness="partial"))
+        self.accept_run(self.board_, run)
+        self.classify([(run, "leaf", "review")], [("root", None, None), ("leaf", "root", None)])
+
+        facts = self.domain_facts()[0]
+        cell = facts["byDomainTaskType"]["leaf"]["review"]
+        self.assertEqual((cell["samples"], cell["firstPasses"], cell["reworkRounds"],
+                          cell["medianDeliverySeconds"]), (1, 0, 1, 4))
+        self.assertEqual(cell["usage"], NO_USAGE)
+        self.assertEqual(cell, facts["byDomain"]["leaf"])
+        self.assertEqual(cell, facts["byDomain"]["root"])
 
     def test_usage_sums_ability_turns_per_sample_and_reports_medians(self):
         first, _ = self.end_turn(self.new_run(), disposition="assistance",

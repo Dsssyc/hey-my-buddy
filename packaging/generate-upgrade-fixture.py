@@ -26,8 +26,8 @@ import tarfile
 import tempfile
 import uuid
 
-BASE = "4a9fce3e11c48c55975f9b1251c0a8f03a31f707"
-BASE_VERSION = "0.54.0"
+BASE = "4de1dd9478980e924a4a86b2c50aaca33e33b79d"
+BASE_VERSION = "0.54.1"
 BASE_SCHEMA = 30
 # An existing five-file repository commit keeps workspace capture bounded.
 # This is the workspace input, never the source used to create the database.

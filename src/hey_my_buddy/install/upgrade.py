@@ -22,6 +22,7 @@ from .launcher import write_active_runtime
 from ..protocol.contracts import CONTRACT_VERSION
 from ..protocol.service_process import independent_service_popen
 from ..blackboard.store.db import SCHEMA_VERSION, utc_now
+from ..blackboard.store.upgrade import UPGRADE_BASE_SCHEMA, upgrade_state
 from ..errors import BoardError
 
 # A private C-Two 0.7.5 restart with one frozen execution released ownership
@@ -64,8 +65,8 @@ def file_lock(path: Path, *, timeout: float = 0):
 
 def _idle_board(connection: sqlite3.Connection) -> int:
     schema = connection.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone()
-    if schema is None or schema[0] != str(SCHEMA_VERSION):
-        raise BoardError('UNSUPPORTED_SCHEMA', f'Upgrade requires schema {SCHEMA_VERSION}')
+    if schema is None or schema[0] not in (str(UPGRADE_BASE_SCHEMA), str(SCHEMA_VERSION)):
+        raise BoardError('UNSUPPORTED_SCHEMA', f'Upgrade requires schema {UPGRADE_BASE_SCHEMA} or {SCHEMA_VERSION}')
     # A micro-task Host boundary has no autonomous next turn. A recorded or
     # queued continuation still has work to prepare/claim, even if the run
     # currently reports a Host boundary. Routing and helper tasks are checked
@@ -513,13 +514,18 @@ def upgrade(state: Path, *, skill_source: Path | None = None, skill_target: Path
                         backed_up = backup.create(state, runtime_identity={'identity': identity}, plugin_commit=runtime.read_ready(previous).get('sourceCommit'), contract_version=contract_version)
                         journal.update(phase='backed-up', backup=backed_up)
                         write_journal(marker, journal)
-                    journal.update(phase='prepared', expected=before)
+                    expected = before
+                    if contract_changed and before['schema'] == UPGRADE_BASE_SCHEMA:
+                        migration = upgrade_state(state)
+                        expected = {**idle_snapshot(state), 'runtimeSettings': runtime_settings}
+                        journal['schemaUpgrade'] = migration
+                    journal.update(phase='prepared', expected=expected)
                     write_journal(marker, journal)
                 active = target
                 health = start(state, target)
-                evidence = verify_started(state, target, health, before, contract_changed=contract_changed)
+                evidence = verify_started(state, target, health, expected, contract_changed=contract_changed)
                 _verify_skill_generation(skill_paths, target, health)
-                journal.update(phase='skill-switching', expected=before)
+                journal.update(phase='skill-switching', expected=expected)
                 write_journal(marker, journal)
                 _publish_skill(journal, skill_paths)
                 write_journal(marker, journal)
