@@ -1,4 +1,4 @@
-"""Private C-Two 0.7.6 endpoint and IPC profile.
+"""Private C-Two 0.8.1 endpoint and IPC profile.
 
 Apply before the first local register/connect. Unix roles use <state>/ipc,
 independent of inherited C2_IPC_ROOT; Windows retains the native Named Pipe domain.
@@ -21,6 +21,8 @@ import c_two as cc
 #: can be compared against the source it claims to run.
 PROFILE_ID = "hey-my-buddy-lightweight-1"
 MAX_WAIT_CAPACITY = 48
+#: Shared by the launcher readiness wait and every native RPC server startup.
+SERVICE_STARTUP_TIMEOUT_SECONDS = 20
 
 _MIB = 1024 * 1024
 
@@ -161,7 +163,7 @@ def _apply(role: str, state_dir: Path, *, create: bool) -> dict:
         if not active:
             overrides = _role_overrides(role)
             if role == "server":
-                cc.set_server(ipc_overrides=overrides)
+                cc.set_server(ipc_overrides=overrides, startup_timeout=SERVICE_STARTUP_TIMEOUT_SECONDS)
             else:
                 cc.set_client(ipc_overrides=overrides)
         _reports.setdefault(role, _build_report(role))

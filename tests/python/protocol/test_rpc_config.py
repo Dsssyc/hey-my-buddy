@@ -1,4 +1,4 @@
-"""Private published C-Two 0.8.0 RPC, non-pool accounting and control capacity.
+"""Private published C-Two 0.8.1 RPC, non-pool accounting and control capacity.
 
 Every native process configures an explicit test-owned state/ipc directory before
 local I/O. Memory statistics are C-Two accounting, never RSS.
@@ -244,6 +244,12 @@ class ProfileTests(unittest.TestCase):
         self.assertEqual((self.state / "ipc").stat().st_mode & 0o777, 0o700)
         self.assertEqual(dict(os.environ), before)
 
+    def test_server_uses_the_shared_startup_budget(self):
+        with mock.patch.object(rpc_config, "SERVICE_STARTUP_TIMEOUT_SECONDS", 1.25), \
+             mock.patch.object(rpc_config.cc, "set_server", wraps=rpc_config.cc.set_server) as configure:
+            rpc_config.configure_server(self.state)
+        configure.assert_called_once_with(ipc_overrides=rpc_config.SERVER_OVERRIDES, startup_timeout=1.25)
+
     def test_windows_never_passes_root_override(self):
         with mock.patch.object(rpc_config, "os", SimpleNamespace(name="nt", environ=os.environ)), mock.patch.object(rpc_config.cc, "set_local_endpoint") as endpoint:
             rpc_config.configure_local_endpoint(self.state)
@@ -399,7 +405,7 @@ class IsolatedTransportTests(unittest.TestCase):
         for size in (4096, MAX_MESSAGE_BYTES):
             legal = server.call("echo", f"bytes:{size}")
             self.assertTrue(legal["ok"], legal)
-            self.assertEqual(legal["version"], "0.8.0")
+            self.assertEqual(legal["version"], "0.8.1")
             self.assertEqual(legal["bytes"], size)
             self.assertEqual(legal["sha256"], hashlib.sha256(b"x" * size).hexdigest())
         skeleton = encode_message({"token": "t", "pad": ""})

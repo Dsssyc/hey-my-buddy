@@ -321,7 +321,12 @@ def main() -> int:
         for signum in (signal.SIGTERM, signal.SIGINT):
             signal.signal(signum, lambda *_args: daemon.on_stop({"drainSeconds": DRAIN_SECONDS_DEFAULT}))
         return daemon.run()
-    except BoardError as error:
+    except RuntimeError as error:
+        if not isinstance(error, BoardError):
+            if (getattr(error, "category", None) != "lifecycle"
+                    or getattr(error, "lifecycle_kind", None) != "startup_timeout"):
+                raise
+            error = ServiceError("SERVICE_START_TIMEOUT", str(error))
         atomic_json(directory / "startup-error.json", {"pid": os.getpid(), **error.payload()})
         # An actionable, non-destructive failure: never fall back to an old
         # implementation and never rewrite records.
