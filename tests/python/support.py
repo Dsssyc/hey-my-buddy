@@ -202,7 +202,7 @@ def assert_private_processes_gone(directory: Path) -> None:
     processes, problems, _ = observed_processes(Path(directory))
     if processes or problems:
         raise AssertionError(f"Private test process shutdown unconfirmed; preserved {directory}: "
-                             f"{len(processes)} process(es), {problems}")
+                             f"{len(processes)} process(es), {problems}; processes={processes}")
 
 
 def cleanup_private_tree(directory: Path, state_directories: tuple[Path, ...]) -> None:
@@ -225,7 +225,7 @@ def cleanup_private_tree(directory: Path, state_directories: tuple[Path, ...]) -
     held = held_locks(directory)["daemon"]
     if held or processes or problems:
         raise AssertionError(f"Private fixture shutdown unconfirmed; preserved {directory}: "
-                             f"{len(held)} lock(s), {len(processes)} process(es), {problems}")
+                             f"{len(held)} lock(s), {len(processes)} process(es), {problems}; processes={processes}")
     remove_private_test_root(directory)
 
 

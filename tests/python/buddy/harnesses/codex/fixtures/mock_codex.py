@@ -355,11 +355,11 @@ def main():
                 # The controller test releases this only after it reads a
                 # flushed message while no completed item has been sent.
                 release = state_path().with_suffix('.release')
-                deadline = time.monotonic() + 5
-                while not release.exists() and time.monotonic() < deadline:
+                # The caller owns the fixture readiness budget and stops this
+                # child if it cannot observe the stream. Completion depends on
+                # that observation, never on how quickly the caller is scheduled.
+                while not release.exists():
                     time.sleep(0.01)
-                if not release.exists():
-                    raise RuntimeError('session stream was not visible before completion')
                 if case == 'session-stream-disconnect':
                     return
                 send({"method": "item/completed", "params": {"threadId": thread_id, "turnId": turn_id,
