@@ -12,7 +12,7 @@
 
 对 harness 只运行 `--version`，没有启动桌面界面、读取登录状态、进行模型调用、安装或改系统设置。Windows 脚本经 PowerShell `-EncodedCommand` 传入，没有向测试机写文件，因此没有产生待清理的远程工作目录。未上网查厂商材料。未读厂商应用的业务源码，也未解包 `app.asar`；读取了本任务要求的三个 Windows `.cmd` CLI 包装文件全文，下面照录。Linux 没有机器，整体为“未观察”。“未安装”仅对应本次安装登记、应用目录与命令位置的检查范围，不证明磁盘任意位置都没有副本；安装命令和历史均未观察。
 
-本项目对应提交 `bfd61bb6`。读取本项目发现入口与 10-11 的调研记录，并以 `PYTHONPATH` 的等效源码路径导入方式，在 Mac 对四个 harness 各调用一次 `hey_my_buddy.buddy.harnesses.discovery.candidate_snapshot`，没有传 `manual_path` 或替换环境，没有执行健康检查；Windows 没有运行产品代码。每次快照含内部收集的 Node 候选，下面也列出。原始证据在本检出的忽略目录 `tmp/harness-desktop-entries/`：`capture.py` 与各探测脚本保存命令，`*.json` 保存参数与退出码，`*.stdout`、`*.stderr` 保存未经修改的输出字节；四份 `*-snapshot.json` 保存完整函数返回值。Windows 标准输出设置为 UTF-8，PowerShell 在标准错误上的 GBK/CLIXML 字节仍按原样保留。本文将两台机器的主目录分别写作 `~`。
+本项目对应提交 `bfd61bb6`。读取本项目发现入口与 10-11 的调研记录，并以 `PYTHONPATH` 的等效源码路径导入方式，在 Mac 对四个 harness 各调用一次 `hey_my_buddy.buddy.harnesses.discovery.candidate_snapshot`，没有传 `manual_path` 或替换环境，没有执行健康检查；Windows 没有运行产品代码。每次快照含内部收集的 Node 候选。原始证据在本检出的忽略目录 `tmp/harness-desktop-entries/`：`capture.py` 与各探测脚本保存命令，`*.json` 保存参数与退出码，`*.stdout`、`*.stderr` 保存未经修改的输出字节；四份 `*-snapshot.json` 保存完整函数返回值。Windows 标准输出设置为 UTF-8，PowerShell 在标准错误上的 GBK/CLIXML 字节仍按原样保留。本文将两台机器的主目录分别写作 `~`。
 
 ## 看到的事实
 
@@ -145,87 +145,7 @@ IF EXIST "%dp0%\node.exe" (
 endLocal & goto #_undefined_# 2>NUL || title %COMSPEC% & "%_prog%"  "%dp0%\node_modules\@openai\codex\bin\codex.js" %*
 ```
 
-Mac 源码候选快照的全部 harness 候选如下。每行表示“目录内接该列命令名”的一个候选，四个命令名依次为 `claude`、`codex`、`dsh`、`zcode`；只有三个 `app` 行使用“仅”后面给出的完整文件名。单元格为原数组序号及 `exists`（有/无）；`—` 表示没有列入数组，不能读作文件不存在。`source` 是原值。按路径去重后保留先遇到的来源，故 Codex 在 `Contents/Resources` 的 `path` 行没有第二项。短期目录名是本次进程的观察值。
-
-| 目录或限定文件 | `source` | Claude | Codex | DSH | ZCode |
-| --- | --- | --- | --- | --- | --- |
-| `~/.nvm/versions/node/v24.21.0/bin/{命令}` | `nvm` | 1 / 无 | 1 / 有 | 1 / 无 | 1 / 无 |
-| `~/.nvm/versions/node/v24.21.0/{命令}` | `nvm` | 2 / 无 | 2 / 无 | 2 / 无 | 2 / 无 |
-| `/opt/homebrew/bin/{命令}` | `common` | 3 / 无 | 3 / 无 | 3 / 无 | 3 / 无 |
-| `/usr/local/bin/{命令}` | `common` | 4 / 无 | 4 / 无 | 4 / 无 | 4 / 无 |
-| `/usr/bin/{命令}` | `common` | 5 / 无 | 5 / 无 | 5 / 无 | 5 / 无 |
-| `~/.local/bin/{命令}` | `common` | 6 / 有 | 6 / 无 | 6 / 有 | 6 / 无 |
-| `~/.npm-global/bin/{命令}` | `common` | 7 / 无 | 7 / 无 | 7 / 无 | 7 / 无 |
-| `~/.volta/bin/{命令}` | `common` | 8 / 无 | 8 / 无 | 8 / 无 | 8 / 无 |
-| `/Applications/Claude.app/Contents/Resources/claude`（仅该列） | `app` | 9 / 无 | — | — | — |
-| `~/.nvm/versions/node/v24.21.0/lib/node_modules/@openai/codex/node_modules/@openai/codex-darwin-arm64/vendor/aarch64-apple-darwin/codex-path/{命令}` | `path` | 10 / 无 | 10 / 无 | 9 / 无 | 10 / 无 |
-| `~/llama.cpp/build/bin/{命令}` | `path` | 11 / 无 | 11 / 无 | 10 / 无 | 11 / 无 |
-| `/opt/homebrew/sbin/{命令}` | `path` | 12 / 无 | 12 / 无 | 11 / 无 | 12 / 无 |
-| `/System/Cryptexes/App/usr/bin/{命令}` | `path` | 13 / 无 | 13 / 无 | 12 / 无 | 13 / 无 |
-| `/bin/{命令}` | `path` | 14 / 无 | 14 / 无 | 13 / 无 | 14 / 无 |
-| `/usr/sbin/{命令}` | `path` | 15 / 无 | 15 / 无 | 14 / 无 | 15 / 无 |
-| `/sbin/{命令}` | `path` | 16 / 无 | 16 / 无 | 15 / 无 | 16 / 无 |
-| `/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/local/bin/{命令}` | `path` | 17 / 无 | 17 / 无 | 16 / 无 | 17 / 无 |
-| `/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/bin/{命令}` | `path` | 18 / 无 | 18 / 无 | 17 / 无 | 18 / 无 |
-| `/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/appleinternal/bin/{命令}` | `path` | 19 / 无 | 19 / 无 | 18 / 无 | 19 / 无 |
-| `/pkg/env/global/bin/{命令}` | `path` | 20 / 无 | 20 / 无 | 19 / 无 | 20 / 无 |
-| `/Library/Apple/usr/bin/{命令}` | `path` | 21 / 无 | 21 / 无 | 20 / 无 | 21 / 无 |
-| `/Applications/VMware Fusion.app/Contents/Public/{命令}` | `path` | 22 / 无 | 22 / 无 | 21 / 无 | 22 / 无 |
-| `/usr/local/share/dotnet/{命令}` | `path` | 23 / 无 | 23 / 无 | 22 / 无 | 23 / 无 |
-| `/usr/local/go/bin/{命令}` | `path` | 24 / 无 | 24 / 无 | 23 / 无 | 24 / 无 |
-| `/opt/podman/bin/{命令}` | `path` | 25 / 无 | 25 / 无 | 24 / 无 | 25 / 无 |
-| `~/.codex/tmp/arg0/codex-arg0x5bCTM/{命令}` | `path` | 26 / 无 | 26 / 无 | 25 / 无 | 26 / 无 |
-| `/Applications/ChatGPT.app/Contents/Resources/codex-cli/codex-path/{命令}` | `path` | 27 / 无 | 27 / 无 | 26 / 无 | 27 / 无 |
-| `~/.codex/tmp/arg0-macos/codex-arg0Ct8XqF/{命令}` | `path` | 28 / 无 | 28 / 无 | 27 / 无 | 28 / 无 |
-| `~/.cache/codex-runtimes/codex-primary-runtime/dependencies/bin/override/{命令}` | `path` | 29 / 无 | 29 / 无 | 28 / 无 | 29 / 无 |
-| `~/.cargo/bin/{命令}` | `path` | 30 / 无 | 30 / 无 | 29 / 无 | 30 / 无 |
-| `~/go/bin/{命令}` | `path` | 31 / 无 | 31 / 无 | 30 / 无 | 31 / 无 |
-| `~/.cache/codex-runtimes/codex-primary-runtime/dependencies/bin/fallback/{命令}` | `path` | 32 / 无 | 32 / 无 | 31 / 无 | 32 / 无 |
-| `/Applications/ChatGPT.app/Contents/Resources/{命令}` | `path` | 33 / 无 | — | 32 / 无 | 33 / 无 |
-| `/Applications/ChatGPT.app/Contents/Resources/codex-cli/CodexCLI.app/Contents/MacOS/{命令}` | `path` | 34 / 无 | 33 / 有 | 33 / 无 | 34 / 无 |
-| `/Applications/ChatGPT.app/Contents/Resources/codex`（仅该列） | `app` | — | 9 / 无 | — | — |
-| `/Applications/ZCode.app/Contents/Resources/glm/zcode.cjs`（仅该列） | `app` | — | — | — | 9 / 有 |
-
-四份 harness 候选数依次为 Claude 34、Codex 33、DSH 33、ZCode 34。`exists=true` 的候选只有 Claude 的 `common` 独立 CLI、Codex 的 `nvm` 独立 CLI 与 `path` 包内 CLI、DSH 的 `common` 独立 CLI、ZCode 的 `app` 包内 `.cjs`。Claude 的固定 `app` 路径和 Codex 的固定 `app` 路径均不存在；DSH 桌面入口没有 `app` 候选。这里的文件存在性来自快照，不能替代上文的版本实测。
-
-快照附带的全部 Node 候选如下，目录后均接 `node`。单元格仍是各自数组序号及文件指纹是否存在；此数组没有 `source` 字段。四份 `managerRecords` 中只有 `~/.nvm/alias/default` 有文件指纹，其他七个记录均无指纹；该记录产生的默认 Node 目录是 `~/.nvm/versions/node/v24.21.0`。原始快照同时保留记录路径、真实路径、大小、mtime，下面不把它们当成 Node 执行验证。
-
-| Node 文件 | Claude 快照 | Codex 快照 | DSH 快照 | ZCode 快照 |
-| --- | --- | --- | --- | --- |
-| `~/.local/bin/node` | 1 / 无 | 7 / 无 | 1 / 无 | 7 / 无 |
-| `~/.nvm/versions/node/v24.21.0/bin/node` | 2 / 有 | 1 / 有 | 2 / 有 | 2 / 有 |
-| `~/.nvm/versions/node/v24.21.0/node` | 3 / 无 | 3 / 无 | 3 / 无 | 3 / 无 |
-| `/opt/homebrew/bin/node` | 4 / 有 | 4 / 有 | 4 / 有 | 4 / 有 |
-| `/usr/local/bin/node` | 5 / 无 | 5 / 无 | 5 / 无 | 5 / 无 |
-| `/usr/bin/node` | 6 / 无 | 6 / 无 | 6 / 无 | 6 / 无 |
-| `~/.npm-global/bin/node` | 7 / 无 | 8 / 无 | 7 / 无 | 8 / 无 |
-| `~/.volta/bin/node` | 8 / 无 | 9 / 无 | 8 / 无 | 9 / 无 |
-| `~/.nvm/versions/node/v24.21.0/lib/node_modules/@openai/codex/node_modules/@openai/codex-darwin-arm64/vendor/aarch64-apple-darwin/codex-path/node` | 9 / 无 | 10 / 无 | 9 / 无 | 10 / 无 |
-| `~/llama.cpp/build/bin/node` | 10 / 无 | 11 / 无 | 10 / 无 | 11 / 无 |
-| `/opt/homebrew/sbin/node` | 11 / 无 | 12 / 无 | 11 / 无 | 12 / 无 |
-| `/System/Cryptexes/App/usr/bin/node` | 12 / 无 | 13 / 无 | 12 / 无 | 13 / 无 |
-| `/bin/node` | 13 / 无 | 14 / 无 | 13 / 无 | 14 / 无 |
-| `/usr/sbin/node` | 14 / 无 | 15 / 无 | 14 / 无 | 15 / 无 |
-| `/sbin/node` | 15 / 无 | 16 / 无 | 15 / 无 | 16 / 无 |
-| `/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/local/bin/node` | 16 / 无 | 17 / 无 | 16 / 无 | 17 / 无 |
-| `/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/bin/node` | 17 / 无 | 18 / 无 | 17 / 无 | 18 / 无 |
-| `/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/appleinternal/bin/node` | 18 / 无 | 19 / 无 | 18 / 无 | 19 / 无 |
-| `/pkg/env/global/bin/node` | 19 / 无 | 20 / 无 | 19 / 无 | 20 / 无 |
-| `/Library/Apple/usr/bin/node` | 20 / 无 | 21 / 无 | 20 / 无 | 21 / 无 |
-| `/Applications/VMware Fusion.app/Contents/Public/node` | 21 / 无 | 22 / 无 | 21 / 无 | 22 / 无 |
-| `/usr/local/share/dotnet/node` | 22 / 无 | 23 / 无 | 22 / 无 | 23 / 无 |
-| `/usr/local/go/bin/node` | 23 / 无 | 24 / 无 | 23 / 无 | 24 / 无 |
-| `/opt/podman/bin/node` | 24 / 无 | 25 / 无 | 24 / 无 | 25 / 无 |
-| `~/.codex/tmp/arg0/codex-arg0x5bCTM/node` | 25 / 无 | 26 / 无 | 25 / 无 | 26 / 无 |
-| `/Applications/ChatGPT.app/Contents/Resources/codex-cli/codex-path/node` | 26 / 无 | 27 / 无 | 26 / 无 | 27 / 无 |
-| `~/.codex/tmp/arg0-macos/codex-arg0Ct8XqF/node` | 27 / 无 | 28 / 无 | 27 / 无 | 28 / 无 |
-| `~/.cache/codex-runtimes/codex-primary-runtime/dependencies/bin/override/node` | 28 / 无 | 29 / 无 | 28 / 无 | 29 / 无 |
-| `~/.cargo/bin/node` | 29 / 无 | 30 / 无 | 29 / 无 | 30 / 无 |
-| `~/go/bin/node` | 30 / 无 | 31 / 无 | 30 / 无 | 31 / 无 |
-| `~/.cache/codex-runtimes/codex-primary-runtime/dependencies/bin/fallback/node` | 31 / 无 | 32 / 无 | 31 / 无 | 32 / 无 |
-| `/Applications/ChatGPT.app/Contents/Resources/node` | 32 / 无 | 33 / 无 | 32 / 无 | 33 / 无 |
-| `/Applications/ChatGPT.app/Contents/Resources/codex-cli/CodexCLI.app/Contents/MacOS/node` | 33 / 无 | 2 / 无 | 33 / 无 | 34 / 无 |
-| `/Applications/ZCode.app/Contents/Resources/glm/node` | — | — | — | 1 / 无 |
+四份 harness 候选数依次为 Claude 34、Codex 33、DSH 33、ZCode 34。`exists=true` 的候选只有 Claude 的 `common` 独立 CLI、Codex 的 `nvm` 独立 CLI 与 `path` 包内 CLI、DSH 的 `common` 独立 CLI、ZCode 的 `app` 包内 `.cjs`。Claude 的固定 `app` 路径和 Codex 的固定 `app` 路径均不存在；DSH 桌面入口没有 `app` 候选。这里的文件存在性来自快照，不能替代上文的版本实测。完整快照分别保存在 `tmp/harness-desktop-entries/claude-snapshot.json`、`tmp/harness-desktop-entries/codex-snapshot.json`、`tmp/harness-desktop-entries/dsh-snapshot.json`、`tmp/harness-desktop-entries/zcode-snapshot.json`。
 
 Linux 的桌面安装、系统登记、包内 CLI、独立 CLI、PATH 与当前发现结果：均未观察。Windows 包内存在 ELF 文件只是一条 Windows 文件观察，没有在 Linux 上执行它。
 
