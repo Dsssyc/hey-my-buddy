@@ -28,7 +28,7 @@ import secrets
 from .read_only import correction_code, no_tool_prompt, valid_answer
 from .zcode_protocol import NativeConnection, NativeError
 from .zcode_runner import NoToolEvidence, configure_session
-from .zcode_static_contract import allowlist_chain_problem
+from .zcode_static_contract import allowlist_chain_problem, lexical_regions
 from .zcode_tool_evidence import ZcodeToolFacts
 
 #: The exact restricted tool set; the native registry filters registrations to
@@ -78,36 +78,42 @@ def native_contract_problem(source_text) -> str | None:
     pair whose complete registration flow, tool-preserving transform, resolver
     return chain and call-site wiring are verified by
     :mod:`~buddy.adapters.zcode_static_contract` through string/comment/bracket-aware
-    tokenization and complete supported templates — a discarded membership
-    test, an ``allowedTools`` object the registration never reads, a rewritten
-    Set or a side-effecting rejection operand each fail with their own reason —
-    and the three read-only registration names. Minified identifiers are read
-    from the text and followed to their declarations, never assumed; versions,
-    hashes and certificates play no part. The caller supplies the text bounded
-    to 32 MiB of the public bundle; no credential or provider configuration
-    ever enters this check.
+    tokenization and complete supported templates over one shared outer code
+    context — a discarded membership test, an ``allowedTools`` object the
+    registration never reads, a rewritten Set, a decoy in a string, comment,
+    template or regex literal or a side-effecting rejection operand each fail
+    with their own reason — and the three read-only registration names.
+    Minified identifiers are read from the text and followed to their
+    declarations in their bound scopes, never assumed; versions, hashes and
+    certificates play no part. The caller supplies the text bounded to 32 MiB
+    of the public bundle; no credential or provider configuration ever enters
+    this check.
     """
     if not isinstance(source_text, str) or not source_text.strip():
         return "no public CLI bundle text was provided for the read-only contract check"
     if len(source_text) > _MAX_BUNDLE_TEXT_BYTES:
         return "the public CLI bundle text exceeds the 32 MiB read-only contract bound"
-    schema = _strict_session_schema(source_text)
+    # The schema, mode-enum and tool-registration discoveries share the same
+    # outer code context as the allowlist chain: nothing found inside a
+    # string, comment, template or regex literal proves a mechanism.
+    regions = lexical_regions(source_text)
+    schema = _strict_session_schema(source_text, regions)
     if schema is None:
         return "the public bundle has no strict session/create schema carrying the restriction fields"
-    problem = _schema_mode_problem(source_text, schema)
+    problem = _schema_mode_problem(source_text, schema, regions)
     if problem is not None:
         return problem
-    return allowlist_chain_problem(source_text) or _registration_problem(source_text)
+    return allowlist_chain_problem(source_text) or _registration_problem(source_text, regions)
 
 
-def _strict_session_schema(text: str) -> str | None:
+def _strict_session_schema(text: str, regions) -> str | None:
     """One ``m.object`` schema carrying every restriction field, closed strict."""
-    for marker in re.finditer("titleGenerationEnabled", text):
+    for marker in regions.code_matches(re.compile("titleGenerationEnabled")):
         start = text.rfind("m.object({", max(0, marker.start() - 800), marker.start())
-        if start < 0:
+        if start < 0 or not regions.is_code(start):
             continue
         end = text.find("}).strict()", marker.end())
-        if end < 0 or end - start > 1600:
+        if end < 0 or not regions.is_code(end) or end - start > 1600:
             continue
         body = text[start:end]
         if all(re.search(r"(?<![A-Za-z0-9_])" + re.escape(field) + r"\s*:", body)
@@ -116,23 +122,27 @@ def _strict_session_schema(text: str) -> str | None:
     return None
 
 
-def _schema_mode_problem(text: str, schema: str) -> str | None:
+def _schema_mode_problem(text: str, schema: str, regions) -> str | None:
     member = re.search(r"(?<![A-Za-z0-9_])mode\s*:\s*([\w$]+)\.optional\(\)", schema)
     if member is None:
         return "the session/create schema binds mode to no named enum schema"
-    enum = re.search(re.escape(member.group(1)) + r"\s*=\s*m\.enum\(\[([^\]]*)\]\)", text)
-    if enum is None:
-        return "the session/create mode is not bound to an enum in the public bundle"
-    if not re.search(r'"plan"', enum.group(1)):
+    for enum in regions.code_matches(
+            re.compile(re.escape(member.group(1)) + r"\s*=\s*m\.enum\(\[([^\]]*)\]\)")):
+        if re.search(r'"plan"', enum.group(1)):
+            return None
         return "the session/create mode enum does not offer plan"
-    return None
+    return "the session/create mode is not bound to an enum in the public bundle"
 
 
-def _registration_problem(text: str) -> str | None:
+def _registration_problem(text: str, regions) -> str | None:
     for name in READ_ONLY_TOOLS:
         # The span stops at the metadata object's first closing brace, so the
         # read-only flag is judged within this registration alone.
-        registered = re.search(r'metadata\s*:\s*\{\s*name\s*:\s*"' + name + r'"[^{}]{0,400}', text)
+        registered = None
+        for match in regions.code_matches(
+                re.compile(r'metadata\s*:\s*\{\s*name\s*:\s*"' + name + r'"[^{}]{0,400}')):
+            registered = match
+            break
         if registered is None:
             return f"the {name} built-in tool is not registered in the public bundle"
         if not re.search(r"readOnly\s*:\s*!0", registered.group(0)):

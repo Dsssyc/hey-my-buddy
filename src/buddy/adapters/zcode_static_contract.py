@@ -1,40 +1,48 @@
-"""Free static verification of the allowlist chain in the public ZCode CLI bundle (L6-A3).
+"""Free static verification of the allowlist chain in the public ZCode CLI bundle (L6-A4).
 
-The L6-A2 review smuggled two bundles past a checker built from local regex
-assembly: a membership test dropped as a bare statement before an unconditional
-register, and an ``allowedTools`` object parked in a third argument the named
-registration function never reads. This module replaces that assembly with a
-bounded, string/comment/bracket-aware tokenizer and complete-template matching
-over the supported JavaScript shapes. It never executes the bundle, embeds no
-general interpreter and adds no dependency; anything outside the supported
-templates fails closed with a specific reason.
+The L6-A3 full-template review confirmed seven reproducible escapes, all shapes
+a genuine token/template match cannot see on its own: a ``var`` allowlist
+declared after the loop it gates (hoisting), a local rebinding of the options
+parameter or of the ``Set`` constructor, a transform condition that is always
+true next to a tool name, decoys living in strings, comments, templates or
+regex literals, a formal parameter impersonating a module constant, a
+concatenated or rewritten constant, and an escaped string spelling a read-only
+tool name as another value. This module keeps the bounded tokenizer and the
+complete supported templates, and adds the two lexical layers those escapes
+crossed: every discovery regex now runs over one shared outer code context —
+comments, strings, templates with their interpolations and regex literals
+never provide definitions, calls, assignments or registrations — and every
+proof reference resolves against the bound environment of its scope: formal
+parameters, locals, loop variables, arrow parameters and the scopes enclosing
+both the verified functions and the registration call site, including
+``var``-hoisted and later declarations and every write. Constants consume
+their whole right-hand side and any unrecognized or disagreeing write leaves
+them unsolvable; proof regions carrying escaped string literals are rejected
+rather than decoded. The module never executes the bundle, embeds no general
+interpreter and adds no dependency; anything outside the supported templates
+or outside the provable lexical context fails closed with a specific reason.
 
-The verified mechanisms are structural, never name-bound: the named
-``registerBuiltInTools`` must build one Set from its options parameter's
-``allowedTools`` and gate a single per-tool for-of registration through either
-the complete positive membership condition or a top-level short-circuit OR
-chain whose membership rejection is one complete operand and whose register
-call is the last. Every other rejection operand must be a pure comparison, a
-verified Set membership test or a verified pure name predicate, so discarded
-tests, comma or assignment decoys, extra tails, second registrations, rewritten
-Sets and side-effecting calls cannot pass. The registered argument is the loop
-variable itself or a transform that provably returns every Read/Glob/Grep entry
-unchanged. The named ``resolveBuiltInToolAllowlist`` must return the config
-``toolAllowlist`` directly, through one same-value local, or through the
-recognized alias-map/explore-filter/root-child helper chain whose every helper
-preserves the read-only names, and the registration must actually be invoked
-with that resolver's call as the unique ``allowedTools`` value of a direct
-object literal at the options parameter's position. Minified identifiers are
-read from the text and followed to their declarations; versions, hashes and
-named-certificate knowledge play no part. The proof covers only the packaged
-code; whether a live session enforced anything stays with the protocol facts,
-the unified tool evidence and the separately approved native checks.
+The verified mechanisms stay structural, never name-bound: the named
+``registerBuiltInTools`` builds one Set from its options parameter's
+``allowedTools`` and gates a single per-tool for-of registration through
+either the complete positive membership condition or a top-level short-circuit
+OR chain whose membership rejection is one complete operand and whose register
+call is the last; the transform provably returns every Read/Glob/Grep entry
+unchanged; the named ``resolveBuiltInToolAllowlist`` returns the config
+``toolAllowlist`` through the recognized helper chain; and the registration is
+actually invoked with that resolver's call as the unique ``allowedTools``
+value at the options parameter's position from a scope that does not shadow
+either function. Versions, hashes and named-certificate knowledge play no
+part. The proof covers only the packaged code; whether a live session enforced
+anything stays with the protocol facts, the unified tool evidence and the
+separately approved native checks.
 """
 from __future__ import annotations
 
+import bisect
 import re
 
-__all__ = ["allowlist_chain_problem"]
+__all__ = ["allowlist_chain_problem", "lexical_regions"]
 
 #: One verified function or call region is tokenized within this many characters.
 _MAX_REGION_CHARS = 16384
@@ -44,6 +52,8 @@ _MAX_CONST_DEPTH = 4
 _MAX_PURE_DEPTH = 8
 #: One parsed region consumes at most this many tokens.
 _MAX_REGION_TOKENS = 20000
+#: A backward group match for slash classification stays within this window.
+_MAX_GROUP_WINDOW = 65536
 #: The read-only tool names every alias, filter and transform must preserve.
 _READ_ONLY_TOOL_NAMES = frozenset({"Read", "Glob", "Grep"})
 
@@ -63,6 +73,13 @@ _NO_FOR_OF = "registerBuiltInTools filters no per-tool for-of loop over the buil
 _NO_REGISTRY_PARAM = "registerBuiltInTools does not register on one of its own registry parameters"
 _REGISTER_OUTSIDE = "registerBuiltInTools carries registrations outside the one allowlist-gated flow"
 _SET_REWRITTEN = "registerBuiltInTools rewrites its allowlist Set after the declaration that builds it"
+_BAD_ORDER = ("registerBuiltInTools does not carry all of its declarations before the "
+              "single for-of loop")
+_BAD_BINDING = ("registerBuiltInTools rebinds its parameters, the Set constructor, "
+                "its locals or its loop variable")
+_BAD_DEFAULT = "a verified function declares an unsupported parameter default"
+_REASSIGNED = ("registerBuiltInTools or resolveBuiltInToolAllowlist is reassigned "
+               "in the public bundle")
 _BAD_PREAMBLE = ("registerBuiltInTools carries a preamble declaration that is not a pure read "
                  "or a verified helper call")
 _BAD_OPERAND = ("registerBuiltInTools' rejection chain carries an operand that is not a pure comparison, "
@@ -85,12 +102,18 @@ _STRING_METHODS = frozenset({"trim", "indexOf", "slice", "toLowerCase", "toUpper
 #: Writing the Set variable after its declaration invalidates the filter.
 _ASSIGNMENT_PUNCT = frozenset({"=", "+=", "-=", "*=", "/=", "%=", "&=", "|=", "^=", "<<=", ">>=",
                                ">>>=", "&&=", "||=", "??=", "**=", "++", "--"})
+#: Writing or mutating a module constant in any of these ways leaves it unsolvable.
+_COMPOUND_PUNCT = frozenset({"+=", "-=", "*=", "/=", "%=", "&=", "|=", "^=", "<<=", ">>=",
+                             ">>>=", "&&=", "||=", "??=", "**="})
+_MUTATION_METHODS = frozenset({"add", "delete", "clear", "push", "pop", "shift", "unshift",
+                               "splice", "sort", "reverse", "fill", "copyWithin"})
+#: Assignment right-hand sides must end on one of these, with a reason to be there.
+_RHS_TERMININATORS = frozenset({";", ",", ")", "]", "}"})
 
 _IDENT_RE = re.compile(r"[A-Za-z_$][A-Za-z0-9_$]*")
 _NUMBER_RE = re.compile(r"0[xXbBoO][0-9a-fA-F]+n?|(?:\d+\.?\d*|\.\d+)(?:[eE][+-]?\d+)?n?")
-#: One combined scan collects every plausible constant assignment and both
-#: exported mechanism names, so the whole bundle text is regex-scanned once.
-_ASSIGNMENT_RE = re.compile(r'(?<![\w$".])([A-Za-z_$][A-Za-z0-9_$]*)\s*=(?![=>])')
+#: The export mapping call: a code-position match with the exported mechanism
+#: name as a plain string argument — escapes simply never match it.
 _EXPORT_RE = re.compile(r'([\w$]+)\(\s*([\w$]+)\s*,\s*"(' + _REGISTER_EXPORT + r"|" + _RESOLVE_EXPORT
                         + r')"\s*\)')
 #: Punctuators longest first so ``===`` never reads as ``=`` nor ``?.`` as ``?``.
@@ -111,8 +134,10 @@ def _token_iter(text: str, start: int, end: int):
 
     Comments never become tokens, string literals never leak their quotes into
     the token stream, identifiers may carry ``$``, and an interpolated template
-    literal is refused rather than treated as an opaque string, so no decoy
-    hidden in a comment or a string can stand in for code.
+    literal is refused rather than treated as an opaque string. A string or
+    template carrying a backslash escape is refused too: a proof region never
+    decodes escapes, so a different spelling of a read-only tool name cannot
+    enter a template as another value.
     """
     index, limit = start, min(end, len(text))
     while index < limit:
@@ -131,7 +156,7 @@ def _token_iter(text: str, start: int, end: int):
             stop = index + 1
             while stop < limit:
                 if text[stop] == "\\":
-                    stop += 2
+                    raise _ParseError("escaped string literal in a proof region")
                 elif text[stop] == character:
                     break
                 else:
@@ -144,7 +169,7 @@ def _token_iter(text: str, start: int, end: int):
             stop = index + 1
             while stop < limit:
                 if text[stop] == "\\":
-                    stop += 2
+                    raise _ParseError("escaped template literal in a proof region")
                 elif text[stop] == "`":
                     break
                 else:
@@ -475,6 +500,811 @@ class _Parser:
         return [self.parse_statement()]
 
 
+# -- the shared outer lexical context --------------------------------------------
+
+#: Keywords after which a slash starts a regex literal, not a division.
+_REGEX_AFTER_WORDS = frozenset({"return", "typeof", "instanceof", "in", "of", "new", "delete",
+                                "void", "throw", "case", "do", "else", "yield", "await"})
+#: Keywords whose group is a control-statement header: ``if(x) /re/`` is a regex.
+_CONTROL_WORDS = frozenset({"if", "while", "for", "switch", "catch", "with"})
+_TOP_SCAN = re.compile(r"[/\"'`]")
+_EVENT_CHARS = re.compile(r"[{}()\[\],;=]")
+_TEXT_SCAN = re.compile(r"\\.|`|\$\{")
+_CODE_SCAN = re.compile(r"[{}()'\"`/]")
+
+
+class _LexicalRegions:
+    """The bundle's code context: which byte positions are real code.
+
+    One sequential scan covers line and block comments, plain strings, template
+    literals — one span each, interpolations included, nested templates and
+    their escapes handled — and regex literals, whose escapes and character
+    classes never end the literal early. A slash after an identifier, a
+    number, a closing bracket or a finished literal divides; a slash after
+    ``)`` divides unless the group is a control-statement header; every other
+    position — including after ``}``, where minified bundles essentially never
+    divide — masks as a regex, the fail-closed direction. Strings, comments,
+    templates and regexes therefore never provide definitions, calls,
+    assignments or registrations, while an export's real string argument stays
+    matchable because only the match position itself must sit in code.
+    """
+
+    def __init__(self, text: str):
+        self.text = text
+        self.spans = self._scan(text)
+        self._starts = tuple(start for start, _ in self.spans)
+        code = bytearray(len(text))
+        for start, end in self.spans:
+            code[start:end] = b"\x01" * (end - start)
+        self._code = code
+
+    def is_code(self, position: int) -> bool:
+        return position < len(self._code) and not self._code[position]
+
+    def events(self, i: int, stop: int | None = None):
+        """Yield ``(position, char)`` for structural code characters at or after ``i``.
+
+        Brackets, separators and the equals sign drive every scope walker;
+        masked characters are jumped over whole, so a walker never touches a
+        string, comment, template or regex literal character by character.
+        """
+        text = self.text
+        code = self._code
+        starts = self._starts
+        spans = self.spans
+        n = len(text)
+        while i < n:
+            m = _EVENT_CHARS.search(text, i)
+            if m is None:
+                return
+            p = m.start()
+            if stop is not None and p >= stop:
+                return
+            if code[p]:
+                k = bisect.bisect_right(starts, p) - 1
+                i = spans[k][1] if k >= 0 else n
+                continue
+            yield p, text[p]
+            i = m.end()
+
+    @staticmethod
+    def _scan(text: str):
+        spans = []
+        add = spans.append
+        n = len(text)
+        find = text.find
+        stack = []  # per open template: [start, mode]; mode 0 text, >=1 interpolation depth
+        i = 0
+        while i < n:
+            if not stack:
+                m = _TOP_SCAN.search(text, i)
+                if m is None:
+                    break
+                i = m.start()
+                c = text[i]
+                if c == "`":
+                    stack.append([i, 0])
+                    i += 1
+                    continue
+                if c in "'\"":
+                    j = _plain_string_end(text, i, c)
+                    add((i, j))
+                    i = j
+                    continue
+                if i + 1 < n and text[i + 1] == "/":
+                    k = find("\n", i)
+                    j = n if k < 0 else k
+                elif i + 1 < n and text[i + 1] == "*":
+                    k = find("*/", i + 2)
+                    j = n if k < 0 else k + 2
+                elif _slash_is_regex(text, i, spans):
+                    j = _regex_end(text, i)
+                else:
+                    i += 1
+                    continue
+                add((i, j))
+                i = j
+                continue
+            if stack[-1][1] == 0:  # template text: escapes, close, or interpolation
+                m = _TEXT_SCAN.search(text, i)
+                if m is None:
+                    add((stack.pop()[0], n))
+                    i = n
+                    break
+                i = m.start()
+                c = text[i]
+                if c == "\\":
+                    i += 2
+                    continue
+                if c == "`":
+                    start = stack.pop()[0]
+                    if not stack:
+                        add((start, i + 1))
+                    i += 1
+                    continue
+                stack[-1][1] = 1
+                i += 2
+                continue
+            m = _CODE_SCAN.search(text, i)  # interpolation code
+            if m is None:
+                add((stack.pop()[0], n))
+                i = n
+                break
+            i = m.start()
+            c = text[i]
+            if c == "{":
+                stack[-1][1] += 1
+                i += 1
+                continue
+            if c == "}":
+                stack[-1][1] -= 1
+                i += 1
+                continue
+            if c in "()":
+                i += 1
+                continue
+            if c == "`":
+                stack.append([i, 0])
+                i += 1
+                continue
+            if c in "'\"":
+                i = _plain_string_end(text, i, c)
+                continue
+            if i + 1 < n and text[i + 1] == "/":
+                k = find("\n", i)
+                i = n if k < 0 else k
+                continue
+            if i + 1 < n and text[i + 1] == "*":
+                k = find("*/", i + 2)
+                i = n if k < 0 else k + 2
+                continue
+            if _slash_is_regex(text, i, spans):
+                i = _regex_end(text, i)
+                continue
+            i += 1
+        return spans
+
+    def code_matches(self, pattern):
+        """Every match of ``pattern`` whose start position is real code."""
+        for match in pattern.finditer(self.text):
+            if self.is_code(match.start()):
+                yield match
+
+
+def _plain_string_end(text: str, i: int, quote: str) -> int:
+    n = len(text)
+    j = i + 1
+    while j < n:
+        k = text.find(quote, j)
+        if k < 0:
+            return n
+        back, slashes = k - 1, 0
+        while back >= 0 and text[back] == "\\":
+            slashes += 1
+            back -= 1
+        if slashes % 2 == 0:
+            return k + 1
+        j = k + 1
+    return n
+
+
+def _regex_end(text: str, i: int) -> int:
+    n = len(text)
+    j = i + 1
+    in_class = False
+    while j < n:
+        c = text[j]
+        if c == "\\":
+            j += 2
+            continue
+        if in_class:
+            if c == "]":
+                in_class = False
+        elif c == "[":
+            in_class = True
+        elif c == "/" or c == "\n":
+            break
+        j += 1
+    return min(j + 1, n)
+
+
+def _prev_code_pos(text: str, i: int, spans) -> int | None:
+    j = i - 1
+    if j < 0:
+        return None
+    if spans and j < spans[-1][1]:
+        return spans[-1][1] - 1
+    while j >= 0 and text[j].isspace():
+        j -= 1
+    return None if j < 0 else j
+
+
+def _slash_is_regex(text: str, i: int, spans) -> bool:
+    """Whether the slash at ``i`` starts a regex literal rather than dividing.
+
+    In valid JavaScript a regex can never follow a finished expression, so only
+    the ``)`` of a control-statement header and a keyword before the slash are
+    real regex positions among the expression-ending ones; everywhere else the
+    fail-closed mask wins.
+    """
+    j = _prev_code_pos(text, i, spans)
+    if j is None:
+        return True
+    prev = text[j]
+    if prev.isalnum() or prev in "_$":
+        w = j
+        while w >= 0 and (text[w].isalnum() or text[w] in "_$"):
+            w -= 1
+        return text[w + 1:j + 1] in _REGEX_AFTER_WORDS
+    if prev == "]":
+        return False
+    if prev == ")":
+        group_start = _group_open_back(text, j)
+        if group_start is None:
+            return True  # unresolvable context: mask, the fail-closed direction
+        k = _prev_code_pos(text, group_start, spans)
+        if k is None:
+            return False
+        if text[k].isalnum() or text[k] in "_$":
+            w = k
+            while w >= 0 and (text[w].isalnum() or text[w] in "_$"):
+                w -= 1
+            return text[w + 1:k + 1] in _CONTROL_WORDS
+        return False
+    if prev in "\"'`" or prev == "/":
+        return False  # a literal just ended: a following slash divides
+    return True  # after an operator, an opener or a brace, a regex may start
+
+
+def _group_open_back(text: str, close: int) -> int | None:
+    depth = 1
+    j = close - 1
+    limit = max(0, close - _MAX_GROUP_WINDOW)
+    while j >= limit:
+        c = text[j]
+        if c == ")":
+            depth += 1
+        elif c == "(":
+            depth -= 1
+            if depth == 0:
+                return j
+        j -= 1
+    return None
+
+
+def lexical_regions(text: str) -> _LexicalRegions:
+    """The shared outer code context for every static discovery regex."""
+    return _LexicalRegions(text)
+
+
+# -- the scope map: bound environments and global writes -------------------------
+
+_SCOPE_SCAN = re.compile(r"[{}]|=>|(?<![\w$])(?:function|var|let|const|catch|class|for)(?![\w$])")
+_FUNCTION_KINDS = frozenset({"function", "method", "arrow", "catch"})
+
+
+#: Words classified as keywords when they precede a group or a brace.
+_RESERVED_WORDS = frozenset(
+    "function var let const catch class for extends get set static async accessor "
+    "if while switch with do else try finally break continue return typeof new in of "
+    "await yield case delete void throw instanceof this super true false null".split())
+_SCOPE_SCAN = re.compile(r"[{}]|=>|(?<![\w$])(?:function|var|let|const|catch|class|for)(?![\w$])")
+_FUNCTION_KINDS = frozenset({"function", "method", "arrow", "catch"})
+
+
+class _ScopeMap:
+    """Function, block, catch, loop and method scopes with their bound names.
+
+    One pass over the code context tracks every brace with its kind, the
+    parameters of function, method, arrow and catch headers, ``var`` hoisting
+    to the enclosing function, ``let``/``const`` in their block, for-of/for-in
+    headers, and destructuring patterns (whose binding positions feed the
+    constant write analysis). A scope whose parameter list cannot be read — a
+    computed-key method, ``]`` before the brace — is marked fuzzy and shadows
+    every name inside it, so an unreadable context fails closed.
+    """
+
+    def __init__(self, text: str, regions: _LexicalRegions):
+        self.text = text
+        self.regions = regions
+        self.nodes = []            # [start, end, kind, names, parent index]
+        self.top_names = set()
+        self.destructured = {}     # name -> positions bound by destructuring
+        self.for_writes = {}       # name -> positions assigned by a for target
+        self._for_headers = []     # (start, end) groups whose keywords self-handle
+        self._for_header_starts = []  # the same intervals' starts, for bisect
+        self._order = None         # node indices sorted by start, built lazily
+        self._parse()
+
+    # -- construction ------------------------------------------------------
+
+    def _parse(self):
+        text, regions = self.text, self.regions
+        nodes = self.nodes
+        stack = []     # node indices of open braces
+        pending = None  # (kind, group_end, names) claimed by the next brace
+        for m in _SCOPE_SCAN.finditer(text):
+            if not regions.is_code(m.start()):
+                continue
+            token = m.group(0)
+            if token == "{":
+                kind, names, start = "block", set(), m.start()
+                if pending is not None and m.start() >= pending[1]:
+                    kind, names, start = pending[0], set(pending[2]), min(pending[3], m.start())
+                    pending = None
+                elif pending is None:
+                    kind, names, start = self._classify_brace(m.start())
+                # A brace inside a pending header group (destructured default
+                # values) is a plain pattern brace and keeps the pending claim.
+                # Function-kind spans open at the parameter group so a default
+                # initializer's writes resolve against the parameters' scope.
+                nodes.append([start, None, kind, names, stack[-1] if stack else -1])
+                stack.append(len(nodes) - 1)
+            elif token == "}":
+                if stack:
+                    nodes[stack.pop()][1] = m.end()
+            elif token == "=>":
+                self._arrow(m.start(), m.end(), stack)
+            else:
+                keyword = token
+                if keyword == "function":
+                    pending = self._function_header(m.start(), m.end(), stack)
+                elif keyword == "for":
+                    pending = self._for_header(m.end(), stack)
+                elif keyword == "catch":
+                    pending = self._catch_header(m.end())
+                elif keyword == "class":
+                    name = self._name_after(m.end())
+                    if name is not None and self._statement_position(m.start()):
+                        self._bind_in_function(stack, name)
+                elif keyword in ("var", "let", "const"):
+                    k = bisect.bisect_right(self._for_header_starts, m.start()) - 1
+                    inside_for = (k >= 0 and m.start() < self._for_headers[k][1])
+                    if not inside_for:
+                        self._declarations(m.end(), keyword, stack)
+
+    def _classify_brace(self, pos):
+        """The kind, parameter names and header start of an unclaimed brace."""
+        before = self._token_before(pos)
+        if before is None:
+            return "block", set(), pos
+        kind, value = before
+        if kind == "arrow":
+            gt = self._skip_ws_back(pos)
+            group_close = self._skip_ws_back(gt) if gt is not None else None
+            if group_close is not None and self.text[group_close] == ")":
+                group_start = self._group_open_back(group_close)
+                if group_start is not None:
+                    return ("arrow", set(self._group_names(group_start, group_close)),
+                            group_start)
+            return "arrow", set(), pos
+        if kind == "op" and value == ")":
+            group_start = self._group_open_back(pos - 1)
+            if group_start is None:
+                return "fuzzy", set(), pos
+            head = self._token_before(group_start)
+            if head is not None and head[0] == "ident":
+                return ("method", set(self._group_names(group_start, pos - 1)), group_start)
+            return "block", set(), group_start
+        if kind == "op" and value == "]":
+            return "fuzzy", set(), pos  # a computed-key method: parameters unreadable
+        return "block", set(), pos
+
+    def _arrow(self, arrow_start: int, arrow_end: int, stack):
+        """Arrow parameters bind at the body, braced or a single expression."""
+        before = self._token_before(arrow_start)
+        params = []
+        if before is not None:
+            if before[0] == "op" and before[1] == ")":
+                group_start = self._group_open_back(arrow_start - 1)
+                if group_start is not None:
+                    params = self._group_names(group_start, arrow_start - 1)
+            elif before[0] == "ident":
+                params = [before[1]]
+        if self._next_code_char(arrow_end) == "{":
+            return  # the braced body is classified as an arrow scope at its brace
+        # ``x => expression``: the binding region runs to the end of the
+        # enclosing statement or argument list; over-extending only shadows
+        # more, which fails closed.
+        depth, stop = 0, len(self.text)
+        for pos, c in self.regions.events(arrow_end):
+            if c in "([{":
+                depth += 1
+            elif c in ")]}":
+                if depth == 0:
+                    stop = pos
+                    break
+                depth -= 1
+            elif c in ";," and depth == 0:
+                stop = pos
+                break
+        self.nodes.append([arrow_start, stop, "arrow", set(params),
+                           stack[-1] if stack else -1])
+
+    def _function_header(self, keyword_start, keyword_end, stack):
+        """Parse ``[*][name](params)`` after a ``function`` keyword."""
+        i = self._skip_ws(keyword_end)
+        if i < len(self.text) and self.text[i] == "*":
+            i = self._skip_ws(i + 1)
+        name = self._name_at(i)
+        if name is not None:
+            i = self._skip_ws(i + len(name))
+        if i >= len(self.text) or self.text[i] != "(":
+            return None
+        close = self._group_close_forward(i)
+        if close is None:
+            return None
+        if name is not None and self._statement_position(keyword_start):
+            self._bind_in_function(stack, name)
+        return ("function", close + 1, self._group_names(i, close), i)
+
+    def _for_header(self, pos, stack):
+        i = self._skip_ws(pos)
+        if self._name_at(i) == "await":
+            i = self._skip_ws(i + 5)
+        if i >= len(self.text) or self.text[i] != "(":
+            return None
+        close = self._group_close_forward(i)
+        if close is None:
+            return None
+        self._for_headers.append((i, close))
+        self._for_header_starts.append(i)
+        names, targets = self._for_header_names(i + 1, close)
+        for target in targets:
+            self.for_writes.setdefault(target, []).append(i)
+        if not names:
+            return None
+        if self._next_code_char(close + 1) != "{":
+            # A non-block loop body: the bindings live in the header alone.
+            self.nodes.append([i, close + 1, "for", set(names),
+                               stack[-1] if stack else -1])
+            return None
+        return ("for", close + 1, names, i)
+
+    def _for_header_names(self, start, close):
+        text = self.text
+        i = self._skip_ws(start)
+        declared, targets = [], []
+        m = _IDENT_RE.match(text, i)
+        if m is not None and m.group(0) in ("let", "const", "var"):
+            i = self._skip_ws(m.end())
+            if i < close:
+                c = text[i]
+                if c in "[{":
+                    end = self._pattern_close_forward(i)
+                    pattern = self._pattern_names(i + 1, end)
+                    declared.extend(pattern)
+                    targets.extend(pattern)
+                elif c.isalpha() or c in "_$":
+                    ident = _IDENT_RE.match(text, i)
+                    if ident is not None:
+                        declared.append(ident.group(0))
+                        targets.append(ident.group(0))
+            return declared, targets
+        # No declaration keyword: a bare or destructured assignment target.
+        if i < close:
+            c = text[i]
+            if c in "[{":
+                end = self._pattern_close_forward(i)
+                targets.extend(self._pattern_names(i + 1, end))
+            elif c.isalpha() or c in "_$":
+                ident = _IDENT_RE.match(text, i)
+                if ident is not None:
+                    targets.append(ident.group(0))
+        return declared, targets
+
+    def _catch_header(self, pos):
+        i = self._skip_ws(pos)
+        if i < len(self.text) and self.text[i] == "(":
+            close = self._group_close_forward(i)
+            if close is None:
+                return None
+            return ("catch", close + 1, self._group_names(i, close), i)
+        return ("catch", 0 if i >= len(self.text) or self.text[i] != "{" else i, [], pos)
+
+    def _declarations(self, pos, keyword, stack):
+        """Collect one declarator list's binding names, destructuring included."""
+        text = self.text
+        i = self._skip_ws(pos)
+        expect_name = True
+        while i < len(text):
+            c = text[i]
+            if expect_name:
+                if c in "[{":
+                    end = self._pattern_close_forward(i)
+                    for name in self._pattern_names(i + 1, end):
+                        self._bind(keyword, stack, name)
+                        self.destructured.setdefault(name, []).append(i)
+                    i = self._skip_ws(end + 1)
+                    expect_name = False
+                    continue
+                ident = _IDENT_RE.match(text, i)
+                if ident is None:
+                    return
+                self._bind(keyword, stack, ident.group(0))
+                i = self._skip_ws(ident.end())
+                expect_name = False
+                continue
+            if c == "=":
+                i = self._skip_initializer(i + 1)
+                continue
+            if c == ",":
+                i = self._skip_ws(i + 1)
+                expect_name = True
+                continue
+            return  # ';' or any other token ends the declarator list
+
+    def _pattern_names(self, start, end):
+        """The binding identifiers of a destructuring pattern, keys excluded.
+
+        Identifiers are read between structural events: one before ``:`` in an
+        object pattern is a key, one before ``,`` ``]`` ``}`` or ``=`` is a
+        binding, and everything inside a default expression is skipped whole.
+        """
+        text = self.text
+        names = []
+        depth = 0
+        skipping = None
+        for pos, c in self.regions.events(start, stop=end):
+            if skipping is not None:
+                if c in "[{":
+                    skipping += 1
+                elif c in "]}":
+                    if skipping <= depth:
+                        skipping = None  # the closer of this pattern level
+                    else:
+                        skipping -= 1
+                elif c == "," and skipping == depth:
+                    skipping = None  # the separator: handled below
+                continue
+            if c in "[{":
+                depth += 1
+                continue
+            if c in "]}":
+                depth -= 1
+                continue
+            if c in ",=" or (c == ":" and depth > 0):
+                ident = self._ident_before(pos, start)
+                if ident is not None and c != ":":
+                    names.append(ident)
+                if c == "=":
+                    skipping = depth
+                continue
+            # a group or separator inside a default: nothing to bind
+        return names
+
+    def _ident_before(self, pos: int, floor: int):
+        """The identifier ending right before ``pos``, if any."""
+        j = self._skip_ws_back(pos)
+        if j is None or j < floor:
+            return None
+        w = j
+        while w >= floor and (self.text[w].isalnum() or self.text[w] in "_$"):
+            w -= 1
+        if w == j:
+            return None
+        candidate = self.text[w + 1:j + 1]
+        return candidate if _IDENT_RE.fullmatch(candidate) else None
+
+    def _bind(self, keyword, stack, name):
+        """Bind a declared name; ``var`` hoists to the enclosing function."""
+        if keyword == "var":
+            target = self._enclosing_function(stack)
+        else:
+            target = stack[-1] if stack else -1
+        if target < 0:
+            self.top_names.add(name)
+        else:
+            self.nodes[target][3].add(name)
+
+    def _bind_in_function(self, stack, name):
+        target = self._enclosing_function(stack)
+        if target < 0:
+            self.top_names.add(name)
+        else:
+            self.nodes[target][3].add(name)
+
+    def _enclosing_function(self, stack):
+        """The innermost open function-kind node index, or -1 for the top level."""
+        target = stack[-1] if stack else -1
+        while target >= 0 and self.nodes[target][2] not in _FUNCTION_KINDS:
+            target = self.nodes[target][4]
+        return target
+
+    # -- queries -------------------------------------------------------------
+
+    def chain(self, position: int):
+        """The scope node indices containing ``position``, innermost first."""
+        if self._order is None:
+            self._order = sorted(range(len(self.nodes)), key=lambda k: self.nodes[k][0])
+            self._starts_cache = tuple(self.nodes[k][0] for k in self._order)
+        result = []
+        k = bisect.bisect_right(self._starts_cache, position) - 1
+        while k >= 0:
+            index = self._order[k]
+            start, end = self.nodes[index][0], self.nodes[index][1]
+            if end is not None and start <= position < end:
+                while index >= 0:
+                    result.append(index)
+                    index = self.nodes[index][4]
+                return result
+            k -= 1
+        return result
+
+    def bindings_at(self, position: int):
+        """Names rebound by the scopes around ``position``; None when unreadable."""
+        names = set()
+        for index in self.chain(position):
+            if self.nodes[index][2] == "fuzzy":
+                return None
+            names |= self.nodes[index][3]
+        return names
+
+    def is_shadowed(self, name: str, position: int) -> bool:
+        """Whether any scope between ``position`` and the top level rebinds name."""
+        bindings = self.bindings_at(position)
+        return bindings is None or name in bindings
+
+    # -- lexical helpers over the code context -------------------------------
+
+    def _skip_ws(self, i: int) -> int:
+        text, code = self.text, self.regions._code
+        starts, spans = self.regions._starts, self.regions.spans
+        n = len(text)
+        while i < n:
+            if code[i]:
+                k = bisect.bisect_right(starts, i) - 1
+                i = spans[k][1] if k >= 0 else n
+                continue
+            if not text[i].isspace():
+                return i
+            i += 1
+        return n
+
+    def _name_at(self, i: int):
+        m = _IDENT_RE.match(self.text, i)
+        return m.group(0) if m is not None else None
+
+    def _name_after(self, pos: int):
+        return self._name_at(self._skip_ws(pos))
+
+    def _next_code_char(self, pos: int):
+        i = self._skip_ws(pos)
+        return self.text[i] if i < len(self.text) else None
+
+    def _token_before(self, pos: int):
+        """The token before ``pos``: (kind, value), keywords classified."""
+        i = self._skip_ws_back(pos)
+        if i is None:
+            return None
+        c = self.text[i]
+        if c.isalpha() or c in "_$":
+            m = _IDENT_RE.match(self.text, i)
+            while m is not None and m.start() > 0 and (
+                    self.text[m.start() - 1].isalnum() or self.text[m.start() - 1] in "_$"):
+                m = _IDENT_RE.match(self.text, m.start() - 1)
+            word = m.group(0) if m else c
+            if word in _RESERVED_WORDS:
+                return ("kw", word)
+            return ("ident", word)
+        if c == ">" and i > 0 and self.text[i - 1] == "=":
+            return ("arrow", "=>")
+        return ("op", c)
+
+    def _skip_ws_back(self, pos: int):
+        text, code = self.text, self.regions._code
+        starts, spans = self.regions._starts, self.regions.spans
+        i = pos - 1
+        while i >= 0:
+            if code[i]:
+                k = bisect.bisect_right(starts, i) - 1
+                if k < 0:
+                    return None
+                i = spans[k][0] - 1
+                continue
+            if not text[i].isspace():
+                return i
+            i -= 1
+        return None
+
+    def _group_open_back(self, close: int):
+        depth = 1
+        i = close - 1
+        limit = max(0, close - _MAX_GROUP_WINDOW)
+        while i >= limit:
+            c = self.text[i]
+            if c == ")":
+                depth += 1
+            elif c == "(":
+                depth -= 1
+                if depth == 0:
+                    return i
+            i -= 1
+        return None
+
+    def _group_close_forward(self, open_pos: int):
+        depth = 0
+        for pos, c in self.regions.events(open_pos):
+            if c == "(":
+                depth += 1
+            elif c == ")":
+                depth -= 1
+                if depth == 0:
+                    return pos
+        return None
+
+    def _pattern_close_forward(self, open_pos: int):
+        """The matching bracket of a destructuring pattern opener."""
+        opener = self.text[open_pos]
+        closer = "]" if opener == "[" else "}"
+        depth = 0
+        for pos, c in self.regions.events(open_pos):
+            if c in "[{(":
+                depth += 1
+            elif c in "]})":
+                depth -= 1
+                if depth == 0 and c == closer:
+                    return pos
+        return len(self.text) - 1
+
+    def _skip_initializer(self, i: int) -> int:
+        """Skip past a declarator's initializer, stopping at its separator."""
+        depth = 0
+        for pos, c in self.regions.events(i):
+            if c in "([{":
+                depth += 1
+            elif c in ")]}":
+                if depth == 0:
+                    return pos
+                depth -= 1
+            elif c in ";," and depth == 0:
+                return pos
+        return len(self.text)
+
+    def _statement_position(self, pos: int) -> bool:
+        """Whether the token at ``pos`` starts a statement, not an expression."""
+        i = self._skip_ws_back(pos)
+        if i is None:
+            return True
+        c = self.text[i]
+        if c in ";}{":
+            return True
+        m = _IDENT_RE.match(self.text, i)
+        if m is not None:
+            return m.group(0) in ("do", "else")
+        return False
+
+    def _group_names(self, open_pos: int, close_pos: int):
+        """Binding names of a parameter group: plain, defaulted, rest, patterns."""
+        names = []
+        i = self._skip_ws(open_pos + 1)
+        while i < close_pos:
+            c = self.text[i]
+            if c == ",":
+                i = self._skip_ws(i + 1)
+                continue
+            if c == ".":
+                i = self._skip_ws(i + 3 if self.text[i:i + 3] == "..." else i + 1)
+                continue
+            if c in "[{":
+                pattern_end = self._pattern_close_forward(i)
+                names.extend(self._pattern_names(i + 1, pattern_end))
+                i = self._skip_ws(pattern_end + 1)
+                if i < close_pos and self.text[i] == "=":
+                    i = self._skip_initializer(i + 1)
+                continue
+            ident = _IDENT_RE.match(self.text, i)
+            if ident is None:
+                i += 1
+                continue
+            names.append(ident.group(0))
+            i = self._skip_ws(ident.end())
+            if i < close_pos and self.text[i] == "=":
+                i = self._skip_initializer(i + 1)
+            continue
+        return names
+
+
 # -- shared node constructors and template shapes ------------------------------
 
 def _member(base, name: str, optional: bool = False):
@@ -537,11 +1367,19 @@ def _pure_read(node) -> bool:
     return False
 
 
-def _exported_names(text: str) -> dict[str, tuple[str, ...]]:
-    """The distinct local names a bundle binds to each exported mechanism name."""
+def _exported_names(bundle):
+    """The distinct local names a bundle binds to each exported mechanism name.
+
+    The mapping call is discovered in the shared code context only, so a
+    decoy export living in a string or a comment provides nothing, while the
+    real export's string argument stays matchable.
+    """
     bound = {_REGISTER_EXPORT: [], _RESOLVE_EXPORT: []}
-    for match in _EXPORT_RE.finditer(text):
+    for match in bundle.regions.code_matches(_EXPORT_RE):
         export, local = match.group(3), match.group(2)
+        prefix = bundle.text[:match.start()].rstrip()
+        if prefix.endswith("function"):
+            continue
         if local not in bound[export]:
             bound[export].append(local)
     return {export: tuple(names) for export, names in bound.items()}
@@ -550,28 +1388,45 @@ def _exported_names(text: str) -> dict[str, tuple[str, ...]]:
 # -- the bundle with its lazily verified functions, constants and helpers ------
 
 class _Bundle:
-    """The bundle text plus memoized parsing, constant resolution and purity."""
+    """The bundle text plus memoized parsing, constants, purity and scopes."""
 
     def __init__(self, text: str):
         self.text = text
+        self.regions = _LexicalRegions(text)
         self._sites = {}
         self._constants = {}
         self._pure = {}
         self._pure_visiting = set()
-        self._assign_index = None
+        self._scopes = None
+        self._writes = {}
+        self._write_index = None
+
+    def scopes(self):
+        if self._scopes is None:
+            self._scopes = _ScopeMap(self.text, self.regions)
+        return self._scopes
+
+    def chain_bindings(self, position: int):
+        """Names the scopes around a position rebind; None when unreadable."""
+        return self.scopes().bindings_at(position)
+
+    # -- function sites -------------------------------------------------------
 
     def sites(self, name: str):
-        """Every located ``(parameters, statements, body tokens)`` of one function.
+        """Every ``(parameters, defaults, statements, body, body_start)`` of one name.
 
         A definition is located when its header and braces balance at token
-        level; ``statements`` is ``None`` when the body then leaves the
-        supported grammar, which the caller treats as an unrecognized flow
+        level, its position is real code — never a string, comment, template
+        or regex literal — and none of its default initializers carries an
+        escaped literal; ``statements`` is ``None`` when the body then leaves
+        the supported grammar, which the caller treats as an unrecognized flow
         rather than a missing function. A name with no definition or several
         located definitions is ambiguous and fails closed at the caller.
         """
         if name not in self._sites:
             found = []
-            for match in re.finditer(r"function\s+" + re.escape(name) + r"\s*\(", self.text):
+            pattern = re.compile(r"(?<![\w$])function\s+" + re.escape(name) + r"\s*\(")
+            for match in self.regions.code_matches(pattern):
                 try:
                     found.append(self._parse_site(match.start(), name))
                 except _ParseError:
@@ -585,15 +1440,21 @@ class _Bundle:
         parser.expect_id("function")
         parser.expect_id(name)
         parser.expect_punct("(")
-        parameters = []
+        parameters, defaults = [], []
         while not parser.at_punct(")"):
             parameter = parser.expect_id()
-            if parser.eat_punct("="):
-                parser.parse_ternary()
+            # The default is kept and verified, never silently dropped: only
+            # the register options parameter may default to an empty object.
+            default = parser.parse_ternary() if parser.eat_punct("=") else None
             parameters.append(parameter)
+            defaults.append(default)
             if not parser.eat_punct(","):
                 break
         parser.expect_punct(")")
+        brace = parser.peek()
+        if brace is None or brace[0] != "punct" or brace[1] != "{":
+            raise _ParseError("the function body does not open")
+        body_start = brace[2]
         parser.expect_punct("{")
         body = []
         depth = 1
@@ -613,45 +1474,169 @@ class _Bundle:
             statements = _Parser(iter(body)).parse_statements()
         except _ParseError:
             statements = None
-        return tuple(parameters), statements, body
+        return tuple(parameters), tuple(defaults), statements, body, body_start
 
-    # -- module constants ---------------------------------------------------
+    # -- module constants -----------------------------------------------------
 
-    def _assignments(self):
-        """Every plausible constant assignment position, indexed by name once."""
-        if self._assign_index is None:
+    #: One scan shape for every plausible write of any name, so a bundle's
+    #: whole write surface is collected once instead of once per name.
+    _WRITE_CANDIDATE = re.compile(
+        r"(?<![\w$.])([A-Za-z_$][A-Za-z0-9_$]*)\s*"
+        r"(?==(?![=>])|\+=|-=|\*=|/=|%=|&=|\|=|\^=|<<=|>>=|>>>=|\*\*=|&&=|\|\|=|\?\?="
+        r"|\+\+|--|\[|\.\s*(?:add|delete|clear|push|pop|shift|unshift|splice|sort"
+        r"|reverse|fill|copyWithin)\s*\()")
+    _WRITE_PREFIX = re.compile(r"(?<![\w$.])(?:\+\+|--)\s*([A-Za-z_$][A-Za-z0-9_$]*)")
+
+    def write_index(self):
+        """Every write-shaped position of every name, keyed by name, once."""
+        if self._write_index is None:
             index = {}
-            for match in _ASSIGNMENT_RE.finditer(self.text):
-                index.setdefault(match.group(1), []).append(match.end())
-            self._assign_index = index
-        return self._assign_index
+            for match in self.regions.code_matches(self._WRITE_CANDIDATE):
+                index.setdefault(match.group(1), []).append(match.start(1))
+            for match in self.regions.code_matches(self._WRITE_PREFIX):
+                index.setdefault(match.group(1), []).append(match.start(1))
+            self._write_index = index
+        return self._write_index
+
+    def name_writes(self, name: str):
+        """Every unshadowed write or mutation of a module-level name.
+
+        A write counts only when no scope between its position and the top
+        level rebinds the name, so an unrelated local with the same minified
+        name never unsolves the module constant. Kinds: ``assign`` for a plain
+        ``=``, and anything else — compound assignment, increments, index
+        writes, mutating calls, destructuring bindings and bare for-loop
+        targets — which always leaves a constant unsolvable.
+        """
+        if name in self._writes:
+            return self._writes[name]
+        events = [(position, self._classify_write(name, position))
+                  for position in self.write_index().get(name, ())]
+        scopes = self.scopes()
+        for position in scopes.for_writes.get(name, ()):
+            events.append((position, "update"))
+        for position in scopes.destructured.get(name, ()):
+            events.append((position, "destructure"))
+        kept, seen = [], set()
+        for position, kind in sorted(events):
+            if kind == "read" or position in seen or scopes.is_shadowed(name, position):
+                continue
+            seen.add(position)
+            kept.append((position, kind))
+        self._writes[name] = kept
+        return kept
+
+    def _classify_write(self, name: str, position: int) -> str:
+        """The write kind at a candidate position, or ``read`` for a plain read."""
+        text = self.text
+        n = len(text)
+        i = self._skip_write_ws(position + len(name))
+        if i >= n:
+            return "read"
+        c = text[i]
+        if c == "=":
+            return "assign" if text[i + 1:i + 2] not in ("=", ">") else "read"
+        if text[i:i + 2] in ("++", "--"):
+            return "update"
+        for width in (4, 3, 2):
+            if text[i:i + width] in _COMPOUND_PUNCT:
+                return "compound"
+        if c == "[":
+            return self._index_write_kind(i)
+        if c == ".":
+            j = self._skip_write_ws(i + 1)
+            m = _IDENT_RE.match(text, j)
+            if m is not None and m.group(0) in _MUTATION_METHODS:
+                k = self._skip_write_ws(m.end())
+                return "mutate" if k < n and text[k] == "(" else "read"
+            return "read"
+        return "read"
+
+    def _index_write_kind(self, open_bracket: int) -> str:
+        """Whether ``name[...]`` is written through; unreadable contexts write."""
+        depth = 0
+        i = open_bracket
+        n = min(len(self.text), open_bracket + _MAX_GROUP_WINDOW)
+        while i < n:
+            if not self.regions.is_code(i):
+                k = bisect.bisect_right(self.regions._starts, i) - 1
+                i = self.regions.spans[k][1]
+                continue
+            c = self.text[i]
+            if c in "([{":
+                depth += 1
+            elif c in ")]}":
+                depth -= 1
+                if depth == 0:
+                    j = self._skip_write_ws(i + 1)
+                    if j < n and self.text[j] == "=" and self.text[j + 1:j + 2] not in ("=", ">"):
+                        return "assign"
+                    if j < n and self.text[j:j + 2] in ("++", "--"):
+                        return "update"
+                    for width in (4, 3, 2):
+                        if self.text[j:j + width] in _COMPOUND_PUNCT:
+                            return "compound"
+                    return "read"
+            i += 1
+        return "compound"  # the index could not be resolved: fail closed
+
+    def _skip_write_ws(self, i: int) -> int:
+        n = len(self.text)
+        while i < n:
+            if not self.regions.is_code(i):
+                k = bisect.bisect_right(self.regions._starts, i) - 1
+                i = self.regions.spans[k][1]
+                continue
+            if not self.text[i].isspace():
+                return i
+            i += 1
+        return n
 
     def constant(self, name: str, depth: int = 0):
         """The single agreed value of a module constant: a string, list or Set.
 
-        Every resolvable ``name =`` assignment in the text must carry the same
-        value — strings and comments that merely contain a candidate make the
-        name unresolvable unless they agree — and the elements of lists and
-        Sets are followed through identifier indirections.
+        Every unshadowed write of the name must be a plain assignment whose
+        complete right-hand side parses and resolves to the same value; any
+        unrecognized, mutating or disagreeing write leaves it unsolvable
+        instead of discarding the inconvenient one.
         """
         if name in self._constants:
             return self._constants[name]
         if depth > _MAX_CONST_DEPTH:
             return None
+        writes = self.name_writes(name)
         values = set()
-        for position in self._assignments().get(name, ()):
+        for position, kind in writes:
+            if kind != "assign":
+                self._constants[name] = None
+                return None
             value = self._constant_value(position, depth)
-            if value is not None:
-                values.add(value)
-        resolved = next(iter(values)) if len(values) == 1 else None
+            if value is None:
+                self._constants[name] = None
+                return None
+            values.add(value)
+        resolved = next(iter(values)) if len(values) == 1 and values else None
         self._constants[name] = resolved
         return resolved
 
     def _constant_value(self, position: int, depth: int):
+        """The parsed value of the assignment at ``position``, whole right-hand side.
+
+        The expression must consume the entire right-hand side and stop at a
+        terminator a real declarator list or call could put there; a truncated
+        parse — ``"Re" + "ad"``, for one — resolves to nothing.
+        """
         limit = min(len(self.text), position + 4096)
         try:
-            node = _Parser(_token_iter(self.text, position, limit)).parse_ternary()
+            parser = _Parser(_token_iter(self.text, position, limit))
+            parser.next()  # the name itself
+            parser.expect_punct("=")
+            node = parser.parse_ternary()
+            following = parser.peek()
         except _ParseError:
+            return None
+        if following is not None and not (following[0] == "punct"
+                                          and following[1] in _RHS_TERMININATORS):
             return None
         return self._constant_of_node(node, depth)
 
@@ -685,11 +1670,13 @@ class _Bundle:
                 return None
         return ("list", tuple(elements))
 
-    def constant_string(self, node):
-        """A node's constant string: a literal or a resolvable identifier."""
+    def constant_string(self, node, env=frozenset()):
+        """A node's constant string: a literal, or an unshadowed identifier."""
         if node[0] == "str":
             return node[1]
         if node[0] == "id":
+            if node[1] in env:
+                return None  # a formal or local is never the module constant
             value = self.constant(node[1])
             if value is not None and value[0] == "str":
                 return value[1]
@@ -697,14 +1684,16 @@ class _Bundle:
 
     # -- helper purity --------------------------------------------------------
 
-    def pure_function(self, name: str, depth: int = 0) -> bool:
+    def pure_function(self, name: str, depth: int = 0, call_env=frozenset()) -> bool:
         """Whether a helper's whole body is built from the pure grammar only.
 
-        Allowed statements are declarations, returns and pure guards; allowed
-        calls are pure string methods on parameters, locals or resolved
-        constants and calls to further verified helpers, so a side effect
-        anywhere in the chain disqualifies it.
+        The reference must not be shadowed where it is made, and the helper's
+        own environment — parameters, locals and every enclosing scope —
+        contributes its bindings, so a shadowed helper or constant inside the
+        chain never passes as the global one.
         """
+        if call_env and name in call_env:
+            return False
         if name in self._pure:
             return self._pure[name]
         if depth > _MAX_PURE_DEPTH or name in self._pure_visiting:
@@ -715,99 +1704,104 @@ class _Bundle:
             if len(sites) != 1:
                 verdict = False
             else:
-                parameters, statements, _ = sites[0]
-                verdict = statements is not None and self._pure_statements(
-                    statements, set(parameters), set(), depth)
+                parameters, defaults, statements, _, body_start = sites[0]
+                chain = self.chain_bindings(body_start)
+                if (any(default is not None for default in defaults)
+                        or chain is None or statements is None):
+                    verdict = False
+                else:
+                    env = frozenset(parameters) | chain
+                    verdict = self._pure_statements(statements, env, depth)
         finally:
             self._pure_visiting.discard(name)
         self._pure[name] = verdict
         return verdict
 
-    def _pure_statements(self, statements, parameters: set, locals_: set, depth: int) -> bool:
+    def _pure_statements(self, statements, env: frozenset, depth: int) -> bool:
         for statement in statements:
             kind = statement[0]
             if kind == "empty":
                 continue
             if kind == "let":
                 for name, initializer in statement[2]:
-                    if initializer is not None and not self._pure_expression(
-                            initializer, parameters, locals_, depth):
+                    if initializer is not None and not self._pure_expression(initializer, env, depth):
                         return False
-                    locals_.add(name)
+                    env = env | {name}
             elif kind == "return":
-                if statement[1] is not None and not self._pure_expression(
-                        statement[1], parameters, locals_, depth):
+                if statement[1] is not None and not self._pure_expression(statement[1], env, depth):
                     return False
             elif kind == "if":
                 if (statement[3] is not None
-                        or not self._pure_expression(statement[1], parameters, locals_, depth)
-                        or not self._pure_statements(statement[2], parameters, set(locals_), depth)):
+                        or not self._pure_expression(statement[1], env, depth)
+                        or not self._pure_statements(statement[2], env, depth)):
                     return False
             else:
                 return False
         return True
 
-    def _pure_expression(self, node, parameters: set, locals_: set, depth: int) -> bool:
+    def _pure_expression(self, node, env: frozenset, depth: int) -> bool:
         kind = node[0]
         if kind in ("str", "num", "lit", "id"):
             return True
         if kind == "member":
-            return self._pure_expression(node[1], parameters, locals_, depth)
+            return self._pure_expression(node[1], env, depth)
         if kind == "index":
-            return (self._pure_expression(node[1], parameters, locals_, depth)
-                    and self._pure_expression(node[2], parameters, locals_, depth))
+            return (self._pure_expression(node[1], env, depth)
+                    and self._pure_expression(node[2], env, depth))
         if kind == "unary":
-            return self._pure_expression(node[2], parameters, locals_, depth)
+            return self._pure_expression(node[2], env, depth)
         if kind == "bin":
-            return (self._pure_expression(node[2], parameters, locals_, depth)
-                    and self._pure_expression(node[3], parameters, locals_, depth))
+            return (self._pure_expression(node[2], env, depth)
+                    and self._pure_expression(node[3], env, depth))
         if kind in ("logic", "cond"):
             operands = node[2] if kind == "logic" else node[1:]
-            return all(self._pure_expression(operand, parameters, locals_, depth)
-                       for operand in operands)
+            return all(self._pure_expression(operand, env, depth) for operand in operands)
         if kind == "array":
             return all(self._pure_expression(element[1] if element[0] == "spread" else element,
-                                             parameters, locals_, depth) for element in node[1])
+                                             env, depth) for element in node[1])
         if kind == "object":
             return all(self._pure_expression(value[1] if value[0] == "spread" else value,
-                                             parameters, locals_, depth) for _, value in node[1])
+                                             env, depth) for _, value in node[1])
         if kind == "arrow":
-            return self._pure_expression(node[2], parameters | set(node[1]), locals_, depth)
+            return self._pure_expression(node[2], env | set(node[1]), depth)
         if kind == "new":
             return node[1] == ("id", "Set") and all(
-                self._pure_expression(argument, parameters, locals_, depth) for argument in node[2])
+                self._pure_expression(argument, env, depth) for argument in node[2])
         if kind == "call":
-            return self._pure_call(node, parameters, locals_, depth)
+            return self._pure_call(node, env, depth)
         return False
 
-    def _pure_call(self, node, parameters: set, locals_: set, depth: int) -> bool:
+    def _pure_call(self, node, env: frozenset, depth: int) -> bool:
         callee, arguments = node[1], node[2]
-        if not all(self._pure_expression(argument, parameters, locals_, depth) for argument in arguments):
+        if not all(self._pure_expression(argument, env, depth) for argument in arguments):
             return False
         if callee[0] == "id":
-            return self.pure_function(callee[1], depth + 1)
+            return self.pure_function(callee[1], depth + 1, env)
         if callee[0] == "member" and callee[2] in _STRING_METHODS:
             base = callee[1]
             while base[0] == "member":
                 base = base[1]
-            return base[0] == "id" and (base[1] in parameters or base[1] in locals_
-                                        or self.constant(base[1]) is not None)
+            return base[0] == "id" and (base[1] in env or self.constant(base[1]) is not None)
         return False
 
     # -- recognized helper templates ------------------------------------------
 
-    def set_builder(self, name: str) -> bool:
+    def set_builder(self, name: str, call_env=frozenset()) -> bool:
         """The pure disallowed-Set builder template over one parameter.
 
         The optional empty guard, the fresh Set, the single for-of that only
         adds normalized entries through a verified pure normalizer and the
         bounded return together admit exactly the installed builder's shape.
         """
+        if name in call_env:
+            return False
         sites = self.sites(name)
         if len(sites) != 1:
             return False
-        parameters, statements, _ = sites[0]
-        if not parameters or statements is None:
+        parameters, defaults, statements, _, body_start = sites[0]
+        chain = self.chain_bindings(body_start)
+        if (not parameters or statements is None or chain is None
+                or any(default is not None for default in defaults)):
             return False
         parameter = ("id", parameters[0])
         index = 0
@@ -832,6 +1826,7 @@ class _Bundle:
         if iterable != parameter:
             return False
         loop_id, set_id = ("id", loop_var), ("id", set_var)
+        env = frozenset(parameters) | chain | {set_var, loop_var}
         add_direct = ("call", _member(set_id, "add"), (loop_id,))
         built = len(loop_body) == 1 and loop_body[0] == ("expr", add_direct)
         if not built and len(loop_body) == 2:
@@ -843,7 +1838,7 @@ class _Bundle:
                             "expr", ("logic", "&&", (("id", norm_var),
                                                      ("call", _member(set_id, "add"),
                                                       (("id", norm_var),)))))):
-                    built = self.pure_function(norm_init[1][1])
+                    built = self.pure_function(norm_init[1][1], 0, env | {norm_var})
         if not built:
             return False
         index += 1
@@ -854,17 +1849,23 @@ class _Bundle:
                        set_id, ("unary", "void", ("num", "0"))))
 
 
-def _name_predicate_ok(bundle: _Bundle, name: str) -> bool:
+def _name_predicate_ok(bundle: _Bundle, name: str, call_env=frozenset()) -> bool:
     """The pure name predicate template: ``x ? SET.has(x) : !0``.
 
-    The Set must be a resolved constant of strings; a helper that merely carries
-    a plausible name, or one whose predicate can act, never qualifies.
+    The Set must be a resolved constant of strings that the predicate's own
+    environment does not shadow; a helper that merely carries a plausible
+    name, or one whose predicate can act, never qualifies.
     """
+    if name in call_env:
+        return False
     sites = bundle.sites(name)
     if len(sites) != 1:
         return False
-    parameters, statements, _ = sites[0]
-    if len(parameters) != 1 or statements is None or len(statements) != 1 or statements[0][0] != "return":
+    parameters, defaults, statements, _, body_start = sites[0]
+    chain = bundle.chain_bindings(body_start)
+    if (len(parameters) != 1 or statements is None or chain is None
+            or any(default is not None for default in defaults)
+            or len(statements) != 1 or statements[0][0] != "return"):
         return False
     value = statements[0][1]
     if value is None or value[0] != "cond":
@@ -882,6 +1883,8 @@ def _name_predicate_ok(bundle: _Bundle, name: str) -> bool:
     base = consequent[1][1]
     if base[0] != "id":
         return False
+    if base[1] in frozenset(parameters) | chain:
+        return False
     resolved = bundle.constant(base[1])
     return resolved is not None and resolved[0] == "set"
 
@@ -893,7 +1896,9 @@ def _registration_problem(bundle: _Bundle, name: str):
     sites = bundle.sites(name)
     if len(sites) != 1:
         return None, _REGISTER_NOT_FUNCTION
-    parameters, statements, body = sites[0]
+    parameters, defaults, statements, body, body_start = sites[0]
+    if any(default is not None and default != ("object", ()) for default in defaults):
+        return None, _BAD_DEFAULT
     if not _body_has_for_of(body):
         return None, _NO_FOR_OF
     register_sites, receivers = 0, set()
@@ -909,14 +1914,40 @@ def _registration_problem(bundle: _Bundle, name: str):
         return None, _REGISTER_OUTSIDE
     if statements is None:
         return None, _UNRECOGNIZED_FLOW
-    declarations, loops = [], []
+    # Collect the shape first so a rewritten Set is named precisely before the
+    # ordering verdicts: declarations and empty statements, then the one
+    # for-of, then nothing but empty statements. ``var`` hoisting is why a
+    # declaration after the loop — uninitialized at loop time — never qualifies.
+    declarations, seen_loop, loops, misordered, order_problem = [], False, [], [], False
     for statement in statements:
+        if statement[0] == "empty":
+            continue
         if statement[0] == "let":
             declarations.extend(statement[2])
+            if seen_loop:
+                order_problem = True
         elif statement[0] == "forof":
-            loops.append(statement)
-        elif statement[0] not in ("empty", "assign"):
-            return None, _UNRECOGNIZED_FLOW
+            if seen_loop:
+                return None, _UNRECOGNIZED_FLOW
+            seen_loop, _ = True, loops.append(statement)
+        else:
+            misordered.append(statement)
+    if not seen_loop or len(loops) != 1:
+        return None, _UNRECOGNIZED_FLOW
+    # Complete bindings: duplicate parameters, a local or parameter named Set,
+    # a local redeclaring a parameter or an earlier local, and a loop variable
+    # colliding with any of them, all leave the template's meaning unprovable.
+    if len(set(parameters)) != len(parameters) or "Set" in parameters:
+        return None, _BAD_BINDING
+    bound = set(parameters)
+    for declared, _initializer in declarations:
+        if declared in bound or declared == "Set":
+            return None, _BAD_BINDING
+        bound.add(declared)
+    _, loop_var, iterable, loop_body = loops[0]
+    if loop_var in bound:
+        return None, _BAD_BINDING
+    bound.add(loop_var)
     set_var = options_param = None
     for declared, initializer in declarations:
         for parameter in parameters:
@@ -926,47 +1957,74 @@ def _registration_problem(bundle: _Bundle, name: str):
                 set_var, options_param = declared, parameter
     if set_var is None:
         return None, _NO_SET_FILTER
-    writes = 0
+    # Writes: the allowlist Set may be written exactly once — its declaration;
+    # every other bound name — parameters, locals, the loop variable — and the
+    # registry parameter may never be written anywhere in the body.
+    write_counts = {}
     for index in range(len(body) - 1):
-        if (body[index][0] == "id" and body[index][1] == set_var
-                and body[index + 1][0] == "punct" and body[index + 1][1] in _ASSIGNMENT_PUNCT):
-            writes += 1
-    if writes > 1:
+        token, following = body[index], body[index + 1]
+        if token[0] != "id" or not (following[0] == "punct"
+                                    and following[1] in _ASSIGNMENT_PUNCT):
+            continue
+        if index > 0 and body[index - 1][0] == "punct" and body[index - 1][1] in ("++", "--"):
+            continue  # counted by the prefix pass below
+        write_counts[token[1]] = write_counts.get(token[1], 0) + 1
+    for index in range(len(body) - 1):
+        token, previous = body[index], body[index - 1] if index else None
+        if (token[0] == "id" and token[1] in bound and previous is not None
+                and previous[0] == "punct" and previous[1] in ("++", "--")):
+            write_counts[token[1]] = write_counts.get(token[1], 0) + 1
+    if write_counts.get(set_var, 0) > 1:
         return None, _SET_REWRITTEN
-    if any(statement[0] == "assign" for statement in statements):
+    for parameter in parameters:
+        if write_counts.get(parameter, 0):
+            return None, _UNRECOGNIZED_FLOW
+    for declared, _initializer in declarations:
+        if declared != set_var and write_counts.get(declared, 0) > 1:
+            return None, _UNRECOGNIZED_FLOW
+    if write_counts.get(loop_var, 0) or write_counts.get(next(iter(receivers)), 0):
         return None, _UNRECOGNIZED_FLOW
+    if misordered or order_problem:
+        reason = _UNRECOGNIZED_FLOW if any(s[0] == "assign" for s in misordered) else _BAD_ORDER
+        return None, reason
+    chain = bundle.chain_bindings(body_start)
+    if chain is None:
+        return None, _UNRECOGNIZED_FLOW
+    env = frozenset(bound) | chain
     local_kinds = {}
     for declared, initializer in declarations:
         if declared == set_var:
             continue
-        usable, kind = _preamble_declaration(bundle, initializer)
+        usable, kind = _preamble_declaration(bundle, initializer, env)
         if not usable:
             return None, _BAD_PREAMBLE
         local_kinds[declared] = kind
-    if len(loops) != 1:
-        return None, _UNRECOGNIZED_FLOW
-    _, loop_var, iterable, loop_body = loops[0]
     if not _pure_read(iterable):
         return None, _UNRECOGNIZED_FLOW
     registry = next(iter(receivers))
     environment = {"set_var": set_var, "set_locals": local_kinds, "loop_var": loop_var,
-                   "parameters": parameters, "registry": registry, "options": options_param}
+                   "parameters": parameters, "registry": registry, "options": options_param,
+                   "env": env}
     problem = _loop_flow_problem(bundle, loop_body, environment)
     if problem is not None:
         return None, problem
     return (len(parameters), parameters.index(options_param)), None
 
 
-def _preamble_declaration(bundle: _Bundle, initializer):
+def _preamble_declaration(bundle: _Bundle, initializer, env: frozenset):
     """A preamble declaration must be a pure read or a verified helper call."""
+    if initializer is None:
+        return True, "pure"  # a bare binding; nothing downstream may read it
     if _pure_read(initializer):
         return True, "pure"
     if (initializer[0] == "call" and initializer[1][0] == "id"
             and all(_pure_read(argument) for argument in initializer[2])):
         helper = initializer[1][1]
-        if bundle.set_builder(helper):
+        if helper in env:
+            return False, None  # a shadowed helper is not the verified global one
+        if bundle.set_builder(helper, env):
             return True, "set"
-        if bundle.pure_function(helper):
+        if bundle.pure_function(helper, 0, env):
             return True, "pure"
     return False, None
 
@@ -1025,13 +2083,16 @@ def _register_argument_problem(bundle: _Bundle, arguments, environment) -> str |
     if not arguments:
         return _BAD_REGISTER_ARG
     first = arguments[0]
-    loop_var, options = environment["loop_var"], environment["options"]
+    loop_var, options, env = environment["loop_var"], environment["options"], environment["env"]
     if first == ("id", loop_var):
         pass
     elif (first[0] == "call" and first[1][0] == "id"
           and tuple(first[2]) == (("id", loop_var), ("id", options))):
-        if _transform_problem(bundle, first[1][1]) is not None:
+        if first[1][1] in env:
             return _TRANSFORM_PROBLEM
+        problem = _transform_problem(bundle, first[1][1], env)
+        if problem is not None:
+            return problem
     else:
         return _BAD_REGISTER_ARG
     if not all(_pure_read(argument) for argument in arguments[1:]):
@@ -1041,6 +2102,7 @@ def _register_argument_problem(bundle: _Bundle, arguments, environment) -> str |
 
 def _rejection_operand_ok(bundle: _Bundle, node, environment) -> bool:
     """One rejection operand: pure comparison logic, a verified Set.has or predicate."""
+    env = environment["env"]
     kind = node[0]
     if kind in ("str", "num", "lit"):
         return True
@@ -1059,98 +2121,129 @@ def _rejection_operand_ok(bundle: _Bundle, node, environment) -> bool:
                 return True
             if base[0] == "id" and environment["set_locals"].get(base[1]) == "set":
                 return True
-            if base[0] == "id":
+            if base[0] == "id" and base[1] not in env:
                 resolved = bundle.constant(base[1])
                 return resolved is not None and resolved[0] == "set"
             return False
         if callee[0] == "id" and len(arguments) == 1 and _pure_read(arguments[0]):
-            return _name_predicate_ok(bundle, callee[1])
+            return _name_predicate_ok(bundle, callee[1], env)
         return False
     return False
 
 
-def _transform_problem(bundle: _Bundle, name: str) -> str | None:
-    """The transform returns every read-only tool unchanged, or fails closed.
-
-    Every branch condition must carry a positive ``metadata.name`` equality
-    whose resolvable name is none of Read/Glob/Grep, must contain no other
-    reference to ``metadata.name`` and no call, and the final fall-through must
-    be the bare tool parameter — a ``return e`` elsewhere proves nothing.
-    """
+def _transform_problem(bundle: _Bundle, name: str, call_env=frozenset()) -> str | None:
+    """The transform returns every read-only tool unchanged, or fails closed."""
+    if name in call_env:
+        return _TRANSFORM_PROBLEM
     sites = bundle.sites(name)
     if len(sites) != 1:
         return _TRANSFORM_PROBLEM
-    parameters, statements, _ = sites[0]
-    if (len(parameters) != 2 or statements is None or len(statements) != 1
+    parameters, defaults, statements, _, body_start = sites[0]
+    if any(default is not None for default in defaults):
+        return _BAD_DEFAULT
+    chain = bundle.chain_bindings(body_start)
+    if (chain is None or len(parameters) != 2 or statements is None or len(statements) != 1
             or statements[0][0] != "return"):
         return _TRANSFORM_PROBLEM
+    env = frozenset(parameters) | chain
     node = statements[0][1]
     if node is None:
         return _TRANSFORM_PROBLEM
     while node[0] == "cond":
-        problem = _transform_condition_problem(bundle, node[1], parameters[0])
+        problem = _transform_condition_problem(bundle, node[1], parameters[0], env)
         if problem is not None:
             return problem
         node = node[3]
     return None if node == ("id", parameters[0]) else _TRANSFORM_PROBLEM
 
 
-def _transform_condition_problem(bundle: _Bundle, condition, tool_parameter: str) -> str | None:
+def _chain_within(node, name_chain) -> bool:
+    """Whether the name chain appears anywhere inside ``node``."""
+    if node == name_chain:
+        return True
+    kind = node[0]
+    if kind == "member":
+        return _chain_within(node[1], name_chain)
+    if kind == "index":
+        return _chain_within(node[1], name_chain) or _chain_within(node[2], name_chain)
+    if kind == "unary":
+        return _chain_within(node[2], name_chain)
+    if kind == "bin":
+        return _chain_within(node[2], name_chain) or _chain_within(node[3], name_chain)
+    if kind in ("logic", "cond"):
+        operands = node[2] if kind == "logic" else node[1:]
+        return any(_chain_within(operand, name_chain) for operand in operands)
+    if kind == "array":
+        return any(_chain_within(element[1] if element[0] == "spread" else element, name_chain)
+                   for element in node[1])
+    if kind == "object":
+        return any(_chain_within(value[1] if value[0] == "spread" else value, name_chain)
+                   for _, value in node[1])
+    return False
+
+
+def _transform_condition_problem(bundle: _Bundle, condition, tool_parameter: str,
+                                 env: frozenset) -> str | None:
+    """A transform condition must imply the tool name is not a read-only one.
+
+    Two facts are checked separately for every operand: it is supported —
+    within the pure grammar, with the name chain appearing only as one side of
+    a positive ``===`` whose other side resolves to a non-read-only string —
+    and it constrains — its truth then implies the name is none of
+    Read/Glob/Grep. An AND needs at least one constraining operand, an OR
+    needs every operand constraining, and every operand is checked before
+    either fact is concluded, so a later ``true`` or side effect never hides
+    behind an earlier positive test. Unknown negations, ternaries and
+    comparisons around the name support nothing.
+    """
+    supported, constrained = _condition_constraint(bundle, condition, tool_parameter, env)
+    if not supported or not constrained:
+        return _TRANSFORM_PROBLEM
+    return None
+
+
+def _condition_constraint(bundle: _Bundle, node, tool_parameter: str, env: frozenset):
     name_chain = _name_member(tool_parameter)
-    keys = []
-
-    def chain_within(node) -> bool:
-        """Whether the name chain appears anywhere inside ``node``."""
-        if node == name_chain:
-            return True
-        kind = node[0]
-        if kind == "member":
-            return chain_within(node[1])
-        if kind == "index":
-            return chain_within(node[1]) or chain_within(node[2])
-        if kind == "unary":
-            return chain_within(node[2])
-        if kind == "bin":
-            return chain_within(node[2]) or chain_within(node[3])
-        if kind in ("logic", "cond"):
-            operands = node[2] if kind == "logic" else node[1:]
-            return any(chain_within(operand) for operand in operands)
-        if kind == "array":
-            return any(chain_within(element[1] if element[0] == "spread" else element)
-                       for element in node[1])
-        if kind == "object":
-            return any(chain_within(value[1] if value[0] == "spread" else value)
-                       for _, value in node[1])
-        return False
-
-    def visit(node) -> bool:
-        kind = node[0]
-        if kind == "bin":
-            if node[1] not in ("===", "!==", "==", "!="):
-                return False
+    kind = node[0]
+    if node == name_chain:
+        return False, False  # a bare name is truthy for every tool
+    if kind == "bin":
+        if node[1] in ("===", "!==", "==", "!="):
+            matched = False
             for side, other in ((node[2], node[3]), (node[3], node[2])):
                 if side == name_chain:
-                    # The name chain may appear only as a side of a positive
-                    # equality, never nested where a lookup could match any
-                    # tool, and never under an inverted comparison.
                     if node[1] != "===":
-                        return False
-                    keys.append(other)
-                elif chain_within(side):
-                    return False
-            return _pure_read(node[2]) and _pure_read(node[3])
-        if kind in ("logic", "cond", "unary"):
-            operands = node[2] if kind == "logic" else node[1:]
-            return all(visit(operand) for operand in operands)
-        return _pure_read(node) and not chain_within(node)
-
-    if not visit(condition) or not keys:
-        return _TRANSFORM_PROBLEM
-    for key in keys:
-        value = bundle.constant_string(key)
-        if value is None or value in _READ_ONLY_TOOL_NAMES:
-            return _TRANSFORM_PROBLEM
-    return None
+                        return False, False
+                    key = bundle.constant_string(other, env)
+                    if key is None or key in _READ_ONLY_TOOL_NAMES:
+                        return False, False
+                    matched = True
+                elif _chain_within(side, name_chain):
+                    return False, False
+            if not matched:
+                if not (_pure_read(node[2]) and _pure_read(node[3])):
+                    return False, False
+                return True, False
+            return True, True
+        if _chain_within(node, name_chain) or not (_pure_read(node[2]) and _pure_read(node[3])):
+            return False, False
+        return True, False
+    if kind == "logic":
+        parts = [_condition_constraint(bundle, operand, tool_parameter, env)
+                 for operand in node[2]]
+        if not all(part[0] for part in parts):
+            return False, False
+        combine = any if node[1] == "&&" else all
+        return True, combine(part[1] for part in parts)
+    if kind in ("unary", "cond"):
+        # A negation or ternary around the name supports nothing; without the
+        # name it may still sit in the condition as a pure operand.
+        if _chain_within(node, name_chain):
+            return False, False
+        return (True, False) if _pure_read(node) else (False, False)
+    if _chain_within(node, name_chain):
+        return False, False
+    return (True, False) if _pure_read(node) else (False, False)
 
 
 # -- the resolver function -------------------------------------------------------
@@ -1161,15 +2254,19 @@ def _resolver_problem(bundle: _Bundle, name: str) -> str | None:
     Only three complete chains qualify: returning the read member directly,
     returning one same-value local, or the recognized alias-map, explore-filter
     and root-child helper chain with every helper verified to preserve the
-    read-only names.
+    read-only names in its own bound environment.
     """
     sites = bundle.sites(name)
     if len(sites) != 1:
         return _RESOLVE_NOT_FUNCTION
-    parameters, statements, _ = sites[0]
-    if not parameters or statements is None:
+    parameters, defaults, statements, _, body_start = sites[0]
+    if any(default is not None for default in defaults):
+        return _BAD_DEFAULT
+    chain = bundle.chain_bindings(body_start)
+    if not parameters or statements is None or chain is None:
         return _RES_NO_READ
     config_id = parameters[0]
+    env = frozenset(parameters) | chain
     read = _member(("id", config_id), "toolAllowlist")
     if statements == [("return", read)]:
         return None
@@ -1180,20 +2277,23 @@ def _resolver_problem(bundle: _Bundle, name: str) -> str | None:
     if len(statements) != 2 or statements[0][0] != "let" or len(statements[0][2]) != 1:
         return _RES_NO_READ
     local, initializer = statements[0][2][0]
+    env = env | {local}
     if (initializer[0] != "call" or initializer[1][0] != "id" or initializer[2] != (read,)):
         return _RES_NO_READ
     alias_map = initializer[1][1]
+    if alias_map in env:
+        return _RES_HELPER
     if statements[1][0] != "return" or statements[1][1] is None:
         return _RES_NO_READ
-    chain = statements[1][1]
-    if chain[0] != "cond":
+    chain_node = statements[1][1]
+    if chain_node[0] != "cond":
         return _RES_NO_READ
-    if chain[1] != ("bin", "!==", _member(("id", config_id), "toolset"), ("str", "explore")):
+    if chain_node[1] != ("bin", "!==", _member(("id", config_id), "toolset"), ("str", "explore")):
         return _RES_NO_READ
-    if not _config_list_call(chain[2], config_id, local):
+    if not _config_list_call(chain_node[2], config_id, local):
         return _RES_NO_READ
-    child = chain[2][1][1]
-    tail = chain[3]
+    child = chain_node[2][1][1]
+    tail = chain_node[3]
     if tail[0] != "cond" or tail[1] != ("id", local):
         return _RES_NO_READ
     filter_branch, default_branch = tail[2], tail[3]
@@ -1201,6 +2301,8 @@ def _resolver_problem(bundle: _Bundle, name: str) -> str | None:
             and len(filter_branch[2]) == 2 and filter_branch[2][0] == ("id", config_id)):
         return _RES_NO_READ
     filter_child = filter_branch[1][1]
+    if filter_child in env:
+        return _RES_HELPER
     filter_call = filter_branch[2][1]
     if not (filter_call[0] == "call" and filter_call[1] == _member(("id", local), "filter")
             and len(filter_call[2]) == 1 and filter_call[2][0][0] == "arrow"):
@@ -1212,20 +2314,24 @@ def _resolver_problem(bundle: _Bundle, name: str) -> str | None:
             and has_call[2] == (("id", arrow[1][0]),)):
         return _RES_NO_READ
     set_base = has_call[1][1]
-    explore_set = bundle.constant(set_base[1]) if set_base[0] == "id" else None
+    arrow_env = env | set(arrow[1])
+    explore_set = (None if set_base[0] != "id" or set_base[1] in arrow_env
+                   else bundle.constant(set_base[1]))
     if explore_set is None or explore_set[0] != "set" or not _READ_ONLY_TOOL_NAMES <= explore_set[1]:
         return _RES_EXPLORE
     if not (default_branch[0] == "call" and default_branch[1][0] == "id"
             and len(default_branch[2]) == 2 and default_branch[2][0] == ("id", config_id)
             and default_branch[2][1][0] == "id"):
         return _RES_NO_READ
+    if default_branch[1][1] in env or default_branch[2][1][1] in env:
+        return _RES_NO_READ
     default_list = bundle.constant(default_branch[2][1][1])
     if default_list is None or default_list[0] != "list":
         return _RES_NO_READ
-    problem = _alias_map_problem(bundle, alias_map)
+    problem = _alias_map_problem(bundle, alias_map, env)
     if problem is not None:
         return problem
-    if _child_problem(bundle, child) is not None or _child_problem(bundle, filter_child) is not None:
+    if _child_problem(bundle, child, env) is not None or _child_problem(bundle, filter_child, env) is not None:
         return _RES_HELPER
     return None
 
@@ -1235,14 +2341,18 @@ def _config_list_call(node, config_id: str, local: str) -> bool:
             and tuple(node[2]) == (("id", config_id), ("id", local)))
 
 
-def _alias_map_problem(bundle: _Bundle, name: str) -> str | None:
+def _alias_map_problem(bundle: _Bundle, name: str, caller_env=frozenset()) -> str | None:
     """The alias-map helper ``x?.map(v => alias(v))`` over a pure alias chain."""
+    if name in caller_env:
+        return _RES_HELPER
     sites = bundle.sites(name)
     if len(sites) != 1:
         return _RES_HELPER
-    parameters, statements, _ = sites[0]
-    if (len(parameters) != 1 or statements is None or len(statements) != 1
-            or statements[0][0] != "return"):
+    parameters, defaults, statements, _, body_start = sites[0]
+    chain = bundle.chain_bindings(body_start)
+    if (len(parameters) != 1 or statements is None or chain is None
+            or any(default is not None for default in defaults)
+            or len(statements) != 1 or statements[0][0] != "return"):
         return _RES_HELPER
     value = statements[0][1]
     if value is None or value[0] != "call" or len(value[2]) != 1:
@@ -1253,57 +2363,69 @@ def _alias_map_problem(bundle: _Bundle, name: str) -> str | None:
     arrow = value[2][0]
     if arrow[0] != "arrow" or len(arrow[1]) != 1:
         return _RES_HELPER
+    env = frozenset(parameters) | chain | set(arrow[1])
     body = arrow[2]
     if body == ("id", arrow[1][0]):
         return None
     if body[0] == "call" and body[1][0] == "id" and body[2] == (("id", arrow[1][0]),):
-        return _alias_chain_problem(bundle, body[1][1])
-    return _alias_chain_on_node(bundle, body, arrow[1][0])
+        return _alias_chain_problem(bundle, body[1][1], env)
+    return _alias_chain_on_node(bundle, body, arrow[1][0], env)
 
 
-def _alias_chain_problem(bundle: _Bundle, name: str) -> str | None:
+def _alias_chain_problem(bundle: _Bundle, name: str, caller_env=frozenset()) -> str | None:
+    if name in caller_env:
+        return _RES_HELPER
     sites = bundle.sites(name)
     if len(sites) != 1:
         return _RES_HELPER
-    parameters, statements, _ = sites[0]
-    if (len(parameters) != 1 or statements is None or len(statements) != 1
-            or statements[0][0] != "return"):
+    parameters, defaults, statements, _, body_start = sites[0]
+    chain = bundle.chain_bindings(body_start)
+    if (len(parameters) != 1 or statements is None or chain is None
+            or any(default is not None for default in defaults)
+            or len(statements) != 1 or statements[0][0] != "return"):
         return _RES_HELPER
-    return _alias_chain_on_node(bundle, statements[0][1], parameters[0])
+    env = frozenset(parameters) | chain
+    return _alias_chain_on_node(bundle, statements[0][1], parameters[0], env)
 
 
-def _alias_chain_on_node(bundle: _Bundle, node, parameter: str) -> str | None:
+def _alias_chain_on_node(bundle: _Bundle, node, parameter: str, env: frozenset) -> str | None:
     """A chain of ``x === key ? value :`` conditions ending in the bare ``x``.
 
-    No key may name a read-only tool, and every key and value must resolve to a
-    string constant, so the three read-only names always pass unchanged.
+    No key may name a read-only tool, and every key and value must resolve to
+    a string constant its own environment does not shadow, so the three
+    read-only names always pass unchanged.
     """
     identity = ("id", parameter)
     while node[0] == "cond":
         test = node[1]
         if not (test[0] == "bin" and test[1] == "===" and test[2] == identity):
             return _RES_HELPER
-        key = bundle.constant_string(test[3])
+        key = bundle.constant_string(test[3], env)
         if key is None:
             return _RES_HELPER
         if key in _READ_ONLY_TOOL_NAMES:
             return _RES_ALIAS
-        if bundle.constant_string(node[2]) is None:
+        if bundle.constant_string(node[2], env) is None:
             return _RES_HELPER
         node = node[3]
     return None if node == identity else _RES_HELPER
 
 
-def _child_problem(bundle: _Bundle, name: str) -> str | None:
+def _child_problem(bundle: _Bundle, name: str, caller_env=frozenset()) -> str | None:
     """The root-child helper: only the child branch appends one constant name."""
+    if name in caller_env:
+        return _RES_HELPER
     sites = bundle.sites(name)
     if len(sites) != 1:
         return _RES_HELPER
-    parameters, statements, _ = sites[0]
-    if (len(parameters) != 2 or statements is None or len(statements) != 1
-            or statements[0][0] != "return"):
+    parameters, defaults, statements, _, body_start = sites[0]
+    chain = bundle.chain_bindings(body_start)
+    if (len(parameters) != 2 or statements is None or chain is None
+            or any(default is not None for default in defaults)
+            or len(statements) != 1 or statements[0][0] != "return"):
         return _RES_HELPER
     config, list_param = parameters
+    env = frozenset(parameters) | chain
     value = statements[0][1]
     if value is None or value[0] != "logic" or value[1] != "&&":
         return _RES_HELPER
@@ -1329,26 +2451,33 @@ def _child_problem(bundle: _Bundle, name: str) -> str | None:
         return _RES_HELPER
     if appended != ("array", (("spread", ("id", list_param)), key)):
         return _RES_HELPER
-    return None if bundle.constant_string(key) is not None else _RES_HELPER
+    return None if bundle.constant_string(key, env) is not None else _RES_HELPER
 
 
 # -- the call-site wiring ---------------------------------------------------------
 
-def _wiring_problem(text: str, register: str, resolver: str, context) -> str | None:
+def _wiring_problem(bundle: _Bundle, register: str, resolver: str, context) -> str | None:
     """One registration call wires the verified resolver at the options position.
 
     A qualifying call carries exactly the declared parameters' worth of
     arguments, its options-position argument is a direct object literal without
     spread or duplicate ``allowedTools`` keys, and that one value is the
-    resolver called on a single ``.config`` member read. Anything else — a
-    third argument, a nested or spread decoy, a discarded resolver return —
-    leaves the call unqualified.
+    resolver called on a single ``.config`` member read — from a scope chain
+    that rebinds neither verified function, ``var`` hoisting, later locals and
+    default parameters included. Anything else — a shadowed callee, a third
+    argument, a nested or spread decoy, a discarded resolver return — leaves
+    the call unqualified.
     """
     parameter_count, options_index = context
-    for match in re.finditer(r"(?<![\w$])" + re.escape(register) + r"\s*\(", text):
+    text = bundle.text
+    pattern = re.compile(r"(?<![\w$.])" + re.escape(register) + r"\s*\(")
+    for match in bundle.regions.code_matches(pattern):
         prefix = text[:match.start()].rstrip()
-        if prefix.endswith("function") or prefix.endswith("."):
+        if prefix.endswith("function") or prefix.endswith("new"):
             continue
+        bindings = bundle.chain_bindings(match.start())
+        if bindings is None or register in bindings or resolver in bindings:
+            continue  # the call site's own scopes rebind a verified function
         limit = min(len(text), match.start() + _MAX_REGION_CHARS)
         try:
             parser = _Parser(_token_iter(text, match.start(), limit))
@@ -1387,17 +2516,20 @@ def _wiring_problem(text: str, register: str, resolver: str, context) -> str | N
 def allowlist_chain_problem(text: str) -> str | None:
     """The first missing allowlist mechanism in the public CLI bundle text.
 
-    This is the L6-A3 static core behind
+    This is the L6-A4 static core behind
     :func:`~buddy.adapters.zcode_read_only.native_contract_problem`: it locates
-    the exported registration and resolver functions, verifies the complete
-    Set-membership registration flow, the tool-preserving transform, the
-    resolver's complete return chain and the call-site wiring, fail-closed with
-    a specific reason for every unrecognized shape. The caller supplies the
+    the exported registration and resolver functions in the shared outer code
+    context, verifies the complete ordered and bound Set-membership
+    registration flow, the tool-preserving transform whose conditions imply
+    the read-only names never match, the resolver's complete return chain over
+    its own bound environment, the unwritten function names, and the
+    call-site wiring resolved in its actual scope — fail-closed with a
+    specific reason for every unrecognized shape. The caller supplies the
     bounded public bundle text; nothing here executes the bundle or reads any
     credential.
     """
     bundle = _Bundle(text)
-    exported = _exported_names(text)
+    exported = _exported_names(bundle)
     registers = exported[_REGISTER_EXPORT]
     resolvers = exported[_RESOLVE_EXPORT]
     if not registers:
@@ -1408,10 +2540,13 @@ def allowlist_chain_problem(text: str) -> str | None:
         return _REGISTER_AMBIGUOUS
     if len(resolvers) > 1:
         return _RESOLVE_AMBIGUOUS
-    context, problem = _registration_problem(bundle, registers[0])
+    register, resolver = registers[0], resolvers[0]
+    context, problem = _registration_problem(bundle, register)
     if problem is not None:
         return problem
-    problem = _resolver_problem(bundle, resolvers[0])
+    problem = _resolver_problem(bundle, resolver)
     if problem is not None:
         return problem
-    return _wiring_problem(text, registers[0], resolvers[0], context)
+    if bundle.name_writes(register) or bundle.name_writes(resolver):
+        return _REASSIGNED
+    return _wiring_problem(bundle, register, resolver, context)

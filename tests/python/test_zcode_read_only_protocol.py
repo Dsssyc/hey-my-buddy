@@ -235,6 +235,23 @@ class ContractProblemTests(unittest.TestCase):
             with self.subTest(label=label):
                 self.assertIn(reason, native_contract_problem(text))
 
+    def test_decoys_outside_code_never_prove_a_schema_or_a_tool(self):
+        # The strict schema lives only inside a string, and the tool carries an
+        # escaped spelling: both discoveries share the outer code context, so
+        # neither a masked schema nor an unread name registers a mechanism.
+        schema_in_string = (
+            "var decoy='kR=m.object({sessionId:Dn.optional(),workspace:rd,parentSessionId:Dn.optional(),"
+            "mode:Qm.optional(),model:Pu.optional(),titleGenerationEnabled:m.boolean().optional(),"
+            "mcpServers:m.array(Ype).optional(),toolAllowlist:m.array(Dn).optional(),"
+            "toolDenylist:m.array(Dn).optional(),offPeakToolEnabled:m.boolean().optional(),"
+            "dynamicWorkflowEnabled:m.boolean().optional()}).strict();';"
+            + GOOD_BUNDLE[len(BUNDLE_SCHEMA):])
+        self.assertIn("no strict session/create schema", native_contract_problem(schema_in_string))
+        escaped_tool = GOOD_BUNDLE.replace('metadata:{name:"Read",readOnly:!0}',
+                                           'metadata:{name:"R\\x65ad",readOnly:!0}')
+        self.assertIn("the Read built-in tool is not registered",
+                      native_contract_problem(escaped_tool))
+
 
 @unittest.skipUnless(DEFAULT_CLI.is_file(), "the public ZCode installation is required")
 class InstalledBundleContractTests(unittest.TestCase):

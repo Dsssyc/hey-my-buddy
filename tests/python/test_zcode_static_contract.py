@@ -1,15 +1,21 @@
-"""L6-A3 free static contract: token-level template verification and counterexamples.
+"""L6-A3/A4 free static contract: token-level templates, lexical context, counterexamples.
 
 The L6-A2 review confirmed two bundles the old regex assembly wrongly accepted
 — a membership test dropped before an unconditional register, and an
 ``allowedTools`` object parked in an unread third argument — so those
-regressions come first here. The rest of the matrix pins the supported
-registration flows, the tool-preserving transform, the resolver helper chain
-and the call-site wiring against renamed identifiers, string and comment
-decoys, and every rejected shape listed in the fixed L6-A3 design. All bundles
-are synthetic minified text whose identifiers differ from the real
-installation; the installed text itself is verified by the retained installed
-test in ``test_zcode_read_only_protocol.py``.
+regressions come first here. The L6-A3 full-template review then confirmed
+seven more escapes — a hoisted allowlist declared after its loop, rebinding
+the options parameter or the Set constructor, an always-true transform
+condition, decoys in comments, strings, templates and regex literals, a formal
+parameter impersonating a module constant, a truncated or rewritten constant,
+and an escaped string spelling a read-only tool name as another value — saved
+below with their scope and write variants. The rest of the matrix pins the
+supported registration flows, the tool-preserving transform, the resolver
+helper chain and the call-site wiring against renamed identifiers and every
+rejected shape in the fixed L6-A3/A4 designs. All bundles are synthetic
+minified text whose identifiers differ from the real installation; the
+installed text itself is verified by the retained installed test in
+``test_zcode_read_only_protocol.py``.
 """
 from __future__ import annotations
 
@@ -415,6 +421,277 @@ class BoundTests(unittest.TestCase):
         ):
             with self.subTest(label=label):
                 self.assertIn(reason, native_contract_problem(value))
+
+
+# -- the seven confirmed L6-A4 escapes, saved as fixed counterexamples ----------
+
+#: The installed if-form registration, kept here as one editable reference for
+#: the A4 mutations that follow.
+A4_REGISTER = ('function Uw(e,t={}){let n=t.allowedTools?new Set(t.allowedTools):void 0,'
+               'o=fD(t.disallowedTools);'
+               'for(let s of builtins)if(!n||n.has(s.metadata.name))e.register(fO(s,t))}')
+
+
+class A4OrderingTests(unittest.TestCase):
+    """Hoisting order: declarations precede the one loop or nothing qualifies."""
+
+    def test_a_var_allowlist_declared_after_the_loop_fails(self):
+        bundle = mutated(GOOD_IF_BUNDLE, (A4_REGISTER,
+                                          'function Uw(e,t={}){'
+                                          'for(let s of builtins)if(!n||n.has(s.metadata.name))e.register(fO(s,t));'
+                                          'var n=t.allowedTools?new Set(t.allowedTools):void 0,'
+                                          'o=fD(t.disallowedTools)}'))
+        self.assertIn("does not carry all of its declarations before",
+                      native_contract_problem(bundle))
+
+    def test_a_declaration_after_the_loop_fails(self):
+        bundle = mutated(GOOD_IF_BUNDLE, (A4_REGISTER,
+                                          'function Uw(e,t={}){'
+                                          'let n=t.allowedTools?new Set(t.allowedTools):void 0,'
+                                          'o=fD(t.disallowedTools);'
+                                          'for(let s of builtins)if(!n||n.has(s.metadata.name))e.register(fO(s,t));'
+                                          'let tail=1}'))
+        self.assertIn("does not carry all of its declarations before",
+                      native_contract_problem(bundle))
+
+    def test_the_loop_initialization_still_precedes_the_gated_flow(self):
+        self.assertIsNone(native_contract_problem(GOOD_IF_BUNDLE))
+
+
+class A4BindingTests(unittest.TestCase):
+    """Complete bindings: rebinding a proof name never proves the template."""
+
+    def test_rebindings_of_the_proof_names_fail(self):
+        cases = (
+            ("options-shadowed-by-local",
+             SIMPLE_IF_BUNDLE.replace("function Uw(e,t={}){let n=t.allowedTools?",
+                                      "function Uw(e,t={}){var t={allowedTools:void 0};let n=t.allowedTools?"),
+             "rebinds its parameters"),
+            ("set-constructor-shadowed",
+             SIMPLE_IF_BUNDLE.replace("function Uw(e,t={}){let n=t.allowedTools?",
+                                      "function Uw(e,t={}){let Set=t.alternateSet,n=t.allowedTools?"),
+             "rebinds its parameters"),
+            ("registry-shadowed-by-local",
+             SIMPLE_IF_BUNDLE.replace("function Uw(e,t={}){",
+                                      "function Uw(e,t={}){var e=otherRegistry;"),
+             "rebinds its parameters"),
+            ("loop-variable-shadowed",
+             GOOD_IF_BUNDLE.replace("o=fD(t.disallowedTools);",
+                                    "o=fD(t.disallowedTools),s=1;"),
+             "rebinds its parameters"),
+            ("duplicate-parameters",
+             SIMPLE_IF_BUNDLE.replace("function Uw(e,t={}){", "function Uw(e,e){"),
+             "rebinds its parameters"),
+            ("helper-shadowed-by-local",
+             GOOD_BUNDLE.replace("function Uw(e,t={}){let n=",
+                                 "function Uw(e,t={}){let gA=proxy,n="),
+             "not a pure comparison"),
+        )
+        for label, bundle, reason in cases:
+            with self.subTest(label=label):
+                problem = native_contract_problem(bundle)
+                self.assertIsNotNone(problem)
+                self.assertIn(reason, problem)
+
+    def test_unsafe_parameter_defaults_fail(self):
+        for label, header in (
+            ("default-carrying-allowlist", "function Uw(e,t={allowedTools:['Bash']}){"),
+            ("void-default", "function Uw(e,t=void 0){"),
+            ("helper-default", "function fO(e,t=sK){"),
+        ):
+            with self.subTest(label=label):
+                bundle = GOOD_IF_BUNDLE.replace(
+                    "function Uw(e,t={}){" if label != "helper-default" else "function fO(e,t){",
+                    header)
+                self.assertIn("unsupported parameter default", native_contract_problem(bundle))
+
+    def test_writes_to_the_options_or_set_fail(self):
+        for label, old, new in (
+            ("options-written-before-loop",
+             "function Uw(e,t={}){let n=", "function Uw(e,t={}){t=otherOptions;let n="),
+            ("set-compound-update",
+             "o=fD(t.disallowedTools);", "o=fD(t.disallowedTools);n+=other;"),
+        ):
+            with self.subTest(label=label):
+                bundle = mutated(GOOD_IF_BUNDLE, (old, new))
+                self.assertIsNotNone(native_contract_problem(bundle))
+
+
+class A4ConditionTests(unittest.TestCase):
+    """A transform condition must imply the tool name is not a read-only one."""
+
+    def test_conditions_without_the_implication_fail(self):
+        for label, old, new in (
+            ("or-true", 'function fO(e,t){return e.metadata.name==="Bash"?',
+             'function fO(e,t){return e.metadata.name==="Bash"||true?'),
+            ("and-side-effect", 'function fO(e,t){return e.metadata.name==="Bash"?',
+             'function fO(e,t){return e.metadata.name==="Bash"&&evil()?'),
+            ("negated-name", 'function fO(e,t){return e.metadata.name==="Bash"?',
+             'function fO(e,t){return !(e.metadata.name==="Read")?'),
+            ("ternary-around-the-name", 'function fO(e,t){return e.metadata.name==="Bash"?',
+             'function fO(e,t){return (e.metadata.name==="Bash"?1:2)?'),
+            ("and-side-effect-last", ':e.metadata.name==="EnterPlanMode"?eP({embeddedSearchEnabled:t.embeddedSearchEnabled})',
+             ':e.metadata.name==="EnterPlanMode"&&evil()?eP({embeddedSearchEnabled:t.embeddedSearchEnabled})'),
+        ):
+            with self.subTest(label=label):
+                bundle = mutated(GOOD_IF_BUNDLE, (old, new))
+                self.assertIn("tool transform does not preserve",
+                              native_contract_problem(bundle))
+
+    def test_name_or_name_and_pure_flags_still_qualify(self):
+        for label, old, new in (
+            ("or-of-names", 'function fO(e,t){return e.metadata.name==="Bash"?',
+             'function fO(e,t){return e.metadata.name==="A"||e.metadata.name==="B"?'),
+            ("and-of-name-and-flag", ':e.metadata.name==="EnterPlanMode"?eP({embeddedSearchEnabled:t.embeddedSearchEnabled})',
+             ':e.metadata.name==="EnterPlanMode"&&t.embeddedSearchEnabled!==void 0?eP({})'),
+            ("and-of-name-and-pure-global", ':e.metadata.name==="EnterPlanMode"?eP({embeddedSearchEnabled:t.embeddedSearchEnabled})',
+             ':e.metadata.name==="EnterPlanMode"&&evilFlag?eP({})'),
+        ):
+            with self.subTest(label=label):
+                bundle = mutated(GOOD_IF_BUNDLE, (old, new))
+                self.assertIsNone(native_contract_problem(bundle))
+
+
+class A4OuterContextTests(unittest.TestCase):
+    """Strings, comments, templates and regex literals prove nothing."""
+
+    def test_decoy_contexts_never_provide_the_wiring(self):
+        real_call = ("function refresh(e){Uw(e.registry,{bashTimeoutPolicy:e.config.bashTimeoutPolicy,"
+                     "includeSkill:!!e.skillPort,embeddedSearchEnabled:!1,allowedTools:fT(e.config),"
+                     "disallowedTools:e.config.toolDisallowlist,silentDuplicateWarnings:!0})}")
+        for label, decoy in (
+            ("comment", "/*Uw(e.registry,{allowedTools:fT(e.config)})*/"),
+            ("string", "var d='Uw(e.registry,{allowedTools:fT(e.config)})';"),
+            ("template", "var d=`Uw(e.registry,{allowedTools:fT(e.config)})`;"),
+            ("template-with-interpolation",
+             "var d=`x${p}Uw(e.registry,{allowedTools:fT(e.config)})`;"),
+            ("regex", r"var re=/Uw\(e\.registry,\{allowedTools:fT\(e\.config\)\}\)/;"),
+        ):
+            with self.subTest(label=label):
+                bundle = mutated(GOOD_IF_BUNDLE,
+                                 (real_call, decoy + "function refresh(e){Uw(e.registry,{})}"))
+                self.assertIn("not called with allowedTools from resolveBuiltInToolAllowlist",
+                              native_contract_problem(bundle))
+
+    def test_decoy_contexts_never_provide_definitions_or_constants(self):
+        for label, old, new in (
+            ("resolver-defined-in-a-string",
+             'function fT(e){let t=nL(e.toolAllowlist);'
+             'return e.toolset!=="explore"?aC(e,t):t?aC(e,t.filter(v=>eS.has(v))):aC(e,dL)}',
+             "var decoy='function fT(e){let t=nL(e.toolAllowlist);"
+             'return e.toolset!==\"explore\"?aC(e,t):t?aC(e,t.filter(v=>eS.has(v))):aC(e,dL)}\';'),
+            ("resolver-defined-in-a-regex",
+             'function fT(e){let t=nL(e.toolAllowlist);'
+             'return e.toolset!=="explore"?aC(e,t):t?aC(e,t.filter(v=>eS.has(v))):aC(e,dL)}',
+             r"var decoy=/function fT\(e\)\{return e\.toolAllowlist\}/;"),
+            ("constant-declared-in-a-comment",
+             'sK="submit_result"', '/*sK="submit_result"*/'),
+            ("export-named-in-a-string",
+             'r(Uw,"registerBuiltInTools");', 'var d=\'r(Uw,"registerBuiltInTools")\';'),
+        ):
+            with self.subTest(label=label):
+                bundle = mutated(GOOD_BUNDLE, (old, new))
+                self.assertIsNotNone(native_contract_problem(bundle))
+
+    def test_the_real_export_string_argument_still_parses(self):
+        self.assertIsNone(native_contract_problem(GOOD_IF_BUNDLE))
+
+
+class A4LexicalBindingTests(unittest.TestCase):
+    """Every proof reference resolves in its own bound environment."""
+
+    def test_shadowed_proof_references_fail(self):
+        for label, old, new in (
+            ("alias-formal-shadows-the-key-constant",
+             'function aM(v){return v==="web_search"?"WebSearch":v}',
+             'var v="web_search";function aM(v){return v===v?"Bash":v}'),
+            ("transform-formal-shadows-the-name-constant",
+             'function fO(e,t){return e.metadata.name==="Bash"?bR({bashTimeoutPolicy:t.bashTimeoutPolicy})'
+             ':e.metadata.name===sK&&t.submitResultSchema!==void 0?sU(t.submitResultSchema)',
+             'function fO(e,sK){return e.metadata.name==="Bash"?bR({bashTimeoutPolicy:sK.bashTimeoutPolicy})'
+             ':e.metadata.name===sK&&sK.submitResultSchema!==void 0?sU(sK.submitResultSchema)'),
+            ("resolver-formal-shadows-the-explore-set",
+             "function fT(e){let t=nL(e.toolAllowlist);",
+             "function fT(e,eS){let t=nL(e.toolAllowlist);"),
+        ):
+            with self.subTest(label=label):
+                bundle = mutated(GOOD_IF_BUNDLE, (old, new))
+                self.assertIsNotNone(native_contract_problem(bundle))
+
+    def test_shadowed_call_scopes_never_wire_the_functions(self):
+        real_call = ("function refresh(e){Uw(e.registry,{bashTimeoutPolicy:e.config.bashTimeoutPolicy,"
+                     "includeSkill:!!e.skillPort,embeddedSearchEnabled:!1,allowedTools:fT(e.config),"
+                     "disallowedTools:e.config.toolDisallowlist,silentDuplicateWarnings:!0})}")
+        for label, caller in (
+            ("resolver-parameter", "function refresh(e,fT){Uw(e.registry,{allowedTools:fT(e.config)})}"),
+            ("register-parameter", "function refresh(e,Uw){Uw(e.registry,{allowedTools:fT(e.config)})}"),
+            ("late-var-after-the-call",
+             "function refresh(e){Uw(e.registry,{allowedTools:fT(e.config)});var fT}"),
+            ("arrow-parameter-around-the-call",
+             "function refresh(e){var g=(fT)=>Uw(e.registry,{allowedTools:fT(e.config)});}"),
+            ("default-parameter-shadow",
+             "function refresh(e,Uw=otherRegister){Uw(e.registry,{allowedTools:fT(e.config)})}"),
+        ):
+            with self.subTest(label=label):
+                bundle = mutated(GOOD_IF_BUNDLE, (real_call, caller))
+                self.assertIn("not called with allowedTools from resolveBuiltInToolAllowlist",
+                              native_contract_problem(bundle))
+
+    def test_a_property_member_is_not_an_identifier_binding(self):
+        bundle = mutated(GOOD_IF_BUNDLE,
+                         ("function refresh(e){Uw(e.registry,{",
+                          "function refresh(e){e.Uw();e.fT();Uw(e.registry,{"))
+        self.assertIsNone(native_contract_problem(bundle))
+
+
+class A4ConstantTests(unittest.TestCase):
+    """Constants consume whole right-hand sides and admit no unrecognized write."""
+
+    def test_incomplete_or_rewritten_constants_fail(self):
+        for label, old, new in (
+            ("concatenated-right-hand-side", 'sK="submit_result"', 'sK="Re"+"ad"'),
+            ("unknown-later-write", 'sK="submit_result"', 'sK="submit_result";sK=getName()'),
+            ("compound-write", 'sK="submit_result"', 'sK="submit_result";sK+="x"'),
+            ("update-write", 'sK="submit_result"', 'sK="submit_result";sK++'),
+            ("destructuring-binding", 'sK="submit_result"', 'var [sK]=arr'),
+            ("collection-mutation",
+             'wS=new Set(["Agent","Task"])', 'wS=new Set(["Agent","Task"]);wS.add("Read")'),
+            ("index-write",
+             'wS=new Set(["Agent","Task"])', 'wS=new Set(["Agent","Task"]);wS[0]="Read"'),
+        ):
+            with self.subTest(label=label):
+                bundle = mutated(GOOD_BUNDLE, (old, new))
+                self.assertIsNotNone(native_contract_problem(bundle))
+
+    def test_an_unrelated_shadowed_write_does_not_unsolve_the_constant(self):
+        bundle = mutated(GOOD_IF_BUNDLE,
+                         (MAPPING_BODY,
+                          MAPPING_BODY + 'function unrelated(){var sK=other;sK=1;return sK}'))
+        self.assertIsNone(native_contract_problem(bundle))
+
+
+class A4EscapeTests(unittest.TestCase):
+    """Proof regions carrying escaped string literals are rejected outright."""
+
+    def test_escaped_literals_never_count_as_resolved_values(self):
+        for label, old, new in (
+            ("escaped-tool-name-in-the-transform",
+             'function fO(e,t){return e.metadata.name==="Bash"?',
+             'function fO(e,t){return e.metadata.name==="R\\x65ad"?'),
+            ("escaped-alias-key",
+             'function aM(v){return v==="web_search"?"WebSearch":v}',
+             'function aM(v){return v==="web_sear\\x63h"?"WebSearch":v}'),
+            ("escaped-constant-value", 'sK="submit_result"', 'sK="submit\\x5fresult"'),
+        ):
+            with self.subTest(label=label):
+                bundle = mutated(GOOD_IF_BUNDLE, (old, new))
+                self.assertIsNotNone(native_contract_problem(bundle))
+
+    def test_an_escaped_options_key_fails_the_wiring(self):
+        bundle = mutated(GOOD_IF_BUNDLE,
+                         ("allowedTools:fT(e.config),", '"\\x61llowedTools":fT(e.config),'))
+        self.assertIn("not called with allowedTools from resolveBuiltInToolAllowlist",
+                      native_contract_problem(bundle))
 
 
 if __name__ == "__main__":  # pragma: no cover
