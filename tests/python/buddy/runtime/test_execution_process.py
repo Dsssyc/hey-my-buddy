@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import os
 import json
+import sys
 import tempfile
 import threading
 import time
@@ -17,10 +18,52 @@ from hey_my_buddy.json_codec import canonical_json
 from hey_my_buddy.protocol import execution as launch_protocol
 from hey_my_buddy.protocol.execution import read_execution_endpoint
 from hey_my_buddy.protocol.process_identity import boot_id, _creation_time
+from hey_my_buddy.protocol import process_identity
+from hey_my_buddy.buddy.runtime import command
 from hey_my_buddy.buddy.harnesses.live import LiveRequest, InquiryPayload
 
 
 class ExecutionEndpointTests(unittest.TestCase):
+    @unittest.skipUnless(sys.platform in {"darwin", "linux"}, "POSIX unreaped child failure")
+    def test_missing_native_creation_time_becomes_harness_error_with_stop_proof(self):
+        with tempfile.TemporaryDirectory() as directory:
+            state = Path(directory)
+            claim = {"task": {"taskId": "task-identity", "spec": {
+                "adapter": "command", "task": "echo", "cwd": directory,
+                "argv": ["/bin/echo", "hello"]}},
+                "attempt": {"taskId": "task-identity", "attemptId": "attempt-identity", "generation": 1}}
+            execution = Execution(claim, state, "n" * 64, client=object())
+            execution.control = mock.Mock(cancel_view=None)
+            journal = process_identity.NativeProcessJournal(state / "native-journal.json", {
+                "taskId": "task-identity", "attemptId": "attempt-identity", "generation": 1})
+            spawn = command.owned_popen
+            children = []
+
+            def exited_before_handle(*args, **kwargs):
+                child = spawn(*args, **kwargs)
+                children.append(child)
+                os.waitid(os.P_PID, child.pid, os.WEXITED | os.WNOWAIT)
+                return child
+
+            try:
+                # Reproduce the former reader's None while retaining the real
+                # spawn, journal capture, handle cleanup and receipt path.
+                with mock.patch.object(command, "owned_popen", side_effect=exited_before_handle), \
+                     mock.patch.object(process_identity, "_active_native_journal", journal), \
+                     mock.patch.object(process_identity, "_creation_time", return_value=None):
+                    report = execution.execute()["report"]
+                self.assertEqual(len(children), 1)
+                self.assertEqual(report["status"], "failed")
+                self.assertEqual(report["terminationReason"], "harness-error")
+                self.assertIn("process identity vanished before capture", report["error"])
+                self.assertTrue(report["shutdownConfirmed"])
+                self.assertEqual(children[0].returncode, 0)
+            finally:
+                for child in children:
+                    if child.poll() is None:
+                        child.kill()
+                    child.wait(timeout=5)
+
     def test_launch_persists_intent_and_private_startup_before_child_creation(self):
         with tempfile.TemporaryDirectory() as directory:
             state = Path(directory)
