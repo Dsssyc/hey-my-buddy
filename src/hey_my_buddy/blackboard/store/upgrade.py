@@ -6,7 +6,7 @@ from pathlib import Path
 import json
 import sqlite3
 
-from .db import COMMAND_DELETION_COLUMN, MACRO_TASK_DELETIONS_DDL, EVALUATION_TABLES, canonical_json
+from .db import COMMAND_DELETION_COLUMN, MACRO_TASK_DELETIONS_DDL, WORKFLOW_REQUESTS_DDL, EVALUATION_TABLES, canonical_json
 from ...errors import BoardError
 from ...protocol.reasons import reason as make_reason
 
@@ -357,6 +357,110 @@ def _upgrade_catalog_and_health(connection: sqlite3.Connection) -> None:
     connection.execute('CREATE INDEX buddies_harness_idx ON buddies(harness, buddy_id)')
 
 
+# The old helper-report summary was one of these service codes, never content.
+_HELPER_REPORT_CODES = {
+    'helpers-settled': 'helpers-settled',
+    'ANCESTOR_TERMINAL': 'ANCESTOR_TERMINAL',
+    'CONFLICT': 'CONFLICT',
+    'SHUTDOWN_UNCONFIRMED': 'SHUTDOWN_UNCONFIRMED',
+    'REVISION_CONFLICT': 'REVISION_CONFLICT',
+    'UPGRADE_IN_PROGRESS': 'UPGRADE_IN_PROGRESS',
+    'ILLEGAL_TRANSITION': 'ILLEGAL_TRANSITION',
+}
+_SYSTEM_REQUEST_TEXT_KEYS = frozenset((
+    'summary', 'attempted', 'neededWork', 'expectedArtifacts', 'acceptance', 'suggestedBuddyId',
+))
+
+
+def _upgrade_workflow_requests(connection: sqlite3.Connection) -> None:
+    cursor = connection.execute('SELECT * FROM workflow_requests ORDER BY rowid')
+    columns = [column[0] for column in cursor.description]
+    rows = {row[0]: dict(zip(columns, row)) for row in cursor.fetchall()}
+    converted: dict[str, tuple[dict | None, dict]] = {}
+    visiting: set[str] = set()
+
+    def convert(record_id: str) -> tuple[dict | None, dict]:
+        if record_id in converted:
+            return converted[record_id]
+        if record_id in visiting:
+            raise BoardError('UPGRADE_INVALID_BOARD', 'Workflow request proxy chain contains a cycle')
+        visiting.add(record_id)
+        row = rows[record_id]
+        payload = json.loads(row['payload_json'])
+        structured = None
+        system = False
+        proxy = payload.get('proxy')
+        if proxy is not None:
+            source_id = proxy.get('requestId') if isinstance(proxy, dict) else None
+            source = rows.get(source_id)
+            if source is None or source['run_id'] != proxy.get('runId') or row['child_task_id'] != source['run_id']:
+                raise BoardError('UPGRADE_INVALID_BOARD', 'Workflow request proxy source cannot be attributed')
+            structured, source_payload = convert(source_id)
+            if structured is not None:
+                # Keep the original lineage facts, replacing only the system body.
+                payload = {**source_payload, 'origin': payload['origin'], 'proxy': proxy}
+                system = True
+        elif payload.get('source') == 'routing':
+            pass
+        elif payload.get('reason') == 'workspace-scope-violation' and 'conflictIds' in payload:
+            system = True
+            ids, paths = payload.get('conflictIds'), payload.get('paths')
+            if (isinstance(ids, list) and ids and all(isinstance(item, str) and item for item in ids)
+                    and isinstance(paths, list) and all(isinstance(item, str) for item in paths)):
+                structured = make_reason('workspace-scope-violation', conflictIds=ids, paths=paths)
+            for key in ('reason', 'conflictIds', 'paths'):
+                payload.pop(key, None)
+        elif (isinstance(payload.get('continuationId'), str)
+              and record_id == 'prep-' + payload['continuationId'] and 'preparationError' in payload):
+            system = True
+            if payload['continuationId']:
+                structured = make_reason('workspace.continuation-prepare-failed', continuationId=payload['continuationId'])
+            payload.pop('continuationId')
+        elif payload.get('source') == 'lead-lifecycle':
+            system = True
+            turn = connection.execute('SELECT disposition FROM workflow_turns WHERE turn_id=? AND run_id=?',
+                                      (row['turn_id'], row['run_id'])).fetchone()
+            facts, total = payload.get('unfinishedOwnedMicroTasks'), payload.get('unfinishedOwnedMicroTaskTotal')
+            if (turn is not None and turn[0] in ('completed', 'waiting') and isinstance(facts, list)
+                    and isinstance(total, int) and not isinstance(total, bool) and total >= len(facts)
+                    and all(isinstance(item, dict) and set(item) == {'runId', 'state'}
+                            and isinstance(item['runId'], str) and isinstance(item['state'], str) for item in facts)):
+                structured = make_reason('lead.result-refused', disposition=turn[0], unfinished=facts, total=total)
+            for key in ('source', 'unfinishedOwnedMicroTasks', 'unfinishedOwnedMicroTaskTotal'):
+                payload.pop(key, None)
+        elif row['kind'] == 'helper-report':
+            if row['summary'] not in _HELPER_REPORT_CODES:
+                raise BoardError('UPGRADE_INVALID_BOARD', 'Workflow helper report code cannot be attributed')
+            system = True
+            structured = make_reason(_HELPER_REPORT_CODES[row['summary']])
+        if system:
+            if structured is None:
+                structured = make_reason('history.reason-unavailable', recordId=record_id)
+            payload = {key: value for key, value in payload.items() if key not in _SYSTEM_REQUEST_TEXT_KEYS}
+        converted[record_id] = structured, payload
+        visiting.remove(record_id)
+        return converted[record_id]
+
+    connection.execute(WORKFLOW_REQUESTS_DDL.replace('workflow_requests (', 'workflow_requests_upgrade ('))
+    new_columns = columns[:columns.index('payload_json')] + ['reason_code', 'reason_params_json'] + columns[columns.index('payload_json'):]
+    for record_id, row in rows.items():
+        structured, payload = convert(record_id)
+        row['reason_code'] = structured['code'] if structured else None
+        row['reason_params_json'] = canonical_json(structured['params']) if structured else None
+        if structured is not None:
+            row['summary'] = None
+            row['payload_json'] = canonical_json(payload)
+        connection.execute('INSERT INTO workflow_requests_upgrade (' + ','.join(new_columns) + ') VALUES ('
+                           + ','.join('?' for _ in new_columns) + ')', [row[key] for key in new_columns])
+    connection.execute('DROP TABLE workflow_requests')
+    connection.execute('ALTER TABLE workflow_requests_upgrade RENAME TO workflow_requests')
+    connection.execute('CREATE INDEX workflow_requests_run_idx ON workflow_requests(run_id, state)')
+    for seq, raw in connection.execute("SELECT seq,payload_json FROM events WHERE kind='workflow.lead_result_refused'").fetchall():
+        payload = json.loads(raw)
+        payload.pop('reason', None)
+        connection.execute('UPDATE events SET payload_json=? WHERE seq=?', (canonical_json(payload), seq))
+
+
 def upgrade_schema_24_to_25(state: Path) -> None:
     """Convert a stopped schema-24 board after its exact rollback backup exists."""
     with closing(sqlite3.connect(Path(state) / 'board.sqlite3')) as connection:
@@ -371,6 +475,7 @@ def upgrade_schema_24_to_25(state: Path) -> None:
             connection.execute(MACRO_TASK_DELETIONS_DDL)
             connection.execute('ALTER TABLE commands ADD COLUMN ' + COMMAND_DELETION_COLUMN)
             _upgrade_catalog_and_health(connection)
+            _upgrade_workflow_requests(connection)
             connection.execute("UPDATE meta SET value='25' WHERE key='schema_version'")
             if connection.execute('PRAGMA foreign_key_check').fetchall():
                 raise BoardError('UPGRADE_INVALID_BOARD', 'The upgraded board has foreign key violations')

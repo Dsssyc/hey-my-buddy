@@ -214,6 +214,18 @@ class CliViewTests(RealWorkspaceTestCase):
 
 
 class ProjectionUnitTests(unittest.TestCase):
+    def test_request_projection_keeps_both_form_keys_and_system_facts(self):
+        for request in (
+            {"requestId": "worker", "summary": "Worker content", "reason": None,
+             "neededWork": ["Host decision"], "attempted": "Worker explanation"},
+            {"requestId": "system", "summary": None, "reason": {"code": "helpers-settled", "params": {}},
+             "helperOutcomes": [{"taskId": "child", "state": "succeeded"}]},
+        ):
+            with self.subTest(request=request["requestId"]):
+                brief = cli_views.micro_task_brief({"task": {"lineage": {"kind": "micro-task"}},
+                                                   "buddy": None, "activeRequest": request})
+                self.assertEqual(brief["activeRequest"], request)
+
     def test_unconfirmed_shutdown_and_truncation_are_kept(self):
         view = {
             "task": {"lineage": {"kind": "micro-task"}}, "runId": "r", "revision": 3, "state": "running", "status": "running", "buddy": None,

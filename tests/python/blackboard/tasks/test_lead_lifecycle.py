@@ -67,9 +67,16 @@ class LeadLifecycleTests(WorkflowTestCase):
         self.assertEqual(view["activeRequest"]["kind"], "attention")
         with board.store.db.read() as db:
             payload = json.loads(db.execute("SELECT payload_json FROM workflow_requests WHERE request_id=?", (view["activeRequest"]["requestId"],)).fetchone()[0])
-        self.assertEqual(payload["source"], "lead-lifecycle")
-        self.assertEqual(payload["unfinishedOwnedMicroTasks"], [{"runId": child["runId"], "state": "executing"}])
-        self.assertEqual(view["activeRequest"]["unfinishedOwnedMicroTasks"], payload["unfinishedOwnedMicroTasks"])
+        self.assertEqual(payload, {})
+        self.assertIsNone(view["activeRequest"]["summary"])
+        self.assertEqual(view["activeRequest"]["reason"], {
+            "code": "lead.result-refused", "params": {"disposition": "completed",
+            "unfinished": [{"runId": child["runId"], "state": "executing"}], "total": 1}})
+        with board.store.db.read() as db:
+            event = json.loads(db.execute("SELECT payload_json FROM events WHERE kind='workflow.lead_result_refused'"
+                                          " AND task_id=?", (lead["runId"],)).fetchone()[0])
+        self.assertNotIn("reason", event)
+        self.assertEqual(event["requestId"], view["activeRequest"]["requestId"])
         self.assertEqual(self.wakeups(board, lead), [])
 
     def test_waiting_without_ongoing_owned_work_is_service_attention(self):
@@ -79,7 +86,9 @@ class LeadLifecycleTests(WorkflowTestCase):
         self.assertFalse(result["workflow"]["accepted"])
         view = self.current(board, lead)
         self.assertEqual(view["state"], "awaiting-host")
-        self.assertIn("still queued, running or stopping", view["activeRequest"]["summary"])
+        self.assertIsNone(view["activeRequest"]["summary"])
+        self.assertEqual(view["activeRequest"]["reason"], {"code": "lead.result-refused",
+                                                        "params": {"disposition": "waiting", "unfinished": [], "total": 0}})
         self.assertEqual(self.wakeups(board, lead), [])
 
     def test_delivered_but_unaccepted_owned_does_not_allow_waiting(self):
@@ -448,6 +457,9 @@ class LeadLifecycleTests(WorkflowTestCase):
         view = self.current(board, lead)
         self.assertEqual(view["state"], "awaiting-host")
         self.assertEqual(view["activeRequest"]["kind"], "helper-report")
+        self.assertEqual(view["activeRequest"]["reason"], {"code": "SHUTDOWN_UNCONFIRMED", "params": {}})
+        self.assertIsNone(view["activeRequest"]["summary"])
+        self.assertEqual(view["activeRequest"]["helperOutcomes"], [])
         self.assertEqual(self.wakeups(board, lead)[0]["state"], "recorded")
 
     def test_storage_alone_reconstructs_lead_segments_wakeups_owned_turns_usage_and_takeover(self):

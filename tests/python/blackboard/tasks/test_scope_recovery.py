@@ -235,9 +235,15 @@ class ScopeRecoveryTestCase(RealWorkspaceTestCase):
         self.assertIn("sha256", by_path["tracked.txt"]["observed"])
         audit = self.view(board, run_id, includeAudit=True)
         request = [row for row in audit["audit"]["requests"] if row["state"] == "open"][0]
-        self.assertEqual(request["payload"]["reason"], "workspace-scope-violation")
-        self.assertEqual(request["payload"]["paths"], ["outside.txt", "tracked.txt"])
-        self.assertEqual(request["payload"]["conflictIds"], [conflict["conflictId"]])
+        self.assertIsNone(request["summary"])
+        self.assertEqual(request["reason"], {"code": "workspace-scope-violation", "params": {
+            "paths": ["outside.txt", "tracked.txt"], "conflictIds": [conflict["conflictId"]]}})
+        self.assertEqual(view["activeRequest"]["reason"], request["reason"])
+        self.assertEqual(request["payload"], {})
+        with board.store.db.read() as connection:
+            stored = connection.execute("SELECT payload_json FROM workflow_requests WHERE request_id=?",
+                                        (request["requestId"],)).fetchone()[0]
+        self.assertEqual(request["payload"], json.loads(stored))
         # The failed turn keeps its honest receipt; nothing was sealed as output.
         with board.store.db.read() as connection:
             turn = connection.execute(

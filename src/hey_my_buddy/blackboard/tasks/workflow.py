@@ -34,6 +34,7 @@ from pathlib import Path
 from typing import Any
 
 from ...protocol import schemas
+from ...protocol.reasons import reason as make_reason
 from ...protocol.stop import WRAP_UP_INITIATORS
 from . import fixes as task_fixes
 from . import host_conclusions
@@ -48,6 +49,18 @@ try:  # The workspace module is owned and delivered separately.
     from . import workspace as _workspace_module
 except ImportError:  # pragma: no cover - exercised by tests without the module
     _workspace_module = None
+
+# Errors from _requeue and its automatic-path callees: lineage, admission and
+# task/run transitions. Manual workspace reclamation is not on either path.
+_AUTO_CONTINUE_FAILURE_CODES = {
+    "ANCESTOR_TERMINAL": "ANCESTOR_TERMINAL",
+    "CONFLICT": "CONFLICT",
+    "SHUTDOWN_UNCONFIRMED": "SHUTDOWN_UNCONFIRMED",
+    "REVISION_CONFLICT": "REVISION_CONFLICT",
+    "UPGRADE_IN_PROGRESS": "UPGRADE_IN_PROGRESS",
+    "ILLEGAL_TRANSITION": "ILLEGAL_TRANSITION",
+}
+
 
 #: Operations an attempt-scoped credential may call at all.
 AGENT_OPERATIONS = frozenset(
@@ -384,11 +397,8 @@ class WorkflowCoordinator:
             "kind": row["kind"],
             "state": row["state"],
             "summary": row["summary"],
-            "attempted": payload.get("attempted"),
-            "neededWork": payload.get("neededWork", []),
-            "expectedArtifacts": payload.get("expectedArtifacts", []),
-            "acceptance": payload.get("acceptance"),
-            "suggestedBuddyId": payload.get("suggestedBuddyId"),
+            "reason": ({"code": row["reason_code"], "params": json.loads(row["reason_params_json"])}
+                       if row["reason_code"] is not None else None),
             "turnId": row["turn_id"],
             "attemptId": row["attempt_id"],
             "childTaskId": row["child_task_id"],
@@ -401,9 +411,12 @@ class WorkflowCoordinator:
         }
         if boundary is not None:
             view["routingBoundary"] = boundary
-        if payload.get("source") == "lead-lifecycle":
-            view["unfinishedOwnedMicroTasks"] = payload["unfinishedOwnedMicroTasks"]
-            view["unfinishedOwnedMicroTaskTotal"] = payload["unfinishedOwnedMicroTaskTotal"]
+        if row["summary"] is not None:
+            view.update({"attempted": payload.get("attempted"), "neededWork": payload.get("neededWork", []),
+                         "expectedArtifacts": payload.get("expectedArtifacts", []),
+                         "acceptance": payload.get("acceptance"), "suggestedBuddyId": payload.get("suggestedBuddyId")})
+        if "helperOutcomes" in payload:
+            view["helperOutcomes"] = payload["helperOutcomes"]
         if isinstance(payload.get("preparationError"), dict):
             problem = payload["preparationError"]
             view["preparationError"] = {
@@ -2540,9 +2553,10 @@ class WorkflowCoordinator:
             request_id = self._proxy_id(parent["run_id"], source["request_id"])
             connection.execute(
                 "INSERT OR IGNORE INTO workflow_requests(request_id,run_id,turn_id,attempt_id,child_task_id,kind,summary,"
-                "payload_json,state,expected_revision,created_at,updated_at) VALUES(?,?,?,?,?,'helper-attention',?,?,'open',?,?,?)",
+                "reason_code,reason_params_json,payload_json,state,expected_revision,created_at,updated_at)"
+                " VALUES(?,?,?,?,?,'helper-attention',?,?,?,?,'open',?,?,?)",
                 (request_id, parent["run_id"], source["turn_id"], source["attempt_id"], source["run_id"], source["summary"],
-                 canonical_json(payload), parent["revision"], now, now),
+                 source["reason_code"], source["reason_params_json"], canonical_json(payload), parent["revision"], now, now),
             )
             source = self._request_row(connection, parent["run_id"], request_id)
             if source["state"] != "open":
@@ -5294,8 +5308,9 @@ class WorkflowCoordinator:
                 for request in connection.execute(
                     "SELECT * FROM workflow_requests WHERE run_id=? AND state='open' AND kind='attention'", (run_id,)
                 ).fetchall():
-                    payload = json.loads(request["payload_json"] or "{}")
-                    if conflict_id not in (payload.get("conflictIds") or []):
+                    if request["reason_code"] != "workspace-scope-violation":
+                        continue
+                    if conflict_id not in json.loads(request["reason_params_json"])["conflictIds"]:
                         continue
                     connection.execute(
                         "UPDATE workflow_requests SET state='approved', decision_json=?, decided_at=?, updated_at=?"
@@ -6724,25 +6739,11 @@ class WorkflowCoordinator:
                 now = self.now()
                 if problem is not None:
                     request_id = f"prep-{row['continuation_id']}"
-                    payload = {
-                        "summary": "Continuation workspace preparation needs Host attention",
-                        "attempted": f"Prepare continuation {row['continuation_id']}",
-                        "neededWork": ["Resolve the workspace conflict and explicitly continue the micro task"],
-                        "expectedArtifacts": [], "acceptance": "The allocated checkout has a verified fixed input",
-                        "continuationId": row["continuation_id"], "preparationError": problem,
-                    }
-                    connection.execute(
-                        "INSERT INTO workflow_requests(request_id, run_id, kind, summary, payload_json, state,"
-                        " expected_revision, created_at, updated_at) VALUES(?,?,'attention',?,?,'open',?,?,?)",
-                        (request_id, row["run_id"], payload["summary"], canonical_json(payload), run["revision"] + 1, now, now),
+                    self._record_system_request(
+                        connection, run, make_reason("workspace.continuation-prepare-failed", continuationId=row["continuation_id"]),
+                        {"preparationError": problem}, now, request_id=request_id,
                     )
                     connection.execute("UPDATE workflow_continuations SET state='invalidated' WHERE continuation_id=?", (row["continuation_id"],))
-                    connection.execute(
-                        "UPDATE workflow_runs SET state='awaiting-host', active_request_id=?, updated_at=?, revision=revision+1 WHERE run_id=?",
-                        (request_id, now, row["run_id"]),
-                    )
-                    connection.execute("UPDATE tasks SET queue_reason='awaiting-host', updated_at=? WHERE task_id=?", (now, row["run_id"]),)
-                    self._propagate_boundary(connection, self._request_row(connection, row["run_id"], request_id), now)
                     kind = "workflow.workspace_preparation_failed"
                     event = {"continuationId": row["continuation_id"], "requestId": request_id, "errorCode": problem["code"]}
                 else:
@@ -6850,7 +6851,7 @@ class WorkflowCoordinator:
         except BoardError as error:
             connection.execute("UPDATE workflow_continuations SET state='recorded' WHERE continuation_id=?",
                                (continuation_id,))
-            self._record_helper_report(connection, lead, [], reason=error.code, now=now)
+            self._record_helper_report(connection, lead, [], reason=make_reason(_AUTO_CONTINUE_FAILURE_CODES[error.code]), now=now)
             return
         self.board._append_event(connection, "workflow.auto_continued", task_id=lead["run_id"],
                                  revision=lead["revision"] + 1,
@@ -7234,9 +7235,7 @@ class WorkflowCoordinator:
                          and self.shutdown_summary(connection, row["run_id"])["unconfirmedCount"] > 0)
                          for row in unfinished)
             if disposition == "completed" and unfinished or disposition == "waiting" and not active:
-                reason = ("Lead completion requires every owned micro task to be accepted or concluded"
-                          if disposition == "completed" else "Lead waiting requires an owned micro task still queued, running or stopping")
-                request_id = self._record_lead_attention(connection, run_row, turn_row, attempt, reason, unfinished, now)
+                request_id = self._record_lead_attention(connection, run_row, turn_row, attempt, disposition, unfinished, now)
                 return {"accepted": False, "disposition": disposition, "state": "awaiting-host", "requestId": request_id,
                         "sharedStash": self._shared_refs_summary(shared_refs)}
             if disposition == "waiting":
@@ -7283,23 +7282,15 @@ class WorkflowCoordinator:
         return {"accepted": True, "disposition": disposition, "state": "awaiting-host", "requestId": request_id,
                 "sharedStash": self._shared_refs_summary(shared_refs)}
 
-    def _record_lead_attention(self, connection, run_row, turn_row, attempt, reason, unfinished, now) -> str:
+    def _record_lead_attention(self, connection, run_row, turn_row, attempt, disposition, unfinished, now) -> str:
         facts = [{"runId": row["run_id"], "state": row["state"]} for row in unfinished[:MAX_CHILD_VIEW]]
-        turn = {"outcome": {"summary": reason, "request": {
-            "summary": reason, "attempted": "The Lead returned a lifecycle result that cannot be accepted",
-            "neededWork": ["Continue the Lead or conclude its work and owned micro tasks",
-                           f"Unfinished owned micro tasks ({len(unfinished)} total): "
-                           + ", ".join(f"{row['run_id']} ({row['state']})" for row in unfinished[:MAX_CHILD_VIEW])],
-            "acceptance": "The Host records the next action", "expectedArtifacts": [],
-        }}}
-        request_id = self._record_request(connection, run_row, turn_row, turn, "attention", now)
-        row = self._request_row(connection, run_row["run_id"], request_id)
-        payload = {**json.loads(row["payload_json"]), "source": "lead-lifecycle", "unfinishedOwnedMicroTasks": facts,
-                   "unfinishedOwnedMicroTaskTotal": len(unfinished)}
-        connection.execute("UPDATE workflow_requests SET payload_json=? WHERE request_id=?", (canonical_json(payload), request_id))
+        request_id = self._record_system_request(
+            connection, run_row, make_reason("lead.result-refused", disposition=disposition, unfinished=facts, total=len(unfinished)),
+            {}, now, turn_row=turn_row,
+        )
         self.board._append_event(connection, "workflow.lead_result_refused", task_id=run_row["run_id"],
                                  attempt_id=attempt["attempt_id"], revision=run_row["revision"] + 1,
-                                 payload={"turnId": turn_row["turn_id"], "requestId": request_id, "reason": reason,
+                                 payload={"turnId": turn_row["turn_id"], "requestId": request_id,
                                           "unfinishedOwnedMicroTasks": facts, "unfinishedOwnedMicroTaskTotal": len(unfinished)})
         return request_id
 
@@ -7427,40 +7418,9 @@ class WorkflowCoordinator:
             tuple(conflict_ids),
         ).fetchall()
         paths = sorted({path for row in conflicts for path in json.loads(row["blocking_paths_json"])})
-        payload = {
-            "summary": "Workspace changes outside the authorized write scope need a Host decision",
-            "attempted": f"Seal attempt {attempt['attempt_id']} on turn {turn_row['turn_id']}",
-            "neededWork": ["Record restore, adopt or abandon for the conflict, then continue the micro task"],
-            "expectedArtifacts": [],
-            "acceptance": "The failed site has an explicit resolution and a fixed handoff",
-            "conflictIds": list(conflict_ids),
-            "paths": paths[:MAX_CONFLICT_PATH_VIEW],
-            "reason": "workspace-scope-violation",
-        }
-        request_id = f"req-{uuid.uuid4()}"
-        connection.execute(
-            "INSERT INTO workflow_requests(request_id, run_id, turn_id, attempt_id, kind, summary, payload_json,"
-            " state, expected_revision, created_at, updated_at) VALUES(?,?,?,?,'attention',?,?,'open',?,?,?)",
-            (
-                request_id,
-                run_row["run_id"],
-                turn_row["turn_id"],
-                attempt["attempt_id"],
-                payload["summary"],
-                canonical_json(payload),
-                run_row["revision"] + 1,
-                now,
-                now,
-            ),
-        )
-        connection.execute(
-            "UPDATE workflow_runs SET state='awaiting-host', active_request_id=?, current_attempt_id=NULL,"
-            " updated_at=?, revision=revision+1 WHERE run_id=? AND revision=?",
-            (request_id, now, run_row["run_id"], run_row["revision"]),
-        )
-        connection.execute(
-            "UPDATE tasks SET queue_reason='awaiting-host', updated_at=? WHERE task_id=?",
-            (now, run_row["run_id"]),
+        request_id = self._record_system_request(
+            connection, run_row, make_reason("workspace-scope-violation", conflictIds=list(conflict_ids), paths=paths[:MAX_CONFLICT_PATH_VIEW]),
+            {}, now, turn_row=turn_row,
         )
         self.board._append_event(
             connection,
@@ -7470,6 +7430,24 @@ class WorkflowCoordinator:
             revision=run_row["revision"] + 1,
             payload={"requestId": request_id, "conflictIds": list(conflict_ids), "paths": paths[:MAX_CONFLICT_PATH_VIEW]},
         )
+        return request_id
+
+    def _record_system_request(self, connection, run_row, reason: dict, payload: dict, now: str, *,
+                               kind: str = "attention", turn_row=None, request_id: str | None = None) -> str:
+        """Open one system boundary and propagate the same form to its owners."""
+        request_id = request_id or f"req-{uuid.uuid4()}"
+        connection.execute(
+            "INSERT INTO workflow_requests(request_id,run_id,turn_id,attempt_id,kind,reason_code,reason_params_json,"
+            "payload_json,state,expected_revision,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,'open',?,?,?)",
+            (request_id, run_row["run_id"], turn_row["turn_id"] if turn_row is not None else None,
+             turn_row["attempt_id"] if turn_row is not None else None, kind, reason["code"], canonical_json(reason["params"]),
+             canonical_json(payload), run_row["revision"] + 1, now, now),
+        )
+        if turn_row is not None:
+            connection.execute("UPDATE workflow_runs SET current_turn_id=?,current_attempt_id=NULL WHERE run_id=?",
+                               (turn_row["turn_id"], run_row["run_id"]))
+        self._sync_boundary(connection, run_row["run_id"], now)
+        self._propagate_boundary(connection, self._request_row(connection, run_row["run_id"], request_id), now)
         return request_id
 
     def _record_request(self, connection, run_row, turn_row, turn, disposition, now) -> str:
@@ -7770,7 +7748,8 @@ class WorkflowCoordinator:
                 " AND kind IN ('assistance','attention') ORDER BY created_at, request_id LIMIT 1",
                 (task["task_id"], attempt["attempt_id"]),
             ).fetchone()
-            if source is not None:
+            # System requests propagate when the common writer opens them.
+            if source is not None and source["reason_code"] is None:
                 self._propagate_boundary(connection, source, now)
             return
         # Cancelling an intermediate helper closes its local requests. Remove
@@ -7822,28 +7801,13 @@ class WorkflowCoordinator:
                     "UPDATE workflow_continuations SET state='recorded' WHERE continuation_id=?",
                     (auto["continuation_id"],),
                 )
-                self._record_helper_report(connection, parent, outcomes, reason=error.code, now=now)
+                self._record_helper_report(connection, parent, outcomes, reason=make_reason(_AUTO_CONTINUE_FAILURE_CODES[error.code]), now=now)
             return
         if parent["state"] == "waiting-helpers":
-            self._record_helper_report(connection, parent, outcomes, reason="helpers-settled", now=now)
+            self._record_helper_report(connection, parent, outcomes, reason=make_reason("helpers-settled"), now=now)
 
-    def _record_helper_report(self, connection, parent, outcomes: list[dict], *, reason: str, now: str) -> None:
-        request_id = f"req-{uuid.uuid4()}"
-        payload = {
-            "summary": reason,
-            "attempted": None,
-            "neededWork": [],
-            "expectedArtifacts": [],
-            "acceptance": None,
-            "helperOutcomes": outcomes,
-        }
-        connection.execute(
-            "INSERT INTO workflow_requests(request_id, run_id, kind, summary, payload_json, state,"
-            " expected_revision, created_at, updated_at) VALUES(?,?,'helper-report',?,?,'open',?,?,?)",
-            (request_id, parent["run_id"], reason, canonical_json(payload), parent["revision"] + 1, now, now),
-        )
-        self._sync_boundary(connection, parent["run_id"], now)
-        self._propagate_boundary(connection, self._request_row(connection, parent["run_id"], request_id), now)
+    def _record_helper_report(self, connection, parent, outcomes: list[dict], *, reason: dict, now: str) -> None:
+        self._record_system_request(connection, parent, reason, {"helperOutcomes": outcomes}, now, kind="helper-report")
 
     def _settle_helper_reservation(self, connection, child, task, attempt, now: str) -> None:
         if not self._stop_proven(connection, task):

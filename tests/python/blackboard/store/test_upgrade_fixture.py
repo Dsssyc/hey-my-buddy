@@ -203,6 +203,8 @@ class UpgradeFixtureTests(unittest.TestCase):
             if row['key'] == 'schema_version':
                 row['value'] = str(SCHEMA_VERSION)
         stock['macro_task_deletions'] = []
+        for row in stock['workflow_requests']:
+            row['reason_code'] = row['reason_params_json'] = None
         old.close()
         history = {path.relative_to(state): path.read_bytes()
                    for path in (state / 'workspaces').rglob('*') if path.is_file()}
@@ -263,8 +265,8 @@ class UpgradeFixtureTests(unittest.TestCase):
             # comma; compare the command DDL without that formatting difference.
             def structure(rows):
                 return [(kind, name, table,
-                         ''.join(sql.replace('"buddies"', 'buddies').split())
-                         if name in {'commands', 'buddies'} else sql)
+                         ''.join(sql.replace('"buddies"', 'buddies').replace('"workflow_requests"', 'workflow_requests').split())
+                         if name in {'commands', 'buddies', 'workflow_requests'} else sql)
                         for kind, name, table, sql in rows]
             self.assertEqual(structure(source_schema), structure(fresh_schema))
             self.assertEqual([tuple(row) for row in upgraded.execute('PRAGMA table_info(commands)')],
@@ -770,3 +772,136 @@ class UpgradeFixtureTests(unittest.TestCase):
         self.assertTrue(replay['duplicate'])
         self.assertEqual(replay['runId'], first['runId'])
         self.assertEqual(replay['requestFingerprint'], first['requestFingerprint'])
+
+    def old_request(self, connection, run_id, request_id, *, payload, summary='program text', kind='attention',
+                    turn_id=None, child_task_id=None):
+        raw = payload if isinstance(payload, str) else json.dumps(payload)
+        connection.execute("INSERT INTO workflow_requests(request_id,run_id,turn_id,child_task_id,kind,summary,payload_json,"
+                           "state,expected_revision,created_at,updated_at) VALUES(?,?,?,?,?,?,?,'open',1,'created','updated')",
+                           (request_id, run_id, turn_id, child_task_id, kind, summary, raw))
+
+    def test_system_requests_convert_by_markers_and_proxies_follow_the_original_form(self):
+        fixture, connection = self.restored('system-requests')
+        run_id = fixture['stableIds']['delivered']
+        other = fixture['stableIds']['accepted']
+        turn_id = connection.execute('SELECT turn_id FROM workflow_turns WHERE run_id=?', (run_id,)).fetchone()[0]
+        connection.execute("UPDATE workflow_turns SET disposition='waiting' WHERE turn_id=?", (turn_id,))
+        sentences = {'summary': 'old service sentence', 'attempted': 'old attempt', 'neededWork': ['old work'],
+                     'expectedArtifacts': [], 'acceptance': 'old acceptance'}
+        self.old_request(connection, run_id, 'scope', payload={**sentences, 'reason': 'workspace-scope-violation',
+                         'conflictIds': ['conflict-a'], 'paths': ['a.py']})
+        self.old_request(connection, run_id, 'prep-continuation-a', payload={**sentences,
+                         'continuationId': 'continuation-a', 'preparationError': {'code': 'GIT_ERROR', 'message': 'native details'}})
+        self.old_request(connection, run_id, 'lead', turn_id=turn_id, summary='The old sentence says completed',
+                         payload={**sentences, 'source': 'lead-lifecycle', 'unfinishedOwnedMicroTasks': [],
+                                  'unfinishedOwnedMicroTaskTotal': 0})
+        for code in ('helpers-settled', 'CONFLICT', 'SHUTDOWN_UNCONFIRMED', 'REVISION_CONFLICT',
+                     'ANCESTOR_TERMINAL', 'UPGRADE_IN_PROGRESS', 'ILLEGAL_TRANSITION'):
+            self.old_request(connection, run_id, code, kind='helper-report', summary=code,
+                             payload={**sentences, 'summary': code, 'helperOutcomes': [{'taskId': other, 'state': 'succeeded'}]})
+        origin = {'runId': run_id, 'requestId': 'scope'}
+        proxy = {'runId': run_id, 'requestId': 'scope'}
+        self.old_request(connection, other, 'scope-proxy', kind='helper-attention', child_task_id=run_id,
+                         payload={**sentences, 'reason': 'workspace-scope-violation', 'conflictIds': ['conflict-a'],
+                                  'paths': ['a.py'], 'origin': origin, 'proxy': proxy})
+        content = '  Lead completion requires every owned micro task\nCONFLICT\n原样  '
+        content_payload = ' { "summary" : "CONFLICT", "neededWork" : ["User content"] } '
+        self.old_request(connection, run_id, 'worker', kind='assistance', summary=content, payload=content_payload)
+        routing_payload = json.dumps({'source': 'routing', 'decisionId': 'kept-decision', 'summary': 'routing text'})
+        self.old_request(connection, run_id, 'routing', summary='routing text', payload=routing_payload)
+        self.old_request(connection, other, 'worker-proxy', kind='helper-attention', child_task_id=run_id,
+                         summary=content, payload={'origin': {'runId': run_id, 'requestId': 'worker'},
+                                                  'proxy': {'runId': run_id, 'requestId': 'worker'}})
+        event = {'turnId': turn_id, 'requestId': 'lead', 'reason': 'old sentence',
+                 'unfinishedOwnedMicroTasks': [], 'unfinishedOwnedMicroTaskTotal': 0}
+        connection.execute("INSERT INTO events(kind,task_id,revision,payload_json,created_at) VALUES('workflow.lead_result_refused',?,1,?,'created')",
+                           (run_id, json.dumps(event)))
+        event_seq = connection.execute('SELECT MAX(seq) FROM events').fetchone()[0]
+        turn_raw = connection.execute('SELECT input_json,outcome_json FROM workflow_turns WHERE turn_id=?', (turn_id,)).fetchone()
+        connection.commit()
+        upgrade_schema_24_to_25(fixture['state'])
+        rows = {row['request_id']: row for row in connection.execute('SELECT * FROM workflow_requests')}
+        for request_id, code, params in (
+            ('scope', 'workspace-scope-violation', {'conflictIds': ['conflict-a'], 'paths': ['a.py']}),
+            ('prep-continuation-a', 'workspace.continuation-prepare-failed', {'continuationId': 'continuation-a'}),
+            ('lead', 'lead.result-refused', {'disposition': 'waiting', 'unfinished': [], 'total': 0}),
+        ):
+            row = rows[request_id]
+            self.assertIsNone(row['summary'])
+            self.assertEqual(row['reason_code'], code)
+            self.assertEqual(json.loads(row['reason_params_json']), params)
+            self.assertTrue(set(sentences).isdisjoint(json.loads(row['payload_json'])))
+            self.assertEqual((row['created_at'], row['updated_at'], row['expected_revision']), ('created', 'updated', 1))
+        self.assertEqual(json.loads(rows['scope']['payload_json']), {})
+        self.assertEqual(json.loads(rows['prep-continuation-a']['payload_json']), {'preparationError': {'code': 'GIT_ERROR', 'message': 'native details'}})
+        self.assertEqual(json.loads(rows['lead']['payload_json']), {})
+        for code in ('helpers-settled', 'CONFLICT', 'SHUTDOWN_UNCONFIRMED', 'REVISION_CONFLICT',
+                     'ANCESTOR_TERMINAL', 'UPGRADE_IN_PROGRESS', 'ILLEGAL_TRANSITION'):
+            self.assertEqual((rows[code]['summary'], rows[code]['reason_code'], rows[code]['reason_params_json']), (None, code, '{}'))
+            self.assertEqual(json.loads(rows[code]['payload_json']), {'helperOutcomes': [{'taskId': other, 'state': 'succeeded'}]})
+        self.assertEqual(rows['scope-proxy']['reason_params_json'], rows['scope']['reason_params_json'])
+        self.assertEqual(json.loads(rows['scope-proxy']['payload_json']), {'origin': origin, 'proxy': proxy})
+        self.assertEqual((rows['worker']['summary'], rows['worker']['payload_json']), (content, content_payload))
+        self.assertEqual((rows['routing']['summary'], rows['routing']['payload_json']), ('routing text', routing_payload))
+        for request_id in ('worker', 'worker-proxy', 'routing'):
+            self.assertIsNone(rows[request_id]['reason_code'])
+            self.assertIsNone(rows[request_id]['reason_params_json'])
+        self.assertEqual(rows['worker-proxy']['summary'], content)
+        event.pop('reason')
+        self.assertEqual(json.loads(connection.execute('SELECT payload_json FROM events WHERE seq=?', (event_seq,)).fetchone()[0]), event)
+        self.assertEqual(tuple(connection.execute('SELECT input_json,outcome_json FROM workflow_turns WHERE turn_id=?', (turn_id,)).fetchone()), tuple(turn_raw))
+
+    def test_attributed_system_request_without_recoverable_facts_uses_history_reason_and_proxy(self):
+        fixture, connection = self.restored('missing-request-facts')
+        run_id, other = fixture['stableIds']['delivered'], fixture['stableIds']['accepted']
+        self.old_request(connection, run_id, 'missing-facts', payload={'source': 'lead-lifecycle', 'summary': 'old sentence'})
+        self.old_request(connection, other, 'missing-proxy', kind='helper-attention', child_task_id=run_id,
+                         payload={'source': 'lead-lifecycle', 'summary': 'old sentence',
+                                  'origin': {'runId': run_id, 'requestId': 'missing-facts'},
+                                  'proxy': {'runId': run_id, 'requestId': 'missing-facts'}})
+        connection.commit()
+        upgrade_schema_24_to_25(fixture['state'])
+        for record_id in ('missing-facts', 'missing-proxy'):
+            row = connection.execute('SELECT * FROM workflow_requests WHERE request_id=?', (record_id,)).fetchone()
+            self.assertEqual(row['reason_code'], 'history.reason-unavailable')
+            self.assertEqual(json.loads(row['reason_params_json']), {'recordId': 'missing-facts'})
+            self.assertIsNone(row['summary'])
+            payload = json.loads(row['payload_json'])
+            self.assertTrue({'summary', 'source'}.isdisjoint(payload))
+
+    def test_unattributable_helper_report_refuses_the_upgrade_and_rolls_back(self):
+        fixture, connection = self.restored('unknown-helper-report')
+        run_id = fixture['stableIds']['delivered']
+        self.old_request(connection, run_id, 'unknown-report', kind='helper-report', summary='unknown text',
+                         payload={'summary': 'unknown text', 'helperOutcomes': []})
+        connection.commit()
+        before = list(connection.execute('SELECT * FROM sqlite_master ORDER BY name'))
+        requests = list(connection.execute('SELECT * FROM workflow_requests ORDER BY rowid'))
+        with self.assertRaises(BoardError) as caught:
+            upgrade_schema_24_to_25(fixture['state'])
+        self.assertEqual(caught.exception.code, 'UPGRADE_INVALID_BOARD')
+        self.assertEqual(list(connection.execute('SELECT * FROM sqlite_master ORDER BY name')), before)
+        self.assertEqual(list(connection.execute('SELECT * FROM workflow_requests ORDER BY rowid')), requests)
+        self.assertEqual(connection.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone()[0], '24')
+
+    def test_request_check_requires_exactly_one_content_or_object_reason_form(self):
+        fixture, connection = self.restored('request-check')
+        connection.commit()
+        upgrade_schema_24_to_25(fixture['state'])
+        run_id = fixture['stableIds']['delivered']
+        fresh = Database(self.root / 'request-check-fresh')
+        fresh.initialize()
+        # The run FK is not part of this column CHECK and is verified separately.
+        with sqlite3.connect(self.root / 'request-check-fresh' / 'board.sqlite3') as baseline:
+            for label, db in (('upgraded', connection), ('fresh', baseline)):
+                for index, values in enumerate(((None, None, None), ('text', 'CONFLICT', '{}'),
+                                                (None, 'CONFLICT', None), (None, None, '{}'),
+                                                (None, 'CONFLICT', '[]'), (None, 'CONFLICT', 'null'),
+                                                (None, 'CONFLICT', 'true'), (None, 'CONFLICT', '123'),
+                                                (None, 'CONFLICT', '"text"'),
+                                                ('text', None, '{}'))):
+                    with self.subTest(schema=label, values=values), self.assertRaises(sqlite3.IntegrityError):
+                        db.execute("INSERT INTO workflow_requests(request_id,run_id,kind,summary,reason_code,reason_params_json,"
+                                   "payload_json,state,expected_revision,created_at,updated_at)"
+                                   " VALUES(?,?,'attention',?,?,?,'{}','open',1,'created','updated')",
+                                   (f'bad-{index}', run_id, *values))

@@ -138,9 +138,16 @@ class PreparationTests(WorkflowTestCase):
         with patch.object(workspace, "prepare", side_effect=failure):
             self.claim(board, run_id=run_id, claim_request_id="git-error-claim")
         with board.store.db.read() as connection:
-            row = connection.execute("SELECT payload_json FROM workflow_requests WHERE run_id=? AND kind='attention' ORDER BY rowid DESC LIMIT 1", (run_id,)).fetchone()
-        payload = json.loads(row[0])
-        self.assertEqual(payload["continuationId"], continuation_id)
+            row = connection.execute("SELECT * FROM workflow_requests WHERE run_id=? AND kind='attention' ORDER BY rowid DESC LIMIT 1", (run_id,)).fetchone()
+        payload = json.loads(row["payload_json"])
+        self.assertEqual(set(payload), {"preparationError"})
+        self.assertIsNone(row["summary"])
+        self.assertEqual(row["reason_code"], "workspace.continuation-prepare-failed")
+        self.assertEqual(json.loads(row["reason_params_json"]), {"continuationId": continuation_id})
+        view = board.call("workflow_get", {"runId": run_id})["activeRequest"]
+        self.assertIsNone(view["summary"])
+        self.assertEqual(view["reason"], {"code": row["reason_code"], "params": {"continuationId": continuation_id}})
+        self.assertTrue({"summary", "attempted", "neededWork", "expectedArtifacts", "acceptance"}.isdisjoint(payload))
         error = payload["preparationError"]
         self.assertEqual(error["code"], "WORKSPACE_GIT_ERROR")
         self.assertIn("details", error)

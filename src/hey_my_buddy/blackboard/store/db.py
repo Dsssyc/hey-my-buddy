@@ -25,6 +25,31 @@ SECRET_KEY = "capability_secret"
 CONTROL_TOKEN_VERSION = 1
 AGENT_TOKEN_VERSION = 1
 
+WORKFLOW_REQUESTS_DDL = """
+CREATE TABLE IF NOT EXISTS workflow_requests (
+    request_id          TEXT PRIMARY KEY,
+    run_id              TEXT NOT NULL REFERENCES workflow_runs(run_id) ON DELETE RESTRICT,
+    turn_id             TEXT,
+    attempt_id          TEXT,
+    child_task_id       TEXT,
+    kind                TEXT NOT NULL CHECK (kind IN ('assistance','attention','helper-attention','helper-report')),
+    summary             TEXT,
+    reason_code         TEXT,
+    reason_params_json  TEXT,
+    payload_json        TEXT NOT NULL,
+    state               TEXT NOT NULL CHECK (state IN ('open','approved','declined','superseded','cancelled')),
+    decision_json       TEXT,
+    decision_command_id TEXT,
+    expected_revision   INTEGER NOT NULL,
+    created_at          TEXT NOT NULL,
+    updated_at          TEXT NOT NULL,
+    decided_at          TEXT,
+    CHECK ((summary IS NOT NULL AND reason_code IS NULL AND reason_params_json IS NULL)
+        OR (summary IS NULL AND reason_code IS NOT NULL AND reason_params_json IS NOT NULL
+            AND json_valid(reason_params_json) AND json_type(reason_params_json)='object'))
+);
+"""
+
 MACRO_TASK_DELETIONS_DDL = """
 CREATE TABLE IF NOT EXISTS macro_task_deletions (
     deletion_id      TEXT PRIMARY KEY,
@@ -610,25 +635,7 @@ CREATE INDEX IF NOT EXISTS workflow_turns_attempt_idx ON workflow_turns(attempt_
 """,
     # Assistance/attention requests. Only a Host decision closes one, and only an
     # approval creates helpers.
-    """
-CREATE TABLE IF NOT EXISTS workflow_requests (
-    request_id          TEXT PRIMARY KEY,
-    run_id              TEXT NOT NULL REFERENCES workflow_runs(run_id) ON DELETE RESTRICT,
-    turn_id             TEXT,
-    attempt_id          TEXT,
-    child_task_id       TEXT,
-    kind                TEXT NOT NULL CHECK (kind IN ('assistance','attention','helper-attention','helper-report')),
-    summary             TEXT NOT NULL,
-    payload_json        TEXT NOT NULL,
-    state               TEXT NOT NULL CHECK (state IN ('open','approved','declined','superseded','cancelled')),
-    decision_json       TEXT,
-    decision_command_id TEXT,
-    expected_revision   INTEGER NOT NULL,
-    created_at          TEXT NOT NULL,
-    updated_at          TEXT NOT NULL,
-    decided_at          TEXT
-);
-""",
+    WORKFLOW_REQUESTS_DDL,
     """
 CREATE INDEX IF NOT EXISTS workflow_requests_run_idx ON workflow_requests(run_id, state);
 """,

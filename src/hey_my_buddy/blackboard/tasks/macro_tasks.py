@@ -760,7 +760,7 @@ def _run_spans(store, connection, row) -> list[dict]:
         # below is that interval, and a second open span would cover its label.
         spans.append(_span("queue", f"queue:open:{run_id}", run_id, queued_from, None, "queued"))
     for request in connection.execute(
-        "SELECT request_id, kind, state, summary, created_at, decided_at, updated_at FROM workflow_requests"
+        "SELECT request_id, kind, state, summary, reason_code, reason_params_json, created_at, decided_at, updated_at FROM workflow_requests"
         " WHERE run_id=? ORDER BY created_at, request_id", (run_id,)
     ).fetchall():
         open_request = request["state"] == "open"
@@ -773,7 +773,9 @@ def _run_spans(store, connection, row) -> list[dict]:
             "host", f"host:{request['request_id']}", run_id, request["created_at"],
             None if open_request else (closed_at or None), request["state"],
             request_id=request["request_id"], requestKind=request["kind"],
-            summary=(request["summary"] or "")[:SUMMARY_LIMIT] or None,
+            summary=(request["summary"][:SUMMARY_LIMIT] if request["summary"] is not None else None),
+            reason=({"code": request["reason_code"], "params": json.loads(request["reason_params_json"])}
+                    if request["reason_code"] is not None else None),
         ))
     return spans
 

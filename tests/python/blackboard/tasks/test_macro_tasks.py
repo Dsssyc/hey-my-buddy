@@ -705,6 +705,22 @@ class MacroTaskReadTests(WorkflowTestCase):
         self.assertIsNone(execution['endAt'])
         self.assertFalse(timeline['rows'][0]['shutdownConfirmed'])
 
+    def test_system_request_wait_carries_reason_and_worker_wait_carries_only_content(self):
+        board, first, second, _loose = self.grouped_board()
+        self.register(board)
+        self.finish_turn(board, self.claim(board, run_id=first['runId']), disposition='assistance')
+        with board.store.db.write() as connection:
+            run = board.store.workflow._run_row(connection, second['runId'])
+            board.store.workflow._record_helper_report(
+                connection, run, [], reason={'code': 'helpers-settled', 'params': {}}, now=board.store.workflow.now())
+        spans = board.call('macro_task_timeline', {'macroTaskId': first['macroTaskId']})['spans']
+        content = next(span for span in spans if span['runId'] == first['runId'] and span['kind'] == 'host')
+        system = next(span for span in spans if span['runId'] == second['runId'] and span['kind'] == 'host')
+        self.assertEqual(content['summary'], 'please review the approach')
+        self.assertNotIn('reason', content)
+        self.assertNotIn('summary', system)
+        self.assertEqual(system['reason'], {'code': 'helpers-settled', 'params': {}})
+
     def test_a_run_parked_on_its_host_has_one_open_wait_that_cancellation_closes(self):
         board, first, _second, _loose = self.grouped_board()
         self.register(board)
