@@ -2016,10 +2016,13 @@ def _catalog(options: list, version: str) -> dict:
     return {
         "source": "dsh-acp-session-config", "adapter": "dsh", "harnessVersion": version,
         "discoveredAt": _now(), "providers": list(providers.values()),
-        "discoveries": [{"adapter": "dsh", "status": "complete"}],
+        "discoveries": [{"adapter": "dsh", "status": "complete", "accountStatus": "not-applicable"}],
         "warnings": [
             "The no-prompt ACP surface exposes the declared model and effort selectors only; "
             "per-model effort availability and context windows stay unknown until a real session.",
+            "The account status is not applicable to this reading: the selectors are read through "
+            "the user's own running DSH app, whose login the discovery already presumes, and the "
+            "no-prompt session carries no separate account read.",
         ],
     }
 

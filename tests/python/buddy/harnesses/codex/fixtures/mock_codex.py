@@ -133,8 +133,11 @@ def main():
                 configured['features']['apps'] = True
             send({'id': ident, 'result': {'config': configured}})
         elif method == "account/read":
-            send({"id": ident, "result": {"account": {"type": "apiKey" if case == "api-key" or os.environ.get("OPENAI_API_KEY") or os.environ.get("CODEX_API_KEY") else "chatgpt",
-                                                            "email": None, "planType": "plus"}, "requiresOpenaiAuth": True}})
+            if case == "account-unknown":
+                send({"id": ident, "result": {"account": {"type": "unrecognized"}, "requiresOpenaiAuth": True}})
+            else:
+                send({"id": ident, "result": {"account": {"type": "apiKey" if case == "api-key" or os.environ.get("OPENAI_API_KEY") or os.environ.get("CODEX_API_KEY") else "chatgpt",
+                                                                "email": None, "planType": "plus"}, "requiresOpenaiAuth": True}})
         elif method == "account/rateLimits/read":
             if case in ("usage", "quota-failure"):
                 # The rolling notifications already carried the quota; a failed
@@ -146,6 +149,12 @@ def main():
             if case == "bad-catalog":
                 send({"id": ident, "result": {"data": {"not": "a list"}, "nextCursor": None}})
                 continue
+            if case == "unlisted-model":
+                send({"id": ident, "result": {"data": [{"model": "other-model", "displayName": "Other",
+                    "description": "not the selected model", "hidden": False, "isDefault": True,
+                    "defaultReasoningEffort": "low", "supportedReasoningEfforts": [{"reasoningEffort": "low"}, {"reasoningEffort": "high"}]}],
+                    "nextCursor": None}})
+                continue
             send({"id": ident, "result": {"data": [] if case == "empty-catalog" else [{"id": "fixture-model", "model": "fixture-model",
                 "displayName": "Fixture", "description": "fixture", "hidden": False, "isDefault": True,
                 "defaultReasoningEffort": "low", "supportedReasoningEfforts": [{"reasoningEffort": "low"}, {"reasoningEffort": "high"}]}],
@@ -155,6 +164,7 @@ def main():
             thread_id = f"thread-{state['next']}"
             state["next"] += 1
             state["threads"][thread_id] = {"cwd": params["cwd"], "turns": [],
+                                         'model': params['model'],
                                          'codexHome': os.environ.get('CODEX_HOME'),
                                          'sqliteHome': os.environ.get('CODEX_SQLITE_HOME')}
             write_state(state)
@@ -184,6 +194,14 @@ def main():
             state = read_state()
             turn_index = len(state['threads'][thread_id]['turns'])
             turn_id = f"native-turn-{turn_index + 1}"
+            if case == "unlisted-model":
+                # The native answer, not the adapter's catalog reading, decides:
+                # the server rejects the turn under the selected model's own name.
+                state['threads'][thread_id].setdefault('rejectedTurns', []).append(
+                    {'model': params['model'], 'effort': params['effort']})
+                write_state(state)
+                send({"id": ident, "error": {"code": -32000, "message": f"model not found: {params['model']}"}})
+                continue
             send({"id": ident, "result": {"turn": {"id": turn_id, "status": "inProgress", "items": []}}})
             send({"method": "turn/started", "params": {"threadId": thread_id, "turn": {"id": turn_id, "status": "inProgress", "items": []}}})
             send_usage(case, thread_id, turn_id, turn_index)

@@ -1202,7 +1202,10 @@ class DiscoveryTests(NativeRunCase):
         self.assertEqual(catalog["adapter"], "dsh")
         self.assertEqual(catalog["source"], "dsh-acp-session-config")
         self.assertEqual(catalog["harnessVersion"], "0.0.1")
-        self.assertEqual(catalog["discoveries"], [{"adapter": "dsh", "status": "complete"}])
+        self.assertEqual(catalog["discoveries"],
+                         [{"adapter": "dsh", "status": "complete", "accountStatus": "not-applicable"}])
+        self.assertTrue(any("account status is not applicable" in warning for warning in catalog["warnings"]),
+                        catalog["warnings"])
         provider = next(entry for entry in catalog["providers"] if entry["provider"] == "fake")
         models = {model["id"]: model for model in provider["models"]}
         self.assertEqual(set(models), {"m1", "m2"})

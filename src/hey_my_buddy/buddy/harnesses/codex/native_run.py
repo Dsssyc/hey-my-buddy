@@ -363,6 +363,10 @@ class _RunState:
     coding_home_prepared: bool = False
     coding_home: Path | None = None
     review_config: dict | None = None
+    #: Whether the on-the-spot native catalog listed the selected model. ADR-027
+    #: rule 5: an absent model is handed to the native turn under its own name,
+    #: the absence becomes this run's public fact, and the native answer decides.
+    selected_model_listed: bool | None = None
 
 
 @dataclasses.dataclass
@@ -606,8 +610,15 @@ def _account_binding(prep: _Preparation, services: RunServices) -> dict:
 
 
 def _initialize(connection: Connection, prep: _Preparation, services: RunServices,
-                mode: str, spec: dict) -> dict:
-    """Initialization phase: handshake, account check, catalog and membership."""
+                mode: str, spec: dict) -> bool:
+    """Initialization phase: handshake, account check, catalog and membership.
+
+    The provider gate stays exact, and a model the on-the-spot catalog lists
+    keeps its effort check. A model that reading does not list never fails
+    here (ADR-027 rule 5): the selected name is handed to the native turn as
+    usual, the caller records the absence as this run's public fact, and the
+    real native error decides the failure.
+    """
     experimental = {"capabilities": {"experimentalApi": True}} if mode in ("fast", "review") else {}
     connection.call("initialize", {**_INIT_CLIENT, **experimental})
     connection.send({"method": "initialized", "params": {}})
@@ -618,12 +629,15 @@ def _initialize(connection: Connection, prep: _Preparation, services: RunService
         raise CodexProtocolError("account-plan-required",
                                  "Codex requires an existing ChatGPT account-plan login")
     catalog = _catalog(connection, prep.version)
-    if spec.get("provider") != "openai" or not any(
-            model["id"] == spec.get("model") and spec.get("effort") in model["efforts"]
-            for model in catalog["providers"][0]["models"]):
+    if spec.get("provider") != "openai":
         raise CodexProtocolError("invalid-configuration",
                                  "the selected Codex model and effort are not in the current native catalog")
-    return catalog
+    listed = next((model for model in catalog["providers"][0]["models"]
+                   if model["id"] == spec.get("model")), None)
+    if listed is not None and spec.get("effort") not in listed["efforts"]:
+        raise CodexProtocolError("invalid-configuration",
+                                 "the selected Codex model and effort are not in the current native catalog")
+    return listed is not None
 
 
 # -- phase 3: configuration (one thread per carrier) -------------------------------
@@ -1053,7 +1067,7 @@ def _run(request: RunRequest, services: RunServices, mode: str,
         spawn = _spawn_app_server(prep, cancel, owned_spawn)
         connection = spawn.connection
         _wire(connection, chain, facts, observer, request, state, mode)
-        _initialize(connection, prep, services, mode, _spec(request))
+        state.selected_model_listed = _initialize(connection, prep, services, mode, _spec(request))
         if mode == "worker":
             thread_id = _configure_worker(connection, request, services, prep, state)
             _worker_turn(connection, chain, request, state, thread_id, observer, activity)
@@ -1549,6 +1563,15 @@ def _evidence_refs(request: RunRequest, state: _RunState, facts: _RunFacts) -> t
         retain("quota-snapshot", invocation_root / "quota-snapshot.json", state.quota)
     if state.capture is not None:
         retain("review-captured-events", invocation_root / "review-captured-events.json", state.capture)
+    if state.selected_model_listed is False:
+        # The on-the-spot absence of the selected model, with the selected
+        # identity kept beside it: this run's own public fact (ADR-027 rule 5),
+        # never a refusal verdict and never a substitute for the native answer.
+        retain("model-check", invocation_root / "model-check.json",
+               {"adapter": "codex", "selectedModelListed": False,
+                "selected": {"provider": request.configuration.provider,
+                             "model": request.configuration.model,
+                             "effort": request.configuration.effort}})
     if state.native_turn_facts is not None:
         retain("native-turn-facts", invocation_root / "native-turn-facts.json", state.native_turn_facts)
     if state.review_config is not None:
@@ -1644,8 +1667,12 @@ def run_discovery(*, cwd: str, invocation_root: Path, native_root: Path,
 
     Discovery never sends a turn, never prepares a private home and never
     configures a model; it performs the account check and the native model
-    list read and stops the owned process conservatively. The return value is
-    the catalog receipt shape the current callers consume.
+    list read in the same session and stops the owned process conservatively.
+    The account fact is reported, never judged (ADR-027 rule 1): a session
+    whose ``account/read`` answer is missing, failed or unrecognized still
+    reports the models it read, marked ``unknown``, and the board decides
+    whether to trust the reading. The return value is the catalog receipt
+    shape the current callers consume.
     """
     deadline = execution_deadline(timeout_seconds)
     cancel = _CancelFlag(cancelled)
@@ -1669,13 +1696,22 @@ def run_discovery(*, cwd: str, invocation_root: Path, native_root: Path,
         connection = spawn.connection
         connection.call("initialize", _INIT_CLIENT)
         connection.send({"method": "initialized", "params": {}})
-        account = connection.call("account/read", {"refreshToken": False}).get("account")
+        account_status = "unknown"
+        try:
+            account = connection.call("account/read", {"refreshToken": False}).get("account")
+        except CodexProtocolError:
+            account = None
         independent = _account_binding(prep, RunServices()).get("source") == "worker"
-        if (not isinstance(account, dict) or account.get("type") not in
-                (("chatgpt", "apiKey") if independent else ("chatgpt",))):
-            raise CodexProtocolError("account-plan-required",
-                                     "Codex requires an existing ChatGPT account-plan login")
+        if isinstance(account, dict) and account.get("type") in (
+                ("chatgpt", "apiKey") if independent else ("chatgpt",)):
+            account_status = "confirmed"
         catalog_value = _catalog(connection, version)
+        catalog_value["discoveries"] = [{"adapter": "codex", "status": "complete",
+                                         "accountStatus": account_status}]
+        if account_status == "unknown":
+            catalog_value["warnings"] = [*catalog_value["warnings"],
+                                         "The discovery session could not confirm the Codex account; "
+                                         "whether to trust this reading is the board's judgment"]
     except Exception as caught:
         error = caught
     finally:
@@ -1854,8 +1890,10 @@ def native_evidence(result: RunResult) -> dict:
     policy that failed verification keeps its real readback and is never
     dressed up as enforced. The interrupt facts keep the legacy true keys and
     appear only when a real request (and a real acknowledgement) happened; an
-    acknowledgement is never inferred from a confirmed stop. Keys this run
-    never produced are absent, never filled with a placeholder.
+    acknowledgement is never inferred from a confirmed stop. A model the
+    on-the-spot catalog did not list keeps its ``selectedModelListed`` fact
+    and the selected identity beside it. Keys this run never produced are
+    absent, never filled with a placeholder.
     """
     projection: dict = {}
     receipt = _read_evidence_ref(result, "review-thread-receipt")
@@ -1881,6 +1919,11 @@ def native_evidence(result: RunResult) -> dict:
         projection["nativeInterruptRequested"] = True
         if interrupt.basis == "native-turn-interrupt-ack":
             projection["nativeInterruptAcknowledged"] = True
+    check = _read_evidence_ref(result, "model-check")
+    if isinstance(check, dict) and check.get("selectedModelListed") is False:
+        projection["selectedModelListed"] = False
+        if isinstance(check.get("selected"), dict):
+            projection["selectedModel"] = check["selected"]
     return projection
 
 
