@@ -16,6 +16,7 @@ if __name__ == "__main__":
         signal.signal(_signal, _defer_signal)
 
 import argparse
+import io
 import math
 import os
 import sys
@@ -797,6 +798,9 @@ class _ExecutionControl(threading.Thread):
 
 
 def main():
+    for stream in (sys.stdout, sys.stderr):
+        if isinstance(stream, io.TextIOWrapper):
+            stream.reconfigure(encoding="utf-8", newline="\n")
     parser = argparse.ArgumentParser()
     parser.add_argument("--startup", required=True)
     args = parser.parse_args()

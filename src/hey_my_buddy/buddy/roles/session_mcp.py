@@ -20,6 +20,7 @@ shutdown evidence remain the separate facts they were.
 from __future__ import annotations
 
 import argparse
+import io
 import json
 import sys
 from pathlib import Path
@@ -54,6 +55,9 @@ def respond(message: dict, configuration: dict) -> dict | None:
 
 
 def main() -> int:
+    for stream in (sys.stdout, sys.stderr):
+        if isinstance(stream, io.TextIOWrapper):
+            stream.reconfigure(encoding="utf-8", newline="\n")
     parser = argparse.ArgumentParser()
     parser.add_argument("--config", required=True)
     args = parser.parse_args()

@@ -4,11 +4,15 @@ Daily commands use the launcher in the materialized shared skill and stable runt
 """
 from __future__ import annotations
 
+import io
 import json
 import sys
 
 
 def main(argv: list[str] | None = None) -> int:
+    for stream in (sys.stdout, sys.stderr):
+        if isinstance(stream, io.TextIOWrapper):
+            stream.reconfigure(encoding="utf-8", newline="\n")
     args = list(sys.argv[1:] if argv is None else argv)
     from .launcher import bootstrap_contract_version
     if args != ["install"]:

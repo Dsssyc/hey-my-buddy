@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from ... import locking
 import hmac
+import io
 import json
 import os
 from pathlib import Path
@@ -298,6 +299,9 @@ def _env_int(name: str, default: int) -> int:
 
 
 def main() -> int:
+    for stream in (sys.stdout, sys.stderr):
+        if isinstance(stream, io.TextIOWrapper):
+            stream.reconfigure(encoding="utf-8", newline="\n")
     selected = os.environ.get("HMB_STATE_DIR")
     if not selected:
         sys.stderr.write("hey-my-buddy daemon: HMB_STATE_DIR is required\n")

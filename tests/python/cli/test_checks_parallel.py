@@ -272,6 +272,50 @@ class ParallelOutcomeTests(RunnerTestCase):
         self.assertNotIn("checksfixture_encoding_external", failure)
         self.assertIn("EncodingWarning: 'encoding' argument not specified", output)
 
+    def test_runner_relays_unicode_child_output_with_cp1252_standard_streams(self):
+        name = self.module(
+            "checksfixture_unicode_output",
+            """
+            import sys, unittest
+
+            class UnicodeOutput(unittest.TestCase):
+                def test_failure_output(self):
+                    print("子进程标准输出")
+                    print("子进程标准错误", file=sys.stderr)
+                    self.fail("与中文相关的预期失败")
+            """,
+        )
+        driver_root = self.directory / "driver"
+        (driver_root / "tmp").mkdir(parents=True)
+        environment = checks.child_environment(
+            REPOSITORY, driver_root, home_root=self.directory / "driver-home")
+        environment.update(self.environment())
+        environment["PYTHONIOENCODING"] = "cp1252"
+        driver = """
+            import sys
+            from unittest.mock import patch
+            from hey_my_buddy.cli import checks
+
+            assert sys.stdout.encoding == sys.stderr.encoding == "cp1252"
+            with patch.object(checks, "selected_test_modules", return_value=[sys.argv[1]]):
+                try:
+                    checks.main(["--jobs", "1"])
+                except SystemExit:
+                    print("运行器标准错误", file=sys.stderr)
+                    raise
+        """
+        result = subprocess.run(
+            [sys.executable, "-c", textwrap.dedent(driver), name],
+            cwd=REPOSITORY, env=environment, capture_output=True,
+            text=True, encoding="utf-8", timeout=90,
+        )
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        for text in ("子进程标准输出", "子进程标准错误", "与中文相关的预期失败"):
+            self.assertIn(text, result.stdout)
+        self.assertIn("private root removed; exit 1", result.stdout)
+        self.assertIn("运行器标准错误", result.stderr)
+        self.assertNotIn("UnicodeEncodeError", result.stderr)
+
     def test_every_kind_of_failing_file_fails_the_run(self):
         names = [
             self.passing(),
