@@ -5,7 +5,6 @@ from support import BoardTestCase
 from blackboard.store.upgrade_fixture import load_fixture
 from hey_my_buddy.blackboard.store import backup
 from hey_my_buddy.blackboard.store.db import Database, SCHEMA_VERSION
-from hey_my_buddy.blackboard.store.upgrade import upgrade_schema_23_to_24
 from hey_my_buddy.blackboard.routing import router
 from hey_my_buddy.buddy.harnesses.codex.adapter import CodexAdapter
 from hey_my_buddy.protocol.transport import _read_endpoint, _request
@@ -18,7 +17,6 @@ class UpgradeServiceTests(BoardTestCase):
         fixture = load_fixture(state)
         archived = backup.create(state)
         self.assertEqual(backup.verify(archived["path"])["schema"], fixture["schemaVersion"])
-        upgrade_schema_23_to_24(state)
         Database(state).initialize()
         with mock.patch.object(CodexAdapter, "local_read_only_check", return_value={
             "eligible": True, "reasonCode": None, "reason": None,

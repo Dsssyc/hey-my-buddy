@@ -8,6 +8,7 @@ import unittest
 from pathlib import Path
 from unittest import mock
 from hey_my_buddy.blackboard.store import backup
+from hey_my_buddy.blackboard.store.db import SCHEMA_VERSION
 from hey_my_buddy import private_dirs
 from hey_my_buddy.install import upgrade
 from hey_my_buddy.install import launcher
@@ -59,7 +60,7 @@ class UpgradeTests(BoardTestCase):
 
         with mock.patch.object(upgrade.runtime, 'is_ready', return_value=True), \
              mock.patch.object(upgrade, 'probe', return_value={'runtimeContentId': target.name}), \
-             mock.patch.object(upgrade, 'verify_started', return_value={'runtimeContentId': target.name, 'schemaVersion': 23}), \
+             mock.patch.object(upgrade, 'verify_started', return_value={'runtimeContentId': target.name, 'schemaVersion': SCHEMA_VERSION}), \
              mock.patch.object(upgrade, 'write_active_runtime'), \
              mock.patch.object(upgrade, 'clear_journal', side_effect=refuse_clear):
             result = upgrade.recover(state, root)
@@ -418,7 +419,7 @@ class UpgradeTests(BoardTestCase):
 
     def test_upgrade_refuses_older_or_unknown_schema(self):
         board=self.board()
-        for version in ('19', '20', '21', '22', '999'):
+        for version in ('19', '20', '21', '22', '23', '999'):
             with self.subTest(schema=version):
                 with board.store.db.write() as connection:
                     connection.execute("UPDATE meta SET value=? WHERE key='schema_version'", (version,))

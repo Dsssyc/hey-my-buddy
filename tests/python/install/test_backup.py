@@ -68,12 +68,14 @@ class BackupTests(BoardTestCase):
         current = Path(backup.create(board.directory)['path'])
         path = current / 'manifest.json'
         manifest = json.loads(path.read_text())
-        manifest['schema'] = 21
-        path.write_text(json.dumps(manifest))
-        with self.assertRaises(BoardError) as caught:
-            backup.verify(current)
-        self.assertEqual(caught.exception.code, 'BACKUP_INVALID')
-        self.assertEqual(caught.exception.message, 'Unsupported backup format or schema')
+        for version in (21, 23):
+            with self.subTest(schema=version):
+                manifest['schema'] = version
+                path.write_text(json.dumps(manifest))
+                with self.assertRaises(BoardError) as caught:
+                    backup.verify(current)
+                self.assertEqual(caught.exception.code, 'BACKUP_INVALID')
+                self.assertEqual(caught.exception.message, 'Unsupported backup format or schema')
 
     def test_offline_archive_refuses_an_uncheckpointed_wal_without_publication(self):
         board = self.board()

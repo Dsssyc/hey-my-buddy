@@ -25,7 +25,7 @@ CANCELLATION_NOTE = (
 
 
 def stored_response(kind: str, response: dict) -> dict:
-    """Select committed identities by kind, including when converting schema 23.
+    """Select committed identities by kind.
 
     Dispatch uses the command kind, never a field heuristic about a historical
     response. Kinds with small answers retain their exact response.

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Generate schema-23 upgrade stock using the frozen installed base source.
+"""Generate schema-24 upgrade stock using the frozen installed base source.
 
 No product installation, daemon, native harness or model is started. The base
 named service operations run in process; only native discovery and execution
@@ -26,9 +26,9 @@ import tarfile
 import tempfile
 import uuid
 
-BASE = "9baa0524a884fb335f64446a7bad8f27522082b8"
-BASE_VERSION = "0.40.0"
-BASE_SCHEMA = 23
+BASE = "90bd0148230fe1b030cc65e325026dea0cdfb8b9"
+BASE_VERSION = "0.42.0"
+BASE_SCHEMA = 24
 # An existing five-file repository commit keeps workspace capture bounded.
 # This is the workspace input, never the source used to create the database.
 WORKSPACE_INPUT = "122ec20edcdeb97cc655ae3993c402c2c9c966a3"
