@@ -193,6 +193,62 @@ class RecoveryCommandTests(unittest.TestCase):
         self.assertEqual(json.loads(argv[-1]), {"requestId": tricky_request})
 
 
+class InstallHandoverTests(unittest.TestCase):
+    """A wait already in flight outlives the service handover of an installation."""
+
+    def test_wait_survives_the_old_service_stopping_and_the_new_service_answering(self):
+        for code in ("SERVICE_STOPPING", "SERVICE_UNAVAILABLE", "UPGRADE_IN_PROGRESS"):
+            with self.subTest(code=code):
+                clock = VirtualClock()
+                state = Path(os.environ["HMB_STATE_DIR"])
+                state.mkdir(parents=True, exist_ok=True)
+                journal = state / "upgrade.json"
+                journal.write_text("{}", encoding="utf-8")
+                self.addCleanup(journal.unlink, missing_ok=True)
+                service = FakeService(clock, complete_after_waits=1)
+                handovers = []
+
+                def handover(method, params, state_dir):
+                    if method == "wait" and not handovers:
+                        handovers.append(code)
+                        raise ServiceError(code, "the old service stopped while the installation owns the cutover")
+                    if method == "wait":
+                        journal.unlink()
+                    return service(method, params, state_dir)
+
+                envelope = await_run({"runId": "run-fixture", "waitSeconds": 60}, state_dir=state,
+                                     service=handover, clock=clock)
+                self.assertEqual(handovers, [code])
+                self.assertEqual(envelope["outcome"], "completed", envelope)
+                self.assertTrue(envelope["ok"])
+                self.assertIsNone(envelope["error"])
+                self.assertEqual(envelope["result"]["finalText"], "fixture result")
+
+    def test_install_handover_retries_are_still_bounded_by_the_wait_window(self):
+        clock = VirtualClock()
+        state = Path(os.environ["HMB_STATE_DIR"])
+        state.mkdir(parents=True, exist_ok=True)
+        journal = state / "upgrade.json"
+        journal.write_text("{}", encoding="utf-8")
+        self.addCleanup(journal.unlink, missing_ok=True)
+        service = FakeService(clock)
+        attempts = []
+
+        def still_installing(method, params, state_dir):
+            if method == "wait":
+                attempts.append(method)
+                clock.advance(0.6)
+                raise ServiceError("SERVICE_UNAVAILABLE", "the installation still owns the service")
+            return service(method, params, state_dir)
+
+        envelope = await_run({"runId": "run-fixture", "waitSeconds": 2}, state_dir=state,
+                             service=still_installing, clock=clock)
+        self.assertEqual(envelope["outcome"], "wait-timeout", envelope)
+        self.assertEqual(envelope["status"], "running")
+        self.assertGreaterEqual(len(attempts), 2)
+        self.assertIsNone(envelope["error"])
+
+
 class AwaitTests(unittest.TestCase):
     def test_waiting_counts_use_the_latest_result_at_each_boundary(self):
         for boundary in ('awaiting-host', 'delivered'):
@@ -278,7 +334,7 @@ class AwaitTests(unittest.TestCase):
 
 
 class UnavailableTests(unittest.TestCase):
-    """A failed wait returns the same durable identity without retrying."""
+    """Without an installation journal, a failed wait returns the same durable identity without retrying."""
 
     def test_wait_service_error_returns_unavailable_without_reconnecting(self):
         for code in ("SERVICE_UNAVAILABLE", "INVALID_ARGUMENT", "UNAUTHORIZED", "NOT_FOUND"):
