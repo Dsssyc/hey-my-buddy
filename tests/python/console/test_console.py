@@ -350,8 +350,9 @@ class ConsoleSecurityTests(ConsoleTestCase):
         buddy = next(p for p in board.call("console_snapshot", {})["buddies"] if p["buddyId"] == BUDDY_ID)
         model_service = {key: buddy[key] for key in ("harness", "provider", "model")}
         status, _h, data = browser.command("task_cancel", {"runId": run_id, 'note': "console operator"}, csrf=csrf)
-        self.assertEqual(status, 200, data)
-        self.assertEqual(board.call("task_get", {"runId": run_id})["task"]["state"], "cancelled")
+        self.assertEqual(status, 403, data)
+        self.assertEqual(json.loads(data)["error"]["code"], "FORBIDDEN")
+        self.assertEqual(board.call("task_get", {"runId": run_id})["task"]["state"], "queued")
         # A publish through the browser is the same operation the CLI uses: it is
         # validated and persisted exactly once.
         status, _h, data = browser.command(
@@ -759,6 +760,31 @@ class ConsoleDaemonTests(ConsoleTestCase):
 
 class ConsoleDecisionBrowseTests(ConsoleTestCase):
     """The bounded decision/routing reads are reachable over the real console HTTP path."""
+
+    def test_console_cannot_cancel_a_host_selection_execution(self):
+        from blackboard.routing.test_decision import CATALOG_BUDDY, SECOND_BUDDY
+
+        board = self.board()
+        board.call("model_catalog_refresh", {"requestId": "cancel-host-selection"})
+        board.console_call("user_policy_publish", {
+            "commandId": "configure-cancel-host-selection",
+            "buddySettings": [{"buddyId": buddy["buddyId"], "enabled": True}
+                              for buddy in (CATALOG_BUDDY, SECOND_BUDDY)],
+            "configuration": {"defaultRoutingMode": "fast", "routerBuddyIds": [BUDDY_ID]},
+        })
+        selected = board.call("selection_request", {"requestId": "host-selection", "task": "Choose a Worker"})
+        self.assertIsNotNone(selected["runId"], selected)
+        _, browser = self.open_console(board)
+        csrf = browser.bootstrap()["csrfToken"]
+        status, _, body = browser.command("selection_get", {"decisionId": selected["decisionId"]}, csrf=csrf)
+        self.assertEqual(status, 200, body)
+        run_id = json.loads(body)["result"]["decision"]["runId"]
+        status, _, body = browser.command("task_cancel", {"runId": run_id}, csrf=csrf)
+        self.assertEqual(status, 403, body)
+        self.assertEqual(json.loads(body)["error"]["code"], "FORBIDDEN")
+        self.assertEqual(board.call("task_get", {"runId": run_id})["task"]["state"], "queued")
+        # The same existing execution-cancel operation remains available to the Host.
+        self.assertEqual(board.call("task_cancel", {"runId": run_id})["task"]["state"], "cancelled")
 
     def test_selection_list_is_reachable_over_the_console_boundary(self):
         board = self.board()

@@ -13,7 +13,8 @@ from support import BoardTestCase, FakeClock
 from hey_my_buddy.blackboard.routing import router
 from hey_my_buddy.blackboard.store.db import canonical_json
 from hey_my_buddy.buddy.roles.run_observers import MaintenanceCorrection
-from hey_my_buddy.buddy.runtime.execution import Execution
+from hey_my_buddy.buddy.runtime.execution import Execution, classify_termination
+from hey_my_buddy.buddy.harnesses.base import AdapterOutcome
 from hey_my_buddy.paths import native_path
 from hey_my_buddy.protocol import process_identity
 from hey_my_buddy.buddy.harnesses.registry import run_seam
@@ -371,7 +372,9 @@ class MaintenanceExecutionTests(WorkflowTestCase):
         started = self.start()
         claim = self.claim_maintenance(started["runId"])
         browser = Browser(self.board_.call("console", {"action": "open"})["url"])
-        csrf = browser.bootstrap()["csrfToken"]
+        snapshot = browser.bootstrap()
+        csrf = snapshot["csrfToken"]
+        actor = {"role": "console", "id": snapshot["consoleSession"]["id"]}
         activity = {"phase": "streaming-model", "lastNativeActivityAt": T0, "eventSeq": 5}
         self.board_.call("execution_progress", {
             "attemptId": claim["attempt"]["attemptId"], "generation": claim["attempt"]["generation"],
@@ -383,20 +386,49 @@ class MaintenanceExecutionTests(WorkflowTestCase):
         self.assertEqual(denied, 403)
         denied, _, body = browser.command("task_cancel", {"runId": self.evidence_id}, csrf=csrf)
         self.assertNotEqual(denied, 200)
-        self.assertEqual(json.loads(body)["error"]["code"], "MICRO_TASK_REQUIRED")
+        self.assertEqual(json.loads(body)["error"]["code"], "FORBIDDEN")
         status, _, body = browser.command("task_cancel", {"runId": started["runId"]}, csrf=csrf)
         self.assertEqual(status, 200, body)
         task = json.loads(body)["result"]["task"]
         self.assertEqual(task["state"], "cancelling")
         self.assertTrue(task["cancelRequested"])
+        self.assertEqual(task["stopInitiator"], "console")
+        events = self.board_.call("events_read", {"runId": started["runId"], "after": 0})["events"]
+        cancel = next(event["payload"] for event in events if event["kind"] == "task.cancel_requested")
+        self.assertEqual(cancel["actor"], actor)
         self.assertEqual(browser.bootstrap()["maintenance"]["runs"][0]["state"], "running")
+        outcome = AdapterOutcome(status="cancelled", result={"status": "error", "code": "user-cancel"},
+                                 shutdown_confirmed=True)
+        termination = classify_termination(outcome, timed_out=False, cancel_requested=task["cancelRequested"],
+                                           stop_initiator=task["stopInitiator"])
         self.board_.call("execution_result", {
             "attemptId": claim["attempt"]["attemptId"], "generation": claim["attempt"]["generation"],
             "nonce": NONCE, "status": "cancelled", "shutdownConfirmed": True,
-            "result": {"status": "error", "code": "user-cancel"}})
+            "terminationReason": termination, "result": outcome.result})
+        finished = self.board_.call("task_get", {"runId": started["runId"]})["task"]
+        self.assertEqual(finished["terminationReason"], "console-stop")
+        self.assertEqual(finished["selectedAttempt"]["stopInitiator"], "console")
         run = browser.bootstrap()["maintenance"]["runs"][0]
         self.assertEqual((run["state"], run["reason"]["code"], run["finishedAt"]), ("failed", "user-cancel", T0))
         self.assertEqual(self.board_.store.maintenance.collect(), 120)
+
+    def test_console_cannot_supply_requested_by_even_for_maintenance(self):
+        from console.test_console import Browser
+
+        self.configure()
+        run_id = self.start()["runId"]
+        browser = Browser(self.board_.call("console", {"action": "open"})["url"])
+        csrf = browser.bootstrap()["csrfToken"]
+        before = self.board_.store.head()
+        for requested_by in ("forged-host", None):
+            status, _, body = browser.command("task_cancel", {"runId": run_id, "requestedBy": requested_by}, csrf=csrf)
+            self.assertEqual(status, 400, body)
+            self.assertEqual(json.loads(body)["error"]["code"], "INVALID_ARGUMENT")
+        with self.assertRaises(BoardError) as refused:
+            self.board_.console_call("task_cancel", {"runId": run_id, "requestedBy": "forged-host"})
+        self.assertEqual(refused.exception.code, "INVALID_ARGUMENT")
+        self.assertEqual(self.board_.call("task_get", {"runId": run_id})["task"]["state"], "queued")
+        self.assertEqual(self.board_.store.head(), before)
 
     def test_failed_native_execution_keeps_reported_usage_and_leaves_missing_usage_unknown(self):
         from console.test_console import Browser

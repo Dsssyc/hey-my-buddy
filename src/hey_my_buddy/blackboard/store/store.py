@@ -1197,6 +1197,9 @@ class BoardStore:
         return view
 
     def task_cancel(self, params: dict, *, command_id: str | None = None, initiator: str = "unknown") -> dict:
+        from ..routing.decision import decision_spec
+        from ..tasks.workflow import console_authority_from_scope
+
         schemas.reject_unknown(
             params,
             {
@@ -1211,8 +1214,16 @@ class BoardStore:
         )
         note = (schemas.bounded_text(params, "note", max_bytes=schemas.MAX_NOTE_BYTES)[0]
                 if params.get("note") is not None else None)
-        actor = {"role": "service" if initiator == "service" else "host",
-                 "id": schemas.optional_string(params, "requestedBy") or "cli"}
+        console_authority = console_authority_from_scope()
+        if console_authority is not None:
+            if "requestedBy" in params:
+                raise BoardError("INVALID_ARGUMENT", "requestedBy is not accepted from a console session",
+                                 field="requestedBy")
+            actor = {"role": "console", "id": console_authority["sessionId"]}
+            initiator = "console"
+        else:
+            actor = {"role": "service" if initiator == "service" else "host",
+                     "id": schemas.optional_string(params, "requestedBy") or "cli"}
         request = {"selector": {k: params[k] for k in ("runId", "requestId") if k in params}, "note": note}
         with self.db.write() as connection:
             if command_id:
@@ -1220,6 +1231,9 @@ class BoardStore:
                 if receipt is not None:
                     return receipt
             task = self._task_row(connection, params)
+            if console_authority is not None and (decision_spec(json.loads(task["spec_json"])) or {}).get("kind") != "maintain":
+                raise BoardError("FORBIDDEN", "A console session may cancel only maintenance executions; use macro task stop for Host work",
+                                 runId=task["task_id"])
             self.workflow.guard_task_control(connection, task, params, operation="task_cancel")
             now = self.now()
             already = task["state"] in TERMINAL_TASK_STATES
