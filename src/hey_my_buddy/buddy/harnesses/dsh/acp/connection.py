@@ -14,13 +14,8 @@ import time
 from collections import deque
 from pathlib import Path
 
-from .....errors import BoardError
-
 #: A single stdout line larger than this is a broken-frame fact, not a message.
 MAX_LINE_BYTES = 1024 * 1024
-
-#: Outbound frames larger than this are refused before anything is written.
-MAX_OUTBOUND_BYTES = 1024 * 1024
 
 #: Bounded stderr tail kept for failure reports.
 STDERR_TAIL_BYTES = 64 * 1024
@@ -241,8 +236,8 @@ class AcpConnection:
                 outcome = ("sent", self._write_now(job.payload))
             except Exception as error:
                 self.write_failure_count += 1
-                outcome = ("failed", error if isinstance(error, BoardError) else
-                           AcpConnectionClosed(f"writing the child's stdin failed: {error}"))
+                outcome = ("failed", AcpConnectionClosed(
+                    f"writing the child's stdin failed: {error}"))
             with self._write_queue_lock:
                 job.outcome = outcome
                 job.done.set()
@@ -250,9 +245,6 @@ class AcpConnection:
     def _write_now(self, payload) -> int:
         line = json.dumps(payload, ensure_ascii=False) + "\n"
         encoded = line.encode("utf-8")
-        if len(encoded) > MAX_OUTBOUND_BYTES:
-            raise BoardError("ACP_OUTBOUND_FRAME_TOO_LARGE",
-                             f"outbound frame is {len(encoded)} bytes, over the {MAX_OUTBOUND_BYTES}-byte cap")
         with self._stdin_lock:
             stdin = self.process.stdin
             if stdin is None or stdin.closed:

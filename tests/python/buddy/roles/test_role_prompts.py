@@ -88,8 +88,11 @@ class RolePromptTests(unittest.TestCase):
             module = SimpleNamespace(prepare_services=mock.Mock(return_value=binding))
             for name, authority in ((name, authority) for name in ("codex", "claude", "dsh", "zcode")
                                     for authority in (False, True)):
-                turn["context"] = {"delegationAuthority": authority}
+                turn["context"] = {"delegationAuthority": authority, "task": task,
+                                   "continuation": {"input": "完整的续做输入\nretain this text"}}
                 turn_io.private_json(root / "input.json", turn)
+                frozen_input = (root / "input.json").read_bytes()
+                frozen_hash = turn_io.input_hash(turn)
                 with self.subTest(harness=name, authority=authority), mock.patch.object(run_execution, "_native_services", return_value={}):
                     control = {"harness": name, "privateRoot": str(root), "nativeRoot": str(root / "native"),
                                "stateDir": str(root),
@@ -112,7 +115,13 @@ class RolePromptTests(unittest.TestCase):
                     else:
                         self.assertNotIn(str(root / "agent-credential.json"), request.input_text)
                     self.assertGreater(request.input_text.index(task), len(role))
-                    self.assertTrue(request.input_text.endswith(turn_io.canonical_json(turn)))
+                    self.assertEqual(request.input_text.count(task), 1)
+                    prompt_input = {**turn, "context": {key: value for key, value in turn["context"].items()
+                                                       if key != "task"}}
+                    self.assertTrue(request.input_text.endswith(turn_io.canonical_json(prompt_input)))
+                    self.assertEqual((root / "input.json").read_bytes(), frozen_input)
+                    self.assertEqual(turn_io.input_hash(turn), frozen_hash)
+                    self.assertEqual(turn["context"]["task"], task)
                     self.assertNotIn("Do not create another micro task.", request.input_text)
 
     def test_delegation_restriction_belongs_to_worker_role_and_lead_overrides_it(self):

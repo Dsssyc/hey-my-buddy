@@ -70,10 +70,6 @@ ContinuationMode = Literal["native-session", "reconstructed-new-session"]
 #: Bound of each JSON fact envelope. Growing tool-call rows live in a private
 #: digest-bound file; only its bounded reference travels in a tool package.
 MAX_PACKAGE_BYTES = 512 * 1024
-#: The role-assembled input text: the board's task text bound is 1 MiB and the
-#: roles add their own bounded material (hints, workspace facts, the answer
-#: schema for fast prompts), so the bound is the task bound plus that margin.
-MAX_INPUT_TEXT_BYTES = 2 * 1024 * 1024
 MAX_SCHEMA_BYTES = 65536
 #: The final value's raw text and its parsed form hold the old 512 KiB strict
 #: controller-read range; a value within it is never refused or dropped here.
@@ -89,12 +85,9 @@ MAX_UNCONFIRMED_NAME_CHARS = 64
 MAX_EVIDENCE_REFS = 32
 MAX_SESSION_SERVICES = 8
 MAX_SERVICE_TOOL_NAMES = 16
-#: The role-assembled input text keeps the old input allowed set: any bounded
-#: string, NUL included (the board's task text admits NUL and the native wire
-#: serializes it escaped), but a whole input is never empty — the library's
-#: own length bound enforces it on construction and decode alike. The
-#: corrected input of one feedback carries the same allowed set.
-NonEmptyInputText = Annotated[RawText(MAX_INPUT_TEXT_BYTES), Field(min_length=1)]
+#: A role-assembled input is nonempty; its task, context and feedback text
+#: reach the harness whole. NUL is allowed and serialized escaped on the wire.
+NonEmptyInputText = Annotated[str, Field(min_length=1)]
 
 
 def _nonblank(value: str) -> str:

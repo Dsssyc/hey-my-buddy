@@ -99,6 +99,8 @@ class FakeAgent:
 
     def __init__(self, args) -> None:
         self.log_path = Path(args.log)
+        self.capture_method = args.capture_method
+        self.capture_path = Path(args.capture_path) if args.capture_path else None
         self.delays = dict(item.rsplit(":", 1) for item in (args.delay or []))
         self.garbage_on = set(args.garbage_on or [])
         self.duplicate_on = set(args.duplicate_on or [])
@@ -333,8 +335,11 @@ class FakeAgent:
     # -- agent-side request dispatch -------------------------------------------
 
     def handle(self, message: dict) -> None:
-        log(self.log_path, {"dir": "in", "raw": message})
         method = message.get("method")
+        if self.capture_method is not None and method == self.capture_method:
+            log(self.log_path, {"dir": "in", "method": method, "captured": True})
+        else:
+            log(self.log_path, {"dir": "in", "raw": message})
         if method is None:
             return
         if "id" not in message:
@@ -1009,6 +1014,8 @@ class FakeAgent:
         except ValueError:
             log(self.log_path, {"event": "malformed-client-frame"})
             return
+        if self.capture_method is not None and message.get("method") == self.capture_method:
+            self.capture_path.write_bytes(line + b"\n")
         if "id" in message and "method" not in message:
             with self.lock:
                 pending = self.client_pending.get(message.get("id"))
@@ -1030,6 +1037,10 @@ def build_parser(*, log_required: bool = True) -> argparse.ArgumentParser:
     """
     parser = argparse.ArgumentParser()
     parser.add_argument("--log", required=log_required)
+    parser.add_argument("--capture-method", default=None,
+                        help="method whose complete incoming frame is saved privately")
+    parser.add_argument("--capture-path", default=None,
+                        help="private output file for the selected incoming frame")
     # The public launch face the run module's driver always passes, accepted and
     # recorded like the installed agent's: the profile name and the patch file.
     parser.add_argument("--profile", default=None)

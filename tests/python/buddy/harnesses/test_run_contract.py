@@ -348,14 +348,12 @@ class CodecRoundtripTests(unittest.TestCase):
             with self.assertRaises(BoardError):
                 rc.NativeIdentity.from_payload(broken)
 
-    def test_the_new_bounds_hold_the_old_allowed_sets(self):
-        # The role-assembled input follows the board's 1 MiB task text bound, so
-        # a 300,000-character non-turn prompt is a legal request.
-        request = edited(full_request(self.root), input_text="x" * 300000)
+    def test_complete_input_and_independently_bounded_evidence_roundtrip(self):
+        prompt = "汉😀\0\n" * 250000
+        self.assertGreater(len(prompt.encode()), 2 * 1024 * 1024)
+        request = edited(full_request(self.root), input_text=prompt)
         decoded = rc.RunRequest.from_payload(request.to_payload())
-        self.assertEqual(len(decoded.input_text), 300000)
-        with self.assertRaises(BoardError):
-            edited(request, input_text="x" * (rc.MAX_INPUT_TEXT_BYTES + 1))
+        self.assertEqual(decoded.input_text, prompt)
         # The final value keeps the old strict 512 KiB controller-read range.
         raw = " " * 70000 + '{"answer": 1}'
         value = rc.RunValue(schema_status="valid",  raw=raw)

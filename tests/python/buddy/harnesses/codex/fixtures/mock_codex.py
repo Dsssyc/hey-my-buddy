@@ -250,6 +250,8 @@ def main():
                     del receipt['modelProvider']
                 send({"id": ident, "result": receipt})
         elif method == "turn/start":
+            if case == "large-prompt":
+                state_path().with_suffix(".prompt.txt").write_bytes(params["input"][0]["text"].encode("utf-8"))
             thread_id = params["threadId"]
             state = read_state()
             state['threads'][thread_id].setdefault('turnRequests', []).append(

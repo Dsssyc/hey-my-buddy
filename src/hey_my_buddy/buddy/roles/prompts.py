@@ -18,7 +18,10 @@ def worker_prompt(task_text: str, turn_input: dict, *, delivery: tuple[str, ...]
         lead = (resource_path("roles.lead").read_text(encoding="utf-8"),)
         if credential_file is not None:
             lead += (f"Credential file path: {canonical_json(credential_file)}",)
-    return _role_prompt("roles.worker", (*lead, *delivery, task_text, canonical_json(turn_input)))
+    prompt_input = dict(turn_input)
+    if "context" in turn_input:
+        prompt_input["context"] = {key: value for key, value in turn_input["context"].items() if key != "task"}
+    return _role_prompt("roles.worker", (*lead, *delivery, task_text, canonical_json(prompt_input)))
 
 
 def router_prompt(call_text: str) -> str:

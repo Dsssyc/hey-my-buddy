@@ -10,7 +10,6 @@ from hey_my_buddy.buddy.harnesses.dsh.acp.client import PermissionPolicy
 from hey_my_buddy.buddy.harnesses.dsh.acp.connection import (AcpConnectionClosed,
                                                              AcpRequestError, AcpTimeout,
                                                              _WriteJob)
-from hey_my_buddy.errors import BoardError
 
 from .support import AcpTestCase
 
@@ -105,14 +104,20 @@ class EnvelopeTest(AcpTestCase):
         self.assertEqual({"ok": True}, waiter["message"]["result"])
         dispatch.join(timeout=5)
 
-    def test_outbound_size_is_checked_before_write(self):
-        client = self.start_client()
+    def test_outbound_frame_larger_than_two_mib_reaches_peer_byte_for_byte(self):
+        capture = self.test_dir / "outbound-frame.ndjson"
+        client = self.start_client("--capture-method", "session/list",
+                                   "--capture-path", str(capture))
         client.initialize(timeout=15)
-        with self.assertRaises(BoardError) as caught:
-            client.connection.request("session/list", {"filler": "x" * (2 * 1024 * 1024)}, 15)
-        self.assertEqual("ACP_OUTBOUND_FRAME_TOO_LARGE", caught.exception.code)
+        params = {"filler": "漢字🙂" * 230_000}
+        request_id = client.connection._next_id + 1
+        expected = (json.dumps({"jsonrpc": "2.0", "id": request_id,
+                                "method": "session/list", "params": params},
+                               ensure_ascii=False) + "\n").encode("utf-8")
+        self.assertGreater(len(expected), 2 * 1024 * 1024)
+        self.assertEqual([], client.connection.request("session/list", params, 15)["sessions"])
+        self.assertTrue(expected == capture.read_bytes(), "captured outbound frame differs")
         self.assertEqual(0, client.facts()["pendingRequestCount"])
-        self.assertEqual([], client.connection.request("session/list", {}, 15)["sessions"])
 
 
 class FailureTest(AcpTestCase):
