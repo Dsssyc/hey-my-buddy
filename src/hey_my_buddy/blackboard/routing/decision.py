@@ -11,7 +11,6 @@ from __future__ import annotations
 from contextlib import nullcontext
 
 import json
-import re
 import sqlite3
 import uuid
 from typing import Any
@@ -20,6 +19,7 @@ from ...protocol import schemas
 from ..evaluation import user_policy
 from . import selection_policy, router, router_sequence, router_failover
 from ...protocol import tool_evidence
+from ...protocol.reasons import reason as make_reason
 from ..store.db import canonical_json, sha256_text
 from ...errors import BoardError
 
@@ -39,8 +39,8 @@ MAX_LIST_LIMIT = 100
 #: The shared row projection for one decision. The paginated list reader adds
 #: ``decision_requests.rowid`` as its stable keyset; nothing here persists anything.
 _ROW_COLUMNS = (
-    "d.decision_id, d.status, d.task, d.buddy_id, d.reason,"
-    " d.created_at, d.error, r.request_id, r.kind, r.input_fingerprint,"
+    "d.decision_id, d.status, d.task, d.buddy_id, d.reason_code, d.reason_params_json, d.note,"
+    " d.created_at, r.request_id, r.kind, r.input_fingerprint,"
     " r.task_id AS decision_task_id, r.attempt_id AS decision_attempt_id,"
     " r.generation AS decision_generation,"
     " r.selected_json, r.input_json, r.input_sha256, r.output_json,"
@@ -50,7 +50,6 @@ _ROW_COLUMNS = (
 _ROW_FROM = " FROM decision_requests r JOIN evaluation_decisions d ON d.decision_id = r.decision_id"
 
 MAX_DECISION_TASK_BYTES = 8192
-MAX_DECISION_REASON = 2000
 ANSWER_VALIDATION_CODES = frozenset({
     "answer-empty", "answer-not-json", "answer-invalid-json", "answer-shape",
     "answer-unexpected-field",
@@ -66,17 +65,6 @@ MAX_DECISION_INPUT_BYTES = 128 * 1024
 #: the helper is still shutting its detached child down.
 TIMEOUT_GRACE_SECONDS = 10
 
-NEEDS_HOST_NO_BUDDY = (
-    "Router 不可用：尚未设置可用的 Router buddy；请指定完整合法 buddy，"
-    "或由用户更新 Router 设置后显式 reroute。"
-)
-NEEDS_HOST_NO_CANDIDATE = (
-    "no enabled, available, capability-matching buddy is a legal candidate under the published pins and "
-    "excludes, so there is nothing honest to recommend"
-)
-#: The recorded reason when the frozen candidate set holds exactly one legal
-#: candidate: the program selects it directly and no Router call is created.
-SOLE_CANDIDATE_REASON = "唯一合法候选，未调用 Router"
 #: Retain the complete supported catalog's exclusions. An oversized legacy table
 #: still reports its exact total alongside the bounded entries.
 MAX_FROZEN_EXCLUSIONS = MAX_DECISION_BUDDIES
@@ -155,10 +143,10 @@ class DecisionCoordinator:
         return (identity["harness"], identity["provider"], identity["model"])
 
     # -- request-time policy -------------------------------------------------
-    def _decision_buddy(self, connection: sqlite3.Connection) -> tuple[dict | None, str | None]:
+    def _decision_buddy(self, connection: sqlite3.Connection) -> tuple[dict | None, dict | None]:
         """The current Router for read-only projections; resolving changes nothing."""
         resolution = router.current_router(connection)
-        return resolution.buddy, resolution.problem["reason"] if resolution.problem else None
+        return resolution.buddy, resolution.problem if resolution.problem else None
 
     @staticmethod
     def _candidate_bounds(*, required_capabilities, constraints, coding_only: bool = True) -> tuple[list[str], list[Any]]:
@@ -340,7 +328,7 @@ class DecisionCoordinator:
             "annotations": user_policy.model_service_notes(connection, buddy_ids),
         }
 
-    def _assemble_input(self, connection: sqlite3.Connection, *, kind: str, request_id: str, buddy_row: sqlite3.Row | None, table: dict, task_text: str | None, preserve_oversized: bool = False) -> tuple[dict | None, str | None]:
+    def _assemble_input(self, connection: sqlite3.Connection, *, kind: str, request_id: str, buddy_row: sqlite3.Row | None, table: dict, task_text: str | None, preserve_oversized: bool = False) -> tuple[dict | None, dict | None]:
         """Build the exact bounded document the model sees, or report why it cannot.
 
         Returns ``(document, oversized_reason)``. Nothing is dropped to make a
@@ -363,23 +351,18 @@ class DecisionCoordinator:
             ("annotations", MAX_DECISION_ANNOTATIONS),
         ):
             if len(table[name]) > limit:
-                return document if preserve_oversized else None, (
-                    f"the complete bounded table slice carries {len(table[name])} {name}, above the helper's "
-                    f"{limit}-entry request bound; nothing was truncated and nothing was sent to a model. Curate "
-                    "the published candidates or preferences first."
-                )
+                return document if preserve_oversized else None, make_reason(
+                    "router-input-too-large", collection=name, count=len(table[name]), limit=limit)
         encoded = canonical_json(document)
-        if len(encoded.encode("utf-8")) > MAX_DECISION_INPUT_BYTES:
-            return document if preserve_oversized else None, (
-                f"the complete bounded table slice is {len(encoded.encode('utf-8'))} bytes, above the "
-                f"{MAX_DECISION_INPUT_BYTES}-byte decision input ceiling; nothing was truncated and nothing was "
-                "sent to a model. Curate the published table first."
-            )
+        input_bytes = len(encoded.encode("utf-8"))
+        if input_bytes > MAX_DECISION_INPUT_BYTES:
+            return document if preserve_oversized else None, make_reason(
+                "router-input-too-large", bytes=input_bytes, limit=MAX_DECISION_INPUT_BYTES)
         return document, None
 
-    def _select_input(self, connection: sqlite3.Connection, *, request_id: str, buddy_row: sqlite3.Row | None, task_text: str, candidates: list[sqlite3.Row], hard_constraints: dict | None = None, preserve_oversized: bool = False) -> tuple[dict | None, str | None]:
+    def _select_input(self, connection: sqlite3.Connection, *, request_id: str, buddy_row: sqlite3.Row | None, task_text: str, candidates: list[sqlite3.Row], hard_constraints: dict | None = None, preserve_oversized: bool = False) -> tuple[dict | None, dict | None]:
         if len(candidates) > MAX_DECISION_BUDDIES and not preserve_oversized:
-            return None, "The legal candidate set exceeds the bounded decision buddy limit; narrow the task constraints"
+            return None, make_reason("router-input-too-large", collection="buddies", count=len(candidates), limit=MAX_DECISION_BUDDIES)
         table = self._table_input(
             connection, buddies=candidates, include_preferences=True
         )
@@ -426,7 +409,7 @@ class DecisionCoordinator:
         }
         return self._create(request_id, request)
 
-    def _create(self, request_id: str, request: dict, *, connection=None, needs_host_reason: str | None = None) -> dict:
+    def _create(self, request_id: str, request: dict, *, connection=None, needs_host_reason: dict | None = None) -> dict:
         # Keep the caller's admission input independent of the persisted snapshot,
         # including when an internal caller reuses the same dictionary on replay.
         request = dict(request)
@@ -461,8 +444,7 @@ class DecisionCoordinator:
             status = "queued"
             # New decisions are always selection requests; there is no internal
             # maintenance request path left on the blackboard.
-            reason = "queued for a Router worker"
-            error: str | None = None
+            reason = None
             task_text = request.get("task") or ""
             sole_candidate: sqlite3.Row | None = None
             resolution = None
@@ -475,10 +457,10 @@ class DecisionCoordinator:
                 sole_candidate = candidates[0]
                 facts["routerCalled"] = False
                 request.update(facts)
-                status, reason = "completed", SOLE_CANDIDATE_REASON
+                status, reason = "completed", make_reason("single-candidate")
             elif not candidates:
                 request.update(facts)
-                status, reason = "needs-host", NEEDS_HOST_NO_CANDIDATE
+                status, reason = "needs-host", make_reason("no-legal-candidate")
             else:
                 # Admission freezes the complete common packet — candidates,
                 # preferences, program facts, every Router identity
@@ -543,27 +525,25 @@ class DecisionCoordinator:
                             "inspections": [dict(entry) for entry in resolution.inspections]}
                 input_bytes = len(canonical_json(base_input).encode("utf-8"))
                 if problem is not None or input_bytes > MAX_DECISION_INPUT_BYTES:
-                    status, error = "needs-host", "router-input-too-large"
-                    reason = problem or (
-                        f"The complete frozen routing input contains {input_bytes} UTF-8 bytes, above the "
-                        f"{MAX_DECISION_INPUT_BYTES}-byte decision input ceiling; nothing was truncated or sent to a model.")
+                    status, reason = "needs-host", problem or make_reason(
+                        "router-input-too-large", bytes=input_bytes, limit=MAX_DECISION_INPUT_BYTES)
                 elif needs_host_reason is not None:
                     status, reason = "needs-host", needs_host_reason
                 elif facts["routingMode"] is None or resolution.buddy is None:
                     status, reason = "needs-host", (
-                        resolution.problem["reason"] if resolution.problem else NEEDS_HOST_NO_BUDDY)
+                        {"code": resolution.problem["code"], "params": {key: value for key, value in resolution.problem.items() if key != "code"}})
             task_id = None
             connection.execute(
-                "INSERT INTO evaluation_decisions(decision_id, status, task, buddy_id, reason,"
-                " created_at, error) VALUES(?,?,?,?,?,?,?)",
+                "INSERT INTO evaluation_decisions(decision_id, status, task, buddy_id, reason_code,"
+                " reason_params_json, created_at) VALUES(?,?,?,?,?,?,?)",
                 (
                     decision_id,
                     status,
                     task_text,
                     None,
-                    reason,
+                    reason["code"] if reason else None,
+                    canonical_json(reason["params"]) if reason else None,
                     now,
-                    error,
                 ),
             )
             connection.execute(
@@ -594,9 +574,9 @@ class DecisionCoordinator:
                 except BoardError as failure:
                     if failure.code != "router-input-too-large":
                         raise
-                    status, reason, error = "needs-host", failure.message, failure.code
-                    connection.execute("UPDATE evaluation_decisions SET status=?,reason=?,error=? WHERE decision_id=?",
-                                       (status, reason, error, decision_id))
+                    status, reason = "needs-host", {"code": failure.code, "params": failure.details}
+                    connection.execute("UPDATE evaluation_decisions SET status=?,reason_code=?,reason_params_json=? WHERE decision_id=?",
+                                       (status, reason["code"], canonical_json(reason["params"]), decision_id))
             self._append_event(
                 connection,
                 "decision.requested",
@@ -606,8 +586,6 @@ class DecisionCoordinator:
                     "kind": kind,
                     "status": status,
                     "taskId": task_id,
-                    "reason": reason,
-                    "error": error,
                     **router.routing_facts(request),
                     **({"routerCalled": False} if sole_candidate is not None else {}),
                 },
@@ -655,11 +633,7 @@ class DecisionCoordinator:
             # an incomplete task, and its bounded audit stores only a reference.
             request["task"] = f"Micro task {run_id} (full task retained in workflow)"
             request["taskReference"] = {"runId": run_id, "bytes": task_bytes, "sha256": sha256_text(task_text)}
-            needs_host_reason = (
-                f"The complete Micro task contains {task_bytes} UTF-8 bytes, above the selector's "
-                f"{MAX_DECISION_TASK_BYTES}-byte task limit. No model call was made. "
-                "Continue the same Micro task with a complete buddy; its full task remains unchanged."
-            )
+            needs_host_reason = make_reason("router-input-too-large", bytes=task_bytes, limit=MAX_DECISION_TASK_BYTES)
         return self._create(f"workflow:{run_id}:{sequence}", request, connection=connection,
                             needs_host_reason=needs_host_reason)
 
@@ -790,7 +764,8 @@ class DecisionCoordinator:
         if input_bytes > MAX_DECISION_INPUT_BYTES:
             raise BoardError("router-input-too-large",
                              f"The complete frozen Router dispatch contains {input_bytes} UTF-8 bytes, above the "
-                             f"{MAX_DECISION_INPUT_BYTES}-byte input ceiling; nothing was truncated or sent to a model.")
+                             f"{MAX_DECISION_INPUT_BYTES}-byte input ceiling; nothing was truncated or sent to a model.",
+                             bytes=input_bytes, limit=MAX_DECISION_INPUT_BYTES)
         request = json.loads(row["requested_json"])
         router_budget_seconds = int(request["routerBudgetSeconds"])
         task_id = self._create_task(
@@ -817,8 +792,8 @@ class DecisionCoordinator:
             " output_json=NULL, input_json=?, input_sha256=?, updated_at=? WHERE decision_id=?",
             (task_id, canonical_json(document), digest, now, decision_id),
         )
-        connection.execute("UPDATE evaluation_decisions SET status='queued',buddy_id=NULL,error=NULL,reason=? WHERE decision_id=?",
-                           ("queued for the next frozen Router dispatch", decision_id))
+        connection.execute("UPDATE evaluation_decisions SET status='queued',buddy_id=NULL,reason_code=NULL,reason_params_json=NULL,note=NULL WHERE decision_id=?",
+                           (decision_id,))
         self.board.workflow.routing_dispatched(connection, decision_id=decision_id, task_id=task_id, now=now)
         return task_id
 
@@ -842,14 +817,14 @@ class DecisionCoordinator:
             return "decision-closed"
         if row["decision_task_id"] != task["task_id"]:
             # A superseded dispatch never claims; its queued shell closes honestly.
-            self._cancel_queued_task(connection, task, now, "superseded by a newer Router dispatch")
+            self._cancel_queued_task(connection, task, now)
             return "decision-dispatch-superseded"
         snapshot = router_sequence.request_snapshot(connection, row["decision_id"])
         dispatch = router_sequence.dispatch(connection, task["task_id"])
         if snapshot is None or dispatch is None:
             self._finish(connection, row, status="needs-host", now=now,
-                         reason="No frozen Router request snapshot is recorded for this dispatch")
-            self._cancel_queued_task(connection, task, now, "missing frozen Router request snapshot")
+                         reason=make_reason("router-dispatch-unverified"))
+            self._cancel_queued_task(connection, task, now)
             return "decision-closed"
         facts = json.loads(row["requested_json"])
         from .router_history import router_state
@@ -876,12 +851,12 @@ class DecisionCoordinator:
                 # skip-window observation here is an existing window and stays
                 # unrecorded.
                 self._record_preflight_walk(connection, row["request_id"], [entry], now=now, selection_retry=bool(facts.get("selectionRetry")))
-        self._cancel_queued_task(connection, task, now, "the Router item is unavailable before the model call")
+        self._cancel_queued_task(connection, task, now)
         advance = router.current_router(connection, frozen=facts, after_index=dispatch["routerIndex"], now=now)
         self._record_preflight_walk(connection, row["request_id"], advance.inspections, now=now, selection_retry=bool(json.loads(row["requested_json"]).get("selectionRetry")))
         if advance.buddy is None:
             self._finish(connection, row, status="needs-host", now=now,
-                         reason=advance.problem["reason"], error=advance.problem["code"],
+                         reason={"code": advance.problem["code"], "params": {key:value for key,value in advance.problem.items() if key != "code"}},
                          output={"status": "error", "code": advance.problem["code"]})
             return "decision-closed"
         try:
@@ -889,8 +864,7 @@ class DecisionCoordinator:
         except BoardError as failure:
             if failure.code != "router-input-too-large":
                 raise
-            self._finish(connection, row, status="needs-host", now=now, reason=failure.message,
-                         error=failure.code, output={"status": "error", "code": failure.code})
+            self._finish(connection, row, status="needs-host", now=now, reason={"code": failure.code, "params": failure.details}, output={"status": "error", "code": failure.code})
             return "decision-closed"
         return "decision-dispatch-advanced"
 
@@ -915,8 +889,8 @@ class DecisionCoordinator:
             return "decision-closed", None
         dispatch = router_sequence.dispatch(connection, task["task_id"])
         if dispatch is None:
-            self._finish(connection, row, status="needs-host", reason="No frozen Router dispatch is recorded", now=now)
-            self._cancel_queued_task(connection, task, now, "missing frozen Router dispatch")
+            self._finish(connection, row, status="needs-host", reason=make_reason("router-dispatch-unverified"), now=now)
+            self._cancel_queued_task(connection, task, now)
             return "decision-closed", None
         document = dispatch["document"]
         # Freeze the local system-sandbox program fact for this attempt inside
@@ -944,12 +918,12 @@ class DecisionCoordinator:
             "UPDATE decision_requests SET attempt_id=?, generation=?, input_json=?, input_sha256=?, updated_at=? WHERE decision_id=?",
             (attempt_id, generation, canonical_json(document), digest, now, row["decision_id"]),
         )
-        connection.execute("UPDATE evaluation_decisions SET status='running', reason=? WHERE decision_id=?",
-                           ("Router is running over its frozen input", row["decision_id"]))
+        connection.execute("UPDATE evaluation_decisions SET status='running', reason_code=NULL,reason_params_json=NULL WHERE decision_id=?",
+                           (row["decision_id"],))
         self._append_event(connection, "decision.started", row["decision_id"],
                            {"attemptId": attempt_id, "generation": generation, "inputSha256": digest})
 
-    def released(self, connection: sqlite3.Connection, *, task: sqlite3.Row, reason: str, now: str) -> dict | None:
+    def released(self, connection: sqlite3.Connection, *, task: sqlite3.Row, reason: dict, now: str) -> dict | None:
         """Advance only on the Worker's recorded proof it never crossed spawn."""
         row = self._decision_for_task(connection, task)
         if row is None or row["status"] in TERMINAL_DECISION_STATUSES:
@@ -967,11 +941,11 @@ class DecisionCoordinator:
         stopped = (proof.get("releaseEvidence") == "processCreated=false"
                    and attempt["shutdown_confirmed"] == 1 and attempt["execution_state"] == "finished")
         return self._complete(connection, row=row, task=task, attempt=attempt, status="failed",
-                              result={"status": "error", "code": "router-unavailable", "reason": reason},
-                              shutdown_confirmed=stopped, error=reason, now=now,
+                              result={"status": "error", "code": reason["code"]},
+                              shutdown_confirmed=stopped, error=None, now=now,
                               release_stopped=stopped, released=True)
 
-    def cancelled(self, connection: sqlite3.Connection, *, task: sqlite3.Row, reason: str | None, now: str) -> dict | None:
+    def cancelled(self, connection: sqlite3.Connection, *, task: sqlite3.Row, reason: dict, now: str) -> dict | None:
         """Durable cancel intent: the decision is cancelled, not silently forgotten."""
         row = self._decision_for_task(connection, task)
         if row is None:
@@ -981,12 +955,12 @@ class DecisionCoordinator:
                 connection,
                 row,
                 status="cancelled",
-                reason=("the decision run was cancelled" + (f": {reason}" if reason is not None else ""))[:MAX_DECISION_REASON],
+                reason=reason,
                 now=now,
             )
         return {"decisionId": row["decision_id"], "status": self._status(connection, row["decision_id"])}
 
-    def fence_attempt(self, connection: sqlite3.Connection, *, attempt: sqlite3.Row, reason: str, now: str) -> None:
+    def fence_attempt(self, connection: sqlite3.Connection, *, attempt: sqlite3.Row, reason: dict, now: str) -> None:
         """Fence a decision when its execution is settled as interrupted."""
         task = connection.execute("SELECT * FROM tasks WHERE task_id=?", (attempt["task_id"],)).fetchone()
         if task is None:
@@ -1002,9 +976,7 @@ class DecisionCoordinator:
                 connection,
                 row,
                 status="failed",
-                reason=(
-                    f"{reason}; no delivered answer can become a current recommendation"
-                ),
+                reason=reason,
                 now=now,
             )
 
@@ -1031,41 +1003,52 @@ class DecisionCoordinator:
             connection.execute("ROLLBACK TO decision_publication")
             connection.execute("RELEASE decision_publication")
             row = self._row(connection, descriptor["decisionId"])
+            self._record_publication_issue(connection, attempt, failure, now)
             self._finish(
                 connection,
                 row,
                 status="needs-host",
                 now=now,
-                reason=(
-                    f"the model output could not be adopted ({failure.code}: {failure.message}); the Host decides"
-                ),
+                reason={"code": failure.code, "params": {}},
             )
             return {
                 "decisionId": row["decision_id"],
                 "kind": row["kind"],
                 "status": "needs-host",
-                "error": f"{failure.code}: {failure.message}"[:2000],
+                "reason": {"code": failure.code, "params": {}},
             }
         except Exception as failure:  # noqa: BLE001 - a decision bug must not poison the receipt
             connection.execute("ROLLBACK TO decision_publication")
             connection.execute("RELEASE decision_publication")
             row = self._row(connection, descriptor["decisionId"])
+            self._record_publication_issue(connection, attempt, failure, now)
             self._finish(
                 connection,
                 row,
                 status="failed",
                 now=now,
-                reason="the decision result could not be processed; no recommendation is published",
-                error=f"{type(failure).__name__}: {failure}"[:2000],
+                reason=make_reason("decision-publication-failed"),
             )
             return {
                 "decisionId": row["decision_id"],
                 "kind": row["kind"],
                 "status": "failed",
-                "error": f"{type(failure).__name__}: {failure}"[:2000],
+                "reason": make_reason("decision-publication-failed"),
             }
         connection.execute("RELEASE decision_publication")
         return summary
+
+    def _record_publication_issue(self, connection, attempt, failure, now: str) -> None:
+        code = failure.code if isinstance(failure, BoardError) else type(failure).__name__
+        message = failure.message if isinstance(failure, BoardError) else str(failure)
+        connection.execute(
+            "INSERT INTO execution_issues(attempt_id,stage,code,message,observed_at) VALUES(?,?,?,?,?)"
+            " ON CONFLICT(attempt_id,stage) DO UPDATE SET code=excluded.code,message=excluded.message,"
+            " observed_at=excluded.observed_at",
+            (attempt["attempt_id"], "decision-publication", code, message[:4000], now))
+        self.board._append_event(connection, "execution.issue", task_id=attempt["task_id"],
+                                 attempt_id=attempt["attempt_id"],
+                                 payload={"stage": "decision-publication", "code": code, "message": message[:4000]})
 
     def _complete(self, connection: sqlite3.Connection, *, row: sqlite3.Row, task: sqlite3.Row, attempt: sqlite3.Row, status: str, result: Any, shutdown_confirmed: bool, error: str | None, now: str, release_stopped: bool = False, released: bool = False) -> dict[str, Any]:
         summary: dict[str, Any] = {"decisionId": row["decision_id"], "kind": row["kind"], "status": row["status"]}
@@ -1084,8 +1067,8 @@ class DecisionCoordinator:
         snapshot = router_sequence.request_snapshot(connection, row["decision_id"])
         dispatch = router_sequence.dispatch(connection, task["task_id"])
         checked = {"answer_valid": False, "abstained": False, "changed": False,
-                   "code": "router-unavailable" if released else "router-no-answer",
-                   "reason": error or "The bounded Router call produced no usable answer",
+                   "code": (output or {}).get("code", "router-no-answer") if released else "router-no-answer",
+                   "params": {}, "note": None,
                    "output": output, "buddy_id": None, "selected": None, "evidence": []}
         completion_event = connection.execute(
             "SELECT payload_json FROM events WHERE task_id=? AND attempt_id=? AND kind='task.completed'"
@@ -1102,16 +1085,13 @@ class DecisionCoordinator:
             if (route["state"] != "pending" or route["current_owner"] != route["owner_generation"]
                     or route["current_routing_id"] != row["decision_id"] or route["run_state"] != "executing"
                     or ancestor is not None):
-                checked.update(changed=True, code="workflow-routing-fenced",
-                               reason="The parent route or its owner was fenced before publication")
+                checked.update(changed=True, code="workflow-routing-fenced")
         if snapshot is None or dispatch is None:
-            checked.update(changed=True, code="router-dispatch-unverified",
-                           reason="The current attempt has no immutable Router dispatch")
+            checked.update(changed=True, code="router-dispatch-unverified")
         else:
             if (row["input_sha256"] != dispatch["inputSha256"]
                     or row["input_json"] != canonical_json(dispatch["document"])):
-                checked.update(changed=True, code="router-input-changed",
-                               reason="The current input differs from the immutable dispatch")
+                checked.update(changed=True, code="router-input-changed")
         if not cancelled and not checked["changed"] and not released:
             checked = self._publish_select(connection, row, output=output or {}, now=now)
 
@@ -1122,7 +1102,7 @@ class DecisionCoordinator:
         stopped = shutdown_confirmed is True and stored["shutdown_confirmed"] == 1 and (native_stopped or release_stopped)
         if status != "ok" or (output or {}).get("status") != "ok":
             if checked["answer_valid"]:
-                checked.update(code="router-no-answer", reason=error or "The outer Worker reported a failed Router call")
+                checked.update(code="router-no-answer", params={})
             checked["answer_valid"] = False
         stage = "preflight" if released else ("publication" if (output or {}).get("status") == "ok" else "runtime")
         outcome = router_failover.classify_outcome(
@@ -1140,11 +1120,11 @@ class DecisionCoordinator:
         if outcome == "changed" and checked["code"] == "router-out-of-bounds" and stopped:
             request = json.loads(row["requested_json"])
             if not request.get("selectionRetry"):
-                self._retry_selection(connection, row, reason=checked["reason"], now=now)
+                self._retry_selection(connection, row, now=now)
                 outcome = "rerouted"
             else:
-                self._finish(connection, row, status="needs-host", now=now, error=checked["code"],
-                             reason="The selected buddy remains invalid after rerouting: " + checked["reason"],
+                self._finish(connection, row, status="needs-host", now=now,
+                             reason={"code": checked["code"], "params": checked["params"]},
                              output=checked["output"])
         elif outcome == "no-answer":
             record("no_answer")
@@ -1158,15 +1138,16 @@ class DecisionCoordinator:
                     if failure.code != "router-input-too-large":
                         raise
                     # This is request preparation, not a failure of an unrun item.
-                    self._finish(connection, row, status="needs-host", now=now, error=failure.code,
-                                 reason=failure.message, output={"status": "error", "code": failure.code})
+                    self._finish(connection, row, status="needs-host", now=now,
+                                 reason={"code": failure.code, "params": failure.details}, output={"status": "error", "code": failure.code})
             else:
-                self._finish(connection, row, status="needs-host", now=now, error=checked["code"],
-                             reason=advance.problem["reason"], output={**(output or {}), "routerProblem": advance.problem["code"],
+                self._finish(connection, row, status="needs-host", now=now,
+                             reason={"code": checked["code"], "params": checked["params"]}, output={**(output or {}), "routerProblem": advance.problem["code"],
                                                           "code": checked["code"]})
         elif outcome in ("answered", "abstained"):
             self._finish(connection, row, status="completed" if outcome == "answered" else "needs-host", now=now,
-                         reason=checked["reason"], output=checked["output"], buddy_id=checked["buddy_id"],
+                         reason=make_reason("router-abstained") if outcome == "abstained" else None,
+                         note=checked["note"], output=checked["output"], buddy_id=checked["buddy_id"],
                          selected=checked["selected"])
             # _finish owns the final atomic quota claim. Do not record success if
             # another decision already consumed that retry at this last gate.
@@ -1175,18 +1156,17 @@ class DecisionCoordinator:
             else:
                 outcome = "changed"
         else:
-            code = "router-stop-unconfirmed" if outcome == "stop-unconfirmed" else checked["code"]
-            reason = ("The Router stop is unconfirmed; no recommendation is published" if outcome == "stop-unconfirmed"
-                      else "The routing request was cancelled; no recommendation is published" if outcome == "cancelled"
-                      else checked["reason"])
+            code = ("router-stop-unconfirmed" if outcome == "stop-unconfirmed" else
+                    "decision-cancelled" if outcome == "cancelled" else checked["code"])
             self._finish(connection, row, status="cancelled" if outcome == "cancelled" else "needs-host" if outcome == "changed" else "failed" if shutdown_confirmed is not True else "needs-host",
-                         output={**(output or {}), "code": code}, now=now, reason=reason, error=code)
+                         output={**(output or {}), "code": code}, now=now,
+                         reason={"code": code, "params": checked["params"] if code == checked["code"] else {}})
         current = self._row(connection, row["decision_id"])
         return {**summary, "status": current["status"], "outcome": outcome, "buddyId": current["buddy_id"],
-                "reason": current["reason"]}
+                "reason": self._reason(current), "note": current["note"]}
 
 
-    def _retry_selection(self, connection: sqlite3.Connection, row: sqlite3.Row, *, reason: str, now: str) -> None:
+    def _retry_selection(self, connection: sqlite3.Connection, row: sqlite3.Row, *, now: str) -> None:
         """Route the same micro task once with fresh bounds and Router settings.
 
         Each dispatch keeps its immutable input; the first request snapshot remains
@@ -1201,7 +1181,7 @@ class DecisionCoordinator:
         request["routingBasis"] = self._freeze_routing_basis(
             connection, candidates=candidates, required_capabilities=request.get("requiredCapabilities", []),
             constraints=request.get("constraints"), quota_retry=quota_retry)
-        self._append_event(connection, "decision.selection_rerouted", row["decision_id"], {"reason": reason})
+        self._append_event(connection, "decision.selection_rerouted", row["decision_id"], {})
         if len(candidates) <= 1:
             connection.execute("UPDATE decision_requests SET requested_json=? WHERE decision_id=?",
                                (canonical_json(request), row["decision_id"]))
@@ -1215,8 +1195,8 @@ class DecisionCoordinator:
                 self._adopt_sole_candidate(connection, self._row(connection, row["decision_id"]),
                                            candidate=candidates[0], request=request, now=now)
             else:
-                self._finish(connection, row, status="needs-host", now=now, error="router-out-of-bounds",
-                             reason=reason + "; no legal candidate remains after rerouting", output={"code": "router-out-of-bounds"})
+                self._finish(connection, row, status="needs-host", now=now,
+                             reason=make_reason("no-legal-candidate"), output={"code": "no-legal-candidate"})
             return
         resolution = router.current_router(connection, now=now)
         request.update(resolution.facts)
@@ -1243,9 +1223,9 @@ class DecisionCoordinator:
         connection.execute("UPDATE decision_requests SET requested_json=?, input_json=? WHERE decision_id=?",
                            (canonical_json(request), canonical_json(document), row["decision_id"]))
         if oversized or resolution.buddy is None:
-            problem = resolution.problem or {"code": "router-input-too-large", "reason": oversized}
+            problem = oversized or {"code": resolution.problem["code"], "params": {key:value for key,value in resolution.problem.items() if key != "code"}}
             self._finish(connection, self._row(connection, row["decision_id"]), status="needs-host", now=now,
-                         error=problem["code"], reason=reason + "; rerouting cannot continue: " + problem["reason"],
+                         reason=problem,
                          output={"code": problem["code"]})
             return
         self._record_preflight_walk(connection, row["request_id"], resolution.inspections, now=now, selection_retry=True)
@@ -1274,11 +1254,11 @@ class DecisionCoordinator:
         unverified = tool_evidence.TOOL_EVIDENCE_UNVERIFIED
         evidence = output.get("toolEvidence") if isinstance(output, dict) else None
         if evidence is None:
-            return {"code": unverified, "reason": "Router publication requires unified tool evidence"}
+            return {"code": unverified}
         reported = output.get("nativeIdentity") if isinstance(output, dict) else None
         reported = reported if isinstance(reported, list) else ([reported] if isinstance(reported, dict) else None)
         if not reported:
-            return {"code": unverified, "reason": "The receipt reports no native root identity"}
+            return {"code": unverified}
         expected_binding = {
             "harness": (document.get("buddy") or {}).get("harness"),
             "taskId": row["decision_task_id"],
@@ -1286,36 +1266,31 @@ class DecisionCoordinator:
             "generation": row["decision_generation"],
         }
         if not isinstance(evidence, dict) or evidence.get("binding") != expected_binding:
-            return {"code": unverified, "reason": "The tool evidence binding does not equal this attempt's frozen binding"}
+            return {"code": unverified}
         roots = evidence.get("nativeIdentity")
         if not isinstance(roots, list) or any(identity not in roots for identity in reported):
-            return {"code": unverified, "reason": "The tool evidence does not cover the receipt's root identities"}
+            return {"code": unverified}
         policy = document.get("toolPolicy")
         sandbox = policy.get("systemSandbox") if isinstance(policy, dict) else None
         if not isinstance(sandbox, bool):
             # A result from before this attempt froze its tool policy — or from a
             # foreign attempt's document — has no board-owned sandbox fact to judge by.
-            return {"code": unverified, "reason": "No claim-frozen systemSandbox fact exists for this attempt"}
+            return {"code": unverified}
         judged = tool_evidence.judge_tool_evidence(evidence, document.get("routingMode"), sandbox)
         if judged is None:
             return None
-        reason = (
-            "Router tool evidence is incomplete, inconsistent or malformed"
-            if judged == unverified
-            else "Router tool evidence records a call outside the frozen tool policy"
-        )
-        return {"code": judged, "reason": reason}
+        return {"code": judged}
 
     def _publish_select(self, connection: sqlite3.Connection, row: sqlite3.Row, *, output: dict, now: str) -> dict:
         """Check program facts without settling the request or judging the choice."""
         document = json.loads(row["input_json"]) if row["input_json"] else {}
         request = json.loads(row["requested_json"])
         checked = {"answer_valid": False, "abstained": False, "changed": False,
-                   "code": None, "reason": "", "output": output, "buddy_id": None,
+                   "code": None, "params": {}, "note": None, "output": output, "buddy_id": None,
                    "selected": None, "evidence": []}
 
-        def refuse(code, reason, *, changed=False):
-            return {**checked, "code": code, "reason": reason, "changed": changed,
+        def refuse(code, *, changed=False, **params):
+            return {**checked, "code": code, "params": params, "changed": changed,
                     "output": {**output, "code": code}}
 
         # Check review input even when the helper failed: an explicit changed
@@ -1326,46 +1301,46 @@ class DecisionCoordinator:
         if review and isinstance(verification, dict) and (
                 verification.get("unchanged") is False
                 or ("manifestSha256" in verification and verification["manifestSha256"] != manifest.get("manifestSha256"))):
-            return refuse("router-input-changed", "Router input verification differs from the frozen copy or manifest", changed=True)
+            return refuse("router-input-changed", changed=True)
         stop = output.get("stopEvidence")
         if (not isinstance(stop, dict) or stop.get("shutdownConfirmed") is not True
                 or not isinstance(stop.get("native"), dict) or stop["native"].get("shutdownConfirmed") is not True):
-            return refuse("router-stop-unconfirmed", "Router publication requires native and controller stop evidence")
+            return refuse("router-stop-unconfirmed")
         if output.get("status") != "ok":
             code = output.get("code")
             code = code if (isinstance(code, str) and code.strip() and len(code) <= 128
                             and not any(ord(c) < 32 or ord(c) == 127 for c in code)) else "router-no-answer"
-            return refuse(code, str(output.get("reason") or output.get("error") or "The bounded Router call produced no usable answer")[:MAX_DECISION_REASON])
+            return refuse(code, **({"bound": "constraints-or-quota"} if code == "router-out-of-bounds" else {}))
         if review and (not isinstance(verification, dict) or verification.get("unchanged") is not True
                        or not isinstance(verification.get("snapshotSha256"), str) or not verification["snapshotSha256"]
                        or "manifestSha256" not in verification):
             # Missing/malformed proof invalidates an answer; it does not prove
             # that the input changed. Failed calls need no successful answer proof.
-            return refuse("router-input-changed", "Router publication requires complete frozen input verification")
+            return refuse("router-input-changed")
         if output.get("operation") != row["kind"]:
-            return refuse("answer-shape", "The helper answered a different operation")
+            return refuse("answer-shape")
         usage = output.get("usage")
         budget = document.get("budget") or {}
         if (not isinstance(usage, dict) or type(usage.get("elapsedMs")) is not int
                 or usage["elapsedMs"] < 0 or type(usage.get("toolCalls")) is not int or usage["toolCalls"] < 0):
-            return refuse("router-tool-evidence-unverified", "Router publication requires elapsed time and native tool count evidence")
+            return refuse("router-tool-evidence-unverified")
         if (usage["elapsedMs"] > budget["timeoutSeconds"] * 1000
                 or (document.get("routingMode") == "review" and usage["toolCalls"] > budget["toolCalls"])):
-            return refuse("router-budget-exhausted", "Router publication exceeds the frozen time or cumulative tool budget")
+            return refuse("router-budget-exhausted")
         policy = self._attempt_tool_policy(connection, row["decision_attempt_id"])
         problem = self._tool_evidence_problem(row, {**document, "toolPolicy": policy}, output)
         if problem is None and usage["toolCalls"] != output["toolEvidence"]["toolCalls"]:
-            problem = {"code": "router-tool-evidence-unverified", "reason": "The receipt's tool count differs from its native events"}
+            problem = {"code": "router-tool-evidence-unverified"}
         if problem is not None:
-            return refuse(problem["code"], problem["reason"])
+            return refuse(problem["code"])
         buddies = document.get("buddies") or []
         try:
             decision = router.validate_answer(output.get("decision"), [item["buddyId"] for item in buddies], document.get("routingMode", "review"))
         except BoardError as failure:
-            return refuse(failure.code, failure.message)
-        reason, buddy_id = decision["reason"], decision["buddyId"]
+            return refuse(failure.code, **({"bound": "constraints-or-quota"} if failure.code == "router-out-of-bounds" else {}))
+        note, buddy_id = decision["note"], decision["buddyId"]
         if buddy_id is None:
-            return {**checked, "answer_valid": True, "abstained": True, "reason": reason,
+            return {**checked, "answer_valid": True, "abstained": True, "note": note,
                     "output": {**output, "decision": decision, "policyCheck": None}, "evidence": decision["evidence"]}
         # Recheck hard bounds only. Cached harness health/Router qualification
         # can change during a valid native call; they govern the next request,
@@ -1389,18 +1364,18 @@ class DecisionCoordinator:
             current = connection.execute("SELECT p.*,f.mode AS preference_mode FROM buddies p"
                                          " LEFT JOIN evaluation_preferences f ON f.buddy_id=p.buddy_id WHERE p.buddy_id=?",
                                          (buddy_id,)).fetchone()
-            problem = ("removed from the candidate table" if current is None else
+            bound = ("removed" if current is None else
                        "disabled" if not current["enabled"] else
                        "unavailable" if not current["available"] else
-                       "excluded by the user" if current["preference_mode"] == "exclude" else
-                       "missing a required task capability" if not set(request.get("requiredCapabilities") or []) <= set(json.loads(current["capabilities_json"])) else
-                       "outside current pins, task constraints, or quota limits")
-            return refuse("router-out-of-bounds", f"Selected buddy {buddy_id} is {problem}", changed=True)
+                       "excluded" if current["preference_mode"] == "exclude" else
+                       "capability-missing" if not set(request.get("requiredCapabilities") or []) <= set(json.loads(current["capabilities_json"])) else
+                       "constraints-or-quota")
+            return refuse("router-out-of-bounds", changed=True, bound=bound)
         expected_facts = selection_policy.policy_facts(
             buddies=buddies, prefer_buddy_ids=[item["buddyId"] for item in document.get("preferences", []) if item.get("mode") == "prefer"],
             hard_constraints=request.get("constraints") or {})
         policy_check = selection_policy.expected_policy_check(expected_facts, buddy_id)
-        return {**checked, "answer_valid": True, "reason": reason, "buddy_id": buddy_id,
+        return {**checked, "answer_valid": True, "note": note, "buddy_id": buddy_id,
                 "evidence": decision["evidence"], "selected": selected,
                 "output": {**output, "decision": decision, "policyCheck": policy_check}}
 
@@ -1417,7 +1392,7 @@ class DecisionCoordinator:
             "SELECT status FROM evaluation_decisions WHERE decision_id=?", (decision_id,)
         ).fetchone()["status"]
 
-    def _finish(self, connection: sqlite3.Connection, row: sqlite3.Row, *, status: str, now: str, reason: str | None = None, error: str | None = None, buddy_id: str | None = None, output: dict | None = None, selected: dict | None = None) -> None:
+    def _finish(self, connection: sqlite3.Connection, row: sqlite3.Row, *, status: str, now: str, reason: dict | None = None, note: str | None = None, buddy_id: str | None = None, output: dict | None = None, selected: dict | None = None) -> None:
         """One atomic terminal transition for a decision and its audit material."""
         current = self._row(connection, row["decision_id"])
         if (current is None or (current["decision_task_id"] is not None and current["status"] in TERMINAL_DECISION_STATUSES)
@@ -1432,18 +1407,20 @@ class DecisionCoordinator:
             # another selector either sees exhaustion or rechecks its bounds.
             if claim(connection, selected, decision_id=row["decision_id"], now=now) is None:
                 status, buddy_id, selected = "needs-host", None, None
-                reason, error = "The selected quota retry was consumed by another decision", "router-out-of-bounds"
-                output = {**(output or {}), "code": error}
+                reason = make_reason("router-out-of-bounds", bound="quota-retry-consumed")
+                note = None
+                output = {**(output or {}), "code": reason["code"]}
         if status not in DECISION_STATUSES:
             raise BoardError("INTERNAL_ERROR", f"Unknown decision status {status!r}")
         connection.execute(
-            "UPDATE evaluation_decisions SET status=?, reason=?, buddy_id=?, error=?"
+            "UPDATE evaluation_decisions SET status=?, reason_code=?, reason_params_json=?, note=?, buddy_id=?"
             " WHERE decision_id=?",
             (
                 status,
-                (reason or "")[:MAX_DECISION_REASON],
+                reason["code"] if reason else None,
+                canonical_json(reason["params"]) if reason else None,
+                note,
                 buddy_id,
-                error,
                 row["decision_id"],
             ),
         )
@@ -1463,10 +1440,6 @@ class DecisionCoordinator:
             "failed": "decision.failed",
             "cancelled": "decision.cancelled",
         }[status]
-        # Freeze only an exact, bounded machine code; never parse error prose.
-        error_code = (output or {}).get("code")
-        if not isinstance(error_code, str) or not re.fullmatch(r"[a-z][a-z0-9-]{0,79}", error_code):
-            error_code = None
         self._append_event(
             connection,
             event,
@@ -1474,14 +1447,11 @@ class DecisionCoordinator:
             {
                 "status": status,
                 "buddyId": buddy_id,
-                "reason": (reason or "")[:MAX_DECISION_REASON],
-                "error": error,
-                "errorCode": error_code,
             },
         )
         self.board.workflow.routing_settled(connection, decision_id=row["decision_id"], now=now)
 
-    def _cancel_queued_task(self, connection: sqlite3.Connection, task: sqlite3.Row, now: str, reason: str) -> None:
+    def _cancel_queued_task(self, connection: sqlite3.Connection, task: sqlite3.Row, now: str) -> None:
         """Cancel one decision task that provably never started."""
         if task["state"] != "queued":
             return
@@ -1494,7 +1464,7 @@ class DecisionCoordinator:
             "task.cancelled",
             task_id=task["task_id"],
             revision=task["revision"] + 1,
-            payload={"reason": reason, "actor": {"role": "service", "id": "service"}, "phase": "queued"},
+            payload={"decisionId": json.loads(task["spec_json"])["decision"]["decisionId"], "actor": {"role": "service", "id": "service"}, "phase": "queued"},
         )
 
     def _adopt_sole_candidate(self, connection: sqlite3.Connection, row: sqlite3.Row, *, candidate: sqlite3.Row, request: dict, now: str) -> None:
@@ -1520,7 +1490,7 @@ class DecisionCoordinator:
             row,
             status="completed",
             now=now,
-            reason=SOLE_CANDIDATE_REASON,
+            reason=make_reason("single-candidate"),
             buddy_id=buddy_id,
             selected=selected,
             output={
@@ -1528,7 +1498,6 @@ class DecisionCoordinator:
                     "code": "single-candidate",
                     "buddyId": buddy_id,
                     "candidateCount": 1,
-                    "reason": SOLE_CANDIDATE_REASON,
                     "preferences": preferences,
                     "policyFacts": facts,
                 },
@@ -1538,101 +1507,54 @@ class DecisionCoordinator:
 
     # -- views ---------------------------------------------------------------
     def health_summary(self) -> dict:
-        """Bounded, model-free health: the request overview plus per-buddy facts.
-
-        The total window keeps its original diagnostic meaning: one settled
-        business request is one window entry however many dispatch attempts it
-        had, and ``attemptCount`` names the entries that reached a model. Only an
-        adopted Router success resets the failure streak; neutral events and
-        program selections cannot prove recovery, and immutable event codes and
-        bound attempt receipts survive late changes to the retained output.
-
-        ``available``, ``reasonCode`` and ``currentRouterBuddyId`` come from the
-        one ordered-list resolution entry and its skip periods, never from the old
-        three-failure diagnostic threshold. Each ``routers`` entry is projected by
-        the R2 history interfaces from that buddy's own immutable facts and
-        receipts: a success recovers only its own buddy, a valid abstention is an
-        answer, the consecutive count ignores the display window, and budget
-        exhaustion (including timeout codes and the read-only variant) counts as
-        failures too. Records whose attribution or nature cannot be proven are
-        listed under ``unattributed`` and never guessed onto any buddy. Reading
-        writes no events, timers, settings or probe sessions.
-        """
-        from .router_history import buddy_timeline, router_state, unattributed_records
+        """Read terminal decision facts and each Router's recorded outcomes."""
+        from .router_history import buddy_timeline, router_state
         limit = 20
-        kinds = "('decision.completed','decision.failed','decision.needs_host','decision.cancelled')"
         source = (
-            " FROM events e JOIN decision_requests r ON r.decision_id=json_extract(e.payload_json,'$.decisionId')"
-            " LEFT JOIN attempts a ON a.attempt_id=r.attempt_id AND a.task_id=r.task_id AND a.generation=r.generation"
-            " WHERE e.kind IN " + kinds + " AND r.kind='select'"
+            " FROM evaluation_decisions d JOIN decision_requests r ON r.decision_id=d.decision_id"
+            " WHERE r.kind='select' AND d.status IN ('completed','needs-host','failed','cancelled')"
         )
         router_success = (
-            "e.kind='decision.completed' AND a.attempt_id IS NOT NULL"
-            " AND json_extract(a.result_json,'$.status')='ok'"
-            " AND json_extract(a.result_json,'$.shutdownConfirmed')=1"
-            " AND json_extract(a.result_json,'$.result.status')='ok'"
-            " AND json_extract(a.result_json,'$.result.modelStarted') IS NOT 0"
+            "d.status='completed' AND d.note IS NOT NULL AND EXISTS(SELECT 1 FROM router_outcomes o"
+            " WHERE o.plane='work' AND o.request_id=r.request_id AND o.outcome='answered'"
+            " AND o.task_id=r.task_id AND o.attempt_id=r.attempt_id)"
         )
         with self.db.read() as connection:
             now = self._now()
             rows = connection.execute(
-                "SELECT e.kind,e.created_at,e.payload_json,r.decision_id,r.task_id,r.output_json,"
-                " a.result_json AS receipt_json,(" + router_success + ") AS router_success,"
-                " (a.attempt_id IS NOT NULL) AS has_attempt,"
+                "SELECT d.status,d.reason_code,r.updated_at AS created_at,r.decision_id,r.task_id,"
+                " (" + router_success + ") AS router_success,"
+                " (r.attempt_id IS NOT NULL) AS has_attempt,"
                 " (SELECT w.run_id FROM workflow_routes w WHERE w.decision_id=r.decision_id LIMIT 1) AS micro_task_id"
-                + source + " ORDER BY e.seq DESC LIMIT ?", (limit,),
+                + source + " ORDER BY r.updated_at DESC,r.rowid DESC LIMIT ?", (limit,),
             ).fetchall()
             success = connection.execute(
-                "SELECT e.created_at,r.decision_id" + source
-                + " AND " + router_success + " ORDER BY e.seq DESC LIMIT 1",
+                "SELECT r.updated_at AS created_at,r.decision_id" + source
+                + " AND " + router_success + " ORDER BY r.updated_at DESC,r.rowid DESC LIMIT 1",
             ).fetchone()
             resolution = router.current_router(connection, now=now)
             failed = []
             streak = 0
             still_failing = True
-            all_timeouts = True
             timeout_codes = {"timeout", "call-timeout", "deadline", "router-timeout"}
             abstentions = cancellations = 0
             special_counts = {"router-budget-exhausted": 0, "router-out-of-bounds": 0, "router-input-changed": 0}
             for row in rows:
-                payload = json.loads(row["payload_json"])
-                receipt = json.loads(row["receipt_json"]) if row["receipt_json"] else {}
-                # The request output may be replaced by a late, fenced result. Prefer
-                # the immutable receipt; old events without one retain their output.
-                if receipt:
-                    output = receipt.get("result")
-                else:
-                    output = json.loads(row["output_json"]) if row["output_json"] else {}
-                output = output if isinstance(output, dict) else {}
-                code = payload.get("errorCode") or output.get("code")
-                if not isinstance(code, str) or not re.fullmatch(r"[a-z][a-z0-9-]{0,79}", code):
-                    code = "needs-host" if row["kind"] == "decision.needs_host" else "call-failed"
-                decision = output.get("decision") or {}
-                abstained = (row["kind"] == "decision.needs_host" and output.get("status") == "ok"
-                             and payload.get("errorCode") is None and output.get("code") is None
-                             and receipt.get("status") == "ok" and receipt.get("shutdownConfirmed") is True
-                             and output.get("modelStarted") is not False
-                             and isinstance(decision, dict) and decision.get("buddyId", False) is None
-                             and set(decision) == {"buddyId", "reason", "evidence"})
-                original_code = output.get("code")
-                diagnostic_code = original_code if isinstance(original_code, str) and original_code in special_counts else code
-                special = row["kind"] in ("decision.failed", "decision.needs_host") and diagnostic_code in special_counts
-                if special:
-                    special_counts[diagnostic_code] += 1
-                # Bounds and input changes remain independent diagnostic counters.
-                # Budget exhaustion also means the Router failed to return an answer.
-                is_failure = code not in ("router-out-of-bounds", "router-input-changed") and (row["kind"] == "decision.failed" or
-                             (row["kind"] == "decision.needs_host" and not abstained))
+                code = row["reason_code"]
+                abstained = code == "router-abstained"
+                if row["status"] in ("failed", "needs-host") and code in special_counts:
+                    special_counts[code] += 1
+                is_failure = code not in ("router-out-of-bounds", "router-input-changed") and (
+                    row["status"] == "failed" or (row["status"] == "needs-host" and not abstained))
                 if still_failing and is_failure:
                     streak += 1
-                    all_timeouts = all_timeouts and (code in timeout_codes or receipt.get("terminationReason") == "deadline")
                 elif row["router_success"]:
                     still_failing = False
                 abstentions += int(abstained)
-                cancellations += int(row["kind"] == "decision.cancelled")
+                cancellations += int(row["status"] == "cancelled")
                 if is_failure:
-                    failed.append({"decisionId":row["decision_id"], "runId":row["micro_task_id"] or row["task_id"],
-                                   "at":row["created_at"], "code":code})
+                    failed.append({"decisionId": row["decision_id"], "runId": row["micro_task_id"] or row["task_id"],
+                                   "at": row["created_at"], "code": code})
             facts = resolution.facts
             interval = facts.get("routerRetryIntervalSeconds")
             mode = facts.get("routingMode")
@@ -1653,7 +1575,7 @@ class DecisionCoordinator:
                 elif state["inSkipWindow"]:
                     eligible, code = False, "router-skip-window"
                 else:
-                    buddy, code, _reason = router.buddy_problem(connection, buddy_id, mode)
+                    buddy, code = router.buddy_problem(connection, buddy_id, mode)
                     eligible = buddy is not None
                 last_error = next((entry for entry in reversed(window) if entry["outcome"] == "no_answer"), None)
                 routers.append({
@@ -1677,7 +1599,6 @@ class DecisionCoordinator:
                     "lastError": None if last_error is None else {
                         "code": last_error.get("code"), "at": last_error["at"], "phase": last_error.get("phase")},
                 })
-            unattributed = unattributed_records(connection)
         return {"available":resolution.buddy_id is not None,
                 "reasonCode":resolution.problem["code"] if resolution.problem else None,
                 "currentRouterBuddyId":resolution.buddy_id,
@@ -1691,11 +1612,7 @@ class DecisionCoordinator:
                 "cancelledCount":cancellations,
                 "lastSuccessAt":success["created_at"] if success else None,
                 "lastSuccessDecisionId":success["decision_id"] if success else None,
-                "recentFailures":failed[:5],
-                "unattributedCount":len(unattributed),
-                "unattributed":[{"decisionId":entry["decisionId"], "at":entry["at"],
-                                 "outcome":entry["outcome"], "code":entry["code"]}
-                                for entry in reversed(unattributed[-5:])]}
+                "recentFailures":failed[:5]}
 
     def _request_response(self, connection: sqlite3.Connection | None, row: sqlite3.Row, *, duplicate: bool) -> dict:
         view = self._view(connection, row, include_audit=False)
@@ -1780,6 +1697,11 @@ class DecisionCoordinator:
                     next_cursor = last_rowid
         return {"decisions": decisions, "nextCursor": next_cursor, "total": total}
 
+    @staticmethod
+    def _reason(row: sqlite3.Row) -> dict | None:
+        return ({"code": row["reason_code"], "params": json.loads(row["reason_params_json"])}
+                if row["reason_code"] is not None else None)
+
     def _view(self, connection: sqlite3.Connection | None, row: sqlite3.Row, *, include_audit: bool) -> dict:
         if connection is None:
             # Admission responses are assembled after their write transaction.
@@ -1813,7 +1735,8 @@ class DecisionCoordinator:
                 "resolved": (output or {}).get("resolved"),
                 "observed": (output or {}).get("observed"),
             },
-            "reason": row["reason"],
+            "reason": self._reason(row),
+            "note": row["note"],
             "evidence": evidence,
             "policyCheck": (output or {}).get("policyCheck"),
             "budget": request.get("budget"),
@@ -1833,8 +1756,6 @@ class DecisionCoordinator:
         }
         if actor is None:
             view.update(routerBuddyId=None, routerBuddy=None, routerIndex=None)
-        if row["error"]:
-            view["error"] = row["error"]
         if connection is not None:
             from .router_boundary_data import routing_boundary, router_trials
             projection_now = self._now()

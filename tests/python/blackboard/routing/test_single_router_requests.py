@@ -137,7 +137,7 @@ class SingleRouterRequestTests(BoardTestCase):
         self.assertEqual(first["status"], "needs-host")
         self.assertIsNone(first["runId"])
         self.assertEqual(view["routerProblem"]["code"], "router-not-configured")
-        self.assertTrue(view["reason"].startswith("Router 不可用："))
+        self.assertEqual(view["reason"], {"code": "router-not-configured", "params": {}})
         self.configure(board, routerBuddyIds=[BUDDY_ID])
         self.assertEqual(self.audit(board, self.request(board)), view)
         with board.store.db.read() as connection:
@@ -156,7 +156,7 @@ class SingleRouterRequestTests(BoardTestCase):
         self.assertEqual(view["routingMode"], "review")
         self.assertIsNone(view["routerBuddyId"])
         self.assertEqual(view["routerBuddyIds"], [BUDDY_ID])
-        self.assertEqual(view["routerProblem"]["code"], "router-unavailable")
+        self.assertEqual(view["routerProblem"]["code"], "router-all-unavailable")
         with board.store.db.read() as connection:
             record = json.loads(connection.execute("SELECT payload_json FROM events WHERE kind='router.no_answer'").fetchone()[0])
         self.assertEqual(record["code"], "router-review-unsupported")
@@ -169,7 +169,7 @@ class SingleRouterRequestTests(BoardTestCase):
         with patch("hey_my_buddy.blackboard.routing.router.current_router", side_effect=AssertionError("empty bounds must not resolve")):
             view = self.audit(board, self.request(board, requiredCapabilities=["not-present"]))
         self.assertEqual(view["status"], "needs-host")
-        self.assertIn("legal candidate", view["reason"])
+        self.assertEqual(view["reason"], {"code": "no-legal-candidate", "params": {}})
         self.assertEqual(view["routingBasis"]["candidateCount"], 0)
         self.assertIsNone(view["routerProblem"])
         self.assertIsNone(view["runId"])
@@ -179,38 +179,33 @@ class SingleRouterRequestTests(BoardTestCase):
         self.seed(board)
         with board.store.db.write() as connection:
             connection.execute("UPDATE buddies SET provider='',enabled=0 WHERE buddy_id=?", (BUDDY_ID,))
-            buddy, code, reason = router.buddy_problem(connection, BUDDY_ID, "review")
+            buddy, code = router.buddy_problem(connection, BUDDY_ID, "review")
         self.assertIsNone(buddy)
         self.assertEqual(code, "router-incomplete")
-        self.assertIn("身份不完整", reason)
+        self.assertEqual(code, "router-incomplete")
 
     def test_buddy_problem_keeps_each_cached_unavailability_reason(self):
         board = self.board()
         self.seed(board)
         with board.store.db.write() as connection:
-            for updates, code, text in (("enabled=0", "router-unavailable", "已禁用"),
-                                        ("enabled=1,available=0", "router-unavailable", "已发布目录中不可用")):
+            for updates, code in (("enabled=0", "router-disabled"),
+                                  ("enabled=1,available=0", "router-catalog-unavailable")):
                 connection.execute(f"UPDATE buddies SET {updates} WHERE buddy_id=?", (BUDDY_ID,))
-                buddy, actual, reason = router.buddy_problem(connection, BUDDY_ID, "review")
+                buddy, actual = router.buddy_problem(connection, BUDDY_ID, "review")
                 self.assertIsNone(buddy)
                 self.assertEqual(actual, code)
-                self.assertIn(text, reason)
             connection.execute("UPDATE buddies SET available=1 WHERE buddy_id=?", (BUDDY_ID,))
             with patch("hey_my_buddy.blackboard.service.harness_health.read_health", return_value={"available": False, "reason": {"code": "harness.not-found", "params": {"operation": "probe"}}}):
-                _, code, reason = router.buddy_problem(connection, BUDDY_ID, "review")
-            self.assertEqual(code, "router-unavailable")
-            self.assertIn("harness.not-found", reason)
+                _, code = router.buddy_problem(connection, BUDDY_ID, "review")
+            self.assertEqual(code, "router-harness-unavailable")
             with patch("hey_my_buddy.blackboard.evaluation.native_observations.exhausted", return_value={"nativeCode": "quota"}):
-                _, code, reason = router.buddy_problem(connection, BUDDY_ID, "review")
+                _, code = router.buddy_problem(connection, BUDDY_ID, "review")
             self.assertEqual(code, "router-quota-exhausted")
-            self.assertIn("额度耗尽", reason)
             with patch("hey_my_buddy.buddy.harnesses.dsh.adapter.DshAdapter.no_tool_structured", False):
-                _, code, reason = router.buddy_problem(connection, BUDDY_ID, "fast")
+                _, code = router.buddy_problem(connection, BUDDY_ID, "fast")
             self.assertEqual(code, "router-no-tool-unsupported")
-            self.assertIn("无工具结构化入口", reason)
-            _, code, reason = router.buddy_problem(connection, "unpublished", "review")
+            _, code = router.buddy_problem(connection, "unpublished", "review")
             self.assertEqual(code, "router-not-published")
-            self.assertIn("未发布", reason)
 
     def test_frozen_current_router_keeps_snapshot_after_settings_changes(self):
         board = self.board()
@@ -239,7 +234,7 @@ class SingleRouterRequestTests(BoardTestCase):
             self.assertEqual(resolution.facts["routerBuddyIds"], [BUDDY_ID])
             connection.execute("UPDATE buddies SET effort='off',enabled=0 WHERE buddy_id=?", (BUDDY_ID,))
             resolution = router.current_router(connection, frozen=snapshot)
-            self.assertEqual(resolution.inspections[0]["code"], "router-unavailable")
+            self.assertEqual(resolution.inspections[0]["code"], "router-disabled")
 
     def test_historical_fallback_is_retained_only_in_audit(self):
         board = self.board()
@@ -266,8 +261,8 @@ class SingleRouterRequestTests(BoardTestCase):
             response = self.request(board, requestId="bounded-packet")
         view = self.audit(board, response)
         self.assertEqual(view["status"], "needs-host")
-        self.assertEqual(view["error"], "router-input-too-large")
-        self.assertIn("nothing was truncated or sent to a model", view["reason"])
+        self.assertEqual(view["reason"]["code"], "router-input-too-large")
+        self.assertGreater(view["reason"]["params"]["bytes"], limit)
         self.assertIsNone(view["input"])
         self.assertIsNone(view["runId"])
 
@@ -301,7 +296,8 @@ class SingleRouterWorkflowRequestTests(WorkflowTestCase):
         self.assertEqual(view["activeRequest"]["kind"], "attention")
         self.assertEqual(view["counts"]["turns"], 0)
         self.assertEqual(view["routing"]["routerProblem"]["code"], "router-not-configured")
-        self.assertTrue(view["activeRequest"]["summary"].startswith("Router 不可用："))
+        self.assertIsNone(view["activeRequest"]["summary"])
+        self.assertEqual(view["activeRequest"]["reason"], {"code": "router-not-configured", "params": {}})
         self.assertIsNone(view["routing"]["taskId"])
         replay = self.routed(board)
         self.assertEqual(replay["activeRequest"]["requestId"], view["activeRequest"]["requestId"])
@@ -310,9 +306,9 @@ class SingleRouterWorkflowRequestTests(WorkflowTestCase):
             self.assertEqual(connection.execute("SELECT COUNT(*) FROM workflow_requests").fetchone()[0], 1)
             self.assertEqual(connection.execute("SELECT COUNT(*) FROM workflow_routes").fetchone()[0], 1)
             self.assertEqual(connection.execute("SELECT COUNT(*) FROM tasks").fetchone()[0], 1)
-            payload = json.loads(connection.execute("SELECT payload_json FROM workflow_requests").fetchone()[0])
-        self.assertEqual(payload["routerProblem"]["code"], "router-not-configured")
-        self.assertIn("未调用 Router", payload["attempted"])
+            request_row = connection.execute("SELECT decision_id,payload_json FROM workflow_requests").fetchone()
+        self.assertEqual(request_row["decision_id"], view["routing"]["decisionId"])
+        self.assertEqual(json.loads(request_row["payload_json"]), {"source": "routing"})
         continued = self.continue_run(board, view, buddy=BUDDY)
         self.assertEqual(continued["runId"], view["runId"])
         self.assertEqual(continued["buddy"], BUDDY)

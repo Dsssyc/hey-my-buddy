@@ -375,7 +375,7 @@ class SealFactPinningTests(WorkflowStashTestCase):
         self.workspace.stash_inventories[repository] = observed([])
         claimed = self.submit_and_claim(board)
         attempt = claimed["claim"]["attempt"]
-        released = board.store.release_execution(({'attemptId': attempt['attemptId'], 'generation': attempt['generation'], 'nonce': NONCE, 'evidence': {'spawnIntentWritten': False}})["attemptId"])
+        released = board.store.release_execution(({'attemptId': attempt['attemptId'], 'generation': attempt['generation'], 'nonce': NONCE, 'evidence': {'spawnIntentWritten': False}})["attemptId"], reason="execution-process-not-created")
         self.assertTrue(released["released"])
         view = board.call("workflow_get", {"runId": self.run_id})
         artifact = next(row for row in view["artifacts"] if row["kind"] == "shared-refs")

@@ -124,7 +124,7 @@ class DecisionTestCase(BoardTestCase):
     @classmethod
     def valid_decision(cls, document: dict, buddy_id: str | None, *,
                        reason: str = "fixture selection", evidence: list[dict] | None = None) -> dict:
-        return {"buddyId": buddy_id, "reason": reason, "evidence": list(evidence or [])}
+        return {"buddyId": buddy_id, "note": reason, "evidence": list(evidence or [])}
 
 
 class SelectionRequestTests(DecisionTestCase):
@@ -148,7 +148,13 @@ class SelectionRequestTests(DecisionTestCase):
                          [BUDDY_ID, SECOND_BUDDY_ID])
         # The queued recommendation is cancelled through the ordinary task operation.
         board.call("task_cancel", {"runId": first["runId"], 'note': "not needed"})
-        self.assertEqual(self.decision(board, first["decisionId"])["status"], "cancelled")
+        cancelled = self.decision(board, first["decisionId"])
+        self.assertEqual(cancelled["status"], "cancelled")
+        self.assertEqual(cancelled["reason"], {"code": "decision-cancelled", "params": {}})
+        self.assertIsNone(cancelled["note"])
+        with board.store.db.read() as db:
+            payload = json.loads(db.execute("SELECT payload_json FROM events WHERE kind='task.cancelled' ORDER BY seq DESC LIMIT 1").fetchone()[0])
+        self.assertEqual(payload["note"], "not needed")
         # The idempotent replay still resolves the same decision after it terminated.
         replayed = self.request(board)
         self.assertEqual(replayed["status"], "cancelled")
@@ -160,7 +166,7 @@ class SelectionRequestTests(DecisionTestCase):
         selected = self.request(board)
         board.call("task_cancel", {"runId": selected["runId"]})
         self.assertEqual(self.decision(board, selected["decisionId"])["reason"],
-                         "the decision run was cancelled")
+                         {"code": "decision-cancelled", "params": {}})
 
     def test_recommendation_never_creates_or_authorizes_a_business_task(self):
         board = self.board()
@@ -170,7 +176,9 @@ class SelectionRequestTests(DecisionTestCase):
         decision = self.decision(board, request["decisionId"])
         self.assertEqual(decision["status"], "completed")
         self.assertEqual(decision["buddyId"], BUDDY_ID)
-        self.assertIn("mock select chose", decision["reason"])
+        self.assertIn("mock select chose", decision["note"])
+        self.assertIsNone(decision["reason"])
+        self.assertNotIn("error", decision)
         # Exactly the decision's own run exists; no business task was submitted.
         tasks = board.call("task_list", {"limit": 50})["runs"]
         self.assertEqual([task["runId"] for task in tasks], [request["runId"]])
@@ -270,7 +278,7 @@ class SelectionRequestTests(DecisionTestCase):
         self.assertIsNone(request["runId"])
         decision = self.decision(board, request["decisionId"])
         self.assertEqual(decision["buddyId"], BUDDY_ID)
-        self.assertEqual(decision["reason"], "唯一合法候选，未调用 Router")
+        self.assertEqual(decision["reason"], {"code": "single-candidate", "params": {}})
         self.assertEqual(decision["routingBasis"]["candidateCount"], 1)
         self.readonly_start.assert_not_called()
         no_candidate = board.call(
@@ -280,7 +288,7 @@ class SelectionRequestTests(DecisionTestCase):
         self.assertEqual(no_candidate["status"], "needs-host")
         self.assertIsNone(no_candidate["runId"])
         decision = self.decision(board, no_candidate["decisionId"])
-        self.assertIn("legal candidate", decision["reason"])
+        self.assertEqual(decision["reason"]["code"], "no-legal-candidate")
         # The frozen basis records the empty candidate set the Host boundary and
         # the routing source derivation both read.
         self.assertEqual(decision["routingBasis"]["candidateCount"], 0)
@@ -360,7 +368,7 @@ class SelectionRequestTests(DecisionTestCase):
         self.assertIsNone(request["runId"])
         decision = self.decision(board, request["decisionId"])
         self.assertEqual(decision["routerProblem"]["code"], "router-not-configured")
-        self.assertTrue(decision["reason"].startswith("Router 不可用："))
+        self.assertEqual(decision["reason"]["code"], "router-not-configured")
         self.assertEqual(board.call("task_list", {"limit": 10})["runs"], [])
 
     def test_native_fixture_absence_is_an_honest_harness_unavailable_outcome(self):
@@ -381,7 +389,7 @@ class SelectionRequestTests(DecisionTestCase):
         decision = self.decision(board, request["decisionId"])
         self.assertEqual(decision["routingBasis"]["candidateCount"], 0)
         self.assertIsNone(decision["routerProblem"])
-        self.assertIn("legal candidate", decision["reason"])
+        self.assertEqual(decision["reason"]["code"], "no-legal-candidate")
         # The removed Host maintenance capability is absent even during an outage.
         self.assertNotIn("maintenance", capabilities)
         self.assertEqual(board.call("task_list", {"limit": 10})["runs"], [])
@@ -480,7 +488,8 @@ class DecisionFailureTests(DecisionTestCase):
         self.seed(board)
         decision = self.outcome(board, "error")
         self.assertEqual(decision["status"], "needs-host")
-        self.assertIn("call-timeout", decision["error"])
+        self.assertEqual(decision["reason"]["code"], "call-timeout")
+        self.assertNotIn("error", decision)
         self.assertTrue(decision["stopEvidence"]["shutdownConfirmed"])
 
     def test_out_of_candidate_is_not_adopted_and_has_its_own_health_count(self):
@@ -572,7 +581,7 @@ class DecisionFailureTests(DecisionTestCase):
         self.seed(board)
         decision = self.outcome(board, "json_answer")
         self.assertEqual(decision["status"], "completed")
-        self.assertEqual(set(decision["output"]["decision"]), {"buddyId", "reason", "evidence"})
+        self.assertEqual(set(decision["output"]["decision"]), {"buddyId", "note", "evidence"})
         self.assertEqual(decision["usage"], {"elapsedMs": 200, "toolCalls": 1, "bytesRead": None})
         self.assertEqual(decision["nativeIdentity"]["sessionId"], "mock-native")
 
@@ -620,7 +629,7 @@ class DecisionFailureTests(DecisionTestCase):
         with board.store.db.read() as connection:
             head = connection.execute('SELECT MAX(seq) FROM events').fetchone()[0]
             success_time = connection.execute(
-                "SELECT created_at FROM events WHERE kind='decision.completed' AND json_extract(payload_json,'$.decisionId')=?",
+                "SELECT updated_at FROM decision_requests WHERE decision_id=?",
                 (success["decisionId"],),
             ).fetchone()[0]
         report = board.call("health", {})["routingHealth"]
@@ -727,7 +736,7 @@ class DecisionFailureTests(DecisionTestCase):
         with restarted.store.db.read() as connection:
             receipt = json.loads(connection.execute("SELECT result_json FROM attempts WHERE attempt_id=?",
                                                     (claim["attempt"]["attemptId"],)).fetchone()[0])
-        self.assertEqual(receipt["result"]["decision"]["reason"], "survived restart")
+        self.assertEqual(receipt["result"]["decision"]["note"], "survived restart")
 
     def test_unreachable_router_is_fenced_only_when_identity_proves_interruption(self):
         board = self.board()
@@ -849,7 +858,7 @@ class DecisionSurfaceTests(DecisionTestCase):
                 "buddyId",
                 "selectedBuddy",
                 "decisionModel",
-                "reason",
+                "reason", "note",
                 "evidence",
                 "policyCheck",
                 "budget",
@@ -912,7 +921,7 @@ class DecisionWorkerProcessTests(DecisionTestCase):
         self.run_worker(board)
         decision = self.decision(board, request["decisionId"])
         self.assertEqual(decision["status"], "completed", decision.get("reason"))
-        self.assertEqual(set(decision["output"]["decision"]), {"buddyId", "reason", "evidence"})
+        self.assertEqual(set(decision["output"]["decision"]), {"buddyId", "note", "evidence"})
         self.assertTrue(decision["stopEvidence"]["shutdownConfirmed"])
         self.assertTrue(decision["inputVerification"]["unchanged"])
         harness, context, request_view = self.readonly_start.call_args.args

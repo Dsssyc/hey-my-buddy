@@ -47,7 +47,7 @@ ALPHA = {"buddyId": "dsh:fixture:alpha:max", "harness": "dsh", "provider": "fixt
 BRAVO = {"buddyId": "dsh:fixture:bravo:max", "harness": "dsh", "provider": "fixture",
          "model": "bravo", "effort": "max"}
 INSPECTIONS = [{"index": 0, "buddyId": ALPHA["buddyId"], "eligible": True, "code": None,
-                "reason": None, "selected": True}]
+                "selected": True}]
 
 
 def snapshot_dict() -> dict:
@@ -72,8 +72,8 @@ class RouterSequenceTestCase(BoardTestCase):
         self.board_ = self.board()
         with self.board_.store.db.write() as db:
             db.execute(
-                "INSERT INTO evaluation_decisions(decision_id,status,task,reason,"
-                "created_at) VALUES('dec-1','queued','task','',?)", (T0,))
+                "INSERT INTO evaluation_decisions(decision_id,status,task,"
+                "created_at) VALUES('dec-1','queued','task',?)", (T0,))
             db.execute(
                 "INSERT INTO decision_requests(decision_id,request_id,kind,input_fingerprint,"
                 "requested_json,created_at,updated_at)"

@@ -1,17 +1,53 @@
 {
   "ANCESTOR_TERMINAL": [],
+  "BUDDY_UNAVAILABLE": [
+    "buddy",
+    "enabled",
+    "catalogReadAt"
+  ],
+  "CATALOG_UNAVAILABLE": [
+    "buddy",
+    "harness",
+    "catalogReadAt"
+  ],
   "CONFLICT": [],
   "HARNESS_BALANCE_ZERO": [],
   "HARNESS_QUOTA_EXHAUSTED": [],
   "HARNESS_QUOTA_LIMIT_REPORTED": [],
   "HARNESS_QUOTA_NEAR_LIMIT": [],
   "HARNESS_RATE_LIMIT_REPORTED": [],
+  "HARNESS_UNAVAILABLE": [
+    "buddy",
+    "harness"
+  ],
   "ILLEGAL_TRANSITION": [],
+  "INVALID_ARGUMENT": [
+    "legalEfforts",
+    "buddy"
+  ],
+  "INVALID_BUDDY": [],
+  "PERMISSION_DENIED": [],
   "REVISION_CONFLICT": [],
   "SHUTDOWN_UNCONFIRMED": [],
+  "UNSUPPORTED_ADAPTER": [
+    "adapter"
+  ],
+  "UNSUPPORTED_CAPABILITY": [
+    "harness",
+    "access",
+    "requiredCapability",
+    "missingCapabilities"
+  ],
+  "UNSUPPORTED_HARNESS": [],
   "UPGRADE_IN_PROGRESS": [],
   "account.login-required": [],
   "account.not-checked": [],
+  "answer-empty": [],
+  "answer-invalid-json": [],
+  "answer-not-json": [],
+  "answer-shape": [],
+  "answer-unexpected-field": [],
+  "call-timeout": [],
   "catalog-unavailable": [],
   "catalog.account-binding-changed": [],
   "catalog.account-status-unknown": [
@@ -39,6 +75,11 @@
   "catalog.native-warning": [],
   "config-options-shape-unreadable": [],
   "config-shape-unreadable": [],
+  "deadline": [],
+  "decision-cancelled": [],
+  "decision-publication-failed": [],
+  "execution-launch-failed": [],
+  "execution-process-not-created": [],
   "harness.account-read-failed": [
     "operation"
   ],
@@ -95,6 +136,7 @@
   "history.reason-unavailable": [
     "recordId"
   ],
+  "interrupted-before-delivery": [],
   "lead.owned-concluded": [
     "leadRunId"
   ],
@@ -127,9 +169,54 @@
   "macro-task-deletion.unsafe-path": [],
   "macro-task-deletion.unsealed-changes": [],
   "macro-task-deletion.unsealed-handoff": [],
+  "micro-task-cancelled": [],
   "model-cursor-shape-unreadable": [],
   "model-list-shape-unreadable": [],
+  "no-legal-candidate": [],
   "not-enabled": [],
+  "readonly-budget-exhausted": [],
+  "router-abstained": [],
+  "router-all-unavailable": [],
+  "router-budget-exhausted": [],
+  "router-catalog-unavailable": [],
+  "router-disabled": [],
+  "router-dispatch-unverified": [],
+  "router-evidence-out-of-bounds": [],
+  "router-harness-unavailable": [],
+  "router-incomplete": [],
+  "router-input-changed": [],
+  "router-input-too-large": [
+    "bytes",
+    "limit",
+    "collection",
+    "count"
+  ],
+  "router-list-exhausted": [],
+  "router-no-answer": [],
+  "router-no-tool-unsupported": [],
+  "router-not-configured": [],
+  "router-not-published": [],
+  "router-not-published-at-freeze": [],
+  "router-out-of-bounds": [
+    "bound"
+  ],
+  "router-quota-exhausted": [],
+  "router-review-unavailable": [],
+  "router-review-unsupported": [],
+  "router-skip-window": [
+    "buddyId",
+    "retryAt"
+  ],
+  "router-stop-unconfirmed": [],
+  "router-timeout": [],
+  "router-tool-evidence-unverified": [],
+  "router-tools-forbidden": [],
+  "routing-taken-over": [],
+  "routing-unusable-selection": [],
+  "service-stopped-before-launch": [],
+  "single-candidate": [],
+  "timeout": [],
+  "workflow-routing-fenced": [],
   "workspace-scope-violation": [
     "conflictIds",
     "paths"

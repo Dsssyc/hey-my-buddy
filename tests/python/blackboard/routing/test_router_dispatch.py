@@ -144,7 +144,7 @@ class AdmissionTests(RouterDispatchTestCase):
         second = self.snapshot_of(unavailable["decisionId"])
         self.assertEqual([item["buddyId"] for item in second["baseInput"]["buddies"]], [A, B])
         self.assertEqual([entry["code"] for entry in second["inspections"]],
-                         ["router-unavailable", "router-unavailable"])
+                         ["router-disabled", "router-disabled"])
         self.assertEqual(self.tasks(), [])
 
     def test_sole_candidate_takes_the_direct_path_without_a_router_task(self):
@@ -188,7 +188,7 @@ class AdmissionTests(RouterDispatchTestCase):
         recorded = [payload for _, payload in events if payload["requestId"] == "pick-disabled"]
         self.assertEqual(recorded, [{"plane": "work", "requestId": "pick-disabled", "routerIndex": 0,
                                      "buddyId": A, "phase": "preflight", "taskId": None, "attemptId": None,
-                                     "outcome": "no_answer", "code": "router-unavailable"}])
+                                     "outcome": "no_answer", "code": "router-disabled"}])
         # Replaying the same request adds no second fact.
         self.request(request_id="pick-disabled")
         self.assertEqual(len(self.router_events("router.no_answer")), 2)
@@ -537,7 +537,10 @@ class HostReviewRegressionTests(RouterDispatchTestCase):
         self.assertIsNone(refused["runId"])
         self.assertEqual(len(self.tasks()), 1)
         self.assertIsNotNone(self.snapshot_of(refused["decisionId"]))
-        self.assertEqual(self.decision_row(refused["decisionId"])["error"], "router-input-too-large")
+        oversized = self.decision_row(refused["decisionId"])["reason"]
+        self.assertEqual(oversized["code"], "router-input-too-large")
+        self.assertEqual(oversized["params"]["limit"], bound)
+        self.assertGreater(oversized["params"]["bytes"], bound)
 
     def test_next_actor_byte_ceiling_keeps_the_original_task_and_input(self):
         with self.board_.store.db.write() as db:
@@ -551,7 +554,10 @@ class HostReviewRegressionTests(RouterDispatchTestCase):
             response = self.claim("oversize")
         self.assertIsNone(response["claim"])
         self.assertEqual(self.decision_row(first["decisionId"])["status"], "needs-host")
-        self.assertEqual(self.decision_row(first["decisionId"])["error"], "router-input-too-large")
+        oversized = self.decision_row(first["decisionId"])["reason"]
+        self.assertEqual(oversized["code"], "router-input-too-large")
+        self.assertEqual(oversized["params"]["limit"], bound)
+        self.assertGreater(oversized["params"]["bytes"], bound)
         self.assertEqual(self.dispatch_of(first["runId"]), original)
         self.assertEqual(len(self.tasks()), 1)
         self.assertEqual([event[1]["buddyId"] for event in self.router_events("router.no_answer")], [A])

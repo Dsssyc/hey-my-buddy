@@ -127,6 +127,7 @@ class RoutingOwnershipTests(RouterDispatchTestCase, ConsoleTestCase):
                 self.assertEqual(selected["buddyId"], B)
                 self.assertEqual({key: selected[key] for key in ("harness", "provider", "model", "effort")}, {
                     "harness": "dsh", "provider": "fixture", "model": "bravo", "effort": "max"})
-                self.assertEqual(span["routing"]["reason"], "The frozen legal choice")
+                self.assertIsNone(span["routing"]["reason"])
+                self.assertEqual(span["routing"]["note"], "The frozen legal choice")
                 self.assertEqual(span["routing"]["usage"], {
                     "elapsedMs": 100, "toolCalls": 0, "bytesRead": None})

@@ -370,15 +370,20 @@ class WorkflowCoordinator:
 
     def _request_view(self, row, *, include_audit: bool = False, compact: bool = False, connection=None, now=None) -> dict:
         payload = json.loads(row["payload_json"])
-        boundary = payload.get("routingBoundary")
-        if connection is not None and payload.get("source") == "routing" and payload.get("decisionId"):
+        boundary = None
+        decision_id = row["decision_id"]
+        request_reason = ({"code": row["reason_code"], "params": json.loads(row["reason_params_json"])}
+                          if row["reason_code"] is not None else None)
+        if connection is not None and payload.get("source") == "routing" and decision_id:
             # Proxy rows retain the leaf's frozen decision. Only command fencing
             # is refreshed from the current owned lineage, never its frozen packet.
             target_id = (payload.get("origin") or {}).get("runId") or row["run_id"]
             target = self._run_optional(connection, target_id)
-            decision = self.board.decisions._row(connection, payload["decisionId"])
+            decision = self.board.decisions._row(connection, decision_id)
             if target is not None and decision is not None:
                 boundary = self._routing_boundary(connection, decision, target, now=now)
+            if request_reason is None and decision is not None:
+                request_reason = self.board.decisions._reason(decision)
         if compact:
             view = {
                 "requestId": row["request_id"],
@@ -390,6 +395,8 @@ class WorkflowCoordinator:
                 "proxy": payload.get("proxy"),
                 "origin": payload.get("origin"),
                 "routing": payload.get("source") == "routing",
+                "decisionId": decision_id,
+                "reason": request_reason,
             }
             if boundary is not None:
                 view["routingBoundary"] = boundary
@@ -399,8 +406,8 @@ class WorkflowCoordinator:
             "kind": row["kind"],
             "state": row["state"],
             "summary": row["summary"],
-            "reason": ({"code": row["reason_code"], "params": json.loads(row["reason_params_json"])}
-                       if row["reason_code"] is not None else None),
+            "reason": request_reason,
+            "decisionId": decision_id,
             "turnId": row["turn_id"],
             "attemptId": row["attempt_id"],
             "childTaskId": row["child_task_id"],
@@ -1403,7 +1410,8 @@ class WorkflowCoordinator:
             "status": status, "decisionId": decision["decision_id"], "taskId": decision["decision_task_id"],
             "attemptId": decision["decision_attempt_id"], "generation": decision["decision_generation"],
             "selectedBuddy": json.loads(decision["selected_json"]) if decision["selected_json"] else None,
-            "reason": link["reason"] or decision["reason"],
+            "reason": current["reason"],
+            "note": current["note"],
             "constraints": requested.get("constraints", schemas.buddy_constraints(micro_task)),
             "requiredCapabilities": requested.get("requiredCapabilities", []),
             "source": selection_source(requested),
@@ -1481,8 +1489,8 @@ class WorkflowCoordinator:
             if (len(buddy) == len(schemas.BUDDY_FIELDS)
                     and buddy.get("harness") in schemas.CODING_HARNESSES
                     and all(buddy.get(key) == value for key, value in constraints.items())):
-                connection.execute("UPDATE workflow_routes SET state='resolved',reason=?,updated_at=? WHERE decision_id=?",
-                                   (decision["reason"], now, decision_id))
+                connection.execute("UPDATE workflow_routes SET state='resolved',updated_at=? WHERE decision_id=?",
+                                   (now, decision_id))
                 connection.execute(
                     "UPDATE workflow_runs SET buddy_json=?, buddy_revision=buddy_revision+1,"
                     " validated_buddy_revision=NULL,updated_at=?,revision=revision+1 WHERE run_id=?",
@@ -1495,46 +1503,27 @@ class WorkflowCoordinator:
                                                   "buddyId": decision["buddy_id"],
                                                   "source": selection_source(json.loads(decision["requested_json"]))})
                 return
-        self._routing_attention(connection, run, now,
-                                decision["error"] or decision["reason"] or "No legal coding buddy was selected")
+        own_reason = (make_reason("routing-unusable-selection") if decision["status"] == "completed" else None)
+        self._routing_attention(connection, run, now, own_reason)
 
-    def _routing_attention(self, connection, run, now: str, reason: str) -> None:
+    def _routing_attention(self, connection, run, now: str, reason: dict | None = None) -> None:
         """A service boundary, with no invented agent turn or completed Micro task."""
-        reason = str(reason)[:2000]
         if run["current_routing_id"]:
-            connection.execute("UPDATE workflow_routes SET state='needs-host',reason=?,updated_at=? WHERE decision_id=?",
-                               (reason, now, run["current_routing_id"]))
+            connection.execute("UPDATE workflow_routes SET state='needs-host',updated_at=? WHERE decision_id=?",
+                               (now, run["current_routing_id"]))
         request_id = f"routing-{uuid.uuid4()}"
-        payload = {"source": "routing", "decisionId": run["current_routing_id"], "summary": reason,
-                   "neededWork": ["读取路由边界的冻结候选和事实，指定完整合法 buddy 继续同一微任务，或在列明的时间后显式 reroute=true；仅更改共享 Router 设置需要用户。"],
-                   "attempted": "Bounded model routing and native buddy validation",
-                   "acceptance": "A legal harness/provider/model/effort tuple is ready for execution"}
-        if run["current_routing_id"]:
-            decision = self.board.decisions._row(connection, run["current_routing_id"])
-            current = self.board.decisions._view(connection, decision, include_audit=False)
-            payload.update({key: current[key] for key in (
-                "routerBuddyIds", "routerIdentities", "routingMode", "routingBudget", "budget",
-                "routerRetryIntervalSeconds",
-                "routerBuddyId", "routerBuddy", "routerIndex", "decisionModel", "routerProblem",
-            ) if key in current})
-            boundary = self._routing_boundary(connection, decision, run, post_transition=True, now=now)
-            if boundary is not None:
-                payload["routingBoundary"] = boundary
-                payload["summary"] = reason = boundary["reason"][:2000]
-            if decision["decision_attempt_id"] is None and not any(
-                    trial.get("attemptId") for trial in current.get("routerTrials", [])):
-                payload["attempted"] = "已冻结合法候选并检查请求边界；未调用 Router，未创建 Worker 业务回合。"
-        connection.execute(
-            "INSERT INTO workflow_requests(request_id,run_id,kind,summary,payload_json,state,expected_revision,created_at,updated_at)"
-            " VALUES(?,?,'attention',?,?,'open',?,?,?)",
-            (request_id, run["run_id"], reason, canonical_json(payload), run["revision"] + 1, now, now),
-        )
+        if reason is None and not run["current_routing_id"]:
+            reason = make_reason("no-legal-candidate")
+        decision_id = run["current_routing_id"]
+        payload = {"source": "routing"}
+        self._record_system_request(connection, run, reason, payload, now,
+                                    request_id=request_id, decision_id=decision_id, sync=False)
         connection.execute("UPDATE workflow_runs SET state='awaiting-host',active_request_id=?,updated_at=?,revision=revision+1 WHERE run_id=?",
                            (request_id, now, run["run_id"]))
         connection.execute("UPDATE tasks SET queue_reason='awaiting-host' WHERE task_id=?", (run["run_id"],))
         self._propagate_boundary(connection, self._request_row(connection, run["run_id"], request_id), now)
         self.board._append_event(connection, "workflow.routing_needs_host", task_id=run["run_id"],
-                                 payload={"requestId": request_id, "decisionId": run["current_routing_id"], "reason": reason})
+                                 payload={"requestId": request_id, "decisionId": run["current_routing_id"]})
 
     @staticmethod
     def _dispatch_identity(run) -> tuple:
@@ -1570,7 +1559,14 @@ class WorkflowCoordinator:
                     task = connection.execute("SELECT * FROM tasks WHERE task_id=?", (run["run_id"],)).fetchone()
                     if (current["state"] == "executing" and task["state"] == "queued"
                             and self._dispatch_identity(current) == self._dispatch_identity(run)):
-                        self._routing_attention(connection, current, self.now(), f"{error.code}: {error.message}")
+                        facts = {key: error.details[key] for key in (
+                            "buddy", "enabled", "catalogReadAt", "legalEfforts", "access",
+                            "requiredCapability", "missingCapabilities", "adapter",
+                        ) if key in error.details}
+                        if error.code in ("HARNESS_UNAVAILABLE", "UNSUPPORTED_CAPABILITY"):
+                            facts["harness"] = buddy["harness"]
+                        self._routing_attention(connection, current, self.now(),
+                                                {"code": error.code, "params": facts})
                     head = self.board._head_of(connection)
                 self.board._notify(head)
             else:
@@ -2037,8 +2033,8 @@ class WorkflowCoordinator:
             ).fetchone()["count"]
         )
         query = (
-            "SELECT r.rowid AS route_rowid, r.decision_id, r.owner_generation, r.state, r.reason,"
-            " r.created_at, d.status AS decision_status, d.reason AS decision_reason,"
+            "SELECT r.rowid AS route_rowid, r.decision_id, r.owner_generation, r.state,"
+            " r.created_at, d.status AS decision_status, d.reason_code, d.reason_params_json, d.note,"
             " q.task_id AS decision_task_id, q.selected_json, q.requested_json"
             " FROM workflow_routes r"
             " JOIN evaluation_decisions d ON d.decision_id=r.decision_id"
@@ -2070,7 +2066,9 @@ class WorkflowCoordinator:
                     "taskId": row["decision_task_id"],
                     "selectedBuddy": json.loads(row["selected_json"]) if row["selected_json"] else None,
                     "source": selection_source(requested),
-                    "reason": row["reason"] or row["decision_reason"],
+                    "reason": ({"code": row["reason_code"], "params": json.loads(row["reason_params_json"])}
+                               if row["reason_code"] is not None else None),
+                    "note": row["note"],
                     "createdAt": row["created_at"],
                     "ownerGeneration": int(row["owner_generation"]),
                     "current": bool(current_id) and row["decision_id"] == current_id,
@@ -2554,10 +2552,11 @@ class WorkflowCoordinator:
             request_id = self._proxy_id(parent["run_id"], source["request_id"])
             connection.execute(
                 "INSERT OR IGNORE INTO workflow_requests(request_id,run_id,turn_id,attempt_id,child_task_id,kind,summary,"
-                "reason_code,reason_params_json,payload_json,state,expected_revision,created_at,updated_at)"
-                " VALUES(?,?,?,?,?,'helper-attention',?,?,?,?,'open',?,?,?)",
+                "reason_code,reason_params_json,decision_id,payload_json,state,expected_revision,created_at,updated_at)"
+                " VALUES(?,?,?,?,?,'helper-attention',?,?,?,?,?,'open',?,?,?)",
                 (request_id, parent["run_id"], source["turn_id"], source["attempt_id"], source["run_id"], source["summary"],
-                 source["reason_code"], source["reason_params_json"], canonical_json(payload), parent["revision"], now, now),
+                 source["reason_code"], source["reason_params_json"], source["decision_id"], canonical_json(payload),
+                 parent["revision"], now, now),
             )
             source = self._request_row(connection, parent["run_id"], request_id)
             if source["state"] != "open":
@@ -3391,10 +3390,10 @@ class WorkflowCoordinator:
             # Routing calls are owned processes too. Fence every still-pending
             # selection before changing authority can admit a late recommendation.
             for owned_id in [run_id, *(child["child_task_id"] for child in self._owned_children(connection, run_id))]:
-                if self._cancel_routes(connection, owned_id, "Host takeover fenced model selection", now):
+                if self._cancel_routes(connection, owned_id, make_reason("routing-taken-over"), now):
                     owned = self._run_row(connection, owned_id)
                     if owned["state"] == "executing":
-                        self._routing_attention(connection, owned, now, "Host takeover interrupted model selection; wait for its confirmed stop, then choose a buddy or reroute")
+                        self._routing_attention(connection, owned, now)
             self.board._append_event(
                 connection,
                 "workflow.takeover",
@@ -3708,7 +3707,7 @@ class WorkflowCoordinator:
         if pending is not None:
             raise BoardError("CONFLICT", "Model selection is still pending; wait or cancel its owning Micro task before continuing")
 
-    def _cancel_routes(self, connection, run_id: str, reason: str, now: str, *,
+    def _cancel_routes(self, connection, run_id: str, reason: dict, now: str, *,
                        actor: dict | None = None, initiator: str = "unknown") -> bool:
         fenced = False
         for link in connection.execute("SELECT * FROM workflow_routes WHERE run_id=?", (run_id,)).fetchall():
@@ -3719,8 +3718,8 @@ class WorkflowCoordinator:
             if link["state"] != "pending" and not unconfirmed:
                 continue
             fenced = True
-            connection.execute("UPDATE workflow_routes SET state='fenced',reason=?,updated_at=? WHERE decision_id=?",
-                               (reason, now, link["decision_id"]))
+            connection.execute("UPDATE workflow_routes SET state='fenced',updated_at=? WHERE decision_id=?",
+                               (now, link["decision_id"]))
             if task is not None:
                 if task["state"] not in ("completed", "failed", "cancelled", "cancelling"):
                     self.board._transition_task(connection, task, "cancelling" if unconfirmed else "cancelled")
@@ -3729,7 +3728,8 @@ class WorkflowCoordinator:
                     self._request_attempt_stop(connection, task["task_id"], now, initiator=initiator, wrap_up=False)
                 self.board.decisions.cancelled(connection, task=task, reason=reason, now=now)
                 self.board._append_event(connection, "task.cancel_requested" if unconfirmed else "task.cancelled",
-                                         task_id=task["task_id"], payload={"reason": reason, "owningRunId": run_id})
+                                         task_id=task["task_id"], payload={"decisionId": link["decision_id"],
+                                                                            "owningRunId": run_id})
         return fenced
 
     def _stop_proven(self, connection, task) -> bool:
@@ -3815,7 +3815,7 @@ class WorkflowCoordinator:
             "UPDATE workflow_continuations SET state='cancelled' WHERE run_id=? AND state IN ('recorded','queued')", (run_id,),
         )
         self._revoke_credentials(connection, run_id, now)
-        self._cancel_routes(connection, run_id, "Owning Micro task cancelled", now, actor=actor,
+        self._cancel_routes(connection, run_id, make_reason("micro-task-cancelled"), now, actor=actor,
                             initiator=initiator)
         if cancel_micro_task:
             connection.execute(
@@ -3866,7 +3866,7 @@ class WorkflowCoordinator:
         )
         return {"accepted": False, "disposition": disposition, "state": run_row["state"], "late": True}
 
-    def attempt_released(self, connection, *, task, attempt, now: str, reason: str,
+    def attempt_released(self, connection, *, task, attempt, now: str,
                          seal_stash: dict | None = None) -> None:
         """Settle a Worker's durable never-spawned release inside its transaction."""
         if self._run_optional(connection, task["task_id"]) is None:
@@ -3878,10 +3878,6 @@ class WorkflowCoordinator:
         self.child_settled(connection, task=task, attempt=attempt, payload=None, task_state=task["state"], now=now)
         self._release_reservations(connection, task["task_id"], now)
         self._revoke_credentials(connection, task["task_id"], now)
-        self.board._append_event(
-            connection, "workflow.attempt_released", task_id=task["task_id"], attempt_id=attempt["attempt_id"],
-            payload={"reason": reason, "shutdownConfirmed": True},
-        )
 
     def _revoke_credentials(self, connection, run_id: str, now: str) -> None:
         connection.execute(
@@ -7437,22 +7433,26 @@ class WorkflowCoordinator:
         )
         return request_id
 
-    def _record_system_request(self, connection, run_row, reason: dict, payload: dict, now: str, *,
-                               kind: str = "attention", turn_row=None, request_id: str | None = None) -> str:
+    def _record_system_request(self, connection, run_row, reason: dict | None, payload: dict, now: str, *,
+                               kind: str = "attention", turn_row=None, request_id: str | None = None,
+                               decision_id: str | None = None, sync: bool = True) -> str:
         """Open one system boundary and propagate the same form to its owners."""
         request_id = request_id or f"req-{uuid.uuid4()}"
         connection.execute(
             "INSERT INTO workflow_requests(request_id,run_id,turn_id,attempt_id,kind,reason_code,reason_params_json,"
-            "payload_json,state,expected_revision,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,'open',?,?,?)",
+            "decision_id,payload_json,state,expected_revision,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,'open',?,?,?)",
             (request_id, run_row["run_id"], turn_row["turn_id"] if turn_row is not None else None,
-             turn_row["attempt_id"] if turn_row is not None else None, kind, reason["code"], canonical_json(reason["params"]),
+             turn_row["attempt_id"] if turn_row is not None else None, kind,
+             reason["code"] if reason is not None else None,
+             canonical_json(reason["params"]) if reason is not None else None, decision_id,
              canonical_json(payload), run_row["revision"] + 1, now, now),
         )
         if turn_row is not None:
             connection.execute("UPDATE workflow_runs SET current_turn_id=?,current_attempt_id=NULL WHERE run_id=?",
                                (turn_row["turn_id"], run_row["run_id"]))
-        self._sync_boundary(connection, run_row["run_id"], now)
-        self._propagate_boundary(connection, self._request_row(connection, run_row["run_id"], request_id), now)
+        if sync:
+            self._sync_boundary(connection, run_row["run_id"], now)
+            self._propagate_boundary(connection, self._request_row(connection, run_row["run_id"], request_id), now)
         return request_id
 
     def _record_request(self, connection, run_row, turn_row, turn, disposition, now) -> str:

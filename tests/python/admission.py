@@ -9,7 +9,7 @@ def admit_store(store, params):
     return store.admit_execution(params['nonce'], params.get('taskId') or params.get('runId'))
 
 
-def release_before_spawn(client, attempt_id, reason=None):
+def release_before_spawn(client, attempt_id, reason="execution-process-not-created"):
     return client._call.__self__.store.release_execution(attempt_id, reason=reason)
 
 

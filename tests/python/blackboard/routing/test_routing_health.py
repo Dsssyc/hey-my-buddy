@@ -11,6 +11,7 @@ import unittest
 from support import BoardTestCase, FakeClock
 
 from hey_my_buddy.blackboard.store.db import canonical_json, sha256_text
+from hey_my_buddy.blackboard.routing.router_history import record_outcome
 
 
 class RoutingHealthTests(BoardTestCase):
@@ -33,7 +34,7 @@ class RoutingHealthTests(BoardTestCase):
         if output is None:
             output = {"operation": kind, "status": "ok" if status == "completed" else "error"}
             if status == "completed":
-                output["decision"] = {"buddyId": "worker-fixture", "reason": "fixture choice", "evidence": []}
+                output["decision"] = {"buddyId": "worker-fixture", "note": "fixture choice", "evidence": []}
         if code is not None:
             output = {**output, "code": code}
         receipt_status = "cancelled" if status == "cancelled" else "ok" if output.get("status") == "ok" else "failed"
@@ -61,8 +62,16 @@ class RoutingHealthTests(BoardTestCase):
                 (decision_id, decision_id, kind, sha256_text(decision_id), task_id, attempt_id,
                  1 if invoked else None, now, now))
             self.coordinator._finish(connection, self.coordinator._row(connection, decision_id),
-                                     status=status, now=now, output=output, error=error,
+                                     status=status, now=now, output=output,
+                                     reason=({"code": code or output.get("code") or "router-no-answer", "params": {}}
+                                             if status in ("failed", "needs-host") and (code or output.get("status") != "ok" or output.get("code")) else
+                                             {"code": "router-abstained", "params": {}} if status == "needs-host" else None),
+                                     note=(output.get("decision") or {}).get("note"),
                                      buddy_id="worker-fixture" if status == "completed" else None)
+            if invoked and status == "completed":
+                record_outcome(connection, buddy_id="fixture-router", plane="work", request_id=decision_id,
+                               task_id=task_id, attempt_id=attempt_id, outcome="answered", code=None,
+                               phase="publication", facts={"routerIndex":0}, now=now)
             self.assertEqual(connection.execute("PRAGMA foreign_key_check").fetchall(), [])
         return decision_id, now
 
@@ -128,7 +137,7 @@ class RoutingHealthTests(BoardTestCase):
             self.settle(code="router-out-of-bounds")
             self.settle(code="router-input-changed")
             self.settle(output={"status": "ok", "operation": "select", "decision": {
-                "buddyId": None, "reason": "insufficient evidence", "evidence": []}})
+                "buddyId": None, "note": "insufficient evidence", "evidence": []}})
         health = self.coordinator.health_summary()
         self.assertFalse(health["available"])
         self.assertEqual(health["consecutiveFailures"], 3)
@@ -148,7 +157,7 @@ class RoutingHealthTests(BoardTestCase):
 
     def test_rejected_null_buddy_cannot_hide_a_failed_answer_in_the_overview(self):
         self.settle(output={"status": "ok", "operation": "select", "code": "router-tools-forbidden",
-                            "decision": {"buddyId": None, "reason": "cannot choose", "evidence": []}})
+                            "decision": {"buddyId": None, "note": "cannot choose", "evidence": []}})
         health = self.coordinator.health_summary()
         self.assertEqual(health["failureCount"], 1)
         self.assertEqual(health["abstentionCount"], 0)
@@ -160,19 +169,15 @@ class RoutingHealthTests(BoardTestCase):
         self.assertEqual(health["reasonCode"], "router-not-configured")
         self.assertEqual(health["budgetExhaustedCount"], 0)
 
-    def test_bounded_event_error_code_and_generic_failure_fallback(self):
-        for code, expected in (("timeout", "timeout"), ("timeout from provider", "call-failed"),
-                               ("x" * 81, "call-failed"), ("TOKEN\nsecret", "call-failed"),
-                               (None, "call-failed"), ([], "call-failed")):
-            with self.subTest(code=code):
-                decision_id, _ = self.settle("failed", output={}, code=code, error="timeout")
-                with self.db.read() as connection:
-                    event = json.loads(connection.execute(
-                        "SELECT payload_json FROM events WHERE kind='decision.failed' ORDER BY seq DESC LIMIT 1").fetchone()[0])
-                self.assertEqual(event["errorCode"], code if expected == "timeout" else None)
-                recent = self.coordinator.health_summary()["recentFailures"][0]
-                self.assertEqual(recent["decisionId"], decision_id)
-                self.assertEqual(recent["code"], expected)
+    def test_decision_event_has_no_reason_or_error_copies(self):
+        decision_id, _ = self.settle("failed", code="timeout", error="provider diagnostic")
+        with self.db.read() as connection:
+            event = json.loads(connection.execute(
+                "SELECT payload_json FROM events WHERE kind='decision.failed' ORDER BY seq DESC LIMIT 1").fetchone()[0])
+        self.assertEqual(event["decisionId"], decision_id)
+        self.assertFalse({"reason", "error", "errorCode"} & event.keys())
+        recent = self.coordinator.health_summary()["recentFailures"][0]
+        self.assertEqual(recent["code"], "timeout")
 
     def test_late_output_cannot_reclassify_terminal_receipt_or_move_success(self):
         success_id, success_at = self.settle("completed", termination="completed")
@@ -180,8 +185,8 @@ class RoutingHealthTests(BoardTestCase):
         with self.db.write() as connection:
             connection.execute("UPDATE decision_requests SET output_json=? WHERE decision_id=?",
                                (canonical_json({"status": "ok", "decision": {"buddyId": "worker-fixture"}}), failure_id))
-            connection.execute("UPDATE decision_requests SET output_json=?,updated_at=? WHERE decision_id=?",
-                               (canonical_json({"status": "error", "code": "timeout"}), self.clock.advance(1), success_id))
+            connection.execute("UPDATE decision_requests SET output_json=? WHERE decision_id=?",
+                               (canonical_json({"status": "error", "code": "timeout"}), success_id))
         health = self.coordinator.health_summary()
         self.assertEqual(health["budgetExhaustedCount"], 1)
         self.assertEqual(health["failureCount"], 1)
@@ -201,6 +206,15 @@ class RoutingHealthTests(BoardTestCase):
         self.assertEqual(len(health["recentFailures"]), 5)
         self.assertEqual(health["lastSuccessAt"], success_at)
         self.assertEqual(health["lastSuccessDecisionId"], success_id)
+
+    def test_other_plane_answer_cannot_turn_program_selection_into_router_recovery(self):
+        decision_id, now = self.settle("completed", invoked=False,
+                                       output={"programSelection": {"code": "single-candidate"}})
+        with self.db.write() as connection:
+            record_outcome(connection, buddy_id="fixture-router", plane="portrait", request_id=decision_id,
+                           task_id=None, attempt_id=None, outcome="answered", code=None,
+                           phase="publication", facts={"routerIndex": 0}, now=now)
+        self.assertIsNone(self.coordinator.health_summary()["lastSuccessDecisionId"])
 
     def test_reads_are_diagnostic_and_do_not_write(self):
         self.settle("failed", code="timeout")

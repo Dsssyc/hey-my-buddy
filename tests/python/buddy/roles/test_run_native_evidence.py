@@ -135,7 +135,7 @@ class NativeEvidenceRoleTests(unittest.TestCase):
         self.assertIsNone(correction.stop_reason)
         evidence = rc.NativeEvidence(unknown_events=facts["unknownEvents"])
         payload = self.project(self.result(evidence=evidence))[0]
-        payload["rawAnswer"] = {"buddyId": "chosen", "reason": "fits", "evidence": []}
+        payload["rawAnswer"] = {"buddyId": "chosen", "note": "fits", "evidence": []}
         outcome = self.router_collect(payload)
         self.assertEqual(outcome.status, "ok")
         self.assertEqual(outcome.result["decision"]["buddyId"], "chosen")

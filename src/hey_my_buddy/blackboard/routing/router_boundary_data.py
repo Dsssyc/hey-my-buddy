@@ -192,8 +192,8 @@ def router_trials(connection, row, *, now):
                     and event["payload"].get("attemptId") is None), None)) is not None:
                 _preflight_no_answer(connection, item, no_answer, state, now)
             elif row["decision_task_id"] == task_id and row["status"] in ("cancelled", "needs-host", "failed"):
-                item.update(outcome="cancelled" if row["status"] == "cancelled" else "changed" if row["error"] in _CHANGED_CODES else "skipped",
-                            phase="preflight", code=row["error"], reason=row["reason"])
+                item.update(outcome="cancelled" if row["status"] == "cancelled" else "changed" if row["reason_code"] in _CHANGED_CODES else "skipped",
+                            phase="preflight", code=row["reason_code"], reason=None)
             item["shutdownConfirmed"] = True if _stopped(connection, task_id) else None
             trials.append(item)
             continue
@@ -229,8 +229,7 @@ def router_trials(connection, row, *, now):
                                  and isinstance(output.get("decision"), dict) else None))
             elif (row["decision_task_id"] == task_id and terminal is not None
                   and terminal["kind"] in ("decision.completed", "decision.needs_host")
-                  and row["error"] is None and not terminal["payload"].get("errorCode")
-                  and not terminal["payload"].get("error") and confirmed
+                  and row["reason_code"] in (None, "router-abstained") and confirmed
                   and receipt.get("status") == "ok" and output.get("status") == "ok"
                   and isinstance(output.get("decision"), dict)
                   and adopted.get("status") == "ok" and "policyCheck" in adopted
@@ -242,8 +241,8 @@ def router_trials(connection, row, *, now):
                 trial.update(outcome="answered", phase="publication", reason=output["decision"].get("reason"))
             elif receipt.get("status") == "cancelled" or attempt["cancel_requested_at"] or (task and task["state"] == "cancelled") or (row["decision_task_id"] == task_id and row["status"] == "cancelled"):
                 trial.update(outcome="cancelled", code="router-cancelled", reason="The dispatch was cancelled")
-            elif row["decision_task_id"] == task_id and row["error"] in _CHANGED_CODES:
-                trial.update(outcome="changed", code=row["error"], reason=row["reason"])
+            elif row["decision_task_id"] == task_id and row["reason_code"] in _CHANGED_CODES:
+                trial.update(outcome="changed", code=row["reason_code"], reason=None)
             elif not confirmed and (receipt or attempt["execution_state"] in ("uncertain", "finished")):
                 trial.update(outcome="stopUnknown", code="router-stop-unconfirmed", reason="The dispatch stop is unconfirmed")
             elif attempt["execution_state"] in ("starting", "executing", "finalizing"):
@@ -397,20 +396,19 @@ def routing_boundary(connection, row, *, now, run_id=None, revision=None,
     if snapshot is None:
         return None  # Never reconstruct a legacy packet from today's catalog.
     trials = router_trials(connection, row, now=now)
-    code = row["error"] or (request.get("routerProblem") or {}).get("code")
+    code = row["reason_code"] or (request.get("routerProblem") or {}).get("code")
     current = [item for item in trials if item["taskId"] == row["decision_task_id"] and item["outcome"] == "answered"]
     if execution_changed:
         kind = "routing-changed"
-    elif current and row["status"] == "needs-host" and row["error"] is None:
+    elif current and row["status"] == "needs-host" and row["reason_code"] == "router-abstained":
         kind = "router-abstained"
     elif any(item["outcome"] == "changed" for item in trials) or (
             code in _CHANGED_CODES and not any(item["taskId"] == row["decision_task_id"] and item["outcome"] == "no_answer" for item in trials)):
         kind = "routing-changed"
     else:
         kind = "router-unavailable"
-    reason = (route["reason"] if execution_changed else row["reason"]) or "Router 不可用：没有可用答案"
-    if kind == "router-unavailable" and "Router 不可用" not in reason:
-        reason = "Router 不可用：" + reason
+    reason = ({"code": row["reason_code"], "params": _json(row["reason_params_json"], {})}
+              if row["reason_code"] is not None else None)
     if request.get("selectionRetry"):
         facts = deepcopy(_json(row["input_json"], {}))
         facts.update(deepcopy(request))
@@ -422,8 +420,6 @@ def routing_boundary(connection, row, *, now, run_id=None, revision=None,
     candidates = facts.get("buddies") or []
     retry_at = _retry_at(connection, request if request.get("selectionRetry") else snapshot["facts"],
                          trials, now=now, kind=kind)
-    if retry_at is None:
-        reason += "; cached qualification, health or quota has no recorded recovery time"
     stopped, problem, helper_policy, run = _continuation_context(connection, row, run_id, owner_run_id)
     dispatch_docs = router_sequence.dispatches(connection, row["decision_id"])
     if any(not _stopped(connection, item["taskId"]) for item in dispatch_docs) or any(

@@ -96,9 +96,9 @@ class CurrentRouterTestCase(BoardTestCase):
             requested["routerCalled"] = called
         with self.board_.store.db.write() as db:
             db.execute(
-                "INSERT INTO evaluation_decisions(decision_id,status,task,buddy_id,reason,"
-                "created_at) VALUES(?,?,?,?,?,?)",
-                (decision, "failed", "task", buddy_id, "", at))
+                "INSERT INTO evaluation_decisions(decision_id,status,task,buddy_id,"
+                "created_at) VALUES(?,?,?,?,?)",
+                (decision, "failed", "task", buddy_id, at))
             db.execute(
                 "INSERT INTO decision_requests(decision_id,request_id,kind,input_fingerprint,task_id,attempt_id,"
                 "generation,requested_json,output_json,created_at,updated_at)"
@@ -166,8 +166,8 @@ class ResolutionTests(CurrentRouterTestCase):
             resolution = router.current_router(db, now=T0)
         self.assertEqual(resolution.buddy_id, C)
         self.assertEqual(resolution.router_index, 2)
-        self.assertEqual(resolution.inspections[0]["code"], "router-unavailable")
-        self.assertIn("已禁用", resolution.inspections[0]["reason"])
+        self.assertEqual(resolution.inspections[0]["code"], "router-disabled")
+        self.assertNotIn("reason", resolution.inspections[0])
         self.assertEqual(resolution.inspections[1]["code"], "router-no-tool-unsupported")
 
     def test_quota_exhausted_item_is_skipped_from_recorded_observations(self):
@@ -276,7 +276,7 @@ class ResolutionTests(CurrentRouterTestCase):
         with self.board_.store.db.read() as db:
             resolution = router.current_router(db, now=T0)
         self.assertIsNone(resolution.buddy)
-        self.assertEqual(resolution.problem["code"], "router-unavailable")
+        self.assertEqual(resolution.problem["code"], "router-all-unavailable")
         self.assertEqual(len(resolution.inspections), 2)
         self.assertTrue(all(entry["code"] for entry in resolution.inspections))
 
@@ -290,8 +290,8 @@ class ResolutionTests(CurrentRouterTestCase):
             self.assertEqual(router.current_router(db, after_index=1, now=T0).router_index, 2)
             exhausted = router.current_router(db, after_index=2, now=T0)
         self.assertIsNone(exhausted.buddy)
-        self.assertEqual(exhausted.problem["code"], "router-unavailable")
-        self.assertIn("没有更多", exhausted.problem["reason"])
+        self.assertEqual(exhausted.problem["code"], "router-list-exhausted")
+        self.assertNotIn("reason", exhausted.problem)
         with self.assertRaises(BoardError) as caught:
             with self.board_.store.db.read() as db:
                 router.current_router(db, after_index=-2, now=T0)
@@ -445,131 +445,26 @@ class HistoryProjectionTests(CurrentRouterTestCase):
         super().setUp()
         self.set_settings(ids=[A, B])
 
-    def test_four_old_timeouts_stay_attributed_and_counted(self):
-        for index in range(4):
-            self.add_routing_record(decision=f"dec-{index}", request=f"route-{index}", kind="decision.failed",
-                                    buddy_id=A, code="timeout",
-                                    receipt={"status": "error", "result": {"status": "error"},
-                                             "shutdownConfirmed": True},
-                                    output={"code": "timeout"}, attempt_state="finished", at=T0)
-        state = self.state(A)
-        self.assertEqual(state["noAnswerCount"], 4)
-        self.assertEqual(state["consecutiveNoAnswers"], 4)
-        self.assertEqual(state["inSkipWindow"], True)
-        other = self.state(B)
-        self.assertEqual(other["noAnswerCount"], 0)
-        self.assertEqual(other["consecutiveNoAnswers"], 0)
-        self.assertEqual(other["inSkipWindow"], False)
-        self.assertIsNone(other["lastNoAnswerAt"])
-
-    def test_old_accepted_answer_stays_answered_without_new_evidence_rules(self):
-        self.add_routing_record(decision="dec-ok", request="route-ok", kind="decision.completed", buddy_id=A,
-                                receipt={"status": "ok",
-                                         "result": {"status": "ok", "modelStarted": True,
-                                                    "decision": {"buddyId": "worker"}},
-                                         "shutdownConfirmed": True},
-                                output={"status": "ok"}, attempt_state="finished", at=T0)
-        state = self.state(A)
-        self.assertEqual(state["answeredCount"], 1)
-        self.assertEqual(state["consecutiveNoAnswers"], 0)
-        self.assertIsNone(state["skipUntil"])
-
-    def test_old_abstention_and_changed_records_do_not_fabricate_failures(self):
-        self.add_routing_record(decision="dec-abs", request="route-abs", kind="decision.needs_host", buddy_id=A,
-                                output={"status": "ok", "decision": {"buddyId": None, "reason": "insufficient",
-                                                                     "evidence": []}}, at=T0)
-        self.add_routing_record(decision="dec-chg", request="route-chg", kind="decision.failed", buddy_id=A,
-                                code="router-input-changed", output={"code": "router-input-changed"}, at=T0)
-        self.add_routing_record(decision="dec-cancel", request="route-cancel", kind="decision.cancelled",
-                                buddy_id=A, at=T0)
-        state = self.state(A)
-        self.assertEqual(state["answeredCount"], 1)
-        self.assertEqual(state["noAnswerCount"], 0)
-        self.assertEqual(state["consecutiveNoAnswers"], 0)
-
-    def test_old_and_new_records_dedupe_by_request_and_attempt(self):
-        self.add_routing_record(decision="dec-1", request="route-1", kind="decision.failed", buddy_id=A,
-                                code="timeout", output={"code": "timeout"}, attempt_state="finished", at=T0)
-        self.record(A, request="route-1", task="task-dec-1", attempt="att-dec-1", phase="runtime", now=T0)
+    def test_only_recorded_outcomes_affect_retry_state(self):
+        self.add_routing_record(decision="dec-old", request="route-old", kind="decision.failed",
+                                buddy_id=A, code="timeout", output={"code": "timeout"}, at=T0)
+        self.assertEqual(self.state(A)["noAnswerCount"], 0)
+        self.record(A, request="route-new", now=T0)
         self.assertEqual(self.state(A)["noAnswerCount"], 1)
-        # Another request fact with the same bound attempt also suppresses the old record.
-        self.record(A, request="route-2-fact", task="task-dec-1", attempt="att-dec-1", phase="runtime", now=T0)
-        self.assertEqual(self.state(A)["noAnswerCount"], 2)
+        self.assertEqual(self.state(B)["noAnswerCount"], 0)
 
-    def test_unattributed_and_program_records_stay_unknown(self):
+    def test_unattributed_decisions_do_not_create_router_outcomes(self):
         self.add_routing_record(decision="dec-none", request="route-none", kind="decision.needs_host",
                                 output={"code": "router-not-configured"}, at=T0)
-        self.add_routing_record(decision="dec-single", request="route-single", kind="decision.completed",
-                                called=False, output={"status": "ok"}, at=T0)
-        # A record whose frozen basis proves zero candidates never reached a Router.
-        self.add_routing_record(decision="dec-zero", request="route-zero", kind="decision.needs_host",
-                                candidates=0, output={"code": "no-legal-candidates"}, at=T0)
-        with self.board_.store.db.read() as db:
-            unattributed = router_history.unattributed_records(db)
-        self.assertEqual([entry["decisionId"] for entry in unattributed], ["dec-none"])
-        self.assertEqual(unattributed[0]["outcome"], "no_answer")
-        # None of the records is guessed onto today's first list item.
-        self.assertEqual(self.state(A)["noAnswerCount"], 0)
         self.assertEqual(self.state(A)["answeredCount"], 0)
+        self.assertEqual(self.state(A)["noAnswerCount"], 0)
 
-    def test_bad_events_cannot_break_other_projections(self):
-        self.record(A, request="route-good", now=T0)
-        with self.board_.store.db.write() as db:
-            db.execute("INSERT INTO events(task_id,attempt_id,revision,kind,payload_json,created_at)"
-                       " VALUES(NULL,NULL,NULL,'router.no_answer','{broken json',?)", (T0,))
-            db.execute("INSERT INTO events(task_id,attempt_id,revision,kind,payload_json,created_at)"
-                       " VALUES(NULL,NULL,NULL,'router.answered','{\"unrelated\": true}',?)", (T0,))
-            db.execute("INSERT INTO evaluation_decisions(decision_id,status,task,buddy_id,"
-                       "reason,created_at) VALUES('dec-bad','failed','t',NULL,'',?)", (T0,))
-            db.execute("INSERT INTO decision_requests(decision_id,request_id,kind,input_fingerprint,"
-                       "requested_json,output_json,created_at,updated_at)"
-                       " VALUES('dec-bad','route-bad','select','digest','{broken','{}',?,?)", (T0, T0))
-            self.board_.store._append_event(db, "decision.failed", payload={"decisionId": "dec-bad"})
-        with self.board_.store.db.read() as db:
-            timeline = router_history.buddy_timeline(db, buddy_id=A)
-            unattributed = router_history.unattributed_records(db)
-            state = router_history.router_state(db, buddy_id=B, interval_seconds=600, now=T0)
-        self.assertEqual([entry["outcome"] for entry in timeline], ["no_answer"])
-        self.assertEqual(state["noAnswerCount"], 0)
-        # The malformed record is carried in the separate unknown listing, never
-        # counted for any buddy, and it breaks neither projection.
-        self.assertEqual([entry["decisionId"] for entry in unattributed], ["dec-bad"])
-        self.assertEqual(self.state(A)["noAnswerCount"], 1)
-
-    def test_immutable_terminal_facts_win_over_late_output(self):
-        receipt = {'status': 'ok', 'shutdownConfirmed': True, 'result': {'status': 'ok'}}
-        self.assertEqual(router_history._classify_record('decision.completed', {}, receipt), ('answered', None))
-        abstention = {'status': 'ok', 'decision': {'buddyId': None, 'reason': 'cannot choose', 'evidence': []}}
-        for code in ('router-budget-exhausted', 'router-tool-evidence-unverified'):
-            with self.subTest(code=code):
-                self.assertEqual(router_history._classify_record('decision.needs_host', abstention, None,
-                                 {'errorCode': code}), ('no_answer', code))
-        old = {'status': 'failed', 'result': {'status': 'error', 'code': 'timeout'}}
-        self.assertEqual(router_history._classify_record('decision.failed',
-                         {'code': 'router-input-changed'}, old, {'errorCode': 'timeout'}), ('no_answer', 'timeout'))
-
-    def test_per_buddy_reads_use_the_partial_outcome_index(self):
-        """Per-buddy reads must serve the partial index, not scan unrelated events.
-
-        ``events_router_outcome_idx`` indexes the guarded buddy expression over the
-        literal fact kinds; the projection must render exactly that predicate so a
-        bounded per-item read stays an index-only range.
-        """
-        with self.board_.store.db.write() as connection:
-            for index in range(300):
-                self.board_.store._append_event(connection, "task.progress", payload={"index": index})
-            query = ("SELECT seq FROM events WHERE kind IN ('router.answered','router.no_answer')"
-                     f" AND {router_history._BUDDY_EXPRESSION}=? ORDER BY seq")
+    def test_per_buddy_reads_use_outcome_index(self):
+        with self.board_.store.db.read() as connection:
+            query = "SELECT event_seq FROM router_outcomes WHERE buddy_id=? ORDER BY event_seq"
             plan = " ".join(row["detail"] for row in connection.execute("EXPLAIN QUERY PLAN " + query,
                                                                         (A,)).fetchall())
-        self.assertIn("events_router_outcome_idx", plan)
-        self.assertNotIn("SCAN event", plan)
-        with self.board_.store.db.read() as connection:
-            query = ("SELECT seq FROM events WHERE kind='router.claimed'"
-                     f" AND {router_history._BUDDY_EXPRESSION}=? ORDER BY seq")
-            claimed = " ".join(row['detail'] for row in connection.execute('EXPLAIN QUERY PLAN ' + query, (A,)))
-        self.assertIn('events_router_claimed_idx', claimed)
-        self.assertNotIn('SCAN e', claimed)
+        self.assertIn("router_outcomes_buddy_idx", plan)
 
     def test_active_attempts_project_retry_in_progress(self):
         self.add_buddy(A, model="alpha")

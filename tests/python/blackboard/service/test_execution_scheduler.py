@@ -100,7 +100,7 @@ class ExecutionObservationTests(unittest.TestCase):
                 scheduler._admit_available()
                 store.release_execution.assert_called_once_with(
                     "attempt-1",
-                    reason="execution launch failed before process creation")
+                    reason="execution-launch-failed")
                 scheduler._admit_available()
                 for thread in tuple(scheduler._threads):
                     thread.join(1)

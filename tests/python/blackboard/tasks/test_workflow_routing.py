@@ -157,7 +157,18 @@ class TestWorkflowRouting(WorkflowTestCase):
         self.assertTrue(submitted["awaitingHost"])
         self.assertIsNone(submitted["routing"]["taskId"])
         self.assertIn("routing", submitted["waitReason"])
-        self.assertIsInstance(submitted["activeRequest"]["neededWork"], list)
+        self.assertEqual(submitted["activeRequest"]["reason"]["code"], "no-legal-candidate")
+        with board.store.db.read() as connection:
+            request = connection.execute(
+                "SELECT summary,reason_code,reason_params_json,decision_id,payload_json"
+                " FROM workflow_requests WHERE request_id=?",
+                (submitted["activeRequest"]["requestId"],),
+            ).fetchone()
+            self.assertIsNone(request["summary"])
+            self.assertIsNone(request["reason_code"])
+            self.assertIsNone(request["reason_params_json"])
+            self.assertEqual(request["decision_id"], submitted["routing"]["decisionId"])
+            self.assertEqual(json.loads(request["payload_json"]), {"source": "routing"})
         self.assertEqual(submitted["counts"]["turns"], 0)
         with self.assertRaises(BoardError) as raised:
             self.continue_run(board, submitted)
@@ -200,6 +211,41 @@ class TestWorkflowRouting(WorkflowTestCase):
         view = board.call("workflow_get", {"runId": submitted["runId"]})
         self.assertEqual(view["routing"]["status"], "needs-host")
         self.assertEqual(view["counts"]["turns"], 0)
+        self.assertEqual(view["activeRequest"]["reason"],
+                         {"code": "CATALOG_UNAVAILABLE", "params": {}})
+        with board.store.db.read() as connection:
+            request = connection.execute(
+                "SELECT summary,reason_code,reason_params_json,decision_id,payload_json"
+                " FROM workflow_requests WHERE request_id=?", (view["activeRequest"]["requestId"],),
+            ).fetchone()
+            self.assertIsNone(request["summary"])
+            self.assertEqual(request["reason_code"], "CATALOG_UNAVAILABLE")
+            self.assertEqual(request["decision_id"], submitted["routing"]["decisionId"])
+            self.assertEqual(json.loads(request["payload_json"]), {"source": "routing"})
+
+    def test_explicit_dispatch_validation_has_own_reason_without_decision(self):
+        board = self.board()
+        self.seed(board)
+        submitted = self.submit(board)
+        with board.store.db.write() as connection:
+            connection.execute("UPDATE workflow_runs SET validated_buddy_revision=NULL WHERE run_id=?",
+                               (submitted["runId"],))
+        self.catalog_validation.side_effect = BoardError("CATALOG_UNAVAILABLE", "catalog disappeared")
+        self.register(board)
+        claim = self.claim(board, run_id=submitted["runId"])
+        self.assertIsNone(claim["claim"])
+        view = board.call("workflow_get", {"runId": submitted["runId"]})
+        self.assertEqual(view["activeRequest"]["reason"],
+                         {"code": "CATALOG_UNAVAILABLE", "params": {}})
+        with board.store.db.read() as connection:
+            request = connection.execute(
+                "SELECT summary,reason_code,decision_id,payload_json FROM workflow_requests WHERE request_id=?",
+                (view["activeRequest"]["requestId"],),
+            ).fetchone()
+            self.assertIsNone(request["summary"])
+            self.assertEqual(request["reason_code"], "CATALOG_UNAVAILABLE")
+            self.assertIsNone(request["decision_id"])
+            self.assertEqual(json.loads(request["payload_json"]), {"source": "routing"})
 
     def test_cancel_routes_owned_attempt_and_late_selection_cannot_start_micro_task(self):
         board = self.board()
@@ -226,6 +272,17 @@ class TestWorkflowRouting(WorkflowTestCase):
                            "expectedOwnerGeneration": 1, "newHostId": "host-2", **self.control(submitted)})
         self.controls[taken["runId"]] = taken["control"]
         self.assertTrue(taken["awaitingHost"])
+        self.assertEqual(taken["activeRequest"]["reason"],
+                         {"code": "routing-taken-over", "params": {}})
+        with board.store.db.read() as connection:
+            request = connection.execute(
+                "SELECT summary,reason_code,decision_id,payload_json FROM workflow_requests WHERE request_id=?",
+                (taken["activeRequest"]["requestId"],),
+            ).fetchone()
+            self.assertIsNone(request["summary"])
+            self.assertIsNone(request["reason_code"])
+            self.assertEqual(request["decision_id"], submitted["routing"]["decisionId"])
+            self.assertEqual(json.loads(request["payload_json"]), {"source": "routing"})
         with self.assertRaises(BoardError) as raised:
             self.continue_run(board, taken, buddy=BUDDY, note="New Host selected an installed buddy after takeover")
         self.assertEqual(raised.exception.code, "SHUTDOWN_UNCONFIRMED")
@@ -504,8 +561,9 @@ class TestWorkflowRouting(WorkflowTestCase):
         self.assertTrue(submitted["awaitingHost"])
         self.assertEqual(submitted["routing"]["status"], "needs-host")
         self.assertIsNone(submitted["routing"]["taskId"])
-        self.assertIn(str(task_bytes), submitted["routing"]["reason"])
-        self.assertIn(str(MAX_DECISION_TASK_BYTES), submitted["routing"]["reason"])
+        self.assertEqual(submitted["routing"]["reason"],
+                         {"code": "router-input-too-large", "params": {"bytes": task_bytes,
+                                                                        "limit": MAX_DECISION_TASK_BYTES}})
         decision = board.call("selection_get", {"decisionId": submitted["routing"]["decisionId"], "includeAudit": True})["decision"]
         reference = {"runId": submitted["runId"], "bytes": task_bytes,
                      "sha256": hashlib.sha256(task.encode("utf-8")).hexdigest()}

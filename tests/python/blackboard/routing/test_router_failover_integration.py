@@ -60,7 +60,7 @@ class FailoverTests(RouterDispatchTestCase):
                 "stopEvidence": {"shutdownConfirmed": True, "native": {"shutdownConfirmed": True}},
                 "inputVerification": {"unchanged": True, "snapshotSha256": "private-fixture-copy",
                                       "manifestSha256": (doc.get("executionWorkspace") or {}).get("manifestSha256")},
-                "decision": {"buddyId": buddy_id, "reason": "The frozen legal choice", "evidence": []}}
+                "decision": {"buddyId": buddy_id, "note": "The frozen legal choice", "evidence": []}}
 
     def failure(self, claim, code="timeout"):
         return {**self.answer(claim), "status": "error", "code": code, "decision": None}
@@ -283,11 +283,12 @@ class FailoverTests(RouterDispatchTestCase):
         self.assert_switch(request, first, self.failure(first))
         second = self.next_claim(request)
         output = self.answer(second, buddy_id=None)
-        output["decision"]["reason"] = "I cannot choose within these bounds"
+        output["decision"]["note"] = "I cannot choose within these bounds"
         done = self.report(second, output)
         self.assertEqual(done["decision"]["outcome"], "abstained")
         self.assertEqual(done["decision"]["status"], "needs-host")
-        self.assertEqual(done["decision"]["reason"], output["decision"]["reason"])
+        self.assertEqual(done["decision"]["note"], output["decision"]["note"])
+        self.assertEqual(done["decision"]["reason"], {"code": "router-abstained", "params": {}})
         self.assertEqual(len(self.tasks()), 2)
         self.assertEqual([kind for kind, _ in self.outcomes()], ["router.no_answer", "router.answered"])
         with self.board_.store.db.read() as db:
@@ -374,9 +375,9 @@ class FailoverTests(RouterDispatchTestCase):
             attempt = db.execute("SELECT * FROM attempts WHERE attempt_id=?", (first["attempt"]["attemptId"],)).fetchone()
             late = coordinator.complete(db, task=task, attempt=attempt, status="ok", result=self.answer(first), shutdown_confirmed=True, error=None, now=T0)
             self.assertTrue(late["late"])
-            coordinator.cancelled(db, task=task, reason="old cancel", now=T0)
-            coordinator.fence_attempt(db, attempt=attempt, reason="old fence", now=T0)
-            coordinator.released(db, task=task, reason="old release", now=T0)
+            coordinator.cancelled(db, task=task, reason={"code":"decision-cancelled", "params":{}}, now=T0)
+            coordinator.fence_attempt(db, attempt=attempt, reason={"code":"interrupted-before-delivery", "params":{}}, now=T0)
+            coordinator.released(db, task=task, reason={"code":"execution-process-not-created", "params":{}}, now=T0)
             task = db.execute("SELECT * FROM tasks WHERE task_id=?", (second["task"]["taskId"],)).fetchone()
             attempt = dict(db.execute("SELECT * FROM attempts WHERE attempt_id=?", (second["attempt"]["attemptId"],)).fetchone())
             for key, value in (("attempt_id", first["attempt"]["attemptId"]), ("generation", 0), ("nonce_verifier", "wrong")):
@@ -412,7 +413,7 @@ class FailoverTests(RouterDispatchTestCase):
 
     def test_release_real_never_spawned_proof_advances(self):
         request, first = self.start(review=True)
-        response = self.board_.store.release_execution(({'attemptId': first['attempt']['attemptId'], 'generation': first['attempt']['generation'], 'nonce': first['nonce'], 'reason': 'local preflight refused', 'evidence': {'spawnIntentWritten': False}})["attemptId"])
+        response = self.board_.store.release_execution(({'attemptId': first['attempt']['attemptId'], 'generation': first['attempt']['generation'], 'nonce': first['nonce'], 'reason': 'local preflight refused', 'evidence': {'spawnIntentWritten': False}})["attemptId"], reason="execution-process-not-created")
         self.assertNotEqual(self.current_task(request["decisionId"]), first["task"]["taskId"])
         self.assertEqual(self.outcomes()[0][1]["phase"], "preflight")
         self.assertEqual(self.outcomes()[0][1]["buddyId"], A)
@@ -426,7 +427,7 @@ class FailoverTests(RouterDispatchTestCase):
             db.execute("UPDATE attempts SET identity_confirmed_at=? WHERE attempt_id=?",
                        (self.board_.store.now(), first['attempt']['attemptId']))
         with self.assertRaises(BoardError):
-            self.board_.store.release_execution(first['attempt']['attemptId'])
+            self.board_.store.release_execution(first['attempt']['attemptId'], reason='execution-process-not-created')
         self.assertEqual(len(self.tasks()), 1)
         self.assertEqual(self.outcomes(), [])
 
@@ -438,7 +439,7 @@ class FailoverTests(RouterDispatchTestCase):
         with patch("hey_my_buddy.blackboard.routing.decision.MAX_DECISION_INPUT_BYTES", bound):
             result = self.report(first, self.failure(first))
         self.assertEqual(result["decision"]["status"], "needs-host")
-        self.assertEqual(self.decision_row(request["decisionId"])["error"], "router-input-too-large")
+        self.assertEqual(self.decision_row(request["decisionId"])["reason"]["code"], "router-input-too-large")
         self.assertEqual(len(self.tasks()), 1)
         self.assertEqual([event[1]["buddyId"] for event in self.outcomes()], [A])
 
@@ -474,7 +475,7 @@ class FailoverTests(RouterDispatchTestCase):
             row = self.board_.store.decisions._row(db, request["decisionId"])
             before = db.execute("SELECT COUNT(*) FROM events").fetchone()[0]
             dto = self.board_.store.decisions._publish_select(db, row, output=self.answer(first), now=T0)
-            self.assertEqual(set(dto), {"answer_valid", "abstained", "changed", "code", "reason", "output", "buddy_id", "selected", "evidence"})
+            self.assertEqual(set(dto), {"answer_valid", "abstained", "changed", "code", "params", "note", "output", "buddy_id", "selected", "evidence"})
             self.assertTrue(dto["answer_valid"])
             self.assertEqual(self.board_.store.decisions._row(db, request["decisionId"])["status"], "running")
             self.assertEqual(db.execute("SELECT COUNT(*) FROM events").fetchone()[0], before)
@@ -518,7 +519,7 @@ class FailoverTests(RouterDispatchTestCase):
         request, first = self.start(micro_task=True)
         with self.board_.store.db.write() as db:
             db.execute("UPDATE workflow_runs SET state='cancelled'")
-        self.board_.store.release_execution(({'attemptId': first['attempt']['attemptId'], 'generation': first['attempt']['generation'], 'nonce': first['nonce'], 'reason': 'cancelled parent', 'evidence': {'spawnIntentWritten': False}})["attemptId"])
+        self.board_.store.release_execution(({'attemptId': first['attempt']['attemptId'], 'generation': first['attempt']['generation'], 'nonce': first['nonce'], 'reason': 'cancelled parent', 'evidence': {'spawnIntentWritten': False}})["attemptId"], reason="execution-process-not-created")
         self.assertEqual(self.decision_row(request["decisionId"])["status"], "cancelled")
         self.assertEqual(self.outcomes(), [])
         self.assertEqual(len(self.tasks()), 1)
@@ -542,7 +543,7 @@ class FailoverTests(RouterDispatchTestCase):
         with patch.object(self.board_.store.decisions, "_finish", side_effect=competing_claim):
             result = self.report(first, self.answer(first))
         self.assertEqual(result["decision"]["outcome"], "changed")
-        self.assertEqual(self.decision_row(request["decisionId"])["error"], "router-out-of-bounds")
+        self.assertEqual(self.decision_row(request["decisionId"])["reason"]["code"], "router-out-of-bounds")
         self.assertEqual(self.outcomes(), [])
         self.assertEqual(len(self.tasks()), 1)
         with self.board_.store.db.read() as db:

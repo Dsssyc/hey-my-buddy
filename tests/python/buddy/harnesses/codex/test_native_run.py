@@ -705,7 +705,7 @@ class ReviewSeamTests(CodexSeamCase):
         result = self.review_run("ok")
         self.assertEqual(result.end.status, "ok", result.end.message)
         self.assertEqual(result.value.raw,
-                         json.dumps({"buddyId": "legal", "reason": "Read-only fixture", "evidence": []}))
+                         json.dumps({"buddyId": "legal", "note": "Read-only fixture", "evidence": []}))
         self.assertEqual(result.value.correction_count, 0)
         package = result.tool_evidence.value
         self.assertEqual(len(package["nativeIdentity"]), 1)

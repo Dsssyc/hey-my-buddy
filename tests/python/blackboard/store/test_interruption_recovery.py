@@ -213,6 +213,8 @@ class InterruptionRecoveryTests(BoardTestCase):
         event = [event for event in board.store.events_read({'limit': 200})['events']
                  if event['kind'] == 'attempt.released'][0]
         self.assertEqual(event['payload']['releaseEvidence'], 'processCreated=false')
+        self.assertEqual(event['payload']['reason'],
+                         {'code': 'execution-process-not-created', 'params': {}})
 
     def test_written_intent_without_identity_cannot_be_guessed_from_elapsed_time(self):
         board, _, task, _, actor = self.claimed(identity=False)
@@ -459,7 +461,7 @@ class InterruptionRecoveryTests(BoardTestCase):
 
     def test_released_admission_cannot_later_commit_a_result(self):
         board, _, _, _, actor = self.claimed(identity=False)
-        board.store.release_execution(actor['attemptId'])
+        board.store.release_execution(actor['attemptId'], reason='execution-process-not-created')
         with self.assertRaises(BoardError) as refused:
             board.call('execution_result', {**actor, 'status': 'ok', 'result': {'late': True},
                                            'shutdownConfirmed': True})
@@ -468,7 +470,7 @@ class InterruptionRecoveryTests(BoardTestCase):
     def test_service_stop_between_admission_and_creation_releases_as_cancelled(self):
         board, client, task, _, actor = self.claimed(identity=False)
         board.store.task_cancel({'runId': task['taskId'], 'note': 'service stop'}, initiator='service')
-        board.store.release_execution(actor['attemptId'], reason='service stopped before execution launch')
+        board.store.release_execution(actor['attemptId'], reason='service-stopped-before-launch')
         final = client.get(runId=task['taskId'])
         self.assertEqual(final['state'], 'cancelled')
         self.assertEqual(final['stopInitiator'], 'service')

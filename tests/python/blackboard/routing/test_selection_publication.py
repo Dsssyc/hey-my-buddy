@@ -61,7 +61,7 @@ class SelectionPublicationTests(RouterDispatchTestCase):
             self.assertEqual(db.execute("SELECT state FROM workflow_routes").fetchone()[0], "pending")
             events = [json.loads(r[0]) for r in db.execute("SELECT payload_json FROM events WHERE kind='decision.selection_rerouted'")]
             self.assertEqual(len(events), 1)
-            self.assertIn(reason, events[0]["reason"])
+            self.assertNotIn("reason", events[0])
         self.report(second, self.answer(second, buddy_id=C))
         self.assertEqual(self.decision_row(request["decisionId"])["status"], "completed")
         self.assertEqual(self.decision_row(request["decisionId"])["buddyId"], C)
@@ -104,10 +104,9 @@ class SelectionPublicationTests(RouterDispatchTestCase):
         response = self.report(second, self.answer(second, buddy_id=C))
         self.assertEqual(response["decision"]["status"], "needs-host", response)
         view = self.decision_row(request["decisionId"])
-        self.assertIn("after rerouting", view["reason"])
-        self.assertIn("excluded by the user", view["reason"])
+        self.assertEqual(view["reason"], {"code": "router-out-of-bounds", "params": {"bound": "excluded"}})
         self.assertEqual(view["routingBoundary"]["kind"], "routing-changed")
-        self.assertIn("excluded by the user", view["routingBoundary"]["reason"])
+        self.assertEqual(view["routingBoundary"]["reason"], view["reason"])
         self.assertEqual([p["buddyId"] for p in view["routingBoundary"]["candidates"]], [A, C])
         self.assertEqual([t["taskId"] for t in view["routerTrials"] if t["attemptId"]], [second["task"]["taskId"]])
         with self.board_.store.db.read() as db:

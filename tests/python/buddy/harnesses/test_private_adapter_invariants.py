@@ -382,7 +382,7 @@ class PrivateAdapterInvariants(unittest.TestCase):
             with self.subTest(harness=harness):
                 fixture = self.fixture(kind)
                 if harness == "dsh":
-                    fixture.select('{"buddyId":"legal","reason":"fixture","evidence":[]}')
+                    fixture.select('{"buddyId":"legal","note":"fixture","evidence":[]}')
                     env = fixture.environment
                     buddy = {"harness": harness, **dsh_tests.SPEC}
                 elif harness == "zcode":

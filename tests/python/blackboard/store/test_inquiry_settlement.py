@@ -34,11 +34,11 @@ class InquirySettlementTests(BoardTestCase):
         board, client, task, attempt = self.claimed()
         board.store.task_cancel({"runId": task["taskId"], "note": "service stop"}, initiator="service")
         self.assertEqual(client.get_message("q-pending", runId=task["taskId"])["state"], "queued")
-        board.store.release_execution(attempt["attemptId"])
+        board.store.release_execution(attempt["attemptId"], reason="execution-process-not-created")
         self.assertEqual(client.get(runId=task["taskId"])["state"], "cancelled")
         self.assert_settled_once(board, client, task, attempt)
         head = board.store.head()
-        board.store.release_execution(attempt["attemptId"])
+        board.store.release_execution(attempt["attemptId"], reason="execution-process-not-created")
         self.assertEqual(board.store.head(), head)
 
     def test_identity_absent_recovery_settles_without_execution_receipt(self):

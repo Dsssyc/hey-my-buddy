@@ -302,7 +302,7 @@ class PrivateExecutionRecoveryTests(BoardTestCase):
             f"        root=Path({str(self.directory)!r})\n"
             "        (root/'router.started').touch()\n"
             "        while not (root/'router.release').exists(): time.sleep(.05)\n"
-            f"        self.final_answers=[json.dumps({{'buddyId':{candidate!r},'reason':'offline fixture choice','evidence':[]}})]\n"
+            f"        self.final_answers=[json.dumps({{'buddyId':{candidate!r},'note':'offline fixture choice','evidence':[]}})]\n"
             "        return module.fake_agent.FakeAgent.run_final_prompt(self,message)\n"
             "module.WorkflowAgent=GatedAgent\n"
             "raise SystemExit(module.main())\n"

@@ -453,7 +453,8 @@ class UpgradeFixtureTests(unittest.TestCase):
                              'workflow_host_conclusions', 'workflow_integrations',
                              'workflow_scope_versions', 'workflow_turns',
                              'workflow_continuations', 'workflow_workspace_conflicts',
-                             'workflow_runs', 'workflow_requests'}:
+                             'workflow_runs', 'workflow_requests', 'evaluation_decisions',
+                             'workflow_routes', 'decision_requests', 'router_requests'}:
                     continue
                 with self.subTest(retained_table=table):
                     self.assertEqual([dict(item) for item in upgraded.execute(f'SELECT * FROM {table} ORDER BY rowid')], rows)
@@ -1010,7 +1011,11 @@ class UpgradeFixtureTests(unittest.TestCase):
         content = '  Lead completion requires every owned micro task\nCONFLICT\n原样  '
         content_payload = ' { "summary" : "CONFLICT", "neededWork" : ["User content"] } '
         self.old_request(connection, run_id, 'worker', kind='assistance', summary=content, payload=content_payload)
-        routing_payload = json.dumps({'source': 'routing', 'decisionId': 'kept-decision', 'summary': 'routing text'})
+        decision_id = connection.execute('SELECT decision_id FROM evaluation_decisions LIMIT 1').fetchone()[0]
+        connection.execute('INSERT INTO workflow_routes(decision_id,run_id,owner_generation,state,reason,created_at,updated_at)'
+                           " VALUES(?,?,1,'needs-host','routing text','created','updated')",
+                           (decision_id, run_id))
+        routing_payload = json.dumps({'source': 'routing', 'decisionId': decision_id, 'summary': 'routing text'})
         self.old_request(connection, run_id, 'routing', summary='routing text', payload=routing_payload)
         self.old_request(connection, other, 'worker-proxy', kind='helper-attention', child_task_id=run_id,
                          summary=content, payload={'origin': {'runId': run_id, 'requestId': 'worker'},
@@ -1045,8 +1050,10 @@ class UpgradeFixtureTests(unittest.TestCase):
         self.assertEqual(rows['scope-proxy']['reason_params_json'], rows['scope']['reason_params_json'])
         self.assertEqual(json.loads(rows['scope-proxy']['payload_json']), {'origin': origin, 'proxy': proxy})
         self.assertEqual((rows['worker']['summary'], rows['worker']['payload_json']), (content, content_payload))
-        self.assertEqual((rows['routing']['summary'], rows['routing']['payload_json']), ('routing text', routing_payload))
-        for request_id in ('worker', 'worker-proxy', 'routing'):
+        self.assertEqual((rows['routing']['summary'], rows['routing']['decision_id'],
+                          rows['routing']['reason_code'], json.loads(rows['routing']['payload_json'])),
+                         (None, decision_id, 'routing-unusable-selection', {'source': 'routing'}))
+        for request_id in ('worker', 'worker-proxy'):
             self.assertIsNone(rows[request_id]['reason_code'])
             self.assertIsNone(rows[request_id]['reason_params_json'])
         self.assertEqual(rows['worker-proxy']['summary'], content)
@@ -1097,14 +1104,234 @@ class UpgradeFixtureTests(unittest.TestCase):
         # The run FK is not part of this column CHECK and is verified separately.
         with sqlite3.connect(self.root / 'request-check-fresh' / 'board.sqlite3') as baseline:
             for label, db in (('upgraded', connection), ('fresh', baseline)):
-                for index, values in enumerate(((None, None, None), ('text', 'CONFLICT', '{}'),
-                                                (None, 'CONFLICT', None), (None, None, '{}'),
-                                                (None, 'CONFLICT', '[]'), (None, 'CONFLICT', 'null'),
-                                                (None, 'CONFLICT', 'true'), (None, 'CONFLICT', '123'),
-                                                (None, 'CONFLICT', '"text"'),
-                                                ('text', None, '{}'))):
+                for index, values in enumerate(((None, None, None, None), ('text', 'CONFLICT', '{}', None),
+                                                (None, 'CONFLICT', None, None), (None, None, '{}', None),
+                                                (None, 'CONFLICT', '[]', None), (None, 'CONFLICT', 'null', None),
+                                                (None, 'CONFLICT', 'true', None), (None, 'CONFLICT', '123', None),
+                                                (None, 'CONFLICT', '"text"', None),
+                                                ('text', None, '{}', None), ('text', None, None, 'decision'))):
                     with self.subTest(schema=label, values=values), self.assertRaises(sqlite3.IntegrityError):
                         db.execute("INSERT INTO workflow_requests(request_id,run_id,kind,summary,reason_code,reason_params_json,"
-                                   "payload_json,state,expected_revision,created_at,updated_at)"
-                                   " VALUES(?,?,'attention',?,?,?,'{}','open',1,'created','updated')",
+                                   "decision_id,payload_json,state,expected_revision,created_at,updated_at)"
+                                   " VALUES(?,?,'attention',?,?,?,?,'{}','open',1,'created','updated')",
                                    (f'bad-{index}', run_id, *values))
+                for index, values in enumerate((('buddy content', None, None, None),
+                                                (None, 'CONFLICT', '{}', None),
+                                                (None, 'routing-unusable-selection', '{}', 'decision'),
+                                                (None, None, None, 'decision'))):
+                    db.execute("INSERT INTO workflow_requests(request_id,run_id,kind,summary,reason_code,reason_params_json,"
+                               "decision_id,payload_json,state,expected_revision,created_at,updated_at)"
+                               " VALUES(?,?,'attention',?,?,?,?,'{}','open',1,'created','updated')",
+                               (f'good-{index}', run_id, *values))
+                self.assertEqual(db.execute("SELECT COUNT(*) FROM workflow_requests WHERE request_id LIKE 'good-%'")
+                                 .fetchone()[0], 4)
+                for index, values in enumerate((('CONFLICT', None), (None, '{}'), ('CONFLICT', '[]'),
+                                                ('CONFLICT', 'null'), ('CONFLICT', '123'),
+                                                ('CONFLICT', '"text"'))):
+                    with self.subTest(schema=label, decision_values=values), self.assertRaises(sqlite3.IntegrityError):
+                        db.execute('INSERT INTO evaluation_decisions(decision_id,status,task,reason_code,'
+                                   'reason_params_json,created_at) VALUES(?,?,?,?,?,?)',
+                                   (f'bad-decision-{index}', 'needs-host', 'task', *values, 'created'))
+                for index, values in enumerate(((None, None, None), ('CONFLICT', '{}', None),
+                                                (None, None, 'Router content'))):
+                    db.execute('INSERT INTO evaluation_decisions(decision_id,status,task,reason_code,'
+                               'reason_params_json,note,created_at) VALUES(?,?,?,?,?,?,?)',
+                               (f'good-decision-{index}', 'needs-host', 'task', *values, 'created'))
+                self.assertEqual(db.execute("SELECT COUNT(*) FROM evaluation_decisions"
+                                            " WHERE decision_id LIKE 'good-decision-%'").fetchone()[0], 3)
+
+    def test_decision_upgrade_preserves_adopted_router_note_and_removes_routing_copies(self):
+        fixture, connection = self.restored('decision-reasons')
+        decision_id = connection.execute('SELECT decision_id FROM evaluation_decisions LIMIT 1').fetchone()[0]
+        buddy_id = connection.execute('SELECT buddy_id FROM evaluation_decisions WHERE decision_id=?',
+                                      (decision_id,)).fetchone()[0]
+        run_id = fixture['stableIds']['delivered']
+        note = 'Router authored note; retain exactly  '
+        output = {'status': 'ok', 'operation': 'select',
+                  'decision': {'buddyId': buddy_id, 'reason': note, 'evidence': []}}
+        connection.execute('UPDATE evaluation_decisions SET reason=?,error=NULL WHERE decision_id=?',
+                           (note, decision_id))
+        connection.execute('UPDATE decision_requests SET output_json=?,requested_json=? WHERE decision_id=?',
+                           (json.dumps(output), json.dumps({'inspections': [
+                               {'code': 'router-unavailable', 'reason': 'Router buddy 在请求冻结时尚未发布'}]}), decision_id))
+        connection.execute('INSERT INTO router_requests(decision_id,snapshot_json,frozen_at) VALUES(?,?,?)',
+                           (decision_id, json.dumps({'routerProblem': {'code': 'router-unavailable',
+                                                                        'reason': 'Router 不可用：列表中 2 项当前都不可用'}}),
+                            'created'))
+        connection.execute('INSERT INTO workflow_routes(decision_id,run_id,owner_generation,state,reason,created_at,updated_at)'
+                           ' VALUES(?, ?, 1, ?, ?, ?, ?)',
+                           (decision_id, run_id, 'needs-host', note, 'created', 'created'))
+        self.old_request(connection, run_id, 'routing-ref', summary=note,
+                         payload={'source': 'routing', 'decisionId': decision_id, 'summary': note})
+        connection.execute("INSERT INTO events(kind,task_id,revision,payload_json,created_at)"
+                           " VALUES('decision.completed',?,1,?,'created')",
+                           (run_id, json.dumps({'decisionId': decision_id, 'status': 'completed',
+                                                'reason': note, 'error': None})))
+        connection.commit()
+        original_output = connection.execute('SELECT output_json FROM decision_requests WHERE decision_id=?',
+                                             (decision_id,)).fetchone()[0]
+        upgrade_schema_24_to_25(fixture['state'])
+        decision = connection.execute('SELECT * FROM evaluation_decisions WHERE decision_id=?',
+                                      (decision_id,)).fetchone()
+        self.assertEqual((decision['reason_code'], decision['reason_params_json'], decision['note']),
+                         (None, None, note))
+        self.assertEqual(connection.execute('SELECT output_json FROM decision_requests WHERE decision_id=?',
+                                            (decision_id,)).fetchone()[0], original_output)
+        inspection = json.loads(connection.execute('SELECT requested_json FROM decision_requests WHERE decision_id=?',
+                                                   (decision_id,)).fetchone()[0])['inspections'][0]
+        self.assertEqual(inspection, {'code': 'router-not-published-at-freeze'})
+        self.assertEqual(json.loads(connection.execute('SELECT snapshot_json FROM router_requests WHERE decision_id=?',
+                                                       (decision_id,)).fetchone()[0])['routerProblem'],
+                         {'code': 'router-all-unavailable'})
+        self.assertNotIn('reason', connection.execute('SELECT * FROM workflow_routes').fetchone().keys())
+        request = connection.execute("SELECT * FROM workflow_requests WHERE request_id='routing-ref'").fetchone()
+        self.assertEqual((request['summary'], request['decision_id'], request['reason_code']),
+                         (None, decision_id, 'routing-unusable-selection'))
+        event = json.loads(connection.execute("SELECT payload_json FROM events WHERE kind='decision.completed'"
+                                              " ORDER BY seq DESC LIMIT 1").fetchone()[0])
+        self.assertEqual(event, {'decisionId': decision_id, 'status': 'completed'})
+
+    def test_decision_upgrade_uses_history_only_for_known_board_prose(self):
+        fixture, connection = self.restored('decision-history')
+        decision_id = connection.execute('SELECT decision_id FROM evaluation_decisions LIMIT 1').fetchone()[0]
+        connection.execute("UPDATE evaluation_decisions SET status='needs-host',buddy_id=NULL,"
+                           "reason='Old board sentence no longer recognized',error=NULL WHERE decision_id=?",
+                           (decision_id,))
+        connection.execute('UPDATE decision_requests SET output_json=NULL WHERE decision_id=?',
+                           (decision_id,))
+        connection.execute("INSERT INTO events(kind,revision,payload_json,created_at)"
+                           " VALUES('decision.needs_host',1,?,'created')",
+                           (json.dumps({'decisionId': decision_id, 'status': 'needs-host',
+                                        'reason': 'Old board sentence no longer recognized'}),))
+        connection.commit()
+        upgrade_schema_24_to_25(fixture['state'])
+        row = connection.execute('SELECT reason_code,reason_params_json,note FROM evaluation_decisions'
+                                 ' WHERE decision_id=?', (decision_id,)).fetchone()
+        self.assertEqual((row['reason_code'], json.loads(row['reason_params_json']), row['note']),
+                         ('history.reason-unavailable', {'recordId': decision_id}, None))
+
+    def test_decision_upgrade_rejects_ambiguous_router_ownership_atomically(self):
+        fixture, connection = self.restored('decision-ambiguous')
+        decision_id = connection.execute('SELECT decision_id FROM evaluation_decisions LIMIT 1').fetchone()[0]
+        note = 'Router output with an unrelated selected buddy'
+        connection.execute('UPDATE evaluation_decisions SET reason=? WHERE decision_id=?', (note, decision_id))
+        connection.execute('UPDATE decision_requests SET output_json=? WHERE decision_id=?',
+                           (json.dumps({'status': 'ok', 'operation': 'select',
+                                        'decision': {'buddyId': 'another-buddy', 'reason': note, 'evidence': []}}),
+                            decision_id))
+        connection.commit()
+        before = backup.database_snapshot(connection, exact=True)
+        schema = list(connection.execute('SELECT * FROM sqlite_master ORDER BY name'))
+        with self.assertRaises(BoardError) as caught:
+            upgrade_schema_24_to_25(fixture['state'])
+        self.assertEqual(caught.exception.code, 'UPGRADE_INVALID_BOARD')
+        self.assertEqual(backup.database_snapshot(connection, exact=True), before)
+        self.assertEqual(list(connection.execute('SELECT * FROM sqlite_master ORDER BY name')), schema)
+
+    def test_decision_upgrade_uses_frozen_table_count_for_oversize_reason(self):
+        fixture, connection = self.restored('decision-oversize')
+        decision_id = connection.execute('SELECT decision_id FROM evaluation_decisions LIMIT 1').fetchone()[0]
+        connection.execute("UPDATE evaluation_decisions SET status='needs-host',buddy_id=NULL,"
+                           "reason='an old truncated limit message',error='router-input-too-large'"
+                           ' WHERE decision_id=?', (decision_id,))
+        frozen = {'baseInput': {'buddies': [{} for _ in range(201)], 'preferences': [],
+                                'annotations': []}}
+        connection.execute('INSERT INTO router_requests(decision_id,snapshot_json,frozen_at) VALUES(?,?,?)',
+                           (decision_id, json.dumps(frozen), 'created'))
+        connection.commit()
+        upgrade_schema_24_to_25(fixture['state'])
+        row = connection.execute('SELECT reason_code,reason_params_json FROM evaluation_decisions'
+                                 ' WHERE decision_id=?', (decision_id,)).fetchone()
+        self.assertEqual((row['reason_code'], json.loads(row['reason_params_json'])),
+                         ('router-input-too-large', {'collection': 'buddies', 'count': 201, 'limit': 200}))
+
+    def test_release_upgrade_moves_program_reason_and_keeps_event_identity(self):
+        fixture, connection = self.restored('release-reason')
+        attempt = connection.execute('SELECT attempt_id,task_id FROM attempts LIMIT 1').fetchone()
+        old = 'service stopped before execution launch'
+        decision_id = connection.execute('SELECT decision_id FROM evaluation_decisions LIMIT 1').fetchone()[0]
+        connection.execute("UPDATE evaluation_decisions SET status='failed',buddy_id=NULL,reason=?,error=?"
+                           ' WHERE decision_id=?', (old, old, decision_id))
+        connection.execute('UPDATE decision_requests SET task_id=? WHERE decision_id=?',
+                           (attempt['task_id'], decision_id))
+        connection.execute('UPDATE attempts SET error=? WHERE attempt_id=?', (old, attempt['attempt_id']))
+        for kind, payload in (
+            ('attempt.released', {'reason': old, 'releaseEvidence': 'processCreated=false',
+                                  'previousState': 'starting'}),
+            ('workflow.attempt_released', {'reason': old, 'shutdownConfirmed': True}),
+            ('attempt.uncertain', {'reason': 'service restarted while this attempt owned possible external work; '
+                                   'its resource claims are retained until the execution reconnects or recovery proves shutdown'}),
+        ):
+            connection.execute('INSERT INTO events(kind,task_id,attempt_id,revision,payload_json,created_at)'
+                               ' VALUES(?,?,?,1,?,?)',
+                               (kind, attempt['task_id'], attempt['attempt_id'], json.dumps(payload), 'created'))
+        before = [row['seq'] for row in connection.execute('SELECT seq FROM events ORDER BY seq')]
+        connection.commit()
+        upgrade_schema_24_to_25(fixture['state'])
+        self.assertIsNone(connection.execute('SELECT error FROM attempts WHERE attempt_id=?',
+                                             (attempt['attempt_id'],)).fetchone()[0])
+        self.assertEqual(connection.execute('SELECT reason_code FROM evaluation_decisions WHERE decision_id=?',
+                                            (decision_id,)).fetchone()[0], 'service-stopped-before-launch')
+        self.assertEqual([row['seq'] for row in connection.execute('SELECT seq FROM events ORDER BY seq')], before)
+        payloads = {row['kind']: json.loads(row['payload_json']) for row in connection.execute(
+            "SELECT kind,payload_json FROM events WHERE kind IN ('attempt.released','workflow.attempt_released','attempt.uncertain')")}
+        self.assertEqual(payloads['attempt.released']['reason'],
+                         {'code': 'service-stopped-before-launch', 'params': {}})
+        self.assertEqual(payloads['workflow.attempt_released'], {'shutdownConfirmed': True})
+        self.assertEqual(payloads['attempt.uncertain'], {})
+
+    def test_interrupted_decision_requires_durable_interruption_relation(self):
+        fixture, connection = self.restored('decision-interrupted')
+        decision_id = connection.execute('SELECT decision_id FROM evaluation_decisions LIMIT 1').fetchone()[0]
+        attempt_id = connection.execute('SELECT attempt_id FROM attempts LIMIT 1').fetchone()[0]
+        old = 'the execution ended before result delivery; no delivered answer can become a current recommendation'
+        connection.execute("UPDATE evaluation_decisions SET status='failed',buddy_id=NULL,reason=?,error=NULL"
+                           ' WHERE decision_id=?', (old, decision_id))
+        connection.execute('UPDATE decision_requests SET attempt_id=? WHERE decision_id=?',
+                           (attempt_id, decision_id))
+        connection.execute('INSERT INTO attempt_interruptions(attempt_id,evidence_kind,observed_at,state)'
+                           " VALUES(?,'identity-absent','created','settled')", (attempt_id,))
+        connection.commit()
+        upgrade_schema_24_to_25(fixture['state'])
+        row = connection.execute('SELECT reason_code,reason_params_json FROM evaluation_decisions'
+                                 ' WHERE decision_id=?', (decision_id,)).fetchone()
+        self.assertEqual((row['reason_code'], row['reason_params_json']),
+                         ('interrupted-before-delivery', '{}'))
+
+    def test_fenced_route_reason_uses_its_recorded_owner(self):
+        for name, run_key, old, code in (
+            ('takeover', 'delivered', 'Host takeover fenced model selection', 'routing-taken-over'),
+            ('cancel', 'cancelled', 'Owning Micro task cancelled', 'micro-task-cancelled'),
+        ):
+            with self.subTest(name=name):
+                fixture, connection = self.restored('fenced-' + name)
+                decision_id = connection.execute('SELECT decision_id FROM evaluation_decisions LIMIT 1').fetchone()[0]
+                run_id = fixture['stableIds'][run_key]
+                connection.execute("UPDATE evaluation_decisions SET status='cancelled',buddy_id=NULL,reason=?,error=NULL"
+                                   ' WHERE decision_id=?', ('the decision run was cancelled: ' + old, decision_id))
+                connection.execute('INSERT INTO workflow_routes(decision_id,run_id,owner_generation,state,reason,'
+                                   "created_at,updated_at) VALUES(?,?,1,'fenced',?,'created','updated')",
+                                   (decision_id, run_id, old))
+                connection.commit()
+                upgrade_schema_24_to_25(fixture['state'])
+                self.assertEqual(connection.execute('SELECT reason_code FROM evaluation_decisions WHERE decision_id=?',
+                                                    (decision_id,)).fetchone()[0], code)
+
+    def test_decision_cancel_reason_does_not_consume_host_cancel_note(self):
+        fixture, connection = self.restored('decision-host-cancel')
+        decision_id = connection.execute('SELECT decision_id FROM evaluation_decisions LIMIT 1').fetchone()[0]
+        task_id = fixture['stableIds']['delivered']
+        note = 'Host cancelled this choice  '
+        connection.execute("UPDATE evaluation_decisions SET status='cancelled',buddy_id=NULL,reason=?,error=NULL"
+                           ' WHERE decision_id=?', ('the decision run was cancelled: ' + note, decision_id))
+        connection.execute('UPDATE decision_requests SET task_id=? WHERE decision_id=?', (task_id, decision_id))
+        connection.execute("INSERT INTO events(kind,task_id,revision,payload_json,actor_role,actor_id,created_at)"
+                           " VALUES('task.cancelled',?,1,?,'host','host-1','created')",
+                           (task_id, json.dumps({'reason': note})))
+        connection.commit()
+        upgrade_schema_24_to_25(fixture['state'])
+        self.assertEqual(connection.execute('SELECT reason_code FROM evaluation_decisions WHERE decision_id=?',
+                                            (decision_id,)).fetchone()[0], 'decision-cancelled')
+        event = json.loads(connection.execute("SELECT payload_json FROM events WHERE kind='task.cancelled'"
+                                              ' ORDER BY seq DESC LIMIT 1').fetchone()[0])
+        self.assertEqual(event['note'], note)

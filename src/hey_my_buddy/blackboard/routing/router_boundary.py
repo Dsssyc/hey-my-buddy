@@ -9,7 +9,7 @@ from ...protocol.schemas import BUDDY_FIELDS
 KINDS = ("router-unavailable", "routing-changed", "router-abstained")
 
 
-def build_boundary(*, kind: str, code: str | None, reason: str, candidates: list,
+def build_boundary(*, kind: str, code: str | None, reason: dict | None, candidates: list,
                    facts: dict, router_trials: list, retry_at: str | None,
                    decision_id: str, run_id: str | None = None, revision: int | None = None,
                    shutdown_confirmed: bool = False, continuation_problem: str | None = None,
@@ -25,8 +25,6 @@ def build_boundary(*, kind: str, code: str | None, reason: str, candidates: list
     """
     if not isinstance(kind, str) or kind not in KINDS:
         raise BoardError("INVALID_ARGUMENT", "Unknown Router boundary kind")
-    if not isinstance(reason, str) or not reason.strip():
-        raise BoardError("INVALID_ARGUMENT", "Router boundary reason must be nonempty")
     if not isinstance(candidates, list) or not isinstance(router_trials, list) or not isinstance(facts, dict):
         raise BoardError("INVALID_ARGUMENT", "Router boundary requires frozen candidates, trials and facts")
     if type(shutdown_confirmed) is not bool:
@@ -79,9 +77,6 @@ def build_boundary(*, kind: str, code: str | None, reason: str, candidates: list
     reroute_reason = blocked or ("尚无可知的 Router 恢复时间；可先读取 health 再决定" if retry_at is None else None)
     reroute_params = None if reroute_reason else {
         **base, "commandId": command_id("reroute"), "reroute": True}
-    if (kind in ("router-unavailable", "routing-changed")
-            and "取消后重新提交没有用" not in reason):
-        reason += "；取消后重新提交没有用。"
     return deepcopy({"kind": kind, "code": code, "reason": reason, "routerTrials": router_trials,
                      "candidates": candidates, "facts": facts, "retryAt": retry_at,
                      "commands": {

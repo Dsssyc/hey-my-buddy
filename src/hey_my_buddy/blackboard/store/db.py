@@ -36,6 +36,7 @@ CREATE TABLE IF NOT EXISTS workflow_requests (
     summary             TEXT,
     reason_code         TEXT,
     reason_params_json  TEXT,
+    decision_id         TEXT REFERENCES evaluation_decisions(decision_id) ON DELETE RESTRICT,
     payload_json        TEXT NOT NULL,
     state               TEXT NOT NULL CHECK (state IN ('open','approved','declined','superseded','cancelled')),
     decision_json       TEXT,
@@ -44,9 +45,10 @@ CREATE TABLE IF NOT EXISTS workflow_requests (
     created_at          TEXT NOT NULL,
     updated_at          TEXT NOT NULL,
     decided_at          TEXT,
-    CHECK ((summary IS NOT NULL AND reason_code IS NULL AND reason_params_json IS NULL)
+    CHECK ((summary IS NOT NULL AND reason_code IS NULL AND reason_params_json IS NULL AND decision_id IS NULL)
         OR (summary IS NULL AND reason_code IS NOT NULL AND reason_params_json IS NOT NULL
-            AND json_valid(reason_params_json) AND json_type(reason_params_json)='object'))
+            AND json_valid(reason_params_json) AND json_type(reason_params_json)='object')
+        OR (summary IS NULL AND reason_code IS NULL AND reason_params_json IS NULL AND decision_id IS NOT NULL))
 );
 """
 
@@ -418,9 +420,13 @@ CREATE TABLE IF NOT EXISTS evaluation_decisions (
     status            TEXT NOT NULL,
     task              TEXT NOT NULL,
     buddy_id        TEXT,
-    reason            TEXT NOT NULL DEFAULT '',
+    reason_code       TEXT,
+    reason_params_json TEXT,
+    note              TEXT,
     created_at        TEXT NOT NULL,
-    error             TEXT
+    CHECK ((reason_code IS NULL AND reason_params_json IS NULL)
+        OR (reason_code IS NOT NULL AND reason_params_json IS NOT NULL
+            AND json_valid(reason_params_json) AND json_type(reason_params_json)='object'))
 );
 """,
     """
@@ -614,7 +620,6 @@ CREATE TABLE IF NOT EXISTS workflow_routes (
     run_id              TEXT NOT NULL REFERENCES workflow_runs(run_id) ON DELETE RESTRICT,
     owner_generation    INTEGER NOT NULL,
     state               TEXT NOT NULL CHECK (state IN ('pending','resolved','needs-host','fenced')),
-    reason              TEXT,
     created_at          TEXT NOT NULL,
     updated_at          TEXT NOT NULL
 );

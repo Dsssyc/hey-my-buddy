@@ -760,8 +760,11 @@ def _run_spans(store, connection, row) -> list[dict]:
         # below is that interval, and a second open span would cover its label.
         spans.append(_span("queue", f"queue:open:{run_id}", run_id, queued_from, None, "queued"))
     for request in connection.execute(
-        "SELECT request_id, kind, state, summary, reason_code, reason_params_json, created_at, decided_at, updated_at FROM workflow_requests"
-        " WHERE run_id=? ORDER BY created_at, request_id", (run_id,)
+        "SELECT w.request_id,w.kind,w.state,w.summary,w.decision_id,w.created_at,w.decided_at,w.updated_at,"
+        " COALESCE(w.reason_code,d.reason_code) AS reason_code,"
+        " COALESCE(w.reason_params_json,d.reason_params_json) AS reason_params_json FROM workflow_requests w"
+        " LEFT JOIN evaluation_decisions d ON d.decision_id=w.decision_id"
+        " WHERE w.run_id=? ORDER BY w.created_at,w.request_id", (run_id,)
     ).fetchall():
         open_request = request["state"] == "open"
         # A cancellation or a Host continuation closes an open request without a
@@ -772,7 +775,7 @@ def _run_spans(store, connection, row) -> list[dict]:
         spans.append(_span(
             "host", f"host:{request['request_id']}", run_id, request["created_at"],
             None if open_request else (closed_at or None), request["state"],
-            request_id=request["request_id"], requestKind=request["kind"],
+            request_id=request["request_id"], requestKind=request["kind"], decisionId=request["decision_id"],
             summary=(request["summary"][:SUMMARY_LIMIT] if request["summary"] is not None else None),
             reason=({"code": request["reason_code"], "params": json.loads(request["reason_params_json"])}
                     if request["reason_code"] is not None else None),
@@ -784,7 +787,8 @@ def _routing_spans(connection, decision_task_id: str, owner_run_id: str) -> list
     # Resolve every Router task through its immutable dispatch, including tasks
     # replaced by a later Router in the same decision.
     record = connection.execute(
-        "SELECT d.decision_id, d.status, d.buddy_id, d.reason, r.selected_json, r.output_json, r.requested_json"
+        "SELECT d.decision_id, d.status, d.buddy_id, d.reason_code, d.reason_params_json, d.note,"
+        " r.selected_json, r.output_json, r.requested_json"
         f" FROM ({micro_task.ROUTING_TASKS_SQL}) routing"
         " JOIN decision_requests r ON r.decision_id=routing.decision_id"
         " JOIN evaluation_decisions d ON d.decision_id=routing.decision_id"
@@ -796,18 +800,14 @@ def _routing_spans(connection, decision_task_id: str, owner_run_id: str) -> list
     routing = {
         **router.routing_facts(json.loads(record["requested_json"]) if record else {}),
         "selectedBuddy": json.loads(record["selected_json"]) if record and record["selected_json"] else None,
-        "reason": (record["reason"] or None) if record else None,
+        "reason": ({"code": record["reason_code"], "params": json.loads(record["reason_params_json"])}
+                   if record and record["reason_code"] is not None else None),
+        "note": record["note"] if record else None,
         "policyCheck": output.get("policyCheck"),
         "budget": output.get("budget"),
         "usage": {key: usage.get(key) for key in ("elapsedMs", "toolCalls", "bytesRead")},
     }
-    abstention = False
-    if record and record["status"] == "needs-host" and output.get("status") == "ok" and record["buddy_id"] is None:
-        try:
-            answer = router.validate_answer(output.get("decision"), [])
-            abstention = answer["buddyId"] is None
-        except BoardError:
-            pass
+    abstention = bool(record and record["reason_code"] == "router-abstained")
     spans = []
     for attempt in connection.execute(
         "SELECT attempt_id, execution_state, shutdown_confirmed, ownership, started_at, finished_at, created_at,"
@@ -820,7 +820,7 @@ def _routing_spans(connection, decision_task_id: str, owner_run_id: str) -> list
         if isinstance(attempt_output, dict) and 'routingMode' in attempt_output:
             span_routing = {**routing, **router.routing_facts(attempt_output)}
             if attempt_output.get('code') == 'router-review-unavailable':
-                span_routing.update(selectedBuddy=None, reason=attempt_output.get('reason'),
+                span_routing.update(selectedBuddy=None,
                                     policyCheck=None, budget=attempt_output.get('budget'), usage=None)
         spans.append(_span(
             "routing", f"routing:{attempt['attempt_id']}", owner_run_id,

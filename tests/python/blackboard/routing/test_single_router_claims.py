@@ -26,7 +26,7 @@ def stopped_answer(claim, *, buddy_id=BUDDY_ID):
             'stopEvidence': {'shutdownConfirmed': True, 'native': {'shutdownConfirmed': True}},
             'inputVerification': {'unchanged': True, 'snapshotSha256': 'private-fixture-digest',
                                   'manifestSha256': (document.get('executionWorkspace') or {}).get('manifestSha256')},
-            'decision': {'buddyId': buddy_id, 'reason': 'Frozen legal candidate', 'evidence': []}}
+            'decision': {'buddyId': buddy_id, "note": 'Frozen legal candidate', 'evidence': []}}
 
 
 class SingleRouterClaimTests(DecisionTestCase):
@@ -48,8 +48,9 @@ class SingleRouterClaimTests(DecisionTestCase):
         self.assertIsNone(response['claim'])
         view = self.decision(board, request['decisionId'])
         unavailable = code in ('router-not-published', 'router-incomplete', 'router-no-tool-unsupported',
-                               'router-review-unsupported', 'router-quota-exhausted')
-        expected_code = 'router-unavailable' if unavailable else code
+                               'router-review-unsupported', 'router-quota-exhausted', 'router-disabled',
+                               'router-catalog-unavailable', 'router-harness-unavailable')
+        expected_code = 'router-list-exhausted'
         self.assertEqual(view['status'], 'needs-host')
         self.assertEqual(view['output']['code'], expected_code)
         self.assertEqual(view['input'], frozen['input'])
@@ -58,7 +59,9 @@ class SingleRouterClaimTests(DecisionTestCase):
             self.assertEqual(connection.execute('SELECT COUNT(*) FROM attempts').fetchone()[0], 0)
             event = json.loads(connection.execute("SELECT payload_json FROM events WHERE kind=?",
                                                   ('decision.needs_host',)).fetchone()[0])
-            self.assertEqual(event['errorCode'], expected_code)
+            self.assertNotIn('errorCode', event)
+            self.assertNotIn('reason', event)
+            self.assertEqual(view['reason']['code'], expected_code)
             failures = [json.loads(row[0]) for row in connection.execute("SELECT payload_json FROM events WHERE kind='router.no_answer'")]
             if unavailable:
                 self.assertEqual([entry['code'] for entry in failures], [code])
@@ -93,8 +96,8 @@ class SingleRouterClaimTests(DecisionTestCase):
     def test_buddy_removal_incomplete_disabled_and_unavailable_are_specific_boundaries(self):
         for sql, code in (("DELETE FROM buddies WHERE buddy_id=?", 'router-not-published'),
                           ("UPDATE buddies SET effort='' WHERE buddy_id=?", 'router-incomplete'),
-                          ("UPDATE buddies SET enabled=0 WHERE buddy_id=?", 'router-unavailable'),
-                          ("UPDATE buddies SET available=0 WHERE buddy_id=?", 'router-unavailable')):
+                          ("UPDATE buddies SET enabled=0 WHERE buddy_id=?", 'router-disabled'),
+                          ("UPDATE buddies SET available=0 WHERE buddy_id=?", 'router-catalog-unavailable')):
             with self.subTest(code=code, sql=sql):
                 board = self.case_board()
                 self.seed(board)
@@ -116,7 +119,7 @@ class SingleRouterClaimTests(DecisionTestCase):
                 if unavailable == 'health':
                     with board.store.db.write() as connection:
                         connection.execute("UPDATE harness_health SET status='unhealthy' WHERE harness='dsh'")
-                    self.assert_unclaimed(board, request, 'router-unavailable', frozen)
+                    self.assert_unclaimed(board, request, 'router-harness-unavailable', frozen)
                 else:
                     with patch('hey_my_buddy.blackboard.evaluation.native_observations.exhausted', return_value={'nativeCode': 'quota'}), \
                             patch('hey_my_buddy.blackboard.routing.quota_routing.claim', side_effect=AssertionError('Router must not use a Worker retry')):
@@ -220,7 +223,7 @@ class SingleRouterClaimTests(DecisionTestCase):
                     status='failed', shutdown=False)
         decision = self.decision(board, request['decisionId'])
         self.assertEqual(decision['status'], 'failed')
-        self.assertIn('unconfirmed', decision['reason'])
+        self.assertEqual(decision['reason']['code'], 'router-stop-unconfirmed')
         self.assertIsNone(self.claim_route(board, request, command='no-retry', worker='second-worker')['claim'])
         with board.store.db.read() as connection:
             self.assertEqual(connection.execute('SELECT shutdown_confirmed FROM attempts').fetchone()[0], 0)

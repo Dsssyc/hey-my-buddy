@@ -194,7 +194,9 @@ class EvaluationStore:
             "status": row["status"],
             "task": row["task"],
             "buddyId": row["buddy_id"],
-            "reason": row["reason"],
+            "reason": ({"code": row["reason_code"], "params": json.loads(row["reason_params_json"])}
+                       if row["reason_code"] is not None else None),
+            "note": row["note"],
             "createdAt": row["created_at"],
         }
         if "kind" in keys and row["kind"] is not None:
@@ -203,8 +205,6 @@ class EvaluationStore:
             view["runId"] = row["run_id"]
         if "updated_at" in keys and row["updated_at"] is not None:
             view["updatedAt"] = row["updated_at"]
-        if row["error"]:
-            view["error"] = row["error"]
         return view
 
     def user_policy_publish(self, params: dict) -> dict:

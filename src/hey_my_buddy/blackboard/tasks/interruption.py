@@ -183,7 +183,7 @@ def _recover_one(board, attempt, identity, stopped_evidence):
             # commit -> startup-material crash window without any elapsed-time guess.
             elif attempt['execution_state'] == 'uncertain' and not (
                     _evidence_directory(board, attempt) / 'spawn.intent').exists():
-                return board.release_execution(attempt['attempt_id'], reason='No execution process was created')
+                return board.release_execution(attempt['attempt_id'], reason='execution-process-not-created')
             else:
                 return None
         if stopped_evidence is None:

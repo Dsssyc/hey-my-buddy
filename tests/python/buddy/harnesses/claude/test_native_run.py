@@ -1245,7 +1245,7 @@ class StructuredDeliveryTests(NativeRunCase):
     """
 
     def delivered(self):
-        return {"buddyId": "legal", "reason": "Read-only stream fixture", "evidence": []}
+        return {"buddyId": "legal", "note": "Read-only stream fixture", "evidence": []}
 
     def review_request(self, **kwargs):
         return self.request(scope="read", schema=READ_SCHEMA, network=(),

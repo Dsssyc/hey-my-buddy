@@ -197,7 +197,7 @@ class ExecutionScheduler:
             attempt_id = attempt["attemptId"]
             if self.service.control.get("stopping") or self.service.control.get("restart_requested"):
                 self.store.release_execution(attempt_id,
-                                             reason="service stopped before execution launch")
+                                             reason="service-stopped-before-launch")
                 return
             failure = None
             with self._lock:
@@ -214,7 +214,7 @@ class ExecutionScheduler:
             if handle is None:
                 if failure is not None and not getattr(failure, "spawn_created", True):
                     self.store.release_execution(attempt_id,
-                                                 reason="execution launch failed before process creation")
+                                                 reason="execution-launch-failed")
                 elif failure is not None and getattr(
                         getattr(failure, "owned_popen_evidence", None), "shutdown_confirmed", False):
                     self.store.recover_executions(attempt_id, stopped_evidence={

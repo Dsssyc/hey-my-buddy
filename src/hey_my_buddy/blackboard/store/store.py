@@ -18,6 +18,7 @@ from ...protocol import activity as activity_module
 from ..tasks import micro_task
 from ..tasks import scheduling
 from ...protocol import schemas
+from ...protocol.reasons import reason as make_reason
 from .db import (
     ACTIVE_ATTEMPT_STATES,
     ATTEMPT_STATES,
@@ -1214,7 +1215,7 @@ class BoardStore:
                 # A decision run is an ordinary cancellable task. Cancelling it marks
                 # the decision terminal in the same transaction, so a queued selection
                 # that is cancelled can never become a current recommendation.
-                self.decisions.cancelled(connection, task=task, reason=note, now=now)
+                self.decisions.cancelled(connection, task=task, reason=make_reason("decision-cancelled"), now=now)
             response = {"task": self._decorate(connection, task), "alreadyTerminal": already}
             if command_id:
                 self._store_receipt(
@@ -2311,7 +2312,7 @@ class BoardStore:
             if recovered and connection.execute(
                     "SELECT 1 FROM attempt_interruptions WHERE attempt_id=?", (attempt_id_param,)).fetchone() is not None:
                 self.decisions.fence_attempt(connection, attempt=attempt_row,
-                    reason="the execution ended before result delivery", now=now)
+                    reason=make_reason("interrupted-before-delivery"), now=now)
             decision = self.decisions.complete(
                 connection,
                 task=task_row,
@@ -2459,9 +2460,9 @@ class BoardStore:
             head = self._head_of(connection)
         self._notify(head)
 
-    def release_execution(self, attempt_id: str, *, reason: str | None = None) -> dict:
+    def release_execution(self, attempt_id: str, *, reason: str) -> dict:
         """Release a dispatch when its creator proves no execution process was created."""
-        reason = reason or "Execution process could not be started"
+        release_reason = {"code": reason, "params": {}}
         seal_stash = self.workflow.collect_result_stash_facts({"attemptId": attempt_id})
         with self.db.write() as connection:
             attempt = self._attempt_row(connection, attempt_id)
@@ -2474,9 +2475,9 @@ class BoardStore:
             now = self.now()
             self._transition_attempt(connection, attempt, "finished")
             connection.execute(
-                "UPDATE attempts SET finished_at=?, updated_at=?, error=?, shutdown_confirmed=1,"
+                "UPDATE attempts SET finished_at=?, updated_at=?, shutdown_confirmed=1,"
                 " revision=revision+1 WHERE attempt_id=?",
-                (now, now, reason, attempt["attempt_id"]),
+                (now, now, attempt["attempt_id"]),
             )
             connection.execute("INSERT INTO attempt_shutdown_evidence VALUES(?,?,?,?)",
                 (attempt_id, "process-not-created", canonical_json({"kind": "process-not-created",
@@ -2498,7 +2499,7 @@ class BoardStore:
                 attempt_id=attempt["attempt_id"],
                 revision=task["revision"] + 1,
                 payload={
-                    "reason": reason,
+                    "reason": release_reason,
                     "releaseEvidence": "processCreated=false",
                     "previousState": attempt["execution_state"],
                 },
@@ -2506,12 +2507,12 @@ class BoardStore:
             task_row = connection.execute("SELECT * FROM tasks WHERE task_id=?", (attempt["task_id"],)).fetchone()
             # An attempt released before its adapter ran means the decision never
             # reached a model: it fails honestly and releases its reader or writer.
-            self.decisions.released(connection, task=task_row, reason=reason, now=now)
+            self.decisions.released(connection, task=task_row, reason=release_reason, now=now)
             released_attempt = connection.execute(
                 "SELECT * FROM attempts WHERE attempt_id=?", (attempt["attempt_id"],)
             ).fetchone()
             self.workflow.attempt_released(
-                connection, task=task_row, attempt=released_attempt, now=now, reason=reason,
+                connection, task=task_row, attempt=released_attempt, now=now,
                 seal_stash=seal_stash,
             )
             head = self._head_of(connection)
@@ -2905,10 +2906,7 @@ class BoardStore:
                     task_id=attempt["task_id"],
                     attempt_id=attempt["attempt_id"],
                     revision=task["revision"] if task else None,
-                    payload={
-                        "reason": "service restarted while this attempt owned possible external work; "
-                        "its resource claims are retained until the execution reconnects or recovery proves shutdown"
-                    },
+                    payload={},
                 )
             summary["retained"] = int(
                 connection.execute(
