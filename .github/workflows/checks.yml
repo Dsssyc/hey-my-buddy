@@ -250,25 +250,8 @@ jobs:
           npm --prefix apps/console ci 2>&1 | tee "$RUNNER_TEMP/logs/npm-ci.log"
       - name: Select Python test shard
         id: shard
-        shell: python {0}
-        run: |
-          import json
-          import os
-          from pathlib import Path
-
-          shard = int(os.environ["CHECK_SHARD"])
-          shard_count = int(os.environ["CHECK_SHARDS"])
-          files = sorted(path.as_posix() for path in Path("tests/python").rglob("test_*.py") if path.is_file())
-          selected = [path for index, path in enumerate(files) if index % shard_count == shard - 1]
-          if not selected:
-              raise SystemExit("The shard has no test files; refusing to run the whole suite.")
-          manifest = {"system": os.environ["CHECK_OS"], "shard": shard,
-                      "shards": shard_count, "total": len(files), "files": selected}
-          logs = Path(os.environ["RUNNER_TEMP"]) / "logs"
-          (logs / "python-shard.json").write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
-          with open(os.environ["GITHUB_ENV"], "a", encoding="utf-8") as output:
-              output.write(f"HMB_CHECKS_JOBS={os.cpu_count()}\n")
-          print(f"{manifest['system']}: shard {shard}/{shard_count}, {len(selected)}/{len(files)} files, {os.cpu_count()} workers")
+        # Splits by measured per-file durations (.github/check-durations.json).
+        run: python .github/select-test-shard.py
       - name: Python check shard
         id: python-check
         # Leave time to publish partial results and logs when a file hangs.
@@ -333,9 +316,11 @@ jobs:
           failed = sum(status.startswith("FAILED") for _, status, _ in rows)
           system, shard = os.environ["CHECK_OS"], os.environ["CHECK_SHARD"]
           code = os.environ["CHECK_EXIT"] or "unavailable (check did not finish)"
+          estimated = manifest.get("estimated-seconds")
+          estimated_text = f" (estimated {estimated:.1f}s)" if isinstance(estimated, (int, float)) else ""
           lines = [
               f"## {system} / shard {shard}/{os.environ['CHECK_SHARDS']}", "",
-              f"Result: {os.environ['CHECK_RESULT']}; exit: {code}; elapsed: {elapsed:.1f}s.",
+              f"Result: {os.environ['CHECK_RESULT']}; exit: {code}; elapsed: {elapsed:.1f}s{estimated_text}.",
               f"Files selected: {len(rows)}; passed: {passed}; failed: {failed}; not completed: {len(rows) - passed - failed}.", "",
               "| File | Result | Seconds |", "| --- | --- | ---: |",
           ]
