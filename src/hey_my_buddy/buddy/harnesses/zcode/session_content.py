@@ -1,13 +1,21 @@
 """Project the admitted ZCode app-server event stream, never native storage.
 
-The versioned 0.16.9 usage fixture documents message parts; the mock server
-exercises event envelopes. Neither establishes complete reasoning coverage.
+The projected event vocabulary is the one the installed ZCode app 0.17.0
+really emitted in the recorded live and resumed turns of the session-content
+probe (a loopback scripted model; ``tests/probes/zcode_native.py``): body text
+streams as ``model.streaming`` ``text_delta`` frames and reasoning as
+``reasoning_delta`` frames, both keyed by ``assistantMessageId``; tool input
+travels in the ``model.streaming`` ``tool_call`` frame — the scheduled
+``tool.updated`` repeats only ``inputOmitted`` — tool output in ``tool.updated``
+``result`` frames, and the final response in ``turn.completed``.
+``message.upserted`` and ``part.*`` events never appeared in those streams, so
+neither is projected; the kinds no evidence shows stay named in this package's
+``session_omitted.py``.
 """
 from __future__ import annotations
 
 from ....protocol.session_content import (
-    MessageChunk, NativeMeta, Plan, PlanEntry, TextContent,
-    ToolCall, ToolCallUpdate, ToolContent,
+    MessageChunk, NativeMeta, TextContent, ToolCall, ToolCallUpdate, ToolContent,
 )
 from ....protocol.tool_evidence import normalize_tool_event
 from ..session_record import SessionRecord
@@ -22,11 +30,7 @@ class ZcodeSessionProjector:
         self.roots: dict[tuple[str, str], str] = {}
         self.text: dict[tuple[str, str, str], str] = {}
         self.tools: dict[tuple[str, str, str], dict] = {}
-        self.messages: dict[tuple[str, str], str] = {}
         self.assistant: dict[tuple[str, str], list[tuple[str, str, str]]] = {}
-        self.plans: dict[tuple[str, str], list] = {}
-        self.active_parts: dict[tuple[str, str], tuple[str, str]] = {}
-        self.ordinal = 0
 
     def start_prompt(self, session_id: str, input_id: str, input_text: str, invocation_id: str) -> None:
         self.prompts[session_id] = (input_id, input_text, invocation_id)
@@ -54,84 +58,45 @@ class ZcodeSessionProjector:
             return
         if root not in self.roots:
             return
-        if kind == "message.upserted":
-            item = data.get("message")
-            if not isinstance(item, dict):
-                self._marker(root, "message.upserted")
-                return
-            info = item.get("info", item)
-            if not isinstance(info, dict) or any(info.get(k) for k in _CHILD_FIELDS):
-                return
-            if info.get("sessionId", session) != session or info.get("turnId", turn) != turn:
-                return
-            role = info.get("role", "assistant")
-            if role not in ("user", "assistant"):
-                return
-            parts = item.get("parts")
-            if not isinstance(parts, list):
-                self._marker(root, "message.upserted")
-                return
-            for index, part in enumerate(parts):
-                self._part(root, part, delta=False, role=role, new_segment=index > 0)
-        elif kind in ("part.started", "part.upserted", "part.delta"):
-            self._part(root, data.get("delta") if kind == "part.delta" else data.get("part"),
-                       delta=kind == "part.delta", new_segment=kind == "part.started")
-        elif kind == "tool.updated" or (kind == "model.streaming" and data.get("kind") == "tool_call"):
-            self.active_parts.pop(root, None)
+        if kind == "model.streaming":
+            if data.get("kind") == "tool_call":
+                self._tool(root, data)
+            else:
+                self._stream(root, data)
+        elif kind == "tool.updated":
             self._tool(root, data)
         elif kind == "turn.completed" and isinstance(data.get("response"), str):
             response = data["response"]
             keys = self.assistant.get(root, [])
-            if response == "".join(self.text[key] for key in keys):
+            # The response is the final assistant message's own text: a streamed
+            # final body is already recorded and an empty response carries none.
+            if not response or keys and response == self.text[keys[-1]]:
                 return
-            key = keys[0] if len(keys) == 1 else (self.roots[root], "turn-response", "text")
-            self._text(key, response, "agent_message_chunk", snapshot=True)
+            self._text(keys[-1] if keys else (self.roots[root], "turn-response", "text"),
+                       response, "agent_message_chunk", snapshot=True)
 
-    def _part(self, root: tuple[str, str], part: object, *, delta: bool, role: str = "assistant",
-              new_segment: bool = False) -> None:
-        if not isinstance(part, dict):
-            self._marker(root, "unknown-part")
+    def _stream(self, root: tuple[str, str], data: dict) -> None:
+        """One streamed content frame of the model's current assistant message."""
+        kind = data.get("kind")
+        if kind not in ("text_delta", "reasoning_delta"):
+            return  # Envelope and tool-input streaming frames carry no display content.
+        delta = data.get("delta")
+        if delta == "":
             return
-        if any(part.get(k) for k in _CHILD_FIELDS):
+        message_id = data.get("assistantMessageId")
+        if not isinstance(message_id, str) or not message_id or not isinstance(delta, str):
+            self._marker(root, f"model-streaming-{kind}")
             return
-        if part.get("sessionId", root[0]) != root[0] or part.get("turnId", root[1]) != root[1]:
-            return
-        native_type = part.get("type")
-        part_id = part.get("partId")
-        if native_type == "plan":
-            self._plan(root, part.get("entries"))
-            return
-        if native_type not in ("text", "reasoning", "thinking") or not isinstance(part.get("text"), str):
-            self._marker(root, native_type if isinstance(native_type, str) else "unknown-part",
-                         part_id if isinstance(part_id, str) and part_id else "unknown")
-            return
-        if not isinstance(part_id, str) or not part_id:
-            # The existing minimal stream fixture has typed text deltas with
-            # no part identity. As with ACP chunks, consecutive same-kind
-            # fragments share a display item scoped to this invocation/root.
-            content_kind = f"{role}/{native_type}"
-            active = self.active_parts.get(root)
-            if new_segment or active is None or active[0] != content_kind:
-                self.ordinal += 1
-                active = (content_kind, f"stream-{self.ordinal}")
-                self.active_parts[root] = active
-            part_id = active[1]
-        kind = ("user_message_chunk" if role == "user" else
-                "agent_message_chunk" if native_type == "text" else "agent_thought_chunk")
-        key = (self.roots[root], part_id, native_type)
-        if kind == "agent_message_chunk":
-            message_id = part.get("messageId")
-            if isinstance(message_id, str) and self.messages.get(root) != message_id:
-                self.messages[root] = message_id
-                self.assistant[root] = []
+        native_type = "text" if kind == "text_delta" else "reasoning"
+        key = (self.roots[root], message_id, native_type)
+        if native_type == "text":
             keys = self.assistant.setdefault(root, [])
             if key not in keys:
                 keys.append(key)
-        # The root's sent prompt is already recorded once. An exact native echo
-        # is redundant; other native user text remains display content.
-        if role == "user" and part["text"] == self.prompts[root[0]][1]:
-            return
-        self._text(key, part["text"], kind, snapshot=not delta, native_type=native_type)
+        # One assistant message streams all its reasoning into one native part
+        # and all its body text into another, so both append per message id.
+        self._text(key, delta, "agent_message_chunk" if native_type == "text" else "agent_thought_chunk",
+                   snapshot=False, native_type=native_type)
 
     def _text(self, key: tuple[str, str, str], value: str, kind: str, *, snapshot: bool,
               native_type: str | None = None, marker: bool = False) -> None:
@@ -147,7 +112,6 @@ class ZcodeSessionProjector:
         self.text[key] = value if snapshot else before + value
 
     def _marker(self, root: tuple[str, str], label: str, item_id: str = "unknown") -> None:
-        self.active_parts.pop(root, None)
         self._text((self.roots[root], item_id, "marker"), f"[{label}]", "agent_message_chunk",
                    snapshot=True, native_type=label, marker=True)
 
@@ -200,18 +164,6 @@ class ZcodeSessionProjector:
                     meta=NativeMeta(native_item_id=call_id, content_segment=key[0] + "/output",
                                     replace=True if replace else None)))
                 self.text[output_key] = content
-
-    def _plan(self, root: tuple[str, str], entries: object) -> None:
-        if not isinstance(entries, list) or any(not isinstance(entry, dict)
-                or not isinstance(entry.get("content"), str)
-                or not isinstance(entry.get("status"), str) or entry["status"] not in ("pending", "in_progress", "completed")
-                or not isinstance(entry.get("priority"), str) or entry["priority"] not in ("high", "medium", "low")
-                for entry in entries):
-            self._marker(root, "plan")
-        elif self.plans.get(root) != entries:
-            self.record.append(Plan(entries=[PlanEntry(**{k: entry[k] for k in ("content", "status", "priority")})
-                                            for entry in entries]))
-            self.plans[root] = entries
 
     def close(self) -> None:
         self.record.close()

@@ -1,4 +1,12 @@
-"""Offline ZCode display projection; synthetic events do not prove native coverage."""
+"""Offline ZCode display projection; synthetic events do not prove native coverage.
+
+The fixtures copy the shapes the installed ZCode app 0.17.0 really emitted in
+the recorded live and resumed turns of the session-content probe
+(``tests/probes/zcode_native.py`` against a loopback scripted model): body text
+and reasoning stream as ``model.streaming`` ``text_delta``/``reasoning_delta``
+frames keyed by ``assistantMessageId``, tool facts keep their established
+frames, and the final response arrives in ``turn.completed``.
+"""
 import json
 import os
 import unittest
@@ -33,24 +41,28 @@ class ProjectorTests(unittest.TestCase):
         self.projector.observe_notification({'method': 'session/event', 'params': {
             'sessionId': session, 'turnId': turn, 'type': event_type, 'payload': payload}})
 
-    def part(self, text, *, kind='text', part_id='p', delta=False, **fields):
-        self.emit('part.delta' if delta else 'part.upserted', **{
-            'delta' if delta else 'part': {'type': kind, 'partId': part_id, 'text': text, **fields}})
+    def stream(self, kind, delta, *, message_id='msg-1', turn='turn', **fields):
+        self.emit('model.streaming', assistantMessageId=message_id, kind=kind, delta=delta,
+                  done=False, turn=turn, **fields)
 
-    def test_six_updates_text_reasoning_input_output_and_plan(self):
-        self.part('思考', kind='reasoning', part_id='r')
-        self.part('更多', kind='reasoning', part_id='r', delta=True)
-        self.part('答复')
-        self.emit('tool.updated', kind='scheduled', toolCallId='call', toolName='Read', input={'file_path': 'a.py'})
+    def test_streamed_text_reasoning_tools_and_response_are_recorded(self):
+        self.stream('reasoning_delta', '思考')
+        self.stream('reasoning_delta', '更多')
+        self.stream('text_delta', '答复')
+        self.emit('model.streaming', kind='tool_call', toolCallId='call', toolName='Read',
+                  input={'file_path': 'a.py'}, delta='', done=False)
         self.emit('tool.updated', kind='result', toolCallId='call', result={'success': True, 'content': 'file 中文'})
-        self.emit('part.upserted', part={'type': 'plan', 'partId': 'plan', 'entries': [
-            {'content': 'finish', 'status': 'pending', 'priority': 'high'}]})
+        self.stream('text_delta', '完成', message_id='msg-2')
+        self.emit('turn.completed', response='完成')
         events = self.record.events
         self.assertEqual({e['sessionUpdate'] for e in events}, {'user_message_chunk', 'agent_message_chunk',
-            'agent_thought_chunk', 'tool_call', 'tool_call_update', 'plan'})
+            'agent_thought_chunk', 'tool_call', 'tool_call_update'})
         thoughts = [e for e in events if e['sessionUpdate'] == 'agent_thought_chunk']
         self.assertEqual(''.join(e['content']['text'] for e in thoughts), '思考更多')
         self.assertEqual(thoughts[0]['_meta']['reasoning'], 'text')
+        self.assertEqual([e['_meta']['nativeItemId'] for e in thoughts], ['msg-1', 'msg-1'])
+        messages = [e['content']['text'] for e in events if e['sessionUpdate'] == 'agent_message_chunk']
+        self.assertEqual(messages, ['答复', '完成'])  # the streamed final body needs no response echo
         call = next(e for e in events if e['sessionUpdate'] == 'tool_call')
         self.assertEqual((call['kind'], call['rawInput']), ('read', {'file_path': 'a.py'}))
         self.assertTrue(any(e.get('rawOutput') == {'success': True, 'content': 'file 中文'} for e in events))
@@ -84,41 +96,25 @@ class ProjectorTests(unittest.TestCase):
                 self.assertEqual(self.record.events[-1]['sessionUpdate'], 'tool_call')
                 self.assertEqual(self.record.events[-1]['rawInput'], {})
 
-    def test_versioned_message_parts_preserve_exact_supplied_reasoning(self):
-        sample = json.loads((Path(__file__).with_name('fixtures') / 'native-usage-zcode.json').read_text(encoding="utf-8"))
-        self.assertEqual(sample['harnessVersion'], '0.16.9')
-        expected = []
-        for item in sample['finalMessages']['messages']:
-            if item['info']['role'] != 'assistant':
-                continue
-            item = {**item, 'info': {**item['info'], 'sessionId': 'root'},
-                    'parts': [{**p, 'sessionId': 'root'} for p in item['parts']]}
-            expected.extend(p['text'] for p in item['parts'] if p['type'] == 'reasoning')
-            self.emit('message.upserted', message=item)
-        self.assertEqual([e['content']['text'] for e in self.record.events
-                          if e['sessionUpdate'] == 'agent_thought_chunk'], expected)
-        from hey_my_buddy.buddy.harnesses.zcode.session_omitted import OMITTED
-        self.assertEqual(OMITTED, ())  # This sample cannot prove a missing field.
-
-    def test_completed_snapshots_deduplicate_and_revisions_replace(self):
-        self.part('ab', delta=True)
-        self.part('c', delta=True)
-        self.part('abc')
-        self.emit('turn.completed', response='abc')
-        self.assertEqual([e['content']['text'] for e in self.record.events[1:]], ['ab', 'c'])
-        self.part('revised')
-        self.assertTrue(self.record.events[-1]['_meta']['replace'])
-        self.assertEqual(self.record.events[-1]['content']['text'], 'revised')
-        self.emit('turn.completed', response='revised final')
-        self.assertEqual(self.record.events[-1]['content']['text'], ' final')
-
-    def test_completed_only_response_and_multisegment_snapshot(self):
-        self.emit('turn.completed', response='only final')
-        self.assertEqual(self.record.events[-1]['content']['text'], 'only final')
-        self.part('one', part_id='p1', messageId='m')
-        self.part('two', part_id='p2', messageId='m')
+    def test_completed_response_deduplicates_extends_or_replaces_streamed_text(self):
+        for deltas, response, expected in (
+                (('ab', 'c'), 'abc', ['ab', 'c']),            # equal final body: no echo
+                (('ab',), 'abc', ['ab', 'c']),                # extension: append the suffix
+                (('ab',), 'revised', ['ab', 'revised']),      # revision: replace the block
+                ((), 'only final', ['only final']),           # unstreamed response: its own segment
+                (('ab',), '', ['ab'])):                       # an empty response carries nothing
+            with self.subTest(deltas=deltas, response=response):
+                self.setUp()
+                for piece in deltas:
+                    self.stream('text_delta', piece)
+                self.emit('turn.completed', response=response)
+                written = [e for e in self.record.events[1:] if e['sessionUpdate'] == 'agent_message_chunk']
+                self.assertEqual([e['content']['text'] for e in written], expected)
+        self.setUp()
+        self.stream('text_delta', 'one')
+        self.stream('text_delta', 'two', message_id='msg-2')
         count = len(self.record.events)
-        self.emit('turn.completed', response='onetwo')
+        self.emit('turn.completed', response='two')  # a multi-round turn echoes only its final body
         self.assertEqual(len(self.record.events), count)
 
     def test_tool_categories_and_repeated_terminal_output(self):
@@ -135,47 +131,44 @@ class ProjectorTests(unittest.TestCase):
         self.emit('tool.updated', kind='error', toolCallId='0', error='revised')
         self.assertTrue(self.record.events[-1]['_meta']['replace'])
 
-    def test_foreign_history_child_and_unbound_turn_do_not_write(self):
+    def test_foreign_child_and_unbound_frames_do_not_write(self):
         before = list(self.record.events)
-        self.emit('part.upserted', session='foreign', part={'type': 'text', 'partId': 'p', 'text': 'foreign'})
-        self.emit('part.upserted', turn='old', part={'type': 'text', 'partId': 'p', 'text': 'history'})
+        self.stream('text_delta', 'foreign', session='foreign')
+        self.stream('text_delta', 'history', turn='old')
         self.emit('turn.started', turn='old', inputId='old-input')
-        self.emit('part.upserted', turn='old', part={'type': 'text', 'partId': 'p', 'text': 'history'})
-        self.part('child', part_id='child', source='sub-agent')
+        self.stream('text_delta', 'history', turn='old')
+        self.stream('text_delta', 'child', source='sub-agent')
         self.emit('tool.updated', kind='scheduled', toolCallId='c', toolName='Read', childSessionId='child')
         for identity in ({'session': 'foreign'}, {'turn': 'old'}, {'source': 'sub-agent'}):
             self.emit('model.streaming', kind='tool_call', toolCallId='c', toolName='Read',
                       input={'file_path': 'secret'}, delta='', done=False, **identity)
-        self.emit('message.upserted', message={'info': {'role': 'assistant', 'parentToolCallId': 'child'},
-                                             'parts': [{'type': 'text', 'partId': 'p', 'text': 'child'}]})
         self.assertEqual(self.record.events, before)
 
-    def test_unknown_native_content_is_a_marker_without_raw_payload(self):
-        self.emit('part.upserted', part={'type': 'image', 'partId': 'image', 'data': 'secret'})
-        self.emit('part.upserted', part={'type': 'text', 'text': {'private': 'secret'}})
-        self.emit('part.upserted', part={'type': 'plan', 'partId': 'plan', 'entries': [{'status': []}]})
+    def test_unusable_content_frames_are_markers_without_raw_payload(self):
+        self.stream('text_delta', {'private': 'secret'})
+        self.stream('reasoning_delta', 5)
+        self.stream('text_delta', 'secret', message_id=None)
+        count = len(self.record.events)
+        self.stream('text_delta', '')  # an empty delta carries nothing, not even a marker
+        self.emit('model.streaming', assistantMessageId='msg-1', kind='text_start', delta='', done=False)
+        self.emit('model.streaming', kind='tool_input_start', toolCallId='call', toolName='Read',
+                  delta='', done=False)
+        self.assertEqual(len(self.record.events), count)
         self.emit('tool.updated', kind=[], toolCallId='c')
         self.emit('tool.updated', kind='scheduled', toolCallId=[])
         serialized = json.dumps(self.record.events)
-        self.assertIn('[image]', serialized)
-        self.assertIn('[plan]', serialized)
+        self.assertIn('[model-streaming-text_delta]', serialized)
+        self.assertIn('[unknown-tool-phase]', serialized)
+        self.assertIn('[unidentified-tool-call]', serialized)
         self.assertNotIn('secret', serialized)
-
-    def test_existing_idless_native_stream_keeps_deltas_and_deduplicates_snapshot(self):
-        self.emit('part.started', part={'type': 'text', 'text': ''})
-        self.emit('part.delta', delta={'type': 'text', 'text': '{'})
-        self.emit('message.upserted', message={'parts': [{'type': 'text', 'text': '{"choice":"a"}'}]})
-        self.emit('turn.completed', response='{"choice":"a"}')
-        events = self.record.events[1:]
-        self.assertEqual(''.join(e['content']['text'] for e in events), '{"choice":"a"}')
-        self.assertEqual(len({(e['_meta']['nativeItemId'], e['_meta']['contentSegment']) for e in events}), 1)
 
     def test_pre_model_events_do_not_open_record(self):
         record = MemoryRecord()
         projector = ZcodeSessionProjector(record)
         projector.start_prompt('root', 'input', 'prompt', 'invocation')
         projector.observe_notification({'method': 'session/event', 'params': {'sessionId': 'root',
-            'turnId': 'old', 'type': 'part.upserted', 'payload': {'part': {'type': 'text', 'text': 'old'}}}})
+            'turnId': 'old', 'type': 'model.streaming', 'payload': {'kind': 'text_delta',
+                'assistantMessageId': 'msg-old', 'delta': 'old', 'done': False}}})
         self.assertEqual(record.events, [])
 
 
@@ -334,7 +327,7 @@ class WorkerSessionTests(MockNativeCase):
         self.assertTrue(any(e.get('status') == 'completed' and e.get('rawOutput') for e in events))
         self.assertIsNotNone(result.value)
 
-    def test_worker_synthetic_stream_records_six_updates_and_deduplicates_tool_result(self):
+    def test_worker_stream_records_every_content_kind_and_deduplicates_tool_result(self):
         from hey_my_buddy.buddy.roles.run_observers import worker_observer
         request, services = self.worker_request(self.context().turn['input'])
         with mock.patch.dict(os.environ, {**self.environment, 'HMB_ZCODE_TEST_CASE': 'session-content'}, clear=True):
@@ -342,9 +335,14 @@ class WorkerSessionTests(MockNativeCase):
         self.assertEqual(result.end.status, 'ok', result.end.message)
         events = self.events(request)
         self.assertEqual({e['sessionUpdate'] for e in events}, {'user_message_chunk', 'agent_message_chunk',
-            'agent_thought_chunk', 'tool_call', 'tool_call_update', 'plan'})
+            'agent_thought_chunk', 'tool_call', 'tool_call_update'})
         self.assertEqual([e['content']['text'] for e in events if e['sessionUpdate'] == 'agent_thought_chunk'],
                          ['fixture reasoning that is never assistant output'])
+        self.assertEqual([e['content']['text'] for e in events if e['sessionUpdate'] == 'agent_message_chunk'],
+                         ['fixture 正文 before the tools', 'fixture body after the tools',
+                          'fixture final text is not the outcome'])
+        final = [e for e in events if e['sessionUpdate'] == 'agent_message_chunk'][-1]
+        self.assertTrue(final['_meta']['replace'])  # the response revises the final body
         for call_id, expected in (('display-read', {'file_path': '/workspace/file.py'}),
                                   ('display-execute', {'command': 'pwd'})):
             calls = [e for e in events if e.get('toolCallId') == call_id and e['sessionUpdate'] == 'tool_call']
@@ -358,7 +356,11 @@ class WorkerSessionTests(MockNativeCase):
         self.assertEqual(output[0]['content'][0]['content']['text'], 'file 中文')
         self.assertNotIn('secret', json.dumps(events))
 
-    def test_resumed_worker_excludes_replayed_history_and_preserves_same_attempt_record(self):
+    @staticmethod
+    def record_end(events):
+        return events[-1]
+
+    def test_resumed_worker_records_its_own_stream_in_the_same_attempt_record(self):
         from hey_my_buddy.buddy.harnesses.run_contract import RunContinuation
         from hey_my_buddy.buddy.roles.run_observers import worker_observer
         first_input = self.context().turn['input']
@@ -379,7 +381,7 @@ class WorkerSessionTests(MockNativeCase):
         self.assertEqual(events[:len(original)], original)
         self.assertNotIn('secret', json.dumps(events))
         self.assertEqual(sum(e['sessionUpdate'] == 'user_message_chunk' for e in events), 2)
-        self.assertTrue(any(e['sessionUpdate'] == 'agent_thought_chunk' for e in events))
+        self.assertEqual(sum(e['sessionUpdate'] == 'agent_thought_chunk' for e in events), 1)
 
     def test_worker_write_failure_preserves_completed_receipt_and_stop(self):
         from hey_my_buddy.buddy.roles.run_observers import worker_observer

@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
 """Explicit installed-ZCode checks against a localhost model fixture.
 
-Run from the checkout root:
-    PYTHONPATH=src:tests/python python tests/probes/zcode_native.py -v
+Run from the checkout root (``HMB_DEV_SOURCE`` lets the ``HMB_ZCODE_CLI``
+override below take effect; without it the run falls back to a selected
+fixture and fails its catalog):
+    HMB_DEV_SOURCE=1 PYTHONPATH=src:tests/python python tests/probes/zcode_native.py -v
 A single check can be selected with InstalledZcodeTests.<test_name>.
 
 This starts the installed macOS ZCode bundle through Node and sandbox-exec,
@@ -20,6 +22,7 @@ import json
 import os
 import shlex
 import shutil
+import sqlite3
 import threading
 import unittest
 from unittest import mock
@@ -66,6 +69,11 @@ class InstalledZcodeTests(ZcodeFixtureCase):
                 if finish and (not called or scenario.correct_failed_finish and rejected):
                     if scenario.omit_first_request and not called:
                         outcome.pop("request")
+                    # Body and reasoning stream before the finish tool call, so
+                    # the probe can hold the session record against what the
+                    # app itself stores for the same turn.
+                    chunk({"reasoning_content": "probe reasoning before the finish call"})
+                    chunk({"content": "probe body before the finish call."})
                     chunk({"role": "assistant", "tool_calls": [{"index": 0, "id": f"call_native_finish_{len(tool_results) + 1}",
                            "type": "function", "function": {"name": finish, "arguments": json.dumps(outcome)}}]})
                     chunk({}, "tool_calls")
@@ -108,14 +116,36 @@ class InstalledZcodeTests(ZcodeFixtureCase):
         wrapper.chmod(0o700)
         self.environment["HMB_ZCODE_CLI"] = str(wrapper)
 
+    def assert_streamed_content_recorded(self, handle, context, session_id):
+        """Body and reasoning in the native session store are in our record too."""
+        native_root = Path(handle.role_run_control["nativeRoot"])
+        connection = sqlite3.connect(f"file:{native_root / 'sessions.sqlite'}?mode=ro", uri=True)
+        try:
+            part_types = {row[0] for row in connection.execute(
+                "SELECT json_extract(data, '$.type') FROM part WHERE session_id = ?", (session_id,))}
+        finally:
+            connection.close()
+        self.assertIn("text", part_types, "the native store holds this turn's body parts")
+        self.assertIn("reasoning", part_types, "the native store holds this turn's reasoning parts")
+        updates = [json.loads(line) for line in
+                   Path(context.session_record_path).read_text(encoding="utf-8").splitlines()]
+        updates = [entry["update"] for entry in updates if "update" in entry]
+        thoughts = [u["content"]["text"] for u in updates if u["sessionUpdate"] == "agent_thought_chunk"]
+        messages = [u["content"]["text"] for u in updates if u["sessionUpdate"] == "agent_message_chunk"]
+        self.assertIn("probe reasoning before the finish call", thoughts)
+        self.assertIn("probe body before the finish call.", messages)
+        self.assertEqual(messages.count("Native fixture finished."), 1,
+                         "the final response must appear once, not streamed and echoed")
+
     def test_native_root_finish_and_exact_resume_keep_coding_tools(self):
         context = self.context(timeout=30)
         context.spec["model"] = "GLM-5.3-Flash"
-        _, first = self.execute(context)
+        first_handle, first = self.execute(context)
         self.assertEqual(first.status, "ok", first.to_report())
         first_turn = first.result["turn"]
         self.assertEqual(first_turn["outcome"]["summary"], "localhost native fixture completed")
         self.assertEqual(first_turn["provenance"]["settlement"], "session-closed")
+        self.assert_streamed_content_recorded(first_handle, context, first_turn["sessionId"])
         self.assertIn("Bash", self.requests[0]["tools"])
         self.assertTrue(any(name in self.requests[0]["tools"] for name in ("Agent", "Task")), self.requests[0]["tools"])
         resumed = self.context(index=2, previous=first_turn["sessionId"], timeout=30)
@@ -125,6 +155,7 @@ class InstalledZcodeTests(ZcodeFixtureCase):
         second_turn = second.result["turn"]
         self.assertEqual(second_turn["sessionId"], first_turn["sessionId"])
         self.assertNotEqual(second_turn["provenance"]["nativeTurnId"], first_turn["provenance"]["nativeTurnId"])
+        self.assert_streamed_content_recorded(second_handle, resumed, second_turn["sessionId"])
         self.assertEqual(second_handle.result.buddy.checked.effort.value, "low")
         self.assertEqual(second.result["requested"], {
             key: value.value for key in ("provider", "model", "effort")

@@ -931,27 +931,14 @@ def _root_model_activity(message: dict, session_id: str, turn_id: str | None) ->
     kind = params.get("type")
     if kind == "tool.updated":
         return data.get("kind") in ("scheduled", "started", "progress", "result", "error")
-    if kind == "message.upserted":
-        item = data.get("message")
-        if not isinstance(item, dict):
-            return False
-        info = item.get("info") if isinstance(item.get("info"), dict) else item
-        if info.get("role") not in (None, "assistant"):
-            return False
-        tokens = info.get("tokens") if isinstance(info.get("tokens"), dict) else {}
-        if any(type(tokens.get(key)) is int and tokens[key] > 0 for key in ("output", "reasoning")):
+    if kind == "model.streaming":
+        stream_kind = data.get("kind")
+        if stream_kind == "tool_call":
             return True
-        parts = item.get("parts") if isinstance(item.get("parts"), list) else []
-        return any(isinstance(part, dict) and part.get("type") in ("text", "reasoning", "thinking")
-                   and isinstance(part.get("text"), str) and bool(part["text"].strip()) for part in parts)
-    if kind in ("part.started", "part.delta", "part.upserted"):
-        part = data.get("part") if isinstance(data.get("part"), dict) else data.get("delta")
-        if not isinstance(part, dict):
-            return False
-        if part.get("type") in ("tool", "tool-call", "tool_call"):
-            return True
-        return part.get("type") in ("text", "reasoning", "thinking") and any(
-            isinstance(part.get(key), str) and bool(part[key].strip()) for key in ("text", "content"))
+        # The two content stream frames the 0.17.0 app really emits (recorded
+        # by the session-content probe); envelope frames carry no activity.
+        return stream_kind in ("text_delta", "reasoning_delta") and isinstance(
+            data.get("delta"), str) and bool(data["delta"].strip())
     return False
 
 
