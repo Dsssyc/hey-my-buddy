@@ -92,7 +92,6 @@ from ..inquiry_bridge import InquiryBridge
 from ..c_two_live import CTwoLiveEndpoint
 from ....protocol.activity import ActivityPublisher
 from .protocol import (
-    COOPERATIVE_INQUIRY_NOTE,
     ActivityProjection,
     NativeConnection,
     NativeError,
@@ -364,7 +363,7 @@ def make_inquiry_bridge(*, identity: dict, journal_path: str,
                         live: CTwoLiveEndpoint | None = None) -> InquiryBridge:
     return InquiryBridge(identity=identity, journal_path=journal_path,
                          attention_path=attention_path, live=live, error_factory=NativeError,
-                         event_metadata=_inquiry_event_metadata, limitation=COOPERATIVE_INQUIRY_NOTE)
+                         event_metadata=_inquiry_event_metadata)
 
 
 def check_preparation(spec: dict, environment: dict) -> None:

@@ -8,7 +8,7 @@ import json
 import re
 import sqlite3
 
-from .db import (COMMAND_DELETION_COLUMN, HOST_CONCLUSION_INDEX, HOST_CONCLUSION_TABLE,
+from .db import (COMMAND_DELETION_COLUMN, CORE_SCHEMA, HOST_CONCLUSION_INDEX, HOST_CONCLUSION_TABLE,
                  MACRO_TASK_DELETIONS_DDL, WORKFLOW_REQUESTS_DDL,
                  EVALUATION_TABLES, WORKFLOW_TABLES, canonical_json)
 from ...errors import BoardError
@@ -1003,6 +1003,120 @@ def _upgrade_routing_copies(connection: sqlite3.Connection) -> None:
                                (canonical_json(payload), seq))
 
 
+# The sentence, emitter and storage bound identify the schema-24 writer.
+_INQUIRY_PROGRAM_REASONS = {
+    'no live agent to receive this question': 'inquiry-no-live-agent',
+    'the attempt ended before this question could be delivered': 'inquiry-queued-at-attempt-end',
+    'this adapter observes native activity but has no correlated inquiry capability': 'inquiry-observe-only',
+    'the live bridge reported answered without usable answer text': 'inquiry-answer-empty',
+    'the bridge recorded an answered journal entry without usable answer text': 'inquiry-answer-empty',
+    'the micro task root turn ended before this inquiry was answered': 'inquiry-root-turn-ended',
+    'the micro task root turn ended before reading or answering this inquiry; its queued follow-up was stopped': 'inquiry-root-turn-ended',
+    "Host questions reach this root only when the root itself calls hey_my_buddy_checkpoint inside the one admitted native turn (cooperative-checkpoint delivery); they are never injected mid-turn, never start a new turn, and an answer counts only through hey_my_buddy_answer_inquiry verified against this root turn's own tool evidence": 'inquiry-root-turn-ended',
+    "Host questions are queued by the bridge and delivered only at the root's next hey_my_buddy_checkpoint or finish refusal inside the same admitted native turn; they are never injected through session/send, a v4 command, a stop, a restart or a new turn, and an answer counts only through hey_my_buddy_answer_inquiry verified against the root turn's own tool evidence": 'inquiry-root-turn-ended',
+}
+_INQUIRY_PROGRAM_ACTORS = {('bridge', 'live-bridge'), ('bridge', 'bridge-journal'),
+                           ('service', 'attempt-finished')}
+
+
+def _message_reason(connection: sqlite3.Connection, row: sqlite3.Row) -> dict | None:
+    if row['state'] == 'answered':
+        return None
+    old = row['reason']
+    if old is None:
+        return None
+    events = connection.execute(
+        "SELECT kind,payload_json,actor_role,actor_id FROM events WHERE task_id=? "
+        "AND kind IN ('message.posted','message.updated')", (row['task_id'],))
+    sources = set()
+    posted_unavailable = False
+    for event in events:
+        payload = json.loads(event['payload_json'])
+        if payload.get('inquiryId') != row['inquiry_id']:
+            continue
+        if event['kind'] == 'message.updated':
+            sources.add((event['actor_role'], event['actor_id']))
+        elif payload.get('state') == 'unavailable':
+            posted_unavailable = True
+    program = bool(sources & _INQUIRY_PROGRAM_ACTORS)
+    if posted_unavailable and old == 'no live agent to receive this question':
+        return make_reason('inquiry-no-live-agent')
+    if program:
+        for text, code in _INQUIRY_PROGRAM_REASONS.items():
+            # Old journal/mark writes had a 400-character bound; live answers
+            # had a 200-character bound. These are finite known writer forms.
+            if old in (text, text[:400], text[:200]):
+                return {'code': code, 'params': {}}
+        match = re.fullmatch(r'the bridge cannot deliver this question \((agent-gone|agent-not-running|journal-unavailable)\)', old)
+        if match:
+            return make_reason('bridge-refused', error=match[1])
+    raise BoardError('UPGRADE_INVALID_BOARD', 'Message reason has no recognized writer')
+
+
+def _upgrade_messages(connection: sqlite3.Connection) -> None:
+    ddl = CORE_SCHEMA.split('CREATE TABLE IF NOT EXISTS messages (', 1)[1].split(';', 1)[0]
+    columns = ('message_id', 'task_id', 'attempt_id', 'inquiry_id', 'direction', 'author',
+               'recipient', 'correlation_id', 'body', 'body_bytes', 'payload_hash', 'state',
+               'reason_code', 'reason_params_json', 'delivery_json', 'answer_json',
+               'attempts_count', 'created_at', 'updated_at', 'revision')
+    converted = []
+    for row in connection.execute('SELECT * FROM messages').fetchall():
+        reason = _message_reason(connection, row)
+        values = {key: row[key] for key in columns if key not in ('reason_code', 'reason_params_json')}
+        if row['state'] == 'queued' and row['attempt_id'] is not None:
+            attempt = connection.execute('SELECT execution_state FROM attempts WHERE attempt_id=?',
+                                         (row['attempt_id'],)).fetchone()
+            if attempt['execution_state'] == 'finished':
+                values['state'] = 'unavailable'
+                reason = make_reason('inquiry-queued-at-attempt-end')
+        values.update(reason_code=reason['code'] if reason else None,
+                      reason_params_json=canonical_json(reason['params']) if reason else None)
+        converted.append(tuple(values[key] for key in columns))
+    connection.execute('DROP TABLE messages')
+    connection.execute('CREATE TABLE IF NOT EXISTS messages (' + ddl)
+    connection.executemany('INSERT INTO messages (' + ','.join(columns) + ') VALUES ('
+                           + ','.join('?' for _ in columns) + ')', converted)
+    connection.execute('CREATE INDEX messages_task_idx ON messages(task_id, created_at)')
+    connection.execute('CREATE INDEX messages_state_idx ON messages(state)')
+
+
+def _upgrade_inquiry_waiting(connection: sqlite3.Connection) -> None:
+    for row in connection.execute("SELECT seq,payload_json FROM events WHERE kind='attempt.waiting'").fetchall():
+        payload = json.loads(row['payload_json'])
+        old = payload.get('reason')
+        if old is None:
+            continue
+        elif old == 'router-input-unknown':
+            payload['reason'] = make_reason('router-input-unknown')
+        else:
+            raise BoardError('UPGRADE_INVALID_BOARD', 'Unknown stored attempt waiting reason')
+        connection.execute('UPDATE events SET payload_json=? WHERE seq=?',
+                           (canonical_json(payload), row['seq']))
+
+    def convert(activity: dict) -> bool:
+        old = activity.get('waitingReason')
+        if old is None:
+            return False
+        match = (re.fullmatch(r'native (permission\.requested|userInput\.requested) requires Host authority', old)
+                 if isinstance(old, str) else None)
+        if not match:
+            raise BoardError('UPGRADE_INVALID_BOARD', 'Unknown stored native waiting reason')
+        activity['waitingReason'] = make_reason('native-authority-required',
+                                                kind='permission' if match[1] == 'permission.requested' else 'user-input')
+        return True
+
+    for row in connection.execute('SELECT attempt_id,activity_json FROM attempt_activity').fetchall():
+        activity = json.loads(row['activity_json'])
+        if convert(activity):
+            connection.execute('UPDATE attempt_activity SET activity_json=? WHERE attempt_id=?',
+                               (canonical_json(activity), row['attempt_id']))
+    for row in connection.execute("SELECT seq,payload_json FROM events WHERE kind='attempt.activity'").fetchall():
+        payload = json.loads(row['payload_json'])
+        if convert(payload['activity']):
+            connection.execute('UPDATE events SET payload_json=? WHERE seq=?',
+                               (canonical_json(payload), row['seq']))
+
+
 def upgrade_schema_24_to_25(state: Path) -> None:
     """Convert a stopped schema-24 board after its exact rollback backup exists."""
     with closing(sqlite3.connect(Path(state) / 'board.sqlite3')) as connection:
@@ -1024,6 +1138,8 @@ def upgrade_schema_24_to_25(state: Path) -> None:
             _upgrade_routing_copies(connection)
             _upgrade_notes(connection)
             _upgrade_host_conclusions(connection)
+            _upgrade_messages(connection)
+            _upgrade_inquiry_waiting(connection)
             connection.execute("UPDATE meta SET value='25' WHERE key='schema_version'")
             if connection.execute('PRAGMA foreign_key_check').fetchall():
                 raise BoardError('UPGRADE_INVALID_BOARD', 'The upgraded board has foreign key violations')

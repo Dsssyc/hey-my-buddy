@@ -222,7 +222,7 @@ class NativeInquiryTests(NativeRunCase):
         self.assertEqual(report["answered"], 0)
         self.assertEqual(report["unansweredDelivered"], 1)
         self.assertEqual(self.bridge.entries["q1"]["state"], "unavailable")
-        self.assertIn("before reading", self.bridge.entries["q1"]["reason"])
+        self.assertNotIn("reason", self.bridge.entries["q1"])
         self.assertFalse((self.cwd / "unadmitted-followup-write.txt").exists())
         self.assertFalse(self.fixture_state().get("unadmittedFollowupRan", False))
         self.assertEqual(result.stop_evidence.native.group_state, "gone")

@@ -17,6 +17,9 @@
   "answer-not-json": [],
   "answer-shape": [],
   "answer-unexpected-field": [],
+  "bridge-refused": [
+    "error"
+  ],
   "call-timeout": [],
   "catalog-unavailable": [],
   "catalog.account-binding-changed": [],
@@ -122,6 +125,15 @@
     "recordId"
   ],
   "interrupted-before-delivery": [],
+  "inquiry-answer-empty": [],
+  "inquiry-no-live-agent": [],
+  "inquiry-observe-only": [],
+  "inquiry-queued-at-attempt-end": [],
+  "inquiry-root-turn-ended": [],
+  "journal-attempt-mismatch": [],
+  "journal-attempt-unbound": [],
+  "journal-question-unknown": [],
+  "journal-task-mismatch": [],
   "lead.owned-concluded": [
     "leadRunId"
   ],
@@ -157,6 +169,9 @@
   "micro-task-cancelled": [],
   "micro-task-not-found": [],
   "micro-task-not-owned": [],
+  "native-authority-required": [
+    "kind"
+  ],
   "model-cursor-shape-unreadable": [],
   "model-list-shape-unreadable": [],
   "no-legal-candidate": [],
@@ -176,6 +191,7 @@
   ],
   "router-incomplete": [],
   "router-input-changed": [],
+  "router-input-unknown": [],
   "router-input-too-large": [
     "bytes",
     "limit",

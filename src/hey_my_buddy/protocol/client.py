@@ -118,14 +118,13 @@ class BoardClient:
             {**selector, "inquiryId": inquiry_id, "question": question, "author": author},
         )
 
-    def update_message(self, inquiry_id: str, *, state: str | None = None, reason: str | None = None, delivery: dict | None = None, answer: dict | None = None, **selector: Any) -> dict:
+    def update_message(self, inquiry_id: str, *, state: str | None = None, delivery: dict | None = None, answer: dict | None = None, **selector: Any) -> dict:
         return self.call(
             "message_update",
             {
                 **selector,
                 "inquiryId": inquiry_id,
                 "state": state,
-                "reason": reason,
                 "delivery": delivery,
                 "answer": answer,
             },

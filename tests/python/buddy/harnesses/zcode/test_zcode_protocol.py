@@ -15,6 +15,7 @@ from hey_my_buddy.buddy.harnesses.run_contract import RunBuddy
 from hey_my_buddy.buddy.harnesses.session_receipts import sign_receipt
 from hey_my_buddy.buddy.roles.session_mcp import respond
 from hey_my_buddy.buddy.harnesses.zcode.protocol import (
+    ActivityProjection,
     NativeConnection,
     NativeError,
     RootTurnEvidence,
@@ -36,6 +37,15 @@ from hey_my_buddy.buddy.roles.turn_io import validate_outcome
 
 FALLBACK_PREFERENCES = {"memoryEnabled": {"value": False, "source": "fallback"},
                         "nativeSearchEnhancementsEnabled": {"value": True, "source": "fallback"}}
+
+
+class ActivityReasonTests(unittest.TestCase):
+    def test_native_authority_requests_publish_structured_reason(self):
+        activity = ActivityProjection('session-1')
+        for kind, expected in (('permission.requested', 'permission'), ('userInput.requested', 'user-input')):
+            activity.note({'method': 'session/event', 'params': {'type': kind, 'payload': {}}}, 1)
+            self.assertEqual(activity.payload()['waitingReason'],
+                             {'code': 'native-authority-required', 'params': {'kind': expected}})
 
 
 class ReceiptTests(unittest.TestCase):

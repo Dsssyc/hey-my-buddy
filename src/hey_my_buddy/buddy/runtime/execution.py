@@ -33,6 +33,7 @@ from ...protocol import activity as activity_module
 from ...protocol import execution as execution_protocol
 from ...protocol.contracts import ExecutionLive
 from ...protocol.run_identity import RunIdentity
+from ...protocol.reasons import reason as make_reason
 from ...json_codec import canonical_json, decode_strict_json
 from ...protocol.stop import WRAP_UP_INITIATORS, TERMINATION_REASONS
 from ..harnesses.registry import ExecutionContext
@@ -526,7 +527,7 @@ class Execution:
         unknown_reads = 0
         while preparation.error is not None and preparation.error.code == 'router-input-unknown':
             control.raise_fatal()
-            self._wait_control_observation(claim, control, preparation.error.code, unknown_reads)
+            self._wait_control_observation(claim, control, unknown_reads)
             unknown_reads += 1
             preparation = role_seam.prepare_worker_run(implementation, context)
         if not preparation.available:
@@ -612,7 +613,7 @@ class Execution:
                 if error.code != 'router-input-unknown':
                     raise
                 holder['confirmed_stopped'] = True
-                self._wait_control_observation(claim, control, error.code, unknown_reads)
+                self._wait_control_observation(claim, control, unknown_reads)
                 unknown_reads += 1
         holder["confirmed_stopped"] = outcome.shutdown_confirmed is True
         result = getattr(handle, "result", None)
@@ -664,10 +665,10 @@ class Execution:
         report["runtimeIdentity"] = context.runtime.get("identity")
         return self.receipt(claim, report, directory)
 
-    def _wait_control_observation(self, claim, control, reason, retry):
+    def _wait_control_observation(self, claim, control, retry):
         control.raise_fatal()
         attempt = claim['attempt']
-        self.hint(waitingReason=reason)
+        self.hint(waitingReason=make_reason('router-input-unknown'))
         control.wait(min(PREFLIGHT_MAX_RETRY_SECONDS, PREFLIGHT_RETRY_SECONDS * 2 ** min(retry, 4)))
         control.raise_fatal()
         if control.cancel_view is not None or self.stop_requested():

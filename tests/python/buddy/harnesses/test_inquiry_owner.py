@@ -34,7 +34,7 @@ from hey_my_buddy.buddy.harnesses.session_receipts import (
     INQUIRY_JOURNAL_VERSION, MAX_JOURNAL_BYTES,
 )
 from hey_my_buddy.buddy.harnesses.zcode.protocol import (
-    COOPERATIVE_INQUIRY_NOTE, NativeError, RootTurnEvidence,
+    NativeError, RootTurnEvidence,
 )
 from hey_my_buddy.buddy.roles import turn_io
 from hey_my_buddy.buddy.roles.session_mcp import respond
@@ -68,7 +68,7 @@ def make_bridge(directory: Path, endpoint=None, *, identity=None) -> ib.InquiryB
         attention_path=str(directory / "attention.json"),
         error_factory=NativeError,
         event_metadata=lambda message: {"kind": message.get("method", "event")},
-        limitation=COOPERATIVE_INQUIRY_NOTE, live=endpoint)
+        live=endpoint)
 
 
 def request(question_id="q-owner", question="What has been verified?", request_id=None):
@@ -308,6 +308,9 @@ class InquiryJournalProjectionTests(unittest.TestCase):
         self.assertEqual(fact["records"], [queued, delivered])
         self.assertEqual({item["questionId"] for item in fact["rejections"]},
                          {"q-rejected", "q-version"})
+        self.assertEqual({item["questionId"]: item["reason"] for item in fact["rejections"]},
+                         {"q-rejected": "journal-attempt-mismatch",
+                          "q-version": "journal-attempt-unbound"})
         self.assertEqual(self.path.read_bytes(), original)
 
     def test_projection_uses_only_shared_locked_read_and_preserves_answer_source_fields(self):

@@ -180,7 +180,7 @@ class ZcodeCheckpointFlowTests(ZcodeFixtureCase):
         self.assertEqual(outcome.result["turn"]["outcome"]["disposition"], "assistance")
         records = self.inquiry_records(context, "q-1")
         self.assertEqual([record["state"] for record in records], ["queued", "delivered", "unavailable"])
-        self.assertIn("ended before this inquiry was answered", records[-1]["reason"])
+        self.assertNotIn("reason", records[-1])
 
     def test_a_question_after_the_final_receipt_becomes_honest_unavailable(self):
         context = self.context("inquiry-late", timeout=40)
@@ -200,7 +200,7 @@ class ZcodeCheckpointFlowTests(ZcodeFixtureCase):
         self.assertEqual(self.native_log(context, "methods.jsonl").split().count("session/send"), 1)
         records = self.inquiry_records(context, "q-late")
         self.assertEqual([record["state"] for record in records], ["queued", "unavailable"])
-        self.assertIn("ended before this inquiry was answered", records[-1]["reason"])
+        self.assertNotIn("reason", records[-1])
 
     def test_a_child_relay_cannot_deliver_or_answer(self):
         context = self.context("inquiry-child", timeout=40)

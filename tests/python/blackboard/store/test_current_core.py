@@ -185,7 +185,7 @@ class CurrentCoreTests(BoardTestCase):
                 client.submit_result(attempt["attemptId"], attempt["generation"], "n" * 32, report)
                 pending = client.get_message("q-pending", runId=task["taskId"])
                 self.assertEqual(pending["state"], "unavailable")
-                self.assertIn("attempt ended", pending["reason"])
+                self.assertEqual(pending["reason"], {"code": "inquiry-queued-at-attempt-end", "params": {}})
                 self.assertEqual(client.get_message("q-delivered", runId=task["taskId"])["state"], "delivered")
                 self.assertEqual(client.get_message("q-answered", runId=task["taskId"])["answer"]["text"], "Still working")
                 events = client.read_events(taskId=task["taskId"])

@@ -24,7 +24,6 @@ from support import FIXTURE_CATALOG, BoardTestCase
 from hey_my_buddy.errors import BoardError
 from hey_my_buddy.blackboard.tasks.inquiry import (
     MAX_JOURNAL_BYTES,
-    NOTE,
     observe,
     read_journal,
 )
@@ -426,7 +425,7 @@ class TestInquiry(BoardTestCase):
             message = client.get_message("q-empty", runId=task["runId"])
             self.assertEqual(message["state"], "delivered", "answered without usable text must not be recorded")
             self.assertIsNone(message["answer"])
-            self.assertIn("without usable answer text", message["reason"])
+            self.assertEqual(message["reason"], {"code": "inquiry-answer-empty", "params": {}})
         finally:
             bridge.close()
 
@@ -471,7 +470,7 @@ class TestInquiry(BoardTestCase):
         dsh_task = self._submit_dsh(client, self.workdir(), request_id="no-bridge")
         result = board.call("inquiry_observe", {"runId": dsh_task["runId"]})
         self.assertFalse(result["bridge"]["enabled"])
-        self.assertIn("has not attached", result["bridge"]["reason"] or "")
+        self.assertEqual(result["bridge"]["reason"], "channel-unbound")
         command_task = board.submit_execution(
             requestId="no-bridge-command",
             task="do",
@@ -480,7 +479,7 @@ class TestInquiry(BoardTestCase):
             argv=["/bin/true"],
         )["task"]
         command_result = board.call("inquiry_observe", {"runId": command_task["runId"]})
-        self.assertIn("no observation or inquiry capability", command_result["bridge"]["reason"])
+        self.assertIsNone(command_result["bridge"]["reason"])
         self.assertIn("agentStatus", result["live"]["unavailable"])
         self.assertEqual(result["limits"]["maxQuestionBytes"], 4000)
         self.assertEqual(result["limits"]["maxInquiriesPerRun"], 32)
@@ -519,7 +518,7 @@ class TestInquiry(BoardTestCase):
         )["task"]
         result = board.call("inquiry_observe", {"runId": task["runId"]})
         self.assertFalse(result["bridge"]["enabled"])
-        self.assertIn("no observation or inquiry capability", result["bridge"]["reason"])
+        self.assertIsNone(result["bridge"]["reason"])
 
     def test_inquiry_capability_comes_from_the_adapter_registry(self):
         from hey_my_buddy.blackboard.tasks.inquiry import inquiry_capable
@@ -554,7 +553,7 @@ class TestInquiry(BoardTestCase):
             self.assertEqual(result["bridge"]["error"], "journal-unavailable")
             message = client.get_message("q-journal-failed", runId=task["runId"])
             self.assertEqual(message["state"], "unavailable")
-            self.assertIn("journal-unavailable", message["reason"])
+            self.assertEqual(message["reason"], {"code": "bridge-refused", "params": {"error": "journal-unavailable"}})
             self.assertEqual(client.get(runId=task["runId"])["state"], "running")
         finally:
             bridge.close()
@@ -574,7 +573,7 @@ class TestInquiry(BoardTestCase):
             self.assertEqual(result["bridge"]["error"], "agent-gone")
             message = client.get_message("q-ended", runId=task["runId"])
             self.assertEqual(message["state"], "unavailable")
-            self.assertIn("agent-gone", message["reason"])
+            self.assertEqual(message["reason"], {"code": "bridge-refused", "params": {"error": "agent-gone"}})
             self.assertIsNone(message["answer"])
         finally:
             bridge.close()
@@ -595,7 +594,7 @@ class TestInquiry(BoardTestCase):
                 "inquiry_observe",
                 {"runId": task["runId"], "inquiryId": "q-foreign", "question": "who are you?"},
             )
-            self.assertIn("another", result["bridge"]["journalRejected"])
+            self.assertEqual(result["bridge"]["journalRejected"], "journal-task-mismatch")
             message = client.get_message("q-foreign", runId=task["runId"])
             self.assertIsNone(message["answer"], "a foreign journal record must never be imported as an answer")
         finally:
@@ -718,7 +717,7 @@ class TestInquiry(BoardTestCase):
         result = board.call("inquiry_observe", {"runId": task["runId"], "inquiryId": "q-terminal",
                             "question": "what was the last answer?", "waitMs": 100})
         self.assertEqual(result["phase"], "terminal")
-        self.assertIn("cannot be woken", result["bridge"]["reason"])
+        self.assertIsNone(result["bridge"]["reason"])
         self.assertEqual(result["inquiry"]["state"], "answered")
         self.assertEqual(result["inquiry"]["answer"]["text"], "durable history")
         self.assertEqual(result["inquiry"]["answer"]["source"], "bridge-journal")
@@ -727,7 +726,7 @@ class TestInquiry(BoardTestCase):
             with self.subTest(source=label):
                 rejected = board.call("inquiry_observe", {"runId": task["runId"],
                                       "inquiryId": question_id, "question": "historical probe"})
-                self.assertEqual(rejected["bridge"]["journalRejected"], f"the journal record belongs to another {label}")
+                self.assertEqual(rejected["bridge"]["journalRejected"], f"journal-{label}-mismatch")
                 self.assertFalse(rejected["inquiry"]["answer"]["available"])
         self.assertEqual(len(owner.requests), before)
         with board.store.db.read() as db:
@@ -752,12 +751,13 @@ class TestInquiry(BoardTestCase):
         owner.append({"inquiryId": "q-orphan", "state": "answered", "answer": {"text": "orphan"}})
         result = board.call("inquiry_observe", {"runId": task["runId"]})
         self.assertTrue(result["bridge"]["observed"])
+        self.assertEqual(result["journal"]["rejections"]["q-orphan"], "journal-question-unknown")
         self.assertEqual(client.get_message("q-delivered", runId=task["runId"])["state"], "delivered")
         self.assertEqual(client.get_message("q-answered", runId=task["runId"])["answer"]["text"], "native answer")
         self.assertEqual(client.get_message("q-foreign", runId=task["runId"])["state"], "queued")
         rejected = board.call("inquiry_observe", {"runId": task["runId"],
                               "inquiryId": "q-foreign", "question": "status?"})
-        self.assertIn("another task", rejected["bridge"]["journalRejected"])
+        self.assertEqual(rejected["bridge"]["journalRejected"], "journal-task-mismatch")
         self.assertNotIn("journalImported", rejected["bridge"])
         self.assertEqual(client.get_message("q-foreign", runId=task["runId"])["state"], "queued")
         with self.assertRaises(BoardError) as error:
@@ -794,18 +794,17 @@ class TestInquiry(BoardTestCase):
                 self.assertTrue(result["journal"]["available"])
                 message = client.get_message("q-ended", runId=task["runId"])
                 self.assertEqual(message["state"], "unavailable")
-                self.assertEqual(message["reason"], reason)
+                self.assertEqual(message["reason"], {"code": "inquiry-root-turn-ended", "params": {}})
                 self.assertEqual(len(owner.requests), before)
 
-    def test_message_reason_keeps_the_full_live_bound(self):
+    def test_message_update_accepts_neither_reason_nor_note(self):
         board = self.board()
         client = board.client()
         task, _attempt, _owner = self._attempt_directory(board, client)
         client.post_question("q-reason", "status?", runId=task["runId"])
-        reason = "x" * 400
-        board.store.message_update({"runId": task["runId"], "inquiryId": "q-reason",
-                                    "state": "unavailable", "reason": reason + "overflow"})
-        self.assertEqual(client.get_message("q-reason", runId=task["runId"])["reason"], reason)
+        for key in ("reason", "note"):
+            with self.subTest(key=key), self.assertRaises(BoardError):
+                board.store.message_update({"runId": task["runId"], "inquiryId": "q-reason", key: "caller text"})
 
     def test_an_observation_source_loss_removes_stale_public_facts_without_stopping(self):
         board = self.board()
@@ -828,11 +827,11 @@ class TestInquiry(BoardTestCase):
         task, _attempt, owner = self._attempt_directory(board, client)
         # Neither the owner nor the endpoint has published the earlier legal
         # answer: the final source record must reject it before publication.
-        changed = (("version", 2, "not bound to this execution"),
-                   ("taskId", "foreign-task", "another task"),
-                   ("attemptId", "foreign-attempt", "another attempt"),
-                   ("generation", owner.identity.generation + 1, "not bound to this execution"),
-                   ("turnId", "foreign-turn", "not bound to this execution"))
+        changed = (("version", 2, "journal-attempt-unbound"),
+                   ("taskId", "foreign-task", "journal-task-mismatch"),
+                   ("attemptId", "foreign-attempt", "journal-attempt-mismatch"),
+                   ("generation", owner.identity.generation + 1, "journal-attempt-unbound"),
+                   ("turnId", "foreign-turn", "journal-attempt-unbound"))
         rows = []
         for index, (key, value, _reason) in enumerate(changed):
             legal = {**owner.bound, "inquiryId": f"q-source-{index}", "state": "answered",
@@ -848,12 +847,90 @@ class TestInquiry(BoardTestCase):
                 self.assertIsNone(result["bridge"]["reason"])
                 self.assertIsNone(result["bridge"]["error"])
                 self.assertIn(reason, result["bridge"]["journalRejected"])
-                self.assertEqual(result["journal"], {"available": True, "reason": None, "entries": 5})
+                self.assertEqual(result["journal"], {"available": True, "reason": None, "entries": 5,
+                    "rejections": {f"q-source-{i}": item[2] for i, item in enumerate(changed)}})
                 message = client.get_message(question_id, runId=task["runId"])
                 self.assertEqual(message["state"], "queued")
                 self.assertIsNone(message["answer"])
                 self.assertEqual(result["status"], "running")
                 self.assertFalse(result["execution"]["shutdownConfirmed"])
+
+    def test_message_reasons_are_internal_and_answers_clear_them(self):
+        from hey_my_buddy.blackboard.tasks.inquiry import _apply_journal, _mark_unavailable
+        board = self.board()
+        client = board.client()
+        inactive = board.submit_execution(requestId="inactive-question", task="fixture",
+            cwd=str(self.workdir("inactive")), adapter="command", argv=["true"])["task"]
+        posted = client.post_question("q-inactive", "status?", runId=inactive["runId"])["message"]
+        self.assertEqual(posted["reason"], {"code": "inquiry-no-live-agent", "params": {}})
+        client.cancel(runId=inactive["runId"])
+        task, _attempt, _owner = self._attempt_directory(board, client)
+        client.post_question("q-late", "status?", runId=task["runId"])
+        _mark_unavailable(board.store, task["runId"], "q-late", "agent-gone")
+        message = client.get_message("q-late", runId=task["runId"])
+        self.assertEqual(message["reason"], {"code": "bridge-refused", "params": {"error": "agent-gone"}})
+        self.assertNotIn("note", message)
+        _apply_journal(board.store, task["runId"], "q-late", {"state": "answered", "answer": {"text": "late answer"}})
+        message = client.get_message("q-late", runId=task["runId"])
+        self.assertEqual(message["state"], "answered")
+        self.assertIsNone(message["reason"])
+        self.assertNotIn("note", message)
+        with self.assertRaises(BoardError):
+            board.store.message_update({"runId": task["runId"], "inquiryId": "q-late", "reason": "old parameter"})
+
+    def test_message_reason_checks_reject_invalid_pairs_params_and_states(self):
+        import sqlite3
+        board = self.board()
+        client = board.client()
+        task, _attempt, _owner = self._attempt_directory(board, client)
+        client.post_question("q-check", "status?", runId=task["runId"])
+        with board.store.db.read() as connection:
+            columns = {row['name'] for row in connection.execute('PRAGMA table_info(messages)')}
+        self.assertFalse({'reason', 'note'} & columns)
+        self.assertTrue({'reason_code', 'reason_params_json'} <= columns)
+        for code, params, state in (("inquiry-answer-empty", None, "delivered"),
+                                    (None, "{}", "delivered"),
+                                    ("inquiry-answer-empty", "[]", "delivered"),
+                                    ("inquiry-answer-empty", "{}", "queued"),
+                                    ("inquiry-answer-empty", "{}", "claimed"),
+                                    ("inquiry-answer-empty", "{}", "discarded"),
+                                    ("inquiry-answer-empty", "{}", "answered")):
+            with self.subTest(code=code, params=params, state=state), self.assertRaises(sqlite3.IntegrityError):
+                with board.store.db.write() as connection:
+                    connection.execute("UPDATE messages SET reason_code=?,reason_params_json=?,state=? WHERE inquiry_id='q-check'",
+                                       (code, params, state))
+
+    def test_unknown_journal_questions_are_rejected_and_other_errors_propagate(self):
+        from hey_my_buddy.blackboard.tasks.inquiry import _apply_journal, _apply_bridge_answer, _mark_unavailable
+        board = self.board()
+        client = board.client()
+        task, _attempt, _owner = self._attempt_directory(board, client)
+        for apply in (_apply_journal, lambda store, task, inquiry, record: _apply_bridge_answer(store, task, inquiry, record, None)):
+            self.assertEqual(apply(board.store, task["runId"], "q-orphan", {"state": "delivered"}), "journal-question-unknown")
+            client.post_question("q-owned", "status?", runId=task["runId"])
+            with mock.patch.object(board.store, "_message_update", side_effect=BoardError("CONFLICT", "test failure")), self.assertRaises(BoardError):
+                apply(board.store, task["runId"], "q-owned", {"state": "delivered"})
+        self.assertEqual(_mark_unavailable(board.store, task["runId"], "q-orphan", "agent-gone"), "journal-question-unknown")
+        with mock.patch.object(board.store, "_message_update", side_effect=BoardError("CONFLICT", "test failure")), self.assertRaises(BoardError):
+            _mark_unavailable(board.store, task["runId"], "q-owned", "agent-gone")
+
+    def test_observe_has_no_explanatory_note_or_unavailable_answer_sentence(self):
+        board = self.board()
+        client = board.client()
+        task, _attempt, _owner = self._attempt_directory(board, client)
+        result = board.call("inquiry_observe", {"runId": task["runId"], "inquiryId": "q-shape", "question": "status?"})
+        self.assertNotIn("note", result)
+        self.assertNotIn("limitation", result["live"])
+        self.assertEqual(result["inquiry"]["answer"], {"available": False})
+        self.assertNotIn("note", result["inquiry"])
+
+    def test_only_nested_journal_answers_supply_answer_provenance(self):
+        from hey_my_buddy.blackboard.tasks.inquiry import normalize_journal_answer
+        self.assertIsNone(normalize_journal_answer({"answer": "retired string answer", "answerBytes": 21}))
+        answer = normalize_journal_answer({"answer": {"text": "nested"}, "via": "retired", "answeredAt": "retired", "toolCallId": "retired"})
+        self.assertIsNone(answer["via"])
+        self.assertIsNone(answer["at"])
+        self.assertIsNone(answer["toolCallId"])
 
 
 def zcode_catalog() -> dict:
@@ -973,7 +1050,7 @@ class ZcodeLiveChannelTests(BoardTestCase):
         message = client.get_message("q-empty", runId=task["runId"])
         self.assertEqual(message["state"], "delivered", "answered without usable text must not be recorded")
         self.assertIsNone(message["answer"])
-        self.assertIn("without usable answer text", message["reason"])
+        self.assertEqual(message["reason"], {"code": "inquiry-answer-empty", "params": {}})
 
     def test_an_absent_registration_never_falls_back_to_private_files(self):
         board = self.board()
@@ -1020,8 +1097,9 @@ class ZcodeLiveChannelTests(BoardTestCase):
         })
         self.assertIsNone(result["bridge"]["error"])
         self.assertEqual(result["bridge"]["journalRejected"],
-                         "the journal record belongs to another task")
-        self.assertEqual(result["journal"], {"available": True, "reason": None, "entries": 1},
+                         "journal-task-mismatch")
+        self.assertEqual(result["journal"], {"available": True, "reason": None, "entries": 1,
+                         "rejections": {"q-live": "journal-task-mismatch"}},
                          "the reader's own count includes the rejected record")
         message = client.get_message("q-live", runId=task["runId"])
         self.assertEqual(message["state"], "queued")
@@ -1059,7 +1137,8 @@ class ZcodeLiveChannelTests(BoardTestCase):
         client.post_question("q31", "last", runId=task["runId"])
         result = board.call("inquiry_observe", {"runId": task["runId"]})
         self.assertEqual(client.get_message("q0", runId=task["runId"])["state"], "answered")
-        self.assertEqual(result["journal"], {"available": True, "reason": None, "entries": 32})
+        self.assertEqual(result["journal"], {"available": True, "reason": None, "entries": 32,
+            "rejections": {f"q{i}": "journal-question-unknown" for i in range(1, 31)}})
         message = client.get_message("q31", runId=task["runId"])
         self.assertEqual(message["state"], "answered")
         self.assertEqual(message["answer"]["text"], "x" * 4000)
@@ -1087,7 +1166,7 @@ class ZcodeLiveChannelTests(BoardTestCase):
         self.assertIsNone(replayed["bridge"]["error"])
         message = client.get_message("q-discard", runId=task["runId"])
         self.assertEqual(message["state"], "discarded")
-        self.assertEqual(message["reason"], "withdrawn by the asking side; it no longer blocks turn completion")
+        self.assertIsNone(message["reason"])
 
     def test_a_settled_question_keeps_the_specific_reason(self):
         board = self.board()
@@ -1102,7 +1181,7 @@ class ZcodeLiveChannelTests(BoardTestCase):
         self.assertEqual(message["state"], "unavailable")
         # The specific lifecycle reason survives the projection instead of
         # the generic explanation of how this bridge delivers inquiries.
-        self.assertEqual(message["reason"], "the owned turn ended")
+        self.assertEqual(message["reason"], {"code": "inquiry-root-turn-ended", "params": {}})
 
     def test_an_empty_existing_journal_is_available_not_exceeds(self):
         board = self.board()
@@ -1155,10 +1234,10 @@ class ZcodeLiveChannelTests(BoardTestCase):
         )
         self.assertTrue(result["bridge"]["canObserve"])
         self.assertFalse(result["bridge"]["canAsk"])
-        self.assertIn("no correlated inquiry capability", result["bridge"]["reason"])
+        self.assertIsNone(result["bridge"]["reason"])
         message = client.get_message("q-observe", runId=task["runId"])
         self.assertEqual(message["state"], "unavailable")
-        self.assertIn("no correlated inquiry capability", message["reason"])
+        self.assertEqual(message["reason"], {"code": "inquiry-observe-only", "params": {}})
         self.assertIsNone(message["answer"])
         self.assertEqual(bridge.entries, {}, "an observe-only adapter must never ask the bridge")
         observed = board.call("inquiry_observe", {"runId": task["runId"]})

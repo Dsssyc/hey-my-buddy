@@ -871,7 +871,7 @@ class TestDelivery(BoardTestCase):
         self.assertFalse(observed["bridge"]["enabled"])
         self.assertFalse(observed["bridge"]["canObserve"])
         self.assertFalse(observed["bridge"]["canAsk"])
-        self.assertTrue(observed["bridge"]["reason"])
+        self.assertIsNone(observed["bridge"]["reason"])
         self.assertEqual(observed["limits"]["maxQuestionBytes"], 4000)
         self.assertEqual(observed["limits"]["maxInquiriesPerRun"], 32)
 

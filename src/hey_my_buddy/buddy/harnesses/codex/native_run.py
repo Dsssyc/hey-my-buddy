@@ -286,11 +286,6 @@ class _Classifier:
 # -- the role-held narrow service binding ----------------------------------------
 
 
-IN_TURN_NOTE = ("Questions enter the running native turn and are read at its next decision. "
-                "They never start a turn or extend its deadline. Only a root client-tool call "
-                "to hey_my_buddy_answer_inquiry records an answer.")
-
-
 @dataclasses.dataclass(frozen=True)
 class ClientInquiryServices:
     configuration: dict
@@ -1186,7 +1181,7 @@ def _run(request: RunRequest, services: RunServices, mode: str,
                     "kind": message.get("method") if isinstance(message.get("method"), str) else "unknown",
                     "toolName": (message.get("params") or {}).get("item", {}).get("tool")
                     if isinstance((message.get("params") or {}).get("item"), dict) else None},
-                limitation=IN_TURN_NOTE, attention_path=configuration.get("attentionPath"),
+                attention_path=configuration.get("attentionPath"),
                 live=services.live, delivery_mode="realtime", checkpoint_tool=None)
             inquiry_bridge.start()
         prep.version = probe_version(prep.command, prep.environment, cwd=request.cwd,

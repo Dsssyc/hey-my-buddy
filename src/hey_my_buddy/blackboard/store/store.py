@@ -18,7 +18,7 @@ from ...protocol import activity as activity_module
 from ..tasks import micro_task
 from ..tasks import scheduling
 from ...protocol import schemas
-from ...protocol.reasons import reason as make_reason
+from ...protocol.reasons import reason as make_reason, reason_from_json, validate_reason
 from .db import (
     ACTIVE_ATTEMPT_STATES,
     ATTEMPT_STATES,
@@ -496,7 +496,7 @@ class BoardStore:
             "questionBytes": row["body_bytes"],
             "questionSha256": row["payload_hash"],
             "state": row["state"],
-            "reason": row["reason"],
+            "reason": reason_from_json(row["reason_code"], row["reason_params_json"]),
             "delivery": json.loads(row["delivery_json"]) if row["delivery_json"] else None,
             "answer": json.loads(row["answer_json"]) if row["answer_json"] else None,
             "attempts": row["attempts_count"],
@@ -1493,8 +1493,8 @@ class BoardStore:
                 task = connection.execute("SELECT revision FROM tasks WHERE task_id=?", (attempt["task_id"],)).fetchone()
                 for question in queued_questions:
                     connection.execute(
-                        "UPDATE messages SET state='unavailable',reason=?,updated_at=?,revision=revision+1 WHERE message_id=?",
-                        ("the attempt ended before this question could be delivered", now, question["message_id"]),
+                        "UPDATE messages SET state='unavailable',reason_code=?,reason_params_json='{}',updated_at=?,revision=revision+1 WHERE message_id=?",
+                        ("inquiry-queued-at-attempt-end", now, question["message_id"]),
                     )
                     self._append_event(connection, "message.updated", task_id=attempt["task_id"],
                         attempt_id=attempt["attempt_id"], revision=task["revision"],
@@ -1930,6 +1930,7 @@ class BoardStore:
         # a caller actually publishes one - a routine heartbeat is never
         # turned into fake native progress.
         activity = None
+        waiting_reason = None
         data = params.get("data")
         if data is not None:
             if not isinstance(data, dict):
@@ -1937,6 +1938,13 @@ class BoardStore:
             schemas.reject_unknown(data, {"activity", "waitingReason"}, "execution.progress.data")
             if data.get("activity") is not None:
                 activity = activity_module.normalize_activity(data["activity"])
+                if 'waitingReason' in activity:
+                    validate_reason(activity['waitingReason'], 'activity.waitingReason')
+            if data.get('waitingReason') is not None:
+                waiting_reason = validate_reason(data['waitingReason'], 'data.waitingReason')
+                if waiting_reason['code'] != 'router-input-unknown':
+                    raise BoardError('INVALID_ARGUMENT', 'data.waitingReason must be router-input-unknown',
+                                     field='data.waitingReason.code')
         with self.db.write() as connection:
             attempt = self._verify_attempt_actor(connection, params)
             if attempt["execution_state"] == "finished":
@@ -1951,11 +1959,14 @@ class BoardStore:
                 self._transition_attempt(connection, attempt, phase)
             now = self.now()
             if data is not None and 'waitingReason' in data:
-                waiting = schemas.optional_string(data, 'waitingReason', max_length=200)
-                connection.execute('UPDATE tasks SET queue_reason=? WHERE task_id=?',
-                                   (waiting, attempt['task_id']))
-                self._append_event(connection, 'attempt.waiting', task_id=attempt['task_id'],
-                                   attempt_id=attempt['attempt_id'], payload={'reason': waiting})
+                waiting_code = waiting_reason['code'] if waiting_reason is not None else None
+                current = connection.execute('SELECT queue_reason FROM tasks WHERE task_id=?',
+                                             (attempt['task_id'],)).fetchone()['queue_reason']
+                if current != waiting_code:
+                    connection.execute('UPDATE tasks SET queue_reason=? WHERE task_id=?',
+                                       (waiting_code, attempt['task_id']))
+                    self._append_event(connection, 'attempt.waiting', task_id=attempt['task_id'],
+                                       attempt_id=attempt['attempt_id'], payload={'reason': waiting_reason})
             connection.execute(
                 "UPDATE attempts SET updated_at=?, revision=revision+1 WHERE attempt_id=?",
                 (now, attempt["attempt_id"]),
@@ -2580,12 +2591,12 @@ class BoardStore:
                 now = self.now()
                 active = task["state"] in ("running", "cancelling")
                 state = "queued" if active and task["adapter"] == "dsh" else ("unavailable" if not active else "queued")
-                reason = None if state == "queued" else "no live agent to receive this question"
+                reason_code = None if state == "queued" else "inquiry-no-live-agent"
                 message_id = str(uuid.uuid4())
                 connection.execute(
                     "INSERT INTO messages(message_id, task_id, attempt_id, inquiry_id, direction, author, recipient,"
-                    " correlation_id, body, body_bytes, payload_hash, state, reason, created_at, updated_at, revision)"
-                    " VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,1)",
+                    " correlation_id, body, body_bytes, payload_hash, state, reason_code, reason_params_json, created_at, updated_at, revision)"
+                    " VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,1)",
                     (
                         message_id,
                         task["task_id"],
@@ -2599,7 +2610,8 @@ class BoardStore:
                         question_bytes,
                         payload_hash,
                         state,
-                        reason,
+                        reason_code,
+                        "{}" if reason_code else None,
                         now,
                         now,
                     ),
@@ -2631,6 +2643,9 @@ class BoardStore:
         return response
 
     def message_update(self, params: dict) -> dict:
+        return self._message_update(params)
+
+    def _message_update(self, params: dict, *, reason: dict | None = None) -> dict:
         """Apply one bounded delivery/answer observation.
 
         Every field is validated on a candidate copy before anything is written, a
@@ -2639,7 +2654,7 @@ class BoardStore:
         """
         schemas.reject_unknown(
             params,
-            {"runId", "taskId", "messageId", "inquiryId", "state", "reason", "delivery", "answer", "actor"},
+            {"runId", "taskId", "messageId", "inquiryId", "state", "delivery", "answer", "actor"},
             "message.update",
         )
         inquiry_id = schemas.optional_string(params, "inquiryId", max_length=128, pattern=schemas.INQUIRY_ID_PATTERN)
@@ -2656,9 +2671,6 @@ class BoardStore:
         if answer is not None and not isinstance(answer, dict):
             raise BoardError("INVALID_ARGUMENT", "answer must be an object or null")
         actor = {"role": "bridge", "id": schemas.optional_string(params, "actor") or "bridge"}
-        reason = params.get("reason")
-        if reason is not None and not isinstance(reason, str):
-            raise BoardError("INVALID_ARGUMENT", "reason must be a string or null")
         with self.db.write() as connection:
             if inquiry_id is not None:
                 task = self._task_row(connection, params)
@@ -2676,7 +2688,7 @@ class BoardStore:
             if state is not None and not terminal:
                 candidate["state"] = state
             if reason is not None:
-                candidate["reason"] = reason[:400]
+                candidate["reason"] = reason
             if delivery is not None:
                 bounded = dict(candidate["delivery"] or {})
                 for key in ("messageId", "agentStatusAtInject", "injectedAt", "insertedAt", "claimedAt", "deliveredAt", "observedAt", "observedAgentStatus"):
@@ -2707,13 +2719,16 @@ class BoardStore:
                 raise BoardError("INVALID_ARGUMENT", "answered requires a nonblank answer")
             if candidate["state"] not in MESSAGE_STATES:
                 raise BoardError("INVALID_ARGUMENT", "Unknown message state")
+            if candidate["state"] not in ("delivered", "unavailable"):
+                candidate["reason"] = None
             now = self.now()
             connection.execute(
-                "UPDATE messages SET state=?, reason=?, delivery_json=?, answer_json=?, attempts_count=attempts_count+1,"
+                "UPDATE messages SET state=?, reason_code=?, reason_params_json=?, delivery_json=?, answer_json=?, attempts_count=attempts_count+1,"
                 " updated_at=?, revision=revision+1 WHERE message_id=?",
                 (
                     candidate["state"],
-                    candidate["reason"],
+                    candidate["reason"]["code"] if candidate["reason"] else None,
+                    canonical_json(candidate["reason"]["params"]) if candidate["reason"] else None,
                     canonical_json(candidate["delivery"]) if candidate["delivery"] else None,
                     canonical_json(candidate["answer"]) if candidate["answer"] else None,
                     now,

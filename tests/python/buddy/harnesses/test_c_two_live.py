@@ -515,23 +515,19 @@ class EndpointAdmissionTests(unittest.TestCase):
         self.wait_pending("request-1")
         self.endpoint.consume_request(1.0)
         self.endpoint.publish_inquiry_state(lv.InquiryState(
-            question_id="question-1", status="queued", delivery=delivery,
-            limitation="only at the session's cooperative checkpoint"))
+            question_id="question-1", status="queued", delivery=delivery))
         self.endpoint.settle_request("request-1", lv.LiveReply(**QUEUED_REPLY))
         thread.join(timeout=5.0)
         self.assertEqual(decode_reply(box[0]).status, "queued")
         entry = self.observe_entries()[0]
-        self.assertEqual((entry.status, entry.delivery.value, entry.limitation),
-                         ("queued", delivery,
-                          "only at the session's cooperative checkpoint"))
+        self.assertEqual((entry.status, entry.delivery.value), ("queued", delivery))
         seq_before = entry.seq
         # A settle arriving after the owner already published the answer never
         # downgrades it or bumps the sequence.
         self.endpoint.settle_request("request-1", lv.LiveReply(**QUEUED_REPLY))
         again = self.observe_entries()[0]
-        self.assertEqual((again.status, again.seq, again.delivery.value, again.limitation),
-                         ("queued", seq_before, delivery,
-                          "only at the session's cooperative checkpoint"))
+        self.assertEqual((again.status, again.seq, again.delivery.value),
+                         ("queued", seq_before, delivery))
         self.endpoint.publish_inquiry_state(lv.InquiryState(
             question_id="question-1", status="answered", answer="yes", delivery=delivery))
         self.endpoint.settle_request("request-1", lv.LiveReply(**QUEUED_REPLY))
@@ -885,7 +881,7 @@ class EndpointObservationTests(unittest.TestCase):
                          (False, "journal-not-written"))
         rejection = lv.InquiryJournalRejection(
             question_id="foreign",
-            reason="the journal record belongs to another attempt")
+            reason="journal-attempt-mismatch")
         self.endpoint.publish_journal(lv.LiveJournal(available=True, entries=1,
                                                     rejections=(rejection,)))
         carried = self.observe(limit=10, fields=("inquiries",))
@@ -904,15 +900,15 @@ class EndpointObservationTests(unittest.TestCase):
         # observation and a rejection-bearing journal — together more than one
         # 64 KiB frame can carry.
         entry = lv.InquiryState(question_id="q-big", status="answered",
-                                answer="\x01" * 4000, limitation="\x01" * 2048,
-                                reason="\x01" * 400, via="\x01" * 512,
+                                answer="\x01" * 4000, via="\x01" * 512,
                                 tool_call_id="\x01" * 512)
         events = [lv.LiveEvent(at="\x01" * 64, kind="\x01" * 80, tool_name="\x01" * 120)
                   for _ in range(20)]
-        observation = lv.LiveObservation(ready=True, recent_activity=tuple(events))
+        observation = lv.LiveObservation(ready=True, recent_activity=tuple(events),
+                                         session_id="\x01" * 512, error="\x01" * 512)
         rejections = tuple(lv.InquiryJournalRejection(
             question_id=f"foreign-{index:02d}",
-            reason="\x01" * 40) for index in range(lv.MAX_INQUIRIES_PER_RUN))
+            reason="journal-attempt-mismatch") for index in range(lv.MAX_INQUIRIES_PER_RUN))
         journal = lv.LiveJournal(available=True, entries=0, rejections=rejections)
         composed = lv.LiveSnapshot(inquiries=(entry,), observation=observation, journal=journal)
         self.assertGreater(len(canonical_json(composed.to_payload()).encode()),
@@ -2074,11 +2070,10 @@ if __name__ == "__main__":
 class RichReplayIntegrationTests(unittest.TestCase):
     def test_owner_delivery_replay_is_a_json_value_and_keeps_the_published_state(self):
         entry = lv.InquiryState(question_id="inquiry", status="delivered",
-            delivery={"admittedDelivery": "cooperative-checkpoint", "startsNewTurn": False},
-            reason="owner observation")
+            delivery={"admittedDelivery": "cooperative-checkpoint", "startsNewTurn": False})
         reply = ctl._question_reply(entry, duplicate=True)
         decoded = lv.LiveReply.from_payload(decode_strict_json(canonical_json(reply.to_payload())))
         self.assertEqual(decoded.status, "delivered")
         self.assertTrue(decoded.observed)
         self.assertEqual(decoded.native_correlation.value["delivery"], entry.delivery.value)
-        self.assertEqual(decoded.native_correlation.value["reason"], "owner observation")
+        self.assertNotIn("reason", decoded.native_correlation.value)
