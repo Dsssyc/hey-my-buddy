@@ -1993,9 +1993,19 @@ class BoardStore:
             if attempt["execution_state"] == "finished":
                 raise BoardError("ATTEMPT_FINISHED", "This attempt is already finished; progress is not accepted")
             if process_identity is not None:
-                if verify_identity is not None and not verify_identity(attempt["attempt_id"], process_identity):
-                    raise BoardError("UNAUTHORIZED", "Execution identity differs from the service-owned process")
-                self._record_process_identity(connection, attempt["attempt_id"], process_identity)
+                if verify_identity is not None:
+                    from ..tasks.interruption import marker_identity
+                    # The verified report is recorded as the attempt's root: the
+                    # SQLite row never holds the interpreter inside a forwarder.
+                    root = self._process_identity(connection, attempt["attempt_id"])
+                    if root is None:
+                        root = marker_identity(self, attempt)
+                    verified = verify_identity(attempt["attempt_id"], process_identity, root)
+                    if verified is None:
+                        raise BoardError("UNAUTHORIZED", "Execution identity differs from the service-owned process")
+                else:
+                    verified = process_identity
+                self._record_process_identity(connection, attempt["attempt_id"], verified)
                 connection.execute("UPDATE attempts SET identity_confirmed_at=COALESCE(identity_confirmed_at,?)"
                                    " WHERE attempt_id=?", (self.now(), attempt["attempt_id"]))
             if phase in ("starting", "executing", "finalizing") and attempt["execution_state"] != "uncertain":

@@ -60,6 +60,26 @@ class UpgradeFixtureTests(unittest.TestCase):
         self.addCleanup(connection.close)
         return fixture, connection
 
+    def test_windows_identity_stock_violates_the_rebuild_and_rolls_back(self):
+        fixture, connection = self.restored('windows-identity-stock')
+        stock = connection.execute('SELECT rowid,* FROM attempt_process_identities ORDER BY rowid').fetchall()
+        connection.execute(
+            "UPDATE attempt_process_identities SET boot_id='windows:00000000-0000-4000-8000-0000000000ff',"
+            " process_group_id=NULL, job_name='Local\\HeyMyBuddy-00000000-0000-4000-8000-0000000000f1'"
+            ' WHERE rowid=?', (stock[0]['rowid'],))
+        connection.commit()
+        changed = connection.execute('SELECT rowid,* FROM attempt_process_identities ORDER BY rowid').fetchall()
+        # Real boards hold no such stock; an old Windows row is neither
+        # converted nor cleaned up, and the whole upgrade rolls back to it.
+        with self.assertRaises(sqlite3.IntegrityError):
+            schema_upgrade.migrate_schema(fixture['state'])
+        self.assertEqual([tuple(row) for row in connection.execute(
+            'SELECT rowid,* FROM attempt_process_identities ORDER BY rowid')],
+                         [tuple(row) for row in changed])
+        self.assertNotEqual([tuple(row) for row in changed], [tuple(row) for row in stock])
+        self.assertEqual(connection.execute(
+            "SELECT value FROM meta WHERE key='schema_version'").fetchone()[0], str(UPGRADE_BASE_SCHEMA))
+
 
     def sample(self, fixture, connection):
         run_id = fixture['stableIds']['delivered']

@@ -19,8 +19,11 @@ def launch_controller(*, prepare, log_paths: dict, timeout_seconds: int | None =
     transfers ownership to its handle before log descriptors are closed, so
     later failures terminate and observe that owned group. An ownership
     failure consumes owned_popen's receipt even when no handle was returned.
-    Positive budgets stamp a deadline plus the supplied grace. An absent
-    budget leaves the controller unbounded; discovery enforces its own limit.
+    A named Job marks the execution root: it stays suspended after joining so
+    the caller can publish the spawn marker before the child runs, then hands
+    the Job's lifetime into it. Positive budgets stamp a deadline plus the
+    supplied grace. An absent budget leaves the controller unbounded; discovery
+    enforces its own limit.
     """
     evidence = ProcessCreationEvidence(created=False, shutdown_confirmed=True, exit_code=None)
     handle = None
@@ -31,7 +34,9 @@ def launch_controller(*, prepare, log_paths: dict, timeout_seconds: int | None =
             try:
                 process = owned_popen(command, cwd=cwd, env=environment, stdin=subprocess.DEVNULL,
                                       stdout=stdout, stderr=stderr, start_new_session=True,
-                                      close_fds=True, **({"job_name": job_name} if job_name is not None else {}))
+                                      close_fds=True,
+                                      **({"job_name": job_name, "defer_resume": True}
+                                         if job_name is not None else {}))
             except BaseException as error:
                 evidence = error.owned_popen_evidence
                 raise

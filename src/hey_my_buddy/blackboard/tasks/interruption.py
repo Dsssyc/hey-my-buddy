@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import json
-import os
 from datetime import datetime, timezone
 
 from ...errors import BoardError
@@ -13,8 +12,10 @@ def read_identity(connection, attempt_id: str) -> dict | None:
     row = connection.execute('SELECT * FROM attempt_process_identities WHERE attempt_id=?', (attempt_id,)).fetchone()
     if row is None:
         return None
+    if row['job_name'] is not None:
+        return {'pid': row['root_pid'], 'startedAt': row['root_started_at'], 'jobName': row['job_name']}
     return {'bootId': row['boot_id'], 'pid': row['root_pid'], 'startedAt': row['root_started_at'],
-            'processGroupId': row['process_group_id'], 'jobName': row['job_name']}
+            'processGroupId': row['process_group_id'], 'jobName': None}
 
 
 def record_identity(connection, attempt_id: str, record: dict) -> None:
@@ -24,8 +25,8 @@ def record_identity(connection, attempt_id: str, record: dict) -> None:
             raise BoardError('CONFLICT', 'An execution process identity is immutable', attemptId=attempt_id)
         return
     connection.execute('INSERT INTO attempt_process_identities VALUES(?,?,?,?,?,?)',
-                       (attempt_id, record['bootId'], record['pid'], record['startedAt'],
-                        record['processGroupId'], record['jobName']))
+                       (attempt_id, record.get('bootId'), record['pid'], record['startedAt'],
+                        record.get('processGroupId'), record.get('jobName')))
 
 
 def attempt_private_adapter(attempt) -> str:
@@ -41,24 +42,12 @@ def _evidence_directory(board, attempt):
     return board.directory / 'attempts' / attempt['task_id'] / attempt['attempt_id']
 
 
-def _marker_identity(board, attempt) -> dict | None:
+def marker_identity(board, attempt) -> dict | None:
     """Validate the creator's durable identity record at this file boundary."""
-    from ...private_dirs import open_regular_fd
-    path = _evidence_directory(board, attempt) / 'spawn.marker'
-    try:
-        fd = open_regular_fd(path, os.O_RDONLY)
-    except FileNotFoundError:
-        return None
-    with os.fdopen(fd, encoding="utf-8") as source:
-        raw = source.read(16385)
-    if len(raw) > 16384:
-        raise BoardError('INVALID_ARGUMENT', 'Execution spawn marker is too large')
-    value = json.loads(raw)
-    binding = {'taskId': attempt['task_id'], 'attemptId': attempt['attempt_id'], 'generation': attempt['generation']}
-    if not isinstance(value, dict) or set(value) != {*binding, 'processIdentity'} or any(
-            value[key] != item for key, item in binding.items()):
-        raise BoardError('INVALID_ARGUMENT', 'Execution spawn marker has a different binding')
-    return processes.validate_process_identity(value['processIdentity'])
+    from ...protocol.execution import read_spawn_marker
+    binding = {'taskId': attempt['task_id'], 'attemptId': attempt['attempt_id'],
+               'generation': attempt['generation']}
+    return read_spawn_marker(board.directory, binding)
 
 
 def _stop_native(board, attempt, identity, observed):
@@ -68,6 +57,10 @@ def _stop_native(board, attempt, identity, observed):
     # Native process creation is behind the acknowledged identity publication.
     # A reaped child that never reached it cannot have created native work.
     if attempt['identity_confirmed_at'] is None:
+        return True, observed
+    if identity is not None and identity.get('jobName') is not None:
+        # A Windows root's proven stop covers every native member and the whole
+        # native creation window: no descendant leaves the no-breakaway Job.
         return True, observed
     binding = {'taskId': attempt['task_id'], 'attemptId': attempt['attempt_id'], 'generation': attempt['generation']}
     journal = processes.read_native_process_journal(
@@ -178,7 +171,7 @@ def _recover_one(board, attempt, identity, stopped_evidence):
     from ...protocol.execution import read_execution_receipt, read_execution_delivery
     if stopped_evidence is None:
         if identity is None:
-            identity = _marker_identity(board, attempt)
+            identity = marker_identity(board, attempt)
             if identity is not None:
                 with board.db.write() as connection:
                     record_identity(connection, attempt['attempt_id'], identity)

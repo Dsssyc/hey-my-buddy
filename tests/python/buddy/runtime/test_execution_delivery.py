@@ -24,6 +24,15 @@ CLAIM = {"task": {"taskId": "task-1", "spec": {"adapter": "command"}},
          "attempt": {"taskId": "task-1", "attemptId": "attempt-1", "generation": 1}}
 
 
+class WindowsOSProxy:
+    """Pretend only this module's ``os.name`` is Windows; other modules stay POSIX."""
+
+    name = "nt"
+
+    def __getattr__(self, attribute):
+        return getattr(os, attribute)
+
+
 class ExecutionDeliveryTests(unittest.TestCase):
     def setUp(self):
         temporary = tempfile.TemporaryDirectory()
@@ -295,7 +304,7 @@ class ExecutionDeliveryTests(unittest.TestCase):
         entry._early_signals.append(signal.SIGTERM)
         self.addCleanup(entry._early_signals.clear)
         with mock.patch.object(sys, "argv", ["execution", "--startup", str(startup)]), \
-             mock.patch.object(entry.execution_protocol, "self_execution_process_identity", return_value={}), \
+             mock.patch.object(entry.execution_protocol, "self_process_identity", return_value={}), \
              mock.patch.object(entry.Execution, "run", run), \
              mock.patch.object(entry._ExecutionLive, "start"), \
              mock.patch.object(entry._ExecutionLive, "finish"), \
@@ -306,8 +315,8 @@ class ExecutionDeliveryTests(unittest.TestCase):
     @unittest.skipIf(os.name == "nt", "POSIX session identity")
     def test_execution_can_capture_its_identity_without_a_parent_marker(self):
         command = ("import json; from hey_my_buddy.protocol.execution import "
-                   "self_execution_process_identity; "
-                   "print(json.dumps(self_execution_process_identity(None)))")
+                   "self_process_identity; "
+                   "print(json.dumps(self_process_identity(None)))")
         child = subprocess.run([sys.executable, "-c", command], start_new_session=True,
                                capture_output=True, text=True, timeout=10, encoding="utf-8")
         self.assertEqual(child.returncode, 0, child.stderr)
@@ -330,7 +339,7 @@ class ExecutionDeliveryTests(unittest.TestCase):
             return {"report": {"status": "ok", "shutdownConfirmed": True}}
 
         with mock.patch.object(sys, "argv", ["execution", "--startup", str(startup)]), \
-             mock.patch.object(entry.execution_protocol, "self_execution_process_identity",
+             mock.patch.object(entry.execution_protocol, "self_process_identity",
                                return_value=identity), \
              mock.patch.object(entry, "BoardClient", return_value=client), \
              mock.patch.object(entry.Execution, "execute", execute), \
@@ -342,6 +351,44 @@ class ExecutionDeliveryTests(unittest.TestCase):
             self.assertEqual(entry.main(), 0)
         client.progress.assert_called_once_with(
             "attempt-1", 1, "n" * 64, process_identity=identity, phase="executing", data=None)
+
+    def test_main_reports_the_marker_root_and_carries_its_own_windows_identity(self):
+        from hey_my_buddy.protocol.execution import fsync_json
+        job_name = "Local\\HeyMyBuddy-00000000-0000-4000-8000-0000000000dd"
+        root = {"pid": 301, "startedAt": 1339247086400000000, "jobName": job_name}
+        own = {"pid": 402, "startedAt": 815, "jobName": job_name}
+        startup = self.execution.directory / "execution-start.json"
+        fsync_json(startup, {"claim": CLAIM, "stateDir": str(self.state), "nonce": "n" * 64,
+                             "jobName": job_name, "sessionRecordPath": None})
+        evidence = self.state / "attempts/task-1/attempt-1"
+        evidence.mkdir(parents=True, exist_ok=True)
+        fsync_json(evidence / "spawn.marker",
+                   {"taskId": "task-1", "attemptId": "attempt-1", "generation": 1, "processIdentity": root})
+        client = mock.Mock()
+        started = []
+        reported = []
+
+        def execute(_execution):
+            reported.append(client.progress.call_args)
+            return {"report": {"status": "ok", "shutdownConfirmed": True}}
+
+        windows_os = WindowsOSProxy()
+        with mock.patch.object(sys, "argv", ["execution", "--startup", str(startup)]), \
+             mock.patch.object(entry, "os", windows_os), \
+             mock.patch.object(entry.execution_protocol, "self_process_identity", return_value=own), \
+             mock.patch.object(entry, "BoardClient", return_value=client), \
+             mock.patch.object(entry.Execution, "execute", execute), \
+             mock.patch.object(entry, "deliver_receipt", return_value=True), \
+             mock.patch.object(entry._ExecutionLive, "start", side_effect=lambda identity: started.append(identity)), \
+             mock.patch.object(entry._ExecutionLive, "finish"), \
+             mock.patch.object(signal, "signal"), \
+             mock.patch("hey_my_buddy.protocol.process_identity.install_native_process_journal") as journal:
+            self.assertEqual(entry.main(), 0)
+        # The live descriptor binds the marker's root; progress reports the
+        # interpreter itself, and no native journal is written on Windows.
+        self.assertEqual(started, [root])
+        self.assertEqual(reported[0].kwargs["process_identity"], own)
+        journal.assert_not_called()
 
     def test_native_work_waits_for_initial_identity_acknowledgement(self):
         client = mock.Mock()

@@ -55,6 +55,42 @@ class InterruptionRecoveryTests(BoardTestCase):
             self.assertEqual(connection.execute('SELECT COUNT(*) FROM attempt_process_identities').fetchone()[0], 1)
             self.assertEqual(interruption.read_identity(connection, actor['attemptId']), IDENTITY)
 
+    def test_verified_windows_progress_records_the_marker_root_not_the_reporter(self):
+        windows = {'pid': 301, 'startedAt': 1339247086400000000,
+                   'jobName': 'Local\\HeyMyBuddy-00000000-0000-4000-8000-0000000000d1'}
+        reporter = {'pid': 402, 'startedAt': 815, 'jobName': windows['jobName']}
+        for stored in ('absent', 'recorded'):
+            with self.subTest(stored=stored):
+                board, _client, task, _claim, actor = self.claimed(identity=False)
+                evidence = board.directory / 'attempts' / task['runId'] / actor['attemptId']
+                fsync_json(evidence / 'spawn.marker', {'taskId': task['runId'], 'attemptId': actor['attemptId'],
+                                                       'generation': 1, 'processIdentity': windows})
+                if stored == 'recorded':
+                    board.call('execution_progress', {**actor, 'processIdentity': windows})
+                seen = []
+
+                def verify(attempt_id, reported, root):
+                    seen.append((attempt_id, reported, root))
+                    return root
+
+                board.store.execution_progress({**actor, 'processIdentity': reporter}, verify_identity=verify)
+                self.assertEqual(seen, [(actor['attemptId'], reporter, windows)])
+                with board.store.db.read() as connection:
+                    self.assertEqual(interruption.read_identity(connection, actor['attemptId']), windows)
+                self.assertTrue(board.store.execution_identity_confirmed(actor['attemptId']))
+
+    def test_refused_progress_confirms_no_identity(self):
+        board, _client, _task, _claim, actor = self.claimed(identity=False)
+        reporter = {'pid': 402, 'startedAt': 815,
+                    'jobName': 'Local\\HeyMyBuddy-00000000-0000-4000-8000-0000000000d2'}
+        with self.assertRaises(BoardError) as caught:
+            board.store.execution_progress({**actor, 'processIdentity': reporter},
+                                           verify_identity=lambda *_args: None)
+        self.assertEqual(caught.exception.code, 'UNAUTHORIZED')
+        with board.store.db.read() as connection:
+            self.assertIsNone(interruption.read_identity(connection, actor['attemptId']))
+        self.assertFalse(board.store.execution_identity_confirmed(actor['attemptId']))
+
     def test_normal_startup_waits_for_endpoint_without_unknown_or_reconnect_events(self):
         from hey_my_buddy.blackboard.service.execution_scheduler import ExecutionScheduler, _RecoveredExecution
         from hey_my_buddy.protocol.run_identity import RunIdentity

@@ -226,8 +226,8 @@ class ExecutionObservationTests(unittest.TestCase):
                     "processGroupId": 123, "jobName": None}
         scheduler._handles["attempt-1"] = (handle, None)
         with patch("hey_my_buddy.blackboard.service.execution_scheduler.boot_id", return_value="test-boot"):
-            self.assertFalse(scheduler.verify_identity("attempt-1", {**identity, "startedAt": 111}))
-            self.assertTrue(scheduler.verify_identity("attempt-1", identity))
+            self.assertIsNone(scheduler.verify_identity("attempt-1", {**identity, "startedAt": 111}, None))
+            self.assertEqual(scheduler.verify_identity("attempt-1", identity, None), identity)
         claim = {"attempt": {"attemptId": "attempt-1"}, "task": {"taskId": "task-1"}}
         with patch.object(scheduler, "_observe") as observe:
             self.monitor(scheduler, claim, handle)
@@ -307,14 +307,67 @@ class ExecutionObservationTests(unittest.TestCase):
         service = Mock()
         scheduler = ExecutionScheduler(service, live_registry=self.live_registry)
         handle = Mock()
+        captured = {"bootId": "test-boot", "pid": 1, "startedAt": 11,
+                    "processGroupId": 1, "jobName": None}
         with scheduler._lock:
-            scheduler._handles["owned"] = (handle, {"pid": 1})
-        self.assertFalse(scheduler.verify_identity("owned", {"pid": 2}))
-        self.assertTrue(scheduler.verify_identity("owned", {"pid": 1}))
+            scheduler._handles["owned"] = (handle, captured)
+        report = {**captured, "pid": 2, "processGroupId": 2}
+        self.assertIsNone(scheduler.verify_identity("owned", report, None))
+        self.assertEqual(scheduler.verify_identity("owned", captured, None), captured)
         with patch("hey_my_buddy.blackboard.service.execution_scheduler.inspect_process_identity",
-                   side_effect=["alive", "unknown"]):
-            self.assertTrue(scheduler.verify_identity("restarted", {"pid": 2}))
-            self.assertFalse(scheduler.verify_identity("unverified", {"pid": 2}))
+                   side_effect=["alive", "unknown", "alive"]):
+            self.assertEqual(scheduler.verify_identity("restarted", report, report), report)
+            self.assertIsNone(scheduler.verify_identity("unverified", report, report))
+            # Before the creator's marker write completes, a live reporter is the root.
+            self.assertEqual(scheduler.verify_identity("unrecorded", report, None), report)
+
+    def test_windows_report_from_another_pid_of_the_root_job_verifies_and_records_the_root(self):
+        scheduler = ExecutionScheduler(Mock(), live_registry=self.live_registry)
+        root = {"pid": 301, "startedAt": 1339247086400000000,
+                "jobName": "Local\\HeyMyBuddy-00000000-0000-4000-8000-0000000000c1"}
+        reporter = {"pid": 402, "startedAt": 815, "jobName": root["jobName"]}
+        handle = Mock(pid=301, process_started_at=root["startedAt"],
+                      job=SimpleNamespace(name=root["jobName"]))
+        scheduler._handles["attempt-1"] = (handle, None)
+        with patch("hey_my_buddy.blackboard.service.execution_scheduler.verify_job_member",
+                   return_value=True) as member:
+            self.assertEqual(scheduler.verify_identity("attempt-1", reporter, None), root)
+            self.assertEqual(scheduler.verify_identity("attempt-1", reporter, root), root)
+            # The child's report closes the failed parent-side capture with the root.
+            self.assertEqual(scheduler.verify_identity("attempt-1", reporter, None), root)
+        member.assert_called_with(reporter, root["jobName"])
+        adopted = scheduler._handles["attempt-1"]
+        self.assertIs(adopted[0], handle)
+        self.assertEqual(adopted[1], root)
+
+    def test_windows_report_outside_the_root_job_or_without_a_root_is_refused(self):
+        scheduler = ExecutionScheduler(Mock(), live_registry=self.live_registry)
+        root = {"pid": 301, "startedAt": 1339247086400000000,
+                "jobName": "Local\\HeyMyBuddy-00000000-0000-4000-8000-0000000000c2"}
+        reporter = {"pid": 402, "startedAt": 815, "jobName": root["jobName"]}
+        with patch("hey_my_buddy.blackboard.service.execution_scheduler.verify_job_member",
+                   return_value=False) as member:
+            self.assertIsNone(scheduler.verify_identity("attempt-1", reporter, root))
+        member.assert_called_once_with(reporter, root["jobName"])
+        # A reporter naming another Job never reaches the membership check.
+        with patch("hey_my_buddy.blackboard.service.execution_scheduler.verify_job_member") as member:
+            self.assertIsNone(scheduler.verify_identity(
+                "attempt-1", {**reporter, "jobName": root["jobName"] + "0"}, root))
+            member.assert_not_called()
+        # Without a handle, a recorded root, or a marker there is nothing to verify against.
+        with patch("hey_my_buddy.blackboard.service.execution_scheduler.verify_job_member") as member:
+            self.assertIsNone(scheduler.verify_identity("attempt-1", reporter, None))
+            member.assert_not_called()
+
+    def test_windows_report_after_restart_uses_the_recorded_root_without_a_handle(self):
+        scheduler = ExecutionScheduler(Mock(), live_registry=self.live_registry)
+        root = {"pid": 301, "startedAt": 1339247086400000000,
+                "jobName": "Local\\HeyMyBuddy-00000000-0000-4000-8000-0000000000c3"}
+        reporter = {"pid": 402, "startedAt": 815, "jobName": root["jobName"]}
+        with patch("hey_my_buddy.blackboard.service.execution_scheduler.verify_job_member",
+                   side_effect=[True, False]):
+            self.assertIs(scheduler.verify_identity("restarted", reporter, root), root)
+            self.assertIsNone(scheduler.verify_identity("restarted", reporter, root))
 
     def test_router_budget_is_durable_before_forced_stop(self):
         with tempfile.TemporaryDirectory() as root:

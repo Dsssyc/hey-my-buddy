@@ -18,9 +18,9 @@ from ..json_codec import canonical_json, decode_strict_json
 from ..private_dirs import ensure_private_dir, attempt_root, open_regular_fd
 from . import rpc_config
 from .contracts import ExecutionLive
-from .process_identity import (capture_process_identity, inspect_process_identity,
-                               validate_process_identity, boot_id, _creation_time)
+from .process_identity import capture_process_identity, validate_process_identity, boot_id, _creation_time
 from .process_controller import launch_controller
+from .owned_process import transfer_job_to_child
 from .run_identity import RunIdentity
 
 STARTUP = "execution-start.json"
@@ -47,7 +47,12 @@ def execution_directory(claim: dict, state_dir: Path) -> Path:
 
 def launch_execution(claim: dict, state_dir: Path, nonce: str, *,
                      session_record_path: Path | str | None = None):
-    """Persist intent and startup before spawning an owned new-session process."""
+    """Persist intent and startup before spawning an owned new-session process.
+
+    A Windows root joins its exclusively created Job while still suspended;
+    the marker is published before the child runs, and the Job's lifetime is
+    then duplicated into the created process so it survives this service.
+    """
     state_dir = Path(state_dir)
     attempt = claim["attempt"]
     binding = {"taskId": claim["task"]["taskId"], "attemptId": attempt["attemptId"],
@@ -83,6 +88,8 @@ def launch_execution(claim: dict, state_dir: Path, nonce: str, *,
         handle.process_identity = None
         handle.process_identity = capture_process_identity(handle)
         fsync_json(evidence / "spawn.marker", {**binding, "processIdentity": handle.process_identity})
+        if job_name is not None:
+            transfer_job_to_child(handle.process, handle.job)
         return handle
     except BaseException as error:
         surviving_handle = handle if handle is not None else getattr(error, "execution_handle", None)
@@ -102,24 +109,62 @@ def launch_execution(claim: dict, state_dir: Path, nonce: str, *,
         raise
 
 
-def self_execution_process_identity(job_name: str | None) -> dict:
-    """Capture the execution's own complete identity without a service marker."""
+def read_spawn_marker(state_dir: Path, binding: dict) -> dict | None:
+    """Read the creator's durable root identity, bound to one attempt, at the file boundary."""
+    from ..private_dirs import open_regular_fd
+
+    path = Path(state_dir) / "attempts" / binding["taskId"] / binding["attemptId"] / "spawn.marker"
+    try:
+        descriptor = open_regular_fd(path, os.O_RDONLY)
+    except FileNotFoundError:
+        return None
+    with os.fdopen(descriptor, "rb") as stream:
+        raw = stream.read(16385)
+    if len(raw) > 16384:
+        raise BoardError("INVALID_ARGUMENT", "Execution spawn marker is too large")
+    value = decode_strict_json(raw)
+    if not isinstance(value, dict) or set(value) != {*binding, "processIdentity"} or any(
+            value[key] != item for key, item in binding.items()):
+        raise BoardError("INVALID_ARGUMENT", "Execution spawn marker has a different binding")
+    return validate_process_identity(value["processIdentity"])
+
+
+def self_process_identity(job_name: str | None) -> dict:
+    """Capture this execution process's own complete identity.
+
+    A Windows execution reports the interpreter it runs in and the root Job it
+    belongs to; a POSIX execution is itself the recorded group-leader root.
+    """
     pid = os.getpid()
     started_at = _creation_time(pid)
     if started_at is None:
         raise BoardError("PROCESS_IDENTITY_UNKNOWN", "Execution creation time is unavailable")
     if os.name == "nt":
-        record = {"bootId": boot_id(), "pid": pid, "startedAt": started_at,
-                  "processGroupId": None, "jobName": job_name}
+        if job_name is None:
+            raise BoardError("PROCESS_IDENTITY_UNKNOWN", "Execution root Job name is missing")
+        record = {"pid": pid, "startedAt": started_at, "jobName": job_name}
     else:
         if job_name is not None or os.getpgrp() != pid or os.getsid(pid) != pid:
             raise BoardError("PROCESS_IDENTITY_UNKNOWN", "Execution does not own its process group")
         record = {"bootId": boot_id(), "pid": pid, "startedAt": started_at,
                   "processGroupId": pid, "jobName": None}
-    validate_process_identity(record)
-    if inspect_process_identity(record) != "alive":
-        raise BoardError("PROCESS_IDENTITY_UNKNOWN", "Execution process identity is unverified")
-    return record
+    return validate_process_identity(record)
+
+
+def execution_root_identity(startup: dict) -> dict:
+    """Read the marker-published root this execution belongs to (Windows only).
+
+    The marker is published before the created process is resumed, so a live
+    execution always finds it; its absence is a startup error, never something
+    to poll for or reconstruct from the startup material.
+    """
+    binding = {"taskId": startup["claim"]["task"]["taskId"],
+               "attemptId": startup["claim"]["attempt"]["attemptId"],
+               "generation": startup["claim"]["attempt"]["generation"]}
+    root = read_spawn_marker(Path(startup["stateDir"]), binding)
+    if root is None or root.get("jobName") is None:
+        raise BoardError("PROCESS_IDENTITY_UNKNOWN", "Execution spawn marker is missing its root")
+    return root
 
 
 def _private_json(path: Path, maximum: int = 32768) -> dict:

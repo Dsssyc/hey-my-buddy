@@ -1,8 +1,11 @@
 """Durable OS identity and conservative recovery evidence for one execution.
 
-Only a matching boot, root PID plus creation time, and owned group or Job
-authorizes the service to stop an orphan after its execution has ended. An uninspectable identity
-remains unknown; a numeric PID or process-group ID alone is never authority.
+A POSIX root records its boot session, PID, creation time and owned process
+group; a Windows root records the PID and raw-FILETIME creation time of the
+process the service created plus the exclusively created root Job, and reads no
+boot identifier. Only the complete recorded identity authorizes the service to
+stop an orphan after its execution has ended. An uninspectable identity remains
+unknown; a numeric PID or process-group ID alone is never authority.
 """
 from __future__ import annotations
 
@@ -143,18 +146,6 @@ def boot_id() -> str:
         if method(b"kern.bootsessionuuid", value, ctypes.byref(length), None, 0) != 0:
             raise OSError(ctypes.get_errno(), "cannot read boot session UUID")
         return f"macos:{uuid.UUID(value.value.decode('ascii'))}"
-    if sys.platform == "win32":
-        # SystemBootEnvironmentInformation's first field is BootIdentifier.
-        # Query only that documented-size prefix; failure yields unknown evidence.
-        buffer = ctypes.create_string_buffer(32)
-        library = ctypes.WinDLL("ntdll")
-        query = library.NtQuerySystemInformation
-        query.argtypes = [ctypes.c_int, ctypes.c_void_p, ctypes.c_ulong, ctypes.c_void_p]
-        query.restype = ctypes.c_long
-        status = query(0x5A, buffer, ctypes.sizeof(buffer), None)
-        if status != 0:
-            raise OSError(f"cannot read Windows boot identifier: NTSTATUS {status:#x}")
-        return f"windows:{uuid.UUID(bytes_le=buffer.raw[:16])}"
     raise OSError(f"unsupported platform: {sys.platform}")
 
 
@@ -206,61 +197,73 @@ class _SystemSource:
 
 
 def validate_process_identity(record: object) -> dict:
-    """Validate the one stored form at the RPC/storage boundary."""
-    if not isinstance(record, dict) or set(record) != {
-            "bootId", "pid", "startedAt", "processGroupId", "jobName"}:
+    """Validate the one stored form at the RPC/storage boundary.
+
+    The two platforms carry one shape each, told apart by the Job and
+    process-group exclusion: a Windows root names its Job and records no boot
+    or group; a POSIX root records its boot session and process-group leader.
+    """
+    if not isinstance(record, dict):
         raise BoardError("INVALID_ARGUMENT", "process identity has an invalid shape")
-    if not isinstance(record["bootId"], str) or not record["bootId"]:
-        raise BoardError("INVALID_ARGUMENT", "boot identifier is required")
-    try:
-        platform, identifier = record["bootId"].split(":", 1)
-        if platform not in {"linux", "macos", "windows"} or str(uuid.UUID(identifier)) != identifier:
-            raise ValueError("noncanonical boot identifier")
-    except ValueError as error:
-        raise BoardError("INVALID_ARGUMENT", "boot identifier is invalid") from error
+    windows = set(record) == {"pid", "startedAt", "jobName"}
+    posix = set(record) == {"bootId", "pid", "startedAt", "processGroupId", "jobName"}
+    if not windows and not posix:
+        raise BoardError("INVALID_ARGUMENT", "process identity has an invalid shape")
     if type(record["pid"]) is not int or record["pid"] <= 0:
         raise BoardError("INVALID_ARGUMENT", "process ID must be positive")
     if type(record["startedAt"]) is not int or not 0 < record["startedAt"] < 2**63:
         raise BoardError("INVALID_ARGUMENT", "process creation time is invalid")
-    pgid, job = record["processGroupId"], record["jobName"]
-    if (type(pgid) is int and pgid > 0 and job is None) == (pgid is None and isinstance(job, str) and bool(job)):
-        raise BoardError("INVALID_ARGUMENT", "exactly one process group or Job is required")
-    if pgid is not None and pgid != record["pid"]:
-        raise BoardError("INVALID_ARGUMENT", "owned process-group leader must match the root PID")
-    if job is not None:
+    if windows:
+        job = record["jobName"]
+        if not isinstance(job, str) or not job:
+            raise BoardError("INVALID_ARGUMENT", "owned Job name is invalid")
         try:
             prefix = "Local\\HeyMyBuddy-"
             if not job.startswith(prefix) or str(uuid.UUID(job[len(prefix):])) != job[len(prefix):]:
                 raise ValueError("invalid Job name")
         except ValueError as error:
             raise BoardError("INVALID_ARGUMENT", "owned Job name is invalid") from error
+        return record
+    boot = record["bootId"]
+    if not isinstance(boot, str) or not boot:
+        raise BoardError("INVALID_ARGUMENT", "boot identifier is required")
+    try:
+        platform, identifier = boot.split(":", 1)
+        if platform not in {"linux", "macos"} or str(uuid.UUID(identifier)) != identifier:
+            raise ValueError("noncanonical boot identifier")
+    except ValueError as error:
+        raise BoardError("INVALID_ARGUMENT", "boot identifier is invalid") from error
+    pgid, job = record["processGroupId"], record["jobName"]
+    if type(pgid) is not int or pgid <= 0 or pgid != record["pid"]:
+        raise BoardError("INVALID_ARGUMENT", "owned process-group leader must match the root PID")
+    if job is not None:
+        raise BoardError("INVALID_ARGUMENT", "exactly one process group or Job is required")
     return record
 
 
 def capture_process_identity(handle) -> dict:
     """Capture the complete child identity while its creating handle is held."""
-    boot = boot_id()
     pid = handle.pid
     child_start = handle.process_started_at
     if child_start is None:
         raise OSError("process identity vanished before capture")
     job = handle.job
-    record = {"bootId": boot, "pid": pid, "startedAt": child_start,
-              "processGroupId": handle.pgid if job is None else None,
-              "jobName": job.name if job is not None else None}
-    if job is None:
-        if handle.pgid is None:
-            raise OSError("owned process group was not captured at spawn")
-        try:
-            current_group = os.getpgid(pid)
-        except ProcessLookupError:
-            # The root may already have exited. ProcessHandle captured its
-            # creation time and owned group before callers could reap it.
-            pass
-        else:
-            if current_group != handle.pgid:
-                raise OSError("owned process group changed before identity capture")
-    return record
+    if job is not None:
+        return {"pid": pid, "startedAt": child_start, "jobName": job.name}
+    boot = boot_id()
+    if handle.pgid is None:
+        raise OSError("owned process group was not captured at spawn")
+    try:
+        current_group = os.getpgid(pid)
+    except ProcessLookupError:
+        # The root may already have exited. ProcessHandle captured its
+        # creation time and owned group before callers could reap it.
+        pass
+    else:
+        if current_group != handle.pgid:
+            raise OSError("owned process group changed before identity capture")
+    return {"bootId": boot, "pid": pid, "startedAt": child_start,
+            "processGroupId": handle.pgid, "jobName": None}
 
 
 def _inspect_job_identity(record: dict, source, job) -> str:
@@ -277,11 +280,11 @@ def inspect_process_identity(record: dict, *, source=None) -> str:
     """Return boot-changed, identity-absent, alive, or unknown."""
     source = source or _SystemSource()
     try:
-        if source.boot_id() != record["bootId"]:
-            return "boot-changed"
         if record["jobName"] is not None:
             with source.open_job(record["jobName"]) as job:
                 return _inspect_job_identity(record, source, job)
+        if source.boot_id() != record["bootId"]:
+            return "boot-changed"
         root_start = source.started_at(record["pid"])
         group_alive = source.group_alive(record["processGroupId"])
         if root_start is None and not group_alive:
@@ -322,8 +325,6 @@ def kill_verified_process_group(record: dict, *, source=None) -> None:
 def _stop_windows_job(record: dict, source, *, settle_seconds: float) -> str:
     """Keep the original Job open from verification through observed shutdown."""
     try:
-        if source.boot_id() != record["bootId"]:
-            return "boot-changed"
         with source.open_job(record["jobName"]) as job:
             observation = _inspect_job_identity(record, source, job)
             if observation != "alive":
@@ -338,6 +339,23 @@ def _stop_windows_job(record: dict, source, *, settle_seconds: float) -> str:
                 time.sleep(0.05)
     except OSError:
         return "unknown"
+
+
+def verify_job_member(reported: dict, job_name: str, *, source=None) -> bool:
+    """Check one progress report against its root Job at the service boundary.
+
+    The reporting process must belong to the attempt's root Job and carry the
+    kernel creation time of its own PID; the root itself may be a different
+    process of the same Job.
+    """
+    source = source or _SystemSource()
+    try:
+        with source.open_job(job_name) as job:
+            if job is None or reported["pid"] not in job.members():
+                return False
+        return source.started_at(reported["pid"]) == reported["startedAt"]
+    except OSError:
+        return False
 
 
 def stop_orphan_process(record: dict, *, source=None, settle_seconds: float = 2.0) -> str:

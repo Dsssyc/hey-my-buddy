@@ -18,7 +18,8 @@ from ...json_codec import canonical_json
 from .live_registry import LiveRegistry
 from ...protocol.execution import (BUDGET, execution_directory,
                                   launch_execution, read_execution_endpoint, read_execution_receipt)
-from ...protocol.process_identity import inspect_process_identity, boot_id, kill_verified_process_group
+from ...protocol.process_identity import (inspect_process_identity, boot_id, kill_verified_process_group,
+                                          verify_job_member)
 from ...protocol.run_identity import RunIdentity
 
 
@@ -140,25 +141,63 @@ class ExecutionScheduler:
             self.store.persistence_error = (f"Scheduler {stage}: {type(error).__name__}: {error}; "
                                             f"issue recording failed: {reporting_error}")
 
-    def verify_identity(self, attempt_id: str, identity: dict) -> bool:
+    def verify_identity(self, attempt_id: str, identity: dict, root: dict | None) -> dict | None:
+        """Check one progress report against the attempt's root at the boundary.
+
+        ``root`` is the recorded identity the store resolved from SQLite or the
+        spawn marker. The return value is the root identity to record, or None
+        when the report does not verify. A POSIX reporter is itself the root; a
+        Windows reporter may be any process of the root Job, checked there by
+        membership and kernel creation time. The held creating handle supplies
+        or closes the root; without one, the same rule accepts a live root.
+        """
         with self._lock:
             held = self._handles.get(attempt_id)
-            if held is None:
-                return inspect_process_identity(identity) == "alive"
+        if identity["jobName"] is not None:
+            return self._verify_windows_report(attempt_id, identity, root, held)
+        return self._verify_posix_report(attempt_id, identity, root, held)
+
+    def _adopt_verified(self, attempt_id: str, held, root: dict) -> dict:
+        handle, captured = held
+        if captured is None:
+            handle.process_identity = root
+            with self._lock:
+                self._handles[attempt_id] = (handle, root)
+        return root
+
+    def _verify_posix_report(self, attempt_id: str, identity: dict, root: dict | None, held) -> dict | None:
+        if held is not None:
             handle, captured = held
-            if captured is None:
-                # The child's own report can close a failed parent-side capture.
-                # Compare it with the creation facts retained in our owned handle.
-                expected = {"bootId": boot_id(), "pid": handle.pid,
-                            "startedAt": handle.process_started_at,
-                            "processGroupId": handle.pgid if handle.job is None else None,
-                            "jobName": handle.job.name if handle.job is not None else None}
-                if identity != expected:
-                    return False
-                handle.process_identity = identity
-                self._handles[attempt_id] = (handle, identity)
-                return True
-            return captured == identity
+            if captured is not None:
+                return captured if identity == captured else None
+            # The child's own report can close a failed parent-side capture.
+            # Compare it with the creation facts retained in our owned handle.
+            expected = {"bootId": boot_id(), "pid": handle.pid,
+                        "startedAt": handle.process_started_at,
+                        "processGroupId": handle.pgid, "jobName": None}
+            if identity != expected:
+                return None
+            return self._adopt_verified(attempt_id, held, identity)
+        if root is not None:
+            return root if identity == root and inspect_process_identity(identity) == "alive" else None
+        # The report may precede the creator's marker write; the reporter is the root.
+        return identity if inspect_process_identity(identity) == "alive" else None
+
+    def _verify_windows_report(self, attempt_id: str, identity: dict, root: dict | None, held) -> dict | None:
+        if held is not None:
+            handle, captured = held
+            if captured is not None:
+                root = captured
+            else:
+                root = {"pid": handle.pid, "startedAt": handle.process_started_at,
+                        "jobName": handle.job.name}
+        if root is None or root.get("jobName") is None:
+            return None
+        if identity["jobName"] != root["jobName"]:
+            return None
+        if not verify_job_member(identity, root["jobName"]):
+            return None
+        return self._adopt_verified(attempt_id, held, root) if held is not None else root
 
     def _run(self) -> None:
         try:

@@ -7,10 +7,10 @@ import json
 from pathlib import Path
 import sqlite3
 
-from .db import (DB_FILE, DECISION_REQUESTS_DDL, EVALUATION_DECISIONS_DDL,
-                 EVENTS_ROUTER_CLAIMED_INDEX_DDL, MODEL_SERVICE_CONCURRENCY_DDL,
-                 ROUTER_DISPATCHES_DDL, ROUTER_OUTCOMES_DDL, ROUTER_REQUESTS_DDL,
-                 SCHEMA_VERSION, UPGRADE_BASE_SCHEMA, WORKFLOW_CHILDREN_DDL,
+from .db import (ATTEMPT_PROCESS_IDENTITIES_DDL, DB_FILE, DECISION_REQUESTS_DDL,
+                 EVALUATION_DECISIONS_DDL, EVENTS_ROUTER_CLAIMED_INDEX_DDL,
+                 MODEL_SERVICE_CONCURRENCY_DDL, ROUTER_DISPATCHES_DDL, ROUTER_OUTCOMES_DDL,
+                 ROUTER_REQUESTS_DDL, SCHEMA_VERSION, UPGRADE_BASE_SCHEMA, WORKFLOW_CHILDREN_DDL,
                  WORKFLOW_RUNS_DDL, WORKFLOW_TURNS_DDL, canonical_json, sha256_text)
 from ... import private_dirs
 from ...errors import BoardError
@@ -22,6 +22,10 @@ EVENT_COLUMNS = ('seq', 'task_id', 'attempt_id', 'revision', 'kind', 'payload_js
 
 # Only the common columns cross the pending upgrade's retention comparison.
 RETAINED_COLUMN_PROJECTIONS = {
+    # The schema-29 identity CHECK adds the boot/Job platform exclusion; every
+    # stored POSIX value crosses the rebuild unchanged.
+    'attempt_process_identities': ('attempt_id', 'boot_id', 'root_pid', 'root_started_at',
+                                   'process_group_id', 'job_name'),
     'evaluation_decisions': ('decision_id', 'status', 'buddy_id', 'reason_code',
                              'reason_params_json', 'note', 'created_at'),
     'router_outcomes': ('receipt_id', 'request_id', 'router_index', 'buddy_id', 'phase',
@@ -535,6 +539,7 @@ def migrate_schema(state: Path) -> None:
                                expressions={'source_host_id': SOURCE_HOST_SQL})
                 _rebuild_table(connection, 'workflow_children', WORKFLOW_CHILDREN_DDL)
                 _rebuild_table(connection, 'workflow_turns', WORKFLOW_TURNS_DDL)
+                _rebuild_table(connection, 'attempt_process_identities', ATTEMPT_PROCESS_IDENTITIES_DDL)
                 connection.execute("UPDATE events SET payload_json=? WHERE kind='attempt.activity'",
                                    (ACTIVITY_EVENT_PAYLOAD,))
                 connection.execute('DROP INDEX events_router_claimed_idx')

@@ -220,7 +220,7 @@ class _ExecutionLive:
             raise BoardError("LIVE_UNAVAILABLE", "Execution endpoint credential is unavailable")
         credential = inspected["credential"]
         descriptor = LiveEndpointDescriptor(address=address, name=self.name,
-            instance_id=self.instance_id, host_pid=os.getpid(),
+            instance_id=self.instance_id, host_pid=process_identity["pid"],
             endpoint_credential=credential.to_json() if credential is not None else None)
         fsync_json(self.execution.directory / execution_protocol.LIVE, {
             "identity": self.identity.to_payload(), "processIdentity": process_identity,
@@ -327,6 +327,7 @@ class Execution:
         self._hint_lock = threading.Lock()
         self._flush_lock = threading.Lock()
         self._identity_pending: dict | None = None
+        self._identity: dict | None = None
         self._next_hint_at = 0.0
         self._hint_delay = 0.25
         self.directory = receipt_directory(self.state_dir, execution_protocol.private_adapter(claim),
@@ -358,8 +359,12 @@ class Execution:
                 return False
             attempt = self.claim["attempt"]
             try:
+                # Windows caches its own identity and carries it with every
+                # progress it already sends, so the first progress after a
+                # service restart reaches the same no-handle verification.
                 self.client.progress(attempt["attemptId"], attempt["generation"],
-                                     self.nonce, process_identity=self._identity_pending,
+                                     self.nonce,
+                                     process_identity=self._identity if os.name == "nt" else self._identity_pending,
                                      phase="executing" if self._identity_pending else None,
                                      data=pending or None)
             except BoardError as error:
@@ -391,11 +396,14 @@ class Execution:
         # The durable empty journal precedes the identity acknowledgement:
         # any acknowledged execution therefore has a native-spawn record to
         # inspect after a crash. Native work still waits for the acknowledgement.
+        # A Windows root keeps no journal: its no-breakaway Job's stop evidence
+        # already covers every native member and the whole creation window.
         from ...protocol.process_identity import install_native_process_journal, native_process_journal_path
         binding = {"taskId": self.claim["task"]["taskId"],
                    "attemptId": self.claim["attempt"]["attemptId"],
                    "generation": self.claim["attempt"]["generation"]}
-        install_native_process_journal(native_process_journal_path(self.directory), binding)
+        if os.name != "nt":
+            install_native_process_journal(native_process_journal_path(self.directory), binding)
         delay = 0.25
         while self._identity_pending is not None:
             delivered = self.flush_hints()
@@ -904,11 +912,19 @@ def main():
     from ...private_dirs import ensure_private_dir
     ensure_private_dir(execution.directory)
     ensure_private_dir(execution.evidence_directory)
-    identity = execution_protocol.self_execution_process_identity(material.get("jobName"))
+    if os.name == "nt":
+        # The marker is published before this process was resumed; it names the
+        # created root (the venv forwarder), whose Job also covers this interpreter.
+        root_identity = execution_protocol.execution_root_identity(material)
+        identity = execution_protocol.self_process_identity(root_identity["jobName"])
+    else:
+        identity = execution_protocol.self_process_identity(material.get("jobName"))
+        root_identity = identity
     from ..roles.run_execution import set_execution_live_server
     set_execution_live_server(execution.live)
     try:
-        execution.live.start(identity)
+        execution.live.start(root_identity)
+        execution._identity = identity
         execution._identity_pending = identity
         execution.run()
     finally:
