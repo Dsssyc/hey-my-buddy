@@ -46,6 +46,7 @@
 | 2026-10-15 | [Worker 池能不能用现成的懒加载进程池](2026-10-15-lazy-worker-pools.md) | 待办“Worker 池按需伸缩” |
 | 2026-10-15 | [C-Two 0.7.4 里对端没了怎样知道，一个执行进程要多少开销](2026-10-15-c-two-peer-liveness.md) | ADR-031 |
 | 2026-10-16 | [Codex 与 Claude Code 能不能在回合进行中收下 Host 的问题、并把答复对上这个回合](2026-10-16-codex-claude-in-turn-questions.md) | ADR-031 执行计划里落在这块底座上的问询（31–32），尚未实现 |
+| 2026-10-22 | [四个 harness 的桌面版装在哪、自带的 CLI 在哪](2026-10-22-harness-desktop-entries.md) | ADR-017 第 10 条（待改） |
 
 2026-10-11 之前的四份是从各自的决定里移过来的，当时没有按上面的写法记录读到哪里为止，这一点在各份记录里照实写明。
 | 2026-10-18 | [各 harness 的会话记录有没有现成的统一读法](2026-10-18-session-transcript-projection.md) | ADR-024 |
