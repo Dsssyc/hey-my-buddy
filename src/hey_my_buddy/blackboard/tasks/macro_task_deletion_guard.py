@@ -31,7 +31,8 @@ def reject_deleting_run(connection, run_id: str) -> None:
         " LEFT JOIN workflow_runs r ON r.run_id=?"
         " WHERE d.state='deleting' AND"
         " ((d.target_kind='macro-task' AND d.target_id=r.macro_task_id)"
-        " OR (d.target_kind='micro-task-tree' AND d.target_id IN (SELECT run_id FROM ancestors)))"
+        " OR (d.target_kind='micro-task-tree' AND d.target_id IN"
+        " (SELECT 'run:' || run_id FROM ancestors)))"
         " LIMIT 1",
         (run_id, run_id),
     ).fetchone()

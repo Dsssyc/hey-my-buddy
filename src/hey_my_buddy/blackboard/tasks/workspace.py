@@ -2494,7 +2494,7 @@ def _cleanup_proof(repository, checkout_root, allocation, manifest, retained, se
     return
 
 
-def deletion_inspect(state_dir, manifest: dict, artifacts: list[dict]) -> dict:
+def deletion_inspect(state_dir, manifest: dict, artifacts: list[dict], *, retained=()) -> dict:
     """Prove deletion of one checkout without restoring an interrupted removal.
 
     A missing gitfile can be the result of ``git worktree remove`` stopping
@@ -2510,9 +2510,15 @@ def deletion_inspect(state_dir, manifest: dict, artifacts: list[dict]) -> dict:
             return {"reasons": ["owner-unproven"], "resume": False}
         checkout = Path(allocation["path"])
         repository = Path(manifest["snapshot"]["repositoryPath"])
+        related = [item for item in _allocation_candidates(manifest, retained)
+                   if isinstance(item, dict) and item.get("repositoryId") == manifest["repositoryId"]
+                   and item.get("checkoutId") == manifest["checkoutId"]
+                   and item.get("checkoutRoot") == manifest["checkoutRoot"]]
+        by_hash = {item["manifestSha256"]: item for item in related}
         candidates = [item for item in artifacts if isinstance(item, dict)
-                      and item.get("workspaceId") == manifest["workspaceId"]
-                      and item.get("manifestSha256") == manifest["manifestSha256"]
+                      and item.get("workspaceId") in {value["workspaceId"] for value in related}
+                      and item.get("manifestSha256") in by_hash
+                      and item.get("workspaceId") == by_hash[item["manifestSha256"]]["workspaceId"]
                       and isinstance(item.get("snapshot"), dict)
                       and isinstance(item.get("tree"), str)]
         pointer_missing = not _path_present(checkout / ".git")
@@ -2530,8 +2536,15 @@ def deletion_inspect(state_dir, manifest: dict, artifacts: list[dict]) -> dict:
             return {"reasons": ["identity-changed"], "resume": True}
         if not pointer_missing:
             first = None
-            for sealed in [*candidates, None]:
-                proof = cleanup_inspect(state_dir, manifest, sealed=sealed)
+            for candidate in candidates:
+                selected = by_hash[candidate["manifestSha256"]]
+                proof = cleanup_inspect(state_dir, selected, sealed=candidate, retained=related)
+                if proof["eligible"]:
+                    return {"reasons": [], "resume": True}
+                if first is None:
+                    first = proof
+            for selected in related:
+                proof = cleanup_inspect(state_dir, selected, retained=related)
                 if proof["eligible"]:
                     return {"reasons": [], "resume": True}
                 if first is None:

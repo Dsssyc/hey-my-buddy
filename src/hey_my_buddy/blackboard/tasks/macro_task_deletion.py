@@ -5,10 +5,10 @@ here. Database rows remain the ownership evidence until physical work completes.
 """
 from __future__ import annotations
 
+from contextlib import ExitStack
 from dataclasses import dataclass
 import hashlib
 import json
-from pathlib import Path
 import re
 import uuid
 
@@ -32,6 +32,7 @@ class Scope:
     attempt_rows: list
     manifests: list[dict]
     artifacts: list[dict]
+    sessions: list[dict]
 
 
 def _ids(values):
@@ -72,7 +73,8 @@ def _collect(connection, target):
         seed_id = identifier
     else:
         root = connection.execute('SELECT * FROM workflow_runs WHERE run_id=?', (identifier[4:],)).fetchone()
-        if root is None or root['macro_task_id'] is not None:
+        if (root is None or root['macro_task_id'] is not None or connection.execute(
+                'SELECT 1 FROM workflow_children WHERE child_task_id=?',(identifier[4:],)).fetchone() is not None):
             raise BoardError('NOT_FOUND', 'Unknown run group', macroTaskId=target)
         seed, seed_id = 'SELECT run_id FROM workflow_runs WHERE run_id=?', identifier[4:]
     runs = {row[0] for row in connection.execute(f'''
@@ -110,6 +112,9 @@ def _collect(connection, target):
         candidate = document.get('executionWorkspace', document)
         if 'workspaceId' in candidate and 'snapshot' in candidate:
             manifests.append(candidate)
+    for row in _rows(connection, 'workflow_children', 'parent_run_id', runs):
+        if row['workspace_manifest_json']:
+            add(json.loads(row['workspace_manifest_json']))
     for row in run_rows:
         if row['workspace_manifest_json']:
             add(json.loads(row['workspace_manifest_json']))
@@ -123,14 +128,17 @@ def _collect(connection, target):
     request_ids = {row['request_id'] for row in _rows(connection, 'decision_requests', 'decision_id', decisions)}
     return Scope(runs, tasks, {r['attempt_id'] for r in attempt_rows}, decisions,
                  {r['turn_id'] for r in turns}, request_ids, run_rows, task_rows,
-                 attempt_rows, manifests, artifacts)
+                 attempt_rows, manifests, artifacts,
+                 [row for row in worker_sessions.inventory_rows(connection, tasks)
+                  if row['storageOwner'] == 'harness-user-store'])
 
 
 def _blockers(store, connection, scope):
     runs = {row['run_id']: row for row in scope.run_rows}
+    tasks = {row['task_id']:row for row in scope.task_rows}
     reasons = {}
     def block(task_id, reason, resolution, attempt_ids=()):
-        task = next(row for row in scope.task_rows if row['task_id'] == task_id)
+        task = tasks[task_id]
         run = runs.get(task_id)
         key = (task_id, reason)
         reasons[key] = {'runId': task_id if run else None, 'taskId': task_id,
@@ -162,32 +170,66 @@ def _blockers(store, connection, scope):
 
 
 def _storage_in_use(connection, scope):
-    """Match exact structured identities; malformed unrelated JSON cannot match."""
-    identities = {(m.get('workspaceId'), m.get('repositoryId'), m.get('checkoutId')) for m in scope.manifests}
+    """Select candidate identities in SQL; parse only matching structured evidence."""
+    workspace_ids = {m['workspaceId'] for m in scope.manifests}
+    checkouts = {(m['repositoryId'],m['checkoutId']) for m in scope.manifests
+                 if m.get('repositoryId') and m.get('checkoutId')}
+    hashes = {m['manifestSha256'] for m in scope.manifests}
     holders = {}
-    for workspace_id, repository_id, checkout_id in identities:
-        for table, column, owner in (('workflow_runs','workspace_manifest_json','run_id'),
-                                     ('workflow_artifacts','manifest_json','run_id')):
-            valid = f'CASE WHEN json_valid({column}) THEN {column} END'
-            predicate = f"json_extract({valid},'$.workspaceId')=?"
-            args = [workspace_id]
-            if repository_id and checkout_id:
-                predicate += f" OR (json_extract({valid},'$.repositoryId')=? AND json_extract({valid},'$.checkoutId')=?)"
-                args.extend((repository_id, checkout_id))
-            for row in connection.execute(f'SELECT {owner} FROM {table} WHERE ({predicate})', args):
-                if row[0] not in scope.runs:
-                    holders.setdefault('workspace', set()).add(row[0])
+
+    def retain(kind, owner):
+        if owner not in scope.tasks:
+            holders.setdefault(kind,set()).add(owner)
+
+    for table,column,owner,nested in (
+            ('workflow_runs','workspace_manifest_json','run_id',False),
+            ('workflow_artifacts','manifest_json','run_id',False),
+            ('workflow_continuations','workspace_manifest_json','run_id',False),
+            ('workflow_children','workspace_manifest_json','child_task_id',False),
+            ('workflow_turns','input_json','run_id',True)):
+        valid = f'CASE WHEN json_valid({column}) THEN {column} END'
+        prefix = '$.executionWorkspace' if nested else '$'
+        wid = f"json_extract({valid},'{prefix}.workspaceId')"
+        rid = f"json_extract({valid},'{prefix}.repositoryId')"
+        cid = f"json_extract({valid},'{prefix}.checkoutId')"
+        digest = f"json_extract({valid},'{prefix}.manifestSha256')"
+        predicates = [f'{wid} IN (SELECT value FROM json_each(?))',
+                      f'{digest} IN (SELECT value FROM json_each(?))']
+        args = [_ids(workspace_ids),_ids(hashes)]
+        for repository_id,checkout_id in sorted(checkouts):
+            predicates.append(f'({rid}=? AND {cid}=?)')
+            args.extend((repository_id,checkout_id))
+        if table == 'workflow_artifacts':
+            predicates.append('manifest_sha256 IN (SELECT value FROM json_each(?))')
+            args.append(_ids(hashes))
+        query = f'SELECT {owner} AS owner,{column} AS document FROM {table} WHERE (' + ' OR '.join(predicates) + ')'
+        for row in connection.execute(query,args):
+            # A selected malformed fixed binding is corrupt target evidence;
+            # unrelated malformed JSON did not match and was never decoded.
+            json.loads(row['document'])
+            retain('workspace',row['owner'])
+    for row in connection.execute(
+            'SELECT holder_task_id,workspace_id,repository_id,checkout_id FROM workspace_reservations'):
+        if row['workspace_id'] in workspace_ids or (row['repository_id'],row['checkout_id']) in checkouts:
+            retain('checkout',row['holder_task_id'])
+    for repository_id,checkout_id in sorted(checkouts):
         for row in connection.execute(
-                'SELECT holder_task_id FROM workspace_reservations WHERE workspace_id=? OR (repository_id=? AND checkout_id=?)',
-                (workspace_id, repository_id, checkout_id)):
-            if row[0] not in scope.tasks:
-                holders.setdefault('checkout', set()).add(row[0])
-        if repository_id and checkout_id:
-            for row in connection.execute('SELECT run_id FROM workflow_integrations WHERE target_repository_id=? AND target_checkout_id=?',
-                                          (repository_id, checkout_id)):
-                if row[0] not in scope.runs:
-                    holders.setdefault('integration-target', set()).add(row[0])
-    return [{'objectKind':kind, 'holderRunIds':sorted(ids)} for kind, ids in sorted(holders.items())]
+                'SELECT run_id FROM workflow_integrations WHERE target_repository_id=? AND target_checkout_id=?',
+                (repository_id,checkout_id)):
+            retain('integration-target',row['run_id'])
+    session_ids = {(r['harness'],r['sessionId']) for r in scope.sessions}
+    if session_ids:
+        for row in worker_sessions.inventory_rows(connection,created_only=False,stopped_only=False,
+                                                  session_ids={session_id for _,session_id in session_ids}):
+            if (row['storageOwner'] == 'harness-user-store'
+                    and (row['harness'],row['sessionId']) in session_ids):
+                retain('native-session',row['taskId'])
+        for row in connection.execute(
+                'SELECT t.run_id,t.session_id,t.previous_session_id FROM workflow_turns t'
+                " JOIN attempts a ON a.attempt_id=t.attempt_id WHERE a.adapter='codex'"):
+            if any(('codex',row[field]) in session_ids for field in ('session_id','previous_session_id')):
+                retain('native-session',row['run_id'])
+    return [{'objectKind':kind,'holderRunIds':sorted(ids)} for kind,ids in sorted(holders.items())]
 
 
 def _busy(connection, scope):
@@ -240,7 +282,8 @@ def _delete_workspaces(store, scope):
 
 
 def _remove_owned_tree(path):
-    if private_dirs.linked(path) or any(private_dirs.linked(p) for p in path.parents):
+    if (private_dirs.linked_component(path) is not None
+            or path.exists() and not path.is_dir()):
         return [{'objectKind':'private-root', 'path':str(path), 'reasonCode':'owner-unproven'}]
     private_dirs.remove_tree(path)
     return []
@@ -252,9 +295,15 @@ def _delete_private_roots(store, scope):
     for row in scope.task_rows + scope.attempt_rows:
         if row['adapter'] in private_dirs.ADAPTERS:
             adapters[row['task_id']].add(row['adapter'])
+        if 'model_harness' in row.keys() and row['model_harness'] in private_dirs.ADAPTERS:
+            adapters[row['task_id']].add(row['model_harness'])
     with store.db.read() as connection:
         for row in _rows(connection, 'router_dispatches', 'task_id', scope.tasks):
             adapters[row['task_id']].add(row['harness'])
+        for row in _rows(connection,'workflow_turns','run_id',scope.runs):
+            buddy = json.loads(row['input_json']).get('buddy')
+            if buddy and buddy['harness'] in private_dirs.ADAPTERS:
+                adapters[row['run_id']].add(buddy['harness'])
         for row in scope.run_rows:
             if row['buddy_json']:
                 adapters[row['run_id']].add(json.loads(row['buddy_json'])['harness'])
@@ -274,21 +323,47 @@ def _delete_private_roots(store, scope):
 
 def _delete_cli_files(store, scope):
     skipped = []
+
+    def safe_file(path):
+        return private_dirs.linked_component(path) is None and (not path.exists() or path.is_file())
+
     def remove(path):
-        if private_dirs.linked(path) or any(private_dirs.linked(p) for p in path.parents):
+        if not safe_file(path):
             skipped.append({'objectKind':'cli-file','path':str(path),'reasonCode':'owner-unproven'})
         else:
             path.unlink(missing_ok=True)
+
+    def temporary_matches(path, **binding):
+        if not safe_file(path):
+            return False
+        try:
+            document = json.loads(path.read_text())
+        except (ValueError,UnicodeError):
+            return False
+        return isinstance(document,dict) and all(document.get(key) == value for key,value in binding.items())
+
     controls = store.directory / 'controls'
-    if controls.exists() and not private_dirs.linked(controls):
+    if controls.is_dir() and private_dirs.linked_component(controls) is None:
+        files = list(controls.iterdir())
         for run_id in scope.runs:
             pattern = re.compile(re.escape(run_id) + r'\.g([1-9][0-9]*)\.json\Z')
-            for path in controls.iterdir():
+            temporary = re.compile(r'\.' + re.escape(run_id) + r'\.g([1-9][0-9]*)\.json\..+\.tmp\Z')
+            for path in files:
                 match = pattern.fullmatch(path.name)
                 if match:
-                    remove(control_file_path(store.directory, run_id, int(match[1])))
+                    remove(control_file_path(store.directory,run_id,int(match[1])))
+                else:
+                    match = temporary.fullmatch(path.name)
+                    if match and temporary_matches(path,runId=run_id,ownerGeneration=int(match[1])):
+                        remove(path)
+    submissions = store.directory / 'submissions'
     for task in scope.task_rows:
-        remove(submission_file_path(store.directory, task['request_id']))
+        path = submission_file_path(store.directory,task['request_id'])
+        remove(path)
+        if submissions.is_dir() and private_dirs.linked_component(submissions) is None:
+            for temporary in submissions.glob('.' + path.stem + '.*.tmp'):
+                if temporary_matches(temporary,requestId=task['request_id']):
+                    remove(temporary)
     return skipped
 
 
@@ -304,8 +379,10 @@ def _delete_storage_plans(store, scope):
         for candidate in document['candidates']:
             # Only persisted plans with content-bearing allocation proof. Ordinary
             # removal receipts carry no such material and are retained.
-            proof = candidate.get('orphan') or candidate
-            manifests = [proof.get('manifest'), *(proof.get('retained') or [])]
+            manifests = [candidate.get('manifest'), *(candidate.get('retained') or [])]
+            proof = candidate.get('proof') or {}
+            allocation = proof.get('allocation') or {}
+            manifests.append(allocation.get('manifest'))
             if any(isinstance(m,dict) and m.get('workspaceId') in identities for m in manifests):
                 path.unlink()
                 break
@@ -322,6 +399,7 @@ def _delete_rows(store, connection, scope, deletion):
                 'integrationId':{x['integration_id'] for x in _rows(connection,'workflow_integrations','run_id',r)},
                 'conclusionId':{x['conclusion_id'] for x in _rows(connection,'workflow_host_conclusions','run_id',r)},
                 'conflictId':{x['conflict_id'] for x in _rows(connection,'workflow_workspace_conflicts','run_id',r)}}
+    bindings['macroTaskId'] = {deletion['target_id']}
     commands = set()
     for table,column in (('workflow_requests','decision_command_id'),('workflow_children','decision_command_id'),
                          ('workflow_continuations','command_id'),('workflow_scope_versions','command_id'),
@@ -329,13 +407,20 @@ def _delete_rows(store, connection, scope, deletion):
                          ('workspace_cleanup_plans','command_id'),('workflow_host_conclusions','command_id')):
         owner = 'parent_run_id' if table == 'workflow_children' else 'run_id'
         commands.update(x[column] for x in _rows(connection,table,owner,r) if x[column])
-    for row in connection.execute('SELECT command_id,kind,task_id,attempt_id,response_json FROM commands WHERE deletion_id IS NULL'):
-        if row['task_id'] in t or row['attempt_id'] in a or row['command_id'] in commands:
-            commands.add(row['command_id'])
-        elif row['kind'].startswith('workflow.'):
-            response = json.loads(row['response_json'])
-            if any(response.get(field) in values for field,values in bindings.items()):
-                commands.add(row['command_id'])
+    clauses,args = [],[]
+    for column,values in (('task_id',t),('attempt_id',a),('command_id',commands)):
+        clause,values_args = _in(column,values)
+        clauses.append(clause);args.extend(values_args)
+    response_clauses,response_args = [],[]
+    for field,values in bindings.items():
+        response_clauses.append(
+            f"json_extract(CASE WHEN json_valid(response_json) THEN response_json END,'$.{field}')"
+            " IN (SELECT value FROM json_each(?))")
+        response_args.append(_ids(values))
+    clauses.append("((kind LIKE 'workflow.%' OR kind='macro_task.stop') AND (" + ' OR '.join(response_clauses) + '))')
+    args.extend(response_args)
+    commands.update(row[0] for row in connection.execute(
+        'SELECT command_id FROM commands WHERE deletion_id IS NULL AND (' + ' OR '.join(clauses) + ')',args))
     clause,args = _in('command_id',commands)
     connection.execute(f"UPDATE commands SET task_id=NULL,attempt_id=NULL,response_json='{{}}',deletion_id=? WHERE {clause}",
                        [deletion['deletion_id'],*args])
@@ -374,8 +459,8 @@ def _delete_rows(store, connection, scope, deletion):
         remove(table,('attempt_id',a))
     connection.execute("DELETE FROM events WHERE task_id IN (SELECT value FROM json_each(?))"
                        " OR attempt_id IN (SELECT value FROM json_each(?)) OR seq IN (SELECT value FROM json_each(?))"
-                       " OR (kind LIKE 'decision.%' AND json_extract(payload_json,'$.decisionId') IN (SELECT value FROM json_each(?)))"
-                       " OR (kind LIKE 'router.%' AND json_extract(payload_json,'$.requestId') IN (SELECT value FROM json_each(?)))",
+                       " OR ((kind LIKE 'decision.%' OR kind LIKE 'router.%') AND json_extract(CASE WHEN json_valid(payload_json) THEN payload_json END,'$.decisionId') IN (SELECT value FROM json_each(?)))"
+                       " OR (kind LIKE 'router.%' AND json_extract(CASE WHEN json_valid(payload_json) THEN payload_json END,'$.requestId') IN (SELECT value FROM json_each(?)))",
                        (_ids(t),_ids(a),_ids(outcome_events),_ids(d),_ids(scope.requests)))
     remove('attempts',('attempt_id',a))
     remove('workflow_runs',('run_id',r))
@@ -393,28 +478,50 @@ def delete(store, target: str, micro_task_count: int) -> dict:
     if isinstance(micro_task_count,bool) or not isinstance(micro_task_count,int) or micro_task_count < 0:
         raise BoardError('INVALID_ARGUMENT','microTaskCount must be a nonnegative integer')
     with storage.locked(store):
-        with store.db.write() as connection:
-            deletion = _record(connection,target)
-            duplicate = deletion is not None
-            if deletion is not None and deletion['state'] == 'deleted':
-                return _summary(deletion,duplicate=True)
-            scope = _collect(connection,target)
-            if deletion is None:
-                if len(scope.runs) != micro_task_count:
-                    raise BoardError('REVISION_CONFLICT','The micro task count changed',microTaskCount=len(scope.runs))
-                if _busy(connection,scope):
-                    raise BoardError('MACRO_TASK_BUSY','A workspace cleanup is applying',macroTaskId=target)
-                blockers = _blockers(store,connection,scope)
-                if blockers:
-                    raise BoardError('MACRO_TASK_NOT_SETTLED','The macro task is not settled',macroTaskId=target,
-                                     blockerTotal=len(blockers),blockers=blockers[:50])
-                shared = _storage_in_use(connection,scope)
-                if shared:
-                    raise BoardError('MACRO_TASK_STORAGE_IN_USE','Storage is retained by another micro task',macroTaskId=target,objects=shared)
-                kind,identifier = _target(target)
-                connection.execute('INSERT INTO macro_task_deletions(deletion_id,target_kind,target_id,state,started_at,micro_task_count)'
-                                   " VALUES(?,?,?,'deleting',?,?)",('del-'+uuid.uuid4().hex,kind,identifier,store.now(),len(scope.runs)))
+        # Both marking and cleanup admission take the allocation lock before
+        # opening their short write transaction. No restore can cross this fence.
+        with store.db.read() as connection:
+            previous = _record(connection,target)
+            if previous is not None and previous['state'] == 'deleted':
+                return _summary(previous,duplicate=True)
+            initial_scope = _collect(connection,target)
+        from . import workspace
+        with ExitStack() as locks:
+            for identifier in sorted({m['workspaceId'] for m in initial_scope.manifests}):
+                directory = store.directory / 'workspaces' / identifier
+                if (workspace._workspace_identifier(identifier) and directory.is_dir()
+                        and (directory / '.lock').is_file()
+                        and private_dirs.linked_component(directory / '.lock') is None):
+                    try:
+                        locks.enter_context(workspace._lock(directory))
+                    except BoardError as error:
+                        if error.code == 'WORKSPACE_BUSY':
+                            with store.db.read() as connection:
+                                if _busy(connection,initial_scope):
+                                    raise BoardError('MACRO_TASK_BUSY','A workspace cleanup is applying',macroTaskId=target) from error
+                        raise
+            with store.db.write() as connection:
                 deletion = _record(connection,target)
+                duplicate = deletion is not None
+                if deletion is not None and deletion['state'] == 'deleted':
+                    return _summary(deletion,duplicate=True)
+                scope = _collect(connection,target)
+                if deletion is None:
+                    if len(scope.runs) != micro_task_count:
+                        raise BoardError('REVISION_CONFLICT','The micro task count changed',microTaskCount=len(scope.runs))
+                    if _busy(connection,scope):
+                        raise BoardError('MACRO_TASK_BUSY','A workspace cleanup is applying',macroTaskId=target)
+                    blockers = _blockers(store,connection,scope)
+                    if blockers:
+                        raise BoardError('MACRO_TASK_NOT_SETTLED','The macro task is not settled',macroTaskId=target,
+                                         blockerTotal=len(blockers),blockers=blockers[:50])
+                    shared = _storage_in_use(connection,scope)
+                    if shared:
+                        raise BoardError('MACRO_TASK_STORAGE_IN_USE','Storage is retained by another micro task',macroTaskId=target,objects=shared)
+                    kind,identifier = _target(target)
+                    connection.execute('INSERT INTO macro_task_deletions(deletion_id,target_kind,target_id,state,started_at,micro_task_count)'
+                                       " VALUES(?,?,?,'deleting',?,?)",('del-'+uuid.uuid4().hex,kind,identifier,store.now(),len(scope.runs)))
+                    deletion = _record(connection,target)
         skipped = []
         for phase,operation in (('native-session',_delete_sessions),('workspace',_delete_workspaces),
                                 ('storage-plan',_delete_storage_plans),('private-root',_delete_private_roots),('cli-file',_delete_cli_files)):

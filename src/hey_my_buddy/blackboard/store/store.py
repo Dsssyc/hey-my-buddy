@@ -331,13 +331,15 @@ class BoardStore:
         row = connection.execute("SELECT * FROM commands WHERE command_id = ?", (command_id,)).fetchone()
         if row is None:
             return None
-        if subject is not None and row["subject"] and not _constant_time_equal(row["subject"], subject):
+        if row["subject"] and ((subject is None and row["deletion_id"] is not None)
+                               or (subject is not None and not _constant_time_equal(row["subject"], subject))):
             raise BoardError(
                 "UNAUTHORIZED",
                 "This commandId belongs to a different execution identity; it cannot be replayed from here",
                 commandId=command_id,
             )
-        if row["kind"] != kind or row["request_hash"] != sha256_text(canonical_json(request)):
+        if row["kind"] != kind or (row["deletion_id"] is None
+                                    and row["request_hash"] != sha256_text(canonical_json(request))):
             raise BoardError(
                 "CONFLICT",
                 "This commandId already belongs to a different request; use a new commandId",
@@ -926,7 +928,7 @@ class BoardStore:
             existing = connection.execute("SELECT * FROM tasks WHERE request_id = ?", (request_id,)).fetchone()
             run = self.workflow._run_optional(connection, existing["task_id"]) if existing is not None else None
             if run is not None:
-                self.workflow._require_replayable_submission(run, request_id)
+                self.workflow._require_replayable_submission(connection, run, request_id)
             if command_id:
                 receipt = self._receipt(connection, command_id, "task.submit", request)
                 if receipt is not None:

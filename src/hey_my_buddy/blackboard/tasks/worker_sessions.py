@@ -33,15 +33,25 @@ def _completed_codex_turn(result: dict, row) -> dict | None:
 def _inventory(store, task_ids: set[str] | None = None) -> list[dict]:
     if task_ids is not None and not task_ids:
         return []
+    with store.db.read() as connection:
+        return inventory_rows(connection, task_ids)
+
+
+def inventory_rows(connection, task_ids: set[str] | None = None, *, created_only=True, stopped_only=True, session_ids=None) -> list[dict]:
+    """Read bound native identities within the caller's existing snapshot."""
     rows = []
-    selected = sorted(task_ids) if task_ids is not None else []
-    task_filter = " AND a.task_id IN (" + ",".join("?" for _ in selected) + ")" if selected else ""
-    with store.db.read() as db:
-        attempts = db.execute(
-            "SELECT a.attempt_id,a.task_id,a.execution_state,a.shutdown_confirmed,a.result_json "
-            "FROM attempts a WHERE a.adapter='codex' AND a.result_json IS NOT NULL" + task_filter
-            + " ORDER BY a.attempt_id", selected
-        ).fetchall()
+    task_filter = " AND a.task_id IN (SELECT value FROM json_each(?))" if task_ids is not None else ""
+    args = [json.dumps(sorted(task_ids))] if task_ids is not None else []
+    if session_ids is not None:
+        valid = "CASE WHEN json_valid(a.result_json) THEN a.result_json END"
+        task_filter += (f" AND (json_extract({valid},'$.result.nativeSession.sessionId') IN (SELECT value FROM json_each(?))"
+                        f" OR json_extract({valid},'$.result.turn.sessionId') IN (SELECT value FROM json_each(?)))")
+        args.extend([json.dumps(sorted(session_ids))] * 2)
+    attempts = connection.execute(
+        "SELECT a.attempt_id,a.task_id,a.execution_state,a.shutdown_confirmed,a.result_json "
+        "FROM attempts a WHERE a.adapter='codex' AND a.result_json IS NOT NULL" + task_filter
+        + " ORDER BY a.attempt_id", args
+    ).fetchall()
     for row in attempts:
         try:
             receipt = json.loads(row['result_json'])
@@ -61,7 +71,7 @@ def _inventory(store, task_ids: set[str] | None = None) -> list[dict]:
                 continue
             # A stored native thread identity plus an own stopped attempt is
             # provenance. Never infer ownership from an app title or path.
-            if row['execution_state'] != 'finished' or not row['shutdown_confirmed']:
+            if stopped_only and (row['execution_state'] != 'finished' or not row['shutdown_confirmed']):
                 continue
             if native.get('storageOwner') not in {'harness-user-store', 'hey-my-buddy-micro-task'}:
                 continue
@@ -87,7 +97,7 @@ def _inventory(store, task_ids: set[str] | None = None) -> list[dict]:
     threads = {}
     for row in rows:
         key = (row['taskId'], row['sessionId'])
-        if key not in created:
+        if created_only and key not in created:
             continue
         if key not in threads:
             threads[key] = {**row, 'attemptIds': []}

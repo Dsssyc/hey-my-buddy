@@ -1,8 +1,10 @@
 """Workflow receipt identities replay against an advancing private board."""
 from __future__ import annotations
 
+from contextlib import ExitStack
 import json
 from pathlib import Path
+from unittest.mock import patch
 
 from blackboard.tasks.test_workflow import WorkflowTestCase
 from blackboard.tasks import test_scope_recovery as scope_fixtures
@@ -11,6 +13,7 @@ from blackboard.tasks.test_workflow_real import RealWorkspaceTestCase
 from hey_my_buddy.blackboard.tasks.command_receipts import replay_response, stored_response
 from hey_my_buddy.blackboard.tasks import workflow as workflow_module
 from hey_my_buddy.blackboard.tasks import workspace as workspace_module
+from hey_my_buddy.blackboard.tasks import macro_task_deletion
 from hey_my_buddy.errors import BoardError
 
 
@@ -31,6 +34,32 @@ def replay(board, kind, response):
 
 
 class WorkflowReceiptTests(WorkflowTestCase):
+    def test_deleted_decision_and_cancel_replay_before_run_lookup(self):
+        board = self.board()
+        submitted = self.submit(board, request_id="delete-replay", macroTask={"title": "Disposable"})
+        self.finish_turn(board, self.claim(board), disposition="attention")
+        view = board.call("workflow_get", {"runId": submitted["runId"]})
+        decision_params = {
+            "runId": submitted["runId"], "requestId": view["activeRequest"]["requestId"],
+            "commandId": "deleted-decision", "expectedRevision": view["revision"],
+            "decision": "decline", "autoContinue": False, **self.control(view),
+        }
+        board.call("workflow_decide", decision_params)
+        cancel_params = {"runId": submitted["runId"], "commandId": "deleted-cancel",
+                         "reason": "Close disposable work", **self.control(view)}
+        cancelled = board.call("workflow_cancel", cancel_params)
+        board.call("workflow_conclude", {"runId": submitted["runId"],
+                                         "note": "Reviewed the failure", **self.control(cancelled)})
+        with ExitStack() as stack:
+            for stage in ("_delete_sessions", "_delete_workspaces", "_delete_storage_plans",
+                          "_delete_private_roots", "_delete_cli_files"):
+                stack.enter_context(patch.object(macro_task_deletion, stage, return_value=[]))
+            macro_task_deletion.delete(board.store, submitted["macroTaskId"], 1)
+        expected = {"commandId": "deleted-decision", "deleted": True}
+        self.assertEqual(board.call("workflow_decide", {**decision_params, "expectedRevision": 999}), expected)
+        self.assertEqual(board.call("workflow_cancel", {**cancel_params, "reason": "Different reason"}),
+                         {"commandId": "deleted-cancel", "deleted": True})
+
     def test_deleted_receipt_checks_identity_without_loading_response(self):
         board = self.board()
         params = {"requestId": "deleted-command", "adapter": "command", "task": "Record a command",
@@ -48,9 +77,22 @@ class WorkflowReceiptTests(WorkflowTestCase):
             )
         self.assertEqual(board.store.task_submit(params, command_id="deleted-command-id"),
                          {"commandId": "deleted-command-id", "deleted": True})
-        with self.assertRaises(BoardError) as caught:
-            board.store.task_submit({**params, "task": "Different input"}, command_id="deleted-command-id")
+        self.assertEqual(board.store.task_submit({**params, "task": "Different input"}, command_id="deleted-command-id"),
+                         {"commandId": "deleted-command-id", "deleted": True})
+        with board.store.db.read() as connection:
+            with self.assertRaises(BoardError) as caught:
+                board.store._receipt(connection, "deleted-command-id", "task.retry", {})
         self.assertEqual(caught.exception.code, "CONFLICT")
+        with board.store.db.write() as connection:
+            connection.execute("UPDATE commands SET subject='owner-identity' WHERE command_id='deleted-command-id'")
+        with board.store.db.read() as connection:
+            self.assertEqual(board.store._receipt(connection, "deleted-command-id", "task.submit", {},
+                                                  "owner-identity"),
+                             {"commandId": "deleted-command-id", "deleted": True})
+            for subject in (None, "other-identity"):
+                with self.subTest(subject=subject), self.assertRaises(BoardError) as caught:
+                    board.store._receipt(connection, "deleted-command-id", "task.submit", {}, subject)
+                self.assertEqual(caught.exception.code, "UNAUTHORIZED")
 
     def test_decision_continuation_takeover_and_cancel_keep_commits_with_current_view(self):
         board = self.board()

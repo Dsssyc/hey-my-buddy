@@ -85,6 +85,28 @@ class ProjectLabelTests(WorkflowTestCase):
 
 
 class MacroTaskAdmissionTests(WorkflowTestCase):
+    def test_deleting_standalone_tree_fences_its_run(self):
+        board = self.board()
+        run = self.submit(board, request_id="standalone-fence")
+        with board.store.db.write() as connection:
+            connection.execute(
+                "INSERT INTO macro_task_deletions"
+                " (deletion_id,target_kind,target_id,state,started_at,micro_task_count)"
+                " VALUES('standalone-deletion','micro-task-tree',?,'deleting',?,1)",
+                ("run:" + run["runId"], board.store.now()),
+            )
+        with self.assertRaises(BoardError) as continued:
+            board.call("workflow_continue", {
+                "runId": run["runId"], "commandId": "standalone-continue",
+                "expectedRevision": run["revision"], "input": "Continue this work",
+                **self.control(run),
+            })
+        self.assertEqual(continued.exception.code, "TASK_DELETING")
+        self.assertEqual(continued.exception.details["deletionId"], "standalone-deletion")
+        with self.assertRaises(BoardError) as retried:
+            board.store.task_retry({"runId": run["runId"], **self.control(run)})
+        self.assertEqual(retried.exception.code, "TASK_DELETING")
+
     def test_deleting_group_rejects_named_and_inherited_admission(self):
         board = self.board()
         first = self.submit(board, macroTask={"title": "group"})
@@ -115,6 +137,20 @@ class MacroTaskAdmissionTests(WorkflowTestCase):
             board.store.task_retry({"runId": first["runId"], **self.control(first)})
         self.assertEqual(retried.exception.code, "TASK_DELETING")
         self.assertEqual(board.store.count_tasks(), 1)
+
+    def test_deleting_group_rejects_submission_recovery(self):
+        board = self.board()
+        run = self.submit(board, macroTask={"title":"recovering group"})
+        with board.store.db.write() as connection:
+            connection.execute(
+                "INSERT INTO macro_task_deletions"
+                " (deletion_id,target_kind,target_id,state,started_at,micro_task_count)"
+                " VALUES('recovery-deletion','macro-task',?,'deleting',?,1)",
+                (run["macroTaskId"],board.store.now()),
+            )
+        with self.assertRaises(BoardError) as caught:
+            self.submit(board, macroTask={"title":"recovering group"})
+        self.assertEqual(caught.exception.code,"MACRO_TASK_DELETED")
 
     def test_group_and_title_replay_are_separate_from_execution(self):
         board = self.board()

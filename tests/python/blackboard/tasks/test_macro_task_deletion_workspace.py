@@ -1,19 +1,23 @@
 """Physical deletion boundaries against disposable Git worktrees."""
 import unittest
+import json
 from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import patch
 
-from blackboard.tasks.test_workspace import WorkspaceTests
+from blackboard.tasks import test_workspace as workspace_tests
+from hey_my_buddy import private_dirs
+from hey_my_buddy.errors import BoardError
 from hey_my_buddy.blackboard.tasks import workspace
 from hey_my_buddy.blackboard.tasks.macro_task_deletion_workspace import delete_workspaces
 
 
 class DeletionWorkspaceTests(unittest.TestCase):
-    setUp = WorkspaceTests.setUp
-    _seed_repository = WorkspaceTests._seed_repository
-    git = WorkspaceTests.git
-    intent = WorkspaceTests.intent
-    prepare = WorkspaceTests.prepare
+    setUp = workspace_tests.WorkspaceTests.setUp
+    _seed_repository = workspace_tests.WorkspaceTests._seed_repository
+    git = workspace_tests.WorkspaceTests.git
+    intent = workspace_tests.WorkspaceTests.intent
+    prepare = workspace_tests.WorkspaceTests.prepare
 
     def delete(self, manifest, artifacts=()):
         return delete_workspaces(SimpleNamespace(directory=self.state), [manifest], list(artifacts))
@@ -66,3 +70,165 @@ class DeletionWorkspaceTests(unittest.TestCase):
         self.assertIn("REF_UNPROVEN", [item["reasonCode"] for item in skipped])
         self.assertTrue((self.state / "workspaces" / identifier).exists())
         self.assertTrue(self.git("show-ref", "--verify", unknown))
+
+    def test_interrupted_after_each_phase_replays(self):
+        for phase in ("checkout", "refs", "allocation"):
+            with self.subTest(phase=phase):
+                manifest = self.prepare(request="request-" + phase)
+                directory = self.state / "workspaces" / manifest["workspaceId"]
+                def interrupt(completed):
+                    if completed == phase:
+                        raise OSError("interrupted")
+                with self.assertRaisesRegex(OSError, "interrupted"):
+                    delete_workspaces(SimpleNamespace(directory=self.state), [manifest], [], interrupt)
+                self.assertEqual(self.delete(manifest), [])
+                self.assertFalse(directory.exists())
+
+    def test_missing_checkout_still_removes_refs_and_record(self):
+        manifest = self.prepare()
+        directory = self.state / "workspaces" / manifest["workspaceId"]
+        checkout = Path(manifest["checkoutRoot"])
+        self.git("worktree", "unlock", str(checkout))
+        self.git("worktree", "remove", "--force", str(checkout))
+        self.assertEqual(self.delete(manifest), [])
+        self.assertFalse(directory.exists())
+        self.assertFalse(self.git("for-each-ref", "--format=%(refname)",
+                                  f"refs/hey-my-buddy/workspaces/{manifest['workspaceId']}/"))
+
+    def test_missing_allocation_record_still_removes_bound_refs(self):
+        manifest = self.prepare()
+        directory = self.state / "workspaces" / manifest["workspaceId"]
+        checkout = Path(manifest["checkoutRoot"])
+        self.git("worktree", "unlock", str(checkout))
+        self.git("worktree", "remove", "--force", str(checkout))
+        private_dirs.remove_tree(directory)
+        self.assertTrue(self.git("show-ref", "--verify", manifest["snapshot"]["inputRef"]))
+        self.assertEqual(self.delete(manifest), [])
+        self.assertFalse(self.git("for-each-ref", "--format=%(refname)",
+                                  f"refs/hey-my-buddy/workspaces/{manifest['workspaceId']}/"))
+
+    def test_later_turn_on_same_allocation_keeps_its_seal_until_checkout_removal(self):
+        allocation = self.prepare(request="allocation")
+        later = self.prepare(request="later-turn", kind="existing", cwd=allocation["path"])
+        checkout = Path(allocation["checkoutRoot"])
+        (checkout / "src/file.txt").write_text("later result\n")
+        output = workspace.seal(self.state, later, "task-1", "attempt-1")
+        skipped = delete_workspaces(SimpleNamespace(directory=self.state),
+                                    [later, allocation, later], [output])
+        self.assertEqual(skipped, [])
+        self.assertFalse(checkout.exists())
+        for manifest in (allocation, later):
+            self.assertFalse((self.state / "workspaces" / manifest["workspaceId"]).exists())
+            self.assertFalse(self.git("for-each-ref", "--format=%(refname)",
+                                      f"refs/hey-my-buddy/workspaces/{manifest['workspaceId']}/"))
+
+    def test_user_checkout_is_preserved(self):
+        manifest = self.prepare(kind="existing")
+        self.assertEqual(self.delete(manifest), [])
+        self.assertTrue(self.repo.is_dir())
+        self.assertTrue((self.repo / "src/file.txt").is_file())
+        self.assertFalse(self.git("for-each-ref", "--format=%(refname)",
+                                  f"refs/hey-my-buddy/workspaces/{manifest['workspaceId']}/"))
+
+    def test_bad_request_binding_does_not_create_a_workspace(self):
+        manifest = self.prepare()
+        directory = self.state / "workspaces" / manifest["workspaceId"]
+        record = directory / "request.json"
+        request = json.loads(record.read_text())
+        request["requestId"] = "not-the-allocation-request"
+        record.write_text(json.dumps(request))
+        before = set(directory.parent.iterdir())
+        skipped = self.delete(manifest)
+        self.assertIn("OWNER_UNPROVEN", [item["reasonCode"] for item in skipped])
+        self.assertEqual(set(directory.parent.iterdir()), before)
+
+    def test_linked_allocation_lock_is_left_in_place(self):
+        manifest = self.prepare()
+        directory = self.state / "workspaces" / manifest["workspaceId"]
+        lock = directory / ".lock"
+        lock.unlink()
+        outside = self.root / "foreign-lock"
+        outside.write_text("owned elsewhere")
+        lock.symlink_to(outside)
+        skipped = self.delete(manifest)
+        self.assertIn("OWNER_UNPROVEN", [item["reasonCode"] for item in skipped])
+        self.assertEqual(outside.read_text(), "owned elsewhere")
+        self.assertTrue(self.git("show-ref", "--verify", manifest["snapshot"]["inputRef"]))
+
+    def test_linked_allocation_directory_is_preserved(self):
+        manifest = self.prepare()
+        directory = self.state / "workspaces" / manifest["workspaceId"]
+        outside = self.root / "outside-allocation"
+        directory.rename(outside)
+        directory.symlink_to(outside, target_is_directory=True)
+        skipped = self.delete(manifest)
+        self.assertIn("OWNER_UNPROVEN", [item["reasonCode"] for item in skipped])
+        self.assertTrue(outside.is_dir())
+        self.assertTrue(self.git("show-ref", "--verify", manifest["snapshot"]["inputRef"]))
+
+    def test_git_remove_failure_with_unchanged_oid_is_an_error(self):
+        manifest = self.prepare()
+        checkout = Path(manifest["checkoutRoot"])
+        self.git("worktree", "unlock", str(checkout))
+        self.git("worktree", "remove", "--force", str(checkout))
+        original = workspace._git
+        def fail_remove(root, *args, **kwargs):
+            if args[0] == "update-ref":
+                raise BoardError("WORKSPACE_GIT_ERROR", "Git refused ref removal")
+            return original(root, *args, **kwargs)
+        with patch.object(workspace, "_git", side_effect=fail_remove):
+            with self.assertRaises(BoardError) as caught:
+                self.delete(manifest)
+        self.assertEqual(caught.exception.code, "WORKSPACE_GIT_ERROR")
+        self.assertTrue((self.state / "workspaces" / manifest["workspaceId"]).exists())
+        self.assertEqual(self.delete(manifest), [])
+
+    def test_changed_reference_is_retained(self):
+        manifest = self.prepare()
+        checkout = Path(manifest["checkoutRoot"])
+        self.git("worktree", "unlock", str(checkout))
+        self.git("worktree", "remove", "--force", str(checkout))
+        ref = manifest["snapshot"]["inputRef"]
+        replacement = self.git("rev-parse", "HEAD").decode().strip()
+        if replacement == manifest["inputCommit"]:
+            (self.repo / "docs/readme.md").write_text("changed\n")
+            self.git("add", ".")
+            self.git("commit", "-qm", "replacement")
+            replacement = self.git("rev-parse", "HEAD").decode().strip()
+        self.git("update-ref", ref, replacement)
+        skipped = self.delete(manifest)
+        self.assertIn("REF_CHANGED", [item["reasonCode"] for item in skipped])
+        self.assertTrue((self.state / "workspaces" / manifest["workspaceId"]).exists())
+        self.assertEqual(self.git("rev-parse", ref).decode().strip(), replacement)
+
+    def test_compare_delete_preserves_a_raced_oid_and_accepts_raced_absence(self):
+        for changed in (True,False):
+            with self.subTest(changed=changed):
+                manifest = self.prepare('race-' + str(changed))
+                checkout = Path(manifest['checkoutRoot'])
+                self.git('worktree','unlock',str(checkout))
+                self.git('worktree','remove','--force',str(checkout))
+                ref = manifest['snapshot']['inputRef']
+                replacement = self.git('rev-parse','HEAD').decode().strip()
+                if replacement == manifest['inputCommit']:
+                    (self.repo / 'docs/readme.md').write_text('competing update ' + str(changed))
+                    self.git('add','.')
+                    self.git('commit','-qm','competing ref update')
+                    replacement = self.git('rev-parse','HEAD').decode().strip()
+                original = workspace._git
+                def race(root,*args,**kwargs):
+                    if args[:3] == ('update-ref','-d',ref):
+                        if changed:
+                            original(root,'update-ref',ref,replacement)
+                        else:
+                            original(root,*args,**kwargs)
+                        raise BoardError('WORKSPACE_GIT_ERROR','Compare delete lost its race')
+                    return original(root,*args,**kwargs)
+                with patch.object(workspace,'_git',side_effect=race):
+                    skipped = self.delete(manifest)
+                if changed:
+                    self.assertIn('REF_CHANGED',[item['reasonCode'] for item in skipped])
+                    self.assertEqual(self.git('rev-parse',ref).decode().strip(),replacement)
+                else:
+                    self.assertEqual(skipped,[])
+                    self.assertFalse((self.state/'workspaces'/manifest['workspaceId']).exists())

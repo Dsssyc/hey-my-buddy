@@ -515,7 +515,7 @@ def inspect(store, *, git_proof: bool = True) -> dict:
             if path in seen:
                 continue
             seen.add(path)
-            if not path.exists():
+            if not workspace._path_present(path):
                 # The checkout may have been reclaimed while its allocation
                 # record and sealed outputs remain. Keep those bytes visible.
                 add('workspaces', path.parent, [*reasons, 'checkout-missing'],

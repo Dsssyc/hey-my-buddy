@@ -28,6 +28,7 @@ from datetime import datetime, timedelta
 import hashlib
 import json
 import re
+import stat
 import threading
 import uuid
 from pathlib import Path
@@ -42,6 +43,7 @@ from .command_receipts import CANCELLATION_NOTE
 from .macro_task_deletion_guard import reject_deleting_run, reject_macro_task
 from ..store.db import canonical_json, sha256_text
 from ...errors import BoardError
+from ... import private_dirs
 
 try:  # The workspace module is owned and delivered separately.
     from . import workspace as _workspace_module
@@ -1612,7 +1614,7 @@ class WorkflowCoordinator:
         macro_task_id = (self._run_row(connection, lead["runId"])["macro_task_id"] if lead is not None else
                          attach_macro_task(connection, presentation, spec=spec, host_id=hostId,
                                            manifest=manifest, now=now, fixed_run=fixed_run))
-        if macro_task_id is not None:
+        if lead is not None and macro_task_id is not None:
             reject_macro_task(connection, macro_task_id)
         connection.execute(
             "INSERT INTO workflow_runs(run_id, host_id, owner_generation, control_verifier, micro_task_json,"
@@ -1762,7 +1764,7 @@ class WorkflowCoordinator:
                         requestId=request_id,
                         existingTaskId=existing["task_id"],
                     )
-                self._require_replayable_submission(run_row, request_id)
+                self._require_replayable_submission(connection, run_row, request_id)
                 if existing["input_fingerprint"] != fingerprint:
                     raise BoardError(
                         "CONFLICT",
@@ -1825,7 +1827,7 @@ class WorkflowCoordinator:
                             task = connection.execute("SELECT * FROM tasks WHERE request_id=?", (request_id,)).fetchone()
                             run_row = self._run_optional(connection, task["task_id"]) if task is not None else None
                             if run_row is not None:
-                                self._require_replayable_submission(run_row, request_id)
+                                self._require_replayable_submission(connection, run_row, request_id)
                             identical = (
                                 task is not None
                                 and run_row is not None
@@ -1917,7 +1919,11 @@ class WorkflowCoordinator:
         return facts
 
     @staticmethod
-    def _require_replayable_submission(run_row, request_id: str) -> None:
+    def _require_replayable_submission(connection, run_row, request_id: str) -> None:
+        if run_row["macro_task_id"] is not None:
+            reject_macro_task(connection, run_row["macro_task_id"])
+        else:
+            reject_deleting_run(connection, run_row["run_id"])
         if run_row["request_fingerprint"] is None:
             raise BoardError(
                 "SUBMISSION_REPLAY_UNAVAILABLE",
@@ -2171,6 +2177,9 @@ class WorkflowCoordinator:
         reason = schemas.optional_string(params, "reason", max_length=schemas.MAX_WORKFLOW_REASON_BYTES) or ""
         auto_continue = schemas.optional_bool(params, "autoContinue", True)
         with self.db.read() as connection:
+            deleted = self.board._deleted_receipt(connection, command_id, "workflow.decide", {})
+            if deleted is not None:
+                return {"deletedReceipt": deleted, "helpers": []}
             owner = self._run_row(connection, run_id)
             self._authorize(connection, owner, params, console_authority=console_authority, action="A Host decision")
             integrator = self._owner_actor(connection, owner)
@@ -2184,6 +2193,8 @@ class WorkflowCoordinator:
         return self.decide_normalized(params, normalized, console_authority=console_authority)
 
     def decide_normalized(self, params: dict, normalized: dict, *, console_authority: dict | None = None) -> dict:
+        if "deletedReceipt" in normalized:
+            return normalized["deletedReceipt"]
         run_id, request_id, command_id = (normalized[key] for key in ("runId", "requestId", "commandId"))
         expected, decision, reason = (normalized[key] for key in ("expectedRevision", "decision", "reason"))
         auto_continue, helpers = normalized["autoContinue"], normalized["helpers"]
@@ -2218,12 +2229,15 @@ class WorkflowCoordinator:
         with self._helper_preparations(helpers if decision == "approve" else []) as prepared:
             now = self.now()
             with self.db.write() as connection:
+                deleted = self.board._deleted_receipt(connection, command_id, "workflow.decide", request_key)
+                if deleted is not None:
+                    return deleted
                 run_row = self._run_row(connection, run_id)
                 task = connection.execute("SELECT * FROM tasks WHERE task_id=?", (run_id,)).fetchone()
                 actor, _initiator = self._authorize(connection, run_row, params, console_authority=console_authority, action="A Host decision")
                 receipt = self.board._receipt(connection, command_id, "workflow.decide", request_key)
                 if receipt is not None:
-                    return {**receipt, "duplicate": True}
+                    return receipt if receipt.get("deleted") else {**receipt, "duplicate": True}
                 self._expect_revision(run_row, expected)
                 request_row = self._request_row(connection, run_id, request_id)
                 if json.loads(request_row["payload_json"]).get("source") == "routing":
@@ -2453,7 +2467,7 @@ class WorkflowCoordinator:
             )
             receipt = self.board._receipt(connection, command_id, "workflow.decide", request_key)
             if receipt is not None:
-                return {**receipt, "duplicate": True}
+                return receipt if receipt.get("deleted") else {**receipt, "duplicate": True}
             self._expect_revision(run_row, expected)
             request_row = self._request_row(connection, run_id, request_id)
             active = self._open_boundary(connection, run_row)
@@ -2947,7 +2961,7 @@ class WorkflowCoordinator:
             self._authorize(connection, run, params, console_authority=console_authority, action="A continuation")
             receipt = self.board._receipt(connection, command_id, "workflow.continue", request_key)
             if receipt is not None:
-                return {**receipt, "duplicate": True}
+                return receipt if receipt.get("deleted") else {**receipt, "duplicate": True}
             self._expect_revision(run, expected)
             target_snapshot = self._continuation_target(connection, run, target_id)
             self._buddy_matches_micro_task(target_snapshot, supplied_buddy)
@@ -2967,11 +2981,14 @@ class WorkflowCoordinator:
         buddy = self._validated_buddy(supplied_buddy) if supplied_buddy is not None else None
         now = self.now()
         with self.db.write() as connection:
+            deleted = self.board._deleted_receipt(connection, command_id, "workflow.continue", request_key)
+            if deleted is not None:
+                return deleted
             owner = self._run_row(connection, owner_run_id)
             actor, initiator = self._authorize(connection, owner, params, console_authority=console_authority, action="A continuation")
             receipt = self.board._receipt(connection, command_id, "workflow.continue", request_key)
             if receipt is not None:
-                return {**receipt, "duplicate": True}
+                return receipt if receipt.get("deleted") else {**receipt, "duplicate": True}
             reject_deleting_run(connection, owner_run_id)
             reject_deleting_run(connection, target_id)
             self._expect_revision(owner, expected)
@@ -3337,7 +3354,7 @@ class WorkflowCoordinator:
                 self._authorize_takeover_replay(
                     connection, run_row, params, console_authority, expected_generation, receipt
                 )
-                return {**receipt, "duplicate": True}
+                return receipt if receipt.get("deleted") else {**receipt, "duplicate": True}
             actor, _initiator = self._authorize(connection, run_row, params, console_authority=console_authority, action="A takeover")
             self._expect_revision(run_row, expected)
             if run_row["owner_generation"] != expected_generation:
@@ -3458,7 +3475,7 @@ class WorkflowCoordinator:
             if command_id:
                 receipt = self.board._receipt(connection, command_id, "workflow.cancel", request_key)
                 if receipt is not None:
-                    return {**receipt, "duplicate": True}
+                    return receipt if receipt.get("deleted") else {**receipt, "duplicate": True}
             if run_row["state"] in ("accepted", "concluded"):
                 raise BoardError("CONFLICT", "This run is already closed; cancellation cannot undo it")
             response = self._cancel_in_transaction(connection, run_row, task, reason, actor, initiator, now)
@@ -3992,6 +4009,9 @@ class WorkflowCoordinator:
                 adjusted=adjusted, reason=note)
         now = self.now()
         with self.db.write() as connection:
+            deleted = self.board._deleted_receipt(connection, command_id, "workflow.accept", request_key)
+            if deleted is not None:
+                return deleted
             owner = self._run_row(connection, owner_run_id)
             actor, _initiator = self._authorize(connection, owner, params, console_authority=console_authority, action="An acceptance")
             receipt = self.board._receipt(connection, command_id, "workflow.accept", request_key)
@@ -4945,17 +4965,20 @@ class WorkflowCoordinator:
             self._authorize(connection, owner, params, console_authority=console_authority, action="A scope amendment")
             receipt = self.board._receipt(connection, command_id, "workflow.scope_amend", request_key)
             if receipt is not None:
-                return {**receipt, "duplicate": True}
+                return receipt if receipt.get("deleted") else {**receipt, "duplicate": True}
             self._expect_revision(owner, expected)
             target_snapshot = self._target_run(connection, owner, target_id)
             self._scope_precheck(connection, target_snapshot, expected_scope, "A scope amendment")
         now = self.now()
         with self.db.write() as connection:
+            deleted = self.board._deleted_receipt(connection, command_id, "workflow.scope_amend", request_key)
+            if deleted is not None:
+                return deleted
             owner = self._run_row(connection, owner_run_id)
             actor, _initiator = self._authorize(connection, owner, params, console_authority=console_authority, action="A scope amendment")
             receipt = self.board._receipt(connection, command_id, "workflow.scope_amend", request_key)
             if receipt is not None:
-                return {**receipt, "duplicate": True}
+                return receipt if receipt.get("deleted") else {**receipt, "duplicate": True}
             self._expect_revision(owner, expected)
             run_row = self._target_run(connection, owner, target_id)
             run_id = run_row["run_id"]
@@ -5170,7 +5193,7 @@ class WorkflowCoordinator:
             actor, _initiator = self._authorize(connection, owner, params, console_authority=console_authority, action="A workspace resolution")
             receipt = self.board._receipt(connection, command_id, "workflow.workspace_resolve", request_key)
             if receipt is not None:
-                return {**receipt, "duplicate": True}
+                return receipt if receipt.get("deleted") else {**receipt, "duplicate": True}
             self._expect_revision(owner, expected)
             target_snapshot = self._target_run(connection, owner, target_id)
             conflict = self._conflict_row(connection, target_id, conflict_id)
@@ -5211,11 +5234,14 @@ class WorkflowCoordinator:
             raise
         now = self.now()
         with self.db.write() as connection:
+            deleted = self.board._deleted_receipt(connection, command_id, "workflow.workspace_resolve", request_key)
+            if deleted is not None:
+                return deleted
             owner = self._run_row(connection, owner_run_id)
             actor, _initiator = self._authorize(connection, owner, params, console_authority=console_authority, action="A workspace resolution")
             receipt = self.board._receipt(connection, command_id, "workflow.workspace_resolve", request_key)
             if receipt is not None:
-                return {**receipt, "duplicate": True}
+                return receipt if receipt.get("deleted") else {**receipt, "duplicate": True}
             self._expect_revision(owner, expected)
             run_row = self._target_run(connection, owner, target_id)
             run_id = run_row["run_id"]
@@ -5537,7 +5563,7 @@ class WorkflowCoordinator:
             actor, _initiator = self._authorize(connection, owner, params, console_authority=console_authority, action="A cleanup plan")
             receipt = self.board._receipt(connection, command_id, "workflow.cleanup_plan", request_key)
             if receipt is not None:
-                return {**receipt, "duplicate": True}
+                return receipt if receipt.get("deleted") else {**receipt, "duplicate": True}
             self._expect_revision(owner, expected)
             run_row = self._target_run(connection, owner, target_id, include_lead=_lead_conclusion)
             run_id = target_id
@@ -5588,11 +5614,14 @@ class WorkflowCoordinator:
         plan_id = f"cln-{uuid.uuid4()}"
         expires_at = self._expiry(CLEANUP_PLAN_TTL_SECONDS)
         with self.db.write() as connection:
+            deleted = self.board._deleted_receipt(connection, command_id, "workflow.cleanup_plan", request_key)
+            if deleted is not None:
+                return deleted
             owner = self._run_row(connection, owner_run_id)
             actor, _initiator = self._authorize(connection, owner, params, console_authority=console_authority, action="A cleanup plan")
             receipt = self.board._receipt(connection, command_id, "workflow.cleanup_plan", request_key)
             if receipt is not None:
-                return {**receipt, "duplicate": True}
+                return receipt if receipt.get("deleted") else {**receipt, "duplicate": True}
             reject_deleting_run(connection, target_id)
             self._expect_revision(owner, expected)
             run_row = self._target_run(connection, owner, target_id, include_lead=_lead_conclusion)
@@ -5648,6 +5677,24 @@ class WorkflowCoordinator:
                 failed.add(row['attempt_id'])
         return frozenset(failed)
 
+    @staticmethod
+    @contextmanager
+    def _cleanup_allocation_lock(state_dir: Path, allocation: dict):
+        """Share the original allocation fence with macro task deletion marking."""
+        directory = Path(state_dir).resolve() / "workspaces" / allocation["workspaceId"]
+        lock_path = directory / ".lock"
+        if (Path(allocation["path"]).parent != directory
+                or private_dirs.linked_component(directory) is not None
+                or not directory.is_dir()):
+            raise BoardError("WORKSPACE_UNSAFE", "The cleanup allocation directory is not proven")
+        try:
+            if not stat.S_ISREG(lock_path.lstat().st_mode):
+                raise BoardError("WORKSPACE_UNSAFE", "The cleanup allocation lock is not a regular file")
+        except FileNotFoundError as error:
+            raise BoardError("WORKSPACE_UNSAFE", "The cleanup allocation lock is missing") from error
+        with workspace_module()._lock(directory):
+            yield
+
     def cleanup_apply(self, params: dict, *, console_authority: dict | None = None,
                       _lead_conclusion: bool = False) -> dict:
         """Apply one unexpired cleanup plan to exactly its registered checkout.
@@ -5680,7 +5727,7 @@ class WorkflowCoordinator:
             self._authorize(connection, owner, params, console_authority=console_authority, action="A cleanup apply")
             receipt = self.board._receipt(connection, command_id, "workflow.cleanup_apply", request_key)
             if receipt is not None:
-                return {**receipt, "duplicate": True}
+                return receipt if receipt.get("deleted") else {**receipt, "duplicate": True}
             self._expect_revision(owner, expected)
             run_row = self._target_run(connection, owner, target_id, include_lead=_lead_conclusion)
             run_id = target_id
@@ -5697,6 +5744,7 @@ class WorkflowCoordinator:
             task = connection.execute("SELECT * FROM tasks WHERE task_id=?", (run_id,)).fetchone()
             manifest = json.loads(run_row["workspace_manifest_json"] or "{}")
             retained = self._allocation_provenance(connection, run_row)
+            allocation = workspace_module().resolve_allocation(self.board.directory, manifest, retained)
             sealed = self._latest_handoff(connection, run_row, manifest)
             # Board eligibility proves the whole owned lineage stopped. Reclaim
             # only sessions bound to the checkout being removed, including
@@ -5713,65 +5761,71 @@ class WorkflowCoordinator:
                 private_micro_tasks.extend(task['task_id'] for task in self._routing_tasks(connection, micro_task_id))
             failed_attempts = {micro_task_id: self._failed_attempt_ids(connection, micro_task_id)
                                for micro_task_id in dict.fromkeys(private_micro_tasks)}
-        path = Path(plan["path"])
-        inspection = None
-        if path.exists() or path.is_symlink():
-            inspection = workspace_module().cleanup_inspect(
-                self.board.directory, manifest, sealed=sealed,
-                retained=retained, allowed=self._board_adopted_paths(run_id, manifest), resume=resume)
-            # The registered owner of this allocation may complete the same removal
-            # while the eligibility is proven, or the checkout may already have been
-            # deleted out of band. A path that is factually gone leaves nothing to
-            # delete, so its reasons cannot block; anything still occupying the exact
-            # planned path keeps every NOT_READY reason.
-        blocked = inspection is not None and bool(inspection["reasons"]) and (path.exists() or path.is_symlink())
-        if blocked:
-            details = {"reasons": inspection["reasons"], "unsealedPaths": inspection["unsealedPaths"]}
-            if inspection.get("attachedBranch") is not None:
-                details["attachedBranch"] = inspection["attachedBranch"]
-            refusal = BoardError("NOT_READY", "This checkout is not eligible for cleanup", **details)
-        now = self.now()
-        with self.db.write() as connection:
-            owner = self._run_row(connection, owner_run_id)
-            self._authorize(connection, owner, params, console_authority=console_authority, action="A cleanup apply")
-            receipt = self.board._receipt(connection, command_id, "workflow.cleanup_apply", request_key)
-            if receipt is not None:
-                return {**receipt, "duplicate": True}
-            reject_deleting_run(connection, target_id)
-            self._expect_revision(owner, expected)
-            run_row = self._target_run(connection, owner, target_id, include_lead=_lead_conclusion)
-            run_id = run_row["run_id"]
-            self._expect_revision(run_row, target_snapshot["revision"])
-            plan = connection.execute(
-                "SELECT * FROM workspace_cleanup_plans WHERE plan_id=? AND run_id=?", (plan_id, run_id)
-            ).fetchone()
-            if plan["state"] == "applied":
-                return {**self.compact(connection, run_row), "duplicate": True, "plan": self._plan_view(plan),
-                        "targetRunId": run_id, "targetRevision": run_row["revision"]}
-            self._cleanup_apply_precheck(connection, run_row, plan)
-            if blocked and plan["state"] == "applying":
-                # A started removal keeps its fence even when its resumption is
-                # refused; no part of that journal may be rewritten here.
-                raise refusal
-            if plan["state"] == "planned":
-                evidence = json.loads(plan["evidence_json"])
-                retention = json.loads(plan["retention_json"])
-                if inspection is not None:
-                    evidence["workspace"] = {key: inspection.get(key) for key in
-                                             ("eligible", "reasons", "kind", "checkoutId", "repositoryId", "worktree",
-                                              "locked", "unsealedPaths", "sealedObservation", "workspaceId",
-                                              "manifestWorkspaceId", "allocation", "attachedBranch")}
-                    retention["fixedRefs"] = sorted(set(retention["fixedRefs"]) | set(inspection["refs"]))
-                    retention["checkoutRoot"] = inspection["path"]
-                    retention["cwd"] = inspection["cwd"]
-                connection.execute(
-                    "UPDATE workspace_cleanup_plans SET state=?, evidence_json=?, retention_json=?, reasons_json=?,"
-                    " command_id=?, revision=revision+1 WHERE plan_id=? AND state='planned'",
-                    ("blocked" if blocked else "applying", canonical_json(evidence), canonical_json(retention),
-                     canonical_json(inspection["reasons"] if blocked else []), command_id, plan_id),
-                )
-            head = self.board._head_of(connection)
-        self.board._notify(head)
+        with self._cleanup_allocation_lock(self.board.directory, allocation):
+            with self.db.read() as connection:
+                reject_deleting_run(connection, target_id)
+            path = Path(plan["path"])
+            inspection = None
+            if path.exists() or path.is_symlink():
+                inspection = workspace_module().cleanup_inspect(
+                    self.board.directory, manifest, sealed=sealed,
+                    retained=retained, allowed=self._board_adopted_paths(run_id, manifest), resume=resume)
+                # The registered owner of this allocation may complete the same removal
+                # while the eligibility is proven, or the checkout may already have been
+                # deleted out of band. A path that is factually gone leaves nothing to
+                # delete, so its reasons cannot block; anything still occupying the exact
+                # planned path keeps every NOT_READY reason.
+            blocked = inspection is not None and bool(inspection["reasons"]) and (path.exists() or path.is_symlink())
+            if blocked:
+                details = {"reasons": inspection["reasons"], "unsealedPaths": inspection["unsealedPaths"]}
+                if inspection.get("attachedBranch") is not None:
+                    details["attachedBranch"] = inspection["attachedBranch"]
+                refusal = BoardError("NOT_READY", "This checkout is not eligible for cleanup", **details)
+            now = self.now()
+            with self.db.write() as connection:
+                deleted = self.board._deleted_receipt(connection, command_id, "workflow.cleanup_apply", request_key)
+                if deleted is not None:
+                    return deleted
+                owner = self._run_row(connection, owner_run_id)
+                self._authorize(connection, owner, params, console_authority=console_authority, action="A cleanup apply")
+                receipt = self.board._receipt(connection, command_id, "workflow.cleanup_apply", request_key)
+                if receipt is not None:
+                    return receipt if receipt.get("deleted") else {**receipt, "duplicate": True}
+                reject_deleting_run(connection, target_id)
+                self._expect_revision(owner, expected)
+                run_row = self._target_run(connection, owner, target_id, include_lead=_lead_conclusion)
+                run_id = run_row["run_id"]
+                self._expect_revision(run_row, target_snapshot["revision"])
+                plan = connection.execute(
+                    "SELECT * FROM workspace_cleanup_plans WHERE plan_id=? AND run_id=?", (plan_id, run_id)
+                ).fetchone()
+                if plan["state"] == "applied":
+                    return {**self.compact(connection, run_row), "duplicate": True, "plan": self._plan_view(plan),
+                            "targetRunId": run_id, "targetRevision": run_row["revision"]}
+                self._cleanup_apply_precheck(connection, run_row, plan)
+                if blocked and plan["state"] == "applying":
+                    # A started removal keeps its fence even when its resumption is
+                    # refused; no part of that journal may be rewritten here.
+                    raise refusal
+                if plan["state"] == "planned":
+                    evidence = json.loads(plan["evidence_json"])
+                    retention = json.loads(plan["retention_json"])
+                    if inspection is not None:
+                        evidence["workspace"] = {key: inspection.get(key) for key in
+                                                 ("eligible", "reasons", "kind", "checkoutId", "repositoryId", "worktree",
+                                                  "locked", "unsealedPaths", "sealedObservation", "workspaceId",
+                                                  "manifestWorkspaceId", "allocation", "attachedBranch")}
+                        retention["fixedRefs"] = sorted(set(retention["fixedRefs"]) | set(inspection["refs"]))
+                        retention["checkoutRoot"] = inspection["path"]
+                        retention["cwd"] = inspection["cwd"]
+                    connection.execute(
+                        "UPDATE workspace_cleanup_plans SET state=?, evidence_json=?, retention_json=?, reasons_json=?,"
+                        " command_id=?, revision=revision+1 WHERE plan_id=? AND state='planned'",
+                        ("blocked" if blocked else "applying", canonical_json(evidence), canonical_json(retention),
+                         canonical_json(inspection["reasons"] if blocked else []), command_id, plan_id),
+                    )
+                head = self.board._head_of(connection)
+            self.board._notify(head)
         if blocked:
             raise refusal
         removed = None

@@ -33,6 +33,7 @@ src/hey_my_buddy/blackboard/service/service.py	786	hey_my_buddy.buddy.harnesses.
 src/hey_my_buddy/blackboard/tasks/inquiry.py	21	hey_my_buddy.buddy.harnesses.live	blackboard->buddy	import
 src/hey_my_buddy/blackboard/tasks/inquiry.py	53	hey_my_buddy.buddy.harnesses.registry	blackboard->buddy	import
 src/hey_my_buddy/blackboard/tasks/inquiry.py	171	hey_my_buddy.buddy.harnesses.registry	blackboard->buddy	import
+src/hey_my_buddy/blackboard/tasks/macro_task_deletion.py	269	hey_my_buddy.buddy.harnesses.registry	blackboard->buddy	import
 src/hey_my_buddy/blackboard/tasks/workflow.py	1087	hey_my_buddy.buddy.harnesses.registry	blackboard->buddy	import
 src/hey_my_buddy/blackboard/tasks/workflow.py	5405	hey_my_buddy.buddy.roles.turn_io	blackboard->buddy	import
 src/hey_my_buddy/blackboard/tasks/workflow.py	5528	hey_my_buddy.buddy.roles.turn_io	blackboard->buddy	import
