@@ -11,7 +11,6 @@ from blackboard.tasks.test_workflow import WorkflowTestCase
 from blackboard.tasks.test_workflow_real import CONFIGURATION, RealWorkspaceTestCase
 from hey_my_buddy.blackboard.tasks import workspace as git_workspace
 from hey_my_buddy.buddy.harnesses.registry import _WORKER_PERMISSIONS
-from hey_my_buddy.buddy.harnesses.claude.adapter import ClaudeAdapter
 from hey_my_buddy.errors import BoardError
 from hey_my_buddy.cli.cli_views import governed_brief
 
@@ -19,7 +18,7 @@ from hey_my_buddy.cli.cli_views import governed_brief
 class PermissionLevelsTests(WorkflowTestCase):
     def setUp(self):
         super().setUp()
-        self.executors['claude'] = SimpleNamespace(native_resume=False, validate_turn_provenance=lambda record: None)
+        self.executors['claude'] = SimpleNamespace(native_resume=False, native_resume_permission_change=False, validate_turn_provenance=lambda record: None)
 
     def claude_run(self, board, **extra):
         return self.submit(board, adapter='claude', provider='fixture', model='fixture', effort='high', **extra)
@@ -71,9 +70,6 @@ class PermissionLevelsTests(WorkflowTestCase):
                 self.assertNotIn('enforcement', governed_brief(view))
 
     def test_turns_freeze_access_and_full_reason_then_inherit(self):
-        # Only the declaration is extended here to exercise future full storage;
-        # synthetic receipts never launch a harness or change native parameters.
-        self.enterContext(patch.object(ClaudeAdapter, 'capabilities', (*ClaudeAdapter.capabilities, 'permission:full')))
         board = self.board()
         self.register_claude(board)
         view = self.claude_run(board, access='read')

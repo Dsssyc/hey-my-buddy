@@ -9,7 +9,7 @@ import unittest
 from unittest.mock import patch
 
 from hey_my_buddy.blackboard.catalog import catalog
-from hey_my_buddy.buddy.harnesses.registry import require_permission
+from hey_my_buddy.buddy.harnesses.registry import _WORKER_PERMISSIONS, require_permission
 from hey_my_buddy.protocol import schemas
 from hey_my_buddy.errors import BoardError
 from support import FIXTURE_CATALOG
@@ -144,11 +144,17 @@ class CatalogTests(unittest.TestCase):
         permissions = {profile["adapter"]: {cap for cap in profile["capabilities"]
                                             if cap.startswith("permission:")} for profile in profiles}
         self.assertEqual(permissions, {
-            "claude": {"permission:read", "permission:write"},
+            "claude": {"permission:read", "permission:write", "permission:full"},
             "codex": {"permission:read", "permission:write", "permission:full"},
             "dsh": {"permission:read", "permission:write", "permission:full"},
-            "zcode": {"permission:read", "permission:write"},
+            "zcode": {"permission:read", "permission:write", "permission:full"},
         })
+        with patch.dict(_WORKER_PERMISSIONS, {"claude": {
+                level: declaration for level, declaration in _WORKER_PERMISSIONS["claude"].items()
+                if level != "full"}}):
+            restricted = catalog.CatalogView.from_payload(payload).proposed_profiles()
+        claude = next(profile for profile in restricted if profile["adapter"] == "claude")
+        self.assertNotIn("permission:full", claude["capabilities"])
 
     def test_explicit_permission_gate_uses_adapter_declaration(self):
         require_permission(None, "full")
@@ -158,14 +164,22 @@ class CatalogTests(unittest.TestCase):
         require_permission({"adapter": "zcode"}, "read")
         require_permission({"adapter": "codex"}, "write")
         require_permission({"adapter": "codex"}, "full")
+        require_permission({"adapter": "claude"}, "full")
         require_permission({"adapter": "dsh"}, "full")
+        require_permission({"adapter": "zcode"}, "full")
         require_permission({"adapter": "external"}, "read")
         require_permission({"adapter": "command"}, "write")
-        for adapter, access in (("claude", "full"), ("external", "full")):
-            with self.subTest(adapter=adapter, access=access), self.assertRaises(BoardError) as caught:
-                require_permission({"adapter": adapter}, access)
+        with patch.dict(_WORKER_PERMISSIONS, {"claude": {
+                level: declaration for level, declaration in _WORKER_PERMISSIONS["claude"].items()
+                if level != "full"}}):
+            with self.assertRaises(BoardError) as caught:
+                require_permission({"adapter": "claude"}, "full")
             self.assertEqual(caught.exception.code, "UNSUPPORTED_CAPABILITY")
-            self.assertEqual(caught.exception.details["requiredCapability"], f"permission:{access}")
+            self.assertEqual(caught.exception.details["requiredCapability"], "permission:full")
+        with self.assertRaises(BoardError) as caught:
+            require_permission({"adapter": "external"}, "full")
+        self.assertEqual(caught.exception.code, "UNSUPPORTED_CAPABILITY")
+        self.assertEqual(caught.exception.details["requiredCapability"], "permission:full")
 
     def test_native_ids_with_context_suffixes_keep_legal_distinct_profile_ids(self):
         payload = {"source": "claude-native-fixture", "providers": [{

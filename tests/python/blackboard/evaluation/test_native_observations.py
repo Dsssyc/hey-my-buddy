@@ -214,7 +214,7 @@ class NativeReceiptTests(WorkflowTestCase):
         from protocol.test_usage import dsh_usage_record, codex_usage_record, CODEX_NATIVE
         clock = FakeClock("2026-09-29T10:00:00Z")
         board = self.board(clock=clock)
-        self.executors["codex"] = SimpleNamespace(native_resume=True, validate_turn_provenance=lambda record: None)
+        self.executors["codex"] = SimpleNamespace(native_resume=True, native_resume_permission_change=True, validate_turn_provenance=lambda record: None)
         quota_record = deepcopy(CODEX_NATIVE["rateLimitsRead"])
         quota_record["rateLimitsByLimitId"]["codex"]["primary"]["usedPercent"] = 95
         quota = quota_candidate_from_response(quota_record, observed_at=clock())

@@ -54,6 +54,7 @@ class WorkerPermissionTests(NativeRunCase):
                 else:
                     self.assertEqual(settings, {"sandbox": {"enabled": False}})
                 self.assertEqual(self.observations(result)["permissionMode"], mode)
+                self.assertEqual(result.native_evidence.unconfirmed, ())
 
     def test_known_different_mode_stops_before_processing_model_or_tool_output(self):
         self.fixture_case("permission-mode-mismatch")
@@ -74,6 +75,7 @@ class WorkerPermissionTests(NativeRunCase):
                 self.assertEqual(result.end.status, "ok", result.end.message)
                 self.assertEqual(self.observations(result)["permissionModeStatus"], "unread")
                 self.assertIsNone(self.observations(result)["permissionMode"])
+                self.assertEqual(result.native_evidence.unconfirmed, ("settings-readback",))
 
     def test_multiple_denials_share_one_bounded_input_fact(self):
         collector = native_run._TurnCollector(self.worker_request("write"), mock.Mock(),

@@ -134,9 +134,8 @@ register_run_seam("dsh", dsh_run)
 #: advertise this capability.
 EXTERNAL_CAPABILITIES = ("external", "artifacts", "task-text")
 
-# Worker levels name the Host's chosen boundary. Native tool scope is a
-# separate harness fact: two current Worker paths require their existing
-# write execution path even for a read reservation, which the board seals.
+# Worker levels name the Host's chosen boundary; each harness declares the
+# native tool scope and enforcement it provides for that level.
 _WORKER_PERMISSIONS = {
     "codex": {"read": ("read", "enforced"), "write": ("write", "enforced"),
               "full": ("full", "enforced")},

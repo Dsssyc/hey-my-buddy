@@ -207,6 +207,16 @@ class MockNativeCase(ZcodeFixtureCase):
 
 
 class FastSeamTests(NativeRunCase):
+    def test_full_scope_without_worker_permission_is_refused_before_native_launch(self):
+        request = self.fast_request("fixture prompt").model_copy(update={"tool_scope": "full"})
+        with mock.patch.object(native_run, "_run") as native:
+            with self.assertRaises(BoardError) as caught:
+                run(request, observer=lambda _facts: RunFeedback(action="continue"),
+                    services=None, cancelled=lambda: False)
+        self.assertEqual(caught.exception.code, "INVALID_ARGUMENT")
+        self.assertEqual(caught.exception.details["toolScope"], "full")
+        native.assert_not_called()
+
     def test_a_settled_answer_is_a_final_message_fact_with_role_checked_schema(self):
         os.environ["BUDDY_ZCODE_TEST_CASE"] = "ok"
         prompt = no_tool_prompt("Choose a profile", SCHEMA)

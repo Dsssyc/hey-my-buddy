@@ -14,6 +14,7 @@ class ZcodeAdapter:
     name = "zcode"
     capabilities = ("zcode", "observe", "inquiry", "workspace", "cancel", "artifacts", "deadline", "native-session")
     native_resume = True
+    native_resume_permission_change = True
     model_discovery = True
     no_tool_structured = True
     read_only_structured = False

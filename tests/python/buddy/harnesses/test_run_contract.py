@@ -157,18 +157,21 @@ class NativeEvidenceContractTests(unittest.TestCase):
 class CodecRoundtripTests(unittest.TestCase):
     def test_full_scope_crosses_the_run_contract_and_is_refused_before_native_launch(self):
         from hey_my_buddy.buddy.harnesses.claude import native_run as claude
+        from hey_my_buddy.buddy.harnesses.codex import native_run as codex
+        from hey_my_buddy.buddy.harnesses.dsh import native_run as dsh
+        from hey_my_buddy.buddy.harnesses.zcode import native_run as zcode
 
         request = edited(full_request(Path("/private/tmp")), tool_scope="full")
         self.assertEqual(rc.decode_run_request(rc.encode_run_request(request)).tool_scope, "full")
-        for name, module in (("claude", claude),):
+        for name, module in (("claude", claude), ("codex", codex), ("dsh", dsh), ("zcode", zcode)):
             with self.subTest(harness=name), mock.patch("subprocess.Popen",
                                                         side_effect=AssertionError("native launch")) as spawn:
                 with self.assertRaises(BoardError) as caught:
                     module.run(edited(request, harness=name), observer=lambda _event: None,
                                services=None, cancelled=lambda: False)
                 self.assertEqual(caught.exception.code, "INVALID_ARGUMENT")
-                self.assertIn("full access requires a Worker permission" if name == "claude"
-                              else "full access is not implemented", caught.exception.message)
+                self.assertIn("permission level" if name == "codex" else "Worker permission",
+                              caught.exception.message)
                 spawn.assert_not_called()
 
     def test_worker_permission_roundtrips_and_keeps_native_scope_consistent(self):
@@ -189,6 +192,18 @@ class CodecRoundtripTests(unittest.TestCase):
             codex.run(request, observer=lambda _event: None, services=None, cancelled=lambda: False)
         self.assertEqual(native.call_args.args[2], "worker")
         require_permission({"adapter": "claude"}, "full")
+
+    def test_undeclared_full_worker_permission_is_refused(self):
+        from hey_my_buddy.buddy.harnesses.registry import _WORKER_PERMISSIONS, require_permission, worker_permission
+        with mock.patch.dict(_WORKER_PERMISSIONS, {"claude": {
+                level: declaration for level, declaration in _WORKER_PERMISSIONS["claude"].items()
+                if level != "full"}}):
+            for check in (lambda: require_permission({"adapter": "claude"}, "full"),
+                          lambda: worker_permission("claude", "full")):
+                with self.subTest(check=check), self.assertRaises(BoardError) as caught:
+                    check()
+                self.assertEqual(caught.exception.code, "UNSUPPORTED_CAPABILITY")
+                self.assertEqual(caught.exception.details["requiredCapability"], "permission:full")
 
     def test_codex_write_or_full_without_worker_level_is_a_caller_error(self):
         from hey_my_buddy.buddy.harnesses.codex import native_run as codex
