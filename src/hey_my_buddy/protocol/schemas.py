@@ -448,18 +448,7 @@ def require_expected_revision(params: dict) -> int:
 
 
 def _spec_fields(params: dict) -> dict:
-    """The ordinary spec fields, given flat. The nested ``spec`` object is retired.
-
-    ADR-021 decision 17 removes the duplicate spelling: one field given in two
-    places could never silently change what is executed, and now the second
-    place no longer exists. Naming it is rejected with where the field belongs.
-    """
-    if "spec" in params:
-        raise BoardError(
-            "INVALID_ARGUMENT",
-            "spec is a retired duplicate spelling; give the ordinary spec fields flat, at the top level",
-            field="spec",
-        )
+    """Project the declared fields after the original request was validated."""
     spec_params: dict = {}
     for key in WORKFLOW_SPEC_FIELDS:
         if key in params:
@@ -604,7 +593,6 @@ def normalize_workflow_spec(params: dict) -> dict:
     it (the Router chooses). Command and external execution records use the
     separate ordinary execution submission contract.
     """
-    _reject_retired_spec_keys(params)
     supplied = [key for key in BUDDY_FIELDS if params.get(key) is not None]
     if supplied and len(supplied) != len(BUDDY_FIELDS):
         missing = [key for key in BUDDY_FIELDS if key not in supplied]

@@ -37,7 +37,6 @@ from ...protocol import schemas
 from ...protocol.stop import WRAP_UP_INITIATORS
 from . import fixes as task_fixes
 from . import host_conclusions
-from .micro_task import _complete_buddy
 from ..store.db import canonical_json, sha256_text
 from ...errors import BoardError
 
@@ -289,6 +288,16 @@ class WorkflowCoordinator:
     def _turn_view(row, *, include_audit: bool = False, compact: bool = False) -> dict:
         outcome = json.loads(row["outcome_json"]) if row["outcome_json"] else None
         context = _turn_input_context(row["input_json"])
+        adapter = row["execution_adapter"]
+        frozen_buddy = context.get("buddy")
+        if adapter in schemas.CODING_HARNESSES:
+            buddy = schemas.normalize_buddy(frozen_buddy)
+            if buddy["harness"] != adapter:
+                raise BoardError("TURN_INVALID", "The frozen buddy does not match the turn's execution harness")
+        elif adapter in ("command", "external") and frozen_buddy == {"adapter": adapter}:
+            buddy = None
+        else:
+            raise BoardError("TURN_INVALID", "The turn has an unknown execution or frozen buddy shape")
         view = {
             "turnId": row["turn_id"],
             "turnIndex": row["turn_index"],
@@ -308,7 +317,7 @@ class WorkflowCoordinator:
             "createdAt": row["created_at"],
             "updatedAt": row["updated_at"],
             # This turn's own frozen buddy, never the current run's.
-            "buddy": _complete_buddy(context.get("buddy")),
+            "buddy": buddy,
             # This turn's own frozen routing identity. An older turn input that
             # predates the binding stays null: it is never inferred from the current
             # run, wall-clock timestamps or a matching model name.
@@ -619,7 +628,7 @@ class WorkflowCoordinator:
         ).fetchone()
         host_conclusion = host_conclusions.current(connection, run_row)
         turns = connection.execute(
-            "SELECT t.*,a.token_usage_json FROM workflow_turns t LEFT JOIN attempts a ON a.attempt_id=t.attempt_id WHERE t.run_id=? ORDER BY t.turn_index DESC LIMIT ?",
+            "SELECT t.*,a.token_usage_json,a.adapter AS execution_adapter FROM workflow_turns t LEFT JOIN attempts a ON a.attempt_id=t.attempt_id WHERE t.run_id=? ORDER BY t.turn_index DESC LIMIT ?",
             (run_row["run_id"], MAX_ACTIVE_TURNS_VIEW),
         ).fetchall()
         requests = connection.execute(
@@ -719,7 +728,6 @@ class WorkflowCoordinator:
             "accessReason": json.loads(run_row["execution_workspace_json"]).get("accessReason"),
             "requestFingerprint": run_row["request_fingerprint"],
             "buddy": self._buddy(run_row),
-            "adapter": task_row["adapter"],
             "buddyLocked": bool(run_row["buddy_locked"]),
             "delegationAuthority": bool(run_row["delegation_authority"]),
             "leadOwnership": ({"leadRunId": ownership["lead_run_id"], "leadTurnId": ownership["lead_turn_id"],
@@ -782,8 +790,7 @@ class WorkflowCoordinator:
             "task": task if len(task) <= limit else task[:limit],
             "taskTruncated": len(task) > limit,
             "taskBytes": len(task.encode("utf-8")),
-            **({"adapter": micro_task["adapter"]} if micro_task.get("adapter") in ("command", "external")
-               else {"harness": micro_task.get("harness")}),
+            "harness": micro_task.get("harness"),
             "cwd": micro_task.get("cwd"),
             "fingerprint": fingerprint,
         }
@@ -1694,7 +1701,23 @@ class WorkflowCoordinator:
                                               "buddyRevision": 1})
         return run_id
 
+    def normalize_submission(self, params: dict) -> dict:
+        """Validate the original request before native discovery or workspace work."""
+        scope = current_scope()
+        lead = scope if scope is not None and scope["kind"] == AGENT_KIND else None
+        if lead is not None:
+            for field in ("hostId", "owner", "macroTask", "macroTaskId", "macroTaskOf"):
+                if field in params:
+                    raise BoardError("INVALID_ARGUMENT", f"A Lead submission derives {field} from its execution credential", field=field)
+        normalized = schemas.normalize_workflow_submit(params, lead_run_id=lead["runId"] if lead else None)
+        if lead is not None and normalized["delegationAuthority"]:
+            raise BoardError("FORBIDDEN", "A Lead cannot grant delegationAuthority to an owned micro task")
+        return normalized
+
     def submit(self, params: dict) -> dict:
+        return self.submit_normalized(params, self.normalize_submission(params))
+
+    def submit_normalized(self, params: dict, normalized: dict) -> dict:
         """Prepare the workspace, admit one ordinary micro-task task and return control.
 
         Authority is a private submission capability chosen by the caller before the
@@ -1705,13 +1728,6 @@ class WorkflowCoordinator:
         """
         scope = current_scope()
         lead = scope if scope is not None and scope["kind"] == AGENT_KIND else None
-        if lead is not None:
-            for field in ("hostId", "owner", "macroTask", "macroTaskId", "macroTaskOf"):
-                if field in params:
-                    raise BoardError("INVALID_ARGUMENT", f"A Lead submission derives {field} from its execution credential", field=field)
-        normalized = schemas.normalize_workflow_submit(params, lead_run_id=lead["runId"] if lead else None)
-        if lead is not None and normalized["delegationAuthority"]:
-            raise BoardError("FORBIDDEN", "A Lead cannot grant delegationAuthority to an owned micro task")
         request_id = normalized["requestId"]
         spec = normalized["spec"]
         host_id = normalized["hostId"]
@@ -2050,7 +2066,7 @@ class WorkflowCoordinator:
 
     def _audit(self, connection, run_row) -> dict:
         turns = connection.execute(
-            "SELECT t.*,a.token_usage_json FROM workflow_turns t LEFT JOIN attempts a ON a.attempt_id=t.attempt_id WHERE t.run_id=? ORDER BY t.turn_index", (run_row["run_id"],)
+            "SELECT t.*,a.token_usage_json,a.adapter AS execution_adapter FROM workflow_turns t LEFT JOIN attempts a ON a.attempt_id=t.attempt_id WHERE t.run_id=? ORDER BY t.turn_index", (run_row["run_id"],)
         ).fetchall()
         requests = connection.execute(
             "SELECT * FROM workflow_requests WHERE run_id=? ORDER BY created_at", (run_row["run_id"],)
@@ -2122,7 +2138,7 @@ class WorkflowCoordinator:
         }
 
     # -- decide --------------------------------------------------------------
-    def decide(self, params: dict, *, console_authority: dict | None = None) -> dict:
+    def normalize_decision(self, params: dict, *, console_authority: dict | None = None) -> dict:
         schemas.reject_unknown(
             params,
             {
@@ -2154,6 +2170,18 @@ class WorkflowCoordinator:
             self._authorize(connection, owner, params, console_authority=console_authority, action="A Host decision")
             integrator = self._owner_actor(connection, owner)
         helpers = schemas.normalize_helpers(params, integrator=integrator)
+        return {"runId": run_id, "requestId": request_id, "commandId": command_id,
+                "expectedRevision": expected, "decision": decision, "reason": reason,
+                "autoContinue": auto_continue, "helpers": helpers}
+
+    def decide(self, params: dict, *, console_authority: dict | None = None) -> dict:
+        normalized = self.normalize_decision(params, console_authority=console_authority)
+        return self.decide_normalized(params, normalized, console_authority=console_authority)
+
+    def decide_normalized(self, params: dict, normalized: dict, *, console_authority: dict | None = None) -> dict:
+        run_id, request_id, command_id = (normalized[key] for key in ("runId", "requestId", "commandId"))
+        expected, decision, reason = (normalized[key] for key in ("expectedRevision", "decision", "reason"))
+        auto_continue, helpers = normalized["autoContinue"], normalized["helpers"]
         request_key = {
             "runId": run_id,
             "requestId": request_id,
@@ -2730,7 +2758,7 @@ class WorkflowCoordinator:
                 canonical_json(spec),
                 fingerprint,
                 schemas.FINGERPRINT_VERSION_CURRENT,
-                spec.get("harness") or spec.get("adapter") or "unresolved",
+                spec.get("harness") or "unresolved",
                 canonical_json(spec.get("requiredCapabilities", [])),
                 effective_cwd,
                 canonical_json(spec.get("exclusiveResources", [])),

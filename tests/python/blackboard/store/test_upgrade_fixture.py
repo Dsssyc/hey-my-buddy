@@ -44,11 +44,21 @@ class UpgradeFixtureTests(unittest.TestCase):
         selected = {}
         for key, adapter in (('delivered', 'command'), ('accepted', 'external')):
             run_id = fixture['stableIds'][key]
+            original = json.loads(connection.execute(
+                'SELECT micro_task_json FROM workflow_runs WHERE run_id=?', (run_id,)
+            ).fetchone()[0])
+            for field in ('harness', 'provider', 'model', 'effort'):
+                original.pop(field, None)
+            original['adapter'] = adapter
+            original_raw = _json(original)
             old_buddy = json.dumps({'adapter': adapter})
             old_payload = json.dumps({'source': 'original-explicit', 'buddy': {'adapter': adapter},
                                       'buddyRevision': 1})
             connection.execute('UPDATE tasks SET adapter=? WHERE task_id=?', (adapter, run_id))
-            connection.execute('UPDATE workflow_runs SET buddy_json=? WHERE run_id=?', (old_buddy, run_id))
+            connection.execute('UPDATE attempts SET adapter=? WHERE task_id=?', (adapter, run_id))
+            connection.execute('UPDATE workflow_runs SET buddy_json=?,micro_task_json=?,micro_task_fingerprint=?'
+                               ' WHERE run_id=?', (old_buddy, original_raw,
+                                                  hashlib.sha256(original_raw.encode()).hexdigest(), run_id))
             connection.execute("UPDATE events SET payload_json=? WHERE task_id=? AND kind='workflow.buddy_selected'",
                                (old_payload, run_id))
             event = connection.execute(
@@ -65,15 +75,34 @@ class UpgradeFixtureTests(unittest.TestCase):
         events = [tuple(row) for row in connection.execute(
             "SELECT seq,payload_json FROM events WHERE task_id=? AND kind='workflow.buddy_selected'", (run_id,))]
         self.assertTrue(events)
+        original = json.loads(events[0][1])['buddy']
+        harness = 'claude' if original['harness'] != 'claude' else 'codex'
+        current = {'harness': harness, 'provider': 'fixture-provider', 'model': 'fixture-model', 'effort': 'high'}
+        connection.execute("UPDATE tasks SET adapter=? WHERE task_id=?", (harness, run_id))
+        connection.execute('UPDATE workflow_runs SET buddy_json=? WHERE run_id=?', (json.dumps(current), run_id))
+        connection.commit()
+        before = upgrade.idle_snapshot(fixture['state'], exact=True)
+        board_upgrade.migrate(fixture['state'])
+        upgrade.verify_migrated_snapshot(before, upgrade.idle_snapshot(fixture['state'], exact=True))
+        self.assertEqual([tuple(row) for row in connection.execute(
+            "SELECT seq,payload_json FROM events WHERE task_id=? AND kind='workflow.buddy_selected'", (run_id,))], events)
+        self.assertEqual(json.loads(connection.execute(
+            'SELECT buddy_json FROM workflow_runs WHERE run_id=?', (run_id,)).fetchone()[0]), current)
+
+    def test_native_selection_event_uses_original_spec_after_harness_override(self):
+        fixture, connection = self.restored('native-override')
+        selections = self.insert_native_selections(fixture, connection)
+        run_id = fixture['stableIds']['delivered']
+        adapter, seq, _, _ = selections[run_id]
         current = {'harness': 'codex', 'provider': 'openai', 'model': 'fixture-model', 'effort': 'high'}
         connection.execute("UPDATE tasks SET adapter='codex' WHERE task_id=?", (run_id,))
         connection.execute('UPDATE workflow_runs SET buddy_json=? WHERE run_id=?', (json.dumps(current), run_id))
         connection.commit()
-        before = upgrade.idle_snapshot(fixture['state'])
+        before = upgrade.idle_snapshot(fixture['state'], exact=True)
         board_upgrade.migrate(fixture['state'])
-        upgrade.verify_migrated_snapshot(before, upgrade.idle_snapshot(fixture['state']))
-        self.assertEqual([tuple(row) for row in connection.execute(
-            "SELECT seq,payload_json FROM events WHERE task_id=? AND kind='workflow.buddy_selected'", (run_id,))], events)
+        upgrade.verify_migrated_snapshot(before, upgrade.idle_snapshot(fixture['state'], exact=True))
+        self.assertEqual(tuple(connection.execute('SELECT kind,payload_json FROM events WHERE seq=?', (seq,)).fetchone()),
+                         ('workflow.execution_selected', _json({'source': 'original-explicit', 'adapter': adapter})))
         self.assertEqual(json.loads(connection.execute(
             'SELECT buddy_json FROM workflow_runs WHERE run_id=?', (run_id,)).fetchone()[0]), current)
 
@@ -105,7 +134,10 @@ class UpgradeFixtureTests(unittest.TestCase):
                 task = store.task_get({'runId': run_id})['task']
                 for view in (workflow, micro_task_brief(workflow), task_brief(task), brief_rows[run_id]):
                     self.assertIsNone(view['buddy'])
-                    self.assertEqual(view['adapter'], adapter)
+                self.assertNotIn('adapter', workflow)
+                self.assertNotIn('adapter', micro_task_brief(workflow))
+                self.assertEqual(task_brief(task)['adapter'], adapter)
+                self.assertEqual(brief_rows[run_id]['adapter'], adapter)
                 self.assertIsNone(task['lineage']['buddy'])
                 self.assertEqual(task['adapter'], adapter)
                 self.assertIsNone(workflow['currentTurn']['buddy'])
@@ -195,7 +227,7 @@ class UpgradeFixtureTests(unittest.TestCase):
         state = fixture['state']
         old_stop = self.insert_stop_receipt(fixture, old)
         native = self.insert_native_selections(fixture, old)
-        before = upgrade.idle_snapshot(state)
+        before = upgrade.idle_snapshot(state, exact=True)
         expected_settings = router.configuration(old)
         expected_runs = dict(old.execute('SELECT run_id,state FROM workflow_runs'))
         request_fingerprints = dict(old.execute('SELECT run_id,request_fingerprint FROM workflow_runs'))
@@ -235,7 +267,7 @@ class UpgradeFixtureTests(unittest.TestCase):
             result = upgrade.upgrade({})
         self.assertTrue(result['upgraded'], result)
         self.assertNotIn('archive', result)
-        after = upgrade.idle_snapshot(state, event_head=before['eventHead'])
+        after = upgrade.idle_snapshot(state, event_head=before['eventHead'], exact=True)
         self.assertEqual(after['schema'], SCHEMA_VERSION)
         self.assertEqual(after['eventHead'], before['eventHead'])
         converted_tables = {'meta', 'commands', 'workflow_runs', 'events'}
@@ -346,15 +378,15 @@ class UpgradeFixtureTests(unittest.TestCase):
 
     def test_migrated_snapshot_rejects_a_fix_row_inserted_after_upgrade(self):
         fixture, connection = self.restored('changed-fixes')
-        before = upgrade.idle_snapshot(fixture['state'])
+        before = upgrade.idle_snapshot(fixture['state'], exact=True)
         board_upgrade.migrate(fixture['state'])
-        after = upgrade.idle_snapshot(fixture['state'], event_head=before['eventHead'])
+        after = upgrade.idle_snapshot(fixture['state'], event_head=before['eventHead'], exact=True)
         upgrade.verify_migrated_snapshot(before, after)
         connection.execute('INSERT INTO workflow_fixes(run_id,fixed_run_id,created_at) VALUES(?,?,?)',
                            (fixture['stableIds']['accepted'], fixture['stableIds']['delivered'],
                             '2026-01-01T00:00:00Z'))
         connection.commit()
-        corrupted = upgrade.idle_snapshot(fixture['state'], event_head=before['eventHead'])
+        corrupted = upgrade.idle_snapshot(fixture['state'], event_head=before['eventHead'], exact=True)
         with self.assertRaises(BoardError) as caught:
             upgrade.verify_migrated_snapshot(before, corrupted)
         self.assertEqual(caught.exception.code, 'UPGRADE_VERIFY_FAILED')
@@ -387,23 +419,104 @@ class UpgradeFixtureTests(unittest.TestCase):
             with self.subTest(change=change[0]):
                 fixture, connection = self.restored(f'verify-stop-{index}')
                 self.insert_stop_receipt(fixture, connection)
-                before = upgrade.idle_snapshot(fixture['state'])
+                before = upgrade.idle_snapshot(fixture['state'], exact=True)
                 board_upgrade.migrate(fixture['state'])
-                after = upgrade.idle_snapshot(fixture['state'], event_head=before['eventHead'])
+                after = upgrade.idle_snapshot(fixture['state'], event_head=before['eventHead'], exact=True)
                 upgrade.verify_migrated_snapshot(before, after)
                 connection.execute(change[0], (fixture['stableIds'][change[1]],) if len(change) == 2 else ())
                 connection.commit()
-                corrupted = upgrade.idle_snapshot(fixture['state'], event_head=before['eventHead'])
+                corrupted = upgrade.idle_snapshot(fixture['state'], event_head=before['eventHead'], exact=True)
                 with self.assertRaises(BoardError) as caught:
                     upgrade.verify_migrated_snapshot(before, corrupted)
                 self.assertEqual(caught.exception.code, 'UPGRADE_VERIFY_FAILED')
 
+    def test_native_view_receipts_are_deleted_by_original_run_identity(self):
+        fixture, connection = self.restored('native-receipts')
+        selections = self.insert_native_selections(fixture, connection)
+        native_id = fixture['stableIds']['delivered']
+        model_id = fixture['stableIds']['failed']
+        # The current adapter can change after Host override. Ownership follows
+        # the immutable original micro task and the receipt's task_id.
+        connection.execute("UPDATE tasks SET adapter='codex' WHERE task_id=?", (native_id,))
+        connection.execute('UPDATE workflow_runs SET buddy_json=? WHERE run_id=?',
+                           (_json({'harness': 'codex', 'provider': 'openai',
+                                   'model': 'fixture-model', 'effort': 'high'}), native_id))
+        connection.execute('INSERT INTO commands(command_id,task_id,kind,request_hash,response_json,created_at)'
+                           ' VALUES(?,?,?,?,?,?)', ('native-decide', native_id, 'workflow.decide', 'hash',
+                                                   '{"buddy":{"adapter":"command"}}', '2026-01-01T00:00:00Z'))
+        connection.execute('INSERT INTO commands(command_id,task_id,kind,request_hash,response_json,created_at)'
+                           ' VALUES(?,?,?,?,?,?)', ('model-decide', model_id, 'workflow.decide', 'hash',
+                                                   '{"buddy":{"harness":"codex"}}', '2026-01-01T00:00:00Z'))
+        connection.execute('INSERT INTO commands(command_id,task_id,kind,request_hash,response_json,created_at)'
+                           ' VALUES(?,?,?,?,?,?)', ('native-message', native_id, 'message.post', 'hash',
+                                                   '{"message":"retained"}', '2026-01-01T00:00:00Z'))
+        connection.commit()
+        before = upgrade.idle_snapshot(fixture['state'], exact=True)
+        board_upgrade.migrate(fixture['state'])
+        after = upgrade.idle_snapshot(fixture['state'], exact=True)
+        upgrade.verify_migrated_snapshot(before, after)
+        self.assertEqual(after['tables']['commands'], before['migratedCommandsCount'])
+        self.assertEqual(after['fingerprints']['commands'], before['migratedCommandsFingerprint'])
+        kinds = dict(connection.execute('SELECT command_id,kind FROM commands'))
+        self.assertNotIn('native-decide', kinds)
+        self.assertIn('model-decide', kinds)
+        self.assertIn('native-message', kinds)
+        self.assertTrue(all(not (task_id in selections and
+                                 (kind.startswith('workflow.') or kind in ('worker.claim', 'worker.result')))
+                            for task_id, kind in connection.execute('SELECT task_id,kind FROM commands')))
+
+    def test_exact_migration_snapshot_detects_workers_sequence_and_metadata_changes(self):
+        changes = (
+            ('workers', "UPDATE workers SET last_seen_at='changed' WHERE worker_id=(SELECT worker_id FROM workers LIMIT 1)"),
+            ('sqlite_sequence', "UPDATE sqlite_sequence SET seq=seq+1 WHERE name='events'"),
+            ('meta', "UPDATE meta SET value='changed' WHERE key='created_at'"),
+        )
+        for index, (table, statement) in enumerate(changes):
+            with self.subTest(table=table):
+                fixture, connection = self.restored(f'exact-{index}')
+                before = upgrade.idle_snapshot(fixture['state'], exact=True)
+                board_upgrade.migrate(fixture['state'])
+                after = upgrade.idle_snapshot(fixture['state'], exact=True)
+                upgrade.verify_migrated_snapshot(before, after)
+                connection.execute(statement)
+                connection.commit()
+                corrupted = upgrade.idle_snapshot(fixture['state'], exact=True)
+                with self.assertRaises(BoardError) as caught:
+                    upgrade.verify_migrated_snapshot(before, corrupted)
+                self.assertEqual(caught.exception.code, 'UPGRADE_VERIFY_FAILED')
+
+    def test_model_selection_event_must_match_the_original_explicit_buddy(self):
+        for index, change in enumerate(('different-harness', 'different-model', 'no-explicit-buddy')):
+            with self.subTest(change=change):
+                fixture, connection = self.restored(f'false-model-selection-{index}')
+                run_id = fixture['stableIds']['delivered']
+                if change == 'no-explicit-buddy':
+                    spec = json.loads(connection.execute('SELECT micro_task_json FROM workflow_runs WHERE run_id=?',
+                                                         (run_id,)).fetchone()[0])
+                    for key in ('harness', 'provider', 'model', 'effort'):
+                        spec.pop(key)
+                    connection.execute('UPDATE workflow_runs SET micro_task_json=? WHERE run_id=?',
+                                       (json.dumps(spec), run_id))
+                else:
+                    seq, raw = connection.execute(
+                        "SELECT seq,payload_json FROM events WHERE task_id=? AND kind='workflow.buddy_selected'", (run_id,)).fetchone()
+                    payload = json.loads(raw)
+                    key, value = (('harness', 'claude' if payload['buddy']['harness'] != 'claude' else 'codex')
+                                  if change == 'different-harness' else ('model', 'different-model'))
+                    payload['buddy'][key] = value
+                    connection.execute('UPDATE events SET payload_json=? WHERE seq=?', (json.dumps(payload), seq))
+                connection.commit()
+                with self.assertRaises(BoardError) as caught:
+                    board_upgrade.migrate(fixture['state'])
+                self.assertEqual(caught.exception.code, 'UPGRADE_INVALID_BOARD')
+                self.assertEqual(connection.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone()[0], '21')
+
     def test_started_verification_uses_converted_command_fingerprints_and_rejects_tampering(self):
         fixture, connection = self.restored('started-stop')
         self.insert_stop_receipt(fixture, connection)
-        before = upgrade.idle_snapshot(fixture['state'])
+        before = upgrade.idle_snapshot(fixture['state'], exact=True)
         board_upgrade.migrate(fixture['state'])
-        after = upgrade.idle_snapshot(fixture['state'], event_head=before['eventHead'])
+        after = upgrade.idle_snapshot(fixture['state'], event_head=before['eventHead'], exact=True)
         upgrade.verify_migrated_snapshot(before, after)
         target = self.root / 'runtimes' / ('b' * 32)
         health = {'runtimeContentId': target.name, 'runtimeStable': True, 'schemaVersion': SCHEMA_VERSION}
@@ -489,6 +602,8 @@ class UpgradeFixtureTests(unittest.TestCase):
             ('event', '{"source":"original-explicit","buddy":{"adapter":"command"},"buddyRevision":true}'),
             ('event', '{"source":"original-explicit","buddy":{"adapter":"command"},"buddyRevision":1,"extra":true}'),
             ('event-task', None),
+            ('original', '{"adapter":"unknown"}'),
+            ('original', '{"adapter":[]}'),
         )
         for index, (location, invalid) in enumerate(changes):
             with self.subTest(location=location, invalid=invalid):
@@ -500,6 +615,8 @@ class UpgradeFixtureTests(unittest.TestCase):
                     connection.execute('UPDATE workflow_runs SET buddy_json=? WHERE run_id=?', (invalid, run_id))
                 elif location == 'event-task':
                     connection.execute('UPDATE events SET task_id=NULL WHERE seq=?', (seq,))
+                elif location == 'original':
+                    connection.execute('UPDATE workflow_runs SET micro_task_json=? WHERE run_id=?', (invalid, run_id))
                 else:
                     connection.execute('UPDATE events SET payload_json=? WHERE seq=?', (invalid, seq))
                 connection.commit()
@@ -534,15 +651,15 @@ class UpgradeFixtureTests(unittest.TestCase):
             with self.subTest(table=table, sql=sql):
                 fixture, connection = self.restored(f'tampered-native-{index}')
                 native = self.insert_native_selections(fixture, connection)
-                before = upgrade.idle_snapshot(fixture['state'])
+                before = upgrade.idle_snapshot(fixture['state'], exact=True)
                 board_upgrade.migrate(fixture['state'])
-                after = upgrade.idle_snapshot(fixture['state'], event_head=before['eventHead'])
+                after = upgrade.idle_snapshot(fixture['state'], event_head=before['eventHead'], exact=True)
                 upgrade.verify_migrated_snapshot(before, after)
                 run_id = fixture['stableIds']['delivered']
                 event_seq = native[run_id][1]
                 connection.execute(sql, (values[0], event_seq if values[1] == 'event' else run_id))
                 connection.commit()
-                corrupted = upgrade.idle_snapshot(fixture['state'], event_head=before['eventHead'])
+                corrupted = upgrade.idle_snapshot(fixture['state'], event_head=before['eventHead'], exact=True)
                 with self.assertRaises(BoardError) as caught:
                     upgrade.verify_migrated_snapshot(before, corrupted)
                 self.assertEqual(caught.exception.code, 'UPGRADE_VERIFY_FAILED')

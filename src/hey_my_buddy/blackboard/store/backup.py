@@ -321,8 +321,9 @@ def database_snapshot(connection, *, event_head: int | None = None, exact: bool 
     """Hash the historical sorted JSON format with SQLite's bounded sorter.
 
     Python retains one row at a time. Optional sparse changes describe expected
-    rows, before any statements execute; exact adds the lifecycle rows normally
-    exempted by backup. Neither option changes ordinary backup metadata.
+    rows, before any statements execute. A third sparse value names deleted
+    row keys. ``exact`` adds the lifecycle rows normally exempted by backup.
+    Neither option changes ordinary backup metadata.
     """
     from heapq import merge
 
@@ -334,7 +335,7 @@ def database_snapshot(connection, *, event_head: int | None = None, exact: bool 
         event_head = connection.execute('SELECT COALESCE(MAX(seq),0) FROM events').fetchone()[0]
 
     def fingerprint(name, *, exempt=False):
-        updates, inserts = (changes or {}).get(name, ({}, {}))
+        updates, inserts, deletes = (changes or {}).get(name, ({}, {}, set()))
         if not counts[name] and not inserts:
             return hashlib.sha256(b'').hexdigest()
 
@@ -364,10 +365,14 @@ def database_snapshot(connection, *, event_head: int | None = None, exact: bool 
         else:
             arguments = 'hey_my_buddy_snapshot_row(' + arguments + ')'
         sql, args = 'SELECT ' + arguments + ' AS encoded FROM ' + quoted, ()
+        if deletes:
+            first_column = '"' + columns[0].replace('"', '""') + '"'
+            connection.create_function('hey_my_buddy_snapshot_keep', 1, lambda key: key not in deletes)
+            sql += ' WHERE hey_my_buddy_snapshot_keep(' + first_column + ')'
         if name == 'events':
-            sql += ' WHERE seq<=?'; args = (event_head,)
+            sql += ' AND seq<=?' if deletes else ' WHERE seq<=?'; args = (event_head,)
         elif name == 'sqlite_sequence' and not exempt:
-            sql += " WHERE name NOT IN ('events','workers')"
+            sql += " AND name NOT IN ('events','workers')" if deletes else " WHERE name NOT IN ('events','workers')"
         sql += ' ORDER BY encoded COLLATE BINARY'
         connection.create_function('hey_my_buddy_snapshot_row', -1, encode)
         try:
@@ -384,9 +389,15 @@ def database_snapshot(connection, *, event_head: int | None = None, exact: bool 
             connection.create_function('hey_my_buddy_snapshot_row', -1, None)
             if wide:
                 connection.create_function('hey_my_buddy_snapshot_part', -1, None)
+            if deletes:
+                connection.create_function('hey_my_buddy_snapshot_keep', 1, None)
 
     fingerprints = {name:fingerprint(name) for name in tables if name != 'workers'}
-    result = {'tables':{name:counts[name] + len((changes or {}).get(name, ({}, {}))[1]) for name in tables},
+    def projected_count(name):
+        _updates, inserts, deletes = (changes or {}).get(name, ({}, {}, set()))
+        return counts[name] + len(inserts) - len(deletes)
+
+    result = {'tables':{name:projected_count(name) for name in tables},
               'fingerprints':fingerprints, 'eventHead':event_head}
     if exact:
         result['exemptFingerprints'] = {name:fingerprint(name, exempt=True)

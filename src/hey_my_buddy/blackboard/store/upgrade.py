@@ -14,6 +14,31 @@ from .db import FIX_SCHEMA, REMINDER_SCHEMA, SCHEMA_VERSION, utc_now
 BASE_SCHEMA_VERSION = 21
 _NATIVE_ADAPTERS = {'command', 'external'}
 _BUDDY_FIELDS = {'harness', 'provider', 'model', 'effort'}
+_VIEW_RECEIPT_KINDS = {'worker.claim', 'worker.result', 'task.submit', 'task.cancel',
+                       'task.retry', 'task.acknowledge'}
+
+
+def original_micro_task(raw: str) -> dict:
+    """Read the immutable schema-21 micro-task execution choice."""
+    try:
+        spec = decode_strict_json(raw)
+    except (ValueError, RecursionError) as error:
+        raise BoardError('UPGRADE_INVALID_BOARD', f'Invalid original micro task JSON: {error}') from error
+    if not isinstance(spec, dict):
+        raise BoardError('UPGRADE_INVALID_BOARD', 'Invalid original micro task structure')
+    if 'adapter' in spec and (not isinstance(spec['adapter'], str) or spec['adapter'] not in _NATIVE_ADAPTERS):
+        raise BoardError('UPGRADE_INVALID_BOARD', 'Invalid original micro task adapter')
+    return spec
+
+
+def obsolete_receipt_ids(connection: sqlite3.Connection) -> set[str]:
+    """Find view-bearing receipts owned by originally native micro tasks."""
+    native_runs = {run_id for run_id, raw in connection.execute(
+        'SELECT run_id,micro_task_json FROM workflow_runs'
+    ) if original_micro_task(raw).get('adapter') in _NATIVE_ADAPTERS}
+    return {command_id for command_id, task_id, kind in connection.execute(
+        'SELECT command_id,task_id,kind FROM commands WHERE task_id IS NOT NULL'
+    ) if task_id in native_runs and (kind.startswith('workflow.') or kind in _VIEW_RECEIPT_KINDS)}
 
 
 def migrated_buddy(raw: str, adapter: str) -> str | None:
@@ -34,10 +59,12 @@ def migrated_buddy(raw: str, adapter: str) -> str | None:
     raise BoardError('UPGRADE_INVALID_BOARD', 'Invalid workflow buddy or task adapter binding')
 
 
-def migrated_selection_event(raw: str, adapter: str) -> tuple[str, str]:
+def migrated_selection_event(raw: str, original_spec: str | None) -> tuple[str, str]:
     """Return the exact kind and payload expected for a schema-21 selection event."""
-    if adapter is None:
+    if original_spec is None:
         raise BoardError('UPGRADE_INVALID_BOARD', 'Workflow selection event has no task binding')
+    original = original_micro_task(original_spec)
+    adapter = original.get('adapter')
     try:
         payload = decode_strict_json(raw)
     except (ValueError, RecursionError) as error:
@@ -53,7 +80,8 @@ def migrated_selection_event(raw: str, adapter: str) -> tuple[str, str]:
             and buddy['adapter'] in _NATIVE_ADAPTERS and buddy['adapter'] == adapter):
         return 'workflow.execution_selected', canonical_json({'source': 'original-explicit', 'adapter': adapter})
     if (set(buddy) == _BUDDY_FIELDS and all(isinstance(value, str) and value for value in buddy.values())
-            and buddy['harness'] in CODING_HARNESSES):
+            and buddy['harness'] in CODING_HARNESSES and adapter is None
+            and buddy == {key: original.get(key) for key in _BUDDY_FIELDS}):
         return 'workflow.buddy_selected', raw
     raise BoardError('UPGRADE_INVALID_BOARD', 'Invalid workflow selection event task adapter binding')
 
@@ -110,6 +138,8 @@ def migrate(state: Path) -> None:
             ).fetchall():
                 connection.execute('UPDATE commands SET response_json=? WHERE command_id=?',
                                    (migrated_stop_response(raw), command_id))
+            for command_id in obsolete_receipt_ids(connection):
+                connection.execute('DELETE FROM commands WHERE command_id=?', (command_id,))
             for run_id, raw, adapter in connection.execute(
                 'SELECT r.run_id,r.buddy_json,t.adapter FROM workflow_runs r JOIN tasks t ON t.task_id=r.run_id'
                 ' WHERE r.buddy_json IS NOT NULL'
@@ -117,11 +147,12 @@ def migrate(state: Path) -> None:
                 converted = migrated_buddy(raw, adapter)
                 if converted != raw:
                     connection.execute('UPDATE workflow_runs SET buddy_json=? WHERE run_id=?', (converted, run_id))
-            for seq, raw, adapter in connection.execute(
-                "SELECT e.seq,e.payload_json,t.adapter FROM events e LEFT JOIN tasks t ON t.task_id=e.task_id"
+            for seq, raw, original_spec in connection.execute(
+                "SELECT e.seq,e.payload_json,r.micro_task_json FROM events e"
+                " LEFT JOIN workflow_runs r ON r.run_id=e.task_id"
                 " WHERE e.kind='workflow.buddy_selected'"
             ).fetchall():
-                kind, payload = migrated_selection_event(raw, adapter)
+                kind, payload = migrated_selection_event(raw, original_spec)
                 if kind != 'workflow.buddy_selected':
                     connection.execute('UPDATE events SET kind=?,payload_json=? WHERE seq=?', (kind, payload, seq))
             for statement in (REMINDER_SCHEMA + FIX_SCHEMA).split(';'):

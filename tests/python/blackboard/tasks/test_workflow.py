@@ -200,6 +200,45 @@ class WorkflowTestCase(BoardTestCase):
 
 
 class LifecycleTests(WorkflowTestCase):
+    def test_turn_buddy_uses_the_bound_execution_and_rejects_unknown_shapes(self):
+        board = self.board()
+        self.register(board)
+        submitted = self.submit(board)
+        claimed = self.claim(board)['claim']
+        attempt_id = claimed['attempt']['attemptId']
+        turn_id = claimed['turn']['turnId']
+        original = claimed['turn']['input']
+        for adapter, frozen, valid in (
+            ('dsh', BUDDY, True),
+            ('command', {'adapter': 'command'}, True),
+            ('external', {'adapter': 'external'}, True),
+            ('dsh', None, False),
+            ('dsh', {key: value for key, value in BUDDY.items() if key != 'effort'}, False),
+            ('dsh', {**BUDDY, 'harness': 'codex'}, False),
+            ('dsh', {'adapter': 'command'}, False),
+            ('command', None, False),
+            ('command', {'adapter': 'external'}, False),
+            ('unknown', BUDDY, False),
+        ):
+            with self.subTest(adapter=adapter, buddy=frozen):
+                payload = {**original, 'context': {**original['context'], 'buddy': frozen}}
+                raw = json.dumps(payload)
+                with board.store.db.write() as connection:
+                    connection.execute('UPDATE attempts SET adapter=? WHERE attempt_id=?', (adapter, attempt_id))
+                    connection.execute('UPDATE workflow_turns SET input_json=? WHERE turn_id=?', (raw, turn_id))
+                if valid:
+                    view = board.call('workflow_get', {'runId': submitted['runId'], 'includeAudit': True})
+                    expected = BUDDY if adapter == 'dsh' else None
+                    self.assertEqual(view['currentTurn']['buddy'], expected)
+                    self.assertEqual(view['audit']['turns'][0]['buddy'], expected)
+                    self.assertEqual(view['audit']['turns'][0]['input'], payload)
+                else:
+                    with self.assertRaises(BoardError):
+                        board.call('workflow_get', {'runId': submitted['runId']})
+                with board.store.db.read() as connection:
+                    self.assertEqual(connection.execute('SELECT input_json FROM workflow_turns WHERE turn_id=?',
+                                                        (turn_id,)).fetchone()[0], raw)
+
     def test_execution_record_fields_are_rejected_before_preparation(self):
         board = self.board()
         for fields in ({'adapter': 'command', 'argv': ['true']}, {'adapter': 'external'},
@@ -253,7 +292,8 @@ class LifecycleTests(WorkflowTestCase):
             view = board.call('workflow_get', {'runId': run_id})
             self.assertIsNone(view['buddy'])
             self.assertEqual(view['quotaWarnings'], [])
-            self.assertEqual(view['adapter'], 'unresolved')
+            self.assertNotIn('adapter', view)
+            self.assertEqual(view['task']['adapter'], 'unresolved')
             with board.store.db.read() as connection:
                 self.assertIsNone(connection.execute(
                     'SELECT buddy_json FROM workflow_runs WHERE run_id=?', (run_id,)).fetchone()[0])
