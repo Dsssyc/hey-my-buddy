@@ -1001,14 +1001,18 @@ class _CarrierOutcome:
     verified_completion: dict | None = None
 
 
+def _session_mode(request: RunRequest) -> str:
+    """Map the turn's permission independently of its completion carrier."""
+    if request.worker_permission is not None:
+        return {"read": "yolo", "write": "yolo", "full": "yolo"}[request.worker_permission.level]
+    return "yolo"
+
+
 def run(request: RunRequest, *, observer: Callable[[Mapping[str, Any]], RunFeedback],
         services: Any, cancelled: Callable[[], bool]) -> RunResult:
     """Run one native ZCode execution: the single native path of this harness."""
     if request.harness != "zcode":
         raise BoardError("INVALID_ARGUMENT", "this run module drives zcode", harness=request.harness)
-    if request.tool_scope == "full" or (request.worker_permission is not None
-                                        and request.worker_permission.level == "full"):
-        raise BoardError("INVALID_ARGUMENT", "zcode full access is not implemented", toolScope=request.tool_scope)
     if services is not None and not isinstance(services, SessionServices):
         raise BoardError("INVALID_ARGUMENT", "zcode accepts its own narrow session service binding")
     no_tool = request.tool_scope == "none"
@@ -1218,7 +1222,7 @@ def _final_message_rounds(*, connection: NativeConnection, request: RunRequest, 
         # final-message carrier over the session's own default tools;
         # the effective policy reports that honestly and the external
         # review eligibility is untouched.
-        create_params = {"mode": "yolo", "mcpServers": []}
+        create_params = {"mode": _session_mode(request), "mcpServers": []}
     state.create_params = create_params
     while True:
         protocol_holder[:] = []
@@ -1266,7 +1270,7 @@ def _governed_turn(*, connection: NativeConnection, request: RunRequest, service
     mount = services.mount
     _check_service_descriptions(request, mount)
     mode, previous = _continuation_of(request)
-    create_params = {"mode": "yolo", "mcpServers": list(mount.mcp_servers)}
+    create_params = {"mode": _session_mode(request), "mcpServers": list(mount.mcp_servers)}
     state.create_params = create_params
     snapshot = None
     if mode == "native-session":
@@ -1620,7 +1624,10 @@ def _build_result(request: RunRequest, *, spawn, state, owned_spawn, resolved, s
             completion = CompletionEvidence(stream_end=drained)
     effective = EffectivePolicy()
     if state.session_opened and state.create_params is not None:
-        if request.tool_scope == "none":
+        if request.worker_permission is not None:
+            effective = EffectivePolicy(
+                tools=PolicyFact(requested=_json_package({"mode": state.create_params["mode"]})))
+        elif request.tool_scope == "none":
             effective = EffectivePolicy(
                 tools=PolicyFact(requested=_json_package(state.create_params)))
         else:

@@ -551,6 +551,27 @@ def evidence_call(result):
 
 
 class WorkerSeamTests(MockNativeCase):
+    def test_worker_levels_keep_the_governed_carrier_and_record_the_sent_mode(self):
+        from hey_my_buddy.buddy.harnesses.registry import worker_permission
+        os.environ.update(self.environment)
+        os.environ["BUDDY_ZCODE_TEST_CASE"] = "ok"
+        original_open = native_run._open_root
+        for level in ("read", "write", "full"):
+            with self.subTest(level=level):
+                request, services = self.worker_request(self.turn_input())
+                permission = worker_permission("zcode", level)
+                request = request.model_copy(update={"tool_scope": permission.tool_scope,
+                                                     "worker_permission": permission})
+                with mock.patch.object(native_run, "_open_root", wraps=original_open) as opened:
+                    result = run(request, observer=worker_observer, services=services, cancelled=lambda: False)
+                self.assertEqual(result.end.status, "ok", result.end.message)
+                self.assertEqual(opened.call_args.kwargs["create_params"],
+                                 {"mode": "yolo", "mcpServers": list(services.mount.mcp_servers)})
+                self.assertEqual(result.effective_policy.tools.requested.value, {"mode": "yolo"})
+                self.assertEqual(result.value.schema_status, "valid")
+                self.assertEqual(result.value.parsed.value["summary"], "fixture work completed")
+                self.assertEqual(permission.enforcement, "enforced" if level == "full" else "convention")
+
     def turn_input(self, *, previous=None, mode=None):
         return {"version": 1, "taskId": "goal-1", "attemptId": f"attempt-{uuid.uuid4().hex[:8]}",
                 "generation": 1, "turnId": "turn-1",
