@@ -57,6 +57,90 @@ _ROUTER_COLUMNS = {
                           *_ROUTER_IDENTITY_FIELDS, 'created_at'),
 }
 
+# These values were emitted by the shared schema-28 InquiryBridge writer for
+# every harness and delivery mode, never observed from a native process.
+_DELIVERY_CONSTANTS = {'extendsDeadline': False, 'requestedDelivery': None,
+                       'startsNewTurn': False, 'supported': True}
+
+
+def _delivery_without_constants(encoded: str | None, *, message_id: str) -> str | None:
+    if encoded is None:
+        return None
+    delivery = json.loads(encoded)
+    retired = delivery.keys() & _DELIVERY_CONSTANTS.keys()
+    for key in retired:
+        expected = _DELIVERY_CONSTANTS[key]
+        if type(delivery[key]) is not type(expected) or delivery[key] != expected:
+            raise BoardError('UPGRADE_INVALID_BOARD', 'Inquiry delivery differs from its constructed constant',
+                             messageId=message_id, field=key)
+    return canonical_json({key: value for key, value in delivery.items() if key not in retired}) if retired else encoded
+
+
+def _scope_without_paths(connection, encoded: str, *, record_id: str | int) -> str:
+    facts = json.loads(encoded)
+    paths = set()
+    for conflict_id in facts['conflictIds']:
+        conflict = connection.execute('SELECT evidence_json FROM workflow_workspace_conflicts WHERE conflict_id=?',
+                                      (conflict_id,)).fetchone()
+        if conflict is None:
+            raise BoardError('UPGRADE_INVALID_BOARD', 'Scope reason names missing conflict evidence',
+                             recordId=record_id, conflictId=conflict_id)
+        paths.update(json.loads(conflict[0])['blockingPaths'])
+    # The old writer sorted and truncated the union once, including when its
+    # reason was copied to an owning ancestor's request.
+    if facts['paths'] != sorted(paths)[:32]:
+        raise BoardError('UPGRADE_INVALID_BOARD', 'Scope paths differ from their conflict evidence',
+                         recordId=record_id)
+    del facts['paths']
+    return canonical_json(facts)
+
+
+def _convert_inquiry_and_scope_stock(connection) -> None:
+    for message_id, encoded in connection.execute('SELECT message_id,delivery_json FROM messages'
+                                                   ' WHERE delivery_json IS NOT NULL'):
+        retained = _delivery_without_constants(encoded, message_id=message_id)
+        if retained != encoded:
+            connection.execute('UPDATE messages SET delivery_json=? WHERE message_id=?', (retained, message_id))
+    for request_id, encoded in connection.execute("SELECT request_id,reason_params_json FROM workflow_requests"
+                                                  " WHERE reason_code='workspace-scope-violation'"):
+        retained = _scope_without_paths(connection, encoded, record_id=request_id)
+        connection.execute('UPDATE workflow_requests SET reason_params_json=? WHERE request_id=?', (retained, request_id))
+    for seq, encoded in connection.execute("SELECT seq,payload_json FROM events WHERE kind='workflow.scope_conflict'"):
+        retained = _scope_without_paths(connection, encoded, record_id=seq)
+        connection.execute('UPDATE events SET payload_json=? WHERE seq=?', (retained, seq))
+
+
+def expected_inquiry_and_scope_fingerprints(connection) -> dict[str, str]:
+    """Compare every retained value after the checked JSON-key removals."""
+    fingerprints = {}
+    for table in ('messages', 'workflow_requests'):
+        columns = [item[0] for item in connection.execute(f'SELECT * FROM {table} LIMIT 0').description]
+        positions = {column: index for index, column in enumerate(columns)}
+
+        def encode(*values):
+            row = list(values)
+            if table == 'messages':
+                index = positions['delivery_json']
+                row[index] = _delivery_without_constants(row[index], message_id=row[positions['message_id']])
+            elif row[positions['reason_code']] == 'workspace-scope-violation':
+                index = positions['reason_params_json']
+                row[index] = _scope_without_paths(connection, row[index], record_id=row[positions['request_id']])
+            return json.dumps(row, ensure_ascii=False, separators=(',', ':'))
+
+        connection.create_function('hmb_upgrade_fact_row', len(columns), encode)
+        try:
+            cursor = connection.execute('SELECT hmb_upgrade_fact_row(' + ','.join(columns)
+                                        + f') AS encoded FROM {table} ORDER BY encoded COLLATE BINARY')
+            digest, separator = hashlib.sha256(), b''
+            for row in cursor:
+                digest.update(separator)
+                digest.update(row[0].encode())
+                separator = b'\n'
+            fingerprints[table] = digest.hexdigest()
+        finally:
+            connection.create_function('hmb_upgrade_fact_row', len(columns), None)
+    return fingerprints
+
 
 def _request_without_router_facts(request: dict, snapshots: list[dict], *, decision_id: str) -> dict:
     """Check the old writer's duplicated facts before retiring their request copy."""
@@ -382,6 +466,8 @@ def expected_events_fingerprint(connection, *, event_head: int) -> str:
         row = list(values)
         if row[4] == 'attempt.activity':
             row[5] = ACTIVITY_EVENT_PAYLOAD
+        elif row[4] == 'workflow.scope_conflict':
+            row[5] = _scope_without_paths(connection, row[5], record_id=row[0])
         return json.dumps(row, ensure_ascii=False, separators=(',', ':'))
 
     connection.create_function('hmb_upgrade_event_row', len(EVENT_COLUMNS), encode)
@@ -415,6 +501,7 @@ def migrate_schema(state: Path) -> None:
                 raise BoardError('UNSUPPORTED_SCHEMA', 'Board schema cannot be upgraded')
             if version[0] == str(UPGRADE_BASE_SCHEMA):
                 _validate_turn_stock(connection)
+                _convert_inquiry_and_scope_stock(connection)
                 with _router_upgrade_stock(connection):
                     _validate_router_stock(connection)
                     _rebuild_table(connection, 'router_requests', ROUTER_REQUESTS_DDL, projected=True)

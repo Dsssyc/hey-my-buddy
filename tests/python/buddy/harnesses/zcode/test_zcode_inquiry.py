@@ -169,17 +169,19 @@ class BridgeQueueTests(unittest.TestCase):
     def test_a_question_queues_with_one_committed_identity_and_no_native_command(self):
         value = self.ask()
         self.assertTrue(value["accepted"])
-        self.assertTrue(value["supported"])
+        self.assertNotIn("supported", value)
         self.assertEqual(value["state"], "queued")
         self.assertFalse(value["duplicate"])
         self.assertEqual(value["delivery"]["admittedDelivery"], "cooperative-checkpoint")
-        self.assertFalse(value["delivery"]["startsNewTurn"])
+        self.assertEqual(set(value["delivery"]), {"admittedDelivery", "at"})
         records = self.harness.records()
         self.assertEqual(len(records), 1, records)
+        self.assertEqual(records[0]["version"], 2)
         self.assertEqual(records[0]["state"], "queued")
         self.assertEqual(records[0]["question"], "what is blocking you?")
         self.assertEqual(records[0]["taskId"], "task-1")
         self.assertEqual(records[0]["sessionId"], "sess-1")
+        self.assertEqual(set(records[0]["delivery"]), {"admittedDelivery", "at"})
 
     def test_identical_replay_is_a_duplicate_at_every_state_and_changed_text_conflicts(self):
         self.ask()
@@ -350,7 +352,7 @@ class BridgeQueueTests(unittest.TestCase):
                          ("unavailable", None))
         self.assertEqual(restored.records(), closed_records)
 
-    def test_journal_replay_requires_the_current_version_and_this_attempt(self):
+    def test_journal_replay_reads_sealed_v1_and_current_v2_with_attempt_binding(self):
         import hashlib
 
         question = "status?"
@@ -358,8 +360,13 @@ class BridgeQueueTests(unittest.TestCase):
         records = [
             {"version": 1, "inquiryId": "q-mine", "state": "answered", "question": question,
              "questionSha256": digest, "askedAt": "t", **IDENTITY,
+             "delivery": {"requestedDelivery": None, "admittedDelivery": "cooperative-checkpoint",
+                          "startsNewTurn": False, "extendsDeadline": False, "supported": True, "at": "t"},
              "answer": {"text": "mine", "bytes": 4, "truncated": False,
                         "via": "tool:hey_my_buddy_answer_inquiry", "toolCallId": "c", "at": "t"}},
+            {"version": 2, "inquiryId": "q-new", "state": "queued", "question": question,
+             "questionSha256": digest, "askedAt": "t", **IDENTITY,
+             "delivery": {"admittedDelivery": "cooperative-checkpoint", "at": "t"}},
             {"version": 1, "inquiryId": "q-foreign", "state": "answered", "question": question,
              "questionSha256": digest, "askedAt": "t", **OTHER_IDENTITY,
              "answer": {"text": "foreign", "bytes": 7, "truncated": False, "via": "x", "toolCallId": "c", "at": "t"}},
@@ -374,8 +381,12 @@ class BridgeQueueTests(unittest.TestCase):
         restarted = make_inquiry_bridge(identity=IDENTITY,
                                   journal_path=self.harness.credentials["resultsPath"])
         restarted._load_journal()
-        self.assertEqual(set(restarted.entries), {"q-mine"})
+        self.assertEqual(set(restarted.entries), {"q-mine", "q-new"})
         self.assertEqual(restarted.entries["q-mine"]["state"], "answered")
+        self.assertEqual(restarted.entries["q-mine"]["delivery"],
+                         {"admittedDelivery": "cooperative-checkpoint", "at": "t"})
+        self.assertEqual(restarted.entries["q-new"]["delivery"],
+                         {"admittedDelivery": "cooperative-checkpoint", "at": "t"})
         # A foreign or legacy "answered" record never answers a fresh question.
         for inquiry_id in ("q-foreign", "q-legacy"):
             with self.subTest(inquiryId=inquiry_id):
@@ -410,13 +421,11 @@ class BridgeQueueTests(unittest.TestCase):
         value = self.harness.bridge.snapshot()
         self.assertTrue(value["ready"])
         self.assertEqual(value["capability"], "inquiry")
-        self.assertTrue(value["supported"])
+        self.assertNotIn("supported", value)
         self.assertEqual(value["deliveryMode"], "cooperative-checkpoint")
         self.assertEqual(value["inbox"]["pending"], 1)
         self.assertEqual(value["replyTool"]["name"], "hey_my_buddy_answer_inquiry")
-        self.assertEqual(value["limits"]["inquiry"], "cooperative-checkpoint")
-        self.assertFalse(value["limits"]["startsNewTurn"])
-        self.assertFalse(value["limits"]["extendsDeadline"])
+        self.assertNotIn("limits", value)
         self.assertNotIn("limitation", value)
         self.assertIn("immediateDelivery", value["unavailable"])
 
@@ -635,6 +644,32 @@ class JournalBarrierTests(unittest.TestCase):
 
     def bridge(self) -> InquiryBridge:
         return make_inquiry_bridge(identity=IDENTITY, journal_path=str(self.journal))
+
+    def test_old_journal_keeps_its_bytes_and_replays_only_delivery_observations(self):
+        old = json.loads(self.queued_record("q-v1"))
+        old["delivery"] = {"requestedDelivery": None, "startsNewTurn": False,
+                           "extendsDeadline": False, "supported": True,
+                           "admittedDelivery": "cooperative-checkpoint", "at": "old-admission"}
+        original = (json.dumps(old) + "\n").encode()
+        self.journal.write_bytes(original)
+        self.assertEqual(normalize_inquiry_record(old)["delivery"],
+                         {"admittedDelivery": "cooperative-checkpoint", "at": "old-admission"})
+        bridge = self.bridge()
+        bridge.start()
+        self.assertEqual(self.journal.read_bytes(), original)
+        bridge.deliver_native("q-v1", {"nativeItemId": "item-v1"})
+        data = self.journal.read_bytes()
+        self.assertEqual(data[:len(original)], original)
+        appended = [json.loads(line) for line in data[len(original):].splitlines()]
+        self.assertTrue(appended)
+        self.assertTrue(all(row["version"] == 2 for row in appended))
+        snapshot = read_inquiry_journal(IDENTITY, self.journal)
+        merged = merged_inquiry_records(snapshot["records"])["q-v1"]
+        delivery = normalize_inquiry_record(merged)["delivery"]
+        self.assertEqual(delivery["at"], "old-admission")
+        self.assertEqual(delivery["nativeCorrelation"], {"nativeItemId": "item-v1"})
+        self.assertIn("deliveredAt", delivery)
+        self.assertFalse(set(old["delivery"]) - {"admittedDelivery", "at"} & delivery.keys())
 
     def test_a_shared_reader_waits_for_the_exclusive_writer_transaction(self):
         record = self.queued_record("q-barrier")

@@ -235,7 +235,7 @@ describe("the task view", () => {
     expect(view).toMatchObject({ updatedAt: "2026-09-26T11:00:00Z", lead: false });
     expect(view.attempt).toMatchObject({ attemptId: "att-2", active: false, overdue: false, possiblyStuck: false, activity: null, ending: null, session: null });
     expect(() => parseTask(task({ runId: "other" }), "m1")).toThrow(ApiError);
-    for (const key of ["task", "status", "cwd", "createdAt", "updatedAt", "lineage"]) {
+    for (const key of ["task", "state", "cwd", "createdAt", "updatedAt", "lineage"]) {
       expect(() => parseTask({ ...task(), [key]: undefined }, "m1"), key).toThrow(ApiError);
     }
   });
@@ -244,7 +244,7 @@ describe("the task view", () => {
     expect(() => parseTask(task({ lineage: { ...task().lineage, kind: "other" } }), "m1")).toThrow(ApiError);
     expect(parseTask(task({ lineage: { ...task().lineage, project: null } }), "m1").task.lineage?.project).toBeNull();
     expect(() => parseTask(task({ lineage: { ...task().lineage, sourceHostId: 7 } }), "m1")).toThrow(ApiError);
-    expect(() => parseTask(task({ status: "cancelled", cancellation: { actor: { role: "robot", id: "x" }, note: null } }), "m1")).toThrow(ApiError);
+    expect(() => parseTask(task({ state: "cancelled", cancellation: { actor: { role: "robot", id: "x" }, note: null } }), "m1")).toThrow(ApiError);
     expect(() => parseTask(task({ selectedAttempt: { reminders: null } }), "m1")).toThrow(ApiError);
   });
 
@@ -259,25 +259,25 @@ describe("the task view", () => {
   it("reads the reminders and the activity of the attempt that runs now, and of no other", () => {
     const reminders = { overdue: true, possiblyStuck: true, lastNativeEventAt: null, toolInProgress: false };
     const activity = { phase: "tool-running", observedAt: "t", toolName: "bash", counts: { modelTurns: 4, toolCalls: 9 }, lastToolActivityAt: "t", lastNativeActivityAt: "t", eventSeq: 7 };
-    const running = parseTask(task({ status: "running", activeAttemptId: "att-2", activity, selectedAttempt: attempt({ reminders }) }), "m1").attempt!;
+    const running = parseTask(task({ state: "running", activeAttemptId: "att-2", activity, selectedAttempt: attempt({ reminders }) }), "m1").attempt!;
     expect(running).toMatchObject({ active: true, overdue: true, possiblyStuck: true });
     expect(running.activity).toMatchObject({ phase: "tool-running", toolName: "bash", modelTurns: 4, toolCalls: 9, eventSeq: 7, basis: "tool" });
-    const idle = parseTask(task({ status: "completed", activeAttemptId: null, activity, selectedAttempt: attempt({ reminders }) }), "m1").attempt!;
+    const idle = parseTask(task({ state: "completed", activeAttemptId: null, activity, selectedAttempt: attempt({ reminders }) }), "m1").attempt!;
     expect(idle).toMatchObject({ active: false, overdue: false, possiblyStuck: false, activity: null });
   });
 
   it("keeps only the activity's own keys: no prompt, no tool arguments", () => {
     const activity = { phase: "tool-running", observedAt: "t", toolName: "apply_patch", prompt: "秘密", toolArguments: { secret: "x" } };
-    const wire = JSON.stringify(parseTask(task({ status: "running", activeAttemptId: "att-2", activity }), "m1").attempt!.activity);
+    const wire = JSON.stringify(parseTask(task({ state: "running", activeAttemptId: "att-2", activity }), "m1").attempt!.activity);
     expect(wire).toContain("apply_patch");
     expect(wire).not.toMatch(/秘密|secret|toolArguments|prompt/);
     // A report that is no record at all is no activity, and one with a phase nobody knows is a report of unknown progress.
-    expect(parseTask(task({ status: "running", activeAttemptId: "att-2", activity: null }), "m1").attempt!.activity).toBeNull();
-    expect(parseTask(task({ status: "running", activeAttemptId: "att-2", activity: { phase: "unknown" } }), "m1").attempt!.activity).toMatchObject({ phase: "unknown", basis: "unknown" });
+    expect(parseTask(task({ state: "running", activeAttemptId: "att-2", activity: null }), "m1").attempt!.activity).toBeNull();
+    expect(parseTask(task({ state: "running", activeAttemptId: "att-2", activity: { phase: "unknown" } }), "m1").attempt!.activity).toMatchObject({ phase: "unknown", basis: "unknown" });
   });
 
   it("says what backs an activity report: a tool, native activity, the phase alone, or nothing", () => {
-    const basis = (activity: Record<string, unknown>) => parseTask(task({ status: "running", activeAttemptId: "att-2", activity }), "m1").attempt!.activity!.basis;
+    const basis = (activity: Record<string, unknown>) => parseTask(task({ state: "running", activeAttemptId: "att-2", activity }), "m1").attempt!.activity!.basis;
     expect(basis({ phase: "waiting-model", lastToolActivityAt: "t" })).toBe("tool");
     expect(basis({ phase: "waiting-model", nativeSessionId: "s" })).toBe("native");
     expect(basis({ phase: "starting", observedAt: "t", eventSeq: 1 })).toBe("phase");
@@ -286,14 +286,14 @@ describe("the task view", () => {
 
   it("writes how an attempt ended: a normal end is none, any other has its cause, who stopped it, why, and a native limit", () => {
     expect(parseTask(task(), "m1").attempt!.ending).toBeNull();
-    const stopped = parseTask(task({ status: "cancelled", cancellation: { actor: { role: "host", id: "codex-desktop" }, note: "不再需要" },
+    const stopped = parseTask(task({ state: "cancelled", cancellation: { actor: { role: "host", id: "codex-desktop" }, note: "不再需要" },
       selectedAttempt: attempt({ stopInitiator: "host", result: { terminationReason: "forced-stop" } }) }), "m1").attempt!.ending;
     expect(stopped).toEqual({ cause: "forced-stop", stoppedBy: "host", actor: { role: "host", id: "codex-desktop" }, note: "不再需要", quota: null });
-    const limited = parseTask(task({ status: "failed", quotaFailure: { code: "rate-limited" }, selectedAttempt: attempt({ result: { terminationReason: "harness-error" } }) }), "m1").attempt!.ending;
+    const limited = parseTask(task({ state: "failed", quotaFailure: { code: "rate-limited" }, selectedAttempt: attempt({ result: { terminationReason: "harness-error" } }) }), "m1").attempt!.ending;
     expect(limited).toMatchObject({ cause: "harness-error", stoppedBy: null, quota: "rate-limited" });
     // A stop with no recorded initiator is unknown, never a person.
-    expect(parseTask(task({ status: "cancelled", selectedAttempt: attempt({ result: { terminationReason: "unknown-stop" } }) }), "m1").attempt!.ending).toMatchObject({ stoppedBy: "unknown" });
-    expect(() => parseTask(task({ status: "failed", quotaFailure: { code: "blocked" } }), "m1")).toThrow(ApiError);
+    expect(parseTask(task({ state: "cancelled", selectedAttempt: attempt({ result: { terminationReason: "unknown-stop" } }) }), "m1").attempt!.ending).toMatchObject({ stoppedBy: "unknown" });
+    expect(() => parseTask(task({ state: "failed", quotaFailure: { code: "blocked" } }), "m1")).toThrow(ApiError);
   });
 
   it("reads where the native session is kept and whether it can be resumed", () => {

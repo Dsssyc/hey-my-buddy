@@ -57,7 +57,7 @@ function pane(step: Step, ctx: Context) {
 /** Where a micro task's elapsed time ends: now while it is open, else when its last word was said. */
 function elapsedEnd(view: TaskView, workflow: Workflow | null, nowMs: number): number {
   if (workflow && ["executing", "awaiting-host", "waiting-helpers", "waiting-owned", "delivered"].includes(workflow.state)) return nowMs;
-  if (!workflow && ["queued", "running", "cancelling"].includes(view.task.status)) return nowMs;
+  if (!workflow && ["queued", "running", "cancelling"].includes(view.task.state)) return nowMs;
   const ended = Date.parse(view.task.acceptedAt ?? view.updatedAt);
   return Number.isFinite(ended) ? ended : nowMs;
 }

@@ -183,7 +183,7 @@ describe("the head of the detail", () => {
 
   it("tells that a turn is past its expected time or silent only while it is the one running", async () => {
     const reminders = { overdue: true, possiblyStuck: true, lastNativeEventAt: null, toolInProgress: false };
-    const running = task({ status: "running", activeAttemptId: "att-2", selectedAttempt: { attemptId: "att-2", reminders } });
+    const running = task({ state: "running", activeAttemptId: "att-2", selectedAttempt: { attemptId: "att-2", reminders } });
     const live = timeline();
     Object.assign(live.spans.find(item => item.spanId === "e2")!, { endAt: null, state: "executing", shutdownConfirmed: false });
     open({ timeline: live, replies: { task: running, workflow: workflow({ state: "executing" }) } });
@@ -194,7 +194,7 @@ describe("the head of the detail", () => {
     expect(pane().textContent).toContain("已超过预期");
     cleanup();
     // The same record on a micro task whose attempt is no longer running warns of nothing.
-    open({ replies: { task: task({ status: "completed", activeAttemptId: null, selectedAttempt: { attemptId: "att-2", reminders } }) } });
+    open({ replies: { task: task({ state: "completed", activeAttemptId: null, selectedAttempt: { attemptId: "att-2", reminders } }) } });
     await ready();
     expect(document.querySelector("[data-slot=detail-header]")!.textContent).not.toContain("可能卡住");
   });
@@ -464,7 +464,7 @@ describe("a turn", () => {
   });
 
   it("writes why an execution did not end as it should: the cause, who cancelled it and why, a native limit", async () => {
-    const stopped = task({ status: "cancelled", workflow: { ...task().workflow, state: "cancelled" }, stopInitiator: "host",
+    const stopped = task({ state: "cancelled", workflow: { ...task().workflow, state: "cancelled" }, stopInitiator: "host",
       selectedAttempt: { attemptId: "att-2", result: { terminationReason: "wrap-up" }, stopInitiator: "host" },
       cancellation: { actor: HOST, note: "改由 Host 接手" } });
     open({ step: 7, replies: { task: stopped, workflow: workflow({ state: "cancelled" }) } });
@@ -473,7 +473,7 @@ describe("a turn", () => {
     expect(pane().textContent).toContain("Host 停止");
     expect(pane().textContent).toContain("改由 Host 接手");
     cleanup();
-    const limited = task({ status: "failed", workflow: { ...task().workflow, state: "failed" }, quotaFailure: { code: "quota-exceeded" }, selectedAttempt: { attemptId: "att-2", result: { terminationReason: "harness-error" } } });
+    const limited = task({ state: "failed", workflow: { ...task().workflow, state: "failed" }, quotaFailure: { code: "quota-exceeded" }, selectedAttempt: { attemptId: "att-2", result: { terminationReason: "harness-error" } } });
     open({ step: 7, replies: { task: limited, workflow: workflow({ state: "failed" }) } });
     await ready();
     expect(pane().textContent).toContain("额度耗尽");
@@ -498,7 +498,7 @@ describe("a turn", () => {
     base.turns = base.turns.filter(item => item.turnIndex !== 1);
     const history = audit();
     history.turns = history.turns.map(item => item.turnIndex === 1 ? { ...item, state: "rejected", summary: null } : item);
-    open({ step: 3, timeline: first, replies: { task: task({ status: "completed", workflow: { ...task().workflow, state: "accepted" } }), workflow: base, audit: history } });
+    open({ step: 3, timeline: first, replies: { task: task({ state: "completed", workflow: { ...task().workflow, state: "accepted" } }), workflow: base, audit: history } });
     await ready();
     expect(pane().textContent).toContain("模型开始前额度被拒绝");
     expect(pane().textContent).toContain("额度被拒");
@@ -525,7 +525,7 @@ describe("a turn that is running", () => {
   function live(reminders = { overdue: true, possiblyStuck: true, lastNativeEventAt: null, toolInProgress: false }, activity: unknown = { phase: "tool-running", observedAt: at("11:11"), toolName: "Bash", lastToolActivityAt: at("11:11"), counts: { modelTurns: 7, toolCalls: 23 } }) {
     const running = timeline();
     Object.assign(running.spans.find(item => item.spanId === "e2")!, { endAt: null, state: "executing", shutdownConfirmed: false });
-    const record = task({ status: "running", activeAttemptId: "att-2", selectedAttempt: { attemptId: "att-2", reminders }, activity });
+    const record = task({ state: "running", activeAttemptId: "att-2", selectedAttempt: { attemptId: "att-2", reminders }, activity });
     const current = workflow({ state: "executing" });
     return open({ step: 7, timeline: running, replies: { task: record, workflow: current, inquiries: { items: [inquiry({ attemptId: "att-2" })], more: false } } });
   }
@@ -617,7 +617,7 @@ describe("a Host's decision", () => {
   it("is told apart from a handoff, a takeover and a cancellation, which each have their own step", async () => {
     const changed = timeline();
     changed.events.push(event(4, "takeover", at("10:50")), event(5, "cancel", at("10:55"), { actor: HOST, note: "不再需要" }));
-    const f = open({ timeline: changed, replies: { task: task({ status: "cancelled", cancellation: { actor: HOST, note: "不再需要" }, selectedAttempt: { result: { terminationReason: "forced-stop" } } }) } });
+    const f = open({ timeline: changed, replies: { task: task({ state: "cancelled", cancellation: { actor: HOST, note: "不再需要" }, selectedAttempt: { result: { terminationReason: "forced-stop" } } }) } });
     await ready();
     // A change of buddy is the boundary between two turns; the takeover and the cancellation are their own marks.
     f.atStep(6);
@@ -705,7 +705,7 @@ describe("the acceptance", () => {
     failed.rows = [row({ state: "failed", status: "failed" })];
     const conclusion = { conclusionId: "c1", reason: null, executionStatus: "failed", note: "额度耗尽前把改动提取为部分成果",
       artifactId: "art-partial", attemptId: "att-2", actor: { role: "host" as const, id: "host-a" }, createdAt: at("11:07"), runRevision: 7 };
-    open({ timeline: failed, step: 8, replies: { workflow: workflow({ state: "failed", hostConclusion: conclusion }), task: task({ status: "failed", workflow: { ...task().workflow, state: "failed" } }) } });
+    open({ timeline: failed, step: 8, replies: { workflow: workflow({ state: "failed", hostConclusion: conclusion }), task: task({ state: "failed", workflow: { ...task().workflow, state: "failed" } }) } });
     await ready();
     const text = pane().textContent!;
     expect(text).toContain("Host 的结论");

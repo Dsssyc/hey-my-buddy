@@ -264,7 +264,7 @@ class ActivityProjection(BoardTestCase):
         self.assertEqual(board.store.head(), old_cursor)
 
         client.progress(attempt["attemptId"], attempt["generation"], nonce, data={"activity": second})
-        following = board.store.events_wait({"after": old_cursor, "taskId": task["runId"], "timeoutMs": 0})
+        following = board.store.events_wait({"after": old_cursor, "runId": task["runId"], "timeoutMs": 0})
         self.assertEqual(len(following["events"]), 1)
         self.assertGreater(following["cursor"], old_cursor)
         self.assertEqual(following["head"], board.store.head())
@@ -356,7 +356,7 @@ class ActivityProjection(BoardTestCase):
                 "shutdownConfirmed": True,
                 "terminationReason": "harness-error",
             })
-        self.assertEqual(client.get(runId=task["runId"])["status"], "failed")
+        self.assertEqual(client.get(runId=task["runId"])["state"], "failed")
         client.retry(runId=task["runId"], note="second generation")
         second = admit_execution(client, "b" * 32)["claim"]["attempt"]
         self.assertEqual(second["generation"], 2)
@@ -398,7 +398,7 @@ class ExecutionActivityForwarding(BoardTestCase):
         directory = execution.directory
         directory.mkdir(mode=0o700, parents=True, exist_ok=True)
         context = ExecutionContext(
-            task_id=task["taskId"],
+            task_id=task["runId"],
             attempt_id=attempt["attemptId"],
             generation=attempt["generation"],
             spec=claim["task"]["spec"],

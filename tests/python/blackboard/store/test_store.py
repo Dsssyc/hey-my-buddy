@@ -327,7 +327,7 @@ class ServiceAdmissionWindowTests(BoardTestCase):
                                  adapter='command', argv=['true'])['task']
         admitted = admit_execution(client, 'free-nonce-0000000000000000000')['claim']
         self.assertIsNotNone(admitted)
-        self.assertEqual(admitted['task']['taskId'], runnable['taskId'])
+        self.assertEqual(admitted['task']['runId'], runnable['runId'])
 
     def test_an_empty_admission_does_not_wake_the_scheduler_again(self):
         from unittest.mock import Mock
@@ -350,8 +350,8 @@ class ServiceAdmissionWindowTests(BoardTestCase):
                  for index in range(2)]
         changed = Mock()
         board.store.on_change = changed
-        client.cancel(runId=tasks[0]['taskId'])
-        changed.assert_called_once_with(frozenset({tasks[0]['taskId']}))
+        client.cancel(runId=tasks[0]['runId'])
+        changed.assert_called_once_with(frozenset({tasks[0]['runId']}))
         changed.reset_mock()
         board.store.record_service_issue('fixture', RuntimeError('service issue'))
         changed.assert_called_once_with(frozenset())

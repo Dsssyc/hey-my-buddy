@@ -18,7 +18,7 @@ class ReceiptStopTests(WorkflowTestCase):
         self.finish_turn(board, claim, disposition="attention")
         view = board.call("workflow_get", {"runId": run["runId"]})
         self.assertEqual(view["state"], "cancelled")
-        self.assertEqual(view["task"]["status"], "cancelled")
+        self.assertEqual(view["task"]["state"], "cancelled")
         self.assertFalse(any(request["state"] == "open" for request in view["requests"]))
         self.assertTrue(view["shutdown"]["selfConfirmed"])
 
@@ -31,7 +31,7 @@ class ReceiptStopTests(WorkflowTestCase):
         board.store.release_execution(({'attemptId': claim['attemptId'], 'generation': claim['generation'], 'nonce': NONCE, 'evidence': {'spawnIntentWritten': False}, 'reason': 'owner never spawned'})["attemptId"], reason="execution-process-not-created")
         view = board.call("workflow_get", {"runId": run["runId"], "includeAudit": True})
         self.assertEqual(view["state"], "cancelled")
-        self.assertEqual(view["task"]["status"], "cancelled")
+        self.assertEqual(view["task"]["state"], "cancelled")
         self.assertEqual(view["shutdown"]["unconfirmedCount"], 0)
         self.assertTrue(all(row["state"] == "released" for row in view["audit"]["reservations"]))
         replacement = self.submit(board, request_id="reuse-actual-checkout")
@@ -45,7 +45,7 @@ class ReceiptStopTests(WorkflowTestCase):
         attempt = self.claim(board)["claim"]["attempt"]
         board.call('execution_result', {'attemptId': attempt['attemptId'], 'generation': attempt['generation'], 'nonce': NONCE, 'status': 'ok', 'shutdownConfirmed': True, 'result': {'turn': {'outcome': {'disposition': 'assistance'}}}})
         view = board.call("task_get", {"runId": run["task"]["runId"]})["task"]
-        self.assertEqual(view["status"], "completed")
+        self.assertEqual(view["state"], "completed")
         self.assertNotIn("workflow", view)
 
     def test_current_summary_is_bounded_and_full_audit_preserved(self):
@@ -65,7 +65,7 @@ class MicroTaskStopWaitTests(unittest.TestCase):
         self.state = Path(os.environ["HMB_STATE_DIR"])
 
     def test_cancelled_micro_task_never_becomes_success_from_a_late_completed_execution(self):
-        run = {"runId": "parent", "status": "completed", "workflowState": "cancelled", "revision": 9,
+        run = {"runId": "parent", "state": "completed", "workflowState": "cancelled", "revision": 9,
                "resultAvailable": True, "shutdownConfirmed": True,
                "workflowShutdown": {"selfConfirmed": True, "descendantsConfirmed": True,
                                     "unconfirmedRunIds": [], "unconfirmedCount": 0, "truncated": False}}
@@ -87,7 +87,7 @@ class MicroTaskStopWaitTests(unittest.TestCase):
     def test_cancelled_parent_waits_on_descendant_events_not_terminal_spin(self):
         clock = VirtualClock()
         pending = {"selfConfirmed": True, "descendantsConfirmed": False, "unconfirmedRunIds": ["child"], "unconfirmedCount": 1, "truncated": False}
-        run = {"runId": "parent", "status": "cancelled", "workflowState": "cancelled", "revision": 9,
+        run = {"runId": "parent", "state": "cancelled", "workflowState": "cancelled", "revision": 9,
                "resultAvailable": True, "shutdownConfirmed": True, "workflowShutdown": pending}
         calls = []
 
@@ -118,7 +118,7 @@ class MicroTaskStopWaitTests(unittest.TestCase):
     def test_unknown_descendant_stop_expires_only_the_wait(self):
         clock = VirtualClock()
         pending = {"selfConfirmed": True, "descendantsConfirmed": False, "unconfirmedRunIds": ["child"], "unconfirmedCount": 1, "truncated": False}
-        run = {"runId": "parent", "status": "cancelled", "workflowState": "cancelled", "revision": 9,
+        run = {"runId": "parent", "state": "cancelled", "workflowState": "cancelled", "revision": 9,
                "resultAvailable": True, "shutdownConfirmed": True, "workflowShutdown": pending}
 
         def service(method, params, directory):
@@ -139,7 +139,7 @@ class MicroTaskStopWaitTests(unittest.TestCase):
 
     def test_micro_task_wait_timeout_expires_only_the_wait_and_names_current_commands(self):
         clock = VirtualClock()
-        run = {"runId": "parent", "status": "running", "workflowState": "executing", "revision": 9,
+        run = {"runId": "parent", "state": "running", "workflowState": "executing", "revision": 9,
                "resultAvailable": False, "shutdownConfirmed": False}
         calls = []
 

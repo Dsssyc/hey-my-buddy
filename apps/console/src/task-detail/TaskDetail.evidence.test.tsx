@@ -333,7 +333,7 @@ describe("the head", () => {
   it("writes a relative time with a space between the number and the unit", async () => {
     const running = timeline();
     Object.assign(running.spans.find(item => item.spanId === "e2")!, { endAt: null, state: "executing", shutdownConfirmed: false });
-    open({ step: 7, timeline: running, replies: { task: task({ status: "running", activeAttemptId: "att-2", activity: { phase: "tool-running", observedAt: at("11:11"), toolName: "Bash", lastToolActivityAt: at("11:11") } }),
+    open({ step: 7, timeline: running, replies: { task: task({ state: "running", activeAttemptId: "att-2", activity: { phase: "tool-running", observedAt: at("11:11"), toolName: "Bash", lastToolActivityAt: at("11:11") } }),
       workflow: workflow({ state: "executing" }) } });
     await ready();
     expect(pane().querySelector("[data-slot=detail-live]")!.textContent).toContain("上报 19 分钟前");
@@ -344,7 +344,7 @@ describe("the title of a turn that runs", () => {
   function running(reminders: { overdue: boolean; possiblyStuck: boolean }) {
     const live = timeline();
     Object.assign(live.spans.find(item => item.spanId === "e2")!, { endAt: null, state: "executing", shutdownConfirmed: false });
-    return open({ timeline: live, replies: { task: task({ status: "running", activeAttemptId: "att-2", selectedAttempt: { reminders: { ...reminders, lastNativeEventAt: null, toolInProgress: false } },
+    return open({ timeline: live, replies: { task: task({ state: "running", activeAttemptId: "att-2", selectedAttempt: { reminders: { ...reminders, lastNativeEventAt: null, toolInProgress: false } },
       activity: { phase: "tool-running", observedAt: at("11:11"), toolName: "Bash" } }), workflow: workflow({ state: "executing" }) } });
   }
 
@@ -394,12 +394,12 @@ describe("the turn that ended otherwise than it should", () => {
     for (const [cause, words] of [["deadline", "Router 预算用完"], ["forced-stop", "强制停止"], ["console-stop", "控制台停止"], ["service-stop", "服务停止"],
       ["unknown-stop", "停止（发起者未知）"], ["harness-error", "Harness 错误"], ["transport-error", "传输故障"], ["grace-expired", "收尾宽限到期后停止"]] as const) {
       cleanup();
-      ended({ status: "failed", selectedAttempt: { result: { terminationReason: cause } } });
+      ended({ state: "failed", selectedAttempt: { result: { terminationReason: cause } } });
       await ready();
       expect(pane().textContent, cause).toContain(words);
     }
     cleanup();
-    ended({ status: "cancelled", cancellation: { actor: { role: "lead", id: "review-lead" }, note: "Please summarize the current work" },
+    ended({ state: "cancelled", cancellation: { actor: { role: "lead", id: "review-lead" }, note: "Please summarize the current work" },
       selectedAttempt: { stopInitiator: "lead", result: { terminationReason: "wrap-up" } } });
     await ready();
     expect(pane().textContent).toContain("Lead 收尾完成");
@@ -410,24 +410,24 @@ describe("the turn that ended otherwise than it should", () => {
   });
 
   it("names the person who stopped it only when the stopper was a person, and the console or the service never by a name", async () => {
-    ended({ status: "cancelled", cancellation: { actor: { role: "host", id: "old-actor" }, note: null }, selectedAttempt: { stopInitiator: "console", result: { terminationReason: "console-stop" } } });
+    ended({ state: "cancelled", cancellation: { actor: { role: "host", id: "old-actor" }, note: null }, selectedAttempt: { stopInitiator: "console", result: { terminationReason: "console-stop" } } });
     await ready();
     expect(pane().textContent).toContain("控制台停止");
     expect(pane().textContent).not.toContain("old-actor");
     cleanup();
-    ended({ status: "cancelled", cancellation: { actor: { role: "host", id: "old-owner" }, note: null }, selectedAttempt: { stopInitiator: "lead", result: { terminationReason: "forced-stop" } } });
+    ended({ state: "cancelled", cancellation: { actor: { role: "host", id: "old-owner" }, note: null }, selectedAttempt: { stopInitiator: "lead", result: { terminationReason: "forced-stop" } } });
     await ready();
     expect(pane().textContent).toContain("Lead 停止");
     expect(pane().textContent).not.toContain("old-owner");
     cleanup();
-    ended({ status: "cancelled", selectedAttempt: { result: { terminationReason: "unknown-stop" } } });
+    ended({ state: "cancelled", selectedAttempt: { result: { terminationReason: "unknown-stop" } } });
     await ready();
     expect(pane().textContent).toContain("停止（发起者未知）");
     expect(pane().textContent).not.toContain("用户取消");
   });
 
   it("says the cause is not recorded when a run is over and recorded none, and nothing for one that ended as it should", async () => {
-    ended({ status: "failed", selectedAttempt: { result: {} } });
+    ended({ state: "failed", selectedAttempt: { result: {} } });
     await ready();
     expect(pane().textContent).toContain("终止原因未记录");
     cleanup();

@@ -11,7 +11,7 @@ const samples: Record<string, unknown> = {
   category: "OSError", message: "file write unavailable", truncated: false,
   collection: "buddies", conflictIds: ["conflict-1"], continuationId: "continuation-1", count: 1234, disposition: "completed", enabled: false,
   errorCode: "SAMPLE", harness: "codex", kind: "permission", leadRunId: "lead-1", legalEfforts: ["high", "max"], limit: 12000,
-  missingCapabilities: ["decision"], operation: "probe", paths: ["src/first.ts", "src/second.ts"], recordId: "record-1",
+  missingCapabilities: ["decision"], operation: "probe", recordId: "record-1",
   requiredCapability: "decision", retryAt: "2026-10-18T01:02:03Z", shape: "object", total: 12,
   unfinished: [{ runId: "micro-1", state: "executing" }], utf16Units: 32768,
 };

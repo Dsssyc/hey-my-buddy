@@ -788,6 +788,51 @@ def populate(args):
             **helper_parent["control"]})
         call("workflow_conclude", {"runId": helper_parent["runId"],
             "note": "Fixture Host concluded helper parent", **helper_parent["control"]})
+        # Stock the old writer's propagation of a scope reason to its owner.
+        # This independent cancelled chain keeps the original helper's accepted
+        # result intact and retains more than 32 refused paths in full evidence.
+        scope_parent = call("workflow_submit", {"requestId": "fixture-scope-parent",
+            "hostId": "fixture-host", "submissionToken": "fixture-submission-token-scope-parent",
+            "task": "fixture parent of a scoped helper", "harness": "codex", "provider": "openai",
+            "model": "fixture-alpha", "effort": "high", "cwd": str(work / "workspaces" / "cancelled"),
+            "executionWorkspace": {"kind": "existing", "access": "read"}, "macroTaskOf": ids["delivered"]})
+        stock_ids["scopeParent"] = scope_parent["runId"]
+        scope_parent_claim = admit(nonce, scope_parent["runId"])
+        scope_parent_seal = workspace.seal(work / "state", scope_parent_claim["turn"]["input"]["executionWorkspace"],
+                                          scope_parent["runId"], scope_parent_claim["attempt"]["attemptId"])
+        scope_parent_record = completed_record(scope_parent_claim, "scope-parent")
+        scope_parent_record["outcome"] = parent_record["outcome"]
+        report(scope_parent_claim, nonce, status="ok", result={"status": "ok", "turn": scope_parent_record,
+            "workspaceSeal": scope_parent_seal, "processState": {"shutdownConfirmed": True}})
+        scope_parent_view = call("workflow_get", {"runId": scope_parent["runId"]})
+        scope_approved = call("workflow_decide", {"runId": scope_parent["runId"],
+            "requestId": scope_parent_view["activeRequest"]["requestId"], "commandId": "approve-scope-helper",
+            "expectedRevision": scope_parent_view["revision"], "decision": "approve", "autoContinue": False,
+            "helpers": [{"requestId": "fixture-scope-helper", "task": "fixture scoped helper",
+                "harness": "codex", "provider": "openai", "model": "fixture-alpha", "effort": "high",
+                "cwd": str(work / "repository"),
+                "executionWorkspace": {"kind": "worktree", "access": "write", "writeScope": ["README.md"]}}],
+            **scope_parent["control"]})
+        scope_helper_id = scope_approved["children"][0]["taskId"]
+        stock_ids["scopeHelper"] = scope_helper_id
+        scope_claim = admit(nonce, scope_helper_id)
+        scope_manifest = scope_claim["turn"]["input"]["executionWorkspace"]
+        for index in range(40):
+            (Path(scope_manifest["path"]) / f"outside-{index:02d}.txt").write_bytes(b"fixture helper scope stock\n")
+        try:
+            workspace.seal(work / "state", scope_manifest, scope_helper_id, scope_claim["attempt"]["attemptId"])
+        except BoardError as error:
+            assert error.code == "WORKSPACE_SCOPE_VIOLATION", error
+        else:
+            raise AssertionError("Expected a helper scope failure")
+        report(scope_claim, nonce, status="failed", error=seal_error, result={
+            "status": "failed", "workspaceSealError": seal_error, "processState": {"shutdownConfirmed": True}})
+        scope_helper_view = call("workflow_get", {"runId": scope_helper_id})
+        scope_parent_view = call("workflow_get", {"runId": scope_parent["runId"]})
+        assert scope_parent_view["activeRequest"]["reason"] == scope_helper_view["activeRequest"]["reason"]
+        assert len(scope_parent_view["activeRequest"]["reason"]["params"]["paths"]) == 32
+        call("workflow_cancel", {"runId": scope_parent["runId"], "commandId": "cancel-scope-parent",
+            "note": "Fixture closes the propagated scope boundary", **scope_parent["control"]})
         # A successful routed call ended the earlier refusal sequence. Retain a
         # fresh synthetic refusal through the base's transaction writer, then
         # exercise the named re-detection operation on it.
@@ -821,7 +866,7 @@ def populate(args):
         with patch.object(macro_task_deletion, "_delete_sessions",
                           side_effect=BoardError("FIXTURE_STOP", "Retain in-progress deletion stock")):
             pending = call("macro_task_delete", {"macroTaskId": pending_target,
-                           "confirm": True, "microTaskCount": 10}, human=True)
+                           "confirm": True, "microTaskCount": 12}, human=True)
         assert pending["state"] == "deleting"
         # Cover default reason-only health and a native result whose JSON status
         # becomes stale after the base writer invalidates it. Codex stays ready
@@ -1106,6 +1151,12 @@ def verify(output, restored):
         assert set(connection.execute("SELECT attempt_id IS NULL FROM workflow_suggestions")) == {(0,), (1,)}
         assert set(connection.execute("SELECT state FROM workspace_cleanup_plans")) == {("planned",), ("applied",), ("blocked",)}
         assert connection.execute("SELECT COUNT(*) FROM workflow_continuations WHERE state='consumed'").fetchone()[0] == 1
+        scope_requests = connection.execute("SELECT child_task_id,reason_params_json FROM workflow_requests"
+                                            " WHERE reason_code='workspace-scope-violation'").fetchall()
+        assert any(row[0] is not None for row in scope_requests)
+        assert any(len(json.loads(row[1])["paths"]) == 32 for row in scope_requests)
+        assert any(len(json.loads(row[0])["blockingPaths"]) == 40 for row in connection.execute(
+            "SELECT evidence_json FROM workflow_workspace_conflicts"))
         assert connection.execute("SELECT COUNT(*) FROM attempt_interruptions WHERE state='settled'").fetchone()[0] == 2
         for label, expected in (("delivered", {}),
                                 ("accepted", {"remaining": {"droppedItems": 5, "shortenedItems": 1}})):
@@ -1176,6 +1227,7 @@ def verify(output, restored):
                           **{metadata["stockIds"][key]: "accepted" for key in ("adopted", "verified", "helper", "lead")},
                           metadata["stockIds"]["helperParent"]: "concluded",
                           metadata["stockIds"]["leadOwned"]: "concluded",
+                          **{metadata["stockIds"][key]: "cancelled" for key in ("scopeParent", "scopeHelper")},
                           **{metadata["edgeStock"][key]["runId"]: "failed" for key in
                              ("partial-failed", "partial-interrupted", "rejected-turn", "rejected-seal")}}
         schema = [list(row) for row in connection.execute("SELECT type,name,tbl_name,sql FROM sqlite_master ORDER BY type,name")]

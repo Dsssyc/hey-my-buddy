@@ -1758,11 +1758,11 @@ def task_view(entry: dict) -> dict:
         spec["decision"] = {"decisionId": entry["decisionId"], "kind": "select",
                             "routerBudgetSeconds": entry["routing"]["budget"]["timeoutSeconds"]}
     view: dict[str, Any] = {
-        "runId": entry["runId"], "taskId": entry["runId"], "requestId": entry["requestId"],
+        "runId": entry["runId"], "requestId": entry["requestId"],
         "owner": None if entry["kind"] in ("micro-task", "helper") else "synthetic-worker-1", "adapter": adapter, "cwd": entry["cwd"], "task": entry["task"],
         "spec": spec, "inputFingerprint": digest(f"{entry['runId']}-fingerprint"), "fingerprintVersion": 3,
         "requiredCapabilities": [], "exclusiveResources": [], **duration,
-        "status": entry["status"], "state": entry["status"],
+        "state": entry["status"],
         "queueReason": "awaiting-owned" if entry["state"] == "waiting-owned" else None,
         "revision": entry["revision"],
         "selectedAttemptId": selected["attemptId"] if selected else None,
@@ -1881,7 +1881,7 @@ def workflow_view(entry: dict) -> dict:
                                          "decisionId": None, "taskId": None, "constraints": {},
                                          "source": "original-explicit" if entry["buddy"] else None})
     return {
-        "runId": entry["runId"], "taskId": entry["runId"],
+        "runId": entry["runId"],
         "requestId": entry["requestId"], "title": entry["title"], "macroTaskId": entry["group"],
         "hostId": entry["currentHostId"], "ownerGeneration": 1, "revision": entry["revision"],
         "state": entry["state"], "status": entry["status"],

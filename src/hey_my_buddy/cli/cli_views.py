@@ -4,14 +4,13 @@ Every CLI response is read by a Host model, stays in its context and is re-read 
 each later request, so the default printout is a brief projection of the service
 response rather than the complete record. The projection only removes material
 the caller already supplied (its own packet and workspace intent), duplicates
-(``taskId``/``runId``, the execution summary under ``task``, a plan echoed as both
+(the execution summary under ``task``, a plan echoed as both
 ``plan`` and ``cleanup``) and history that is not needed for the next decision.
 Identifiers the next command needs, open boundaries, conflicts, errors,
 unconfirmed shutdown and truncation are always kept, and a value the service did
 not report is never replaced by a default.
 
-The service response itself is unchanged: RPC clients, the console and
-``BoardClient`` still receive the complete views, and the CLI-local option
+RPC clients, the console and ``BoardClient`` receive the complete views. The CLI-local option
 ``"output": "full"`` prints them unmodified. ``includeAudit`` and
 ``routingHistory`` on ``get`` are explicit requests and are passed through.
 """
@@ -328,7 +327,6 @@ def micro_task_receipt(response: dict) -> dict:
 _KNOWN_MICRO_TASK_FIELDS = frozenset(
     {
         "runId",
-        "taskId",
         "requestId",
         "hostId",
         "ownerGeneration",
@@ -393,11 +391,8 @@ def submit_receipt(response: dict) -> dict:
 
 _TASK_BRIEF = (
     "runId",
-    # Execution records address the same identity as taskId.
-    "taskId",
     "requestId",
     "adapter",
-    "status",
     "state",
     "cancellation",
     "queueReason",
@@ -466,7 +461,7 @@ def list_brief(response: dict) -> dict:
     rows = response["runs"]
     brief_rows = []
     for row in rows:
-        entry = _pick(row, ("runId", "requestId", "adapter", "status", "workflowState", "awaitingHost", "createdAt"))
+        entry = _pick(row, ("runId", "requestId", "adapter", "state", "workflowState", "awaitingHost", "createdAt"))
         lineage = row.get("lineage")
         if lineage is not None:
             buddy = lineage.get("buddy")

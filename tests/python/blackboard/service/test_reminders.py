@@ -68,7 +68,7 @@ class ReminderBoardTests(BoardTestCase):
         reminders.collect(self.board_instance.store)
         # A status read never consumes a reminder, and collecting the same instant
         # again does not manufacture another copy of either elapsed multiple.
-        self.assertEqual(self.client.get(runId=run_id)["status"], "running")
+        self.assertEqual(self.client.get(runId=run_id)["state"], "running")
         reminders.collect(self.board_instance.store)
         first = self.wait(run_id)["reminder"]
         second = self.wait(run_id)["reminder"]
@@ -160,7 +160,7 @@ class ReminderPrivateServiceTests(BoardTestCase):
                 self.assertNotEqual(first["reminder"]["reminderId"], second["reminder"]["reminderId"])
                 code, status = self.cli("status", json.dumps({"runId": run_id}))
                 self.assertEqual(code, 0, status)
-                self.assertEqual(status["status"], "running")
+                self.assertEqual(status["state"], "running")
                 attempt = BoardClient(self.directory).get(runId=run_id)["selectedAttempt"]
                 self.assertFalse(attempt["reminders"]["possiblyStuck"])
                 store = BoardStore(self.directory)

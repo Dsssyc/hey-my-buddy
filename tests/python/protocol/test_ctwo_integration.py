@@ -176,7 +176,7 @@ class CTwoIntegrationTests(unittest.TestCase):
         def finished():
             value = exchange(self.service, {"op": "status"})
             task = self.client.get(runId=self.run_id)
-            return value if not value["running"] and task["status"] in {
+            return value if not value["running"] and task["state"] in {
                 "completed", "failed", "cancelled"} else None
 
         value = self.until(finished, "service did not settle its execution")

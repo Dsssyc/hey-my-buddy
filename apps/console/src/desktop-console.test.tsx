@@ -26,7 +26,7 @@ function catalog(): Buddy[] {
     contextWindow: null, source: "catalog:fixture", description: "" }));
 }
 function microTask(runId: string, sourceHostId = "codex-source", projectId = "source-project"): Task {
-  return { runId, task: `目标 ${runId}`, status: "queued", owner: "worker:unrelated-label", cwd: `/runtime/worktrees/${runId}`,
+  return { runId, task: `目标 ${runId}`, state: "queued", owner: "worker:unrelated-label", cwd: `/runtime/worktrees/${runId}`,
     revision: 1, createdAt: "2026-09-24T10:00:00Z", updatedAt: "2026-09-24T10:00:00Z", acceptedAt: null, reviewRejectedAt: null, reviewRejectionNote: null,
     workflow: { state: "executing", awaitingHost: false, hostId: "current-host", ownerGeneration: 2, revision: 1 },
     lineage: { kind: "micro-task", sourceHostId, currentHostId: "current-host", parentRunId: null, rootRunId: runId, rootLeadRunId: null, routingTask: null,
@@ -41,7 +41,7 @@ function workflow(task: Task): Workflow {
     finalArtifactId: null, hostConclusion: null, shutdown: null, workspace: { path: task.cwd },
     activeRequest: { requestId: `request-${task.runId}`, kind: "assistance", state: "open", createdAt: "2026-09-24T10:00:00Z", decidedAt: null, childTaskId: null, routing: false,
       summary: `协助 ${task.runId}`, attempted: "已有检查", neededWork: ["补充测试"], expectedArtifacts: [], acceptance: "检查通过" },
-    task: { runId: task.runId, revision: task.revision, status: task.status, lineage: task.lineage } };
+    task: { runId: task.runId, revision: task.revision, state: task.state, lineage: task.lineage } };
 }
 function fixture(records: Task[] = []) {
   const buddies = catalog();

@@ -17,17 +17,17 @@ class InquirySettlementTests(BoardTestCase):
         client = board.client()
         task = board.submit_execution(requestId="inquiry-settlement", task="work",
             cwd=str(self.workdir()), adapter="command", argv=["true"])["task"]
-        attempt = admit_execution(client, "n" * 32, task_id=task["taskId"])["claim"]["attempt"]
-        board.store._message_post(task["taskId"], "q-pending", "Status?")
+        attempt = admit_execution(client, "n" * 32, task_id=task["runId"])["claim"]["attempt"]
+        board.store._message_post(task["runId"], "q-pending", "Status?")
         return board, client, task, attempt
 
     def journal_facts(self, board, task, attempt):
         """Source facts may outrun the service's last queued snapshot."""
         records = []
-        binding = {"version": 1, "taskId": task["taskId"], "attemptId": attempt["attemptId"],
+        binding = {"version": 1, "taskId": task["runId"], "attemptId": attempt["attemptId"],
                    "generation": attempt["generation"], "turnId": None}
         for inquiry_id in ("q-answered", "q-delivered"):
-            board.store._message_post(task["taskId"], inquiry_id, "Status?")
+            board.store._message_post(task["runId"], inquiry_id, "Status?")
             records.append({**binding, "inquiryId": inquiry_id, "state": "queued", "question": "Status?",
                             "questionSha256": hashlib.sha256(b"Status?").hexdigest(),
                             "delivery": {"admittedDelivery": "cooperative-checkpoint"}})
@@ -36,24 +36,24 @@ class InquirySettlementTests(BoardTestCase):
             records.append({**binding, "inquiryId": inquiry_id,
                             **({"state": "answered", "answer": {"text": "already durable"}}
                                if inquiry_id == "q-answered" else {"state": "unavailable"})})
-        directory = board.directory / "attempts" / task["taskId"] / attempt["attemptId"]
+        directory = board.directory / "attempts" / task["runId"] / attempt["attemptId"]
         directory.mkdir(parents=True, exist_ok=True)
         (directory / "inquiry.results.jsonl").write_text("".join(json.dumps(record) + "\n" for record in records), encoding="utf-8")
 
     def assert_imported(self, client, task):
-        answered = client.get_message("q-answered", runId=task["taskId"])
+        answered = client.get_message("q-answered", runId=task["runId"])
         self.assertEqual(answered["state"], "answered")
         self.assertEqual(answered["answer"]["text"], "already durable")
-        delivered = client.get_message("q-delivered", runId=task["taskId"])
+        delivered = client.get_message("q-delivered", runId=task["runId"])
         self.assertEqual(delivered["state"], "unavailable")
         self.assertEqual(delivered["reason"]["code"], "inquiry-delivered-at-attempt-end")
         self.assertEqual(delivered["delivery"]["deliveredAt"], "2026-10-22T00:00:00Z")
 
     def assert_settled_once(self, board, client, task, attempt):
-        message = client.get_message("q-pending", runId=task["taskId"])
+        message = client.get_message("q-pending", runId=task["runId"])
         self.assertEqual(message["state"], "unavailable")
         self.assertEqual(message["reason"], {"code": "inquiry-queued-at-attempt-end", "params": {}})
-        events = client.read_events(taskId=task["taskId"])["events"]
+        events = client.read_events(runId=task["runId"])["events"]
         updates = [event for event in events if event["kind"] == "message.updated"
                    and event["payload"].get("state") == "unavailable"
                    and event["payload"].get("inquiryId") == "q-pending"]
@@ -63,10 +63,10 @@ class InquirySettlementTests(BoardTestCase):
 
     def test_cancelled_before_process_creation_settles_on_release(self):
         board, client, task, attempt = self.claimed()
-        board.store.task_cancel({"runId": task["taskId"], "note": "service stop"}, initiator="service")
-        self.assertEqual(client.get_message("q-pending", runId=task["taskId"])["state"], "queued")
+        board.store.task_cancel({"runId": task["runId"], "note": "service stop"}, initiator="service")
+        self.assertEqual(client.get_message("q-pending", runId=task["runId"])["state"], "queued")
         board.store.release_execution(attempt["attemptId"], reason="execution-process-not-created")
-        self.assertEqual(client.get(runId=task["taskId"])["state"], "cancelled")
+        self.assertEqual(client.get(runId=task["runId"])["state"], "cancelled")
         self.assert_settled_once(board, client, task, attempt)
         head = board.store.head()
         board.store.release_execution(attempt["attemptId"], reason="execution-process-not-created")
@@ -82,11 +82,11 @@ class InquirySettlementTests(BoardTestCase):
             directory = interruption._directory(board.store, stored)
         journal = processes.native_process_journal_path(directory, IDENTITY)
         Path(journal).parent.mkdir(parents=True, exist_ok=True)
-        processes.NativeProcessJournal(Path(journal), {"taskId": task["taskId"],
+        processes.NativeProcessJournal(Path(journal), {"taskId": task["runId"],
             "attemptId": attempt["attemptId"], "generation": attempt["generation"]})
         with patch.object(processes, "inspect_process_identity", return_value="identity-absent"):
             self.assertEqual(len(board.store.recover_executions()), 1)
-        self.assertEqual(client.get(runId=task["taskId"])["attemptState"], "finished")
+        self.assertEqual(client.get(runId=task["runId"])["attemptState"], "finished")
         self.assert_settled_once(board, client, task, attempt)
         self.assert_imported(client, task)
 
@@ -95,10 +95,10 @@ class InquirySettlementTests(BoardTestCase):
         self.journal_facts(board, task, attempt)
         report = {"status": "failed", "shutdownConfirmed": False}
         client.submit_result(attempt["attemptId"], attempt["generation"], "n" * 32, report)
-        self.assertEqual(client.get(runId=task["taskId"])["attemptState"], "uncertain")
-        self.assertEqual(client.get_message("q-pending", runId=task["taskId"])["state"], "queued")
+        self.assertEqual(client.get(runId=task["runId"])["attemptState"], "uncertain")
+        self.assertEqual(client.get_message("q-pending", runId=task["runId"])["state"], "queued")
         board.store.confirm_execution_shutdown(attempt["attemptId"], {"kind": "identity-absent"})
-        self.assertEqual(client.get(runId=task["taskId"])["attemptState"], "finished")
+        self.assertEqual(client.get(runId=task["runId"])["attemptState"], "finished")
         self.assert_settled_once(board, client, task, attempt)
         self.assert_imported(client, task)
         head = board.store.head()
@@ -109,11 +109,11 @@ class InquirySettlementTests(BoardTestCase):
         board, client, task, attempt = self.claimed()
         self.journal_facts(board, task, attempt)
         board.store.execution_connection(attempt["attemptId"], connected=False)
-        self.assertEqual(client.get(runId=task["taskId"])["attemptState"], "uncertain")
-        self.assertEqual(client.get_message("q-pending", runId=task["taskId"])["state"], "queued")
+        self.assertEqual(client.get(runId=task["runId"])["attemptState"], "uncertain")
+        self.assertEqual(client.get_message("q-pending", runId=task["runId"])["state"], "queued")
         client.submit_result(attempt["attemptId"], attempt["generation"], "n" * 32,
                              {"status": "ok", "shutdownConfirmed": True})
-        self.assertEqual(client.get(runId=task["taskId"])["attemptState"], "finished")
+        self.assertEqual(client.get(runId=task["runId"])["attemptState"], "finished")
         self.assert_settled_once(board, client, task, attempt)
         self.assert_imported(client, task)
 
@@ -130,7 +130,7 @@ class InquirySettlementTests(BoardTestCase):
     def test_cancelled_result_imports_answers_before_settlement(self):
         board, client, task, attempt = self.claimed()
         self.journal_facts(board, task, attempt)
-        board.store.task_cancel({"runId": task["taskId"], "note": "cancel"})
+        board.store.task_cancel({"runId": task["runId"], "note": "cancel"})
         client.submit_result(attempt["attemptId"], attempt["generation"], "n" * 32,
                              {"status": "cancelled", "shutdownConfirmed": True})
         self.assert_settled_once(board, client, task, attempt)

@@ -15,11 +15,18 @@ from .run_identity import RunIdentity
 #: and every session-tool reader agree on this bound.
 MAX_JOURNAL_BYTES = 1024 * 1024
 
-#: The only inquiry-journal record format the writers write and the readers
-#: replay. Every reader requires exactly this version and the record's attempt
-#: identity, so a malformed, foreign or unbound line is ignored instead of
-#: merged.
-INQUIRY_JOURNAL_VERSION = 1
+#: New records omit fixed delivery claims. Version 1 records remain readable
+#: because sealed and attempt-private journals are evidence, not migration stock.
+INQUIRY_JOURNAL_VERSION = 2
+READABLE_INQUIRY_JOURNAL_VERSIONS = (1, INQUIRY_JOURNAL_VERSION)
+
+# Version 1 journals remain immutable; their message projection carries only
+# observations, so replay cannot restore retired constructed claims to SQLite.
+_V1_DELIVERY_CLAIMS = frozenset(('requestedDelivery', 'startsNewTurn', 'extendsDeadline', 'supported'))
+
+
+def inquiry_delivery_facts(delivery: dict) -> dict:
+    return {key: value for key, value in delivery.items() if key not in _V1_DELIVERY_CLAIMS}
 
 
 def read_shared_snapshot(path, max_bytes: int) -> bytes | None:
@@ -118,7 +125,7 @@ def read_inquiry_journal(identity: RunIdentity | dict, journal_path: str | Path 
         question_id = record.get("inquiryId")
         if not isinstance(question_id, str) or not question_id:
             continue
-        if type(record.get("version")) is not int or record["version"] != INQUIRY_JOURNAL_VERSION or any(
+        if type(record.get("version")) is not int or record["version"] not in READABLE_INQUIRY_JOURNAL_VERSIONS or any(
                 key not in record or type(record[key]) is not type(bound[key]) or record[key] != bound[key]
                 for key in ("taskId", "attemptId", "generation", "turnId")):
             rejection[question_id] = _journal_rejection_reason(record, bound)
@@ -171,7 +178,7 @@ def normalize_inquiry_record(record: dict, *, was_delivered: bool = False) -> di
     if state not in ("queued", "claimed", "delivered", "answered", "discarded", "unavailable"):
         return None
     patch: dict = {"state": state}
-    delivery = dict(record["delivery"]) if isinstance(record.get("delivery"), dict) else {}
+    delivery = inquiry_delivery_facts(record["delivery"]) if isinstance(record.get("delivery"), dict) else {}
     for key in ("deliveredAt", "via", "toolCallId", "nativeCorrelation"):
         if record.get(key) is not None:
             delivery[key] = record[key]

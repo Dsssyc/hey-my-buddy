@@ -101,7 +101,7 @@ export function useTaskDetail(client: TaskDetailClient, runId: string, active: b
     return { value: Object.fromEntries(reads.map(([id, read]) => [id, read.value])), verifiedAtMs: null };
   }, (previous, bases: Record<string, Basis>) => ({ ...previous, bases: { ...previous.bases, ...bases } })), [client, load]);
 
-  const live = data.view !== null && LIVE_STATUSES.includes(data.view.task.status);
+  const live = data.view !== null && LIVE_STATUSES.includes(data.view.task.state);
   const revision = data.workflow?.revision ?? null;
 
   useEffect(() => { if (run) void loadTask(); }, [run, loadTask]);

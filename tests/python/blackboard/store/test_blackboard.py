@@ -52,8 +52,8 @@ class TestAtomicity(BoardTestCase):
         finally:
             board.store._append_event = original
         after = client.get(runId=task["runId"])
-        self.assertEqual(before["status"], "queued")
-        self.assertEqual(after["status"], "queued", "the task state must roll back with its missing event")
+        self.assertEqual(before["state"], "queued")
+        self.assertEqual(after["state"], "queued", "the task state must roll back with its missing event")
         self.assertEqual(after["revision"], before["revision"])
         self.assertEqual(board.store.events_read({"after": 0})["events"][-1]["kind"], "task.submitted")
 
@@ -65,7 +65,7 @@ class TestAtomicity(BoardTestCase):
         client.cancel(runId=task["runId"], note="test")
         kinds = [event["kind"] for event in board.store.events_read({"after": 0})["events"]]
         self.assertEqual(kinds, ["task.submitted", "task.cancelled"])
-        self.assertEqual(client.get(runId=task["runId"])["status"], "cancelled")
+        self.assertEqual(client.get(runId=task["runId"])["state"], "cancelled")
 
     def test_execution_cancel_records_only_the_supplied_note(self):
         board = self.board()
@@ -110,7 +110,7 @@ class TestAtomicity(BoardTestCase):
         kinds = [event["kind"] for event in board.store.events_read({"after": 0})["events"]]
         self.assertNotIn("task.completed", kinds)
         self.assertNotIn("task.completed", kinds)
-        self.assertEqual(client.get(runId=task["runId"])["status"], "running")
+        self.assertEqual(client.get(runId=task["runId"])["state"], "running")
 
 
 class TestConcurrency(BoardTestCase):
@@ -162,7 +162,7 @@ class TestConcurrency(BoardTestCase):
         admit_execution(client, "a" * 32)
         # Queued admission, not BUSY: the second task is accepted and says why it waits.
         second = board.submit_execution(requestId="cap-2", task="two", cwd=str(second_cwd), adapter="command", argv=["/bin/true"])["task"]
-        self.assertEqual(second["status"], "queued")
+        self.assertEqual(second["state"], "queued")
         self.assertEqual(second["queueReason"], "capacity")
         empty = admit_execution(client, "c" * 32)
         self.assertIsNone(empty["claim"])
@@ -330,7 +330,7 @@ class TestCrashWindows(BoardTestCase):
         claim = admit_execution(client, "a" * 32)
         board.store.release_execution(claim["claim"]["attempt"]["attemptId"], reason="execution-process-not-created")
         task = client.get(runId=claim["claim"]["task"]["runId"])
-        self.assertEqual(task["status"], "failed")
+        self.assertEqual(task["state"], "failed")
         self.assertEqual(task["attemptState"], "finished")
         self.assertEqual(
             board.store.active_work()["attempts"], [], "a never-spawned attempt must not retain resources"
@@ -608,8 +608,8 @@ class TestLifecycle(BoardTestCase):
                 argv=["/bin/sh", "-c", f"sleep 8; echo durable > {artifact}"], expectedSeconds=120,
             )["task"]
             run_id = task["runId"]
-            self.assertEqual(task["status"], "queued")
-            started = wait_for(lambda: self.cli("status", json.dumps({"runId": run_id}))[1].get("status") == "running", 20)
+            self.assertEqual(task["state"], "queued")
+            started = wait_for(lambda: self.cli("status", json.dumps({"runId": run_id}))[1].get("state") == "running", 20)
             self.assertTrue(started, "the worker must claim the task")
             before = self.cli("status", json.dumps({"runId": run_id}))[1]
             attempt_id = before["selectedAttemptId"]
@@ -653,7 +653,7 @@ class TestLifecycle(BoardTestCase):
             self.assertEqual(abandoned["runId"], run_id)
             after_interrupt = self.cli("status", json.dumps({"runId": run_id}))[1]
             self.assertIn(
-                after_interrupt["status"],
+                after_interrupt["state"],
                 ("running", "completed"),
                 "an interrupted wait must never cancel or fail the task",
             )
@@ -670,7 +670,7 @@ class TestLifecycle(BoardTestCase):
             self.assertEqual(status["attemptGeneration"], generation)
             self.assertEqual(status["expectedSeconds"], 120, "the expected duration must survive the restart")
             completed = wait_for(
-                lambda: self.cli("status", json.dumps({"runId": run_id}))[1]["status"] == "completed", 30
+                lambda: self.cli("status", json.dumps({"runId": run_id}))[1]["state"] == "completed", 30
             )
             self.assertTrue(completed, "the worker must finish the same attempt after the restart")
             code, result = self.cli("result", json.dumps({"runId": run_id}))
@@ -804,7 +804,7 @@ class TestDelivery(BoardTestCase):
             thread.join(timeout=30)
         self.assertEqual(len(results), 8)
         self.assertIn("WAIT_OVERLOAD", results, "overflow must be an honest, resumable overload error")
-        self.assertEqual(client.get(runId=task["runId"])["status"], "completed")
+        self.assertEqual(client.get(runId=task["runId"])["state"], "completed")
 
     def test_cancellation_race_has_one_legal_outcome(self):
         board = self.board()
@@ -951,7 +951,7 @@ class TestExtensibility(BoardTestCase):
         self.assertEqual(result["result"]["argv"][0], "/bin/sh")
         self.assertEqual(result["resultMeta"]["status"], "ok")
         self.assertEqual(marker.read_text(encoding="utf-8").strip(), "one")
-        self.assertEqual(client.get(runId=task["runId"])["status"], "completed")
+        self.assertEqual(client.get(runId=task["runId"])["state"], "completed")
         self.assertTrue(client.get(runId=task["runId"])["shutdownConfirmed"])
 
     def test_command_adapter_rejects_a_missing_executable_honestly(self):
@@ -966,13 +966,13 @@ class TestExtensibility(BoardTestCase):
         )["task"]
         run_next(client)
         result = client.result(runId=task["runId"])
-        self.assertEqual(result["status"], "failed")
+        self.assertEqual(result["state"], "failed")
         self.assertEqual(result['result']['code'], 'ADAPTER_UNAVAILABLE')
         self.assertEqual(result['result']['stopEvidence'], {
             'shutdownConfirmed': True, 'native': {'shutdownConfirmed': True}})
         self.assertIn("ADAPTER_UNAVAILABLE", result["resultMeta"]["error"])
         self.assertTrue(result["shutdownConfirmed"], "no process was ever created, so shutdown is confirmed")
-        self.assertEqual(client.get(runId=task["runId"])["status"], "failed")
+        self.assertEqual(client.get(runId=task["runId"])["state"], "failed")
 
 
 
@@ -1038,7 +1038,7 @@ class TestPackaging(BoardTestCase):
         )["task"]
         self.assertTrue(
             wait_for(
-                lambda: self.cli("status", json.dumps({"runId": task["runId"]}), env=environment)[1]["status"]
+                lambda: self.cli("status", json.dumps({"runId": task["runId"]}), env=environment)[1]["state"]
                 == "completed",
                 90,
             ),

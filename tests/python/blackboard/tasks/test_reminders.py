@@ -64,7 +64,7 @@ class ReminderFacts(BoardTestCase):
         self.assertEqual((second['expectedMultiple'], second['elapsedSeconds']), (2, 20))
         self.assertNotEqual(first['reminderId'], second['reminderId'])
         self.assertEqual(len(self.records()), 2)
-        self.assertEqual(self.client.get(runId=self.task['runId'])['status'], 'running')
+        self.assertEqual(self.client.get(runId=self.task['runId'])['state'], 'running')
 
     def test_idle_and_future_deadlines_do_not_open_a_write_transaction(self):
         with patch.object(self.store.db, 'write', side_effect=AssertionError('unexpected writer')):

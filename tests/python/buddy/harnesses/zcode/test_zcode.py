@@ -210,7 +210,8 @@ class ZcodeAdapterTests(ZcodeFixtureCase):
         self.assertIn("observe", self.description.capabilities)
         self.assertIn("inquiry", self.description.capabilities)
         self.assertTrue(outcome.result["inquiry"]["mounted"], outcome.result["inquiry"])
-        self.assertTrue(outcome.result["inquiry"]["supported"])
+        self.assertFalse({"supported", "requestedDelivery", "startsNewTurn", "extendsDeadline"}
+                         & outcome.result["inquiry"].keys())
         self.assertEqual(outcome.result["inquiry"]["deliveryMode"], "cooperative-checkpoint")
         self.assertEqual(outcome.result["inquiry"]["answered"], 0)
         native = outcome.result["nativeSession"]

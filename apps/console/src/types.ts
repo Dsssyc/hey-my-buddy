@@ -158,7 +158,7 @@ export type Task = {
   /** Whether the assigned buddy may delegate work from this micro task. */
   delegationAuthority?: boolean;
   task: string;
-  status: string;
+  state: string;
   /** The execution the task view's per-attempt facts are about: the one running, and the last one chosen. */
   activeAttemptId?: string | null;
   selectedAttemptId?: string | null;

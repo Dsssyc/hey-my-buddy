@@ -242,7 +242,7 @@ class ScopeRecoveryTestCase(RealWorkspaceTestCase):
         request = [row for row in audit["audit"]["requests"] if row["state"] == "open"][0]
         self.assertIsNone(request["summary"])
         self.assertEqual(request["reason"], {"code": "workspace-scope-violation", "params": {
-            "paths": ["outside.txt", "tracked.txt"], "conflictIds": [conflict["conflictId"]]}})
+            "conflictIds": [conflict["conflictId"]]}})
         self.assertEqual(view["activeRequest"]["reason"], request["reason"])
         self.assertEqual(request["payload"], {})
         with board.store.db.read() as connection:

@@ -108,6 +108,7 @@ def idle_snapshot(state: Path, *, event_head: int | None = None,
         expected = {}
         if schema == UPGRADE_BASE_SCHEMA:
             fingerprints = schema_upgrade.expected_router_fingerprints(connection)
+            fingerprints.update(schema_upgrade.expected_inquiry_and_scope_fingerprints(connection))
             fingerprints['events'] = schema_upgrade.expected_events_fingerprint(
                 connection, event_head=snapshot['eventHead'])
             expected = {'expectedFingerprints': fingerprints}

@@ -30,9 +30,9 @@ class TestExecutionRecords(BoardTestCase):
             marker = self.directory / "execution-marker.txt"
             task = self.command_task("exec-1", ["/bin/sh", "-c", f"echo done > {marker}; echo finished"])
             self.assertEqual(task["requestId"], "exec-1")
-            self.assertEqual(task["status"], "queued")
+            self.assertEqual(task["state"], "queued")
             self.assertTrue(task["queueReason"], "a queued task must say why it is waiting")
-            self.assertEqual(task["runId"], task["taskId"])
+            self.assertNotIn("taskId", task)
 
             code, envelope = self.cli("await", json.dumps({"runId": task["runId"], "waitSeconds": 60}), timeout=120)
             self.assertEqual(code, 0, envelope)
@@ -116,8 +116,8 @@ class TestExecutionRecords(BoardTestCase):
             self.assertEqual(status["requestId"], "exec-envelope-1")
             self.assertEqual(status["requestId"], "exec-envelope-1")
             self.assertEqual(status["runId"], task["runId"])
-            self.assertIn(status["status"], ("queued", "running", "completed"))
-            self.assertTrue(wait_for(lambda: self.cli("status", json.dumps({"runId": task["runId"]}))[1]["status"] == "completed", 30))
+            self.assertIn(status["state"], ("queued", "running", "completed"))
+            self.assertTrue(wait_for(lambda: self.cli("status", json.dumps({"runId": task["runId"]}))[1]["state"] == "completed", 30))
             result = self.cli("result", json.dumps({"runId": task["runId"]}))[1]
             self.assertTrue(result["resultAvailable"])
             self.assertEqual(result["resultMeta"]["status"], "ok")
@@ -141,19 +141,19 @@ class TestExecutionRecords(BoardTestCase):
     def test_execution_cancel_then_acknowledge_records_a_reviewed_outcome(self):
         with self.daemon():
             task = self.command_task("exec-cancel-1", ["/bin/sleep", "30"])
-            self.assertTrue(wait_for(lambda: self.cli("status", json.dumps({"runId": task["runId"]}))[1]["status"] == "running", 30))
+            self.assertTrue(wait_for(lambda: self.cli("status", json.dumps({"runId": task["runId"]}))[1]["state"] == "running", 30))
             code, cancelled = self.cli(
                 "execution-cancel", json.dumps({"runId": task["runId"], "note": "operator stopped it"})
             )
             self.assertEqual(code, 0, cancelled)
             done = wait_for(
-                lambda: self.cli("status", json.dumps({"runId": task["runId"]}))[1]["status"] in ("cancelled", "failed", "reconciliation-needed"),
+                lambda: self.cli("status", json.dumps({"runId": task["runId"]}))[1]["state"] in ("cancelled", "failed", "reconciliation-needed"),
                 60,
             )
             self.assertTrue(done, "the worker must observe the cancel intent and stop its own child")
             final = self.cli("status", json.dumps({"runId": task["runId"]}))[1]
-            self.assertIn(final["status"], ("cancelled", "reconciliation-needed"))
-            if final["status"] == "cancelled":
+            self.assertIn(final["state"], ("cancelled", "reconciliation-needed"))
+            if final["state"] == "cancelled":
                 code, acknowledged = self.cli(
                     "execution-acknowledge",
                     json.dumps({"runId": task["runId"], "note": "reviewed the cancelled run", "verdict": "rejected"}),

@@ -53,7 +53,7 @@ class FakeService:
         self.listed = listed
         self.result_response = result_response
         self.run = {
-            "runId": "run-fixture", "requestId": "fixture", "status": "running", "revision": 1,
+            "runId": "run-fixture", "requestId": "fixture", "state": "running", "revision": 1,
             "resultAvailable": False, "shutdownConfirmed": False, "createdAt": "t0", "updatedAt": "t0",
             "cwd": "/tmp", "logPaths": {"stdout": "/tmp/stdout.log", "stderr": "/tmp/stderr.log"},
         }
@@ -70,13 +70,13 @@ class FakeService:
         if method == "wait":
             self.clock.advance(params["timeoutMs"] / 1000)
             if self.complete_after_waits is not None and self.calls.count("wait") >= self.complete_after_waits:
-                self.run = {**self.run, "status": "completed", "resultAvailable": True,
+                self.run = {**self.run, "state": "completed", "resultAvailable": True,
                             "shutdownConfirmed": True, "revision": self.run["revision"] + 1}
                 if "workflowState" in self.run:
                     self.run["workflowState"] = "delivered"
             elif self.terminal_without_result:
                 status = self.terminal_without_result if isinstance(self.terminal_without_result, str) else "reconciliation-needed"
-                self.run = {**self.run, "status": status, "revision": self.run["revision"] + 1}
+                self.run = {**self.run, "state": status, "revision": self.run["revision"] + 1}
             if self.stop_event is not None:
                 self.stop_event.set()
             return dict(self.run)
@@ -95,7 +95,7 @@ class WaitWindowTests(unittest.TestCase):
     def test_host_await_keeps_waiting_while_lead_is_parked_on_owned_work(self):
         clock = VirtualClock()
         service = FakeService(clock, complete_after_waits=1)
-        service.run.update(status="queued", workflowState="waiting-owned", resultAvailable=True,
+        service.run.update(state="queued", workflowState="waiting-owned", resultAvailable=True,
                            shutdownConfirmed=True)
         envelope = await_run({"runId": "run-fixture", "waitSeconds": 60},
                              state_dir=Path(os.environ["HMB_STATE_DIR"]), service=service, clock=clock)
@@ -207,7 +207,7 @@ class AwaitTests(unittest.TestCase):
                         return {**result, 'result': {'status': 'ok'}}
 
                     service = FakeService(clock, result_response=result_response)
-                    service.run.update(status='completed', resultAvailable=True, shutdownConfirmed=True,
+                    service.run.update(state='completed', resultAvailable=True, shutdownConfirmed=True,
                                        workflowState=boundary, workflow={}, waitingForHost={'host': 1, 'review': 2})
                     response = await_run({'runId': 'run-fixture', 'waitSeconds': 1},
                                          Path(os.environ['HMB_STATE_DIR']), clock=clock, service=service)
@@ -352,7 +352,7 @@ class ResultTruthTests(unittest.TestCase):
             with self.subTest(status=status):
                 clock = VirtualClock()
                 service = FakeService(clock)
-                service.run.update(status=status, resultAvailable=True, shutdownConfirmed=True)
+                service.run.update(state=status, resultAvailable=True, shutdownConfirmed=True)
 
                 def unavailable(_run):
                     raise ServiceError("SERVICE_UNAVAILABLE", "result service unavailable")
@@ -409,7 +409,7 @@ class MicroTaskBoundaryTests(unittest.TestCase):
             facts={}, router_trials=[], retry_at="2026-10-23T00:00:00Z", decision_id="decision-1",
             run_id="run-fixture", revision=3, shutdown_confirmed=True, target_run_id="authorized-child")
         service.run.update(
-            status="queued", workflowState="awaiting-host", resultAvailable=False,
+            state="queued", workflowState="awaiting-host", resultAvailable=False,
             workflow={"revision": 3, "activeRequestId": "route-boundary", "requestKind": "attention",
                       "requestSummary": "Configure a selector", "requestRouting": True,
                       "requestTargetRunId": "authorized-child", "routingBoundary": boundary},
@@ -445,7 +445,7 @@ class MicroTaskBoundaryTests(unittest.TestCase):
         }
         service.run = {
             **service.run,
-            "status": "queued",
+            "state": "queued",
             "revision": 7,
             "resultAvailable": True,
             "workflowState": "awaiting-host",
@@ -496,7 +496,7 @@ class MicroTaskBoundaryTests(unittest.TestCase):
         service = FakeService(clock, complete_after_waits=1)
         service.run = {
             **service.run,
-            "status": "queued",
+            "state": "queued",
             "revision": 3,
             "resultAvailable": True,
             "workflowState": "waiting-helpers",
@@ -518,14 +518,14 @@ class CompactMicroTaskEnvelopeTests(unittest.TestCase):
         huge = "x" * 200_000
         service.run = {
             **service.run,
-            "status": "queued",
+            "state": "queued",
             "resultAvailable": True,
             "workflowState": "executing",
             "awaitingHost": False,
         }
         service.result_response = lambda run: {
             **run,
-            "status": "completed",
+            "state": "completed",
             "result": {
                 "status": "ok",
                 "finalText": huge,
@@ -561,7 +561,7 @@ class CompactMicroTaskEnvelopeTests(unittest.TestCase):
         from hey_my_buddy.cli import cli_views
         clock = VirtualClock()
         service = FakeService(clock)
-        service.run.update(status="failed", workflowState="failed", resultAvailable=True, shutdownConfirmed=True)
+        service.run.update(state="failed", workflowState="failed", resultAvailable=True, shutdownConfirmed=True)
         service.result_response = lambda run: {**run, "result": None}
         envelope = await_run({"runId": "run-fixture"}, state_dir=Path(os.environ["HMB_STATE_DIR"]),
                              service=service, clock=clock)
@@ -571,7 +571,7 @@ class CompactMicroTaskEnvelopeTests(unittest.TestCase):
         self.assertIsNone(envelope["error"])
         self.assertEqual(service.calls, ["status", "result"])
         brief = cli_views.result_brief({**service.run, "result": None})
-        self.assertEqual(brief["status"], "failed")
+        self.assertEqual(brief["state"], "failed")
         self.assertIsNone(brief["result"])
 
     def test_execution_envelope_delivers_the_full_result(self):
@@ -584,7 +584,7 @@ class CompactMicroTaskEnvelopeTests(unittest.TestCase):
 
     def test_scoped_await_waits_on_owned_run_events_without_addressing_internal_executions(self):
         clock = VirtualClock()
-        run = {"runId": "owned", "requestId": "owned-request", "status": "running", "workflowState": "executing",
+        run = {"runId": "owned", "requestId": "owned-request", "state": "running", "workflowState": "executing",
                "workflowShutdown": {"selfConfirmed": False, "descendantsConfirmed": False,
                                     "unconfirmedRunIds": ["internal-router"]}, "revision": 1, "resultAvailable": False}
         watched = []
@@ -596,7 +596,7 @@ class CompactMicroTaskEnvelopeTests(unittest.TestCase):
                 return {"head": 10}
             if method == "watch":
                 watched.append(params["runId"])
-                run.update(status="cancelled", workflowState="cancelled",
+                run.update(state="cancelled", workflowState="cancelled",
                            workflowShutdown={"selfConfirmed": True, "descendantsConfirmed": True, "unconfirmedRunIds": []})
                 return {"head": 11}
             self.fail("Unexpected operation: " + method)

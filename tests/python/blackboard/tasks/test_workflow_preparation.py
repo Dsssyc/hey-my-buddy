@@ -361,7 +361,7 @@ class PreparationTests(WorkflowTestCase):
         (self.repo / "tracked.txt").write_text("unreviewed post-seal drift\n", encoding="utf-8", newline="\n")
         ordinary = board.submit_execution(**{"requestId": "ordinary", "adapter": "command", "argv": ["/bin/true"], "task": "independent", "cwd": str(self.workdir("ordinary"))})["task"]
         claimed = self.claim(board, claim_request_id="scan")
-        self.assertEqual(claimed["claim"]["task"]["taskId"], ordinary["taskId"])
+        self.assertEqual(claimed["claim"]["task"]["taskId"], ordinary["runId"])
         view = board.call("workflow_get", {"runId": run_id, "includeAudit": True})
         self.assertEqual(view["state"], "awaiting-host")
         self.assertEqual(view["activeRequest"]["kind"], "attention")

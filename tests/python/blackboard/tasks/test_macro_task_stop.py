@@ -103,7 +103,7 @@ class MacroTaskStopTests(WorkflowTestCase, ConsoleTestCase):
         status, _, raw = browser.command('macro_task_stop', {'macroTaskId': 'run:' + run['runId'], 'commandId': 'standalone-stop'}, csrf=browser.bootstrap()['csrfToken'])
         self.assertEqual(status, 200, raw)
         task = board.call('task_get', {'runId': run['runId']})['task']
-        self.assertEqual(task['status'], 'cancelling')
+        self.assertEqual(task['state'], 'cancelling')
         timeline = board.call('macro_task_timeline', {'macroTaskId': 'run:' + run['runId']})
         self.assertFalse(timeline['rows'][0]['shutdownConfirmed'])
         self.finish_turn(board, claim, runner_status='cancelled', seal=False)
@@ -193,7 +193,7 @@ class MacroTaskStopTests(WorkflowTestCase, ConsoleTestCase):
             accepted['runId']: ('accepted', False), pending['runId']: ('cancelled', True),
             helper: ('cancelled', True),
         })
-        self.assertEqual(board.call('task_get', {'runId': helper})['task']['status'], 'cancelling')
+        self.assertEqual(board.call('task_get', {'runId': helper})['task']['state'], 'cancelling')
         self.assertEqual(board.call('workflow_get', {'runId': accepted['runId']})['state'], 'accepted')
         group = board.call('macro_task_timeline', {'macroTaskId': accepted['macroTaskId']})['macroTask']
         self.assertEqual(group['counts']['accepted'], 1)
@@ -215,8 +215,8 @@ class MacroTaskStopTests(WorkflowTestCase, ConsoleTestCase):
         board.call('workflow_cancel', {'runId': already_cancelled['runId'], **self.control(already_cancelled)})
         preserved = {run['runId']: board.call('workflow_get', {'runId': run['runId']})
                      for run in (awaiting, already_cancelled)}
-        self.assertEqual(board.call('task_get', {'runId': queued['runId']})['task']['status'], 'queued')
-        self.assertEqual(board.call('task_get', {'runId': running['runId']})['task']['status'], 'running')
+        self.assertEqual(board.call('task_get', {'runId': queued['runId']})['task']['state'], 'queued')
+        self.assertEqual(board.call('task_get', {'runId': running['runId']})['task']['state'], 'running')
         _, browser = self.open_console(board)
         before = board.call('macro_task_timeline', {'macroTaskId': queued['macroTaskId'], 'limit': 1})
         self.assertEqual(before['macroTask']['counts']['stoppableRoots'], 2)
@@ -234,7 +234,7 @@ class MacroTaskStopTests(WorkflowTestCase, ConsoleTestCase):
         attempt = board.call('task_get', {'runId': running['runId']})['task']['selectedAttempt']
         self.assertEqual(attempt['stopInitiator'], 'console')
         self.assertTrue(attempt['cancelRequested'])
-        self.assertEqual(board.call('task_get', {'runId': queued['runId']})['task']['status'], 'cancelled')
+        self.assertEqual(board.call('task_get', {'runId': queued['runId']})['task']['state'], 'cancelled')
         self.finish_turn(board, running_claim, runner_status='cancelled', seal=False)
         after = board.call('macro_task_timeline', {'macroTaskId': queued['macroTaskId'], 'query': 'no such task'})
         self.assertEqual(after['macroTask']['counts']['stoppableRoots'], 0)
@@ -260,7 +260,7 @@ class MacroTaskStopTests(WorkflowTestCase, ConsoleTestCase):
         self.assertEqual(result['results'], [
             {'runId': routed['runId'], 'state': 'cancelled', 'stopped': True},
         ])
-        self.assertEqual(board.call('task_get', {'runId': router_id})['task']['status'], 'cancelled')
+        self.assertEqual(board.call('task_get', {'runId': router_id})['task']['state'], 'cancelled')
 
     def test_waiting_owned_lead_is_stopped_with_its_active_child(self):
         board = self.board(max_concurrent=4)
@@ -321,7 +321,7 @@ class MacroTaskStopTests(WorkflowTestCase, ConsoleTestCase):
         self.assertEqual(current['activeRequest'], before['activeRequest'])
         self.assertEqual(current['cancellation'], before['cancellation'])
         helper_task = board.call('task_get', {'runId': helper_id})['task']
-        self.assertEqual(helper_task['status'], 'cancelling')
+        self.assertEqual(helper_task['state'], 'cancelling')
         self.assertEqual(helper_task['selectedAttempt']['stopInitiator'], 'console')
         self.finish_turn(board, helper_claim, worker_id='w3', runner_status='cancelled', seal=False)
         settled = board.call('workflow_get', {'runId': lead['runId']})

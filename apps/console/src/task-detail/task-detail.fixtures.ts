@@ -22,7 +22,7 @@ export const at = (clock: string, second = 0) => `2026-09-26T${clock}:${String(s
 export function task(overrides: Record<string, unknown> = {}): Task {
   const { selectedAttempt, ...rest } = overrides;
   return {
-    runId: "m1", task: "实现微任务详情，左边是步骤，右边是这一步的内容。", status: "completed", owner: null, cwd: "/work/m1",
+    runId: "m1", task: "实现微任务详情，左边是步骤，右边是这一步的内容。", state: "completed", owner: null, cwd: "/work/m1",
     spec: {},
     revision: 5, createdAt: at("10:00"), updatedAt: at("11:00"), acceptedAt: null, reviewRejectedAt: null, reviewRejectionNote: null,
     activeAttemptId: null, selectedAttemptId: "att-2", resultAvailable: true, shutdownConfirmed: true,

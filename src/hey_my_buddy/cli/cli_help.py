@@ -605,7 +605,7 @@ class _TrackedValue:
 
     field: str
     unit: str | None = None
-    #: Other fields the same local may hold, e.g. ``x.get("taskId") or x.get("runId")``.
+    #: Other fields the same local may hold, e.g. ``x.get("runId")``.
     aliases: tuple[str, ...] = ()
     #: True when a leaf helper already proved the value is a scalar (string, integer,
     #: list, ...); such a local is never an object whose fields a callee validates.

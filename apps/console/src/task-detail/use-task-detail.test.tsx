@@ -61,7 +61,7 @@ describe("what the detail of a micro task reads", () => {
     await settle(9000);
     expect(calls(reads.inquiries)).toBe(1);
     cleanup();
-    const running = client({ task: task({ status: "running", activeAttemptId: "att-2" }), inquiries: { items: [inquiry()], more: false } });
+    const running = client({ task: task({ state: "running", activeAttemptId: "att-2" }), inquiries: { items: [inquiry()], more: false } });
     render(<Probe reads={running} />);
     await settle();
     const taskReads = calls(running.task), inquiryReads = calls(running.inquiries);
@@ -70,7 +70,7 @@ describe("what the detail of a micro task reads", () => {
     expect(calls(running.task)).toBe(taskReads + 2);
     expect(calls(running.inquiries)).toBe(inquiryReads + 2);
     // When it stops running, the beat of its inquiries stops with it, after one last read.
-    running.held.task = task({ status: "completed", activeAttemptId: null });
+    running.held.task = task({ state: "completed", activeAttemptId: null });
     await settle(3000);
     const after = calls(running.inquiries);
     expect(after).toBeGreaterThan(inquiryReads + 2);

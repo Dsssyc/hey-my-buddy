@@ -350,7 +350,7 @@ class ConsoleSecurityTests(ConsoleTestCase):
         model_service = {key: buddy[key] for key in ("harness", "provider", "model")}
         status, _h, data = browser.command("task_cancel", {"runId": run_id, 'note': "console operator"}, csrf=csrf)
         self.assertEqual(status, 404, data)
-        self.assertEqual(board.call("task_get", {"runId": run_id})["task"]["status"], "queued")
+        self.assertEqual(board.call("task_get", {"runId": run_id})["task"]["state"], "queued")
         # A publish through the browser is the same operation the CLI uses: it is
         # validated and persisted exactly once.
         status, _h, data = browser.command(
@@ -459,7 +459,7 @@ def snapshot_of(board) -> dict:
         self.assertIn("application/json", headers["content-type"])
         view = json.loads(body)
         self.assertEqual(view["runId"], run_id)
-        self.assertEqual(view["status"], "completed")
+        self.assertEqual(view["state"], "completed")
         self.assertEqual(view["result"]["finalText"], "detail")
         self.assertEqual(view["resultMeta"]["status"], "ok")
         self.assertEqual(view["spec"]["adapter"], "command")

@@ -27,7 +27,7 @@ function snapshotFixture(): Snapshot {
 }
 
 function taskFixture(runId: string): Task {
-  const base: Task = { runId, task: `目标 ${runId}`, status: "completed", owner: "fixture", cwd: `/worktrees/${runId}`,
+  const base: Task = { runId, task: `目标 ${runId}`, state: "completed", owner: "fixture", cwd: `/worktrees/${runId}`,
     revision: 1, createdAt: "2026-09-26T01:12:00Z", updatedAt: "2026-09-26T01:12:00Z", acceptedAt: null, reviewRejectedAt: null, reviewRejectionNote: null,
     resultAvailable: true, shutdownConfirmed: true,
     lineage: { kind: runId === "r3" ? "helper" : "micro-task", sourceHostId: "codex-desktop", currentHostId: "codex-desktop",

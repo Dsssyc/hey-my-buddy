@@ -69,7 +69,7 @@ def observe_capable(adapter: str) -> bool:
 
 def observe(store: BoardStore, params: dict, *, live_registry: LiveRegistry) -> dict:
     """One bounded inquiry operation: observe, ask, or read a correlated answer."""
-    schemas.reject_unknown(params, {"runId", "taskId", "inquiryId", "question", "timeoutMs", "waitMs"}, "inquire")
+    schemas.reject_unknown(params, {"runId", "inquiryId", "question", "timeoutMs", "waitMs"}, "inquire")
     if (params.get("inquiryId") is None) != (params.get("question") is None):
         raise BoardError("INVALID_ARGUMENT", "inquiryId and question must be supplied together")
     timeout_ms = schemas.optional_int(params, "timeoutMs", DEFAULT_TRANSPORT_TIMEOUT_MS, MIN_TRANSPORT_TIMEOUT_MS, MAX_TRANSPORT_TIMEOUT_MS)
@@ -80,13 +80,13 @@ def observe(store: BoardStore, params: dict, *, live_registry: LiveRegistry) -> 
         schemas.required_string(params, "inquiryId", max_length=128, pattern=schemas.INQUIRY_ID_PATTERN)
         schemas.bounded_text(params, "question", max_bytes=schemas.MAX_QUESTION_BYTES)
 
-    view = store.task_get({k: params[k] for k in ("runId", "taskId") if k in params})["task"]
+    view = store.task_get({"runId": params.get("runId")})["task"]
     attempt = view.get("selectedAttempt") or {}
     adapter = view.get("adapter")
     duplicate = False
     recorded = None
     if inquiry_id is not None:
-        posted = store._message_post(view["taskId"], inquiry_id, question)
+        posted = store._message_post(view["runId"], inquiry_id, question)
         recorded = posted["message"]
         duplicate = bool(posted.get("duplicate"))
 
@@ -113,7 +113,7 @@ def observe(store: BoardStore, params: dict, *, live_registry: LiveRegistry) -> 
         # The adapter can be observed but cannot ask: record the honest capability
         # refusal instead of sending a question the native protocol cannot carry.
         bridge["capability"] = "observe"
-        _mark_unavailable(store, view["taskId"], inquiry_id, "unsupported" if can_observe else "unsupported-method")
+        _mark_unavailable(store, view["runId"], inquiry_id, "unsupported" if can_observe else "unsupported-method")
     elif not can_observe:
         pass
     elif channel is not None:
@@ -137,7 +137,7 @@ def observe(store: BoardStore, params: dict, *, live_registry: LiveRegistry) -> 
                 if code in TERMINAL_BRIDGE_ERRORS:
                     # The owned turn already ended: the question is refused, never
                     # injected into a new or idle turn and never left looking pending.
-                    _mark_unavailable(store, view["taskId"], inquiry_id, code)
+                    _mark_unavailable(store, view["runId"], inquiry_id, code)
         elif inquiry_id is None:
             snapshot = channel.observe(after_seq=None, limit=MAX_OBSERVE_LIMIT, timeout_ms=timeout_ms,
                                        fields=("observation",))
@@ -167,7 +167,7 @@ def observe(store: BoardStore, params: dict, *, live_registry: LiveRegistry) -> 
     if inquiry_id is not None and wait_ms:
         deadline = time.monotonic() + wait_ms / 1000.0
         while time.monotonic() < deadline:
-            current = store.message_get({"runId": view["taskId"], "inquiryId": inquiry_id})["message"]
+            current = store.message_get({"runId": view["runId"], "inquiryId": inquiry_id})["message"]
             if current["state"] in ("answered", "discarded", "unavailable"):
                 break
             time.sleep(min(POLL_INTERVAL_SECONDS, max(0, deadline - time.monotonic())))
@@ -179,15 +179,15 @@ def observe(store: BoardStore, params: dict, *, live_registry: LiveRegistry) -> 
         bridge["journalRejected"] = rejections[inquiry_id]
     elif inquiry_id in journal.get("imported", []):
         bridge["journalImported"] = True
-    view = store.task_get({"runId": view["taskId"]})["task"]
+    view = store.task_get({"runId": view["runId"]})["task"]
     attempt = view.get("selectedAttempt") or {}
     terminal = view["state"] in ("completed", "concluded", "failed", "cancelled")
     message = None
     if inquiry_id is not None:
-        message = store.message_get({"runId": view["taskId"], "inquiryId": inquiry_id})["message"]
-    pending = store.message_list({"runId": view["taskId"], "limit": 50})["messages"]
+        message = store.message_get({"runId": view["runId"], "inquiryId": inquiry_id})["message"]
+    pending = store.message_list({"runId": view["runId"], "limit": 50})["messages"]
     return {
-        "runId": view["taskId"],
+        "runId": view["runId"],
         "requestId": view["requestId"],
         "status": view["state"],
         "phase": "terminal" if terminal else "active",
