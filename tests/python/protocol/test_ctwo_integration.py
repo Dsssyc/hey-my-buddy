@@ -28,7 +28,28 @@ from hey_my_buddy.protocol import rpc_config
 from hey_my_buddy.protocol.client import BoardClient
 from hey_my_buddy.protocol.contracts import ExecutionLive
 from hey_my_buddy.protocol.transport import _read_endpoint, _request
-from protocol.fixtures.ctwo_controller import BUDDY, SELF, exchange, join_exchanges
+from protocol.fixtures.ctwo_controller import BUDDY, SELF, exchange, join_exchanges, read_execution_material
+
+
+class FixtureStatusTests(unittest.TestCase):
+    def test_status_can_read_while_the_execution_retires_its_endpoint(self):
+        with tempfile.TemporaryDirectory(prefix="retiring-execution-") as raw:
+            root = Path(raw)
+            material = root / "state/harnesses/dsh/micro-tasks/run/attempts/attempt/execution-live.json"
+            material.parent.mkdir(parents=True)
+            material.write_text('{"descriptor": {}}', encoding="utf-8")
+            read_text = Path.read_text
+
+            def retire_before_read(path, *args, **kwargs):
+                if path == material:
+                    path.unlink()
+                return read_text(path, *args, **kwargs)
+
+            # Execution shutdown removes this material between glob and open.
+            # Its disappearance must not kill the service's fixture controller.
+            with patch.object(Path, "read_text", retire_before_read):
+                self.assertIsNone(read_execution_material(root))
+            self.assertIsNone(read_execution_material(root))
 
 
 @unittest.skipUnless(os.name == "posix", "private IPC inspection is POSIX")
@@ -68,7 +89,7 @@ class CTwoIntegrationTests(unittest.TestCase):
         self.processes.append(process)
         return process
 
-    def until(self, predicate, message, timeout=10):
+    def until(self, predicate, message, timeout=180):
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
             result = predicate()

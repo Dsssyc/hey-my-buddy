@@ -4,10 +4,13 @@ from __future__ import annotations
 import importlib.util
 import http.client
 import json
+from datetime import datetime
+from email.utils import parsedate_to_datetime
 from pathlib import Path
 import sys
 import tempfile
 import threading
+import time
 import unittest
 from hey_my_buddy.blackboard.tasks.macro_tasks import HOST_MARKERS
 from hey_my_buddy.protocol.session_content import SessionNotification
@@ -112,6 +115,23 @@ class SessionPreviewTests(unittest.TestCase):
             return response.status, json.loads(response.read())
         finally:
             connection.close()
+
+    def test_timeline_response_clock_does_not_advance_with_server_uptime(self):
+        for request in range(2):
+            if request:
+                # Cross the HTTP Date's one-second resolution without restarting
+                # the preview: a later browser shard must see the same clock.
+                time.sleep(1.1)
+            connection = http.client.HTTPConnection(*self.server.server_address, timeout=10)
+            try:
+                connection.request("GET", f"/api/macro-tasks/{preview.MACRO_A}/timeline")
+                response = connection.getresponse()
+                self.assertEqual(response.status, 200)
+                served = parsedate_to_datetime(response.getheader("Date"))
+                timeline = json.loads(response.read())
+                self.assertEqual(served, datetime.fromisoformat(timeline["observedAt"].replace("Z", "+00:00")))
+            finally:
+                connection.close()
 
     def test_ended_long_session_pages_by_bytes_and_carries_full_content(self):
         pair = preview.SESSION_LONG

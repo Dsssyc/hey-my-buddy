@@ -810,10 +810,11 @@ def remove_private_test_root(directory: Path) -> None:
 
     The caller must first close its resources and confirm its work has stopped.
     On Windows an exited process's handles, such as its working directory, may
-    still be closing after shutdown is confirmed. Retry sharing violations for
-    up to 60 seconds to allow that cleanup; a process that leaked will keep its
-    handles open and still fail at the deadline. Other deletion failures raise
-    immediately, and any final failure preserves the remaining tree.
+    still be closing after shutdown is confirmed. A mapped extension can report
+    access denied (5), and an open handle a sharing violation (32). Retry both
+    for up to 60 seconds; a process that leaked still fails at the deadline.
+    Other deletion failures raise immediately, and any final failure preserves
+    the remaining tree.
     """
     directory = native_path(directory)
 
@@ -842,7 +843,7 @@ def remove_private_test_root(directory: Path) -> None:
             shutil.rmtree(directory, onexc=readonly_file)
             return
         except OSError as error:
-            if os.name != "nt" or getattr(error, "winerror", None) != 32:
+            if os.name != "nt" or getattr(error, "winerror", None) not in (5, 32):
                 raise
             remaining = deadline - time.monotonic()
             if remaining <= 0:

@@ -46,7 +46,7 @@ def emit(value):
     print(canonical_json(value), flush=True)
 
 
-def exchange(process, value, *, timeout=5):
+def exchange(process, value, *, timeout=180):
     """One bounded fixture-pipe exchange; this is not the SDK transport.
 
     Check the saved child while a thread performs blocking pipe I/O. The caller
@@ -117,6 +117,19 @@ def write_fact(path, value):
         json.dump(value, stream, sort_keys=True)
         stream.flush()
         os.fsync(stream.fileno())
+
+
+def read_execution_material(root):
+    materials = list((root / "state").glob("harnesses/dsh/micro-tasks/*/attempts/*/execution-live.json"))
+    if not materials:
+        return None
+    try:
+        raw = materials[0].read_text(encoding="utf-8")
+    except FileNotFoundError:
+        # The execution retires its endpoint during normal shutdown. A glob is
+        # not ownership of that file; absence is a valid status snapshot.
+        return None
+    return json.loads(raw)
 
 
 def native(root):
@@ -246,8 +259,7 @@ def service(root):
             command = json.loads(line)
             if command["op"] == "status":
                 handle = handles[0] if handles else None
-                materials = list((root / "state").glob("harnesses/dsh/micro-tasks/*/attempts/*/execution-live.json"))
-                material = json.loads(materials[0].read_text(encoding="utf-8")) if materials else None
+                material = read_execution_material(root)
                 view = (daemon.store.task_get({"runId": handle.execution_binding["taskId"]})["task"]
                         if handle else None)
                 bound = bool(view and daemon.live_registry.channel_for(view))

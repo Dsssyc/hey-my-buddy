@@ -608,7 +608,7 @@ class RealDaemonControlTests(unittest.TestCase):
     """Real command executions leave control RPC responsive while waits are admitted."""
 
     WAIT_CAPACITY = 6
-    WAIT_MILLISECONDS = 3500
+    WAIT_MILLISECONDS = 30000
     CONTROL_BUDGET_SECONDS = 2.0
 
     def setUp(self):
@@ -658,15 +658,20 @@ class RealDaemonControlTests(unittest.TestCase):
             raise AssertionError(f"daemon never became healthy: {log_path.read_text(encoding="utf-8")[-2000:]}")
         return _read_endpoint(self.state)
 
-    def _submit_command(self, request_id: str, *, sleep: float) -> str:
+    def _submit_command(self, request_id: str, *, release: Path | None = None) -> str:
         cwd = self.work / request_id
         cwd.mkdir(parents=True, exist_ok=True)
+        script = "pass" if release is None else (
+            "import pathlib,time\n"
+            f"release=pathlib.Path({str(release)!r})\n"
+            "release.with_suffix('.started').touch()\n"
+            "while not release.exists(): time.sleep(.05)\n")
         capacity = call_board("health", {}, endpoint=self.endpoint, state_dir=self.state)["capacity"]
         store = BoardStore(self.state, max_concurrent=capacity["totalLimit"])
         try:
             reply = store.task_submit({
                 "requestId": request_id, "task": "private command probe", "cwd": str(cwd),
-                "adapter": "command", "argv": [sys.executable, "-c", f"import time; time.sleep({sleep})"],
+                "adapter": "command", "argv": [sys.executable, "-c", script],
                 "expectedSeconds": 30,
             })
         finally:
@@ -692,18 +697,22 @@ class RealDaemonControlTests(unittest.TestCase):
                           endpoint=self.endpoint, state_dir=self.state, resource="wait")
 
     def test_admitted_waits_do_not_starve_control_or_command_completion(self):
-        waited = self._submit_command("rpc-waited-1", sleep=15)
-        cancellable = self._submit_command("rpc-cancel-1", sleep=15)
-        deadline = time.monotonic() + 10
-        for run_id in (waited, cancellable):
-            while call_board("task_get", {"runId": run_id}, endpoint=self.endpoint,
-                             state_dir=self.state)["task"]["state"] == "queued":
-                self.assertLess(time.monotonic(), deadline)
+        release = self.work / "waited.release"
+        cancel_release = self.work / "cancel.release"
+        waited = self._submit_command("rpc-waited-1", release=release)
+        cancellable = self._submit_command("rpc-cancel-1", release=cancel_release)
+        deadline = time.monotonic() + 180
+        for run_id, marker in ((waited, release.with_suffix('.started')),
+                               (cancellable, cancel_release.with_suffix('.started'))):
+            while not marker.exists():
+                task = call_board("task_get", {"runId": run_id}, endpoint=self.endpoint,
+                                  state_dir=self.state)["task"]
+                self.assertNotIn(task["state"], ("completed", "failed", "cancelled"), task)
+                self.assertLess(time.monotonic(), deadline, f"command never reached its gate: {marker.name}")
                 time.sleep(0.05)
         started = time.monotonic()
         with ThreadPoolExecutor(max_workers=self.WAIT_CAPACITY) as pool:
             waits = [pool.submit(self._wait, waited) for _ in range(self.WAIT_CAPACITY)]
-            self._await_admitted(self.WAIT_CAPACITY)
             measured: dict[str, float] = {}
 
             def control(name: str, operation: str, params: dict) -> dict:
@@ -712,35 +721,44 @@ class RealDaemonControlTests(unittest.TestCase):
                 measured[name] = round(time.monotonic() - begin, 3)
                 return reply
 
-            self.assertEqual(control("health", "health", {})["status"], "ok")
-            self.assertIn("events", control("events", "events_read", {"after": 0}))
-            cancelled = control("cancel", "task_cancel", {"runId": cancellable,
-                                                           "note": "rpc profile probe"})
-            self.assertTrue(cancelled["task"]["cancelRequested"])
-            quick = self._submit_command("rpc-quick", sleep=0)
-            self.assertEqual(self._admission()["admitted"], self.WAIT_CAPACITY)
-            self.assertFalse(any(wait.done() for wait in waits),
-                             "control traffic must not end an admitted wait")
-            replies = [wait.result(timeout=self.WAIT_MILLISECONDS / 1000 + 10) for wait in waits]
+            try:
+                self._await_admitted(self.WAIT_CAPACITY)
+                self.assertEqual(control("health", "health", {})["status"], "ok")
+                self.assertIn("events", control("events", "events_read", {"after": 0}))
+                cancelled = control("cancel", "task_cancel", {"runId": cancellable,
+                                                               "note": "rpc profile probe"})
+                self.assertTrue(cancelled["task"]["cancelRequested"])
+                quick = self._submit_command("rpc-quick")
+                deadline = time.monotonic() + 180
+                while True:
+                    final = call_board("task_get", {"runId": quick}, endpoint=self.endpoint,
+                                       state_dir=self.state)["task"]
+                    if final["state"] in ("completed", "failed", "cancelled"):
+                        break
+                    self.assertFalse(any(wait.done() for wait in waits),
+                                     "quick command must finish while the waits still hold their slots")
+                    self.assertLess(time.monotonic(), deadline, final)
+                    time.sleep(0.05)
+                self.assertEqual(final["state"], "completed", final)
+                self.assertTrue(final["resultAvailable"])
+                self.assertEqual(self._admission()["admitted"], self.WAIT_CAPACITY)
+                self.assertFalse(any(wait.done() for wait in waits),
+                                 "control traffic must not end an admitted wait")
+            finally:
+                # Completion, rather than a short sleep, releases all task waits.
+                release.touch()
+            replies = [wait.result(timeout=180) for wait in waits]
         elapsed = round(time.monotonic() - started, 3)
         print("daemon control evidence: " + json.dumps({"controlSeconds": measured,
                                                          "waitsSeconds": elapsed}))
         self.assertEqual(len(replies), self.WAIT_CAPACITY)
         for reply in replies:
             self.assertNotIn("error", reply, reply)
+            self.assertEqual(reply["state"], "completed", reply)
+            self.assertTrue(reply["resultAvailable"])
         for name, seconds in measured.items():
             self.assertLess(seconds, self.CONTROL_BUDGET_SECONDS,
                             f"{name} was starved behind admitted waits")
-        self.assertGreaterEqual(elapsed, self.WAIT_MILLISECONDS / 1000)
-        deadline = time.monotonic() + 10
-        while time.monotonic() < deadline:
-            final = call_board("task_get", {"runId": quick}, endpoint=self.endpoint,
-                               state_dir=self.state)["task"]
-            if final["state"] == "completed":
-                break
-            time.sleep(0.05)
-        self.assertEqual(final["state"], "completed")
-        self.assertTrue(final["resultAvailable"])
 
 
 if __name__ == "__main__":

@@ -62,8 +62,8 @@ for (const theme of ["light", "dark"]) for (const width of [1440, 390]) test.des
   });
 
   test("keeps execution and inquiry hover reachable after the preview clock advances", async ({ page }) => {
-    // The preview's Date advances with server uptime. At this age the narrow
-    // fitted scale puts the execution group's centre on the inquiry's hit area.
+    // Advance the fixed preview clock explicitly. At this age the narrow fitted
+    // scale puts the execution group's centre on the inquiry's hit area.
     await page.route(`**/api/macro-tasks/${macro}/timeline*`, async route => {
       const response = await route.fetch();
       const timeline = await response.json();
