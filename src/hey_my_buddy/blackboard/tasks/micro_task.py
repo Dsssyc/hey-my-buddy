@@ -8,7 +8,7 @@ ordinary micro-task workflow keeps ``workflow.task_extension``.
 Everything here is grounded in durable rows:
 
 * kind and lineage come from ``workflow_runs`` plus ``workflow_children`` (helpers)
-  and ``decision_requests``/``workflow_routes`` (internal routing decisions);
+  and ``router_dispatches``/``workflow_routes`` (internal routing decisions);
 * the original delegating Host comes from that run's first explicit admission
   source, its generation-1 takeover evidence, or its still-current generation-1
   row. Helpers use their own creation evidence, and routing decisions use their
@@ -96,14 +96,24 @@ FILTER_SQL = {
     ),
 }
 
+#: Every immutable Router dispatch and its owning micro task, when routed for one.
+#: The request's current task pointer cannot identify replaced Router tasks.
+ROUTING_TASKS_SQL = """
+SELECT dispatch.task_id, dispatch.decision_id, route.run_id,
+       dispatch.harness, dispatch.provider, dispatch.model, dispatch.effort
+  FROM router_dispatches dispatch
+  LEFT JOIN workflow_routes route ON route.decision_id = dispatch.decision_id
+"""
+
 #: One row per task: the full task row plus its derived micro task facts.
 #:
 #: ``roots`` walks ``workflow_children`` upward; the terminal row of a lineage is the
 #: root of that micro task tree. A routing decision points at its owning run through
 #: ``workflow_routes``, and that run's root is used for the decision's project and
 #: Host, so a decision is never misattributed to its own private decision directory.
-RELATION_SQL = """
-WITH RECURSIVE lineage(task_id, root_run_id) AS (
+RELATION_SQL = f"""
+WITH RECURSIVE routing_tasks AS ({ROUTING_TASKS_SQL}),
+lineage(task_id, root_run_id) AS (
     SELECT child_task_id, child_task_id FROM workflow_children
     UNION ALL
     SELECT lineage.task_id, parent.parent_run_id
@@ -151,10 +161,8 @@ owned_runs(owner_run_id, run_id) AS (
 owned_executions(owner_run_id, task_id) AS (
     SELECT owner_run_id, run_id FROM owned_runs
     UNION
-    SELECT owned.owner_run_id, decision.task_id FROM owned_runs owned
-      JOIN workflow_routes route ON route.run_id = owned.run_id
-      JOIN decision_requests decision ON decision.decision_id = route.decision_id
-     WHERE decision.task_id IS NOT NULL
+    SELECT owned.owner_run_id, routing.task_id FROM owned_runs owned
+      JOIN routing_tasks routing ON routing.run_id = owned.run_id
 ),
 unconfirmed_stops AS (
     -- Equivalent to WorkflowCoordinator._stop_proven: all attempts must be
@@ -183,19 +191,19 @@ SELECT
     lead.created_at AS lead_owned_at,
     root_lead.lead_run_id AS root_lead_run_id,
     c.parent_run_id AS child_parent_run_id,
-    COALESCE(c.parent_run_id, wr.run_id) AS delegated_parent_run_id,
+    COALESCE(c.parent_run_id, dr.run_id) AS delegated_parent_run_id,
     dr.decision_id AS decision_id,
-    wr.run_id AS route_run_id,
+    dr.run_id AS route_run_id,
     r.title AS workflow_title,
     routed_run.title AS route_run_title,
     json_extract(routed_run.micro_task_json, '$.task') AS route_run_task,
     routed_run.macro_task_id AS route_macro_task_id,
     routed_macro.title AS route_macro_task_title,
-    dispatch.harness AS router_harness,
-    dispatch.provider AS router_provider,
-    dispatch.model AS router_model,
-    dispatch.effort AS router_effort,
-    COALESCE(rt.root_run_id, r.run_id, wr_roots.root_run_id, wr.run_id) AS root_run_id,
+    dr.harness AS router_harness,
+    dr.provider AS router_provider,
+    dr.model AS router_model,
+    dr.effort AS router_effort,
+    COALESCE(rt.root_run_id, r.run_id, wr_roots.root_run_id, dr.run_id) AS root_run_id,
     root_run.host_id AS root_host_id,
     root_run.owner_generation AS root_owner_generation,
     source_run.source_host_id AS source_host_id,
@@ -246,21 +254,15 @@ LEFT JOIN workflow_runs r ON r.run_id = t.task_id
 LEFT JOIN workflow_children c ON c.child_task_id = t.task_id
 LEFT JOIN workflow_lead_tasks lead ON lead.owned_run_id = t.task_id
 LEFT JOIN roots rt ON rt.task_id = t.task_id
-LEFT JOIN (
-    SELECT task_id, MIN(decision_id) AS decision_id FROM decision_requests
-     WHERE task_id IS NOT NULL
-     GROUP BY task_id
-) dr ON dr.task_id = t.task_id
-LEFT JOIN workflow_routes wr ON wr.decision_id = dr.decision_id
-LEFT JOIN workflow_runs routed_run ON routed_run.run_id = wr.run_id
+LEFT JOIN routing_tasks dr ON dr.task_id = t.task_id
+LEFT JOIN workflow_runs routed_run ON routed_run.run_id = dr.run_id
 LEFT JOIN macro_tasks routed_macro ON routed_macro.macro_task_id = routed_run.macro_task_id
-LEFT JOIN router_dispatches dispatch ON dispatch.task_id = t.task_id
-LEFT JOIN roots wr_roots ON wr_roots.task_id = wr.run_id
-LEFT JOIN source_hosts source_run ON source_run.run_id = COALESCE(r.run_id, wr.run_id)
-LEFT JOIN tasks root_task ON root_task.task_id = COALESCE(rt.root_run_id, r.run_id, wr_roots.root_run_id, wr.run_id)
-LEFT JOIN workflow_runs root_run ON root_run.run_id = COALESCE(rt.root_run_id, r.run_id, wr_roots.root_run_id, wr.run_id)
+LEFT JOIN roots wr_roots ON wr_roots.task_id = dr.run_id
+LEFT JOIN source_hosts source_run ON source_run.run_id = COALESCE(r.run_id, dr.run_id)
+LEFT JOIN tasks root_task ON root_task.task_id = COALESCE(rt.root_run_id, r.run_id, wr_roots.root_run_id, dr.run_id)
+LEFT JOIN workflow_runs root_run ON root_run.run_id = COALESCE(rt.root_run_id, r.run_id, wr_roots.root_run_id, dr.run_id)
 LEFT JOIN workflow_lead_tasks root_lead
-  ON root_lead.owned_run_id = COALESCE(rt.root_run_id, r.run_id, wr_roots.root_run_id, wr.run_id)
+  ON root_lead.owned_run_id = COALESCE(rt.root_run_id, r.run_id, wr_roots.root_run_id, dr.run_id)
 """
 
 #: The relation wrapped as a table expression: ``SELECT * FROM (task_history) AS resolved``.

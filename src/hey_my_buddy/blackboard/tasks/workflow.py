@@ -37,6 +37,7 @@ from ...protocol import schemas
 from ...protocol.stop import WRAP_UP_INITIATORS
 from . import fixes as task_fixes
 from . import host_conclusions
+from . import micro_task
 from .command_receipts import CANCELLATION_NOTE
 from ..store.db import canonical_json, sha256_text
 from ...errors import BoardError
@@ -3640,8 +3641,8 @@ class WorkflowCoordinator:
             ids.extend(child["child_task_id"] for child in self._owned_children(connection, run_id, include_lead=include_lead))
         placeholders = ",".join("?" for _ in ids)
         return connection.execute(
-            "SELECT t.* FROM tasks t JOIN decision_requests d ON d.task_id=t.task_id"
-            f" JOIN workflow_routes r ON r.decision_id=d.decision_id WHERE r.run_id IN ({placeholders})",
+            f"SELECT t.* FROM tasks t JOIN ({micro_task.ROUTING_TASKS_SQL}) r ON r.task_id=t.task_id"
+            f" WHERE r.run_id IN ({placeholders})",
             ids,
         ).fetchall()
 
