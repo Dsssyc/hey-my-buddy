@@ -612,6 +612,31 @@ class WorkerSeamTests(MockNativeCase):
             second = run(request, observer=worker_observer, services=services, cancelled=lambda: False)
         return first, second, calls, mode_readbacks
 
+    def test_usage_fixture_resumes_with_native_mode_readback_and_only_new_usage(self):
+        from hey_my_buddy.protocol.usage import normalize_token_usage
+        fixture = Path(__file__).parent / "fixtures/mock_zcode_usage.py"
+        expected = json.loads(fixture.with_name("native-usage-zcode.json").read_text())["expectedMessages"]
+        with mock.patch.dict(self.environment, {"BUDDY_ZCODE_CLI": str(fixture)}):
+            for first_level, second_level, before, after in (
+                    ("read", "write", "build", "yolo"),
+                    ("write", "read", "yolo", "yolo"),
+                    ("read", "read", "build", "build")):
+                with self.subTest(first=first_level, second=second_level), mock.patch.object(
+                        self, "base", self.base / f"usage-{first_level}-{second_level}"):
+                    first, second, calls, readbacks = self.resume_with_levels(
+                        first_level, second_level, case="resume-ok")
+                    self.assertEqual(second.end.status, "ok", second.end.message)
+                    self.assertEqual(second.native_identity.session_id, first.native_identity.session_id)
+                    mode = "plan" if second_level == "read" else "yolo"
+                    self.assertIn(("session/setMode", {"sessionId": first.native_identity.session_id,
+                                                       "mode": mode}), calls)
+                    self.assertEqual(readbacks, [("session/resume", {"current": before}),
+                                                ("session/setMode", {"current": after})])
+                    token_usage = normalize_token_usage(second.usage.value)
+                    self.assertEqual(token_usage["inputTokens"], expected["inputTokens"])
+                    self.assertEqual(token_usage["nativeRecords"], expected["records"])
+                    self.assertEqual(token_usage["completeness"], "complete")
+
     def check_resumed_level(self, first_level, second_level, native_mode):
         first, second, calls, readbacks = self.resume_with_levels(first_level, second_level,
             case="mode-plan-required" if second_level == "read" else "ok")

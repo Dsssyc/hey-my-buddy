@@ -131,3 +131,40 @@ buddy.roles.test_registered_run_wiring.WorkerRegisteredRunTests
 ```
 
 未运行 tests/python/install、完整检查、真实 harness 回合、探针、故障注入、安装、前端检查或 Windows/Linux 原生权限验证；没有为了未运行项绕过沙盒、请求人工批准或改测试的能力含义。Host 还需在真实 DSH 上复核两个换档方向确实创建新会话，并确认整合后的 Codex/ZCode 续接和 Claude 新会话行为；这些事实不由本轮离线模拟证明。
+
+## 续接第 2 回合：评价断言与 ZCode 用量假程序
+
+2026-10-13，Host 续接输入确认第 1 回合交付已读过并在整合分支临时合并验证，允许在原范围内修正三步合入后另外两处遗留测试；本回合以封存 8149c7ec 为输入，只修改测试、假程序与本说明，产品源码与第 1 回合的声明、续接规则及原生设置完全相同。
+
+`blackboard/evaluation/test_evaluation.py::EvaluationPublishTests.test_catalog_permissions_persist_through_user_publication` 将 DSH 不带 full 的旧断言替换成显式的 read/write/full 三档集合，分别检查目录产生的画像与用户发布后的画像，保留“能力字符串经过用户发布不丢失”的测试含义。
+
+`buddy/harnesses/zcode/fixtures/mock_zcode_usage.py` 新增 session/setMode，行为与现有 mock_zcode.py 对齐：创建 plan 时底层权限模式为 build，创建 yolo 时为 yolo；setMode plan 只开启独立的 plan_active，不把底层模式回显成 plan，setMode yolo 改变底层模式。快照的 session.mode 报 build，settings.mode.current 报底层权限模式。每次 session/send 在私有原生根保存 sessionId、selection 与 permissionMode，续接读回同一会话和底层模式并清除 plan_active，供本回合再 setMode；没有加入旧字段读法或回退。原有用量消息分页、游标、增量及拒绝记录的语义没有修改。
+
+`buddy/harnesses/zcode/test_native_run.py` 新增离线用量假程序回归测试，经过产品现有原生 run 路径与签名结束工具，直接覆盖 read→write、write→read、read→read：同组两个回合共享原生根，各组独立；断言原生会话身份相同、发送本回合 session/setMode、底层回读分别为 build→yolo、yolo→yolo、build→build，以及新回合的 inputTokens、nativeRecords 和 completeness 与已脱敏用量夹具一致。它不启动真实角色控制器或 C-Two 端点，也不证明真实 ZCode 的工具限制。新增测试初次将三个独立情形放在同一原生根时，假程序基于该根生成的固定身份导致后两组初始回合被拒；改为每组独立的私有原生根后通过，没有为此改产品的身份判断。
+
+按文件独立进程运行本次指定两目录的可运行范围，使用同一冻结只读解释器及 checks.child_environment 的私有 HOME、harness 配置和状态、运行、临时目录；最终 20 个文件、413 项全部通过，每个文件退出码均为 0，unittest 没有跳过项。先前的聚焦测试不重复计数。git diff --check 通过，产品 src 相对输入封存的差异为空；原始日志与逐文件退出码保留在 /tmp/buddy-resume-followup-results-98_munp0/summary.json 及同目录的各文件日志。
+
+| 范围 | 已执行文件数 | 已通过项数 |
+| --- | --- | --- |
+| blackboard/evaluation | 6 | 128 |
+| buddy/harnesses/zcode | 14 | 285 |
+| 合计 | 20 | 413 |
+
+ZCode 目录中会启动真实角色控制器及 C-Two 端点的选择器继续按第 1 回合“未运行的测试”清单排除，两个全为该类用例的文件 test_zcode_checkpoint.py、test_zcode_tool_refusals.py 没有运行。评价目录的 test_other_native_observations.py 只运行 ClaudeNativeRecordTests 与 ZcodeNativeRecordTests；下列两个 adapter 观察类会调用真实角色控制器 start，因此没有执行，包含 Host 指出的目标续接用例。该目标的假程序方法与新回合用量边界已由上述直接 run 的离线测试验证，完整控制器路径仍由 Host 补跑，不把两者当作同一验证事实。
+
+```text
+blackboard.evaluation.test_other_native_observations.ClaudeAdapterObservationTests.test_a_completed_turn_publishes_the_execution_summary_and_quota
+blackboard.evaluation.test_other_native_observations.ClaudeAdapterObservationTests.test_a_missing_result_usage_falls_back_to_the_bound_assistant_records
+blackboard.evaluation.test_other_native_observations.ClaudeAdapterObservationTests.test_a_quota_rejection_retains_usage_quota_and_the_last_root_message
+blackboard.evaluation.test_other_native_observations.ClaudeAdapterObservationTests.test_no_native_usage_reports_unknown_not_zero
+blackboard.evaluation.test_other_native_observations.ClaudeAdapterObservationTests.test_an_oversized_assistant_text_is_bounded_with_its_full_provenance
+blackboard.evaluation.test_other_native_observations.ZcodeAdapterObservationTests.test_a_turn_publishes_the_bound_root_message_tokens
+blackboard.evaluation.test_other_native_observations.ZcodeAdapterObservationTests.test_a_resumed_session_counts_only_the_new_turn
+blackboard.evaluation.test_other_native_observations.ZcodeAdapterObservationTests.test_a_delta_only_turn_uses_the_partial_stream_fallback
+blackboard.evaluation.test_other_native_observations.ZcodeAdapterObservationTests.test_a_lost_cursor_is_never_counted_as_this_attempt
+blackboard.evaluation.test_other_native_observations.ZcodeAdapterObservationTests.test_a_failed_quota_turn_keeps_its_native_code_and_last_message
+blackboard.evaluation.test_other_native_observations.ZcodeAdapterObservationTests.test_a_stalled_optional_read_cannot_change_the_turn
+blackboard.evaluation.test_other_native_observations.ZcodeAdapterObservationTests.test_no_native_usage_reports_unknown_not_zero
+```
+
+本回合没有执行 tests/python/install、启动器、真实服务或 Worker、真实 harness、模型调用、完整检查、安装或故障注入；未改分支、标签、存储形式、schema 或版本。
