@@ -63,15 +63,23 @@ describe("curated buddy palette", () => {
   it("keeps all twelve core colours apart and measures every ordered prefix", async () => {
     const { BUDDY_CORE_COLORS, buddyColorPrefix } = await import("./buddyColors");
     expect(BUDDY_CORE_COLORS).toHaveLength(12);
+    expect(new Set(BUDDY_CORE_COLORS.map(color => color.family)).size).toBeGreaterThanOrEqual(7);
+    expect(BUDDY_CORE_COLORS.filter(color => color.family === "blue" || color.family === "cyan").length).toBeLessThanOrEqual(3);
     for (const key of ["hex", "name"] as const) expect(new Set(BUDDY_CORE_COLORS.map(color => color[key])).size).toBe(12);
     const labs = buddyColorPrefix(12).map(rgbHexToLab);
     // Bounds are measured on the displayed 8-bit values, for every prefix 2–12.
     expect(leastPairDistance(labs, 1)).toBe(Infinity);
-    const prefixBounds = [97.8, 61.9, 55.9, 49.9, 37.2, 28.9, 28.3, 28.0, 27.6, 27.4, 27.2];
+    const prefixBounds = [116.4, 82.9, 65.5, 58.3, 48.9, 48.3, 46.9, 46.7, 46.3, 38.8, 30.9];
     for (const [index, threshold] of prefixBounds.entries()) {
       expect(leastPairDistance(labs, index + 2), `prefix ${index + 2}`).toBeGreaterThanOrEqual(threshold);
     }
     expect(leastPairDistance(labs, 12)).toBeGreaterThanOrEqual(25);
+  });
+
+  it("excludes muddy warm colours while allowing clean red, coral, orange and green", async () => {
+    const { isUnwantedBuddyColor } = await import("./buddyColors");
+    for (const color of ["#8b4513", "#808000", "#999229", "#b27f4e"]) expect(isUnwantedBuddyColor(rgbHexToLab(color)), color).toBe(true);
+    for (const color of ["#db0129", "#fd5878", "#fa881a", "#117b2d", "#acec6e"]) expect(isUnwantedBuddyColor(rgbHexToLab(color)), color).toBe(false);
   });
 
   it("extends beyond twelve while respecting semantic colours, core distances and both themes' inks", async () => {
@@ -87,8 +95,9 @@ describe("curated buddy palette", () => {
     for (const [index, color] of palette.entries()) {
       const lab = labs[index]!;
       const angle = hue(lab);
-      expect(angle >= 115 && angle <= 220, `${color} belongs to green`).toBe(false);
-      expect(angle >= 30 && angle <= 115 && lab[0] < 76, `${color} is dark yellow/orange/brown`).toBe(false);
+      const chroma = Math.hypot(lab[1], lab[2]);
+      expect(angle >= 70 && angle <= 135 && lab[0] < 76, `${color} is dark yellow/olive`).toBe(false);
+      expect(angle >= 30 && angle < 70 && (chroma < 55 || angle >= 45 && lab[0] < 55), `${color} is brown`).toBe(false);
       for (const token of tokens) expect(labDistance(lab, rgbHexToLab(token)), `${color} / ${token}`).toBeGreaterThanOrEqual(BUDDY_STATUS_DISTANCE);
       if (index >= 12) for (const core of labs.slice(0, 12)) expect(labDistance(lab, core)).toBeGreaterThanOrEqual(BUDDY_EXTENSION_CORE_DISTANCE);
       const inks = buddyUsesLightInk(color) ? lightInks : executionInks;

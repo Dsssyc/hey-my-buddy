@@ -1182,17 +1182,24 @@ def build_runs() -> dict[str, dict]:
         for index in range(12):
             buddy = {**CONFIGS[index % len(CONFIGS)], "model": f"palette-buddy-{index + 1:02}"}
             identifier = f"palette-{index + 1:02}"
-            start, end = instant(8, index), instant(9, 20 + index)
+            start, failed_end = instant(8, index), instant(8, 30 + index)
+            retry, end = instant(8, 45 + index), instant(9, 20 + index)
             runs.append(run(identifier, project="alpha", group=MACRO_PALETTE,
                             title=f"配色核对 {index + 1:02} · Buddy colour review", title_source="title",
-                            task_text="Synthetic timeline colour review.", created=start, updated=end,
-                            state="accepted", status="completed", category="ended", buddy=buddy,
-                            accepted=end, result=True,
-                            spans=[span(f"execution:{identifier}", "execution", start, end, "finished",
-                                        attempt_id=f"att-{identifier}", buddy=buddy, confirmed=True,
-                                        generation=1, disposition="completed", turn_index=1)],
-                            attempts=[attempt(f"att-{identifier}", 1, "finished", True, start, end,
-                                              buddy, result="Synthetic colour review.")],
+                            task_text="Synthetic timeline colour and status review.", created=start, updated=end,
+                            state="executing", status="reconciliation-needed", category="active", buddy=buddy,
+                            result=True, shutdown_confirmed=False,
+                            spans=[span(f"execution:{identifier}-failed", "execution", start, failed_end, "finished",
+                                        attempt_id=f"att-{identifier}-1", buddy=buddy, confirmed=True,
+                                        generation=1, disposition="completed", turn_index=1,
+                                        error="Synthetic failed execution"),
+                                   span(f"execution:{identifier}-unknown", "execution", retry, end, "finished",
+                                        attempt_id=f"att-{identifier}-2", buddy=buddy, confirmed=False, uncertain=True,
+                                        generation=2, disposition="completed", turn_index=2)],
+                            attempts=[attempt(f"att-{identifier}-1", 1, "finished", True, start, failed_end,
+                                              buddy, result="Synthetic failure.", error="Synthetic failed execution"),
+                                      attempt(f"att-{identifier}-2", 2, "finished", False, retry, end,
+                                              buddy, result="Synthetic stop unconfirmed.")],
                             markers=[marker(start, "dispatch", actor=host_actor(HOST_A))]))
     by_id = {entry["runId"]: entry for entry in runs}
     for entry in runs:

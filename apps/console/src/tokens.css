@@ -1,4 +1,5 @@
-/* The console's one palette (ADR-029 clause 8). Green belongs to the now ruler.
+/* The console's semantic palette (ADR-029 clause 8). Buddy fills keep a measured
+   distance from these colours; status shapes carry a track-paper separation.
    Active facts use body ink and motion; selection and keyboard focus are neutral.
    Hand marks waiting for a person, and fail marks failure. */
 :root {

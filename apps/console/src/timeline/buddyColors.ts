@@ -7,18 +7,18 @@ import { parseTimelineInstant } from "./instant";
 
 /** Curated sRGB colours; the order spreads every prefix, especially the first six. */
 export const BUDDY_CORE_COLORS = [
-  { hex: "#146eb4", name: "Blue" }, // 蓝色 / Blue
-  { hex: "#f5dd8a", name: "Butter yellow" }, // 奶油黄 / Butter yellow
-  { hex: "#8e215a", name: "Deep rose" }, // 深玫红 / Deep rose
-  { hex: "#fec0dc", name: "Light pink" }, // 浅粉 / Light pink
-  { hex: "#4fdaf8", name: "Light cyan" }, // 浅青蓝 / Light cyan
-  { hex: "#d094f0", name: "Lilac" }, // 浅紫 / Lilac
-  { hex: "#afb6e9", name: "Periwinkle" }, // 长春花蓝 / Periwinkle
-  { hex: "#8c5b97", name: "Plum" }, // 梅紫 / Plum
-  { hex: "#3e4199", name: "Indigo" }, // 靛蓝 / Indigo
-  { hex: "#02b3fc", name: "Sky blue" }, // 天蓝 / Sky blue
-  { hex: "#0c6681", name: "Deep cyan" }, // 深青蓝 / Deep cyan
-  { hex: "#da69ac", name: "Orchid pink" }, // 兰花粉 / Orchid pink
+  { hex: "#025387", name: "Deep blue", family: "blue" }, // 深蓝 / Deep blue
+  { hex: "#fa881a", name: "Orange", family: "orange" }, // 橙色 / Orange
+  { hex: "#117b2d", name: "Leaf green", family: "green" }, // 叶绿 / Leaf green
+  { hex: "#ffc5d9", name: "Light pink", family: "rose" }, // 浅粉 / Light pink
+  { hex: "#93205b", name: "Deep rose", family: "rose" }, // 深玫红 / Deep rose
+  { hex: "#db0129", name: "Crimson", family: "red" }, // 正红 / Crimson
+  { hex: "#66c8e4", name: "Light cyan", family: "cyan" }, // 浅青蓝 / Light cyan
+  { hex: "#6137a5", name: "Deep violet", family: "violet" }, // 深紫 / Deep violet
+  { hex: "#acec6e", name: "Light lime", family: "green" }, // 浅柠绿 / Light lime
+  { hex: "#fad58e", name: "Light gold", family: "yellow" }, // 浅金黄 / Light gold
+  { hex: "#baabfe", name: "Lilac", family: "violet" }, // 浅紫 / Lilac
+  { hex: "#fd5878", name: "Coral", family: "red" }, // 珊瑚红 / Coral
 ] as const;
 
 export const BUDDY_STATUS_DISTANCE = 25;
@@ -43,12 +43,22 @@ export function buddyUsesLightInk(color: string): boolean {
   return rgbHexToLab(color)[0] < 52;
 }
 
+/** Exclude muddy warm browns and low-lightness yellow/olive; saturated red and orange stay eligible. */
+export function isUnwantedBuddyColor([lightness, a, b]: LABColor): boolean {
+  const hue = (Math.atan2(b, a) * 180 / Math.PI + 360) % 360;
+  const chroma = Math.hypot(a, b);
+  return hue >= 70 && hue <= 135 && lightness < 76
+    || hue >= 30 && hue < 70 && (chroma < 55 || hue >= 45 && lightness < 55);
+}
+
 function prepareCandidates(): void {
   const usedHex = new Set(colors);
   // The extension keeps the existing deterministic farthest-point Lab grid.
   // Measure the rounded sRGB output, which is what the user actually sees.
-  for (let lightness = 54; lightness <= 86; lightness += 2) {
-    for (let chroma = 26; chroma <= 54; chroma += 2) {
+  for (let lightness = 34; lightness <= 88; lightness += 2) {
+    // Neither foreground reaches 4.5:1 in the gap between the two lightness tiers.
+    if (lightness === 50 || lightness === 52) continue;
+    for (let chroma = 26; chroma <= 84; chroma += 2) {
       for (let hue = 0; hue < 360; hue += 2) {
         const radians = hue * Math.PI / 180;
         const point: LABColor = [lightness, chroma * Math.cos(radians), chroma * Math.sin(radians)];
@@ -56,8 +66,7 @@ function prepareCandidates(): void {
         const hex = labToRgbHex(point);
         if (usedHex.has(hex)) continue;
         const lab = rgbHexToLab(hex);
-        const angle = (Math.atan2(lab[2], lab[1]) * 180 / Math.PI + 360) % 360;
-        if (angle >= 115 && angle <= 220 || angle >= 30 && angle <= 115 && lab[0] < 76) continue;
+        if (isUnwantedBuddyColor(lab)) continue;
         if (statusLabs.some(status => squaredDistance(lab, status) < BUDDY_STATUS_DISTANCE ** 2)) continue;
         const distance = Math.min(...coreLabs.map(core => squaredDistance(lab, core)));
         if (distance < BUDDY_EXTENSION_CORE_DISTANCE ** 2) continue;

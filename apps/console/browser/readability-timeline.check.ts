@@ -86,7 +86,8 @@ for (const reducedMotion of ["reduce", "no-preference"] as const) test.describe(
         const context = canvas.getContext("2d")!; context.drawImage(image, 0, 0);
         const pixel = context.getImageData(Math.floor(x), Math.floor(y), 1, 1).data;
         return pixel[0]! * .2126 + pixel[1]! * .7152 + pixel[2]! * .0722;
-      }, { data, x: edge.x + edge.width - 2, y: edge.y + edge.height - 3 });
+        // Sample inside the moving edge, clear of the silent-tail outline's paper.
+      }, { data, x: edge.x + edge.width - 5, y: edge.y + edge.height - 3 });
     };
     if (reducedMotion === "no-preference") {
       await tail.evaluate(node => { const animation = node.getAnimations()[0]!; animation.pause(); animation.currentTime = 0; });

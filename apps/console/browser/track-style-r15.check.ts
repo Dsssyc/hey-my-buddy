@@ -13,9 +13,10 @@ for (const width of [390, 1440]) test.describe(`track style ${width}px`, () => {
     await expect(failed).toBeAttached();
     const drawing = await failed.evaluate(bar => {
       const style = getComputedStyle(bar);
+      const outline = getComputedStyle(bar.parentElement!.querySelector('[data-slot=execution-status-outline]')!);
       const fail = getComputedStyle(document.documentElement).getPropertyValue("--fail").trim();
       const glyph = bar.parentElement!.querySelector('[data-slot=execution-failed]');
-      return { fill: style.fill, stroke: style.stroke, width: Number(style.strokeWidth.replace("px", "")), fail, glyph: !!glyph,
+      return { fill: style.fill, stroke: outline.stroke, width: Number(outline.strokeWidth.replace("px", "")), fail, glyph: !!glyph,
         barWidth: bar.getBoundingClientRect().width };
     });
     expect(drawing.fill).toMatch(/^rgb\(/);
@@ -23,7 +24,7 @@ for (const width of [390, 1440]) test.describe(`track style ${width}px`, () => {
       const probe = document.createElement("span"); probe.style.color = value; document.body.append(probe);
       const color = getComputedStyle(probe).color; probe.remove(); return color;
     }, drawing.fail));
-    expect(drawing.width).toBeGreaterThanOrEqual(2.5);
+    expect(drawing.width).toBeGreaterThanOrEqual(2);
     expect(drawing.barWidth).toBeGreaterThan(0);
     expect(drawing.glyph).toBe(true);
     const words = await page.locator('[data-slot=timeline-track]').evaluateAll(tracks => tracks.flatMap(track => {

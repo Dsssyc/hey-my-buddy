@@ -54,8 +54,8 @@ describe("timeline drawings follow recorded facts", () => {
     expect(slot("execution-breath")).not.toBeNull();
     cleanup(); track([execution({ resultStatus: "failed" })]);
     expect(slot("execution-failed")).not.toBeNull();
-    expect(slot("execution-bar")?.getAttribute("class")).toContain("stroke-fail");
-    expect(slot("execution-bar")?.getAttribute("stroke-width")).toBe("2.5");
+    expect(slot("execution-status-outline")?.getAttribute("class")).toContain("stroke-fail");
+    expect(slot("execution-status-outline")?.getAttribute("stroke-width")).toBe("2");
     expect((slot("execution-bar") as SVGElement).style.fill).toBe("rgb(109, 126, 192)");
     cleanup(); const unknown = execution({ uncertain: true, shutdownConfirmed: false }); track([unknown]);
     expect(slot("unconfirmed-end")).toBeTruthy();
