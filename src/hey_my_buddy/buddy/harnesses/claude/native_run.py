@@ -128,8 +128,7 @@ def _catalog(initialize: dict, version: str) -> dict:
     """Read native model and account facts without selecting a provider or login."""
     account = initialize.get("account")
     provider = provider_from_account(account)
-    has_account_facts = isinstance(account, dict) and any(
-        value for field, value in account.items() if field != "apiProvider")
+    has_account_facts = isinstance(account, dict) and any(account.values())
     account_status = "confirmed" if has_account_facts else "unknown"
     entries = initialize.get("models")
     if not isinstance(entries, list):

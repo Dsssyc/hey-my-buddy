@@ -86,9 +86,9 @@ def initialize_response(case):
     if case == "token-source":
         account = {"apiProvider": "firstParty", "tokenSource": "subscription"}
     if case == "third-party":
-        account = {"apiProvider": "bedrock", "tokenSource": "api-key"}
+        account = {"apiProvider": "bedrock"}
     if case == "api-key-source":
-        account = {"apiProvider": "bedrock", "apiKeySource": "user"}
+        account = {"apiProvider": "firstParty", "tokenSource": "none", "apiKeySource": "ANTHROPIC_API_KEY"}
     if case == "null-token":
         account["tokenSource"] = None
     if case == "provider-only":

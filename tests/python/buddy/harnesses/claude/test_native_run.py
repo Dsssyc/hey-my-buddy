@@ -616,19 +616,24 @@ class CatalogAccountTests(unittest.TestCase):
     def test_nonempty_account_facts_do_not_select_a_provider_or_login_method(self):
         for field, value in (("email", "subscriber@example.invalid"), ("organization", "fixture-organization"),
                              ("subscriptionType", "max"), ("tokenSource", "subscription"),
-                             ("tokenSource", "none"), ("apiKeySource", "user"),
+                             ("tokenSource", "none"), ("apiKeySource", "ANTHROPIC_API_KEY"),
                              ("futureAccountField", {"identity": "fixture"})):
-            for provider in ("firstParty", "bedrock", "future-provider", None):
+            for provider in (None, ""):
                 with self.subTest(field=field, value=value, provider=provider):
                     self.assertEqual(self.account_status({"account": {"apiProvider": provider, field: value}}),
                                      "confirmed")
 
-    def test_absent_malformed_and_provider_only_accounts_are_unknown(self):
+    def test_provider_only_accounts_are_confirmed(self):
+        for provider in ("firstParty", "bedrock", "vertex", "future-provider"):
+            with self.subTest(provider=provider):
+                self.assertEqual(self.account_status({"account": {"apiProvider": provider}}), "confirmed")
+
+    def test_absent_malformed_and_empty_account_facts_are_unknown(self):
         self.assertEqual(self.account_status({}), "unknown")
-        for account in (None, "account", [], ["account"], True, 1, {}, {"apiProvider": "firstParty"},
-                        {"apiProvider": "bedrock"},
-                        {"apiProvider": "firstParty", "email": "", "tokenSource": None,
-                         "futureAccountField": {}, "anotherField": []}):
+        for account in (None, "account", [], ["account"], True, 1, {}, {"apiProvider": ""},
+                        {"apiProvider": None},
+                        {"apiProvider": "", "email": "", "tokenSource": None,
+                         "futureAccountField": {}, "anotherField": [], "flag": False, "count": 0}):
             with self.subTest(account=account):
                 self.assertEqual(self.account_status({"account": account}), "unknown")
 
@@ -664,20 +669,20 @@ class DiscoveryTests(NativeRunCase):
         self.assertEqual(set(settings), {"sandbox"})
 
     def test_unknown_account_does_not_require_a_login_proof_process(self):
-        for case in ("provider-only", "empty-account", "invalid-account", "null-account", "missing-account"):
+        for case in ("empty-account", "invalid-account", "null-account", "missing-account"):
             with self.subTest(case=case):
                 self.fixture_case(case)
                 catalog = run_discovery(cwd=str(self.cwd), invocation_root=self.base / f"discovery-{case}",
                                         native_root=self.base / f"native-{case}", timeout_seconds=25,
                                         cancelled=lambda: False)
                 self.assertEqual(catalog["discoveries"][0]["accountStatus"], "unknown")
-                self.assertEqual(catalog["providers"][0]["provider"], "anthropic" if case == "provider-only" else "unknown")
+                self.assertEqual(catalog["providers"][0]["provider"], "unknown")
                 self.assertNotIn("authStatusRuns", self.fixture_state())
                 result = self.execute(self.request())
                 self.assertEqual(result.end.status, "ok", result.end.message)
 
     def test_account_facts_are_confirmed_in_one_initialize_without_a_user_message(self):
-        for case in ("ok", "null-token", "token-source", "api-key-source"):
+        for case in ("ok", "null-token", "token-source", "api-key-source", "provider-only"):
             with self.subTest(case=case):
                 self.fixture_case(case)
                 previous_runs = self.fixture_state()["runs"] if self.state_path.exists() else 0
