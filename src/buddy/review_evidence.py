@@ -13,7 +13,7 @@ from .harness_review import CHECKS
 from .review_probe import _DENIAL, _SCRIPT_META, _native_call, _response, _turn_ids, commands
 
 FILE = "review-evidence.json"
-FORMAT = "buddy-review-evidence-v2"
+FORMAT = "buddy-review-evidence-v3"
 _METHODS = {"rawResponseItem/completed", "item/started", "item/completed",
             "item/commandExecution/requestApproval", "item/fileChange/requestApproval",
             "item/permissions/requestApproval", "item/tool/requestUserInput"}

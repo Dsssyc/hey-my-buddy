@@ -122,8 +122,53 @@ class HistoricalReplayTests(unittest.TestCase):
         self.assertTrue(a['forbiddenTools'])
         self.assertTrue(a['internalReadObserved'])
         self.assertEqual(a['nativeDenialCount'],4)
+        self.assertFalse(a['fixedBoundaryProofPresent'])
+        self.assertIsNone(a['boundaryDenials'])
+        self.assertFalse(a['checksPass'])
         self.assertFalse(a['certifiable'])
         self.assertEqual(a['reasonCode'],'HISTORICAL_PROBE_BINDING_MISSING')
+
+    def test_sol_without_supplemental_output_still_correlates_but_never_certifies(self):
+        sol=json.loads((FIXTURES/'sol-v1.json').read_text())
+        result=replay(sol)
+        self.assertTrue(result['toolStreamCorrelated'])
+        self.assertFalse(result['internalReadObserved'])
+        self.assertFalse(result['checksPass'])
+        self.assertEqual(result['reasonCode'],'HISTORICAL_PROBE_BINDING_MISSING')
+
+    def test_02600_luna_v2_evidence_passes_current_rules_without_new_certification(self):
+        document=json.loads((FIXTURES/'luna-v2-b37e7302.json').read_text())
+        result=replay(document)
+        self.assertEqual(document['format'],'buddy-review-evidence-v2')
+        self.assertEqual(document['attempt']['taskId'],'b37e7302-da06-49a2-b8d6-e78d814e3b2f')
+        self.assertTrue(result['toolStreamCorrelated'])
+        self.assertTrue(result['forbiddenTools'])
+        self.assertTrue(result['nativePolicy'])
+        self.assertTrue(result['internalReadObserved'])
+        self.assertEqual(result['nativeDenialCount'],4)
+        self.assertTrue(result['fixedBoundaryProofPresent'])
+        self.assertTrue(result['boundaryDenials'])
+        self.assertTrue(result['checksPass'])
+        self.assertFalse(result['certifiable'])
+        self.assertEqual(result['reasonCode'],'REPLAY_IS_NOT_CERTIFICATION')
+        self.assertFalse(any(event['responseReadable'] for event in document['events']
+                             if event['source']=='nativeRawToolEvents' and event['type']=='custom_tool_call_output'))
+
+    def test_replayed_v2_evidence_fails_when_any_fixed_probe_fails(self):
+        document=json.loads((FIXTURES/'luna-v2-b37e7302.json').read_text())
+        for update in ({'exitCode':0,'denialMatched':False},{'denialMatched':False},{'truncated':True}):
+            with self.subTest(update=list(update)):
+                variant=copy.deepcopy(document)
+                variant['sandboxProbes']['operations'][3].update(update)
+                result=replay(variant)
+                self.assertFalse(result['boundaryDenials'])
+                self.assertFalse(result['checksPass'])
+        variant=copy.deepcopy(document)
+        variant['sandboxProbes']['operations'].pop(0)
+        self.assertFalse(replay(variant)['checksPass'])
+        variant=copy.deepcopy(document)
+        variant['eventCounts']['nativeDeniedRequests']=1
+        self.assertFalse(replay(variant)['checksPass'])
 
     def test_historical_changed_reply_extra_tools_approval_and_truncation_fail(self):
         original=json.loads((FIXTURES/'luna-v1.json').read_text())

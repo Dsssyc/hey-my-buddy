@@ -210,7 +210,7 @@ class ReviewCheckAdapter(Adapter):
         try:
             checks, reasons = evaluate(payload, configuration=context.spec["reviewCheck"]["configuration"],
                 expected_version=context.spec["reviewCheck"]["version"],
-                frozen=frozen, sentinel=sentinel, url=url, host_status=host_status, marker=marker,
+                frozen=frozen, host_status=host_status, marker=marker,
                 input_before=before, input_after=_tree(frozen), sentinel_before=outside_before,
                 sentinel_after=_file(sentinel), controller_elapsed_ms=elapsed,
                 native_stopped=native_stopped, owned_stopped=owned_stopped, basis=basis)

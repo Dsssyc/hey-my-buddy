@@ -69,7 +69,7 @@ class ReviewProbeTests(unittest.TestCase):
 
     def assess(self, **changes):
         return evaluate(self.payload, configuration=self.configuration, expected_version="0.157.0", frozen=self.frozen,
-            sentinel=self.sentinel, url=self.url, host_status=changes.get("host_status", 200),
+            host_status=changes.get("host_status", 200),
             marker="randommarker", input_before=_tree(self.frozen),
             input_after=changes.get("input_after", _tree(self.frozen)),
             sentinel_before=_file(self.sentinel), sentinel_after=changes.get("sentinel_after", _file(self.sentinel)),
@@ -89,10 +89,14 @@ class ReviewProbeTests(unittest.TestCase):
         self.payload['nativeTurns'][1]['completed'] = False
         self.assertFalse(self.assess()['requestIdentity'])
 
-    def test_answer_cannot_forge_denial_or_internal_read(self):
+    def test_model_answers_cannot_forge_or_overrule_the_native_probes(self):
         self.events[3]["params"]["item"]["output"] = json.dumps({"exit_code": 0, "output": "success"})
-        self.assertFalse(self.assess()["boundaryDenials"])
         self.events[1]["params"]["item"]["output"] = json.dumps({"exit_code": 1, "output": "Operation not permitted"})
+        self.assertTrue(all(self.assess().values()))
+        self.payload["nativeSandboxProbes"]["operations"][1].update(exitCode=0, stderr="")
+        self.assertFalse(self.assess()["boundaryDenials"])
+        self.payload["nativeSandboxProbes"]["operations"][1].update(exitCode=1, stderr="Operation not permitted")
+        self.payload["nativeSandboxProbes"]["operations"][0].update(stdout="forged\n")
         self.assertFalse(self.assess()["internalRead"])
 
     def test_commands_are_auxiliary_but_replies_remain_correlated(self):
@@ -103,12 +107,19 @@ class ReviewProbeTests(unittest.TestCase):
         self.assertTrue(checks["forbiddenTools"])
         self.assertTrue(checks["boundaryDenials"])
 
-    def test_printed_denial_and_mismatched_response_do_not_pass(self):
+    def test_unreadable_model_outputs_with_complete_correlation_still_pass(self):
+        for event in self.events:
+            item = event["params"]["item"]
+            if item["type"] == "function_call_output":
+                item["output"] = "unparseable private prose"
+        self.assertTrue(all(self.assess().values()))
+
+    def test_missing_completion_record_or_broken_call_identity_fails(self):
         self.events[2]["params"]["item"]["call_id"] = "other-call"
-        self.assertFalse(self.assess()["boundaryDenials"])
+        self.assertFalse(self.assess()["forbiddenTools"])
         self.events[2]["params"]["item"]["call_id"] = "call-2"
-        self.events[3]["params"]["item"]["output"] = "Operation not permitted"
-        self.assertFalse(self.assess()["boundaryDenials"])
+        del self.events[3]
+        self.assertFalse(self.assess()["forbiddenTools"])
 
     def test_missing_or_truncated_trace_and_extra_tool_fail(self):
         self.payload["nativeEvidenceTruncated"] = True
@@ -139,7 +150,30 @@ class ReviewProbeTests(unittest.TestCase):
         self.payload["nativeToolEvents"] = items
         self.assertTrue(all(self.assess().values()))
         items[3]["params"]["item"]["id"] = "different"
-        self.assertFalse(self.assess()["boundaryDenials"])
+        self.assertFalse(self.assess()["forbiddenTools"])
+
+    def test_unparseable_exec_outputs_alongside_command_execution_items_pass(self):
+        # The observed 0.159.0 Luna shape: five exec custom tool calls whose
+        # two-block outputs do not decode, plus correlated high-level
+        # commandExecution items. The proof stays on the fixed probes.
+        self.native_01590_events()
+        self.payload["usage"]["toolCalls"] = 5
+        for event in self.events:
+            item = event["params"]["item"]
+            if item["type"] == "custom_tool_call_output":
+                item["output"] = [{"type": "input_text", "text": "Script completed\nWall time 0.1 seconds\nOutput:\n"},
+                                  {"type": "input_text", "text": "not json at all"}]
+        self.payload["nativeToolEvents"] = [
+            {"method": method, "params": {"threadId": "session", "turnId": "turn", "item": {
+                "type": "commandExecution", "id": name, "command": "cat marker.txt", "cwd": str(self.frozen),
+                **({"exitCode": 0, "aggregatedOutput": "randommarker\n"} if method == "item/completed" else {})}}}
+            for name in ("native-a", "native-b") for method in ("item/started", "item/completed")]
+        checks = self.assess()
+        self.assertTrue(all(checks.values()))
+        document = self.diagnostic()
+        self.assertFalse(any(event["responseReadable"] for event in document["events"]
+                             if event["source"] == "nativeRawToolEvents" and event["type"] == "custom_tool_call_output"))
+        self.assertTrue(all(check["passed"] for check in document["checks"].values()))
 
     def native_01590_events(self):
         # Observed 0.159.0 wire shape, using only disposable synthetic contents.
@@ -178,7 +212,7 @@ class ReviewProbeTests(unittest.TestCase):
     def test_native_01590_blocks_do_not_accept_prose_or_more_calls(self):
         self.native_01590_events()
         self.events[1]["params"]["item"]["output"][0]["text"] = "The model says permission denied"
-        self.assertFalse(self.assess()["boundaryDenials"])
+        self.assertTrue(all(self.assess().values()))
         self.events[1]["params"]["item"]["output"][0]["text"] = "Script completed\nWall time 0.123 seconds\nOutput:\n"
         # Model source syntax is never evidence of an extra native call.
         self.events[0]["params"]["item"]["input"] += ' text("Operation not permitted");'
@@ -294,7 +328,7 @@ class ReviewProbeTests(unittest.TestCase):
     def diagnostic(self):
         basis = {}
         checks, reasons = evaluate(self.payload, configuration=self.configuration, expected_version="0.157.0",
-            frozen=self.frozen, sentinel=self.sentinel, url=self.url, host_status=200, marker="randommarker",
+            frozen=self.frozen, host_status=200, marker="randommarker",
             input_before=_tree(self.frozen), input_after=_tree(self.frozen), sentinel_before=_file(self.sentinel),
             sentinel_after=_file(self.sentinel), controller_elapsed_ms=1000, native_stopped=True, owned_stopped=True, basis=basis)
         return diagnostic(self.payload, plan={"version": "0.157.0", "platform": "darwin", "configuration": self.configuration},
@@ -303,6 +337,8 @@ class ReviewProbeTests(unittest.TestCase):
 
     def test_retained_projection_has_correlated_operations_and_each_check_basis(self):
         document = self.diagnostic()
+        self.assertEqual(document["format"], "buddy-review-evidence-v3")
+        self.assertNotIn("modelNativeResultsConsistent", json.dumps(document["checks"]))
         self.assertTrue(all(check["passed"] and all(check["basis"].values()) for check in document["checks"].values()))
         events = document["events"]
         self.assertEqual({event["operation"] for event in events if event["operation"]}, set(commands(self.frozen, self.sentinel, self.url)))

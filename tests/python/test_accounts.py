@@ -91,7 +91,7 @@ class AccountServiceTests(WorkflowTestCase):
         from buddy.cli import METHODS
         from buddy.transport import METHOD_MAP
         from buddy.cli_help import render
-        self.assertEqual(CONTRACT_VERSION, '0.26.0')
+        self.assertEqual(CONTRACT_VERSION, '0.27.0')
         for name in ('accounts', 'account-set'):
             operation = name.replace('-', '_')
             self.assertTrue(hasattr(BuddyControl, operation))
