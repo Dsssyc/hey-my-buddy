@@ -77,7 +77,7 @@ def run(args):
     context = ExecutionContext(task_id=str(uuid.uuid4()), attempt_id=str(uuid.uuid4()), generation=1,
         spec={'adapter': 'decision', 'cwd': str(root), 'routerBudgetSeconds': 70},
         directory=root / 'attempt', runtime={'identity': 'source:fast-probe'},
-        environment=environment, decision_input=document)
+        environment=environment, decision_input=document, session_record_path=None)
     implementation = DecisionAdapter()
     started = time.monotonic()
     handle = None

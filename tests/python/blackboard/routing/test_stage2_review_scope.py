@@ -25,7 +25,7 @@ class DeferredReviewTests(unittest.TestCase):
         with tempfile.TemporaryDirectory(prefix='deferred-review-') as directory:
             root = Path(directory)
             context = ExecutionContext(task_id='micro-task', attempt_id='attempt', generation=1,
-                spec={'cwd': str(root)}, directory=root / 'attempt', environment={}, runtime={})
+                spec={'cwd': str(root)}, directory=root / 'attempt', environment={}, runtime={}, session_record_path=None)
             request = ReadOnlyStructuredRequest(str(root), 'read', {'type': 'object'},
                                                {'timeoutSeconds': 60, 'toolCalls': 8})
             with patch('subprocess.Popen', side_effect=AssertionError('native process')), \

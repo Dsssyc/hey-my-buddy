@@ -178,7 +178,7 @@ class ClaudeAdapterObservationTests(unittest.TestCase):
                                       "model": CLAUDE_MODEL, "effort": "low"},
                                 directory=self.root / f"attempt-{index}", runtime={},
                                 environment={**self.environment, "HMB_CLAUDE_FIXTURE_CASE": case},
-                                turn={"turnId": f"turn-{index}", "input": turn_input})
+                                turn={"turnId": f"turn-{index}", "input": turn_input}, session_record_path=None)
 
     def execute(self, case: str, **kwargs):
         context = self.context(case, **kwargs)
@@ -447,7 +447,7 @@ class ZcodeAdapterObservationTests(unittest.TestCase):
                                       "provider": "fixture-api", "model": "fixture-model", "effort": "low"},
                                 directory=self.root / f"attempt-{index}", runtime={},
                                 environment={**self.environment, "HMB_ZCODE_TEST_CASE": case},
-                                turn={"turnId": f"turn-{index}", "input": identity})
+                                turn={"turnId": f"turn-{index}", "input": identity}, session_record_path=None)
 
     def execute(self, case: str, **kwargs):
         context = self.context(case, **kwargs)

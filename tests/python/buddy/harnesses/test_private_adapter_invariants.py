@@ -265,7 +265,7 @@ class PrivateAdapterInvariants(unittest.TestCase):
         command_evidence = state / "attempts/command-task/attempt-2"
         command = ExecutionContext("command-task", "attempt-2", 1,
             {"adapter": "command", "cwd": str(fixture.cwd), "task": "fixture command", "expectedSeconds": 3,
-             "argv": [sys.executable, "-c", "print('ok')"]}, command_evidence, {}, fixture.environment)
+             "argv": [sys.executable, "-c", "print('ok')"]}, command_evidence, {}, fixture.environment, session_record_path=None)
         adapter = CommandAdapter()
         child = adapter.start(command)
         self.addCleanup(lambda: child.terminate(grace_seconds=0.1) if child.group_alive() else None)

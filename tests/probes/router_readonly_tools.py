@@ -155,7 +155,7 @@ def run(args):
                        HMB_RUNTIME_ROOT=str(private / 'runtime'), TMPDIR=str(private / 'tmp'))
     context = ExecutionContext(task_id=packet['binding']['taskId'], attempt_id=packet['binding']['attemptId'],
         generation=packet['binding']['generation'], spec={**buddy, 'cwd': str(root / 'frozen')},
-        directory=private / 'attempt', runtime={}, environment=environment)
+        directory=private / 'attempt', runtime={}, environment=environment, session_record_path=None)
     request = ReadOnlyStructuredRequest(str(root / 'frozen'), **{
         'prompt': packet['request']['prompt'], 'output_schema': packet['request']['outputSchema'],
         'budget': packet['request']['budget'], 'capture_evidence': False})

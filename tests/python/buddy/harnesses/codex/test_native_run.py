@@ -1123,6 +1123,7 @@ class WorkerSeamTests(CodexSeamCase):
                 request = request.model_copy(update={"identity": request.identity.model_copy(
                     update={"input_sha256": run_execution.input_hash(turn_input)})})
                 control = {"operation": "worker", "harness": "codex", "privateRoot": str(root),
+                           "sessionRecordPath": request.session_record_path,
                            "inputFile": str(input_file), "outputFile": str(root / "turn-output.json")}
                 control.update(timeoutSeconds=30)
                 handle = run_execution.InlineRunHandle(control, request.identity, grace_seconds=0)

@@ -218,7 +218,7 @@ class DecisionCapabilityTests(unittest.TestCase):
                                        spec={"cwd": root, "routerBudgetSeconds": 60}, directory=directory,
                                        runtime={}, environment={"HMB_STATE_DIR": str(Path(root) / "state"),
                                            "HMB_RUNTIME_ROOT": str(Path(root) / "runtime"), "HMB_DEV_SOURCE": "1"}, decision_input=document,
-                                       turn={"input": {}}, agent_credential="must-not-pass")
+                                       turn={"input": {}}, agent_credential="must-not-pass", session_record_path=None)
             with mock.patch("hey_my_buddy.buddy.roles.router_input.prepare", return_value=(frozen, "digest")) as prepare, mock.patch(
                 "hey_my_buddy.buddy.harnesses.registry.adapter", return_value=Native()
             ), mock.patch("hey_my_buddy.buddy.roles.run_execution.start_review", side_effect=start):
@@ -247,7 +247,7 @@ class DecisionCapabilityTests(unittest.TestCase):
     def test_ineligible_capability_is_rejected_before_input_preparation_or_spawn(self):
         context = ExecutionContext(task_id="microTask", attempt_id="attempt", generation=1,
                                    spec={}, directory=Path("/tmp/unused"), runtime={}, environment={},
-                                       decision_input={"buddy": {"harness": "codex"}, "budget": router.budget("brief")})
+                                       decision_input={"buddy": {"harness": "codex"}, "budget": router.budget("brief")}, session_record_path=None)
         with mock.patch("hey_my_buddy.buddy.harnesses.registry.adapter", return_value=CodexAdapter()), mock.patch(
             "hey_my_buddy.buddy.roles.router_input.prepare"
         ) as prepare, mock.patch.object(CodexAdapter, 'local_read_only_check', return_value={

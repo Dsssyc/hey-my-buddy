@@ -78,10 +78,10 @@ class NativeEvidenceRoleTests(unittest.TestCase):
                                  validate_turn_provenance=mock.Mock())
         executor = run_execution.WorkerRunExecutor(SimpleNamespace(name="zcode"), module)
         with tempfile.TemporaryDirectory() as directory:
-            context = ExecutionContext("task", "attempt", 1, {}, Path(directory), {}, {})
+            context = ExecutionContext("task", "attempt", 1, {}, Path(directory), {}, {}, session_record_path=None)
             context.turn = {"input": {"resumeMode": "initial"}}
             context.effective_workspace = {"partial": True}
-            control = {"nativeRoot": directory, "harness": "zcode"}
+            control = {"nativeRoot": directory, "harness": "zcode", "sessionRecordPath": None}
             handle = SimpleNamespace(role_run_control=control, role_run_identity=result.identity,
                                      role_run_original_identity=result.identity, result=result,
                                      role_run_active_control=control, role_run_active_identity=result.identity,
