@@ -39,7 +39,7 @@ class LeadWorkspaceTests(RealWorkspaceTestCase):
             **buddy, "requestId": request_id, "hostId": "host",
             "task": "Review and direct the child task", "cwd": str(repo),
             "submissionToken": request_id[0] * 32, "delegationAuthority": True,
-            "executionWorkspace": {"kind": "existing", "access": "full", "accessReason": "Lead review"},
+            "executionWorkspace": {"kind": "existing", "access": "full", "accessNote": "Lead review"},
         })
         claimed = admit_board(board, {'workerId': worker, 'claimRequestId': f'claim-{request_id}', 'nonce': worker[0] * 16, 'runId': submitted['runId']})["claim"]
         self.assertIsNotNone(claimed)
@@ -99,7 +99,7 @@ class LeadWorkspaceTests(RealWorkspaceTestCase):
         params = {
             "runId": child["runId"], "commandId": "lead-amend",
             "expectedRevision": view["revision"], "expectedScopeVersion": 1,
-            "writeScope": ["src", "docs"], "reason": "Documentation is in the next stage",
+            "writeScope": ["src", "docs"], "note": "Documentation is in the next stage",
         }
         self._wrong_lead_refused(board, "workflow_scope_amend", params, other)
         amended = board.call("workflow_scope_amend", {**params, "credential": lead["credential"]})
@@ -123,7 +123,7 @@ class LeadWorkspaceTests(RealWorkspaceTestCase):
             "expectedRevision": view["revision"], "conflictId": conflict["conflictId"],
             "action": "restore", "paths": ["outside.txt"],
             "observedFingerprint": conflict["observedFingerprint"],
-            "reason": "Restore the unauthorized path",
+            "note": "Restore the unauthorized path",
         }
         self._wrong_lead_refused(board, "workflow_workspace_resolve", params, other)
         resolved = board.call("workflow_workspace_resolve", {**params, "credential": lead["credential"]})

@@ -38,7 +38,7 @@ class PermissionResumeTests(WorkflowTestCase):
             view = board.call("workflow_get", {"runId": submitted["runId"]})
             kwargs = {"access": access}
             if access == "full":
-                kwargs["accessReason"] = "Need unrestricted fixture operations"
+                kwargs["accessNote"] = "Need unrestricted fixture operations"
             self.continue_run(board, view, command_id=f"continue-{index}", **kwargs)
             # The current task already has the new level; the old turn must keep
             # the old one so this comparison cannot use the task's current access.

@@ -534,7 +534,7 @@ class HistoryPagingTests(MicroTaskTestCase):
         for index in range(4):
             self.execution_task(board, f"bulk-{index:02d}")
         cancelled = self.execution_task(board, "cancel-me")
-        board.call("task_cancel", {"runId": cancelled["runId"], "reason": "test"})
+        board.call("task_cancel", {"runId": cancelled["runId"], 'note': "test"})
         listing = self.history(board, limit=2, state="completed")
         self.assertEqual(listing["total"], 0)
         self.assertEqual(listing["runs"], [])

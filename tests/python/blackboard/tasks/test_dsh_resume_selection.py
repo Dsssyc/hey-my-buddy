@@ -212,7 +212,7 @@ class DshResumeSelectionTests(WorkflowTestCase):
         self.continue_run(board, view, command_id="continue-new-effort",
                           buddy={**BUDDY, "effort": "high"},
                           access="read",
-                          reason="Host raised effort after the prior turn")
+                          note="Host raised effort after the prior turn")
         resumed = self.claim(board, claim_request_id="turn-new-effort")
         turn = resumed["claim"]["turn"]
         self.assertEqual(turn["resumeMode"], "reconstructed-new-session")
@@ -225,7 +225,7 @@ class DshResumeSelectionTests(WorkflowTestCase):
         The prior turn is otherwise fully qualified: returned, same session,
         buddy and harness version. The common ownership
         judgment — the same storageOwner qualification codex already applies —
-        must reconstruct with an explicit reason instead of selecting
+        must reconstruct with an explicit note instead of selecting
         native-session and failing later inside the native module.
         """
         before = registry_adapter("dsh").native_resume

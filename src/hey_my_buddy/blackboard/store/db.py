@@ -524,8 +524,8 @@ CREATE TABLE IF NOT EXISTS workflow_turns (
     input_json          TEXT NOT NULL,
     -- Frozen access for this turn, independent of later run intent changes.
     access              TEXT NOT NULL CHECK (access IN ('read','write','full')),
-    -- Only an explicit full turn carries the Host's one-line reason.
-    access_reason       TEXT,
+    -- Only an explicit full turn carries the Host's one-line note.
+    access_note         TEXT,
     expected_seconds    INTEGER NOT NULL CHECK (expected_seconds > 0),
     state               TEXT NOT NULL CHECK (state IN ('prepared','running','returned','failed','interrupted')),
     disposition         TEXT CHECK (disposition IN ('completed','assistance','attention','waiting')),
@@ -536,7 +536,7 @@ CREATE TABLE IF NOT EXISTS workflow_turns (
     sealed_artifacts_json TEXT NOT NULL DEFAULT '[]',
     created_at          TEXT NOT NULL,
     updated_at          TEXT NOT NULL,
-    CHECK ((access='full') = (access_reason IS NOT NULL)),
+    CHECK ((access='full') = (access_note IS NOT NULL)),
     UNIQUE(run_id, turn_index)
 );
 """
@@ -625,7 +625,7 @@ CREATE INDEX IF NOT EXISTS workflow_routes_run_idx ON workflow_routes(run_id);
     # One row per actual execution turn. The turn input is written to disk by the
     # adapter; this row pins the service-owned identity, the bounded context and the
     # validated structured outcome. Access is the frozen permission of this
-    # turn; a full-access reason belongs only to that explicit choice.
+    # turn; a full-access note belongs only to that explicit choice.
     WORKFLOW_TURNS_DDL,
     """
 CREATE INDEX IF NOT EXISTS workflow_turns_run_idx ON workflow_turns(run_id, turn_index);
@@ -688,7 +688,7 @@ CREATE TABLE IF NOT EXISTS workflow_continuations (
     expected_revision INTEGER NOT NULL,
     input_text        TEXT NOT NULL,
     input_bytes       INTEGER NOT NULL,
-    reason            TEXT,
+    note              TEXT,
     helper_policy     TEXT NOT NULL DEFAULT 'keep' CHECK (helper_policy IN ('cancel','keep')),
     helper_outcomes_json TEXT NOT NULL DEFAULT '[]',
     workspace_manifest_json TEXT,
@@ -756,7 +756,7 @@ CREATE TABLE IF NOT EXISTS workflow_scope_versions (
     command_id          TEXT,
     actor_role          TEXT NOT NULL,
     actor_id            TEXT NOT NULL,
-    reason              TEXT,
+    note                TEXT,
     write_scope_json    TEXT NOT NULL,
     manifest_sha256     TEXT,
     stopped_evidence_json TEXT NOT NULL,
@@ -794,7 +794,7 @@ CREATE TABLE IF NOT EXISTS workflow_workspace_conflicts (
     output_tree             TEXT,
     actor_role              TEXT,
     actor_id                TEXT,
-    reason                  TEXT,
+    note                    TEXT,
     command_id              TEXT,
     delivery_json           TEXT,
     created_at              TEXT NOT NULL,
@@ -832,7 +832,7 @@ CREATE TABLE IF NOT EXISTS workflow_integrations (
     before_tree           TEXT,
     after_tree            TEXT,
     verification_json     TEXT NOT NULL,
-    reason                TEXT,
+    note                  TEXT,
     command_id            TEXT,
     actor_role            TEXT NOT NULL,
     actor_id              TEXT NOT NULL,
@@ -987,7 +987,9 @@ CREATE TABLE IF NOT EXISTS workflow_host_conclusions (
     run_revision     INTEGER NOT NULL,
     owner_generation INTEGER NOT NULL,
     execution_status TEXT NOT NULL CHECK (execution_status IN ('failed','cancelled','delivered')),
-    note             TEXT NOT NULL,
+    note             TEXT,
+    reason_code      TEXT,
+    reason_params_json TEXT,
     evidence_json    TEXT NOT NULL DEFAULT '{"references":[]}',
     artifact_id      TEXT REFERENCES workflow_artifacts(artifact_id) ON DELETE RESTRICT,
     integration_id   TEXT REFERENCES workflow_integrations(integration_id) ON DELETE RESTRICT,
@@ -995,7 +997,10 @@ CREATE TABLE IF NOT EXISTS workflow_host_conclusions (
     actor_id         TEXT NOT NULL,
     command_id       TEXT NOT NULL UNIQUE,
     created_at       TEXT NOT NULL,
-    CHECK (actor_role IN ('host','lead','console','service','workflow','bridge'))
+    CHECK (actor_role IN ('host','lead','console','service','workflow','bridge')),
+    CHECK ((note IS NOT NULL AND reason_code IS NULL AND reason_params_json IS NULL)
+        OR (note IS NULL AND reason_code IS NOT NULL AND reason_params_json IS NOT NULL
+            AND json_valid(reason_params_json) AND json_type(reason_params_json)='object'))
 );
 """
 HOST_CONCLUSION_INDEX = "CREATE UNIQUE INDEX IF NOT EXISTS workflow_host_conclusions_run_idx ON workflow_host_conclusions(run_id)"

@@ -47,7 +47,7 @@ class WorkflowReceiptTests(WorkflowTestCase):
         }
         board.call("workflow_decide", decision_params)
         cancel_params = {"runId": submitted["runId"], "commandId": "deleted-cancel",
-                         "reason": "Close disposable work", **self.control(view)}
+                         "note": "Close disposable work", **self.control(view)}
         cancelled = board.call("workflow_cancel", cancel_params)
         board.call("workflow_conclude", {"runId": submitted["runId"],
                                          "note": "Reviewed the failure", **self.control(cancelled)})
@@ -58,7 +58,7 @@ class WorkflowReceiptTests(WorkflowTestCase):
             macro_task_deletion.delete(board.store, submitted["macroTaskId"], 1)
         expected = {"commandId": "deleted-decision", "deleted": True}
         self.assertEqual(board.call("workflow_decide", {**decision_params, "expectedRevision": 999}), expected)
-        self.assertEqual(board.call("workflow_cancel", {**cancel_params, "reason": "Different reason"}),
+        self.assertEqual(board.call("workflow_cancel", {**cancel_params, "note": "Different note"}),
                          {"commandId": "deleted-cancel", "deleted": True})
 
     def test_deleted_receipt_checks_identity_without_loading_response(self):
@@ -111,7 +111,7 @@ class WorkflowReceiptTests(WorkflowTestCase):
         self.controls[submitted["runId"]] = taken["control"]
         cancelled = board.call("workflow_cancel", {
             "runId": submitted["runId"], "commandId": "receipt-cancel",
-            "reason": "Host ended this run", **self.control(submitted),
+            "note": "Host ended this run", **self.control(submitted),
         })
         for kind, original, facts in (
             ("workflow.decide", decided, ("requestId", "decision")),
@@ -140,7 +140,7 @@ class WorkflowReceiptTests(WorkflowTestCase):
         delivered = board.call("workflow_get", {"runId": accepted_id})
         amended = board.store.workflow.scope_amend({
             "runId": accepted_id, "commandId": "receipt-scope", "expectedRevision": delivered["revision"],
-            "expectedScopeVersion": 1, "writeScope": ["docs"], "reason": "Authorize the next stage",
+            "expectedScopeVersion": 1, "writeScope": ["docs"], "note": "Authorize the next stage",
             **self.control(delivered),
         })
         accepted = self.accept_run(board, amended, keepCheckout=True)
@@ -217,11 +217,11 @@ class ResolutionReceiptTests(RealWorkspaceTestCase):
         view = self.view(board, submitted["runId"])
         conflict = view["workspaceConflicts"][0]
         partial = self.resolve(board, view, conflict, "restore", paths=["outside.txt"],
-                               reason="Restore one path")
+                               note="Restore one path")
         current = self.view(board, submitted["runId"])
         completed = self.resolve(board, current, current["workspaceConflicts"][0], "restore",
                                  paths=["tracked.txt"], fingerprint=partial["resolvedFingerprint"],
-                                 command_id="receipt-resolution-2", reason="Restore remaining path")
+                                 command_id="receipt-resolution-2", note="Restore remaining path")
         self.assertEqual(completed["resolutionState"], "restored")
         stored, rebuilt, latest = replay(board, "workflow.workspace_resolve", partial)
         self.assertEqual(rebuilt["resolutionState"], "open")
@@ -240,7 +240,7 @@ class ResolutionReceiptTests(RealWorkspaceTestCase):
         view = self.view(board, submitted["runId"])
         conflict = view["workspaceConflicts"][0]
         resolved = self.resolve(board, view, conflict, "restore", paths=["outside.txt", "tracked.txt"],
-                                command_id="receipt-native-restore", reason="restore refused paths")
+                                command_id="receipt-native-restore", note="restore refused paths")
         self.assertTrue(resolved["delivered"])
         target = self.verified_target(resolved["artifact"])
         request = {

@@ -294,7 +294,7 @@ class RealWorkerTurnTests(MicroTaskWorkerTestCase):
                 **BUDDY, "requestId": "launcher-private", "hostId": "host-1", "task": "run the mock turn",
                 "cwd": str(self.repo), "submissionToken": "l" * 32, "delegationAuthority": True,
                 "requiredCapabilities": ["launcher-private"],
-                "executionWorkspace": {"kind": "existing", "access": "full", "accessReason": "Lead tasks"},
+                "executionWorkspace": {"kind": "existing", "access": "full", "accessNote": "Lead tasks"},
             }), env=self.env())
             self.assertEqual(code, 0, submitted)
             with mock.patch.dict(execution_capabilities.ADAPTER_CAPABILITIES,

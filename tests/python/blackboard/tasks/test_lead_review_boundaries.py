@@ -38,7 +38,7 @@ class LeadReviewBoundaryTests(WorkflowTestCase):
             "workflow_reclaim": lambda child, lead: {},
             "workflow_scope_amend": lambda child, lead: {
                 "commandId": "host-amend-child", "expectedRevision": lead["revision"],
-                "writeScope": ["review.txt"], "expectedScopeVersion": 1, "reason": "Review scope",
+                "writeScope": ["review.txt"], "expectedScopeVersion": 1, 'note': "Review scope",
             },
         }
         board = self.board()

@@ -592,7 +592,7 @@ class MacroTaskReadTests(WorkflowTestCase):
         with board.store.db.write() as connection:
             connection.execute('UPDATE tasks SET expected_seconds=59 WHERE task_id=?', (run_id,))
         view = board.call('workflow_get', {'runId': run_id})
-        self.continue_run(board, view, reason='review the output again')
+        self.continue_run(board, view, note='review the output again')
         self.claim(board, claim_request_id='c2', run_id=run_id)
         timeline = board.call('macro_task_timeline', {'macroTaskId': f'run:{run_id}'})
         executions = [span for span in timeline['spans'] if span['kind'] == 'execution']
@@ -729,7 +729,7 @@ class MacroTaskReadTests(WorkflowTestCase):
         mine = [span for span in spans if span['runId'] == first['runId']]
         # The host wait is the whole open interval; no open queue span overlaps it.
         self.assertEqual([span['kind'] for span in mine if span['endAt'] is None], ['host'])
-        board.call('workflow_cancel', {'runId': first['runId'], 'reason': 'stop', **self.control(first)})
+        board.call('workflow_cancel', {'runId': first['runId'], 'note': 'stop', **self.control(first)})
         spans = board.call('macro_task_timeline', {'macroTaskId': first['macroTaskId']})['spans']
         wait = next(span for span in spans if span['runId'] == first['runId'] and span['kind'] == 'host')
         self.assertEqual(wait['state'], 'cancelled')

@@ -144,7 +144,7 @@ _PLAN_BRIEF = ("planId", "state", "eligible", "reasons", "path", "kind", "expire
 def _integration_brief(row: Any) -> dict:
     if not isinstance(row, dict):
         return row
-    brief = _pick(row, ("integrationId", "artifactId", "state", "strategy", "notRequired", "reason", "afterCommit"))
+    brief = _pick(row, ("integrationId", "artifactId", "state", "strategy", "notRequired", "note", "afterCommit"))
     target = row.get("target")
     if isinstance(target, dict):
         brief["target"] = _pick(target, ("path", "ref"))
@@ -212,7 +212,7 @@ def micro_task_brief(view: dict, *, turn_summary: bool = True) -> dict:
                 "continuationCount",
                 "resumeRecovery",
                 "access",
-                "accessReason",
+                "accessNote",
                 "buddy",
                 "buddyLocked",
                 "delegationAuthority",
@@ -345,7 +345,7 @@ _KNOWN_MICRO_TASK_FIELDS = frozenset(
         "workspace",
         "executionWorkspace",
         "access",
-        "accessReason",
+        "accessNote",
         "requestFingerprint",
         "buddy",
         "buddyRevision",

@@ -438,7 +438,7 @@ class RetiredRoutingInputWorkflowTests(WorkflowTestCase):
                 "expectedRevision": view["revision"], "input": "keep going", "helperPolicy": "keep",
                 "buddy": BUDDY, **self.control(view)})
         self.assertEqual(raised.exception.code, "INVALID_ARGUMENT")
-        updated = self.continue_run(board, view, buddy=BUDDY, reason="Host selected the installed buddy")
+        updated = self.continue_run(board, view, buddy=BUDDY, note="Host selected the installed buddy")
         self.assertEqual(updated["routing"]["source"], "host-override")
         self.assertNotIn("routingPreferences", updated["routing"])
         with board.store.db.read() as connection:

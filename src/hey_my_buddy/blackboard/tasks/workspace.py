@@ -589,7 +589,7 @@ def _pin(root, ref, commit):
 
 
 def _intent(intent):
-    allowed = {"kind", "cwd", "access", "accessReason", "base", "includeUntracked", "writeScope", "integrator", "targetRef"}
+    allowed = {"kind", "cwd", "access", "accessNote", "base", "includeUntracked", "writeScope", "integrator", "targetRef"}
     if not isinstance(intent, dict) or set(intent) - allowed:
         raise BoardError("INVALID_WORKSPACE", "Unknown executionWorkspace fields")
     if intent.get("kind") not in ("existing", "worktree") or intent.get("access") not in ("read", "write", "full"):
@@ -835,7 +835,7 @@ def _validate_manifest(manifest):
     fields = {"version", "workspaceId", "kind", "path", "checkoutRoot", "checkoutId", "repositoryId", "access",
               "baseCommit", "inputCommit", "inputTree", "writeScope", "integrator", "targetRef", "exclusionPolicy", "snapshot", "manifestSha256"}
     if isinstance(manifest, dict) and manifest.get("access") == "full":
-        fields.add("accessReason")
+        fields.add("accessNote")
     if not isinstance(manifest, dict) or set(manifest) != fields or type(manifest.get("version")) is not int or manifest["version"] not in (1, 2):
         raise BoardError("INVALID_WORKSPACE", "Invalid workspace manifest schema")
     expected = _sha(_json({key: value for key, value in manifest.items() if key != "manifestSha256"}))
@@ -1043,7 +1043,7 @@ def _prepare_locked(directory, workspace_id, request_id, intent, preparation=Non
                     "writeScope": intent["writeScope"], "integrator": intent["integrator"], "targetRef": intent["targetRef"],
                     "exclusionPolicy": dict(_EXCLUSION_POLICY), "snapshot": snapshot}
         if intent["access"] == "full":
-            manifest["accessReason"] = intent["accessReason"]
+            manifest["accessNote"] = intent["accessNote"]
         manifest["manifestSha256"] = _sha(_json(manifest))
         _write_once(directory / "manifest.json", _json(manifest))
         return manifest
@@ -1447,14 +1447,6 @@ def shared_stash_inventory(repository_path) -> dict:
             "totalCount": total}
 
 
-_STASH_CAUSE_NOTE = (
-    "Why a stash entry disappeared is unknown: the user or another session may have popped or"
-    " dropped it. Nothing was restored automatically and the turn is not judged failed on this"
-    " fact; review the recorded commit and description, then recover it with the recorded"
-    " git stash store command if it is wanted."
-)
-
-
 def shared_stash_comparison(start, seal) -> dict:
     """Compare two stash observations by complete entries.
 
@@ -1526,14 +1518,6 @@ def shared_stash_comparison(start, seal) -> dict:
         unproven = [direction for direction, provable in (("lost", lost_provable), ("new", new_provable))
                     if not provable]
         record["unprovenDirections"] = unproven
-        record["partialNote"] = (
-            "One observation was truncated to its bounded entry list, so "
-            + " and ".join(unproven)
-            + " entries beyond the observed window cannot be proven from these records; no such"
-            " disappearance or appearance is claimed."
-        )
-    if lost_entries:
-        record["causeNote"] = _STASH_CAUSE_NOTE
     return record
 
 
@@ -1712,7 +1696,7 @@ def _replay_record(directory, names, *, task_id, attempt_id, manifest):
     return None
 
 
-def _resolution_record(root, manifest, repository, directory, observation, *, task_id, attempt_id, action, actor, reason, conflict_fingerprint):
+def _resolution_record(root, manifest, repository, directory, observation, *, task_id, attempt_id, action, actor, note, conflict_fingerprint):
     workspace_id = manifest["workspaceId"]
     output_id = _sha(_json([task_id, attempt_id]))
     names = (f"resolve-{action}.json", f"resolve-{action}-pending.json")
@@ -1730,7 +1714,7 @@ def _resolution_record(root, manifest, repository, directory, observation, *, ta
     patch_data = _diff(repository, manifest["inputCommit"], commit)
     snapshot = _snapshot_record(manifest, observation, tree, entries, changed, excluded_changes, task_id, attempt_id, commit, patch_data)
     snapshot["adoptedPaths"] = adopted
-    record = {"version": 2, "kind": "resolution", "action": action, "actor": actor, "reason": reason,
+    record = {"version": 2, "kind": "resolution", "action": action, "actor": actor, "note": note,
               "conflictFingerprint": conflict_fingerprint, "workspaceId": workspace_id, "taskId": task_id,
               "attemptId": attempt_id, "manifestSha256": manifest["manifestSha256"],
               "baseCommit": manifest["baseCommit"], "inputCommit": manifest["inputCommit"], "commit": commit,
@@ -1747,7 +1731,7 @@ def _resolution_record(root, manifest, repository, directory, observation, *, ta
                           bindings=_RECORD_BINDINGS)
 
 
-def _abandoned_record(root, manifest, repository, directory, observation, *, task_id, attempt_id, actor, reason, conflict_fingerprint):
+def _abandoned_record(root, manifest, repository, directory, observation, *, task_id, attempt_id, actor, note, conflict_fingerprint):
     """Preserve the abandoned site as immutable evidence before returning input."""
     workspace_id = manifest["workspaceId"]
     output_id = _sha(_json([task_id, attempt_id]))
@@ -1771,7 +1755,7 @@ def _abandoned_record(root, manifest, repository, directory, observation, *, tas
     commit = _commit_tree(root, tree, manifest["inputCommit"], workspace_id + " abandoned " + output_id)
     patch_data = _diff(repository, manifest["inputCommit"], commit)
     snapshot = _snapshot_record(manifest, observation, tree, entries, changed, [], task_id, attempt_id, commit, patch_data)
-    record = {"version": 2, "kind": "abandoned-site", "action": "abandon", "actor": actor, "reason": reason,
+    record = {"version": 2, "kind": "abandoned-site", "action": "abandon", "actor": actor, "note": note,
               "conflictFingerprint": conflict_fingerprint, "workspaceId": workspace_id, "taskId": task_id,
               "attemptId": attempt_id, "manifestSha256": manifest["manifestSha256"],
               "baseCommit": manifest["baseCommit"], "inputCommit": manifest["inputCommit"], "commit": commit,
@@ -1799,7 +1783,7 @@ def _resolution_result(action, state, artifact, resolved, preserved, remaining, 
     }
 
 
-def resolve(state_dir, manifest: dict, *, task_id: str, attempt_id: str, action: str, paths, observed_fingerprint: str, reason: str = "", actor: dict | None = None):
+def resolve(state_dir, manifest: dict, *, task_id: str, attempt_id: str, action: str, paths, observed_fingerprint: str, note: str = "", actor: dict | None = None):
     """Mechanically settle one recorded out-of-scope failure site.
 
     ``restore`` returns the selected paths to their authorized content while
@@ -1855,7 +1839,7 @@ def resolve(state_dir, manifest: dict, *, task_id: str, attempt_id: str, action:
                                      recordedFingerprint=records[0]["observedFingerprint"])
                 record = _resolution_record(root, manifest, repository, directory, observation,
                                             task_id=task_id, attempt_id=attempt_id, action="adopt", actor=actor,
-                                            reason=reason, conflict_fingerprint=records[0]["observedFingerprint"])
+                                            note=note, conflict_fingerprint=records[0]["observedFingerprint"])
                 return _resolution_result("adopt", "adopted", record, blocking, [], [],
                                           observation["fingerprint"], record["snapshot"]["observationSha256"])
             if action == "abandon":
@@ -1863,7 +1847,7 @@ def resolve(state_dir, manifest: dict, *, task_id: str, attempt_id: str, action:
                     raise BoardError("INVALID_WORKSPACE", "Abandon returns the whole site and takes no path selection")
                 evidence = _abandoned_record(root, manifest, repository, directory, observation,
                                              task_id=task_id, attempt_id=attempt_id, actor=actor,
-                                             reason=reason, conflict_fingerprint=records[0]["observedFingerprint"])
+                                             note=note, conflict_fingerprint=records[0]["observedFingerprint"])
                 reset, remaining = _reset_site(root, manifest, observation)
                 after = _stable_observation(root, manifest["snapshot"]["executionSelectors"])
                 remaining = sorted(set(remaining) | set(_blocking_paths(root, manifest, after)))
@@ -1898,7 +1882,7 @@ def resolve(state_dir, manifest: dict, *, task_id: str, attempt_id: str, action:
                                           observation["fingerprint"], after["fingerprint"])
             record = _resolution_record(root, manifest, repository, directory, after,
                                         task_id=task_id, attempt_id=attempt_id, action="restore", actor=actor,
-                                        reason=reason, conflict_fingerprint=records[0]["observedFingerprint"])
+                                        note=note, conflict_fingerprint=records[0]["observedFingerprint"])
             return _resolution_result("restore", "restored", record, selected, preserved, [],
                                       observation["fingerprint"], record["snapshot"]["observationSha256"])
 
@@ -2022,7 +2006,7 @@ def verify_sealed_output(original_input: dict, final_input: dict, artifact: dict
 def integration_verify(artifact: dict, *, original_input: dict, final_input: dict,
                        path: str, ref: str, strategy: str, before_commit: str | None = None,
                        repository_id: str | None = None, checkout_id: str | None = None,
-                       adjusted_paths=None, host_paths=None, reason: str | None = None,
+                       adjusted_paths=None, host_paths=None, note: str | None = None,
                        _confirm_adjustments: bool = False) -> dict:
     """Verify that one immutable artifact is actually present in a real target.
 
@@ -2048,8 +2032,8 @@ def integration_verify(artifact: dict, *, original_input: dict, final_input: dic
         unknown_adjustments = [value for value in adjustments if value not in changed]
         if unknown_adjustments:
             raise BoardError("INVALID_WORKSPACE", "Adjusted paths must be artifact output paths", paths=unknown_adjustments[:32])
-        if adjustments and not (isinstance(reason, str) and reason.strip()):
-            raise BoardError("INVALID_WORKSPACE", "An adjusted integration requires an explicit reason")
+        if adjustments and not (isinstance(note, str) and note.strip()):
+            raise BoardError("INVALID_WORKSPACE", "An adjusted integration requires an explicit note")
         host_paths = sorted({_relative(value) for value in (host_paths or [])})
         overlap = sorted(set(host_paths) & set(changed))
         if overlap:
@@ -2096,8 +2080,8 @@ def integration_verify(artifact: dict, *, original_input: dict, final_input: dic
                                   "targetMode": actual["mode"], "targetOid": actual["oid"]})
         if _confirm_adjustments:
             adjustments = sorted({item["path"] for item in differing} | set(missing))
-            if adjustments and not (isinstance(reason, str) and reason.strip()):
-                raise BoardError("INVALID_WORKSPACE", "An adjusted integration requires an explicit reason")
+            if adjustments and not (isinstance(note, str) and note.strip()):
+                raise BoardError("INVALID_WORKSPACE", "An adjusted integration requires an explicit note")
         unrecorded = sorted({item["path"] for item in differing} - set(adjustments)) + sorted(set(missing) - set(adjustments))
         verification = {
             "verified": bool((before is None or _is_ancestor(root, before, after)) and not unrecorded),
@@ -2113,7 +2097,7 @@ def integration_verify(artifact: dict, *, original_input: dict, final_input: dic
             "adjustments": adjustments[:OUTPUT_ENTRY_LIMIT],
             "hostPaths": host_paths,
             "unrecordedPaths": unrecorded[:OUTPUT_ENTRY_LIMIT],
-            "reason": reason,
+            "note": note,
         }
         return verification
 
@@ -2144,17 +2128,7 @@ def allocation_lock_directory(state_dir, workspace_id: str | None) -> Path | Non
 
 
 def _attached_branch_report(checkout_root, record) -> dict:
-    """The honest diagnosis of a correctly registered worktree on a branch.
-
-    Registration and the allocation's lock can both be exactly right while the
-    checkout's HEAD sits on a branch a Worker created or switched to, and that
-    state is not the disposable detached checkout cleanup removes. This names
-    the exact branch and the one safe way for a Host to make the checkout
-    detachable again — ``switch --detach`` moves only HEAD, never a branch, tag
-    or other reference — and states that the board itself never detaches,
-    deletes or moves any branch or reference. The decision whether the branch
-    survives belongs to the Host, not to this report.
-    """
+    """Identify an attached branch and the command to detach this checkout's HEAD."""
     ref = record.get("branch") if isinstance(record.get("branch"), str) else ""
     head = record.get("HEAD") if isinstance(record.get("HEAD"), str) else ""
     name = ref.removeprefix("refs/heads/")
@@ -2162,15 +2136,9 @@ def _attached_branch_report(checkout_root, record) -> dict:
         "branch": name or None,
         "ref": ref or None,
         "headCommit": head or None,
-        "note": "The checkout is registered and locked correctly, but its HEAD is attached to"
-                + (f" branch {name}" if name else " a branch")
-                + " instead of a detached commit, so it is not the disposable detached state"
-                " this cleanup removes.",
     }
     if head:
         report["detachCommand"] = f"git -C {_shell_quoted(str(checkout_root))} switch --detach {_shell_quoted(head)}"
-        report["retry"] = ("After detaching, plan or apply the cleanup again; the branch, its ref"
-                           " and its commits are untouched and stay the Host's to keep or delete.")
     return report
 
 

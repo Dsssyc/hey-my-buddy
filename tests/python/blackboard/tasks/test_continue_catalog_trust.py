@@ -51,7 +51,7 @@ class ContinueCatalogTrustTests(WorkflowTestCase):
             "runId": view["runId"], "commandId": command_id,
             "expectedRevision": view["revision"], "input": "continue with the explicit route",
             "helperPolicy": "keep", "buddy": buddy,
-            "reason": "Route the continuation through this explicit buddy",
+            'note': "Route the continuation through this explicit buddy",
             **self.control(view),
         })
 
@@ -187,7 +187,7 @@ class ContinueCatalogTrustTests(WorkflowTestCase):
                 self.continue_with(submitted, IDENTITY)
         error = rejected.exception
         self.assertEqual(error.code, "BUDDY_UNAVAILABLE")
-        self.assertEqual(error.details.get("reason"), "catalog-unavailable")
+        self.assertEqual(error.details.get("reason"), {"code": "catalog-unavailable", "params": {}})
         self.assertEqual(error.details.get("catalogReadAt"), self.clock.value)
         self.assertEqual(error.details.get("remedy"), catalog.CATALOG_REMEDY)
         self.assertNotIn("enabled", error.details, "User enablement is not the cause")
@@ -219,7 +219,7 @@ class ContinueCatalogTrustTests(WorkflowTestCase):
                 self.continue_with(submitted, IDENTITY)
         error = rejected.exception
         self.assertEqual(error.code, "BUDDY_UNAVAILABLE")
-        self.assertEqual(error.details.get("reason"), "catalog-unavailable",
+        self.assertEqual(error.details.get("reason"), {"code": "catalog-unavailable", "params": {}},
                          "The catalog cause leads when both causes hold")
         self.assertEqual(error.details.get("catalogReadAt"), self.clock.value)
         self.assertEqual(error.details.get("remedy"), catalog.CATALOG_REMEDY)
@@ -244,7 +244,7 @@ class ContinueCatalogTrustTests(WorkflowTestCase):
             self.continue_with(submitted, IDENTITY)
         gate = rejected.exception
         self.assertEqual(gate.code, "BUDDY_UNAVAILABLE")
-        self.assertEqual(gate.details.get("reason"), "not-enabled")
+        self.assertEqual(gate.details.get("reason"), {"code": "not-enabled", "params": {}})
         self.assertIn("enabled", gate.details, "The refusal states the enablement fact itself")
         self.assertIs(gate.details["enabled"], False)
         self.assertEqual(calls, [], "The operator pin admits validation without a native re-read")
@@ -260,7 +260,7 @@ class ContinueCatalogTrustTests(WorkflowTestCase):
             self.continue_with(submitted, IDENTITY)
         gate = disabled.exception
         self.assertEqual(gate.code, "BUDDY_UNAVAILABLE")
-        self.assertEqual(gate.details.get("reason"), "not-enabled")
+        self.assertEqual(gate.details.get("reason"), {"code": "not-enabled", "params": {}})
         self.assertIn("enabled", gate.details, "The user-gate refusal states the enablement fact itself")
         self.assertIs(gate.details["enabled"], False)
         self.assertEqual(gate.details.get("catalogReadAt"), read_at, "The refusal still names the catalog read time")
@@ -296,7 +296,7 @@ class ContinueCatalogTrustTests(WorkflowTestCase):
             self.continue_with(submitted, override)
         error = refused.exception
         self.assertEqual(calls, ["dsh"])
-        self.assertEqual(error.details.get("reason"), "not-enabled",
+        self.assertEqual(error.details.get("reason"), {"code": "not-enabled", "params": {}},
                          "The refreshed catalog admitted the route; only the user gate refuses")
         self.assertEqual(error.details.get("catalogReadAt"), self.clock.value,
                          "The refusal names the refreshed reading's time")

@@ -32,7 +32,7 @@ class InquirySettlementTests(BoardTestCase):
 
     def test_cancelled_before_process_creation_settles_on_release(self):
         board, client, task, attempt = self.claimed()
-        board.store.task_cancel({"runId": task["taskId"], "reason": "service stop"}, initiator="service")
+        board.store.task_cancel({"runId": task["taskId"], "note": "service stop"}, initiator="service")
         self.assertEqual(client.get_message("q-pending", runId=task["taskId"])["state"], "queued")
         board.store.release_execution(attempt["attemptId"])
         self.assertEqual(client.get(runId=task["taskId"])["state"], "cancelled")

@@ -7,9 +7,9 @@ from blackboard.tasks.test_workflow import WorkflowTestCase
 
 
 class MicroTaskServiceStopTests(WorkflowTestCase):
-    def stop_daemon(self, reason="test stop"):
+    def stop_daemon(self, note="test stop"):
         daemon = Daemon(self.directory)
-        return daemon.on_stop({"reason": reason, "drainSeconds": 0})
+        return daemon.on_stop({"note": note, "drainSeconds": 0})
 
     def test_queued_micro_task_is_fenced_but_passive_host_request_is_preserved(self):
         board = self.board()

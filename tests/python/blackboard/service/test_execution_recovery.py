@@ -65,7 +65,7 @@ class PrivateExecutionRecoveryTests(BoardTestCase):
     def restart(self, daemon):
         endpoint = _read_endpoint(self.directory)
         self.assertIsNotNone(endpoint)
-        reply = _request(endpoint, "service_control", {"action": "restart", "reason": "private recovery test"},
+        reply = _request(endpoint, "service_control", {"action": "restart", 'note': "private recovery test"},
                          state_dir=self.directory)
         self.assertTrue(reply["restarting"], reply)
         self.assertTrue(reply["executionsPreserved"], reply)

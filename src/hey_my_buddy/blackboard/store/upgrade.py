@@ -3,10 +3,13 @@ from __future__ import annotations
 
 from contextlib import closing
 from pathlib import Path
+import hashlib
 import json
+import re
 import sqlite3
 
-from .db import COMMAND_DELETION_COLUMN, MACRO_TASK_DELETIONS_DDL, WORKFLOW_REQUESTS_DDL, EVALUATION_TABLES, canonical_json
+from .db import (COMMAND_DELETION_COLUMN, HOST_CONCLUSION_INDEX, HOST_CONCLUSION_TABLE,
+                 MACRO_TASK_DELETIONS_DDL, WORKFLOW_REQUESTS_DDL, EVALUATION_TABLES, canonical_json)
 from ...errors import BoardError
 from ...protocol.reasons import reason as make_reason
 
@@ -461,6 +464,145 @@ def _upgrade_workflow_requests(connection: sqlite3.Connection) -> None:
         connection.execute('UPDATE events SET payload_json=? WHERE seq=?', (canonical_json(payload), seq))
 
 
+_DEFAULT_NOTES = frozenset({
+    'original submission', 'helper admission', 'owned-micro-task-boundary',
+    'Host cancelled', 'User stopped macro task', 'manual continuation cancelled live helpers',
+    'Owning Micro task cancelled', 'Owned micro task stopped because its Lead is being concluded',
+})
+_NOTE_EVENTS = frozenset({
+    'workflow.request_declined', 'workflow.review_rejected', 'workflow.buddy_overridden',
+    'workflow.cancelled', 'workflow.helper_cancelled', 'workflow.lead_task_cancelled',
+})
+_AUTO_CONCLUSION = re.compile(r'^Concluded because Lead micro task (.+) received a Host conclusion$')
+
+
+def _note(value: str | None) -> str | None:
+    return None if value in _DEFAULT_NOTES else value
+
+
+def _upgrade_notes(connection: sqlite3.Connection) -> None:
+    """Change mutable Host and user annotations without rewriting frozen evidence."""
+    for table, old, new in (
+        ('workflow_turns', 'access_reason', 'access_note'),
+        ('workflow_continuations', 'reason', 'note'),
+        ('workflow_scope_versions', 'reason', 'note'),
+        ('workflow_workspace_conflicts', 'reason', 'note'),
+        ('workflow_integrations', 'reason', 'note'),
+    ):
+        connection.execute(f'ALTER TABLE {table} RENAME COLUMN {old} TO {new}')
+        if table != 'workflow_turns':
+            connection.execute(f'UPDATE {table} SET note=NULL WHERE note IN ('
+                               + ','.join('?' for _ in _DEFAULT_NOTES) + ')', tuple(_DEFAULT_NOTES))
+    # The initial scope and Lead wake-up values describe facts already held by
+    # their kind/evidence. They must not turn into authored notes.
+    connection.execute("UPDATE workflow_continuations SET note=NULL WHERE kind='lead-wakeup'")
+    connection.execute("UPDATE workflow_scope_versions SET note=NULL WHERE scope_version=1"
+                       " AND json_extract(stopped_evidence_json,'$.kind') IN ('initial','helper')"
+                       " AND note IN ('original submission','helper admission')")
+
+    for run_id, raw in connection.execute('SELECT run_id,execution_workspace_json FROM workflow_runs').fetchall():
+        workspace = json.loads(raw)
+        if 'accessReason' in workspace:
+            workspace['accessNote'] = workspace.pop('accessReason')
+            connection.execute('UPDATE workflow_runs SET execution_workspace_json=? WHERE run_id=?',
+                               (canonical_json(workspace), run_id))
+    for request_id, raw in connection.execute(
+        'SELECT request_id,decision_json FROM workflow_requests WHERE decision_json IS NOT NULL'
+    ).fetchall():
+        decision = json.loads(raw)
+        if 'reason' in decision:
+            decision['note'] = _note(decision.pop('reason'))
+            connection.execute('UPDATE workflow_requests SET decision_json=? WHERE request_id=?',
+                               (canonical_json(decision), request_id))
+    for seq, kind, raw in connection.execute('SELECT seq,kind,payload_json FROM events').fetchall():
+        if kind not in _NOTE_EVENTS and kind != 'workflow.access_changed':
+            continue
+        payload = json.loads(raw)
+        changed = False
+        if kind in _NOTE_EVENTS and 'reason' in payload:
+            value = _note(payload.pop('reason'))
+            if value is not None:
+                payload['note'] = value
+            changed = True
+        if kind == 'workflow.access_changed' and 'accessReason' in payload:
+            payload['accessNote'] = payload.pop('accessReason')
+            changed = True
+        if changed:
+            connection.execute('UPDATE events SET payload_json=? WHERE seq=?', (canonical_json(payload), seq))
+
+
+def _auto_conclusion_lead(connection: sqlite3.Connection, row: dict, lead_run_id: str) -> str:
+    """Prove the generated child conclusion from its parent receipt and event pair."""
+    link = connection.execute('SELECT lead_run_id FROM workflow_lead_tasks WHERE owned_run_id=?',
+                              (row['run_id'],)).fetchone()
+    parent = connection.execute('SELECT * FROM workflow_host_conclusions WHERE run_id=?',
+                                (lead_run_id,)).fetchone()
+    if link is None or link[0] != lead_run_id or parent is None:
+        raise BoardError('UPGRADE_INVALID_BOARD', 'Generated conclusion has no proved Lead parent')
+    parent = dict(parent)
+    if (row['created_at'] != parent['created_at'] or row['actor_role'] != parent['actor_role']
+            or row['actor_id'] != parent['actor_id']):
+        raise BoardError('UPGRADE_INVALID_BOARD', 'Generated conclusion does not share its parent operation')
+    receipt = connection.execute('SELECT kind,response_json FROM commands WHERE command_id=?',
+                                 (parent['command_id'],)).fetchone()
+    if receipt is None or receipt[0] != 'workflow.conclude':
+        raise BoardError('UPGRADE_INVALID_BOARD', 'Lead parent has no conclusion receipt')
+    response = json.loads(receipt[1])
+    if response.get('conclusionId') != parent['conclusion_id'] or response.get('runId') != lead_run_id:
+        raise BoardError('UPGRADE_INVALID_BOARD', 'Lead parent receipt has a different conclusion')
+    events = {}
+    for seq, task_id, raw in connection.execute(
+        "SELECT seq,task_id,payload_json FROM events WHERE kind='workflow.host_concluded'"
+        ' AND task_id IN (?,?)', (row['run_id'], lead_run_id)
+    ):
+        identifier = json.loads(raw).get('conclusionId')
+        if identifier in (row['conclusion_id'], parent['conclusion_id']):
+            events[identifier] = (seq, task_id)
+    if (events.get(row['conclusion_id'], (None, None))[1] != row['run_id']
+            or events.get(parent['conclusion_id'], (None, None))[1] != lead_run_id
+            or events[row['conclusion_id']][0] >= events[parent['conclusion_id']][0]):
+        raise BoardError('UPGRADE_INVALID_BOARD', 'Generated conclusion has no ordered parent event')
+    # The old command hashes include the original notes. A matching parent
+    # command reveals the actual controlling run without guessing from actor ID.
+    candidates = [item[0] for item in connection.execute('SELECT run_id FROM workflow_runs')]
+    owners = []
+    for owner in candidates:
+        key = {'runId': owner, 'targetRunId': lead_run_id, 'note': parent['note'],
+               'attemptId': parent['attempt_id']}
+        digest = hashlib.sha256(canonical_json(key).encode()).hexdigest()[:32]
+        if parent['command_id'] == 'conclude-' + digest:
+            owners.append(owner)
+    if len(owners) != 1:
+        raise BoardError('UPGRADE_INVALID_BOARD', 'Lead parent command identity is ambiguous')
+    key = {'runId': owners[0], 'targetRunId': row['run_id'], 'note': row['note'],
+           'attemptId': row['attempt_id']}
+    digest = hashlib.sha256(canonical_json(key).encode()).hexdigest()[:32]
+    if row['command_id'] != 'conclude-' + digest:
+        raise BoardError('UPGRADE_INVALID_BOARD', 'Generated conclusion command does not match parent')
+    return lead_run_id
+
+
+def _upgrade_host_conclusions(connection: sqlite3.Connection) -> None:
+    rows = [dict(row) for row in connection.execute('SELECT * FROM workflow_host_conclusions')]
+    connection.execute(HOST_CONCLUSION_TABLE.replace('workflow_host_conclusions (',
+                                                 'workflow_host_conclusions_upgrade ('))
+    for row in rows:
+        match = _AUTO_CONCLUSION.fullmatch(row['note'])
+        if match:
+            lead_run_id = _auto_conclusion_lead(connection, row, match[1])
+            row['note'] = None
+            row['reason_code'] = 'lead.owned-concluded'
+            row['reason_params_json'] = canonical_json({'leadRunId': lead_run_id})
+        else:
+            row['reason_code'] = row['reason_params_json'] = None
+        columns = list(row)
+        connection.execute('INSERT INTO workflow_host_conclusions_upgrade (' + ','.join(columns) +
+                           ') VALUES (' + ','.join('?' for _ in columns) + ')', [row[key] for key in columns])
+    connection.execute('DROP TABLE workflow_host_conclusions')
+    connection.execute('ALTER TABLE workflow_host_conclusions_upgrade RENAME TO workflow_host_conclusions')
+    connection.execute(HOST_CONCLUSION_INDEX)
+
+
 def upgrade_schema_24_to_25(state: Path) -> None:
     """Convert a stopped schema-24 board after its exact rollback backup exists."""
     with closing(sqlite3.connect(Path(state) / 'board.sqlite3')) as connection:
@@ -476,6 +618,8 @@ def upgrade_schema_24_to_25(state: Path) -> None:
             connection.execute('ALTER TABLE commands ADD COLUMN ' + COMMAND_DELETION_COLUMN)
             _upgrade_catalog_and_health(connection)
             _upgrade_workflow_requests(connection)
+            _upgrade_notes(connection)
+            _upgrade_host_conclusions(connection)
             connection.execute("UPDATE meta SET value='25' WHERE key='schema_version'")
             if connection.execute('PRAGMA foreign_key_check').fetchall():
                 raise BoardError('UPGRADE_INVALID_BOARD', 'The upgraded board has foreign key violations')

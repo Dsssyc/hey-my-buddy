@@ -44,7 +44,6 @@ RESOURCE_ID_PATTERN = re.compile(r"^[A-Za-z0-9._:/@+-]{1,512}$")
 
 # -- micro-task workflow bounds ------------------------------------------------
 MAX_WORKFLOW_INPUT_BYTES = 64 * 1024
-MAX_WORKFLOW_REASON_BYTES = 4000
 MAX_WORKFLOW_HELPERS = 8
 MAX_WORKFLOW_ARTIFACTS = 32
 MAX_CONTROL_TOKEN = 256
@@ -327,7 +326,7 @@ def reject_untrusted_override(params: dict) -> None:
 
 
 def normalize_access(intent: dict) -> tuple[str, str | None]:
-    """Validate the Worker access choice and its optional full-access reason."""
+    """Validate the Worker access choice and its full-access note."""
     access = optional_string(intent, "access") or "write"
     if "access" in intent and intent["access"] is None:
         raise BoardError("INVALID_ARGUMENT", "executionWorkspace.access cannot be null",
@@ -336,15 +335,15 @@ def normalize_access(intent: dict) -> tuple[str, str | None]:
         raise BoardError("INVALID_ARGUMENT", "executionWorkspace.access must be 'read', 'write' or 'full'",
                          field="executionWorkspace.access")
     if access == "full":
-        reason = required_string(intent, "accessReason", max_length=1000)
-        raw_reason = intent["accessReason"]
-        if raw_reason.splitlines() != [raw_reason]:
-            raise BoardError("INVALID_ARGUMENT", "executionWorkspace.accessReason must be a single line",
-                             field="executionWorkspace.accessReason")
-        return access, reason
-    if "accessReason" in intent:
-        raise BoardError("INVALID_ARGUMENT", "executionWorkspace.accessReason requires full access",
-                         field="executionWorkspace.accessReason")
+        note = required_string(intent, "accessNote", max_length=1000)
+        raw_note = intent["accessNote"]
+        if raw_note.splitlines() != [raw_note]:
+            raise BoardError("INVALID_ARGUMENT", "executionWorkspace.accessNote must be a single line",
+                             field="executionWorkspace.accessNote")
+        return access, note
+    if "accessNote" in intent:
+        raise BoardError("INVALID_ARGUMENT", "executionWorkspace.accessNote requires full access",
+                         field="executionWorkspace.accessNote")
     return access, None
 
 
@@ -372,17 +371,17 @@ def normalize_execution_workspace(params: dict) -> dict:
             )
     reject_unknown(
         intent,
-        {"kind", "access", "accessReason", "base", "includeUntracked", "writeScope", "targetRef"},
+        {"kind", "access", "accessNote", "base", "includeUntracked", "writeScope", "targetRef"},
         "executionWorkspace",
     )
     kind = optional_string(intent, "kind")
     if kind not in ("existing", "worktree"):
         raise BoardError("INVALID_ARGUMENT", "executionWorkspace.kind must explicitly be 'existing' or 'worktree'",
                          field="executionWorkspace.kind")
-    access, access_reason = normalize_access(intent)
+    access, access_note = normalize_access(intent)
     normalized: dict[str, Any] = {"kind": kind, "access": access}
-    if access_reason is not None:
-        normalized["accessReason"] = access_reason
+    if access_note is not None:
+        normalized["accessNote"] = access_note
     base = intent.get("base")
     if base is None:
         # The documented default: the current working tree, with ref omitted (a

@@ -103,7 +103,7 @@ examples:
   Input: one JSON object as the positional argument, --params-file PATH or "-" (stdin); the three are mutually exclusive, decoded as UTF-8 and never re-interpreted by a shell. `hey-my-buddy help [METHOD]` prints the methods or one method's validated parameters and starts no service.
   hey-my-buddy submit '{"requestId":"fix-123","hostId":"host-1","task":"...","cwd":"/abs/path","executionWorkspace":{"kind":"existing","access":"write"}}'
       Admit one micro task in an explicit executionWorkspace: kind existing|worktree,
-      access read|write|full (default write; full requires accessReason), base {kind:commit|working-tree,ref?}, includeUntracked,
+      access read|write|full (default write; full requires accessNote), base {kind:commit|working-tree,ref?}, includeUntracked,
       writeScope and targetRef; the source cwd and the integrator are derived from
       the top-level cwd and the submitting Host.
       Routing: a complete explicit harness/provider/model/effort quadruple is validated
@@ -122,10 +122,10 @@ examples:
 
   hey-my-buddy decide '{"runId":"<runId>","requestId":"req-1","commandId":"cmd-1","expectedRevision":1,"decision":"approve","helpers":[],"controlFile":"/path/from-submit"}'
   hey-my-buddy continue '{"runId":"<runId>","commandId":"cmd-2","expectedRevision":2,"input":"...","helperPolicy":"keep","controlFile":"..."}'
-      continue may set access and accessReason for the next turn; omission keeps the current choice.
+      continue may set access and accessNote for the next turn; omission keeps the current choice.
   hey-my-buddy takeover '{"runId":"<runId>","commandId":"cmd-3","expectedOwnerGeneration":1,"newHostId":"host-2","controlFile":"..."}'
-  hey-my-buddy cancel '{"runId":"<runId>","commandId":"cmd-4","reason":"...","controlFile":"..."}'
-  hey-my-buddy scope-amend '{"runId":"<runId>","commandId":"cmd-5","expectedRevision":3,"expectedScopeVersion":1,"writeScope":["src"],"reason":"...","controlFile":"..."}'
+  hey-my-buddy cancel '{"runId":"<runId>","commandId":"cmd-4","note":"...","controlFile":"..."}'
+  hey-my-buddy scope-amend '{"runId":"<runId>","commandId":"cmd-5","expectedRevision":3,"expectedScopeVersion":1,"writeScope":["src"],"note":"...","controlFile":"..."}'
   hey-my-buddy conclude '{"runId":"<runId>","note":"failed after the schema change; partial work retained","controlFile":"..."}'   hey-my-buddy reclaim '{"runId":"<runId>","controlFile":"..."}'
       conclude ends a failed, cancelled or delivered-but-unaccepted micro task: unsealed
       managed changes are sealed as an independent Host partial output, the
@@ -139,7 +139,7 @@ examples:
   hey-my-buddy accept '{"runId":"<runId>","artifactId":"...","note":"no repository target needed","notRequired":"the artifact needs no repository target","controlFile":"..."}'
       Accept one delivered artifact. The service compares the artifact with the
       target itself; differing paths are refused with their names first, and your
-      own adjustments are confirmed with "adjusted":true (the note is the reason).
+      own adjustments are confirmed with "adjusted":true and a note.
       Optional hostPaths with beforeCommit verify real Host additions; the checkout
       is reclaimed afterwards unless "keepCheckout":true.
 
@@ -150,8 +150,8 @@ examples:
       Cancel a micro task with cancel, or an execution record with execution-cancel.
 
   Execution records created by the workflow or internal decision infrastructure:
-  hey-my-buddy execution-cancel '{"runId":"<runId>","reason":"..."}'
-  hey-my-buddy execution-retry '{"runId":"<runId>","reason":"..."}'
+  hey-my-buddy execution-cancel '{"runId":"<runId>","note":"..."}'
+  hey-my-buddy execution-retry '{"runId":"<runId>","note":"..."}'
   hey-my-buddy execution-acknowledge '{"runId":"<runId>","note":"...","verdict":"accepted"}'
       Explicit task operations, separate from the micro task lifecycle. A micro-task
       run's execution record additionally needs its Host control.

@@ -105,7 +105,7 @@ class WorkflowDeletionCommandTests(WorkflowTestCase, ConsoleTestCase):
         amended = board.store.workflow.scope_amend({
             "runId": first["runId"], "commandId": "commands-scope",
             "expectedRevision": delivered["revision"], "expectedScopeVersion": 1,
-            "writeScope": ["docs"], "reason": "Authorize reviewed follow-up",
+            "writeScope": ["docs"], "note": "Authorize reviewed follow-up",
             **self.control(delivered),
         })
         accepted = self.accept_run(board, amended, keepCheckout=True)
@@ -167,7 +167,7 @@ class WorkspaceDeletionCommandTests(RealWorkspaceTestCase):
         view = self.view(board, submitted["runId"])
         conflict = view["workspaceConflicts"][0]
         resolved = self.resolve(board, view, conflict, "restore", paths=["outside.txt", "tracked.txt"],
-                                command_id="commands-resolve", reason="Restore refused paths")
+                                command_id="commands-resolve", note="Restore refused paths")
         board.call("workflow_cancel", {"runId": submitted["runId"],
                                        "commandId": "commands-resolved-cancel", **self.control(resolved)})
         assert_deleted_receipts(self, board, "run:" + submitted["runId"],

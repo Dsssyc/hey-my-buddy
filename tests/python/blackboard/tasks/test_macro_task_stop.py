@@ -15,10 +15,10 @@ class MacroTaskStopTests(WorkflowTestCase, ConsoleTestCase):
     owned = lead_helpers.LeadOwnedTests.owned
     finish_owned = lead_helpers.LeadOwnedTests.finish_owned
 
-    def stop(self, browser, macro_task_id, command_id, *, reason=None):
+    def stop(self, browser, macro_task_id, command_id, *, note=None):
         params = {'macroTaskId': macro_task_id, 'commandId': command_id}
-        if reason is not None:
-            params['reason'] = reason
+        if note is not None:
+            params['note'] = note
         status, _, raw = browser.command('macro_task_stop', params, csrf=browser.bootstrap()['csrfToken'])
         self.assertEqual(status, 200, raw)
         result = json.loads(raw)['result']
@@ -51,7 +51,7 @@ class MacroTaskStopTests(WorkflowTestCase, ConsoleTestCase):
         self.assertTrue(replay['duplicate'])
         self.assertEqual({**replay, 'duplicate': False}, result)
         self.assertEqual(board.call('workflow_get', {'runId': later['runId']})['state'], 'executing')
-        self.assertEqual(browser.command('macro_task_stop', {**params, 'reason': 'changed'}, csrf=browser.bootstrap()['csrfToken'])[0], 409)
+        self.assertEqual(browser.command('macro_task_stop', {**params, 'note': 'changed'}, csrf=browser.bootstrap()['csrfToken'])[0], 409)
 
     def test_atomic_failure_and_console_authority(self):
         board = self.board()
@@ -222,7 +222,7 @@ class MacroTaskStopTests(WorkflowTestCase, ConsoleTestCase):
         self.assertEqual(before['macroTask']['counts']['stoppableRoots'], 2)
         self.assertEqual(before['macroTask']['counts']['awaitingHost'], 1)
         self.assertEqual(before['totals']['allRows'], 4)
-        result = self.stop(browser, queued['macroTaskId'], 'state-scope', reason='Stop selected active work')
+        result = self.stop(browser, queued['macroTaskId'], 'state-scope', note='Stop selected active work')
         self.assertEqual({entry['runId']: (entry['state'], entry['stopped']) for entry in result['results']}, {
             queued['runId']: ('cancelled', True), running['runId']: ('cancelled', True),
             awaiting['runId']: ('awaiting-host', False), already_cancelled['runId']: ('cancelled', False),
@@ -311,7 +311,7 @@ class MacroTaskStopTests(WorkflowTestCase, ConsoleTestCase):
         counts = board.call('macro_task_timeline', {'macroTaskId': lead['macroTaskId'], 'limit': 1})['macroTask']['counts']
         self.assertEqual(counts['awaitingHost'], 1)
         self.assertEqual(counts['stoppableHelpers'], 1)
-        result = self.stop(browser, lead['macroTaskId'], 'stop-preserved-lead', reason='Stop remaining owned work')
+        result = self.stop(browser, lead['macroTaskId'], 'stop-preserved-lead', note='Stop remaining owned work')
         self.assertEqual({entry['runId']: (entry['state'], entry['stopped']) for entry in result['results']}, {
             lead['runId']: ('awaiting-host', False), owned['runId']: ('cancelled', True),
             helper_id: ('cancelled', True),
@@ -330,7 +330,7 @@ class MacroTaskStopTests(WorkflowTestCase, ConsoleTestCase):
         self.assertEqual(settled['counts']['turns'], before['counts']['turns'])
         late = self.submit(board, kind='worktree', request_id='late-root', cwd=str(self.workdir('lead')),
                            macroTaskId=lead['macroTaskId'])
-        replay = self.stop(browser, lead['macroTaskId'], 'stop-preserved-lead', reason='Stop remaining owned work')
+        replay = self.stop(browser, lead['macroTaskId'], 'stop-preserved-lead', note='Stop remaining owned work')
         self.assertTrue(replay['duplicate'])
         self.assertEqual({**replay, 'duplicate': False}, result)
         self.assertEqual(board.call('workflow_get', {'runId': late['runId']})['state'], 'executing')
@@ -343,10 +343,10 @@ class MacroTaskStopTests(WorkflowTestCase, ConsoleTestCase):
         owned = self.owned(board, claim, 'attributed-owned')
         _, browser = self.open_console(board)
         session_id = browser.bootstrap()['consoleSession']['id']
-        reason = 'Stopped from the task console'
-        result = self.stop(browser, lead['macroTaskId'], 'attributed-stop', reason=reason)
+        note = 'Stopped from the task console'
+        result = self.stop(browser, lead['macroTaskId'], 'attributed-stop', note=note)
         self.assertEqual(len(result['results']), 2)
-        expected = {'actor': {'role': 'console', 'id': session_id}, 'reason': reason}
+        expected = {'actor': {'role': 'console', 'id': session_id}, 'note': note}
         for run in (lead, owned):
             view = board.call('workflow_get', {'runId': run['runId']})
             task = board.call('task_get', {'runId': run['runId']})['task']

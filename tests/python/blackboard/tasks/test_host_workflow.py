@@ -328,7 +328,7 @@ class HostCompletionTests(WorkflowTestCase):
         self.register(board)
         self.finish_turn(board, self.claim(board))
         delivered = board.call("workflow_get", {"runId": submitted["runId"]})
-        continued = self.continue_run(board, delivered, input="Address review", reason="Needs work")
+        continued = self.continue_run(board, delivered, input="Address review", note="Needs work")
         self.assertIsNotNone(continued["task"]["reviewRejectedAt"])
         self.assertEqual(continued["task"]["reviewRejectionNote"], "Needs work")
         for key in ("acceptedAt", "acceptanceNote", "acceptanceVerdict"):

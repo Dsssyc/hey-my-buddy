@@ -113,7 +113,7 @@ class ScopeRecoveryTestCase(RealWorkspaceTestCase):
         return board.call("workflow_get", {"runId": run_id, **extra})
 
     def resolve(self, board, view, conflict, action, *, paths=None, fingerprint=None, command_id="resolve-1",
-                reason=None):
+                note=None):
         params = {
             "runId": view["runId"],
             "commandId": command_id,
@@ -125,8 +125,8 @@ class ScopeRecoveryTestCase(RealWorkspaceTestCase):
         }
         if paths is not None:
             params["paths"] = paths
-        if reason is not None:
-            params["reason"] = reason
+        if note is not None:
+            params["note"] = note
         return board.store.workflow.workspace_resolve(params)
 
     def continue_run(self, board, view, *, command_id="continue-1"):
@@ -136,10 +136,10 @@ class ScopeRecoveryTestCase(RealWorkspaceTestCase):
         })
 
     def amend(self, board, view, *, command_id="amend-1", expected_scope=1, write_scope=("docs", "src"),
-              reason="the next stage may touch docs"):
+              note="the next stage may touch docs"):
         return board.store.workflow.scope_amend({
             "runId": view["runId"], "commandId": command_id, "expectedRevision": view["revision"],
-            "expectedScopeVersion": expected_scope, "writeScope": list(write_scope), "reason": reason,
+            "expectedScopeVersion": expected_scope, "writeScope": list(write_scope), 'note': reason,
             **self.control(view),
         })
 
@@ -286,7 +286,7 @@ class ScopeRecoveryTestCase(RealWorkspaceTestCase):
         view = self.view(board, run_id)
         conflict = view["workspaceConflicts"][0]
         resolved = self.resolve(board, view, conflict, "restore",
-                                paths=["outside.txt", "tracked.txt"], reason="restore the authorized state")
+                                paths=["outside.txt", "tracked.txt"], note="restore the authorized state")
         self.assertTrue(resolved["resolved"])
         self.assertEqual(resolved["resolutionState"], "restored")
         self.assertEqual(resolved["resolvedPaths"], ["outside.txt", "tracked.txt"])
@@ -344,12 +344,12 @@ class ScopeRecoveryTestCase(RealWorkspaceTestCase):
         view = self.view(board, run_id)
         conflict = view["workspaceConflicts"][0]
         first = self.resolve(board, view, conflict, "restore", paths=["outside.txt", "tracked.txt"],
-                             reason="restore once")
+                             note="restore once")
         # The same decision replays through the durable conflict record.
         replay = board.store.workflow.workspace_resolve({
             "runId": run_id, "commandId": "resolve-replay", "expectedRevision": first["revision"],
             "conflictId": conflict["conflictId"], "action": "restore", "paths": ["outside.txt", "tracked.txt"],
-            "observedFingerprint": first["resolvedFingerprint"], "reason": "restore once",
+            "observedFingerprint": first["resolvedFingerprint"], 'note': "restore once",
             **self.control(first),
         })
         self.assertTrue(replay["duplicate"])
@@ -374,7 +374,7 @@ class ScopeRecoveryTestCase(RealWorkspaceTestCase):
         run_id = submitted["runId"]
         view = self.view(board, run_id)
         conflict = view["workspaceConflicts"][0]
-        partial = self.resolve(board, view, conflict, "restore", paths=["outside.txt"], reason="restore one path")
+        partial = self.resolve(board, view, conflict, "restore", paths=["outside.txt"], note="restore one path")
         self.assertFalse(partial["resolved"])
         self.assertEqual(partial["resolutionState"], "open")
         self.assertIsNone(partial["artifactId"])
@@ -388,7 +388,7 @@ class ScopeRecoveryTestCase(RealWorkspaceTestCase):
         self.assertEqual(current["workspaceConflicts"][0]["resolvedPaths"], ["outside.txt"])
         completed = self.resolve(board, current, current["workspaceConflicts"][0], "restore",
                                  paths=["tracked.txt"], fingerprint=partial["resolvedFingerprint"],
-                                 command_id="resolve-2", reason="restore the rest")
+                                 command_id="resolve-2", note="restore the rest")
         self.assertTrue(completed["resolved"])
         self.assertEqual(completed["resolutionState"], "restored")
         self.assertEqual((checkout / "tracked.txt").read_text(), "base\n")
@@ -403,9 +403,9 @@ class ScopeRecoveryTestCase(RealWorkspaceTestCase):
             self.resolve(board, view, conflict, "adopt")
         self.assertEqual(raised.exception.code, "INVALID_ARGUMENT")
         with self.assertRaises(BoardError) as raised:
-            self.resolve(board, view, conflict, "adopt", paths=["outside.txt"], reason="partial adoption")
+            self.resolve(board, view, conflict, "adopt", paths=["outside.txt"], note="partial adoption")
         self.assertEqual(raised.exception.code, "INVALID_ARGUMENT")
-        adopted = self.resolve(board, view, conflict, "adopt", reason="the Host accepts these files")
+        adopted = self.resolve(board, view, conflict, "adopt", note="the Host accepts these files")
         self.assertTrue(adopted["resolved"])
         self.assertEqual(adopted["resolutionState"], "adopted")
         self.assertEqual(adopted["adoptedPaths"], ["outside.txt", "tracked.txt"])
@@ -424,7 +424,7 @@ class ScopeRecoveryTestCase(RealWorkspaceTestCase):
         run_id = submitted["runId"]
         view = self.view(board, run_id)
         conflict = view["workspaceConflicts"][0]
-        abandoned = self.resolve(board, view, conflict, "abandon", reason="discard this failed round")
+        abandoned = self.resolve(board, view, conflict, "abandon", note="discard this failed round")
         self.assertTrue(abandoned["resolved"])
         self.assertEqual(abandoned["resolutionState"], "abandoned")
         self.assertEqual(abandoned["artifact"]["kind"], "abandoned-site")
@@ -451,7 +451,7 @@ class ScopeRecoveryTestCase(RealWorkspaceTestCase):
         manifest = first["claim"]["turn"]["input"]["executionWorkspace"]
         active = self.view(board, run_id)
         with self.assertRaises(BoardError) as raised:
-            self.amend(board, active, write_scope=(".", "docs"), reason="retroactive")
+            self.amend(board, active, write_scope=(".", "docs"), note="retroactive")
         self.assertEqual(raised.exception.code, "SHUTDOWN_UNCONFIRMED")
         seal = workspace_module.seal(self.directory, manifest, run_id, first["claim"]["attempt"]["attemptId"])
         self.finish_turn(board, first, seal)
@@ -511,7 +511,7 @@ class ScopeRecoveryTestCase(RealWorkspaceTestCase):
         view = self.view(board, run_id)
         conflict = view["workspaceConflicts"][0]
         resolved = self.resolve(board, view, conflict, "restore", paths=["outside.txt", "tracked.txt"],
-                                reason="only the refused seal failed")
+                                note="only the refused seal failed")
         self.assertTrue(resolved["delivered"])
         self.assertEqual(resolved["state"], "delivered")
         self.assertEqual(resolved["finalAttemptId"], attempt_id)
@@ -575,7 +575,7 @@ class ScopeRecoveryTestCase(RealWorkspaceTestCase):
         run_id = submitted["runId"]
         view = self.view(board, run_id)
         conflict = view["workspaceConflicts"][0]
-        adopted = self.resolve(board, view, conflict, "adopt", reason="the Host accepts this exact site")
+        adopted = self.resolve(board, view, conflict, "adopt", note="the Host accepts this exact site")
         self.assertTrue(adopted["delivered"])
         self.assertEqual(adopted["state"], "delivered")
         self.assertEqual(adopted["delivery"]["action"], "adopt")
@@ -596,7 +596,7 @@ class ScopeRecoveryTestCase(RealWorkspaceTestCase):
         view = self.view(board, run_id)
         conflict = view["workspaceConflicts"][0]
         partial = self.resolve(board, view, conflict, "restore", paths=["outside.txt"],
-                               reason="only one path is safe to restore")
+                               note="only one path is safe to restore")
         self.assertFalse(partial["delivered"])
         self.assertEqual(partial["resolutionState"], "open")
         self.assertIsNone(partial["artifactId"])
@@ -604,7 +604,7 @@ class ScopeRecoveryTestCase(RealWorkspaceTestCase):
         current = self.view(board, run_id)
         abandoned = self.resolve(board, current, current["workspaceConflicts"][0], "abandon",
                                  command_id="resolve-abandon", fingerprint=partial["resolvedFingerprint"],
-                                 reason="discard this failed round")
+                                 note="discard this failed round")
         self.assertFalse(abandoned["delivered"])
         self.assertEqual(abandoned["resolutionState"], "abandoned")
         record = self.resolution_record(board, abandoned)
@@ -619,7 +619,7 @@ class ScopeRecoveryTestCase(RealWorkspaceTestCase):
         view = self.view(board, submitted["runId"])
         conflict = view["workspaceConflicts"][0]
         resolved = self.resolve(board, view, conflict, "restore", paths=["outside.txt", "tracked.txt"],
-                                reason="restore a genuine harness failure")
+                                note="restore a genuine harness failure")
         self.assertTrue(resolved["resolved"])
         self.assertFalse(resolved["delivered"])
         self.assertIsNone(resolved["delivery"])
@@ -645,7 +645,7 @@ class ScopeRecoveryTestCase(RealWorkspaceTestCase):
         view = self.view(board, run_id)
         conflict = view["workspaceConflicts"][0]
         resolved = self.resolve(board, view, conflict, "restore", paths=["outside.txt", "tracked.txt"],
-                                reason="the native record is broken")
+                                note="the native record is broken")
         self.assertFalse(resolved["delivered"])
         self.assertEqual(resolved["state"], "awaiting-host")
 
@@ -656,7 +656,7 @@ class ScopeRecoveryTestCase(RealWorkspaceTestCase):
         view = self.view(board, run_id)
         conflict = view["workspaceConflicts"][0]
         resolved = self.resolve(board, view, conflict, "restore", paths=["outside.txt", "tracked.txt"],
-                                reason="settle the scope, keep the native question")
+                                note="settle the scope, keep the native question")
         self.assertTrue(resolved["resolved"])
         self.assertFalse(resolved["delivered"])
         self.assertEqual(resolved["state"], "awaiting-host")
@@ -711,7 +711,7 @@ class ScopeRecoveryTestCase(RealWorkspaceTestCase):
         self.assertEqual(view["state"], "awaiting-host")
         approved = board.call("workflow_decide", {
             "runId": run_id, "requestId": view["activeRequest"]["requestId"], "commandId": "decide-helper",
-            "expectedRevision": view["revision"], "decision": "approve", "reason": "one isolated helper",
+            "expectedRevision": view["revision"], "decision": "approve", 'note': "one isolated helper",
             "helpers": [{
                 **BUDDY, "requestId": "helper-scope-1", "task": "helper task", "cwd": str(self.repo),
                 "executionWorkspace": {"kind": "worktree", "access": "write"},
@@ -726,12 +726,12 @@ class ScopeRecoveryTestCase(RealWorkspaceTestCase):
         self.assertEqual(child_view["scope"]["writeScope"], ["."])
         with board.store.db.read() as connection:
             rows = connection.execute(
-                "SELECT scope_version, reason, stopped_evidence_json FROM workflow_scope_versions"
+                "SELECT scope_version, note, stopped_evidence_json FROM workflow_scope_versions"
                 " WHERE run_id=? ORDER BY scope_version",
                 (child,),
             ).fetchall()
         self.assertEqual([row["scope_version"] for row in rows], [1])
-        self.assertEqual(rows[0]["reason"], "helper admission")
+        self.assertIsNone(rows[0]["note"])
         self.assertEqual(json.loads(rows[0]["stopped_evidence_json"])["parentRunId"], run_id)
 
 

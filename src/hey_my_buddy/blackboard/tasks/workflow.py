@@ -320,7 +320,7 @@ class WorkflowCoordinator:
             "turnIndex": row["turn_index"],
             "expectedSeconds": row["expected_seconds"],
             "access": row["access"],
-            "accessReason": row["access_reason"],
+            "accessNote": row["access_note"],
             "attemptId": row["attempt_id"],
             "generation": row["generation"],
             "resumeMode": row["resume_mode"],
@@ -529,7 +529,7 @@ class WorkflowCoordinator:
                 runId=run_row["run_id"],
             )
         return {"scopeVersion": row["scope_version"], "writeScope": json.loads(row["write_scope_json"]),
-                "inputManifestSha256": row["manifest_sha256"], "actor": {"role": row["actor_role"], "id": row["actor_id"]} if row["actor_role"] else None, "reason": row["reason"],
+                "inputManifestSha256": row["manifest_sha256"], "actor": {"role": row["actor_role"], "id": row["actor_id"]} if row["actor_role"] else None, "note": row["note"],
                 "recorded": True, "updatedAt": row["created_at"]}
 
     def _open_conflict(self, connection, run_id: str):
@@ -577,7 +577,7 @@ class WorkflowCoordinator:
             "outputCommit": row["output_commit"],
             "outputTree": row["output_tree"],
             "actor": {"role": row["actor_role"], "id": row["actor_id"]} if row["actor_role"] else None,
-            "reason": row["reason"],
+            "note": row["note"],
             "delivery": delivery,
             "createdAt": row["created_at"],
             "updatedAt": row["updated_at"],
@@ -609,7 +609,7 @@ class WorkflowCoordinator:
             "afterTree": row["after_tree"],
             "verification": verification,
             "notRequired": row["state"] == "not-required",
-            "reason": row["reason"],
+            "note": row["note"],
             "actor": {"role": row["actor_role"], "id": row["actor_id"]} if row["actor_role"] else None,
             "createdAt": row["created_at"],
         }
@@ -742,7 +742,7 @@ class WorkflowCoordinator:
             "workspace": self._workspace_view(run_row, connection=connection),
             "executionWorkspace": json.loads(run_row["execution_workspace_json"]),
             "access": json.loads(run_row["execution_workspace_json"])["access"],
-            "accessReason": json.loads(run_row["execution_workspace_json"]).get("accessReason"),
+            "accessNote": json.loads(run_row["execution_workspace_json"]).get("accessNote"),
             "requestFingerprint": run_row["request_fingerprint"],
             "buddy": self._buddy(run_row),
             "buddyLocked": bool(run_row["buddy_locked"]),
@@ -1684,9 +1684,9 @@ class WorkflowCoordinator:
             # The original authorization is recorded once as scope version 1; every
             # later amendment appends a new version instead of editing this one.
             connection.execute(
-                "INSERT INTO workflow_scope_versions(run_id, scope_version, actor_role, actor_id, reason, write_scope_json,"
+                "INSERT INTO workflow_scope_versions(run_id, scope_version, actor_role, actor_id, note, write_scope_json,"
                 " manifest_sha256, stopped_evidence_json, created_at) VALUES(?,1,?,?,?,?,?,?,?)",
-                (run_id, "lead" if lead else "host", lead["runId"] if lead else hostId, "original submission", canonical_json(list(manifest.get("writeScope") or [])),
+                (run_id, "lead" if lead else "host", lead["runId"] if lead else hostId, None, canonical_json(list(manifest.get("writeScope") or [])),
                  manifest.get("manifestSha256"), canonical_json({"kind": "initial"}), now),
             )
             self._reserve(
@@ -2114,7 +2114,7 @@ class WorkflowCoordinator:
                     "kind": row["kind"],
                     "state": row["state"],
                     "requestId": row["request_id"],
-                    "reason": row["reason"],
+                    "note": row["note"],
                     "helperPolicy": row["helper_policy"],
                     "helperOutcomes": json.loads(row["helper_outcomes_json"]),
                     "input": row["input_text"],
@@ -2168,7 +2168,7 @@ class WorkflowCoordinator:
                 "commandId",
                 "expectedRevision",
                 "decision",
-                "reason",
+                "note",
                 "helpers",
                 "autoContinue",
                 *schemas.CONTROL_FIELDS,
@@ -2184,7 +2184,7 @@ class WorkflowCoordinator:
         decision = schemas.required_string(params, "decision", max_length=16)
         if decision not in ("approve", "decline"):
             raise BoardError("INVALID_ARGUMENT", "decision must be 'approve' or 'decline'")
-        reason = schemas.optional_string(params, "reason", max_length=schemas.MAX_WORKFLOW_REASON_BYTES) or ""
+        note = schemas.optional_string(params, "note", max_length=schemas.MAX_NOTE_BYTES) or ""
         auto_continue = schemas.optional_bool(params, "autoContinue", True)
         with self.db.read() as connection:
             receipt_entry = self.board._receipt_entry(connection, command_id, "workflow.decide", None, deleted_only=True)
@@ -2195,7 +2195,7 @@ class WorkflowCoordinator:
             integrator = self._owner_actor(connection, owner)
         helpers = schemas.normalize_helpers(params, integrator=integrator)
         return {"runId": run_id, "requestId": request_id, "commandId": command_id,
-                "expectedRevision": expected, "decision": decision, "reason": reason,
+                "expectedRevision": expected, "decision": decision, "note": note,
                 "autoContinue": auto_continue, "helpers": helpers}
 
     def decide(self, params: dict, *, console_authority: dict | None = None) -> dict:
@@ -2206,13 +2206,13 @@ class WorkflowCoordinator:
         if "deletedReceipt" in normalized:
             return normalized["deletedReceipt"]
         run_id, request_id, command_id = (normalized[key] for key in ("runId", "requestId", "commandId"))
-        expected, decision, reason = (normalized[key] for key in ("expectedRevision", "decision", "reason"))
+        expected, decision, note = (normalized[key] for key in ("expectedRevision", "decision", "note"))
         auto_continue, helpers = normalized["autoContinue"], normalized["helpers"]
         request_key = {
             "runId": run_id,
             "requestId": request_id,
             "decision": decision,
-            "reason": reason,
+            "note": note,
             "autoContinue": auto_continue,
             "expectedRevision": expected,
             "helpers": [
@@ -2289,7 +2289,7 @@ class WorkflowCoordinator:
                         request_row,
                         prepared,
                         decision=decision,
-                        reason=reason,
+                        note=note,
                         actor=actor,
                         command_id=command_id,
                         now=now,
@@ -2301,7 +2301,7 @@ class WorkflowCoordinator:
                         "UPDATE workflow_requests SET state='approved', decision_json=?, decision_command_id=?,"
                         " decided_at=?, updated_at=? WHERE request_id=?",
                         (
-                            canonical_json({"decision": "approve", "reason": reason, "actor": actor, "helpers": children}),
+                            canonical_json({"decision": "approve", "note": note, "actor": actor, "helpers": children}),
                             command_id,
                             now,
                             now,
@@ -2317,11 +2317,11 @@ class WorkflowCoordinator:
                     if auto_continue:
                         approve_continuation = str(uuid.uuid4())
                         approval_input = (
-                            reason or "Host approved assistance; continue the original micro task with the helper results"
+                            note or "Host approved assistance; continue the original micro task with the helper results"
                         )
                         connection.execute(
                             "INSERT INTO workflow_continuations(continuation_id, run_id, command_id,"
-                            " kind, request_id, expected_revision, input_text, input_bytes, reason, helper_policy,"
+                            " kind, request_id, expected_revision, input_text, input_bytes, note, helper_policy,"
                             " helper_outcomes_json, state, created_at) VALUES(?,?,?,'helper',?,?,?,?,?, 'keep','[]','recorded',?)",
                             (
                                 approve_continuation,
@@ -2331,7 +2331,7 @@ class WorkflowCoordinator:
                                 run_row["revision"],
                                 approval_input,
                                 len(approval_input.encode()),
-                                reason or None,
+                                note or None,
                                 now,
                             ),
                         )
@@ -2342,7 +2342,7 @@ class WorkflowCoordinator:
                             connection,
                             task,
                             self._run_row(connection, run_id),
-                            reason=reason or "Host approved the next turn",
+                            
                             actor=actor,
                             now=now,
                             continuation_id=approve_continuation,
@@ -2364,7 +2364,7 @@ class WorkflowCoordinator:
                         "UPDATE workflow_requests SET state='declined', decision_json=?, decision_command_id=?,"
                         " decided_at=?, updated_at=? WHERE request_id=?",
                         (
-                            canonical_json({"decision": "decline", "reason": reason, "actor": actor}),
+                            canonical_json({"decision": "decline", "note": note, "actor": actor}),
                             command_id,
                             now,
                             now,
@@ -2372,11 +2372,11 @@ class WorkflowCoordinator:
                         ),
                     )
                     if auto_continue:
-                        input_text = reason or "Host declined the assistance request; continue with the current evidence"
+                        input_text = note or "Host declined the assistance request; continue with the current evidence"
                         decline_continuation = str(uuid.uuid4())
                         connection.execute(
                             "INSERT INTO workflow_continuations(continuation_id, run_id, command_id,"
-                            " kind, request_id, expected_revision, input_text, input_bytes, reason, helper_policy,"
+                            " kind, request_id, expected_revision, input_text, input_bytes, note, helper_policy,"
                             " helper_outcomes_json, state, created_at) VALUES(?,?,?,'helper',?,?,?,?,?, 'keep','[]','recorded',?)",
                             (
                                 decline_continuation,
@@ -2386,7 +2386,7 @@ class WorkflowCoordinator:
                                 run_row["revision"],
                                 input_text,
                                 len(input_text.encode()),
-                                reason or None,
+                                note or None,
                                 now,
                             ),
                         )
@@ -2394,7 +2394,7 @@ class WorkflowCoordinator:
                             connection,
                             task,
                             run_row,
-                            reason=reason or "Host declined assistance",
+                            
                             actor=actor,
                             now=now,
                             continuation_id=decline_continuation,
@@ -2410,7 +2410,7 @@ class WorkflowCoordinator:
                         "workflow.request_declined",
                         task_id=run_id,
                         revision=run_row["revision"] + 1,
-                        payload={"requestId": request_id, "actor": actor, "autoContinue": auto_continue, "reason": reason},
+                        payload={"requestId": request_id, "actor": actor, "autoContinue": auto_continue, "note": note},
                     )
                 self._close_proxy_ancestors(connection, self._request_row(connection, run_id, request_id), now)
                 self._sync_boundary(connection, run_id, now)
@@ -2615,18 +2615,18 @@ class WorkflowCoordinator:
 
     def _resolve_helper_attention(
         self, connection, parent_run, request_row, prepared: list[dict], *,
-        decision: str, reason: str, actor: dict, command_id: str, now: str,
+        decision: str, note: str, actor: dict, command_id: str, now: str,
     ) -> None:
         """Answer one exact proxy chain and resume its requesting leaf only."""
         chain = self._attention_chain(connection, parent_run, request_row)
         child_run, source_request = chain[-1]
         child_task_id = child_run["run_id"]
         child_task = connection.execute("SELECT * FROM tasks WHERE task_id=?", (child_task_id,)).fetchone()
-        input_text = reason or (
+        input_text = note or (
             "The Host approved the requested assistance; continue with this guidance"
             if decision == "approve" else "The Host declined the requested assistance; continue with what you have"
         )
-        decision_record = canonical_json({"decision": decision, "reason": reason, "actor": actor,
+        decision_record = canonical_json({"decision": decision, "note": note, "actor": actor,
                                           "parentRunId": parent_run["run_id"], "targetRunId": child_task_id})
         for _, boundary in chain:
             connection.execute(
@@ -2637,10 +2637,10 @@ class WorkflowCoordinator:
         continuation_id = str(uuid.uuid4())
         connection.execute(
             "INSERT INTO workflow_continuations(continuation_id,run_id,command_id,kind,request_id,"
-            "expected_revision,input_text,input_bytes,reason,helper_policy,helper_outcomes_json,state,created_at)"
+            "expected_revision,input_text,input_bytes,note,helper_policy,helper_outcomes_json,state,created_at)"
             " VALUES(?,?,?,'helper',?,?,?,?,?,'keep','[]','recorded',?)",
             (continuation_id, child_task_id, command_id, source_request["request_id"], child_run["revision"],
-             input_text, len(input_text.encode()), reason or None, now),
+             input_text, len(input_text.encode()), note or None, now),
         )
         extra = self._create_helpers(connection, child_run, child_task, source_request, prepared, command_id, now,
                                      source_host_id=parent_run["host_id"], actor=actor) if decision == "approve" and prepared else []
@@ -2648,7 +2648,7 @@ class WorkflowCoordinator:
         if extra or pending is not None or self._unfinished_helpers(connection, child_task_id):
             self._sync_boundary(connection, child_task_id, now, default_state="waiting-helpers")
         else:
-            self._requeue(connection, child_task, child_run, reason=input_text, actor=actor, now=now,
+            self._requeue(connection, child_task, child_run,  actor=actor, now=now,
                           continuation_id=continuation_id)
         # Existing automatic authority on intermediate parents is untouched. Each
         # still waits for its own dependency before it can consume that authority.
@@ -2829,9 +2829,9 @@ class WorkflowCoordinator:
         # with its admission so no creation path can exist without a real scope row.
         connection.execute("UPDATE workflow_runs SET macro_task_id=? WHERE run_id=?", (run_row["macro_task_id"], helper_task_id))
         connection.execute(
-            "INSERT INTO workflow_scope_versions(run_id, scope_version, actor_role, actor_id, reason, write_scope_json,"
+            "INSERT INTO workflow_scope_versions(run_id, scope_version, actor_role, actor_id, note, write_scope_json,"
             " manifest_sha256, stopped_evidence_json, created_at) VALUES(?,1,?,?,?,?,?,?,?)",
-            (helper_task_id, actor["role"], actor["id"], "helper admission",
+            (helper_task_id, actor["role"], actor["id"], None,
              canonical_json(list(manifest.get("writeScope") or [])), manifest.get("manifestSha256"),
              canonical_json({"kind": "helper", "parentRunId": run_row["run_id"]}), now),
         )
@@ -2891,11 +2891,11 @@ class WorkflowCoordinator:
             "SELECT enabled,available FROM buddies WHERE harness=? AND provider=? AND model=? AND effort=?",
             tuple(buddy[key] for key in schemas.BUDDY_FIELDS),
         ).fetchone()
-        from ..catalog.catalog import CATALOG_REMEDY, CATALOG_UNAVAILABLE_REASON, catalog_read_at
+        from ..catalog.catalog import catalog_read_at
 
         read_at = catalog_read_at(connection, buddy["harness"])
         if row is not None and not row["available"]:
-            details = {"buddy": buddy, "reason": CATALOG_UNAVAILABLE_REASON, "remedy": CATALOG_REMEDY}
+            details = {"buddy": buddy, "reason": make_reason("catalog-unavailable")}
             if read_at:
                 details["catalogReadAt"] = read_at
             raise BoardError("BUDDY_UNAVAILABLE", "The requested native model route is no longer available", **details)
@@ -2904,8 +2904,7 @@ class WorkflowCoordinator:
         details = {
             "buddy": buddy,
             "enabled": False,
-            "reason": "not-enabled",
-            "remedy": f"Enable this buddy; {CATALOG_REMEDY} only re-reads the catalog and never enables a buddy",
+            "reason": make_reason("not-enabled"),
         }
         if read_at:
             details["catalogReadAt"] = read_at
@@ -2923,11 +2922,11 @@ class WorkflowCoordinator:
                 "expectedRevision",
                 "input",
                 "helperPolicy",
-                "reason",
+                "note",
                 "buddy",
                 "reroute",
                 "access",
-                "accessReason",
+                "accessNote",
                 *schemas.CONTROL_FIELDS,
                 schemas.CONSOLE_AUTHORITY_FIELD,
             },
@@ -2943,14 +2942,14 @@ class WorkflowCoordinator:
         policy = schemas.optional_string(params, "helperPolicy")
         if policy is not None and policy not in ("cancel", "keep"):
             raise BoardError("INVALID_ARGUMENT", "helperPolicy must be 'cancel' or 'keep'")
-        reason = schemas.optional_string(params, "reason", max_length=schemas.MAX_WORKFLOW_REASON_BYTES) or ""
+        note = schemas.optional_string(params, "note", max_length=schemas.MAX_NOTE_BYTES) or ""
         reroute = schemas.optional_bool(params, "reroute", False)
-        access_selection = schemas.normalize_access(params) if "access" in params or "accessReason" in params else None
+        access_selection = schemas.normalize_access(params) if "access" in params or "accessNote" in params else None
         supplied_buddy = schemas.normalize_buddy(params["buddy"]) if "buddy" in params else None
         if supplied_buddy is not None and reroute:
             raise BoardError("INVALID_ARGUMENT", "buddy and reroute are mutually exclusive")
-        if supplied_buddy is not None and not reason:
-            raise BoardError("INVALID_ARGUMENT", "a Host buddy override requires an explicit reason")
+        if supplied_buddy is not None and not note:
+            raise BoardError("INVALID_ARGUMENT", "a Host buddy override requires an explicit note")
         request_key = {
             "runId": run_id,
             "targetRunId": target_id,
@@ -2958,9 +2957,9 @@ class WorkflowCoordinator:
             "inputSha256": sha256_text(input_text),
             "helperPolicy": policy,
             "buddy": supplied_buddy,
-            "reason": reason,
+            "note": note,
             "reroute": reroute,
-            **({"access": access_selection[0], "accessReason": access_selection[1]} if access_selection else {}),
+            **({"access": access_selection[0], "accessNote": access_selection[1]} if access_selection else {}),
         }
         # Authenticate/replay before native catalog work. A concurrent takeover is
         # checked again after validation, before any durable mutation.
@@ -3008,7 +3007,7 @@ class WorkflowCoordinator:
             self._buddy_matches_micro_task(run_row, buddy)
             self._require_enabled_buddy(connection, buddy)
             current_workspace = json.loads(run_row["execution_workspace_json"])
-            next_access, next_reason = access_selection or (current_workspace["access"], current_workspace.get("accessReason"))
+            next_access, next_note = access_selection or (current_workspace["access"], current_workspace.get("accessNote"))
             run_id = run_row["run_id"]
             task = connection.execute("SELECT * FROM tasks WHERE task_id=?", (run_id,)).fetchone()
             self._assert_lineage_open(connection, run_id)
@@ -3041,9 +3040,11 @@ class WorkflowCoordinator:
             if policy is None:
                 policy = "keep"
             helper_outcomes = self._helper_outcomes(connection, run_id)
+            continuation_id = str(uuid.uuid4())
             if policy == "cancel":
-                self._cancel_children(connection, run_id, reason or "manual continuation cancelled live helpers", now,
-                                      actor=actor, initiator=initiator, include_lead=False)
+                self._cancel_children(connection, run_id, note, now,
+                                      actor=actor, initiator=initiator, include_lead=False,
+                                      stop_facts={"continuationId": continuation_id})
             # New manual input supersedes every older unconsumed intent, including
             # an earlier manual input that has not acquired an execution attempt.
             connection.execute(
@@ -3059,10 +3060,9 @@ class WorkflowCoordinator:
             )
             for request in open_requests:
                 self._close_proxy_ancestors(connection, self._request_row(connection, run_id, request["request_id"]), now)
-            continuation_id = str(uuid.uuid4())
             connection.execute(
                 "INSERT INTO workflow_continuations(continuation_id, run_id, command_id,"
-                " kind, expected_revision, input_text, input_bytes, reason, helper_policy, helper_outcomes_json, state,"
+                " kind, expected_revision, input_text, input_bytes, note, helper_policy, helper_outcomes_json, state,"
                 " created_at) VALUES(?,?,?,'manual',?,?,?,?,?,?, 'queued', ?)",
                 (
                     continuation_id,
@@ -3071,7 +3071,7 @@ class WorkflowCoordinator:
                     run_row["revision"],
                     input_text,
                     input_bytes,
-                    reason or None,
+                    note or None,
                     policy,
                     canonical_json(helper_outcomes),
                     now,
@@ -3081,7 +3081,6 @@ class WorkflowCoordinator:
                 connection,
                 task,
                 run_row,
-                reason=reason or "Host continuation",
                 actor=actor,
                 now=now,
                 continuation_id=continuation_id,
@@ -3090,7 +3089,7 @@ class WorkflowCoordinator:
                 # Ending a delivered outcome without acceptance records the negative
                 # review and the Host's opinion next to the immutable artifact; the
                 # artifact itself and every earlier review stay in history.
-                rejection_note = reason or _head(input_text, 512)
+                rejection_note = note or _head(input_text, 512)
                 connection.execute(
                     "UPDATE tasks SET review_rejected_at=?, review_rejection_note=?,"
                     " updated_at=? WHERE task_id=?",
@@ -3100,21 +3099,21 @@ class WorkflowCoordinator:
                     connection, "workflow.review_rejected", task_id=run_id,
                     attempt_id=run_row["final_attempt_id"], revision=run_row["revision"] + 1,
                     payload={"artifactId": run_row["final_artifact_id"], "verdict": "rejected",
-                             "actor": actor, "reason": reason, "opinion": _head(input_text, 512)},
+                             "actor": actor, "note": note, "opinion": _head(input_text, 512)},
                 )
             if access_selection is not None:
                 updated_workspace = {**current_workspace, "access": next_access}
-                updated_workspace.pop("accessReason", None)
-                if next_reason is not None:
-                    updated_workspace["accessReason"] = next_reason
+                updated_workspace.pop("accessNote", None)
+                if next_note is not None:
+                    updated_workspace["accessNote"] = next_note
                 connection.execute("UPDATE workflow_runs SET execution_workspace_json=? WHERE run_id=?",
                                    (canonical_json(updated_workspace), run_id))
-                if (current_workspace["access"], current_workspace.get("accessReason")) != (next_access, next_reason):
+                if (current_workspace["access"], current_workspace.get("accessNote")) != (next_access, next_note):
                     self.board._append_event(
                         connection, "workflow.access_changed", task_id=run_id,
                         revision=run_row["revision"] + 1,
                         payload={"previousAccess": current_workspace["access"], "access": next_access,
-                                 "accessReason": next_reason, "actor": actor, "continuationId": continuation_id})
+                                 "accessNote": next_note, "actor": actor, "continuationId": continuation_id})
             if buddy is not None:
                 connection.execute("UPDATE workflow_runs SET buddy_json=?,current_routing_id=NULL,"
                                    "buddy_revision=buddy_revision+1,"
@@ -3124,7 +3123,7 @@ class WorkflowCoordinator:
                 updated_run = self._run_row(connection, run_id)
                 self.board._append_event(
                     connection, "workflow.buddy_overridden", task_id=run_id,
-                    payload={"source": "host-override", "actor": actor, "reason": reason,
+                    payload={"source": "host-override", "actor": actor, "note": note,
                              "buddy": buddy,
                              "buddyRevision": updated_run["buddy_revision"]},
                 )
@@ -3247,7 +3246,6 @@ class WorkflowCoordinator:
         task,
         run_row,
         *,
-        reason: str,
         actor: dict,
         now: str,
         continuation_id: str | None = None,
@@ -3466,14 +3464,14 @@ class WorkflowCoordinator:
     def cancel(self, params: dict, *, console_authority: dict | None = None) -> dict:
         schemas.reject_unknown(
             params,
-            {"runId", "commandId", "reason", *schemas.CONTROL_FIELDS, schemas.CONSOLE_AUTHORITY_FIELD},
+            {"runId", "commandId", "note", *schemas.CONTROL_FIELDS, schemas.CONSOLE_AUTHORITY_FIELD},
             "workflow.cancel",
         )
         schemas.reject_untrusted_override(params)
         run_id = schemas.required_string(params, "runId", max_length=128)
         command_id = schemas.optional_string(params, "commandId", max_length=128)
-        reason = schemas.optional_string(params, "reason", max_length=schemas.MAX_WORKFLOW_REASON_BYTES) or "Host cancelled"
-        request_key = {"runId": run_id, "reason": reason}
+        note = schemas.optional_string(params, "note", max_length=schemas.MAX_NOTE_BYTES) or None
+        request_key = {"runId": run_id, "note": note}
         now = self.now()
         with self.db.write() as connection:
             if command_id:
@@ -3489,7 +3487,7 @@ class WorkflowCoordinator:
                     return {**receipt, "duplicate": True}
             if run_row["state"] in ("accepted", "concluded"):
                 raise BoardError("CONFLICT", "This run is already closed; cancellation cannot undo it")
-            response = self._cancel_in_transaction(connection, run_row, task, reason, actor, initiator, now)
+            response = self._cancel_in_transaction(connection, run_row, task, note, actor, initiator, now)
             if command_id:
                 self.board._store_receipt(
                     connection, command_id, "workflow.cancel", request_key, response, task_id=run_id
@@ -3500,13 +3498,13 @@ class WorkflowCoordinator:
 
     def stop_macro_task(self, params: dict, *, console_authority: dict | None = None) -> dict:
         """One browser-only cancellation scope, resolved and fenced atomically."""
-        schemas.reject_unknown(params, {"macroTaskId", "commandId", "reason"}, "macro_task.stop")
+        schemas.reject_unknown(params, {"macroTaskId", "commandId", "note"}, "macro_task.stop")
         if console_authority is None:
             raise BoardError("UNAUTHORIZED", "Stopping a macro task requires an authenticated console writer")
         identifier = schemas.required_string(params, "macroTaskId", max_length=134)
         command_id = schemas.required_string(params, "commandId", max_length=128)
-        reason = schemas.optional_string(params, "reason", max_length=schemas.MAX_WORKFLOW_REASON_BYTES) or "User stopped macro task"
-        request = {"macroTaskId": identifier, "reason": reason}
+        note = schemas.optional_string(params, "note", max_length=schemas.MAX_NOTE_BYTES) or None
+        request = {"macroTaskId": identifier, "note": note}
         now = self.now()
         with self.db.write() as connection:
             receipt_entry = self.board._receipt_entry(connection, command_id, "macro_task.stop", request)
@@ -3543,10 +3541,10 @@ class WorkflowCoordinator:
             for root in roots:
                 if root["state"] in IN_PROGRESS_STATES:
                     task = connection.execute("SELECT * FROM tasks WHERE task_id=?", (root["run_id"],)).fetchone()
-                    self._cancel_in_transaction(connection, root, task, reason, actor, "console", now,
+                    self._cancel_in_transaction(connection, root, task, note, actor, "console", now,
                                                 active_only=True)
                 else:
-                    self._cancel_children(connection, root["run_id"], reason, now, actor=actor,
+                    self._cancel_children(connection, root["run_id"], note, now, actor=actor,
                                           initiator="console", include_lead=True, active_only=True)
             results = []
             for original in scope:
@@ -3559,7 +3557,7 @@ class WorkflowCoordinator:
         self.board._notify(head)
         return response
 
-    def cancel_for_service_stop(self, reason: str) -> tuple[dict[str, int], set[str]]:
+    def cancel_for_service_stop(self, note: str) -> tuple[dict[str, int], set[str]]:
         """Internal daemon shutdown path; no request fields or caller authority enter here."""
         with self.db.write() as connection:
             unresolved = self.board.UNRESOLVED_SQL.replace("execution_state", "a.execution_state").replace(
@@ -3604,7 +3602,7 @@ class WorkflowCoordinator:
                 if run_row["state"] in ("accepted", "concluded"):
                     raise BoardError("CONFLICT", "Closed Micro task still owns active work during service stop", runId=root_id)
                 task = connection.execute("SELECT * FROM tasks WHERE task_id=?", (root_id,)).fetchone()
-                self._cancel_in_transaction(connection, run_row, task, reason, {"role": "service", "id": "stop"}, "service", now)
+                self._cancel_in_transaction(connection, run_row, task, note, {"role": "service", "id": "stop"}, "service", now)
                 cancelled_roots.add(root_id)
             head = self.board._head_of(connection)
             counts = {"queued": 0, "active": 0}
@@ -3615,17 +3613,17 @@ class WorkflowCoordinator:
             self.board._notify(head)
         return counts, set(candidates)
 
-    def _cancel_in_transaction(self, connection, run_row, task, reason: str, actor: dict, initiator: str, now: str, *,
-                               active_only: bool = False) -> dict:
+    def _cancel_in_transaction(self, connection, run_row, task, note: str, actor: dict, initiator: str, now: str, *,
+                               active_only: bool = False, stop_facts: dict | None = None) -> dict:
         run_id = run_row["run_id"]
         # Fence the root before descendants settle: a transferred checkout must
         # not be handed back to a micro task cancelled in this transaction.
         self._cancel_owned_run(connection, task, now, explicit=True, actor=actor, initiator=initiator)
-        self._cancel_children(connection, run_id, reason, now, actor=actor, initiator=initiator, include_lead=True,
-                              active_only=active_only)
+        self._cancel_children(connection, run_id, note, now, actor=actor, initiator=initiator, include_lead=True,
+                              active_only=active_only, stop_facts=stop_facts)
         self.board._append_event(
             connection, "workflow.cancelled", task_id=run_id, revision=run_row["revision"] + 1,
-            payload={"reason": reason, "actor": actor, "stopInitiator": initiator, "honestShutdown": True},
+            payload={"note": note, "actor": actor, "stopInitiator": initiator, "honestShutdown": True, **(stop_facts or {})},
         )
         task = connection.execute("SELECT * FROM tasks WHERE task_id=?", (run_id,)).fetchone()
         child = connection.execute("SELECT * FROM workflow_children WHERE child_task_id=?", (run_id,)).fetchone()
@@ -3640,9 +3638,9 @@ class WorkflowCoordinator:
             "note": CANCELLATION_NOTE,
         }
 
-    def _cancel_children(self, connection, run_id: str, reason: str, now: str, *,
+    def _cancel_children(self, connection, run_id: str, note: str, now: str, *,
                          actor: dict | None = None, initiator: str = "unknown", include_lead: bool = False,
-                         active_only: bool = False) -> list[str]:
+                         active_only: bool = False, stop_facts: dict | None = None) -> list[str]:
         """Fence the whole owned graph, including work behind settled helpers."""
         cancelled: list[str] = []
         rows = self._owned_children(connection, run_id, include_lead=include_lead)
@@ -3656,8 +3654,8 @@ class WorkflowCoordinator:
                 self.board._append_event(
                     connection, "workflow.helper_cancelled" if child["kind"] == "helper" else "workflow.lead_task_cancelled",
                     task_id=task["task_id"], revision=task["revision"] + 1,
-                    payload={"parentRunId": child["parent_run_id"], "cancelledByRunId": run_id, "reason": reason,
-                             "stopInitiator": initiator, **({"actor": actor} if actor is not None else {})},
+                    payload={"parentRunId": child["parent_run_id"], "cancelledByRunId": run_id, "note": note,
+                             "stopInitiator": initiator, **(stop_facts or {}), **({"actor": actor} if actor is not None else {})},
                 )
                 cancelled.append(task["task_id"])
         # Every descendant is fenced before ownership can move upward. Settlement
@@ -4020,7 +4018,7 @@ class WorkflowCoordinator:
             verification = self._accept_verify(
                 manifest, original_input=original_manifest, final_input=final_manifest,
                 target=target, host_paths=host_paths, before_commit=before_commit,
-                adjusted=adjusted, reason=note)
+                adjusted=adjusted, note=note)
         now = self.now()
         with self.db.write() as connection:
             receipt_entry = self.board._receipt_entry(connection, command_id, "workflow.accept", request_key)
@@ -4081,7 +4079,7 @@ class WorkflowCoordinator:
         if recorded is None:
             return True
         if not_required is not None:
-            return recorded["state"] != "not-required" or (recorded["reason"] or "") != not_required
+            return recorded["state"] != "not-required" or (recorded["note"] or "") != not_required
         if recorded["state"] != "verified":
             return True
         # The recorded path is the repository-resolved identity; compare the
@@ -4126,7 +4124,7 @@ class WorkflowCoordinator:
 
     def _accept_verify(self, manifest: dict, *, original_input: dict, final_input: dict,
                        target: dict, host_paths: list[str], before_commit: str | None,
-                       adjusted: bool, reason: str) -> dict:
+                       adjusted: bool, note: str) -> dict:
         """Compare the immutable artifact with the real target and name every difference.
 
         Without ``adjusted`` differing paths are refused; with it the same
@@ -4137,7 +4135,7 @@ class WorkflowCoordinator:
             manifest, original_input=original_input, final_input=final_input,
             path=target["path"], ref=target["ref"], strategy="patch", before_commit=before_commit,
             repository_id=target.get("repositoryId"), checkout_id=target.get("checkoutId"),
-            host_paths=host_paths, reason=reason, _confirm_adjustments=adjusted,
+            host_paths=host_paths, note=note, _confirm_adjustments=adjusted,
         )
         unrecorded = sorted({item["path"] for item in verification.get("differingPaths") or []}
                             | set(verification.get("missingPaths") or []))
@@ -4353,7 +4351,7 @@ class WorkflowCoordinator:
                 "INSERT INTO workflow_integrations(integration_id, run_id, artifact_id, attempt_id, state, strategy,"
                 " binding_sha256, target_kind, target_path, target_ref, target_repository_id, target_checkout_id,"
                 " source_commit, source_tree, before_commit, after_commit, before_tree, after_tree, verification_json,"
-                " reason, command_id, actor_role, actor_id, created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                " note, command_id, actor_role, actor_id, created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                 (
                     integration_id, run_id, artifact_id, artifact["attempt_id"],
                     "not-required" if not_required is not None else "verified",
@@ -4548,8 +4546,8 @@ class WorkflowCoordinator:
                 for child_id in descendants:
                     child = self._run_row(connection, child_id)
                     child_task = self._conclude_precheck(connection, child, None)
-                    child_note = f"Concluded because Lead micro task {target_id} received a Host conclusion"
-                    child_key = {"runId": owner_run_id, "targetRunId": child_id, "note": child_note,
+                    child_reason = make_reason("lead.owned-concluded", leadRunId=target_id)
+                    child_key = {"runId": owner_run_id, "targetRunId": child_id, "reason": child_reason,
                                  "attemptId": child_task["selected_attempt_id"]}
                     owned_work.append({"snapshot": child, "request": child_key,
                                        "sealWork": self._conclude_seal_work(connection, child, child_task)})
@@ -4583,7 +4581,7 @@ class WorkflowCoordinator:
                             or child_run["workspace_manifest_json"] != child["snapshot"]["workspace_manifest_json"]):
                         raise BoardError("REVISION_CONFLICT", "An owned execution or workspace changed while concluding")
                     self._conclude_record(
-                        connection, run_row=child_run, task=child_task, actor=actor, now=now, note=child_key["note"],
+                        connection, run_row=child_run, task=child_task, actor=actor, now=now, note=None, reason=child_key["reason"],
                         command_id="conclude-" + sha256_text(canonical_json(child_key))[:32], request_key=child_key,
                         sealed_record=child["seal"])
                 response = self._conclude_record(
@@ -4635,11 +4633,12 @@ class WorkflowCoordinator:
                 raise BoardError("CONFLICT", "Resolve the Lead workspace conflict before concluding its owned work",
                                  conflictId=conflict["conflict_id"], paths=json.loads(conflict["blocking_paths_json"]))
             task = connection.execute("SELECT * FROM tasks WHERE task_id=?", (target_id,)).fetchone()
-            reason = "Owned micro task stopped because its Lead is being concluded"
             if lead["state"] not in ("failed", "cancelled", "delivered") or not self._stop_proven(connection, task):
-                self._cancel_in_transaction(connection, lead, task, reason, actor, initiator, self.now())
+                self._cancel_in_transaction(connection, lead, task, None, actor, initiator, self.now(),
+                                            stop_facts={"leadRunId": target_id})
             else:
-                self._cancel_children(connection, target_id, reason, self.now(), actor=actor, initiator=initiator, include_lead=True)
+                self._cancel_children(connection, target_id, None, self.now(), actor=actor, initiator=initiator, include_lead=True,
+                                      stop_facts={"leadRunId": target_id})
             descendants = [row["child_task_id"] for row in reversed(self._owned_children(connection, target_id, include_lead=True))
                            if self._run_row(connection, row["child_task_id"])["state"] not in ("accepted", "concluded")]
             summary = self.shutdown_summary(connection, target_id)
@@ -4715,8 +4714,8 @@ class WorkflowCoordinator:
         allowed = self._board_adopted_paths(run_row["run_id"], manifest)
         return manifest, allowed, task["selected_attempt_id"]
 
-    def _conclude_record(self, connection, *, run_row, task, actor: dict, now: str, note: str,
-                         command_id: str, request_key: dict, sealed_record: dict | None) -> dict:
+    def _conclude_record(self, connection, *, run_row, task, actor: dict, now: str, note: str | None,
+                         command_id: str, request_key: dict, sealed_record: dict | None, reason: dict | None = None) -> dict:
         """Insert the conclusion row, the Host partial artifact and the events atomically."""
         run_id = run_row["run_id"]
         task = self._conclude_precheck(connection, run_row, task)
@@ -4735,10 +4734,11 @@ class WorkflowCoordinator:
         identifier = "conclusion-" + str(uuid.uuid4())
         connection.execute(
             "INSERT INTO workflow_host_conclusions(conclusion_id,run_id,attempt_id,run_revision,owner_generation,"
-            "execution_status,note,evidence_json,artifact_id,integration_id,actor_role,actor_id,command_id,created_at)"
-            " VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            "execution_status,note,reason_code,reason_params_json,evidence_json,artifact_id,integration_id,actor_role,actor_id,command_id,created_at)"
+            " VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (identifier, run_id, attempt_id, run_row["revision"] + 1, run_row["owner_generation"], run_row["state"],
-             note, canonical_json({"references": []}),
+             note, reason["code"] if reason else None, canonical_json(reason["params"]) if reason else None,
+             canonical_json({"references": []}),
              partial_artifact_id, None, actor["role"], actor["id"], command_id, now),
         )
         if sealed_record is not None:
@@ -4751,7 +4751,7 @@ class WorkflowCoordinator:
             connection, "workflow.host_concluded", task_id=run_id,
             attempt_id=attempt_id, revision=run_row["revision"] + 1,
             payload={"conclusionId": identifier, "executionStatus": run_row["state"], "actor": actor,
-                     "partialArtifactId": partial_artifact_id},
+                     "partialArtifactId": partial_artifact_id, **({"reason": reason} if reason else {})},
         )
         self.board._transition_task(connection, task, "concluded")
         connection.execute("UPDATE tasks SET queue_reason=NULL WHERE task_id=?", (run_id,))
@@ -4955,7 +4955,7 @@ class WorkflowCoordinator:
             params,
             {
                 "runId", "targetRunId", "commandId", "expectedRevision", "writeScope", "expectedScopeVersion",
-                "reason", *schemas.CONTROL_FIELDS, schemas.CONSOLE_AUTHORITY_FIELD,
+                "note", *schemas.CONTROL_FIELDS, schemas.CONSOLE_AUTHORITY_FIELD,
             },
             "workflow.scope_amend",
         )
@@ -4971,9 +4971,9 @@ class WorkflowCoordinator:
         expected_scope = params.get("expectedScopeVersion")
         if isinstance(expected_scope, bool) or not isinstance(expected_scope, int) or expected_scope < 1:
             raise BoardError("INVALID_ARGUMENT", "expectedScopeVersion must be a positive integer")
-        reason, _size = schemas.bounded_text(params, "reason", max_bytes=schemas.MAX_WORKFLOW_REASON_BYTES)
+        note, _size = schemas.bounded_text(params, "note", max_bytes=schemas.MAX_NOTE_BYTES)
         request_key = {"runId": run_id, "targetRunId": target_id, "expectedScopeVersion": expected_scope,
-                       "writeScope": write_scope, "reason": reason, "expectedRevision": expected}
+                       "writeScope": write_scope, "note": note, "expectedRevision": expected}
         with self.db.read() as connection:
             receipt_entry = self.board._receipt_entry(connection, command_id, "workflow.scope_amend", request_key)
             if receipt_entry is not None and receipt_entry["deletion_id"] is not None:
@@ -5004,9 +5004,9 @@ class WorkflowCoordinator:
             scope = self._current_scope(connection, run_row)
             version = scope["scopeVersion"] + 1
             connection.execute(
-                "INSERT INTO workflow_scope_versions(run_id, scope_version, command_id, actor_role, actor_id, reason, write_scope_json,"
+                "INSERT INTO workflow_scope_versions(run_id, scope_version, command_id, actor_role, actor_id, note, write_scope_json,"
                 " manifest_sha256, stopped_evidence_json, created_at) VALUES(?,?,?,?,?,?,?,?,?,?)",
-                (run_id, version, command_id, actor["role"], actor["id"], reason, canonical_json(write_scope),
+                (run_id, version, command_id, actor["role"], actor["id"], note, canonical_json(write_scope),
                  scope["inputManifestSha256"], canonical_json(evidence), now),
             )
             self.board._append_event(
@@ -5177,7 +5177,7 @@ class WorkflowCoordinator:
             params,
             {
                 "runId", "targetRunId", "commandId", "expectedRevision", "conflictId", "action", "paths",
-                "observedFingerprint", "reason", *schemas.CONTROL_FIELDS, schemas.CONSOLE_AUTHORITY_FIELD,
+                "observedFingerprint", "note", *schemas.CONTROL_FIELDS, schemas.CONSOLE_AUTHORITY_FIELD,
             },
             "workflow.workspace_resolve",
         )
@@ -5194,14 +5194,14 @@ class WorkflowCoordinator:
         observed = schemas.required_string(params, "observedFingerprint", max_length=64)
         if schemas.SHA256_PATTERN.fullmatch(observed) is None:
             raise BoardError("INVALID_ARGUMENT", "observedFingerprint must be a lowercase sha256 hex digest")
-        reason = schemas.optional_string(params, "reason", max_length=schemas.MAX_WORKFLOW_REASON_BYTES) or ""
+        note = schemas.optional_string(params, "note", max_length=schemas.MAX_NOTE_BYTES) or ""
         if action in ("adopt", "abandon"):
             if paths:
                 raise BoardError("INVALID_ARGUMENT", f"{action} binds the whole recorded site and takes no path selection")
-            if not reason:
-                raise BoardError("INVALID_ARGUMENT", f"{action} requires an explicit reason")
+            if not note:
+                raise BoardError("INVALID_ARGUMENT", f"{action} requires an explicit note")
         request_key = {"runId": run_id, "targetRunId": target_id, "conflictId": conflict_id, "action": action,
-                       "paths": paths, "observedFingerprint": observed, "reason": reason, "expectedRevision": expected}
+                       "paths": paths, "observedFingerprint": observed, "note": note, "expectedRevision": expected}
         with self.db.read() as connection:
             receipt_entry = self.board._receipt_entry(connection, command_id, "workflow.workspace_resolve", request_key)
             if receipt_entry is not None and receipt_entry["deletion_id"] is not None:
@@ -5232,7 +5232,7 @@ class WorkflowCoordinator:
             result = workspace_module().resolve(
                 self.board.directory, manifest, task_id=target_id,
                 attempt_id=conflict["attempt_id"], action=action, paths=paths,
-                observed_fingerprint=observed, reason=reason, actor=actor,
+                observed_fingerprint=observed, note=note, actor=actor,
             )
             resolved_artifact = result.get("artifact")
             if action != "abandon" and isinstance(resolved_artifact, dict):
@@ -5294,11 +5294,11 @@ class WorkflowCoordinator:
                             "deliveredAt": now}
             connection.execute(
                 "UPDATE workflow_workspace_conflicts SET state=?, action=?, resolved_paths_json=?,"
-                " conflicting_paths_json=?, artifact_id=?, output_commit=?, output_tree=?, actor_role=?, actor_id=?, reason=?,"
+                " conflicting_paths_json=?, artifact_id=?, output_commit=?, output_tree=?, actor_role=?, actor_id=?, note=?,"
                 " command_id=?, delivery_json=?, updated_at=? WHERE conflict_id=? AND state='open'",
                 (result["state"], action, canonical_json(result["resolvedPaths"]),
                  canonical_json(result["remainingPaths"]), artifact_id, (record or {}).get("commit"),
-                 (record or {}).get("tree"), actor["role"], actor["id"], reason, command_id,
+                 (record or {}).get("tree"), actor["role"], actor["id"], note, command_id,
                  canonical_json(delivery) if delivery is not None else None, now, conflict_id),
             )
             closed_requests = []
@@ -6429,7 +6429,7 @@ class WorkflowCoordinator:
         input_json = canonical_json(turn_input)
         connection.execute(
             "INSERT INTO workflow_turns(turn_id, run_id, attempt_id, generation, turn_index, resume_mode,"
-            " previous_session_id, input_json, access, access_reason, expected_seconds, state, created_at, updated_at)"
+            " previous_session_id, input_json, access, access_note, expected_seconds, state, created_at, updated_at)"
             " VALUES(?,?,?,?,?,?,?,?,?,?,?,'prepared',?,?)",
             (
                 turn_id,
@@ -6441,7 +6441,7 @@ class WorkflowCoordinator:
                 previous_session,
                 input_json,
                 execution_workspace["access"],
-                execution_workspace.get("accessReason"),
+                execution_workspace.get("accessNote"),
                 task["expected_seconds"],
                 now,
                 now,
@@ -6587,7 +6587,7 @@ class WorkflowCoordinator:
             # stopped worktree; its out-of-scope paths were already rejected above.
             sealed = None
         choice = json.loads(run_row["execution_workspace_json"])
-        changed_access = (choice["access"], choice.get("accessReason")) != (manifest["access"], manifest.get("accessReason"))
+        changed_access = (choice["access"], choice.get("accessNote")) != (manifest["access"], manifest.get("accessNote"))
         if sealed is None and recovered_attempt is None and not changed_access:
             return None
         # A permission-only continuation before any seal keeps the original
@@ -6600,7 +6600,7 @@ class WorkflowCoordinator:
             "kind": "existing",
             "cwd": manifest["path"],
             "access": choice["access"],
-            **({"accessReason": choice["accessReason"]} if choice["access"] == "full" else {}),
+            **({"accessNote": choice["accessNote"]} if choice["access"] == "full" else {}),
             "base": {"kind": "working-tree", **({"ref": sealed["commit"]} if sealed.get("commit") else {})},
             "includeUntracked": included,
             "integrator": self._owner_actor(connection, run_row),
@@ -6839,14 +6839,14 @@ class WorkflowCoordinator:
         text = "An owned micro task reached a boundary. Review the current ownedMicroTasks in this turn input."
         connection.execute(
             "INSERT INTO workflow_continuations(continuation_id,run_id,kind,trigger_event_json,"
-            " expected_revision,input_text,input_bytes,reason,state,created_at)"
+            " expected_revision,input_text,input_bytes,note,state,created_at)"
             " VALUES(?,?,'lead-wakeup',?,?,?,?,?,'recorded',?)",
             (continuation_id, lead["run_id"], canonical_json(trigger), lead["revision"], text,
-             len(text.encode()), "owned-micro-task-boundary", now),
+             len(text.encode()), None, now),
         )
         task = connection.execute("SELECT * FROM tasks WHERE task_id=?", (lead["run_id"],)).fetchone()
         try:
-            self._requeue(connection, task, lead, reason="owned micro task needs its Lead", actor={"role": "workflow", "id": "auto"},
+            self._requeue(connection, task, lead,  actor={"role": "workflow", "id": "auto"},
                           now=now, continuation_id=continuation_id)
         except BoardError as error:
             connection.execute("UPDATE workflow_continuations SET state='recorded' WHERE continuation_id=?",
@@ -6940,7 +6940,7 @@ class WorkflowCoordinator:
             context["continuation"] = {
                 "kind": continuation["kind"],
                 "trigger": json.loads(continuation["trigger_event_json"]) if continuation["trigger_event_json"] else None,
-                "reason": continuation["reason"],
+                "note": continuation["note"],
                 "input": continuation["input_text"],
             }
         request_row = None
@@ -6958,7 +6958,7 @@ class WorkflowCoordinator:
             context["hostDecision"] = {
                 "requestId": request_row["request_id"],
                 "decision": decision.get("decision"),
-                "reason": decision.get("reason"),
+                "note": decision.get("note"),
             }
         frozen = continuation["helper_outcomes_json"] if continuation is not None else None
         if frozen and frozen not in ("[]", ""):
@@ -7145,7 +7145,7 @@ class WorkflowCoordinator:
                     "SELECT * FROM workflow_continuations WHERE turn_id=? AND state='consumed'",
                     (turn_row["turn_id"],),
                 ).fetchone()
-                self._requeue(connection, task, run_row, reason="native-resume-refused",
+                self._requeue(connection, task, run_row, 
                               actor={"role": "workflow", "id": "auto"}, now=now,
                               continuation_id=continuation["continuation_id"])
                 facts = {"turnId": turn_row["turn_id"], "continuationId": continuation["continuation_id"],
@@ -7629,12 +7629,10 @@ class WorkflowCoordinator:
                 "truncated": comparison.get("truncated"),
                 "truncatedSides": comparison.get("truncatedSides"),
                 "unprovenDirections": comparison.get("unprovenDirections"),
-                "partialNote": comparison.get("partialNote"),
                 "lostCount": comparison.get("lostCount"),
                 "newCount": comparison.get("newCount"),
                 "lostEntries": lost,
                 "newEntries": new,
-                "causeNote": comparison.get("causeNote"),
             },
         }
 
@@ -7783,7 +7781,7 @@ class WorkflowCoordinator:
                     connection,
                     parent_task,
                     parent,
-                    reason="authorized helpers settled",
+                    
                     actor={"role": "workflow", "id": "auto"},
                     now=now,
                 )

@@ -209,7 +209,7 @@ class DirtyInputTests(RealWorkspaceTestCase):
                 "commandId": "decide-1",
                 "expectedRevision": view["revision"],
                 "decision": "decline",
-                "reason": "continue on the sealed state",
+                "note": "continue on the sealed state",
                 **submitted["control"],
             },
         )
@@ -465,7 +465,7 @@ class TransferredCheckoutContinuationTests(RealWorkspaceTestCase):
                 "commandId": "decide-1",
                 "expectedRevision": view["revision"],
                 "decision": "approve",
-                "reason": "hand the checkout over",
+                "note": "hand the checkout over",
                 "helpers": [
                     {
                         **BUDDY,
@@ -572,7 +572,7 @@ class PinnedHelperHandoffTests(RealWorkspaceTestCase):
                 "commandId": "decide-1",
                 "expectedRevision": view["revision"],
                 "decision": "approve",
-                "reason": "two independent helpers",
+                "note": "two independent helpers",
                 "helpers": [
                     {
                         **BUDDY,
@@ -655,7 +655,7 @@ class WorktreeContinuationReuseTests(TransferredCheckoutContinuationTests):
                 "commandId": "wt-decide-1",
                 "expectedRevision": view["revision"],
                 "decision": "decline",
-                "reason": "keep working",
+                "note": "keep working",
                 **submitted["control"],
             },
         )
@@ -701,7 +701,7 @@ class ContinuationCheckoutReuseTests(TransferredCheckoutContinuationTests):
                 "commandId": "r-decide-1",
                 "expectedRevision": view["revision"],
                 "decision": "approve",
-                "reason": "sequential helper",
+                "note": "sequential helper",
                 "helpers": [
                     {
                         **BUDDY,
@@ -745,7 +745,7 @@ class ContinuationCheckoutReuseTests(TransferredCheckoutContinuationTests):
                 "commandId": "r-decide-2",
                 "expectedRevision": view["revision"],
                 "decision": "decline",
-                "reason": "continue on the integrated state",
+                "note": "continue on the integrated state",
                 **submitted["control"],
             },
         )

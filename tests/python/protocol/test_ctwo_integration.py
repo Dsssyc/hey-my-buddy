@@ -219,7 +219,7 @@ class CTwoIntegrationTests(unittest.TestCase):
             endpoint = self.service_endpoint or _read_endpoint(self.state)
             self.assertIsNotNone(endpoint, "service start failed; retain root for Host")
             stopped = _request(endpoint, "service_control", {
-                "action": "stop", "drainSeconds": 1, "reason": "owned integration fixture"}, state_dir=self.state)
+                "action": "stop", "drainSeconds": 1, 'note': "owned integration fixture"}, state_dir=self.state)
             self.record("service-stop.json", stopped)
             self.assertTrue(stopped["stopped"])
 
