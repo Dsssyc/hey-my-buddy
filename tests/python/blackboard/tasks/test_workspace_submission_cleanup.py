@@ -238,6 +238,7 @@ class SubmissionCleanupTests(workflow_tests.WorkflowTestCase):
                 self.assertEqual(reasons, ['commands-reference'] if kind == 'worktree' else [])
 
     def test_admission_rejection_preserves_everything_when_additional_evidence_exists(self):
+        from hey_my_buddy.blackboard.tasks.reclamation import Reclamation
         board = self.board()
         foreign = self.submit(board, request_id='foreign', cwd=str(self.repository('foreign')),
                               macroTask={'title': 'other repository'}, executionWorkspace={'kind': 'existing', 'access': 'read'})
@@ -264,6 +265,10 @@ class SubmissionCleanupTests(workflow_tests.WorkflowTestCase):
         self.assertEqual(source_index, (self.repo / '.git/index').read_bytes())
         self.assertEqual(saved['refs'], self.git(self.repo, 'for-each-ref', '--format=%(refname) %(objectname)', 'refs/hey-my-buddy/'))
         self.assert_no_registration(board)
+        Reclamation(board.store).run()
+        self.assertTrue((directory / 'checkout').exists())
+        self.assertEqual((directory / 'outputs/evidence.txt').read_text(encoding='utf-8'), 'retained output')
+        self.assertEqual(saved['refs'], self.git(self.repo, 'for-each-ref', '--format=%(refname) %(objectname)', 'refs/hey-my-buddy/'))
 
     def test_transaction_failure_rolls_back_task_and_revokes_checkout(self):
         board = self.board()
@@ -277,6 +282,7 @@ class SubmissionCleanupTests(workflow_tests.WorkflowTestCase):
         self.assert_no_snapshot()
 
     def test_unknown_reference_keeps_everything_for_both_kinds(self):
+        from hey_my_buddy.blackboard.tasks.reclamation import Reclamation
         board = self.board()
         for kind in ('existing', 'worktree'):
             with self.subTest(kind=kind):
@@ -295,6 +301,11 @@ class SubmissionCleanupTests(workflow_tests.WorkflowTestCase):
                 self.assertFalse(facts['removed'])
                 self.assertIn('fixed-reference-set-changed', facts['reasons'])
                 self.assertTrue((self.allocation(request) / 'manifest.json').exists())
+                self.assertEqual(len(self.git(self.repo, 'for-each-ref', 'refs/hey-my-buddy/workspaces/' + self.allocation(request).name).splitlines()), 5)
+                Reclamation(board.store).run()
+                self.assertTrue((self.allocation(request) / 'manifest.json').exists())
+                if kind == 'worktree':
+                    self.assertTrue((self.allocation(request) / 'checkout').exists())
                 self.assertEqual(len(self.git(self.repo, 'for-each-ref', 'refs/hey-my-buddy/workspaces/' + self.allocation(request).name).splitlines()), 5)
 
     def test_non_reservation_admission_error_revokes_both_kinds_and_keeps_source(self):
@@ -522,10 +533,16 @@ class SubmissionCleanupTests(workflow_tests.WorkflowTestCase):
         self.assertTrue(workspace.cleanup_inspect(self.directory, manifest)['eligible'])
         from hey_my_buddy.blackboard.tasks.reclamation import Reclamation
         Reclamation(board.store).run()
-        self.assertFalse(directory.exists())
+        self.assertTrue(directory.exists())
+        self.assertTrue((directory / 'checkout').exists())
+        planned = storage.inspect(board.store)
+        retained = next(row for row in planned['candidates'] if row['path'] == str(directory / 'checkout'))
+        self.assertIn('additional-evidence', retained['reasons'])
+        self.assertFalse(retained['eligible'])
         self.assert_no_registration(board)
 
     def test_changed_new_checkout_is_retained_after_admission_rejection(self):
+        from hey_my_buddy.blackboard.tasks.reclamation import Reclamation
         board = self.board()
         error = BoardError('ADMISSION_FAILED', 'rejected with changed content')
         def changed(*args, **kwargs):
@@ -538,6 +555,19 @@ class SubmissionCleanupTests(workflow_tests.WorkflowTestCase):
         self.assertEqual((self.allocation() / 'checkout/tracked.txt').read_text(encoding="utf-8"), 'valuable new content')
         self.assertIn('unsealed-changes', error.details['submissionCleanup']['reasons'])
         self.assert_no_registration(board)
+        refs = self.git(self.repo, 'for-each-ref', '--format=%(refname) %(objectname)',
+                        'refs/hey-my-buddy/workspaces/' + self.allocation().name)
+        maintenance = Reclamation(board.store)
+        maintenance.run()
+        maintenance.run()
+        self.assertEqual((self.allocation() / 'checkout/tracked.txt').read_text(encoding='utf-8'), 'valuable new content')
+        self.assertEqual(self.git(self.repo, 'for-each-ref', '--format=%(refname) %(objectname)',
+                                 'refs/hey-my-buddy/workspaces/' + self.allocation().name), refs)
+        planned = storage.inspect(board.store)
+        retained = next(row for row in planned['candidates'] if row['path'] == str(self.allocation() / 'checkout'))
+        self.assertFalse(retained['eligible'])
+        self.assertIn('additional-evidence', retained['reasons'])
+        self.assertEqual(board.store.service_issues(), [])
 
     def test_reset_failure_revokes_new_checkout(self):
         board = self.board()

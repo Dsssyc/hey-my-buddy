@@ -428,10 +428,28 @@ class StorageOrphanTests(WorkflowTestCase):
         Reclamation(self.board_instance.store).run()
         self.assertTrue(checkout.exists(), 'the committed integration must retain its target')
 
+    def test_inspection_and_reclamation_retain_an_unlocked_orphan_without_relocking_it(self):
+        from hey_my_buddy.blackboard.tasks.reclamation import Reclamation
+        manifest, checkout, _ = self.orphan()
+        self.git(self.repo, 'worktree', 'unlock', str(checkout))
+        refs = self.git(self.repo, 'for-each-ref', '--format=%(refname) %(objectname)',
+                        'refs/hey-my-buddy/workspaces/' + manifest['workspaceId'])
+        planned = self.board_instance.call('storage_plan', {})
+        retained = next(row for row in planned['candidates'] if row['path'] == str(checkout))
+        self.assertIn('lock-mismatch', retained['reasons'])
+        self.assertFalse(retained['eligible'])
+        self.assertNotIn('locked', workspace._worktree_record(self.repo, checkout))
+        Reclamation(self.board_instance.store).run()
+        self.assertTrue(checkout.exists())
+        self.assertNotIn('locked', workspace._worktree_record(self.repo, checkout))
+        self.assertEqual(self.git(self.repo, 'for-each-ref', '--format=%(refname) %(objectname)',
+                                 'refs/hey-my-buddy/workspaces/' + manifest['workspaceId']), refs)
+        self.assertEqual(self.board_instance.store.service_issues(), [])
+
     def test_accept_reports_busy_while_reclamation_owns_its_target(self):
         from hey_my_buddy.blackboard.tasks.reclamation import Reclamation
         manifest, checkout, _ = self.orphan()
-        remove = workspace.cleanup_remove
+        remove = workspace.revoke_submission
         observed = []
         def while_locked(*args, **kwargs):
             with self.assertRaises(BoardError) as caught:
@@ -439,7 +457,7 @@ class StorageOrphanTests(WorkflowTestCase):
             self.assertEqual(caught.exception.code, 'WORKSPACE_BUSY')
             observed.append(True)
             return remove(*args, **kwargs)
-        with patch.object(workspace, 'cleanup_remove', side_effect=while_locked):
+        with patch.object(workspace, 'revoke_submission', side_effect=while_locked):
             Reclamation(self.board_instance.store).run()
         self.assertEqual(observed, [True])
         self.assertFalse(checkout.exists())

@@ -79,6 +79,20 @@ class DeletionWorkspaceTests(unittest.TestCase):
         self.assertIn("macro-task-deletion.lock-mismatch", [item["reason"]["code"] for item in skipped])
         self.assertTrue(checkout.exists())
 
+    def test_unlocked_checkout_proof_is_read_only_and_cannot_authorize_deletion(self):
+        manifest = self.prepare()
+        checkout = Path(manifest['checkoutRoot'])
+        self.git('worktree', 'unlock', str(checkout))
+        before = self.git('for-each-ref', '--format=%(refname) %(objectname)', 'refs/hey-my-buddy/')
+        proof = workspace.deletion_inspect(self.state, manifest)
+        self.assertEqual(proof['reasons'], ['lock-mismatch'])
+        self.assertNotIn('locked', workspace._worktree_record(self.repo, checkout))
+        skipped = self.delete(manifest)
+        self.assertIn('macro-task-deletion.lock-mismatch', [item['reason']['code'] for item in skipped])
+        self.assertTrue(checkout.exists())
+        self.assertNotIn('locked', workspace._worktree_record(self.repo, checkout))
+        self.assertEqual(self.git('for-each-ref', '--format=%(refname) %(objectname)', 'refs/hey-my-buddy/'), before)
+
     def test_worker_commit_and_unsealed_files_do_not_block_owned_macro_deletion(self):
         manifest = self.prepare()
         checkout = Path(manifest["checkoutRoot"])

@@ -1883,8 +1883,7 @@ class WorkflowCoordinator:
         if facts["removed"]:
             def after_release():
                 try:
-                    (directory / ".lock").unlink()
-                    directory.rmdir()
+                    module.finish_submission_revoke(directory)
                 except Exception as error:
                     cleanup_error(error)
                 record()

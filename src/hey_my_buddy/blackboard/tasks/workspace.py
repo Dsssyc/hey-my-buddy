@@ -824,8 +824,8 @@ def submission_revoke_plan(state_dir, manifest):
     """Inspect this new allocation under its preparation lock, outside SQLite.
 
     Any unproven record, changed content, reference or additional evidence keeps
-    the entire allocation. The coordinator separately proves no board reference
-    under its writer fence before applying this plan with the same lock held.
+    the entire allocation. The caller separately proves no board reference in
+    a read snapshot before applying this plan with the same lock held.
     """
     with _errors():
         _validate_manifest(manifest)
@@ -847,7 +847,8 @@ def submission_revoke_plan(state_dir, manifest):
             raise BoardError("WORKSPACE_UNSAFE", "The submission records no longer prove this allocation")
         plan = {"manifest": manifest, "directory": directory, "allocation": None, "reasons": []}
         expected = {".lock", "request.json", "input.json", "manifest.json"}
-        if manifest["kind"] == "worktree":
+        checkout_present = manifest["kind"] == "worktree" and _path_present(directory / "checkout")
+        if checkout_present:
             expected.add("checkout")
         if {path.name for path in directory.iterdir()} != expected:
             plan["reasons"].append("additional-evidence")
@@ -868,7 +869,7 @@ def submission_revoke_plan(state_dir, manifest):
             if (_line(repository, "symbolic-ref", "--quiet", ref, allowed=(0, 1))
                     or _line(repository, "rev-parse", "--verify", ref) != commit):
                 plan["reasons"].append("fixed-reference-changed")
-        if manifest["kind"] == "worktree":
+        if checkout_present:
             proof = _cleanup_inspect(state, manifest)
             plan["allocation"] = proof["allocation"]
             plan["reasons"].extend(proof["reasons"])
@@ -880,7 +881,7 @@ def submission_revoke_plan(state_dir, manifest):
 def revoke_submission(plan):
     """Remove a proven, unregistered allocation, preserving sweep evidence on failure.
 
-    The original preparation lock and the coordinator's writer fence are held.
+    The original allocation lock is held and retained board uses were checked.
     The worktree goes before its manifest so failed Git removal retains the
     record the orphan sweep needs. All remaining removals follow creation in
     reverse order.
@@ -893,7 +894,7 @@ def revoke_submission(plan):
     with _errors():
         manifest, directory = plan["manifest"], plan["directory"]
         repository = Path(manifest["snapshot"]["repositoryPath"])
-        if manifest["kind"] == "worktree":
+        if plan["allocation"] is not None:
             _remove_worktree(repository, Path(manifest["checkoutRoot"]), plan["allocation"], manifest,
                              {"removed": True, "alreadyRemoved": True})
         (directory / "manifest.json").unlink()
@@ -906,6 +907,18 @@ def revoke_submission(plan):
             _git(repository, "update-ref", "--no-deref", "-d", prefix + suffix, commit)
         (directory / "request.json").unlink()
         return {"removed": True}
+
+
+def finish_submission_revoke(directory):
+    """Finish the same revocation after its original allocation lock is released.
+
+    With three callers for a request, unlinking a locked inode can let a third
+    create a different lock while a second holds the old one. The existing
+    post-release cleanup window stays accepted; deleting a held lock file
+    requires separate Windows verification.
+    """
+    (directory / ".lock").unlink()
+    directory.rmdir()
 
 
 def _borrowed_submission_allocation(state_dir, intent):
@@ -2110,8 +2123,8 @@ def _allocation_refs(repository, allocation_id, manifest, retained):
     return sorted(set(refs))
 
 
-def _cleanup_resume_registration(repository, checkout_root, allocation, manifest):
-    """Prove the surviving registration even when removal erased the gitfile."""
+def _cleanup_registration(repository, checkout_root, manifest):
+    """Read the surviving registration even when removal erased the gitfile."""
     def refuse(reason):
         raise BoardError("WORKSPACE_UNSAFE", "The started cleanup's allocation cannot be proved",
                          reasons=[reason], path=str(checkout_root))
@@ -2154,9 +2167,18 @@ def _cleanup_resume_registration(repository, checkout_root, allocation, manifest
             pointed = checkout_root / pointed
         if pointed.resolve() != git_dir.resolve():
             refuse("identity-changed")
+    return record, git_dir
+
+
+def _cleanup_resume_registration(repository, checkout_root, allocation, manifest):
+    """Restore an interrupted removal's own Git lock after proving its identity."""
+    record, git_dir = _cleanup_registration(repository, checkout_root, manifest)
+    if record is None:
+        return record, git_dir
     reason = "hey-my-buddy:" + allocation["workspaceId"]
     if "locked" in record and record["locked"] != reason:
-        refuse("lock-mismatch")
+        raise BoardError("WORKSPACE_UNSAFE", "The started cleanup's allocation cannot be proved",
+                         reasons=["lock-mismatch"], path=str(checkout_root))
     if "locked" not in record:
         _git(repository, "worktree", "lock", "--reason", reason, str(checkout_root))
         record["locked"] = reason
@@ -2383,7 +2405,7 @@ def deletion_inspect(state_dir, manifest: dict) -> dict:
         checkout = Path(allocation["path"])
         repository = Path(manifest["snapshot"]["repositoryPath"])
         try:
-            record, _git_dir = _cleanup_resume_registration(repository, checkout, allocation, manifest)
+            record, _git_dir = _cleanup_registration(repository, checkout, manifest)
         except BoardError as error:
             if error.code == "WORKSPACE_UNSAFE":
                 return {"reasons": error.details["reasons"], "resume": True}
@@ -2391,6 +2413,8 @@ def deletion_inspect(state_dir, manifest: dict) -> dict:
         if record is None:
             return {"reasons": [], "resume": True, "eligible": True,
                     "allocation": allocation, "worktree": False}
+        if record.get("locked") != "hey-my-buddy:" + allocation["workspaceId"]:
+            return {"reasons": ["lock-mismatch"], "resume": True}
         if "detached" not in record:
             return {"reasons": ["attached-branch"], "resume": True,
                     "attachedBranch": _attached_branch_report(checkout, record)}

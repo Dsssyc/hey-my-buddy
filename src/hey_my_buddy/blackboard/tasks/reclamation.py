@@ -141,103 +141,85 @@ def _request_run(connection, request_id):
     ).fetchone()
 
 
-def _allocation_refs(directory, manifest):
-    from .macro_task_deletion_workspace import _artifact_refs, _fixed_refs
-    expected = _fixed_refs(manifest)
-    outputs = directory / 'outputs'
-    if not outputs.exists() or private_dirs.linked(outputs):
-        return expected
-    names = ('output.json', 'pending.json', 'abandoned.json', 'abandoned-pending.json',
-             'resolve-restore.json', 'resolve-restore-pending.json', 'resolve-adopt.json', 'resolve-adopt-pending.json')
-    for output in outputs.iterdir():
-        if private_dirs.linked(output) or not output.is_dir():
-            continue
-        for name in names:
-            artifact = workspace._record(output / name)
-            if artifact is None:
-                continue
-            if not isinstance(artifact, dict):
-                raise BoardError('WORKSPACE_CONFLICT', 'An allocation artifact is not a record')
-            for ref, oid in _artifact_refs(artifact, {manifest['workspaceId']: manifest}).items():
-                if ref in expected and expected[ref] != oid:
-                    raise BoardError('WORKSPACE_CONFLICT', 'Allocation records disagree on a fixed reference')
-                expected[ref] = oid
-    return expected
-
-
 def allocation_record(store, directory):
-    """Read untrusted allocation material once; no Git or database transaction."""
-    from .macro_task_deletion_workspace import _record_proven
+    """Read the immutable request before deciding whether to acquire its lock."""
     result = {'directory': directory, 'manifest': None, 'requestId': None,
-              'owner': None, 'tasks': set(), 'reasons': []}
+              'owner': None, 'tasks': set(), 'reasons': [], 'afterRelease': None}
     try:
+        if private_dirs.linked(directory) or workspace.allocation_lock_directory(store.directory, directory.name) != directory:
+            raise ValueError('Unproven allocation directory or lock')
         request = workspace._record(directory / 'request.json')
         if not isinstance(request, dict):
             raise ValueError('Unproven request')
         request_id = request.get('requestId')
         if not isinstance(request_id, str) or not request_id or '\0' in request_id:
             raise ValueError('Unproven request identity')
-        expected = 'ws-' + workspace._sha(workspace._json([str(store.directory), request_id]))[:32]
+        expected = 'ws-' + workspace._sha(workspace._json([str(store.directory.resolve()), request_id]))[:32]
         if directory.name != expected:
             raise ValueError('Request does not own this directory')
-        manifest = workspace._record(directory / 'manifest.json')
-        if manifest is not None:
-            workspace._validate_manifest(manifest)
-            if manifest['workspaceId'] != directory.name or not _record_proven(store.directory, manifest):
-                raise ValueError('Unproven allocation records')
-        result.update(manifest=manifest, requestId=request_id)
+        result['requestId'] = request_id
     except (BoardError, ValueError, TypeError, KeyError):
         result['reasons'] = ['allocation-unproven']
     return result
 
 
-def allocation_records(store, directories, *, stopping=lambda: False):
-    """Inspect one allocation at a time, holding only its own allocation lock.
+def _allocation_owner(store, item):
+    with store.db.read() as connection:
+        run = _request_run(connection, item['requestId'])
+    if run is not None:
+        item['tasks'].add(run['task_id'])
+        if run['state'] not in ('accepted', 'concluded') or workspace._path_present(item['directory'] / 'manifest.json'):
+            item['owner'] = run['task_id']
+            item['reasons'] = ['request-task-retained']
 
-    A manifest's retained uses are checked in a read snapshot under that lock.
-    Shells need no retained-reference scan. The caller closes the iterator before
-    leaving, so interruption releases the current lock as well.
+
+def allocation_records(store, directories, *, stopping=lambda: False):
+    """Skip owned allocations without a lock; lock unowned candidates one by one.
+
+    Admission also holds the allocation lock, so a candidate's owner is re-read
+    after acquisition. Closing the iterator releases its current lock before
+    finishing an applied revocation's lock-file and directory removal.
     """
-    from .storage import _allocation_reference_sets, _workspace_reference_rows
     for directory in directories:
         if stopping():
             break
+        item = allocation_record(store, directory)
+        if not item['reasons']:
+            _allocation_owner(store, item)
+        if item['reasons']:
+            yield item
+            continue
         with ExitStack() as ownership:
+            def after_release():
+                if item['afterRelease'] is not None:
+                    item['afterRelease']()
+            ownership.callback(after_release)
             try:
-                if private_dirs.linked(directory) or workspace.allocation_lock_directory(store.directory, directory.name) != directory:
-                    raise BoardError('WORKSPACE_UNSAFE', 'Unproven allocation directory or lock')
                 ownership.enter_context(workspace._lock(directory, create=False))
             except BoardError as error:
                 if error.code not in ('WORKSPACE_BUSY', 'WORKSPACE_UNSAFE', 'PRIVATE_PATH_UNSAFE'):
                     raise
-                item = {'directory': directory, 'manifest': None, 'requestId': None,
-                        'owner': None, 'tasks': set(), 'reasons': [
-                            'WORKSPACE_BUSY' if error.code == 'WORKSPACE_BUSY' else 'allocation-unproven']}
+                item['reasons'] = ['WORKSPACE_BUSY' if error.code == 'WORKSPACE_BUSY' else 'allocation-unproven']
             else:
-                item = allocation_record(store, directory)
-                if not item['reasons']:
-                    with store.db.read() as connection:
-                        run = _request_run(connection, item['requestId'])
-                        if run is not None and (item['manifest'] is not None or run['state'] not in ('accepted', 'concluded')):
-                            item['owner'] = run['task_id']
-                            item['tasks'].add(run['task_id'])
-                            item['reasons'] = ['request-task-retained']
-                        elif item['manifest'] is not None:
-                            def referenced(index, table, row):
-                                item['tasks'].update(value for key in row.keys()
-                                                     if (key.endswith('task_id') or key.endswith('run_id'))
-                                                     and isinstance(value := row[key], str))
-                            item['reasons'] = _allocation_reference_sets(_workspace_reference_rows(connection),
-                                [(item['manifest'], item['requestId'])],
-                                directories=[str(directory)], on_reference=referenced)[0]
+                _allocation_owner(store, item)
+                if item['owner'] is None:
+                    try:
+                        item['manifest'] = workspace._record(directory / 'manifest.json')
+                        if (item['manifest'] is not None and (not isinstance(item['manifest'], dict)
+                                or item['manifest'].get('workspaceId') != directory.name)):
+                            item['reasons'] = ['allocation-unproven']
+                    except BoardError as error:
+                        if error.code not in ('WORKSPACE_CONFLICT', 'PRIVATE_PATH_UNSAFE'):
+                            raise
+                        item['reasons'] = ['allocation-unproven']
             if item['reasons']:
                 ownership.close()
             yield item
 
 
-def allocation_proof(store, item):
-    """Ownership and process proof outside every SQLite transaction."""
-    from .macro_task_deletion_workspace import _repository_skip
+def allocation_plan(store, item):
+    """Use submission revocation's proof, plus retained uses and process facts."""
+    from .storage import _allocation_reference_sets, _workspace_reference_rows
     directory, manifest = item['directory'], item['manifest']
     if item['reasons']:
         return
@@ -245,63 +227,43 @@ def allocation_proof(store, item):
         if {entry.name for entry in directory.iterdir()} - {'.lock', 'request.json'}:
             item['reasons'] = ['allocation-unproven']
         return
-    skipped = _repository_skip(manifest, 'allocation', str(directory))
-    if skipped is not None:
-        item['reasons'] = [skipped['reason']['code']]
+    try:
+        item['plan'] = workspace.submission_revoke_plan(store.directory, manifest)
+    except BoardError as error:
+        if error.code not in ('INVALID_WORKSPACE', 'WORKSPACE_MANIFEST_CHANGED', 'WORKSPACE_CONFLICT',
+                              'WORKSPACE_CHANGED', 'WORKSPACE_UNSAFE', 'PRIVATE_PATH_UNSAFE'):
+            raise
+        item['reasons'] = ['allocation-unproven']
         return
-    item['refs'] = _allocation_refs(directory, manifest)
+    item['reasons'] = list(item['plan']['reasons'])
+    with store.db.read() as connection:
+        def referenced(index, table, row):
+            item['tasks'].update(value for key in row.keys()
+                                 if (key.endswith('task_id') or key.endswith('run_id'))
+                                 and isinstance(value := row[key], str))
+        item['reasons'].extend(_allocation_reference_sets(_workspace_reference_rows(connection),
+            [(manifest, item['requestId'])], directories=[str(directory)], on_reference=referenced)[0])
     checkout = directory / 'checkout'
-    proof = workspace.deletion_inspect(store.directory, manifest) if workspace._path_present(checkout) else None
-    item['proof'] = proof
-    if proof is not None:
-        item['reasons'].extend(proof['reasons'])
-        if not item['reasons']:
-            from .checkout_processes import require_idle_checkout
-            try:
-                require_idle_checkout(checkout)
-            except BoardError as error:
-                cause = error.details.get('reason', {})
-                if (error.code != 'NOT_READY' or cause.get('code') != 'checkout.process-blockers'
-                        or cause.get('params', {}).get('unreadableProcesses')):
-                    raise
-                item['reasons'].extend(error.details['reasons'])
+    if not item['reasons'] and workspace._path_present(checkout):
+        from .checkout_processes import require_idle_checkout
+        try:
+            require_idle_checkout(checkout)
+        except BoardError as error:
+            cause = error.details.get('reason', {})
+            if (error.code != 'NOT_READY' or cause.get('code') != 'checkout.process-blockers'
+                    or cause.get('params', {}).get('unreadableProcesses')):
+                raise
+            item['reasons'].extend(error.details['reasons'])
 
-
-def reclaim_allocation(store, item):
-    """Remove a proven object while its original allocation lock is held."""
-    from .macro_task_deletion_workspace import _delete_refs
-    from .storage import locked
-    with locked(store):
-        allocation_proof(store, item)
-        if item['reasons']:
-            return
-        directory, manifest = item['directory'], item['manifest']
-        if manifest is not None:
-            if item['proof'] is not None:
-                workspace.cleanup_remove(store.directory, manifest, proof=item['proof'])
-            skipped = _delete_refs(Path(manifest['snapshot']['repositoryPath']), directory.name, item['refs'])
-            if skipped:
-                item['reasons'] = sorted({entry['reason']['code'] for entry in skipped})
-                return
-        private_dirs.remove_tree(directory)
 
 def allocation_inventory(store, directories):
     """List only allocations automatic reclamation cannot presently prove."""
-    from .macro_task_deletion_workspace import _refs
     result = []
     with closing(allocation_records(store, directories)) as records:
         for item in records:
             if item['owner'] is not None:
                 continue
-            allocation_proof(store, item)
-            manifest = item['manifest']
-            if not item['reasons'] and manifest is not None:
-                repository = Path(manifest['snapshot']['repositoryPath'])
-                for ref, oid in _refs(repository, item['directory'].name).items():
-                    if (ref not in item['refs'] or workspace._line(repository, 'symbolic-ref', '--quiet', ref, allowed=(0, 1))):
-                        item['reasons'].append('macro-task-deletion.ref-unproven')
-                    elif oid != item['refs'][ref]:
-                        item['reasons'].append('macro-task-deletion.ref-changed')
+            allocation_plan(store, item)
             if item['reasons']:
                 checkout = item['directory'] / 'checkout'
                 item['path'] = checkout if workspace._path_present(checkout) else item['directory']
@@ -387,7 +349,7 @@ class Reclamation:
 
     def _discover_allocations(self):
         import os
-        root = self.store.directory / 'workspaces'
+        root = self.store.directory.resolve() / 'workspaces'
         if not root.is_dir():
             return
         stamp = root.stat().st_mtime_ns
@@ -457,7 +419,14 @@ class Reclamation:
                         continue
                     try:
                         if not item['reasons']:
-                            reclaim_allocation(store, item)
+                            with locked(store):
+                                allocation_plan(store, item)
+                                if not item['reasons']:
+                                    if item['manifest'] is None:
+                                        (directory / 'request.json').unlink()
+                                    else:
+                                        workspace.revoke_submission(item['plan'])
+                                    item['afterRelease'] = lambda directory=directory: workspace.finish_submission_revoke(directory)
                         self._remember_tasks(directory, item['tasks'])
                         if item['reasons']:
                             self._allocations.discard(directory)

@@ -125,7 +125,6 @@ class ReclamationTests(LifecycleTestCase):
 
     def test_abandoned_shell_and_unowned_allocation_are_reclaimed_under_their_locks(self):
         from hey_my_buddy.blackboard.tasks.reclamation import Reclamation
-        from unittest.mock import patch
         board = self.board()
         intent = {'kind': 'worktree', 'cwd': str(self.repo), 'access': 'write', 'writeScope': ['.'],
                   'base': {'kind': 'working-tree'}, 'integrator': {'role': 'host', 'id': 'fixture-host'}}
@@ -141,9 +140,9 @@ class ReclamationTests(LifecycleTestCase):
         manifest = workspace.prepare(board.directory, 'abandoned-allocation', intent)
         directory = board.directory / 'workspaces' / manifest['workspaceId']
         checkout = Path(manifest['checkoutRoot'])
-        (checkout / 'unsealed.txt').write_text('abandoned preparation', encoding='utf-8')
-        git(checkout, 'add', '.')
-        git(checkout, 'commit', '-qm', 'Preparation committed before admission')
+        with workspace._lock(directory, create=False):
+            Reclamation(board.store).run()
+            self.assertTrue(checkout.exists())
         Reclamation(board.store).run()
         self.assertFalse(directory.exists())
         self.assertFalse(git(self.repo, 'for-each-ref', '--format=%(refname)',
@@ -153,6 +152,38 @@ class ReclamationTests(LifecycleTestCase):
         Reclamation(board.store).run()
         self.assertTrue(checkout.exists())
         self.assertTrue(directory.exists())
+
+    def test_a_missing_checkout_uses_the_same_revoke_plan_for_its_records_and_refs(self):
+        from hey_my_buddy.blackboard.tasks.reclamation import Reclamation
+        board = self.board()
+        manifest = workspace.prepare(board.directory, 'already-removed-checkout', {
+            'kind': 'worktree', 'cwd': str(self.repo), 'access': 'write', 'writeScope': ['.'],
+            'base': {'kind': 'working-tree'}, 'integrator': {'role': 'host', 'id': 'fixture-host'}})
+        directory = Path(manifest['checkoutRoot']).parent
+        workspace.cleanup_remove(board.directory, manifest)
+        self.assertFalse(Path(manifest['checkoutRoot']).exists())
+        self.assertTrue((directory / 'manifest.json').exists())
+        Reclamation(board.store).run()
+        self.assertFalse(directory.exists())
+        self.assertFalse(git(self.repo, 'for-each-ref', '--format=%(refname)',
+                             'refs/hey-my-buddy/workspaces/' + manifest['workspaceId']))
+        self.assertEqual(board.store.service_issues(), [])
+
+    def test_a_foreign_manifest_cannot_redirect_an_unregistered_revocation(self):
+        from hey_my_buddy.blackboard.tasks.reclamation import Reclamation
+        board = self.board()
+        intent = {'kind': 'worktree', 'cwd': str(self.repo), 'access': 'write', 'writeScope': ['.'],
+                  'base': {'kind': 'working-tree'}, 'integrator': {'role': 'host', 'id': 'fixture-host'}}
+        first = workspace.prepare(board.directory, 'misplaced-manifest', intent)
+        second = workspace.prepare(board.directory, 'other-allocation', intent)
+        directory = Path(first['checkoutRoot']).parent
+        other = Path(second['checkoutRoot']).parent
+        (directory / 'manifest.json').write_bytes(workspace._json(second))
+        with workspace._lock(other, create=False):
+            Reclamation(board.store).run()
+            self.assertTrue(Path(first['checkoutRoot']).exists())
+            self.assertTrue(Path(second['checkoutRoot']).exists())
+        self.assertEqual(board.store.service_issues(), [])
 
     def test_failed_or_cancelled_borrower_uses_its_concluded_parents_retention_time(self):
         from support import FakeClock
@@ -212,6 +243,33 @@ class ReclamationTests(LifecycleTestCase):
             connection.execute('DELETE FROM tasks WHERE task_id=?', (task['task']['runId'],))
         Reclamation(board.store).run()
         self.assertFalse(directory.exists())
+
+    def test_maintenance_never_locks_a_running_tasks_allocation(self):
+        from unittest.mock import patch
+        from hey_my_buddy.blackboard.tasks.reclamation import Reclamation
+        from blackboard.tasks.workspace_lifecycle_case import BUDDY
+        board = self.board()
+        submitted = board.call('workflow_submit', {
+            **BUDDY, 'requestId': 'running-no-maintenance-lock', 'hostId': 'host-1',
+            'task': 'Keep sealing available', 'cwd': str(self.repo), 'submissionToken': 't' * 32,
+            'executionWorkspace': {'kind': 'worktree', 'access': 'write', 'writeScope': ['.']},
+        })
+        claimed = self.claim(board, submitted['runId'], request_id='running-maintenance-claim')
+        manifest = claimed['claim']['turn']['input']['executionWorkspace']
+        directory = Path(manifest['checkoutRoot']).parent
+        maintenance = Reclamation(board.store)
+        original_lock = workspace._lock
+        def no_running_lock(path, **kwargs):
+            self.assertNotEqual(path, directory, 'Maintenance must not lock a running task allocation')
+            return original_lock(path, **kwargs)
+        with patch.object(workspace, '_lock', side_effect=no_running_lock):
+            maintenance.run()
+            maintenance.changed([submitted['runId']])
+            maintenance.run()
+        self.assertEqual(board.store.service_issues(), [])
+        seal = workspace.seal(board.directory, manifest, submitted['runId'], claimed['claim']['attempt']['attemptId'])
+        self.finish_turn(board, claimed, seal)
+        self.assertEqual(self.view(board, submitted['runId'])['state'], 'delivered')
 
     def test_hundreds_of_shells_can_be_inspected_and_reclaimed_with_256_descriptors(self):
         import os
@@ -389,14 +447,13 @@ class ReclamationTests(LifecycleTestCase):
             _, directory = workspace._workspace_directory(board.directory, request_id)
             (directory / '.lock').touch()
             (directory / 'request.json').write_bytes(workspace._json({'requestId': request_id}))
-        real = reclamation.reclaim_allocation
+        real = workspace.finish_submission_revoke
         unlocked = []
-        def remove(store, directory):
-            result = real(store, directory)
-            with storage.locked(store):
-                unlocked.append(directory['directory'].name)
-            return result
-        with patch.object(reclamation, 'reclaim_allocation', side_effect=remove):
+        def remove(directory):
+            with storage.locked(board.store), workspace._lock(directory, create=False):
+                unlocked.append(directory.name)
+            return real(directory)
+        with patch.object(workspace, 'finish_submission_revoke', side_effect=remove):
             reclamation.Reclamation(board.store).run()
         self.assertEqual(len(unlocked), 2)
         stopped = threading.Event()
@@ -412,11 +469,14 @@ class ReclamationTests(LifecycleTestCase):
     def test_task_deletion_invalidates_cached_allocation_ownership_without_a_retained_event(self):
         from hey_my_buddy.blackboard.tasks import reclamation
         board = self.board()
-        submitted, _, manifest, _, _, view, artifact = self.run_worktree(board)
-        self.accept(board, view, artifact, target=self.target_with_artifact(artifact))
+        submitted = self.submit(board, request_id='cached-owner', kind='worktree')
+        self.controls[submitted['runId']] = submitted['control']
+        with board.store.db.read() as connection:
+            manifest = json.loads(board.store.workflow._run_row(connection, submitted['runId'])['workspace_manifest_json'])
         maintenance = reclamation.Reclamation(board.store)
         board.store.on_change = maintenance.changed
         maintenance.run()
+        board.call('workflow_cancel', {'runId': submitted['runId'], **self.control(submitted)})
         directory = board.directory / 'workspaces' / manifest['workspaceId']
         original = (directory / 'request.json').read_bytes()
         (directory / 'request.json').write_bytes(workspace._json({'requestId': 'unknown-owner'}))
@@ -527,8 +587,7 @@ class ReclamationTests(LifecycleTestCase):
     def test_allocation_git_process_and_removal_work_never_hold_a_database_transaction(self):
         import sqlite3
         from unittest.mock import patch
-        from hey_my_buddy import private_dirs
-        from hey_my_buddy.blackboard.tasks import checkout_processes, macro_task_deletion_workspace, reclamation
+        from hey_my_buddy.blackboard.tasks import checkout_processes, reclamation
         board = self.board()
         intent = {'kind': 'worktree', 'cwd': str(self.repo), 'access': 'write', 'writeScope': ['.'],
                   'base': {'kind': 'working-tree'}, 'integrator': {'role': 'host', 'id': 'fixture-host'}}
@@ -542,13 +601,18 @@ class ReclamationTests(LifecycleTestCase):
                 observed.append(name)
                 return operation(*args, **kwargs)
             return call
-        with patch.object(workspace, 'deletion_inspect', side_effect=outside_transaction('git', workspace.deletion_inspect)), \
+        git_call = workspace._git
+        def git_operation(root, *args, **kwargs):
+            operation = outside_transaction('refs', git_call) if args[0] == 'update-ref' else git_call
+            return operation(root, *args, **kwargs)
+        with patch.object(workspace, 'submission_revoke_plan', side_effect=outside_transaction('proof', workspace.submission_revoke_plan)), \
              patch.object(checkout_processes, 'require_idle_checkout', side_effect=outside_transaction('process', checkout_processes.require_idle_checkout)), \
-             patch.object(workspace, 'cleanup_remove', side_effect=outside_transaction('checkout', workspace.cleanup_remove)), \
-             patch.object(macro_task_deletion_workspace, '_delete_refs', side_effect=outside_transaction('refs', macro_task_deletion_workspace._delete_refs)), \
-             patch.object(private_dirs, 'remove_tree', side_effect=outside_transaction('records', private_dirs.remove_tree)):
+             patch.object(workspace, 'revoke_submission', side_effect=outside_transaction('revoke', workspace.revoke_submission)), \
+             patch.object(workspace, '_remove_worktree', side_effect=outside_transaction('checkout', workspace._remove_worktree)), \
+             patch.object(workspace, '_git', side_effect=git_operation), \
+             patch.object(workspace, 'finish_submission_revoke', side_effect=outside_transaction('records', workspace.finish_submission_revoke)):
             reclamation.Reclamation(board.store).run()
-        self.assertEqual(observed, ['git', 'process', 'checkout', 'refs', 'records'])
+        self.assertEqual(observed, ['proof', 'process', 'revoke', 'checkout', 'refs', 'refs', 'refs', 'refs', 'records'])
         self.assertFalse(Path(manifest['checkoutRoot']).parent.exists())
 
     def test_unproven_allocations_are_scanned_once_each_and_wait_for_entry_or_related_task_changes(self):
@@ -600,7 +664,7 @@ class ReclamationTests(LifecycleTestCase):
             with self.subTest(operation=operation, failure=str(failure)):
                 board = self.board()
                 manifest = workspace.prepare(board.directory, operation + type(failure).__name__, intent)
-                module, name = (workspace, 'deletion_inspect') if operation == 'git' else (checkout_processes, 'require_idle_checkout')
+                module, name = (workspace, 'submission_revoke_plan') if operation == 'git' else (checkout_processes, 'require_idle_checkout')
                 with patch.object(module, name, side_effect=failure):
                     reclamation.Reclamation(board.store).run()
                 issues = board.store.service_issues()
