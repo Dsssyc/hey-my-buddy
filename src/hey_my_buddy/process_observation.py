@@ -13,11 +13,15 @@ import psutil
 
 @dataclass(frozen=True)
 class DeniedPathObservation:
-    pid: int
+    process: psutil.Process
     create_time: float
     name: str
     read: str
     error: str
+
+    @property
+    def pid(self) -> int:
+        return self.process.pid
 
     def __str__(self) -> str:
         return (f'process path observation denied: pid={self.pid} createTime={self.create_time!r} '
@@ -28,7 +32,7 @@ class _IdentityUnavailable(Exception):
     """A failed identity recheck must never be treated as a denied path read."""
 
 
-def _read_with_retry(process, created, read, *, errors=(psutil.Error, OSError)):
+def _read_with_retry(process, read, *, errors=(psutil.Error, OSError)):
     try:
         return read(process)
     except psutil.NoSuchProcess:
@@ -36,12 +40,14 @@ def _read_with_retry(process, created, read, *, errors=(psutil.Error, OSError)):
     except errors:
         try:
             current = psutil.Process(process.pid)
-            current_created = current.create_time()
+            # Construction can retain an unreadable identity on Windows.
+            # Require readable evidence, but never compare wall-clock values.
+            current.create_time()
         except psutil.NoSuchProcess:
             raise
         except (psutil.Error, OSError) as error:
             raise _IdentityUnavailable(f'{type(error).__name__}: {error}') from error
-        if current_created != created:
+        if current != process:
             raise psutil.NoSuchProcess(process.pid)
         return read(current)
 
@@ -50,7 +56,7 @@ def _failure(process, created, operation, error, *, name=None) -> str:
     if name is None:
         try:
             name = process.name()
-        except (psutil.Error, OSError) as name_error:
+        except (psutil.Error, OSError, SystemError) as name_error:
             name = f'<unavailable: {type(name_error).__name__}: {name_error}>'
     return (f'pid={process.pid} createTime={created!r} name={name!r} '
             f'read={operation}: {type(error).__name__}: {error}')
@@ -102,12 +108,12 @@ def observe_process_argv() -> tuple[list[tuple[psutil.Process, list[str]]], list
         try:
             created = process.create_time()
             operation = 'cmdline'
-            argv = _read_with_retry(process, created, lambda current: current.cmdline(),
+            argv = _read_with_retry(process, lambda current: current.cmdline(),
                                     errors=(psutil.Error, OSError, SystemError))
         except psutil.NoSuchProcess:
             continue
         except _IdentityUnavailable as error:
-            problems.append(_failure(process, created, 'create_time recheck', error))
+            problems.append(_failure(process, created, 'identity recheck', error))
         # On macOS psutil 7.2.2 can raise SystemError when proc_cmdline
         # leaves an exception set on its forced-permission-denial path.
         except (psutil.Error, OSError, SystemError) as error:
@@ -118,19 +124,17 @@ def observe_process_argv() -> tuple[list[tuple[psutil.Process, list[str]]], list
     return rows, problems
 
 
-def _proc_fd_paths(pid: int) -> set[str]:
+def _proc_fd_paths(pid: int, paths: set[str]) -> None:
     try:
         handles = list((Path('/proc') / str(pid) / 'fd').iterdir())
     except (FileNotFoundError, ProcessLookupError):
         raise psutil.NoSuchProcess(pid) from None
-    paths = set()
     for handle in handles:
         try:
             paths.add(os.readlink(handle))
         except FileNotFoundError:
             # A descriptor closed after listing no longer holds a reference.
             continue
-    return paths
 
 
 def observe_open_paths() -> tuple[dict[int, set[str]], str | None, bool, list[DeniedPathObservation]]:
@@ -143,45 +147,62 @@ def observe_open_paths() -> tuple[dict[int, set[str]], str | None, bool, list[De
     """
     processes, known = _processes()
     problems = [] if known else ['psutil process enumeration incomplete']
-    denied: dict[int, DeniedPathObservation] = {}
+    denied: dict[int, list[DeniedPathObservation]] = {}
     paths: dict[int, set[str]] = {}
     for process in processes:
         created = None
-        operation = 'create_time'
         try:
             created = process.create_time()
-            values = paths.setdefault(process.pid, set())
-            operation = 'cwd'
-            values.add(_read_with_retry(process, created, lambda current: current.cwd()))
-            if psutil.LINUX:
-                operation = 'memory_maps'
-                values.update(item.path for item in _read_with_retry(
-                    process, created, lambda current: current.memory_maps()))
-                operation = '/proc/pid/fd'
-                values.update(_read_with_retry(
-                    process, created, lambda current: _proc_fd_paths(current.pid)))
         except psutil.NoSuchProcess:
-            paths.pop(process.pid, None)
-        except _IdentityUnavailable as error:
-            problems.append(_failure(process, created, 'create_time recheck', error))
+            continue
         except (psutil.Error, OSError) as error:
-            if operation != 'create_time' and _starting_or_ending(process):
-                paths.pop(process.pid, None)
-            elif operation != 'create_time' and isinstance(error, psutil.AccessDenied):
-                try:
-                    name = process.name()
-                except psutil.NoSuchProcess:
-                    paths.pop(process.pid, None)
-                except (psutil.Error, OSError) as name_error:
-                    problems.append(_failure(process, created, 'name after denied ' + operation, name_error))
+            problems.append(_failure(process, created, 'create_time', error))
+            continue
+        values: set[str] = set()
+        readers = [('cwd', lambda current: values.add(current.cwd()))]
+        if psutil.LINUX:
+            readers.extend([
+                ('memory_maps', lambda current: values.update(item.path for item in current.memory_maps())),
+                ('/proc/pid/fd', lambda current: _proc_fd_paths(current.pid, values)),
+            ])
+        process_denied = []
+        process_problems = []
+        ended = False
+        for operation, read in readers:
+            try:
+                _read_with_retry(process, read)
+            except psutil.NoSuchProcess:
+                ended = True
+                break
+            except _IdentityUnavailable as error:
+                process_problems.append(_failure(process, created, 'identity recheck', error))
+                break
+            except (psutil.Error, OSError) as error:
+                if _starting_or_ending(process):
+                    ended = True
+                    break
+                if (isinstance(error, psutil.AccessDenied) or
+                        operation == '/proc/pid/fd' and isinstance(error, PermissionError)):
+                    try:
+                        name = process.name()
+                    except psutil.NoSuchProcess:
+                        ended = True
+                        break
+                    except (psutil.Error, OSError, SystemError) as name_error:
+                        unavailable = f'<unavailable: {type(name_error).__name__}: {name_error}>'
+                        process_problems.append(_failure(
+                            process, created, 'name after denied ' + operation, name_error, name=unavailable))
+                    else:
+                        process_denied.append(DeniedPathObservation(
+                            process, created, name, operation, f'{type(error).__name__}: {error}'))
                 else:
-                    denied[process.pid] = DeniedPathObservation(
-                        process.pid, created, name, operation, f'{type(error).__name__}: {error}')
-                    # macOS lsof must not turn this explicit exception back into
-                    # an unknown missing-PID result. Keep any positive paths.
-            else:
-                problems.append('process path observation failed: ' +
-                                _failure(process, created, operation, error))
+                    process_problems.append('process path observation failed: ' +
+                                            _failure(process, created, operation, error))
+        if not ended:
+            paths[process.pid] = values
+            problems.extend(process_problems)
+            if process_denied:
+                denied[process.pid] = process_denied
     available = psutil.LINUX or psutil.MACOS or psutil.WINDOWS
     native_pids = None
     if psutil.WINDOWS:
@@ -220,4 +241,5 @@ def observe_open_paths() -> tuple[dict[int, set[str]], str | None, bool, list[De
             problems.append('lsof observation incomplete for a snapshot process')
     normalized = {pid: {path.removesuffix(' (deleted)') for path in values}
                   for pid, values in paths.items()}
-    return normalized, '; '.join(dict.fromkeys(problems)) or None, available, list(denied.values())
+    return normalized, '; '.join(dict.fromkeys(problems)) or None, available, [
+        entry for entries in denied.values() for entry in entries]

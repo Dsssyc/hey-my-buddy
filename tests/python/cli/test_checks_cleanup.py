@@ -732,7 +732,7 @@ class ProcessObservationTests(unittest.TestCase):
                 self.assertIsNotNone(error)
                 self.assertTrue(available)
 
-    def test_linux_missing_fd_directory_means_ended_but_denied_is_unknown(self):
+    def test_linux_missing_fd_directory_means_ended_but_denied_is_recorded(self):
         root = Path('/private/checks-fixture')
         for failure in (FileNotFoundError('fd directory gone'), PermissionError('fd denied')):
             with self.subTest(failure=type(failure).__name__):
@@ -740,10 +740,15 @@ class ProcessObservationTests(unittest.TestCase):
                       patch.object(observation.psutil, 'LINUX', True),
                       patch.object(observation.psutil, 'MACOS', False),
                       patch.object(Path, 'iterdir', side_effect=failure)):
-                    pids, error, available, _ = checks._open_file_pids(root)
-                self.assertEqual(error is None, isinstance(failure, FileNotFoundError))
-                if error is None:
-                    self.assertEqual(pids, set())
+                    pids, error, available, denied = checks._open_file_pids(root)
+                self.assertIsNone(error)
+                if isinstance(failure, FileNotFoundError):
+                    self.assertEqual((pids, denied), (set(), []))
+                else:
+                    self.assertEqual(pids, {123})
+                    self.assertEqual(len(denied), 1)
+                    self.assertEqual(denied[0].read, '/proc/pid/fd')
+                    self.assertIn('PermissionError', denied[0].error)
                 self.assertTrue(available)
 
     def test_cwd_and_linux_mappings_find_processes_without_an_argv_reference(self):
@@ -783,7 +788,7 @@ class ProcessObservationTests(unittest.TestCase):
         self.assertIsNone(error)
         self.assertTrue(available)
 
-    def test_linux_fd_channel_preserves_deleted_files_and_denied_reads_are_unknown(self):
+    def test_linux_fd_channel_preserves_deleted_files_and_records_denied_reads(self):
         root = self.root
         for failure in (None, PermissionError('fd denied')):
             with self.subTest(failure=failure):
@@ -792,13 +797,16 @@ class ProcessObservationTests(unittest.TestCase):
                       patch.object(observation.psutil, 'MACOS', False),
                       patch.object(observation.shutil, 'which', side_effect=AssertionError('Linux called lsof')),
                       proc_references(failure or f'{root / "unlinked"} (deleted)')):
-                    pids, error, available, _ = checks._open_file_pids(root)
+                    pids, error, available, denied = checks._open_file_pids(root)
                 self.assertTrue(available)
+                self.assertIsNone(error)
                 if failure:
-                    self.assertIsNotNone(error)
+                    self.assertEqual(pids, set())
+                    self.assertEqual(len(denied), 1)
+                    self.assertIn('PermissionError', denied[0].error)
                 else:
                     self.assertEqual(pids, {123})
-                    self.assertIsNone(error)
+                    self.assertEqual(denied, [])
 
     def test_linux_descriptor_closed_before_read_does_not_make_observation_unknown(self):
         root = self.root

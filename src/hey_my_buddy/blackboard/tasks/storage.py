@@ -116,7 +116,7 @@ def process_inventory(state: Path) -> tuple[list[dict], list[str], bool]:
     return orphans, commands, known
 
 
-def runtime_usage(directory: Path, commands: list[str], known: bool, *, reported: set[tuple[int, float]] | None = None) -> list[str]:
+def runtime_usage(directory: Path, commands: list[str], known: bool, *, reported: set[psutil.Process] | None = None) -> list[str]:
     if not known or os.name == 'nt':
         return ['process-inspection-unavailable']
     prefixes = {str(directory), str(directory.resolve())}
@@ -128,10 +128,9 @@ def runtime_usage(directory: Path, commands: list[str], known: bool, *, reported
     if reported is None:
         reported = set()
     for observation in denied:
-        identity = observation.pid, observation.create_time
-        if identity not in reported:
+        if observation.process not in reported:
             print(f'hey_my_buddy.storage: {observation}', file=sys.stderr, flush=True)
-            reported.add(identity)
+            reported.add(observation.process)
     if any(path == prefix or path.startswith(prefix + os.sep)
            for paths in opened.values() for path in paths for prefix in prefixes):
         return ['runtime-in-use']
@@ -403,7 +402,7 @@ def inspect(store, *, git_proof: bool = True) -> dict:
     state = store.directory.resolve()
     rows = []
     orphaned, commands, known = process_inventory(state)
-    reported: set[tuple[int, float]] = set()
+    reported: set[psutil.Process] = set()
     now = time.time()
     def add(category, path, reasons, **metadata):
         size, fingerprint, safe = tree_info(path)

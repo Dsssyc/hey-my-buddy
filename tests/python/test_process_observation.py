@@ -5,7 +5,7 @@ import os
 from pathlib import Path
 import tempfile
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 from hey_my_buddy import process_observation as observation
 from hey_my_buddy.blackboard.tasks import storage
@@ -18,6 +18,7 @@ class ProcessObservationTests(unittest.TestCase):
         self.enterContext(patch.object(observation.psutil, 'WINDOWS', False))
         self.enterContext(patch.object(observation.psutil, 'LINUX', True))
         self.enterContext(patch.object(observation.psutil, 'MACOS', False))
+        self.enterContext(patch.object(observation.psutil, 'POSIX', True))
         self.enterContext(patch.object(observation.os, 'geteuid', return_value=0, create=True))
 
     def test_transient_path_reads_retry_once_and_keep_recovered_references(self):
@@ -26,7 +27,8 @@ class ProcessObservationTests(unittest.TestCase):
                 target = process(123)
                 failure = observation.psutil.AccessDenied(123)
                 if channel == '/proc/pid/fd':
-                    reader = patch.object(observation, '_proc_fd_paths', side_effect=[failure, {'/fixture/file'}])
+                    reader = proc_references('/fixture/file', readlink=Mock(side_effect=[
+                        PermissionError('fd denied'), '/fixture/file']))
                 else:
                     method = getattr(target, channel)
                     method.side_effect = [failure, '/fixture' if channel == 'cwd' else process(1, mappings=['/fixture/map']).memory_maps()]
@@ -44,9 +46,9 @@ class ProcessObservationTests(unittest.TestCase):
             for identity in (1235.0, observation.psutil.NoSuchProcess(123)):
                 with self.subTest(channel=channel, identity=identity):
                     target = process(123)
-                    target.create_time.side_effect = [1234.5, identity]
+                    replacement = identity if isinstance(identity, Exception) else process(123, created=identity)
                     getattr(target, channel).side_effect = observation.psutil.AccessDenied(123)
-                    with processes(target), proc_references():
+                    with processes(target, rechecks={123: replacement}), proc_references():
                         if channel == 'cmdline':
                             rows, problems = observation.observe_process_argv()
                             self.assertEqual((rows, problems), ([], []))
@@ -54,6 +56,45 @@ class ProcessObservationTests(unittest.TestCase):
                             self.assertEqual(observation.observe_open_paths(), ({}, None, True, []))
                     self.assertEqual(getattr(target, channel).call_count, 1)
                     target.status.assert_not_called()
+
+    def test_wall_clock_jump_keeps_the_same_monotonic_process_identity(self):
+        for channel in ('cmdline', 'cwd'):
+            with self.subTest(channel=channel):
+                original = process(123, created=1234.5, monotonic_created=42.0)
+                current = process(123, ['python'], cwd='/fixture', created=9876.5, monotonic_created=42.0)
+                getattr(original, channel).side_effect = OSError('transient read')
+                with processes(original, rechecks={123: current}), proc_references():
+                    if channel == 'cmdline':
+                        rows, problems = observation.observe_process_argv()
+                        self.assertEqual(rows, [(original, ['python'])])
+                        self.assertEqual(problems, [])
+                    else:
+                        opened, error, _, denied = observation.observe_open_paths()
+                        self.assertIn('/fixture', opened[123])
+                        self.assertIsNone(error)
+                        self.assertEqual(denied, [])
+                getattr(current, channel).assert_called_once_with()
+
+    def test_long_name_cmdline_system_error_is_recorded_as_an_unreadable_name(self):
+        for channel in ('cmdline', 'cwd'):
+            with self.subTest(channel=channel):
+                target = process(123, name='very-long-proce')
+                target.cmdline.side_effect = SystemError('proc_cmdline left exception set')
+                if channel == 'cwd':
+                    target.cwd.side_effect = observation.psutil.AccessDenied(123)
+                with processes(target), proc_references():
+                    if channel == 'cmdline':
+                        rows, problems = observation.observe_process_argv()
+                        self.assertEqual(rows, [])
+                        self.assertEqual(target.cmdline.call_count, 3)
+                    else:
+                        _, problems, _, denied = observation.observe_open_paths()
+                        self.assertEqual(denied, [])
+                        self.assertEqual(target.cmdline.call_count, 1)
+                self.assertTrue(problems)
+                self.assertIn('name=', str(problems))
+                self.assertIn('unavailable: SystemError', str(problems))
+                target.name.assert_called_once_with()
 
     def test_unreadable_identity_never_uses_the_path_exception_or_a_second_read(self):
         for channel in ('cmdline', 'cwd', 'memory_maps'):
@@ -92,7 +133,7 @@ class ProcessObservationTests(unittest.TestCase):
                 target = process(123, name='agent')
                 failure = observation.psutil.AccessDenied(123)
                 if channel == '/proc/pid/fd':
-                    reader = patch.object(observation, '_proc_fd_paths', side_effect=failure)
+                    reader = proc_references(PermissionError('fd denied'))
                 else:
                     getattr(target, channel).side_effect = failure
                     reader = proc_references()
@@ -101,17 +142,20 @@ class ProcessObservationTests(unittest.TestCase):
                 self.assertIsNone(error)
                 self.assertTrue(available)
                 self.assertEqual(len(denied), 1)
-                for detail in ('pid=123', 'createTime=1234.5', "name='agent'", 'read=' + channel, 'AccessDenied'):
+                exception = 'PermissionError' if channel == '/proc/pid/fd' else 'AccessDenied'
+                for detail in ('pid=123', 'createTime=1234.5', "name='agent'", 'read=' + channel, exception):
                     self.assertIn(detail, str(denied[0]))
                 self.assertEqual(target.create_time.call_count, 2)
 
     def test_other_path_errors_remain_unknown_after_the_second_read(self):
         for failure in (OSError('busy'), PermissionError('native permission error')):
             for channel in ('cwd', 'memory_maps', '/proc/pid/fd'):
+                if channel == '/proc/pid/fd' and isinstance(failure, PermissionError):
+                    continue
                 with self.subTest(error=type(failure).__name__, channel=channel):
                     target = process(123)
                     if channel == '/proc/pid/fd':
-                        reader = patch.object(observation, '_proc_fd_paths', side_effect=failure)
+                        reader = proc_references(failure)
                     else:
                         getattr(target, channel).side_effect = failure
                         reader = proc_references()
@@ -123,26 +167,51 @@ class ProcessObservationTests(unittest.TestCase):
                     self.assertEqual(denied, [])
                     self.assertEqual(target.create_time.call_count, 2)
 
+    def test_each_denied_path_channel_keeps_references_from_the_other_channels(self):
+        for channel in ('cwd', 'memory_maps', '/proc/pid/fd'):
+            with self.subTest(channel=channel):
+                target = process(123, cwd='/fixture/cwd', mappings=['/fixture/map'])
+                if channel != '/proc/pid/fd':
+                    getattr(target, channel).side_effect = observation.psutil.AccessDenied(123)
+                with processes(target), proc_references(
+                        PermissionError('fd denied') if channel == '/proc/pid/fd' else '/fixture/fd'):
+                    opened, error, _, denied = observation.observe_open_paths()
+                expected = {'cwd': '/fixture/cwd', 'memory_maps': '/fixture/map', '/proc/pid/fd': '/fixture/fd'}
+                self.assertEqual(opened[123], {path for source, path in expected.items() if source != channel})
+                self.assertIsNone(error)
+                self.assertEqual([entry.read for entry in denied], [channel])
+
+    def test_denied_descriptor_keeps_already_observed_descriptor_paths(self):
+        with processes(process(123)), proc_references('/fixture/open', PermissionError('fd denied')):
+            opened, error, _, denied = observation.observe_open_paths()
+        self.assertIn('/fixture/open', opened[123])
+        self.assertIsNone(error)
+        self.assertEqual([entry.read for entry in denied], ['/proc/pid/fd'])
+        self.assertIn('PermissionError', denied[0].error)
+
     @unittest.skipIf(os.name == 'nt', 'POSIX runtime absence proof; Windows remains unknown')
-    def test_denied_maps_keep_positive_cwd_evidence_for_storage(self):
-        target = process(123, cwd='/fixture')
-        target.memory_maps.side_effect = observation.psutil.AccessDenied(123)
-        log = io.StringIO()
-        with processes(target), proc_references(), redirect_stderr(log):
-            self.assertEqual(storage.runtime_usage(Path('/fixture'), [], True), ['runtime-in-use'])
-        self.assertEqual(len(log.getvalue().splitlines()), 1)
-        self.assertIn('read=memory_maps: AccessDenied', log.getvalue())
+    def test_denied_maps_keep_positive_cwd_and_descriptor_evidence_for_storage(self):
+        for source in ('cwd', 'fd'):
+            with self.subTest(source=source):
+                target = process(123, cwd='/fixture' if source == 'cwd' else '/')
+                target.memory_maps.side_effect = observation.psutil.AccessDenied(123)
+                log = io.StringIO()
+                with (processes(target), proc_references('/fixture/file' if source == 'fd' else '/other'),
+                      redirect_stderr(log)):
+                    self.assertEqual(storage.runtime_usage(Path('/fixture'), [], True), ['runtime-in-use'])
+                self.assertEqual(len(log.getvalue().splitlines()), 1)
+                self.assertIn('read=memory_maps: AccessDenied', log.getvalue())
 
     @unittest.skipIf(os.name == 'nt', 'POSIX runtime absence proof; Windows remains unknown')
     def test_storage_log_deduplicates_identity_and_reports_a_reused_pid(self):
-        target = process(123)
-        target.cwd.side_effect = observation.psutil.AccessDenied(123)
         reported = set()
         log = io.StringIO()
-        with processes(target), proc_references(), redirect_stderr(log):
-            for created in (1234.5, 1234.5, 1235.5):
-                target.create_time.return_value = created
-                self.assertEqual(storage.runtime_usage(Path('/fixture'), [], True, reported=reported), [])
+        with redirect_stderr(log):
+            for created, monotonic in ((1234.5, 42.0), (9876.5, 42.0), (1235.5, 43.0)):
+                target = process(123, created=created, monotonic_created=monotonic)
+                target.cwd.side_effect = observation.psutil.AccessDenied(123)
+                with processes(target), proc_references():
+                    self.assertEqual(storage.runtime_usage(Path('/fixture'), [], True, reported=reported), [])
         lines = log.getvalue().splitlines()
         self.assertEqual(len(lines), 2)
         self.assertIn('pid=123 createTime=1234.5', lines[0])
