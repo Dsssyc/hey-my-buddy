@@ -71,6 +71,14 @@ SELECT h.*, ownership.group_id
   JOIN ({RUN_GROUPS_SQL}) ownership ON ownership.run_id = h.root_run_id
 """
 
+# Build at import so source drift cannot silently remove the page restriction.
+PAGE_HISTORY_SQL = micro_task.replace_sql_once(
+    micro_task.replace_sql_once(
+        micro_task.TASK_HISTORY_SQL, "t.*,", "t.rowid AS summary_task_rowid, t.*,",
+    ),
+    "FROM tasks t\n", "FROM tasks t JOIN page_tasks ON page_tasks.task_id=t.task_id\n",
+)
+
 #: Disjoint micro task states, in the display priority 待决定 > 进行中 > 待验收 > 已结束.
 _HOST_SQL = micro_task.FILTER_SQL["host"]
 _ACTIVE_SQL = f"({micro_task.FILTER_SQL['active']} AND NOT {_HOST_SQL})"
@@ -442,11 +450,6 @@ def _summary_inputs(connection, groups: list[str], clauses: list[str], values: l
     remain intact: review readiness still covers every owned execution.
     """
     placeholders = ",".join("?" for _ in groups)
-    history = micro_task.TASK_HISTORY_SQL.replace(
-        "t.*,", "t.rowid AS summary_task_rowid, t.*,",
-    ).replace(
-        "FROM tasks t\n", "FROM tasks t JOIN page_tasks ON page_tasks.task_id=t.task_id\n",
-    )
     matching = " AND ".join(["micro_task_run_id IS NOT NULL", *clauses])
     rows = connection.execute(f"""
 WITH page_runs AS MATERIALIZED (
@@ -459,7 +462,7 @@ page_tasks AS (
       JOIN page_runs ON page_runs.run_id=routing.run_id
 )
 SELECT h.*, ownership.group_id, CASE WHEN {matching} THEN 1 ELSE 0 END AS summary_matching
-  FROM ({history}) h JOIN page_runs ownership ON ownership.run_id=h.root_run_id
+  FROM ({PAGE_HISTORY_SQL}) h JOIN page_runs ownership ON ownership.run_id=h.root_run_id
  ORDER BY h.summary_task_rowid
 """, [*groups, *values]).fetchall()
     inputs = {group: {"members": [], "matching": 0, "failed": set()} for group in groups}

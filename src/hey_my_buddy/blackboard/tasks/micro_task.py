@@ -229,6 +229,14 @@ LEFT JOIN workflow_lead_tasks root_lead
 TASK_HISTORY_SQL = f"SELECT * FROM ({RELATION_SQL}) AS resolved"
 
 
+def replace_sql_once(sql: str, fragment: str, replacement: str) -> str:
+    """Fail when a derived SQL projection no longer matches its shared source."""
+    count = sql.count(fragment)
+    if count != 1:
+        raise ValueError(f"Expected exactly one SQL fragment {fragment!r}, found {count}")
+    return sql.replace(fragment, replacement)
+
+
 def _complete_buddy(value: Any) -> dict | None:
     """The four-field buddy, or ``None`` when it is not complete."""
     if isinstance(value, str):

@@ -4,6 +4,7 @@ from hey_my_buddy.paths import native_path
 
 import json
 import copy
+import importlib.util
 import shutil
 import sqlite3
 import threading
@@ -14,7 +15,23 @@ from unittest.mock import Mock, patch
 
 from support import private_state_dir
 from blackboard.tasks.test_console_macro_task_fixture import fixture_module, SOURCE
-from hey_my_buddy.blackboard.tasks import macro_tasks, macro_task_summary_cache as memo
+from hey_my_buddy.blackboard.tasks import macro_tasks, macro_task_summary_cache as memo, micro_task
+
+
+class HistorySqlProjectionTests(unittest.TestCase):
+    def test_projection_modules_reject_missing_or_repeated_sql_fragments_at_import(self):
+        source = micro_task.TASK_HISTORY_SQL
+        for module, fragment in ((memo, "t.*,"), (macro_tasks, "t.*,"),
+                                 (macro_tasks, "FROM tasks t\n")):
+            for count, changed in ((0, source.replace(fragment, "")), (2, source + fragment)):
+                with self.subTest(module=module.__name__, fragment=fragment, count=count):
+                    spec = importlib.util.spec_from_file_location(
+                        module.__name__ + "_projection_probe", module.__file__,
+                    )
+                    probe = importlib.util.module_from_spec(spec)
+                    with patch.object(micro_task, "TASK_HISTORY_SQL", changed):
+                        with self.assertRaisesRegex(ValueError, f"found {count}"):
+                            spec.loader.exec_module(probe)
 
 
 class MacroTaskSummaryCacheTests(unittest.TestCase):
