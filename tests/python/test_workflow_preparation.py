@@ -44,7 +44,7 @@ class PreparationTests(WorkflowTestCase):
     def pending(self, *, clock=None, kind="existing"):
         board = self.board(clock=clock or FakeClock())
         self.register(board)
-        submitted = self.submit(board, cwd=str(self.repo), executionWorkspace={**self.intent(), "kind": kind})
+        submitted = self.submit(board, cwd=str(self.repo), executionWorkspace={"kind": kind, "access": "write"})
         first = self.claim(board)
         (Path(first["claim"]["task"]["cwd"]) / "tracked.txt").write_text("sealed first output\n")
         self.finish_turn(board, first, disposition="assistance")
@@ -66,12 +66,12 @@ class PreparationTests(WorkflowTestCase):
         self.git(self.repo, "commit", "-qm", "exclude private runtime files")
         board = self.board()
         self.register(board)
-        parent = self.submit(board, cwd=str(self.repo), executionWorkspace=self.intent())
+        parent = self.submit(board, cwd=str(self.repo), executionWorkspace={"kind": "existing", "access": "write"})
         self.finish_turn(board, self.claim(board), disposition="assistance")
         view = board.call("workflow_get", {"runId": parent["runId"]})
         approved = self.decide(board, view, view["activeRequest"]["requestId"], autoContinue=False, helpers=[{
             "requestId": "partial-helper", "task": "write tests before returning",
-            "cwd": str(self.repo), "executionWorkspace": {**self.intent(), "kind": "worktree", "writeScope": ["tests"]},
+            "cwd": str(self.repo), "executionWorkspace": {"kind": "worktree", "writeScope": ["tests"]},
         }])
         helper_id = approved["children"][0]["taskId"]
         failed = self.claim(board, run_id=helper_id, claim_request_id="partial-helper-first")
@@ -136,7 +136,7 @@ class PreparationTests(WorkflowTestCase):
     def reclaim_conflict(self, access):
         board, parent, helper_id, failed, checkout = self.failed_helper()
         competing = self.submit(board, request_id="competing-owner", cwd=str(checkout),
-                                executionWorkspace={**self.intent(checkout), "access": access})
+                                executionWorkspace={"kind": "existing", "access": access})
         view = board.call("workflow_get", {"runId": parent["runId"]})
         with patch.object(workspace, "prepare", side_effect=AssertionError("must reject before Git")) as prepare:
             with self.assertRaises(BoardError) as raised:
@@ -360,10 +360,10 @@ class PreparationTests(WorkflowTestCase):
     def test_transferred_checkout_is_not_scanned_by_preparation(self):
         board = self.board()
         self.register(board)
-        submitted = self.submit(board, cwd=str(self.repo), executionWorkspace=self.intent())
+        submitted = self.submit(board, cwd=str(self.repo), executionWorkspace={"kind": "existing", "access": "write"})
         self.finish_turn(board, self.claim(board), disposition="assistance")
         view = board.call("workflow_get", {"runId": submitted["runId"]})
-        self.decide(board, view, view["activeRequest"]["requestId"], helpers=[{"requestId": "helper", "task": "shared helper", "cwd": str(self.repo), "executionWorkspace": self.intent()}])
+        self.decide(board, view, view["activeRequest"]["requestId"], helpers=[{"requestId": "helper", "task": "shared helper", "cwd": str(self.repo), "executionWorkspace": {"kind": "existing", "access": "write"}}])
         view = board.call("workflow_get", {"runId": submitted["runId"]})
         self.continue_run(board, view, helper_policy="keep")
         with patch.object(workspace, "prepare", side_effect=AssertionError("must not scan a transferred checkout")) as prepare:
@@ -399,12 +399,12 @@ class PreparationTests(WorkflowTestCase):
     def test_helper_output_reference_never_impersonates_a_new_failed_attempt(self):
         board = self.board()
         self.register(board)
-        submitted = self.submit(board, cwd=str(self.repo), executionWorkspace=self.intent())
+        submitted = self.submit(board, cwd=str(self.repo), executionWorkspace={"kind": "existing", "access": "write"})
         self.finish_turn(board, self.claim(board), disposition="assistance")
         helper_repo = self.repository("helper")
         view = board.call("workflow_get", {"runId": submitted["runId"]})
         approved = self.decide(board, view, view["activeRequest"]["requestId"], autoContinue=False,
-                               helpers=[{"requestId": "helper", "task": "independent helper", "cwd": str(helper_repo), "executionWorkspace": self.intent(helper_repo)}])
+                               helpers=[{"requestId": "helper", "task": "independent helper", "cwd": str(helper_repo), "executionWorkspace": {"kind": "existing", "access": "write"}}])
         child = approved["children"][0]["taskId"]
         first = self.claim(board, claim_request_id="helper-first", run_id=child)
         self.finish_turn(board, first, disposition="attention")
@@ -438,12 +438,12 @@ class PreparationTests(WorkflowTestCase):
     def test_authorized_helper_seal_becomes_the_same_checkout_handoff(self):
         board = self.board(clock=FakeClock())
         self.register(board)
-        submitted = self.submit(board, cwd=str(self.repo), executionWorkspace=self.intent())
+        submitted = self.submit(board, cwd=str(self.repo), executionWorkspace={"kind": "existing", "access": "write"})
         parent = self.claim(board)
         (self.repo / "tracked.txt").write_text("parent output\n")
         self.finish_turn(board, parent, disposition="assistance")
         view = board.call("workflow_get", {"runId": submitted["runId"]})
-        approved = self.decide(board, view, view["activeRequest"]["requestId"], helpers=[{"requestId": "helper", "task": "shared checkout helper", "cwd": str(self.repo), "executionWorkspace": self.intent()}])
+        approved = self.decide(board, view, view["activeRequest"]["requestId"], helpers=[{"requestId": "helper", "task": "shared checkout helper", "cwd": str(self.repo), "executionWorkspace": {"kind": "existing", "access": "write"}}])
         helper = approved["children"][0]["taskId"]
         claim = self.claim(board, claim_request_id="helper-claim", run_id=helper)
         (self.repo / "tracked.txt").write_text("newer helper output\n")

@@ -95,7 +95,7 @@ describe("sole candidate routing basis", () => {
       routerCalled: false, routingBasis, reason: "唯一合法候选，未调用 Router",
       routingMode: "fast", requestedRoutingMode: "fast",
       output: { programSelection: { preferences: [{ profileId: worker.profileId, mode: "pin", reason: "当时固定此配置" }] } },
-      policyCheck: { hardConstraints: { adapter: "dsh" }, taskPreference: { ruleIndex: null, outcome: "none" }, userPreference: "none" },
+      policyCheck: { hardConstraints: { adapter: "dsh" }, userPreference: "none" },
     };
     const command = vi.fn(async () => ({ decision: audit }));
     render(<DecisionDetails decisionId="sole" api={apiFor(snapshot(), command)} csrfToken="csrf" />);
@@ -207,7 +207,7 @@ describe("recorded decision details", () => {
   it("shows saved evidence, program preferences and unknown native usage without current facts", async () => {
     const audit = {
       ...decision("new-fields"),
-      policyCheck: { taskPreference: { ruleIndex: 2, outcome: "alternative" }, userPreference: "matched" },
+      policyCheck: { userPreference: "matched" },
       budget: { preset: "quick", timeoutSeconds: 60, toolCalls: 8, bytesRead: 131072 },
       usage: { elapsedMs: 1234, toolCalls: 0, bytesRead: null },
       nativeIdentity: { sessionId: "native-session" }, stopEvidence: { shutdownConfirmed: true },
@@ -217,7 +217,8 @@ describe("recorded decision details", () => {
     render(<DecisionDetails decisionId={audit.decisionId} api={apiFor(snapshot(), command)} csrfToken="csrf" />);
     const detail = await screen.findByRole("region", { name: "决策依据详情" });
     expect(within(detail).getByText("file · src/frozen.ts")).toBeTruthy();
-    expect(within(detail).getByText("选择其他配置（规则 2）")).toBeTruthy();
+    // Task-local preferences are retired; only the user-preference outcome remains.
+    expect(within(detail).queryByText(/规则/)).toBeNull();
     expect(within(detail).getByText("符合")).toBeTruthy();
     expect(within(detail).getByText("简要（历史记录）")).toBeTruthy();
     expect(within(detail).getByText("1234 毫秒 / 60 秒")).toBeTruthy();

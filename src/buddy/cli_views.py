@@ -116,7 +116,7 @@ _TURN_BRIEF = ("turnId", "turnIndex", "state", "disposition", "resumeMode")
 #: The routing basis keeps the frozen submission facts (hard constraints and the
 #: user exclusions that narrowed the candidate set) beside the choice itself, so
 #: a Host sees why a route had few candidates without a table read.
-_ROUTING_BRIEF = ("status", "source", "reason", "selectedProfile", "preferenceOutcome", "decisionId",
+_ROUTING_BRIEF = ("status", "source", "reason", "selectedProfile", "decisionId",
                   "routingMode", "requestedRoutingMode", "fallback", "constraints", "requiredCapabilities", "routingBasis")
 _WORKSPACE_BRIEF = ("path", "kind", "access", "inputCommit")
 _OUTPUT_ARTIFACT = (

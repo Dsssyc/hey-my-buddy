@@ -29,7 +29,7 @@ DECISION_KINDS = ("select", "maintain")
 DECISION_STATUSES = ("queued", "running", "completed", "needs-host", "failed", "cancelled", "stale")
 TERMINAL_DECISION_STATUSES = frozenset({"completed", "needs-host", "failed", "cancelled", "stale"})
 
-SELECT_FIELDS = frozenset({"requestId", "task", "requiredCapabilities", "timeoutSeconds", "routingPreferences", "routingMode", "allowRoutingFallback"})
+SELECT_FIELDS = frozenset({"requestId", "task", "requiredCapabilities", "timeoutSeconds"})
 GET_FIELDS = frozenset({"decisionId", "includeAudit"})
 LIST_FIELDS = frozenset({"kind", "limit", "before"})
 DEFAULT_LIST_LIMIT = 20
@@ -508,7 +508,7 @@ class DecisionCoordinator:
             )
         return document, None
 
-    def _select_input(self, connection: sqlite3.Connection, *, request_id: str, revision: int, profile_row: sqlite3.Row, task_text: str, candidates: list[sqlite3.Row], routing_preferences: list[dict] | None = None, hard_constraints: dict | None = None, routing_mode: str = "review") -> tuple[dict | None, str | None]:
+    def _select_input(self, connection: sqlite3.Connection, *, request_id: str, revision: int, profile_row: sqlite3.Row, task_text: str, candidates: list[sqlite3.Row], hard_constraints: dict | None = None, routing_mode: str = "review") -> tuple[dict | None, str | None]:
         if len(candidates) > MAX_DECISION_PROFILES:
             return None, "The legal candidate set exceeds the bounded decision profile limit; narrow the task constraints"
         candidate_ids = {candidate["profile_id"] for candidate in candidates}
@@ -521,13 +521,12 @@ class DecisionCoordinator:
         table = self._table_input(
             connection, profiles=candidates, evidence_rows=evidence, include_preferences=True
         )
-        table["routingPreferences"] = routing_preferences or []
         # The program-computed preference truth for this request. It is request-local
-        # (it depends on this candidate slice and this task's preferences), so it is
-        # part of the variable suffix the model sees after the stable table snapshot.
+        # (it depends on this candidate slice and the user's published prefer entries),
+        # so it is part of the variable suffix the model sees after the stable table
+        # snapshot. Task-local routing preferences are retired Host input (ADR-021).
         table["policyFacts"] = selection_policy.policy_facts(
             profiles=table["profiles"],
-            routing_preferences=table["routingPreferences"],
             prefer_profile_ids=[
                 entry["profileId"] for entry in table["preferences"] if entry["mode"] == "prefer"
             ],
@@ -607,13 +606,19 @@ class DecisionCoordinator:
 
     # -- request operations --------------------------------------------------
     def request_select(self, params: dict) -> dict:
+        for key in ("routingPreferences", "routingMode", "allowRoutingFallback"):
+            if key in params:
+                raise BoardError(
+                    "INVALID_ARGUMENT",
+                    f"{key} is retired Host routing input; " + schemas.PARTIAL_CONFIGURATION_HINT,
+                    field=key,
+                )
         schemas.reject_unknown(params, SELECT_FIELDS, "selection.request")
         request_id = schemas.required_string(
             params, "requestId", max_length=128, pattern=schemas.IDENTIFIER_PATTERN
         )
         task_text, _size = schemas.bounded_text(params, "task", max_bytes=MAX_DECISION_TASK_BYTES)
         capabilities = schemas.string_list(params, "requiredCapabilities", limit=schemas.MAX_CAPABILITIES)
-        routing_preferences = schemas.normalize_routing_preferences(params.get("routingPreferences", []))
         timeout = schemas.optional_int(
             params, "timeoutSeconds", DEFAULT_TIMEOUT_SECONDS, MIN_TIMEOUT_SECONDS, MAX_TIMEOUT_SECONDS
         )
@@ -621,13 +626,8 @@ class DecisionCoordinator:
             "kind": "select",
             "task": task_text,
             "requiredCapabilities": capabilities,
-            "routingPreferences": routing_preferences,
             "timeoutSeconds": timeout if "timeoutSeconds" in params else None,
         }
-        if "routingMode" in params:
-            request["routingMode"] = router.mode(params["routingMode"])
-        if "allowRoutingFallback" in params:
-            request["allowRoutingFallback"] = schemas.optional_bool(params, "allowRoutingFallback", True)
         return self._create(request_id, request)
 
     def _create(self, request_id: str, request: dict, *, connection=None, needs_host_reason: str | None = None) -> dict:
@@ -673,13 +673,13 @@ class DecisionCoordinator:
                 # so the program selects it directly: no Router task is created and
                 # no Router configuration or model-input byte budget is needed.
                 sole_candidate = candidates[0]
-                requested_mode = request.get("routingMode") or router.configuration(connection)["defaultRoutingMode"]
+                requested_mode = router.configuration(connection)["defaultRoutingMode"]
                 facts = {"requestedRoutingMode": requested_mode, "routingMode": requested_mode,
                          "fallback": None, "routerCalled": False}
                 request.update(facts)
                 status, reason = "completed", SOLE_CANDIDATE_REASON
             else:
-                profile_row, facts, profile_reason = router.resolve(connection, request.get("routingMode"), request.get("allowRoutingFallback", True))
+                profile_row, facts, profile_reason = router.resolve(connection, None)
                 request = {**request, **facts, "budget": (dict(router.FAST_BUDGET) if facts["routingMode"] == "fast" else router.configured_budget(connection))}
                 request["timeoutSeconds"] = 60 if facts["routingMode"] == "fast" else request.get("timeoutSeconds") or request["budget"]["timeoutSeconds"]
                 request["budget"]["timeoutSeconds"] = request["timeoutSeconds"]
@@ -697,7 +697,6 @@ class DecisionCoordinator:
                 frozen_input, problem = self._select_input(
                     connection, request_id=request_id, revision=expected_revision, profile_row=profile_row,
                     task_text=task_text, candidates=candidates,
-                    routing_preferences=request.get("routingPreferences", []),
                     hard_constraints=request.get("constraints") or {}, routing_mode=facts["routingMode"])
                 if frozen_input is None:
                     status, reason = "needs-host", problem
@@ -809,9 +808,7 @@ class DecisionCoordinator:
             "executionWorkspace": manifest,
             "requiredCapabilities": spec.get("requiredCapabilities", []),
             "constraints": schemas.configuration_constraints(spec),
-            "routingPreferences": spec.get("routingPreferences", []),
             "workflowRouting": True,
-            **{key: spec[key] for key in ("routingMode", "allowRoutingFallback") if key in spec},
         }
         needs_host_reason = None
         if task_bytes > MAX_DECISION_TASK_BYTES:
@@ -1299,13 +1296,12 @@ class DecisionCoordinator:
                          reason="The selected configuration no longer satisfies the original hard bounds",
                          error="router-out-of-bounds")
             return
-        routing_preferences = document.get("routingPreferences") or []
         expected_facts = selection_policy.policy_facts(
-            profiles=profiles, routing_preferences=routing_preferences,
+            profiles=profiles,
             prefer_profile_ids=[item["profileId"] for item in document.get("preferences", [])
                                 if item.get("mode") == "prefer"],
             hard_constraints=request.get("constraints") or {})
-        policy_check = selection_policy.expected_policy_check(expected_facts, routing_preferences, profile_id)
+        policy_check = selection_policy.expected_policy_check(expected_facts, profile_id)
         output = {**output, "decision": decision, "policyCheck": policy_check}
         if not self._reader_open(connection, row, now):
             self._finish(
@@ -1320,20 +1316,6 @@ class DecisionCoordinator:
             (dict(profile) for profile in document.get("profiles", []) if profile.get("profileId") == profile_id),
             None,
         )
-        outcome = policy_check["taskPreference"]["outcome"]
-        rule_index = policy_check["taskPreference"]["ruleIndex"]
-        if outcome == "matched":
-            preference_reason = routing_preferences[rule_index]["reason"]
-        elif outcome == "alternative":
-            preference_reason = reason
-        elif outcome == "fallback":
-            preference_reason = "No task preference matched a legal candidate"
-        else:
-            preference_reason = "No task preference applies to this request"
-        if selected is not None and routing_preferences:
-            selected["routingPreference"] = {
-                "status": outcome, "ruleIndex": rule_index, "reason": preference_reason,
-            }
         self._finish(
             connection, row, status="completed", output=output, now=now,
             reason=reason, profile_id=profile_id, evidence_ids=evidence_ids, selected=selected,
@@ -1453,24 +1435,12 @@ class DecisionCoordinator:
         profile_id = candidate["profile_id"]
         profiles = [self._profile_input(candidate)]
         preferences = user_policy.effective_preferences(connection, [profile_id])
-        routing_preferences = request.get("routingPreferences") or []
         facts = selection_policy.policy_facts(
             profiles=profiles,
-            routing_preferences=routing_preferences,
             prefer_profile_ids=[entry["profileId"] for entry in preferences if entry["mode"] == "prefer"],
             hard_constraints=request.get("constraints") or {})
-        policy_check = selection_policy.expected_policy_check(facts, routing_preferences, profile_id)
-        outcome = policy_check["taskPreference"]["outcome"]
-        rule_index = policy_check["taskPreference"]["ruleIndex"]
-        if outcome == "matched":
-            preference_reason = routing_preferences[rule_index]["reason"]
-        elif outcome == "fallback":
-            preference_reason = "No task preference matched a legal candidate"
-        else:
-            preference_reason = "No task preference applies to this request"
+        policy_check = selection_policy.expected_policy_check(facts, profile_id)
         selected = dict(profiles[0])
-        if routing_preferences:
-            selected["routingPreference"] = {"status": outcome, "ruleIndex": rule_index, "reason": preference_reason}
         self._finish(
             connection,
             row,

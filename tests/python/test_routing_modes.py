@@ -73,8 +73,9 @@ class RoutingModesTests(BoardTestCase):
     def test_fast_input_is_repo_free_and_fixed_at_sixty_seconds(self):
         board = self.board()
         self.seed(board)
-        self.configure(board, fastRouterProfileId=PROFILE_ID)
-        result = board.call('selection_request', {'requestId': 'fast', 'task': 'choose a tiny edit', 'routingMode': 'fast', 'timeoutSeconds': 500})
+        # The mode comes from the Router setting; the submission no longer carries it.
+        self.configure(board, fastRouterProfileId=PROFILE_ID, defaultRoutingMode='fast')
+        result = board.call('selection_request', {'requestId': 'fast', 'task': 'choose a tiny edit', 'timeoutSeconds': 500})
         view = board.call('selection_get', {'decisionId': result['decisionId'], 'includeAudit': True})['decision']
         self.assertEqual(view['routingMode'], 'fast')
         self.assertEqual(view['budget'], {'timeoutSeconds': 60})
@@ -82,24 +83,37 @@ class RoutingModesTests(BoardTestCase):
         self.assertNotIn('evidence', view['input'])
         self.assertNotIn('file', view['input']['outputSchema']['properties']['evidence']['items']['properties']['kind']['enum'])
 
-    def test_review_unavailable_falls_back_or_stops_when_disabled(self):
+    def test_review_unavailable_falls_back_under_the_default_switch(self):
+        board = self.board()
+        self.seed(board)
+        self.configure(board, reviewRouterProfileId=None, fastRouterProfileId=PROFILE_ID,
+                       defaultRoutingMode='review')
+        result = board.call('selection_request', {'requestId': 'fallback-on', 'task': 'choose'})
+        view = result['decision']
+        self.assertEqual(result['status'], 'queued')
+        self.assertEqual(view['requestedRoutingMode'], 'review')
+        self.assertEqual(view['routingMode'], 'fast')
+        self.assertEqual(view['fallback']['code'], 'router-not-configured')
+
+    def test_resolve_still_supports_disabling_the_fallback_internally(self):
+        # The retired scenario turned the fallback off per submission; that input is
+        # gone, and the internal switch it drove stays covered at its own boundary
+        # until the L4 Router unification removes the fallback entirely.
         board = self.board()
         self.seed(board)
         self.configure(board, reviewRouterProfileId=None, fastRouterProfileId=PROFILE_ID)
-        for enabled in (True, False):
-            result = board.call('selection_request', {'requestId': f'fallback-{enabled}', 'task': 'choose',
-                               'routingMode': 'review', 'allowRoutingFallback': enabled})
-            view = result['decision']
-            self.assertEqual(result['status'], 'queued' if enabled else 'needs-host')
-            self.assertEqual(view['requestedRoutingMode'], 'review')
-            self.assertEqual(view['routingMode'], 'fast' if enabled else 'review')
-            self.assertEqual(view['fallback']['code'] if enabled else view['fallback'], 'router-not-configured' if enabled else None)
+        with board.store.db.read() as connection:
+            profile, facts, reason = router.resolve(connection, 'review', False)
+        self.assertIsNone(profile)
+        self.assertEqual(facts['routingMode'], 'review')
+        self.assertIsNone(facts['fallback'])
+        self.assertIn('review Router is not configured', reason)
 
     def test_claim_rechecks_review_and_charges_the_fallback_family(self):
         board = self.board()
         self.seed(board)
         self.configure(board, fastRouterProfileId=SECOND_PROFILE_ID)
-        result = board.call('selection_request', {'requestId': 'later-unverified', 'task': 'choose', 'routingMode': 'review'})
+        result = board.call('selection_request', {'requestId': 'later-unverified', 'task': 'choose'})
         board.call('worker_register', {'workerId': 'router', 'adapter': 'decision', 'capabilities': ['decision']})
         with patch('buddy.adapters.dsh.DshAdapter.read_only_structured_verified', False):
             claim = board.client().claim('router', 'mode-claim', 'nonce-abcdefghijklmnop', task_id=result['runId'])['claim']
@@ -126,7 +140,7 @@ class RoutingModesTests(BoardTestCase):
         board = self.board()
         self.seed(board)
         self.configure(board, fastRouterProfileId=SECOND_PROFILE_ID)
-        result = board.call('selection_request', {'requestId': 'preflight', 'task': 'choose', 'routingMode': 'review'})
+        result = board.call('selection_request', {'requestId': 'preflight', 'task': 'choose'})
         board.call('worker_register', {'workerId': 'router', 'adapter': 'decision', 'capabilities': ['decision']})
         nonce = 'nonce-abcdefghijklmnop'
         first = board.client().claim('router', 'preflight-claim', nonce, task_id=result['runId'])['claim']
@@ -145,10 +159,10 @@ class RoutingModesTests(BoardTestCase):
     def test_fast_receipt_requires_zero_tool_evidence_at_publication(self):
         board = self.board()
         self.seed(board)
-        self.configure(board, fastRouterProfileId=PROFILE_ID)
+        self.configure(board, fastRouterProfileId=PROFILE_ID, defaultRoutingMode='fast')
         nonce = 'nonce-abcdefghijklmnop'
         for index, (proof, count, expected) in enumerate(((True, 0, 'completed'), (None, 0, 'needs-host'), (True, 1, 'needs-host'), (True, False, 'needs-host'))):
-            result = board.call('selection_request', {'requestId': f'proof-{index}', 'task': 'choose', 'routingMode': 'fast'})
+            result = board.call('selection_request', {'requestId': f'proof-{index}', 'task': 'choose'})
             worker = f'router-{index}'
             board.call('worker_register', {'workerId': worker, 'adapter': 'decision', 'capabilities': ['decision']})
             claim = board.client().claim(worker, f'proof-claim-{index}', nonce, task_id=result['runId'])['claim']
@@ -194,9 +208,12 @@ class FastAnswerTests(unittest.TestCase):
         self.assertNotIn('secret-evidence', prompt)
         self.assertNotIn('secret-tree', prompt)
 
-    def test_mode_and_fallback_are_validated_and_fingerprinted(self):
-        for payload in ({'routingMode': 'quick'}, {'routingMode': None}, {'allowRoutingFallback': 'false'}):
-            with self.assertRaises(BoardError):
+    def test_mode_and_fallback_are_retired_submission_input(self):
+        for payload in ({'routingMode': 'quick'}, {'routingMode': 'fast'}, {'routingMode': None},
+                        {'allowRoutingFallback': 'false'}, {'allowRoutingFallback': True}):
+            with self.assertRaises(BoardError) as raised:
                 schemas.normalize_workflow_spec({'requestId': 'test', 'task': 'x', 'cwd': '.', **payload})
+            self.assertEqual(raised.exception.code, 'INVALID_ARGUMENT')
+            self.assertIn('retired Host routing input', raised.exception.message)
         with self.assertRaises(BoardError):
             router.budget('quick')

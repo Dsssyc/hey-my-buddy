@@ -10,7 +10,6 @@ export type DecisionAudit = Decision & {
   constraints?: Partial<ExecutionConfiguration>;
   requiredCapabilities?: string[];
   policyCheck?: {
-    taskPreference?: { ruleIndex?: number | null; outcome?: string | null } | null;
     userPreference?: string | null;
     [key: string]: unknown;
   } | null;

@@ -49,9 +49,7 @@ class SoleCandidateSelectionTests(DecisionTestCase):
                          {"candidateCount": 1, "excludedCount": 0, "excludedProfiles": []})
         self.assertEqual(decision["output"]["programSelection"]["code"], "single-candidate")
         self.assertEqual(decision["policyCheck"],
-                         {"hardConstraints": {},
-                          "taskPreference": {"ruleIndex": None, "outcome": "none"},
-                          "userPreference": "none"})
+                         {"hardConstraints": {}, "userPreference": "none"})
         self.readonly_start.assert_not_called()
         self.assertEqual(board.call("task_list", {"limit": 10})["runs"], [])
         with board.store.db.read() as connection:
@@ -96,10 +94,6 @@ class SoleCandidateSelectionTests(DecisionTestCase):
             {"kind": "select", "task": "bounded selection",
              "constraints": {"adapter": "dsh", "effort": "off"},
              "requiredCapabilities": ["execution:dsh"],
-             "routingPreferences": [
-                 {"match": {"effort": "high"}, "reason": "Prefer the stronger effort"},
-                 {"match": {"effort": "off"}, "reason": "Use the economical effort"},
-             ],
              "timeoutSeconds": 60},
         )
         self.assertEqual(request["status"], "completed")
@@ -112,12 +106,10 @@ class SoleCandidateSelectionTests(DecisionTestCase):
         self.assertNotIn("requested", compact)
         check = decision["policyCheck"]
         self.assertEqual(check["hardConstraints"], {"adapter": "dsh", "effort": "off"})
-        # The first ordered rule without a legal match is skipped; the second
-        # matches the sole candidate, exactly as a Router answer would record it.
-        self.assertEqual(check["taskPreference"], {"ruleIndex": 1, "outcome": "matched"})
+        # The program's preference check keeps the user's published prefer entries;
+        # task-local routing preferences are retired and no longer contribute.
         self.assertEqual(check["userPreference"], "matched")
-        self.assertEqual(decision["selectedProfile"]["routingPreference"],
-                         {"status": "matched", "ruleIndex": 1, "reason": "Use the economical effort"})
+        self.assertNotIn("routingPreference", decision["selectedProfile"])
 
     def test_sole_candidate_replay_returns_the_same_completed_decision(self):
         board = self.board()
@@ -143,7 +135,7 @@ class SoleCandidateSelectionTests(DecisionTestCase):
         request = board.store.decisions._create(
             "basis-freeze",
             {"kind": "select", "task": "bounded selection", "constraints": {"adapter": "dsh"},
-             "requiredCapabilities": [], "routingPreferences": [], "timeoutSeconds": 60},
+             "requiredCapabilities": [], "timeoutSeconds": 60},
         )
         self.assertEqual(request["status"], "completed")
         decision = self.decision(board, request["decisionId"])
@@ -215,7 +207,7 @@ class SoleCandidateWorkflowTests(WorkflowTestCase):
     def test_sole_candidate_route_completes_without_a_router_attempt(self):
         board = self.board()
         self.seed(board)
-        submitted = self.routed(board, effort="high")
+        submitted = self.routed(board, requiredCapabilities=["effort:high"])
         routing = submitted["routing"]
         self.assertEqual(routing["status"], "completed")
         self.assertEqual(routing["source"], "single-candidate")
@@ -239,9 +231,10 @@ class SoleCandidateWorkflowTests(WorkflowTestCase):
         self.assertEqual(resolved["source"], "single-candidate")
         self.assertEqual(resolved["configuration"], {key: SECOND_PROFILE[key] for key in CONFIGURATION})
         # Replaying the same submission is a duplicate, not a second route.
-        self.assertTrue(self.routed(board, effort="high")["duplicate"])
+        self.assertTrue(self.routed(board, requiredCapabilities=["effort:high"])["duplicate"])
         # The run proceeds into ordinary execution under the adopted configuration.
-        self.register(board)
+        # The coding worker declares the capability that narrowed the candidates.
+        board.call("worker_register", {"workerId": "w1", "capabilities": ["dsh", "command", "effort:high"]})
         claim = self.claim(board, run_id=submitted["runId"], claim_request_id="coding")
         self.assertEqual(claim["claim"]["task"]["spec"]["model"], SECOND_PROFILE["model"])
         self.assertEqual(claim["claim"]["turn"]["input"]["context"]["routing"]["decisionId"],
@@ -251,10 +244,10 @@ class SoleCandidateWorkflowTests(WorkflowTestCase):
         board = self.board()
         self.seed(board, decision_profile=None)
         task = "完整工作说明" * 3000
-        submitted = self.routed(board, task=task, effort="high", requiredCapabilities=["execution:dsh"])
+        submitted = self.routed(board, task=task, requiredCapabilities=["effort:high"])
         self.assertEqual(submitted["routing"]["status"], "completed")
-        self.assertEqual(submitted["routing"]["requiredCapabilities"], ["execution:dsh"])
-        self.assertEqual(submitted["routing"]["constraints"], {"effort": "high"})
+        self.assertEqual(submitted["routing"]["requiredCapabilities"], ["effort:high"])
+        self.assertEqual(submitted["routing"]["constraints"], {})
         decision = board.call("selection_get", {"decisionId": submitted["routing"]["decisionId"]})["decision"]
         self.assertIsNone(decision["runId"])
         self.assertEqual(decision["taskReference"]["bytes"], len(task.encode()))
@@ -262,22 +255,51 @@ class SoleCandidateWorkflowTests(WorkflowTestCase):
             goal = json.loads(connection.execute("SELECT goal_json FROM workflow_runs").fetchone()[0])
             self.assertEqual(goal["task"], task)
 
-    def test_unlocked_reroute_displays_its_own_frozen_constraints(self):
+    def test_unlocked_reroute_freezes_its_own_candidate_basis(self):
+        # The retired scenario narrowed the first route with a partial `effort`
+        # constraint and watched an unlocked reroute drop it; a partial tuple is
+        # rejected input now, so the surviving essence is per-route freezing: a
+        # goal that named no buddy routes with empty constraints, and a later
+        # table change never rewrites the frozen basis of the earlier route.
         board = self.board()
         self.seed(board)
-        submitted = self.routed(board, effort="high")
-        continued = self.continue_run(board, submitted, command_id="reroute-unlocked", reroute=True)
+        submitted = self.routed(board)
+        self.assertEqual(submitted["routing"]["status"], "queued")
+        self.assertEqual(submitted["routing"]["constraints"], {})
+        # Settle the first Router answer so the reroute can replace the route.
+        board.call("worker_register", {"workerId": "router", "adapter": "decision", "capabilities": ["decision"]})
+        claim = self.claim(board, "router", run_id=submitted["routing"]["taskId"], claim_request_id="router-claim")["claim"]
+        board.call("worker_result", {
+            "workerId": "router", "attemptId": claim["attempt"]["attemptId"],
+            "generation": claim["attempt"]["generation"], "nonce": "n" * 16,
+            "status": "ok", "shutdownConfirmed": True,
+            "result": {"status": "ok", "operation": "select",
+                       "tableRevision": claim["decisionInput"]["tableRevision"],
+                       "inputVerification": {"unchanged": True,
+                                             "manifestSha256": claim["decisionInput"]["executionWorkspace"]["manifestSha256"]},
+                       "decision": {"profileId": PROFILE_ID, "reason": "fixture selection", "evidence": []}},
+        })
+        settled = board.call("workflow_get", {"runId": submitted["runId"]})
+        continued = self.continue_run(board, settled, command_id="reroute-unlocked", reroute=True)
         board.store.workflow.prepare_continuation_workspace({"runId": continued["runId"]})
+        self.publish_user_patch(
+            board, request_id="exclude-one", command_id="exclude-one",
+            preferenceChanges=[{"profileId": SECOND_PROFILE_ID, "mode": "exclude", "reason": "narrowed later"}])
         routed = board.call("workflow_get", {"runId": submitted["runId"]})
         self.assertEqual(routed["routing"]["status"], "queued")
         self.assertEqual(routed["routing"]["constraints"], {})
         original = board.call("selection_get", {"decisionId": submitted["routing"]["decisionId"]})["decision"]
-        self.assertEqual(original["constraints"], {"effort": "high"})
+        self.assertEqual(original["constraints"], {})
+        self.assertEqual(original["routingBasis"]["candidateCount"], 2)
+        history = board.call("workflow_get", {
+            "runId": submitted["runId"], "routingHistory": {"limit": 10}})["routingHistory"]
+        self.assertEqual(len(history["entries"]), 2)
+        self.assertEqual(history["entries"][1]["decisionId"], submitted["routing"]["decisionId"])
 
     def test_reroute_after_a_preference_change_reaches_the_host_boundary(self):
         board = self.board()
         self.seed(board)
-        submitted = self.routed(board, effort="high", configurationLocked=True)
+        submitted = self.routed(board, requiredCapabilities=["effort:high"])
         self.assertEqual(submitted["routing"]["status"], "completed")
         # The user now excludes the only effort-high candidate. The locked
         # constraint survives the reroute, so it finds no legal candidate and

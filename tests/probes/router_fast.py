@@ -38,16 +38,13 @@ def packet(args):
                 for profile in (
                     {'adapter': 'dsh', 'provider': 'deepseek-official', 'model': 'deepseek-flash', 'effort': 'off'},
                     {'adapter': 'codex', 'provider': 'openai', 'model': 'gpt-6-sol', 'effort': 'high'})]
-    preferences = [{'match': {'adapter': 'dsh', 'model': 'deepseek-flash', 'effort': 'off'},
-                    'reason': '本次只是一个极小的文档标点修正，优先考虑此配置。'}]
     return {
         'profile': {key: getattr(args, key) for key in ('adapter', 'provider', 'model', 'effort')},
         'task': '极小任务：将 README 中一句中文句末的英文句点改成中文句号。只选择执行配置，不执行修改。',
         'routingMode': 'fast', 'requestedRoutingMode': 'fast', 'fallback': None,
         'captureEvidence': True,
         'profiles': profiles, 'cards': [], 'preferences': [], 'annotations': [],
-        'routingPreferences': preferences,
-        'policyFacts': selection_policy.policy_facts(profiles=profiles, routing_preferences=preferences,
+        'policyFacts': selection_policy.policy_facts(profiles=profiles,
                                                     prefer_profile_ids=[], hard_constraints={}),
         'requestId': 'native-fast-check', 'tableRevision': 0,
         'budget': dict(router.FAST_BUDGET),

@@ -93,7 +93,6 @@ export function DecisionDetails({ decisionId, api, csrfToken, active = true, ref
     </dl>
     {audit.kind !== "maintain" && <>
       <dl className="facts">
-        <dt>程序任务偏好结果</dt><dd>{outcomeText(audit.policyCheck?.taskPreference?.outcome)}{audit.policyCheck?.taskPreference?.ruleIndex != null ? `（规则 ${audit.policyCheck.taskPreference.ruleIndex}）` : ""}</dd>
         <dt>程序用户偏好结果</dt><dd>{outcomeText(audit.policyCheck?.userPreference)}</dd>
         <dt>预算配置</dt><dd>{noRouterCall ? "未调用 Router" : audit.routingMode === "fast" ? "快速路由固定 60 秒，无工具" : audit.budget?.preset ? ({ brief: "简要", quick: "简要（历史记录）", standard: "标准", deep: "深入" }[audit.budget.preset] ?? audit.budget.preset) : "未记录"}</dd>
         <dt>耗时 / 上限</dt><dd>{recorded(audit.usage?.elapsedMs)} 毫秒 / {recorded(audit.budget?.timeoutSeconds)} 秒</dd>

@@ -326,7 +326,7 @@ ACTIVE_REQUEST = {
 }
 def routing(decision_id: str, task_id: str, status: str, selected: dict | None, reason: str,
             constraints: dict, configuration_revision: int | None, *,
-            task_outcome: str = "none", user_outcome: str = "none",
+            user_outcome: str = "none",
             elapsed_ms: int = 180000, tool_calls: int = 3, bytes_read: int = 32768,
             mode: str = "review", requested_mode: str = "review", fallback: dict | None = None) -> dict:
     """One recorded routing decision, shaped like ``workflow._routing_view``."""
@@ -335,11 +335,8 @@ def routing(decision_id: str, task_id: str, status: str, selected: dict | None, 
             "configurationRevision": configuration_revision, "selectedProfile": selected, "reason": reason,
             "routingMode": mode, "requestedRoutingMode": requested_mode, "fallback": fallback,
             "constraints": constraints,
-            "routingPreferences": [{"match": selected}] if task_outcome == "matched" else [],
-            "source": "model-selection" if decision_id else None, "preferenceOutcome": None,
+            "source": "model-selection" if decision_id else None,
             "policyCheck": {"hardConstraints": constraints,
-                            "taskPreference": {"ruleIndex": 0 if task_outcome != "none" else None,
-                                               "outcome": task_outcome},
                             "userPreference": user_outcome},
             # Illustrative fixture values only; these are not runtime defaults.
             "budget": ({"timeoutSeconds": 60} if mode == "fast" else
@@ -350,7 +347,7 @@ def routing(decision_id: str, task_id: str, status: str, selected: dict | None, 
 
 ROUTING_A1 = routing("preview-decision-a1", "preview-run-a1-router", "completed", CFG_FLASH,
                      "合成预览：选择 DeepSeek Flash；符合委派偏好，偏离用户偏好以缩短路由等待。",
-                     {}, 2, task_outcome="matched", user_outcome="alternative",
+                     {}, 2, user_outcome="alternative",
                      mode="fast", requested_mode="review",
                      fallback={"from": "review", "to": "fast", "code": "REVIEW_UNAVAILABLE",
                                "reason": "合成预览：审阅 Router 不可用"},
@@ -952,7 +949,7 @@ def workflow_view(entry: dict) -> dict:
                 if child["governed"] and child["parentRunId"] == entry["runId"]]
     routing = entry["routing"] or {"status": "explicit" if entry["configuration"] else "needs-host",
                                    "decisionId": None, "taskId": None, "constraints": {},
-                                   "routingPreferences": [], "source": None}
+                                   "source": None}
     return {
         "governed": True, "runId": entry["runId"], "taskId": entry["runId"],
         "requestId": entry["requestId"], "title": entry["title"], "objectiveId": entry["group"],
@@ -1875,8 +1872,7 @@ def validate_fixtures() -> list[str]:
         if decision["status"] == "abstention" and (item.get("error") or item.get("disposition") != "abstention"):
             problems.append("routing abstention must not project as a failure")
         policy = projection["policyCheck"]
-        if set(policy) != {"hardConstraints", "taskPreference", "userPreference"} or set(
-                policy["taskPreference"]) != {"ruleIndex", "outcome"}:
+        if set(policy) != {"hardConstraints", "userPreference"}:
             problems.append(f"{item['spanId']}: policyCheck differs from Python selection policy shape")
         limits = {**projection["budget"], "elapsedMs": projection["budget"]["timeoutSeconds"] * 1000}
         if any(value is not None and (type(value) is not int or value < 0 or
