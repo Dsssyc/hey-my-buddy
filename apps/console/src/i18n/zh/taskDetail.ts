@@ -101,6 +101,6 @@ export default {
     status: { failed: "失败", cancelled: "已取消" },
     exception: "例外", unconfirmed: "停止未确认，{{n}} 项执行尚未核实",
   },
-  record: { command: "命令执行", untitled: "未命名", microTask: "微任务", macroTask: "宏任务", host: "Host", id: "编号" },
+  record: { label: "记录详情", loading: "正在读取记录…", failed: "读取记录失败", command: "命令执行", untitled: "未命名", microTask: "微任务", macroTask: "宏任务", host: "Host", id: "编号" },
   error: { incomplete: "读取的内容不完整（{{what}}）；请检查服务版本。" },
 };

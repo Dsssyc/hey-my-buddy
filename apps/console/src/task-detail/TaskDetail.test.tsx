@@ -666,8 +666,11 @@ describe("a run with no collaboration record", () => {
     status: "completed", selectedAttempt: { attemptId: "att-c", startedAt: at("10:00"), finishedAt: at("10:02"), result: { result: { finalText: "42 passed" } } }, ...overrides });
 
   it("has one step, whose band names no buddy, and reads no collaboration record", async () => {
-    const f = open({ replies: { task: command() }, timeline: null, backTo: "records" });
+    const recordedCommand = command();
+    recordedCommand.selectedAttempt!.tokenUsage = { inputTokens: 120, cachedInputTokens: 20, outputTokens: 10, source: "recorded", scope: "attempt" };
+    const f = open({ replies: { task: recordedCommand }, timeline: null, backTo: "records" });
     await ready();
+    expect(document.querySelector("[data-slot=task-detail]")?.getAttribute("aria-label")).toBe("记录详情");
     expect(screen.queryByRole("navigation", { name: "步骤" })).toBeNull();
     const head = document.querySelector("[data-slot=detail-header]") as HTMLElement;
     expect(within(head).getByRole("heading").textContent).toContain("命令执行");
@@ -677,6 +680,9 @@ describe("a run with no collaboration record", () => {
     const band = pane().querySelector("[data-slot=detail-band]") as HTMLElement;
     expect(band.textContent).toContain("命令执行");
     expect(band.textContent).not.toMatch(/codex|claude|Worker/);
+    expect(band.textContent).not.toMatch(/输入|输出|缓存/);
+    expect(band.children).toHaveLength(3);
+    expect(within(pane()).getByText("Host")).toBeTruthy();
     expect(pane().textContent).toContain("npm test");
     expect(pane().textContent).toContain("42 passed");
     expect(f.reads.workflow).not.toHaveBeenCalled();
@@ -685,14 +691,17 @@ describe("a run with no collaboration record", () => {
   });
 
   it("is, for a Router's calculation, laid out as a route", async () => {
-    const f = open({ replies: { task: command({ lineage: { ...task().lineage, kind: "decision", buddy: ROUTER_QUAD,
-      routingTask: { runId: "source-task", title: "时间轴比例尺", titleSource: "title", macroTaskId: "macro-1", macroTaskTitle: "控制台前端重建" } }, task: "为微任务选择 buddy" }) }, timeline: null });
+    const calculation = command({ lineage: { ...task().lineage, kind: "decision", buddy: ROUTER_QUAD,
+      routingTask: { runId: "source-task", title: "时间轴比例尺", titleSource: "title", macroTaskId: "macro-1", macroTaskTitle: "控制台前端重建" } }, task: "为微任务选择 buddy" });
+    calculation.selectedAttempt!.tokenUsage = { inputTokens: 120, cachedInputTokens: 20, outputTokens: 10, source: "recorded", scope: "attempt" };
+    const f = open({ replies: { task: calculation }, timeline: null });
     await ready();
     expect(screen.queryByRole("navigation", { name: "步骤" })).toBeNull();
     expect(document.querySelector("[data-slot=detail-header] h2")?.textContent).toBe("路由计算时间轴比例尺");
     const band = pane().querySelector("[data-slot=detail-band]") as HTMLElement;
     expect(band.textContent).toContain("Router");
     expect(band.textContent).toContain("gpt-6-luna");
+    expect(band.textContent).toMatch(/输入 120.*输出 10.*缓存 20/);
     expect(pane().textContent).toContain("控制台前端重建");
     await f.user.click(within(pane()).getByRole("button", { name: "时间轴比例尺" }));
     expect(f.onOpenRun).toHaveBeenCalledExactlyOnceWith("source-task", "macro-1");

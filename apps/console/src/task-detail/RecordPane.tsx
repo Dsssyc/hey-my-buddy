@@ -28,7 +28,7 @@ export function RecordPane({ step, view, onOpenRun }: { step: Step; view: TaskVi
     <Band role={calculation ? "Router" : t("record.command")} plain={!calculation}
       identity={calculation ? quad(task.lineage?.buddy) ?? undefined : undefined}
       end={routing?.routingMode ? t(`routing.mode.${routing.routingMode}`) : undefined}
-      second={<Usage usage={attempt?.tokenUsage ?? null} />}
+      second={calculation ? <Usage usage={attempt?.tokenUsage ?? null} /> : undefined}
       secondEnd={attempt?.session?.id ? <span className="inline-flex flex-wrap items-baseline gap-x-1.5">
         <span>{t("session.name")}</span><CopyableIdentifier value={attempt.session.id} hint={sessionHint(attempt.session, t)} />
       </span> : undefined} />
@@ -49,7 +49,7 @@ export function RecordPane({ step, view, onOpenRun }: { step: Step; view: TaskVi
       <Facts items={[
         ...(source ? [[t("record.microTask"), <LinkButton key="micro-task" hint={source.titleSource === "first-line" ? t("title.fromTask", { title: source.title }) : undefined} onClick={() => onOpenRun(source.runId, source.macroTaskId ?? `run:${task.lineage!.rootRunId}`)}>{source.title ?? t("untitled")}</LinkButton>] as [string, ReactNode]] : []),
         ...(source?.macroTaskTitle ? [[t("record.macroTask"), source.macroTaskTitle] as [string, ReactNode]] : []),
-        [calculation ? t("record.host") : t("delegation.originalDelegator"), taskHost(task)],
+        [t("record.host"), taskHost(task)],
         [t("record.id"), <CopyableIdentifier key="id" value={task.runId} />],
         ...(!calculation ? [[t("delegation.cwd"), task.cwd, true] as [string, ReactNode, boolean]] : []),
       ]} />

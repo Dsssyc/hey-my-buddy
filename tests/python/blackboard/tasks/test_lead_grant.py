@@ -87,7 +87,7 @@ class LeadGrantTests(WorkflowTestCase):
         submitted = self.grant(board)
         fetched = board.call("workflow_get", {"runId": submitted["runId"]})
         brief = micro_task_brief(fetched)
-        listed = board.call("task_list", {})["tasks"][0]
+        listed = board.call("task_list", {})["runs"][0]
         for view in (submitted, fetched, brief, listed["lineage"]):
             self.assertTrue(view["delegationAuthority"])
             self.assertEqual(view["buddy"], BUDDY)
@@ -109,7 +109,7 @@ class LeadGrantTests(WorkflowTestCase):
         replay = self.submit(board, delegationAuthority=False)
         self.assertTrue(replay["duplicate"])
         self.assertFalse(ordinary["delegationAuthority"])
-        self.assertFalse(board.call("task_list", {})["tasks"][0]["lineage"]["delegationAuthority"])
+        self.assertFalse(board.call("task_list", {})["runs"][0]["lineage"]["delegationAuthority"])
         self.register(board)
         claimed = self.claim(board)
         self.assertFalse(claimed["claim"]["turn"]["input"]["context"]["delegationAuthority"])

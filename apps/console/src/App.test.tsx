@@ -90,7 +90,7 @@ describe("console interactions", () => {
     expect(screen.queryByRole("button", { name: "取消任务" })).toBeNull();
     expect(screen.queryByRole("heading", { name: "记录验收" })).toBeNull();
     expect(api.command).not.toHaveBeenCalled();
-    await user.click(within(screen.getByRole("region", { name: "微任务详情" })).getByRole("button", { name: "记录" }));
+    await user.click(within(screen.getByRole("region", { name: "记录详情" })).getByRole("button", { name: "记录" }));
     expect(await screen.findByText("选择一条记录。")).toBeTruthy();
   });
 

@@ -17,7 +17,7 @@ export default {
   rail: { label: "Steps", truncated: "The timeline read is incomplete and has no row for this micro task; only the delegation is listed." },
   step: {
     delegation: "Delegate", routing: "Route", turn: "Turn {{n}}", handoff: "Handoff", decision: "Decision", continue: "Continue",
-    cancel: "Cancel", takeover: "Takeover", acceptance: "Acceptance", record: "Run", calculation: "Route calculation",
+    cancel: "Cancel", takeover: "Takeover", acceptance: "Acceptance", record: "Run", calculation: "Routing calculation",
   },
   fold: { more: "Show more", less: "Show less" },
   result: { name: "Result" },
@@ -79,7 +79,7 @@ export default {
   delegation: {
     task: "Task", source: "Source", originalDelegator: "Originally delegated by", currentOwner: "Current owner", project: "Project", unknownProject: "Project not recorded", id: "Micro task ID",
     parent: "Parent micro task", cwd: "Working directory", authority: "Delegation authority", authorityYes: "Has delegation authority", helpers: "Helpers",
-    calculation: "Route calculation", fixes: "Fixes", fixesTarget: "Micro task being fixed", fixedBy: "Fixed by: {{n}}",
+    calculation: "Routing calculation", fixes: "Fixes", fixesTarget: "Micro task being fixed", fixedBy: "Fixed by: {{n}}",
     inquiries: "Inquiries",
   },
   decision: {
@@ -102,6 +102,6 @@ export default {
     status: { failed: "Failed", cancelled: "Cancelled" },
     exception: "Exceptions", unconfirmed: "Stop not confirmed; executions not yet verified: {{n}}",
   },
-  record: { command: "Command execution", untitled: "Untitled", microTask: "Micro task", macroTask: "Macro task", host: "Host", id: "ID" },
+  record: { label: "Record detail", loading: "Reading the record…", failed: "Could not read the record", command: "Command execution", untitled: "Untitled", microTask: "Micro task", macroTask: "Macro task", host: "Host", id: "ID" },
   error: { incomplete: "The reply is incomplete ({{what}}); check the service version." },
 } satisfies typeof zh;

@@ -466,7 +466,7 @@ def task_brief(view: dict) -> dict:
 
 
 def list_brief(response: dict) -> dict:
-    rows = response.get("runs") if isinstance(response.get("runs"), list) else response.get("tasks")
+    rows = response["runs"]
     brief_rows = []
     for row in rows or []:
         if not isinstance(row, dict):

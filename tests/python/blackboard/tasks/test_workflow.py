@@ -293,7 +293,7 @@ class LifecycleTests(WorkflowTestCase):
                     "SELECT COUNT(*) FROM events WHERE task_id=? AND kind IN "
                     "('workflow.buddy_selected','workflow.execution_selected')", (run_id,)).fetchone()[0], 0)
             self.assertIsNone(board.call('task_get', {'runId': run_id})['task']['lineage']['buddy'])
-            rows = board.call('task_list', {})['tasks']
+            rows = board.call('task_list', {})['runs']
             row = next(item for item in rows if item['taskId'] == run_id)
             self.assertIsNone(row['lineage']['buddy'])
             self.assertEqual(row['adapter'], 'unresolved')

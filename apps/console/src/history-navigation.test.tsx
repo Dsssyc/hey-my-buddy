@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { MacroTasks } from "./MacroTasks";
 import type { ConsoleApi } from "./api";
 import type { Snapshot, Task, TaskQuery } from "./types";
+import { task as detailTask, workflow as detailWorkflow, audit as detailAudit } from "./task-detail/task-detail.fixtures";
 import { macroTaskTimelineFixture } from "./macro-task-fixtures";
 import { VIEW_PREFERENCE_PREFIX } from "./view-preferences";
 import { TooltipProvider } from "./components/ui/tooltip";
@@ -35,8 +36,15 @@ function harness(paged = false) {
   const timeline = macroTaskTimelineFixture();
   const api = {
     snapshot: vi.fn(async () => structuredClone(snapshot)),
-    command: vi.fn(),
-    task: vi.fn(async (runId: string) => ({ ...rawRecord(), runId })),
+    command: vi.fn(async (operation: string, params: { runId: string; includeAudit?: boolean }) => {
+      if (operation === "message_list") return { messages: [] };
+      if (operation === "workflow_get") return { ...detailWorkflow({ runId: params.runId }),
+        ...(params.includeAudit ? { audit: detailAudit(), routingHistory: { entries: [], nextCursor: null, total: 0 } } : {}) };
+      throw new Error(`Unexpected operation: ${operation}`);
+    }),
+    task: vi.fn(async (runId: string) => runId === "cmd-9" ? rawRecord() : detailTask({ runId,
+      lineage: { ...detailTask().lineage!, rootRunId: runId },
+      workflow: { ...detailTask().workflow!, macroTaskId: timeline.macroTask.macroTaskId } })),
     tasks: vi.fn(async ({ rootsOnly }: TaskQuery) => ({ runs: rootsOnly ? [] : [rawRecord()], total: 1, nextCursor: null })),
     macroTasks: vi.fn(async () => ({ macroTasks: [timeline.macroTask], totals: { all: 1, active: 1, host: 0, review: 0 }, nextCursor: paged ? "older" : null, cursor: 41, changed: false })),
     macroTaskTimeline: vi.fn(async () => ({ timeline, verifiedAtMs: null })),

@@ -58,7 +58,12 @@ class TestWorkflowRouting(WorkflowTestCase):
             self.assertNotIn(hidden, serialized)
         self.select(board, claim)
         self.register(board)
-        self.assertNotIn('Hidden description sentinel', json.dumps(self.claim(board)))
+        worker_claim = self.claim(board)
+        for hidden in ('Hidden description sentinel', 'Human-only group', 'Human-only title'):
+            self.assertNotIn(hidden, json.dumps(worker_claim))
+        for owned in (claim['claim'], worker_claim['claim']):
+            self.assertNotIn('lineage', owned['task'])
+            self.assertNotIn('workflow', owned['task'])
 
     def test_explicit_validated_and_no_selection_or_coding_bypass(self):
         board = self.board()

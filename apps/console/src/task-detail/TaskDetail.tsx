@@ -106,21 +106,22 @@ export function TaskDetail({ client, runId, timeline, timelineLoading, nowMs, st
   }, [active, onBack]);
 
   // The view brings its own hints, so that it stands in any page.
+  const recordDetail = view?.record != null || (view === null && backTo === "records");
   const bare = (body: ReactNode) => <TooltipProvider delayDuration={300}>
-    <section data-slot="task-detail" aria-label={t("label")} className="flex min-h-0 min-w-0 flex-1 flex-col bg-card max-[760px]:flex-none">{body}</section>
+    <section data-slot="task-detail" aria-label={t(recordDetail ? "record.label" : "label")} className="flex min-h-0 min-w-0 flex-1 flex-col bg-card max-[760px]:flex-none">{body}</section>
   </TooltipProvider>;
   if (!view) {
     return bare(<div className="flex flex-1 flex-col items-center justify-center gap-3 p-6 text-center">
       {read.error
         ? <>
-          <h2 className="text-base font-semibold">{t("failed")}</h2>
+          <h2 className="text-base font-semibold">{t(recordDetail ? "record.failed" : "failed")}</h2>
           <p role="alert" className="max-w-prose text-fail wrap-anywhere">{read.error}</p>
           <div className="flex gap-2">
             <Button variant="outline" onClick={read.refresh}>{t("retry")}</Button>
             <Button variant="outline" onClick={onBack}>{t(`back.${backTo}`)}</Button>
           </div>
         </>
-        : <p role="status" className="text-ink2">{t("loading")}</p>}
+        : <p role="status" className="text-ink2">{t(recordDetail ? "record.loading" : "loading")}</p>}
     </div>);
   }
   const ctx: Context | null = workflow ? {

@@ -1508,7 +1508,7 @@ def task_page(params: dict) -> dict:
         entries = [entry for entry in entries if entry["parentRunId"] is None]
     entries.sort(key=lambda entry: (entry["createdAt"], entry["runId"]), reverse=True)
     views = [task_view(entry) for entry in entries[:limit]]
-    return {"runs": views, "tasks": views, "total": len(entries), "cursor": FIXTURES["head"],
+    return {"runs": views, "total": len(entries), "cursor": FIXTURES["head"],
             "nextCursor": None}
 
 

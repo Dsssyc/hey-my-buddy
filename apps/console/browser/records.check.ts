@@ -7,8 +7,8 @@ const COMMAND = "preview-command-c1";
 const MICRO = "preview-run-a1";
 const HELPER = "preview-run-b1-h1";
 const words = [
-  { locale: "zh-CN", today: "今天", yesterday: "昨天", search: "搜索标题、项目、Host 或编号", noMatch: "没有匹配的记录", empty: "还没有记录", records: "记录", macro: "宏任务", failed: "读取失败" },
-  { locale: "en-US", today: "Today", yesterday: "Yesterday", search: "Search title, project, Host or ID", noMatch: "No matching records", empty: "No records yet", records: "Records", macro: "Macro tasks", failed: "Read failed" },
+  { locale: "zh-CN", today: "今天", yesterday: "昨天", search: "搜索标题、项目、Host 或编号", noMatch: "没有匹配的记录", empty: "还没有记录", records: "记录", macro: "宏任务", failed: "读取失败", helper: "协助任务", calculation: "路由计算", command: "命令执行", input: "输入", recordDetail: "记录详情" },
+  { locale: "en-US", today: "Today", yesterday: "Yesterday", search: "Search title, project, Host or ID", noMatch: "No matching records", empty: "No records yet", records: "Records", macro: "Macro tasks", failed: "Read failed", helper: "Helper", calculation: "Routing calculation", command: "Command execution", input: "Input", recordDetail: "Record detail" },
 ] as const;
 
 async function themeBeforeLoad(page: Page, theme: string) {
@@ -56,8 +56,11 @@ for (const w of words) for (const width of [1280, 390]) for (const theme of ["li
       await expect(list.locator("h3").first()).toHaveText(w.today);
       await expect(list.locator("h3").last()).toHaveText(w.yesterday);
       await expect(list.locator("[data-run-id='preview-run-a1-router']")).toContainText("gpt-5-codex / high");
+      await expect(list.locator(`[data-run-id='${ROUTING}']`)).toContainText(w.calculation);
       await expect(list.locator("[data-run-id='preview-command-c1']")).toBeVisible();
+      await expect(list.locator(`[data-run-id='${COMMAND}']`)).toContainText(w.command);
       await expect(list.locator("[data-run-id='preview-run-b1-h1']")).toBeVisible();
+      await expect(list.locator(`[data-run-id='${HELPER}']`)).toContainText(w.helper);
       await expect(list.getByRole("textbox", { name: w.search })).toBeVisible();
       await expect(list.getByRole("tab")).toHaveCount(0);
       await expect(list.getByRole("combobox")).toHaveCount(0);
@@ -67,9 +70,11 @@ for (const w of words) for (const width of [1280, 390]) for (const theme of ["li
       await list.locator(`[data-run-id='${ROUTING}'] [data-slot=record-entry]`).click();
       await expect(page).toHaveURL(new RegExp(`#tasks/records/${ROUTING}$`));
       await expect(page.locator("[data-slot=task-detail]")).toBeVisible();
+      await expect(page.locator("[data-slot=task-detail]")).toHaveAttribute("aria-label", w.recordDetail);
       await expect(page.locator("[data-slot=detail-band]")).toBeVisible();
       await expect(page.locator("[data-slot=task-detail-rail]")).toHaveCount(0);
       await expect(page.locator("[data-slot=task-detail]")).toContainText("Router");
+      await expect(page.locator("[data-slot=detail-band]")).toContainText(w.input);
       await expectNoSidewaysScroll(page);
       await page.goBack();
       await expect(page).toHaveURL(/#tasks\/records$/);
@@ -78,7 +83,10 @@ for (const w of words) for (const width of [1280, 390]) for (const theme of ["li
       await list.locator(`[data-run-id='${COMMAND}'] [data-slot=record-entry]`).click();
       await expect(page).toHaveURL(new RegExp(`#tasks/records/${COMMAND}$`));
       await expect(page.locator("[data-slot=task-detail]")).toBeVisible();
+      await expect(page.locator("[data-slot=task-detail]")).toHaveAttribute("aria-label", w.recordDetail);
       await expect(page.locator("[data-slot=detail-band]")).toBeVisible();
+      await expect(page.locator("[data-slot=detail-band]")).not.toContainText(w.input);
+      await expect(page.locator("[data-slot=detail-band] > *")).toHaveCount(3);
       await expect(page.locator("[data-slot=task-detail-rail]")).toHaveCount(0);
       await page.goBack();
       await expect(page).toHaveURL(/#tasks\/records$/);
@@ -115,7 +123,7 @@ for (const w of words) for (const width of [1280, 390]) for (const theme of ["li
       await page.route("**/api/tasks?*", async route => {
         const response = await route.fetch();
         const data = await response.json();
-        await route.fulfill({ response, json: { ...data, runs: [], tasks: [], total: 0, nextCursor: null } });
+        await route.fulfill({ response, json: { ...data, runs: [], total: 0, nextCursor: null } });
       });
       await page.reload();
       await expect(list.getByText(w.empty)).toBeVisible();
@@ -137,7 +145,7 @@ test.describe("records pagination and polling", () => {
       const data = await response.json();
       const before = new URL(route.request().url()).searchParams.get("before");
       await route.fulfill({ response, json: { ...data, runs: before ? data.runs.slice(8) : data.runs.slice(0, 8),
-        tasks: before ? data.runs.slice(8) : data.runs.slice(0, 8), nextCursor: before ? null : "older-page" } });
+        nextCursor: before ? null : "older-page" } });
     });
     await open(page, "#tasks/records");
     const list = page.locator("[data-slot=records-list]");
@@ -161,7 +169,7 @@ test.describe("records pagination and polling", () => {
       const fresh = { ...data.runs[0], runId: "preview-new-record", taskId: "preview-new-record",
         requestId: "preview-new-record", createdAt: "2026-09-27T10:01:00.000Z", updatedAt: "2026-09-27T10:01:00.000Z" };
       await route.fulfill({ response, json: inject ? { ...data, runs: [fresh, ...data.runs],
-        tasks: [fresh, ...data.runs], total: data.total + 1 } : data });
+        total: data.total + 1 } : data });
     });
     await open(page, "#tasks/records");
     const list = page.locator("[data-slot=records-list]");
