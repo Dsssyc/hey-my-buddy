@@ -26,19 +26,9 @@ jobs:
           if tag != f"v{version}":
               raise SystemExit(f"Release tag {tag!r} does not match pyproject.toml version {version!r} (expected 'v{version}').")
           print(f"Verified release tag {tag} matches pyproject.toml version {version}.")
-      - uses: actions/setup-node@v4
-        with:
-          node-version: '24'
-          cache: npm
-          cache-dependency-path: apps/console/package-lock.json
       - uses: astral-sh/setup-uv@v6
         with:
           version: '0.12.19'
-      - name: Build console assets
-        working-directory: apps/console
-        run: |
-          npm ci
-          npm run build
       - name: Build wheel and sdist
         run: uv build --out-dir dist
       - name: Write SHA-256 manifest
