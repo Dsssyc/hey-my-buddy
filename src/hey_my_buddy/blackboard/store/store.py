@@ -2356,11 +2356,14 @@ class BoardStore:
         selector = "attempt_id=? AND stage=?" if attempt_id is not None else "stage=?"
         keys = (attempt_id, stage) if attempt_id is not None else (stage,)
         with self.db.write() as connection:
+            attempt = self._attempt_row(connection, attempt_id) if attempt_id is not None else None
+            if attempt is not None and stage == "connection" and attempt["execution_state"] == "finished":
+                return
             previous = connection.execute(f"SELECT code,message FROM {table} WHERE {selector}", keys).fetchone()
             if previous is not None and (previous["code"], previous["message"]) == (code, message):
                 return
             now = self.now()
-            task_id = self._attempt_row(connection, attempt_id)["task_id"] if attempt_id is not None else None
+            task_id = attempt["task_id"] if attempt is not None else None
             if attempt_id is not None:
                 connection.execute("INSERT INTO execution_issues VALUES(?,?,?,?,?) ON CONFLICT(attempt_id,stage)"
                     " DO UPDATE SET code=excluded.code,message=excluded.message,observed_at=excluded.observed_at",
@@ -2745,6 +2748,10 @@ class BoardStore:
                     record_identity(connection, attempt_id, process_identity)
             return recover(self, attempt_id=attempt_id, stopped_evidence=stopped_evidence)
 
+    def execution_identity_confirmed(self, attempt_id: str) -> bool:
+        with self.db.read() as connection:
+            return self._attempt_row(connection, attempt_id)["identity_confirmed_at"] is not None
+
     def execution_observations(self) -> list[dict]:
         """Immutable bindings needed to observe pre-existing executions, without credentials."""
         with self.db.read() as connection:
@@ -2764,7 +2771,7 @@ class BoardStore:
                 return
             self._require_effective_attempt(connection, attempt)
             state, ownership = ("executing", "owned") if connected else ("uncertain", "uncertain")
-            if (connected and attempt["execution_state"] == "finalizing"
+            if (connected and attempt["execution_state"] != "uncertain"
                     or (attempt["execution_state"], attempt["ownership"]) == (state, ownership)):
                 return
             now = self.now()

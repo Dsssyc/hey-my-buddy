@@ -112,6 +112,32 @@ class PrivateExecutionRecoveryTests(BoardTestCase):
         finally:
             release.touch()
 
+    def test_normal_startup_has_no_unknown_state_connection_issue_or_reconnect_event(self):
+        with self.daemon(env={"HMB_MAX_CONCURRENT": "1"}):
+            run_id, release, before = self.command("normal-startup")
+            try:
+                self.assertIsNotNone(wait_for(lambda: self._live_bridge(run_id), timeout=30))
+                running = self.client().get(runId=run_id)
+                self.assertEqual(running["selectedAttempt"]["executionState"], "executing")
+                self.assertEqual(running["selectedAttempt"]["ownership"], "owned")
+                self.assertEqual(running["selectedAttempt"]["issues"], [])
+                store = BoardStore(self.directory)
+                try:
+                    with store.db.read() as db:
+                        events = db.execute("SELECT kind FROM events WHERE attempt_id=? AND kind IN"
+                            " ('attempt.uncertain','execution.unknown','execution.connected',"
+                            " 'execution.issue','execution.issue_resolved')", (before["attemptId"],)).fetchall()
+                    self.assertEqual(events, [])
+                finally:
+                    store.db.close()
+                release.touch()
+                finished = wait_for(lambda: self._finished(run_id), timeout=35)
+                self.assertIsNotNone(finished, self.client().get(runId=run_id))
+                self.assertEqual(finished["state"], "completed")
+                self.assertEqual(finished["selectedAttempt"]["issues"], [])
+            finally:
+                release.touch()
+
     def test_live_command_completes_after_replacement_service(self):
         with self.daemon(env={"HMB_MAX_CONCURRENT": "1"}) as daemon:
             run_id, release, before = self.command("reconnect-complete")

@@ -75,11 +75,8 @@ class ExecutionScheduler:
                 view = self.store.task_get({"runId": handle.execution_binding["taskId"]})["task"]
                 if client is None and identity is not None and inspect_process_identity(identity) == "alive":
                     try:
-                        temporary = read_execution_endpoint(handle.execution_directory, handle.role_run_identity,
-                                                            state_dir=self.store.directory, process_identity=identity)
+                        temporary = self._endpoint(attempt_id, handle, identity)
                         client = temporary
-                        if client is None:
-                            raise BoardError("LIVE_UNAVAILABLE", "Execution endpoint material is missing")
                     except Exception as error:
                         self._unknown(attempt_id, error)
                 self._apply_stop(view, {"attempt": {"attemptId": attempt_id}}, handle, client, None, None)
@@ -257,6 +254,16 @@ class ExecutionScheduler:
                 self._threads.discard(threading.current_thread())
             self.wake()
 
+    def _endpoint(self, attempt_id: str, handle, identity: dict):
+        # Publication precedes the identity acknowledgement. Sample the latter
+        # first so publication between these two reads cannot look like a loss.
+        confirmed = self.store.execution_identity_confirmed(attempt_id)
+        client = read_execution_endpoint(handle.execution_directory, handle.role_run_identity,
+                                         state_dir=self.store.directory, process_identity=identity)
+        if client is None and confirmed:
+            raise BoardError("LIVE_UNAVAILABLE", "Execution endpoint material is missing")
+        return client
+
     def _observe(self, claim: dict, handle, identity: dict) -> None:
         attempt_id = claim["attempt"]["attemptId"]
         task_id = claim["task"]["taskId"]
@@ -281,14 +288,11 @@ class ExecutionScheduler:
                                 return
                         elif observation == "alive":
                             try:
-                                client = read_execution_endpoint(handle.execution_directory, handle.role_run_identity,
-                                                                 state_dir=self.store.directory,
-                                                                 process_identity=identity)
-                                if client is None:
-                                    raise BoardError("LIVE_UNAVAILABLE", "Execution endpoint material is missing")
-                                with self._lock:
-                                    self._clients[attempt_id] = client
-                                stop_sent = None  # Every new channel needs the durable intent.
+                                client = self._endpoint(attempt_id, handle, identity)
+                                if client is not None:
+                                    with self._lock:
+                                        self._clients[attempt_id] = client
+                                    stop_sent = None  # Every new channel needs the durable intent.
                             except Exception as error:
                                 self._unknown(attempt_id, error)
                         else:

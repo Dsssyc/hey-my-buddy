@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 from admission import admit_execution
 from support import BoardTestCase, InProcessBoard
@@ -52,6 +52,68 @@ class InterruptionRecoveryTests(BoardTestCase):
         with board.store.db.read() as connection:
             self.assertEqual(connection.execute('SELECT COUNT(*) FROM attempt_process_identities').fetchone()[0], 1)
             self.assertEqual(interruption.read_identity(connection, actor['attemptId']), IDENTITY)
+
+    def test_normal_startup_waits_for_endpoint_without_unknown_or_reconnect_events(self):
+        from hey_my_buddy.blackboard.service.execution_scheduler import ExecutionScheduler, _RecoveredExecution
+        from hey_my_buddy.protocol.run_identity import RunIdentity
+        for acknowledgement in ('during-missing-read', 'after-first-wait'):
+            with self.subTest(acknowledgement=acknowledgement):
+                board, client, task, claim, actor = self.claimed(identity=False)
+                scheduler = ExecutionScheduler(board.service)
+                binding = {'taskId': task['taskId'], 'attemptId': actor['attemptId'], 'generation': 1}
+                with board.store.db.read() as db:
+                    directory = interruption._directory(board.store, board.store._attempt_row(db, actor['attemptId']))
+                location = _RecoveredExecution(directory, binding, RunIdentity(
+                    task_id=task['taskId'], attempt_id=actor['attemptId'], generation=1, invocation_id='execution'))
+                endpoint = Mock()
+                endpoint.wait.side_effect = lambda: scheduler._stopping.set() or True
+                reads = []
+
+                def publish_endpoint(*_args, **_kwargs):
+                    view = client.get(runId=task['taskId'])
+                    self.assertNotEqual(view['attemptState'], 'uncertain')
+                    reads.append(view['attemptState'])
+                    if len(reads) == 1:
+                        self.assertFalse(board.store.execution_identity_confirmed(actor['attemptId']))
+                        if acknowledgement == 'during-missing-read':
+                            # Publication and its acknowledgement can finish after
+                            # open reported absence but before that read returns.
+                            board.call('execution_progress', {**actor, 'processIdentity': IDENTITY, 'phase': 'executing'})
+                        return None
+                    return endpoint
+
+                with patch('hey_my_buddy.blackboard.service.execution_scheduler.read_execution_endpoint',
+                           side_effect=publish_endpoint), patch(
+                           'hey_my_buddy.blackboard.service.execution_scheduler.inspect_process_identity',
+                           return_value='alive'):
+                    scheduler._observe(claim, location, IDENTITY)
+                self.assertEqual(len(reads), 2)
+                if acknowledgement == 'after-first-wait':
+                    self.assertEqual(client.get(runId=task['taskId'])['attemptState'], 'starting')
+                    board.call('execution_progress', {**actor, 'processIdentity': IDENTITY, 'phase': 'executing'})
+                view = client.get(runId=task['taskId'])
+                self.assertEqual(view['attemptState'], 'executing')
+                self.assertEqual(view['selectedAttempt']['ownership'], 'owned')
+                self.assertEqual(view['selectedAttempt']['issues'], [])
+                self.assertIsNone(view['queueReason'])
+                self.assertEqual(board.store.resource_claims()[0]['state'], 'held')
+                with board.store.db.read() as db:
+                    events = db.execute("SELECT kind FROM events WHERE attempt_id=? AND kind IN"
+                        " ('attempt.uncertain','execution.unknown','execution.connected',"
+                        " 'execution.issue','execution.issue_resolved')", (actor['attemptId'],)).fetchall()
+                self.assertEqual(events, [])
+
+    def test_normal_endpoint_close_after_completion_is_quiet_but_cleanup_failures_remain_visible(self):
+        board, client, task, _, actor = self.claimed()
+        board.call('execution_result', {**actor, 'status': 'ok', 'result': {}, 'shutdownConfirmed': True})
+        head = board.store.head()
+        board.store.execution_connection(actor['attemptId'], connected=False)
+        board.store.record_execution_issue(actor['attemptId'], 'connection',
+                                           BoardError('EXECUTION_UNKNOWN', 'The execution endpoint is unavailable'))
+        self.assertEqual(board.store.head(), head)
+        self.assertEqual(client.get(runId=task['taskId'])['selectedAttempt']['issues'], [])
+        board.store.record_execution_issue(actor['attemptId'], 'endpoint-cleanup', OSError('cleanup failed'))
+        self.assertEqual(client.get(runId=task['taskId'])['selectedAttempt']['issues'][0]['stage'], 'endpoint-cleanup')
 
     def test_boot_changed_or_absent_execution_settles_and_releases_capacity(self):
         for observed in ('boot-changed', 'identity-absent'):

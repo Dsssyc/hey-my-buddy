@@ -24,6 +24,7 @@ class ExecutionObservationTests(unittest.TestCase):
     def test_unavailable_endpoint_keeps_work_unknown_without_creating_a_stop(self):
         with tempfile.TemporaryDirectory() as root:
             store = Mock(directory=Path(root))
+            store.execution_identity_confirmed.return_value = True
             store.task_get.return_value = {"task": {"cancelRequested": False}}
             scheduler = ExecutionScheduler(Mock(store=store))
             claim, location = self.recovered(root)
