@@ -10,7 +10,7 @@ Worker 在私有凭据文件里写入执行令牌、执行身份和绝对 `state
 
 `events`、`workflow_scope_versions`、`workflow_workspace_conflicts`、`workflow_integrations`、`workspace_cleanup_plans` 与 `workflow_host_conclusions` 的发起者分别存为 `actor_role`、`actor_id`，事件载荷不再重复存发起者。公开事件与审计视图按 `{role, id}` 投影，Lead 唤醒 SQL 比较两个存储字段。取消、接管、结论、整合、范围变更、清理与自动续做的写入点同步使用结构化角色。
 
-安装升级先创建并验证 schema 20 备份，再在离线事务里重建改变形状的表，换算旧发起者、名下归属、请求指纹及产品自己的命令回执。旧归属只从 `workflow_lead_tasks` 及其辅助微任务关系认定，未建立名下关系的 `lead:...` Host 名称保留；实际 Host 接管后的名字也保留。初代名下微任务移除合成的 Host 名称；其请求指纹按不可变微任务、原始工作区意图与已存标题重新计算。历史 manifest、native 历史、提示词哈希与模型返回的不透明内容不重写，换算失败事务回滚。
+安装升级先创建并验证 schema 20 备份，再在离线事务里重建改变形状的表，换算旧发起者、名下归属及产品自己的命令回执，并清空旧请求指纹。旧归属只从 `workflow_lead_tasks` 及其辅助微任务关系认定，未建立名下关系的 `lead:...` Host 名称保留；实际 Host 接管后的名字也保留。初代名下微任务移除合成的 Host 名称；其请求指纹统一清空为 NULL，表示 schema 21 之前的提交不能按原请求重放。历史 manifest、native 历史、提示词哈希与模型返回的不透明内容不重写，换算失败事务回滚。
 
 删除 `attempt_legacy_starts` 当前 DDL、开机一小时余量、`legacy_boot_evidence`、`boot_started_at`、中断恢复对存量开始时刻的读取和传递，以及只测试这条规则的两项测试。升级只要发现带存量开始时刻的执行尚未确认结束便拒绝；已结清后删除该表，并在产品已知的中断证据及回执位置移除 `legacyStartedAt`。完整进程身份、native 子进程证据、实际停止确认与普通恢复保留。
 
@@ -49,7 +49,7 @@ Python 验证统一使用 `PYTHONPATH=src <prepared-python> -m hey_my_buddy.cli.
 
 schema 20 → 21 的唯一发起者换算函数同时接收旧字符串、所属运行与写入代次：有名下关系且仍为第一代时，产品合成的 `lead:<运行>` 或 `host:lead:<运行>` 换成 Lead；明确的 `host:` 仅剥去一个 Host 包装，其他产品实际写过的 console、service、workflow、bridge 和 Lead 形式按明确角色换算，已知的裸 Host 标签保留为 Host。没有关系的同名前缀 Host 以及接管后的 Host 名称均不据前缀提升角色；未知值拒绝升级，worker 与 agent 不属于角色集合。所有含 `actor_role` 的表均用 CHECK 限定 host、lead、console、service、workflow、bridge，控制台解析使用同一封闭集合。
 
-升级同步换算事件和回执中产品写入的来源 Host、接管前后 Host、嵌套的 `decision_json.resolution.actor` 与工作区意图，清除名下微任务旧回执中的控制能力，保留普通 Host 回执的控制能力。`workflow.helper_admitted.integrator` 经源码核对是“是否承担整合”的布尔字段，身份位于工作区意图中，该布尔值保留原意。每个请求都先由保留的原始输入候选精确匹配旧指纹，匹配后再计算包含结构化整合方的新指纹，含已接管的名下微任务；回执内历史范围、结论、取消和整合等记录按自身版本、事件或写入时刻确定代次，不借用外层回执的当前代次。无法恢复原请求、识别发起者或确定代次时回滚拒绝，不猜指纹或身份。带摘要的历史清单与模型内容保持不变，`workflow_turns` 不在换算表集合内，样板测试继续比较它的全部表指纹及输入摘要。
+升级同步换算事件和回执中产品写入的来源 Host、接管前后 Host、嵌套的 `decision_json.resolution.actor` 与工作区意图，清除名下微任务旧回执中的控制能力，保留普通 Host 回执的控制能力。`workflow.helper_admitted.integrator` 经源码核对是“是否承担整合”的布尔字段，身份位于工作区意图中，该布尔值保留原意。升级前的请求指纹统一清空，不重算已接管的名下微任务或其他旧提交；先前还原旧请求的尝试已在下一节记录的修正中删除。回执内历史范围、结论、取消和整合等记录按自身版本、事件或写入时刻确定代次，不借用外层回执的当前代次。无法识别发起者或确定代次时回滚拒绝，不猜身份。带摘要的历史清单与模型内容保持不变，`workflow_turns` 不在换算表集合内，样板测试继续比较它的全部表指纹及输入摘要。
 
 凭据说明集中在 `lead.txt`，`prompts.py` 只附加私有文件路径；说明要求每条启动器命令显式带 `HMB_AGENT_CREDENTIAL_FILE`，提交若报告缺少 `hostId`，就停止并报告漏带凭据，不补 Host 名称。删除直接令牌环境变量、console 的凭据例外、`controller_environment` 的废弃 `turn_input` 参数以及任务和执行标识环境复制。一次启动器命令只读取凭据源文件一次，同进程直接传已读文档，切换固定运行时进程时通过匿名私有文件描述符传递已读内容；环境只载文件路径和私有描述符编号，没有令牌。
 
@@ -60,3 +60,20 @@ schema 20 → 21 的唯一发起者换算函数同时接收旧字符串、所属
 前端全量 79 个文件、1106 项通过，真实浏览器 98 项通过；随后重建打包资源，退出码 0，更新 JavaScript 资源及入口引用。浏览器检查仍只使用私有合成预览；没有运行完整 Python 检查，没有安装产品，没有操作日常服务或 Worker。
 
 与本回合要求不一致的情形：授权范围内修改已完成，但额外运行的 `tests/python/install/test_first_install.py` 有 12 项中的 1 项失败，`test_readmes_keep_first_install_parity` 要求两份 README 的安装命令与当前 0.37.0 一致，而它们仍为 0.36.0；另外 11 项通过，包括改用凭据文件的安装拒绝测试。README 不在写入范围内，未改写也未削弱断言，需 Host 同步 `README.md`、`README.zh-CN.md` 的安装版本后重跑该文件；失败证据保存在忽略目录 `tmp/credential-cleanup3-firstinstall.log`。本微任务未验证真实日常看板在本回合修正后的升级，Host 此前对上一版私有副本的演练不替代本回合的验收。
+
+
+## 升级前提交的重放边界
+
+开发者在日常看板的私有副本上演练后发现，经过 schema 19 → 20 的旧提交无法从当前字段还原原始请求；此前样板是 schema 20 新建，未暴露这个缺陷。本回合删除 `_request_fingerprint`、输入组合枚举、旧摘要匹配及其专用测试，升级不再读取旧请求内容来重算请求指纹，也不再以此拒绝升级。
+
+schema 20 → 21 重建 `workflow_runs` 时将所有已有 `request_fingerprint` 清为 SQL NULL；该列允许 NULL，只有一个含义：这次提交记于 schema 21 之前，不能再按原请求重放。新提交及新辅助微任务仍在创建时按当前规则计算非空指纹，后续使用相同 `requestId` 的合法幂等重放继续工作。任务、归属、历史输入摘要和固定 artifact 绑定保留，清空的是失去当前重放意义的请求指纹。
+
+`workflow_submit` 读到旧提交后，在比较任务内容、工作区或 Host，以及恢复提交控制能力之前，明确返回 `SUBMISSION_REPLAY_UNAVAILABLE`，错误中带 `requestId` 和 `runId`，说明应使用新的 `requestId`。事务内的 `task_submit` 同样检查该状态，早于命令回执返回与请求比较；并发提交的冲突恢复路径也用同一检查，不会把 NULL 当成普通指纹不匹配或返回旧提交成功。
+
+其余读取点中，公开微任务视图的 `requestFingerprint` 返回 null，CLI 的完整结果原样保留 null，精简视图原本就不展示此字段；升级时保存的工作流回执也同步清空该字段。它们不据此推断身份或恢复原始请求，只有提交重放入口将 NULL 解释为不可重放。没有修改控制台前端或打包资源。
+
+验证继续使用 Host 指定的既有解释器和 Python 检查运行器，默认进程数；升级样板、当前 schema、六个 Lead 文件、普通提交重放与工作区提交清理共 10 个文件 169 项通过，退出码 0，私有根已清理。样板另补充升级后新提交的幂等重放检查，测试夹具按正常入口初始化 Store 并使用无旧工作区占用的私有仓库后，最终重跑 9 项通过；没有运行完整检查，没有修改 README，也没有安装产品或接触日常看板。
+
+补跑 `blackboard/store/test_blackboard.py`、`test_store.py`、`blackboard/tasks/test_host_workflow.py`、`test_workflow_routing.py` 与 `test_macro_tasks.py`，5 个文件 145 项通过，验证普通任务提交、宏任务提交重放与路由对指纹的使用；增强已有命令回执不能绕过旧提交拒绝的回归后，`test_workflow.py` 最终重跑 58 项通过。这两批及样板重跑均为退出码 0，私有根已清理；本回合 15 个受影响文件最终共 314 项通过，重复运行不重复计数，`git diff --check` 通过。
+
+与本回合要求不一致的情形：没有；README 的版本同步由 Host 处理，之前该项失败不作为本回合剩余工作。本回合只在私有测试夹具上验证升级，日常看板私有副本的再次演练由 Host 验收。

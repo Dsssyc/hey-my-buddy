@@ -21,7 +21,6 @@ from hey_my_buddy.blackboard.tasks import workspace
 from hey_my_buddy.blackboard.tasks.workflow import WorkflowCoordinator
 from hey_my_buddy.errors import BoardError
 from hey_my_buddy.install import upgrade
-from hey_my_buddy.protocol import schemas
 
 
 class UpgradeFixtureTests(unittest.TestCase):
@@ -193,19 +192,8 @@ class UpgradeFixtureTests(unittest.TestCase):
             self.assertEqual(dict(upgraded.execute('SELECT run_id,state FROM workflow_runs')), expected_runs)
             self.assertEqual(set(dict(upgraded.execute('SELECT run_id,request_fingerprint FROM workflow_runs'))),
                              set(request_fingerprints))
-            self.assertTrue(all(row['request_fingerprint'] != request_fingerprints[row['run_id']]
-                                for row in upgraded.execute('SELECT run_id,request_fingerprint FROM workflow_runs')))
-            original_submissions = {entry['params']['requestId']: entry['params'] for entry in fixture['operations']
-                                    if entry['operation'] == 'workflow_submit'}
-            for row in upgraded.execute('SELECT r.*,t.request_id FROM workflow_runs r JOIN tasks t ON t.task_id=r.run_id'):
-                original = original_submissions[row['request_id']]
-                presentation = {key: original[key] for key in ('title', 'macroTask', 'macroTaskId', 'macroTaskOf')
-                                if key in original}
-                self.assertEqual(row['request_fingerprint'], schemas.workflow_request_fingerprint(
-                    json.loads(row['micro_task_json']), json.loads(row['execution_workspace_json']), row['host_id'],
-                    presentation=presentation,
-                    buddy_locked=bool(row['buddy_locked']),
-                    delegation_authority=bool(row['delegation_authority'])))
+            self.assertTrue(all(row['request_fingerprint'] is None
+                                for row in upgraded.execute('SELECT request_fingerprint FROM workflow_runs')))
             self.assertTrue(all(row['owner'] is None for row in upgraded.execute(
                 'SELECT t.owner FROM tasks t JOIN workflow_runs r ON r.run_id=t.task_id')))
             self.assertEqual([tuple(row) for row in upgraded.execute(
@@ -269,6 +257,7 @@ class UpgradeFixtureTests(unittest.TestCase):
                             json.dumps({'actor': 'host:lead:' + lead, 'reason': 'fixture cancellation'}),
                             '2026-01-01T00:00:00Z'))
         receipt = {'runId': owned, 'ownerGeneration': 1, 'hostId': 'lead:' + lead,
+                   'requestFingerprint': 'old-digest',
                    'control': {'hostId': 'lead:' + lead},
                    'executionWorkspace': {'integrator': 'host:lead:' + lead},
                    'scope': {'scopeVersion': 1, 'actor': 'host:lead:' + lead},
@@ -352,6 +341,7 @@ class UpgradeFixtureTests(unittest.TestCase):
             replay = json.loads(upgraded.execute(
                 "SELECT response_json FROM commands WHERE command_id='fixture-lead-replay'").fetchone()[0])
             self.assertIsNone(replay['hostId'])
+            self.assertIsNone(replay['requestFingerprint'])
             self.assertNotIn('control', replay)
             host_replay = json.loads(upgraded.execute(
                 "SELECT response_json FROM commands WHERE command_id='fixture-host-replay'").fetchone()[0])
@@ -441,17 +431,50 @@ class UpgradeFixtureTests(unittest.TestCase):
             self.assertEqual(preserved.execute('PRAGMA integrity_check').fetchone()[0], 'ok')
         self.assertEqual((fixture['state'] / 'board.sqlite3').read_bytes(), before)
 
-    def test_unrecoverable_submission_identity_refuses_conversion(self):
+    def test_old_submission_digest_is_cleared_and_replay_is_explicitly_refused(self):
         fixture, connection = self.restored()
-        connection.execute('UPDATE workflow_runs SET request_fingerprint=? WHERE run_id=?',
-                           ('0' * 64, fixture['stableIds']['delivered']))
+        # A previous schema upgrade may have changed the request's stored inputs.
+        # The old digest is opaque evidence, not a recoverable current request.
+        connection.execute('UPDATE workflow_runs SET request_fingerprint=?', ('0' * 64,))
         connection.commit()
         connection.close()
-        with self.assertRaises(BoardError) as caught:
-            board_upgrade.migrate(fixture['state'])
-        self.assertEqual(caught.exception.code, 'UPGRADE_UNRECOVERABLE_REQUEST')
-        with sqlite3.connect(fixture['state'] / 'board.sqlite3') as preserved:
-            self.assertEqual(preserved.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone()[0], '20')
+        archived = backup.create(BoardStore(fixture['state']), offline=True)
+        self.assertEqual(backup.verify(Path(archived['path']))['schema'], 20)
+        board_upgrade.migrate(fixture['state'])
+        store = BoardStore(fixture['state'])
+        store.initialize()
+        self.addCleanup(store.db.close)
+        for entry in fixture['operations']:
+            if entry['operation'] != 'workflow_submit':
+                continue
+            for params in (entry['params'], {**entry['params'], 'task': 'Different input also cannot replay'}):
+                with self.subTest(request=params['requestId'], changed=params is not entry['params']):
+                    with self.assertRaises(BoardError) as caught:
+                        store.workflow.submit(params)
+                    self.assertEqual(caught.exception.code, 'SUBMISSION_REPLAY_UNAVAILABLE')
+                    self.assertEqual(caught.exception.details['requestId'], params['requestId'])
+        with store.db.read() as upgraded:
+            self.assertEqual(upgraded.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone()[0], '21')
+            self.assertTrue(all(row[0] is None for row in upgraded.execute(
+                'SELECT request_fingerprint FROM workflow_runs')))
+            for row in upgraded.execute("SELECT response_json FROM commands WHERE kind LIKE 'workflow.%'"):
+                response = json.loads(row[0])
+                if isinstance(response, dict) and 'requestFingerprint' in response:
+                    self.assertIsNone(response['requestFingerprint'])
+        repository = self.root / 'new-submission-repository'
+        repository.mkdir()
+        _git(repository, 'init')
+        _git(repository, '-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.invalid',
+             'commit', '--allow-empty', '-m', 'Private test input')
+        current = {'requestId': 'post-upgrade-submit', 'hostId': 'current-host',
+                   'adapter': 'external', 'task': 'New schema-21 submission', 'cwd': str(repository),
+                   'executionWorkspace': {'kind': 'existing', 'access': 'read'}}
+        first = store.workflow.submit(current)
+        replay = store.workflow.submit(current)
+        self.assertIsNotNone(first['requestFingerprint'])
+        self.assertTrue(replay['duplicate'])
+        self.assertEqual(replay['runId'], first['runId'])
+        self.assertEqual(replay['requestFingerprint'], first['requestFingerprint'])
 
     def test_malformed_product_actor_refuses_conversion_atomically(self):
         fixture, connection = self.restored()

@@ -537,7 +537,7 @@ CREATE TABLE IF NOT EXISTS workflow_runs (
     control_verifier        TEXT NOT NULL,
     micro_task_json               TEXT NOT NULL,
     micro_task_fingerprint        TEXT NOT NULL,
-    request_fingerprint     TEXT NOT NULL,
+    request_fingerprint     TEXT,
     buddy_json TEXT,
     buddy_revision INTEGER NOT NULL DEFAULT 0,
     validated_buddy_revision INTEGER,

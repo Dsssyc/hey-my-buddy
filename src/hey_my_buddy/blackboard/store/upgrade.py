@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 from contextlib import closing
-from itertools import product
 import json
 from pathlib import Path
 import sqlite3
@@ -254,78 +253,6 @@ def _target_structure() -> tuple[dict[str, str], dict[str, list[str]]]:
     return tables, indexes
 
 
-def _request_fingerprint(connection: sqlite3.Connection, row: dict,
-                         inherited: dict[str, str]) -> str:
-    """Recover the original request by matching its stored schema-20 digest."""
-    from ...protocol import schemas
-
-    run_id = row['run_id']
-    old_workspace = json.loads(row['execution_workspace_json'])
-    old_spec = json.loads(row['micro_task_json'])
-    hosts = {row['host_id']}
-    if run_id in inherited:
-        hosts.add('lead:' + inherited[run_id])
-    for event in connection.execute("SELECT kind,payload_json FROM events WHERE task_id=? AND kind IN "
-                                    "('task.submitted','workflow.helper_admitted','workflow.takeover','workflow.macro_task_created')",
-                                    (run_id,)):
-        payload = json.loads(event['payload_json'])
-        if event['kind'] == 'task.submitted':
-            hosts.add(payload.get('microTask', {}).get('sourceHostId'))
-        elif event['kind'] == 'workflow.helper_admitted':
-            hosts.add(payload.get('sourceHostId'))
-        elif event['kind'] == 'workflow.takeover':
-            hosts.add(payload.get('previousHostId'))
-    titles = [None, row['title']] if row['title'] else [None]
-    macro_presentations = [{}]
-    if row['macro_task_id']:
-        macro_presentations.extend(({'macroTaskId': row['macro_task_id']},
-                                    {'macroTaskOf': row['macro_task_id']}))
-        macro_presentations.extend({'macroTaskOf': earlier[0]} for earlier in connection.execute(
-            'SELECT run_id FROM workflow_runs WHERE macro_task_id=? AND created_at<=? AND run_id<>?',
-            (row['macro_task_id'], row['created_at'], run_id)))
-        macro = connection.execute('SELECT title FROM macro_tasks WHERE macro_task_id=?',
-                                   (row['macro_task_id'],)).fetchone()
-        creation = connection.execute("SELECT payload_json FROM events WHERE task_id=? "
-                                      "AND kind='workflow.macro_task_created' ORDER BY seq LIMIT 1",
-                                      (run_id,)).fetchone()
-        if macro is not None and creation is not None:
-            description = json.loads(creation[0]).get('description')
-            candidate = {'title': macro[0]}
-            if description is not None:
-                candidate['description'] = description
-            macro_presentations.append({'macroTask': candidate})
-    workspaces = [old_workspace]
-    turn = connection.execute('SELECT access,access_reason FROM workflow_turns WHERE run_id=? ORDER BY turn_index LIMIT 1',
-                              (run_id,)).fetchone()
-    if turn is not None and (old_workspace.get('access'), old_workspace.get('accessReason')) != (turn[0], turn[1]):
-        earlier = {**old_workspace, 'access': turn[0]}
-        if turn[1] is None:
-            earlier.pop('accessReason', None)
-        else:
-            earlier['accessReason'] = turn[1]
-        workspaces.append(earlier)
-    for host, workspace, title, macro in product(hosts, workspaces, titles, macro_presentations):
-        if host is None and run_id not in inherited:
-            continue
-        presentation = {**macro, **({'title': title} if title else {})}
-        if schemas.workflow_request_fingerprint(old_spec, workspace, host, presentation=presentation,
-                                                buddy_locked=bool(row['buddy_locked']),
-                                                delegation_authority=bool(row['delegation_authority'])) != row['request_fingerprint']:
-            continue
-        new_workspace = dict(workspace)
-        lead_id = inherited.get(run_id)
-        initial_lead = lead_id is not None and host == 'lead:' + lead_id
-        new_workspace['integrator'] = ({'role': 'lead', 'id': lead_id} if initial_lead
-                                       else {'role': 'host', 'id': host})
-        return schemas.workflow_request_fingerprint(old_spec, new_workspace,
-                                                     None if initial_lead else host,
-                                                     presentation=presentation,
-                                                     buddy_locked=bool(row['buddy_locked']),
-                                                     delegation_authority=bool(row['delegation_authority']))
-    raise BoardError('UPGRADE_UNRECOVERABLE_REQUEST', 'Original workflow request does not match preserved fingerprint',
-                     runId=run_id)
-
-
 def _current_owners(connection: sqlite3.Connection, owned: dict[str, str]) -> dict[str, dict[str, str]]:
     runs = {row['run_id']: row for row in connection.execute(
         'SELECT run_id,host_id,owner_generation FROM workflow_runs')}
@@ -356,7 +283,7 @@ def _current_owners(connection: sqlite3.Connection, owned: dict[str, str]) -> di
 
 def _rebuild(connection: sqlite3.Connection, table: str, sql: str, indexes: list[str],
              owned: dict[str, str], inherited: dict[str, str], converted: set[str],
-             known_hosts: set[str], workflow_ids: set[str], fingerprints: dict[str, str],
+             known_hosts: set[str], workflow_ids: set[str],
              current_owners: dict[str, dict[str, str]]) -> None:
     rows = [dict(row) for row in connection.execute(f'SELECT * FROM "{table}"')]
     connection.execute(f'DROP TABLE "{table}"')
@@ -366,7 +293,7 @@ def _rebuild(connection: sqlite3.Connection, table: str, sql: str, indexes: list
             if row['task_id'] in workflow_ids:
                 row['owner'] = None
         elif table == 'workflow_runs':
-            row['request_fingerprint'] = fingerprints[row['run_id']]
+            row['request_fingerprint'] = None
             if row['run_id'] in converted:
                 row['host_id'] = None
             workspace = json.loads(row['execution_workspace_json'])
@@ -461,11 +388,9 @@ def migrate(state: Path) -> None:
                               payload.get('previousHostId'), payload.get('newHostId')):
                     if isinstance(value, str):
                         known_hosts.add(value)
-            fingerprints = {row['run_id']: _request_fingerprint(connection, dict(row), inherited)
-                            for row in connection.execute('SELECT * FROM workflow_runs')}
             for table in _REBUILT:
                 _rebuild(connection, table, tables[table], indexes[table], owned, inherited,
-                         converted, known_hosts, workflow_ids, fingerprints, current_owners)
+                         converted, known_hosts, workflow_ids, current_owners)
             for row in connection.execute('SELECT child_task_id,workspace_intent_json FROM workflow_children'):
                 workspace = json.loads(row['workspace_intent_json'])
                 run = connection.execute('SELECT host_id FROM workflow_runs WHERE run_id=?',

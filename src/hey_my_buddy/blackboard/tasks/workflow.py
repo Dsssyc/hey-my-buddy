@@ -1720,6 +1720,7 @@ class WorkflowCoordinator:
                         requestId=request_id,
                         existingTaskId=existing["task_id"],
                     )
+                self._require_replayable_submission(run_row, request_id)
                 if existing["input_fingerprint"] != fingerprint:
                     raise BoardError(
                         "CONFLICT",
@@ -1780,6 +1781,8 @@ class WorkflowCoordinator:
                         with self.db.write() as connection:
                             task = connection.execute("SELECT * FROM tasks WHERE request_id=?", (request_id,)).fetchone()
                             run_row = self._run_optional(connection, task["task_id"]) if task is not None else None
+                            if run_row is not None:
+                                self._require_replayable_submission(run_row, request_id)
                             identical = (
                                 task is not None
                                 and run_row is not None
@@ -1869,6 +1872,16 @@ class WorkflowCoordinator:
         except Exception as record_error:
             original_error.add_note("Submission cleanup receipt failed: " + str(record_error)[:2000])
         return facts
+
+    @staticmethod
+    def _require_replayable_submission(run_row, request_id: str) -> None:
+        if run_row["request_fingerprint"] is None:
+            raise BoardError(
+                "SUBMISSION_REPLAY_UNAVAILABLE",
+                "This submission predates schema 21 and cannot be replayed; use a new requestId",
+                requestId=request_id,
+                runId=run_row["run_id"],
+            )
 
     def _recovered_control(self, run_row, submission_token: str | None) -> dict | None:
         """Control for an idempotent replay, fenced by the private submission capability.

@@ -899,14 +899,16 @@ class BoardStore:
         request = {"requestId": request_id, "fingerprint": fingerprint}
 
         with self.db.write() as connection:
+            existing = connection.execute("SELECT * FROM tasks WHERE request_id = ?", (request_id,)).fetchone()
+            run = self.workflow._run_optional(connection, existing["task_id"]) if existing is not None else None
+            if run is not None:
+                self.workflow._require_replayable_submission(run, request_id)
             if command_id:
                 receipt = self._receipt(connection, command_id, "task.submit", request)
                 if receipt is not None:
                     return receipt
-            existing = connection.execute("SELECT * FROM tasks WHERE request_id = ?", (request_id,)).fetchone()
             if existing is not None:
                 if micro_task is not None:
-                    run = self.workflow._run_optional(connection, existing["task_id"])
                     if run is None or run["request_fingerprint"] != micro_task["requestFingerprint"]:
                         raise BoardError("CONFLICT", "requestId already belongs to a different micro-task request")
                 if existing["input_fingerprint"] == fingerprint:
