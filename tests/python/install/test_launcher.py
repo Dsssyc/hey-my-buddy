@@ -75,7 +75,7 @@ class LauncherTests(unittest.TestCase):
             (target / 'src' / 'hey_my_buddy').mkdir(parents=True)
             with mock.patch.dict(os.environ, {'HMB_STATE_DIR': str(state)}, clear=True), \
                     mock.patch('hey_my_buddy.install.launcher.selected_runtime', return_value=target), \
-                    mock.patch('hey_my_buddy.install.launcher.os.execve', side_effect=SystemExit(0)) as execute:
+                    mock.patch('hey_my_buddy.install.launcher._exec_runtime', side_effect=SystemExit(0)) as execute:
                 with self.assertRaises(SystemExit):
                     launcher.main(['ping'])
             self.assertEqual(execute.call_args.args[0], str(python))
@@ -100,7 +100,7 @@ class LauncherTests(unittest.TestCase):
             with mock.patch.dict(os.environ, {'HMB_AGENT_CREDENTIAL_FILE': str(credential)}, clear=True), \
                     mock.patch.object(launcher, 'read_private', wraps=original_read) as read, \
                     mock.patch('hey_my_buddy.install.launcher.selected_runtime', return_value=target) as selected, \
-                    mock.patch('hey_my_buddy.install.launcher.os.execve', side_effect=capture_exec) as execute:
+                    mock.patch('hey_my_buddy.install.launcher._exec_runtime', side_effect=capture_exec) as execute:
                 with self.assertRaises(SystemExit):
                     launcher.main(['get', '{"runId":"owned"}'])
             selected.assert_called_once_with(state)

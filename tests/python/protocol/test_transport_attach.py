@@ -224,8 +224,7 @@ class TrustBoundaryTests(AttachFixture):
                 self.assertEqual(ensure_service(self.directory), ENDPOINT)
             spawned, created = recorder.popen.call_count, recorder.mkdir.call_count
         self.assertEqual(spawned, 1, "cold setup must still run when no endpoint can be trusted")
-        self.assertEqual(created, 1, "owner setup must ensure its existing state directory")
-        recorder.mkdir.assert_called_once_with(self.directory.resolve(), mode=0o700, parents=True, exist_ok=True)
+        self.assertEqual(stat.S_IMODE(self.directory.stat().st_mode), 0o700)
         recorder.chmod.assert_called_once_with(self.directory.resolve(), 0o700)
         self.assertGreaterEqual(len(calls), 3, "health must be re-checked after spawning")
         self.assertEqual(requests_before_spawn, [0], "no RPC may run against an untrusted endpoint")

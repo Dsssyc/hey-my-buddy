@@ -565,10 +565,9 @@ def start_fast(module, name: str, context: ExecutionContext, request) -> InlineR
     try:
         if not is_absolute_path(cwd) or not cwd.is_dir() or cwd.is_symlink() or any(cwd.iterdir()):
             raise ValueError("not an empty private directory")
-        info = cwd.stat()
-        if info.st_mode & 0o077 or (hasattr(os, "getuid") and info.st_uid != os.getuid()):
-            raise ValueError("directory is not owner-private")
-    except (OSError, ValueError):
+        from ...private_dirs import validate_private_dir
+        validate_private_dir(cwd)
+    except (OSError, ValueError, BoardError):
         raise BoardError("INVALID_ARGUMENT", "no-tool cwd must be an existing empty private directory") from None
     module.check_preparation(context.spec, native_environment)
     directory = ensure_private_dir(context.directory)

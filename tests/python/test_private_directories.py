@@ -134,7 +134,17 @@ class PrivateDirectoryTests(BoardTestCase):
             if Path(path) == temporary:
                 temporary.symlink_to(sentinel)
             return original(path, flags, *args, **kwargs)
-        with mock.patch('hey_my_buddy.private_dirs.os.open', side_effect=raced_open):
+        if os.name == 'nt':
+            from hey_my_buddy.windows_files import WindowsFileAPI, CREATE_NEW
+            windows_open = WindowsFileAPI._open
+            def raced_windows_open(api, path, access, disposition, **kwargs):
+                if Path(path) == temporary and disposition == CREATE_NEW:
+                    temporary.symlink_to(sentinel)
+                return windows_open(api, path, access, disposition, **kwargs)
+            patcher = mock.patch.object(WindowsFileAPI, '_open', raced_windows_open)
+        else:
+            patcher = mock.patch('hey_my_buddy.private_dirs.os.open', side_effect=raced_open)
+        with patcher:
             with self.assertRaises(FileExistsError):
                 private_dirs.open_regular_fd(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL)
         self.assertTrue(temporary.is_symlink())

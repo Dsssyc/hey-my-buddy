@@ -281,7 +281,7 @@ def is_ready(directory: Path) -> bool:
     """True only for a complete runtime whose assets and resources stay inside it."""
     directory = Path(directory)
     try:
-        value = json.loads((directory / READY_FILE).read_text(encoding="utf-8"))
+        value = _read_ready_file(directory)
     except (OSError, ValueError):
         return False
     if not isinstance(value, dict) or value.get("format") != RUNTIME_FORMAT:
@@ -333,7 +333,10 @@ def materialize(
     target = runtime_dir(root, destination)
     if is_ready(target):
         return {"runtime": read_ready(target), "installed": False, "runtimeDir": str(target)}
-    target.parent.mkdir(parents=True, exist_ok=True)
+    if os.name == 'nt':
+        private_dirs.ensure_private_dir(target.parent)
+    else:
+        target.parent.mkdir(parents=True, exist_ok=True)
     # Install into a temporary sibling first only because the final name must be a
     # complete directory atomically; every path recorded inside is rewritten to the
     # final location before installation starts.
@@ -453,8 +456,15 @@ def _copy_assets(root: Path, destination: Path) -> None:
         shutil.copy2(path, target)
 
 
+def _read_ready_file(directory: Path) -> dict:
+    if os.name == 'nt':
+        with os.fdopen(private_dirs.open_regular_fd(directory / READY_FILE, os.O_RDONLY), 'rb') as stream:
+            return json.load(stream)
+    return json.loads((directory / READY_FILE).read_text(encoding='utf-8'))
+
+
 def read_ready(directory: Path) -> dict:
-    value = json.loads((directory / READY_FILE).read_text(encoding="utf-8"))
+    value = _read_ready_file(directory)
     value["runtimeDir"] = str(directory)
     return value
 

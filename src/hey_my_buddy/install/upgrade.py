@@ -42,9 +42,14 @@ def clear_journal(path: Path) -> None:
     private_files.sync_directory(path.parent, follow_symlinks=False)
 
 
+def _read_json(path: Path):
+    with os.fdopen(private_dirs.open_regular_fd(path, os.O_RDONLY), 'rb') as stream:
+        return json.load(stream)
+
+
 @contextmanager
 def file_lock(path: Path, *, timeout: float = 0):
-    fd = os.open(path, os.O_CREAT | os.O_RDWR, 0o600)
+    fd = private_dirs.open_regular_fd(path, os.O_CREAT | os.O_RDWR, 0o600)
     deadline = time.monotonic() + timeout
     try:
         while True:
@@ -131,7 +136,7 @@ def _environment(state: Path, target: Path) -> dict:
         env.pop(key, None)
     marker = state / 'upgrade.json'
     if marker.exists():
-        preserved = json.loads(marker.read_text(encoding="utf-8")).get('environment', {})
+        preserved = _read_json(marker).get('environment', {})
         for key in ('HMB_MAX_CONCURRENT', 'HMB_WAIT_CAPACITY'):
             if key in preserved:
                 env[key] = str(preserved[key])
@@ -199,7 +204,7 @@ def detach(state: Path, target: Path, *, contract_changed: bool = True) -> None:
 
 def start(state: Path, target: Path) -> dict:
     from .launcher import entry_modules
-    log = os.open(state / 'upgrade-start.log', os.O_CREAT | os.O_APPEND | os.O_WRONLY, 0o600)
+    log = private_dirs.open_regular_fd(state / 'upgrade-start.log', os.O_CREAT | os.O_APPEND | os.O_WRONLY, 0o600)
     try:
         # A rollback starts the previous runtime's installed daemon.
         child = subprocess.Popen([str(runtime.runtime_python(target)), '-m', entry_modules(target)['daemon']], cwd=target,
@@ -216,7 +221,7 @@ def start(state: Path, target: Path) -> dict:
                 raise BoardError(failure['code'], str(failure.get('message') or 'Replacement daemon failed'))
             raise BoardError('UPGRADE_START_FAILED', 'Replacement daemon exited; see private upgrade-start.log')
         try:
-            endpoint = json.loads((state / 'control.json').read_text(encoding="utf-8"))
+            endpoint = _read_json(state / 'control.json')
             if endpoint.get('pid') == child.pid:
                 return command(state, target, 'health')
         except (OSError, ValueError, BoardError):
@@ -467,7 +472,7 @@ def upgrade(params: dict, *, skill_source: Path | None = None, skill_target: Pat
             return recover(state, root)
     if not (state / 'control.json').exists():
         raise BoardError('UPGRADE_NOT_RUNNING', 'Start the installed service before upgrading')
-    endpoint = json.loads((state / 'control.json').read_text(encoding="utf-8"))
+    endpoint = _read_json(state / 'control.json')
     identity = endpoint.get('runtimeIdentity', '')
     if not isinstance(identity, str) or not identity.startswith('runtime:'):
         raise BoardError('UPGRADE_NO_ROLLBACK_RUNTIME', 'Upgrade needs a proven previous stable runtime')
@@ -577,7 +582,7 @@ def upgrade(params: dict, *, skill_source: Path | None = None, skill_target: Pat
                             error = failure.payload() if isinstance(failure, BoardError) and failure.code == 'UPGRADE_NOT_IDLE' else {'code':'UPGRADE_NOT_SWITCHED','message':'Upgrade could not detach; the previous service remains available'}
                             error.setdefault('details', {})['reason'] = reason
                             return {'upgraded':False, 'error':error}
-                    endpoint_now = json.loads((state / 'control.json').read_text(encoding="utf-8")) if (state / 'control.json').exists() else None
+                    endpoint_now = _read_json(state / 'control.json') if (state / 'control.json').exists() else None
                     if detached and endpoint_now and endpoint_now.get('runtimeIdentity') == 'runtime:' + active.name:
                         detach(state, active, contract_changed=contract_changed)
                     if backed_up is not None:
@@ -613,7 +618,7 @@ def upgrade(params: dict, *, skill_source: Path | None = None, skill_target: Pat
 def recover(state: Path, root: Path) -> dict:
     """Resume an interrupted journal under both launcher fences; never cancel work."""
     marker = state / 'upgrade.json'
-    journal = json.loads(marker.read_text(encoding="utf-8"))
+    journal = _read_json(marker)
     contract_changed = journal['contractChanged']
     _skill_paths(journal)  # Validate destructive recovery paths before touching a service.
     previous, target = Path(journal['previous']), Path(journal['target'])

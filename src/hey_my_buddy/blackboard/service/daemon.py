@@ -76,7 +76,8 @@ class Daemon:
 
     def acquire_exclusive(self) -> None:
         for name in ("control-daemon.lock", "board-owner.lock"):
-            fd = os.open(self.directory / name, os.O_CREAT | os.O_RDWR, 0o600)
+            from ...private_dirs import open_regular_fd
+            fd = open_regular_fd(self.directory / name, os.O_CREAT | os.O_RDWR, 0o600)
             try:
                 locking.lock(fd, blocking=False)
             except BlockingIOError:
@@ -116,8 +117,8 @@ class Daemon:
 
     def run(self) -> int:
         rpc_config._validate_path(self.directory)
-        self.directory.mkdir(mode=0o700, parents=True, exist_ok=True)
-        self.directory.chmod(0o700)
+        from ...private_dirs import ensure_private_dir
+        ensure_private_dir(self.directory)
         self.control["rpc_profile"] = rpc_config.configure_server(self.directory)
         self.acquire_exclusive()
         try:
@@ -291,6 +292,8 @@ def _env_int(name: str, default: int) -> int:
 
 
 def main() -> int:
+    from ...windows_files import initialize_process_owner
+    initialize_process_owner()
     for stream in (sys.stdout, sys.stderr):
         if isinstance(stream, io.TextIOWrapper):
             stream.reconfigure(encoding="utf-8", newline="\n")

@@ -11,6 +11,7 @@ from unittest import mock
 
 from hey_my_buddy.blackboard.tasks import windows_paths, workspace
 from hey_my_buddy.errors import BoardError
+from hey_my_buddy.windows_files import _link_print_name
 
 
 class FakeHandle:
@@ -242,9 +243,9 @@ class WindowsWorkspaceTests(unittest.TestCase):
         raw = (struct.pack("<IHHHHHHI", windows_paths.IO_REPARSE_TAG_SYMLINK,
                            12 + len(substitute) + len(print_name), 0, 0, len(substitute),
                            len(substitute), len(print_name), 1) + substitute + print_name)
-        self.assertEqual(windows_paths._link_print_name(raw), "../target")
+        self.assertEqual(_link_print_name(raw), "../target")
         with self.assertRaises(OSError):
-            windows_paths._link_print_name(raw[:12])
+            _link_print_name(raw[:12])
 
 
 if __name__ == "__main__":

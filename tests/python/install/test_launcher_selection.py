@@ -3,6 +3,7 @@ import os
 from unittest import mock
 from hey_my_buddy.install import launcher, upgrade
 from hey_my_buddy.errors import BoardError
+from hey_my_buddy import private_dirs
 from support import BoardTestCase
 
 class LauncherSelectionTests(BoardTestCase):
@@ -14,7 +15,8 @@ class LauncherSelectionTests(BoardTestCase):
             self.assertEqual(launcher.selected_runtime(self.directory),target)
             self.assertEqual(launcher.runtime_environment(target)['HMB_AGENT_CREDENTIAL_FILE'],'/private/attempt')
         self.assertEqual(launcher.launch_defaults(self.directory)['HMB_MAX_CONCURRENT'],'7')
-        self.assertEqual((self.directory/'active-runtime.json').stat().st_mode & 0o777,0o600)
+        with os.fdopen(private_dirs.open_regular_fd(self.directory/'active-runtime.json', os.O_RDONLY), 'rb') as stream:
+            private_dirs.validate_private_fd(stream.fileno())
 
     def test_upgrade_environment_preserves_capacity_over_caller_defaults(self):
         launcher.write_private(self.directory/'upgrade.json',{'environment':{'HMB_MAX_CONCURRENT':'7','HMB_WAIT_CAPACITY':'32'}})
@@ -53,7 +55,7 @@ class TargetEntryModuleTests(BoardTestCase):
         (target / 'src' / 'hey_my_buddy').mkdir(parents=True)
         with mock.patch.dict(os.environ, {'HMB_STATE_DIR': str(self.directory)}, clear=True), \
                 mock.patch('hey_my_buddy.install.launcher.selected_runtime', return_value=target), \
-                mock.patch('hey_my_buddy.install.launcher.os.execve', side_effect=SystemExit(0)) as execute:
+                mock.patch('hey_my_buddy.install.launcher._exec_runtime', side_effect=SystemExit(0)) as execute:
             with self.assertRaises(SystemExit):
                 launcher.main(['ping'])
         self.assertEqual(execute.call_args.args[1],

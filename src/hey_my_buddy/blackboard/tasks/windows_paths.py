@@ -7,35 +7,15 @@ its contents or path may be used. The API is injectable for POSIX contract tests
 from __future__ import annotations
 
 from contextlib import contextmanager
-import ctypes
-from ctypes import wintypes
-import errno
-import ntpath
 import os
 from pathlib import Path
-import struct
 
 from ... import private_files
+from ...windows_files import (WindowsFileAPI, FILE_ATTRIBUTE_REPARSE_POINT,
+                              FILE_ATTRIBUTE_DIRECTORY, FILE_TYPE_DISK, IO_REPARSE_TAG_SYMLINK)
 from ...paths import is_absolute_path
 from ...errors import BoardError
 
-FILE_READ_ATTRIBUTES = 0x0080
-GENERIC_READ = 0x80000000
-GENERIC_WRITE = 0x40000000
-DELETE = 0x00010000
-FILE_SHARE_READ = 0x00000001
-FILE_SHARE_WRITE = 0x00000002
-CREATE_NEW = 1
-OPEN_EXISTING = 3
-OPEN_ALWAYS = 4
-FILE_ATTRIBUTE_DIRECTORY = 0x10
-FILE_ATTRIBUTE_NORMAL = 0x80
-FILE_ATTRIBUTE_REPARSE_POINT = 0x400
-FILE_FLAG_OPEN_REPARSE_POINT = 0x00200000
-FILE_FLAG_BACKUP_SEMANTICS = 0x02000000
-IO_REPARSE_TAG_SYMLINK = 0xA000000C
-FILE_TYPE_DISK = 1
-FSCTL_GET_REPARSE_POINT = 0x000900A8
 _FORBIDDEN = set('<>:"/\\|?*')
 _RESERVED = {"CON", "PRN", "AUX", "NUL"} | {f"{stem}{digit}" for stem in ("COM", "LPT")
                                                   for digit in "123456789¹²³"}
@@ -64,135 +44,6 @@ def validate_unique(paths):
                 raise BoardError("WORKSPACE_UNSUPPORTED", "Git paths collide on Windows",
                                  paths=[folded[key], prefix])
             folded[key] = prefix
-
-
-def _link_print_name(raw):
-    if len(raw) < 20:
-        raise OSError("invalid symbolic-link reparse data")
-    tag, length, _, _, _, offset, size, _ = struct.unpack_from("<IHHHHHHI", raw)
-    start = 20 + offset
-    if (tag != IO_REPARSE_TAG_SYMLINK or length < 12 or length + 8 > len(raw) or
-            not size or offset % 2 or size % 2 or start + size > length + 8):
-        raise OSError("invalid symbolic-link print name")
-    return raw[start:start + size].decode("utf-16-le")
-
-
-class _AttributeTag(ctypes.Structure):
-    _fields_ = [("FileAttributes", wintypes.DWORD), ("ReparseTag", wintypes.DWORD)]
-
-
-class _Disposition(ctypes.Structure):
-    _fields_ = [("DeleteFile", ctypes.c_ubyte)]
-
-
-class WindowsFileAPI:
-    def __init__(self):
-        import msvcrt
-
-        self.msvcrt = msvcrt
-        self.kernel = kernel = ctypes.WinDLL("kernel32", use_last_error=True)
-        signatures = {
-            "CreateFileW": (wintypes.HANDLE, [wintypes.LPCWSTR, wintypes.DWORD, wintypes.DWORD,
-                                               ctypes.c_void_p, wintypes.DWORD, wintypes.DWORD, wintypes.HANDLE]),
-            "GetFileInformationByHandleEx": (wintypes.BOOL, [wintypes.HANDLE, ctypes.c_int,
-                                                               ctypes.c_void_p, wintypes.DWORD]),
-            "GetFinalPathNameByHandleW": (wintypes.DWORD, [wintypes.HANDLE, wintypes.LPWSTR,
-                                                            wintypes.DWORD, wintypes.DWORD]),
-            "GetFileType": (wintypes.DWORD, [wintypes.HANDLE]),
-            "SetFileInformationByHandle": (wintypes.BOOL, [wintypes.HANDLE, ctypes.c_int,
-                                                             ctypes.c_void_p, wintypes.DWORD]),
-            "DeviceIoControl": (wintypes.BOOL, [wintypes.HANDLE, wintypes.DWORD, ctypes.c_void_p,
-                                                 wintypes.DWORD, ctypes.c_void_p, wintypes.DWORD,
-                                                 ctypes.POINTER(wintypes.DWORD), ctypes.c_void_p]),
-            "CloseHandle": (wintypes.BOOL, [wintypes.HANDLE]),
-        }
-        for name, (result, arguments) in signatures.items():
-            method = getattr(kernel, name)
-            method.restype, method.argtypes = result, arguments
-
-    @staticmethod
-    def _error():
-        code = ctypes.get_last_error()
-        if code in (2, 3):
-            raise FileNotFoundError(errno.ENOENT, "Windows path does not exist")
-        if code in (80, 183):
-            raise FileExistsError(errno.EEXIST, "Windows path already exists")
-        raise ctypes.WinError(code)
-
-    def _open(self, path, access, disposition):
-        handle = self.kernel.CreateFileW(str(path), access, FILE_SHARE_READ | FILE_SHARE_WRITE,
-                                         None, disposition,
-                                         FILE_FLAG_OPEN_REPARSE_POINT | FILE_FLAG_BACKUP_SEMANTICS |
-                                         FILE_ATTRIBUTE_NORMAL, None)
-        if handle == ctypes.c_void_p(-1).value:
-            self._error()
-        return handle
-
-    def open_dir(self, path):
-        return self._open(path, FILE_READ_ATTRIBUTES, OPEN_EXISTING)
-
-    def open_leaf(self, path, *, action="read"):
-        access, disposition = {
-            "read": (GENERIC_READ, OPEN_EXISTING),
-            "inspect": (FILE_READ_ATTRIBUTES, OPEN_EXISTING),
-            "create": (GENERIC_WRITE, CREATE_NEW),
-            "lock": (GENERIC_READ | GENERIC_WRITE, OPEN_ALWAYS),
-            "lock-existing": (GENERIC_READ | GENERIC_WRITE, OPEN_EXISTING),
-            "delete": (DELETE | FILE_READ_ATTRIBUTES, OPEN_EXISTING),
-        }[action]
-        return self._open(path, access, disposition)
-
-    def info(self, handle):
-        tag = _AttributeTag()
-        if not self.kernel.GetFileInformationByHandleEx(handle, 9, ctypes.byref(tag), ctypes.sizeof(tag)):
-            self._error()
-        return tag.FileAttributes, tag.ReparseTag
-
-    def name(self, handle):
-        size = self.kernel.GetFinalPathNameByHandleW(handle, None, 0, 0)
-        if not size:
-            self._error()
-        buffer = ctypes.create_unicode_buffer(size + 1)
-        used = self.kernel.GetFinalPathNameByHandleW(handle, buffer, len(buffer), 0)
-        if not used or used >= len(buffer):
-            self._error()
-        return ntpath.basename(buffer.value.rstrip("\\"))
-
-    def file_type(self, handle):
-        return self.kernel.GetFileType(handle)
-
-    def fd(self, handle, flags):
-        # open_osfhandle transfers ownership to the returned CRT descriptor.
-        return self.msvcrt.open_osfhandle(handle, flags | os.O_BINARY | os.O_NOINHERIT)
-
-    def delete(self, handle):
-        disposition = _Disposition(1)
-        if not self.kernel.SetFileInformationByHandle(handle, 4, ctypes.byref(disposition),
-                                                      ctypes.sizeof(disposition)):
-            self._error()
-
-    def close(self, handle):
-        if not self.kernel.CloseHandle(handle):
-            self._error()
-
-    def mkdir(self, path):
-        os.mkdir(path)
-
-    def readlink(self, handle):
-        # Python's Windows os.readlink returns the substitute path, which can
-        # add a \\?\ prefix. Git stores the original print-name text.
-        buffer = ctypes.create_string_buffer(16 * 1024)
-        returned = wintypes.DWORD()
-        if not self.kernel.DeviceIoControl(handle, FSCTL_GET_REPARSE_POINT, None, 0,
-                                            buffer, len(buffer), ctypes.byref(returned), None):
-            self._error()
-        return _link_print_name(buffer.raw[:returned.value])
-
-    def symlink(self, target, path, *, directory=False):
-        os.symlink(target, path, target_is_directory=directory)
-
-    def link(self, source, target):
-        os.link(source, target)
 
 
 def _checked(api, handle, name, *, directory=False, allow_symlink=False):
