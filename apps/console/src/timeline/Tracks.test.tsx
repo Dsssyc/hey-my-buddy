@@ -171,18 +171,31 @@ describe("timeline drawings follow recorded facts", () => {
     expect(document.querySelector('[data-key="event:0"]')?.getAttribute("aria-label")).toContain("Fact continue");
     expect(document.querySelector('[data-key="event:3"]')?.getAttribute("aria-label")).toContain("Fact integrate");
   });
-  it("compares the complete row identity before drawing a harness mark and model", () => {
+  it("compares harness, provider and model before drawing a harness mark and model", () => {
     const live = execution({ startAt: at(0), endAt: at(40) });
     track([live], { rowBuddy: { ...live.buddy! }, width: 800 });
     expect(slot("execution-buddy")).toBeNull();
     expect(slot("track-label")?.textContent).toBe("40 分");
-    for (const field of ["harness", "provider", "model", "effort"] as const) {
+    for (const field of ["harness", "provider", "model"] as const) {
       cleanup(); track([live], { rowBuddy: { ...live.buddy!, [field]: "different" }, width: 800 });
       expect(slot("execution-buddy")).toBeTruthy();
       expect(slot("track-label")?.textContent).toContain("Claude Opus 5.5");
       const readout = spanReadout(live, Date.parse(at(40)));
-      for (const value of Object.values(live.buddy!)) expect(readout).toContain(value);
+      for (const value of Object.values(live.buddy!).filter(value => value !== null)) expect(readout).toContain(value);
     }
+  });
+  it("omits repeated identity when the row records effort and its execution does not", () => {
+    const live = execution({ startAt: at(0), endAt: at(40) });
+    expect(live.buddy!.effort).toBeNull();
+    for (const effort of ["high", "max"]) {
+      cleanup(); track([live], { rowBuddy: { ...live.buddy!, effort }, width: 800 });
+      expect(slot("execution-buddy")).toBeNull();
+      expect(slot("execution-buddy-paper")).toBeNull();
+      expect(slot("track-label")?.textContent).toBe("40 分");
+    }
+    cleanup(); track([live], { rowBuddy: { ...live.buddy!, provider: "another-provider", effort: "max" }, width: 800 });
+    expect(slot("execution-buddy")).toBeTruthy();
+    expect(slot("track-label")?.textContent).toContain("Claude Opus 5.5");
   });
   it("retains orange diamonds after human waits and acceptance waits settle", () => {
     track([execution({ spanId: "h", kind: "host", state: "approved", expectedSeconds: null, inquiries: null })]);

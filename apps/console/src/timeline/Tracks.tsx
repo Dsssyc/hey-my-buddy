@@ -253,7 +253,9 @@ export function Track({ row, spans, events, scale, nowMs, ongoing, buddies, onOp
     return { left: Math.max(-INSET_PX, range.left), right: Math.min(scale.widthPx + INSET_PX, range.right) };
   });
   const lightInk = (span: TimelineSpan) => buddyUsesLightInk(buddyColors.get(buddyColorKey(span.buddy))!);
-  const differentBuddy = (span: TimelineSpan) => buddyColorKey(span.buddy) !== buddyColorKey(row.buddy);
+  // Execution reads do not record effort; the mark identifies harness/provider/model.
+  const differentBuddy = (span: TimelineSpan) => (["harness", "provider", "model"] as const)
+    .some(field => (span.buddy?.[field] ?? null) !== (row.buddy?.[field] ?? null));
   const crosses = positioned.filter(item => item.span.kind === "execution" && item.outcome === "failed")
     .map(item => ({ item, left: item.end - item.start >= 14 ? item.end - 10 : item.end + 8 }));
   const crossObstacles: Occupancy[] = crosses.map(cross => ({ kind: "obstacle", left: cross.left - 2.4, right: cross.left + 8.4 }));

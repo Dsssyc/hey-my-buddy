@@ -69,7 +69,7 @@ function row(runId: string, overrides: Partial<TimelineRow> = {}): TimelineRow {
 }
 
 function span(spanId: string, runId: string, kind: TimelineSpan["kind"], startAt: string | null, endAt: string | null, overrides: Partial<TimelineSpan> = {}): TimelineSpan {
-  return {
+  const result: TimelineSpan = {
     spanId, runId, kind, startAt, endAt,
     state: kind === "queue" ? "admitted" : kind === "host" ? "approved" : "finished",
     attemptId: null, turnId: null, turnIndex: null, requestId: null,
@@ -78,6 +78,9 @@ function span(spanId: string, runId: string, kind: TimelineSpan["kind"], startAt
     shutdownConfirmed: null, uncertain: false, clockSkew: false,
     ...overrides,
   };
+  // Attempts record harness/provider/model; timeline reads have no effort fact.
+  if (kind === "execution" && result.buddy) result.buddy = { ...result.buddy, effort: null };
+  return result;
 }
 
 function event(seq: number, runId: string, kind: TimelineEvent["kind"], at: string, overrides: Partial<TimelineEvent> = {}): TimelineEvent {
