@@ -22,6 +22,7 @@ from hey_my_buddy.buddy.roles import inline_run, run_controller, run_execution
 from hey_my_buddy.json_codec import canonical_json
 from hey_my_buddy.errors import BoardError
 from buddy.harnesses.claude.test_native_run import BUDDY, NativeRunCase
+from buddy.roles.test_role_prompts import real_turn_input
 
 
 class CodexSchemaTests(unittest.TestCase):
@@ -53,8 +54,8 @@ class CodexSchemaTests(unittest.TestCase):
         for harness in ("codex", "claude"):
             with self.subTest(harness=harness), tempfile.TemporaryDirectory() as directory:
                 root = Path(directory)
-                turn = {"taskId": "task", "attemptId": "attempt", "generation": 1,
-                        "turnId": "turn", "executionWorkspace": {"access": "full"}}
+                turn = real_turn_input()
+                turn["executionWorkspace"]["access"] = "full"
                 (root / "input.json").write_text(canonical_json(turn), encoding="utf-8", newline="\n")
                 (root / "task.txt").write_text("Task", encoding="utf-8", newline="\n")
                 control = {"harness": harness, "privateRoot": str(root), "directory": str(root),
@@ -125,8 +126,8 @@ class CodexSchemaTests(unittest.TestCase):
             for access in ("read", "write", "full"):
                 with self.subTest(harness=harness, access=access), tempfile.TemporaryDirectory() as directory:
                     root = Path(directory)
-                    turn = {"taskId": "task", "attemptId": "attempt", "generation": 1,
-                            "turnId": "turn", "executionWorkspace": {"access": access}}
+                    turn = real_turn_input()
+                    turn["executionWorkspace"]["access"] = access
                     (root / "input.json").write_text(canonical_json(turn), encoding="utf-8", newline="\n")
                     (root / "task.txt").write_text("Task", encoding="utf-8", newline="\n")
                     mount = SimpleNamespace(server_name="test", tool_contracts=[
@@ -175,9 +176,9 @@ class SchemaWorkerTests(NativeRunCase):
         self.fixture_case(case)
         root = self.base / uuid.uuid4().hex
         root.mkdir(mode=0o700)
-        turn = {"taskId": "task", "attemptId": "attempt", "generation": 1, "turnId": "turn",
-                "resumeMode": "initial", "previousSessionId": previous,
-                "executionWorkspace": {"access": "read"}}
+        turn = real_turn_input()
+        turn["previousSessionId"] = previous
+        turn["executionWorkspace"]["access"] = "read"
         (root / "input.json").write_text(canonical_json(turn), encoding="utf-8", newline="\n")
         (root / "task.txt").write_text("Do this bounded task", encoding="utf-8", newline="\n")
         control = {"operation": "worker", "harness": "claude", "spec": BUDDY,
@@ -274,13 +275,13 @@ class SchemaWorkerTests(NativeRunCase):
         # pins the full assembled prompt, including the published Worker text.
         hashes = {
             "codex": ("b46e2bd89c8d171059f35ad52c7c97c8b98fd32bc49382da1c299b4d0d500f1a",
-                      "59a3414a8625ef60dea822eec2f5aa8d644eaa241ba51f7c2534ababccdb82be"),
+                      "38c2e5f03c72d8245867de695ac6c74aeb3ca8bf67cb3a7b6f40a4ff7d4746b1"),
             "claude": ("ff7983882b2a1adefe1cad314fec9c009086ca2ae3fd38d33fe9fddf248f9bca",
-                       "45d3db9f90721b3d584d55706065c91f8a9f731f902aa45740dfce75840ccfd2"),
+                       "b2d0ced986c9c5f7eb370b65bd27feb97656de4f6dff2c9b5d14e18bb7df05a9"),
         }
         for name, (schema_hash, prompt_hash) in hashes.items():
             with self.subTest(harness=name):
                 format = worker_format(name)
                 self.assertEqual(hashlib.sha256(canonical_json(format.schema).encode()).hexdigest(), schema_hash)
-                self.assertEqual(hashlib.sha256(format.prompt("task", {"turn": 1}).encode()).hexdigest(), prompt_hash)
+                self.assertEqual(hashlib.sha256(format.prompt("task", real_turn_input()).encode()).hexdigest(), prompt_hash)
         self.assertEqual(PERMISSION_LEVELS["codex"]["read"], "enforced")
