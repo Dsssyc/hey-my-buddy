@@ -1643,7 +1643,7 @@ class DiscoveryStopTests(NativeRunCase):
             "send({'id':call['id'],'result':result})\n    if method == 'session/close': sys.exit(7)"))
         with self.assertRaises(native_run.NativeError) as caught:
             self.discover()
-        self.assertEqual(caught.exception.code, 'native-shutdown-failed')
+        self.assertEqual(caught.exception.code, 'native-process-failed')
         self.assertIs(getattr(caught.exception, "discovery_shutdown_confirmed", None), True)
 
     def test_successful_read_with_unconfirmed_stop_is_refused(self):
