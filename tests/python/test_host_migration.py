@@ -24,6 +24,11 @@ class HostMigrationTests(unittest.TestCase):
         columns, before = migrations.retained_columns(self.connection)
         self.assertEqual(migrations.migrate_14_to_15(self.connection)["toSchema"], 15)
         self.assertEqual(migrations.retained_columns(self.connection, columns)[1], before)
+        # The historical 14→15 migration stays frozen; the ADR-021 pending schema 16
+        # reaches every current board through the runtime's idempotent initialization
+        # DDL, so both sides of this comparison get the same additive pass before the
+        # shapes must match.
+        self.connection.executescript(SCHEMA)
         with closing(sqlite3.connect(":memory:")) as fresh:
             fresh.executescript(SCHEMA)
             self.assertEqual(shape(self.connection), shape(fresh))

@@ -148,6 +148,7 @@ def publish(evaluation, connection, *, revision: int, writer, now: str, params: 
     family_preferences = _family_changes(params, 'familyPreferenceChanges', {*FAMILY_FIELDS, 'mode', 'reason'})
     annotations = _family_changes(params, 'familyAnnotationChanges', {*FAMILY_FIELDS, 'text'})
     model_limits = _model_concurrency_changes(params)
+    enabled_families: list[tuple[str, str, str]] = []
     profiles = {}
     for entry in settings + preferences:
         profile_id = entry['profileId']
@@ -163,8 +164,22 @@ def publish(evaluation, connection, *, revision: int, writer, now: str, params: 
         profile = profiles[entry['profileId']]
         if entry['enabled'] and not profile['available']:
             raise BoardError('CONFIGURATION_UNAVAILABLE', 'This configuration is not currently available', profileId=entry['profileId'])
+        # A user enabling a model is the one trigger for the public model facts
+        # snapshot (ADR-021 decision 12): the family that gains its first enabled
+        # effort by this patch is reported to the caller, which refreshes the
+        # snapshot outside this transaction. Re-saving an enabled effort, a second
+        # effort of an already enabled family, and disabling never trigger a fetch.
+        was_enabled = bool(profile['enabled'])
         profile['enabled'] = int(entry['enabled'])
         connection.execute('UPDATE evaluation_profiles SET enabled=?, updated_revision=? WHERE profile_id=?', (profile['enabled'], revision, entry['profileId']))
+        if entry['enabled'] and not was_enabled:
+            family = tuple(profile[name] for name in FAMILY_FIELDS)
+            other = connection.execute(
+                'SELECT 1 FROM evaluation_profiles WHERE adapter=? AND provider=? AND model=? AND enabled=1 AND profile_id<>?',
+                (*family, entry['profileId']),
+            ).fetchone()
+            if other is None and family not in enabled_families:
+                enabled_families.append(family)
     families = {}
     for entry in family_preferences + annotations:
         family = _family(entry)
@@ -260,4 +275,8 @@ def publish(evaluation, connection, *, revision: int, writer, now: str, params: 
     }
     connection.execute('INSERT INTO evaluation_revisions(revision,kind,writer_id,actor,counts_json,created_at) VALUES(?,?,?,?,?,?)', (revision, 'human', writer['writer_id'], writer['writer_id'], canonical_json(counts), now))
     connection.execute('UPDATE evaluation_state SET table_revision=?,updated_at=? WHERE id=1', (revision, now))
-    return {'revision': revision, 'configurationRevision': configuration_revision, 'counts': counts}
+    # ``enabledFamilies`` is an internal caller value, never a published response
+    # field: the facts refresh runs after the publication transaction commits and is
+    # not part of the idempotent receipt.
+    return {'revision': revision, 'configurationRevision': configuration_revision, 'counts': counts,
+            'enabledFamilies': enabled_families}

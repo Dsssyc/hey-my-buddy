@@ -1024,6 +1024,16 @@ class EvaluationStore:
             )
             head = self.board._head_of(connection)
         self.board._notify(head)
+        if kind == "human" and published.get("enabledFamilies"):
+            # The user enabled a model: refresh the public facts snapshot after the
+            # publication committed, never inside a transaction and never on a
+            # schedule. A failed refresh keeps the previous snapshot and never fails
+            # the already-committed publication; the snapshot rows carry the outcome.
+            from . import model_facts
+            try:
+                model_facts.refresh_families(self.board, published["enabledFamilies"], now=self._now())
+            except Exception:  # noqa: BLE001 - the committed publication must not depend on the network
+                pass
         return response
 
     def write_abort(self, params: dict) -> dict:

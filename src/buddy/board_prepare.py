@@ -176,6 +176,14 @@ def prepare(source: Path | str, destination: Path | str) -> dict:
         migration = migrate_12_to_13(connection)
         migration = {**migration, "healthMigration": migrate_13_to_14(connection),
                      "hostWorkflowMigration": migrate_14_to_15(connection), "toSchema": SCHEMA_VERSION}
+        # The historical migration chain stays frozen; the ADR-021 modules add their
+        # tables to the shared pending schema 16, which reaches every current board
+        # through this same idempotent initialization DDL — a fresh board gets it at
+        # creation, an upgraded one at its next open. Applying it here keeps the
+        # prepared copy current-shaped at handover. The explicit schema-16 upgrade
+        # and the stock cleanup remain owned by the upgrade module.
+        connection.executescript(SCHEMA)
+        connection.execute("PRAGMA foreign_keys=ON")
         connection.execute("PRAGMA foreign_keys=ON")
         integrity = connection.execute("PRAGMA integrity_check").fetchone()[0]
         violations = connection.execute("PRAGMA foreign_key_check").fetchall()

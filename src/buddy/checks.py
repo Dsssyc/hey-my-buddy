@@ -104,6 +104,10 @@ def child_environment(root: Path, private_root: Path) -> dict:
     values["BUDDY_CHECKS_TMPDIR"] = str(private_root / "tmp")
     values['BUDDY_STATE_DIR'] = str(private_root / 'state')
     values['BUDDY_RUNTIME_ROOT'] = str(private_root / 'runtime')
+    # Model-facts refreshes stay offline in the check suite: the pinned source is a
+    # private fixture path inside this root, and a missing one retains the snapshot
+    # instead of fetching.
+    values['BUDDY_MODEL_FACTS_FILE'] = str(private_root / 'state' / 'model-facts-fixture.json')
     return values
 
 
