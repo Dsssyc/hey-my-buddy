@@ -371,8 +371,14 @@ def _summary(connection, group_id: str, clauses: list[str], values: list[Any]) -
         + " AND ".join(["micro_task_run_id IS NOT NULL", *clauses]),
         [group_id, *values],
     ).fetchone()["count"]
-    counts = {"roots": 0, "helpers": 0, "active": 0, "host": 0, "review": 0, "ended": 0, "accepted": 0}
+    counts = {"roots": 0, "helpers": 0, "active": 0, "host": 0, "review": 0, "ended": 0, "accepted": 0,
+              "stoppableRoots": 0, "stoppableHelpers": 0, "delivered": 0, "awaitingHost": 0}
+    from .workflow import IN_PROGRESS_STATES
     for row in members:
+        if row["run_state"] in IN_PROGRESS_STATES:
+            counts["stoppableHelpers" if row["child_parent_run_id"] is not None else "stoppableRoots"] += 1
+        counts["delivered"] += int(row["run_state"] == "delivered")
+        counts["awaitingHost"] += int(row["run_state"] == "awaiting-host")
         counts[_state(row)] += 1
         counts["accepted"] += int(row["child_parent_run_id"] is None and row["run_state"] == "accepted")
         counts["helpers" if row["child_parent_run_id"] is not None else "roots"] += 1

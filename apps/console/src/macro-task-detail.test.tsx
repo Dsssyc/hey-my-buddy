@@ -59,18 +59,23 @@ function harness(options: StopOptions = {}) {
   const listed = options.secondStoppable
     ? [timeline.macroTask, macroTaskSummary({ macroTaskId: "macro-2", title: "另一个进行中的目标",
         lastActivitySeq: 30, lastActivityAt: "2026-09-26T07:40:00Z", state: "active",
-        counts: { roots: 2, helpers: 0, accepted: 0, active: 1, host: 0, review: 1, ended: 0 } })]
+        counts: { roots: 2, helpers: 0, accepted: 0, active: 1, host: 0, review: 1, ended: 0,
+          stoppableRoots: 1, stoppableHelpers: 0, delivered: 1, awaitingHost: 0 } })]
     : options.secondMacroTask
     ? [timeline.macroTask, macroTaskSummary({ macroTaskId: "run:3f0e", kind: "standalone",
         title: "修复标题回退在 CRLF 输入下的显示", titleSource: "task", description: null, lastActivitySeq: 20,
         lastActivityAt: "2026-09-25T10:22:00Z", state: "ended",
-        counts: { roots: 1, helpers: 0, accepted: 0, active: 0, host: 0, review: 0, ended: 1 } })]
+        counts: { roots: 1, helpers: 0, accepted: 0, active: 0, host: 0, review: 0, ended: 1,
+          stoppableRoots: 0, stoppableHelpers: 0, delivered: 0, awaitingHost: 0 } })]
     : [timeline.macroTask];
   const tasks = new Map(["r1", "r2", "r3", "r4"].map(id => [id, taskFixture(id)]));
   let stopAttempts = 0;
   const stopReply: MacroTaskStopResult = {
-    macroTaskId: "macro-1", runIds: ["r4", "r6"], acceptedRunIds: ["r1", "r2"], concludedRunIds: [],
-    results: [{ runId: "r4", result: "cancel-requested" }, { runId: "r6", result: "cancel-requested" }],
+    macroTaskId: "macro-1", duplicate: false,
+    results: [{ runId: "r1", state: "accepted", stopped: false },
+      { runId: "r2", state: "accepted", stopped: false },
+      { runId: "r4", state: "cancelled", stopped: true },
+      { runId: "r6", state: "delivered", stopped: false }],
   };
   const command = vi.fn(async (operation: string, params: Record<string, unknown>) => {
     if (operation === "workflow_get") {
@@ -107,6 +112,9 @@ function harness(options: StopOptions = {}) {
 const stopCalls = (f: ReturnType<typeof harness>) =>
   (f.api.command as unknown as ReturnType<typeof vi.fn>).mock.calls
     .filter(([operation]) => operation === "macro_task_stop") as [string, Record<string, unknown>][];
+
+const stopReplyFor = (macroTaskId: string) => ({ macroTaskId, duplicate: false,
+  results: [{ runId: "r4", state: "cancelled", stopped: true }] });
 
 const openMacroTask = async (f: ReturnType<typeof harness>) => {
   await f.user.click(await screen.findByRole("button", { name: /宏任务时间轴：设计、接口与实现/ }));
@@ -274,6 +282,30 @@ describe("macroTask detail navigation (layer mode, ≤760px viewport)", () => {
 });
 
 describe("macro-task-level stop (0.15.1 U4)", () => {
+  it("disables stop for delivered and awaiting-Host work without active descendants", async () => {
+    stubViewport(true);
+    const f = harness();
+    Object.assign(f.timeline.macroTask.counts, { stoppableRoots: 0, stoppableHelpers: 0,
+      delivered: 2, awaitingHost: 1 });
+    await openMacroTask(f);
+    const stop = screen.getByRole("button", { name: "停止宏任务" });
+    expect(stop).toHaveProperty("disabled", true);
+    expect(stop.getAttribute("title")).toContain("没有进行中的");
+  });
+
+  it("offers stop for an active helper below a preserved parent", async () => {
+    stubViewport(true);
+    const f = harness();
+    Object.assign(f.timeline.macroTask.counts, { stoppableRoots: 0, stoppableHelpers: 1,
+      delivered: 1, awaitingHost: 1 });
+    await openMacroTask(f);
+    const stop = screen.getByRole("button", { name: "停止宏任务" });
+    expect(stop).toHaveProperty("disabled", false);
+    await f.user.click(stop);
+    expect((await screen.findByRole("dialog", { name: "停止宏任务" })).textContent)
+      .toContain("进行中的 0 个微任务及 1 个协助任务");
+  });
+
   it("requires the explicit confirmation naming the macroTask and its scope before dispatching", async () => {
     stubViewport(true);
     const f = harness();
@@ -282,9 +314,8 @@ describe("macro-task-level stop (0.15.1 U4)", () => {
     const dialog = await screen.findByRole("dialog", { name: "停止宏任务" });
     // The confirmation names the macroTask and the honest scope.
     expect(dialog.textContent).toContain("宏任务时间轴：设计、接口与实现");
-    // 0.16 P1.3: the new confirmation copy names the unaccepted scope.
-    expect(dialog.textContent).toContain("尚未验收的 3 个微任务及其协助任务");
-    expect(dialog.textContent).toContain("已验收的 2 个保留");
+    expect(dialog.textContent).toContain("进行中的 1 个微任务及 0 个协助任务");
+    expect(dialog.textContent).toContain("已交付 1 个、等待 Host 0 个、已验收 2 个保留");
     expect(f.api.command).not.toHaveBeenCalled();
     // Cancel submits nothing.
     await f.user.click(within(dialog).getByRole("button", { name: "取消" }));
@@ -365,7 +396,7 @@ describe("macro-task-level stop (0.15.1 U4)", () => {
       if (operation === "workflow_get") return workflowFixture(f.tasks.get(String(params.runId)) ?? taskFixture(String(params.runId)));
       if (operation === "macro_task_stop") {
         refreshShouldFail = true;
-        return { macroTaskId: "macro-1", runIds: ["r4"], acceptedRunIds: ["r1", "r2"], concludedRunIds: [], results: [{ runId: "r4", result: "cancel-requested" }] };
+        return stopReplyFor("macro-1");
       }
       throw new Error(`Unexpected command: ${operation}`);
     });
@@ -388,7 +419,7 @@ describe("macro-task-level stop (0.15.1 U4)", () => {
     (f.api.command as unknown as ReturnType<typeof vi.fn>).mockImplementation(async (operation: string, params: Record<string, unknown>) => {
       if (operation === "macro_task_stop") {
         if (fail) throw new ApiError("NETWORK", "lost reply");
-        return { macroTaskId: "macro-1", runIds: ["r4"], acceptedRunIds: ["r1", "r2"], concludedRunIds: [], results: [{ runId: "r4", result: "cancel-requested" }] };
+        return stopReplyFor("macro-1");
       }
       if (operation === "workflow_get") return workflowFixture(f.tasks.get(String(params.runId)) ?? taskFixture(String(params.runId)));
       throw new Error(`Unexpected command: ${operation}`);
@@ -452,10 +483,10 @@ describe("macro-task-level stop (0.15.1 U4)", () => {
     expect((await screen.findByText("正在停止")).textContent).toBe("正在停止");
     // Resolving both replies settles each macroTask without a stuck phase.
     pending.get(String((first![1] as { commandId: string }).commandId))!.resolve({
-      macroTaskId: "macro-1", runIds: ["r4"], acceptedRunIds: ["r1", "r2"], concludedRunIds: [], results: [{ runId: "r4", result: "cancel-requested" }],
+      ...stopReplyFor("macro-1"),
     });
     pending.get(String((second![1] as { commandId: string }).commandId))!.resolve({
-      macroTaskId: "macro-2", runIds: ["r4"], acceptedRunIds: [], concludedRunIds: [], results: [{ runId: "r4", result: "cancel-requested" }],
+      ...stopReplyFor("macro-2"),
     });
     await waitFor(() => expect(screen.queryByText("停止请求未提交")).toBeNull(), { timeout: 3000 });
     expect(stopCalls(f).length).toBe(2);
@@ -516,11 +547,11 @@ describe("macro-task-level stop (0.15.1 U4)", () => {
       if (operation === "macro_task_stop") {
         attempts += 1;
         if (attempts === 1) {
-          // results do not cover runIds: the scope is incoherent.
-          return { macroTaskId: "macro-1", runIds: ["r4", "r6"], acceptedRunIds: ["r1"], concludedRunIds: [], results: [{ runId: "r4", result: "cancel-requested" }] };
+          // A running row cannot be reported as preserved.
+          return { macroTaskId: "macro-1", duplicate: false,
+            results: [{ runId: "r4", state: "executing", stopped: false }] };
         }
-        return { macroTaskId: "macro-1", runIds: ["r4", "r6"], acceptedRunIds: ["r1", "r2"], concludedRunIds: [],
-          results: [{ runId: "r4", result: "cancel-requested" }, { runId: "r6", result: "cancel-requested" }] };
+        return stopReplyFor("macro-1");
       }
       throw new Error(`Unexpected command: ${operation}`);
     });

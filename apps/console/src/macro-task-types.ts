@@ -9,6 +9,8 @@ export type MacroTaskCounts = {
   /** Accepted root micro tasks; the numerator of progress against the root count. */
   accepted: number;
   active: number; host: number; review: number; ended: number;
+  /** Exact workflow-state counts across the whole group, independent of display filters. */
+  stoppableRoots: number; stoppableHelpers: number; delivered: number; awaitingHost: number;
 };
 export type MacroTaskSummary = {
   /** `macro-<id>` for an explicit macroTask, or `run:<rootRunId>` for a standalone root micro task. */
@@ -129,15 +131,10 @@ export type MacroTaskTimeline = {
   filtered: boolean;
   scopeComplete: boolean;
 };
-/** Reply of `macro_task_stop`: the affected scope and per-root cancellation results. */
+/** Reply of `macro_task_stop`: one result for every member of the macro task. */
 export type MacroTaskStopResult = {
   macroTaskId: string;
-  /** Roots and helpers whose cancellation was requested in this stop. */
-  runIds: string[];
-  /** Accepted roots retained by the stop; they keep their recorded outcome. */
-  acceptedRunIds: string[];
-  /** Concluded roots retained by the stop; they keep their Host conclusion. */
-  concludedRunIds: string[];
-  /** Per-root cancellation results; acknowledgement is not termination evidence. */
-  results: ReadonlyArray<{ runId: string; result: string }>;
+  duplicate: boolean;
+  /** Acknowledgement is not shutdown evidence; the timeline proves each stop. */
+  results: ReadonlyArray<{ runId: string; state: string; stopped: boolean; [key: string]: unknown }>;
 };

@@ -337,7 +337,8 @@ describe("macroTask timeline rendering", () => {
       rows: [macroTaskTimelineFixture().rows[0]!, macroTaskTimelineFixture().rows[2]!],
       spans: macroTaskTimelineFixture().spans.filter(span => ["s-r1-q", "s-r1-e"].includes(span.spanId)),
       events: [],
-      macroTask: { ...macroTaskTimelineFixture().macroTask, counts: { roots: 1, helpers: 1, accepted: 0, active: 0, host: 0, review: 0, ended: 2 } },
+      macroTask: { ...macroTaskTimelineFixture().macroTask, counts: { roots: 1, helpers: 1, accepted: 0, active: 0, host: 0, review: 0, ended: 2,
+        stoppableRoots: 0, stoppableHelpers: 0, delivered: 0, awaitingHost: 0 } },
     });
     timeline.rows[1] = { ...timeline.rows[1]!, parentRunId: "r1", rootRunId: "r1", rootLeadRunId: null, depth: 1, kind: "helper" };
     const { container } = render(<MacroTaskTimeline {...baseProps(timeline)} />);

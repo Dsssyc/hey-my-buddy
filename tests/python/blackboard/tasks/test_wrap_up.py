@@ -131,7 +131,7 @@ class WrapUpStopTests(WorkflowTestCase):
             {"macroTaskId": "run:" + second["runId"], "commandId": "browser-stop"},
             console_authority={"sessionId": "browser"},
         )
-        self.assertEqual(stopped["runIds"], [second["runId"]])
+        self.assertEqual(stopped["results"], [{"runId": second["runId"], "state": "cancelled", "stopped": True}])
         immediate = self.attempt(board, second_claim)
         self.assertEqual(immediate["stopInitiator"], "console")
         self.assertIsNone(immediate["graceDeadline"])

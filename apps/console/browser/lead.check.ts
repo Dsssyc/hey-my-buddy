@@ -118,15 +118,21 @@ for (const { locale, language, tasks } of [
           && request.postDataJSON().operation === "macro_task_stop") commands.push(request.postDataJSON());
       });
       const { timeline, body } = await openLeadMacro(page, language, tasks);
-      const stop = page.getByRole("button", { name: "停止宏任务", exact: true });
+      const zh = language === "zh-CN";
+      const stopName = zh ? "停止宏任务" : "Stop macro task";
+      const cancelName = zh ? "取消" : "Cancel";
+      const confirmName = zh ? "确认停止宏任务" : "Confirm stop";
+      const stop = page.getByRole("button", { name: stopName, exact: true });
       await expect(stop).toBeEnabled();
       await stop.click();
-      const dialog = page.getByRole("dialog", { name: "停止宏任务", exact: true });
+      const dialog = page.getByRole("dialog", { name: stopName, exact: true });
       const summary = timeline.macroTask;
       await expect(dialog).toHaveAccessibleDescription(
-        `将停止「${summary.title}」中尚未验收的 ${summary.counts.roots - summary.counts.accepted} 个微任务及其协助任务；已验收的 ${summary.counts.accepted} 个保留。（涉及 ${summary.counts.helpers} 个协助任务）`,
+        zh
+          ? `将停止「${summary.title}」中进行中的 ${summary.counts.stoppableRoots} 个微任务及 ${summary.counts.stoppableHelpers} 个协助任务；已交付 ${summary.counts.delivered} 个、等待 Host ${summary.counts.awaitingHost} 个、已验收 ${summary.counts.accepted} 个保留。`
+          : `Stop ${summary.counts.stoppableRoots} micro tasks in progress and ${summary.counts.stoppableHelpers} helper tasks in “${summary.title}”; preserve ${summary.counts.delivered} delivered, ${summary.counts.awaitingHost} awaiting Host, and ${summary.counts.accepted} accepted micro tasks.`,
       );
-      await expect(dialog.getByRole("button", { name: "取消", exact: true })).toBeFocused();
+      await expect(dialog.getByRole("button", { name: cancelName, exact: true })).toBeFocused();
       await expectWholeAndApart(page.locator("body"), dialog);
       await expectWholeAndApart(dialog, dialog.locator(":scope > h2, :scope > p, :scope > .actions"));
       await expectWholeAndApart(dialog.locator(".actions"), dialog.getByRole("button"));
@@ -136,8 +142,8 @@ for (const { locale, language, tasks } of [
       expect(commands).toEqual([]);
 
       await stop.click();
-      await dialog.getByRole("button", { name: "取消", exact: true }).press("Tab");
-      const confirm = dialog.getByRole("button", { name: "确认停止宏任务", exact: true });
+      await dialog.getByRole("button", { name: cancelName, exact: true }).press("Tab");
+      const confirm = dialog.getByRole("button", { name: confirmName, exact: true });
       await expect(confirm).toBeFocused();
       const refusal = page.waitForResponse(response => response.request().method() === "POST"
         && new URL(response.url()).pathname === "/api/command"
@@ -151,11 +157,11 @@ for (const { locale, language, tasks } of [
       expect(response.request().postDataJSON().params.commandId).not.toBe("");
       await expect(dialog).toBeHidden();
       const status = page.locator(".stop-status");
-      await expect(status).toHaveText("停止请求未提交");
+      await expect(status).toHaveText(zh ? "停止请求未提交" : "Stop request was refused");
       await expect(status).toHaveAttribute("title", /This synthetic preview never performs mutations/);
       await expectTextUncut(status);
-      await expect(page.getByText("已停止", { exact: true })).toHaveCount(0);
-      await expect(page.getByRole("button", { name: "重试停止", exact: true })).toHaveCount(0);
+      await expect(page.getByText(zh ? "已停止" : "Stopped", { exact: true })).toHaveCount(0);
+      await expect(page.getByRole("button", { name: zh ? "重试停止" : "Retry stop", exact: true })).toHaveCount(0);
 
       const unchanged = await page.request.get(TIMELINE);
       expect(unchanged.status()).toBe(200);
@@ -163,7 +169,7 @@ for (const { locale, language, tasks } of [
       expect(await unchanged.text()).toBe(body);
       await expectReadableStart(row(page, LEAD).locator(".lbl-sub"), "等待名下的微任务");
       await expectReadableStart(row(page, WAITING).locator(".lbl-sub"), "等待 Lead");
-      await page.getByRole("button", { name: "知道了", exact: true }).click();
+      await page.getByRole("button", { name: zh ? "知道了" : "Dismiss", exact: true }).click();
       await expect(status).toHaveCount(0);
       await expect(stop).toBeEnabled();
       await expectNoSidewaysScroll(page);

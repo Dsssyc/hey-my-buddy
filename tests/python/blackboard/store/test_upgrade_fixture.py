@@ -201,6 +201,60 @@ class UpgradeFixtureTests(unittest.TestCase):
             self.assertEqual(upgraded.execute('PRAGMA integrity_check').fetchone()[0], 'ok')
             self.assertEqual(upgraded.execute('PRAGMA foreign_key_check').fetchall(), [])
 
+    def test_macro_stop_receipt_converts_without_losing_historical_root_facts(self):
+        fixture, connection = self.restored()
+        stopped = {'runId': 'root-stopped', 'state': 'cancelled', 'status': 'cancelling',
+                   'cancelled': True, 'duplicate': False, 'note': 'Stop requested',
+                   'shutdownConfirmed': False, 'children': [{'runId': 'child'}]}
+        old = {'macroTaskId': 'macro-example', 'runIds': ['root-stopped'],
+               'acceptedRunIds': ['root-accepted'], 'concludedRunIds': ['root-concluded'],
+               'results': [stopped], 'duplicate': False}
+        connection.execute('INSERT INTO commands(command_id,kind,request_hash,response_json,created_at)'
+                           ' VALUES(?,?,?,?,?)', ('stop-fixture', 'macro_task.stop', 'hash',
+                                                  json.dumps(old), '2026-01-01T00:00:00Z'))
+        connection.commit()
+        board_upgrade.migrate(fixture['state'])
+        result = json.loads(connection.execute(
+            "SELECT response_json FROM commands WHERE command_id='stop-fixture'").fetchone()[0])
+        self.assertEqual(result, {'macroTaskId': 'macro-example', 'results': [
+            {**stopped, 'stopped': True},
+            {'runId': 'root-accepted', 'state': 'accepted', 'stopped': False},
+            {'runId': 'root-concluded', 'state': 'concluded', 'stopped': False},
+        ], 'duplicate': False})
+
+    def test_invalid_macro_stop_receipt_rolls_back_all_upgrade_changes(self):
+        cases = (
+            {'state': 'unknown'},
+            {'runIds': ['different']},
+            {'acceptedRunIds': ['root-stopped']},
+            {'extra': True},
+        )
+        for index, change in enumerate(cases):
+            with self.subTest(change=change):
+                fixture, connection = self.restored(f'invalid-stop-{index}')
+                valid = {'macroTaskId': 'macro-example', 'runIds': ['root-stopped'],
+                         'acceptedRunIds': [], 'concludedRunIds': [],
+                         'results': [{'runId': 'root-stopped', 'state': 'cancelled',
+                                      'cancelled': True, 'duplicate': False}], 'duplicate': False}
+                invalid = {**valid, **change}
+                if 'state' in change:
+                    invalid['results'] = [{**valid['results'][0], 'state': change['state']}]
+                    del invalid['state']
+                for command_id, value in (('a-valid', valid), ('z-invalid', invalid)):
+                    connection.execute('INSERT INTO commands(command_id,kind,request_hash,response_json,created_at)'
+                                       ' VALUES(?,?,?,?,?)', (command_id, 'macro_task.stop', 'hash',
+                                                              json.dumps(value), '2026-01-01T00:00:00Z'))
+                connection.commit()
+                with self.assertRaises(BoardError) as caught:
+                    board_upgrade.migrate(fixture['state'])
+                self.assertEqual(caught.exception.code, 'UPGRADE_INVALID_BOARD')
+                self.assertEqual(connection.execute(
+                    "SELECT value FROM meta WHERE key='schema_version'").fetchone()[0], '21')
+                self.assertIsNone(connection.execute(
+                    "SELECT name FROM sqlite_master WHERE name='reminder_settings'").fetchone())
+                self.assertEqual(json.loads(connection.execute(
+                    "SELECT response_json FROM commands WHERE command_id='a-valid'").fetchone()[0]), valid)
+
     def test_unavailable_submission_digest_refuses_replay_and_new_submissions_replay(self):
         fixture, connection = self.restored()
         # A NULL fingerprint is retained schema-21 stock from the consumed upgrade.

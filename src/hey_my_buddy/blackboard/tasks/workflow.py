@@ -122,6 +122,7 @@ ROUTING_HISTORY_FIELDS = frozenset({"limit", "before"})
 DEFAULT_ROUTING_HISTORY_LIMIT = 20
 MAX_ROUTING_HISTORY_LIMIT = 100
 
+IN_PROGRESS_STATES = ("executing", "waiting-helpers", "waiting-owned")
 RUN_STATES = ("executing", "awaiting-host", "waiting-helpers", "waiting-owned", "delivered", "accepted", "concluded", "cancelled", "failed")
 
 # These events follow the corresponding workflow mutation in the same transaction.
@@ -3418,6 +3419,7 @@ class WorkflowCoordinator:
                 roots = connection.execute(
                     "SELECT r.* FROM workflow_runs r WHERE r.macro_task_id=?"
                     " AND NOT EXISTS (SELECT 1 FROM workflow_children c WHERE c.child_task_id=r.run_id)"
+                    " AND NOT EXISTS (SELECT 1 FROM workflow_lead_tasks l WHERE l.owned_run_id=r.run_id)"
                     " ORDER BY r.created_at,r.run_id", (identifier,),
                 ).fetchall()
             elif identifier.startswith("run:"):
@@ -3430,20 +3432,28 @@ class WorkflowCoordinator:
                 raise BoardError("INVALID_ARGUMENT", "macroTaskId must identify a macro task or standalone root")
             if not roots:
                 raise BoardError("NOT_FOUND", "Unknown work macro task")
-            results, accepted, concluded = [], [], []
+            # Freeze the whole ownership graph before cancellation emits events.
+            # Fence active parents first so descendant settlement cannot wake them.
+            scope = []
             for root in roots:
-                if root["state"] == "accepted":
-                    accepted.append(root["run_id"])
-                    continue
-                if root["state"] == "concluded":
-                    concluded.append(root["run_id"])
-                    continue
-                task = connection.execute("SELECT * FROM tasks WHERE task_id=?", (root["run_id"],)).fetchone()
-                results.append(self._cancel_in_transaction(
-                    connection, root, task, reason, {"role": "console", "id": console_authority["sessionId"]}, "console", now,
-                ))
-            response = {"macroTaskId": identifier, "runIds": [r["runId"] for r in results],
-                        "acceptedRunIds": accepted, "concludedRunIds": concluded, "results": results, "duplicate": False}
+                scope.append(root)
+                scope.extend(self._run_row(connection, child["child_task_id"])
+                             for child in self._owned_children(connection, root["run_id"], include_lead=True))
+            actor = {"role": "console", "id": console_authority["sessionId"]}
+            for root in roots:
+                if root["state"] in IN_PROGRESS_STATES:
+                    task = connection.execute("SELECT * FROM tasks WHERE task_id=?", (root["run_id"],)).fetchone()
+                    self._cancel_in_transaction(connection, root, task, reason, actor, "console", now,
+                                                active_only=True)
+                else:
+                    self._cancel_children(connection, root["run_id"], reason, now, actor=actor,
+                                          initiator="console", include_lead=True, active_only=True)
+            results = []
+            for original in scope:
+                stopped = original["state"] in IN_PROGRESS_STATES
+                current = self._run_row(connection, original["run_id"])
+                results.append({"runId": current["run_id"], "state": current["state"], "stopped": stopped})
+            response = {"macroTaskId": identifier, "results": results, "duplicate": False}
             self.board._store_receipt(connection, command_id, "macro_task.stop", request, response)
             head = self.board._head_of(connection)
         self.board._notify(head)
@@ -3505,12 +3515,14 @@ class WorkflowCoordinator:
             self.board._notify(head)
         return counts, set(candidates)
 
-    def _cancel_in_transaction(self, connection, run_row, task, reason: str, actor: dict, initiator: str, now: str) -> dict:
+    def _cancel_in_transaction(self, connection, run_row, task, reason: str, actor: dict, initiator: str, now: str, *,
+                               active_only: bool = False) -> dict:
         run_id = run_row["run_id"]
         # Fence the root before descendants settle: a transferred checkout must
         # not be handed back to a micro task cancelled in this transaction.
         self._cancel_owned_run(connection, task, now, explicit=True, actor=actor, initiator=initiator)
-        self._cancel_children(connection, run_id, reason, now, actor=actor, initiator=initiator, include_lead=True)
+        self._cancel_children(connection, run_id, reason, now, actor=actor, initiator=initiator, include_lead=True,
+                              active_only=active_only)
         self.board._append_event(
             connection, "workflow.cancelled", task_id=run_id, revision=run_row["revision"] + 1,
             payload={"reason": reason, "actor": actor, "stopInitiator": initiator, "honestShutdown": True},
@@ -3532,13 +3544,16 @@ class WorkflowCoordinator:
         }
 
     def _cancel_children(self, connection, run_id: str, reason: str, now: str, *,
-                         actor: dict | None = None, initiator: str = "unknown", include_lead: bool = False) -> list[str]:
+                         actor: dict | None = None, initiator: str = "unknown", include_lead: bool = False,
+                         active_only: bool = False) -> list[str]:
         """Fence the whole owned graph, including work behind settled helpers."""
         cancelled: list[str] = []
         rows = self._owned_children(connection, run_id, include_lead=include_lead)
         for child in rows:
             task = connection.execute("SELECT * FROM tasks WHERE task_id=?", (child["child_task_id"],)).fetchone()
             if task is None:
+                continue
+            if active_only and self._run_row(connection, task["task_id"])["state"] not in IN_PROGRESS_STATES:
                 continue
             if self._cancel_owned_run(connection, task, now, actor=actor, initiator=initiator):
                 self.board._append_event(
@@ -3551,6 +3566,8 @@ class WorkflowCoordinator:
         # Every descendant is fenced before ownership can move upward. Settlement
         # walks through cancelled intermediaries but never reactivates one.
         for child in reversed(rows):
+            if active_only and child["child_task_id"] not in cancelled:
+                continue
             task = connection.execute("SELECT * FROM tasks WHERE task_id=?", (child["child_task_id"],)).fetchone()
             if child["kind"] == "helper":
                 self._settle_helper_reservation(connection, child, task, None, now)

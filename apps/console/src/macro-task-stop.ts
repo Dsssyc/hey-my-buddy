@@ -1,4 +1,6 @@
 import { useCallback, useRef, useState } from "react";
+import i18n from "i18next";
+import "./i18n";
 import type { ConsoleApi } from "./api";
 import { errorText, isSessionExpiredRefusal, uncertainResponse } from "./api";
 import type { Snapshot } from "./types";
@@ -33,91 +35,81 @@ export type MacroTaskStopStatus = {
 };
 
 const ACTIVE_TASK_STATUS = new Set(["queued", "running", "cancelling", "reconciliation-needed"]);
-const ACTIVE_ROW_STATE = new Set(["executing", "waiting-helpers", "awaiting-host", "waiting-owned"]);
+const ACTIVE_ROW_STATE = new Set(["executing", "waiting-helpers", "waiting-owned"]);
 
-/** Whether a summary still has members a macro task stop could cancel. */
-export function stoppableSummary(summary: MacroTaskSummary | null): boolean {
-  if (!summary) return false;
-  return summary.counts.active + summary.counts.host + summary.counts.review > 0;
+/** Counts from a complete timeline, including active helpers below preserved roots. */
+export function stopScope(summary: MacroTaskSummary) {
+  return {
+    roots: summary.counts.stoppableRoots,
+    helpers: summary.counts.stoppableHelpers,
+    delivered: summary.counts.delivered,
+    awaitingHost: summary.counts.awaitingHost,
+  };
 }
+export type StopScope = NonNullable<ReturnType<typeof stopScope>>;
 
 /**
  * Honest stop status derived from the acknowledged reply plus the refreshed
- * timeline read. A stop is proven only by a COMPLETE read (no filters, no
- * truncation) in which every affected root is cancelled and every member row
- * of those roots — helpers included — carries confirmed shutdown. Anything
- * less keeps 正在停止 (work still visible) or 停止未确认; a partial read can
- * never claim 已停止.
+ * timeline read. Only members marked stopped in the reply need cancellation
+ * evidence. A complete read is required before claiming 已停止.
  */
 export function stopStatus(entry: MacroTaskStopEntry | undefined, timeline: MacroTaskTimeline | null): MacroTaskStopStatus | null {
+  const t = (key: keyof typeof import("./i18n/zh/shell").default["macroStop"], options?: Record<string, number>) =>
+    i18n.t(`shell:macroStop.${key}`, options);
   if (!entry) return null;
   if (entry.phase === "refused") {
-    return { phase: "refused", label: "停止请求未提交", detail: entry.error || "请求被拒绝。" };
+    return { phase: "refused", label: t("refused"), detail: entry.error || t("refusedDetail") };
   }
   if (entry.phase === "unknown") {
     return {
       phase: "unknown",
-      label: "停止未确认",
-      detail: "停止结果未知，可能已生效；可重试同一请求或刷新核对。",
+      label: t("unknown"),
+      detail: t("unknownDetail"),
     };
   }
   if (entry.phase === "stopping") {
-    return { phase: "stopping", label: "正在停止", detail: "停止中 · 等待证据" };
+    return { phase: "stopping", label: t("stopping"), detail: t("stoppingDetail") };
   }
-  const runIds = entry.result?.runIds ?? [];
+  const stopped = entry.result?.results.filter(result => result.stopped) ?? [];
+  if (stopped.length === 0) {
+    return { phase: "acknowledged", label: t("noOp"), detail: t("noOpDetail") };
+  }
   if (!timeline) {
-    return { phase: "unconfirmed-stop", label: "停止未确认", detail: "时间轴读取不完整" };
+    return { phase: "unconfirmed-stop", label: t("unknown"), detail: t("incomplete") };
   }
   const complete = timeline.scopeComplete && !timeline.filtered && !timeline.truncated.rows;
   const rowsById = new Map(timeline.rows.map(row => [row.runId, row]));
-  // The stop scope's roots: every affected root's whole tree must be verified.
-  const affectedRoots = new Set(runIds
-    .map(runId => rowsById.get(runId))
-    .filter(row => row !== undefined && row.parentRunId === null)
-    .map(row => row!.runId));
   let pending = 0, uncertain = 0;
-  const count = (row: { status: string; state: string; shutdownConfirmed: boolean }) => {
-    if (row.shutdownConfirmed) return;
-    if (ACTIVE_TASK_STATUS.has(row.status) || ACTIVE_ROW_STATE.has(row.state)) pending += 1;
-    else uncertain += 1;
-  };
-  // Every run the reply named must be present and confirmed; a missing run
-  // cannot be verified from this read.
-  for (const runId of runIds) {
+  for (const { runId } of stopped) {
     const row = rowsById.get(runId);
     if (!row) { uncertain += 1; continue; }
-    if (affectedRoots.has(row.rootRunId)) continue; // counted with the whole tree below
-    count(row);
-  }
-  // Whole-tree verification: all members of each affected root, helpers included.
-  for (const row of timeline.rows) {
-    if (affectedRoots.has(row.rootRunId)) count(row);
-  }
-  // A root the server cancelled must actually read as cancelled.
-  for (const rootId of affectedRoots) {
-    const root = rowsById.get(rootId);
-    if (root && root.state !== "cancelled" && root.status !== "cancelled") pending += 1;
+    if (row.state !== "cancelled") pending += 1;
+    else if (!row.shutdownConfirmed) {
+      if (ACTIVE_TASK_STATUS.has(row.status) || ACTIVE_ROW_STATE.has(row.state)) pending += 1;
+      else uncertain += 1;
+    }
   }
   if (pending > 0) {
-    return { phase: "in-progress", label: "正在停止", detail: `仍有 ${pending} 项停止未确认` };
+    return { phase: "in-progress", label: t("stopping"), detail: t("pendingCount", { count: pending }) };
   }
   if (uncertain > 0) {
-    return { phase: "unconfirmed-stop", label: "停止未确认", detail: `${uncertain} 项停止未确认或超出读取范围` };
+    return { phase: "unconfirmed-stop", label: t("unknown"), detail: t("uncertainCount", { count: uncertain }) };
   }
   if (!complete) {
     return {
       phase: "unconfirmed-stop",
-      label: "停止未确认",
-      detail: "时间轴读取不完整 · 停止未确认",
+      label: t("unknown"),
+      detail: t("incompleteDetail"),
     };
   }
-  // runIds mixes roots and helpers; only the root count names 微任务.
-  return { phase: "stopped", label: "已停止", detail: `${affectedRoots.size} 个微任务及协助任务已停止` };
+  const roots = stopped.filter(result => rowsById.get(result.runId)?.kind === "micro-task").length;
+  const helpers = stopped.length - roots;
+  return { phase: "stopped", label: t("stopped"), detail: t("stoppedCount", { roots, helpers }) };
 }
 
 export function useMacroTaskStop(api: ConsoleApi, snapshot: Snapshot, writesAvailable: boolean, authority: AuthorityLatch | undefined, refresh: () => Promise<unknown>) {
   const [entries, setEntries] = useState<Map<string, MacroTaskStopEntry>>(() => new Map());
-  const [confirming, setConfirming] = useState<MacroTaskSummary | null>(null);
+  const [confirming, setConfirming] = useState<{ summary: MacroTaskSummary; scope: StopScope } | null>(null);
   // One in-flight stop per macroTask: a second confirmation of the SAME
   // macroTask is ignored while its reply is pending, but different macroTasks
   // navigate and stop independently.
@@ -161,7 +153,7 @@ export function useMacroTaskStop(api: ConsoleApi, snapshot: Snapshot, writesAvai
         // was denied; the earlier unknown attempt stays unknown.
         patch(macroTaskId, {
           phase: "unknown",
-          error: `${errorText(reason)} 停止结果未知；可重试同一请求。`,
+          error: `${errorText(reason)} ${i18n.t("shell:macroStop.replayUnknown")}`,
         });
       } else {
         patch(summary.macroTaskId, { phase: "refused", error: errorText(reason) });
@@ -172,9 +164,9 @@ export function useMacroTaskStop(api: ConsoleApi, snapshot: Snapshot, writesAvai
   }, [api, patch, refresh, snapshot.csrfToken]);
 
   /** Step one: the explicit confirmation naming the macroTask and its scope. */
-  const requestStop = useCallback((summary: MacroTaskSummary) => {
-    if (!writable) return;
-    setConfirming(summary);
+  const requestStop = useCallback((summary: MacroTaskSummary, scope: StopScope) => {
+    if (!writable || scope.roots + scope.helpers === 0) return;
+    setConfirming({ summary, scope });
   }, [writable]);
 
   const cancelConfirm = useCallback(() => setConfirming(null), []);

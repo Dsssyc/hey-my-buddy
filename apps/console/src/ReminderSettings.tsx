@@ -11,19 +11,21 @@ export function ReminderSettings({ api, csrfToken, settings, refresh, unavailabl
 }) {
   const { t } = useTranslation("shell");
   const [current, setCurrent] = useState(settings);
-  const [draft, setDraft] = useState(settings ? String(settings.silenceSeconds) : "");
+  const [draft, setDraft] = useState(settings ? String(settings.silenceSeconds / 60) : "");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [note, setNote] = useState("");
   useEffect(() => {
     if (settings && (!current || settings.revision > current.revision)) {
       setCurrent(settings);
-      setDraft(String(settings.silenceSeconds));
+      setDraft(String(settings.silenceSeconds / 60));
       setNote("");
     }
   }, [settings, current]);
-  const seconds = Number(draft);
-  const valid = /^\d+$/.test(draft) && Number.isSafeInteger(seconds) && seconds >= 1 && seconds <= 86400;
+  const minutes = Number(draft);
+  const seconds = Math.round(minutes * 60);
+  const valid = /^\d+(?:\.\d+)?$/.test(draft) && Number.isFinite(minutes)
+    && minutes >= 1 / 60 && minutes <= 1440 && Number.isSafeInteger(seconds);
   const changed = valid && seconds !== current?.silenceSeconds;
   async function save() {
     if (busy || unavailable || !current || !changed) return;
@@ -31,7 +33,7 @@ export function ReminderSettings({ api, csrfToken, settings, refresh, unavailabl
     try {
       const saved = parseReminderSettings(await api.command("reminder_settings_set", { silenceSeconds: seconds }, csrfToken));
       setCurrent(saved);
-      setDraft(String(saved.silenceSeconds));
+      setDraft(String(saved.silenceSeconds / 60));
       setNote(t("reminders.saved"));
       await refresh();
     } catch (failure) {
@@ -39,13 +41,12 @@ export function ReminderSettings({ api, csrfToken, settings, refresh, unavailabl
     } finally { setBusy(false); }
   }
   return <section className="panel settings-panel" aria-labelledby="reminder-settings-title" aria-busy={busy}>
-    <div className="panel-heading"><h2 id="reminder-settings-title">{t("reminders.title")}</h2>
-      <p>{t("reminders.description")}</p></div>
+    <div className="panel-heading"><h2 id="reminder-settings-title">{t("reminders.title")}</h2></div>
     {current ? <div className="flex flex-wrap items-end gap-3">
-      <label className="grid gap-1 text-sm" htmlFor="reminder-silence-seconds">
-        <span>{t("reminders.silenceSeconds")}</span>
-        <input id="reminder-silence-seconds" className="h-9 w-32 rounded-sm border border-input bg-background px-2 font-mono tabular-nums text-foreground"
-          type="number" inputMode="numeric" min="1" max="86400" step="1" value={draft}
+      <label className="grid gap-1 text-sm" htmlFor="reminder-silence-minutes">
+        <span>{t("reminders.silenceMinutes")}</span>
+        <input id="reminder-silence-minutes" className="h-9 w-32 rounded-sm border border-input bg-background px-2 font-mono tabular-nums text-foreground"
+          type="number" inputMode="decimal" min={1 / 60} max="1440" step="any" value={draft}
           disabled={unavailable || busy} aria-invalid={draft.length > 0 && !valid || undefined}
           aria-describedby="reminder-range"
           onChange={event => { setDraft(event.target.value); setError(""); setNote(""); }} />

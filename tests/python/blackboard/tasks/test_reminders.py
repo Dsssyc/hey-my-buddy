@@ -1,6 +1,8 @@
 """Deadline and native-silence facts, independent of harness/model execution."""
+from contextlib import contextmanager
 from support import BoardTestCase, FakeClock
 import uuid
+from unittest.mock import patch
 from hey_my_buddy.blackboard.tasks import reminders
 
 
@@ -49,6 +51,31 @@ class ReminderFacts(BoardTestCase):
         self.assertNotEqual(first['reminderId'], second['reminderId'])
         self.assertEqual(len(self.records()), 2)
         self.assertEqual(self.client.get(runId=self.task['runId'])['status'], 'running')
+
+    def test_idle_and_future_deadlines_do_not_open_a_write_transaction(self):
+        with patch.object(self.store.db, 'write', side_effect=AssertionError('unexpected writer')):
+            self.assertIsNone(reminders.collect(self.store))
+        self.claim()
+        with patch.object(self.store.db, 'write', side_effect=AssertionError('unexpected writer')):
+            self.assertEqual(reminders.collect(self.store), 10)
+        self.assertEqual(self.records(), [])
+
+    def test_due_reminder_is_rechecked_after_a_concurrent_completion(self):
+        self.claim()
+        self.clock.advance(10)
+        original_write = self.store.db.write
+
+        @contextmanager
+        def complete_before_collect_write():
+            with original_write() as connection:
+                connection.execute("UPDATE attempts SET execution_state='finished',result_json='{}'"
+                                   ' WHERE attempt_id=?', (self.attempt['attemptId'],))
+            with original_write() as connection:
+                yield connection
+
+        with patch.object(self.store.db, 'write', side_effect=complete_before_collect_write):
+            self.assertIsNone(reminders.collect(self.store))
+        self.assertEqual(self.records(), [])
 
     def test_silence_keeps_native_timestamp_tool_fact_and_ignores_renewal(self):
         self.claim(expected=100)

@@ -16,19 +16,33 @@ it("saves a valid silence threshold and keeps read-only sessions unable to chang
   const initial = { silenceSeconds: 900, revision: 1, updatedAt: "2026-10-15T00:00:00Z" };
   const user = userEvent.setup();
   const view = render(<ReminderSettings api={api} csrfToken="csrf" settings={initial} refresh={refresh} unavailable={false} />);
-  const input = screen.getByRole("spinbutton", { name: "静默提醒阈值（秒）" });
+  const input = screen.getByRole("spinbutton", { name: "静默提醒阈值（分钟）" });
   await user.clear(input);
   await user.type(input, "0");
   expect(input.getAttribute("aria-invalid")).toBe("true");
   expect(screen.getByRole("button", { name: "保存" }).hasAttribute("disabled")).toBe(true);
   await user.clear(input);
-  await user.type(input, "1200");
+  await user.type(input, "20");
   await user.click(screen.getByRole("button", { name: "保存" }));
   await waitFor(() => expect(command).toHaveBeenCalledWith("reminder_settings_set", { silenceSeconds: 1200 }, "csrf"));
   await waitFor(() => expect(refresh).toHaveBeenCalledTimes(1));
-  expect((input as HTMLInputElement).value).toBe("1200");
+  expect((input as HTMLInputElement).value).toBe("20");
   view.rerender(<ReminderSettings api={api} csrfToken="csrf" settings={initial} refresh={refresh} unavailable />);
   expect(input.hasAttribute("disabled")).toBe(true);
+});
+
+it("preserves a stored second-level threshold when shown in minutes", async () => {
+  const command = vi.fn(async () => ({ silenceSeconds: 61, revision: 2, updatedAt: "2026-10-15T01:00:00Z" }));
+  const initial = { silenceSeconds: 1, revision: 1, updatedAt: "2026-10-15T00:00:00Z" };
+  const user = userEvent.setup();
+  render(<ReminderSettings api={{ command } as unknown as ConsoleApi} csrfToken="csrf" settings={initial}
+    refresh={async () => {}} unavailable={false} />);
+  const input = screen.getByRole("spinbutton", { name: "静默提醒阈值（分钟）" }) as HTMLInputElement;
+  expect(Number(input.value) * 60).toBeCloseTo(1);
+  await user.clear(input);
+  await user.type(input, String(61 / 60));
+  await user.click(screen.getByRole("button", { name: "保存" }));
+  await waitFor(() => expect(command).toHaveBeenCalledWith("reminder_settings_set", { silenceSeconds: 61 }, "csrf"));
 });
 
 it("shows reminders only for the active selected attempt beside the task status", () => {
