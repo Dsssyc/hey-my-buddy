@@ -1,11 +1,13 @@
 """Complete process identity and orphan-stop evidence."""
 from __future__ import annotations
 
+from contextlib import nullcontext
 import os
 import signal
 import subprocess
 import sys
 import threading
+from types import SimpleNamespace
 import unittest
 from unittest import mock
 
@@ -48,13 +50,14 @@ class Source:
         self.start = None
         self.group = False
 
-    def job_members(self, name):
-        return self.job
+    def open_job(self, name):
+        def terminate():
+            self.signals.append(("job", name))
+            self.job = []
+            self.start = None
 
-    def stop_job(self, name):
-        self.signals.append(("job", name))
-        self.job = []
-        self.start = None
+        return nullcontext(None if self.job is None else SimpleNamespace(
+            members=lambda: self.job, active=lambda: len(self.job), terminate=terminate))
 
 
 class ProcessIdentityTests(unittest.TestCase):
@@ -133,18 +136,71 @@ class ProcessIdentityTests(unittest.TestCase):
         source.start = 220
         self.assertEqual(identity.inspect_process_identity(WINDOWS_RECORD, source=source), "identity-absent")
 
-    def test_windows_system_source_reopens_named_job_for_query_and_stop(self):
+    def test_windows_stop_keeps_one_handle_for_verification_termination_and_empty_observation(self):
         from hey_my_buddy.protocol import windows_process
 
-        api = mock.Mock()
-        api.open_job.return_value = 77
-        api.process_ids.return_value = [301, 302]
-        with mock.patch.object(windows_process, "WindowsAPI", return_value=api):
-            source = identity._SystemSource()
-            self.assertEqual(source.job_members(WINDOWS_RECORD["jobName"]), [301, 302])
-            source.stop_job(WINDOWS_RECORD["jobName"])
-        self.assertEqual(api.terminate.call_args.args, (77,))
-        self.assertEqual(api.close.call_count, 2)
+        for hard_stop in (False, True):
+            with self.subTest(hard_stop=hard_stop):
+                api = mock.Mock()
+                api.open_job.side_effect = [77, 99]  # Reopening could select a different named object.
+                api.process_ids.return_value = [301, 302]
+                api.active.side_effect = [1, 0]
+                with mock.patch.object(windows_process, "WindowsAPI", return_value=api), \
+                     mock.patch.object(identity._SystemSource, "boot_id", return_value=WINDOWS_RECORD["bootId"]), \
+                     mock.patch.object(identity._SystemSource, "started_at", side_effect=[105, None]):
+                    if hard_stop:
+                        identity.kill_verified_process_group(WINDOWS_RECORD)
+                    else:
+                        self.assertEqual(identity.stop_orphan_process(WINDOWS_RECORD), "orphan-stopped")
+                self.assertEqual(api.mock_calls, [mock.call.open_job(WINDOWS_RECORD["jobName"]),
+                    mock.call.process_ids(77), mock.call.terminate(77), mock.call.active(77),
+                    mock.call.active(77), mock.call.close(77)])
+
+    def test_windows_unreadable_mismatched_or_absent_job_never_authorizes_termination(self):
+        from hey_my_buddy.protocol import windows_process
+
+        for case in ("missing", "empty", "reused-root", "members-denied", "open-denied", "boot-changed"):
+            with self.subTest(case=case):
+                api = mock.Mock()
+                api.open_job.return_value = None if case == "missing" else 77
+                api.process_ids.return_value = [] if case == "empty" else [301, 302]
+                if case == "members-denied":
+                    api.process_ids.side_effect = PermissionError("members denied")
+                if case == "open-denied":
+                    api.open_job.side_effect = PermissionError("open denied")
+                boot = RECORD["bootId"] if case == "boot-changed" else WINDOWS_RECORD["bootId"]
+                with mock.patch.object(windows_process, "WindowsAPI", return_value=api), \
+                     mock.patch.object(identity._SystemSource, "boot_id", return_value=boot), \
+                     mock.patch.object(identity._SystemSource, "started_at", return_value=106 if case == "reused-root" else 105):
+                    self.assertEqual(identity.stop_orphan_process(WINDOWS_RECORD, settle_seconds=0),
+                                     "boot-changed" if case == "boot-changed" else "unknown")
+                api.terminate.assert_not_called()
+                if case in ("missing", "open-denied", "boot-changed"):
+                    api.close.assert_not_called()
+                else:
+                    api.close.assert_called_once_with(77)
+
+    def test_windows_root_exit_still_requires_job_empty_and_observable(self):
+        from hey_my_buddy.protocol import windows_process
+
+        for case in ("descendants", "active-denied", "terminate-denied", "root-alive", "stopped"):
+            with self.subTest(case=case):
+                api = mock.Mock()
+                api.open_job.return_value = 77
+                api.process_ids.return_value = [302]  # Original root has already exited.
+                api.active.return_value = 1 if case == "descendants" else 0
+                if case == "active-denied":
+                    api.active.side_effect = PermissionError("active denied")
+                if case == "terminate-denied":
+                    api.terminate.side_effect = PermissionError("terminate denied")
+                with mock.patch.object(windows_process, "WindowsAPI", return_value=api), \
+                     mock.patch.object(identity._SystemSource, "boot_id", return_value=WINDOWS_RECORD["bootId"]), \
+                     mock.patch.object(identity._SystemSource, "started_at", return_value=105 if case == "root-alive" else None):
+                    self.assertEqual(identity.stop_orphan_process(WINDOWS_RECORD, settle_seconds=0),
+                                     "orphan-stopped" if case == "stopped" else "unknown")
+                api.open_job.assert_called_once_with(WINDOWS_RECORD["jobName"])
+                api.terminate.assert_called_once_with(77)
+                api.close.assert_called_once_with(77)
 
     @unittest.skipIf(os.name == "nt", "POSIX process group test")
     def test_real_owned_process_identity_and_orphan_stop(self):

@@ -6,6 +6,7 @@ remains unknown; a numeric PID or process-group ID alone is never authority.
 """
 from __future__ import annotations
 
+from contextlib import contextmanager
 import ctypes
 import os
 import signal
@@ -183,30 +184,21 @@ class _SystemSource:
         return os.getpgid(pid)
 
     @staticmethod
-    def job_members(name: str) -> list[int] | None:
+    @contextmanager
+    def open_job(name: str):
         from .windows_process import WindowsAPI
+        from .owned_process import OwnedJob
 
         api = WindowsAPI()
         handle = api.open_job(name)
         if handle is None:
-            return None
+            yield None
+            return
+        job = OwnedJob(api, handle, name)
         try:
-            return api.process_ids(handle)
+            yield job
         finally:
-            api.close(handle)
-
-    @staticmethod
-    def stop_job(name: str) -> None:
-        from .windows_process import WindowsAPI
-
-        api = WindowsAPI()
-        handle = api.open_job(name)
-        if handle is None:
-            raise ProcessLookupError(name)
-        try:
-            api.terminate(handle)
-        finally:
-            api.close(handle)
+            job.close()
 
     @staticmethod
     def signal_group(pgid: int, sig: int) -> None:
@@ -271,6 +263,16 @@ def capture_process_identity(handle) -> dict:
     return record
 
 
+def _inspect_job_identity(record: dict, source, job) -> str:
+    members = job.members() if job is not None else None
+    root_start = source.started_at(record["pid"])
+    if not members:
+        return "unknown" if root_start == record["startedAt"] else "identity-absent"
+    if record["pid"] in members and root_start != record["startedAt"]:
+        return "unknown"
+    return "alive"
+
+
 def inspect_process_identity(record: dict, *, source=None) -> str:
     """Return boot-changed, identity-absent, alive, or unknown."""
     source = source or _SystemSource()
@@ -278,13 +280,8 @@ def inspect_process_identity(record: dict, *, source=None) -> str:
         if source.boot_id() != record["bootId"]:
             return "boot-changed"
         if record["jobName"] is not None:
-            members = source.job_members(record["jobName"])
-            root_start = source.started_at(record["pid"])
-            if not members:
-                return "unknown" if root_start == record["startedAt"] else "identity-absent"
-            if record["pid"] in members and root_start != record["startedAt"]:
-                return "unknown"
-            return "alive"
+            with source.open_job(record["jobName"]) as job:
+                return _inspect_job_identity(record, source, job)
         root_start = source.started_at(record["pid"])
         group_alive = source.group_alive(record["processGroupId"])
         if root_start is None and not group_alive:
@@ -314,38 +311,57 @@ def kill_verified_process_group(record: dict, *, source=None) -> None:
     Sending a signal is not shutdown evidence; the observer must establish absence.
     """
     source = source or _SystemSource()
+    if record["jobName"] is not None:
+        _stop_windows_job(record, source, settle_seconds=2.0)
+        return
     if inspect_process_identity(record, source=source) != "alive":
         return
-    if record["jobName"] is not None:
-        source.stop_job(record["jobName"])
-    else:
-        source.signal_group(record["processGroupId"], signal.SIGKILL)
+    source.signal_group(record["processGroupId"], signal.SIGKILL)
+
+
+def _stop_windows_job(record: dict, source, *, settle_seconds: float) -> str:
+    """Keep the original Job open from verification through observed shutdown."""
+    try:
+        if source.boot_id() != record["bootId"]:
+            return "boot-changed"
+        with source.open_job(record["jobName"]) as job:
+            observation = _inspect_job_identity(record, source, job)
+            if observation != "alive":
+                return observation
+            job.terminate()
+            deadline = time.monotonic() + settle_seconds
+            while True:
+                if job.active() == 0 and source.started_at(record["pid"]) != record["startedAt"]:
+                    return "orphan-stopped"
+                if time.monotonic() >= deadline:
+                    return "unknown"
+                time.sleep(0.05)
+    except OSError:
+        return "unknown"
 
 
 def stop_orphan_process(record: dict, *, source=None, settle_seconds: float = 2.0) -> str:
     """Stop an orphan after the caller proved its execution has ended."""
     source = source or _SystemSource()
+    if record["jobName"] is not None:
+        return _stop_windows_job(record, source, settle_seconds=settle_seconds)
     observation = inspect_process_identity(record, source=source)
     if observation != "alive":
         return observation
     try:
-        if record["jobName"] is not None:
-            source.stop_job(record["jobName"])
-        else:
-            source.signal_group(record["processGroupId"], signal.SIGTERM)
+        source.signal_group(record["processGroupId"], signal.SIGTERM)
     except Exception as error:
         if not _observation_failure(error):
             raise
         return "unknown"
     escalated = False
-    deadline = time.monotonic() + (settle_seconds if record["jobName"] is not None
-                                   else COMMAND_STOP_GRACE_SECONDS)
+    deadline = time.monotonic() + COMMAND_STOP_GRACE_SECONDS
     while True:
         observation = inspect_process_identity(record, source=source)
         if observation in ("boot-changed", "identity-absent"):
             return "orphan-stopped"
         if time.monotonic() >= deadline:
-            if record["jobName"] is not None or escalated or observation != "alive":
+            if escalated or observation != "alive":
                 return "unknown"
             try:
                 # Recheck the complete root/group identity directly before escalation.

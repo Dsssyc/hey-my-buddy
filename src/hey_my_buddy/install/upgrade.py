@@ -20,6 +20,7 @@ from .. import private_dirs, private_files
 from . import runtime
 from .launcher import write_active_runtime
 from ..protocol.contracts import CONTRACT_VERSION
+from ..protocol.service_process import independent_service_popen
 from ..blackboard.store.db import SCHEMA_VERSION, UPGRADE_BASE_SCHEMA, utc_now
 from ..errors import BoardError
 
@@ -199,9 +200,9 @@ def start(state: Path, target: Path) -> dict:
     log = private_dirs.open_regular_fd(state / 'upgrade-start.log', os.O_CREAT | os.O_APPEND | os.O_WRONLY, 0o600)
     try:
         # A rollback starts the previous runtime's installed daemon.
-        child = subprocess.Popen([str(runtime.runtime_python(target)), '-m', entry_modules(target)['daemon']], cwd=target,
-                                 env=_environment(state, target), stdin=subprocess.DEVNULL, stdout=log, stderr=log,
-                                 start_new_session=True, close_fds=True)
+        child = independent_service_popen([str(runtime.runtime_python(target)), '-m', entry_modules(target)['daemon']], cwd=target,
+                                          env=_environment(state, target), stdin=subprocess.DEVNULL, stdout=log, stderr=log,
+                                          close_fds=True)
     finally:
         os.close(log)
     deadline = time.monotonic() + 45

@@ -93,7 +93,7 @@ class WindowsCommandLineTests(unittest.TestCase):
         original = owned_process.check_windows_command_line
         receipt = []
         with mock.patch.object(process_identity, "native_process_journal_active", return_value=False), \
-             mock.patch.object(owned_process, "check_windows_command_line", side_effect=lambda command: original(command, windows=True)), \
+             mock.patch.object(owned_process, "check_windows_command_line", side_effect=lambda command, **_kwargs: original(command, windows=True)), \
              mock.patch.object(discovery.subprocess, "Popen") as popen:
             reason, output = discovery.probe(argv, {}, owned=receipt)
         self.assertEqual(reason["code"], "harness.command-line-too-long")

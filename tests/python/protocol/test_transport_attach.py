@@ -17,6 +17,7 @@ from unittest.mock import Mock, call, patch
 from hey_my_buddy.errors import BoardError
 from hey_my_buddy import state_root
 from hey_my_buddy.protocol import transport
+from hey_my_buddy.protocol import service_process
 
 from hey_my_buddy.protocol.transport import (
     ServiceError,
@@ -448,6 +449,25 @@ class ColdStartTests(unittest.TestCase):
             self.assertEqual((self.directory / "control-start.lock").stat().st_mode & 0o777, 0o600)
             self.assertEqual((self.directory / "control.log").stat().st_mode & 0o777, 0o600)
         self.assertEqual(Path(self.spawn.call_args.args[0][2]).name, "hey_my_buddy.blackboard.service.daemon")
+
+    def test_windows_cold_start_uses_independent_service_flags(self):
+        with patch.object(service_process, "os", SimpleNamespace(name="nt")), \
+             patch.object(transport, "_healthy", side_effect=[None, None, ENDPOINT]):
+            self.assertEqual(ensure_service(self.directory), ENDPOINT)
+        self.spawn.assert_called_once()
+        self.assertEqual(self.spawn.call_args.kwargs["creationflags"], 0x01000208)
+        self.assertNotIn("start_new_session", self.spawn.call_args.kwargs)
+
+    def test_windows_cold_start_refuses_denied_breakaway_without_retry(self):
+        failure = OSError(5, "fixture breakaway denied")
+        self.spawn.side_effect = failure
+        with patch.object(service_process, "os", SimpleNamespace(name="nt")), \
+             patch.object(transport, "_healthy", return_value=None):
+            with self.assertRaises(BoardError) as caught:
+                ensure_service(self.directory)
+        self.assertEqual(caught.exception.code, "SERVICE_START_UNSUPPORTED")
+        self.assertIn(str(failure), caught.exception.message)
+        self.spawn.assert_called_once()
 
     def test_orphan_upgrade_journal_without_startup_lock_refuses_without_preflight(self):
         self.directory.mkdir(mode=0o700)

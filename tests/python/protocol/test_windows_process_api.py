@@ -31,6 +31,7 @@ class WindowsAPITests(unittest.TestCase):
             JobObjectBasicAccountingInformation=1, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE=0x2000,
             JOB_OBJECT_QUERY=4, JOB_OBJECT_TERMINATE=8)
         self.api, self.process = mock.Mock(), mock.Mock()
+        self.api.GetLastError.return_value = 0
         self.kernel = mock.Mock(spec=["CreateToolhelp32Snapshot", "Thread32First",
                                       "Thread32Next", "GetProcessIdOfThread"])
         self.addCleanup(mock.patch.stopall)
@@ -52,7 +53,7 @@ class WindowsAPITests(unittest.TestCase):
         self.child = SimpleNamespace(pid=321, _handle=42)
 
     def test_job_owns_the_created_handle_and_sets_kill_on_last_close(self):
-        limits = {"BasicLimitInformation": {"LimitFlags": 0}, "ProcessMemoryLimit": 0}
+        limits = {"BasicLimitInformation": {"LimitFlags": 0x800 | 0x1000}, "ProcessMemoryLimit": 0}
         self.job.QueryInformationJobObject.return_value = limits
         self.assertIs(self.boundary.create_job("Local\\HeyMyBuddy-fixture"), self.job_handle)
         self.job.CreateJobObject.assert_called_once_with(None, "Local\\HeyMyBuddy-fixture")
@@ -60,6 +61,21 @@ class WindowsAPITests(unittest.TestCase):
         self.assertEqual(limits["BasicLimitInformation"]["LimitFlags"], 0x2000)
         self.job.SetInformationJobObject.assert_called_once_with(self.job_handle, 9, limits)
         self.api.CloseHandle.assert_not_called()
+
+    def test_existing_job_is_closed_before_query_or_mutation(self):
+        limits = {"BasicLimitInformation": {"LimitFlags": 0x800 | 0x1000}}
+        self.job.QueryInformationJobObject.return_value = limits
+        self.api.GetLastError.return_value = 183
+        events = mock.Mock()
+        for method, name in ((self.job.CreateJobObject, "create"), (self.api.GetLastError, "last_error"),
+                             (self.api.CloseHandle, "close"), (self.job.QueryInformationJobObject, "query"),
+                             (self.job.SetInformationJobObject, "set")):
+            events.attach_mock(method, name)
+        with self.assertRaises(FileExistsError):
+            self.boundary.create_job("Local\\HeyMyBuddy-existing")
+        self.assertEqual(events.mock_calls, [mock.call.create(None, "Local\\HeyMyBuddy-existing"),
+                                            mock.call.last_error(), mock.call.close(self.job_handle)])
+        self.assertEqual(limits["BasicLimitInformation"]["LimitFlags"], 0x800 | 0x1000)
 
     def test_limit_query_or_setup_failure_closes_the_new_job(self):
         for method in ("QueryInformationJobObject", "SetInformationJobObject"):
