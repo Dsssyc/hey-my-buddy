@@ -38,9 +38,12 @@ class Maintenance:
         settings = connection.execute("SELECT * FROM router_settings WHERE id=1").fetchone()
         interval = settings["maintenance_interval_seconds"]
         # An explicit empty-board request reports that fact regardless of setup.
-        if not maintenance_data.pending(connection):
+        unclassified = maintenance_data.pending(connection)
+        if not unclassified and not maintenance_data.summary_pending(connection):
             return {"status": "no-new-evidence"}, interval
-        active = connection.execute("SELECT * FROM maintenance_runs WHERE state='running'").fetchone()
+        active = connection.execute("SELECT m.* FROM maintenance_runs m WHERE m.state='running' OR EXISTS"
+            " (SELECT 1 FROM (SELECT * FROM attempts WHERE " + self.store.UNRESOLVED_SQL + ") a"
+            " WHERE a.task_id=m.task_id) ORDER BY m.started_at LIMIT 1").fetchone()
         if active is not None:
             return {"status": "running", "maintenanceRunId": active["maintenance_run_id"]}, None
         buddy_id = settings["maintenance_buddy_id"]
@@ -50,7 +53,11 @@ class Maintenance:
         if latest is not None and not manual:
             # Successful batches drain immediately. An invalid batch waits from
             # its actual finish; missed intervals are never replayed.
-            if latest["state"] != "completed":
+            finish = connection.execute("SELECT payload_json FROM events WHERE task_id=? AND kind='maintenance.finished' ORDER BY seq DESC LIMIT 1",
+                                        (latest["task_id"],)).fetchone()
+            drain = (latest["state"] == "completed" and unclassified and finish is not None
+                     and json.loads(finish[0])["continueUnclassified"])
+            if not drain:
                 remaining = interval - (datetime.fromisoformat(now) - datetime.fromisoformat(latest["finished_at"])).total_seconds()
                 if remaining > 0:
                     return {"status": "waiting"}, remaining
@@ -109,7 +116,8 @@ class Maintenance:
                 raise BoardError("CONFLICT", "Maintenance correction rounds must be sequential")
             material = files.read(self.store.directory, run["maintenance_run_id"], params.get("answer"))
             if (not isinstance(material, dict) or set(material) != {"answer", "observations"}
-                    or material["observations"] != {"toolCalls": 0, "toolMarkerFrames": 0, "deniedInteractions": 0}):
+                    or material["observations"] != {"toolCalls": 0, "toolMarkerFrames": 0, "deniedInteractions": 0}
+                    or any(type(value) is not int for value in material["observations"].values())):
                 raise BoardError("INVALID_ARGUMENT", "Maintenance answer requires observed zero-tool facts")
             task = connection.execute("SELECT spec_json FROM tasks WHERE task_id=?", (attempt["task_id"],)).fetchone()
             document = json.loads(task[0])["decision"]["document"]
@@ -130,7 +138,8 @@ class Maintenance:
         connection.execute("UPDATE maintenance_runs SET state=?,reason_code=?,reason_params_json=?,finished_at=? WHERE task_id=?",
                            ("failed" if code else "completed", code, canonical_json(params or {}) if code else None, now, task_id))
         self.store._append_event(connection, "maintenance.finished", task_id=task_id,
-            payload={"maintenanceRunId": run["maintenance_run_id"], "status": "failed" if code else "completed", "code": code})
+            payload={"maintenanceRunId": run["maintenance_run_id"], "status": "failed" if code else "completed", "code": code,
+                     "continueUnclassified": code is None and maintenance_data.pending(connection)})
         return {"maintenanceRunId": run["maintenance_run_id"], "status": "failed" if code else "completed"}
 
     def complete(self, connection, *, task, attempt, status, result, shutdown_confirmed, error, now):
@@ -153,14 +162,14 @@ class Maintenance:
         event = connection.execute("SELECT payload_json FROM events WHERE attempt_id=? AND kind='maintenance.answer_checked' ORDER BY seq DESC LIMIT 1",
                                    (attempt["attempt_id"],)).fetchone()
         params = {}
-        if code is None:
-            if event is None:
-                code = "router-no-answer"
-            else:
-                feedback_ref = json.loads(event[0])["feedback"]
-                feedback = files.read(self.store.directory, run["maintenance_run_id"], feedback_ref)
-                if feedback["errors"]:
-                    code, params = "answer-shape", {"feedback": feedback_ref}
+        if event is not None:
+            feedback_ref = json.loads(event[0])["feedback"]
+            feedback = files.read(self.store.directory, run["maintenance_run_id"], feedback_ref)
+            if feedback["errors"]:
+                params["feedback"] = feedback_ref
+                code = code or "answer-shape"
+        elif code is None:
+            code = "router-no-answer"
         return self.finish(connection, task_id=task["task_id"], now=now, code=code, params=params)
 
 

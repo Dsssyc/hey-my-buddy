@@ -166,6 +166,8 @@ class BoardStore:
 
         self.evaluation = EvaluationStore(self, clock=self._clock)
         self.decisions = DecisionCoordinator(self, self.evaluation)
+        from ..routing.maintenance import Maintenance
+        self.maintenance = Maintenance(self)
         # The micro-task workflow layer wraps this same store: it opens no second
         # authority and every one of its mutations is one of these transactions.
         self.workflow = WorkflowCoordinator(self, clock=self._clock)
@@ -777,6 +779,9 @@ class BoardStore:
         for row in connection.execute("SELECT d.harness,d.provider,d.model FROM router_dispatches d"
                                       " JOIN tasks t ON t.task_id=d.task_id WHERE t.state='queued'"):
             model_services.add((row["harness"], row["provider"], row["model"]))
+        for row in connection.execute("SELECT spec_json FROM tasks WHERE state='queued' AND adapter='decision'"
+                                      " AND json_extract(spec_json,'$.decision.kind')='maintain'"):
+            model_services.add(self.decisions.selector_model_service(connection, json.loads(row[0])))
         return model_services
 
     def _full_model_services(self, connection: sqlite3.Connection) -> set[tuple[str, str, str]]:

@@ -12,16 +12,20 @@ import re
 
 from ..errors import BoardError
 from ..json_codec import canonical_json, decode_strict_json
-from ..private_dirs import ensure_private_dir
+from ..private_dirs import ensure_private_dir, linked
 from ..private_files import publish_bytes, read_bytes
 
 
 def _root(state: Path, run_id: str) -> Path:
-    return ensure_private_dir(Path(state) / "maintenance" / hashlib.sha256(run_id.encode()).hexdigest())
+    root = Path(state) / "maintenance"
+    run = root / hashlib.sha256(run_id.encode()).hexdigest()
+    if linked(root) or linked(run):
+        raise BoardError("PRIVATE_PATH_UNSAFE", "Maintenance root must be an ordinary private directory")
+    return ensure_private_dir(run)
 
 
 def publish(state: Path, run_id: str, value: object) -> dict:
-    raw = canonical_json(value).encode("utf-8")
+    raw = canonical_json({"version": 1, "value": value}).encode("utf-8")
     digest = hashlib.sha256(raw).hexdigest()
     path = _root(state, run_id) / (digest + ".json")
     publish_bytes(path, raw, immutable=True)
@@ -39,4 +43,7 @@ def read(state: Path, run_id: str, reference: object):
     raw = read_bytes(expected)
     if hashlib.sha256(raw).hexdigest() != reference["sha256"]:
         raise BoardError("ARTIFACT_MISMATCH", "Maintenance file digest differs")
-    return decode_strict_json(raw)
+    envelope = decode_strict_json(raw)
+    if not isinstance(envelope, dict) or set(envelope) != {"version", "value"} or type(envelope["version"]) is not int or envelope["version"] != 1:
+        raise BoardError("INVALID_ARGUMENT", "Invalid maintenance file form")
+    return envelope["value"]

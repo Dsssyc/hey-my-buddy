@@ -23,6 +23,8 @@ CONFIG_COLUMNS = {
     "routerRetryIntervalSeconds": "retry_interval_seconds",
     "defaultRoutingMode": "default_mode",
     "routingBudget": "budget_preset",
+    "maintenanceBuddyId": "maintenance_buddy_id",
+    "maintenanceIntervalSeconds": "maintenance_interval_seconds",
 }
 
 INSTRUCTIONS = """Router protocol version 14.
@@ -158,6 +160,8 @@ def buddy_problem(connection, buddy_id: str, routing_mode: str, *, now=None) -> 
         return None, code, facts
 
     row = connection.execute("SELECT * FROM buddies WHERE buddy_id=?", (buddy_id,)).fetchone()
+    if row is None:
+        return unavailable("router-catalog-unavailable")
     if not row["enabled"]:
         return unavailable("router-disabled")
     if not row["available"]:
@@ -192,12 +196,14 @@ def _write_settings(connection, settings: dict) -> None:
 
 def configuration(connection) -> dict:
     """Read the current Router settings."""
-    row = connection.execute("SELECT default_mode,budget_preset,retry_interval_seconds FROM router_settings WHERE id=1").fetchone()
+    row = connection.execute("SELECT * FROM router_settings WHERE id=1").fetchone()
     return {
         "routerBuddyIds": [row[0] for row in connection.execute("SELECT buddy_id FROM router_buddies ORDER BY position")],
         "routerRetryIntervalSeconds": row["retry_interval_seconds"],
         "defaultRoutingMode": row["default_mode"],
         "routingBudget": row["budget_preset"],
+        "maintenanceBuddyId": row["maintenance_buddy_id"],
+        "maintenanceIntervalSeconds": row["maintenance_interval_seconds"],
     }
 
 

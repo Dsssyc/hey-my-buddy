@@ -108,6 +108,9 @@ class DecisionCoordinator:
         to *before* the claim commits and before the dispatch is claimed.
         """
         descriptor = decision_spec(spec or {})
+        if descriptor and descriptor["kind"] == "maintain":
+            identity = descriptor["document"]["buddy"]
+            return (identity["harness"], identity["provider"], identity["model"])
         row = self._row(connection, descriptor["decisionId"]) if descriptor else None
         if row is None or row["status"] != "queued":
             return None
@@ -276,8 +279,8 @@ class DecisionCoordinator:
                 constraints=request.get("constraints"), cooling_buddies=cooling_buddies,
                 overloaded_model_services=request.get("routingBasis", {}).get("overloadedModelServices"))
             status = "queued"
-            # New decisions are always selection requests; there is no internal
-            # maintenance request path left on the blackboard.
+            # This admission path creates selections. Maintenance admits its
+            # single internal task through the maintenance coordinator.
             reason = None
             task_text = request.get("task") or ""
             sole_candidate: sqlite3.Row | None = None
@@ -417,7 +420,7 @@ class DecisionCoordinator:
         }
         return self._create(f"workflow:{run_id}:{sequence}", request, connection=connection)
 
-    def _create_task(self, connection: sqlite3.Connection, *, decision_id: str, request_id: str, router_budget_seconds: int, now: str, request_key: str | None = None) -> str:
+    def _create_task(self, connection: sqlite3.Connection, *, decision_id: str, request_id: str, router_budget_seconds: int, now: str, request_key: str | None = None, kind: str = "select", document: dict | None = None) -> str:
         """Admit one ordinary selection task, using the real queue and capacity.
 
         Each dispatched Router item owns its own internal task; ``request_key``
@@ -432,10 +435,12 @@ class DecisionCoordinator:
             # starting the Router. It is unique to this task and is reclaimed
             # with the task's attempt evidence.
             "cwd": str(self.board.directory / "attempts" / task_id),
-            "task": "Bounded selection decision over the current evaluation table.",
+            "task": ("Maintain domains, task classifications and buddy kind summaries."
+                     if kind == "maintain" else "Bounded selection decision over the current evaluation table."),
             "routerBudgetSeconds": router_budget_seconds + TIMEOUT_GRACE_SECONDS,
             "requiredCapabilities": [DECISION_ADAPTER],
-            "decision": {"decisionId": decision_id, "kind": "select", "routerBudgetSeconds": router_budget_seconds},
+            "decision": {"decisionId": decision_id, "kind": kind, "routerBudgetSeconds": router_budget_seconds,
+                         **({"document": document} if kind == "maintain" else {})},
         }
         fingerprint = schemas.spec_fingerprint(spec)
         blocker = self.board._admission_blocker(connection, spec)
@@ -562,6 +567,8 @@ class DecisionCoordinator:
         """
         spec = json.loads(task["spec_json"])
         descriptor = decision_spec(spec)
+        if descriptor["kind"] == "maintain":
+            return self.board.maintenance.prepare_claim(connection, task, now)
         row = self._row(connection, descriptor["decisionId"])
         if row["status"] != "queued":
             return "decision-closed"
@@ -620,7 +627,12 @@ class DecisionCoordinator:
         becomes ``running``, the attempt is bound to the dispatch, and the exact
         model input is persisted for audit.
         """
-        row = self._row(connection, decision_spec(spec)["decisionId"])
+        descriptor = decision_spec(spec)
+        if descriptor["kind"] == "maintain":
+            self.board._append_event(connection, "maintenance.claimed", task_id=task["task_id"],
+                attempt_id=attempt_id, payload={"maintenanceRunId": descriptor["decisionId"], "generation": generation})
+            return descriptor["document"]
+        row = self._row(connection, descriptor["decisionId"])
         dispatch = router_sequence.dispatch(connection, task["task_id"])
         document = dispatch["document"]
         self._mark_running(
@@ -646,6 +658,9 @@ class DecisionCoordinator:
 
     def released(self, connection: sqlite3.Connection, *, task: sqlite3.Row, reason: dict, now: str) -> dict | None:
         """Advance only on the Worker's recorded proof it never crossed spawn."""
+        if (decision_spec(json.loads(task["spec_json"])) or {}).get("kind") == "maintain":
+            return self.board.maintenance.finish(connection, task_id=task["task_id"], now=now,
+                                                  code=reason["code"], params=reason["params"])
         row = self._decision_for_task(connection, task)
         if row is None or row["status"] in TERMINAL_DECISION_STATUSES:
             return None
@@ -668,6 +683,13 @@ class DecisionCoordinator:
 
     def cancelled(self, connection: sqlite3.Connection, *, task: sqlite3.Row, reason: dict, now: str) -> dict | None:
         """Durable cancel intent: the decision is cancelled, not silently forgotten."""
+        if (decision_spec(json.loads(task["spec_json"])) or {}).get("kind") == "maintain":
+            # A running execution retains its maintenance slot until its
+            # confirmed stop; a never-started queued task can settle now.
+            if task["active_attempt_id"] is None:
+                return self.board.maintenance.finish(connection, task_id=task["task_id"], now=now,
+                                                      code=reason["code"], params=reason["params"])
+            return None
         row = self._decision_for_task(connection, task)
         if row is None:
             return None
@@ -685,6 +707,10 @@ class DecisionCoordinator:
         """Fence a decision when its execution is settled as interrupted."""
         task = connection.execute("SELECT * FROM tasks WHERE task_id=?", (attempt["task_id"],)).fetchone()
         if task is None:
+            return
+        if (decision_spec(json.loads(task["spec_json"])) or {}).get("kind") == "maintain":
+            self.board.maintenance.finish(connection, task_id=task["task_id"], now=now,
+                                           code=reason["code"], params=reason["params"])
             return
         row = self._decision_for_task(connection, task)
         if row is None:
@@ -715,6 +741,9 @@ class DecisionCoordinator:
         descriptor = decision_spec(spec)
         if not descriptor:
             return None
+        if descriptor["kind"] == "maintain":
+            return self.board.maintenance.complete(connection, task=task, attempt=attempt, status=status,
+                result=result, shutdown_confirmed=shutdown_confirmed, error=error, now=now)
         row = self._row(connection, descriptor["decisionId"])
         if row is None:
             return None

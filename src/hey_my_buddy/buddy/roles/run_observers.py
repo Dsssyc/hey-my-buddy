@@ -21,6 +21,7 @@ from __future__ import annotations
 from typing import Mapping
 
 from .structured_call import correction_code
+from .turn_io import canonical_json
 from ..harnesses.run_contract import FEEDBACK_CONTINUE, FEEDBACK_STOP, RunFeedback
 
 #: The correction suffix of the fast structured call, verbatim: the correction
@@ -102,4 +103,31 @@ class ReviewObserver:
         return FEEDBACK_CONTINUE
 
 
-__all__ = ["CORRECTION_SUFFIX", "FastCorrection", "ReviewObserver", "worker_observer"]
+class MaintenanceCorrection(FastCorrection):
+    """Publish valid entries at each settled answer, correcting rejected ones twice.
+
+    The publisher belongs to the execution process, never the native harness.
+    It sends a private file reference to the service, where semantic validation
+    and every write occur. Corrections stay in the native run's total budget.
+    """
+
+    def __init__(self, output_schema, base_prompt, publisher):
+        super().__init__(output_schema, base_prompt)
+        self.publisher = publisher
+
+    def observer(self, facts):
+        feedback = super().observer({**facts, "settled": False})
+        if feedback.action == "stop" or not facts.get("settled"):
+            return feedback
+        checked = self.publisher(facts.get("rawAnswer"), self.correction_count, {
+            key: int(facts.get(key) or 0) for key in ("toolCalls", "toolMarkerFrames", "deniedInteractions")})
+        if checked["errors"] and self.correction_count < 2:
+            self.correction_count += 1
+            return RunFeedback(action="correct", input_text=self.base_prompt +
+                "\n\nMaintenance correction: valid entries have already been saved. "
+                "Correct the rejected entries described below; preserve accepted classifications and summaries.\n" +
+                canonical_json(checked))
+        return FEEDBACK_CONTINUE
+
+
+__all__ = ["CORRECTION_SUFFIX", "FastCorrection", "MaintenanceCorrection", "ReviewObserver", "worker_observer"]

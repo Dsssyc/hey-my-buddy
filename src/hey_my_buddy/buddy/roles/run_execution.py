@@ -14,7 +14,7 @@ import sys
 import threading
 import time
 import uuid
-from contextvars import copy_context
+from contextvars import ContextVar, copy_context
 from functools import partial
 from pathlib import Path
 
@@ -35,7 +35,7 @@ from ..harnesses.run_contract import (
     ResumeCheckpoint, RunBudget, RunBuddy, RunContinuation, RunIdentity, RunRequest, RunResult,
 )
 from . import turn_io, worker_services
-from .run_observers import FastCorrection, ReviewObserver, worker_observer
+from .run_observers import FastCorrection, MaintenanceCorrection, ReviewObserver, worker_observer
 from .run_controller import NATIVE_OPERATIONS
 from .structured_call import (
     _NoToolEvidence, structured_prompt,
@@ -45,6 +45,12 @@ from .turn_io import input_hash, private_json, validate_outcome, canonical_json
 WORKER_STOP_GRACE_SECONDS = 8.0
 _NATIVE_CONTROL = "native-control.json"
 _execution_live_server = None
+_maintenance_publisher = ContextVar("maintenance_publisher", default=None)
+
+
+def set_maintenance_publisher(publisher):
+    """Bind the execution-owned service callback, outside all model-visible data."""
+    _maintenance_publisher.set(publisher)
 
 
 def set_execution_live_server(server) -> None:
@@ -450,7 +456,10 @@ def fast_request(control: dict, module):
         output_schema=request_values["outputSchema"], capture_evidence=request_values.get("captureEvidence") is True,
         budget=RunBudget(timeout_seconds=control["timeoutSeconds"]),
     )
-    correction = FastCorrection(request_values["outputSchema"], base_prompt)
+    if control.get("maintenance"):
+        correction = MaintenanceCorrection(request_values["outputSchema"], base_prompt, _maintenance_publisher.get())
+    else:
+        correction = FastCorrection(request_values["outputSchema"], base_prompt)
     return request, _native_services(module), correction.observer, correction
 
 
@@ -544,6 +553,7 @@ def start_fast(module, name: str, context: ExecutionContext, request) -> InlineR
         "timeoutSeconds": request.timeout_seconds,
         "spec": {key: context.spec[key] for key in ("provider", "model", "effort")},
         "noToolRequest": request_values,
+        "maintenance": (context.spec.get("decision") or {}).get("kind") == "maintain",
     }
     identity = RunIdentity(task_id=context.task_id, attempt_id=context.attempt_id,
                            generation=context.generation, invocation_id=uuid.uuid4().hex)

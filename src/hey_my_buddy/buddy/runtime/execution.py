@@ -178,6 +178,11 @@ def validate_claim_turn(claim: dict) -> None:
                 or not isinstance(decision["buddy"].get("harness"), str)
                 or not decision["buddy"]["harness"] or not isinstance(decision.get("budget"), dict)):
             raise BoardError("INVALID_ARGUMENT", "Execution claim has invalid decision input")
+        if task["spec"].get("decision", {}).get("kind") == "maintain":
+            if (decision.get("kind") != "maintain" or decision["routingMode"] != "fast"
+                    or decision.get("maintenanceRunId") != task["spec"]["decision"]["decisionId"]
+                    or not isinstance(decision.get("input"), dict)):
+                raise BoardError("INVALID_ARGUMENT", "Execution claim has invalid maintenance input")
     if "turn" not in claim:
         return
     turn = claim["turn"]
@@ -618,6 +623,8 @@ class Execution:
         self, claim: dict, task: dict, spec: dict, attempt: dict, directory: Path, holder: dict
     ) -> dict:
         from ...install import runtime
+        from ..roles.run_execution import set_maintenance_publisher
+        set_maintenance_publisher(self._maintenance_answer)
 
         context = ExecutionContext(
             task_id=task["taskId"],
@@ -786,6 +793,16 @@ class Execution:
         report["logPaths"] = {name: path for name, path in log_paths.items() if native_path(Path(path)).is_file()}
         report["runtimeIdentity"] = context.runtime.get("identity")
         return self.receipt(claim, report, directory)
+
+    def _maintenance_answer(self, raw, round_index, observations):
+        from ...protocol import maintenance as files
+        run_id = self.claim["decisionInput"]["maintenanceRunId"]
+        reference = files.publish(self.state_dir, run_id, {"answer": raw, "observations": observations})
+        attempt = self.claim["attempt"]
+        response = self.client.call("execution_maintenance", {
+            "attemptId": attempt["attemptId"], "generation": attempt["generation"], "nonce": self.nonce,
+            "round": round_index, "answer": reference})
+        return files.read(self.state_dir, run_id, response["feedback"])
 
     def _wait_control_observation(self, claim, control, retry):
         control.raise_fatal()

@@ -198,6 +198,10 @@ def publish(evaluation, connection, *, now: str, params: dict) -> dict:
                                          (buddy_id,)).fetchone()
                 if row is None:
                     raise BoardError('NOT_FOUND', 'Unknown buddyId', buddyId=buddy_id)
+        if configuration.get('maintenanceBuddyId') is not None:
+            buddy_id = configuration['maintenanceBuddyId']
+            if connection.execute('SELECT 1 FROM buddies WHERE buddy_id=?', (buddy_id,)).fetchone() is None:
+                raise BoardError('NOT_FOUND', 'Unknown maintenance buddyId', buddyId=buddy_id)
         router._write_settings(connection, configuration)
         if 'routingBudget' in configuration:
             evaluation.board._append_event(connection, 'evaluation.routing_budget_changed',

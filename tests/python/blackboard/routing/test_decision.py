@@ -445,7 +445,6 @@ class SelectionRequestTests(DecisionTestCase):
             connection.execute("UPDATE harness_health SET status='missing'")
         capabilities = board.call("console_snapshot", {})["capabilities"]
         self.assertFalse(capabilities["selection"])
-        self.assertNotIn("maintenance", capabilities)
         self.assertFalse(capabilities["selection"])
         request = self.request(board)
         self.assertEqual(request["status"], "needs-host")
@@ -456,8 +455,6 @@ class SelectionRequestTests(DecisionTestCase):
         self.assertEqual(decision["routingBasis"]["candidateCount"], 0)
         self.assertIsNone(decision["routerProblem"])
         self.assertEqual(decision["reason"]["code"], "no-legal-candidate")
-        # The removed Host maintenance capability is absent even during an outage.
-        self.assertNotIn("maintenance", capabilities)
         self.assertEqual(board.call("task_list", {"limit": 10})["runs"], [])
 
     def test_capabilities_report_real_availability(self):
@@ -465,7 +462,6 @@ class SelectionRequestTests(DecisionTestCase):
         self.seed(board)
         capabilities = board.call("console_snapshot", {})["capabilities"]
         self.assertTrue(capabilities["selection"])
-        self.assertNotIn("maintenance", capabilities)
         self.assertTrue(capabilities["selection"])
         report = board.call("capabilities", {})
         self.assertIn("decision", report["adapters"])
