@@ -13,7 +13,8 @@ from .db import REMINDER_SCHEMA, SCHEMA_VERSION, utc_now
 BASE_SCHEMA_VERSION = 21
 
 
-def _stop_response(raw: str) -> str:
+def migrated_stop_response(raw: str) -> str:
+    """The exact schema-22 reply, shared by conversion and its expected snapshot."""
     try:
         old = decode_strict_json(raw)
     except (ValueError, RecursionError) as error:
@@ -35,7 +36,7 @@ def _stop_response(raw: str) -> str:
         for run_id, item in zip(run_ids, results)
     ):
         raise BoardError('UPGRADE_INVALID_BOARD', 'Invalid macro_task.stop receipt results')
-    converted = [{**item, 'stopped': True} for item in results]
+    converted = [{'runId': item['runId'], 'state': item['state'], 'stopped': True} for item in results]
     converted.extend({'runId': run_id, 'state': 'accepted', 'stopped': False} for run_id in accepted)
     converted.extend({'runId': run_id, 'state': 'concluded', 'stopped': False} for run_id in concluded)
     return canonical_json({'macroTaskId': old['macroTaskId'], 'results': converted, 'duplicate': False})
@@ -63,7 +64,7 @@ def migrate(state: Path) -> None:
                 "SELECT command_id,response_json FROM commands WHERE kind='macro_task.stop'"
             ).fetchall():
                 connection.execute('UPDATE commands SET response_json=? WHERE command_id=?',
-                                   (_stop_response(raw), command_id))
+                                   (migrated_stop_response(raw), command_id))
             for statement in REMINDER_SCHEMA.split(';'):
                 if statement.strip():
                     connection.execute(statement)

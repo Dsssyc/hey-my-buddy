@@ -127,16 +127,21 @@ for (const { locale, language, tasks } of [
       await stop.click();
       const dialog = page.getByRole("dialog", { name: stopName, exact: true });
       const summary = timeline.macroTask;
-      await expect(dialog).toHaveAccessibleDescription(
-        zh
-          ? `将停止「${summary.title}」中进行中的 ${summary.counts.stoppableRoots} 个微任务及 ${summary.counts.stoppableHelpers} 个协助任务；已交付 ${summary.counts.delivered} 个、等待 Host ${summary.counts.awaitingHost} 个、已验收 ${summary.counts.accepted} 个保留。`
-          : `Stop ${summary.counts.stoppableRoots} micro tasks in progress and ${summary.counts.stoppableHelpers} helper tasks in “${summary.title}”; preserve ${summary.counts.delivered} delivered, ${summary.counts.awaitingHost} awaiting Host, and ${summary.counts.accepted} accepted micro tasks.`,
-      );
+      await expect(dialog.locator(".stop-dialog-task-title")).toHaveAttribute("title", summary.title);
+      await expect(dialog.locator(".stop-dialog-task-title")).toHaveText(summary.title);
+      await expect(dialog.locator("#stop-macro-task-counts li")).toHaveCount(5);
+      await expect(dialog.locator("#stop-macro-task-body")).not.toContainText(summary.title);
+      await expect(dialog.locator("#stop-macro-task-counts")).toContainText(zh
+        ? `停止 ${summary.counts.stoppableRoots} 个微任务`
+        : `${summary.counts.stoppableRoots} micro task${summary.counts.stoppableRoots === 1 ? "" : "s"} to stop`);
+      await expect(dialog.locator("#stop-macro-task-counts")).toContainText(zh
+        ? `停止 ${summary.counts.stoppableHelpers} 个协助任务`
+        : `${summary.counts.stoppableHelpers} helper task${summary.counts.stoppableHelpers === 1 ? "" : "s"} to stop`);
       await expect(dialog.getByRole("button", { name: cancelName, exact: true })).toBeFocused();
       await expectWholeAndApart(page.locator("body"), dialog);
-      await expectWholeAndApart(dialog, dialog.locator(":scope > h2, :scope > p, :scope > .actions"));
+      await expectWholeAndApart(dialog, dialog.locator(":scope > h2, :scope > p, :scope > ul, :scope > .actions"));
       await expectWholeAndApart(dialog.locator(".actions"), dialog.getByRole("button"));
-      await expectTextUncut(dialog.locator("h2, p, button"));
+      await expectTextUncut(dialog.locator("h2, #stop-macro-task-body, li, button"));
       await dialog.press("Escape");
       await expect(dialog).toBeHidden();
       expect(commands).toEqual([]);
@@ -181,3 +186,32 @@ for (const { locale, language, tasks } of [
     });
   });
 }
+
+for (const locale of ["zh-CN", "en-US"]) test.describe(`a long stop title in ${locale} at narrow width`, () => {
+  test.use({ locale, viewport: { width: 390, height: 844 } });
+  test("truncates only the title while keeping the scope and controls readable", async ({ page }) => {
+    const title = "核对完整范围与全部已交付结果的宏任务标题：".repeat(10);
+    await page.route(/\/api\/macro-tasks(?:\?|$)/, async route => {
+      const response = await route.fetch();
+      const data = await response.json();
+      const target = data.macroTasks.find((item: { macroTaskId: string }) => item.macroTaskId === MACRO);
+      target.title = title;
+      await route.fulfill({ response, json: data });
+    });
+    await open(page, "#tasks");
+    await page.locator(`[data-macro-task-id="${MACRO}"] button`).click();
+    await page.getByRole("button", { name: locale === "zh-CN" ? "停止宏任务" : "Stop macro task", exact: true }).click();
+    const dialog = page.getByRole("dialog");
+    const titleLine = dialog.locator(".stop-dialog-task-title");
+    await expect(titleLine).toHaveAttribute("title", title);
+    await expect(titleLine).toHaveText(title);
+    await expect(dialog).toHaveAccessibleDescription(new RegExp(title.slice(0, 24)));
+    expect(await titleLine.evaluate(element => {
+      const style = getComputedStyle(element);
+      return style.whiteSpace === "nowrap" && element.scrollWidth > element.clientWidth;
+    })).toBe(true);
+    await expectWholeAndApart(dialog, dialog.locator(":scope > h2, :scope > p, :scope > ul, :scope > .actions"));
+    await expectTextUncut(dialog.locator("h2, #stop-macro-task-body, li, button"));
+    await expectNoSidewaysScroll(page);
+  });
+});

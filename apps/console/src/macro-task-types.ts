@@ -136,5 +136,5 @@ export type MacroTaskStopResult = {
   macroTaskId: string;
   duplicate: boolean;
   /** Acknowledgement is not shutdown evidence; the timeline proves each stop. */
-  results: ReadonlyArray<{ runId: string; state: string; stopped: boolean; [key: string]: unknown }>;
+  results: ReadonlyArray<{ runId: string; state: string; stopped: boolean }>;
 };

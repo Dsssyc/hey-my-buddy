@@ -9,10 +9,14 @@ export function errorOfStopReply(expectedMacroTaskId: string, value: unknown): M
   const results = reply?.results;
   const preserved = new Set(["delivered", "awaiting-host", "failed", "cancelled", "accepted", "concluded"]);
   const valid = !!reply && typeof reply === "object"
+    && !Array.isArray(reply)
+    && Object.keys(reply).sort().join(",") === "duplicate,macroTaskId,results"
     && reply.macroTaskId === expectedMacroTaskId
     && typeof reply.duplicate === "boolean"
     && Array.isArray(results)
     && results.every(result => result && typeof result === "object"
+      && !Array.isArray(result)
+      && Object.keys(result).sort().join(",") === "runId,state,stopped"
       && typeof result.runId === "string" && result.runId.length > 0
       && typeof result.stopped === "boolean"
       && (result.stopped ? result.state === "cancelled" : preserved.has(result.state)))

@@ -494,6 +494,9 @@ h2 .title-source-note { font-size: 10px; font-weight: 500; vertical-align: middl
 .stop-acknowledged, .stop-stopped { color: var(--muted); }
 .detail-stop-status { margin: 8px 0 0; }
 .stop-dialog .actions { flex-direction: column; align-items: stretch; }
+.stop-dialog-task-title { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; }
+.stop-dialog-counts { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 4px 12px; margin: 0; padding-left: 20px; font-size: 12px; color: var(--muted); }
+.stop-dialog-counts li { min-width: 0; }
 @media (max-width: 760px) {
   .stop-dialog { width: calc(100vw - 32px); }
   .stop-dialog .actions button { width: 100%; }

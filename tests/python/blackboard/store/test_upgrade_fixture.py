@@ -119,6 +119,7 @@ class UpgradeFixtureTests(unittest.TestCase):
     def test_schema_upgrade_preserves_stock_and_matches_fresh_structure(self):
         fixture, old = self.restored()
         state = fixture['state']
+        old_stop = self.insert_stop_receipt(fixture, old)
         before = upgrade.idle_snapshot(state)
         expected_settings = router.configuration(old)
         expected_runs = dict(old.execute('SELECT run_id,state FROM workflow_runs'))
@@ -162,8 +163,13 @@ class UpgradeFixtureTests(unittest.TestCase):
         after = upgrade.idle_snapshot(state, event_head=before['eventHead'])
         self.assertEqual(after['schema'], SCHEMA_VERSION)
         self.assertEqual(after['eventHead'], before['eventHead'])
-        self.assertEqual({name: after['fingerprints'][name] for name in before['fingerprints'] if name != 'meta'},
-                         {name: value for name, value in before['fingerprints'].items() if name != 'meta'})
+        self.assertEqual({name: after['fingerprints'][name] for name in before['fingerprints'] if name not in ('meta', 'commands')},
+                         {name: value for name, value in before['fingerprints'].items() if name not in ('meta', 'commands')})
+        self.assertEqual(after['fingerprints']['commands'], before['migratedCommandsFingerprint'])
+        with sqlite3.connect(state / 'board.sqlite3') as migrated:
+            receipt = json.loads(migrated.execute(
+                "SELECT response_json FROM commands WHERE command_id='install-stop-fixture'").fetchone()[0])
+        self.assertEqual(receipt, json.loads(board_upgrade.migrated_stop_response(json.dumps(old_stop))))
         self.assertEqual({relative: (state / relative).read_bytes() for relative in history}, history)
         self.assertEqual(backup.verify(Path(result['backup']['path']))['schema'], fixture['schemaVersion'])
 
@@ -201,7 +207,70 @@ class UpgradeFixtureTests(unittest.TestCase):
             self.assertEqual(upgraded.execute('PRAGMA integrity_check').fetchone()[0], 'ok')
             self.assertEqual(upgraded.execute('PRAGMA foreign_key_check').fetchall(), [])
 
-    def test_macro_stop_receipt_converts_without_losing_historical_root_facts(self):
+    def insert_stop_receipt(self, fixture, connection):
+        old = {'macroTaskId': 'run:' + fixture['stableIds']['cancelled'],
+               'runIds': [fixture['stableIds']['cancelled']],
+               'acceptedRunIds': [fixture['stableIds']['accepted']], 'concludedRunIds': [],
+               'results': [{'runId': fixture['stableIds']['cancelled'], 'state': 'cancelled',
+                            'cancelled': True, 'duplicate': False, 'note': 'Historical stop',
+                            'status': 'cancelled'}], 'duplicate': False}
+        connection.execute('INSERT INTO commands(command_id,kind,request_hash,response_json,created_at)'
+                           ' VALUES(?,?,?,?,?)', ('install-stop-fixture', 'macro_task.stop', 'stop-request-hash',
+                                                  json.dumps(old), '2026-01-01T00:00:00Z'))
+        connection.execute('INSERT INTO commands(command_id,kind,request_hash,response_json,created_at)'
+                           ' VALUES(?,?,?,?,?)', ('retained-command', 'workflow.cancel', 'other-request-hash',
+                                                  '{"cancelled":true}', '2026-01-01T00:00:00Z'))
+        connection.commit()
+        return old
+
+    def test_migration_verification_refuses_changes_beyond_the_exact_stop_conversion(self):
+        changes = (
+            ("UPDATE commands SET response_json='{}' WHERE command_id='install-stop-fixture'",),
+            ("UPDATE commands SET request_hash='tampered' WHERE command_id='install-stop-fixture'",),
+            ("UPDATE commands SET response_json='{}' WHERE command_id='retained-command'",),
+            ("DELETE FROM commands WHERE command_id='retained-command'",),
+            ("UPDATE workflow_runs SET title='tampered' WHERE run_id=?", 'cancelled'),
+        )
+        for index, change in enumerate(changes):
+            with self.subTest(change=change[0]):
+                fixture, connection = self.restored(f'verify-stop-{index}')
+                self.insert_stop_receipt(fixture, connection)
+                before = upgrade.idle_snapshot(fixture['state'])
+                board_upgrade.migrate(fixture['state'])
+                after = upgrade.idle_snapshot(fixture['state'], event_head=before['eventHead'])
+                upgrade.verify_migrated_snapshot(before, after)
+                connection.execute(change[0], (fixture['stableIds'][change[1]],) if len(change) == 2 else ())
+                connection.commit()
+                corrupted = upgrade.idle_snapshot(fixture['state'], event_head=before['eventHead'])
+                with self.assertRaises(BoardError) as caught:
+                    upgrade.verify_migrated_snapshot(before, corrupted)
+                self.assertEqual(caught.exception.code, 'UPGRADE_VERIFY_FAILED')
+
+    def test_started_verification_uses_converted_command_fingerprints_and_rejects_tampering(self):
+        fixture, connection = self.restored('started-stop')
+        self.insert_stop_receipt(fixture, connection)
+        before = upgrade.idle_snapshot(fixture['state'])
+        board_upgrade.migrate(fixture['state'])
+        after = upgrade.idle_snapshot(fixture['state'], event_head=before['eventHead'])
+        upgrade.verify_migrated_snapshot(before, after)
+        target = self.root / 'runtimes' / ('b' * 32)
+        health = {'runtimeContentId': target.name, 'runtimeStable': True, 'schemaVersion': SCHEMA_VERSION}
+        with mock.patch.object(upgrade, 'command', return_value={'leaks': []}):
+            self.assertTrue(upgrade.verify_started(fixture['state'], target, health, after)['retainedDataFingerprints'])
+        for command_id in ('install-stop-fixture', 'retained-command'):
+            original = connection.execute('SELECT response_json FROM commands WHERE command_id=?', (command_id,)).fetchone()[0]
+            connection.execute("UPDATE commands SET response_json='{}' WHERE command_id=?", (command_id,))
+            connection.commit()
+            with self.subTest(command_id=command_id), mock.patch.object(upgrade, 'command') as command:
+                with self.assertRaises(BoardError) as caught:
+                    upgrade.verify_started(fixture['state'], target, health, after)
+                self.assertEqual(caught.exception.code, 'UPGRADE_VERIFY_FAILED')
+                self.assertEqual(caught.exception.details['tables'], ['commands'])
+                command.assert_not_called()
+            connection.execute('UPDATE commands SET response_json=? WHERE command_id=?', (original, command_id))
+            connection.commit()
+
+    def test_macro_stop_receipt_converts_to_the_exact_current_form(self):
         fixture, connection = self.restored()
         stopped = {'runId': 'root-stopped', 'state': 'cancelled', 'status': 'cancelling',
                    'cancelled': True, 'duplicate': False, 'note': 'Stop requested',
@@ -217,7 +286,7 @@ class UpgradeFixtureTests(unittest.TestCase):
         result = json.loads(connection.execute(
             "SELECT response_json FROM commands WHERE command_id='stop-fixture'").fetchone()[0])
         self.assertEqual(result, {'macroTaskId': 'macro-example', 'results': [
-            {**stopped, 'stopped': True},
+            {'runId': 'root-stopped', 'state': 'cancelled', 'stopped': True},
             {'runId': 'root-accepted', 'state': 'accepted', 'stopped': False},
             {'runId': 'root-concluded', 'state': 'concluded', 'stopped': False},
         ], 'duplicate': False})

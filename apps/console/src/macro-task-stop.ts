@@ -54,7 +54,7 @@ export type StopScope = NonNullable<ReturnType<typeof stopScope>>;
  * evidence. A complete read is required before claiming 已停止.
  */
 export function stopStatus(entry: MacroTaskStopEntry | undefined, timeline: MacroTaskTimeline | null): MacroTaskStopStatus | null {
-  const t = (key: keyof typeof import("./i18n/zh/shell").default["macroStop"], options?: Record<string, number>) =>
+  const t = (key: keyof typeof import("./i18n/zh/shell").default["macroStop"], options?: Record<string, number | string>) =>
     i18n.t(`shell:macroStop.${key}`, options);
   if (!entry) return null;
   if (entry.phase === "refused") {
@@ -104,7 +104,9 @@ export function stopStatus(entry: MacroTaskStopEntry | undefined, timeline: Macr
   }
   const roots = stopped.filter(result => rowsById.get(result.runId)?.kind === "micro-task").length;
   const helpers = stopped.length - roots;
-  return { phase: "stopped", label: t("stopped"), detail: t("stoppedCount", { roots, helpers }) };
+  return { phase: "stopped", label: t("stopped"), detail: t("stoppedCount", {
+    roots: t("stoppedRoots", { count: roots }), helpers: t("stoppedHelpers", { count: helpers }),
+  }) };
 }
 
 export function useMacroTaskStop(api: ConsoleApi, snapshot: Snapshot, writesAvailable: boolean, authority: AuthorityLatch | undefined, refresh: () => Promise<unknown>) {

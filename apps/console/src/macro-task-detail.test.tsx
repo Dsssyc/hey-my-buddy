@@ -51,11 +51,12 @@ function deferred(): Pending {
   return { promise, resolve };
 }
 
-type StopOptions = { writesAvailable?: boolean; stopError?: Error; secondMacroTask?: boolean; secondStoppable?: boolean; stoppedTimeline?: MacroTaskTimeline };
+type StopOptions = { writesAvailable?: boolean; stopError?: Error; secondMacroTask?: boolean; secondStoppable?: boolean; stoppedTimeline?: MacroTaskTimeline; title?: string };
 
 function harness(options: StopOptions = {}) {
   const snapshot = snapshotFixture();
   const timeline = macroTaskTimelineFixture();
+  if (options.title) timeline.macroTask.title = options.title;
   const listed = options.secondStoppable
     ? [timeline.macroTask, macroTaskSummary({ macroTaskId: "macro-2", title: "另一个进行中的目标",
         lastActivitySeq: 30, lastActivityAt: "2026-09-26T07:40:00Z", state: "active",
@@ -117,7 +118,7 @@ const stopReplyFor = (macroTaskId: string) => ({ macroTaskId, duplicate: false,
   results: [{ runId: "r4", state: "cancelled", stopped: true }] });
 
 const openMacroTask = async (f: ReturnType<typeof harness>) => {
-  await f.user.click(await screen.findByRole("button", { name: /宏任务时间轴：设计、接口与实现/ }));
+  await f.user.click(await screen.findByRole("button", { name: new RegExp(f.listed[0]!.title.slice(0, 10)) }));
   await screen.findByRole("group", { name: "宏任务时间轴" });
 };
 // Layer mode opens details with Enter or a double click; a single click only pins.
@@ -303,7 +304,7 @@ describe("macro-task-level stop (0.15.1 U4)", () => {
     expect(stop).toHaveProperty("disabled", false);
     await f.user.click(stop);
     expect((await screen.findByRole("dialog", { name: "停止宏任务" })).textContent)
-      .toContain("进行中的 0 个微任务及 1 个协助任务");
+      .toContain("停止 0 个微任务停止 1 个协助任务");
   });
 
   it("requires the explicit confirmation naming the macroTask and its scope before dispatching", async () => {
@@ -314,8 +315,13 @@ describe("macro-task-level stop (0.15.1 U4)", () => {
     const dialog = await screen.findByRole("dialog", { name: "停止宏任务" });
     // The confirmation names the macroTask and the honest scope.
     expect(dialog.textContent).toContain("宏任务时间轴：设计、接口与实现");
-    expect(dialog.textContent).toContain("进行中的 1 个微任务及 0 个协助任务");
-    expect(dialog.textContent).toContain("已交付 1 个、等待 Host 0 个、已验收 2 个保留");
+    expect(dialog.querySelector(".stop-dialog-task-title")?.getAttribute("title")).toBe("宏任务时间轴：设计、接口与实现");
+    expect(dialog.querySelector(".stop-dialog-task-title")?.textContent).toBe("宏任务时间轴：设计、接口与实现");
+    expect(dialog.textContent).toContain("停止 1 个微任务");
+    expect(dialog.textContent).toContain("停止 0 个协助任务");
+    expect(dialog.textContent).toContain("保留 1 个已交付微任务");
+    expect(dialog.textContent).toContain("保留 0 个等待 Host 的微任务");
+    expect(dialog.textContent).toContain("保留 2 个已验收微任务");
     expect(f.api.command).not.toHaveBeenCalled();
     // Cancel submits nothing.
     await f.user.click(within(dialog).getByRole("button", { name: "取消" }));
@@ -328,6 +334,18 @@ describe("macro-task-level stop (0.15.1 U4)", () => {
       expect.objectContaining({ macroTaskId: "macro-1" }), "csrf"));
     const params = (f.api.command as ReturnType<typeof vi.fn>).mock.calls.at(-1)![1] as { commandId: string };
     expect(typeof params.commandId).toBe("string");
+  });
+
+  it("keeps a long macro task title in its own titled line", async () => {
+    stubViewport(true);
+    const title = "核对范围很长的宏任务标题：".repeat(12);
+    const f = harness({ title });
+    await openMacroTask(f);
+    await f.user.click(screen.getByRole("button", { name: "停止宏任务" }));
+    const dialog = await screen.findByRole("dialog", { name: "停止宏任务" });
+    expect(dialog.querySelector(".stop-dialog-task-title")?.getAttribute("title")).toBe(title);
+    expect(dialog.getAttribute("aria-describedby")?.split(" ")).toContain("stop-macro-task-name");
+    expect(dialog.querySelector("#stop-macro-task-body")?.textContent).not.toContain(title);
   });
 
   it("shows 正在停止 from refreshed evidence and settles once stops are confirmed", async () => {

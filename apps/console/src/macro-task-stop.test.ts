@@ -78,13 +78,15 @@ describe("macro task stop scope and evidence", () => {
     expect(stopStatus(entry({ phase: "unknown" }), null)?.detail).toContain("可重试同一请求");
   });
 
-  it("validates the new result contract and preserves extra historical cancellation fields", () => {
+  it("accepts only the current exact result contract", () => {
     const good = { macroTaskId: "macro-1", duplicate: false, results: [
       { runId: "r1", state: "accepted", stopped: false },
-      { runId: "r4", state: "cancelled", stopped: true, cancelled: true },
+      { runId: "r4", state: "cancelled", stopped: true },
     ] };
     expect(errorOfStopReply("macro-1", good)).toEqual(good);
     for (const bad of [null, { ...good, macroTaskId: "other" }, { ...good, duplicate: undefined },
+      { ...good, oldField: true },
+      { ...good, results: [{ runId: "r4", state: "cancelled", stopped: true, cancelled: true }] },
       { ...good, results: [{ runId: "r4", state: "executing", stopped: true }] },
       { ...good, results: [{ runId: "r4", state: "awaiting-host", stopped: true }] },
       { ...good, results: [{ runId: "r4", state: "executing", stopped: false }] },
@@ -97,6 +99,14 @@ describe("macro task stop scope and evidence", () => {
   it("localizes stop status in English", async () => {
     await i18n.changeLanguage("en");
     const confirmed = read({ r4: { state: "cancelled", status: "cancelled", shutdownConfirmed: true } });
-    expect(stopStatus(entry(), confirmed)?.detail).toBe("Stopped 1 micro tasks and 0 helper tasks");
+    expect(stopStatus(entry(), confirmed)?.detail).toBe("Stopped 1 micro task; 0 helper tasks");
+    const two = entry({ result: { macroTaskId: "macro-1", duplicate: false, results: [
+      { runId: "r4", state: "cancelled", stopped: true },
+      { runId: "r7", state: "cancelled", stopped: true },
+    ] } });
+    const second = { ...confirmed, rows: [...confirmed.rows,
+      { ...confirmed.rows.find(row => row.runId === "r4")!, runId: "r7" }] };
+    expect(stopStatus(two, second)?.detail).toBe("Stopped 2 micro tasks; 0 helper tasks");
+    expect(stopStatus(entry(), read())?.detail).toBe("1 stop remains unconfirmed");
   });
 });

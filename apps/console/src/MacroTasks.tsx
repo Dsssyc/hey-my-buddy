@@ -109,12 +109,18 @@ function StopDialog({ summary, scope, onConfirm, onCancel }: {
     return () => document.removeEventListener("keydown", onKey);
   }, [onCancel]);
   const title = displayTitle(summary.titleSource, summary.title).text;
-  const description = t("macroStop.scope", { title, roots: scope.roots, helpers: scope.helpers,
-    delivered: scope.delivered, awaitingHost: scope.awaitingHost, accepted: summary.counts.accepted });
   return <div className="dialog-backdrop" ref={backdrop}>
-    <div className="dialog stop-dialog" role="dialog" aria-modal="true" aria-labelledby="stop-macro-task-title" aria-describedby="stop-macro-task-body">
+    <div className="dialog stop-dialog" role="dialog" aria-modal="true" aria-labelledby="stop-macro-task-title" aria-describedby="stop-macro-task-name stop-macro-task-body stop-macro-task-counts">
       <h2 id="stop-macro-task-title">{t("macroStop.title")}</h2>
-      <p id="stop-macro-task-body">{description}</p>
+      <p id="stop-macro-task-name" className="stop-dialog-task-title" title={title}>{title}</p>
+      <p id="stop-macro-task-body">{t("macroStop.scope")}</p>
+      <ul id="stop-macro-task-counts" className="stop-dialog-counts">
+        <li>{t("macroStop.scopeRoots", { count: scope.roots })}</li>
+        <li>{t("macroStop.scopeHelpers", { count: scope.helpers })}</li>
+        <li>{t("macroStop.scopeDelivered", { count: scope.delivered })}</li>
+        <li>{t("macroStop.scopeAwaitingHost", { count: scope.awaitingHost })}</li>
+        <li>{t("macroStop.scopeAccepted", { count: summary.counts.accepted })}</li>
+      </ul>
       <div className="actions">
         <button ref={cancelRef} type="button" className="button" onClick={onCancel}>{t("macroStop.cancel")}</button>
         <button type="button" className="button danger" onClick={onConfirm}>{t("macroStop.confirm")}</button>
