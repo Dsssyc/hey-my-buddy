@@ -21,25 +21,43 @@ def _result(value):
     value["providerRejection"] = value.pop("quotaFailure")
 
 
-def _mismatch(table, row, field):
-    raise BoardError("UPGRADE_INVALID_BOARD", "A stored copy disagrees with its retained value",
+def _invalid_board(table, row, field):
+    raise BoardError("UPGRADE_INVALID_BOARD", "Stored facts do not match the supported upgrade form",
                      table=table, row=row, field=field)
 
 
 def _routing(value, decision_id):
-    """Check the base's redundant counts before removing them."""
-    basis = value.get("routingBasis")
-    if basis is None:
-        return
-    for count, items in (("excludedCount", "excludedBuddies"), ("coolingCount", "coolingBuddies")):
-        if basis[count] != len(basis[items]):
-            _mismatch("decision_requests", decision_id, "routingBasis." + count)
+    """Unify the pre-cooling and cooling forms retained by the upgrade base."""
+    basis = value.get("routingBasis") if isinstance(value, dict) else None
+    if not isinstance(basis, dict):
+        _invalid_board("decision_requests", decision_id, "routingBasis")
+    required = {"candidateCount", "excludedCount", "excludedBuddies"}
+    cooling = {"coolingCount", "coolingBuddies"}
+    missing = required - basis.keys()
+    unexpected = basis.keys() - required - cooling
+    if missing or unexpected:
+        _invalid_board("decision_requests", decision_id, "routingBasis." + sorted(missing or unexpected)[0])
+    present = cooling & basis.keys()
+    if present and present != cooling:
+        _invalid_board("decision_requests", decision_id, "routingBasis." + next(iter(cooling - present)))
+    if type(basis["candidateCount"]) is not int or basis["candidateCount"] < 0:
+        _invalid_board("decision_requests", decision_id, "routingBasis.candidateCount")
+    counts = [("excludedCount", "excludedBuddies")]
+    if present:
+        counts.append(("coolingCount", "coolingBuddies"))
+    for count, items in counts:
+        if not isinstance(basis[items], list):
+            _invalid_board("decision_requests", decision_id, "routingBasis." + items)
+        if type(basis[count]) is not int or basis[count] != len(basis[items]):
+            _invalid_board("decision_requests", decision_id, "routingBasis." + count)
         del basis[count]
+    if not present:
+        basis["coolingBuddies"] = []
     basis["overloadedModelServices"] = []
 
 
 def upgrade_schema_29_to_30(connection):
-    """Convert base-written projections; sealed Router snapshots stay as written."""
+    """Convert retained database projections; sealed Router snapshots stay as written."""
     changed = {}
     converted = 0
     rows = connection.execute(
@@ -53,16 +71,16 @@ def upgrade_schema_29_to_30(connection):
                 ("log_paths", (json.loads(log_paths) if log_paths is not None else None) or {}, value.get("logPaths") or {}),
                 ("error", error, value.get("error"))):
             if stored != retained:
-                _mismatch("attempts", attempt_id, field)
+                _invalid_board("attempts", attempt_id, field)
         result = value.get("result")
         usage = json.loads(usage) if usage is not None else None
         if isinstance(result, dict) and "tokenUsage" in result:
             if normalize_token_usage(result["tokenUsage"]) != usage:
-                _mismatch("attempts", attempt_id, "token_usage_json")
+                _invalid_board("attempts", attempt_id, "token_usage_json")
             result["tokenUsage"] = usage
         elif usage is not None:
             if not isinstance(result, dict):
-                _mismatch("attempts", attempt_id, "token_usage_json")
+                _invalid_board("attempts", attempt_id, "token_usage_json")
             result["tokenUsage"] = usage
         _result(result)
         if value != original:

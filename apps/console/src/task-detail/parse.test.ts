@@ -91,7 +91,7 @@ describe("the compact collaboration record", () => {
 
   it("reads a current turn that has returned nothing yet, and the routing bounds of the current route", () => {
     const parsed = parseWorkflow(reply({ currentTurn: turn, routing: { status: "completed", decisionId: "d1", source: "single-candidate",
-      constraints: { harness: "dsh" }, requiredCapabilities: ["execution:dsh"], routingBasis: { candidateCount: 1, excludedBuddies: [{ harness: "dsh", provider: "p", model: "m", effort: "off", note: "排除低强度" }], overloadedModelServices: [] } } }), "m1");
+      constraints: { harness: "dsh" }, requiredCapabilities: ["execution:dsh"], routingBasis: { candidateCount: 1, excludedBuddies: [{ harness: "dsh", provider: "p", model: "m", effort: "off", note: "排除低强度" }], overloadedModelServices: [], coolingBuddies: [] } } }), "m1");
     expect(parsed.currentTurn).toMatchObject({ summary: null, remaining: [] });
     expect(parsed.routing?.basis).toEqual({ constraints: { harness: "dsh" }, requiredCapabilities: ["execution:dsh"], candidateCount: 1,
       excluded: [{ buddy: { harness: "dsh", provider: "p", model: "m", effort: "off" }, note: "排除低强度" }], overloadedModelServices: [], cooling: [], preferences: [] });
@@ -182,6 +182,14 @@ describe("what a decision was bound by", () => {
     expect(parseBasis({ decision: { decisionId: "d1" } }, "d1")).toEqual({ constraints: {}, requiredCapabilities: [], candidateCount: null, excluded: [], overloadedModelServices: [], cooling: [], preferences: [] });
     expect(() => parseBasis({ decision }, "d2")).toThrow(ApiError);
     expect(() => parseBasis({ decision: { ...decision, output: { programSelection: { preferences: [{ buddyId: "x", mode: "like", note: null }] } } } }, "d1")).toThrow(ApiError);
+  });
+
+  it("requires every list supplied by the current routing-basis contract", () => {
+    for (const field of ["excludedBuddies", "coolingBuddies", "overloadedModelServices"]) {
+      const basis: Record<string, unknown> = { ...decision.routingBasis };
+      delete basis[field];
+      expect(() => parseBasis({ decision: { ...decision, routingBasis: basis } }, "d1")).toThrow(ApiError);
+    }
   });
 });
 

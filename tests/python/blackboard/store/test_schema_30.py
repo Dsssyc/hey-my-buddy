@@ -88,11 +88,64 @@ class Schema30Tests(unittest.TestCase):
                 basis = original.get("routingBasis")
                 if basis is not None:
                     self.assertEqual(basis.pop("excludedCount"), len(basis["excludedBuddies"]))
-                    self.assertEqual(basis.pop("coolingCount"), len(basis["coolingBuddies"]))
+                    if "coolingCount" in basis:
+                        self.assertEqual(basis.pop("coolingCount"), len(basis["coolingBuddies"]))
+                    else:
+                        basis["coolingBuddies"] = []
                     basis["overloadedModelServices"] = []
                     converted += 1
                 self.assertEqual(json.loads(raw), original)
             self.assertGreater(converted, 0)
+
+    def test_pre_cooling_stock_becomes_the_current_form(self):
+        derived = self.fixture["derivedForms"]
+        self.assertEqual([row["name"] for row in derived], ["pre-provider-cooling-routing-basis"])
+        decision_id = derived[0]["row"]["decisionId"]
+        with closing(sqlite3.connect(self.state / "board.sqlite3")) as connection:
+            original = json.loads(connection.execute("SELECT requested_json FROM decision_requests WHERE decision_id=?",
+                                                     (decision_id,)).fetchone()[0])
+            self.assertEqual(set(original["routingBasis"]), {"candidateCount", "excludedCount", "excludedBuddies"})
+            forms = {frozenset(json.loads(raw)["routingBasis"]) for raw, in connection.execute("SELECT requested_json FROM decision_requests")}
+            self.assertEqual(forms, {frozenset({"candidateCount", "excludedCount", "excludedBuddies"}),
+                                     frozenset({"candidateCount", "excludedCount", "excludedBuddies", "coolingCount", "coolingBuddies"})})
+        schema_upgrade.upgrade_state(self.state)
+        with closing(sqlite3.connect(self.state / "board.sqlite3")) as connection:
+            upgraded = json.loads(connection.execute("SELECT requested_json FROM decision_requests WHERE decision_id=?",
+                                                     (decision_id,)).fetchone()[0])
+        self.assertEqual(upgraded["routingBasis"], {
+            "candidateCount": original["routingBasis"]["candidateCount"],
+            "excludedBuddies": original["routingBasis"]["excludedBuddies"],
+            "coolingBuddies": [], "overloadedModelServices": []})
+
+    def test_incomplete_or_unknown_routing_form_refuses_the_upgrade_without_changes(self):
+        required = {"candidateCount": 2, "excludedCount": 0, "excludedBuddies": []}
+        cooled = {**required, "coolingCount": 0, "coolingBuddies": []}
+        cases = [(None, "routingBasis"),
+                 ({**required, "coolingCount": 0}, "routingBasis.coolingBuddies"),
+                 ({**required, "coolingBuddies": []}, "routingBasis.coolingCount"),
+                 ({**cooled, "extra": []}, "routingBasis.extra"),
+                 ({**cooled, "excludedBuddies": None}, "routingBasis.excludedBuddies"),
+                 ({**cooled, "coolingBuddies": None}, "routingBasis.coolingBuddies"),
+                 ({**cooled, "excludedCount": "0"}, "routingBasis.excludedCount"),
+                 ({**cooled, "candidateCount": None}, "routingBasis.candidateCount"),
+                 *[({key: value for key, value in required.items() if key != missing}, "routingBasis." + missing)
+                   for missing in required]]
+        with closing(sqlite3.connect(self.state / "board.sqlite3")) as connection:
+            decision_id, raw = connection.execute("SELECT decision_id,requested_json FROM decision_requests LIMIT 1").fetchone()
+            for basis, field in cases:
+                with self.subTest(field=field):
+                    request = json.loads(raw)
+                    request["routingBasis"] = basis
+                    connection.execute("UPDATE decision_requests SET requested_json=? WHERE decision_id=?", (json.dumps(request), decision_id))
+                    connection.commit()
+                    before = self.snapshot()
+                    with self.assertRaises(BoardError) as caught:
+                        schema_upgrade.upgrade_state(self.state)
+                    self.assertEqual(caught.exception.code, "UPGRADE_INVALID_BOARD")
+                    self.assertEqual(caught.exception.details, {"table": "decision_requests", "row": decision_id, "field": field})
+                    self.assertEqual(self.snapshot(), before)
+            connection.execute("UPDATE decision_requests SET requested_json=? WHERE decision_id=?", (raw, decision_id))
+            connection.commit()
 
     def test_any_mismatched_attempt_copy_refuses_the_upgrade_without_changes(self):
         corruptions = {"exit_code": 99, "signal": "SIGINT", "log_paths": '{"stderr":"unexpected"}',
@@ -130,7 +183,7 @@ class Schema30Tests(unittest.TestCase):
         for field in ("excludedCount", "coolingCount"):
             with self.subTest(field=field), closing(sqlite3.connect(self.state / "board.sqlite3")) as connection:
                 decision_id, raw = connection.execute(
-                    "SELECT decision_id,requested_json FROM decision_requests WHERE json_type(requested_json,'$.routingBasis')='object' LIMIT 1").fetchone()
+                    "SELECT decision_id,requested_json FROM decision_requests WHERE json_type(requested_json,'$.routingBasis.coolingCount')='integer' LIMIT 1").fetchone()
                 value = json.loads(raw)
                 value["routingBasis"][field] += 1
                 connection.execute("UPDATE decision_requests SET requested_json=? WHERE decision_id=?", (json.dumps(value), decision_id))

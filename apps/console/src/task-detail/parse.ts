@@ -232,7 +232,7 @@ function parseBounds(source: Rec, what: string): Omit<Basis, "preferences"> {
     constraints: partialBuddy(source.constraints ?? {}, what),
     requiredCapabilities: strings(source.requiredCapabilities, what),
     candidateCount: basis ? intOrNull(basis.candidateCount, what) : null,
-    excluded: basis ? list(basis.excludedBuddies ?? [], what).map(item => {
+    excluded: basis ? list(basis.excludedBuddies, what).map(item => {
       const excluded = rec(item, what);
       return { buddy: partialBuddy(excluded, what), note: strOrNull(excluded.note, what)?.trim() || null };
     }) : [],
@@ -241,7 +241,7 @@ function parseBounds(source: Rec, what: string): Omit<Basis, "preferences"> {
       return { harness: str(service.harness, what), provider: str(service.provider, what), model: str(service.model, what),
         nativeCode: str(service.nativeCode, what), turnId: str(service.turnId, what) };
     }) : [],
-    cooling: basis ? list(basis.coolingBuddies ?? [], what).map(item => {
+    cooling: basis ? list(basis.coolingBuddies, what).map(item => {
       const cooled = rec(item, what);
       return { buddy: partialBuddy(cooled, what), coolingUntil: strOrNull(cooled.coolingUntil, what) };
     }) : [],

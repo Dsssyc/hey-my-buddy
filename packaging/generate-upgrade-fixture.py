@@ -942,6 +942,20 @@ def populate(args):
                 else:
                     assert turn_row["state"] == "failed"
                     assert stored_result["result"]["partialWorkspaceSeal"] == seal
+        # Derive the form written before provider cooling (caadf88d). The 24→25
+        # conversion and later upgrades left these two keys absent. Change only
+        # the mutable request projection; sealed Router inputs stay as written.
+        with store.db.write() as connection:
+            row = connection.execute("SELECT decision_id,requested_json FROM decision_requests WHERE request_id=?",
+                                     ("fixture-routing-answered",)).fetchone()
+            historical = json.loads(row["requested_json"])
+            for key in ("coolingCount", "coolingBuddies"):
+                del historical["routingBasis"][key]
+            connection.execute("UPDATE decision_requests SET requested_json=? WHERE decision_id=?",
+                               (json_text(historical), row["decision_id"]))
+            derived_forms = [{"name": "pre-provider-cooling-routing-basis", "table": "decision_requests",
+                "row": {"decisionId": row["decision_id"]}, "sourceRequestId": "fixture-routing-answered",
+                "derivation": "Remove requested_json.routingBasis.coolingCount and coolingBuddies; simulate a pre-caadf88d row retained unchanged by the 24→25 and later conversions."}]
         hashing.close()
         # Base operations created these rows. Export templates keep
         # their original digests; restoration explicitly rebinds the dependency
@@ -983,11 +997,12 @@ def populate(args):
                              source / "uv.lock", source / "packaging/runtime-assets.json"]},
             "stableIds": ids, "stockIds": stock_ids, "taskOnlyStock": task_only_stock,
             "edgeStock": edge_stock,
+            "derivedForms": derived_forms,
             "inquiryStock": inquiry_stock,
             "tableRowCounts": row_counts,
             "routerBuddyIds": PROFILES, "fixedTimestamp": AT,
             "secret": "ab" * 32, "serviceToken": "fixture-service-token",
-            "boundary": "Base BoardService operations, message writers and InquiryBridge journal writers in process; synthetic native discovery, execution results and absent-process evidence; no daemon/IPC/model/account read. All stored rows come from base writers without SQL seeds or historical-form patches. Generation uses a canonical private path and synthetic inode; text templates retain source digests. load_fixture binds private paths, stable path/inode identities and dependent hashes before acceptance; this preparation is not migration or new native execution.",
+            "boundary": "Base BoardService operations, message writers and InquiryBridge journal writers in process; synthetic native discovery, execution results and absent-process evidence; no daemon/IPC/model/account read. All rows originate from the base writers. The only exceptions are forms written by earlier versions, retained at the base and converted by the pending upgrade; each is derived from a base-written row with its derivation recorded. Generation uses a canonical private path and synthetic inode; text templates retain source digests. load_fixture binds private paths, stable path/inode identities and dependent hashes before acceptance; this preparation is not migration or new native execution.",
             "pythonVersion": sys.version.split()[0],
             "pythonInterpreter": "<fixture-root>/base/.venv/bin/python" if args.python is None else "<prepared-python>",
             "restoreInterface": f"load_fixture(state: Path) -> dict; empty private state directory; returns source metadata plus state, fixtureRoot, operations and bindings; schema stays {BASE_SCHEMA}; baseline only after return",
