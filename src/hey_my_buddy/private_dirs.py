@@ -36,7 +36,9 @@ def linked(path: Path) -> bool:
 
 
 def _absolute(path: Path) -> Path:
-    path = Path(windows_path(path, extended=False)) if os.name == 'nt' else Path(path).absolute()
+    path = Path(path).absolute()
+    if os.name == 'nt':
+        path = Path(windows_path(path, extended=False))
     if not is_absolute_path(path):
         raise BoardError('PRIVATE_PATH_UNSAFE', 'Private path must be absolute')
     if '..' in path.parts:

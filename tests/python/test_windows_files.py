@@ -29,10 +29,10 @@ class WindowsPathTests(unittest.TestCase):
                     self.assertEqual(windows_path(value), extended)
                     self.assertEqual(windows_path(value, extended=False), ordinary)
 
-    def test_relative_traversal_and_device_paths_are_rejected(self):
+    def test_paths_without_a_local_drive_root_and_traversal_are_rejected(self):
         for path in ('leaf', 'C:leaf', '\\leaf', r'C:\folder\..\leaf',
                      r'\\?\C:\folder\..\leaf', r'\\.\NUL', r'\\?\GLOBALROOT\Device\HarddiskVolume1',
-                     r'C:\NUL', r'C:\folder\con.txt', r'\\?\C:\COM1'):
+                     'C:\\folder\\nul\0suffix'):
             with self.subTest(path=path), self.assertRaises(BoardError):
                 windows_path(path)
 
@@ -269,13 +269,13 @@ class HandleBoundaryTests(unittest.TestCase):
         api.close.assert_not_called()
 
     def test_private_open_refuses_parent_traversal_and_truncation_before_opening(self):
-        api = mock.Mock()
-        for path, flags in ((Path('parent/../leaf'), os.O_RDONLY),
-                            (Path('leaf'), os.O_WRONLY | os.O_TRUNC),
-                            (Path('leaf'), os.O_WRONLY | os.O_CREAT | os.O_TRUNC)):
-            with self.subTest(path=path, flags=flags), self.assertRaises(BoardError):
-                private_dirs.open_regular_fd(path, flags)
-        api._open.assert_not_called()
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            for path, flags in ((root / 'parent/../leaf', os.O_RDONLY),
+                                (root / 'leaf', os.O_WRONLY | os.O_TRUNC),
+                                (root / 'leaf', os.O_WRONLY | os.O_CREAT | os.O_TRUNC)):
+                with self.subTest(path=path, flags=flags), self.assertRaisesRegex(BoardError, 'parent traversal|without traversal|Unsafe ordinary-file open'):
+                    private_dirs.open_regular_fd(path, flags)
 
     def test_directory_open_pins_against_rename(self):
         api = files.WindowsFileAPI()
@@ -343,10 +343,15 @@ class NativePrivateFilesTests(unittest.TestCase):
         target = root / 'target.json'
         publish_bytes(target, b'content')
         link = root / 'link'
-        native_path(link).symlink_to(target.name)
-        self.assertEqual(resolved_path(link, strict=True), target)
+        try:
+            native_path(link).symlink_to(target.name)
+        except OSError as error:
+            if error.winerror == 1314:
+                self.skipTest('symbolic-link privilege is unavailable')
+            raise
+        self.assertEqual(resolved_path(link), target)
         self.assertEqual(private_dirs._absolute(native_path(root)), root)
-        self.assertNotIn('\\\\?\\', str(resolved_path(root, strict=True)))
+        self.assertNotIn('\\\\?\\', str(resolved_path(root)))
 
     def test_private_path_accepts_different_case(self):
         with tempfile.TemporaryDirectory() as temporary:

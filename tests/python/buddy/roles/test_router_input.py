@@ -56,12 +56,25 @@ class FrozenTreeEntryTests(unittest.TestCase):
         else:
             self.assertEqual(metadata.st_mode & 0o777, 0o555)
         self.assertTrue(router_input.verify(self.manifest, frozen, expected, deadline=time.monotonic() + 120)['unchanged'])
-        native_path(path).chmod(0o644)
-        self.assertTrue(router_input.verify(self.manifest, frozen, expected, deadline=time.monotonic() + 120)['unchanged'])
+        if os.name != 'nt':
+            native_path(path).chmod(0o644)
         native_path(path).write_bytes(b'changed')
         self.assertFalse(router_input.verify(self.manifest, frozen, expected, deadline=time.monotonic() + 120)['unchanged'])
         router_input.discard(frozen)
         self.assertFalse(frozen.exists())
+
+    def test_mode_change_invalidates_the_snapshot(self):
+        directory = self.root / 'mode-mirror'
+        directory.mkdir()
+        frozen, expected = router_input.prepare(self.manifest, directory, deadline=time.monotonic() + 120)
+        path = frozen / 'first.txt'
+        path.chmod(0o444 if os.name == 'nt' else 0o644)
+        try:
+            self.assertFalse(router_input.verify(self.manifest, frozen, expected, deadline=time.monotonic() + 120)['unchanged'])
+        finally:
+            if os.name == 'nt':
+                path.chmod(0o666)
+
 
     def assert_refused_after_materializing_a_file(self, entry, message):
         directory = self.root / "review"

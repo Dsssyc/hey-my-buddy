@@ -12,6 +12,8 @@ from unittest import mock
 from hey_my_buddy.blackboard.tasks import windows_paths, workspace
 from hey_my_buddy.errors import BoardError
 from hey_my_buddy.windows_files import WindowsFileAPI, _link_print_name
+from hey_my_buddy import private_dirs
+from hey_my_buddy.paths import native_path
 
 
 class FakeHandle:
@@ -120,9 +122,6 @@ class FakeWindowsAPI:
     def symlink(self, target, path, *, directory=False):
         os.symlink(target, path, target_is_directory=directory)
 
-    def link(self, source, target):
-        os.link(source, target)
-
 
 class WindowsWorkspaceTests(unittest.TestCase):
     def setUp(self):
@@ -139,6 +138,32 @@ class WindowsWorkspaceTests(unittest.TestCase):
             self.assertIn(self.root, [handle.path for handle in self.api.open])
         self.assertEqual(self.api.open, [])
         self.assertEqual(self.api.events[-1], ("close", str(Path(self.root.anchor))))
+
+    @unittest.skipUnless(os.name == 'nt', 'native Windows directory symbolic links')
+    def test_long_directory_symlinks_preserve_type_with_parent_components(self):
+        root = self.root / 'long-links'
+        self.addCleanup(private_dirs.remove_tree, root)
+        deep = root
+        while len(str(deep)) < 310:
+            deep /= 'directory-' + 'a' * 35
+        private_dirs.ensure_private_dir(deep / 'links')
+        private_dirs.ensure_private_dir(deep / 'target')
+        for operation in ('restore', 'symlink'):
+            with self.subTest(operation=operation):
+                path = deep / 'links' / operation
+                target = '../target'
+                try:
+                    if operation == 'restore':
+                        windows_paths.restore(path, None, symlink_target=target)
+                    else:
+                        windows_paths.symlink(path, target)
+                except OSError as error:
+                    if error.winerror == 1314:
+                        self.skipTest('symbolic-link privilege is unavailable')
+                    raise
+                metadata = native_path(path).lstat()
+                self.assertTrue(metadata.st_file_attributes & windows_paths.FILE_ATTRIBUTE_REPARSE_POINT)
+                self.assertTrue(metadata.st_file_attributes & windows_paths.FILE_ATTRIBUTE_DIRECTORY)
 
     def test_reparse_parent_is_rejected_and_all_handles_close(self):
         middle = self.root / "junction"

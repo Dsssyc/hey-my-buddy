@@ -13,7 +13,7 @@ from pathlib import Path
 from ... import private_files
 from ...windows_files import (WindowsFileAPI, FILE_ATTRIBUTE_REPARSE_POINT,
                               FILE_ATTRIBUTE_DIRECTORY, FILE_TYPE_DISK, IO_REPARSE_TAG_SYMLINK)
-from ...paths import is_absolute_path
+from ...paths import is_absolute_path, native_path
 from ...errors import BoardError
 
 _FORBIDDEN = set('<>:"/\\|?*')
@@ -184,7 +184,8 @@ def restore(path, data, *, symlink_target=None, api=None, repository=None):
     with parent(path, create=True, api=api, repository=repository) as (api, path):
         _remove_held(api, path, missing_ok=True)
         if symlink_target is not None:
-            api.symlink(symlink_target, path, directory=(path.parent / symlink_target).is_dir())
+            target_path = Path(os.path.normpath(path.parent / symlink_target))
+            api.symlink(symlink_target, path, directory=native_path(target_path).is_dir())
         elif data is not None:
             _write_held(api, path, data)
 
@@ -192,7 +193,8 @@ def restore(path, data, *, symlink_target=None, api=None, repository=None):
 def symlink(path, target, *, api=None, repository=None):
     with parent(path, create=True, api=api, repository=repository) as (api, path):
         # Windows needs this type bit at creation; the Git entry remains link text.
-        directory = (path.parent / target).is_dir()
+        target_path = Path(os.path.normpath(path.parent / target))
+        directory = native_path(target_path).is_dir()
         api.symlink(target, path, directory=directory)
 
 

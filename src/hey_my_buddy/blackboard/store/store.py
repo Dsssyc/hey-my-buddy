@@ -14,7 +14,7 @@ import uuid
 from pathlib import Path
 from typing import Any, Callable, Iterable
 
-from ...paths import is_absolute_path
+from ...paths import is_absolute_path, native_path, resolved_path
 from ...protocol import activity as activity_module
 from ..tasks import micro_task
 from ..tasks import scheduling
@@ -1856,15 +1856,15 @@ class BoardStore:
                     "INVALID_ARGUMENT", f"artifacts[{index}].location must be an absolute path", location=location
                 )
             try:
-                resolved = Path(os.path.realpath(location))
-                stat = resolved.stat()
+                resolved = resolved_path(path)
+                stat = native_path(resolved).stat()
             except OSError as exc:
                 raise BoardError(
                     "ARTIFACT_MISSING",
                     "An artifact was claimed but does not exist; no completed result was published",
                     location=location,
                 ) from exc
-            if not resolved.is_file():
+            if not native_path(resolved).is_file():
                 raise BoardError(
                     "ARTIFACT_MISSING",
                     "An artifact location is not a regular file; no completed result was published",
@@ -2997,7 +2997,7 @@ def _file_sha256(path: Path) -> str:
     import hashlib
 
     digest = hashlib.sha256()
-    with path.open("rb") as stream:
+    with native_path(path).open("rb") as stream:
         for chunk in iter(lambda: stream.read(1024 * 1024), b""):
             digest.update(chunk)
     return digest.hexdigest()

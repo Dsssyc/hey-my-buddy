@@ -35,9 +35,7 @@ def _digest(root: Path, deadline: float) -> str:
         for name in sorted(names + files):
             path = root / Path(directory).relative_to(filesystem_root) / name
             value.update(path.relative_to(root).as_posix().encode() + b"\0")
-            # The snapshot binds names, kinds and bytes. Windows cannot express
-            # POSIX execute/read-only modes; permissions are materialization
-            # policy rather than portable input content.
+            value.update(str(native_path(path).lstat().st_mode & 0o777).encode() + b"\0")
             if native_path(path).is_symlink():
                 value.update(b"link\0" + os.readlink(native_path(path)).encode())
             elif native_path(path).is_file():
@@ -181,8 +179,7 @@ def prepare(manifest: dict | None, directory: Path, *, deadline: float) -> tuple
 
 def discard(root: Path) -> None:
     """Remove a Router mirror; the manifest and digests remain the durable evidence."""
-    if root.exists():
-        remove_tree(root)
+    remove_tree(root)
 
 
 def verify(manifest: dict | None, root: Path, expected: str, *, deadline: float) -> dict:

@@ -30,10 +30,9 @@ _RUNTIME_ID = r'[0-9a-f]{32}'
 _BUILD_DIRECTORY = re.compile(r'\.(' + _RUNTIME_ID + r')\.build-.+')
 
 
-def tree_info(path: Path, *, excluded: frozenset[Path] = frozenset()) -> tuple[int, str, bool]:
+def tree_info(path: Path) -> tuple[int, str, bool]:
     """Size and mutation fingerprint without descending into linked entries."""
     path = private_dirs._absolute(path)
-    excluded = frozenset(private_dirs._absolute(item) for item in excluded)
     size = 0
     digest = hashlib.sha256()
     safe = not private_dirs.linked(path)
@@ -53,7 +52,7 @@ def tree_info(path: Path, *, excluded: frozenset[Path] = frozenset()) -> tuple[i
     collect(path)
     for item in sorted(paths):
         stat = native_path(item).lstat()
-        if item not in excluded and not private_dirs.linked(item) and native_path(item).is_file():
+        if not private_dirs.linked(item) and native_path(item).is_file():
             size += stat.st_size
         digest.update(f'{item.relative_to(path)}:{stat.st_ino}:{stat.st_size}:{stat.st_mtime_ns}:{stat.st_mode}\n'.encode())
     return size, digest.hexdigest(), safe
@@ -396,8 +395,8 @@ def inspect(store, *, git_proof: bool = True) -> dict:
     rows = []
     orphaned, commands, known = process_inventory(state)
     now = time.time()
-    def add(category, path, reasons, *, excluded=frozenset(), **metadata):
-        size, fingerprint, safe = tree_info(path, excluded=excluded)
+    def add(category, path, reasons, **metadata):
+        size, fingerprint, safe = tree_info(path)
         if not safe:
             reasons = [*reasons, 'linked-path']
         if not native_path(path).exists() and not private_dirs.linked(path):

@@ -156,9 +156,6 @@ class WindowsFileAPI:
     def symlink(self, target, path, *, directory=False):
         os.symlink(target, windows_path(path), target_is_directory=directory)
 
-    def link(self, source, target):
-        os.link(windows_path(source), windows_path(target))
-
 
 READ_CONTROL = 0x00020000
 FILE_SHARE_DELETE = 0x00000004
