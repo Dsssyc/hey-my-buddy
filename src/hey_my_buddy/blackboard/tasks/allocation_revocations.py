@@ -1,4 +1,5 @@
 """Durable authority for finishing a revoked allocation's empty directory."""
+import errno
 import os
 
 from ...paths import native_path
@@ -40,22 +41,40 @@ def finish(store, directory):
     rmdir and the row deletion, so a new generation cannot publish a revocation
     between them. It is released between allocations, never held by SQLite.
     """
-    if os.name == 'nt':
-        from ...windows_files import unlink_regular_file
-        unlink_regular_file(directory / '.lock')
-    else:
-        native_path(directory / '.lock').unlink()
-    with storage.locked(store):
+    try:
         if os.name == 'nt':
-            from ...windows_files import remove_directory
-            remove_directory(directory)
+            from ...windows_files import unlink_regular_file
+            unlink_regular_file(directory / '.lock')
         else:
-            native_path(directory).rmdir()
+            native_path(directory / '.lock').unlink()
+    except FileNotFoundError:
+        return forget_removed(store, directory)
+    with storage.locked(store):
+        try:
+            if os.name == 'nt':
+                from ...windows_files import remove_directory
+                remove_directory(directory)
+            else:
+                native_path(directory).rmdir()
+        except FileNotFoundError:
+            # Directory absence completes this physical step.
+            pass
+        except OSError as error:
+            if error.errno in (errno.ENOTEMPTY, errno.EEXIST):
+                return False
+            raise
         clear(store, directory)
+    return True
 
 
 def forget_removed(store, directory):
     """Recover death after rmdir; a recreated directory keeps its old row."""
+    if workspace._path_present(directory):
+        return False
+    with store.db.read() as connection:
+        if connection.execute('SELECT 1 FROM allocation_revocations WHERE allocation_id=?',
+                              (directory.name,)).fetchone() is None:
+            return True
     with storage.locked(store):
         if not workspace._path_present(directory):
             clear(store, directory)

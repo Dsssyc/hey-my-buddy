@@ -67,7 +67,7 @@ class AllocationRevocationTests(BoardTestCase):
         self.assertFalse(directory.exists())
         self.assertIsNone(self.row(directory))
 
-    def test_failure_after_lock_unlink_keeps_row_until_next_reclamation(self):
+    def test_nonempty_directory_after_lock_unlink_keeps_row_until_next_reclamation(self):
         directory = self.shell('after-lock-unlink')
         real_rmdir = Path.rmdir
 
@@ -87,10 +87,12 @@ class AllocationRevocationTests(BoardTestCase):
         self.assertFalse((directory / 'request.json').exists())
         self.assertFalse((directory / '.lock').exists())
         self.assertEqual(self.row(directory)['request_id'], 'after-lock-unlink')
+        self.assertEqual(self.store.service_issues(), [])
 
         Reclamation(self.store).run()
         self.assertFalse(directory.exists())
         self.assertIsNone(self.row(directory))
+        self.assertEqual(self.store.service_issues(), [])
 
     def test_interruption_before_request_unlink_keeps_the_record_for_retry(self):
         directory = self.shell('before-request-unlink')
@@ -148,6 +150,51 @@ class AllocationRevocationTests(BoardTestCase):
         self.assertFalse(directory.exists())
         self.assertIsNone(self.row(directory))
 
+    def test_disappearing_lock_is_busy_for_inventory_and_maintenance(self):
+        inventory_shell = self.shell('inventory-lock-open-race')
+        maintenance_shell = self.shell('maintenance-lock-open-race')
+        other_shell = self.shell('unrelated-shell')
+        real_open = workspace.private_dirs.open_regular_fd
+        removed = []
+
+        def remove_before_open(path, flags, mode=0o600):
+            if path in (inventory_shell / '.lock', maintenance_shell / '.lock') and path not in removed:
+                path.unlink()
+                removed.append(path)
+            return real_open(path, flags, mode)
+
+        with patch.object(workspace.private_dirs, 'open_regular_fd', side_effect=remove_before_open):
+            inventory = allocation_inventory(self.store, [inventory_shell])
+            Reclamation(self.store).run()
+
+        self.assertEqual(removed, [inventory_shell / '.lock', maintenance_shell / '.lock'])
+        self.assertEqual(len(inventory), 1)
+        self.assertIn('WORKSPACE_BUSY', inventory[0]['reasons'])
+        self.assertTrue((inventory_shell / 'request.json').is_file())
+        self.assertTrue((maintenance_shell / 'request.json').is_file())
+        self.assertFalse(other_shell.exists())
+        self.assertEqual(self.store.service_issues(), [])
+
+    def test_missing_lock_leaf_open_is_reported_as_busy(self):
+        directory = self.shell('missing-lock-leaf-open')
+        lock = directory / '.lock'
+        real_open = workspace.private_dirs.open_regular_fd
+        removed = []
+
+        def remove_before_open(path, flags, mode=0o600):
+            if path == lock:
+                path.unlink()
+                removed.append(path)
+            return real_open(path, flags, mode)
+
+        with patch.object(workspace.private_dirs, 'open_regular_fd', side_effect=remove_before_open):
+            with self.assertRaises(BoardError) as caught:
+                with workspace._lock(directory, create=False):
+                    self.fail('Missing lock leaf was accepted')
+        self.assertEqual(caught.exception.code, 'WORKSPACE_BUSY')
+        self.assertEqual(removed, [lock])
+        self.assertTrue((directory / 'request.json').is_file())
+
     def test_new_generation_between_unlink_and_rmdir_survives_failed_old_finish(self):
         directory = self.shell('generation-race', request=False)
         self.record(directory, 'generation-race')
@@ -185,9 +232,7 @@ class AllocationRevocationTests(BoardTestCase):
         else:
             unlink_patch = patch.object(Path, 'unlink', new=replace_lock)
         with workspace._lock(directory, create=False), unlink_patch:
-            with self.assertRaises(OSError) as caught:
-                allocation_revocations.finish(self.store, directory)
-        self.assertIn(caught.exception.errno, (errno.ENOTEMPTY, errno.EEXIST))
+            self.assertIs(allocation_revocations.finish(self.store, directory), False)
         self.assertEqual(created, [True])
         self.assertIsNone(self.row(directory))
         self.assertEqual({path.name for path in directory.iterdir()},
@@ -195,6 +240,10 @@ class AllocationRevocationTests(BoardTestCase):
         Reclamation(self.store).run()
         self.assertEqual((directory / 'new-file.txt').read_text(encoding='utf-8'), 'new generation')
         self.assertEqual(workspace._record(directory / 'request.json')['requestId'], 'generation-race')
+        self.assertEqual({path.name for path in directory.iterdir()},
+                         {'.lock', 'request.json', 'new-file.txt'})
+        self.assertIsNone(self.row(directory))
+        self.assertEqual(self.store.service_issues(), [])
 
     def test_replaced_open_lock_descriptor_is_rejected_as_busy(self):
         directory = self.shell('replaced-descriptor')

@@ -47,9 +47,10 @@ class WindowsWorkspacePrivateRecordsTests(unittest.TestCase):
         self.assertFalse((self.root / "elsewhere").exists())
 
     def test_existing_lock_does_not_create_a_missing_file(self):
-        with self.assertRaises(FileNotFoundError):
+        with self.assertRaises(BoardError) as caught:
             with workspace._lock(self.root, create=False):
                 pass
+        self.assertEqual(caught.exception.code, 'WORKSPACE_BUSY')
         self.assertFalse((self.root / ".lock").exists())
         with workspace._lock(self.root):
             pass

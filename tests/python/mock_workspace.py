@@ -151,7 +151,7 @@ class MockWorkspace:
     def scope_conflicts(self, state_dir, manifest, task_id, attempt_id):
         return []
 
-    def prepare(self, state_dir: Path, request_id: str, intent: dict, *, _preparation=None) -> dict:
+    def prepare(self, state_dir: Path, request_id: str, intent: dict, *, _preparation=None, before_prepare=None) -> dict:
         self.prepare_calls.append((request_id, dict(intent)))
         if request_id in self.fail_prepare:
             raise BoardError("WORKSPACE_PREPARE_FAILED", "injected prepare failure", requestId=request_id)

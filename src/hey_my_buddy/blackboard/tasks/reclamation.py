@@ -459,13 +459,11 @@ class Reclamation:
                                 with locked(store):
                                     allocation_plan(store, item)
                                     if not item['reasons']:
-                                        def record():
-                                            allocation_revocations.record(store, directory, item['requestId'])
+                                        allocation_revocations.record(store, directory, item['requestId'])
                                         if item['manifest'] is None:
-                                            record()
                                             (directory / 'request.json').unlink(missing_ok=item['revoked'])
                                         else:
-                                            workspace.revoke_submission(item['plan'], before_request_remove=record)
+                                            workspace.revoke_submission(item['plan'])
                                 if not item['reasons']:
                                     allocation_revocations.finish(store, directory)
                         self._remember_tasks(directory, item['tasks'])

@@ -538,11 +538,10 @@ def _write_once(path, data):
 def _lock(directory, *, create=True):
     flags = os.O_RDWR | (os.O_CREAT if create else 0)
     path = directory / ".lock"
-    if _WINDOWS:
-        from ...windows_files import open_regular_fd
-        descriptor = open_regular_fd(private_dirs._absolute(path), flags, delete=True)
-    else:
+    try:
         descriptor = private_dirs.open_regular_fd(path, flags)
+    except FileNotFoundError as error:
+        raise BoardError("WORKSPACE_BUSY", "The workspace lock was removed while opening it") from error
     try:
         try:
             locking.lock(descriptor, blocking=False)
@@ -1044,7 +1043,7 @@ def submission_revoke_plan(state_dir, manifest):
         return plan
 
 
-def revoke_submission(plan, *, before_request_remove):
+def revoke_submission(plan):
     """Remove a proven, unregistered allocation, preserving sweep evidence on failure.
 
     The original allocation lock is held and retained board uses were checked.
@@ -1052,7 +1051,7 @@ def revoke_submission(plan, *, before_request_remove):
     record the orphan sweep needs. All remaining removals follow creation in
     reverse order.
     The caller finishes the lock-file and directory removal under this same
-    lock, after persisting the revocation before removing its request.
+    lock. The caller has persisted the revocation before any removal.
     """
     with _errors():
         manifest, directory = plan["manifest"], plan["directory"]
@@ -1072,7 +1071,6 @@ def revoke_submission(plan, *, before_request_remove):
         for suffix, commit in (("retained/staged", manifest["snapshot"]["stagedCommit"]),
                                ("retained/input", manifest["inputCommit"])):
             _git(repository, "update-ref", "--no-deref", "-d", prefix + suffix, commit)
-        before_request_remove()
         (directory / "request.json").unlink()
         return {"removed": True}
 
@@ -1114,9 +1112,10 @@ def _borrowed_submission_allocation(state_dir, intent):
                                  facts.st_dev, facts.st_ino, facts.st_mode)
 
 
-def prepare(state_dir: Path, request_id: str, intent: dict, *, _preparation=None) -> dict:
+def prepare(state_dir: Path, request_id: str, intent: dict, *, _preparation=None, before_prepare=None) -> dict:
     """Prepare once, then replay the same request's frozen input manifest."""
-    with submission_preparation(state_dir, request_id, intent, _preparation=_preparation) as prepared:
+    with submission_preparation(state_dir, request_id, intent, _preparation=_preparation,
+                                before_prepare=before_prepare) as prepared:
         return prepared["manifest"]
 
 

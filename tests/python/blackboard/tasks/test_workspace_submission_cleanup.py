@@ -34,8 +34,8 @@ class SubmissionCleanupTests(workflow_tests.WorkflowTestCase):
             plan = workspace.submission_revoke_plan(self.directory, manifest)
             self.assertEqual(plan["reasons"], [])
             with storage.locked(board.store):
-                self.assertTrue(workspace.revoke_submission(plan, before_request_remove=lambda:
-                    allocation_revocations.record(board.store, directory, "revoke-missing-new-checkout"))["removed"])
+                allocation_revocations.record(board.store, directory, "revoke-missing-new-checkout")
+                self.assertTrue(workspace.revoke_submission(plan)["removed"])
             allocation_revocations.finish(board.store, directory)
         self.assertFalse(directory.exists())
 
@@ -326,6 +326,13 @@ class SubmissionCleanupTests(workflow_tests.WorkflowTestCase):
                 if kind == 'worktree':
                     self.assertTrue((self.allocation(request) / 'checkout').exists())
                 self.assertEqual(len(self.git(self.repo, 'for-each-ref', 'refs/hey-my-buddy/workspaces/' + self.allocation(request).name).splitlines()), 5)
+                self.assertEqual(list(self.allocation(request).glob('submission-cleanup-*.json')), [])
+                self.git(self.repo, 'update-ref', '-d',
+                         'refs/hey-my-buddy/workspaces/' + self.allocation(request).name + '/unknown')
+                # A fresh inventory re-proves the repaired reference set.
+                Reclamation(board.store).run()
+                self.assert_no_snapshot(request)
+                self.assertEqual(board.store.service_issues(), [])
 
     def test_non_reservation_admission_error_revokes_both_kinds_and_keeps_source(self):
         board = self.board()
@@ -339,15 +346,13 @@ class SubmissionCleanupTests(workflow_tests.WorkflowTestCase):
                         with workspace._lock(plan['directory'], create=False):
                             self.fail('preparation lock was released before revocation')
                     self.assertEqual(busy.exception.code, 'WORKSPACE_BUSY')
-                    before_remove = kwargs['before_request_remove']
-                    def recorded_before_remove():
-                        before_remove()
-                        self.assertTrue((plan['directory'] / 'request.json').is_file())
-                        with board.store.db.read() as connection:
-                            self.assertEqual(connection.execute(
-                                'SELECT request_id FROM allocation_revocations WHERE allocation_id=?',
-                                (plan['directory'].name,)).fetchone()[0], request)
-                    kwargs['before_request_remove'] = recorded_before_remove
+                    self.assertTrue((plan['directory'] / 'request.json').is_file())
+                    self.assertTrue((plan['directory'] / 'manifest.json').is_file())
+                    self.assertTrue((plan['directory'] / 'input.json').is_file())
+                    with board.store.db.read() as connection:
+                        self.assertEqual(connection.execute(
+                            'SELECT request_id FROM allocation_revocations WHERE allocation_id=?',
+                            (plan['directory'].name,)).fetchone()[0], request)
                     return original_revoke(plan, **kwargs)
                 with patch.object(board.store, 'task_submit', side_effect=error), \
                         patch.object(workspace, 'revoke_submission', side_effect=revoke_with_original_lock):
@@ -394,6 +399,57 @@ class SubmissionCleanupTests(workflow_tests.WorkflowTestCase):
                             'SELECT 1 FROM allocation_revocations WHERE allocation_id=?',
                             (directory.name,)).fetchone())
 
+    def test_storage_busy_before_revoke_preserves_complete_allocation_for_maintenance(self):
+        from hey_my_buddy.blackboard.tasks.reclamation import Reclamation
+        board = self.board()
+        for kind in ('existing', 'worktree'):
+            with self.subTest(kind=kind):
+                request = 'busy-before-revoke-' + kind
+                directory = self.allocation(request)
+                error = BoardError('ADMISSION_FAILED', 'controlled admission rejection')
+                captured = {}
+                def reject(*args, **kwargs):
+                    captured['files'] = {str(path.relative_to(directory)): path.read_bytes()
+                                         for path in directory.rglob('*') if path.is_file()}
+                    captured['refs'] = self.git(self.repo, 'for-each-ref',
+                        'refs/hey-my-buddy/workspaces/' + directory.name)
+                    raise error
+                with storage.locked(board.store), patch.object(board.store, 'task_submit', side_effect=reject):
+                    with self.assertRaises(BoardError) as caught:
+                        self.rejected(board, request=request, executionWorkspace={'kind': kind, 'access': 'write'})
+                    self.assertIs(caught.exception, error)
+                    self.assertEqual(error.details['submissionCleanup']['cleanupError']['code'], 'STORAGE_BUSY')
+                    self.assertEqual({str(path.relative_to(directory)): path.read_bytes()
+                                      for path in directory.rglob('*') if path.is_file()}, captured['files'])
+                    self.assertEqual(self.git(self.repo, 'for-each-ref',
+                        'refs/hey-my-buddy/workspaces/' + directory.name), captured['refs'])
+                    self.assertTrue((directory / 'manifest.json').is_file())
+                    self.assertEqual(list(directory.glob('submission-cleanup-*.json')), [])
+                    with board.store.db.read() as connection:
+                        self.assertIsNone(connection.execute(
+                            'SELECT 1 FROM allocation_revocations WHERE allocation_id=?',
+                            (directory.name,)).fetchone())
+                Reclamation(board.store).run()
+                self.assert_no_snapshot(request)
+                self.assertEqual(board.store.service_issues(), [])
+
+    def test_already_completed_revoke_reports_removed_without_cleanup_error(self):
+        board = self.board()
+        error = BoardError('ADMISSION_FAILED', 'controlled admission rejection')
+        finish = allocation_revocations.finish
+        def completed_elsewhere(store, directory):
+            self.assertTrue(finish(store, directory))
+            with storage.locked(store):
+                return finish(store, directory)
+        with patch.object(board.store, 'task_submit', side_effect=error), \
+                patch.object(allocation_revocations, 'finish', side_effect=completed_elsewhere):
+            with self.assertRaises(BoardError) as caught:
+                self.rejected(board, request='already-completed-revoke')
+        self.assertIs(caught.exception, error)
+        self.assertTrue(error.details['submissionCleanup']['removed'])
+        self.assertNotIn('cleanupError', error.details['submissionCleanup'])
+        self.assert_no_snapshot('already-completed-revoke')
+
     def test_cleanup_failure_preserves_original_error_and_recovery_manifest(self):
         board = self.board()
         for kind in ('existing', 'worktree'):
@@ -414,7 +470,11 @@ class SubmissionCleanupTests(workflow_tests.WorkflowTestCase):
                 self.assertEqual((directory / 'checkout').is_dir(), kind == 'worktree')
                 manifest = json.loads((directory / 'manifest.json').read_text(encoding='utf-8'))
                 self.assertEqual(manifest['kind'], kind)
-                self.assertEqual(json.loads(next(directory.glob('submission-cleanup-*.json')).read_text(encoding='utf-8')), facts)
+                self.assertEqual(list(directory.glob('submission-cleanup-*.json')), [])
+                with board.store.db.read() as connection:
+                    self.assertEqual(connection.execute(
+                        'SELECT request_id FROM allocation_revocations WHERE allocation_id=?',
+                        (directory.name,)).fetchone()[0], request)
                 self.assert_no_registration(board, request)
 
     def test_unconfirmed_helper_transfer_revokes_both_kinds_in_the_same_batch(self):
@@ -567,7 +627,7 @@ class SubmissionCleanupTests(workflow_tests.WorkflowTestCase):
         self.assertFalse((self.allocation() / 'checkout').exists())
         self.assert_no_registration(board)
 
-    def test_failed_git_registration_removal_keeps_allocation_identity_and_admission_error(self):
+    def test_failed_git_registration_removal_preserves_proof_and_retries_after_admission_error(self):
         board = self.board()
         original_git = workspace._git
         def removal_failure(root, *args, **kwargs):
@@ -598,14 +658,20 @@ class SubmissionCleanupTests(workflow_tests.WorkflowTestCase):
         backlink = Path((git_dir / 'gitdir').read_text(encoding='utf-8').strip())
         self.assertEqual((git_dir / backlink).resolve(), directory / 'checkout' / '.git')
         self.assertTrue(workspace.deletion_inspect(self.directory, manifest)['eligible'])
+        self.assertEqual(list(directory.glob('submission-cleanup-*.json')), [])
+        with board.store.db.read() as connection:
+            self.assertIsNotNone(connection.execute(
+                'SELECT 1 FROM allocation_revocations WHERE allocation_id=?',
+                (directory.name,)).fetchone())
         from hey_my_buddy.blackboard.tasks.reclamation import Reclamation
         Reclamation(board.store).run()
-        self.assertTrue(directory.exists())
-        self.assertFalse((directory / 'checkout').exists())
-        planned = storage.inspect(board.store)
-        retained = next(row for row in planned['candidates'] if row['path'] == str(directory))
-        self.assertIn('additional-evidence', retained['reasons'])
-        self.assertFalse(retained['eligible'])
+        self.assert_no_snapshot()
+        self.assertIsNone(workspace._worktree_record(self.repo, directory / 'checkout'))
+        with board.store.db.read() as connection:
+            self.assertIsNone(connection.execute(
+                'SELECT 1 FROM allocation_revocations WHERE allocation_id=?',
+                (directory.name,)).fetchone())
+        self.assertEqual(board.store.service_issues(), [])
         self.assert_no_registration(board)
 
     def test_changed_new_checkout_is_retained_after_admission_rejection(self):
@@ -633,7 +699,8 @@ class SubmissionCleanupTests(workflow_tests.WorkflowTestCase):
         planned = storage.inspect(board.store)
         retained = next(row for row in planned['candidates'] if row['path'] == str(self.allocation() / 'checkout'))
         self.assertFalse(retained['eligible'])
-        self.assertIn('additional-evidence', retained['reasons'])
+        self.assertIn('unsealed-changes', retained['reasons'])
+        self.assertEqual(list(self.allocation().glob('submission-cleanup-*.json')), [])
         self.assertEqual(board.store.service_issues(), [])
 
     def test_reset_failure_revokes_new_checkout(self):
