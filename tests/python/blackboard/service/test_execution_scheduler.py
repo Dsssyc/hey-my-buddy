@@ -782,14 +782,14 @@ class ExecutionObservationTests(unittest.TestCase):
             scheduler = ExecutionScheduler(Mock(store=store), live_registry=self.live_registry)
             claim, location = self.recovered(root)
             client = self.client()
-            with self.observing(scheduler, claim, location, client) as waits:
+            with patch('hey_my_buddy.blackboard.service.execution_scheduler.time.monotonic', return_value=100.0), \
+                 self.observing(scheduler, claim, location, client) as waits:
                 self.assertIsNone(waits.get(timeout=2))
                 fsync_json(location.budget_path, {"binding": location.execution_binding,
-                                                "deadline": time.monotonic() + 60})
+                                                "deadline": 160.0})
                 scheduler.wake()
                 timeout = waits.get(timeout=2)
-                self.assertGreater(timeout, 58)
-                self.assertLessEqual(timeout, 60)
+                self.assertEqual(timeout, 60.0)
                 client.connect.assert_called_once()
                 client.stop.assert_not_called()
 

@@ -17,7 +17,7 @@ SPEC.loader.exec_module(sharding)
 
 
 class ShardSelectionTests(unittest.TestCase):
-    def split(self, costs, count, *, delays=None, slowdown=1, workers=2):
+    def split(self, costs, count, *, workers=2):
         with tempfile.TemporaryDirectory(prefix="ci-shards-") as raw:
             root = Path(raw)
             (root / ".github").mkdir()
@@ -33,8 +33,6 @@ class ShardSelectionTests(unittest.TestCase):
             with (chdir(root), redirect_stdout(io.StringIO()),
                   patch.dict(os.environ, {"CHECK_OS": "fixture", "CHECK_SHARDS": str(count),
                                           "CHECK_WORKERS": str(workers),
-                                          "CHECK_START_DELAYS": json.dumps(delays or [0] * count),
-                                          "CHECK_SLOWDOWN": str(slowdown),
                                           "RUNNER_TEMP": str(root), "GITHUB_ENV": str(root / "environment")}),
                   patch.object(sharding.os, "cpu_count", side_effect=AssertionError(
                       "shard allocation must use the workflow's shared worker count"))):
@@ -47,7 +45,7 @@ class ShardSelectionTests(unittest.TestCase):
     def test_per_system_shard_counts_cover_every_file_exactly_once(self):
         costs = [6, 5, 6, 6, 4, 2, 10, 4, 1, 1]
         expected = [f"tests/python/test_{index:02}.py" for index in range(len(costs))]
-        for count in (1, 2, 5, 8, 9):
+        for count in (1, 2, 6, 7):
             with self.subTest(shards=count):
                 manifests = self.split(costs, count)
                 self.assertEqual(sorted(path for item in manifests for path in item["files"]), expected)
@@ -68,19 +66,6 @@ class ShardSelectionTests(unittest.TestCase):
             self.assertLessEqual(max(lanes), 12)
             self.assertEqual(manifest["estimated-wall-seconds"], max(lanes))
             self.assertEqual(manifest["workers"], 2)
-
-    def test_queued_shards_get_less_work_before_a_slow_runner_extends_the_tail(self):
-        # Two jobs start immediately; two more get their slots ten seconds
-        # later. Equal-size shards finish at 28s on a 1.5x slower runner.
-        manifests = self.split([6] * 12, 4, delays=[0, 0, 10, 10], slowdown=1.5)
-        self.assertEqual(len({path for item in manifests for path in item["files"]}), 12)
-        for manifest in manifests:
-            lanes = [0, 0]
-            for _path in manifest["files"]:
-                lanes[lanes.index(min(lanes))] += 6
-            finish = manifest["planned-delay-seconds"] + 1.5 * max(lanes)
-            self.assertLessEqual(finish, 19)
-            self.assertEqual(manifest["estimated-finish-seconds"], finish)
 
     def test_parallel_slots_do_not_make_additional_heavy_files_free(self):
         manifests = self.split([100, 90, 80, 70, 60, 50, 40, 30, 20, 10], 4, workers=4)

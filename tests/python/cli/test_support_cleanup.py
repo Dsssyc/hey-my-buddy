@@ -6,6 +6,7 @@ import os
 import runpy
 import subprocess
 import sys
+import tempfile
 import textwrap
 import unittest
 from pathlib import Path
@@ -41,17 +42,22 @@ class FixtureCleanupTests(unittest.TestCase):
     def test_failed_process_evidence_keeps_identity_and_only_private_references(self):
         target = Mock(pid=123)
         target.create_time.return_value = 42.0
-        with patch('hey_my_buddy.cli.checks.observe_process_argv', return_value=(
-                [(target, ['python', '/fixture/worker', 'private-token'])], [])), \
-             patch('hey_my_buddy.cli.checks.observe_open_paths', return_value=(
-                {123: {'/fixture/runtime/native.so', '/outside/private-file'}}, None, True, [])):
-            evidence = support.private_process_failure_evidence(
-                Path('/fixture'), [{'pid': 123, 'source': 'openFiles', 'executable': 'python'}])
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary) / 'fixture'
+            worker = str(directory / 'worker')
+            native = str(directory / 'runtime' / 'native.so')
+            outside = str(directory.parent / 'outside-private-file')
+            with patch('hey_my_buddy.cli.checks.observe_process_argv', return_value=(
+                    [(target, ['python', worker, 'private-token'])], [])), \
+                 patch('hey_my_buddy.cli.checks.observe_open_paths', return_value=(
+                    {123: {native, outside}}, None, True, [])):
+                evidence = support.private_process_failure_evidence(
+                    directory, [{'pid': 123, 'source': 'openFiles', 'executable': 'python'}])
         self.assertEqual(evidence['identitySnapshot'], [
-            {'pid': 123, 'createTime': 42.0, 'rootArguments': ['/fixture/worker']}])
-        self.assertEqual(evidence['rootReferences'], {'123': ['/fixture/runtime/native.so']})
+            {'pid': 123, 'createTime': 42.0, 'rootArguments': [worker]}])
+        self.assertEqual(evidence['rootReferences'], {'123': [native]})
         self.assertNotIn('private-token', json.dumps(evidence))
-        self.assertNotIn('/outside', json.dumps(evidence))
+        self.assertNotIn('outside-private-file', json.dumps(evidence))
 
     def test_daemon_fixture_cooperates_on_windows_and_keeps_posix_sigterm(self):
         for platform, fail_stop in (("nt", False), ("nt", True), ("posix", False)):

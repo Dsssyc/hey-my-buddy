@@ -215,47 +215,40 @@ jobs:
           if-no-files-found: error
 
   python:
-    name: &python-name Python (${{ matrix.os }}, shard ${{ matrix.shard }}/${{ matrix.shards }})
+    name: Python (${{ matrix.os }}, shard ${{ matrix.shard }}/${{ matrix.shards }})
     runs-on: ${{ matrix.os }}
     timeout-minutes: 30
     strategy:
       fail-fast: false
-      max-parallel: 16
       matrix:
-        # First wave: 16 Python jobs plus frontend (1) and browser (3).
+        # 16 Python jobs plus frontend (1) and browser (3) fit in 20 slots.
         include:
           - {os: ubuntu-latest, shard: 1, shards: 1}
           - {os: macos-latest, shard: 1, shards: 2}
           - {os: macos-latest, shard: 2, shards: 2}
-          - {os: windows-latest, shard: 1, shards: 9}
-          - {os: windows-latest, shard: 2, shards: 9}
-          - {os: windows-latest, shard: 3, shards: 9}
-          - {os: windows-latest, shard: 4, shards: 9}
-          - {os: windows-latest, shard: 5, shards: 9}
-          - {os: windows-11-arm, shard: 1, shards: 8}
-          - {os: windows-11-arm, shard: 2, shards: 8}
-          - {os: windows-11-arm, shard: 3, shards: 8}
-          - {os: windows-11-arm, shard: 4, shards: 8}
-          - {os: windows-11-arm, shard: 5, shards: 8}
-          - {os: windows-11-arm, shard: 6, shards: 8}
-          - {os: windows-11-arm, shard: 7, shards: 8}
-          - {os: windows-11-arm, shard: 8, shards: 8}
-    env: &python-environment
+          - {os: windows-latest, shard: 1, shards: 7}
+          - {os: windows-latest, shard: 2, shards: 7}
+          - {os: windows-latest, shard: 3, shards: 7}
+          - {os: windows-latest, shard: 4, shards: 7}
+          - {os: windows-latest, shard: 5, shards: 7}
+          - {os: windows-latest, shard: 6, shards: 7}
+          - {os: windows-latest, shard: 7, shards: 7}
+          - {os: windows-11-arm, shard: 1, shards: 6}
+          - {os: windows-11-arm, shard: 2, shards: 6}
+          - {os: windows-11-arm, shard: 3, shards: 6}
+          - {os: windows-11-arm, shard: 4, shards: 6}
+          - {os: windows-11-arm, shard: 5, shards: 6}
+          - {os: windows-11-arm, shard: 6, shards: 6}
+    env:
       CHECK_OS: ${{ matrix.os }}
       CHECK_SHARD: ${{ matrix.shard }}
       CHECK_SHARDS: ${{ matrix.shards }}
       # Run 40426199390: macOS has 3 workers; the other hosted runners have 4.
       # Freeze the allocation input across every shard of the same system.
       CHECK_WORKERS: ${{ matrix.os == 'macos-latest' && 3 || 4 }}
-      # Run 40475105412: the four later x64 shards started at 6.0 min.
-      # This is a queue forecast; later release is reported as a sensitivity.
-      CHECK_START_DELAYS: ${{ matrix.os == 'windows-latest' && '[0,0,0,0,0,360,360,360,360]' || '' }}
-      # Host's performance case: one runner takes 1.5x as long. This is not
-      # an adjustment for test co-location; allocation balances file weights.
-      CHECK_SLOWDOWN: ${{ matrix.os == 'windows-latest' && '1.5' || '1' }}
       # Flush each completed file even if another file hangs until the timeout.
       PYTHONUNBUFFERED: '1'
-    steps: &python-steps
+    steps:
       - name: Use the user temporary directory on Windows
         if: runner.os == 'Windows'
         shell: pwsh
@@ -406,23 +399,3 @@ jobs:
             ${{ env.HMB_CHECKS_TMPDIR || runner.temp }}/hey-my-buddy-checks-*/**/*.log
           include-hidden-files: true
           if-no-files-found: error
-
-  python-tail:
-    name: *python-name
-    # All four short jobs have ended before these four claim their slots:
-    # first wave <= 16 + 4, second wave <= 16 + 4, on every account plan.
-    needs: [frontend, browser]
-    if: ${{ !cancelled() }}
-    runs-on: windows-latest
-    timeout-minutes: 30
-    strategy:
-      fail-fast: false
-      max-parallel: 4
-      matrix:
-        include:
-          - {os: windows-latest, shard: 6, shards: 9}
-          - {os: windows-latest, shard: 7, shards: 9}
-          - {os: windows-latest, shard: 8, shards: 9}
-          - {os: windows-latest, shard: 9, shards: 9}
-    env: *python-environment
-    steps: *python-steps
