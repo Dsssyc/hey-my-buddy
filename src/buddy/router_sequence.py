@@ -64,8 +64,7 @@ def freeze_request(connection, decision_id: str, *, snapshot: dict, now: str) ->
     document, _created = _store(
         connection,
         REQUEST_KEY_PREFIX + decision_id,
-        {"frozenAt": now, "facts": snapshot["facts"], "baseInput": snapshot["baseInput"],
-         "inspections": snapshot["inspections"]}, clock_field="frozenAt",
+        {**snapshot, "frozenAt": now}, clock_field="frozenAt",
     )
     return document
 

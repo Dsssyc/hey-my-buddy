@@ -424,9 +424,13 @@ def current_router(connection, *, frozen: dict | None = None, after_index: int =
     return RouterResolution(None, None, None, facts, tuple(inspections), problem)
 
 
-def routing_facts(request: dict) -> dict:
+def routing_facts(request: dict, *, actor: dict | None = None) -> dict:
     facts = {key: request.get(key) for key in
-             ("routerProfileId", "routerProfile", "routingMode", "budget", "routerProblem")}
+             ("routerProfileIds", "routerIdentities", "routerProfileId", "routerProfile", "routerIndex",
+              "routingMode", "routingBudget", "routerRetryIntervalSeconds", "budget", "routerProblem")}
+    if actor is not None:
+        facts.update(routerProfileId=actor["profileId"], routerProfile=actor["profile"],
+                     routerIndex=actor["routerIndex"])
     # Historical JSON has no revision field; callers already have the immutable
     # request column and must not overwrite that evidence with a guessed value.
     if "configurationRevision" in request:

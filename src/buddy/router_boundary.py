@@ -1,5 +1,7 @@
 """Pure ADR-021 Host boundary data and governed continuation templates."""
 from copy import deepcopy
+import hashlib
+import json
 
 from .errors import BoardError
 from .schemas import CONFIGURATION_FIELDS
@@ -10,12 +12,16 @@ KINDS = ("router-unavailable", "routing-changed", "router-abstained")
 def build_boundary(*, kind: str, code: str | None, reason: str, candidates: list,
                    facts: dict, router_trials: list, retry_at: str | None,
                    decision_id: str, run_id: str | None = None, revision: int | None = None,
-                   shutdown_confirmed: bool = False, continuation_problem: str | None = None) -> dict:
+                   shutdown_confirmed: bool = False, continuation_problem: str | None = None,
+                   target_run_id: str | None = None, helper_policy: str | None = None) -> dict:
     """Copy frozen facts and explain the Host's existing operations; start nothing.
 
     The caller computes legality, retry times and actual lineage stop evidence.
     Commands carry a saved-control-file placeholder, never a credential, and
     ``notBefore`` is template metadata rather than an unsupported CLI argument.
+    A nested target uses the owning run's authority and revision. The caller
+    either explicitly preserves live helpers with ``keep`` or blocks through
+    ``continuation_problem``; these templates never cancel helpers.
     """
     if not isinstance(kind, str) or kind not in KINDS:
         raise BoardError("INVALID_ARGUMENT", "Unknown Router boundary kind")
@@ -27,12 +33,14 @@ def build_boundary(*, kind: str, code: str | None, reason: str, candidates: list
         raise BoardError("INVALID_ARGUMENT", "Router boundary stop evidence must be boolean")
     if not isinstance(decision_id, str) or not decision_id:
         raise BoardError("INVALID_ARGUMENT", "Router boundary requires its decision identity")
-    for value, name in ((code, "code"), (retry_at, "retry_at"), (run_id, "run_id"),
+    for value, name in ((code, "code"), (retry_at, "retry_at"), (run_id, "run_id"), (target_run_id, "target_run_id"),
                         (continuation_problem, "continuation_problem")):
         if value is not None and (not isinstance(value, str) or not value.strip()):
             raise BoardError("INVALID_ARGUMENT", f"Router boundary {name} must be a nonempty string or null")
     if revision is not None and (type(revision) is not int or revision < 0):
         raise BoardError("INVALID_ARGUMENT", "Router boundary revision must be a nonnegative integer or null")
+    if helper_policy is not None and helper_policy != "keep":
+        raise BoardError("INVALID_ARGUMENT", "Router boundary helper_policy must be 'keep' or null")
     identities = []
     for candidate in candidates:
         if (not isinstance(candidate, dict) or not isinstance(candidate.get("profileId"), str)
@@ -46,16 +54,31 @@ def build_boundary(*, kind: str, code: str | None, reason: str, candidates: list
                continuation_problem or ("当前目标 revision 未提供" if revision is None else None))
     base = {"runId": run_id, "expectedRevision": revision, "controlFile": "<saved-control-file>",
             "input": "继续既定工作目标。"}
+    if target_run_id is not None:
+        base["targetRunId"] = target_run_id
+    if helper_policy is not None:
+        base["helperPolicy"] = helper_policy
+
+    def command_id(operation, *, index=None, identity=None):
+        # A new owner/revision or changed tuple is a different request for the
+        # command ledger. Hash the complete template binding to keep long
+        # decision IDs within continue's 128-character commandId bound.
+        binding = {"decisionId": decision_id, "operation": operation, "base": base,
+                   "index": index, "configuration": identity}
+        digest = hashlib.sha256(json.dumps(binding, sort_keys=True, separators=(",", ":"),
+                                          ensure_ascii=False).encode("utf-8")).hexdigest()
+        return f"router-{operation}-{digest}"
+
     choices = []
     if blocked is None:
         for index, (candidate, identity) in enumerate(zip(candidates, identities)):
             choices.append({"profileId": candidate["profileId"], "method": "continue", "params": {
-                **base, "commandId": f"router-continue-{decision_id}-{index}",
+                **base, "commandId": command_id("continue", index=index, identity=identity),
                 "configuration": identity, "reason": "Host 根据路由边界的冻结候选指定 buddy 继续"}})
     continue_reason = blocked or ("没有冻结的合法候选" if not choices else None)
     reroute_reason = blocked or ("尚无可知的 Router 恢复时间；可先读取 health 再决定" if retry_at is None else None)
     reroute_params = None if reroute_reason else {
-        **base, "commandId": f"router-reroute-{decision_id}", "reroute": True,
+        **base, "commandId": command_id("reroute"), "reroute": True,
         "reason": "在 Router 再试时间之后重新路由同一工作目标"}
     if kind in ("router-unavailable", "routing-changed") and "取消后重新提交没有用" not in reason:
         reason += "；取消后重新提交没有用。"

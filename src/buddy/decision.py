@@ -439,7 +439,7 @@ class DecisionCoordinator:
         order = {evidence_id: index for index, evidence_id in enumerate(ids)}
         return sorted(rows, key=lambda row: order.get(row["evidence_id"], len(ids)))
 
-    def _assemble_input(self, connection: sqlite3.Connection, *, kind: str, request_id: str, revision: int, profile_row: sqlite3.Row | None, table: dict, task_text: str | None) -> tuple[dict | None, str | None]:
+    def _assemble_input(self, connection: sqlite3.Connection, *, kind: str, request_id: str, revision: int, profile_row: sqlite3.Row | None, table: dict, task_text: str | None, preserve_oversized: bool = False) -> tuple[dict | None, str | None]:
         """Build the exact bounded document the model sees, or report why it cannot.
 
         Returns ``(document, oversized_reason)``. Nothing is dropped to make a
@@ -448,6 +448,14 @@ class DecisionCoordinator:
         packet without the current actor — the base input every dispatch copies,
         where only the actor and its same-tier budget vary per item.
         """
+        document: dict[str, Any] = {
+            "operation": kind, "requestId": request_id, "tableRevision": revision,
+        }
+        if profile_row is not None:
+            document["profile"] = {key: profile_row[key] for key in schemas.CONFIGURATION_FIELDS}
+        if kind == "select":
+            document["task"] = task_text
+        document.update(table)
         for name, limit in (
             ("profiles", MAX_DECISION_PROFILES),
             ("cards", MAX_DECISION_CARDS),
@@ -456,37 +464,22 @@ class DecisionCoordinator:
             ("annotations", MAX_DECISION_ANNOTATIONS),
         ):
             if len(table[name]) > limit:
-                return None, (
+                return document if preserve_oversized else None, (
                     f"the complete bounded table slice carries {len(table[name])} {name}, above the helper's "
                     f"{limit}-entry request bound; nothing was truncated and nothing was sent to a model. Curate "
                     "the published table or the maintenance batch first."
                 )
-        document: dict[str, Any] = {
-            "operation": kind,
-            "requestId": request_id,
-            "tableRevision": revision,
-        }
-        if profile_row is not None:
-            document["profile"] = {
-                "adapter": profile_row["adapter"],
-                "provider": profile_row["provider"],
-                "model": profile_row["model"],
-                "effort": profile_row["effort"],
-            }
-        if kind == "select":
-            document["task"] = task_text
-        document.update(table)
         encoded = canonical_json(document)
         if len(encoded.encode("utf-8")) > MAX_DECISION_INPUT_BYTES:
-            return None, (
+            return document if preserve_oversized else None, (
                 f"the complete bounded table slice is {len(encoded.encode('utf-8'))} bytes, above the "
                 f"{MAX_DECISION_INPUT_BYTES}-byte decision input ceiling; nothing was truncated and nothing was "
                 "sent to a model. Curate the published table first."
             )
         return document, None
 
-    def _select_input(self, connection: sqlite3.Connection, *, request_id: str, revision: int, profile_row: sqlite3.Row, task_text: str, candidates: list[sqlite3.Row], hard_constraints: dict | None = None, routing_mode: str = "review") -> tuple[dict | None, str | None]:
-        if len(candidates) > MAX_DECISION_PROFILES:
+    def _select_input(self, connection: sqlite3.Connection, *, request_id: str, revision: int, profile_row: sqlite3.Row | None, task_text: str, candidates: list[sqlite3.Row], hard_constraints: dict | None = None, routing_mode: str | None = "review", preserve_oversized: bool = False) -> tuple[dict | None, str | None]:
+        if len(candidates) > MAX_DECISION_PROFILES and not preserve_oversized:
             return None, "The legal candidate set exceeds the bounded decision profile limit; narrow the task constraints"
         candidate_ids = {candidate["profile_id"] for candidate in candidates}
         markers = ",".join("?" for _ in candidate_ids) or "NULL"
@@ -494,7 +487,7 @@ class DecisionCoordinator:
             self._card_input(row)
             for row in connection.execute(f"SELECT * FROM evaluation_cards WHERE profile_id IN ({markers}) ORDER BY rowid", tuple(candidate_ids))
         ]
-        evidence = self._referenced_evidence(connection, cards) if routing_mode == "review" else []
+        evidence = self._referenced_evidence(connection, cards) if routing_mode != "fast" else []
         table = self._table_input(
             connection, profiles=candidates, evidence_rows=evidence, include_preferences=True
         )
@@ -517,6 +510,7 @@ class DecisionCoordinator:
             profile_row=profile_row,
             table=table,
             task_text=task_text,
+            preserve_oversized=preserve_oversized,
         )
 
     # -- lease helpers -------------------------------------------------------
@@ -671,61 +665,77 @@ class DecisionCoordinator:
                 # leaves the Host the same frozen packet, never only a reason.
                 resolution = router.current_router(connection, now=now)
                 facts = resolution.facts
-                if facts["routingMode"] is None:
-                    # Broken or unupgraded settings freeze no mode to route under;
-                    # the honest boundary is the settings problem itself.
-                    request.update(facts)
-                    if resolution.problem is not None:
-                        request["routerProblem"] = resolution.problem
-                    if needs_host_reason is not None:
-                        status, reason = "needs-host", needs_host_reason
-                    else:
-                        status, reason = "needs-host", (
-                            resolution.problem["reason"] if resolution.problem else NEEDS_HOST_NO_PROFILE)
-                else:
-                    request.update(facts)
-                    if resolution.problem is not None:
-                        request["routerProblem"] = resolution.problem
+                request.update(facts)
+                if resolution.problem is not None:
+                    request["routerProblem"] = resolution.problem
+                if facts["routingMode"] is not None:
                     request["timeoutSeconds"] = (60 if facts["routingMode"] == "fast" else
                                                  request.get("timeoutSeconds") or facts["budget"]["timeoutSeconds"])
-                    facts["budget"] = dict(facts["budget"])
-                    facts["budget"]["timeoutSeconds"] = request["timeoutSeconds"]
+                    facts["budget"] = {**facts["budget"], "timeoutSeconds": request["timeoutSeconds"]}
                     request["budget"] = dict(facts["budget"])
-                    base_input, problem = self._select_input(
-                        connection, request_id=request_id, revision=expected_revision, profile_row=None,
-                        task_text=task_text, candidates=candidates,
-                        hard_constraints=request.get("constraints") or {}, routing_mode=facts["routingMode"])
-                    if base_input is None:
-                        status, reason = "needs-host", problem
-                    else:
-                        base_input["budget"] = facts["budget"]
-                        base_input.update(facts)
-                        if facts["routingMode"] == "review":
-                            base_input["executionWorkspace"] = request.get("executionWorkspace")
-                        else:
-                            base_input.pop("evidence", None)
-                        base_input["outputSchema"] = router.answer_schema(
-                            [item["profileId"] for item in base_input["profiles"]], facts["routingMode"])
-                        from .accounts import identity, selection
-                        names = {item["adapter"] for item in base_input.get("profiles", [])}
-                        for listed in facts["routerIdentities"]:
-                            if listed:
-                                names.add(listed["adapter"])
-                        base_input["accounts"] = {name: identity(selection(connection, name)) for name in names}
-                        input_bytes = len(canonical_json(base_input).encode("utf-8"))
-                        if input_bytes > MAX_DECISION_INPUT_BYTES:
-                            status, reason = "needs-host", (
-                                f"The complete frozen routing input contains {input_bytes} UTF-8 bytes, above the "
-                                f"{MAX_DECISION_INPUT_BYTES}-byte decision input ceiling; nothing was truncated or "
-                                "sent to a model.")
-                        else:
-                            snapshot = {"facts": facts, "baseInput": base_input,
-                                        "inspections": [dict(entry) for entry in resolution.inspections]}
-                            if needs_host_reason is not None:
-                                status, reason = "needs-host", needs_host_reason
-                            elif resolution.profile is None:
-                                status, reason = "needs-host", (
-                                    resolution.problem["reason"] if resolution.problem else NEEDS_HOST_NO_PROFILE)
+                # The admission scan's limit protects model routing. For an
+                # oversized Host packet only, retain the entire legal slice,
+                # without changing admission or consuming any quota retry.
+                if len(candidates) > MAX_DECISION_PROFILES:
+                    clauses, values = self._candidate_bounds(
+                        required_capabilities=request.get("requiredCapabilities", []),
+                        constraints=request.get("constraints"), coding_only=True)
+                    clauses.extend(["COALESCE(f.mode,'')!='exclude'",
+                                    "(NOT EXISTS(SELECT 1 FROM effective_preferences WHERE mode='pin') OR f.mode='pin')"])
+                    from .native_observations import exhausted
+                    from .quota_routing import claim
+                    from .harness_health import read_health
+                    complete_candidates, complete_retries = [], []
+                    for item in connection.execute(
+                        "SELECT p.* FROM evaluation_profiles p LEFT JOIN effective_preferences f ON f.profile_id=p.profile_id WHERE "
+                        + " AND ".join(clauses) + " ORDER BY p.rowid", values):
+                        if not read_health(connection, item["adapter"])["available"]:
+                            continue
+                        if exhausted(connection, item, now=now) is not None:
+                            if claim(connection, item, decision_id=decision_id, consume=False, now=now) is None:
+                                continue
+                            complete_retries.append(item["profile_id"])
+                        complete_candidates.append(item)
+                    candidates = complete_candidates
+                    request["routingBasis"] = self._freeze_routing_basis(
+                        connection, candidates=candidates,
+                        required_capabilities=request.get("requiredCapabilities", []),
+                        constraints=request.get("constraints"), quota_retry=complete_retries)
+                base_input, problem = self._select_input(
+                    connection, request_id=request_id, revision=expected_revision, profile_row=None,
+                    task_text=task_text, candidates=candidates,
+                    hard_constraints=request.get("constraints") or {}, routing_mode=facts["routingMode"],
+                    preserve_oversized=True)
+                base_input.update(facts)
+                base_input["routingBasis"] = request["routingBasis"]
+                base_input["constraints"] = request.get("constraints", {})
+                base_input["requiredCapabilities"] = request.get("requiredCapabilities", [])
+                # Unknown legacy mode stays unknown. Its Host packet retains the
+                # admission facts but is never eligible for a model dispatch.
+                if facts["routingMode"] != "fast":
+                    base_input["executionWorkspace"] = request.get("executionWorkspace")
+                else:
+                    base_input.pop("evidence", None)
+                if facts["routingMode"] is not None:
+                    base_input["outputSchema"] = router.answer_schema(
+                        [item["profileId"] for item in base_input["profiles"]], facts["routingMode"])
+                from .accounts import identity, selection
+                names = {item["adapter"] for item in base_input["profiles"]}
+                names.update(item["adapter"] for item in facts["routerIdentities"] if item)
+                base_input["accounts"] = {name: identity(selection(connection, name)) for name in sorted(names)}
+                snapshot = {"facts": facts, "baseInput": base_input,
+                            "inspections": [dict(entry) for entry in resolution.inspections]}
+                input_bytes = len(canonical_json(base_input).encode("utf-8"))
+                if problem is not None or input_bytes > MAX_DECISION_INPUT_BYTES:
+                    status, error = "needs-host", "router-input-too-large"
+                    reason = problem or (
+                        f"The complete frozen routing input contains {input_bytes} UTF-8 bytes, above the "
+                        f"{MAX_DECISION_INPUT_BYTES}-byte decision input ceiling; nothing was truncated or sent to a model.")
+                elif needs_host_reason is not None:
+                    status, reason = "needs-host", needs_host_reason
+                elif facts["routingMode"] is None or resolution.profile is None:
+                    status, reason = "needs-host", (
+                        resolution.problem["reason"] if resolution.problem else NEEDS_HOST_NO_PROFILE)
             task_id = None
             connection.execute(
                 "INSERT INTO evaluation_decisions(decision_id, status, task, profile_id, table_revision, reason,"
@@ -2095,8 +2105,16 @@ class DecisionCoordinator:
         return {"decisions": decisions, "nextCursor": next_cursor, "total": total}
 
     def _view(self, connection: sqlite3.Connection | None, row: sqlite3.Row, *, include_audit: bool) -> dict:
+        if connection is None:
+            # Admission responses are assembled after their write transaction.
+            # Read the same immutable dispatch/packet projection as get without
+            # retaining a closed connection or probing any harness.
+            with self.board.db.read() as reading:
+                return self._view(reading, row, include_audit=include_audit)
         output = json.loads(row["output_json"]) if row["output_json"] else None
         request = json.loads(row["requested_json"]) if row["requested_json"] else {}
+        actor = (router_sequence.dispatch(connection, row["decision_task_id"])
+                 if connection is not None and row["decision_task_id"] else None)
         selected = json.loads(row["selected_json"]) if row["selected_json"] else None
         references = json.loads(row["evidence_ids_json"])
         evidence = references if isinstance(references, list) and all(
@@ -2114,7 +2132,7 @@ class DecisionCoordinator:
             # call's own requested/resolved identity and is deliberately separate.
             "selectedProfile": selected,
             "decisionModel": {
-                "requested": (output or {}).get("requested"),
+                "requested": actor["profile"] if actor else None,
                 "resolved": (output or {}).get("resolved"),
                 "observed": (output or {}).get("observed"),
             },
@@ -2134,7 +2152,7 @@ class DecisionCoordinator:
             # False only for a recorded program selection; a record predating that
             # path stays null rather than claiming a Router ran.
             "routerCalled": request.get("routerCalled"),
-            **router.routing_facts(request),
+            **router.routing_facts(request, actor=actor),
             "configurationRevision": int(row["configuration_revision"]),
             "usage": (output or {}).get("usage"),
             "nativeIdentity": (output or {}).get("nativeIdentity"),
@@ -2143,8 +2161,17 @@ class DecisionCoordinator:
             "createdAt": row["created_at"],
             "updatedAt": row["request_updated_at"],
         }
+        if actor is None:
+            view.update(routerProfileId=None, routerProfile=None, routerIndex=None)
         if row["error"]:
             view["error"] = row["error"]
+        if connection is not None:
+            from .router_boundary_data import routing_boundary, router_trials
+            projection_now = self._now()
+            view["routerTrials"] = router_trials(connection, row, now=projection_now)
+            boundary = routing_boundary(connection, row, now=projection_now)
+            if boundary is not None:
+                view["routingBoundary"] = boundary
         if "taskReference" in request:
             view["taskReference"] = request["taskReference"]
         view["pendingEvidenceRemaining"] = (
@@ -2174,7 +2201,7 @@ class DecisionCoordinator:
                     "proposal": proposal,
                     # The decision call's own configuration, kept separate from the
                     # selected worker configuration above.
-                    "requestedProfile": (output or {}).get("requested"),
+                    "requestedProfile": actor["profile"] if actor else None,
                     "resolvedProfile": (output or {}).get("resolved"),
                     "observedProfile": (output or {}).get("observed"),
                     "usage": (output or {}).get("usage"),

@@ -63,6 +63,43 @@ class RouterBoundaryTests(unittest.TestCase):
                 self.assertEqual(result["commands"]["continue"]["choices"], [])
                 self.assertIsNone(result["commands"]["reroute"]["params"])
 
+    def test_owned_descendant_templates_use_root_authority_and_preserve_helpers(self):
+        result = self.build(run_id="root", revision=42, target_run_id="nested-child", helper_policy="keep")
+        params = [result["commands"]["continue"]["choices"][0]["params"],
+                  result["commands"]["reroute"]["params"]]
+        from buddy.cli_help import method_help
+        fields = {item.name for item in method_help("continue").parameters}
+        for template in params:
+            self.assertEqual(template["runId"], "root")
+            self.assertEqual(template["expectedRevision"], 42)
+            self.assertEqual(template["targetRunId"], "nested-child")
+            self.assertEqual(template["helperPolicy"], "keep")
+            self.assertEqual(template["controlFile"], "<saved-control-file>")
+            self.assertTrue(set(template) - {"controlFile"} <= fields)
+
+    def test_command_ids_are_stable_unique_bounded_and_change_with_owner_revision(self):
+        candidate_b = dict(CANDIDATE, profileId="candidate-b", model="model-b")
+        options = dict(decision_id="dec-" + "long-id" * 100, candidates=[CANDIDATE, candidate_b],
+                       target_run_id="child", helper_policy="keep")
+        first = self.build(**options)["commands"]
+        self.assertEqual(first, self.build(**options)["commands"])
+        ids = [choice["params"]["commandId"] for choice in first["continue"]["choices"]]
+        ids.append(first["reroute"]["params"]["commandId"])
+        self.assertEqual(len(set(ids)), len(ids))
+        self.assertTrue(all(len(value) <= 128 for value in ids))
+        for changes in ({"revision": 8}, {"run_id": "new-owner"}, {"target_run_id": "other-child"}):
+            result = self.build(**(options | changes))["commands"]
+            self.assertNotEqual(result["continue"]["choices"][0]["params"]["commandId"], ids[0])
+            self.assertNotEqual(result["reroute"]["params"]["commandId"], ids[-1])
+
+    def test_live_helper_policy_cannot_make_a_destructive_template(self):
+        for policy in ("cancel", "unknown", False):
+            with self.subTest(policy=policy), self.assertRaises(BoardError):
+                self.build(helper_policy=policy)
+        blocked = self.build(continuation_problem="live helpers 没有明确 keep 政策")
+        self.assertTrue(blocked["commands"]["continue"]["blocked"])
+        self.assertTrue(blocked["commands"]["reroute"]["blocked"])
+
     def test_unknown_recovery_time_allows_explicit_candidate_but_blocks_reroute_template(self):
         result = self.build(retry_at=None)
         self.assertFalse(result["commands"]["continue"]["blocked"])
