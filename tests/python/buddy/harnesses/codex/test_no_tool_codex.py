@@ -168,6 +168,9 @@ class NoToolCodexTests(unittest.TestCase):
         outcome, _control, _directory = self.run_case("unknown")
         self.assertEqual(outcome.status, "ok", outcome.result)
         self.assertTrue(outcome.result["answerValid"])
+        self.assertEqual(outcome.result["nativeEvidence"]["unknownEvents"],
+                         {"countsByType": {"account/updated": 1, "futureThing": 1}, "total": 2})
+        self.assertNotIn("unknownEvents", outcome.result)
 
     def test_partial_and_eof_rejected(self):
         for case in ("truncated", "eof"):

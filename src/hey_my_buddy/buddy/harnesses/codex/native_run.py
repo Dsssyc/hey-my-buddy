@@ -75,6 +75,7 @@ from ..run_contract import (
     MAX_SCHEMA_BYTES,
     MAX_UNKNOWN_EVENT_TYPES,
     MAX_VALUE_BYTES,
+    NativeEvidence,
     NativeFailurePackage,
     NativeErrorRecord,
     OptionalFrozenJsonAt,
@@ -849,7 +850,7 @@ class _FastProtocol:
     """The no-tool carrier's own protocol checks, without the moved policy.
 
     This keeps exactly the driver-owned guarantees of the old no-tool
-    observer: identity binding of every frame, one turn per round, duplicate
+    observer: explicit identity binding, one turn per round, duplicate
     start/final/completion refusal, and the non-retryable error rule. Tool
     shapes and unknown events are retained facts answered by the role
     observer, never raised here.
@@ -865,16 +866,9 @@ class _FastProtocol:
         method = message.get("method")
         label = _truncate_utf8(method if isinstance(method, str) else "unknown", 96)
         params = message.get("params")
-        opaque = not isinstance(method, str) or method.startswith("rpc/result-unreadable")
-        if opaque and (not isinstance(params, dict) or not any(key in params for key in ("threadId", "turnId", "turn"))):
+        if not isinstance(params, dict) or "threadId" not in params:
             return
-        if method in ("account/rateLimits/updated", "remoteControl/status/changed", "deprecationNotice"):
-            return
-        if method == "thread/started" and isinstance(params, dict):
-            thread = params.get("thread") or {}
-            if thread.get("id") == self.thread_id:
-                return
-        if not isinstance(params, dict) or params.get("threadId") != self.thread_id:
+        if params["threadId"] != self.thread_id:
             raise CodexProtocolError("invalid-native-result", f"Unbound native event in no-tool stream ({label})")
         event_turn = _event_turn(params)
         if event_turn is not None and event_turn != self.turn_id:
@@ -1636,6 +1630,11 @@ def _build_result(request: RunRequest, prep: _Preparation | None, state: _RunSta
     completion = None
     if state.turn_id is not None:
         completion = CompletionEvidence(stream_end=state.drained if mode == "fast" else None)
+    unconfirmed = [name for key, name in (("configReadback", "configuration-readback"),
+                                          ("threadReceipt", "thread-receipt"))
+                   if state.policy_checks.get(key, {}).get("status") == "unknown"]
+    if state.catalog_read is not None and state.catalog_read["discovery"]["status"] == "unknown":
+        unconfirmed.append("model-catalog")
     return RunResult(
         identity=request.identity, harness="codex",
         end=RunEnd(status=state.status, reason_code=state.reason,
@@ -1646,6 +1645,10 @@ def _build_result(request: RunRequest, prep: _Preparation | None, state: _RunSta
         model_started=True if state.model_started else None,
         configuration=_checked_configuration(request, state, mode),
         native_identity=native_identity,
+        native_evidence=NativeEvidence(
+            unknown_events={"countsByType": facts.unknown_counts, "total": sum(facts.unknown_counts.values())}
+            if facts.unknown_counts else None,
+            unconfirmed=unconfirmed),
         value=value, completion_evidence=completion,
         tool_evidence=_tool_evidence_package(tool_package),
         effective_policy=_effective_policy(state, mode),
@@ -1728,9 +1731,6 @@ def run_discovery(*, cwd: str, invocation_root: Path, native_root: Path,
             if facts.unknown_counts:
                 catalog_value["unknownEvents"] = {"countsByType": facts.unknown_counts,
                                                    "total": sum(facts.unknown_counts.values())}
-                catalog_value["warnings"].extend(
-                    f"Unrecognized native reading event: {label} ({count})"
-                    for label, count in facts.unknown_counts.items())
             if account_status == "unknown":
                 catalog_value["warnings"] = [*catalog_value["warnings"],
                                              "The discovery session could not confirm the Codex account; "
@@ -1845,7 +1845,7 @@ def native_evidence(result: RunResult) -> dict:
     absent, never filled with a placeholder.
     """
     projection: dict = {}
-    for kind, key in (("unknown-events", "unknownEvents"), ("catalog-read", "catalogRead"),
+    for kind, key in (("catalog-read", "catalogRead"),
                       ("policy-check", "policyCheck"), ("fast-config-readback", "nativeConfigPolicy"),
                       ("fast-thread-receipt", "nativeThreadReceipt")):
         value = _read_evidence_ref(result, kind)

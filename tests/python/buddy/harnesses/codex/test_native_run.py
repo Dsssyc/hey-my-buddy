@@ -238,6 +238,18 @@ class FastSeamTests(SeamCase):
         facts = native_run.native_evidence(result)["threadNotifications"]
         self.assertEqual(facts, {"countsByType": {"thread/futureNotification": 1}, "total": 1})
 
+    def test_connection_unknown_notifications_before_thread_and_during_turn_keep_answer(self):
+        correction = FastCorrection(FAST_SCHEMA, "Pick a profile")
+        result = self.fast_run("connection-notification", correction)
+        self.assertEqual(result.end.status, "ok", result.end.message)
+        self.assertEqual(result.value.raw, '{"profileId": "legal"}')
+        self.assertIsNone(correction.stop_reason)
+        self.assertEqual(result.native_evidence.unknown_events.to_payload(),
+                         {"countsByType": {"account/updated": 2}, "total": 2})
+        retained = native_run._read_evidence_ref(result, "unknown-events")
+        self.assertEqual(retained, result.native_evidence.unknown_events.to_payload())
+        self.assertNotIn("unknownEvents", native_run.native_evidence(result))
+
     def test_explicit_foreign_identity_is_refused_with_method_in_message(self):
         # A known method isolates the identity guard; unknown turn-scoped
         # methods likewise remain facts in batch 4.
@@ -345,8 +357,8 @@ class FastSeamTests(SeamCase):
         self.assertIsNone(result.end.reason_code)
         self.assertIsNone(correction.stop_reason)
         # The unknown event's own count is the observer statistics' fact.
-        self.assertTrue(any(facts["unknownEvents"] == {"countsByType": {"futureThing": 1},
-                                                      "total": 1} for facts in seen),
+        self.assertTrue(any(facts["unknownEvents"] == {"countsByType": {"account/updated": 1, "futureThing": 1},
+                                                      "total": 2} for facts in seen),
                         [facts["unknownEvents"] for facts in seen])
 
     def test_a_denied_interaction_is_refused_then_stops_the_run(self):
@@ -441,8 +453,8 @@ class FastSeamTests(SeamCase):
                 result = self.fast_run(case, FastCorrection(FAST_SCHEMA, "Pick a profile"),
                                        observer=lambda _facts: FEEDBACK_CONTINUE)
                 self.assertEqual(result.end.status, "ok", result.end.message)
-                facts = native_run.native_evidence(result)["unknownEvents"]
-                self.assertEqual(facts["countsByType"], {label: 1})
+                facts = result.native_evidence.unknown_events.to_payload()
+                self.assertEqual(facts["countsByType"], {"account/updated": 1, label: 1})
                 self.assertTrue(result.completion_evidence.stream_end)
         observations = []
         def observe(facts):
@@ -458,7 +470,8 @@ class FastSeamTests(SeamCase):
                                observer=lambda _facts: FEEDBACK_CONTINUE)
         self.assertEqual(result.end.status, "ok", result.end.message)
         self.assertTrue(result.completion_evidence.stream_end)
-        self.assertEqual(native_run.native_evidence(result)["unknownEvents"]["countsByType"], {"unknown-method": 1})
+        self.assertEqual(result.native_evidence.unknown_events.to_payload()["countsByType"],
+                         {"account/updated": 1, "unknown-method": 1})
 
     def test_an_unrunnable_executable_fails_native_creation_without_a_child(self):
         garbage = self.base / "not-a-cli"
@@ -728,8 +741,8 @@ class ReviewSeamTests(CodexSeamCase):
                                  observer=lambda _facts: FEEDBACK_CONTINUE)
         self.assertEqual(result.end.status, "ok", result.end.message)
         facts = native_run.native_evidence(result)
-        self.assertEqual(facts["unknownEvents"]["countsByType"],
-                         {"thread/futureItem": 1, "item-shape-unreadable": 1})
+        self.assertEqual(result.native_evidence.unknown_events.to_payload()["countsByType"],
+                         {"account/updated": 1, "thread/futureItem": 1, "item-shape-unreadable": 1})
         self.assertEqual(facts["nativeToolEvents"][0]["params"]["item"], "new-native-shape")
         self.assertFalse(facts["nativeEvidenceTruncated"])
 
@@ -920,7 +933,7 @@ class WorkerSeamTests(CodexSeamCase):
         self.assertEqual(result.end.status, "ok", result.end.message)
         # The unknown event's own count is the observer statistics' fact.
         self.assertEqual(seen[-1]["unknownEvents"],
-                         {"countsByType": {"thread/hologram/updated": 1}, "total": 1})
+                         {"countsByType": {"account/updated": 1, "thread/hologram/updated": 1}, "total": 2})
 
     def test_unknown_event_types_merge_at_the_public_bound(self):
         # More distinct unclassified types in one real turn than the public
@@ -937,12 +950,13 @@ class WorkerSeamTests(CodexSeamCase):
         self.assertEqual(result.end.status, "ok", result.end.message)
         counts = seen[-1]["unknownEvents"]["countsByType"]
         total = seen[-1]["unknownEvents"]["total"]
-        self.assertEqual(total, 65)
-        self.assertEqual(sum(counts.values()), 65)
+        self.assertEqual(total, 66)
+        self.assertEqual(sum(counts.values()), 66)
         self.assertEqual(len(counts), MAX_UNKNOWN_EVENT_TYPES)
         self.assertEqual(list(counts)[:MAX_UNKNOWN_EVENT_TYPES - 1],
-                         [f"native/future/{number}" for number in range(MAX_UNKNOWN_EVENT_TYPES - 1)])
-        self.assertEqual(counts["(unlisted-native-events)"], 2)
+                         ["account/updated", *[f"native/future/{number}" for number in range(MAX_UNKNOWN_EVENT_TYPES - 2)]])
+        self.assertEqual(counts["(unlisted-native-events)"], 3)
+        self.assertEqual(result.native_evidence.unknown_events.to_payload(), seen[-1]["unknownEvents"])
 
     def test_worker_tool_facts_are_live_public_evidence(self):
         seen = []
@@ -1451,6 +1465,9 @@ class DiscoverySeamTests(SeamCase):
         models = catalog["providers"][0]["models"]
         self.assertEqual([model["id"] for model in models], ["fixture-model"])
         self.assertEqual(models[0]["efforts"], ["low", "high"])
+        self.assertEqual(catalog["discoveries"][0]["status"], "complete")
+        self.assertEqual(catalog["unknownEvents"], {"countsByType": {"account/updated": 1}, "total": 1})
+        self.assertEqual(catalog["warnings"], [])
         # No thread was ever created: discovery reads metadata only.
         self.assertFalse((self.base / "discovery-trace.json").exists())
 
@@ -1460,8 +1477,9 @@ class DiscoverySeamTests(SeamCase):
                                 native_root=self.base / "rpc-discovery-native",
                                 timeout_seconds=10, cancelled=lambda: False)
         self.assertEqual(catalog["discoveries"][0]["status"], "unknown")
-        self.assertEqual(catalog["unknownEvents"]["countsByType"], {"rpc/result-unreadable/model/list": 1})
-        self.assertIn("Unrecognized native reading event: rpc/result-unreadable/model/list (1)", catalog["warnings"])
+        self.assertEqual(catalog["unknownEvents"]["countsByType"],
+                         {"account/updated": 1, "rpc/result-unreadable/model/list": 1})
+        self.assertEqual(catalog["warnings"], ["The native model reading is incomplete: model-list-shape-unreadable"])
         self.assertFalse((self.base / "discovery-trace.json").exists())
 
     def test_unreadable_catalog_continues_as_unknown_but_unconfirmed_stop_still_refuses(self):
@@ -1469,6 +1487,7 @@ class DiscoverySeamTests(SeamCase):
         self.assertEqual(catalog["discoveries"][0]["status"], "unknown")
         self.assertEqual(catalog["discoveries"][0]["reason"], "model-list-shape-unreadable")
         self.assertEqual(catalog["providers"][0]["models"], [])
+        self.assertEqual(catalog["warnings"], ["The native model reading is incomplete: model-list-shape-unreadable"])
         with self.halt_reported_unconfirmed():
             with self.assertRaises(CodexProtocolError) as unknown:
                 self.discover("unknown")
