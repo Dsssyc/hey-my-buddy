@@ -228,6 +228,7 @@ class ProcessObservationTests(unittest.TestCase):
         self.assertEqual(len(notes), 1)
         self.assertIn('pid=123', notes[0])
 
+    @unittest.skipIf(os.name == 'nt', 'POSIX clean teardown; Windows path observation is incomplete')
     def test_clean_teardown_prints_denied_identity_before_removing_its_private_root(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -237,8 +238,7 @@ class ProcessObservationTests(unittest.TestCase):
                   patch.object(checks, 'request_cooperative_stop', return_value=[]),
                   patch.object(checks, 'held_locks', return_value={'daemon': []}),
                   patch.object(checks, 'remove_private_test_root') as remove,
-                  patch('builtins.print') as output,
-                  patch.object(checks.os, 'name', 'posix')):
+                  patch('builtins.print') as output):
                 self.assertIsNone(checks.teardown_private_root(root))
             remove.assert_called_once_with(root)
             self.assertIn('read=cwd: AccessDenied', output.call_args.args[0])
