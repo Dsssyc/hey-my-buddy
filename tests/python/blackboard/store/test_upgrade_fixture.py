@@ -27,7 +27,9 @@ class UpgradeFixtureTests(unittest.TestCase):
 
     def test_legacy_cleanup_keeps_link_targets_and_current_private_files(self):
         state = self.root / 'state'
-        state.mkdir()
+        database = Database(state)
+        database.initialize()
+        self.addCleanup(database.close)
         outside = self.root / 'outside'
         (outside / 'goals').mkdir(parents=True)
         survivor = outside / 'goals/native.jsonl'
@@ -51,6 +53,22 @@ class UpgradeFixtureTests(unittest.TestCase):
         self.assertEqual(current.read_bytes(), b'current private native history')
         self.assertFalse(retired.exists())
         self.assertFalse((state / 'worker.log').exists())
+
+
+    def test_legacy_delivery_cleanup_keeps_link_target(self):
+        fixture, _connection = self.restored()
+        relative = fixture['deliveryStock']['path']
+        path = fixture['state'] / relative
+        content = path.read_bytes()
+        outside = self.root / 'outside-delivery.json'
+        path.rename(outside)
+        path.symlink_to(outside)
+        result = schema_upgrade.cleanup_legacy_layout(fixture['state'])
+        self.assertFalse(result['complete'])
+        self.assertEqual([(item['path'], item['code']) for item in result['failures']],
+                         [(relative, 'PRIVATE_PATH_UNSAFE')])
+        self.assertEqual(outside.read_bytes(), content)
+        self.assertTrue(path.is_symlink())
 
 
     def restored(self, name='state'):
@@ -349,6 +367,16 @@ class UpgradeFixtureTests(unittest.TestCase):
         self.assertEqual((state / 'board.sqlite3').read_bytes(), board)
         self.assertEqual({p.relative_to(state): p.read_bytes() for p in state.rglob('*')
                           if p.is_file() and not p.name.startswith('board.sqlite3')}, files)
+        cleanup = schema_upgrade.cleanup_legacy_layout(state)
+        self.assertTrue(cleanup['complete'], cleanup)
+        retired = {Path('harnesses') / harness / 'goals' for harness in ('codex', 'claude', 'zcode', 'dsh')}
+        retired.update(Path(name) for name in ('decisions', 'legacy-worker-cleanup.lock', 'worker.log'))
+        retired.add(Path(fixture['deliveryStock']['path']))
+        self.assertEqual(set(cleanup['removed']), {path.as_posix() for path in retired})
+        self.assertEqual({p.relative_to(state): p.read_bytes() for p in state.rglob('*')
+                          if p.is_file() and not p.name.startswith('board.sqlite3')},
+                         {path: content for path, content in files.items()
+                          if not any(path == entry or entry in path.parents for entry in retired)})
 
     def test_delivery_and_scope_stock_loses_only_the_old_writers_checked_copies(self):
         fixture, connection = self.restored('delivery-and-scope-stock')
@@ -978,9 +1006,18 @@ class UpgradeFixtureTests(unittest.TestCase):
         fixture, connection = self.restored()
         references = [entry['params']['receipt'] for entry in fixture['operations']
                       if entry['operation'] == 'execution_result']
-        self.assertEqual(len(references), 20)
+        self.assertEqual(len(references), 21)
+        delivery = fixture['deliveryStock']
+        path = fixture['state'] / delivery['path']
+        self.assertEqual(json.loads(path.read_bytes()), {'attemptId': delivery['attemptId'], 'accepted': True})
+        self.assertEqual(delivery['taskId'], fixture['stableIds']['accepted'])
+        self.assertEqual(connection.execute('SELECT task_id FROM attempts WHERE attempt_id=?',
+                                           (delivery['attemptId'],)).fetchone()[0], delivery['taskId'])
         for reference in references:
             receipt = read_execution_receipt(Path(reference['path']).parent, sha256=reference['sha256'])
+            if Path(reference['path']).parent == path.parent:
+                self.assertIsNone(receipt)
+                continue
             self.assertIsNotNone(receipt)
             attempt = connection.execute('SELECT task_id,generation FROM attempts WHERE attempt_id=?',
                                          (receipt['attemptId'],)).fetchone()

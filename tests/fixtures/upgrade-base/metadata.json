@@ -1,6 +1,11 @@
 {
   "boundary": "Base BoardService operations, message writers and InquiryBridge journal writers in process; synthetic native discovery, execution results and absent-process evidence; no daemon/IPC/model/account read. Stored rows come from base writers; one completed retry dispatch and its dependent current-input and event digests are patched to represent the pre-0.46 excludedBuddies reason-empty form that fd9f04e8 cannot emit. No SQL seed creates a row. Generation uses a canonical private path and synthetic inode; text templates retain source digests. load_fixture binds private paths, stable path/inode identities and dependent hashes before acceptance; this preparation is not migration or new native execution.",
   "catalogSha256": "4a60053082f545089f75271d7f0039aa9612ae06b5f328bfab7947521a22b19b",
+  "deliveryStock": {
+    "attemptId": "00000000-0000-0000-0000-000000000041",
+    "path": "harnesses/codex/micro-tasks/a8558c5b1af85598318f0e2ae33d849420df68a82409cb6e76256fcf0844bcec/attempts/00000000-0000-0000-0000-000000000041/result-delivery.json",
+    "taskId": "00000000-0000-0000-0000-00000000003e"
+  },
   "dependencyMode": "prepared-read-only-interpreter",
   "dependencyVersions": {
     "c-two": "0.8.2",
@@ -33,7 +38,7 @@
   "fixedTimestamp": "2026-01-01T00:00:00.000Z",
   "format": 2,
   "generationCommand": "python packaging/generate-upgrade-fixture.py --python <prepared-python> --work-dir <new-private-tmp-dir> --output-dir tests/fixtures/upgrade-base",
-  "generatorSha256": "0706f28fc20f82abd90916c62b0bcf9b8a9552495967ce9f2329b2c20fcd39a0",
+  "generatorSha256": "341eeae96faf46763fe845b0654ddbeb3c0626a8330288b6b3506ca13a2bd14d",
   "inquiryStock": {
     "dbDeliveredNoEntry": {
       "attemptId": "00000000-0000-0000-0000-0000000000bb",
@@ -232,6 +237,7 @@
     "src/hey_my_buddy/buddy/roles/turn_io.py",
     "src/hey_my_buddy/buddy/runtime/__init__.py",
     "src/hey_my_buddy/buddy/runtime/command.py",
+    "src/hey_my_buddy/buddy/runtime/receipts.py",
     "src/hey_my_buddy/errors.py",
     "src/hey_my_buddy/home.py",
     "src/hey_my_buddy/install/__init__.py",
@@ -267,10 +273,10 @@
     "src/hey_my_buddy/protocol/windows_process.py",
     "src/hey_my_buddy/windows_files.py"
   ],
-  "operationsSha256": "953682d16cae8a537d9d5bf322b4464034bac9d916a71a573fdf56a70216b648",
+  "operationsSha256": "407cb662f7cd72a7c9a37f449a8720c5e2a92f3dbe30db24e348c1e3b8f497ed",
   "pythonInterpreter": "<prepared-python>",
   "pythonVersion": "3.12.10",
-  "resourcesSha256": "11413f7187ee7e652616772e25d369e545cd1d7b9f4deb2d90690b1f58e47f35",
+  "resourcesSha256": "25d7fc33ceb61f316e8a7ab17c48984b15da5ab568d0040bf02be792b121b435",
   "restoreInterface": "load_fixture(state: Path) -> dict; empty private state directory; returns source metadata plus state, fixtureRoot, operations and bindings; schema stays 28; baseline only after return",
   "routerBuddyIds": [
     "codex:openai:fixture-alpha:high",
@@ -474,7 +480,7 @@
   },
   "sourceTree": "507fd2b6b2fbda0b1953781419358fecc43e9236",
   "sourceVersion": "0.51.0",
-  "sqlSha256": "b15a58309c88abbd72c7a381ef302f167d5eafd22ed5d3bffd9b5230a0d463ae",
+  "sqlSha256": "943d0f0329611e874bbc699c9a1fbf938ce8146eeede91312b1bae546705078f",
   "stableIds": {
     "accepted": "00000000-0000-0000-0000-00000000003e",
     "cancelled": "00000000-0000-0000-0000-00000000006c",

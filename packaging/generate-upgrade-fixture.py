@@ -24,6 +24,7 @@ import subprocess
 import sys
 import tarfile
 import tempfile
+from types import SimpleNamespace
 import uuid
 
 BASE = "fd9f04e828ea49a5f2259cdcae0d71401e5c0d84"
@@ -148,6 +149,7 @@ def populate(args):
     from hey_my_buddy.private_dirs import ensure_private_dir
     from hey_my_buddy.protocol.tool_evidence import ToolEventEvidence
     from hey_my_buddy.buddy.harnesses.session_record import SessionRecord
+    from hey_my_buddy.buddy.runtime import receipts
     from hey_my_buddy.protocol.session_content import MessageChunk, TextContent
     from hey_my_buddy.errors import BoardError
 
@@ -467,6 +469,7 @@ def populate(args):
             view = call("workflow_get", {"runId": run_id})
             assert view["state"] == "delivered", view
             if label == "accepted":
+                accepted_claim = claim
                 call("workflow_accept", {"runId": run_id, "artifactId": view["finalArtifactId"],
                     "note": "fixture accepted", "notRequired": "Read-only fixture has no separate target",
                     "keepCheckout": True, **control})
@@ -952,6 +955,22 @@ def populate(args):
                 else:
                     assert turn_row["state"] == "failed"
                     assert stored_result["result"]["partialWorkspaceSeal"] == seal
+        # Re-deliver one accepted result through the base execution writer.
+        # The service's idempotent answer creates no new business rows; the
+        # writer seals result-delivery.json and removes the original receipt.
+        # Do this last so its atomic writer's UUID cannot renumber other stock.
+        directory = execution_directory(accepted_claim, work / "state")
+        receipt = receipts.read_receipt(directory)
+        client = SimpleNamespace(submit_result=lambda attempt_id, generation, nonce, reference:
+            call("execution_result", {"attemptId": attempt_id, "generation": generation,
+                                      "nonce": nonce, "receipt": reference}))
+        accepted = receipts.deliver_receipt(client, receipt, directory, nonce=nonce)
+        assert accepted
+        delivery_stock = {"taskId": receipt["taskId"], "attemptId": receipt["attemptId"],
+                          "path": (directory / receipts.DELIVERY).relative_to(work / "state").as_posix()}
+        operations.append({"operation": "receipts.deliver_receipt",
+                           "params": {"attemptId": receipt["attemptId"], "nonce": nonce},
+                           "response": {"accepted": accepted}})
         hashing.close()
         # Base operations created these rows. Export templates keep
         # their original digests; restoration explicitly rebinds the dependency
@@ -998,6 +1017,7 @@ def populate(args):
             "stableIds": ids, "stockIds": stock_ids, "taskOnlyStock": task_only_stock,
             "edgeStock": edge_stock,
             "inquiryStock": inquiry_stock,
+            "deliveryStock": delivery_stock,
             "tableRowCounts": row_counts,
             "routerBuddyIds": PROFILES, "fixedTimestamp": AT,
             "secret": "ab" * 32, "serviceToken": "fixture-service-token",
@@ -1213,6 +1233,11 @@ def verify(output, restored):
             item["messageId"] for item in metadata["inquiryStock"].values()}
         by_id = {row[0]: row for row in messages}
         resource_files = json.loads((output / "workspace-resources.json").read_text(encoding="utf-8"))["files"]
+        delivery = metadata["deliveryStock"]
+        assert json.loads(resource_files[delivery["path"]]) == {"attemptId": delivery["attemptId"], "accepted": True}
+        assert str(Path(delivery["path"]).with_name("result-receipt.json")) not in resource_files
+        assert connection.execute("SELECT task_id FROM attempts WHERE attempt_id=?",
+                                  (delivery["attemptId"],)).fetchone() == (delivery["taskId"],)
         for case, item in metadata["inquiryStock"].items():
             row = by_id[item["messageId"]]
             assert (row[1], row[2]) == (item["attemptId"], item["inquiryId"])
@@ -1236,7 +1261,8 @@ def verify(output, restored):
         assert "/Users/" not in (output / "board.sql").read_text(encoding="utf-8")
         return {"integrity": "ok", "foreignKeyViolations": 0, "schema": BASE_SCHEMA, "states": states,
                 "tables": sum(row[0] == "table" and row[1] != "sqlite_sequence" for row in schema),
-                "events": connection.execute("SELECT COUNT(*) FROM events").fetchone()[0], "sourceSchemaMatches": True}
+                "events": connection.execute("SELECT COUNT(*) FROM events").fetchone()[0],
+                "legacyDeliveryFiles": 1, "sourceSchemaMatches": True}
 
 
 def main():

@@ -458,8 +458,14 @@ LEGACY_LAYOUT = (
 def cleanup_legacy_layout(state: Path) -> dict:
     """Remove retired private entries after the pending conversion is verified."""
     state = private_dirs._absolute(state)
+    with closing(sqlite3.connect((state / DB_FILE).as_uri() + '?mode=ro', uri=True)) as connection:
+        deliveries = [((private_dirs.attempt_root(state, adapter, task_id, attempt_id)
+                        / 'result-delivery.json').relative_to(state).as_posix(), False)
+                      for task_id, attempt_id, adapter in connection.execute(
+                          "SELECT task_id,attempt_id,CASE WHEN adapter='decision' THEN model_harness ELSE adapter END"
+                          ' FROM attempts ORDER BY rowid')]
     removed, failures = [], []
-    for relative, directory in LEGACY_LAYOUT:
+    for relative, directory in (*LEGACY_LAYOUT, *deliveries):
         path = state / relative
         try:
             # Check parents from state outward before the private remover can
