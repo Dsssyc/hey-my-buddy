@@ -277,8 +277,8 @@ class PreparationTests(WorkflowTestCase):
         prepare = workspace.prepare
         replacement = []
 
-        def supersede(*args):
-            manifest = prepare(*args)
+        def supersede(*args, **kwargs):
+            manifest = prepare(*args, **kwargs)
             view = board.call("workflow_get", {"runId": parent["runId"]})
             replacement.append(self.continue_run(board, view, targetRunId=helper_id, command_id="recover-newer", input="Newer recovery input"))
             return manifest
@@ -341,6 +341,7 @@ class PreparationTests(WorkflowTestCase):
         self.assertEqual(view["activeRequest"]["kind"], "attention")
         self.assertEqual(view["activeRequest"]["preparationError"]["code"], "WORKSPACE_BASE_MISMATCH")
         self.assertEqual(self.rows(board, run_id, cont)[2]["state"], "invalidated")
+
         self.assertEqual(self.rows(board, run_id, cont)[1]["state"], "queued")
         self.assertEqual((self.repo / "tracked.txt").read_text(), "unreviewed post-seal drift\n")
         with board.store.db.read() as connection:
@@ -356,6 +357,21 @@ class PreparationTests(WorkflowTestCase):
         self.assertIsNotNone(resumed["claim"], resumed)
         self.assertEqual(resumed["claim"]["turn"]["turnIndex"], 2)
         self.assertEqual(self.rows(board, run_id, cont)[2]["state"], "invalidated")
+
+    def test_replayed_continuation_rechecks_changes_after_its_input_was_prepared(self):
+        board, run_id, _, continuation_id = self.pending()
+        with board.store.db.read() as connection:
+            run = board.store.workflow._run_row(connection, run_id)
+            row = connection.execute("SELECT * FROM workflow_continuations WHERE continuation_id=?",
+                                     (continuation_id,)).fetchone()
+            intent = board.store.workflow._continuation_intent(connection, run, row)
+        prepared = workspace.prepare(self.directory, f"{run_id}:{continuation_id}", intent)
+        (Path(prepared["path"]) / "tracked.txt").write_text("changed after the prepared input\n")
+        board.store.workflow.prepare_continuation_workspace({"runId": run_id})
+        view = board.call("workflow_get", {"runId": run_id})
+        self.assertEqual(view["state"], "awaiting-host")
+        self.assertEqual(view["activeRequest"]["preparationError"]["code"], "WORKSPACE_CHANGED")
+        self.assertIsNone(self.rows(board, run_id, continuation_id)[2]["workspace_manifest_json"])
 
     def test_concurrent_preparation_lock_retains_continuation_and_allows_recovery(self):
         board, run_id, _, cont = self.pending(kind="worktree")
@@ -417,8 +433,8 @@ class PreparationTests(WorkflowTestCase):
         prepared = []
         original = workspace.prepare
 
-        def race(*args):
-            manifest = original(*args)
+        def race(*args, **kwargs):
+            manifest = original(*args, **kwargs)
             prepared.append(manifest)
             view = board.call("workflow_get", {"runId": run_id})
             if operation == "cancel":

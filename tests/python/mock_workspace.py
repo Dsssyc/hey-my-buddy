@@ -134,11 +134,14 @@ class MockWorkspace:
             "clean": not self.dirty,
         }
 
-    def prepare(self, state_dir: Path, request_id: str, intent: dict) -> dict:
+    def prepare(self, state_dir: Path, request_id: str, intent: dict, *, _preparation=None) -> dict:
         self.prepare_calls.append((request_id, dict(intent)))
         if request_id in self.fail_prepare:
             raise BoardError("WORKSPACE_PREPARE_FAILED", "injected prepare failure", requestId=request_id)
-        if request_id in self.manifests:
+        replayed = request_id in self.manifests
+        if _preparation is not None:
+            _preparation["replayed"] = replayed
+        if replayed:
             return dict(self.manifests[request_id])
         manifest = self._manifest(request_id=request_id, intent=intent)
         self.manifests[request_id] = manifest
@@ -146,14 +149,18 @@ class MockWorkspace:
 
     def verify(self, manifest: dict, *, require_unchanged: bool = True) -> dict:
         self.verify_calls.append(dict(manifest))
-        digest = manifest.get("manifestSha256") if isinstance(manifest, dict) else None
-        if not isinstance(digest, str) or not re.fullmatch(r"[0-9a-f]{64}", digest):
-            raise BoardError("WORKSPACE_INVALID", "manifest has no valid manifestSha256")
+        self._validate_manifest(manifest)
         if require_unchanged and self.dirty:
             raise BoardError("SNAPSHOT_CHANGED", "the source tree changed after the snapshot was taken")
         if manifest.get("path") and manifest.get("kind") == "worktree":
             Path(manifest["path"]).mkdir(parents=True, exist_ok=True)
         return {**manifest, "verified": True}
+
+    @staticmethod
+    def _validate_manifest(manifest):
+        digest = manifest.get("manifestSha256") if isinstance(manifest, dict) else None
+        if not isinstance(digest, str) or not re.fullmatch(r"[0-9a-f]{64}", digest):
+            raise BoardError("WORKSPACE_INVALID", "manifest has no valid manifestSha256")
 
     def seal(self, state_dir: Path, manifest: dict, task_id: str, attempt_id: str) -> dict:
         self.seal_calls.append((task_id, attempt_id))
@@ -200,12 +207,14 @@ class MockWorkspace:
     # -- Host lifecycle surface: this double owns no disposable checkout -----
     def integration_verify(self, artifact, *, original_input=None, final_input=None, path=None, ref=None,
                            strategy="patch", before_commit=None, repository_id=None, checkout_id=None,
-                           adjusted_paths=None, host_paths=None, reason=None):
+                           adjusted_paths=None, host_paths=None, reason=None, _confirm_adjustments=False):
         """The mock target carries the artifact only once its marker exists, or an
         explicit adjustment names the differing paths."""
         changed = [str(item) for item in (artifact.get("changedPaths") or [])]
         target = Path(path)
         carried = (target / ".buddy-integrated").exists()
+        if _confirm_adjustments and not carried:
+            adjusted_paths = changed
         return {
             "verified": bool(carried or adjusted_paths), "strategy": strategy,
             "target": {"kind": "checkout", "path": str(target.resolve()), "checkoutId": f"checkout:{target}",
@@ -224,6 +233,9 @@ class MockWorkspace:
 
     def host_seal(self, state_dir, manifest, task_id, attempt_id, *, allowed_paths=()):
         return self.seal(state_dir, manifest, task_id, attempt_id)
+
+    def resolve_allocation(self, state_dir, manifest, retained=None):
+        return None
 
     def cleanup_inspect(self, state_dir, manifest, sealed=None, retained=None, allowed=None):
         return {

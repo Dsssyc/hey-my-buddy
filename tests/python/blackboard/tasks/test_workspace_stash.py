@@ -21,6 +21,9 @@ from hey_my_buddy.blackboard.tasks import workspace
 
 
 class StashInventoryTestCase(RealWorkspaceTestCase):
+    def common_git_dir(self) -> str:
+        return str(self.repo / ".git")
+
     def stash(self, message: str) -> str:
         (self.repo / "tracked.txt").write_text(f"change {message}\n")
         self.git("add", "tracked.txt")
@@ -32,9 +35,9 @@ class SharedStashInventoryTests(StashInventoryTestCase):
     def test_reads_commit_ids_and_full_descriptions(self):
         first = self.stash("first message")
         second = self.stash("sécond ünïcødé 描述 with 'quotes'")
-        inventory = workspace.shared_stash_inventory(str(self.repo))
+        inventory = workspace.shared_stash_inventory(self.common_git_dir())
         self.assertEqual(inventory["state"], "observed")
-        self.assertEqual(inventory["repositoryPath"], str(self.repo))
+        self.assertEqual(inventory["repositoryPath"], self.common_git_dir())
         self.assertEqual(inventory["totalCount"], 2)
         self.assertFalse(inventory["truncated"])
         self.assertEqual([entry["commit"] for entry in inventory["entries"]], [second, first])
@@ -44,32 +47,28 @@ class SharedStashInventoryTests(StashInventoryTestCase):
         self.assertIn("ünïcødé", inventory["entries"][0]["description"])
 
     def test_a_repository_without_stashes_is_an_empty_observation(self):
-        inventory = workspace.shared_stash_inventory(str(self.repo))
+        inventory = workspace.shared_stash_inventory(self.common_git_dir())
         self.assertEqual(inventory["state"], "observed")
         self.assertEqual(inventory["entries"], [])
         self.assertEqual(inventory["totalCount"], 0)
         self.assertFalse(inventory["truncated"])
 
-    def test_the_snapshot_repository_path_is_a_git_directory_and_still_reads(self):
+    def test_worktrees_share_stash_through_the_common_git_directory(self):
         # A workspace snapshot's repositoryPath is the repository's common Git
-        # directory, not a worktree: the observation must resolve it with Git's
-        # own plumbing and read the shared reflog there without a work tree.
+        # directory; the observation reads the shared reflog there.
         first = self.stash("from the worktree view")
-        from_gitdir = workspace.shared_stash_inventory(str(self.repo / ".git"))
+        from_gitdir = workspace.shared_stash_inventory(self.common_git_dir())
         self.assertEqual(from_gitdir["state"], "observed")
         self.assertEqual([entry["commit"] for entry in from_gitdir["entries"]], [first])
         # A sibling worktree of the same repository sees the same shared entries,
         # because refs/stash and its reflog live in the common directory.
         sibling = self.directory / "sibling-worktree"
         self.git("worktree", "add", "-q", "--detach", str(sibling), "HEAD")
-        from_worktree = workspace.shared_stash_inventory(str(sibling))
+        sibling_common = workspace.inspect(str(sibling))["repositoryPath"]
+        self.assertEqual(sibling_common, self.common_git_dir())
+        from_worktree = workspace.shared_stash_inventory(sibling_common)
         self.assertEqual(from_worktree["state"], "observed")
         self.assertEqual([entry["commit"] for entry in from_worktree["entries"]], [first])
-        # A worktree's private Git directory also resolves to the common one.
-        private_gitdir = self.git("-C", str(sibling), "rev-parse", "--absolute-git-dir").strip()
-        from_private_gitdir = workspace.shared_stash_inventory(private_gitdir)
-        self.assertEqual(from_private_gitdir["state"], "observed")
-        self.assertEqual([entry["commit"] for entry in from_private_gitdir["entries"]], [first])
 
     def test_unreadable_repositories_are_honest_unknowns(self):
         missing = workspace.shared_stash_inventory(str(self.directory / "not-a-repository"))
@@ -98,7 +97,7 @@ class SharedStashInventoryTests(StashInventoryTestCase):
         subprocess.run(["git", "add", "file.txt"], cwd=repository, env={**os.environ, **GIT_ENV}, check=True)
         subprocess.run(["git", "stash", "push", "-q", "-m", "sha256 stash"], cwd=repository,
                        env={**os.environ, **GIT_ENV}, capture_output=True, text=True, check=True)
-        inventory = workspace.shared_stash_inventory(str(repository))
+        inventory = workspace.shared_stash_inventory(str(repository / ".git"))
         self.assertEqual(inventory["state"], "observed")
         [entry] = inventory["entries"]
         self.assertEqual(len(entry["commit"]), 64)
@@ -108,7 +107,7 @@ class SharedStashInventoryTests(StashInventoryTestCase):
     def test_the_entry_list_is_bounded_and_marks_truncation(self):
         for number in range(workspace.STASH_ENTRY_LIMIT + 5):
             self.stash(f"flood {number}")
-        inventory = workspace.shared_stash_inventory(str(self.repo))
+        inventory = workspace.shared_stash_inventory(self.common_git_dir())
         self.assertTrue(inventory["truncated"])
         self.assertEqual(inventory["totalCount"], workspace.STASH_ENTRY_LIMIT + 5)
         self.assertEqual(len(inventory["entries"]), workspace.STASH_ENTRY_LIMIT)
@@ -121,7 +120,7 @@ class SharedStashInventoryTests(StashInventoryTestCase):
             cwd=self.repo, env={**os.environ, **GIT_ENV}, capture_output=True,
         )
         self.assertEqual(completed.returncode, 0, completed.stderr)
-        inventory = workspace.shared_stash_inventory(str(self.repo))
+        inventory = workspace.shared_stash_inventory(self.common_git_dir())
         self.assertEqual(inventory["state"], "observed")
         [recorded] = inventory["entries"]
         self.assertEqual(recorded["commit"], commit)
@@ -214,11 +213,11 @@ class TruncatedObservationHonestyTests(StashInventoryTestCase):
         self.stash("first")
         for number in range(63):
             self.stash(f"entry-{number}")
-        before = workspace.shared_stash_inventory(str(self.repo))
+        before = workspace.shared_stash_inventory(self.common_git_dir())
         self.assertEqual(before["totalCount"], 64)
         self.assertFalse(before["truncated"])
         newest = self.stash("new-65th-entry")
-        after = workspace.shared_stash_inventory(str(self.repo))
+        after = workspace.shared_stash_inventory(self.common_git_dir())
         self.assertEqual(after["totalCount"], 65)
         self.assertTrue(after["truncated"])
         comparison = workspace.shared_stash_comparison(before, after)
@@ -238,11 +237,11 @@ class TruncatedObservationHonestyTests(StashInventoryTestCase):
     def test_a_truncated_start_side_cannot_claim_new_entries_but_keeps_provable_losses(self):
         for number in range(65):
             self.stash(f"entry-{number}")
-        before = workspace.shared_stash_inventory(str(self.repo))
+        before = workspace.shared_stash_inventory(self.common_git_dir())
         self.assertTrue(before["truncated"])
         dropped = self.git("rev-parse", "stash@{0}").strip()
         self.git("stash", "drop", "stash@{0}")
-        after = workspace.shared_stash_inventory(str(self.repo))
+        after = workspace.shared_stash_inventory(self.common_git_dir())
         self.assertFalse(after["truncated"])
         comparison = workspace.shared_stash_comparison(before, after)
         self.assertEqual(comparison["state"], "partial")
@@ -277,9 +276,9 @@ class StashChangesNeverGateWorkTests(StashInventoryTestCase):
 
     def test_the_recorded_recovery_command_restores_a_dropped_entry(self):
         commit = self.stash("recoverable work")
-        start = workspace.shared_stash_inventory(str(self.repo))
+        start = workspace.shared_stash_inventory(self.common_git_dir())
         self.git("stash", "drop", "stash@{0}")
-        seal = workspace.shared_stash_inventory(str(self.repo))
+        seal = workspace.shared_stash_inventory(self.common_git_dir())
         comparison = workspace.shared_stash_comparison(start, seal)
         [lost] = comparison["lostEntries"]
         self.assertEqual(lost["commit"], commit)
@@ -339,7 +338,7 @@ class RealBoardClaimStashTests(StashInventoryTestCase):
         # that eventually starts must freeze its own starting state.
         self.git("stash", "drop", "stash@{0}")
         oid = self.stash("during turn ✓ 'quote'")
-        description = workspace.shared_stash_inventory(str(self.repo))["entries"][0]["description"]
+        description = workspace.shared_stash_inventory(self.common_git_dir())["entries"][0]["description"]
         # An identical re-registration beside a separating entry leaves two
         # indistinguishable stack positions of the same commit.
         self.stash("separating entry")

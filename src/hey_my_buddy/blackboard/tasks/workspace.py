@@ -638,7 +638,6 @@ def _snapshot(source, intent, workspace_id):
         if observed["head"] != source["headCommit"]:
             raise BoardError("WORKSPACE_CHANGED", "The source HEAD changed during preparation")
         staged_tree = _tree(root, observed["index"])
-        tracked_tree = _tree(root, observed["tracked"])
         input_tree = _tree(root, observed["tracked"] | observed["included"])
         # A later turn may select its previous sealed output without moving the
         # source HEAD. Such a ref is an exact content handoff, not permission to
@@ -650,7 +649,7 @@ def _snapshot(source, intent, workspace_id):
                         excludedEntries={path: value for path, value in observed["untracked"].items() if path not in observed["included"]},
                         sourceFingerprint=observed["fingerprint"])
     else:
-        staged_tree = tracked_tree = input_tree = base_tree
+        staged_tree = input_tree = base_tree
         snapshot.update(includedUntracked=[], excludedUntracked=_untracked(root, []), excludedEntries={})
         if intent["kind"] == "existing":
             observed = _stable_observation(root, [])
@@ -659,9 +658,7 @@ def _snapshot(source, intent, workspace_id):
             snapshot["sourceFingerprint"] = observed["fingerprint"]
     staged_commit = base if staged_tree == base_tree else _commit_tree(root, staged_tree, base, workspace_id + " staged input")
     input_commit = base if input_tree == base_tree else _commit_tree(root, input_tree, base, workspace_id + " input")
-    snapshot.update(stagedTree=staged_tree, stagedCommit=staged_commit,
-                    stagedSha256=_sha(_diff(root, base, staged_tree)),
-                    unstagedSha256=_sha(_diff(root, staged_tree, tracked_tree)))
+    snapshot.update(stagedTree=staged_tree, stagedCommit=staged_commit)
     return {"baseCommit": base, "inputCommit": input_commit, "inputTree": input_tree, "snapshot": snapshot}
 
 
@@ -709,7 +706,7 @@ def _prepare_worktree(source, target, pinned, reason):
         if target.is_symlink() or not record or record.get("locked") != reason or "detached" not in record:
             raise BoardError("WORKSPACE_CONFLICT", "The worktree target is not owned by this preparation", path=str(target))
         identity = inspect(str(target))
-        observed = _stable_observation(target, [])
+        observed = _observe(target, [])
         if (source["repositoryId"] != identity["repositoryId"]
                 or observed["head"] != pinned["inputCommit"] or observed["index"] != entries or observed["tracked"] != entries or observed["untracked"]):
             raise BoardError("WORKSPACE_CONFLICT", "The interrupted worktree is incomplete or changed; it was preserved", path=str(target))
@@ -841,7 +838,7 @@ def _validate_manifest(manifest):
 
 
 def verify(manifest: dict, *, require_unchanged: bool = True) -> dict:
-    """Validate fixed input references and actual execution checkout identity.
+    """Validate fixed input objects and actual execution checkout identity.
 
     Read workspaces always require unchanged managed input, as defined by the
     manifest's exclusionPolicy. Ignored caches may change. For a writable workspace,
@@ -858,14 +855,11 @@ def verify(manifest: dict, *, require_unchanged: bool = True) -> dict:
                 raise BoardError("WORKSPACE_CHANGED", "The execution checkout identity changed", field=field)
         root = Path(actual["checkoutRoot"])
         snapshot = manifest["snapshot"]
-        for field, commit in (("inputRef", manifest["inputCommit"]), ("stagedRef", snapshot["stagedCommit"])):
-            if _commit(root, snapshot[field]) != commit:
-                raise BoardError("WORKSPACE_CONFLICT", "An immutable input reference changed", ref=snapshot[field])
         if _line(root, "rev-parse", manifest["inputCommit"] + "^{tree}") != manifest["inputTree"]:
             raise BoardError("WORKSPACE_MANIFEST_CHANGED", "The pinned input tree is inconsistent")
         unchanged = None
         if require_unchanged or manifest["access"] == "read":
-            observation = _stable_observation(root, snapshot["executionSelectors"])
+            observation = _observe(root, snapshot["executionSelectors"])
             if observation["fingerprint"] != snapshot["executionFingerprint"]:
                 raise BoardError("WORKSPACE_CHANGED", "The execution workspace no longer matches its prepared input")
             unchanged = True
@@ -887,7 +881,8 @@ def recovery_inputs(manifest: dict) -> list[str]:
 
 
 @contextmanager
-def submission_preparation(state_dir: Path, request_id: str, intent: dict, *, shared_locks=None):
+def submission_preparation(state_dir: Path, request_id: str, intent: dict, *, shared_locks=None,
+                           _preparation=None):
     """Hold the original allocation lock through preparation and admission.
 
     The new-allocation fact is local to this invocation; replaying a prepared
@@ -914,7 +909,10 @@ def submission_preparation(state_dir: Path, request_id: str, intent: dict, *, sh
             target = directory / "checkout"
             new = (intent["kind"] == "worktree" and not _path_present(target)
                    and _record(directory / "manifest.json") is None)
-            manifest = _prepare_locked(directory, workspace_id, request_id, intent)
+            if _preparation is None:
+                manifest = _prepare_locked(directory, workspace_id, request_id, intent)
+            else:
+                manifest = _prepare_locked(directory, workspace_id, request_id, intent, _preparation)
         yield {"manifest": manifest, "newAllocation": new}
 
 
@@ -960,19 +958,22 @@ def _borrowed_submission_allocation(state_dir, intent):
                                  facts.st_dev, facts.st_ino, facts.st_mode)
 
 
-def prepare(state_dir: Path, request_id: str, intent: dict) -> dict:
+def prepare(state_dir: Path, request_id: str, intent: dict, *, _preparation=None) -> dict:
     """Prepare once, then replay the same request's frozen input manifest."""
-    with submission_preparation(state_dir, request_id, intent) as prepared:
+    with submission_preparation(state_dir, request_id, intent, _preparation=_preparation) as prepared:
         return prepared["manifest"]
 
 
-def _prepare_locked(directory, workspace_id, request_id, intent):
+def _prepare_locked(directory, workspace_id, request_id, intent, preparation=None):
     _write_once(directory / "request.json", _json({"version": 1, "requestId": request_id, "intent": intent}))
     manifest = _record(directory / "manifest.json")
+    if preparation is not None:
+        preparation["replayed"] = manifest is not None
     if manifest is not None:
         verify(manifest, require_unchanged=False)
         return manifest
     pinned = _record(directory / "input.json")
+    fresh_input = pinned is None
     if pinned is None:
         source = inspect(intent["cwd"])
         pinned = {"source": source, **_snapshot(source, intent, workspace_id)}
@@ -1000,10 +1001,15 @@ def _prepare_locked(directory, workspace_id, request_id, intent):
         if source["repositoryId"] != actual["repositoryId"]:
             raise BoardError("WORKSPACE_CHANGED", "The execution repository changed during preparation")
         selectors = intent["includeUntracked"] if intent["kind"] == "existing" else []
-        observed = _stable_observation(Path(actual["checkoutRoot"]), selectors)
-        if intent["kind"] == "existing" and (source["checkoutId"] != actual["checkoutId"] or observed["fingerprint"] != pinned["snapshot"]["sourceFingerprint"]):
+        if intent["kind"] == "existing" and source["checkoutId"] != actual["checkoutId"]:
             raise BoardError("WORKSPACE_CHANGED", "The existing checkout changed after its input was frozen")
-        snapshot = dict(pinned["snapshot"], executionSelectors=selectors, executionFingerprint=observed["fingerprint"])
+        if intent["kind"] == "existing" and not fresh_input:
+            replay = _observe(Path(actual["checkoutRoot"]), selectors)
+            if replay["fingerprint"] != pinned["snapshot"]["sourceFingerprint"]:
+                raise BoardError("WORKSPACE_CHANGED", "The existing checkout changed after its input was frozen")
+        fingerprint = (pinned["snapshot"]["sourceFingerprint"] if intent["kind"] == "existing" else
+                       _observe(Path(actual["checkoutRoot"]), selectors)["fingerprint"])
+        snapshot = dict(pinned["snapshot"], executionSelectors=selectors, executionFingerprint=fingerprint)
         manifest = {"version": 1, "workspaceId": workspace_id, "kind": intent["kind"], "path": str(path),
                     "checkoutRoot": actual["checkoutRoot"], "checkoutId": actual["checkoutId"],
                     "repositoryId": actual["repositoryId"], "access": intent["access"],
@@ -1088,9 +1094,11 @@ def _scope_evidence(root, manifest, observation, violations, changed, index_chan
     }
 
 
-def _output_entries(root, manifest, observation, *, allow_outside_scope=False, allowed_paths=None):
+def _output_entries(root, manifest, observation, *, allow_outside_scope=False, allowed_paths=None, write=True):
     initial = _entries(root, manifest["inputCommit"])
-    initial_index = _entries(root, manifest["snapshot"]["stagedTree"] if manifest["kind"] == "existing" else manifest["inputTree"])
+    staged_tree = manifest["snapshot"]["stagedTree"]
+    initial_index = (_entries(root, staged_tree)
+                     if manifest["kind"] == "existing" and staged_tree != manifest["inputTree"] else initial)
     excluded = manifest["snapshot"]["excludedEntries"] if manifest["kind"] == "existing" else {}
     scope = manifest["writeScope"]
     # Paths an earlier Host decision already promoted (adopt) or a previous Host
@@ -1111,7 +1119,7 @@ def _output_entries(root, manifest, observation, *, allow_outside_scope=False, a
         if item is None or [item[0], _sha(item[1])] != fingerprint:
             raise BoardError("WORKSPACE_CHANGED", "An output changed during sealing", path=path)
         pending.append((path, item))
-    for (path, item), oid in zip(pending, _batch_blobs(root, [item[1] for _path, item in pending], write=True)):
+    for (path, item), oid in zip(pending, _batch_blobs(root, [item[1] for _path, item in pending], write=write)):
         entry = [item[0], oid]
         if _in_scope(path, scope) or path in allowed or initial.get(path) == entry:
             entries[path] = entry
@@ -1146,12 +1154,13 @@ def _changed_entries(entries, changed):
     return {path: entries.get(path) for path in bounded}, len(changed) > OUTPUT_ENTRY_LIMIT
 
 
-def _finish_output(repository, output, directory):
-    expected_tree = _line(repository, "rev-parse", output["commit"] + "^{tree}")
+def _finish_output(repository, output, directory, *, fresh=False):
+    if not fresh and _line(repository, "rev-parse", output["commit"] + "^{tree}") != output["tree"]:
+        raise BoardError("WORKSPACE_CONFLICT", "The sealed output record is inconsistent")
     bindings = ("workspaceId", "taskId", "attemptId", "manifestSha256", "baseCommit", "inputCommit", "commit",
                 "tree", "changedPaths", "includedUntracked", "diffSha256")
     expected_ref = f"refs/buddy/workspaces/{output['workspaceId']}/outputs/{directory.name}"
-    if expected_tree != output["tree"] or _sha(_json(output["snapshot"])) != output["snapshotSha256"] or any(output.get(key) != output["snapshot"].get(key) for key in bindings) or output["ref"] != expected_ref or output["diffPath"] != str(directory / "output.patch"):
+    if _sha(_json(output["snapshot"])) != output["snapshotSha256"] or any(output.get(key) != output["snapshot"].get(key) for key in bindings) or output["ref"] != expected_ref or output["diffPath"] != str(directory / "output.patch"):
         raise BoardError("WORKSPACE_CONFLICT", "The sealed output record is inconsistent")
     patch_path = directory / "output.patch"
     patch_data = _read(patch_path)
@@ -1217,7 +1226,7 @@ def _seal_output(state_dir: Path, manifest: dict, task_id: str, attempt_id: str,
                 return _finish_output(repository, output, directory)
             verify(manifest, require_unchanged=False)
             root = Path(manifest["checkoutRoot"])
-            observation = _stable_observation(root, manifest["snapshot"]["executionSelectors"], write=True)
+            observation = _observe(root, manifest["snapshot"]["executionSelectors"], write=True)
             if manifest["access"] == "read":
                 if observation["fingerprint"] != manifest["snapshot"]["executionFingerprint"]:
                     raise BoardError("WORKSPACE_CHANGED", "Read-only input changed before it could be sealed")
@@ -1267,19 +1276,29 @@ def _seal_output(state_dir: Path, manifest: dict, task_id: str, attempt_id: str,
             _pin(repository, f"refs/buddy/workspaces/{workspace_id}/retained/output-{directory.name}", commit)
             _write_once(directory / "pending.json", _json(output))
             _write_once(directory / "output.patch", patch_data)
-            return _finish_output(repository, output, directory)
+            return _finish_output(repository, output, directory, fresh=True)
 
 
 def cumulative_patch(manifest: dict, artifact: dict, original_commit: str) -> dict:
     """Freeze a whole-goal patch using immutable Git objects, independent of checkout edits."""
     with _errors():
-        repository, _changed = _artifact_binding(manifest, manifest, artifact)
+        if original_commit == manifest.get("inputCommit"):
+            _validate_output_record(manifest, artifact)
+            data = _read(Path(artifact["diffPath"]))
+            if data is None or _sha(data) != artifact["diffSha256"]:
+                raise BoardError("WORKSPACE_MANIFEST_CHANGED", "The final output patch changed")
+            path = Path(artifact["diffPath"]).with_name("cumulative-" + original_commit + ".patch")
+            _write_once(path, data)
+            return {"baseCommit": original_commit, "outputCommit": artifact["commit"], "path": str(path),
+                    "sha256": _sha(data), "changedPaths": list(artifact["changedPaths"])}
+        repository, changed = _artifact_binding(manifest, manifest, artifact)
         base = _commit(repository, original_commit)
         data = _diff(repository, base, artifact["commit"])
         path = Path(artifact["diffPath"]).with_name("cumulative-" + base + ".patch")
         _write_once(path, data)
         return {"baseCommit": base, "outputCommit": artifact["commit"], "path": str(path),
-                "sha256": _sha(data), "changedPaths": sorted(_tree_changes(repository, base, artifact["commit"]))}
+                "sha256": _sha(data),
+                "changedPaths": sorted(changed) if base == artifact["inputCommit"] else sorted(_tree_changes(repository, base, artifact["commit"]))}
 
 
 # -- scope failure evidence and Host-directed recovery ------------------------
@@ -1360,12 +1379,9 @@ def shared_stash_inventory(repository_path) -> dict:
     Managed checkouts are worktrees of the user's repository: ``refs/stash`` and
     its reflog live in the common Git directory, so a stash created or removed in
     any worktree — the user's own checkout included — is visible and removable in
-    every other one. The recorded ``repositoryPath`` may therefore be either a
-    worktree root or the repository's own Git directory (a snapshot's
-    ``snapshot.repositoryPath`` is the common Git dir, not a worktree); Git's own
-    ``rev-parse --git-common-dir`` resolves both shapes to the one directory
-    that actually owns the shared reflog, and ``reflog show`` reads it there
-    without needing any work tree. Each entry records its commit id and the full
+    every other one. Callers pass the snapshot's common Git directory, which
+    owns the shared reflog; ``reflog show`` reads it without a work tree. Each
+    entry records its commit id and the full
     description Git itself shows (``%gs``, the reflog subject; Git stores
     newline-bearing messages flattened there, while the commit object keeps the
     full text). A repository that cannot be read is an honest ``unknown``
@@ -1374,11 +1390,8 @@ def shared_stash_inventory(repository_path) -> dict:
     """
     path = str(repository_path)
     try:
-        common = _line(path, "rev-parse", "--path-format=absolute", "--git-common-dir")
-        if not common:
-            return _stash_unknown(path, "the repository did not name a common Git directory")
-        if _git_in(common, "rev-parse", "--verify", "--quiet", "refs/stash", allowed=(0, 1)).strip():
-            payload = _git_in(common, "reflog", "show", "--format=%H%x00%gs%x00", "refs/stash")
+        if _git_in(path, "rev-parse", "--verify", "--quiet", "refs/stash", allowed=(0, 1)).strip():
+            payload = _git_in(path, "reflog", "show", "--format=%H%x00%gs%x00", "refs/stash")
         else:
             # No stash ref at all is a complete, empty observation.
             payload = b""
@@ -1892,27 +1905,11 @@ def _tree_changes(root, before_tree, after_tree):
     return {name: (_tree_entry(root, after_tree, name) or None) for name in names}
 
 
-def _artifact_binding(original_input, final_input, artifact):
-    """Prove both input manifests and the final output against fixed Git objects."""
-    _validate_manifest(original_input)
+def _validate_output_record(final_input, artifact):
+    """Validate the retained output record without observing Git or the checkout."""
     _validate_manifest(final_input)
     if not isinstance(artifact, dict) or not isinstance(artifact.get("snapshot"), dict):
         raise BoardError("WORKSPACE_MANIFEST_CHANGED", "The sealed output snapshot is missing")
-    repository = Path(original_input["snapshot"]["repositoryPath"])
-    if (original_input["repositoryId"] != _identity(repository)
-            or final_input["repositoryId"] != original_input["repositoryId"]
-            or final_input["checkoutId"] != original_input["checkoutId"]
-            or final_input["snapshot"]["repositoryPath"] != str(repository)):
-        raise BoardError("WORKSPACE_CHANGED", "The artifact input repository or checkout identity changed")
-    for manifest in (original_input, final_input):
-        snapshot = manifest["snapshot"]
-        for ref, commit in ((snapshot["inputRef"], manifest["inputCommit"]),
-                            (snapshot["stagedRef"], snapshot["stagedCommit"])):
-            if _commit(repository, ref) != commit:
-                raise BoardError("WORKSPACE_CONFLICT", "An immutable input reference changed", ref=ref)
-        if (_line(repository, "rev-parse", manifest["inputCommit"] + "^{tree}") != manifest["inputTree"]
-                or _line(repository, "rev-parse", snapshot["stagedCommit"] + "^{tree}") != snapshot["stagedTree"]):
-            raise BoardError("WORKSPACE_MANIFEST_CHANGED", "A pinned input tree is inconsistent")
     snapshot = artifact["snapshot"]
     bindings = ("workspaceId", "taskId", "attemptId", "manifestSha256", "baseCommit", "inputCommit",
                 "commit", "tree", "changedPaths", "includedUntracked", "diffSha256")
@@ -1935,29 +1932,50 @@ def _artifact_binding(original_input, final_input, artifact):
     else:
         raise BoardError("WORKSPACE_MANIFEST_CHANGED", "The final output record kind is invalid")
     patch_path = artifact.get("diffPath")
-    patch = _read(Path(patch_path)) if isinstance(patch_path, str) and Path(patch_path).is_absolute() else None
-    if (not isinstance(commit, str) or not isinstance(ref, str)
-            or ref != expected_ref
-            or _commit(repository, ref) != commit
-            or _line(repository, "rev-parse", commit + "^{tree}") != artifact.get("tree")
-            or patch is None or _sha(patch) != artifact.get("diffSha256")
-            or _sha(_diff(repository, final_input["inputCommit"], commit)) != artifact.get("diffSha256")):
+    if (not isinstance(commit, str) or not isinstance(ref, str) or ref != expected_ref
+            or not isinstance(patch_path, str) or not Path(patch_path).is_absolute()):
+        raise BoardError("WORKSPACE_MANIFEST_CHANGED", "The final output record is inconsistent")
+
+
+def _artifact_binding(original_input, final_input, artifact):
+    """Prove both input manifests and the final output against fixed Git objects."""
+    _validate_manifest(original_input)
+    _validate_output_record(final_input, artifact)
+    repository = Path(original_input["snapshot"]["repositoryPath"])
+    if (original_input["repositoryId"] != _identity(repository)
+            or final_input["repositoryId"] != original_input["repositoryId"]
+            or final_input["checkoutId"] != original_input["checkoutId"]
+            or final_input["snapshot"]["repositoryPath"] != str(repository)):
+        raise BoardError("WORKSPACE_CHANGED", "The artifact input repository or checkout identity changed")
+    trees = {}
+    def check_tree(commit, expected):
+        if commit not in trees:
+            trees[commit] = _line(repository, "rev-parse", commit + "^{tree}")
+        if trees[commit] != expected:
+            raise BoardError("WORKSPACE_MANIFEST_CHANGED", "A pinned input tree is inconsistent")
+
+    for manifest in (original_input, final_input):
+        snapshot = manifest["snapshot"]
+        check_tree(manifest["inputCommit"], manifest["inputTree"])
+        check_tree(snapshot["stagedCommit"], snapshot["stagedTree"])
+    commit = artifact["commit"]
+    patch = _read(Path(artifact["diffPath"]))
+    if commit not in trees:
+        trees[commit] = _line(repository, "rev-parse", commit + "^{tree}")
+    if trees[commit] != artifact.get("tree") or patch is None or _sha(patch) != artifact.get("diffSha256"):
         raise BoardError("WORKSPACE_MANIFEST_CHANGED", "The final output Git objects or patch changed")
     if commit != final_input["inputCommit"]:
         parents = _line(repository, "rev-list", "--parents", "-n", "1", commit).split()
         if parents != [commit, final_input["inputCommit"]]:
             raise BoardError("WORKSPACE_MANIFEST_CHANGED", "The final output commit has the wrong input parent")
-    own_changes = _tree_changes(repository, final_input["inputTree"], artifact["tree"])
-    if sorted(own_changes) != artifact.get("changedPaths"):
-        raise BoardError("WORKSPACE_MANIFEST_CHANGED", "The final output path list differs from its Git trees")
     return repository, _tree_changes(repository, original_input["inputTree"], artifact["tree"])
 
 
 def verify_sealed_output(original_input: dict, final_input: dict, artifact: dict) -> dict:
     """Prove one sealed output/resolution record against its fixed Git objects.
 
-    The record's ref, commit, tree, parent binding, patch hash and per-path
-    summary are re-derived from immutable Git objects; any drift raises. The
+    The record's commit, tree, parent binding and patch hash are checked against
+    immutable Git objects; any drift raises. The
     returned changed paths are the whole-goal delta the record provably carries,
     so a caller can trust exactly the paths this record names.
     """
@@ -1969,7 +1987,8 @@ def verify_sealed_output(original_input: dict, final_input: dict, artifact: dict
 def integration_verify(artifact: dict, *, original_input: dict, final_input: dict,
                        path: str, ref: str, strategy: str, before_commit: str | None = None,
                        repository_id: str | None = None, checkout_id: str | None = None,
-                       adjusted_paths=None, host_paths=None, reason: str | None = None) -> dict:
+                       adjusted_paths=None, host_paths=None, reason: str | None = None,
+                       _confirm_adjustments: bool = False) -> dict:
     """Verify that one immutable artifact is actually present in a real target.
 
     The target checkout identity, the resolved ``ref`` commit and both before and
@@ -2017,14 +2036,7 @@ def integration_verify(artifact: dict, *, original_input: dict, final_input: dic
         if missing_host:
             raise BoardError("INVALID_WORKSPACE", "Host paths must be actual changes in the target commit interval", paths=missing_host[:32])
         source = artifact.get("commit")
-        artifact_ancestor = False
-        if isinstance(source, str) and source:
-            try:
-                _commit(root, source)
-            except BoardError:
-                artifact_ancestor = False
-            else:
-                artifact_ancestor = _is_ancestor(root, source, after)
+        artifact_ancestor = _is_ancestor(root, source, after) if isinstance(source, str) and source else False
         matching, differing, missing = [], [], []
         for name in sorted(changed):
             expected = changed[name]
@@ -2047,6 +2059,10 @@ def integration_verify(artifact: dict, *, original_input: dict, final_input: dic
             else:
                 differing.append({"path": name, "artifactMode": expected[0], "artifactOid": expected[1],
                                   "targetMode": actual["mode"], "targetOid": actual["oid"]})
+        if _confirm_adjustments:
+            adjustments = sorted({item["path"] for item in differing} | set(missing))
+            if adjustments and not (isinstance(reason, str) and reason.strip()):
+                raise BoardError("INVALID_WORKSPACE", "An adjusted integration requires an explicit reason")
         unrecorded = sorted({item["path"] for item in differing} - set(adjustments)) + sorted(set(missing) - set(adjustments))
         verification = {
             "verified": bool((before is None or _is_ancestor(root, before, after)) and not unrecorded),
@@ -2180,7 +2196,7 @@ def resolve_allocation(state_dir, manifest: dict, retained=None) -> dict | None:
 
 def _allocation_refs(repository, allocation_id, manifest, retained):
     """Bounded retention view of every fixed ref that belongs to this checkout."""
-    identifiers = [allocation_id, manifest["workspaceId"]]
+    identifiers = list(dict.fromkeys((allocation_id, manifest["workspaceId"])))
     for candidate in _allocation_candidates(manifest, retained):
         value = candidate.get("workspaceId")
         if ((candidate.get("checkoutId") == manifest["checkoutId"])
@@ -2289,10 +2305,24 @@ def _cleanup_proof(repository, checkout_root, allocation, manifest, retained, se
         result["worktree"] = True
         result["locked"] = record.get("locked")
     result["refs"] = _allocation_refs(repository, allocation["workspaceId"], manifest, retained)
+    def fixed_refs_match(include_output):
+        snapshot = manifest["snapshot"]
+        expected = ((snapshot["inputRef"], manifest["inputCommit"]),
+                    (snapshot["stagedRef"], snapshot["stagedCommit"]))
+        if include_output:
+            expected += ((sealed["ref"], sealed["commit"]),)
+        try:
+            return all(_commit(repository, ref) == commit for ref, commit in expected)
+        except BoardError:
+            return False
+
     if not isinstance(sealed, dict) or not isinstance(sealed.get("snapshot"), dict):
         try:
             verify(manifest, require_unchanged=True)
         except BoardError:
+            result["reasons"].append("unsealed-changes")
+            return
+        if not fixed_refs_match(False):
             result["reasons"].append("unsealed-changes")
         return
     snapshot = sealed["snapshot"]
@@ -2308,14 +2338,19 @@ def _cleanup_proof(repository, checkout_root, allocation, manifest, retained, se
     except BoardError:
         result["reasons"].append("sealed-output-invalid")
         return
-    observation = _stable_observation(checkout_root, manifest["snapshot"]["executionSelectors"], write=True)
+    if not fixed_refs_match(True):
+        result["reasons"].append("sealed-output-invalid")
+        return
+    observation = _observe(checkout_root, manifest["snapshot"]["executionSelectors"])
+    if observation["fingerprint"] == snapshot.get("observationSha256"):
+        return
     unsealed = []
     try:
         entries_now, _changed, excluded_changes, _adopted = _output_entries(checkout_root, manifest, observation,
-                                                                           allowed_paths=allowed)
-        current_tree = _tree(checkout_root, entries_now)
-        if current_tree != sealed["tree"]:
-            unsealed = sorted(_tree_changes(checkout_root, sealed["tree"], current_tree))
+                                                                           allowed_paths=allowed, write=False)
+        sealed_entries = _entries(repository, sealed["tree"])
+        unsealed = sorted(path for path in entries_now.keys() | sealed_entries.keys()
+                          if entries_now.get(path) != sealed_entries.get(path))
         if sorted(excluded_changes) != sorted(snapshot.get("excludedChangedPaths") or []):
             unsealed = sorted(set(unsealed) | set(excluded_changes) | set(snapshot.get("excludedChangedPaths") or []))
     except BoardError as error:
@@ -2325,9 +2360,8 @@ def _cleanup_proof(repository, checkout_root, allocation, manifest, retained, se
         if error.code != "WORKSPACE_SCOPE_VIOLATION":
             raise
         unsealed = [path for path in (error.details.get("paths") or []) if path not in set(allowed)]
-    if unsealed or observation["fingerprint"] != snapshot.get("observationSha256"):
-        result["reasons"].append("unsealed-changes")
-        result["unsealedPaths"] = unsealed[:32]
+    result["reasons"].append("unsealed-changes")
+    result["unsealedPaths"] = unsealed[:32]
     return
 
 

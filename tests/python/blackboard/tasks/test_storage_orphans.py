@@ -336,8 +336,8 @@ class StorageOrphanTests(WorkflowTestCase):
     def test_apply_rechecks_database_after_inventory(self):
         _, checkout, planned = self.orphan()
         original = storage.inspect
-        def register_after_inventory(store):
-            result = original(store)
+        def register_after_inventory(store, **kwargs):
+            result = original(store, **kwargs)
             self.submit(self.board_instance, request_id='late-registration', cwd=str(checkout), kind='existing')
             return result
         with patch.object(storage, 'inspect', side_effect=register_after_inventory):
@@ -543,17 +543,17 @@ class StorageOrphanTests(WorkflowTestCase):
         first_row = next(row for row in inspected['candidates'] if row['path'] == str(checkout))
         self.assertTrue(first_row['eligible'], first_row['reasons'])
 
-    def test_late_reference_after_physical_proof_is_rechecked_in_writer_transaction(self):
+    def test_late_reference_after_locked_proof_is_rechecked_in_writer_transaction(self):
         _, checkout, planned = self.orphan()
         original = storage._orphan_workspace
         inspected = []
         def insert_after_proof(*args, **kwargs):
             fresh = original(*args, **kwargs)
-            inspected.append(fresh['path'])
-            if len(inspected) == 2:
-                # Apply inventory and physical proof have both already completed.
-                # An independent committed reference must still win before the
-                # authoritative writer fence and actual checkout removal.
+            inspected.append((fresh['path'], kwargs.get('git_proof', True)))
+            if kwargs.get('git_proof', True):
+                # The sole apply-time Git proof has completed under the
+                # allocation lock. A committed reference still wins before
+                # the writer fence and actual checkout removal.
                 with self.board_instance.store.db.write() as connection:
                     connection.execute("INSERT INTO events(kind,payload_json,created_at) VALUES ('private-late',?,?)",
                                        (json.dumps({'retained': {'path': str(checkout / '..' / 'checkout')}}),
@@ -561,18 +561,18 @@ class StorageOrphanTests(WorkflowTestCase):
             return fresh
         with patch.object(storage, '_orphan_workspace', side_effect=insert_after_proof):
             result = self.assert_retained(checkout, planned)
-        self.assertEqual(inspected, [str(checkout), str(checkout)])
+        self.assertEqual(inspected, [(str(checkout), False), (str(checkout), True)])
         self.assertEqual(result['skipped'][0]['reasons'], ['STORAGE_CHANGED'])
         self.assertTrue(checkout.is_dir())
 
-    def test_late_allocation_record_change_after_physical_proof_is_retained(self):
+    def test_late_allocation_record_change_after_locked_proof_is_retained(self):
         _, checkout, planned = self.orphan()
         original = storage._orphan_workspace
         calls = []
         def change_after_proof(*args, **kwargs):
             fresh = original(*args, **kwargs)
-            calls.append(fresh['path'])
-            if len(calls) == 2:
+            calls.append((fresh['path'], kwargs.get('git_proof', True)))
+            if kwargs.get('git_proof', True):
                 path = checkout.parent / 'request.json'
                 changed = json.loads(path.read_text())
                 changed['requestId'] = 'different-original-request'
@@ -580,7 +580,7 @@ class StorageOrphanTests(WorkflowTestCase):
             return fresh
         with patch.object(storage, '_orphan_workspace', side_effect=change_after_proof):
             result = self.assert_retained(checkout, planned)
-        self.assertEqual(calls, [str(checkout), str(checkout)])
+        self.assertEqual(calls, [(str(checkout), False), (str(checkout), True)])
         self.assertEqual(result['skipped'][0]['reasons'], ['STORAGE_CHANGED'])
 
     def test_raw_request_reference_protects_only_its_orphan_during_plan_and_apply(self):

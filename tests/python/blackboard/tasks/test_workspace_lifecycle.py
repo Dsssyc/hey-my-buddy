@@ -343,7 +343,7 @@ class LifecycleTestCase(RealWorkspaceTestCase):
         applied = self.reclaim(board, self.view(board, submitted["runId"]))
         self.assertTrue(applied["removed"])
 
-    def test_missing_or_spoofed_source_objects_cannot_verify(self):
+    def test_spoofed_source_objects_cannot_verify(self):
         board = self.board()
         self.register(board)
         submitted, claimed, manifest, checkout, seal, view, artifact = self.run_worktree(
@@ -359,10 +359,53 @@ class LifecycleTestCase(RealWorkspaceTestCase):
             with self.assertRaises(BoardError) as oversized:
                 self.accept(board, self.view(board, submitted["runId"]), artifact, target=target)
         self.assertEqual(oversized.exception.code, "WORKSPACE_UNSUPPORTED")
-        git(self.repo, "update-ref", "-d", manifest["snapshot"]["inputRef"])
-        with self.assertRaises(BoardError) as raised:
-            self.accept(board, self.view(board, submitted["runId"]), artifact, target=target)
-        self.assertEqual(raised.exception.code, "WORKSPACE_REF_INVALID")
+
+    def test_cleared_workspace_refs_allow_turns_and_acceptance_but_block_cleanup(self):
+        board = self.board()
+        self.register(board)
+        submitted, _first_claim, _first_manifest, checkout, _first_seal, yielded, first_artifact = self.run_worktree(
+            board, request_id="cleared-refs", output="first output\n", disposition="assistance"
+        )
+        run_id = submitted["runId"]
+
+        def clear_workspace_refs():
+            refs = git(self.repo, "for-each-ref", "--format=%(refname)", "refs/buddy/workspaces/").splitlines()
+            self.assertTrue(refs)
+            for ref in refs:
+                git(self.repo, "update-ref", "-d", ref)
+
+        clear_workspace_refs()
+        continued = board.call("workflow_continue", {
+            "runId": run_id, "commandId": "cleared-refs-continue", "expectedRevision": yielded["revision"],
+            "input": "finish the work", **self.control(yielded),
+        })
+        self.assertEqual(continued["state"], "executing")
+        second_claim = self.claim(board, run_id, request_id="cleared-refs-second", nonce="q" * 16)
+        second_manifest = second_claim["claim"]["turn"]["input"]["executionWorkspace"]
+        clear_workspace_refs()
+        attempt = second_claim["claim"]["attempt"]
+        context = ExecutionContext(
+            task_id=run_id, attempt_id=attempt["attemptId"], generation=attempt["generation"],
+            spec={**CONFIGURATION, "cwd": second_manifest["path"], "task": "second turn", "timeoutSeconds": 30},
+            directory=self.directory / "cleared-refs-turn", runtime={},
+            environment={"BUDDY_STATE_DIR": str(self.directory)}, turn=second_claim["claim"]["turn"],
+        )
+        turn_io.verify_workspace(context)
+        self.assertEqual(context.effective_workspace, second_manifest)
+        (checkout / "second.txt").write_text("second output\n")
+        second_seal = workspace_module.seal(self.directory, second_manifest, run_id, attempt["attemptId"])
+        self.finish_turn(board, second_claim, second_seal, nonce="q" * 16)
+        clear_workspace_refs()
+        delivered = self.view(board, run_id)
+        final = next(row for row in delivered["artifacts"] if row["kind"] == "output")
+        target = self.target_with_artifact(final, previous=(first_artifact,))
+        accepted = self.accept(board, delivered, final, target=target, keepCheckout=True)
+        self.assertEqual(accepted["state"], "accepted")
+        with self.assertRaises(BoardError) as blocked:
+            self.reclaim(board, self.view(board, run_id))
+        self.assertEqual(blocked.exception.code, "NOT_READY")
+        self.assertIn("sealed-output-invalid", blocked.exception.details["reasons"])
+        self.assertTrue(checkout.exists())
 
     def test_final_noop_continuation_still_requires_earlier_goal_change(self):
         board = self.board()
@@ -685,6 +728,22 @@ class LifecycleTestCase(RealWorkspaceTestCase):
         recovered = self.reclaim(board, blocked_view)
         self.assertTrue(recovered["removed"])
         self.assertFalse(checkout.exists())
+
+    def test_matching_seal_fingerprint_needs_no_git_object_writes_for_cleanup_proof(self):
+        board = self.board()
+        self.register(board)
+        _submitted, _claimed, manifest, checkout, seal, view, artifact = self.run_worktree(
+            board, request_id="cleanup-matching-fingerprint"
+        )
+        self.accept(board, view, artifact, target=self.target_with_artifact(artifact), keepCheckout=True)
+        with mock.patch.object(workspace_module, "_write_objects", side_effect=AssertionError("object write")) as write, \
+                mock.patch.object(workspace_module, "_tree", side_effect=AssertionError("tree construction")) as tree:
+            proof = workspace_module.cleanup_inspect(self.directory, manifest, sealed=seal, retained=[manifest])
+        self.assertTrue(proof["eligible"], proof)
+        self.assertEqual(proof["reasons"], [])
+        write.assert_not_called()
+        tree.assert_not_called()
+        self.assertTrue(checkout.exists())
 
     def test_cleanup_never_targets_a_source_checkout_or_foreign_path(self):
         board, submitted, manifest, checkout, artifact, view = self.accepted_worktree(request_id="cleanup-foreign")
@@ -1583,10 +1642,20 @@ class LifecycleTestCase(RealWorkspaceTestCase):
             **self.control(view),
         })
         plan = planned["plan"]
-        self.assertEqual(plan["state"], "blocked")
-        self.assertIn("attached-branch", plan["reasons"])
-        self.assertNotIn("unregistered-checkout", plan["reasons"])
-        diagnosis = plan["evidence"]["workspace"]["attachedBranch"]
+        self.assertEqual(plan["state"], "planned")
+        self.assertNotIn("attached-branch", plan["reasons"])
+        # The actual branch is first examined by apply; its diagnosis is then
+        # persisted on the plan that this planning call created.
+        with self.assertRaises(BoardError) as blocked:
+            self.reclaim(board, self.view(board, run_id))
+        self.assertEqual(blocked.exception.code, "NOT_READY")
+        self.assertIn("attached-branch", blocked.exception.details["reasons"])
+        self.assertEqual(blocked.exception.details["reclaim"]["attachedBranch"]["branch"], "socu/worker-branch")
+        blocked_plan = self.view(board, run_id)["cleanup"]
+        self.assertEqual(blocked_plan["planId"], plan["planId"])
+        self.assertEqual(blocked_plan["state"], "blocked")
+        self.assertIn("attached-branch", blocked_plan["reasons"])
+        diagnosis = blocked_plan["evidence"]["workspace"]["attachedBranch"]
         self.assertEqual(diagnosis["branch"], "socu/worker-branch")
         self.assertEqual(diagnosis["ref"], "refs/heads/socu/worker-branch")
         self.assertEqual(diagnosis["headCommit"], head)
@@ -1594,12 +1663,6 @@ class LifecycleTestCase(RealWorkspaceTestCase):
         self.assertIn("switch --detach", diagnosis["detachCommand"])
         self.assertIn(head, diagnosis["detachCommand"])
         self.assertIn("retry", diagnosis)
-        # The reclaim refusal surfaces the same Host-facing diagnosis.
-        with self.assertRaises(BoardError) as blocked:
-            self.reclaim(board, self.view(board, run_id))
-        self.assertEqual(blocked.exception.code, "NOT_READY")
-        self.assertIn("attached-branch", blocked.exception.details["reasons"])
-        self.assertEqual(blocked.exception.details["reclaim"]["attachedBranch"]["branch"], "socu/worker-branch")
         # The direct removal refuses with the same facts and touches nothing.
         with self.assertRaises(BoardError) as raised:
             workspace_module.cleanup_remove(self.directory, manifest)
@@ -1644,6 +1707,9 @@ class LifecycleTestCase(RealWorkspaceTestCase):
         # The branch appears between planning and applying.
         git(checkout, "switch", "-q", "-c", "socu/late-branch")
         branch_commit = self.branch_ref("socu/late-branch")
+        refs_before = git(self.repo, "for-each-ref", "--format=%(refname) %(objectname)", "refs/buddy/")
+        checkout_files_before = {path.relative_to(checkout): path.read_bytes()
+                                 for path in checkout.rglob("*") if path.is_file() and ".git" not in path.parts}
         with self.assertRaises(BoardError) as raised:
             board.store.workflow.cleanup_apply({
                 "runId": run_id, "planId": planned["plan"]["planId"], "commandId": "apply-attached",
@@ -1653,8 +1719,20 @@ class LifecycleTestCase(RealWorkspaceTestCase):
         self.assertEqual(raised.exception.code, "NOT_READY")
         self.assertIn("attached-branch", raised.exception.details["reasons"])
         self.assertEqual(raised.exception.details["attachedBranch"]["branch"], "socu/late-branch")
+        blocked = self.view(board, run_id)["cleanup"]
+        self.assertEqual(blocked["planId"], planned["plan"]["planId"])
+        self.assertEqual(blocked["state"], "blocked")
+        self.assertIn("attached-branch", blocked["reasons"])
+        self.assertEqual(blocked["evidence"]["workspace"]["attachedBranch"]["branch"], "socu/late-branch")
+        self.assertTrue(blocked["retention"]["fixedRefs"])
         self.assertTrue(checkout.exists())
         self.assertEqual(self.branch_ref("socu/late-branch"), branch_commit)
+        self.assertEqual(git(checkout, "rev-parse", "--abbrev-ref", "HEAD").strip(), "socu/late-branch")
+        self.assertEqual(git(self.repo, "for-each-ref", "--format=%(refname) %(objectname)", "refs/buddy/"),
+                         refs_before)
+        self.assertEqual({path.relative_to(checkout): path.read_bytes()
+                          for path in checkout.rglob("*") if path.is_file() and ".git" not in path.parts},
+                         checkout_files_before)
 
     def test_a_missing_registration_and_a_foreign_lock_keep_their_own_reasons(self):
         board, submitted, manifest, checkout, artifact, view = self.accepted_worktree(

@@ -142,9 +142,8 @@ class WorkspaceTests(unittest.TestCase):
         self.assertEqual(self.base, self.git("rev-parse", "HEAD").decode().strip())
         self.assertEqual(outside.read_text(), "do not follow")
         self.assertEqual(manifest["snapshot"]["excludedUntracked"], ["src/excluded.txt"])
-        empty_hash = hashlib.sha256(b"").hexdigest()
-        self.assertNotEqual(manifest["snapshot"]["stagedSha256"], empty_hash)
-        self.assertNotEqual(manifest["snapshot"]["unstagedSha256"], empty_hash)
+        self.assertNotIn("stagedSha256", manifest["snapshot"])
+        self.assertNotIn("unstagedSha256", manifest["snapshot"])
         self.assertTrue(workspace.verify(manifest)["unchanged"])
 
     def test_prepare_replay_freezes_source_and_changed_intent_conflicts(self):
@@ -300,6 +299,40 @@ class WorkspaceTests(unittest.TestCase):
         self.git("update-ref", output["ref"], output["commit"])
         Path(output["diffPath"]).write_bytes(b"corrupted")
         self.assert_error("WORKSPACE_CONFLICT", workspace.seal, self.state, manifest, "task", "attempt")
+
+    def test_missing_input_and_output_refs_allow_seal_and_verification_but_block_cleanup(self):
+        manifest = self.prepare()
+        target = Path(manifest["checkoutRoot"])
+        self.git("update-ref", "-d", manifest["snapshot"]["inputRef"])
+        self.git("update-ref", "-d", manifest["snapshot"]["stagedRef"])
+        (target / "src/file.txt").write_text("sealed output\n")
+        output = workspace.seal(self.state, manifest, "task", "attempt")
+        self.git("update-ref", "-d", output["ref"])
+        self.assertEqual(workspace.verify_sealed_output(manifest, manifest, output)["changedPaths"], ["src/file.txt"])
+        integrated = self.root / "integrated"
+        self.git("worktree", "add", "--detach", str(integrated), output["commit"])
+        result = workspace.integration_verify(output, original_input=manifest, final_input=manifest,
+                                              path=str(integrated), ref="HEAD", strategy="patch")
+        self.assertTrue(result["verified"])
+        cleanup = workspace.cleanup_inspect(self.state, manifest, output)
+        self.assertFalse(cleanup["eligible"])
+        self.assertIn("sealed-output-invalid", cleanup["reasons"])
+        self.assertTrue(target.is_dir())
+
+    def test_matching_seal_cleanup_proof_does_not_write_git_objects(self):
+        manifest = self.prepare()
+        (Path(manifest["checkoutRoot"]) / "src/file.txt").write_text("sealed output\n")
+        output = workspace.seal(self.state, manifest, "task", "attempt")
+        git = workspace._git
+
+        def read_only_git(root, *args, **kwargs):
+            self.assertNotIn(args[0], {"fast-import", "write-tree", "commit-tree", "update-index", "read-tree"})
+            self.assertFalse(args[0] == "hash-object" and "-w" in args)
+            return git(root, *args, **kwargs)
+
+        with patch.object(workspace, "_git", side_effect=read_only_git):
+            cleanup = workspace.cleanup_inspect(self.state, manifest, output)
+        self.assertTrue(cleanup["eligible"], cleanup["reasons"])
 
     def test_existing_checkout_continuation_uses_exact_sealed_baseline(self):
         (self.repo / "src/file.txt").write_text("initial staged\n")
