@@ -568,10 +568,9 @@ class MicroTaskBoundaryTests(unittest.TestCase):
 
 
 class CompactMicroTaskEnvelopeTests(unittest.TestCase):
-    def test_structured_micro_task_report_is_whole_and_omits_native_duplicate(self):
+    def test_micro_task_report_is_whole_and_points_at_the_full_result(self):
         clock = VirtualClock()
         service = FakeService(clock, complete_after_waits=1)
-        huge = "x" * 200_000
         report = "report " * 500
         service.run = {
             **service.run,
@@ -585,7 +584,6 @@ class CompactMicroTaskEnvelopeTests(unittest.TestCase):
             "state": "completed",
             "result": {
                 "status": "ok",
-                "finalText": huge,
                 "logPaths": {"stdout": "/tmp/out", "stderr": "/tmp/err"},
                 "processState": {"shutdownConfirmed": True},
                 "turn": {
@@ -613,7 +611,6 @@ class CompactMicroTaskEnvelopeTests(unittest.TestCase):
         self.assertIn("hey-my-buddy result", envelope["resultCommand"])
         self.assertEqual(envelope["turn"]["summary"], report)
         self.assertNotIn("finalText", envelope["result"])
-        self.assertNotIn("finalTextTruncated", envelope["result"])
 
     def test_preparation_failure_with_a_null_runner_result_stays_failed(self):
         from hey_my_buddy.cli import cli_views

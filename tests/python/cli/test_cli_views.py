@@ -293,7 +293,7 @@ class CliViewTests(RealWorkspaceTestCase):
         row = next(entry for entry in listed["runs"] if entry["runId"] == run_id)
         self.assertIn("state", row)
         self.assertNotIn("status", row)
-        self.assertTrue(row["title"])
+        self.assertTrue(row["title"].startswith("Implement the bounded change"))
         self.assertLessEqual(len(row["title"]), 120)
         code, macros, _ = self.cli("macro-task-list", {})
         self.assertEqual(code, 0, macros)

@@ -160,13 +160,9 @@ def dependencies(connection, members):
         else:
             row = connection.execute(
                 "SELECT " + _bounded("r.title") + "," + _bounded("json_extract(t.spec_json,'$.task')",
-                    kind="json_type(t.spec_json,'$.task')") + ","
-                + _bounded("(SELECT CASE WHEN json_type(a.result_json,'$.result.turn.outcome.summary')='text'"
-                           " THEN json_extract(a.result_json,'$.result.turn.outcome.summary') END FROM workflow_turns t JOIN attempts a ON a.attempt_id=t.attempt_id"
-                           " WHERE t.run_id=r.run_id AND t.state='returned'"
-                           " ORDER BY t.turn_index DESC LIMIT 1)") +
+                    kind="json_type(t.spec_json,'$.task')") +
                 " FROM workflow_runs r JOIN tasks t ON t.task_id=r.run_id WHERE r.run_id=?", (group[4:],),
             ).fetchone()
             groups[group].append(("presentation", *tuple(row)))
-            reusable[group] = all(length is None or length <= TEXT_BOUND for length in (row[1], row[4], row[7]))
+            reusable[group] = all(length is None or length <= TEXT_BOUND for length in (row[1], row[4]))
     return groups, reusable

@@ -305,27 +305,21 @@ def _first_line(text: Any) -> str | None:
     return " ".join(text.strip().splitlines()[0].split())[:TITLE_LIMIT]
 
 
-def _run_presentation(connection, run_id: str) -> tuple[str | None, str, str | None]:
-    """Intent first; a recorded result summary is a separate secondary field."""
+def _run_title(connection, run_id: str) -> tuple[str | None, str]:
+    """Use the Host's title or task text for an index, without reading reports."""
     row = connection.execute(
-        "SELECT r.title,"
-        " (SELECT CASE WHEN json_type(a.result_json,'$.result.turn.outcome.summary')='text'"
-        "  THEN json_extract(a.result_json,'$.result.turn.outcome.summary') END FROM workflow_turns t JOIN attempts a ON a.attempt_id=t.attempt_id"
-        "  WHERE t.run_id=r.run_id AND t.state='returned'"
-        "  ORDER BY t.turn_index DESC LIMIT 1) AS summary,"
-        " json_extract(t.spec_json,'$.task') AS task"
+        "SELECT r.title,json_extract(t.spec_json,'$.task') AS task"
         " FROM workflow_runs r JOIN tasks t ON t.task_id=r.run_id WHERE r.run_id=?",
         (run_id,),
     ).fetchone()
     if row is None:
-        return None, "none", None
-    summary = row["summary"]
+        return None, "none"
     if isinstance(row["title"], str) and row["title"].strip():
-        return row["title"].strip()[:TITLE_LIMIT], "title", summary
+        return row["title"].strip()[:TITLE_LIMIT], "title"
     task = _first_line(row["task"])
     if task:
-        return task, "task", summary
-    return None, "none", summary
+        return task, "task"
+    return None, "none"
 
 
 def _state(row) -> str:
@@ -580,7 +574,6 @@ SELECT h.*, ownership.group_id, conclusion.execution_status AS conclusion_status
 
 
 def _summary(connection, group_id: str, inputs: dict) -> dict:
-    result_summary = None
     members, matching, failed_conclusions = inputs["members"], inputs["matching"], inputs["failed"]
     counts = {"roots": 0, "helpers": 0, "active": 0, "host": 0, "review": 0, "ended": 0, "accepted": 0,
               "failed": 0,
@@ -607,7 +600,7 @@ def _summary(connection, group_id: str, inputs: dict) -> dict:
     else:
         root_id = group_id[len("run:"):]
         root = next((row for row in members if row["task_id"] == root_id), None)
-        title, title_source, result_summary = _run_presentation(connection, root_id)
+        title, title_source = _run_title(connection, root_id)
         metadata = micro_task.metadata_from_row(root) if root is not None else {"project": None, "sourceHostId": None}
         group_project, source_host = metadata["project"], metadata["sourceHostId"]
         created_at = root["created_at"] if root is not None else None
@@ -621,7 +614,6 @@ def _summary(connection, group_id: str, inputs: dict) -> dict:
         "kind": kind,
         "title": title,
         "titleSource": title_source,
-        "summary": result_summary,
         "project": group_project,
         "sourceHostId": source_host,
         "currentHostIds": current_hosts,
@@ -729,10 +721,10 @@ def _tree_order(runs: list) -> list:
 
 def _timeline_row(connection, row, depth: int) -> dict:
     metadata = micro_task.metadata_from_row(row)
-    title, title_source, result_summary = _run_presentation(connection, row["task_id"])
+    title, title_source = _run_title(connection, row["task_id"])
     fix_relation = fixes.view(connection, row["task_id"])
     if "fixes" in fix_relation:
-        fixes_title, fixes_title_source, _ = _run_presentation(connection, fix_relation["fixes"])
+        fixes_title, fixes_title_source = _run_title(connection, fix_relation["fixes"])
         fix_relation["fixesTitle"] = fixes_title
         fix_relation["fixesTitleSource"] = fixes_title_source
     task_text = connection.execute("SELECT json_extract(spec_json,'$.task') FROM tasks WHERE task_id=?", (row["task_id"],)).fetchone()
@@ -753,7 +745,6 @@ def _timeline_row(connection, row, depth: int) -> dict:
         "rootRunId": row["root_run_id"],
         "title": title,
         "titleSource": title_source,
-        "summary": result_summary,
         "taskSummary": _first_line(task_text[0]) if task_text else None,
         "createdAt": row["created_at"],
         "state": row["run_state"],
@@ -911,7 +902,7 @@ def _run_spans(store, connection, row) -> list[dict]:
         # below is that interval, and a second open span would cover its label.
         spans.append(_span("queue", f"queue:open:{run_id}", run_id, queued_from, None, "queued"))
     for request in connection.execute(
-        "SELECT w.request_id,w.kind,w.state,w.summary,w.decision_id,w.created_at,w.decided_at,w.updated_at,"
+        "SELECT w.request_id,w.kind,w.state,w.decision_id,w.created_at,w.decided_at,w.updated_at,"
         " w.reason_code,w.reason_params_json FROM workflow_requests w"
         " WHERE w.run_id=? ORDER BY w.created_at,w.request_id", (run_id,)
     ).fetchall():
@@ -925,7 +916,6 @@ def _run_spans(store, connection, row) -> list[dict]:
             "host", f"host:{request['request_id']}", run_id, request["created_at"],
             None if open_request else (closed_at or None), request["state"],
             request_id=request["request_id"], requestKind=request["kind"], decisionId=request["decision_id"],
-            summary=request["summary"],
             reason=request_reason(connection, request),
         ))
     return spans

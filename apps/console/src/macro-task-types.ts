@@ -11,7 +11,6 @@ type MacroTaskCategory = MacroTaskSummary["state"];
 const macroTaskSummaryFields = z.looseObject({
   macroTaskId: z.string().min(1), kind: z.enum(["macro-task", "standalone"]), title: z.string().nullable(),
   titleSource: z.enum(["macro-task", "title", "task", "none"]),
-  summary: z.string().nullable(),
   project: z.looseObject({ id: z.string(), path: z.string().nullable(), label: z.string() }).nullable(),
   sourceHostId: z.string().nullable(), currentHostIds: z.array(z.string()), createdAt: z.string().nullable(),
   lastActivityAt: z.string().nullable(), lastActivitySeq: safeCount, state: z.enum(["host", "active", "review", "ended"]),
@@ -58,7 +57,6 @@ const timelineRowSchema = z.looseObject({
 export type TimelineRow = z.infer<typeof timelineRowSchema> & {
   runId: string; parentRunId: string | null; rootRunId: string;
   titleSource: "title" | "task" | "none";
-  summary: string | null;
   createdAt: string;
   /** Micro task workflow state (for example executing, awaiting-host, delivered, accepted). */
   state: string;
@@ -121,7 +119,7 @@ export type TimelineSpan = z.infer<typeof timelineSpanSchema> & {
   generation?: number; disposition?: string; error?: string;
   /** Own durable attempt receipt; a model turn disposition is not the execution result. */
   resultStatus?: "ok" | "failed" | "cancelled";
-  requestKind?: string; summary?: string | null; reason?: Reason | null; decisionTaskId?: string;
+  requestKind?: string; reason?: Reason | null; decisionTaskId?: string;
   /** Native usage of the span's own execution; a shape the console does not read is unknown. */
   tokenUsage?: unknown;
   /** Exact recorded decision; never infer it from the run's current route. */

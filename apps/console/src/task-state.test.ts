@@ -40,21 +40,21 @@ describe("Lead ownership display", () => {
 
 describe("micro task title rule (0.16 T1)", () => {
   it("prefers the explicit workflow title over everything else", () => {
-    const title = taskTitle(task({ workflow: { state: "delivered", awaitingHost: false, hostId: "h", ownerGeneration: 1, revision: 3, title: "修复标题", resultSummary: "已验证的整合结果" } }));
+    const title = taskTitle(task({ workflow: { state: "delivered", awaitingHost: false, hostId: "h", ownerGeneration: 1, revision: 3, title: "修复标题" } }));
     expect(title.text).toBe("修复标题");
     expect(title.source).toBe("title");
   });
 
-  it("never uses the Worker resultSummary as a title", () => {
-    const title = taskTitle(task({ workflow: { state: "delivered", awaitingHost: false, hostId: "h", ownerGeneration: 1, revision: 3, resultSummary: "已验证的整合结果" } }));
+  it("uses the task line when there is no explicit title", () => {
+    const title = taskTitle(task({ workflow: { state: "delivered", awaitingHost: false, hostId: "h", ownerGeneration: 1, revision: 3 } }));
     expect(title.text).toBe("第一行标题");
     expect(title.source).toBe("task");
   });
 
-  it("falls back to the trimmed first task line without a summary or workflow", () => {
+  it("falls back to the trimmed first task line without an explicit title or workflow", () => {
     expect(taskTitle(task()).text).toBe("第一行标题");
     expect(taskTitle(task()).source).toBe("task");
-    expect(taskTitle(task({ workflow: { state: "executing", awaitingHost: false, hostId: "h", ownerGeneration: 1, revision: 1, resultSummary: null } })).text)
+    expect(taskTitle(task({ workflow: { state: "executing", awaitingHost: false, hostId: "h", ownerGeneration: 1, revision: 1 } })).text)
       .toBe("第一行标题");
   });
 
@@ -77,7 +77,7 @@ describe("micro task title rule (0.16 T1)", () => {
   });
 
   it("names an unnamed microTask only when the title and first line are empty", () => {
-    expect(taskTitle(task({ task: "   \n\t ", workflow: { state: "queued", awaitingHost: false, hostId: "h", ownerGeneration: 1, revision: 0, resultSummary: null } })).text)
+    expect(taskTitle(task({ task: "   \n\t ", workflow: { state: "queued", awaitingHost: false, hostId: "h", ownerGeneration: 1, revision: 0 } })).text)
       .toBe("未命名微任务");
     expect(taskTitle(task({ task: "", workflow: undefined })).source).toBe("none");
     expect(taskTitle(task({ task: "", workflow: undefined })).text).toBe("未命名微任务");

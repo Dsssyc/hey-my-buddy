@@ -432,7 +432,7 @@ def task_brief(view: dict) -> dict:
         brief["workflow"] = _pick(
             workflow,
             ("state", "awaitingHost", "ownerGeneration", "revision", "continuationCount", "activeRequestId",
-             "resultSummary", "macroTaskId", "title"),
+             "macroTaskId", "title"),
         )
     if "workflowShutdown" in view:
         brief["workflowShutdown"] = _shutdown(view["workflowShutdown"])
@@ -516,8 +516,6 @@ def _await_result(result: Any) -> Any:
     turn = brief.get("turn")
     if turn is not None:
         brief["turn"] = {key: value for key, value in turn.items() if value is not None and value != []}
-    if brief.get("finalTextTruncated") is False:
-        brief.pop("finalTextTruncated")
     if brief.get("artifacts") == []:
         brief.pop("artifacts")
     if brief.get("request") is None:

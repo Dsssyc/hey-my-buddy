@@ -5701,20 +5701,12 @@ class WorkflowCoordinator:
 
     # -- task-view extension -------------------------------------------------
     def task_extension(self, connection, task_row) -> dict | None:
-        # Share the existing run read; the indexed subquery returns at most one
-        # own outcome. json_type distinguishes text from serialized objects/arrays.
         run_row = connection.execute(
-            "SELECT r.run_id,r.state,r.owner_generation,r.host_id,r.revision,r.continuation_count,r.active_request_id,r.title,r.macro_task_id,"
-            " (SELECT CASE WHEN json_type(a.result_json,'$.result.turn.outcome.summary')='text'"
-            " THEN json_extract(a.result_json,'$.result.turn.outcome.summary') END FROM workflow_turns t JOIN attempts a ON a.attempt_id=t.attempt_id"
-            " WHERE t.run_id=r.run_id AND t.state='returned'"
-            " ORDER BY t.turn_index DESC LIMIT 1) AS result_summary"
-            " FROM workflow_runs r WHERE r.run_id=?", (task_row["task_id"],)
+            "SELECT run_id,state,owner_generation,host_id,revision,continuation_count,active_request_id,title,macro_task_id"
+            " FROM workflow_runs WHERE run_id=?", (task_row["task_id"],)
         ).fetchone()
         if run_row is None:
             return None
-        summary = run_row["result_summary"]
-        summary = summary if isinstance(summary, str) and summary.strip() else ""
         extension = {
             "state": run_row["state"],
             "awaitingHost": run_row["state"] == "awaiting-host",
@@ -5723,7 +5715,6 @@ class WorkflowCoordinator:
             "revision": run_row["revision"],
             "continuationCount": run_row["continuation_count"],
             "activeRequestId": run_row["active_request_id"],
-            "resultSummary": summary or None,
             "hostConclusion": host_conclusions.view(host_conclusions.current(connection, run_row)),
         }
         if (current_scope() or {}).get("kind") != AGENT_KIND:
