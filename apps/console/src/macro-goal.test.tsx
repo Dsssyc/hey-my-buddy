@@ -19,7 +19,7 @@ function harness(body = goal.body) {
 }
 it("reads history only on click, renders Markdown, switches full revisions in the same card and restores focus on Escape", async () => {
   const { readGoals, timeline, user } = harness();
-  const trigger = screen.getByRole("button", { name: "当前目标" });
+  const trigger = screen.getByRole("button", { name: "目标说明" });
   expect(readGoals).not.toHaveBeenCalled();
   await user.hover(trigger);
   expect(screen.queryByRole("dialog", { name: "目标说明" })).toBeNull();
@@ -42,8 +42,8 @@ it("copies the identifier in place, closes on outside click, rereads on reopen a
   const copy = screen.getByRole("button", { name: "复制标识 macro-1" });
   await user.click(copy);
   expect(write).toHaveBeenCalledWith("macro-1");
-  expect(within(copy).getByText("已复制")).toBeTruthy();
-  const trigger = screen.getByRole("button", { name: "当前目标" });
+  expect(copy.querySelector(".lucide-check")).toBeTruthy();
+  const trigger = screen.getByRole("button", { name: "目标说明" });
   await user.click(trigger);
   await screen.findByRole("dialog", { name: "目标说明" });
   await user.click(screen.getByRole("button", { name: "外部按钮" }));
@@ -53,15 +53,15 @@ it("copies the identifier in place, closes on outside click, rereads on reopen a
   view.rerender(ui(false));
   expect(screen.queryByRole("dialog", { name: "目标说明" })).toBeNull();
 });
-it("omits the goal information item when the record has none", () => {
+it("omits the goal button when the record has none", () => {
   const timeline = macroTaskTimelineFixture(); timeline.macroTask.goal = null;
   const { container } = render(<MacroTaskOverview readGoals={vi.fn()} timeline={timeline} summary={null} loading={false} stale={false} onBackToList={() => {}}/>, { wrapper: TooltipProvider });
-  expect(container.querySelector('[data-slot="macro-goal-fact"]')).toBeNull();
+  expect(container.querySelector('[data-slot="macro-goal-trigger"]')).toBeNull();
 });
 
 it("keeps single goal line breaks while rendering Markdown and the existing GFM extensions", async () => {
   const { user } = harness("第一行\n第二行\n\n**Markdown** 与 ~~旧内容~~\n\n| 名称 | 值 |\n| --- | --- |\n| 项目 | 目标 |");
-  await user.click(screen.getByRole("button", { name: "第一行" }));
+  await user.click(screen.getByRole("button", { name: "目标说明" }));
   const card = await screen.findByRole("dialog", { name: "目标说明" });
   const body = card.querySelector('[data-slot="macro-goal-body"]')!;
   await waitFor(() => expect(body.querySelector("br")).not.toBeNull());

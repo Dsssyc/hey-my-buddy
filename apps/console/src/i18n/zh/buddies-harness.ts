@@ -79,7 +79,7 @@ export default {
     status: "冷却中 · 约 {{time}} 可再试",
     clear: "解除冷却",
     done: { cleared: "已解除冷却", none: "当前未在冷却" },
-    storageUnavailable: "无法保留请求编号；请允许页面使用会话存储后重试。",
+    storageUnavailable: "无法保留请求 ID；请允许页面使用会话存储后重试。",
     unknownResult: "解除冷却的结果未知；请重放此请求。",
   },
 };

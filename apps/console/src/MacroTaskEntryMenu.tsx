@@ -21,9 +21,9 @@ export function MacroTaskEntryMenu({ summary, entry, writable, active, onStop, o
   const scope = stopScope(summary);
   const reason = !writable ? t("tasks:readonly") : stopping ? t("tasks:stopping") : scope.roots + scope.helpers === 0 ? t("shell:macroStop.noActive") : undefined;
   return <DropdownMenu modal={false} open={open && active} onOpenChange={setOpen}>
-    <Hint text={t("tasks:more")}><DropdownMenuTrigger asChild>
+    <DropdownMenuTrigger asChild>
       <Button ref={button} data-slot="macro-menu-button" className="size-6!" variant="ghost" size="icon-sm" aria-label={t("tasks:more")}><Ellipsis aria-hidden="true"/></Button>
-    </DropdownMenuTrigger></Hint>
+    </DropdownMenuTrigger>
     <DropdownMenuContent data-slot="macro-entry-menu" onCloseAutoFocus={event => {
       if (openingDialog.current) { event.preventDefault(); openingDialog.current = false; }
     }}>

@@ -117,19 +117,19 @@ describe("macro task list", () => {
     expect(entries.every(entry => !entry.querySelector('[data-slot="macro-entry-counts"]'))).toBe(true);
     expect(entries.every(entry => entry.classList.contains("h-7"))).toBe(true);
     expect(entries.every(entry => entry.querySelector("time") === null)).toBe(true);
-    expect(entries.every(entry => entry.querySelector('[data-slot="macro-entry-title"]')?.classList.contains("sidebar-label"))).toBe(true);
+    expect(entries.every(entry => Boolean(entry.querySelector('[data-slot="macro-entry-title"] [data-slot="scrolling-title"]')))).toBe(true);
     expect(within(entries[0]!).getByText("等待 Host", { selector: ".sr-only" })).toBeTruthy();
     expect(within(entries[1]!).getByText("等待验收", { selector: ".sr-only" })).toBeTruthy();
   });
 
-  it("marks the selected row and explains the sort time with the full title", () => {
+  it("marks the selected row and keeps the full title without a hover description", () => {
     const p = props();
     const view = render(<MacroTaskList {...p}/>);
     const entry = screen.getByRole("button", { name: /宏任务时间轴：设计、接口与实现/ });
-    expect(entry.getAttribute("aria-description")).toContain(`${row(p).title} · 最后活动：`);
+    expect(entry.getAttribute("aria-description")).toBeNull();
     view.rerender(<MacroTaskList {...p} sortFor={() => "created-desc"} selected="macro-1"/>);
     const sorted = screen.getByRole("button", { name: /宏任务时间轴：设计、接口与实现/ });
-    expect(sorted.getAttribute("aria-description")).toContain(`开始：${formatting.formatDateTime(Date.parse(row(p).createdAt!))}`);
+    expect(sorted.getAttribute("aria-description")).toBeNull();
     expect(sorted.getAttribute("aria-pressed")).toBe("true");
     expect(sorted.classList.contains("bg-selection")).toBe(true);
   });

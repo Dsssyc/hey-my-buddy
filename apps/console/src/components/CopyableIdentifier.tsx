@@ -1,21 +1,19 @@
 import { useEffect, useState } from "react";
-import { Check, Copy } from "lucide-react";
+import { Check, Copy, CircleX } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { Button } from "./ui/button";
-import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip";
 
-/** An identifier, shortened where it is long, that copies whole. The hint says more of it on hover and focus. */
+/** A middle-shortened identifier that copies whole, with feedback in its icon. */
 export function CopyableIdentifier({ value, hint }: { value: string; hint?: string }) {
   return <Identifier key={value} value={value} hint={hint} />;
 }
 
 function Identifier({ value, hint }: { value: string; hint?: string }) {
   const { t } = useTranslation("shell");
-  const [open, setOpen] = useState(false);
   const [feedback, setFeedback] = useState<{ kind: "copied" | "failed" } | null>(null);
   useEffect(() => {
     if (!feedback) return;
-    const timer = setTimeout(() => { setFeedback(null); setOpen(false); }, 2000);
+    const timer = setTimeout(() => setFeedback(null), 2000);
     return () => clearTimeout(timer);
   }, [feedback]);
   const prefixLength = value.startsWith("macro-") ? 6 : value.startsWith("run:") ? 4 : 0;
@@ -29,15 +27,13 @@ function Identifier({ value, hint }: { value: string; hint?: string }) {
       setFeedback({ kind: "failed" });
     }
   }
-  return <Tooltip open={!!feedback || open} onOpenChange={setOpen}>
-    <TooltipTrigger asChild>
-      <Button type="button" variant="ghost" size="sm" className="h-8 max-w-full justify-start -ml-2 font-mono text-xs font-normal text-muted-foreground"
-        aria-label={t("identifier.copy", { value })} onClick={() => void copy()}>
+  return <>
+      <Button type="button" variant="ghost" size="sm" data-slot="copyable-identifier" data-feedback={feedback?.kind}
+        className="h-6 max-w-full shrink-0 justify-start gap-1 -ml-2 font-mono text-xs font-normal text-ink"
+        aria-label={t("identifier.copy", { value })} aria-description={hint} onClick={() => void copy()}>
         <span className="truncate">{shortened}</span>
-        {feedback?.kind === "copied" ? <Check aria-hidden="true" /> : <Copy aria-hidden="true" />}
+        {feedback?.kind === "copied" ? <Check aria-hidden="true" /> : feedback?.kind === "failed" ? <CircleX aria-hidden="true" className="text-fail"/> : <Copy aria-hidden="true" className="text-ink3"/>}
       </Button>
-    </TooltipTrigger>
-    <TooltipContent className="break-all">{message || (hint ? `${value} · ${hint}` : value)}</TooltipContent>
     <span className="sr-only" aria-live="polite" role={message ? "status" : undefined}>{message}</span>
-  </Tooltip>;
+  </>;
 }

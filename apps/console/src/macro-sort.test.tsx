@@ -69,6 +69,6 @@ describe("macro sort menu", () => {
     expect(screen.getByRole("menuitemradio", { name: "创建时间" }).getAttribute("aria-checked")).toBe("true");
     await user.keyboard("{Escape}");
     await user.hover(trigger);
-    expect((await screen.findByRole("tooltip")).textContent).toBe("排序");
+    expect(screen.queryByRole("tooltip")).toBeNull();
   });
 });

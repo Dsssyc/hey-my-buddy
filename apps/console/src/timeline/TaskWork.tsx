@@ -9,7 +9,6 @@ import { ScrollArea } from "../components/ui/scroll-area";
 import { MacroTaskOverview } from "../MacroTaskOverview";
 import { buddyLabel, clockTime, displayTitle, rowStateInfo } from "../macro-task-display";
 import { formatDuration } from "../i18n/format";
-import { usageTotalsLabel } from "../usage-totals";
 import type { FriendlyBuddy } from "../macro-task-display";
 import type { MacroTaskSummary, MacroTaskTimeline, TimelineRow, TimelineSpan } from "../macro-task-types";
 import { parseTimelineInstant as instant } from "./instant";
@@ -19,11 +18,10 @@ import { useViewport } from "./useViewport";
 import { RowName } from "./RowName";
 import { Legend } from "./Legend";
 import { NameDivider, useNameWidth } from "./NameDivider";
-import { Hint } from "../components/hint";
 import { ZoomRuler } from "./ZoomRuler";
 import { useTimelineGestures } from "./useTimelineGestures";
 import { buddyColorsFor } from "./buddyColors";
-import { groupLanes, laneLevel, laneSummary, ownedWaits } from "./lanes";
+import { groupLanes, laneLevel, ownedWaits } from "./lanes";
 import type { ScaleInput } from "./scale";
 import type { LaneGroup } from "./lanes";
 import { markerAt, markerHasKey, markerKey } from "./MarkerCluster";
@@ -135,7 +133,6 @@ export function TaskWork(props: TaskWorkProps) {
     wasOpen.current = openedRunId;
   }, [openedRunId, open, narrow, workspace]);
   const layout = useMemo(() => groupLanes(rows), [rows]);
-  const summaries = useMemo(() => layout.lanes.map(lane => laneSummary(lane, timeline!)), [layout, timeline]);
   const spansByRow = useMemo(() => {
     const grouped = new Map<string, TimelineSpan[]>();
     for (const span of timeline?.spans ?? []) {
@@ -177,10 +174,10 @@ export function TaskWork(props: TaskWorkProps) {
     setSelectedRunId(runId); setSelectedKey(key ?? null);
     setPointerScreenX(null); setHoveredSpan(null); setFocusedSpan(null); setHoveredRow(null); setFocusedRow(null); setHoveredMarker(null); setFocusedMarker(null);
   };
-  const renderName = (row: TimelineRow, options: { list?: boolean; tall?: boolean; laneLevel?: number; lead?: boolean; ariaPrefix?: string; hoverExtra?: ReactNode } = {}) => <RowName
+  const renderName = (row: TimelineRow, options: { list?: boolean; tall?: boolean; laneLevel?: number; lead?: boolean; ariaPrefix?: string } = {}) => <RowName
     key={row.runId}
     ref={element => { if (element) rowsRef.current.set(row.runId, element); else rowsRef.current.delete(row.runId); }}
-    row={row} rows={rows} list={options.list} tall={options.tall} laneLevel={options.laneLevel} lead={options.lead} ariaPrefix={options.ariaPrefix} hoverExtra={options.hoverExtra}
+    row={row} rows={rows} list={options.list} tall={options.tall} laneLevel={options.laneLevel} lead={options.lead} ariaPrefix={options.ariaPrefix}
     tabIndex={tabKey === `row:${row.runId}` ? 0 : -1} current={options.list ? openedRunId === row.runId : selectedRunId === row.runId || highlightedRunId === row.runId} fresh={props.newRunIds.has(row.runId)} buddies={props.buddies}
     onClick={() => { select(row.runId); props.onOpen(row.runId); }}
     onEnter={() => { setPointerScreenX(null); setHoveredMarker(null); setHoveredSpan(null); setHoveredRow(row); }} onLeave={() => setHoveredRow(null)} onFocus={event => { if (movingDetailFocus.current) event.preventDefault(); setPointerScreenX(null); setHoveredRow(null); setHoveredSpan(null); setFocusedMarker(null); setFocusedRow(row); }} onBlur={() => setFocusedRow(null)}/>;
@@ -214,30 +211,18 @@ export function TaskWork(props: TaskWorkProps) {
     if (next.has(leadRunId)) next.delete(leadRunId); else next.add(leadRunId);
     return next;
   });
-  const laneToggle = (lead: TimelineRow, collapsed: boolean) => <Hint text={t("laneToggle", { title: displayTitle(lead.titleSource, lead.title).fullText })}><Button type="button" variant="ghost" size="icon-sm" data-slot="lane-toggle" aria-expanded={!collapsed} aria-controls={`lane-${lead.runId}`}
+  const laneToggle = (lead: TimelineRow, collapsed: boolean) => <Button type="button" variant="ghost" size="icon-sm" data-slot="lane-toggle" aria-expanded={!collapsed} aria-controls={`lane-${lead.runId}`}
     aria-label={t("laneToggle", { title: displayTitle(lead.titleSource, lead.title).fullText })} onClick={() => toggleLane(lead.runId)}
     className="self-center">
     <Disclosure open={!collapsed}/>
-  </Button></Hint>;
-  const laneFacts = useMemo(() => layout.lanes.map((lane, index) => {
-    const summary = summaries[index]!;
-    // The lane's own numbers ride on the Lead row's hover, where the reader asks for them.
-    return <span className="block text-xs text-ink3 tabular-nums">
-      <span className="block">{[
-        t("laneMicroTasks", { n: lane.members.length + 1 }),
-        `${t("elapsed")}${summary.elapsedMs !== null ? formatDuration(summary.elapsedMs) : t("unknown")}`,
-        `${t("execution")}${summary.executionMs !== null ? formatDuration(summary.executionMs) : t("unknown")}`,
-      ].join(" · ")}</span>
-      <span className="block">{usageTotalsLabel(summary.usage)}</span>
-    </span>;
-  }), [layout, summaries, t]);
+  </Button>;
   const waitsAt = input?.nowAtEnd ? nowMs : instant(timeline?.observedAt) ?? 0;
   const laneWaits = useMemo(() => new Map(layout.lanes.map(lane => [lane.lead.runId, ownedWaits(lane.lead, timeline!.spans, waitsAt)])), [layout, timeline?.spans, waitsAt]);
-  const laneHeader = (lane: LaneGroup, index: number) => {
+  const laneHeader = (lane: LaneGroup) => {
     const lead = lane.lead;
     const collapsed = collapsedLanes.has(lead.runId);
     const leadName = () => <div className="flex min-w-0 flex-1 items-stretch">
-      {renderName(lead, { tall: true, lead: true, ariaPrefix: t("leadBadge"), hoverExtra: laneFacts[index] })}
+      {renderName(lead, { tall: true, lead: true, ariaPrefix: t("leadBadge") })}
     </div>;
     // The divider under a Lead runs across the whole row; the members below it sit one indent step in.
     return <header data-slot="timeline-lane-lead" data-run-id={lead.runId} onClick={event => { if (!(event.target as Element).closest("[data-key], button")) select(lead.runId); }} className={cn("border-b border-line", narrow ? "block" : "grid items-stretch")} style={{ gridTemplateColumns: narrow ? undefined : `${nameWidth}px ${scale!.widthPx + SLACK_PX * 2}px minmax(0,1fr)` }}>
@@ -275,7 +260,7 @@ export function TaskWork(props: TaskWorkProps) {
       return <section key={lead.runId} data-slot="detail-lane" className={cn("border-t border-line bg-card", index > 0 && "mt-6")}>
         <div data-slot="detail-lane-lead" data-run-id={lead.runId} className="flex items-stretch border-b border-line">
           {laneToggle(lead, collapsed)}
-          <div className="min-w-0 flex-1">{renderName(lead, { list: true, tall: true, lead: true, ariaPrefix: t("leadBadge"), hoverExtra: laneFacts[index] })}</div>
+          <div className="min-w-0 flex-1">{renderName(lead, { list: true, tall: true, lead: true, ariaPrefix: t("leadBadge") })}</div>
         </div>
         <Collapsible open={!collapsed}><CollapsibleContent><div id={`lane-${lead.runId}`}>
           {lane.members.map(row => renderName(row, { list: true, laneLevel: laneLevel(lead, row) }))}
@@ -285,7 +270,7 @@ export function TaskWork(props: TaskWorkProps) {
     {layout.lanes.length > 0 && layout.ordinary.length > 0 && <div className="mt-6 flex h-9 items-center px-4 text-xs text-ink3">{t("otherMicroTasks")}</div>}
     {layout.ordinary.map(row => renderName(row, { list: true }))}
   </>;
-  const rowFilter = <RowFilter unfinished={unfinished} count={rows.length} onChange={value => {
+  const rowFilter = <RowFilter unfinished={unfinished} count={rows.length} total={timeline?.rows.length ?? 0} onChange={value => {
     setUnfinished(value);
     setFocusKey(null); setSelectedKey(null);
     if (!open) setSelectedRunId(null);
@@ -317,7 +302,7 @@ export function TaskWork(props: TaskWorkProps) {
         </ZoomRuler>
       </div>
       {layout.lanes.map((lane, index) => <section key={lane.lead.runId} data-slot="timeline-lane" className={cn("border-t border-line bg-card", index > 0 && "mt-6")}>
-        {laneHeader(lane, index)}
+        {laneHeader(lane)}
         <Collapsible open={!collapsedLanes.has(lane.lead.runId)}>
           <CollapsibleContent>
             <div id={`lane-${lane.lead.runId}`}>{lane.members.map(row => trackRow(row, lane.lead))}</div>
