@@ -28,6 +28,7 @@ import binascii
 import json
 import re
 import sqlite3
+from ...protocol.workspace_manifest import project_id_sql
 from pathlib import Path
 from typing import Any, Sequence
 
@@ -207,11 +208,12 @@ SELECT
          WHEN dr.decision_id IS NOT NULL OR t.adapter = 'decision' THEN NULL
          ELSE json_extract(t.spec_json, '$.cwd') END AS project_path,
     CASE WHEN root_run.run_id IS NOT NULL THEN
-        (SELECT json_extract(artifact.manifest_json, '$.repositoryId') FROM workflow_artifacts artifact
+        (SELECT {project_id_sql('artifact.manifest_json')}
+           FROM workflow_artifacts artifact
           WHERE artifact.run_id = root_run.run_id AND artifact.kind = 'input'
           ORDER BY artifact.rowid LIMIT 1)
          WHEN dr.decision_id IS NOT NULL OR t.adapter = 'decision' THEN NULL
-         ELSE json_extract(t.spec_json, '$.cwd') END AS project_id,
+         ELSE NULL END AS project_id,
     (SELECT json_extract(artifact.manifest_json, '$.snapshot.repositoryPath')
        FROM workflow_artifacts artifact
       WHERE artifact.run_id = root_run.run_id AND artifact.kind = 'input'
@@ -316,7 +318,7 @@ def metadata_from_row(row: sqlite3.Row) -> dict:
                      "macroTaskId": row["route_macro_task_id"],
                      "macroTaskTitle": row["route_macro_task_title"]}
                     if row["route_run_id"] is not None else None)
-    project = ({"id": identifier or path, "path": path,
+    project = ({"id": identifier, "path": path,
                 "label": project_label(path, row["project_repository_path"])}
                if identifier or path else None)
     result = {

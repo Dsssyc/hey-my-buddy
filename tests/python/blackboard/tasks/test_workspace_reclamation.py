@@ -330,7 +330,7 @@ class ReclamationTests(LifecycleTestCase):
                   'base': {'kind': 'working-tree'}, 'integrator': {'role': 'host', 'id': 'fixture-host'}}
         shell_id, shell = workspace._workspace_directory(board.directory, 'abandoned-shell')
         (shell / '.lock').touch()
-        (shell / 'request.json').write_bytes(workspace._json({'requestId': 'abandoned-shell', 'version': 3, 'intent': intent}))
+        (shell / 'request.json').write_bytes(workspace._json({'requestId': 'abandoned-shell', 'version': 4, 'intent': intent}))
         with workspace._lock(shell, create=False):
             Reclamation(board.store).run()
             self.assertTrue(shell.exists())
@@ -762,7 +762,7 @@ class ReclamationTests(LifecycleTestCase):
         with board.store.db.read() as connection:
             prepared = json.loads(board.store.workflow._run_row(connection, run_id)['workspace_manifest_json'])
         self.assertEqual(prepared['inputCommit'], host_seal['commit'])
-        self.assertEqual(prepared['checkoutId'], current['checkoutId'])
+        self.assertEqual(prepared['checkoutRoot'], current['checkoutRoot'])
 
     def test_current_unstarted_journal_refreshes_its_physical_binding(self):
         board, submitted, manifest, checkout, _, _ = self.accepted_worktree()
@@ -783,8 +783,8 @@ class ReclamationTests(LifecycleTestCase):
         board, submitted, _, checkout, _, _ = self.accepted_worktree()
         coordinator = board.store.workflow
         real_apply = coordinator.cleanup_apply
-        def completed_elsewhere(params):
-            real_apply(params)
+        def completed_elsewhere(params, **kwargs):
+            real_apply(params, **kwargs)
             raise BoardError('WORKSPACE_BUSY', 'The competing operation held the lock')
         with patch.object(coordinator, 'cleanup_apply', side_effect=completed_elsewhere):
             result = self.reclaim(board, self.view(board, submitted['runId']))

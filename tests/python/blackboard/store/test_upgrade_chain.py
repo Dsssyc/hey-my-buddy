@@ -1,5 +1,6 @@
 """Frozen upgrade output and the floor-to-current migration chain."""
 from contextlib import closing
+import ast
 import hashlib
 import json
 from pathlib import Path
@@ -9,7 +10,7 @@ import unittest
 from unittest import mock
 
 from blackboard.store.upgrade_fixture import FIXTURE, complete_fixture_cleanup
-from hey_my_buddy.blackboard.store import schema_30_31, upgrade
+from hey_my_buddy.blackboard.store import schema_30_31, schema_32_33, upgrade
 from hey_my_buddy.blackboard.store.db import Database, SCHEMA_VERSION
 from hey_my_buddy.install.upgrade import preflight
 from hey_my_buddy.errors import BoardError
@@ -21,6 +22,14 @@ def digest(value):
 
 
 class FrozenUpgradeTests(unittest.TestCase):
+    def test_new_step_has_no_current_package_imports(self):
+        source = ast.parse(Path(schema_32_33.__file__).read_text(encoding='utf-8'))
+        self.assertFalse([node for node in ast.walk(source) if isinstance(node, (ast.Import, ast.ImportFrom))
+                          and (any(alias.name.startswith('hey_my_buddy') for alias in node.names)
+                               if isinstance(node, ast.Import) else node.module is not None
+                               and node.module.startswith('hey_my_buddy'))])
+        self.assertFalse([node for node in ast.walk(source) if isinstance(node, ast.ImportFrom) and node.level])
+
     def test_30_to_31_matches_the_complete_pre_freeze_output(self):
         oracle = json.loads((FIXTURE / 'schema-31-oracle.json').read_text())
         sql = (FIXTURE / 'board.sql').read_bytes()
@@ -209,6 +218,7 @@ class UpgradeChainTests(unittest.TestCase):
                                  " JOIN workflow_host_conclusions h ON h.run_id=r.run_id WHERE r.run_id=?",
                                  (reader_id,)).fetchone()
         self.assertEqual((reader['access'], reader['state'], reader['released_at']), ('read', 'held', None))
+        self.assertTrue(reader['path'].endswith('/fixture-subdirectory'))
         self.assertEqual(json.loads(reader['execution_workspace_json'])['kind'], 'existing')
         self.assertEqual(reader['concluded_at'], metadata['reservationStockConcludedAt'])
         # The floor's accept writer already releases its own reservations. Also
@@ -230,10 +240,25 @@ class UpgradeChainTests(unittest.TestCase):
         self.db.commit()
         frozen = {table: [tuple(row) for row in self.db.execute(f'SELECT rowid,* FROM {table} ORDER BY rowid')]
                   for table in ('workflow_host_conclusions', 'workflow_artifacts', 'workflow_turns')}
+        roots = {}
+        for (raw,) in self.db.execute('SELECT workspace_manifest_json FROM workflow_runs'):
+            manifest = json.loads(raw)
+            roots[manifest['workspaceId'], manifest['manifestSha256']] = manifest['checkoutRoot']
+        for (raw,) in self.db.execute("SELECT manifest_json FROM workflow_artifacts WHERE kind IN ('input','turn-input')"):
+            manifest = json.loads(raw)
+            roots[manifest['workspaceId'], manifest['manifestSha256']] = manifest['checkoutRoot']
         upgrade.upgrade_state(self.state)
-        expected = [{**row, 'state': 'released', 'released_at': decisions[row['holder_task_id']]}
-                    if row['state'] == 'held' and row['holder_task_id'] in decisions else row for row in before]
+        expected = []
+        for row in before:
+            value = {key: item for key, item in row.items() if key not in ('checkout_id', 'repository_id', 'path')}
+            value['checkout_root'] = roots[row['workspace_id'], row['manifest_sha256']]
+            if row['state'] == 'held' and row['holder_task_id'] in decisions:
+                value.update(state='released', released_at=decisions[row['holder_task_id']])
+            expected.append(value)
         self.assertEqual([dict(row) for row in self.db.execute('SELECT rowid,* FROM workspace_reservations ORDER BY rowid')], expected)
+        self.assertEqual(self.db.execute('SELECT checkout_root FROM workspace_reservations WHERE holder_task_id=?',
+                                         (reader_id,)).fetchone()[0],
+                         roots[reader['workspace_id'], reader['manifest_sha256']])
         for table, rows in frozen.items():
             self.assertEqual([tuple(row) for row in self.db.execute(f'SELECT rowid,* FROM {table} ORDER BY rowid')], rows)
         self.assert_current_structure()
@@ -324,9 +349,25 @@ class UpgradeChainTests(unittest.TestCase):
         self.assertEqual(inbound, [])
         self.db.commit()
         upgrade.upgrade_state(self.state)
-        expected = [{key: value for key, value in row.items() if key not in ('expires_at', 'command_id')}
-                    for row in before if row['state'] in ('applying','applied')]
-        self.assertEqual([dict(row) for row in self.db.execute('SELECT rowid,* FROM workspace_cleanup_plans ORDER BY rowid')], expected)
+        expected = []
+        for row in before:
+            if row['state'] not in ('applying', 'applied'):
+                continue
+            value = {key: item for key, item in row.items()
+                     if key not in ('expires_at', 'command_id', 'checkout_id', 'repository_id')}
+            evidence = json.loads(value['evidence_json'])
+            workspace = evidence['workspace']
+            workspace['projectId'] = workspace.pop('repositoryId')
+            workspace.pop('checkoutId', None)
+            allocation = workspace['allocation']
+            allocation['projectId'] = allocation.pop('repositoryId')
+            allocation.pop('checkoutId', None)
+            value['evidence_json'] = evidence
+            expected.append(value)
+        actual = [dict(row) for row in self.db.execute('SELECT rowid,* FROM workspace_cleanup_plans ORDER BY rowid')]
+        for row in actual:
+            row['evidence_json'] = json.loads(row['evidence_json'])
+        self.assertEqual(actual, expected)
         self.assertEqual(self.db.execute("SELECT COUNT(*) FROM commands WHERE kind IN"
                                         " ('workflow.cleanup_plan','workflow.cleanup_apply')").fetchone()[0], 0)
         self.assertFalse(any(json.loads(row[0]).get('planId') in deleted for row in self.db.execute('SELECT payload_json FROM events')))

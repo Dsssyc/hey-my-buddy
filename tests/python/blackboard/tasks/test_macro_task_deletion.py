@@ -647,10 +647,10 @@ class MacroTaskDeletionTests(WorkflowTestCase):
         self.assertIn("macro-task-deletion.routing", {b["reason"]["code"] for b in macro_task_deletion.preview(board.store, target)["blockers"]})
         with board.store.db.write() as db:
             db.execute("UPDATE workflow_routes SET state='resolved' WHERE decision_id='pending-decision'")
-            db.execute("INSERT INTO workspace_cleanup_plans(plan_id,run_id,workspace_id,checkout_id,path,kind,"
+            db.execute("INSERT INTO workspace_cleanup_plans(plan_id,run_id,workspace_id,path,kind,"
                        "state,evidence_json,retention_json,created_at)"
-                       " VALUES(?,?,?,?,?,?,?,?,?,?)",
-                       ("applying-plan", run["runId"], "workspace", "checkout", "private", "worktree",
+                       " VALUES(?,?,?,?,?,?,?,?,?)",
+                       ("applying-plan", run["runId"], "workspace", "private", "worktree",
                         "applying", "{}", "{}", now))
         self.assert_code("MACRO_TASK_BUSY", macro_task_deletion.preview, board.store, target)
         self.assert_code("MACRO_TASK_BUSY", macro_task_deletion.delete, board.store, target, 1)
@@ -782,11 +782,11 @@ class MacroTaskDeletionTests(WorkflowTestCase):
                         "not-required", "owned-binding", "{}", "host", "fixture", now))
             db.execute("INSERT INTO workflow_suggestions(suggestion_id,run_id,body,created_at)"
                        " VALUES(?,?,?,?)", ("owned-suggestion", run["runId"], "private", now))
-            db.execute("INSERT INTO workspace_reservations(reservation_id,workspace_id,checkout_id,repository_id,"
-                       "path,access,holder_task_id,holder_kind,parent_run_id,manifest_sha256,state,created_at)"
-                       " VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
-                       ("owned-reservation", "owned-workspace", "owned-checkout", "owned-repository",
-                        "private", "read", run["runId"], "parent", run["runId"], "fixture", "released", now))
+            db.execute("INSERT INTO workspace_reservations(reservation_id,workspace_id,checkout_root,"
+                       "access,holder_task_id,holder_kind,parent_run_id,manifest_sha256,state,created_at)"
+                       " VALUES(?,?,?,?,?,?,?,?,?,?)",
+                       ("owned-reservation", "owned-workspace", "private", "read", run["runId"],
+                        "parent", run["runId"], "fixture", "released", now))
             db.execute("INSERT INTO attempts(attempt_id,task_id,generation,nonce_verifier,execution_state,"
                        "adapter,shutdown_confirmed,created_at,updated_at) VALUES(?,?,1,'fixture','finished','codex',1,?,?)",
                        ("owned-attempt", run["runId"], now, now))
@@ -884,10 +884,10 @@ class MacroTaskDeletionTests(WorkflowTestCase):
             self.assert_code('WORKSPACE_BUSY',macro_task_deletion.delete,board.store,run['macroTaskId'],1)
             now = board.store.now()
             with board.store.db.write() as db:
-                db.execute('INSERT INTO workspace_cleanup_plans(plan_id,run_id,workspace_id,checkout_id,path,kind,'
+                db.execute('INSERT INTO workspace_cleanup_plans(plan_id,run_id,workspace_id,path,kind,'
                            'state,evidence_json,retention_json,created_at)'
-                           ' VALUES(?,?,?,?,?,?,?,?,?,?)',
-                           ('held-plan',run['runId'],'ws-'+'a'*32,'checkout',str(directory/'checkout'),'worktree',
+                           ' VALUES(?,?,?,?,?,?,?,?,?)',
+                           ('held-plan',run['runId'],'ws-'+'a'*32,str(directory/'checkout'),'worktree',
                             'applying','{}','{}',now))
             self.assert_code('MACRO_TASK_BUSY',macro_task_deletion.delete,board.store,run['macroTaskId'],1)
         with board.store.db.read() as db:

@@ -18,6 +18,7 @@ from ...errors import BoardError
 from ...home import control_file_path, submission_file_path
 from ...protocol import schemas
 from ...protocol.reasons import reason
+from ...protocol.workspace_manifest import project_id
 from . import micro_task, storage, worker_sessions
 from .macro_task_deletion_progress import collect_skipped
 from ..service.harness_health import read_health
@@ -200,7 +201,7 @@ def _storage_in_use(store, connection, scope):
     from . import workspace
     allocations = [workspace.resolve_allocation(store.directory,m,scope.manifests)
                    for m in scope.manifests if m.get('kind') == 'worktree']
-    checkouts = {(a['repositoryId'],a['checkoutId']) for a in allocations if a is not None}
+    checkouts = {a['path'] for a in allocations if a is not None}
     checkout_paths = {a['path'] for a in allocations if a is not None}
     holders = {}
 
@@ -217,14 +218,12 @@ def _storage_in_use(store, connection, scope):
         valid = f'CASE WHEN json_valid({column}) THEN {column} END'
         prefix = '$.executionWorkspace' if nested else '$'
         wid = f"json_extract({valid},'{prefix}.workspaceId')"
-        rid = f"json_extract({valid},'{prefix}.repositoryId')"
-        cid = f"json_extract({valid},'{prefix}.checkoutId')"
         root = f"json_extract({valid},'{prefix}.checkoutRoot')"
         predicates = [f'{wid} IN (SELECT value FROM json_each(?))']
         args = [_ids(workspace_ids)]
-        for repository_id,checkout_id in sorted(checkouts):
-            predicates.append(f'({rid}=? AND {cid}=?)')
-            args.extend((repository_id,checkout_id))
+        for checkout_root in sorted(checkouts):
+            predicates.append(f'{root}=?')
+            args.append(checkout_root)
         for checkout_path in sorted(checkout_paths):
             descendant = checkout_path + os.sep
             predicates.append(f'({root}=? OR substr({root},1,?)=?)')
@@ -233,8 +232,8 @@ def _storage_in_use(store, connection, scope):
         for row in connection.execute(query,args):
             retain('workspace',row['owner'])
     for row in connection.execute(
-            "SELECT holder_task_id,workspace_id,repository_id,checkout_id FROM workspace_reservations WHERE state='held'"):
-        if row['workspace_id'] in workspace_ids or (row['repository_id'],row['checkout_id']) in checkouts:
+            "SELECT holder_task_id,workspace_id,checkout_root FROM workspace_reservations WHERE state='held'"):
+        if row['workspace_id'] in workspace_ids or row['checkout_root'] in checkouts:
             retain('checkout',row['holder_task_id'])
     session_ids = {row['sessionId'] for row in scope.sessions}
     for row in worker_sessions.session_references(connection,session_ids):
@@ -280,7 +279,7 @@ def _scope_summary(store, scope):
     allocations = [workspace.resolve_allocation(store.directory, manifest, scope.manifests)
                    for manifest in scope.manifests if manifest['kind'] == 'worktree']
     checkouts = (None if any(allocation is None for allocation in allocations) else
-                 len({(allocation['repositoryId'], allocation['checkoutId']) for allocation in allocations}))
+                 len({allocation['path'] for allocation in allocations}))
     manifests = {}
     refs = {}
     refs_known = True
@@ -299,14 +298,15 @@ def _scope_summary(store, scope):
             refs_known = False
     if refs_known:
         for identifier, manifest in manifests.items():
-            if not _repository_current(manifest):
+            repository = _repository_current(manifest)
+            if repository is None:
                 refs_known = False
                 break
-            actual = _refs(Path(manifest['snapshot']['repositoryPath']), identifier)
+            actual = _refs(repository, identifier)
             if any(commit is None or expected[identifier].get(ref) != commit for ref, commit in actual.items()):
                 refs_known = False
                 break
-            refs.update(((manifest['repositoryId'], ref), commit) for ref, commit in actual.items())
+            refs.update(((project_id(manifest), ref), commit) for ref, commit in actual.items())
 
     sessions = {(session['harness'], session['sessionId']) for session in scope.sessions}
     # Artifacts bind Git snapshots, whose objects may be shared with the user's
@@ -362,10 +362,14 @@ def _delete_sessions(store, scope):
 def _delete_workspaces(store, scope):
     from .macro_task_deletion_workspace import delete_workspaces
     from .checkout_processes import first_execution_time
+    from .workflow import known_repository_paths
     with store.db.read() as connection:
-        starts = {(m["repositoryId"], m["checkoutId"]): first_execution_time(connection, m)
+        starts = {m["checkoutRoot"]: first_execution_time(connection, m)
                   for m in scope.manifests}
-    return delete_workspaces(store, scope.manifests, scope.artifacts, first_execution_times=starts)
+        candidates = {m["workspaceId"]: known_repository_paths(connection, m)
+                      for m in scope.manifests}
+    return delete_workspaces(store, scope.manifests, scope.artifacts,
+                             first_execution_times=starts, candidate_paths=candidates)
 
 
 def _remove_owned_tree(path, *, object_kind='private-root'):

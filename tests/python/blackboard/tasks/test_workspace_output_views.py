@@ -64,7 +64,7 @@ class WorkspaceOutputViewTests(unittest.TestCase):
                         "missingPaths": [], "hostPaths": [], "note": None}
         row = {"integration_id": "integration", "run_id": "run", "artifact_id": "artifact",
                "strategy": "patch", "target_path": "/private/target", "target_ref": "HEAD",
-               "target_repository_id": "repository", "target_checkout_id": "checkout",
+               "target_project_id": "repository",
                "source_commit": "source", "source_tree": "source-tree", "before_commit": "before",
                "after_commit": "after", "before_tree": "before-tree", "after_tree": "after-tree",
                "verification_json": json.dumps(verification), "note": "accepted", "actor_role": "host",
@@ -109,8 +109,8 @@ class WorkspaceOutputViewTests(unittest.TestCase):
         self.assertTrue(projected["changedPathsSamplesShortened"])
 
     def test_cleanup_plan_keeps_full_unsealed_evidence_and_bounds_reply(self):
-        row = {"plan_id": "plan", "run_id": "run", "workspace_id": "workspace", "checkout_id": "checkout",
-               "repository_id": "repository", "path": "/private/checkout", "kind": "worktree", "state": "blocked",
+        row = {"plan_id": "plan", "run_id": "run", "workspace_id": "workspace",
+               "path": "/private/checkout", "kind": "worktree", "state": "blocked",
                "reasons_json": '["unsealed-changes"]',
                "evidence_json": json.dumps({"workspace": {"unsealedPaths": self.paths}}),
                "retention_json": "{}", "result_json": None, "revision": 2, "created_at": "now",

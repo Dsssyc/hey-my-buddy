@@ -3,8 +3,20 @@
   "catalogSha256": "4a60053082f545089f75271d7f0039aa9612ae06b5f328bfab7947521a22b19b",
   "cleanupStockBaseSha256": "df3c47f4ec6370c825f7079133e12ba23245c571def3689e286cf559fa4395a6",
   "cleanupStockGenerationCommand": "python packaging/generate-upgrade-fixture.py --work-dir <new-private-tmp-dir> --output-dir <new-generated-stock-dir> --cleanup-stock-for tests/fixtures/upgrade-floor",
-  "cleanupStockGeneratorSha256": "61e9608a9b20d70f4c0c2e24bed7d563554b2788c4a212fb5a52b4c0d8b19749",
+  "cleanupStockGeneratorSha256": "b38b33d3835e200bcaf722481b580dcd6ad3ace2f51060a3352984abf8190c5a",
   "cleanupStockSha256": "2511d0e53f4321ce9df89461835b76c61f4cb74c1304829939e7719969770073",
+  "deliveredStockArtifactId": "00000000-0000-0000-0000-00000000018d",
+  "deliveredStockBaseSha256": "df3c47f4ec6370c825f7079133e12ba23245c571def3689e286cf559fa4395a6",
+  "deliveredStockControl": {
+    "controlToken": "98b1b159d189bc558a10531d5f52a8bdcb76442e4486ef36101708f09f694c53",
+    "hostId": "fixture-host",
+    "ownerGeneration": 1
+  },
+  "deliveredStockGenerationCommand": "python packaging/generate-upgrade-fixture.py --work-dir <new-private-tmp-dir> --output-dir <new-generated-stock-dir> --delivered-stock-for tests/fixtures/upgrade-floor",
+  "deliveredStockGeneratorSha256": "b38b33d3835e200bcaf722481b580dcd6ad3ace2f51060a3352984abf8190c5a",
+  "deliveredStockResourcesSha256": "615352d2f35051bb4a22bed6dca2478ebc0e47a919e89cd12eaf0a48a2af5a0d",
+  "deliveredStockRunId": "00000000-0000-0000-0000-00000000017f",
+  "deliveredStockSqlSha256": "232af9c5e4fec63adb9603cd113a4517d93956903c30554eaa861874725d1206",
   "dependencyMode": "base-frozen-uv-environment",
   "dependencyVersions": {
     "c-two": "0.9.0",
@@ -279,9 +291,9 @@
   "reservationStockBaseSha256": "df3c47f4ec6370c825f7079133e12ba23245c571def3689e286cf559fa4395a6",
   "reservationStockConcludedAt": "2026-01-04T00:01:00.000Z",
   "reservationStockGenerationCommand": "python packaging/generate-upgrade-fixture.py --work-dir <new-private-tmp-dir> --output-dir <new-generated-stock-dir> --reservation-stock-for tests/fixtures/upgrade-floor",
-  "reservationStockGeneratorSha256": "61e9608a9b20d70f4c0c2e24bed7d563554b2788c4a212fb5a52b4c0d8b19749",
+  "reservationStockGeneratorSha256": "b38b33d3835e200bcaf722481b580dcd6ad3ace2f51060a3352984abf8190c5a",
   "reservationStockRunId": "00000000-0000-0000-0000-00000000016b",
-  "reservationStockSha256": "a7bc4e3cb4b666644ae47dcbcf1cb9f96f25a80f2722d7336dae8dc1d6cdf432",
+  "reservationStockSha256": "f104adb571a6fb310a348c1d0d9da5e482c4880d804361e5c766d6dc51be9230",
   "resourcesSha256": "350b4a63afce3b5ab02d44b19c773efc424895614c6e77ecf7aac9fa1e14dabe",
   "restoreInterface": "load_fixture(state: Path) -> dict; empty private state directory; returns source metadata plus state, fixtureRoot, operations and bindings; schema stays 30; baseline only after return",
   "routerBuddyIds": [

@@ -8,6 +8,7 @@ from ... import private_dirs
 from ...paths import native_path
 from ...errors import BoardError
 from ...protocol.reasons import reason
+from ...protocol.workspace_manifest import project_id
 from . import workspace
 from .macro_task_deletion_progress import collect_skipped
 
@@ -34,14 +35,11 @@ def _skip(kind: str, path: str, code: str, workspace_id: str | None = None) -> d
             "reason": reason(_SKIP_CODES[code])}
 
 
-def _repository_current(manifest: dict) -> bool:
-    repository = Path(manifest["snapshot"]["repositoryPath"])
-    try:
-        if private_dirs.linked(repository):
-            return False
-        return workspace._identity(repository) == manifest["repositoryId"]
-    except (FileNotFoundError, NotADirectoryError):
-        return False
+def _repository_current(manifest: dict) -> Path | None:
+    repository = workspace.repository_at(manifest["path"])
+    if repository is None or workspace.read_project_id(repository) != project_id(manifest):
+        return None
+    return Path(repository)
 
 
 def _fixed_refs(manifest: dict) -> dict[str, str]:
@@ -143,7 +141,11 @@ def _refs(repository: Path, identifier: str) -> dict[str, str | None]:
 
 def _delete_refs(repository: Path, identifier: str, expected: dict[str, str]) -> list[dict]:
     with collect_skipped() as skipped:
-        for ref, actual in _refs(repository, identifier).items():
+        anchor = _PREFIX + identifier + "/retained/input"
+        for ref, actual in sorted(_refs(repository, identifier).items(), key=lambda item: item[0] == anchor):
+            # Keep the relocation proof until every other reference is gone.
+            if ref == anchor and skipped:
+                continue
             bound = expected.get(ref)
             if bound is None or actual is None:
                 skipped.append(_skip("ref", ref, "REF_UNPROVEN", identifier))
@@ -202,7 +204,8 @@ def _remove_tombstone(state: Path, identifier: str) -> bool:
     return True
 
 
-def delete_workspaces(store, manifests: list[dict], artifacts: list[dict], *, first_execution_times=None) -> list[dict]:
+def delete_workspaces(store, manifests: list[dict], artifacts: list[dict], *, first_execution_times=None,
+                      candidate_paths=None) -> list[dict]:
     """Remove proven physical allocations, exact refs, then their private records.
 
     The caller owns the storage lock, shared-dependency check and settled-task
@@ -211,6 +214,7 @@ def delete_workspaces(store, manifests: list[dict], artifacts: list[dict], *, fi
     """
     state = store.directory.resolve()
     first_execution_times = first_execution_times or {}
+    candidate_paths = candidate_paths or {}
     by_id = {}
     with collect_skipped() as skipped:
         for manifest in manifests:
@@ -231,14 +235,15 @@ def delete_workspaces(store, manifests: list[dict], artifacts: list[dict], *, fi
                 continue
             if workspace.allocation_lock_directory(state, identifier) != directory:
                 skipped.append(_skip("allocation", str(directory), "OWNER_UNPROVEN", identifier))
-                blocked[(manifest["repositoryId"], manifest["checkoutId"])] = _SKIP_CODES["OWNER_UNPROVEN"]
+                blocked[manifest["checkoutRoot"]] = _SKIP_CODES["OWNER_UNPROVEN"]
                 continue
             with workspace._lock(directory, create=False):
                 if not _record_proven(state, manifest):
                     skipped.append(_skip("allocation", str(directory), "OWNER_UNPROVEN", identifier))
-                    blocked[(manifest["repositoryId"], manifest["checkoutId"])] = _SKIP_CODES["OWNER_UNPROVEN"]
+                    blocked[manifest["checkoutRoot"]] = _SKIP_CODES["OWNER_UNPROVEN"]
                     continue
-                if not _repository_current(manifest):
+                repository = workspace.locate_repository(manifest, candidates=candidate_paths.get(identifier, ()))
+                if repository is None:
                     # The private allocation record proves its private bytes. Its
                     # former repository's refs and registration are no longer ours
                     # to pursue; the record phase removes this whole allocation.
@@ -248,31 +253,31 @@ def delete_workspaces(store, manifests: list[dict], artifacts: list[dict], *, fi
                 if workspace._path_present(checkout):
                     from .checkout_processes import require_idle_checkout
                     require_idle_checkout(checkout, first_execution_at=first_execution_times.get(
-                        (manifest["repositoryId"], manifest["checkoutId"])))
+                        manifest["checkoutRoot"]))
                 # A missing checkout may still have its original registration.
                 # Complete that same proven boundary before refs or records leave.
-                proof = workspace.deletion_inspect(state, manifest)
+                proof = workspace.deletion_inspect(state, manifest, repository=repository)
                 if proof["reasons"]:
                     skipped.extend(_skip("checkout", str(checkout), reason, identifier)
                                    for reason in proof["reasons"])
                     checkout_retained = True
                 else:
-                    workspace.cleanup_remove(state, manifest, proof=proof)
+                    workspace.cleanup_remove(state, manifest, proof=proof, repository=repository)
                 if checkout_retained or workspace._path_present(checkout):
                     skipped.append(_skip("allocation", str(directory), "DEPENDENCY_RETAINED", identifier))
-                    blocked[(manifest["repositoryId"], manifest["checkoutId"])] = _SKIP_CODES["DEPENDENCY_RETAINED"]
+                    blocked[manifest["checkoutRoot"]] = _SKIP_CODES["DEPENDENCY_RETAINED"]
                     continue
 
         for identifier, manifest in sorted(by_id.items()):
             directory = state / "workspaces" / identifier
-            blocked_reason = blocked.get((manifest["repositoryId"], manifest["checkoutId"]))
+            blocked_reason = blocked.get(manifest["checkoutRoot"])
             if blocked_reason is not None:
                 if manifest["kind"] != "worktree" and workspace._path_present(directory):
                     skipped.append(_skip("allocation", str(directory), "DEPENDENCY_RETAINED", identifier))
                 continue
             if not workspace._path_present(directory):
-                repository = Path(manifest["snapshot"]["repositoryPath"])
-                if not _repository_current(manifest):
+                repository = workspace.locate_repository(manifest, candidates=candidate_paths.get(identifier, ()), repair=False)
+                if repository is None:
                     _remove_tombstone(state, identifier)
                     continue
                 expected = _expected_refs({identifier: manifest}, artifacts)[identifier]
@@ -291,8 +296,8 @@ def delete_workspaces(store, manifests: list[dict], artifacts: list[dict], *, fi
                 if not _record_proven(state, manifest):
                     skipped.append(_skip("allocation", str(directory), "OWNER_UNPROVEN", identifier))
                     continue
-                repository = Path(manifest["snapshot"]["repositoryPath"])
-                current_repository = _repository_current(manifest)
+                repository = workspace.locate_repository(manifest, candidates=candidate_paths.get(identifier, ()), repair=False)
+                current_repository = repository is not None
                 checkout = directory / "checkout"
                 if current_repository and manifest["kind"] == "worktree" and workspace._path_present(checkout):
                     skipped.append(_skip("allocation", str(directory), "DEPENDENCY_RETAINED", identifier))
@@ -307,7 +312,7 @@ def delete_workspaces(store, manifests: list[dict], artifacts: list[dict], *, fi
                 elif manifest["kind"] == "worktree" and workspace._path_present(checkout) and not private_dirs.linked(checkout):
                     from .checkout_processes import require_idle_checkout
                     require_idle_checkout(checkout, first_execution_at=first_execution_times.get(
-                        (manifest["repositoryId"], manifest["checkoutId"])))
+                        manifest["checkoutRoot"]))
                 tomb = _tombstone(state, identifier)
                 if workspace._path_present(tomb):
                     skipped.append(_skip("allocation", str(tomb), "OWNER_UNPROVEN", identifier))

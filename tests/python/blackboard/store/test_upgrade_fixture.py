@@ -10,7 +10,7 @@ import tempfile
 import unittest
 from unittest import mock
 
-from blackboard.store.upgrade_fixture import FIXTURE, load_fixture, complete_fixture_cleanup, _git, _sha, _json
+from blackboard.store.upgrade_fixture import FIXTURE, load_fixture, load_delivered_stock, complete_fixture_cleanup, _git, _sha, _json
 from hey_my_buddy.blackboard.store.store import BoardStore
 from hey_my_buddy.blackboard.routing import router_sequence
 from hey_my_buddy.blackboard.store.db import Corruption, Database, SCHEMA_VERSION
@@ -44,6 +44,71 @@ class UpgradeFixtureTests(unittest.TestCase):
         manifest = json.loads(row['workspace_manifest_json'])
         attempt = connection.execute('SELECT selected_attempt_id FROM tasks WHERE task_id=?', (run_id,)).fetchone()[0]
         return run_id, manifest, attempt
+
+    def test_delivered_v3_stock_continues_and_is_accepted_after_upgrade(self):
+        from admission import admit_board
+        from support import FakeClock, InProcessBoard
+
+        fixture = load_fixture(self.root / 'delivered-v3')
+        load_delivered_stock(fixture)
+        run_id = fixture['deliveredStockRunId']
+        with sqlite3.connect(fixture['state'] / 'board.sqlite3') as connection:
+            raw, state = connection.execute('SELECT workspace_manifest_json,state FROM workflow_runs WHERE run_id=?',
+                                            (run_id,)).fetchone()
+            self.assertEqual(state, 'delivered')
+            self.assertEqual(json.loads(raw)['version'], 3)
+        upgrade_state(fixture['state'])
+        board = InProcessBoard(fixture['state'], clock=FakeClock('2026-01-05T00:10:00.000Z'))
+        self.addCleanup(board.close)
+        view = board.call('workflow_get', {'runId': run_id})
+        self.assertEqual(view['state'], 'delivered')
+        old_manifest = json.loads(raw)
+        self.assertTrue(workspace.verify(old_manifest, state_dir=fixture['state'])['valid'])
+        board.call('workflow_continue', {
+            'runId': run_id, 'commandId': 'schema33-v3-continue',
+            'expectedRevision': view['revision'], 'input': 'Finish the read-only review',
+            **fixture['deliveredStockControl'],
+        })
+        board.store.workflow.prepare_continuation_workspace({'runId': run_id})
+        nonce = 'schema33-fixture-nonce'
+        claim = admit_board(board, {'nonce': nonce, 'runId': run_id})['claim']
+        self.assertIsNotNone(claim)
+        attempt, turn = claim['attempt'], claim['turn']
+        manifest = turn['input']['executionWorkspace']
+        seal = workspace.seal(fixture['state'], manifest, run_id, attempt['attemptId'])
+        session_id = (turn['input']['previousSessionId'] if turn['resumeMode'] == 'native-session'
+                      else 'fixture-schema33-continued')
+        record = {
+            'version': 1, 'taskId': run_id, 'attemptId': attempt['attemptId'],
+            'generation': attempt['generation'], 'turnId': turn['turnId'],
+            'resumeMode': turn['resumeMode'],
+            'previousSessionId': turn['input']['previousSessionId'],
+            'sessionId': session_id, 'promptSha256': 'a' * 64,
+            'inputSha256': turn['inputSha256'],
+            'outcome': {'disposition': 'completed', 'summary': 'Review completed',
+                        'remaining': [], 'decisions': [], 'artifacts': [], 'request': None},
+            'provenance': {'harness': 'codex', 'turnEnd': 'completed',
+                           'outputSchemaValidated': True, 'finalMessageCompleted': True,
+                           'nativeTurnStarted': True, 'nativeTurnCompleted': True,
+                           'nativeThreadId': session_id,
+                           'nativeTurnId': 'fixture-schema33-native-turn',
+                           'finalItemId': 'fixture-item', 'eventSeq': 2},
+        }
+        board.call('execution_result', {
+            'attemptId': attempt['attemptId'], 'generation': attempt['generation'], 'nonce': nonce,
+            'status': 'ok', 'exitCode': 0, 'shutdownConfirmed': True,
+            'result': {'status': 'ok', 'workspaceManifest': manifest, 'turn': record,
+                       'workspaceSeal': seal, 'processState': {'shutdownConfirmed': True}, 'fixture': True},
+        })
+        delivered = board.call('workflow_get', {'runId': run_id})
+        self.assertEqual(delivered['state'], 'delivered')
+        accepted = board.call('workflow_accept', {
+            'runId': run_id, 'artifactId': delivered['finalArtifactId'],
+            'notRequired': 'Read-only fixture has no integration target',
+            'note': 'Accepted after the v3 continuation',
+            **fixture['deliveredStockControl'],
+        })
+        self.assertEqual(accepted['state'], 'accepted')
 
 
     def insert_retained_native_selections(self, fixture, connection):
@@ -139,10 +204,11 @@ class UpgradeFixtureTests(unittest.TestCase):
         for row in connection.execute("SELECT w.input_json,a.result_json FROM workflow_turns w"
                                       " JOIN attempts a ON a.attempt_id=w.attempt_id WHERE w.state='returned'"):
             self.assertEqual(_sha(row[0].encode()), json.loads(row[1])['result']['turn']['inputSha256'])
+        sealed_manifests = []
         for _, run_id in fixture['stableIds'].items():
             row = connection.execute('SELECT workspace_manifest_json FROM workflow_runs WHERE run_id=?', (run_id,)).fetchone()
             manifest = json.loads(row[0])
-            workspace.verify(manifest, state_dir=fixture['state'])
+            sealed_manifests.append(manifest)
             for artifact in connection.execute('SELECT * FROM workflow_artifacts WHERE run_id=?', (run_id,)):
                 if artifact['kind'] == 'output':
                     output = json.loads(artifact['manifest_json'])
@@ -177,6 +243,9 @@ class UpgradeFixtureTests(unittest.TestCase):
         for table in ('buddies', 'evaluation_preferences', 'model_service_notes',
                       'model_service_concurrency', 'harness_health'):
             self.assertGreater(connection.execute(f'SELECT COUNT(*) FROM {table}').fetchone()[0], 0, table)
+        upgrade_state(fixture['state'])
+        for manifest in sealed_manifests:
+            workspace.verify(manifest, state_dir=fixture['state'])
 
 
     def test_host_seal_replays_without_overwriting_worker_stock(self):
@@ -223,6 +292,14 @@ class UpgradeFixtureTests(unittest.TestCase):
         identity_columns = ['rowid', *[row[1] for row in connection.execute('PRAGMA table_info(attempt_process_identities)')]]
         cleanup_columns = ['rowid', *[row[1] for row in connection.execute('PRAGMA table_info(workspace_cleanup_plans)')]]
         reservation_columns = ['rowid', *[row[1] for row in connection.execute('PRAGMA table_info(workspace_reservations)')]]
+        integration_columns = ['rowid', *[row[1] for row in connection.execute('PRAGMA table_info(workflow_integrations)')]]
+        sealed_roots = {}
+        for (raw,) in connection.execute('SELECT workspace_manifest_json FROM workflow_runs'):
+            manifest = json.loads(raw)
+            sealed_roots[manifest['workspaceId'], manifest['manifestSha256']] = manifest['checkoutRoot']
+        for (raw,) in connection.execute("SELECT manifest_json FROM workflow_artifacts WHERE kind IN ('input','turn-input')"):
+            manifest = json.loads(raw)
+            sealed_roots[manifest['workspaceId'], manifest['manifestSha256']] = manifest['checkoutRoot']
         releases = dict(connection.execute(
             "SELECT w.reservation_id,h.created_at FROM workspace_reservations w"
             " JOIN workflow_host_conclusions h ON h.run_id=w.holder_task_id"
@@ -235,7 +312,8 @@ class UpgradeFixtureTests(unittest.TestCase):
         retained_events = {row['seq'] for row in connection.execute('SELECT * FROM events')
                            if json.loads(row['payload_json']).get('planId') not in deleted_plans}
         files = {p.relative_to(native_path(state)): p.read_bytes() for p in native_path(state).rglob('*')
-                 if p.is_file() and not p.name.startswith('board.sqlite3')}
+                 if p.is_file() and not p.name.startswith('board.sqlite3')
+                 and not p.is_relative_to(native_path(state / 'fixture-root' / 'repository' / '.git'))}
         self.assertEqual(before['schema'], UPGRADE_FLOOR_SCHEMA)
         with self.assertRaises(Corruption):
             Database(state).initialize()
@@ -272,16 +350,48 @@ class UpgradeFixtureTests(unittest.TestCase):
                 keep = [i for i, column in enumerate(identity_columns) if column != 'process_group_id']
                 self.assertEqual(actual, [tuple(row[i] for i in keep) for row in original])
             elif name == 'workspace_cleanup_plans':
-                keep = [i for i, column in enumerate(cleanup_columns) if column not in ('expires_at','command_id')]
-                self.assertEqual(actual, [tuple(row[i] for i in keep) for row in original if row[1] not in deleted_plans])
+                expected = []
+                for row in original:
+                    value = dict(zip(cleanup_columns, row))
+                    if value['plan_id'] in deleted_plans:
+                        continue
+                    evidence = json.loads(value['evidence_json'])
+                    workspace = evidence['workspace']
+                    workspace['projectId'] = workspace.pop('repositoryId')
+                    workspace.pop('checkoutId', None)
+                    allocation = workspace['allocation']
+                    allocation['projectId'] = allocation.pop('repositoryId')
+                    allocation.pop('checkoutId', None)
+                    value['evidence_json'] = evidence
+                    for removed in ('checkout_id', 'repository_id', 'expires_at', 'command_id'):
+                        value.pop(removed)
+                    expected.append(value)
+                after_columns = ['rowid', *[column[1] for column in connection.execute('PRAGMA table_info(workspace_cleanup_plans)')]]
+                for row, value in zip(actual, expected, strict=True):
+                    observed = dict(zip(after_columns, row))
+                    observed['evidence_json'] = json.loads(observed['evidence_json'])
+                    self.assertEqual(observed, value)
             elif name == 'workspace_reservations':
                 expected = []
                 for row in original:
                     value = dict(zip(reservation_columns, row))
                     if value['reservation_id'] in releases:
                         value.update(state='released', released_at=releases[value['reservation_id']])
-                    expected.append(tuple(value.values()))
-                self.assertEqual(actual, expected)
+                    value['checkout_root'] = sealed_roots[value['workspace_id'], value['manifest_sha256']]
+                    for removed in ('checkout_id', 'repository_id', 'path'):
+                        value.pop(removed)
+                    expected.append(value)
+                after_columns = ['rowid', *[column[1] for column in connection.execute('PRAGMA table_info(workspace_reservations)')]]
+                self.assertEqual([dict(zip(after_columns, row)) for row in actual], expected)
+            elif name == 'workflow_integrations':
+                expected = []
+                for row in original:
+                    value = dict(zip(integration_columns, row))
+                    value['target_project_id'] = value.pop('target_repository_id')
+                    value.pop('target_checkout_id')
+                    expected.append(value)
+                after_columns = ['rowid', *[column[1] for column in connection.execute('PRAGMA table_info(workflow_integrations)')]]
+                self.assertEqual([dict(zip(after_columns, row)) for row in actual], expected)
             elif name == 'commands':
                 self.assertEqual(actual, [row for row in original if row[1] in retained_commands])
             elif name == 'events':
@@ -312,7 +422,8 @@ class UpgradeFixtureTests(unittest.TestCase):
         self.assertEqual(caught.exception.code, 'UNSUPPORTED_SCHEMA')
         self.assertEqual(upgrade.idle_snapshot(state), after)
         self.assertEqual({p.relative_to(native_path(state)): p.read_bytes() for p in native_path(state).rglob('*')
-                          if p.is_file() and not p.name.startswith('board.sqlite3')}, files)
+                          if p.is_file() and not p.name.startswith('board.sqlite3')
+                          and not p.is_relative_to(native_path(state / 'fixture-root' / 'repository' / '.git'))}, files)
 
     def test_retained_catalog_is_normalized_for_refresh_and_console_without_rewriting_evidence(self):
         from console.test_console import Browser
@@ -861,3 +972,15 @@ class UpgradeFixtureTests(unittest.TestCase):
         self.assertEqual(metadata['reservationStockBaseSha256'], _sha((FIXTURE / 'board.sql').read_bytes()))
         self.assertEqual(metadata['reservationStockSha256'], _sha((FIXTURE / 'schema-30-reservation-stock.sql').read_bytes()))
         self.assertIn('--reservation-stock-for', metadata['reservationStockGenerationCommand'])
+
+    def test_delivered_stock_records_its_floor_writer_and_physical_resources(self):
+        metadata = json.loads((FIXTURE / 'metadata.json').read_text())
+        root = Path(__file__).resolve().parents[4]
+        self.assertEqual(metadata['deliveredStockGeneratorSha256'],
+                         _sha((root / 'packaging/generate-upgrade-fixture.py').read_bytes()))
+        self.assertEqual(metadata['deliveredStockBaseSha256'], _sha((FIXTURE / 'board.sql').read_bytes()))
+        self.assertEqual(metadata['deliveredStockSqlSha256'],
+                         _sha((FIXTURE / 'schema-30-delivered-stock.sql').read_bytes()))
+        self.assertEqual(metadata['deliveredStockResourcesSha256'],
+                         _sha((FIXTURE / 'schema-30-delivered-resources.json').read_bytes()))
+        self.assertIn('--delivered-stock-for', metadata['deliveredStockGenerationCommand'])

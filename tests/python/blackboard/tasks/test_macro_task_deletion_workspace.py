@@ -319,6 +319,35 @@ class DeletionWorkspaceTests(unittest.TestCase):
     def test_moved_repository_clears_private_allocations_and_leaves_its_refs(self):
         self.unavailable_repository_case("moved")
 
+    def test_known_moved_repository_removes_exact_allocation_refs(self):
+        manifest = self.prepare("known-moved-repository")
+        checkout = Path(manifest["checkoutRoot"])
+        moved = self.root / "known-moved-location"
+        self.repo.rename(moved)
+        skipped = delete_workspaces(
+            SimpleNamespace(directory=self.state), [manifest], [],
+            candidate_paths={manifest["workspaceId"]: (str(moved),)},
+        )
+        self.assertEqual(skipped, [])
+        self.assertFalse(checkout.exists())
+        self.assertFalse((self.state / "workspaces" / manifest["workspaceId"]).exists())
+        prefix = f"refs/hey-my-buddy/workspaces/{manifest['workspaceId']}/"
+        self.assertFalse(self.git("for-each-ref", "--format=%(refname)", prefix, cwd=moved))
+
+    def test_moved_existing_refs_are_removed_without_repairing_user_checkout(self):
+        manifest = self.prepare("moved-existing-refs", kind="existing")
+        moved = self.root / "moved-existing-location"
+        self.repo.rename(moved)
+        with patch.object(workspace, "_git_in", side_effect=AssertionError("existing checkout was repaired")):
+            skipped = delete_workspaces(
+                SimpleNamespace(directory=self.state), [manifest], [],
+                candidate_paths={manifest["workspaceId"]: (str(moved),)},
+            )
+        self.assertEqual(skipped, [])
+        self.assertTrue(moved.is_dir())
+        prefix = f"refs/hey-my-buddy/workspaces/{manifest['workspaceId']}/"
+        self.assertFalse(self.git("for-each-ref", "--format=%(refname)", prefix, cwd=moved))
+
     def test_replaced_repository_clears_private_allocations_without_touching_replacement(self):
         self.unavailable_repository_case("replaced")
 
@@ -341,8 +370,7 @@ class DeletionWorkspaceTests(unittest.TestCase):
                     replacement = {str(path.relative_to(self.repo)): path.read_bytes()
                                    for path in self.repo.rglob("*") if path.is_file()}
                 try:
-                    with patch.object(workspace, "_git", side_effect=AssertionError("unavailable repository was opened")):
-                        self.assertEqual(self.delete(manifest), [])
+                    self.assertEqual(self.delete(manifest), [])
                     self.assertFalse(directory.exists())
                     self.assertFalse(deletion_workspace._tombstone(self.state, manifest["workspaceId"]).exists())
                     if replacement is not None:
@@ -361,17 +389,17 @@ class DeletionWorkspaceTests(unittest.TestCase):
                         retained.rename(self.repo)
 
     def test_repository_io_errors_are_not_skipped(self):
-        original = workspace._identity
+        original = workspace.repository_at
         for layout in ("checkout", "logical", "no-checkout", "refs"):
             manifest, _ = self.repository_case(layout)
             repository = Path(manifest["snapshot"]["repositoryPath"])
             for error in (PermissionError("unreadable repository"), OSError("repository I/O failed")):
                 with self.subTest(layout=layout, error=type(error).__name__):
-                    def identity(path):
-                        if Path(path) == repository:
+                    def read_repository(path):
+                        if Path(path) in (repository, Path(manifest["checkoutRoot"])):
                             raise error
                         return original(path)
-                    with patch.object(workspace, "_identity", side_effect=identity), \
+                    with patch.object(workspace, "repository_at", side_effect=read_repository), \
                             patch.object(deletion_workspace, "_delete_refs") as delete_refs:
                         with self.assertRaises(type(error)):
                             self.delete(manifest)

@@ -234,7 +234,7 @@ def _allocation_reference_sets(rows, allocations, *, directories=None, on_refere
     for index, (manifest, request_id) in enumerate(allocations):
         identities = [manifest['workspaceId'], request_id, manifest.get('manifestSha256')]
         if manifest['kind'] == 'worktree':
-            identities.append(manifest['checkoutId'])
+            identities.append(manifest['checkoutRoot'])
         for token in identities:
             if isinstance(token, str):
                 tokens.setdefault(token, set()).add(index)

@@ -157,8 +157,8 @@ class DirtyInputTests(RealWorkspaceTestCase):
         first_manifest = self.manifest_for("req-1", kind="worktree")
         second_manifest = self.manifest_for("req-2", kind="worktree")
         self.assertNotEqual(first_manifest["path"], second_manifest["path"])
-        self.assertNotEqual(first_manifest["checkoutId"], second_manifest["checkoutId"])
-        self.assertEqual(first_manifest["repositoryId"], second_manifest["repositoryId"])
+        self.assertNotEqual(first_manifest["checkoutRoot"], second_manifest["checkoutRoot"])
+        self.assertEqual(first_manifest["projectId"], second_manifest["projectId"])
         for worker, submitted in (("w1", first), ("w2", second)):
             pass  # Admission is owned by the service.
             claimed = admit_board(board, {'workerId': worker, 'claimRequestId': f'claim-{worker}', 'nonce': f'{worker}x'.ljust(16, 'y')})
@@ -471,7 +471,7 @@ class TransferredCheckoutContinuationTests(RealWorkspaceTestCase):
 
         helper_claim = admit_board(board, {'workerId': 'w1', 'claimRequestId': 'claim-2', 'nonce': 'm' * 16, 'runId': child})
         helper_manifest = helper_claim["claim"]["turn"]["input"]["executionWorkspace"]
-        self.assertEqual(helper_manifest["checkoutId"], parent_manifest["checkoutId"])
+        self.assertEqual(helper_manifest["checkoutRoot"], parent_manifest["checkoutRoot"])
         # The helper writes a new file and seals its output on the shared checkout.
         (self.repo / "helper-new.txt").write_text("helper output\n", encoding="utf-8", newline="\n")
         helper_seal = workspace.seal(
@@ -597,7 +597,7 @@ class PinnedHelperHandoffTests(RealWorkspaceTestCase):
             self.assertEqual(artifact["inputCommit"], seal["inputCommit"])
             self.assertIn(f"helper-{index}.txt", artifact["changedPaths"])
             self.assertTrue(entry["attemptId"])
-            self.assertTrue(entry["workspace"]["checkoutId"])
+            self.assertTrue(entry["workspace"]["checkoutRoot"])
             self.assertEqual(entry["workspace"]["manifestSha256"], manifests[child]["manifestSha256"])
         # The continuation snapshot is the frozen record, not a live re-query.
         audit = board.call("workflow_get", {"runId": run_id, "includeAudit": True})
@@ -647,17 +647,17 @@ class WorktreeContinuationReuseTests(TransferredCheckoutContinuationTests):
         second = admit_board(board, {'workerId': 'w1', 'claimRequestId': 'wt-c2', 'nonce': 'm' * 16, 'runId': run_id})
         manifest_two = second["claim"]["turn"]["input"]["executionWorkspace"]
         self.assertEqual(manifest_two["path"], manifest_one["path"])
-        self.assertEqual(manifest_two["checkoutId"], manifest_one["checkoutId"])
+        self.assertEqual(manifest_two["checkoutRoot"], manifest_one["checkoutRoot"])
         self.assertEqual(manifest_two["baseCommit"], seal_one["commit"])
         self.assertEqual(board.call("task_get", {"runId": run_id})["task"]["cwd"], manifest_one["path"])
         # No second allocation was reserved for this run.
         audit = board.call("workflow_get", {"runId": run_id, "includeAudit": True})
         paths = {
-            row["path"]
+            row["checkoutRoot"]
             for row in audit["audit"]["reservations"]
             if row["state"] in ("held", "transferred")
         }
-        self.assertEqual(paths, {manifest_one["path"]})
+        self.assertEqual(paths, {manifest_one["checkoutRoot"]})
 
 
 class ContinuationCheckoutReuseTests(TransferredCheckoutContinuationTests):
@@ -739,7 +739,7 @@ class ContinuationCheckoutReuseTests(TransferredCheckoutContinuationTests):
         self.assertEqual(manifest_three["path"], manifest_one["path"])
         self.assertEqual(manifest_three["baseCommit"], seal_three["commit"])
         self.assertEqual(manifest_three["inputTree"], seal_three["tree"])
-        self.assertEqual(manifest_three["checkoutId"], manifest_one["checkoutId"])
+        self.assertEqual(manifest_three["checkoutRoot"], manifest_one["checkoutRoot"])
         self.assertEqual(
             board.call("task_get", {"runId": run_id})["task"]["cwd"], manifest_one["path"]
         )
@@ -750,7 +750,7 @@ class ContinuationCheckoutReuseTests(TransferredCheckoutContinuationTests):
             for row in audit["audit"]["reservations"]
             if row["state"] == "held" and row["access"] == "write"
         ]
-        self.assertEqual([(row["holderTaskId"], row["checkoutId"]) for row in held], [(run_id, manifest_one["checkoutId"])])
+        self.assertEqual([(row["holderTaskId"], row["checkoutRoot"]) for row in held], [(run_id, manifest_one["checkoutRoot"])])
         view = board.call("workflow_get", {"runId": run_id})
         self.assertEqual(view["workspace"]["path"], manifest_one["path"])
         # Sibling paths of the same checkout still cannot bypass the write exclusion.

@@ -53,9 +53,9 @@ class MockWorkspace:
                  if path.is_relative_to(Path(manifest["checkoutRoot"]).resolve())]
         if known:
             manifest = max(known, key=lambda item: len(Path(item["checkoutRoot"]).parts))
-            return {key: manifest[key] for key in ("checkoutRoot", "checkoutId", "repositoryId")}
+            return {key: manifest[key] for key in ("checkoutRoot", "projectId")}
         root = self._repository_root(cwd)
-        return {"checkoutRoot": root, "checkoutId": f"checkout:{root}", "repositoryId": f"repo:{root}"}
+        return {"checkoutRoot": root, "projectId": f"repo:{root}"}
 
     def _manifest(self, *, request_id: str, intent: dict) -> dict:
         kind = intent.get("kind", "existing")
@@ -67,11 +67,11 @@ class MockWorkspace:
             path = str(cwd)
         identity = self._checkout_identity(intent.get("cwd") or path)
         if kind == "worktree":
-            identity = {**identity, "checkoutRoot": path, "checkoutId": f"checkout:{identity['checkoutRoot']}:{request_id}"}
+            identity = {**identity, "checkoutRoot": path}
         base = intent.get("base") if isinstance(intent.get("base"), dict) else {}
         base_commit = base.get("ref") or "a" * 40
         manifest = {
-            "version": 3,
+            "version": 4,
             "workspaceId": f"ws-{request_id}",
             "kind": kind,
             "path": path,
@@ -132,7 +132,7 @@ class MockWorkspace:
             raise BoardError("INVALID_WORKSPACE", "writeScope must be a list of nonempty relative paths")
         return sorted({value for value in values})
 
-    def inspect(self, cwd: str) -> dict:
+    def inspect(self, cwd: str, *, create_project=False, existing=False, managed=False, _project=True) -> dict:
         return {
             "kind": "existing",
             "path": str(cwd),
@@ -140,6 +140,9 @@ class MockWorkspace:
             "baseCommit": "a" * 40,
             "clean": not self.dirty,
         }
+
+    def locate_repository(self, manifest, *, cwd=None, candidates=(), repair=True, removal_started=False):
+        return manifest["snapshot"]["repositoryPath"]
 
     @contextmanager
     def submission_preparation(self, state_dir, request_id, intent, *, shared_locks=None):
@@ -191,7 +194,7 @@ class MockWorkspace:
             "kind": manifest.get("kind"),
             "path": manifest.get("path"),
             "checkoutRoot": manifest.get("checkoutRoot"),
-            "repositoryId": manifest.get("repositoryId"),
+            "projectId": manifest.get("projectId"),
             "taskId": task_id,
             "attemptId": attempt_id,
             "baseCommit": manifest.get("baseCommit"),
@@ -219,7 +222,7 @@ class MockWorkspace:
 
     # -- Host lifecycle surface: this double owns no disposable checkout -----
     def integration_verify(self, artifact, *, original_input=None, final_input=None, path=None, ref=None,
-                           before_commit=None, repository_id=None, checkout_id=None,
+                           before_commit=None, repository=None,
                            adjusted_paths=None, host_paths=None, note=None, _confirm_adjustments=False):
         """The mock target carries the artifact only once its marker exists, or an
         explicit adjustment names the differing paths."""
@@ -230,8 +233,8 @@ class MockWorkspace:
             adjusted_paths = changed
         return {
             "verified": bool(carried or adjusted_paths), "strategy": "patch",
-            "target": {"kind": "checkout", "path": str(target.resolve()), "checkoutId": f"checkout:{target}",
-                       "repositoryId": f"repo:{target}", "ref": ref},
+            "target": {"kind": "checkout", "path": str(target.resolve()),
+                       "projectId": f"repo:{target}", "ref": ref},
             "beforeCommit": before_commit, "afterCommit": ref, "beforeTree": None, "afterTree": None,
             "sourceCommit": artifact.get("commit"), "sourceTree": artifact.get("tree"),
             "artifactAncestor": False,
@@ -264,16 +267,17 @@ class MockWorkspace:
         from hey_my_buddy.blackboard.tasks.workspace import _path_present
         return _path_present(path)
 
-    def cleanup_inspect(self, state_dir, manifest, sealed=None, retained=None, allowed=None, *, resume=False):
+    def cleanup_inspect(self, state_dir, manifest, sealed=None, retained=None, allowed=None, *, resume=False,
+                        repository=None):
         return {
             "eligible": False, "reasons": ["not-a-managed-worktree"],
             "workspaceId": manifest.get("workspaceId"), "manifestWorkspaceId": manifest.get("workspaceId"),
-            "kind": manifest.get("kind", "existing"), "checkoutId": manifest.get("checkoutId"),
-            "repositoryId": manifest.get("repositoryId"), "path": manifest.get("checkoutRoot"),
+            "kind": manifest.get("kind", "existing"), "checkoutRoot": manifest.get("checkoutRoot"),
+            "projectId": manifest.get("projectId"), "path": manifest.get("checkoutRoot"),
             "cwd": manifest.get("path"), "allocation": None, "worktree": False, "locked": None,
             "unsealedPaths": [], "refs": [], "sealedObservation": None, "attachedBranch": None,
         }
 
     def cleanup_remove(self, state_dir, manifest, *, retained=None, resume=False, proof=None,
-                       missing_allocation=None):
+                       missing_allocation=None, repository=None):
         raise BoardError("WORKSPACE_UNSAFE", "the mock double owns no disposable checkout")

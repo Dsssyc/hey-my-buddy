@@ -278,8 +278,8 @@ class PreparationTests(WorkflowTestCase):
         with board.store.db.read() as connection:
             self.assertEqual(connection.execute("SELECT state FROM workflow_runs WHERE run_id=?", (helper_id,)).fetchone()[0], "failed")
             self.assertEqual(connection.execute("SELECT COUNT(*) FROM workflow_continuations WHERE run_id=?", (helper_id,)).fetchone()[0], 0)
-            checkout_id = failed["claim"]["turn"]["input"]["executionWorkspace"]["checkoutId"]
-            holders = connection.execute("SELECT holder_task_id FROM workspace_reservations WHERE checkout_id=? AND state='held'", (checkout_id,)).fetchall()
+            checkout_root = failed["claim"]["turn"]["input"]["executionWorkspace"]["checkoutRoot"]
+            holders = connection.execute("SELECT holder_task_id FROM workspace_reservations WHERE checkout_root=? AND state='held'", (checkout_root,)).fetchall()
         self.assertEqual([row[0] for row in holders], [competing["runId"]])
 
     def test_new_manual_input_supersedes_every_unconsumed_manual_intent(self):
@@ -343,7 +343,7 @@ class PreparationTests(WorkflowTestCase):
         board.store.workflow.prepare_continuation_workspace({"runId": run_id})
         after = self.rows(board, run_id, cont)
         manifest = json.loads(after[2]["workspace_manifest_json"])
-        self.assertEqual(manifest["checkoutId"], json.loads(before[0]["workspace_manifest_json"])["checkoutId"])
+        self.assertEqual(manifest["checkoutRoot"], json.loads(before[0]["workspace_manifest_json"])["checkoutRoot"])
         self.assertEqual(after[3]["manifest_sha256"], manifest["manifestSha256"])
         self.assertEqual(after[3]["workspace_id"], manifest["workspaceId"])
         for key in ("request_fingerprint", "execution_workspace_json"):
@@ -429,7 +429,7 @@ class PreparationTests(WorkflowTestCase):
         resumed = self.claim(board, claim_request_id="worktree-continuation", run_id=run_id)
         self.assertIsNotNone(resumed["claim"], resumed)
         current = resumed["claim"]["turn"]["input"]["executionWorkspace"]
-        for field in ("checkoutId", "checkoutRoot", "repositoryId", "path"):
+        for field in ("checkoutRoot", "projectId", "path"):
             self.assertEqual(current[field], previous[field])
         self.assertEqual(resumed["claim"]["task"]["cwd"], previous["path"])
         self.assertEqual((self.repo / "tracked.txt").read_text(encoding="utf-8"), "base\n")
@@ -482,7 +482,7 @@ class PreparationTests(WorkflowTestCase):
                 with board.store.db.write() as connection:
                     connection.execute("UPDATE workflow_runs SET workspace_manifest_json=? WHERE run_id=?", (canonical_json(replacement), run_id))
                     connection.execute("UPDATE tasks SET cwd=? WHERE task_id=?", (replacement["path"], run_id))
-                    connection.execute("UPDATE workspace_reservations SET workspace_id=?, checkout_id=?, repository_id=?, path=?, manifest_sha256=? WHERE holder_task_id=? AND state='held'", (replacement["workspaceId"], replacement["checkoutId"], replacement["repositoryId"], replacement["path"], replacement["manifestSha256"], run_id))
+                    connection.execute("UPDATE workspace_reservations SET workspace_id=?, checkout_root=?, manifest_sha256=? WHERE holder_task_id=? AND state='held'", (replacement["workspaceId"], replacement["checkoutRoot"], replacement["manifestSha256"], run_id))
             return manifest
 
         with patch.object(workspace, "prepare", side_effect=race):
@@ -640,7 +640,7 @@ class RestartPreparationTests(WorkflowTestCase):
                           executionWorkspace={"kind": "worktree", "access": "write"},
                           macroTask={"title": "initial project"})
         original = self.manifest(board, run["runId"])
-        project = workspace.inspect(str(self.repo))["repositoryId"]
+        project = workspace.inspect(str(self.repo))["projectId"]
         other = self.repository("other-project")
         foreign = self.submit(board, request_id="foreign-project", cwd=str(other),
                               executionWorkspace={"kind": "worktree", "access": "write"})
@@ -650,15 +650,13 @@ class RestartPreparationTests(WorkflowTestCase):
         with board.store.db.write() as connection:
             connection.execute("UPDATE workflow_runs SET workspace_manifest_json=? WHERE run_id=?",
                                (canonical_json(foreign_manifest), run["runId"]))
-            connection.execute("UPDATE workspace_reservations SET repository_id=?,path=? WHERE holder_task_id=?",
-                               (foreign_manifest["repositoryId"], foreign_manifest["path"], run["runId"]))
             connection.execute("UPDATE tasks SET cwd=? WHERE task_id=?", (str(other), run["runId"]))
         board = self.board()
         task = board.call("task_get", {"runId": run["runId"]})["task"]
         self.assertEqual(task["lineage"]["project"]["id"], project)
         listed = board.call("task_list", {"projectId": project})
         self.assertIn(run["runId"], {row["runId"] for row in listed["runs"]})
-        foreign_list = board.call("task_list", {"projectId": foreign_manifest["repositoryId"]})
+        foreign_list = board.call("task_list", {"projectId": foreign_manifest["projectId"]})
         self.assertNotIn(run["runId"], {row["runId"] for row in foreign_list["runs"]})
         timeline = board.call("macro_task_timeline", {"macroTaskId": run["macroTaskId"]})
         self.assertEqual(timeline["macroTask"]["project"]["id"], project)
@@ -690,7 +688,7 @@ class RestartPreparationTests(WorkflowTestCase):
                     self.submit(board, request_id=f"restart-competing-{access}", cwd=str(self.repo),
                                 executionWorkspace={"kind": "existing", "access": access})
                 self.assertEqual(blocked.exception.code, "PREPARATION_CONFLICT")
-                self.assertEqual(blocked.exception.details["checkoutId"], workspace.inspect(str(self.repo))["checkoutId"])
+                self.assertEqual(blocked.exception.details["checkoutRoot"], workspace.inspect(str(self.repo))["checkoutRoot"])
                 if access == "write":
                     self.assertEqual(blocked.exception.details["holderTaskId"], helper_id)
         helper = self.claim(board, run_id=helper_id, claim_request_id="restart-helper-claim")
@@ -705,7 +703,7 @@ class RestartPreparationTests(WorkflowTestCase):
         current = resumed["claim"]["turn"]["input"]["executionWorkspace"]
         self.assertEqual(current["baseCommit"], output["commit"])
         self.assertEqual(current["path"], old["path"])
-        self.assertEqual(current["checkoutId"], workspace.inspect(str(self.repo))["checkoutId"])
+        self.assertEqual(current["checkoutRoot"], workspace.inspect(str(self.repo))["checkoutRoot"])
         with board.store.db.read() as connection:
             holders = connection.execute("SELECT holder_task_id FROM workspace_reservations WHERE state='held'").fetchall()
         self.assertEqual([row[0] for row in holders], [root["runId"]])

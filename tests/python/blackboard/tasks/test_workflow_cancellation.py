@@ -117,7 +117,7 @@ class WorkflowCancellationTests(WorkflowTestCase):
         self.assertIn((parent["runId"], "released"), self.reservations(board))
         self.assertIn((child, "released"), self.reservations(board))
         replacement = self.submit(board, request_id="replacement", cwd=str(root))
-        self.assertEqual(replacement["workspace"]["checkoutId"], parent["workspace"]["checkoutId"])
+        self.assertEqual(replacement["workspace"]["checkoutRoot"], parent["workspace"]["checkoutRoot"])
 
     def test_yielded_attention_helper_and_its_request_are_cancelled(self):
         board, _, parent, child = self.parent_and_child()
@@ -426,7 +426,7 @@ class RealCheckoutCancellationTests(RealWorkspaceTestCase, WorkflowTestCase):
         before = self.state()
         board.call("workflow_cancel", {"runId": submitted["runId"], **self.control(approved)})
         replacement = self.submit(board, request_id="replacement-real")
-        self.assertEqual(replacement["workspace"]["checkoutId"], submitted["workspace"]["checkoutId"])
+        self.assertEqual(replacement["workspace"]["checkoutRoot"], submitted["workspace"]["checkoutRoot"])
         self.assertEqual(self.state(), before)
         claimed = self.claim(board, claim_request_id="replacement-claim", run_id=replacement["runId"])
         self.assertEqual(claimed["claim"]["attempt"]["taskId"], replacement["runId"])

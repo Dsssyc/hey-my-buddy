@@ -24,6 +24,7 @@ from ..routing import router, router_sequence
 from ...protocol import schemas
 from ...protocol.turn_input import turn_buddy
 from ...protocol.reasons import reason_from_json
+from ...protocol.workspace_manifest import project_id as manifest_project_id
 from ...errors import BoardError
 
 LIST_DEFAULT_LIMIT = 50
@@ -148,7 +149,7 @@ def pending_root_count(store) -> int:
 def attach_macro_task(connection, presentation: dict, *, spec: dict, host_id: str, manifest: dict, now: str,
                       fixed_run=None) -> str | None:
     """Run within the task's admission transaction; failed admission creates nothing."""
-    project_id = manifest["repositoryId"]
+    project_id = manifest_project_id(manifest)
     identifier = presentation.get("macroTaskId")
     if fixed_run is not None and not any(key in presentation for key in ("macroTask", "macroTaskId", "macroTaskOf")):
         identifier = fixed_run["macro_task_id"]

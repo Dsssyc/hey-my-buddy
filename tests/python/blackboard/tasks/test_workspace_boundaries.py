@@ -444,7 +444,7 @@ class WorkspaceBoundaryTests(unittest.TestCase):
         self.assertEqual(self.git("ls-files", "-s", "--", "src/deep/link", cwd=checkout).split()[0], b"120000")
         if not workspace._WINDOWS:
             self.assertEqual((checkout / "src/deep/payload.bin").stat().st_mode & 0o777, 0o755)
-        self.assertEqual(workspace.inspect(str(checkout))["checkoutId"], manifest["checkoutId"])
+        self.assertEqual(workspace.inspect(str(checkout))["checkoutRoot"], manifest["checkoutRoot"])
         self.assertTrue(workspace.cleanup_remove(self.state, manifest, resume=True)["removed"])
 
     def test_resumed_cleanup_refuses_a_link_placeholder_that_the_real_index_cannot_represent(self):
