@@ -176,6 +176,9 @@ def main():
             else:
                 send({"id": ident, "result": RATE_LIMITS_READ})
         elif method == "model/list":
+            if case == "unreadable-catalog-result":
+                send({"id": ident, "result": []})
+                continue
             if case == "bad-catalog":
                 send({"id": ident, "result": {"data": {"not": "a list"}, "nextCursor": None}})
                 continue
@@ -298,6 +301,11 @@ def main():
                 for number in range(65):
                     send({"method": f"native/future/{number}",
                           "params": {"threadId": thread_id, "turnId": turn_id}})
+            if case == "readonly-unknown-item-shape":
+                send({"method": "thread/futureItem", "params": {"threadId": thread_id, "turnId": turn_id,
+                      "item": "new-native-shape"}})
+                send({"method": "item/started", "params": {"threadId": thread_id, "turnId": turn_id,
+                      "item": "new-native-shape"}})
             if case == "readonly-budget":
                 send({"method": "item/started", "params": {"threadId": thread_id, "turnId": turn_id,
                       "item": {"type": "commandExecution", "id": "read-1"}}})

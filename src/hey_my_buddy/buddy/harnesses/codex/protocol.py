@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import os
 import queue
+import re
 import select
 import threading
 import time
@@ -18,6 +19,7 @@ MAX_FRAME_BYTES = 8 * 1024 * 1024
 #: size. Nothing past ``error.message`` is expanded (no ``error.data``).
 MAX_NATIVE_REFUSAL_BYTES = 512
 _WINDOWS_PIPE = os.name == "nt"
+_UNREADABLE_RESULT = "rpc/result-unreadable"
 
 
 class CodexProtocolError(Exception):
@@ -47,6 +49,7 @@ class Connection:
         #: observer's pending feedback here, so a stop requested on a recorded
         #: fact takes effect before any further native waiting.
         self.after_pump = None
+        self.last_result_readable: bool | None = None
         os.set_blocking(process.stdin.fileno(), False)
         threading.Thread(target=self._read, daemon=True).start()
 
@@ -110,15 +113,15 @@ class Connection:
         if "id" in message and "method" in message:
             self.on_request(message)
         elif "id" in message:
-            if type(message["id"]) is not int or len(self.responses) >= 16:
+            if type(message["id"]) is not int:
                 raise CodexProtocolError("invalid-protocol", "invalid native response identity")
             if self.strict_responses and (message["id"] not in self.pending_ids or message["id"] in self.responses):
                 raise CodexProtocolError("invalid-protocol", "uncorrelated or duplicate native sandbox reply")
+            if len(self.responses) >= 16:
+                raise CodexProtocolError("invalid-protocol", "too many pending native responses")
             self.responses[message["id"]] = message
-        elif isinstance(message.get("method"), str):
-            self.on_notification(message)
         else:
-            raise CodexProtocolError("invalid-protocol", "unrecognized native message")
+            self.on_notification(message)
 
     def call(self, method: str, params: dict) -> dict:
         request_id = self.next_id
@@ -146,8 +149,13 @@ class Connection:
                 raise CodexProtocolError("native-rpc-error", text)
             raise CodexProtocolError("native-rpc-error", f"Codex rejected {method}")
         result = response.get("result")
-        if not isinstance(result, dict):
-            raise CodexProtocolError("invalid-protocol", f"Codex returned no object for {method}")
+        self.last_result_readable = isinstance(result, dict)
+        if not self.last_result_readable:
+            label = f"{_UNREADABLE_RESULT}/{method}"
+            if not re.fullmatch(r"[A-Za-z0-9/._-]{1,64}", label):
+                label = _UNREADABLE_RESULT
+            self.on_notification({"method": label})
+            return {}
         return result
 
 
@@ -411,13 +419,17 @@ class TurnEvidence:
             self.model_turns += 1
             return "waiting-model", None
         if method == "item/started":
-            item = params.get("item") or {}
+            item = params.get("item")
+            if not isinstance(item, dict):
+                return None
             if item.get("type") in ("commandExecution", "fileChange", "mcpToolCall", "dynamicToolCall", "collabAgentToolCall"):
                 self.tool_calls += 1
                 return "tool-running", item.get("type")
             return "streaming-model", None
         if method == "item/completed":
-            item = params.get("item") or {}
+            item = params.get("item")
+            if not isinstance(item, dict):
+                return None
             if item.get("type") == "agentMessage":
                 self.last_agent_item = item
             if item.get("type") == "agentMessage" and item.get("phase") == "final_answer":

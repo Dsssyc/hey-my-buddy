@@ -191,7 +191,6 @@ _KNOWN_METHODS = frozenset({
     "warning", "error",
 })
 _TOOL_METHOD_PREFIXES = ("collabAgent/", "tool/", "mcp/")
-_CONVERSATION_ITEMS = ("agentMessage", "reasoning", "userMessage")
 
 
 class _Classifier:
@@ -213,7 +212,7 @@ class _Classifier:
         if isinstance(method, str) and (method.startswith(_TOOL_METHOD_PREFIXES)
                                         or method.startswith("rawResponseItem/")):
             return self._tool_shaped(method, params)
-        if method not in _KNOWN_METHODS:
+        if not isinstance(method, str) or method not in _KNOWN_METHODS:
             if isinstance(params, dict) and isinstance(params.get("threadId"), str) and _event_turn(params) is None:
                 facts.note_thread_notification(method)
             else:
@@ -250,7 +249,10 @@ class _Classifier:
 
     def _item(self, params: Any) -> bool:
         kind = self._item_kind(params)
-        if not isinstance(kind, str) or kind in NON_TOOL_ITEMS:
+        if not isinstance(kind, str):
+            self.facts.note_unknown("item-shape-unreadable")
+            return True
+        if kind in NON_TOOL_ITEMS:
             return False
         if kind in TYPED_TOOL_ITEMS:
             self.facts.note_marker()
@@ -339,6 +341,11 @@ class _RunState:
     #: the absence becomes this run's public fact, and the native answer decides.
     selected_model_listed: bool | None = None
     native_provider: str | None = None
+    native_model: str | None = None
+    catalog_read: dict | None = None
+    policy_checks: dict = dataclasses.field(default_factory=dict)
+    fast_config: dict | None = None
+    fast_receipt: dict | None = None
 
 
 @dataclasses.dataclass
@@ -406,10 +413,6 @@ class _ActivityWriter:
 
 def _prepare(request: RunRequest, mode: str) -> _Preparation:
     """Preparation phase: private evidence roots and native environment."""
-    if mode == "fast" and (type(request.budget.timeout_seconds) is not int
-                           or not 0 < request.budget.timeout_seconds <= 60):
-        raise CodexProtocolError("no-tool-policy-unverified",
-                                 "Codex no-tool deadline must be at most 60 seconds")
     invocation_root = ensure_private_dir(Path(request.private_state.invocation_root))
     native_root = ensure_private_dir(Path(request.private_state.native_root))
     incoming = dict(os.environ)
@@ -476,6 +479,7 @@ def _spawn_app_server(prep: _Preparation, cancel: CancelFlag, owned: list) -> _S
 
 def _catalog(connection: Connection, version: str | None, provider: str) -> tuple[dict, set[str]]:
     data, cursor, seen = [], None, set()
+    read_status, read_reason = "complete", None
     while True:
         params = {"limit": 100, "includeHidden": False}
         if cursor:
@@ -483,17 +487,22 @@ def _catalog(connection: Connection, version: str | None, provider: str) -> tupl
         page = connection.call("model/list", params)
         entries = page.get("data")
         if not isinstance(entries, list):
-            raise CodexProtocolError("invalid-catalog", "Codex returned no model list")
+            read_status, read_reason = "unknown", "model-list-shape-unreadable"
+            break
         data.extend(entries)
         if len(data) > 200:
             raise CodexProtocolError("invalid-catalog", "Codex model list exceeds the catalog bound")
         cursor = page.get("nextCursor")
         if cursor is None:
             break
-        if not isinstance(cursor, str) or not cursor or cursor in seen:
-            raise CodexProtocolError("invalid-catalog", "Codex model cursor is invalid")
+        if not isinstance(cursor, str) or not cursor:
+            read_status, read_reason = "unknown", "model-cursor-shape-unreadable"
+            break
+        if cursor in seen:
+            raise CodexProtocolError("invalid-catalog", "Codex model cursor did not advance")
         seen.add(cursor)
-    models, warnings = [], []
+    models = []
+    warnings = [f"The native model reading is incomplete: {read_reason}"] if read_reason else []
     listed_ids: set[str] = set()
     for item in data:
         if not isinstance(item, dict) or item.get("hidden") is True:
@@ -516,7 +525,9 @@ def _catalog(connection: Connection, version: str | None, provider: str) -> tupl
                "discoveredAt": datetime.now(timezone.utc).isoformat(),
                "providers": [{"adapter": "codex", "provider": provider, "displayName": provider,
                               "packageName": "codex", "packageVersion": version or "unknown", "models": models}],
-               "warnings": list(dict.fromkeys(warnings))}
+               "warnings": list(dict.fromkeys(warnings)),
+               "discoveries": [{"adapter": "codex", "status": read_status,
+                                **({"reason": read_reason} if read_reason else {})}]}
     return catalog, listed_ids
 
 
@@ -539,7 +550,8 @@ def _discovery_account_status(account) -> str:
     return "confirmed"
 
 
-def _initialize(connection: Connection, prep: _Preparation, mode: str, spec: dict) -> bool:
+def _initialize(connection: Connection, prep: _Preparation, mode: str, spec: dict,
+                state: _RunState) -> bool | None:
     """Initialization phase: handshake, account check, catalog and membership.
 
     The listed/unlisted fact comes from every
@@ -556,8 +568,9 @@ def _initialize(connection: Connection, prep: _Preparation, mode: str, spec: dic
     connection.call("account/read", {"refreshToken": False})
     configured = connection.call("config/read", {"cwd": prep.cwd, "includeLayers": False}).get("config") or {}
     catalog, listed_ids = _catalog(connection, prep.version, native_provider(configured))
+    state.catalog_read = {"discovery": catalog["discoveries"][0], "warnings": catalog["warnings"]}
     if spec.get("model") not in listed_ids:
-        return False
+        return False if catalog["discoveries"][0]["status"] == "complete" else None
     listed = next((model for model in catalog["providers"][0]["models"]
                    if model["id"] == spec.get("model")), None)
     if listed is None or spec.get("effort") not in listed["efforts"]:
@@ -618,9 +631,6 @@ def _configure_worker(connection: Connection, request: RunRequest, prep: _Prepar
     requested = configuration_spec(request)
     state.requested = requested
     if mode == "native-session":
-        if not isinstance(previous, str) or not previous:
-            raise CodexProtocolError("native-resume-unavailable",
-                                     "native continuation requires the bound Codex thread")
         binding = _read_binding(prep.native_root, previous)
         expected = {"taskId": request.identity.task_id, "threadId": previous,
                     "cwd": request.cwd, "configuration": requested}
@@ -658,7 +668,7 @@ def _configure_worker(connection: Connection, request: RunRequest, prep: _Prepar
         raise CodexProtocolError("invalid-resume-mode",
                                  "Codex requires an explicit initial, native or reconstructed turn")
     thread_id = _check_thread_receipt(response, request.cwd, mode=mode, previous=previous)
-    state.native_provider = (response.get("thread") or {}).get("modelProvider")
+    state.native_provider = _bounded((response.get("thread") or {}).get("modelProvider"), 128)
     state.thread_opened = True
     state.thread_id = thread_id
     state.configured = True
@@ -681,8 +691,8 @@ def _config_overrides(config: dict) -> dict[str, str]:
 
 
 def _configure_review(connection: Connection, request: RunRequest,
-                      state: _RunState) -> tuple[str, dict]:
-    """Review configuration: exact policy readback, then the buddy-router thread."""
+                      state: _RunState) -> str:
+    """Review configuration: native readback facts and thread ownership."""
     cwd, spec = request.cwd, configuration_spec(request)
     expected = tomllib.loads(read_only_config(cwd))
     response = connection.call("thread/start", {
@@ -690,46 +700,53 @@ def _configure_review(connection: Connection, request: RunRequest,
         "approvalPolicy": "never", "permissions": "buddy-router", "serviceName": "hey-my-buddy",
         "experimentalRawEvents": True, "ephemeral": True,
     })
-    configured = connection.call("config/read", {"cwd": cwd, "includeLayers": False}).get("config") or {}
+    configured = connection.call("config/read", {"cwd": cwd, "includeLayers": False}).get("config")
+    configured = configured if isinstance(configured, dict) else {}
     # Retain permission facts and presence, never user MCP arguments or credentials.
-    state.review_config = {key: configured[key] for key in
+    state.review_config = {key: _readback_fact(configured[key]) for key in
                            ("web_search", "approval_policy", "default_permissions") if key in configured}
     state.review_config["mcp_servers"] = bool(configured.get("mcp_servers"))
-    state.review_config["features"] = {"apps": (configured.get("features") or {}).get("apps")}
-    state.review_config["permissions"] = {"buddy-router": (configured.get("permissions") or {}).get("buddy-router")}
-    profile = (configured.get("permissions") or {}).get("buddy-router") or {}
-    filesystem = {key: value for key, value in (profile.get("filesystem") or {}).items() if value is not None}
-    if (not policy_matches(configured, expected)
-            or filesystem != expected["permissions"]["buddy-router"]["filesystem"]):
-        raise CodexProtocolError("readonly-policy-unverified",
-                                 "Codex effective configuration differs from the read-only policy")
-    receipt_profile = response.get("activePermissionProfile") or {}
-    sandbox = response.get("sandbox") or {}
+    features = configured.get("features")
+    permissions = configured.get("permissions")
+    profile = permissions.get("buddy-router") if isinstance(permissions, dict) else None
+    state.review_config["features"] = {"apps": _readback_fact(features.get("apps")) if isinstance(features, dict) else None}
+    state.review_config["permissions"] = {"buddy-router": _readback_fact(profile)}
+    grants = profile.get("filesystem") if isinstance(profile, dict) else None
+    filesystem = {key: value for key, value in grants.items() if value is not None} if isinstance(grants, dict) else {}
+    state.policy_checks["configReadback"] = {
+        "status": "confirmed" if (policy_matches(configured, expected)
+                                  and filesystem == expected["permissions"]["buddy-router"]["filesystem"]) else "unknown"}
+    receipt_profile = response.get("activePermissionProfile")
+    sandbox = response.get("sandbox")
     acknowledged = {"activePermissionProfile": receipt_profile, "sandbox": sandbox,
                     "approvalPolicy": response.get("approvalPolicy"), "model": response.get("model"),
                     "modelProvider": response.get("modelProvider"), "cwd": response.get("cwd")}
     # The acknowledged receipt is retained before any verdict over it, so a
     # policy-mismatch run still carries the native readback it actually got —
     # never the requested policy dressed up as the readback.
-    state.review_receipt = acknowledged
-    if (receipt_profile.get("id") != "buddy-router" or response.get("approvalPolicy") != "never"
-            or sandbox.get("type") != "readOnly" or sandbox.get("networkAccess", False) is not False):
-        raise CodexProtocolError("readonly-policy-unverified",
-                                 "Codex did not acknowledge the read-only permission profile")
-    if response.get("model") != spec["model"] \
-            or Path(response.get("cwd") or "").resolve() != Path(cwd).resolve():
+    state.review_receipt = {key: _readback_fact(value) for key, value in acknowledged.items()}
+    state.policy_checks["threadReceipt"] = {
+        "status": "confirmed" if (isinstance(receipt_profile, dict) and isinstance(sandbox, dict)
+                                  and receipt_profile.get("id") == "buddy-router"
+                                  and response.get("approvalPolicy") == "never"
+                                  and sandbox.get("type") == "readOnly"
+                                  and sandbox.get("networkAccess") is False) else "unknown"}
+    state.native_model = _bounded(response.get("model"), 128)
+    state.policy_checks["selectedModel"] = {"status": "confirmed" if state.native_model == spec["model"] else "unknown"}
+    if not isinstance(response.get("cwd"), str) or Path(response["cwd"]).resolve() != Path(cwd).resolve():
         raise CodexProtocolError("readonly-configuration-mismatch",
-                                 "Codex acknowledged a different read-only configuration")
+                                 "Codex acknowledged a different read-only checkout")
     thread = response.get("thread") or {}
     thread_id = thread.get("id")
-    if not isinstance(thread_id, str) or Path(thread.get("cwd", "")).resolve() != Path(cwd).resolve():
+    if not isinstance(thread_id, str) or not thread_id or not isinstance(thread.get("cwd"), str) \
+            or Path(thread["cwd"]).resolve() != Path(cwd).resolve():
         raise CodexProtocolError("wrong-native-workspace", "Read-only native checkout differs")
     state.thread_opened = True
     state.thread_id = thread_id
     state.configured = True
     state.requested = spec
-    state.native_provider = response.get("modelProvider")
-    return thread_id, {"acknowledged": acknowledged, "filesystem": filesystem}
+    state.native_provider = _bounded(response.get("modelProvider"), 128)
+    return thread_id
 
 
 def _configure_fast(connection: Connection, request: RunRequest, state: _RunState) -> str:
@@ -741,22 +758,28 @@ def _configure_fast(connection: Connection, request: RunRequest, state: _RunStat
         "experimentalRawEvents": True, "ephemeral": True,
     })
     configured = connection.call("config/read", {"cwd": cwd, "includeLayers": True}).get("config")
-    if (not isinstance(configured, dict) or configured.get("web_search") != "disabled"
-            or configured.get("approval_policy") != "never"):
-        raise CodexProtocolError("no-tool-policy-unverified", "Codex effective no-tool policy differs")
+    state.fast_config = {key: _readback_fact(configured[key]) for key in ("web_search", "approval_policy")
+                         if isinstance(configured, dict) and key in configured}
+    state.policy_checks["configReadback"] = {
+        "status": "confirmed" if (isinstance(configured, dict) and configured.get("web_search") == "disabled"
+                                  and configured.get("approval_policy") == "never") else "unknown"}
     thread = response.get("thread")
     thread_id = thread.get("id") if isinstance(thread, dict) else None
-    if (not isinstance(thread_id, str) or not thread_id
-            or Path(thread.get("cwd") or "").resolve() != Path(cwd).resolve()
-            or thread.get("turns") not in (None, [])
-            or response.get("model") != spec["model"]
-            or response.get("approvalPolicy") != "never"):
-        raise CodexProtocolError("no-tool-policy-unverified", "Codex did not acknowledge the no-tool thread")
+    state.fast_receipt = {key: _readback_fact(response.get(key)) for key in ("model", "modelProvider", "approvalPolicy")}
+    state.native_model = _bounded(response.get("model"), 128)
+    state.policy_checks["selectedModel"] = {"status": "confirmed" if state.native_model == spec["model"] else "unknown"}
+    state.policy_checks["threadReceipt"] = {"status": "confirmed" if response.get("approvalPolicy") == "never" else "unknown"}
+    if not isinstance(thread_id, str) or not thread_id:
+        raise CodexProtocolError("wrong-native-thread", "Codex returned no no-tool thread identity")
+    if not isinstance(thread.get("cwd"), str) or Path(thread["cwd"]).resolve() != Path(cwd).resolve():
+        raise CodexProtocolError("wrong-native-workspace", "Codex no-tool checkout differs")
+    if thread.get("turns") not in (None, []):
+        raise CodexProtocolError("wrong-native-thread", "Codex no-tool thread has unrelated history")
     state.thread_opened = True
     state.thread_id = thread_id
     state.configured = True
     state.requested = spec
-    state.native_provider = response.get("modelProvider")
+    state.native_provider = _bounded(response.get("modelProvider"), 128)
     return thread_id
 
 
@@ -833,6 +856,9 @@ class _FastProtocol:
         method = message.get("method")
         label = _truncate_utf8(method if isinstance(method, str) else "unknown", 96)
         params = message.get("params")
+        opaque = not isinstance(method, str) or method.startswith("rpc/result-unreadable")
+        if opaque and (not isinstance(params, dict) or not any(key in params for key in ("threadId", "turnId", "turn"))):
+            return
         if method in ("account/rateLimits/updated", "remoteControl/status/changed", "deprecationNotice"):
             return
         if method == "thread/started" and isinstance(params, dict):
@@ -890,7 +916,8 @@ def _retain_event(capture: dict, key: str, message: dict, *, per_event: int, tot
 def _capture_frame(capture: dict, message: dict) -> None:
     method = message.get("method")
     params = message.get("params") or {}
-    raw_type = (params.get("item") or {}).get("type") if isinstance(params, dict) else None
+    item = params.get("item") if isinstance(params, dict) else None
+    raw_type = item.get("type") if isinstance(item, dict) else None
     if method == "rawResponseItem/completed" and raw_type in (
             "function_call", "custom_tool_call", "function_call_output", "custom_tool_call_output",
             "local_shell_call", "web_search_call"):
@@ -967,10 +994,6 @@ def run(request: RunRequest, *, observer: Callable[[Mapping], RunFeedback],
         raise BoardError("INVALID_ARGUMENT", "codex accepts its own narrow run service binding")
     binding = services if services is not None else RunServices()
     mode = _mode(request)
-    if mode == "worker":
-        if not request.identity.input_sha256 or not request.identity.turn_id:
-            raise BoardError("INVALID_ARGUMENT",
-                             "a governed codex turn carries its turn identity and input digest")
     return _run(request, binding, mode, observer, cancelled)
 
 
@@ -994,7 +1017,6 @@ def _run(request: RunRequest, services: RunServices, mode: str,
                                          "generation": request.identity.generation})
     activity = _ActivityWriter(services.live)
     chain = _EventChain(facts, _Classifier(facts), projector, overflow_raises=mode == "fast")
-    review_policy: dict | None = None
     try:
         prep = _prepare(request, mode)
         prep.version = probe_version(prep.command, prep.environment, cwd=request.cwd,
@@ -1003,7 +1025,7 @@ def _run(request: RunRequest, services: RunServices, mode: str,
         spawn = _spawn_app_server(prep, cancel, owned_spawn)
         connection = spawn.connection
         _wire(connection, chain, facts, observer, request, state, mode)
-        state.selected_model_listed = _initialize(connection, prep, mode, configuration_spec(request))
+        state.selected_model_listed = _initialize(connection, prep, mode, configuration_spec(request), state)
         if mode == "worker":
             thread_id = _configure_worker(connection, request, prep, state)
             _worker_turn(connection, chain, request, state, thread_id, observer, activity)
@@ -1011,7 +1033,7 @@ def _run(request: RunRequest, services: RunServices, mode: str,
             if mode == "fast":
                 thread_id = _configure_fast(connection, request, state)
             else:
-                thread_id, review_policy = _configure_review(connection, request, state)
+                thread_id = _configure_review(connection, request, state)
             _structured_rounds(connection, chain, request, state, thread_id,
                                mode, observer, activity)
     except ObserverInterrupt:
@@ -1035,7 +1057,7 @@ def _run(request: RunRequest, services: RunServices, mode: str,
         # ever spawned, and that known fact — not an unknown — is what the
         # result must carry.
         _stop_collection(request, prep, state, spawn, owned_spawn, mode, cancel)
-    return _build_result(request, prep, state, mode, projector, facts, review_policy, activity)
+    return _build_result(request, prep, state, mode, projector, facts, activity)
 
 
 def _wire(connection: Connection, chain: _EventChain, facts: _RunFacts,
@@ -1183,17 +1205,20 @@ def _structured_rounds(connection: Connection, chain: _EventChain, request: RunR
         if mode == "fast":
             if not isinstance(turn_id, str) or not turn_id:
                 raise CodexProtocolError("invalid-native-result", "Codex returned no native turn identity")
-            if turn.get("items") not in (None, []):
-                if not isinstance(turn["items"], list) or any(
-                        not isinstance(item, dict) or item.get("type") not in _CONVERSATION_ITEMS
-                        for item in turn["items"]):
-                    raise CodexProtocolError("no-tool-violation", "Native turn started with a tool item")
         elif not isinstance(turn_id, str):
             raise CodexProtocolError("wrong-native-turn", "No read-only turn identity")
         state.turn_id = turn_id
         if chain.projector is not None:
             # The trusted root identity comes only from this native turn receipt.
             chain.projector.observe_root(thread_id, turn_id)
+        if mode == "fast":
+            items = turn.get("items")
+            if items is not None and not isinstance(items, list):
+                chain.observe_facts({"method": "turn/start-items-unreadable"})
+            elif items:
+                for item in items:
+                    chain.observe_facts({"method": "item/started", "params": {
+                        "threadId": thread_id, "turnId": turn_id, "item": item}})
         evidence = TurnEvidence(thread_id, turn_id)
         state.usage_rounds.append(evidence)
         if mode == "fast":
@@ -1294,8 +1319,6 @@ def _drain_to_eof(connection: Connection, chain: _EventChain,
             connection.on_request(message)
         elif "id" in message:
             raise CodexProtocolError("invalid-native-result", "Unexpected late native response")
-        elif not isinstance(message.get("method"), str):
-            raise CodexProtocolError("invalid-native-result", "Unrecognized late native frame")
         else:
             chain.observe(message)
         if chain.facts.dirty:
@@ -1313,7 +1336,8 @@ def _interrupt(connection: Connection, state: _RunState) -> None:
         connection.deadline = time.monotonic() + 2
         connection.call("turn/interrupt", {"threadId": state.thread_id, "turnId": state.turn_id})
         state.interrupt_requested = True
-        state.interrupt_basis = "native-turn-interrupt-ack"
+        state.interrupt_basis = ("native-turn-interrupt-ack" if connection.last_result_readable is True
+                                 else "native-turn-interrupt-unconfirmed")
     except (CodexProtocolError, OSError, ValueError):
         # A closed input (the fast drain already ended the stream) or a failed
         # control write is an unconfirmed interrupt, never a crash and never a
@@ -1381,8 +1405,20 @@ _message_package = shape_guard(LastAssistantMessagePackage)
 _activity_package = shape_guard(ActivityPackage)
 
 
+def _readback_fact(value):
+    """Bound one whitelisted native field before writing a projected receipt.
+
+    The six retained review fields fit the evidence reader's 512 KiB budget;
+    an oversized field keeps its omission fact, never its arbitrary contents.
+    """
+    size = len(canonical_json(value).encode())
+    if size <= 64 * 1024:
+        return value
+    return {"status": "unknown", "reason": "readback-exceeds-evidence-bound", "sizeBytes": size}
+
+
 def _bounded(value: str | None, limit: int) -> str | None:
-    return value if value is not None and len(value.encode()) <= limit else None
+    return value if isinstance(value, str) and len(value.encode()) <= limit else None
 
 
 def _truncate_utf8(value: str, limit: int) -> str:
@@ -1441,12 +1477,14 @@ def _checked_configuration(request: RunRequest, state: _RunState, mode: str) -> 
         if mode == "worker":
             checked = CheckedConfiguration(
                 provider=CheckedValue(value=state.native_provider) if isinstance(state.native_provider, str) else None,
-                model=catalog_model, effort=catalog_effort)
+                model=catalog_model if state.selected_model_listed is True else None,
+                effort=catalog_effort if state.selected_model_listed is True else None)
         else:
             checked = CheckedConfiguration(
                 provider=CheckedValue(value=state.native_provider) if isinstance(state.native_provider, str) else None,
-                model=CheckedValue(value=request.configuration.model),
-                effort=catalog_effort)
+                model=CheckedValue(value=state.native_model) if state.native_model else None,
+                effort=catalog_effort if state.selected_model_listed is True
+                and state.native_model == request.configuration.model else None)
     return ResultConfiguration(
         requested=RunConfiguration(provider=request.configuration.provider,
                                    model=request.configuration.model,
@@ -1454,8 +1492,7 @@ def _checked_configuration(request: RunRequest, state: _RunState, mode: str) -> 
         checked=checked)
 
 
-def _effective_policy(state: _RunState, mode: str,
-                      review_policy: dict | None) -> EffectivePolicy:
+def _effective_policy(state: _RunState, mode: str) -> EffectivePolicy:
     if not state.configured:
         return EffectivePolicy()
     if mode == "worker":
@@ -1465,7 +1502,7 @@ def _effective_policy(state: _RunState, mode: str,
         return EffectivePolicy(
             tools=PolicyFact(requested=_json_package({"sandbox": "read-only", "approvalPolicy": "never"})))
     return EffectivePolicy(
-        tools=PolicyFact(requested=_json_package(review_policy["acknowledged"] if review_policy else {})))
+        tools=PolicyFact(requested=_json_package({"permissions": "buddy-router", "approvalPolicy": "never"})))
 
 
 def _last_assistant_message(checkpoint: dict | None) -> dict | None:
@@ -1499,6 +1536,17 @@ def _evidence_refs(request: RunRequest, state: _RunState, facts: _RunFacts) -> t
         refs.append(EvidenceRef(kind=kind, location=str(path), size_bytes=len(raw),
                                 sha256=hashlib.sha256(raw).hexdigest()))
 
+    if facts.unknown_counts:
+        retain("unknown-events", invocation_root / "unknown-events.json",
+               {"countsByType": facts.unknown_counts, "total": sum(facts.unknown_counts.values())})
+    if state.catalog_read is not None:
+        retain("catalog-read", invocation_root / "catalog-read.json", state.catalog_read)
+    if state.policy_checks:
+        retain("policy-check", invocation_root / "policy-check.json", state.policy_checks)
+    if state.fast_config is not None:
+        retain("fast-config-readback", invocation_root / "fast-config-readback.json", {"config": state.fast_config})
+    if state.fast_receipt is not None:
+        retain("fast-thread-receipt", invocation_root / "fast-thread-receipt.json", state.fast_receipt)
     if facts.denied:
         retain("denied-interactions", invocation_root / "denied-interactions.json",
                {"records": facts.denied})
@@ -1535,7 +1583,7 @@ def _evidence_refs(request: RunRequest, state: _RunState, facts: _RunFacts) -> t
 
 def _build_result(request: RunRequest, prep: _Preparation | None, state: _RunState, mode: str,
                   projector: CodexToolEventProjector | None, facts: _RunFacts,
-                  review_policy: dict | None, activity: _ActivityWriter) -> RunResult:
+                  activity: _ActivityWriter) -> RunResult:
     if state.usage_rounds:
         usages = [attempt_token_usage(evidence) for evidence in state.usage_rounds]
         known = [usage for usage in usages if usage is not None]
@@ -1588,7 +1636,7 @@ def _build_result(request: RunRequest, prep: _Preparation | None, state: _RunSta
         native_identity=native_identity,
         value=value, completion_evidence=completion,
         tool_evidence=_tool_evidence_package(tool_package),
-        effective_policy=_effective_policy(state, mode, review_policy),
+        effective_policy=_effective_policy(state, mode),
         activity=_activity_package(activity.last_payload),
         usage=_usage_package(state.token_usage),
         native_failure=_quota_package(state.quota_failure),
@@ -1645,6 +1693,9 @@ def run_discovery(*, cwd: str, invocation_root: Path, native_root: Path,
         shutdown = False
         try:
             connection = spawn.connection
+            facts = _RunFacts()
+            classifier = _Classifier(facts)
+            connection.on_notification = classifier.observe
             connection.call("initialize", _INIT_CLIENT)
             connection.send({"method": "initialized", "params": {}})
             try:
@@ -1652,7 +1703,8 @@ def run_discovery(*, cwd: str, invocation_root: Path, native_root: Path,
             except CodexProtocolError:
                 account = None
             account_status = _discovery_account_status(account)
-            configured = connection.call("config/read", {"cwd": cwd, "includeLayers": False}).get("config") or {}
+            configured = connection.call("config/read", {"cwd": cwd, "includeLayers": False}).get("config")
+            configured = configured if isinstance(configured, dict) else {}
             catalog_value, _listed_ids = _catalog(connection, version, native_provider(configured))
             from ....protocol.billing import codex_account, fact
             provider = native_provider(configured)
@@ -1660,8 +1712,13 @@ def run_discovery(*, cwd: str, invocation_root: Path, native_root: Path,
             catalog_value["billingByProvider"] = {provider: (
                 codex_account(account, observed_at) if provider == "openai"
                 else fact("unknown", "codex/account-read", observed_at))}
-            catalog_value["discoveries"] = [{"adapter": "codex", "status": "complete",
-                                             "accountStatus": account_status}]
+            catalog_value["discoveries"][0]["accountStatus"] = account_status
+            if facts.unknown_counts:
+                catalog_value["unknownEvents"] = {"countsByType": facts.unknown_counts,
+                                                   "total": sum(facts.unknown_counts.values())}
+                catalog_value["warnings"].extend(
+                    f"Unrecognized native reading event: {label} ({count})"
+                    for label, count in facts.unknown_counts.items())
             if account_status == "unknown":
                 catalog_value["warnings"] = [*catalog_value["warnings"],
                                              "The discovery session could not confirm the Codex account; "
@@ -1698,8 +1755,6 @@ def check_preparation(spec: dict, environment: dict) -> None:
 
 def prepare_run_services(*, tool_scope: str = "write") -> RunServices:
     """Bind the harness's native services without selecting credentials."""
-    if tool_scope not in ("none", "read", "write"):
-        raise BoardError("INVALID_ARGUMENT", "codex accepts none, read and write tool scopes", adapter="codex")
     return RunServices()
 
 
@@ -1767,9 +1822,9 @@ def native_evidence(result: RunResult) -> dict:
     """Project this run's real native evidence; no missing fact is invented.
 
     The fast posture comes from the public policy fact; the review
-    acknowledgment and configuration readback come from this run's verified
+    acknowledgment and configuration readback come from this run's integrity-checked
     evidence references, retained as the native side actually answered — a
-    policy that failed verification keeps its real readback and is never
+    policy whose restrictions are unverified keeps its real readback and is never
     dressed up as enforced. The interrupt facts keep the legacy true keys and
     appear only when a real request (and a real acknowledgement) happened; an
     acknowledgement is never inferred from a confirmed stop. A model the
@@ -1778,6 +1833,12 @@ def native_evidence(result: RunResult) -> dict:
     absent, never filled with a placeholder.
     """
     projection: dict = {}
+    for kind, key in (("unknown-events", "unknownEvents"), ("catalog-read", "catalogRead"),
+                      ("policy-check", "policyCheck"), ("fast-config-readback", "nativeConfigPolicy"),
+                      ("fast-thread-receipt", "nativeThreadReceipt")):
+        value = _read_evidence_ref(result, kind)
+        if value is not None:
+            projection[key] = value["config"] if kind == "fast-config-readback" else value
     if result.native_error is not None:
         projection["nativeFailure"] = result.native_error.value
     notifications = _read_evidence_ref(result, "thread-notifications")

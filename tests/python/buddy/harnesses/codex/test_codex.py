@@ -422,24 +422,25 @@ class CodexAdapterTests(unittest.TestCase):
         self.assertTrue(outcome.shutdown_confirmed)
         self.assertNotIn("turn", outcome.result)
 
-    def test_read_only_refuses_an_unacknowledged_policy_before_model_input(self):
+    def test_read_only_continues_with_an_unacknowledged_policy_receipt(self):
         result, _context = self.review('readonly-policy-mismatch', index=41)
-        self.assertEqual(result.status, 'failed')
-        self.assertEqual(result.result['code'], 'readonly-policy-unverified')
+        self.assertEqual(result.status, 'ok', result.result)
+        self.assertIs(result.result['modelStarted'], True)
+        self.assertEqual(result.result['policyCheck']['threadReceipt']['status'], 'unknown')
         self.assertIn('nativeConfigPolicy', result.result)
-        # The retained readback is the native side's actual answer, retained
-        # before the verdict: it carries the refused networkAccess fact, never
-        # the requested policy dressed up as an acknowledged one.
+        # The native receipt keeps its actual networkAccess value.
         self.assertIn('nativePolicy', result.result)
         self.assertIs(result.result['nativePolicy']['sandbox']['networkAccess'], True)
-        self.assertIs(result.result['modelStarted'], False)
+        self.assertTrue(result.result['toolEvidence']['streamComplete'])
         self.assertTrue(result.shutdown_confirmed)
 
-    def test_failed_config_readback_survives_without_a_model_call(self):
+    def test_config_readback_difference_survives_a_completed_model_turn(self):
         result, _context = self.review('readonly-config-mismatch', index=42)
-        self.assertEqual(result.result['code'], 'readonly-policy-unverified')
-        self.assertIs(result.result['modelStarted'], False)
+        self.assertEqual(result.status, 'ok', result.result)
+        self.assertIs(result.result['modelStarted'], True)
+        self.assertEqual(result.result['policyCheck']['configReadback']['status'], 'unknown')
         self.assertIs(result.result['nativeConfigPolicy']['permissions']['buddy-router']['network']['enabled'], True)
+        self.assertTrue(result.result['toolEvidence']['streamComplete'])
         self.assertTrue(result.shutdown_confirmed)
 
     def test_read_only_accepts_user_features_and_external_configuration(self):
