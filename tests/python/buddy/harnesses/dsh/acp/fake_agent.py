@@ -33,11 +33,14 @@ from pathlib import Path
 
 from hey_my_buddy.paths import native_path
 
+_LOG_LOCK = threading.Lock()
+
 
 def log(log_path: Path, event: dict) -> None:
     entry = {"ts": datetime.now(timezone.utc).isoformat(timespec="milliseconds"), **event}
-    with native_path(log_path).open("a", encoding="utf-8", newline="\n") as handle:
-        handle.write(json.dumps(entry, default=str, sort_keys=True) + "\n")
+    with _LOG_LOCK:
+        with native_path(log_path).open("a", encoding="utf-8", newline="\n") as handle:
+            handle.write(json.dumps(entry, default=str, sort_keys=True) + "\n")
 
 
 def check_private_home(log_path: Path, fixture_root: Path) -> bool:

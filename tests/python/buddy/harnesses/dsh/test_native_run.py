@@ -77,8 +77,7 @@ class NativeRunCase(unittest.TestCase):
     """One private per-test root; the fake agent launched like the native one."""
 
     def setUp(self):
-        name = self.id().rsplit(".", 1)[-1]
-        container = TemporaryDirectory(prefix=f"dsh-native-{name}-",
+        container = TemporaryDirectory(prefix="dsh-native-",
                                                 dir=os.environ.get("HMB_CHECKS_TMPDIR", tempfile.gettempdir()))
         self.addCleanup(container.cleanup)
         self.base = Path(container.name).resolve()
