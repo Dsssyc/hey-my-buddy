@@ -43,7 +43,6 @@ import json
 import os
 from pathlib import Path
 import re
-import shutil
 import stat
 import subprocess
 import sys
@@ -52,8 +51,10 @@ import threading
 import time
 
 from ..text import configure_utf8_output
-from .. import locking, private_dirs
+from .. import locking, private_dirs, state_root
+from ..errors import BoardError
 from ..process_observation import observe_open_paths, observe_process_argv
+from .checks_cleanup import remove_private_test_root
 
 #: Inherited virtual environment pins not covered by the prefix filter below.
 SANITIZED_VARIABLES = (
@@ -678,7 +679,7 @@ def teardown_private_root(root: Path, drain_seconds: float = 30.0) -> dict | Non
     clean = not problems and not processes and not residue["daemon"]
     if clean:
         try:
-            shutil.rmtree(root)
+            remove_private_test_root(root)
         except OSError as error:
             evidence["cleanupError"] = f"{type(error).__name__}: {error}"
         else:
@@ -725,7 +726,11 @@ def sweep_private_roots(directory: Path) -> int:
     pids = {pid for pid, _ in table} if table is not None else None
     for root in sorted(directory.glob("hey-my-buddy-checks-*")):
         metadata = root.lstat()
-        if not stat.S_ISDIR(metadata.st_mode) or metadata.st_uid != os.getuid():
+        if not stat.S_ISDIR(metadata.st_mode):
+            continue
+        try:
+            state_root.check_state_root(root)
+        except BoardError:
             continue
         creator = root / CREATOR_FILE_NAME
         reason = None

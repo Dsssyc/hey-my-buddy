@@ -8,10 +8,11 @@ import os
 from pathlib import Path
 import tempfile
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 from hey_my_buddy.cli import checks
 from hey_my_buddy import process_observation as observation
+from hey_my_buddy.errors import BoardError
 from process_observation_fakes import process, processes
 
 
@@ -172,6 +173,17 @@ class FocusedChecksTests(unittest.TestCase):
         self.assertEqual(evidence["teardownError"], "RuntimeError: fixture teardown")
         self.assertIn(str(retained), output.splitlines()[-1])
 
+    def test_removal_failure_preserves_root_and_exits_three(self):
+        error = PermissionError("fixture deletion denied")
+        with patch.object(checks, "remove_private_test_root", side_effect=error):
+            code, output, errors = self.invoke(["tests/python/test_first.py"])
+        self.assertEqual(code, 3, errors + output)
+        retained, = self.temporary.iterdir()
+        evidence = json.loads((retained / checks.EVIDENCE_FILE_NAME).read_text(encoding="utf-8"))
+        self.assertEqual(evidence["cleanupError"], "PermissionError: fixture deletion denied")
+        self.assertIn(f"tests passed; teardown incomplete; preserved {retained}; exit 3",
+                      output.splitlines()[-1])
+
 
 class SweepTests(unittest.TestCase):
     def setUp(self):
@@ -260,20 +272,55 @@ class SweepTests(unittest.TestCase):
         self.assertIn("creator record unreadable", output)
         self.assertTrue((root / checks.EVIDENCE_FILE_NAME).is_file())
 
+    def test_sweep_uses_shared_boundary_without_unix_uid_api(self):
+        root = self.abandoned()
+        with (patch.object(checks, "os", wraps=os) as runner_os,
+              patch.object(checks.state_root, "check_state_root",
+                           wraps=checks.state_root.check_state_root) as boundary):
+            runner_os.getuid = Mock(side_effect=AssertionError("Unix uid API is unavailable"))
+            code, output = self.sweep([])
+        self.assertEqual(code, 0, output)
+        self.assertFalse(root.exists())
+        boundary.assert_called_once_with(root)
+        runner_os.getuid.assert_not_called()
+
+    def test_sweep_does_not_touch_a_root_rejected_by_private_boundary(self):
+        root = self.abandoned()
+        error = BoardError("PRIVATE_PATH_UNSAFE", "State root has a foreign owner")
+        with (patch.object(checks.state_root, "check_state_root", side_effect=error),
+              patch.object(checks, "_safe_teardown") as teardown):
+            code, output = self.sweep([])
+        self.assertEqual(code, 0, output)
+        self.assertTrue(root.exists())
+        self.assertEqual(sorted(path.name for path in root.iterdir()), [checks.CREATOR_FILE_NAME, "tmp"])
+        teardown.assert_not_called()
+        self.assertIn("sweep deleted 0, skipped 0, retained 0", output)
+
+    @unittest.skipIf(os.name == "nt", "POSIX account ownership")
     def test_sweep_does_not_touch_another_users_directory(self):
         root = self.abandoned()
-        original = Path.lstat
-        def foreign(path):
-            metadata = original(path)
+        original = Path.stat
+        def foreign(path, *args, **kwargs):
+            metadata = original(path, *args, **kwargs)
             if path == root:
                 fields = list(metadata)
                 fields[4] = os.getuid() + 1
                 return os.stat_result(fields)
             return metadata
-        with patch.object(Path, "lstat", foreign):
+        with patch.object(Path, "stat", foreign):
             code, output = self.sweep([])
         self.assertEqual(code, 0, output)
         self.assertTrue(root.exists())
+        self.assertIn("sweep deleted 0, skipped 0, retained 0", output)
+
+    @unittest.skipIf(os.name == "nt", "POSIX owner-private mode")
+    def test_sweep_rejects_shared_permissions_without_repair(self):
+        root = self.abandoned()
+        root.chmod(0o755)
+        code, output = self.sweep([])
+        self.assertEqual(code, 0, output)
+        self.assertEqual(root.stat().st_mode & 0o777, 0o755)
+        self.assertTrue((root / checks.CREATOR_FILE_NAME).is_file())
         self.assertIn("sweep deleted 0, skipped 0, retained 0", output)
 
     def test_default_sweep_location_matches_root_creation_location(self):

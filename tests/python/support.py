@@ -9,9 +9,7 @@ from __future__ import annotations
 import errno
 import json
 import os
-import shutil
 import sqlite3
-import stat
 import subprocess
 import sys
 import tempfile
@@ -28,6 +26,7 @@ if str(PYTHON_ROOT) not in sys.path:
 from hey_my_buddy import locking  # noqa: E402
 from hey_my_buddy.protocol.client import BoardClient  # noqa: E402
 from hey_my_buddy.cli.checks import prepare_test_home  # noqa: E402
+from hey_my_buddy.cli.checks_cleanup import remove_private_test_root  # noqa: E402
 from hey_my_buddy.protocol.execution import RECEIPT, fsync_json, receipt_reference, read_execution_receipt  # noqa: E402
 from hey_my_buddy.private_dirs import attempt_root, directory_mode  # noqa: E402
 from hey_my_buddy.blackboard.store.db import DB_FILE  # noqa: E402
@@ -236,36 +235,6 @@ def private_state_dir(prefix: str = "hey-my-buddy-test-"):
         shutdown_private_rpc()
         assert_private_processes_gone(directory)
         remove_private_test_root(directory)
-
-
-def remove_private_test_root(directory: Path) -> None:
-    """Remove a stopped fixture, retrying only Windows READONLY regular files.
-
-    The caller must first close its resources and confirm its work has stopped.
-    A sharing violation or any other deletion failure preserves the remaining tree.
-    """
-    directory = Path(directory)
-
-    def readonly_file(operation, name, error):
-        if os.name != "nt" or operation is not os.unlink or getattr(error, "winerror", None) != 5:
-            raise error
-        path = Path(name)
-        # Never chmod a link/reparse target, including through a replaced ancestor.
-        for part in (path, *path.parents):
-            info = part.lstat()
-            attributes = getattr(info, "st_file_attributes", 0)
-            if stat.S_ISLNK(info.st_mode) or attributes & stat.FILE_ATTRIBUTE_REPARSE_POINT:
-                raise error
-            if part == path and (not stat.S_ISREG(info.st_mode) or not attributes & stat.FILE_ATTRIBUTE_READONLY):
-                raise error
-            if part == directory:
-                break
-        else:
-            raise error
-        os.chmod(path, stat.S_IWRITE)
-        operation(name)
-
-    shutil.rmtree(directory, onexc=readonly_file)
 
 
 def publish_result_receipt(state_dir: Path, params: dict) -> dict:
