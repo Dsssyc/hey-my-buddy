@@ -17,7 +17,7 @@ SPEC.loader.exec_module(sharding)
 
 
 class ShardSelectionTests(unittest.TestCase):
-    def split(self, costs, count, *, delays=None, slowdown=1, separate=()):
+    def split(self, costs, count, *, delays=None, slowdown=1, workers=2):
         with tempfile.TemporaryDirectory(prefix="ci-shards-") as raw:
             root = Path(raw)
             (root / ".github").mkdir()
@@ -32,10 +32,9 @@ class ShardSelectionTests(unittest.TestCase):
             manifests = []
             with (chdir(root), redirect_stdout(io.StringIO()),
                   patch.dict(os.environ, {"CHECK_OS": "fixture", "CHECK_SHARDS": str(count),
-                                          "CHECK_WORKERS": "2",
+                                          "CHECK_WORKERS": str(workers),
                                           "CHECK_START_DELAYS": json.dumps(delays or [0] * count),
                                           "CHECK_SLOWDOWN": str(slowdown),
-                                          "CHECK_SEPARATE_MODULES": json.dumps(list(separate)),
                                           "RUNNER_TEMP": str(root), "GITHUB_ENV": str(root / "environment")}),
                   patch.object(sharding.os, "cpu_count", side_effect=AssertionError(
                       "shard allocation must use the workflow's shared worker count"))):
@@ -54,13 +53,16 @@ class ShardSelectionTests(unittest.TestCase):
                 self.assertEqual(sorted(path for item in manifests for path in item["files"]), expected)
                 self.assertTrue(all(item["files"] and item["shards"] == count for item in manifests))
 
-    def test_alphabetical_file_execution_has_no_avoidable_tail(self):
-        # Balancing only total seconds produces a 16-second tail here. Two
-        # workers per shard can finish these same files in 12 seconds.
+    def test_weight_order_avoids_an_alphabetical_tail(self):
+        # Re-sorting the balanced manifest alphabetically takes 16 seconds.
+        # Submitting its longer files first finishes in 12 seconds.
         costs = [6, 5, 6, 6, 4, 2, 10, 4, 1, 1]
         for manifest in self.split(costs, 2):
             lanes = [0, 0]
-            for path in sorted(manifest["files"]):
+            ordered_costs = [costs[int(Path(path).stem.removeprefix('test_'))]
+                             for path in manifest['files']]
+            self.assertEqual(ordered_costs, sorted(ordered_costs, reverse=True))
+            for path in manifest["files"]:
                 worker = lanes.index(min(lanes))
                 lanes[worker] += costs[int(Path(path).stem.removeprefix("test_"))]
             self.assertLessEqual(max(lanes), 12)
@@ -80,9 +82,8 @@ class ShardSelectionTests(unittest.TestCase):
             self.assertLessEqual(finish, 19)
             self.assertEqual(manifest["estimated-finish-seconds"], finish)
 
-    def test_repeat_contention_cohort_is_placed_on_distinct_runners(self):
-        separate = ("test_00", "test_01", "test_04", "test_07")
-        manifests = self.split([12, 10, 8, 7, 6, 5, 4, 3, 2, 1], 4, separate=separate)
-        for manifest in manifests:
-            selected = {Path(path).stem for path in manifest["files"]}
-            self.assertEqual(len(selected & set(separate)), 1)
+    def test_parallel_slots_do_not_make_additional_heavy_files_free(self):
+        manifests = self.split([100, 90, 80, 70, 60, 50, 40, 30, 20, 10], 4, workers=4)
+        # Minimizing only the parallel tail piles 220 seconds onto one shard,
+        # with only 90 on another. LPT bounds the largest shard here at 150.
+        self.assertLessEqual(max(item['estimated-seconds'] for item in manifests), 150)

@@ -91,8 +91,7 @@ class AttachFixture(unittest.TestCase):
         # This fixture observes bootstrap I/O, not runtime installation. Never
         # resolve an operator's runtime or create environments from a unit test.
         patch("hey_my_buddy.install.runtime.launch_target", return_value=LAUNCH_TARGET).start()
-        sockets = patch("hey_my_buddy.protocol.transport.socket.socket", autospec=True).start()
-        sockets.return_value.accept.return_value = (Mock(), None)
+        patch("hey_my_buddy.protocol.transport._probe_local_ipc").start()
         self.addCleanup(patch.stopall)
 
     def write_endpoint(self, value, mode):
@@ -596,8 +595,7 @@ class ColdStartTests(unittest.TestCase):
         child.wait.return_value = 0
         self.spawn.return_value = child
         patch("hey_my_buddy.install.runtime.launch_target", return_value=LAUNCH_TARGET).start()
-        sockets = patch("hey_my_buddy.protocol.transport.socket.socket", autospec=True).start()
-        sockets.return_value.accept.return_value = (Mock(), None)
+        patch("hey_my_buddy.protocol.transport._probe_local_ipc").start()
         self.addCleanup(patch.stopall)
 
     def test_cold_start_creates_private_state_directory_and_spawns_daemon(self):

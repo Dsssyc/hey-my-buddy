@@ -38,6 +38,21 @@ def write_service_endpoint(root: Path, *, pid=123, started='fixture-start', serv
 
 
 class FixtureCleanupTests(unittest.TestCase):
+    def test_failed_process_evidence_keeps_identity_and_only_private_references(self):
+        target = Mock(pid=123)
+        target.create_time.return_value = 42.0
+        with patch('hey_my_buddy.cli.checks.observe_process_argv', return_value=(
+                [(target, ['python', '/fixture/worker', 'private-token'])], [])), \
+             patch('hey_my_buddy.cli.checks.observe_open_paths', return_value=(
+                {123: {'/fixture/runtime/native.so', '/outside/private-file'}}, None, True, [])):
+            evidence = support.private_process_failure_evidence(
+                Path('/fixture'), [{'pid': 123, 'source': 'openFiles', 'executable': 'python'}])
+        self.assertEqual(evidence['identitySnapshot'], [
+            {'pid': 123, 'createTime': 42.0, 'rootArguments': ['/fixture/worker']}])
+        self.assertEqual(evidence['rootReferences'], {'123': ['/fixture/runtime/native.so']})
+        self.assertNotIn('private-token', json.dumps(evidence))
+        self.assertNotIn('/outside', json.dumps(evidence))
+
     def test_daemon_fixture_cooperates_on_windows_and_keeps_posix_sigterm(self):
         for platform, fail_stop in (("nt", False), ("nt", True), ("posix", False)):
             with self.subTest(platform=platform, fail_stop=fail_stop):
@@ -95,6 +110,7 @@ class FixtureCleanupTests(unittest.TestCase):
                       patch.object(support, "os", wraps=os) as native,
                       patch.object(support, "stop_private_service") as stop,
                       patch.object(support, "shutdown_private_rpc"),
+                      patch.object(support, "private_process_failure_evidence", return_value={}),
                       patch.object(checks, "request_cooperative_stop", return_value=[]) as drain,
                       patch.object(checks, "held_locks", return_value={"daemon": [base / "elsewhere/board-owner.lock"]
                                                                     if residue == "lock" else []}),

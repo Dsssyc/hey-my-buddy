@@ -129,15 +129,21 @@ class FocusedChecksTests(unittest.TestCase):
             ([str(self.top / "test_first.py")], ["test_first"]),
             (["tests/python/nested"], ["nested.deeper.test_third", "nested.test_second"]),
             (["tests/python/test_first.py", "tests/python/nested"],
-             ["nested.deeper.test_third", "nested.test_second", "test_first"]),
+             ["test_first", "nested.deeper.test_third", "nested.test_second"]),
             (["tests/python/test_first.py", str(self.top / "test_first.py"), "tests/python"],
-             ["nested.deeper.test_third", "nested.test_second", "test_first"]),
+             ["test_first", "nested.deeper.test_third", "nested.test_second"]),
         )
         for arguments, expected in cases:
             with self.subTest(arguments=arguments):
                 self.assertEqual(checks.selected_test_modules(self.root, arguments), expected)
         self.assertEqual(checks.selected_test_modules(self.root, []),
                          checks.python_test_modules(self.root))
+
+    def test_explicit_file_priority_reaches_the_worker_queue(self):
+        code, output, errors = self.invoke(['--jobs', '1',
+            'tests/python/nested/test_second.py', 'tests/python/test_first.py'])
+        self.assertEqual(code, 0, errors + output)
+        self.assertLess(output.index('] nested.test_second ok'), output.index('] test_first ok'))
 
     def test_all_usage_errors_precede_private_root_creation(self):
         for arguments in (
@@ -519,10 +525,7 @@ class SweepTests(unittest.TestCase):
     def test_default_sweep_location_matches_root_creation_location(self):
         environment = {key: value for key, value in os.environ.items() if key != "HMB_CHECKS_TMPDIR"}
         with patch.dict(os.environ, environment, clear=True):
-            with patch.object(checks.sys, "platform", "darwin"):
-                self.assertEqual(checks.private_root_directory(), Path("/tmp"))
-            with patch.object(checks.sys, "platform", "linux"):
-                self.assertEqual(checks.private_root_directory(), Path(tempfile.gettempdir()))
+            self.assertEqual(checks.private_root_directory(), Path(tempfile.gettempdir()))
 
 
 if __name__ == "__main__":

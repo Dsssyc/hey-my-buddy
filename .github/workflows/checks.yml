@@ -247,13 +247,12 @@ jobs:
       # Run 40426199390: macOS has 3 workers; the other hosted runners have 4.
       # Freeze the allocation input across every shard of the same system.
       CHECK_WORKERS: ${{ matrix.os == 'macos-latest' && 3 || 4 }}
-      # Four smaller x64 shards start after frontend and all browser checks.
-      # Runs 40459165153/40468217639 put those freed slots within 2-5 min.
-      CHECK_START_DELAYS: ${{ matrix.os == 'windows-latest' && '[0,0,0,0,0,300,300,300,300]' || '' }}
+      # Run 40475105412: the four later x64 shards started at 6.0 min.
+      # This is a queue forecast; later release is reported as a sensitivity.
+      CHECK_START_DELAYS: ${{ matrix.os == 'windows-latest' && '[0,0,0,0,0,360,360,360,360]' || '' }}
+      # Host's performance case: one runner takes 1.5x as long. This is not
+      # an adjustment for test co-location; allocation balances file weights.
       CHECK_SLOWDOWN: ${{ matrix.os == 'windows-latest' && '1.5' || '1' }}
-      # This repeatedly slow cohort overlaps in both runs' x64 5/5 shard.
-      # Separate it while CI measures whether co-location explains the excess.
-      CHECK_SEPARATE_MODULES: ${{ matrix.os == 'windows-latest' && '["blackboard.routing.test_router_failover_integration","blackboard.tasks.test_inquiry","blackboard.store.test_upgrade_fixture","blackboard.tasks.test_macro_task_summary_cache"]' || '[]' }}
       # Flush each completed file even if another file hangs until the timeout.
       PYTHONUNBUFFERED: '1'
     steps: &python-steps
@@ -308,7 +307,7 @@ jobs:
               raise SystemExit("Windows long paths must be disabled before running checks")
       - name: Select Python test shard
         id: shard
-        # Per-system file durations from release run 40426199390 (2026-10-27),
+        # Successful file durations from run 40475105412 (2026-10-27),
         # including native Windows ARM measurements (.github/check-durations.json).
         run: python .github/select-test-shard.py
       - name: Python check shard

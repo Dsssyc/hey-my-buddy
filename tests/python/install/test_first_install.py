@@ -42,8 +42,25 @@ class SkillInstallTests(unittest.TestCase):
 
     def install(self, **extra):
         from hey_my_buddy.install.skill_install import install
-        with patch.dict(os.environ, {**self.environment, **extra}):
-            return install({})
+        from hey_my_buddy.install import runtime
+        from hey_my_buddy.errors import BoardError
+
+        materialize = runtime.materialize
+        log = self.base / 'runtime-install.log'
+
+        def recorded_materialize(*args, **kwargs):
+            kwargs.setdefault('log_path', log)
+            return materialize(*args, **kwargs)
+
+        try:
+            with patch.dict(os.environ, {**self.environment, **extra}), \
+                 patch.object(runtime, 'materialize', side_effect=recorded_materialize):
+                return install({})
+        except BoardError as error:
+            if log.exists():
+                print('private install failure: ' + json.dumps(error.payload(), ensure_ascii=False)
+                      + '\n' + log.read_text(encoding='utf-8')[-8192:], flush=True)
+            raise
 
     def test_first_install_places_the_skill_and_links_claude(self):
         result = self.install()

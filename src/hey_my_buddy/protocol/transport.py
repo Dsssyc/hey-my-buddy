@@ -11,7 +11,6 @@ from .. import locking, private_dirs
 import json
 import os
 from pathlib import Path
-import socket
 import tempfile
 import subprocess
 import sys
@@ -22,6 +21,7 @@ from typing import Any, NoReturn
 
 import c_two as cc
 from c_two.error import CCError, CoreError
+from c_two._native import RuntimeSession
 
 from . import rpc_config
 from .service_process import independent_service_popen
@@ -327,12 +327,41 @@ def _attach_read_only(directory: Path) -> dict | None:
     return _ping_endpoint(directory, endpoint)
 
 
+def _probe_local_ipc(directory: Path) -> None:
+    """Use Core's real binding path without changing the caller's Runtime."""
+    runtime = RuntimeSession()
+    namespace = Path(tempfile.mkdtemp(prefix='.launch-ipc-', dir=directory))
+    namespace_fd = os.open(namespace, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    try:
+        runtime.set_local_endpoint(context=cc.local_endpoint_context(root=str(namespace)))
+        runtime.set_server_options(startup_timeout=rpc_config.SERVICE_STARTUP_TIMEOUT_SECONDS)
+        runtime.ensure_host_started()
+        if not runtime.ping_direct_ipc(runtime.server_address):
+            raise ServiceError('LAUNCH_IO_ERROR', 'The local IPC probe did not answer', io_operation='connect')
+    finally:
+        try:
+            outcome = runtime.shutdown()
+            if not outcome['completed']:
+                raise ServiceError('LAUNCH_IO_ERROR', 'Local IPC probe shutdown is unconfirmed; temporary root preserved',
+                                   io_operation='shutdown', path=str(namespace))
+            # The independent native namespace is flat. Retire only its closed
+            # runtime's entries through the pinned directory, including its gate.
+            for name in os.listdir(namespace_fd):
+                os.unlink(name, dir_fd=namespace_fd)
+            opened = os.fstat(namespace_fd)
+            current = namespace.lstat()
+            if (opened.st_dev, opened.st_ino) != (current.st_dev, current.st_ino):
+                raise ServiceError('LAUNCH_IO_ERROR', 'Local IPC probe directory was replaced; path preserved',
+                                   io_operation='cleanup', path=str(namespace))
+            namespace.rmdir()
+        finally:
+            os.close(namespace_fd)
+
+
 def _cold_start_preflight(directory: Path) -> None:
-    """Prove state writes and local IPC before inheriting this process into a daemon."""
+    """Refuse sandboxed writes or IPC before installing a runtime or spawning."""
     directory = check_state_root(directory, create=True)
     probe = directory / ('.launch-probe-' + uuid.uuid4().hex[:12])
-    socket_directory = None
-    socket_directory_fd = None
     operation = 'configure_local_endpoint'
     try:
         rpc_config.configure_local_endpoint(directory)
@@ -340,53 +369,15 @@ def _cold_start_preflight(directory: Path) -> None:
         fd = private_dirs.open_regular_fd(probe, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
         os.close(fd)
         if os.name != 'nt':
-            # State paths need not fit sockaddr_un; C-Two also uses short private
-            # IPC names. Keep the probe independent of a deeply nested checkout.
-            operation = 'make_socket_directory'
-            socket_directory = Path(tempfile.mkdtemp(prefix='hey-my-buddy-ipc-'))
-            socket_directory_fd = os.open(socket_directory, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
-            address = str(socket_directory / 's')
-            listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-            connector = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-            try:
-                listener.settimeout(1)
-                connector.settimeout(1)
-                operation = 'bind'
-                listener.bind(address)
-                listener.listen(1)
-                operation = 'connect'
-                connector.connect(address)
-                operation = 'accept'
-                accepted, _ = listener.accept()
-                accepted.close()
-            finally:
-                connector.close()
-                listener.close()
+            operation = 'bind'
+            _probe_local_ipc(directory)
+    except (CoreError, CCError) as error:
+        raise local_rpc_error(error) from error
     except OSError as error:
         code = 'LAUNCH_ACCESS_DENIED' if isinstance(error, PermissionError) else 'LAUNCH_IO_ERROR'
-        raise ServiceError(code, str(error),
-                           raw_os_error=error.errno, io_operation=operation) from error
+        raise ServiceError(code, str(error), raw_os_error=error.errno, io_operation=operation) from error
     finally:
-        try:
-            probe.unlink(missing_ok=True)
-        except OSError:
-            pass
-        try:
-            if socket_directory_fd is not None:
-                try:
-                    os.unlink('s', dir_fd=socket_directory_fd)
-                except FileNotFoundError:
-                    pass
-                # A replacement path is never used to clean up the opened directory.
-                opened = os.fstat(socket_directory_fd)
-                current = os.stat(socket_directory, follow_symlinks=False)
-                if (opened.st_dev, opened.st_ino) == (current.st_dev, current.st_ino):
-                    socket_directory.rmdir()
-        except OSError:
-            pass
-        finally:
-            if socket_directory_fd is not None:
-                os.close(socket_directory_fd)
+        probe.unlink(missing_ok=True)
 
 
 def _retire_stale_endpoint(directory: Path) -> None:

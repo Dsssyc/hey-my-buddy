@@ -10,12 +10,12 @@ from hey_my_buddy.protocol import transport
 
 class LocalLaunchTests(unittest.TestCase):
     @unittest.skipIf(os.name == 'nt', 'Unix socket bind denial has no Windows named-pipe bind path')
-    def test_local_socket_denial_refuses_start(self):
+    def test_native_ipc_denial_refuses_start(self):
         with tempfile.TemporaryDirectory() as temporary:
             directory = Path(temporary) / 'state'
-            with mock.patch('hey_my_buddy.protocol.transport.socket.socket') as socket_factory, \
+            with mock.patch('hey_my_buddy.protocol.transport._probe_local_ipc') as probe, \
                     mock.patch('hey_my_buddy.protocol.transport.subprocess.Popen') as spawn:
-                socket_factory.return_value.bind.side_effect = PermissionError('sandbox')
+                probe.side_effect = PermissionError('sandbox')
                 with self.assertRaises(transport.ServiceError) as caught:
                     transport.ensure_service(directory)
             self.assertEqual(caught.exception.code, 'LAUNCH_ACCESS_DENIED')

@@ -1,9 +1,11 @@
 """Select this Python check shard's test files from the measured durations.
 
 Reads .github/check-durations.json and assigns every file under tests/python:
-in descending duration, each file goes to the shard with the earliest predicted
-finish, accounting for parallel files in the runner's module order, planned
-queue delays and the workflow's runner slowdown allowance. A file
+in descending duration, each file goes to the shard with the least queued work,
+accounting for planned queue delays and the workflow's slow-runner scenario.
+Every file adds its full weight even when other files could run beside it:
+parallel free slots must not concentrate heavy files on one runner. The check
+runner preserves this descending file order inside each shard. A file
 missing from the table counts as that system's median duration. With no files
 for this shard the script fails; it never falls back to running the whole
 suite. CHECK_WORKERS comes from the workflow, so local CPU observations cannot
@@ -18,9 +20,9 @@ from pathlib import Path
 
 
 def execution_seconds(files: list[str], estimated: dict[str, float], workers: int) -> float:
-    """The runner submits modules alphabetically to its file worker pool."""
+    """The runner submits files in the explicit manifest order."""
     available = [0.0] * workers
-    for path in sorted(files, key=lambda path: path.removesuffix(".py").replace("/", ".")):
+    for path in files:
         heapq.heappush(available, heapq.heappop(available) + estimated[path])
     return max(available)
 
@@ -43,22 +45,15 @@ def main() -> None:
     median_duration = statistics.median(measured.values())
     files = sorted(path.as_posix() for path in Path("tests/python").rglob("test_*.py") if path.is_file())
     modules = {path: ".".join(Path(path).relative_to("tests/python").with_suffix("").parts) for path in files}
-    separate = set(json.loads(os.environ.get("CHECK_SEPARATE_MODULES", "[]")))
-    if len(separate) > shard_count or not separate <= set(modules.values()):
-        raise SystemExit("Separated modules must exist and fit on distinct shards.")
     estimated = {path: measured.get(modules[path], median_duration) for path in files}
     totals = [0.0] * shard_count
     shards: list[list[str]] = [[] for _ in range(shard_count)]
-    occupied: set[int] = set()
     for path in sorted(files, key=lambda path: (-estimated[path], path)):
-        targets = [index for index in range(shard_count) if modules[path] not in separate or index not in occupied]
-        target = min(targets, key=lambda index: (
-            start_delays[index] + slowdown * execution_seconds([*shards[index], path], estimated, workers),
+        target = min(range(shard_count), key=lambda index: (
+            start_delays[index] + slowdown * (totals[index] + estimated[path]) / workers,
             totals[index], index))
         shards[target].append(path)
         totals[target] += estimated[path]
-        if modules[path] in separate:
-            occupied.add(target)
     selected = shards[shard - 1]
     if not selected:
         raise SystemExit("The shard has no test files; refusing to run the whole suite.")
@@ -67,7 +62,6 @@ def main() -> None:
                 "estimated-wall-seconds": round(execution_seconds(selected, estimated, workers), 1),
                 "planned-delay-seconds": start_delays[shard - 1],
                 "runner-slowdown": slowdown,
-                "separated-modules": sorted(separate),
                 "estimated-finish-seconds": round(start_delays[shard - 1]
                     + slowdown * execution_seconds(selected, estimated, workers), 1),
                 "workers": workers, "files": selected}
