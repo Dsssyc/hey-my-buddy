@@ -1000,6 +1000,10 @@ def _checkpoint(request: RunRequest, evidence: TurnEvidence) -> dict:
                   "nativeTurnStarted": evidence.started,
                   "nativeTurnStatus": (evidence.completed or {}).get("status", "incomplete"),
                   "eventSeq": evidence.event_seq, "bindingSaved": False}
+    if evidence.superseded_final_answers:
+        checkpoint["supersededFinalAnswers"] = {
+            "count": len(evidence.superseded_final_answers),
+            "records": list(evidence.superseded_final_answers)}
     item = evidence.final_item or getattr(evidence, "last_agent_item", None)
     if isinstance(item, dict) and isinstance(item.get("id"), str) and isinstance(item.get("text"), str):
         raw = item["text"].encode()
@@ -1171,11 +1175,6 @@ def _worker_turn(connection: Connection, chain: _EventChain, request: RunRequest
         while evidence.completed is None:
             connection.pump()
         native_turn = evidence.completed
-        if evidence.final_item is None and isinstance(native_turn.get("items"), list):
-            finals = [item for item in native_turn["items"] if isinstance(item, dict)
-                      and item.get("type") == "agentMessage" and item.get("phase") == "final_answer"]
-            if len(finals) == 1:
-                evidence.final_item = finals[0]
     finally:
         # Even a transport failure or a deadline can leave a completed root
         # assistant message; the retained checkpoint permits reconstruction,

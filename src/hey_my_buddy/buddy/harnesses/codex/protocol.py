@@ -1,6 +1,7 @@
 """Bounded Codex App Server JSONL transport and native turn observation."""
 from __future__ import annotations
 
+import hashlib
 import os
 import queue
 import re
@@ -345,6 +346,7 @@ class TurnEvidence:
         self.started = False
         self.completed = None
         self.final_item = None
+        self.superseded_final_answers = []
         self.last_agent_item = None
         self.event_seq = 0
         self.model_turns = 0
@@ -397,6 +399,25 @@ class TurnEvidence:
         if candidate is not None and normalize_quota(candidate) is not None:
             self.quota_candidate = candidate
 
+    def _complete_final(self, item: dict) -> None:
+        if self.final_item is not None:
+            text = self.final_item.get("text")
+            raw = text.encode("utf-8") if isinstance(text, str) else None
+            parsable = False
+            if raw is not None:
+                try:
+                    decode_json(raw)
+                except (ValueError, RecursionError):
+                    pass
+                else:
+                    parsable = True
+            self.superseded_final_answers.append({
+                "itemId": self.final_item.get("id"),
+                "sourceBytes": len(raw) if raw is not None else None,
+                "sha256": hashlib.sha256(raw).hexdigest() if raw is not None else None,
+                "jsonParsable": parsable})
+        self.final_item = item
+
     def observe(self, message: dict):
         method, params = message.get("method"), message.get("params")
         if not isinstance(params, dict):
@@ -432,14 +453,16 @@ class TurnEvidence:
                 return None
             if item.get("type") == "agentMessage":
                 self.last_agent_item = item
-            if item.get("type") == "agentMessage" and item.get("phase") == "final_answer":
-                if self.final_item is not None:
-                    raise CodexProtocolError("invalid-result", "multiple native final messages completed")
-                self.final_item = item
+            if self.completed is None and item.get("type") == "agentMessage" and item.get("phase") == "final_answer":
+                self._complete_final(item)
             return "streaming-model", None
         if method == "turn/completed":
             if self.completed is not None:
                 raise CodexProtocolError("invalid-protocol", "duplicate native turn completion")
+            if self.final_item is None and isinstance(turn, dict) and isinstance(turn.get("items"), list):
+                for item in turn["items"]:
+                    if isinstance(item, dict) and item.get("type") == "agentMessage" and item.get("phase") == "final_answer":
+                        self._complete_final(item)
             self.completed = turn
             return "finishing", None
         return "streaming-model", None

@@ -8,6 +8,7 @@ process; no paid model is reached.
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import math
 import os
@@ -146,6 +147,33 @@ class CodexAdapterTests(unittest.TestCase):
         outcome = self.execute(self.context("assistance"))
         self.assertEqual(outcome.status, "ok", outcome.to_report())
         self.assertEqual(outcome.result["turn"]["outcome"]["disposition"], "assistance")
+
+    def test_last_completed_final_answer_wins_and_superseded_facts_reach_receipt(self):
+        cases = (("final-invalid-then-valid", False), ("final-valid-then-valid", True),
+                 ("ok", None), ("final-last-invalid", True))
+        for index, (case, parsable) in enumerate(cases, 1):
+            with self.subTest(case=case):
+                outcome = self.execute(self.context(case, index=index))
+                self.assertTrue(outcome.shutdown_confirmed, outcome.to_report())
+                invalid = case == "final-last-invalid"
+                self.assertEqual(outcome.status, "failed" if invalid else "ok", outcome.to_report())
+                checkpoint = outcome.result["nativeCheckpoint"]
+                if invalid:
+                    self.assertEqual(outcome.result["code"], "invalid-result")
+                    self.assertEqual(checkpoint["lastAssistantMessage"]["text"], "not json")
+                else:
+                    turn = outcome.result["turn"]
+                    self.assertEqual(turn["outcome"]["summary"], "fixture work completed")
+                    self.assertEqual(turn["provenance"]["finalItemId"], "final-1" if case == "ok" else "final-2")
+                if parsable is None:
+                    self.assertNotIn("supersededFinalAnswers", checkpoint)
+                    continue
+                state = json.loads(Path(self.environment["HMB_CODEX_FIXTURE_STATE"]).read_text())
+                native_turn = state["threads"][outcome.result["sessionId"]]["turns"][-1]
+                raw = native_turn["items"][0]["text"].encode("utf-8")
+                self.assertEqual(checkpoint["supersededFinalAnswers"], {"count": 1, "records": [{
+                    "itemId": "final-1", "sourceBytes": len(raw),
+                    "sha256": hashlib.sha256(raw).hexdigest(), "jsonParsable": parsable}]})
 
     def test_an_unlisted_model_reaches_the_native_turn_and_its_public_fact_reaches_the_receipt(self):
         # The full micro task chain: the relaxed check hands the selected name to

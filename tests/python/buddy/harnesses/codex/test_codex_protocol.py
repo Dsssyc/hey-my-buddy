@@ -93,9 +93,41 @@ class NativeCheckpointTests(unittest.TestCase):
         self.assertEqual(checkpoint["lastAssistantMessage"]["text"], "partial research")
         self.assertIsNone(evidence.final_item)
 
+    def test_finals_stop_changing_at_completion_and_ignore_foreign_items(self):
+        evidence = TurnEvidence("root", "turn")
+
+        def finish(item_id, *, thread="root", turn="turn", phase="final_answer"):
+            evidence.observe({"method": "item/completed", "params": {
+                "threadId": thread, "turnId": turn, "item": {
+                    "id": item_id, "type": "agentMessage", "phase": phase, "text": "{}"}}})
+
+        for item_id in ("first", "second", "last"):
+            finish(item_id)
+        finish("child", thread="child")
+        finish("other-turn", turn="other-turn")
+        finish("commentary", phase="commentary")
+        evidence.observe({"method": "turn/completed", "params": {
+            "threadId": "root", "turn": {"id": "turn", "status": "completed",
+                "items": [evidence.final_item]}}})
+        finish("too-late")
+        self.assertEqual(evidence.final_item["id"], "last")
+        facts = _checkpoint(self.request(), evidence)["supersededFinalAnswers"]
+        self.assertEqual(facts["count"], 2)
+        self.assertEqual([record["itemId"] for record in facts["records"]], ["first", "second"])
+
+    def test_completion_items_supply_last_final_when_item_notifications_are_absent(self):
+        evidence = TurnEvidence("root", "turn")
+        items = [{"id": str(number), "type": "agentMessage", "phase": "final_answer", "text": "{}"}
+                 for number in range(3)]
+        evidence.observe({"method": "turn/completed", "params": {
+            "threadId": "root", "turn": {"id": "turn", "status": "completed", "items": items}}})
+        self.assertEqual(evidence.final_item, items[-1])
+        self.assertEqual(len(evidence.superseded_final_answers), 2)
+
     def test_message_is_bounded_and_truncation_is_honest(self):
         evidence = SimpleNamespace(thread_id="thread", turn_id="native-turn", started=True,
                                    completed={"status": "completed"}, event_seq=3,
+                                   superseded_final_answers=[],
                                    final_item={"id": "final", "text": "调研\n" * 15000})
         checkpoint = _checkpoint(self.request(), evidence)
         self.assertTrue(checkpoint["lastAssistantMessage"]["truncated"])
