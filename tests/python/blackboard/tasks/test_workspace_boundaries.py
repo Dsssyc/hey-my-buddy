@@ -59,7 +59,7 @@ class WorkspaceBoundaryTests(unittest.TestCase):
 
     def test_first_turn_cumulative_patch_uses_sealed_diff_without_git(self):
         manifest = self.prepare()
-        (Path(manifest["path"]) / "src/file.txt").write_text("output\n", encoding="utf-8", newline="\n")
+        native_path(Path(manifest["path"]) / "src/file.txt").write_text("output\n", encoding="utf-8", newline="\n")
         sealed = self.seal(manifest)
         with patch.object(workspace, "_git", side_effect=AssertionError("unexpected Git read")):
             cumulative = workspace.cumulative_patch(manifest, sealed, manifest["inputCommit"])
@@ -152,8 +152,8 @@ class WorkspaceBoundaryTests(unittest.TestCase):
             expected.append((sealed["ref"], sealed["commit"]))
         proof = lambda: workspace.cleanup_inspect(self.state, manifest, sealed=sealed)
         self.assertTrue(proof()["eligible"])
-        files = {str(path.relative_to(checkout)): path.read_bytes()
-                 for path in checkout.rglob("*") if path.is_file()}
+        files = {str(path.relative_to(native_path(checkout))): path.read_bytes()
+                 for path in native_path(checkout).rglob("*") if path.is_file()}
         for ref, commit in expected:
             with self.subTest(ref=ref):
                 self.git("update-ref", "-d", ref)
@@ -165,8 +165,8 @@ class WorkspaceBoundaryTests(unittest.TestCase):
                     if other != ref:
                         self.assertEqual(self.git("rev-parse", other).decode().strip(), value)
                 self.assertTrue(checkout.exists())
-                self.assertEqual({str(path.relative_to(checkout)): path.read_bytes()
-                                  for path in checkout.rglob("*") if path.is_file()}, files)
+                self.assertEqual({str(path.relative_to(native_path(checkout))): path.read_bytes()
+                                  for path in native_path(checkout).rglob("*") if path.is_file()}, files)
                 self.git("update-ref", ref, commit)
                 self.assertTrue(proof()["eligible"])
 

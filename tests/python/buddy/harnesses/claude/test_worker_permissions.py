@@ -14,6 +14,7 @@ from hey_my_buddy.buddy.harnesses.run_contract import RunContinuation
 from hey_my_buddy.buddy.roles.run_execution import worker_delivery
 from hey_my_buddy.json_codec import canonical_json
 from hey_my_buddy.protocol.tool_evidence import read_tool_calls
+from hey_my_buddy.paths import native_path
 
 
 class WorkerPermissionTests(NativeRunCase):
@@ -21,8 +22,8 @@ class WorkerPermissionTests(NativeRunCase):
         return self.request(scope=level, **kwargs)
 
     def observations(self, result):
-        return json.loads(Path(next(ref.location for ref in result.evidence_refs
-                                    if ref.kind == "native-observations")).read_bytes())
+        return json.loads(native_path(Path(next(ref.location for ref in result.evidence_refs
+                                    if ref.kind == "native-observations"))).read_bytes())
 
     def test_each_level_sends_its_native_posture_and_keeps_the_actual_policy(self):
         for level, mode, tools in (("read", "default", READONLY_TOOLS),
@@ -32,7 +33,7 @@ class WorkerPermissionTests(NativeRunCase):
                 result = self.execute(self.worker_request(level))
                 self.assertEqual(result.end.status, "ok", result.end.message)
                 argv = self.fixture_state()["argv"]
-                settings = json.loads(Path(flag_value(argv, "--settings")).read_bytes())
+                settings = json.loads(native_path(Path(flag_value(argv, "--settings"))).read_bytes())
                 self.assertEqual(flag_value(argv, "--permission-mode"), mode)
                 self.assertEqual(flag_value(argv, "--tools"), ",".join(tools))
                 policy = result.effective_policy.tools.requested.value
@@ -136,5 +137,5 @@ class WorkerPermissionTests(NativeRunCase):
             "--session-id", flag_value(argv, "--session-id"), "--model", "claude-opus-5-5[1m]",
             "--permission-mode", "default", "--disallowedTools", ",".join(DENIED_WRITE_TOOLS),
             "--effort", "high", "--json-schema", canonical_json(READ_SCHEMA)])
-        self.assertEqual(json.loads(Path(flag_value(argv, "--settings")).read_bytes()),
+        self.assertEqual(json.loads(native_path(Path(flag_value(argv, "--settings"))).read_bytes()),
                          permission_sandbox_settings("read"))

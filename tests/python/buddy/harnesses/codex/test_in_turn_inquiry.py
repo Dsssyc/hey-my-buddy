@@ -20,6 +20,7 @@ from hey_my_buddy.buddy.harnesses.run_contract import FEEDBACK_CONTINUE, RunCont
 from hey_my_buddy.buddy.roles.worker_services import ANSWER_SCHEMA
 
 from .test_native_run import FIXTURE, OUTCOME_SCHEMA, SeamCase
+from hey_my_buddy.paths import native_path
 
 
 class FakeConnection:
@@ -182,7 +183,7 @@ class ClientToolWorkerTests(SeamCase):
         self.assertEqual(thread["start"]["dynamicTools"], inquiry.dynamic_tools)
         self.assertNotIn("config", thread["start"])
         self.assertNotIn("dynamicTools", thread["resumeRequests"][0])
-        self.assertFalse((Path(request.private_state.invocation_root) / "inquiry-bridge.json").exists())
+        self.assertFalse(native_path(Path(request.private_state.invocation_root) / "inquiry-bridge.json").exists())
 
     def test_fake_app_server_answers_or_keeps_unanswered_and_invalid_calls_continue(self):
         os.environ.update(self.environment)

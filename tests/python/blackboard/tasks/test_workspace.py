@@ -254,7 +254,7 @@ class WorkspaceTests(unittest.TestCase):
         self.assertEqual(workspace.prepare(self.state, "same", intent), first)
         second = workspace.prepare(self.state, "new-request", intent)
         self.assertNotEqual(first["inputCommit"], second["inputCommit"])
-        self.assertEqual((Path(first["path"]) / "src/file.txt").read_text(encoding="utf-8"), "base\n")
+        self.assertEqual(native_path(Path(first["path"]) / "src/file.txt").read_text(encoding="utf-8"), "base\n")
         self.assert_error("WORKSPACE_CONFLICT", workspace.prepare, self.state, "same", self.intent(writeScope=["docs"]))
 
     def test_existing_commit_requires_exact_checkout(self):
@@ -268,7 +268,7 @@ class WorkspaceTests(unittest.TestCase):
 
     def test_verify_detects_drift_and_read_cannot_opt_out(self):
         manifest = self.prepare(access="read", writeScope=[])
-        (Path(manifest["path"]) / "src/file.txt").write_text("changed\n", encoding="utf-8", newline="\n")
+        native_path(Path(manifest["path"]) / "src/file.txt").write_text("changed\n", encoding="utf-8", newline="\n")
         self.assert_error("WORKSPACE_CHANGED", workspace.verify, manifest, state_dir=self.state)
         self.assert_error("WORKSPACE_CHANGED", workspace.verify, manifest, require_unchanged=False, state_dir=self.state)
 
@@ -290,7 +290,7 @@ class WorkspaceTests(unittest.TestCase):
             self.assert_error("WORKSPACE_IO_ERROR", self.prepare)
         (self.repo / "src/file.txt").write_text("source advanced after interruption", encoding="utf-8", newline="\n")
         recovered = self.prepare()
-        self.assertEqual((Path(recovered["path"]) / "src/file.txt").read_text(encoding="utf-8"), "base\n")
+        self.assertEqual(native_path(Path(recovered["path"]) / "src/file.txt").read_text(encoding="utf-8"), "base\n")
         self.assertTrue(workspace.verify(recovered, state_dir=self.state)["unchanged"])
 
     def test_changed_interrupted_checkout_is_not_overwritten(self):
@@ -326,7 +326,7 @@ class WorkspaceTests(unittest.TestCase):
         self.assertEqual(self.git("show", output["commit"] + ":src/link"), b"../../external-missing")
         self.assertIn(b"100644" if os.name == "nt" else b"100755",
                       self.git("ls-tree", output["commit"], "src/new.txt"))
-        self.assertEqual(output["diffSha256"], hashlib.sha256(Path(output["diffPath"]).read_bytes()).hexdigest())
+        self.assertEqual(output["diffSha256"], hashlib.sha256(native_path(Path(output["diffPath"])).read_bytes()).hexdigest())
         self.assertEqual(self.git("rev-parse", output["commit"] + "^").decode().strip(), manifest["inputCommit"])
         self.assertEqual(workspace.seal(self.state, manifest, "task", "attempt"), output)
         integration = self.root / "integration"
@@ -441,7 +441,7 @@ class WorkspaceTests(unittest.TestCase):
         self.assert_error("WORKSPACE_CONFLICT", workspace.seal, self.state, manifest, "task", "attempt")
         self.assertEqual(self.git("rev-parse", output["ref"]).decode().strip(), self.base)
         self.git("update-ref", output["ref"], output["commit"])
-        Path(output["diffPath"]).write_bytes(b"corrupted")
+        native_path(Path(output["diffPath"])).write_bytes(b"corrupted")
         self.assert_error("WORKSPACE_CONFLICT", workspace.seal, self.state, manifest, "task", "attempt")
 
     def test_missing_input_and_output_refs_allow_seal_and_verification_but_block_cleanup(self):
@@ -465,7 +465,7 @@ class WorkspaceTests(unittest.TestCase):
 
     def test_matching_seal_cleanup_proof_only_updates_the_private_index(self):
         manifest = self.prepare()
-        (Path(manifest["checkoutRoot"]) / "src/file.txt").write_text("sealed output\n", encoding="utf-8", newline="\n")
+        native_path(Path(manifest["checkoutRoot"]) / "src/file.txt").write_text("sealed output\n", encoding="utf-8", newline="\n")
         output = workspace.seal(self.state, manifest, "task", "attempt")
         git = workspace._git
 
@@ -509,7 +509,7 @@ class WorkspaceTests(unittest.TestCase):
     def test_sibling_cwd_maps_to_equivalent_subdirectory_in_isolated_tree(self):
         manifest = self.prepare(cwd=str(self.repo / "src"))
         self.assertEqual(Path(manifest["path"]), Path(manifest["checkoutRoot"]) / "src")
-        self.assertTrue((Path(manifest["path"]) / "file.txt").exists())
+        self.assertTrue(native_path(Path(manifest["path"]) / "file.txt").exists())
         self.assertTrue(workspace.verify(manifest, state_dir=self.state)["unchanged"])
 
     def test_symbolic_input_reference_cannot_modify_a_branch(self):
@@ -529,12 +529,12 @@ class WorkspaceTests(unittest.TestCase):
         (self.repo / name).write_bytes(b"\x00selected")
         (self.repo / "src/unselected.secret").write_text("excluded", encoding="utf-8", newline="\n")
         manifest = self.prepare(includeUntracked=[name])
-        self.assertEqual((Path(manifest["path"]) / name).read_bytes(), b"\x00selected")
-        self.assertFalse((Path(manifest["path"]) / "src/unselected.secret").exists())
+        self.assertEqual(native_path(Path(manifest["path"]) / name).read_bytes(), b"\x00selected")
+        self.assertFalse(native_path(Path(manifest["path"]) / "src/unselected.secret").exists())
         (self.repo / name).write_bytes(b"later source input")
-        self.assertEqual((Path(manifest["path"]) / name).read_bytes(), b"\x00selected")
+        self.assertEqual(native_path(Path(manifest["path"]) / name).read_bytes(), b"\x00selected")
         self.assertTrue(workspace.verify(manifest, state_dir=self.state)["unchanged"])
-        (Path(manifest["path"]) / name).write_bytes(b"changed selected input")
+        native_path(Path(manifest["path"]) / name).write_bytes(b"changed selected input")
         self.assert_error("WORKSPACE_CHANGED", workspace.verify, manifest, state_dir=self.state)
 
     def test_ignored_caches_do_not_interfere_with_managed_input_or_output(self):
@@ -542,13 +542,13 @@ class WorkspaceTests(unittest.TestCase):
         self.git("add", ".gitignore")
         self.git("commit", "-qm", "ignore generated files")
         reader = self.prepare("reader", access="read", writeScope=[])
-        (Path(reader["path"]) / "new.ignored").write_text("generated cache", encoding="utf-8", newline="\n")
+        native_path(Path(reader["path"]) / "new.ignored").write_text("generated cache", encoding="utf-8", newline="\n")
         self.assertTrue(workspace.verify(reader, state_dir=self.state)["unchanged"])
         self.assertEqual(workspace.seal(self.state, reader, "reader", "attempt")["changedPaths"], [])
         writer = self.prepare("writer")
-        (Path(writer["path"]) / "docs/out.ignored").write_text("generated cache outside write scope", encoding="utf-8", newline="\n")
-        (Path(writer["path"]) / "src/out.ignored").write_text("generated cache inside write scope", encoding="utf-8", newline="\n")
-        (Path(writer["path"]) / "src/file.txt").write_text("managed output\n", encoding="utf-8", newline="\n")
+        native_path(Path(writer["path"]) / "docs/out.ignored").write_text("generated cache outside write scope", encoding="utf-8", newline="\n")
+        native_path(Path(writer["path"]) / "src/out.ignored").write_text("generated cache inside write scope", encoding="utf-8", newline="\n")
+        native_path(Path(writer["path"]) / "src/file.txt").write_text("managed output\n", encoding="utf-8", newline="\n")
         output = workspace.seal(self.state, writer, "writer", "attempt")
         self.assertEqual(output["changedPaths"], ["src/file.txt"])
         self.assertNotIn(b"out.ignored", self.git("ls-tree", "-r", output["commit"]))
@@ -617,15 +617,15 @@ class WorkspaceTests(unittest.TestCase):
         (self.repo / "src/file.txt").write_text("later source edits\n", encoding="utf-8", newline="\n")
         self.git("gc", "--prune=now")
         manifest = self.prepare()
-        self.assertEqual((Path(manifest["path"]) / "src/file.txt").read_text(encoding="utf-8"), "frozen uncommitted input\n")
+        self.assertEqual(native_path(Path(manifest["path"]) / "src/file.txt").read_text(encoding="utf-8"), "frozen uncommitted input\n")
 
     def test_replayed_output_rejects_inconsistent_top_level_fields(self):
         manifest = self.prepare()
-        (Path(manifest["path"]) / "src/file.txt").write_text("output\n", encoding="utf-8", newline="\n")
+        native_path(Path(manifest["path"]) / "src/file.txt").write_text("output\n", encoding="utf-8", newline="\n")
         output = workspace.seal(self.state, manifest, "task", "attempt")
         path = Path(output["diffPath"]).parent / "output.json"
         changed = {**output, "changedPaths": []}
-        path.write_text(json.dumps(changed), encoding="utf-8", newline="\n")
+        native_path(path).write_text(json.dumps(changed), encoding="utf-8", newline="\n")
         self.assert_error("WORKSPACE_CONFLICT", workspace.seal, self.state, manifest, "task", "attempt")
 
     def test_malformed_manifest_and_input_fail_with_structured_errors(self):

@@ -160,7 +160,7 @@ class PrivateAdapterInvariants(unittest.TestCase):
     def assert_partition(self, context, harness):
         self.assertTrue(context.directory.is_dir())
         evidence_names = set()
-        for path in context.directory.rglob("*"):
+        for path in native_path(context.directory).rglob("*"):
             if path.is_file():
                 self.assertFalse(path.is_symlink(), path)
                 evidence_names.add(path.name)
@@ -369,9 +369,9 @@ class PrivateAdapterInvariants(unittest.TestCase):
                         "outputSchema": router.answer_schema(["legal"]),
                         "budget": {"timeoutSeconds": 5}}}
                 startup = receipt_directory(state, harness, task_id, attempt_id) / "execution-start.json"
-                startup.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+                native_path(startup.parent).mkdir(mode=0o700, parents=True, exist_ok=True)
                 job_name = f"Local\\HeyMyBuddy-{uuid.uuid4()}" if os.name == "nt" else None
-                startup.write_text(json.dumps({"claim": claim, "stateDir": str(state),
+                native_path(startup).write_text(json.dumps({"claim": claim, "stateDir": str(state),
                     "nonce": "n" * 64,
                     "jobName": job_name,
                     "sessionRecordPath": str(fixture.root / f"session-{harness}.jsonl")}), encoding="utf-8", newline="\n")

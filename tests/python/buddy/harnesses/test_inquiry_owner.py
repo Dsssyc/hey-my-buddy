@@ -24,6 +24,7 @@ from hey_my_buddy.buddy.harnesses.zcode.protocol import NativeError, RootTurnEvi
 from hey_my_buddy.buddy.roles.session_mcp import respond
 from hey_my_buddy.buddy.roles import turn_io
 from hey_my_buddy.errors import BoardError
+from hey_my_buddy.paths import native_path
 
 TASK_MATERIAL_ROOT = Path(os.environ.get("HMB_INQUIRY_OWNER_MATERIAL_ROOT", tempfile.gettempdir()))
 RUN = RunIdentity(task_id="task-owner", attempt_id="attempt-owner", generation=2,
@@ -217,7 +218,7 @@ class InquiryOwnerTests(unittest.TestCase):
         self.assertFalse(refused.observed)
         self.assertEqual(refused.error_code, "journal-unavailable")
         self.assertEqual(self.bridge.entries, {})
-        self.assertEqual(self.bridge.journal_path.read_bytes(), b"")
+        self.assertEqual(native_path(self.bridge.journal_path).read_bytes(), b"")
         snapshot = direct_snapshot(self.endpoint)
         self.assertEqual(snapshot.inquiries, ())
         self.assertIn("journal-unavailable", snapshot.observation.error)
@@ -331,7 +332,7 @@ class InquiryOwnerTests(unittest.TestCase):
         self.assertEqual(json.loads(checkpoint["content"][0]["text"])["inquiries"][0]["inquiryId"],
                          "q-local")
         self.assertEqual(records(local.journal_path)[0]["state"], "queued")
-        self.assertFalse(any(local.journal_path.parent.glob("*.sock")))
+        self.assertFalse(any(native_path(local.journal_path.parent).glob("*.sock")))
 
 
 class InquiryJournalProjectionTests(unittest.TestCase):

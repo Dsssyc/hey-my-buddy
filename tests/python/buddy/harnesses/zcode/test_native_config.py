@@ -17,6 +17,7 @@ from hey_my_buddy.buddy.harnesses.zcode.config import load_runtime_preferences, 
 from hey_my_buddy.errors import BoardError
 from hey_my_buddy.buddy.roles.run_observers import FastCorrection, worker_observer
 from hey_my_buddy.protocol.billing import zcode_access
+from hey_my_buddy.paths import native_path
 
 
 class NativeConfigCase(NativeRunCase):
@@ -73,7 +74,7 @@ class NativeConfigTests(NativeConfigCase):
         self.assertEqual(env["ZCODE_STORAGE_DIR"], str(Path(request.private_state.native_root).resolve() / "storage"))
         self.assertEqual(env["ZCODE_SESSION_DB_PATH"], str(Path(request.private_state.native_root).resolve() / "sessions.sqlite"))
         for name in ("builtin-provider.json", "personal-provider.json"):
-            self.assertEqual(list(self.base.rglob(name)), [])
+            self.assertEqual(list(native_path(self.base).rglob(name)), [])
         self.assertFalse((self.cwd / ".zcode/config.json").exists())
         self.assertNotIn("secret-never-returned", json.dumps(receipt))
 
@@ -159,7 +160,7 @@ class RuntimePreferenceTests(NativeConfigCase):
     def preference_facts(self, result):
         self.assertEqual(result.end.status, "ok", result)
         ref = next(ref for ref in result.evidence_refs if ref.kind == "native-runtime-preferences")
-        return json.loads(Path(ref.location).read_text(encoding="utf-8"))
+        return json.loads(native_path(Path(ref.location)).read_text(encoding="utf-8"))
 
     def test_user_preferences_are_answered_and_no_tools_only_tightens_search(self):
         for memory, search, no_tools in ((True, False, False), (False, True, False),

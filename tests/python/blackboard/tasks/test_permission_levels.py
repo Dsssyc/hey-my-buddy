@@ -13,6 +13,7 @@ from hey_my_buddy.blackboard.tasks import workspace as git_workspace
 from hey_my_buddy.protocol.capabilities import PERMISSION_LEVELS
 from hey_my_buddy.errors import BoardError
 from hey_my_buddy.cli.cli_views import micro_task_brief
+from hey_my_buddy.paths import native_path
 
 
 class PermissionLevelsTests(WorkflowTestCase):
@@ -198,7 +199,7 @@ class GitPermissionLevelsTests(RealWorkspaceTestCase):
             saved.append(dict(manifest))
             self.assertEqual(manifest['access'], access)
             if access != 'read':
-                (Path(manifest['path']) / 'tracked.txt').write_text(f'turn {index}\n', encoding="utf-8", newline="\n")
+                native_path(Path(manifest['path']) / 'tracked.txt').write_text(f'turn {index}\n', encoding="utf-8", newline="\n")
             attempt_id = claim['claim']['attempt']['attemptId']
             seal = git_workspace.seal(self.directory, manifest, run_id, attempt_id)
             self.finish_turn(board, claim, seal)

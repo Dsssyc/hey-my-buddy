@@ -7,6 +7,7 @@ from support import enable_fixture_buddy
 from hey_my_buddy.blackboard.tasks import workflow
 from hey_my_buddy.cli.cli_views import micro_task_brief, task_brief, list_brief
 from hey_my_buddy.errors import BoardError
+from hey_my_buddy.paths import native_path
 
 
 class LeadOwnedTests(WorkflowTestCase):
@@ -81,7 +82,7 @@ class LeadOwnedTests(WorkflowTestCase):
         self.assertEqual(macro_task_deletion.preview(board.store, group)['microTaskCount'], 2)
         rows = board.call('macro_task_timeline', {'macroTaskId': group})['rows']
         self.assertEqual({row['runId'] for row in rows}, {lead['runId'], owned['runId']})
-        self.assertFalse(session_record_path(board.directory, 'run:' + owned['runId'], 'unused').parent.exists())
+        self.assertFalse(native_path(session_record_path(board.directory, 'run:' + owned['runId'], 'unused').parent).exists())
 
     def test_submit_records_run_turn_macro_and_source_in_one_admission(self):
         board = self.board()

@@ -12,6 +12,7 @@ from hey_my_buddy.buddy.harnesses.session_receipts import ReceiptError
 from hey_my_buddy.buddy.roles.session_mcp import respond
 from hey_my_buddy import private_dirs
 from hey_my_buddy.protocol.inquiry_journal import read_shared_snapshot, MAX_JOURNAL_BYTES
+from hey_my_buddy.paths import native_path
 
 
 class InTurnInquiryTests(unittest.TestCase):
@@ -99,7 +100,7 @@ class InTurnInquiryTests(unittest.TestCase):
         self.bridge.deliver_native("q", {"sessionId": "native-session"})
         self.bridge.close()
         self.assertEqual(self.bridge.entries["q"]["state"], "unavailable")
-        self.assertEqual(set(json.loads(Path(self.bridge.journal_path).read_text(encoding="utf-8").splitlines()[-1])),
+        self.assertEqual(set(json.loads(native_path(Path(self.bridge.journal_path)).read_text(encoding="utf-8").splitlines()[-1])),
                          {"version", "taskId", "attemptId", "generation", "turnId", "sessionId",
                           "inquiryId", "state", "unavailableAt"})
         self.assertEqual(self.bridge.report()["unansweredDelivered"], 1)

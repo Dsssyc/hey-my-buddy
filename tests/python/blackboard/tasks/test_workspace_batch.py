@@ -11,6 +11,7 @@ from unittest.mock import patch
 
 from hey_my_buddy import private_dirs
 from hey_my_buddy.blackboard.tasks import workspace
+from hey_my_buddy.paths import native_path
 
 
 LARGE_BINARY = b"large\x00\xff\r\n" + bytes(range(256)) * 8192
@@ -133,7 +134,7 @@ class GitIndexSnapshotTests(unittest.TestCase):
         with patch.dict(os.environ, {"TMPDIR": str(worker_tmp), "TEMP": str(worker_tmp), "TMP": str(worker_tmp)}), \
                 patch.object(private_dirs, "make_temporary_dir", side_effect=capture):
             manifest = workspace.prepare(self.state, "private-index", self.intent(repo))
-            (Path(manifest["checkoutRoot"]) / "src/text.txt").write_bytes(b"changed\n")
+            native_path(Path(manifest["checkoutRoot"]) / "src/text.txt").write_bytes(b"changed\n")
             workspace.seal(self.state, manifest, "task", "private-index")
         self.assertTrue(any(path.name.startswith("hey-my-buddy-index-") for path in created))
         self.assertTrue(all(path.parent == self.state / "tmp" for path in created))

@@ -42,7 +42,7 @@ class HostQuotaRecoveryTests(MicroTaskWorkerTestCase):
         self.assertFalse(partial["verified"])
         self.assertFalse(partial["final"])
         self.assertIn("tracked.txt", partial["changedPaths"])
-        self.assertTrue(Path(partial["diffPath"]).is_file())
+        self.assertTrue(native_path(Path(partial["diffPath"])).is_file())
         self.assertIsNone(current["finalArtifactId"])
         # The quota death keeps its machine classification end to end: the
         # private session record's turn-end code is the only native failure
@@ -124,7 +124,7 @@ class HostQuotaRecoveryTests(MicroTaskWorkerTestCase):
             # The Host seal is a new artifact with its own binding; the Worker's
             # partial artifact, ref and manifest stay exactly as they were.
             self.assertNotEqual(concluded["partialArtifactId"], partial["artifactId"])
-            self.assertTrue(Path(partial["diffPath"]).is_file())
+            self.assertTrue(native_path(Path(partial["diffPath"])).is_file())
             self.assertTrue(native_path(Path(partial["cumulativePatch"]["path"])).is_file())
             sealed = self.call("get", {"runId": failed["runId"], "includeAudit": True})
             artifacts = {row["artifactId"]: row for row in sealed["artifacts"]}
@@ -137,7 +137,7 @@ class HostQuotaRecoveryTests(MicroTaskWorkerTestCase):
                 "partial artifact; no further execution."}), env=self.env())[1]
             self.assertTrue(replay["duplicate"])
             # Both partial outputs stay readable after the reclaim.
-            self.assertTrue(Path(host_artifact["diffPath"]).is_file())
+            self.assertTrue(native_path(Path(host_artifact["diffPath"])).is_file())
 
 
 class CrossHarnessProviderRejectionRecoveryTests(HostQuotaRecoveryTests):

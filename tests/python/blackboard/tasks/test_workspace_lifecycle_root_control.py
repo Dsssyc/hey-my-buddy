@@ -12,6 +12,7 @@ from hey_my_buddy.blackboard.tasks import workspace as workspace_module
 from hey_my_buddy.errors import BoardError
 
 from blackboard.tasks.workspace_lifecycle_case import LifecycleTestCase
+from hey_my_buddy.paths import native_path
 
 
 class RootControlLifecycleTests(LifecycleTestCase):
@@ -103,7 +104,7 @@ class RootControlLifecycleTests(LifecycleTestCase):
         parent_claim = self.claim(board, run_id, request_id="parent-claim-2", nonce="p" * 16)
         self.assertIsNotNone(parent_claim["claim"], parent_claim)
         parent_manifest = parent_claim["claim"]["turn"]["input"]["executionWorkspace"]
-        (Path(parent_manifest["path"]) / "parent-second.txt").write_text("parent second stage\n", encoding="utf-8", newline="\n")
+        native_path(Path(parent_manifest["path"]) / "parent-second.txt").write_text("parent second stage\n", encoding="utf-8", newline="\n")
         parent_seal = workspace_module.seal(self.directory, parent_manifest, run_id,
                                             parent_claim["claim"]["attempt"]["attemptId"])
         self.finish_turn(board, parent_claim, parent_seal, nonce="p" * 16)

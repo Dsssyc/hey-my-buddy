@@ -12,6 +12,7 @@ from hey_my_buddy.buddy.harnesses.dsh import native_run
 from buddy.harnesses.dsh.test_native_run import NativeRunCase
 from buddy.harnesses.zcode.test_native_run import MockNativeCase
 from hey_my_buddy.buddy.harnesses.zcode import native_run as zcode_run
+from hey_my_buddy.paths import native_path
 
 
 def assert_summary_stderr(self, module, *, harness, spec, cwd, native_root, configure):
@@ -38,7 +39,7 @@ def assert_summary_stderr(self, module, *, harness, spec, cwd, native_root, conf
     first = module.run(request, observer=observer, services=services, cancelled=lambda: False)
     self.assertEqual(first.end.status, "ok", first.end.message)
     first_ref = next(ref for ref in first.evidence_refs if ref.kind == "native-stderr")
-    first_bytes = Path(first_ref.location).read_bytes()
+    first_bytes = native_path(Path(first_ref.location)).read_bytes()
     self.assertEqual(first_ref.sha256, hashlib.sha256(first_bytes).hexdigest())
     self.assertIn(b"first invocation stderr", first_bytes)
 
@@ -56,9 +57,9 @@ def assert_summary_stderr(self, module, *, harness, spec, cwd, native_root, conf
     summary_ref = next(ref for ref in summary.evidence_refs if ref.kind == "native-stderr")
     self.assertNotEqual(first_ref.location, summary_ref.location)
     self.assertEqual(Path(summary_ref.location).parent, Path(summary_request.private_state.invocation_root))
-    self.assertIn(b"summary invocation stderr", Path(summary_ref.location).read_bytes())
-    self.assertEqual(first_bytes, Path(first_ref.location).read_bytes())
-    self.assertEqual(first_ref.sha256, hashlib.sha256(Path(first_ref.location).read_bytes()).hexdigest())
+    self.assertIn(b"summary invocation stderr", native_path(Path(summary_ref.location)).read_bytes())
+    self.assertEqual(first_bytes, native_path(Path(first_ref.location)).read_bytes())
+    self.assertEqual(first_ref.sha256, hashlib.sha256(native_path(Path(first_ref.location)).read_bytes()).hexdigest())
 
 
 class DshSummaryStderrTests(NativeRunCase):
@@ -79,7 +80,7 @@ class ZcodeSummaryStderrTests(MockNativeCase):
             marker[:] = [text]
         def spawn(**kwargs):
             owned = original(**kwargs)
-            with Path(kwargs["stderr_path"]).open("ab") as stream:
+            with native_path(Path(kwargs["stderr_path"])).open("ab") as stream:
                 stream.write((marker[0] + "\n").encode())
             return owned
         with mock.patch.dict("os.environ", self.environment, clear=True), \

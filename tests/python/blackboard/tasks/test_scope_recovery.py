@@ -475,7 +475,7 @@ class ScopeRecoveryTestCase(RealWorkspaceTestCase):
         self.assertFalse((checkout / "outside.txt").exists())
         self.assertEqual((checkout / "tracked.txt").read_text(encoding="utf-8"), "base\n")
         self.assertEqual((checkout / "src" / "feature.py").read_text(encoding="utf-8"), "value = 1\n")
-        patch = Path(abandoned["diffPath"]).read_text(encoding="utf-8")
+        patch = native_path(Path(abandoned["diffPath"])).read_text(encoding="utf-8")
         self.assertIn("outside.txt", patch)
         self.assertIn("value = 2", patch)
         continued = self.continue_run(board, abandoned, command_id="continue-after-abandon")
@@ -507,13 +507,13 @@ class ScopeRecoveryTestCase(RealWorkspaceTestCase):
                     historical["actor"] = "host:host-1"
                 original = workspace_module._json(historical)
                 for path in paths:
-                    path.write_bytes(original)
+                    native_path(path).write_bytes(original)
                 replay = workspace_module._resolution_record(
                     checkout, manifest, repository, directory, None, task_id=run_id, attempt_id=attempt_id,
                     action="adopt", actor={"role": "host", "id": "host-1"}, note="later call",
                     conflict_fingerprint=conflict["observedFingerprint"], state_dir=self.directory)
                 self.assertEqual(replay, historical)
-                self.assertEqual([path.read_bytes() for path in paths], [original, original])
+                self.assertEqual([native_path(path).read_bytes() for path in paths], [original, original])
                 self.assertIn("outside.txt", workspace_module.verify_sealed_output(
                     manifest, manifest, replay)["changedPaths"])
 
@@ -535,13 +535,13 @@ class ScopeRecoveryTestCase(RealWorkspaceTestCase):
                     historical["actor"] = "host:host-1"
                 original = workspace_module._json(historical)
                 for path in paths:
-                    path.write_bytes(original)
+                    native_path(path).write_bytes(original)
                 replay = workspace_module._abandoned_record(
                     checkout, manifest, repository, directory, None, task_id=run_id, attempt_id=attempt_id,
                     actor={"role": "host", "id": "host-1"}, note="later call",
                     conflict_fingerprint=conflict["observedFingerprint"], state_dir=self.directory)
                 self.assertEqual(replay, historical)
-                self.assertEqual([path.read_bytes() for path in paths], [original, original])
+                self.assertEqual([native_path(path).read_bytes() for path in paths], [original, original])
 
     def test_scope_amendment_is_versioned_and_fenced_by_an_active_attempt(self):
         board = self.board()
@@ -810,7 +810,7 @@ class ScopeRecoveryTestCase(RealWorkspaceTestCase):
         run_id = submitted["runId"]
         claimed = self.claim(board, run_id, request_id="helper-scope-claim")
         manifest = claimed["claim"]["turn"]["input"]["executionWorkspace"]
-        (Path(manifest["path"]) / "src" / "feature.py").write_text("value = 2\n", encoding="utf-8", newline="\n")
+        native_path(Path(manifest["path"]) / "src" / "feature.py").write_text("value = 2\n", encoding="utf-8", newline="\n")
         seal = workspace_module.seal(self.directory, manifest, run_id, claimed["claim"]["attempt"]["attemptId"])
         self.finish_turn(board, claimed, seal, disposition="assistance")
         view = self.view(board, run_id)

@@ -336,7 +336,7 @@ class ZcodeAdapterTests(ZcodeFixtureCase):
         self.assertNotIn("turn", first.result)
         from hey_my_buddy.private_dirs import context_root
         root = Path(first_handle.role_run_control["nativeRoot"])
-        prior_session = json.loads((root / "sessions.fixture.json").read_text(encoding="utf-8"))["sessionId"]
+        prior_session = json.loads(native_path(root / "sessions.fixture.json").read_text(encoding="utf-8"))["sessionId"]
         _, second = self.execute(self.context(index=2, mode="reconstructed-new-session"))
         self.assertEqual(second.status, "ok", second.to_report())
         turn = second.result["turn"]

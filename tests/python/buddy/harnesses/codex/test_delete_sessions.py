@@ -14,6 +14,7 @@ from hey_my_buddy.buddy.harnesses.codex import native_run
 from hey_my_buddy.buddy.harnesses.codex.protocol import CodexProtocolError
 from hey_my_buddy.buddy.roles.run_execution import delete_sessions
 from hey_my_buddy.errors import BoardError
+from hey_my_buddy.paths import native_path
 
 FIXTURE = Path(__file__).parent / "fixtures/delete_sessions_codex.py"
 
@@ -48,10 +49,10 @@ class DeleteSessionTests(unittest.TestCase):
     def test_adapter_uses_controller_and_deletes_each_exact_identity_once(self):
         record = private_dirs.session_record_path(self.root / 'state', 'run:owned-task', 'owned-attempt')
         private_dirs.ensure_private_dir(record.parent)
-        record.write_bytes(b'private display record\n')
+        native_path(record).write_bytes(b'private display record\n')
         self.assertEqual(CodexAdapter().delete_sessions(["owned", "gone", "owned", "gone"], state_dir=Path(os.environ["HMB_STATE_DIR"])),
                          {"owned": "deleted", "gone": "already-gone"})
-        self.assertEqual(record.read_bytes(), b'private display record\n')
+        self.assertEqual(native_path(record).read_bytes(), b'private display record\n')
         frames = self.requests()
         self.assertEqual([item["method"] for item in frames],
                          ["initialize", "initialized", "thread/delete", "thread/delete"])

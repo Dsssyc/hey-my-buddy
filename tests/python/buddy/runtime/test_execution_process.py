@@ -24,6 +24,7 @@ from hey_my_buddy.protocol.process_identity import boot_id, _creation_time
 from hey_my_buddy.protocol import process_identity
 from hey_my_buddy.buddy.runtime import command
 from hey_my_buddy.buddy.harnesses.live import LiveRequest, InquiryPayload
+from hey_my_buddy.paths import native_path
 
 
 def self_identity_for_endpoint() -> dict:
@@ -163,8 +164,8 @@ class ExecutionEndpointTests(unittest.TestCase):
                 "argv": ["/bin/echo", "hello"]}},
                 "attempt": {"taskId": "task-identity", "attemptId": "attempt-identity", "generation": 1}}
             execution = Execution(claim, state, "n" * 64, client=object())
-            execution.directory.mkdir(parents=True, mode=0o700)
-            execution.evidence_directory.mkdir(parents=True, mode=0o700)
+            native_path(execution.directory).mkdir(parents=True, mode=0o700)
+            native_path(execution.evidence_directory).mkdir(parents=True, mode=0o700)
             execution.control = mock.Mock(cancel_view=None)
             journal = process_identity.NativeProcessJournal(state / "native-journal.json", {
                 "taskId": "task-identity", "attemptId": "attempt-identity", "generation": 1})
@@ -241,7 +242,7 @@ class ExecutionEndpointTests(unittest.TestCase):
             else:
                 self.assertIsNone(job_name)
                 transfer.assert_not_called()
-            self.assertEqual(json.loads((handle.execution_directory / "execution-start.json").read_text(encoding="utf-8")),
+            self.assertEqual(json.loads(native_path(handle.execution_directory / "execution-start.json").read_text(encoding="utf-8")),
                              {"claim": claim, "stateDir": str(state), "nonce": "n" * 64,
                               "jobName": job_name, "sessionRecordPath": None})
             marker = json.loads((state / "attempts/task-3/attempt-3/spawn.marker").read_text(encoding="utf-8"))
@@ -335,14 +336,14 @@ class ExecutionEndpointTests(unittest.TestCase):
             claim = {"task": {"taskId": "task-1", "spec": {"adapter": "command"}},
                      "attempt": {"taskId": "task-1", "attemptId": "attempt-1", "generation": 1}}
             execution = Execution(claim, state, "a" * 64, client=object())
-            execution.directory.mkdir(parents=True, mode=0o700)
+            native_path(execution.directory).mkdir(parents=True, mode=0o700)
             process_identity = self_identity_for_endpoint()
             execution.live.start(process_identity)
             try:
                 endpoint_file = execution.directory / "execution-live.json"
-                material = json.loads(endpoint_file.read_text(encoding="utf-8"))
+                material = json.loads(native_path(endpoint_file).read_text(encoding="utf-8"))
                 if os.name != "nt":
-                    self.assertEqual(endpoint_file.stat().st_mode & 0o777, 0o600)
+                    self.assertEqual(native_path(endpoint_file).stat().st_mode & 0o777, 0o600)
                 client = read_execution_endpoint(execution.directory, execution.live.identity,
                     state_dir=state, process_identity=process_identity)
                 self.assertIsNotNone(client)
@@ -391,7 +392,7 @@ class ExecutionEndpointTests(unittest.TestCase):
                         execution.directory, process_identity, state_dir=state,
                         stopped_evidence="alive")["status"], "unverified")
                     reap.assert_not_called()
-                    self.assertTrue((execution.directory / "execution-live.json").exists())
+                    self.assertTrue(native_path(execution.directory / "execution-live.json").exists())
                 with mock.patch.object(launch_protocol.cc, "reap_endpoint",
                                        return_value={"status": "reaped"}) as reap:
                     self.assertEqual(launch_protocol.cleanup_execution_endpoint(
@@ -402,7 +403,7 @@ class ExecutionEndpointTests(unittest.TestCase):
                         reap.assert_not_called()
                     else:
                         reap.assert_called_once()
-                    self.assertFalse((execution.directory / "execution-live.json").exists())
+                    self.assertFalse(native_path(execution.directory / "execution-live.json").exists())
             finally:
                 execution.live.finish()
 
@@ -412,7 +413,7 @@ class ExecutionEndpointTests(unittest.TestCase):
             claim = {"task": {"taskId": "task-shared", "spec": {"adapter": "command"}},
                      "attempt": {"taskId": "task-shared", "attemptId": "attempt-shared", "generation": 1}}
             execution = Execution(claim, state, "c" * 64, client=object())
-            execution.directory.mkdir(parents=True, mode=0o700)
+            native_path(execution.directory).mkdir(parents=True, mode=0o700)
             process_identity = self_identity_for_endpoint()
             execution.live.start(process_identity)
             clients = []
@@ -450,10 +451,10 @@ class ExecutionEndpointTests(unittest.TestCase):
                         raise BoardError("SERVICE_UNAVAILABLE", "private service is offline")
 
             execution = Execution(claim, state, "b" * 64, client=Client())
-            execution.directory.mkdir(parents=True, mode=0o700)
+            native_path(execution.directory).mkdir(parents=True, mode=0o700)
             process_identity = self_identity_for_endpoint()
             execution.live.start(process_identity)
-            self.assertTrue((execution.directory / "execution-live.json").exists())
+            self.assertTrue(native_path(execution.directory / "execution-live.json").exists())
             receipt = execution.receipt(claim, {"status": "ok", "shutdownConfirmed": True},
                                         execution.directory)
             with mock.patch.object(execution, "execute", return_value=receipt):
@@ -461,8 +462,8 @@ class ExecutionEndpointTests(unittest.TestCase):
                 thread.start()
                 try:
                     self.assertTrue(offline.wait(5))
-                    self.assertTrue((execution.directory / "execution-live.json").exists())
-                    self.assertTrue((execution.directory / "result-receipt.json").exists())
+                    self.assertTrue(native_path(execution.directory / "execution-live.json").exists())
+                    self.assertTrue(native_path(execution.directory / "result-receipt.json").exists())
                     client = read_execution_endpoint(execution.directory, execution.live.identity,
                         state_dir=state, process_identity=process_identity)
                     try:
@@ -470,12 +471,12 @@ class ExecutionEndpointTests(unittest.TestCase):
                         self.assertIsNotNone(client.connection_observation)
                     finally:
                         client.close()
-                    self.assertTrue((execution.directory / "execution-live.json").exists())
+                    self.assertTrue(native_path(execution.directory / "execution-live.json").exists())
                 finally:
                     online.set()
                     thread.join(10)
                     execution.live.finish()
             self.assertFalse(thread.is_alive())
-            self.assertFalse((execution.directory / "execution-live.json").exists())
-            self.assertFalse((execution.directory / "result-delivery.json").exists())
-            self.assertTrue((execution.directory / "result-receipt.json").exists())
+            self.assertFalse(native_path(execution.directory / "execution-live.json").exists())
+            self.assertFalse(native_path(execution.directory / "result-delivery.json").exists())
+            self.assertTrue(native_path(execution.directory / "result-receipt.json").exists())

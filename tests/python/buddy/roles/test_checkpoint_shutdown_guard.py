@@ -26,6 +26,7 @@ from hey_my_buddy.buddy.harnesses import run_contract as rc
 from hey_my_buddy.buddy.harnesses.run_contract import RunResult
 from hey_my_buddy.buddy.roles import turn_io
 from hey_my_buddy.buddy.roles.turn_io import private_json
+from hey_my_buddy.paths import native_path
 
 CHECKPOINT_STATUSES = ("completed", "incomplete")
 
@@ -77,7 +78,7 @@ class CheckpointOnlyResumableTests(ZcodeFixtureCase):
         fields["evidenceRefs"] = refs
         handle.result = RunResult.from_payload(fields)
         handle.turn_record = None
-        context.turn_output_file().unlink(missing_ok=True)
+        native_path(context.turn_output_file()).unlink(missing_ok=True)
         return fields
 
     def _rewrite(self, handle, fields):

@@ -132,9 +132,9 @@ class BridgeHarness:
 
     def records(self) -> list[dict]:
         path = Path(self.credentials["resultsPath"])
-        if not path.exists():
+        if not native_path(path).exists():
             return []
-        return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
+        return [json.loads(line) for line in native_path(path).read_text(encoding="utf-8").splitlines() if line.strip()]
 
     def close(self):
         self.bridge.close()
@@ -376,7 +376,7 @@ class BridgeQueueTests(unittest.TestCase):
              "questionSha256": digest, "askedAt": "t", **IDENTITY,
              "answer": {"text": "legacy", "bytes": 6, "truncated": False, "via": "x", "toolCallId": "c", "at": "t"}},
         ]
-        Path(self.harness.credentials["resultsPath"]).write_text(
+        native_path(Path(self.harness.credentials["resultsPath"])).write_text(
             "garbage line\n" + "".join(json.dumps(record) + "\n" for record in records), encoding="utf-8", newline="\n")
         restarted = make_inquiry_bridge(identity=IDENTITY,
                                   journal_path=self.harness.credentials["resultsPath"])
@@ -470,7 +470,7 @@ class BridgeQueueTests(unittest.TestCase):
                 bridge = harness.bridge
                 flaky_write.count = 0
                 if failure == "byte-cap":
-                    Path(harness.credentials["resultsPath"]).write_bytes(b"x" * MAX_JOURNAL_BYTES)
+                    native_path(Path(harness.credentials["resultsPath"])).write_bytes(b"x" * MAX_JOURNAL_BYTES)
                     asked = harness.owner_call("ask", inquiryId=f"q-{failure}", question="durable?")
                 else:
                     effect = OSError("disk gone") if failure == "raise" else flaky_write
@@ -757,12 +757,12 @@ class JournalBarrierTests(unittest.TestCase):
         with mock.patch("hey_my_buddy.buddy.harnesses.inquiry_bridge.os.write", side_effect=flaky_write):
             self.assertFalse(bridge._journal(record))
         path = Path(harness.credentials["resultsPath"])
-        self.assertEqual(path.read_bytes(), b"", "a failed append must leave no fragment behind")
+        self.assertEqual(native_path(path).read_bytes(), b"", "a failed append must leave no fragment behind")
         self.assertFalse(bridge._torn_line, "a clean rollback must not mark the journal torn")
         # After the fault clears the same record commits as one clean line that
         # the session tools can read back.
         self.assertTrue(bridge._journal(record))
-        lines = [line for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
+        lines = [line for line in native_path(path).read_text(encoding="utf-8").splitlines() if line.strip()]
         self.assertEqual([json.loads(line)["inquiryId"] for line in lines], ["q-rollback"])
 
     def test_a_crash_torn_tail_is_isolated_by_the_next_append_and_ignored_by_readers(self):

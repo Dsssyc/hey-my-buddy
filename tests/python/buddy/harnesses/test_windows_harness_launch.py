@@ -23,6 +23,7 @@ from hey_my_buddy.buddy.roles.run_observers import FastCorrection
 from hey_my_buddy.buddy.roles.structured_call import structured_prompt
 from hey_my_buddy.json_codec import canonical_json
 from hey_my_buddy.protocol.owned_process import owned_popen
+from hey_my_buddy.paths import native_path
 
 
 def _source_for(fixture: Path, harness: str, log: Path) -> str:
@@ -189,7 +190,7 @@ class HarnessLaunchChainTests(unittest.TestCase):
                                      observer=FastCorrection(zcode_cases.SCHEMA, prompt).observer,
                                      services=None, cancelled=lambda: False)
         self.assertEqual(result.end.status, "ok", repr(result) + "\n" + "\n".join(
-            Path(ref.location).read_text(encoding="utf-8") for ref in result.evidence_refs if ref.kind == "native-stderr"))
+            native_path(Path(ref.location)).read_text(encoding="utf-8") for ref in result.evidence_refs if ref.kind == "native-stderr"))
         self.assertTrue(result.completion_evidence.stream_end)
         self.assertEqual(result.stop_evidence.native.group_state, "gone")
 

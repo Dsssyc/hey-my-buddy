@@ -12,6 +12,7 @@ from hey_my_buddy.buddy.harnesses.run_contract import (RunResult, RunEnd, RunIde
 from hey_my_buddy.buddy.roles.run_execution import _base_result
 from hey_my_buddy.console import session_content
 from hey_my_buddy.protocol.session_content import SESSION_FORMAT, MessageChunk, TextContent
+from hey_my_buddy.paths import native_path
 
 
 class SessionContentTests(ConsoleTestCase, WorkflowTestCase):
@@ -29,8 +30,8 @@ class SessionContentTests(ConsoleTestCase, WorkflowTestCase):
         events = [self.event(attempt_id, f'消息 {i}') for i in range(count)]
         header = self.line(SESSION_FORMAT.model_dump(mode='json', by_alias=True, exclude_none=True))
         if record:
-            path.parent.mkdir(parents=True)
-            path.write_bytes(header + b''.join(self.line(event) for event in events))
+            native_path(path.parent).mkdir(parents=True)
+            native_path(path).write_bytes(header + b''.join(self.line(event) for event in events))
         _, browser = self.open_console(board)
         route = f'/api/tasks/{task_id}/attempts/{attempt_id}/session'
         return board, browser, route, path, events, len(header), run
@@ -382,8 +383,8 @@ class SessionContentTests(ConsoleTestCase, WorkflowTestCase):
     def test_session_bytes_are_separate_and_ordinary_storage_apply_retains_them(self):
         board, browser, route, path, events, _, run = self.fixture(count=2)
         payload = private_dirs.attempt_root(board.directory, 'codex', run['runId'], 'session-attempt') / 'other-evidence'
-        payload.parent.mkdir(parents=True)
-        payload.write_bytes(b'other')
+        native_path(payload.parent).mkdir(parents=True)
+        native_path(payload).write_bytes(b'other')
         with mock.patch.object(storage, 'process_inventory', return_value=([], [], True)), \
              mock.patch.object(storage, '_zcode_reasons', return_value=[]):
             plan = board.call('storage_plan', {})

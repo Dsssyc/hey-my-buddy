@@ -83,6 +83,7 @@ class DeletionFileTests(BoardTestCase):
 
 from blackboard.tasks import test_macro_task_deletion as engine_fixtures
 from blackboard.tasks import test_workflow as workflow_fixtures
+from hey_my_buddy.paths import native_path
 
 
 class DeletionFileRetryTests(workflow_fixtures.WorkflowTestCase):
@@ -96,12 +97,12 @@ class DeletionFileRetryTests(workflow_fixtures.WorkflowTestCase):
                                   **({'macro_task': 'Session deletion'} if macro else {}))
                 target = run.get('macroTaskId') or 'run:' + run['runId']
                 record = private_dirs.session_record_path(board.directory, target, 'attempt')
-                record.parent.mkdir(parents=True)
-                record.write_bytes(b'private session')
+                native_path(record.parent).mkdir(parents=True)
+                native_path(record).write_bytes(b'private session')
                 with patch.object(deletion, '_delete_workspaces', return_value=[]):
                     result = deletion.delete(board.store, target, 1)
                 self.assertEqual(result['state'], 'deleted')
-                self.assertFalse(record.parent.exists())
+                self.assertFalse(native_path(record.parent).exists())
                 self.assertEqual(deletion._delete_session_group(board.store, target), [])
                 with self.assertRaises(BoardError) as caught:
                     deletion.delete(board.store, target, 1)
@@ -126,7 +127,7 @@ class DeletionFileRetryTests(workflow_fixtures.WorkflowTestCase):
         board = self.board()
         run = self.closed(board,'private-interruption',macro_task='Private root interruption')
         root = private_dirs.micro_task_root(board.directory,'dsh',run['runId'])
-        root.mkdir(parents=True)
+        native_path(root).mkdir(parents=True)
         first,remaining = root/'first',root/'remaining'
         first.write_text('first private byte', encoding="utf-8", newline="\n")
         remaining.write_text('remaining private bytes', encoding="utf-8", newline="\n")
@@ -148,7 +149,7 @@ class DeletionFileRetryTests(workflow_fixtures.WorkflowTestCase):
         with patch.object(deletion,'_delete_workspaces',return_value=[]):
             completed = deletion.delete(board.store,run['macroTaskId'],1)
         self.assertEqual(completed['state'],'deleted')
-        self.assertFalse(root.exists())
+        self.assertFalse(native_path(root).exists())
         self.assertFalse(evidence.exists())
 
     def test_cli_partial_removal_retries_from_real_files(self):

@@ -14,6 +14,7 @@ from unittest import mock
 
 from hey_my_buddy.protocol.process_controller import launch_controller
 from hey_my_buddy.buddy.harnesses.controller import read_strict_result, stop_confirmed
+from hey_my_buddy.paths import native_path
 
 CONTROLLER = "hey_my_buddy.buddy.roles.run_controller"
 
@@ -57,7 +58,7 @@ class DiscoverySignalTests(unittest.TestCase):
             try:
                 deadline = time.monotonic() + 10
                 while not ready.exists():
-                    self.assertIsNone(handle.process.poll(), Path(logs["stderr"]).read_text())
+                    self.assertIsNone(handle.process.poll(), native_path(Path(logs["stderr"])).read_text())
                     self.assertLess(time.monotonic(), deadline)
                     time.sleep(0.01)
                 stopped, escalated = handle.terminate(grace_seconds=8)

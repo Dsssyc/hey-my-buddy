@@ -17,6 +17,7 @@ from hey_my_buddy.buddy.harnesses.run_contract import (
 from hey_my_buddy.buddy.harnesses.zcode import native_run
 from hey_my_buddy.buddy.harnesses.zcode.protocol import NativeError
 from hey_my_buddy.errors import BoardError
+from hey_my_buddy.paths import native_path
 
 
 class NoToolShapeTests(unittest.TestCase):
@@ -180,7 +181,7 @@ class BoundaryAndDrainTests(unittest.TestCase):
                                              stderr_path=invocation / "missing-stderr.log",
                                              state=native_run._RunState(), facts=facts, record=None)
             ref = next(item for item in refs if item.kind == "native-run-facts")
-            retained = json.loads(Path(ref.location).read_text(encoding="utf-8"))["unknownEvents"]
+            retained = json.loads(native_path(Path(ref.location)).read_text(encoding="utf-8"))["unknownEvents"]
         shared = native_run._shared_unknown_events(facts)
         self.assertEqual(len(retained["countsByType"]), MAX_UNKNOWN_EVENT_TYPES)
         self.assertEqual(retained["countsByType"], dict(shared.unknown_events.counts_by_type))
@@ -249,7 +250,7 @@ class NativeShapeRoundTests(NativeRunCase):
                                 services=None, cancelled=lambda: False)
         self.assertEqual(result.end.status, "ok", result.end.message)
         ref = next(ref for ref in result.evidence_refs if ref.kind == "native-run-facts")
-        retained = json.loads(Path(ref.location).read_text(encoding="utf-8"))["unknownEvents"]["countsByType"]
+        retained = json.loads(native_path(Path(ref.location)).read_text(encoding="utf-8"))["unknownEvents"]["countsByType"]
         self.assertTrue(any(f["unknownEvents"]["total"] for f in seen))
         # The shared outlet carries the same counts the evidence file retains.
         shared = result.native_evidence.unknown_events

@@ -9,6 +9,7 @@ from hey_my_buddy.buddy.harnesses.claude.session_content import ClaudeSessionPro
 from hey_my_buddy.buddy.harnesses.session_record import SessionRecord
 from buddy.harnesses.session_record_support import notifications
 from buddy.harnesses.claude.test_native_run import NativeRunCase, READ_SCHEMA
+from hey_my_buddy.paths import native_path
 
 
 class MemoryRecord:
@@ -235,7 +236,7 @@ class RunRecordTests(NativeRunCase):
                 request = self.request()
                 result = self.execute(request)
                 self.assertEqual(result.end.status, "error")
-                self.assertFalse(self.path(request).exists())
+                self.assertFalse(native_path(self.path(request)).exists())
 
     def test_write_failure_keeps_observed_frame_identity_and_actual_stop_evidence(self):
         request = self.request()

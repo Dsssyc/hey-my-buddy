@@ -219,8 +219,8 @@ class LifecycleTestCase(RealWorkspaceTestCase):
             sealed["snapshotSha256"] = workspace_module._sha(workspace_module._json(sealed["snapshot"]))
             for record_name in ("pending.json", "output.json"):
                 record_path = Path(sealed["diffPath"]).with_name(record_name)
-                record_path.write_bytes(workspace_module._json(sealed))
-                historical_bytes[record_path] = record_path.read_bytes()
+                native_path(record_path).write_bytes(workspace_module._json(sealed))
+                historical_bytes[record_path] = native_path(record_path).read_bytes()
         # Exercise both the sealed first-turn patch and the whole-task Git diff.
         for base in (manifest["inputCommit"], original):
             cumulative = workspace_module.cumulative_patch(manifest, sealed, base)
@@ -239,7 +239,7 @@ class LifecycleTestCase(RealWorkspaceTestCase):
         execute_result = board.service.execution_result
 
         def record_receipt_size(frame):
-            receipt_sizes.append(Path(json.loads(frame)["receipt"]["path"]).stat().st_size)
+            receipt_sizes.append(native_path(Path(json.loads(frame)["receipt"]["path"])).stat().st_size)
             return execute_result(frame)
 
         with mock.patch.object(board.service, "execution_result", side_effect=record_receipt_size) as called:
@@ -284,7 +284,7 @@ class LifecycleTestCase(RealWorkspaceTestCase):
         self.assertTrue(self.reclaim(board, self.view(board, run_id))["removed"])
         self.assertFalse(checkout.exists())
         for path, original_bytes in historical_bytes.items():
-            self.assertEqual(path.read_bytes(), original_bytes)
+            self.assertEqual(native_path(path).read_bytes(), original_bytes)
 
     # -- cleanup -------------------------------------------------------------
     def accepted_worktree(self, *, request_id="cleanup-1"):
@@ -557,8 +557,8 @@ class LifecycleTestCase(RealWorkspaceTestCase):
                 (run_id,),
             ).fetchone())
         self.assertEqual(before["state"], "applying")
-        contents = {path.relative_to(checkout): path.read_bytes()
-                    for path in checkout.rglob("*") if path.is_file()}
+        contents = {path.relative_to(native_path(checkout)): path.read_bytes()
+                    for path in native_path(checkout).rglob("*") if path.is_file()}
         with mock.patch.object(workspace_module, "cleanup_remove", side_effect=AssertionError("refused deletion")):
             with self.assertRaises(BoardError) as refused:
                 self.reclaim(board, self.view(board, run_id))
@@ -567,8 +567,8 @@ class LifecycleTestCase(RealWorkspaceTestCase):
         self.assertEqual(refused.exception.details["reclaim"]["path"], str(checkout))
         if paths is not None:
             self.assertEqual(refused.exception.details["reclaim"]["unsealedPaths"], paths)
-        after_contents = {path.relative_to(checkout): path.read_bytes()
-                          for path in checkout.rglob("*") if path.is_file()}
+        after_contents = {path.relative_to(native_path(checkout)): path.read_bytes()
+                          for path in native_path(checkout).rglob("*") if path.is_file()}
         self.assertEqual({path: after_contents[path] for path in contents}, contents)
         self.assertEqual(set(after_contents) - set(contents), {Path(path) for path in restored})
         with board.store.db.read() as connection:

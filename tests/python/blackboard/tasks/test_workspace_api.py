@@ -20,6 +20,7 @@ from hey_my_buddy.console.server import CONSOLE_OPERATIONS
 from hey_my_buddy.protocol.contracts import BuddyControl, CONTROL_NAME
 from hey_my_buddy.errors import BoardError
 from hey_my_buddy.blackboard.service.service import CONTROL_OPERATIONS
+from hey_my_buddy.paths import native_path
 
 
 OPERATIONS = {
@@ -174,5 +175,5 @@ class WorkspaceApiTests(RealWorkspaceTestCase):
         self.assertTrue(applied["removed"])
         self.assertEqual(applied["path"], manifest["checkoutRoot"])
         self.assertFalse(checkout.exists())
-        self.assertTrue(Path(artifact["diffPath"]).exists())
+        self.assertTrue(native_path(Path(artifact["diffPath"])).exists())
         self.assertNotIn(submitted["control"]["controlToken"], json.dumps(applied))

@@ -16,6 +16,7 @@ from hey_my_buddy.cli import checks
 from hey_my_buddy import process_observation as observation
 from hey_my_buddy.errors import BoardError
 from process_observation_fakes import process, processes
+from hey_my_buddy.paths import native_path
 
 
 class FocusedChecksTests(unittest.TestCase):
@@ -364,7 +365,7 @@ class WindowsSweepTests(unittest.TestCase):
             original = b'{"original":"shutdown unknown"}\n'
             evidence = root / checks.EVIDENCE_FILE_NAME
             evidence.write_bytes(original)
-            before = {path.relative_to(root): path.read_bytes() for path in root.rglob("*") if path.is_file()}
+            before = {path.relative_to(native_path(root)): path.read_bytes() for path in native_path(root).rglob("*") if path.is_file()}
             errors = io.StringIO()
             with (patch.object(checks, "os", wraps=os) as windows,
                   patch.object(checks, "sweep_private_roots") as sweep,
@@ -379,7 +380,7 @@ class WindowsSweepTests(unittest.TestCase):
             self.assertIn("remove roots manually", errors.getvalue())
             sweep.assert_not_called()
             self.assertTrue(root.exists())
-            after = {path.relative_to(root): path.read_bytes() for path in root.rglob("*") if path.is_file()}
+            after = {path.relative_to(native_path(root)): path.read_bytes() for path in native_path(root).rglob("*") if path.is_file()}
             self.assertEqual(after, before)
             self.assertEqual(evidence.read_bytes(), original)
             checks._windows_suite_children.pop(root, None)

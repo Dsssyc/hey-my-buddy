@@ -300,7 +300,7 @@ class FastSeamTests(NativeRunCase):
         self.assertEqual(message["text"], "the final answer")
         self.assertFalse(message["truncated"])
         ref = next(ref for ref in result.evidence_refs if ref.kind == "dsh-session-record")
-        facts = json.loads(Path(ref.location).read_text(encoding="utf-8"))
+        facts = json.loads(native_path(Path(ref.location)).read_text(encoding="utf-8"))
         self.assertEqual(facts["model"], {"provider": "fake", "model": "m1"})
         self.assertEqual(len(facts["steps"]), 2)
         self.assertEqual(facts["sessions"], [result.native_identity.session_id])
@@ -323,8 +323,8 @@ class FastSeamTests(NativeRunCase):
         self.assertTrue(failure["observedAt"])
         self.assertEqual(set(failure), {"code", "nativeCode", "source", "observedAt",
                                         "resetsAt", "rejectionPhase"})
-        retained = json.loads(Path(next(ref for ref in result.evidence_refs
-                                        if ref.kind == "dsh-session-record").location).read_text(encoding="utf-8"))
+        retained = json.loads(native_path(Path(next(ref for ref in result.evidence_refs
+                                        if ref.kind == "dsh-session-record").location)).read_text(encoding="utf-8"))
         self.assertNotIn("provider wording", json.dumps(retained))
 
     def test_quota_phase_distinguishes_prompt_only_from_a_truncated_record(self):
@@ -374,8 +374,8 @@ class FastSeamTests(NativeRunCase):
         usage = result.usage.value
         self.assertEqual(usage["completeness"], "partial", "a bound stop is never complete")
         self.assertEqual(usage["inputTokens"], 3150)
-        facts = json.loads(Path(next(ref for ref in result.evidence_refs
-                                     if ref.kind == "dsh-session-record").location).read_text(encoding="utf-8"))
+        facts = json.loads(native_path(Path(next(ref for ref in result.evidence_refs
+                                     if ref.kind == "dsh-session-record").location)).read_text(encoding="utf-8"))
         self.assertTrue(facts["truncated"])
 
     def test_an_uncompressed_record_rolls_out_too(self):
@@ -758,7 +758,7 @@ class MountTests(NativeRunCase):
         expected_env = ([{"name": "PYTHONPATH", "value": os.environ["PYTHONPATH"]}]
                         if os.environ.get("PYTHONPATH") else [])
         self.assertEqual(server["env"], expected_env)
-        bridge = json.loads(Path(mount.bridge_config_path).read_text(encoding="utf-8"))
+        bridge = json.loads(native_path(Path(mount.bridge_config_path)).read_text(encoding="utf-8"))
         self.assertEqual(bridge["identity"]["attemptId"], request.identity.attempt_id)
         self.assertEqual(bridge["inputSha256"], request.identity.input_sha256)
         self.assertTrue(bridge["key"])
@@ -894,7 +894,7 @@ class WorkerSeamTests(NativeRunCase):
         # The signed receipt the finish call received is the retained
         # provenance's own fact, read back through the checked reference.
         ref = next(ref for ref in result.evidence_refs if ref.kind == "turn-provenance")
-        raw = Path(ref.location).read_bytes()
+        raw = native_path(Path(ref.location)).read_bytes()
         self.assertEqual(len(raw), ref.size_bytes)
         self.assertEqual(hashlib.sha256(raw).hexdigest(), ref.sha256)
         provenance = json.loads(raw)
@@ -939,7 +939,7 @@ class WorkerSeamTests(NativeRunCase):
                          "an unreadable end writes no accepted-turn provenance")
         self.assertTrue(self.wait_for(lambda: any(
             entry.get("event") == "session-closed" for entry in self.agent_log())))
-        self.assertFalse(any(self.root.glob("*.json")),
+        self.assertFalse(any(native_path(self.root).glob("*.json")),
                          "an unreadable end establishes no micro task binding")
 
     def test_a_worker_turn_reports_the_record_usage_and_mirrors_its_stderr(self):
@@ -961,10 +961,10 @@ class WorkerSeamTests(NativeRunCase):
         self.assertEqual(usage["inputTokens"], 3150)
         self.assertEqual(result.last_assistant_message.value["text"], "the final answer")
         mirror = Path(bound.services.native_stderr)
-        self.assertTrue(mirror.is_file())
-        self.assertIn(note, mirror.read_text(encoding="utf-8"))
+        self.assertTrue(native_path(mirror).is_file())
+        self.assertIn(note, native_path(mirror).read_text(encoding="utf-8"))
         ref = next(ref for ref in result.evidence_refs if ref.kind == "dsh-session-record")
-        facts = json.loads(Path(ref.location).read_text(encoding="utf-8"))
+        facts = json.loads(native_path(Path(ref.location)).read_text(encoding="utf-8"))
         self.assertEqual(facts["model"], {"provider": "fake", "model": "m1"})
 
     def test_a_refused_upgrade_request_becomes_attention_not_completed(self):
@@ -975,7 +975,7 @@ class WorkerSeamTests(NativeRunCase):
         self.assertEqual(result.end.status, "ok", result.end.message)
         self.assertEqual(result.value.parsed.value["disposition"], "attention",
                          "the role's own completion rule refused completed while the upgrade was outstanding")
-        attention = json.loads(Path(bound.services.mount.bridge["attentionPath"]).read_text(encoding="utf-8"))
+        attention = json.loads(native_path(Path(bound.services.mount.bridge["attentionPath"])).read_text(encoding="utf-8"))
         self.assertEqual(len(attention["requests"]), 1)
         self.assertIn("reject_once", attention["requests"][0]["basis"],
                       "the reject-only policy selects the reject option")
@@ -985,7 +985,7 @@ class WorkerSeamTests(NativeRunCase):
         # remain inspectable without a bounded in-memory array.
         refs = [ref for ref in result.evidence_refs if ref.kind == "acp-connection-facts"]
         self.assertEqual(len(refs), 1)
-        decisions = [json.loads(line) for line in Path(refs[0].location).read_text(encoding="utf-8").splitlines()
+        decisions = [json.loads(line) for line in native_path(Path(refs[0].location)).read_text(encoding="utf-8").splitlines()
                      if json.loads(line)["recordType"] == "permission-decision"]
         self.assertEqual(len(decisions), 1)
         self.assertEqual(decisions[0]["outcome"].get("optionId"), "opt-reject",
@@ -1000,8 +1000,8 @@ class WorkerSeamTests(NativeRunCase):
         # The natively failed finish stays a task-tool fact; only the verified
         # retry — the call whose receipt the provenance names — is the delivery
         # evidence.
-        provenance = json.loads(Path(next(ref.location for ref in result.evidence_refs
-                                          if ref.kind == "turn-provenance")).read_bytes())
+        provenance = json.loads(native_path(Path(next(ref.location for ref in result.evidence_refs
+                                          if ref.kind == "turn-provenance"))).read_bytes())
         self.assertEqual(provenance["toolCallId"], "call_finish_2")
         self.assertEqual(result.value.parsed.value["disposition"], "completed")
         package = result.tool_evidence.value
@@ -1071,7 +1071,7 @@ class WorkerSeamTests(NativeRunCase):
         self.assertEqual(result.activity.value["counts"], seen[-1]["counts"])
         self.assertEqual(result.activity.value["phase"], "finishing")
         self.assertEqual(result.value.parsed.value["disposition"], "completed")
-        self.assertFalse(any(self.base.rglob("activity.json")))
+        self.assertFalse(any(native_path(self.base).rglob("activity.json")))
 
     def test_no_live_endpoint_keeps_the_native_activity_final_fact(self):
         request, bound, mount = self.worker_request()
@@ -1083,7 +1083,7 @@ class WorkerSeamTests(NativeRunCase):
         self.assertEqual(result.activity.value["phase"], "finishing")
         self.assertEqual(result.activity.value["counts"]["modelTurns"], 1)
         self.assertGreaterEqual(result.activity.value["counts"]["toolCalls"], 2)
-        self.assertFalse(any(self.base.rglob("activity.json")))
+        self.assertFalse(any(native_path(self.base).rglob("activity.json")))
 
     def test_a_refused_activity_callback_keeps_transport_unknown_and_native_facts(self):
         from hey_my_buddy.buddy.harnesses.c_two_live import CTwoLiveEndpoint
@@ -1124,7 +1124,7 @@ class ContinuationTests(NativeRunCase):
         self.assertTrue(result.continuation.resumable)
         binding = self.root / (hashlib.sha256(
             result.native_identity.session_id.encode()).hexdigest() + ".json")
-        self.assertEqual(json.loads(binding.read_text(encoding="utf-8")),
+        self.assertEqual(json.loads(native_path(binding).read_text(encoding="utf-8")),
                          {"taskId": request.identity.task_id,
                           "sessionId": result.native_identity.session_id,
                           "cwd": request.cwd,
@@ -1132,7 +1132,7 @@ class ContinuationTests(NativeRunCase):
         self.assertTrue(native_run.session_facts(self.root,
                                                  result.native_identity.session_id)["bindingPresent"])
         reference = next(ref for ref in result.evidence_refs if ref.kind == "turn-provenance")
-        provenance = json.loads(Path(reference.location).read_text(encoding="utf-8"))
+        provenance = json.loads(native_path(Path(reference.location)).read_text(encoding="utf-8"))
         record = {"version": 1, "resumeMode": "reconstructed-new-session",
                   "previousSessionId": "previous-native-session",
                   "sessionId": result.native_identity.session_id, "provenance": provenance}
@@ -1164,7 +1164,7 @@ class ContinuationTests(NativeRunCase):
         self.assertEqual(result.end.reason_code, "missing-finish")
         self.assertIsNone(result.continuation,
                           "a turn without its verified finish provenance is not resumable")
-        self.assertFalse(any(self.root.glob("*.json")),
+        self.assertFalse(any(native_path(self.root).glob("*.json")),
                          "no micro task binding may exist for an incomplete turn")
 
     def test_a_confirmed_turn_without_group_stop_evidence_saves_no_binding(self):
@@ -1180,7 +1180,7 @@ class ContinuationTests(NativeRunCase):
         self.assertEqual(result.end.reason_code, "native-shutdown-failed")
         self.assertIsNone(result.continuation,
                           "without the really-gone group stop the session is not resumable")
-        self.assertFalse(any(self.root.glob("*.json")))
+        self.assertFalse(any(native_path(self.root).glob("*.json")))
 
 
 class RoleSeamFunctionTests(unittest.TestCase):
@@ -1241,7 +1241,7 @@ class RoleSeamFunctionTests(unittest.TestCase):
             # The binding file's real presence is the fact, keyed by the same
             # sha256 name the run writes after a complete verified turn.
             binding = root / (hashlib.sha256(b"session-1").hexdigest() + ".json")
-            binding.write_text('{"taskId": "task", "sessionId": "session-1"}', encoding="utf-8", newline="\n")
+            native_path(binding).write_text('{"taskId": "task", "sessionId": "session-1"}', encoding="utf-8", newline="\n")
             self.assertTrue(native_run.session_facts(root, "session-1")["bindingPresent"])
             absent = native_run.session_facts(root, None)
             self.assertFalse(absent["captured"])
@@ -1361,8 +1361,8 @@ class InquirySeamTests(NativeRunCase):
         self.assertEqual(states, ["queued", "delivered", "answered"])
         answered = records[-1]
         self.assertEqual(answered["answer"]["text"], "the root's bounded answer to the Host question")
-        report = json.loads(Path(next(ref for ref in result.evidence_refs
-                                      if ref.kind == "inquiry-report").location).read_text(encoding="utf-8"))
+        report = json.loads(native_path(Path(next(ref for ref in result.evidence_refs
+                                      if ref.kind == "inquiry-report").location)).read_text(encoding="utf-8"))
         self.assertEqual(report["answered"], 1)
         self.assertEqual(report["requested"], 1)
         self.assertEqual(report["deliveryMode"], "cooperative-checkpoint")
@@ -1370,7 +1370,7 @@ class InquirySeamTests(NativeRunCase):
         self.assertIn("attention-report",
                       [ref.kind for ref in result.evidence_refs])
         reference = next(ref for ref in result.evidence_refs if ref.kind == "turn-provenance")
-        provenance = json.loads(Path(reference.location).read_text(encoding="utf-8"))
+        provenance = json.loads(native_path(Path(reference.location)).read_text(encoding="utf-8"))
         self.assertEqual(provenance["nativeSessionId"], result.native_identity.session_id)
         # The refused completed finish was corrected in the same native turn; the
         # provenance names the finish call whose receipt was actually accepted.
@@ -1394,8 +1394,8 @@ class InquirySeamTests(NativeRunCase):
         self.assertEqual(replies[0].status, "queued")
         self.assertEqual(result.value.parsed.value["disposition"], "attention",
                          "a completed outcome is refused while the delivered question is unanswered")
-        report = json.loads(Path(next(ref for ref in result.evidence_refs
-                                      if ref.kind == "inquiry-report").location).read_text(encoding="utf-8"))
+        report = json.loads(native_path(Path(next(ref for ref in result.evidence_refs
+                                      if ref.kind == "inquiry-report").location)).read_text(encoding="utf-8"))
         self.assertEqual(report["refused"], 1,
                          "settlement terminalized the delivered-but-unanswered question")
         self.assertEqual(report["answered"], 0)
@@ -1411,7 +1411,7 @@ class InquirySeamTests(NativeRunCase):
                    "generation": 1, "turnId": "turn-1", "inquiryId": "foreign-1",
                    "state": "queued", "question": "a foreign attempt's question",
                    "questionSha256": "b" * 64, "askedAt": "2026-10-07T00:00:00Z"}
-        journal.write_text(json.dumps(foreign) + "\n", encoding="utf-8", newline="\n")
+        native_path(journal).write_text(json.dumps(foreign) + "\n", encoding="utf-8", newline="\n")
         replies: list = []
         asking = threading.Thread(target=lambda: replies.append(self.ask_when_ready(channel)))
         asking.start()
@@ -1425,8 +1425,8 @@ class InquirySeamTests(NativeRunCase):
         self.assertEqual([record.get("inquiryId") for record in records],
                          ["foreign-1", "inq-1", "inq-1", "inq-1"],
                          "the foreign record is untouched; only this attempt's question flows")
-        report = json.loads(Path(next(ref for ref in result.evidence_refs
-                                      if ref.kind == "inquiry-report").location).read_text(encoding="utf-8"))
+        report = json.loads(native_path(Path(next(ref for ref in result.evidence_refs
+                                      if ref.kind == "inquiry-report").location)).read_text(encoding="utf-8"))
         self.assertEqual(report["journalEntries"], 1, "only the bound question is counted")
 
     def test_a_forged_checkpoint_receipt_fails_the_turn(self):
@@ -1593,8 +1593,8 @@ class NativeConfigurationTests(NativeRunCase):
                     self.assertEqual({path: path.read_bytes() for path in materials}, before)
         self.assertFalse((source / "sessions").exists(), "native records remain private")
         self.assertFalse((source / "storages").exists(), "projection cache stays with private session storage")
-        self.assertTrue(list((self.root / "storages/session_projcache/sessions").glob("*.json")))
-        self.assertTrue(list((self.root / "dsh-home/storages/session_projcache/sessions").glob("*.json")))
+        self.assertTrue(list(native_path(self.root / "storages/session_projcache/sessions").glob("*.json")))
+        self.assertTrue(list(native_path(self.root / "dsh-home/storages/session_projcache/sessions").glob("*.json")))
         self.assertFalse((self.root / "dsh-home" / "profiles").exists())
 
     def test_an_unset_dsh_home_uses_the_inherited_home_without_a_private_config(self):

@@ -26,6 +26,7 @@ from hey_my_buddy.buddy.roles.structured_call import collect
 from hey_my_buddy.buddy.harnesses.zcode.protocol import NativeError
 from hey_my_buddy.buddy.harnesses.zcode.tool_evidence import ZcodeToolFacts
 from hey_my_buddy.json_codec import canonical_json
+from hey_my_buddy.paths import native_path
 
 
 SCHEMA = {"type": "object", "properties": {"choice": {"type": "string", "enum": ["a"]}},
@@ -606,7 +607,7 @@ class FakeAppServerTests(unittest.TestCase):
         self.assertIsNotNone(handle.wait(timeout + 8))
         outcome = collect(handle)
         if outcome.result.get("code") == "invalid-native-result":
-            self.fail(f"controller emitted no result: {Path(handle.log_paths['stderr']).read_text(encoding="utf-8")}")
+            self.fail(f"controller emitted no result: {native_path(Path(handle.log_paths['stderr'])).read_text(encoding="utf-8")}")
         return outcome
 
 

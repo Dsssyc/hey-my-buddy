@@ -226,7 +226,7 @@ class CodexAdapterTests(unittest.TestCase):
         self.assertEqual(outcome.status, 'failed', outcome.to_report())
         self.assertIs(outcome.result['modelStarted'], False)
         self.assertTrue(outcome.shutdown_confirmed)
-        self.assertFalse(list(Path(context.environment['HMB_STATE_DIR']).rglob('codex-home')))
+        self.assertFalse(list(native_path(Path(context.environment['HMB_STATE_DIR'])).rglob('codex-home')))
         self.assertEqual((self.home / 'auth.json').read_text(encoding="utf-8"), 'source login')
 
     def test_worker_inherits_native_home_and_preserves_user_configuration(self):
@@ -245,7 +245,7 @@ class CodexAdapterTests(unittest.TestCase):
         self.assertIsNone(thread['sqliteHome'])
         self.assertEqual(thread['start']['modelProvider'], 'fixture-provider')
         self.assertNotIn('ephemeral', thread['start'])
-        self.assertFalse(list(Path(self.environment['HMB_STATE_DIR']).rglob('codex-home')))
+        self.assertFalse(list(native_path(Path(self.environment['HMB_STATE_DIR'])).rglob('codex-home')))
         self.assertEqual(auth.read_text(encoding="utf-8"), 'fixture login')
         self.assertFalse(auth.is_symlink())
         self.assertEqual(config.read_text(encoding="utf-8"), 'model_provider = "fixture-provider"\n[features]\napps = true\n')
@@ -568,7 +568,7 @@ class CodexAdapterTests(unittest.TestCase):
         thread = state["threads"][result.result["sessionId"]]
         self.assertEqual(thread["codexHome"], str(account_home))
         self.assertEqual(thread["home"], context.environment["HOME"])
-        self.assertFalse(list(Path(context.environment["HMB_STATE_DIR"]).rglob("codex-home")))
+        self.assertFalse(list(native_path(Path(context.environment["HMB_STATE_DIR"])).rglob("codex-home")))
         self.assertEqual(source_auth.read_text(encoding="utf-8"), 'private fixture auth')
 
     def test_read_only_budget_interrupts_the_native_turn_and_keeps_unknown_read_bytes(self):

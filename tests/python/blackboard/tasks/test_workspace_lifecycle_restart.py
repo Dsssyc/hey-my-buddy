@@ -16,6 +16,7 @@ from hey_my_buddy.blackboard.tasks import workspace as workspace_module
 from hey_my_buddy.buddy.harnesses.base import ExecutionContext
 from hey_my_buddy.buddy.roles import router_input, turn_io
 from hey_my_buddy.errors import BoardError
+from hey_my_buddy.paths import native_path
 
 from blackboard.tasks.workspace_lifecycle_case import LifecycleTestCase, git
 
@@ -78,7 +79,7 @@ class RestartLifecycleTests(LifecycleTestCase):
         self.assertFalse(checkout.exists())
         self.assertEqual(self.reclaim(board, self.view(board, run_id))["alreadyRemoved"], removed["alreadyRemoved"])
         for path, raw in initial_files.items():
-            self.assertEqual((self.directory / path).read_bytes(), raw, path)
+            self.assertEqual(native_path(self.directory / path).read_bytes(), raw, path)
         with board.store.db.read() as connection:
             saved = connection.execute("SELECT t.input_json,json_extract(a.result_json,'$.result.turn.inputSha256')"
                                        " AS input_sha256 FROM workflow_turns t JOIN attempts a USING(attempt_id)"
@@ -126,12 +127,12 @@ class RestartLifecycleTests(LifecycleTestCase):
         self.assertEqual(removed["plan"]["path"], original["checkoutRoot"])
         self.assertEqual(set(removed["plan"]["result"]), {"alreadyRemoved"})
         self.assertFalse(checkout.exists())
-        self.assertTrue(Path(target["path"]).exists())
+        self.assertTrue(native_path(Path(target["path"])).exists())
         target_view = board.call("task_get", {"runId": target_run["runId"]})["task"]
         self.assertEqual(target_view["lineage"]["project"]["id"],
                          workspace_module.inspect(str(target["path"]))["repositoryId"])
         for path, raw in files.items():
-            self.assertEqual((self.directory / path).read_bytes(), raw, path)
+            self.assertEqual(native_path(self.directory / path).read_bytes(), raw, path)
 
     def test_restart_cannot_remove_a_copied_worktree_git_directory(self):
         board, submitted, original, checkout, _artifact, _view = self.accepted_worktree(
@@ -140,10 +141,10 @@ class RestartLifecycleTests(LifecycleTestCase):
         actual = workspace_module.inspect(str(checkout))
         git_directory = Path(actual["gitDir"])
         retained = self.directory / "retained-allocation-git-directory"
-        git_directory.rename(retained)
-        shutil.copytree(retained, git_directory)
-        self.assertNotEqual(git_directory.stat().st_ino, retained.stat().st_ino)
-        self.assertEqual((git_directory / "HEAD").read_bytes(), (retained / "HEAD").read_bytes())
+        native_path(git_directory).rename(native_path(retained))
+        shutil.copytree(native_path(retained), native_path(git_directory))
+        self.assertNotEqual(native_path(git_directory).stat().st_ino, native_path(retained).stat().st_ino)
+        self.assertEqual(native_path(git_directory / "HEAD").read_bytes(), native_path(retained / "HEAD").read_bytes())
         self.assertEqual(git(checkout, "rev-parse", original["snapshot"]["inputRef"]).strip(), original["inputCommit"])
         with self.assertRaises(BoardError):
             workspace_module.verify(original, require_unchanged=False, state_dir=self.directory)
@@ -151,7 +152,7 @@ class RestartLifecycleTests(LifecycleTestCase):
             workspace_module.cleanup_remove(self.directory, original)
         self.assertEqual(unsafe.exception.code, "WORKSPACE_CHANGED")
         self.assertTrue(checkout.exists())
-        self.assertTrue(git_directory.exists())
+        self.assertTrue(native_path(git_directory).exists())
         self.assertTrue(retained.exists())
         self.assertNotEqual((self.view(board, submitted["runId"])["cleanup"] or {}).get("state"), "applied")
 
@@ -182,7 +183,7 @@ class RestartLifecycleTests(LifecycleTestCase):
         self.assertEqual(current["baseCommit"], resolved["outputCommit"])
         self.assertEqual(current["checkoutId"], workspace_module.inspect(current["path"])["checkoutId"])
         for path, raw in files.items():
-            self.assertEqual((self.directory / path).read_bytes(), raw, path)
+            self.assertEqual(native_path(self.directory / path).read_bytes(), raw, path)
 
     def test_restart_abandon_returns_input_and_preserves_the_failed_site(self):
         flow = self.helper_scope_failure(request_id="restart-abandon")
@@ -199,7 +200,7 @@ class RestartLifecycleTests(LifecycleTestCase):
         })
         self.assertEqual(abandoned["resolutionState"], "abandoned")
         self.assertEqual(abandoned["artifact"]["kind"], "abandoned-site")
-        self.assertIn("outside the helper scope", Path(abandoned["diffPath"]).read_text(encoding="utf-8"))
+        self.assertIn("outside the helper scope", native_path(Path(abandoned["diffPath"])).read_text(encoding="utf-8"))
         self.assertEqual((flow["helperCheckout"] / "src" / "feature.py").read_text(encoding="utf-8"), "value = 1\n")
         root = self.view(board, root_id)
         board.call("workflow_continue", {
@@ -211,7 +212,7 @@ class RestartLifecycleTests(LifecycleTestCase):
         current = resumed["claim"]["turn"]["input"]["executionWorkspace"]
         self.assertEqual(current, flow["helperManifest"])
         for path, raw in files.items():
-            self.assertEqual((self.directory / path).read_bytes(), raw, path)
+            self.assertEqual(native_path(self.directory / path).read_bytes(), raw, path)
 
 
 if __name__ == "__main__":

@@ -82,8 +82,8 @@ class CleanupLifecycleTests(LifecycleTestCase):
                     tracked.write_text('dirty! output\n', encoding="utf-8", newline="\n")
                     if preserve_stat:
                         os.utime(tracked, ns=(facts.st_atime_ns, facts.st_mtime_ns))
-                    retained = {path.relative_to(checkout): path.read_bytes()
-                                for path in checkout.rglob('*') if path.is_file()}
+                    retained = {path.relative_to(native_path(checkout)): path.read_bytes()
+                                for path in native_path(checkout).rglob('*') if path.is_file()}
                     refs = git(self.repo, 'for-each-ref', '--format=%(refname) %(objectname)', 'refs/hey-my-buddy/')
                     result = board.call('storage_apply', {
                         'planId': planned['planId'], 'commandId': f'storage-dirty-{preserve_stat}', 'confirm': True})
@@ -91,8 +91,8 @@ class CleanupLifecycleTests(LifecycleTestCase):
                 self.assertEqual(skipped['reasons'], ['unsealed-changes'])
                 self.assertFalse(any(row['path'] == str(checkout) for row in result['removed']))
                 self.assertTrue(checkout.is_dir())
-                self.assertEqual({path.relative_to(checkout): path.read_bytes()
-                                  for path in checkout.rglob('*') if path.is_file()}, retained)
+                self.assertEqual({path.relative_to(native_path(checkout)): path.read_bytes()
+                                  for path in native_path(checkout).rglob('*') if path.is_file()}, retained)
                 self.assertEqual(git(self.repo, 'for-each-ref', '--format=%(refname) %(objectname)', 'refs/hey-my-buddy/'), refs)
 
     def test_cleanup_removes_only_the_registered_worktree_and_is_idempotent(self):
@@ -108,7 +108,7 @@ class CleanupLifecycleTests(LifecycleTestCase):
         # Only the checkout was removed: manifests, patches and Git refs stay readable.
         workspace_dir = Path(self.directory) / "workspaces" / manifest["workspaceId"]
         self.assertTrue((workspace_dir / "manifest.json").exists())
-        self.assertTrue(Path(artifact["diffPath"]).exists())
+        self.assertTrue(native_path(Path(artifact["diffPath"])).exists())
         refs = git(self.repo, "for-each-ref", "--format=%(refname)", f"refs/hey-my-buddy/workspaces/{manifest['workspaceId']}/")
         self.assertIn("outputs", refs)
         still = self.view(board, run_id)
@@ -487,7 +487,7 @@ class CleanupLifecycleTests(LifecycleTestCase):
         # Only the checkout is removed: both turns' manifests, patches and refs stay.
         self.assertTrue((Path(self.directory) / "workspaces" / first["workspaceId"] / "manifest.json").exists())
         self.assertTrue((Path(self.directory) / "workspaces" / second["workspaceId"] / "manifest.json").exists())
-        self.assertTrue(Path(final["diffPath"]).exists())
+        self.assertTrue(native_path(Path(final["diffPath"])).exists())
         refs = git(self.repo, "for-each-ref", "--format=%(refname)")
         self.assertIn(f"refs/hey-my-buddy/workspaces/{first['workspaceId']}/", refs)
         self.assertIn(f"refs/hey-my-buddy/workspaces/{second['workspaceId']}/", refs)
@@ -527,7 +527,7 @@ class CleanupLifecycleTests(LifecycleTestCase):
         plan = self.view(board, submitted["runId"])["cleanup"]
         self.assertEqual(plan["workspaceId"], first["workspaceId"])
         self.assertNotEqual(plan["workspaceId"], second["workspaceId"])
-        self.assertTrue(Path(final["diffPath"]).is_file())
+        self.assertTrue(native_path(Path(final["diffPath"])).is_file())
 
     def test_a_borrowed_run_never_authorizes_its_own_cleanup(self):
         board, submitted, first, second, final, view = self.two_turn_worktree(request_id="borrow-owner")

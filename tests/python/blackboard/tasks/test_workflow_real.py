@@ -31,6 +31,7 @@ from hey_my_buddy.buddy.harnesses.base import ExecutionContext
 from hey_my_buddy.buddy.roles.controller import worker_executor
 from hey_my_buddy.blackboard.store.db import canonical_json, sha256_text
 from hey_my_buddy.private_dirs import attempt_root
+from hey_my_buddy.paths import native_path
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[4]
 
@@ -342,7 +343,7 @@ class RealAdapterTests(RealWorkspaceTestCase):
         )
         self.assertTrue(context.credential_file().is_file())
         assert_private_path(self, context.credential_file(), 0o600)
-        self.assertFalse(context.turn_output_file().exists())
+        self.assertFalse(native_path(context.turn_output_file()).exists())
 
     def test_collect_imports_a_turn_only_with_confirmed_shutdown(self):
         board = self.board()
@@ -363,7 +364,7 @@ class RealAdapterTests(RealWorkspaceTestCase):
             self.assertLess(time.monotonic(), deadline, "the fixture never entered its native prompt")
             time.sleep(0.02)
         self.assertFalse(handle.finished, "the held native run must still be active at collection")
-        self.assertFalse(held.turn_output_file().exists())
+        self.assertFalse(native_path(held.turn_output_file()).exists())
         handle.terminate()
         self.assertIsNotNone(handle.wait(30))
         # Once the run settles and shutdown is confirmed, the same shared
@@ -574,7 +575,7 @@ class PinnedHelperHandoffTests(RealWorkspaceTestCase):
             claim = admit_board(board, {'workerId': 'w1', 'claimRequestId': f'claim-h{index}', 'nonce': nonce, 'runId': child})
             manifest = claim["claim"]["turn"]["input"]["executionWorkspace"]
             manifests[child] = manifest
-            (Path(manifest["path"]) / f"helper-{index}.txt").write_text(f"helper {index} output\n", encoding="utf-8", newline="\n")
+            native_path(Path(manifest["path"]) / f"helper-{index}.txt").write_text(f"helper {index} output\n", encoding="utf-8", newline="\n")
             seal = workspace.seal(self.directory, manifest, child, claim["claim"]["attempt"]["attemptId"])
             seals[child] = seal
             self._finish(board, child, claim, "completed", seal, f"sess-h{index}", nonce)
@@ -603,7 +604,7 @@ class PinnedHelperHandoffTests(RealWorkspaceTestCase):
         self.assertEqual(frozen, {child: seal["commit"] for child, seal in seals.items()})
         # Editing a helper worktree afterwards cannot rewrite what the parent was given.
         for entry in outcomes.values():
-            Path(entry["workspace"]["path"], "later.txt").write_text("later edit\n", encoding="utf-8", newline="\n")
+            native_path(Path(entry["workspace"]["path"], "later.txt")).write_text("later edit\n", encoding="utf-8", newline="\n")
         again = board.call("workflow_get", {"runId": run_id, "includeAudit": True})
         frozen_again = {
             row["taskId"]: row["artifact"]["outputCommit"]

@@ -60,6 +60,7 @@ from hey_my_buddy.buddy.roles.structured_call import correction_code
 from hey_my_buddy.buddy.roles.turn_io import input_hash
 from hey_my_buddy.errors import BoardError
 from buddy.runtime.test_windows_process import FakeAPI, FakeProcess
+from hey_my_buddy.paths import native_path
 
 FIXTURE = Path(__file__).parent / "fixtures/mock_codex.py"
 FAST_FIXTURE = Path(__file__).parent / "fixtures/no_tool_codex.py"
@@ -351,7 +352,7 @@ class FastSeamTests(SeamCase):
         self.assertEqual(overrides, ['web_search="disabled"', 'approval_policy="never"'])
         self.assertIs(trace["thread"]["ephemeral"], True)
         self.assertNotIn("baseInstructions", trace["thread"])
-        self.assertFalse((Path(request.private_state.native_root) / "codex-home").exists())
+        self.assertFalse(native_path(Path(request.private_state.native_root) / "codex-home").exists())
         self.assertEqual((self.home / "config.toml").read_text(encoding="utf-8"), '[mcp_servers.user]\ncommand = "user-tool"\n')
         self.assertIsNone(result.usage)
 
@@ -410,7 +411,7 @@ class FastSeamTests(SeamCase):
         self.assertEqual(correction.stop_reason, "no-tool-violation")
         retained = Path(next(ref.location for ref in result.evidence_refs
                              if ref.kind == "denied-interactions"))
-        raw = retained.read_bytes()
+        raw = native_path(retained).read_bytes()
         self.assertEqual(len(raw), next(ref.size_bytes for ref in result.evidence_refs
                                         if ref.kind == "denied-interactions"))
         self.assertEqual(hashlib.sha256(raw).hexdigest(),
@@ -850,7 +851,7 @@ class ReviewSeamTests(CodexSeamCase):
         self.assertEqual(result.end.status, "ok", result.end.message)
         retained = {ref.kind: ref for ref in result.evidence_refs}
         self.assertIn("review-captured-events", retained)
-        capture = json.loads(Path(retained["review-captured-events"].location).read_text(encoding="utf-8"))
+        capture = json.loads(native_path(Path(retained["review-captured-events"].location)).read_text(encoding="utf-8"))
         self.assertTrue(capture["toolEvents"])
         self.assertTrue(capture["rawToolEvents"])
         self.assertEqual(capture["turns"][0]["turnId"], result.native_identity.turn_id)
@@ -1254,7 +1255,7 @@ class WorkerSeamTests(CodexSeamCase):
         self.assertEqual(thread["start"]["approvalPolicy"], "never")
         retained = Path(next(ref.location for ref in result.evidence_refs
                              if ref.kind == "native-checkpoint"))
-        checkpoint = json.loads(retained.read_text(encoding="utf-8"))
+        checkpoint = json.loads(native_path(retained).read_text(encoding="utf-8"))
         self.assertTrue(checkpoint["bindingSaved"])
         # The saved binding is the fact ``resumable`` reports: the run says
         # resumable exactly when its binding was saved.
@@ -1293,18 +1294,18 @@ class WorkerSeamTests(CodexSeamCase):
         self.assertEqual(thread["home"], str(self.base))
         self.assertIsNone(thread["sqliteHome"])
         self.assertNotIn("-c", thread["argv"])
-        self.assertFalse(list(self.base.rglob("codex-home")))
+        self.assertFalse(list(native_path(self.base).rglob("codex-home")))
 
     def test_current_binding_has_only_native_session_ownership_and_old_binding_is_refused(self):
         first = self.worker_run("ok")
         self.assertEqual(first.end.status, "ok", first.end.message)
         root = self.base / "worker-native"
         path = native_run._binding_path(root, first.native_identity.session_id)
-        binding = json.loads(path.read_text(encoding="utf-8"))
+        binding = json.loads(native_path(path).read_text(encoding="utf-8"))
         self.assertEqual(set(binding), {"taskId", "threadId", "cwd", "buddy", "lastTurnId",
                                         "lastAttemptId", "lastInputSha256"})
         binding.update(codexHome="<old-private-home>", credentialSource={"source": "native"})
-        path.write_text(json.dumps(binding), encoding="utf-8", newline="\n")
+        native_path(path).write_text(json.dumps(binding), encoding="utf-8", newline="\n")
         continuation = RunContinuation(mode="native-session", previous_session_id=first.native_identity.session_id)
         resumed = self.worker_run("ok", continuation=continuation)
         self.assertEqual(resumed.end.reason_code, "native-resume-unavailable")
@@ -1314,9 +1315,9 @@ class WorkerSeamTests(CodexSeamCase):
         first = self.worker_run("ok")
         previous = first.native_identity.session_id
         path = native_run._binding_path(self.base / "worker-native", previous)
-        binding = json.loads(path.read_text(encoding="utf-8"))
+        binding = json.loads(native_path(path).read_text(encoding="utf-8"))
         binding["lastTurnStatus"] = "completed"
-        path.write_text(json.dumps(binding), encoding="utf-8", newline="\n")
+        native_path(path).write_text(json.dumps(binding), encoding="utf-8", newline="\n")
         result = self.worker_run("ok", continuation=RunContinuation(
             mode="native-session", previous_session_id=previous))
         self.assertEqual(result.end.reason_code, "native-resume-unavailable")
@@ -1391,7 +1392,7 @@ class WorkerSeamTests(CodexSeamCase):
         self.assertEqual(json.loads(result.value.raw)["outcome"]["disposition"], "completed")
         retained = Path(next(ref.location for ref in result.evidence_refs
                              if ref.kind == "denied-interactions"))
-        raw = retained.read_bytes()
+        raw = native_path(retained).read_bytes()
         self.assertEqual(len(raw), next(ref.size_bytes for ref in result.evidence_refs
                                         if ref.kind == "denied-interactions"))
         self.assertEqual(hashlib.sha256(raw).hexdigest(),
@@ -1489,7 +1490,7 @@ class WorkerSeamTests(CodexSeamCase):
         self.assertTrue(all(normalize_activity(payload) == payload for payload in payloads))
         self.assertTrue(all(is_newer(new, old) for old, new in zip(payloads, payloads[1:])))
         self.assertEqual(observed_activity(endpoint), result.activity.value)
-        self.assertFalse(Path(request.private_state.invocation_root, "activity.json").exists())
+        self.assertFalse(native_path(Path(request.private_state.invocation_root, "activity.json")).exists())
 
     def test_refused_activity_publication_retains_native_final_facts(self):
         endpoint = mock.Mock(spec=CTwoLiveEndpoint)
@@ -1607,12 +1608,12 @@ class WorkerSeamTests(CodexSeamCase):
         first = self.worker_run("ok")
         previous = first.native_identity.session_id
         path = native_run._binding_path(self.base / "worker-native", previous)
-        self.assertTrue(path.is_file())
-        original = path.read_bytes()
+        self.assertTrue(native_path(path).is_file())
+        original = native_path(path).read_bytes()
         result = self.worker_run("hang", timeout=2, continuation=RunContinuation(
             mode="native-session", previous_session_id=previous))
         self.assertEqual(result.end.reason_code, "deadline")
-        self.assertEqual(path.read_bytes(), original)
+        self.assertEqual(native_path(path).read_bytes(), original)
         self.assertFalse(result.continuation.resumable)
 
     def test_resume_without_a_binding_is_refused(self):
@@ -1625,7 +1626,7 @@ class WorkerSeamTests(CodexSeamCase):
         """The public checkpoint facts exactly as the first run's evidence kept them."""
         retained = Path(next(ref.location for ref in result.evidence_refs
                              if ref.kind == "native-checkpoint"))
-        checkpoint = json.loads(retained.read_text(encoding="utf-8"))
+        checkpoint = json.loads(native_path(retained).read_text(encoding="utf-8"))
         return ResumeCheckpoint(native_turn_id=checkpoint["nativeTurnId"],
                                 attempt_id=checkpoint["attemptId"],
                                 input_sha256=checkpoint["inputSha256"])
@@ -1757,12 +1758,12 @@ class WorkerSeamTests(CodexSeamCase):
         self.assertEqual(first.end.status, "cancelled")
         self.assertEqual(first.stop_evidence.native.group_state, "gone")
         self.assertIs(first.continuation.resumable, True)
-        checkpoint = json.loads(Path(next(ref.location for ref in first.evidence_refs
-                                          if ref.kind == "native-checkpoint")).read_text(encoding="utf-8"))
+        checkpoint = json.loads(native_path(Path(next(ref.location for ref in first.evidence_refs
+                                          if ref.kind == "native-checkpoint"))).read_text(encoding="utf-8"))
         self.assertEqual(checkpoint["nativeTurnStatus"], "interrupted")
         previous = first.native_identity.session_id
-        binding = json.loads(native_run._binding_path(
-            self.base / "worker-native", previous).read_text(encoding="utf-8"))
+        binding = json.loads(native_path(native_run._binding_path(
+            self.base / "worker-native", previous)).read_text(encoding="utf-8"))
         self.assertEqual(set(binding), {"taskId", "threadId", "cwd", "buddy", "lastTurnId",
                                         "lastAttemptId", "lastInputSha256"})
         resumed = self.worker_run("ok", continuation=RunContinuation(
@@ -2109,7 +2110,7 @@ class CatalogTrustTests(CodexSeamCase):
 
     def _model_check_ref(self, result):
         ref = next(ref for ref in result.evidence_refs if ref.kind == "model-check")
-        raw = Path(ref.location).read_bytes()
+        raw = native_path(Path(ref.location)).read_bytes()
         self.assertEqual(len(raw), ref.size_bytes)
         self.assertEqual(hashlib.sha256(raw).hexdigest(), ref.sha256)
         return json.loads(raw)

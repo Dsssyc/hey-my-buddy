@@ -705,7 +705,7 @@ class TestLifecycle(BoardTestCase):
             code, result = self.cli("result", json.dumps({"runId": run_id}))
             self.assertEqual(code, 0, result)
             self.assertTrue(result["resultAvailable"])
-            self.assertEqual(artifact.read_text(encoding="utf-8").strip(), "durable")
+            self.assertEqual(native_path(artifact).read_text(encoding="utf-8").strip(), "durable")
             stdout_artifacts = [
                 entry["location"] for entry in result["artifacts"] if entry["location"].endswith("runner.stdout.log")
             ]

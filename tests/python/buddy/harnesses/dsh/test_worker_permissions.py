@@ -97,9 +97,9 @@ class WorkerPermissionTests(NativeRunCase):
                 outcome = result.value.parsed.value
                 self.assertEqual(outcome["disposition"], "attention")
                 self.assertEqual(outcome["request"]["attempted"], "the bounded fixture work")
-                attention = json.loads(Path(mount.bridge["attentionPath"]).read_text(encoding="utf-8"))["requests"][0]
+                attention = json.loads(native_path(Path(mount.bridge["attentionPath"])).read_text(encoding="utf-8"))["requests"][0]
                 ref = next(ref for ref in result.evidence_refs if ref.kind == "acp-connection-facts")
-                decision = next(json.loads(line) for line in Path(ref.location).read_text(encoding="utf-8").splitlines()
+                decision = next(json.loads(line) for line in native_path(Path(ref.location)).read_text(encoding="utf-8").splitlines()
                                 if json.loads(line)["recordType"] == "permission-decision")
                 operation = attention["operation"]
                 self.assertEqual(operation, decision["operation"])

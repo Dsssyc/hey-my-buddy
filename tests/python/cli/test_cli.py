@@ -27,6 +27,7 @@ from hey_my_buddy.errors import BoardError
 from hey_my_buddy.blackboard.service.service import BoardService, CONTROL_OPERATIONS
 from hey_my_buddy.protocol.client import BoardClient
 from hey_my_buddy.protocol.contracts import BuddyControl
+from hey_my_buddy.paths import native_path
 
 #: Every CLI method that was removed by ADR-007, plus the ADR-008 removal of the
 #: internal maintenance call and the ADR-021 retirement of the paid review
@@ -569,7 +570,7 @@ class MicroTaskCliTests(PrivateStateTestCase, WorkflowTestCase):
         self.assertEqual(code, 0, submitted)
         # A control file exists on disk for this run, but the CLI must not adopt it:
         # no implicit latest-generation lookup is ever authority.
-        self.assertTrue(Path(submitted["controlFile"]).is_file())
+        self.assertTrue(native_path(Path(submitted["controlFile"])).is_file())
         code, refused = self.run_cli("cancel", json.dumps({"runId": submitted["runId"], "commandId": "cli-cancel-2"}))
         self.assertEqual(code, 1)
         self.assertEqual(refused["error"]["code"], "UNAUTHORIZED")

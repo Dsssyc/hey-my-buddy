@@ -341,10 +341,11 @@ def run_turn(case):
             write_state({"unadmittedFollowupRan": True})
             sys.exit(0)
         if case not in ("inquiry-text-only", "inquiry-unanswered", "inquiry-slow-interrupt"):
-            mounted = json.loads(Path(argv_value("--mcp-config")).read_text(encoding="utf-8"))["mcpServers"]
+            from hey_my_buddy.paths import native_path
+            mounted = json.loads(native_path(Path(argv_value("--mcp-config"))).read_text(encoding="utf-8"))["mcpServers"]
             server_name, server = next(iter(mounted.items()))
             config_path = server["args"][-1]
-            configuration = json.loads(Path(config_path).read_text(encoding="utf-8"))
+            configuration = json.loads(native_path(Path(config_path)).read_text(encoding="utf-8"))
             from hey_my_buddy.protocol.inquiry_journal import MAX_JOURNAL_BYTES, read_shared_snapshot
             snapshot = read_shared_snapshot(configuration["inquiryJournalPath"], MAX_JOURNAL_BYTES)
             if snapshot is None:

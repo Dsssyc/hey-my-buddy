@@ -23,6 +23,7 @@ from blackboard.tasks.test_workflow_real import BUDDY, RealWorkspaceTestCase
 from hey_my_buddy.cli import main as cli, cli_views
 from hey_my_buddy.protocol import transport
 from hey_my_buddy.blackboard.tasks import workflow as workflow_module, workspace as workspace_module
+from hey_my_buddy.paths import native_path
 
 PACKET = "Implement the bounded change described here. " * 40
 SUMMARY = "Changed tracked.txt and ran the focused checks. " * 30
@@ -83,7 +84,7 @@ class CliViewTests(RealWorkspaceTestCase):
         run_id = submitted["runId"]
         claimed = self.claim(self.board_instance, run_id, request_id="views-claim")
         manifest = claimed["claim"]["turn"]["input"]["executionWorkspace"]
-        (Path(manifest["path"]) / "tracked.txt").write_text("sealed output\n", encoding="utf-8", newline="\n")
+        native_path(Path(manifest["path"]) / "tracked.txt").write_text("sealed output\n", encoding="utf-8", newline="\n")
         seal = workspace_module.seal(self.directory, manifest, run_id, claimed["claim"]["attempt"]["attemptId"])
         self.finish_turn(self.board_instance, claimed, seal)
         return submitted, self.view(self.board_instance, run_id)

@@ -20,6 +20,7 @@ from hey_my_buddy.buddy.harnesses.base import ExecutionContext, NoToolStructured
 from hey_my_buddy.buddy.roles.controller import FastPreparation, start_router_preparation
 from hey_my_buddy.buddy.roles.structured_call import collect, correction_code
 from hey_my_buddy.protocol.tool_evidence import read_tool_calls
+from hey_my_buddy.paths import native_path
 
 
 FIXTURE = Path(__file__).parent / "fixtures" / "no_tool_codex.py"
@@ -89,7 +90,7 @@ class NoToolCodexTests(unittest.TestCase):
         for name in ("baseInstructions", "environments", "dynamicTools", "selectedCapabilityRoots", "allowProviderModelFallback"):
             self.assertNotIn(name, trace["thread"])
         self.assertNotIn("environments", trace["turns"][0])
-        self.assertFalse(list(Path(control["nativeRoot"]).rglob("codex-home")))
+        self.assertFalse(list(native_path(Path(control["nativeRoot"])).rglob("codex-home")))
         self.assertFalse((self.home / "auth.json").is_symlink())
         self.assertEqual((self.home / "auth.json").read_text(encoding="utf-8"), '{"test":"fake-auth-only"}')
         self.assertEqual(json.loads((self.home / "models_cache.json").read_text(encoding="utf-8"))["models"][0]["multi_agent_version"], "v2")
@@ -245,7 +246,7 @@ class NoToolCodexTests(unittest.TestCase):
         self.assertEqual(outcome.result["code"], "deadline")
         self.assertIs(outcome.result["nativeInterruptRequested"], True)
         self.assertTrue(outcome.result["processState"]["shutdownConfirmed"])
-        self.assertFalse(list(Path(control["nativeRoot"]).rglob("codex-home")))
+        self.assertFalse(list(native_path(Path(control["nativeRoot"])).rglob("codex-home")))
 
     def test_absent_user_model_cache_does_not_refuse_a_native_catalog(self):
         (self.home / 'models_cache.json').unlink()

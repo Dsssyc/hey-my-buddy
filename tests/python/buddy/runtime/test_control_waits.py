@@ -8,6 +8,7 @@ from unittest.mock import Mock, patch
 
 from hey_my_buddy.buddy.runtime.execution import Execution, _ExecutionControl
 from hey_my_buddy.errors import BoardError
+from hey_my_buddy.paths import native_path
 
 
 class ControlWaitTests(unittest.TestCase):
@@ -20,7 +21,7 @@ class ControlWaitTests(unittest.TestCase):
         self.client = Mock()
         self.execution = Execution(self.claim, self.root, 'nonce', client=self.client)
         self.directory = self.execution.directory
-        self.directory.mkdir(parents=True)
+        native_path(self.directory).mkdir(parents=True)
         self.execution.receipt = Mock(side_effect=lambda claim, report, directory: report)
         self.execution._execute_selected = Mock(return_value={'status': 'ok'})
         self.backoff = self.enterContext(patch.object(self.execution.control, 'wait'))

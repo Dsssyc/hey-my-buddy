@@ -13,6 +13,7 @@ from hey_my_buddy.blackboard.tasks import macro_task_deletion, macro_tasks, work
 from hey_my_buddy.buddy.harnesses import registry as harness_registry
 from hey_my_buddy.private_dirs import micro_task_root
 from hey_my_buddy.errors import BoardError
+from hey_my_buddy.paths import native_path
 
 
 PHYSICAL_STAGES = (
@@ -303,8 +304,8 @@ class MacroTaskDeletionTests(WorkflowTestCase):
                 hashlib.sha256(run["requestId"].encode()).hexdigest()[:32] + ".json"
             )
             for path in (native / "session", evidence / "task.txt", control, submission):
-                path.parent.mkdir(parents=True, exist_ok=True)
-                path.write_text("private fixture", encoding="utf-8", newline="\n")
+                native_path(path.parent).mkdir(parents=True, exist_ok=True)
+                native_path(path).write_text("private fixture", encoding="utf-8", newline="\n")
             return native.parent, evidence.parent, control, submission
 
         target_paths = materialize(target)
@@ -315,9 +316,9 @@ class MacroTaskDeletionTests(WorkflowTestCase):
             result = macro_task_deletion.delete(board.store, target["macroTaskId"], 1)
         self.assertEqual(result["state"], "deleted")
         for path in target_paths:
-            self.assertFalse(path.exists(), path)
+            self.assertFalse(native_path(path).exists(), path)
         for path in other_paths:
-            self.assertTrue(path.exists(), path)
+            self.assertTrue(native_path(path).exists(), path)
 
     def test_run_tree_closes_recursive_helpers_lead_ownership_and_fixes(self):
         board = self.board()
@@ -374,15 +375,15 @@ class MacroTaskDeletionTests(WorkflowTestCase):
         for run in (root, helper, lead_owned, grandchild, {'runId': router_id, 'requestId': 'router-record'}):
             self.assertEqual(by_task[run['runId']], target)
             record = session_record_path(board.directory, by_task[run['runId']], run['requestId'])
-            record.parent.mkdir(parents=True, exist_ok=True)
-            record.write_bytes(b'private session')
+            native_path(record.parent).mkdir(parents=True, exist_ok=True)
+            native_path(record).write_bytes(b'private session')
             records.append(record)
         self.assertNotIn('run:' + lead_owned['runId'],
                          {row['macroTaskId'] for row in board.call('macro_task_list', {})['macroTasks']})
         self.assertEqual(macro_task_deletion.preview(board.store, target)["microTaskCount"], 4)
         with self.without_physical_io()[0]:
             self.assertEqual(macro_task_deletion.delete(board.store, target, 4)["state"], "deleted")
-        self.assertTrue(all(not record.exists() for record in records))
+        self.assertTrue(all(not native_path(record).exists() for record in records))
         with board.store.db.read() as db:
             for run in (root, helper, lead_owned, grandchild):
                 self.assertIsNone(db.execute("SELECT 1 FROM workflow_runs WHERE run_id=?", (run["runId"],)).fetchone())
