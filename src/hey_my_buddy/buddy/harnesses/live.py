@@ -55,12 +55,11 @@ class LiveCapabilities(InternalModel):
     inquiry_delivery: InquiryDeliveryMode
 
 
-#: What each harness's existing facilities can do today. Codex and Claude Code
-#: refuse questions; ZCode and DSH deliver them at their session's cooperative
-#: checkpoint.
+#: Codex CLI and Claude Code CLI accept input during the active turn; ZCode
+#: and DSH deliver questions at their session's cooperative checkpoint.
 EXISTING_CAPABILITIES = {
-    "codex": LiveCapabilities(inquiry_delivery="unsupported"),
-    "claude": LiveCapabilities(inquiry_delivery="unsupported"),
+    "codex": LiveCapabilities(inquiry_delivery="realtime"),
+    "claude": LiveCapabilities(inquiry_delivery="realtime"),
     "zcode": LiveCapabilities(inquiry_delivery="cooperative-checkpoint"),
     "dsh": LiveCapabilities(inquiry_delivery="cooperative-checkpoint"),
 }

@@ -10,6 +10,7 @@ always shared, and the legacy adapter path is exercised by its own suites.
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import tempfile
@@ -19,6 +20,8 @@ from pathlib import Path
 from unittest import mock
 
 from hey_my_buddy.buddy.harnesses.claude import native_run
+from hey_my_buddy.buddy.harnesses.in_turn_inquiry import prepare_inquiry_services
+from hey_my_buddy.buddy.harnesses.inquiry_bridge import InquiryBridge, _owner_response
 from hey_my_buddy.buddy.harnesses.claude.native_run import run, run_discovery
 from hey_my_buddy.buddy.harnesses.run_contract import (
     FEEDBACK_CONTINUE,
@@ -113,6 +116,84 @@ class NativeRunCase(unittest.TestCase):
 
     def fixture_state(self) -> dict:
         return json.loads(self.state_path.read_text())
+
+
+class NativeInquiryTests(NativeRunCase):
+    def test_child_lifecycle_does_not_change_the_root_inquiry_window(self):
+        request = self.request()
+        bridge = mock.Mock()
+        collector = native_run._TurnCollector(request, native_run.ActivityPublisher(None),
+                                               lambda _facts: FEEDBACK_CONTINUE, bridge=bridge)
+        collector.evidence = native_run.TurnEvidence("root-session", request.cwd)
+        collector.observe({"type": "system", "subtype": "init", "session_id": "root-session",
+                           "cwd": request.cwd, "model": request.buddy.model})
+        collector.observe({"type": "result", "parent_tool_use_id": "child-call", "session_id": "child-session"})
+        collector.observe({"type": "system", "subtype": "init", "parent_tool_use_id": "child-call",
+                           "session_id": "child-session"})
+        bridge.activate.assert_called_once_with("root-session")
+        bridge.deactivate.assert_not_called()
+
+    def execute_inquiry(self, case: str):
+        self.fixture_case(case)
+        request = self.request()
+        identity = {"taskId": request.identity.task_id, "attemptId": request.identity.attempt_id,
+                    "generation": request.identity.generation, "turnId": request.identity.turn_id}
+        inquiry = prepare_inquiry_services(
+            invocation_root=Path(request.private_state.invocation_root), identity=identity,
+            input_sha256=hashlib.sha256(request.input_text.encode()).hexdigest(),
+            attention_path=self.base / "attention.json",
+            inquiry={"resultsPath": str(self.base / f"inquiry-{request.identity.attempt_id}.jsonl")})
+        original_activate = InquiryBridge.activate
+
+        def activate(bridge, session_id):
+            self.bridge = bridge
+            original_activate(bridge, session_id)
+            queued = bridge._ask({"inquiryId": "q1", "question": "What is 6 times 7?"}, _owner_response)
+            self.assertTrue(queued["ok"], queued)
+
+        with mock.patch.object(InquiryBridge, "activate", activate):
+            result = run(request, observer=lambda _facts: FEEDBACK_CONTINUE,
+                         services=native_run.RunServices(inquiry=inquiry), cancelled=lambda: False)
+        report_ref = next(ref for ref in result.evidence_refs if ref.kind == "inquiry-report")
+        if result.end.status != "ok":
+            stderr = next((ref for ref in result.evidence_refs if ref.kind == "native-stderr"), None)
+            self.fail(Path(stderr.location).read_text() if stderr else result.end.message)
+        return result, json.loads(Path(report_ref.location).read_text())
+
+    def test_root_signed_answer_binds_to_running_turn(self):
+        result, report = self.execute_inquiry("inquiry-answer")
+        self.assertEqual(result.end.status, "ok", result.end.message)
+        self.assertEqual(report["answered"], 1)
+        self.assertEqual(report["unansweredDelivered"], 0)
+        self.assertIn("Host inquiry q1", self.fixture_state()["inquiryInput"])
+        self.assertIsNotNone(flag_value(self.fixture_state()["argv"], "--mcp-config"))
+
+    def test_foreign_call_and_child_result_do_not_answer(self):
+        for case in ("inquiry-wrong-call", "inquiry-child"):
+            with self.subTest(case=case):
+                result, report = self.execute_inquiry(case)
+                self.assertEqual(result.end.status, "ok", result.end.message)
+                self.assertEqual(report["answered"], 0)
+                self.assertEqual(report["unansweredDelivered"], 1)
+
+    def test_assistant_text_and_unanswered_delivery_do_not_answer(self):
+        result, report = self.execute_inquiry("inquiry-text-only")
+        self.assertEqual(result.end.status, "ok", result.end.message)
+        self.assertEqual(report["answered"], 0)
+        self.assertEqual(report["unansweredDelivered"], 1)
+        from hey_my_buddy.buddy.roles.run_execution import worker_delivery
+        outcome, provenance, _truncated = worker_delivery(result)
+        self.assertEqual(outcome["disposition"], "attention")
+        self.assertIsNone(native_run.validate_turn_provenance({
+            "sessionId": result.native_identity.session_id, "provenance": provenance,
+            "outcome": outcome, "resumeMode": "initial", "previousSessionId": None}))
+
+    def test_closed_bridge_refuses_question_after_end(self):
+        result, report = self.execute_inquiry("inquiry-unanswered")
+        self.assertEqual(result.end.status, "ok", result.end.message)
+        self.assertEqual(report["unansweredDelivered"], 1)
+        late = self.bridge._ask({"inquiryId": "q2", "question": "Too late?"}, _owner_response)
+        self.assertEqual(late["error"], "not-ready")
 
 
 class Batch4FactsTests(NativeRunCase):

@@ -534,6 +534,9 @@ class TestInquiry(BoardTestCase):
         self.assertTrue(observe_capable("dsh"))
         self.assertTrue(inquiry_capable("zcode"))
         self.assertTrue(observe_capable("zcode"))
+        for name in ("codex", "claude"):
+            self.assertTrue(inquiry_capable(name))
+            self.assertTrue(observe_capable(name))
         for name in ("command", "external", "not-an-adapter"):
             with self.subTest(adapter=name):
                 self.assertFalse(inquiry_capable(name))

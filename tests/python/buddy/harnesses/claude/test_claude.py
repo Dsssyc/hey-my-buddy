@@ -496,7 +496,7 @@ class ClaudeAdapterTests(ClaudeFixtureCase):
         self.assertEqual(outcome.status, "ok", outcome.to_report())
         self.assertTrue(outcome.shutdown_confirmed)
         argv = self.fixture_state()["argv"]
-        for flag in ("--setting-sources", "--strict-mcp-config", "--mcp-config", "--safe-mode"):
+        for flag in ("--setting-sources", "--strict-mcp-config", "--safe-mode"):
             self.assertNotIn(flag, argv)
         self.assertIn("--no-session-persistence", argv)
         self.assertTrue(Path(flag_value(argv, "--settings")).resolve().is_relative_to(context_root(context, "claude").resolve()))
@@ -552,8 +552,13 @@ class ClaudeAdapterTests(ClaudeFixtureCase):
         argv = self.fixture_state()["argv"]
         self.assertNotIn("--restricted", argv)
         self.assertIn("--no-session-persistence", argv)
-        for flag in ("--safe-mode", "--strict-mcp-config", "--setting-sources", "--mcp-config"):
+        for flag in ("--safe-mode", "--strict-mcp-config", "--setting-sources"):
             self.assertNotIn(flag, argv)
+        mounted = json.loads(Path(flag_value(argv, "--mcp-config")).read_text())["mcpServers"]
+        server_name, = mounted
+        self.assertEqual(flag_value(argv, "--allowedTools").split(","),
+                         [f"mcp__{server_name}__hey_my_buddy_checkpoint",
+                          f"mcp__{server_name}__hey_my_buddy_answer_inquiry"])
         self.assertEqual(flag_value(argv, "--permission-prompt-tool"), "stdio")
         self.assertEqual(flag_value(argv, "--permission-mode"), "acceptEdits")
         from hey_my_buddy.buddy.harnesses.registry import worker_format
@@ -580,7 +585,7 @@ class ClaudeAdapterTests(ClaudeFixtureCase):
         self.assertEqual(outcome.status, "ok", outcome.to_report())
         argv = self.fixture_state()["argv"]
         tools = flag_value(argv, "--tools")
-        self.assertEqual(set(tools.split(",")), {"Glob", "Grep", "LS", "Read", "Skill"})
+        self.assertEqual(set(tools.split(",")), {"Glob", "Grep", "LS", "Read", "Skill", "ToolSearch"})
         self.assertEqual(flag_value(argv, "--permission-mode"), "default")
         self.assertEqual(flag_value(argv, "--disallowedTools").split(","),
                          ["Bash", "Edit", "MultiEdit", "NotebookEdit", "Write"])

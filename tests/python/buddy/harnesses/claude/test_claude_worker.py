@@ -72,7 +72,7 @@ class ClaudeWorkerTests(MicroTaskWorkerTestCase):
         self.assertIn("claude", schemas.CODING_HARNESSES)
         implementation = adapter("claude")
         self.assertFalse(implementation.native_resume)
-        self.assertNotIn("inquiry", implementation.capabilities)
+        self.assertIn("inquiry", implementation.capabilities)
         with self.daemon(env=self.env()):
             view, receipt = self.execute_fixture()
             self.assertEqual(view["state"], "delivered", receipt)

@@ -118,10 +118,14 @@ class NativeSchemaWorker:
             denied = bool(facts.get("nativeRequestMethod"))
         else:
             denied = bool(facts.get("deniedControlRequestIds") or facts.get("permissionDenials"))
-        attention = denied and (outcome is None or outcome["disposition"] in ("completed", "waiting"))
+        unanswered = bool(facts.get("unansweredDeliveredInquiries"))
+        attention = unanswered or (denied and (outcome is None or outcome["disposition"] in ("completed", "waiting")))
         if attention:
-            outcome = self.attention_outcome(facts)
-            truncated = {}
+            if unanswered and outcome is not None and outcome["disposition"] in ("assistance", "attention"):
+                outcome = {**outcome, "disposition": "attention"}
+            else:
+                outcome = self.attention_outcome(facts)
+                truncated = {}
         elif outcome is None:
             message = "the native root turn has no strict structured final outcome"
             if self.interaction_kind == "request":
@@ -133,6 +137,14 @@ class NativeSchemaWorker:
         return outcome, provenance, truncated
 
     def attention_outcome(self, facts: dict) -> dict:
+        if facts.get("unansweredDeliveredInquiries"):
+            summary = f"{self.display_name} ended its turn with delivered Host inquiries still unanswered"
+            return {"disposition": "attention", "summary": summary, "remaining": [], "decisions": [],
+                    "artifacts": [], "request": {"summary": summary,
+                        "attempted": "The native turn received the questions but supplied no verified answer tool receipt",
+                        "neededWork": "Host must review the unanswered questions and choose a continuation",
+                        "expectedArtifacts": [],
+                        "acceptance": "The Host resolves the unanswered inquiries"}}
         if self.interaction_kind == "request":
             summary = f"{self.display_name} requested Host interaction through {facts['nativeRequestMethod']}"
             attempted = "The owned controller declined the correlated native request without granting access"

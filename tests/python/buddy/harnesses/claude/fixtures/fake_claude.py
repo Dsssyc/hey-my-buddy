@@ -2,6 +2,7 @@
 """Private Claude Code CLI fixture. No model, no shared Claude state, no network."""
 import json
 import os
+import subprocess
 import sys
 import tempfile
 import time
@@ -279,6 +280,42 @@ def run_turn(case):
             "status": "allowed", "rateLimitType": "five_hour", "resetsAt": None,
             "utilization": {"fiveHourPctUsed": 12}}})
     send({"type": "assistant", "message": {"role": "assistant", "content": [{"type": "text", "text": "working"}]}})
+    if case in ("inquiry-answer", "inquiry-wrong-call", "inquiry-child", "inquiry-text-only",
+                "inquiry-unanswered"):
+        while True:
+            frame = json.loads(sys.stdin.readline())
+            if frame.get("type") == "user":
+                break
+            if frame.get("type") == "control_request":
+                handle_control(frame, case)
+        text = frame["message"]["content"][0]["text"]
+        write_state({"inquiryInput": text})
+        if case not in ("inquiry-text-only", "inquiry-unanswered"):
+            mounted = json.loads(Path(argv_value("--mcp-config")).read_text())["mcpServers"]
+            server_name, server = next(iter(mounted.items()))
+            config_path = server["args"][-1]
+            configuration = json.loads(Path(config_path).read_text())
+            journal = [json.loads(line) for line in Path(configuration["inquiryJournalPath"]).read_text().splitlines()]
+            question = next(item for item in journal if item.get("state") == "queued")
+            answer = {"inquiryId": question["inquiryId"], "answer": "42"}
+            call = {"id": 1, "method": "tools/call", "params": {
+                "name": "hey_my_buddy_answer_inquiry", "arguments": answer}}
+            completed = subprocess.run([server["command"], *server["args"]],
+                                       input=json.dumps(call) + "\n", text=True, capture_output=True,
+                                       env={**os.environ, **server["env"]}, check=True)
+            response = json.loads(completed.stdout)["result"]
+            tool_name = f"mcp__{server_name}__hey_my_buddy_answer_inquiry"
+            send({"type": "assistant", "session_id": session_id, "message": {"role": "assistant",
+                  "content": [{"type": "tool_use", "id": "toolu_inquiry_1", "name": tool_name,
+                               "input": answer}]}})
+            send({"type": "user", "session_id": session_id,
+                  **({"parent_tool_use_id": "toolu_child"} if case == "inquiry-child" else {}),
+                  "message": {"role": "user", "content": [{"type": "tool_result",
+                    "tool_use_id": "toolu_wrong" if case == "inquiry-wrong-call" else "toolu_inquiry_1",
+                    "content": response["content"], "is_error": response.get("isError", False)}]}})
+        else:
+            send({"type": "assistant", "message": {"role": "assistant",
+                  "content": [{"type": "text", "text": "The answer is 42"}]}})
     if case == "no-result":
         # Exit without a result frame: the controller must see the stream close.
         sys.exit(0)

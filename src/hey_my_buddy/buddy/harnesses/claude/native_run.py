@@ -24,9 +24,10 @@ start. Role material — the micro task prompt, the completion rules, the outcom
 validation and the attention assembly — stays with the roles; the delivered
 value travels with its own facts and the role re-validates it.
 
-This harness has no native no-tool run, no in-run session service and no
-native session resume. The role request boundary rejects native resume;
-this module rejects no-tool runs and in-run services before any process starts.
+This harness has no native no-tool run and no native session resume. The role
+request boundary rejects native resume; this module rejects no-tool runs and
+run-contract session services before any process starts. A Worker inquiry uses
+one per-execution MCP mount alongside the native schema value carrier.
 Model discovery (:func:`run_discovery`) is a
 separate initialize-only operation that reuses the same spawn and stop
 primitives and never sends a user message.
@@ -54,6 +55,9 @@ from ....json_codec import canonical_json
 from ....private_dirs import ensure_private_dir
 from ....protocol.activity import ActivityPublisher
 from ..c_two_live import CTwoLiveEndpoint
+from ..in_turn_inquiry import INQUIRY_TOOLS, IN_TURN_NOTE, InquiryServices
+from ..inquiry_bridge import InquiryBridge
+from ..session_receipts import ReceiptError, refusal_shaped
 from ....protocol.usage import identifier as _usage_identifier
 from ...roles.turn_io import private_json
 from ..version import VersionShutdownError, probe_version
@@ -259,6 +263,7 @@ class _RunState:
     #: The frozen delivery verification, settled once before the role's settled
     #: facts so the count the role acts on and the package agree (3-C).
     verified_delivery: tuple = ()
+    inquiry_report: dict | None = None
 
 
 def _flag_value(args: list[str], flag: str) -> str | None:
@@ -273,7 +278,7 @@ def _flag_value(args: list[str], flag: str) -> str | None:
 # -- phase 1: the frozen startup decisions ---------------------------------------
 
 
-def _prepare(request: RunRequest) -> _Preparation:
+def _prepare(request: RunRequest, inquiry: InquiryServices | None = None) -> _Preparation:
     """Gate the request, allocate the session and freeze the native invocation."""
     if request.tool_scope == "none":
         raise BoardError("INVALID_ARGUMENT",
@@ -296,12 +301,19 @@ def _prepare(request: RunRequest) -> _Preparation:
     settings = (worker_sandbox_settings(request.worker_permission.level)
                 if request.worker_permission is not None else sandbox_settings(request.network_allowed_domains))
     private_json(native_root / _SETTINGS_FILE, settings)
+    mcp_config_path = None
+    inquiry_tools = ()
+    if inquiry is not None:
+        mcp_config_path = str(native_root / "inquiry-mcp.json")
+        private_json(Path(mcp_config_path), {"mcpServers": {inquiry.server_name: inquiry.mcp_server}})
+        inquiry_tools = tuple(f"mcp__{inquiry.server_name}__{name}" for name in INQUIRY_TOOLS)
     args = execution_args(session_id=session_id, model=request.buddy.model,
                           effort=request.buddy.effort,
                           settings_path=str(native_root / _SETTINGS_FILE),
                           read_only=read_only, output_schema=request.output_schema.value,
                           additional_denied_tools=request.additional_denied_tools,
-                          full_access=request.worker_permission is not None and request.worker_permission.level == "full")
+                          full_access=request.worker_permission is not None and request.worker_permission.level == "full",
+                          mcp_config_path=mcp_config_path, inquiry_tools=inquiry_tools)
     return _Preparation(session_id=session_id, deadline=deadline, invocation_root=invocation_root,
                         command=command, environment=environment, args=args,
                         settings=settings)
@@ -405,7 +417,8 @@ class _TurnCollector:
 
     def __init__(self, request: RunRequest, publisher: ActivityPublisher,
                  observer: Callable[[Mapping[str, Any]], RunFeedback],
-                 native_schema_delivery: bool = False, expected_permission_mode: str | None = None):
+                 native_schema_delivery: bool = False, expected_permission_mode: str | None = None,
+                 inquiry: InquiryServices | None = None, bridge: InquiryBridge | None = None):
         self._publisher = publisher
         self._observer = observer
         self.tools = ReadOnlyToolEvidence({"harness": "claude", "taskId": request.identity.task_id,
@@ -424,6 +437,10 @@ class _TurnCollector:
         self._connection: Connection | None = None
         self._last_tool_calls = 0
         self._quiet = False
+        self.inquiry = inquiry
+        self.bridge = bridge
+        self._inquiry_calls: dict[str, str] = {}
+        self._foreign_inquiry_session = False
 
     def install(self, connection: Connection) -> None:
         self._connection = connection
@@ -497,7 +514,16 @@ class _TurnCollector:
         # its tool facts, and the evidence observation follows the same rule.
         self.tools.observe_frame(frame)
         if self.evidence is not None:
+            initialized = self.evidence.init_observed
             activity = self.evidence.observe(frame)
+            if self.bridge is not None:
+                if not initialized and self.evidence.init_observed:
+                    self.bridge.activate(self.evidence.session_id)
+                self._observe_inquiry_tool(frame)
+                self.bridge.note_event({"kind": frame.get("type") or "event"},
+                                       "finishing" if self.evidence.result is not None else "running")
+                if self.evidence.result is not None:
+                    self.bridge.deactivate()
             if (frame.get("type") == "system" and frame.get("subtype") == "init"
                     and self.expected_permission_mode is not None
                     and self.evidence.permission_mode is not None
@@ -511,6 +537,58 @@ class _TurnCollector:
         if self.tools.tool_calls != self._last_tool_calls:
             self._last_tool_calls = self.tools.tool_calls
             self._notify(settled=False, raw=None)
+
+    def _observe_inquiry_tool(self, frame: dict) -> None:
+        """Accept only a completed tool result tied to this native root call."""
+        if not self.evidence.init_observed or self.inquiry is None:
+            return
+        session = frame.get("session_id")
+        if isinstance(session, str) and session and session != self.evidence.session_id:
+            self._foreign_inquiry_session = True
+            return
+        if self._foreign_inquiry_session and not session:
+            return
+        if frame.get("parent_tool_use_id"):
+            return
+        message = frame.get("message")
+        content = message.get("content") if isinstance(message, dict) else None
+        if not isinstance(content, list):
+            return
+        if frame.get("type") == "assistant":
+            names = {f"mcp__{self.inquiry.server_name}__{name}" for name in INQUIRY_TOOLS}
+            for block in content:
+                if not isinstance(block, dict) or block.get("type") != "tool_use":
+                    continue
+                name, call_id = block.get("name"), block.get("id")
+                if name not in names or not isinstance(call_id, str) or not call_id:
+                    continue
+                prior = self._inquiry_calls.get(call_id)
+                if prior is not None and prior != name:
+                    raise ClaudeProtocolError("invalid-inquiry-evidence", "one inquiry call changed its native tool name")
+                self._inquiry_calls[call_id] = name
+        elif frame.get("type") == "user":
+            for block in content:
+                if not isinstance(block, dict) or block.get("type") != "tool_result":
+                    continue
+                call_id = block.get("tool_use_id")
+                name = self._inquiry_calls.get(call_id) if isinstance(call_id, str) else None
+                if name is None:
+                    continue
+                value = block.get("content")
+                if isinstance(value, list):
+                    if len(value) != 1 or not isinstance(value[0], dict) or value[0].get("type") != "text":
+                        raise ClaudeProtocolError("invalid-inquiry-evidence", "the inquiry tool returned no single text receipt")
+                    value = value[0].get("text")
+                if not isinstance(value, str):
+                    raise ClaudeProtocolError("invalid-inquiry-evidence", "the inquiry tool returned no text receipt")
+                if block.get("truncated") is True or block.get("is_truncated") is True:
+                    raise ClaudeProtocolError("invalid-inquiry-evidence", "the inquiry tool result was truncated")
+                if (block.get("is_error") is True or block.get("isError") is True) and not refusal_shaped(value):
+                    raise ClaudeProtocolError("invalid-inquiry-evidence", "the inquiry tool reported an unsuccessful result")
+                try:
+                    self.inquiry.accept_tool_result(self.bridge, name, value, call_id)
+                except ReceiptError as error:
+                    raise ClaudeProtocolError(error.code, str(error)) from None
 
     def publish_activity(self, phase: str, tool: str | None = None) -> None:
         if self.evidence is None:
@@ -576,6 +654,7 @@ def _send_and_settle(collector: _TurnCollector, spawn: _Spawn, preparation: _Pre
     collector.publish_activity("waiting-model")
     evidence = collector.evidence
     while evidence.result is None:
+        _send_pending_inquiries(collector, connection, preparation.session_id)
         connection.pump()
     # A quiet window cannot prove the stream ended: close the input and keep
     # validating trailing frames until the observed end of stream, so a delayed
@@ -587,6 +666,25 @@ def _send_and_settle(collector: _TurnCollector, spawn: _Spawn, preparation: _Pre
     connection.drain_until_closed(
         min(_DRAIN_SECONDS, max(0.0, preparation.deadline - time.monotonic())))
     return evidence.result
+
+
+def _send_pending_inquiries(collector: _TurnCollector, connection: Connection, session_id: str) -> None:
+    bridge = collector.bridge
+    if bridge is None:
+        return
+    for entry in bridge.pending_inquiries():
+        inquiry_id = entry["inquiryId"]
+        question = entry["question"]
+        message = (f"Host inquiry {inquiry_id} for this running execution:\n{question}\n"
+                   "Answer with the hey_my_buddy_answer_inquiry MCP tool using this inquiry id, "
+                   "then continue the assigned work.")
+        connection.send({"type": "user", "message": {"role": "user",
+                         "content": [{"type": "text", "text": message}]}})
+        bridge.deliver_native(inquiry_id, {"sessionId": session_id,
+                                           "source": "claude/stream-json-user",
+                                           "eventSeq": collector.evidence.event_seq})
+        if bridge.error:
+            raise ClaudeProtocolError("inquiry-journal-unavailable", bridge.error)
 
 
 def _check_terminal(evidence: TurnEvidence, session_id: str) -> bool:
@@ -861,6 +959,8 @@ def _build_result(request: RunRequest, *, state: _RunState, collector: _TurnColl
         if state.status == "ok" and native_result is not None:
             _retain(evidence_refs, invocation_root, "native-turn-facts", "native-turn-facts.json",
                     _native_turn_facts(collector, session_id, native_result.get("subtype")))
+        if state.inquiry_report is not None:
+            _retain(evidence_refs, invocation_root, "inquiry-report", "inquiry-report.json", state.inquiry_report)
     if spawn is None:
         receipt = owned_spawn[0]
         # A held main-process handle without a completed receipt stays unknown.
@@ -938,10 +1038,7 @@ def run(request: RunRequest, *, observer: Callable[[Mapping[str, Any]], RunFeedb
     if request.tool_scope == "full" and request.worker_permission is None:
         raise BoardError("INVALID_ARGUMENT", "claude full access requires a Worker permission", toolScope=request.tool_scope)
     if services is not None and not isinstance(services, RunServices):
-        # No in-run session service exists on this harness; the one accepted
-        # binding is this module's own controller endpoint binding, and a
-        # direct native module call may pass None.
-        raise BoardError("INVALID_ARGUMENT", "claude mounts no in-run session service")
+        raise BoardError("INVALID_ARGUMENT", "claude requires its own run service binding")
     if request.session_services:
         raise BoardError("INVALID_ARGUMENT",
                          "claude has no native session service; the value carrier is the native schema")
@@ -950,6 +1047,7 @@ def run(request: RunRequest, *, observer: Callable[[Mapping[str, Any]], RunFeedb
     spawn: _Spawn | None = None
     preparation: _Preparation | None = None
     collector: _TurnCollector | None = None
+    inquiry_bridge: InquiryBridge | None = None
     native_result: dict | None = None
     cancel = CancelFlag(cancelled)
 
@@ -966,8 +1064,18 @@ def run(request: RunRequest, *, observer: Callable[[Mapping[str, Any]], RunFeedb
         state.interrupt_acknowledged = acknowledged
 
     try:
-        preparation = _prepare(request)
+        inquiry = services.inquiry if services is not None else None
+        preparation = _prepare(request, inquiry)
         live = services.live if services is not None else None
+        if inquiry is not None:
+            configuration = inquiry.configuration
+            inquiry_bridge = InquiryBridge(
+                identity=configuration["identity"], journal_path=configuration["inquiryJournalPath"],
+                attention_path=configuration.get("attentionPath"), live=live,
+                error_factory=ClaudeProtocolError,
+                event_metadata=lambda message: {"kind": str(message.get("kind") or "event")},
+                limitation=IN_TURN_NOTE, delivery_mode="realtime")
+            inquiry_bridge.start()
         collector = _TurnCollector(
             request,
             ActivityPublisher(live.publish_activity if live else None),
@@ -977,7 +1085,8 @@ def run(request: RunRequest, *, observer: Callable[[Mapping[str, Any]], RunFeedb
             # the tool scope: a run without the flag exempts nothing.
             native_schema_delivery="--json-schema" in preparation.args,
             expected_permission_mode=_flag_value(preparation.args, "--permission-mode")
-            if request.worker_permission is not None else None)
+            if request.worker_permission is not None else None,
+            inquiry=inquiry, bridge=inquiry_bridge)
         spawn = _spawn_native(command=preparation.command, args=preparation.args, cwd=request.cwd,
                               environment=preparation.environment,
                               invocation_root=preparation.invocation_root, deadline=preparation.deadline,
@@ -1004,6 +1113,9 @@ def run(request: RunRequest, *, observer: Callable[[Mapping[str, Any]], RunFeedb
         if state.terminal_ok:
             state.verified_delivery = collector.tools.settle_delivery(
                 native_result.get("structured_output"), {"sessionId": preparation.session_id})
+            if inquiry_bridge is not None:
+                inquiry_bridge.close()
+                state.inquiry_report = inquiry_bridge.report()
             collector.settled_notify(native_result)
     except ObserverInterrupt:
         state.status = "cancelled"
@@ -1033,6 +1145,9 @@ def run(request: RunRequest, *, observer: Callable[[Mapping[str, Any]], RunFeedb
         state.reason = "invalid-native-result"
         state.error_text = "the native execution returned invalid or incomplete data"
     finally:
+        if inquiry_bridge is not None:
+            inquiry_bridge.close()
+            state.inquiry_report = inquiry_bridge.report()
         if collector is not None and collector.evidence is not None:
             # ADR-018 items 22/23 and the retained root assistant text: raw
             # native observations for every path, including a quota rejection,
@@ -1127,14 +1242,15 @@ def run_discovery(*, cwd: str, invocation_root: Path, native_root: Path, timeout
 
 @dataclasses.dataclass(frozen=True)
 class RunServices:
-    """The controller-owned endpoint, optional for direct native fixtures."""
+    """The controller endpoint and optional per-execution inquiry MCP service."""
 
     live: CTwoLiveEndpoint | None = None
+    inquiry: InquiryServices | None = None
 
 
-def prepare_run_services() -> RunServices:
+def prepare_run_services(*, inquiry: InquiryServices | None = None) -> RunServices:
     """Create the binding; the controller injects its own live endpoint."""
-    return RunServices()
+    return RunServices(inquiry=inquiry)
 
 
 def check_preparation(spec: dict, environment: dict) -> None:
@@ -1186,7 +1302,9 @@ def validate_turn_provenance(record: dict) -> str | None:
         ids = p.get("deniedControlRequestIds")
         bound = bool(isinstance(ids, list) and 0 < len(ids) <= 32
                      and all(isinstance(item, str) and item and len(item) <= 256 for item in ids))
-        if not bound and p.get("permissionDenials") <= 0:
+        unanswered = p.get("unansweredDeliveredInquiries")
+        if not bound and p.get("permissionDenials") <= 0 and not (
+                type(unanswered) is int and unanswered > 0):
             return "the Claude controller attention is not bound to denied native permission requests"
         if (record.get("outcome") or {}).get("disposition") != "attention":
             return "the Claude controller attention must carry an attention outcome"

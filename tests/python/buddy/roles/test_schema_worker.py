@@ -24,6 +24,51 @@ from buddy.harnesses.claude.test_native_run import BUDDY, NativeRunCase
 
 
 class CodexSchemaTests(unittest.TestCase):
+    def test_delivered_unanswered_inquiry_requires_host_attention(self):
+        outcome = {"disposition": "completed", "summary": "Done", "remaining": [],
+                   "decisions": [], "artifacts": [], "request": None}
+        result = SimpleNamespace(value=SimpleNamespace(
+            parsed=SimpleNamespace(value={"outcome": outcome})))
+        for harness in ("codex", "claude"):
+            policy = worker_format(harness)
+            delivered, provenance, _truncated = policy.delivery(
+                result, {"unansweredDeliveredInquiries": 1})
+            self.assertEqual(delivered["disposition"], "attention", harness)
+            self.assertTrue(provenance["controllerAttention"])
+            self.assertFalse(provenance[policy.validation_key])
+            answered, _provenance, _truncated = policy.delivery(
+                result, {"unansweredDeliveredInquiries": 0})
+            self.assertEqual(answered["disposition"], "completed", harness)
+            assistance = {**outcome, "disposition": "assistance", "request": delivered["request"]}
+            assistance_result = SimpleNamespace(value=SimpleNamespace(
+                parsed=SimpleNamespace(value={"outcome": assistance})))
+            pending, _provenance, _truncated = policy.delivery(
+                assistance_result, {"unansweredDeliveredInquiries": 1})
+            self.assertEqual(pending["disposition"], "attention", harness)
+            self.assertEqual(pending["request"], assistance["request"])
+
+    def test_schema_worker_gets_an_attempt_private_inquiry_service(self):
+        from hey_my_buddy.buddy.harnesses.registry import run_seam
+        for harness in ("codex", "claude"):
+            with self.subTest(harness=harness), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                turn = {"taskId": "task", "attemptId": "attempt", "generation": 1,
+                        "turnId": "turn", "executionWorkspace": {"access": "full"}}
+                (root / "input.json").write_text(canonical_json(turn))
+                (root / "task.txt").write_text("Task")
+                control = {"harness": harness, "privateRoot": str(root), "directory": str(root),
+                           "inputFile": str(root / "input.json"), "taskFile": str(root / "task.txt"),
+                           "nativeRoot": str(root / "native"), "invocationId": "invocation",
+                           "spec": {"provider": "fixture", "model": "fixture", "effort": "low"},
+                           "cwd": str(root), "timeoutSeconds": 10,
+                           "inquiry": {"resultsPath": str(root / "inquiry.results.jsonl")}}
+                request, services, _observer, error = run_execution.worker_request(control, run_seam(harness))
+                self.assertIsNone(error)
+                self.assertEqual(services.inquiry.configuration["identity"]["turnId"], "turn")
+                self.assertEqual(services.inquiry.configuration["inquiryJournalPath"], control["inquiry"]["resultsPath"])
+                self.assertIn(f"mcp__{services.inquiry.server_name}__hey_my_buddy_answer_inquiry", request.input_text)
+                self.assertEqual(request.session_services, ())
+
     def test_native_result_schema_offers_waiting_only_for_lead(self):
         for harness in ("codex", "claude"):
             with self.subTest(harness=harness):
@@ -37,9 +82,9 @@ class CodexSchemaTests(unittest.TestCase):
 
     def test_worker_permission_capabilities_match_role_paths(self):
         expected = {
-            "codex": ("codex", "workspace", "cancel", "artifacts", "deadline", "native-session",
+            "codex": ("codex", "inquiry", "workspace", "cancel", "artifacts", "deadline", "native-session",
                       "permission:read", "permission:write", "permission:full"),
-            "claude": ("claude", "workspace", "cancel", "artifacts", "deadline", "permission:read", "permission:write", "permission:full"),
+            "claude": ("claude", "inquiry", "workspace", "cancel", "artifacts", "deadline", "permission:read", "permission:write", "permission:full"),
             "dsh": ("dsh", "inquiry", "workspace", "cancel", "artifacts", "deadline", "native-session",
                     "permission:read", "permission:write", "permission:full"),
             "zcode": ("zcode", "observe", "inquiry", "workspace", "cancel", "artifacts", "deadline", "native-session",

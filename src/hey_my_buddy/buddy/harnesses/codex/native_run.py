@@ -46,6 +46,9 @@ from typing import Any, Callable, Mapping
 from ....errors import BoardError
 from ....protocol.activity import ActivityPublisher
 from ..c_two_live import CTwoLiveEndpoint
+from ..inquiry_bridge import InquiryBridge
+from ..in_turn_inquiry import IN_TURN_NOTE, InquiryServices
+from ..session_receipts import ReceiptError, refusal_shaped
 from ....private_dirs import ensure_private_dir
 from ...roles.turn_io import canonical_json, guard_private_path, private_json
 from ....protocol.owned_process import owned_popen
@@ -284,13 +287,14 @@ class _Classifier:
 
 @dataclasses.dataclass(frozen=True)
 class RunServices:
-    """The controller-owned live endpoint.
+    """The controller-owned live endpoint and attempt-private inquiry tools.
 
     No blackboard client, ExecutionContext or credential file content travels here.
-    Direct fixtures can omit the endpoint while retaining native activity facts.
+    Direct fixtures can omit either binding while retaining native activity facts.
     """
 
     live: CTwoLiveEndpoint | None = None
+    inquiry: InquiryServices | None = None
 
 
 # -- the run state ----------------------------------------------------------------
@@ -352,6 +356,7 @@ class _RunState:
     policy_checks: dict = dataclasses.field(default_factory=dict)
     fast_config: dict | None = None
     fast_receipt: dict | None = None
+    inquiry_report: dict | None = None
 
 
 @dataclasses.dataclass
@@ -634,12 +639,15 @@ def _check_thread_receipt(response: dict, cwd: str, *, mode: str, previous: str 
     return thread_id
 
 
-def _configure_worker(connection: Connection, request: RunRequest, prep: _Preparation, state: _RunState) -> str:
+def _configure_worker(connection: Connection, request: RunRequest, prep: _Preparation,
+                      state: _RunState, inquiry: InquiryServices | None = None) -> str:
     """Worker buddy selection: continuation checks, then one start or resume."""
     mode, previous = _continuation_of(request)
     requested = buddy_spec(request)
     sandbox, _policy = _worker_sandbox(request)
     state.requested = requested
+    inquiry_config = ({"config": {"mcp_servers": {inquiry.server_name: inquiry.mcp_server}}}
+                      if inquiry is not None else {})
     if mode == "native-session":
         binding = _read_binding(prep.native_root, previous)
         expected = {"taskId": request.identity.task_id, "threadId": previous,
@@ -669,7 +677,8 @@ def _configure_worker(connection: Connection, request: RunRequest, prep: _Prepar
                                          "an interrupted Codex turn requires its exact previous attempt checkpoint")
             response = connection.call("thread/resume", {"threadId": previous, "cwd": request.cwd,
                                                          "model": requested["model"], "modelProvider": requested["provider"],
-                                                         "approvalPolicy": "never", "sandbox": sandbox})
+                                                         "approvalPolicy": "never", "sandbox": sandbox,
+                                                         **inquiry_config})
             state.binding_path = _binding_path(prep.native_root, previous)
         except CodexProtocolError as error:
             if error.code != "native-rpc-error":
@@ -678,7 +687,8 @@ def _configure_worker(connection: Connection, request: RunRequest, prep: _Prepar
     elif mode == "initial" and previous is None or mode == "reconstructed-new-session":
         response = connection.call("thread/start", {"cwd": request.cwd, "model": requested["model"],
                                                     "modelProvider": requested["provider"], "approvalPolicy": "never",
-                                                    "sandbox": sandbox, "serviceName": "hey-my-buddy"})
+                                                    "sandbox": sandbox, "serviceName": "hey-my-buddy",
+                                                    **inquiry_config})
     else:
         raise CodexProtocolError("invalid-resume-mode",
                                  "Codex requires an explicit initial, native or reconstructed turn")
@@ -871,6 +881,102 @@ class _EventChain:
         self.pending = []
 
 
+class _NativeInquiry:
+    """Codex's active root turn owns native delivery and signed tool evidence."""
+
+    def __init__(self, connection: Connection, evidence: TurnEvidence, thread_id: str,
+                 turn_id: str, services: InquiryServices, bridge: InquiryBridge):
+        self.connection, self.evidence = connection, evidence
+        self.thread_id, self.turn_id = thread_id, turn_id
+        self.services, self.bridge = services, bridge
+        self._polling = False
+        self._started: dict[str, str] = {}
+
+    def poll(self) -> None:
+        if self._polling or self.evidence.completed is not None:
+            return
+        if self.bridge.error and self.bridge.error.startswith("journal-unavailable"):
+            raise CodexProtocolError("inquiry-journal-unavailable", self.bridge.error)
+        self._polling = True
+        try:
+            for entry in self.bridge.pending_inquiries():
+                if self.evidence.completed is not None:
+                    break
+                inquiry_id = entry["inquiryId"]
+                prompt = ("Host inquiry for this active Buddy turn. Answer with "
+                          f"mcp__{self.services.server_name}__hey_my_buddy_answer_inquiry, "
+                          "using the exact inquiryId in this JSON. Continue the assigned work after answering.\n"
+                          + canonical_json({"inquiryId": inquiry_id, "question": entry["question"]}))
+                try:
+                    response = self.connection.call("turn/steer", {
+                        "threadId": self.thread_id, "expectedTurnId": self.turn_id,
+                        "input": [{"type": "text", "text": prompt}]})
+                except CodexProtocolError as error:
+                    if error.code == "native-rpc-error" and self.evidence.completed is not None:
+                        break  # The turn settled while the native input was in flight.
+                    raise
+                if response.get("turnId") != self.turn_id:
+                    raise CodexProtocolError("wrong-native-turn",
+                                             "Codex did not acknowledge the active turn for the Host inquiry")
+                self.bridge.deliver_native(inquiry_id, {
+                    "threadId": self.thread_id, "turnId": self.turn_id,
+                    "method": "turn/steer", "inquiryId": inquiry_id})
+                if self.bridge.error and self.bridge.error.startswith("journal-unavailable"):
+                    raise CodexProtocolError("inquiry-journal-unavailable", self.bridge.error)
+        finally:
+            self._polling = False
+
+    def observe(self, message: dict) -> None:
+        if message.get("method") not in ("item/started", "item/completed"):
+            return
+        params = message.get("params")
+        if not isinstance(params, dict) or params.get("threadId") != self.thread_id \
+                or _event_turn(params) != self.turn_id:
+            return
+        item = params.get("item")
+        if not isinstance(item, dict) or item.get("type") != "mcpToolCall" \
+                or item.get("server") != self.services.server_name \
+                or item.get("tool") not in ("hey_my_buddy_checkpoint", "hey_my_buddy_answer_inquiry"):
+            return
+        call_id = item.get("id")
+        if not isinstance(call_id, str) or not call_id:
+            raise CodexProtocolError("invalid-inquiry-evidence", "the inquiry tool has no native call identity")
+        if message["method"] == "item/started":
+            prior = self._started.setdefault(call_id, item["tool"])
+            if prior != item["tool"]:
+                raise CodexProtocolError("invalid-inquiry-evidence", "the inquiry call changed native tool identity")
+            return
+        if self._started.get(call_id) != item["tool"]:
+            raise CodexProtocolError("invalid-inquiry-evidence", "the inquiry tool result has no root call start")
+        if item.get("truncated") is True:
+            raise CodexProtocolError("invalid-inquiry-evidence", "the inquiry tool result was truncated")
+        if item.get("status") == "completed":
+            result = item.get("result")
+            if isinstance(result, dict) and result.get("truncated") is True:
+                raise CodexProtocolError("invalid-inquiry-evidence", "the inquiry tool result was truncated")
+            content = result.get("content") if isinstance(result, dict) else None
+            if not isinstance(content, list) or len(content) != 1 or not isinstance(content[0], dict) \
+                    or content[0].get("type") != "text" or not isinstance(content[0].get("text"), str):
+                raise CodexProtocolError("invalid-inquiry-evidence", "the inquiry tool result has no signed text")
+            raw_text = content[0]["text"]
+            if result.get("isError") is True and not refusal_shaped(raw_text):
+                raise CodexProtocolError("invalid-inquiry-evidence", "the inquiry tool failed without a signed refusal")
+        elif item.get("status") == "failed":
+            error = item.get("error")
+            raw_text = error.get("message") if isinstance(error, dict) else None
+            if not isinstance(raw_text, str):
+                raise CodexProtocolError("invalid-inquiry-evidence", "the inquiry tool refusal has no signed text")
+            if not refusal_shaped(raw_text):
+                raise CodexProtocolError("invalid-inquiry-evidence", "the inquiry tool failed without a signed refusal")
+        else:
+            raise CodexProtocolError("invalid-inquiry-evidence", "the inquiry tool has no terminal native status")
+        tool_name = f"mcp__{self.services.server_name}__{item['tool']}"
+        try:
+            self.services.accept_tool_result(self.bridge, tool_name, raw_text, call_id)
+        except ReceiptError as error:
+            raise CodexProtocolError(error.code, str(error)) from None
+
+
 class _FastProtocol:
     """The no-tool carrier's own protocol checks, without the moved policy.
 
@@ -1051,18 +1157,33 @@ def _run(request: RunRequest, services: RunServices, mode: str,
                                          "generation": request.identity.generation})
     activity = _ActivityWriter(services.live)
     chain = _EventChain(facts, _Classifier(facts), projector, overflow_raises=mode == "fast")
+    inquiry_bridge: InquiryBridge | None = None
+    inquiry_poller: list[_NativeInquiry] = []
     try:
         prep = _prepare(request, mode)
+        if mode == "worker" and services.inquiry is not None:
+            configuration = services.inquiry.configuration
+            inquiry_bridge = InquiryBridge(
+                identity=configuration["identity"], journal_path=configuration["inquiryJournalPath"],
+                error_factory=CodexProtocolError,
+                event_metadata=lambda message: {
+                    "kind": message.get("method") if isinstance(message.get("method"), str) else "unknown",
+                    "toolName": (message.get("params") or {}).get("item", {}).get("tool")
+                    if isinstance((message.get("params") or {}).get("item"), dict) else None},
+                limitation=IN_TURN_NOTE, attention_path=configuration.get("attentionPath"),
+                live=services.live, delivery_mode="realtime")
+            inquiry_bridge.start()
         prep.version = probe_version(prep.command, prep.environment, cwd=request.cwd,
                                      deadline=prep.deadline, owned=owned_spawn)
         state.version = prep.version
         spawn = _spawn_app_server(prep, cancel, owned_spawn)
         connection = spawn.connection
-        _wire(connection, chain, facts, observer, request, state, mode)
+        _wire(connection, chain, facts, observer, request, state, mode, inquiry_poller)
         state.selected_model_listed = _initialize(connection, prep, mode, buddy_spec(request), state)
         if mode == "worker":
-            thread_id = _configure_worker(connection, request, prep, state)
-            _worker_turn(connection, chain, request, state, thread_id, observer, activity)
+            thread_id = _configure_worker(connection, request, prep, state, services.inquiry)
+            _worker_turn(connection, chain, request, state, thread_id, observer, activity,
+                         inquiry_bridge, services.inquiry, inquiry_poller)
         else:
             if mode == "fast":
                 thread_id = _configure_fast(connection, request, state)
@@ -1087,6 +1208,9 @@ def _run(request: RunRequest, services: RunServices, mode: str,
         state.status, state.reason = "error", "invalid-native-result"
         state.error_text = "Codex returned invalid or incomplete native data"
     finally:
+        if inquiry_bridge is not None:
+            inquiry_bridge.close()
+            state.inquiry_report = inquiry_bridge.report()
         # A preparation failure also reaches the stop collection: nothing was
         # ever spawned, and that known fact — not an unknown — is what the
         # result must carry.
@@ -1096,7 +1220,7 @@ def _run(request: RunRequest, services: RunServices, mode: str,
 
 def _wire(connection: Connection, chain: _EventChain, facts: _RunFacts,
           observer: Callable[[Mapping], RunFeedback], request: RunRequest,
-          state: _RunState, mode: str) -> None:
+          state: _RunState, mode: str, inquiry_poller: list[_NativeInquiry]) -> None:
     """Bind the connection's frame paths to the fact-first chain."""
     connection.on_notification = chain.observe
 
@@ -1122,12 +1246,13 @@ def _wire(connection: Connection, chain: _EventChain, facts: _RunFacts,
     def dispatch_feedback() -> None:
         # Runs after every pump step, the waits inside ``call`` included: the
         # refusal answer is already on the wire when the role's stop lands.
-        if not facts.dirty:
-            return
-        facts.dirty = False
-        tool_calls = chain.projector.tool_calls if chain.projector is not None else 0
-        feedback = observer(facts.mapping(tool_calls=tool_calls, settled=False, raw_answer=None))
-        _take_feedback(feedback, mode, settled=False)
+        if facts.dirty:
+            facts.dirty = False
+            tool_calls = chain.projector.tool_calls if chain.projector is not None else 0
+            feedback = observer(facts.mapping(tool_calls=tool_calls, settled=False, raw_answer=None))
+            _take_feedback(feedback, mode, settled=False)
+        if inquiry_poller:
+            inquiry_poller[0].poll()
 
     connection.after_pump = dispatch_feedback
 
@@ -1148,7 +1273,10 @@ def _take_feedback(feedback: Any, mode: str, *, settled: bool) -> RunFeedback:
 
 def _worker_turn(connection: Connection, chain: _EventChain, request: RunRequest,
                  state: _RunState, thread_id: str,
-                 observer: Callable[[Mapping], RunFeedback], activity: _ActivityWriter) -> None:
+                 observer: Callable[[Mapping], RunFeedback], activity: _ActivityWriter,
+                 inquiry_bridge: InquiryBridge | None = None,
+                 inquiry_services: InquiryServices | None = None,
+                 inquiry_poller: list[_NativeInquiry] | None = None) -> None:
     """The micro task turn: one admission, settlement, usage, quota, checkpoint."""
     state.model_started = True
     response = _admit_turn(connection, request, thread_id, request.input_text, "worker", state)
@@ -1162,8 +1290,18 @@ def _worker_turn(connection: Connection, chain: _EventChain, request: RunRequest
         chain.projector.observe_root(thread_id, turn_id)
     evidence = TurnEvidence(thread_id, turn_id)
     state.turn_evidence = evidence
+    native_inquiry = None
+    if inquiry_bridge is not None and inquiry_services is not None:
+        native_inquiry = _NativeInquiry(connection, evidence, thread_id, turn_id,
+                                        inquiry_services, inquiry_bridge)
+        inquiry_bridge.activate(thread_id)
+        if inquiry_poller is not None:
+            inquiry_poller.append(native_inquiry)
 
     def carrier(message: dict) -> None:
+        if native_inquiry is not None:
+            native_inquiry.observe(message)
+            inquiry_bridge.note_event(message, "finishing" if evidence.completed is not None else "running")
         _capture_native_error(state, message, thread_id, turn_id)
         observed = evidence.observe(message)
         if observed:
@@ -1176,6 +1314,10 @@ def _worker_turn(connection: Connection, chain: _EventChain, request: RunRequest
             connection.pump()
         native_turn = evidence.completed
     finally:
+        if inquiry_bridge is not None:
+            inquiry_bridge.deactivate()
+        if inquiry_poller is not None:
+            inquiry_poller.clear()
         # Even a transport failure or a deadline can leave a completed root
         # assistant message; the retained checkpoint permits reconstruction,
         # never resume without a completed native turn.
@@ -1623,6 +1765,8 @@ def _evidence_refs(request: RunRequest, state: _RunState, facts: _RunFacts) -> t
                              "effort": request.buddy.effort}})
     if state.native_turn_facts is not None:
         retain("native-turn-facts", invocation_root / "native-turn-facts.json", state.native_turn_facts)
+    if state.inquiry_report is not None:
+        retain("inquiry-report", invocation_root / "inquiry-report.json", state.inquiry_report)
     if state.review_config is not None:
         retain("review-config-readback", invocation_root / "review-config-readback.json",
                {"config": state.review_config})
@@ -1814,9 +1958,10 @@ def check_preparation(spec: dict, environment: dict) -> None:
         raise BoardError("HARNESS_UNAVAILABLE", str(error), harness="codex") from None
 
 
-def prepare_run_services(*, tool_scope: str = "write") -> RunServices:
+def prepare_run_services(*, tool_scope: str = "write",
+                         inquiry: InquiryServices | None = None) -> RunServices:
     """Bind the harness's native services without selecting credentials."""
-    return RunServices()
+    return RunServices(inquiry=inquiry)
 
 
 def validate_turn_provenance(record: dict) -> str | None:
@@ -1836,11 +1981,14 @@ def validate_turn_provenance(record: dict) -> str | None:
         expected = {"harness": "codex", "turnEnd": "completed", "outputSchemaValidated": False,
                     "nativeTurnStarted": True, "nativeTurnCompleted": True, "controllerAttention": True}
         outcome = record.get("outcome")
-        if (not isinstance(outcome, dict) or outcome.get("disposition") != "attention"
-                or not isinstance(p.get("nativeRequestMethod"), str) or not p["nativeRequestMethod"]
-                or p.get("nativeRequestThreadId") != record.get("sessionId")
-                or p.get("nativeRequestTurnId") != p.get("nativeTurnId")):
-            return "the Codex controller attention is not bound to a native request"
+        native_request = (isinstance(p.get("nativeRequestMethod"), str) and bool(p["nativeRequestMethod"])
+                          and p.get("nativeRequestThreadId") == record.get("sessionId")
+                          and p.get("nativeRequestTurnId") == p.get("nativeTurnId"))
+        unanswered = (type(p.get("unansweredDeliveredInquiries")) is int
+                      and p["unansweredDeliveredInquiries"] > 0)
+        if not isinstance(outcome, dict) or outcome.get("disposition") != "attention" \
+                or not (native_request or unanswered):
+            return "the Codex controller attention lacks root inquiry or native request evidence"
     if any(type(p.get(key)) is not type(value) or p.get(key) != value for key, value in expected.items()):
         return "the Codex turn lacks native completion and structured-result evidence"
     if p.get("nativeThreadId") != record.get("sessionId") or not isinstance(p.get("nativeTurnId"), str) or not p["nativeTurnId"]:

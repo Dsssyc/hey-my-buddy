@@ -352,6 +352,9 @@ def worker_delivery(result, *, delegation_authority: bool = False) -> tuple[dict
         facts = _evidence(result, "native-turn-facts")
         if not isinstance(facts, dict):
             raise BoardError("invalid-result", "The native run has no correlated completion facts")
+        inquiry = _evidence(result, "inquiry-report")
+        if inquiry is not None:
+            facts = {**facts, "unansweredDeliveredInquiries": inquiry.get("unansweredDelivered", 0)}
         return format.delivery(result, facts)
     provenance = _evidence(result, "turn-provenance")
     outcome = result.value.parsed.value if result.value is not None and result.value.parsed else None
@@ -399,7 +402,17 @@ def worker_request(control: dict, module):
     else:
         format = format.for_turn(turn_input)
         prompt, schema, scope = format.prompt(task_text, turn_input, credential_file=credential_file), format.schema, permission.tool_scope
-        services = _native_services(control, module, scope)
+        inquiry_services = None
+        if inquiry is not None:
+            from ..harnesses.in_turn_inquiry import prepare_inquiry_services
+            inquiry_services = prepare_inquiry_services(
+                invocation_root=invocation_root, identity=identity, input_sha256=input_hash(turn_input),
+                attention_path=attention_path, inquiry=inquiry)
+            prompt += ("\nHost questions may arrive as inputs during this running turn. Answer each with "
+                       f"mcp__{inquiry_services.server_name}__hey_my_buddy_answer_inquiry, using its exact "
+                       "inquiryId and answer text. Assistant prose does not count as an answer. "
+                       "Questions never open a new turn or extend this turn's deadline.\n")
+        services = _native_services(control, module, scope, inquiry=inquiry_services)
         descriptions = ()
     mode = turn_input.get("resumeMode")
     previous = turn_input.get("previousSessionId")
@@ -431,13 +444,13 @@ def worker_request(control: dict, module):
     return request, services, worker_observer, error
 
 
-def _native_services(control: dict, module, tool_scope: str):
+def _native_services(control: dict, module, tool_scope: str, *, inquiry=None):
     """Supply only the registered factory's actual inputs, without workflow authority."""
     factory = getattr(module, "prepare_run_services", None)
     if factory is None:
         return None
     import inspect
-    values = dict(tool_scope=tool_scope)
+    values = dict(tool_scope=tool_scope, inquiry=inquiry)
     # These are this project's registered factories, not vendor qualification.
     parameters = inspect.signature(factory).parameters
     return factory(**{key: value for key, value in values.items() if key in parameters})

@@ -6,8 +6,8 @@ ADAPTER_CAPABILITIES = {
     "decision": ("decision",),
     "dsh": ("dsh", "inquiry", "workspace", "cancel", "artifacts", "deadline", "native-session"),
     "zcode": ("zcode", "observe", "inquiry", "workspace", "cancel", "artifacts", "deadline", "native-session"),
-    "codex": ("codex", "workspace", "cancel", "artifacts", "deadline", "native-session"),
-    "claude": ("claude", "workspace", "cancel", "artifacts", "deadline"),
+    "codex": ("codex", "inquiry", "workspace", "cancel", "artifacts", "deadline", "native-session"),
+    "claude": ("claude", "inquiry", "workspace", "cancel", "artifacts", "deadline"),
 }
 
 WORKER_PERMISSIONS = {

@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 """Private Codex App Server fixture. No model or shared Codex state is touched."""
 import json
+import hashlib
+import hmac
 import os
 import sys
 import time
@@ -304,6 +306,38 @@ def main():
                 continue
             send({"id": ident, "result": {"turn": {"id": turn_id, "status": "inProgress", "items": []}}})
             send({"method": "turn/started", "params": {"threadId": thread_id, "turn": {"id": turn_id, "status": "inProgress", "items": []}}})
+            if case in ("inquiry-active", "inquiry-unanswered"):
+                state['threads'][thread_id]['turnStart'] = {"threadId": thread_id, "turnId": turn_id}
+                write_state(state)
+                steer = json.loads(sys.stdin.readline())
+                if steer.get("method") != "turn/steer" or steer["params"].get("expectedTurnId") != turn_id:
+                    raise RuntimeError("expected active-turn inquiry steer")
+                state = read_state()
+                state['threads'][thread_id]['steer'] = steer['params']
+                write_state(state)
+                send({"id": steer["id"], "result": {"turnId": turn_id}})
+                if case == "inquiry-active":
+                    prompt = steer['params']['input'][0]['text']
+                    inquiry_id = json.loads(prompt.splitlines()[-1])['inquiryId']
+                    name, server = next(iter(state['threads'][thread_id]['start']['config']['mcp_servers'].items()))
+                    config = json.loads(Path(server['args'][-1]).read_text())
+                    journal = [json.loads(line) for line in Path(config['inquiryJournalPath']).read_text().splitlines()]
+                    entry = next(record for record in journal if record['inquiryId'] == inquiry_id)
+                    receipt = {"version": 1, "kind": "inquiry-answer", "identity": config['identity'],
+                               "inquiryId": inquiry_id, "questionSha256": entry['questionSha256'],
+                               "answer": "42", "receiptId": "1" * 32}
+                    signature = hmac.new(bytes.fromhex(config['key']),
+                                         json.dumps(receipt, ensure_ascii=False, sort_keys=True,
+                                                    separators=(',', ':')).encode(), hashlib.sha256).hexdigest()
+                    receipt['signature'] = signature
+                    call = {"type": "mcpToolCall", "id": "inquiry-call-1", "server": name,
+                            "tool": "hey_my_buddy_answer_inquiry", "status": "inProgress", "arguments": {}}
+                    send({"method": "item/started", "params": {"threadId": thread_id, "turnId": turn_id,
+                                                               "item": call}})
+                    send({"method": "item/completed", "params": {"threadId": thread_id, "turnId": turn_id,
+                                                                 "item": {**call, "status": "completed",
+                                                                          "result": {"content": [{"type": "text", "text":
+                                                                              json.dumps(receipt, ensure_ascii=False)}]}}}})
             send_usage(case, thread_id, turn_id, turn_index)
             if case.startswith("protocol-"):
                 for method, protocol_item in item_frames(case.removeprefix("protocol-")):
