@@ -1,18 +1,7 @@
-import { cn } from "cn";
-import type { ComponentProps, ReactNode } from "react";
 import { memo } from "react";
+import type { ComponentProps, ReactNode } from "react";
 import { Streamdown } from "streamdown";
-import { MarkdownCode } from "./markdown-code";
-
-export type MessageProps = ComponentProps<"div"> & { from: "user" | "assistant" };
-
-export function Message({ from, className, ...props }: MessageProps) {
-  return <div data-slot="session-message" data-from={from} className={cn("group flex min-w-0 flex-col gap-2", from === "user" && "items-end", className)} {...props} />;
-}
-
-export function MessageContent({ className, ...props }: ComponentProps<"div">) {
-  return <div data-slot="session-message-content" className={cn("relative min-w-0 max-w-full break-words text-sm leading-relaxed", "group-data-[from=user]:bg-sunk group-data-[from=user]:px-3 group-data-[from=user]:py-2", "group-data-[from=assistant]:border-l-2 group-data-[from=assistant]:border-line2 group-data-[from=assistant]:pl-3", className)} {...props} />;
-}
+import { MarkdownCode } from "./MarkdownCode";
 
 // The transcript is model output. Only web links are active; local paths and
 // arbitrary schemes stay text. Images never fetch a remote resource.

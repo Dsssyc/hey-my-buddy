@@ -29,8 +29,10 @@ function leaves(node: unknown, path: string[] = []): string[] {
 
 function unused(copy: unknown, text: string, namespace = ""): string[] {
   return leaves(copy).filter(key => {
-    const parts = key.split(".");
-    const qualified = `${namespace}${key}`;
+    // i18next selects plural variants from the base key and count.
+    const lookup = key.replace(/_(?:zero|one|two|few|many|other)$/, "");
+    const parts = lookup.split(".");
+    const qualified = `${namespace}${lookup}`;
     // A key is used whole, or by a prefix that a state completes: `harness.status.${key}`.
     const prefixes = parts.map((_, index) => `${namespace}${parts.slice(0, index + 1).join(".")}${index + 1 < parts.length ? "." : ""}`);
     return !text.includes(`"${qualified}"`) && !text.includes(`'${qualified}'`) && !prefixes.slice(0, -1).some(prefix => text.includes(`\`${prefix}\${`) || text.includes(`"${prefix}" +`));
@@ -56,6 +58,9 @@ describe("the copy of the pages", () => {
       "notice.tsx": 'const { t } = useTranslation("common"); t("active");',
       "other.tsx": 'const { t } = useTranslation("settings"); t("retired"); t("common:explicit");',
     }, "common")).toEqual(["retired"]);
+  });
+  it("recognises plural base keys while still finding unused plural variants", () => {
+    expect(unused({ files_one: "file", files_other: "files", retired_other: "unused" }, 't("files", { count })')).toEqual(["retired_other"]);
   });
   it("has no retired settings copy", () => {
     const source = sourceOf(pages.settings).replaceAll("settingsStorage:", "");

@@ -1,7 +1,7 @@
 import type { MessageUpdate, PlanUpdate, RecordedEvent, ToolUpdate } from "./types";
 
 type MessageBlock = { type: "message"; key: string; update: MessageUpdate };
-type ToolBlock = { type: "tool"; key: string; update: ToolUpdate; segments: Map<string, string> };
+type ToolBlock = { type: "tool"; started: boolean; key: string; update: ToolUpdate; segments: Map<string, string> };
 type PlanBlock = { type: "plan"; key: string; update: PlanUpdate };
 export type SessionBlock = MessageBlock | ToolBlock | PlanBlock;
 
@@ -16,10 +16,11 @@ export function sessionBlocks(events: RecordedEvent[]): SessionBlock[] {
     } else if (update.sessionUpdate === "tool_call" || update.sessionUpdate === "tool_call_update") {
       let block = tools.get(update.toolCallId);
       if (!block) {
-        block = { type: "tool", key: `tool:${update.toolCallId}`, update: { ...update }, segments: new Map() };
+        block = { type: "tool", started: update.sessionUpdate === "tool_call", key: `tool:${update.toolCallId}`, update: { ...update }, segments: new Map() };
         tools.set(update.toolCallId, block);
         blocks.push(block);
       }
+      if (update.sessionUpdate === "tool_call") block.started = true;
       block.update = { ...block.update, ...update };
       if (update.content) {
         const key = update._meta ? JSON.stringify([update._meta.nativeItemId, update._meta.contentSegment]) : id;
@@ -39,5 +40,5 @@ export function sessionBlocks(events: RecordedEvent[]): SessionBlock[] {
       }
     }
   }
-  return blocks;
+  return blocks.filter(block => block.type !== "tool" || block.started);
 }
