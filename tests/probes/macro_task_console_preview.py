@@ -387,7 +387,8 @@ def run(run_id: str, *, project: str, title: str, title_source: str, task_text: 
         active_request: dict | None = None, spans: list[dict] | None = None,
         markers: list[dict] | None = None, attempts: list[dict] | None = None,
         shutdown_confirmed: bool = True, micro_task: bool = True, adapter: str | None = None,
-        continuation_count: int = 0, timeout_seconds: int = 0, revision: int = 3,
+        continuation_count: int = 0, expected_seconds: int = 1800,
+        router_budget_seconds: int | None = None, revision: int = 3,
         buddy_locked: bool = False, conclusion: dict | None = None) -> dict:
     return {
         "runId": run_id, "parentRunId": parent, "group": group, "project": project, "title": title,
@@ -398,7 +399,9 @@ def run(run_id: str, *, project: str, title: str, title_source: str, task_text: 
         "artifacts": artifacts or [], "integrations": integrations or [], "routing": routing,
         "activeRequest": active_request, "spans": spans or [], "markers": markers or [],
         "attempts": attempts or [], "shutdownConfirmed": shutdown_confirmed,
-        "adapter": adapter, "continuationCount": continuation_count, "timeoutSeconds": timeout_seconds,
+        "adapter": adapter, "continuationCount": continuation_count,
+        **({"routerBudgetSeconds": router_budget_seconds} if adapter == "decision"
+           else {"expectedSeconds": expected_seconds}),
         "revision": revision, "buddyLocked": buddy_locked,
         "hostConclusion": conclusion,
         "kind": "decision" if not micro_task else ("helper" if parent is not None else "micro-task"),
@@ -754,7 +757,8 @@ def build_runs() -> dict[str, dict]:
                         state="cancelled" if record["status"] == "cancelled" else "accepted",
                         status=record["status"] if record["status"] in ("failed", "cancelled") else "completed",
                         category="ended", buddy=None, micro_task=False, routing=record,
-                        adapter="decision", revision=1))
+                        adapter="decision", router_budget_seconds=record["budget"]["timeoutSeconds"] + 10,
+                        revision=1))
         runs[-1]["decisionId"] = record["decisionId"]
         runs[-1]["requestId"] = f"request-{router}"
     by_id = {entry["runId"]: entry for entry in runs}
@@ -860,17 +864,20 @@ def task_view(entry: dict) -> dict:
     selected = entry["attempts"][-1] if entry["attempts"] else None
     receipt = selected["result"] if selected is not None and entry["resultAvailable"] else None
     adapter = entry["adapter"] or (entry["buddy"] or {}).get("harness", "dsh")
+    duration = ({"routerBudgetSeconds": entry["routerBudgetSeconds"]} if adapter == "decision"
+                else {"expectedSeconds": entry["expectedSeconds"]})
     spec: dict[str, Any] = {"task": entry["task"], "adapter": adapter, "cwd": entry["cwd"],
-                            "workspace": True, "timeoutSeconds": entry["timeoutSeconds"]}
+                            "workspace": True, **duration}
     if entry["group"]:
         spec["macroTaskId"] = entry["group"]
     if entry["adapter"] == "decision" and entry.get("decisionId"):
-        spec["decision"] = {"decisionId": entry["decisionId"]}
+        spec["decision"] = {"decisionId": entry["decisionId"], "kind": "select",
+                            "routerBudgetSeconds": entry["routing"]["budget"]["timeoutSeconds"]}
     view: dict[str, Any] = {
         "runId": entry["runId"], "taskId": entry["runId"], "requestId": entry["requestId"],
         "owner": "synthetic-worker-1", "adapter": adapter, "cwd": entry["cwd"], "task": entry["task"],
         "spec": spec, "inputFingerprint": digest(f"{entry['runId']}-fingerprint"), "fingerprintVersion": 3,
-        "requiredCapabilities": [], "exclusiveResources": [], "timeoutSeconds": entry["timeoutSeconds"],
+        "requiredCapabilities": [], "exclusiveResources": [], **duration,
         "status": entry["status"], "state": entry["status"], "queueReason": None,
         "revision": entry["revision"],
         "selectedAttemptId": selected["attemptId"] if selected else None,
@@ -939,6 +946,7 @@ def turn_views(entry: dict) -> list[dict]:
     for item in reversed(entry["attempts"]):
         views.append({
             "turnId": item["turnId"], "turnIndex": item["turnIndex"], "attemptId": item["attemptId"],
+            "expectedSeconds": entry["expectedSeconds"],
             "generation": item["generation"], "resumeMode": "reconstructed-new-session",
             "sessionId": None, "state": "returned" if item["state"] == "finished" else "open",
             "disposition": item["disposition"], "createdAt": item["startedAt"],

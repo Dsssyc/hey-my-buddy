@@ -34,6 +34,16 @@
 
 buddy 侧分阶段跑过 contract/controller/protocol、四个 harness 的 fixture 执行与 DSH role/storage、Codex 超过预期、Worker/role/private adapter 及私有打包 runtime 的检查，均通过；最终补查的 7 个 harness/工具证据文件 140 项通过，4 个角色/controller 文件 86 项通过，Claude Worker 文件 3 项通过，对应 `tmp/buddy-expected-seconds-harness-checks.log`、`tmp/buddy-expected-seconds-role-checks.log` 与 `tmp/buddy-expected-seconds-claude-worker-checks.log`。没有发生仅凭机器繁忙判定的时序失败，因而没有无改动的时序重跑记录。`git diff --check` 通过；说明文件写完后单独运行 `cli/test_repository_hygiene.py`，5 项通过，日志为 `tmp/expected-seconds/notes-hygiene.log`。
 
-授权范围之外发现未同步的 probe 调用：`tests/probes/dsh_native_resume_smoke.py` 的实际 `workflow_submit` 仍发送 `timeoutSeconds:180`，新契约将明确拒绝，需 Host 更新或扩充写入范围；`tests/probes/macro_task_console_preview.py` 的合成 task 视图仍写旧字段、默认 0，`tests/probes/router_fast.py` 与 `tests/probes/router_readonly.py` 的手构 ExecutionContext 也仍写旧字段。后两者的实际原生请求预算仍单独传入，但规范应由 Host 改为 Router 专用字段。这四个文件均不在冻结写入范围内，故没有修改或运行其中的真实 probe；它们是交付中需要 Host 处理的范围缺口，其余无不一致情形。
+第一回合发现四个 probe 的旧字段仍未同步，因为它们当时不在冻结写入范围内，已通过 attention 交给 Host；第二回合 Host 将 `tests/probes` 加入范围第 2 版，授权改字段并只做 Python 编译检查。四处现已按下节同步，第一回合的范围缺口已解除；当前无不一致情形。
 
 没有实现 08/09 提醒、10 急停范围或 11 有序收尾，没有改 docs 的其他文件、skills、README、AGENTS、CONTEXT、升级基点 fixture 或版本号；没有提交、stash、分支或标签操作，没有操作日常服务、Worker、状态、配置、凭据、账户或产品安装。最终验收与整合后完整检查由 Host 负责。
+
+## 第 2 回合：探针字段同步
+
+`tests/probes/dsh_native_resume_smoke.py` 的 `workflow_submit` 将 `timeoutSeconds:180` 改为 `expectedSeconds:180`，保留正数预期时长；其余真实 harness 探针流程没有执行。
+
+`tests/probes/router_fast.py` 的手构 `ExecutionContext.spec` 使用 `routerBudgetSeconds:70`，保留 60 秒原生预算加 10 秒外层宽限；`tests/probes/router_readonly.py` 的手构规范也改用 `routerBudgetSeconds`，取值仍为独立请求的 `budget.timeoutSeconds`，该探针既有的等待预算加 10 秒不变。两个探针中的原生请求预算、预算比较与 wait 调用仍沿原路径，只替换执行规范的旧字段。
+
+`tests/probes/macro_task_console_preview.py` 的普通微任务和命令合成记录改为 `expectedSeconds`，fixture 参数改为 `expected_seconds`、默认 1800；task 规范与 task 视图同步读出该字段，合成回合也给出 `expectedSeconds`。内部 Router 记录只给出 `routerBudgetSeconds`，由既有 routing budget 加 10 秒宽限生成，嵌套 `decision` 给出实际预算与 `kind:select`；Router 档位和冻结 `budget.timeoutSeconds` 保持原义，没有给 Router 记录同时放入工作预期。
+
+本回合只执行 `PYTHONPYCACHEPREFIX="$PWD/tmp/expected-seconds/probe-pycache" python3 -m py_compile tests/probes/dsh_native_resume_smoke.py tests/probes/macro_task_console_preview.py tests/probes/router_fast.py tests/probes/router_readonly.py`，四个文件编译通过，退出 0；缓存写在检出内，`git diff --check` 通过，静态检索确认剩余 `timeoutSeconds` 都属于 Router budget。没有执行或导入四个探针模块，没有启动预览服务、运行真实 harness 或进行模型调用；这次验证只证明 Python 语法可编译，真实导入依赖与探针运行留给 Host 有意执行时核验，第一回合的测试结果保留为此前证据。

@@ -301,7 +301,7 @@ def run(args):
     handle = None
     context = ExecutionContext(task_id=identity["taskId"], attempt_id=identity["attemptId"],
         generation=1, spec={**report["buddy"], "harness": args.harness,
-                               "cwd": str(frozen), "timeoutSeconds": limits["timeoutSeconds"]},
+                               "cwd": str(frozen), "routerBudgetSeconds": limits["timeoutSeconds"]},
         directory=root / "attempt", runtime={}, environment=environment)
     private_json(root / "request.json", redact({"identity": identity, "buddy": report["buddy"],
                                                "request": report["request"]}, secrets))

@@ -75,7 +75,7 @@ def run(args):
     environment.update(HMB_DEV_SOURCE='1', HMB_STATE_DIR=str(root / 'state'),
                        HMB_RUNTIME_ROOT=str(root / 'runtime'))
     context = ExecutionContext(task_id=str(uuid.uuid4()), attempt_id=str(uuid.uuid4()), generation=1,
-        spec={'adapter': 'decision', 'cwd': str(root), 'timeoutSeconds': 70},
+        spec={'adapter': 'decision', 'cwd': str(root), 'routerBudgetSeconds': 70},
         directory=root / 'attempt', runtime={'identity': 'source:fast-probe'},
         environment=environment, decision_input=document)
     implementation = DecisionAdapter()
