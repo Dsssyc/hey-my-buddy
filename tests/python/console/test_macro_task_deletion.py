@@ -7,6 +7,7 @@ from blackboard.tasks import test_workflow as workflow_fixtures, test_workspace 
 from console.test_console import ConsoleTestCase
 from hey_my_buddy.blackboard.tasks import macro_task_deletion, workflow, workspace
 from hey_my_buddy.errors import BoardError
+from hey_my_buddy.protocol.reasons import reason
 
 
 PREVIEW = 'macro_task_deletion_preview'
@@ -189,7 +190,8 @@ class ConsoleMacroTaskDeletionTests(workflow_fixtures.WorkflowTestCase, ConsoleT
         board = self.board()
         _, browser = self.open_console(board)
         for code, status in (('MACRO_TASK_NOT_SETTLED', 409), ('MACRO_TASK_STORAGE_IN_USE', 409),
-                             ('MACRO_TASK_BUSY', 409), ('STORAGE_BUSY', 409), ('TASK_DELETING', 409),
+                             ('MACRO_TASK_HARNESS_UNAVAILABLE', 409), ('MACRO_TASK_BUSY', 409),
+                             ('STORAGE_BUSY', 409), ('TASK_DELETING', 409),
                              ('MACRO_TASK_DELETED', 410), ('REVISION_CONFLICT', 409), ('NOT_FOUND', 404)):
             for operation, seam, params in ((PREVIEW, 'preview', {'macroTaskId': 'macro-fixture'}),
                     (DELETE, 'delete', {'macroTaskId': 'macro-fixture', 'microTaskCount': 0, 'confirm': True})):
@@ -197,6 +199,44 @@ class ConsoleMacroTaskDeletionTests(workflow_fixtures.WorkflowTestCase, ConsoleT
                         macro_task_deletion, seam, side_effect=BoardError(code, 'Fixture failure', deletionId='del-fixture')):
                     error = self.command(browser, operation, params, status=status, code=code)
                 self.assertEqual(error, {'code': code, 'message': 'Fixture failure', 'details': {'deletionId': 'del-fixture'}})
+
+    def test_unavailable_harness_refuses_with_structured_details_and_recovers(self):
+        board = self.board()
+        run = self.create(board, macroTask={'title': 'Harness health'})
+        target = run['macroTaskId']
+        session_id = '55555555-5555-4555-8555-555555555555'
+        receipt = {'result': {'nativeSession': {'harness': 'codex', 'sessionId': session_id,
+                                                'captured': True, 'storageOwner': 'harness-user-store',
+                                                'resumeMode': 'initial'},
+                              'nativeCheckpoint': {'version': 1, 'sessionId': session_id,
+                                                   'taskId': run['runId'], 'attemptId': 'health-attempt-1'}}}
+        not_found = reason('harness.not-found', operation='probe')
+        now = board.store.now()
+        with board.store.db.write() as connection:
+            connection.execute('INSERT INTO attempts(attempt_id,task_id,generation,nonce_verifier,execution_state,'
+                               'adapter,shutdown_confirmed,result_json,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?)',
+                               ('health-attempt-1', run['runId'], 1, 'fixture', 'finished', 'codex', 1,
+                                json.dumps(receipt), now, now))
+            connection.execute("UPDATE harness_health SET status='missing',record_json=? WHERE harness='codex'",
+                               (json.dumps({'reason': not_found}),))
+        _, browser = self.open_console(board)
+        for operation, params in ((PREVIEW, {'macroTaskId': target}),
+                                  (DELETE, {'macroTaskId': target, 'microTaskCount': 1, 'confirm': True})):
+            with self.subTest(operation=operation):
+                error = self.command(browser, operation, params, status=409, code='MACRO_TASK_HARNESS_UNAVAILABLE')
+                self.assertEqual(error['details'], {'macroTaskId': target,
+                                                    'harnesses': [{'harness': 'codex', 'reason': not_found,
+                                                                   'microTaskIds': [run['runId']]}]})
+        with board.store.db.read() as connection:
+            self.assertEqual(connection.execute('SELECT COUNT(*) FROM macro_task_deletions').fetchone()[0], 0)
+        self.assertEqual(board.call('workflow_get', {'runId': run['runId']})['state'], 'cancelled')
+        with board.store.db.write() as connection:
+            connection.execute("UPDATE harness_health SET status='ready',record_json='{}' WHERE harness='codex'")
+        # The native session deletion seam is patched: the real one launches a
+        # controller process, which belongs to the physical-phase suites.
+        with patch.object(macro_task_deletion, '_delete_sessions', return_value=[]):
+            deleted = self.command(browser, DELETE, {'macroTaskId': target, 'microTaskCount': 1, 'confirm': True})
+        self.assertEqual(deleted['state'], 'deleted')
 
     def test_interrupted_deletion_returns_structured_reason_and_resumes_the_same_record(self):
         board = self.board()

@@ -18,6 +18,7 @@ from ...home import control_file_path, submission_file_path
 from ...protocol import schemas
 from ...protocol.reasons import reason
 from . import micro_task, storage, worker_sessions
+from ..service.harness_health import read_health
 from ..store.db import canonical_json
 
 
@@ -240,6 +241,20 @@ def _storage_in_use(store, connection, scope):
     return [{'objectKind':kind,'holderRunIds':sorted(ids)} for kind,ids in sorted(holders.items())]
 
 
+def _unavailable_harnesses(connection, scope):
+    """A session in a harness user store needs that harness for its deletion."""
+    involved = {}
+    for session in scope.sessions:
+        involved.setdefault(session['harness'], set()).add(session['taskId'])
+    unavailable = []
+    for harness in sorted(involved):
+        health = read_health(connection, harness)
+        if not health['available']:
+            unavailable.append({'harness': harness, 'reason': health['reason'],
+                                'microTaskIds': sorted(involved[harness])})
+    return unavailable
+
+
 def _busy(connection, scope):
     return any(row['state'] == 'applying' for row in _rows(connection, 'workspace_cleanup_plans', 'run_id', scope.runs))
 
@@ -264,6 +279,10 @@ def preview(store, target: str) -> dict:
         shared = _storage_in_use(store,connection,scope)
         if shared:
             raise BoardError('MACRO_TASK_STORAGE_IN_USE', 'Storage is retained by another micro task', macroTaskId=target, objects=shared)
+        unavailable = _unavailable_harnesses(connection, scope)
+        if unavailable:
+            raise BoardError('MACRO_TASK_HARNESS_UNAVAILABLE', 'A harness with stored sessions is unavailable',
+                             macroTaskId=target, harnesses=unavailable)
         blockers = _blockers(store, connection, scope)
         concluded = {r['run_id'] for r in _rows(connection, 'workflow_host_conclusions', 'run_id', scope.runs)}
         tasks = {r['task_id']:r for r in scope.task_rows}
@@ -503,6 +522,10 @@ def delete(store, target: str, micro_task_count: int) -> dict:
                     shared = _storage_in_use(store,connection,scope)
                     if shared:
                         raise BoardError('MACRO_TASK_STORAGE_IN_USE','Storage is retained by another micro task',macroTaskId=target,objects=shared)
+                    unavailable = _unavailable_harnesses(connection,scope)
+                    if unavailable:
+                        raise BoardError('MACRO_TASK_HARNESS_UNAVAILABLE','A harness with stored sessions is unavailable',
+                                         macroTaskId=target,harnesses=unavailable)
                     kind,identifier = _target(target)
                     connection.execute('INSERT INTO macro_task_deletions(deletion_id,target_kind,target_id,state,started_at,micro_task_count)'
                                        " VALUES(?,?,?,'deleting',?,?)",('del-'+uuid.uuid4().hex,kind,identifier,store.now(),len(scope.runs)))
