@@ -18,7 +18,7 @@ class SessionProjectionTests(unittest.TestCase):
         temp = tempfile.TemporaryDirectory()
         self.addCleanup(temp.cleanup)
         self.state = Path(temp.name)
-        self.record = SessionRecord(self.state / "attempt.sqlite3", "attempt")
+        self.record = SessionRecord(self.state / "attempt.jsonl", "attempt")
         self.projector = CodexSessionProjector(self.record)
         self.addCleanup(self.projector.close)
         self.projector.record_input("sent input")
@@ -53,7 +53,7 @@ class SessionProjectionTests(unittest.TestCase):
         return blocks
 
     def test_record_is_not_opened_until_the_first_write(self):
-        record = SessionRecord(self.state / 'other' / 'unstarted.sqlite3', 'unstarted')
+        record = SessionRecord(self.state / 'other' / 'unstarted.jsonl', 'unstarted')
         record.close()
         self.assertFalse(record.path.parent.exists())
 
@@ -77,12 +77,12 @@ class SessionProjectionTests(unittest.TestCase):
             {'id': '', 'type': 'commandExecution', 'command': 'must not normalize'}]})
         self.assertEqual(len(self.updates()), 1)
 
-    def test_attempt_path_private_permissions_and_wal_settings(self):
-        self.assertEqual(self.record.path, self.state / "attempt.sqlite3")
+    def test_attempt_path_private_permissions_and_jsonl_header(self):
+        self.assertEqual(self.record.path, self.state / "attempt.jsonl")
         if os.name != "nt":
             self.assertEqual(self.record.path.stat().st_mode & 0o777, 0o600)
-        self.assertEqual(self.record._connection.execute("PRAGMA journal_mode").fetchone()[0], "wal")
-        self.assertEqual(self.record._connection.execute("PRAGMA synchronous").fetchone()[0], 1)
+        self.assertEqual(json.loads(self.record.path.read_text().splitlines()[0]),
+                         {"protocol": "acp", "protocolVersion": 1, "projectionVersion": 1})
         with patch("os.fsync", side_effect=AssertionError("display writes never fsync")):
             self.item("item/completed", text="visible now")
             self.projector.flush()
@@ -311,7 +311,7 @@ class SessionProjectionTests(unittest.TestCase):
         self.assertEqual(len(notifications(self.record.path)), 2)
 
     def test_new_attempt_on_same_native_thread_has_a_separate_record(self):
-        second = SessionRecord(self.state / "next-attempt.sqlite3", "next-attempt")
+        second = SessionRecord(self.state / "next-attempt.jsonl", "next-attempt")
         projector = CodexSessionProjector(second)
         projector.record_input("new input")
         projector.observe_root("thread", "next-turn", "new input", [])
@@ -330,7 +330,7 @@ class SessionProjectionTests(unittest.TestCase):
             reopened.close()
         self.assertEqual(notifications(self.record.path)[:len(original)], original)
         self.assertEqual(self.updates()[-1]["content"]["text"], "next run")
-        linked_path = self.state / "linked.sqlite3"
+        linked_path = self.state / "linked.jsonl"
         linked_path.symlink_to(self.record.path)
         linked = SessionRecord(linked_path, "linked")
         linked.append(MessageChunk(session_update='user_message_chunk', content=TextContent(text='input')))
@@ -348,4 +348,48 @@ class SessionProjectionTests(unittest.TestCase):
         self.assertEqual(len(notifications(self.record.path)), count)
         reopened = SessionRecord(self.record.path, 'attempt')
         self.assertEqual(reopened.failure, self.record.failure)
-        self.assertIsNone(reopened._connection)
+        self.assertIsNone(reopened._fd)
+
+
+class SessionRecordRecoveryTests(unittest.TestCase):
+    def setUp(self):
+        temp = tempfile.TemporaryDirectory()
+        self.addCleanup(temp.cleanup)
+        self.root = Path(temp.name)
+
+    @staticmethod
+    def _update(text):
+        return MessageChunk(session_update="user_message_chunk", content=TextContent(text=text))
+
+    def test_reopen_discards_crash_tail_and_appends_readable_line(self):
+        path = self.root / "attempt.jsonl"
+        first = SessionRecord(path, "attempt")
+        first.append(self._update("first"))
+        first.close()
+        with path.open("ab") as file:
+            file.write(b'{"sessionId":"attempt","update":')
+        resumed = SessionRecord(path, "attempt")
+        resumed.append(self._update("second"))
+        resumed.close()
+        self.assertIsNone(resumed.failure)
+        self.assertEqual([row["update"]["content"]["text"] for row in notifications(path)],
+                         ["first", "second"])
+        self.assertTrue(path.read_bytes().endswith(b"\n"))
+
+    def test_file_and_parent_links_are_refused_without_touching_target(self):
+        outside = self.root / "outside"
+        outside.mkdir()
+        target = outside / "sentinel.jsonl"
+        target.write_text("sentinel", encoding="utf-8")
+        linked_file = self.root / "linked.jsonl"
+        linked_file.symlink_to(target)
+        record = SessionRecord(linked_file, "attempt")
+        record.append(self._update("ignored"))
+        self.assertEqual(record.failure["code"], "session-record-write-failed")
+        linked_parent = self.root / "linked-parent"
+        linked_parent.symlink_to(outside, target_is_directory=True)
+        record = SessionRecord(linked_parent / "attempt.jsonl", "attempt")
+        record.append(self._update("ignored"))
+        self.assertEqual(record.failure["code"], "session-record-write-failed")
+        self.assertEqual(target.read_text(encoding="utf-8"), "sentinel")
+        self.assertFalse((outside / "attempt.jsonl").exists())

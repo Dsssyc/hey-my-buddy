@@ -136,6 +136,17 @@ class ProjectorTests(unittest.TestCase):
 
 
 class SessionRunTests(NativeRunCase):
+    def test_no_record_path_skips_projection_and_keeps_result_and_stop(self):
+        request = self.fast_request('router input').model_copy(update={'session_record_path': None})
+        with mock.patch.object(native_run, 'DshSessionProjector') as projector:
+            result = native_run.run(request, observer=lambda _: FEEDBACK_CONTINUE,
+                                    services=None, cancelled=lambda: False)
+        projector.assert_not_called()
+        self.assertEqual(result.end.status, 'ok', result.end.message)
+        self.assertIsNotNone(result.value)
+        self.assertIsNone(result.session_record_failure)
+        self.assertEqual(result.stop_evidence.native.group_state, 'gone')
+
     def setUp(self):
         super().setUp()
         patcher = mock.patch.dict(os.environ, {'HMB_STATE_DIR': str(self.base / 'state')})

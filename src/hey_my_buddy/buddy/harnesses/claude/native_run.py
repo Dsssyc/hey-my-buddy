@@ -1110,7 +1110,8 @@ def run(request: RunRequest, *, observer: Callable[[Mapping[str, Any]], RunFeedb
     inquiry_bridge: InquiryBridge | None = None
     native_result: dict | None = None
     cancel = CancelFlag(cancelled)
-    session = ClaudeSessionProjector(SessionRecord(request.session_record_path, request.identity.attempt_id))
+    session = (ClaudeSessionProjector(SessionRecord(request.session_record_path, request.identity.attempt_id))
+               if request.session_record_path is not None else None)
 
     def request_interrupt() -> None:
         # A fresh short control budget permits a native interrupt after the
@@ -1236,11 +1237,12 @@ def run(request: RunRequest, *, observer: Callable[[Mapping[str, Any]], RunFeedb
             state.status = "cancelled"
             state.reason = "user-cancel"
             state.error_text = "the owned Claude execution was cancelled"
-    session.close()
+    if session is not None:
+        session.close()
     return _build_result(request, state=state, collector=collector, spawn=spawn,
                          owned_spawn=owned_spawn, preparation=preparation, native_result=native_result).model_copy(
                              update={"session_record_failure": SessionRecordFailure(**session.record.failure)
-                                     if session.record.failure is not None else None})
+                                     if session is not None and session.record.failure is not None else None})
 
 
 # -- the initialize-only discovery ------------------------------------------------

@@ -140,7 +140,7 @@ class FastRegisteredRunTests(FakeAppServerTests):
         context = ExecutionContext("task", "attempt", 1,
             {"provider": "fixture-api", "model": "fixture-model", "effort": "low"},
             self.root / "attempt", {}, self.environment,
-            session_record_path=str(self.root / "session.sqlite3"))
+            session_record_path=str(self.root / "session.jsonl"))
         request = NoToolStructuredRequest(str(self.cwd), "Choose", SCHEMA, WIRING_TIMEOUT)
         preparation = FastPreparation("zcode",  request, context, self.cwd)
         self.assertIs(preparation.run_module, run_seam("zcode"))
@@ -156,7 +156,7 @@ class FastRegisteredRunTests(FakeAppServerTests):
             {"provider": "fixture-api", "model": "fixture-model", "effort": "low",
              "cwd": str(self.cwd), "routerBudgetSeconds": WIRING_TIMEOUT}, self.root / "attempt", {},
             {**self.environment, "HMB_ZCODE_TEST_CASE": case},
-            session_record_path=str(self.root / "session.sqlite3"))
+            session_record_path=str(self.root / "session.jsonl"))
         request = NoToolStructuredRequest(str(self.cwd), "Choose a buddy", SCHEMA, WIRING_TIMEOUT,
                                           capture_evidence=capture_evidence)
         handle = start_router_preparation(FastPreparation("zcode",  request, context, self.cwd))

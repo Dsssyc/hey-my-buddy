@@ -1,14 +1,14 @@
 """Attempt-bound session reads over real authenticated HTTP, without a harness."""
 import json
-import sqlite3
-from contextlib import closing
 from unittest import mock
 
 from console.test_console import Browser, ConsoleTestCase
 from blackboard.tasks.test_workflow import WorkflowTestCase
 from hey_my_buddy import private_dirs
 from hey_my_buddy.blackboard.tasks import storage
+from hey_my_buddy.buddy.harnesses.session_record import SessionRecord
 from hey_my_buddy.console import session_content
+from hey_my_buddy.protocol.session_content import SESSION_FORMAT, MessageChunk, TextContent
 
 
 class SessionContentTests(ConsoleTestCase, WorkflowTestCase):
@@ -24,21 +24,20 @@ class SessionContentTests(ConsoleTestCase, WorkflowTestCase):
         group_id = run.get('macroTaskId') or 'run:' + task_id
         path = private_dirs.session_record_path(board.directory, group_id, attempt_id)
         events = [self.event(attempt_id, f'消息 {i}') for i in range(count)]
+        header = self.line(SESSION_FORMAT.model_dump(mode='json', by_alias=True, exclude_none=True))
         if record:
             path.parent.mkdir(parents=True)
-            with closing(sqlite3.connect(path)) as connection, connection:
-                connection.execute('PRAGMA journal_mode=WAL')
-                connection.execute('CREATE TABLE events(seq INTEGER PRIMARY KEY, notification TEXT NOT NULL)')
-                connection.execute('PRAGMA user_version=1')
-                connection.executemany('INSERT INTO events(notification) VALUES(?)',
-                                       [(json.dumps(event),) for event in events])
+            path.write_bytes(header + b''.join(self.line(event) for event in events))
         _, browser = self.open_console(board)
         route = f'/api/tasks/{task_id}/attempts/{attempt_id}/session'
-        return board, browser, route, path, events, 0, run
+        return board, browser, route, path, events, len(header), run
+
+    def line(self, value):
+        return (json.dumps(value, ensure_ascii=False, separators=(',', ':')) + '\n').encode()
 
     def append(self, path, event):
-        with closing(sqlite3.connect(path)) as connection, connection:
-            connection.execute('INSERT INTO events(notification) VALUES(?)', (json.dumps(event),))
+        with path.open('ab') as stream:
+            stream.write(self.line(event))
 
     def event(self, attempt_id, text):
         return {'sessionId': attempt_id, 'update': {'sessionUpdate': 'agent_message_chunk',
@@ -58,7 +57,9 @@ class SessionContentTests(ConsoleTestCase, WorkflowTestCase):
         page = self.get(browser, route + '?limit=3')
         self.assertEqual(set(page), {'state', 'stopped', 'omitted', 'events', 'before', 'after', 'hasEarlier'})
         self.assertEqual(page['events'], events[4:])
-        self.assertEqual((page['before'], page['after'], page['stopped']), (4, 7, None))
+        expected_before = start + sum(len(self.line(event)) for event in events[:4])
+        self.assertEqual((page['before'], page['after'], page['stopped']),
+                         (expected_before, path.stat().st_size, None))
         self.assertTrue(page['hasEarlier'])
         earlier = self.get(browser, route + f'?before={page["before"]}&limit=3')
         first = self.get(browser, route + f'?before={earlier["before"]}&limit=3')
@@ -82,7 +83,7 @@ class SessionContentTests(ConsoleTestCase, WorkflowTestCase):
         self.assertEqual(self.get(browser, route)['events'], events[-100:])
         self.assertEqual(self.get(browser, route + '?limit=256')['events'], events[-256:])
 
-    def test_invalid_parameters_are_rejected_and_outside_positions_are_empty(self):
+    def test_invalid_parameters_and_byte_positions_are_rejected(self):
         _, browser, route, path, _, start, _ = self.fixture(count=2)
         for query in ('before=1&after=1',
                       'after=-1', 'after=1.0', 'after=', 'before=1&before=1',
@@ -90,8 +91,10 @@ class SessionContentTests(ConsoleTestCase, WorkflowTestCase):
                       'after=9223372036854775808'):
             with self.subTest(query=query):
                 self.get(browser, route + '?' + query, status=400, code='INVALID_ARGUMENT')
-        self.assertEqual(self.get(browser, route + '?after=100')['events'], [])
-        self.assertEqual(self.get(browser, route + '?before=0')['events'], [])
+        for query in (f'after={start - 1}', f'before={path.stat().st_size + 1}',
+                      f'after={start + 1}'):
+            with self.subTest(query=query):
+                self.get(browser, route + '?' + query, status=400, code='INVALID_ARGUMENT')
 
     def test_cursor_survives_append_and_finish_with_stopped_reason(self):
         board, browser, route, path, events, _, _ = self.fixture(count=1)
@@ -108,23 +111,39 @@ class SessionContentTests(ConsoleTestCase, WorkflowTestCase):
         ended = self.get(browser, route + f'?after={cursor}')
         self.assertEqual((ended['events'], ended['state'], ended['stopped']), ([appended], 'ended', stopped))
 
-    def test_snapshot_excludes_appends_after_query(self):
+    def test_snapshot_excludes_appends_after_the_size_was_fixed(self):
         _, browser, route, path, events, _, _ = self.fixture(count=1)
-        original = session_content._page
+        original = session_content._last_newline
         appended = self.event('session-attempt', 'later')
         injected = False
         def snapshot(*args):
             nonlocal injected
-            page = original(*args)
             if not injected:
                 self.append(path, appended)
                 injected = True
-            return page
-        with mock.patch.object(session_content, '_page', side_effect=snapshot):
+            return original(*args)
+        with mock.patch.object(session_content, '_last_newline', side_effect=snapshot):
             self.assertEqual(self.get(browser, route)['events'], events)
         self.assertEqual(self.get(browser, route)['events'][-1], appended)
 
-    def test_empty_database_and_empty_after_initial_position(self):
+    def test_partial_final_line_is_ignored_until_writer_recovers(self):
+        _, browser, route, path, events, _, _ = self.fixture(count=1)
+        cursor = self.get(browser, route)['after']
+        with path.open('ab') as stream:
+            stream.write(b'{"sessionId":"interrupted"')
+        page = self.get(browser, route)
+        self.assertEqual((page['events'], page['after']), (events, cursor))
+        self.assertEqual(self.get(browser, route + f'?after={cursor}')['events'], [])
+        resumed = self.event('session-attempt', 'after recovery')
+        record = SessionRecord(path, 'session-attempt')
+        record.append(MessageChunk(session_update='agent_message_chunk',
+                                   content=TextContent(text='after recovery')))
+        record.close()
+        self.assertIsNone(record.failure)
+        page = self.get(browser, route + f'?after={cursor}')
+        self.assertEqual(page['events'], [resumed])
+
+    def test_empty_record_and_empty_after_initial_position(self):
         _, browser, route, _, _, start, _ = self.fixture()
         page = self.get(browser, route)
         self.assertEqual((page['events'], page['before'], page['after'], page['hasEarlier']),
@@ -139,26 +158,44 @@ class SessionContentTests(ConsoleTestCase, WorkflowTestCase):
         self.assertEqual(page['events'], [event])
         self.assertEqual(page['omitted'], [{'code': 'session.codex-internal-reasoning-omitted', 'params': {}}])
 
-    def test_bad_json_version_and_event_shapes_fail_without_source_paths(self):
+    def test_bad_json_header_and_event_shapes_fail_without_source_paths(self):
         _, browser, route, path, _, _, _ = self.fixture()
+        header = self.line(SESSION_FORMAT.model_dump(mode='json', by_alias=True, exclude_none=True))
         for content in ('not-json', '{"sessionId":"x","sessionId":"y","update":{}}',
                         '{"sessionId":"x","update":{"sessionUpdate":"unknown"}}',
                         '{"private":"/secret/credentials"}', '{"value":NaN}'):
             with self.subTest(content=content):
-                with closing(sqlite3.connect(path)) as connection, connection:
-                    connection.execute('DELETE FROM events')
-                    connection.execute('INSERT INTO events(notification) VALUES(?)', (content,))
+                path.write_bytes(header + content.encode() + b'\n')
                 error = self.get(browser, route, status=422, code='SESSION_INVALID_RECORD')
                 self.assertEqual(error['error']['details']['reason']['code'], 'session.invalid-record')
                 self.assertNotIn('/secret/credentials', json.dumps(error))
-        with closing(sqlite3.connect(path)) as connection, connection:
-            connection.execute('PRAGMA user_version=2')
+        path.write_bytes(self.line({'format': 'unexpected'}) + self.line(self.event('session-attempt', 'ok')))
+        self.get(browser, route, status=422, code='SESSION_INVALID_RECORD')
+        bad_version = {**SESSION_FORMAT.model_dump(mode='json', by_alias=True), 'projectionVersion': 2}
+        path.write_bytes(self.line(bad_version) + self.line(self.event('session-attempt', 'ok')))
         self.get(browser, route, status=422, code='SESSION_INVALID_RECORD')
 
     def test_missing_record_is_not_recorded(self):
         board, browser, route, _, _, _, _ = self.fixture(record=False)
         error = self.get(browser, route, status=404, code='SESSION_NOT_RECORDED')
         self.assertEqual(error['error']['details']['reason']['code'], 'session.not-recorded')
+
+    def test_attempt_without_a_micro_task_group_has_no_session_record(self):
+        board, browser, _, _, _, _, run = self.fixture(record=False)
+        plain_task, plain_attempt = 'plain-execution', 'plain-attempt'
+        with board.store.db.write() as connection:
+            row = dict(connection.execute('SELECT * FROM tasks WHERE task_id=?', (run['runId'],)).fetchone())
+            row.update(task_id=plain_task, request_id='plain-execution-request',
+                       selected_attempt_id=None, active_attempt_id=None)
+            columns = tuple(row)
+            connection.execute(f"INSERT INTO tasks({','.join(columns)}) VALUES({','.join('?' for _ in columns)})",
+                               tuple(row.values()))
+            now = board.store.now()
+            connection.execute('INSERT INTO attempts(attempt_id,task_id,generation,nonce_verifier,'
+                               'execution_state,adapter,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?)',
+                               (plain_attempt, plain_task, 1, 'fixture', 'executing', 'codex', now, now))
+        route = f'/api/tasks/{plain_task}/attempts/{plain_attempt}/session'
+        self.get(browser, route, status=404, code='SESSION_NOT_RECORDED')
 
     def test_claude_reads_its_attempt_record_and_missing_history_is_not_recorded(self):
         board, browser, route, path, events, _, _ = self.fixture(count=2, harness='claude')
@@ -248,15 +285,26 @@ class SessionContentTests(ConsoleTestCase, WorkflowTestCase):
         with mock.patch.object(session_content, '_page', side_effect=remove):
             self.get(browser, route, status=410, code='SESSION_DELETED')
 
-    def test_linked_file_and_io_errors_do_not_leak_private_paths(self):
+    def test_linked_file_and_parent_are_refused_without_reading_outside_content(self):
         board, browser, route, path, _, _, _ = self.fixture(count=1)
-        target = board.directory / 'credential-secret'
-        target.write_text('credentials must stay private')
+        outside = board.directory / 'outside-session-read'
+        outside.mkdir()
+        target = outside / path.name
+        expected = path.read_bytes() + self.line(self.event('session-attempt', 'credentials must stay private'))
+        target.write_bytes(expected)
         path.unlink()
         path.symlink_to(target)
         error = self.get(browser, route, status=500, code='SESSION_UNREADABLE')
+        self.assertNotIn('credentials must stay private', json.dumps(error))
+        self.assertEqual(target.read_bytes(), expected)
+        path.unlink()
+        path.parent.rmdir()
+        path.parent.symlink_to(outside, target_is_directory=True)
+        error = self.get(browser, route, status=500, code='SESSION_UNREADABLE')
+        self.assertNotIn('credentials must stay private', json.dumps(error))
+        self.assertEqual(target.read_bytes(), expected)
         with mock.patch.object(private_dirs, 'open_regular_fd', side_effect=OSError(str(target))):
-            error = self.get(browser, route, status=500, code='SESSION_UNREADABLE')
+            self.get(browser, route, status=500, code='SESSION_UNREADABLE')
 
     def test_session_bytes_are_separate_and_ordinary_storage_apply_retains_them(self):
         board, browser, route, path, events, _, run = self.fixture(count=2)

@@ -217,7 +217,7 @@ class RunRequest(InternalModel):
     buddy: RunBuddy
     cwd: AbsolutePath
     private_state: PrivateStatePaths
-    session_record_path: AbsolutePath
+    session_record_path: Optional[AbsolutePath] = None
     input_text: NonEmptyInputText
     tool_scope: ToolScope
     #: None for runs without a micro task Worker permission choice.

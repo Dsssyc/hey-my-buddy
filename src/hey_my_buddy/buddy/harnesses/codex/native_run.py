@@ -874,7 +874,7 @@ class _EventChain:
     """
 
     def __init__(self, facts: _RunFacts, classifier: _Classifier,
-                 projector: CodexToolEventProjector | None, session: CodexSessionProjector, *, overflow_raises: bool):
+                 projector: CodexToolEventProjector | None, session: CodexSessionProjector | None, *, overflow_raises: bool):
         self.facts = facts
         self.classifier = classifier
         self.projector = projector
@@ -893,7 +893,8 @@ class _EventChain:
 
     def observe(self, message: dict) -> None:
         self.observe_facts(message)
-        self.session.observe_notification(message)
+        if self.session is not None:
+            self.session.observe_notification(message)
         if self.carrier is None:
             if len(self.pending) >= _BOUND_NOTIFICATIONS:
                 self.truncated = True
@@ -923,7 +924,7 @@ class _NativeInquiry:
 
     def __init__(self, connection: Connection, evidence: TurnEvidence, thread_id: str,
                  turn_id: str, services: ClientInquiryServices, bridge: InquiryBridge,
-                 session: CodexSessionProjector):
+                 session: CodexSessionProjector | None):
         self.connection, self.evidence = connection, evidence
         self.thread_id, self.turn_id = thread_id, turn_id
         self.services, self.bridge = services, bridge
@@ -949,7 +950,8 @@ class _NativeInquiry:
                     response = self.connection.call("turn/steer", {
                         "threadId": self.thread_id, "expectedTurnId": self.turn_id,
                         "input": [{"type": "text", "text": prompt}]},
-                        on_sent=lambda: self.session.record_input(prompt, (self.thread_id, self.turn_id)))
+                        on_sent=(lambda: self.session.record_input(prompt, (self.thread_id, self.turn_id)))
+                        if self.session is not None else None)
                 except CodexProtocolError as error:
                     if error.code == "native-rpc-error" and self.evidence.completed is not None:
                         break  # The turn settled while the native input was in flight.
@@ -1097,7 +1099,9 @@ def _admit_turn(connection: Connection, request: RunRequest, thread_id: str,
     if mode == "worker":
         state.worker_policy = {"sandboxPolicy": params["sandboxPolicy"],
                                "approvalPolicy": params["approvalPolicy"]}
-    return connection.call("turn/start", params, on_sent=lambda: chain.session.record_input(input_text))
+    return connection.call("turn/start", params,
+                           on_sent=(lambda: chain.session.record_input(input_text))
+                           if chain.session is not None else None)
 
 
 def _checkpoint(request: RunRequest, evidence: TurnEvidence) -> dict:
@@ -1158,7 +1162,8 @@ def _run(request: RunRequest, services: RunServices, mode: str,
                                          "attemptId": request.identity.attempt_id,
                                          "generation": request.identity.generation})
     activity = _ActivityWriter(services.live)
-    session = CodexSessionProjector(SessionRecord(request.session_record_path, request.identity.attempt_id))
+    session = (CodexSessionProjector(SessionRecord(request.session_record_path, request.identity.attempt_id))
+               if request.session_record_path is not None else None)
     chain = _EventChain(facts, _Classifier(facts), projector, session, overflow_raises=mode == "fast")
     inquiry_bridge: InquiryBridge | None = None
     inquiry_poller: list[_NativeInquiry] = []
@@ -1218,11 +1223,12 @@ def _run(request: RunRequest, services: RunServices, mode: str,
         # ever spawned, and that known fact — not an unknown — is what the
         # result must carry.
         _stop_collection(request, prep, state, spawn, owned_spawn, mode, cancel)
-    session.close()
+    if session is not None:
+        session.close()
     _collect_quota_failure(state, stream_truncated=chain.truncated)
     return _build_result(request, prep, state, mode, projector, facts, activity).model_copy(
         update={"session_record_failure": SessionRecordFailure(**session.record.failure)
-                if session.record.failure is not None else None})
+                if session is not None and session.record.failure is not None else None})
 
 
 def _wire(connection: Connection, chain: _EventChain, facts: _RunFacts,
@@ -1261,7 +1267,8 @@ def _wire(connection: Connection, chain: _EventChain, facts: _RunFacts,
         # Runs after every pump step, the waits inside ``call`` included: the
         # refusal answer is already on the wire when the role's stop lands.
         if connection.messages.empty():
-            chain.session.flush()
+            if chain.session is not None:
+                chain.session.flush()
         if facts.dirty:
             facts.dirty = False
             tool_calls = chain.projector.tool_calls if chain.projector is not None else 0
@@ -1328,7 +1335,8 @@ def _worker_turn(connection: Connection, chain: _EventChain, request: RunRequest
 
     try:
         chain.bind(carrier)
-        chain.session.observe_root(thread_id, turn_id, request.input_text, turn.get("items") or [])
+        if chain.session is not None:
+            chain.session.observe_root(thread_id, turn_id, request.input_text, turn.get("items") or [])
         activity.write(evidence, "waiting-model")
         while evidence.completed is None:
             connection.pump()
@@ -1432,7 +1440,8 @@ def _structured_rounds(connection: Connection, chain: _EventChain, request: RunR
             chain.bind(carrier)
         try:
             items = turn.get("items")
-            chain.session.observe_root(thread_id, turn_id, input_text, items if isinstance(items, list) else [])
+            if chain.session is not None:
+                chain.session.observe_root(thread_id, turn_id, input_text, items if isinstance(items, list) else [])
             if mode == "fast":
                 while fast_state["completed"] is None:
                     connection.pump()
@@ -1525,10 +1534,11 @@ def _drain_to_eof(connection: Connection, chain: _EventChain,
             _take_feedback(feedback, mode, settled=False)
 
 
-def _interrupt(connection: Connection, state: _RunState, session: CodexSessionProjector) -> None:
+def _interrupt(connection: Connection, state: _RunState, session: CodexSessionProjector | None) -> None:
     """A fresh short control budget permits a native interrupt after the deadline."""
     def observe_terminal(message: dict) -> None:
-        session.defer_notification(message)
+        if session is not None:
+            session.defer_notification(message)
         if state.turn_evidence is not None:
             state.turn_evidence.observe(message)
 

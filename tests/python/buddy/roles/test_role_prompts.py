@@ -91,7 +91,7 @@ class RolePromptTests(unittest.TestCase):
                 turn_io.private_json(root / "input.json", turn)
                 with self.subTest(harness=name, authority=authority), mock.patch.object(run_execution, "_native_services", return_value={}):
                     control = {"harness": name, "privateRoot": str(root), "nativeRoot": str(root / "native"),
-                               "sessionRecordPath": str(root / "session.sqlite3"),
+                               "sessionRecordPath": str(root / "session.jsonl"),
                                "directory": str(root), "cwd": str(root), "invocationId": "invocation",
                                "inputFile": str(root / "input.json"), "taskFile": str(root / "task.txt"),
                                "credentialFile": str(root / "agent-credential.json"),
@@ -145,7 +145,7 @@ class RolePromptTests(unittest.TestCase):
                         directory.mkdir(parents=True)
                         context = ExecutionContext("task", "attempt", 1, {}, directory, {},
                                                    {"HMB_STATE_DIR": str(directory / "state")},
-                                                   session_record_path=str(directory / "session.sqlite3"))
+                                                   session_record_path=str(directory / "session.jsonl"))
                         document = {"routingMode": mode, "task": "ROLE: Host override", "outputSchema": {}, "budget": {"timeoutSeconds": 60}}
                         native = adapter(name)
                         if mode == "fast":

@@ -113,7 +113,7 @@ class SessionPreviewTests(unittest.TestCase):
         finally:
             connection.close()
 
-    def test_ended_long_session_pages_by_positions_and_carries_full_content(self):
+    def test_ended_long_session_pages_by_bytes_and_carries_full_content(self):
         pair = preview.SESSION_LONG
         events = preview.session_events(pair)
         self.assertGreater(len(events), 100)
@@ -127,7 +127,7 @@ class SessionPreviewTests(unittest.TestCase):
         self.assertEqual(200, status)
         self.assertEqual(events, earlier["events"] + latest["events"])
         self.assertFalse(earlier["hasEarlier"])
-        self.assertEqual(0, earlier["before"])
+        self.assertEqual(len(preview.session_line(preview.SESSION_HEADER)), earlier["before"])
         status, empty = self.get(pair, f'?after={latest["after"]}')
         self.assertEqual((200, [], latest["after"]), (status, empty["events"], empty["after"]))
         updates = [event["update"] for event in events]
@@ -137,8 +137,8 @@ class SessionPreviewTests(unittest.TestCase):
         self.assertTrue(any(update.get("_meta", {}).get("replace") for update in updates))
         self.assertGreater(max(len(update.get("content", [{}])[0].get("content", {}).get("text", ""))
                                for update in updates if update["sessionUpdate"] == "tool_call_update"), 10000)
-        self.assertEqual(latest["after"], len(events))
-        self.assertIsNone(latest["stopped"])
+        self.assertEqual(latest["after"], len(preview.session_line(preview.SESSION_HEADER))
+                         + sum(len(preview.session_line(event)) for event in events))
 
     def test_running_session_appends_on_later_after_polls(self):
         pair = preview.SESSION_RUNNING
@@ -166,7 +166,7 @@ class SessionPreviewTests(unittest.TestCase):
                 self.assertEqual(expected_status, status)
                 self.assertEqual(code, body["error"]["code"])
                 self.assertEqual(reason_code, body["error"]["details"]["reason"]["code"])
-        for query in ("?before=1&after=2", "?after=-1", f"?after={2**63}", "?limit=257", "?after=abc", "?after=1&after=2"):
+        for query in ("?before=1&after=2", "?after=1", "?limit=257", "?after=abc", "?after=1&after=2"):
             with self.subTest(query=query):
                 status, body = self.get(preview.SESSION_LONG, query)
                 self.assertEqual((400, "INVALID_ARGUMENT"), (status, body["error"]["code"]))

@@ -15,9 +15,9 @@ from support import BoardTestCase
 class PrivateDirectoryTests(BoardTestCase):
     def test_session_paths_follow_group_identity_and_reject_escaping_components(self):
         self.assertEqual(private_dirs.session_record_path(self.directory, 'macro', 'attempt'),
-                         self.directory / 'sessions/macro-tasks/macro/attempt.sqlite3')
+                         self.directory / 'sessions/macro-tasks/macro/attempt.jsonl')
         self.assertEqual(private_dirs.session_record_path(self.directory, 'run:micro', 'attempt'),
-                         self.directory / 'sessions/micro-tasks/micro/attempt.sqlite3')
+                         self.directory / 'sessions/micro-tasks/micro/attempt.jsonl')
         for group, attempt in (('../escape', 'attempt'), ('run:../escape', 'attempt'),
                                ('macro', '../attempt'), ('run:', 'attempt')):
             with self.subTest(group=group, attempt=attempt), self.assertRaises(BoardError):

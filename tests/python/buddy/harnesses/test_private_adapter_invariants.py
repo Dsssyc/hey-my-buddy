@@ -63,7 +63,7 @@ class NoToolEvidenceSafetyTests(unittest.TestCase):
             self.root / "state" / "attempts" / "task" / f"attempt-{self.index}", {},
             {"HMB_STATE_DIR": str(self.root / "state"), "HMB_RUNTIME_ROOT": str(self.root / "runtime"),
              "HMB_DEV_SOURCE": "1"},
-            session_record_path=str(self.root / f"session-{self.index}.sqlite3"))
+            session_record_path=str(self.root / f"session-{self.index}.jsonl"))
         request = NoToolStructuredRequest(str(self.cwd), "frozen original prompt", {"type": "object"}, 3)
         module = SimpleNamespace(check_preparation=lambda *_args: None, native_evidence=lambda _result: {})
         self.enterContext(mock.patch.dict(RUN_SEAMS, {"codex": module}))
@@ -250,7 +250,7 @@ class PrivateAdapterInvariants(unittest.TestCase):
         context = ExecutionContext("task", "attempt-1", 1,
             {"adapter": "dsh", "harness": "dsh", **dsh_tests.SPEC,
              "cwd": str(fixture.cwd), "routerBudgetSeconds": 3}, evidence, {}, fixture.environment,
-            session_record_path=str(fixture.root / "session-attempt-1.sqlite3"))
+            session_record_path=str(fixture.root / "session-attempt-1.jsonl"))
         request = NoToolStructuredRequest(str(fixture.cwd), "Choose a buddy", dsh_tests.SCHEMA, 3)
         handle = start_router_preparation(FastPreparation("dsh",  request, context, fixture.cwd))
         self.addCleanup(lambda: (handle.terminate(grace_seconds=0.1), handle.wait(15)) if not handle.finished else None)
@@ -293,7 +293,7 @@ class PrivateAdapterInvariants(unittest.TestCase):
                 context = ExecutionContext("task", "attempt", 1,
                     {"adapter": adapter.name, "harness": adapter.name, **spec, "cwd": str(fixture.cwd), "routerBudgetSeconds": 3},
                     evidence, {}, environment,
-                    session_record_path=str(fixture.root / "session-attempt.sqlite3"))
+                    session_record_path=str(fixture.root / "session-attempt.jsonl"))
                 native = adapter()
                 request = NoToolStructuredRequest(str(fixture.cwd), "Pick a buddy", codex_fast_tests.SCHEMA, 3)
                 handle = start_router_preparation(FastPreparation(native.name,  request, context, fixture.cwd))
@@ -360,7 +360,7 @@ class PrivateAdapterInvariants(unittest.TestCase):
                 context = ExecutionContext("task", "attempt", 1,
                     {"adapter": "decision", "cwd": str(fixture.cwd), "routerBudgetSeconds": 60},
                     Path(env["HMB_STATE_DIR"]) / "attempts/task/attempt", {}, env,
-                    session_record_path=str(fixture.root / "session-attempt.sqlite3"),
+                    session_record_path=str(fixture.root / "session-attempt.jsonl"),
                     decision_input={"buddy": {"harness": name, **spec},
                         "buddies": [{"buddyId": "legal"}], "routingMode": "fast",
                         "task": "Select", "outputSchema": router.answer_schema(["legal"]),
@@ -418,7 +418,7 @@ class PrivateAdapterInvariants(unittest.TestCase):
                 startup.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
                 startup.write_text(json.dumps({"claim": claim, "stateDir": str(state),
                     "nonce": "n" * 64,
-                    "sessionRecordPath": str(fixture.root / f"session-{harness}.sqlite3")}))
+                    "sessionRecordPath": str(fixture.root / f"session-{harness}.jsonl")}))
                 entry = fixture.root / f"execution-entry-{harness}.py"
                 entry.write_text(
                     "import json, os, runpy\n"

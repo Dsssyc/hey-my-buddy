@@ -785,13 +785,14 @@ def _stop_native(spawn: _Spawn, deadline: float) -> tuple[bool, bool]:
     return halt_owned_group(spawn.process, spawn.handle, deadline)
 
 
-def _project_session(session: ZcodeSessionProjector, state: _RunState, message: dict) -> None:
-    session.observe_notification(message)
+def _project_session(session: ZcodeSessionProjector | None, state: _RunState, message: dict) -> None:
+    if session is not None:
+        session.observe_notification(message)
 
 
 def _drain(connection: NativeConnection, tools: ZcodeToolFacts, classifier: _Classifier,
            protocol, facts: _RunFacts, state: _RunState,
-           notify: Callable[..., RunFeedback], session: ZcodeSessionProjector) -> bool:
+           notify: Callable[..., RunFeedback], session: ZcodeSessionProjector | None) -> bool:
     """Keep every stopped stream frame, even after an earlier failure.
 
     The order of every frame is the run's own: projection first, then
@@ -900,7 +901,7 @@ def _admit_root_input(connection: NativeConnection, *, snapshot: dict, request: 
                       spec: dict, input_id: str, input_text: str,
                       previous: str | None, mode: str, require_interactive: bool,
                       settled: Callable[[], bool], classifier: "_Classifier",
-                      state: _RunState, session: ZcodeSessionProjector, on_configured: Callable[[str, dict], None] | None = None,
+                      state: _RunState, session: ZcodeSessionProjector | None, on_configured: Callable[[str, dict], None] | None = None,
                       before_send: Callable[[str], None] | None = None,
                       after_admit: Callable[[str], None] | None = None) -> tuple[str, dict]:
     """The one configure/subscribe/send/settlement site of every root session.
@@ -928,7 +929,8 @@ def _admit_root_input(connection: NativeConnection, *, snapshot: dict, request: 
     classifier.admitted = True
     if before_send is not None:
         before_send(session_id)
-    session.start_prompt(session_id, input_id, input_text, request.identity.invocation_id)
+    if session is not None:
+        session.start_prompt(session_id, input_id, input_text, request.identity.invocation_id)
     state.model_started = True
     accepted = connection.call("session/send", {"sessionId": session_id, "inputId": input_id,
                                                 "content": input_text})
@@ -1116,7 +1118,8 @@ def _run(request: RunRequest, *, services: Any, no_tool: bool, completion_carrie
     tools = ZcodeToolFacts({"harness": "zcode", "taskId": request.identity.task_id,
                             "attemptId": request.identity.attempt_id,
                             "generation": request.identity.generation})
-    session = ZcodeSessionProjector(SessionRecord(request.session_record_path, request.identity.attempt_id))
+    session = (ZcodeSessionProjector(SessionRecord(request.session_record_path, request.identity.attempt_id))
+               if request.session_record_path is not None else None)
     outcome = _CarrierOutcome()
     spawn: _Spawn | None = None
     owned_spawn: list = []
@@ -1216,7 +1219,8 @@ def _run(request: RunRequest, *, services: Any, no_tool: bool, completion_carrie
         drained = _stop_collection(spawn=spawn, deadline=deadline, cancel=cancel, state=state,
                                    tools=tools, classifier=classifier, facts=facts, notify=notify,
                                    completion_carrier=completion_carrier, outcome=outcome, session=session)
-    session.close()
+    if session is not None:
+        session.close()
     if state.quota_failure is not None:
         usage = outcome.attempt_usage.raw_usage() if outcome.attempt_usage is not None else None
         has_output = bool(usage and any(type(usage.get(key)) is int and usage[key] > 0
@@ -1260,14 +1264,14 @@ def _run(request: RunRequest, *, services: Any, no_tool: bool, completion_carrie
                           outcome=outcome, completion_carrier=completion_carrier, drained=drained,
                           evidence_refs=evidence_refs, tool_package=tool_package, facts=facts).model_copy(
                               update={"session_record_failure": SessionRecordFailure(**session.record.failure)
-                                      if session.record.failure is not None else None})
+                                      if session is not None and session.record.failure is not None else None})
 
 
 def _final_message_rounds(*, connection: NativeConnection, request: RunRequest, spawn: _Spawn,
                           workspace: dict, no_tool: bool, facts: _RunFacts, classifier: _Classifier,
                           state: _RunState, tools: ZcodeToolFacts,
                           notify: Callable[..., RunFeedback], outcome: _CarrierOutcome,
-                          session: ZcodeSessionProjector) -> None:
+                          session: ZcodeSessionProjector | None) -> None:
     """The final-message carrier: fresh root sessions on the one process and
     total deadline, one per executed observer correction.
 
@@ -1360,7 +1364,7 @@ def _micro_task_turn(*, connection: NativeConnection, request: RunRequest, servi
                    spawn: _Spawn, workspace: dict, invocation_root: Path, native_root: Path,
                    facts: _RunFacts, classifier: _Classifier, state: _RunState,
                    tools: ZcodeToolFacts, notify: Callable[..., RunFeedback],
-                   outcome: _CarrierOutcome, session: ZcodeSessionProjector) -> None:
+                   outcome: _CarrierOutcome, session: ZcodeSessionProjector | None) -> None:
     """The micro task completion-tool turn: the same lifecycle sites, with a
     mounted session service, a continuation and live observers."""
     mount = services.mount
@@ -1509,7 +1513,7 @@ def _stop_collection(*, spawn: _Spawn | None, deadline: float, cancel: CancelFla
                      state: _RunState, tools: ZcodeToolFacts, classifier: _Classifier,
                      facts: _RunFacts, notify: Callable[..., RunFeedback],
                      completion_carrier: bool, outcome: _CarrierOutcome,
-                     session: ZcodeSessionProjector) -> bool | None:
+                     session: ZcodeSessionProjector | None) -> bool | None:
     """The stop phase: retained observations, bridge close, the conservative
     group stop and the EOF drain, in their established order."""
     if outcome.attempt_usage is not None:

@@ -58,7 +58,7 @@ class CodexSchemaTests(unittest.TestCase):
                 (root / "task.txt").write_text("Task")
                 control = {"harness": harness, "privateRoot": str(root), "directory": str(root),
                            "inputFile": str(root / "input.json"), "taskFile": str(root / "task.txt"),
-                           "nativeRoot": str(root / "native"), "sessionRecordPath": str(root / "session.sqlite3"),
+                           "nativeRoot": str(root / "native"), "sessionRecordPath": str(root / "session.jsonl"),
                            "invocationId": "invocation",
                            "spec": {"provider": "fixture", "model": "fixture", "effort": "low"},
                            "cwd": str(root), "timeoutSeconds": 10,
@@ -140,7 +140,7 @@ class CodexSchemaTests(unittest.TestCase):
                     module = SimpleNamespace(prepare_services=lambda **_kwargs: binding)
                     control = {"harness": harness, "privateRoot": str(root), "directory": str(root),
                                "inputFile": str(root / "input.json"), "taskFile": str(root / "task.txt"),
-                               "nativeRoot": str(root / "native"), "sessionRecordPath": str(root / "session.sqlite3"),
+                               "nativeRoot": str(root / "native"), "sessionRecordPath": str(root / "session.jsonl"),
                                "invocationId": "invocation",
                                "spec": {"provider": "fixture", "model": "fixture", "effort": "low"},
                                "cwd": str(root), "timeoutSeconds": 10}
@@ -203,7 +203,7 @@ class SchemaWorkerTests(NativeRunCase):
         control = {"operation": "worker", "harness": "claude", "spec": BUDDY,
                    "invocationId": uuid.uuid4().hex, "privateRoot": str(root),
                    "directory": str(root), "nativeRoot": str(root / "native"),
-                   "sessionRecordPath": str(root / "session.sqlite3"),
+                   "sessionRecordPath": str(root / "session.jsonl"),
                    "cwd": str(self.cwd), "timeoutSeconds": 10,
                    "inputFile": str(root / "input.json"), "taskFile": str(root / "task.txt"),
                    "outputFile": str(root / "output.json"),

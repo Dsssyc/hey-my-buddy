@@ -133,7 +133,7 @@ def session_record_path(state: Path, group_id: str, attempt_id: str) -> Path:
     """One execution's display record, shared by the service and its reader."""
     if not isinstance(attempt_id, str) or _ATTEMPT_ID.fullmatch(attempt_id) is None or attempt_id in ('.', '..'):
         raise BoardError('INVALID_ARGUMENT', 'Session records require a safe attempt identity')
-    return session_group_root(state, group_id) / (attempt_id + '.sqlite3')
+    return session_group_root(state, group_id) / (attempt_id + '.jsonl')
 
 
 def context_root(context, adapter: str | None = None) -> Path:

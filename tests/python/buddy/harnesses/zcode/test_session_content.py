@@ -147,6 +147,18 @@ class ProjectorTests(unittest.TestCase):
 
 
 class RouterSessionTests(NativeRunCase):
+    def test_no_record_path_skips_projection_and_keeps_result_and_stop(self):
+        request = self.fast_request('Return only one JSON value matching this schema: {}').model_copy(
+            update={'session_record_path': None})
+        with mock.patch.object(native_run, 'ZcodeSessionProjector') as projector:
+            result = native_run.run(request, observer=lambda _: FEEDBACK_CONTINUE,
+                                    services=None, cancelled=lambda: False)
+        projector.assert_not_called()
+        self.assertEqual(result.end.status, 'ok', result.end.message)
+        self.assertEqual(result.value.raw, '{"choice":"a"}')
+        self.assertIsNone(result.session_record_failure)
+        self.assertEqual(result.stop_evidence.native.group_state, 'gone')
+
     def record(self, request):
         return SessionRecord(request.session_record_path, request.identity.attempt_id)
 

@@ -16,7 +16,6 @@ import hashlib
 import json
 import os
 import subprocess
-import sqlite3
 import sys
 import tempfile
 import threading
@@ -34,6 +33,7 @@ from hey_my_buddy.buddy.harnesses.live import EXISTING_CAPABILITIES
 from buddy.harnesses.live_contract import HarnessRunLive
 from hey_my_buddy.protocol.activity import is_newer, normalize_activity
 from hey_my_buddy.buddy.harnesses.codex import native_run
+from hey_my_buddy.buddy.harnesses.session_record import SessionRecord
 from hey_my_buddy.buddy.harnesses.codex.native_run import RunServices, run, run_discovery
 from hey_my_buddy.buddy.harnesses.codex.protocol import CodexProtocolError
 from hey_my_buddy.buddy.harnesses.registry import worker_permission, worker_format
@@ -147,7 +147,7 @@ class SeamCase(unittest.TestCase):
                                  generation=1, invocation_id=uuid.uuid4().hex,
                                  turn_id=turn_id, input_sha256=input_sha256),
             harness="codex",
-            session_record_path=str(self.base / f"session-{marker}.sqlite3"),
+            session_record_path=str(self.base / f"session-{marker}.jsonl"),
             buddy=RunBuddy(provider="openai", model="fixture-model", effort="low"),
             cwd=str(self.cwd),
             private_state=PrivateStatePaths(
@@ -162,7 +162,7 @@ class SeamCase(unittest.TestCase):
         return RunServices(live=live)
 
     def session_updates(self, result):
-        path = self.base / ("session-" + result.identity.attempt_id.removeprefix("attempt-") + ".sqlite3")
+        path = self.base / ("session-" + result.identity.attempt_id.removeprefix("attempt-") + ".jsonl")
         return [line['update'] for line in notifications(path)]
 
     def assert_discovered_provider_runs(self, scope, schema):
@@ -872,6 +872,22 @@ class ReviewSeamTests(CodexSeamCase):
 
 
 class WorkerSeamTests(CodexSeamCase):
+    def test_no_record_path_skips_projection_and_keeps_result_usage_checkpoint_and_stop(self):
+        self.set_case('usage')
+        request = self.request(tool_scope='write', output_schema=OUTCOME_SCHEMA,
+                               prompt='fixture micro task task').model_copy(update={'session_record_path': None})
+        with mock.patch.object(native_run, 'CodexSessionProjector') as projector:
+            result = run(request, observer=lambda _: FEEDBACK_CONTINUE,
+                         services=self.worker_services(), cancelled=lambda: False)
+        projector.assert_not_called()
+        self.assertEqual(result.end.status, 'ok', result.end.message)
+        self.assertEqual(json.loads(result.value.raw)['outcome']['disposition'], 'completed')
+        self.assertGreater(result.usage.value['inputTokens'], 0)
+        self.assertIsNone(result.session_record_failure)
+        self.assertEqual(result.stop_evidence.native.group_state, 'gone')
+        checkpoint = native_run._read_evidence_ref(result, 'native-checkpoint')
+        self.assertEqual(checkpoint['nativeTurnStatus'], 'completed')
+
     def test_revised_completed_content_and_empty_native_id_do_not_change_the_native_outcome(self):
         result = self.worker_run('session-rewrite')
         self.assertEqual(result.end.status, 'ok', result.end.message)
@@ -884,16 +900,14 @@ class WorkerSeamTests(CodexSeamCase):
         self.assertTrue(all(row.get('toolCallId') != '' for row in updates))
 
     def test_write_failure_preserves_native_result_usage_checkpoint_and_stop_evidence(self):
-        connect = sqlite3.connect
+        write = SessionRecord._write
 
-        class FullConnection(sqlite3.Connection):
-            def execute(connection, sql, parameters=()):
-                if sql.startswith('INSERT') and json.loads(parameters[0])['update']['sessionUpdate'] == 'agent_message_chunk':
-                    raise sqlite3.OperationalError('database or disk is full')
-                return super().execute(sql, parameters)
+        def fail_agent(fd, line):
+            if b'"sessionUpdate":"agent_message_chunk"' in line:
+                raise OSError('database or disk is full')
+            write(fd, line)
 
-        with mock.patch('hey_my_buddy.buddy.harnesses.session_record.sqlite3.connect',
-                        side_effect=lambda *args, **kwargs: connect(*args, **kwargs, factory=FullConnection)):
+        with mock.patch.object(SessionRecord, '_write', side_effect=fail_agent):
             result = self.worker_run('usage')
         self.assertEqual(result.end.status, 'ok', result.end.message)
         self.assertEqual(result.session_record_failure.code, 'session-record-write-failed')
@@ -915,19 +929,17 @@ class WorkerSeamTests(CodexSeamCase):
         self.assertEqual(result.stop_evidence.native.group_state, 'gone')
 
     def test_late_write_failure_keeps_interrupt_and_checkpoint_evidence(self):
-        connect = sqlite3.connect
+        write = SessionRecord._write
 
-        class FullConnection(sqlite3.Connection):
-            def execute(connection, sql, parameters=()):
-                if sql.startswith('INSERT') and json.loads(parameters[0])['update']['sessionUpdate'] == 'agent_message_chunk':
-                    raise sqlite3.OperationalError('controlled late record write failure')
-                return super().execute(sql, parameters)
+        def fail_agent(fd, line):
+            if b'"sessionUpdate":"agent_message_chunk"' in line:
+                raise OSError('controlled late record write failure')
+            write(fd, line)
 
         cancelled = self.cancel_after_native_start()
         self.set_case('session-interrupt')
         request = self.request(tool_scope='write', output_schema=OUTCOME_SCHEMA, prompt='interrupt input')
-        with mock.patch('hey_my_buddy.buddy.harnesses.session_record.sqlite3.connect',
-                        side_effect=lambda *args, **kwargs: connect(*args, **kwargs, factory=FullConnection)):
+        with mock.patch.object(SessionRecord, '_write', side_effect=fail_agent):
             result = run(request, observer=lambda _facts: FEEDBACK_CONTINUE,
                          services=self.worker_services(), cancelled=cancelled)
         self.assertEqual(result.end.status, 'cancelled')
@@ -2085,7 +2097,7 @@ class CatalogTrustTests(CodexSeamCase):
                                  generation=1, invocation_id=uuid.uuid4().hex,
                                  turn_id="turn-check", input_sha256=input_hash(turn_input)),
             harness="codex",
-            session_record_path=str(self.base / f"session-{marker}.sqlite3"),
+            session_record_path=str(self.base / f"session-{marker}.jsonl"),
             buddy=RunBuddy(provider="openai", model="fixture-model", effort="medium"),
             cwd=str(self.cwd),
             private_state=PrivateStatePaths(

@@ -45,7 +45,7 @@ def full_request(tmp: Path) -> rc.RunRequest:
         buddy=rc.RunBuddy(provider="fixture-provider", model="fixture-model", effort="off"),
         cwd=str(tmp / "checkout"), private_state=rc.PrivateStatePaths(invocation_root=str(tmp / "inv"),
                                                                       native_root=str(tmp / "native")),
-        session_record_path=str(tmp / "session.sqlite3"),
+        session_record_path=str(tmp / "session.jsonl"),
         input_text="one bounded role-assembled input", tool_scope="read",
         output_schema=rc.FrozenJson({"type": "object", "required": ["answer"],
                                      "properties": {"answer": {"type": "string"}}}),
@@ -347,10 +347,10 @@ class CodecRoundtripTests(unittest.TestCase):
         # Ordinary default semantics since the step 2-B simplification: a
         # default-valued field may be omitted, a required field may not.
         for path in ("identity.turnId", "identity.inputSha256", "sessionServices.0.toolNames",
-                     "captureEvidence", "continuation"):
+                     "captureEvidence", "continuation", "sessionRecordPath"):
             decoded = rc.RunRequest.from_payload(without(json.loads(json.dumps(request)), path))
             self.assertIsInstance(decoded, rc.RunRequest, path)
-        for path in ("identity.taskId", "budget.timeoutSeconds", "outputSchema", "sessionRecordPath"):
+        for path in ("identity.taskId", "budget.timeoutSeconds", "outputSchema"):
             with self.assertRaises(BoardError, msg=path):
                 rc.RunRequest.from_payload(without(json.loads(json.dumps(request)), path))
         result = full_result().to_payload()
@@ -465,6 +465,13 @@ class StrictScalarTypeTests(unittest.TestCase):
 
 
 class SessionRecordFailureTests(unittest.TestCase):
+    def test_ungrouped_request_omits_the_session_record_path(self):
+        payload = full_request(Path("/tmp")).to_payload()
+        del payload["sessionRecordPath"]
+        request = rc.RunRequest.from_payload(payload)
+        self.assertIsNone(request.session_record_path)
+        self.assertIsNone(request.to_payload()["sessionRecordPath"])
+
     def test_failure_roundtrips_without_changing_other_run_facts(self):
         result = full_result()
         payload = result.to_payload()
@@ -489,7 +496,7 @@ class FreezingTests(unittest.TestCase):
             identity=rc.RunIdentity.from_payload(mutable_identity), harness="codex",
             buddy=rc.RunBuddy.from_payload(requested), cwd="/tmp/checkout",
             private_state=rc.PrivateStatePaths(invocation_root="/tmp/inv", native_root="/tmp/native"),
-            session_record_path="/tmp/session.sqlite3",
+            session_record_path="/tmp/session.jsonl",
             input_text="x",
             tool_scope="none",
             output_schema=rc.FrozenJson(schema), budget=rc.RunBudget(timeout_seconds=60),

@@ -974,7 +974,8 @@ def run(request: RunRequest, *, observer: Callable[[Mapping[str, Any]], RunFeedb
                           "attemptId": request.identity.attempt_id,
                           "generation": request.identity.generation})
     activity = DshActivity()
-    session = DshSessionProjector(SessionRecord(request.session_record_path, request.identity.attempt_id))
+    session = (DshSessionProjector(SessionRecord(request.session_record_path, request.identity.attempt_id))
+               if request.session_record_path is not None else None)
     # The cooperative inquiry bridge lives in this process because only it holds
     # the native connection; it queues questions for the root's own checkpoint
     # tool and journals delivered/answered state after the verified receipt.
@@ -1016,7 +1017,8 @@ def run(request: RunRequest, *, observer: Callable[[Mapping[str, Any]], RunFeedb
 
     def fold(message: object) -> bool:
         state.event_count += 1
-        session.observe_notification(message)
+        if session is not None:
+            session.observe_notification(message)
         changed = _fold_update(message, state, facts=facts, tools=tools, activity=activity,
                                evidence=evidence, inquiry_bridge=inquiry_bridge)
         if pump is not None and pump.overflow:
@@ -1118,7 +1120,8 @@ def run(request: RunRequest, *, observer: Callable[[Mapping[str, Any]], RunFeedb
             inquiry_bridge.close()
             state.inquiry = inquiry_bridge.report()
             state.attention = inquiry_bridge.attention_report()
-    session.close()
+    if session is not None:
+        session.close()
     if sessions:
         if state.record_baseline is not None:
             record = resumed_session_record_facts(sessions_root, state.record_baseline)
@@ -1155,7 +1158,7 @@ def run(request: RunRequest, *, observer: Callable[[Mapping[str, Any]], RunFeedb
                          stderr_mirror=services.native_stderr if micro_task else None,
                          continuation=continuation).model_copy(
                              update={"session_record_failure": SessionRecordFailure(**session.record.failure)
-                                     if session.record.failure is not None else None})
+                                     if session is not None and session.record.failure is not None else None})
 
 
 # -- the session/prompt stages shared by both carriers -------------------------------
@@ -1214,15 +1217,16 @@ def _resume_session(*, client: AcpClient, request: RunRequest, servers: list,
 def _prompt_and_observe(*, client: AcpClient, pump: _Pump, session_id: str, input_text: str,
                         deadline: float, cancel: CancelFlag, state: _RunState,
                         fold, notify, activity: DshActivity, denied: Callable[[], int],
-                        send_cancel, session: DshSessionProjector) -> dict:
+                        send_cancel, session: DshSessionProjector | None) -> dict:
     """The one prompt/observe site: send once, fold updates, honor stop feedback.
 
     The prompt runs on its own thread because the ACP response only arrives at
     the turn's end; the run loop owns every update, the cancel flag, the overall
     deadline and the role's feedback while it streams.
     """
-    session.start_prompt(session_id, input_text,
-                         f"{session_id}/{time.monotonic_ns()}")
+    if session is not None:
+        session.start_prompt(session_id, input_text,
+                             f"{session_id}/{time.monotonic_ns()}")
     state.root_model_activity = False
     activity.note_prompt()
     result: dict = {}
@@ -1312,7 +1316,7 @@ def _final_message_rounds(*, client: AcpClient, pump: _Pump, request: RunRequest
                           deadline: float, cancel: CancelFlag, state: _RunState,
                           facts: _RunFacts, tools: DshToolFacts, activity: DshActivity,
                           sessions: list, fold, notify, denied, send_cancel,
-                          session: DshSessionProjector) -> tuple[str | None, int]:
+                          session: DshSessionProjector | None) -> tuple[str | None, int]:
     """The final-message carrier: one fresh root session per executed correction.
 
     The scope only decides the native tool settings; the value carrier follows
@@ -1385,7 +1389,7 @@ def _micro_task_round(*, client: AcpClient, pump: _Pump, request: RunRequest,
                     state: _RunState, tools: DshToolFacts, activity: DshActivity,
                     sessions: list, evidence: RootTurnEvidence,
                     inquiry_bridge: InquiryBridge | None, sessions_root: Path,
-                    fold, notify, session: DshSessionProjector,
+                    fold, notify, session: DshSessionProjector | None,
                     denied, send_cancel) -> None:
     """The micro task completion-tool carrier: one root turn, one verified receipt.
 

@@ -83,7 +83,7 @@ class DshRoleCase(unittest.TestCase):
                     "context": {}, "executionWorkspace": {}}
         return ExecutionContext(
             task_id="task", attempt_id=attempt, generation=index,
-            session_record_path=str(self.root / f"session-{attempt}.sqlite3"),
+            session_record_path=str(self.root / f"session-{attempt}.jsonl"),
             spec={**SPEC, "cwd": str(self.cwd), "task": "fixture micro task task",
                   "expectedSeconds": 1, **({"routerBudgetSeconds": timeout} if timeout is not None else {})},
             directory=self.root / "attempts" / attempt, runtime={}, environment=dict(self.environment),

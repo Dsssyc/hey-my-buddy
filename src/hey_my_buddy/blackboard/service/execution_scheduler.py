@@ -237,7 +237,7 @@ class ExecutionScheduler:
                 f"SELECT group_id FROM ({MEMBERS_SQL}) WHERE task_id=?",
                 (claim["task"]["taskId"],)).fetchone()
         if member is None:
-            raise BoardError("INVALID_ARGUMENT", "Execution has no session group")
+            return None
         return session_record_path(self.store.directory, member["group_id"],
                                    claim["attempt"]["attemptId"])
 

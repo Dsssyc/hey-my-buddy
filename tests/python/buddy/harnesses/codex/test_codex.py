@@ -57,7 +57,7 @@ class CodexAdapterTests(unittest.TestCase):
         turn_input = {"version": 1, "taskId": "micro-task-1", "attemptId": f"attempt-{index}", "generation": index,
                       "turnId": f"turn-{index}", "resumeMode": mode or ("native-session" if previous else "initial"),
                       "previousSessionId": previous, "context": {}, "executionWorkspace": {}}
-        return ExecutionContext(session_record_path=str(self.root / f"session-{index}.sqlite3"), task_id="micro-task-1", attempt_id=f"attempt-{index}", generation=index,
+        return ExecutionContext(session_record_path=str(self.root / f"session-{index}.jsonl"), task_id="micro-task-1", attempt_id=f"attempt-{index}", generation=index,
                                 spec={"cwd": str(self.cwd), "task": "Write a fixture result", "expectedSeconds": 1,
                                       **({"routerBudgetSeconds": timeout} if timeout is not None else {}),
                                       "provider": "openai", "model": "fixture-model", "effort": effort},

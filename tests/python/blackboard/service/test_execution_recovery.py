@@ -331,6 +331,7 @@ class PrivateExecutionRecoveryTests(BoardTestCase):
             created = self.client().call("selection_request", {
                 "requestId": "router-reconnect", "task": "Choose an offline fixture buddy"})
             self.assertTrue(wait_for(started.exists, timeout=60), created)
+            self.assertFalse((self.directory / "sessions").exists(), "ungrouped selections do not record sessions")
             run_id = created["runId"]
             before = self.client().get(runId=run_id)["selectedAttempt"]
             self.assertIsNotNone(before["processIdentity"])
@@ -368,6 +369,7 @@ class PrivateExecutionRecoveryTests(BoardTestCase):
                 created = self.client().call("selection_request", {
                     "requestId": "router-deadline", "task": "Choose behind a frozen gate"})
                 self.assertTrue(wait_for(started.exists, timeout=60), created)
+                self.assertFalse((self.directory / "sessions").exists(), "ungrouped selections do not record sessions")
                 run_id = created["runId"]
                 attempt = self.client().get(runId=run_id)["selectedAttempt"]
                 identity = attempt["processIdentity"]

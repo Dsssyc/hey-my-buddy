@@ -1,4 +1,4 @@
-"""The ACP v1 subset written to an attempt's SQLite session record.
+"""The ACP v1 subset written to an attempt's grouped JSONL session record.
 
 These are display facts, independent of activity, settlement and stop evidence.
 Decode JSON with the shared strict decoder before validating at a read boundary.
@@ -18,7 +18,16 @@ from typing import Annotated, Literal
 
 from pydantic import Field, JsonValue
 
-from .internal_models import InternalModel
+from .internal_models import FormatVersion, InternalModel
+
+
+class SessionFormat(InternalModel):
+    protocol: Literal["acp"]
+    protocol_version: FormatVersion
+    projection_version: FormatVersion
+
+
+SESSION_FORMAT = SessionFormat(protocol="acp", protocol_version=1, projection_version=1)
 
 
 class NativeMeta(InternalModel):

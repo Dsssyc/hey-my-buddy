@@ -61,7 +61,7 @@ class CodexUsageContractTests(unittest.TestCase):
                                       "provider": "openai", "model": "fixture-model", "effort": "low"},
                                 directory=self.root / f"attempt-{index}", runtime={},
                                 environment={**self.environment, "HMB_CODEX_FIXTURE_CASE": case},
-                                session_record_path=str(self.root / f"session-{index}.sqlite3"),
+                                session_record_path=str(self.root / f"session-{index}.jsonl"),
                                 turn={"turnId": f"turn-{index}", "input": turn_input})
 
     def execute(self, context: ExecutionContext):

@@ -94,7 +94,7 @@ class NativeQuotaFailureTests(unittest.TestCase):
                           output_schema={"type": "object"}, budget=RunBudget(timeout_seconds=5),
                           private_state=PrivateStatePaths(invocation_root=str(self.root / "run"),
                                                           native_root=str(self.root / "native")),
-                          session_record_path=str(self.root / "session.sqlite3"))
+                          session_record_path=str(self.root / "session.jsonl"))
 
     def zcode_result(self, failure):
         from hey_my_buddy.buddy.harnesses.zcode import native_run

@@ -166,6 +166,17 @@ class ProjectorTests(unittest.TestCase):
 
 
 class RunRecordTests(NativeRunCase):
+    def test_no_record_path_skips_projection_and_keeps_result_and_stop(self):
+        request = self.request().model_copy(update={"session_record_path": None})
+        with mock.patch("hey_my_buddy.buddy.harnesses.claude.native_run.ClaudeSessionProjector") as projector:
+            result = self.execute(request)
+        projector.assert_not_called()
+        self.assertEqual(result.end.status, "ok", result.end.message)
+        self.assertIsNotNone(result.value)
+        self.assertIsNotNone(result.last_assistant_message)
+        self.assertIsNone(result.session_record_failure)
+        self.assertEqual(result.stop_evidence.native.group_state, "gone")
+
     def path(self, request):
         return Path(request.session_record_path)
 

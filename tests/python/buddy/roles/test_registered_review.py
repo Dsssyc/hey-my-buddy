@@ -24,7 +24,7 @@ class RegisteredReviewTests(NativeRunCase):
             "taskId": "task", "attemptId": "attempt", "generation": 1,
             "invocationId": uuid.uuid4().hex, "privateRoot": str(root),
             "directory": str(root),
-            "nativeRoot": str(root / "native"), "sessionRecordPath": str(root / "session.sqlite3"),
+            "nativeRoot": str(root / "native"), "sessionRecordPath": str(root / "session.jsonl"),
             "cwd": str(self.cwd), "timeoutSeconds": 10,
             "executionLiveFile": str(root / "execution-live.json"),
             "live": {"instanceId": "a" * 64, "token": "b" * 64},

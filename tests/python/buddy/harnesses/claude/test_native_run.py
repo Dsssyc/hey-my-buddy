@@ -99,7 +99,7 @@ class NativeRunCase(unittest.TestCase):
             identity=RunIdentity(task_id="task-1", attempt_id=f"attempt-{uuid.uuid4().hex[:8]}",
                                  generation=1, invocation_id=uuid.uuid4().hex, turn_id="turn-1"),
             harness="claude",
-            session_record_path=str(self.base / f"session-{uuid.uuid4().hex}.sqlite3"),
+            session_record_path=str(self.base / f"session-{uuid.uuid4().hex}.jsonl"),
             buddy=RunBuddy(**BUDDY),
             cwd=str(self.cwd),
             private_state=PrivateStatePaths(

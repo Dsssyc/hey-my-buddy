@@ -58,7 +58,7 @@ class RoleStopTests(unittest.TestCase):
         self.root = Path(self.temp.name)
         self.invocation = ensure_private_dir(self.root / "invocation")
         self.control = {"privateRoot": str(self.invocation), "nativeRoot": str(self.root / "native"),
-                        "sessionRecordPath": str(self.root / "session.sqlite3"),
+                        "sessionRecordPath": str(self.root / "session.jsonl"),
                         "cwd": str(self.root), "harness": "zcode", "operation": "worker",
                         "invocationId": "first-invocation",
                         "executionLiveFile": str(self.root / "execution-live.json"),
@@ -446,11 +446,11 @@ class RoleStopTests(unittest.TestCase):
         context = ExecutionContext(task_id="task-stop", attempt_id="attempt-stop", generation=1,
             spec={"harness": "codex", "cwd": str(self.root)}, directory=self.root,
             runtime={}, environment={"HMB_STATE_DIR": str(self.root)},
-            session_record_path=str(self.root / "session.sqlite3"),
+            session_record_path=str(self.root / "session.jsonl"),
             turn={"turnId": "turn-stop", "input": turn_input})
         control = {"operation": "worker", "harness": "codex", "privateRoot": str(self.invocation),
                    "nativeRoot": str(ensure_private_dir(self.root / "native")),
-                   "sessionRecordPath": str(self.root / "session.sqlite3"),
+                   "sessionRecordPath": str(self.root / "session.jsonl"),
                    "executionLiveFile": str(self.root / "execution-live.json"),
                    "timeoutSeconds": None,
                    "outputFile": str(context.turn_output_file())}
@@ -459,7 +459,7 @@ class RoleStopTests(unittest.TestCase):
                                   input_sha256=input_hash(turn_input))
         request = rc.RunRequest(identity=identity, harness="codex",
             buddy=rc.RunBuddy(provider="provider", model="model", effort="off"),
-            cwd=str(self.root), session_record_path=str(self.root / "session.sqlite3"),
+            cwd=str(self.root), session_record_path=str(self.root / "session.jsonl"),
             private_state=rc.PrivateStatePaths(
                 invocation_root=str(self.invocation), native_root=control["nativeRoot"]),
             input_text="original Worker prompt", tool_scope="write",
