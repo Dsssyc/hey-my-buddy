@@ -7,18 +7,22 @@ import { parseTimelineInstant } from "./instant";
 
 /** Curated sRGB colours; the order spreads every prefix, especially the first six. */
 export const BUDDY_CORE_COLORS = [
-  { hex: "#025387", name: "Deep blue", family: "blue" }, // 深蓝 / Deep blue
-  { hex: "#fa881a", name: "Orange", family: "orange" }, // 橙色 / Orange
-  { hex: "#117b2d", name: "Leaf green", family: "green" }, // 叶绿 / Leaf green
-  { hex: "#ffc5d9", name: "Light pink", family: "rose" }, // 浅粉 / Light pink
-  { hex: "#93205b", name: "Deep rose", family: "rose" }, // 深玫红 / Deep rose
-  { hex: "#db0129", name: "Crimson", family: "red" }, // 正红 / Crimson
-  { hex: "#66c8e4", name: "Light cyan", family: "cyan" }, // 浅青蓝 / Light cyan
-  { hex: "#6137a5", name: "Deep violet", family: "violet" }, // 深紫 / Deep violet
-  { hex: "#acec6e", name: "Light lime", family: "green" }, // 浅柠绿 / Light lime
-  { hex: "#fad58e", name: "Light gold", family: "yellow" }, // 浅金黄 / Light gold
-  { hex: "#baabfe", name: "Lilac", family: "violet" }, // 浅紫 / Lilac
-  { hex: "#fd5878", name: "Coral", family: "red" }, // 珊瑚红 / Coral
+  "#025387", // 深蓝 / Deep blue
+  "#fa881a", // 橙色 / Orange
+  "#117b2d", // 叶绿 / Leaf green
+  "#ffc5d9", // 浅粉 / Light pink
+  "#93205b", // 深玫红 / Deep rose
+  "#66c8e4", // 浅青蓝 / Light cyan
+  "#6137a5", // 深紫 / Deep violet
+  "#acec6e", // 浅柠绿 / Light lime
+  "#fad58e", // 浅金黄 / Light gold
+  "#baabfe", // 浅紫 / Lilac
+] as const;
+
+/** Developer-rejected colours are reserved just like semantic colours. */
+export const BUDDY_REJECTED_COLORS = [
+  "#db0129", // 正红 / Crimson: rejected by the developer as too vivid.
+  "#fd5878", // 珊瑚红 / Coral: rejected as too similar to the failure cross.
 ] as const;
 
 export const BUDDY_STATUS_DISTANCE = 25;
@@ -28,17 +32,18 @@ export const BUDDY_EXTENSION_CORE_DISTANCE = 12;
 // hue bands: distance leaves room for individual colours near reserved hues.
 const statusLabs = [...tokens.matchAll(/--(?:fail|bar-fail|hand|hand-mark|bar-hand|live|brand-mark|past): (#[0-9a-f]{6});/g)]
   .map(match => rgbHexToLab(match[1]!));
-const coreLabs = BUDDY_CORE_COLORS.map(color => rgbHexToLab(color.hex));
+const reservedLabs = [...statusLabs, ...BUDDY_REJECTED_COLORS.map(rgbHexToLab)];
+const coreLabs = BUDDY_CORE_COLORS.map(rgbHexToLab);
 type Candidate = { lab: LABColor; hex: string };
 const candidates: Candidate[] = [];
 const nearestDistanceSquared: number[] = [];
-const colors: string[] = BUDDY_CORE_COLORS.map(color => color.hex);
+const colors: string[] = [...BUDDY_CORE_COLORS];
 
 function squaredDistance(left: LABColor, right: LABColor): number {
   return (left[0] - right[0]) ** 2 + (left[1] - right[1]) ** 2 + (left[2] - right[2]) ** 2;
 }
 
-/** One lightness rule for text and monochrome harness marks, in both themes. */
+/** One lightness rule for execution text in both themes. */
 export function buddyUsesLightInk(color: string): boolean {
   return rgbHexToLab(color)[0] < 52;
 }
@@ -67,7 +72,7 @@ function prepareCandidates(): void {
         if (usedHex.has(hex)) continue;
         const lab = rgbHexToLab(hex);
         if (isUnwantedBuddyColor(lab)) continue;
-        if (statusLabs.some(status => squaredDistance(lab, status) < BUDDY_STATUS_DISTANCE ** 2)) continue;
+        if (reservedLabs.some(reserved => squaredDistance(lab, reserved) < BUDDY_STATUS_DISTANCE ** 2)) continue;
         const distance = Math.min(...coreLabs.map(core => squaredDistance(lab, core)));
         if (distance < BUDDY_EXTENSION_CORE_DISTANCE ** 2) continue;
         usedHex.add(hex);

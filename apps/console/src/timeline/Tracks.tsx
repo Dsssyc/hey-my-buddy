@@ -260,7 +260,7 @@ export function Track({ row, spans, events, scale, nowMs, ongoing, buddies, onOp
   for (const item of positioned) {
     if (item.execution) {
       const tail = tails.find(entry => entry.item === item);
-      add([`${modelLabel(item.span)} · ${fullLabel(item)}`, fullLabel(item), duration(item)!], item.start + (item.span.kind === "execution" ? 23 : 6), (tail?.x ?? item.end) - (["failed", "unknown"].includes(item.outcome) ? 14 : 6), barTextY, item.span.kind === "execution" ? (lightInk(item.span) ? "fill-execution-ink-light" : "fill-execution-ink") : "fill-ink");
+      add([`${modelLabel(item.span)} · ${fullLabel(item)}`, fullLabel(item), duration(item)!], item.start + (item.span.kind === "execution" ? 26 : 6), (tail?.x ?? item.end) - (["failed", "unknown"].includes(item.outcome) ? 14 : 6), barTextY, item.span.kind === "execution" ? (lightInk(item.span) ? "fill-execution-ink-light" : "fill-execution-ink") : "fill-ink");
     } else add([fullLabel(item), duration(item)!], item.start + (item.outcome === "open" && item.span.kind === "host" ? 10 : 0), item.end, topTextY, item.outcome === "open" && item.span.kind === "host" ? "fill-hand" : "fill-ink3");
   }
   return <svg data-slot="timeline-track" viewBox={`${-INSET_PX} 0 ${scale.widthPx + INSET_PX * 2} ${height - 1}`} width={scale.widthPx + INSET_PX * 2} height={height} preserveAspectRatio="none" className="block max-w-none select-none overflow-hidden border-t text-xs" aria-label={t("track", { title: displayTitle(row.titleSource, row.title).fullText })}>
@@ -282,7 +282,10 @@ export function Track({ row, spans, events, scale, nowMs, ongoing, buddies, onOp
       {span.kind === "execution" && ["failed", "unknown", "cancelled"].includes(outcome) && <IsolatedStatusMark slot="execution-status-outline"
         d={`M${start - 2.5} ${middle - 13.5}h${Math.max(1, end - start) + 5}v27h${-Math.max(1, end - start) - 5}Z`}
         paper={paper} stroke={outcome === "failed" ? "stroke-fail" : outcome === "unknown" ? "stroke-hand-mark" : "stroke-ink3"} dashed={outcome !== "failed"}/>}
-      {span.kind === "execution" && <foreignObject data-slot="execution-buddy" pointerEvents="none" x={start + 3} y={middle - 7} width={14} height={14} className={cn("overflow-visible", lightInk(span) ? "text-execution-ink-light" : "text-execution-ink")}><div className="[&_img]:size-3.5 [&_[data-slot=harness-logo]]:size-3.5 [&>span]:size-3.5">{span.buddy?.harness && <HarnessLogo harness={span.buddy.harness}/>}</div></foreignObject>}
+      {span.kind === "execution" && <>
+        <rect data-slot="execution-buddy-paper" pointerEvents="none" x={start + 2} y={middle - 9} width={18} height={18} className={surface === "card" ? "fill-card" : "fill-background"}/>
+        <foreignObject data-slot="execution-buddy" pointerEvents="none" x={start + 4} y={middle - 7} width={14} height={14} className="overflow-visible text-foreground"><div className="[&_img]:size-3.5 [&_[data-slot=harness-logo]]:size-3.5 [&>span]:size-3.5">{span.buddy?.harness && <HarnessLogo harness={span.buddy.harness}/>}</div></foreignObject>
+      </>}
 
       {span.kind === "execution" && outcome === "failed" && <IsolatedStatusMark slot="execution-failed" d={`M${end - 8} ${middle - 3}l6 6m0-6l-6 6`} paper={paper} stroke="stroke-fail" width={1.8}/>}
       {outcome === "unknown" && <IsolatedStatusMark slot="unconfirmed-end" d={`M${end - 4} ${middle - 11}l4 6-4 5 4 5-4 6`} paper={paper} stroke="stroke-hand-mark"/>}
