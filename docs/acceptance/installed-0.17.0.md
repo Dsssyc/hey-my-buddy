@@ -1,6 +1,6 @@
 # Installed 0.17.0
 
-The user authorized installation on 2026-09-28 after the independent review. The package from source commit `2d63405` on `socu/router-buddy-0.17-review` was staged into the personal marketplace at `~/plugins/hey-my-buddy`, installed with the ChatGPT app's bundled Codex CLI (`codex-cli 0.158.0-alpha.2.1`) as `hey-my-buddy@personal` 0.17.0, and its bundled launcher ran `buddy upgrade`. The daily service was idle beforehand (no active attempts). No manual state archive, database replacement, stop or task cancellation was performed.
+The developer authorized installation on 2026-09-28 after the independent review. The package from source commit `2d63405` on `socu/router-buddy-0.17-review` was staged into the personal marketplace at `~/plugins/hey-my-buddy`, installed with the ChatGPT app's bundled Codex CLI (`codex-cli 0.158.0-alpha.2.1`) as `hey-my-buddy@personal` 0.17.0, and its bundled launcher ran `buddy upgrade`. The daily service was idle beforehand (no active attempts). No manual state archive, database replacement, stop or task cancellation was performed.
 
 ## Result
 

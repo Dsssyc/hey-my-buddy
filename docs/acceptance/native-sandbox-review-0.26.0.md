@@ -12,7 +12,7 @@
 
 ## 两份历史证据的离线重放
 
-Luna 参考文件只从用户指定目录读取并复制到本 worktree，未修改原目录。Sol v1 与同一次原生记录的离线摘要来自此前忽略的私有测试根；补充摘要的 run ID 与原 v1 字节哈希绑定。三份无凭据的历史夹具保存在 `tests/python/fixtures/review-evidence/`。
+Luna 参考文件只从开发者指定目录读取并复制到本 worktree，未修改原目录。Sol v1 与同一次原生记录的离线摘要来自此前忽略的私有测试根；补充摘要的 run ID 与原 v1 字节哈希绑定。三份无凭据的历史夹具保存在 `tests/python/fixtures/review-evidence/`。
 
 Sol 和 Luna 都得到相同判定：完整的允许工具请求／回复关联、原生策略有效、内部 marker 读取已观察到、四次原生拒绝。旧 v1 数据没有独立的四类边界请求绑定，因此回放都返回 `HISTORICAL_PROBE_BINDING_MISSING`，不会按调用顺序、退出码、输出长度或模型回答给拒绝补造类别，也不会签发新证书。这表明原拼写检查误拒绝了完整工具流；同时如实保留了旧日志的证明边界。新的真实认证必须产生固定探针证明。
 
@@ -22,6 +22,6 @@ Sol 和 Luna 都得到相同判定：完整的允许工具请求／回复关联�
 
 聚焦的沙盒、历史重放、模型写法、Codex 控制器、审阅准入、私有区不变式及当前契约 101 项测试通过。模拟原生进程的两个额外端到端用例确认五个固定挑战使用相同 profile／目标，未关联原生回复在模型启动前失败。收尾先运行 `npm --prefix apps/console ci`，使用 Node 24.19.0 通过且无 engine 警告；再运行完整 `uv run --frozen python -m buddy.checks`，退出码 0，1786 项 Python 测试通过（1276.156 秒），165 项 Node 测试通过（15 suites，28.228 秒）。原始输出保存在本 worktree 忽略的 `tmp/sandbox-review/`，未提交原始日志。
 
-测试全部使用显式私有 BUDDY_STATE_DIR 与 BUDDY_RUNTIME_ROOT，并清除继承的运行时、Worker、凭据与 harness-selection 环境。Windows 真机、真实 Codex 0.159.0 command/exec 路径及完整新认证均未验证；0.159.0 不新增已验证证书，安装和真实重验等待用户授权。
+测试全部使用显式私有 BUDDY_STATE_DIR 与 BUDDY_RUNTIME_ROOT，并清除继承的运行时、Worker、凭据与 harness-selection 环境。Windows 真机、真实 Codex 0.159.0 command/exec 路径及完整新认证均未验证；0.159.0 不新增已验证证书，安装和真实重验等待开发者授权。
 
-经用户授权的一次 Buddy 只读审查默认路由偏好 ZCode，run `8d224b53-dbe7-4d6b-afbd-d93ca0d50c3e` 到 deadline 后 cancelled、停机确认，未交付报告。本批不把它当审查通过；Host 自行核对一手协议、实现和反例。Host 未直接访问该审查的受管 checkout 或日常状态文件。
+经开发者授权的一次 Buddy 只读审查默认路由偏好 ZCode，run `8d224b53-dbe7-4d6b-afbd-d93ca0d50c3e` 到 deadline 后 cancelled、停机确认，未交付报告。本批不把它当审查通过；Host 自行核对一手协议、实现和反例。Host 未直接访问该审查的受管 checkout 或日常状态文件。

@@ -1,6 +1,6 @@
 # Installed 0.24.0
 
-The user authorized installing the accepted ADR-019 decision 11 candidate on 2026-09-30, including the tidying of the daily board, once review, checks and a rehearsal had passed. The implementation and its reviews are recorded in [private-directories-0.24.0.md](private-directories-0.24.0.md).
+The developer authorized installing the accepted ADR-019 decision 11 candidate on 2026-09-30, including the tidying of the daily board, once review, checks and a rehearsal had passed. The implementation and its reviews are recorded in [private-directories-0.24.0.md](private-directories-0.24.0.md).
 
 ## Pre-installation rehearsal
 

@@ -14,7 +14,7 @@ On 2026-09-24, Node 24.15.0 ran `npm test` from `apps/console`: all 65 tests in 
 
 The settings pane now uses ordinary content flow inside one viewport scroll area. Maintenance history and the selected maintenance detail occupy separate reading areas, and previous routing choices collapse after selection with focus moved to the chosen rationale. React asynchronous reads ignore responses after their selection or active pane changes, following the [React effect cleanup guidance](https://react.dev/reference/react/useEffect#fetching-data-with-effects).
 
-No Computer Use, browser automation, screenshots or visual acceptance was performed for this change, following the user's instruction. Component tests and CSS inspection do not establish pixel-level rendering correctness.
+No Computer Use, browser automation, screenshots or visual acceptance was performed for this change, following the developer's instruction. Component tests and CSS inspection do not establish pixel-level rendering correctness.
 
 ## Python and protocol evidence
 
@@ -34,4 +34,4 @@ The validated plugin version is `0.6.1+codex.20260924125851`. Installation check
 
 A separate staged plugin cold-started against private state and runtime roots, reported stable content ID `fdebe48e2c75c65dcf7edcee739465c0`, imported its package from inside that runtime and reported no source leaks. The plugin source directory was replaced while this private service remained running: PID `24415` and the runtime identity stayed unchanged, and `selection-list` still returned the expected empty bounded page. The private packaged service then stopped with no cancellations or unresolved attempts. The prior daily daemon's matching retained stable runtime is used for the detach before the final new client starts; an incompatible new client is not used to control the old C-Two surface.
 
-During implementation, the user approved a temporary capacity increase to two while another project occupied the daily board. That work released its slot before a second worker was needed; the implementation ran with the observed capacity of one. No additional worker was started, and the final capacity is to remain one. Daily profiles, preferences and configuration are not reset by this update.
+During implementation, the developer approved a temporary capacity increase to two while another project occupied the daily board. That work released its slot before a second worker was needed; the implementation ran with the observed capacity of one. No additional worker was started, and the final capacity is to remain one. Daily profiles, preferences and configuration are not reset by this update.

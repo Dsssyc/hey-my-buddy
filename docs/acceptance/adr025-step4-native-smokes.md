@@ -1,6 +1,6 @@
 # ADR-025 第四步：DSH 原生与分发验证
 
-本记录区分原生运行结果、Host 探针留证是否完整和整步验收。核对使用用户已经安装的 DSH；经新 Python 控制器与 `dsh --profile acp`，没有 DSH Python SDK、日常运行时安装或升级，也没有读取凭据文件内容。每次 DSH 启动均有私有 `DSH_HOME`；真实运行保留原有 `HOME`，公开配置导出另设私有 `HOME`。真实认证由 DSH 经既有只读指路配置自行取得，Host 没有复制凭据或改登录。以下模型调用均属于已授权的第四步冒烟，原始脚本、摘要和具名证据清单在 `<checkout>/tmp/adr025-host/<phase>/`。
+本记录区分原生运行结果、Host 探针留证是否完整和整步验收。核对使用开发者已经安装的 DSH；经新 Python 控制器与 `dsh --profile acp`，没有 DSH Python SDK、日常运行时安装或升级，也没有读取凭据文件内容。每次 DSH 启动均有私有 `DSH_HOME`；真实运行保留原有 `HOME`，公开配置导出另设私有 `HOME`。真实认证由 DSH 经既有只读指路配置自行取得，Host 没有复制凭据或改登录。以下模型调用均属于已授权的第四步冒烟，原始脚本、摘要和具名证据清单在 `<checkout>/tmp/adr025-host/<phase>/`。
 
 ## 原生运行账目
 
@@ -22,7 +22,7 @@
 
 公开配置导出包含 16 个 `tool-` 行，其中 `tool-result-pruner` 是已登记的上下文剪枝插件，本次没有新工具提供行。其余 15 行为 tool-bash、tool-pwsh、tool-jobs、tool-fs、tool-fs-search、tool-skill、tool-subagent-control、tool-subagent-list-agents、tool-subagent、tool-subagent-fork、tool-workflow、tool-todo、tool-goal、tool-ralph、tool-web；不给工具时这 15 行连同 plan-mode、session-title-llm、session-telemetry-otel 共 18 行均 disabled。仅按公开组合配置与实际事件核对，不静态证明厂商实现；清单外的新工具仍保留为事实，不能被称为已经限制。临时提取器第一次只按 tool- 前缀列出清单外的 pruner，第二次归入此前已登记的非工具提供行，原始导出不改写。
 
-只读实测证明本次 bash 重定向受到原生只读沙盒限制，补上前期只验证写入工具的缺口。没有发生升级权限请求，也没有重试或放宽权限；用户提示词要求一次尝试后返回。工具结果是原生会话记录中与该 callId 对应的 `tool/result`，不只依赖最终文字。共享词表补入实际原生名称 `bash → execute`，未知名仍为 other；这只是分类，DSH 的 systemSandbox 能力与黑板审阅准入没有在此改写。
+只读实测证明本次 bash 重定向受到原生只读沙盒限制，补上前期只验证写入工具的缺口。没有发生升级权限请求，也没有重试或放宽权限；开发者提示词要求一次尝试后返回。工具结果是原生会话记录中与该 callId 对应的 `tool/result`，不只依赖最终文字。共享词表补入实际原生名称 `bash → execute`，未知名仍为 other；这只是分类，DSH 的 systemSandbox 能力与黑板审阅准入没有在此改写。
 
 五项已接受行为差异逐项继续成立：问询经合作检查点送达；快速调用多出 DSH 系统提示词；原生续接可以成为新能力但本次没有启用，仍以新会话重建；第四项是所有由 hey-my-buddy 启动的 DSH 关闭 session-title-llm；第五项是同一范围关闭 session-telemetry-otel。后两项经本次私有启动 patch 应用，用户自己交互使用的 DSH 不受影响。不给工具的私有会话记录中 title 来源为 fallback。没有新增已发现而未批准的行为差异。
 

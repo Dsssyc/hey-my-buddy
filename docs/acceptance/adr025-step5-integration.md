@@ -1,6 +1,6 @@
 # ADR-025 第五步整合登记
 
-2026-10-07，实施分支先从 c550d65 快进到 socu/buddy-core 当前的 43d8d63，包含用户指出的 3449897、第三四步验收合并 3fce9ac 及其后的文档提交。第三四步已由 Claude Code Host 验收，依据是 adr025-step3-4-host-review.md；本步尚未完成，日常运行时没有安装或升级。
+2026-10-07，实施分支先从 c550d65 快进到 socu/buddy-core 当前的 43d8d63，包含开发者指出的 3449897、第三四步验收合并 3fce9ac 及其后的文档提交。第三四步已由 Claude Code Host 验收，依据是 adr025-step3-4-host-review.md；本步尚未完成，日常运行时没有安装或升级。
 
 开始时实际加载 Python 编号 2,785 个、175 个模块，装载错误和重复均为零；原始清单在 <checkout>/tmp/adr025-host/<phase>/step5-before-ids.json。第五步先整合清理批次，再改实时通道；清理无需单独等待外部验收，整步结束才停下。
 
@@ -12,7 +12,7 @@ Host 将角色中的四处厂商判断移到登记参数：冻结账户的读取
 
 Host 清理聚焦 15 个受影响模块，154 项全部通过，27.975 秒，私有检查根正常收尾；没有跑完整检查或调用模型。迁移链接防护的单点变异只去掉新角色读取中的 guard_private_path：原件 1 项通过，变异命中 ok != failed 的断言（0.227/0.346 秒），原始输出留 tmp。第一次探针在原件通过后误读 ChildOutcome.exit_code 属性而退出，不算变异证据；保留该脚本、通过输出与副本，另建新副本和新输出，用真实 returncode 完成核对，没有覆盖旧材料。
 
-用户已明确批准 Claude Code 的两次最小真实冒烟（Worker 回合一次、审阅一次），尚未运行。将沿用本机已有登录，不设置 CLAUDE_CONFIG_DIR 或 CODEX_HOME，不登录、登出、改密钥或读取凭据文件内容；额度或登录阻碍按未验证记录，不反复尝试。
+开发者已明确批准 Claude Code 的两次最小真实冒烟（Worker 回合一次、审阅一次），尚未运行。将沿用本机已有登录，不设置 CLAUDE_CONFIG_DIR 或 CODEX_HOME，不登录、登出、改密钥或读取凭据文件内容；额度或登录阻碍按未验证记录，不反复尝试。
 
 5-P3 第一份提交 30bc23f 的三份测试与两份记录在范围内，但另误写一个未跟踪 MD 到 <managed-checkout>/Users/<user>/…/docs/acceptance/，使黑板拒绝封存。Worker 如实披露并保留，没有手动删除；Host 核对黑板记录的唯一 blockingPath、普通文件类型及字节摘要，以 workspace-resolve restore 恢复该明确新文件，没有扩大写范围或触及受管检出以外。恢复后的固定 artifact 为 6f2f8367-e125-4a26-b4f7-b811ae5a6d85、提交 ed818685；误写文件已消失，黑板恢复登记保留。
 
@@ -28,11 +28,11 @@ Claude Code 的已批准两次冒烟可以独立于尚在执行的清理微任�
 
 5-P2 固定副本的 36 个受影响模块首次检查 34 个通过（680 项），两份 ZCode 测试因 Host 自建检查根过长而失败，73.722 秒，正常收尾；未写成通过。用检查运行器在系统临时目录创建并登记短私有根后，仅重跑这两份测试：基线和交付各 46 项问询、5 项本机 ZCode 假模型测试全部通过（11.445/22.147/11.232/20.528 秒），各根正常由运行器收尾，确认是 Host 环境问题。累计受影响 731 项有通过证据；独立只读审查逐段比对四个运行模块及 ZCode 阶段，未找到行为/异常/停止/写入顺序回归，16 个新记录字段均有读取方。原始三项变异日志确为断言失败，取消的既有见证也有原件通过。
 
-5-P2 仍因验证结论拒绝并原 run continue：记录称零安装版 harness，但原始 255 项 ZCode 日志没有 skip，包含 5 个 InstalledZcodeTests，实际启动安装版 ZCode/Node、以私有配置和 localhost 假模型运行，不能写成纯模拟 CLI。该过程没有付费模型或真实凭据，测试沙盒拒绝写日常 ZCode 与 agent 目录；没有证据指向日常数据改动。要求只更正并如实披露，不重跑测试、不改已验证代码/测试；根路径的占位写法一并更正，空 .venv 留存不删。这会改变“做过什么、验证过什么”，按用户规则由原微任务更正，Host 不代改。
+5-P2 仍因验证结论拒绝并原 run continue：记录称零安装版 harness，但原始 255 项 ZCode 日志没有 skip，包含 5 个 InstalledZcodeTests，实际启动安装版 ZCode/Node、以私有配置和 localhost 假模型运行，不能写成纯模拟 CLI。该过程没有付费模型或真实凭据，测试沙盒拒绝写日常 ZCode 与 agent 目录；没有证据指向日常数据改动。要求只更正并如实披露，不重跑测试、不改已验证代码/测试；根路径的占位写法一并更正，空 .venv 留存不删。这会改变“做过什么、验证过什么”，按开发者规则由原微任务更正，Host 不代改。
 
 5-P2 更正轮固定 artifact c088e9cd-97c7-484d-92dd-9572d4681e3a、提交 7e1d4a2 与先前代码相比仅 MD 改动，源码、测试及编号表逐字节不变，不重跑检查。原 run 核对并撤回错误结论：安装版路径实际还包括 2 个 FreeProbePipelineTests，共 7 个测试，进程启动次数未留存，不能把 7 项写成 7 次进程。更正明确违反任务的安装版限制、基线绿日志未持久化的边界，保留旧 checkpoint 的错误历史和空 .venv 披露。Host 已按累计补丁应用全部 8 条路径，并与新固定提交逐字节相等；源代码及迁移防护验证沿用已核对的 731 项与原始故障证据，记录仅更正无需重跑。尚未整合实时通道。
 
-清理批次补充整合：5-P1 同一 run continue 后逐侧保留 detail、空白 inquiryId 与非字符串工具名的原判定，用一份验证核心及实际登记规则束；三项要求的身份/签名变异同时打红 ZCode、DSH 接缝，Host 固定副本的 193 项聚焦测试全部通过（13.462 秒）。5-P3 同一 run continue 以 unknown/alive 原生组事实且外层确认构造负向，不再把续接能力未知当作停止未知；Host 固定副本的 115 项聚焦测试全部通过（13.877 秒）。整合后的源码与测试均逐文件字节匹配固定交付。Host 仅将 5-P3 文末任务根的绝对路径改为占位符，事实、验证结论与测试没有改变；该小更正按用户的相称性规则登记，不打回、不重跑。
+清理批次补充整合：5-P1 同一 run continue 后逐侧保留 detail、空白 inquiryId 与非字符串工具名的原判定，用一份验证核心及实际登记规则束；三项要求的身份/签名变异同时打红 ZCode、DSH 接缝，Host 固定副本的 193 项聚焦测试全部通过（13.462 秒）。5-P3 同一 run continue 以 unknown/alive 原生组事实且外层确认构造负向，不再把续接能力未知当作停止未知；Host 固定副本的 115 项聚焦测试全部通过（13.877 秒）。整合后的源码与测试均逐文件字节匹配固定交付。Host 仅将 5-P3 文末任务根的绝对路径改为占位符，事实、验证结论与测试没有改变；该小更正按开发者的相称性规则登记，不打回、不重跑。
 
 5-P2 已内部签收 int-c02d7107-3783-4946-ac4c-0d405fe01732；受管检出回收计划 cln-92935fe9-d086-47b2-8ecd-2961f1f70b1d 已 applied，Host 核实路径消失后，将七份已读取的原始日志/变异摘要保留在本检出 tmp 的 manifest 中并记 SHA-256，再仅整体删除创建时登记的该微任务根。未扫描或清理别的临时对象。
 
@@ -56,7 +56,7 @@ Claude 两次原生冒烟的私有根在核实停止后已由 Host 按各自创�
 
 5-B1 首份 helper 的 21 项独立聚焦检查通过（2.908 秒），真实 BoardStore 探针仍发现实例 NULL 放行、已有治理回合省略 turn/hash 放行以及当前合法摘要被拒；拒绝并原 run continue。Host 任务中的“已记录摘要列”假设错误：当前服务先保存规范化 input_json，input_sha256 列等结果才写，修正为复用现有服务输入摘要来源，未新增 schema/写操作或扩大微任务范围。未代改 helper，探针与失败来源完整保留。
 
-两条微任务因 Z.ai 不可重试的限流（rate_limited、code 1308、HTTP 429）失败，按用户第五步许可在原 run 上继续，未取消或另开。5-B1 被限流的 buddy 为 zcode/zai-api/GLM-5.3-Flash/max，原路由决定 dec-024b214f-2b5b-4c75-927c-df5acb3999fd；5-B2 为 zcode/zai-api/GLM-5.3/max，原路由决定 dec-4f931ac6-fef4-4105-9caa-a011e4cd5736。两条均改用已启用且可用的 codex/openai/gpt-6.1-sol/high，保留原检出、任务根与范围；未修改模型启用、登录或配置。
+两条微任务因 Z.ai 不可重试的限流（rate_limited、code 1308、HTTP 429）失败，按开发者第五步许可在原 run 上继续，未取消或另开。5-B1 被限流的 buddy 为 zcode/zai-api/GLM-5.3-Flash/max，原路由决定 dec-024b214f-2b5b-4c75-927c-df5acb3999fd；5-B2 为 zcode/zai-api/GLM-5.3/max，原路由决定 dec-4f931ac6-fef4-4105-9caa-a011e4cd5736。两条均改用已启用且可用的 codex/openai/gpt-6.1-sol/high，保留原检出、任务根与范围；未修改模型启用、登录或配置。
 
 Host 公共接线前置：新增 protocol.activity.ActivityPublisher，复用既有 normalize_activity/is_newer 与相同阶段、时间节流，只将写文件改为调用实际端点发布函数。未成功的发布不前移序列，保留重试；阶段变化即时发送。新增一项行为测试验证合并、发布失败与新阶段，聚焦测试 1 个通过（0.001 秒）；这不是另一个运行通道。暂保留旧 sidecar 实现供尚未整合的调用方，最终接线时删除。
 
@@ -64,7 +64,7 @@ Host 公共接线前置：新增 protocol.activity.ActivityPublisher，复用既
 
 5-B2 报告公共接口缺口后，Host 将 5-A 的严格有界解码和完整身份、实例、token 认证原实现提取为 decode_live_wire_frame / authenticate_live_frame，原 endpoint 同源调用，无新规则或账本。后端 53 项聚焦回归通过（原始输出 host-live-auth-focused1.log）；此公共文件由 Host 维护。Worker 的隔离 Codex 检出不能写共享 Git 元数据，后续若只因提交命令失败，由 Host 核对文件来源和范围后代执行 git add/commit，不代改实现并登记。
 
-5-C1 原路由决定 dec-edb4247b-4fc6-4165-b643-8f16e9b4714a 的 zcode/zai-api/GLM-5.3/max 在首次原生回合报不可重试 code 1308/HTTP 429，按用户许可原 run continue 为 codex/openai/gpt-6.1-sol/high；未改供应方启用或登录。
+5-C1 原路由决定 dec-edb4247b-4fc6-4165-b643-8f16e9b4714a 的 zcode/zai-api/GLM-5.3/max 在首次原生回合报不可重试 code 1308/HTTP 429，按开发者许可原 run continue 为 codex/openai/gpt-6.1-sol/high；未改供应方启用或登录。
 
 5-B1 Codex 已完成实现、聚焦与变异验证但无法写受管检出外的共享 Git 元数据；Host 按原 run assistance 请求只执行精确四路径暂存和提交（0bfbbaaac34cff3392b7d9ac9cfdf38eeb103ed1），执行前后文件摘要相等，没有源代码或测试代改。之后原 run continue 收尾，不重跑不变的测试。
 
@@ -82,7 +82,7 @@ C-Two 点查口径由 Host 选择：按当前所有者已发布的事实查询�
 
 5-B2 固定产物 daad210f 在 Host 允许 IPC 的固定副本中 23 项通过 5.833 秒，包含六个真实 peer。但审查发现 unbind 没有实际 named detach，WorkerLiveDetach 没有生产调用，服务登记不能正常回收；明确拒绝该产物并原 run continue。正式 rejected 操作因 awaiting-host 尚非 delivered 被黑板 NOT_READY 拒绝，原始响应保留；拒绝结论和具体缺陷写在同 run continue 与本登记。Host 未代改范围内代码。
 
-5-C3 首次路由 zcode/zai-api/GLM-5.3-Flash/max（决定 dec-ae3c4288-67de-482a-99be-677ef6cca72d）以供应方不可重试 code1308/429 失败；按用户许可原 run continue 为已在本步完成代码/测试迁移的 codex/openai/gpt-6.1-sol/high，未改路由偏好、供应方启用或登录。
+5-C3 首次路由 zcode/zai-api/GLM-5.3-Flash/max（决定 dec-ae3c4288-67de-482a-99be-677ef6cca72d）以供应方不可重试 code1308/429 失败；按开发者许可原 run continue 为已在本步完成代码/测试迁移的 codex/openai/gpt-6.1-sol/high，未改路由偏好、供应方启用或登录。
 
 5-C4 首次路由 zcode/zai-api/GLM-5.3-Flash/max（决定 dec-ffa2e8ff-33a3-4e33-be3e-cb4ff3a4b6a9）返回不可重试1308/429，原 run continue 为本步完成过同类代码/测试迁移的 codex/openai/gpt-6.1-sol/high；未改用户设置或登录。
 
@@ -136,7 +136,7 @@ CONTRACT_VERSION的两处旧0.28.0字面断言由Host随本步真实契约变化
 
 Host直接修范围外四处：HarnessStartup将Worker参数改为声明的worker_id,state_dir顺序；registered review不向无参fixture服务工厂注入已删闲置参数；private adapter改核对live.readyFile归属而非退休errorPath；真实Worker回合读取保留RunResult.activity并与公开phase/eventSeq相对，不再断言sidecarWritten。初次27项仅最后1项因Host还引用退休nativeActivity字段KeyError；改为实际activity投影后该1项通过，其他26项原件通过，不重复无变化模块。
 
-5-C3完整发现导入缺陷已准备仅两处前缀的确切patch，按用户规则尝试原run continue；黑板以CONFLICT/An accepted goal cannot be continued拒绝。内部验收漏了tests/python cwd场景，accepted与检出回收已发生；Host未绕过黑板状态或代改，已向用户提出这一次两行导入的例外授权，独立工作继续。
+5-C3完整发现导入缺陷已准备仅两处前缀的确切patch，按开发者规则尝试原run continue；黑板以CONFLICT/An accepted goal cannot be continued拒绝。内部验收漏了tests/python cwd场景，accepted与检出回收已发生；Host未绕过黑板状态或代改，已向开发者提出这一次两行导入的例外授权，独立工作继续。
 
 独立只读源码复核与Host初核一致：限定公共运行/实时格式、共同机制及其生产消费者，没有可确认的闲置字段/类/参数或公共整合缺陷。实际Pydantic请求/结果文件解码消费formatVersion，blackboard公共live投影消费嵌套元数据，holder消费descriptor、Worker日志消费CleanupOutcome，ReceiptRules四项均被实际核验函数读取；没有运行厂商harness或静态证明厂商代码。该源码结论不代替完整检查与外部验收。
 
@@ -144,7 +144,7 @@ Host直接修范围外四处：HarnessStartup将Worker参数改为声明的worke
 
 5-D2首次路由dec-cfb245c1-f2b8-441e-95c6-77c5ac35f6c7选zcode/zai-api/GLM-5.3/max，正常固定交付dbdb5e5；没有因耗时更换buddy。七路径封存patch/SHA/停止核对一致，Host固定整合副本六相关模块168项通过224.859秒；8份迁移防护变异均真实断言失败且无导入错误，原始日志保留。仅将MD确切系统临时根改为<task-root>，不改Worker做过/验证过的结论。内部ack/回收暂等最终集成发现检查完成，避免重复C3验收遗漏。
 
-用户补充：提交第五步前合入socu/buddy-core 9b65abbc的ADR-027；解决Codex/DSH等冲突保留两边行为，受影响聚焦后最终代码才再跑完整检查。今后微任务描述新增共享Git规则：受管检出与用户仓库共用stash/分支/标签，Worker禁止git stash，不移动或删除分支/标签；基线对比用新临时副本。Host本次合入不使用stash或自动stash。
+开发者补充：提交第五步前合入socu/buddy-core 9b65abbc的ADR-027；解决Codex/DSH等冲突保留两边行为，受影响聚焦后最终代码才再跑完整检查。今后微任务描述新增共享Git规则：受管检出与用户仓库共用stash/分支/标签，Worker禁止git stash，不移动或删除分支/标签；基线对比用新临时副本。Host本次合入不使用stash或自动stash。
 
 已将 socu/buddy-core 的 9b65abbc 合入实施分支（2278c40）：Codex 冲突采用共同 configuration_spec 且保存 _initialize 返回的 selected_model_listed；DSH 发现保留共同 utc_now 与 ADR-027 的 accountStatus。四个发现路径、Codex 所选模型未列出时的核对放宽、角色 selectedModelListed 传递均保留。聚焦中 DSH 旧发现字面断言遗漏 accountStatus 由 Host 修正并单项通过，实际 registered_run_wiring 21 项通过；两次 Host 写错不存在的测试选择器导致的装载错误如实保留，不当作生产失败。最终完整检查仍等全部交付整合完成。
 
@@ -162,9 +162,9 @@ DSH 两个确切任务根已由 Host 回收：先保留首轮材料及第二轮2
 
 5-D3 原run continue在准备检出阶段失败：attention prep-f9bb86e3-0fda-4b4f-bcf4-6e3eee48ecaa，WORKSPACE_GIT_ERROR，没有产生新模型回合。Host仅只读核对受管HEAD仍2278c40、改动仍授权三路径，没有使用stash/移动分支标签/手动提交受管文件或扩大到修黑板。已准备仅记录/编号表/源码注释的更正补丁，去除docstring后可执行AST与241bd0b完全相等，全17个实际加载编号与基线集合相等；与C3两行导入补丁一并提出一次性Host更正授权，未应用到实施分支。候选私有副本共3049个唯一编号/189模块（原步输入2785，最新已验上游2874），无装载错误；这是未授权补丁的提案编号核对，不是最终代码或完整检查通过。D1/D2的integration-record已登记，ack/回收继续等待最终发现与整批完整检查；D3原run保留且未取消、未另开。
 
-用户已明确授权两项一次性 Host 更正。C3 两处测试导入去掉 tests.python. 前缀；原 run 已接受不能 continue，不取消或重提。D3 固定241bd0b三路径先逐字整合，再更正编号表/记录与源码注释：全17个实际加载编号相等，变化/删除/新增均零；12处夹具机制变化另在记录说明；生产stdout是RunResult帧，夹具runner日志是单独的角色投影脱敏样本；模拟组在观察阶段活跃而非笼统永不消失。去除docstring后可执行AST完全相等，原17项/两变异证据不改、不为注释或记录重跑。所有Host适配明确列入integration-record的adjustedPaths，原WORKSPACE_GIT_ERROR、首轮产物与日志保留；受管检出没有手动改写。
+开发者已明确授权两项一次性 Host 更正。C3 两处测试导入去掉 tests.python. 前缀；原 run 已接受不能 continue，不取消或重提。D3 固定241bd0b三路径先逐字整合，再更正编号表/记录与源码注释：全17个实际加载编号相等，变化/删除/新增均零；12处夹具机制变化另在记录说明；生产stdout是RunResult帧，夹具runner日志是单独的角色投影脱敏样本；模拟组在观察阶段活跃而非笼统永不消失。去除docstring后可执行AST完全相等，原17项/两变异证据不改、不为注释或记录重跑。所有Host适配明确列入integration-record的adjustedPaths，原WORKSPACE_GIT_ERROR、首轮产物与日志保留；受管检出没有手动改写。
 
-提交前再次合入最新socu/buddy-core 54d15908，仅用户维护的待办文档变化，没有生产或测试变化；没有由Host改写待办。最终完整检查将在这些已授权修正与全部交付整合后的代码上运行，默认并行数，不传--jobs。
+提交前再次合入最新socu/buddy-core 54d15908，仅开发者维护的待办文档变化，没有生产或测试变化；没有由Host改写待办。最终完整检查将在这些已授权修正与全部交付整合后的代码上运行，默认并行数，不传--jobs。
 
 授权后C3实际tests/python cwd的三迁移模块与检查运行器73项通过6.849秒；D3记录/注释不重跑。主编号清单实际3049个唯一编号/189模块，无装载错误；原输入2785个的未变集合2712相等，73个旧编号变化/退役、337个新增，含上游ADR-027的1个改名与89个新增ID差异；相对最新已验上游2874个是72旧/247新。逐项见adr025-step5-test-id-delta.tsv，仅列实际编号差异；微任务表中正文/断言迁移明细不计作整步编号变化。主表额外补齐Host范围外改名及控制器退休入口的对应，不能靠新用例总数掩盖旧意图。
 
@@ -182,6 +182,6 @@ D2最终integration-record第一次漏记ADR-027给Claude模型发现测试增�
 
 最终整批完整检查在b437090通过：uv run --frozen python -m hey_my_buddy.cli.checks，默认4并行、无jobs覆盖，3049项（原有skip1）/189文件全部调度通过，505.735秒、退出0。393份源码/测试/锁文件SHA与检查开始时完全相同；再发现3049唯一编号、189模块、零装载错误，与先前清单集合相等。原失败与取消用例返修/变异日志保留，之后仅记录收尾，不重复无变化检查。
 
-5-D1、5-D2、5-D3均绑定各自最终固定artifact与核验integration完成内部accepted；D3按用户单次授权由Host在准备失败后的awaiting-host边界完成，没有新模型回合。黑板按自身计划回收受管检出，确切路径已消失；Host分别保留17、33、18份命名材料/SHA（D3含两份实际变异源码差异），再按创建登记的三个确切任务根整体回收。D1第一次cleanup-apply回应WORKSPACE_CHANGED快照错误，后续cleanup-plan返回原计划applied且result.removed为true，物理路径同样消失；该回应错误保留，不猜测根因，不绕过黑板删除受管检出。Host收尾脚本曾因创建台账有path与root两种记录形状而KeyError、又把已applied误当待执行而断言退出，均在继续删除之前停下；修正只影响Host收尾脚本，没有生产或测试改动。
+5-D1、5-D2、5-D3均绑定各自最终固定artifact与核验integration完成内部accepted；D3按开发者单次授权由Host在准备失败后的awaiting-host边界完成，没有新模型回合。黑板按自身计划回收受管检出，确切路径已消失；Host分别保留17、33、18份命名材料/SHA（D3含两份实际变异源码差异），再按创建登记的三个确切任务根整体回收。D1第一次cleanup-apply回应WORKSPACE_CHANGED快照错误，后续cleanup-plan返回原计划applied且result.removed为true，物理路径同样消失；该回应错误保留，不猜测根因，不绕过黑板删除受管检出。Host收尾脚本曾因创建台账有path与root两种记录形状而KeyError、又把已applied误当待执行而断言退出，均在继续删除之前停下；修正只影响Host收尾脚本，没有生产或测试改动。
 
 最后保留最终wheel（SHA34b434e56fce375cb03c4587373d78f1ac154940ed2a24b3f3cb8deb519f4a41）及阶段中的原始运行/安装/契约/端点证据，按创建时登记的确切Host任务根整体回收。13个微任务任务根全部已回收，其他会话对象与其他C-Two残留未动；实施worktree仍供外部验收。第五步提交记录后停止，等待Claude Code Host验收，未安装或升级日常运行时。

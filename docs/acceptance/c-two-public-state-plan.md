@@ -8,7 +8,7 @@ Host 已从原候选归档独立复跑整合方原样的默认入口探针：空
 
 `call_service`、`call_board` 是公开调用边界，选择由它们解析状态目录，并让服务探测、冷启动与实际请求使用同一个结果。BoardClient 保留构造时存原参数、调用时选目录的现有时机：注入 call 的路径原样短路；autostart=True 复用 call_board，autostart=False 在自己调用边界解析后同时传给 attach 与 _request。这样不把默认目录冻结到构造时，不改变显式参数优先于环境、环境优先于默认 HOME 数据路径的现有语义。具体简洁实现由微任务产物核对，不为传输另造解析器。
 
-内部 _request、rpc_config、Worker、控制器的缺根拒绝保留，不增加默认路径回退，不用 shell export 掩盖公开 Python 客户端问题。不改公开参数、schema、契约版本、停止/恢复判定、原生 harness、前端或已有三次付费冒烟；ZCode 按用户决定不调用模型。
+内部 _request、rpc_config、Worker、控制器的缺根拒绝保留，不增加默认路径回退，不用 shell export 掩盖公开 Python 客户端问题。不改公开参数、schema、契约版本、停止/恢复判定、原生 harness、前端或已有三次付费冒烟；ZCode 按开发者决定不调用模型。
 
 ## 独立微任务与写入边界
 
@@ -40,7 +40,7 @@ Host 核对固定补丁与风险接缝、实际聚焦测试、目标故障注入
 
 ## 路由与同 run 恢复登记
 
-3-A run `ef9677e7-df3e-4f57-b03b-4c7add95b85f`，微任务基线 `9e45e890e0c249250621a12d165001c9c76d7e8e`。首次四项配置全部省略，路由决定 `dec-7705e392-3073-4d96-9576-986a5c4eca38` 选 ZCode/zai-api/GLM-5.3/max；实际 nativeFailure.attribution 为 provider rate_limited、statusCode=429、providerErrorCode=1310、retryable=false，两层停止确认，没有固定修复交付。按本批既有许可，用完整 configuration 与独立 reason 在原 run continue 到 Codex/openai/gpt-6.1-sol/high（曾完成本批 C-Two 实施与夹具返修），revision 5 已排队，范围与规则不变。没有修改用户路由设置或为 ZCode 重试相同限流回合；既有三个付费冒烟和用户暂不调用 ZCode 的决定不改写，微任务使用模型另按本 run 记录。请求、原始失败、路由与恢复响应保存在 `tmp/c073-host/public-state-repair*`。
+3-A run `ef9677e7-df3e-4f57-b03b-4c7add95b85f`，微任务基线 `9e45e890e0c249250621a12d165001c9c76d7e8e`。首次四项配置全部省略，路由决定 `dec-7705e392-3073-4d96-9576-986a5c4eca38` 选 ZCode/zai-api/GLM-5.3/max；实际 nativeFailure.attribution 为 provider rate_limited、statusCode=429、providerErrorCode=1310、retryable=false，两层停止确认，没有固定修复交付。按本批既有许可，用完整 configuration 与独立 reason 在原 run continue 到 Codex/openai/gpt-6.1-sol/high（曾完成本批 C-Two 实施与夹具返修），revision 5 已排队，范围与规则不变。没有修改用户路由设置或为 ZCode 重试相同限流回合；既有三个付费冒烟和开发者暂不调用 ZCode 的决定不改写，微任务使用模型另按本 run 记录。请求、原始失败、路由与恢复响应保存在 `tmp/c073-host/public-state-repair*`。
 
 ## 首份固定产物退回与 Host 自建实例收尾
 
@@ -52,15 +52,15 @@ Host 只对自己这一批检查创建且 endpoint PID/serviceId 与台账相等
 
 ## 2026-10-11 第二次 Host 复核补充：3-B 排队
 
-用户要求同一轮再修三处路径/权限/错误回归，复核记录只读取自 `e8f57266:docs/acceptance/c-two-074-host-review.md`，core 仍冻结 `12eb4fcd`。3-B 必须在 3-A 内部验收后开始，不并行修改 transport 接缝；目前仅准备计划与只读探针证据，未委派或修改产品。最终完整检查移到 3-A 与 3-B 全部整合后的源上一次执行，既有付费冒烟不重跑。
+开发者要求同一轮再修三处路径/权限/错误回归，复核记录只读取自 `e8f57266:docs/acceptance/c-two-074-host-review.md`，core 仍冻结 `12eb4fcd`。3-B 必须在 3-A 内部验收后开始，不并行修改 transport 接缝；目前仅准备计划与只读探针证据，未委派或修改产品。最终完整检查移到 3-A 与 3-B 全部整合后的源上一次执行，既有付费冒烟不重跑。
 
-用户提供的 path_probe 已复制并核对哈希，分别在候选 `8e793196` 与基线 `12eb4fcd` 的独立归档副本运行，模型调用为 0。仅在探针外层记录并把 tempfile.mkdtemp 创建物约束到各自短私有任务根，原探针逻辑和产品源未改。候选符号链接路径 preflight 报 LAUNCH_ACCESS_DENIED、未解析到真实目录；0755 preflight 同码失败且保持 0755；基线两项均通过，路径变为真实目录、0755 变 0700；两份新 HOME 默认预检都通过。外层两个命令均退出 0，0.279 / 0.144 秒；退出 0 只表示比较完成，不能写成候选被测预检成功。证据与创建路径台账为 `tmp/c073-host/path-preflight-red-owned-root.json` 及该根中原探针/两个 stdout、stderr。两副本使用当前已锁定 0.7.4 解释器；该探针只覆盖文件、本地预检与公开路径选择，不外推旧运行时传输互通。
+开发者提供的 path_probe 已复制并核对哈希，分别在候选 `8e793196` 与基线 `12eb4fcd` 的独立归档副本运行，模型调用为 0。仅在探针外层记录并把 tempfile.mkdtemp 创建物约束到各自短私有任务根，原探针逻辑和产品源未改。候选符号链接路径 preflight 报 LAUNCH_ACCESS_DENIED、未解析到真实目录；0755 preflight 同码失败且保持 0755；基线两项均通过，路径变为真实目录、0755 变 0700；两份新 HOME 默认预检都通过。外层两个命令均退出 0，0.279 / 0.144 秒；退出 0 只表示比较完成，不能写成候选被测预检成功。证据与创建路径台账为 `tmp/c073-host/path-preflight-red-owned-root.json` 及该根中原探针/两个 stdout、stderr。两副本使用当前已锁定 0.7.4 解释器；该探针只覆盖文件、本地预检与公开路径选择，不外推旧运行时传输互通。
 
 3-B 的生产选择：公开 get_state_dir 恢复基线的真实路径解析，角色下收到规范后的状态根；状态根之内的 ipc 等私有区继续拒绝链接和 `..`，不能从文件系统根拒绝用户选择的外部链接祖先。服务所有者在 cold_start_preflight 与 Daemon.run 恢复 mkdir/chmod 0700；只读 attach 不创建不 chmod。结构性 BoardError 原代码、消息与路径原样向上报告；系统拒绝写入/本地 IPC 才用 LAUNCH_ACCESS_DENIED，不能把所有 BoardError 当沙箱。移除 preflight 对 BUDDY_CHECKS_TMPDIR 的认识，使用已有通用临时目录机制/正常 TMPDIR，探针仍保留短私有根和合作收尾，不引入新的运行通道。
 
 3-B 唯一写入范围拟为 `src/hey_my_buddy/protocol/{transport,rpc_config}.py`、`src/hey_my_buddy/blackboard/service/daemon.py`、`tests/python/protocol/{test_public_state,test_rpc_config,test_transport_attach}.py`、`tests/python/blackboard/service/test_daemon.py` 及新 `docs/acceptance/c-two-path-state-repair.md`；开始时绑定已验收 3-A 的整合提交。没有额外客户端、角色、注册表、support、launcher 或其他公共文件写权，缺口交 Host 统一整合。新增 PATH-01 链接可达的私有状态 CLI health 真实成功且返回真实根；PATH-02 state/ipc 链接仍拒绝并报告自身路径；PATH-03 0755 冷启动/直接服务启动后为 0700、0500 只读 attach 不 chmod；PATH-04 CLI 保留结构拒绝代码/路径，与模拟系统权限拒绝分开；PATH-05 各删除真实路径解析、所有者修正、错误保留后目标断言失败，并保留既有内部缺根拒绝与旧编号。每项真实服务采用空 HOME、私有根、固定模型目录与 sentinel；范围内缺陷原 run continue。
 
-“已有 0755 状态可用”的旧记载仅在 rpc_config 能选域这一层成立，不是普通冷启动已可用；不抹掉历史证据，在 3-B 验收记录明确修正口径。3-A 当前针对公开状态参数的链接/路径断言随新用户决定逐项迁移到状态内部 guard，列编号与故障注入，不偷偷删除旧防护。整批最后核对编号和默认并行全检；之后只改记录跑卫生，然后停等整合 Host 明确结论。
+“已有 0755 状态可用”的旧记载仅在 rpc_config 能选域这一层成立，不是普通冷启动已可用；不抹掉历史证据，在 3-B 验收记录明确修正口径。3-A 当前针对公开状态参数的链接/路径断言随新开发者决定逐项迁移到状态内部 guard，列编号与故障注入，不偷偷删除旧防护。整批最后核对编号和默认并行全检；之后只改记录跑卫生，然后停等整合 Host 明确结论。
 
 ## 3-A 第二份固定候选的 Host 核对
 
@@ -72,7 +72,7 @@ Host 从本份固定源码重建三份只取消最终目录传递的生产变异
 
 实际 unittest loader 从 3,474→3,500，214 个模块，原 3,474 个集合相等、删除 0、新增 26，无重复/装载错误；原始编号及新增差集为 `public-state-{baseline,fixed}-ids.json` 与 `public-state-id-delta.json`。本批当前只整合 3-A，不提前宣称三处新增路径/权限回归已修复，不进行中间全检；3-A 微任务签收后顺序启动 3-B，最终完整检查仍在两份整合后的源码上执行。
 
-3-A 整合提交 `99cd2b0652a1156777472bb307bc6e70f6a16c2e`，黑板整合 `int-02a53b8c-c3a4-4146-b79d-92f2a2f6d26d` verified，原 run accepted/completed（revision 14）。这是内部微任务验收，整合 Host 的整批退回结论不变。3-B 起点绑定这个整合提交；为了把新增路径场景与已固定的公开目录回归分开核对，唯一写入范围在前述八路径之外增加新 `tests/python/protocol/test_path_state.py`，其余不变，共九路径。优先复用 3-A 与现有服务 fixture、MutationRecorder、固定 catalog 和子环境，不另造 RPC 或发现路径。旧编号中确需按新用户决定迁移的逐项说明，没有改变记录而掩盖验证结论。
+3-A 整合提交 `99cd2b0652a1156777472bb307bc6e70f6a16c2e`，黑板整合 `int-02a53b8c-c3a4-4146-b79d-92f2a2f6d26d` verified，原 run accepted/completed（revision 14）。这是内部微任务验收，整合 Host 的整批退回结论不变。3-B 起点绑定这个整合提交；为了把新增路径场景与已固定的公开目录回归分开核对，唯一写入范围在前述八路径之外增加新 `tests/python/protocol/test_path_state.py`，其余不变，共九路径。优先复用 3-A 与现有服务 fixture、MutationRecorder、固定 catalog 和子环境，不另造 RPC 或发现路径。旧编号中确需按新开发者决定迁移的逐项说明，没有改变记录而掩盖验证结论。
 
 3-A 清理计划 `cln-05e8a2be-1dd8-4a12-867c-f8a423ba006f` 原样 confirmPath apply，removed=true。两个 Worker 创建并报告的任务根 `/private/tmp/ps3a-34r52t5y`、`/private/tmp/ps3b-21te13_d` 分别留存 4,617 / 2,776 份源码、日志与台账文件后按这两个确切根整体回收；uv/cache/重复公开依赖材料未再留一份。已登记的自有 0500 故障目录按原权限残留台账恢复后回收，没有按名称或日期推断别的对象，不屏蔽删除错误。留存哈希与实际回收结果为 `public-state-retained-evidence.json`，没有手工删除受管检出。
 
@@ -96,17 +96,17 @@ Host 从本份固定源码重建三份只取消最终目录传递的生产变异
 
 Host 从固定源码独立重建 13 份目标变异并运行原目标测试：公开 realpath、两处所有者 chmod/mkdir、BoardError 保留、内部链接/..、结构 path、测试环境耦合，以及 3-A 的三种实际 RPC 目录传递。每份恰好一项 assertion failure、无 errors，命中相应路径、权限、错误对象或 PRIVATE_STATE_REQUIRED 断言，不以沙箱或任意导入/超时算 red；3-A 的三个目标这次仍经过真实私有 RPC。13 份命令墙钟为 0.315–0.705 秒。Host 本地结果分类器最初对五种消息预期过窄，汇总退出 1；逐个读取未改日志确认目标断言后补充准确消息标记，不重跑测试、不改源或掩盖首次汇总。初汇总 `path-state-host-target-proofs.json` 与复核 `path-state-host-target-proofs-reviewed.json` 均保留，各 red 日志不覆写。
 
-用户的原 path_probe 只读复制后在候选及冻结 core 各重放一次：两份均链接路径预检成功、解析到真实目录、0755 修正 0700、新 HOME 默认预检通过；命令各退出 0、0.143/0.144 秒。沿用此前相同外层短私有临时根约束和创建台账，不改探针，产品没有模型调用；该原探针是文件/本地预检对照，真实服务证据以上述新场景为准。台账 `path-preflight-green-owned-root.json` 保留原脚本哈希与两份输出，之前原候选 red 不改写。
+开发者的原 path_probe 只读复制后在候选及冻结 core 各重放一次：两份均链接路径预检成功、解析到真实目录、0755 修正 0700、新 HOME 默认预检通过；命令各退出 0、0.143/0.144 秒。沿用此前相同外层短私有临时根约束和创建台账，不改探针，产品没有模型调用；该原探针是文件/本地预检对照，真实服务证据以上述新场景为准。台账 `path-preflight-green-owned-root.json` 保留原脚本哈希与两份输出，之前原候选 red 不改写。
 
-实际 loader 3,500→3,512，214→215 模块，旧 3,500 编号集合全保留、删除 0、新增 12、重复和装载错误 0；新编号和集合证明在 `path-state-fixed-ids.json`、`path-state-id-delta.json`。旧 PS-07 及 rpc_config 链接断言按用户决定迁移到状态边界内，公开根链接改由 PATH-01 正向保护；旧 transport 的 owner setup 断言按恢复的 mkdir/chmod 改为实测行为，只读 guard 未削弱。产品 preflight 不再读取 BUDDY_CHECKS_TMPDIR，标准 tempfile 使用 TMPDIR；这项测试设施耦合没有生产必要。0755 只表示 rpc_config 可选 IPC 域，服务所有者冷启动和启动会修正 0700；只读 attach 不创建或改权限。
+实际 loader 3,500→3,512，214→215 模块，旧 3,500 编号集合全保留、删除 0、新增 12、重复和装载错误 0；新编号和集合证明在 `path-state-fixed-ids.json`、`path-state-id-delta.json`。旧 PS-07 及 rpc_config 链接断言按开发者决定迁移到状态边界内，公开根链接改由 PATH-01 正向保护；旧 transport 的 owner setup 断言按恢复的 mkdir/chmod 改为实测行为，只读 guard 未削弱。产品 preflight 不再读取 BUDDY_CHECKS_TMPDIR，标准 tempfile 使用 TMPDIR；这项测试设施耦合没有生产必要。0755 只表示 rpc_config 可选 IPC 域，服务所有者冷启动和启动会修正 0700；只读 attach 不创建或改权限。
 
 Host 没有修改微任务代码或测试，只整合固定补丁及在本计划登记独立补核和本地分类器说明。此结论仅为 3-B 内部微任务验收；整批仍等最终完整检查和 Claude Code Host。Worker 原记录的“待 Host 补核”保留原提交绑定，不回写成 Worker 做过真实成功验证。
 
-## 用户补充 3-C：边界一次解析，内部必填
+## 开发者补充 3-C：边界一次解析，内部必填
 
 3-B 已整合 `8183fd05e0536f14446b5ca3f621f42fbfd6605e`，黑板整合 `int-cab5da29-2f54-45f8-acfd-86ea7b5a6a39` verified，原 run accepted/completed revision 10。其受管检出清理计划 `cln-f40af380-421e-4051-b21e-3471783333d6` 已 apply，removed=true；Worker 报告的 `/tmp/c073-b-cIzzzx` 尚保留，留存证据后由 Host 按确切根回收。两份修复成果保留，新 3-C 在 3-B 内部验收之后串行启动，没有同接缝的并行写入。
 
-用户新要求抵达时，绑定 `8183fd05` 的默认并行全检已经启动，随后主动中断，命令会话退出 130，不是通过或完整结果。保留原启动/进程/输出及 `public-path-final-check-interrupted.json`；中断时检查器自己的 teardown 也被打断，Host 只对创建时绑定的该检查私有根重新调用现有 teardown_private_root，合作收尾与观测均完成、根已删除，没有信号/扫描清理日常服务。该检查不得当作最终完整检查证据，最终一次移到 3-C 整合后的源码上。
+开发者新要求抵达时，绑定 `8183fd05` 的默认并行全检已经启动，随后主动中断，命令会话退出 130，不是通过或完整结果。保留原启动/进程/输出及 `public-path-final-check-interrupted.json`；中断时检查器自己的 teardown 也被打断，Host 只对创建时绑定的该检查私有根重新调用现有 teardown_private_root，合作收尾与观测均完成、根已删除，没有信号/扫描清理日常服务。该检查不得当作最终完整检查证据，最终一次移到 3-C 整合后的源码上。
 
 3-C 用一个串行微任务处理同一状态接缝。选择 `transport.get_state_dir` 作为唯一公开可选目录解析函数；CLI、BoardClient（保留既有调用时选择和注入 call 的边界）、call_service、call_board、ensure_service、request_stop 先解析，之后传真实 Path。公开入口相互复用时调用必要的必填内部 helper，避免重复选默认、重复读取环境或重复解析，不增加兼容包装。内部 _request/_healthy/_attach_read_only/preflight、rpc_config 三个 configure、C-Two endpoint/channel、roles/live 和 runtime/live 的参数一律必填，不读环境、不接受 None、不重做已成立的目录不变量。删除 rpc_config.resolve_state_dir 和 PRIVATE_STATE_REQUIRED 运行时规则；private_dirs.context_root 的同名内部兜底也纳入审查范围，不能换名字保留另一份冗余规则。
 
@@ -191,7 +191,7 @@ Host 没有修改微任务代码或测试，只整合固定补丁及在本计划
 
 Host 在固定副本补核 path_state 全 12 项退出 0、6.801 秒，public_state 全 26 项退出 0、27.858 秒，真实 3-A/3-B 场景通过；C-Two 全文件 70 项退出 1、5.837 秒、18 failures，Worker live 全文件 34 项退出 1、4.416 秒、6 errors。原始 `state-boundaries-host-{path,public,ctwo,live}-r1.{json,log}` 保留：前一缺陷是 c_two_live_peer 使用 Path 却未导入，后一缺陷是 live_runtime_peer 的 controller 建 CTwoLiveEndpoint 未传必填 state_dir，stderr 被现有 DEVNULL 隐去，只见私有 peer pipe 关闭。两处都是原范围 fixture 缺陷，退回原 run，Host 不代改。语法通过不足以证明这些 fixture 实际可用。
 
-按用户明确的范围修订许可，把六个已查到的测试调用方纳入；blocking.await_run 和 console_cli.run 属于 CLI 内部 helper，必须消费 main 已解析 Path，不再有默认或调用公开解析的重复选择。catalog.discover 位于黑板内部、生产由 service/store 明确传目录，不是新公开状态入口，也改必填 Path，删除其目录环境 fallback，保留账户/模型语义，直接调用的离线测试显式提供自有根。没有对外新增入口或改变 CLI schema，console 仅 Python 状态传递，无前端变化。
+按开发者明确的范围修订许可，把六个已查到的测试调用方纳入；blocking.await_run 和 console_cli.run 属于 CLI 内部 helper，必须消费 main 已解析 Path，不再有默认或调用公开解析的重复选择。catalog.discover 位于黑板内部、生产由 service/store 明确传目录，不是新公开状态入口，也改必填 Path，删除其目录环境 fallback，保留账户/模型语义，直接调用的离线测试显式提供自有根。没有对外新增入口或改变 CLI schema，console 仅 Python 状态传递，无前端变化。
 
 附加唯一写入路径如下，原 53 路径全部保留，总 66 路径；Host 仍独占计划和整合记录。continue 没有 executionWorkspace 变更字段；Host 起初只用 input 登记范围许可，漏查了已有 scope-amend 操作，没有更新黑板的机械 scope 版本。这是 Host 的流程错误，不能把该 input 当作已完成 scope-amend。原始 scope、修订理由、基线和新 scope 为 `tmp/c073-host/state-boundaries-scope-amendment.json`，Task/Host 验收以该继续输入为依据。
 
@@ -265,7 +265,7 @@ Host 在最终 R3 归档上独立建立六个窄变异副本，正常目标六�
 
 可选状态入口最终仅 CLI、BoardClient、call_service、call_board、ensure_service、request_stop；唯一解析 helper 为 transport.get_state_dir。AST 的可选参数函数为 BoardClient.__init__、四个 transport 公开操作及 get_state_dir，CLI 通过既有命令参数与环境接受可选根；cli.checks.create_private_root(directory=None) 选择的是检查器临时目录，既不是服务状态入口也不是第二个状态解析函数。内部 await_run、console_cli.run、catalog.discover 以及本批列举的请求/configure/live 函数都必填 Path，没有环境/客户端回退。完整审计 `state-boundaries-optional-functions.json`。公开依赖路径的行为、链接/0755 owner 修正、0500 只读与结构错误 code/message/path 都由最终 public/path/attach 真实私有回归确认；公开 envelope、schema 和契约版本未改。
 
-Root 整合登记：范围操作顺序错误由 Root 承担，原 scopeVersion 1 封存失败及 adopt 保全不改写，正式版本 2/3 只用于后续回合。R1/R2 fixture 缺陷均原 run continue，readonly 重复流程由原 Worker 合并为一份，不由 Root 代改。Root 只改自己的固定归档/检查助手、数目口径与本计划，不触碰用户 stash、分支标签或保护文档。任务根 `/tmp/c073-c-H6SbNM` 在签收前仍保留，当前无绑定进程/持有锁的观察不能补造旧 daemon 数字 wait 回执。根外 `/tmp/state-calls-readonly-audit.txt` 写前归属与实际覆盖未知，原普通重定向命令留存，文件原样保留、不纳入回收。
+Root 整合登记：范围操作顺序错误由 Root 承担，原 scopeVersion 1 封存失败及 adopt 保全不改写，正式版本 2/3 只用于后续回合。R1/R2 fixture 缺陷均原 run continue，readonly 重复流程由原 Worker 合并为一份，不由 Root 代改。Root 只改自己的固定归档/检查助手、数目口径与本计划，不触碰开发者 stash、分支标签或保护文档。任务根 `/tmp/c073-c-H6SbNM` 在签收前仍保留，当前无绑定进程/持有锁的观察不能补造旧 daemon 数字 wait 回执。根外 `/tmp/state-calls-readonly-audit.txt` 写前归属与实际覆盖未知，原普通重定向命令留存，文件原样保留、不纳入回收。
 
 这次是微任务内部核对，尚未完整检查、整批 Host 验收或日常安装。已有 Codex/Claude Code/DSH 各一次授权真实冒烟沿用原提交证据；ZCode 无额度未验证，不重跑模型。三步整合后在最终提交上运行一次默认并行数完整检查；完整结果与精确回收随后追加本记录。
 
@@ -276,7 +276,7 @@ Root 整合登记：范围操作顺序错误由 Root 承担，原 scopeVersion 1
 
 失败文件为 blackboard.service.test_liveness、buddy.harnesses.dsh.test_dsh_role_wiring、buddy.harnesses.test_inquiry_owner、buddy.harnesses.zcode.test_zcode_checkpoint、buddy.harnesses.zcode.test_zcode_inquiry、buddy.harnesses.zcode.test_zcode_tool_refusals、protocol.test_ctwo_integration。liveness 模拟健康 endpoint 却缺其私有 ipc 目录；DSH、ZCode 两个 live helper 仍传 environment 字符串而不是必填 Path，造成已有归属断言失败，checkpoint/tool_refusals 复用 test_zcode 的同一 helper；inquiry owner 子进程把 JSON 字符串未经边界转换传给 endpoint；model-free 整链的 ct_controller fixture 漏传 OneSlowCallEndpoint 必填 state_dir，Worker 轮次提前结束，随后合作 stop 的原断言也失败。原始失败与次级清理错误全部保留。
 
-按用户明确的“范围不够就修订范围”许可，在 3-C 原 run 追加 tests/python/blackboard/service/test_liveness.py 与 tests/python/protocol/fixtures/ctwo_controller.py，两条新增路径使正式范围从 67 到 69；先在停下的边界 scope-amend v3→v4，确认成功后才原 run continue，不再用文本授权替代机械范围。R4 实际唯一修改限于这两份 fixture、既已许可的 test_dsh_role_wiring.py、test_inquiry_owner.py、test_zcode.py、test_zcode_inquiry.py 及交付记录。冻结产品代码；保留所有原断言/编号，不加兼容、不恢复内部解析、不放宽健康/截止时刻规则；Host 不代改。各修补必须经独立聚焦与对应目标故障注入，受限真实 bind 不重复，完整检查由 Host 在最终代码上重跑并保留本轮 exit 1。
+按开发者明确的“范围不够就修订范围”许可，在 3-C 原 run 追加 tests/python/blackboard/service/test_liveness.py 与 tests/python/protocol/fixtures/ctwo_controller.py，两条新增路径使正式范围从 67 到 69；先在停下的边界 scope-amend v3→v4，确认成功后才原 run continue，不再用文本授权替代机械范围。R4 实际唯一修改限于这两份 fixture、既已许可的 test_dsh_role_wiring.py、test_inquiry_owner.py、test_zcode.py、test_zcode_inquiry.py 及交付记录。冻结产品代码；保留所有原断言/编号，不加兼容、不恢复内部解析、不放宽健康/截止时刻规则；Host 不代改。各修补必须经独立聚焦与对应目标故障注入，受限真实 bind 不重复，完整检查由 Host 在最终代码上重跑并保留本轮 exit 1。
 
 Host 汇总助手最初用逐行末尾锚定遗漏一行被并发 stderr 拼接的成功输出，断言拒绝；一次探查脚本有括号语法错误，均未跑测试或改变源码。已按实际逐文件前缀、最终 216/209/7 汇总核对，原日志不改写；检查器私有根是否自行移除以结构化 summary 里的实际存在性为准。
 
@@ -341,9 +341,9 @@ Host 在已登记 Worker 根 `/tmp/c073-c-H6SbNM` 做只读进程/持锁观测�
 
 ## 第三次独立复核退回：四处范围内整洁性返修
 
-用户转达整合分支 c-two-074-host-review.md 的“第三次独立复核”：候选9522e73e的行为、22个编号迁移与合并后的完整检查均已由Claude Code Host独立通过；仅退回本批自己新增代码的四处整洁性缺口。评审只读复制，不合入整合分支，不修其升级L15与预检问题、跨侧下划线命名、其他环境解析或参考文档。本次仅focused测试，完整检查由Host合入后跑；旧3519/216/645.517秒与历史失败保持原绑定。
+开发者转达整合分支 c-two-074-host-review.md 的“第三次独立复核”：候选9522e73e的行为、22个编号迁移与合并后的完整检查均已由Claude Code Host独立通过；仅退回本批自己新增代码的四处整洁性缺口。评审只读复制，不合入整合分支，不修其升级L15与预检问题、跨侧下划线命名、其他环境解析或参考文档。本次仅focused测试，完整检查由Host合入后跑；旧3519/216/645.517秒与历史失败保持原绑定。
 
-原3-C run df9f35ac上轮已签收并回收检出，实际continue返回CONFLICT“An accepted goal cannot be continued”；没有改黑板数据或恢复清理中的检出。用户明确批准例外新增同宏任务的窄返修微任务，经路由首次省略四配置，hostId codex-adr025、宏任务obj-e2bf6c47-a17b-42ba-9b75-a32581e43716沿用。范围仅下表对应生产三文件、四测试文件及本既有最终记录；rpc_config与Daemon.run的根链接防护代码只读、保留，不顺手改其他产品接缝。
+原3-C run df9f35ac上轮已签收并回收检出，实际continue返回CONFLICT“An accepted goal cannot be continued”；没有改黑板数据或恢复清理中的检出。开发者明确批准例外新增同宏任务的窄返修微任务，经路由首次省略四配置，hostId codex-adr025、宏任务obj-e2bf6c47-a17b-42ba-9b75-a32581e43716沿用。范围仅下表对应生产三文件、四测试文件及本既有最终记录；rpc_config与Daemon.run的根链接防护代码只读、保留，不顺手改其他产品接缝。
 
 | 编号 | 做法与验收 |
 | --- | --- |
@@ -359,7 +359,7 @@ Worker开始时建短任务专用系统临时根并记录确切路径，TMPDIR/B
 
 ## T3 本轮范围内返修交付与受限验证（待 Host 复核）
 
-本轮绑定输入 `46ebbccaf4102d1bb5f859e65c1acf112bc73bc2`、窄 run `76cdc2b1-0eb0-4487-a6a0-481b45525f38`、attempt `ba89b98c-0e35-430f-ba40-5bdd60fb7fe5`。continuation 输入登记的历史为：原 3-C 已 accepted 且检出回收，实际 continue 被 CONFLICT 拒绝；用户批准同宏任务经路由的新窄微任务，没有取消原 run、改黑板数据或自建新 goal。路由 `dec-5767702b-7e42-4311-9814-6d9db80b44fb` 首次省略四字段，选择 ZCode/zai-api/GLM-5.3-Flash/max；实际 provider `rate_limited` HTTP429/code1310、not-retryable，两层停止确认、无 artifact。按用户既有的不可重试限流恢复授权，在同 run 用完整配置继续为 Codex/openai/gpt-6.1-sol/high，理由是该配置已完成同类工作；这些是输入提供的历史，本轮没有重试 ZCode、调用路由模型或自行分派任务，先前未实施代码不登记为已交付。
+本轮绑定输入 `46ebbccaf4102d1bb5f859e65c1acf112bc73bc2`、窄 run `76cdc2b1-0eb0-4487-a6a0-481b45525f38`、attempt `ba89b98c-0e35-430f-ba40-5bdd60fb7fe5`。continuation 输入登记的历史为：原 3-C 已 accepted 且检出回收，实际 continue 被 CONFLICT 拒绝；开发者批准同宏任务经路由的新窄微任务，没有取消原 run、改黑板数据或自建新 goal。路由 `dec-5767702b-7e42-4311-9814-6d9db80b44fb` 首次省略四字段，选择 ZCode/zai-api/GLM-5.3-Flash/max；实际 provider `rate_limited` HTTP429/code1310、not-retryable，两层停止确认、无 artifact。按开发者既有的不可重试限流恢复授权，在同 run 用完整配置继续为 Codex/openai/gpt-6.1-sol/high，理由是该配置已完成同类工作；这些是输入提供的历史，本轮没有重试 ZCode、调用路由模型或自行分派任务，先前未实施代码不登记为已交付。
 
 本轮唯一临时根由 mktemp 创建为 `/tmp/t3-6RShzm`（macOS 真实路径 `/private/tmp/t3-6RShzm`），完整保留供 Host 按此确切根验收后整体回收。HOME/USERPROFILE、TMPDIR/BUDDY_CHECKS_TMPDIR、state/runtime、uv 环境/cache/解释器安装目录、baseline/fixed/三个 mutant 副本、catalog、助手和原始日志都在该根。子进程清除继承 BUDDY_/ANTHROPIC_/C2_ 与 VIRTUAL_ENV/UV_PROJECT_ENVIRONMENT 后显式设置私有值；空私有 HOME、固定 support.FIXTURE_CATALOG、不可用 native CLI sentinel，无模型或账号发现、凭据内容读取、登录登出或用户配置修改。仅使用获准 delegate-materials，核对 provenance 中全部18份文件的 SHA-256/size，当前 uv.lock 与材料 byte 相等（`5ae675829eb4c9aca5e2c933b86799abd3ab9a979e80f8d00c074adf5e27cdf8`）；`uv venv --python /opt/homebrew/bin/python3.13 <TASK_ROOT>/env` 与 `uv pip install --no-index --find-links <AUTHORIZED_MATERIALS>/wheelhouse --require-hashes -r <AUTHORIZED_MATERIALS>/locked-dependencies.txt` 均退出0，未改锁或依赖。源码对照来自只读 git archive，复制前拒绝 symlink/hardlink，不复制用户链接数据。
 
@@ -448,7 +448,7 @@ Host 另从最终归档独立新建三个窄变异副本，四个目标分别正
 | `_validate_path` / `protocol.test_rpc_config.ProfileTests.test_linked_state_root_is_refused_with_root_link_diagnostic_before_changes` | 0 / 0.259 | 1 / 0.262 |
 | `_validate_path` / `blackboard.service.test_daemon.DaemonCeilingTests.test_run_refuses_linked_state_root_before_chmod_or_service_start` | 0 / 0.362 | 1 / 0.344 |
 
-Host实际loader只collect，不执行全套：3,519→3,524个唯一ID、216模块，旧3,519集合全部相等、删除0、改名0、重复0、loaderErrors0。新增五项如下；原完整检查3,519/216/645.517秒保持原提交256023c5绑定，不作为这次源码的全检。新源码的完整检查按用户要求由Claude Code Host合入后跑。
+Host实际loader只collect，不执行全套：3,519→3,524个唯一ID、216模块，旧3,519集合全部相等、删除0、改名0、重复0、loaderErrors0。新增五项如下；原完整检查3,519/216/645.517秒保持原提交256023c5绑定，不作为这次源码的全检。新源码的完整检查按开发者要求由Claude Code Host合入后跑。
 
 - `blackboard.service.test_daemon.DaemonCeilingTests.test_run_refuses_linked_state_root_before_chmod_or_service_start`
 - `buddy.harnesses.test_c_two_live.CleanupPrimitiveTests.test_missing_context_is_type_error_before_ambient_sdk_or_reap`
@@ -458,10 +458,10 @@ Host实际loader只collect，不执行全套：3,519→3,524个唯一ID、216模
 
 固定产物只应用原八路径，代码/Worker记录提交 `7adc6327`，整合 `int-68583a0b-36c9-4147-a7f0-916ee8bcb316` verified且八文件完全匹配；Host独立focused/变异/编号通过后才acknowledge accepted，revision10。本次仅微任务内部签收，尚待Claude Code Host复验/合入；不开始后续批次、不推送、不安装升级日常运行时或重启服务。
 
-Root的唯一直接措辞修正：本轮开头“用户随后批准同run完整配置恢复”更正为“按用户既有的不可重试限流恢复授权”，授权时间来自本会话既有规则，本轮没有另一次逐次授权提问。四字段仍只在实际429/1310不可重试且停止确认后写入同run continue；旧ZCode、新Codex与路由dec-5767702b均保留。这是自己掌握事实的一句话表述校正，按用户相称性规则直接改并在本整合登记/ack note列明，不改变代码、测试或验证结论，不为此返修或重跑。
+Root的唯一直接措辞修正：本轮开头“开发者随后批准同run完整配置恢复”更正为“按开发者既有的不可重试限流恢复授权”，授权时间来自本会话既有规则，本轮没有另一次逐次授权提问。四字段仍只在实际429/1310不可重试且停止确认后写入同run continue；旧ZCode、新Codex与路由dec-5767702b均保留。这是自己掌握事实的一句话表述校正，按开发者相称性规则直接改并在本整合登记/ack note列明，不改变代码、测试或验证结论，不为此返修或重跑。
 
 清理边界：首次计划因签收后的revision变化被REVISION_CONFLICT拒绝；Root提前读取未生成计划文件得到FileNotFoundError，未发删除操作，这两个工具失败均保留。新计划 `cln-81572004-5e2b-41d2-a5ba-5681fec91c43` 创建成功；apply返回INTERNAL_ERROR“workspace.cleanup_apply failed inside the service”。Root立即停止后续服务写操作，不重启、不修补、不反复试。仅一次本run只读get确认cleanup.state=applied、result.removed=true，精确受管路径不存在；因此检出已经回收，原API失败不能改写成成功响应。完整服务结果与只读核对是 `third-review-tidy.cleanup-failure-readonly.result.json`、`third-review-cleanup-failure-summary.json` 和先前plan/apply原始文件。
 
 Worker精确根 `/tmp/t3-6RShzm`（真实路径 `/private/tmp/t3-6RShzm`）当前仍保留，未删除；独立只读观测processes/problems/notes均空、daemon/supervisor持锁均空，记录 `third-review-worker-residue.json`。这不补造旧probe回执。本轮发生服务回收API报错后，临时材料留给Host复核，未按通配符/日期/同名推断归属，未碰旧根外审计文件或其他会话数据。后续回收只可按这个已记录确切根，待Host安排；服务内部错误不纳入四项返修，不另开范围。
 
-本记录追加后仅跑仓库卫生测试，代码focused证据不因文字变化重跑；完成记录提交后按用户要求停下等验收。
+本记录追加后仅跑仓库卫生测试，代码focused证据不因文字变化重跑；完成记录提交后按开发者要求停下等验收。

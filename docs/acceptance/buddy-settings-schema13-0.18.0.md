@@ -23,9 +23,9 @@
 | `ab917e53` | DeepSeek Flash max | 按需求审查并补齐控制台 | 已验收，`58e9666` |
 | `15e52c96` | DeepSeek Flash max | 文档同步 | 已验收，`b8029c6`；Host 只检查了旧名称残留 |
 | `4d7377ef` | DeepSeek Flash max | 已确认决定与文档修正 | 已验收，`a00b806` |
-| `dee9e4ad` | DeepSeek Flash max | ADR-017 草稿 | 用户暂停讨论后由 Host 取消，已确认停止，未产生改动；ADR 最终由 Host 起草 |
+| `dee9e4ad` | DeepSeek Flash max | ADR-017 草稿 | 开发者暂停讨论后由 Host 取消，已确认停止，未产生改动；ADR 最终由 Host 起草 |
 
-三次向 Codex GPT-6 Sol 提交都在受理时被拒绝（`ADAPTER_UNAVAILABLE`：Codex closed before the request settled）。服务与 Worker 的 PATH 不含 nvm 目录，Claude Code 会话 PATH 优先的 node 22 下 codex 缺少原生依赖包；用户终端的 node 24 下 codex 0.157.0 可以正常握手。这是 ADR-017 的背景之一。已验收 run 的受管检出已通过 `workspace-cleanup-apply` 删除；`a461cf03`、`a2a230da`、`5679034b`、`dee9e4ad` 未验收，官方清理与存储回收都拒绝删除它们的检出（`not-accepted`），保留在 `~/.local/share/hey-my-buddy/state/workspaces/`。
+三次向 Codex GPT-6 Sol 提交都在受理时被拒绝（`ADAPTER_UNAVAILABLE`：Codex closed before the request settled）。服务与 Worker 的 PATH 不含 nvm 目录，Claude Code 会话 PATH 优先的 node 22 下 codex 缺少原生依赖包；开发者终端的 node 24 下 codex 0.157.0 可以正常握手。这是 ADR-017 的背景之一。已验收 run 的受管检出已通过 `workspace-cleanup-apply` 删除；`a461cf03`、`a2a230da`、`5679034b`、`dee9e4ad` 未验收，官方清理与存储回收都拒绝删除它们的检出（`not-accepted`），保留在 `~/.local/share/hey-my-buddy/state/workspaces/`。
 
 ## 验证
 
@@ -41,12 +41,12 @@
 - 启动器每次调用都经过 `uv run`，Claude Code 沙盒不允许写 uv 缓存，每条 buddy 命令都要在沙盒外执行；会话还带入 `BUDDY_*` 与 `ANTHROPIC_BASE_URL`，每次都要手动清除。
 - 单个 JSON 参数不便传递长任务文本；没有按方法的参数帮助；后续委派加入同一工作目标需要手动复制 `objectiveId`。
 - 后台 `await` 与 Claude Code 的完成通知配合良好，多个委派可以并行，Host 同时推进后端。
-- Claude worker 消耗额度很快（见委派记录），用户随后要求本议程不再使用 Claude worker。
+- Claude worker 消耗额度很快（见委派记录），开发者随后要求本议程不再使用 Claude worker。
 - 被额度中断的 worker 以 failed 结束且没有封存成果，未提交的改动只留在受管检出里；显式配置是硬约束，`continue` 不能改用其他模型（路由得出的配置可以，run `6e072cc5` 即如此），只能另开任务；`acknowledge` 不接受 failed 的任务；`integration-record` 的 `adjustedPaths` 只能是成果内的路径。
 - 恢复后的 Claude Code 会话被分到新的 worktree，钩子禁止写入旧 worktree，分支只能改指向后继续。
 
 ## 未完成与限制
 
-- 所有 adapter 的 `read_only_structured_verified` 仍为 false，没有可用的 Router；[0.17.0 源码记录](router-read-only-routing-0.17.0.md)中的原生探针仍未执行，每次执行都需要用户单独授权。Claude 探针因用户暂停 Claude 使用而搁置，Codex 探针先要解决服务侧找不到可用 codex 的问题。
+- 所有 adapter 的 `read_only_structured_verified` 仍为 false，没有可用的 Router；[0.17.0 源码记录](router-read-only-routing-0.17.0.md)中的原生探针仍未执行，每次执行都需要开发者单独授权。Claude 探针因开发者暂停 Claude 使用而搁置，Codex 探针先要解决服务侧找不到可用 codex 的问题。
 - 上一会话的 worktree `.claude/worktrees/skill-windows-adaptation-1d9d2f` 留有两处未提交改动，与 `0ad0e72` 中的文件逐字节相同，可以丢弃。
 - `b8029c6` 的文档内容只做了旧名称残留检查，没有逐段审阅。

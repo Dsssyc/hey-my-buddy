@@ -4,9 +4,9 @@
 
 ## 准备
 
-Host 将包含第二步验收的 `socu/buddy-core` 合入实施分支：用户指定的 `886836e` 与随后只说明受管检出被拒回收原因的 `4a8dfee` 均已包含，合入是从 `5859475` 到 `4a8dfee` 的快进。执行计划更新提交 `90900d7`，增加四项准备、三条独立 harness 线、默认并行完整检查、未消费字段期限、限流恢复授权与受管检出不得切换分支的任务规则。
+Host 将包含第二步验收的 `socu/buddy-core` 合入实施分支：开发者指定的 `886836e` 与随后只说明受管检出被拒回收原因的 `4a8dfee` 均已包含，合入是从 `5859475` 到 `4a8dfee` 的快进。执行计划更新提交 `90900d7`，增加四项准备、三条独立 harness 线、默认并行完整检查、未消费字段期限、限流恢复授权与受管检出不得切换分支的任务规则。
 
-按用户明确授权，Host 在旧准备微任务 `7d967147-ce32-405c-a5a0-62859e84abb1` 的受管检出确认干净、HEAD 为 `c919197` 后执行 `git checkout --detach`；然后用新读取的 revision 完成 `workspace-cleanup-plan` 与 `workspace-cleanup-apply`，结果为 `removed=true`，实际目录消失。随后强制删除已补丁整合的分支 `socu/adr025-step2-preparation`。只处理这一受管检出及指定分支；旧第二步记录中的历史拒绝保留。原始计划、应用和路径核对输出留在本检出 `tmp/adr025-host/step34-20261006-105245/`。
+按开发者明确授权，Host 在旧准备微任务 `7d967147-ce32-405c-a5a0-62859e84abb1` 的受管检出确认干净、HEAD 为 `c919197` 后执行 `git checkout --detach`；然后用新读取的 revision 完成 `workspace-cleanup-plan` 与 `workspace-cleanup-apply`，结果为 `removed=true`，实际目录消失。随后强制删除已补丁整合的分支 `socu/adr025-step2-preparation`。只处理这一受管检出及指定分支；旧第二步记录中的历史拒绝保留。原始计划、应用和路径核对输出留在本检出 `tmp/adr025-host/step34-20261006-105245/`。
 
 3-P1 首次提交走路由，run 为 `4aab6133-0ba4-4690-b61b-402c9b0939be`，固定基线 `90900d7`；唯一写入范围为三个指定测试模块及本项新记录。路由决定 `dec-77f37d16-ef38-49dc-af0b-bf49f8d2aee9` 选择 `zcode / zai-api / GLM-5.3 / max`。Host 已即时登记短任务根，Worker 不删除；检查和变异证据等待固定交付审查。
 
@@ -36,7 +36,7 @@ Host 按已批准的请求字段可调整规则补 `network_allowed_domains` 与
 
 3-A1 首轮因根回合在 finish 后再次调工具而失败（duplicate-finish），原生与外层停止均已确认；这不是供应方限流，不更换 buddy。封存的 partial-output 为 07eef2d、artifact 1fcbcb46-9bdd-4626-95e8-c3f332bd20c7，累计补丁摘要与六条范围路径核对一致。Host 对该固定代码的模拟原生进程探针确认：Worker 工具完成后 toolEvidence 为空，观察计数先为零、终结才变成一；65 种未知事件令结果构造抛 BoardError，已确认的停止事实没有返回；准备失败且未启动原生进程时却报告 groupState=unknown、started=null，同时 basis=spawn-never-happened。以上要求回原 run 修正，不整合该产物。
 
-该 partial-output 的记录同时声称没有手动删除，又承认重建变异副本使用 shutil.rmtree；实际脚本在本任务已登记根的 m/fault-* 具体副本内删除再复制。已见对象均位于本任务根，按用户规则拒绝交付并要求如实披露、撤回矛盾口径后 continue，不暂停等用户，也不恢复或追查别的会话。Host 未代改这份掩盖违规的记录。上述探针只用假原生 CLI，不调用模型；原始输出保留在本检出 tmp/。
+该 partial-output 的记录同时声称没有手动删除，又承认重建变异副本使用 shutil.rmtree；实际脚本在本任务已登记根的 m/fault-* 具体副本内删除再复制。已见对象均位于本任务根，按开发者规则拒绝交付并要求如实披露、撤回矛盾口径后 continue，不暂停等开发者，也不恢复或追查别的会话。Host 未代改这份掩盖违规的记录。上述探针只用假原生 CLI，不调用模型；原始输出保留在本检出 tmp/。
 
 3-B1 同 run 第二轮固定交付 834f825（artifact 5b3c7f94-0571-4c73-8a88-aeb6058b1ba0）累计补丁 SHA-256 为 1b12f95beaff40299484f7d4faf8c82b8f5faf48c2f7a714c48de88961269949，七条改动路径均在原 scope。Host 核对五项整改及未改路径，整合七文件与固定提交逐字节相同；两份新变异副本各只有对应身份／EOF 条件的一行变化，指定测试在变异下失败、对照通过。Host 当前公共基线上的新原生主体及配置聚焦检查 47 项通过（7.338 秒），没有模型调用。接受原生主体微任务，等待共享角色接线、3-C、旧入口删除和整条线的验证，不宣称 Claude 线已完成；本项没有单独跑完整检查，随接线批次整合后运行一次默认并行检查。
 
@@ -48,9 +48,9 @@ Host 补共享审阅角色接线：ReviewPreparation 冻结登记的运行模块
 
 4-B1 在约两小时执行预算后结束，终态cancelled、cancellation为空，原生与外层停止都已确认；没有供应方限流，不能按限流例外更换buddy。封存partial-output为cb9dfbc、artifact 97e40606-dadc-4b96-9f9e-9f8e50b2cbcd，累计摘要1dfc416c46a043c2407104887e8c9cf8102695918bc2945ff0bb974b1f8556cf及六条scope路径核对一致，未整合、未验收。初稿none工具清单为空，usage恒为None，并建议Host补解压依赖；同一记录先称零安装版启动，随后承认旧入口测试回退安装版DSH。Host已核对至少一个复现的DSH_HOME明确在本任务私有根、以MISSING_CREDENTIAL退出，尚不声称准确启动总数，后续须由原run纠正验证结论。
 
-DSH初稿另把F-D2探针关闭标题模型和遥测的patch应用于全部运行。当前旧Worker入口没有这项强制关闭，旧快速路由有；这超出已接受的三项行为差异。按用户的暂停条件，Host停止DSH线并请求选择：恢复Worker原profile行为（推荐），或明确接受全部关闭并登记。Codex与Claude的独立工作继续。Python解压库属于项目依赖的待处理缺口，未因此更改日常运行时；初稿建议的zstandard>=1.5,<2混用了libzstd和Python包版本，官方PyPI显示Python包为0.25.0，后续依赖选择须按Python包版本核定（https://pypi.org/project/zstandard/）。
+DSH初稿另把F-D2探针关闭标题模型和遥测的patch应用于全部运行。当前旧Worker入口没有这项强制关闭，旧快速路由有；这超出已接受的三项行为差异。按开发者的暂停条件，Host停止DSH线并请求选择：恢复Worker原profile行为（推荐），或明确接受全部关闭并登记。Codex与Claude的独立工作继续。Python解压库属于项目依赖的待处理缺口，未因此更改日常运行时；初稿建议的zstandard>=1.5,<2混用了libzstd和Python包版本，官方PyPI显示Python包为0.25.0，后续依赖选择须按Python包版本核定（https://pypi.org/project/zstandard/）。
 
-用户已明确同意所有hey-my-buddy启动的DSH运行关闭session-title-llm和session-telemetry-otel，分别登记为第四、五项已接受行为差异；私有启动patch不影响用户自己交互使用的DSH。DSH暂停条件解除，按原run继续，不更换buddy。Host按官方Python包版本增加项目依赖zstandard>=0.25,<1，uv.lock固定0.25.0；uv sync --frozen只更新实施检出的项目虚拟环境，锁定解压库的压缩/解压往返通过，未安装或升级日常运行时。
+开发者已明确同意所有hey-my-buddy启动的DSH运行关闭session-title-llm和session-telemetry-otel，分别登记为第四、五项已接受行为差异；私有启动patch不影响用户自己交互使用的DSH。DSH暂停条件解除，按原run继续，不更换buddy。Host按官方Python包版本增加项目依赖zstandard>=0.25,<1，uv.lock固定0.25.0；uv sync --frozen只更新实施检出的项目虚拟环境，锁定解压库的压缩/解压往返通过，未安装或升级日常运行时。
 
 F-D2记录所指原始none patch在当前留存路径及其旧受管检出已不可读，不能声称逐字节复用了旧清单。Host用私有HOME/DSH_HOME执行两次免模型dump-config，重新读取当前公开组合面：16个tool-前缀行中，tool-result-pruner是上下文剪枝行，其余15个是工具提供行（包含两种平台shell）；不是照历史数字盲填14。第一次脚本用safe_load处理!!js数据标签失败，发生在子进程communicate和finalize之后，原始stdout保留，但其停止返回没有单独保存；第二次先保存停止证据，再用BaseLoader把表达式仅作为字符串读取，exit0且groupObserved=gone。随后对明确15项工具行、plan-mode及两项已批准关闭行做一次免模型ACP初始化/新会话/关闭核对，结果见tmp下dsh-none-boot-summary.json。仅证明当前组合能启动；没有prompt，实际有效工具集仍要在本线最小真实冒烟从本次私有记录核对，未来清单外新行不得被当作已限制。以上Host免模型原生启动共3次、模型prompt0次，均经已验收的私有启动包装。
 
@@ -66,11 +66,11 @@ Host为3-A2补共享收集接缝：将原checkpoint的身份/输入摘要核对�
 
 把既有NativeCheckpointTests临时绑定到迁移后的函数，与现有ZCode接线/schema Worker聚焦共21项执行，20项通过；一次源标签统一保留过了头，令ZCode既有unknown内部标签未被投成原来的公开来源。Host按原有四种收据来源在注册处绑定固定标签，相关10项再通过（15.426秒）。这属于Host公共接线缺陷，已自行修正并登记，没有打回Worker；未改原测试意图。3-A2仍需实现路径/账户服务绑定、来源事实与来源校验、共用实时接口和私有auth清理事实，迁移本harness全部旧调用点测试并删除旧入口；公共注册与跨目录测试归Host，受管检出禁止改公共文件。
 
-3-C第二轮已修普通结算计数/双输入冲突和134→157编号口径，但Host在8份输入保留界之后复现了冲突信息遗失：c1旧input逐出后换成不同input，最终仍被豁免，9个不同调用只报8个。另delivery_exclusion只有生产定义、没有调用；记录还披露本轮重建两个临时镜像，违反Worker不删除。按用户规则拒绝后原run继续，要求保留输入指纹或丢证后拒绝豁免、删除未使用接口，并明确删除路径/次数；都在任务根范围内，不另停等用户。
+3-C第二轮已修普通结算计数/双输入冲突和134→157编号口径，但Host在8份输入保留界之后复现了冲突信息遗失：c1旧input逐出后换成不同input，最终仍被豁免，9个不同调用只报8个。另delivery_exclusion只有生产定义、没有调用；记录还披露本轮重建两个临时镜像，违反Worker不删除。按开发者规则拒绝后原run继续，要求保留输入指纹或丢证后拒绝豁免、删除未使用接口，并明确删除路径/次数；都在任务根范围内，不另停等开发者。
 
 Host新增已登记运行模块的共用只读资格检查，供删除继承执行入口后的描述类调用：只确认本项目run接缝存在，以及既有平台/工具类别条件，不读厂商源码。免原生探针覆盖未登记拒绝、已登记可用与不支持平台拒绝；实际执行/沙盒仍由本线原生检查验证。这是3-A2/3-B2删除旧入口所需的公共整合辅助，旧未抽取Adapter检查暂不改动。
 
-3-C第三轮固定封存29d4d4c（摘要8ee10fe，tree相同）、artifact f53a796a-13ac-4800-b5ad-65646b175e14，七条scope路径与补丁摘要已核对，整合文件逐字节相同。候选表保留首份完整input的有界sha256指纹，8份全文逐出后仍拒绝冲突；结算前冻结验证，恢复未验证调用的计数，实时末帧与终包一致。删除无人调用的方法，编号按统一加载134→161，27个新增、旧134集合相等。Host整合后的工具投影/原生主体/真实共享审阅及Worker角色聚焦86项通过（6.205秒，无skip）。违规记录已明确：第二轮rm -rf删除并重建任务根内baseline/current两个镜像，一次；原记录保留并撤回含糊口径，本轮无删除。按用户既定规则，同run整改后内部接受此修正；不构成Claude整条线完成。
+3-C第三轮固定封存29d4d4c（摘要8ee10fe，tree相同）、artifact f53a796a-13ac-4800-b5ad-65646b175e14，七条scope路径与补丁摘要已核对，整合文件逐字节相同。候选表保留首份完整input的有界sha256指纹，8份全文逐出后仍拒绝冲突；结算前冻结验证，恢复未验证调用的计数，实时末帧与终包一致。删除无人调用的方法，编号按统一加载134→161，27个新增、旧134集合相等。Host整合后的工具投影/原生主体/真实共享审阅及Worker角色聚焦86项通过（6.205秒，无skip）。违规记录已明确：第二轮rm -rf删除并重建任务根内baseline/current两个镜像，一次；原记录保留并撤回含糊口径，本轮无删除。按开发者既定规则，同run整改后内部接受此修正；不构成Claude整条线完成。
 
 Host复核接线时补齐原生schema路径服务的共同入口：prepare_run_services新增tool_scope参数，并同时用于Worker、fast和review；fast控制文件保留冻结account，三者均只传运行目录、活动目录、账户选择和工具范围，不传黑板凭据或整个控制文件。此前fast/review返回services=None会使Codex活动目录和明确账户绑定缺失，这属于公共角色接线缺口，由Host统一修正；本次不改任何微任务范围内文件。相关角色与已登记ZCode聚焦23项通过（6.296秒），新增一项实进程审阅用例核对窄服务绑定和JSON请求不携带账户。新增接口随3-A2/3-B2实际消费与各线完整检查验证，无模型调用。
 
@@ -122,13 +122,13 @@ Codex 接线后的第一次默认并行完整检查在两个模块失败：共�
 
 3-B2 内部签收编号 int-b806afb4-84f4-4da2-a4a4-41de2cee8a5d 为 verified，回收计划 cln-02d86000-8309-41c0-9fbe-87cd339717a3 最终 applied/removed，实际检出消失。一次显式 apply 因缺 confirmPath 被校验拒绝，未执行删除；随后的只读回查确认黑板已自动应用。Host 留存 14 份指定材料与摘要后，仅整体删除创建时登记的 3-B2 根，不用通配符、不屏蔽报错。
 
-第二次默认并行完整检查基线 5a83d06，466.878 秒，退出 1；176 个 Python 模块中只失败 cli.test_repository_hygiene，原因是 3-B2 记录含本机项目目录层级。其余 175 个模块运行 2,785 项（skip 1），Node 110 项通过；不是整步通过。Host 把该一处路径替换为 <other-desktop-checkout>，只改记录路径表示，不改代码、测试或验证结论，按用户相称性规则直接更正，不为此 continue；此项是内部签收后的记录调整。
+第二次默认并行完整检查基线 5a83d06，466.878 秒，退出 1；176 个 Python 模块中只失败 cli.test_repository_hygiene，原因是 3-B2 记录含本机项目目录层级。其余 175 个模块运行 2,785 项（skip 1），Node 110 项通过；不是整步通过。Host 把该一处路径替换为 <other-desktop-checkout>，只改记录路径表示，不改代码、测试或验证结论，按开发者相称性规则直接更正，不为此 continue；此项是内部签收后的记录调整。
 
 本批全量编号按同一 python_test_modules 加 unittest 加载器收集为 2,790 个、176 个模块，加载错误 0、重复 0。相对第二步 2,628 个：2,619 个编号不变，7 个改类/改名有对应，2 个重复 Claude schema/解析器测试随唯一旧使用方删除，由共享 schema-worker 的 schema 哈希与严格业务值校验覆盖；净新增编号 164 个。已列变化两侧从原始集合减去后集合完全相等。[编号表](adr025-step3-test-ids.tsv) 只列变化，原始清单留 tmp；其中包含并行已合入的 DSH 原生主体 42 项，不能把这一共存计数冒充 DSH 接线验收。
 
 [格式使用表](adr025-step3-format-usage.tsv) 复核第二步的 18 组 B 项：InterruptEvidence.requested/basis 已有 Codex native_evidence 的实际读取；3 组部分投影/部分读取；14 组仍没有业务读取。整帧存下与测试断言不算业务使用方。ModelStartEvidence、DeniedInteraction、UnknownEvents 三个格式类当前只有构造/序列化，连同表中其余未消费字段在第四步结束前删除或明确真实读取；不为保留它们造消费者。本步新增的角色参数、网络/拒绝工具请求字段、路径服务绑定均有实际调用。真实检查见[原生冒烟记录](adr025-step3-native-smokes.md)：Codex Worker 1 次通过，Claude 1 次无模型发现遇登录条件，Worker 0 次、未验证、不重试。
 
-第三步最终整合检查基线 bd4324e：uv run --frozen python -m hey_my_buddy.cli.checks，默认并行数、不传 --jobs、清除 BUDDY_CHECKS_JOBS，退出 0；Python 2,790 项（skip 1）／176 个模块全部完成，Node 110 项，用时 459.388 秒。两处代码/同步问题与一处记录路径失败均已闭环，本次同时作为本批整合检查和第三步两条线的整步完整检查，不再重复。代码与测试在检查期间保持该固定版本；之后只补结果记录。Codex、Claude 两条线在此停止等待用户转达 Claude Code Host 验收；DSH 线独立继续，未开始第五步。Claude 私有探针根在所选 CLI 启动前资格拒绝、无 Worker 启动后按登记确切路径回收；所有原始发现摘要保留。
+第三步最终整合检查基线 bd4324e：uv run --frozen python -m hey_my_buddy.cli.checks，默认并行数、不传 --jobs、清除 BUDDY_CHECKS_JOBS，退出 0；Python 2,790 项（skip 1）／176 个模块全部完成，Node 110 项，用时 459.388 秒。两处代码/同步问题与一处记录路径失败均已闭环，本次同时作为本批整合检查和第三步两条线的整步完整检查，不再重复。代码与测试在检查期间保持该固定版本；之后只补结果记录。Codex、Claude 两条线在此停止等待开发者转达 Claude Code Host 验收；DSH 线独立继续，未开始第五步。Claude 私有探针根在所选 CLI 启动前资格拒绝、无 Worker 启动后按登记确切路径回收；所有原始发现摘要保留。
 
 4-B2 首轮在约 7,200 秒窗口后返回 cancelled，黑板 cancellation 为 null、quotaFailure 为 null，原生收据 code=cancelled、nativeExitCode=0，两层停止均已确认；不能把停止确认当作交付。仅有 partial-output 7236ba66-972a-4c73-8bc1-8c44a2f18302，固定 2ded7516，累计补丁 5996ebc63f904ed82cb7607efe55c4d6967e9c377526c4aa2b8794bfb7f7fe01。Host 核对 12 条范围路径和摘要，未整合或签收。初审发现 available/check_preparation 把已有选择记录变成新门槛，丢失原未绑定时的发现路径；正式记录也未提交。原 run 已 continue（revision 5），配置仍为路由决定 dec-1fbe15bd-3790-4df2-af7f-185bf8799b12 选出的 zcode / zai-api / GLM-5.3-Flash / max，没有配置覆盖、没有另开任务。要求局部修复、复用已有聚焦与变异证据、完成编号/偏差记录，公共邻接缺口列给 Host，不反复扩大验证。任务根保留，4-C 尚未开始。
 
@@ -138,13 +138,13 @@ Host 在这份固定组合上重新注入四处故障，journal 外来记录、�
 
 本轮 Host 只改公共 registry 的 DSH 导入/注册和 live 能力为 cooperative-checkpoint；共享 discovery_shutdown_confirmed 消费已在 1d28a16，不需要另加外层。发现流程的 DSH 版本探针还沿用公共 discovery 环境，Host 会在 4-C 公共整合时为该启动强制私有 DSH_HOME 后再做安装版检查。
 
-按用户记录更正的相称性规则，Host 直接澄清 4-B2 三处记录，未改代码或测试、未重跑：发现异常停止字段在 1d28a16 已有公共消费；525d4cb 的 DSH live 基线为 realtime，验证组合实际含 cooperative-checkpoint 改动；“未删除任何对象”过宽，新组合构造用 rsync --delete 同步了已授权删除的两条源码。Host 对比 base-patched 与 comb 的 DSH 两棵源码树，仅 catalog.py 与 runner.py 缺席；这是在全新镜像中复现已授权的源码删除，不是回收旧实验材料，原方法明确保留，措辞缩窄为未回收旧实验/任务根。原始 applied-activation.txt 的基线误记保留在 tmp，当前公共文件与 Worker 验证组合已独立逐字核对一致，174 项验证结论不变。
+按开发者记录更正的相称性规则，Host 直接澄清 4-B2 三处记录，未改代码或测试、未重跑：发现异常停止字段在 1d28a16 已有公共消费；525d4cb 的 DSH live 基线为 realtime，验证组合实际含 cooperative-checkpoint 改动；“未删除任何对象”过宽，新组合构造用 rsync --delete 同步了已授权删除的两条源码。Host 对比 base-patched 与 comb 的 DSH 两棵源码树，仅 catalog.py 与 runner.py 缺席；这是在全新镜像中复现已授权的源码删除，不是回收旧实验材料，原方法明确保留，措辞缩窄为未回收旧实验/任务根。原始 applied-activation.txt 的基线误记保留在 tmp，当前公共文件与 Worker 验证组合已独立逐字核对一致，174 项验证结论不变。
 
 4-B2 回收计划 cln-d95fb583-83d9-44b4-9330-85b1c7cb44eb 已应用，实际受管检出消失；Host 留存 11 份指定材料后，只整体删除创建时登记的 4-B2 确切根。4-C 已从 68c03c0 首次走路由提交 run 7925d6a9-b01d-4a68-964c-6cb6a0d81ffc，决定 dec-92b7b95e-eae5-48c7-9d64-ccd85c9a687a 选择 zcode / zai-api / GLM-5.3-Flash / max；没有配置覆盖，拥有新的短任务根与独立检出。
 
 Host 为公共发现的 DSH --version 探针复用已验收的私有启动包装：包装新增可选 source_environment 与 merge_stderr，默认 ACP 行为不变；版本探针保留调用方 HOME、代理/CA，只强制私有 DSH_HOME，并以自有 handle 核实组停止后回收该次目录，未知则留目录并记录位置。资格仍只做版本握手。发现与暂缓审阅聚焦 22 项通过（5.923 秒），启动包装 20 项通过（0.090 秒）；首次启动包装模块名写错造成一个加载错误，改正后只补跑该模块，原始日志保留。把实际发现分支改回旧非隔离探针，新增见证以 dshHome 等于模拟日常目录失败，恢复原件通过。均为假 CLI，零安装版或模型。
 
-跨目录用量测试改为真实假 ACP Worker → 私有 session.v3 记录 → 新运行格式 → 共享收集，而非直接注入旧 Node sidecar。首轮 8 项中发现消息 sourceId 丢失和非配额错误进入 quotaFailure；这是旧公开收据检查与新原生事实/公共投影合并后的缺口，Host 自行整合：记录读取保留实际 message.id 到 lastAssistantMessage.sourceId，角色层对 DSH 只发布已识别配额分类，原始非配额代码继续保留在 RunResult/记录证据。生产两处修改已明确登记，未改用户批准的五项差异。跨 harness 用量与 schema Worker 共 20 项通过（5.576 秒）。
+跨目录用量测试改为真实假 ACP Worker → 私有 session.v3 记录 → 新运行格式 → 共享收集，而非直接注入旧 Node sidecar。首轮 8 项中发现消息 sourceId 丢失和非配额错误进入 quotaFailure；这是旧公开收据检查与新原生事实/公共投影合并后的缺口，Host 自行整合：记录读取保留实际 message.id 到 lastAssistantMessage.sourceId，角色层对 DSH 只发布已识别配额分类，原始非配额代码继续保留在 RunResult/记录证据。生产两处修改已明确登记，未改开发者批准的五项差异。跨 harness 用量与 schema Worker 共 20 项通过（5.576 秒）。
 
 Host 迁移暂缓审阅与私有证据分区的旧 DSH 调用点到同一注册接缝，保留身份、两层停止、私有记录与输出证据分离的原断言意图。退役仅旧 Node 载体消费的 read_last_line_result、legacy_node_stop_confirmed 及五个专属实现见证（两条旧 FD 区域规则、一条末行读取、两条 truthy Node 停止收据）；Node 载体整体移除后没有这些执行区域，公共外层的 FD 收尾、严格帧读取与真实两层停止由保留的共享测试和 4-B2 新见证覆盖。不会为了保留旧 FD 泄漏或 truthy 停止口径而留下兼容代码。原编号与替代覆盖随第四步总账列明。
 
@@ -168,7 +168,7 @@ Host 按第四步结束前清除无生产读取方格式的要求统一精简共
 
 第四步真实核对已完成 DSH Worker 2 次、只读命令写入 1 次、不给工具 1 次，另做 1 次免模型公开配置导出。第一次 Worker 已签收并有用量，但 Host 探针错误地把输出目录中的 .codex 也替换成 .dsh，收集后保存摘要失败，外层停止布尔值未落盘；原件保留，不算完整通过。修正为实际检出路径并加目录/输出存在性前置断言后，第二次 5.208 秒通过，身份一致、签收有效、read 工具 1 次、原生组 gone、控制器及组合停止均 true，完整 token 计数可读。只读运行 4.035 秒，原生 bash 工具实际尝试 printf 重定向，记录返回 Operation not permitted 与 read-only mode，目标文件不存在；不给工具运行工具计数 0、目标文件不存在，三次完整运行均组停止确认。具体次数、原始材料和边界在本步原生记录中列明。
 
-原生只读探针暴露共享词表尚未登记 DSH 实际的 bash 名称，仍投成 other。Host 在公共 protocol.tool_evidence 加入真实观测名称 bash→execute，未更改 DSH 的 systemSandbox 能力或黑板放行规则；既有名称映射见证增加此项，DSH 投影见证同时确认它在无沙盒审阅判定下仍拒绝。两模块 45 项通过（0.021 秒），无需为纯事实映射重跑模型。AGENTS/docs 索引只删除已退役目录、更新测试路径；launcher 仅去掉无任何执行方的 BUDDY_RUNNER_PATH 白名单，BUDDY_NODE 仍为现有 ZCode 安装入口定位所用。参考页中旧 Node 流程的叙述按用户文档边界未重写，交外部 Host 审阅时列明。
+原生只读探针暴露共享词表尚未登记 DSH 实际的 bash 名称，仍投成 other。Host 在公共 protocol.tool_evidence 加入真实观测名称 bash→execute，未更改 DSH 的 systemSandbox 能力或黑板放行规则；既有名称映射见证增加此项，DSH 投影见证同时确认它在无沙盒审阅判定下仍拒绝。两模块 45 项通过（0.021 秒），无需为纯事实映射重跑模型。AGENTS/docs 索引只删除已退役目录、更新测试路径；launcher 仅去掉无任何执行方的 BUDDY_RUNNER_PATH 白名单，BUDDY_NODE 仍为现有 ZCode 安装入口定位所用。参考页中旧 Node 流程的叙述按开发者文档边界未重写，交外部 Host 审阅时列明。
 
 4-D1（run b48f1f86-23ac-4f7f-9fe1-0f310fa7d9b7）与 4-D2（run 7d2f88ed-b7e0-41e6-b082-1bd6179e702c）首次均走路由，决定分别为 dec-d7b66319-f85d-4dd0-8ccd-a2588be6cdd4、dec-f8910a7e-060c-4186-8ec6-e241b79e5757，均选 zcode / zai-api / GLM-5.3-Flash / max；没有配置覆盖。两项范围分别为黑板流程测试/旧夹具与四个原生测试文件，不改公共源码；各自短任务根已登记，Worker 不回收材料、不建分支。Host 另直接把 4-C 当前记录里的系统临时根写法改为占位符，原确切路径仍在 tmp 台账，属于已知事实的路径表述更正，不影响验证结论。
 
@@ -182,7 +182,7 @@ Host 在原生系列验证与私有分发验证完成后，留存 43 份具名�
 
 4-D2 固定 c877ef6、artifact 4be924d4-47b1-4a9d-a2a8-af54ca23f673、累计补丁 9f77ec0eab2108fc07320dd52b5fbabf2772ff4e39e91a95ced998b8c6b642bf 的 6 条 scope 路径与摘要一致；在 bf34678 公共源码 + 固定交付的全新副本复核 178 项全部通过（45.828 秒）。日志有一条未关闭流 ResourceWarning，未据此扩改未动的进程代码；没有失败。Host 分别在两份新变异副本只运行对应见证，恒报 gone 命中 gone!=unknown，跳过 DSH 完成签名命中 ok!=error（0.571/0.295 秒）。四模块编号 37/37/49/55 全部不变。组装移除的 owned-spawn 观察字段与 Claude 内部交付 call id 没有业务读取，不为测试重新添加；停止判定、排除交付工具的事实和角色消费的 provenance 保留。
 
-固定交付应用时 6 个文件逐字节相符；之后 Host 只更正记录中的一处事实表述：tuple == tuple[:1] 并非恒真，它只能排除多于一个根而仍允许空集合，当前测试恰为一个根更强。该更正不改代码、测试或做过的验证结论，按用户相称性规则直接登记，不 continue、不重跑。
+固定交付应用时 6 个文件逐字节相符；之后 Host 只更正记录中的一处事实表述：tuple == tuple[:1] 并非恒真，它只能排除多于一个根而仍允许空集合，当前测试恰为一个根更强。该更正不改代码、测试或做过的验证结论，按开发者相称性规则直接登记，不 continue、不重跑。
 
 4-D2 已按 integration int-47ee5cbd-b1f5-4e1f-aa73-4430fcfe54a5 内部签收。首次登记因 adjustedPaths 未同时给 reason 被接口拒绝，未建立登记；补明仅记录措辞更正的理由后成功。回收计划 cln-41843fe3-a113-481e-992a-f67b346b643d 已应用、受管检出实际不存在；Host 校验四组前后编号集合分别为 37/37/49/55 且完全相等，留存 19 份具名编号/基线错误/变异源码/脚本材料与摘要后，只删除创建时登记的 4-D2 确切根。Host 自己的 178 项与两份目标失败日志另在 tmp，未依赖 Worker 成功消息。
 
@@ -218,4 +218,4 @@ Worker 第一轮保留了两份注入脚本但未提供独立末轮失败日志�
 
 修正批次整合后的完整检查基线 6078488eb553ddadcf5ef15f42a9c110696fb126，HEAD 前后相同；命令 uv run --frozen python -m hey_my_buddy.cli.checks 未传 --jobs，并清除 BUDDY_CHECKS_JOBS，实际默认 4 个并行进程。175 个 Python 模块全部通过，运行 2,785 项（既有 skip 1），434.254 秒退出 0。原始日志和元数据分别是 tmp/adr025-host/<phase>/step4-full-check2.log 与 step4-full-check2-meta.json；第一次 15 个失败及其补迁移不撤回、不覆盖。本次整合检查同时作为第四步结束检查，之后只补记录，不重复运行测试。
 
-第四步提交外部验收，汇总见 adr025-step4-review-ready.md。原 4-B1 同 run 的工具清单、私有用量读取和用户批准的第四、第五项差异均已接线并取得实际证据；用户自己交互使用的 DSH 不受这两项关闭影响。第三步仍停在已提交的外部验收边界；第五步未开始，须等所有 harness 线的 Claude Code Host 验收结果由用户转达。
+第四步提交外部验收，汇总见 adr025-step4-review-ready.md。原 4-B1 同 run 的工具清单、私有用量读取和开发者批准的第四、第五项差异均已接线并取得实际证据；用户自己交互使用的 DSH 不受这两项关闭影响。第三步仍停在已提交的外部验收边界；第五步未开始，须等所有 harness 线的 Claude Code Host 验收结果由开发者转达。

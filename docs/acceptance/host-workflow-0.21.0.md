@@ -1,6 +1,6 @@
 # ADR-018 第二部分：Host 工作流 0.21.0
 
-日期：2026-09-29。范围为 [ADR-018](../decisions/018-routing-modes-and-host-workflow.md) 第 11–23 条与四个同时修复的缺陷。基线为第一批合入后的 `socu/buddy-core`，提交 `cf4d70a4faa3c9884b4cccb21c1ceb105f46f579`，包含路由双模式合并 `f97dea8`；实施分支为 `socu/host-workflow`，位于独立 worktree。用户先审阅并同意 [schema 15 方案](../design/adr018-host-workflow-schema15.md)，再实施迁移。源码与契约均为 `0.21.0`，schema 为 15。
+日期：2026-09-29。范围为 [ADR-018](../decisions/018-routing-modes-and-host-workflow.md) 第 11–23 条与四个同时修复的缺陷。基线为第一批合入后的 `socu/buddy-core`，提交 `cf4d70a4faa3c9884b4cccb21c1ceb105f46f579`，包含路由双模式合并 `f97dea8`；实施分支为 `socu/host-workflow`，位于独立 worktree。开发者先审阅并同意 [schema 15 方案](../design/adr018-host-workflow-schema15.md)，再实施迁移。源码与契约均为 `0.21.0`，schema 为 15。
 
 状态：第 11–23 条、四个缺陷、离线集成、浏览器验证与最终完整检查均已完成，四个委派均已验收并清理受管检出。本轮没有安装日常运行时、迁移日常板、修改用户配置、合并或发布。
 
@@ -73,7 +73,7 @@ Host 在隔离合成预览的真实浏览器中核对了逐次用量、缓存子
 
 ## 委派、未验证项与后续
 
-本轮 CLI/skill、环境/分发、原生观测、控制台四项实现通过已安装的 Buddy 委派，分别由轻量监控子代理等待，均未派 Claude Worker。四项最初提交都由 Host 指定 `adapter:dsh` 并使用 fast 路由；这只是本轮实际执行记录，不表示其他 harness 不可用或新功能只支持 DSH。用户指出该限制无充分依据，后续普通委派不再默认限制为 DSH。Host 负责 schema、工作流、代码整合、纠正与验收。四项均已对固定成果登记整合并验收，受管检出已移除，补丁与固定 Git 引用保留。CLI 与原生观测任务各两轮，整合验证使用整个目标输入至最终输出的差异。
+本轮 CLI/skill、环境/分发、原生观测、控制台四项实现通过已安装的 Buddy 委派，分别由轻量监控子代理等待，均未派 Claude Worker。四项最初提交都由 Host 指定 `adapter:dsh` 并使用 fast 路由；这只是本轮实际执行记录，不表示其他 harness 不可用或新功能只支持 DSH。开发者指出该限制无充分依据，后续普通委派不再默认限制为 DSH。Host 负责 schema、工作流、代码整合、纠正与验收。四项均已对固定成果登记整合并验收，受管检出已移除，补丁与固定 Git 引用保留。CLI 与原生观测任务各两轮，整合验证使用整个目标输入至最终输出的差异。
 
 | 委派 | runId | 最终 artifactId | integrationId | 已应用的清理计划 |
 | --- | --- | --- | --- | --- |
@@ -84,12 +84,12 @@ Host 在隔离合成预览的真实浏览器中核对了逐次用量、缓存子
 
 环境/分发任务在 `1b716df` 已完成独立整合验收，其余三项整合到最终运行时代码 `18baa33`。控制台任务清理调用返回一次 `REVISION_CONFLICT`，随后只读 `get` 确认同一计划为 applied、removed=true；现场检出不存在，输出 patch 和 6 个固定引用仍可读。CLI 与原生观测各保留 2 个输出 patch、12 个固定引用。没有把错误回执当成成功，也没有盲目重复删除；冲突产生原因未另行推断。
 
-未验证的是新版本在用户日常板的迁移/安装、本次变更的原生 Linux/Windows、实际付费额度失败后的恢复，以及各 provider 后续版本的记录格式。已有原生记录和模拟 harness 证明本次实现的处理路径，不扩大此前 Router 的原生资格。合并到 `socu/buddy-core`、空闲时安装候选与 schema 15 日常迁移均等待用户另行授权。
+未验证的是新版本在开发者日常板的迁移/安装、本次变更的原生 Linux/Windows、实际付费额度失败后的恢复，以及各 provider 后续版本的记录格式。已有原生记录和模拟 harness 证明本次实现的处理路径，不扩大此前 Router 的原生资格。合并到 `socu/buddy-core`、空闲时安装候选与 schema 15 日常迁移均等待开发者另行授权。
 
 ## Host 合并验收（2026-09-30）
 
-Claude Code Host 在 `socu/integration-0.21` 上把 `socu/host-workflow`（`ce09950`）合入当时的 `socu/buddy-core`（`3f0a91c`），合并提交为 `137dab1`。唯一冲突在 AGENTS.md：保留已改为只含仓库事实的版本，本分支新增的议程段落不收，只吸收了"完整检查前用 `npm --prefix apps/console ci` 准备控制台依赖"这一步骤说明。随后 `02b9479` 删掉了 skill 与参考文档中属于某一位用户的设定：SKILL.md 的"this repository: Chinese"，usage.md 中"本仓库使用中文"及过时的版本标题，以及 claude.md 中关于 Claude Worker 数量与分工的整段个人要求。`02b9479` 上的完整检查通过（Python 1,581 项，Node 161 项）。
+Claude Code Host 在 `socu/integration-0.21` 上把 `socu/host-workflow`（`ce09950`）合入当时的 `socu/buddy-core`（`3f0a91c`），合并提交为 `137dab1`。唯一冲突在 AGENTS.md：保留已改为只含仓库事实的版本，本分支新增的议程段落不收，只吸收了"完整检查前用 `npm --prefix apps/console ci` 准备控制台依赖"这一步骤说明。随后 `02b9479` 删掉了 skill 与参考文档中属于某一位开发者的设定：SKILL.md 的"this repository: Chinese"，usage.md 中"本仓库使用中文"及过时的版本标题，以及 claude.md 中关于 Claude Worker 数量与分工的整段个人要求。`02b9479` 上的完整检查通过（Python 1,581 项，Node 161 项）。
 
 Host 自己审查了 schema 14 → 15 迁移：迁移在单个 `BEGIN IMMEDIATE` 事务中只增加列和 Host 结论表，前后比对原有列指纹，完成后做外键与完整性检查，失败整体回滚；历史目标默认不锁定配置，与已同意的方案一致。独立只读审查（run `b90b02a8`，路由按软偏好选中 Codex GPT-6 Sol high，未加硬约束）报告三项，Host 逐条对照代码确认成立：Codex 与 ZCode 在发出请求前就把 `modelStarted` 置为真，模型被拒绝且没有改动时仍会发布空补丁的部分成果；额度中的标识类字段只检查长度，可能存下原生错误原文；新增的服务环境白名单漏掉 CA 证书路径变量。修正任务（run `2483361f`，路由选中 ZCode GLM-5.3 max）使部分成果只在确有改动时发布（防重试的 `modelStarted` 语义不变），额度标识字段只接受 `^[A-Za-z0-9._:/-]{1,64}$`，并把 `SSL_CERT_FILE`、`SSL_CERT_DIR`、`REQUESTS_CA_BUNDLE`、`CURL_CA_BUNDLE`、`NODE_EXTRA_CA_CERTS` 加入服务、原生子进程与 Claude 三处白名单，均有回归测试。Host 读完每处改动后原样整合为 `2f930a6`，其上的完整检查通过（Python 1,590 项，Node 161 项，运行时 PATH 前置 Node 24.21.0）。两项委派都已记录整合并验收。
 
-0.21.0 尚未安装；日常板从 schema 14 迁移到 15 需要用户另行授权。
+0.21.0 尚未安装；日常板从 schema 14 迁移到 15 需要开发者另行授权。

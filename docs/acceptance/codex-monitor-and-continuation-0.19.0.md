@@ -16,13 +16,13 @@ run `9cc4223f-4f3f-4205-aeb4-cdc88b6e4939` 的第一轮原生会话为 `01a0eafc
 
 原始收据确认原生退出码为 0 且停止已确认；旧代码只有校验成功并生成 turn record 后才写私有 native binding，服务也只从 `concluded` turn 选择 native resume。因此已经完成、已保存研究内容的原生线程未被登记为可恢复，下一轮变成 `reconstructed-new-session`。这属于接入层丢失恢复证据，不能据此认为 Codex 无法恢复这轮。新代码对原始消息做离线 replay，解析结果与原 JSON 完全一致且保留引用；控制器/服务协议夹具验证了失败后显式 continue 恢复同一个线程并产生 native turn 2。没有付费重跑这个历史委派。[原始消息指纹与收据摘要](evidence/codex-outcome-9cc4223f.json)记录了验证范围。
 
-## 经用户逐次批准的监控实测
+## 经开发者逐次批准的监控实测
 
 全部 Buddy 实测使用私有根 `/private/tmp/buddy-monitor-probe-jn8_gplj`，包含独立 state、runtime、skill 安装目录和只读 fixture。监控仍调用规定的绝对入口 `~/.agents/skills/buddy/scripts/buddy`，通过显式私有 state/runtime 附着私有服务。私有测试板只启用了日常已启用的 `dsh:deepseek-official:deepseek-flash:off`；未改日常模型目录或设置。没有 Claude 调用，没有新 Router 调用，没有自动续做或付费重试。
 
 第一次批准包含一个 DeepSeek Flash off Worker 委派和一个 Luna low 监控会话。run `c0342e2e-9210-471d-b540-2442dd72f688` 只读取 `marker.txt` 并用中文原样报告内容；一个本地 `sleep 45` command 先占用唯一执行槽，以便观察排队。Worker 原生执行 4.1 秒，包含排队与服务开销为 50.195 秒，2 次模型请求；固定输出 `2aabdd2e74e08bc4da1b5c7737a5c554fa9ad7d3` 的 marker 与输入一致，changedPaths 与 diff 均为空。第一个监控开始执行 await 时 Worker 已完成，所以 await 的实际等待为 0 秒，只证明模型覆盖、权限与结果交回，不能作为长等待证据。
 
-用户另行批准第二个 Luna low 监控会话，监控本地 `sleep 120` command run `e4d85088-df6a-4543-8cf4-4522a8d97f6e`，不再调用 DeepSeek。监控的 await 实际等待 79.2 秒，最终返回 completed 与停止确认。父代理先调用 10,000 ms 的 `collaboration.wait_agent`，实际 10.017 秒后返回 `timed_out: true`；继续等待同一子代理 60,000 ms，实际 60.007 秒后仍超时。两个超时都没有取消子代理或 Buddy 任务，没有创建替代任务，随后收到同一子代理的完成通知。
+开发者另行批准第二个 Luna low 监控会话，监控本地 `sleep 120` command run `e4d85088-df6a-4543-8cf4-4522a8d97f6e`，不再调用 DeepSeek。监控的 await 实际等待 79.2 秒，最终返回 completed 与停止确认。父代理先调用 10,000 ms 的 `collaboration.wait_agent`，实际 10.017 秒后返回 `timed_out: true`；继续等待同一子代理 60,000 ms，实际 60.007 秒后仍超时。两个超时都没有取消子代理或 Buddy 任务，没有创建替代任务，随后收到同一子代理的完成通知。
 
 | 执行 | 模型请求数 | 原生输入 token | 其中/另计缓存输入 | 输出 token | 总 token | 原生执行/监控会话耗时 | 监控 await 实际等待 |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
@@ -52,8 +52,8 @@ Host 检查固定产物后记录 integration not required，并接受了唯一�
 
 没有新付费 Codex Worker 原生续做探针；修复依赖原故障原始消息 replay、收据/源码诊断和协议夹具回归。没有 Windows/Linux 真机监控或恢复验证，没有实际测试一小时 wait 上限，没有验证低权限子代理交互审批路径，也没有验证 Host 关闭后的自动唤醒。没有启用/修改任何 Codex feature、默认子代理配置或用户模型偏好；低权限场景依照[官方子代理权限说明](https://learn.chatgpt.com/docs/agent-configuration/subagents#approvals-and-sandbox-controls)与现有精确启动器放行指引处理。
 
-全量检查已通过，建议将本分支合并到 `socu/buddy-core`，在空闲状态下经用户单独授权安装包含 `9fcea9a` 登录用户名修正和本次改动的同版本运行时，再重新载入已安装 skill。源码提交、已验证私有测试和日常安装是独立事实；本记录不授权合并或安装。
+全量检查已通过，建议将本分支合并到 `socu/buddy-core`，在空闲状态下经开发者单独授权安装包含 `9fcea9a` 登录用户名修正和本次改动的同版本运行时，再重新载入已安装 skill。源码提交、已验证私有测试和日常安装是独立事实；本记录不授权合并或安装。
 
 ## 本地安装候选
 
-`uv build --wheel` 从冻结提交 `9b2d37dbab341ce96cfcdce0d9b3b125f0374043` 构建本地 `tmp/codex-monitor/dist/hey_my_buddy-0.19.0-py3-none-any.whl`（1,608,083 字节）。内嵌 `build-info.json` 保留完整 sourceCommit；已解包核对包含 `USER` 修正、监控 skill 与恢复拒绝后的上下文传递。SHA-256 为 `82557d99ad229a22f085c6c51043f9c138e79d83a85f2e0cc4ab48574bc050e3`，同目录 `SHA256SUMS` 可用于核对。包未安装到日常服务、未发布；安装仍需用户授权，之后应重新载入已安装 skill。
+`uv build --wheel` 从冻结提交 `9b2d37dbab341ce96cfcdce0d9b3b125f0374043` 构建本地 `tmp/codex-monitor/dist/hey_my_buddy-0.19.0-py3-none-any.whl`（1,608,083 字节）。内嵌 `build-info.json` 保留完整 sourceCommit；已解包核对包含 `USER` 修正、监控 skill 与恢复拒绝后的上下文传递。SHA-256 为 `82557d99ad229a22f085c6c51043f9c138e79d83a85f2e0cc4ab48574bc050e3`，同目录 `SHA256SUMS` 可用于核对。包未安装到日常服务、未发布；安装仍需开发者授权，之后应重新载入已安装 skill。

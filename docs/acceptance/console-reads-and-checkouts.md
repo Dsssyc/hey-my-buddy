@@ -190,7 +190,7 @@ R04 第四轮 `f939a9de` 的 Host 15 个探针通过（872 ms、退出码 0）�
 
 合入 core 前的候选代码提交为 `92f2a8c5f2a502dc81c0607e4edefa3e3fdf52e4`（`perf(console): reuse conditional reads and pause hidden polling`），当时工作树干净后执行了一次完整检查：`uv run --frozen python -m hey_my_buddy.cli.checks`。UTC 2026-10-07 18:42:08 开始、18:50:27 结束，约 498.921 秒，退出码 **0**；沿用默认并行数，Python 4 个 Worker、187/187 文件、2,987 项测试、跳过 1 项。每个测试使用检查器的全新私有状态和运行时，启动 uv 前清除继承的 BUDDY_*、ANTHROPIC_*、VIRTUAL_ENV 与 UV_PROJECT_ENVIRONMENT。完整检查后核对四个构建产物与该提交逐字节相同、工作树没有源码或产物变化，随后只补验收记录。完整检查的 stdout 只给出上述 Python 数量，不把前端编号清点数量冒充它打印的执行数量。命令、完整提交号、开始/结束时刻、退出码和产物哈希见 [最终核对 JSON](console-reads-and-checkouts-verification.json)，原始日志留在 ignored `tmp/console-reads-host/full-check.log`。
 
-启动包装器最初误用了旧 ADR-027 任务的“最新 core 必须为祖先”门槛，在实际检查命令启动前退出；该次没有运行完整检查。更正 ignored 包装器为本批用户指定的 `54d15908` 起点后，运行了上述一次实际完整检查。开始时 `socu/buddy-core` 已推进到 `fbfa8eac881ee7da8d23465df155d270b8707b60`；当时按并行互不依赖的起始指令保留原起点，没有合入 ADR-025 的并行改动。此为补充合入指令到达前的历史边界，不能作为合入后代码的验证结论；新的整合与验证在 R13、R14 记录。
+启动包装器最初误用了旧 ADR-027 任务的“最新 core 必须为祖先”门槛，在实际检查命令启动前退出；该次没有运行完整检查。更正 ignored 包装器为本批开发者指定的 `54d15908` 起点后，运行了上述一次实际完整检查。开始时 `socu/buddy-core` 已推进到 `fbfa8eac881ee7da8d23465df155d270b8707b60`；当时按并行互不依赖的起始指令保留原起点，没有合入 ADR-025 的并行改动。此为补充合入指令到达前的历史边界，不能作为合入后代码的验证结论；新的整合与验证在 R13、R14 记录。
 
 Host 在上述合入前候选的完整检查通过后，对以下五个固定产物和各自已核对的 integration ID 登记 accepted；早期 rejected、失败回合、范围更正和原 run continue 均保留。这里的微任务验收与本批等待 Claude Code Host 验收是两个阶段。
 
@@ -234,7 +234,7 @@ R13 实际结果：13 个受影响模块、159 项测试、跳过 0，默认 4 �
 
 修正写入范围仅 `apps/console/src/objective-api.test.ts` 与 `tests/python/console/test_console_reads_http.py`：修正两条成功断言为 `{timeline, verifiedAtMs}`，保留非法响应拒绝与路径/信号断言；补同一已缓存有效会话中访问修订变化的实际 HTTP 回归，冻结时间、数据库与其他失效来源，使去掉 access_revision 的隔离内存变异真的返回旧 304 而使新测试失败。明确区分受控修订事实注入与真实切换登录模式，不能再次由会话更换或 requireLogin 变化掩盖目标。Worker 只跑这两处受影响测试，不跑前端或 Python 的完整检查；日志置于新建 ignored 任务目录，保留确切路径，不删除、不用 stash、不创建或切换分支、公开记录用 ~ 或占位符。
 
-R15 由 Host 独立核对固定产物、受影响测试，以及恢复两个旧前端断言和移除后端 access_revision 的失败证据；代码/测试缺陷退回该新 run。R16 在固定整合提交上运行一次完整 `npm --prefix apps/console test`，记录命令、提交号、项数和实际退出码；只更改测试与记录，按用户指令不重复 Python 完整检查，只跑仓库卫生。旧 Python 完整检查的 3,162 项通过与之前缺失完整前端检查分别保留，不把 Python 命令说成包含前端。控制台产品源码、构建产物与对外行为无需修改；最后验收并核对自动受保护回收，停止等 Claude Code Host 验收，不合入新的 core 文档变化、不推送。
+R15 由 Host 独立核对固定产物、受影响测试，以及恢复两个旧前端断言和移除后端 access_revision 的失败证据；代码/测试缺陷退回该新 run。R16 在固定整合提交上运行一次完整 `npm --prefix apps/console test`，记录命令、提交号、项数和实际退出码；只更改测试与记录，按开发者指令不重复 Python 完整检查，只跑仓库卫生。旧 Python 完整检查的 3,162 项通过与之前缺失完整前端检查分别保留，不把 Python 命令说成包含前端。控制台产品源码、构建产物与对外行为无需修改；最后验收并核对自动受保护回收，停止等 Claude Code Host 验收，不合入新的 core 文档变化、不推送。
 
 首次试图复用原宏任务 `obj-e7f5f4a6-85a5-4338-a8af-8c396266b34d` 的 submit 被 CONFLICT 拒绝，没有 runId；只读核对原宏任务 Host 仍为 codex-adr027，但其 project_id 与当前 Git 公共目录的仓库身份不同。没有修改旧宏任务/黑板记录或跳过归属检查；为这次修正创建新的宏任务，并在 task 说明与记录中关联两条原 run。原失败请求与响应保留。Host 已在原源码上复现 objective-api 的 9 项中 2 fail / 7 pass，退出码 1，原始日志 ignored `tmp/console-reads-host/repair-objective-api-before.log`；未重复原已通过的全量核对。
 
@@ -248,7 +248,7 @@ Host 新用例单独运行退出 0；inspect/exec 与 mock.patch.object 只在�
 
 固定整合提交 `881dbd4ee9a31bfab431e45659021215ad46d20e`（`test(console): cover access revision and timeline read envelopes`）上，worktree 干净后运行完整命令 `npm --prefix apps/console test`，没有文件筛选或降低范围：56/56 文件、728/728 项测试通过、退出码 **0**，Node 24.21.0，26.048 秒；UTC 2026-10-08 07:29:40→07:30:06（Asia/Singapore 15:29→15:30）。启动前清除继承的 BUDDY_*、ANTHROPIC_*、VIRTUAL_ENV 和 UV_PROJECT_ENVIRONMENT，再设置全新的私有状态、运行时与明确预览 Python/源路径；使用 Vite/Vitest 默认运行机制。原始完整日志在 ignored `tmp/console-reads-host/repair-front-full.log`，命令、提交号、项数、时间和退出码在最终核对 JSON 的 acceptanceRepair.fullFrontend。
 
-本次是整个前端源码的一次完整执行；先前仅受影响的前端验证没有包含 objective-api，原 Python checks 也不包含前端，此前的完成结论漏了这一项。本次明确补上，不改写原 195 文件/3,162 项的 Python 完整检查事实；按用户的测试-only 指令不重复 Python 全量。产品源码与构建产物相对 0011980b 的 Git 差异为零，4 个构建产物 SHA-256 与原固定值一致，测试修改不会改变发布的界面、错误或事件，因此不重新构建或重做原已通过的浏览器、目录、Git 对象与其他变异核对。
+本次是整个前端源码的一次完整执行；先前仅受影响的前端验证没有包含 objective-api，原 Python checks 也不包含前端，此前的完成结论漏了这一项。本次明确补上，不改写原 195 文件/3,162 项的 Python 完整检查事实；按开发者的测试-only 指令不重复 Python 全量。产品源码与构建产物相对 0011980b 的 Git 差异为零，4 个构建产物 SHA-256 与原固定值一致，测试修改不会改变发布的界面、错误或事件，因此不重新构建或重做原已通过的浏览器、目录、Git 对象与其他变异核对。
 
 修正 run 的整合记录为 `int-79aed93f-845e-4de0-8ae4-3f6a7c1ef2e0`，绑定完整两路径固定产物与上述整合提交，Host 的三份验收记录另列 hostPaths。独立证据通过且完整前端退出 0 后登记 accepted；随后现有守护进程通过正常受保护 plan/apply 回收精确检出 `~/.local/share/hey-my-buddy/state/workspaces/ws-f6efb30828c3289b89ba3c736d0879d7/checkout`，计划 `cln-954a5291-37bf-40dc-b033-99db11e31bcb` 持久状态 applied。Host 核对路径与符号链接均不存在，2 份输出补丁实际存在，6 个固定 refs 的对象仍可读取；所需日志与一次性材料已先保留于 Host ignored 专用目录。Worker 未自行删除或回收，没有改变原 A-F/A-S 的历史事实。
 

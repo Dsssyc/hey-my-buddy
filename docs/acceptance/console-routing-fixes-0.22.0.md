@@ -4,7 +4,7 @@
 
 2026-09-30，在 `794a901`（`socu/buddy-core`）上建立独立 worktree `~/.codex/worktrees/console-routing-fixes/hey-my-buddy` 与分支 `socu/console-routing-fixes`。本记录覆盖四项源码修复、自动化验证与合成浏览器核对。契约及包版本为 `0.22.0`，SQLite schema 仍为 `15`，没有修改数据库 schema、适配器、备份或升级实现。未合并主开发分支，未安装或升级日常服务，未修改用户配置，也未访问日常控制台。
 
-先写已接受的 [ADR-020](../decisions/020-loopback-console-access.md)，依据用户 2026-09-29 的决定；随后更新 [console.md](../reference/console.md)，再实现登录行为。设计与契约提交为 `f56dfd4`，登录与滚动实现为 `eb0bc3c`，目标列表为 `53be4b6`，路由及 Host 补充为 `13c83d1`，列表失败恢复及最终资源构建为 `8457ac3`。提交未添加 AI 署名。
+先写已接受的 [ADR-020](../decisions/020-loopback-console-access.md)，依据开发者 2026-09-29 的决定；随后更新 [console.md](../reference/console.md)，再实现登录行为。设计与契约提交为 `f56dfd4`，登录与滚动实现为 `eb0bc3c`，目标列表为 `53be4b6`，路由及 Host 补充为 `13c83d1`，列表失败恢复及最终资源构建为 `8457ac3`。提交未添加 AI 署名。
 
 ## 行为与原因
 
@@ -50,7 +50,7 @@ Buddy 配置页的外层原为固定高度但不滚动，模型区域允许 flex
 
 与 ADR-019 第 11 条的 `socu/private-dirs` 批次分开交付。本批没有修改 `src/buddy/adapters/`、备份、升级或 schema 文件；在当前本地仓库没有可解析的该分支引用，因此没有验证两批组合合并。合并时保留 ADR-019 的滚动修复标记和另一批第 11 条的变更，分别处理 backlog；统一 `pyproject.toml`、`uv.lock` 与 `src/buddy/contracts.py` 的契约版本，并在最终树重新构建 `src/buddy/console_assets`，不要择一保留旧资源。备份/升级应继续完整保留 `console-settings.json` 的端口、登录开关和修订号；本批使用该现有 sidecar，没有引入新备份路径。
 
-建议两批合入目标分支后，对组合树再次完成相同检查并重新构建共享 skill，再按已授权的安装流程切换日常服务。组合合并、安装以及安装后的固定地址验证均等待用户授权；本次源码验证不作为安装证明。
+建议两批合入目标分支后，对组合树再次完成相同检查并重新构建共享 skill，再按已授权的安装流程切换日常服务。组合合并、安装以及安装后的固定地址验证均等待开发者授权；本次源码验证不作为安装证明。
 
 ## Host 合并验收（2026-09-30）
 

@@ -1,6 +1,6 @@
 # Production workflow repairs — 0.8.0
 
-This is the source acceptance record for [ADR-010](../decisions/010-production-workflow-repair-plan.md), verified on 2026-09-25. It records the combined regression run, its failed cases and subsequent repairs, focused reruns and real private-board harness exercises. It is not an installed-runtime acceptance: the shared daily service remains contract 0.7.0/schema 9, and activating the 0.8 candidate still requires the user's notice.
+This is the source acceptance record for [ADR-010](../decisions/010-production-workflow-repair-plan.md), verified on 2026-09-25. It records the combined regression run, its failed cases and subsequent repairs, focused reruns and real private-board harness exercises. It is not an installed-runtime acceptance: the shared daily service remains contract 0.7.0/schema 9, and activating the 0.8 candidate still requires the developer's notice.
 
 ## Ownership and delivery
 
@@ -15,7 +15,7 @@ The integration checkout is `socu/buddy-core`. The original dirty `socu/python-b
 | Documentation `e8dfec7a-bd29-4726-967a-9c579a8833d9` | `b9234557b7845c0fb88a36a3c51cf4f3e59880a6` | `c895d56`, then verified contract and acceptance updates |
 | Host-adopted RPC output from failed goal `7ac89b7e-ef25-49c8-819d-e979fa44f203` | `2c8f2da36beed09ff8d88c41989afef199166843` | `5af8fc5`; original failure retained |
 
-The daily board's capacity was changed, at the user's request, to six business attempts plus one reserved decision attempt. The switch preserved worker-owned children and their original attempt identities. A later `health` read confirmed `business.limit=6`, `decision.limit=1`, all seven managed supervisors present and clean database integrity. Source defaults remain two plus one. This deployment setting must be retained when the candidate is eventually installed.
+The daily board's capacity was changed, at the developer's request, to six business attempts plus one reserved decision attempt. The switch preserved worker-owned children and their original attempt identities. A later `health` read confirmed `business.limit=6`, `decision.limit=1`, all seven managed supervisors present and clean database integrity. Source defaults remain two plus one. This deployment setting must be retained when the candidate is eventually installed.
 
 ## Verified source boundaries
 
@@ -93,4 +93,4 @@ Five implementation goals were accepted against their final immutable artifacts 
 
 Eight task-owned implementation checkouts were then removed: the six Buddy allocations above and the two independently integrated Codex-adapter/service-stop checkouts. Before each removal, Host checked immutable output/patch hashes, actual checkout content, Git registration and allocation lock, confirmed attempt shutdown, released reservations, no descendants or live cwd users and the integration commit on `socu/buddy-core`. The procedure used read-only daily SQLite inspection and exact-path Git removal; no schema-10 daemon was pointed at the schema-9 board and no cleanup/integration rows were fabricated. Each checkout was first archived under `tmp/checkout-archive-20260925/` and every archived file was checked against its source hash. Archives retain local source and logs, excluding only rebuildable virtual environments, `node_modules`, Python bytecode and pytest caches. Fixed refs, output patches, manifests and execution receipts remain outside the removed checkouts. Native implementation commits have retained refs under `refs/buddy/host-recovery/`. `tmp/checkout-cleanup-applied.jsonl` records the eight archive hashes and exact removals. The original checkout, CodeBuddy branch, integration checkout and other historical worktrees were preserved.
 
-Daily installation remains pending the user's notice. At installation, recheck all Hosts' live work, preserve the six-plus-one deployment capacity, make a fresh recoverable backup and prepare a verified current-schema copy before switching clients, daemon and idle Workers together. The earlier active-state rehearsal must never be activated.
+Daily installation remains pending the developer's notice. At installation, recheck all Hosts' live work, preserve the six-plus-one deployment capacity, make a fresh recoverable backup and prepare a verified current-schema copy before switching clients, daemon and idle Workers together. The earlier active-state rehearsal must never be activated.

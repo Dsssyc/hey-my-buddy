@@ -1,6 +1,6 @@
 # Installed 0.18.0
 
-The user authorized installation on 2026-09-28 after the [0.18.0 source acceptance](buddy-settings-schema13-0.18.0.md). The skill was built from `cc1da88` on `socu/buddy-core` with `packaging/build-skill.py` into a private staging directory and installed with that build's own `scripts/buddy install`. The Claude Code Host ran the install outside its sandbox with node 24's `bin` directory first on `PATH`, so the upgraded service inherits a `PATH` whose `codex` (codex-cli 0.157.0) passes the Codex adapter's admission; this is an interim measure until the harness discovery proposed in [ADR-017](../decisions/017-local-installation-and-harness-discovery.md) exists.
+The developer authorized installation on 2026-09-28 after the [0.18.0 source acceptance](buddy-settings-schema13-0.18.0.md). The skill was built from `cc1da88` on `socu/buddy-core` with `packaging/build-skill.py` into a private staging directory and installed with that build's own `scripts/buddy install`. The Claude Code Host ran the install outside its sandbox with node 24's `bin` directory first on `PATH`, so the upgraded service inherits a `PATH` whose `codex` (codex-cli 0.157.0) passes the Codex adapter's admission; this is an interim measure until the harness discovery proposed in [ADR-017](../decisions/017-local-installation-and-harness-discovery.md) exists.
 
 ## Result
 

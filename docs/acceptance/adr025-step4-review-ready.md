@@ -1,6 +1,6 @@
 # ADR-025 第四步提交 Host 验收
 
-DSH 已由 Python 控制器经用户已安装的 `dsh --profile acp` 接入公共运行请求、结果与角色接缝；Worker、快速调用和发现复用登记的运行模块，问询使用公共实时接口的合作检查点。旧 Node 运行器、插件、安装资源、YAML bridge 和 Python 旧入口均已删除，没有兼容层或 DSH Python SDK。原 4-B1 使用同一个 run 继续完成工具清单与用量读取，内部验收、固定交付和公共整合见[整合登记](adr025-step34-integration.md)。此记录提交验收，不代表 Claude Code Host 已验收。
+DSH 已由 Python 控制器经开发者已安装的 `dsh --profile acp` 接入公共运行请求、结果与角色接缝；Worker、快速调用和发现复用登记的运行模块，问询使用公共实时接口的合作检查点。旧 Node 运行器、插件、安装资源、YAML bridge 和 Python 旧入口均已删除，没有兼容层或 DSH Python SDK。原 4-B1 使用同一个 run 继续完成工具清单与用量读取，内部验收、固定交付和公共整合见[整合登记](adr025-step34-integration.md)。此记录提交验收，不代表 Claude Code Host 已验收。
 
 最终完整检查基线 `6078488eb553ddadcf5ef15f42a9c110696fb126`；`uv run --frozen python -m hey_my_buddy.cli.checks` 使用默认并行数，实际 4 个并行进程，未传 `--jobs`：Python **2,785 / 175 模块**（既有 skip 1），**434.254 秒，退出 0**，检查前后 HEAD 相同。原始日志与元数据保留在 `<checkout>/tmp/adr025-host/<phase>/step4-full-check2.log` 和 `step4-full-check2-meta.json`。首次完整检查的 15 个失败已按边界迁移旧测试接缝并修正打包断言，原失败记录保留；修正批次的这次完整检查也作为整步结束检查。
 
@@ -14,6 +14,6 @@ DSH 已由 Python 控制器经用户已安装的 `dsh --profile acp` 接入公�
 
 [格式使用表](adr025-step4-format-usage.tsv)逐项收敛第三步留下的 18 组字段：保留有真实生产读取方的部分，删除其余部分与 ModelStartEvidence、DeniedInteraction、UnknownEvents 三类，另删除只剩旧兜底分支读取的 FastPreparation.native。run_contract.py 为 622 行；四个 harness 的生产组装方已适配，保留格式的读取方沿用此前逐字段登记及本表补充，没有为保留字段虚设消费方。公开 CLI schemas 与 C-Two 契约不变，CONTRACT_VERSION 不变；第五步的通道切换尚未开始。
 
-私有分发验证在 `6a800c2` 对冻结锁安装和实际导入核对通过，资源只含 console.assets，旧 runner/YAML bridge 不存在且 sourceLeaks=[]，依赖实际为 pydantic 2.13.5、zstandard 0.25.0。最终完整检查另覆盖实际私有冷启动和打包测试；未安装或升级日常运行时。公共参考文档中旧 Node 行为的语义说明按用户规定没有重写，本步仅作必要路径和命令适配，留外部 Host 按文档所有权处理。
+私有分发验证在 `6a800c2` 对冻结锁安装和实际导入核对通过，资源只含 console.assets，旧 runner/YAML bridge 不存在且 sourceLeaks=[]，依赖实际为 pydantic 2.13.5、zstandard 0.25.0。最终完整检查另覆盖实际私有冷启动和打包测试；未安装或升级日常运行时。公共参考文档中旧 Node 行为的语义说明按开发者规定没有重写，本步仅作必要路径和命令适配，留外部 Host 按文档所有权处理。
 
-全部微任务已完成内部固定交付审查、整合登记和确切路径回收，原始证据保留在忽略的 tmp，Host 整合根暂留供复核。第四步现在停下等待用户转达 Claude Code Host 验收；第三步的外部验收也仍待转达，所有 harness 线验收前不开始第五步。
+全部微任务已完成内部固定交付审查、整合登记和确切路径回收，原始证据保留在忽略的 tmp，Host 整合根暂留供复核。第四步现在停下等待开发者转达 Claude Code Host 验收；第三步的外部验收也仍待转达，所有 harness 线验收前不开始第五步。

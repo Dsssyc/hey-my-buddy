@@ -22,7 +22,7 @@
 
 ## 逐次授权的真实提供方检查
 
-每一行都单独获得用户授权，输入仅为“修正 README 一处标点”的任务和两个候选配置，只选择配置，不执行文件修改。所有会话、state、runtime 和输出均在本次私有目录；没有 Claude 调用。真实结果的可提交摘要见 [原生检查数据](evidence/adr018-fast-routing-native.json)，原始日志保留在被忽略的 `tmp/acceptance-fast-*/`。
+每一行都单独获得开发者授权，输入仅为“修正 README 一处标点”的任务和两个候选配置，只选择配置，不执行文件修改。所有会话、state、runtime 和输出均在本次私有目录；没有 Claude 调用。真实结果的可提交摘要见 [原生检查数据](evidence/adr018-fast-routing-native.json)，原始日志保留在被忽略的 `tmp/acceptance-fast-*/`。
 
 | Harness / 次数 | 耗时 | modelStarted | 结果 |
 | --- | --- | --- | --- |
@@ -50,7 +50,7 @@ DSH 第 3 次成功选择 `dsh / deepseek-official / deepseek-flash / off`，引
 
 ZCode 的真实提供方验收被第 4 次检查的 429 限流阻断；恢复后若需再次实测，仍须逐次授权。其原生离线零工具能力已验证，不能将此写成真实提供方成功。Codex 快速路由未执行真实 ChatGPT 账户模型调用；macOS 原生离线工具检查与既有审阅 Router 认证是两项独立证据。Claude 快速路由未接入，也没有任何 Claude 付费调用。Linux/Windows 的原生快速路径未在真机验证。审阅路由沿用此前 macOS Codex CLI 0.157.0 的认证，未重新运行付费审阅探针；预算数值仍属待校准值。本次未做日常迁移、安装后服务冒烟或实际费用核对。
 
-实现使用 Buddy 工作目标 `obj-78a6585a-e208-44b8-86d9-dec1f127ce98`，四个子任务的固定最终产物均已登记 `verified` 整合并 `accepted`。Host 在整合记录中列出实际调整的产物路径，并完成原生协议、迁移、配额、界面与文档复核；分组提交用于记录各补丁的落点，完整检查针对最终组合源码。产物之外的 Host 补充修正在 `b51eaf1`，源码与参考文档在 `f8701fc` 汇合，之后只补充本验收记录与议程状态。四个受管检出均经 `workspace-cleanup-plan` / `workspace-cleanup-apply` 精确匹配路径后清理，原始补丁、清单与固定 Git 引用保留。本次开发 worktree 保留供用户审阅。
+实现使用 Buddy 工作目标 `obj-78a6585a-e208-44b8-86d9-dec1f127ce98`，四个子任务的固定最终产物均已登记 `verified` 整合并 `accepted`。Host 在整合记录中列出实际调整的产物路径，并完成原生协议、迁移、配额、界面与文档复核；分组提交用于记录各补丁的落点，完整检查针对最终组合源码。产物之外的 Host 补充修正在 `b51eaf1`，源码与参考文档在 `f8701fc` 汇合，之后只补充本验收记录与议程状态。四个受管检出均经 `workspace-cleanup-plan` / `workspace-cleanup-apply` 精确匹配路径后清理，原始补丁、清单与固定 Git 引用保留。本次开发 worktree 保留供开发者审阅。
 
 | 子任务 | runId | 已验证整合记录 | 分组提交 |
 | --- | --- | --- | --- |
@@ -63,4 +63,4 @@ ZCode 的真实提供方验收被第 4 次检查的 429 限流阻断；恢复后
 
 ## 合并后补充的 ZCode 真实检查
 
-用户重置 ZCode 额度并授权后，Claude Code Host 于 2026-09-29 用 `tests/probes/router_fast.py --adapter zcode --provider zai-api --model GLM-5.3-Flash --effort max --execute` 在私有输出目录执行一次：通过，模型已开始，原生零工具证明成立（0 次工具调用），0 次格式纠正，耗时 31.67 秒，选中 `dsh / deepseek-official / deepseek-flash / off` 并引用任务偏好。ZCode 快速路由因此已有真实提供方证据；max 档位在 60 秒时限内但明显慢于 DSH。合并提交上的完整检查（Host 独立运行）通过：1,405 个 Python 测试与 142 个 Node 测试。
+开发者重置 ZCode 额度并授权后，Claude Code Host 于 2026-09-29 用 `tests/probes/router_fast.py --adapter zcode --provider zai-api --model GLM-5.3-Flash --effort max --execute` 在私有输出目录执行一次：通过，模型已开始，原生零工具证明成立（0 次工具调用），0 次格式纠正，耗时 31.67 秒，选中 `dsh / deepseek-official / deepseek-flash / off` 并引用任务偏好。ZCode 快速路由因此已有真实提供方证据；max 档位在 60 秒时限内但明显慢于 DSH。合并提交上的完整检查（Host 独立运行）通过：1,405 个 Python 测试与 142 个 Node 测试。

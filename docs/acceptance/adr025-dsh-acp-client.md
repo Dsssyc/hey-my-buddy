@@ -25,7 +25,7 @@
 
 实测:initialize 回报 protocolVersion 1、agentInfo `deepseek-harness-acp` 0.0.1、sessionCapabilities close/list/resume、authMethods 空,与 F-D1 一致;空会话返回完整配置(model 选择器当前值 `["deepseek-official","deepseek-v4-flash"]`,reasoning_effort `high`),与 F-D1 的默认值一致;`session/close` 无错误;停止证据 leader 退出码 0、组观察 gone、shutdownConfirmed true;连接事实零故障、零未匹配响应;全程约 1.2 秒。启动账目:本次微任务原生 DSH 启动共 1 次(即该握手),模型 prompt 0 次;本执行 harness 自身未启动其他原生 harness。
 
-材料(创建时逐项登记,全部保留,未删除):`<worktree>/tmp/adr025-dsh-acp-client/handshake.py`(驱动脚本)、`handshake-summary.json`(摘要)、`probe-root/dsh-home/`(私有 DSH home:具体化 acp profile、`.anonymous-user-id`、被关闭空会话的记录与投影检查点)、`probe-root/home/`(私有 HOME)、`probe-root/logs/launches.jsonl`(启动账目,含 pid 与环境键名)、`probe-root/logs/frames.jsonl`(原始帧,2,961 字节)。按清理规则未执行任何删除,也不为整洁做额外清理;本微任务未访问用户日常 `~/.dsh`(包装在 spawn 前按路径拒绝,构造上不可能写入),因此未做日常目录快照。
+材料(创建时逐项登记,全部保留,未删除):`<worktree>/tmp/adr025-dsh-acp-client/handshake.py`(驱动脚本)、`handshake-summary.json`(摘要)、`probe-root/dsh-home/`(私有 DSH home:具体化 acp profile、`.anonymous-user-id`、被关闭空会话的记录与投影检查点)、`probe-root/home/`(私有 HOME)、`probe-root/logs/launches.jsonl`(启动账目,含 pid 与环境键名)、`probe-root/logs/frames.jsonl`(原始帧,2,961 字节)。按清理规则未执行任何删除,也不为整洁做额外清理;本微任务未访问开发者日常 `~/.dsh`(包装在 spawn 前按路径拒绝,构造上不可能写入),因此未做日常目录快照。
 
 ## 边界与未验证事实
 

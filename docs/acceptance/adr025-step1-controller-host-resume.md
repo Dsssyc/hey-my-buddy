@@ -1,6 +1,6 @@
 # ADR-025 第一步 1-B：恢复与固定交付审查
 
-2026-10-04，用户转达 Claude Code Host 的独立影响核对：用户临时目录中的 `buddy-1b-*` 已全部不在，其他会话的 430 个 `buddy-*` 条目仍在，此前登记的 12 类数量与前日一致，没有证据表明涉及其他会话或日常数据。用户明确不恢复、不再追查，并授权在原 run `ad9da628-9b48-48b9-97a4-f2d8ae1c0b46` continue。此前的[暂停记录](adr025-step1-controller-host-hold.md)及[微任务披露与撤回](adr025-step1-controller.md)保留。
+2026-10-04，开发者转达 Claude Code Host 的独立影响核对：用户临时目录中的 `buddy-1b-*` 已全部不在，其他会话的 430 个 `buddy-*` 条目仍在，此前登记的 12 类数量与前日一致，没有证据表明涉及其他会话或日常数据。开发者明确不恢复、不再追查，并授权在原 run `ad9da628-9b48-48b9-97a4-f2d8ae1c0b46` continue。此前的[暂停记录](adr025-step1-controller-host-hold.md)及[微任务披露与撤回](adr025-step1-controller.md)保留。
 
 本次是原 run 的第二次 continue、第三个实施回合。固定 artifact 为 `9d39ba84-54c0-4dc5-bacd-b58f2c165b14`，输出 commit 为 `98f1b8c4959ac307b4e6a231c062088afe3c893b`，从 `da8c25d` 起的累积 patch SHA-256 为 `e140d75e128b559bb6c9c334b6fd348af05383f06e42ab76f4c1fa73a47ce038`。Host 核对累积 10 条变更路径、patch SHA、工作区相应文件与 seal 的逐字一致；原 worktree 的 HEAD 仍为输入基线，交付由 seal 固定，不把未提交工作区误写成干净的输出 commit。
 

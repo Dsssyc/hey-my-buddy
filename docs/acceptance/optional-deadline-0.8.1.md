@@ -1,6 +1,6 @@
 # Optional unbounded execution — 0.8.1
 
-This acceptance record tracks the user's request to let long C-Two Buddy coding work run without an arbitrary overall execution deadline. The source and installed service use contract 0.8.1 with the existing schema 10. The duration choice is explicit per task; the preserved default is 1800 seconds.
+This acceptance record tracks the developer's request to let long C-Two Buddy coding work run without an arbitrary overall execution deadline. The source and installed service use contract 0.8.1 with the existing schema 10. The duration choice is explicit per task; the preserved default is 1800 seconds.
 
 `timeoutSeconds: 0` is the explicit no-deadline value for a coding or ordinary execution task. Omitting it retains the 1800-second default, and a positive value retains the 10–86400-second bound. Internal model-selection calls, CLI `await` windows, worker leases, the optional native version probe, DSH workspace requests and confirmed shutdown retain their independent bounds. ZCode/Codex native calls that share the overall execution deadline may wait indefinitely for a response; their short poll steps still let an explicit cancellation interrupt them. A zero-duration attempt occupies capacity, continues lease renewal and can be cancelled through its Host control. The UI copies this option to a helper approved under a zero-duration parent.
 

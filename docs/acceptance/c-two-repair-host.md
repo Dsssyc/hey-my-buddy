@@ -62,11 +62,11 @@ Host 另作两份公共接线单点变异：运行时恢复借用 SDK 当前域�
 - `protocol.test_rpc_config.ProfileTests.test_explicit_state_and_environment_are_the_only_sources`
 - `protocol.test_rpc_config.ProfileTests.test_missing_state_refuses_before_sdk_or_default_paths`
 
-## R-05 目标识别结论撤回与用户授权返修
+## R-05 目标识别结论撤回与开发者授权返修
 
 Host 复读真实 catalog-loss 日志后发现，前述“额外一处命中拒绝诱饵”的结论不成立：固定测试失败于 `Browser.bootstrap` 的 HTTP 500 / INTERNAL_ERROR 断言，没有明确核对诱饵记录或文件 source/content。这份失败保留，但不计为指定目标变异的有效证据；其余 20 份具体环境/fixture 目标断言不受影响。错误来自 Host 对任意 AssertionError 的宽泛分类，不能写成已完成 R-05 验证。
 
-Host 在原 2-B run 发出不指定配置的 continue，黑板拒绝 `CONFLICT: An accepted goal cannot be continued`，没有创建新回合。用户明确授权例外新增一个经路由的窄微任务 2-E，唯一可写 `tests/python/console/test_console.py` 中的新增 R-05 测试与新 `docs/acceptance/c-two-r05-guard.md`；不碰旧 run、原固定记录与正在由 2-C 独占的 support。目的为在 CLI/HTTP/bootstrap 错误时也明确核对记录拒绝诱饵，正常路径仍验证真实服务与修改后 fixture 重读。旧签收、原失败与撤回全部保留，R-05 等新固定交付与实际目标变异通过后再登记。
+Host 在原 2-B run 发出不指定配置的 continue，黑板拒绝 `CONFLICT: An accepted goal cannot be continued`，没有创建新回合。开发者明确授权例外新增一个经路由的窄微任务 2-E，唯一可写 `tests/python/console/test_console.py` 中的新增 R-05 测试与新 `docs/acceptance/c-two-r05-guard.md`；不碰旧 run、原固定记录与正在由 2-C 独占的 support。目的为在 CLI/HTTP/bootstrap 错误时也明确核对记录拒绝诱饵，正常路径仍验证真实服务与修改后 fixture 重读。旧签收、原失败与撤回全部保留，R-05 等新固定交付与实际目标变异通过后再登记。
 
 首批整合为 `57837f2f`，2-A 的 `int-9f3931f7-e1e3-49e8-9763-cd4d5a40311f`、2-B 的 `int-8b1f1f78-4f9f-400f-85ab-578282f80aca` 均 verified 后内部签收。原始产物日志与脚本已保存在 Host 根的 `retained-c2a-8p4Pqv` / `retained-b2b-iptu2A`，Host 按创建时记录的两个确切任务根整体回收，删除错误未屏蔽；清单在 `repair-ab-task-root-cleanup.json`。受管检出经黑板 cleanup-plan 核对，2-A 已自动 applied，2-B 后续按其 eligible 计划 apply，不手工删除受管检出。
 
@@ -165,7 +165,7 @@ Host 分别对该 core 的归档副本与合并后的源码执行 loader，执�
 
 首次经路由省略全部四项配置，仍用同一宏任务；不指定 buddy 的返修、同 run 的不可重试限流恢复、唯一写入范围、Worker 不删除、共享 refs/stash 禁令、私有根与无真实模型规则全部保留。仅跑五份受影响测试并核对目标单点变异，Host 固定审查后整合。下一次完整检查只在这一批最终代码上运行，保留两次已失败的完整检查；没有安装或重启日常服务/Worker，没有清扫公共 IPC 或日常状态。
 
-2-F run 为 `cc637748-00eb-4f62-9d0d-90b3aae9230b`，基线 `bd89119a0c5b961016f1d6d269267fcd869c8ac2`，路由决定 `dec-88585fc4-9fc7-4ba7-9b7f-6acafd20ccb4` 选 ZCode/zai-api/GLM-5.3-Flash/max。原生结果记录供应方不可重试 429/1310，原生与外层停止均确认；按用户既有许可在原 run 上 continue 改用已完成本批同类工作的 Codex/openai/gpt-6.1-sol/high。第一次配置恢复缺少独立 reason 字段，被 INVALID_ARGUMENT 拒绝，没有形成新回合；补齐 reason、使用新 commandId 后排队成功，两个原始请求/响应保留。没有改变用户路由配置。记录中的“真实模型冒烟 0 次”只指待用户逐次批准的四个 harness 回合；为微任务选择和运行 buddy 所用模型另按各 run 记录。
+2-F run 为 `cc637748-00eb-4f62-9d0d-90b3aae9230b`，基线 `bd89119a0c5b961016f1d6d269267fcd869c8ac2`，路由决定 `dec-88585fc4-9fc7-4ba7-9b7f-6acafd20ccb4` 选 ZCode/zai-api/GLM-5.3-Flash/max。原生结果记录供应方不可重试 429/1310，原生与外层停止均确认；按开发者既有许可在原 run 上 continue 改用已完成本批同类工作的 Codex/openai/gpt-6.1-sol/high。第一次配置恢复缺少独立 reason 字段，被 INVALID_ARGUMENT 拒绝，没有形成新回合；补齐 reason、使用新 commandId 后排队成功，两个原始请求/响应保留。没有改变用户路由配置。记录中的“真实模型冒烟 0 次”只指待开发者逐次批准的四个 harness 回合；为微任务选择和运行 buddy 所用模型另按各 run 记录。
 
 ## 2-F 固定产物的 Host 独立验证
 
@@ -183,7 +183,7 @@ Host 从同一固定源码重新生成六份只改一处的副本，不使用 Wo
 
 原始证据为 `tmp/c073-host/host-2f-{recovery,dsh,zcode,backup,attach}.{json,log}`、`host-2f-target-proofs.json`、六份 `host-2f-red-*.{json,log}`，副本位于本任务私有根。五文件旧编号 108 个全部保留，唯一新增 `protocol.test_transport_attach.RpcReadOnlySetupTests.test_group_readable_ipc_reaches_native_rpc_without_chmod`；整批 loader 为 213 模块、3,474 个编号，3,473 个未变化集合相等，无删除、重复或加载错误。没有改 Worker 的固定记录与范围内代码；本节只登记 Host 的补核事实。
 
-用户明确指定的 `socu/buddy-core@1f7e8b60577cc0b8883aa5dca9e9a1bc392f6ad0` 已合入且祖先核对通过；该分支随后新增两笔文档提交，最新为 `fea30f2964fb15ead6da1a53f8abfc96abc1ee87`，本批按“完整检查前合入最新 core”的原要求合入。增量仅为 Host 维护的 ADR、术语、索引、待办与 AGENTS 文档，没有产品、测试或控制台改动，不冒认本线所写。最终检查将绑定实际实施提交及该 core，保留此前两次完整失败。
+开发者明确指定的 `socu/buddy-core@1f7e8b60577cc0b8883aa5dca9e9a1bc392f6ad0` 已合入且祖先核对通过；该分支随后新增两笔文档提交，最新为 `fea30f2964fb15ead6da1a53f8abfc96abc1ee87`，本批按“完整检查前合入最新 core”的原要求合入。增量仅为 Host 维护的 ADR、术语、索引、待办与 AGENTS 文档，没有产品、测试或控制台改动，不冒认本线所写。最终检查将绑定实际实施提交及该 core，保留此前两次完整失败。
 
 2-F 整合提交为 `3fb2c5c60c762a854b2ae1f3aca87c865c3e5cdb`，黑板登记 `int-5c9ab592-259b-4b13-9001-378a585b9206` 为 verified，原 run 已 accepted/completed。清理计划 `cln-ea16e156-765c-4fba-9ff3-2817efc117fc` 通过 eligibility 和两层停止核对，以计划原样给出的 confirmPath 执行，removed=true；只回收该微任务受管检出，固定产物、原始记录和任务根保留供 Host 复核。没有删除其他会话对象或清扫日常目录。
 
@@ -199,41 +199,41 @@ Host 在现有 localhost 响应夹具中只给测试自有 native wrapper 附加
 
 ## 最终完整检查通过与下一验收关口
 
-最终代码提交 `e0ce3d2be333b1655397920d59a8014162730849`，core 绑定 `40d82d937caa03a058b484ff0f660657cd595945`，用户指定 `1f7e8b60577cc0b8883aa5dca9e9a1bc392f6ad0` 的祖先关系通过。命令为 `uv run --frozen python -m hey_my_buddy.cli.checks`，未带 jobs，使用默认并行数；退出码 0，用时 690.917 秒，213/213 个文件通过，实际执行清单 3,474 项（其中跳过 1 项）。完整检查已涵盖本批五份夹具、真实 C-Two 私有注册/回收/期限、四个 harness 的 localhost 或模拟路径、打包与运行时检查。安装版 ZCode 文件在完整检查中通过，22.2 秒；本次没有对其降低断言、超时或检查范围。
+最终代码提交 `e0ce3d2be333b1655397920d59a8014162730849`，core 绑定 `40d82d937caa03a058b484ff0f660657cd595945`，开发者指定 `1f7e8b60577cc0b8883aa5dca9e9a1bc392f6ad0` 的祖先关系通过。命令为 `uv run --frozen python -m hey_my_buddy.cli.checks`，未带 jobs，使用默认并行数；退出码 0，用时 690.917 秒，213/213 个文件通过，实际执行清单 3,474 项（其中跳过 1 项）。完整检查已涵盖本批五份夹具、真实 C-Two 私有注册/回收/期限、四个 harness 的 localhost 或模拟路径、打包与运行时检查。安装版 ZCode 文件在完整检查中通过，22.2 秒；本次没有对其降低断言、超时或检查范围。
 
 本次运行使用创建时登记确切路径的短私有系统任务根；检查运行器自行创建并收尾自己的 `buddy-checks-<nonce>` 根，Host 外层材料留待验收。开始与结束负载分别约 20.81 / 83.46，仅为运行条件观察，不用作通过或失败解释。原始证据为 `tmp/c073-host/final-short-check-{started,process,result,summary,owned-root}.json` 与 `final-short-check.log`。前三次完整失败全部保留，没有用最终 green 覆盖原结果。记录后的产品、测试、锁文件与控制台差集核对为空；只补记录时不重跑完整检查，仍重跑 `cli.test_repository_hygiene`。
 
-四个最短真实 Worker 回合的脚本与独立批准门已准备，仍未执行（真实付费冒烟 0 次；各微任务委派的模型使用另按各 run 登记）。准备从一次 Codex Worker 回合开始，证明真实 CLI 经私有服务、Worker 主循环、角色、运行模块与 C-Two 通道完成最小交付，留存签收、工具事实与两层停止；其余 ZCode、Claude Code、DSH 及任何重跑都继续逐次请求用户批准。沿用已有登录，不设置 CODEX_HOME 或 CLAUDE_CONFIG_DIR，不读凭据文件，不安装、升级或重启日常运行时。真实冒烟与 Claude Code Host 的最终验收仍是后续关口，不把完整检查退出 0 写成整批已验收。
+四个最短真实 Worker 回合的脚本与独立批准门已准备，仍未执行（真实付费冒烟 0 次；各微任务委派的模型使用另按各 run 登记）。准备从一次 Codex Worker 回合开始，证明真实 CLI 经私有服务、Worker 主循环、角色、运行模块与 C-Two 通道完成最小交付，留存签收、工具事实与两层停止；其余 ZCode、Claude Code、DSH 及任何重跑都继续逐次请求开发者批准。沿用已有登录，不设置 CODEX_HOME 或 CLAUDE_CONFIG_DIR，不读凭据文件，不安装、升级或重启日常运行时。真实冒烟与 Claude Code Host 的最终验收仍是后续关口，不把完整检查退出 0 写成整批已验收。
 
-## 用户单次批准的 Codex 真实 Worker 冒烟
+## 开发者单次批准的 Codex 真实 Worker 冒烟
 
-用户明确回复“批准这一次 Codex 回合”后，Host 才生成与配置、脚本哈希、准备文件、nonce 和确切根绑定的单次批准文件。源提交 `80916e3eb499b9768d90fd7873de8b5e5a7424ab`，与完整检查候选的生产代码相同；实际调用 Codex/openai/gpt-6.1-sol/low，一个 Worker 回合、没有重跑。原生版本 `codex-cli 0.160.1`，回合命令退出 0、32.542 秒。真实角色结果 ok/completed，私有黑板 run `18c33384-8894-4e86-8bc8-412e1f9d00db` 的固定 artifact `551bdc1e-f168-4ddf-baa5-57e2e77b315a` 已 accepted/completed，签收前状态为 delivered；没有以 RPC 排队响应代替交付。
+开发者明确回复“批准这一次 Codex 回合”后，Host 才生成与配置、脚本哈希、准备文件、nonce 和确切根绑定的单次批准文件。源提交 `80916e3eb499b9768d90fd7873de8b5e5a7424ab`，与完整检查候选的生产代码相同；实际调用 Codex/openai/gpt-6.1-sol/low，一个 Worker 回合、没有重跑。原生版本 `codex-cli 0.160.1`，回合命令退出 0、32.542 秒。真实角色结果 ok/completed，私有黑板 run `18c33384-8894-4e86-8bc8-412e1f9d00db` 的固定 artifact `551bdc1e-f168-4ddf-baa5-57e2e77b315a` 已 accepted/completed，签收前状态为 delivered；没有以 RPC 排队响应代替交付。
 
 工具事实 streamComplete=true、toolCalls=0、unsettledToolCalls=0、truncated=false，绑定实际 task/attempt/native session/turn；本探针请求没有任何文件或命令工作，通过既有 Codex 结构化交付接缝完成。控制器 shutdownConfirmed=true、wait 退出 0，原生 stopEvidence.native.groupState=gone；角色的 processState.shutdownConfirmed=true。模型用量来源为 Codex app-server，nativeRecords=1、inputTokens=17,850、cachedInputTokens=0、outputTokens=41、reasoningOutputTokens=0。只报告原生 token 事实，不推算费用。
 
 持有的 Worker 与私有服务均停止，C-Two shutdown.completed=true；服务、Worker、控制器三个实际地址 inspect 均 absent，私有 state/ipc 套接字残留集合为空，没有手工 unlink。证据为 `tmp/c073-host/codex-approved-smoke-{started,result,proof}.json`、`codex-approved-smoke.log` 及 `<CODEX_SMOKE_ROOT>` 中的 run-request、run-result、round、delivered-view、acknowledgment、stop-and-endpoints 与固定原生 evidence；不在记录里写出凭据或完整主目录。没有设置 CODEX_HOME/CLAUDE_CONFIG_DIR，没有读取登录凭据文件内容或操作日常服务/Worker。
 
-结合已定位的 ZCode 临时套接字长度条件，Host 将尚未运行的其余三个入口准备在开始时创建并登记确切路径的短私有系统任务根，脚本逐字节哈希不变；只重做 prepare，modelCalls=0、nativeStarts=0，旧准备材料保留、没有消耗旧批准门。三个真实回合仍各待用户批准，Codex 的这一次授权不延伸到其他 harness 或重跑。
+结合已定位的 ZCode 临时套接字长度条件，Host 将尚未运行的其余三个入口准备在开始时创建并登记确切路径的短私有系统任务根，脚本逐字节哈希不变；只重做 prepare，modelCalls=0、nativeStarts=0，旧准备材料保留、没有消耗旧批准门。三个真实回合仍各待开发者批准，Codex 的这一次授权不延伸到其他 harness 或重跑。
 
-## 用户单次批准的 Claude Code 真实 Worker 冒烟
+## 开发者单次批准的 Claude Code 真实 Worker 冒烟
 
-用户另行回复“批准这一次 Claude 回合”后，Host 仅执行 Claude/anthropic/claude-haiku-4-5-20251001/default 的一次 Worker 回合，没有重跑。源提交 `624fe4bb4358dd0aa677b8ce145b0c62d861b185`，与完整检查候选的生产代码相同；原生版本 `2.1.284 (Claude Code)`，命令退出 0、27.764 秒。实际角色结果 ok/completed，私有 run `45a805b1-6d99-4e91-b539-8e2f71a60496` 的 artifact `bce91ab6-5e03-4cde-b69b-62c3a3d2e1a1` 已 accepted/completed，签收前真实交付为 delivered。
+开发者另行回复“批准这一次 Claude 回合”后，Host 仅执行 Claude/anthropic/claude-haiku-4-5-20251001/default 的一次 Worker 回合，没有重跑。源提交 `624fe4bb4358dd0aa677b8ce145b0c62d861b185`，与完整检查候选的生产代码相同；原生版本 `2.1.284 (Claude Code)`，命令退出 0、27.764 秒。实际角色结果 ok/completed，私有 run `45a805b1-6d99-4e91-b539-8e2f71a60496` 的 artifact `bce91ab6-5e03-4cde-b69b-62c3a3d2e1a1` 已 accepted/completed，签收前真实交付为 delivered。
 
 工具事实 streamComplete=true、toolCalls=0、unsettledToolCalls=0、truncated=false，绑定实际 task/attempt/session；结构化交付沿用既有角色接缝。控制器 shutdownConfirmed=true、退出 0，原生 groupState=gone、nativeExitCode=0，角色两层停止确认。stream-json 用量事实 nativeRecords=1、inputTokens=17,694（含 cachedInputTokens=17,684）、outputTokens=409、reasoningOutputTokens=307。Worker 与私有服务停止、SDK shutdown.completed=true，三个实际端点均 absent，socketResiduals=[]。
 
 原始证据为 `tmp/c073-host/claude-approved-smoke-{started,result,proof}.json` 与 `claude-approved-smoke.log`，固定 run/result/交付/签收/端点材料保留在 `<CLAUDE_SMOKE_ROOT>`；没有设置 CLAUDE_CONFIG_DIR 或 CODEX_HOME，没有改登录或读凭据文件。真实冒烟累计为 Codex 1 次、Claude Code 1 次，DSH 与 ZCode 仍未运行，继续各自请求批准；这一记录更正没有代码变化，按既有规则只重跑仓库卫生检查。
 
-## 用户单次批准的 DSH 真实 Worker 冒烟
+## 开发者单次批准的 DSH 真实 Worker 冒烟
 
-用户另行回复“批准这一次 DSH 回合”后，仅运行 DSH/deepseek-official/deepseek-v4-flash/off 的一个 Worker 回合，没有重跑。源提交 `6f1aa5003917e53d6cf38a5f62e54dc3a80ba311`，生产代码与完整检查候选相同。经已安装 DSH 的 ACP 与现有角色、运行模块、C-Two 通道，命令退出 0、9.616 秒，角色 ok/completed，私有 run `5c03e3a1-7e65-40ab-8e32-fe95c32ee346` 的 artifact `bfd16765-afd5-4cd2-b618-b9f3f8fec591` 已 accepted/completed，签收前状态 delivered；运行模块的 harnessVersion 如实报告 `0.0.1`。
+开发者另行回复“批准这一次 DSH 回合”后，仅运行 DSH/deepseek-official/deepseek-v4-flash/off 的一个 Worker 回合，没有重跑。源提交 `6f1aa5003917e53d6cf38a5f62e54dc3a80ba311`，生产代码与完整检查候选相同。经已安装 DSH 的 ACP 与现有角色、运行模块、C-Two 通道，命令退出 0、9.616 秒，角色 ok/completed，私有 run `5c03e3a1-7e65-40ab-8e32-fe95c32ee346` 的 artifact `bfd16765-afd5-4cd2-b618-b9f3f8fec591` 已 accepted/completed，签收前状态 delivered；运行模块的 harnessVersion 如实报告 `0.0.1`。
 
 工具事实 streamComplete=true、toolCalls=0、unsettledToolCalls=0、truncated=false，绑定实际 task/attempt/session。控制器停止确认、退出 0，原生 groupState=gone、nativeExitCode=0，角色两层停止确认；Worker、私有服务与 SDK 也确认停止。三个实际端点均 absent，socketResiduals=[]，没有项目自行推算套接字路径并删除。私有会话用量 source=dsh/session-record、scope=attempt、completeness=complete、nativeRecords=2、inputTokens=22,737（含 cachedInputTokens=12,032）、outputTokens=150；这里只记录本回合原生报告，没有把多回合累计数当作本回合。
 
-证据为 `tmp/c073-host/dsh-approved-smoke-{started,result,proof}.json`、`dsh-approved-smoke.log` 与 `<DSH_SMOKE_ROOT>` 中的固定交付/签收/用量/停止/端点材料。使用产品既有私有 DSH_HOME 与启动配置，没有改用户交互使用的 DSH、登录或凭据。真实冒烟累计为 Codex、Claude Code、DSH 各一次，ZCode 仍未调用，须另行批准。
+证据为 `tmp/c073-host/dsh-approved-smoke-{started,result,proof}.json`、`dsh-approved-smoke.log` 与 `<DSH_SMOKE_ROOT>` 中的固定交付/签收/用量/停止/端点材料。使用产品既有私有 DSH_HOME 与启动配置，没有改开发者交互使用的 DSH、登录或凭据。真实冒烟累计为 Codex、Claude Code、DSH 各一次，ZCode 仍未调用，须另行批准。
 
 ## 提交整步验收的最终状态
 
-用户对最后一次 ZCode 付费冒烟明确回复“zcode没额度了，这个暂时不调用模型”。本批 ZCode 真实供应方回合为 0 次，因额度不足记为未验证；没有运行已准备入口、改变配置或自动重试。localhost 安装版测试与真实模型回合是不同验证边界，前者已在短根完整检查通过，不能替代后者。真实付费 Worker 冒烟总计 3 次：Codex、Claude Code、DSH 各一次且全通过，没有重跑。
+开发者对最后一次 ZCode 付费冒烟明确回复“zcode没额度了，这个暂时不调用模型”。本批 ZCode 真实供应方回合为 0 次，因额度不足记为未验证；没有运行已准备入口、改变配置或自动重试。localhost 安装版测试与真实模型回合是不同验证边界，前者已在短根完整检查通过，不能替代后者。真实付费 Worker 冒烟总计 3 次：Codex、Claude Code、DSH 各一次且全通过，没有重跑。
 
 最终产品、测试与锁文件仍与全检提交 `e0ce3d2b` 相同；全检 3,474 项（跳过 1）、213/213 文件、690.917 秒、退出 0 的绑定及三次失败原始证据不变。后续只修改记录，仓库卫生检查重跑，不重复全检；控制台相对已合入 core 没有改动，不另跑前端测试。本分支不推送、不安装或升级日常运行时，到这里停止，等 Claude Code Host 整步验收。
 
@@ -241,4 +241,4 @@ Host 在现有 localhost 响应夹具中只给测试自有 native wrapper 附加
 
 最终提交关口 core 又新增两笔 Host 文档更新至 `7b5beabf5f4c1d4fba0390127bf0ad2473bfc08e`，已按确切提交合入；增量只有 AGENTS、术语、索引、ADR 与待办。全检提交之后的 src、tests、pyproject.toml、uv.lock、apps/console 差集再次为空，原全检与真实冒烟绑定仍有效，指定 `1f7e8b60` 仍为祖先。这里仅记录合入来源，没有自行改写 Host 文档；按仅文档变化规则只重跑仓库卫生测试。
 
-用户随后指定 core 停在 `12eb4fcdc2be8d6599c862fae3b9d3a20b40409d`，已一次合入为 `f63dd2097c39c6c65de1b281c49c951c4dbdae4f`。独立核对 `1f7e8b60..12eb4fcd` 仅涉及 docs、CONTEXT、AGENTS，全检候选之后的 src、tests、pyproject.toml、uv.lock、apps/console 差集仍为空。按用户要求不重跑完整检查或真实冒烟，仅跑仓库卫生、源 skill/Host 文档读取与链接、README/operations 读取及构建 skill 的文档链接测试，共 20 项通过、两个命令均退出 0；证据为 `core-12eb4fcd-doc-tests.{json,log}`（17 项，0.317 秒）与 `core-12eb4fcd-shipped-doc-tests.{json,log}`（3 项，0.406 秒）。补本记录后再跑卫生测试。最新合入 core 是 `12eb4fcd`，完整检查的原代码/core 绑定与三次真实冒烟证据不改写，继续停止等整步 Host 验收。
+开发者随后指定 core 停在 `12eb4fcdc2be8d6599c862fae3b9d3a20b40409d`，已一次合入为 `f63dd2097c39c6c65de1b281c49c951c4dbdae4f`。独立核对 `1f7e8b60..12eb4fcd` 仅涉及 docs、CONTEXT、AGENTS，全检候选之后的 src、tests、pyproject.toml、uv.lock、apps/console 差集仍为空。按开发者要求不重跑完整检查或真实冒烟，仅跑仓库卫生、源 skill/Host 文档读取与链接、README/operations 读取及构建 skill 的文档链接测试，共 20 项通过、两个命令均退出 0；证据为 `core-12eb4fcd-doc-tests.{json,log}`（17 项，0.317 秒）与 `core-12eb4fcd-shipped-doc-tests.{json,log}`（3 项，0.406 秒）。补本记录后再跑卫生测试。最新合入 core 是 `12eb4fcd`，完整检查的原代码/core 绑定与三次真实冒烟证据不改写，继续停止等整步 Host 验收。

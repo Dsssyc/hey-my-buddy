@@ -61,7 +61,7 @@
 
 实际 unittest loader 与 AST 清单交叉核对：基线五文件共 108 个编号，最终 109 个；删除差集为空，无重复、无加载错误。各文件数量为 recovery 10→10、DSH 12→12、ZCode inquiry 47→47、backup 12→12、transport attach 27→28。唯一新增为 `protocol.test_transport_attach.RpcReadOnlySetupTests.test_group_readable_ipc_reaches_native_rpc_without_chmod`；没有改名或退出的旧编号。
 
-原 `RpcReadOnlySetupTests.test_unsafe_ipc_is_not_chmodded_or_connected` 保留编号，名称中的 unsafe 现在明确为组/其他人可写（0770/0777），connected 表示 SDK 拒绝实际 I/O 且受控 peer 未收到 RPC。旧“0750 unsafe、项目在 Python 包装 connect 被调用前自行拒绝”断言与用户已接受规则冲突，改为“真实库拒绝可写 IPC，peer 未收到，不 chmod”；此语义变更单独登记，不把 Python connect 是否调用作为原生连接证据。0750 允许性由新增真实受控 RPC 编号接替；其余原防护保留。
+原 `RpcReadOnlySetupTests.test_unsafe_ipc_is_not_chmodded_or_connected` 保留编号，名称中的 unsafe 现在明确为组/其他人可写（0770/0777），connected 表示 SDK 拒绝实际 I/O 且受控 peer 未收到 RPC。旧“0750 unsafe、项目在 Python 包装 connect 被调用前自行拒绝”断言与开发者已接受规则冲突，改为“真实库拒绝可写 IPC，peer 未收到，不 chmod”；此语义变更单独登记，不把 Python connect 是否调用作为原生连接证据。0750 允许性由新增真实受控 RPC 编号接替；其余原防护保留。
 
 loader 命令为 `run.py loader-original /tmp/c2ff-0B4h55/baseline helper:load_ids`（退出 0，0.984 秒）和 `run.py loader-final <checkout> helper:load_ids`（退出 0，0.506 秒），运行测试/模型次数均为 0。完整编号在 `loader-{original,final}-0/ids.json`，差集在 `test-id-delta-{loader,ast}.json`。
 
