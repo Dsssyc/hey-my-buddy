@@ -200,6 +200,33 @@ class WorkflowTestCase(BoardTestCase):
 
 
 class LifecycleTests(WorkflowTestCase):
+    def test_non_model_runs_keep_no_buddy_across_continuation(self):
+        board = self.board()
+        board.call('worker_register', {'workerId': 'w1', 'capabilities': ['command', 'external']})
+        for adapter in ('command', 'external'):
+            with self.subTest(adapter=adapter):
+                extra = {'argv': ['echo', 'fixture']} if adapter == 'command' else {}
+                self.catalog_validation.reset_mock()
+                submitted = self.submit(board, request_id='no-buddy-' + adapter, adapter=adapter,
+                                        cwd=str(self.workdir(adapter)), **extra)
+                self.catalog_validation.assert_not_called()
+                self.assertIsNone(submitted['buddy'])
+                claim = self.claim(board, run_id=submitted['runId'], claim_request_id='first-' + adapter)
+                self.assertIsNone(claim['claim']['turn']['input']['context']['buddy'])
+                self.finish_turn(board, claim)
+                view = board.call('workflow_get', {'runId': submitted['runId']})
+                for override in ({'buddy': BUDDY}, {'reroute': True}):
+                    with self.assertRaises(BoardError) as rejected:
+                        self.continue_run(board, view, command_id='illegal-' + adapter + str(len(override)), **override)
+                    self.assertEqual(rejected.exception.code, 'INVALID_ARGUMENT')
+                continued = self.continue_run(board, view, command_id='continue-' + adapter)
+                self.assertIsNone(continued['buddy'])
+                self.assertEqual(continued['adapter'], adapter)
+                followup = self.claim(board, run_id=submitted['runId'], claim_request_id='second-' + adapter)
+                self.assertIsNone(followup['claim']['turn']['input']['context']['buddy'])
+                self.assertEqual(followup['claim']['task']['spec']['adapter'], adapter)
+                self.finish_turn(board, followup)
+
     def test_outcome_truncation_is_stored_and_returned_with_the_turn(self):
         board = self.board()
         self.register(board)
@@ -240,7 +267,16 @@ class LifecycleTests(WorkflowTestCase):
             self.finish_turn(board, claim)
             view = board.call('workflow_get', {'runId': run_id})
             self.assertIsNone(view['currentTurn']['outcomeTruncated'])
-            self.assertEqual(view['buddy'], {'adapter': 'command'})
+            self.assertIsNone(view['buddy'])
+            self.assertEqual(view['adapter'], 'command')
+            with board.store.db.read() as connection:
+                self.assertIsNone(connection.execute(
+                    'SELECT buddy_json FROM workflow_runs WHERE run_id=?', (run_id,)).fetchone()[0])
+                events = connection.execute(
+                    "SELECT kind,payload_json FROM events WHERE task_id=? AND kind IN "
+                    "('workflow.buddy_selected','workflow.execution_selected')", (run_id,)).fetchall()
+            self.assertEqual([(row[0], json.loads(row[1])) for row in events], [
+                ('workflow.execution_selected', {'source': 'original-explicit', 'adapter': 'command'})])
             self.assertEqual(view['quotaWarnings'], [])
             self.assertEqual(view['task']['adapter'], 'command')
             self.assertTrue(board.call('task_result', {'runId': run_id})['resultDelivered'])

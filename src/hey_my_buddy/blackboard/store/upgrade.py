@@ -7,10 +7,55 @@ import sqlite3
 
 from ...errors import BoardError
 from ...json_codec import canonical_json, decode_strict_json
+from ...protocol.schemas import CODING_HARNESSES
 from .db import FIX_SCHEMA, REMINDER_SCHEMA, SCHEMA_VERSION, utc_now
 
 
 BASE_SCHEMA_VERSION = 21
+_NATIVE_ADAPTERS = {'command', 'external'}
+_BUDDY_FIELDS = {'harness', 'provider', 'model', 'effort'}
+
+
+def migrated_buddy(raw: str, adapter: str) -> str | None:
+    """Convert a schema-21 native selection; retain a complete harness buddy."""
+    try:
+        buddy = decode_strict_json(raw)
+    except (ValueError, RecursionError) as error:
+        raise BoardError('UPGRADE_INVALID_BOARD', f'Invalid workflow buddy JSON: {error}') from error
+    if (isinstance(buddy, dict) and set(buddy) == {'adapter'}
+            and isinstance(buddy['adapter'], str) and buddy['adapter'] in _NATIVE_ADAPTERS):
+        if buddy['adapter'] == adapter:
+            return None
+    elif (isinstance(buddy, dict) and set(buddy) == _BUDDY_FIELDS
+          and all(isinstance(value, str) and value for value in buddy.values())
+          and buddy['harness'] in CODING_HARNESSES
+          and buddy['harness'] == adapter):
+        return raw
+    raise BoardError('UPGRADE_INVALID_BOARD', 'Invalid workflow buddy or task adapter binding')
+
+
+def migrated_selection_event(raw: str, adapter: str) -> tuple[str, str]:
+    """Return the exact kind and payload expected for a schema-21 selection event."""
+    if adapter is None:
+        raise BoardError('UPGRADE_INVALID_BOARD', 'Workflow selection event has no task binding')
+    try:
+        payload = decode_strict_json(raw)
+    except (ValueError, RecursionError) as error:
+        raise BoardError('UPGRADE_INVALID_BOARD', f'Invalid workflow selection event JSON: {error}') from error
+    if (not isinstance(payload, dict) or set(payload) != {'source', 'buddy', 'buddyRevision'}
+            or payload['source'] != 'original-explicit' or type(payload['buddyRevision']) is not int
+            or payload['buddyRevision'] != 1):
+        raise BoardError('UPGRADE_INVALID_BOARD', 'Invalid workflow selection event structure')
+    buddy = payload['buddy']
+    if not isinstance(buddy, dict):
+        raise BoardError('UPGRADE_INVALID_BOARD', 'Invalid workflow selection event buddy')
+    if (set(buddy) == {'adapter'} and isinstance(buddy['adapter'], str)
+            and buddy['adapter'] in _NATIVE_ADAPTERS and buddy['adapter'] == adapter):
+        return 'workflow.execution_selected', canonical_json({'source': 'original-explicit', 'adapter': adapter})
+    if (set(buddy) == _BUDDY_FIELDS and all(isinstance(value, str) and value for value in buddy.values())
+            and buddy['harness'] in CODING_HARNESSES):
+        return 'workflow.buddy_selected', raw
+    raise BoardError('UPGRADE_INVALID_BOARD', 'Invalid workflow selection event task adapter binding')
 
 
 def migrated_stop_response(raw: str) -> str:
@@ -65,6 +110,20 @@ def migrate(state: Path) -> None:
             ).fetchall():
                 connection.execute('UPDATE commands SET response_json=? WHERE command_id=?',
                                    (migrated_stop_response(raw), command_id))
+            for run_id, raw, adapter in connection.execute(
+                'SELECT r.run_id,r.buddy_json,t.adapter FROM workflow_runs r JOIN tasks t ON t.task_id=r.run_id'
+                ' WHERE r.buddy_json IS NOT NULL'
+            ).fetchall():
+                converted = migrated_buddy(raw, adapter)
+                if converted != raw:
+                    connection.execute('UPDATE workflow_runs SET buddy_json=? WHERE run_id=?', (converted, run_id))
+            for seq, raw, adapter in connection.execute(
+                "SELECT e.seq,e.payload_json,t.adapter FROM events e LEFT JOIN tasks t ON t.task_id=e.task_id"
+                " WHERE e.kind='workflow.buddy_selected'"
+            ).fetchall():
+                kind, payload = migrated_selection_event(raw, adapter)
+                if kind != 'workflow.buddy_selected':
+                    connection.execute('UPDATE events SET kind=?,payload_json=? WHERE seq=?', (kind, payload, seq))
             for statement in (REMINDER_SCHEMA + FIX_SCHEMA).split(';'):
                 if statement.strip():
                     connection.execute(statement)

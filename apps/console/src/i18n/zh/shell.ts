@@ -1,6 +1,7 @@
 /** The frame around every page: top bar, connection state and the startup screen. */
 export default {
   identifier: { copy: "复制标识 {{value}}", copied: "已复制", failed: "复制失败，请重试" },
+  execution: { command: "命令执行", external: "外部执行", buddy: "执行 buddy", pendingBuddy: "执行 buddy 待确定", unrecordedBuddy: "buddy 未记录", type: "执行类型" },
   actor: {
     delegator: "委派方：{{source}}", originalDelegator: "原始委派方", unrecordedDelegator: "未记录委派方",
     currentOwner: "当前管理方",

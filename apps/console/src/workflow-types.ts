@@ -134,6 +134,8 @@ export type IntegrationRecord = {
 };
 export type Workflow = {
   runId: string;
+  /** Recorded execution adapter; command and external executions have no buddy. */
+  adapter?: string;
   hostId: string | null;
   ownerGeneration: number;
   revision: number;

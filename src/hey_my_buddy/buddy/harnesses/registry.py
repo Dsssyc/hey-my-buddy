@@ -227,18 +227,13 @@ def require_permission(buddy: dict | None, access: str) -> None:
     """
     if buddy is None:
         return
-    identity_key = "adapter" if buddy.get("adapter") in ("command", "external") else "harness"
-    name = buddy[identity_key]
+    name = buddy["harness"]
     capability = f"permission:{access}"
-    if name in ("command", "external") and access in ("read", "write"):
-        return
     native = adapters().get(name)
     if native is not None and capability in native.capabilities:
         return
-    reason = ("This harness does not support the requested Worker permission" if identity_key == "harness"
-              else "This adapter does not support the requested Worker permission")
-    raise BoardError("UNSUPPORTED_CAPABILITY", reason,
-                     **{identity_key: name}, access=access, requiredCapability=capability,
+    raise BoardError("UNSUPPORTED_CAPABILITY", "This harness does not support the requested Worker permission",
+                     harness=name, access=access, requiredCapability=capability,
                      missingCapabilities=[capability])
 
 

@@ -263,7 +263,7 @@ def digest(tag: str) -> str:
 # Fixture records (the payloads themselves, not a board simulation)            #
 # --------------------------------------------------------------------------- #
 def attempt(attempt_id: str, turn_index: int, state: str, confirmed: bool, started: str,
-            finished: str | None, buddy: dict, *, error: str | None = None,
+            finished: str | None, buddy: dict | None, *, error: str | None = None,
             result: str | None = None, disposition: str = "completed",
             usage: dict | None = None) -> dict:
     # `result` is the stored worker receipt: {"status", "result", "shutdownConfirmed"},
@@ -818,6 +818,26 @@ def build_runs() -> dict[str, dict]:
                      marker(instant(5, 25), "reject", actor=host_actor(HOST_B), artifact_id="art-c1h", summary="rejected")],
             artifacts=[artifact("art-c1h", "att-c1h-1", digest("c1h-output")[:40],
                                 "/synthetic-preview/diffs/c1h.diff", ["apps/console/src/task-title.ts"])]),
+        run("preview-run-c1-command", project="beta", group=None, parent=STANDALONE,
+            title="运行本地检查命令", title_source="title", task_text="运行合成预览的本地检查。",
+            created=instant(5, 7), updated=instant(5, 13), state="delivered", status="completed",
+            category="review", buddy=None, adapter="command", result=True,
+            result_summary="合成预览：命令已完成。",
+            spans=[span("execution:att-c1-command", "execution", instant(5, 9), instant(5, 12), "finished",
+                        attempt_id="att-c1-command", confirmed=True, generation=1,
+                        disposition="completed", turn_index=1)],
+            attempts=[attempt("att-c1-command", 1, "finished", True, instant(5, 9), instant(5, 12), None,
+                              result="合成预览：命令已完成。")]),
+        run("preview-run-c1-external", project="beta", group=None, parent=STANDALONE,
+            title="记录外部执行结果", title_source="title", task_text="核对外部执行的合成记录。",
+            created=instant(5, 14), updated=instant(5, 22), state="delivered", status="completed",
+            category="review", buddy=None, adapter="external", result=True,
+            result_summary="合成预览：外部执行已记录。",
+            spans=[span("execution:att-c1-external", "execution", instant(5, 16), instant(5, 21), "finished",
+                        attempt_id="att-c1-external", confirmed=True, generation=1,
+                        disposition="completed", turn_index=1)],
+            attempts=[attempt("att-c1-external", 1, "finished", True, instant(5, 16), instant(5, 21), None,
+                              result="合成预览：外部执行已记录。")]),
     ]
     # Internal routing rows: real task history, never macro task rows.
     for owner, record in (("preview-run-a1", ROUTING_A1), ("preview-run-a2", ROUTING_A2),
@@ -865,6 +885,8 @@ def build_runs() -> dict[str, dict]:
             item["createdAt"] = entry["updatedAt"]
         for item in entry["spans"]:
             item["runId"] = entry["runId"]
+            if item["kind"] == "execution":
+                item["adapter"] = entry["adapter"] or (item["buddy"] or entry["buddy"] or {}).get("harness", "dsh")
     order = [entry["runId"] for entry in runs]
     sequence = sorted(((entry["runId"], item) for entry in runs for item in entry["markers"]),
                       key=lambda pair: (pair[1]["at"], pair[0], pair[1]["kind"]))
@@ -1055,13 +1077,14 @@ def workflow_view(entry: dict) -> dict:
                  "integrator": False, "autoContinue": True, "requestId": child["requestId"]}
                 for child in FIXTURES["runs"].values()
                 if child["kind"] in ("micro-task", "helper") and child["parentRunId"] == entry["runId"]]
-    routing = entry["routing"] or {"status": "explicit" if entry["buddy"] else "needs-host",
+    routing = entry["routing"] or {"status": "explicit" if entry["buddy"] or entry["adapter"] in ("command", "external") else "needs-host",
                                    "decisionId": None, "taskId": None, "constraints": {},
                                    "source": None}
     return {
         "runId": entry["runId"], "taskId": entry["runId"],
         "requestId": entry["requestId"], "title": entry["title"], "macroTaskId": entry["group"],
         "hostId": entry["currentHostId"], "ownerGeneration": 1, "revision": entry["revision"],
+        "adapter": entry["adapter"] or (entry["buddy"] or {}).get("harness", "dsh"),
         "state": entry["state"], "status": entry["status"],
         "queueReason": "awaiting-owned" if entry["state"] == "waiting-owned" else None,
         "awaitingHost": entry["state"] == "awaiting-host", "waitReason": wait_reason(entry),
@@ -1124,6 +1147,7 @@ def timeline_row(entry: dict, depth: int) -> dict:
         "createdAt": entry["createdAt"], "state": entry["state"], "status": entry["status"],
         "category": entry["category"], "shutdownConfirmed": len(attempts) == confirmed, "depth": depth,
         "kind": entry["kind"],
+        "adapter": entry["adapter"] or (entry["buddy"] or {}).get("harness", "dsh"),
         "buddy": ({key: buddy.get(key) for key in ("harness", "provider", "model", "effort")}
                           if buddy else None),
         "acceptedAt": entry["acceptedAt"], "acceptanceVerdict": entry["acceptanceVerdict"],
@@ -2133,9 +2157,20 @@ def validate_fixtures() -> list[str]:
     if not all(row["taskSummary"] == task_first_line(FIXTURES["runs"][row["runId"]]["task"])
                for row in timeline["rows"]):
         problems.append("taskSummary must be the first nonempty task line")
-    standalone_rows = macro_task_timeline({"macroTaskId": STANDALONE_GROUP}, "normal")["rows"]
+    standalone = macro_task_timeline({"macroTaskId": STANDALONE_GROUP}, "normal")
+    standalone_rows = standalone["rows"]
     if not any(row["taskSummary"] is None for row in standalone_rows):
         problems.append("the blank-task helper must keep a null taskSummary")
+    for adapter in ("command", "external"):
+        run_id = f"preview-run-c1-{adapter}"
+        view = workflow_get({"runId": run_id})
+        row = next(row for row in standalone_rows if row["runId"] == run_id)
+        execution = next(span for span in standalone["spans"] if span["runId"] == run_id and span["kind"] == "execution")
+        if (view["adapter"] != adapter or view["buddy"] is not None
+                or view["task"]["adapter"] != adapter or view["task"]["lineage"]["buddy"] is not None
+                or row["adapter"] != adapter or row["buddy"] is not None
+                or execution["adapter"] != adapter or execution["buddy"] is not None):
+            problems.append(f"{run_id}: infrastructure execution must retain adapter and null buddy")
     categories = {entry["category"] for entry in FIXTURES["runs"].values() if entry["kind"] in ("micro-task", "helper")}
     if categories != {"host", "active", "review", "ended"}:
         problems.append(f"fixture categories are {sorted(categories)}")

@@ -194,6 +194,8 @@ export type TaskQuery = {
 export type QuotaFailure = { code: "quota-exceeded" | "rate-limited"; nativeCode?: string; source?: string };
 
 export type Task = {
+  /** Recorded execution adapter; command and external executions have no buddy. */
+  adapter?: string;
   quotaFailure?: QuotaFailure | null;
   runId: string;
   /** Whether the assigned buddy may delegate work from this micro task. */

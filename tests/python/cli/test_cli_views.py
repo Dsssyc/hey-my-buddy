@@ -212,7 +212,7 @@ class CliViewTests(RealWorkspaceTestCase):
 class ProjectionUnitTests(unittest.TestCase):
     def test_unconfirmed_shutdown_and_truncation_are_kept(self):
         view = {
-            "task": {"lineage": {"kind": "micro-task"}}, "runId": "r", "revision": 3, "state": "running", "status": "running",
+            "task": {"lineage": {"kind": "micro-task"}}, "runId": "r", "revision": 3, "state": "running", "status": "running", "buddy": None,
             "awaitingHost": False, "shutdown": {"selfConfirmed": True, "descendantsConfirmed": False,
                                                  "unconfirmedCount": 2, "unconfirmedRunIds": ["a", "b"],
                                                  "truncated": False},
@@ -234,13 +234,13 @@ class ProjectionUnitTests(unittest.TestCase):
                 {"buddyId": "dsh:p:m:off", "harness": "dsh", "provider": "p", "model": "m",
                  "effort": "off", "reason": "user excluded"}]},
         }
-        brief = cli_views.micro_task_brief({"task": {"lineage": {"kind": "micro-task"}}, "runId": "r", "revision": 1,
+        brief = cli_views.micro_task_brief({"task": {"lineage": {"kind": "micro-task"}}, "runId": "r", "revision": 1, "buddy": None,
                                           "state": "executing", "status": "queued", "routing": routing})
         self.assertEqual(brief["routing"]["constraints"], {"harness": "dsh"})
         self.assertEqual(brief["routing"]["requiredCapabilities"], ["execution:dsh"])
         self.assertEqual(brief["routing"]["routingBasis"], routing["routingBasis"])
         # A route recorded before the frozen basis stays unchanged and compact.
-        legacy = cli_views.micro_task_brief({"task": {"lineage": {"kind": "micro-task"}}, "runId": "r", "revision": 1,
+        legacy = cli_views.micro_task_brief({"task": {"lineage": {"kind": "micro-task"}}, "runId": "r", "revision": 1, "buddy": None,
                                            "state": "executing", "status": "queued",
                                            "routing": {"status": "completed", "source": "model-selection",
                                                        "reason": "chosen", "constraints": {}}})
@@ -248,7 +248,7 @@ class ProjectionUnitTests(unittest.TestCase):
         self.assertNotIn("constraints", legacy["routing"])
 
     def test_unknown_receipt_fields_are_not_dropped(self):
-        receipt = cli_views.micro_task_receipt({"task": {"lineage": {"kind": "micro-task"}}, "runId": "r", "revision": 1, "newField": {"x": 1}})
+        receipt = cli_views.micro_task_receipt({"task": {"lineage": {"kind": "micro-task"}}, "runId": "r", "revision": 1, "buddy": None, "newField": {"x": 1}})
         self.assertEqual(receipt["newField"], {"x": 1})
 
     def test_error_envelopes_and_unprojected_commands_pass_through(self):

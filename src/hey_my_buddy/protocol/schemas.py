@@ -634,7 +634,7 @@ def normalize_workflow_spec(params: dict) -> dict:
 
 def buddy_constraints(spec: dict) -> dict:
     if spec.get("adapter") in ("command", "external"):
-        return {"adapter": spec["adapter"]}
+        return {}
     return {key: spec[key] for key in BUDDY_FIELDS if key in spec}
 
 

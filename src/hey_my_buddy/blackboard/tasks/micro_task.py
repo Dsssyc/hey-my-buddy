@@ -58,8 +58,8 @@ _CURSOR_PATTERN = re.compile(r"^[A-Za-z0-9_-]{1,%d}$" % CURSOR_MAX_LENGTH)
 _TIMESTAMP_PATTERN = re.compile(r"^[0-9A-Za-z:.+-]{1,64}$")
 
 #: Columns matched by ``query``. The original project path and both Host
-#: attributions are part of the contract; the execution adapter/model is the
-#: resolved buddy with the task's effective adapter as fallback.
+#: attributions are part of the contract; execution uses the task's effective
+#: adapter and the resolved model.
 QUERY_COLUMNS = (
     "task_id",
     "task",
@@ -214,7 +214,7 @@ SELECT
         json_extract(root_run.workspace_manifest_json, '$.snapshot.repositoryPath')
     ) AS project_repository_path,
     COALESCE(json_extract(r.micro_task_json, '$.task'), json_extract(t.spec_json, '$.task')) AS task,
-    COALESCE(json_extract(r.buddy_json, '$.harness'), t.adapter) AS effective_adapter,
+    t.adapter AS effective_adapter,
     COALESCE(json_extract(r.buddy_json, '$.model'), json_extract(t.spec_json, '$.model'))
         AS effective_model,
     EXISTS(

@@ -572,6 +572,7 @@ def _timeline_row(connection, row, depth: int) -> dict:
         "leadOwnership": metadata["leadOwnership"],
         "rootLeadRunId": metadata["rootLeadRunId"],
         "buddy": _full_buddy(metadata["buddy"]),
+        "adapter": row["adapter"],
         "acceptedAt": row["accepted_at"],
         "acceptanceVerdict": row["acceptance_verdict"],
         "reviewRejectedAt": row["review_rejected_at"],
@@ -670,13 +671,13 @@ def _run_spans(connection, row) -> list[dict]:
         state, confirmed, uncertain = _attempt_state(attempt)
         buddy = _turn_buddy(attempt["input_json"]) or (
             {"harness": attempt["model_harness"], "provider": attempt["model_provider"], "model": attempt["model_model"]}
-            if attempt["model_harness"] else {"adapter": attempt["adapter"]}
+            if attempt["model_harness"] else None
         )
         spans.append(_span(
             "execution", f"execution:{attempt['attempt_id']}", run_id,
             attempt["started_at"] or attempt["created_at"], attempt["finished_at"] if state == "finished" else None,
             state, attempt_id=attempt["attempt_id"], turn_id=attempt["turn_id"], turn_index=attempt["turn_index"],
-            buddy=buddy, shutdown_confirmed=confirmed, uncertain=uncertain,
+            buddy=buddy, shutdown_confirmed=confirmed, uncertain=uncertain, adapter=attempt["adapter"],
             generation=attempt["generation"], disposition=attempt["disposition"],
             resultStatus=attempt["result_status"],
             tokenUsage=json.loads(attempt["token_usage_json"]) if attempt["token_usage_json"] else None,

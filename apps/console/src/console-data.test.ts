@@ -28,17 +28,21 @@ const taskFixture = (overrides: Partial<Task> = {}): Task => ({
 afterEach(async () => { await i18n.changeLanguage("zh"); });
 
 describe("console grouping and recorded attribution", () => {
-  it("has no model buddy for the command and external adapters and retains pending model assignment", () => {
-    expect(taskExecutor(taskFixture({ spec: { adapter: "command" },
+  it("names infrastructure execution from the recorded adapter and retains pending model assignment", async () => {
+    expect(taskExecutor(taskFixture({ adapter: "command",
       lineage: { kind: "execution", sourceHostId: null, currentHostId: null, parentRunId: null, rootRunId: null,
         rootLeadRunId: null, project: { id: "project", label: "project", path: "~/project" },
-        buddy: { harness: "codex", provider: "openai", model: "gpt-6", effort: "high" } } }))).toBeNull();
-    expect(taskExecutor(taskFixture({ spec: { adapter: "external" } }))).toBeNull();
-    expect(hasModelBuddy(taskFixture(), { adapter: "command" })).toBe(false);
-    expect(hasModelBuddy(taskFixture(), null)).toBe(true);
-    expect(taskExecutor(taskFixture({ spec: { adapter: "codex" } }))).toBe("执行 buddy 待确定");
+        buddy: { harness: "codex", provider: "openai", model: "gpt-6", effort: "high" } } }))).toBe("命令执行");
+    expect(taskExecutor(taskFixture({ adapter: "external" }))).toBe("外部执行");
+    expect(hasModelBuddy(taskFixture({ adapter: "command" }))).toBe(false);
+    expect(hasModelBuddy(taskFixture({ adapter: "external" }))).toBe(false);
+    expect(hasModelBuddy(taskFixture({ adapter: "codex" }))).toBe(true);
+    expect(taskExecutor(taskFixture({ adapter: "codex" }))).toBe("执行 buddy 待确定");
     expect(taskExecutor({ lineage: { buddy: { harness: "codex", model: "gpt-6", effort: "high" } } } as Task))
       .toBe("codex · gpt-6 / high");
+    await i18n.changeLanguage("en");
+    expect(taskExecutor(taskFixture({ adapter: "command" }))).toBe("Command execution");
+    expect(taskExecutor(taskFixture({ adapter: "external" }))).toBe("External execution");
   });
 
   it("keeps the recorded delegator distinct from a later Host owner, including Lead-owned helper trees", async () => {

@@ -1,7 +1,7 @@
 import type { CSSProperties } from "react";
 import type { TimelineSpan } from "./macro-task-types";
 import type { ChronoEntry, BuddyStyle, SpanOutcome, TimelineItem } from "./macro-task-display";
-import { clockTime, buddyLabel, displayTitle, durationText, eventVocab, outcomeLabel, paletteIndex, titleLineTooltip } from "./macro-task-display";
+import { clockTime, displayTitle, durationText, eventVocab, executionLabel, outcomeLabel, paletteIndex, titleLineTooltip } from "./macro-task-display";
 
 const RESULT_GLYPH: Partial<Record<SpanOutcome, string>> = { failed: "✕", cancelled: "⊘", unknown: "?", running: "▸" };
 
@@ -81,7 +81,7 @@ export function MacroTaskChronology({ entries, palette, onSelectItem, onOpenItem
         {swatch}
         <span className="e-title single-line" title={titleLineTooltip(titleLine)}>{entry.item.head} · {helper}{titleLine.text}</span>
         <span className="e-meta">
-          {span.kind === "execution" && <span>{buddyLabel(span.buddy)}</span>}
+          {span.kind === "execution" && <span>{executionLabel(span)}</span>}
           {duration && <span>{duration}{span.endAt == null ? "（至今）" : ""}</span>}
           {span.kind === "routing" ? <span>{outcomeLabel(span, outcome)}</span>
             : resultGlyph && <span>{resultGlyph} {outcomeLabel(span, outcome)}</span>}

@@ -18,7 +18,7 @@ const snapshot = { csrfToken: "fixture", eventCursor: 0, buddies: [] } as unknow
 function commandTask(): Task {
   return { runId, task: "Run checks", status: "cancelled", owner: null, cwd: "~/project", revision: 1,
     createdAt: "2026-10-15T00:00:00Z", acceptedAt: null, acceptanceVerdict: null, reviewRejectedAt: null, reviewRejectionNote: null,
-    spec: { adapter: "command", argv: ["npm", "test"] },
+    adapter: "command", spec: { adapter: "command", argv: ["npm", "test"] },
     activity: { phase: "waiting-host", waitingReason: "the run was cancelled" },
     lineage: { kind: "execution", sourceHostId: null, currentHostId: null, rootRunId: null, rootLeadRunId: null, parentRunId: null,
       project: { id: "project", label: "project", path: "~/project" }, buddy: null } };
@@ -75,16 +75,17 @@ describe("task identifiers and recorded attribution", () => {
     expect(props.onSelectRun).not.toHaveBeenCalled();
   });
 
-  it("omits a command's buddy in the execution list and details without translating its waiting reason", async () => {
+  it("names a command in the execution list and details without translating its waiting reason", async () => {
     const user = userEvent.setup();
     const task = commandTask();
     const view = render(<Tasks snapshot={snapshot} api={apiFor(task)} refresh={vi.fn()} />);
     const row = await screen.findByRole("button", { name: /Run checks/ });
-    expect(within(row).getByText("未记录委派方").getAttribute("title")).toBe("未记录委派方");
-    expect(row.textContent).not.toMatch(/undefined|buddy|→/);
+    expect(within(row).getByText("未记录委派方 → 命令执行").getAttribute("title")).toBe("未记录委派方 → 命令执行");
+    expect(row.textContent).toContain("→ 命令执行");
+    expect(row.textContent).not.toMatch(/undefined|buddy/);
     await user.click(row);
     const header = view.container.querySelector(".assignment-line")!;
-    expect(header.textContent).toBe("委派方：未记录委派方");
+    expect(header.textContent).toBe("委派方：未记录委派方→ 命令执行");
     expect(view.container.querySelector(".detail-panel")!.textContent).not.toMatch(/undefined|执行 buddy 待确定/);
     expect(screen.getByText(/the run was cancelled/)).toBeTruthy();
   });

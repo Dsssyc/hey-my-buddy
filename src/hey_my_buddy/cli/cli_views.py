@@ -191,7 +191,7 @@ def micro_task_brief(view: dict, *, turn_summary: bool = True) -> dict:
             if key in view:
                 brief[key] = view[key]
         return brief
-    brief: dict = {"view": OUTPUT_BRIEF}
+    brief: dict = {"view": OUTPUT_BRIEF, "buddy": view["buddy"]}
     brief.update(
         _pick(
             view,
@@ -213,6 +213,7 @@ def micro_task_brief(view: dict, *, turn_summary: bool = True) -> dict:
                 "access",
                 "accessReason",
                 "buddy",
+                "adapter",
                 "buddyLocked",
                 "delegationAuthority",
                 "leadOwnership",
@@ -347,6 +348,7 @@ _KNOWN_MICRO_TASK_FIELDS = frozenset(
         "accessReason",
         "requestFingerprint",
         "buddy",
+        "adapter",
         "buddyRevision",
         "routing",
         "currentTurn",
@@ -437,6 +439,8 @@ def task_brief(view: dict) -> dict:
         buddy = lineage.get("buddy")
         if isinstance(buddy, dict):
             brief["buddy"] = _pick(buddy, ("harness", "provider", "model", "effort"))
+        else:
+            brief["buddy"] = None
         brief.update(_pick(lineage, ("kind", "parentRunId", "leadOwnership")))
     workflow = view.get("workflow")
     if isinstance(workflow, dict):
@@ -473,6 +477,7 @@ def list_brief(response: dict) -> dict:
         lineage = row.get("lineage")
         if isinstance(lineage, dict):
             buddy = lineage.get("buddy")
+            entry["buddy"] = _pick(buddy, ("harness", "provider", "model", "effort")) if buddy else None
             if isinstance(buddy, dict) and buddy.get("model"):
                 entry["model"] = buddy["model"]
             entry.update(_pick(lineage, ("kind", "parentRunId", "currentHostId", "leadOwnership")))

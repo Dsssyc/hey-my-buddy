@@ -93,28 +93,17 @@ export function taskHost(task: Task) {
   const lead = task.lineage?.leadOwnership?.leadRunId ?? task.lineage?.rootLeadRunId;
   return lead ? actorText({ role: "lead", id: lead }) : i18n.t("shell:actor.unrecordedDelegator");
 }
-/**
- * The buddy record the board keeps for one execution (protocol
- * `buddy_constraints`): the four-field model identity, or — for the command
- * and external adapters, which name no buddy — the bare adapter marker.
- */
-export type RecordedBuddy =
-  | { harness: string; provider: string; model: string; effort: string }
-  | { adapter: string };
-/**
- * Whether one execution has a model buddy. The command and external adapters
- * name no buddy: the spec names the infrastructure adapter and the board's
- * recorded buddy for the execution is the bare adapter marker, never a model
- * identity; a model execution without an assigned buddy yet still gets one.
- * The execution list and the detail header pass the lineage buddy; the
- * workflow record details pass the workflow's own recorded buddy.
- */
-export function hasModelBuddy(task: Task, buddy: RecordedBuddy | null | undefined) {
-  const adapter = task.spec?.adapter;
-  return adapter !== "command" && adapter !== "external" && (buddy == null || "harness" in buddy);
+/** Infrastructure adapters identify the execution, and carry no model buddy. */
+export function executionTypeText(adapter: string | null | undefined): string | null {
+  if (adapter === "command" || adapter === "external") return i18n.t(`shell:execution.${adapter}`);
+  return null;
+}
+export function hasModelBuddy(task: Pick<Task, "adapter">) {
+  return task.adapter !== "command" && task.adapter !== "external";
 }
 export function taskExecutor(task: Task) {
   const buddy = task.lineage?.buddy;
-  if (!hasModelBuddy(task, buddy)) return null;
-  return buddy ? `${buddy.harness} · ${buddy.model} / ${effortText(buddy.effort)}` : "执行 buddy 待确定";
+  const executionType = executionTypeText(task.adapter);
+  if (executionType) return executionType;
+  return buddy ? `${buddy.harness} · ${buddy.model} / ${effortText(buddy.effort)}` : i18n.t("shell:execution.pendingBuddy");
 }

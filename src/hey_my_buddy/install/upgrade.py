@@ -81,8 +81,8 @@ def idle_snapshot(state: Path, *, event_head: int | None = None) -> dict:
             raise BoardError('UPGRADE_INVALID_BOARD', 'Board integrity or foreign key checks failed')
         snapshot = {**backup.database_snapshot(connection, event_head=event_head), 'schema': int(schema[0])}
         if snapshot['schema'] == board_upgrade.BASE_SCHEMA_VERSION:
-            # Hash complete expected rows: only stop receipts' response_json may
-            # change. Other columns and every other command remain byte-exact.
+            # Hash complete expected rows before conversion. The sparse changes
+            # replace only the declared fields; every other value stays exact.
             cursor = connection.execute("SELECT * FROM commands WHERE kind='macro_task.stop'")
             response_index = [column[0] for column in cursor.description].index('response_json')
             updates = {}
@@ -93,6 +93,38 @@ def idle_snapshot(state: Path, *, event_head: int | None = None) -> dict:
             projected = backup.database_snapshot(connection, event_head=event_head,
                                                  table_names={'commands'}, changes={'commands': (updates, {})})
             snapshot['migratedCommandsFingerprint'] = projected['fingerprints']['commands']
+            cursor = connection.execute(
+                'SELECT r.*,t.adapter FROM workflow_runs r JOIN tasks t ON t.task_id=r.run_id'
+                ' WHERE r.buddy_json IS NOT NULL'
+            )
+            buddy_index = [column[0] for column in cursor.description].index('buddy_json')
+            updates = {}
+            for row in cursor:
+                converted = board_upgrade.migrated_buddy(row[buddy_index], row[-1])
+                if converted != row[buddy_index]:
+                    expected = list(row[:-1])
+                    expected[buddy_index] = converted
+                    updates[row[0]] = expected
+            projected = backup.database_snapshot(connection, event_head=event_head,
+                                                 table_names={'workflow_runs'}, changes={'workflow_runs': (updates, {})})
+            snapshot['migratedWorkflowRunsFingerprint'] = projected['fingerprints']['workflow_runs']
+            cursor = connection.execute(
+                "SELECT e.*,t.adapter FROM events e LEFT JOIN tasks t ON t.task_id=e.task_id"
+                " WHERE e.kind='workflow.buddy_selected' AND e.seq<=?", (snapshot['eventHead'],)
+            )
+            columns = [column[0] for column in cursor.description]
+            kind_index, payload_index = columns.index('kind'), columns.index('payload_json')
+            updates = {}
+            for row in cursor:
+                kind, payload = board_upgrade.migrated_selection_event(row[payload_index], row[-1])
+                if kind != row[kind_index]:
+                    expected = list(row[:-1])
+                    expected[kind_index] = kind
+                    expected[payload_index] = payload
+                    updates[row[0]] = expected
+            projected = backup.database_snapshot(connection, event_head=event_head,
+                                                 table_names={'events'}, changes={'events': (updates, {})})
+            snapshot['migratedEventsFingerprint'] = projected['fingerprints']['events']
         return snapshot
 
 
@@ -298,12 +330,16 @@ def backup_readiness(state: Path) -> dict:
 
 def verify_migrated_snapshot(before: dict, after: dict) -> None:
     """Prove that the pending migration changed only its declared stored form."""
-    retained = set(before['tables']) - {'meta', 'commands'}
+    converted = {'commands': 'migratedCommandsFingerprint',
+                 'workflow_runs': 'migratedWorkflowRunsFingerprint',
+                 'events': 'migratedEventsFingerprint'}
+    retained = set(before['tables']) - {'meta', *converted}
     if (after['schema'] != SCHEMA_VERSION or after['eventHead'] != before['eventHead']
             or set(after['tables']) != set(before['tables']) | {'reminder_settings', 'attempt_reminders', 'workflow_fixes'}
             or after['tables']['meta'] != before['tables']['meta']
-            or after['tables']['commands'] != before['tables']['commands']
-            or after['fingerprints']['commands'] != before['migratedCommandsFingerprint']
+            or any(after['tables'][name] != before['tables'][name]
+                   or after['fingerprints'].get(name) != before[expected]
+                   for name, expected in converted.items())
             or after['tables']['reminder_settings'] != 1 or after['tables']['attempt_reminders'] != 0
             or after['tables']['workflow_fixes'] != 0
             or any(after['tables'][name] != before['tables'][name]
