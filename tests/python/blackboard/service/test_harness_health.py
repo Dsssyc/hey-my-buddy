@@ -773,6 +773,24 @@ class NativeAccountReadFailureTests(BoardTestCase):
         self.assertNotIn('provider', result['billingByProvider']['configured-provider'])
         self.assertEqual(self.events('harness.account_observed')[0]['billing'], result['billingByProvider'])
 
+    def test_missing_or_null_provider_keeps_default_provider_account_facts(self):
+        from hey_my_buddy.buddy.harnesses.codex import account_probe
+        for configured in ({}, {'model_provider': None}):
+            with self.subTest(configured=configured), \
+                 patch.object(account_probe, 'owned_popen'), patch.object(account_probe, 'ProcessHandle') as handle, \
+                 patch.object(account_probe, 'Connection') as connection:
+                with self.board.db.write() as db:
+                    db.execute("DELETE FROM harness_account_reads WHERE adapter='codex'")
+                handle.return_value.shutdown_confirmed.return_value = True
+                connection.return_value.call.side_effect = [
+                    {}, {'account': {'type': 'chatgpt', 'planType': 'plus'}}, {'config': configured}, {},
+                ]
+                result = self.health.refresh('codex', force=True)
+                self.assertEqual([call.args[0] for call in connection.return_value.call.call_args_list],
+                                 ['initialize', 'account/read', 'config/read', 'account/rateLimits/read'])
+                self.assertEqual(set(result['billingByProvider']), {'openai'})
+                self.assertEqual(result['billingByProvider']['openai']['kind'], 'subscription')
+
     def test_unexpected_account_reader_exception_is_not_silently_recorded(self):
         with patch('hey_my_buddy.buddy.harnesses.codex.account_probe.read', side_effect=TypeError('fixture programming error')):
             with self.assertRaises(TypeError):

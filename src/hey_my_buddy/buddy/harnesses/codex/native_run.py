@@ -123,6 +123,7 @@ _REFUSAL_MESSAGE = ("This Buddy Worker cannot approve interactive requests; "
                     "report attention in the structured outcome")
 _REFUSED_REQUEST_KEYS = ("threadId", "turnId", "itemId", "command", "cwd", "reason")
 _INIT_CLIENT = {"clientInfo": {"name": "hey_my_buddy", "title": "Hey My Buddy", "version": "0.9.0"}}
+DEFAULT_MODEL_PROVIDER = "openai"
 _BOUND_NOTIFICATIONS = 128
 #: The one residual bucket when a run sees more distinct unclassified native
 #: event types than the public result carries. The parenthesised name cannot
@@ -520,7 +521,7 @@ def _catalog(connection: Connection, version: str | None, provider: str) -> tupl
 
 def _native_provider(configured: dict) -> str:
     provider = configured.get("model_provider")
-    return provider if isinstance(provider, str) and provider else "unknown"
+    return provider if isinstance(provider, str) and provider else DEFAULT_MODEL_PROVIDER
 
 
 def _discovery_account_status(account) -> str:

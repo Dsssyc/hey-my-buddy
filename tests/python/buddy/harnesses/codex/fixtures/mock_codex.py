@@ -120,13 +120,16 @@ def main():
         print("codex-cli fixture")
         return
     case = os.environ.get("BUDDY_CODEX_FIXTURE_CASE", "ok")
-    provider = "fixture-provider" if case == "custom-provider" else "openai"
-    native_config = {"model_provider": provider, "mcp_servers": {"user-tool": {}},
+    native_config = {"mcp_servers": {"user-tool": {}},
                      "features": {"apps": True}, "web_search": "enabled", "approval_policy": "on-request"}
+    if case == "custom-provider":
+        native_config["model_provider"] = "fixture-provider"
+    elif case == "provider-null":
+        native_config["model_provider"] = None
     user_config = Path(os.environ.get("CODEX_HOME") or Path(os.environ["HOME"]) / ".codex") / "config.toml"
     if user_config.is_file():
         native_config.update(tomllib.loads(user_config.read_text()))
-    provider = native_config["model_provider"]
+    provider = native_config.get("model_provider") or "openai"
     def merge(target, update):
         for key, value in update.items():
             if isinstance(value, dict):

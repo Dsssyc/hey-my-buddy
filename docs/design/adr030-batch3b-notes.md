@@ -68,7 +68,7 @@ Host 已同意本批不清理旧私有主目录，是否清理由用户另定；
 
 ## 供应方、登录与计费
 
-公开目录的 provider 来自同一次原生读取的 `config/read.config.model_provider`，model/list 给模型与努力档位；缺少供应方事实写 `unknown`，不猜 openai。运行请求中的 provider 原样交给原生 thread/start/resume；结果的 requested 保留请求，checked.provider 使用实际 thread 回执。缺少原生回执不编造 checked 值；远端 served-model 的 observed 仍为 null。
+公开目录的 provider 来自同一次原生读取的 `config/read.config.model_provider`，model/list 给模型与努力档位；没有设置或为空时使用官方规定的 Codex 内置默认名 `openai`（第六回合更正）；显式供应方原样保留。运行请求中的 provider 原样交给原生 thread/start/resume；结果的 requested 保留请求，checked.provider 使用实际 thread 回执。缺少原生回执不编造 checked 值；远端 served-model 的 observed 仍为 null。
 
 apiKey 登录的发现状态可确认，其他未知登录类型作为 unknown 账户事实，运行不因此拒绝。OpenAI 的 subscription/metered 标注沿用现有 `codex_account`；其他供应方不因账户类型或供应方名字推断计费，一律 unknown。account_probe 仍返回 `(billing, quota, partial_error)`，billing 增加一次原生读取的 provider；健康接线按该 provider 写 `billingByProvider`，内部 fact 不含冗余 provider；原生 OpenAI rate-limit scope 不再被健康接线强行覆盖。
 
@@ -195,3 +195,15 @@ Host 随后在真实 codex-cli 0.162.1 上做了无模型探测，只发送 init
 最终模拟 app-server 分别采用 Host 实测的 thread/read 与 thread/resume 拒绝文本，测试断言 native-resume-unavailable、有界原生消息保留、模型未启动、没有 thread/start；额外采用不同的 MCP 拒绝文本守住规则不依赖措辞，并保留没有回答仍为 deadline 的反例。docs/reference/workers.md 在 Codex 的既有续接描述中补上原生一侧已读不到会话的情况；Host 引用的原句实际位于 ZCode 小节，因此仅补 Codex 小节，ZCode 内容保持原样，没有改变回执或存储形式。
 
 第五回合最终可运行选择共 123 项，29.952 秒，`OK`；使用上述清环境命令与指定只读解释器运行 `buddy.harnesses.codex.test_native_run`、`buddy.harnesses.codex.test_codex_protocol`、`buddy.roles.test_run_execution`、`buddy.roles.test_schema_worker` 四个完整文件，以及已有的 `buddy.harnesses.codex.test_codex_continuation.CodexContinuationTests.test_refused_resume_does_not_erase_the_last_message_before_reconstruction`，`git diff --check` 通过。撤回后的 protocol.py、run_execution.py、test_codex.py、test_codex_protocol.py 均与第三候选对应文件一致；源码与测试内已无第四回合同回合重建的名称和模拟分支。test_codex 的完整控制器生命周期测试与 test_codex_continuation 的 test_controller_failure_to_workflow_continue_keeps_the_native_thread 需要本沙盒不允许的 C-Two 监听，仍由 Host 复验。第四回合新增的控制器重建测试已随机制删除，不再列为待运行项目；真实三种路径与完整验收仍由 Host 在得到用户批准后完成。
+
+## 第六回合：未配置供应方时使用 Codex 内置默认名
+
+Host 报告：第五候选 `3c624079` 及其整合树上，受影响的 13 个文件 268 项（含监听控制器）通过；用户批准的四次真实调用——只读审阅、可写 Worker、同一原生会话续接、无工具快速调用——正常结束，前三处真实接口缺陷及线程级通知记录已确认修好，续接拒绝规则与实测一致。这是 Host 对上一候选的验收事实，不是本实现方对本回合源码做的真实检查。
+
+Host 随后在真实 codex-cli 0.162.1 上做了三次无模型探测：空配置目录的 config/read 返回 model_provider=null、model_providers={}；旧读取点因此输出 unknown，使目录供应方和 billingByProvider 键变成 unknown，并丢失已知 ChatGPT 订阅计费；thread/start 若传 modelProvider=unknown 则明确拒绝（Model provider `unknown` not found），不传供应方或传 openai 可建成线程，回执分别给出配置的默认供应方和 openai。这些是 Host 提供的实测事实，本实现方没有读用户配置、建真实线程或发模型回合。
+
+[OpenAI 官方配置参考](https://learn.chatgpt.com/docs/config-file/config-reference)在 model_provider 条目明确给出内置默认名 openai，[官方示例配置](https://learn.chatgpt.com/docs/config-file/config-sample)的 Core Model Selection 同样标明该默认值。因此只在 `_native_provider` 修改缺失/空值解释，使用命名常量 `DEFAULT_MODEL_PROVIDER`；发现、初始化及账户读取沿用同一个读取点，无须创建线程获取默认名。显式配置的供应方原样保留，运行的 checked.provider 仍来自实际线程回执；供应方默认与计费未知是两种不同事实，非 OpenAI 供应方的未知计费规则不改，共用目录与计费函数不改。
+
+两个模拟 app-server 的普通配置不再预填 model_provider，让既有路径也覆盖未设置的普通用户；可写/审阅模拟增加 null 用例，快速夹具的线程回执报告它实际使用的配置供应方。新增回归从真实模拟发现结果取供应方再交给 Worker 与两种 Router，验证默认 openai 与显式自定义名称、billingByProvider 的键及已知订阅/未知计费、账户读取结果、thread/start.modelProvider 和线程 checked.provider；比较元数据读取前后的夹具状态，验证发现与账户读取未启动线程。健康测试覆盖缺失和 null 两种 config/read，原有“账户读取真正失败”的 unknown 断言保留，因为它没有读到配置，不能冒称已知供应方。默认/空值发现回归在修复前输出 unknown 失败，改读取点后通过。
+
+第六回合最终源码的四个完整可运行文件共 142 项，35.141 秒，`OK`；使用上述清环境命令与指定只读解释器运行 `buddy.harnesses.codex.test_native_run`、`buddy.harnesses.codex.test_codex_protocol`、`blackboard.service.test_harness_health`、`protocol.test_billing_quota`，`git diff --check` 通过。夹具影响的 `buddy.harnesses.codex.test_codex`、`buddy.harnesses.codex.test_no_tool_codex` 与 `buddy.harnesses.codex.test_codex_tool_evidence.CodexReviewToolEvidenceTests` 的控制器路径受已知 C-Two 监听限制，仍交由 Host 复验。本回合不重新探测真实用户配置或真实原生线程。

@@ -23,7 +23,7 @@ def main():
         return
     case = os.environ.get("BUDDY_CODEX_FIXTURE_CASE", "ok")
     turns = 0
-    native_config = {"model_provider": "openai", "mcp_servers": {"user-tool": {}},
+    native_config = {"mcp_servers": {"user-tool": {}},
                      "web_search": "enabled", "approval_policy": "on-request"}
     user_config = Path(os.environ.get("CODEX_HOME") or Path(os.environ["HOME"]) / ".codex") / "config.toml"
     if user_config.is_file():
@@ -49,7 +49,7 @@ def main():
         if method == "initialize":
             send({"id": ident, "result": {}})
         elif method == "account/read":
-            send({"id": ident, "result": {"account": {"type": "chatgpt"}}})
+            send({"id": ident, "result": {"account": {"type": "chatgpt", "planType": "plus"}}})
         elif method == "model/list":
             entry = {"model": "fixture-model", "displayName": "Fixture",
                      "supportedReasoningEfforts": [{"reasoningEffort": "low"}]}
@@ -69,7 +69,7 @@ def main():
             trace.write_text(json.dumps({"thread": params, "home": os.environ["CODEX_HOME"], "userHome": os.environ["HOME"], "argv": sys.argv}))
             send({"id": ident, "result": {"thread": {"id": "thread-1", "cwd": params["cwd"], "environments": []},
                 "model": "other" if case == "wrong-model" else params["model"],
-                "modelProvider": "openai", "approvalPolicy": "never"}})
+                "modelProvider": native_config.get("model_provider") or "openai", "approvalPolicy": "never"}})
         elif method == "turn/start":
             turns += 1
             trace = Path(os.environ["BUDDY_CODEX_FIXTURE_STATE"])

@@ -140,8 +140,48 @@ class SeamCase(unittest.TestCase):
     def worker_services(self, live=None) -> RunServices:
         return RunServices(live=live)
 
+    def assert_discovered_provider_runs(self, scope, schema):
+        from hey_my_buddy.buddy.harnesses.codex import account_probe
+        for configured, expected in ((None, 'openai'), ('fixture-provider', 'fixture-provider')):
+            with self.subTest(provider=configured, scope=scope):
+                if configured is not None:
+                    (self.home / 'config.toml').write_text(f'model_provider = "{configured}"\n')
+                trace = Path(os.environ['BUDDY_CODEX_FIXTURE_STATE'])
+                before = trace.read_bytes() if trace.exists() else None
+                marker = uuid.uuid4().hex
+                catalog = run_discovery(cwd=str(self.cwd), invocation_root=self.base / ('discovery-' + marker),
+                                        native_root=self.base / ('discovery-native-' + marker),
+                                        timeout_seconds=8, cancelled=lambda: False)
+                provider = catalog['providers'][0]['provider']
+                self.assertEqual(provider, expected)
+                self.assertEqual(set(catalog['billingByProvider']), {expected})
+                self.assertEqual(catalog['billingByProvider'][expected]['kind'],
+                                 'subscription' if expected == 'openai' else 'unknown')
+                billing, _quota, error = account_probe.read([str(FIXTURE)], dict(os.environ))
+                self.assertIsNone(error)
+                self.assertEqual(billing['provider'], expected)
+                self.assertEqual(billing['kind'], 'subscription' if expected == 'openai' else 'unknown')
+                self.assertEqual(trace.read_bytes() if trace.exists() else None, before,
+                                 'Discovery and account reads must not create a thread')
+                request = self.request(tool_scope=scope, output_schema=schema, prompt='Choose',
+                                       turn_id='turn-check' if scope == 'write' else None,
+                                       input_sha256='a' * 64 if scope == 'write' else None)
+                request = request.model_copy(update={'configuration': RunConfiguration(
+                    provider=provider, model='fixture-model', effort='low')})
+                result = run(request, observer=lambda _facts: FEEDBACK_CONTINUE,
+                             services=RunServices(), cancelled=lambda: False)
+                self.assertEqual(result.end.status, 'ok', result.end.message)
+                self.assertEqual(result.configuration.checked.provider.value, expected)
+                state = json.loads(trace.read_text())
+                params = (state['thread'] if scope == 'none'
+                          else state['threads'][result.native_identity.session_id]['start'])
+                self.assertEqual(params['modelProvider'], expected)
+
 
 class FastSeamTests(SeamCase):
+    def test_default_and_configured_provider_reach_fast_thread_start(self):
+        self.assert_discovered_provider_runs('none', FAST_SCHEMA)
+
     def setUp(self):
         super().setUp()
         FIXTURE.chmod(0o755)
@@ -486,6 +526,9 @@ class ReviewCorrection:
 
 
 class ReviewSeamTests(CodexSeamCase):
+    def test_default_and_configured_provider_reach_review_thread_start(self):
+        self.assert_discovered_provider_runs('read', REVIEW_SCHEMA)
+
     def test_review_cli_permission_table_preserves_dots_spaces_and_quotes_in_checkout(self):
         import tomllib
         self.cwd = self.base / '.managed worktree' / 'space "quote"' / 'checkout'
@@ -618,6 +661,17 @@ class ReviewSeamTests(CodexSeamCase):
 
 
 class WorkerSeamTests(CodexSeamCase):
+    def test_default_and_configured_provider_reach_worker_thread_start(self):
+        self.assert_discovered_provider_runs('write', OUTCOME_SCHEMA)
+
+    def test_null_native_provider_uses_codex_default_in_discovery(self):
+        self.set_case('provider-null')
+        catalog = run_discovery(cwd=str(self.cwd), invocation_root=self.base / 'null-discovery',
+                                native_root=self.base / 'null-native', timeout_seconds=8, cancelled=lambda: False)
+        self.assertEqual(catalog['providers'][0]['provider'], 'openai')
+        self.assertEqual(set(catalog['billingByProvider']), {'openai'})
+        self.assertEqual(catalog['billingByProvider']['openai']['kind'], 'subscription')
+
     def test_native_failed_completion_keeps_error_attribution_without_quota_guess(self):
         from hey_my_buddy.buddy.roles.run_execution import _worker_facts
         result = self.worker_run("schema-failure")
