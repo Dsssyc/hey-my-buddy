@@ -448,6 +448,20 @@ class FastSeamTests(SeamCase):
         trace = json.loads(Path(os.environ["BUDDY_CODEX_FIXTURE_STATE"]).read_text())
         self.assertNotIn("turns", trace)
 
+    def test_fast_provider_mismatch_refuses_and_unreadable_provider_continues(self):
+        for case in ("provider-wrong", "provider-missing", "provider-unreadable"):
+            with self.subTest(case=case):
+                result = self.fast_run(case, FastCorrection(FAST_SCHEMA, "Pick a profile"))
+                trace = json.loads(Path(os.environ["BUDDY_CODEX_FIXTURE_STATE"]).read_text())
+                if case == "provider-wrong":
+                    self.assertEqual(result.end.reason_code, "configuration-mismatch")
+                    self.assertIsNone(result.model_started)
+                    self.assertNotIn("turns", trace)
+                else:
+                    self.assertEqual(result.end.status, "ok", result.end.message)
+                    self.assertIsNone(result.configuration.checked.provider)
+                    self.assertIn("modelProvider", native_run.native_evidence(result)["nativeThreadReceipt"])
+
     def test_unfamiliar_startup_items_continue_and_reach_result_facts(self):
         for case, label in (("startup-unknown", "futureThing"),
                             ("startup-unreadable", "turn/start-items-unreadable")):
@@ -466,6 +480,17 @@ class FastSeamTests(SeamCase):
         self.assertEqual(result.end.status, "ok", result.end.message)
         self.assertEqual(result.tool_evidence.value["toolCalls"], 1)
         self.assertTrue(any(facts["toolMarkerFrames"] == 1 for facts in observations))
+
+    def test_unreadable_startup_items_invalidate_fast_tool_evidence(self):
+        from hey_my_buddy.protocol.tool_evidence import judge_tool_evidence
+        for case in ("startup-unreadable", "startup-unreadable-item", "startup-unreadable-type"):
+            with self.subTest(case=case):
+                result = self.fast_run(case, FastCorrection(FAST_SCHEMA, "Pick a profile"),
+                                       observer=lambda _facts: FEEDBACK_CONTINUE)
+                self.assertEqual(result.end.status, "ok", result.end.message)
+                self.assertFalse(result.tool_evidence.value["streamComplete"])
+                self.assertIsNotNone(judge_tool_evidence(result.tool_evidence.value, "fast", False))
+                self.assertIsNotNone(result.native_evidence.unknown_events)
 
     def test_unfamiliar_drain_frame_continues_and_retains_unknown_shape(self):
         result = self.fast_run("late-unknown-frame", FastCorrection(FAST_SCHEMA, "Pick a profile"),
@@ -546,6 +571,37 @@ class CodexSeamCase(SeamCase):
                    observer=observer or (lambda _facts: FEEDBACK_CONTINUE),
                    services=RunServices(),
                    cancelled=lambda: False)
+
+
+class ProviderReceiptSeamTests(CodexSeamCase):
+    def test_worker_and_review_provider_mismatch_refuses_before_model_input(self):
+        for mode, code in (("worker", "configuration-mismatch"), ("review", "readonly-configuration-mismatch")):
+            with self.subTest(mode=mode):
+                result = getattr(self, mode + "_run")("provider-wrong")
+                self.assertEqual(result.end.reason_code, code)
+                self.assertIsNone(result.model_started)
+                trace = json.loads(Path(os.environ["BUDDY_CODEX_FIXTURE_STATE"]).read_text())
+                self.assertTrue(all("turnRequests" not in thread for thread in trace["threads"].values()))
+
+    def test_worker_and_review_unreadable_provider_continues(self):
+        for mode in ("worker", "review"):
+            for case in ("provider-missing", "provider-unreadable"):
+                with self.subTest(mode=mode, case=case):
+                    result = getattr(self, mode + "_run")(case)
+                    self.assertEqual(result.end.status, "ok", result.end.message)
+                    self.assertIsNone(result.configuration.checked.provider)
+
+    def test_resumed_worker_provider_mismatch_refuses_before_another_turn(self):
+        first = self.worker_run("ok")
+        self.assertEqual(first.end.status, "ok", first.end.message)
+        continuation = RunContinuation(mode="native-session", previous_session_id=first.native_identity.session_id)
+        result = self.worker_run("provider-wrong", continuation=continuation)
+        self.assertEqual(result.end.reason_code, "configuration-mismatch")
+        self.assertIsNone(result.model_started)
+        trace = json.loads(Path(os.environ["BUDDY_CODEX_FIXTURE_STATE"]).read_text())
+        thread = trace["threads"][first.native_identity.session_id]
+        self.assertEqual(len(thread["turnRequests"]), 1)
+        self.assertEqual(len(thread["resumeRequests"]), 1)
 
 
 class ReviewCorrection:
@@ -694,19 +750,22 @@ class ReviewSeamTests(CodexSeamCase):
         self.assertEqual(len(result.tool_evidence.value["nativeIdentity"]), 1)
         self.assertEqual(outside.correction_count, 0)
 
-    def test_review_policy_mismatches_continue_with_unverified_actual_readbacks(self):
+    def test_review_policy_mismatches_refuse_with_actual_readbacks_before_a_turn(self):
         for case, check in (("readonly-config-mismatch", "configReadback"),
                             ("readonly-policy-mismatch", "threadReceipt")):
             with self.subTest(case=case):
                 result = self.review_run(case)
-                self.assertEqual(result.end.status, "ok", result.end.message)
-                self.assertTrue(result.model_started)
+                self.assertEqual(result.end.status, "error", result.end.message)
+                self.assertEqual(result.end.reason_code, "readonly-policy-unverified")
+                self.assertIsNone(result.model_started)
                 facts = native_run.native_evidence(result)
                 self.assertEqual(facts["policyCheck"][check]["status"], "unknown")
                 if check == "threadReceipt":
                     self.assertIs(facts["nativePolicy"]["sandbox"]["networkAccess"], True)
                 else:
                     self.assertIs(facts["nativeConfigPolicy"]["permissions"]["buddy-router"]["network"]["enabled"], True)
+                trace = json.loads(Path(os.environ["BUDDY_CODEX_FIXTURE_STATE"]).read_text())
+                self.assertTrue(all("turnRequests" not in thread for thread in trace["threads"].values()))
 
     def test_unreadable_review_model_continues_with_unknown_checked_model(self):
         for case in ("readonly-model-missing", "readonly-model-unreadable"):
@@ -875,10 +934,14 @@ class WorkerSeamTests(CodexSeamCase):
         self.assertIs(error["messageTruncated"], True)
         self.assertNotIn("\ufffd", error["message"])
 
-    def test_unreadable_initial_config_uses_empty_native_config_and_continues(self):
+    def test_unreadable_initial_config_keeps_catalog_unknown_and_continues(self):
         result = self.worker_run("config-unreadable")
         self.assertEqual(result.end.status, "ok", result.end.message)
         self.assertTrue(result.model_started)
+        self.assertIsNone(result.configuration.checked.model)
+        self.assertIsNone(result.configuration.checked.effort)
+        self.assertEqual(native_run.native_evidence(result)["catalogRead"]["discovery"]["reason"], "config-shape-unreadable")
+        self.assertIn("model-catalog", result.native_evidence.unconfirmed)
 
     def test_unreadable_catalog_continues_worker_turn_without_confirming_selection(self):
         result = self.worker_run("bad-catalog")
@@ -1555,6 +1618,20 @@ class DiscoverySeamTests(SeamCase):
         self.assertEqual(catalog["warnings"], [])
         # No thread was ever created: discovery reads metadata only.
         self.assertFalse((self.base / "discovery-trace.json").exists())
+
+    def test_unreadable_config_never_invents_a_catalog_provider(self):
+        for case in ("config-unreadable", "config-result-unreadable", "config-missing"):
+            with self.subTest(case=case):
+                self.set_case(case)
+                catalog = run_discovery(cwd=str(self.cwd), invocation_root=self.base / case,
+                                        native_root=self.base / (case + "-native"),
+                                        timeout_seconds=10, cancelled=lambda: False)
+                self.assertEqual(catalog["discoveries"][0]["status"], "unknown")
+                self.assertEqual(catalog["discoveries"][0]["reason"], "config-shape-unreadable")
+                self.assertEqual(catalog["providers"], [])
+                self.assertEqual(catalog["billingByProvider"], {})
+                self.assertTrue(any("config" in warning.lower() for warning in catalog["warnings"]))
+                self.assertFalse((self.base / "discovery-trace.json").exists())
 
     def test_discovery_unreadable_rpc_result_retains_bounded_fact_without_a_turn(self):
         self.set_case("unreadable-catalog-result")

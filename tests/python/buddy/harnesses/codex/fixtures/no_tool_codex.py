@@ -75,6 +75,12 @@ def main():
                 del receipt["model"]
             elif case == "unreadable-model":
                 receipt["model"] = ["new-native-shape"]
+            if case == "provider-wrong":
+                receipt["modelProvider"] = "different-provider"
+            elif case == "provider-unreadable":
+                receipt["modelProvider"] = []
+            elif case == "provider-missing":
+                del receipt["modelProvider"]
             send({"id": ident, "result": receipt})
         elif method == "turn/start":
             turns += 1
@@ -96,6 +102,8 @@ def main():
                 send({'method':'account/rateLimits/updated','params':{'rateLimits':{}}})
             startup_items = {"startup-unknown": [{"type": "futureThing", "id": "future-1"}],
                              "startup-tool": [{"type": "commandExecution", "id": "command-1"}],
+                             "startup-unreadable-item": [17],
+                             "startup-unreadable-type": [{"type": []}],
                              "startup-unreadable": "new-native-shape"}.get(case)
             send({"id": ident, "result": {"turn": {"id": turn_id, "items": startup_items}}})
             if case in ("thread-notification", "foreign-turn", "foreign-thread"):

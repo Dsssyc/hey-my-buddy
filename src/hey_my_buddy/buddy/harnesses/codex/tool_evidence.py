@@ -94,7 +94,10 @@ class CodexToolEventProjector:
     def _typed(self, method: str, params) -> None:
         item = params.get("item") if isinstance(params, dict) else None
         kind = item.get("type") if isinstance(item, dict) else None
-        if not isinstance(kind, str) or kind in NON_TOOL_ITEMS:
+        if not isinstance(kind, str):
+            self._incomplete(params, tool_name=None, phase=None)
+            return
+        if kind in NON_TOOL_ITEMS:
             return
         if method == "item/updated":
             # A progress frame carries neither a start nor an end; the stream
@@ -107,7 +110,10 @@ class CodexToolEventProjector:
     def _raw(self, params) -> None:
         item = params.get("item") if isinstance(params, dict) else None
         raw_type = item.get("type") if isinstance(item, dict) else None
-        if not isinstance(raw_type, str) or raw_type in NON_TOOL_ITEMS or raw_type == "message":
+        if not isinstance(raw_type, str):
+            self._incomplete(params, tool_name=None, phase=None)
+            return
+        if raw_type in NON_TOOL_ITEMS or raw_type == "message":
             return
         if raw_type in RAW_TOOL_STARTS:
             name = item.get("name") if raw_type in NAMED_RAW_CALLS else None
