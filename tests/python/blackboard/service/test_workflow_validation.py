@@ -9,7 +9,7 @@ from hey_my_buddy.protocol import schemas
 
 class WorkflowValidationTests(WorkflowTestCase):
     def service(self, board):
-        service = BoardService(board.store, token='host', control={}, on_stop=lambda _: {},
+        service = BoardService(board.store, live_registry=board.live_registry, token='host', control={}, on_stop=lambda _: {},
                                on_restart=lambda _: {}, automatic_discovery=True)
         service.harnesses.get = Mock(return_value={'available': False})
         service.harnesses.refresh = Mock()

@@ -29,7 +29,6 @@ from hey_my_buddy.blackboard.tasks.inquiry import (
     read_journal,
 )
 
-from hey_my_buddy.blackboard.service.live_registry import LiveRegistry
 from hey_my_buddy.buddy.harnesses import c_two_live as ctl
 from hey_my_buddy.buddy.harnesses.c_two_live import CTwoLiveChannel, CTwoLiveEndpoint
 from hey_my_buddy.buddy.harnesses.inquiry_bridge import read_inquiry_journal
@@ -248,14 +247,12 @@ def attach_owner(case, board, client, task, adapter):
         return connection
     case.enterContext(mock.patch.object(ctl.cc, "connect", side_effect=connect))
     case.enterContext(mock.patch.object(ctl.cc, "with_call_options", side_effect=with_call_options))
-    # This in-process fixture supplies the daemon-owned live registry.
-    board.store.live_registry = LiveRegistry()
     channel = ExecutionChannel(CTwoLiveChannel(
         identity, HarnessRunLive, name='inquiry fixture', address='fixture://execution-live',
         instance_id=owner.endpoint.instance_id, token=owner.token, state_dir=Path(os.environ["HMB_STATE_DIR"])))
-    board.store.live_registry.bind(attempt['attemptId'], channel)
+    board.live_registry.bind(attempt['attemptId'], channel)
     case._turn_id = identity.turn_id
-    channel = board.store.live_registry.channel_for(board.store.task_get({"runId": task["runId"]})["task"])
+    channel = board.live_registry.channel_for(board.store.task_get({"runId": task["runId"]})["task"])
     case.assertEqual(channel.native.capabilities().inquiry_delivery, "cooperative-checkpoint")
     case.assertEqual(channel.identity, identity)
     return task, attempt, owner
@@ -950,7 +947,7 @@ class ZcodeLiveChannelTests(BoardTestCase):
         client = board.client()
         task, _attempt, owner = self._live_attempt(board, client)
         client.post_question("q-early", "anyone there?", runId=task["runId"])
-        channel = board.store.live_registry.channel_for(board.store.task_get({"runId": task["runId"]})["task"])
+        channel = board.live_registry.channel_for(board.store.task_get({"runId": task["runId"]})["task"])
         snapshot = channel.native.observe(inquiry_id="q-early", timeout_ms=1500)
         self.assertTrue(snapshot.observed)
         self.assertEqual(snapshot.inquiries, ())
@@ -982,8 +979,8 @@ class ZcodeLiveChannelTests(BoardTestCase):
         board = self.board()
         client = board.client()
         task, _attempt, owner = self._live_attempt(board, client)
-        channel = board.store.live_registry.channel_for(board.store.task_get({"runId": task["runId"]})["task"])
-        board.store.live_registry.unbind(owner.identity.attempt_id, channel)
+        channel = board.live_registry.channel_for(board.store.task_get({"runId": task["runId"]})["task"])
+        board.live_registry.unbind(owner.identity.attempt_id, channel)
         # A live source has an answer, but the service must not read it without
         # the holder's binding. There are no native request/credential files.
         owner.append({"inquiryId": "q-unbound", "state": "answered", "answer": {"text": "private answer"}})
@@ -1001,9 +998,9 @@ class ZcodeLiveChannelTests(BoardTestCase):
         client = board.client()
         task, _attempt, owner = self._live_attempt(board, client)
         view = board.store.task_get({"runId": task["runId"]})["task"]
-        original = board.store.live_registry.channel_for(view)
-        board.store.live_registry.unbind("foreign-attempt", original)
-        self.assertIs(board.store.live_registry.channel_for(view), original)
+        original = board.live_registry.channel_for(view)
+        board.live_registry.unbind("foreign-attempt", original)
+        self.assertIs(board.live_registry.channel_for(view), original)
         self.assertTrue(board.call("inquiry_observe", {"runId": task["runId"]})["bridge"]["observed"])
 
     def test_a_foreign_record_for_the_asked_id_surfaces_as_the_public_rejection(self):

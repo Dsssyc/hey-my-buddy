@@ -25,6 +25,7 @@ from ..store.db import SCHEMA_VERSION, utc_now
 from ...errors import BoardError
 from ..evaluation.evaluation import EvaluationStore
 from ..store.store import BoardStore
+from .live_registry import LiveRegistry
 
 PROTOCOL_VERSION = 2
 WAIT_CAPACITY_DEFAULT = 32
@@ -249,6 +250,7 @@ class BoardService(_BaseResource):
         self,
         store: BoardStore,
         *,
+        live_registry: LiveRegistry,
         token: str,
         control: dict,
         on_stop: Callable[[dict], dict],
@@ -262,6 +264,7 @@ class BoardService(_BaseResource):
     ):
         super().__init__(store)
         self.token = token
+        self.live_registry = live_registry
         self.control = control
         self.on_stop = on_stop
         self.on_restart = on_restart
@@ -910,7 +913,7 @@ class BoardService(_BaseResource):
         def handler(params: dict) -> dict:
             from ..tasks.inquiry import observe
 
-            return observe(self.store, params)
+            return observe(self.store, params, live_registry=self.live_registry)
 
         return self._guard("inquiry.observe", request_json, handler)
 

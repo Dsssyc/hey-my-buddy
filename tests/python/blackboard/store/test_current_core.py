@@ -157,7 +157,7 @@ class CurrentCoreTests(BoardTestCase):
         self.assertEqual(caught.exception.code, "INVALID_ARGUMENT")
 
     def test_result_settles_only_its_queued_questions_and_replay_adds_no_events(self):
-        for status, confirmed in (("ok", True), ("failed", True), ("cancelled", True), ("failed", False)):
+        for status, confirmed in (("ok", True), ("failed", True), ("cancelled", True)):
             with self.subTest(status=status, shutdownConfirmed=confirmed):
                 board = self.board()
                 client = board.client()

@@ -1455,6 +1455,22 @@ class BoardStore:
         )
         if cursor.rowcount != 1:
             raise BoardError("REVISION_CONFLICT", "The attempt changed concurrently; re-read it and retry")
+        if state == "finished" and attempt["execution_state"] != "finished":
+            queued_questions = connection.execute(
+                "SELECT message_id,inquiry_id FROM messages WHERE attempt_id=? AND state='queued'",
+                (attempt["attempt_id"],),
+            ).fetchall()
+            if queued_questions:
+                task = connection.execute("SELECT revision FROM tasks WHERE task_id=?", (attempt["task_id"],)).fetchone()
+                for question in queued_questions:
+                    connection.execute(
+                        "UPDATE messages SET state='unavailable',reason=?,updated_at=?,revision=revision+1 WHERE message_id=?",
+                        ("the attempt ended before this question could be delivered", now, question["message_id"]),
+                    )
+                    self._append_event(connection, "message.updated", task_id=attempt["task_id"],
+                        attempt_id=attempt["attempt_id"], revision=task["revision"],
+                        payload={"inquiryId": question["inquiry_id"], "state": "unavailable",
+                                 "actor": {"role": "service", "id": "attempt-finished"}})
 
     # -- service admission ---------------------------------------------------
     def admit_execution(self, nonce: str, task_id: str | None = None) -> dict:
@@ -2228,19 +2244,6 @@ class BoardStore:
                     attempt["attempt_id"],
                 ),
             )
-            queued_questions = connection.execute(
-                "SELECT message_id,inquiry_id FROM messages WHERE attempt_id=? AND state='queued'",
-                (attempt["attempt_id"],),
-            ).fetchall()
-            for question in queued_questions:
-                connection.execute(
-                    "UPDATE messages SET state='unavailable',reason=?,updated_at=?,revision=revision+1 WHERE message_id=?",
-                    ("the attempt ended before this question could be delivered", now, question["message_id"]),
-                )
-                self._append_event(connection, "message.updated", task_id=attempt["task_id"],
-                    attempt_id=attempt["attempt_id"], revision=task["revision"],
-                    payload={"inquiryId": question["inquiry_id"], "state": "unavailable",
-                             "actor": {"role": "service", "id": "execution-result"}})
             from ..evaluation.native_observations import persist
             persist(connection, attempt, result)
             self._transition_task(connection, task, task_state)

@@ -229,7 +229,7 @@ def service(root):
                 material = json.loads(materials[0].read_text()) if materials else None
                 view = (daemon.store.task_get({"runId": handle.execution_binding["taskId"]})["task"]
                         if handle else None)
-                bound = bool(view and daemon.store.live_registry.channel_for(view))
+                bound = bool(view and daemon.live_registry.channel_for(view))
                 native_ready = bool(list((root / "state").glob(
                     "harnesses/dsh/micro-tasks/*/attempts/*/run-*/fixture-request.json")))
                 emit({"ok": True, "execution": material["descriptor"] if material else None,

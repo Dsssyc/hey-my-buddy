@@ -9,6 +9,7 @@ from typing import Any
 from ...protocol import schemas
 from ...errors import BoardError
 from ..store.store import BoardStore
+from ..service.live_registry import LiveRegistry
 from ...private_dirs import attempt_root
 from ...protocol.inquiry import (
     BRIDGE_ERRORS,
@@ -102,7 +103,7 @@ def read_journal(results_path: str | None) -> dict:
     return {"available": True, "reason": None, "entries": entries}
 
 
-def observe(store: BoardStore, params: dict) -> dict:
+def observe(store: BoardStore, params: dict, *, live_registry: LiveRegistry) -> dict:
     """One bounded inquiry operation: observe, ask, or read a correlated answer."""
     schemas.reject_unknown(params, {"runId", "taskId", "inquiryId", "question", "timeoutMs", "waitMs"}, "inquire")
     if (params.get("inquiryId") is None) != (params.get("question") is None):
@@ -140,7 +141,7 @@ def observe(store: BoardStore, params: dict) -> dict:
     from ...buddy.harnesses.registry import live_binding
 
     extracted_live = live_binding(adapter) is not None
-    channel = None if attempt_ended else _live_channel(store, view)
+    channel = None if attempt_ended else _live_channel(live_registry, view)
     # A restarted service waits for the original holder to attach. Active facts
     # never fall back to files or a directly addressed controller.
     unbound_live = extracted_live and not attempt_ended and channel is None
@@ -307,10 +308,9 @@ def observe(store: BoardStore, params: dict) -> dict:
     }
 
 
-def _live_channel(store: BoardStore, view: dict):
+def _live_channel(registry: LiveRegistry, view: dict):
     """Service restart leaves no live bindings until the same holder attaches again."""
-    registry = getattr(store, "live_registry", None)
-    channel = registry.channel_for(view) if registry is not None else None
+    channel = registry.channel_for(view)
     return _ExecutionChannel(channel) if channel is not None else None
 
 
