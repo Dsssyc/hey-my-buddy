@@ -373,35 +373,6 @@ class BoardService(_BaseResource):
                 "waitAdmission": self.control.get("wait_admission").stats()
                 if self.control.get("wait_admission")
                 else None,
-                "limitations": {
-                    "steer": "an active attempt cannot be re-scoped; submit authorized continuation input after its turn ends",
-                    "resume": "micro-task continuation creates a new owned attempt; native session support is declared per harness",
-                    "nativeAppWakeup": "not provided: notifications are post-commit hints for clients",
-                    "postgres": "not provided: SQLite is the deliberate local database",
-                    "remoteTenancy": "not provided: same-user local service only",
-                    "selectionFallback": (
-                        "not provided: with no configured decision buddy or no legal candidate the decision is "
-                        "needs-host; the service never guesses a buddy and never selects a selector"
-                    ),
-                    "decisionModelIdentity": (
-                        "the Router records its requested and resolved buddy; the served "
-                        "identity is unknown and is never invented"
-                    ),
-                    "osIsolation": (
-                        "not claimed: the console token and session separate browser origins, not a same-user "
-                        "process with full shell and credential access"
-                    ),
-                    "agentScope": (
-                        "enforced in the supported API: an attempt-scoped credential may observe its own run and "
-                        "record suggestions only; it cannot submit tasks, create helpers, approve, take over, "
-                        "cancel, change shared settings or address another run. This is capability enforcement, not OS "
-                        "isolation against a same-user process that steals the credential file"
-                    ),
-                    "hostAuthority": (
-                        "a Host decision requires the owner control capability (or an authenticated console "
-                        "session); a hostId label and a shared cache of the newest generation are never authority"
-                    ),
-                },
             }
 
         return self._guard("capabilities", request_json, handler)
@@ -511,6 +482,7 @@ class BoardService(_BaseResource):
         return self._guard("user.policy.publish", request_json, self.evaluation.user_policy_publish)
 
     def _refresh_harness_catalog(self, name, record, catalog_scan_claimed=False):
+        from ...protocol.reasons import reason
         from ..catalog import catalog_store
         from ...buddy.harnesses.registry import adapter
         from ...buddy.harnesses.runtime_selection import bound
@@ -528,7 +500,8 @@ class BoardService(_BaseResource):
             catalog_store.record(self.evaluation, payload, observation['observationId'], health_generation=(name, record['revision']))
         except BoardError as error:
             if error.code != 'UPGRADE_IN_PROGRESS':
-                self.harnesses.invalidate(name, record['revision'], diagnostic_code=error.code)
+                self.harnesses.invalidate(name, record['revision'],
+                                          cause=reason('catalog.discovery-failed', harness=name, errorCode=error.code))
 
     def _reread_catalog_for_validation(self, name):
         """One bounded re-read through the service's ordinary refresh path."""

@@ -23,7 +23,7 @@ def service(daemon):
             if executable and Path(executable).suffix == '.py':
                 command.insert(0, sys.executable)
             record = {'harness': name, 'status': 'ready', 'available': True, 'command': command,
-                      'executable': executable, 'version': 'fixture', 'source': 'fixture'}
+                      'executable': executable, 'version': 'fixture', 'source': 'fixture', 'reason': None}
             db.execute("INSERT OR REPLACE INTO harness_health(harness,status,record_json) VALUES(?,'ready',?)", (name, json.dumps(record)))
     result.harnesses.refresh = lambda name, **kwargs: result.harnesses.get(name)
     # The file-catalog branch disables automatic discovery. Bind availability

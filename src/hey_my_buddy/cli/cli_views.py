@@ -206,7 +206,6 @@ def micro_task_brief(view: dict, *, turn_summary: bool = True) -> dict:
                 "interruptionEvidence",
                 "queueReason",
                 "awaitingHost",
-                "waitReason",
                 "revision",
                 "ownerGeneration",
                 "continuationCount",
@@ -338,7 +337,6 @@ _KNOWN_MICRO_TASK_FIELDS = frozenset(
         "status",
         "queueReason",
         "awaitingHost",
-        "waitReason",
         "microTask",
         "revision",
         "continuationCount",
@@ -522,13 +520,13 @@ def result_brief(response: dict) -> dict:
 
 # -- await -------------------------------------------------------------------
 
-_AWAIT_DROP = frozenset({"note", "maxWaitSeconds", "createdAt", "cwd"})
+_AWAIT_DROP = frozenset({"maxWaitSeconds", "createdAt", "cwd"})
 
 
 def _await_result(result: Any) -> Any:
     if not isinstance(result, dict):
         return result
-    brief = {key: value for key, value in result.items() if key not in ("note",) and value is not None}
+    brief = {key: value for key, value in result.items() if value is not None}
     turn = brief.get("turn")
     if isinstance(turn, dict):
         brief["turn"] = {key: value for key, value in turn.items() if value is not None and value != []}

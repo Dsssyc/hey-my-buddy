@@ -277,7 +277,8 @@ class InProcessBoard:
         # Dedicated discovery/service tests start with empty real health records.
         with self.store.db.write() as db:
             for name in ('dsh', 'zcode', 'codex', 'claude'):
-                db.execute("INSERT OR IGNORE INTO harness_health(harness,status,record_json) VALUES(?,'ready','{}')", (name,))
+                db.execute("INSERT OR IGNORE INTO harness_health(harness,status,record_json) VALUES(?,'ready',?)",
+                           (name, json.dumps({"reason": None})))
         self.admission = WaitAdmission(options.get("wait_capacity", 4))
         self.control: dict = {"wait_admission": self.admission}
         self.stopped: list[dict] = []

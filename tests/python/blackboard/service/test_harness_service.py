@@ -19,9 +19,10 @@ class HarnessServiceTests(BoardTestCase):
         params = {'attemptId': attempt['attemptId'],
                   'generation': attempt['generation'], 'nonce': 'n' * 32}
         unknown = {'harness': 'codex', 'status': 'unknown', 'available': False,
+                   'reason': {'code': 'harness.timeout', 'params': {'operation': 'probe'}},
                    'lastProbe': {'status': 'unknown', 'reason': {'code': 'harness.timeout', 'params': {'operation': 'probe'}}}}
         ready = {'harness': 'codex', 'status': 'ready', 'available': True,
-                 'lastProbe': {'status': 'complete'}}
+                 'reason': None, 'lastProbe': {'status': 'complete'}}
         with patch.object(self.service.harnesses, 'refresh', side_effect=[unknown, ready]):
             self.assertNotIn('error', self.call('harness_prepare', **params, commandId='unknown-read'))
             view = self.board.task_get({'runId': task['runId']})['task']
@@ -86,7 +87,8 @@ class HarnessServiceTests(BoardTestCase):
         self.assertEqual(result['error']['code'], 'UPGRADE_IN_PROGRESS')
 
     def test_explicit_refresh_returns_selected_version_and_path(self):
-        ready = {'harness': 'codex', 'status': 'ready', 'version': '1.2.3', 'command': ['/native/codex'], 'executable': '/native/codex'}
+        ready = {'harness': 'codex', 'status': 'ready', 'version': '1.2.3', 'command': ['/native/codex'],
+                 'executable': '/native/codex', 'reason': None}
         with patch('hey_my_buddy.blackboard.service.harness_health._snapshot', return_value={'harness': 'codex', 'managerRecords': [], 'candidates': []}), patch('hey_my_buddy.blackboard.service.harness_health._discover', return_value=ready) as native:
             result = self.call('capabilities', refresh=True, harness='codex')
         self.assertNotIn('error', result)
@@ -100,9 +102,11 @@ class HarnessServiceTests(BoardTestCase):
         from datetime import datetime, timedelta, timezone
         until = (datetime.now(timezone.utc) + timedelta(seconds=180)).isoformat(timespec='milliseconds').replace('+00:00', 'Z')
         with self.board.db.write() as db:
-            db.execute("INSERT INTO harness_health(harness,scan_after) VALUES('codex',?)"
-                       " ON CONFLICT(harness) DO UPDATE SET scan_after=excluded.scan_after", (until,))
-        ready = {'harness': 'codex', 'status': 'ready', 'version': '1.2.3', 'command': ['/native/codex'], 'executable': '/native/codex'}
+            db.execute("INSERT INTO harness_health(harness,scan_after,record_json) VALUES('codex',?,?)"
+                       " ON CONFLICT(harness) DO UPDATE SET scan_after=excluded.scan_after",
+                       (until, json.dumps({'reason': {'code': 'harness.not-checked', 'params': {'operation': 'probe'}}})))
+        ready = {'harness': 'codex', 'status': 'ready', 'version': '1.2.3', 'command': ['/native/codex'],
+                 'executable': '/native/codex', 'reason': None}
         with patch('hey_my_buddy.blackboard.service.harness_health._snapshot', return_value={'harness': 'codex', 'managerRecords': [], 'candidates': []}), patch('hey_my_buddy.blackboard.service.harness_health._discover', return_value=ready) as native:
             result = self.call('capabilities', refresh=True, harness='codex')
         self.assertNotIn('error', result)
@@ -143,7 +147,7 @@ class HarnessServiceTests(BoardTestCase):
             for version in ('0.157.0', '0.158.0'):
                 with self.subTest(version=version), patch('hey_my_buddy.blackboard.service.harness_health._discover', return_value={
                         'harness': 'codex', 'status': 'ready', 'version': version,
-                        'command': ['/fixture/codex'], 'executable': '/fixture/codex'}):
+                        'command': ['/fixture/codex'], 'executable': '/fixture/codex', 'reason': None}):
                     result = self.call('capabilities', refresh=True, harness='codex')
                     self.assertNotIn('error', result)
                     with self.board.db.read() as db:
@@ -164,7 +168,8 @@ class HarnessServiceTests(BoardTestCase):
 
 
     def test_accounts_reports_cached_native_login_without_source_management(self):
-        ready = {'harness': 'codex', 'status': 'ready', 'version': '1.2.3', 'command': ['/native/codex']}
+        ready = {'harness': 'codex', 'status': 'ready', 'version': '1.2.3', 'command': ['/native/codex'],
+                 'reason': None}
         with patch('hey_my_buddy.blackboard.service.harness_health._snapshot', return_value={'harness': 'codex', 'managerRecords': [], 'candidates': []}), patch('hey_my_buddy.blackboard.service.harness_health._discover', return_value=ready):
             self.call('capabilities', refresh=True, harness='codex')
         with patch('hey_my_buddy.blackboard.service.harness_health._discover') as native:
@@ -180,7 +185,8 @@ class HarnessServiceTests(BoardTestCase):
         self.service.harnesses.catalog_refresh = self.service._refresh_harness_catalog
         old = self.service.harnesses.get('codex')
         with self.board.db.write() as db:
-            db.execute("INSERT INTO harness_health(harness,status,record_json,revision) VALUES('codex','unknown','{}',1)")
+            db.execute("INSERT INTO harness_health(harness,status,record_json,revision) VALUES('codex','unknown',?,1)",
+                       (json.dumps({'reason': {'code': 'harness.not-checked', 'params': {'operation': 'probe'}}}),))
         with patch('hey_my_buddy.buddy.harnesses.registry.adapter') as native:
             self.service._refresh_harness_catalog('codex', old)
         native.return_value.discover_models.assert_not_called()

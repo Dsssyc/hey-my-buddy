@@ -231,7 +231,7 @@ class ConsoleMacroTaskDeletionTests(workflow_fixtures.WorkflowTestCase, ConsoleT
             self.assertEqual(connection.execute('SELECT COUNT(*) FROM macro_task_deletions').fetchone()[0], 0)
         self.assertEqual(board.call('workflow_get', {'runId': run['runId']})['state'], 'cancelled')
         with board.store.db.write() as connection:
-            connection.execute("UPDATE harness_health SET status='ready',record_json='{}' WHERE harness='codex'")
+            connection.execute("UPDATE harness_health SET status='ready',record_json=? WHERE harness='codex'", (json.dumps({"reason": None}),))
         # The native session deletion seam is patched: the real one launches a
         # controller process, which belongs to the physical-phase suites.
         with patch.object(macro_task_deletion, '_delete_sessions', return_value=[]):

@@ -865,7 +865,7 @@ def _native_operation(name: str, operation: str, **arguments) -> dict:
             if specification["allowUnknown"] and (wait_expired or payload.get("status") == "unknown"):
                 return {"source": "native-discovery", "providers": [], "discoveries": [{
                     "harness": name, "status": "unknown", "accountStatus": "unknown",
-                    "reason": "native-metadata-wait-expired"}]}
+                    "reason": {"code": "native-metadata-wait-expired", "params": {}}}]}
             if wait_expired or collection.exit_code != 0 or payload.get("status") != "ok":
                 message = (collection.payload or {}).get("error")
                 if not isinstance(message, str) or not message:

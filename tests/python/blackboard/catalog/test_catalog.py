@@ -9,7 +9,7 @@ import unittest
 from unittest.mock import patch
 
 from hey_my_buddy.blackboard.catalog import catalog
-from hey_my_buddy.buddy.harnesses.registry import require_permission
+from hey_my_buddy.buddy.harnesses.registry import capability_report, require_permission
 from hey_my_buddy.protocol.capabilities import WORKER_PERMISSIONS
 from hey_my_buddy.protocol import schemas
 from hey_my_buddy.errors import BoardError
@@ -43,16 +43,19 @@ class CatalogTests(unittest.TestCase):
 
     def test_discovery_preserves_each_harness_status_and_reason(self):
         observations = {
-            "codex": {"status": "unknown", "accountStatus": "confirmed", "reason": "native model shape unreadable"},
+            "codex": {"status": "unknown", "accountStatus": "confirmed",
+                      "reason": {"code": "model-list-shape-unreadable", "params": {}}},
             "claude": {"status": "complete", "accountStatus": "not-applicable"},
             "dsh": {"status": "unknown", "accountStatus": "not-applicable"},
-            "zcode": {"status": "complete", "accountStatus": "confirmed", "reason": "native discovery note"},
+            "zcode": {"status": "complete", "accountStatus": "confirmed"},
         }
         instances = {}
         for name, fact in observations.items():
             payload = {"source": name + "-fixture", "providers": [{"harness": name, "provider": "fixture",
                        "models": [{"id": "alpha", "efforts": ["high"]}]}],
-                       "discoveries": [{"harness": name, **fact}], "warnings": [name + " warning"],
+                       "discoveries": [{"harness": name, **fact}],
+                       "warnings": [{"reason": {"code": "catalog.native-warning", "params": {}},
+                                     "content": name + " warning"}],
                        "harnessVersion": "fixture-1"}
             instances[name] = SimpleNamespace(model_discovery=True, discovery_available=lambda: (True, None),
                                               discover_models=lambda payload=payload: payload)
@@ -61,9 +64,8 @@ class CatalogTests(unittest.TestCase):
             result = catalog.discover(directory=self.directory)
         self.assertEqual(result["discoveries"], [
             {"harness": name, "status": fact["status"], "accountStatus": fact["accountStatus"],
-             "reason": ({"code": "catalog.native-unknown", "params": {"harness": name}}
-                        if fact["status"] == "unknown" and fact.get("reason") else None),
-             "content": fact.get("reason")}
+             "reason": fact.get("reason") if fact["status"] == "unknown" else None,
+             "content": None}
             for name, fact in observations.items()])
         self.assertEqual([entry["harness"] for entry in result["providers"]], list(observations))
         self.assertEqual(result["warnings"], [
@@ -72,6 +74,39 @@ class CatalogTests(unittest.TestCase):
             for name in observations])
         self.assertEqual(result["source"], "; ".join(name + "-fixture" for name in observations))
         self.assertEqual(result["harnessVersion"], "; ".join(name + ":fixture-1" for name in observations))
+
+    def test_discovery_receipt_rejects_unregistered_or_malformed_reasons(self):
+        payload = copy.deepcopy(FIXTURE_CATALOG)
+        payload["discoveries"] = [{"harness": "dsh", "status": "unknown",
+                                   "reason": "native-metadata-wait-expired"}]
+        with self.assertRaisesRegex(BoardError, "discovery.reason"):
+            catalog.canonical_payload(payload)
+        payload["discoveries"][0]["reason"] = {"code": "catalog.model-shape-unreadable", "params": {"extra": "x"}}
+        with self.assertRaisesRegex(BoardError, "discovery.reason"):
+            catalog.canonical_payload(payload)
+        payload["discoveries"][0]["reason"] = {"code": "native-metadata-wait-expired", "params": {}}
+        payload["warnings"] = ["native warning"]
+        with self.assertRaisesRegex(BoardError, "warning"):
+            catalog.canonical_payload(payload)
+        payload["warnings"] = [{"reason": {"code": "catalog.model-list-unreadable", "params": {}}}]
+        with self.assertRaisesRegex(BoardError, "warning.reason"):
+            catalog.canonical_payload(payload)
+
+    def test_capability_report_uses_health_reason_only_for_harnesses(self):
+        def adapter():
+            return SimpleNamespace(available=lambda: (True, None), capabilities=(),
+                                   read_only_structured=False, no_tool_structured=False,
+                                   local_read_only_check=lambda: {})
+        stored = {"reason": {"code": "harness.login-required", "params": {"operation": "probe"}}}
+        with patch("hey_my_buddy.buddy.harnesses.registry.adapters", return_value={
+                "codex": adapter(), "dsh": adapter(), "command": adapter()}), \
+             patch("hey_my_buddy.buddy.harnesses.runtime_selection.selected",
+                   side_effect=lambda name: stored if name == "dsh" else None):
+            report = capability_report()
+        self.assertEqual(report["codex"]["reason"],
+                         {"code": "harness.not-checked", "params": {"operation": "probe"}})
+        self.assertEqual(report["dsh"]["reason"], stored["reason"])
+        self.assertIsNone(report["command"]["reason"])
 
     def test_discovery_without_own_observation_keeps_complete_and_unknown_account(self):
         instance = SimpleNamespace(model_discovery=True, discovery_available=lambda: (True, None),

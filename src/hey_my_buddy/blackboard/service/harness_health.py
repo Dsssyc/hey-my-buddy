@@ -64,7 +64,6 @@ def read_health(connection, harness):
     from ..evaluation.native_observations import quota_view, latest_quota
     from ..routing.quota_routing import routing_facts
     record = json.loads(row['record_json'])
-    record.setdefault('reason', _not_checked() if row['status'] == 'unknown' else None)
     record.pop('reviewVerification', None)
     billing = record.get('billingByProvider') or {}
     if harness == "dsh":
@@ -131,9 +130,10 @@ class HarnessHealth:
         with self.board.db.read() as db:
             return read_health(db, _name(name))
 
-    def invalidate(self, name, revision, *, account_read_failure=None, diagnostic_code=None):
-        cause = (make_reason('harness.shutdown-unverified', operation='account-read')
-                 if account_read_failure is not None else make_reason('harness.launch-failed', operation='probe'))
+    def invalidate(self, name, revision, *, account_read_failure=None, cause=None):
+        if cause is None:
+            cause = (make_reason('harness.shutdown-unverified', operation='account-read')
+                     if account_read_failure is not None else make_reason('harness.launch-failed', operation='probe'))
         with self.board.db.write() as db:
             row = read_health(db, _name(name))
             if account_read_failure is not None and (self._closed or (self.board.directory / 'upgrade.json').exists()):
@@ -155,7 +155,6 @@ class HarnessHealth:
                 # with their own reason; health only grounds the rest.
                 _set_buddies_unavailable(db, name, cause)
                 self.board._append_event(db, 'harness.invalidated', payload={'harness': name, 'reason': cause,
-                    **({'diagnosticCode': diagnostic_code} if diagnostic_code is not None else {}),
                     **({'accountReadFailure': account_read_failure} if account_read_failure is not None else {})})
             head = self.board._head_of(db)
         self.board._notify(head)
@@ -214,7 +213,9 @@ class HarnessHealth:
                 if current['revision'] != old['revision']:
                     return current
                 generation = old['revision'] + 1
-                db.execute('INSERT INTO harness_health(harness,revision) VALUES(?,?) ON CONFLICT(harness) DO UPDATE SET revision=excluded.revision', (name, generation))
+                db.execute('INSERT INTO harness_health(harness,revision,record_json) VALUES(?,?,?) '
+                           'ON CONFLICT(harness) DO UPDATE SET revision=excluded.revision',
+                           (name, generation, canonical_json({'reason': _not_checked()})))
             try:
                 record = _discover(name, old['manualPath'], environment)
             except Exception:
@@ -244,7 +245,6 @@ class HarnessHealth:
                       'lastProbe': {'status': 'complete', 'observedAt': now,
                                     'reason': record.get('reason')},
                       'systemSandbox': old['systemSandbox']}
-            record.setdefault('reason', None)
             status = record.get('status')
             native_ready = status == 'ready'
             if native_ready and (record.get('accountReadFailure', {}).get('reason') or {}).get('code') == 'harness.shutdown-unverified':

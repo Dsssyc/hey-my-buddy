@@ -30,18 +30,34 @@ class ConsoleSessionTests(ConsoleTestCase):
         board = self.board()
         entry, browser = self.open_console(board, assets=True)
         ticket = urlsplit(entry['url']).path
-        self.assertEqual(browser.call('GET', ticket)[0], 410)
+        status, headers, body = browser.call('GET', ticket)
+        self.assertEqual(status, 410)
+        self.assertEqual(headers['cache-control'], 'no-store')
+        self.assertIn("default-src 'none'", headers['content-security-policy'])
+        self.assertEqual(headers['content-type'], 'text/html; charset=utf-8')
+        self.assertIn(b'<meta name="hey-my-buddy-reason" content="console.entry-unavailable">', body)
+        self.assertIn(b'hey-my-buddy console fixture', body)
+        self.assertIn(b'src="/assets/app.js"', body)
+        self.assertNotIn(b'src="./assets/app.js"', body)
+        self.assertNotIn(ticket.removeprefix('/launch/').encode(), body)
         self.assertNotIn(ticket.removeprefix('/launch/'), browser.prefix)
         self.assertNotIn(browser.cookie.split('=', 1)[1], browser.prefix)
         copied = Browser(browser.origin + browser.prefix + '/')
-        for route in ('/', '/api/console', '/api/macro-tasks', '/assets/app.js'):
+        for route in ('/', '/api/console', '/api/macro-tasks'):
             self.assertEqual(copied.get(route)[0], 401, route)
             self.assertEqual(browser.get(route)[0], 200, route)
+        status, headers, body = copied.call('GET', '/assets/app.js')
+        self.assertEqual(status, 200)
+        self.assertIn('text/javascript', headers['content-type'])
+        self.assertIn("default-src 'none'", headers['content-security-policy'])
+        self.assertEqual(body.strip(), b'export const ready = true;')
+        self.assertEqual(copied.call('GET', '/assets/../../outside.txt')[0], 404)
+        self.assertEqual(copied.call('GET', '/assets/app.js', headers={'Origin': 'http://evil.test'})[0], 403)
         self.assertNotIn('url', board.call('console', {'action': 'status'}))
 
     def test_expired_or_unredeemed_ticket_does_not_take_write_access(self):
         board, now = self.timed_board()
-        _, first = self.open_console(board)
+        _, first = self.open_console(board, assets=True)
         pending = board.call('console', {'action': 'open'})
         self.assertTrue(first.bootstrap()['consoleSession']['canWrite'])
         now[0] += ENTRY_SECONDS
@@ -50,6 +66,8 @@ class ConsoleSessionTests(ConsoleTestCase):
 
     def test_two_redemptions_race_for_exactly_one_session(self):
         board = self.board()
+        board.console.assets_dir.mkdir(parents=True, exist_ok=True)
+        (board.console.assets_dir / 'index.html').write_text('<!doctype html><html><head></head><body></body></html>')
         entry = board.call('console', {'action': 'open'})
         parts = urlsplit(entry['url'])
         barrier = threading.Barrier(2)
@@ -202,7 +220,7 @@ class ConsoleSessionTests(ConsoleTestCase):
         board, now = self.timed_board()
         first = None
         for _ in range(MAX_SESSIONS):
-            _, browser = self.open_console(board)
+            _, browser = self.open_console(board, assets=True)
             first = first or browser
         pending = board.call('console', {'action': 'open'})
         existing_id = first.bootstrap()['consoleSession']['id']
@@ -210,7 +228,10 @@ class ConsoleSessionTests(ConsoleTestCase):
         self.assertEqual(first.bootstrap()['consoleSession']['id'], existing_id)
         fresh_ticket = board.call('console', {'action':'open'})
         anonymous = Browser(first.origin + '/')
-        self.assertEqual(anonymous.call('GET', urlsplit(fresh_ticket['url']).path)[0], 429)
+        status, headers, body = anonymous.call('GET', urlsplit(fresh_ticket['url']).path)
+        self.assertEqual(status, 429)
+        self.assertEqual(headers['cache-control'], 'no-store')
+        self.assertIn(b'console.entry-unavailable', body)
         self.assertEqual(first.get('/api/console')[0], 200)
         self.assertEqual(board.console.status()['sessionCount'], MAX_SESSIONS)
         now[0] += 800 * 24 * 3600

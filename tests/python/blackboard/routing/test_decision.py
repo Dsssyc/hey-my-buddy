@@ -419,8 +419,7 @@ class SelectionRequestTests(DecisionTestCase):
         report = board.call("capabilities", {})
         self.assertIn("decision", report["adapters"])
         self.assertIn("decision", report["localCapabilities"])
-        self.assertNotIn("selection", report["limitations"])
-        self.assertIn("selectionFallback", report["limitations"])
+        self.assertIn("control", report["operations"])
 
     def test_ordinary_execution_storage_cannot_create_a_decision_run(self):
         board = self.board()

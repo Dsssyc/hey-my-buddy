@@ -48,6 +48,7 @@
   "catalog.native-warning": [],
   "config-options-shape-unreadable": [],
   "config-shape-unreadable": [],
+  "console.entry-unavailable": [],
   "deadline": [],
   "decision-cancelled": [],
   "decision-publication-failed": [
@@ -173,6 +174,7 @@
   "native-authority-required": [
     "kind"
   ],
+  "native-metadata-wait-expired": [],
   "model-cursor-shape-unreadable": [],
   "model-list-shape-unreadable": [],
   "no-legal-candidate": [],

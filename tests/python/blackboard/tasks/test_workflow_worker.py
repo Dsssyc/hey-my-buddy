@@ -436,7 +436,6 @@ class CompactRouteTests(MicroTaskWorkerTestCase):
             "status",
             "queueReason",
             "awaitingHost",
-            "waitReason",
             "microTask",
             "revision",
             "continuationCount",

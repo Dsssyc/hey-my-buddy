@@ -926,7 +926,7 @@ class TestExtensibility(BoardTestCase):
         self.assertIn("command", report["adapters"])
         self.assertNotIn("external", report["adapters"])
         self.assertNotIn("external", report["localCapabilities"])
-        self.assertIn("steer", report["limitations"])
+        self.assertIn("wait", report["operations"])
 
     def test_command_adapter_runs_explicit_argv_without_a_shell(self):
         board = self.board()

@@ -32,8 +32,6 @@ TIMELINE_MAX_LIMIT = 200
 MAX_SPANS = 800
 MAX_MARKERS = 800
 SUMMARY_LIMIT = 300
-#: Display fallback when a micro task recorded no intent title or task line.
-UNTITLED = "未命名微任务"
 TITLE_LIMIT = 200
 CURSOR_VERSION = 1
 
@@ -72,11 +70,6 @@ HOST_MARKERS = {
     "workflow.host_concluded": "conclude",
     "workflow.cancelled": "cancel",
     "workflow.takeover": "takeover",
-}
-#: Display labels of the Host marker kinds (the verdict splits accept/reject).
-MARKER_LABELS = {
-    "dispatch": "派发", "decide": "决定", "continue": "续接", "integrate": "整合",
-    "accept": "验收", "reject": "验收问题", "conclude": "结论", "cancel": "取消", "takeover": "接管",
 }
 
 
@@ -459,7 +452,7 @@ def _summary(connection, group_id: str, clauses: list[str], values: list[Any]) -
     return {
         "macroTaskId": group_id,
         "kind": kind,
-        "title": title or UNTITLED,
+        "title": title,
         "titleSource": title_source,
         "summary": result_summary,
         "description": description,
@@ -579,7 +572,7 @@ def _timeline_row(connection, row, depth: int) -> dict:
     fix_relation = fixes.view(connection, row["task_id"])
     if "fixes" in fix_relation:
         fixes_title, fixes_title_source, _ = _run_presentation(connection, fix_relation["fixes"])
-        fix_relation["fixesTitle"] = fixes_title or UNTITLED
+        fix_relation["fixesTitle"] = fixes_title
         fix_relation["fixesTitleSource"] = fixes_title_source
     task_text = connection.execute("SELECT json_extract(micro_task_json,'$.task') FROM workflow_runs WHERE run_id=?", (row["task_id"],)).fetchone()
     shutdown = connection.execute(
@@ -597,7 +590,7 @@ def _timeline_row(connection, row, depth: int) -> dict:
         "runId": row["task_id"],
         "parentRunId": row["child_parent_run_id"],
         "rootRunId": row["root_run_id"],
-        "title": title or UNTITLED,
+        "title": title,
         "titleSource": title_source,
         "summary": result_summary,
         "taskSummary": _first_line(task_text[0]) if task_text else None,
@@ -848,40 +841,27 @@ def _markers(connection, run_ids: list[str]) -> list[dict]:
     ).fetchall()
     markers = []
     for row in rows:
-        try:
-            payload = json.loads(row["payload_json"]) if row["payload_json"] else {}
-        except ValueError:
-            payload = {}
-        payload = payload if isinstance(payload, dict) else {}
+        payload = json.loads(row["payload_json"])
         kind = HOST_MARKERS[row["kind"]]
         if kind == "accept" and payload.get("verdict") == "rejected":
             kind = "reject"
 
-        def text(key: str) -> str | None:
-            value = payload.get(key)
-            return value[:SUMMARY_LIMIT] if isinstance(value, str) and value else None
-
-        micro_task = payload.get("microTask") if isinstance(payload.get("microTask"), dict) else {}
-        fallback_host = text("newHostId") or (
-            micro_task.get("sourceHostId") if isinstance(micro_task.get("sourceHostId"), str) else None)
+        fallback_host = payload.get("newHostId") or payload.get("microTask", {}).get("sourceHostId")
         actor = ({"role": row["actor_role"], "id": row["actor_id"]} if row["actor_role"] else
                  {"role": "host", "id": fallback_host} if fallback_host else None)
-        details = [part for part in (text("decision"), text("verdict"), text("state"), text("strategy"),
-                                     text("note")) if part]
         markers.append({
             "seq": row["seq"],
             "runId": row["task_id"],
             "kind": kind,
             "at": row["created_at"],
-            "label": MARKER_LABELS[kind],
-            "summary": " · ".join(details)[:SUMMARY_LIMIT],
+            **{key: payload.get(key) for key in ("decision", "verdict", "state", "strategy", "note")},
             "actor": actor,
             "attemptId": row["attempt_id"],
-            "requestId": text("requestId"),
-            "artifactId": text("artifactId"),
-            "integrationId": text("integrationId"),
-            "continuationId": text("continuationId"),
-            "stopInitiator": text("stopInitiator"),
+            "requestId": payload.get("requestId"),
+            "artifactId": payload.get("artifactId"),
+            "integrationId": payload.get("integrationId"),
+            "continuationId": payload.get("continuationId"),
+            "stopInitiator": payload.get("stopInitiator"),
             "eventKind": row["kind"],
         })
     return markers

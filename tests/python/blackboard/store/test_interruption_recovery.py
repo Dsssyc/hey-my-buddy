@@ -468,6 +468,26 @@ class InterruptionRecoveryTests(BoardTestCase):
                                            'shutdownConfirmed': True})
         self.assertEqual(refused.exception.code, 'ATTEMPT_FINISHED')
 
+    def test_release_reason_belongs_to_the_selected_attempt(self):
+        board, client, task, _, first = self.claimed(identity=False)
+        self.assertIsNone(client.get(runId=task['taskId'])['selectedAttempt']['releaseReason'])
+
+        board.store.release_execution(first['attemptId'], reason='execution-process-not-created')
+        released = client.get(runId=task['taskId'])['selectedAttempt']
+        self.assertEqual(released['attemptId'], first['attemptId'])
+        self.assertEqual(released['releaseReason'],
+                         {'code': 'execution-process-not-created', 'params': {}})
+
+        client.retry(runId=task['taskId'])
+        second = admit_execution(client, 'n' * 32)['claim']['attempt']
+        current = client.get(runId=task['taskId'])['selectedAttempt']
+        self.assertEqual(current['attemptId'], second['attemptId'])
+        self.assertIsNone(current['releaseReason'])
+
+        board.store.release_execution(second['attemptId'], reason='service-stopped-before-launch')
+        self.assertEqual(client.get(runId=task['taskId'])['selectedAttempt']['releaseReason'],
+                         {'code': 'service-stopped-before-launch', 'params': {}})
+
     def test_service_stop_between_admission_and_creation_releases_as_cancelled(self):
         board, client, task, _, actor = self.claimed(identity=False)
         board.store.task_cancel({'runId': task['taskId'], 'note': 'service stop'}, initiator='service')

@@ -208,12 +208,15 @@ class CliViewTests(RealWorkspaceTestCase):
         code, waited, _ = self.cli("await", {"runId": run_id, "waitSeconds": 5})
         self.assertEqual(code, 0, waited)
         self.assertEqual(waited["outcome"], "completed")
-        self.assertNotIn("note", waited)
         self.assertEqual(waited["turn"]["summary"], SUMMARY[:2000])
         self.assertNotIn("turn", waited["result"], "the lifted turn is printed once")
 
 
 class ProjectionUnitTests(unittest.TestCase):
+    def test_await_projection_retains_content_notes(self):
+        self.assertEqual(cli_views.await_brief({"note": "Host note", "result": {"note": "Result note"}}),
+                         {"note": "Host note", "result": {"note": "Result note"}, "view": "brief"})
+
     def test_request_projection_keeps_both_form_keys_and_system_facts(self):
         for request in (
             {"requestId": "worker", "summary": "Worker content", "reason": None,

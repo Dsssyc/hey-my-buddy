@@ -141,7 +141,10 @@ class ConsoleTestCase(BoardTestCase):
         if assets:
             root = board.console.assets_dir
             (root / "assets").mkdir(parents=True, exist_ok=True)
-            (root / "index.html").write_text("<!doctype html><div id=root>hey-my-buddy console fixture</div>")
+            (root / "index.html").write_text(
+                '<!doctype html><html><head><script src="./assets/app.js"></script>'
+                '</head><body><div id=root>hey-my-buddy console fixture</div></body></html>'
+            )
             (root / "assets" / "app.js").write_text("export const ready = true;\n")
             (root / "assets" / "app.css").write_text("body{color:#20332e}\n")
         stated = board.call("console", {"action": "open"})
@@ -646,8 +649,7 @@ class ConsoleDaemonTests(ConsoleTestCase):
                 self.assertIn(operation, caps["operations"]["control"])
             for operation in ("evaluation_prepare", "evaluation_history", "evaluation_write_begin"):
                 self.assertNotIn(operation, caps["operations"]["control"])
-            self.assertIn("selectionFallback", caps["limitations"])
-            self.assertIn("not claimed", caps["limitations"]["osIsolation"])
+            self.assertIn("permission:full", caps["adapters"]["codex"]["capabilities"])
             code, snapshot = self.cli("console-snapshot", "{}")
             self.assertEqual(code, 0, snapshot)
             self.assertNotIn("tableRevision", snapshot)

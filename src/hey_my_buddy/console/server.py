@@ -716,12 +716,15 @@ class Console:
                         console.service.register_console_authority(session.cookie, session.id)
                         target = sessions.path(session)
                 except BoardError as error:
-                    # A human following a stale entry needs an actionable page, not
-                    # another reusable credential or a raw JSON error.
-                    body = ("<!doctype html><html lang=zh-CN><meta charset=utf-8>"
-                            "<meta name=viewport content='width=device-width,initial-scale=1'>"
-                            "<title>hey-my-buddy 控制台入口不可用</title><h1>控制台入口已失效或暂不可用</h1>"
-                            "<p>请重新运行 <code>hey-my-buddy console</code> 打开控制台。后台任务不受影响。</p></html>").encode()
+                    try:
+                        body = (console.assets_dir / "index.html").read_bytes()
+                    except OSError:
+                        return self._error(500, "INTERNAL_ERROR", "The console page could not be read")
+                    body = body.replace(
+                        b"</head>",
+                        b'<meta name="hey-my-buddy-reason" content="console.entry-unavailable"></head>',
+                        1,
+                    ).replace(b'./assets/', b'/assets/')
                     return self._send(STATUS_BY_CODE.get(error.code, 400), body, "text/html; charset=utf-8")
                 self.send_response(303)
                 self.send_header("Location", target)
@@ -738,6 +741,8 @@ class Console:
                 path = self._path()
                 if path.startswith("/launch/"):
                     return self._launch(path)
+                if path.startswith("/assets/"):
+                    return self._asset(path)
                 relative = self._authenticated_path(path)
                 if relative is None:
                     return

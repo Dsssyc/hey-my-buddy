@@ -156,7 +156,7 @@ class TestWorkflowRouting(WorkflowTestCase):
         submitted = self.routed(board)
         self.assertTrue(submitted["awaitingHost"])
         self.assertIsNone(submitted["routing"]["taskId"])
-        self.assertIn("routing", submitted["waitReason"])
+        self.assertEqual(submitted["state"], "awaiting-host")
         self.assertEqual(submitted["activeRequest"]["reason"]["code"], "no-legal-candidate")
         with board.store.db.read() as connection:
             request = connection.execute(

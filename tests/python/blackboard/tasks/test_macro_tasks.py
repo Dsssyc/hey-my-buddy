@@ -377,6 +377,25 @@ class MacroTaskReadTests(WorkflowTestCase):
         })['rows'][0]
         self.assertEqual((row['fixesTitle'], row['fixesTitleSource']), ('do the thing', 'task'))
 
+        with board.store.db.write() as db:
+            db.execute("UPDATE workflow_runs SET micro_task_json=json_set(micro_task_json,'$.task','') WHERE run_id=?",
+                       (target['runId'],))
+        target_timeline = board.call('macro_task_timeline', {'macroTaskId': target['macroTaskId']})
+        self.assertEqual((target_timeline['rows'][0]['title'], target_timeline['rows'][0]['titleSource']),
+                         (None, 'none'))
+        row = board.call('macro_task_timeline', {'macroTaskId': correction['macroTaskId']})['rows'][0]
+        self.assertEqual((row['fixesTitle'], row['fixesTitleSource']), (None, 'none'))
+
+    def test_standalone_summary_keeps_an_absent_intent_title(self):
+        board = self.board()
+        run = self.submit(board, request_id='untitled')
+        with board.store.db.write() as db:
+            db.execute("UPDATE workflow_runs SET title=NULL,micro_task_json=json_set(micro_task_json,'$.task','') WHERE run_id=?",
+                       (run['runId'],))
+        standalone = next(group for group in self.list_(board)['macroTasks']
+                          if group['macroTaskId'] == f"run:{run['runId']}")
+        self.assertEqual((standalone['title'], standalone['titleSource']), (None, 'none'))
+
     def test_intent_title_is_not_replaced_by_worker_result_summary(self):
         board = self.board()
         submitted = self.submit(board, kind='worktree', task='Implement bounded routing\nDetailed request')
@@ -531,7 +550,10 @@ class MacroTaskReadTests(WorkflowTestCase):
         self.assertFalse(timeline['rows'][1]['shutdownConfirmed'])
         self.assertTrue(by_run[second['runId']]['uncertain'])
         self.assertEqual([row['depth'] for row in timeline['rows']], [0, 0])
-        self.assertEqual(timeline['events'][0]['label'], '派发')
+        dispatch = timeline['events'][0]
+        self.assertEqual({key: dispatch[key] for key in ('kind', 'decision', 'verdict', 'state', 'strategy', 'note')},
+                         {'kind': 'dispatch', 'decision': None, 'verdict': None, 'state': None,
+                          'strategy': None, 'note': None})
         self.assertEqual(timeline['events'][0]['actor'], {'role': 'host', 'id': 'host-1'})
         self.assertNotIn('controlToken', json.dumps(timeline))
 
@@ -606,9 +628,11 @@ class MacroTaskReadTests(WorkflowTestCase):
         run_id = run['runId']
         with board.store.db.write() as connection:
             lead = board.store._append_event(connection, 'workflow.request_approved', task_id=run_id,
-                                             payload={'actor': {'role': 'lead', 'id': 'lead-run'}})
+                                             payload={'actor': {'role': 'lead', 'id': 'lead-run'},
+                                                      'decision': 'approve', 'note': 'Host content ' * 40})
             console = board.store._append_event(connection, 'workflow.continued', task_id=run_id,
-                                                payload={'actor': {'role': 'console', 'id': 'session-1'}})
+                                                payload={'actor': {'role': 'console', 'id': 'session-1'},
+                                                         'verdict': 'accepted', 'state': 'recorded', 'strategy': 'merge'})
             takeover = board.store._append_event(connection, 'workflow.takeover', task_id=run_id,
                                                  payload={'newHostId': 'next-host'})
             submitted = board.store._append_event(connection, 'task.submitted', task_id=run_id,
@@ -616,6 +640,10 @@ class MacroTaskReadTests(WorkflowTestCase):
             unknown = board.store._append_event(connection, 'workflow.cancelled', task_id=run_id)
         timeline = board.call('macro_task_timeline', {'macroTaskId': f'run:{run_id}'})
         actors = {event['seq']: event['actor'] for event in timeline['events']}
+        events = {event['seq']: event for event in timeline['events']}
+        self.assertEqual((events[lead]['decision'], events[lead]['note']), ('approve', 'Host content ' * 40))
+        self.assertEqual(tuple(events[console][key] for key in ('verdict', 'state', 'strategy')),
+                         ('accepted', 'recorded', 'merge'))
         self.assertEqual(actors[lead], {'role': 'lead', 'id': 'lead-run'})
         self.assertEqual(actors[console], {'role': 'console', 'id': 'session-1'})
         self.assertEqual(actors[takeover], {'role': 'host', 'id': 'next-host'})

@@ -24,8 +24,6 @@ GRACE_SECONDS = 3 * 86400
 _RUNTIME_ID = r'[0-9a-f]{32}'
 _INSTALL_LOCK = re.compile(r'\.(' + _RUNTIME_ID + r')\.install\.lock')
 _BUILD_DIRECTORY = re.compile(r'\.(' + _RUNTIME_ID + r')\.build-.+')
-LABELS = {'harnesses':'Harness 私有会话', 'zcode':'ZCode 旧私有主目录', 'workspaces':'受管检出',
-          'runtimes':'运行时', 'backup':'上次升级之前的看板', 'durable':'看板与记录'}
 
 
 def tree_info(path: Path) -> tuple[int, str, bool]:
@@ -639,13 +637,12 @@ def inspect(store, *, git_proof: bool = True) -> dict:
                 add('durable', path, ['durable-record'])
                 continue
     categories = []
-    for key, label in LABELS.items():
+    for key in ('harnesses', 'zcode', 'workspaces', 'runtimes', 'backup', 'durable'):
         members = [r for r in rows if r['category'] == key]
         total_bytes = tree_info(state / 'workspaces')[0] if key == 'workspaces' else sum(r['bytes'] for r in members)
-        categories.append({'id': key, 'label': label, 'bytes': total_bytes,
+        categories.append({'id': key, 'bytes': total_bytes,
                            'reclaimableBytes': sum(r['bytes'] for r in members if r['eligible']),
-                           'count': len(members), 'eligibleCount': sum(r['eligible'] for r in members),
-                           'reasons': sorted({reason for r in members for reason in r['reasons']})})
+                           'count': len(members), 'eligibleCount': sum(r['eligible'] for r in members)})
     return {'createdAt': utc_now(), 'categories': categories, 'candidates': rows, 'orphanProcesses': orphaned}
 
 
