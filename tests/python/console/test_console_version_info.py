@@ -12,7 +12,6 @@ from unittest import mock
 
 from console.test_console import Browser
 from support import BoardTestCase
-from hey_my_buddy.blackboard.store import backup
 from hey_my_buddy.blackboard.store.db import SCHEMA_VERSION
 from hey_my_buddy.console import version_info
 from hey_my_buddy.console.console_sessions import ConsoleSessions
@@ -142,8 +141,7 @@ class VersionInfoTests(unittest.TestCase):
         self.assertNotIn("HMB_RUNTIME", os.environ)
         self.assertNotEqual(runtime.content_id(), self.installed.name)
         self.assertEqual(runtime.resolve_runtime()["state"], "SOURCE")
-        with mock.patch.object(backup, "preflight", side_effect=AssertionError("unexpected preflight")), \
-             mock.patch.object(runtime.subprocess, "check_output") as git:
+        with mock.patch.object(runtime.subprocess, "check_output") as git:
             info = version_info.version_info(self.state)
         git.assert_not_called()
         self.assertEqual(info["running"], {"mode": "source", "softwareVersion": "7.2.1",
@@ -225,7 +223,7 @@ class VersionInfoHTTPTests(_VersionConsoleTestCase):
         board = self.board()
         stated, browser = self.open_console(board)
         stranger = Browser(stated["url"], redeem=False)
-        expected = {"running": {"mode": "source", "softwareVersion": "0.40.0",
+        expected = {"running": {"mode": "source", "softwareVersion": "0.41.0",
                     "contractVersion": CONTRACT_VERSION, "schemaVersion": SCHEMA_VERSION,
                     "sourceCommit": None, "installedAt": None}, "installed": None}
         with mock.patch.object(version_info, "version_info", return_value=expected) as read:
@@ -251,24 +249,21 @@ class VersionInfoHTTPTests(_VersionConsoleTestCase):
         self.assertEqual(json.loads(body)["error"]["code"], "INTERNAL_ERROR")
         self.assertNotIn("private-token-and-path", body.decode())
 
-    def test_periodic_snapshot_never_reads_runtime_or_preflight(self):
+    def test_periodic_snapshot_never_reads_runtime_version(self):
         board = self.board()
         _stated, browser = self.open_console(board)
         with mock.patch.object(runtime, "resolve_runtime", wraps=runtime.resolve_runtime) as resolve, \
-             mock.patch.object(version_info, "version_info", wraps=version_info.version_info) as read, \
-             mock.patch.object(backup, "preflight", wraps=backup.preflight) as preflight:
+             mock.patch.object(version_info, "version_info", wraps=version_info.version_info) as read:
             for _ in range(3):
                 status, _headers, body = browser.get("/api/console")
                 self.assertEqual(status, 200)
                 self.assertNotIn("runtimeVersion", json.loads(body))
             self.assertEqual(read.call_count, 0)
             self.assertEqual(resolve.call_count, 0)
-            self.assertEqual(preflight.call_count, 0)
             status, _headers, body = browser.get("/api/runtime-version")
             self.assertEqual(status, 200, body[:200])
             self.assertEqual(read.call_count, 1)
             self.assertEqual(resolve.call_count, 1)
-            self.assertEqual(preflight.call_count, 0)
 
 
 class VersionInfoHandlerTests(_VersionConsoleTestCase):
@@ -314,8 +309,7 @@ class VersionInfoHandlerTests(_VersionConsoleTestCase):
         launcher.write_active_runtime(self.console.store.directory, self.installed)
         # The process environment may name a different state than this Console.
         with mock.patch.dict(os.environ, {"HMB_STATE_DIR": str(self.directory / "unrelated-state"),
-                                          "HMB_RUNTIME_ROOT": str(self.installed.parent)}), \
-             mock.patch.object(backup, "preflight", side_effect=AssertionError("unexpected preflight")):
+                                          "HMB_RUNTIME_ROOT": str(self.installed.parent)}):
             status, body = self.request("/api/runtime-version")
         self.assertEqual(status, 200)
         info = json.loads(body)
@@ -346,20 +340,17 @@ class VersionInfoHandlerTests(_VersionConsoleTestCase):
             self.assertEqual(status, 403)
             self.assertEqual(read.call_count, 0)
 
-    def test_periodic_handler_does_not_scan_versions_or_backup(self):
+    def test_periodic_handler_does_not_scan_versions(self):
         with mock.patch.object(runtime, "resolve_runtime", wraps=runtime.resolve_runtime) as resolve, \
-             mock.patch.object(version_info, "version_info", wraps=version_info.version_info) as read, \
-             mock.patch.object(backup, "preflight", wraps=backup.preflight) as preflight:
+             mock.patch.object(version_info, "version_info", wraps=version_info.version_info) as read:
             for _ in range(3):
                 self.assertEqual(self.request("/api/console")[0], 200)
             self.assertEqual(read.call_count, 0)
             self.assertEqual(resolve.call_count, 0)
-            self.assertEqual(preflight.call_count, 0)
             status, body = self.request("/api/runtime-version")
             self.assertEqual(status, 200, body[:200])
             self.assertEqual(read.call_count, 1)
             self.assertEqual(resolve.call_count, 1)
-            self.assertEqual(preflight.call_count, 0)
 
 
 if __name__ == "__main__":

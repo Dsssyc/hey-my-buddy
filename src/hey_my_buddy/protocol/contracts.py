@@ -14,7 +14,7 @@ control capacity that cancel, renew and result commits need.
 import c_two as cc
 
 # Patch releases share the software's major/minor contract (major.minor.0).
-CONTRACT_VERSION = "0.40.0"
+CONTRACT_VERSION = "0.41.0"
 CONTROL_NAME = "hey-my-buddy-control"
 WAIT_NAME = "hey-my-buddy-wait"
 
@@ -65,9 +65,6 @@ class BuddyControl:
         ...
 
     def worker_sessions(self, request_json: str) -> str:
-        ...
-
-    def backup(self, request_json: str) -> str:
         ...
 
     def runtime_info(self, request_json: str) -> str:

@@ -41,8 +41,6 @@ METHODS = [
     "harness-set",
     "quota-redetect",
     "runtime",
-    "backup",
-    "backup-preflight",
     "upgrade",
     "install",
     "paths",
@@ -563,9 +561,6 @@ def main(argv: list[str] | None = None, *, credential_document=_NO_CREDENTIAL_DO
         elif args.method == "install":
             from ..install.skill_install import install
             result = install(params)
-        elif args.method == "backup-preflight":
-            from ..blackboard.store.backup import preflight_command
-            result = preflight_command(params)
         elif args.method == "paths":
             from ..install.skill_install import paths
             result = paths(params)

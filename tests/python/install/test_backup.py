@@ -1,78 +1,71 @@
-"""Private backup publication and recovery evidence; never touches daily state."""
+"""Private backup publication, inventory, and recovery tests."""
+import hashlib
+import json
 import os
 from pathlib import Path
-from unittest import mock
-import json
-import hashlib
 import sqlite3
+import stat
+import unittest
+from unittest import mock
 
 from hey_my_buddy.blackboard.store import backup
 from hey_my_buddy.errors import BoardError
 from support import BoardTestCase
 
 
+STATE_FILES = ('console-settings.json', 'runtime-retention.json',
+               'active-runtime.json', 'launch-settings.json')
+
+
 class BackupTests(BoardTestCase):
-    def test_installation_fence_refuses_online_backup_in_both_modes(self):
+    def test_roundtrip_contains_board_and_existing_state_files_only(self):
         board = self.board()
-        for contract_changed in (False, True):
-            with self.subTest(contractChanged=contract_changed):
-                (board.directory / 'upgrade.json').write_text(json.dumps({'contractChanged': contract_changed}))
-                with mock.patch.object(backup, 'create', side_effect=AssertionError('online backup ran')):
-                    with self.assertRaises(BoardError) as caught:
-                        board.call('backup', {})
-                self.assertEqual(caught.exception.code, 'UPGRADE_IN_PROGRESS')
-                self.assertIn('install', caught.exception.message)
-
-    def test_backup_has_no_upgrade_token_parameter(self):
-        board = self.board()
-        with self.assertRaises(BoardError) as caught:
-            board.call('backup', {'upgradeToken': 'retired'})
-        self.assertEqual(caught.exception.code, 'INVALID_ARGUMENT')
-        self.assertIn('Unknown', caught.exception.message)
-
-    def test_roundtrip_one_generation_and_excluded_regenerable_data(self):
-        board = self.board()
-        for name in ('controls/x.json', 'submissions/y.json', 'attempts/run/attempt/result.json', 'attempts/run/attempt/result-receipt.json', 'workers/local/startup.json', 'worker-pool.json', 'workspaces/large', 'harnesses/zcode/native'):
-            p = board.directory / name
-            p.parent.mkdir(parents=True, exist_ok=True)
-            p.write_text('{}')
-        first = board.call('backup', {})
+        board.store.db.close()
+        for name in STATE_FILES:
+            (board.directory / name).write_text(json.dumps({'name': name, 'generation': 1}))
+        for name in ('controls/x.json', 'attempts/run/attempt/result.json',
+                     'workspaces/large', 'harnesses/zcode/native', 'console-sessions.json'):
+            path = board.directory / name
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text('retained evidence')
+        first = backup.create(board.store)
         current = Path(first['path'])
         manifest = backup.verify(current)
         self.assertTrue(first['verified'])
-        self.assertIn('state/controls/x.json', manifest['files'])
-        self.assertNotIn('state/attempts/run/attempt/result-receipt.json', manifest['files'])
-        self.assertNotIn('state/workers/local/startup.json', manifest['files'])
-        self.assertNotIn('state/worker-pool.json', manifest['files'])
-        self.assertFalse(any('workspaces' in p or 'harnesses' in p for p in manifest['files']))
-        (board.directory / 'controls/x.json').write_text('{"new":true}')
-        second = board.call('backup', {})
+        self.assertEqual(set(manifest['files']), {'board.sqlite3.gz', *(str(Path('state') / name) for name in STATE_FILES)})
+        self.assertEqual((current / 'state/console-settings.json').stat().st_mode & 0o777, 0o600)
+        (board.directory / 'console-settings.json').write_text('{"generation":2}')
+        second = backup.create(board.store)
         self.assertEqual(first['path'], second['path'])
-        self.assertEqual(json.loads((current / 'state/controls/x.json').read_text()), {'new': True})
-        self.assertEqual([p.name for p in current.parent.iterdir() if p.is_dir()], ['current'])
-        self.assertEqual((current / 'state/controls/x.json').stat().st_mode & 0o777, 0o600)
+        self.assertEqual(json.loads((current / 'state/console-settings.json').read_text()), {'generation': 2})
+        self.assertEqual([path.name for path in current.parent.iterdir() if path.is_dir()], ['current'])
 
-    def test_execution_receipts_and_startup_secrets_are_excluded_but_logs_remain_evidence(self):
-        from hey_my_buddy.protocol import attempt_evidence
+    def test_missing_state_files_are_optional(self):
         board = self.board()
-        directory = board.directory / "attempts" / "run" / "attempt"
-        directory.mkdir(mode=0o700, parents=True)
-        for name in ("result-receipt.json", "result-delivery.json", "execution.stdout.log", "execution.stderr.log"):
-            (directory / name).write_text("{}")
-        for name in ("execution-start.json", "execution-live.json", "execution-stop.json"):
-            (directory / name).write_text('{"private":"launch-secret"}')
-        files = backup.verify(Path(board.call("backup", {})["path"]))["files"]
-        for name in ("execution.stdout.log", "execution.stderr.log"):
-            self.assertIn("state/attempts/run/attempt/" + name, files)
-        for name in ("result-receipt.json", "result-delivery.json", "execution-start.json",
-                     "execution-live.json", "execution-stop.json"):
-            self.assertNotIn("state/attempts/run/attempt/" + name, files)
-        self.assertFalse(attempt_evidence.is_evidence("result-receipt.json"))
-        self.assertFalse(attempt_evidence.is_evidence("execution-live.json"))
+        board.store.db.close()
+        manifest = backup.verify(Path(backup.create(board.store)['path']))
+        self.assertEqual(set(manifest['files']), {'board.sqlite3.gz'})
+
+    def test_verify_rejects_out_of_scope_manifest_entry_with_valid_hash(self):
+        board = self.board()
+        board.store.db.close()
+        current = Path(backup.create(board.store)['path'])
+        outside = current / 'state/attempts/run/result.json'
+        outside.parent.mkdir(parents=True)
+        outside.write_bytes(b'outside backup scope')
+        manifest_path = current / 'manifest.json'
+        manifest = json.loads(manifest_path.read_text())
+        manifest['files']['state/attempts/run/result.json'] = {
+            'bytes': outside.stat().st_size, 'sha256': hashlib.sha256(outside.read_bytes()).hexdigest()}
+        manifest_path.write_text(json.dumps(manifest))
+        with self.assertRaises(BoardError) as caught:
+            backup.verify(current)
+        self.assertEqual(caught.exception.code, 'BACKUP_INVALID')
 
     def test_verify_refuses_consumed_upgrade_schema(self):
         board = self.board()
-        current = Path(board.call('backup', {})['path'])
+        board.store.db.close()
+        current = Path(backup.create(board.store)['path'])
         path = current / 'manifest.json'
         manifest = json.loads(path.read_text())
         manifest['schema'] = 21
@@ -89,7 +82,7 @@ class BackupTests(BoardTestCase):
             before = (board.directory / 'board.sqlite3').read_bytes()
             wal = (board.directory / 'board.sqlite3-wal').read_bytes()
             with self.assertRaises(BoardError) as caught:
-                backup.create(board.store, offline=True)
+                backup.create(board.store)
             self.assertEqual(caught.exception.code, 'BACKUP_INVALID')
             self.assertEqual((board.directory / 'board.sqlite3').read_bytes(), before)
             self.assertEqual((board.directory / 'board.sqlite3-wal').read_bytes(), wal)
@@ -97,178 +90,86 @@ class BackupTests(BoardTestCase):
 
     def test_failed_validation_keeps_old_backup_and_retries_incoming(self):
         board = self.board()
-        current = Path(board.call('backup', {})['path'])
+        board.store.db.close()
+        current = Path(backup.create(board.store)['path'])
         original = (current / 'manifest.json').read_bytes()
-        with mock.patch('hey_my_buddy.blackboard.store.backup.verify', side_effect=BoardError('BACKUP_INVALID', 'injected')):
+        with mock.patch.object(backup, 'verify', side_effect=BoardError('BACKUP_INVALID', 'injected')):
             with self.assertRaises(BoardError):
-                board.call('backup', {})
+                backup.create(board.store)
         self.assertEqual((current / 'manifest.json').read_bytes(), original)
-        board.call('backup', {})
+        backup.create(board.store)
         backup.verify(current)
         self.assertFalse((current.parent / '.incoming').exists())
 
-    def test_tamper_is_detected_and_source_symlink_refused(self):
+    def test_tamper_is_detected_and_linked_retained_evidence_is_untouched(self):
         board = self.board()
-        current = Path(board.call('backup', {})['path'])
+        board.store.db.close()
+        current = Path(backup.create(board.store)['path'])
         with (current / 'board.sqlite3.gz').open('ab') as stream:
             stream.write(b'tamper')
         with self.assertRaises(BoardError):
             backup.verify(current)
-        (board.directory / 'controls').mkdir(exist_ok=True)
-        (board.directory / 'controls/link').symlink_to(board.directory / 'board.sqlite3')
-        with self.assertRaises(BoardError) as error:
-            board.call('backup', {})
-        self.assertEqual(error.exception.code, 'BACKUP_UNSAFE_PATH')
-        self.assertEqual(error.exception.details['path'], 'controls/link')
-        self.assertIn('controls/link', error.exception.message)
+        sentinel = self.directory / 'outside-sentinel'
+        sentinel.write_text('retained evidence')
+        evidence = board.directory / 'attempts/run/attempt/result.json'
+        evidence.parent.mkdir(parents=True)
+        evidence.symlink_to(sentinel)
+        backup.create(board.store)
+        self.assertEqual(sentinel.read_text(), 'retained evidence')
+        self.assertTrue(evidence.is_symlink())
 
-    def test_linked_control_directory_is_refused_with_relative_path(self):
+    def test_linked_preserved_state_file_is_refused_without_publication(self):
         board = self.board()
-        (board.directory / 'controls').mkdir()
-        (board.directory / 'controls/sub').symlink_to(self.directory)
-        with self.assertRaises(BoardError) as error:
-            board.call('backup', {})
-        self.assertEqual(error.exception.code, 'BACKUP_UNSAFE_PATH')
-        self.assertEqual(error.exception.details['path'], 'controls/sub')
-        self.assertIn('controls/sub', error.exception.message)
+        board.store.db.close()
+        sentinel = self.directory / 'outside-sentinel'
+        sentinel.write_text('keep outside')
+        state_file = board.directory / 'console-settings.json'
+        state_file.symlink_to(sentinel)
+        with self.assertRaises(BoardError) as caught:
+            backup.create(board.store)
+        self.assertEqual(caught.exception.code, 'BACKUP_UNSAFE_PATH')
+        self.assertEqual(caught.exception.details['path'], str(state_file))
+        self.assertEqual(sentinel.read_text(), 'keep outside')
+        self.assertFalse((board.directory / 'backups/current').exists())
 
-    def test_attempt_private_native_home_and_provider_snapshots_are_excluded(self):
+    def test_retained_paths_do_not_join_backup_or_block_creation(self):
         board = self.board()
-        attempt = board.directory / 'attempts/run/attempt'
-        home = attempt / 'native/codex-home'
-        home.mkdir(parents=True)
-        secret = self.directory / 'private-auth.json'
-        secret.write_text('private auth must not be copied')
-        (home / 'auth.json').symlink_to(secret)
-        (home / 'native.sqlite').write_bytes(b'native cache')
-        for name in ('builtin-provider.json', 'personal-provider.json'):
-            (attempt / name).write_text('private provider key')
-            (attempt / 'native' / name).write_text('retained native record')
-        (attempt / 'result.json').write_text('{"status":"ok"}')
-
-        current = Path(board.call('backup', {})['path'])
-        manifest = backup.verify(current)
-        entries = set(manifest['files'])
-        self.assertIn('state/attempts/run/attempt/result.json', entries)
-        self.assertNotIn('state/attempts/run/attempt/native/builtin-provider.json', entries)
-        self.assertNotIn('state/attempts/run/attempt/native/personal-provider.json', entries)
-        self.assertFalse(any(name.startswith('state/attempts/run/attempt/native/codex-home/') for name in entries))
-        self.assertNotIn('state/attempts/run/attempt/builtin-provider.json', entries)
-        self.assertNotIn('state/attempts/run/attempt/personal-provider.json', entries)
-        self.assertTrue((home / 'auth.json').is_symlink())
-        self.assertEqual(secret.read_text(), 'private auth must not be copied')
-
-    def test_no_tool_private_homes_are_excluded_and_call_evidence_kept(self):
-        board = self.board()
-        invocation = board.directory / ('attempts/run/attempt/no-tool-' + 'a' * 32)
+        board.store.db.close()
+        native = board.directory / 'attempts/run/attempt/native/codex-home'
+        native.mkdir(parents=True)
         secret = self.directory / 'private-auth.json'
         secret.write_text('private credential')
-        dsh_modules = invocation / 'dsh-home/profiles/headless/node_modules'
-        dsh_modules.mkdir(parents=True)
-        (dsh_modules / '.bin').symlink_to(secret)
-        (dsh_modules / 'package.json').write_text('{"private":true}')
-        codex_home = invocation / 'native/codex-home'
-        codex_home.mkdir(parents=True)
-        (codex_home / 'auth.json').symlink_to(secret)
-        (codex_home / 'config.toml').write_text('private codex config')
-        zcode_state = invocation / 'native/storage'
-        zcode_state.mkdir(parents=True)
-        (zcode_state / 'session.db').write_bytes(b'native session state')
-        for name in ('builtin-provider.json', 'personal-provider.json'):
-            (invocation / name).write_text('private provider key')
-        (invocation / 'native.stderr.log').write_text('native stderr evidence')
-        (invocation / 'call-1').mkdir(parents=True)
-        (invocation / 'call-1/request.json').write_text('{"prompt":"call evidence"}')
-        (invocation / 'call-1/result.json').write_text('{"status":"ok"}')
-
-        current = Path(board.call('backup', {})['path'])
-        manifest = backup.verify(current)
-        entries = set(manifest['files'])
-        prefix = 'state/attempts/run/attempt/no-tool-' + 'a' * 32 + '/'
-        self.assertIn(prefix + 'call-1/request.json', entries)
-        self.assertIn(prefix + 'call-1/result.json', entries)
-        self.assertIn(prefix + 'native.stderr.log', entries)
-        self.assertFalse(any(name.startswith(prefix + 'dsh-home/') for name in entries))
-        self.assertFalse(any(name.startswith(prefix + 'native/') for name in entries))
-        self.assertNotIn(prefix + 'builtin-provider.json', entries)
-        self.assertNotIn(prefix + 'personal-provider.json', entries)
-        self.assertEqual(manifest['skippedAttemptEntries']['count'], 4)
-        self.assertTrue((dsh_modules / '.bin').is_symlink())
-        self.assertTrue((codex_home / 'auth.json').is_symlink())
+        (native / 'auth.json').symlink_to(secret)
+        checkout = board.directory / 'workspaces/large'
+        checkout.parent.mkdir()
+        checkout.write_text('unchanged checkout')
+        current = Path(backup.create(board.store)['path'])
+        self.assertEqual(set(backup.verify(current)['files']), {'board.sqlite3.gz'})
+        self.assertTrue((native / 'auth.json').is_symlink())
         self.assertEqual(secret.read_text(), 'private credential')
-        leaked = [name for name, row in manifest['files'].items()
-                  if any(secret_bytes in (current / name).read_bytes()
-                         for secret_bytes in (b'private credential', b'private codex config',
-                                              b'native session state', b'private provider key'))]
-        self.assertEqual(leaked, [])
+        self.assertEqual(checkout.read_text(), 'unchanged checkout')
 
-    def test_undeclared_attempt_symlinks_are_skipped_and_recorded(self):
+    @unittest.skipUnless(hasattr(os, 'mkfifo'), 'requires POSIX FIFOs')
+    def test_special_rollback_source_refuses_publication_and_keeps_previous_generation(self):
         board = self.board()
-        attempt = board.directory / 'attempts/run/attempt'
-        attempt.mkdir(parents=True)
-        secret = self.directory / 'leak.txt'
-        secret.write_text('link target must not be copied')
-        (attempt / 'unregistered.json').symlink_to(secret)
-        (attempt / 'linked-dir').symlink_to(self.directory)
-        (attempt / 'task.txt').write_text('{"kept":true}')
-
-        result = board.call('backup', {})
-        current = Path(result['path'])
-        manifest = backup.verify(current)
-        entries = set(manifest['files'])
-        self.assertIn('state/attempts/run/attempt/task.txt', entries)
-        self.assertNotIn('state/attempts/run/attempt/unregistered.json', entries)
-        self.assertFalse(any('linked-dir' in name for name in entries))
-        self.assertEqual(result['skippedAttemptEntries'], 2)
-        self.assertEqual(manifest['skippedAttemptEntries'],
-                         {'count': 2, 'paths': ['attempts/run/attempt/linked-dir', 'attempts/run/attempt/unregistered.json']})
-        self.assertTrue((attempt / 'unregistered.json').is_symlink())
-        self.assertEqual(secret.read_text(), 'link target must not be copied')
-        leaked = [name for name in entries if (current / name).read_bytes().find(b'link target must not be copied') >= 0]
-        self.assertEqual(leaked, [])
-
-    def test_nonregular_attempt_entry_is_skipped(self):
-        board = self.board()
-        attempt = board.directory / 'attempts/run/attempt'
-        attempt.mkdir(parents=True)
-        os.mkfifo(attempt / 'pipe')
-        result = board.call('backup', {})
-        manifest = backup.verify(Path(result['path']))
-        self.assertNotIn('state/attempts/run/attempt/pipe', manifest['files'])
-        self.assertEqual(manifest['skippedAttemptEntries'],
-                         {'count': 1, 'paths': ['attempts/run/attempt/pipe']})
-
-    def test_skip_recording_is_bounded_to_twenty_paths(self):
-        board = self.board()
-        attempt = board.directory / 'attempts/run/attempt'
-        attempt.mkdir(parents=True)
-        secret = self.directory / 'leak.txt'
-        secret.write_text('target')
-        for index in range(25):
-            (attempt / ('link-%02d' % index)).symlink_to(secret)
-
-        result = board.call('backup', {})
-        manifest = backup.verify(Path(result['path']))
-        recorded = manifest['skippedAttemptEntries']
-        self.assertEqual(result['skippedAttemptEntries'], 25)
-        self.assertEqual(recorded['count'], 25)
-        self.assertEqual(len(recorded['paths']), 20)
-        self.assertEqual(recorded['paths'], sorted(recorded['paths']))
-        self.assertTrue(all(path.startswith('attempts/run/attempt/link-') for path in recorded['paths']))
-
-    def test_no_tool_exclusion_requires_the_exact_structural_name(self):
-        board = self.board()
-        imprecise = board.directory / 'attempts/run/attempt/no-tool-not-a-hex-name/dsh-home'
-        imprecise.mkdir(parents=True)
-        secret = self.directory / 'leak.txt'
-        secret.write_text('target')
-        (imprecise / 'link').symlink_to(secret)
-
-        result = board.call('backup', {})
-        manifest = backup.verify(Path(result['path']))
-        self.assertEqual(manifest['skippedAttemptEntries'],
-                         {'count': 1, 'paths': ['attempts/run/attempt/no-tool-not-a-hex-name']})
-        self.assertEqual(secret.read_text(), 'target')
+        board.store.db.close()
+        current = Path(backup.create(board.store)['path'])
+        before = (current / 'manifest.json').read_bytes()
+        source = board.directory / 'console-settings.json'
+        for kind in ('directory', 'fifo'):
+            with self.subTest(kind=kind):
+                if kind == 'directory':
+                    source.mkdir()
+                else:
+                    os.mkfifo(source)
+                try:
+                    with self.assertRaises(BoardError) as caught:
+                        backup.create(board.store)
+                    self.assertEqual(caught.exception.code, 'BACKUP_UNSAFE_PATH')
+                    self.assertEqual((current / 'manifest.json').read_bytes(), before)
+                    self.assertEqual(stat.S_ISDIR(source.lstat().st_mode), kind == 'directory')
+                finally:
+                    source.rmdir() if kind == 'directory' else source.unlink()
 
     def test_snapshot_keeps_historical_json_sort_and_exemption_format(self):
         with sqlite3.connect(self.directory / "fingerprint.sqlite3") as connection:

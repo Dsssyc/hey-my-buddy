@@ -21,10 +21,6 @@ input[type="checkbox"] { width: 16px; height: 16px; padding: 0; accent-color: va
 .unsaved-mark { display: inline-block; margin-left: 6px; padding: 1px 5px; border: 1px solid var(--warning-line); border-radius: 3px; background: var(--warning-wash); color: var(--warning); font-size: 10px; font-weight: 600; }
 .chip-row { display: inline-flex; align-items: center; gap: 5px; flex-wrap: wrap; }
 .guard-banner { background: var(--subtle); color: var(--muted); border: 1px solid var(--line); }
-.backup-attention { align-items: stretch; flex-direction: column; }
-.backup-attention p { margin: 0; }
-.backup-attention summary { cursor: pointer; }
-.backup-attention ul { margin: 6px 0; padding-left: 18px; overflow-wrap: anywhere; }
 .activity-view { display: block; margin-top: 12px; }
 .activity-view .facts dd { max-width: 60ch; }
 .dialog-backdrop { position: fixed; inset: 0; z-index: 30; display: grid; place-items: center; padding: 20px; background: var(--overlay); }

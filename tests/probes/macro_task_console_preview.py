@@ -156,7 +156,7 @@ TOKEN_USAGE_KEYS = {"inputTokens", "cachedInputTokens", "outputTokens", "source"
 EMIT_SOURCE = "tests/probes/macro_task_console_preview.py"
 EMIT_SCENARIOS = ("normal", "readonly", "truncated", "error")
 EMIT_LAYOUT = {
-    "normal": ("backup-preflight.json", "console.json", "macro-tasks.json", "runtime-version.json", "tasks.json",
+    "normal": ("console.json", "macro-tasks.json", "runtime-version.json", "tasks.json",
                "timeline-macro-a.json", "timeline-macro-b.json", "timeline-standalone.json",
                "workflow-preview-run-a1.json", "workflow-preview-run-a2.json",
                "workflow-preview-run-b1-h1.json", "workflow-preview-run-b1.json",
@@ -165,7 +165,7 @@ EMIT_LAYOUT = {
     "readonly": ("console.json", "macro-tasks.json", "timeline-macro-a.json", "workflow-preview-run-a1.json"),
     "truncated": ("console.json", "macro-tasks.json", "timeline-macro-a.json", "workflow-preview-run-a1.json"),
     "error": ("console.json", "macro-tasks.json", "timeline-macro-a.json", "workflow-preview-run-a1.json"),
-    "incompatible": ("backup-preflight-malformed.json", "harness-quota-malformed.json",
+    "incompatible": ("harness-quota-malformed.json",
                      "snapshot-legacy-single-router.json", "snapshot-missing-session.json",
                      "snapshot-missing-tasks.json", "workflow-missing-revision.json"),
 }
@@ -1465,21 +1465,6 @@ def pending_root_count() -> int:
     return len(roots)
 
 
-def backup_preflight_report() -> dict:
-    """The on-demand preflight the storage panel reads explicitly.
-
-    Synthetic paths only, no real state directory; one skipped entry keeps the
-    attention banner's skipped/rejected semantics observable in the preview.
-    """
-
-    def inventory(count: int, entries: list[dict]) -> dict:
-        return {"count": count, "paths": [row["path"] for row in entries], "entries": entries}
-
-    skipped = [{"path": "attempts/undeclared-note.txt", "reason": "not-evidence-file"}]
-    return {"policy": "attempt-evidence", "ok": True, "needsAttention": True,
-            "copied": inventory(3, []), "skipped": inventory(1, skipped), "rejected": inventory(0, [])}
-
-
 def runtime_version_report() -> dict:
     """The version facts the settings page reads once: one synthetic installed runtime, in use."""
     facts = {"softwareVersion": "0.0.0", "contractVersion": "0.0.0", "schemaVersion": 0,
@@ -1687,7 +1672,6 @@ def endpoint_lines(port: int) -> tuple[str, ...]:
         f"GET  {base}/api/macro-tasks/{urllib.parse.quote(STANDALONE_GROUP, safe='')}/timeline",
         f"GET  {base}/api/tasks",
         f"GET  {base}/api/tasks/preview-run-a1",
-        f"GET  {base}/api/backup-preflight",
         f"GET  {base}/api/runtime-version",
         f"POST {base}/api/command  workflow_get · selection_get · selection_list · "
         f"buddy_list   (removed ops: 404; writes incl. macro_task_stop: 403)",
@@ -1787,8 +1771,6 @@ class PreviewHandler(BaseHTTPRequestHandler):
                 params = parse_query(query, frozenset({"limit", "state", "adapter", "before", "rootsOnly",
                                                        "query", "projectId", "hostId", "filter"}))
                 return self._json(200, task_page(params))
-            if path == "/api/backup-preflight":
-                return self._json(200, backup_preflight_report())
             if path == "/api/runtime-version":
                 return self._json(200, runtime_version_report())
             if path.startswith("/api/macro-tasks/") and path.endswith("/timeline"):
@@ -2431,13 +2413,10 @@ def emit_fixture_files() -> list[dict]:
             add(scenario, "console.json", "console-snapshot", "GET /api/console", 200, "accepted",
                 console_snapshot(scenario, assets_ready=False), request={})
         if scenario == "normal":
-            # The records view's own paginated read, the storage panel's on-demand
-            # preflight and the settings page's version facts: reads the slim
-            # snapshot does not carry.
+            # The records view's paginated read and the settings page's version
+            # facts are read separately from the slim snapshot.
             add(scenario, "tasks.json", "task-page", "GET /api/tasks", 200, "accepted",
                 task_page({}), request={})
-            add(scenario, "backup-preflight.json", "backup-preflight", "GET /api/backup-preflight",
-                200, "accepted", backup_preflight_report(), request={})
             add(scenario, "runtime-version.json", "runtime-version", "GET /api/runtime-version",
                 200, "accepted", runtime_version_report(), request={})
         add(scenario, "macro-tasks.json", "macro-tasks-page", "GET /api/macro-tasks", 200, "accepted",
@@ -2487,12 +2466,6 @@ def emit_fixture_files() -> list[dict]:
     add("incompatible", "snapshot-missing-tasks.json", "console-snapshot", "GET /api/console", 200,
         "rejected", missing_tasks, request={}, expected_code="INVALID_RESPONSE",
         mutation="tasks removed, leaving the slim snapshot without the server's board-wide pending count")
-    malformed_preflight = clone(backup_preflight_report())
-    malformed_preflight["rejected"] = "none"
-    add("incompatible", "backup-preflight-malformed.json", "backup-preflight", "GET /api/backup-preflight",
-        200, "rejected", malformed_preflight, request={}, expected_code="INVALID_RESPONSE",
-        mutation="backup-preflight rejected inventory replaced by the string \"none\" while every "
-                 "other field stays valid")
     missing_revision = clone(workflow_get({"runId": "preview-run-a1"}))
     missing_revision.pop("revision", None)
     add("incompatible", "workflow-missing-revision.json", "workflow-get", workflow_endpoint, 200,
@@ -2626,10 +2599,6 @@ def smoke(assets: Path, scenario: str) -> int:
         check("GET /api/tasks serves the paginated records page", status == 200
               and isinstance(records.get("runs"), list) and isinstance(records.get("total"), int)
               and records.get("nextCursor") is None, f"status={status}")
-        status, preflight, _headers = call("GET", "/api/backup-preflight")
-        check("GET /api/backup-preflight serves the on-demand report", status == 200
-              and preflight.get("needsAttention") is True and preflight.get("skipped", {}).get("count") == 1
-              and preflight.get("rejected", {}).get("count") == 0, f"status={status}")
         status, version, _headers = call("GET", "/api/runtime-version")
         check("GET /api/runtime-version serves the version facts", status == 200
               and version.get("running", {}).get("mode") == "runtime"

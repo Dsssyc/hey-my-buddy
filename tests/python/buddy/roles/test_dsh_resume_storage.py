@@ -1,4 +1,4 @@
-"""DSH native storage rides the common prepare, private-dir, backup and
+"""DSH native storage rides the common prepare, private-dir and
 reclamation rules; the capability under test stays a candidate injection.
 
 The real ``WorkerRunExecutor.prepare`` runs here over the real dsh run seam with
@@ -9,7 +9,7 @@ exercised. The candidate DshAdapter instance below carries ``native_resume``
 explicitly ``False`` local instance, so no case depends on the product class's
 current declared value; every injecting case captures that declaration before
 and after the injection and compares it instead of pinning it. The storage
-cases reuse this suite's micro-task-run fixture and the general storage and backup
+cases reuse this suite's micro-task-run fixture and the general storage
 rules; no new reclamation protocol is added. Fine-grained DSH_HOME isolation and
 the per-turn native facts belong to the candidate-native work and the Host's
 native checks, and only this file's own dummy credential bytes appear anywhere.
@@ -22,7 +22,6 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest import mock
 
-from hey_my_buddy.blackboard.store import backup
 from hey_my_buddy.buddy.harnesses.base import ExecutionContext
 from hey_my_buddy.buddy.harnesses.dsh.adapter import DshAdapter
 from hey_my_buddy.buddy.harnesses.registry import adapter as registry_adapter, run_seam
@@ -168,7 +167,7 @@ class CandidatePrepareTests(BoardTestCase):
 
 
 class DshNativeStorageRulesTests(WorkflowTestCase):
-    """The general backup and storage rules over a real micro task dsh run's micro task."""
+    """The general storage rules over a real micro task dsh run's micro task."""
 
     def setUp(self) -> None:
         super().setUp()
@@ -181,19 +180,6 @@ class DshNativeStorageRulesTests(WorkflowTestCase):
         return next(row for row in planned["candidates"]
                     if row["category"] == "harnesses" and row["adapter"] == "dsh"
                     and row["path"] == str(micro_task_dir))
-
-    def test_micro_task_native_state_stays_out_of_the_verified_backup(self):
-        board = self.board()
-        state = board.directory.resolve()
-        rollout = native_root(state, "dsh", "task-b") / "sessions" / "session.v3.jsonl.zstd"
-        rollout.parent.mkdir(parents=True)
-        rollout.write_bytes(ROLLOUT_BYTES)
-        first = board.call("backup", {})
-        self.assertTrue(first["verified"])
-        manifest = backup.verify(Path(first["path"]))
-        self.assertFalse(any("harnesses" in name for name in manifest["files"]))
-        self.assertFalse((Path(first["path"]) / "state" / "harnesses").exists())
-        self.assertEqual(rollout.read_bytes(), ROLLOUT_BYTES)
 
     def test_awaiting_and_grace_micro_tasks_are_kept_and_reclaim_takes_only_the_qualified_micro_task(self):
         board = self.board()

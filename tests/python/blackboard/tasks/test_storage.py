@@ -181,11 +181,18 @@ class StorageTests(BoardTestCase):
 
     def test_unknown_native_owner_and_durable_state_are_never_reclaimed(self):
         board = self.board()
+        previous_board = board.directory / 'backups/current/board.sqlite3.gz'
+        previous_board.parent.mkdir(parents=True)
+        previous_board.write_bytes(b'previous board')
         native = board.directory / 'harnesses/zcode/unknown'
         native.mkdir(parents=True)
         (native / 'sessions.sqlite').write_bytes(b'protected')
         with mock.patch('hey_my_buddy.blackboard.tasks.storage.process_inventory', return_value=([], [], True)):
             planned = board.call('storage_plan', {})
+            backup_row = next(row for row in planned['categories'] if row['id'] == 'backup')
+            self.assertEqual(backup_row['label'], '上次升级之前的看板')
+            self.assertEqual(backup_row['bytes'], previous_board.stat().st_size)
+            self.assertEqual(backup_row['reclaimableBytes'], 0)
             native_row = next(r for r in planned['candidates'] if r['category'] == 'zcode')
             self.assertFalse(native_row['eligible'])
             self.assertIn('owner-unproven', native_row['reasons'])
@@ -193,6 +200,7 @@ class StorageTests(BoardTestCase):
             result = board.call('storage_apply', params)
             self.assertEqual(result['removedBytes'], 0)
             self.assertTrue((native / 'sessions.sqlite').exists())
+            self.assertEqual(previous_board.read_bytes(), b'previous board')
             self.assertEqual(board.call('storage_apply', params), result)
 
     def test_archived_upgrade_evidence_stays_out_of_storage_plan_and_apply(self):

@@ -45,8 +45,6 @@ SUMMARIES: dict[str, str] = {
     "quota-redetect": "Open the one-shot routing retry window of a provider's no-reset quota exhaustion; no model or balance query.",
     "accounts": "Read cached native login status and billing type without a native refresh.",
     "runtime": "Installed-runtime identity, description and source-leak report.",
-    "backup": "Service-owned verified rolling backup.",
-    "backup-preflight": "Read-only evidence backup inventory: copying, skipping and refusal reasons; starts nothing.",
     "upgrade": "Coordinated skill, launcher and runtime upgrade; requires separate installation authorization.",
     "install": "Install the shared skill and its runtime; requires separate user authorization.",
     "paths": "Skill, launcher, data and runtime locations; reads files only and starts nothing.",
@@ -103,7 +101,6 @@ LOCAL_ROOTS: dict[str, tuple[str, str]] = {
     "install": ("install.skill_install", "install"),
     "upgrade": ("install.skill_install", "install"),
     "paths": ("install.skill_install", "paths"),
-    "backup-preflight": ("blackboard.store.backup", "preflight_command"),
     "console": ("cli.console_cli", "run"),
 }
 
@@ -123,7 +120,6 @@ METHOD_NOTES: dict[str, tuple[str, ...]] = {
     "accept": ("keyed by run and artifact: the same payload replays its recorded response and any changed payload conflicts",),
     "conclude": ("keyed by run: the same note replays and a changed note conflicts",),
     "reclaim": ("blocked removals report their reasons and change nothing; retry when the blocker is gone",),
-    "backup-preflight": ("reads directory entries only; no locks, files, database writes, service or runtime startup; samples are bounded to 20 paths per outcome",),
     "wait-capacity": ("takes no parameters",),
 }
 

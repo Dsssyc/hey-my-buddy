@@ -565,55 +565,6 @@ describe("conditional reads (ETag / If-None-Match / 304)", () => {
     expect(second.verifiedAtMs).toBe(Date.parse(fresh304));
   });
 
-  it("treats a legitimate HTTP 200 negative assessment as domain data, not a failure", async () => {
-    // The preflight DTO itself carries a negative verdict (ok:false with
-    // per-class reasons and no error object): a legal domain answer the panel
-    // must show as reasons — never as 读取失败.
-    const blocked = { policy: "attempt-evidence", ok: false, needsAttention: true,
-      legacyPlan: { present: false },
-      copied: { count: 2, paths: ["a"], entries: [{ path: "a", reason: "evidence" }] },
-      skipped: { count: 1, paths: ["b"], entries: [{ path: "b", reason: "not-evidence-file" }] },
-      rejected: { count: 1, paths: ["c"], entries: [{ path: "c", reason: "linked-path" }] } };
-    const fetcher = vi.fn<typeof fetch>()
-      .mockImplementationOnce(async () => jsonResponse(blocked, '"neg-1"'))
-      .mockImplementationOnce(async () => new Response(null, { status: 304, headers: { ETag: '"neg-1"' } }));
-    const api = createApi("/private", fetcher);
-    await expect(api.backupPreflight()).resolves.toMatchObject({ ok: false, needsAttention: true });
-    // The cached negative body revalidated by 304 stays domain data too.
-    await expect(api.backupPreflight()).resolves.toMatchObject({ rejected: { count: 1 } });
-  });
-
-  it("still refuses a real refusal envelope, HTTP-level failures and invalid reports on the preflight route", async () => {
-    const report = { policy: "attempt-evidence", ok: true, needsAttention: false,
-      copied: { count: 0, paths: [], entries: [] }, skipped: { count: 0, paths: [], entries: [] },
-      rejected: { count: 0, paths: [], entries: [] } };
-    // A service refusal envelope ({ok:false, error:{...}}) is a failure even
-    // on this route — and it clears the session-scoped cache.
-    let releaseEnvelope: ((value: Response) => void) | undefined;
-    const envelopeReply = new Promise<Response>(resolve => { releaseEnvelope = resolve; });
-    const fetcher = vi.fn<typeof fetch>()
-      .mockImplementationOnce(async () => jsonResponse(report, '"pf-1"'))
-      .mockImplementationOnce(() => envelopeReply)
-      .mockImplementationOnce(async () => new Response(JSON.stringify({ ok: false, error: { code: "CONSOLE_SESSION_EXPIRED", message: "expired" } }), { status: 401, headers: { "Content-Type": "application/json" } }));
-    const api = createApi("/private", fetcher);
-    await api.backupPreflight();
-    const refused = api.backupPreflight();
-    releaseEnvelope!(new Response(JSON.stringify({ ok: false, error: { code: "FORBIDDEN", message: "no" } }), { status: 200, headers: { "Content-Type": "application/json" } }));
-    await expect(refused).rejects.toHaveProperty("code", "FORBIDDEN");
-    // A later read carries no validator: the refusal cleared the cache.
-    const fresh = createApi("/private", vi.fn(async () => jsonResponse(report)));
-    await fresh.backupPreflight();
-    void fresh;
-    await expect(api.backupPreflight()).rejects.toHaveProperty("code", "CONSOLE_SESSION_EXPIRED");
-    // HTTP-level failures stay failures.
-    const http = createApi("/private", vi.fn(async () => new Response(
-      JSON.stringify({ ...report, ok: false }), { status: 403, headers: { "Content-Type": "application/json" } })) as typeof fetch);
-    await expect(http.backupPreflight()).rejects.toHaveProperty("code", "HTTP_403");
-    // An incomplete report body stays INVALID_RESPONSE.
-    const broken = createApi("/private", vi.fn(async () => jsonResponse({ policy: "x", ok: true })) as typeof fetch);
-    await expect(broken.backupPreflight()).rejects.toHaveProperty("code", "INVALID_RESPONSE");
-  });
-
   it("tolerates a response without a Date header by reporting no verification time", async () => {
     const fetcher = vi.fn(async () => new Response(JSON.stringify(macroTaskTimelineFixture())));
     const api = createApi("/private", fetcher);
@@ -628,26 +579,7 @@ describe("conditional reads (ETag / If-None-Match / 304)", () => {
     }
   });
 
-  it("parses the on-demand backup preflight and refuses an incomplete report", async () => {
-    const report = { policy: "attempt-evidence", ok: true, needsAttention: false,
-      copied: { count: 1, paths: ["a"], entries: [{ path: "a", reason: "evidence" }] },
-      skipped: { count: 0, paths: [], entries: [] },
-      rejected: { count: 0, paths: [], entries: [] } };
-    const fetcher = queued([
-      () => jsonResponse(report, '"pf-1"'),
-      () => new Response(null, { status: 304 }),
-      () => jsonResponse(report, '"pf-2"'),
-    ]);
-    const api = createApi("/private/", fetcher);
-    await expect(api.backupPreflight()).resolves.toMatchObject({ policy: "attempt-evidence" });
-    await expect(api.backupPreflight()).resolves.toMatchObject({ needsAttention: false });
-    expect(fetcher.mock.calls[1][1]?.headers).toMatchObject({ "If-None-Match": '"pf-1"' });
-    // An explicit re-check omits the validator so the fresh walk transfers.
-    await expect(api.backupPreflight(undefined, { refresh: true })).resolves.toMatchObject({ ok: true });
-    expect((fetcher.mock.calls[2][1]?.headers as Record<string, string> | undefined)?.["If-None-Match"]).toBeUndefined();
-    const broken = createApi("/private/", queued([() => jsonResponse({ ...report, ok: "yes" })]));
-    await expect(broken.backupPreflight()).rejects.toHaveProperty("code", "INVALID_RESPONSE");
-  });
+
 });
 
 describe("storage wire shapes (0.16, operations.md 3b0a2e6)", () => {

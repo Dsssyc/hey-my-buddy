@@ -392,19 +392,6 @@ export type ConsoleAccess = {
   sessions: { id: string; lastSeen: number; current: boolean }[];
 };
 export type ReminderSettings = { silenceSeconds: number; revision: number; updatedAt: string };
-export type BackupInventory = {
-  count: number;
-  paths: string[];
-  entries: { path: string; reason: string }[];
-};
-export type BackupPreflight = {
-  policy: string;
-  ok: boolean;
-  needsAttention: boolean;
-  copied: BackupInventory;
-  skipped: BackupInventory;
-  rejected: BackupInventory;
-};
 export type Snapshot = {
   harnesses?: HarnessHealth[];
   csrfToken: string;

@@ -1,8 +1,7 @@
 """The console's periodic read projection: slim by construction.
 
-The old periodic snapshot re-derived three expensive things every poll: the
-latest hundred fully decorated task rows, the backup preflight walk of every
-evidence directory, and the full evaluation/routing/harness projection. This
+The old periodic snapshot re-derived the latest hundred fully decorated task rows
+and the full evaluation/routing/harness projection every poll. This
 module builds the projection the console actually polls:
 
 * the evaluation core (``EvaluationStore.console_core``) — configuration,
@@ -12,8 +11,7 @@ module builds the projection the console actually polls:
   roots awaiting their Host, with the exact dedup semantics the top bar used.
 
 Full execution records stay on the existing paginated ``task_list`` route, and
-the backup preflight moved to its own authenticated on-demand route that reuses
-the original ``backup.preflight``. Each projection also reports the earliest
+Each projection also reports the earliest
 time at which one of its own fields can flip (quota retry and
 reset windows, router skip windows), so a read cache can serve it unchanged
 without freezing state that must expire.
@@ -59,10 +57,3 @@ def console_snapshot_projection(service, *, clock=_time.time) -> tuple[dict, flo
     if automatic:
         deadline = min(deadline, now + SCAN_SECONDS)
     return projection, deadline
-
-
-def backup_preflight(store) -> dict:
-    """The original backup preflight, computed on explicit request only."""
-    from ..blackboard.store.backup import preflight
-
-    return preflight(store.directory)

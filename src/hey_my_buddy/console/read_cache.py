@@ -306,17 +306,6 @@ class ReadOutcome:
         return json.loads(self.entry.body)
 
 
-def uncached_read(body: bytes, *, if_none_match: str | None, coding: str) -> ReadOutcome:
-    """A conditional outcome for a body that is recomputed on every read.
-
-    Used by routes whose content is always regenerated (the on-demand backup
-    preflight): only the transfer is conditional, but the validator and the
-    negotiated representation follow the same per-coding rules as the cache.
-    """
-    entry = Entry(body, (), float("inf"), 0.0)
-    return ReadOutcome(entry, not_modified=if_none_match_matches(if_none_match, entry.validator(coding)))
-
-
 class ReadCache:
     """Marker-checked, session-private response cache for one console."""
 

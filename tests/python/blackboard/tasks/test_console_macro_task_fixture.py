@@ -37,7 +37,7 @@ class ConsoleMacroTaskFixtureTests(unittest.TestCase):
                 self.assertEqual(facts["counts"]["attempts"], 13)
                 self.assertEqual(facts["counts"]["workflow_turns"], 12)
                 self.assertEqual(facts["largeResultBytes"], [8192, 8192])
-                self.assertEqual(facts["declaredEvidenceFiles"], 40)
+                self.assertGreaterEqual(facts["attemptFiles"], 40)
                 self.assertLess(facts["databaseBytes"], 3_000_000)
                 self.assertLess(facts["maxDisplaySummaryCharacters"], 200)
                 self.assertEqual(facts["foreignKeyViolations"], [])

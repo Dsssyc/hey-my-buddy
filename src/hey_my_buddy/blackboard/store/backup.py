@@ -1,4 +1,4 @@
-"""Service-owned, verified, single-generation backup (no schema changes)."""
+"""Verified, single-generation archive for installation rollback."""
 from __future__ import annotations
 
 from contextlib import closing
@@ -9,11 +9,9 @@ import hashlib
 import json
 import os
 from pathlib import Path
-import re
 import shutil
 import stat
 import sqlite3
-import subprocess
 import sys
 import tempfile
 import time
@@ -21,7 +19,6 @@ import time
 from .db import SCHEMA_VERSION, Database, utc_now
 from ...protocol.contracts import CONTRACT_VERSION
 from ...errors import BoardError
-from ...protocol import attempt_evidence
 from ... import private_dirs
 from ...private_dirs import linked as _linked
 
@@ -110,7 +107,7 @@ def _open(path: Path, mode: str):
 
 
 def _regular_files(root: Path, *, scope: str = ''):
-    """Walk verified backup payloads and non-attempt state; never follow links."""
+    """Walk backup payloads, refusing links and special files."""
     _guard(root)
     try:
         root_info = root.lstat()
@@ -144,146 +141,8 @@ def _regular_files(root: Path, *, scope: str = ''):
     yield from visit(root)
 
 
-STATE_FILES = ('console-sessions.json', 'console-settings.json',
-               'runtime-retention.json', 'active-runtime.json', 'launch-settings.json')
-
-
-def _scan(path: Path, *, attempt_depth: int | None = None):
-    """Inventory entries only, pruning every undeclared directory and every link.
-
-    ``attempt_depth`` is the number of structural containers still to enter
-    before paths become relative to one attempt. Skipped directory trees count
-    as one entry, including empty directories; their contents are never read.
-    """
-    def visit(item, depth, relative=Path()):
-        component = _linked_component(item)
-        if component is not None and component != private_dirs._absolute(item):
-            yield 'rejected', item, 'linked-path'
-            return
-        try:
-            info = item.lstat()
-        except FileNotFoundError:
-            return
-        except OSError:
-            yield 'rejected', item, 'unreadable-path'
-            return
-        link = component is not None or _linked(item)
-        is_dir = stat.S_ISDIR(info.st_mode) and not link
-        structural = depth is not None and (depth > 0 or not relative.parts)
-        expected_file = depth is None or depth == 0 and attempt_evidence.is_evidence(relative)
-        expected_dir = depth is None or structural or attempt_evidence.is_evidence_directory(relative)
-        declared = expected_file or expected_dir
-        if not declared:
-            yield 'skipped', item, 'not-evidence-directory' if is_dir else 'not-evidence-file'
-        elif link:
-            yield 'rejected', item, 'linked-evidence' if depth == 0 else 'linked-path'
-        elif is_dir and not expected_dir or not is_dir and not expected_file:
-            yield 'rejected', item, 'wrong-evidence-type' if depth == 0 else 'non-directory-path'
-        elif is_dir:
-            try:
-                children = sorted(item.iterdir())
-            except OSError:
-                yield 'rejected', item, 'unreadable-directory'
-                return
-            for child in children:
-                new_depth = None if depth is None else max(0, depth - 1)
-                new_relative = relative / child.name if depth == 0 else Path()
-                # Entering the attempt establishes a new relative root.
-                yield from visit(child, new_depth, new_relative)
-        elif stat.S_ISREG(info.st_mode) and (depth is None or depth == 0):
-            yield 'copied', item, 'declared-evidence' if depth == 0 else 'durable-state'
-        else:
-            yield 'rejected', item, 'nonregular-evidence' if depth == 0 else 'nonregular-path'
-    yield from visit(path, attempt_depth)
-
-
-def _single(path: Path):
-    if _linked_component(path):
-        yield 'rejected', path, 'linked-path'
-        return
-    try:
-        metadata = path.lstat()
-    except FileNotFoundError:
-        return
-    if stat.S_ISDIR(metadata.st_mode):
-        yield 'rejected', path, 'nonregular-path'
-    else:
-        yield from _scan(path)
-
-
-def preflight_entries(state: Path):
-    """Complete read-only stream used by backup, diagnostics and upgrade admission."""
-    state = Path(state)
-    if _linked_component(state):
-        yield 'rejected', state, 'linked-state-root' if _linked(state) else 'linked-state-ancestor'
-        return
-    if not state.exists():
-        return
-    if not state.is_dir():
-        yield 'rejected', state, 'non-directory-state-root'
-        return
-    # Online backup reads SQLite itself; the database path must still be regular.
-    yield from _single(state / 'board.sqlite3')
-    # Root -> micro task -> attempt -> declared relative evidence.
-    yield from _scan(state / 'attempts', attempt_depth=2)
-    for name in ('controls', 'submissions'):
-        yield from _scan(state / name)
-    # Workspace inputs and sealed outputs are durable evidence, independently
-    # of the checkout lifetime. Never enter checkouts or allocation locks.
-    workspaces = state / 'workspaces'
-    if _linked(workspaces) or workspaces.exists() and not workspaces.is_dir():
-        yield 'rejected', workspaces, 'linked-path' if _linked(workspaces) else 'non-directory-path'
-    elif workspaces.exists():
-        for allocation in sorted(workspaces.iterdir()):
-            if re.fullmatch(r'ws-[0-9a-f]{32}', allocation.name) is None:
-                continue
-            if _linked(allocation) or not allocation.is_dir():
-                yield 'rejected', allocation, 'linked-path' if _linked(allocation) else 'non-directory-path'
-                continue
-            for name in ('input.json', 'manifest.json'):
-                yield from _single(allocation / name)
-            yield from _scan(allocation / 'outputs')
-    # Retired DSH archive receipts remain ordinary historical evidence. A linked
-    # journal root or an undeclared name must never enter a verified backup.
-    session_journals = state / 'worker-session-cleanup'
-    if _linked(session_journals) or session_journals.exists() and not session_journals.is_dir():
-        yield 'rejected', session_journals, 'linked-path' if _linked(session_journals) else 'non-directory-path'
-    elif session_journals.exists():
-        for journal in sorted(session_journals.iterdir()):
-            if re.fullmatch(r'[0-9a-f]{64}\.json', journal.name):
-                yield from _single(journal)
-            else:
-                yield 'rejected', journal, 'undeclared-journal-entry'
-    for name in STATE_FILES:
-        yield from _single(state / name)
-
-
-def preflight(state: Path) -> dict:
-    """Report copying/skipping/refusal without locks, writes, hashing or startup."""
-    result = {kind: {'count': 0, 'paths': [], 'entries': []}
-              for kind in ('copied', 'skipped', 'rejected')}
-    for kind, path, reason in preflight_entries(state):
-        row = result[kind]
-        row['count'] += 1
-        if len(row['entries']) < 20:
-            relative = _shown_path(path.relative_to(state).as_posix())
-            row['paths'].append(relative)
-            row['entries'].append({'path': relative, 'reason': reason})
-    return {'policy': attempt_evidence.POLICY,
-            'ok': result['rejected']['count'] == 0,
-            'needsAttention': result['skipped']['count'] > 0 or result['rejected']['count'] > 0,
-            **result}
-
-
-def preflight_command(params: dict) -> dict:
-    """CLI-local read, deliberately independent of service and runtime startup."""
-    from ...protocol import schemas
-    from ... import home
-    schemas.reject_unknown(params, set(), 'backup-preflight')
-    if os.environ.get('HMB_AGENT_CREDENTIAL_FILE'):
-        raise BoardError('UNAUTHORIZED', 'A Worker cannot inspect Host backup sources')
-    state = Path(os.environ.get('HMB_STATE_DIR') or home.default_state_dir()).expanduser().absolute()
-    return preflight(state)
+STATE_FILES = ('console-settings.json', 'runtime-retention.json',
+               'active-runtime.json', 'launch-settings.json')
 
 
 def _private_copy(source: Path, target: Path) -> None:
@@ -378,23 +237,14 @@ def _verify(directory: Path) -> dict:
         manifest = json.load(stream)
     if manifest.get('format') != 1 or manifest.get('schema') != SCHEMA_VERSION:
         raise BoardError('BACKUP_INVALID', 'Unsupported backup format or schema')
-    policy = manifest.get('attemptEvidencePolicy')
-    if policy is not None and policy != attempt_evidence.POLICY:
-        raise BoardError('BACKUP_INVALID', 'Unsupported attempt evidence policy')
-    if policy == attempt_evidence.POLICY:
-        for relative in manifest['files']:
-            parts = Path(relative).parts
-            if parts[:2] == ('state', 'attempts') and (len(parts) < 5 or not attempt_evidence.is_evidence(Path(*parts[4:]).as_posix())):
-                raise BoardError('BACKUP_INVALID', 'Backup contains undeclared attempt evidence', file=relative)
-            if parts[:2] == ('state', 'worker-session-cleanup') and (len(parts) != 3 or re.fullmatch(r'[0-9a-f]{64}\.json', parts[2]) is None):
-                raise BoardError('BACKUP_INVALID', 'Backup contains undeclared Worker session journal', file=relative)
+    allowed = {'board.sqlite3.gz', *(str(Path('state') / name) for name in STATE_FILES)}
+    if 'board.sqlite3.gz' not in manifest['files'] or set(manifest['files']) - allowed:
+        raise BoardError('BACKUP_INVALID', 'Backup contains files outside the rollback inventory')
     actual = {str(p.relative_to(directory)) for p in _regular_files(directory) if p != directory / 'manifest.json'}
     if actual != set(manifest['files']):
         raise BoardError('BACKUP_INVALID', 'Backup inventory mismatch')
     for relative, row in manifest['files'].items():
         path = directory / relative
-        if Path(relative).is_absolute() or '..' in Path(relative).parts:
-            raise BoardError('BACKUP_INVALID', 'Unsafe manifest path')
         _guard(path)
         if path.lstat().st_size != row['bytes'] or digest(path) != row['sha256']:
             raise BoardError('BACKUP_INVALID', 'Backup payload hash mismatch', file=relative)
@@ -553,19 +403,13 @@ def recover(state: Path) -> Path:
         os.close(lock)
 
 
-def create(store, *, runtime_identity: dict | None = None, plugin_commit: str | None = None, contract_version: str = CONTRACT_VERSION, offline: bool = False) -> dict:
+def create(store, *, runtime_identity: dict | None = None, plugin_commit: str | None = None, contract_version: str = CONTRACT_VERSION) -> dict:
     started = time.monotonic()
     if _linked_component(store.directory):
         raise BoardError('BACKUP_UNSAFE_PATH', 'Backup state path cannot contain links', path='.')
     state = store.directory.resolve()
-    inventory = list(preflight_entries(state))
-    for kind, path, reason in inventory:
-        if kind == 'rejected':
-            relative = _shown_path(path.relative_to(state).as_posix())
-            raise BoardError('BACKUP_UNSAFE_PATH', 'Backup refuses ' + relative + ': ' + reason,
-                             path=relative, reason=reason)
     wal = state / 'board.sqlite3-wal'
-    if offline and wal.exists() and wal.stat().st_size:
+    if wal.exists() and wal.stat().st_size:
         raise BoardError('BACKUP_INVALID', 'Exact stopped-board archive requires a checkpointed WAL')
     root = state / 'backups'
     incoming, current, previous, journal, _ = _backup_paths(root)
@@ -592,16 +436,9 @@ def create(store, *, runtime_identity: dict | None = None, plugin_commit: str | 
             shutil.rmtree(incoming)
         incoming.mkdir(mode=0o700)
         snapshot = incoming / 'board.sqlite3'
-        _guard(state / 'board.sqlite3')
-        if offline:
-            # The coordinator owns both writer locks and has detached every owner.
-            # Copy the stopped database verbatim so the archive preserves its bytes.
-            _private_copy(state / 'board.sqlite3', snapshot)
-        else:
-            with _open(snapshot, 'xb'):
-                pass
-            with store.db.connect() as source, closing(sqlite3.connect(snapshot)) as target:
-                source.backup(target)
+        # The coordinator owns both writer locks and has detached every owner.
+        # Copy the stopped database verbatim so the archive preserves its bytes.
+        _private_copy(state / 'board.sqlite3', snapshot)
         os.chmod(snapshot, 0o600)
         with closing(sqlite3.connect(snapshot)) as connection:
             snapshot_metadata = database_snapshot(connection)
@@ -610,17 +447,13 @@ def create(store, *, runtime_identity: dict | None = None, plugin_commit: str | 
             with gzip.GzipFile(fileobj=compressed, mode='wb', compresslevel=6) as target:
                 shutil.copyfileobj(source, target)
         snapshot.unlink()
-        skipped_attempt_entries = sorted(_shown_path(path.relative_to(state).as_posix())
-                                         for kind, path, _ in inventory if kind == 'skipped')
-        for kind, path, _ in inventory:
-            if kind == 'copied' and path != state / 'board.sqlite3':
-                _private_copy(path, incoming / 'state' / path.relative_to(state))
-        skipped_attempt_entries.sort()
+        for name in STATE_FILES:
+            path = state / name
+            if path.exists() or _linked(path):
+                _private_copy(path, incoming / 'state' / name)
         files = {str(path.relative_to(incoming)): {'bytes': path.lstat().st_size, 'sha256': digest(path)} for path in _regular_files(incoming)}
         manifest = {'format': 1, 'createdAt': utc_now(), 'schema': schema, 'contract': contract_version, 'backupToolContract': CONTRACT_VERSION,
                     'databaseSnapshot':snapshot_metadata, 'runtime': runtime_identity, 'pluginCommit': plugin_commit, 'pluginCommitStatus': 'recorded' if plugin_commit else 'unavailable-in-source-metadata',
-                    'attemptEvidencePolicy': attempt_evidence.POLICY,
-                    'skippedAttemptEntries': {'count': len(skipped_attempt_entries), 'paths': skipped_attempt_entries[:20]},
                     'files': files}
         manifest_path = incoming / 'manifest.json'
         with _open(manifest_path, 'x') as stream:
@@ -657,7 +490,7 @@ def create(store, *, runtime_identity: dict | None = None, plugin_commit: str | 
             sync_dir(root)
         return {'path': str(current), 'verified': True, 'schema': schema,
                 'bytes': sum(row['bytes'] for row in files.values()) + manifest_path_size(current),
-                'fileCount': len(files), 'skippedAttemptEntries': len(skipped_attempt_entries),
+                'fileCount': len(files),
                 'durationSeconds': round(time.monotonic() - started, 3)}
     except Exception:
         if not published and not journal.exists() and incoming.exists() and not _linked(incoming):
@@ -671,19 +504,3 @@ def create(store, *, runtime_identity: dict | None = None, plugin_commit: str | 
 def manifest_path_size(current: Path) -> int:
     with _open(current / 'manifest.json', 'rb') as stream:
         return os.fstat(stream.fileno()).st_size
-
-
-def source_commit() -> str | None:
-    from ...install.runtime import project_root
-    for metadata in (project_root() / 'READY.json', project_root() / 'src/hey_my_buddy/build-info.json'):
-        try:
-            with _open(metadata, 'rb') as stream:
-                value = json.load(stream).get('sourceCommit')
-            if isinstance(value, str) and len(value) == 40:
-                return value
-        except (OSError, ValueError, BoardError):
-            pass
-    try:
-        return subprocess.check_output(['git', '-C', str(project_root()), 'rev-parse', 'HEAD'], stderr=subprocess.DEVNULL, text=True).strip()
-    except (OSError, subprocess.CalledProcessError):
-        return None
