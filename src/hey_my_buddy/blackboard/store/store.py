@@ -2335,19 +2335,16 @@ class BoardStore:
                 f"terminationReason must be one of {', '.join(TERMINATION_REASONS)}",
                 field="terminationReason",
             )
-        stop_reasons = {"wrap-up", "grace-expired", "forced-stop", "console-stop", "service-stop", "unknown-stop", "interrupted"}
+        if termination_reason == "interrupted":
+            raise BoardError("INVALID_ARGUMENT", "Only service recovery can record an interrupted result",
+                             field="terminationReason")
+        stop_reasons = {"wrap-up", "grace-expired", "forced-stop", "console-stop", "service-stop", "unknown-stop"}
         if termination_reason in stop_reasons and not shutdown_confirmed:
             raise BoardError("INVALID_ARGUMENT", "A stop termination reason requires confirmed shutdown",
                              field="terminationReason")
         if termination_reason == "wrap-up" and status != "cancelled":
             raise BoardError("INVALID_ARGUMENT", "wrap-up requires a cancelled result",
                              field="terminationReason")
-        if termination_reason == 'interrupted':
-            evidence = (result or {}).get('interruptionEvidence')
-            if status != 'failed' or not isinstance(evidence, dict) or evidence.get('kind') not in {
-                    'boot-changed', 'identity-absent', 'worker-stopped'}:
-                raise BoardError('INVALID_ARGUMENT', 'interrupted requires a failed result and recognized stop evidence',
-                                 field='terminationReason')
         error_text = schemas.optional_string(params, "error", max_length=4000)
         command_id = schemas.optional_string(params, "commandId", max_length=128) or f"result:{params.get('attemptId')}"
         attempt_id_param = schemas.required_string(params, "attemptId", max_length=128)

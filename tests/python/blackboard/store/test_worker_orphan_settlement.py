@@ -12,11 +12,11 @@ from hey_my_buddy.protocol import process_identity
 class OrphanSettlementTests(BoardTestCase):
     claimed = helpers.InterruptionRecoveryTests.claimed
 
-    def test_interrupted_receipt_requires_confirmed_stop_and_recognized_evidence(self):
+    def test_worker_cannot_report_interrupted_even_with_valid_looking_stop_evidence(self):
         board, client, task, claim, actor = self.claimed()
         valid = {**actor, 'status': 'failed', 'terminationReason': 'interrupted', 'shutdownConfirmed': True,
                  'result': {'interruptionEvidence': {'kind': 'identity-absent'}}}
-        for changes in ({'shutdownConfirmed': False}, {'status': 'ok'}, {'result': {}},
+        for changes in ({}, {'shutdownConfirmed': False}, {'status': 'ok'}, {'result': {}},
                         {'result': {'interruptionEvidence': {'kind': 'lease-expired'}}}):
             with self.subTest(changes=changes), self.assertRaises(BoardError) as caught:
                 board.call('worker_result', {**valid, **changes})

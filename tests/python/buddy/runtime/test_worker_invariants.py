@@ -189,6 +189,58 @@ class MarkerWriteFailureTests(unittest.TestCase):
             self.assertEqual(worker.settle_retirement(), ["orphaned-attempt:attempt-orphan"])
         recover.assert_called_once_with()
 
+    def test_empty_wait_windows_never_poll_orphan_recovery(self):
+        calls = []
+        def wait(**params):
+            calls.append(params)
+            if len(calls) == 4:
+                self.worker.stop.set()
+            return {"events": [], "head": 0, "recoveryNeeded": False}
+        with mock.patch.object(self.worker.client, "event_waiter", return_value=nullcontext(wait)), \
+             mock.patch.object(self.worker, "recover_orphans") as recover:
+            self.worker.wait_for_work()
+        self.assertEqual(len(calls), 4)
+        recover.assert_not_called()
+
+    def test_unknown_event_wakes_one_recovery_per_batch(self):
+        for needed in (False, True):
+            with self.subTest(recoveryNeeded=needed):
+                wait = mock.Mock(side_effect=[
+                    {"events": [], "head": 0, "recoveryNeeded": False},
+                    {"events": [{"kind": "worker.registered"}], "head": 12,
+                     "recoveryNeeded": needed}])
+                with mock.patch.object(self.worker.client, "event_waiter", return_value=nullcontext(wait)), \
+                     mock.patch.object(self.worker, "recover_orphans", return_value=True) as recover:
+                    self.worker.wait_for_work()
+                self.assertEqual(recover.call_count, int(needed))
+                self.assertEqual(self.worker._idle_cursor, 12)
+
+    def test_failed_recovery_keeps_event_trigger_and_backs_off(self):
+        self.worker._idle_cursor = 5
+        wait = mock.Mock(return_value={"events": [{"kind": "attempt.uncertain"}],
+                                       "head": 12, "recoveryNeeded": True})
+        with mock.patch.object(self.worker.client, "event_waiter", side_effect=lambda **_: nullcontext(wait)), \
+             mock.patch.object(self.worker, "recover_orphans", side_effect=[False, True]) as recover, \
+             mock.patch.object(self.worker.stop, "wait") as backoff:
+            self.worker.wait_for_work()
+            self.assertEqual(self.worker._idle_cursor, 5)
+            backoff.assert_called_once_with(worker_module.RECOVERY_RETRY_SECONDS)
+            self.worker.wait_for_work()
+            self.assertEqual(self.worker._idle_cursor, 12)
+        self.assertEqual(recover.call_count, 2)
+        self.assertEqual([call.kwargs['after'] for call in wait.call_args_list], [5, 5])
+
+    def test_replacement_with_an_old_claim_waits_for_unknown_events(self):
+        with mock.patch.object(self.worker.client, "claim", side_effect=BoardError(
+                "WORKER_BUSY", "the previous Worker still owns an unresolved attempt")):
+            self.assertEqual(self.worker.run_once(), "idle")
+
+    def test_empty_claim_does_not_skip_events_since_last_wait(self):
+        self.worker._idle_cursor = 8
+        with mock.patch.object(self.worker.client, "claim", return_value={"claim": None, "cursor": 12}):
+            self.assertEqual(self.worker.run_once(), "idle")
+        self.assertEqual(self.worker._idle_cursor, 8)
+
     def test_native_journal_must_prove_every_child_stopped_before_settlement(self):
         from hey_my_buddy.protocol import process_identity
 

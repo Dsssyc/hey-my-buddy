@@ -108,17 +108,44 @@ class ProcessIdentityTests(unittest.TestCase):
     def test_term_grace_then_kill_and_confirm(self):
         source = Source()
         source.starts.pop(201)
+        now = [0.0]
+        kill_time = [None]
 
         def signal_group(pgid, sig):
-            source.signals.append((pgid, sig))
+            source.signals.append((pgid, sig, now[0]))
             if sig == signal.SIGKILL:
+                kill_time[0] = now[0]
+
+        def advance(seconds):
+            now[0] += seconds
+            if kill_time[0] is not None and now[0] >= kill_time[0] + 1.5:
                 source.group = False
                 source.starts.pop(301)
 
         source.signal_group = signal_group
-        self.assertEqual(identity.stop_orphan_process(RECORD, source=source,
-                                                      settle_seconds=0.05), "worker-stopped")
-        self.assertEqual(source.signals, [(301, signal.SIGTERM), (301, signal.SIGKILL)])
+        with mock.patch.object(identity.time, "monotonic", side_effect=lambda: now[0]), \
+             mock.patch.object(identity.time, "sleep", side_effect=advance):
+            self.assertEqual(identity.stop_orphan_process(RECORD, source=source), "worker-stopped")
+        self.assertEqual([(pgid, sig) for pgid, sig, _ in source.signals],
+                         [(301, signal.SIGTERM), (301, signal.SIGKILL)])
+        self.assertGreaterEqual(kill_time[0], identity.COMMAND_STOP_GRACE_SECONDS)
+        self.assertLessEqual(kill_time[0], identity.COMMAND_STOP_GRACE_SECONDS + 0.05 + 1e-6)
+        self.assertGreaterEqual(now[0] - kill_time[0], 1.5)
+
+    def test_kill_observation_has_its_own_two_second_deadline(self):
+        source = Source()
+        source.starts.pop(201)
+        now = [0.0]
+
+        def signal_group(pgid, sig):
+            source.signals.append((pgid, sig, now[0]))
+
+        source.signal_group = signal_group
+        with mock.patch.object(identity.time, "monotonic", side_effect=lambda: now[0]), \
+             mock.patch.object(identity.time, "sleep", side_effect=lambda seconds: now.__setitem__(0, now[0] + seconds)):
+            self.assertEqual(identity.stop_orphan_process(RECORD, source=source), "unknown")
+        self.assertEqual(source.signals[1][1], signal.SIGKILL)
+        self.assertGreaterEqual(now[0] - source.signals[1][2], 2.0)
 
     def test_group_probe_reports_only_esrch_as_absent(self):
         with mock.patch.object(identity.os, "killpg", side_effect=ProcessLookupError):

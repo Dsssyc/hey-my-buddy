@@ -17,8 +17,7 @@ from pathlib import Path
 from typing import Any
 
 from ...errors import BoardError
-
-COMMAND_STOP_GRACE_SECONDS = 3.0
+from ...protocol.process_identity import COMMAND_STOP_GRACE_SECONDS
 
 
 @dataclass

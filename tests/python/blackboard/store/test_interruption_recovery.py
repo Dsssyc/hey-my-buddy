@@ -114,6 +114,20 @@ class InterruptionRecoveryTests(BoardTestCase):
         view = board.call('task_get', {'runId': task['taskId']})['task']
         self.assertEqual(view['interruptionEvidence']['kind'], 'worker-stopped')
 
+    def test_candidate_reads_native_journal_location_once(self):
+        board, client, task, _, actor = self.claimed()
+        client.register_worker('replacement', adapter='command', capabilities=['command'])
+        with patch.object(interruption.processes, 'inspect_process_identity', return_value='alive'):
+            board.store.reconcile_startup()
+        journal = {'path': 'native-journal', 'binding': {'attemptId': actor['attemptId']}}
+        with patch.object(interruption.processes, 'worker_identity_alive', return_value=False), \
+             patch.object(interruption.processes, 'inspect_process_identity', return_value='identity-absent'), \
+             patch.object(interruption, '_native_journal', return_value=journal) as native_journal:
+            candidates = board.call('worker_recover', {'workerId': 'replacement'})['candidates']
+        self.assertEqual(candidates, [{'attemptId': actor['attemptId'],
+                                       'processIdentity': IDENTITY, 'nativeJournal': journal}])
+        native_journal.assert_called_once()
+
     def test_periodic_sweep_proves_stop_without_a_service_restart(self):
         board, client, task, _, actor = self.claimed()
         with board.store.db.write() as connection:

@@ -457,7 +457,7 @@ class Worker:
                 return
             self.log(f"orphan identity publication unavailable ({error.code})")
 
-    def recover_orphans(self) -> None:
+    def recover_orphans(self) -> bool:
         """Stop only a still verified orphan group and report evidence for the service sweep."""
         from ...protocol.process_identity import (
             read_native_process_journal, stop_orphan_process,
@@ -474,11 +474,12 @@ class Worker:
             candidates = response['candidates']
         except BoardError as error:
             self.log(f"orphan recovery unavailable ({error.code})")
-            return
+            return False
         observed = response.get('observedAttempt')
         if (observed is not None and observed['executionState'] == 'finished'
                 and observed['shutdownConfirmed']):
             orphan_path.unlink()
+        reported = True
         for candidate in candidates:
             identity = candidate["processIdentity"]
             # The process-identity boundary checks the complete boot/PID/start
@@ -519,6 +520,8 @@ class Worker:
                         orphan_path.unlink()
             except BoardError as error:
                 self.log(f"orphan settlement unavailable ({error.code})")
+                reported = False
+        return reported
 
     def attempt_directory(self, task_id: str | None, attempt_id: str) -> Path:
         return self.state_dir / "attempts" / (task_id or "unknown") / attempt_id
@@ -574,18 +577,17 @@ class Worker:
             self.live.stop()
 
     def wait_for_work(self) -> None:
-        """Wait after the empty claim's snapshot; a timeout only renews the wait."""
+        """Wait after the last consumed event page; a timeout only renews the wait."""
         try:
             with self.client.event_waiter(worker_id=self.worker_id) as wait:
                 while not self.stop_requested() and not self.retire_requested():
                     page = wait(after=self._idle_cursor, timeout_ms=IDLE_WAIT_TIMEOUT_MS, limit=1)
                     if page["events"]:
+                        if page["recoveryNeeded"] and not self.recover_orphans():
+                            self.stop.wait(RECOVERY_RETRY_SECONDS)
+                            return
                         self._idle_cursor = page["head"]
                         return
-                    # A previous Worker may have died while its lease was still
-                    # valid. Once the service's sweep marks that attempt unknown,
-                    # this idle replacement must check the new recovery candidate.
-                    self.recover_orphans()
         except BoardError as error:
             self.log(f"event wait failed: {error.code}")
             if not self.stop_requested() and not self.retire_requested():
@@ -604,10 +606,13 @@ class Worker:
             )
         except BoardError as error:
             self.log(f"claim failed: {error.code}")
-            return "retry"
+            # A replacement has no live handle for the previous process's claim.
+            # Wait for its uncertainty event so this slot can recover that orphan.
+            return "idle" if error.code == "WORKER_BUSY" else "retry"
         claim = response.get("claim")
         if not claim:
-            self._idle_cursor = response["cursor"]
+            # Only a consumed wait page advances the event cursor. A claim's
+            # snapshot could skip an uncertainty event raised since the last wake.
             self.spool.clear_startup()
             return "idle"
         attempt = claim["attempt"]

@@ -171,9 +171,9 @@ def worker_recover(board, params: dict) -> dict:
             reserved = _reserve(board, attempt, record, kind)
             return {'settled': False, 'stopObserved': reserved is not None, 'evidence': reserved}
         observed = processes.inspect_process_identity(record)
-        if observed == 'alive' or (observed == 'identity-absent' and _native_journal(board, attempt, record) is not None):
+        journal = _native_journal(board, attempt, record) if observed in ('alive', 'identity-absent') else None
+        if observed == 'alive' or (observed == 'identity-absent' and journal is not None):
             candidate = {'attemptId': attempt['attempt_id'], 'processIdentity': record}
-            journal = _native_journal(board, attempt, record)
             if journal is not None:
                 candidate['nativeJournal'] = journal
             candidates.append(candidate)

@@ -22,7 +22,7 @@ import time
 import unittest
 from pathlib import Path
 
-from support import BoardTestCase, wait_for
+from support import BoardTestCase, wait_for, stop_private_workers
 
 from hey_my_buddy.buddy.harnesses.registry import ExecutionContext, adapter as get_adapter
 from hey_my_buddy.buddy.harnesses.base import AdapterOutcome
@@ -483,6 +483,9 @@ class RealDaemonRestart(RecoveryBase):
         identity = None
         try:
             with self.daemon(env=environment):
+                # Only the replacement must find its orphan: an unrelated idle
+                # pool slot would conceal a WORKER_BUSY retry loop here.
+                stop_private_workers(self.directory)
                 supervisor = subprocess.Popen(
                     [sys.executable, "-m", "hey_my_buddy.buddy.runtime.supervisor",
                      "--worker-id", f"crash-{suffix}", "--state-dir", str(self.directory),
