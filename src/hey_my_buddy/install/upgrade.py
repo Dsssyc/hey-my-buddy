@@ -297,9 +297,10 @@ def restore(state: Path, current: Path) -> None:
 
 
 def verify_started(state: Path, target: Path, health: dict, before: dict, *, contract_changed: bool = True) -> dict:
-    if health.get('runtimeContentId') != target.name or not health.get('runtimeStable') or health.get('schemaVersion') != SCHEMA_VERSION:
+    expected_schema = before['schema']
+    if health.get('runtimeContentId') != target.name or not health.get('runtimeStable') or health.get('schemaVersion') != expected_schema:
         raise BoardError('UPGRADE_VERIFY_FAILED', 'Replacement runtime identity or schema did not match',
-                         tables=['meta'] if health.get('schemaVersion') != SCHEMA_VERSION else [])
+                         tables=['meta'] if health.get('schemaVersion') != expected_schema else [])
     settings = before.get('runtimeSettings', {})
     if any(health.get(key) != value for key, value in settings.items()):
         raise BoardError('UPGRADE_VERIFY_FAILED', 'Configured runtime capacity changed')
@@ -313,7 +314,7 @@ def verify_started(state: Path, target: Path, health: dict, before: dict, *, con
                    if actual['fingerprints'].get(name) != value]
         if changed:
             raise BoardError('UPGRADE_VERIFY_FAILED', 'Retained database values changed', tables=changed)
-    return {'runtimeContentId': target.name, 'schemaVersion': SCHEMA_VERSION,
+    return {'runtimeContentId': target.name, 'schemaVersion': expected_schema,
             **({'retainedDataFingerprints': True} if contract_changed else {})}
 
 

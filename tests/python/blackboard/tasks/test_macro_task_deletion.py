@@ -714,6 +714,22 @@ class MacroTaskDeletionTests(WorkflowTestCase):
             db.execute("INSERT INTO provider_cooling(harness,provider,consecutive_rejections,"
                        "cooling_until,last_rejected_at) VALUES(?,?,?,?,?)",
                        ("codex", "fixture", 2, now, now))
+            db.execute("INSERT INTO maintenance_runs(maintenance_run_id,trigger_type,buddy_id,task_id,"
+                       "state,started_at,finished_at) VALUES('maintenance','manual','fixture',?,'completed',?,?)",
+                       (other["runId"], now, now))
+            db.execute("INSERT INTO domain_nodes(node_id,name,definition,maintenance_run_id)"
+                       " VALUES('domain','Domain','Retained expertise','maintenance')")
+            db.execute("INSERT INTO kind_summaries(harness,model,effort,text,maintenance_run_id)"
+                       " VALUES('codex','fixture','high','Retained observations','maintenance')")
+            for task in (run, other):
+                db.execute("INSERT INTO micro_task_classifications VALUES(?, 'domain','review','maintenance')",
+                           (task["runId"],))
+                db.execute("INSERT INTO kind_summary_citations VALUES('codex','fixture','high',?)",
+                           (task["runId"],))
+            db.execute("INSERT INTO routing_judgments VALUES('owned-decision','domain','review')")
+            db.execute("INSERT INTO evaluation_decisions(decision_id,status,created_at)"
+                       " VALUES('retained-decision','completed',?)", (now,))
+            db.execute("INSERT INTO routing_judgments VALUES('retained-decision',NULL,'research')")
             db.execute("INSERT INTO commands(command_id,task_id,kind,request_hash,response_json,subject)"
                        " VALUES(?,?,?,?,?,?)",
                        ("owned-content-command", run["runId"], "workflow.fixture", "hash",
@@ -740,11 +756,22 @@ class MacroTaskDeletionTests(WorkflowTestCase):
                 ("workflow_routes", "decision_id", "owned-decision"),
                 ("decision_requests", "decision_id", "owned-decision"),
                 ("evaluation_decisions", "decision_id", "owned-decision"),
+                ("micro_task_classifications", "run_id", run["runId"]),
+                ("kind_summary_citations", "run_id", run["runId"]),
+                ("routing_judgments", "decision_id", "owned-decision"),
             ):
                 with self.subTest(table=table):
                     self.assertIsNone(db.execute(f"SELECT 1 FROM {table} WHERE {column}=?", (value,)).fetchone())
             self.assertIsNone(db.execute("SELECT 1 FROM commands WHERE command_id='owned-content-command'").fetchone())
             self.assertIsNone(db.execute("SELECT 1 FROM commands WHERE command_id='owned-stop-command'").fetchone())
+            for table in ("micro_task_classifications", "kind_summary_citations"):
+                self.assertEqual([row[0] for row in db.execute(f"SELECT run_id FROM {table}")],
+                                 [other["runId"]], table)
+            self.assertEqual([tuple(row) for row in db.execute("SELECT * FROM routing_judgments")],
+                             [("retained-decision", None, "research")])
+            for table in ("domain_nodes", "maintenance_runs", "kind_summaries"):
+                self.assertEqual(db.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0], 1, table)
+            self.assertEqual(db.execute("PRAGMA foreign_key_check").fetchall(), [])
             cooling = db.execute("SELECT consecutive_rejections,cooling_until,last_rejected_at"
                                  " FROM provider_cooling WHERE harness='codex' AND provider='fixture'").fetchone()
             self.assertEqual(tuple(cooling), (2, now, now))

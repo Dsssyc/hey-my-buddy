@@ -982,23 +982,27 @@ CREATE INDEX IF NOT EXISTS router_outcomes_attempt_idx ON router_outcomes(attemp
 
 DOMAIN_EVALUATION_SCHEMA = """
 CREATE TABLE IF NOT EXISTS maintenance_runs (
-    maintenance_run_id TEXT PRIMARY KEY,
+    maintenance_run_id TEXT NOT NULL PRIMARY KEY,
     trigger_type       TEXT NOT NULL CHECK (trigger_type IN ('interval','manual')),
     buddy_id           TEXT NOT NULL,
     task_id            TEXT NOT NULL UNIQUE REFERENCES tasks(task_id) ON DELETE RESTRICT,
     state              TEXT NOT NULL CHECK (state IN ('running','completed','failed')),
-    reason             TEXT,
+    reason_code        TEXT,
+    reason_params_json TEXT,
     started_at         TEXT NOT NULL,
     finished_at        TEXT,
     CHECK ((state='running') = (finished_at IS NULL)),
-    CHECK (state!='failed' OR reason IS NOT NULL),
+    CHECK ((reason_code IS NULL AND reason_params_json IS NULL)
+        OR (reason_code IS NOT NULL AND reason_params_json IS NOT NULL
+            AND json_valid(reason_params_json) AND json_type(reason_params_json)='object')),
+    CHECK (state!='failed' OR reason_code IS NOT NULL),
     CHECK (finished_at IS NULL OR finished_at >= started_at)
 );
 CREATE UNIQUE INDEX IF NOT EXISTS maintenance_runs_running_unique
     ON maintenance_runs(state) WHERE state='running';
 
 CREATE TABLE IF NOT EXISTS domain_nodes (
-    node_id            TEXT PRIMARY KEY,
+    node_id            TEXT NOT NULL PRIMARY KEY,
     name               TEXT NOT NULL CHECK (length(trim(name)) > 0),
     definition         TEXT NOT NULL CHECK (length(trim(definition)) > 0),
     parent_id          TEXT REFERENCES domain_nodes(node_id) ON DELETE RESTRICT,
@@ -1012,7 +1016,7 @@ CREATE UNIQUE INDEX IF NOT EXISTS domain_nodes_active_name_unique
 CREATE INDEX IF NOT EXISTS domain_nodes_parent_idx ON domain_nodes(parent_id);
 
 CREATE TABLE IF NOT EXISTS micro_task_classifications (
-    run_id             TEXT PRIMARY KEY REFERENCES workflow_runs(run_id) ON DELETE RESTRICT,
+    run_id             TEXT NOT NULL PRIMARY KEY REFERENCES workflow_runs(run_id) ON DELETE RESTRICT,
     domain_node_id     TEXT NOT NULL REFERENCES domain_nodes(node_id) ON DELETE RESTRICT,
     task_type          TEXT NOT NULL CHECK (task_type IN ('create','change','debug','verify','review','research','write')),
     maintenance_run_id TEXT NOT NULL REFERENCES maintenance_runs(maintenance_run_id) ON DELETE RESTRICT
@@ -1037,7 +1041,7 @@ CREATE TABLE IF NOT EXISTS kind_summary_citations (
 CREATE INDEX IF NOT EXISTS kind_summary_citations_run_idx ON kind_summary_citations(run_id);
 
 CREATE TABLE IF NOT EXISTS routing_judgments (
-    decision_id    TEXT PRIMARY KEY REFERENCES evaluation_decisions(decision_id) ON DELETE RESTRICT,
+    decision_id    TEXT NOT NULL PRIMARY KEY REFERENCES evaluation_decisions(decision_id) ON DELETE RESTRICT,
     domain_node_id TEXT REFERENCES domain_nodes(node_id) ON DELETE RESTRICT,
     task_type      TEXT NOT NULL CHECK (task_type IN ('create','change','debug','verify','review','research','write'))
 );

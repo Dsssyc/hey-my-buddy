@@ -1,4 +1,4 @@
-"""The installed upgrade base opens directly with the current schema."""
+"""The installed schema-30 stock upgrades explicitly without changing its evidence."""
 from __future__ import annotations
 
 import hashlib
@@ -14,6 +14,8 @@ from blackboard.store.upgrade_fixture import FIXTURE, load_fixture, _git, _sha, 
 from hey_my_buddy.blackboard.store.store import BoardStore
 from hey_my_buddy.blackboard.routing import router, router_sequence
 from hey_my_buddy.blackboard.store.db import Corruption, Database, SCHEMA_VERSION
+from hey_my_buddy.blackboard.store import upgrade as schema_upgrade
+from hey_my_buddy.blackboard.store.upgrade import UPGRADE_BASE_SCHEMA, upgrade_state
 from hey_my_buddy.blackboard.tasks import workspace
 from hey_my_buddy.blackboard.tasks.workflow import WorkflowCoordinator
 from hey_my_buddy.errors import BoardError
@@ -26,8 +28,10 @@ class UpgradeFixtureTests(unittest.TestCase):
         self.root = Path(tempfile.mkdtemp(prefix='upgrade-base-fixture-'))
 
 
-    def restored(self, name='state'):
+    def restored(self, name='state', *, migrate=True):
         fixture = load_fixture(self.root / name)
+        if migrate:
+            upgrade_state(fixture['state'])
         connection = sqlite3.connect(fixture['state'] / 'board.sqlite3')
         connection.row_factory = sqlite3.Row
         self.addCleanup(connection.close)
@@ -114,14 +118,14 @@ class UpgradeFixtureTests(unittest.TestCase):
 
 
     def test_public_operation_stock_retains_source_schema_and_history_hashes(self):
-        fixture, connection = self.restored()
-        self.assertEqual(fixture['sourceCommit'], '4a9fce3e11c48c55975f9b1251c0a8f03a31f707')
-        self.assertEqual(fixture['sourceVersion'], '0.54.0')
-        self.assertEqual(fixture['schemaVersion'], SCHEMA_VERSION)
+        fixture, connection = self.restored(migrate=False)
+        self.assertEqual(fixture['sourceCommit'], '4de1dd9478980e924a4a86b2c50aaca33e33b79d')
+        self.assertEqual(fixture['sourceVersion'], '0.54.1')
+        self.assertEqual(fixture['schemaVersion'], UPGRADE_BASE_SCHEMA)
         self.assertEqual(connection.execute('PRAGMA integrity_check').fetchone()[0], 'ok')
         self.assertEqual(connection.execute('PRAGMA foreign_key_check').fetchall(), [])
         self.assertEqual(connection.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone()[0],
-                         str(SCHEMA_VERSION))
+                         str(UPGRADE_BASE_SCHEMA))
         self.assertEqual({row[0] for row in connection.execute('SELECT key FROM meta')},
                          {'schema_version', 'capability_secret'})
         self.assertEqual(tuple(connection.execute(
@@ -207,15 +211,23 @@ class UpgradeFixtureTests(unittest.TestCase):
             load_fixture(first['state'])
 
 
-    def test_base_opens_directly_and_matches_fresh_structure(self):
-        fixture, connection = self.restored()
+    def test_base_requires_explicit_upgrade_and_matches_fresh_structure(self):
+        fixture, connection = self.restored(migrate=False)
         state = fixture['state']
         before = upgrade.idle_snapshot(state)
+        old_rows = {name: [tuple(row) for row in connection.execute(f'SELECT rowid,* FROM "{name}" ORDER BY rowid')]
+                    for name in before['tables']}
         files = {p.relative_to(native_path(state)): p.read_bytes() for p in native_path(state).rglob('*')
                  if p.is_file() and not p.name.startswith('board.sqlite3')}
-        rowids = {name: [row[0] for row in connection.execute(f'SELECT rowid FROM "{name}" ORDER BY rowid')]
-                  for name in before['tables']}
-        self.assertEqual(before['schema'], SCHEMA_VERSION)
+        self.assertEqual(before['schema'], UPGRADE_BASE_SCHEMA)
+        with self.assertRaises(Corruption):
+            Database(state).initialize()
+        self.assertEqual(upgrade.preflight(state, contract_changed=True)['schema'], UPGRADE_BASE_SCHEMA)
+        with self.assertRaises(BoardError) as caught:
+            upgrade.preflight(state, contract_changed=False)
+        self.assertEqual(caught.exception.code, 'UNSUPPORTED_SCHEMA')
+        self.assertEqual(upgrade_state(state), {'sourceSchema': UPGRADE_BASE_SCHEMA, 'targetSchema': SCHEMA_VERSION})
+        self.assertEqual(upgrade.idle_snapshot(state)['schema'], SCHEMA_VERSION)
         for changed in (False, True):
             self.assertEqual(upgrade.preflight(state, contract_changed=changed)['schema'], SCHEMA_VERSION)
         current = Database(state)
@@ -229,12 +241,56 @@ class UpgradeFixtureTests(unittest.TestCase):
             query = 'SELECT type,name,tbl_name,sql FROM sqlite_master ORDER BY type,name'
             self.assertEqual([tuple(row) for row in connection.execute(query)],
                              [tuple(row) for row in baseline.execute(query)])
-        self.assertEqual(upgrade.idle_snapshot(state), before)
-        for name, original in rowids.items():
-            self.assertEqual([row[0] for row in connection.execute(f'SELECT rowid FROM "{name}" ORDER BY rowid')],
-                             original, name)
+        after = upgrade.idle_snapshot(state)
+        for name, original in old_rows.items():
+            actual = [tuple(row) for row in connection.execute(f'SELECT rowid,* FROM "{name}" ORDER BY rowid')]
+            if name == 'meta':
+                self.assertEqual([(row[1], row[2]) for row in actual if row[1] != 'schema_version'],
+                                 [(row[1], row[2]) for row in original if row[1] != 'schema_version'])
+            elif name == 'router_settings':
+                self.assertEqual([row[:len(original[0])] for row in actual], original)
+                self.assertEqual(actual[0][-2:], (None, 3600))
+            else:
+                self.assertEqual(actual, original, name)
+                self.assertEqual(after['fingerprints'][name], before['fingerprints'][name], name)
+        for name in ('maintenance_runs', 'domain_nodes', 'micro_task_classifications',
+                     'kind_summaries', 'kind_summary_citations', 'routing_judgments'):
+            self.assertEqual(after['tables'][name], 0, name)
+        with self.assertRaises(BoardError) as caught:
+            upgrade_state(state)
+        self.assertEqual(caught.exception.code, 'UNSUPPORTED_SCHEMA')
+        self.assertEqual(upgrade.idle_snapshot(state), after)
         self.assertEqual({p.relative_to(native_path(state)): p.read_bytes() for p in native_path(state).rglob('*')
                           if p.is_file() and not p.name.startswith('board.sqlite3')}, files)
+
+    def test_failed_second_column_addition_rolls_back_the_whole_upgrade(self):
+        fixture, connection = self.restored('failed-upgrade', migrate=False)
+        state = fixture['state']
+        before = upgrade.idle_snapshot(state)
+        schema = [tuple(row) for row in connection.execute(
+            'SELECT type,name,tbl_name,sql FROM sqlite_master ORDER BY type,name')]
+        real_connect = sqlite3.connect
+
+        class FailingConnection(sqlite3.Connection):
+            additions = 0
+
+            def execute(self, sql, parameters=(), /):
+                if sql.startswith('ALTER TABLE router_settings ADD COLUMN'):
+                    self.additions += 1
+                    if self.additions == 2:
+                        raise sqlite3.OperationalError('injected second column failure')
+                return super().execute(sql, parameters)
+
+        with mock.patch.object(schema_upgrade.sqlite3, 'connect',
+                               side_effect=lambda *args, **kwargs: real_connect(*args, **kwargs, factory=FailingConnection)):
+            with self.assertRaisesRegex(sqlite3.OperationalError, 'injected second column failure'):
+                upgrade_state(state)
+        self.assertEqual(upgrade.idle_snapshot(state), before)
+        self.assertEqual([tuple(row) for row in connection.execute(
+            'SELECT type,name,tbl_name,sql FROM sqlite_master ORDER BY type,name')], schema)
+        self.assertEqual(connection.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone()[0],
+                         str(UPGRADE_BASE_SCHEMA))
+        self.assertEqual(upgrade_state(state)['targetSchema'], SCHEMA_VERSION)
 
     def test_started_verification_checks_retained_workflow_columns(self):
         fixture, connection = self.restored('projected-columns')
@@ -510,7 +566,7 @@ class UpgradeFixtureTests(unittest.TestCase):
         self.assertFalse({'reviewVerification', 'systemSandbox', 'readOnlyStructured'} & health.keys())
 
     def test_every_other_schema_is_refused_without_writes(self):
-        fixture, connection = self.restored()
+        fixture, connection = self.restored(migrate=False)
         for version in ('24', '25', '26', '27', '28', '29', '0', '999', '028', '28.0', '029', '29.0', '030', '30.0', 'unrecognized'):
             with self.subTest(schema=version):
                 connection.execute("UPDATE meta SET value=? WHERE key='schema_version'", (version,))

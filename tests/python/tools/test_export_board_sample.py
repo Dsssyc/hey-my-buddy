@@ -15,6 +15,7 @@ from console.test_console import Browser
 from support import InProcessBoard, write_catalog_fixture, _child_environment, wait_for
 from private_acl import assert_private_path
 from hey_my_buddy.blackboard.store.db import DB_FILE, SCHEMA_VERSION, SECRET_KEY, Database
+from hey_my_buddy.blackboard.store.upgrade import UPGRADE_BASE_SCHEMA, upgrade_state
 from hey_my_buddy import private_dirs
 from hey_my_buddy.errors import BoardError
 from hey_my_buddy.paths import native_path
@@ -227,13 +228,13 @@ class ExportBoardSampleTests(WorkflowTestCase):
     def test_unsupported_schema_preserves_source_and_publishes_no_sample(self):
         board = self.source_board()
         board.store.db.close()
-        for schema in (29, 31):
+        for schema in (29, 32):
             with self.subTest(schema=schema):
                 with closing(sqlite3.connect(board.directory / DB_FILE)) as connection, connection:
                     connection.execute("UPDATE meta SET value=? WHERE key='schema_version'", (str(schema),))
                 before = files(board.directory)
                 output = self.directory / f'unsupported-{schema}'
-                with self.assertRaisesRegex(ValueError, f'Source must use schema {SCHEMA_VERSION}'):
+                with self.assertRaisesRegex(ValueError, f'Source must use schema {UPGRADE_BASE_SCHEMA} or {SCHEMA_VERSION}'):
                     export_sample(board.directory, output)
                 self.assertFalse(output.exists())
                 self.assert_source_unchanged(before, files(board.directory))
@@ -289,6 +290,11 @@ class ExportBoardSampleTests(WorkflowTestCase):
         for task, attempt in selected_attempts:
             relative = Path('attempts') / task / attempt / 'inquiry.results.jsonl'
             self.assertEqual(native_path(output / relative).read_bytes(), native_path(source / relative).read_bytes())
+        self.assertEqual(upgrade_state(output),
+                         {'sourceSchema': UPGRADE_BASE_SCHEMA, 'targetSchema': SCHEMA_VERSION})
+        current = Database(output)
+        self.addCleanup(current.close)
+        current.initialize()
         self.assert_source_unchanged(before, files(source))
 
     def test_source_service_can_commit_during_snapshot_and_destination_creation(self):
