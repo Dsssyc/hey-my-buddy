@@ -73,15 +73,54 @@ class ExecutionDeliveryTests(unittest.TestCase):
                 if len([item for item in calls if item[0] == "result"]) == 1:
                     raise BoardError("SERVICE_UNAVAILABLE", "offline")
 
+        def flush_hints():
+            calls.append(("hint", None))
+            return True
+
         with mock.patch("hey_my_buddy.buddy.runtime.receipts.time.sleep"):
             accepted = deliver_receipt(Client(), receipt, self.execution.directory, nonce="n" * 64,
-                                       flush_hints=lambda: calls.append(("hint", None)))
+                                       flush_hints=flush_hints)
         self.assertTrue(accepted)
         self.assertEqual([name for name, _ in calls], ["hint", "result", "hint", "result"])
         self.assertEqual(calls[1][1], calls[3][1])
         self.assertEqual(calls[1][1], ("attempt-1", 1, "n" * 64, reference))
         self.assertFalse((self.execution.directory / "result-receipt.json").exists())
         self.assertTrue((self.execution.directory / "result-delivery.json").exists())
+
+    def test_result_waits_for_hint_already_in_backoff(self):
+        receipt = {"attemptId": "attempt-1", "taskId": "task-1", "generation": 1,
+                   "report": {"status": "ok"},
+                   "createdAt": "2026-10-16T00:00:00+00:00"}
+        from hey_my_buddy.buddy.runtime.receipts import write_receipt
+        write_receipt(self.execution.directory, receipt)
+        client = self.execution.client
+        client.progress.side_effect = [BoardError("SERVICE_UNAVAILABLE", "offline"), None]
+        self.execution.hint(activity={"phase": "completed"})
+        clock = [10.0]
+        submitted = []
+
+        def advance(seconds):
+            client.submit_result.assert_not_called()
+            self.assertEqual(read_execution_receipt(self.execution.directory), receipt)
+            clock[0] += seconds
+
+        def submit_result(*_args):
+            submitted.append((client.progress.call_count, dict(self.execution._hints)))
+
+        client.submit_result.side_effect = submit_result
+        with mock.patch.object(entry.time, "monotonic", side_effect=lambda: clock[0]), \
+             mock.patch.object(entry.time, "sleep", side_effect=advance) as pause:
+            self.assertFalse(self.execution.flush_hints())
+            clock[0] = 10.1
+            self.assertTrue(deliver_receipt(client, receipt, self.execution.directory,
+                                           nonce="n" * 64,
+                                           flush_hints=self.execution._flush_delivery_hints))
+        self.assertEqual(submitted, [(2, {})])
+        pause.assert_called_once_with(0.25)
+        self.assertEqual(client.progress.call_args.kwargs["data"],
+                         {"activity": {"phase": "completed"}})
+        client.submit_result.assert_called_once()
+        self.assertIsNone(read_execution_receipt(self.execution.directory))
 
     def test_repeated_wrap_up_does_not_extend_deadline_and_force_escalates(self):
         control = self.execution.control

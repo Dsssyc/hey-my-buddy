@@ -28,31 +28,27 @@ def deliver_receipt(client, receipt: dict, directory: Path, *, nonce: str, log=l
     reference = receipt_reference(directory)
     delay = 0.25
     while True:
-        if flush_hints is not None:
-            # A disconnected service or an installation fence may delay hints.
-            # Identity rejection is terminal and must reach the caller.
-            flush_hints()
-        try:
-            client.submit_result(receipt["attemptId"], receipt["generation"],
-                                 nonce, reference)
-        except BoardError as error:
-            if error.code not in RETRYABLE:
-                accepted = False
-                log(f"result refused: {error.code}")
-            else:
+        # Hints and results share this delivery wait. Identity rejection from
+        # flushing hints is terminal and must reach the caller.
+        if flush_hints is None or flush_hints():
+            try:
+                client.submit_result(receipt["attemptId"], receipt["generation"],
+                                     nonce, reference)
+            except BoardError as error:
+                if error.code not in RETRYABLE:
+                    accepted = False
+                    log(f"result refused: {error.code}")
+                    break
                 log(f"result delivery pending: {error.code}")
-                time.sleep(delay)
-                delay = min(10.0, delay * 2)
-                continue
-        except Exception as error:
-            log(f"result delivery unavailable: {error!r}")
-            time.sleep(delay)
-            delay = min(10.0, delay * 2)
-            continue
-        else:
-            accepted = True
-        # The acknowledgement is durable before removing the pending receipt.
-        # A crash before it is written replays the same attempt result.
-        fsync_json(directory / DELIVERY, {"attemptId": receipt["attemptId"], "accepted": accepted}, immutable=True)
-        (directory / RECEIPT).unlink(missing_ok=True)
-        return accepted
+            except Exception as error:
+                log(f"result delivery unavailable: {error!r}")
+            else:
+                accepted = True
+                break
+        time.sleep(delay)
+        delay = min(10.0, delay * 2)
+    # The acknowledgement is durable before removing the pending receipt.
+    # A crash before it is written replays the same attempt result.
+    fsync_json(directory / DELIVERY, {"attemptId": receipt["attemptId"], "accepted": accepted}, immutable=True)
+    (directory / RECEIPT).unlink(missing_ok=True)
+    return accepted
