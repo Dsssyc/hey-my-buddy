@@ -14,7 +14,11 @@ from unittest import mock
 from hey_my_buddy.buddy.harnesses.dsh import native_run
 from hey_my_buddy.buddy.harnesses.dsh.acp.client import AcpClient
 from hey_my_buddy.buddy.harnesses.dsh.acp.connection import AcpRequestError
-from hey_my_buddy.buddy.harnesses.run_contract import FEEDBACK_CONTINUE, RunContinuation
+from hey_my_buddy.buddy.harnesses.run_contract import (
+    FEEDBACK_CONTINUE,
+    MAX_UNKNOWN_EVENT_TYPES,
+    RunContinuation,
+)
 from hey_my_buddy.errors import BoardError
 
 from .test_native_run import NativeRunCase
@@ -36,6 +40,9 @@ class RefusalFactsTests(NativeRunCase):
                        "reasoning_effort": {"configOptions": options()}}
         self.answer = '{"choice":"a"}'
         self.stop_reason = "end_turn"
+        #: The unrecognized sessionUpdate kinds this turn's prompt emits before
+        #: its answer; empty means the turn carries only recognized updates.
+        self.unknown_kinds: tuple[str, ...] = ()
         self.callbacks = []
         self.methods = []
         self.connection = mock.Mock()
@@ -64,12 +71,14 @@ class RefusalFactsTests(NativeRunCase):
                 raise response
             return copy.deepcopy(response)
         if method == "session/prompt":
-            message = {"method": "session/update", "params": {
-                "sessionId": params["sessionId"], "update": {
-                    "sessionUpdate": "agent_message_chunk",
-                    "content": {"type": "text", "text": self.answer}}}}
-            for callback in self.callbacks:
-                callback(message)
+            updates = [{"sessionUpdate": kind} for kind in self.unknown_kinds]
+            updates.append({"sessionUpdate": "agent_message_chunk",
+                            "content": {"type": "text", "text": self.answer}})
+            for update in updates:
+                message = {"method": "session/update",
+                           "params": {"sessionId": params["sessionId"], "update": update}}
+                for callback in self.callbacks:
+                    callback(message)
             return {"stopReason": self.stop_reason}
         if method == "session/close":
             return {}
@@ -108,20 +117,30 @@ class RefusalFactsTests(NativeRunCase):
                 self.assertEqual(fact["shape"], type(value).__name__)
                 self.assertNotIn("private-secret", json.dumps(fact))
 
-    def test_unknown_config_options_continues_without_claiming_checked_values(self):
+    def test_unknown_config_options_refuses_before_the_prompt(self):
+        # An unreadable selector list is not an unconfirmed readback: the run
+        # cannot hand the requested selection to the native session at all, so
+        # it refuses before any prompt instead of letting the session's own
+        # configuration answer for a buddy this run never selected. The shape
+        # fact is still recorded first.
         for value in (None, {"private": "secret"}, "new-selector-shape"):
             with self.subTest(value=value):
                 self.session_value["configOptions"] = value
                 self.client.shutdown.reset_mock()
                 self.methods.clear()
                 result = self.run_final()
-                self.assert_continued(result)
+                self.assertEqual(result.end.status, "error")
+                self.assertEqual(result.end.reason_code, "configuration-unavailable")
                 self.assertEqual(result.configuration.checked.model_dump(),
                                  {"provider": None, "model": None, "effort": None})
                 fact = self.native_facts(result)["configOptions"]
                 self.assertEqual(fact["status"], "unknown")
                 self.assertNotIn("secret", json.dumps(fact))
+                self.assertEqual(result.native_evidence.unknown_events.counts_by_type,
+                                 (("configOptions", 1),))
+                self.assertIn("session/new", self.methods)
                 self.assertNotIn("session/set_config_option", self.methods)
+                self.assertNotIn("session/prompt", self.methods)
 
     def test_unknown_agent_info_shape_is_retained_without_failing_handshake(self):
         self.initialize_value = {"agentInfo": "private-secret"}
@@ -268,14 +287,40 @@ class RefusalFactsTests(NativeRunCase):
 
     def test_unread_shapes_reach_the_shared_outlet_as_unknown_events(self):
         self.initialize_value = []
-        self.session_value["configOptions"] = {}
+        self.echoes["model"] = {"configOptions": []}
         result = self.run_final()
         self.assert_continued(result)
         evidence = result.native_evidence
         self.assertEqual(evidence.unknown_events.counts_by_type,
-                         (("initialize", 1), ("configOptions", 1)))
+                         (("initialize", 1), ("modelReadback", 1)))
         self.assertEqual(evidence.unknown_events.total, 2)
         self.assertEqual(evidence.unconfirmed, ())
+
+    def test_a_turn_with_only_unknown_notifications_carries_their_count(self):
+        # The stream's own unknown kinds are part of the final result, not only
+        # of the live observer statistics: a turn with no unread shape at all
+        # still reports what it could not classify.
+        self.unknown_kinds = ("buddy_probe_unknown",)
+        result = self.run_final()
+        self.assert_continued(result)
+        evidence = result.native_evidence
+        self.assertEqual(evidence.unknown_events.counts_by_type, (("buddy_probe_unknown", 1),))
+        self.assertEqual(evidence.unknown_events.total, 1)
+        self.assertEqual(evidence.unconfirmed, ())
+
+    def test_the_merged_kind_counts_keep_the_shared_bound_and_total(self):
+        # The one shared bound covers the union of the unread shape kinds and
+        # the stream's own unknown kinds: the surplus folds into one bucket, so
+        # no event is lost and the contract's distinct-kind bound still holds.
+        self.initialize_value = []
+        self.unknown_kinds = tuple(f"future-{index}" for index in range(65))
+        result = self.run_final()
+        self.assert_continued(result)
+        evidence = result.native_evidence
+        counts = evidence.unknown_events.counts_by_type
+        self.assertEqual(evidence.unknown_events.total, 66)
+        self.assertLessEqual(len(counts), MAX_UNKNOWN_EVENT_TYPES)
+        self.assertEqual(dict(counts)["initialize"], 1)
 
     def test_unread_configuration_readback_stays_an_unknown_event(self):
         self.echoes["model"] = {"configOptions": []}
@@ -305,13 +350,14 @@ class RefusalFactsTests(NativeRunCase):
         from hey_my_buddy.buddy.roles import run_execution
 
         self.initialize_value = []
+        self.unknown_kinds = ("buddy_probe_unknown",)
         request = self.fast_request("prompt")
         result = native_run.run(request, observer=lambda _facts: FEEDBACK_CONTINUE,
                                 services=None, cancelled=lambda: False)
         self.assertEqual(result.end.status, "ok", result.end.message)
         facts = result.native_evidence.to_payload()
         self.assertEqual(facts["unknownEvents"],
-                         {"countsByType": {"initialize": 1}, "total": 1})
+                         {"countsByType": {"initialize": 1, "buddy_probe_unknown": 1}, "total": 2})
         verdict = {"stopReason": None, "elapsedMs": 1}
         payloads = (run_execution._fast_result(result, request, verdict),
                     run_execution._review_result(result, request, verdict),

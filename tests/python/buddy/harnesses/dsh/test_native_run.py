@@ -385,6 +385,11 @@ class FastSeamTests(NativeRunCase):
         self.assertTrue(any(facts["unknownEvents"] == {"countsByType": {"buddy_probe_unknown": 1},
                                                       "total": 1} for facts in seen),
                         [facts["unknownEvents"] for facts in seen])
+        # The same count is the final result's fact: a turn without any unread
+        # shape still reports what it could not classify.
+        self.assertEqual(result.native_evidence.unknown_events.counts_by_type,
+                         (("buddy_probe_unknown", 1),))
+        self.assertEqual(result.native_evidence.unknown_events.total, 1)
 
     def test_a_write_scope_without_a_service_takes_the_final_message_path(self):
         from hey_my_buddy.buddy.harnesses.run_contract import FEEDBACK_CONTINUE
@@ -588,6 +593,10 @@ class FastSeamTests(NativeRunCase):
         self.assertEqual(seen[-1]["unknownEvents"]["total"], 65)
         self.assertLessEqual(len(seen[-1]["unknownEvents"]["countsByType"]),
                              run_contract.MAX_UNKNOWN_EVENT_TYPES)
+        # The final result carries the same bounded total as the observer.
+        self.assertEqual(result.native_evidence.unknown_events.total, 65)
+        self.assertLessEqual(len(result.native_evidence.unknown_events.counts_by_type),
+                             run_contract.MAX_UNKNOWN_EVENT_TYPES)
         self.assertEqual(result.stop_evidence.native.group_state, "gone")
 
     def test_an_unconfirmed_native_group_stop_reports_unknown_not_gone(self):
@@ -788,6 +797,18 @@ class WorkerSeamTests(NativeRunCase):
         checked = result.configuration.checked
         self.assertEqual(checked.model.value, "m1")
         self.assertEqual(checked.effort.value, "high")
+
+    def test_a_governed_turn_carries_its_unknown_notifications_in_the_result(self):
+        request, bound, mount = self.worker_request()
+        self.governed_agent_args(mount)
+        self.extra_agent_args.append("--emit-unknown-update")
+        result = run(request, observer=worker_observer, services=bound.services,
+                     cancelled=lambda: False)
+        self.assertEqual(result.end.status, "ok", result.end.message)
+        self.assertEqual(result.value.parsed.value["disposition"], "completed")
+        self.assertEqual(result.native_evidence.unknown_events.counts_by_type,
+                         (("buddy_probe_unknown", 1),))
+        self.assertEqual(result.native_evidence.unknown_events.total, 1)
 
     def test_a_missing_stop_reason_ends_unknown_without_a_turn_or_binding(self):
         # The governed carrier's unreadable end: the session still closes and

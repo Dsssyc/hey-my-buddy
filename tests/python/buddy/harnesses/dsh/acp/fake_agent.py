@@ -577,6 +577,14 @@ class FakeAgent:
         frame_id = self.framed_session(session_id)
         self.last_session_id = session_id
         self.write_session_record(session_id, self.prompt_text(params))
+        # The same unknown-kind probes the final-message carrier emits; the
+        # governed carrier counts them from the same update pump.
+        for index in range(self.spam_unknown_kinds):
+            self.notify_client("session/update", {"sessionId": frame_id,
+                                                  "update": {"sessionUpdate": f"future-{index}"}})
+        if self.emit_unknown_update:
+            self.notify_client("session/update", {"sessionId": frame_id,
+                                                  "update": {"sessionUpdate": "buddy_probe_unknown"}})
         sys.path.insert(0, str(Path(__file__).resolve().parents[6] / "src"))
         if self.stop_reason_unread:
             self.send({"jsonrpc": "2.0", "id": request_id, "result": {}})
