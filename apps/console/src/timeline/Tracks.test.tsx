@@ -5,6 +5,7 @@ import { macroTaskTimelineFixture } from "../macro-task-fixtures";
 import type { TimelineEvent, TimelineSpan } from "../macro-task-types";
 import { createTimelineScale } from "./scale";
 import { fitLabel } from "./labels";
+import { modelColor } from "./model-color";
 import { Axis, Track, spanReadout } from "./Tracks";
 
 afterEach(cleanup);
@@ -13,7 +14,7 @@ const scale = createTimelineScale({ domain: { startMs: Date.parse(at(0)), endMs:
 const base = macroTaskTimelineFixture();
 const execution = (extra: Partial<TimelineSpan> = {}): TimelineSpan => ({ ...base.spans.find(span => span.kind === "execution")!, spanId: "e", startAt: at(5), endAt: at(15), resultStatus: "ok", state: "finished", uncertain: false, shutdownConfirmed: true, expectedSeconds: 600, reminders: null, inquiries: [], ...extra });
 function track(spans: TimelineSpan[], extra: { state?: string; events?: TimelineEvent[]; width?: number; tabKey?: string; onOpen?: (runId: string, key: string) => void; onEvent?: (event: TimelineEvent | null) => void } = {}) {
-  return render(<Track row={{ ...base.rows[0]!, state: extra.state ?? "accepted", acceptedAt: null, reviewRejectedAt: null }} spans={spans} events={extra.events ?? []} scale={extra.width ? createTimelineScale({ domain: { startMs: Date.parse(at(0)), endMs: Date.parse(at(40)) }, busy: [], instants: [], canFold: false, nowAtEnd: true }, extra.width, extra.width / 40) : scale} nowMs={Date.parse(at(40))} ongoing buddies={[]} onOpen={extra.onOpen ?? vi.fn()} onHover={vi.fn()} onFocusSpan={vi.fn()} onEvent={extra.onEvent ?? vi.fn()} selected={false} tabKey={extra.tabKey}/>);
+  return render(<Track row={{ ...base.rows[0]!, state: extra.state ?? "accepted", acceptedAt: null, reviewRejectedAt: null }} spans={spans} events={extra.events ?? []} scale={extra.width ? createTimelineScale({ domain: { startMs: Date.parse(at(0)), endMs: Date.parse(at(40)) }, busy: [], instants: [], canFold: false, nowAtEnd: true }, extra.width, extra.width / 40) : scale} nowMs={Date.parse(at(40))} ongoing buddies={[]} onOpen={extra.onOpen ?? vi.fn()} onSelect={vi.fn()} onHover={vi.fn()} onFocusSpan={vi.fn()} onEvent={extra.onEvent ?? vi.fn()} selected={false} tabKey={extra.tabKey}/>);
 }
 const slot = (name: string) => document.querySelector(`[data-slot=${name}]`);
 
@@ -34,7 +35,7 @@ describe("measured timeline labels", () => {
 describe("timeline drawings follow recorded facts", () => {
   it("uses pale settled execution, solid live/failure and a distinct unconfirmed end", () => {
     track([execution()]);
-    expect(slot("execution-bar")?.getAttribute("class")).toContain("fill-past-wash");
+    expect((slot("execution-bar") as SVGElement).style.fill).toBe(modelColor(execution().buddy?.model));
     cleanup(); track([execution({ endAt: null, state: "executing", shutdownConfirmed: false, resultStatus: undefined })]);
     expect(slot("execution-bar")?.getAttribute("class")).toContain("fill-live");
     cleanup(); track([execution({ resultStatus: "failed" })]);
@@ -132,7 +133,7 @@ describe("timeline drawings follow recorded facts", () => {
     expect(document.activeElement).toBe(cluster);
     await user.keyboard("{Enter}");
     await user.keyboard("{ArrowDown}{Enter}");
-    expect(onOpen).toHaveBeenCalledWith(base.rows[0]!.runId, "span:e");
+    expect(onOpen).toHaveBeenCalledWith(base.rows[0]!.runId, "inquiry:q");
   });
   it("opens a single inquiry directly at its containing span", async () => {
     const onOpen = vi.fn();
@@ -140,7 +141,7 @@ describe("timeline drawings follow recorded facts", () => {
     const inquiry = document.querySelector<SVGGElement>('[data-key="inquiry:q"]')!;
     expect(inquiry.getAttribute("tabindex")).toBe("0");
     await userEvent.setup().click(inquiry);
-    expect(onOpen).toHaveBeenCalledWith(base.rows[0]!.runId, "span:e");
+    expect(onOpen).toHaveBeenCalledWith(base.rows[0]!.runId, "inquiry:q");
   });
   it("keeps isolated events direct and groups marks within 16 pixels", async () => {
     const onOpen = vi.fn();
@@ -148,7 +149,7 @@ describe("timeline drawings follow recorded facts", () => {
     track([], { events, onOpen, width: 400 });
     expect(document.querySelectorAll('[data-slot=event-cluster]')).toHaveLength(1);
     expect(document.querySelectorAll('[data-slot=event-mark]')).toHaveLength(1);
-    await userEvent.setup().click(document.querySelector('[data-key="event:2"]')!);
+    await userEvent.setup().dblClick(document.querySelector('[data-key="event:2"]')!);
     expect(onOpen).toHaveBeenCalledWith(base.rows[0]!.runId, "event:2");
   });
   it("hides ticks and breaks from screen readers", () => {
@@ -165,4 +166,36 @@ describe("timeline drawings follow recorded facts", () => {
     render(<Axis scale={folded} ongoing nowMs={Date.parse(at(138))}/>);
     expect(slot("gap-label")?.textContent).toBe("2 时 14 分");
   });
+});
+
+it("keeps a model colour across task identities and never colours live, failed, unknown or Router bars", () => {
+  const model = "stable-model";
+  const span = execution({ buddy: { harness: "codex", provider: "a", model, effort: "high" } });
+  track([span]);
+  const color = (slot("execution-bar") as SVGElement).style.fill;
+  expect(color).toMatch(/^var\(--model-[1-6]\)$/);
+  cleanup(); track([{ ...span, runId: "another", buddy: { ...span.buddy!, provider: "b" } }]);
+  expect((slot("execution-bar") as SVGElement).style.fill).toBe(color);
+  for (const patch of [{ state: "executing", endAt: null, resultStatus: undefined, shutdownConfirmed: false }, { resultStatus: "failed" as const }, { uncertain: true }]) {
+    cleanup(); track([{ ...span, ...patch }]);
+    expect((slot("execution-bar") as SVGElement).style.fill).toBe("");
+  }
+  cleanup(); track([{ ...span, kind: "routing" }]);
+  expect((slot("routing-bar") as SVGElement).style.fill).toBe("");
+});
+
+it("draws minute readouts and adds seconds only above thirty pixels per minute", () => {
+  const fine = createTimelineScale({ domain: { startMs: Date.parse(at(0)), endMs: Date.parse(at(40)) }, busy: [], instants: [], canFold: false, nowAtEnd: true }, 1600, 40);
+  const view = render(<Axis scale={scale} ongoing nowMs={Date.parse(at(40))} pointerX={40}/>);
+  expect(slot("pointer-clock")?.textContent).toMatch(/^\d{2}:\d{2}$/);
+  view.rerender(<Axis scale={fine} ongoing nowMs={Date.parse(at(40))} pointerX={40}/>);
+  expect(slot("pointer-clock")?.textContent).toMatch(/^\d{2}:\d{2}:\d{2}$/);
+});
+
+it("draws acceptance and failed conclusions as circles with separate glyphs", () => {
+  track([], { state: "failed", events: [{ ...base.events[0]!, kind: "accept", at: at(5) }, { ...base.events[0]!, seq: 99, kind: "conclude", at: at(35) }] });
+  for (const name of ["accept-mark", "failed-conclusion-mark"]) {
+    expect(slot(name)?.querySelector("circle")).toBeTruthy();
+    expect(slot(name)?.querySelector("path")).toBeTruthy();
+  }
 });

@@ -121,7 +121,7 @@ export function TaskDetail({ client, runId, timeline, timelineLoading, railTarge
     </div>);
   }
   const ctx: Context | null = workflow ? {
-    view, workflow, audit: read.audit, routing: read.routing, bases: read.bases, inquiries: read.inquiries, asked, timeline, row, nowMs: now, open: onOpenRun,
+    view, workflow, audit: read.audit, routing: read.routing, bases: read.bases, inquiries: read.inquiries, asked, timeline, row, highlightedInquiry: origin?.startsWith("inquiry:") ? origin.slice(8) : null, nowMs: now, open: onOpenRun,
   } : null;
   const current = steps !== null && chosen !== null ? steps.steps[chosen] ?? null : null;
   const attempt = view.attempt;
@@ -136,7 +136,7 @@ export function TaskDetail({ client, runId, timeline, timelineLoading, railTarge
       railTarget,
     )}
     <Header view={view} workflow={workflow} turns={workflow ? workflow.counts.turns : null} endMs={elapsedEnd(view, workflow, now)} nowMs={now}
-      verifiedAtMs={read.verifiedAtMs} error={read.error} busy={read.busy} onRefresh={read.refresh} />
+      verifiedAtMs={read.verifiedAtMs} error={read.error} busy={read.busy} onRefresh={read.refresh} onBack={onBack} />
     {steps && current && ctx
       ? <div key={current.key} className="flex min-h-0 min-w-0 flex-1 flex-col">{pane(current, ctx)}</div>
       : <p role="status" className="p-6 text-ink2">{t("loading")}</p>}

@@ -1,4 +1,5 @@
-/* The console's one palette (ADR-029 clause 8). Each colour has one meaning.
+/* The console's one palette (ADR-029 clause 8). Settled execution bars identify
+   models; every other colour has one meaning.
    Live is what runs, is current or is selected. Hand is what waits for someone:
    a Host's decision or acceptance, unsaved changes, a quota near its limit. Fail
    is failure and nothing else. Ink and past are the record. The top bar keeps
@@ -22,6 +23,13 @@
   --fail-wash: #fbe9ed;
   --past: #5b6a62;
   --past-wash: #e1e6e2;
+  --model-1: #d6deea;
+  --model-2: #e1d8ea;
+  --model-3: #d3e5e0;
+  --model-4: #eadfce;
+  --model-5: #ead6e0;
+  --model-6: #dde6ce;
+  --idle-stripe: #cfcdc3;
   --overlay: rgb(0 0 0 / 35%);
   --bar: #1f2a24;
   --bar-ink: #f1efe8;
@@ -34,25 +42,32 @@
 /* Light is the explicit default; the switch writes the dark values below. */
 :root[data-theme="dark"] {
   color-scheme: dark;
-  --paper: #121614;
-  --surface: #191e1b;
-  --sunk: #151a17;
+  --paper: #0e0f10;
+  --surface: #16171a;
+  --sunk: #121315;
   --ink: #eceae2;
-  --ink2: #a6afa9;
-  --ink3: #98a29b;
-  --line: #2a312d;
-  --line2: #3a423d;
+  --ink2: #a9aeb4;
+  --ink3: #9aa0a6;
+  --line: #26282c;
+  --line2: #363940;
   --live: #7cc79f;
-  --live-wash: #243b2e;
+  --live-wash: #1d3b2b;
   --hand: #f0997b;
   --hand-mark: #f0997b;
   --hand-wash: #33231c;
   --fail: #f2899c;
   --fail-wash: #351c23;
-  --past: #98a29b;
-  --past-wash: #2c3530;
+  --past: #9aa0a6;
+  --past-wash: #2b2e33;
+  --model-1: #34465e;
+  --model-2: #4a3d5c;
+  --model-3: #2f504b;
+  --model-4: #57452f;
+  --model-5: #553a4b;
+  --model-6: #44512f;
+  --idle-stripe: #363940;
   --overlay: rgb(0 0 0 / 60%);
-  --bar: #0c0f0e;
+  --bar: #0b0c0d;
   --bar-ink: #f1efe8;
   --bar-ink2: #8f9993;
   --bar-live: #7cc79f;

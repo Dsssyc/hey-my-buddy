@@ -692,3 +692,19 @@ describe("the detail is only read", () => {
     expect(pane().querySelector("[data-slot=detail-band]")!.textContent).not.toContain(OPUS.model);
   });
 });
+
+it("opens and highlights the exact inquiry in its turn, then scrolls it into view", async () => {
+  const found = timeline();
+  const containing = found.spans.find(item => item.attemptId === "att-1" && item.kind === "execution")!;
+  containing.inquiries = [{ inquiryId: "inq-1", createdAt: at("10:20"), author: "host", state: "delivered" }];
+  const scroll = vi.fn();
+  const original = HTMLElement.prototype.scrollIntoView;
+  HTMLElement.prototype.scrollIntoView = scroll;
+  try {
+    open({ origin: "inquiry:inq-1", timeline: found, replies: { inquiries: { items: [inquiry({ messageId: "different-message-id", inquiryId: "inq-1" })], more: false } } });
+    await ready();
+    await waitFor(() => expect(document.querySelector('[data-inquiry-id="inq-1"]')?.getAttribute("data-highlighted")).toBe("true"));
+    expect(selected().textContent).toContain("回合 1");
+    expect(scroll).toHaveBeenCalledWith(expect.objectContaining({ block: "center" }));
+  } finally { HTMLElement.prototype.scrollIntoView = original; }
+});

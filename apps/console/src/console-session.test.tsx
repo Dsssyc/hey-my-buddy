@@ -347,7 +347,7 @@ describe("invalid login session (0.16 multi-window: no handoff UX)", () => {
     await user.click(screen.getByRole("link", { name: "任务" }));
     await user.click(await screen.findByRole("button", { name: /只读微任务/ }));
     await waitFor(() => expect(document.querySelector('[data-key="row:readonly-task"]')).toBeTruthy());
-    await user.click(document.querySelector('[data-key="row:readonly-task"]') as HTMLElement);
+    await user.dblClick(document.querySelector('[data-key="row:readonly-task"]') as HTMLElement);
     await screen.findByRole("heading", { name: /只读微任务/ });
     expect(screen.queryByRole("button", { name: "取消任务" })).toBeNull();
     expect(screen.queryByRole("button", { name: "重新尝试" })).toBeNull();

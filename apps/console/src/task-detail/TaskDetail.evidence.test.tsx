@@ -279,14 +279,16 @@ describe("the inquiries", () => {
 });
 
 describe("the head", () => {
-  it("keeps the mark with the title and the state beside the refresh control", async () => {
-    open();
+  it("keeps the close button with the title and the state beside the refresh control", async () => {
+    const f = open();
     await ready();
     const row1 = head().firstElementChild as HTMLElement;
     const children = [...row1.children];
     const titled = children[0] as HTMLElement;
     expect(titled.querySelector("h2")!.textContent).toBe("微任务详情");
-    expect(titled.firstElementChild!.getAttribute("data-slot")).toBe("state-mark");
+    expect(titled.firstElementChild!.getAttribute("aria-label")).toBe("收起详情");
+    await f.user.click(titled.firstElementChild!);
+    expect(f.onBack).toHaveBeenCalledOnce();
     expect(titled.textContent).not.toContain("等待验收");
     const right = children[1] as HTMLElement;
     expect(right.textContent).toMatch(/开始.*历时.*回合/);

@@ -1,17 +1,17 @@
 export const tasks = {
-  chronological: "清单", timelineView: "时间视图", idle: "空闲 {{duration}}",
   zoomOut: "缩小（-）", zoomIn: "放大（+）", zoomFit: "适应窗口（0）",
   drawing: {
+    eventLegend: "事件", clusterLegend: "成簇的记号", idleLegend: "空闲",
     eventCluster: "{{count}} 个记号",
     stopUnconfirmed: "停止未确认",
     running: "进行中 {{duration}}", failed: "{{duration}} 失败", queue: "排队 {{duration}}",
-    expected: "预期 {{duration}}", silent: "可能卡住 · 静默 {{duration}}", silence: "静默 {{duration}}", silentLegend: "静默的尾巴",
+    expected: "预期 {{duration}}", silent: "可能卡住 · 静默 {{duration}}", silence: "静默 {{duration}}", silentLegend: "可能卡住",
     waiting: "{{kind}} {{duration}}", inquiry: "问询", inquiryReadout: "问询 · {{author}} · {{at}} · {{state}}",
-    pointer: "{{at}}", gap: "断口 {{start}}–{{end}} · 压缩 {{duration}}", routingMode: "路由 · {{mode}}",
+    gap: "空闲 {{start}}–{{end}} · {{duration}}", routingMode: "路由 · {{mode}}",
     events: { dispatch: "派发", decide: "决定", continue: "续接", integrate: "整合", accept: "已验收", reject: "打回", conclude: "结论", cancel: "取消", takeover: "接管" },
   },
 
-  waiting: "等人接手", failed: "失败",
+  waiting: "等待接手", failed: "失败",
   unknownProject: "未记录项目", macro: "宏任务", list: "宏任务列表", entries: "宏任务条目", collapse: "收起宏任务列表", expand: "展开宏任务列表",
   search: "搜索标题、项目、Host 或编号", all: "全部", active: "进行中", host: "等待 Host", review: "等待验收", accepted: "已验收", ended: "已结束",
   filterHost: "等待 Host", filterReview: "等待验收", standalone: "独立微任务", source: "取自首行", unnamed: "未命名", update: "有新的活动，按最近活动排序", earlier: "更早", loading: "读取中", retry: "重试连接",

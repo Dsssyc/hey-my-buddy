@@ -1,14 +1,14 @@
 import type { tasks as zh } from "../zh/tasks";
 export const tasks = {
-  chronological: "List", timelineView: "Time view", idle: "Idle {{duration}}",
   zoomOut: "Zoom out (-)", zoomIn: "Zoom in (+)", zoomFit: "Fit to window (0)",
   drawing: {
+    eventLegend: "Event", clusterLegend: "Clustered markers", idleLegend: "Idle",
     eventCluster: "{{count}} markers",
     stopUnconfirmed: "Stop unconfirmed",
     running: "Running {{duration}}", failed: "{{duration}} failed", queue: "Queued {{duration}}",
     expected: "Expected {{duration}}", silent: "Possibly stuck · silent {{duration}}", silence: "Silent {{duration}}", silentLegend: "Silent tail",
     waiting: "{{kind}} {{duration}}", inquiry: "Inquiry", inquiryReadout: "Inquiry · {{author}} · {{at}} · {{state}}",
-    pointer: "{{at}}", gap: "Break {{start}}–{{end}} · compressed {{duration}}", routingMode: "Routing · {{mode}}",
+    gap: "Idle {{start}}–{{end}} · {{duration}}", routingMode: "Routing · {{mode}}",
     events: { dispatch: "Dispatched", decide: "Decision", continue: "Continuation", integrate: "Integration", accept: "Accepted", reject: "Rejected", conclude: "Conclusion", cancel: "Cancelled", takeover: "Takeover" },
   },
 

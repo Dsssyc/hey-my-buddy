@@ -60,7 +60,7 @@ function narrow(matches: boolean) {
 async function openDetail(f: ReturnType<typeof harness>) {
   if (!document.querySelector("[data-slot=task-work]")) await f.user.click(await screen.findByRole("button", { name: /宏任务时间轴：设计、接口与实现/ }));
   await waitFor(() => expect(document.querySelector('[data-key="span:s-r1-e"]')).toBeTruthy());
-  await f.user.click(document.querySelector('[data-key="span:s-r1-e"]') as HTMLElement);
+  await f.user.dblClick(document.querySelector('[data-key="span:s-r1-e"]') as HTMLElement);
   await screen.findByRole("region", { name: "微任务详情" });
 }
 
