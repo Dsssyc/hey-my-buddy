@@ -37,7 +37,7 @@ class BackupPublicationTests(BoardTestCase):
         self.assertEqual(gzip.decompress((root / 'current/board.sqlite3.gz').read_bytes()),
                          (root.parent / 'board.sqlite3').read_bytes())
         self.assertEqual([path.name for path in root.iterdir() if path.is_dir()], ['current'])
-        self.assertFalse(any((root / name).exists() for name in ('.incoming', '.previous', '.publish.json', '.publish.tmp')))
+        self.assertFalse(any((root / name).exists() for name in ('.incoming', '.previous', '.publish.json')))
 
     def test_killed_writer_recovers_whole_generation_and_retains_sole_copy(self):
         # The child announces a publication boundary and waits to be killed.
@@ -55,6 +55,7 @@ from hey_my_buddy.protocol.contracts import CONTRACT_VERSION
 
 state, marker, phase = Path(sys.argv[1]), Path(sys.argv[2]), sys.argv[3]
 rename = backup._rename
+link = os.link
 remove = shutil.rmtree
 gzip_write, gzip_close, fsync = gzip.GzipFile.write, gzip.GzipFile.close, os.fsync
 
@@ -65,12 +66,18 @@ def pause():
 
 def hooked_rename(source, target):
     rename(source, target)
-    if phase == 'journal' and source.name == '.publish.tmp':
-        pause()
     if phase == 'old' and source.name == 'current' and target.name == '.previous':
         pause()
     if phase == 'new' and source.name == '.incoming' and target.name == 'current':
         pause()
+
+def hooked_link(source, target, *args, **kwargs):
+    if phase == 'journal_before' and Path(target).name == '.publish.json':
+        pause()
+    result = link(source, target, *args, **kwargs)
+    if phase == 'journal_after' and Path(target).name == '.publish.json':
+        pause()
+    return result
 
 def hooked_remove(path, *args, **kwargs):
     if phase == 'cleanup' and Path(path).name == '.previous':
@@ -105,6 +112,7 @@ def hooked_fsync(fd):
     return result
 
 with (mock.patch.object(backup, '_rename', side_effect=hooked_rename),
+      mock.patch.object(os, 'link', side_effect=hooked_link),
       mock.patch.object(backup.shutil, 'rmtree', side_effect=hooked_remove),
       mock.patch.object(gzip.GzipFile, 'write', hooked_gzip_write),
       mock.patch.object(gzip.GzipFile, 'close', hooked_gzip_close),
@@ -112,7 +120,8 @@ with (mock.patch.object(backup, '_rename', side_effect=hooked_rename),
     backup.create(state, runtime_identity=None, plugin_commit=None, contract_version=CONTRACT_VERSION)
 """
         for phase, repeated, expected in (
-            ('journal', False, 'old'),
+            *((phase, repeated, 'old') for phase in ('journal_before', 'journal_after')
+              for repeated in (False, True)),
             ('old', True, 'old'),
             ('new', True, 'new'),
             ('cleanup', True, 'new'),
@@ -178,7 +187,7 @@ with (mock.patch.object(backup, '_rename', side_effect=hooked_rename),
     def test_every_publication_rename_boundary_recovers(self):
         # Each rename can fail normally or stop the process on either side.
         for repeated in (False, True):
-            for source, target in (('.publish.tmp', '.publish.json'), ('current', '.previous'), ('.incoming', 'current')):
+            for source, target in (('current', '.previous'), ('.incoming', 'current')):
                 if not repeated and source == 'current':
                     continue
                 for timing in ('error_before', 'interrupt_before', 'interrupt_after'):
@@ -205,15 +214,45 @@ with (mock.patch.object(backup, '_rename', side_effect=hooked_rename),
                             with self.assertRaises(failure):
                                 backup.create(board.directory, runtime_identity=None, plugin_commit=None, contract_version=CONTRACT_VERSION)
                         self.assertTrue(fired)
-                        if not repeated and source == '.publish.tmp' and timing == 'error_before':
-                            # The verified candidate is the sole complete copy,
-                            # even though no publication journal was committed.
-                            backup._verify(root / '.incoming')
                         backup.recover(board.directory)
                         expected = 'new' if source == '.incoming' and after else 'old'
                         if not repeated:
                             expected = 'old'
                         self._assert_settled(root, expected)
+
+    def test_journal_link_boundary_recovers(self):
+        for repeated in (False, True):
+            for timing in ('error_before', 'interrupt_before', 'interrupt_after'):
+                with self.subTest(repeated=repeated, timing=timing):
+                    board, marker, root = self._board()
+                    if repeated:
+                        backup.create(board.directory, runtime_identity=None, plugin_commit=None,
+                                      contract_version=CONTRACT_VERSION)
+                        marker.write_text(json.dumps({'generation': 'new'}), encoding='utf-8')
+                    real_link = os.link
+                    fired = False
+
+                    def interrupted(source, target, *args, **kwargs):
+                        nonlocal fired
+                        if not fired and Path(target).name == '.publish.json':
+                            fired = True
+                            if timing == 'interrupt_after':
+                                real_link(source, target, *args, **kwargs)
+                            failure = OSError if timing == 'error_before' else KeyboardInterrupt
+                            raise failure('simulated journal link failure')
+                        return real_link(source, target, *args, **kwargs)
+
+                    failure = OSError if timing == 'error_before' else KeyboardInterrupt
+                    with mock.patch.object(os, 'link', side_effect=interrupted):
+                        with self.assertRaises(failure):
+                            backup.create(board.directory, runtime_identity=None, plugin_commit=None,
+                                          contract_version=CONTRACT_VERSION)
+                    self.assertTrue(fired)
+                    if not repeated and timing != 'interrupt_after':
+                        # The verified candidate remains the sole complete copy.
+                        backup._verify(root / '.incoming')
+                    backup.recover(board.directory)
+                    self._assert_settled(root, 'old')
 
     def test_bad_candidate_and_interrupted_rollback_keep_old(self):
         board, marker, root = self._board()
@@ -314,7 +353,7 @@ with (mock.patch.object(backup, '_rename', side_effect=hooked_rename),
         board, _, root = self._board()
         backup.create(board.directory, runtime_identity=None, plugin_commit=None, contract_version=CONTRACT_VERSION)
         outside = self.workdir('outside')
-        for name in ('.incoming', '.previous', '.publish.json', '.publish.tmp'):
+        for name in ('.incoming', '.previous', '.publish.json'):
             with self.subTest(link=name):
                 linked = root / name
                 linked.symlink_to(outside)

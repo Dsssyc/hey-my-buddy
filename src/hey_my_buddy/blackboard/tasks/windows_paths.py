@@ -284,7 +284,7 @@ def read(path, *, allow_symlink=False, missing_ok=True, api=None):
         return ("100755" if before.st_mode & 0o111 else "100644", data) if allow_symlink else data
 
 
-def _write_held(api, path, data, *, sync=False):
+def _write_held(api, path, data):
     handle, _ = _open_checked(api, path, action="create")
     try:
         descriptor = api.fd(handle, os.O_WRONLY)
@@ -293,15 +293,12 @@ def _write_held(api, path, data, *, sync=False):
         raise
     with os.fdopen(descriptor, "wb") as stream:
         stream.write(data)
-        if sync:
-            stream.flush()
-            os.fsync(stream.fileno())
 
 
-def write_new(path, data, *, api=None, create_parents=False, sync=False):
+def write_new(path, data, *, api=None, create_parents=False):
     # The Git mode remains in the index; Windows chmod cannot set its execute bit.
     with parent(path, create=create_parents, api=api) as (api, path):
-        _write_held(api, path, data, sync=sync)
+        _write_held(api, path, data)
 
 
 def _remove_held(api, path, *, missing_ok=False):
@@ -372,19 +369,22 @@ class _WorkspacePublishOperations:
     def link(self, source, target):
         self.api.link(source, target)
 
-    def replace(self, source, target):
-        os.replace(source, target)
-
     def unlink(self, path):
         remove(path, missing_ok=True, api=self.api)
 
 
+@contextmanager
+def artifact_publication(path):
+    """Translate immutable workspace conflicts at one shared boundary."""
+    try:
+        yield
+    except FileExistsError as error:
+        raise BoardError("WORKSPACE_CONFLICT", "An immutable workspace artifact already has different contents",
+                         path=str(path)) from error
+
+
 def write_once(path, data, *, api=None):
     """Publish an immutable artifact under the held Windows workspace parent."""
-    with parent(path, api=api) as (api, path):
-        try:
-            private_files.publish_bytes(path, data, immutable=True,
-                                        operations=_WorkspacePublishOperations(api))
-        except FileExistsError as error:
-            raise BoardError("WORKSPACE_CONFLICT", "An immutable workspace artifact already has different contents",
-                             path=str(path)) from error
+    with parent(path, api=api) as (api, path), artifact_publication(path):
+        private_files.publish_bytes(path, data, immutable=True,
+                                    operations=_WorkspacePublishOperations(api))

@@ -1,7 +1,6 @@
 """Interruption and byte-contract checks for private fact publication."""
 from __future__ import annotations
 
-import json
 import os
 import queue
 import subprocess
@@ -164,6 +163,9 @@ class PrivatePublicationTests(unittest.TestCase):
                         process.kill()
                         process.communicate(timeout=5)
                         self.assertEqual(path.read_bytes() if path.exists() else None, expected)
+                        if stage in {"after_cleanup", "before_directory_fsync",
+                                     "after_directory_fsync", "after_success"}:
+                            self.assertEqual(list(Path(root).glob(".*.tmp")), [])
                     finally:
                         if process.poll() is None:
                             process.kill()
@@ -198,6 +200,9 @@ class PrivatePublicationTests(unittest.TestCase):
                         process.kill()
                         process.communicate(timeout=5)
                         self.assertEqual(path.read_bytes() if path.exists() else None, expected)
+                        if stage in {"after_cleanup", "before_directory_fsync",
+                                     "after_directory_fsync", "after_success"}:
+                            self.assertEqual(list(Path(root).glob(".*.tmp")), [])
                     finally:
                         if process.poll() is None:
                             process.kill()
@@ -305,9 +310,16 @@ class PrivatePublicationTests(unittest.TestCase):
         from hey_my_buddy.install import launcher
         from hey_my_buddy.blackboard.service import daemon
         from hey_my_buddy.buddy.roles import turn_io
-        from hey_my_buddy.json_codec import canonical_json
 
         value = {"z": "café", "a": [1, True]}
+        # Golden bytes from the four writers at d5c908aaaed3cfd66c20822222570a1e267ff9f2.
+        # Keep these literals independent of the current JSON encoder options.
+        expected = (
+            b'{"z": "caf\xc3\xa9", "a": [1, true]}',
+            b'{"z": "caf\\u00e9", "a": [1, true]}',
+            b'{"z": "caf\xc3\xa9", "a": [1, true]}',
+            b'{"a":[1,true],"z":"caf\xc3\xa9"}',
+        )
         with tempfile.TemporaryDirectory() as root:
             paths = [Path(root) / name for name in
                      ("execution.json", "launcher.json", "daemon.json", "turn.json")]
@@ -315,12 +327,7 @@ class PrivatePublicationTests(unittest.TestCase):
             launcher.write_private(paths[1], value)
             daemon.atomic_json(paths[2], value)
             turn_io.private_json(paths[3], value)
-            self.assertEqual(paths[0].read_bytes(), json.dumps(value, ensure_ascii=False,
-                                                               allow_nan=False).encode("utf-8"))
-            self.assertEqual(paths[1].read_bytes(), json.dumps(value).encode("utf-8"))
-            self.assertEqual(paths[2].read_bytes(), json.dumps(value, ensure_ascii=False,
-                                                               allow_nan=False).encode("utf-8"))
-            self.assertEqual(paths[3].read_bytes(), canonical_json(value).encode())
+            self.assertEqual(tuple(path.read_bytes() for path in paths), expected)
 
 
 if __name__ == "__main__":

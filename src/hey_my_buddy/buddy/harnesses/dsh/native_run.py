@@ -1132,11 +1132,7 @@ def run(request: RunRequest, *, observer: Callable[[Mapping[str, Any]], RunFeedb
             expected = _micro_task_binding(request, session_id)
             try:
                 binding_file = _binding_path(native_root, session_id)
-                try:
-                    private_json(binding_file, expected, exclusive=True)
-                except FileExistsError:
-                    if decode_json(binding_file.read_bytes()) != expected:
-                        raise ValueError("the existing DSH session binding differs")
+                private_json(binding_file, expected, exclusive=True)
             except (OSError, ValueError, BoardError):
                 continuation = ContinuationFacts(resumable=False)
             else:

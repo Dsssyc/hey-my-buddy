@@ -534,14 +534,12 @@ def _record(path):
 
 
 def _write_once(path, data):
-    try:
-        if _WINDOWS:
-            windows_paths.write_once(path, data)
-        else:
-            private_files.publish_bytes(path, data, immutable=True)
-    except FileExistsError as error:
-        raise BoardError("WORKSPACE_CONFLICT", "An immutable workspace artifact already has different contents",
-                         path=str(path)) from error
+    if _WINDOWS:
+        windows_paths.write_once(path, data)
+        return
+    with windows_paths.artifact_publication(path):
+        private_files.publish_bytes(path, data, immutable=True,
+                                    open_file=lambda entry, flags, mode: os.open(entry, flags | os.O_NOFOLLOW, mode))
 
 
 @contextmanager

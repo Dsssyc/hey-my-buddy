@@ -674,13 +674,12 @@ def _read_storage_json(path: Path, *, missing_ok: bool = False) -> dict | None:
 
 
 def _atomic_storage_json(path: Path, value: dict) -> None:
-    _guard_storage(path)
     raw = json.dumps(value, ensure_ascii=False, allow_nan=False).encode('utf-8')
     try:
-        private_files.publish_bytes(path, raw, validate=_guard_storage)
+        private_files.publish_bytes(path, raw, open_file=private_dirs.open_regular_fd,
+                                    validate=_guard_storage, directory_nofollow=True)
     except BoardError as error:
         raise BoardError('STORAGE_UNSAFE', 'Storage record is unsafe', path=str(path)) from error
-    _guard_storage(path)
 
 
 def _validate_pending(result: dict, planned: dict, state: Path) -> None:
@@ -897,7 +896,7 @@ def _finish_pending(result: dict, receipt: Path) -> None:
             raise BoardError('STORAGE_CHANGED', 'Pending removal no longer matches its candidate')
         os.rename(original, tomb)
         _guard_storage(original.parent)
-        private_files.sync_directory(original.parent)
+        private_files.sync_directory(original.parent, follow_symlinks=False)
         tomb_exists = True
     if tomb_exists:
         identity = tomb.lstat()
@@ -908,7 +907,7 @@ def _finish_pending(result: dict, receipt: Path) -> None:
         else:
             tomb.unlink()
         _guard_storage(tomb.parent)
-        private_files.sync_directory(tomb.parent)
+        private_files.sync_directory(tomb.parent, follow_symlinks=False)
     result['removed'].append({k:pending[k] for k in ('id','path','bytes')})
     result['removedBytes'] += pending['bytes']
     del result['pending']

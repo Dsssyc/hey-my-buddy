@@ -16,7 +16,7 @@ import time
 import uuid
 
 from ..blackboard.store import backup
-from .. import private_dirs
+from .. import private_dirs, private_files
 from . import runtime
 from .launcher import write_active_runtime
 from ..protocol import schemas
@@ -32,12 +32,14 @@ OWNER_LOCK_TIMEOUT_SECONDS = 15
 
 def write_journal(path: Path, value: dict) -> None:
     from ..private_files import publish_bytes
-    publish_bytes(path, json.dumps(value, ensure_ascii=False, allow_nan=False).encode("utf-8"))
+    publish_bytes(path, json.dumps(value, ensure_ascii=False, allow_nan=False).encode("utf-8"),
+                  validate=backup._guard, directory_nofollow=True)
 
 
 def clear_journal(path: Path) -> None:
     path.unlink()
-    backup.sync_dir(path.parent)
+    backup._guard(path.parent)
+    private_files.sync_directory(path.parent, follow_symlinks=False)
 
 
 @contextmanager
@@ -301,7 +303,8 @@ def restore(state: Path, current: Path) -> None:
         finally:
             if private_dirs.linked_component(temporary) is None:
                 temporary.unlink(missing_ok=True)
-    backup.sync_dir(state)
+    backup._guard(state)
+    private_files.sync_directory(state, follow_symlinks=False)
 
 
 def verify_started(state: Path, target: Path, health: dict, before: dict, *, contract_changed: bool = True) -> dict:

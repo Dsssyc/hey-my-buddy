@@ -18,20 +18,14 @@ import zlib
 from .db import SCHEMA_VERSION, utc_now
 from ...protocol.contracts import CONTRACT_VERSION
 from ...errors import BoardError
-from ... import private_dirs
+from ... import private_dirs, private_files
 from ...private_dirs import linked as _linked
-from ...private_files import publish_bytes, sync_directory
+from ...private_files import publish_bytes
 
 
 def digest(path: Path) -> str:
     with _open(path, 'rb') as stream:
         return hashlib.file_digest(stream, 'sha256').hexdigest()
-
-
-def sync_dir(path: Path) -> None:
-    """Keep the installer-facing directory sync entry point."""
-    _guard(path)
-    sync_directory(path)
 
 
 def _rename(source: Path, target: Path) -> None:
@@ -59,9 +53,9 @@ def _guard(path: Path) -> None:
         raise BoardError('BACKUP_UNSAFE_PATH', 'Backup path contains a linked component', path=str(component))
 
 
-def _open_fd(path: Path, flags: int) -> int:
+def _open_fd(path: Path, flags: int, mode: int = 0o600) -> int:
     try:
-        return private_dirs.open_regular_fd(path, flags)
+        return private_dirs.open_regular_fd(path, flags, mode)
     except BoardError as error:
         raise BoardError('BACKUP_UNSAFE_PATH', error.message, **error.details) from error
 
@@ -243,43 +237,40 @@ def _verify(directory: Path) -> dict:
     return manifest
 
 
-def _backup_paths(root: Path) -> tuple[Path, Path, Path, Path, Path]:
+def _backup_paths(root: Path) -> tuple[Path, Path, Path, Path]:
     _guard(root)
     if _linked(root) or (root.exists() and not root.is_dir()):
         raise BoardError('BACKUP_UNSAFE_PATH', 'Backup root must be a real directory')
     incoming, current, previous = (root / name for name in ('.incoming', 'current', '.previous'))
-    journal, temporary = root / '.publish.json', root / '.publish.tmp'
-    for path in (incoming, current, previous, journal, temporary, root / '.lock'):
+    journal = root / '.publish.json'
+    for path in (incoming, current, previous, journal, root / '.lock'):
         _guard(path)
     for path in (incoming, current, previous):
         if path.exists() and not path.is_dir():
             raise BoardError('BACKUP_UNSAFE_PATH', 'Backup generation must be a directory')
-    for path in (journal, temporary):
-        if path.exists() and not path.is_file():
-            raise BoardError('BACKUP_UNSAFE_PATH', 'Backup journal must be a regular file')
-    return incoming, current, previous, journal, temporary
+    if journal.exists() and not journal.is_file():
+        raise BoardError('BACKUP_UNSAFE_PATH', 'Backup journal must be a regular file')
+    return incoming, current, previous, journal
 
 
 def _publication_journal(root: Path, *, had_current: bool) -> None:
-    _, _, _, journal, temporary = _backup_paths(root)
-    if journal.exists() or temporary.exists():
+    _, _, _, journal = _backup_paths(root)
+    if journal.exists():
         raise BoardError('BACKUP_RECOVERY_REQUIRED', 'Existing publication journal must be recovered')
     raw = json.dumps({'format': 1, 'hadCurrent': had_current}).encode('utf-8')
-    publish_bytes(temporary, raw, immutable=True)
-    _rename(temporary, journal)
-    sync_dir(root)
+    publish_bytes(journal, raw, immutable=True, open_file=_open_fd,
+                  validate=_guard, directory_nofollow=True)
 
 
 def _recover_publication(root: Path) -> None:
     """Converge a journaled publication under the backup lock."""
-    incoming, current, previous, journal, temporary = _backup_paths(root)
+    incoming, current, previous, journal = _backup_paths(root)
     if not journal.exists():
         if previous.exists():
             raise BoardError('BACKUP_RECOVERY_REQUIRED', 'Previous backup exists without a publication journal')
-        temporary.unlink(missing_ok=True)  # An unpublished journal draft.
         if not current.exists() and incoming.exists():
             # A first publication can stop immediately before its journal
-            # rename. A fully verified candidate is the only available copy.
+            # link. A fully verified candidate is the only available copy.
             try:
                 _verify(incoming)
             except BoardError:
@@ -287,11 +278,13 @@ def _recover_publication(root: Path) -> None:
                 # create may discard this incomplete candidate and rebuild.
                 return
             _rename(incoming, current)
-            sync_dir(root)
+            _guard(root)
+            private_files.sync_directory(root, follow_symlinks=False)
         elif current.exists() and incoming.exists():
             _verify(current)
             shutil.rmtree(incoming)
-            sync_dir(root)
+            _guard(root)
+            private_files.sync_directory(root, follow_symlinks=False)
         return
     try:
         with _open(journal, 'rb') as stream:
@@ -318,16 +311,20 @@ def _recover_publication(root: Path) -> None:
                 # Retain both copies if the old copy cannot be proved valid.
                 _verify(previous)
                 _rename(current, incoming)
-                sync_dir(root)
+                _guard(root)
+                private_files.sync_directory(root, follow_symlinks=False)
                 _rename(previous, current)
-                sync_dir(root)
+                _guard(root)
+                private_files.sync_directory(root, follow_symlinks=False)
             else:
                 shutil.rmtree(previous)
-                sync_dir(root)
+                _guard(root)
+                private_files.sync_directory(root, follow_symlinks=False)
         else:
             _verify(previous)
             _rename(previous, current)
-            sync_dir(root)
+            _guard(root)
+            private_files.sync_directory(root, follow_symlinks=False)
     elif current.exists():
         # This is either the pre-first-rename old copy or the published new
         # copy. An incoming candidate alongside current identifies the former.
@@ -340,7 +337,8 @@ def _recover_publication(root: Path) -> None:
     elif incoming.exists() and not had_current:
         _verify(incoming)
         _rename(incoming, current)
-        sync_dir(root)
+        _guard(root)
+        private_files.sync_directory(root, follow_symlinks=False)
     else:
         raise BoardError('BACKUP_RECOVERY_REQUIRED', 'No complete backup generation can be recovered')
 
@@ -349,10 +347,11 @@ def _recover_publication(root: Path) -> None:
     _verify(current)
     if incoming.exists():
         shutil.rmtree(incoming)
-        sync_dir(root)
-    temporary.unlink(missing_ok=True)
+        _guard(root)
+        private_files.sync_directory(root, follow_symlinks=False)
     journal.unlink()
-    sync_dir(root)
+    _guard(root)
+    private_files.sync_directory(root, follow_symlinks=False)
 
 
 def recover(state: Path) -> Path:
@@ -386,7 +385,7 @@ def create(state: Path, *, runtime_identity: dict | None, plugin_commit: str | N
     if wal.exists() and wal.stat().st_size:
         raise BoardError('BACKUP_INVALID', 'Exact stopped-board archive requires a checkpointed WAL')
     root = state / 'backups'
-    incoming, current, previous, journal, _ = _backup_paths(root)
+    incoming, current, previous, journal = _backup_paths(root)
     root.mkdir(mode=0o700, exist_ok=True)
     os.chmod(root, 0o700)
     lock = _open_fd(root / '.lock', os.O_CREAT | os.O_RDWR)
@@ -425,22 +424,29 @@ def create(state: Path, *, runtime_identity: dict | None, plugin_commit: str | N
                     'files': files}
         manifest_path = incoming / 'manifest.json'
         raw = json.dumps(manifest, ensure_ascii=False, sort_keys=True).encode('utf-8')
-        publish_bytes(manifest_path, raw, immutable=True)
+        publish_bytes(manifest_path, raw, immutable=True, open_file=_open_fd,
+                      validate=_guard, directory_nofollow=True)
         verify(incoming)
         for directory, _, _ in os.walk(incoming, topdown=False):
-            sync_dir(Path(directory))
+            directory_path = Path(directory)
+            _guard(directory_path)
+            private_files.sync_directory(directory_path, follow_symlinks=False)
         _publication_journal(root, had_current=current.exists())
         if current.exists():
             _rename(current, previous)
-            sync_dir(root)
+            _guard(root)
+            private_files.sync_directory(root, follow_symlinks=False)
         _rename(incoming, current)
-        sync_dir(root)
+        _guard(root)
+        private_files.sync_directory(root, follow_symlinks=False)
         _verify(current)
         if previous.exists():
             shutil.rmtree(previous)
-            sync_dir(root)
+            _guard(root)
+            private_files.sync_directory(root, follow_symlinks=False)
         journal.unlink()
-        sync_dir(root)
+        _guard(root)
+        private_files.sync_directory(root, follow_symlinks=False)
         return {'path': str(current), 'verified': True, 'schema': schema,
                 'bytes': sum(row['bytes'] for row in files.values()) + manifest_path_size(current),
                 'fileCount': len(files),

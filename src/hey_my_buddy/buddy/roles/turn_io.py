@@ -69,7 +69,8 @@ def _private_bytes(path: Path, raw: bytes, *, exclusive: bool = False) -> None:
             os.close(parent)
             raise
     try:
-        publish_bytes(path, raw, immutable=exclusive, directory_fd=parent, validate=guard_private_path)
+        publish_bytes(path, raw, immutable=exclusive, directory_fd=parent,
+                      validate=guard_private_path if parent is None else None)
     finally:
         if parent is not None:
             os.close(parent)

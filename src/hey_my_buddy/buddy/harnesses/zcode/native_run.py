@@ -1251,11 +1251,7 @@ def _run(request: RunRequest, *, services: Any, no_tool: bool, completion_carrie
             try:
                 expected = {"taskId": request.identity.task_id, "sessionId": outcome.session_id,
                             "cwd": request.cwd, "buddy": outcome.resolved}
-                try:
-                    private_json(outcome.binding_path, expected, exclusive=True)
-                except FileExistsError:
-                    if decode_strict_json(outcome.binding_path.read_bytes()) != expected:
-                        raise ValueError("the existing ZCode session binding differs")
+                private_json(outcome.binding_path, expected, exclusive=True)
             except (OSError, ValueError, BoardError):
                 outcome.binding_save_failed = True
         tool_package = None

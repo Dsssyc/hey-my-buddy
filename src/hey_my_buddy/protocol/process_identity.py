@@ -52,7 +52,8 @@ class NativeProcessJournal:
         path = self.path
         if linked_component(path) is not None:
             raise BoardError("PRIVATE_PATH_UNSAFE", "Native process journal contains a linked component")
-        publish_bytes(path, canonical_json(self.state).encode(), immutable=initial)
+        publish_bytes(path, canonical_json(self.state).encode(), immutable=initial,
+                      open_file=open_regular_fd if initial else None, directory_nofollow=True)
 
     def begin(self) -> str:
         with self.lock:
