@@ -156,7 +156,7 @@ class ConsoleSecurityTests(ConsoleTestCase):
         status, headers, body = browser.get("/api/console")
         self.assertEqual(status, 200)
         snapshot = json.loads(body)
-        self.assertEqual(sorted(snapshot), sorted(["consoleSession", "consoleAccess", "harnesses", "csrfToken", "tableRevision", "gate", "configuration", "configurationError", "profiles", "modelConcurrency", "routingHealth", "unavailableProfileCount", "familyAnnotations", "familyPreferences", "preferenceOverrides", "preferences", "cards", "evidence", "decisions", "pendingEvidence", "sampleCounts", "tasks", "capabilities"]))
+        self.assertEqual(sorted(snapshot), sorted(["consoleSession", "consoleAccess", "harnesses", "csrfToken", "tableRevision", "configuration", "configurationError", "profiles", "modelConcurrency", "routingHealth", "unavailableProfileCount", "familyAnnotations", "familyPreferences", "preferenceOverrides", "preferences", "decisions", "tasks", "capabilities"]))
         self.assertIsNone(snapshot['configurationError'])
         self.assertEqual(snapshot["routingHealth"], board.call("health", {})["routingHealth"])
         self.assertEqual(snapshot["routingHealth"]["sampleCount"], 0)
@@ -184,7 +184,7 @@ class ConsoleSecurityTests(ConsoleTestCase):
         _stated, browser = self.open_console(board)
         snapshot = browser.bootstrap()
         csrf = snapshot["csrfToken"]
-        body = {"operation": "evaluation_write_begin", "params": {"requestId": "w1", "expectedRevision": 0, "kind": "human"}}
+        body = {"operation": "user_policy_publish", "params": {"commandId": "w1", "expectedRevision": 0, "profileSettings": []}}
 
         # No session cookie at all.
         status, _headers, data = http_call(
@@ -294,7 +294,7 @@ class ConsoleSecurityTests(ConsoleTestCase):
             status = 413
         self.assertEqual(status, 413)
 
-    def test_commands_use_the_same_validated_operations_and_survive_a_closed_gate(self):
+    def test_commands_use_the_same_validated_operations(self):
         board = self.board()
         submitted = board.call(
             "task_submit",
@@ -309,25 +309,18 @@ class ConsoleSecurityTests(ConsoleTestCase):
         run_id = submitted["task"]["runId"]
         stated, browser = self.open_console(board)
         csrf = browser.bootstrap()["csrfToken"]
-        # A writer holds the table; settings remain writable but task control is refused.
         refreshed = board.call("model_catalog_refresh", {"requestId": "cat"})
         profile = next(p for p in board.call("console_snapshot", {})["profiles"] if p["profileId"] == PROFILE_ID)
         family = {key: profile[key] for key in ("adapter", "provider", "model")}
-        status, _h, data = browser.command("evaluation_write_begin", {"requestId": "w1", "expectedRevision": refreshed["tableRevision"], "kind": "human"}, csrf=csrf)
-        self.assertEqual(status, 200, data)
-        begin = json.loads(data)["result"]
         status, _h, data = browser.command("task_cancel", {"runId": run_id, "reason": "console operator"}, csrf=csrf)
         self.assertEqual(status, 404, data)
         self.assertEqual(board.call("task_get", {"runId": run_id})["task"]["status"], "queued")
         # A publish through the browser is the same operation the CLI uses: it is
-        # validated, gated and persisted exactly once.
+        # validated and persisted exactly once.
         status, _h, data = browser.command(
             "user_policy_publish",
             {
                 "commandId": "browser-publish",
-                "writerId": begin["writerId"],
-                "generation": begin["generation"],
-                "writerToken": begin["writerToken"],
                 "expectedRevision": refreshed["tableRevision"],
                 "profileSettings": [{"profileId": PROFILE_ID, "enabled": True}],
                 "modelConcurrency": [{**family, "limit": 4}],
@@ -353,7 +346,6 @@ class ConsoleSecurityTests(ConsoleTestCase):
         # Snapshot reads expose no control or session secrets.
         snapshot = snapshot_of(board)
         encoded = json.dumps(snapshot)
-        self.assertNotIn(begin["writerToken"], encoded)
         self.assertNotIn("test-token", encoded)
         def keys(value):
             if isinstance(value, dict):
@@ -366,8 +358,8 @@ class ConsoleSecurityTests(ConsoleTestCase):
         # tokenUsage/inputTokens are public counters, not credential fields.
         self.assertFalse(set(keys(snapshot)) & {"token", "writertoken", "controltoken", "servicetoken", "agentcredential", "accesstoken"})
 
-    def test_browser_reads_decisions_but_cannot_launch_maintenance(self):
-        """The console reads facts/history; only a Harness prepares maintenance."""
+    def test_browser_reads_decisions_but_cannot_launch_router_calls(self):
+        """The console reads selection records but cannot launch a Router call."""
         board = self.board()
         _stated, browser = self.open_console(board)
         csrf = browser.bootstrap()["csrfToken"]
@@ -381,15 +373,12 @@ class ConsoleSecurityTests(ConsoleTestCase):
         before_tasks = board.store.count_tasks()
         with board.store.db.read() as connection:
             before_events = connection.execute("SELECT COUNT(*) FROM events").fetchone()[0]
-        for operation in ("evaluation_prepare", "evaluation_maintain", "evaluation_evidence_record",
-                          "evaluation_reader_begin", "selection_request"):
+        for operation in ("evaluation_history", "evaluation_prepare", "evaluation_maintain", "evaluation_evidence_record",
+                          "evaluation_reader_begin", "evaluation_write_begin", "selection_request"):
             with self.subTest(operation=operation):
                 status, _headers, data = browser.command(operation, {"requestId": "not-authorized"}, csrf=csrf)
                 self.assertEqual(status, 404, data)
                 self.assertEqual(json.loads(data)["error"]["code"], "METHOD_NOT_FOUND")
-        status, _headers, data = browser.command("evaluation_history", {"limit": 20}, csrf=csrf)
-        self.assertEqual(status, 200, data)
-        self.assertEqual(json.loads(data)["result"], board.call("evaluation_history", {"limit": 20}))
         self.assertEqual(board.store.count_tasks(), before_tasks)
         with board.store.db.read() as connection:
             self.assertEqual(connection.execute("SELECT COUNT(*) FROM events").fetchone()[0], before_events)
@@ -612,7 +601,7 @@ class ConsoleAssetTests(ConsoleTestCase):
         self.assertIn("text/html", headers["content-type"])
         # The JSON API is still available without a frontend build.
         snapshot = browser.bootstrap()
-        self.assertIn("gate", snapshot)
+        self.assertNotIn("gate", snapshot)
         self.assertFalse(snapshot["capabilities"]["consoleAssets"])
 
     def test_assets_are_served_with_headers_and_traversal_is_refused(self):
@@ -776,73 +765,32 @@ class ConsoleDaemonTests(ConsoleTestCase):
             self.assertEqual(code, 0, closed)
             self.assertTrue(closed["closed"])
 
-    def test_cli_evaluation_operations_round_trip_through_ctwo(self):
+    def test_cli_policy_publish_round_trip_through_ctwo(self):
         with self.daemon():
             code, caps = self.cli("capabilities", "{}")
             self.assertEqual(code, 0, caps)
             self.assertIn("console_snapshot", caps["operations"]["control"])
-            # Selection and maintenance are advertised, but only through their real
-            # bounded semantics: no silent fallback and a card-only adoption scope.
-            for operation in ("selection_request", "selection_get", "evaluation_prepare", "evaluation_history"):
+            for operation in ("selection_request", "selection_get", "user_policy_publish"):
                 self.assertIn(operation, caps["operations"]["control"])
-            self.assertNotIn("evaluation_maintain", caps["operations"]["control"])
-            self.assertIn("selectionFallback", caps["limitations"])
-            self.assertIn("maintenanceScope", caps["limitations"])
-            self.assertIn("card-only", caps["limitations"]["maintenanceScope"])
-            self.assertIn("not claimed", caps["limitations"]["osIsolation"])
-            code, snapshot = self.cli("console-snapshot", "{}")
-            self.assertEqual(code, 0, snapshot)
-            self.assertEqual(snapshot["tableRevision"], 0)
+            for operation in ("evaluation_prepare", "evaluation_history", "evaluation_write_begin"):
+                self.assertNotIn(operation, caps["operations"]["control"])
             code, refreshed = self.cli("model-catalog-refresh", json.dumps({"requestId": "cli-cat"}))
             self.assertEqual(code, 0, refreshed)
-            self.assertEqual(refreshed["catalog"]["source"], f"file:{self.directory / 'model-catalog.json'}")
             code, opened = self.cli("console", json.dumps({"action": "open", "browser": False}))
             self.assertEqual(code, 0, opened)
             browser = Browser(opened["url"])
             csrf = browser.bootstrap()["csrfToken"]
-            status, _headers, body = browser.command("evaluation_write_begin", {"requestId": "cli-1", "expectedRevision": refreshed["tableRevision"], "kind": "human"}, csrf=csrf)
-            self.assertEqual(status, 200, body)
-            begin = json.loads(body)["result"]
             status, _headers, body = browser.command("user_policy_publish", {
-                "commandId": "cli-publish", "writerId": begin["writerId"],
-                "generation": begin["generation"], "writerToken": begin["writerToken"],
-                "expectedRevision": begin["tableRevision"],
+                "commandId": "cli-publish", "expectedRevision": refreshed["tableRevision"],
                 "profileSettings": [{"profileId": PROFILE_ID, "enabled": True}],
             }, csrf=csrf)
             self.assertEqual(status, 200, body)
             published = json.loads(body)["result"]
             self.assertEqual(published["revision"], refreshed["tableRevision"] + 1)
-            code, evidence = self.cli(
-                "evaluation-evidence-record",
-                json.dumps({"profileId": PROFILE_ID, "kind": "manual", "summary": "cli note", "source": "cli"}),
-            )
-            self.assertEqual(code, 0, evidence)
-            self.assertFalse(evidence["counted"])
-            code, reader = self.cli("evaluation-reader-begin", json.dumps({"kind": "selection", "revision": published["revision"]}))
-            self.assertEqual(code, 0, reader)
-            code, released = self.cli("evaluation-reader-release", json.dumps({"readerId": reader["readerId"]}))
-            self.assertEqual(code, 0, released)
-            self.assertTrue(released["released"])
             code, final = self.cli("console-snapshot", "{}")
             self.assertEqual(code, 0, final)
             self.assertEqual(final["tableRevision"], published["revision"])
-            self.assertEqual(final["pendingEvidence"], 1)
             self.assertTrue(next(p for p in final["profiles"] if p["profileId"] == PROFILE_ID)["enabled"])
-            self.assertEqual(len(final["evidence"]), 1)
-            self.assertNotIn("autoMaintain", final["configuration"])
-            self.assertEqual(final["sampleCounts"].get(PROFILE_ID, 0), 0)
-            code, prepared = self.cli("evaluation-prepare", json.dumps({"requestId": "cli-prepare", "limit": 1}))
-            self.assertEqual(code, 0, prepared)
-            self.assertEqual(prepared["tableRevision"], published["revision"])
-            self.assertEqual(prepared["newEvidenceIds"], [])
-            code, repeated = self.cli("evaluation-prepare", json.dumps({"requestId": "cli-prepare", "limit": 1}))
-            self.assertEqual(code, 0, repeated)
-            self.assertEqual(prepared, repeated)
-            code, history = self.cli("evaluation-history", json.dumps({"limit": 1}))
-            self.assertEqual(code, 0, history)
-            self.assertEqual([row["revision"] for row in history["revisions"]], [published["revision"]])
-            self.assertGreaterEqual(history["total"], 2)  # call-triggered catalog refreshes may also publish
-            self.assertIsNotNone(history["nextCursor"])
 
 
 class ConsoleDecisionBrowseTests(ConsoleTestCase):
@@ -851,19 +799,14 @@ class ConsoleDecisionBrowseTests(ConsoleTestCase):
     def test_selection_list_is_reachable_over_the_console_boundary(self):
         board = self.board()
         board.call("selection_request", {"requestId": "http-select", "task": "browse over http"})
-        # A retained maintenance record is historical data, never executable input.
-        with board.store.db.write() as connection:
-            connection.execute("INSERT INTO evaluation_decisions(decision_id,status,task,table_revision,created_at) VALUES('archived-maintenance','needs-host','prior proposal',0,'2026-01-01T00:00:00.000Z')")
-            connection.execute("INSERT INTO decision_requests(decision_id,request_id,kind,input_fingerprint,created_at,updated_at) VALUES('archived-maintenance','archived-maintenance','maintain','historical','2026-01-01T00:00:00.000Z','2026-01-01T00:00:00.000Z')")
         _stated, browser = self.open_console(board)
         csrf = browser.bootstrap()["csrfToken"]
 
-        status, _headers, data = browser.command("selection_list", {"kind": "maintain", "limit": 5}, csrf=csrf)
+        status, _headers, data = browser.command("selection_list", {"limit": 5}, csrf=csrf)
         self.assertEqual(status, 200, data)
         listed = json.loads(data)["result"]
         self.assertEqual(listed["total"], 1)
-        self.assertEqual([item["decisionId"] for item in listed["decisions"]], ["archived-maintenance"])
-        self.assertEqual(listed["decisions"][0]["kind"], "maintain")
+        self.assertEqual(len(listed["decisions"]), 1)
         self.assertIsNone(listed["nextCursor"])
 
         status, _headers, data = browser.command("selection_list", {"limit": 0}, csrf=csrf)

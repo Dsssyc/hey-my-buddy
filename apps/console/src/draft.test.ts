@@ -24,7 +24,7 @@ import {
 } from "./draft";
 import { blockingIssues } from "./policy";
 import type { HistoryEntries } from "./draft";
-import type { Draft, FamilyAnnotation, Profile, Snapshot, WriterGrant } from "./types";
+import type { Draft, FamilyAnnotation, Profile, Snapshot } from "./types";
 
 const flash = {
   profileId: "flash-off",
@@ -53,30 +53,10 @@ const retired = {
 const retiredFamily = { adapter: "dsh", provider: "deepseek-official", model: "retired-model" };
 const note = (family: typeof flashFamily, text: string, revision = 1): FamilyAnnotation =>
   ({ ...family, text, revision, updatedAt: null });
-const grant = (tableRevision = 4): WriterGrant => ({
-  writerId: "w",
-  generation: 2,
-  writerToken: "private",
-  phase: "writing",
-  state: "active",
-  expiresAt: "",
-  tableRevision,
-});
 const snapshot = {
   tableRevision: 3,
   profiles: [flash],
-  cards: [
-    {
-      profileId: "flash-off",
-      revision: 2,
-      summary: "自动评价",
-      strengths: ["稳定"],
-      limitations: [],
-      risks: [],
-      evidenceIds: ["ev-1"],
-      updatedAt: null,
-    },
-  ],
+
   preferences: [],
   familyPreferences: [],
   preferenceOverrides: [],
@@ -85,7 +65,7 @@ const snapshot = {
     revision: 2,
     routerProfileIds: ["flash-off"], routerRetryIntervalSeconds: 600, defaultRoutingMode: "review" as const, routingBudget: "standard",
   },
-  sampleCounts: { "flash-off": 7 },
+
   modelConcurrency: [
     { adapter: "dsh", provider: "deepseek-official", model: "deepseek-flash", limit: 2, active: 1 },
   ],
@@ -96,7 +76,7 @@ describe("editing a published snapshot", () => {
     const draft = makeDraft(snapshot);
     draft.profiles[0].enabled = false;
     expect(snapshot.profiles[0].enabled).toBe(true);
-    expect(publication(makeDraft(snapshot), draft, grant(), "c").expectedRevision).toBe(3);
+    expect(publication(makeDraft(snapshot), draft, "c").expectedRevision).toBe(3);
   });
 
   it("publishes only the dirty user patches, never a table, a card or an effective preference", () => {
@@ -108,12 +88,9 @@ describe("editing a published snapshot", () => {
       ...draft,
       profiles: draft.profiles.map((p) => ({ ...p, enabled: false })),
     };
-    const patch = publication(baseline, draft, grant(), "c");
+    const patch = publication(baseline, draft, "c");
     expect(patch).toEqual({
       commandId: "c",
-      writerId: "w",
-      generation: 2,
-      writerToken: "private",
       expectedRevision: 3,
       profileSettings: [{ profileId: "flash-off", enabled: false }],
       familyPreferenceChanges: [{ ...flashFamily, mode: "prefer", reason: "速度快" }],
@@ -121,8 +98,7 @@ describe("editing a published snapshot", () => {
       familyAnnotationChanges: [{ ...flashFamily, text: "我的使用备注" }],
     });
     const wire = JSON.stringify(patch);
-    // Program-owned profile facts, automatic cards and the removed per-profile
-    // opinion field are not human inputs of the schema 13 contract.
+    // Program-owned profile facts are not human publication inputs.
     expect(wire).not.toContain("available");
     expect(wire).not.toContain("summary");
     expect(wire).not.toContain("cards");
@@ -135,13 +111,10 @@ describe("editing a published snapshot", () => {
 
   it("omits every field the draft did not actually change", () => {
     const baseline = makeDraft(snapshot);
-    const patch = publication(baseline, makeDraft(snapshot), grant(), "c");
+    const patch = publication(baseline, makeDraft(snapshot), "c");
     expect(Object.keys(patch).sort()).toEqual([
       "commandId",
       "expectedRevision",
-      "generation",
-      "writerId",
-      "writerToken",
     ]);
   });
 
@@ -155,7 +128,7 @@ describe("editing a published snapshot", () => {
     let draft = setFamilyAnnotation(baseline, flash, "");
     draft = setFamilyPreference(draft, flash, "");
     draft = setPreferenceOverride(draft, "flash-off", "");
-    const patch = publication(baseline, draft, grant(), "c");
+    const patch = publication(baseline, draft, "c");
     expect(patch.familyAnnotationChanges).toEqual([{ ...flashFamily, text: "" }]);
     expect(patch.familyPreferenceChanges).toEqual([{ ...flashFamily, mode: null, reason: "" }]);
     expect(patch.preferenceChanges).toEqual([{ profileId: "flash-off", mode: null, reason: "" }]);
@@ -173,7 +146,7 @@ describe("editing a published snapshot", () => {
     expect(preferenceChanges(baseline, none)).toEqual([
       { profileId: "flash-high", mode: "none", reason: "最高档太贵" },
     ]);
-    expect(publication(baseline, none, grant(), "c")).not.toHaveProperty("familyPreferenceChanges");
+    expect(publication(baseline, none, "c")).not.toHaveProperty("familyPreferenceChanges");
     // Back to "跟随家族" deletes the override: nothing left to publish.
     expect(preferenceChanges(baseline, setPreferenceOverride(none, "flash-high", ""))).toEqual([]);
   });
@@ -186,11 +159,11 @@ describe("editing a published snapshot", () => {
       configuration: { revision: 3, routerProfileIds: ["retired"], routerRetryIntervalSeconds: 600, defaultRoutingMode: "review" as const, routingBudget: "standard"},
     } as Snapshot);
     const draft = { ...baseline };
-    expect(publication(baseline, draft, grant(), "c")).not.toHaveProperty("preferenceChanges");
-    expect(publication(baseline, draft, grant(), "c")).not.toHaveProperty("configuration");
+    expect(publication(baseline, draft, "c")).not.toHaveProperty("preferenceChanges");
+    expect(publication(baseline, draft, "c")).not.toHaveProperty("configuration");
     // An unrelated note still publishes while the old settings stay as they are.
     const withNote = setFamilyAnnotation(draft, flash, "只改备注");
-    const patch = publication(baseline, withNote, grant(), "c");
+    const patch = publication(baseline, withNote, "c");
     expect(patch.familyAnnotationChanges).toEqual([{ ...flashFamily, text: "只改备注" }]);
     expect(patch).not.toHaveProperty("preferenceChanges");
     expect(patch).not.toHaveProperty("profileSettings");
@@ -281,7 +254,7 @@ describe("editing a published snapshot", () => {
     expect(adopted.draft.profiles.find((p) => p.profileId === "flash-off")!.available).toBe(false);
     expect(adopted.draft.profiles.find((p) => p.profileId === "flash-off")!.enabled).toBe(false);
     expect(familyAnnotationText(adopted.draft, flash)).toBe("保留的备注");
-    const patch = publication(adopted.baseline, adopted.draft, grant(4), "c");
+    const patch = publication(adopted.baseline, adopted.draft, "c");
     expect(patch.expectedRevision).toBe(4);
     expect(patch.familyAnnotationChanges).toEqual([{ ...flashFamily, text: "保留的备注" }]);
     expect(patch.familyPreferenceChanges).toEqual([{ ...flashFamily, mode: "prefer", reason: "更快" }]);
@@ -346,7 +319,7 @@ describe("field-level three-way rebase", () => {
     expect(adopted.baseline).toEqual(baseline);
     expect(familyAnnotationText(adopted.draft, flash)).toBe("B");
     expect(familyAnnotationText(adopted.baseline, flash)).toBe("A");
-    expect(publication(adopted.baseline, adopted.draft, grant(1), "c").expectedRevision).toBe(1);
+    expect(publication(adopted.baseline, adopted.draft, "c").expectedRevision).toBe(1);
   });
 
   it("merges a note only when the refreshed value still equals the old baseline or the intent", () => {
@@ -559,7 +532,7 @@ describe("model family concurrency", () => {
     expect(modelConcurrencyChanges(baseline, draft)).toEqual([
       { adapter: "dsh", provider: "deepseek-official", model: "deepseek-flash", limit: 6 },
     ]);
-    const patch = publication(baseline, draft, grant(), "c");
+    const patch = publication(baseline, draft, "c");
     expect(patch.modelConcurrency).toEqual([
       { adapter: "dsh", provider: "deepseek-official", model: "deepseek-flash", limit: 6 },
     ]);
@@ -568,7 +541,7 @@ describe("model family concurrency", () => {
     expect(wire).not.toContain("active");
     expect(wire).not.toContain("flash-off");
     // An unrelated edit keeps the concurrency patch out entirely.
-    expect(publication(baseline, setFamilyAnnotation(baseline, flash, "只改备注"), grant(), "c"))
+    expect(publication(baseline, setFamilyAnnotation(baseline, flash, "只改备注"), "c"))
       .not.toHaveProperty("modelConcurrency");
   });
 
@@ -646,7 +619,7 @@ describe("model family concurrency", () => {
     expect(resolved.conflicts).toEqual([]);
     expect(resolved.draft.tableRevision).toBe(3);
     expect(flashLimit(resolved.draft)).toBe(6);
-    expect(publication(resolved.baseline, resolved.draft, grant(3), "c").modelConcurrency).toEqual([
+    expect(publication(resolved.baseline, resolved.draft, "c").modelConcurrency).toEqual([
       { adapter: "dsh", provider: "deepseek-official", model: "deepseek-flash", limit: 6 },
     ]);
   });
@@ -693,20 +666,20 @@ describe("independent Router and budget fields", () => {
     const draft = { ...baseline, configuration: { ...baseline.configuration!, routerProfileIds: [] } };
     expect(configurationChanged(baseline, draft)).toBe(true);
     expect(changeCount(baseline, draft) - changeCount(baseline, baseline)).toBe(1);
-    expect(publication(baseline, draft, grant(), "clear").configuration).toEqual({ routerProfileIds: [] });
+    expect(publication(baseline, draft, "clear").configuration).toEqual({ routerProfileIds: [] });
   });
   it("counts a changed retry interval as its own settings field", () => {
     const baseline = makeDraft(snapshot);
     const draft = { ...baseline, configuration: { ...baseline.configuration!, routerRetryIntervalSeconds: 300 } };
     expect(configurationChanged(baseline, draft)).toBe(true);
-    expect(publication(baseline, draft, grant(), "interval").configuration).toEqual({ routerRetryIntervalSeconds: 300 });
+    expect(publication(baseline, draft, "interval").configuration).toEqual({ routerRetryIntervalSeconds: 300 });
   });
   it("publishes only the changed Router, default mode and review budget", () => {
     const baseline = makeDraft(snapshot);
     const draft = { ...baseline, configuration: { ...baseline.configuration!,
       routerProfileIds: ["review"], routerRetryIntervalSeconds: 600, defaultRoutingMode: "fast" as const,
       routingBudget: "brief" as const } };
-    expect(publication(baseline, draft, grant(), "dual").configuration).toEqual({
+    expect(publication(baseline, draft, "dual").configuration).toEqual({
       routerProfileIds: ["review"], defaultRoutingMode: "fast", routingBudget: "brief",
     });
     expect(changeCount(baseline, draft) - changeCount(baseline, baseline)).toBe(3);
@@ -718,7 +691,7 @@ describe("independent Router and budget fields", () => {
     const draft = { ...equivalent, configuration: { ...equivalent.configuration!, routingBudget: "brief" as const } };
     expect(draftDiffers(baseline, draft)).toBe(true);
     expect(configurationChanged(baseline, draft)).toBe(true);
-    expect(publication(baseline, draft, grant(), "budget").configuration).toEqual({ routingBudget: "brief" });
+    expect(publication(baseline, draft, "budget").configuration).toEqual({ routingBudget: "brief" });
     expect(blockingIssues(baseline, draft)).toEqual([]);
   });
 
@@ -729,7 +702,7 @@ describe("independent Router and budget fields", () => {
     const merged = rebaseDraft(draft, baseline, fresh);
     expect(merged.conflicts).toEqual([]);
     expect(merged.draft.configuration).toMatchObject({ routerProfileIds: ["new-model"], routerRetryIntervalSeconds: 600, defaultRoutingMode: "review" as const, routingBudget: "brief" });
-    expect(publication(merged.baseline, merged.draft, grant(), "budget")).toMatchObject({ expectedRevision: 4, configuration: { routingBudget: "brief" } });
+    expect(publication(merged.baseline, merged.draft, "budget")).toMatchObject({ expectedRevision: 4, configuration: { routingBudget: "brief" } });
     const conflicted = rebaseDraft(draft, baseline, { ...fresh, configuration: { ...fresh.configuration!, routingBudget: "deep" } });
     expect(conflicted.conflicts[0].field).toBe("routingBudget");
     expect(conflicted.draft).toBe(draft);
@@ -739,7 +712,7 @@ describe("independent Router and budget fields", () => {
     const modelMerge = rebaseDraft(modelDraft, baseline, { ...snapshot, tableRevision: 4, configuration: { ...snapshot.configuration!, routingBudget: "deep" } });
     expect(modelMerge.conflicts).toEqual([]);
     expect(modelMerge.draft.configuration!.routingBudget).toBe("deep");
-    expect(publication(modelMerge.baseline, modelMerge.draft, grant(), "model").configuration).toEqual({ routerProfileIds: ["another-model"] });
+    expect(publication(modelMerge.baseline, modelMerge.draft, "model").configuration).toEqual({ routerProfileIds: ["another-model"] });
   });
 });
 
@@ -751,7 +724,7 @@ describe("unavailable Router settings in the editor", () => {
     const baseline = makeDraft(unavailable);
     const draft = setFamilyAnnotation(baseline, flash, "仍可保存备注");
     expect(blockingIssues(baseline, draft)).toEqual([]);
-    expect(publication(baseline, draft, grant(), "note")).not.toHaveProperty("configuration");
+    expect(publication(baseline, draft, "note")).not.toHaveProperty("configuration");
     const merged = rebaseDraft(draft, baseline, { ...unavailable, tableRevision: 4 });
     expect(merged.conflicts).toEqual([]);
     expect(merged.draft.configuration).toBeNull();
@@ -769,7 +742,7 @@ describe("unavailable Router settings in the editor", () => {
     const draft = { ...baseline, configuration: { ...baseline.configuration!, routerProfileIds: ["chosen"], routerRetryIntervalSeconds: 600,
       defaultRoutingMode: "fast" as const, routingBudget: "deep" as const } };
     const fetcher = vi.fn<typeof fetch>(async () => new Response(JSON.stringify({ ok: true, result: { tableRevision: 4 } })));
-    const patch = publication(baseline, draft, grant(), "single-router");
+    const patch = publication(baseline, draft, "single-router");
     await createApi("", fetcher as typeof fetch).command("user_policy_publish", patch, "csrf");
     const body = JSON.parse(fetcher.mock.calls[0][1]!.body as string);
     expect(body.params.configuration).toEqual({ routerProfileIds: ["chosen"], defaultRoutingMode: "fast", routingBudget: "deep" });

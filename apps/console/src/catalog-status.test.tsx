@@ -6,7 +6,7 @@ import type { ConsoleApi } from "./api";
 import { VIEW_PREFERENCE_PREFIX } from "./view-preferences";
 import { formatDateTime } from "./i18n/format";
 import { effortCell, levelPreference, levelSwitch, listed, modelButton, modelRow, pane, selectModel } from "./buddies/page.testing";
-import type { Profile, ProfilePage, Snapshot, WriterGrant } from "./types";
+import type { Profile, ProfilePage, Snapshot } from "./types";
 
 const flashOff = "dsh:deepseek-official:deepseek-flash:off";
 const flashHigh = "dsh:deepseek-official:deepseek-flash:high";
@@ -62,22 +62,19 @@ function fixture() {
   const live = profiles.filter(p => p.available);
   const state: Snapshot = {
     csrfToken: "csrf", consoleSession: { id: "fixture-session", canWrite: true, reason: null }, tableRevision: 2,
-    gate: { phase: "open", readers: 0, waitingWriters: 0, writer: null },
+
     configuration: { revision: 1, routerProfileIds: [flashOff], routerRetryIntervalSeconds: 600,
       defaultRoutingMode: "review" as const, routingBudget: "standard" },
     profiles: live,
     unavailableProfileCount: profiles.filter(p => !p.available).length,
-    cards: [], familyAnnotations: [], preferences: [], preferenceOverrides: [], familyPreferences: [],
-    evidence: [], decisions: [],
-    sampleCounts: {},
+ familyAnnotations: [], preferences: [], preferenceOverrides: [], familyPreferences: [],
+ decisions: [],
+
     modelConcurrency: [],
     tasks: { pendingCount: 0 },
-    capabilities: { selection: true, maintenance: true, evaluationWriteGate: true },
+    capabilities: { selection: true },
   };
-  const grant: WriterGrant = {
-    writerId: "writer", generation: 1, writerToken: "private", phase: "writing", tableRevision: 2,
-    expiresAt: new Date(Date.now() + 120000).toISOString(),
-  };
+
   const operations: string[] = [];
   const command = vi.fn(async (operation: string, params: Record<string, any>): Promise<unknown> => {
     operations.push(operation);
@@ -88,14 +85,14 @@ function fixture() {
       const slice = [...visible].sort((a, b) => a.profileId.localeCompare(b.profileId))
         .filter(p => p.profileId > after).slice(0, limit);
       const page: ProfilePage = {
-        profiles: slice, cards: [], preferences: [], preferenceOverrides: [], familyPreferences: [],
-        familyAnnotations: [], sampleCounts: {}, modelConcurrency: [], tableRevision: 2,
+        profiles: slice, preferences: [], preferenceOverrides: [], familyPreferences: [],
+        familyAnnotations: [], modelConcurrency: [], tableRevision: 2,
         nextCursor: null,
       };
       return page;
     }
-    if (operation === "evaluation_write_begin") return grant;
-    if (operation === "evaluation_write_abort") return { aborted: true };
+
+
     if (operation === "user_policy_publish") return { tableRevision: 3 };
     throw new Error(`Unexpected command: ${operation}`);
   });

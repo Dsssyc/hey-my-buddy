@@ -6,8 +6,7 @@ evidence directory, and the full evaluation/routing/harness projection. This
 module builds the projection the console actually polls:
 
 * the evaluation core (``EvaluationStore.console_core``) — configuration,
-  routed profiles with quota facts, cards, policy, evidence and decision pages,
-  the write gate and model-family capacity;
+  routed profiles with quota facts, policy and model-family capacity;
 * harness health and routing health, as before;
 * ``tasks`` reduced to ``pendingCount`` — the full-board count of delegation
   roots awaiting their Host, with the exact dedup semantics the top bar used.
@@ -15,7 +14,7 @@ module builds the projection the console actually polls:
 Full execution records stay on the existing paginated ``task_list`` route, and
 the backup preflight moved to its own authenticated on-demand route that reuses
 the original ``backup.preflight``. Each projection also reports the earliest
-time at which one of its own fields can flip (lease expiries, quota retry and
+time at which one of its own fields can flip (quota retry and
 reset windows, router skip windows), so a read cache can serve it unchanged
 without freezing state that must expire.
 """
@@ -48,15 +47,14 @@ def console_snapshot_projection(service, *, clock=_time.time) -> tuple[dict, flo
     now = clock()
     from ..blackboard.service.harness_health import SCAN_SECONDS
     from ..blackboard.tasks import objectives
-    from .read_cache import collect_deadline, gate_lease_deadline
+    from .read_cache import collect_deadline
 
     projection = service.evaluation.console_core()
     projection["harnesses"] = service.harnesses.all()
     projection["routingHealth"] = service.decisions.health_summary()
     projection["capabilities"] = service.evaluation.capabilities()
     projection["tasks"] = {"pendingCount": objectives.pending_root_count(service.store)}
-    lease = gate_lease_deadline(service.store.db, now)
-    deadline = collect_deadline(projection, after=now, known=lease)
+    deadline = collect_deadline(projection, after=now)
     if automatic:
         deadline = min(deadline, now + SCAN_SECONDS)
     return projection, deadline

@@ -623,7 +623,7 @@ class LifecycleTests(WorkflowTestCase):
         for operation, params in (
             ("task_submit", {"requestId": "forged", "task": "x", "cwd": str(self.workdir("evil"))}),
             ("workflow_submit", {"requestId": "forged", "hostId": "host-1", "task": "x", "cwd": str(self.workdir("evil"))}),
-            ("evaluation_write_begin", {"requestId": "forged", "expectedRevision": 0}),
+            ("user_policy_publish", {"commandId": "forged", "expectedRevision": 0, "profileSettings": []}),
             ("worker_list", {}),
         ):
             with self.assertRaises(BoardError) as raised:

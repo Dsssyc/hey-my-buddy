@@ -262,13 +262,8 @@ class RetiredRoutingInputWorkflowTests(WorkflowTestCase):
     @staticmethod
     def annotations(board):
         catalog = board.call("model_catalog_refresh", {"requestId": "annotations-catalog"})
-        grant = board.console_call("evaluation_write_begin", {
-            "requestId": "annotations-writer", "expectedRevision": catalog["tableRevision"], "kind": "human",
-        })
         board.console_call("user_policy_publish", {
-            "commandId": "annotations-publish", "writerId": grant["writerId"],
-            "generation": grant["generation"], "writerToken": grant["writerToken"],
-            "expectedRevision": grant["tableRevision"],
+            "commandId": "annotations-publish", "expectedRevision": catalog["tableRevision"],
             "familyAnnotationChanges": [{**family_key(PROFILE), "text": "Human preference for this workflow"}],
         })
 

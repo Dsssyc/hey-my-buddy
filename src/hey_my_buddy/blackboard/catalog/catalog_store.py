@@ -220,9 +220,9 @@ def record(evaluation, discovered, observation_id=None, *, health_generation=Non
             raise BoardError('CATALOG_LIMIT', 'The current native profile set exceeds 200 configurations; no entries were silently dropped')
         if table_changed:
             db.execute('UPDATE evaluation_state SET table_revision=?,updated_at=? WHERE id=1', (revision, now))
-            db.execute('INSERT INTO evaluation_revisions(revision,kind,writer_id,actor,counts_json,created_at) VALUES(?,?,?,?,?,?)', (revision, 'catalog', None, 'native-discovery', canonical_json({'profiles': provided_profiles, 'observationId': observation_id, 'provided': ['catalog']}), now))
+            db.execute('INSERT INTO evaluation_revisions(revision,kind,actor,counts_json,created_at) VALUES(?,?,?,?,?)', (revision, 'catalog', 'native-discovery', canonical_json({'profiles': provided_profiles, 'observationId': observation_id, 'provided': ['catalog']}), now))
         actual_revision = int(evaluation._state(db)['table_revision'])
-        response = {'discoveryId': discovery_id, 'observationId': observation_id, 'duplicate': duplicate, 'tableRevision': actual_revision, 'catalog': {**payload, 'discoveryId': discovery_id, 'observationId': observation_id, 'discoveredAt': now}, 'profiles': CatalogView.from_payload(payload).proposed_profiles(), 'appliedAdapters': applied, 'staleAdapters': stale, 'note': 'Native catalog facts were refreshed; existing user settings and evidence were retained. No model call was made.'}
+        response = {'discoveryId': discovery_id, 'observationId': observation_id, 'duplicate': duplicate, 'tableRevision': actual_revision, 'catalog': {**payload, 'discoveryId': discovery_id, 'observationId': observation_id, 'discoveredAt': now}, 'profiles': CatalogView.from_payload(payload).proposed_profiles(), 'appliedAdapters': applied, 'staleAdapters': stale, 'note': 'Native catalog facts were refreshed; existing user settings were retained. No model call was made.'}
         db.execute('UPDATE catalog_observations SET completed_at=?,response_json=? WHERE observation_id=?', (now, canonical_json(response), observation_id))
         for transition in transitions:
             kind = transition.pop('kind')
@@ -272,11 +272,8 @@ def profiles(evaluation, params):
             if value['quotaExhausted']:
                 value['quotaRetry'] = configuration_retry(db, value)
         ids = [value['profileId'] for value in values]
-        marks = ','.join('?' for _ in ids) or 'NULL'
-        cards = [evaluation._card_view(row) for row in db.execute(f'SELECT * FROM evaluation_cards WHERE profile_id IN ({marks})', ids)]
         families = {(value['adapter'], value['provider'], value['model']) for value in values}
-        return {'profiles': values, 'cards': cards, **user_policy.policy_view(db, ids),
+        return {'profiles': values, **user_policy.policy_view(db, ids),
                 'modelConcurrency': evaluation.board.model_capacity_rows(db, families),
-                'sampleCounts': {profile_id: evaluation._sample_count(db, profile_id) for profile_id in ids},
                 'tableRevision': int(evaluation._state(db)['table_revision']),
                 'nextCursor': rows[limit - 1]['profile_id'] if len(rows) > limit else None}

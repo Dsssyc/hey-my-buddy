@@ -1,4 +1,4 @@
-import type { Decision, Profile, Preference, Evidence, Card, RoutingBudget } from "./types";
+import type { Decision, Profile, Preference, RoutingBudget } from "./types";
 import type { ExecutionConfiguration, RoutingBasis } from "./workflow-types";
 
 export type DecisionModel = Partial<ExecutionConfiguration> & { reasoningEffort?: string };
@@ -20,18 +20,13 @@ export type DecisionAudit = Decision & {
   inputVerification?: unknown;
   decisionModel?: { requested: DecisionModel | null; resolved: DecisionModel | null; observed: unknown };
   configurationRevision?: number;
-  publishedRevision?: number | null;
-  noOp?: boolean;
   requested?: { constraints?: Partial<ExecutionConfiguration>; requiredCapabilities?: string[] };
   input?: {
     profile?: Partial<ExecutionConfiguration>;
     profiles: Profile[];
-    cards: Card[];
     preferences: Preference[];
-    evidence: Evidence[];
     [key: string]: unknown;
   } | null;
-  proposal?: unknown;
   output?: unknown;
   inputSha256?: string | null;
 };

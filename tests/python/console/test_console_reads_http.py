@@ -107,13 +107,6 @@ class ConsoleReadCacheTests(ConsoleTestCase, WorkflowTestCase):
         with board.store.db.write() as connection:
             connection.execute("UPDATE harness_health SET revision=revision+1, record_json='{}' WHERE adapter='dsh'")
         etag = changed("harness health")
-        # A gate record: a queued writer changes the gate view.
-        with board.store.db.write() as connection:
-            connection.execute(
-                "INSERT INTO evaluation_writers(writer_id,request_id,kind,state,generation,expected_revision,"
-                "token_verifier,requested_at,expires_at) VALUES('w-read','req-read','maintenance','waiting',"
-                "1,0,'v','2026-01-01T00:00:00.000Z','2030-01-01T00:00:00Z')")
-        etag = changed("gate queue")
         # Console asset availability is part of the marker.
         (board.console.assets_dir).mkdir(parents=True, exist_ok=True)
         (board.console.assets_dir / "index.html").write_text("<!doctype html><div id=root></div>")

@@ -612,9 +612,7 @@ export function createApi(prefix: string, fetcher: typeof fetch = fetch) {
         !data ||
         !Number.isInteger(data.tableRevision) ||
         !validConfigurationState(data) ||
-        !data.gate ||
         !Array.isArray(data.profiles) ||
-        !Array.isArray(data.cards) ||
         !Array.isArray(data.preferences) ||
         !Array.isArray(data.familyPreferences) ||
         !Array.isArray(data.preferenceOverrides) ||

@@ -12,7 +12,6 @@ import {
   MODEL_CONCURRENCY_MIN,
   concurrencyEntryFor,
   familyKey,
-  recordedSampleCount,
 } from "../console-data";
 import { familyAnnotationText, setConcurrencyLimit, setFamilyAnnotation, setFamilyPreference, setPreferenceOverride } from "../draft";
 import { formatDateTime } from "../i18n/format";
@@ -67,9 +66,6 @@ function BuddySettings({ chip, data, recorded, editor, modelAvailable }: {
         {profile.adapter} / {profile.provider} / {profile.model} / <strong className="font-semibold text-foreground">{effort}</strong>
       </span>
       {modelAvailable && !profile.available && <Hint text={unavailableReason}><span className="text-ink3">{t("pane.unavailable")}</span></Hint>}
-      <Hint text={t("pane.countedHint")}><span className="ml-auto flex items-center gap-2 whitespace-nowrap text-ink3 max-[600px]:ml-0 max-[600px]:w-full">
-        {t("pane.counted")}<span className="text-foreground tabular-nums">{recordedSampleCount(data, profile.profileId)}</span>
-      </span></Hint>
     </div>
     <div className="mt-3 flex flex-wrap items-center gap-x-5 gap-y-3 max-[600px]:flex-col max-[600px]:items-stretch">
       <div className="flex items-center gap-2.5 max-[600px]:justify-between">

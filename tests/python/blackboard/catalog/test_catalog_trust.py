@@ -144,7 +144,7 @@ class CatalogTrustTests(BoardTestCase):
         self.assertEqual([p['profile_id'] for p in profiles], ['dsh:fixture:alpha:max'])
         self.assertTrue(profiles[0]['available'])
         with self.board.store.db.read() as db:
-            view = self.evaluation._catalog(db)
+            view = catalog_store.current(db)
             self.assertIsNotNone(view.lookup('dsh', 'fixture', 'alpha'))
             self.assertIsNone(view.lookup('dsh', 'fixture', 'beta'))
         self.assertEqual(self.events(), [])

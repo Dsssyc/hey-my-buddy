@@ -180,7 +180,7 @@ def _workspace_reference_rows(connection):
     """
     for table in (
         'tasks', 'attempts', 'artifacts', 'objectives', 'resource_claims', 'messages',
-        'events', 'commands', 'decision_requests', 'harness_health', 'evaluation_evidence',
+        'events', 'commands', 'decision_requests', 'harness_health',
         'workflow_runs', 'workflow_children', 'workspace_reservations',
         'workflow_continuations', 'workflow_turns', 'workflow_artifacts',
         'workflow_requests', 'workflow_scope_versions', 'workflow_workspace_conflicts',

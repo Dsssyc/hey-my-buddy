@@ -657,7 +657,6 @@ describe("the settings of the role", () => {
     expect(intervalInput()).toHaveProperty("value", value);
     await user.click(saveButton());
     expect(f.published).toHaveLength(0);
-    expect(f.operations).not.toContain("evaluation_write_begin");
     await user.clear(intervalInput());
     await user.type(intervalInput(), "7");
     expect(intervalInput().getAttribute("aria-invalid")).toBeNull();

@@ -86,18 +86,18 @@ function snapshot(routerProfileId: string | null = solMediumId): SnapshotWithHar
     csrfToken: "csrf",
     consoleSession: { id: "fixture-session", canWrite: true, reason: null },
     tableRevision: 4,
-    gate: { phase: "open", readers: 0, waitingWriters: 0, writer: null },
+
     configuration: { revision: 1, routerProfileIds: routerProfileId ? [routerProfileId] : [], routerRetryIntervalSeconds: 600,
       defaultRoutingMode: "review" as const, routingBudget: "standard" },
     profiles: profiles(),
     preferences: [], familyPreferences: [], preferenceOverrides: [], familyAnnotations: [],
-    cards: [], evidence: [], decisions: [], sampleCounts: {},
+ decisions: [],
     modelConcurrency: [
       { ...sonnet, limit: 2, active: 0 }, { ...sol, limit: 2, active: 0 },
       { ...flash, limit: 2, active: 0 }, { ...glm, limit: 2, active: 0 },
     ],
     tasks: { pendingCount: 0 },
-    capabilities: { selection: true, maintenance: true, evaluationWriteGate: true },
+    capabilities: { selection: true },
   };
   return { ...base, harnesses: harnesses() };
 }
@@ -108,9 +108,9 @@ function fixture(routerProfileId: string | null = solMediumId, extra: Partial<Sn
     if (operation === "model_profiles") {
       // Only the checked 显示不可用 asks for this page; the fixture keeps
       // every recorded row on one bounded page.
-      return { profiles: state.profiles, cards: state.cards, familyAnnotations: state.familyAnnotations,
+      return { profiles: state.profiles, familyAnnotations: state.familyAnnotations,
         preferences: state.preferences, preferenceOverrides: state.preferenceOverrides,
-        familyPreferences: state.familyPreferences, sampleCounts: state.sampleCounts,
+        familyPreferences: state.familyPreferences,
         modelConcurrency: state.modelConcurrency, tableRevision: state.tableRevision, nextCursor: null };
     }
     throw new Error(`Unexpected command: ${operation}`);

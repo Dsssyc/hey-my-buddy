@@ -102,8 +102,8 @@ class RouterListHealthTestCase(BoardTestCase):
         with self.db.write() as db:
             db.execute(
                 "INSERT INTO evaluation_decisions(decision_id,status,task,profile_id,table_revision,reason,"
-                "evidence_ids_json,created_at) VALUES(?,?,?,?,?,?,?,?)",
-                (decision, "failed", "task", profile_id, 0, "", "[]", at))
+                "created_at) VALUES(?,?,?,?,?,?,?)",
+                (decision, "failed", "task", profile_id, 0, "", at))
             db.execute(
                 "INSERT INTO decision_requests(decision_id,request_id,kind,input_fingerprint,task_id,attempt_id,"
                 "generation,expected_revision,requested_json,output_json,created_at,updated_at)"

@@ -20,7 +20,7 @@ import {
   fastRouterCandidates,
   isFastRouterCandidate,
 } from "./policy";
-import type { Profile, Snapshot, WriterGrant } from "./types";
+import type { Profile, Snapshot } from "./types";
 
 const worker: Profile = {
   profileId: "dsh:deepseek-official:deepseek-flash:off",
@@ -58,27 +58,23 @@ function snapshot(profiles: Profile[] = [worker], extra: Partial<Snapshot> = {})
     csrfToken: "csrf",
     consoleSession: { id: "fixture-session", canWrite: true, reason: null },
     tableRevision: 3,
-    gate: { phase: "open", readers: 0, waitingWriters: 0, writer: null },
+
     configuration: { revision: 1, routerProfileIds: [worker.profileId], routerRetryIntervalSeconds: 600, defaultRoutingMode: "review" as const, routingBudget: "standard"},
     profiles,
     preferences: [],
     familyPreferences: [],
     preferenceOverrides: [],
-    cards: [],
+
     familyAnnotations: [],
     evidence: [],
     decisions: [],
-    sampleCounts: {},
+
     modelConcurrency: [],
     tasks: { runs: [], total: 0 },
-    capabilities: { evaluationWriteGate: true },
+    capabilities: {},
     ...extra,
   } as Snapshot;
 }
-const grant = (): WriterGrant => ({
-  writerId: "w", generation: 1, writerToken: "t", phase: "writing", expiresAt: "", tableRevision: 3,
-});
-
 describe("decision capability", () => {
   it("keeps fast and review Router eligibility separate", () => {
     const fast = { ...coder, capabilities: ["execution:dsh", "routing:fast"] };
@@ -189,7 +185,7 @@ describe("blocking new changes", () => {
     };
     draft = setNote(draft, retired, "保留经验");
     expect(blockingIssues(baseline, draft)).toEqual([]);
-    const patch = publication(baseline, draft, grant(), "c");
+    const patch = publication(baseline, draft, "c");
     expect(patch.profileSettings).toEqual([{ profileId: retired.profileId, enabled: false }]);
     expect(patch.familyAnnotationChanges).toEqual([
       { adapter: "dsh", provider: "deepseek-official", model: "retired-model", text: "保留经验" },
@@ -221,7 +217,7 @@ describe("blocking new changes", () => {
     // The mode does not transition into pin, so current legality is not required.
     const reasonOnly = setPreference(baseline, retired.profileId, "pin", "新依据");
     expect(blockingIssues(baseline, reasonOnly)).toEqual([]);
-    const patch = publication(baseline, reasonOnly, grant(), "c");
+    const patch = publication(baseline, reasonOnly, "c");
     expect(patch.preferenceChanges).toEqual([
       { profileId: retired.profileId, mode: "pin", reason: "新依据" },
     ]);
@@ -272,7 +268,7 @@ describe("blocking new changes", () => {
     } }));
     const changed = { ...baseline, configuration: { ...baseline.configuration!, defaultRoutingMode: "review" as const } };
     expect(blockingIssues(baseline, changed)).toEqual([]);
-    expect(publication(baseline, changed, grant(), "mode").configuration).toEqual({ defaultRoutingMode: "review" });
+    expect(publication(baseline, changed, "mode").configuration).toEqual({ defaultRoutingMode: "review" });
   });
 });
 
@@ -287,7 +283,7 @@ describe("stale settings needing attention", () => {
     expect(blockingIssues(baseline, baseline)).toEqual([]);
     const withNote = setNote(baseline, worker, "只改备注");
     expect(blockingIssues(baseline, withNote)).toEqual([]);
-    const patch = publication(baseline, withNote, grant(), "c");
+    const patch = publication(baseline, withNote, "c");
     expect(patch).not.toHaveProperty("configuration");
     expect(patch.familyAnnotationChanges).toEqual([
       { adapter: "dsh", provider: "deepseek-official", model: "deepseek-flash", text: "只改备注" },
@@ -354,7 +350,7 @@ describe("the Router retry interval", () => {
       configuration: { ...baseline.configuration!, routerRetryIntervalSeconds: 300 },
     };
     expect(blockingIssues(baseline, changed)).toEqual([]);
-    expect(publication(baseline, changed, grant(), "i").configuration).toEqual({ routerRetryIntervalSeconds: 300 });
+    expect(publication(baseline, changed, "i").configuration).toEqual({ routerRetryIntervalSeconds: 300 });
   });
 });
 
@@ -376,7 +372,7 @@ describe("model concurrency limits", () => {
     const retiredBase = makeDraft(snapshot([worker, retired]));
     const raised = setConcurrencyLimit(retiredBase, retired, 32);
     expect(blockingIssues(retiredBase, raised)).toEqual([]);
-    const patch = publication(retiredBase, raised, grant(), "c");
+    const patch = publication(retiredBase, raised, "c");
     expect(patch.modelConcurrency).toEqual([
       { adapter: retired.adapter, provider: retired.provider, model: retired.model, limit: 32 },
     ]);

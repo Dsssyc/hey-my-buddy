@@ -11,11 +11,11 @@ import type { RuntimeVersionInfo, Snapshot } from "./types";
 function snapshot(): Snapshot {
   return {
     csrfToken: "csrf", consoleSession: { id: "fixture-session", canWrite: true, reason: null }, tableRevision: 2,
-    gate: { phase: "open", readers: 0, waitingWriters: 0, writer: null },
+
     configuration: { revision: 1, routerProfileIds: [], routerRetryIntervalSeconds: 600, defaultRoutingMode: "review" as const, routingBudget: "standard"},
-    profiles: [], cards: [], preferences: [], familyPreferences: [], preferenceOverrides: [], familyAnnotations: [], evidence: [], decisions: [],
-    sampleCounts: {}, modelConcurrency: [], tasks: { pendingCount: 0 },
-    capabilities: { evaluationWriteGate: true },
+    profiles: [], preferences: [], familyPreferences: [], preferenceOverrides: [], familyAnnotations: [], decisions: [],
+ modelConcurrency: [], tasks: { pendingCount: 0 },
+    capabilities: {},
   };
 }
 function api(): ConsoleApi {

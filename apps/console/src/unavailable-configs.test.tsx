@@ -3,7 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { App } from "./App";
 import type { ConsoleApi } from "./api";
-import type { Card, FamilyAnnotation, Preference, Profile, ProfilePage, Snapshot, WriterGrant } from "./types";
+import type { FamilyAnnotation, Preference, Profile, ProfilePage, Snapshot } from "./types";
 import {
   chip, choosePreference, conflictNotice, effortCell, level, levelPreference, levelSwitch, listed, modelButton, modelRow, note, pane, queryModel, search, selectModel,
 } from "./buddies/page.testing";
@@ -39,10 +39,6 @@ function catalog(): Profile[] {
 function fixture(options: { staleDecision?: boolean; stalePin?: boolean; pageSize?: number } = {}) {
   const profiles = catalog();
   const decisionId = options.staleDecision ? retiredMax : flashOff;
-  const cards: Card[] = [
-    { profileId: flashOff, revision: 1, summary: "当前评价 flash off", strengths: [], limitations: [], risks: [], evidenceIds: [], updatedAt: null },
-    { profileId: retiredMax, revision: 3, summary: "退役前的历史评价", strengths: ["曾稳定"], limitations: [], risks: [], evidenceIds: [], updatedAt: null },
-  ];
   const familyAnnotations: FamilyAnnotation[] = [{ ...retiredFamily, text: "用户保留的历史意见", revision: 2, updatedAt: null }];
   const preferenceOverrides = options.stalePin
     ? [{ profileId: retiredMax, mode: "pin" as const, reason: "以前固定" }]
@@ -50,7 +46,7 @@ function fixture(options: { staleDecision?: boolean; stalePin?: boolean; pageSiz
   const preferences: Preference[] = options.stalePin
     ? [{ profileId: retiredMax, mode: "pin" as const, reason: "以前固定", source: "override" as const }]
     : [];
-  const sampleCounts = { [flashOff]: 4, [retiredMax]: 9 };
+
   // The retained page is bound to the published revision it was read at.
   let revision = 2;
   const pages = (params: Record<string, any>): ProfilePage => {
@@ -63,12 +59,12 @@ function fixture(options: { staleDecision?: boolean; stalePin?: boolean; pageSiz
     const ids = new Set(slice.map(p => p.profileId));
     return {
       profiles: slice,
-      cards: cards.filter(c => ids.has(c.profileId)),
+
       familyAnnotations: ids.has(retiredMax) || ids.has(retiredLow) ? familyAnnotations : [],
       preferences: preferences.filter(p => ids.has(p.profileId)),
       preferenceOverrides: preferenceOverrides.filter(p => ids.has(p.profileId)),
       familyPreferences: [],
-      sampleCounts: Object.fromEntries(Object.entries(sampleCounts).filter(([id]) => ids.has(id))),
+
       modelConcurrency: [],
       tableRevision: revision,
       nextCursor: ordered.length > slice.length ? slice[slice.length - 1].profileId : null,
@@ -77,28 +73,25 @@ function fixture(options: { staleDecision?: boolean; stalePin?: boolean; pageSiz
   const live = profiles.filter(p => p.available || p.profileId === decisionId);
   let state: Snapshot = {
     csrfToken: "csrf", consoleSession: { id: "fixture-session", canWrite: true, reason: null }, tableRevision: revision,
-    gate: { phase: "open", readers: 0, waitingWriters: 0, writer: null },
+
     configuration: { revision: 1, routerProfileIds: [decisionId], routerRetryIntervalSeconds: 600, defaultRoutingMode: "review" as const, routingBudget: "standard"},
     profiles: live,
     // `unavailableProfileCount` counts every unavailable row in the table,
     // including a listed one such as the retained decision profile; the console
     // subtracts what it has loaded and pages the rest.
     unavailableProfileCount: profiles.filter(p => !p.available).length,
-    cards: cards.filter(c => live.some(p => p.profileId === c.profileId)),
+
     familyAnnotations: live.some(p => p.profileId === retiredMax || p.profileId === retiredLow) ? familyAnnotations : [],
     preferences: preferences.filter(p => live.some(x => x.profileId === p.profileId)),
     preferenceOverrides: preferenceOverrides.filter(p => live.some(x => x.profileId === p.profileId)),
     familyPreferences: [],
-    evidence: [], decisions: [],
-    sampleCounts: Object.fromEntries(Object.entries(sampleCounts).filter(([id]) => live.some(p => p.profileId === id))),
+ decisions: [],
+
     modelConcurrency: [],
     tasks: { pendingCount: 0 },
-    capabilities: { selection: true, maintenance: true, evaluationWriteGate: true },
+    capabilities: { selection: true },
   };
-  const grant: WriterGrant = {
-    writerId: "writer", generation: 1, writerToken: "private", phase: "writing", tableRevision: 2,
-    expiresAt: new Date(Date.now() + 120000).toISOString(),
-  };
+
   const operations: string[] = [];
   const published: Record<string, any>[] = [];
   const command = vi.fn(async (operation: string, params: Record<string, any>) => {
@@ -108,11 +101,11 @@ function fixture(options: { staleDecision?: boolean; stalePin?: boolean; pageSiz
       if (options.pageSize) page.nextCursor = page.nextCursor;
       return page;
     }
-    if (operation === "evaluation_write_begin") return grant;
+
     if (operation === "user_policy_publish") {
       published.push(params);
       state = { ...state, tableRevision: state.tableRevision + 1,
-        gate: { phase: "open", readers: 0, waitingWriters: 0, writer: null } };
+ };
       revision = state.tableRevision;
       return { tableRevision: state.tableRevision };
     }
@@ -123,7 +116,7 @@ function fixture(options: { staleDecision?: boolean; stalePin?: boolean; pageSiz
       state = { ...state, tableRevision: revision };
       return { tableRevision: revision };
     }
-    if (operation === "evaluation_write_abort") return { aborted: true };
+
     throw new Error(`Unexpected command: ${operation}`);
   });
   const api = {
@@ -181,11 +174,10 @@ describe("unavailable buddies", () => {
     expect(within(modelRow(RETIRED)).queryByText("low")).toBeNull();
     expect(within(modelRow(FLASH)).queryByText("不可用")).toBeNull();
     await user.click(modelButton(RETIRED));
-    // The side column says it once for the model, keeps the note and the samples.
+    // The side column says it once for the model and keeps the note.
     expect(within(pane(RETIRED)).getByText("不可用").getAttribute("aria-description")).toBe("provider paused");
     expect(within(pane()).getAllByText("不可用")).toHaveLength(1);
     expect(note()).toHaveProperty("value", "用户保留的历史意见");
-    expect(within(level("max")).getByText("9")).toBeTruthy();
   });
 
   it("counts a listed offline Router once and pages the rest in by itself", async () => {
@@ -282,12 +274,9 @@ describe("unavailable buddies", () => {
     await user.type(note(), "，仍可用于历史对照");
     await user.click(screen.getByRole("button", { name: "保存" }));
     await screen.findByText("已发布新版本");
-    expect(f.operations.slice(0, 3)).toEqual(["model_profiles", "evaluation_write_begin", "user_policy_publish"]);
+    expect(f.operations.slice(0, 2)).toEqual(["model_profiles", "user_policy_publish"]);
     expect(f.published[0]).toEqual({
       commandId: expect.any(String),
-      writerId: "writer",
-      generation: 1,
-      writerToken: "private",
       expectedRevision: 2,
       profileSettings: [{ profileId: retiredMax, enabled: false }],
       familyAnnotationChanges: [{ ...retiredFamily, text: "用户保留的历史意见，仍可用于历史对照" }],
@@ -345,7 +334,6 @@ describe("unavailable buddies", () => {
     await user.click(screen.getByRole("button", { name: "保存" }));
     expect((await screen.findAllByText(/设置已更新/)).length).toBeGreaterThan(0);
     expect(f.published).toHaveLength(0);
-    expect(f.operations).not.toContain("evaluation_write_begin");
     // The revision-bound history reload supplies the fresh V3 row; the pending
     // rebase resolves on its own and the same edit publishes at V3.
     await waitFor(() => expect(conflictNotice()).toBeUndefined());
@@ -468,7 +456,7 @@ describe("the two filters as browser habits", () => {
     const f = fixture();
     const state = f.snapshot();
     state.unavailableProfileCount = 0;
-    f.command.mockImplementation(async () => ({ profiles: state.profiles, cards: [], preferences: [], sampleCounts: {}, modelConcurrency: [], tableRevision: state.tableRevision, nextCursor: null }));
+    f.command.mockImplementation(async () => ({ profiles: state.profiles, preferences: [], modelConcurrency: [], tableRevision: state.tableRevision, nextCursor: null }));
     window.location.hash = "#buddies";
     const view = render(<App suppliedApi={f.api} />);
     await listed(1, 2);

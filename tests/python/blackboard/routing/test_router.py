@@ -9,9 +9,9 @@ from blackboard.routing.fixtures.router_tool_receipt import claim_tool_receipt
 
 
 class RouterContractTests(unittest.TestCase):
-    def test_unknown_evidence_and_alternative_are_advisory(self):
+    def test_independent_references_and_alternative_are_advisory(self):
         answer = {"profileId": "legal-alternative", "reason": "Better fit after reading the code",
-                  "evidence": [{"kind": "card", "ref": "not-in-packet"},
+                  "evidence": [{"kind": "annotation", "ref": "model-note"},
                                {"kind": "file", "ref": "src/worker.py"}]}
         self.assertEqual(router.validate_answer(answer, ["preferred", "legal-alternative"]), answer)
 
@@ -111,7 +111,7 @@ class RouterPublicationTests(WorkflowTestCase):
                   'usage': {'elapsedMs': 100, 'toolCalls': 0},
                   'inputVerification': {'unchanged': True, 'manifestSha256': None, 'snapshotSha256': 'fixture-digest'},
                   'decision': {'profileId': profile, 'reason': 'Read the frozen input',
-                               'evidence': [{'kind': 'card', 'ref': 'not-supplied'}]}}
+                               'evidence': [{'kind': 'annotation', 'ref': 'not-supplied'}]}}
         if code:
             result['code'] = code
         board.call('worker_result', {'workerId': 'router', 'attemptId': claim['attempt']['attemptId'],
@@ -119,11 +119,11 @@ class RouterPublicationTests(WorkflowTestCase):
                                     'status': result_status or ('failed' if code else 'ok'), 'shutdownConfirmed': True, 'result': result})
         return board, board.call('selection_get', {'decisionId': request['decisionId']})['decision']
 
-    def test_publication_accepts_alternative_without_card_veto(self):
+    def test_publication_accepts_alternative_with_advisory_reference(self):
         board, decision = self.settle(SECOND_PROFILE_ID, preferences=[{'profileId': PROFILE_ID, 'mode': 'prefer'}])
         self.assertEqual(decision['status'], 'completed')
         self.assertEqual(decision['policyCheck']['userPreference'], 'alternative')
-        self.assertEqual(decision['evidence'], [{'kind': 'card', 'ref': 'not-supplied'}])
+        self.assertEqual(decision['evidence'], [{'kind': 'annotation', 'ref': 'not-supplied'}])
 
     def test_boundary_and_budget_counters_are_separate(self):
         for code, counter in [('router-budget-exhausted', 'budgetExhaustedCount'),
@@ -164,11 +164,8 @@ class RouterPublicationTests(WorkflowTestCase):
         board = self.board()
         self.seed(board)
         snapshot = board.call('console_snapshot', {})
-        grant = board.console_call('evaluation_write_begin', {
-            'requestId': 'budget-change', 'kind': 'human', 'expectedRevision': snapshot['tableRevision']})
         board.console_call('user_policy_publish', {
-            'commandId': 'budget-change', 'writerId': grant['writerId'], 'generation': grant['generation'],
-            'writerToken': grant['writerToken'], 'expectedRevision': grant['tableRevision'],
+            'commandId': 'budget-change', 'expectedRevision': snapshot['tableRevision'],
             'configuration': {'routingBudget': 'deep'}})
         configured = board.call('console_snapshot', {})['configuration']
         self.assertEqual(configured['routingBudget'], 'deep')

@@ -4,7 +4,7 @@ import { createElement } from "react";
 import { expect, vi } from "vitest";
 import { App } from "../App";
 import type { ConsoleApi, HarnessHealth } from "../api";
-import type { Configuration, Profile, RoutingHealth, Snapshot, WriterGrant } from "../types";
+import type { Configuration, Profile, RoutingHealth, Snapshot } from "../types";
 
 /**
  * How the tests build the roles view's world and find things in it. They read
@@ -73,16 +73,16 @@ const harnesses: HarnessHealth[] = ["claude", "codex", "dsh", "zcode"].map(adapt
 export function snapshot({ routers = [], configuration = {}, routingHealth, canWrite = true, extra = {} }: RolesOptions = {}): Snapshot & { harnesses: HarnessHealth[] } {
   return {
     csrfToken: "csrf", consoleSession: { id: "fixture-session", canWrite, reason: null }, tableRevision: 4,
-    gate: { phase: "open", readers: 0, waitingWriters: 0, writer: null },
+
     configuration: configuration === null ? null
       : { revision: 1, routerProfileIds: routers, routerRetryIntervalSeconds: 600, defaultRoutingMode: "review", routingBudget: "standard", ...configuration },
     configurationError: configuration === null ? { code: "router-settings-upgrade-required", message: "请先升级设置", revision: 1 } : null,
     profiles: profiles(),
     preferences: [], familyPreferences: [], preferenceOverrides: [], familyAnnotations: [],
-    cards: [], evidence: [], decisions: [], sampleCounts: {},
+ decisions: [],
     modelConcurrency: [],
     tasks: { pendingCount: 0 },
-    capabilities: { selection: true, maintenance: true, evaluationWriteGate: true },
+    capabilities: { selection: true },
     routingHealth,
     harnesses,
     ...extra,
@@ -95,12 +95,11 @@ type Reply = (params: Record<string, any>) => unknown;
 export function fixture(state: Snapshot = snapshot(), replies: Record<string, Reply> = {}) {
   const published: Record<string, any>[] = [];
   const operations: string[] = [];
-  const grant: WriterGrant = { writerId: "writer", generation: 1, writerToken: "private", phase: "writing", state: "active",
-    tableRevision: state.tableRevision, expiresAt: new Date(Date.now() + 120_000).toISOString() };
+
   const command = vi.fn(async (operation: string, params: Record<string, any>) => {
     operations.push(operation);
     if (replies[operation]) return replies[operation](params);
-    if (operation === "evaluation_write_begin") return grant;
+
     if (operation === "user_policy_publish") {
       published.push(params);
       state = { ...state, tableRevision: state.tableRevision + 1,

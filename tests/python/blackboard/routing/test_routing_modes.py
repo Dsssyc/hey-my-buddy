@@ -22,10 +22,7 @@ class RoutingModesTests(BoardTestCase):
 
     def configure(self, board, **settings):
         revision = board.call('console_snapshot', {})['tableRevision']
-        grant = board.console_call('evaluation_write_begin', {
-            'requestId': f'config-{revision}', 'kind': 'human', 'expectedRevision': revision})
         return board.console_call('user_policy_publish', {
-            **{key: grant[key] for key in ('writerId', 'generation', 'writerToken')},
             'commandId': f'publish-{revision}', 'expectedRevision': revision, 'configuration': settings})
 
     def test_fresh_board_defaults_fast_and_patch_preserves_omitted_settings(self):
@@ -163,7 +160,7 @@ class RoutingModesTests(BoardTestCase):
                 'result': {**facts, 'status': 'ok', 'operation': 'select', 'tableRevision': claim['decisionInput']['tableRevision'],
                     'stopEvidence': {'shutdownConfirmed': True, 'native': {'shutdownConfirmed': True}},
                     'zeroToolVerified': proof, 'usage': {'elapsedMs': 100, 'toolCalls': count},
-                    'decision': {'profileId': PROFILE_ID, 'reason': 'card match', 'evidence': []}}})
+                    'decision': {'profileId': PROFILE_ID, 'reason': 'candidate match', 'evidence': []}}})
             decision = board.call('selection_get', {'decisionId': result['decisionId']})['decision']
             self.assertEqual(decision['status'], expected)
             if expected == 'needs-host':

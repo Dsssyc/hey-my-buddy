@@ -5,11 +5,10 @@ import {
   concurrencyLimit,
   modelFamilies,
   preferredVariant,
-  recordedSampleCount,
   taskHost,
   taskProject,
 } from "./console-data";
-import type { Card, Preference, Profile, Snapshot, Task } from "./types";
+import type { Preference, Profile, Snapshot, Task } from "./types";
 
 const profile = (profileId: string, adapter: string, provider: string, effort: string): Profile => ({
   profileId, adapter, provider, model: "shared-model", effort, label: "Shared model", available: true,
@@ -65,24 +64,6 @@ describe("console grouping and recorded attribution", () => {
       parentRunId: "parent", rootRunId: "root", project: { id: "repo-id", path: "/source/project", label: "Project" }, configuration: null };
     expect(taskProject(task)).toEqual(task.delegation.project);
     expect(taskHost(task)).toBe("codex-original");
-  });
-});
-
-describe("recorded sample counts", () => {
-  const snapshot = (sampleCounts: Record<string, number>) => ({ sampleCounts } as unknown as Snapshot);
-
-  it("reads the count from the snapshot map even without published card prose", () => {
-    expect(recordedSampleCount(snapshot({ p: 7 }), "p")).toBe(7);
-    expect(recordedSampleCount(snapshot({ p: 0 }), "p")).toBe(0);
-  });
-
-  it("reports zero for a profile the map does not name and ignores a legacy card field", () => {
-    expect(recordedSampleCount(snapshot({ other: 9 }), "p")).toBe(0);
-    expect(recordedSampleCount(snapshot({}), "p")).toBe(0);
-    const legacyCard = { profileId: "p", sampleCount: 3 } as unknown as Snapshot["cards"][number];
-    expect(recordedSampleCount({ ...snapshot({}), cards: [legacyCard] } as Snapshot, "p")).toBe(0);
-    // A board that has not shipped the map yet degrades to zero, never crashes.
-    expect(recordedSampleCount({} as Snapshot, "p")).toBe(0);
   });
 });
 

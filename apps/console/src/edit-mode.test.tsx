@@ -3,7 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { App } from "./App";
 import { ApiError, type ConsoleApi } from "./api";
-import type { FamilyAnnotation, Profile, Snapshot, WriterGrant } from "./types";
+import type { FamilyAnnotation, Profile, Snapshot } from "./types";
 import { chip, conflictNotice, defaultPreference, effortCell, level, levelSwitch, listed, modelRow, pane, selectModel } from "./buddies/page.testing";
 
 /** One family with an enabled and a disabled effort, plus a second enabled family. */
@@ -28,61 +28,34 @@ const flashNote = (text: string, revision = 1): FamilyAnnotation => ({ ...flashF
 /** A configuration that only a completed program discovery can add. */
 const discovered = "dsh:deepseek-official:deepseek-v5:medium";
 
-type Outcome = "begin" | "renew" | "publish" | "abort";
-type Script = Partial<Record<Outcome, ("network" | "conflict" | "queued" | "active" | "drift" | "forbidden")[]>>;
+type Script = { publish?: ("network" | "conflict" | "forbidden")[] };
 
-function fixture(script: Script = {}, options: { queuedForever?: boolean; discoveryNote?: string } = {}) {
+function fixture(script: Script = {}, options: { discoveryNote?: string } = {}) {
   const profiles = catalog();
   let state: Snapshot = {
     csrfToken: "csrf", consoleSession: { id: "fixture-session", canWrite: true, reason: null }, tableRevision: 2,
-    gate: { phase: "open", readers: 0, waitingWriters: 0, writer: null },
+
     configuration: { revision: 1, routerProfileIds: [flashOff], routerRetryIntervalSeconds: 600, defaultRoutingMode: "review" as const, routingBudget: "standard"},
     profiles,
-    cards: profiles.map(p => ({ profileId: p.profileId, revision: 2, summary: `原评价 ${p.model} ${p.effort}`,
-      strengths: [], limitations: [], risks: [], evidenceIds: [], updatedAt: null })),
+
     familyAnnotations: [flashNote("原备注")],
-    preferences: [], familyPreferences: [], preferenceOverrides: [], evidence: [], decisions: [],
-    sampleCounts: { [flashOff]: 5, "dsh:deepseek-official:deepseek-flash:high": 2 },
+    preferences: [], familyPreferences: [], preferenceOverrides: [], decisions: [],
+
     modelConcurrency: [
       { adapter: "dsh", provider: "deepseek-official", model: "deepseek-flash", limit: 2, active: 1 },
       { adapter: "dsh", provider: "deepseek-official", model: "deepseek-v4-pro", limit: 5, active: 3 },
     ],
     tasks: { pendingCount: 0 },
-    capabilities: { selection: true, maintenance: true, evaluationWriteGate: true },
+    capabilities: { selection: true },
   };
-  const grant: WriterGrant = { writerId: "writer", generation: 1, writerToken: "private", phase: "writing",
-    state: "active", tableRevision: 2, expiresAt: new Date(Date.now() + 120000).toISOString() };
-  const queue: Record<Outcome, string[]> = { begin: [], renew: [], publish: [], abort: [] };
-  for (const key of Object.keys(queue) as Outcome[]) queue[key] = [...(script[key] || [])];
-  const take = (key: Outcome) => queue[key].shift();
+  const publishQueue = [...(script.publish ?? [])];
   const operations: string[] = [];
   const published: Record<string, any>[] = [];
-  const aborted: Record<string, any>[] = [];
   const command = vi.fn(async (operation: string, params: Record<string, any>) => {
     operations.push(operation);
-    if (operation === "evaluation_write_begin") {
-      const scripted = take("begin");
-      if (scripted === "network") throw new ApiError("NETWORK", "lost begin reply");
-      if (scripted === "conflict") throw new ApiError("REVISION_CONFLICT", "stale revision");
-      if (scripted === "queued" || scripted === "drift") {
-        state = { ...state, gate: { phase: "draining", readers: 1, waitingWriters: 1, writer: null } };
-        return { ...grant, state: "waiting", phase: "draining", queuePosition: 2,
-          ...(scripted === "drift" ? { tableRevision: 3 } : {}) };
-      }
-      state = { ...state, gate: { phase: "writing", readers: 0, waitingWriters: 0, writer: { ...grant, kind: "human" } } };
-      return grant;
-    }
-    if (operation === "evaluation_write_renew") {
-      const scripted = take("renew");
-      if (scripted === "network") throw new ApiError("NETWORK", "lost renew reply");
-      if (options.queuedForever || scripted === "queued")
-        return { ...grant, state: "waiting", phase: "draining", queuePosition: 2 };
-      state = { ...state, gate: { phase: "writing", readers: 0, waitingWriters: 0, writer: { ...grant, kind: "human" } } };
-      return { ...grant, state: "active", phase: "writing" };
-    }
     if (operation === "user_policy_publish") {
       published.push(params);
-      const scripted = take("publish");
+      const scripted = publishQueue.shift();
       if (scripted === "network") throw new ApiError("NETWORK", "lost publish reply");
       if (scripted === "forbidden") throw new ApiError("FORBIDDEN", "stale CSRF after restart");
       if (scripted === "conflict") {
@@ -90,15 +63,8 @@ function fixture(script: Script = {}, options: { queuedForever?: boolean; discov
         throw new ApiError("REVISION_CONFLICT", "stale revision");
       }
       state = { ...state, tableRevision: state.tableRevision + 1,
-        gate: { phase: "open", readers: 0, waitingWriters: 0, writer: null } };
+ };
       return { published: true, tableRevision: state.tableRevision };
-    }
-    if (operation === "evaluation_write_abort") {
-      aborted.push(params);
-      const scripted = take("abort");
-      if (scripted === "network") throw new ApiError("NETWORK", "lost abort reply");
-      if (scripted === "forbidden") throw new ApiError("FORBIDDEN", "console session refused");
-      return { aborted: true };
     }
     if (operation === "model_catalog_refresh") {
       // The program publishes the directory itself; the page only re-reads it.
@@ -121,7 +87,7 @@ function fixture(script: Script = {}, options: { queuedForever?: boolean; discov
     tasks: vi.fn(async () => ({ runs: [], total: 0, nextCursor: null })),
     objectives: vi.fn(async () => ({ objectives: [], total: 0, nextCursor: null, cursor: 0, changed: false })),
   } as unknown as ConsoleApi;
-  return { api, command, operations, published, aborted,
+  return { api, command, operations, published,
     snapshot: () => state,
     setSnapshot: (next: Snapshot) => { state = next; } };
 }
@@ -160,7 +126,7 @@ afterEach(() => {
 });
 
 describe("direct editing and the save bar", () => {
-  it("edits directly without a switch, shows the save bar and only takes the grant on save", async () => {
+  it("edits directly and publishes one settings patch on save", async () => {
     const f = fixture();
     const user = userEvent.setup();
     await openBuddy(f.api, user);
@@ -171,8 +137,8 @@ describe("direct editing and the save bar", () => {
     expect(within(saveBar()!).getByText("1 项未保存")).toBeTruthy();
     expect(f.command).not.toHaveBeenCalled();
     await user.click(save());
-    await waitFor(() => expect(f.operations).toEqual(["evaluation_write_begin", "user_policy_publish"]));
-    expect(f.published[0]).toMatchObject({ expectedRevision: 2, writerId: "writer" });
+    await waitFor(() => expect(f.operations).toEqual(["user_policy_publish"]));
+    expect(f.published[0]).toMatchObject({ expectedRevision: 2, commandId: expect.any(String) });
     // Only the changed family note is published: no profiles table and no card.
     expect(f.published[0].familyAnnotationChanges).toEqual([{ ...flashFamily, text: "本地草稿，未发布" }]);
     expect(f.published[0]).not.toHaveProperty("annotationChanges");
@@ -223,64 +189,7 @@ describe("direct editing and the save bar", () => {
     expect(f.command).not.toHaveBeenCalled();
   });
 
-  it("reuses the same begin request when the grant reply was lost", async () => {
-    const f = fixture({ begin: ["network"] });
-    const user = userEvent.setup();
-    await openBuddy(f.api, user);
-    await user.type(note(), "补充");
-    await user.click(save());
-    await screen.findByText(/编辑资格未知/);
-    await user.click(save());
-    await waitFor(() => expect(f.operations.filter(op => op === "evaluation_write_begin")).toHaveLength(2));
-    const begins = f.command.mock.calls.filter(([op]) => op === "evaluation_write_begin");
-    expect(begins[1][1]).toEqual(begins[0][1]);
-    expect(f.operations.at(-1)).toBe("user_policy_publish");
-  });
-
-  it("waits behind another writer and releases the queued intent on cancel", async () => {
-    const f = fixture({ begin: ["queued"] }, { queuedForever: true });
-    const user = userEvent.setup();
-    await openBuddy(f.api, user);
-    await user.type(note(), "排队中的草稿");
-    await user.click(save());
-    const cancel = await screen.findByRole("button", { name: "取消等待" });
-    expect(within(saveBar()!).getByRole("button", { name: "等待其他保存完成…" })).toBeTruthy();
-    await waitFor(() => expect(f.operations).toContain("evaluation_write_renew"), { timeout: 4000 });
-    await user.click(cancel);
-    await waitFor(() => expect(f.operations).toContain("evaluation_write_abort"), { timeout: 4000 });
-    await screen.findByText("已取消等待；草稿已保留。");
-    expect(note().value).toBe("原备注排队中的草稿");
-    expect(saveBar()).toBeTruthy();
-    expect(f.operations).not.toContain("user_policy_publish");
-  });
-
-  it("publishes after the queued intent becomes active", async () => {
-    const f = fixture({ begin: ["queued"] });
-    const user = userEvent.setup();
-    await openBuddy(f.api, user);
-    await user.type(note(), "等待后发布");
-    await user.click(save());
-    await screen.findByText(PUBLISHED, {}, { timeout: 5000 });
-    expect(f.operations).toEqual(["evaluation_write_begin", "evaluation_write_renew", "user_policy_publish"]);
-    expect(f.published[0]).toMatchObject({ writerId: "writer", generation: 1 });
-  });
-
-  it("releases a superseded intent before requesting a fresh one", async () => {
-    const f = fixture({ begin: ["drift"], renew: ["network"] });
-    const user = userEvent.setup();
-    await openBuddy(f.api, user);
-    await user.type(note(), "补充");
-    await user.click(save());
-    await screen.findByText(/编辑资格未知/, {}, { timeout: 4000 });
-    await user.click(save());
-    await waitFor(() => expect(f.operations.filter(op => op === "evaluation_write_abort")).toHaveLength(1));
-    const begins = f.operations.reduce<number[]>((all, op, index) => op === "evaluation_write_begin" ? [...all, index] : all, []);
-    expect(begins).toHaveLength(2);
-    expect(f.operations.indexOf("evaluation_write_abort")).toBeLessThan(begins[1]);
-    await screen.findByText(PUBLISHED);
-  });
-
-  it("keeps the same publication identity when the publish reply was lost", async () => {
+          it("keeps the same publication identity when the publish reply was lost", async () => {
     const f = fixture({ publish: ["network"] });
     const user = userEvent.setup();
     await openBuddy(f.api, user);
@@ -297,7 +206,7 @@ describe("direct editing and the save bar", () => {
     await screen.findByText(PUBLISHED);
     expect(f.published).toHaveLength(2);
     expect(f.published[1]).toEqual(f.published[0]);
-    expect(f.operations.filter(op => op === "evaluation_write_begin")).toHaveLength(1);
+    expect(f.operations.filter(op => op === "user_policy_publish")).toHaveLength(2);
   });
 
   it("retains an unknown publication across a later CSRF refusal", async () => {
@@ -310,7 +219,6 @@ describe("direct editing and the save bar", () => {
     await user.click(screen.getAllByRole("button", { name: "重试同一保存" })[0]!);
     await waitFor(() => expect(f.published).toHaveLength(2));
     await screen.findByText(/保存结果未知/);
-    expect(f.aborted).toHaveLength(0);
     await waitFor(() => expect(screen.getAllByRole("button", { name: "重试同一保存" })[0]!.getAttribute("aria-disabled")).not.toBe("true"));
     await user.click(screen.getAllByRole("button", { name: "重试同一保存" })[0]!);
     await screen.findByText(PUBLISHED);
@@ -329,7 +237,7 @@ describe("direct editing and the save bar", () => {
     const banner = await waitFor(() => { const found = conflictNotice(); expect(found).toBeTruthy(); return found!; });
     expect(within(banner).getByText(/设置已更新/)).toBeTruthy();
     expect(note().value).toBe("基于 V2 的草稿");
-    expect(f.operations).toContain("evaluation_write_abort");
+    expect(f.operations).toEqual(["user_policy_publish"]);
     // Deliberate reload adopts the latest publication.
     await user.click(within(banner).getByRole("button", { name: "重新加载最新版本" }));
     await screen.findByText("已加载 V3；请核对后保存。");
@@ -340,34 +248,7 @@ describe("direct editing and the save bar", () => {
     expect(f.published.at(-1)).toMatchObject({ expectedRevision: 3 });
   });
 
-  it("keeps drafts editable offline while save refuses and explains why", async () => {
-    const f = fixture();
-    f.setSnapshot({ ...f.snapshot(), capabilities: { evaluationWriteGate: false } });
-    const user = userEvent.setup();
-    await openBuddy(f.api, user);
-    await user.type(note(), "离线草稿");
-    expect(save().getAttribute("aria-disabled")).toBe("true");
-    await user.click(save());
-    expect(f.command).not.toHaveBeenCalled();
-    expect((await screen.findAllByText(/无写入资格/)).length).toBeGreaterThan(0);
-    expect(note().value).toBe("原备注离线草稿");
-  });
-
-  it("explains a guarded save from the keyboard without sending a request", async () => {
-    const f = fixture();
-    f.setSnapshot({ ...f.snapshot(), capabilities: { evaluationWriteGate: false } });
-    const user = userEvent.setup();
-    await openBuddy(f.api, user);
-    await user.type(note(), "x");
-    const button = save();
-    button.focus();
-    expect(document.activeElement).toBe(button);
-    await user.keyboard("{Enter}");
-    expect(f.command).not.toHaveBeenCalled();
-    expect((await screen.findAllByText(/无写入资格/)).length).toBeGreaterThan(0);
-  });
-
-  it("refreshes program directory facts on discovery without uploading a draft", async () => {
+      it("refreshes program directory facts on discovery without uploading a draft", async () => {
     const f = fixture();
     const user = userEvent.setup();
     window.location.hash = "#buddies";
@@ -405,7 +286,6 @@ describe("direct editing and the save bar", () => {
     await user.click(save());
     expect((await screen.findAllByText(/设置已更新/)).length).toBeGreaterThan(0);
     expect(f.published).toHaveLength(0);
-    expect(f.operations).not.toContain("evaluation_write_begin");
     await user.click(within(banner).getByRole("button", { name: "重新加载最新版本" }));
     await screen.findByText("已加载 V3；请核对后保存。");
     expect(note().value).toBe("他人发现期间发布");
@@ -426,7 +306,6 @@ describe("direct editing and the save bar", () => {
     await user.click(save());
     expect((await screen.findAllByText(/设置已更新/)).length).toBeGreaterThan(0);
     expect(f.published).toHaveLength(0);
-    expect(f.operations).not.toContain("evaluation_write_begin");
     // Discard is the deliberate resolution; nothing was published implicitly.
     await user.click(within(banner).getByRole("button", { name: "放弃修改" }));
     await screen.findByText("草稿已放弃");
@@ -449,28 +328,6 @@ describe("direct editing and the save bar", () => {
     expect(f.published[0]).toMatchObject({ expectedRevision: 3 });
     expect(f.published[0].familyAnnotationChanges).toEqual([{ ...flashFamily, text: "原备注，保留的备注" }]);
     expect(f.published[0]).not.toHaveProperty("profiles");
-  });
-
-  it("shows how many results of each level count towards its evaluation and offers nothing that records evidence", async () => {
-    const f = fixture();
-    f.setSnapshot({ ...f.snapshot(), evidence: [{ evidenceId: "ev-1", profileId: flashOff, kind: "observation",
-      summary: "单次观察", project: "fixture", conditions: ["React"], source: "user", runId: null,
-      createdAt: "2026-09-22T00:00:00Z" }] });
-    const user = userEvent.setup();
-    await openBuddy(f.api, user);
-    expect(within(level("off")).getByText("5")).toBeTruthy();
-    await user.click(effortCell("high"));
-    expect(within(level("high")).getByText("2")).toBeTruthy();
-    await user.click(effortCell("off"));
-    // The column says what the number counts, in its name and in the explanation of that name.
-    expect(within(pane()).getByText("计入评价").getAttribute("aria-description"))
-      .toBe("Host 验收或打回过、并且记为证据的执行次数；取消的、没有结论的与环境故障不算");
-    // The side column holds settings only: the two reason-less levels offer a switch and a preference, nothing else.
-    expect(within(level("off")).getAllByRole("switch")).toHaveLength(1);
-    expect(within(level("off")).getAllByRole("radiogroup")).toHaveLength(1);
-    expect(within(level("off")).getByRole("textbox")).toHaveProperty("readOnly", true);
-    expect(within(level("off")).queryByRole("button")).toBeNull();
-    expect(f.command).not.toHaveBeenCalled();
   });
 
   it("toggles a level from its switch and marks it unsaved until publication", async () => {
@@ -516,182 +373,4 @@ describe("direct editing and the save bar", () => {
     }
   });
 
-  it("shows only an actionable gate state instead of a readable badge", async () => {
-    const f = fixture();
-    f.setSnapshot({ ...f.snapshot(), gate: { phase: "draining", readers: 1, waitingWriters: 1, writer: null } });
-    const user = userEvent.setup();
-    await openBuddy(f.api, user);
-    expect(screen.getByText("写入排队中")).toBeTruthy();
-    expect(screen.queryByText("评价表可读")).toBeNull();
-  });
-
-  it("resolves an unresolved begin with its original request before discarding", async () => {
-    const f = fixture({ begin: ["network"] });
-    const user = userEvent.setup();
-    await openBuddy(f.api, user);
-    await user.type(note(), "未确认的编辑资格");
-    await user.click(save());
-    await screen.findByText(/编辑资格未知/);
-    expect(f.operations).toEqual(["evaluation_write_begin"]);
-    await user.click(within(saveBar()!).getByRole("button", { name: "放弃" }));
-    await screen.findByText("草稿已放弃");
-    const begins = f.command.mock.calls.filter(([op]) => op === "evaluation_write_begin");
-    expect(begins).toHaveLength(2);
-    // The retry reuses the request ID, so the board resolves the same intent.
-    expect(begins[1][1]).toEqual(begins[0][1]);
-    expect(f.operations).toEqual(["evaluation_write_begin", "evaluation_write_begin", "evaluation_write_abort"]);
-    expect(f.aborted[0]).toMatchObject({ writerId: "writer", generation: 1 });
-    expect(saveBar()).toBeNull();
-  });
-
-  it("keeps an unresolved begin for a later retry when the discard reply is also lost", async () => {
-    const f = fixture({ begin: ["network", "network"] });
-    const user = userEvent.setup();
-    await openBuddy(f.api, user);
-    await user.type(note(), "补充");
-    await user.click(save());
-    await screen.findByText(/编辑资格未知/);
-    // Reverting the text leaves nothing unsaved, but the unknown begin keeps
-    // the save bar so the user can resolve it deliberately.
-    await user.clear(note());
-    await user.type(note(), "原备注");
-    expect(within(saveBar()!).getByText("保存结果待核对")).toBeTruthy();
-    await user.click(within(saveBar()!).getByRole("button", { name: "放弃" }));
-    await screen.findByText(/编辑资格释放未知/);
-    expect(f.operations).toEqual(["evaluation_write_begin", "evaluation_write_begin"]);
-    // The request identity survives, so the next save resolves it.
-    await user.type(note(), "再次编辑");
-    await user.click(save());
-    await screen.findByText(PUBLISHED);
-    const begins = f.command.mock.calls.filter(([op]) => op === "evaluation_write_begin");
-    expect(begins).toHaveLength(3);
-    expect(begins[1][1]).toEqual(begins[0][1]);
-    expect(begins[2][1]).toEqual(begins[0][1]);
-  });
-
-  it("never reports an unconfirmed abort as a release and retries it with the same identity", async () => {
-    const f = fixture({ begin: ["queued"], abort: ["network"] }, { queuedForever: true });
-    const user = userEvent.setup();
-    await openBuddy(f.api, user);
-    await user.type(note(), "排队后取消");
-    await user.click(save());
-    const cancel = await screen.findByRole("button", { name: "取消等待" });
-    await waitFor(() => expect(f.operations).toContain("evaluation_write_renew"), { timeout: 4000 });
-    await user.click(cancel);
-    await screen.findByText(/编辑资格释放未知/);
-    expect(screen.queryByText("已取消等待；草稿已保留。")).toBeNull();
-    expect(note().value).toBe("原备注排队后取消");
-    // The next save retries the retained abort with its original command ID.
-    await user.click(save());
-    await screen.findByText(PUBLISHED);
-    const aborts = f.command.mock.calls.filter(([op]) => op === "evaluation_write_abort");
-    expect(aborts).toHaveLength(2);
-    expect(aborts[1][1]).toEqual(aborts[0][1]);
-    expect(f.operations.filter(op => op === "evaluation_write_begin")).toHaveLength(2);
-  });
-
-  it("never claims a confirmed release when the board refuses the abort", async () => {
-    const f = fixture({ begin: ["queued"], abort: ["forbidden"] }, { queuedForever: true });
-    const user = userEvent.setup();
-    await openBuddy(f.api, user);
-    await user.type(note(), "被拒绝的释放");
-    await user.click(save());
-    const cancel = await screen.findByRole("button", { name: "取消等待" });
-    await waitFor(() => expect(f.operations).toContain("evaluation_write_renew"), { timeout: 4000 });
-    await user.click(cancel);
-    await screen.findByText(/编辑资格释放未知/);
-    expect(screen.queryByText("已取消等待；草稿已保留。")).toBeNull();
-    expect(f.aborted[0]).toMatchObject({ writerId: "writer", generation: 1 });
-  });
-
-  it("bounds an unconfirmed release by the lease expiry instead of retrying forever", async () => {
-    const f = fixture({ begin: ["queued"], abort: ["network"] }, { queuedForever: true });
-    const user = userEvent.setup();
-    await openBuddy(f.api, user);
-    await user.type(note(), "过期后继续");
-    await user.click(save());
-    const cancel = await screen.findByRole("button", { name: "取消等待" });
-    await waitFor(() => expect(f.operations).toContain("evaluation_write_renew"), { timeout: 4000 });
-    await user.click(cancel);
-    await screen.findByText(/编辑资格释放未知/);
-    const realNow = Date.now();
-    const now = vi.spyOn(Date, "now").mockReturnValue(realNow + 130000);
-    try {
-      await user.click(save());
-      await screen.findByText(PUBLISHED);
-    } finally {
-      now.mockRestore();
-    }
-    // The dead lease was not aborted again, and nothing was claimed as released.
-    expect(f.operations.filter(op => op === "evaluation_write_abort")).toHaveLength(1);
-    expect(f.operations.filter(op => op === "evaluation_write_begin")).toHaveLength(2);
-    expect(f.published.at(-1)!.familyAnnotationChanges[0].text).toContain("过期后继续");
-  });
-
-  it("keeps the draft editable after a cancelled wait and publishes the next attempt", async () => {
-    const f = fixture({ begin: ["queued"] }, { queuedForever: true });
-    const user = userEvent.setup();
-    await openBuddy(f.api, user);
-    await user.type(note(), "排队");
-    await user.click(save());
-    const cancel = await screen.findByRole("button", { name: "取消等待" });
-    await waitFor(() => expect(f.operations).toContain("evaluation_write_renew"), { timeout: 4000 });
-    await user.click(cancel);
-    await screen.findByText("已取消等待；草稿已保留。");
-    // A confirmed cancellation clears the uncertain state: typing stays possible.
-    expect(note().disabled).toBe(false);
-    await user.type(note(), "后继续编辑");
-    await user.click(save());
-    await screen.findByText(PUBLISHED);
-    expect(f.published.at(-1)!.familyAnnotationChanges[0].text).toContain("后继续编辑");
-  });
-
-  it("clears uncertainty after a definitive begin failure so editing continues", async () => {
-    const f = fixture({ begin: ["conflict"] });
-    const user = userEvent.setup();
-    await openBuddy(f.api, user);
-    await user.type(note(), "首次冲突");
-    await user.click(save());
-    await screen.findByText(/记录已更新/);
-    expect(note().disabled).toBe(false);
-    await user.type(note(), "后重试");
-    await user.click(save());
-    await screen.findByText(PUBLISHED);
-    expect(f.published.at(-1)!.familyAnnotationChanges[0].text).toContain("后重试");
-  });
-
-  it("stops renewing an idle writer while a publish outcome is unknown", async () => {
-    const f = fixture({ publish: ["network"] });
-    const user = userEvent.setup();
-    await openBuddy(f.api, user);
-    await user.type(note(), "结果不明");
-    vi.useFakeTimers();
-    try {
-      await act(async () => {
-        fireEvent.click(save());
-      });
-      for (let i = 0; i < 50 && !screen.queryByText(/保存结果未知/); i++) {
-        await act(async () => { await Promise.resolve(); });
-      }
-      expect(screen.getAllByText(/保存结果未知/).length).toBeGreaterThan(0);
-      const renews = () => f.operations.filter(op => op === "evaluation_write_renew").length;
-      const seen = renews();
-      await act(async () => { await vi.advanceTimersByTimeAsync(60000); });
-      expect(renews()).toBe(seen);
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
-  it("does not repeat an unresolved begin while it waits for the user", async () => {
-    const f = fixture({ begin: ["network"] });
-    const user = userEvent.setup();
-    await openBuddy(f.api, user);
-    await user.type(note(), "补充");
-    await user.click(save());
-    await screen.findByText(/编辑资格未知/);
-    await new Promise(resolve => setTimeout(resolve, 900));
-    expect(f.operations.filter(op => op === "evaluation_write_begin")).toHaveLength(1);
-    expect(f.operations).not.toContain("evaluation_write_renew");
-  });
-});
+                    });

@@ -12,7 +12,7 @@ const initial = (): Snapshot => ({
   csrfToken: "fixture-csrf",
   consoleSession: { id: "fixture-session", canWrite: true, reason: null },
   tableRevision: 2,
-  gate: { phase: "open", readers: 0, writer: null, waitingWriters: 0 },
+
   configuration: {
     revision: 1,
     routerProfileIds: ["flash-off"], routerRetryIntervalSeconds: 600, defaultRoutingMode: "review" as const, routingBudget: "standard",
@@ -33,28 +33,17 @@ const initial = (): Snapshot => ({
       description: "",
     },
   ],
-  cards: [
-    {
-      profileId: "flash-off",
-      revision: 2,
-      summary: "待积累实际证据",
-      strengths: [],
-      limitations: [],
-      risks: [],
-      evidenceIds: [],
-      updatedAt: null,
-    },
-  ],
+
   preferences: [],
   familyPreferences: [],
   preferenceOverrides: [],
   familyAnnotations: [],
-  evidence: [],
+
   decisions: [],
-  sampleCounts: { "flash-off": 3 },
+
   modelConcurrency: [{ adapter: "dsh", provider: "deepseek-official", model: "deepseek-flash", limit: 2, active: 0 }],
   tasks: { pendingCount: 0 },
-  capabilities: { selection: false, maintenance: false, evaluationWriteGate: true },
+  capabilities: { selection: false },
 });
 
 const emptyObjectives = () => ({ objectives: [], total: 0, nextCursor: null, cursor: 0, changed: false });
@@ -235,9 +224,6 @@ describe("console interactions", () => {
 
   it("offers no maintenance or evidence-submission action anywhere", async () => {
     const state = initial();
-    state.evidence = [{ evidenceId: "ev-1", profileId: "flash-off", kind: "observation",
-      summary: "一条只读证据", project: null, conditions: [], source: "user", runId: null,
-      createdAt: "2026-09-22T00:00:00Z" }];
     const command = vi.fn(async (operation: string) => {
       throw new Error(`Unexpected command: ${operation}`);
     });

@@ -412,7 +412,7 @@ class ModelFactsTestCase(EvaluationTestCase):
         self.write_fixture()
         self.seed(board)
         calls = self.count_refresh_calls()
-        grant = self.begin(board, request_id="write-1")
+        grant = self.publication_params(board)
         patch = [{"profileId": FLASH_PROFILE_ID, "enabled": True}]
         first = self.publish_with(board, grant, "cmd-1", profileSettings=patch)
         self.assertEqual(len(calls), 1)

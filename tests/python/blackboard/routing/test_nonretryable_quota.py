@@ -30,11 +30,8 @@ class NonretryableQuotaRoutingTests(BoardTestCase):
         self.board_.evaluation._clock = self.clock
         self.board_.call("model_catalog_refresh", {"requestId": "catalog"})
         revision = self.board_.call("console_snapshot", {})["tableRevision"]
-        grant = self.board_.console_call("evaluation_write_begin", {"requestId": "enable",
-                                        "expectedRevision": revision, "kind": "human"})
-        self.board_.console_call("user_policy_publish", {"commandId": "enable", "writerId": grant["writerId"],
-            "generation": grant["generation"], "writerToken": grant["writerToken"],
-            "expectedRevision": grant["tableRevision"],
+        self.board_.console_call("user_policy_publish", {"commandId": "enable",
+            "expectedRevision": revision,
             "profileSettings": [{"profileId": item, "enabled": True} for item in [*PROFILE_IDS, OTHER_PROVIDER_ID]],
             "configuration": {"defaultRoutingMode": "review", "routerProfileIds": []}})
         self.assertEqual(self.candidates()[0], [*PROFILE_IDS, OTHER_PROVIDER_ID])

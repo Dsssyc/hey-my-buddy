@@ -10,7 +10,6 @@ from __future__ import annotations
 
 import json
 import os
-import time
 import unittest
 
 from support import BoardTestCase
@@ -19,7 +18,6 @@ from hey_my_buddy.console.read_cache import (
     MAX_ENTRIES,
     ReadCache,
     collect_deadline,
-    gate_lease_deadline,
     if_none_match_matches,
     parse_boundary,
     select_encoding,
@@ -78,7 +76,6 @@ class BoundaryTests(BoardTestCase):
     def test_collect_deadline_takes_earliest_future_boundary(self):
         after = parse_boundary("2026-10-07T12:00:00Z")
         projection = {
-            "gate": {"writer": {"expiresAt": "2026-10-07T13:00:00Z"}},
             "profiles": [
                 {"quotaRetry": {"eligibleAt": "2026-10-07T12:30:00Z"}},
                 {"quotaExhausted": {"resetsAt": "2027-01-01T00:00:00Z"}},
@@ -99,22 +96,6 @@ class BoundaryTests(BoardTestCase):
         stale_only = collect_deadline({"quota": {"observedAt": "2026-10-07T11:30:00Z"}}, after=after)
         self.assertEqual(stale_only, parse_boundary("2026-10-07T12:30:00Z"))
         self.assertEqual(collect_deadline({"x": 1}, after=after), float("inf"))
-
-    def test_gate_lease_deadline_follows_the_earliest_unexpired_lease(self):
-        board = self.board()
-        now = time.time()
-        self.assertIsNone(gate_lease_deadline(board.store.db, now))
-        with board.store.db.write() as connection:
-            connection.execute(
-                "INSERT INTO evaluation_writers(writer_id,request_id,kind,state,generation,expected_revision,"
-                "token_verifier,requested_at,granted_at,expires_at)"
-                " VALUES('w1','marker-test-request','maintenance','active',1,0,'v','2026-01-01T00:00:00.000Z',"
-                "'2026-01-01T00:00:00.000Z','2030-01-01T00:00:00Z')"
-            )
-        moment = gate_lease_deadline(board.store.db, now)
-        self.assertEqual(moment, parse_boundary("2030-01-01T00:00:00Z"))
-        # An already-expired lease is not a boundary; the view has already flipped.
-        self.assertIsNone(gate_lease_deadline(board.store.db, parse_boundary("2030-06-01T00:00:00Z")))
 
 
 class MarkerTests(BoardTestCase):

@@ -74,22 +74,21 @@ export function DecisionDetails({ decisionId, api, csrfToken, active = true, ref
   const evidence = Array.isArray(audit.evidence) && audit.evidence.every(entry =>
     entry != null && typeof entry === "object" && typeof entry.kind === "string" && typeof entry.ref === "string")
     ? audit.evidence : null;
-  return <section className="decision-detail" aria-label={audit.kind === "maintain" ? "评价整理详情" : "决策依据详情"}>
-    <div className="row-between"><h3>{audit.kind === "maintain" ? "整理结果" : "选择依据"}</h3>
+  return <section className="decision-detail" aria-label="决策依据详情">
+    <div className="row-between"><h3>选择依据</h3>
       <Badge tone={!abstention && ["failed", "needs-host", "stale", "cancelled"].includes(audit.status) ? "amber" : "neutral"}>
         {abstention ? decisionStatus.abstention : decisionStatus[audit.status] || audit.status}</Badge></div>
     <InlineText key={audit.decisionId} recordId={audit.decisionId} text={reason} className="read-text decision-reason" />
     {audit.error && audit.error !== audit.reason && <p className="error-message">{audit.error}</p>}
     <dl className="facts">
-      {audit.kind !== "maintain" && <><dt>选中配置</dt><dd>{configurationText(audit.selectedProfile)}</dd></>}
+      <dt>选中配置</dt><dd>{configurationText(audit.selectedProfile)}</dd>
       <dt>路由模型</dt><dd>{configurationText(model)}</dd>
-      {audit.kind !== "maintain" && <><dt>实际模式</dt><dd>{noRouterCall ? "未调用 Router" : recordedRoutingMode(audit.routingMode)}</dd></>}
+      <dt>实际模式</dt><dd>{noRouterCall ? "未调用 Router" : recordedRoutingMode(audit.routingMode)}</dd>
       <dt>评价表版本</dt><dd>V{audit.tableRevision}</dd>
       <dt>决策配置版本</dt><dd>{audit.configurationRevision == null ? "未记录" : `V${audit.configurationRevision}`}</dd>
       <dt>记录时间</dt><dd>{formatDate(audit.createdAt)}</dd>
-      {audit.publishedRevision != null && <><dt>发布版本</dt><dd>V{audit.publishedRevision}</dd></>}
     </dl>
-    {audit.kind !== "maintain" && <>
+    <>
       <dl className="facts">
         <dt>程序用户偏好结果</dt><dd>{outcomeText(audit.policyCheck?.userPreference)}</dd>
         <dt>预算配置</dt><dd>{noRouterCall ? "未调用 Router" : audit.routingMode === "fast" ? "快速路由固定 60 秒，无工具" : audit.budget?.preset ? ({ brief: "简要", quick: "简要（历史记录）", standard: "标准", deep: "深入" }[audit.budget.preset] ?? audit.budget.preset) : "未记录"}</dd>
@@ -115,13 +114,9 @@ export function DecisionDetails({ decisionId, api, csrfToken, active = true, ref
         {otherPreferences.length > 0 && <details><summary>其他候选偏好（{otherPreferences.length} 条）</summary>
           <ul className="reason-list">{otherPreferences.map(preferenceItem)}</ul></details>}
       </> : <p className="small muted">候选快照无用户偏好</p> : <p className="small muted">输入快照未记录</p>}
-    </>}
-    {audit.kind === "maintain" && audit.proposal != null && <details className="detail-section"><summary>查看整理建议</summary>
-      <p className="small muted">{audit.publishedRevision != null ? "已发布" : "未发布"}</p>
-      <pre className="result-text">{JSON.stringify(audit.proposal, null, 2)}</pre></details>}
-    {audit.noOp && <p className="small muted">无新版本</p>}
-    {table && <details className="detail-section"><summary>候选、评价与证据（{profiles.length} 个配置）</summary>
-      <pre className="result-text">{JSON.stringify({ profiles, cards: table.cards, preferences: table.preferences, evidence: table.evidence }, null, 2)}</pre></details>}
+    </>
+    {table && <details className="detail-section"><summary>候选与偏好（{profiles.length} 个配置）</summary>
+      <pre className="result-text">{JSON.stringify({ profiles, preferences: table.preferences }, null, 2)}</pre></details>}
     <details className="detail-section"><summary>记录标识与原始快照</summary>
       <dl className="facts"><dt>决策 ID</dt><dd>{audit.decisionId}</dd><dt>计算任务</dt><dd>{audit.runId || "未启动计算任务"}</dd>
         <dt>输入 SHA-256</dt><dd>{audit.inputSha256 || "未记录"}</dd></dl>

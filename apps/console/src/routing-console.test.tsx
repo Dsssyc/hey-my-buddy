@@ -19,15 +19,15 @@ const selector = { provider: "deepseek-official", model: "deepseek-flash", effor
 function snapshot(): Snapshot {
   return {
     csrfToken: "csrf", consoleSession: { id: "fixture-session", canWrite: true, reason: null }, tableRevision: 99,
-    gate: { phase: "open", readers: 0, writer: null, waitingWriters: 0 },
+
     configuration: { revision: 9, routerProfileIds: [worker.profileId], routerRetryIntervalSeconds: 600, defaultRoutingMode: "review" as const, routingBudget: "standard"},
     profiles: [{ ...worker, label: "现在已改名的模型 · max" }],
     preferences: [{ profileId: worker.profileId, mode: "exclude", reason: "当前已改为排除" }],
     familyPreferences: [], preferenceOverrides: [],
-    cards: [], familyAnnotations: [], evidence: [], decisions: [], sampleCounts: {},
+ familyAnnotations: [], decisions: [],
     modelConcurrency: [],
     tasks: { pendingCount: 0 },
-    capabilities: { selection: true, maintenance: true, evaluationWriteGate: true },
+    capabilities: { selection: true },
   };
 }
 function decision(id: string, overrides: Partial<Decision> = {}) {
@@ -39,9 +39,9 @@ function decision(id: string, overrides: Partial<Decision> = {}) {
     decisionModel: { requested: { provider: selector.provider, model: selector.model, reasoningEffort: "off" }, resolved: null, observed: null },
     requested: { constraints: { adapter: "dsh" } },
     input: {
-      operation: overrides.kind || "select", tableRevision: overrides.tableRevision ?? 3, profile: selector, profiles: [{ ...worker }],
-      cards: [], preferences: [{ profileId: worker.profileId, mode: "prefer", reason: "当时偏好有边界的测试工作" }],
-      evidence: [{ evidenceId: "evidence-at-selection", summary: "当时已验收的测试证据" }],
+      operation: "select", tableRevision: overrides.tableRevision ?? 3, profile: selector, profiles: [{ ...worker }],
+ preferences: [{ profileId: worker.profileId, mode: "prefer", reason: "当时偏好有边界的测试工作" }],
+
     },
     inputSha256: `hash-${id}`, output: { status: "completed" },
     ...overrides,

@@ -38,8 +38,8 @@ class ConsoleAccessTests(ConsoleTestCase):
         for _ in range(70):
             self.assertEqual(board.console.start()["url"], entry["url"])
         self.assertFalse((board.directory / "console-sessions.json").exists())
-        self.assertEqual(first.command("evaluation_history", {}, csrf="wrong")[0], 403)
-        self.assertEqual(first.command("evaluation_history", {}, csrf=first.bootstrap()["csrfToken"])[0], 200)
+        self.assertEqual(first.command("selection_list", {}, csrf="wrong")[0], 403)
+        self.assertEqual(first.command("selection_list", {}, csrf=first.bootstrap()["csrfToken"])[0], 200)
 
     def test_host_origin_fetch_metadata_and_csrf_refusals_without_cookie(self):
         board = self.board()
@@ -69,7 +69,7 @@ class ConsoleAccessTests(ConsoleTestCase):
         self.assertEqual(self.change(browser, True)[0], 200)
         self.assertFalse(board.service.console_session_valid(old_authority))
         self.assertIsNotNone(browser.cookie)
-        self.assertEqual(browser.command("evaluation_history", {}, csrf=old_csrf)[0], 403)
+        self.assertEqual(browser.command("selection_list", {}, csrf=old_csrf)[0], 403)
         anonymous = Browser(browser.origin + "/")
         self.assertEqual(anonymous.get("/api/console")[0], 401)
         pending = board.console.start()
@@ -138,13 +138,7 @@ class ConsoleAccessTests(ConsoleTestCase):
         for index, browser in enumerate((first, second)):
             revision = before[index]["tableRevision"]
             csrf = before[index]["csrfToken"]
-            status, _, body = browser.command("evaluation_write_begin", {
-                "requestId": f"window-{index}", "kind": "human", "expectedRevision": revision,
-            }, csrf=csrf)
-            self.assertEqual(status, 200, body)
-            grant = json.loads(body)["result"]
             status, _, body = browser.command("user_policy_publish", {
-                **{key: grant[key] for key in ("writerId", "generation", "writerToken")},
                 "commandId": f"window-publish-{index}", "expectedRevision": revision,
                 "profileSettings": [{"profileId": PROFILE_ID, "enabled": index == 0}],
             }, csrf=csrf)

@@ -19,7 +19,7 @@ shortcut:
   marker components (a callable ``extra_marker``, such as the console's
   session-set fingerprint) follow the same double-read rule.
 * Fields derived from the current time do not force per-poll recomputation.
-  Instead the projection's own absolute boundaries (lease expiries, retry and
+  Instead the projection's own absolute boundaries (retry and
   reset windows, quota staleness, router skip windows) become a deadline: once
   the clock passes it, the marker counts as changed. Boundary collection
   deliberately over-reports — a boundary that only affects display still
@@ -92,16 +92,15 @@ def parse_boundary(value: Any) -> float | None:
     return moment.timestamp()
 
 
-def collect_deadline(projection: Any, *, after: float, known: float | None = None) -> float:
+def collect_deadline(projection: Any, *, after: float) -> float:
     """The earliest future boundary inside a projection, as epoch seconds.
 
     Walks every dict and list looking for the boundary keys above, comparing
     against ``after`` (the generation clock). A key that only feeds display
     still counts: over-reporting costs one recomputation, while a missed flip
-    would freeze state that must expire. ``known`` seeds the result with an
-    already-established boundary such as the gate lease expiry.
+    would freeze state that must expire.
     """
-    earliest = known if known is not None else float("inf")
+    earliest = float("inf")
 
     def visit(node: Any) -> None:
         nonlocal earliest
@@ -124,33 +123,6 @@ def collect_deadline(projection: Any, *, after: float, known: float | None = Non
                 visit(item)
 
     visit(projection)
-    return earliest
-
-
-def gate_lease_deadline(database, now: float) -> float | None:
-    """The earliest evaluation-gate lease expiry after ``now``, or ``None``.
-
-    The gate view counts only leases that have not expired, so its phase and
-    counts flip exactly when the earliest active writer, waiting writer or
-    admitted reader lease passes. Those rows are cheap to bound in SQL; the
-    stored stamps are the same normalized ISO text used for the comparison.
-    """
-    earliest: float | None = None
-    now_text = datetime.fromtimestamp(now, timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z")
-    try:
-        with database.read() as connection:
-            for statement in (
-                "SELECT MIN(expires_at) AS boundary FROM evaluation_writers"
-                " WHERE state IN ('active','waiting') AND expires_at > ?",
-                "SELECT MIN(expires_at) AS boundary FROM evaluation_readers"
-                " WHERE released_at IS NULL AND expires_at > ?",
-            ):
-                row = connection.execute(statement, (now_text,)).fetchone()
-                moment = parse_boundary(row["boundary"]) if row is not None and row["boundary"] else None
-                if moment is not None and moment > now:
-                    earliest = moment if earliest is None else min(earliest, moment)
-    except sqlite3.Error:
-        return None
     return earliest
 
 

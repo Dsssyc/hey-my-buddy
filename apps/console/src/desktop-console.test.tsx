@@ -4,7 +4,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { App } from "./App";
 import type { ConsoleApi } from "./api";
 import { formatDateTime } from "./i18n/format";
-import type { Profile, Snapshot, Task, TaskQuery, WriterGrant } from "./types";
+import type { Profile, Snapshot, Task, TaskQuery } from "./types";
 import type { Workflow } from "./workflow-types";
 import { catalogue, effortCell, level, levelSwitch, listed, modelButton, note, pane, selectModel } from "./buddies/page.testing";
 
@@ -49,23 +49,17 @@ function fixture(records: Task[] = []) {
     .map(t => t.delegation?.rootRunId || t.runId)).size;
   const snapshot: Snapshot = { csrfToken: "csrf",
     consoleSession: { id: "fixture-session", canWrite: true, reason: null }, tableRevision: 2,
-    gate: { phase: "open", readers: 0, writer: null, waitingWriters: 0 },
+
     configuration: { revision: 1, routerProfileIds: [profiles[0].profileId], routerRetryIntervalSeconds: 600, defaultRoutingMode: "review" as const, routingBudget: "standard"},
-    profiles, cards: profiles.map(p => ({ profileId: p.profileId, revision: 2, origin: "maintenance",
-      summary: `原评价 ${p.model} ${p.effort}`,
-      strengths: [], limitations: [], risks: [], evidenceIds: [], updatedAt: null })),
-    preferences: [], familyPreferences: [], preferenceOverrides: [], familyAnnotations: [], evidence: [], decisions: [], sampleCounts: { [profiles[0].profileId]: 4 },
+    profiles,
+    preferences: [], familyPreferences: [], preferenceOverrides: [], familyAnnotations: [], decisions: [],
     modelConcurrency: [],
     tasks: { pendingCount },
-    capabilities: { selection: false, maintenance: false, evaluationWriteGate: true } };
-  const grant: WriterGrant = { writerId: "writer", generation: 1, writerToken: "private", phase: "writing", tableRevision: 2,
-    expiresAt: new Date(Date.now() + 120000).toISOString() };
+    capabilities: { selection: false } };
+
   const workflows = new Map<string, Workflow>();
   const command = vi.fn(async (operation: string, params: Record<string, unknown>) => {
-    if (operation === "evaluation_write_begin") {
-      snapshot.gate = { phase: "writing", readers: 0, waitingWriters: 0, writer: { ...grant, kind: "human" } };
-      return grant;
-    }
+
     if (operation === "workflow_get") return workflows.get(String(params.runId)) || workflow(records.find(t => t.runId === params.runId)!);
     throw new Error(`Unexpected write: ${operation}`);
   });
@@ -153,7 +147,6 @@ describe("desktop console", () => {
     const detail = pane(dsh("deepseek-flash"));
     // Each effort selects its buddy; only that buddy has an editable panel.
     expect(levelSwitch("off")).toBeTruthy();
-    expect(within(level("off")).getByText("4")).toBeTruthy();
     await user.click(effortCell("low"));
     expect(levelSwitch("low")).toBeTruthy();
     expect(within(detail).queryByRole("switch", { name: "启用 off" })).toBeNull();

@@ -101,16 +101,7 @@ METHODS = [
     "wait-capacity",
     "console",
     "console-snapshot",
-    "evaluation-write-begin",
-    "evaluation-write-renew",
     "user-policy-publish",
-    "assessment-publish",
-    "evaluation-write-abort",
-    "evaluation-reader-begin",
-    "evaluation-reader-release",
-    "evaluation-evidence-record",
-    "evaluation-prepare",
-    "evaluation-history",
     "selection-request",
     "selection-get",
     "selection-list",
@@ -213,12 +204,6 @@ examples:
       Read the bounded evaluation snapshot, or explicitly discover the installed
       harness model catalog. Neither runs a model; discovery never exposes credentials.
 
-  buddy evaluation-write-begin '{"requestId":"maint-1","expectedRevision":0,"kind":"maintenance"}'
-  buddy assessment-publish '{"commandId":"cmd-1","writerId":"...","generation":1,...}'
-      A maintenance grant publishes only changed assessment cards. Human grants and
-      user-policy publication belong to the authenticated console; an ordinary Host
-      cannot edit user annotations, preferences, enablement or configuration.
-
   buddy model-profiles '{"includeUnavailable":true,"limit":100,"query":"GLM","adapter":"zcode"}'
       Search retained configuration identities before pagination; query has at most
       200 characters and 8 whitespace-separated terms. Read nextCursor for more.
@@ -230,11 +215,6 @@ examples:
       with); add "includeAudit":true for the persisted model input, envelope and
       proposal. A recommendation is recorded history, never an execution permit;
       a queued decision stays cancellable through `execution-cancel` on its runId.
-
-  buddy evaluation-prepare '{"requestId":"maint-1","limit":32}'   buddy evaluation-history '{"limit":20}'
-      Harness-owned maintenance: prepare collects a bounded, deterministic batch of real Host-reviewed
-      facts (no model call, no lease); synthesize the cards and publish a short card-only patch with
-      `assessment-publish`. `evaluation-history` reads bounded publication pages; there is no autoMaintain.
 
   Repeating an inquiryId never injects the question twice; changed text is an error.
 """

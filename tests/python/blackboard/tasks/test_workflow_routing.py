@@ -313,22 +313,18 @@ class TestWorkflowRouting(WorkflowTestCase):
             self.continue_run(board, fresh, command_id="foreign", targetRunId=unrelated["runId"], configuration=CONFIGURATION, reason="Host attempted to configure an unrelated goal")
         self.assertEqual(raised.exception.code, "UNAUTHORIZED")
 
-    def test_pending_writer_gate_fences_changed_router_instead_of_refreshing_frozen_input(self):
+    def test_changed_revision_fences_router_instead_of_refreshing_frozen_input(self):
         board = self.board()
-        # Two effort-high candidates keep this a queued Router decision the writer
-        # gate can fence; a sole candidate would complete before any claim.
+        # Two effort-high candidates keep this a queued Router decision;
+        # a sole candidate would complete before any claim.
         self.seed(board, profiles=(PROFILE, SECOND_PROFILE, THIRD_PROFILE))
         revision = board.call("console_snapshot", {})["tableRevision"]
-        grant = board.console_call("evaluation_write_begin", {"requestId": "changing", "expectedRevision": revision, "kind": "human"})
         submitted = self.routed(board, requiredCapabilities=["effort:high"])
-        blocked = self.router_claim(board, submitted)
-        self.assertEqual(blocked["reason"], "evaluation-writer-pending")
         board.console_call("user_policy_publish", {
-            "commandId": "changed", "writerId": grant["writerId"], "generation": grant["generation"],
-            "writerToken": grant["writerToken"], "expectedRevision": grant["tableRevision"],
+            "commandId": "changed", "expectedRevision": revision,
             "configuration": {"routerProfileIds": [SECOND_PROFILE_ID]},
         })
-        claimed = self.router_claim(board, submitted, claim_id="after-writer")
+        claimed = self.router_claim(board, submitted, claim_id="after-settings-change")
         self.assertIsNone(claimed["claim"])
         old = board.call("selection_get", {"decisionId": submitted["routing"]["decisionId"], "includeAudit": True})["decision"]
         self.assertEqual(old["status"], "stale")

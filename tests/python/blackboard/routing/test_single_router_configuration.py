@@ -15,9 +15,7 @@ class SingleRouterConfigurationTests(BoardTestCase):
 
     def configure(self, settings, *, enable=False):
         revision = self.board_.call('console_snapshot', {})['tableRevision']
-        grant = self.board_.console_call('evaluation_write_begin', {
-            'requestId': f'writer-{revision}', 'kind': 'human', 'expectedRevision': revision})
-        params = {key: grant[key] for key in ('writerId', 'generation', 'writerToken')}
+        params = {}
         params.update(commandId=f'publish-{revision}', expectedRevision=revision, configuration=settings)
         if enable:
             params['profileSettings'] = [{'profileId': PROFILE, 'enabled': True}]

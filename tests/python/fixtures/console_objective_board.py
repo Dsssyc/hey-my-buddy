@@ -276,10 +276,10 @@ class SyntheticBoard:
         self.call("model_catalog_refresh", {"requestId": "synthetic-catalog"})
         with self.board.store.db.read() as connection:
             revision = connection.execute("SELECT table_revision FROM evaluation_state WHERE id=1").fetchone()[0]
-        grant = self.board.console_call("evaluation_write_begin", {"requestId": "synthetic-policy", "expectedRevision": revision, "kind": "human"})
+        expected_revision = revision
         self.board.console_call("user_policy_publish", {
-            "commandId": "synthetic-policy", "writerId": grant["writerId"], "generation": grant["generation"],
-            "writerToken": grant["writerToken"], "expectedRevision": grant["tableRevision"],
+            "commandId": "synthetic-policy",
+            "expectedRevision": expected_revision,
             "profileSettings": [{"profileId": item, "enabled": True} for item in
                                 (PROFILE_ID, "dsh:deepseek-official:deepseek-v4-pro:high")],
             "configuration": {"defaultRoutingMode": "review", "routerProfileIds": [PROFILE_ID]},

@@ -292,12 +292,10 @@ class InProcessBoard:
             **({"clock": clock} if clock is not None else {}),
         )
         # One evaluation store and one decision coordinator for the whole harness:
-        # the store hooks and the resource implementations must fence the same gate.
+        # the store hooks and resource implementations share selection state.
         self.store.evaluation = EvaluationStore(
             self.store,
             clock=clock,
-            writer_lease_seconds=options.get("writer_lease_seconds", 60),
-            writer_queue_seconds=options.get("writer_queue_seconds", 120),
             reader_lease_seconds=options.get("reader_lease_seconds", 300),
         )
         self.store.decisions = DecisionCoordinator(self.store, self.store.evaluation)

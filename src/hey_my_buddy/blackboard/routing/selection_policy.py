@@ -24,7 +24,7 @@ def policy_facts(
     """The complete bounded preference truth for one request.
 
     ``hardConstraints`` is exactly the workflow request's normalized constraint
-    map — never inferred from task text, filenames or card prose, and empty when
+    map — never inferred from task text or filenames, and empty when
     the request supplied none. ``userPreferredProfileIds`` are the supplied
     published ``prefer`` profiles that are legal candidates, in supplied order.
     Legal means enabled and available: a disabled or unavailable profile can
