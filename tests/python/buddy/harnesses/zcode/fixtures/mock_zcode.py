@@ -70,9 +70,13 @@ def snapshot():
         "providerLabel": "Fixture API", "contextWindow": 200000,
         "reasoning": {"levels": [] if case == "no-effort" else [{"value": "low"}, {"value": "high"}], "defaultLevel": "low"},
         "properties": {"inputFormat": {"supportsText": True}}}]
-    return {"session": {"sessionId": session_id, "sessionKind": "interactive", "workspace": workspace},
+    result = {"session": {"sessionId": session_id, "sessionKind": "interactive", "workspace": workspace},
             "settings": {"model": {"current": selection, "available": available},
                          "thoughtLevel": {"current": selection["options"]["reasoningLevel"]}}}
+    if case == "config-unrecognized":
+        result["settings"]["model"]["current"] = None
+        result["settings"]["thoughtLevel"]["current"] = None
+    return result
 
 
 def event(kind, payload, *, root=None, turn=None):

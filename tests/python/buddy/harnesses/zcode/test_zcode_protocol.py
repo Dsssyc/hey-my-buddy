@@ -715,19 +715,40 @@ class ConfigurationTests(unittest.TestCase):
                                    "configuration-selection-unrecognized",
                                    "configuration-readback-unconfirmed"])
 
-    def test_mismatched_selection_readback_is_reported_as_observed(self):
-        unknown = []
-        connection = mock.Mock()
-        connection.call.side_effect = [{}, {"settings": {
-            "model": {"current": {"providerId": "other-api", "modelId": "other-model",
-                                  "options": {"reasoningLevel": "high"}}},
-            "thoughtLevel": {"current": "high"}}}]
-        result = configure_session(connection, {"session": {"sessionId": "native-default"}},
-                                   {"provider": "fixture-api", "model": "fixture-model", "effort": "low"},
-                                   note_unknown=unknown.append)
-        self.assertEqual(connection.call.call_count, 2)
-        self.assertEqual(result, {"provider": "other-api", "model": "other-model", "effort": "high"})
-        self.assertEqual(unknown, ["configuration-catalog-unrecognized", "configuration-readback-unconfirmed"])
+    def test_identified_selection_mismatch_is_rejected_even_with_other_unknown_fields(self):
+        requested = {"provider": "fixture-api", "model": "fixture-model", "effort": "low"}
+        for current, thought in (
+            ({"providerId": "other-api"}, None),
+            ({"modelId": "other-model"}, None),
+            ({"options": {"reasoningLevel": "high"}}, None),
+            ({}, "high"),
+            ({"options": {"reasoningLevel": "low"}}, "high"),
+            ({"options": {"reasoningLevel": "high"}}, "low"),
+        ):
+            with self.subTest(current=current, thought=thought):
+                connection = mock.Mock()
+                connection.call.side_effect = [{}, {"settings": {
+                    "model": {"current": current}, "thoughtLevel": {"current": thought}}}]
+                with self.assertRaises(NativeError) as error:
+                    configure_session(connection, {"session": {"sessionId": "native-default"}}, requested)
+                self.assertEqual(error.exception.code, "configuration-mismatch")
+                self.assertEqual([call.args[0] for call in connection.call.call_args_list],
+                                 ["session/setModel", "session/setThoughtLevel"])
+
+    def test_unrecognized_thought_level_is_unknown_and_configuration_continues(self):
+        for thought in (None, [], False, "", " \t", "x" * 129):
+            with self.subTest(thought=thought):
+                unknown = []
+                connection = mock.Mock()
+                connection.call.side_effect = [{}, {"settings": {
+                    "model": {"current": {"providerId": "fixture-api", "modelId": "fixture-model",
+                                          "options": {"reasoningLevel": "low"}}},
+                    "thoughtLevel": {"current": thought}}}]
+                result = configure_session(connection, {"session": {"sessionId": "native-default"}},
+                    {"provider": "fixture-api", "model": "fixture-model", "effort": "low"},
+                    note_unknown=unknown.append)
+                self.assertEqual(result, {"provider": "fixture-api", "model": "fixture-model", "effort": None})
+                self.assertIn("configuration-readback-unconfirmed", unknown)
 
     def test_catalog_preserves_each_models_real_efforts_and_omits_unconfigurable_models(self):
         def model(identifier, efforts, provider="api"):

@@ -213,12 +213,24 @@ class NativeShapeRoundTests(NativeRunCase):
         self.assertIn("notification-parameters-unrecognized", facts)
         self.assertIn("event-payload-unrecognized", facts)
 
-    def test_readback_mismatch_continues_and_keeps_observed_values(self):
-        result, facts = self.execute_shape(lambda source: source.replace(
+    def test_confirmed_readback_mismatch_is_rejected_before_model_start(self):
+        self.fake.write_text(self.fake.read_text().replace(
             "'providerId':provider,'modelId':'fixture-model',\n          'options':{'reasoningLevel':'low'}",
             "'providerId':provider,'modelId':'observed-model',\n          'options':{'reasoningLevel':'low'}"))
-        self.assertEqual(result.configuration.checked.model.value, "observed-model")
-        self.assertIn("configuration-readback-unconfirmed", facts)
+        os.environ["BUDDY_ZCODE_TEST_CASE"] = "ok"
+        original = native_run.NativeConnection.call
+        calls = []
+        def call(connection, method, params):
+            calls.append(method)
+            return original(connection, method, params)
+        with mock.patch.object(native_run.NativeConnection, "call", call):
+            result = native_run.run(self.fast_request("Return only one JSON value matching this schema: {}"),
+                observer=lambda _facts: RunFeedback(action="continue"), services=None, cancelled=lambda: False)
+        self.assertEqual(result.end.reason_code, "configuration-mismatch")
+        self.assertIsNone(result.model_started)
+        self.assertIsNone(result.configuration.checked.model)
+        self.assertIsNone(result.completion_evidence)
+        self.assertNotIn("session/send", calls)
 
     def test_unknown_final_answer_continues_with_unknown_value(self):
         result, facts = self.execute_shape(lambda source: source.replace("'response':answer", "'response':[]"))

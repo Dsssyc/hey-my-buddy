@@ -154,7 +154,11 @@ def configure_session(connection: NativeConnection, snapshot: dict, spec: dict, 
     settings = snapshot.get("settings")
     thought = settings.get("thoughtLevel") if isinstance(settings, dict) else None
     thought = thought.get("current") if isinstance(thought, dict) else None
-    if actual != expected or thought != effort:
+    thought = thought if isinstance(thought, str) and thought.strip() and len(thought.encode()) <= 128 else None
+    if (any(value is not None and value != expected[key] for key, value in actual.items())
+            or thought is not None and thought != effort):
+        raise NativeError("configuration-mismatch", "native ZCode did not retain the requested model and reasoning settings")
+    if any(item is None for item in actual.values()) or thought is None:
         note_unknown("configuration-readback-unconfirmed")
     if thought != actual["effort"]:
         actual["effort"] = None
