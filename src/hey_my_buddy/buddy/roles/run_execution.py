@@ -190,7 +190,6 @@ def _worker_reports(result, payload: dict) -> bool:
     invalid = False
     for kind, key in (("inquiry-report", "inquiry"), ("attention-report", "nativeAttention"),
                       ("quota-snapshot", "quota"), ("native-checkpoint", "nativeCheckpoint"),
-                      ("native-continuation", "nativeContinuation"),
                       ("native-observations", None), ("native-turn-facts", None)):
         try:
             report = _evidence(result, kind)
@@ -649,9 +648,6 @@ class WorkerRunExecutor:
                               and result.continuation is not None and result.continuation.resumable is True
                               and (record is not None or checkpoint is not None
                                    and turn_io.checkpoint_resumable(payload, checkpoint)))}
-        if payload.get("nativeContinuation") is not None:
-            rebuilt = payload["nativeContinuation"]
-            payload["nativeSession"].update(resumeMode=rebuilt["mode"], resumeReason=rebuilt["reason"])
         if self.receipt_options.capture_session_from_validated_turn:
             payload["nativeSession"]["sessionIdSource"] = "validated-turn" if session_id else "none"
         if isinstance(getattr(context, "effective_workspace", None), dict):

@@ -326,7 +326,6 @@ class _RunState:
     quota: dict | None = None
     quota_failure: dict | None = None
     native_error: dict | None = None
-    native_continuation: dict | None = None
     capture: dict | None = None
     native_turn_facts: dict | None = None
     #: The review thread/start receipt as the native side actually answered it,
@@ -640,31 +639,25 @@ def _configure_worker(connection: Connection, request: RunRequest, prep: _Prepar
                         ("lastInputSha256", "input_sha256"))):
             raise CodexProtocolError("native-resume-unavailable",
                                      "the Codex binding differs from the previous attempt checkpoint")
-        method = "thread/read"
         try:
-            read = connection.call(method, {"threadId": previous, "includeTurns": True}).get("thread")
+            read = connection.call("thread/read", {"threadId": previous, "includeTurns": True}).get("thread")
             turns = read.get("turns") if isinstance(read, dict) else None
             if not isinstance(turns, list) or not turns or turns[-1].get("id") != binding["lastTurnId"] \
                     or turns[-1].get("status") != "completed":
                 raise CodexProtocolError("native-resume-unavailable",
                                          "the Codex thread has changed since its bound completed turn")
-            method = "thread/resume"
-            response = connection.call(method, {"threadId": previous, "cwd": request.cwd,
-                                                "model": requested["model"], "modelProvider": requested["provider"],
-                                                "approvalPolicy": "never", "sandbox": "workspace-write"})
+            response = connection.call("thread/resume", {"threadId": previous, "cwd": request.cwd,
+                                                         "model": requested["model"], "modelProvider": requested["provider"],
+                                                         "approvalPolicy": "never", "sandbox": "workspace-write"})
         except CodexProtocolError as error:
-            if error.code != "native-session-not-found":
+            if error.code != "native-rpc-error":
                 raise
-            # A correlated absence reply precedes any turn admission. Reuse
-            # the explicit new-session path and the role's full board context.
-            mode = "reconstructed-new-session"
-            state.native_continuation = {"mode": mode, "reason": error.code,
-                                         "previousSessionId": previous, "method": method}
-    if mode == "initial" and previous is None or mode == "reconstructed-new-session":
+            raise CodexProtocolError("native-resume-unavailable", str(error)) from None
+    elif mode == "initial" and previous is None or mode == "reconstructed-new-session":
         response = connection.call("thread/start", {"cwd": request.cwd, "model": requested["model"],
                                                     "modelProvider": requested["provider"], "approvalPolicy": "never",
                                                     "sandbox": "workspace-write", "serviceName": "hey-my-buddy"})
-    elif mode != "native-session":
+    else:
         raise CodexProtocolError("invalid-resume-mode",
                                  "Codex requires an explicit initial, native or reconstructed turn")
     thread_id = _check_thread_receipt(response, request.cwd, mode=mode, previous=previous)
@@ -1155,8 +1148,6 @@ def _worker_turn(connection: Connection, chain: _EventChain, request: RunRequest
         "finalItemId": item.get("id") if isinstance(item, dict) else None,
         "finalMessageCompleted": isinstance(item, dict), "nativeTurnStarted": evidence.started,
         "nativeTurnCompleted": True, "eventSeq": evidence.event_seq}
-    if state.native_continuation is not None:
-        state.native_turn_facts["nativeContinuation"] = state.native_continuation
     correlated = next((record for record in chain.facts.denied
                        if record.get("threadId") == thread_id and record.get("turnId") == turn_id), None)
     if correlated is not None:
@@ -1509,8 +1500,6 @@ def _evidence_refs(request: RunRequest, state: _RunState, facts: _RunFacts) -> t
     if facts.denied:
         retain("denied-interactions", invocation_root / "denied-interactions.json",
                {"records": facts.denied})
-    if state.native_continuation is not None:
-        retain("native-continuation", invocation_root / "native-continuation.json", state.native_continuation)
     if state.quota is not None:
         # The native quota snapshot has no field in the common result yet; the
         # retained file keeps the real observation for the role wiring.
@@ -1747,14 +1736,6 @@ def validate_turn_provenance(record: dict) -> str | None:
     if type(p.get("eventSeq")) is not int or p["eventSeq"] < 2:
         return "the Codex final message has no native item or event sequence"
     mode, previous = record.get("resumeMode"), record.get("previousSessionId")
-    rebuilt = p.get("nativeContinuation")
-    if mode == "native-session" and isinstance(rebuilt, dict):
-        if (rebuilt == {"mode": "reconstructed-new-session", "reason": "native-session-not-found",
-                       "previousSessionId": previous, "method": rebuilt.get("method")}
-                and rebuilt["method"] in ("thread/read", "thread/resume")
-                and isinstance(previous, str) and record["sessionId"] != previous):
-            return None
-        return "the Codex reconstruction is not bound to the missing native session"
     if mode == "native-session" and isinstance(previous, str) and record["sessionId"] == previous:
         return None
     if mode == "initial" and previous is None:

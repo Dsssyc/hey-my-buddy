@@ -182,18 +182,16 @@ PY
 
 本回合未重复运行已确认受 C-Two 监听限制阻挡的 `buddy.harnesses.codex.test_codex` 控制器生命周期用例、`buddy.harnesses.codex.test_no_tool_codex.NoToolCodexTests`、`buddy.harnesses.codex.test_codex_tool_evidence.CodexReviewToolEvidenceTests`；由 Host 在允许监听的环境复验，未增加 skip 或模拟停止。Host 在上一候选上的完整 Python 与前端通过是该候选的机械证据，不是第三回合源码的验收；真实配置读回、三种路径重跑与安装验收仍由 Host 在获得用户批准后完成。
 
-## 第四回合：原生会话不存在时重建
+## 第四回合：原生续接被明确拒绝后的原因码（按 Host 第五回合更正）
 
-Host 报告：在第三候选 `db3126fa` 上，真实 codex-cli 0.162.1 使用含点号的冻结检出运行上述无模型 initialize/config/read 步骤，权限读回符合预期；审阅启动语法问题已由 Host 确认修好。机械检查尚在进行，第三回合其余三项真实验证仍待用户批准；本实现方没有重跑真实 CLI 或读取用户配置。
+Host 报告：在第三候选 `db3126fa` 上，真实 codex-cli 0.162.1 使用含点号的冻结检出运行无模型 initialize/config/read 步骤，权限读回符合预期；审阅启动语法问题已由 Host 确认修好。第三回合其余三项真实验证仍待用户批准；本实现方没有重跑真实 CLI 或读取用户配置。
 
-[官方 App Server 文档](https://learn.chatgpt.com/docs/app-server#start-or-resume-a-thread)规定用已保存 thread.id 调用 thread/resume，thread/read 可读取存量而不加载会话；其归档/删除段落说明 archived 日志与永久删除行为，但文档没有给出会话不存在的专用、稳定 RPC 错误码或消息契约。本次只查官方文档，没有阅读或移植原生项目源码，也没有以真实丢失会话做探测。
+Host 随后在真实 codex-cli 0.162.1 上做了无模型探测，只发送 initialize、thread/read、thread/resume，没有发送回合：不存在的会话对 includeTurns 的 thread/read 回答关联 JSON-RPC 错误 `thread not loaded: <id>`；thread/resume 回答 `no rollout found for thread id <id>`；存在但未加载的会话，thread/read 正常返回其回合。这三条是 Host 提供的实测事实，不是本实现方的探测，也不是官方文档保证的措辞。[官方 App Server 文档](https://learn.chatgpt.com/docs/app-server#start-or-resume-a-thread)说明读取和续接操作，但没有提供稳定的不存在专用错误码或文案契约。
 
-本批判据限定在 Connection.call 的关联响应：请求方法是 thread/read 或 thread/resume，收到 JSON-RPC error 对象且 code 是整数，message 精确等于 `no rollout found for thread id <本次请求的 threadId>`；不根据某个通用错误码推断缺失，不接受不指名会话的 `missing`、其他线程 ID 或任意包含 not found 的文本，不展开 error.data。这个精确文案是实现的窄判据，不是官方保证，也尚未经真实缺失会话验收；原生版本若使用不同文案，仍按一般 RPC 失败带回其有界原始消息，需 Host 提供实际关联错误事实后再修改判据。归档本身不自动等于缺失；原生能读/续接时照常，仅上述明确不存在的回答才重建。
+最终判据只认“原生给了关联的拒绝回答”：native-session 的 thread/read 或 thread/resume 调用收到 Connection.call 的 native-rpc-error，就将原因码改为 native-resume-unavailable，消息原样沿用 Connection 已经限制在 512 UTF-8 字节内的原生文本，保留方法名；没有比较文案、没有根据原生通用错误码推断会话不存在。其他原因码不改：无回答、EOF/传输中断、超时仍为原来的 transport-error/deadline 等事实；停止未确认仍不能导入回合或授予续接。任务/检出/配置、绑定与 checkpoint 比较和原生历史检查保持原样。
 
-七字段绑定、任务/检出/配置与 checkpoint 的比较仍先完成；绑定不符不会走新分支。只有原生明确缺失的 read/resume 回答触发同一个 `_configure_worker` 的 reconstructed-new-session/thread/start 分支，沿用获配检出、模型和权限，在同一 deadline 内执行，没有新建第二套运行路径、没有再发模型回合或登录。Worker 原有完整提示词已包含黑板冻结的 context.lastAssistantMessage，所以新会话收到与显式重建相同的角色说明、任务及上一回合最后消息；不从已删除原生会话重取历史，不改写服务冻结的输入。
+第四回合同回合重建机制全部撤回：删去 native-session-not-found 文案匹配、native_continuation 状态、native-continuation 证据、回合事实与 provenance 新分支、角色收集器的两处投影，以及仅供它们使用的模拟分支和测试；不留兼容、别名或第二种读法。native-session 被拒后不会发送 thread/start，模型未启动即返回失败；重建仍只由黑板服务在 Host 再次 continue 后决定，下一回合是 reconstructed-new-session，黑板保存的上一回合最后消息继续保留。服务源码与已有 test_refused_resume_does_not_erase_the_last_message_before_reconstruction 均未修改。
 
-私有 native-continuation 证据与 native-turn-facts/provenance 都记录 `{mode: reconstructed-new-session, reason: native-session-not-found, previousSessionId, method}`，角色收集器据此把结果 nativeSession.resumeMode/resumeReason 记为实际重建方式与原因。turn.resumeMode 继续表示服务冻结的请求方式 native-session，作为执行身份的一部分保持不变；provenance.nativeContinuation 表示实际执行方式，原生校验要求新 sessionId 与缺失的 previousSessionId 不同。两者含义明确，不冒称续接成功，也不放宽任务、回合或结果身份校验；新回合完成且停止确认后照常保存新绑定。旧绑定不删除。
+最终模拟 app-server 分别采用 Host 实测的 thread/read 与 thread/resume 拒绝文本，测试断言 native-resume-unavailable、有界原生消息保留、模型未启动、没有 thread/start；额外采用不同的 MCP 拒绝文本守住规则不依赖措辞，并保留没有回答仍为 deadline 的反例。docs/reference/workers.md 在 Codex 的既有续接描述中补上原生一侧已读不到会话的情况；Host 引用的原句实际位于 ZCode 小节，因此仅补 Codex 小节，ZCode 内容保持原样，没有改变回执或存储形式。
 
-没有回答的 deadline/transport-error、残缺的成功回执、其他 RPC 拒绝和未完成的历史都不触发重建；停止未确认仍不能成功、保存续接绑定或导入回合结果。新增模拟回归覆盖 read 与 resume 的明确缺失、新会话继续、上一回合消息在输入中、持久回执与原生 provenance 校验，以及无回答、残缺 read、其他错误、最终停止未确认的反例；协议测试另守精确会话 ID、方法、错误对象结构和不依赖通用错误码的边界。
-
-第四回合最终源码的可运行文件共 122 项，32.478 秒，`OK`；使用上述清环境命令与指定只读解释器运行 `buddy.harnesses.codex.test_native_run`、`buddy.harnesses.codex.test_codex_protocol`、`buddy.roles.test_run_execution`、`buddy.roles.test_schema_worker` 四个完整文件，`git diff --check` 通过。新增明确缺失回归在修复前分别以 thread/read 与 thread/resume 的 native-rpc-error 失败，修复后两者均通过。新增完整控制器回归 `buddy.harnesses.codex.test_codex.CodexAdapterTests.test_missing_native_session_reconstructs_and_receipt_names_actual_mode` 需要 C-Two 监听，本沙盒已知无法运行，交由 Host 连同 test_codex 文件复验，不加 skip、不绕过监听权限。该回归检查收集后的 nativeSession 实际方式/原因与黑板最后消息；真实缺失会话判据和前三项真实修正仍需 Host 验收。
+第五回合最终可运行选择共 123 项，29.952 秒，`OK`；使用上述清环境命令与指定只读解释器运行 `buddy.harnesses.codex.test_native_run`、`buddy.harnesses.codex.test_codex_protocol`、`buddy.roles.test_run_execution`、`buddy.roles.test_schema_worker` 四个完整文件，以及已有的 `buddy.harnesses.codex.test_codex_continuation.CodexContinuationTests.test_refused_resume_does_not_erase_the_last_message_before_reconstruction`，`git diff --check` 通过。撤回后的 protocol.py、run_execution.py、test_codex.py、test_codex_protocol.py 均与第三候选对应文件一致；源码与测试内已无第四回合同回合重建的名称和模拟分支。test_codex 的完整控制器生命周期测试与 test_codex_continuation 的 test_controller_failure_to_workflow_continue_keeps_the_native_thread 需要本沙盒不允许的 C-Two 监听，仍由 Host 复验。第四回合新增的控制器重建测试已随机制删除，不再列为待运行项目；真实三种路径与完整验收仍由 Host 在得到用户批准后完成。

@@ -67,23 +67,6 @@ class CodexAdapterTests(unittest.TestCase):
         self.assertIsNotNone(handle.wait(15), "Codex fixture controller did not exit")
         return self.adapter.collect(handle, context)
 
-    def test_missing_native_session_reconstructs_and_receipt_names_actual_mode(self):
-        first = self.execute(self.context())
-        self.assertEqual(first.status, 'ok', first.to_report())
-        previous = first.result['sessionId']
-        context = self.context('resume-missing', index=2, previous=previous)
-        context.turn_input['context']['lastAssistantMessage'] = first.result['lastAssistantMessage']
-        resumed = self.execute(context)
-        self.assertEqual(resumed.status, 'ok', resumed.to_report())
-        self.assertNotEqual(resumed.result['sessionId'], previous)
-        self.assertEqual(resumed.result['nativeSession']['resumeMode'], 'reconstructed-new-session')
-        self.assertEqual(resumed.result['nativeSession']['resumeReason'], 'native-session-not-found')
-        self.assertEqual(resumed.result['turn']['provenance']['nativeContinuation'],
-                         resumed.result['nativeContinuation'])
-        state = json.loads(Path(self.environment['BUDDY_CODEX_FIXTURE_STATE']).read_text())
-        text = state['threads'][resumed.result['sessionId']]['inputs'][-1][0]['text']
-        self.assertIn(json.dumps(first.result['lastAssistantMessage']['text'], ensure_ascii=False), text)
-
     def wait_native_turn_start(self, timeout=10):
         """Bounded wait for the fixture's explicit native turn-start fact.
 

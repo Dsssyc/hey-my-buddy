@@ -138,10 +138,6 @@ class Connection:
             # keeps the method-only fallback, and nothing else is expanded.
             error = response.get("error")
             native = error.get("message") if isinstance(error, dict) else None
-            if (method in ("thread/read", "thread/resume") and isinstance(error, dict)
-                    and type(error.get("code")) is int
-                    and native == f"no rollout found for thread id {params['threadId']}"):
-                raise CodexProtocolError("native-session-not-found", f"Codex has no stored thread {params['threadId']}")
             if isinstance(native, str) and native.strip():
                 text = f"Codex rejected {method}: {native}"
                 raw = text.encode("utf-8")

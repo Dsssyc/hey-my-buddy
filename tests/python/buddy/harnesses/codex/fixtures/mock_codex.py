@@ -213,12 +213,9 @@ def main():
             send({"id": ident, "result": {**policy, "thread": {"id": thread_id, "cwd": params["cwd"],
                                                        "modelProvider": provider, "turns": []}}})
         elif method == "thread/read":
-            if case == 'read-missing':
+            if case == 'read-refused':
                 send({"id": ident, "error": {"code": -32600, "message":
-                      f"no rollout found for thread id {params['threadId']}"}})
-                continue
-            if case == 'read-incomplete':
-                send({"id": ident, "result": {}})
+                      f"thread not loaded: {params['threadId']}"}})
                 continue
             state = read_state()["threads"].get(params["threadId"])
             if not state or state.get('codexHome') != os.environ.get('CODEX_HOME'):
@@ -226,14 +223,12 @@ def main():
             else:
                 send({"id": ident, "result": {"thread": {"id": params["threadId"], **state}}})
         elif method == "thread/resume":
-            if case == 'resume-missing':
-                send({"id": ident, "error": {"code": -32600, "message":
-                      f"no rollout found for thread id {params['threadId']}"}})
+            if case in ('resume-refused', 'resume-other-refusal'):
+                message = (f"no rollout found for thread id {params['threadId']}" if case == 'resume-refused'
+                           else 'required MCP server failed')
+                send({"id": ident, "error": {"code": -32600, "message": message}})
                 continue
             if case == 'resume-no-answer':
-                continue
-            if case == 'resume-other-error':
-                send({"id": ident, "error": {"code": -32600, "message": "required MCP server failed"}})
                 continue
             state = read_state()["threads"].get(params["threadId"])
             if not state or state.get('codexHome') != os.environ.get('CODEX_HOME'):
@@ -244,7 +239,6 @@ def main():
         elif method == "turn/start":
             thread_id = params["threadId"]
             state = read_state()
-            state['threads'][thread_id].setdefault('inputs', []).append(params['input'])
             turn_index = len(state['threads'][thread_id]['turns'])
             turn_id = f"native-turn-{turn_index + 1}"
             if case in ("unlisted-model", "long-native-error"):

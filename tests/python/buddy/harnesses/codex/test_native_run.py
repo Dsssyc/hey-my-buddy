@@ -701,67 +701,6 @@ class WorkerSeamTests(CodexSeamCase):
         self.assertEqual(resumed.end.reason_code, "native-resume-unavailable")
         self.assertIsNone(resumed.model_started)
 
-    def test_missing_native_session_reconstructs_with_blackboard_last_message(self):
-        from hey_my_buddy.buddy.harnesses.registry import worker_format
-        from hey_my_buddy.buddy.roles.run_execution import _worker_facts, _worker_reports, _worker_result, worker_delivery
-        for case in ('resume-missing', 'read-missing'):
-            with self.subTest(case=case):
-                first = self.worker_run('ok')
-                previous = first.native_identity.session_id
-                continuation = RunContinuation(mode='native-session', previous_session_id=previous)
-                turn_input = {'taskId': 'goal-1', 'attemptId': 'attempt-check', 'generation': 7,
-                              'turnId': 'turn-check', 'resumeMode': 'native-session', 'previousSessionId': previous,
-                              'context': {'lastAssistantMessage': {'text': '上一回合已完成的调研。'}}}
-                prompt = worker_format('codex').prompt('Continue', turn_input)
-                result = self.worker_run(case, continuation=continuation, input_text=prompt)
-                self.assertEqual(result.end.status, 'ok', result.end.message)
-                self.assertNotEqual(result.native_identity.session_id, previous)
-                self.assertEqual(result.stop_evidence.native.group_state, 'gone')
-                payload = _worker_facts(result)
-                self.assertFalse(_worker_reports(result, payload))
-                facts = payload['nativeContinuation']
-                self.assertEqual(facts['mode'], 'reconstructed-new-session')
-                self.assertEqual(facts['reason'], 'native-session-not-found')
-                self.assertEqual(facts['previousSessionId'], previous)
-                self.assertEqual(facts['method'], 'thread/resume' if case == 'resume-missing' else 'thread/read')
-                _outcome, provenance = worker_delivery(result)
-                self.assertEqual(provenance['nativeContinuation'], facts)
-                output = self.base / (case + '-result.json')
-                _worker_result(result, {'outputFile': str(output)}, turn_input, prompt, payload)
-                record = json.loads(output.read_text())
-                # The frozen requested mode remains service identity; actual
-                # native reconstruction is a separately verified receipt fact.
-                self.assertEqual(record['resumeMode'], 'native-session')
-                self.assertEqual(record['provenance']['nativeContinuation'], facts)
-                self.assertIsNone(native_run.validate_turn_provenance(record))
-                state = json.loads(Path(os.environ['BUDDY_CODEX_FIXTURE_STATE']).read_text())
-                new = state['threads'][result.native_identity.session_id]
-                self.assertIn('上一回合已完成的调研。', new['inputs'][-1][0]['text'])
-
-    def test_resume_without_answer_or_with_other_error_never_reconstructs(self):
-        for case, code in (('resume-no-answer', 'deadline'), ('read-incomplete', 'native-resume-unavailable'),
-                           ('resume-other-error', 'native-rpc-error')):
-            with self.subTest(case=case):
-                first = self.worker_run('ok')
-                previous = first.native_identity.session_id
-                before = json.loads(Path(os.environ['BUDDY_CODEX_FIXTURE_STATE']).read_text())
-                result = self.worker_run(case, timeout=2, continuation=RunContinuation(
-                    mode='native-session', previous_session_id=previous))
-                self.assertEqual(result.end.reason_code, code)
-                self.assertIsNone(result.model_started)
-                self.assertIsNone(result.native_identity)
-                after = json.loads(Path(os.environ['BUDDY_CODEX_FIXTURE_STATE']).read_text())
-                self.assertEqual(set(after['threads']), set(before['threads']))
-
-    def test_reconstruction_with_unconfirmed_stop_is_not_successful_or_resumable(self):
-        first = self.worker_run('ok')
-        with self.halt_reported_unconfirmed():
-            result = self.worker_run('resume-missing', continuation=RunContinuation(
-                mode='native-session', previous_session_id=first.native_identity.session_id))
-        self.assertNotEqual(result.end.status, 'ok')
-        self.assertEqual(result.stop_evidence.native.group_state, 'unknown')
-        self.assertIsNot(result.continuation.resumable, True)
-
     def test_codex_schema_accepts_a_nullable_profile_suggestion(self):
         from hey_my_buddy.buddy.roles.turn_io import validate_outcome
         request = OUTCOME_SCHEMA["properties"]["outcome"]["anyOf"][1]["properties"]["request"]
@@ -969,6 +908,40 @@ class WorkerSeamTests(CodexSeamCase):
         self.assertEqual(second.end.status, "ok", second.end.message)
         self.assertEqual(second.native_identity.session_id, previous)
         self.assertEqual(second.native_identity.turn_id, "native-turn-2")
+
+    def assert_resume_failed_without_new_thread(self, case, code, text=None):
+        first = self.worker_run('ok')
+        self.assertEqual(first.end.status, 'ok', first.end.message)
+        previous = first.native_identity.session_id
+        path = Path(os.environ['BUDDY_CODEX_FIXTURE_STATE'])
+        before = json.loads(path.read_text())
+        result = self.worker_run(case, timeout=2, continuation=RunContinuation(
+            mode='native-session', previous_session_id=previous))
+        self.assertEqual(result.end.reason_code, code)
+        self.assertIsNone(result.model_started)
+        self.assertIsNone(result.native_identity)
+        self.assertEqual(result.stop_evidence.native.group_state, 'gone')
+        if text is not None:
+            self.assertEqual(result.end.message, text.format(previous=previous))
+        after = json.loads(path.read_text())
+        self.assertEqual(after['next'], before['next'], 'thread/start must not be sent after refusal')
+        self.assertEqual(after['threads'], before['threads'])
+
+    def test_rejected_thread_read_reports_resume_unavailable_with_native_text(self):
+        self.assert_resume_failed_without_new_thread(
+            'read-refused', 'native-resume-unavailable', 'Codex rejected thread/read: thread not loaded: {previous}')
+
+    def test_rejected_thread_resume_reports_resume_unavailable_with_native_text(self):
+        self.assert_resume_failed_without_new_thread(
+            'resume-refused', 'native-resume-unavailable',
+            'Codex rejected thread/resume: no rollout found for thread id {previous}')
+
+    def test_resume_refusal_rule_does_not_depend_on_error_text(self):
+        self.assert_resume_failed_without_new_thread(
+            'resume-other-refusal', 'native-resume-unavailable', 'Codex rejected thread/resume: required MCP server failed')
+
+    def test_resume_without_answer_keeps_deadline_reason(self):
+        self.assert_resume_failed_without_new_thread('resume-no-answer', 'deadline')
 
     def test_resume_without_a_binding_is_refused(self):
         result = self.worker_run(

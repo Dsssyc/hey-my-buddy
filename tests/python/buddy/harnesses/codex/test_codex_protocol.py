@@ -249,20 +249,6 @@ class NativeRpcErrorTests(unittest.TestCase):
         self.assertEqual(error.code, "native-rpc-error")
         self.assertEqual(error.args[0], "Codex rejected turn/start: model not found: fixture-model")
 
-    def test_missing_session_requires_the_exact_correlated_native_reply(self):
-        missing = {'code': -32600, 'message': 'no rollout found for thread id bound-thread'}
-        for method, params, error, expected in (
-                ('thread/read', {'threadId': 'bound-thread'}, missing, 'native-session-not-found'),
-                ('thread/resume', {'threadId': 'bound-thread'}, missing, 'native-session-not-found'),
-                ('thread/resume', {'threadId': 'other-thread'}, missing, 'native-rpc-error'),
-                ('turn/start', {}, missing, 'native-rpc-error'),
-                ('thread/resume', {'threadId': 'bound-thread'}, {**missing, 'code': -32000}, 'native-session-not-found'),
-                ('thread/resume', {'threadId': 'bound-thread'}, {'message': missing['message']}, 'native-rpc-error'),
-                ('thread/resume', {'threadId': 'bound-thread'}, {**missing, 'message': 'missing'}, 'native-rpc-error')):
-            with self.subTest(method=method, error=error), self.assertRaises(CodexProtocolError) as caught:
-                self.connection_with_error(error).call(method, params)
-            self.assertEqual(caught.exception.code, expected)
-
     def test_a_long_multibyte_error_is_cut_byte_safely_with_its_prefix_kept(self):
         # The Host probe's shape: a native reason of repeated three-byte CJK
         # plus four-byte characters, far past the public UTF-8 byte budget.
