@@ -13,15 +13,14 @@ import sqlite3
 import stat
 import subprocess
 import time
-import tempfile
-from datetime import datetime, timezone
 import uuid
 
 from ..blackboard.store import backup
 from .. import private_dirs
 from . import runtime
+from .launcher import write_active_runtime
 from ..protocol import schemas
-from ..blackboard.store.db import PREVIOUS_SCHEMA_VERSION, SCHEMA_VERSION, utc_now, canonical_json, sha256_text
+from ..blackboard.store.db import SCHEMA_VERSION, utc_now
 from ..errors import BoardError
 from ..protocol.transport import get_state_dir
 
@@ -59,8 +58,8 @@ def idle_snapshot(state: Path, *, event_head: int | None = None) -> dict:
     with closing(sqlite3.connect((state / 'board.sqlite3').as_uri() + '?mode=ro', uri=True)) as connection:
         connection.execute('BEGIN')
         schema = connection.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone()
-        if schema is None or str(schema[0]) not in (str(SCHEMA_VERSION), str(PREVIOUS_SCHEMA_VERSION)):
-            raise BoardError('UNSUPPORTED_SCHEMA', f'Upgrade accepts schema {PREVIOUS_SCHEMA_VERSION} or {SCHEMA_VERSION} only; no conversion was performed')
+        if schema is None or str(schema[0]) != str(SCHEMA_VERSION):
+            raise BoardError('UNSUPPORTED_SCHEMA', f'Upgrade accepts schema {SCHEMA_VERSION} only; no conversion was performed')
         # A micro-task Host boundary has no autonomous next turn. A recorded or
         # queued continuation still has work to prepare/claim, even if the run
         # currently reports a Host boundary. Routing and helper tasks are checked
@@ -82,19 +81,6 @@ def idle_snapshot(state: Path, *, event_head: int | None = None) -> dict:
         return {**backup.database_snapshot(connection, event_head=event_head), 'schema': int(schema[0])}
 
 
-def _legacy_runtime(target: Path) -> bool:
-    """The installed 0.34.1 generation still reads the old environment names."""
-    commit = runtime.read_ready(target).get('sourceCommit')
-    return commit == '4b7f494670efe7a3fe053062f16cce9312a5e042'
-
-
-def _write_active_runtime(state: Path, target: Path, settings: dict | None = None) -> None:
-    from .launcher import write_active_runtime
-    if settings is not None and _legacy_runtime(target):
-        settings = {'BUDDY_' + key.removeprefix('HMB_'): value for key, value in settings.items()}
-    write_active_runtime(state, target, settings)
-
-
 def _environment(state: Path, target: Path) -> dict:
     from .launcher import service_environment
     # A service started by the upgrade coordinator inherits only the explicit
@@ -102,7 +88,6 @@ def _environment(state: Path, target: Path) -> dict:
     env = service_environment()
     for key in ('HMB_DEV_SOURCE', 'HMB_WORKER_STATE', 'HMB_WORKER_ID'):
         env.pop(key, None)
-    legacy = _legacy_runtime(target)
     marker = state / 'upgrade.json'
     if marker.exists():
         preserved = json.loads(marker.read_text()).get('environment', {})
@@ -113,16 +98,10 @@ def _environment(state: Path, target: Path) -> dict:
         from .launcher import read_private
         preserved = (read_private(state / 'launch-settings.json') or {}).get('environment', {})
         for key in ('HMB_MAX_CONCURRENT', 'HMB_WAIT_CAPACITY'):
-            stored_key = 'BUDDY_' + key.removeprefix('HMB_') if legacy else key
-            if stored_key in preserved:
-                env.setdefault(key, str(preserved[stored_key]))
+            if key in preserved:
+                env.setdefault(key, str(preserved[key]))
     env.update(HMB_STATE_DIR=str(state), HMB_RUNTIME_ROOT=str(target.parent),
                HMB_RUNTIME=str(target), HMB_RUNTIME_IDENTITY='runtime:' + target.name)
-    if legacy:
-        # Only the installed 0.34.1 process receives its former interface.
-        for key in tuple(env):
-            if key.startswith('HMB_'):
-                env['BUDDY_' + key.removeprefix('HMB_')] = env.pop(key)
     return env
 
 
@@ -302,137 +281,6 @@ def backup_readiness(state: Path) -> dict:
     return report
 
 
-@contextmanager
-def archive_read(state: Path):
-    """Inspect a private SQLite copy, including WAL, without creating live sidecars.
-
-    The admission samples may race a writer; the authoritative destructive check
-    runs after detachment under both owner locks.
-    """
-    with tempfile.TemporaryDirectory(prefix='hey-my-buddy-upgrade-read-') as raw:
-        trial = Path(raw) / 'board.sqlite3'
-        backup._private_copy(state / 'board.sqlite3', trial)
-        wal = state / 'board.sqlite3-wal'
-        if wal.exists():
-            backup._private_copy(wal, trial.with_name('board.sqlite3-wal'))
-        with closing(sqlite3.connect(trial)) as connection:
-            connection.execute('BEGIN')
-            yield connection
-
-
-def _archive_base_concluded(connection, run) -> bool:
-    """Recognize the released board's conclusion before archiving its history."""
-    row = connection.execute(
-        "SELECT * FROM workflow_host_conclusions WHERE run_id=? ORDER BY rowid DESC LIMIT 1",
-        (run["run_id"],),
-    ).fetchone()
-    if row is None or row["execution_status"] != run["state"]:
-        return False
-    task = connection.execute("SELECT selected_attempt_id FROM tasks WHERE task_id=?", (run["run_id"],)).fetchone()
-    if row["attempt_id"] != task["selected_attempt_id"]:
-        return False
-    if connection.execute(
-        "SELECT 1 FROM events WHERE task_id=? AND kind='workflow.continued' AND revision>? LIMIT 1",
-        (run["run_id"], row["run_revision"]),
-    ).fetchone():
-        return False
-    artifacts = [tuple(item) for item in connection.execute(
-        "SELECT artifact_id,manifest_sha256 FROM workflow_artifacts WHERE run_id=? ORDER BY artifact_id",
-        (run["run_id"],),
-    )]
-    return json.loads(row["evidence_json"])["artifactSetSha256"] == sha256_text(canonical_json(artifacts))
-
-
-def require_archive_readiness(state: Path) -> None:
-    """The destructive pending upgrade has stricter admission than an idle cutover."""
-    with archive_read(state) as connection:
-        schema = connection.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone()
-        if schema is None or str(schema[0]) not in (str(PREVIOUS_SCHEMA_VERSION), str(SCHEMA_VERSION)):
-            raise BoardError('UNSUPPORTED_SCHEMA', 'Upgrade accepts schema 18 or 19 only')
-        if int(schema[0]) == SCHEMA_VERSION:
-            return
-        connection.row_factory = sqlite3.Row
-        active = [(row['run_id'], row['state']) for row in connection.execute(
-            "SELECT * FROM workflow_runs WHERE state IN ('executing','awaiting-host','waiting-helpers','delivered')")
-            if row['state'] != 'delivered' or not _archive_base_concluded(connection, row)]
-        active += [row for row in connection.execute(
-            "SELECT task_id,state FROM tasks WHERE state IN ('queued','running','cancelling','reconciliation-needed')")
-                   if row[0] not in {item[0] for item in active}]
-        unresolved = [row[0] for row in connection.execute(
-            "SELECT attempt_id FROM attempts WHERE execution_state!='finished' OR shutdown_confirmed!=1")]
-    checkouts = []
-    root = state / 'workspaces'
-    _restore_guard(root)
-    if root.exists():
-        for allocation in sorted(root.iterdir()):
-            checkout = allocation / 'checkout'
-            if checkout.exists() or checkout.is_symlink():
-                checkouts.append({'workspaceId': allocation.name, 'path': str(checkout)})
-    if active or unresolved or checkouts:
-        raise BoardError('UPGRADE_NOT_IDLE', 'Archive upgrade requires concluded micro tasks, confirmed stops and reclaimed managed checkouts',
-                         active=[{'runId': row[0], 'state': row[1]} for row in active],
-                         unresolvedAttempts=unresolved, managedCheckouts=checkouts)
-
-
-def archive_backup(state: Path, saved: dict, journal: dict, marker: Path) -> dict:
-    """Publish the verified stopped-board backup as a permanent archive."""
-    source = Path(saved['path'])
-    manifest = backup.verify(source)
-    if not manifest['pluginCommit']:
-        raise BoardError('UPGRADE_ARCHIVE_IDENTITY_UNAVAILABLE', 'Archive requires the previous runtime source commit')
-    stamp = datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%S%fZ')
-    target = state / 'archives' / f"{stamp}-schema-{manifest['schema']}"
-    _restore_guard(target)
-    target.parent.mkdir(mode=0o700, exist_ok=True)
-    manifest['archivedFrom'] = {'sourceCommit': manifest['pluginCommit'],
-                                'version': manifest['contract'], 'schema': manifest['schema']}
-    write_journal(source / 'manifest.json', manifest)
-    # Recovery can find either side of this rename from the durable intent.
-    journal['archivePath'] = str(target)
-    write_journal(marker, journal)
-    source.rename(target)
-    backup.sync_dir(source.parent)
-    backup.sync_dir(target.parent)
-    saved = {**saved, 'path': str(target)}
-    journal.update(phase='archived', backup=saved)
-    write_journal(marker, journal)
-    return saved
-
-
-def archive_history_paths(state: Path, archive: Path) -> list[Path]:
-    """Validate archive and live history before replacing or deleting anything."""
-    manifest = backup.verify(archive)
-    paths = []
-    for relative, record in manifest['files'].items():
-        parts = Path(relative).parts
-        if parts[0] != 'state' or parts[1] in backup.STATE_FILES:
-            continue
-        path = state.joinpath(*parts[1:])
-        _restore_guard(path)
-        if path.stat().st_size != record['bytes'] or backup.digest(path) != record['sha256']:
-            raise BoardError('UPGRADE_ARCHIVE_CHANGED', 'History no longer matches its archive', path=str(path.relative_to(state)))
-        paths.append(path)
-    with gzip.open(archive / 'board.sqlite3.gz', 'rb') as stream:
-        archived_digest = hashlib.file_digest(stream, 'sha256').hexdigest()
-    if backup.digest(state / 'board.sqlite3') != archived_digest:
-        raise BoardError('UPGRADE_ARCHIVE_CHANGED', 'Board bytes no longer match the archive')
-    return paths
-
-
-def clear_archived_history(state: Path, paths: list[Path]) -> dict:
-    """Execute the validated archive inventory under the exclusive owner locks."""
-    for path in paths:
-        path.unlink()
-        parent = path.parent
-        while parent != state:
-            if any(parent.iterdir()):
-                break
-            parent.rmdir()
-            parent = parent.parent
-    backup.sync_dir(state)
-    return {'removedFiles': len(paths)}
-
-
 def verify_started(state: Path, target: Path, health: dict, before: dict) -> dict:
     if health.get('runtimeContentId') != target.name or not health.get('runtimeStable') or health.get('schemaVersion') != before.get('schema', SCHEMA_VERSION):
         raise BoardError('UPGRADE_VERIFY_FAILED', 'Replacement runtime identity or schema did not match',
@@ -451,37 +299,6 @@ def verify_started(state: Path, target: Path, health: dict, before: dict) -> dic
     if inspected.get('leaks'):
         raise BoardError('UPGRADE_VERIFY_FAILED', 'Runtime still depends on replaceable source paths')
     return {'runtimeContentId': target.name, 'schemaVersion': before.get('schema', SCHEMA_VERSION), 'retainedDataFingerprints': True, 'sourceLeaks': []}
-
-
-def migrate_board(state: Path, before: dict) -> tuple[dict, dict]:
-    """Replace schema 18 with a fresh current board carrying only settings."""
-    from ..blackboard.store import migrations
-    from ..blackboard.store.db import Database
-    require_archive_readiness(state)
-    baseline = idle_snapshot(state, event_head=before.get('eventHead'))
-    changed = [name for name, value in before['fingerprints'].items()
-               if baseline['fingerprints'].get(name) != value]
-    inventory = sorted(set(baseline['tables']) ^ set(before['tables']))
-    if changed or inventory or baseline['schema'] != before['schema']:
-        raise BoardError('UPGRADE_MIGRATION_FAILED', 'Board no longer matches its verified backup',
-                         tables=sorted(set(changed + inventory)))
-    if baseline['schema'] != PREVIOUS_SCHEMA_VERSION:
-        raise BoardError('UPGRADE_MIGRATION_FAILED', 'Fresh-board upgrade expects schema 18', tables=['meta'])
-    with closing(sqlite3.connect((state / 'board.sqlite3').as_uri() + '?mode=ro', uri=True)) as connection:
-        settings = migrations.read_settings(connection)
-    with tempfile.TemporaryDirectory(prefix='.new-board-', dir=state) as raw:
-        fresh = Database(Path(raw))
-        fresh.initialize()
-        with fresh.write() as connection:
-            migrations.write_settings(connection, settings)
-        for suffix in ('-wal', '-shm'):
-            (state / ('board.sqlite3' + suffix)).unlink(missing_ok=True)
-        os.replace(fresh.path, state / 'board.sqlite3')
-        backup.sync_dir(state)
-    expected = idle_snapshot(state)
-    expected['runtimeSettings'] = before.get('runtimeSettings', {})
-    return {'fromSchema': PREVIOUS_SCHEMA_VERSION, 'toSchema': SCHEMA_VERSION,
-            'settingsRows': {name: len(rows) for name, rows in settings['tables'].items()}}, expected
 
 
 def _failure_reason(error: Exception) -> dict:
@@ -572,64 +389,6 @@ def _finish_skill(journal: dict) -> None:
             pass
 
 
-def _cleanup_legacy_skill() -> dict:
-    """Retire only the owned 0.34.1 skill paths after the new runtime is active."""
-    from .skill_install import agent_skills_home, claude_skills_home
-    old = agent_skills_home() / 'buddy'
-    link = claude_skills_home() / 'buddy'
-    result = {'agent': {'path': str(old)}, 'claude': {'path': str(link)}}
-    if private_dirs.linked(old) or (old.exists() and not old.is_dir()):
-        result['agent']['status'] = 'conflict'
-    elif old.is_dir():
-        marker_path = old / 'skill.json'
-        if marker_path.is_symlink():
-            marker = None
-        else:
-            try:
-                marker = json.loads(marker_path.read_text())
-            except (OSError, ValueError):
-                marker = None
-        if not isinstance(marker, dict) or marker.get('name') != 'buddy':
-            result['agent']['status'] = 'conflict'
-        else:
-            try:
-                shutil.rmtree(old)
-                result['agent']['status'] = 'removed'
-            except OSError as error:
-                result['agent'].update(status='error', error=str(error))
-    else:
-        result['agent']['status'] = 'missing'
-    # A foreign directory at the old canonical path makes its Claude link
-    # foreign too; keep both for the owner to inspect.
-    if result['agent']['status'] == 'conflict':
-        result['claude']['status'] = 'conflict' if link.exists() or link.is_symlink() else 'missing'
-    elif link.is_symlink():
-        if Path(os.path.realpath(link)) != Path(os.path.realpath(old)):
-            result['claude']['status'] = 'conflict'
-        else:
-            try:
-                link.unlink()
-                result['claude']['status'] = 'removed'
-            except OSError as error:
-                result['claude'].update(status='error', error=str(error))
-    else:
-        result['claude']['status'] = 'conflict' if link.exists() else 'missing'
-    return result
-
-
-def _report_legacy_cleanup(state: Path, journal: dict) -> dict:
-    try:
-        result = _cleanup_legacy_skill()
-    except Exception as error:
-        result = {'status': 'error', 'error': str(error)}
-    journal['legacySkillCleanup'] = result
-    try:
-        write_journal(state / 'upgrade-last.json', journal)
-    except Exception:
-        pass
-    return result
-
-
 def upgrade(params: dict, *, skill_source: Path | None = None, skill_target: Path | None = None) -> dict:
     from ..blackboard.store.store import BoardStore
     schemas.reject_unknown(params, set(), 'upgrade')
@@ -654,16 +413,9 @@ def upgrade(params: dict, *, skill_source: Path | None = None, skill_target: Pat
         raise BoardError('UPGRADE_IDENTITY_CHANGED', 'The live installed service does not match its recorded runtime identity')
     preserved = {'HMB_MAX_CONCURRENT':str(health_before['maxConcurrent']), 'HMB_WAIT_CAPACITY':str(health_before['waitCapacity'])}
     runtime_settings = {'maxConcurrent':health_before['maxConcurrent'], 'waitCapacity':health_before['waitCapacity']}
-    require_archive_readiness(state)
     before = idle_snapshot(state)
     before['runtimeSettings'] = runtime_settings
     backup_readiness(state)
-    previous_source_commit = None
-    if before['schema'] == PREVIOUS_SCHEMA_VERSION:
-        previous_source_commit = runtime.read_ready(previous).get('sourceCommit')
-        if not previous_source_commit:
-            raise BoardError('UPGRADE_ARCHIVE_IDENTITY_UNAVAILABLE',
-                             'Archive requires the previous runtime source commit')
     # Dependency installation cannot disturb the old daemon; materialize before
     # taking the short ownership fence and preserve both generations on failure.
     materialized = runtime.materialize(root=skill_source / 'package') if skill_source is not None else runtime.materialize()
@@ -677,7 +429,6 @@ def upgrade(params: dict, *, skill_source: Path | None = None, skill_target: Pat
         attached = probe(state, previous)
         if attached is None or attached.get('serviceId') != endpoint.get('serviceId'):
             raise BoardError('UPGRADE_IDENTITY_CHANGED', 'The installed service changed during runtime preparation')
-        require_archive_readiness(state)
         before = idle_snapshot(state)
         before['runtimeSettings'] = runtime_settings
         backup_readiness(state)
@@ -711,7 +462,6 @@ def upgrade(params: dict, *, skill_source: Path | None = None, skill_target: Pat
             # A request may have entered the previous daemon before its entry
             # fence became visible. Recheck after fencing, and take the backup
             # only after detach proves there are no remaining database writers.
-            require_archive_readiness(state)
             before = idle_snapshot(state)
             before['runtimeSettings'] = runtime_settings
             journal['before'] = before
@@ -724,13 +474,12 @@ def upgrade(params: dict, *, skill_source: Path | None = None, skill_target: Pat
             detach(state, previous)
             detached = True
             with file_lock(state / 'control-daemon.lock'), file_lock(state / 'board-owner.lock'):
-                require_archive_readiness(state)
                 before = idle_snapshot(state)
                 before['runtimeSettings'] = runtime_settings
                 backup_readiness(state)
                 journal['before'] = before
                 if backed_up is None:
-                    backed_up = backup.create(BoardStore(state), runtime_identity={'identity': identity}, plugin_commit=previous_source_commit if before['schema'] == PREVIOUS_SCHEMA_VERSION else runtime.read_ready(previous).get('sourceCommit'), contract_version=endpoint['contractVersion'], offline=True)
+                    backed_up = backup.create(BoardStore(state), runtime_identity={'identity': identity}, plugin_commit=runtime.read_ready(previous).get('sourceCommit'), contract_version=endpoint['contractVersion'], offline=True)
                 stored = backup.verify(Path(backed_up['path']))
                 if stored.get('databaseSnapshot') is not None:
                     before = {**stored['databaseSnapshot'], 'schema': stored.get('schema'), 'runtimeSettings':runtime_settings}
@@ -738,17 +487,6 @@ def upgrade(params: dict, *, skill_source: Path | None = None, skill_target: Pat
                 journal.update(phase='backed-up', backup=backed_up)
                 write_journal(marker, journal)
                 expected = before
-                if before.get('schema') == PREVIOUS_SCHEMA_VERSION:
-                    backed_up = archive_backup(state, backed_up, journal, marker)
-                    history_paths = archive_history_paths(state, Path(backed_up['path']))
-                    journal.update(phase='board-replacing')
-                    write_journal(marker, journal)
-                    migration, expected = migrate_board(state, before)
-                    journal.update(phase='board-created', migration=migration, expected=expected)
-                    write_journal(marker, journal)
-                    cleanup = clear_archived_history(state, history_paths)
-                    journal.update(phase='history-cleared', historyCleanup=cleanup)
-                    write_journal(marker, journal)
             active = target
             health = start(state, target)
             evidence = verify_started(state, target, health, expected)
@@ -757,16 +495,16 @@ def upgrade(params: dict, *, skill_source: Path | None = None, skill_target: Pat
             write_journal(marker, journal)
             _publish_skill(journal)
             write_journal(marker, journal)
-            _write_active_runtime(state, target, preserved)
+            write_active_runtime(state, target, preserved)
             journal.update(phase='verified', verification=evidence)
             write_journal(marker, journal)
             write_journal(state / 'upgrade-last.json', journal)
             _finish_skill(journal)
-            legacy_cleanup = _report_legacy_cleanup(state, journal)
+            journal_error = None
             try:
                 clear_journal(marker)
             except OSError as error:
-                legacy_cleanup['journalError'] = str(error)
+                journal_error = str(error)
             try:
                 from ..blackboard.tasks.storage import prune_old_runtimes
                 write_journal(state / 'runtime-retention.json', {'current':target.name, 'previous':previous.name})
@@ -774,8 +512,8 @@ def upgrade(params: dict, *, skill_source: Path | None = None, skill_target: Pat
             except Exception as cleanup_error:
                 pruning = {'complete':False, 'error':getattr(cleanup_error, 'code', type(cleanup_error).__name__), 'note':'Upgrade verified; cleanup can be retried independently'}
             return {'upgraded':True, 'backup':backed_up, 'verification':evidence, 'previousRuntime':previous.name,
-                    'archive': backed_up if journal.get('archivePath') else None,
-                    'rollback':None, 'runtimePruning':pruning, 'legacySkillCleanup':legacy_cleanup}
+                    'rollback':None, 'runtimePruning':pruning,
+                    **({'journalError':journal_error} if journal_error is not None else {})}
         except Exception as failure:
             reason = _failure_reason(failure)
             try:
@@ -783,7 +521,7 @@ def upgrade(params: dict, *, skill_source: Path | None = None, skill_target: Pat
                 if active == previous and not detached:
                     surviving = probe(state, previous)
                     if surviving is not None:
-                        _write_active_runtime(state, previous, preserved)
+                        write_active_runtime(state, previous, preserved)
                         journal.update(phase='not-switched', failure=reason)
                         write_journal(state / 'upgrade-last.json', journal)
                         clear_journal(marker)
@@ -793,22 +531,21 @@ def upgrade(params: dict, *, skill_source: Path | None = None, skill_target: Pat
                 endpoint_now = json.loads((state / 'control.json').read_text()) if (state / 'control.json').exists() else None
                 if detached and endpoint_now and endpoint_now.get('runtimeIdentity') == 'runtime:' + active.name:
                     detach(state, active)
-                if backed_up is not None and journal['phase'] not in ('preflight', 'backed-up', 'archived'):
+                if backed_up is not None and journal['phase'] not in ('preflight', 'backed-up'):
                     with file_lock(state / 'control-daemon.lock', timeout=30), file_lock(state / 'board-owner.lock', timeout=30):
                         restore(state, Path(backed_up['path']))
                 # A race admitted work before the old daemon detached: preserve it
                 # and restart the previous runtime without restoring an older DB.
                 recovered = start(state, previous)
                 evidence = verify_started(state, previous, recovered, before) if backed_up else {'runtimeContentId':previous.name, 'workPreserved':True}
-                _write_active_runtime(state, previous, preserved)
+                write_active_runtime(state, previous, preserved)
                 journal.update(phase='rolled-back', rollback=evidence, failure=reason)
                 write_journal(state / 'upgrade-last.json', journal)
                 clear_journal(marker)
                 error = failure.payload() if backed_up is None and isinstance(failure, BoardError) and failure.code in ('UPGRADE_NOT_IDLE', 'BACKUP_PREFLIGHT_FAILED') else {'code':'UPGRADE_ROLLED_BACK','message':'Upgrade failed; the previous runtime and backup were restored'}
                 error.setdefault('details', {})['reason'] = reason
                 return {'upgraded':False, 'error':error,
-                        'backup':backed_up, 'rollback':evidence,
-                        'archive': backed_up if journal.get('archivePath') else None}
+                        'backup':backed_up, 'rollback':evidence}
             except Exception as recovery:
                 journal.update(phase='recovery-required', failure=reason, recoveryFailure=_failure_reason(recovery))
                 write_journal(marker, journal)
@@ -831,16 +568,16 @@ def recover(state: Path, root: Path) -> dict:
     if journal.get('phase') == 'verified' and target_health is not None:
         evidence = verify_started(state, target, target_health, journal.get('expected', journal['before']))
         _verify_skill_generation(journal, target, target_health)
-        _write_active_runtime(state, target, journal.get('environment'))
+        write_active_runtime(state, target, journal.get('environment'))
         write_journal(state / 'upgrade-last.json', journal)
         _finish_skill(journal)
-        legacy_cleanup = _report_legacy_cleanup(state, journal)
+        journal_error = None
         try:
             clear_journal(marker)
         except OSError as error:
-            legacy_cleanup['journalError'] = str(error)
+            journal_error = str(error)
         return {'upgraded':True, 'recoveredJournal':True, 'verification':evidence,
-                'archive': journal.get('archivePath'), 'legacySkillCleanup':legacy_cleanup}
+                **({'journalError':journal_error} if journal_error is not None else {})}
     if journal.get('phase') == 'preflight':
         if target_health is not None:
             raise BoardError('UPGRADE_RECOVERY_REQUIRED', 'Unexpected target owner during preflight recovery')
@@ -850,7 +587,7 @@ def recover(state: Path, root: Path) -> dict:
             # No backup/cutover happened: preserve live workers and any work that
             # raced the old-version preflight rather than attempting to retire it.
             previous_health = start(state, previous)
-        _write_active_runtime(state, previous, journal.get('environment'))
+        write_active_runtime(state, previous, journal.get('environment'))
         _restore_skill(journal)
         clear_journal(marker)
         return {'upgraded':False, 'recoveredJournal':True, 'rollback':{'runtimeContentId':previous.name,'workPreserved':True}}
@@ -865,25 +602,15 @@ def recover(state: Path, root: Path) -> dict:
         saved = journal.get('backup')
         if saved is not None:
             current = state / 'backups/current'
-            archive = journal.get('archivePath')
-            if archive is not None:
-                candidate = Path(archive)
-                import re
-                if candidate.parent != state / 'archives' or re.fullmatch(r'\d{8}T\d{12}Z-schema-18', candidate.name) is None:
-                    raise BoardError('UPGRADE_RECOVERY_REQUIRED', 'Journal archive path is invalid')
-                _restore_guard(candidate)
-                if candidate.exists():
-                    current = candidate
-            if Path(saved['path']) not in (state / 'backups/current', current):
-                raise BoardError('UPGRADE_RECOVERY_REQUIRED', 'Journal backup path does not match its archive')
+            if Path(saved['path']) != current:
+                raise BoardError('UPGRADE_RECOVERY_REQUIRED', 'Journal backup path does not match this installation')
             restore(state, current)
         before = idle_snapshot(state)
     health = start(state, previous)
     evidence = verify_started(state, previous, health, before)
-    _write_active_runtime(state, previous, journal.get('environment'))
+    write_active_runtime(state, previous, journal.get('environment'))
     _restore_skill(journal)
     journal.update(phase='rolled-back', rollback=evidence)
     write_journal(state / 'upgrade-last.json', journal)
     clear_journal(marker)
-    return {'upgraded':False, 'recoveredJournal':True, 'backup':journal.get('backup'), 'rollback':evidence,
-            'archive': journal.get('archivePath')}
+    return {'upgraded':False, 'recoveredJournal':True, 'backup':journal.get('backup'), 'rollback':evidence}
