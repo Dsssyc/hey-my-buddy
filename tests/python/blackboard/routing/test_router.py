@@ -10,26 +10,26 @@ from blackboard.routing.fixtures.router_tool_receipt import claim_tool_receipt
 
 class RouterContractTests(unittest.TestCase):
     def test_independent_references_and_alternative_are_advisory(self):
-        answer = {"profileId": "legal-alternative", "reason": "Better fit after reading the code",
+        answer = {"buddyId": "legal-alternative", "reason": "Better fit after reading the code",
                   "evidence": [{"kind": "annotation", "ref": "model-note"},
                                {"kind": "file", "ref": "src/worker.py"}]}
         self.assertEqual(router.validate_answer(answer, ["preferred", "legal-alternative"]), answer)
 
     def test_candidate_escape_has_noncorrectable_code(self):
         with self.assertRaises(BoardError) as caught:
-            router.validate_answer({"profileId": "foreign", "reason": "x", "evidence": []}, ["legal"])
+            router.validate_answer({"buddyId": "foreign", "reason": "x", "evidence": []}, ["legal"])
         self.assertEqual(caught.exception.code, "router-out-of-bounds")
 
     def test_file_references_cannot_escape_or_embed_lines(self):
         for ref in ("../secret", "/tmp/other-run", "src/../../secret", "C:\\secret", "file\ncontents"):
             with self.subTest(ref=ref), self.assertRaises(BoardError):
-                router.validate_answer({"profileId": "legal", "reason": "x",
+                router.validate_answer({"buddyId": "legal", "reason": "x",
                                         "evidence": [{"kind": "file", "ref": ref}]}, ["legal"])
 
     def test_abstention_and_malformed_results(self):
-        self.assertIsNone(router.validate_answer('{"profileId":null,"reason":"Insufficient evidence","evidence":[]}', [])['profileId'])
-        for value in ("invalid", {}, {"profileId": None, "reason": " ", "evidence": []},
-                      {"profileId": None, "reason": "x", "evidence": [], "request": {}}):
+        self.assertIsNone(router.validate_answer('{"buddyId":null,"reason":"Insufficient evidence","evidence":[]}', [])['buddyId'])
+        for value in ("invalid", {}, {"buddyId": None, "reason": " ", "evidence": []},
+                      {"buddyId": None, "reason": "x", "evidence": [], "request": {}}):
             with self.subTest(value=value), self.assertRaises(BoardError):
                 router.validate_answer(value, [])
 
@@ -75,7 +75,7 @@ class RouterContractTests(unittest.TestCase):
         self.assertFalse(result.shutdown_confirmed)
 
     def test_prompt_prefix_stays_stable_and_excludes_display_metadata(self):
-        doc = {"profiles": [{"profileId": "legal"}], "task": "first", "title": "display-only"}
+        doc = {"buddies": [{"buddyId": "legal"}], "task": "first", "title": "display-only"}
         first = router.render_prompt(doc)
         second = router.render_prompt({**doc, "task": "second", "macroTask": "private display label"})
         self.assertEqual(first.split('\n\n')[:2], second.split('\n\n')[:2])
@@ -84,7 +84,7 @@ class RouterContractTests(unittest.TestCase):
 
 
 from unittest.mock import patch
-from blackboard.routing.test_decision import DecisionTestCase, PROFILE_ID, SECOND_PROFILE_ID
+from blackboard.routing.test_decision import DecisionTestCase, BUDDY_ID, SECOND_BUDDY_ID
 from blackboard.tasks.test_workflow import WorkflowTestCase, NONCE
 
 
@@ -99,7 +99,7 @@ class RouterPublicationTests(WorkflowTestCase):
         mock_readonly.install(self)
         self.enterContext(patch('hey_my_buddy.blackboard.routing.decision.DecisionCoordinator._adapter_available', return_value=(True, None)))
 
-    def settle(self, profile, *, code=None, preferences=None, result_status=None):
+    def settle(self, buddy, *, code=None, preferences=None, result_status=None):
         board = self.board()
         self.seed(board, preferences=preferences)
         request = board.call('selection_request', {'requestId': 'route', 'task': 'choose'})
@@ -110,7 +110,7 @@ class RouterPublicationTests(WorkflowTestCase):
                   'stopEvidence': {'shutdownConfirmed': True, 'native': {'shutdownConfirmed': True}},
                   'usage': {'elapsedMs': 100, 'toolCalls': 0},
                   'inputVerification': {'unchanged': True, 'manifestSha256': None, 'snapshotSha256': 'fixture-digest'},
-                  'decision': {'profileId': profile, 'reason': 'Read the frozen input',
+                  'decision': {'buddyId': buddy, 'reason': 'Read the frozen input',
                                'evidence': [{'kind': 'annotation', 'ref': 'not-supplied'}]}}
         if code:
             result['code'] = code
@@ -120,7 +120,7 @@ class RouterPublicationTests(WorkflowTestCase):
         return board, board.call('selection_get', {'decisionId': request['decisionId']})['decision']
 
     def test_publication_accepts_alternative_with_advisory_reference(self):
-        board, decision = self.settle(SECOND_PROFILE_ID, preferences=[{'profileId': PROFILE_ID, 'mode': 'prefer'}])
+        board, decision = self.settle(SECOND_BUDDY_ID, preferences=[{'buddyId': BUDDY_ID, 'mode': 'prefer'}])
         self.assertEqual(decision['status'], 'completed')
         self.assertEqual(decision['policyCheck']['userPreference'], 'alternative')
         self.assertEqual(decision['evidence'], [{'kind': 'annotation', 'ref': 'not-supplied'}])
@@ -139,7 +139,7 @@ class RouterPublicationTests(WorkflowTestCase):
 
     def test_reroute_waits_for_new_continuation_manifest(self):
         board = self.board()
-        self.seed(board, decision_profile=None)
+        self.seed(board, decision_buddy=None)
         submitted = board.call('workflow_submit', {
             'requestId': 'frozen-reroute', 'hostId': 'host', 'task': 'Original task',
             'cwd': str(self.workdir()), 'executionWorkspace': {'kind': 'existing', 'access': 'write'}})
@@ -168,7 +168,7 @@ class RouterPublicationTests(WorkflowTestCase):
             'configuration': {'routingBudget': 'deep'}})
         configured = board.call('console_snapshot', {})['configuration']
         self.assertEqual(configured['routingBudget'], 'deep')
-        self.assertEqual(configured['routerProfileIds'], [PROFILE_ID])
+        self.assertEqual(configured['routerBuddyIds'], [BUDDY_ID])
         with board.store.db.read() as connection:
             self.assertEqual(connection.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone()[0], str(SCHEMA_VERSION))
 
@@ -198,14 +198,14 @@ class RouterPublicationTests(WorkflowTestCase):
         with patch('hey_my_buddy.buddy.harnesses.dsh.adapter.DshAdapter.local_read_only_check', return_value={'eligible': False, 'reasonCode': 'readonly-unavailable', 'reason': 'fixture',
                 'systemSandbox': False, 'sameAttemptContinuation': False}):
             snapshot = board.call('console_snapshot', {})
-        profile = next(p for p in snapshot['profiles'] if p['profileId'] == PROFILE_ID)
-        self.assertNotIn('decision', profile['capabilities'])
+        buddy = next(p for p in snapshot['buddies'] if p['buddyId'] == BUDDY_ID)
+        self.assertNotIn('decision', buddy['capabilities'])
         with board.store.db.read() as connection:
-            recorded = json.loads(connection.execute('SELECT capabilities_json FROM evaluation_profiles WHERE profile_id=?', (PROFILE_ID,)).fetchone()[0])
+            recorded = json.loads(connection.execute('SELECT capabilities_json FROM buddies WHERE buddy_id=?', (BUDDY_ID,)).fetchone()[0])
         self.assertIn('decision', recorded)
         self.assertFalse(hasattr(DshAdapter, 'read_only_structured_verified'))
         eligible = board.call('console_snapshot', {})
-        self.assertIn('decision', next(p for p in eligible['profiles'] if p['profileId'] == PROFILE_ID)['capabilities'])
+        self.assertIn('decision', next(p for p in eligible['buddies'] if p['buddyId'] == BUDDY_ID)['capabilities'])
 
     def test_outside_choice_is_rejected_and_not_abstention(self):
         board, decision = self.settle('foreign')

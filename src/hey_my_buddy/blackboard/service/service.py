@@ -78,7 +78,7 @@ CONTROL_OPERATIONS = (
     "selection_get",
     "selection_list",
     "model_catalog_refresh",
-    "model_profiles",
+    "buddy_list",
     "workflow_submit",
     "workflow_get",
     "workflow_decide",
@@ -252,7 +252,7 @@ class BoardService(_BaseResource):
         from .harness_health import HarnessHealth
         self.automatic_discovery = automatic_discovery
         self.harnesses = HarnessHealth(store, catalog_refresh=self._refresh_harness_catalog)
-        # ADR-027 rule 3: explicit-configuration validation borrows this service's
+        # ADR-027 rule 3: explicit-buddy validation borrows this service's
         # own bounded native refresh for its single re-read of one harness.
         from ..catalog.catalog import register_catalog_reread
         register_catalog_reread(store.directory, self._reread_catalog_for_validation)
@@ -369,11 +369,11 @@ class BoardService(_BaseResource):
                     "postgres": "not provided: SQLite is the deliberate local database",
                     "remoteTenancy": "not provided: same-user local service only",
                     "selectionFallback": (
-                        "not provided: with no configured decision profile or no legal candidate the decision is "
-                        "needs-host; the service never guesses a profile and never selects a selector"
+                        "not provided: with no configured decision buddy or no legal candidate the decision is "
+                        "needs-host; the service never guesses a buddy and never selects a selector"
                     ),
                     "decisionModelIdentity": (
-                        "the Router records its requested and resolved configuration; the served "
+                        "the Router records its requested and resolved buddy; the served "
                         "identity is unknown and is never invented"
                     ),
                     "osIsolation": (
@@ -602,7 +602,7 @@ class BoardService(_BaseResource):
         if not self.automatic_discovery:
             return
         specs = [params]
-        specs.extend(params[key] for key in ('configuration', 'spec') if isinstance(params.get(key), dict))
+        specs.extend(params[key] for key in ('buddy', 'spec') if isinstance(params.get(key), dict))
         if isinstance(params.get('helpers'), list):
             specs.extend(helper.get('spec', helper) for helper in params['helpers'] if isinstance(helper, dict))
         names = {spec.get('adapter') for spec in specs if isinstance(spec, dict) and isinstance(spec.get('adapter'), str)}
@@ -650,13 +650,13 @@ class BoardService(_BaseResource):
 
         return self._guard("model.catalog.refresh", request_json, handler)
 
-    def model_profiles(self, request_json: str) -> str:
+    def buddy_list(self, request_json: str) -> str:
         from ..catalog import catalog_store
 
         def handler(params):
             self._touch_harnesses(params)
-            return catalog_store.profiles(self.evaluation, params)
-        return self._guard("model.profiles", request_json, handler)
+            return catalog_store.buddies(self.evaluation, params)
+        return self._guard("buddy.list", request_json, handler)
 
     # -- governed workflow --------------------------------------------------
     def workflow_submit(self, request_json: str) -> str:
@@ -874,9 +874,9 @@ class BoardService(_BaseResource):
                 # No scan for an empty queue. Changed binaries/default records are
                 # rechecked before the transaction freezes a continuation's mode.
                 with self.store.db.read() as db:
-                    names = {row[0] for row in db.execute("SELECT DISTINCT adapter FROM tasks WHERE state='queued' AND queue_reason IN ('awaiting-worker','capacity','awaiting-configuration-validation')")}
+                    names = {row[0] for row in db.execute("SELECT DISTINCT adapter FROM tasks WHERE state='queued' AND queue_reason IN ('awaiting-worker','capacity','awaiting-buddy-validation')")}
                     if 'decision' in names:
-                        row = db.execute('SELECT p.adapter FROM evaluation_state e JOIN evaluation_profiles p ON p.profile_id=e.decision_profile_id WHERE e.id=1').fetchone()
+                        row = db.execute('SELECT p.adapter FROM evaluation_state e JOIN buddies p ON p.buddy_id=e.decision_buddy_id WHERE e.id=1').fetchone()
                         if row:
                             names.add(row[0])
                 for name in sorted(names & {'dsh', 'zcode', 'codex', 'claude'}):

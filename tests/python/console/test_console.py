@@ -19,9 +19,9 @@ from support import BoardTestCase, PYTHON_ROOT
 from blackboard.tasks.test_workflow import WorkflowTestCase
 
 
-PROFILE_ID = "dsh:deepseek-official:deepseek-flash:off"
-PROFILE = {
-    "profileId": PROFILE_ID,
+BUDDY_ID = "dsh:deepseek-official:deepseek-flash:off"
+BUDDY = {
+    "buddyId": BUDDY_ID,
     "label": "Flash off",
     "adapter": "dsh",
     "provider": "deepseek-official",
@@ -156,7 +156,7 @@ class ConsoleSecurityTests(ConsoleTestCase):
         status, headers, body = browser.get("/api/console")
         self.assertEqual(status, 200)
         snapshot = json.loads(body)
-        self.assertEqual(sorted(snapshot), sorted(["consoleSession", "consoleAccess", "harnesses", "csrfToken", "eventCursor", "configuration", "configurationError", "profiles", "modelServiceConcurrency", "routingHealth", "unavailableProfileCount", "modelServiceNotes", "preferences", "decisions", "tasks", "capabilities"]))
+        self.assertEqual(sorted(snapshot), sorted(["consoleSession", "consoleAccess", "harnesses", "csrfToken", "eventCursor", "configuration", "configurationError", "buddies", "modelServiceConcurrency", "routingHealth", "unavailableBuddyCount", "modelServiceNotes", "preferences", "decisions", "tasks", "capabilities"]))
         self.assertIsNone(snapshot['configurationError'])
         self.assertEqual(snapshot["routingHealth"], board.call("health", {})["routingHealth"])
         self.assertEqual(snapshot["routingHealth"]["sampleCount"], 0)
@@ -184,7 +184,7 @@ class ConsoleSecurityTests(ConsoleTestCase):
         _stated, browser = self.open_console(board)
         snapshot = browser.bootstrap()
         csrf = snapshot["csrfToken"]
-        body = {"operation": "user_policy_publish", "params": {"commandId": "w1", "profileSettings": []}}
+        body = {"operation": "user_policy_publish", "params": {"commandId": "w1", "buddySettings": []}}
 
         # No session cookie at all.
         status, _headers, data = http_call(
@@ -310,8 +310,8 @@ class ConsoleSecurityTests(ConsoleTestCase):
         _, browser = self.open_console(board)
         csrf = browser.bootstrap()["csrfToken"]
         board.call("model_catalog_refresh", {"requestId": "cat"})
-        profile = next(p for p in board.call("console_snapshot", {})["profiles"] if p["profileId"] == PROFILE_ID)
-        model_service = {key: profile[key] for key in ("adapter", "provider", "model")}
+        buddy = next(p for p in board.call("console_snapshot", {})["buddies"] if p["buddyId"] == BUDDY_ID)
+        model_service = {key: buddy[key] for key in ("adapter", "provider", "model")}
         status, _h, data = browser.command("task_cancel", {"runId": run_id, "reason": "console operator"}, csrf=csrf)
         self.assertEqual(status, 404, data)
         self.assertEqual(board.call("task_get", {"runId": run_id})["task"]["status"], "queued")
@@ -321,7 +321,7 @@ class ConsoleSecurityTests(ConsoleTestCase):
             "user_policy_publish",
             {
                 "commandId": "browser-publish",
-                "profileSettings": [{"profileId": PROFILE_ID, "enabled": True}],
+                "buddySettings": [{"buddyId": BUDDY_ID, "enabled": True}],
                 "modelServiceConcurrency": [{**model_service, "limit": 4}],
             },
             csrf=csrf,
@@ -329,7 +329,7 @@ class ConsoleSecurityTests(ConsoleTestCase):
         self.assertEqual(status, 200, data)
         result = json.loads(data)["result"]
         self.assertTrue(result["published"])
-        self.assertTrue(next(p for p in board.call("console_snapshot", {})["profiles"] if p["profileId"] == PROFILE_ID)["enabled"])
+        self.assertTrue(next(p for p in board.call("console_snapshot", {})["buddies"] if p["buddyId"] == BUDDY_ID)["enabled"])
         status, _headers, data = browser.get("/api/console")
         self.assertEqual(status, 200)
         capacity = next(row for row in json.loads(data)["modelServiceConcurrency"]
@@ -730,7 +730,7 @@ class ConsoleDaemonTests(ConsoleTestCase):
                 self.assertFalse(trace.exists(), trace.read_text() if trace.exists() else "")
                 self.assertEqual(refreshed["catalog"]["source"], f"file:{fixture}", "R-05: private fixture source after rewrite")
                 self.assertEqual(refreshed["catalog"]["providers"][0]["models"][0]["id"], model["id"], "R-05: private fixture content after rewrite")
-                self.assertIn(model["id"], {profile["model"] for profile in browser.bootstrap()["profiles"]})
+                self.assertIn(model["id"], {buddy["model"] for buddy in browser.bootstrap()["buddies"]})
         finally:
             # CLI, HTTP and bootstrap failures must still identify a discovery
             # attempt before the generic transport/status assertion can hide it.
@@ -787,7 +787,7 @@ class ConsoleDaemonTests(ConsoleTestCase):
             csrf = browser.bootstrap()["csrfToken"]
             status, _headers, body = browser.command("user_policy_publish", {
                 "commandId": "cli-publish",
-                "profileSettings": [{"profileId": PROFILE_ID, "enabled": True}],
+                "buddySettings": [{"buddyId": BUDDY_ID, "enabled": True}],
             }, csrf=csrf)
             self.assertEqual(status, 200, body)
             published = json.loads(body)["result"]
@@ -795,7 +795,7 @@ class ConsoleDaemonTests(ConsoleTestCase):
             code, final = self.cli("console-snapshot", "{}")
             self.assertEqual(code, 0, final)
             self.assertNotIn("tableRevision", final)
-            self.assertTrue(next(p for p in final["profiles"] if p["profileId"] == PROFILE_ID)["enabled"])
+            self.assertTrue(next(p for p in final["buddies"] if p["buddyId"] == BUDDY_ID)["enabled"])
             self.assertNotIn("autoMaintain", final["configuration"])
 
 

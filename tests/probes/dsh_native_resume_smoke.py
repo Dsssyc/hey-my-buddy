@@ -148,11 +148,11 @@ def prepare(root: Path) -> dict:
     try:
         health = board.service.harnesses.refresh("dsh", force=True)
         require(health.get("available") is True, "installed DSH is unavailable")
-        configuration = {"adapter": "dsh", "provider": "deepseek-official",
+        buddy = {"adapter": "dsh", "provider": "deepseek-official",
                          "model": "deepseek-v4-flash", "effort": "off"}
-        from hey_my_buddy.blackboard.catalog.catalog import validate_configuration
-        validate_configuration(configuration, directory=board.directory)
-        facts = {"configuration": configuration, "health": health,
+        from hey_my_buddy.blackboard.catalog.catalog import validate_buddy
+        validate_buddy(buddy, directory=board.directory)
+        facts = {"buddy": buddy, "health": health,
                  "modelCalls": 0, "productCapability": DshAdapter.native_resume}
         write_new(root / "prepared.json", facts)
         return facts
@@ -273,7 +273,7 @@ def execute(root: Path) -> dict:
             original_executor = role_seam.worker_executor
             stack.enter_context(patch.object(role_seam, "worker_executor",
                 lambda name: executor if name == "dsh" else original_executor(name)))
-            submitted = board.call("workflow_submit", {**prepared["configuration"],
+            submitted = board.call("workflow_submit", {**prepared["buddy"],
                 "requestId": "native-memory-probe", "hostId": "codex-adr025",
                 "task": TASK, "cwd": str(root / "repo"), "timeoutSeconds": 180,
                 "executionWorkspace": {"kind": "existing", "access": "write"}})

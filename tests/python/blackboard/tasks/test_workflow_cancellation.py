@@ -5,7 +5,7 @@ import uuid
 
 from hey_my_buddy.blackboard.tasks import workflow as workflow_module, workspace
 from hey_my_buddy.errors import BoardError
-from blackboard.tasks.test_workflow_real import CONFIGURATION, RealWorkspaceTestCase, private_environment
+from blackboard.tasks.test_workflow_real import BUDDY, RealWorkspaceTestCase, private_environment
 from blackboard.tasks.test_workflow import WorkflowTestCase
 
 
@@ -24,7 +24,7 @@ class WorkflowCancellationTests(WorkflowTestCase):
         self.finish_turn(board, self.claim(board), disposition="assistance")
         view = board.call("workflow_get", {"runId": submitted["runId"]})
         approved = self.decide(board, view, view["activeRequest"]["requestId"], helpers=[{
-            **CONFIGURATION,
+            **BUDDY,
             "requestId": "helper-1", "task": "bounded helper", "cwd": str(root),
             "executionWorkspace": {"kind": kind, "access": "write"},
         }])
@@ -53,7 +53,7 @@ class WorkflowCancellationTests(WorkflowTestCase):
         approved = board.store.workflow.decide({
             "runId": child, "requestId": view["activeRequest"]["requestId"], "commandId": "dependency-approval",
             "expectedRevision": view["revision"], "decision": "approve", "helpers": [{
-                **CONFIGURATION,
+                **BUDDY,
                 "requestId": "grandchild", "task": "dependency", "cwd": str(root),
                 "executionWorkspace": {"kind": kind, "access": "write"},
             }],
@@ -381,7 +381,7 @@ class RealCheckoutCancellationTests(RealWorkspaceTestCase, WorkflowTestCase):
         self.finish_turn(board, first, disposition="assistance")
         view = board.call("workflow_get", {"runId": submitted["runId"]})
         approved = self.decide(board, view, view["activeRequest"]["requestId"], helpers=[{
-            **CONFIGURATION,
+            **BUDDY,
             "requestId": "real-helper", "task": "use the parent checkout", "cwd": str(self.repo),
             "executionWorkspace": {"kind": "existing", "access": "write"},
         }])

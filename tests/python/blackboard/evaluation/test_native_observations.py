@@ -95,7 +95,7 @@ class QuotaVisibilityTests(BoardTestCase):
         from hey_my_buddy.buddy.harnesses.claude import native_run
         from hey_my_buddy.buddy.harnesses.claude.protocol import QuotaRejected
         from hey_my_buddy.buddy.harnesses.run_contract import (
-            FEEDBACK_CONTINUE, PrivateStatePaths, RunBudget, RunConfiguration, RunIdentity, RunRequest,
+            FEEDBACK_CONTINUE, PrivateStatePaths, RunBudget, RunBuddy, RunIdentity, RunRequest,
         )
         from hey_my_buddy.blackboard.evaluation.native_observations import failure_view, persist
         from hey_my_buddy.protocol.usage import classify_quota_code
@@ -103,7 +103,7 @@ class QuotaVisibilityTests(BoardTestCase):
         observed_at = "2026-09-29T10:00:00Z"
         request = RunRequest(identity=RunIdentity(task_id="task", attempt_id="attempt", generation=1,
                                                  invocation_id="invocation"),
-                             harness="claude", configuration=RunConfiguration(provider="fixture-api",
+                             harness="claude", buddy=RunBuddy(provider="fixture-api",
                                                                                model="fixture-model", effort="low"),
                              cwd=str(self.directory), input_text="fixture", tool_scope="none",
                              output_schema={"type": "object"}, budget=RunBudget(timeout_seconds=5),

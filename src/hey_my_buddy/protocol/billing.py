@@ -43,7 +43,7 @@ def zcode_access(access: object, observed_at: str) -> dict:
 
 
 def for_provider(connection, adapter: str, provider: str) -> dict:
-    """Only native metadata for this exact configuration may establish a label."""
+    """Only native metadata for this exact buddy may establish a label."""
     from ..blackboard.service.harness_health import read_health
     health = read_health(connection, adapter)
     row = health.get("billingByProvider") or {}

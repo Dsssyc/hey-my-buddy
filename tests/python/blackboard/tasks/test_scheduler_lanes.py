@@ -40,6 +40,7 @@ class FullModelServiceBacklogTests(StoreConcurrencyTestCase):
         self.register(board, "w-free")
         claim = board.client().claim("w-free", "claim-free", "n" * 32)
         self.assertIsNotNone(claim["claim"], claim["reason"])
+        self.assertEqual(claim["claim"]["task"]["requestId"], "runnable-b")
 
     def test_a_full_model_service_backlog_cannot_hide_model_less_command_work(self):
         board = self.board_

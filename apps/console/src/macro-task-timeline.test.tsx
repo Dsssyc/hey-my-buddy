@@ -169,7 +169,7 @@ describe("macroTask timeline rendering", () => {
     expect(container.querySelector(".now-chip")!.textContent).toMatch(/^现在 \d{2}:\d{2}$/);
   });
 
-  it("assigns configuration colours in first-appearance order for the legend", () => {
+  it("assigns buddy colours in first-appearance order for the legend", () => {
     const timeline = macroTaskTimelineFixture();
     render(<MacroTaskTimeline {...baseProps(timeline)} />);
     openLegend();
@@ -350,11 +350,11 @@ describe("macroTask timeline rendering", () => {
       rows: [{
         runId: "r7", parentRunId: null, rootRunId: "r7", title: "失败但停止未确认的委派", titleSource: "title", taskSummary: null, summary: null,
         createdAt: "2026-09-26T07:00:00Z", state: "failed", status: "failed", category: "ended",
-        shutdownConfirmed: false, depth: 0, kind: "goal", configuration: null, acceptedAt: null, acceptanceVerdict: null,
+        shutdownConfirmed: false, depth: 0, kind: "goal", buddy: null, acceptedAt: null, acceptanceVerdict: null,
       }],
       spans: [{
         spanId: "s-r7", runId: "r7", kind: "execution", startAt: "2026-09-26T07:00:00Z", endAt: "2026-09-26T07:20:00Z",
-        state: "uncertain", attemptId: "att-r7", turnId: null, turnIndex: 1, requestId: null, configuration: null,
+        state: "uncertain", attemptId: "att-r7", turnId: null, turnIndex: 1, requestId: null, buddy: null,
         shutdownConfirmed: false, uncertain: true, clockSkew: false, disposition: "failed", error: "执行失败的记录原因",
       }],
       events: [],
@@ -375,11 +375,11 @@ describe("macroTask timeline rendering", () => {
       rows: [{
         runId: "r8", parentRunId: null, rootRunId: "r8", title: "结束时间缺失的委派", titleSource: "task", taskSummary: null, summary: null,
         createdAt: "2026-09-26T07:00:00Z", state: "failed", status: "failed", category: "ended",
-        shutdownConfirmed: true, depth: 0, kind: "goal", configuration: null, acceptedAt: null, acceptanceVerdict: null,
+        shutdownConfirmed: true, depth: 0, kind: "goal", buddy: null, acceptedAt: null, acceptanceVerdict: null,
       }],
       spans: [{
         spanId: "s-r8", runId: "r8", kind: "execution", startAt: "2026-09-26T07:00:00Z", endAt: null,
-        state: "finished", attemptId: "att-r8", turnId: null, turnIndex: 1, requestId: null, configuration: null,
+        state: "finished", attemptId: "att-r8", turnId: null, turnIndex: 1, requestId: null, buddy: null,
         shutdownConfirmed: true, uncertain: false, clockSkew: false, disposition: "failed", error: "命令以失败结束",
       }],
       events: [],
@@ -812,7 +812,7 @@ describe("timeline selection, inspector and popover (C1–C3)", () => {
     }
   });
 
-  it("keeps assigned configuration colours across refreshes and stripes overflow on the bars", () => {
+  it("keeps assigned buddy colours across refreshes and stripes overflow on the bars", () => {
     const first = macroTaskTimelineFixture();
     const view = render(<MacroTaskTimeline {...baseProps(first)} />);
     openLegend();
@@ -823,7 +823,7 @@ describe("timeline selection, inspector and popover (C1–C3)", () => {
     second.spans = [
       {
         ...second.spans[0], spanId: "s-r1-x", kind: "execution" as const, startAt: "2026-09-26T01:12:00Z", endAt: "2026-09-26T01:13:00Z",
-        configuration: { adapter: "dsh", provider: "deepseek-official", model: "deepseek-v4-flash", effort: "high" },
+        buddy: { adapter: "dsh", provider: "deepseek-official", model: "deepseek-v4-flash", effort: "high" },
       },
       ...second.spans,
     ];
@@ -833,13 +833,13 @@ describe("timeline selection, inspector and popover (C1–C3)", () => {
     expect(colors.some(entry => entry === "var(--cfg-5)")).toBe(true); // the newcomer takes the next slot
     expect(colors).toHaveLength(5);
     view.unmount();
-    // Beyond six configurations the execution bar itself gains the stripe; a
+    // Beyond six buddies the execution bar itself gains the stripe; a
     // fresh mount starts a new per-macroTask assignment cache.
     const many = macroTaskTimelineFixture();
     const configs = ["a", "b", "c", "d", "e", "f", "g"].map(model => ({ adapter: "zcode", provider: "bigmodel-api", model, effort: "high" }));
     many.rows = [many.rows[0]];
-    many.spans = configs.map((configuration, index) => ({
-      ...many.spans[0], spanId: `s-c${index}`, kind: "execution" as const, configuration,
+    many.spans = configs.map((buddy, index) => ({
+      ...many.spans[0], spanId: `s-c${index}`, kind: "execution" as const, buddy,
       startAt: `2026-09-26T01:${String(10 + index).padStart(2, "0")}:00Z`, endAt: `2026-09-26T01:${String(11 + index).padEnd(2, "0")}:00Z`,
     }));
     many.events = [];

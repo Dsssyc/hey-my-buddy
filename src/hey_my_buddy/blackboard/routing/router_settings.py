@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from ...errors import BoardError
 from ...protocol.schemas import IDENTIFIER_PATTERN
 
-FIELDS = frozenset({"routerProfileIds", "routerRetryIntervalSeconds", "defaultRoutingMode", "routingBudget"})
+FIELDS = frozenset({"routerBuddyIds", "routerRetryIntervalSeconds", "defaultRoutingMode", "routingBudget"})
 MODES = ("fast", "review")
 PRESETS = ("brief", "standard", "deep")
 RETRY_INTERVAL_MIN_SECONDS = 1
@@ -16,21 +16,21 @@ RETRY_INTERVAL_MAX_SECONDS = 2147483647
 
 @dataclass(frozen=True)
 class RouterSettings:
-    router_profile_ids: tuple[str, ...] = ()
+    router_buddy_ids: tuple[str, ...] = ()
     router_retry_interval_seconds: int = 600
     default_routing_mode: str = "fast"
     routing_budget: str = "standard"
 
     def __post_init__(self) -> None:
-        if not isinstance(self.router_profile_ids, tuple):
-            raise BoardError("INVALID_ARGUMENT", "router_profile_ids must be a tuple of profileIds")
-        _profile_entries(self.router_profile_ids, "router_profile_ids")
+        if not isinstance(self.router_buddy_ids, tuple):
+            raise BoardError("INVALID_ARGUMENT", "router_buddy_ids must be a tuple of buddyIds")
+        _buddy_entries(self.router_buddy_ids, "router_buddy_ids")
         _retry_interval(self.router_retry_interval_seconds, "router_retry_interval_seconds")
         _choice(self.default_routing_mode, MODES, "default_routing_mode")
         _choice(self.routing_budget, PRESETS, "routing_budget")
 
     def as_dict(self) -> dict:
-        return {"routerProfileIds": list(self.router_profile_ids),
+        return {"routerBuddyIds": list(self.router_buddy_ids),
                 "routerRetryIntervalSeconds": self.router_retry_interval_seconds,
                 "defaultRoutingMode": self.default_routing_mode,
                 "routingBudget": self.routing_budget}
@@ -51,20 +51,20 @@ def _object(value: object, fields: frozenset[str], label: str) -> Mapping:
 
 
 
-def _profile_entries(ids: Sequence[object], name: str) -> None:
+def _buddy_entries(ids: Sequence[object], name: str) -> None:
     seen: set[str] = set()
-    for profile_id in ids:
-        if not isinstance(profile_id, str) or not IDENTIFIER_PATTERN.fullmatch(profile_id):
-            raise BoardError("INVALID_ARGUMENT", f"{name} entries must be profileIds")
-        if profile_id in seen:
+    for buddy_id in ids:
+        if not isinstance(buddy_id, str) or not IDENTIFIER_PATTERN.fullmatch(buddy_id):
+            raise BoardError("INVALID_ARGUMENT", f"{name} entries must be buddyIds")
+        if buddy_id in seen:
             raise BoardError("INVALID_ARGUMENT", f"{name} entries must be unique")
-        seen.add(profile_id)
+        seen.add(buddy_id)
 
 
-def _profile_array(value: object, name: str) -> list[str]:
+def _buddy_array(value: object, name: str) -> list[str]:
     if not isinstance(value, list):
-        raise BoardError("INVALID_ARGUMENT", f"{name} must be an array of profileIds")
-    _profile_entries(value, name)
+        raise BoardError("INVALID_ARGUMENT", f"{name} must be an array of buddyIds")
+    _buddy_entries(value, name)
     return list(value)
 
 
@@ -90,8 +90,8 @@ def validate_router_settings_patch(value: object) -> dict:
     if not entry:
         raise BoardError("INVALID_ARGUMENT", "configuration requires a Router setting")
     result = {}
-    if "routerProfileIds" in entry:
-        result["routerProfileIds"] = _profile_array(entry["routerProfileIds"], "routerProfileIds")
+    if "routerBuddyIds" in entry:
+        result["routerBuddyIds"] = _buddy_array(entry["routerBuddyIds"], "routerBuddyIds")
     if "routerRetryIntervalSeconds" in entry:
         result["routerRetryIntervalSeconds"] = _retry_interval(entry["routerRetryIntervalSeconds"],
                                                                "routerRetryIntervalSeconds")

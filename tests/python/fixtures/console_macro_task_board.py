@@ -44,9 +44,9 @@ from unittest.mock import patch
 from urllib.parse import urlsplit
 
 BASELINE_SHA = "613faa4089c02ef1d5ef9b1d0743920de6f4a7cc"
-CONFIGURATION = {"adapter": "dsh", "provider": "deepseek-official",
+BUDDY = {"adapter": "dsh", "provider": "deepseek-official",
                  "model": "deepseek-flash", "effort": "off"}
-PROFILE_ID = ":".join(CONFIGURATION.values())
+BUDDY_ID = ":".join(BUDDY.values())
 NONCE = "synthetic-nonce-1"
 SCENARIOS = ("no-write", "unrelated-meta", "unrelated-plain",
              "other-macro", "single-macro", "all-macros")
@@ -198,7 +198,7 @@ class SyntheticBoard:
                   "task": f"Fictional work {name}", "title": f"Synthetic {name}", "cwd": str(cwd),
                   "executionWorkspace": {"kind": "worktree", "access": "write", "writeScope": ["src/feature.py"]}}
         if not routed:
-            params.update(CONFIGURATION)
+            params.update(BUDDY)
         if macro_task is not None:
             params["macroTask"] = {"title": macro_task, "description": "Fictional benchmark; no real work."}
         if macro_task_id is not None:
@@ -225,7 +225,7 @@ class SyntheticBoard:
                        "usage": {"elapsedMs": 0, "toolCalls": 0},
                        "inputVerification": {"unchanged": True, "snapshotSha256": "fixture-digest",
                                              "manifestSha256": document["executionWorkspace"]["manifestSha256"]},
-                       "decision": {"profileId": PROFILE_ID, "reason": "Fictional fixture selection", "evidence": []}},
+                       "decision": {"buddyId": BUDDY_ID, "reason": "Fictional fixture selection", "evidence": []}},
         })
 
     def _finish(self, run_id, *, disposition="completed"):
@@ -259,7 +259,7 @@ class SyntheticBoard:
         result = self.call("workflow_decide", {
             "runId": parent, **self.controls[parent], "requestId": view["activeRequest"]["requestId"],
             "commandId": f"approve-{parent}", "expectedRevision": view["revision"], "decision": "approve",
-            "helpers": [{**CONFIGURATION, "requestId": name, "task": "Fictional helper",
+            "helpers": [{**BUDDY, "requestId": name, "task": "Fictional helper",
                          "cwd": str(self.state / "fictional-project"),
                          "executionWorkspace": {"kind": "worktree", "access": "write", "writeScope": ["src/feature.py"]}}],
         })
@@ -275,9 +275,9 @@ class SyntheticBoard:
         self.call("model_catalog_refresh", {"requestId": "synthetic-catalog"})
         self.board.console_call("user_policy_publish", {
             "commandId": "synthetic-policy",
-            "profileSettings": [{"profileId": item, "enabled": True} for item in
-                                (PROFILE_ID, "dsh:deepseek-official:deepseek-v4-pro:high")],
-            "configuration": {"defaultRoutingMode": "review", "routerProfileIds": [PROFILE_ID]},
+            "buddySettings": [{"buddyId": item, "enabled": True} for item in
+                                (BUDDY_ID, "dsh:deepseek-official:deepseek-v4-pro:high")],
+            "configuration": {"defaultRoutingMode": "review", "routerBuddyIds": [BUDDY_ID]},
         })
         self.call("worker_register", {"workerId": "synthetic-worker", "capabilities": ["dsh", "command"]})
         self.call("worker_register", {"workerId": "synthetic-router", "adapter": "decision", "capabilities": ["decision"]})

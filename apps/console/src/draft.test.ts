@@ -9,7 +9,7 @@ import {
   makeDraft,
   modelServiceConcurrencyChanges,
   preferenceChanges,
-  profileSettings,
+  buddySettings,
   publication,
   rebaseDraft,
   setConcurrencyLimit,
@@ -18,10 +18,10 @@ import {
 } from "./draft";
 import { blockingIssues } from "./policy";
 import type { HistoryEntries } from "./draft";
-import type { Draft, ModelServiceNote, Profile, Snapshot } from "./types";
+import type { Draft, ModelServiceNote, Buddy, Snapshot } from "./types";
 
 const flash = {
-  profileId: "flash-off",
+  buddyId: "flash-off",
   label: "Flash",
   adapter: "dsh",
   provider: "deepseek-official",
@@ -33,25 +33,25 @@ const flash = {
   contextWindow: 1000000,
   description: "",
   source: "catalog",
-} satisfies Profile;
+} satisfies Buddy;
 const flashModelService = { adapter: "dsh", provider: "deepseek-official", model: "deepseek-flash" };
-/** A configuration that is still enabled but no longer listed by the catalog. */
+/** A buddy that is still enabled but no longer listed by the catalog. */
 const retired = {
   ...flash,
-  profileId: "retired",
+  buddyId: "retired",
   model: "retired-model",
   available: false,
   unavailableReason: "provider paused",
-} satisfies Profile;
+} satisfies Buddy;
 const retiredModelService = { adapter: "dsh", provider: "deepseek-official", model: "retired-model" };
 const note = (modelService: typeof flashModelService, text: string): ModelServiceNote =>
   ({ ...modelService, text, updatedAt: null });
 const snapshot = {
-  profiles: [flash],
+  buddies: [flash],
 
   preferences: [],
       modelServiceNotes: [],
-  configuration: { routerProfileIds: ["flash-off"], routerRetryIntervalSeconds: 600, defaultRoutingMode: "review" as const, routingBudget: "standard",
+  configuration: { routerBuddyIds: ["flash-off"], routerRetryIntervalSeconds: 600, defaultRoutingMode: "review" as const, routingBudget: "standard",
   },
 
   modelServiceConcurrency: [
@@ -62,8 +62,8 @@ const snapshot = {
 describe("editing a published snapshot", () => {
   it("keeps the server snapshot unchanged while editing", () => {
     const draft = makeDraft(snapshot);
-    draft.profiles[0].enabled = false;
-    expect(snapshot.profiles[0].enabled).toBe(true);
+    draft.buddies[0].enabled = false;
+    expect(snapshot.buddies[0].enabled).toBe(true);
   });
 
   it("publishes only the dirty user patches, never a table, a card or an effective preference", () => {
@@ -72,21 +72,21 @@ describe("editing a published snapshot", () => {
     draft = setPreference(draft, "flash-off", "exclude", "太贵");
     draft = {
       ...draft,
-      profiles: draft.profiles.map((p) => ({ ...p, enabled: false })),
+      buddies: draft.buddies.map((p) => ({ ...p, enabled: false })),
     };
     const patch = publication(baseline, draft, "c");
     expect(patch).toEqual({
       commandId: "c",
-      profileSettings: [{ profileId: "flash-off", enabled: false }],
-      preferenceChanges: [{ profileId: "flash-off", mode: "exclude", reason: "太贵" }],
+      buddySettings: [{ buddyId: "flash-off", enabled: false }],
+      preferenceChanges: [{ buddyId: "flash-off", mode: "exclude", reason: "太贵" }],
       modelServiceNoteChanges: [{ ...flashModelService, text: "我的使用备注" }],
     });
     const wire = JSON.stringify(patch);
-    // Program-owned profile facts are not human publication inputs.
+    // Program-owned buddy facts are not human publication inputs.
     expect(wire).not.toContain("available");
     expect(wire).not.toContain("summary");
     expect(wire).not.toContain("cards");
-    expect(wire).not.toContain("profiles\"");
+    expect(wire).not.toContain("buddies\"");
     expect(wire).not.toContain("annotationChanges\"");
     expect(wire).not.toContain("source");
     expect(patch).not.toHaveProperty("annotationChanges");
@@ -105,30 +105,30 @@ describe("editing a published snapshot", () => {
     const baseline = {
       ...makeDraft(snapshot),
       modelServiceNotes: [note(flashModelService, "旧备注")],
-      preferences: [{ profileId: "flash-off", mode: "exclude" as const, reason: "贵" }],
+      preferences: [{ buddyId: "flash-off", mode: "exclude" as const, reason: "贵" }],
     };
     let draft = setModelServiceNote(baseline, flash, "");
     draft = setPreference(draft, "flash-off", "");
     const patch = publication(baseline, draft, "c");
     expect(patch.modelServiceNoteChanges).toEqual([{ ...flashModelService, text: "" }]);
-    expect(patch.preferenceChanges).toEqual([{ profileId: "flash-off", mode: null, reason: "" }]);
+    expect(patch.preferenceChanges).toEqual([{ buddyId: "flash-off", mode: null, reason: "" }]);
     expect(modelServiceNoteChanges(baseline, draft)).toEqual([{ ...flashModelService, text: "" }]);
-    expect(preferenceChanges(baseline, draft)).toEqual([{ profileId: "flash-off", mode: null, reason: "" }]);
+    expect(preferenceChanges(baseline, draft)).toEqual([{ buddyId: "flash-off", mode: null, reason: "" }]);
   });
 
   it("keeps 不设 as an absent preference after clearing a buddy", () => {
-    const baseline = makeDraft({ ...snapshot, preferences: [{ profileId: flash.profileId, mode: "prefer", reason: "常用" }] } as Snapshot);
-    const cleared = setPreference(baseline, flash.profileId, "");
+    const baseline = makeDraft({ ...snapshot, preferences: [{ buddyId: flash.buddyId, mode: "prefer", reason: "常用" }] } as Snapshot);
+    const cleared = setPreference(baseline, flash.buddyId, "");
     expect(cleared.preferences).toEqual([]);
-    expect(preferenceChanges(baseline, cleared)).toEqual([{ profileId: flash.profileId, mode: null, reason: "" }]);
+    expect(preferenceChanges(baseline, cleared)).toEqual([{ buddyId: flash.buddyId, mode: null, reason: "" }]);
   });
 
   it("keeps a stale pin and a stale Router out of every patch", () => {
     const baseline = makeDraft({
       ...snapshot,
-      profiles: [flash, retired],
-      preferences: [{ profileId: "retired", mode: "pin", reason: "以前固定" }],
-      configuration: { routerProfileIds: ["retired"], routerRetryIntervalSeconds: 600, defaultRoutingMode: "review" as const, routingBudget: "standard"},
+      buddies: [flash, retired],
+      preferences: [{ buddyId: "retired", mode: "pin", reason: "以前固定" }],
+      configuration: { routerBuddyIds: ["retired"], routerRetryIntervalSeconds: 600, defaultRoutingMode: "review" as const, routingBudget: "standard"},
     } as Snapshot);
     const draft = { ...baseline };
     expect(publication(baseline, draft, "c")).not.toHaveProperty("preferenceChanges");
@@ -138,28 +138,28 @@ describe("editing a published snapshot", () => {
     const patch = publication(baseline, withNote, "c");
     expect(patch.modelServiceNoteChanges).toEqual([{ ...flashModelService, text: "只改备注" }]);
     expect(patch).not.toHaveProperty("preferenceChanges");
-    expect(patch).not.toHaveProperty("profileSettings");
+    expect(patch).not.toHaveProperty("buddySettings");
   });
 
   it("allows several buddy pins independently", () => {
-    const draft = { ...makeDraft(snapshot), preferences: [{ profileId: "a", mode: "pin" as const, reason: "" }] };
-    const updated = setPreference(draft, flash.profileId, "pin");
+    const draft = { ...makeDraft(snapshot), preferences: [{ buddyId: "a", mode: "pin" as const, reason: "" }] };
+    const updated = setPreference(draft, flash.buddyId, "pin");
     expect(updated.preferences).toHaveLength(2);
-    expect(preferenceChanges(draft, updated)).toEqual([{ profileId: flash.profileId, mode: "pin", reason: "" }]);
+    expect(preferenceChanges(draft, updated)).toEqual([{ buddyId: flash.buddyId, mode: "pin", reason: "" }]);
   });
 
   it("detects human edits independently of array order and program facts", () => {
     const baseline = makeDraft(snapshot);
     const reordered: typeof baseline = {
       ...baseline,
-      profiles: [
+      buddies: [
         { ...flash, available: false, label: "目录已改名", contextWindow: null },
       ],
     };
     // A program-side rename or availability change is not a user change.
     expect(draftDiffers(baseline, reordered)).toBe(false);
     expect(changeCount(baseline, reordered)).toBe(0);
-    const preferred = setPreference(baseline, flash.profileId, "prefer", "更快");
+    const preferred = setPreference(baseline, flash.buddyId, "prefer", "更快");
     expect(draftDiffers(baseline, preferred)).toBe(true);
     expect(changeCount(baseline, preferred)).toBe(1);
     const noted = setModelServiceNote(preferred, flash, "备注");
@@ -168,13 +168,13 @@ describe("editing a published snapshot", () => {
     expect(draftDiffers(baseline, setModelServiceNote(baseline, flash, ""))).toBe(false);
     const disabled = {
       ...baseline,
-      profiles: [{ ...baseline.profiles[0], enabled: false }],
+      buddies: [{ ...baseline.buddies[0], enabled: false }],
     };
     expect(changeCount(baseline, disabled)).toBe(1);
     expect(configurationChanged(baseline, disabled)).toBe(false);
     const reconfigured: typeof disabled = {
       ...disabled,
-      configuration: { ...disabled.configuration!, routerProfileIds: ["other"], routerRetryIntervalSeconds: 600},
+      configuration: { ...disabled.configuration!, routerBuddyIds: ["other"], routerRetryIntervalSeconds: 600},
     };
     expect(configurationChanged(baseline, reconfigured)).toBe(true);
     expect(changeCount(baseline, reconfigured)).toBe(2);
@@ -184,8 +184,8 @@ describe("editing a published snapshot", () => {
     const overridden = {
       ...baseline,
       preferences: [
-        { profileId: "a", mode: "prefer" as const, reason: "1" },
-        { profileId: "b", mode: "exclude" as const, reason: "2" },
+        { buddyId: "a", mode: "prefer" as const, reason: "1" },
+        { buddyId: "b", mode: "exclude" as const, reason: "2" },
       ],
     };
     expect(draftDiffers(overridden, { ...overridden, preferences: [...overridden.preferences].reverse() })).toBe(false);
@@ -197,33 +197,33 @@ describe("editing a published snapshot", () => {
     draft = setPreference(draft, "flash-off", "prefer", "更快");
     draft = {
       ...draft,
-      profiles: draft.profiles.map((p) => ({ ...p, enabled: false })),
+      buddies: draft.buddies.map((p) => ({ ...p, enabled: false })),
     };
     const discovered = {
       ...flash,
-      profileId: "flash-max",
+      buddyId: "flash-max",
       effort: "max",
       enabled: false,
-    } satisfies Profile;
+    } satisfies Buddy;
     const refreshed = {
       ...snapshot,
-      // The program renamed the existing profile and added a new configuration.
-      profiles: [{ ...flash, label: "目录新名称", available: false }, discovered],
+      // The program renamed the existing buddy and added a new buddy.
+      buddies: [{ ...flash, label: "目录新名称", available: false }, discovered],
     } as unknown as Snapshot;
     const adopted = rebaseDraft(draft, baseline, refreshed);
     expect(adopted.conflicts).toEqual([]);
-    expect(adopted.draft.profiles.find((p) => p.profileId === "flash-off")!.label).toBe("目录新名称");
-    expect(adopted.draft.profiles.find((p) => p.profileId === "flash-max")).toBeTruthy();
+    expect(adopted.draft.buddies.find((p) => p.buddyId === "flash-off")!.label).toBe("目录新名称");
+    expect(adopted.draft.buddies.find((p) => p.buddyId === "flash-max")).toBeTruthy();
     // Program availability is adopted; the user's enablement and note are replayed.
-    expect(adopted.draft.profiles.find((p) => p.profileId === "flash-off")!.available).toBe(false);
-    expect(adopted.draft.profiles.find((p) => p.profileId === "flash-off")!.enabled).toBe(false);
+    expect(adopted.draft.buddies.find((p) => p.buddyId === "flash-off")!.available).toBe(false);
+    expect(adopted.draft.buddies.find((p) => p.buddyId === "flash-off")!.enabled).toBe(false);
     expect(modelServiceNoteText(adopted.draft, flash)).toBe("保留的备注");
     const patch = publication(adopted.baseline, adopted.draft, "c");
     expect(patch.modelServiceNoteChanges).toEqual([{ ...flashModelService, text: "保留的备注" }]);
-    expect(patch.preferenceChanges).toEqual([{ profileId: "flash-off", mode: "prefer", reason: "更快" }]);
-    expect(patch.profileSettings).toEqual([{ profileId: "flash-off", enabled: false }]);
-    expect(profileSettings(baseline, draft)).toEqual([
-      { profileId: "flash-off", enabled: false },
+    expect(patch.preferenceChanges).toEqual([{ buddyId: "flash-off", mode: "prefer", reason: "更快" }]);
+    expect(patch.buddySettings).toEqual([{ buddyId: "flash-off", enabled: false }]);
+    expect(buddySettings(baseline, draft)).toEqual([
+      { buddyId: "flash-off", enabled: false },
     ]);
   });
 });
@@ -243,48 +243,48 @@ describe("replaying a draft on refreshed content", () => {
   });
 
   it("waits for a current retained page before replaying an omitted identity", () => {
-    const baseline = { ...makeDraft(snapshot), profiles: [flash, { ...retired, enabled: true }] };
-    const draft = { ...baseline, profiles: baseline.profiles.map(row => row.profileId === "retired"
+    const baseline = { ...makeDraft(snapshot), buddies: [flash, { ...retired, enabled: true }] };
+    const draft = { ...baseline, buddies: baseline.buddies.map(row => row.buddyId === "retired"
       ? { ...row, enabled: false } : row) };
-    const refreshed = { ...snapshot, profiles: [flash] };
+    const refreshed = { ...snapshot, buddies: [flash] };
     const unread = rebaseDraft(draft, baseline, refreshed);
-    expect(unread.conflicts).toMatchObject([{ kind: "unread", field: "enabled", profileId: "retired" }]);
-    const ready = rebaseDraft(draft, baseline, refreshed, { profiles: [{ ...retired, enabled: true }] });
+    expect(unread.conflicts).toMatchObject([{ kind: "unread", field: "enabled", buddyId: "retired" }]);
+    const ready = rebaseDraft(draft, baseline, refreshed, { buddies: [{ ...retired, enabled: true }] });
     expect(ready.conflicts).toEqual([]);
-    expect(ready.draft.profiles.find(row => row.profileId === "retired")?.enabled).toBe(false);
+    expect(ready.draft.buddies.find(row => row.buddyId === "retired")?.enabled).toBe(false);
   });
 
   it("replays a buddy preference over a concurrent change", () => {
-    const baseline = { ...makeDraft(snapshot), preferences: [{ profileId: flash.profileId, mode: "prefer" as const, reason: "A" }] };
-    const draft = setPreference(baseline, flash.profileId, "exclude", "B");
-    const refreshed = { ...snapshot, preferences: [{ profileId: flash.profileId, mode: "pin" as const, reason: "C" }] };
+    const baseline = { ...makeDraft(snapshot), preferences: [{ buddyId: flash.buddyId, mode: "prefer" as const, reason: "A" }] };
+    const draft = setPreference(baseline, flash.buddyId, "exclude", "B");
+    const refreshed = { ...snapshot, preferences: [{ buddyId: flash.buddyId, mode: "pin" as const, reason: "C" }] };
     const adopted = rebaseDraft(draft, baseline, refreshed);
     expect(adopted.conflicts).toEqual([]);
     expect(publication(adopted.baseline, adopted.draft, "save").preferenceChanges).toEqual([
-      { profileId: flash.profileId, mode: "exclude", reason: "B" },
+      { buddyId: flash.buddyId, mode: "exclude", reason: "B" },
     ]);
   });
 });
 
 describe("retained history with local removals", () => {
   it("keeps a local preference removal when the published row returns", () => {
-    const baseline = { ...makeDraft(snapshot), preferences: [{ profileId: flash.profileId, mode: "pin" as const, reason: "old" }] };
+    const baseline = { ...makeDraft(snapshot), preferences: [{ buddyId: flash.buddyId, mode: "pin" as const, reason: "old" }] };
     const draft = { ...baseline, preferences: [] };
     const refreshed = { ...snapshot, preferences: baseline.preferences };
     const adopted = rebaseDraft(draft, baseline, refreshed);
     expect(adopted.conflicts).toEqual([]);
     expect(adopted.draft.preferences).toEqual([]);
     expect(publication(adopted.baseline, adopted.draft, "save").preferenceChanges).toEqual([
-      { profileId: flash.profileId, mode: null, reason: "" },
+      { buddyId: flash.buddyId, mode: null, reason: "" },
     ]);
   });
 
   it("still fills identities neither the draft nor the baseline knows", () => {
     const baseline = makeDraft(snapshot);
-    const page: HistoryEntries = { profiles: [retired], modelServiceNotes: [note(retiredModelService, "history")] };
+    const page: HistoryEntries = { buddies: [retired], modelServiceNotes: [note(retiredModelService, "history")] };
     const adopted = rebaseDraft(baseline, baseline, snapshot, page);
     expect(adopted.conflicts).toEqual([]);
-    expect(adopted.draft.profiles.some(row => row.profileId === retired.profileId)).toBe(true);
+    expect(adopted.draft.buddies.some(row => row.buddyId === retired.buddyId)).toBe(true);
     expect(modelServiceNoteText(adopted.draft, retired)).toBe("history");
   });
 });
@@ -312,7 +312,7 @@ describe("model modelService concurrency", () => {
       { adapter: "dsh", provider: "deepseek-official", model: "deepseek-flash", limit: 6 },
     ]);
     const wire = JSON.stringify(patch);
-    // Occupancy is observation and the profile identity never rides along.
+    // Occupancy is observation and the buddy identity never rides along.
     expect(wire).not.toContain("active");
     expect(wire).not.toContain("flash-off");
     // An unrelated edit keeps the concurrency patch out entirely.
@@ -371,11 +371,11 @@ describe("model modelService concurrency", () => {
   it("waits for a retained model service row omitted by a bounded snapshot", () => {
     const baseline = basedAt();
     const draft = setConcurrencyLimit(baseline, flash, 6);
-    const refreshed = { ...snapshot, profiles: [], modelServiceConcurrency: [] };
+    const refreshed = { ...snapshot, buddies: [], modelServiceConcurrency: [] };
     expect(rebaseDraft(draft, baseline, refreshed).conflicts).toMatchObject([
       { kind: "unread", field: "modelServiceConcurrency" },
     ]);
-    const ready = rebaseDraft(draft, baseline, refreshed, { profiles: [flash], modelServiceConcurrency: [entry(2)] });
+    const ready = rebaseDraft(draft, baseline, refreshed, { buddies: [flash], modelServiceConcurrency: [entry(2)] });
     expect(ready.conflicts).toEqual([]);
     expect(flashLimit(ready.draft)).toBe(6);
   });
@@ -419,10 +419,10 @@ describe("private same-origin API", () => {
 describe("independent Router and budget fields", () => {
   it("publishes an emptied list as the explicit clear patch", () => {
     const baseline = makeDraft(snapshot);
-    const draft = { ...baseline, configuration: { ...baseline.configuration!, routerProfileIds: [] } };
+    const draft = { ...baseline, configuration: { ...baseline.configuration!, routerBuddyIds: [] } };
     expect(configurationChanged(baseline, draft)).toBe(true);
     expect(changeCount(baseline, draft) - changeCount(baseline, baseline)).toBe(1);
-    expect(publication(baseline, draft, "clear").configuration).toEqual({ routerProfileIds: [] });
+    expect(publication(baseline, draft, "clear").configuration).toEqual({ routerBuddyIds: [] });
   });
   it("counts a changed retry interval as its own settings field", () => {
     const baseline = makeDraft(snapshot);
@@ -433,15 +433,15 @@ describe("independent Router and budget fields", () => {
   it("publishes only the changed Router, default mode and review budget", () => {
     const baseline = makeDraft(snapshot);
     const draft = { ...baseline, configuration: { ...baseline.configuration!,
-      routerProfileIds: ["review"], routerRetryIntervalSeconds: 600, defaultRoutingMode: "fast" as const,
+      routerBuddyIds: ["review"], routerRetryIntervalSeconds: 600, defaultRoutingMode: "fast" as const,
       routingBudget: "brief" as const } };
     expect(publication(baseline, draft, "dual").configuration).toEqual({
-      routerProfileIds: ["review"], defaultRoutingMode: "fast", routingBudget: "brief",
+      routerBuddyIds: ["review"], defaultRoutingMode: "fast", routingBudget: "brief",
     });
     expect(changeCount(baseline, draft) - changeCount(baseline, baseline)).toBe(3);
   });
   it("keeps an unchanged standard budget and publishes budget alone with a stale Router", () => {
-    const baseline = makeDraft({ ...snapshot, profiles: [], configuration: { routerProfileIds: ["retired"], routerRetryIntervalSeconds: 600, defaultRoutingMode: "review" as const, routingBudget: "standard"} } as Snapshot);
+    const baseline = makeDraft({ ...snapshot, buddies: [], configuration: { routerBuddyIds: ["retired"], routerRetryIntervalSeconds: 600, defaultRoutingMode: "review" as const, routingBudget: "standard"} } as Snapshot);
     const equivalent = { ...baseline, configuration: { ...baseline.configuration!, routingBudget: "standard" as const } };
     expect(draftDiffers(baseline, equivalent)).toBe(false);
     const draft = { ...equivalent, configuration: { ...equivalent.configuration!, routingBudget: "brief" as const } };
@@ -454,10 +454,10 @@ describe("independent Router and budget fields", () => {
   it("replays Router and budget fields independently over fresh settings", () => {
     const baseline = makeDraft(snapshot);
     const draft = { ...baseline, configuration: { ...baseline.configuration!, routingBudget: "brief" as const } };
-    const fresh = { ...snapshot, configuration: { ...snapshot.configuration!, routerProfileIds: ["new-model"], routingBudget: "deep" as const } };
+    const fresh = { ...snapshot, configuration: { ...snapshot.configuration!, routerBuddyIds: ["new-model"], routingBudget: "deep" as const } };
     const adopted = rebaseDraft(draft, baseline, fresh);
     expect(adopted.conflicts).toEqual([]);
-    expect(adopted.draft.configuration).toMatchObject({ routerProfileIds: ["new-model"], routingBudget: "brief" });
+    expect(adopted.draft.configuration).toMatchObject({ routerBuddyIds: ["new-model"], routingBudget: "brief" });
     expect(publication(adopted.baseline, adopted.draft, "save").configuration).toEqual({ routingBudget: "brief" });
   });
 });
@@ -484,14 +484,14 @@ describe("unavailable Router settings in the editor", () => {
   });
   it("sends only the single Router, mode and budget through the form publication request", async () => {
     const baseline = makeDraft(snapshot);
-    const draft = { ...baseline, configuration: { ...baseline.configuration!, routerProfileIds: ["chosen"], routerRetryIntervalSeconds: 600,
+    const draft = { ...baseline, configuration: { ...baseline.configuration!, routerBuddyIds: ["chosen"], routerRetryIntervalSeconds: 600,
       defaultRoutingMode: "fast" as const, routingBudget: "deep" as const } };
     const fetcher = vi.fn<typeof fetch>(async () => new Response(JSON.stringify({ ok: true, result: {} })));
     const patch = publication(baseline, draft, "single-router");
     await createApi("", fetcher as typeof fetch).command("user_policy_publish", patch, "csrf");
     const body = JSON.parse(fetcher.mock.calls[0][1]!.body as string);
-    expect(body.params.configuration).toEqual({ routerProfileIds: ["chosen"], defaultRoutingMode: "fast", routingBudget: "deep" });
-    expect(body.params.configuration).not.toHaveProperty("fastRouterProfileId");
-    expect(body.params.configuration).not.toHaveProperty("reviewRouterProfileId");
+    expect(body.params.configuration).toEqual({ routerBuddyIds: ["chosen"], defaultRoutingMode: "fast", routingBudget: "deep" });
+    expect(body.params.configuration).not.toHaveProperty("fastRouterBuddyId");
+    expect(body.params.configuration).not.toHaveProperty("reviewRouterBuddyId");
   });
 });

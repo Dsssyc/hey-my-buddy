@@ -167,7 +167,7 @@ async function parseEntry(entry: ManifestEntry): Promise<Outcome> {
       outcome.facts = {
         runId: workflow.runId,
         revision: workflow.revision,
-        configurationLocked: workflow.configurationLocked ?? null,
+        buddyLocked: workflow.buddyLocked ?? null,
         hostConclusion: hostConclusionView(workflow.hostConclusion),
         turns: (workflow.turns ?? []).map(turn => ({
           turnIndex: turn.turnIndex,
@@ -257,12 +257,12 @@ describe("synthetic preview fixtures through the real console parsers", () => {
     // schema the current console requires (the original schema-13 defect).
     const snapshotFacts = snapshots[0].facts as { configuration: Record<string, unknown>; harnesses: unknown[] };
     expect(snapshotFacts.configuration).toMatchObject({
-      routerProfileIds: expect.any(Array),
+      routerBuddyIds: expect.any(Array),
       routerRetryIntervalSeconds: expect.any(Number),
       defaultRoutingMode: "fast", routingBudget: "standard",
     });
-    expect("decisionProfileId" in snapshotFacts.configuration).toBe(false);
-    expect("routerProfileId" in snapshotFacts.configuration).toBe(false);
+    expect("decisionBuddyId" in snapshotFacts.configuration).toBe(false);
+    expect("routerBuddyId" in snapshotFacts.configuration).toBe(false);
 
     // DSH is metered: a zero balance is recorded without invented percentage windows.
     const normalSnapshot = await apiFor(manifest.files.find(entry => entry.scenario === "normal" && entry.kind === "console-snapshot")!).snapshot();

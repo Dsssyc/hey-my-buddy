@@ -527,7 +527,7 @@ class FakeAppServerTests(unittest.TestCase):
             {"provider": "fixture-api", "model": "fixture-model", "effort": "low", "cwd": str(self.cwd),
              "timeoutSeconds": timeout}, self.root / "attempt", {},
             {**self.environment, "BUDDY_ZCODE_TEST_CASE": case})
-        request = NoToolStructuredRequest(str(self.cwd), "Choose a profile", SCHEMA, timeout_seconds=timeout)
+        request = NoToolStructuredRequest(str(self.cwd), "Choose a buddy", SCHEMA, timeout_seconds=timeout)
         handle = start_router_preparation(FastPreparation("zcode",  request, context, self.cwd))
         self.addCleanup(lambda: handle.terminate(grace_seconds=0.1) if handle.group_alive() else None)
         if cancel:

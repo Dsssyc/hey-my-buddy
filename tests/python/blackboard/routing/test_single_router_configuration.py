@@ -4,7 +4,7 @@ from unittest.mock import patch
 from hey_my_buddy.errors import BoardError
 from support import BoardTestCase
 
-PROFILE = 'dsh:deepseek-official:deepseek-flash:off'
+BUDDY = 'dsh:deepseek-official:deepseek-flash:off'
 
 
 class SingleRouterConfigurationTests(BoardTestCase):
@@ -18,7 +18,7 @@ class SingleRouterConfigurationTests(BoardTestCase):
         params = {}
         params.update(commandId=f"publish-{uuid.uuid4()}", configuration=settings)
         if enable:
-            params['profileSettings'] = [{'profileId': PROFILE, 'enabled': True}]
+            params['buddySettings'] = [{'buddyId': BUDDY, 'enabled': True}]
         return self.board_.console_call('user_policy_publish', params)
 
     def settings(self):
@@ -27,23 +27,23 @@ class SingleRouterConfigurationTests(BoardTestCase):
     def test_fresh_defaults_have_an_empty_router_list(self):
         snapshot = self.board_.call('console_snapshot', {})
         settings = snapshot['configuration']
-        self.assertEqual(settings['routerProfileIds'], [])
+        self.assertEqual(settings['routerBuddyIds'], [])
         self.assertEqual(settings['defaultRoutingMode'], 'fast')
         self.assertEqual(settings['routingBudget'], 'standard')
-        self.assertNotIn('fastRouterProfileId', settings)
-        self.assertNotIn('reviewRouterProfileId', settings)
+        self.assertNotIn('fastRouterBuddyId', settings)
+        self.assertNotIn('reviewRouterBuddyId', settings)
         self.assertIsNone(snapshot['configurationError'])
 
     def test_budget_patch_and_clear_preserve_other_settings(self):
-        self.configure({'routerProfileIds': [PROFILE]}, enable=True)
+        self.configure({'routerBuddyIds': [BUDDY]}, enable=True)
         self.configure({'routingBudget': 'brief'})
-        self.assertEqual(self.settings()['routerProfileIds'], [PROFILE])
-        self.configure({'routerProfileIds': []})
-        self.assertEqual(self.settings()['routerProfileIds'], [])
+        self.assertEqual(self.settings()['routerBuddyIds'], [BUDDY])
+        self.configure({'routerBuddyIds': []})
+        self.assertEqual(self.settings()['routerBuddyIds'], [])
         self.assertEqual(self.settings()['routingBudget'], 'brief')
 
     def test_mode_patch_preserves_temporarily_ineligible_router_and_reports_qualification(self):
-        self.configure({'routerProfileIds': [PROFILE]}, enable=True)
+        self.configure({'routerBuddyIds': [BUDDY]}, enable=True)
         with patch('hey_my_buddy.buddy.harnesses.dsh.adapter.DshAdapter.local_read_only_check', return_value={
                 'eligible': False, 'reasonCode': 'readonly-tools-unrestricted',
                 'reason': 'fixture lost its restriction', 'systemSandbox': False,
@@ -52,26 +52,26 @@ class SingleRouterConfigurationTests(BoardTestCase):
             from hey_my_buddy.blackboard.routing import router
             with self.board_.store.db.read() as db:
                 resolution = router.current_router(db)
-            self.assertIsNone(resolution.profile)
+            self.assertIsNone(resolution.buddy)
             self.assertEqual(resolution.inspections[0]['code'], 'router-review-unsupported')
         self.assertEqual(self.settings()['defaultRoutingMode'], 'review')
-        self.assertEqual(self.settings()['routerProfileIds'], [PROFILE])
+        self.assertEqual(self.settings()['routerBuddyIds'], [BUDDY])
 
     def test_unavailable_existing_router_does_not_block_budget_or_clear(self):
-        self.configure({'routerProfileIds': [PROFILE]}, enable=True)
+        self.configure({'routerBuddyIds': [BUDDY]}, enable=True)
         with self.board_.store.db.write() as db:
-            db.execute('UPDATE evaluation_profiles SET available=0 WHERE profile_id=?', (PROFILE,))
+            db.execute('UPDATE buddies SET available=0 WHERE buddy_id=?', (BUDDY,))
         self.configure({'routingBudget': 'deep'})
-        self.assertEqual(self.settings()['routerProfileIds'], [PROFILE])
-        self.configure({'routerProfileIds': [], 'defaultRoutingMode': 'review'})
-        self.assertEqual(self.settings()['routerProfileIds'], [])
+        self.assertEqual(self.settings()['routerBuddyIds'], [BUDDY])
+        self.configure({'routerBuddyIds': [], 'defaultRoutingMode': 'review'})
+        self.assertEqual(self.settings()['routerBuddyIds'], [])
         self.assertEqual(self.settings()['defaultRoutingMode'], 'review')
 
     def test_old_slot_patch_is_refused_atomically(self):
         before = self.settings()
         with self.assertRaises(BoardError) as caught:
-            self.configure({'fastRouterProfileId': PROFILE}, enable=True)
+            self.configure({'fastRouterBuddyId': BUDDY}, enable=True)
         self.assertEqual(caught.exception.code, 'INVALID_ARGUMENT')
         self.assertEqual(self.settings(), before)
         with self.board_.store.db.read() as db:
-            self.assertFalse(db.execute('SELECT enabled FROM evaluation_profiles WHERE profile_id=?', (PROFILE,)).fetchone()[0])
+            self.assertFalse(db.execute('SELECT enabled FROM buddies WHERE buddy_id=?', (BUDDY,)).fetchone()[0])

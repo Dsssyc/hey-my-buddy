@@ -5,11 +5,11 @@ import { App } from "./App";
 import { DecisionDetails } from "./DecisionDetails";
 import { RoutingDetails } from "./RoutingDetails";
 import { ApiError, type ConsoleApi } from "./api";
-import type { Decision, Profile, Snapshot, Task } from "./types";
+import type { Decision, Buddy, Snapshot, Task } from "./types";
 import type { RoutingHistory, Workflow } from "./workflow-types";
 
-const worker: Profile = {
-  profileId: "dsh:deepseek-official:deepseek-flash:max",
+const worker: Buddy = {
+  buddyId: "dsh:deepseek-official:deepseek-flash:max",
   label: "历史工作模型 · max", adapter: "dsh", provider: "deepseek-official",
   model: "deepseek-flash", effort: "max", available: true, enabled: true,
   capabilities: ["execution:dsh"], contextWindow: 1000000, source: "fixture", description: "",
@@ -20,9 +20,9 @@ function snapshot(): Snapshot {
   return {
     csrfToken: "csrf", eventCursor: 0, consoleSession: { id: "fixture-session", canWrite: true, reason: null },
 
-    configuration: { routerProfileIds: [worker.profileId], routerRetryIntervalSeconds: 600, defaultRoutingMode: "review" as const, routingBudget: "standard"},
-    profiles: [{ ...worker, label: "现在已改名的模型 · max" }],
-    preferences: [{ profileId: worker.profileId, mode: "exclude", reason: "当前已改为排除" }],
+    configuration: { routerBuddyIds: [worker.buddyId], routerRetryIntervalSeconds: 600, defaultRoutingMode: "review" as const, routingBudget: "standard"},
+    buddies: [{ ...worker, label: "现在已改名的模型 · max" }],
+    preferences: [{ buddyId: worker.buddyId, mode: "exclude", reason: "当前已改为排除" }],
     modelServiceNotes: [], decisions: [],
     modelServiceConcurrency: [],
     tasks: { pendingCount: 0 },
@@ -32,14 +32,14 @@ function snapshot(): Snapshot {
 function decision(id: string, overrides: Partial<Decision> = {}) {
   return {
     decisionId: id, kind: "select" as const, status: "completed", task: `原始任务 ${id}`,
-    profileId: worker.profileId, selectedProfile: { ...worker },
+    buddyId: worker.buddyId, selectedBuddy: { ...worker },
     reason: `${id} 的持久选择依据`, evidence: [{ kind: "card" as const, ref: "evidence-at-selection" }],
     createdAt: "2026-09-24T08:00:00Z", runId: `calculation-${id}`,
     decisionModel: { requested: { provider: selector.provider, model: selector.model, reasoningEffort: "off" }, resolved: null, observed: null },
     requested: { constraints: { adapter: "dsh" } },
     input: {
-      operation: "select", profile: selector, profiles: [{ ...worker }],
- preferences: [{ profileId: worker.profileId, mode: "prefer", reason: "当时偏好有边界的测试工作" }],
+      operation: "select", buddy: selector, buddies: [{ ...worker }],
+ preferences: [{ buddyId: worker.buddyId, mode: "prefer", reason: "当时偏好有边界的测试工作" }],
 
     },
     inputSha256: `hash-${id}`, output: { status: "completed" },
@@ -52,14 +52,14 @@ function task(runId = "goal"): Task {
     revision: 2, createdAt: "2026-09-24T08:00:00Z", acceptedAt: null, acceptanceVerdict: null,
     workflow: { state: "executing", awaitingHost: false, hostId: "source", ownerGeneration: 1, revision: 4 },
     delegation: { kind: "goal", sourceHostId: "source", currentHostId: "source", parentRunId: null, rootRunId: runId,
-      project: { id: "repo", path: "/repo", label: "repo" }, configuration: { ...worker } },
+      project: { id: "repo", path: "/repo", label: "repo" }, buddy: { ...worker } },
   };
 }
 function workflow(record = task()): Workflow {
   return {
     governed: true, runId: record.runId, hostId: "source", ownerGeneration: 1, revision: 4,
     state: "executing", awaitingHost: false, waitReason: "", continuationCount: 0,
-    executionConfiguration: { ...worker },
+    buddy: { ...worker },
     routing: { status: "completed", decisionId: "decision-current",
       reason: "已记录当前配置的选择依据" },
     workspace: { path: "/repo", kind: "worktree", access: "write", inputCommit: "input", manifestSha256: "manifest" },
@@ -84,8 +84,8 @@ function deferred<T>() {
 afterEach(() => { cleanup(); window.location.hash = ""; });
 
 describe("sole candidate routing basis", () => {
-  const routingBasis = { candidateCount: 1, excludedCount: 1, excludedProfiles: [
-    { ...worker, profileId: "dsh:deepseek-official:deepseek-flash:off", effort: "off",
+  const routingBasis = { candidateCount: 1, excludedCount: 1, excludedBuddies: [
+    { ...worker, buddyId: "dsh:deepseek-official:deepseek-flash:off", effort: "off",
       reason: "提交时排除低推理强度" },
   ] };
   it("shows frozen bounds, exclusions and program policy without inventing a Router call", async () => {
@@ -93,7 +93,7 @@ describe("sole candidate routing basis", () => {
       constraints: { adapter: "dsh" }, requiredCapabilities: ["execution:dsh"],
       routerCalled: false, routingBasis, reason: "唯一合法候选，未调用 Router",
       routingMode: "fast",
-      output: { programSelection: { preferences: [{ profileId: worker.profileId, mode: "pin", reason: "当时固定此配置" }] } },
+      output: { programSelection: { preferences: [{ buddyId: worker.buddyId, mode: "pin", reason: "当时固定此配置" }] } },
       policyCheck: { hardConstraints: { adapter: "dsh" }, userPreference: "none" },
     };
     const command = vi.fn(async () => ({ decision: audit }));
@@ -108,7 +108,7 @@ describe("sole candidate routing basis", () => {
     const mode = screen.getByText("实际模式").nextElementSibling;
     expect(mode?.textContent).toBe("未调用 Router");
   });
-  it("keeps constraints and exclusions beside the current configuration", async () => {
+  it("keeps constraints and exclusions beside the current buddy", async () => {
     const value = workflow();
     value.routing = { status: "completed", source: "single-candidate", decisionId: null,
       constraints: { adapter: "dsh" }, requiredCapabilities: ["execution:dsh"], routingBasis,
@@ -124,7 +124,7 @@ describe("sole candidate routing basis", () => {
 });
 
 describe("zero candidate routing source", () => {
-  const emptyBasis = { candidateCount: 0, excludedCount: 1, excludedProfiles: [
+  const emptyBasis = { candidateCount: 0, excludedCount: 1, excludedBuddies: [
     { ...worker, effort: "high", reason: "用户排除了最后一个候选" },
   ] };
   it("shows the short no-candidate boundary source without claiming a model chose", async () => {
@@ -149,7 +149,7 @@ describe("zero candidate routing source", () => {
   });
   it("shows the boundary decision detail without an exercised mode or budget", async () => {
     const audit = { ...decision("boundary"), status: "needs-host", input: null, runId: null,
-      profileId: null, selectedProfile: null, output: null, routerCalled: null,
+      buddyId: null, selectedBuddy: null, output: null, routerCalled: null,
       routingBasis: emptyBasis, budget: { preset: "standard", timeoutSeconds: 300, toolCalls: 24, bytesRead: 524288 },
       routingMode: "review",
       reason: "no enabled, available, capability-matching profile is a legal candidate" };
@@ -239,7 +239,7 @@ describe("recorded decision details", () => {
 
   it("keeps other candidate preferences collapsed while showing the selected preference", async () => {
     const audit = decision("preference-scope");
-    audit.input.preferences.push({ profileId: "another-profile", mode: "prefer", reason: "另一候选的偏好" });
+    audit.input.preferences.push({ buddyId: "another-buddy", mode: "prefer", reason: "另一候选的偏好" });
     const command = vi.fn(async () => ({ decision: audit }));
     render(<DecisionDetails decisionId={audit.decisionId} api={apiFor(snapshot(), command)} csrfToken="csrf" />);
     const detail = await screen.findByRole("region", { name: "决策依据详情" });
@@ -303,7 +303,7 @@ describe("recorded decision details", () => {
 });
 
 describe("delegation routing rationale", () => {
-  it("opens the route from the executor header using frozen preferences and configuration", async () => {
+  it("opens the route from the executor header using frozen preferences and buddy", async () => {
     const record = task(), value = workflow(record), state = snapshot();
     const audit = decision("decision-current");
     const command = vi.fn(async (operation: string, params: { decisionId?: string }) => {
@@ -329,7 +329,7 @@ describe("delegation routing rationale", () => {
     expect(command.mock.calls.every(([operation]) => ["workflow_get", "selection_get"].includes(operation))).toBe(true);
   });
 
-  it("identifies an explicit Host configuration without inventing an intelligent selection", () => {
+  it("identifies an explicit Host buddy without inventing an intelligent selection", () => {
     const value = workflow();
     value.routing = { status: "explicit", decisionId: null };
     const command = vi.fn();
@@ -339,7 +339,7 @@ describe("delegation routing rationale", () => {
     expect(command).not.toHaveBeenCalled();
   });
 
-  it("shows native configuration rejection alongside the selector's completed rationale", async () => {
+  it("shows native buddy rejection alongside the selector's completed rationale", async () => {
     const value = workflow();
     value.state = "awaiting-host";
     value.awaitingHost = true;
@@ -358,10 +358,10 @@ describe("delegation routing rationale", () => {
   it("paginates the delegation's own routes and inspects the exact older decision", async () => {
     const value = workflow();
     const recent: RoutingHistory["entries"] = Array.from({ length: 20 }, (_, index) => ({
-      decisionId: `route-${index}`, status: "completed", taskId: `calculation-${index}`, selectedProfile: { ...worker }, reason: `近期理由 ${index}`, ownerGeneration: 1,
+      decisionId: `route-${index}`, status: "completed", taskId: `calculation-${index}`, selectedBuddy: { ...worker }, reason: `近期理由 ${index}`, ownerGeneration: 1,
       current: false, createdAt: "2026-09-24T08:00:00Z",
     }));
-    const older = { ...recent[0], decisionId: "older-route", selectedProfile: { ...worker, model: "historical-model" } };
+    const older = { ...recent[0], decisionId: "older-route", selectedBuddy: { ...worker, model: "historical-model" } };
     const command = vi.fn(async (operation: string, params: { decisionId?: string; routingHistory?: { before?: number } }) => {
       if (operation === "selection_get") return { decision: decision(params.decisionId!) };
       if (operation === "workflow_get") return { ...value, routingHistory: {
@@ -402,9 +402,9 @@ describe("delegation routing rationale", () => {
   it("uses recorded turn bindings and leaves an older unbound turn explicitly unknown", async () => {
     const value = workflow();
     value.turns = [
-      { turnId: "old-unbound", turnIndex: 1, attemptId: "attempt-old", executionConfiguration: { ...worker } },
-      { turnId: "bound", turnIndex: 2, attemptId: "attempt-bound", executionConfiguration: { ...worker },
-        routing: { decisionId: "bound-decision", executionConfigurationRevision: 2 } },
+      { turnId: "old-unbound", turnIndex: 1, attemptId: "attempt-old", buddy: { ...worker } },
+      { turnId: "bound", turnIndex: 2, attemptId: "attempt-bound", buddy: { ...worker },
+        routing: { decisionId: "bound-decision", buddyRevision: 2 } },
     ];
     const command = vi.fn(async (_operation: string, params: { decisionId: string }) => ({ decision: decision(params.decisionId) }));
     const user = userEvent.setup();
@@ -426,14 +426,14 @@ describe("delegation routing rationale", () => {
     { status: "failed", reason: "路由服务不可用，没有选中执行配置", label: "执行失败" },
   ])("keeps a $status route inspectable before any executor is selected", async ({ status, reason, label }) => {
     const record = task();
-    record.delegation!.configuration = null;
+    record.delegation!.buddy = null;
     const value = workflow(record);
-    value.executionConfiguration = null;
+    value.buddy = null;
     value.routing = { status, decisionId: "pending-or-failed", reason };
     const state = snapshot();
     const command = vi.fn(async (operation: string) => {
       if (operation === "workflow_get") return value;
-      if (operation === "selection_get") return { decision: { ...decision("pending-or-failed", { status, reason, profileId: null }), selectedProfile: null, input: null } };
+      if (operation === "selection_get") return { decision: { ...decision("pending-or-failed", { status, reason, buddyId: null }), selectedBuddy: null, input: null } };
       throw new Error(`Unexpected command: ${operation}`);
     });
     const user = userEvent.setup();

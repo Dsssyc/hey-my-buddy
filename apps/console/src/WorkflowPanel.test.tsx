@@ -41,7 +41,7 @@ function fixture() {
   const snapshot = {
     csrfToken: "fixture-csrf", eventCursor: 0,
     consoleSession: { id: "fixture-session", canWrite: true, reason: null },
-    profiles: [{ profileId: "flash-max", label: "Flash 工作", enabled: true, available: true, adapter: "dsh", provider: "deepseek-official", model: "deepseek-flash", effort: "max", capabilities: ["execution:dsh", "effort:max"] }],
+    buddies: [{ buddyId: "flash-max", label: "Flash 工作", enabled: true, available: true, adapter: "dsh", provider: "deepseek-official", model: "deepseek-flash", effort: "max", capabilities: ["execution:dsh", "effort:max"] }],
   } as Snapshot;
   const command = vi.fn(async (op: string) => {
     if (op !== "workflow_get") throw new Error(`Unexpected mutation: ${op}`);

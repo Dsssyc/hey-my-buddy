@@ -1,7 +1,7 @@
 import type { CSSProperties } from "react";
 import type { TimelineSpan } from "./macro-task-types";
-import type { ChronoEntry, ConfigurationStyle, SpanOutcome, TimelineItem } from "./macro-task-display";
-import { clockTime, configurationLabel, displayTitle, durationText, eventVocab, outcomeLabel, paletteIndex, titleLineTooltip } from "./macro-task-display";
+import type { ChronoEntry, BuddyStyle, SpanOutcome, TimelineItem } from "./macro-task-display";
+import { clockTime, buddyLabel, displayTitle, durationText, eventVocab, outcomeLabel, paletteIndex, titleLineTooltip } from "./macro-task-display";
 
 const RESULT_GLYPH: Partial<Record<SpanOutcome, string>> = { failed: "✕", cancelled: "⊘", unknown: "?", running: "▸" };
 
@@ -14,7 +14,7 @@ const RESULT_GLYPH: Partial<Record<SpanOutcome, string>> = { failed: "✕", canc
  */
 export function MacroTaskChronology({ entries, palette, onSelectItem, onOpenItem, selectedKey, openedKey }: {
   entries: ChronoEntry[];
-  palette: ConfigurationStyle[];
+  palette: BuddyStyle[];
   onSelectItem: (item: TimelineItem) => void;
   onOpenItem: (item: TimelineItem) => void;
   selectedKey: string | null;
@@ -54,7 +54,7 @@ export function MacroTaskChronology({ entries, palette, onSelectItem, onOpenItem
         </button>;
       }
       const span: TimelineSpan = entry.span;
-      const style = paletteIndex(palette, span.configuration);
+      const style = paletteIndex(palette, span.buddy);
       const outcome = entry.outcome;
       const resultGlyph = RESULT_GLYPH[outcome];
       const helper = entry.row.kind === "helper" ? "↳ 协助 · " : "";
@@ -81,7 +81,7 @@ export function MacroTaskChronology({ entries, palette, onSelectItem, onOpenItem
         {swatch}
         <span className="e-title single-line" title={titleLineTooltip(titleLine)}>{entry.item.head} · {helper}{titleLine.text}</span>
         <span className="e-meta">
-          {span.kind === "execution" && <span>{configurationLabel(span.configuration)}</span>}
+          {span.kind === "execution" && <span>{buddyLabel(span.buddy)}</span>}
           {duration && <span>{duration}{span.endAt == null ? "（至今）" : ""}</span>}
           {span.kind === "routing" ? <span>{outcomeLabel(span, outcome)}</span>
             : resultGlyph && <span>{resultGlyph} {outcomeLabel(span, outcome)}</span>}

@@ -73,12 +73,12 @@ export function parseConsoleAccess(value: unknown): ConsoleAccess {
 
 /**
  * Current L4 list settings: the ordered Router list, its retry interval, mode
- * and review budget. Every retired slot shape — the schema-13 decision profile
+ * and review budget. Every retired slot shape — the schema-13 decision buddy
  * and the single/dual Router positions — is refused; no production alias exists.
  */
 const ROUTER_RETRY_INTERVAL_MAX = 2147483647;
 
-function validRouterProfileIds(value: unknown): value is string[] {
+function validRouterBuddyIds(value: unknown): value is string[] {
   return Array.isArray(value) && value.every(id => typeof id === "string" && id.trim().length > 0)
     && new Set(value).size === value.length;
 }
@@ -87,8 +87,8 @@ export function validRoutingConfiguration(value: unknown): value is Configuratio
   const config = value as Partial<Configuration> | null;
   if (!config || typeof config !== "object" || Array.isArray(config)) return false;
   const interval = config.routerRetryIntervalSeconds;
-  return !["decisionProfileId", "routerProfileId", "fastRouterProfileId", "reviewRouterProfileId"].some(key => key in config)
-    && validRouterProfileIds(config.routerProfileIds)
+  return !["decisionBuddyId", "routerBuddyId", "fastRouterBuddyId", "reviewRouterBuddyId"].some(key => key in config)
+    && validRouterBuddyIds(config.routerBuddyIds)
     && typeof interval === "number" && Number.isInteger(interval) && interval >= 1 && interval <= ROUTER_RETRY_INTERVAL_MAX
     && (config.defaultRoutingMode === "fast" || config.defaultRoutingMode === "review")
     && (config.routingBudget === "brief" || config.routingBudget === "standard" || config.routingBudget === "deep");
@@ -106,7 +106,7 @@ function validConfigurationState(data: Snapshot): boolean {
 function validRouterHealthEntry(entry: unknown): entry is NonNullable<RoutingHealth["routers"]>[number] {
   const item = entry as NonNullable<RoutingHealth["routers"]>[number] | null;
   if (!item || typeof item !== "object" || Array.isArray(item)) return false;
-  if (typeof item.profileId !== "string" || !item.profileId.trim()) return false;
+  if (typeof item.buddyId !== "string" || !item.buddyId.trim()) return false;
   if (!Number.isSafeInteger(item.index) || item.index < 0) return false;
   if (typeof item.eligible !== "boolean") return false;
   for (const key of ["code", "skipUntil", "retryAt", "lastAnsweredAt", "lastNoAnswerAt"] as const) {
@@ -144,8 +144,8 @@ export function parseRoutingHealth(value: unknown): RoutingHealth | undefined {
       .some(count => count !== undefined && (!Number.isSafeInteger(count) || count < 0))
     || (health.available !== undefined && typeof health.available !== "boolean")
     || (health.reasonCode !== undefined && health.reasonCode !== null && typeof health.reasonCode !== "string")
-    || (health.currentRouterProfileId !== undefined && health.currentRouterProfileId !== null
-      && typeof health.currentRouterProfileId !== "string")
+    || (health.currentRouterBuddyId !== undefined && health.currentRouterBuddyId !== null
+      && typeof health.currentRouterBuddyId !== "string")
     || (health.routers !== undefined
       && (!Array.isArray(health.routers) || !health.routers.every(validRouterHealthEntry)))
     || !(health.lastSuccessAt === null || typeof health.lastSuccessAt === "string")
@@ -607,7 +607,7 @@ export function createApi(prefix: string, fetcher: typeof fetch = fetch) {
         !data ||
         !Number.isSafeInteger(data.eventCursor) || data.eventCursor < 0 ||
         !validConfigurationState(data) ||
-        !Array.isArray(data.profiles) ||
+        !Array.isArray(data.buddies) ||
         !Array.isArray(data.preferences) ||
         !Array.isArray(data.modelServiceNotes) ||
         !Array.isArray(data.modelServiceConcurrency) ||

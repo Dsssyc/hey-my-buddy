@@ -11,7 +11,7 @@ from buddy.harnesses.test_quota_failures import PROVIDER_RATE_LIMIT_FAILURE
 
 
 PROVIDER = "fixture-api"
-PROFILE_IDS = [f"zcode:{PROVIDER}:{model}:low" for model in ("alpha", "beta")]
+BUDDY_IDS = [f"zcode:{PROVIDER}:{model}:low" for model in ("alpha", "beta")]
 OTHER_PROVIDER_ID = "zcode:other-api:gamma:low"
 CONFIG = {"adapter": "zcode", "provider": PROVIDER, "model": "alpha", "effort": "low"}
 
@@ -30,9 +30,9 @@ class NonretryableQuotaRoutingTests(BoardTestCase):
         self.board_.evaluation._clock = self.clock
         self.board_.call("model_catalog_refresh", {"requestId": "catalog"})
         self.board_.console_call("user_policy_publish", {"commandId": "enable",
-                        "profileSettings": [{"profileId": item, "enabled": True} for item in [*PROFILE_IDS, OTHER_PROVIDER_ID]],
-            "configuration": {"defaultRoutingMode": "review", "routerProfileIds": []}})
-        self.assertEqual(self.candidates()[0], [*PROFILE_IDS, OTHER_PROVIDER_ID])
+                        "buddySettings": [{"buddyId": item, "enabled": True} for item in [*BUDDY_IDS, OTHER_PROVIDER_ID]],
+            "configuration": {"defaultRoutingMode": "review", "routerBuddyIds": []}})
+        self.assertEqual(self.candidates()[0], [*BUDDY_IDS, OTHER_PROVIDER_ID])
 
     def record_failure(self, raw=None):
         failure = quota_failure(PROVIDER_RATE_LIMIT_FAILURE if raw is None else raw)
@@ -45,7 +45,7 @@ class NonretryableQuotaRoutingTests(BoardTestCase):
         with self.board_.store.db.write() as db:
             rows, retries = DecisionCoordinator._scan_candidates(db, [], coding_only=True,
                 decision_id=decision_id, consume_retries=True, now=self.clock())
-            return [row["profile_id"] for row in rows], retries
+            return [row["buddy_id"] for row in rows], retries
 
     def test_failure_blocks_both_buddies_and_projects_exhaustion_without_reset(self):
         self.record_failure()
@@ -61,12 +61,12 @@ class NonretryableQuotaRoutingTests(BoardTestCase):
             self.assertTrue(facts[0]["blocked"])
             self.assertIsNone(facts[0]["resetsAt"])
             self.assertFalse(facts[0]["retry"]["open"])
-        for operation in ("model_profiles", "console_snapshot"):
-            rows = self.board_.call(operation, {})["profiles"]
-            views = {row["profileId"]: row for row in rows}
-            for profile_id in PROFILE_IDS:
-                self.assertTrue(views[profile_id]["quotaExhausted"])
-                self.assertFalse(views[profile_id]["quotaRetry"]["open"])
+        for operation in ("buddy_list", "console_snapshot"):
+            rows = self.board_.call(operation, {})["buddies"]
+            views = {row["buddyId"]: row for row in rows}
+            for buddy_id in BUDDY_IDS:
+                self.assertTrue(views[buddy_id]["quotaExhausted"])
+                self.assertFalse(views[buddy_id]["quotaRetry"]["open"])
             self.assertFalse(views[OTHER_PROVIDER_ID]["quotaExhausted"])
 
     def test_no_reset_failure_opens_one_natural_retry_per_wait_interval(self):
@@ -74,10 +74,10 @@ class NonretryableQuotaRoutingTests(BoardTestCase):
         self.clock.advance(RETRY_WAIT_SECONDS - 1)
         self.assertEqual(self.candidates("too-early"), ([OTHER_PROVIDER_ID], []))
         self.clock.advance(1)
-        self.assertEqual(self.candidates("first-retry"), ([*PROFILE_IDS, OTHER_PROVIDER_ID], PROFILE_IDS))
+        self.assertEqual(self.candidates("first-retry"), ([*BUDDY_IDS, OTHER_PROVIDER_ID], BUDDY_IDS))
         self.assertEqual(self.candidates("second-retry"), ([OTHER_PROVIDER_ID], []))
         self.clock.advance(RETRY_WAIT_SECONDS)
-        self.assertEqual(self.candidates("later-retry"), ([*PROFILE_IDS, OTHER_PROVIDER_ID], PROFILE_IDS))
+        self.assertEqual(self.candidates("later-retry"), ([*BUDDY_IDS, OTHER_PROVIDER_ID], BUDDY_IDS))
         with self.board_.store.db.read() as db:
             self.assertIsNotNone(exhausted(db, CONFIG, now=self.clock()))
 
@@ -85,7 +85,7 @@ class NonretryableQuotaRoutingTests(BoardTestCase):
         self.record_failure()
         reply = self.board_.call("quota_redetect", {"requestId": "redetect", "adapter": "zcode", "provider": PROVIDER})
         self.assertEqual(reply["quota"]["opened"], [None])
-        self.assertEqual(self.candidates("manual-retry"), ([*PROFILE_IDS, OTHER_PROVIDER_ID], PROFILE_IDS))
+        self.assertEqual(self.candidates("manual-retry"), ([*BUDDY_IDS, OTHER_PROVIDER_ID], BUDDY_IDS))
         self.assertEqual(self.candidates("next-retry"), ([OTHER_PROVIDER_ID], []))
         with self.board_.store.db.read() as db:
             self.assertIsNotNone(exhausted(db, CONFIG, now=self.clock()))
@@ -108,7 +108,7 @@ class NonretryableQuotaRoutingTests(BoardTestCase):
                 else:
                     raw["attribution"]["retryable"] = retryable
                 self.record_failure(raw)
-                self.assertEqual(self.candidates(), ([*PROFILE_IDS, OTHER_PROVIDER_ID], []))
+                self.assertEqual(self.candidates(), ([*BUDDY_IDS, OTHER_PROVIDER_ID], []))
                 with self.board_.store.db.read() as db:
                     self.assertIsNone(latest_quota(db, "zcode"))
                     self.assertEqual(routing_facts(db, "zcode", now=self.clock()), [])

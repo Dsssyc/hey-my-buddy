@@ -32,7 +32,7 @@ from hey_my_buddy.protocol import rpc_config
 from hey_my_buddy.protocol.client import BoardClient
 from hey_my_buddy.protocol.contracts import HarnessRunLive
 from hey_my_buddy.protocol.transport import _read_endpoint, _request
-from protocol.fixtures.ctwo_controller import CONFIGURATION, SELF, exchange
+from protocol.fixtures.ctwo_controller import BUDDY, SELF, exchange
 
 
 @unittest.skipUnless(os.name == "posix", "private IPC inspection is POSIX")
@@ -102,7 +102,7 @@ class CTwoIntegrationTests(unittest.TestCase):
                  "commit", "--allow-empty", "-qm", "private integration input"))):
             process = self.spawn(["git", *arguments], f"git-{number}", cwd=work)
             self.assertEqual(process.wait(timeout=5), 0)
-        submitted = self.client.call("workflow_submit", {**CONFIGURATION,
+        submitted = self.client.call("workflow_submit", {**BUDDY,
             "requestId": "ctwo-integration", "hostId": "integration-host",
             "task": "model-free live transport fixture", "cwd": str(work), "timeoutSeconds": 30,
             "executionWorkspace": {"kind": "existing", "access": "write"}})

@@ -13,8 +13,8 @@ function snapshotFixture(): Snapshot {
   return {
     csrfToken: "csrf", eventCursor: 0, consoleSession: { id: "session-a", canWrite: true, reason: null },
 
-    configuration: { routerProfileIds: [], routerRetryIntervalSeconds: 600, defaultRoutingMode: "review" as const, routingBudget: "standard"},
-    profiles: [], preferences: [], modelServiceNotes: [], decisions: [],
+    configuration: { routerBuddyIds: [], routerRetryIntervalSeconds: 600, defaultRoutingMode: "review" as const, routingBudget: "standard"},
+    buddies: [], preferences: [], modelServiceNotes: [], decisions: [],
  modelServiceConcurrency: [], tasks: { pendingCount: 0 },
     capabilities: {},
   };
@@ -27,7 +27,7 @@ function taskFixture(runId: string): Task {
     delegation: { kind: runId === "r3" ? "helper" : "goal", sourceHostId: "codex-desktop", currentHostId: "codex-desktop",
       parentRunId: runId === "r3" ? "r2" : null, rootRunId: runId === "r3" ? "r2" : runId,
       project: { id: "p1", label: "hey-my-buddy", path: "~/projects/hey-my-buddy" },
-      configuration: { adapter: "zcode", provider: "bigmodel-api", model: "glm-5", effort: "high" } } };
+      buddy: { adapter: "zcode", provider: "bigmodel-api", model: "glm-5", effort: "high" } } };
   if (runId === "r2") {
     base.workflow = { state: "awaiting-host", awaitingHost: true, hostId: "codex-desktop", ownerGeneration: 2, revision: 1 };
   }
@@ -79,7 +79,7 @@ function harness(options: StopOptions = {}) {
       return workflowFixture(task);
     }
     if (operation === "selection_get") return { decision: {
-      decisionId: params.decisionId, status: "completed", kind: "select", task: "路由合成数据", profileId: null, reason: "第一轮的路由依据", evidence: [], createdAt: "2026-09-26T01:21:00Z",
+      decisionId: params.decisionId, status: "completed", kind: "select", task: "路由合成数据", buddyId: null, reason: "第一轮的路由依据", evidence: [], createdAt: "2026-09-26T01:21:00Z",
     } };
     if (operation === "macro_task_stop") {
       stopAttempts += 1;

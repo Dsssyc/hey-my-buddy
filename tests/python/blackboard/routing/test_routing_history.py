@@ -12,8 +12,8 @@ from __future__ import annotations
 import json
 from unittest.mock import patch
 
-from blackboard.routing.test_decision import DecisionTestCase, PROFILE, PROFILE_ID, SECOND_PROFILE, SECOND_PROFILE_ID, THIRD_PROFILE
-from blackboard.tasks.test_workflow import CONFIGURATION, NONCE, WorkflowTestCase
+from blackboard.routing.test_decision import DecisionTestCase, CATALOG_BUDDY, BUDDY_ID, SECOND_BUDDY, SECOND_BUDDY_ID, THIRD_BUDDY
+from blackboard.tasks.test_workflow import BUDDY, NONCE, WorkflowTestCase
 
 from hey_my_buddy.errors import BoardError
 from blackboard.routing.fixtures.router_tool_receipt import claim_tool_receipt
@@ -50,7 +50,7 @@ class RoutingHistoryTestCase(WorkflowTestCase):
         board.call("worker_register", {"workerId": "router", "adapter": "decision", "capabilities": ["decision"]})
         return self.claim(board, "router", run_id=view["routing"]["taskId"], claim_request_id=claim_id)
 
-    def select(self, board, claim, *, profile_id=PROFILE_ID, shutdown=True, status="ok"):
+    def select(self, board, claim, *, buddy_id=BUDDY_ID, shutdown=True, status="ok"):
         owned = claim["claim"]
         return board.call("worker_result", {
             "workerId": "router", "attemptId": owned["attempt"]["attemptId"],
@@ -61,7 +61,7 @@ class RoutingHistoryTestCase(WorkflowTestCase):
                        "zeroToolVerified": True,
                        "stopEvidence": {"shutdownConfirmed": True, "native": {"shutdownConfirmed": True}},
                        "inputVerification": {"unchanged": True, "snapshotSha256": "fixture-digest", "manifestSha256": owned["decisionInput"]["executionWorkspace"]["manifestSha256"]},
-                       "decision": self.valid_decision(owned["decisionInput"], profile_id)},
+                       "decision": self.valid_decision(owned["decisionInput"], buddy_id)},
         })
 
     def history(self, board, run_id, **params):
@@ -109,7 +109,7 @@ class WorkflowRoutingHistoryTests(RoutingHistoryTestCase):
         self.assertIsInstance(first["nextCursor"], int)
         self.assertEqual([entry["status"] for entry in first["entries"]], ["needs-host"] * 3)
         self.assertEqual([entry["taskId"] for entry in first["entries"]], [None, None, None])
-        self.assertEqual([entry["selectedProfile"] for entry in first["entries"]], [None, None, None])
+        self.assertEqual([entry["selectedBuddy"] for entry in first["entries"]], [None, None, None])
         self.assertEqual([entry["ownerGeneration"] for entry in first["entries"]], [1, 1, 1])
         # Only the newest decision is the run's explicit current routing.
         self.assertEqual([entry["current"] for entry in first["entries"]], [True, False, False])
@@ -154,7 +154,7 @@ class WorkflowRoutingHistoryTests(RoutingHistoryTestCase):
         self.assertTrue(other_history["entries"][0]["current"])
         self.assertEqual(self.history(board, run_id)["total"], 22)
 
-        # An explicit-configuration run has no routing rows at all, and the current
+        # An explicit-buddy run has no routing rows at all, and the current
         # routing view stays honest about that.
         explicit = self.submit(board, request_id="explicit-run")
         self.assertEqual(self.history(board, explicit["runId"]), {"entries": [], "nextCursor": None, "total": 0})
@@ -213,11 +213,11 @@ class WorkflowRoutingHistoryTests(RoutingHistoryTestCase):
         self.assertEqual(view["routingHistory"], {"entries": [], "nextCursor": None, "total": 0})
         self.assertNotIn("routingHistory", board.call("workflow_get", {"runId": plain["task"]["runId"]}))
 
-    def test_resolved_reroute_history_keeps_its_frozen_selection_after_profiles_change(self):
+    def test_resolved_reroute_history_keeps_its_frozen_selection_after_buddies_change(self):
         board = self.board()
-        # Three enabled profiles keep the reroute on the Router path after one is
+        # Three enabled buddies keep the reroute on the Router path after one is
         # disabled; a sole remaining candidate would complete without a Router.
-        self.seed(board, profiles=(PROFILE, SECOND_PROFILE, THIRD_PROFILE))
+        self.seed(board, buddies=(CATALOG_BUDDY, SECOND_BUDDY, THIRD_BUDDY))
         submitted = self.routed(board, request_id="route-freeze")
         selector_task_id = board.call("workflow_get", {"runId": submitted["runId"]})["routing"]["taskId"]
         self.select(board, self.router_claim(board, submitted))
@@ -226,20 +226,20 @@ class WorkflowRoutingHistoryTests(RoutingHistoryTestCase):
         self.assertEqual(entry["status"], "completed")
         self.assertTrue(entry["current"])
         self.assertEqual(entry["taskId"], selector_task_id)
-        self.assertEqual(entry["selectedProfile"]["profileId"], PROFILE_ID)
-        self.assertEqual(entry["selectedProfile"]["model"], PROFILE["model"])
+        self.assertEqual(entry["selectedBuddy"]["buddyId"], BUDDY_ID)
+        self.assertEqual(entry["selectedBuddy"]["model"], CATALOG_BUDDY["model"])
 
-        # The user changes eligible profiles; the historical route retains its selection.
+        # The user changes eligible buddies; the historical route retains its selection.
         self.publish_user_patch(
-            board, request_id="profiles-changed", command_id="profiles-changed",
-            profileSettings=[{"profileId": PROFILE_ID, "enabled": False}],
-            configuration={"routerProfileIds": [SECOND_PROFILE_ID]},
+            board, request_id="buddies-changed", command_id="buddies-changed",
+            buddySettings=[{"buddyId": BUDDY_ID, "enabled": False}],
+            configuration={"routerBuddyIds": [SECOND_BUDDY_ID]},
         )
         snapshot = board.call("console_snapshot", {})
-        self.assertEqual(snapshot["configuration"]["routerProfileIds"], [SECOND_PROFILE_ID])
+        self.assertEqual(snapshot["configuration"]["routerBuddyIds"], [SECOND_BUDDY_ID])
         frozen_config = board.call("workflow_get", {"runId": submitted["runId"]})
-        self.assertEqual(frozen_config["executionConfiguration"]["model"], PROFILE["model"])
-        self.assertEqual(frozen_config["executionConfigurationRevision"], 1)
+        self.assertEqual(frozen_config["buddy"]["model"], CATALOG_BUDDY["model"])
+        self.assertEqual(frozen_config["buddyRevision"], 1)
 
         current = board.call("workflow_get", {"runId": submitted["runId"]})
         pending = self.continue_run(board, current, command_id="reroute-after-change", reroute=True)
@@ -248,17 +248,17 @@ class WorkflowRoutingHistoryTests(RoutingHistoryTestCase):
         self.assertEqual(history["total"], 2)
         newest, frozen = history["entries"]
         self.assertEqual(newest["status"], "queued")
-        self.assertIsNone(newest["selectedProfile"])
+        self.assertIsNone(newest["selectedBuddy"])
         self.assertTrue(newest["current"])
-        # The historical page retains the originally selected profile.
+        # The historical page retains the originally selected buddy.
         self.assertFalse(frozen["current"])
         self.assertEqual(frozen["decisionId"], entry["decisionId"])
         self.assertEqual(frozen["status"], "completed")
-        self.assertEqual(frozen["selectedProfile"]["model"], PROFILE["model"])
-        # A reroute in flight is honest: no execution configuration is claimed until
+        self.assertEqual(frozen["selectedBuddy"]["model"], CATALOG_BUDDY["model"])
+        # A reroute in flight is honest: no execution buddy is claimed until
         # the new decision resolves, and the compact routing view says so.
         view = board.call("workflow_get", {"runId": submitted["runId"]})
-        self.assertIsNone(view["executionConfiguration"])
+        self.assertIsNone(view["buddy"])
         self.assertEqual(view["routing"]["status"], "queued")
 
 
@@ -369,42 +369,42 @@ class TurnRoutingBindingTests(RoutingHistoryTestCase):
     def test_turn_view_freezes_explicit_and_reconfigured_bindings(self):
         board = self.board()
         self.register(board)
-        # No fixed constraints and no published profile: routing stops honestly at a
+        # No fixed constraints and no published buddy: routing stops honestly at a
         # Host boundary, and the Host resolves it with a complete explicit
-        # configuration before reconfiguring it.
+        # buddy before selecting another one.
         submitted = self.routed(board, request_id="explicit-bind")
         self.assertTrue(submitted["awaitingHost"])
         self.assertEqual(submitted["routing"]["status"], "needs-host")
-        configured = self.continue_run(board, submitted, configuration=CONFIGURATION)
-        self.assertEqual(configured["executionConfigurationRevision"], 1)
+        configured = self.continue_run(board, submitted, buddy=BUDDY)
+        self.assertEqual(configured["buddyRevision"], 1)
         first = self.claim(board, run_id=submitted["runId"], claim_request_id="first")
         turn = first["claim"]["turn"]
         self.assertEqual(turn["input"]["context"]["routing"],
-                         {"decisionId": None, "executionConfigurationRevision": 1})
-        self.assertEqual(turn["input"]["context"]["executionConfiguration"], CONFIGURATION)
-        expected_first = {"decisionId": None, "executionConfigurationRevision": 1}
+                         {"decisionId": None, "buddyRevision": 1})
+        self.assertEqual(turn["input"]["context"]["buddy"], BUDDY)
+        expected_first = {"decisionId": None, "buddyRevision": 1}
         view = board.call("workflow_get", {"runId": submitted["runId"]})
         self.assertEqual(view["currentTurn"]["routing"], expected_first)
-        self.assertEqual(view["currentTurn"]["executionConfiguration"], CONFIGURATION)
+        self.assertEqual(view["currentTurn"]["buddy"], BUDDY)
         self.assertEqual(view["turns"][0]["routing"], expected_first)
-        self.assertEqual(view["turns"][0]["executionConfiguration"], CONFIGURATION)
+        self.assertEqual(view["turns"][0]["buddy"], BUDDY)
 
         self.finish_turn(board, first, disposition="attention")
         view = board.call("workflow_get", {"runId": submitted["runId"]})
         changed = self.continue_run(
-            board, view, command_id="reconfigure", configuration={**CONFIGURATION, "effort": "high"}
+            board, view, command_id="reconfigure", buddy={**BUDDY, "effort": "high"}
         )
-        self.assertEqual(changed["executionConfigurationRevision"], 2)
+        self.assertEqual(changed["buddyRevision"], 2)
         second = self.claim(board, claim_request_id="second")
         self.assertEqual(second["claim"]["turn"]["input"]["context"]["routing"],
-                         {"decisionId": None, "executionConfigurationRevision": 2})
+                         {"decisionId": None, "buddyRevision": 2})
         view = board.call("workflow_get", {"runId": submitted["runId"]})
-        expected_second = {"decisionId": None, "executionConfigurationRevision": 2}
+        expected_second = {"decisionId": None, "buddyRevision": 2}
         self.assertEqual(view["currentTurn"]["routing"], expected_second)
-        self.assertEqual(view["currentTurn"]["executionConfiguration"]["effort"], "high")
+        self.assertEqual(view["currentTurn"]["buddy"]["effort"], "high")
         # The newest-first turn index keeps every turn's own frozen binding/revision.
         self.assertEqual([item["routing"] for item in view["turns"]], [expected_second, expected_first])
-        self.assertEqual([item["executionConfiguration"]["effort"] for item in view["turns"]], ["high", "off"])
+        self.assertEqual([item["buddy"]["effort"] for item in view["turns"]], ["high", "off"])
 
     def test_routing_turn_binding_and_prior_turn_without_binding_stays_null(self):
         board = self.board()
@@ -417,12 +417,12 @@ class TurnRoutingBindingTests(RoutingHistoryTestCase):
         self.register(board)
         claimed = self.claim(board, run_id=submitted["runId"], claim_request_id="first-turn")
         turn = claimed["claim"]["turn"]
-        expected = {"decisionId": decision_id, "executionConfigurationRevision": 1}
+        expected = {"decisionId": decision_id, "buddyRevision": 1}
         self.assertEqual(turn["input"]["context"]["routing"], expected)
         view = board.call("workflow_get", {"runId": submitted["runId"]})
         self.assertEqual(view["currentTurn"]["routing"], expected)
         self.assertEqual(view["turns"][0]["routing"], expected)
-        self.assertEqual(view["currentTurn"]["executionConfiguration"], view["executionConfiguration"])
+        self.assertEqual(view["currentTurn"]["buddy"], view["buddy"])
         self.assertEqual(view["routing"]["decisionId"], decision_id)
 
         # An older turn input that predates the binding must stay null even though
@@ -441,14 +441,14 @@ class TurnRoutingBindingTests(RoutingHistoryTestCase):
         legacy = board.call("workflow_get", {"runId": submitted["runId"]})
         self.assertIsNone(legacy["currentTurn"]["routing"])
         self.assertIsNone(legacy["turns"][0]["routing"])
-        self.assertEqual(legacy["currentTurn"]["executionConfiguration"], view["executionConfiguration"])
-        # The current routing view and the frozen turn configuration are unaffected.
+        self.assertEqual(legacy["currentTurn"]["buddy"], view["buddy"])
+        # The current routing view and the frozen turn buddy are unaffected.
         self.assertEqual(legacy["routing"]["decisionId"], decision_id)
         self.assertEqual(legacy["routing"]["status"], "completed")
 
-        # A partial binding does not prove an explicit Host configuration. Missing
+        # A partial binding does not prove an explicit Host buddy. Missing
         # decisionId and a recorded null decisionId are different evidence.
-        document["context"]["routing"] = {"executionConfigurationRevision": 1}
+        document["context"]["routing"] = {"buddyRevision": 1}
         with board.store.db.write() as connection:
             connection.execute("UPDATE workflow_turns SET input_json=? WHERE turn_id=?",
                                (json.dumps(document), row["turn_id"]))

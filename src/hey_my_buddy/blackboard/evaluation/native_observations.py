@@ -71,31 +71,31 @@ def quota_view(value, *, now=None):
     return {**value, "windows": windows, "stale": stale or bool(windows and all(w["stale"] for w in windows))}
 
 
-def exhausted(connection, configuration, *, now=None):
+def exhausted(connection, buddy, *, now=None):
     from ..routing.quota_routing import exhausted as routing_exhausted
-    return routing_exhausted(connection, configuration, now=now)
+    return routing_exhausted(connection, buddy, now=now)
 
-def warnings(connection, configuration, *, now=None):
+def warnings(connection, buddy, *, now=None):
     from ...protocol.harness_names import HARNESS_NAMES
-    if not configuration or configuration.get("adapter") not in HARNESS_NAMES:
+    if not buddy or buddy.get("adapter") not in HARNESS_NAMES:
         return []
-    quota = quota_view(latest_quota(connection, configuration["adapter"]), now=now)
-    explicit = exhausted(connection, configuration, now=now)
+    quota = quota_view(latest_quota(connection, buddy["adapter"]), now=now)
+    explicit = exhausted(connection, buddy, now=now)
     if explicit is not None:
-        return [{**explicit, "adapter": configuration["adapter"], "provider": configuration["provider"],
-                 "message": "A recent native observation reports this selected configuration has exhausted its quota."}]
-    if not quota or quota["stale"] or quota.get("provider") not in (None, configuration.get("provider")):
+        return [{**explicit, "adapter": buddy["adapter"], "provider": buddy["provider"],
+                 "message": "A recent native observation reports this selected buddy has exhausted its quota."}]
+    if not quota or quota["stale"] or quota.get("provider") not in (None, buddy.get("provider")):
         return []
     from ...protocol.usage import classify_quota_code
     if quota.get("reachedType") and classify_quota_code(quota["reachedType"]) == "rate-limited":
-        return [{"code": "HARNESS_RATE_LIMIT_REPORTED", "adapter": configuration["adapter"],
+        return [{"code": "HARNESS_RATE_LIMIT_REPORTED", "adapter": buddy["adapter"],
                  "provider": quota.get("provider"), "source": quota.get("source"), "observedAt": quota.get("observedAt"),
                  "reachedType": quota.get("reachedType"), "message": "A recent native observation reported a temporary rate limit."}]
     if quota.get("reachedType") or quota.get("ordinaryUsageAllowed") is False:
-        return [{"code": "HARNESS_QUOTA_LIMIT_REPORTED", "adapter": configuration["adapter"],
+        return [{"code": "HARNESS_QUOTA_LIMIT_REPORTED", "adapter": buddy["adapter"],
                  "provider": quota.get("provider"), "source": quota.get("source"), "observedAt": quota.get("observedAt"),
                  "reachedType": quota.get("reachedType"), "message": "A recent native observation reported a quota limit; its current reset state may be unknown."}]
-    return [{"code": "HARNESS_QUOTA_NEAR_LIMIT", "adapter": configuration["adapter"],
+    return [{"code": "HARNESS_QUOTA_NEAR_LIMIT", "adapter": buddy["adapter"],
              "provider": quota.get("provider"), "source": quota.get("source"),
              "observedAt": quota.get("observedAt"), "window": window,
              "message": "Recent native quota observation is near its limit; review before continuing."}

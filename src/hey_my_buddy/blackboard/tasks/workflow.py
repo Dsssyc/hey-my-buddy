@@ -171,12 +171,12 @@ def _frozen_turn_routing(context: dict) -> dict | None:
     if not isinstance(routing, dict) or "decisionId" not in routing:
         return None
     decision_id = routing.get("decisionId")
-    revision = routing.get("executionConfigurationRevision")
+    revision = routing.get("buddyRevision")
     if decision_id is not None and (not isinstance(decision_id, str) or not decision_id.strip()):
         return None
     if isinstance(revision, bool) or not isinstance(revision, int) or revision < 0:
         return None
-    return {"decisionId": decision_id, "executionConfigurationRevision": revision}
+    return {"decisionId": decision_id, "buddyRevision": revision}
 
 
 def _frozen_turn_shared_stash(context: dict, *, compact: bool = False) -> dict | None:
@@ -273,8 +273,8 @@ class WorkflowCoordinator:
             "disposition": row["disposition"],
             "createdAt": row["created_at"],
             "updatedAt": row["updated_at"],
-            # This turn's own frozen execution configuration, never the current run's.
-            "executionConfiguration": context.get("executionConfiguration"),
+            # This turn's own frozen buddy, never the current run's.
+            "buddy": context.get("buddy"),
             # This turn's own frozen routing identity. An older turn input that
             # predates the binding stays null: it is never inferred from the current
             # run, wall-clock timestamps or a matching model name.
@@ -341,7 +341,7 @@ class WorkflowCoordinator:
             "neededWork": payload.get("neededWork", []),
             "expectedArtifacts": payload.get("expectedArtifacts", []),
             "acceptance": payload.get("acceptance"),
-            "suggestedProfileId": payload.get("suggestedProfileId"),
+            "suggestedBuddyId": payload.get("suggestedBuddyId"),
             "turnId": row["turn_id"],
             "attemptId": row["attempt_id"],
             "childTaskId": row["child_task_id"],
@@ -673,10 +673,10 @@ class WorkflowCoordinator:
             "access": json.loads(run_row["execution_workspace_json"])["access"],
             "accessReason": json.loads(run_row["execution_workspace_json"]).get("accessReason"),
             "requestFingerprint": run_row["request_fingerprint"],
-            "executionConfiguration": self._configuration(run_row),
-            "configurationLocked": bool(run_row["configuration_locked"]),
-            "executionConfigurationRevision": run_row["execution_configuration_revision"],
-            "quotaWarnings": warnings(connection, self._configuration(run_row), now=self.now()),
+            "buddy": self._buddy(run_row),
+            "buddyLocked": bool(run_row["buddy_locked"]),
+            "buddyRevision": run_row["buddy_revision"],
+            "quotaWarnings": warnings(connection, self._buddy(run_row), now=self.now()),
             "routing": self._routing_view(connection, run_row, now=projection_now),
             "currentTurn": self._turn_view(turns[0]) if turns else None,
             "turns": [self._turn_view(row, compact=True) for row in turns],
@@ -780,7 +780,7 @@ class WorkflowCoordinator:
     def _wait_reason(state: str, task_row, active_request, host_conclusion) -> str:
         if state == "awaiting-host":
             if active_request is not None and active_request.get("routing") is True:
-                return "model routing needs Host configuration; no new coding turn was started"
+                return "model routing needs Host buddy; no new coding turn was started"
             if active_request is not None and active_request["kind"] in ("assistance", "helper-attention"):
                 return "the current turn requested Host assistance"
             if active_request is not None and active_request["kind"] == "helper-report":
@@ -1181,25 +1181,25 @@ class WorkflowCoordinator:
 
     # -- submit --------------------------------------------------------------
     @staticmethod
-    def _configuration(run_row) -> dict | None:
-        value = run_row["execution_configuration_json"]
+    def _buddy(run_row) -> dict | None:
+        value = run_row["buddy_json"]
         return json.loads(value) if value else None
 
-    def _validated_configuration(self, spec: dict) -> dict | None:
-        """Inspect native configuration only outside a database write transaction."""
-        constraints = schemas.configuration_constraints(spec)
+    def _validated_buddy(self, spec: dict) -> dict | None:
+        """Inspect native buddy only outside a database write transaction."""
+        constraints = schemas.buddy_constraints(spec)
         if constraints.get("adapter") in ("command", "external"):
             return constraints
-        if len(constraints) != len(schemas.CONFIGURATION_FIELDS):
+        if len(constraints) != len(schemas.BUDDY_FIELDS):
             return None
-        from ..catalog.catalog import validate_configuration
+        from ..catalog.catalog import validate_buddy
 
-        return validate_configuration(schemas.normalize_configuration(constraints), directory=self.board.directory)
+        return validate_buddy(schemas.normalize_buddy(constraints), directory=self.board.directory)
 
     @staticmethod
-    def _require_permission(configuration: dict | None, access: str) -> None:
+    def _require_permission(buddy: dict | None, access: str) -> None:
         from ...buddy.harnesses.registry import require_permission
-        require_permission(configuration, access)
+        require_permission(buddy, access)
 
     @staticmethod
     def _execution_adapter(name: str):
@@ -1212,7 +1212,7 @@ class WorkflowCoordinator:
         spec = json.loads(task["spec_json"])
         run = self._run_optional(connection, task["task_id"])
         if run is not None:
-            spec = {**spec, **(self._configuration(run) or {}), "cwd": task["cwd"]}
+            spec = {**spec, **(self._buddy(run) or {}), "cwd": task["cwd"]}
         return spec
 
     def _routing_boundary(self, connection, decision, run, *, post_transition: bool = False, now=None):
@@ -1247,19 +1247,19 @@ class WorkflowCoordinator:
             request = self._open_boundary(connection, run)
             needs_host = request is not None and json.loads(request["payload_json"]).get("source") == "routing"
             override = connection.execute(
-                "SELECT payload_json FROM events WHERE task_id=? AND kind='workflow.configuration_overridden' ORDER BY seq DESC LIMIT 1",
+                "SELECT payload_json FROM events WHERE task_id=? AND kind='workflow.buddy_overridden' ORDER BY seq DESC LIMIT 1",
                 (run["run_id"],),
             ).fetchone()
             override_payload = json.loads(override["payload_json"]) if override else None
             source = ("host-override" if override_payload and
-                      override_payload.get("configurationRevision") == run["execution_configuration_revision"]
-                      else "original-explicit" if len(schemas.configuration_constraints(goal)) == len(schemas.CONFIGURATION_FIELDS)
+                      override_payload.get("buddyRevision") == run["buddy_revision"]
+                      else "original-explicit" if len(schemas.buddy_constraints(goal)) == len(schemas.BUDDY_FIELDS)
                       else None)
-            preparing = (run["state"] == "executing" and self._configuration(run) is None
+            preparing = (run["state"] == "executing" and self._buddy(run) is None
                          and connection.execute("SELECT 1 FROM workflow_continuations WHERE run_id=? AND state='queued'"
                                                 " AND workspace_manifest_json IS NULL LIMIT 1", (run["run_id"],)).fetchone() is not None)
             return {"status": "needs-host" if needs_host else "queued" if preparing else "explicit", "decisionId": None, "taskId": None,
-                    "constraints": schemas.configuration_constraints(goal),
+                    "constraints": schemas.buddy_constraints(goal),
                     "source": None if preparing else source}
         link = connection.execute("SELECT * FROM workflow_routes WHERE decision_id=?", (run["current_routing_id"],)).fetchone()
         decision = self.board.decisions._row(connection, run["current_routing_id"])
@@ -1271,15 +1271,15 @@ class WorkflowCoordinator:
         view = {
             "status": status, "decisionId": decision["decision_id"], "taskId": decision["decision_task_id"],
             "attemptId": decision["decision_attempt_id"], "generation": decision["decision_generation"],
-            "selectedProfile": json.loads(decision["selected_json"]) if decision["selected_json"] else None,
+            "selectedBuddy": json.loads(decision["selected_json"]) if decision["selected_json"] else None,
             "reason": link["reason"] or decision["reason"],
-            "constraints": requested.get("constraints", schemas.configuration_constraints(goal)),
+            "constraints": requested.get("constraints", schemas.buddy_constraints(goal)),
             "requiredCapabilities": requested.get("requiredCapabilities", []),
             "source": selection_source(requested),
             **{key: current[key] for key in (
-                "routerProfileIds", "routerIdentities", "routingMode", "routingBudget", "budget",
+                "routerBuddyIds", "routerIdentities", "routingMode", "routingBudget", "budget",
                 "routerRetryIntervalSeconds", "routerProblem",
-                "routerProfileId", "routerProfile", "routerIndex", "decisionModel", "routerTrials",
+                "routerBuddyId", "routerBuddy", "routerIndex", "decisionModel", "routerTrials",
             ) if key in current},
             "routingBasis": requested.get("routingBasis"),
         }
@@ -1292,8 +1292,8 @@ class WorkflowCoordinator:
         run = self._run_row(connection, run_id)
         sequence = connection.execute("SELECT COUNT(*) FROM workflow_routes WHERE run_id=?", (run_id,)).fetchone()[0] + 1
         goal = json.loads(run["goal_json"])
-        if run["continuation_count"] and not run["configuration_locked"]:
-            goal = {key: value for key, value in goal.items() if key not in schemas.CONFIGURATION_FIELDS}
+        if run["continuation_count"] and not run["buddy_locked"]:
+            goal = {key: value for key, value in goal.items() if key not in schemas.BUDDY_FIELDS}
         response = self.board.decisions.route_workflow(
             connection, run_id=run_id, sequence=sequence, spec=goal,
             manifest=json.loads(run["workspace_manifest_json"]),
@@ -1304,8 +1304,8 @@ class WorkflowCoordinator:
             " VALUES(?,?,?,'pending',?,?)", (decision_id, run_id, run["owner_generation"], now, now),
         )
         connection.execute(
-            "UPDATE workflow_runs SET current_routing_id=?, execution_configuration_json=NULL,"
-            " validated_configuration_revision=NULL WHERE run_id=?",
+            "UPDATE workflow_runs SET current_routing_id=?, buddy_json=NULL,"
+            " validated_buddy_revision=NULL WHERE run_id=?",
             (decision_id, run_id),
         )
         connection.execute("UPDATE tasks SET adapter='unresolved', queue_reason='awaiting-model-selection' WHERE task_id=?", (run_id,))
@@ -1344,28 +1344,28 @@ class WorkflowCoordinator:
             return
         selected = json.loads(decision["selected_json"]) if decision["selected_json"] else None
         if decision["status"] == "completed" and selected is not None:
-            configuration = schemas.configuration_constraints(selected)
-            constraints = (schemas.configuration_constraints(json.loads(run["goal_json"]))
-                           if run["configuration_locked"] or not run["continuation_count"] else {})
-            if (len(configuration) == len(schemas.CONFIGURATION_FIELDS)
-                    and configuration.get("adapter") in schemas.CODING_ADAPTERS
-                    and all(configuration.get(key) == value for key, value in constraints.items())):
+            buddy = schemas.buddy_constraints(selected)
+            constraints = (schemas.buddy_constraints(json.loads(run["goal_json"]))
+                           if run["buddy_locked"] or not run["continuation_count"] else {})
+            if (len(buddy) == len(schemas.BUDDY_FIELDS)
+                    and buddy.get("adapter") in schemas.CODING_ADAPTERS
+                    and all(buddy.get(key) == value for key, value in constraints.items())):
                 connection.execute("UPDATE workflow_routes SET state='resolved',reason=?,updated_at=? WHERE decision_id=?",
                                    (decision["reason"], now, decision_id))
                 connection.execute(
-                    "UPDATE workflow_runs SET execution_configuration_json=?, execution_configuration_revision=execution_configuration_revision+1,"
-                    " validated_configuration_revision=NULL,updated_at=?,revision=revision+1 WHERE run_id=?",
-                    (canonical_json(configuration), now, run["run_id"]),
+                    "UPDATE workflow_runs SET buddy_json=?, buddy_revision=buddy_revision+1,"
+                    " validated_buddy_revision=NULL,updated_at=?,revision=revision+1 WHERE run_id=?",
+                    (canonical_json(buddy), now, run["run_id"]),
                 )
-                connection.execute("UPDATE tasks SET adapter=?,queue_reason='awaiting-configuration-validation' WHERE task_id=?",
-                                   (configuration["adapter"], run["run_id"]))
+                connection.execute("UPDATE tasks SET adapter=?,queue_reason='awaiting-buddy-validation' WHERE task_id=?",
+                                   (buddy["adapter"], run["run_id"]))
                 self.board._append_event(connection, "workflow.routing_resolved", task_id=run["run_id"],
-                                         payload={"decisionId": decision_id, "configuration": configuration,
-                                                  "profileId": decision["profile_id"],
+                                         payload={"decisionId": decision_id, "buddy": buddy,
+                                                  "buddyId": decision["buddy_id"],
                                                   "source": selection_source(json.loads(decision["requested_json"]))})
                 return
         self._routing_attention(connection, run, now,
-                                decision["error"] or decision["reason"] or "No legal coding configuration was selected")
+                                decision["error"] or decision["reason"] or "No legal coding buddy was selected")
 
     def _routing_attention(self, connection, run, now: str, reason: str) -> None:
         """A service boundary, with no invented agent turn or completed Goal."""
@@ -1376,15 +1376,15 @@ class WorkflowCoordinator:
         request_id = f"routing-{uuid.uuid4()}"
         payload = {"source": "routing", "decisionId": run["current_routing_id"], "summary": reason,
                    "neededWork": ["读取路由边界的冻结候选和事实，指定完整合法 buddy 继续同一委派，或在列明的时间后显式 reroute=true；仅更改共享 Router 设置需要用户。"],
-                   "attempted": "Bounded model routing and native configuration validation",
+                   "attempted": "Bounded model routing and native buddy validation",
                    "acceptance": "A legal adapter/provider/model/effort tuple is ready for execution"}
         if run["current_routing_id"]:
             decision = self.board.decisions._row(connection, run["current_routing_id"])
             current = self.board.decisions._view(connection, decision, include_audit=False)
             payload.update({key: current[key] for key in (
-                "routerProfileIds", "routerIdentities", "routingMode", "routingBudget", "budget",
+                "routerBuddyIds", "routerIdentities", "routingMode", "routingBudget", "budget",
                 "routerRetryIntervalSeconds",
-                "routerProfileId", "routerProfile", "routerIndex", "decisionModel", "routerProblem",
+                "routerBuddyId", "routerBuddy", "routerIndex", "decisionModel", "routerProblem",
             ) if key in current})
             boundary = self._routing_boundary(connection, decision, run, post_transition=True, now=now)
             if boundary is not None:
@@ -1408,12 +1408,12 @@ class WorkflowCoordinator:
     @staticmethod
     def _dispatch_identity(run) -> tuple:
         return (run["owner_generation"], run["revision"], run["current_routing_id"],
-                run["execution_configuration_revision"], run["execution_configuration_json"])
+                run["buddy_revision"], run["buddy_json"])
 
     def prepare_dispatch(self, params: dict) -> None:
         """Validate each new resolved tuple once, outside write transactions.
 
-        Persist the exact configuration revision under a snapshot fence. Polls do
+        Persist the exact buddy revision under a snapshot fence. Polls do
         not repeat native discovery while waiting for capacity; the adapter's own
         prepare/readback is still the final native check at actual process start.
         """
@@ -1421,20 +1421,20 @@ class WorkflowCoordinator:
         with self.db.read() as connection:
             runs = connection.execute(
                 "SELECT r.* FROM workflow_runs r JOIN tasks t ON t.task_id=r.run_id"
-                " WHERE t.state='queued' AND r.state='executing' AND r.execution_configuration_json IS NOT NULL"
-                " AND r.validated_configuration_revision IS NOT r.execution_configuration_revision"
+                " WHERE t.state='queued' AND r.state='executing' AND r.buddy_json IS NOT NULL"
+                " AND r.validated_buddy_revision IS NOT r.buddy_revision"
                 + (" AND r.run_id=?" if selector else " ORDER BY t.created_at,t.task_id LIMIT 50"),
                 (selector,) if selector else (),
             ).fetchall()
         for run in runs:
-            configuration = self._configuration(run)
-            if configuration.get("adapter") not in schemas.CODING_ADAPTERS:
+            buddy = self._buddy(run)
+            if buddy.get("adapter") not in schemas.CODING_ADAPTERS:
                 continue
             try:
-                self._require_permission(configuration, json.loads(run["execution_workspace_json"])["access"])
-                checked = self._validated_configuration(configuration)
-                if checked != configuration:
-                    raise BoardError("INVALID_CONFIGURATION", "The installed native tuple changed; choose a current configuration")
+                self._require_permission(buddy, json.loads(run["execution_workspace_json"])["access"])
+                checked = self._validated_buddy(buddy)
+                if checked != buddy:
+                    raise BoardError("INVALID_BUDDY", "The installed native tuple changed; choose a current buddy")
             except BoardError as error:
                 with self.db.write() as connection:
                     current = self._run_row(connection, run["run_id"])
@@ -1448,11 +1448,11 @@ class WorkflowCoordinator:
                 with self.db.write() as connection:
                     current = self._run_row(connection, run["run_id"])
                     if (current["state"] == "executing" and self._dispatch_identity(current) == self._dispatch_identity(run)
-                            and current["validated_configuration_revision"] != current["execution_configuration_revision"]):
-                        connection.execute("UPDATE workflow_runs SET validated_configuration_revision=execution_configuration_revision WHERE run_id=?", (run["run_id"],))
-                        self.board._append_event(connection, "workflow.configuration_validated", task_id=run["run_id"],
-                                                 payload={"configurationRevision": run["execution_configuration_revision"],
-                                                          "configuration": configuration})
+                            and current["validated_buddy_revision"] != current["buddy_revision"]):
+                        connection.execute("UPDATE workflow_runs SET validated_buddy_revision=buddy_revision WHERE run_id=?", (run["run_id"],))
+                        self.board._append_event(connection, "workflow.buddy_validated", task_id=run["run_id"],
+                                                 payload={"buddyRevision": run["buddy_revision"],
+                                                          "buddy": buddy})
                     head = self.board._head_of(connection)
                 self.board._notify(head)
 
@@ -1467,10 +1467,10 @@ class WorkflowCoordinator:
         manifest: dict,
         goalFingerprint: str,
         requestFingerprint: str,
-        executionConfiguration: dict | None = None,
+        buddy: dict | None = None,
         submissionToken: str | None = None,
         presentation: dict | None = None,
-        configurationLocked: bool = False,
+        buddyLocked: bool = False,
         now: str,
     ) -> str:
         """Insert the run, its reservation and its pinned input manifest.
@@ -1504,8 +1504,8 @@ class WorkflowCoordinator:
                 now,
             ),
         )
-        connection.execute("UPDATE workflow_runs SET macro_task_id=?,title=?,configuration_locked=? WHERE run_id=?",
-                           (macro_task_id, presentation.get("title"), int(configurationLocked), run_id))
+        connection.execute("UPDATE workflow_runs SET macro_task_id=?,title=?,buddy_locked=? WHERE run_id=?",
+                           (macro_task_id, presentation.get("title"), int(buddyLocked), run_id))
         if "macroTask" in presentation:
             self.board._append_event(
                 connection, "workflow.macro_task_created", task_id=run_id,
@@ -1548,14 +1548,14 @@ class WorkflowCoordinator:
                 source_task_id=None,
                 now=now,
             )
-        if executionConfiguration is None:
+        if buddy is None:
             self._start_routing(connection, run_id, now)
         else:
-            connection.execute("UPDATE workflow_runs SET execution_configuration_json=?,execution_configuration_revision=1,validated_configuration_revision=1 WHERE run_id=?",
-                               (canonical_json(executionConfiguration), run_id))
-            self.board._append_event(connection, "workflow.configuration_selected", task_id=run_id,
-                                     payload={"source": "original-explicit", "configuration": executionConfiguration,
-                                              "configurationRevision": 1})
+            connection.execute("UPDATE workflow_runs SET buddy_json=?,buddy_revision=1,validated_buddy_revision=1 WHERE run_id=?",
+                               (canonical_json(buddy), run_id))
+            self.board._append_event(connection, "workflow.buddy_selected", task_id=run_id,
+                                     payload={"source": "original-explicit", "buddy": buddy,
+                                              "buddyRevision": 1})
         return run_id
 
     def submit(self, params: dict) -> dict:
@@ -1575,7 +1575,7 @@ class WorkflowCoordinator:
         fingerprint = schemas.spec_fingerprint(spec)
         request_fingerprint = schemas.workflow_request_fingerprint(
             spec, normalized["executionWorkspace"], host_id, presentation=normalized["presentation"],
-            configuration_locked=normalized["configurationLocked"]
+            buddy_locked=normalized["buddyLocked"]
         )
 
         # Recovery first: an idempotent submit must recover the original prepared
@@ -1613,8 +1613,8 @@ class WorkflowCoordinator:
                     response["controlAvailable"] = False
                 return response
 
-        self._require_permission(schemas.configuration_constraints(spec) or None, normalized["executionWorkspace"]["access"])
-        configuration = self._validated_configuration(spec)
+        self._require_permission(schemas.buddy_constraints(spec) or None, normalized["executionWorkspace"]["access"])
+        buddy = self._validated_buddy(spec)
         self._cleanup_fence(normalized["executionWorkspace"].get("cwd") or spec.get("cwd"))
         with self._submission_preparation(request_id, normalized["executionWorkspace"]) as prepared:
             manifest = prepared["manifest"]
@@ -1637,9 +1637,9 @@ class WorkflowCoordinator:
                             "goalFingerprint": fingerprint,
                             "requestFingerprint": request_fingerprint,
                             "submissionToken": submission_token,
-                            "executionConfiguration": configuration,
+                            "buddy": buddy,
                             "presentation": normalized["presentation"],
-                            "configurationLocked": normalized["configurationLocked"],
+                            "buddyLocked": normalized["buddyLocked"],
                         },
                     )
                 except BoardError as error:
@@ -1858,7 +1858,7 @@ class WorkflowCoordinator:
                         else {"resolved": "completed", "needs-host": "needs-host", "fenced": "fenced"}[row["state"]]
                     ),
                     "taskId": row["decision_task_id"],
-                    "selectedProfile": json.loads(row["selected_json"]) if row["selected_json"] else None,
+                    "selectedBuddy": json.loads(row["selected_json"]) if row["selected_json"] else None,
                     "source": selection_source(requested),
                     "reason": row["reason"] or row["decision_reason"],
                     "createdAt": row["created_at"],
@@ -2024,8 +2024,8 @@ class WorkflowCoordinator:
                 request_row = self._request_row(connection, run_id, request_id)
                 if json.loads(request_row["payload_json"]).get("source") == "routing":
                     raise BoardError(
-                        "CONFIGURATION_REQUIRED",
-                        "Resolve this routing boundary with a complete buddy configuration or explicit reroute on the same goal; only changing shared Router settings needs the user",
+                        "BUDDY_REQUIRED",
+                        "Resolve this routing boundary with a complete buddy buddy or explicit reroute on the same goal; only changing shared Router settings needs the user",
                         routingBoundary=self._request_view(request_row, connection=connection).get("routingBoundary"),
                     )
                 if request_row["state"] != "open":
@@ -2208,14 +2208,14 @@ class WorkflowCoordinator:
             shared_locks = (locks, set())
             try:
                 for helper in helpers:
-                    self._require_permission(schemas.configuration_constraints(helper["spec"]) or None, helper["executionWorkspace"]["access"])
-                    configuration = self._validated_configuration(helper["spec"])
+                    self._require_permission(schemas.buddy_constraints(helper["spec"]) or None, helper["executionWorkspace"]["access"])
+                    buddy = self._validated_buddy(helper["spec"])
                     self._cleanup_fence(helper["executionWorkspace"].get("cwd") or helper["spec"].get("cwd"))
                     allocation = preparations.enter_context(self._submission_preparation(
                         helper["requestId"], helper["executionWorkspace"], shared_locks=shared_locks))
                     prepared.append({**helper, "manifest": allocation["manifest"],
                                      "newAllocation": allocation["newAllocation"],
-                                     "executionConfiguration": configuration})
+                                     "buddy": buddy})
                 yield prepared
             except Exception as error:
                 cleanups = []
@@ -2252,8 +2252,8 @@ class WorkflowCoordinator:
             active = self._open_boundary(connection, run_row)
             if json.loads(request_row["payload_json"]).get("source") == "routing":
                 raise BoardError(
-                    "CONFIGURATION_REQUIRED",
-                    "Resolve this routing boundary with a complete buddy configuration or explicit reroute on the same goal; only changing shared Router settings needs the user",
+                    "BUDDY_REQUIRED",
+                    "Resolve this routing boundary with a complete buddy buddy or explicit reroute on the same goal; only changing shared Router settings needs the user",
                     routingBoundary=self._request_view(request_row, connection=connection).get("routingBoundary"),
                 )
             if request_row["state"] != "open" or active is None or active["request_id"] != request_id:
@@ -2508,14 +2508,14 @@ class WorkflowCoordinator:
                     now,
                 ),
             )
-            if item["executionConfiguration"] is None:
+            if item["buddy"] is None:
                 self._start_routing(connection, helper_task_id, now)
             else:
-                connection.execute("UPDATE workflow_runs SET execution_configuration_json=?,execution_configuration_revision=1,validated_configuration_revision=1 WHERE run_id=?",
-                                   (canonical_json(item["executionConfiguration"]), helper_task_id))
-                self.board._append_event(connection, "workflow.configuration_selected", task_id=helper_task_id,
-                                         payload={"source": "original-explicit", "configuration": item["executionConfiguration"],
-                                                  "configurationRevision": 1})
+                connection.execute("UPDATE workflow_runs SET buddy_json=?,buddy_revision=1,validated_buddy_revision=1 WHERE run_id=?",
+                                   (canonical_json(item["buddy"]), helper_task_id))
+                self.board._append_event(connection, "workflow.buddy_selected", task_id=helper_task_id,
+                                         payload={"source": "original-explicit", "buddy": item["buddy"],
+                                                  "buddyRevision": 1})
             children.append(
                 {
                     "taskId": helper_task_id,
@@ -2634,50 +2634,50 @@ class WorkflowCoordinator:
         return self._target_run(connection, owner, target_id)
 
     @staticmethod
-    def _configuration_matches_goal(run, configuration: dict | None) -> None:
-        if configuration is None or not run["configuration_locked"]:
+    def _buddy_matches_goal(run, buddy: dict | None) -> None:
+        if buddy is None or not run["buddy_locked"]:
             return
-        constraints = schemas.configuration_constraints(json.loads(run["goal_json"]))
-        mismatches = [key for key, value in constraints.items() if configuration.get(key) != value]
+        constraints = schemas.buddy_constraints(json.loads(run["goal_json"]))
+        mismatches = [key for key, value in constraints.items() if buddy.get(key) != value]
         if mismatches:
-            raise BoardError("CONFIGURATION_CONFLICT", "configuration must preserve the original Goal's hard constraints; submit a new Goal to change them",
+            raise BoardError("BUDDY_CONFLICT", "buddy must preserve the original Goal's hard constraints; submit a new Goal to change them",
                              fields=mismatches)
 
     @staticmethod
-    def _require_enabled_override(connection, configuration):
+    def _require_enabled_override(connection, buddy):
         """Recheck current availability and the user's independent enabled gate.
 
         ADR-027: catalog facts — including the one bounded re-read — were already
-        applied by ``_validated_configuration`` outside the write transaction.
+        applied by ``_validated_buddy`` outside the write transaction.
         A concurrent confirmed absence must still fence the write, without any
         native call here. Neither a refresh nor the override flips enablement.
         """
-        if configuration is None:
+        if buddy is None:
             return
         row = connection.execute(
-            "SELECT enabled,available FROM evaluation_profiles WHERE adapter=? AND provider=? AND model=? AND effort=?",
-            tuple(configuration[key] for key in schemas.CONFIGURATION_FIELDS),
+            "SELECT enabled,available FROM buddies WHERE adapter=? AND provider=? AND model=? AND effort=?",
+            tuple(buddy[key] for key in schemas.BUDDY_FIELDS),
         ).fetchone()
         from ..catalog.catalog import CATALOG_REMEDY, CATALOG_UNAVAILABLE_REASON, catalog_read_at
 
-        read_at = catalog_read_at(connection, configuration["adapter"])
+        read_at = catalog_read_at(connection, buddy["adapter"])
         if row is not None and not row["available"]:
-            details = {"configuration": configuration, "reason": CATALOG_UNAVAILABLE_REASON, "remedy": CATALOG_REMEDY}
+            details = {"buddy": buddy, "reason": CATALOG_UNAVAILABLE_REASON, "remedy": CATALOG_REMEDY}
             if read_at:
                 details["catalogReadAt"] = read_at
-            raise BoardError("CONFIGURATION_UNAVAILABLE", "The requested native model route is no longer available", **details)
+            raise BoardError("BUDDY_UNAVAILABLE", "The requested native model route is no longer available", **details)
         if row is not None and row["enabled"]:
             return
         details = {
-            "configuration": configuration,
+            "buddy": buddy,
             "enabled": False,
             "reason": "not-enabled",
-            "remedy": f"Enable this model profile for the Host override; {CATALOG_REMEDY} only re-reads the catalog and never enables a profile",
+            "remedy": f"Enable this model buddy for the Host override; {CATALOG_REMEDY} only re-reads the catalog and never enables a buddy",
         }
         if read_at:
             details["catalogReadAt"] = read_at
-        raise BoardError("CONFIGURATION_UNAVAILABLE",
-                         "A Host override must name a model profile the user enabled; the catalog route itself is admitted",
+        raise BoardError("BUDDY_UNAVAILABLE",
+                         "A Host override must name a model buddy the user enabled; the catalog route itself is admitted",
                          **details)
 
     def continue_run(self, params: dict, *, console_authority: dict | None = None) -> dict:
@@ -2691,7 +2691,7 @@ class WorkflowCoordinator:
                 "input",
                 "helperPolicy",
                 "reason",
-                "configuration",
+                "buddy",
                 "reroute",
                 "access",
                 "accessReason",
@@ -2713,18 +2713,18 @@ class WorkflowCoordinator:
         reason = schemas.optional_string(params, "reason", max_length=schemas.MAX_WORKFLOW_REASON_BYTES) or ""
         reroute = schemas.optional_bool(params, "reroute", False)
         access_selection = schemas.normalize_access(params) if "access" in params or "accessReason" in params else None
-        supplied_configuration = schemas.normalize_configuration(params["configuration"]) if "configuration" in params else None
-        if supplied_configuration is not None and reroute:
-            raise BoardError("INVALID_ARGUMENT", "configuration and reroute are mutually exclusive")
-        if supplied_configuration is not None and not reason:
-            raise BoardError("INVALID_ARGUMENT", "a Host configuration override requires an explicit reason")
+        supplied_buddy = schemas.normalize_buddy(params["buddy"]) if "buddy" in params else None
+        if supplied_buddy is not None and reroute:
+            raise BoardError("INVALID_ARGUMENT", "buddy and reroute are mutually exclusive")
+        if supplied_buddy is not None and not reason:
+            raise BoardError("INVALID_ARGUMENT", "a Host buddy override requires an explicit reason")
         request_key = {
             "runId": run_id,
             "targetRunId": target_id,
             "expectedRevision": expected,
             "inputSha256": sha256_text(input_text),
             "helperPolicy": policy,
-            "configuration": supplied_configuration,
+            "buddy": supplied_buddy,
             "reason": reason,
             "reroute": reroute,
             **({"access": access_selection[0], "accessReason": access_selection[1]} if access_selection else {}),
@@ -2739,16 +2739,16 @@ class WorkflowCoordinator:
                 return {**receipt, "duplicate": True}
             self._expect_revision(run, expected)
             target_snapshot = self._continuation_target(connection, run, target_id)
-            self._configuration_matches_goal(target_snapshot, supplied_configuration)
+            self._buddy_matches_goal(target_snapshot, supplied_buddy)
             current_choice = json.loads(target_snapshot["execution_workspace_json"])
-            self._require_permission(supplied_configuration if supplied_configuration is not None else
-                                     (None if reroute else self._configuration(target_snapshot)),
+            self._require_permission(supplied_buddy if supplied_buddy is not None else
+                                     (None if reroute else self._buddy(target_snapshot)),
                                      access_selection[0] if access_selection else current_choice["access"])
         # ADR-027 rule 3: an explicit override meets the same catalog facts as a
         # submission — one bounded re-read of its harness before any catalog
         # rejection — and only afterwards the user's independent enabled gate,
         # which is re-checked inside the write transaction below.
-        configuration = self._validated_configuration(supplied_configuration) if supplied_configuration is not None else None
+        buddy = self._validated_buddy(supplied_buddy) if supplied_buddy is not None else None
         now = self.now()
         with self.db.write() as connection:
             owner = self._run_row(connection, owner_run_id)
@@ -2759,8 +2759,8 @@ class WorkflowCoordinator:
             self._expect_revision(owner, expected)
             run_row = self._continuation_target(connection, owner, target_id)
             self._expect_revision(run_row, target_snapshot["revision"])
-            self._configuration_matches_goal(run_row, configuration)
-            self._require_enabled_override(connection, configuration)
+            self._buddy_matches_goal(run_row, buddy)
+            self._require_enabled_override(connection, buddy)
             current_workspace = json.loads(run_row["execution_workspace_json"])
             next_access, next_reason = access_selection or (current_workspace["access"], current_workspace.get("accessReason"))
             run_id = run_row["run_id"]
@@ -2773,11 +2773,11 @@ class WorkflowCoordinator:
                 raise BoardError("CONFLICT", "This goal's checkout is being cleaned or has been removed")
             self._require_routing_stopped(connection, run_id)
             routing = self._routing_view(connection, run_row)
-            if configuration is None and not reroute and (
-                    self._configuration(run_row) is None or routing["status"] in ("needs-host", "fenced")):
+            if buddy is None and not reroute and (
+                    self._buddy(run_row) is None or routing["status"] in ("needs-host", "fenced")):
                 raise BoardError(
-                    "CONFIGURATION_REQUIRED",
-                    "Continue the same goal with a complete buddy configuration, or explicitly reroute at the boundary's retry time; only changing shared Router settings needs the user",
+                    "BUDDY_REQUIRED",
+                    "Continue the same goal with a complete buddy buddy, or explicitly reroute at the boundary's retry time; only changing shared Router settings needs the user",
                     routingBoundary=routing.get("routingBoundary"),
                 )
             live_helpers = sum(
@@ -2869,24 +2869,24 @@ class WorkflowCoordinator:
                         revision=run_row["revision"] + 1,
                         payload={"previousAccess": current_workspace["access"], "access": next_access,
                                  "accessReason": next_reason, "actor": actor, "continuationId": continuation_id})
-            if configuration is not None:
-                connection.execute("UPDATE workflow_runs SET execution_configuration_json=?,current_routing_id=NULL,"
-                                   "execution_configuration_revision=execution_configuration_revision+1,"
-                                   "validated_configuration_revision=execution_configuration_revision+1 WHERE run_id=?",
-                                   (canonical_json(configuration), run_id))
-                connection.execute("UPDATE tasks SET adapter=? WHERE task_id=?", (configuration["adapter"], run_id))
+            if buddy is not None:
+                connection.execute("UPDATE workflow_runs SET buddy_json=?,current_routing_id=NULL,"
+                                   "buddy_revision=buddy_revision+1,"
+                                   "validated_buddy_revision=buddy_revision+1 WHERE run_id=?",
+                                   (canonical_json(buddy), run_id))
+                connection.execute("UPDATE tasks SET adapter=? WHERE task_id=?", (buddy["adapter"], run_id))
                 updated_run = self._run_row(connection, run_id)
                 self.board._append_event(
-                    connection, "workflow.configuration_overridden", task_id=run_id,
+                    connection, "workflow.buddy_overridden", task_id=run_id,
                     payload={"source": "host-override", "actor": actor, "reason": reason,
-                             "configuration": configuration,
-                             "configurationRevision": updated_run["execution_configuration_revision"]},
+                             "buddy": buddy,
+                             "buddyRevision": updated_run["buddy_revision"]},
                 )
             elif reroute:
                 # The durable continuation event below records the intent. No Router
                 # is allowed to inspect the previous turn's input while preparation waits.
-                connection.execute("UPDATE workflow_runs SET execution_configuration_json=NULL,"
-                                   " current_routing_id=NULL,validated_configuration_revision=NULL WHERE run_id=?", (run_id,))
+                connection.execute("UPDATE workflow_runs SET buddy_json=NULL,"
+                                   " current_routing_id=NULL,validated_buddy_revision=NULL WHERE run_id=?", (run_id,))
                 connection.execute("UPDATE tasks SET adapter='unresolved',queue_reason='awaiting-workspace-preparation'"
                                    " WHERE task_id=?", (run_id,))
             if run_id != owner_run_id:
@@ -3153,7 +3153,7 @@ class WorkflowCoordinator:
                 if self._cancel_routes(connection, owned_id, "Host takeover fenced model selection", now):
                     owned = self._run_row(connection, owned_id)
                     if owned["state"] == "executing":
-                        self._routing_attention(connection, owned, now, "Host takeover interrupted model selection; wait for its confirmed stop, then choose a configuration or reroute")
+                        self._routing_attention(connection, owned, now, "Host takeover interrupted model selection; wait for its confirmed stop, then choose a buddy or reroute")
             self.board._append_event(
                 connection,
                 "workflow.takeover",
@@ -5558,11 +5558,11 @@ class WorkflowCoordinator:
         if ancestor is not None:
             return f"workflow-ancestor-{ancestor['state']}"
         if run_row["state"] == "executing":
-            configuration = self._configuration(run_row)
-            if configuration is None:
+            buddy = self._buddy(run_row)
+            if buddy is None:
                 return "awaiting-model-selection"
-            if configuration.get("adapter") in schemas.CODING_ADAPTERS and run_row["validated_configuration_revision"] != run_row["execution_configuration_revision"]:
-                return "awaiting-configuration-validation"
+            if buddy.get("adapter") in schemas.CODING_ADAPTERS and run_row["validated_buddy_revision"] != run_row["buddy_revision"]:
+                return "awaiting-buddy-validation"
             if any(not self._stop_proven(connection, task) for task in self._routing_tasks(connection, run_row["run_id"])):
                 return "awaiting-routing-shutdown"
             continuation = connection.execute(
@@ -5758,7 +5758,7 @@ class WorkflowCoordinator:
         resume_mode = "initial" if turn_index == 1 else "reconstructed-new-session"
         manifest = json.loads(run_row["workspace_manifest_json"]) if run_row["workspace_manifest_json"] else {}
         execution_workspace = self._turn_workspace(connection, run_row, manifest, continuation, turn_index)
-        configuration = self._configuration(run_row)
+        buddy = self._buddy(run_row)
         native = self._previous_codex_checkpoint(connection, previous)
         previous_session = previous["session_id"] if previous is not None else None
         if native is not None:
@@ -5770,21 +5770,21 @@ class WorkflowCoordinator:
         harness_changed = False
         native_home_changed = False
         permission_reconstruction = False
-        if previous is not None and native_completed and previous_session and configuration:
+        if previous is not None and native_completed and previous_session and buddy:
             previous_input = json.loads(previous["input_json"])
-            if previous_input.get("context", {}).get("executionConfiguration") == configuration:
-                executor = self._execution_adapter(configuration["adapter"])
+            if previous_input.get("context", {}).get("buddy") == buddy:
+                executor = self._execution_adapter(buddy["adapter"])
                 from ..service.harness_health import read_health
-                health = read_health(connection, configuration['adapter'])
+                health = read_health(connection, buddy['adapter'])
                 prior = connection.execute('SELECT result_json FROM attempts WHERE attempt_id=?', (previous['attempt_id'],)).fetchone()
                 result = json.loads(prior['result_json'] or '{}') if prior else {}
                 history = result.get('harnessAttempts') or result.get('result', {}).get('harnessAttempts') or []
                 old_version = history[-1].get('harness', {}).get('version') if history else None
                 harness_changed = bool(old_version and health.get('version') and old_version != health['version'])
                 native_session = (result.get('result') or result).get('nativeSession') or {}
-                native_home_changed = (configuration['adapter'] == 'codex'
+                native_home_changed = (buddy['adapter'] == 'codex'
                                        and native_session.get('storageOwner') != 'harness-user-store'
-                                       or configuration['adapter'] == 'dsh'
+                                       or buddy['adapter'] == 'dsh'
                                        and native_session.get('storageOwner') != 'buddy-goal')
                 permission_reconstruction = (executor.native_resume
                                              and previous["access"] != execution_workspace["access"]
@@ -5814,7 +5814,7 @@ class WorkflowCoordinator:
         if harness_changed:
             context['resumeReason'] = 'harness-version-changed'
         elif native_home_changed:
-            context['resumeReason'] = ('native-storage-changed' if configuration['adapter'] == 'codex'
+            context['resumeReason'] = ('native-storage-changed' if buddy['adapter'] == 'codex'
                                        else 'private-native-home-required')
         elif permission_reconstruction:
             context['resumeReason'] = 'permission-level-changed'
@@ -5889,7 +5889,7 @@ class WorkflowCoordinator:
         return {
             "turnId": turn_id,
             "turnIndex": turn_index,
-            "executionConfiguration": self._configuration(run_row),
+            "buddy": self._buddy(run_row),
             "resumeMode": resume_mode,
             "inputSha256": sha256_text(input_json),
             "input": turn_input,
@@ -6246,13 +6246,13 @@ class WorkflowCoordinator:
             "taskTruncated": len(task_text) > 8000,
             "taskId": run_row["run_id"],
             "turnIndex": turn_index,
-            "executionConfiguration": self._configuration(run_row),
+            "buddy": self._buddy(run_row),
             # The frozen routing identity of this turn: the decision that produced this
-            # exact execution configuration. Null means the configuration was explicit;
+            # exact buddy. Null means the buddy was explicit;
             # it is never inferred later from the current run, timestamps or model names.
             "routing": {
                 "decisionId": run_row["current_routing_id"],
-                "executionConfigurationRevision": int(run_row["execution_configuration_revision"]),
+                "buddyRevision": int(run_row["buddy_revision"]),
             },
         }
         original = connection.execute("SELECT manifest_json FROM workflow_artifacts WHERE run_id=? AND kind='input' ORDER BY rowid LIMIT 1", (run_row["run_id"],)).fetchone()
@@ -6720,7 +6720,7 @@ class WorkflowCoordinator:
             "neededWork": _string_list(request.get("neededWork")),
             "expectedArtifacts": _string_list(request.get("expectedArtifacts")),
             "acceptance": request.get("acceptance"),
-            "suggestedProfileId": request.get("suggestedProfileId"),
+            "suggestedBuddyId": request.get("suggestedBuddyId"),
         }
         connection.execute(
             "INSERT INTO workflow_requests(request_id, run_id, turn_id, attempt_id, kind, summary, payload_json,"

@@ -2,7 +2,7 @@ import { useRef } from "react";
 import type { MacroTaskTimeline } from "./macro-task-types";
 import type { TimelineItem } from "./macro-task-display";
 import { buildInspectorCard, type CardField, type CardLink, type InspectorCard, type InspectorSelection } from "./inspector-card";
-import type { FriendlyProfile } from "./macro-task-display";
+import type { FriendlyBuddy } from "./macro-task-display";
 
 const MISSING_TITLE = "记录在当前范围外，无法打开";
 
@@ -13,8 +13,8 @@ export type TimelineInspectorProps = {
   timeline: MacroTaskTimeline | null;
   itemsByKey: ReadonlyMap<string, TimelineItem>;
   truncatedEvents: boolean;
-  /** Snapshot profiles for friendly configuration names (0.16 0.3). */
-  profiles?: readonly FriendlyProfile[] | null;
+  /** Snapshot buddies for friendly buddy names (0.16 0.3). */
+  buddies?: readonly FriendlyBuddy[] | null;
   onOpen: (item: TimelineItem) => void;
   onSelectItem: (item: TimelineItem) => void;
   onSelectRun: (runId: string) => void;
@@ -99,7 +99,7 @@ function CardView({ card, truncatedEvents, openDisabled, openTitle, onOpen, onSe
 export function TimelineInspector(props: TimelineInspectorProps) {
   const { selection, timeline, itemsByKey } = props;
   const key = selectionKey(selection);
-  const resolved = timeline && selection ? buildInspectorCard(selection, timeline, itemsByKey, props.profiles) : null;
+  const resolved = timeline && selection ? buildInspectorCard(selection, timeline, itemsByKey, props.buddies) : null;
   // Keep the last resolvable card per selection so a truncated refresh cannot
   // silently clear pinned facts.
   const cache = useRef<{ key: string; card: InspectorCard }>({ key: "", card: null as unknown as InspectorCard });

@@ -30,10 +30,10 @@ class ReadonlyToolsProbeTests(unittest.TestCase):
         return json.loads(Path(report['packet']).read_text())
 
     def outcome(self, packet):
-        result = {**tool_receipt(packet['binding'], 1), 'resolved': packet['configuration'],
+        result = {**tool_receipt(packet['binding'], 1), 'resolved': packet['buddy'],
                   'usage': {'toolCalls': 1, 'bytesRead': None}, 'correctionCount': 0,
                   'processState': {'shutdownConfirmed': True},
-                  'rawAnswer': {'profileId': packet['expected']['profileId'],
+                  'rawAnswer': {'buddyId': packet['expected']['buddyId'],
                                 'reason': packet['expected']['marker'], 'evidence': []}}
         return AdapterOutcome(status='ok', result=result, shutdown_confirmed=True)
 
@@ -70,7 +70,7 @@ class ReadonlyToolsProbeTests(unittest.TestCase):
                          Path(context.environment['BUDDY_STATE_DIR']).parent)
         self.assertFalse(Path(context.environment['BUDDY_STATE_DIR']).parent.exists())
 
-    def test_changed_input_or_configuration_cannot_reuse_approval(self):
+    def test_changed_input_or_buddy_cannot_reuse_approval(self):
         self.prepared()
         (self.args.output_root / 'frozen' / 'selection-guide.txt').write_text('changed')
         self.args.execute = True
@@ -126,7 +126,7 @@ class ReadonlyToolsProbeTests(unittest.TestCase):
                 if adapter == 'dsh':
                     self.args.adapter = 'codex'
                 packet = self.prepared()
-                packet['configuration']['adapter'] = adapter
+                packet['buddy']['adapter'] = adapter
                 packet['systemSandbox'] = probe.system_sandbox(adapter)
                 outcome = self.outcome(packet)
                 for event in outcome.result['toolEvidence']['events']:

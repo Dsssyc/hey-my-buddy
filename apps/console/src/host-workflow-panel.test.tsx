@@ -28,22 +28,22 @@ function workflow(overrides: Partial<Workflow> = {}): Workflow {
   return {
     governed: true, runId: "parent", hostId: "host-a", ownerGeneration: 2, revision: 7,
     state: "failed", awaitingHost: false, waitReason: "the run was cancelled", continuationCount: 0,
-    configurationLocked: false,
+    buddyLocked: false,
     hostConclusion: {
       conclusionId: "concl-1", attemptId: "attempt-2", executionStatus: "failed",
       note: "额度耗尽前已把改动提取为部分成果", evidence: ["部分成果已封存", "检出内容已保留"],
       artifactId: "art-partial", integrationId: null, actor: "host-a",
       createdAt: "2026-09-29T09:00:00.000Z", ownerGeneration: 2, runRevision: 7,
     },
-    executionConfiguration: { adapter: "dsh", provider: "deepseek-official", model: "deepseek-flash", effort: "max" },
-    executionConfigurationRevision: 2,
+    buddy: { adapter: "dsh", provider: "deepseek-official", model: "deepseek-flash", effort: "max" },
+    buddyRevision: 2,
     shutdown: { selfConfirmed: true, descendantsConfirmed: true, unconfirmedRunIds: [], unconfirmedCount: 0, truncated: false },
     workspace: { path: "/repo", kind: "existing", access: "write", inputCommit: "input-commit", manifestSha256: "manifest-a" },
     currentTurn: { turnId: "turn-2", turnIndex: 2, attemptId: "attempt-2", resumeMode: "initial", summary: "额度耗尽", tokenUsage: null },
     turns: [
-      { turnId: "turn-2", turnIndex: 2, attemptId: "attempt-2", executionConfiguration: { adapter: "codex", provider: "openai", model: "gpt-5-codex", effort: "high" }, tokenUsage: {
+      { turnId: "turn-2", turnIndex: 2, attemptId: "attempt-2", buddy: { adapter: "codex", provider: "openai", model: "gpt-5-codex", effort: "high" }, tokenUsage: {
         inputTokens: 20000, cachedInputTokens: 15000, outputTokens: 800, source: "codex-native", scope: "attempt" } },
-      { turnId: "turn-1", turnIndex: 1, attemptId: "attempt-1", executionConfiguration: { adapter: "dsh", provider: "deepseek-official", model: "deepseek-flash", effort: "max" }, tokenUsage: null },
+      { turnId: "turn-1", turnIndex: 1, attemptId: "attempt-1", buddy: { adapter: "dsh", provider: "deepseek-official", model: "deepseek-flash", effort: "max" }, tokenUsage: null },
     ],
     activeRequest: null,
     children: [], finalArtifactId: null, finalAttemptId: null,
@@ -61,7 +61,7 @@ function fixture(value: Workflow = workflow()) {
   const snapshot = {
     csrfToken: "fixture-csrf", eventCursor: 0,
     consoleSession: { id: "fixture-session", canWrite: true, reason: null },
-    profiles: [],
+    buddies: [],
   } as unknown as Snapshot;
   const command = vi.fn(async (op: string) => {
     if (op !== "workflow_get") throw new Error(`Unexpected mutation: ${op}`);
@@ -134,8 +134,8 @@ describe("ADR-018 Host workflow in the delegation detail", () => {
     expect(within(usage).queryByText(/35,000/)).toBeNull();
   });
 
-  it("states whether an explicit configuration is a user lock or a Host choice", async () => {
-    render(<WorkflowPanel {...fixture(workflow({ configurationLocked: true })).props} />);
+  it("states whether an explicit buddy is a user lock or a Host choice", async () => {
+    render(<WorkflowPanel {...fixture(workflow({ buddyLocked: true })).props} />);
     await screen.findByRole("region", { name: "Host 结论" });
     expect(screen.getByText(/用户要求锁定，续做时不能更换/)).toBeTruthy();
   });

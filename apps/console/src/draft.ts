@@ -6,7 +6,7 @@ import type {
   ModelService,
   Preference,
   PreferenceMode,
-  Profile,
+  Buddy,
   Configuration,
   Snapshot,
 } from "./types";
@@ -14,7 +14,7 @@ import { concurrencyLimit, modelServiceKey } from "./console-data";
 
 /** Retained identity rows the current snapshot no longer lists. */
 export type HistoryEntries = {
-  profiles?: Profile[];
+  buddies?: Buddy[];
   preferences?: Preference[];
   modelServiceNotes?: ModelServiceNote[];
   modelServiceConcurrency?: ModelServiceConcurrencyEntry[];
@@ -25,7 +25,7 @@ const modelServiceOf = (row: ModelService): ModelService =>
 
 export function makeDraft(snapshot: Snapshot): Draft {
   return structuredClone({
-    profiles: snapshot.profiles,
+    buddies: snapshot.buddies,
     preferences: snapshot.preferences,
     modelServiceNotes: snapshot.modelServiceNotes ?? [],
     configuration: snapshot.configuration,
@@ -68,16 +68,16 @@ export function modelServiceNoteText(
 }
 
 /** An empty mode clears this buddy's preference. */
-export function setPreference(draft: Draft, profileId: string, mode: PreferenceMode | "", reason = ""): Draft {
-  const preferences = draft.preferences.filter(p => p.profileId !== profileId);
-  if (mode) preferences.push({ profileId, mode, reason });
+export function setPreference(draft: Draft, buddyId: string, mode: PreferenceMode | "", reason = ""): Draft {
+  const preferences = draft.preferences.filter(p => p.buddyId !== buddyId);
+  if (mode) preferences.push({ buddyId, mode, reason });
   return { ...draft, preferences };
 }
 
-function addMissing<T extends { profileId: string }>(current: T[], extra: T[] | undefined): T[] {
+function addMissing<T extends { buddyId: string }>(current: T[], extra: T[] | undefined): T[] {
   if (!extra?.length) return current;
-  const known = new Set(current.map((entry) => entry.profileId));
-  const added = extra.filter((entry) => !known.has(entry.profileId) && (known.add(entry.profileId), true));
+  const known = new Set(current.map((entry) => entry.buddyId));
+  const added = extra.filter((entry) => !known.has(entry.buddyId) && (known.add(entry.buddyId), true));
   return added.length ? [...current, ...added] : current;
 }
 
@@ -91,7 +91,7 @@ function addMissingModelServices<T extends ModelService>(
   return added.length ? [...current, ...added] : current;
 }
 
-type UserRows = Pick<Draft, "profiles" | "preferences" | "modelServiceNotes">
+type UserRows = Pick<Draft, "buddies" | "preferences" | "modelServiceNotes">
   & { modelServiceConcurrency?: ModelServiceConcurrencySetting[] };
 
 /**
@@ -110,7 +110,7 @@ export function withHistory<T extends UserRows>(
   );
   return {
     ...source,
-    profiles: addMissing(source.profiles, entries.profiles),
+    buddies: addMissing(source.buddies, entries.buddies),
     preferences: addMissing(source.preferences, entries.preferences),
     modelServiceNotes: addMissingModelServices(source.modelServiceNotes, entries.modelServiceNotes),
     modelServiceConcurrency: addMissingModelServices(source.modelServiceConcurrency ?? [], retainedSettings),
@@ -165,58 +165,58 @@ export function modelServiceConcurrencyChanges(
   return changed.sort(byModelService);
 }
 
-/** The only fields a human may publish; program-owned profile/catalog fields stay out. */
-export type ProfileSettingPatch = { profileId: string; enabled: boolean };
+/** The only fields a human may publish; program-owned buddy/catalog fields stay out. */
+export type BuddySettingPatch = { buddyId: string; enabled: boolean };
 /** One buddy's preference; `mode: null` clears it. */
-export type PreferenceChangePatch = { profileId: string; mode: PreferenceMode | null; reason: string };
+export type PreferenceChangePatch = { buddyId: string; mode: PreferenceMode | null; reason: string };
 /** Model service note patch; `text: ""` clears the note. */
 export type ModelServiceNoteChangePatch = ModelService & { text: string };
 
 export type UserPolicyPublication = {
   commandId: string;
-  profileSettings?: ProfileSettingPatch[];
+  buddySettings?: BuddySettingPatch[];
   preferenceChanges?: PreferenceChangePatch[];
   modelServiceNoteChanges?: ModelServiceNoteChangePatch[];
   configuration?: Partial<Pick<Configuration,
-    "routerProfileIds" | "routerRetryIntervalSeconds" | "defaultRoutingMode" | "routingBudget">>;
+    "routerBuddyIds" | "routerRetryIntervalSeconds" | "defaultRoutingMode" | "routingBudget">>;
   /** Limit patches per model service; the board refuses any `active` occupancy here. */
   modelServiceConcurrency?: ModelServiceConcurrencySetting[];
 };
 
 type UserEditable = Pick<
   Draft,
-  "profiles" | "preferences" | "modelServiceNotes" | "configuration" | "modelServiceConcurrency"
+  "buddies" | "preferences" | "modelServiceNotes" | "configuration" | "modelServiceConcurrency"
 >;
 
-const byProfileId = (a: { profileId: string }, b: { profileId: string }) =>
-  a.profileId.localeCompare(b.profileId);
+const byBuddyId = (a: { buddyId: string }, b: { buddyId: string }) =>
+  a.buddyId.localeCompare(b.buddyId);
 
-/** Enabled-intent changes, one patch per profile that recorded one. */
-export function profileSettings(
+/** Enabled-intent changes, one patch per buddy that recorded one. */
+export function buddySettings(
   baseline: Draft,
   draft: Draft,
-): ProfileSettingPatch[] {
-  const before = new Map(baseline.profiles.map((p) => [p.profileId, p.enabled]));
-  return draft.profiles
+): BuddySettingPatch[] {
+  const before = new Map(baseline.buddies.map((p) => [p.buddyId, p.enabled]));
+  return draft.buddies
     .filter(
-      (p) => before.get(p.profileId) !== undefined && before.get(p.profileId) !== p.enabled,
+      (p) => before.get(p.buddyId) !== undefined && before.get(p.buddyId) !== p.enabled,
     )
-    .map((p) => ({ profileId: p.profileId, enabled: p.enabled }))
-    .sort(byProfileId);
+    .map((p) => ({ buddyId: p.buddyId, enabled: p.enabled }))
+    .sort(byBuddyId);
 }
 
 /** Changes to each buddy's preference. */
 export function preferenceChanges(baseline: Draft, draft: Draft): PreferenceChangePatch[] {
-  const before = new Map(baseline.preferences.map(p => [p.profileId, p]));
-  const after = new Map(draft.preferences.map(p => [p.profileId, p]));
+  const before = new Map(baseline.preferences.map(p => [p.buddyId, p]));
+  const after = new Map(draft.preferences.map(p => [p.buddyId, p]));
   const changed: PreferenceChangePatch[] = [];
-  for (const profileId of new Set([...before.keys(), ...after.keys()])) {
-    const previous = before.get(profileId);
-    const next = after.get(profileId);
+  for (const buddyId of new Set([...before.keys(), ...after.keys()])) {
+    const previous = before.get(buddyId);
+    const next = after.get(buddyId);
     if (previous?.mode === next?.mode && (previous?.reason ?? "") === (next?.reason ?? "")) continue;
-    changed.push(next ? { profileId, mode: next.mode, reason: next.reason } : { profileId, mode: null, reason: "" });
+    changed.push(next ? { buddyId, mode: next.mode, reason: next.reason } : { buddyId, mode: null, reason: "" });
   }
-  return changed.sort(byProfileId);
+  return changed.sort(byBuddyId);
 }
 
 /** Model service note patches; `text: ""` clears the recorded note. */
@@ -240,13 +240,13 @@ export function routerListEqual(a: string[] | undefined, b: string[] | undefined
   return JSON.stringify(a ?? []) === JSON.stringify(b ?? []);
 }
 
-export const ROUTER_FIELDS = ["routerProfileIds", "defaultRoutingMode", "routerRetryIntervalSeconds"] as const;
+export const ROUTER_FIELDS = ["routerBuddyIds", "defaultRoutingMode", "routerRetryIntervalSeconds"] as const;
 
 export function routerFieldChanged(baseline: Draft, draft: Draft, field: typeof ROUTER_FIELDS[number]): boolean {
   if (!baseline.configuration || !draft.configuration) return false;
   const before = baseline.configuration[field];
   const after = draft.configuration[field];
-  return field === "routerProfileIds" ? !routerListEqual(before as string[], after as string[]) : before !== after;
+  return field === "routerBuddyIds" ? !routerListEqual(before as string[], after as string[]) : before !== after;
 }
 
 export function routingBudgetChanged(baseline: Draft, draft: Draft): boolean {
@@ -268,20 +268,20 @@ export function publication(
   draft: Draft,
   commandId: string,
 ): UserPolicyPublication {
-  const settings = profileSettings(baseline, draft);
+  const settings = buddySettings(baseline, draft);
   const preferences = preferenceChanges(baseline, draft);
   const notes = modelServiceNoteChanges(baseline, draft);
   const concurrency = modelServiceConcurrencyChanges(baseline, draft);
   return {
     commandId,
-    ...(settings.length ? { profileSettings: settings } : {}),
+    ...(settings.length ? { buddySettings: settings } : {}),
     ...(preferences.length ? { preferenceChanges: preferences } : {}),
     ...(notes.length ? { modelServiceNoteChanges: notes } : {}),
     ...(concurrency.length ? { modelServiceConcurrency: concurrency } : {}),
     ...(configurationChanged(baseline, draft)
       ? { configuration: {
-          ...(routerFieldChanged(baseline, draft, "routerProfileIds")
-            ? { routerProfileIds: draft.configuration!.routerProfileIds ?? [] } : {}),
+          ...(routerFieldChanged(baseline, draft, "routerBuddyIds")
+            ? { routerBuddyIds: draft.configuration!.routerBuddyIds ?? [] } : {}),
           ...(routerFieldChanged(baseline, draft, "routerRetryIntervalSeconds")
             ? { routerRetryIntervalSeconds: draft.configuration!.routerRetryIntervalSeconds } : {}),
           ...(routerFieldChanged(baseline, draft, "defaultRoutingMode")
@@ -300,16 +300,16 @@ export function publication(
  */
 function fingerprint(draft: UserEditable): string {
   return JSON.stringify({
-    profiles: [...draft.profiles]
-      .map(({ profileId, enabled }) => ({ profileId, enabled }))
-      .sort(byProfileId),
-    preferences: [...draft.preferences].map(({ profileId, mode, reason }) => ({ profileId, mode, reason })).sort(byProfileId),
+    buddies: [...draft.buddies]
+      .map(({ buddyId, enabled }) => ({ buddyId, enabled }))
+      .sort(byBuddyId),
+    preferences: [...draft.preferences].map(({ buddyId, mode, reason }) => ({ buddyId, mode, reason })).sort(byBuddyId),
     modelServiceNotes: draft.modelServiceNotes
       .filter((a) => a.text)
       .map((a) => ({ key: modelServiceKey(a), text: a.text }))
       .sort((a, b) => a.key.localeCompare(b.key)),
     configuration: draft.configuration ? {
-      routerProfileIds: draft.configuration.routerProfileIds ?? [],
+      routerBuddyIds: draft.configuration.routerBuddyIds ?? [],
       routerRetryIntervalSeconds: draft.configuration.routerRetryIntervalSeconds,
       defaultRoutingMode: draft.configuration.defaultRoutingMode,
       routingBudget: draft.configuration.routingBudget,
@@ -335,7 +335,7 @@ export function changeCount(baseline: Draft, draft: Draft): number {
   const concurrency = draft.modelServiceConcurrency.filter(
     (entry) => !Object.is(limits.get(modelServiceKey(entry)), entry.limit),
   ).length;
-  return profileSettings(baseline, draft).length
+  return buddySettings(baseline, draft).length
     + preferenceChanges(baseline, draft).length
     + modelServiceNoteChanges(baseline, draft).length
     + concurrency
@@ -353,8 +353,8 @@ export type RebaseConflictKind = "changed" | "unread";
 export type RebaseConflict = {
   kind: RebaseConflictKind;
   field: "enabled" | "preference" | "modelServiceNote" | "configuration" | "defaultRoutingMode" | "routingBudget" | "routerRetryIntervalSeconds" | "modelServiceConcurrency";
-  /** The profile id, or the `adapter/provider/model` of a model service field. */
-  profileId: string;
+  /** The buddy id, or the `adapter/provider/model` of a model service field. */
+  buddyId: string;
   message: string;
 };
 
@@ -377,15 +377,15 @@ const FIELD_NAMES: Record<RebaseConflict["field"], string> = {
 
 const modelServiceText = (modelService: ModelService) => `${modelService.adapter}/${modelService.provider}/${modelService.model}`;
 
-function conflictSubject(field: RebaseConflict["field"], profileId: string): string {
-  if (field === "configuration") return profileId ? `Router 列表（${profileId}）` : "Router 列表";
+function conflictSubject(field: RebaseConflict["field"], buddyId: string): string {
+  if (field === "configuration") return buddyId ? `Router 列表（${buddyId}）` : "Router 列表";
   if (field === "defaultRoutingMode") return "默认路由模式";
   if (field === "routingBudget") return "路由预算";
   if (field === "routerRetryIntervalSeconds") return "重试间隔";
   if (field === "modelServiceNote" || field === "modelServiceConcurrency") {
-    return `模型家族 ${profileId} 的${FIELD_NAMES[field]}`;
+    return `模型家族 ${buddyId} 的${FIELD_NAMES[field]}`;
   }
-  return `配置 ${profileId} 的${FIELD_NAMES[field]}`;
+  return `配置 ${buddyId} 的${FIELD_NAMES[field]}`;
 }
 
 /** Replay a local edit on the latest content; policy patches are last-write-wins. */
@@ -399,7 +399,7 @@ function merge<T>(old: T, wanted: T, fresh: T, same: (a: T, b: T) => boolean = O
  *
  * Human-owned edits are replayed on the refreshed table. Concurrent changes
  * to the same field use the local edit when it is published. A dirty field
- * whose profile (or, for a model service field, every profile of the model service) is
+ * whose buddy (or, for a model service field, every buddy of the model service) is
  * missing from the bounded snapshot stays unresolved until a fresh retained
  * history page supplies the row.
  */
@@ -414,50 +414,50 @@ export function rebaseDraft(
   const fail = (
     kind: RebaseConflictKind,
     field: RebaseConflict["field"],
-    profileId: string,
+    buddyId: string,
     detail = "",
   ) => {
-    const subject = conflictSubject(field, profileId);
+    const subject = conflictSubject(field, buddyId);
     conflicts.push({
       kind,
       field,
-      profileId,
+      buddyId,
       message: kind === "unread"
         ? `${subject} 尚待读取最新版本；草稿已保留，读取后将自动核对。`
         : `${subject} 已被其他人更改${detail}；草稿已保留，请重新加载核对。`,
     });
   };
-  const freshProfiles = new Map(nextBaseline.profiles.map((p) => [p.profileId, p]));
-  const freshModelServices = new Set(nextBaseline.profiles.map(modelServiceKey));
+  const freshBuddies = new Map(nextBaseline.buddies.map((p) => [p.buddyId, p]));
+  const freshModelServices = new Set(nextBaseline.buddies.map(modelServiceKey));
 
-  // Enabled intent: only a profile that still exists in the refreshed table can
+  // Enabled intent: only a buddy that still exists in the refreshed table can
   // be compared; a missing row is unresolved rather than silently dropped.
   const enabledOverrides = new Map<string, boolean>();
-  for (const setting of profileSettings(baseline, draft)) {
-    const fresh = freshProfiles.get(setting.profileId);
+  for (const setting of buddySettings(baseline, draft)) {
+    const fresh = freshBuddies.get(setting.buddyId);
     if (!fresh) {
-      fail("unread", "enabled", setting.profileId);
+      fail("unread", "enabled", setting.buddyId);
       continue;
     }
-    enabledOverrides.set(setting.profileId, setting.enabled);
+    enabledOverrides.set(setting.buddyId, setting.enabled);
   }
 
-  // Buddy preferences: mode and reason are merged per profile.
+  // Buddy preferences: mode and reason are merged per buddy.
   const preferenceMerges = new Map<string, Preference>();
   const preferenceRemovals = new Set<string>();
   for (const change of preferenceChanges(baseline, draft)) {
-    const profileId = change.profileId;
-    if (!freshProfiles.has(profileId)) {
-      fail("unread", "preference", profileId);
+    const buddyId = change.buddyId;
+    if (!freshBuddies.has(buddyId)) {
+      fail("unread", "preference", buddyId);
       continue;
     }
-    const oldRow = baseline.preferences.find(p => p.profileId === profileId);
-    const draftRow = draft.preferences.find(p => p.profileId === profileId);
-    const freshRow = nextBaseline.preferences.find(p => p.profileId === profileId);
+    const oldRow = baseline.preferences.find(p => p.buddyId === buddyId);
+    const draftRow = draft.preferences.find(p => p.buddyId === buddyId);
+    const freshRow = nextBaseline.preferences.find(p => p.buddyId === buddyId);
     const mode = merge(oldRow?.mode, draftRow?.mode, freshRow?.mode);
     const reason = merge(oldRow?.reason ?? "", draftRow?.reason ?? "", freshRow?.reason ?? "");
-    if (mode.value === undefined) preferenceRemovals.add(profileId);
-    else preferenceMerges.set(profileId, { profileId, mode: mode.value, reason: reason.value });
+    if (mode.value === undefined) preferenceRemovals.add(buddyId);
+    else preferenceMerges.set(buddyId, { buddyId, mode: mode.value, reason: reason.value });
   }
 
   // Model service notes: replay the local text over the refreshed value.
@@ -475,8 +475,8 @@ export function rebaseDraft(
   if (baseline.configuration && draft.configuration && nextBaseline.configuration) {
     mergedRouting = { ...nextBaseline.configuration };
     for (const field of [...ROUTER_FIELDS, "routingBudget"] as const) {
-      const changed = field === "routerProfileIds"
-        ? !routerListEqual(baseline.configuration.routerProfileIds, draft.configuration.routerProfileIds)
+      const changed = field === "routerBuddyIds"
+        ? !routerListEqual(baseline.configuration.routerBuddyIds, draft.configuration.routerBuddyIds)
         : baseline.configuration[field] !== draft.configuration[field];
       if (!changed) continue;
       const wanted = draft.configuration[field];
@@ -506,7 +506,7 @@ export function rebaseDraft(
 
   if (conflicts.length) return { draft, baseline, conflicts };
 
-  const preferences = nextBaseline.preferences.filter(p => !preferenceMerges.has(p.profileId) && !preferenceRemovals.has(p.profileId));
+  const preferences = nextBaseline.preferences.filter(p => !preferenceMerges.has(p.buddyId) && !preferenceRemovals.has(p.buddyId));
   for (const preference of preferenceMerges.values()) preferences.push(preference);
   const modelServiceNotes = nextBaseline.modelServiceNotes.filter(
     (annotation) => !mergedNotes.has(modelServiceKey(annotation)),
@@ -519,10 +519,10 @@ export function rebaseDraft(
     baseline: nextBaseline,
     draft: {
       ...nextBaseline,
-      profiles: nextBaseline.profiles.map((profile) =>
-        enabledOverrides.has(profile.profileId)
-          ? { ...profile, enabled: enabledOverrides.get(profile.profileId)! }
-          : profile,
+      buddies: nextBaseline.buddies.map((buddy) =>
+        enabledOverrides.has(buddy.buddyId)
+          ? { ...buddy, enabled: enabledOverrides.get(buddy.buddyId)! }
+          : buddy,
       ),
       preferences,
       modelServiceNotes,

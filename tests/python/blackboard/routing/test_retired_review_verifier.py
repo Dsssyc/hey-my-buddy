@@ -70,8 +70,8 @@ class RetiredVerifierServiceTests(BoardTestCase):
         with mock.patch("subprocess.Popen", side_effect=AssertionError("native process")), \
              mock.patch("subprocess.run", side_effect=AssertionError("native process")):
             for params in ({"adapter": "codex"},
-                           {"adapter": "codex", "profileId": "codex:openai:fixture-model:low"},
-                           {"adapter": "codex", "profileId": "codex:openai:fixture-model:low",
+                           {"adapter": "codex", "buddyId": "codex:openai:fixture-model:low"},
+                           {"adapter": "codex", "buddyId": "codex:openai:fixture-model:low",
                             "requestId": "review-1", "execute": True}):
                 with self.subTest(params=params), self.assertRaises(BoardError) as refused:
                     board.call("harness_verify", params)

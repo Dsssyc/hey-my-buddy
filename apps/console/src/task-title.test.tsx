@@ -37,7 +37,7 @@ function workflowValue(task: Task, overrides: Partial<Workflow> = {}): Workflow 
 }
 
 function fixture(workflow: Workflow) {
-  const snapshot = { csrfToken: "fixture-csrf", eventCursor: 0, profiles: [] } as unknown as Snapshot;
+  const snapshot = { csrfToken: "fixture-csrf", eventCursor: 0, buddies: [] } as unknown as Snapshot;
   const command = vi.fn(async (operation: string) => operation === "workflow_get" ? structuredClone(workflow) : {});
   const api = { command, task: vi.fn(async () => ({ result: null })) } as unknown as ConsoleApi;
   const onTaskUpdate = vi.fn();

@@ -5,9 +5,9 @@ import { App } from "./App";
 import { ApiError, createApi, errorText, isSessionExpiredRefusal } from "./api";
 import type { ConsoleApi } from "./api";
 import { createAuthorityLatch, sessionCanWrite } from "./console-session";
-import { FILTER_DEBOUNCE_MS } from "./use-profile-history";
+import { FILTER_DEBOUNCE_MS } from "./use-buddy-history";
 import { VIEW_PREFERENCE_PREFIX } from "./view-preferences";
-import type { ConsoleSession, Profile, Snapshot, Task, TaskQuery } from "./types";
+import type { ConsoleSession, Buddy, Snapshot, Task, TaskQuery } from "./types";
 import { listed, note, selectModel } from "./buddies/page.testing";
 import type { Workflow } from "./workflow-types";
 
@@ -15,14 +15,14 @@ const bannerNotice = /新窗口已取得写权限，此页面现在是只读/;
 const actionRefusal = /登录已失效/;
 const saveRefusal = /登录已失效/;
 
-/** Two model services and three execution configurations, all available. */
-function catalog(): Profile[] {
+/** Two model services and three execution buddies, all available. */
+function catalog(): Buddy[] {
   const entries = [
     { adapter: "dsh", provider: "deepseek-official", model: "deepseek-flash", effort: "off", enabled: true },
     { adapter: "dsh", provider: "deepseek-official", model: "deepseek-flash", effort: "max", enabled: true },
     { adapter: "zcode", provider: "bigmodel-api", model: "GLM-5.3", effort: "high", enabled: false },
   ];
-  return entries.map(p => ({ ...p, profileId: [p.adapter, p.provider, p.model, p.effort].join(":"),
+  return entries.map(p => ({ ...p, buddyId: [p.adapter, p.provider, p.model, p.effort].join(":"),
     label: `${p.model} · ${p.effort}`, available: true, capabilities: [], contextWindow: null,
     source: "catalog:fixture", description: "" }));
 }
@@ -35,7 +35,7 @@ function goal(runId: string, task: string, extra: Partial<Task> = {}): Task {
     workflow: { state: "executing", awaitingHost: false, hostId: "current-host", ownerGeneration: 2, revision: 1 },
     delegation: { kind: "goal", sourceHostId: "codex-source", currentHostId: "current-host", parentRunId: null, rootRunId: runId,
       project: { id: "fixture-project", label: "fixture-project", path: "/source/fixture-project" },
-      configuration: { adapter: "dsh", provider: "deepseek-official", model: "deepseek-flash", effort: "off" } },
+      buddy: { adapter: "dsh", provider: "deepseek-official", model: "deepseek-flash", effort: "off" } },
     ...extra };
 }
 
@@ -68,13 +68,13 @@ function fixture(options: {
   script?: Script; records?: Task[]; workflows?: Map<string, Workflow>; failAfter?: number;
   failWith?: unknown;
 } = {}) {
-  const profiles = catalog();
+  const buddies = catalog();
   let state: Snapshot = {
     csrfToken: "csrf", eventCursor: 0, consoleSession: session(),
 
-    configuration: { routerProfileIds: [flashOff], routerRetryIntervalSeconds: 600, defaultRoutingMode: "review" as const, routingBudget: "standard"},
-    profiles,
-    unavailableProfileCount: 1,
+    configuration: { routerBuddyIds: [flashOff], routerRetryIntervalSeconds: 600, defaultRoutingMode: "review" as const, routingBudget: "standard"},
+    buddies,
+    unavailableBuddyCount: 1,
 
     modelServiceNotes: [{ adapter: "dsh", provider: "deepseek-official", model: "deepseek-flash", text: "原人工意见", updatedAt: null }],
     preferences: [], decisions: [],
@@ -106,12 +106,12 @@ function fixture(options: {
       if (!value) throw new Error(`Unknown run: ${String(params.runId)}`);
       return structuredClone(value);
     }
-    if (operation === "model_profiles") {
-      return { profiles: [], modelServiceNotes: [], preferences: [], modelServiceConcurrency: [], nextCursor: null };
+    if (operation === "buddy_list") {
+      return { buddies: [], modelServiceNotes: [], preferences: [], modelServiceConcurrency: [], nextCursor: null };
     }
     if (operation === "selection_get") {
       return { decision: { decisionId: String(params.decisionId), kind: "select", status: "completed",
-        task: "路由计算", profileId: flashOff, reason: "记录的选择依据",
+        task: "路由计算", buddyId: flashOff, reason: "记录的选择依据",
         evidence: [], createdAt: "2026-09-25T10:00:00Z" } };
     }
     throw new ApiError("FORBIDDEN", "board refused a mutation");
@@ -176,10 +176,10 @@ afterEach(() => {
 /** Builds one authenticated-snapshot envelope; `null` leaves the field out. */
 function envelope(consoleSession: unknown, include = true) {
   return {
-    configuration: { routerProfileIds: [], routerRetryIntervalSeconds: 600,
+    configuration: { routerBuddyIds: [], routerRetryIntervalSeconds: 600,
       defaultRoutingMode: "fast", routingBudget: "standard" },
 
-    profiles: [], modelServiceNotes: [], preferences: [], modelServiceConcurrency: [], tasks: { pendingCount: 0 },
+    buddies: [], modelServiceNotes: [], preferences: [], modelServiceConcurrency: [], tasks: { pendingCount: 0 },
     csrfToken: "csrf", eventCursor: 0,
     ...(include ? { consoleSession } : {}),
   };
@@ -528,8 +528,8 @@ describe("invalid login session (0.16 multi-window: no handoff UX)", () => {
   it("keeps browsing, task details and routing records readable for any logged-in session", async () => {
     const awaiting = goal("browse-task", "可浏览任务", { workflow: { state: "awaiting-host", awaitingHost: true, hostId: "current-host", ownerGeneration: 2, revision: 1 } });
     const workflows = new Map<string, Workflow>([["browse-task", workflow(awaiting, {
-      executionConfiguration: { adapter: "dsh", provider: "deepseek-official", model: "deepseek-flash", effort: "off" },
-      executionConfigurationRevision: 2,
+      buddy: { adapter: "dsh", provider: "deepseek-official", model: "deepseek-flash", effort: "off" },
+      buddyRevision: 2,
       routing: { status: "selected", decisionId: "decision-1", reason: "记录的路由原因" },
     })]]);
     const f = fixture({ records: [awaiting], workflows });
@@ -546,10 +546,10 @@ describe("invalid login session (0.16 multi-window: no handoff UX)", () => {
     await waitFor(() => expect(f.tasks).toHaveBeenLastCalledWith(expect.objectContaining({ query: "可浏览" }), expect.any(AbortSignal)));
     await user.click(screen.getByRole("link", { name: /Buddy/ }));
     await user.click(await screen.findByRole("checkbox", { name: "显示不可用 1" }));
-    await waitFor(() => expect(f.operations).toContain("model_profiles"));
+    await waitFor(() => expect(f.operations).toContain("buddy_list"));
     expect(f.operations).toContain("selection_get");
     // Only read operations were dispatched.
-    expect(f.operations.every(operation => ["selection_get", "selection_list", "model_profiles", "workflow_get"].includes(operation))).toBe(true);
+    expect(f.operations.every(operation => ["selection_get", "selection_list", "buddy_list", "workflow_get"].includes(operation))).toBe(true);
   });
 
   const failedPolls: [string, ApiError][] = [
@@ -589,7 +589,7 @@ describe("invalid login session (0.16 multi-window: no handoff UX)", () => {
     expect(within(detail).queryByRole("group", { name: "手工接续" })).toBeNull();
     // A failed poll is not a new-window takeover.
     expect(screen.queryByText(bannerNotice)).toBeNull();
-    expect(f.operations.every(operation => ["selection_get", "selection_list", "model_profiles", "workflow_get"].includes(operation))).toBe(true);
+    expect(f.operations.every(operation => ["selection_get", "selection_list", "buddy_list", "workflow_get"].includes(operation))).toBe(true);
     // The dirty model draft is preserved and its save stays disabled.
     await user.click(screen.getByRole("link", { name: /Buddy/ }));
     expect(note()).toHaveProperty("value", "原人工意见断线草稿");

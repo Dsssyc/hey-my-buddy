@@ -4,7 +4,7 @@ import unittest
 from hey_my_buddy.errors import BoardError
 from hey_my_buddy.blackboard.routing.router_boundary import build_boundary
 
-CANDIDATE = {"profileId": "dsh:fixture:model:max", "adapter": "dsh", "provider": "fixture",
+CANDIDATE = {"buddyId": "dsh:fixture:model:max", "adapter": "dsh", "provider": "fixture",
              "model": "model", "effort": "max", "contextWindow": 64000}
 RETRY = "2026-01-01T00:10:00.000Z"
 
@@ -13,7 +13,7 @@ class RouterBoundaryTests(unittest.TestCase):
     def build(self, **changes):
         return build_boundary(**(dict(kind="router-unavailable", code="router-unavailable",
             reason="Router 不可用：全部没有答案", candidates=[CANDIDATE], facts={"policyFacts": {"candidateCount": 1}},
-            router_trials=[{"profileId": "router-a", "outcome": "no_answer", "code": "timeout"}],
+            router_trials=[{"buddyId": "router-a", "outcome": "no_answer", "code": "timeout"}],
             retry_at=RETRY, decision_id="dec-1", run_id="run-1", revision=7, shutdown_confirmed=True) | changes))
 
     def test_three_boundary_natures_and_model_reason_remain_distinct(self):
@@ -31,7 +31,7 @@ class RouterBoundaryTests(unittest.TestCase):
         self.assertEqual(params["runId"], "run-1")
         self.assertEqual(params["expectedRevision"], 7)
         self.assertEqual(params["controlFile"], "<saved-control-file>")
-        self.assertEqual(params["configuration"], {key: CANDIDATE[key] for key in ("adapter", "provider", "model", "effort")})
+        self.assertEqual(params["buddy"], {key: CANDIDATE[key] for key in ("adapter", "provider", "model", "effort")})
         self.assertTrue(params["input"])
         self.assertTrue(params["reason"])
         reroute = result["commands"]["reroute"]
@@ -78,7 +78,7 @@ class RouterBoundaryTests(unittest.TestCase):
             self.assertTrue(set(template) - {"controlFile"} <= fields)
 
     def test_command_ids_are_stable_unique_bounded_and_change_with_owner_revision(self):
-        candidate_b = dict(CANDIDATE, profileId="candidate-b", model="model-b")
+        candidate_b = dict(CANDIDATE, buddyId="candidate-b", model="model-b")
         options = dict(decision_id="dec-" + "long-id" * 100, candidates=[CANDIDATE, candidate_b],
                        target_run_id="child", helper_policy="keep")
         first = self.build(**options)["commands"]
@@ -115,19 +115,19 @@ class RouterBoundaryTests(unittest.TestCase):
 
     def test_frozen_candidates_facts_and_trials_are_not_mutated_or_aliased(self):
         facts = {"policyFacts": {"candidateCount": 1}}
-        trials = [{"profileId": "router-a", "outcome": "no_answer"}]
+        trials = [{"buddyId": "router-a", "outcome": "no_answer"}]
         candidates = [dict(CANDIDATE)]
         result = self.build(facts=facts, router_trials=trials, candidates=candidates)
         result["facts"]["policyFacts"]["candidateCount"] = 99
         result["routerTrials"][0]["outcome"] = "answered"
-        result["commands"]["continue"]["choices"][0]["params"]["configuration"]["model"] = "other"
+        result["commands"]["continue"]["choices"][0]["params"]["buddy"]["model"] = "other"
         result["candidates"][0]["contextWindow"] = 1
         self.assertEqual(facts["policyFacts"]["candidateCount"], 1)
         self.assertEqual(trials[0]["outcome"], "no_answer")
         self.assertEqual(candidates[0], CANDIDATE)
 
     def test_incomplete_candidate_or_non_boolean_stop_evidence_cannot_make_a_template(self):
-        for changes in ({"candidates": [{"profileId": "partial", "adapter": "dsh"}]},
+        for changes in ({"candidates": [{"buddyId": "partial", "adapter": "dsh"}]},
                         {"shutdown_confirmed": 1}, {"revision": True}, {"kind": "failure"}):
             with self.subTest(changes=changes), self.assertRaises(BoardError):
                 self.build(**changes)

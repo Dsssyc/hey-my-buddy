@@ -72,7 +72,7 @@ OUTCOME_SCHEMA = {
              "properties": {"summary": {"type": "string"}, "attempted": {"type": "string"},
                             "neededWork": {"type": "string"}, "expectedArtifacts": STRINGS,
                             "acceptance": {"type": "string"},
-                            "suggestedProfileId": {"description": "Optional profile suggestion the Host may ignore; an explicit null means no suggestion.",
+                            "suggestedBuddyId": {"description": "Optional buddy suggestion the Host may ignore; an explicit null means no suggestion.",
                                                    "type": ["string", "null"], "maxLength": 256}}},
         ]},
     },

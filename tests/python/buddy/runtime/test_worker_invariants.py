@@ -287,7 +287,7 @@ class LiveActivityForwardTests(unittest.TestCase):
             FrozenJson,
             PrivateStatePaths,
             RunBudget,
-            RunConfiguration,
+            RunBuddy,
             RunIdentity,
             RunRequest,
             encode_run_request,
@@ -306,7 +306,7 @@ class LiveActivityForwardTests(unittest.TestCase):
         if with_request:
             request = RunRequest(
                 identity=identity, harness=harness,
-                configuration=RunConfiguration(provider="fixture-zcode", model="fixture-glm", effort="low"),
+                buddy=RunBuddy(provider="fixture-zcode", model="fixture-glm", effort="low"),
                 cwd=str(self.work),
                 private_state=PrivateStatePaths(invocation_root=str(directory),
                                                 native_root=str(directory / "native")),

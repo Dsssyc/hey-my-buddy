@@ -18,8 +18,8 @@ from buddy.harnesses.codex.fixtures.protocol_items import PROTOCOL_ITEMS, FUTURE
 
 FIXTURE = Path(__file__).parent / "fixtures" / "mock_codex.py"
 SOURCE = Path(__file__).resolve().parents[5] / "src"
-SCHEMA = {"type": "object", "additionalProperties": False, "required": ["profileId"],
-          "properties": {"profileId": {"type": "string", "enum": ["legal"]}}}
+SCHEMA = {"type": "object", "additionalProperties": False, "required": ["buddyId"],
+          "properties": {"buddyId": {"type": "string", "enum": ["legal"]}}}
 BINDING = {"adapter": "codex", "taskId": "task-1", "attemptId": "attempt-1", "generation": 3}
 ROOT = {"sessionId": "thread-1", "turnId": "turn-1"}
 
@@ -318,12 +318,12 @@ class CodexToolEventProjectionTests(unittest.TestCase):
         # projector, and a validated identity projects exactly the private
         # Python binding the evidence carries.
         from hey_my_buddy.buddy.harnesses.run_contract import (
-            PrivateStatePaths, RunBudget, RunConfiguration, RunIdentity, RunRequest,
+            PrivateStatePaths, RunBudget, RunBuddy, RunIdentity, RunRequest,
             decode_run_request, encode_run_request,
         )
         request = RunRequest(
             identity=RunIdentity(task_id="t", attempt_id="a", generation=0, invocation_id="inv"),
-            harness="codex", configuration=RunConfiguration(provider="openai", model="m", effort="low"),
+            harness="codex", buddy=RunBuddy(provider="openai", model="m", effort="low"),
             cwd="/fixture", private_state=PrivateStatePaths(invocation_root="/fixture/i", native_root="/fixture/n"),
             input_text="prompt", tool_scope="read", output_schema={},
             budget=RunBudget(timeout_seconds=8))
@@ -425,7 +425,7 @@ class CodexReviewToolEvidenceTests(unittest.TestCase):
             with self.subTest(name=name):
                 outcome, _context = self.run_review("protocol-" + name, index="protocol-" + str(index))
                 self.assertEqual(outcome.status, "ok", outcome.result)
-                self.assertEqual(json.loads(outcome.result["rawAnswer"])["profileId"], "legal")
+                self.assertEqual(json.loads(outcome.result["rawAnswer"])["buddyId"], "legal")
                 evidence = outcome.result["toolEvidence"]
                 self.assertEqual(evidence["toolCalls"], calls)
                 self.assertEqual(outcome.result["usage"]["toolCalls"], calls)
@@ -508,7 +508,7 @@ class CodexReviewToolEvidenceTests(unittest.TestCase):
     def test_failure_before_any_turn_still_carries_an_incomplete_package(self):
         outcome, context = self.run_review("no-efforts-row", index=6)
         self.assertNotEqual(outcome.status, "ok")
-        self.assertEqual(outcome.result["code"], "invalid-configuration")
+        self.assertEqual(outcome.result["code"], "invalid-buddy")
         self.assertIs(outcome.result["modelStarted"], False)
         evidence = outcome.result["toolEvidence"]
         self.assertEqual(evidence["binding"], {"adapter": "codex", "taskId": context.task_id,

@@ -1,4 +1,4 @@
-"""ADR-027 rules 2 and 3 for explicit configuration admission.
+"""ADR-027 rules 2 and 3 for explicit buddy admission.
 
 A pending model stays acceptable for an explicitly specified buddy (C02); a
 missing or unavailable route gets exactly one bounded re-read of that harness
@@ -44,7 +44,7 @@ class ExplicitCatalogTrustTests(BoardTestCase):
         self.addCleanup(lambda: catalog.register_catalog_reread(self.directory, self.service_hook))
 
     def validate(self, identity=None):
-        return catalog.validate_configuration(identity or IDENTITY, directory=self.directory)
+        return catalog.validate_buddy(identity or IDENTITY, directory=self.directory)
 
     def fail_health_then_recover(self, reason='HARNESS_HANDSHAKE_FAILED'):
         """A harness health failure, then recovery published like a real check."""
@@ -54,9 +54,9 @@ class ExplicitCatalogTrustTests(BoardTestCase):
             db.execute("UPDATE harness_health SET status='ready',expires_at=?,scan_after=? WHERE adapter='dsh'",
                        (_later(3600), _later(180)))
 
-    def listed_profile(self):
-        listed = catalog_store.profiles(self.evaluation, {'includeUnavailable': True})
-        return next(item for item in listed['profiles'] if item['profileId'] == 'dsh:fixture:alpha:max')
+    def listed_buddy(self):
+        listed = catalog_store.buddies(self.evaluation, {'includeUnavailable': True})
+        return next(item for item in listed['buddies'] if item['buddyId'] == 'dsh:fixture:alpha:max')
 
 
     def test_c02_pending_model_is_still_accepted_explicitly(self):
@@ -76,7 +76,7 @@ class ExplicitCatalogTrustTests(BoardTestCase):
         catalog.register_catalog_reread(self.directory, None)
         with self.assertRaises(BoardError) as rejected:
             self.validate()
-        self.assertEqual(rejected.exception.code, "CONFIGURATION_UNAVAILABLE")
+        self.assertEqual(rejected.exception.code, "BUDDY_UNAVAILABLE")
 
     def scan_marker(self):
         with self.board.store.db.read() as db:
@@ -101,7 +101,7 @@ class ExplicitCatalogTrustTests(BoardTestCase):
 
         catalog.register_catalog_reread(self.directory, reread)
         error = self.reject_missing()
-        self.assertEqual(error.code, "CONFIGURATION_UNAVAILABLE")
+        self.assertEqual(error.code, "BUDDY_UNAVAILABLE")
         self.assertEqual(calls, ["dsh"], "Exactly one bounded re-read of exactly that harness")
         self.assertEqual(error.details["catalogReadAt"], self.clock.value)
         self.assertEqual(error.details["remedy"], catalog.CATALOG_REMEDY)
@@ -132,7 +132,7 @@ class ExplicitCatalogTrustTests(BoardTestCase):
         catalog.register_catalog_reread(self.directory, reread)
         with self.assertRaises(BoardError) as rejected:
             self.validate({**IDENTITY, "model": "beta"})
-        self.assertEqual(rejected.exception.code, "CONFIGURATION_UNAVAILABLE")
+        self.assertEqual(rejected.exception.code, "BUDDY_UNAVAILABLE")
         self.assertEqual(rejected.exception.details["catalogReadAt"], read_at)
 
     def test_c05_a_reread_that_breaks_health_keeps_the_rejection_context(self):
@@ -199,10 +199,10 @@ class ExplicitCatalogTrustTests(BoardTestCase):
 
         catalog.register_catalog_reread(self.directory, reread)
         first = self.reject_missing()
-        self.assertEqual(first.code, "CONFIGURATION_UNAVAILABLE")
+        self.assertEqual(first.code, "BUDDY_UNAVAILABLE")
         self.assertIsNotNone(self.scan_marker(), "The failed read still claims the window")
         again = self.reject_missing()
-        self.assertEqual(again.code, "CONFIGURATION_UNAVAILABLE")
+        self.assertEqual(again.code, "BUDDY_UNAVAILABLE")
         self.assertEqual(again.details["catalogReadAt"], first.details["catalogReadAt"])
         self.assertEqual(calls, ["dsh"], "The failed native read is not retried inside the window")
 
@@ -219,7 +219,7 @@ class ExplicitCatalogTrustTests(BoardTestCase):
 
         catalog.register_catalog_reread(self.directory, reread)
         first = self.reject_missing()
-        self.assertEqual(first.code, "CONFIGURATION_UNAVAILABLE")
+        self.assertEqual(first.code, "BUDDY_UNAVAILABLE")
         self.assertEqual(first.details["catalogReadAt"], read_at, "An unknown reading is not a successful read")
         again = self.reject_missing()
         self.assertEqual(again.details["catalogReadAt"], read_at)
@@ -252,7 +252,7 @@ class ExplicitCatalogTrustTests(BoardTestCase):
         for thread in threads:
             thread.join(timeout=10)
             self.assertFalse(thread.is_alive())
-        self.assertEqual(outcomes, ["CONFIGURATION_UNAVAILABLE"] * 4)
+        self.assertEqual(outcomes, ["BUDDY_UNAVAILABLE"] * 4)
         self.assertEqual(calls, ["dsh"], "Concurrent missing submissions share one native read")
 
     def test_c05_a_concurrent_request_waits_for_the_shared_in_flight_reread(self):
@@ -326,7 +326,7 @@ class ExplicitCatalogTrustTests(BoardTestCase):
             release.set()
             first.join(timeout=10)
         self.assertLess(elapsed, 5, "The bounded join returns without hanging")
-        self.assertEqual(waiter["outcome"], ("CONFIGURATION_UNAVAILABLE", "catalog-unavailable", read_at),
+        self.assertEqual(waiter["outcome"], ("BUDDY_UNAVAILABLE", "catalog-unavailable", read_at),
                          "A timed-out join falls back to the recorded facts")
         self.assertEqual(calls, ["dsh"], "The timed-out join still starts no second native read")
 
@@ -432,7 +432,7 @@ class ExplicitCatalogTrustTests(BoardTestCase):
         catalog.register_catalog_reread(self.directory, lambda name: calls.append(name))
         self.assertEqual(self.validate(), IDENTITY, "The operator pin still admits the listed route")
         error = self.reject_missing()
-        self.assertEqual(error.code, "CONFIGURATION_UNAVAILABLE")
+        self.assertEqual(error.code, "BUDDY_UNAVAILABLE")
         self.assertEqual(error.details["reason"], "catalog-unavailable")
         self.assertEqual(calls, [], "The operator pin replaces discovery; no native re-read applies")
         self.assertNotIn("catalogReadAt", error.details)
@@ -456,15 +456,15 @@ class ExplicitCatalogTrustTests(BoardTestCase):
         self.assertEqual(self.validate(identity), identity)
         self.assertEqual(calls, ["dsh"])
 
-    def test_snapshot_and_model_profiles_expose_catalog_status_fields(self):
+    def test_snapshot_and_model_buddies_expose_catalog_status_fields(self):
         self.evaluation.record_catalog(reading())
         self.evaluation.record_catalog(reading(models=()))
         snapshot = self.evaluation.snapshot({})
-        profile = next(item for item in snapshot["profiles"] if item["profileId"] == "dsh:fixture:alpha:max")
-        self.assertEqual(profile["catalogStatus"], "pending")
-        self.assertEqual(profile["pendingSince"], self.clock.value)
-        listed = catalog_store.profiles(self.evaluation, {"includeUnavailable": True})
-        page = next(item for item in listed["profiles"] if item["profileId"] == "dsh:fixture:alpha:max")
+        buddy = next(item for item in snapshot["buddies"] if item["buddyId"] == "dsh:fixture:alpha:max")
+        self.assertEqual(buddy["catalogStatus"], "pending")
+        self.assertEqual(buddy["pendingSince"], self.clock.value)
+        listed = catalog_store.buddies(self.evaluation, {"includeUnavailable": True})
+        page = next(item for item in listed["buddies"] if item["buddyId"] == "dsh:fixture:alpha:max")
         self.assertEqual(page["catalogStatus"], "pending")
         self.assertEqual(page["pendingSince"], self.clock.value)
 
@@ -474,25 +474,25 @@ class ExplicitCatalogTrustTests(BoardTestCase):
         unknown = reading(models=(), account_status='unknown')
         unknown['providers'] = []
         self.evaluation.record_catalog(unknown)
-        profile = self.listed_profile()
-        self.assertTrue(profile['available'], 'Health 0s must not degrade the retained catalog')
-        self.assertEqual(profile['catalogStatus'], 'available')
-        self.assertEqual(profile['catalogState'], 'unknown')
+        buddy = self.listed_buddy()
+        self.assertTrue(buddy['available'], 'Health 0s must not degrade the retained catalog')
+        self.assertEqual(buddy['catalogStatus'], 'available')
+        self.assertEqual(buddy['catalogState'], 'unknown')
         self.assertEqual(self.validate(), IDENTITY, 'The retained catalog still admits the buddy')
 
     def test_confirmed_empty_after_health_recovery_pends_the_known_model(self):
         self.evaluation.record_catalog(reading())
         with self.board.store.db.write() as db:
-            db.execute("UPDATE evaluation_profiles SET enabled=1 WHERE adapter='dsh'")
+            db.execute("UPDATE buddies SET enabled=1 WHERE adapter='dsh'")
         self.fail_health_then_recover()
         self.evaluation.record_catalog(reading(models=()))
-        profile = self.listed_profile()
-        self.assertEqual(profile['catalogStatus'], 'pending')
-        self.assertTrue(profile['available'])
-        self.assertEqual(profile['pendingSince'], self.clock.value)
+        buddy = self.listed_buddy()
+        self.assertEqual(buddy['catalogStatus'], 'pending')
+        self.assertTrue(buddy['available'])
+        self.assertEqual(buddy['pendingSince'], self.clock.value)
         from hey_my_buddy.blackboard.routing.decision import DecisionCoordinator
         with self.board.store.db.read() as db:
-            candidates = [row['profile_id'] for row in DecisionCoordinator._select_candidates(db, [], coding_only=True)]
+            candidates = [row['buddy_id'] for row in DecisionCoordinator._select_candidates(db, [], coding_only=True)]
         self.assertEqual(candidates, ['dsh:fixture:alpha:max'], 'A pending model stays inside the bounds')
         self.assertEqual(self.validate(), IDENTITY, 'A pending model stays acceptable explicitly')
 
@@ -506,10 +506,10 @@ class ExplicitCatalogTrustTests(BoardTestCase):
         unknown = reading(models=(), account_status='unknown')
         unknown['providers'] = []
         self.evaluation.record_catalog(unknown)
-        profile = self.listed_profile()
-        self.assertEqual(profile['catalogStatus'], 'pending')
-        self.assertEqual(profile['pendingSince'], first_absence)
-        self.assertTrue(profile['available'])
+        buddy = self.listed_buddy()
+        self.assertEqual(buddy['catalogStatus'], 'pending')
+        self.assertEqual(buddy['pendingSince'], first_absence)
+        self.assertTrue(buddy['available'])
         self.assertEqual(self.validate(), IDENTITY)
         # A confirmed absence after the window is a catalog fact: later health
         # noise and unknown re-reads must never resurrect it.
@@ -517,16 +517,16 @@ class ExplicitCatalogTrustTests(BoardTestCase):
         self.evaluation.record_catalog(reading(models=()))
         self.fail_health_then_recover()
         self.evaluation.record_catalog(unknown)
-        profile = self.listed_profile()
-        self.assertEqual(profile['catalogStatus'], 'unavailable')
-        self.assertFalse(profile['available'])
+        buddy = self.listed_buddy()
+        self.assertEqual(buddy['catalogStatus'], 'unavailable')
+        self.assertFalse(buddy['available'])
         catalog.register_catalog_reread(self.directory, None)
         with self.assertRaises(BoardError) as rejected:
             self.validate()
-        self.assertEqual(rejected.exception.code, "CONFIGURATION_UNAVAILABLE")
+        self.assertEqual(rejected.exception.code, "BUDDY_UNAVAILABLE")
 
     def assert_only_high_is_usable(self, *, pending=False):
-        listed = catalog_store.profiles(self.evaluation, {'includeUnavailable': True})['profiles']
+        listed = catalog_store.buddies(self.evaluation, {'includeUnavailable': True})['buddies']
         alpha = {item['effort']: item for item in listed if item['model'] == 'alpha'}
         self.assertEqual(sorted(effort for effort, item in alpha.items() if item['available']), ['high'])
         self.assertTrue(all(item['enabled'] for item in alpha.values()), 'User intent survives retirement and health noise')
@@ -538,7 +538,7 @@ class ExplicitCatalogTrustTests(BoardTestCase):
         self.assertEqual(rejected.exception.details['legalEfforts'], ['high'])
         from hey_my_buddy.blackboard.routing.decision import DecisionCoordinator
         with self.board.store.db.read() as db:
-            candidates = [row['profile_id'] for row in DecisionCoordinator._select_candidates(db, [], coding_only=True)]
+            candidates = [row['buddy_id'] for row in DecisionCoordinator._select_candidates(db, [], coding_only=True)]
         self.assertEqual(candidates, ['dsh:fixture:alpha:high'])
         if pending:
             self.assertEqual(alpha['high']['catalogStatus'], 'pending')
@@ -548,10 +548,10 @@ class ExplicitCatalogTrustTests(BoardTestCase):
         self.evaluation.record_catalog(reading(efforts=('high', 'low')))
         self.evaluation.record_catalog(reading(efforts=('high',)))
         # Before this fix old health code could overwrite the retirement reason
-        # on every profile. The last adopted native reading still proves that
+        # on every buddy. The last adopted native reading still proves that
         # only high is legal, even when no row keeps the retirement reason.
         with self.board.store.db.write() as db:
-            db.execute("UPDATE evaluation_profiles SET available=0,enabled=1,"
+            db.execute("UPDATE buddies SET available=0,enabled=1,"
                        "unavailable_reason='HARNESS_HANDSHAKE_FAILED' WHERE adapter='dsh'")
 
     def test_health_mask_cannot_restore_a_retired_effort_on_unknown_read(self):
@@ -572,7 +572,7 @@ class ExplicitCatalogTrustTests(BoardTestCase):
         self.assert_only_high_is_usable()
         self.clock.advance(2)
         self.evaluation.record_catalog(reading(models=()))
-        listed = catalog_store.profiles(self.evaluation, {'includeUnavailable': True})['profiles']
+        listed = catalog_store.buddies(self.evaluation, {'includeUnavailable': True})['buddies']
         self.assertTrue(all(not item['available'] for item in listed))
         with self.board.store.db.read() as db:
             events = db.execute("SELECT kind,payload_json FROM events WHERE kind LIKE 'catalog.model_%' ORDER BY seq").fetchall()

@@ -17,7 +17,7 @@ import { formatDate } from "./ui";
 import { NativeSessionView } from "./native-session";
 import { DelegationDetailRows } from "./MacroTaskOverview";
 import {
-  artifactKindLabel, artifactStateView, configurationLockText, cumulativePatchView,
+  artifactKindLabel, artifactStateView, buddyLockText, cumulativePatchView,
   hostConclusionView, integrationHostPaths, tokenUsageView,
 } from "./host-workflow";
 
@@ -67,7 +67,7 @@ export function WorkflowPanel({ task, snapshot, api, refresh, selectTask, active
   const artifact = finalArtifact(value);
   const integration = finalIntegration(value, artifact);
   const conclusion = hostConclusionView(value?.hostConclusion);
-  const lockText = configurationLockText(value?.configurationLocked);
+  const lockText = buddyLockText(value?.buddyLocked);
   const hostPaths = integrationHostPaths(integration);
   const quotaFailureLabel = value?.task?.quotaFailure?.code === "quota-exceeded" ? "额度耗尽" : value?.task?.quotaFailure?.code === "rate-limited" ? "原生服务限流" : null;
   // Each execution carries its own usage; a turn without a recorded value is
@@ -76,7 +76,7 @@ export function WorkflowPanel({ task, snapshot, api, refresh, selectTask, active
     .map(turn => ({
       turnId: turn.turnId, turnIndex: turn.turnIndex, attemptId: turn.attemptId,
       tokenUsage: turn.tokenUsage,
-      executionConfiguration: "executionConfiguration" in turn ? turn.executionConfiguration ?? null : null,
+      buddy: "buddy" in turn ? turn.buddy ?? null : null,
     }));
   // `recordedIntegrations` is newest first, so the first record per artifact is
   // the newest one — the same record acceptance binds.
@@ -127,9 +127,9 @@ export function WorkflowPanel({ task, snapshot, api, refresh, selectTask, active
               <dt>接续次数</dt><dd>{value.continuationCount}</dd>
               <dt>已记录回合</dt><dd>{value.counts?.turns == null ? "未记录" : `共 ${value.counts.turns} 个回合`}</dd>
               <dt>接续方式</dt><dd>{value.currentTurn?.resumeMode === "native-session" ? "恢复原生会话" : value.currentTurn?.resumeMode === "reconstructed-new-session" ? "新会话，从持久上下文重建" : "首次执行"}</dd>
-              {value.executionConfiguration && <Fragment>
+              {value.buddy && <Fragment>
                 <dt>执行配置</dt><dd>{
-                  `${value.executionConfiguration.adapter} · ${value.executionConfiguration.model} / ${value.executionConfiguration.effort}`
+                  `${value.buddy.adapter} · ${value.buddy.model} / ${value.buddy.effort}`
                   + (lockText ? `｜${lockText}` : "｜配置来源未记录")
                 }</dd></Fragment>}
               <dt>输入提交</dt><dd className="mono wrap">{value.workspace?.inputCommit || "未记录"}</dd>
@@ -232,10 +232,10 @@ export function WorkflowPanel({ task, snapshot, api, refresh, selectTask, active
         {usageTurns.length === 0 ? <p className="small muted">暂无执行记录</p> : <ul className="token-usage-list">
           {usageTurns.map(turn => {
             const usage = tokenUsageView(turn.tokenUsage);
-            const config = turn.executionConfiguration;
+            const buddy = turn.buddy;
             return <li key={turn.turnId}>
               <span className="turn-label">第 {turn.turnIndex} 回合</span>
-              <span className="small muted">{config ? `${config.adapter} · ${config.model} / ${config.effort}` : "配置未记录"}</span>
+              <span className="small muted">{buddy ? `${buddy.adapter} · ${buddy.model} / ${buddy.effort}` : "配置未记录"}</span>
               <span className="turn-usage" title={usage.title}>{usage.text}</span>
               <span className="small muted">来源 {turn.tokenUsage?.source || "未记录"}</span>
             </li>;

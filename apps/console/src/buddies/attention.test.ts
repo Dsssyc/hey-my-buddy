@@ -1,26 +1,26 @@
 import { describe, expect, it } from "vitest";
-import type { ConsoleView, Profile, RoutingHealth, Snapshot } from "../types";
+import type { ConsoleView, Buddy, RoutingHealth, Snapshot } from "../types";
 import { buddyAttention } from "./attention";
 
 const reviewer = "claude:anthropic:claude-sonnet-5:medium";
 const worker = "codex:openai:gpt-6-sol:medium";
 
-function profile(profileId: string, capabilities: string[], enabled = true): Profile {
-  const [adapter, provider, model, effort] = profileId.split(":");
-  return { profileId, label: profileId, adapter, provider, model, effort, available: true, enabled, capabilities,
+function buddy(buddyId: string, capabilities: string[], enabled = true): Buddy {
+  const [adapter, provider, model, effort] = buddyId.split(":");
+  return { buddyId, label: buddyId, adapter, provider, model, effort, available: true, enabled, capabilities,
     contextWindow: null, description: "", source: "catalog:fixture" };
 }
 
 const failing: RoutingHealth = {
-  available: true, currentRouterProfileId: reviewer, windowSize: 20, sampleCount: 3, failureCount: 2, consecutiveFailures: 2,
+  available: true, currentRouterBuddyId: reviewer, windowSize: 20, sampleCount: 3, failureCount: 2, consecutiveFailures: 2,
   abstentionCount: 0, cancelledCount: 0, lastSuccessAt: null, lastSuccessDecisionId: null, recentFailures: [],
 };
 
 function attention(options: { routers?: string[]; mode?: "fast" | "review"; health?: RoutingHealth; configuration?: null; quota?: number } = {}) {
   const configuration = options.configuration === null ? null
-    : { routerProfileIds: options.routers ?? [reviewer], routerRetryIntervalSeconds: 600,
+    : { routerBuddyIds: options.routers ?? [reviewer], routerRetryIntervalSeconds: 600,
       defaultRoutingMode: options.mode ?? "review", routingBudget: "standard" };
-  const profiles = [profile(reviewer, ["execution:claude", "routing:fast", "decision"]), profile(worker, ["execution:codex"])];
+  const buddies = [buddy(reviewer, ["execution:claude", "routing:fast", "decision"]), buddy(worker, ["execution:codex"])];
   const harnesses = [
     { adapter: "claude", status: "ready", available: true, revision: 1, manualPath: null, checkedAt: "2026-09-29T09:30:00.000Z", candidates: [] },
     { adapter: "dsh", status: "ready", available: true, revision: 1, manualPath: null, checkedAt: "2026-09-29T09:30:00.000Z", candidates: [],
@@ -28,7 +28,7 @@ function attention(options: { routers?: string[]; mode?: "fast" | "review"; heal
         windows: [{ name: "5h", usedPercent: options.quota ?? 40, resetsAt: null }] } },
   ];
   const snapshot = { configuration, routingHealth: options.health, harnesses } as unknown as Snapshot;
-  return buddyAttention({ profiles, configuration } as unknown as ConsoleView, snapshot);
+  return buddyAttention({ buddies, configuration } as unknown as ConsoleView, snapshot);
 }
 
 describe("what waits on the Buddy page", () => {
@@ -46,8 +46,8 @@ describe("what waits on the Buddy page", () => {
   });
 
   it("follows the service's own word on the current Router, not the head of the list", () => {
-    expect(attention({ health: { ...failing, consecutiveFailures: 0, failureCount: 0, currentRouterProfileId: worker } }).roles).toBe("unusable");
-    expect(attention({ health: { ...failing, available: false, currentRouterProfileId: null } }).roles).toBe("unusable");
+    expect(attention({ health: { ...failing, consecutiveFailures: 0, failureCount: 0, currentRouterBuddyId: worker } }).roles).toBe("unusable");
+    expect(attention({ health: { ...failing, available: false, currentRouterBuddyId: null } }).roles).toBe("unusable");
   });
 
   it("names routing that keeps failing while the Router itself can work", () => {

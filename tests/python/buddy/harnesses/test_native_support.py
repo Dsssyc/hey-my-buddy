@@ -6,7 +6,7 @@ contracts that had no direct coverage before — the cancel flag's two sources
 and bounded wait, the package-shape guard's drop-alone rule, the native
 identity dropper and the owned-group halt's close/wait/terminate order. The
 fragments the per-harness trees already cover through their re-exported names
-(the deadline rule, the configuration spec, the timestamp) stay covered there,
+(the deadline rule, the buddy spec, the timestamp) stay covered there,
 and the four harness trees remain the integration coverage of how the shared
 fragments are consumed. Synthetic fakes only: no harness, process or model is
 started.

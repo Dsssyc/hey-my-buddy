@@ -15,8 +15,8 @@ export function ModelLine({ row, harnessState, data, recorded, expanded, onSelec
   row: ModelRow; harnessState: string | null; data: ConsoleView; recorded: Snapshot; expanded: boolean; onSelect: () => void;
 }) {
   const { t } = useTranslation("buddies");
-  const member = row.modelService.profiles[0];
-  const enabled = row.chips.filter(chip => chip.profile.enabled);
+  const member = row.modelService.buddies[0];
+  const enabled = row.chips.filter(chip => chip.buddy.enabled);
   const changed = row.chips.some(chip => chip.unsaved)
     || modelServiceNoteText(data, member) !== modelServiceNoteText(recorded, member)
     || !Object.is(row.limit, concurrencyEntryFor(recorded.modelServiceConcurrency, member)?.limit ?? MODEL_SERVICE_CONCURRENCY_DEFAULT);
@@ -40,7 +40,7 @@ export function ModelLine({ row, harnessState, data, recorded, expanded, onSelec
           {changed && !expanded && <UnsavedMark label={t("unsaved")} />}
         </span>
         <span className="col-start-3 row-start-2 flex min-h-4 min-w-0 flex-wrap items-center gap-x-6 gap-y-1 text-xs sm:col-start-auto sm:row-start-auto">
-          {enabled.map(chip => <span key={chip.profile.profileId} data-slot="enabled-effort" className="inline-flex items-center gap-1.5">
+          {enabled.map(chip => <span key={chip.buddy.buddyId} data-slot="enabled-effort" className="inline-flex items-center gap-1.5">
             <span>{chip.effort}</span>
             {chip.preference && <span className="text-ink2">{t(`preference.${chip.preference}`)}</span>}
           </span>)}

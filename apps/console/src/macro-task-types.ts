@@ -44,7 +44,7 @@ export type MacroTaskPage = {
   /** True when activity after the first page may have reordered groups: offer a refresh. */
   changed: boolean;
 };
-export type TimelineConfiguration = {
+export type TimelineBuddy = {
   adapter: string | null; provider: string | null; model: string | null; effort: string | null;
 };
 export type TimelineRow = {
@@ -65,7 +65,7 @@ export type TimelineRow = {
   /** 0 for a root, +1 per helper level. Rows arrive in tree order. */
   depth: number;
   kind: "goal" | "helper";
-  configuration: TimelineConfiguration | null;
+  buddy: TimelineBuddy | null;
   acceptedAt: string | null;
   acceptanceVerdict: string | null;
 };
@@ -79,7 +79,7 @@ export type TimelineSpan = {
    */
   state: string;
   attemptId: string | null; turnId: string | null; turnIndex: number | null;
-  requestId: string | null; configuration: TimelineConfiguration | null;
+  requestId: string | null; buddy: TimelineBuddy | null;
   shutdownConfirmed: boolean | null; uncertain: boolean; clockSkew: boolean;
   generation?: number; disposition?: string; error?: string;
   /** Own durable attempt receipt; a model turn disposition is not the execution result. */
@@ -90,7 +90,7 @@ export type TimelineSpan = {
   /** Optional projection for historic spans without routing facts. */
   routing?: {
     routingMode?: RoutingMode | null;
-    selectedProfile?: TimelineConfiguration | null;
+    selectedBuddy?: TimelineBuddy | null;
     reason?: string | null;
     policyCheck?: {
       taskPreference?: { ruleIndex?: number | null; outcome?: string | null } | null;

@@ -34,21 +34,21 @@ def parser():
 
 
 def packet(args):
-    profiles = [{**profile, 'profileId': ':'.join(profile.values()), 'enabled': True, 'available': True}
-                for profile in (
+    buddies = [{**buddy, 'buddyId': ':'.join(buddy.values()), 'enabled': True, 'available': True}
+                for buddy in (
                     {'adapter': 'dsh', 'provider': 'deepseek-official', 'model': 'deepseek-flash', 'effort': 'off'},
                     {'adapter': 'codex', 'provider': 'openai', 'model': 'gpt-6-sol', 'effort': 'high'})]
     return {
-        'profile': {key: getattr(args, key) for key in ('adapter', 'provider', 'model', 'effort')},
+        'buddy': {key: getattr(args, key) for key in ('adapter', 'provider', 'model', 'effort')},
         'task': '极小任务：将 README 中一句中文句末的英文句点改成中文句号。只选择执行配置，不执行修改。',
         'routingMode': 'fast', 'requestedRoutingMode': 'fast', 'fallback': None,
         'captureEvidence': True,
-        'profiles': profiles, 'preferences': [], 'annotations': [],
-        'policyFacts': selection_policy.policy_facts(profiles=profiles,
-                                                    prefer_profile_ids=[], hard_constraints={}),
+        'buddies': buddies, 'preferences': [], 'annotations': [],
+        'policyFacts': selection_policy.policy_facts(buddies=buddies,
+                                                    prefer_buddy_ids=[], hard_constraints={}),
         'requestId': 'native-fast-check',
         'budget': dict(router.FAST_BUDGET),
-        'outputSchema': router.answer_schema([p['profileId'] for p in profiles], 'fast'),
+        'outputSchema': router.answer_schema([p['buddyId'] for p in buddies], 'fast'),
     }
 
 
@@ -81,7 +81,7 @@ def run(args):
     implementation = DecisionAdapter()
     started = time.monotonic()
     handle = None
-    report = {'status': 'failed', 'inputSha256': digest, 'routingProfile': document['profile'],
+    report = {'status': 'failed', 'inputSha256': digest, 'routingBuddy': document['buddy'],
               'startedAt': datetime.now(timezone.utc).isoformat(), 'privateRoot': str(root)}
     try:
         handle = implementation.start(context)

@@ -23,7 +23,7 @@ from hey_my_buddy.buddy.harnesses.run_contract import (
     FrozenJson,
     PrivateStatePaths,
     RunBudget,
-    RunConfiguration,
+    RunBuddy,
     RunEnd,
     RunFeedback,
     RunIdentity,
@@ -84,7 +84,7 @@ def run_request(root: Path) -> RunRequest:
         identity=RunIdentity(task_id="task-roles", attempt_id="attempt-roles", generation=0,
                              invocation_id="invocation-1"),
         harness="zcode",
-        configuration=RunConfiguration(provider="provider", model="model", effort="off"),
+        buddy=RunBuddy(provider="provider", model="model", effort="off"),
         cwd=str(root),
         private_state=PrivateStatePaths(invocation_root=str(root / "invocation"),
                                         native_root=str(root / "native")),
@@ -311,7 +311,7 @@ class RouterCallPointTests(unittest.TestCase):
         return ExecutionContext(**values)
 
     def preparation(self, kind, native=None):
-        document = {"routingMode": "fast" if kind == "fast" else "review", "task": "choose", "profiles": [],
+        document = {"routingMode": "fast" if kind == "fast" else "review", "task": "choose", "buddies": [],
                     "outputSchema": {"type": "object"}, "budget": {"timeoutSeconds": 60}}
         native = native if native is not None else self.Native()
         context = self.context()

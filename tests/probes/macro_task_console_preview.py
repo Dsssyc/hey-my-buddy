@@ -14,7 +14,7 @@ Safety boundary:
   strings exist only inside the JSON snapshot.
 * All mutation POSTs are refused. ``POST /api/command`` serves four
   read-only operations the real console allows (``workflow_get``,
-  ``selection_get``, ``selection_list``, ``model_profiles``)
+  ``selection_get``, ``selection_list``, ``buddy_list``)
   with fixed-shape fixture payloads, and answers a
   check of the harnesses (``capabilities``) with the same synthetic rows
   without probing anything. Operations the
@@ -49,7 +49,7 @@ deliberately wrong shapes a strict parser must refuse; each documents its
 ``mutation``. The mode needs no ``--assets`` and writes nothing else.
 
 ADR-018 (schema 15) fields carried by the fixture data: governed
-``workflow_get`` views add ``configurationLocked`` and ``hostConclusion``;
+``workflow_get`` views add ``buddyLocked`` and ``hostConclusion``;
 artifacts add ``partial``/``verified``/``final`` flags, ``kind`` may be
 ``partial-output`` and an artifact may carry ``cumulativePatch``; integration
 verification adds ``hostPaths``; task views, attempts and turns carry a
@@ -139,7 +139,7 @@ ERROR_SCENARIO_MESSAGE = "synthetic preview: simulated read failure (--scenario 
 #: The synthetic harness quota failure the schema-15 fixtures model.
 QUOTA_ERROR = "synthetic preview: harness quota exhausted before completion"
 #: The ADR-018 Host conclusion: the Host's own recorded target outcome of a
-#: failed or cancelled goal, never a worker success claim. ``configurationLocked``
+#: failed or cancelled goal, never a worker success claim. ``buddyLocked``
 #: is separate: a Host submission may be re-chosen, a user-locked one may not.
 HOST_CONCLUSION_KEYS = {"conclusionId", "attemptId", "executionStatus", "note", "evidence",
                         "artifactId", "integrationId", "actor", "createdAt", "ownerGeneration",
@@ -182,7 +182,7 @@ MARKER_SUMMARY = {"dispatch": "synthetic dispatch · preview fixture",
 #: The preview's browser command allowlist: four reads plus settings operations
 #: and macro_task_stop (console.md). Everything else is METHOD_NOT_FOUND.
 ALLOWED_OPERATIONS = (
-    "selection_get", "selection_list", "model_profiles", "workflow_get", "user_policy_publish",
+    "selection_get", "selection_list", "buddy_list", "workflow_get", "user_policy_publish",
     "model_catalog_refresh", "macro_task_stop", "capabilities",
 )
 #: Operations the 0.15.1 read-only repair removed from the browser surface.
@@ -195,7 +195,7 @@ REMOVED_OPERATIONS = (
 #: The exact read-only operation set of the real console (console_sessions.py).
 #: A 403 CONSOLE_READ_ONLY would latch the browser session as read-only, so every
 #: one of them must be answered instead of refused.
-READ_OPERATIONS = ("workflow_get", "selection_get", "selection_list", "model_profiles")
+READ_OPERATIONS = ("workflow_get", "selection_get", "selection_list", "buddy_list")
 
 STATUS_BY_CODE = {"INVALID_ARGUMENT": 400, "METHOD_NOT_FOUND": 404, "NOT_FOUND": 404, "FORBIDDEN": 403,
                   "CONSOLE_READ_ONLY": 403, "UNSUPPORTED": 501, "SERVICE_UNAVAILABLE": 503,
@@ -257,7 +257,7 @@ def digest(tag: str) -> str:
 # Fixture records (the payloads themselves, not a board simulation)            #
 # --------------------------------------------------------------------------- #
 def attempt(attempt_id: str, turn_index: int, state: str, confirmed: bool, started: str,
-            finished: str | None, configuration: dict, *, error: str | None = None,
+            finished: str | None, buddy: dict, *, error: str | None = None,
             result: str | None = None, disposition: str = "completed",
             usage: dict | None = None) -> dict:
     # `result` is the stored worker receipt: {"status", "result", "shutdownConfirmed"},
@@ -268,7 +268,7 @@ def attempt(attempt_id: str, turn_index: int, state: str, confirmed: bool, start
                                            "result": {"finalText": result}, "shutdownConfirmed": confirmed}
     return {"attemptId": attempt_id, "turnId": f"turn-{attempt_id}", "turnIndex": turn_index,
             "generation": turn_index, "state": state, "shutdownConfirmed": confirmed,
-            "startedAt": started, "finishedAt": finished, "configuration": configuration,
+            "startedAt": started, "finishedAt": finished, "buddy": buddy,
             "error": error, "result": receipt, "disposition": disposition, "usage": usage,
             "uncertain": state == "uncertain" or (state == "finished" and not confirmed)}
 
@@ -303,7 +303,7 @@ def host_conclusion(conclusion_id: str, *, attempt_id: str | None, execution_sta
 
 
 def span(span_id: str, kind: str, start: str, end: str | None, state: str, *, attempt_id: str | None = None,
-         request_id: str | None = None, configuration: dict | None = None,
+         request_id: str | None = None, buddy: dict | None = None,
          confirmed: bool | None = None, uncertain: bool = False, generation: int | None = None,
          disposition: str | None = None, error: str | None = None, request_kind: str | None = None,
          summary: str | None = None, decision_task: str | None = None,
@@ -311,7 +311,7 @@ def span(span_id: str, kind: str, start: str, end: str | None, state: str, *, at
          routing_record: dict | None = None) -> dict:
     view = {"spanId": span_id, "kind": kind, "startAt": start, "endAt": end, "state": state,
             "attemptId": attempt_id, "turnId": f"turn-{attempt_id}" if attempt_id else None,
-            "turnIndex": turn_index, "requestId": request_id, "configuration": configuration,
+            "turnIndex": turn_index, "requestId": request_id, "buddy": buddy,
             "shutdownConfirmed": confirmed, "uncertain": uncertain,
             "clockSkew": bool(start and end and end < start)}
     extras = {"generation": generation, "disposition": disposition, "error": error,
@@ -320,7 +320,7 @@ def span(span_id: str, kind: str, start: str, end: str | None, state: str, *, at
     if routing_record is not None:
         view["decisionId"] = routing_record["decisionId"]
         view["routing"] = {key: routing_record[key] for key in
-                           ("routingMode", "requestedRoutingMode", "fallback", "selectedProfile", "reason",
+                           ("routingMode", "requestedRoutingMode", "fallback", "selectedBuddy", "reason",
                             "policyCheck", "budget", "usage")}
     if kind in ("execution", "routing") and state == "finished":
         view["resultStatus"] = result_status or ("failed" if error else "ok")
@@ -349,7 +349,7 @@ def routing(decision_id: str, task_id: str, status: str, selected: dict | None, 
             mode: str = "review", requested_mode: str = "review", fallback: dict | None = None) -> dict:
     """One recorded routing decision, shaped like ``workflow._routing_view``."""
     return {"status": status, "decisionId": decision_id, "taskId": task_id, "attemptId": f"att-{task_id}",
-            "generation": 1, "selectedProfile": selected, "reason": reason,
+            "generation": 1, "selectedBuddy": selected, "reason": reason,
             "routingMode": mode, "requestedRoutingMode": requested_mode, "fallback": fallback,
             "constraints": constraints,
             "source": "model-selection" if decision_id else None,
@@ -379,7 +379,7 @@ ROUTING_A2_ABSTENTION = routing("preview-decision-a2-abstention", "preview-run-a
 
 
 def run(run_id: str, *, project: str, title: str, title_source: str, task_text: str, created: str,
-        updated: str, state: str, status: str, category: str, configuration: dict | None,
+        updated: str, state: str, status: str, category: str, buddy: dict | None,
         hosts: tuple[str, str] = (HOST_A, HOST_A), parent: str | None = None, group: str | None = None,
         accepted: str | None = None, verdict: str | None = None, result: bool = False,
         result_summary: str | None = None, artifacts: list[dict] | None = None,
@@ -388,18 +388,18 @@ def run(run_id: str, *, project: str, title: str, title_source: str, task_text: 
         markers: list[dict] | None = None, attempts: list[dict] | None = None,
         shutdown_confirmed: bool = True, governed: bool = True, adapter: str | None = None,
         continuation_count: int = 0, timeout_seconds: int = 0, revision: int = 3,
-        configuration_locked: bool = False, conclusion: dict | None = None) -> dict:
+        buddy_locked: bool = False, conclusion: dict | None = None) -> dict:
     return {
         "runId": run_id, "parentRunId": parent, "group": group, "project": project, "title": title,
         "titleSource": title_source, "task": task_text, "createdAt": created, "updatedAt": updated,
-        "state": state, "status": status, "category": category, "configuration": configuration,
+        "state": state, "status": status, "category": category, "buddy": buddy,
         "sourceHostId": hosts[0], "currentHostId": hosts[1], "acceptedAt": accepted,
         "acceptanceVerdict": verdict, "resultAvailable": result, "resultSummary": result_summary,
         "artifacts": artifacts or [], "integrations": integrations or [], "routing": routing,
         "activeRequest": active_request, "spans": spans or [], "markers": markers or [],
         "attempts": attempts or [], "shutdownConfirmed": shutdown_confirmed, "governed": governed,
         "adapter": adapter, "continuationCount": continuation_count, "timeoutSeconds": timeout_seconds,
-        "revision": revision, "configurationLocked": configuration_locked,
+        "revision": revision, "buddyLocked": buddy_locked,
         "hostConclusion": conclusion,
         "kind": "decision" if not governed else ("helper" if parent is not None else "goal"),
     }
@@ -446,7 +446,7 @@ def build_runs() -> dict[str, dict]:
             title_source="title",
             task_text="设计并实现工作目标时间轴的只读预览夹具，核对列表、时间轴与详情在长标题下的截断。",
             created=instant(6, 0), updated=instant(7, 5), state="accepted", status="completed",
-            category="ended", configuration=CFG_CODEX, accepted=instant(7, 5), verdict="accepted",
+            category="ended", buddy=CFG_CODEX, accepted=instant(7, 5), verdict="accepted",
             result=True, result_summary="合成预览：工作目标时间轴夹具的第一轮交付摘要",
             spans=[
                 span("queue:att-a1-1", "queue", instant(6, 0), instant(6, 2), "claimed",
@@ -455,7 +455,7 @@ def build_runs() -> dict[str, dict]:
                      attempt_id="att-router-a1", confirmed=True, decision_task="preview-run-a1-router",
                      disposition="completed", routing_record=ROUTING_A1),
                 span("execution:att-a1-1", "execution", instant(6, 5), instant(6, 40), "finished",
-                     attempt_id="att-a1-1", configuration=CFG_FLASH, confirmed=True, generation=1,
+                     attempt_id="att-a1-1", buddy=CFG_FLASH, confirmed=True, generation=1,
                      disposition="completed", turn_index=1),
                 span("host:req-a1-1", "host", instant(6, 40), instant(6, 44), "approved",
                      request_id="req-a1-1", request_kind="assistance",
@@ -463,7 +463,7 @@ def build_runs() -> dict[str, dict]:
                 span("queue:att-a1-2", "queue", instant(6, 45), instant(6, 46), "claimed",
                      attempt_id="att-a1-2"),
                 span("execution:att-a1-2", "execution", instant(6, 46), instant(7, 0), "finished",
-                     attempt_id="att-a1-2", configuration=CFG_CODEX, confirmed=True, generation=2,
+                     attempt_id="att-a1-2", buddy=CFG_CODEX, confirmed=True, generation=2,
                      disposition="completed", turn_index=2),
             ],
             attempts=[
@@ -488,25 +488,25 @@ def build_runs() -> dict[str, dict]:
                                                            ["tests/probes/macro_task_console_preview.py"]))],
             integrations=[integration("int-a1", "art-a1", "att-a1-2", HOST_A,
                                       host_paths=["docs/reference/console.md"])],
-            configuration_locked=True,
+            buddy_locked=True,
             routing=ROUTING_A1),
         run("preview-run-a1-h1", project="alpha", group=MACRO_A, parent="preview-run-a1",
             title="补充 schema 升级离线副本的验证测试", title_source="title",
             task_text="为 board_prepare 的离线副本补充验证测试，覆盖行数不变与来源文件哈希不变。",
             created=instant(6, 20), updated=instant(6, 55), state="delivered", status="completed",
-            category="review", configuration=CFG_GLM, result=True,
+            category="review", buddy=CFG_GLM, result=True,
             result_summary="补充 schema 升级离线副本的验证测试",
             spans=[
                 span("queue:att-h1-1", "queue", instant(6, 20), instant(6, 24), "claimed",
                      attempt_id="att-h1-1"),
                 span("execution:att-h1-1", "execution", instant(6, 24), instant(6, 36), "finished",
-                     attempt_id="att-h1-1", configuration=CFG_GLM, confirmed=True, generation=1,
+                     attempt_id="att-h1-1", buddy=CFG_GLM, confirmed=True, generation=1,
                      disposition="completed", turn_index=1,
                      error="synthetic preview failure: test command timed out"),
                 span("queue:att-h1-2", "queue", instant(6, 36), instant(6, 38), "claimed",
                      attempt_id="att-h1-2"),
                 span("execution:att-h1-2", "execution", instant(6, 38), instant(6, 55), "finished",
-                     attempt_id="att-h1-2", configuration=CFG_GLM, confirmed=True, generation=2,
+                     attempt_id="att-h1-2", buddy=CFG_GLM, confirmed=True, generation=2,
                      disposition="completed", turn_index=2),
             ],
             attempts=[
@@ -525,13 +525,13 @@ def build_runs() -> dict[str, dict]:
             title="核对离线副本的跨平台路径边界", title_source="task",
             task_text="核对 Windows 与 macOS 下离线副本路径大小写与分隔符的边界记录。",
             created=instant(6, 56), updated=instant(7, 2), state="executing", status="reconciliation-needed",
-            category="active", configuration=CFG_CLAUDE, result=True, shutdown_confirmed=False,
+            category="active", buddy=CFG_CLAUDE, result=True, shutdown_confirmed=False,
             result_summary="核对离线副本的跨平台路径边界",
             spans=[
                 span("queue:att-h2-1", "queue", instant(6, 56), instant(6, 57), "claimed",
                      attempt_id="att-h2-1"),
                 span("execution:att-h2-1", "execution", instant(6, 57), instant(7, 2), "finished",
-                     attempt_id="att-h2-1", configuration=CFG_CLAUDE, confirmed=False, uncertain=True,
+                     attempt_id="att-h2-1", buddy=CFG_CLAUDE, confirmed=False, uncertain=True,
                      generation=1, disposition="completed", turn_index=1),
             ],
             attempts=[attempt("att-h2-1", 1, "finished", False, instant(6, 57), instant(7, 2), CFG_CLAUDE,
@@ -542,7 +542,7 @@ def build_runs() -> dict[str, dict]:
             title="核对 Host 等待片段与决定标记的渲染", title_source="title",
             task_text="核对等待 Host 的开放片段、决定标记与协助请求在时间轴和详情中的呈现。",
             created=instant(8, 30), updated=instant(9, 20), state="awaiting-host", status="completed",
-            category="host", configuration=CFG_CLAUDE, result=True, continuation_count=1,
+            category="host", buddy=CFG_CLAUDE, result=True, continuation_count=1,
             result_summary="核对 Host 等待片段与决定标记的渲染", routing=ROUTING_A2_ABSTENTION,
             active_request=ACTIVE_REQUEST,
             spans=[
@@ -553,7 +553,7 @@ def build_runs() -> dict[str, dict]:
                      disposition="completed", result_status="failed", routing_record=ROUTING_A2,
                      error="synthetic preview: routing bounds rejected"),
                 span("execution:att-a2-1", "execution", instant(8, 36), instant(8, 55), "finished",
-                     attempt_id="att-a2-1", configuration=CFG_GLM, confirmed=True, generation=1,
+                     attempt_id="att-a2-1", buddy=CFG_GLM, confirmed=True, generation=1,
                      disposition="completed", turn_index=1),
                 span("host:req-a2-1", "host", instant(8, 55), instant(9, 0), "declined",
                      request_id="req-a2-1", request_kind="routing",
@@ -564,7 +564,7 @@ def build_runs() -> dict[str, dict]:
                 span("queue:att-a2-2", "queue", instant(9, 1), instant(9, 2), "claimed",
                      attempt_id="att-a2-2"),
                 span("execution:att-a2-2", "execution", instant(9, 2), instant(9, 20), "finished",
-                     attempt_id="att-a2-2", configuration=CFG_CLAUDE, confirmed=True, generation=2,
+                     attempt_id="att-a2-2", buddy=CFG_CLAUDE, confirmed=True, generation=2,
                      disposition="assistance", turn_index=2),
                 span("host:req-a2-2", "host", instant(9, 20), None, "open", request_id="req-a2-2",
                      request_kind="assistance",
@@ -587,7 +587,7 @@ def build_runs() -> dict[str, dict]:
             title="实现折叠区间的键盘焦点顺序", title_source="title",
             task_text="实现折叠空闲区间展开后的键盘焦点顺序，并补充可访问性检查。",
             created=instant(9, 35), updated=instant(9, 39), state="executing", status="running",
-            category="active", configuration=CFG_CLAUDE, shutdown_confirmed=False, routing=ROUTING_A3,
+            category="active", buddy=CFG_CLAUDE, shutdown_confirmed=False, routing=ROUTING_A3,
             spans=[
                 span("queue:att-a3-1", "queue", instant(9, 35), instant(9, 36), "claimed",
                      attempt_id="att-a3-1"),
@@ -595,7 +595,7 @@ def build_runs() -> dict[str, dict]:
                      attempt_id="att-router-a3", confirmed=True, decision_task="preview-run-a3-router",
                      disposition="cancelled", result_status="cancelled", routing_record=ROUTING_A3),
                 span("execution:att-a3-1", "execution", instant(9, 39), None, "executing",
-                     attempt_id="att-a3-1", configuration=CFG_CLAUDE, confirmed=False, generation=1,
+                     attempt_id="att-a3-1", buddy=CFG_CLAUDE, confirmed=False, generation=1,
                      disposition="completed", turn_index=1),
             ],
             attempts=[attempt("att-a3-1", 1, "executing", False, instant(9, 39), None, CFG_CLAUDE,
@@ -606,18 +606,18 @@ def build_runs() -> dict[str, dict]:
             title_source="title",
             task_text="排查 DSH 插件在 Windows 路径下的沙箱回归，修复后等待最终验收。",
             created=instant(3, 0), updated=instant(5, 35), state="delivered", status="completed",
-            category="review", configuration=CFG_GLM, result=True, continuation_count=1,
+            category="review", buddy=CFG_GLM, result=True, continuation_count=1,
             result_summary="合成预览：沙箱回归修复完成，等待验收",
             spans=[
                 span("queue:att-b1-1", "queue", instant(3, 0), instant(3, 4), "claimed",
                      attempt_id="att-b1-1"),
                 span("execution:att-b1-1", "execution", instant(3, 4), instant(3, 30), "finished",
-                     attempt_id="att-b1-1", configuration=CFG_GLM, confirmed=True, generation=1,
+                     attempt_id="att-b1-1", buddy=CFG_GLM, confirmed=True, generation=1,
                      disposition="completed", turn_index=1),
                 span("queue:att-b1-2", "queue", instant(5, 1), instant(5, 2), "claimed",
                      attempt_id="att-b1-2"),
                 span("execution:att-b1-2", "execution", instant(5, 2), instant(5, 30), "finished",
-                     attempt_id="att-b1-2", configuration=CFG_GLM, confirmed=True, generation=2,
+                     attempt_id="att-b1-2", buddy=CFG_GLM, confirmed=True, generation=2,
                      disposition="completed", turn_index=2),
             ],
             attempts=[
@@ -638,19 +638,19 @@ def build_runs() -> dict[str, dict]:
             artifacts=[artifact("art-b1", "att-b1-2", digest("b1-output")[:40], "/synthetic-preview/diffs/b1.diff",
                                 ["harnesses/dsh/plugins/sandbox.js"])],
             integrations=[integration("int-b1", "art-b1", "att-b1-2", HOST_B2, host_paths=[])],
-            configuration_locked=True),
+            buddy_locked=True),
         run("preview-run-b1-h1", project="beta", group=MACRO_B, parent="preview-run-b1",
             hosts=(HOST_B, HOST_B),
             title="整理 macOS 与 Windows 沙箱规则差异清单", title_source="title",
             task_text="整理两个平台的沙箱规则差异清单。",
             created=instant(3, 10), updated=instant(3, 25), state="cancelled", status="cancelled",
-            category="ended", configuration=CFG_GLM, result=True,
+            category="ended", buddy=CFG_GLM, result=True,
             result_summary="整理 macOS 与 Windows 沙箱规则差异清单",
             spans=[
                 span("queue:att-b1h-1", "queue", instant(3, 10), instant(3, 11), "claimed",
                      attempt_id="att-b1h-1"),
                 span("execution:att-b1h-1", "execution", instant(3, 11), instant(3, 25), "finished",
-                     attempt_id="att-b1h-1", configuration=CFG_GLM, confirmed=True, generation=1,
+                     attempt_id="att-b1h-1", buddy=CFG_GLM, confirmed=True, generation=1,
                      disposition="completed", turn_index=1,
                      error="synthetic preview cancellation: Host cancelled the helper", result_status="cancelled"),
             ],
@@ -677,13 +677,13 @@ def build_runs() -> dict[str, dict]:
             title="封存配额耗尽时的部分输出", title_source="title",
             task_text="排查执行器在配额耗尽后仍未封存部分输出的路径，并补齐封存记录。",
             created=instant(6, 5), updated=instant(6, 26), state="failed", status="failed",
-            category="ended", configuration=CFG_GLM, result=True,
+            category="ended", buddy=CFG_GLM, result=True,
             result_summary="合成预览：执行器配额耗尽，仅保留封存的部分输出",
             spans=[
                 span("queue:att-b2-1", "queue", instant(6, 5), instant(6, 7), "claimed",
                      attempt_id="att-b2-1"),
                 span("execution:att-b2-1", "execution", instant(6, 7), instant(6, 26), "finished",
-                     attempt_id="att-b2-1", configuration=CFG_GLM, confirmed=True, generation=1,
+                     attempt_id="att-b2-1", buddy=CFG_GLM, confirmed=True, generation=1,
                      disposition="completed", turn_index=1, error=QUOTA_ERROR, result_status="failed"),
             ],
             attempts=[attempt("att-b2-1", 1, "finished", True, instant(6, 7), instant(6, 26), CFG_GLM,
@@ -705,13 +705,13 @@ def build_runs() -> dict[str, dict]:
             title="修复标题回退在 CRLF 输入下的显示", title_source="task",
             task_text="修复标题回退在 CRLF 输入下的显示，并补充回归测试。",
             created=instant(5, 0), updated=instant(5, 35), state="accepted", status="completed",
-            category="ended", configuration=CFG_FLASH, accepted=instant(5, 35), verdict="accepted",
+            category="ended", buddy=CFG_FLASH, accepted=instant(5, 35), verdict="accepted",
             result=True, result_summary="修复标题回退在 CRLF 输入下的显示",
             spans=[
                 span("queue:att-c1-1", "queue", instant(5, 0), instant(5, 4), "claimed",
                      attempt_id="att-c1-1"),
                 span("execution:att-c1-1", "execution", instant(5, 4), instant(5, 20), "finished",
-                     attempt_id="att-c1-1", configuration=CFG_FLASH, confirmed=True, generation=1,
+                     attempt_id="att-c1-1", buddy=CFG_FLASH, confirmed=True, generation=1,
                      disposition="completed", turn_index=1),
             ],
             attempts=[attempt("att-c1-1", 1, "finished", True, instant(5, 4), instant(5, 20), CFG_FLASH,
@@ -726,13 +726,13 @@ def build_runs() -> dict[str, dict]:
         run("preview-run-c1-h1", project="beta", group=None, parent=STANDALONE, hosts=(HOST_B, HOST_B),
             title=UNTITLED, title_source="none", task_text="   ",
             created=instant(5, 6), updated=instant(5, 25), state="delivered", status="completed",
-            category="review", configuration=CFG_GLM, verdict="rejected", result=True,
+            category="review", buddy=CFG_GLM, verdict="rejected", result=True,
             result_summary="合成预览：交付被记录为验收问题。",
             spans=[
                 span("queue:att-c1h-1", "queue", instant(5, 6), instant(5, 8), "claimed",
                      attempt_id="att-c1h-1"),
                 span("execution:att-c1h-1", "execution", instant(5, 8), instant(5, 18), "finished",
-                     attempt_id="att-c1h-1", configuration=CFG_GLM, confirmed=True, generation=1,
+                     attempt_id="att-c1h-1", buddy=CFG_GLM, confirmed=True, generation=1,
                      disposition="completed", turn_index=1),
             ],
             attempts=[attempt("att-c1h-1", 1, "finished", True, instant(5, 8), instant(5, 18), CFG_GLM,
@@ -753,7 +753,7 @@ def build_runs() -> dict[str, dict]:
                         created=recorded_span["startAt"], updated=recorded_span["endAt"],
                         state="cancelled" if record["status"] == "cancelled" else "accepted",
                         status=record["status"] if record["status"] in ("failed", "cancelled") else "completed",
-                        category="ended", configuration=None, governed=False, routing=record,
+                        category="ended", buddy=None, governed=False, routing=record,
                         adapter="decision", revision=1))
         runs[-1]["decisionId"] = record["decisionId"]
         runs[-1]["requestId"] = f"request-{router}"
@@ -771,7 +771,7 @@ def build_runs() -> dict[str, dict]:
             "currentHostId": entry["currentHostId"], "parentRunId": entry["parentRunId"],
             "rootRunId": root,
             "project": {"id": project["id"], "path": project["path"], "label": project["label"]},
-            "configuration": entry["configuration"] or (
+            "buddy": entry["buddy"] or (
                 {"adapter": "decision", "provider": "decision", "model": "decision", "effort": "default"}
                 if entry["adapter"] == "decision" else None),
         }
@@ -838,12 +838,12 @@ def shutdown_view(entry: dict) -> dict:
 
 
 def attempt_view(entry: dict, item: dict) -> dict:
-    configuration = item["configuration"]
+    buddy = item["buddy"]
     cancelled = entry["status"] == "cancelled"
     return {
         "attemptId": item["attemptId"], "taskId": entry["runId"], "generation": item["generation"],
         "workerId": "synthetic-worker-1", "workerIdentity": "synthetic preview worker (fixture)",
-        "workerInstance": "synthetic-instance-1", "adapter": entry["adapter"] or configuration["adapter"],
+        "workerInstance": "synthetic-instance-1", "adapter": entry["adapter"] or buddy["adapter"],
         "executionState": item["state"], "ownership": "owned",
         "runtimeIdentity": None, "leaseExpiresAt": None, "leaseSeconds": 900, "logPaths": {},
         "resultAvailable": item["result"] is not None, "shutdownConfirmed": item["shutdownConfirmed"],
@@ -859,7 +859,7 @@ def attempt_view(entry: dict, item: dict) -> dict:
 def task_view(entry: dict) -> dict:
     selected = entry["attempts"][-1] if entry["attempts"] else None
     receipt = selected["result"] if selected is not None and entry["resultAvailable"] else None
-    adapter = entry["adapter"] or (entry["configuration"] or {}).get("adapter", "dsh")
+    adapter = entry["adapter"] or (entry["buddy"] or {}).get("adapter", "dsh")
     spec: dict[str, Any] = {"task": entry["task"], "adapter": adapter, "cwd": entry["cwd"],
                             "workspace": True, "timeoutSeconds": entry["timeoutSeconds"]}
     if entry["group"]:
@@ -943,8 +943,8 @@ def turn_views(entry: dict) -> list[dict]:
             "sessionId": None, "state": "concluded" if item["state"] == "finished" else "open",
             "disposition": item["disposition"], "createdAt": item["startedAt"],
             "updatedAt": item["finishedAt"] or item["startedAt"],
-            "executionConfiguration": item["configuration"],
-            "routing": ({"decisionId": entry["routing"]["decisionId"], "executionConfigurationRevision": 2}
+            "buddy": item["buddy"],
+            "routing": ({"decisionId": entry["routing"]["decisionId"], "buddyRevision": 2}
                         if entry["routing"] and entry["routing"]["decisionId"] and item["turnIndex"] == 1
                         else None),
             "summary": ((item["result"] or {}).get("result") or {}).get("finalText", ""),
@@ -963,7 +963,7 @@ def workflow_view(entry: dict) -> dict:
                  "integrator": False, "autoContinue": True, "requestId": child["requestId"]}
                 for child in FIXTURES["runs"].values()
                 if child["governed"] and child["parentRunId"] == entry["runId"]]
-    routing = entry["routing"] or {"status": "explicit" if entry["configuration"] else "needs-host",
+    routing = entry["routing"] or {"status": "explicit" if entry["buddy"] else "needs-host",
                                    "decisionId": None, "taskId": None, "constraints": {},
                                    "source": None}
     return {
@@ -973,15 +973,15 @@ def workflow_view(entry: dict) -> dict:
         "state": entry["state"], "status": entry["status"], "queueReason": None,
         "awaitingHost": entry["state"] == "awaiting-host", "waitReason": wait_reason(entry),
         "continuationCount": entry["continuationCount"],
-        # ADR-018: whether the Host may still re-choose the configuration, and
+        # ADR-018: whether the Host may still re-choose the buddy, and
         # the Host's own recorded conclusion for a failed or cancelled goal.
-        "configurationLocked": entry["configurationLocked"],
+        "buddyLocked": entry["buddyLocked"],
         "hostConclusion": entry["hostConclusion"],
         "goal": {"task": entry["task"], "taskTruncated": False,
-                 "adapter": entry["adapter"] or (entry["configuration"] or {}).get("adapter", "dsh"),
+                 "adapter": entry["adapter"] or (entry["buddy"] or {}).get("adapter", "dsh"),
                  "cwd": entry["cwd"], "fingerprint": digest(f"{entry['runId']}-goal")},
-        "executionConfiguration": entry["configuration"],
-        "executionConfigurationRevision": 2 if entry["configuration"] else None,
+        "buddy": entry["buddy"],
+        "buddyRevision": 2 if entry["buddy"] else None,
         "routing": routing, "turns": turns, "currentTurn": turns[0] if turns else None,
         "activeRequest": entry["activeRequest"], "counts": {"turns": len(turns),
                                                             "openRequests": 1 if entry["activeRequest"] else 0,
@@ -1014,7 +1014,7 @@ def task_first_line(task_text: str) -> str | None:
 def timeline_row(entry: dict, depth: int) -> dict:
     attempts = entry["attempts"]
     confirmed = sum(1 for item in attempts if item["state"] == "finished" and item["shutdownConfirmed"])
-    configuration = entry["configuration"]
+    buddy = entry["buddy"]
     return {
         "runId": entry["runId"], "parentRunId": entry["parentRunId"], "rootRunId": entry["rootRunId"],
         "title": entry["title"] or UNTITLED, "titleSource": entry["titleSource"],
@@ -1023,8 +1023,8 @@ def timeline_row(entry: dict, depth: int) -> dict:
         "createdAt": entry["createdAt"], "state": entry["state"], "status": entry["status"],
         "category": entry["category"], "shutdownConfirmed": len(attempts) == confirmed, "depth": depth,
         "kind": entry["kind"],
-        "configuration": ({key: configuration.get(key) for key in ("adapter", "provider", "model", "effort")}
-                          if configuration else None),
+        "buddy": ({key: buddy.get(key) for key in ("adapter", "provider", "model", "effort")}
+                          if buddy else None),
         "acceptedAt": entry["acceptedAt"], "acceptanceVerdict": entry["acceptanceVerdict"],
     }
 
@@ -1120,10 +1120,10 @@ def matches(entry: dict, applied: dict) -> bool:
     if applied.get("hostId") and applied["hostId"] not in (entry["sourceHostId"], entry["currentHostId"]):
         return False
     if applied.get("query"):
-        configuration = entry["configuration"] or {}
+        buddy = entry["buddy"] or {}
         haystack = " ".join((entry["runId"], entry["title"], PROJECTS[entry["project"]]["path"],
                              entry["sourceHostId"], entry["currentHostId"],
-                             configuration.get("adapter", ""), configuration.get("model", ""))).casefold()
+                             buddy.get("adapter", ""), buddy.get("model", ""))).casefold()
         if applied["query"].casefold() not in haystack:
             return False
     name = applied.get("filter", "all")
@@ -1218,7 +1218,7 @@ def task_page(params: dict) -> dict:
         entries = [entry for entry in entries if entry["status"] == params["state"]]
     if params.get("adapter"):
         entries = [entry for entry in entries
-                   if (entry["adapter"] or (entry["configuration"] or {}).get("adapter")) == params["adapter"]]
+                   if (entry["adapter"] or (entry["buddy"] or {}).get("adapter")) == params["adapter"]]
     if (params.get("rootsOnly") or "false").lower() in ("true", "1"):
         entries = [entry for entry in entries if entry["parentRunId"] is None]
     entries.sort(key=lambda entry: (entry["createdAt"], entry["runId"]), reverse=True)
@@ -1227,20 +1227,20 @@ def task_page(params: dict) -> dict:
             "nextCursor": None}
 
 
-def profile_views() -> list[dict]:
-    # All profile claims here are synthetic, including decision support. They
+def buddy_views() -> list[dict]:
+    # All buddy claims here are synthetic, including decision support. They
     # provide UI choices without asserting native verification of real models.
     views = []
     for adapter, provider, model, efforts, enabled in CATALOG:
         for effort in efforts:
             available = adapter != LOGGED_OUT_HARNESS
             pending = (adapter, provider, model) == PENDING_MODEL
-            view = {"profileId": f"{adapter}:{provider}:{model}:{effort}",
+            view = {"buddyId": f"{adapter}:{provider}:{model}:{effort}",
                     "label": f"{model} · {effort} (synthetic preview)",
                     "adapter": adapter, "provider": provider, "model": model,
                     "effort": effort, "available": available, "enabled": effort in enabled,
                     "capabilities": [f"execution:{adapter}", "routing:fast"],
-                    "contextWindow": 200000, "description": "synthetic preview profile",
+                    "contextWindow": 200000, "description": "synthetic preview buddy",
                     "source": "synthetic-preview", "catalogState": "ready", "catalogReason": None,
                     "catalogStatus": "pending" if pending else "available",
                     "billing": {'kind': 'subscription' if adapter in ('codex', 'claude') else 'metered',
@@ -1252,7 +1252,7 @@ def profile_views() -> list[dict]:
             views.append(view)
     # The four buddies the runs use come first, as the snapshot always listed them.
     used = [f"{cfg['adapter']}:{cfg['provider']}:{cfg['model']}:{cfg['effort']}" for cfg in CONFIGS]
-    return sorted(views, key=lambda view: used.index(view["profileId"]) if view["profileId"] in used else len(used))
+    return sorted(views, key=lambda view: used.index(view["buddyId"]) if view["buddyId"] in used else len(used))
 
 
 def policy_views() -> dict:
@@ -1260,14 +1260,14 @@ def policy_views() -> dict:
     def model_service(cfg: dict) -> dict:
         return {key: cfg[key] for key in ("adapter", "provider", "model")}
 
-    def profile_id(cfg: dict) -> str:
+    def buddy_id(cfg: dict) -> str:
         return f"{cfg['adapter']}:{cfg['provider']}:{cfg['model']}:{cfg['effort']}"
 
-    preferences = [{"profileId": profile_id(CFG_FLASH), "mode": "prefer", "reason": "synthetic preview choice"},
-                   {"profileId": profile_id(CFG_CLAUDE), "mode": "exclude", "reason": "synthetic preview exclusion"},
-                   {"profileId": profile_id(CFG_CODEX), "mode": "pin", "reason": ""}]
+    preferences = [{"buddyId": buddy_id(CFG_FLASH), "mode": "prefer", "reason": "synthetic preview choice"},
+                   {"buddyId": buddy_id(CFG_CLAUDE), "mode": "exclude", "reason": "synthetic preview exclusion"},
+                   {"buddyId": buddy_id(CFG_CODEX), "mode": "pin", "reason": ""}]
     return {
-        "preferences": sorted(preferences, key=lambda entry: entry["profileId"]),
+        "preferences": sorted(preferences, key=lambda entry: entry["buddyId"]),
         "modelServiceNotes": [{**model_service(CFG_CODEX), "text": "synthetic preview family note",
                                "updatedAt": "2026-09-26T00:00:00Z"}],
     }
@@ -1373,17 +1373,17 @@ def runtime_version_report() -> dict:
     return {"running": {"mode": "runtime", **facts}, "installed": dict(facts)}
 
 
-def router_records(profiles: list[dict]) -> list[dict]:
+def router_records(buddies: list[dict]) -> list[dict]:
     """The Router list with one record each: one serving, one waiting to be tried again, one that cannot serve."""
-    def record(profile_id: str, index: int, **facts) -> dict:
-        profile = next(item for item in profiles if item["profileId"] == profile_id)
-        return {"profileId": profile_id, "index": index,
-                "identity": {key: profile[key] for key in ("adapter", "provider", "model", "effort")},
+    def record(buddy_id: str, index: int, **facts) -> dict:
+        buddy = next(item for item in buddies if item["buddyId"] == buddy_id)
+        return {"buddyId": buddy_id, "index": index,
+                "identity": {key: buddy[key] for key in ("adapter", "provider", "model", "effort")},
                 "eligible": True, "code": None, "inSkipWindow": False, "skipUntil": None, "retryAt": None,
                 "retryInProgress": False, "answeredCount": 0, "noAnswerCount": 0, "consecutiveNoAnswers": 0,
                 "lastAnsweredAt": None, "lastNoAnswerAt": None, "lastError": None, **facts}
     return [
-        record(profiles[0]["profileId"], 0, answeredCount=3, noAnswerCount=1, lastAnsweredAt=instant(6, 5),
+        record(buddies[0]["buddyId"], 0, answeredCount=3, noAnswerCount=1, lastAnsweredAt=instant(6, 5),
                lastNoAnswerAt=instant(4, 12), lastError={"code": "routing-bounds-rejected", "at": instant(4, 12), "phase": "answer"}),
         record("codex:openai:gpt-5-mini:high", 1, inSkipWindow=True, skipUntil=instant(8, 46), retryAt=instant(8, 46),
                answeredCount=1, noAnswerCount=2, consecutiveNoAnswers=2, lastAnsweredAt=instant(3, 2),
@@ -1393,8 +1393,8 @@ def router_records(profiles: list[dict]) -> list[dict]:
 
 
 def console_snapshot(scenario: str, assets_ready: bool) -> dict:
-    profiles = profile_views()
-    routers = router_records(profiles)
+    buddies = buddy_views()
+    routers = router_records(buddies)
     writable = scenario != "readonly"
     return {
         "csrfToken": SYNTHETIC_CSRF,
@@ -1402,22 +1402,22 @@ def console_snapshot(scenario: str, assets_ready: bool) -> dict:
         "consoleAccess": {"requireLogin": False, "revision": 0, "sessions": []},
         "consoleSession": {"id": SYNTHETIC_SESSION_ID, "canWrite": writable,
                            "reason": None if writable else "superseded"},
-        "configuration": {"routerProfileIds": [entry["profileId"] for entry in routers],
+        "configuration": {"routerBuddyIds": [entry["buddyId"] for entry in routers],
                           "routerRetryIntervalSeconds": 600,
                           "defaultRoutingMode": "fast", "routingBudget": "standard",
                           "routingBudgetLimits": {"preset": "standard", "timeoutSeconds": 300,
                                                   "toolCalls": 24, "bytesRead": 524288}},
-        "configurationError": None,
-        "profiles": profiles,
+        "buddyError": None,
+        "buddies": buddies,
         "modelServiceConcurrency": concurrency_rows(),
         "harnesses": harness_rows(),
-        "unavailableProfileCount": sum(1 for profile in profiles if not profile["available"]),
+        "unavailableBuddyCount": sum(1 for buddy in buddies if not buddy["available"]),
         **policy_views(), "decisions": [],
         "routingHealth": {"windowSize": 20, "sampleCount": 4, "failureCount": 1,
                           "consecutiveFailures": 0, "abstentionCount": 1, "cancelledCount": 1,
                           "budgetExhaustedCount": 0, "boundsRejectedCount": 1, "inputChangedCount": 0,
                           "lastSuccessAt": instant(6, 5), "lastSuccessDecisionId": ROUTING_A1["decisionId"],
-                          "available": True, "reasonCode": None, "currentRouterProfileId": routers[0]["profileId"],
+                          "available": True, "reasonCode": None, "currentRouterBuddyId": routers[0]["buddyId"],
                           "routers": routers,
                           "recentFailures": [{"decisionId": ROUTING_A2["decisionId"], "runId": "preview-run-a2",
                                               "at": instant(8, 36), "code": "routing-bounds-rejected"}]},
@@ -1434,7 +1434,7 @@ def decision_view(router: dict) -> dict:
     routing = router["routing"]
     return {"decisionId": router["decisionId"], "requestId": router["requestId"], "kind": "select",
             "status": routing["status"], "task": router["task"], "runId": router["runId"],
-            "profileId": None, "selectedProfile": routing["selectedProfile"],
+            "buddyId": None, "selectedBuddy": routing["selectedBuddy"],
             "decisionModel": {"requested": None, "resolved": None, "observed": None},
             "reason": routing["reason"], "evidence": [],
             "routingMode": routing["routingMode"], "requestedRoutingMode": routing["requestedRoutingMode"],
@@ -1460,7 +1460,7 @@ def selection_get(params: dict) -> dict:
         view.update({"attemptId": None, "generation": 1,
                                           "requested": {"constraints": routing["constraints"]}, "input": None,
                      "inputSha256": None, "output": None,
-                     "requestedProfile": routing["selectedProfile"]})
+                     "requestedBuddy": routing["selectedBuddy"]})
     return {"decision": view}
 
 
@@ -1494,7 +1494,7 @@ def workflow_get(params: dict) -> dict:
             routing = router["routing"]
             entries.append({"status": routing["status"], "decisionId": routing["decisionId"],
                      "taskId": routing["taskId"],
-                     "selectedProfile": routing["selectedProfile"], "reason": routing["reason"],
+                     "selectedBuddy": routing["selectedBuddy"], "reason": routing["reason"],
                      "constraints": routing["constraints"], "createdAt": router["createdAt"],
                      "routingMode": routing["routingMode"], "requestedRoutingMode": routing["requestedRoutingMode"],
                      "fallback": routing["fallback"], "policyCheck": routing["policyCheck"],
@@ -1549,9 +1549,9 @@ def command_result(scenario: str, operation: str, params: Any) -> dict:
         if not rows:
             raise PreviewError("INVALID_ARGUMENT", "adapter names no harness of the preview")
         result = {"harnesses": rows}
-    elif operation == "model_profiles":
-        profiles = profile_views()
-        result = {"profiles": profiles, **policy_views(),
+    elif operation == "buddy_list":
+        buddies = buddy_views()
+        result = {"buddies": buddies, **policy_views(),
                   "modelServiceConcurrency": concurrency_rows(), "nextCursor": None}
     if scenario == "error":
         # Validate first, then simulate the read failure: a missing or unknown
@@ -1575,7 +1575,7 @@ def endpoint_lines(port: int) -> tuple[str, ...]:
         f"GET  {base}/api/backup-preflight",
         f"GET  {base}/api/runtime-version",
         f"POST {base}/api/command  workflow_get · selection_get · selection_list · "
-        f"model_profiles   (removed ops: 404; writes incl. macro_task_stop: 403)",
+        f"buddy_list   (removed ops: 404; writes incl. macro_task_stop: 403)",
     )
 
 
@@ -1821,11 +1821,11 @@ REQUIRED_KEYS = {
                          "state", "counts", "matchingRuns", "rootRunIds"},
     "MacroTaskCounts": {"roots", "helpers", "accepted", "active", "host", "review", "ended"},
     "TimelineSpan": {"spanId", "runId", "kind", "startAt", "endAt", "state", "attemptId", "turnId",
-                     "turnIndex", "requestId", "configuration", "shutdownConfirmed", "uncertain",
+                     "turnIndex", "requestId", "buddy", "shutdownConfirmed", "uncertain",
                      "clockSkew"},
     "TimelineRow": {"runId", "parentRunId", "rootRunId", "title", "titleSource", "taskSummary", "summary",
                     "createdAt", "state", "status", "category", "shutdownConfirmed", "depth", "kind",
-                    "configuration", "acceptedAt", "acceptanceVerdict"},
+                    "buddy", "acceptedAt", "acceptanceVerdict"},
     "TimelineEvent": {"seq", "runId", "kind", "at", "label", "summary", "actor", "attemptId",
                       "requestId", "artifactId"},
     "MacroTaskTimeline": {"macroTask", "observedAt", "cursor", "rows", "spans", "events", "totals",
@@ -1902,8 +1902,8 @@ def validate_fixtures() -> list[str]:
     page = macro_task_page({})
     timeline = macro_task_timeline({"macroTaskId": MACRO_A}, "normal")
     configuration = console_snapshot("normal", True)["configuration"]
-    if not {"routerProfileIds", "routerRetryIntervalSeconds", "defaultRoutingMode", "routingBudget",
-            "routingBudgetLimits"} <= set(configuration) or "decisionProfileId" in configuration:
+    if not {"routerBuddyIds", "routerRetryIntervalSeconds", "defaultRoutingMode", "routingBudget",
+            "routingBudgetLimits"} <= set(configuration) or "decisionBuddyId" in configuration:
         problems.append("snapshot must use the ADR-021 ordered Router configuration")
     for name, value, keys in (
             ("MacroTaskPage", page, REQUIRED_KEYS["MacroTaskPage"]),
@@ -2019,11 +2019,11 @@ def validate_fixtures() -> list[str]:
         if not entry["governed"]:
             continue
         view = workflow_get({"runId": entry["runId"]})
-        if not isinstance(view.get("configurationLocked"), bool):
-            problems.append(f"{entry['runId']}: configurationLocked must be a boolean")
+        if not isinstance(view.get("buddyLocked"), bool):
+            problems.append(f"{entry['runId']}: buddyLocked must be a boolean")
         if "hostConclusion" not in view:
             problems.append(f"{entry['runId']}: governed view must carry hostConclusion")
-        if view.get("configurationLocked"):
+        if view.get("buddyLocked"):
             locked += 1
         conclusion = view.get("hostConclusion")
         if conclusion is not None:
@@ -2083,7 +2083,7 @@ def validate_fixtures() -> list[str]:
                 problems.append(f"{entry['runId']}: integration verification.hostPaths must be a string list")
             elif paths:
                 host_paths_seen = True
-    for label, covered in (("a Host conclusion", conclusions), ("a locked configuration", locked),
+    for label, covered in (("a Host conclusion", conclusions), ("a locked buddy", locked),
                            ("a sealed partial output", partials), ("a patched final artifact", patched),
                            ("a non-empty verification.hostPaths", host_paths_seen),
                            ("a finished attempt with unknown usage", unknown_usage)):
@@ -2286,13 +2286,13 @@ def emit_fixture_files() -> list[dict]:
     # dropped as unknown rather than blanking the page or reading as 0%.
     normal = console_snapshot("normal", assets_ready=False)
     legacy = clone(normal)
-    for key in ("routerProfileIds", "routerRetryIntervalSeconds", "defaultRoutingMode"):
+    for key in ("routerBuddyIds", "routerRetryIntervalSeconds", "defaultRoutingMode"):
         legacy["configuration"].pop(key, None)
-    legacy["configuration"]["decisionProfileId"] = profile_views()[0]["profileId"]
+    legacy["configuration"]["decisionBuddyId"] = buddy_views()[0]["buddyId"]
     add("incompatible", "snapshot-legacy-single-router.json", "console-snapshot", "GET /api/console", 200,
         "rejected", legacy, request={}, expected_code="INVALID_RESPONSE",
-        mutation="configuration reverted to the retired schema-13 single-Router shape: decisionProfileId "
-                 "added while routerProfileIds, routerRetryIntervalSeconds and defaultRoutingMode were removed")
+        mutation="configuration reverted to the retired schema-13 single-Router shape: decisionBuddyId "
+                 "added while routerBuddyIds, routerRetryIntervalSeconds and defaultRoutingMode were removed")
     missing_session = clone(normal)
     missing_session.pop("consoleSession", None)
     add("incompatible", "snapshot-missing-session.json", "console-snapshot", "GET /api/console", 200,

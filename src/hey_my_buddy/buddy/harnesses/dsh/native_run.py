@@ -7,7 +7,7 @@ leaves title generation and telemetry to the user's native configuration.
 The owned connection supplies native configuration readback, tool/update facts,
 signed turn receipts and conservative stop evidence. Discovery creates a bare
 session without sending a prompt. Worker native resume continues the exact
-bound task/session/cwd/configuration with fresh per-attempt mounts; a refusal
+bound task/session/cwd/buddy with fresh per-attempt mounts; a refusal
 fails the turn without a new-session fallback. Worker records and bindings stay
 in the task's shared native root; launch controls and frame logs stay private
 to the invocation. Fast and discovery records retain their attempt-private
@@ -49,7 +49,7 @@ from ....protocol.activity import ActivityPublisher
 from ..run_contract import (
     ActivityPackage,
     MAX_SCHEMA_BYTES,
-    CheckedConfiguration,
+    CheckedBuddy,
     CheckedValue,
     CompletionEvidence,
     ContinuationFacts,
@@ -60,8 +60,8 @@ from ..run_contract import (
     NativeEvidence,
     NativeFailurePackage,
     PolicyFact,
-    ResultConfiguration,
-    RunConfiguration,
+    ResultBuddy,
+    RunBuddy,
     RunEnd,
     RunFeedback,
     RunRequest,
@@ -161,7 +161,7 @@ UNREAD_SHAPE_KINDS = ("initialize", "agentInfo", "configOptions",
 #: The one shared unconfirmed name this run can produce: the tool rows the
 #: scope declares but the launch patch cannot confirm. Whether the model and
 #: effort readback confirmed the selection is read from the result's own
-#: checked configuration, never from a second unconfirmed name.
+#: checked buddy, never from a second unconfirmed name.
 UNCONFIRMED_TOOL_SCOPE = "tool-scope"
 #: The discovery read that could not recognize the session's configuration
 #: options: the catalog stays unknown with this reason instead of a complete
@@ -388,16 +388,16 @@ def _binding_path(native_root: Path, session_id: str) -> Path:
 
 
 def _goal_binding(request: RunRequest, session_id: str) -> dict:
-    """The resumable goal binding of one session: task, session, cwd, configuration.
+    """The resumable goal binding of one session: task, session, cwd, buddy.
 
-    The configuration is the frozen requested selection — the same values the
+    The buddy is the frozen requested selection — the same values the
     native readback confirmed for the turn that wrote the binding.
     """
     return {"taskId": request.identity.task_id, "sessionId": session_id,
             "cwd": request.cwd,
-            "configuration": {"provider": request.configuration.provider,
-                              "model": request.configuration.model,
-                              "effort": request.configuration.effort}}
+            "buddy": {"provider": request.buddy.provider,
+                              "model": request.buddy.model,
+                              "effort": request.buddy.effort}}
 
 
 def _continuation_of(request: RunRequest) -> tuple[str, str | None]:
@@ -456,7 +456,7 @@ def session_facts(native_root: Path, session_id: str | None) -> dict:
             "patch and the frame logs stay in this invocation's private root; the DSH "
             "home, settings and credentials store are loaded by the owning harness; the "
             "session root is separate from the native app store. A resumable goal binding (task, session, cwd, "
-            "configuration) is saved under the native root only after a complete native turn with "
+            "buddy) is saved under the native root only after a complete native turn with "
             "verified provenance and a confirmed group stop"
         )
     else:
@@ -465,7 +465,7 @@ def session_facts(native_root: Path, session_id: str | None) -> dict:
             "this run's session rollout lives under a private sessions root of this carrier's own "
             "private root, not the task's shared native root; the DSH home, settings and "
             "credentials store are loaded by the owning harness; the session root is "
-            "separate from the native app store. A resumable goal binding (task, session, cwd, configuration) is "
+            "separate from the native app store. A resumable goal binding (task, session, cwd, buddy) is "
             "saved under the run's native root only after a complete native turn with verified "
             "provenance and a confirmed group stop"
         )
@@ -678,7 +678,7 @@ def _initialize(client: AcpClient, facts: dict) -> str | None:
 # -- the configuration stage -------------------------------------------------------
 
 
-def _declared_model_value(options: list, configuration: RunConfiguration) -> str:
+def _declared_model_value(options: list, buddy: RunBuddy) -> str:
     """The declared model option value string for this run's provider and model."""
     for option in options or []:
         if not isinstance(option, dict) or option.get("id") != "model":
@@ -694,23 +694,23 @@ def _declared_model_value(options: list, configuration: RunConfiguration) -> str
                 except ValueError:
                     continue
                 if (isinstance(parsed, list) and len(parsed) == 2
-                        and parsed[0] == configuration.provider and parsed[1] == configuration.model):
+                        and parsed[0] == buddy.provider and parsed[1] == buddy.model):
                     return entry["value"]
-    raise NativeError("configuration-unavailable",
+    raise NativeError("buddy-unavailable",
                       "the requested DSH provider/model is not in the native declared options")
 
 
-def _declared_effort_value(options: list, configuration: RunConfiguration) -> str:
+def _declared_effort_value(options: list, buddy: RunBuddy) -> str:
     """The declared reasoning-effort value for this run's effort."""
     for option in options or []:
         if not isinstance(option, dict) or option.get("id") != "reasoning_effort":
             continue
         declared = [entry.get("value") for entry in (option.get("options") or [])
                     if isinstance(entry, dict) and isinstance(entry.get("value"), str)]
-        if configuration.effort in declared:
-            return configuration.effort
+        if buddy.effort in declared:
+            return buddy.effort
         break
-    raise NativeError("invalid-configuration",
+    raise NativeError("invalid-buddy",
                       "the requested reasoning effort is not a declared native option")
 
 
@@ -725,7 +725,7 @@ def _readback(options: object, option_id: str) -> str | None:
 
 
 def _configure(client: AcpClient, session_id: str, snapshot: dict,
-               configuration: RunConfiguration, facts: dict) -> dict:
+               buddy: RunBuddy, facts: dict) -> dict:
     """The one model/effort selection site: declared values in, readback out.
 
     Recognized selectors are set through ``session/set_config_option`` and
@@ -741,31 +741,31 @@ def _configure(client: AcpClient, session_id: str, snapshot: dict,
     options = snapshot.get("configOptions") if isinstance(snapshot, dict) else None
     if not isinstance(options, list):
         _note_native_shape(facts, "configOptions", options)
-        raise NativeError("configuration-unavailable",
+        raise NativeError("buddy-unavailable",
                           "the native session configuration options had an unrecognized shape")
-    model_value = _declared_model_value(options, configuration)
-    effort_value = _declared_effort_value(options, configuration)
+    model_value = _declared_model_value(options, buddy)
+    effort_value = _declared_effort_value(options, buddy)
     echoed = _native_call(lambda: client.set_config_option(session_id, "model", model_value,
                                                            timeout=_CONFIG_TIMEOUT),
-                          code="configuration-unavailable", message="the native model selection failed")
+                          code="buddy-unavailable", message="the native model selection failed")
     model_options = echoed.get("configOptions") if isinstance(echoed, dict) else None
     model_readback = _readback(model_options, "model")
     if model_readback is None:
         _note_native_shape(facts, "modelReadback", model_options)
     elif model_readback != model_value:
-        raise NativeError("configuration-mismatch", "the native session did not retain the requested model")
+        raise NativeError("buddy-mismatch", "the native session did not retain the requested model")
     echoed = _native_call(lambda: client.set_config_option(session_id, "reasoning_effort", effort_value,
                                                            timeout=_CONFIG_TIMEOUT),
-                          code="invalid-configuration", message="the native effort selection failed")
+                          code="invalid-buddy", message="the native effort selection failed")
     effort_options = echoed.get("configOptions") if isinstance(echoed, dict) else None
     effort_readback = _readback(effort_options, "reasoning_effort")
     if effort_readback is None:
         _note_native_shape(facts, "effortReadback", effort_options)
     elif effort_readback != effort_value:
-        raise NativeError("configuration-mismatch", "the native session did not retain the requested reasoning effort")
-    return {"provider": configuration.provider if model_readback is not None else None,
-            "model": configuration.model if model_readback is not None else None,
-            "effort": configuration.effort if effort_readback is not None else None}
+        raise NativeError("buddy-mismatch", "the native session did not retain the requested reasoning effort")
+    return {"provider": buddy.provider if model_readback is not None else None,
+            "model": buddy.model if model_readback is not None else None,
+            "effort": buddy.effort if effort_readback is not None else None}
 
 
 # -- the update pump and the observer seam ------------------------------------------
@@ -1030,7 +1030,7 @@ def run(request: RunRequest, *, observer: Callable[[Mapping[str, Any]], RunFeedb
             if binding != _goal_binding(request, previous):
                 raise NativeError("native-resume-unavailable",
                                   "the previous native session does not match this goal, "
-                                  "checkout and configuration")
+                                  "checkout and buddy")
         scope_rows, extra_env = _launch_policy(request)
         state.scope_rows = scope_rows
         state.permission_mode = extra_env.get(PERMISSION_MODE_ENV)
@@ -1304,7 +1304,7 @@ def _final_message_rounds(*, client: AcpClient, pump: _Pump, request: RunRequest
                                              state=state, tools=tools, activity=activity,
                                              sessions=sessions)
         state.configured = True
-        state.checked = _configure(client, session_id, snapshot, request.configuration, state.native_facts)
+        state.checked = _configure(client, session_id, snapshot, request.buddy, state.native_facts)
         raw_parts: list[str] = []
         raw_bytes = 0
 
@@ -1402,7 +1402,7 @@ def _governed_round(*, client: AcpClient, pump: _Pump, request: RunRequest,
     if inquiry_bridge is not None:
         inquiry_bridge.activate(session_id)
     state.configured = True
-    state.checked = _configure(client, session_id, snapshot, request.configuration, state.native_facts)
+    state.checked = _configure(client, session_id, snapshot, request.buddy, state.native_facts)
     publisher = ActivityPublisher(services.live.publish_activity if services.live else None)
 
     def governed_fold(message: object) -> bool:
@@ -1610,10 +1610,10 @@ def _build_result(request: RunRequest, *, state: _RunState,
     interrupt = InterruptEvidence(
         requested=True if state.interrupt_requested else None,
         basis=state.interrupt_basis)
-    checked_config = CheckedConfiguration()
+    checked_buddy = CheckedBuddy()
     if state.configured and state.checked is not None:
         checked = state.checked
-        checked_config = CheckedConfiguration(
+        checked_buddy = CheckedBuddy(
             provider=CheckedValue(value=checked["provider"]) if checked["provider"] is not None else None,
             model=CheckedValue(value=checked["model"]) if checked["model"] is not None else None,
             effort=CheckedValue(value=checked["effort"]) if checked["effort"] is not None else None)
@@ -1639,11 +1639,11 @@ def _build_result(request: RunRequest, *, state: _RunState,
         native_event_count=state.event_count or None,
         native_evidence=_native_evidence_facts(state),
         model_started=True if state.model_started else None,
-        configuration=ResultConfiguration(
-            requested=RunConfiguration(provider=request.configuration.provider,
-                                       model=request.configuration.model,
-                                       effort=request.configuration.effort),
-            checked=checked_config),
+        buddy=ResultBuddy(
+            requested=RunBuddy(provider=request.buddy.provider,
+                               model=request.buddy.model,
+                               effort=request.buddy.effort),
+            checked=checked_buddy),
         native_identity=native_identity,
         value=value, completion_evidence=completion,
         tool_evidence=_dsh_tool_package(tool_package),
@@ -1715,7 +1715,7 @@ def _evidence_refs(client: AcpClient | None, invocation_root: Path, state: _RunS
     if record is not None:
         # The optional record's own extracted facts: the observed model identity,
         # the per-step usage and the binding that matched them to this run. The
-        # shared contract has no observed-configuration slot, so the model stays
+        # shared contract has no observed-buddy slot, so the model stays
         # this retained fact instead of a look-alike checked value.
         retain("dsh-session-record", "dsh-session-record.json", record)
     if state.native_facts:

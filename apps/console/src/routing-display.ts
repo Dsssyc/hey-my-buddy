@@ -1,6 +1,6 @@
 import type { RoutingMode } from "./types";
-import { effortText } from "./profile-display";
-import type { ExcludedProfile, RoutingBasis } from "./workflow-types";
+import { effortText } from "./buddy-name";
+import type { ExcludedBuddy, RoutingBasis } from "./workflow-types";
 
 /** Use only the recorded mode; missing historic facts stay unrecorded. */
 export function recordedRoutingMode(mode: RoutingMode | null | undefined): string {
@@ -15,24 +15,24 @@ export function selectionSourceText(source: string | null | undefined): string |
   return null;
 }
 
-function excludedProfileText(entry: ExcludedProfile): string {
-  const configuration = [entry.adapter, entry.provider, entry.model, effortText(entry.effort)].filter(Boolean).join(" / ");
-  return entry.reason ? `${configuration}（${entry.reason}）` : configuration;
+function excludedBuddyText(entry: ExcludedBuddy): string {
+  const buddy = [entry.adapter, entry.provider, entry.model, effortText(entry.effort)].filter(Boolean).join(" / ");
+  return entry.reason ? `${buddy}（${entry.reason}）` : buddy;
 }
 
 /**
  * The frozen routing basis in one line: the candidate count at submission and
  * the user exclusions that narrowed it. Built only from the record's own frozen
- * facts, never from current Buddy configuration.
+ * facts, never from the current buddy.
  */
 export function routingBasisSummary(basis: RoutingBasis | null | undefined): string | null {
-  const excluded = basis?.excludedProfiles ?? [];
+  const excluded = basis?.excludedBuddies ?? [];
   if (basis?.candidateCount == null && excluded.length === 0) return null;
   const parts: string[] = [];
   if (basis?.candidateCount != null) parts.push(`提交时冻结候选 ${basis.candidateCount} 个`);
   const count = basis?.excludedCount ?? excluded.length;
   if (count > 0) {
-    const listed = excluded.slice(0, count).map(excludedProfileText).join("；");
+    const listed = excluded.slice(0, count).map(excludedBuddyText).join("；");
     const suffix = count > excluded.length ? ` 等 ${count} 个` : "";
     parts.push(`用户排除 ${count} 个：${listed}${suffix}`);
   }

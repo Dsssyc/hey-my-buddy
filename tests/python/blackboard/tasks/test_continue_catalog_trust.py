@@ -1,18 +1,18 @@
 """ADR-027 rule 3 for continuation overrides: real catalog facts, real re-read.
 
-A Host's explicit ``workflow_continue`` configuration must meet the same catalog
+A Host's explicit ``workflow_continue`` buddy must meet the same catalog
 facts as a submission: a missing or unavailable route gets exactly one bounded
 re-read of its harness before rejection, and the rejection names the catalog read
 time and the refresh remedy. The user's enabled choice stays a separate gate
 that neither a refresh nor the override can flip, and its refusal carries a
 different reason and facts than a catalog refusal. These tests run the real
-``catalog.validate_configuration`` (WorkflowTestCase's passthrough mock is
+``catalog.validate_buddy`` (WorkflowTestCase's passthrough mock is
 replaced) and never auto-enable the override target.
 """
 import json
 from unittest.mock import patch
 
-from support import FakeClock, enable_fixture_configuration
+from support import FakeClock, enable_fixture_buddy
 from blackboard.tasks.test_catalog_trust import IDENTITY, reading
 from blackboard.tasks.test_workflow import WorkflowTestCase
 
@@ -21,7 +21,7 @@ from hey_my_buddy.errors import BoardError
 
 # Bound at import time, before WorkflowTestCase's setUp mock replaces the module
 # attribute, so these tests can put the real validation back underneath it.
-_real_validate_configuration = catalog.validate_configuration
+_real_validate_buddy = catalog.validate_buddy
 
 
 class ContinueCatalogTrustTests(WorkflowTestCase):
@@ -30,7 +30,7 @@ class ContinueCatalogTrustTests(WorkflowTestCase):
         # WorkflowTestCase replaces catalog validation with a passthrough mock;
         # a continuation override here must face the real recorded catalog, the
         # real pending rules and the real single bounded re-read.
-        self.enterContext(patch.object(catalog, "validate_configuration", _real_validate_configuration))
+        self.enterContext(patch.object(catalog, "validate_buddy", _real_validate_buddy))
         self.clock = FakeClock()
         self.board = self.board(clock=self.clock)
         self.evaluation = self.board.evaluation
@@ -45,28 +45,28 @@ class ContinueCatalogTrustTests(WorkflowTestCase):
         self.evaluation.record_catalog(reading())
         return self.submit(self.board, provider="fixture", model="alpha", effort="max")
 
-    def continue_with(self, view, configuration, *, command_id="continue-1"):
+    def continue_with(self, view, buddy, *, command_id="continue-1"):
         """A Host continuation override without the test helper's auto-enable."""
         return self.board.call("workflow_continue", {
             "runId": view["runId"], "commandId": command_id,
             "expectedRevision": view["revision"], "input": "continue with the explicit route",
-            "helperPolicy": "keep", "configuration": configuration,
-            "reason": "Route the continuation through this explicit configuration",
+            "helperPolicy": "keep", "buddy": buddy,
+            "reason": "Route the continuation through this explicit buddy",
             **self.control(view),
         })
 
-    def enable_profile(self, profile_id):
+    def enable_buddy(self, buddy_id):
         with self.board.store.db.write() as db:
-            db.execute("UPDATE evaluation_profiles SET enabled=1 WHERE profile_id=?", (profile_id,))
+            db.execute("UPDATE buddies SET enabled=1 WHERE buddy_id=?", (buddy_id,))
 
-    def profile_enabled(self, profile_id):
+    def buddy_enabled(self, buddy_id):
         with self.board.store.db.read() as db:
-            row = db.execute("SELECT enabled FROM evaluation_profiles WHERE profile_id=?", (profile_id,)).fetchone()
+            row = db.execute("SELECT enabled FROM buddies WHERE buddy_id=?", (buddy_id,)).fetchone()
             return None if row is None else bool(row[0])
 
     def overridden_event(self):
         with self.board.store.db.read() as db:
-            row = db.execute("SELECT payload_json FROM events WHERE kind='workflow.configuration_overridden'").fetchone()
+            row = db.execute("SELECT payload_json FROM events WHERE kind='workflow.buddy_overridden'").fetchone()
         return json.loads(row[0]) if row is not None else None
 
     def test_missing_route_admits_after_one_bounded_reread_recovers(self):
@@ -79,11 +79,11 @@ class ContinueCatalogTrustTests(WorkflowTestCase):
 
         catalog.register_catalog_reread(self.directory, reread)
         override = {**IDENTITY, "model": "beta"}
-        enable_fixture_configuration(self.board.store, override)
+        enable_fixture_buddy(self.board.store, override)
         continued = self.continue_with(submitted, override)
         self.assertEqual(calls, ["dsh"], "Exactly one bounded re-read of exactly that harness")
-        self.assertEqual(continued["executionConfiguration"], override)
-        self.assertEqual(self.overridden_event()["configuration"], override)
+        self.assertEqual(continued["buddy"], override)
+        self.assertEqual(self.overridden_event()["buddy"], override)
 
     def test_missing_route_without_recovery_still_rejects_with_catalog_facts(self):
         submitted = self.seed()
@@ -95,11 +95,11 @@ class ContinueCatalogTrustTests(WorkflowTestCase):
 
         catalog.register_catalog_reread(self.directory, reread)
         override = {**IDENTITY, "model": "beta"}
-        enable_fixture_configuration(self.board.store, override)  # The user gate is satisfied.
+        enable_fixture_buddy(self.board.store, override)  # The user gate is satisfied.
         with self.assertRaises(BoardError) as rejected:
             self.continue_with(submitted, override)
         error = rejected.exception
-        self.assertEqual(error.code, "CONFIGURATION_UNAVAILABLE")
+        self.assertEqual(error.code, "BUDDY_UNAVAILABLE")
         self.assertEqual(calls, ["dsh"])
         self.assertEqual(error.details.get("catalogReadAt"), read_at)
         self.assertEqual(error.details.get("remedy"), catalog.CATALOG_REMEDY)
@@ -120,11 +120,11 @@ class ContinueCatalogTrustTests(WorkflowTestCase):
             self.evaluation.record_catalog(reading(models=()))  # The refresh still reports absence.
 
         catalog.register_catalog_reread(self.directory, reread)
-        self.enable_profile("dsh:fixture:alpha:max")  # The user gate is satisfied.
+        self.enable_buddy("dsh:fixture:alpha:max")  # The user gate is satisfied.
         with self.assertRaises(BoardError) as rejected:
             self.continue_with(submitted, IDENTITY)
         error = rejected.exception
-        self.assertEqual(error.code, "CONFIGURATION_UNAVAILABLE")
+        self.assertEqual(error.code, "BUDDY_UNAVAILABLE")
         self.assertEqual(calls, ["dsh"])
         self.assertEqual(error.details.get("catalogReadAt"), confirmed_at)
         self.assertEqual(error.details.get("remedy"), catalog.CATALOG_REMEDY)
@@ -142,20 +142,20 @@ class ContinueCatalogTrustTests(WorkflowTestCase):
             self.evaluation.record_catalog(reading(models=('alpha',)))
 
         catalog.register_catalog_reread(self.directory, reread)
-        self.enable_profile("dsh:fixture:alpha:max")
+        self.enable_buddy("dsh:fixture:alpha:max")
         continued = self.continue_with(submitted, IDENTITY)
         self.assertEqual(calls, ["dsh"])
-        self.assertEqual(continued["executionConfiguration"], IDENTITY)
+        self.assertEqual(continued["buddy"], IDENTITY)
 
     def test_catalog_absence_confirmed_before_write_fences_the_override(self):
         submitted = self.seed()
-        self.enable_profile("dsh:fixture:alpha:max")
+        self.enable_buddy("dsh:fixture:alpha:max")
         self.evaluation.record_catalog(reading(models=()))
         self.clock.advance(3601)
         calls = []
         catalog.register_catalog_reread(self.directory, lambda name: calls.append(name))
         workflow = self.board.store.workflow
-        validate = workflow._validated_configuration
+        validate = workflow._validated_buddy
 
         def workflow_state():
             with self.board.store.db.read() as db:
@@ -172,29 +172,29 @@ class ContinueCatalogTrustTests(WorkflowTestCase):
 
         before = workflow_state()
 
-        def confirm_after_validation(configuration):
+        def confirm_after_validation(buddy):
             # The real validator accepts pending alpha even after one hour;
             # only a second confirmed absence retires it. Publish that reading
             # after validation returns, before continue enters its write txn.
-            admitted = validate(configuration)
+            admitted = validate(buddy)
             self.assertEqual(admitted, IDENTITY)
             self.assertEqual(calls, [], "Pending admission needs no native re-read")
             self.evaluation.record_catalog(reading(models=()))
             return admitted
 
-        with patch.object(workflow, "_validated_configuration", side_effect=confirm_after_validation):
+        with patch.object(workflow, "_validated_buddy", side_effect=confirm_after_validation):
             with self.assertRaises(BoardError) as rejected:
                 self.continue_with(submitted, IDENTITY)
         error = rejected.exception
-        self.assertEqual(error.code, "CONFIGURATION_UNAVAILABLE")
+        self.assertEqual(error.code, "BUDDY_UNAVAILABLE")
         self.assertEqual(error.details.get("reason"), "catalog-unavailable")
         self.assertEqual(error.details.get("catalogReadAt"), self.clock.value)
         self.assertEqual(error.details.get("remedy"), catalog.CATALOG_REMEDY)
         self.assertNotIn("enabled", error.details, "User enablement is not the cause")
         self.assertEqual(calls, [], "The write fence must not start a native re-read")
-        self.assertTrue(self.profile_enabled("dsh:fixture:alpha:max"))
+        self.assertTrue(self.buddy_enabled("dsh:fixture:alpha:max"))
         self.assertIsNone(self.overridden_event())
-        self.assertEqual(workflow_state(), before, "No configuration, requeue, continuation, receipt or event writes")
+        self.assertEqual(workflow_state(), before, "No buddy, requeue, continuation, receipt or event writes")
 
     def test_simultaneously_unavailable_and_disabled_reports_the_catalog_reason_first(self):
         # The write-time gate meets a row that is both unavailable and not
@@ -205,45 +205,45 @@ class ContinueCatalogTrustTests(WorkflowTestCase):
         calls = []
         catalog.register_catalog_reread(self.directory, lambda name: calls.append(name))
         workflow = self.board.store.workflow
-        validate = workflow._validated_configuration
+        validate = workflow._validated_buddy
 
-        def confirm_after_validation(configuration):
-            admitted = validate(configuration)
+        def confirm_after_validation(buddy):
+            admitted = validate(buddy)
             self.assertEqual(admitted, IDENTITY)
             self.clock.advance(3601)
             self.evaluation.record_catalog(reading(models=()))  # Confirmed absence; still not enabled.
             return admitted
 
-        with patch.object(workflow, "_validated_configuration", side_effect=confirm_after_validation):
+        with patch.object(workflow, "_validated_buddy", side_effect=confirm_after_validation):
             with self.assertRaises(BoardError) as rejected:
                 self.continue_with(submitted, IDENTITY)
         error = rejected.exception
-        self.assertEqual(error.code, "CONFIGURATION_UNAVAILABLE")
+        self.assertEqual(error.code, "BUDDY_UNAVAILABLE")
         self.assertEqual(error.details.get("reason"), "catalog-unavailable",
                          "The catalog cause leads when both causes hold")
         self.assertEqual(error.details.get("catalogReadAt"), self.clock.value)
         self.assertEqual(error.details.get("remedy"), catalog.CATALOG_REMEDY)
         self.assertNotIn("enabled", error.details, "The not-enabled shape is a different refusal")
         self.assertEqual(calls, [], "The write fence starts no native re-read")
-        self.assertEqual(self.profile_enabled("dsh:fixture:alpha:max"), False)
+        self.assertEqual(self.buddy_enabled("dsh:fixture:alpha:max"), False)
 
-    def test_override_file_route_without_a_profile_row_refuses_not_enabled(self):
+    def test_override_file_route_without_a_buddy_row_refuses_not_enabled(self):
         # The operator's catalog file admits the route at validation without any
-        # recorded catalog, so no profile row exists when the write-time enabled
+        # recorded catalog, so no buddy row exists when the write-time enabled
         # gate looks for it; that missing row is itself the not-enabled refusal,
         # with the explicit enabled:false fact and no catalog re-read.
         self.catalog_fixture(reading())
         submitted = self.submit(self.board, provider="fixture", model="alpha", effort="max")
         with self.board.store.db.read() as db:
             self.assertIsNone(db.execute(
-                "SELECT 1 FROM evaluation_profiles WHERE profile_id='dsh:fixture:alpha:max'").fetchone(),
-                "A file-validated route has no profile row until a catalog is recorded")
+                "SELECT 1 FROM buddies WHERE buddy_id='dsh:fixture:alpha:max'").fetchone(),
+                "A file-validated route has no buddy row until a catalog is recorded")
         calls = []
         catalog.register_catalog_reread(self.directory, lambda name: calls.append(name))
         with self.assertRaises(BoardError) as rejected:
             self.continue_with(submitted, IDENTITY)
         gate = rejected.exception
-        self.assertEqual(gate.code, "CONFIGURATION_UNAVAILABLE")
+        self.assertEqual(gate.code, "BUDDY_UNAVAILABLE")
         self.assertEqual(gate.details.get("reason"), "not-enabled")
         self.assertIn("enabled", gate.details, "The refusal states the enablement fact itself")
         self.assertIs(gate.details["enabled"], False)
@@ -255,11 +255,11 @@ class ContinueCatalogTrustTests(WorkflowTestCase):
         read_at = self.clock.value
         calls = []
         catalog.register_catalog_reread(self.directory, lambda name: calls.append(name))
-        # An admitted catalog route whose profile the user never enabled.
+        # An admitted catalog route whose buddy the user never enabled.
         with self.assertRaises(BoardError) as disabled:
             self.continue_with(submitted, IDENTITY)
         gate = disabled.exception
-        self.assertEqual(gate.code, "CONFIGURATION_UNAVAILABLE")
+        self.assertEqual(gate.code, "BUDDY_UNAVAILABLE")
         self.assertEqual(gate.details.get("reason"), "not-enabled")
         self.assertIn("enabled", gate.details, "The user-gate refusal states the enablement fact itself")
         self.assertIs(gate.details["enabled"], False)
@@ -267,13 +267,13 @@ class ContinueCatalogTrustTests(WorkflowTestCase):
         self.assertNotEqual(gate.details.get("remedy"), catalog.CATALOG_REMEDY)
         self.assertIn("Enable", gate.details["remedy"])
         self.assertEqual(calls, [], "An admitted route is not re-read for the user gate")
-        # A route missing from the catalog whose profile row the user enabled.
+        # A route missing from the catalog whose buddy row the user enabled.
         override = {**IDENTITY, "model": "beta"}
-        enable_fixture_configuration(self.board.store, override)
+        enable_fixture_buddy(self.board.store, override)
         with self.assertRaises(BoardError) as missing:
             self.continue_with(submitted, override, command_id="continue-2")
         absent = missing.exception
-        self.assertEqual(absent.code, "CONFIGURATION_UNAVAILABLE")
+        self.assertEqual(absent.code, "BUDDY_UNAVAILABLE")
         self.assertEqual(calls, ["dsh"])
         self.assertEqual(absent.details.get("remedy"), catalog.CATALOG_REMEDY)
         self.assertEqual(absent.details.get("reason"), "catalog-unavailable")
@@ -282,7 +282,7 @@ class ContinueCatalogTrustTests(WorkflowTestCase):
         self.assertNotEqual(gate.details["remedy"], absent.details["remedy"])
 
     def test_refresh_never_flips_the_users_enabled_choice(self):
-        submitted = self.seed()  # alpha is listed; both profiles start disabled.
+        submitted = self.seed()  # alpha is listed; both buddies start disabled.
         calls = []
 
         def reread(name):
@@ -300,10 +300,10 @@ class ContinueCatalogTrustTests(WorkflowTestCase):
                          "The refreshed catalog admitted the route; only the user gate refuses")
         self.assertEqual(error.details.get("catalogReadAt"), self.clock.value,
                          "The refusal names the refreshed reading's time")
-        self.assertEqual(self.profile_enabled("dsh:fixture:beta:max"), False,
+        self.assertEqual(self.buddy_enabled("dsh:fixture:beta:max"), False,
                          "The refresh that listed beta did not enable it")
-        self.assertEqual(self.profile_enabled("dsh:fixture:alpha:max"), False)
+        self.assertEqual(self.buddy_enabled("dsh:fixture:alpha:max"), False)
         # Enabling it afterwards is the user's act, and only then does the override pass.
-        self.enable_profile("dsh:fixture:beta:max")
+        self.enable_buddy("dsh:fixture:beta:max")
         continued = self.continue_with(submitted, override, command_id="continue-2")
-        self.assertEqual(continued["executionConfiguration"], override)
+        self.assertEqual(continued["buddy"], override)

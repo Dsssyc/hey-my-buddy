@@ -21,7 +21,7 @@ from unittest import mock
 
 from support import BoardTestCase, FakeClock
 from protocol.fixtures import native_turn
-from blackboard.tasks.test_workflow_real import CONFIGURATION, GIT_ENV, RealWorkspaceTestCase, private_environment
+from blackboard.tasks.test_workflow_real import BUDDY, GIT_ENV, RealWorkspaceTestCase, private_environment
 import blackboard.tasks.test_workspace_identity as identity_fixtures
 
 from hey_my_buddy import private_dirs
@@ -122,7 +122,7 @@ class LifecycleTestCase(RealWorkspaceTestCase):
 
     def run_worktree(self, board, *, request_id="lifecycle-1", output="sealed output\n", disposition="completed"):
         submitted = board.call("workflow_submit", {
-            **CONFIGURATION, "requestId": request_id, "hostId": "host-1", "task": "isolated worktree task",
+            **BUDDY, "requestId": request_id, "hostId": "host-1", "task": "isolated worktree task",
             "cwd": str(self.repo), "submissionToken": "t" * 32,
             "executionWorkspace": {"kind": "worktree", "access": "write", "writeScope": ["."]},
         })
@@ -386,7 +386,7 @@ class LifecycleTestCase(RealWorkspaceTestCase):
         attempt = second_claim["claim"]["attempt"]
         context = ExecutionContext(
             task_id=run_id, attempt_id=attempt["attemptId"], generation=attempt["generation"],
-            spec={**CONFIGURATION, "cwd": second_manifest["path"], "task": "second turn", "timeoutSeconds": 30},
+            spec={**BUDDY, "cwd": second_manifest["path"], "task": "second turn", "timeoutSeconds": 30},
             directory=self.directory / "cleared-refs-turn", runtime={},
             environment={"BUDDY_STATE_DIR": str(self.directory)}, turn=second_claim["claim"]["turn"],
         )
@@ -457,7 +457,7 @@ class LifecycleTestCase(RealWorkspaceTestCase):
         board = self.board()
         self.register(board)
         submitted = board.call("workflow_submit", {
-            **CONFIGURATION, "requestId": "delete-mode", "hostId": "host-1", "task": "delete and chmod",
+            **BUDDY, "requestId": "delete-mode", "hostId": "host-1", "task": "delete and chmod",
             "cwd": str(self.repo), "submissionToken": "t" * 32,
             "executionWorkspace": {"kind": "worktree", "access": "write", "writeScope": ["."]},
         })
@@ -783,7 +783,7 @@ class LifecycleTestCase(RealWorkspaceTestCase):
         board_existing = self.board()
         self.register(board_existing, worker_id="w-existing")
         existing = board_existing.call("workflow_submit", {
-            **CONFIGURATION, "requestId": "existing-run", "hostId": "host-1", "task": "source checkout task",
+            **BUDDY, "requestId": "existing-run", "hostId": "host-1", "task": "source checkout task",
             "cwd": str(self.repo), "submissionToken": "t" * 32,
             "executionWorkspace": {"kind": "existing", "access": "read", "writeScope": []},
         })
@@ -951,7 +951,7 @@ class LifecycleTestCase(RealWorkspaceTestCase):
         checkout = Path(first["checkoutRoot"])
         self.register(board, worker_id="w-borrow")
         borrowed = board.call("workflow_submit", {
-            **CONFIGURATION, "requestId": "borrowed-run", "hostId": "host-1", "task": "borrowed checkout task",
+            **BUDDY, "requestId": "borrowed-run", "hostId": "host-1", "task": "borrowed checkout task",
             "cwd": str(checkout), "submissionToken": "b" * 32,
             "executionWorkspace": {"kind": "existing", "access": "read"},
         })
@@ -999,7 +999,7 @@ class LifecycleTestCase(RealWorkspaceTestCase):
         decided = board.call("workflow_decide", {
             "runId": run_id, "requestId": yielded["activeRequest"]["requestId"], "commandId": "helper-approval",
             "expectedRevision": yielded["revision"], "decision": "approve",
-            "helpers": [{**CONFIGURATION, "requestId": "borrow-helper", "task": "helper on the parent checkout",
+            "helpers": [{**BUDDY, "requestId": "borrow-helper", "task": "helper on the parent checkout",
                          "cwd": str(checkout),
                          "executionWorkspace": {"kind": "existing", "access": "write", "writeScope": ["."]}}],
             **self.control(yielded),
@@ -1048,7 +1048,7 @@ class LifecycleTestCase(RealWorkspaceTestCase):
         decided = board.call("workflow_decide", {
             "runId": run_id, "requestId": yielded["activeRequest"]["requestId"],
             "commandId": f"{request_id}-decide", "expectedRevision": yielded["revision"], "decision": "approve",
-            "helpers": [{**CONFIGURATION, "requestId": f"{request_id}-helper",
+            "helpers": [{**BUDDY, "requestId": f"{request_id}-helper",
                          "task": "helper owns its own worktree", "cwd": str(self.repo),
                          "executionWorkspace": {"kind": "worktree", "access": "write", "writeScope": ["."]}}],
             **self.control(yielded),
@@ -1288,7 +1288,7 @@ class LifecycleTestCase(RealWorkspaceTestCase):
         board = self.board()
         self.register(board)
         submitted = board.call("workflow_submit", {
-            **CONFIGURATION, "requestId": "adopt-reclaim", "hostId": "host-1",
+            **BUDDY, "requestId": "adopt-reclaim", "hostId": "host-1",
             "task": "scoped run whose only failure is the refused seal",
             "cwd": str(self.repo), "submissionToken": "t" * 32,
             "executionWorkspace": {"kind": "worktree", "access": "write", "writeScope": ["src"]},
@@ -1346,7 +1346,7 @@ class LifecycleTestCase(RealWorkspaceTestCase):
         board = self.board()
         self.register(board)
         submitted = board.call("workflow_submit", {
-            **CONFIGURATION, "requestId": "adopt-forge", "hostId": "host-1",
+            **BUDDY, "requestId": "adopt-forge", "hostId": "host-1",
             "task": "scoped run whose only failure is the refused seal",
             "cwd": str(self.repo), "submissionToken": "t" * 32,
             "executionWorkspace": {"kind": "worktree", "access": "write", "writeScope": ["src"]},
@@ -1569,7 +1569,7 @@ class LifecycleTestCase(RealWorkspaceTestCase):
         decided = board.call("workflow_decide", {
             "runId": run_id, "requestId": yielded["activeRequest"]["requestId"],
             "commandId": f"{request_id}-decide", "expectedRevision": yielded["revision"], "decision": "approve",
-            "helpers": [{**CONFIGURATION, "requestId": f"{request_id}-helper", "task": "scoped helper",
+            "helpers": [{**BUDDY, "requestId": f"{request_id}-helper", "task": "scoped helper",
                          "cwd": str(self.repo),
                          "executionWorkspace": {"kind": "worktree", "access": "write", "writeScope": ["src"]}}],
             **self.control(yielded),
@@ -1842,7 +1842,7 @@ class LifecycleTestCase(RealWorkspaceTestCase):
         attempt = claimed["claim"]["attempt"]
         context = ExecutionContext(
             task_id=submitted["runId"], attempt_id=attempt["attemptId"], generation=attempt["generation"],
-            spec={**CONFIGURATION, "cwd": original["path"], "task": "private identity seam", "timeoutSeconds": 30},
+            spec={**BUDDY, "cwd": original["path"], "task": "private identity seam", "timeoutSeconds": 30},
             directory=self.directory / "native-seam", runtime={},
             environment={"BUDDY_STATE_DIR": str(self.directory)}, turn=claimed["claim"]["turn"],
         )

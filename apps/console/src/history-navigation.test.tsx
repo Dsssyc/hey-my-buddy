@@ -12,8 +12,8 @@ function snapshotFixture(): Snapshot {
   return {
     csrfToken: "csrf", eventCursor: 0, consoleSession: { id: "session-a", canWrite: true, reason: null },
 
-    configuration: { routerProfileIds: [], routerRetryIntervalSeconds: 600, defaultRoutingMode: "review" as const, routingBudget: "standard"},
-    profiles: [], preferences: [], modelServiceNotes: [], decisions: [],
+    configuration: { routerBuddyIds: [], routerRetryIntervalSeconds: 600, defaultRoutingMode: "review" as const, routingBudget: "standard"},
+    buddies: [], preferences: [], modelServiceNotes: [], decisions: [],
  modelServiceConcurrency: [], tasks: { pendingCount: 0 },
     capabilities: {},
   };
@@ -22,7 +22,7 @@ function snapshotFixture(): Snapshot {
 const rawRecord = (): Task => ({ runId: "cmd-9", task: "外部命令记录", status: "completed", owner: "fixture",
   cwd: "/worktrees/cmd-9", revision: 1, createdAt: "2026-09-26T05:00:00Z", acceptedAt: null, acceptanceVerdict: null,
   delegation: { kind: "execution", sourceHostId: null, currentHostId: null, parentRunId: null, rootRunId: "cmd-9",
-    project: { id: "px", label: "外部", path: null }, configuration: null } });
+    project: { id: "px", label: "外部", path: null }, buddy: null } });
 
 function harness(paged = false) {
   const snapshot = snapshotFixture();

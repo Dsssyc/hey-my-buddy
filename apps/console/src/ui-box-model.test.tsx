@@ -31,12 +31,12 @@ function timeline(kinds: Array<Partial<TimelineSpan>>): MacroTaskTimelineData {
   const base: TimelineRow = {
     runId: "r1", parentRunId: null, rootRunId: "r1", title: "短记录与盒模型", titleSource: "title",
     taskSummary: null, summary: null, createdAt: "2026-09-26T01:12:00Z", state: "running", status: "running",
-    category: "active", shutdownConfirmed: false, depth: 0, kind: "goal", configuration: null,
+    category: "active", shutdownConfirmed: false, depth: 0, kind: "goal", buddy: null,
     acceptedAt: null, acceptanceVerdict: null,
   };
   const spans = kinds.map((overrides, index) => ({
     spanId: `s-${index}`, runId: "r1", kind: "execution" as const, startAt: null, endAt: null, state: "finished",
-    attemptId: null, turnId: null, turnIndex: 1, requestId: null, configuration: null,
+    attemptId: null, turnId: null, turnIndex: 1, requestId: null, buddy: null,
     shutdownConfirmed: null, uncertain: false, clockSkew: false, ...overrides,
   })) as TimelineSpan[];
   return {

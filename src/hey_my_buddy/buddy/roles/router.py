@@ -21,14 +21,14 @@ from ..harnesses.base import (
 from . import structured_call as read_only
 
 
-def prepare_router_fast(document: dict, profile: dict, native: Adapter,
+def prepare_router_fast(document: dict, buddy: dict, native: Adapter,
                         context: ExecutionContext) -> role_seam.FastPreparation:
     """Everything the fast mode's native call needs, except the start itself.
 
     The eligibility check only confirms the declared capability exists; the
     zero-tool verdict stays with the blackboard at publication. The native call
     receives an empty owner-private cwd under its actual harness attempt; its
-    no-tool profile disables project input.
+    no-tool buddy disables project input.
     """
     if not getattr(native, "no_tool_structured", False):
         raise BoardError("router-no-tool-unsupported", "Router 不可用：harness 未实现无工具结构化入口")
@@ -37,12 +37,12 @@ def prepare_router_fast(document: dict, profile: dict, native: Adapter,
         raise BoardError("CONFLICT", "The private no-tool cwd already contains files")
     request = NoToolStructuredRequest(str(root), router_prompt(router.render_prompt(document)), document["outputSchema"], timeout_seconds=60,
                                       capture_evidence=document.get("captureEvidence") is True)
-    child_context = replace(context, spec={**context.spec, **profile, "cwd": str(root)}, turn=None, agent_credential=None)
+    child_context = replace(context, spec={**context.spec, **buddy, "cwd": str(root)}, turn=None, agent_credential=None)
     return role_seam.FastPreparation(harness=native.name, request=request, context=child_context,
                                      no_tool_cwd=root)
 
 
-def prepare_router_review(document: dict, profile: dict, native: Adapter,
+def prepare_router_review(document: dict, buddy: dict, native: Adapter,
                           context: ExecutionContext) -> role_seam.ReviewPreparation:
     """Eligibility, the frozen mirror and the read-only request, before any start.
 
@@ -57,7 +57,7 @@ def prepare_router_review(document: dict, profile: dict, native: Adapter,
     root, digest = router_input.prepare(manifest, ensure_private_dir(context_root(context, native.name)))
     request = ReadOnlyStructuredRequest(str(root), router_prompt(router.render_prompt(document)), document["outputSchema"],
                                         document["budget"], capture_evidence=document.get("captureEvidence") is True)
-    child_context = replace(context, spec={**context.spec, **profile, "cwd": str(root)}, turn=None, agent_credential=None)
+    child_context = replace(context, spec={**context.spec, **buddy, "cwd": str(root)}, turn=None, agent_credential=None)
     return role_seam.ReviewPreparation(harness=native.name, native=native, request=request, context=child_context,
                                        mirror=(manifest, root, digest))
 
@@ -78,14 +78,14 @@ class DecisionAdapter(Adapter):
         document = context.decision_input
         if not isinstance(document, dict):
             raise BoardError("INVALID_ARGUMENT", "The Router has no frozen input")
-        profile = document.get("profile") or {}
-        native = adapter(profile.get("adapter"))
+        buddy = document.get("buddy") or {}
+        native = adapter(buddy.get("adapter"))
         fast = document.get("routingMode") == "fast"
         context.directory.mkdir(mode=0o700, parents=True, exist_ok=True)
         if fast:
-            preparation = prepare_router_fast(document, profile, native, context)
+            preparation = prepare_router_fast(document, buddy, native, context)
         else:
-            preparation = prepare_router_review(document, profile, native, context)
+            preparation = prepare_router_review(document, buddy, native, context)
         started = time.monotonic()
         handle = role_seam.start_router_preparation(preparation)
         handle.router_started = started
@@ -120,7 +120,7 @@ class DecisionAdapter(Adapter):
         }
         result = {
             "operation": "select", "status": "ok" if outcome.status == "ok" else "error",
-            "requested": document["profile"],
+            "requested": document["buddy"],
             "resolved": native_result.get("resolved"), "observed": native_result.get("observed"),
             "modelStarted": native_result.get("modelStarted"),
             "nativeIdentity": native_result.get("nativeIdentity"), "usage": usage,
@@ -150,7 +150,7 @@ class DecisionAdapter(Adapter):
         if code is None and outcome.status == "ok":
             try:
                 result["decision"] = router.validate_answer(native_result.get("rawAnswer"),
-                                                           [item["profileId"] for item in document["profiles"]], document.get("routingMode", "review"))
+                                                           [item["buddyId"] for item in document["buddies"]], document.get("routingMode", "review"))
             except BoardError as failure:
                 code = failure.code
         if code:

@@ -11,8 +11,8 @@ from hey_my_buddy.blackboard.store.db import canonical_json, sha256_text
 from hey_my_buddy.errors import BoardError
 from protocol.fixtures import mock_readonly
 from support import BoardTestCase
-from blackboard.routing.test_decision import DecisionTestCase, PROFILE, PROFILE_ID, SECOND_PROFILE, SECOND_PROFILE_ID, THIRD_PROFILE, THIRD_PROFILE_ID
-from blackboard.tasks.test_workflow import CONFIGURATION, WorkflowTestCase
+from blackboard.routing.test_decision import DecisionTestCase, CATALOG_BUDDY, BUDDY_ID, SECOND_BUDDY, SECOND_BUDDY_ID, THIRD_BUDDY, THIRD_BUDDY_ID
+from blackboard.tasks.test_workflow import BUDDY, WorkflowTestCase
 import blackboard.tasks.test_workflow_routing
 
 
@@ -42,17 +42,17 @@ class SingleRouterRequestTests(BoardTestCase):
         response = self.request(board)
         view = self.audit(board, response)
         self.assertEqual(response["status"], "queued")
-        identity = {key: PROFILE[key] for key in schemas.CONFIGURATION_FIELDS}
+        identity = {key: CATALOG_BUDDY[key] for key in schemas.BUDDY_FIELDS}
         for document in (view, view["requested"], view["input"]):
-            self.assertEqual(document["routerProfileIds"], [PROFILE_ID])
+            self.assertEqual(document["routerBuddyIds"], [BUDDY_ID])
             self.assertEqual(document["routerIdentities"], [identity])
             self.assertEqual(document["routingMode"], "review")
             self.assertEqual(document["budget"], router.budget("deep"))
             self.assertNotIn("fallback", document)
             self.assertNotIn("requestedRoutingMode", document)
-        self.assertEqual(view["input"]["profile"], identity)
-        self.assertEqual(view["routerProfileId"], PROFILE_ID)
-        self.assertEqual(view["routerProfile"], identity)
+        self.assertEqual(view["input"]["buddy"], identity)
+        self.assertEqual(view["routerBuddyId"], BUDDY_ID)
+        self.assertEqual(view["routerBuddy"], identity)
         self.assertEqual(view["inputSha256"], sha256_text(canonical_json(view["input"])))
         self.readonly_start.assert_not_called()
         with board.store.db.read() as connection:
@@ -67,7 +67,7 @@ class SingleRouterRequestTests(BoardTestCase):
         self.seed(board)
         self.configure(board, defaultRoutingMode="fast", routingBudget="deep")
         view = self.audit(board, self.request(board, timeoutSeconds=500))
-        self.assertEqual(view["routerProfileId"], PROFILE_ID)
+        self.assertEqual(view["routerBuddyId"], BUDDY_ID)
         self.assertEqual(view["routingMode"], "fast")
         self.assertEqual(view["budget"], router.FAST_BUDGET)
         self.assertEqual(view["requested"]["timeoutSeconds"], 60)
@@ -77,13 +77,13 @@ class SingleRouterRequestTests(BoardTestCase):
 
     def test_router_choice_is_independent_of_worker_bounds_and_preferences(self):
         board = self.board()
-        self.seed(board, profiles=(PROFILE, SECOND_PROFILE, THIRD_PROFILE), preferences=[
-            {"profileId": PROFILE_ID, "mode": "exclude", "reason": "Worker exclusion"}])
+        self.seed(board, buddies=(CATALOG_BUDDY, SECOND_BUDDY, THIRD_BUDDY), preferences=[
+            {"buddyId": BUDDY_ID, "mode": "exclude", "reason": "Worker exclusion"}])
         view = self.audit(board, self.request(board, requiredCapabilities=["effort:high"]))
         self.assertEqual(view["status"], "queued")
-        self.assertEqual(view["routerProfileId"], PROFILE_ID)
-        self.assertEqual(view["routerProfile"]["effort"], "off")
-        self.assertEqual({item["profileId"] for item in view["input"]["profiles"]}, {SECOND_PROFILE_ID, THIRD_PROFILE_ID})
+        self.assertEqual(view["routerBuddyId"], BUDDY_ID)
+        self.assertEqual(view["routerBuddy"]["effort"], "off")
+        self.assertEqual({item["buddyId"] for item in view["input"]["buddies"]}, {SECOND_BUDDY_ID, THIRD_BUDDY_ID})
 
     def test_review_timeout_override_is_frozen_and_can_be_rechecked(self):
         board = self.board()
@@ -92,7 +92,7 @@ class SingleRouterRequestTests(BoardTestCase):
         self.assertEqual(view["budget"], {**router.budget(), "timeoutSeconds": 77})
         with board.store.db.read() as connection:
             resolution = router.current_router(connection, frozen=view["requested"])
-        self.assertEqual(resolution.profile_id, PROFILE_ID)
+        self.assertEqual(resolution.buddy_id, BUDDY_ID)
         self.assertIsNone(resolution.problem)
         self.assertEqual(resolution.facts["budget"]["timeoutSeconds"], 77)
         self.assertEqual(view["input"]["budget"]["timeoutSeconds"], 77)
@@ -102,9 +102,9 @@ class SingleRouterRequestTests(BoardTestCase):
         self.seed(board)
         first = self.request(board)
         original = self.audit(board, first)
-        self.configure(board, routerProfileIds=[SECOND_PROFILE_ID], defaultRoutingMode="fast", routingBudget="brief")
+        self.configure(board, routerBuddyIds=[SECOND_BUDDY_ID], defaultRoutingMode="fast", routingBudget="brief")
         self.publish_user_patch(board, request_id="exclude", command_id="exclude",
-                                preferenceChanges=[{"profileId": PROFILE_ID, "mode": "exclude", "reason": "later bound"}])
+                                preferenceChanges=[{"buddyId": BUDDY_ID, "mode": "exclude", "reason": "later bound"}])
         with patch("hey_my_buddy.blackboard.routing.router.current_router", side_effect=AssertionError("replay must not resolve")):
             replay = self.request(board)
         self.assertTrue(replay["duplicate"])
@@ -131,14 +131,14 @@ class SingleRouterRequestTests(BoardTestCase):
 
     def test_unconfigured_multi_candidate_is_durable_without_router_task(self):
         board = self.board()
-        self.seed(board, decision_profile=None)
+        self.seed(board, decision_buddy=None)
         first = self.request(board)
         view = self.audit(board, first)
         self.assertEqual(first["status"], "needs-host")
         self.assertIsNone(first["runId"])
         self.assertEqual(view["routerProblem"]["code"], "router-not-configured")
         self.assertTrue(view["reason"].startswith("Router 不可用："))
-        self.configure(board, routerProfileIds=[PROFILE_ID])
+        self.configure(board, routerBuddyIds=[BUDDY_ID])
         self.assertEqual(self.audit(board, self.request(board)), view)
         with board.store.db.read() as connection:
             self.assertEqual(connection.execute("SELECT COUNT(*) FROM tasks").fetchone()[0], 0)
@@ -154,8 +154,8 @@ class SingleRouterRequestTests(BoardTestCase):
             view = self.audit(board, self.request(board))
         self.assertEqual(view["status"], "needs-host")
         self.assertEqual(view["routingMode"], "review")
-        self.assertIsNone(view["routerProfileId"])
-        self.assertEqual(view["routerProfileIds"], [PROFILE_ID])
+        self.assertIsNone(view["routerBuddyId"])
+        self.assertEqual(view["routerBuddyIds"], [BUDDY_ID])
         self.assertEqual(view["routerProblem"]["code"], "router-unavailable")
         with board.store.db.read() as connection:
             record = json.loads(connection.execute("SELECT payload_json FROM events WHERE kind='router.no_answer'").fetchone()[0])
@@ -174,42 +174,42 @@ class SingleRouterRequestTests(BoardTestCase):
         self.assertIsNone(view["routerProblem"])
         self.assertIsNone(view["runId"])
 
-    def test_profile_problem_orders_identity_before_availability(self):
+    def test_buddy_problem_orders_identity_before_availability(self):
         board = self.board()
         self.seed(board)
         with board.store.db.write() as connection:
-            connection.execute("UPDATE evaluation_profiles SET provider='',enabled=0 WHERE profile_id=?", (PROFILE_ID,))
-            profile, code, reason = router.profile_problem(connection, PROFILE_ID, "review")
-        self.assertIsNone(profile)
+            connection.execute("UPDATE buddies SET provider='',enabled=0 WHERE buddy_id=?", (BUDDY_ID,))
+            buddy, code, reason = router.buddy_problem(connection, BUDDY_ID, "review")
+        self.assertIsNone(buddy)
         self.assertEqual(code, "router-incomplete")
         self.assertIn("身份不完整", reason)
 
-    def test_profile_problem_keeps_each_cached_unavailability_reason(self):
+    def test_buddy_problem_keeps_each_cached_unavailability_reason(self):
         board = self.board()
         self.seed(board)
         with board.store.db.write() as connection:
             for updates, code, text in (("enabled=0", "router-unavailable", "已禁用"),
                                         ("enabled=1,available=0", "router-unavailable", "已发布目录中不可用")):
-                connection.execute(f"UPDATE evaluation_profiles SET {updates} WHERE profile_id=?", (PROFILE_ID,))
-                profile, actual, reason = router.profile_problem(connection, PROFILE_ID, "review")
-                self.assertIsNone(profile)
+                connection.execute(f"UPDATE buddies SET {updates} WHERE buddy_id=?", (BUDDY_ID,))
+                buddy, actual, reason = router.buddy_problem(connection, BUDDY_ID, "review")
+                self.assertIsNone(buddy)
                 self.assertEqual(actual, code)
                 self.assertIn(text, reason)
-            connection.execute("UPDATE evaluation_profiles SET available=1 WHERE profile_id=?", (PROFILE_ID,))
+            connection.execute("UPDATE buddies SET available=1 WHERE buddy_id=?", (BUDDY_ID,))
             with patch("hey_my_buddy.blackboard.service.harness_health.read_health", return_value={"available": False, "reasonCode": "executable-missing", "reason": "fixture missing"}):
-                _, code, reason = router.profile_problem(connection, PROFILE_ID, "review")
+                _, code, reason = router.buddy_problem(connection, BUDDY_ID, "review")
             self.assertEqual(code, "router-unavailable")
             self.assertIn("executable-missing", reason)
             self.assertIn("fixture missing", reason)
             with patch("hey_my_buddy.blackboard.evaluation.native_observations.exhausted", return_value={"nativeCode": "quota"}):
-                _, code, reason = router.profile_problem(connection, PROFILE_ID, "review")
+                _, code, reason = router.buddy_problem(connection, BUDDY_ID, "review")
             self.assertEqual(code, "router-quota-exhausted")
             self.assertIn("额度耗尽", reason)
             with patch("hey_my_buddy.buddy.harnesses.dsh.adapter.DshAdapter.no_tool_structured", False):
-                _, code, reason = router.profile_problem(connection, PROFILE_ID, "fast")
+                _, code, reason = router.buddy_problem(connection, BUDDY_ID, "fast")
             self.assertEqual(code, "router-no-tool-unsupported")
             self.assertIn("无工具结构化入口", reason)
-            _, code, reason = router.profile_problem(connection, "unpublished", "review")
+            _, code, reason = router.buddy_problem(connection, "unpublished", "review")
             self.assertEqual(code, "router-not-published")
             self.assertIn("未发布", reason)
 
@@ -217,13 +217,13 @@ class SingleRouterRequestTests(BoardTestCase):
         board = self.board()
         self.seed(board)
         snapshot = self.audit(board, self.request(board))["requested"]
-        self.configure(board, routerProfileIds=[SECOND_PROFILE_ID], defaultRoutingMode="fast", routingBudget="brief")
+        self.configure(board, routerBuddyIds=[SECOND_BUDDY_ID], defaultRoutingMode="fast", routingBudget="brief")
         with board.store.db.read() as connection:
             resolution = router.current_router(connection, frozen=snapshot)
-        self.assertEqual(resolution.profile_id, PROFILE_ID)
+        self.assertEqual(resolution.buddy_id, BUDDY_ID)
         self.assertIsNone(resolution.problem)
         self.assertEqual(resolution.facts, {key: snapshot[key] for key in (
-            "routerProfileIds", "routerIdentities", "routingMode", "routingBudget",
+            "routerBuddyIds", "routerIdentities", "routingMode", "routingBudget",
             "routerRetryIntervalSeconds", "budget")})
         # The claim layer, covered by the settings-drift claim test, refuses
         # execution after this change. The shared resolver reads frozen facts.
@@ -233,12 +233,12 @@ class SingleRouterRequestTests(BoardTestCase):
         self.seed(board)
         snapshot = self.audit(board, self.request(board))["requested"]
         with board.store.db.write() as connection:
-            connection.execute("UPDATE evaluation_profiles SET effort='high' WHERE profile_id=?", (PROFILE_ID,))
+            connection.execute("UPDATE buddies SET effort='high' WHERE buddy_id=?", (BUDDY_ID,))
             resolution = router.current_router(connection, frozen=snapshot)
-            self.assertEqual(resolution.profile["effort"], "off")
+            self.assertEqual(resolution.buddy["effort"], "off")
             self.assertIsNone(resolution.problem)
-            self.assertEqual(resolution.facts["routerProfileIds"], [PROFILE_ID])
-            connection.execute("UPDATE evaluation_profiles SET effort='off',enabled=0 WHERE profile_id=?", (PROFILE_ID,))
+            self.assertEqual(resolution.facts["routerBuddyIds"], [BUDDY_ID])
+            connection.execute("UPDATE buddies SET effort='off',enabled=0 WHERE buddy_id=?", (BUDDY_ID,))
             resolution = router.current_router(connection, frozen=snapshot)
             self.assertEqual(resolution.inspections[0]["code"], "router-unavailable")
 
@@ -296,7 +296,7 @@ class SingleRouterWorkflowRequestTests(WorkflowTestCase):
 
     def test_router_unavailable_opens_same_goal_attention_and_complete_host_buddy_recovers(self):
         board = self.board()
-        self.seed(board, decision_profile=None)
+        self.seed(board, decision_buddy=None)
         view = self.routed(board)
         self.assertTrue(view["awaitingHost"])
         self.assertEqual(view["activeRequest"]["kind"], "attention")
@@ -314,25 +314,25 @@ class SingleRouterWorkflowRequestTests(WorkflowTestCase):
             payload = json.loads(connection.execute("SELECT payload_json FROM workflow_requests").fetchone()[0])
         self.assertEqual(payload["routerProblem"]["code"], "router-not-configured")
         self.assertIn("未调用 Router", payload["attempted"])
-        continued = self.continue_run(board, view, configuration=CONFIGURATION)
+        continued = self.continue_run(board, view, buddy=BUDDY)
         self.assertEqual(continued["runId"], view["runId"])
-        self.assertEqual(continued["executionConfiguration"], CONFIGURATION)
+        self.assertEqual(continued["buddy"], BUDDY)
         self.assertFalse(continued["awaitingHost"])
         self.register(board)
-        self.assertEqual(self.claim(board, run_id=view["runId"])["claim"]["task"]["spec"]["model"], CONFIGURATION["model"])
+        self.assertEqual(self.claim(board, run_id=view["runId"])["claim"]["task"]["spec"]["model"], BUDDY["model"])
 
     def test_queued_workflow_replay_and_history_show_original_router_snapshot(self):
         board = self.board()
         self.seed(board)
         original = self.routed(board)
         self.publish_user_patch(board, request_id="new-router", command_id="new-router",
-                                configuration={"routerProfileIds": [SECOND_PROFILE_ID], "defaultRoutingMode": "fast", "routingBudget": "brief"})
+                                configuration={"routerBuddyIds": [SECOND_BUDDY_ID], "defaultRoutingMode": "fast", "routingBudget": "brief"})
         replay = self.routed(board)
         self.assertEqual(replay["routing"], original["routing"])
         history = board.call("workflow_get", {"runId": original["runId"], "routingHistory": {"limit": 10}})["routingHistory"]
         self.assertEqual(history["total"], 1)
         entry = history["entries"][0]
-        for key in ("routerProfileId", "routerProfile", "routingMode", "budget"):
+        for key in ("routerBuddyId", "routerBuddy", "routingMode", "budget"):
             self.assertEqual(entry[key], original["routing"][key])
         self.assertNotIn("fallback", entry)
 
@@ -342,21 +342,21 @@ class SingleRouterWorkflowRequestTests(WorkflowTestCase):
         with patch("hey_my_buddy.blackboard.routing.router.current_router", side_effect=AssertionError("complete buddy must not resolve")):
             view = self.submit(board)
         self.assertEqual(view["routing"]["status"], "explicit")
-        self.assertEqual(view["executionConfiguration"], CONFIGURATION)
+        self.assertEqual(view["buddy"], BUDDY)
         with board.store.db.read() as connection:
             self.assertEqual(connection.execute("SELECT COUNT(*) FROM decision_requests").fetchone()[0], 0)
 
     def test_explicit_reroute_after_user_setting_creates_one_new_snapshot(self):
         board = self.board()
-        self.seed(board, decision_profile=None)
+        self.seed(board, decision_buddy=None)
         first = self.routed(board)
-        self.publish_user_patch(board, request_id="choose-router", command_id="choose-router", configuration={"routerProfileIds": [PROFILE_ID]})
+        self.publish_user_patch(board, request_id="choose-router", command_id="choose-router", configuration={"routerBuddyIds": [BUDDY_ID]})
         pending = self.continue_run(board, first, reroute=True)
         board.store.workflow.prepare_continuation_workspace({"runId": pending["runId"]})
         fresh = board.call("workflow_get", {"runId": first["runId"]})
         self.assertEqual(fresh["routing"]["status"], "queued")
         self.assertNotEqual(fresh["routing"]["decisionId"], first["routing"]["decisionId"])
-        self.assertEqual(fresh["routing"]["routerProfileId"], PROFILE_ID)
+        self.assertEqual(fresh["routing"]["routerBuddyId"], BUDDY_ID)
         self.assertTrue(self.continue_run(board, first, reroute=True)["duplicate"])
         with board.store.db.read() as connection:
             self.assertEqual(connection.execute("SELECT COUNT(*) FROM workflow_routes").fetchone()[0], 2)

@@ -35,12 +35,12 @@ class CurrentRouterTestCase(BoardTestCase):
             'systemSandbox': False, 'sameAttemptContinuation': True}))
 
     # -- fixtures ------------------------------------------------------------
-    def add_profile(self, profile_id, *, adapter="dsh", provider="fixture", available=1, enabled=1, model=None):
+    def add_buddy(self, buddy_id, *, adapter="dsh", provider="fixture", available=1, enabled=1, model=None):
         with self.board_.store.db.write() as db:
-            db.execute("INSERT INTO evaluation_profiles(profile_id,label,adapter,provider,model,effort,"
+            db.execute("INSERT INTO buddies(buddy_id,label,adapter,provider,model,effort,"
                        "available,enabled,capabilities_json)"
                        " VALUES(?,?,?,?,?,?,?,?,?)",
-                       (profile_id, profile_id, adapter, provider, model or profile_id, "max",
+                       (buddy_id, buddy_id, adapter, provider, model or buddy_id, "max",
                         available, enabled, canonical_json(permission_capabilities(adapter))))
 
     def set_settings(self, *, ids=None, mode=None, budget=None, interval=None):
@@ -48,7 +48,7 @@ class CurrentRouterTestCase(BoardTestCase):
         with self.board_.store.db.write() as db:
             merged = {**router.configuration(db)}
             if ids is not None:
-                merged["routerProfileIds"] = list(ids)
+                merged["routerBuddyIds"] = list(ids)
             if mode is not None:
                 merged["defaultRoutingMode"] = mode
             if budget is not None:
@@ -57,11 +57,11 @@ class CurrentRouterTestCase(BoardTestCase):
                 merged["routerRetryIntervalSeconds"] = interval
             router._write_settings(db, merged)
 
-    def record(self, profile_id, *, outcome="no_answer", plane="work", request="route-1", phase="preflight",
+    def record(self, buddy_id, *, outcome="no_answer", plane="work", request="route-1", phase="preflight",
                code="timeout", index=0, task=None, attempt=None, now=T0, facts=None):
         with self.board_.store.db.write() as db:
             return router_history.record_outcome(
-                db, profile_id=profile_id, plane=plane, request_id=request, task_id=task, attempt_id=attempt,
+                db, buddy_id=buddy_id, plane=plane, request_id=request, task_id=task, attempt_id=attempt,
                 outcome=outcome, code=code, phase=phase,
                 facts={"routerIndex": index} if facts is None else facts, now=now)
 
@@ -88,7 +88,7 @@ class CurrentRouterTestCase(BoardTestCase):
                  canonical_json(receipt) if receipt is not None else None,
                  1 if state == "finished" else 0, at, at, at))
 
-    def add_routing_record(self, *, decision, request, kind, profile_id=None, code=None, at=T0,
+    def add_routing_record(self, *, decision, request, kind, buddy_id=None, code=None, at=T0,
                            attempt_state=None, receipt=None, output=None, called=None, candidates=3):
         """One pre-list routing record: its own frozen input, terminal event and receipt."""
         task_id = attempt_id = None
@@ -96,15 +96,15 @@ class CurrentRouterTestCase(BoardTestCase):
             task_id, attempt_id = f"task-{decision}", f"att-{decision}"
             self.add_task(task_id, at=at, state="running" if attempt_state != "finished" else "completed")
             self.add_attempt(attempt_id, task_id, at=at, state=attempt_state, receipt=receipt)
-        requested = {"kind": "select", "routerProfileId": profile_id,
+        requested = {"kind": "select", "routerBuddyId": buddy_id,
                      "routingBasis": {"candidateCount": candidates}}
         if called is not None:
             requested["routerCalled"] = called
         with self.board_.store.db.write() as db:
             db.execute(
-                "INSERT INTO evaluation_decisions(decision_id,status,task,profile_id,reason,"
+                "INSERT INTO evaluation_decisions(decision_id,status,task,buddy_id,reason,"
                 "created_at) VALUES(?,?,?,?,?,?)",
-                (decision, "failed", "task", profile_id, "", at))
+                (decision, "failed", "task", buddy_id, "", at))
             db.execute(
                 "INSERT INTO decision_requests(decision_id,request_id,kind,input_fingerprint,task_id,attempt_id,"
                 "generation,requested_json,output_json,created_at,updated_at)"
@@ -115,9 +115,9 @@ class CurrentRouterTestCase(BoardTestCase):
                                             payload={"decisionId": decision,
                                                      **({"errorCode": code} if code else {})})
 
-    def state(self, profile_id, *, interval=600, now=None):
+    def state(self, buddy_id, *, interval=600, now=None):
         with self.board_.store.db.read() as db:
-            return router_history.router_state(db, profile_id=profile_id, interval_seconds=interval,
+            return router_history.router_state(db, buddy_id=buddy_id, interval_seconds=interval,
                                                now=now or self.clock.value)
 
 
@@ -125,60 +125,60 @@ class ResolutionTests(CurrentRouterTestCase):
     def test_empty_list_reports_not_configured_with_empty_facts(self):
         with self.board_.store.db.read() as db:
             resolution = router.current_router(db, now=T0)
-        self.assertIsNone(resolution.profile)
-        self.assertIsNone(resolution.profile_id)
+        self.assertIsNone(resolution.buddy)
+        self.assertIsNone(resolution.buddy_id)
         self.assertIsNone(resolution.router_index)
         self.assertEqual(resolution.problem["code"], "router-not-configured")
-        self.assertEqual(resolution.facts["routerProfileIds"], [])
+        self.assertEqual(resolution.facts["routerBuddyIds"], [])
         self.assertNotIn("configurationRevision", resolution.facts)
         self.assertEqual(resolution.inspections, ())
 
     def test_selects_first_eligible_and_snapshots_complete_facts(self):
-        self.add_profile(A, model="alpha")
-        self.add_profile(B, model="bravo")
+        self.add_buddy(A, model="alpha")
+        self.add_buddy(B, model="bravo")
         self.set_settings(ids=[A, B], interval=45, budget="deep")
         with self.board_.store.db.read() as db:
             resolution = router.current_router(db, now=T0)
-        self.assertEqual(resolution.profile_id, A)
+        self.assertEqual(resolution.buddy_id, A)
         self.assertEqual(resolution.router_index, 0)
         self.assertIsNone(resolution.problem)
         self.assertEqual(resolution.facts, {
-            "routerProfileIds": [A, B],
+            "routerBuddyIds": [A, B],
             "routerIdentities": [{"adapter": "dsh", "provider": "fixture", "model": "alpha", "effort": "max"},
                                  {"adapter": "dsh", "provider": "fixture", "model": "bravo", "effort": "max"}],
             "routingMode": "fast", "routingBudget": "deep", "routerRetryIntervalSeconds": 45,
             "budget": {"timeoutSeconds": 60},
         })
         self.assertEqual(resolution.inspections[-1]["selected"], True)
-        # The profile is a copy of the published row; mutating it touches nothing.
-        resolution.profile["model"] = "mutated"
+        # The buddy is a copy of the published row; mutating it touches nothing.
+        resolution.buddy["model"] = "mutated"
         with self.board_.store.db.read() as db:
-            self.assertEqual(db.execute("SELECT model FROM evaluation_profiles WHERE profile_id=?",
+            self.assertEqual(db.execute("SELECT model FROM buddies WHERE buddy_id=?",
                                         (A,)).fetchone()[0], "alpha")
         # Review mode expands the preset budget instead of the fixed fast budget.
         self.set_settings(mode="review", budget="brief")
         with self.board_.store.db.read() as db:
             review = router.current_router(db, now=T0)
-        self.assertEqual(review.profile_id, A)
+        self.assertEqual(review.buddy_id, A)
         self.assertEqual(review.facts["budget"],
                          {"preset": "brief", "timeoutSeconds": 60, "toolCalls": 8, "bytesRead": 131072})
 
     def test_ineligible_items_are_skipped_in_order_with_reasons(self):
-        self.add_profile(A, enabled=0)
-        self.add_profile(B, adapter="claude")
-        self.add_profile(C)
+        self.add_buddy(A, enabled=0)
+        self.add_buddy(B, adapter="claude")
+        self.add_buddy(C)
         self.set_settings(ids=[A, B, C])
         with self.board_.store.db.read() as db:
             resolution = router.current_router(db, now=T0)
-        self.assertEqual(resolution.profile_id, C)
+        self.assertEqual(resolution.buddy_id, C)
         self.assertEqual(resolution.router_index, 2)
         self.assertEqual(resolution.inspections[0]["code"], "router-unavailable")
         self.assertIn("已禁用", resolution.inspections[0]["reason"])
         self.assertEqual(resolution.inspections[1]["code"], "router-no-tool-unsupported")
 
     def test_quota_exhausted_item_is_skipped_from_recorded_observations(self):
-        self.add_profile(A, model="alpha")
-        self.add_profile(B, provider="other")
+        self.add_buddy(A, model="alpha")
+        self.add_buddy(B, provider="other")
         from hey_my_buddy.blackboard.evaluation.native_observations import record_quota
         with self.board_.store.db.write() as db:
             record_quota(db, "dsh", {"provider": "fixture", "observedAt": T0, "balanceZero": True,
@@ -186,25 +186,25 @@ class ResolutionTests(CurrentRouterTestCase):
         self.set_settings(ids=[A, B])
         with self.board_.store.db.read() as db:
             resolution = router.current_router(db, now=T0)
-        self.assertEqual(resolution.profile_id, B)
+        self.assertEqual(resolution.buddy_id, B)
         self.assertEqual(resolution.inspections[0]["code"], "router-quota-exhausted")
 
     def test_review_mode_requires_the_local_review_mechanism(self):
-        self.add_profile(A, adapter="zcode")
-        self.add_profile(B)
+        self.add_buddy(A, adapter="zcode")
+        self.add_buddy(B)
         self.set_settings(ids=[A, B], mode="review")
         with self.board_.store.db.read() as db:
             resolution = router.current_router(db, now=T0)
-        self.assertEqual(resolution.profile_id, B)
+        self.assertEqual(resolution.buddy_id, B)
         self.assertEqual(resolution.inspections[0]["code"], "router-review-unsupported")
 
     def test_skip_window_blocks_then_expires_and_reads_never_write(self):
-        self.add_profile(A)
+        self.add_buddy(A)
         self.set_settings(ids=[A], interval=600)
         self.record(A, now=T0)
         with self.board_.store.db.read() as db:
             first = router.current_router(db, now=T0)
-        self.assertIsNone(first.profile)
+        self.assertIsNone(first.buddy)
         self.assertEqual(first.inspections[0]["code"], "router-skip-window")
         self.assertEqual(first.inspections[0]["retryAt"], "2026-01-01T00:10:00.000Z")
         self.assertEqual(first.inspections[0]["consecutiveNoAnswers"], 1)
@@ -217,18 +217,18 @@ class ResolutionTests(CurrentRouterTestCase):
         self.clock.advance(601)
         with self.board_.store.db.read() as db:
             retried = router.current_router(db, now=self.clock.value)
-        self.assertEqual(retried.profile_id, A)
+        self.assertEqual(retried.buddy_id, A)
         self.assertIsNone(retried.problem)
         self.assertEqual(self.event_count(), before)
 
     def test_valid_answered_clears_and_abstention_counts_as_answered(self):
-        self.add_profile(A)
+        self.add_buddy(A)
         self.set_settings(ids=[A])
         self.record(A, now=T0)
         self.record(A, outcome="answered", request="route-2", phase="runtime", code=None, now=T0)
         with self.board_.store.db.read() as db:
             resolution = router.current_router(db, now=T0)
-        self.assertEqual(resolution.profile_id, A)
+        self.assertEqual(resolution.buddy_id, A)
         self.assertEqual(self.state(A)["consecutiveNoAnswers"], 0)
         # A valid abstention is also a completed routing: it clears the streak too.
         self.record(A, request="route-3", now=T0)
@@ -238,33 +238,33 @@ class ResolutionTests(CurrentRouterTestCase):
         self.assertEqual(self.state(A)["consecutiveNoAnswers"], 0)
 
     def test_other_router_answered_does_not_clear_this_router(self):
-        self.add_profile(A)
-        self.add_profile(B)
+        self.add_buddy(A)
+        self.add_buddy(B)
         self.set_settings(ids=[A, B])
         self.record(A, request="route-a", now=T0)
         self.record(B, request="route-b", now=T0)
         self.record(B, outcome="answered", request="route-b2", phase="runtime", code=None, now=T0)
         with self.board_.store.db.read() as db:
             resolution = router.current_router(db, now=T0)
-        self.assertEqual(resolution.profile_id, B)
+        self.assertEqual(resolution.buddy_id, B)
         self.assertEqual(self.state(A)["consecutiveNoAnswers"], 1)
         self.assertIsNotNone(self.state(A)["skipUntil"])
         self.assertEqual(self.state(B)["consecutiveNoAnswers"], 0)
 
     def test_planes_share_one_recording_entry_and_one_current_router(self):
-        self.add_profile(A)
-        self.add_profile(B)
+        self.add_buddy(A)
+        self.add_buddy(B)
         self.set_settings(ids=[A, B])
         self.record(A, plane="maintenance", request="maintain-1", now=T0)
         self.record(A, plane="portrait", request="portrait-1", now=T0)
         with self.board_.store.db.read() as db:
             resolution = router.current_router(db, now=T0)
-        self.assertEqual(resolution.profile_id, B)
+        self.assertEqual(resolution.buddy_id, B)
         self.assertEqual(self.state(A)["noAnswerCount"], 2)
 
     def test_consecutive_counts_are_not_cut_by_a_display_window(self):
-        self.add_profile(A)
-        self.add_profile(B)
+        self.add_buddy(A)
+        self.add_buddy(B)
         self.set_settings(ids=[A, B])
         for index in range(25):
             self.record(A, request=f"route-{index}", phase="runtime", now=T0)
@@ -272,30 +272,30 @@ class ResolutionTests(CurrentRouterTestCase):
         self.assertEqual(self.state(A)["noAnswerCount"], 25)
         with self.board_.store.db.read() as db:
             resolution = router.current_router(db, now=T0)
-        self.assertEqual(resolution.profile_id, B)
+        self.assertEqual(resolution.buddy_id, B)
         self.assertEqual(resolution.inspections[0]["consecutiveNoAnswers"], 25)
 
     def test_all_unavailable_reports_one_summary_problem(self):
-        self.add_profile(A, enabled=0)
-        self.add_profile(B, adapter="claude")
+        self.add_buddy(A, enabled=0)
+        self.add_buddy(B, adapter="claude")
         self.set_settings(ids=[A, B])
         with self.board_.store.db.read() as db:
             resolution = router.current_router(db, now=T0)
-        self.assertIsNone(resolution.profile)
+        self.assertIsNone(resolution.buddy)
         self.assertEqual(resolution.problem["code"], "router-unavailable")
         self.assertEqual(len(resolution.inspections), 2)
         self.assertTrue(all(entry["code"] for entry in resolution.inspections))
 
     def test_after_index_is_strictly_forward_and_never_wraps(self):
-        self.add_profile(A)
-        self.add_profile(B)
-        self.add_profile(C)
+        self.add_buddy(A)
+        self.add_buddy(B)
+        self.add_buddy(C)
         self.set_settings(ids=[A, B, C])
         with self.board_.store.db.read() as db:
             self.assertEqual(router.current_router(db, after_index=0, now=T0).router_index, 1)
             self.assertEqual(router.current_router(db, after_index=1, now=T0).router_index, 2)
             exhausted = router.current_router(db, after_index=2, now=T0)
-        self.assertIsNone(exhausted.profile)
+        self.assertIsNone(exhausted.buddy)
         self.assertEqual(exhausted.problem["code"], "router-unavailable")
         self.assertIn("没有更多", exhausted.problem["reason"])
         with self.assertRaises(BoardError) as caught:
@@ -304,20 +304,20 @@ class ResolutionTests(CurrentRouterTestCase):
         self.assertEqual(caught.exception.code, "INVALID_ARGUMENT")
 
     def test_unfrozen_read_uses_current_settings_without_version_marker(self):
-        self.add_profile(A)
+        self.add_buddy(A)
         before = self.board_.call("console_snapshot", {})
         self.assertIsNone(before["configurationError"])
         with self.board_.store.db.read() as db:
             resolution = router.current_router(db, now=T0)
         self.assertEqual(resolution.problem["code"], "router-not-configured")
-        self.assertEqual(resolution.facts["routerProfileIds"], before["configuration"]["routerProfileIds"])
+        self.assertEqual(resolution.facts["routerBuddyIds"], before["configuration"]["routerBuddyIds"])
 
 
 class FrozenContinuationTests(CurrentRouterTestCase):
     def prepare(self):
-        self.add_profile(A, model="alpha")
-        self.add_profile(B, model="bravo")
-        self.add_profile(C, model="charlie")
+        self.add_buddy(A, model="alpha")
+        self.add_buddy(B, model="bravo")
+        self.add_buddy(C, model="charlie")
         self.set_settings(ids=[A, B], interval=600)
         with self.board_.store.db.read() as db:
             return router.current_router(db, now=T0).facts
@@ -328,7 +328,7 @@ class FrozenContinuationTests(CurrentRouterTestCase):
         self.set_settings(ids=[A, C], mode="review", interval=30)
         with self.board_.store.db.read() as db:
             resolution = router.current_router(db, frozen=facts, after_index=0, now=T0)
-        self.assertEqual(resolution.profile_id, B)
+        self.assertEqual(resolution.buddy_id, B)
         self.assertEqual(resolution.router_index, 1)
         self.assertEqual(resolution.facts["routerRetryIntervalSeconds"], 600)
         self.assertEqual(resolution.facts["routingMode"], "fast")
@@ -337,12 +337,12 @@ class FrozenContinuationTests(CurrentRouterTestCase):
     def test_frozen_identity_drift_keeps_the_original_actor(self):
         facts = self.prepare()
         with self.board_.store.db.write() as db:
-            db.execute("UPDATE evaluation_profiles SET model='replaced' WHERE profile_id=?", (B,))
+            db.execute("UPDATE buddies SET model='replaced' WHERE buddy_id=?", (B,))
         with self.board_.store.db.read() as db:
             resolution = router.current_router(db, frozen=facts, after_index=0, now=T0)
         self.assertIsNone(resolution.problem)
-        self.assertEqual(resolution.profile_id, B)
-        self.assertEqual(resolution.profile["model"], "bravo")
+        self.assertEqual(resolution.buddy_id, B)
+        self.assertEqual(resolution.buddy["model"], "bravo")
 
     def test_frozen_review_deadline_override_survives_next_router_resolution(self):
         facts = self.prepare()
@@ -352,7 +352,7 @@ class FrozenContinuationTests(CurrentRouterTestCase):
         facts["budget"]["timeoutSeconds"] = 77
         with self.board_.store.db.read() as db:
             resolution = router.current_router(db, frozen=facts, after_index=0, now=T0)
-        self.assertEqual(resolution.profile_id, B)
+        self.assertEqual(resolution.buddy_id, B)
         self.assertEqual(resolution.facts["budget"], facts["budget"])
         resolution.facts["budget"]["timeoutSeconds"] = 88
         self.assertEqual(facts["budget"]["timeoutSeconds"], 77)
@@ -374,7 +374,7 @@ class FrozenContinuationTests(CurrentRouterTestCase):
 
     def test_frozen_snapshot_shape_is_validated(self):
         facts = self.prepare()
-        for broken in (42, {}, {**facts, "routerProfileIds": "solo"},
+        for broken in (42, {}, {**facts, "routerBuddyIds": "solo"},
                        {**facts, "routerIdentities": []},
                        {key: value for key, value in facts.items() if key != "routerRetryIntervalSeconds"},
                        {**facts, "routingMode": "auto"}, {**facts, "routerRetryIntervalSeconds": 0},
@@ -389,8 +389,8 @@ class FrozenContinuationTests(CurrentRouterTestCase):
 class OutcomeFactTests(CurrentRouterTestCase):
     def setUp(self):
         super().setUp()
-        self.add_profile(A, model="alpha")
-        self.add_profile(B, model="bravo")
+        self.add_buddy(A, model="alpha")
+        self.add_buddy(B, model="bravo")
         self.set_settings(ids=[A, B])
 
     def test_replay_is_idempotent_and_different_facts_conflict(self):
@@ -408,7 +408,7 @@ class OutcomeFactTests(CurrentRouterTestCase):
     def test_receipt_and_event_commit_in_one_transaction(self):
         with self.assertRaises(AssertionError):
             with self.board_.store.db.write() as db:
-                router_history.record_outcome(db, profile_id=A, plane="work", request_id="route-1", task_id=None,
+                router_history.record_outcome(db, buddy_id=A, plane="work", request_id="route-1", task_id=None,
                                               attempt_id=None, outcome="no_answer", code="timeout",
                                               phase="preflight", facts={"routerIndex": 0}, now=T0)
                 raise AssertionError("rollback")
@@ -443,7 +443,7 @@ class OutcomeFactTests(CurrentRouterTestCase):
         self.assertEqual(row["task_id"], "task-1")
         self.assertEqual(row["attempt_id"], "att-1")
         self.assertEqual(json.loads(row["payload_json"]),
-                         {"plane": "work", "requestId": "route-1", "routerIndex": 0, "profileId": A,
+                         {"plane": "work", "requestId": "route-1", "routerIndex": 0, "buddyId": A,
                           "phase": "preflight", "taskId": "task-1", "attemptId": "att-1",
                           "outcome": "no_answer", "code": "timeout"})
 
@@ -456,7 +456,7 @@ class HistoryProjectionTests(CurrentRouterTestCase):
     def test_four_old_timeouts_stay_attributed_and_counted(self):
         for index in range(4):
             self.add_routing_record(decision=f"dec-{index}", request=f"route-{index}", kind="decision.failed",
-                                    profile_id=A, code="timeout",
+                                    buddy_id=A, code="timeout",
                                     receipt={"status": "error", "result": {"status": "error"},
                                              "shutdownConfirmed": True},
                                     output={"code": "timeout"}, attempt_state="finished", at=T0)
@@ -471,10 +471,10 @@ class HistoryProjectionTests(CurrentRouterTestCase):
         self.assertIsNone(other["lastNoAnswerAt"])
 
     def test_old_accepted_answer_stays_answered_without_new_evidence_rules(self):
-        self.add_routing_record(decision="dec-ok", request="route-ok", kind="decision.completed", profile_id=A,
+        self.add_routing_record(decision="dec-ok", request="route-ok", kind="decision.completed", buddy_id=A,
                                 receipt={"status": "ok",
                                          "result": {"status": "ok", "modelStarted": True,
-                                                    "decision": {"profileId": "worker"}},
+                                                    "decision": {"buddyId": "worker"}},
                                          "shutdownConfirmed": True},
                                 output={"status": "ok"}, attempt_state="finished", at=T0)
         state = self.state(A)
@@ -483,20 +483,20 @@ class HistoryProjectionTests(CurrentRouterTestCase):
         self.assertIsNone(state["skipUntil"])
 
     def test_old_abstention_and_changed_records_do_not_fabricate_failures(self):
-        self.add_routing_record(decision="dec-abs", request="route-abs", kind="decision.needs_host", profile_id=A,
-                                output={"status": "ok", "decision": {"profileId": None, "reason": "insufficient",
+        self.add_routing_record(decision="dec-abs", request="route-abs", kind="decision.needs_host", buddy_id=A,
+                                output={"status": "ok", "decision": {"buddyId": None, "reason": "insufficient",
                                                                      "evidence": []}}, at=T0)
-        self.add_routing_record(decision="dec-chg", request="route-chg", kind="decision.failed", profile_id=A,
+        self.add_routing_record(decision="dec-chg", request="route-chg", kind="decision.failed", buddy_id=A,
                                 code="router-input-changed", output={"code": "router-input-changed"}, at=T0)
         self.add_routing_record(decision="dec-cancel", request="route-cancel", kind="decision.cancelled",
-                                profile_id=A, at=T0)
+                                buddy_id=A, at=T0)
         state = self.state(A)
         self.assertEqual(state["answeredCount"], 1)
         self.assertEqual(state["noAnswerCount"], 0)
         self.assertEqual(state["consecutiveNoAnswers"], 0)
 
     def test_old_and_new_records_dedupe_by_request_and_attempt(self):
-        self.add_routing_record(decision="dec-1", request="route-1", kind="decision.failed", profile_id=A,
+        self.add_routing_record(decision="dec-1", request="route-1", kind="decision.failed", buddy_id=A,
                                 code="timeout", output={"code": "timeout"}, attempt_state="finished", at=T0)
         self.record(A, request="route-1", task="task-dec-1", attempt="att-dec-1", phase="runtime", now=T0)
         self.assertEqual(self.state(A)["noAnswerCount"], 1)
@@ -527,16 +527,16 @@ class HistoryProjectionTests(CurrentRouterTestCase):
                        " VALUES(NULL,NULL,NULL,'router.no_answer','{broken json',?)", (T0,))
             db.execute("INSERT INTO events(task_id,attempt_id,revision,kind,payload_json,created_at)"
                        " VALUES(NULL,NULL,NULL,'router.answered','{\"unrelated\": true}',?)", (T0,))
-            db.execute("INSERT INTO evaluation_decisions(decision_id,status,task,profile_id,"
+            db.execute("INSERT INTO evaluation_decisions(decision_id,status,task,buddy_id,"
                        "reason,created_at) VALUES('dec-bad','failed','t',NULL,'',?)", (T0,))
             db.execute("INSERT INTO decision_requests(decision_id,request_id,kind,input_fingerprint,"
                        "requested_json,output_json,created_at,updated_at)"
                        " VALUES('dec-bad','route-bad','select','digest','{broken','{}',?,?)", (T0, T0))
             self.board_.store._append_event(db, "decision.failed", payload={"decisionId": "dec-bad"})
         with self.board_.store.db.read() as db:
-            timeline = router_history.profile_timeline(db, profile_id=A)
+            timeline = router_history.buddy_timeline(db, buddy_id=A)
             unattributed = router_history.unattributed_records(db)
-            state = router_history.router_state(db, profile_id=B, interval_seconds=600, now=T0)
+            state = router_history.router_state(db, buddy_id=B, interval_seconds=600, now=T0)
         self.assertEqual([entry["outcome"] for entry in timeline], ["no_answer"])
         self.assertEqual(state["noAnswerCount"], 0)
         # The malformed record is carried in the separate unknown listing, never
@@ -547,7 +547,7 @@ class HistoryProjectionTests(CurrentRouterTestCase):
     def test_immutable_terminal_facts_win_over_late_output(self):
         receipt = {'status': 'ok', 'shutdownConfirmed': True, 'result': {'status': 'ok'}}
         self.assertEqual(router_history._classify_record('decision.completed', {}, receipt), ('answered', None))
-        abstention = {'status': 'ok', 'decision': {'profileId': None, 'reason': 'cannot choose', 'evidence': []}}
+        abstention = {'status': 'ok', 'decision': {'buddyId': None, 'reason': 'cannot choose', 'evidence': []}}
         for code in ('router-budget-exhausted', 'router-tool-evidence-unverified'):
             with self.subTest(code=code):
                 self.assertEqual(router_history._classify_record('decision.needs_host', abstention, None,
@@ -556,10 +556,10 @@ class HistoryProjectionTests(CurrentRouterTestCase):
         self.assertEqual(router_history._classify_record('decision.failed',
                          {'code': 'router-input-changed'}, old, {'errorCode': 'timeout'}), ('no_answer', 'timeout'))
 
-    def test_per_profile_reads_use_the_partial_outcome_index(self):
+    def test_per_buddy_reads_use_the_partial_outcome_index(self):
         """Per-buddy reads must serve the partial index, not scan unrelated events.
 
-        ``events_router_outcome_idx`` indexes the guarded profile expression over the
+        ``events_router_outcome_idx`` indexes the guarded buddy expression over the
         literal fact kinds; the projection must render exactly that predicate so a
         bounded per-item read stays an index-only range.
         """
@@ -567,21 +567,21 @@ class HistoryProjectionTests(CurrentRouterTestCase):
             for index in range(300):
                 self.board_.store._append_event(connection, "task.progress", payload={"index": index})
             query = ("SELECT seq FROM events WHERE kind IN ('router.answered','router.no_answer')"
-                     f" AND {router_history._PROFILE_EXPRESSION}=? ORDER BY seq")
+                     f" AND {router_history._BUDDY_EXPRESSION}=? ORDER BY seq")
             plan = " ".join(row["detail"] for row in connection.execute("EXPLAIN QUERY PLAN " + query,
                                                                         (A,)).fetchall())
         self.assertIn("events_router_outcome_idx", plan)
         self.assertNotIn("SCAN event", plan)
         with self.board_.store.db.read() as connection:
             query = ("SELECT seq FROM events WHERE kind='router.claimed'"
-                     f" AND {router_history._PROFILE_EXPRESSION}=? ORDER BY seq")
+                     f" AND {router_history._BUDDY_EXPRESSION}=? ORDER BY seq")
             claimed = " ".join(row['detail'] for row in connection.execute('EXPLAIN QUERY PLAN ' + query, (A,)))
         self.assertIn('events_router_claimed_idx', claimed)
         self.assertNotIn('SCAN e', claimed)
 
     def test_active_attempts_project_retry_in_progress(self):
-        self.add_profile(A, model="alpha")
-        self.add_routing_record(decision="dec-live", request="route-live", kind="decision.failed", profile_id=A,
+        self.add_buddy(A, model="alpha")
+        self.add_routing_record(decision="dec-live", request="route-live", kind="decision.failed", buddy_id=A,
                                 code="timeout", output={"code": "timeout"}, attempt_state="executing", at=T0)
         self.record(A, request="route-recorded", phase="preflight", now=T0)
         state = self.state(A)
@@ -589,12 +589,12 @@ class HistoryProjectionTests(CurrentRouterTestCase):
         self.assertEqual(state["activeAttempts"][0]["attemptId"], "att-dec-live")
         self.assertEqual(state["activeAttempts"][0]["executionState"], "executing")
         # A finished attempt is not an active execution; the live one still is.
-        self.add_routing_record(decision="dec-done", request="route-done", kind="decision.failed", profile_id=A,
+        self.add_routing_record(decision="dec-done", request="route-done", kind="decision.failed", buddy_id=A,
                                 code="timeout", output={"code": "timeout"}, attempt_state="finished", at=T0)
         self.assertTrue(self.state(A)["retryInProgress"])
         # Shutdown-unconfirmed attempts still own capacity.
         self.add_routing_record(decision="dec-uncertain", request="route-uncertain", kind="decision.failed",
-                                profile_id=B, code="timeout", output={"code": "timeout"},
+                                buddy_id=B, code="timeout", output={"code": "timeout"},
                                 attempt_state="uncertain", at=T0)
         self.record(B, request="route-recorded-b", phase="preflight", now=T0)
         self.assertTrue(self.state(B)["retryInProgress"])
@@ -603,7 +603,7 @@ class HistoryProjectionTests(CurrentRouterTestCase):
         self.assertFalse(self.state(A)["retryInProgress"])
 
     def test_claimed_events_bind_active_executions(self):
-        self.add_profile(A, model="alpha")
+        self.add_buddy(A, model="alpha")
         self.add_task("task-claim", state="queued")
         with self.board_.store.db.write() as db:
             db.execute(
@@ -611,7 +611,7 @@ class HistoryProjectionTests(CurrentRouterTestCase):
                 "execution_state,adapter,created_at,updated_at)"
                 " VALUES('att-claim','task-claim',0,'nonce','claim-1','executing','decision',?,?)", (T0, T0))
             self.board_.store._append_event(db, "router.claimed", task_id="task-claim", attempt_id="att-claim",
-                                            payload={"profileId": A, "routerIndex": 0})
+                                            payload={"buddyId": A, "routerIndex": 0})
         self.record(A, request="route-recorded", phase="preflight", now=T0)
         state = self.state(A)
         self.assertTrue(state["retryInProgress"])

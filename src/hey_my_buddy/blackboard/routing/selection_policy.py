@@ -17,53 +17,53 @@ def _bounded_identifier(value: Any) -> bool:
 
 def policy_facts(
     *,
-    profiles: list[dict],
-    prefer_profile_ids: list[str],
+    buddies: list[dict],
+    prefer_buddy_ids: list[str],
     hard_constraints: dict,
 ) -> dict:
     """The complete bounded preference truth for one request.
 
     ``hardConstraints`` is exactly the workflow request's normalized constraint
     map — never inferred from task text or filenames, and empty when
-    the request supplied none. ``userPreferredProfileIds`` are the supplied
-    published ``prefer`` profiles that are legal candidates, in supplied order.
-    Legal means enabled and available: a disabled or unavailable profile can
+    the request supplied none. ``userPreferredBuddyIds`` are the supplied
+    published ``prefer`` buddies that are legal candidates, in supplied order.
+    Legal means enabled and available: a disabled or unavailable buddy can
     never carry a preference match. Task-local routing preferences are retired
     Host input (ADR-021 decision 5); the user's global pin/prefer/exclude
     settings remain exactly as they were.
     """
     legal_ids: list[str] = []
-    for profile in profiles:
-        if not isinstance(profile, dict):
+    for buddy in buddies:
+        if not isinstance(buddy, dict):
             continue
-        profile_id = profile.get("profileId")
-        if not _bounded_identifier(profile_id):
+        buddy_id = buddy.get("buddyId")
+        if not _bounded_identifier(buddy_id):
             continue
-        if profile.get("enabled") is not True or profile.get("available") is not True:
+        if buddy.get("enabled") is not True or buddy.get("available") is not True:
             continue
-        legal_ids.append(profile_id)
+        legal_ids.append(buddy_id)
     legal_set = set(legal_ids)
 
     user_preferred = [
-        profile_id for profile_id in (prefer_profile_ids or []) if profile_id in legal_set
+        buddy_id for buddy_id in (prefer_buddy_ids or []) if buddy_id in legal_set
     ]
     return {
         "hardConstraints": dict(hard_constraints or {}),
-        "userPreferredProfileIds": user_preferred,
+        "userPreferredBuddyIds": user_preferred,
     }
 
 
-def expected_policy_check(facts: dict, profile_id: str) -> dict:
-    """The program-owned ``policyCheck`` for a selection of ``profile_id``.
+def expected_policy_check(facts: dict, buddy_id: str) -> dict:
+    """The program-owned ``policyCheck`` for a selection of ``buddy_id``.
 
     A selection outside the effective preferred set with a legal preferred
     candidate is ``alternative`` — a legitimate, supported choice, never a
     violation.
     """
-    user_preferred = facts.get("userPreferredProfileIds") or []
+    user_preferred = facts.get("userPreferredBuddyIds") or []
     if not user_preferred:
         user_outcome = "none"
-    elif profile_id in user_preferred:
+    elif buddy_id in user_preferred:
         user_outcome = "matched"
     else:
         user_outcome = "alternative"

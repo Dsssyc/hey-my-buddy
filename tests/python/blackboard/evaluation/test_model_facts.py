@@ -100,8 +100,8 @@ EXPECTED_FLASH_FACTS = {
 }
 
 FLASH_MODEL_SERVICE = ("dsh", "deepseek-official", "deepseek-flash")
-FLASH_PROFILE_ID = "dsh:deepseek-official:deepseek-flash:off"
-FLASH_LOW_PROFILE_ID = "dsh:deepseek-official:deepseek-flash:low"
+FLASH_BUDDY_ID = "dsh:deepseek-official:deepseek-flash:off"
+FLASH_LOW_BUDDY_ID = "dsh:deepseek-official:deepseek-flash:low"
 
 
 class ModelFactsTestCase(EvaluationTestCase):
@@ -341,7 +341,7 @@ class ModelFactsTestCase(EvaluationTestCase):
         self.write_fixture()
         self.seed(board)
         calls = self.count_refresh_calls()
-        self.publish(board, profileSettings=[{"profileId": FLASH_PROFILE_ID, "enabled": True}])
+        self.publish(board, buddySettings=[{"buddyId": FLASH_BUDDY_ID, "enabled": True}])
         self.assertEqual(calls, [[list(FLASH_MODEL_SERVICE)]])
         view = model_facts.model_service_facts(board.store, [FLASH_MODEL_SERVICE])[FLASH_MODEL_SERVICE]
         self.assertEqual(view["status"], "current")
@@ -355,30 +355,30 @@ class ModelFactsTestCase(EvaluationTestCase):
         self.seed(board)
         calls = self.count_refresh_calls()
         self.publish(board, request_id="w1", command_id="c1",
-                     profileSettings=[{"profileId": FLASH_PROFILE_ID, "enabled": True}])
+                     buddySettings=[{"buddyId": FLASH_BUDDY_ID, "enabled": True}])
         self.assertEqual(len(calls), 1)
         # A second effort of the already enabled model service is not a new enablement.
         self.publish(board, request_id="w2", command_id="c2",
-                     profileSettings=[{"profileId": FLASH_LOW_PROFILE_ID, "enabled": True}])
+                     buddySettings=[{"buddyId": FLASH_LOW_BUDDY_ID, "enabled": True}])
         self.assertEqual(len(calls), 1)
         # Re-saving an enabled effort never fetches.
         self.publish(board, request_id="w3", command_id="c3",
-                     profileSettings=[{"profileId": FLASH_PROFILE_ID, "enabled": True}])
+                     buddySettings=[{"buddyId": FLASH_BUDDY_ID, "enabled": True}])
         self.assertEqual(len(calls), 1)
         # While another effort of the model service stays enabled, re-enabling this one is
         # still not a model service enablement.
         self.publish(board, request_id="w4", command_id="c4",
-                     profileSettings=[{"profileId": FLASH_PROFILE_ID, "enabled": False}])
+                     buddySettings=[{"buddyId": FLASH_BUDDY_ID, "enabled": False}])
         self.publish(board, request_id="w5", command_id="c5",
-                     profileSettings=[{"profileId": FLASH_PROFILE_ID, "enabled": True}])
+                     buddySettings=[{"buddyId": FLASH_BUDDY_ID, "enabled": True}])
         self.assertEqual(len(calls), 1)
         # Once every effort of the model service is disabled again, enabling one is a fresh
         # user enablement of the model service.
         self.publish(board, request_id="w6", command_id="c6",
-                     profileSettings=[{"profileId": FLASH_PROFILE_ID, "enabled": False},
-                                      {"profileId": FLASH_LOW_PROFILE_ID, "enabled": False}])
+                     buddySettings=[{"buddyId": FLASH_BUDDY_ID, "enabled": False},
+                                      {"buddyId": FLASH_LOW_BUDDY_ID, "enabled": False}])
         self.publish(board, request_id="w7", command_id="c7",
-                     profileSettings=[{"profileId": FLASH_PROFILE_ID, "enabled": True}])
+                     buddySettings=[{"buddyId": FLASH_BUDDY_ID, "enabled": True}])
         self.assertEqual(len(calls), 2)
         self.assertEqual(calls[-1], [list(FLASH_MODEL_SERVICE)])
 
@@ -388,14 +388,14 @@ class ModelFactsTestCase(EvaluationTestCase):
         self.seed(board)
         calls = self.count_refresh_calls()
         self.publish(board, request_id="start", command_id="start",
-                     profileSettings=[{"profileId": FLASH_PROFILE_ID, "enabled": True}])
+                     buddySettings=[{"buddyId": FLASH_BUDDY_ID, "enabled": True}])
         self.publish(board, request_id="switch1", command_id="switch1",
-                     profileSettings=[{"profileId": FLASH_PROFILE_ID, "enabled": False},
-                                      {"profileId": FLASH_LOW_PROFILE_ID, "enabled": True}])
+                     buddySettings=[{"buddyId": FLASH_BUDDY_ID, "enabled": False},
+                                      {"buddyId": FLASH_LOW_BUDDY_ID, "enabled": True}])
         self.assertEqual(len(calls), 1)
         self.publish(board, request_id="switch2", command_id="switch2",
-                     profileSettings=[{"profileId": FLASH_PROFILE_ID, "enabled": True},
-                                      {"profileId": FLASH_LOW_PROFILE_ID, "enabled": False}])
+                     buddySettings=[{"buddyId": FLASH_BUDDY_ID, "enabled": True},
+                                      {"buddyId": FLASH_LOW_BUDDY_ID, "enabled": False}])
         self.assertEqual(len(calls), 1)
 
     def test_alias_absence_and_ambiguous_normalization_stay_unknown(self):
@@ -413,12 +413,12 @@ class ModelFactsTestCase(EvaluationTestCase):
         self.seed(board)
         calls = self.count_refresh_calls()
         grant = self.publication_params(board)
-        patch = [{"profileId": FLASH_PROFILE_ID, "enabled": True}]
-        first = self.publish_with(board, grant, "cmd-1", profileSettings=patch)
+        patch = [{"buddyId": FLASH_BUDDY_ID, "enabled": True}]
+        first = self.publish_with(board, grant, "cmd-1", buddySettings=patch)
         self.assertEqual(len(calls), 1)
         # The idempotent replay of the same command returns the recorded response
         # without a second fetch.
-        replay = self.publish_with(board, grant, "cmd-1", profileSettings=patch)
+        replay = self.publish_with(board, grant, "cmd-1", buddySettings=patch)
         self.assertTrue(replay["duplicate"])
         self.assertEqual(len(calls), 1)
         self.assertEqual(first["counts"], replay["counts"])
@@ -429,22 +429,22 @@ class ModelFactsTestCase(EvaluationTestCase):
         self.remove_fixture()
         self.seed(board)
         self.publish(board, request_id="w1", command_id="c1",
-                     profileSettings=[{"profileId": FLASH_PROFILE_ID, "enabled": True}])
+                     buddySettings=[{"buddyId": FLASH_BUDDY_ID, "enabled": True}])
         self.assertIsNone(self.row(board, FLASH_MODEL_SERVICE))
         # A snapshot from an earlier fetch survives the next failed fetch untouched.
         self.write_fixture()
         self.publish(board, request_id="w2", command_id="c2",
-                     profileSettings=[{"profileId": FLASH_PROFILE_ID, "enabled": False}])
+                     buddySettings=[{"buddyId": FLASH_BUDDY_ID, "enabled": False}])
         self.publish(board, request_id="w3", command_id="c3",
-                     profileSettings=[{"profileId": FLASH_PROFILE_ID, "enabled": True}])
+                     buddySettings=[{"buddyId": FLASH_BUDDY_ID, "enabled": True}])
         retained = self.row(board, FLASH_MODEL_SERVICE)
         self.assertEqual(retained["status"], "current")
         first_hash = retained["payload_sha256"]
         self.remove_fixture()
         self.publish(board, request_id="w4", command_id="c4",
-                     profileSettings=[{"profileId": FLASH_PROFILE_ID, "enabled": False}])
+                     buddySettings=[{"buddyId": FLASH_BUDDY_ID, "enabled": False}])
         self.publish(board, request_id="w5", command_id="c5",
-                     profileSettings=[{"profileId": FLASH_PROFILE_ID, "enabled": True}])
+                     buddySettings=[{"buddyId": FLASH_BUDDY_ID, "enabled": True}])
         after = self.row(board, FLASH_MODEL_SERVICE)
         self.assertEqual(after["payload_sha256"], first_hash)
         self.assertEqual(after["status"], "current")
@@ -454,16 +454,16 @@ class ModelFactsTestCase(EvaluationTestCase):
         self.write_fixture()
         self.seed(board)
         self.publish(board, request_id="w1", command_id="c1",
-                     profileSettings=[{"profileId": FLASH_PROFILE_ID, "enabled": True}])
+                     buddySettings=[{"buddyId": FLASH_BUDDY_ID, "enabled": True}])
         self.assertEqual(self.row(board, FLASH_MODEL_SERVICE)["status"], "current")
         # A completed fetch without the entry records unknown with its date.
         removed = facts_fixture()
         del removed["deepseek"]["models"]["deepseek-flash"]
         self.write_fixture(removed)
         self.publish(board, request_id="w2", command_id="c2",
-                     profileSettings=[{"profileId": FLASH_PROFILE_ID, "enabled": False}])
+                     buddySettings=[{"buddyId": FLASH_BUDDY_ID, "enabled": False}])
         self.publish(board, request_id="w3", command_id="c3",
-                     profileSettings=[{"profileId": FLASH_PROFILE_ID, "enabled": True}])
+                     buddySettings=[{"buddyId": FLASH_BUDDY_ID, "enabled": True}])
         unknown = self.row(board, FLASH_MODEL_SERVICE)
         self.assertEqual(unknown["status"], "unknown")
         self.assertEqual(unknown["reason"], "entry-missing")
@@ -471,9 +471,9 @@ class ModelFactsTestCase(EvaluationTestCase):
         # The next failed fetch retains the unknown record; it never invents facts.
         self.remove_fixture()
         self.publish(board, request_id="w4", command_id="c4",
-                     profileSettings=[{"profileId": FLASH_PROFILE_ID, "enabled": False}])
+                     buddySettings=[{"buddyId": FLASH_BUDDY_ID, "enabled": False}])
         self.publish(board, request_id="w5", command_id="c5",
-                     profileSettings=[{"profileId": FLASH_PROFILE_ID, "enabled": True}])
+                     buddySettings=[{"buddyId": FLASH_BUDDY_ID, "enabled": True}])
         retained = self.row(board, FLASH_MODEL_SERVICE)
         self.assertEqual(retained["payload_sha256"], unknown_hash)
         self.assertEqual(retained["reason"], "entry-missing")
@@ -484,7 +484,7 @@ class ModelFactsTestCase(EvaluationTestCase):
         self.seed(board)
         calls = self.count_refresh_calls()
         # A buddy preference patch without an enablement never touches the source.
-        self.publish(board, preferenceChanges=[{"profileId": FLASH_PROFILE_ID,
+        self.publish(board, preferenceChanges=[{"buddyId": FLASH_BUDDY_ID,
                                                 "mode": "prefer", "reason": ""}])
         self.assertEqual(calls, [])
 
@@ -500,15 +500,15 @@ class ModelFactsTestCase(EvaluationTestCase):
         self.seed(board)
         calls = self.count_refresh_calls()
         self.publish(board, request_id="w1", command_id="c1",
-                     profileSettings=[{"profileId": FLASH_PROFILE_ID, "enabled": True}])
+                     buddySettings=[{"buddyId": FLASH_BUDDY_ID, "enabled": True}])
         self.assertEqual(len(calls), 1)
         self.publish(board, request_id="w2", command_id="c2",
-                     profileSettings=[{"profileId": FLASH_PROFILE_ID, "enabled": True}])
+                     buddySettings=[{"buddyId": FLASH_BUDDY_ID, "enabled": True}])
         self.assertEqual(len(calls), 1)
 
 
 class ModelFactsClockTestCase(BoardTestCase):
-    """The refresh boundary a later profile-plane caller reuses, with a fake clock."""
+    """The refresh boundary a later buddy-plane caller reuses, with a fake clock."""
 
     def test_refresh_uses_the_injected_clock_and_updates_the_dated_snapshot(self):
         clock = FakeClock()

@@ -11,7 +11,7 @@ import unittest
 from unittest import mock
 
 from hey_my_buddy.buddy.harnesses.base import ProcessHandle
-from hey_my_buddy.buddy.harnesses.run_contract import RunConfiguration
+from hey_my_buddy.buddy.harnesses.run_contract import RunBuddy
 from hey_my_buddy.buddy.harnesses.session_receipts import sign_receipt
 from hey_my_buddy.buddy.roles.session_mcp import respond
 from hey_my_buddy.buddy.harnesses.zcode.protocol import (
@@ -690,17 +690,17 @@ class NativeFailureAttributionTests(unittest.TestCase):
         self.assertIsNone(prompt_error.exception.failure)
 
 
-class ConfigurationTests(unittest.TestCase):
-    def test_run_configuration_boundary_refuses_missing_or_blank_fields(self):
-        configuration = {"provider": "fixture-api", "model": "fixture-model", "effort": "low"}
-        for key in configuration:
+class BuddyTests(unittest.TestCase):
+    def test_run_buddy_boundary_refuses_missing_or_blank_fields(self):
+        buddy = {"provider": "fixture-api", "model": "fixture-model", "effort": "low"}
+        for key in buddy:
             for value in (None, "", False):
                 with self.subTest(key=key, value=value):
-                    requested = {**configuration, key: value}
+                    requested = {**buddy, key: value}
                     if value is None:
                         requested.pop(key)
                     with self.assertRaises(BoardError):
-                        RunConfiguration(**requested)
+                        RunBuddy(**requested)
 
     def test_unknown_selection_readback_continues_with_retained_facts(self):
         unknown = []
@@ -711,9 +711,9 @@ class ConfigurationTests(unittest.TestCase):
                                    note_unknown=unknown.append)
         self.assertEqual(connection.call.call_count, 2)
         self.assertEqual(result, {"provider": None, "model": None, "effort": None})
-        self.assertEqual(unknown, ["configuration-catalog-unrecognized",
-                                   "configuration-selection-unrecognized",
-                                   "configuration-readback-unconfirmed"])
+        self.assertEqual(unknown, ["buddy-catalog-unrecognized",
+                                   "buddy-selection-unrecognized",
+                                   "buddy-readback-unconfirmed"])
 
     def test_identified_selection_mismatch_is_rejected_even_with_other_unknown_fields(self):
         requested = {"provider": "fixture-api", "model": "fixture-model", "effort": "low"}
@@ -731,11 +731,11 @@ class ConfigurationTests(unittest.TestCase):
                     "model": {"current": current}, "thoughtLevel": {"current": thought}}}]
                 with self.assertRaises(NativeError) as error:
                     configure_session(connection, {"session": {"sessionId": "native-default"}}, requested)
-                self.assertEqual(error.exception.code, "configuration-mismatch")
+                self.assertEqual(error.exception.code, "buddy-mismatch")
                 self.assertEqual([call.args[0] for call in connection.call.call_args_list],
                                  ["session/setModel", "session/setThoughtLevel"])
 
-    def test_unrecognized_thought_level_is_unknown_and_configuration_continues(self):
+    def test_unrecognized_thought_level_is_unknown_and_buddy_continues(self):
         for thought in (None, [], False, "", " \t", "x" * 129):
             with self.subTest(thought=thought):
                 unknown = []
@@ -748,7 +748,7 @@ class ConfigurationTests(unittest.TestCase):
                     {"provider": "fixture-api", "model": "fixture-model", "effort": "low"},
                     note_unknown=unknown.append)
                 self.assertEqual(result, {"provider": "fixture-api", "model": "fixture-model", "effort": None})
-                self.assertIn("configuration-readback-unconfirmed", unknown)
+                self.assertIn("buddy-readback-unconfirmed", unknown)
 
     def test_catalog_preserves_each_models_real_efforts_and_omits_unconfigurable_models(self):
         def model(identifier, efforts, provider="api"):

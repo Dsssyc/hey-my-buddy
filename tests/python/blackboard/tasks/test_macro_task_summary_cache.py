@@ -481,7 +481,7 @@ class MacroTaskSummaryCacheTests(unittest.TestCase):
             self.sql("UPDATE workflow_runs SET goal_json=json_set(goal_json,'$.task','fictional-other') WHERE run_id=?", (root,))
             self.assertEqual(self.rows(query="fictional-count-needle")[group]["matchingRuns"], initial-1)
             self.assert_recomputed(counter,[group])
-            self.sql("UPDATE workflow_runs SET execution_configuration_json=json_set(execution_configuration_json,'$.model','fictional-model') WHERE run_id=?", (root,))
+            self.sql("UPDATE workflow_runs SET buddy_json=json_set(buddy_json,'$.model','fictional-model') WHERE run_id=?", (root,))
             self.assertEqual(self.rows(query="fictional-model")[group]["matchingRuns"],1)
             self.assert_recomputed(counter,[group])
             self.sql("UPDATE workflow_runs SET host_id='fictional-takeover' WHERE run_id=?", (root,))

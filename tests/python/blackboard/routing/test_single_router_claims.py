@@ -10,22 +10,22 @@ from hey_my_buddy.buddy.roles.router import DecisionAdapter
 from hey_my_buddy.buddy.harnesses.dsh.adapter import DshAdapter
 from hey_my_buddy.errors import BoardError
 from support import InProcessBoard
-from blackboard.routing.test_decision import DecisionTestCase, PROFILE, PROFILE_ID, SECOND_PROFILE_ID
+from blackboard.routing.test_decision import DecisionTestCase, CATALOG_BUDDY, BUDDY_ID, SECOND_BUDDY_ID
 from blackboard.routing.fixtures.router_tool_receipt import claim_tool_receipt
 
 NONCE = 'g' * 32
 
 
-def stopped_answer(claim, *, profile_id=PROFILE_ID):
+def stopped_answer(claim, *, buddy_id=BUDDY_ID):
     """A deterministic native receipt, with each required fact explicit."""
     document = claim['decisionInput']
     return {**claim_tool_receipt(claim), 'status': 'ok', 'operation': 'select',
-            'requested': document['profile'], 'usage': {'elapsedMs': 100, 'toolCalls': 0},
+            'requested': document['buddy'], 'usage': {'elapsedMs': 100, 'toolCalls': 0},
             'zeroToolVerified': True,
             'stopEvidence': {'shutdownConfirmed': True, 'native': {'shutdownConfirmed': True}},
             'inputVerification': {'unchanged': True, 'snapshotSha256': 'private-fixture-digest',
                                   'manifestSha256': (document.get('executionWorkspace') or {}).get('manifestSha256')},
-            'decision': {'profileId': profile_id, 'reason': 'Frozen legal candidate', 'evidence': []}}
+            'decision': {'buddyId': buddy_id, 'reason': 'Frozen legal candidate', 'evidence': []}}
 
 
 class SingleRouterClaimTests(DecisionTestCase):
@@ -66,7 +66,7 @@ class SingleRouterClaimTests(DecisionTestCase):
         self.readonly_start.assert_not_called()
 
     def test_settings_edits_do_not_replace_the_queued_claim_input(self):
-        for settings in ({'routerProfileIds': [SECOND_PROFILE_ID]}, {'defaultRoutingMode': 'fast'},
+        for settings in ({'routerBuddyIds': [SECOND_BUDDY_ID]}, {'defaultRoutingMode': 'fast'},
                          {'routingBudget': 'brief'}):
             with self.subTest(settings=settings):
                 board = self.case_board()
@@ -86,23 +86,23 @@ class SingleRouterClaimTests(DecisionTestCase):
         request = self.request(board)
         frozen = self.decision(board, request['decisionId'])
         with board.store.db.write() as connection:
-            connection.execute('UPDATE evaluation_profiles SET model=? WHERE profile_id=?', ('deepseek-v4-pro', PROFILE_ID))
+            connection.execute('UPDATE buddies SET model=? WHERE buddy_id=?', ('deepseek-v4-pro', BUDDY_ID))
         claimed = self.claim_route(board, request)['claim']
         self.assertIsNotNone(claimed)
         self.assertEqual(claimed['decisionInput'], frozen['input'])
 
-    def test_profile_removal_incomplete_disabled_and_unavailable_are_specific_boundaries(self):
-        for sql, code in (("DELETE FROM evaluation_profiles WHERE profile_id=?", 'router-not-published'),
-                          ("UPDATE evaluation_profiles SET effort='' WHERE profile_id=?", 'router-incomplete'),
-                          ("UPDATE evaluation_profiles SET enabled=0 WHERE profile_id=?", 'router-unavailable'),
-                          ("UPDATE evaluation_profiles SET available=0 WHERE profile_id=?", 'router-unavailable')):
+    def test_buddy_removal_incomplete_disabled_and_unavailable_are_specific_boundaries(self):
+        for sql, code in (("DELETE FROM buddies WHERE buddy_id=?", 'router-not-published'),
+                          ("UPDATE buddies SET effort='' WHERE buddy_id=?", 'router-incomplete'),
+                          ("UPDATE buddies SET enabled=0 WHERE buddy_id=?", 'router-unavailable'),
+                          ("UPDATE buddies SET available=0 WHERE buddy_id=?", 'router-unavailable')):
             with self.subTest(code=code, sql=sql):
                 board = self.case_board()
                 self.seed(board)
                 request = self.request(board)
                 frozen = self.decision(board, request['decisionId'])
                 with board.store.db.write() as connection:
-                    connection.execute(sql, (PROFILE_ID,))
+                    connection.execute(sql, (BUDDY_ID,))
                 self.assert_unclaimed(board, request, code, frozen)
                 board.close()
                 self._stack.remove(board)
@@ -139,7 +139,7 @@ class SingleRouterClaimTests(DecisionTestCase):
         self.seed(board)
         with board.store.db.write() as connection:
             connection.execute("INSERT INTO model_service_concurrency(adapter,provider,model,concurrency_limit,created_at,updated_at) VALUES(?,?,?,1,'fixture','fixture')",
-                               (PROFILE['adapter'], PROFILE['provider'], PROFILE['model']))
+                               (CATALOG_BUDDY['adapter'], CATALOG_BUDDY['provider'], CATALOG_BUDDY['model']))
         first = self.request(board, request_id='one')
         second = self.request(board, request_id='two')
         claim = self.claim_route(board, first)['claim']
@@ -156,7 +156,7 @@ class SingleRouterClaimTests(DecisionTestCase):
             model_service = connection.execute('SELECT model_adapter,model_provider,model_model,shutdown_confirmed FROM attempts').fetchone()
             self.assertEqual(tuple(model_service), ('dsh', 'deepseek-official', 'deepseek-flash', 0))
             self.assertEqual(board.store._model_active_counts(connection), {('dsh', 'deepseek-official', 'deepseek-flash'): 1})
-        self.assertIsNone(self.decision(board, first['decisionId'])['selectedProfile'])
+        self.assertIsNone(self.decision(board, first['decisionId'])['selectedBuddy'])
 
     def test_confirmed_stop_releases_same_router_model_service_for_next_claim(self):
         board = self.board(max_concurrent=3)
@@ -171,7 +171,7 @@ class SingleRouterClaimTests(DecisionTestCase):
         self.assertEqual(self.decision(board, first['decisionId'])['status'], 'completed')
         next_claim = self.claim_route(board, second, worker='other', command='next')['claim']
         self.assertIsNotNone(next_claim)
-        self.assertEqual(next_claim['decisionInput']['routerProfile'], claim['decisionInput']['routerProfile'])
+        self.assertEqual(next_claim['decisionInput']['routerBuddy'], claim['decisionInput']['routerBuddy'])
 
     def test_missing_stop_budget_and_snapshot_evidence_cannot_publish(self):
         for field, replacement, code in (
@@ -196,7 +196,7 @@ class SingleRouterClaimTests(DecisionTestCase):
                 decision = self.decision(board, request['decisionId'])
                 self.assertEqual(decision['status'], 'needs-host')
                 self.assertEqual(decision['output']['code'], code)
-                self.assertIsNone(decision['selectedProfile'])
+                self.assertIsNone(decision['selectedBuddy'])
                 self.assertIsNone(self.claim_route(board, request, command='late')['claim'])
                 board.close()
                 self._stack.remove(board)
@@ -242,7 +242,7 @@ class SingleRouterClaimTests(DecisionTestCase):
         decision = self.decision(board, request['decisionId'])
         self.assertEqual(decision['status'], 'running')
         self.assertIsNone(decision['output'])
-        self.assertIsNone(decision['selectedProfile'])
+        self.assertIsNone(decision['selectedBuddy'])
 
     def test_historical_fallback_json_is_audit_only_and_is_not_rewritten(self):
         board = self.board()
@@ -334,8 +334,8 @@ class SingleRouterClaimTests(DecisionTestCase):
         self.assertTrue(response['committed'])
         decision = self.decision(board, request['decisionId'])
         self.assertEqual(decision['status'], 'needs-host')
-        self.assertIsNone(decision['profileId'])
-        self.assertIsNone(decision['selectedProfile'])
+        self.assertIsNone(decision['buddyId'])
+        self.assertIsNone(decision['selectedBuddy'])
         with board.store.db.read() as connection:
             self.assertEqual(connection.execute("SELECT COUNT(*) FROM events WHERE kind='decision.completed'").fetchone()[0], 0)
             self.assertIsNotNone(connection.execute('SELECT result_json FROM attempts').fetchone()[0])
@@ -351,6 +351,6 @@ class SingleRouterClaimTests(DecisionTestCase):
             self.report(board, claim, stopped_answer(claim))
         decision = self.decision(board, request['decisionId'])
         self.assertEqual(decision['status'], 'completed')
-        self.assertEqual(decision['profileId'], PROFILE_ID)
+        self.assertEqual(decision['buddyId'], BUDDY_ID)
         self.assertEqual(decision['input'], claim['decisionInput'])
         self.assertIsNone(self.claim_route(board, request, command='no-replacement')['claim'])

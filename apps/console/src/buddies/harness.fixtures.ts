@@ -4,7 +4,7 @@ import { vi } from "vitest";
 import { App } from "../App";
 import { ApiError } from "../api";
 import type { ConsoleApi, HarnessHealth } from "../api";
-import type { Profile, Snapshot } from "../types";
+import type { Buddy, Snapshot } from "../types";
 
 /**
  * The snapshot and the client the harness view's tests share: four harnesses
@@ -47,14 +47,14 @@ export function harnesses(): HarnessHealth[] {
 export type HarnessSnapshot = Snapshot & { harnesses: HarnessHealth[] };
 
 export function snapshot(rows: HarnessHealth[] = harnesses()): HarnessSnapshot {
-  const profile: Profile = { profileId: mediumId, label: "Claude Sonnet 5 · medium", ...sonnet, effort: "medium", available: true,
+  const buddy: Buddy = { buddyId: mediumId, label: "Claude Sonnet 5 · medium", ...sonnet, effort: "medium", available: true,
     enabled: true, capabilities: ["execution:claude", "decision"], contextWindow: 200_000, description: "", source: "catalog:fixture" };
   return {
     csrfToken: "csrf", eventCursor: 0,
     consoleSession: { id: "fixture-session", canWrite: true, reason: null },
 
-    configuration: { routerProfileIds: [mediumId], routerRetryIntervalSeconds: 600, defaultRoutingMode: "review", routingBudget: "standard" },
-    profiles: [profile],
+    configuration: { routerBuddyIds: [mediumId], routerRetryIntervalSeconds: 600, defaultRoutingMode: "review", routingBudget: "standard" },
+    buddies: [buddy],
     preferences: [], modelServiceNotes: [], decisions: [],
 
     modelServiceConcurrency: [{ ...sonnet, limit: 2, active: 0 }],

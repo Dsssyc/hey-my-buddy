@@ -111,7 +111,7 @@ class HarnessHealth:
                 if db.execute('SELECT 1 FROM harness_health WHERE adapter=?', (name,)).fetchone() is None:
                     db.execute('INSERT INTO harness_health(adapter) VALUES(?)', (name,))
                     from ..catalog.catalog import CATALOG_FACT_REASONS
-                    db.execute("UPDATE evaluation_profiles SET available=0,unavailable_reason='HARNESS_NOT_CHECKED'"
+                    db.execute("UPDATE buddies SET available=0,unavailable_reason='HARNESS_NOT_CHECKED'"
                                ' WHERE adapter=? AND (unavailable_reason IS NULL OR unavailable_reason NOT IN (?,?))',
                                (name, *CATALOG_FACT_REASONS))
 
@@ -140,7 +140,7 @@ class HarnessHealth:
                 # confirmed absence or an effort retirement already grounded stay
                 # with their own reason; health only grounds the rest.
                 from ..catalog.catalog import CATALOG_FACT_REASONS
-                db.execute('UPDATE evaluation_profiles SET available=0,unavailable_reason=?'
+                db.execute('UPDATE buddies SET available=0,unavailable_reason=?'
                            ' WHERE adapter=? AND (unavailable_reason IS NULL OR unavailable_reason NOT IN (?,?))',
                            (reason, name, *CATALOG_FACT_REASONS))
                 self.board._append_event(db, 'harness.invalidated', payload={'adapter': name, 'reasonCode': reason,
@@ -160,7 +160,7 @@ class HarnessHealth:
         with self.board.db.write() as db:
             db.execute("INSERT INTO harness_health(adapter,manual_path,revision) VALUES(?,?,1) ON CONFLICT(adapter) DO UPDATE SET manual_path=excluded.manual_path,revision=revision+1,status='unknown',record_json='{}',checked_at=NULL,expires_at=NULL,scan_after=NULL", (name, str(Path(path).expanduser()) if path else None))
             from ..catalog.catalog import CATALOG_FACT_REASONS
-            db.execute("UPDATE evaluation_profiles SET available=0,unavailable_reason='HARNESS_NOT_CHECKED'"
+            db.execute("UPDATE buddies SET available=0,unavailable_reason='HARNESS_NOT_CHECKED'"
                        ' WHERE adapter=? AND (unavailable_reason IS NULL OR unavailable_reason NOT IN (?,?))',
                        (name, *CATALOG_FACT_REASONS))
             self.board._append_event(db, 'harness.path_changed', payload={'adapter': name, 'manualPath': path})
@@ -232,7 +232,7 @@ class HarnessHealth:
                     # Same boundary as invalidate: health grounds the rows it
                     # marks, never the ones a catalog fact already grounded.
                     from ..catalog.catalog import CATALOG_FACT_REASONS
-                    db.execute('UPDATE evaluation_profiles SET available=0,unavailable_reason=?'
+                    db.execute('UPDATE buddies SET available=0,unavailable_reason=?'
                                ' WHERE adapter=? AND (unavailable_reason IS NULL OR unavailable_reason NOT IN (?,?))',
                                (record.get('reasonCode') or 'HARNESS_UNHEALTHY', name, *CATALOG_FACT_REASONS))
                 elif old['status'] != 'ready':

@@ -30,9 +30,9 @@ from hey_my_buddy.blackboard.routing import router
 from hey_my_buddy.errors import BoardError
 from hey_my_buddy.install.runtime import resource_path
 from blackboard.routing.fixtures.router_tool_receipt import claim_tool_receipt
-from blackboard.routing.test_decision import DecisionTestCase, PROFILE, PROFILE_ID, SECOND_PROFILE, SECOND_PROFILE_ID, THIRD_PROFILE, THIRD_PROFILE_ID
+from blackboard.routing.test_decision import DecisionTestCase, CATALOG_BUDDY, BUDDY_ID, SECOND_BUDDY, SECOND_BUDDY_ID, THIRD_BUDDY, THIRD_BUDDY_ID
 from blackboard.evaluation.test_evaluation import model_service_key
-from blackboard.tasks.test_workflow import CONFIGURATION, WorkflowTestCase
+from blackboard.tasks.test_workflow import BUDDY, WorkflowTestCase
 
 NONCE = "n" * 16
 
@@ -138,10 +138,10 @@ class RetiredSubmissionInputTests(unittest.TestCase):
                             "requestId": "helper", "task": "Check a dependency", "cwd": root,
                             "executionWorkspace": {"kind": "existing", "access": "write"}, **partial}]})
             # Both complete expressions normalize: the whole quadruple, and none of it.
-            complete = schemas.normalize_workflow_submit({**self.submit_params(root), **CONFIGURATION})
-            self.assertEqual(schemas.configuration_constraints(complete["spec"]), CONFIGURATION)
+            complete = schemas.normalize_workflow_submit({**self.submit_params(root), **BUDDY})
+            self.assertEqual(schemas.buddy_constraints(complete["spec"]), BUDDY)
             empty = schemas.normalize_workflow_submit(self.submit_params(root))
-            self.assertEqual(schemas.configuration_constraints(empty["spec"]), {})
+            self.assertEqual(schemas.buddy_constraints(empty["spec"]), {})
 
     def test_command_infrastructure_keeps_its_minimal_special_case(self):
         with tempfile.TemporaryDirectory() as root:
@@ -199,9 +199,9 @@ class DecisionCapabilityTests(unittest.TestCase):
             frozen.mkdir()
             manifest = {"inputTree": "frozen-tree", "manifestSha256": "manifest"}
             budget = router.budget("brief")
-            document = {"profile": {"adapter": "codex", "provider": "openai", "model": "fixture-model", "effort": "low"},
-                        "executionWorkspace": manifest, "budget": budget, "outputSchema": router.answer_schema([PROFILE_ID]),
-                        "profiles": [{"profileId": PROFILE_ID}], "task": "bounded read"}
+            document = {"buddy": {"adapter": "codex", "provider": "openai", "model": "fixture-model", "effort": "low"},
+                        "executionWorkspace": manifest, "budget": budget, "outputSchema": router.answer_schema([BUDDY_ID]),
+                        "buddies": [{"buddyId": BUDDY_ID}], "task": "bounded read"}
             context = ExecutionContext(task_id="goal", attempt_id="attempt", generation=1,
                                        spec={"cwd": root, "timeoutSeconds": 60}, directory=directory,
                                        runtime={}, environment={"BUDDY_STATE_DIR": str(Path(root) / "state"),
@@ -233,7 +233,7 @@ class DecisionCapabilityTests(unittest.TestCase):
     def test_ineligible_capability_is_rejected_before_input_preparation_or_spawn(self):
         context = ExecutionContext(task_id="goal", attempt_id="attempt", generation=1,
                                    spec={}, directory=Path("/tmp/unused"), runtime={}, environment={},
-                                   decision_input={"profile": {"adapter": "codex"}})
+                                   decision_input={"buddy": {"adapter": "codex"}})
         with mock.patch("hey_my_buddy.buddy.harnesses.registry.adapter", return_value=CodexAdapter()), mock.patch(
             "hey_my_buddy.buddy.roles.router_input.prepare"
         ) as prepare, mock.patch.object(CodexAdapter, 'local_read_only_check', return_value={'eligible': False}), \
@@ -245,8 +245,8 @@ class DecisionCapabilityTests(unittest.TestCase):
         start.assert_not_called()
 
     def test_router_prompt_carries_no_task_preference_slot(self):
-        prompt = router.render_prompt({"routingMode": "review", "task": "choose", "profiles": [],
-                                       "policyFacts": {"hardConstraints": {}, "userPreferredProfileIds": []}})
+        prompt = router.render_prompt({"routingMode": "review", "task": "choose", "buddies": [],
+                                       "policyFacts": {"hardConstraints": {}, "userPreferredBuddyIds": []}})
         self.assertNotIn("routingPreferences", prompt)
 
 
@@ -264,7 +264,7 @@ class RetiredRoutingInputWorkflowTests(WorkflowTestCase):
         catalog = board.call("model_catalog_refresh", {"requestId": "annotations-catalog"})
         board.console_call("user_policy_publish", {
             "commandId": "annotations-publish",
-            "modelServiceNoteChanges": [{**model_service_key(PROFILE), "text": "Human preference for this workflow"}],
+            "modelServiceNoteChanges": [{**model_service_key(CATALOG_BUDDY), "text": "Human preference for this workflow"}],
         })
 
     def routed(self, board, *, request_id, **extra):
@@ -315,15 +315,15 @@ class RetiredRoutingInputWorkflowTests(WorkflowTestCase):
         self.assertEqual(raised.exception.code, "INVALID_ARGUMENT")
         self.assertIn("all-or-nothing", raised.exception.message)
         # The complete quadruple delegates directly: no routing task, explicit source.
-        delegated = self.routed(board, request_id="direct-buddy", **CONFIGURATION)
+        delegated = self.routed(board, request_id="direct-buddy", **BUDDY)
         self.assertEqual(delegated["routing"]["status"], "explicit")
         self.assertEqual(delegated["routing"]["source"], "original-explicit")
-        self.assertEqual(delegated["executionConfiguration"], CONFIGURATION)
+        self.assertEqual(delegated["buddy"], BUDDY)
         with board.store.db.read() as connection:
             self.assertEqual(connection.execute("SELECT COUNT(*) FROM workflow_routes").fetchone()[0], 0)
             self.assertIsNone(connection.execute("SELECT current_routing_id FROM workflow_runs").fetchone()[0])
             event = json.loads(connection.execute(
-                "SELECT payload_json FROM events WHERE kind='workflow.configuration_selected'").fetchone()[0])
+                "SELECT payload_json FROM events WHERE kind='workflow.buddy_selected'").fetchone()[0])
         self.assertNotIn("routingPreferences", event)
 
     def test_router_input_and_views_no_longer_carry_preferences(self):
@@ -341,7 +341,7 @@ class RetiredRoutingInputWorkflowTests(WorkflowTestCase):
         self.assertNotIn("taskPreference", document["policyFacts"])
         note = document["annotations"][0]
         self.assertEqual({key: note[key] for key in ("adapter", "provider", "model", "text")},
-                         {**model_service_key(PROFILE), "text": "Human preference for this workflow"})
+                         {**model_service_key(CATALOG_BUDDY), "text": "Human preference for this workflow"})
         board.call("worker_result", {
             "workerId": "router", "attemptId": owned["claim"]["attempt"]["attemptId"],
             "generation": owned["claim"]["attempt"]["generation"], "nonce": NONCE,
@@ -351,7 +351,7 @@ class RetiredRoutingInputWorkflowTests(WorkflowTestCase):
                        "zeroToolVerified": True,
                        "stopEvidence": {"shutdownConfirmed": True, "native": {"shutdownConfirmed": True}},
                        "inputVerification": {"unchanged": True, "snapshotSha256": "fixture-digest", "manifestSha256": document["executionWorkspace"]["manifestSha256"]},
-                       "decision": {"profileId": PROFILE_ID, "reason": "fixture selection", "evidence": []}},
+                       "decision": {"buddyId": BUDDY_ID, "reason": "fixture selection", "evidence": []}},
         })
         routed = board.call("workflow_get", {"runId": view["runId"]})
         self.assertEqual(routed["routing"]["source"], "model-selection")
@@ -367,18 +367,18 @@ class RetiredRoutingInputWorkflowTests(WorkflowTestCase):
     def test_capabilities_still_filter_and_user_alternative_is_audited(self):
         board = self.board()
         self.annotations(board)
-        # Two effort-high profiles keep the Router path under the capability
+        # Two effort-high buddies keep the Router path under the capability
         # filter; a single constrained candidate would be selected by the program.
-        self.seed(board, profiles=(PROFILE, SECOND_PROFILE, THIRD_PROFILE),
-                  preferences=[{"profileId": THIRD_PROFILE_ID, "mode": "prefer", "reason": "prefer flash-high"}])
+        self.seed(board, buddies=(CATALOG_BUDDY, SECOND_BUDDY, THIRD_BUDDY),
+                  preferences=[{"buddyId": THIRD_BUDDY_ID, "mode": "prefer", "reason": "prefer flash-high"}])
         view = self.routed(board, request_id="route-caps", requiredCapabilities=["effort:high"])
         self.assertEqual(view["routing"]["requiredCapabilities"], ["effort:high", "permission:write"])
         self.assertEqual(view["routing"]["constraints"], {})
         board.call("worker_register", {"workerId": "router", "adapter": "decision", "capabilities": ["decision"]})
         owned = self.claim(board, "router", run_id=view["routing"]["taskId"], claim_request_id="cap-claim")
         document = owned["claim"]["decisionInput"]
-        self.assertEqual(sorted(entry["profileId"] for entry in document["profiles"]),
-                         sorted([SECOND_PROFILE_ID, THIRD_PROFILE_ID]))
+        self.assertEqual(sorted(entry["buddyId"] for entry in document["buddies"]),
+                         sorted([SECOND_BUDDY_ID, THIRD_BUDDY_ID]))
         board.call("worker_result", {
             "workerId": "router", "attemptId": owned["claim"]["attempt"]["attemptId"],
             "generation": owned["claim"]["attempt"]["generation"], "nonce": NONCE,
@@ -388,7 +388,7 @@ class RetiredRoutingInputWorkflowTests(WorkflowTestCase):
                        "zeroToolVerified": True,
                        "stopEvidence": {"shutdownConfirmed": True, "native": {"shutdownConfirmed": True}},
                        "inputVerification": {"unchanged": True, "snapshotSha256": "fixture-digest", "manifestSha256": document["executionWorkspace"]["manifestSha256"]},
-                       "decision": {"profileId": SECOND_PROFILE_ID, "reason": "fixture selection", "evidence": []}},
+                       "decision": {"buddyId": SECOND_BUDDY_ID, "reason": "fixture selection", "evidence": []}},
         })
         routed = board.call("workflow_get", {"runId": view["runId"]})
         self.assertEqual(routed["routing"]["status"], "completed")
@@ -437,20 +437,20 @@ class RetiredRoutingInputWorkflowTests(WorkflowTestCase):
         view = self.routed(board, request_id="route-override")
         self.assertEqual(view["routing"]["status"], "needs-host")
         # The shared fixture helper supplies a default reason for explicit
-        # configurations; exercise the public request without that field.
+        # buddies; exercise the public request without that field.
         with self.assertRaises(BoardError) as raised:
             board.call("workflow_continue", {"runId": view["runId"], "commandId": "override-no-reason",
                 "expectedRevision": view["revision"], "input": "keep going", "helperPolicy": "keep",
-                "configuration": CONFIGURATION, **self.control(view)})
+                "buddy": BUDDY, **self.control(view)})
         self.assertEqual(raised.exception.code, "INVALID_ARGUMENT")
-        updated = self.continue_run(board, view, configuration=CONFIGURATION, reason="Host selected the installed configuration")
+        updated = self.continue_run(board, view, buddy=BUDDY, reason="Host selected the installed buddy")
         self.assertEqual(updated["routing"]["source"], "host-override")
         self.assertNotIn("routingPreferences", updated["routing"])
         with board.store.db.read() as connection:
-            row = connection.execute("SELECT payload_json FROM events WHERE task_id=? AND kind='workflow.configuration_overridden'",
+            row = connection.execute("SELECT payload_json FROM events WHERE task_id=? AND kind='workflow.buddy_overridden'",
                                      (view["runId"],)).fetchone()
             payload = json.loads(row["payload_json"])
-        self.assertEqual(payload["reason"], "Host selected the installed configuration")
+        self.assertEqual(payload["reason"], "Host selected the installed buddy")
         self.assertNotIn("routingPreferences", payload)
 
 

@@ -28,7 +28,7 @@ GIT_ENV = {
     "GIT_CONFIG_SYSTEM": "/dev/null",
 }
 FIXTURE = Path(__file__).resolve().parents[2] / "buddy/harnesses/dsh/fixtures/workflow_agent.py"
-CONFIGURATION = {"adapter": "dsh", "provider": "deepseek-official", "model": "deepseek-flash", "effort": "off"}
+BUDDY = {"adapter": "dsh", "provider": "deepseek-official", "model": "deepseek-flash", "effort": "off"}
 
 
 def harness_environment(directory: Path) -> dict:
@@ -75,7 +75,7 @@ class GovernedWorkerTestCase(BoardTestCase):
             "submit",
             json.dumps(
                 {
-                    **CONFIGURATION,
+                    **BUDDY,
                     "requestId": request_id,
                     "hostId": "host-1",
                     "task": "run the mock turn",
@@ -249,7 +249,7 @@ class ConsoleWorkflowRouteTests(GovernedWorkerTestCase):
         created = board.call(
             "workflow_submit",
             {
-                **CONFIGURATION,
+                **BUDDY,
                 "requestId": "console-req-1",
                 "hostId": "host-1",
                 "task": "console governed task",
@@ -276,7 +276,7 @@ class ConsoleWorkflowRouteTests(GovernedWorkerTestCase):
         status, _headers, body = browser.command(
             "workflow_submit",
             {
-                **CONFIGURATION,
+                **BUDDY,
                 "requestId": "console-req-2",
                 "hostId": "host-1",
                 "task": "console submission",
@@ -297,7 +297,7 @@ class CompactRouteTests(GovernedWorkerTestCase):
         submitted = board.call(
             "workflow_submit",
             {
-                **CONFIGURATION,
+                **BUDDY,
                 "requestId": "shape-req-1",
                 "hostId": "host-1",
                 "task": "shape",

@@ -98,7 +98,7 @@ def armed(frames):
     return collector
 
 
-DELIVERED = {"profileId": "legal", "reason": "the delivered value", "evidence": ["one"]}
+DELIVERED = {"buddyId": "legal", "reason": "the delivered value", "evidence": ["one"]}
 
 
 def settled_stream():
@@ -266,7 +266,7 @@ class StructuredDeliveryProjectionTests(unittest.TestCase):
                            tool_result("toolu_so_1")])
         self.assertEqual(collector.settle_delivery(DELIVERED, ROOT), (self.delivery_key(),))
         # The one settlement is frozen; a second call returns the same answer.
-        self.assertEqual(collector.settle_delivery({"profileId": "other"}, ROOT),
+        self.assertEqual(collector.settle_delivery({"buddyId": "other"}, ROOT),
                          (self.delivery_key(),))
         self.assertEqual(collector.tool_calls, 0)
         package = collector.finish(True, exclude_calls=collector.settle_delivery(DELIVERED, ROOT))
@@ -313,7 +313,7 @@ class StructuredDeliveryProjectionTests(unittest.TestCase):
         # role's settled facts releases it: the last count the role may act on
         # and the finished package report the same classification.
         collector = armed([init_frame(),
-                           structured_use("toolu_so_1", {"profileId": "forged"}), tool_result("toolu_so_1")])
+                           structured_use("toolu_so_1", {"buddyId": "forged"}), tool_result("toolu_so_1")])
         self.assertEqual(collector.tool_calls, 0)
         self.assertEqual(collector.settle_delivery(DELIVERED, ROOT), ())
         self.assertEqual(collector.tool_calls, 1)
@@ -339,7 +339,7 @@ class StructuredDeliveryProjectionTests(unittest.TestCase):
 
     def test_a_value_mismatch_verifies_nothing_and_keeps_the_call_counted(self):
         collector = armed([init_frame(),
-                           structured_use("toolu_so_1", {"profileId": "forged"}), tool_result("toolu_so_1")])
+                           structured_use("toolu_so_1", {"buddyId": "forged"}), tool_result("toolu_so_1")])
         self.assertEqual(collector.settle_delivery(DELIVERED, ROOT), ())
         package = collector.finish(True)
         self.assertEqual(package["toolCalls"], 1)
@@ -348,7 +348,7 @@ class StructuredDeliveryProjectionTests(unittest.TestCase):
                          tool_evidence.TOOLS_FORBIDDEN)
 
     def test_a_second_different_full_input_refuses_the_exemption_in_either_order(self):
-        other = {"profileId": "conflict", "reason": "a different complete input", "evidence": []}
+        other = {"buddyId": "conflict", "reason": "a different complete input", "evidence": []}
         for name, first, second in (("delivered-first", DELIVERED, other), ("conflict-first", other, DELIVERED)):
             with self.subTest(order=name):
                 collector = armed([init_frame(), structured_use("toolu_so_1", first),
@@ -470,7 +470,7 @@ class StructuredDeliveryProjectionTests(unittest.TestCase):
     def test_a_mixed_candidate_field_settles_to_one_agreed_count(self):
         collector = armed([init_frame(),
                            structured_use("toolu_so_1", DELIVERED), tool_result("toolu_so_1"),
-                           structured_use("toolu_so_2", {"profileId": "forged"}), tool_result("toolu_so_2")])
+                           structured_use("toolu_so_2", {"buddyId": "forged"}), tool_result("toolu_so_2")])
         self.assertEqual(collector.tool_calls, 0)
         verified = collector.settle_delivery(DELIVERED, ROOT)
         self.assertEqual(verified, (self.delivery_key("toolu_so_1"),))

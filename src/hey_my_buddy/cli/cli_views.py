@@ -115,7 +115,7 @@ _TURN_BRIEF = ("turnId", "turnIndex", "state", "disposition", "resumeMode")
 #: The routing basis keeps the frozen submission facts (hard constraints and the
 #: user exclusions that narrowed the candidate set) beside the choice itself, so
 #: a Host sees why a route had few candidates without a table read.
-_ROUTING_BRIEF = ("status", "source", "reason", "selectedProfile", "decisionId",
+_ROUTING_BRIEF = ("status", "source", "reason", "selectedBuddy", "decisionId",
                   "routingMode", "requestedRoutingMode", "fallback", "constraints", "requiredCapabilities", "routingBasis")
 _WORKSPACE_BRIEF = ("path", "kind", "access", "inputCommit")
 _OUTPUT_ARTIFACT = (
@@ -206,8 +206,8 @@ def governed_brief(view: dict, *, turn_summary: bool = True) -> dict:
                 "continuationCount",
                 "access",
                 "accessReason",
-                "executionConfiguration",
-                "configurationLocked",
+                "buddy",
+                "buddyLocked",
                 "hostConclusion",
                 "quotaWarnings",
                 "quotaFailure",
@@ -336,8 +336,8 @@ _KNOWN_GOVERNED_FIELDS = frozenset(
         "access",
         "accessReason",
         "requestFingerprint",
-        "executionConfiguration",
-        "executionConfigurationRevision",
+        "buddy",
+        "buddyRevision",
         "routing",
         "currentTurn",
         "turns",
@@ -419,9 +419,9 @@ def task_brief(view: dict) -> dict:
     brief = _pick(view, _TASK_BRIEF)
     delegation = view.get("delegation")
     if isinstance(delegation, dict):
-        configuration = delegation.get("configuration")
-        if isinstance(configuration, dict):
-            brief["configuration"] = _pick(configuration, ("adapter", "provider", "model", "effort"))
+        buddy = delegation.get("buddy")
+        if isinstance(buddy, dict):
+            brief["buddy"] = _pick(buddy, ("adapter", "provider", "model", "effort"))
         brief.update(_pick(delegation, ("kind", "parentRunId")))
     workflow = view.get("workflow")
     if isinstance(workflow, dict):
@@ -457,9 +457,9 @@ def list_brief(response: dict) -> dict:
         entry = _pick(row, ("runId", "requestId", "adapter", "status", "workflowState", "awaitingHost", "createdAt"))
         delegation = row.get("delegation")
         if isinstance(delegation, dict):
-            configuration = delegation.get("configuration")
-            if isinstance(configuration, dict) and configuration.get("model"):
-                entry["model"] = configuration["model"]
+            buddy = delegation.get("buddy")
+            if isinstance(buddy, dict) and buddy.get("model"):
+                entry["model"] = buddy["model"]
             entry.update(_pick(delegation, ("kind", "parentRunId", "currentHostId")))
         workflow = row.get("workflow") if isinstance(row.get("workflow"), dict) else {}
         title = _title(row.get("task") or (row.get("spec") or {}).get("task"), workflow.get("resultSummary"))

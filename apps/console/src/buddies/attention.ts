@@ -16,11 +16,11 @@ export function buddyAttention(data: ConsoleView, snapshot: Snapshot): BuddyAtte
   if (!configuration) return { roles: "upgrade", quota };
   // The health projection names the current Router; the head of the list stands in only when no health facts exist.
   const health = snapshot.routingHealth;
-  const id = health && "currentRouterProfileId" in health ? health.currentRouterProfileId ?? null
-    : configuration.routerProfileIds[0] ?? null;
-  if (!id && !configuration.routerProfileIds.length) return { roles: "unset", quota };
-  const profile = data.profiles.find(candidate => candidate.profileId === id);
+  const id = health && "currentRouterBuddyId" in health ? health.currentRouterBuddyId ?? null
+    : configuration.routerBuddyIds[0] ?? null;
+  if (!id && !configuration.routerBuddyIds.length) return { roles: "unset", quota };
+  const buddy = data.buddies.find(candidate => candidate.buddyId === id);
   const usable = health?.available !== false
-    && (configuration.defaultRoutingMode === "fast" ? isFastRouterCandidate(profile) : isDecisionCandidate(profile));
+    && (configuration.defaultRoutingMode === "fast" ? isFastRouterCandidate(buddy) : isDecisionCandidate(buddy));
   return { roles: !usable ? "unusable" : healthSummary(health).warning ? "failing" : null, quota };
 }

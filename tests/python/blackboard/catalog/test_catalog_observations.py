@@ -24,7 +24,7 @@ class CatalogObservationTests(BoardTestCase):
     def table_facts(self):
         with self.e.db.read() as db:
             return (db.execute('SELECT COUNT(*) FROM events').fetchone()[0],
-                    [tuple(row) for row in db.execute('SELECT * FROM evaluation_profiles ORDER BY profile_id')])
+                    [tuple(row) for row in db.execute('SELECT * FROM buddies ORDER BY buddy_id')])
 
     def test_begin_freezes_harnesses_in_the_observation_on_first_request(self):
         first = catalog_store.begin(self.e, 'same-request', harnesses=[{'adapter': 'dsh', 'revision': 1}])
@@ -39,7 +39,7 @@ class CatalogObservationTests(BoardTestCase):
         first = self.record(catalog())
         facts = self.table_facts()
         with self.e.db.read() as db:
-            profile = tuple(db.execute('SELECT * FROM evaluation_profiles').fetchone())
+            buddy = tuple(db.execute('SELECT * FROM buddies').fetchone())
         self.clock.advance(21601)
         with patch.object(self.b.store, '_notify') as notify:
             second = self.record({**catalog(), 'discoveredAt': self.clock.value})
@@ -48,14 +48,14 @@ class CatalogObservationTests(BoardTestCase):
         self.assertGreater(second['observationId'], first['observationId'])
         notify.assert_not_called()
         with self.e.db.read() as db:
-            self.assertEqual(tuple(db.execute('SELECT * FROM evaluation_profiles').fetchone()), profile)
+            self.assertEqual(tuple(db.execute('SELECT * FROM buddies').fetchone()), buddy)
             current = db.execute("SELECT read_at,account_status,updated_at FROM catalog_current WHERE adapter='dsh'").fetchone()
             self.assertEqual((current['read_at'], current['account_status'], current['updated_at']),
                              (self.clock.value, 'confirmed', self.clock.value))
             self.assertEqual(db.execute('SELECT completed_at FROM catalog_observations WHERE observation_id=?',
                                         (second['observationId'],)).fetchone()[0], self.clock.value)
 
-    def test_provenance_and_discovery_identity_alone_do_not_change_profile_facts(self):
+    def test_provenance_and_discovery_identity_alone_do_not_change_buddy_facts(self):
         first = self.record(catalog())
         facts = self.table_facts()
         different = {**catalog(), 'source': 'another-native-reading', 'harnessVersion': 'next',
@@ -64,10 +64,10 @@ class CatalogObservationTests(BoardTestCase):
         self.assertNotEqual(first['discoveryId'], second['discoveryId'])
         self.assertEqual(self.table_facts()[0], facts[0])
         with self.e.db.read() as db:
-            row = db.execute('SELECT source FROM evaluation_profiles').fetchone()
+            row = db.execute('SELECT source FROM buddies').fetchone()
         self.assertEqual(row['source'], 'catalog:' + second['discoveryId'])
 
-    def test_applied_reading_keeps_current_profiles_and_pending_absence(self):
+    def test_applied_reading_keeps_current_buddies_and_pending_absence(self):
         payload = catalog(models=('alpha', 'beta'))
         self.record(payload)
         payload['providers'][0]['models'][0]['name'] = 'changed alpha'
@@ -76,10 +76,10 @@ class CatalogObservationTests(BoardTestCase):
         missing['providers'][0]['models'].pop()
         self.record(missing)
         with self.e.db.read() as db:
-            self.assertEqual(db.execute('SELECT COUNT(*) FROM evaluation_profiles').fetchone()[0], 2)
+            self.assertEqual(db.execute('SELECT COUNT(*) FROM buddies').fetchone()[0], 2)
             self.assertEqual(db.execute('SELECT COUNT(*) FROM catalog_pending').fetchone()[0], 1)
 
-    def test_metadata_fields_update_profile_facts(self):
+    def test_metadata_fields_update_buddy_facts(self):
         payload = catalog()
         self.record(payload)
         for field, value in [('name', 'new label'), ('description', 'new description'),
@@ -112,9 +112,9 @@ class CatalogObservationTests(BoardTestCase):
         self.assertEqual(self.table_facts(), facts)
         self.record(catalog(models=('alpha', 'beta')))
         with self.e.db.read() as db:
-            self.assertEqual(db.execute('SELECT COUNT(*) FROM evaluation_profiles WHERE available=1').fetchone()[0], 2)
+            self.assertEqual(db.execute('SELECT COUNT(*) FROM buddies WHERE available=1').fetchone()[0], 2)
 
-    def test_unknown_reading_keeps_profiles_unless_it_restores_retained_availability(self):
+    def test_unknown_reading_keeps_buddies_unless_it_restores_retained_availability(self):
         self.record(catalog())
         with self.e.db.read() as db:
             read_at = db.execute("SELECT read_at FROM catalog_current WHERE adapter='dsh'").fetchone()[0]
@@ -122,11 +122,11 @@ class CatalogObservationTests(BoardTestCase):
         self.record(catalog(models=('untrusted',), account_status='unknown'))
         self.assertEqual(self.table_facts(), facts)
         with self.e.db.write() as db:
-            db.execute("UPDATE evaluation_profiles SET available=0,unavailable_reason='HARNESS_UNHEALTHY'")
+            db.execute("UPDATE buddies SET available=0,unavailable_reason='HARNESS_UNHEALTHY'")
         restored = self.record(catalog(models=(), status='unknown'))
         self.assertGreater(self.table_facts()[0], facts[0])
         with self.e.db.read() as db:
-            row = db.execute('SELECT available FROM evaluation_profiles').fetchone()
+            row = db.execute('SELECT available FROM buddies').fetchone()
             current = db.execute("SELECT read_at,account_status FROM catalog_current WHERE adapter='dsh'").fetchone()
         self.assertEqual(row['available'], 1)
         self.assertEqual((current['read_at'], current['account_status']), (read_at, 'confirmed'))
@@ -135,20 +135,20 @@ class CatalogObservationTests(BoardTestCase):
         self.record(catalog(models=('alpha',)))
         with self.e.db.write() as db:
             db.execute('DELETE FROM catalog_current')
-            db.execute("UPDATE evaluation_profiles SET enabled=1,unavailable_reason=NULL")
+            db.execute("UPDATE buddies SET enabled=1,unavailable_reason=NULL")
         self.record(catalog(models=('beta',)))
         with self.e.db.read() as db:
-            missing = db.execute("SELECT available,enabled,unavailable_reason FROM evaluation_profiles WHERE model='alpha'").fetchone()
+            missing = db.execute("SELECT available,enabled,unavailable_reason FROM buddies WHERE model='alpha'").fetchone()
         self.assertEqual((missing['available'], missing['enabled'], missing['unavailable_reason']),
                          (0, 1, catalog_rules.CONFIRMED_ABSENCE_REASON))
 
-    def test_effort_retirement_changes_profile_once(self):
+    def test_effort_retirement_changes_buddy_once(self):
         payload = catalog()
         payload['providers'][0]['models'][0]['efforts'] = ['max', 'high']
         self.record(payload)
         self.record(catalog())
         with self.e.db.read() as db:
-            self.assertEqual(db.execute('SELECT COUNT(*) FROM evaluation_profiles WHERE available=0').fetchone()[0], 1)
+            self.assertEqual(db.execute('SELECT COUNT(*) FROM buddies WHERE available=0').fetchone()[0], 1)
         facts = self.table_facts()
         self.record(catalog())
         self.assertEqual(self.table_facts(), facts)
@@ -169,10 +169,10 @@ class CatalogObservationTests(BoardTestCase):
         existing = catalog(adapter='claude', models=('claude-fixture',))
         existing['providers'][0]['provider'] = 'anthropic'
         self.record(existing)
-        profile_id = 'claude:anthropic:claude-fixture:max'
+        buddy_id = 'claude:anthropic:claude-fixture:max'
         with self.e.db.write() as db:
-            db.execute('UPDATE evaluation_profiles SET enabled=1 WHERE profile_id=?', (profile_id,))
-            db.execute("INSERT INTO evaluation_preferences VALUES(?,'prefer','keep this buddy')", (profile_id,))
+            db.execute('UPDATE buddies SET enabled=1 WHERE buddy_id=?', (buddy_id,))
+            db.execute("INSERT INTO evaluation_preferences VALUES(?,'prefer','keep this buddy')", (buddy_id,))
         native = _catalog({'account': {'apiProvider': 'firstParty', 'email': 'subscriber@example.invalid',
                                       'organization': 'fixture-organization', 'subscriptionType': 'max'},
                            'models': [{'value': 'fixture', 'resolvedModel': 'claude-fixture',
@@ -183,42 +183,42 @@ class CatalogObservationTests(BoardTestCase):
             self.clock.advance(3601)
             self.record(native)
             with self.e.db.read() as db:
-                rows = db.execute("SELECT profile_id,provider,enabled,available "
-                                  "FROM evaluation_profiles WHERE adapter='claude'").fetchall()
+                rows = db.execute("SELECT buddy_id,provider,enabled,available "
+                                  "FROM buddies WHERE adapter='claude'").fetchall()
                 self.assertEqual([tuple(row) for row in rows],
-                                 [(profile_id, 'anthropic', 1, 1)])
-                self.assertEqual(tuple(db.execute('SELECT * FROM evaluation_preferences WHERE profile_id=?',
-                                                  (profile_id,)).fetchone()),
-                                 (profile_id, 'prefer', 'keep this buddy'))
+                                 [(buddy_id, 'anthropic', 1, 1)])
+                self.assertEqual(tuple(db.execute('SELECT * FROM evaluation_preferences WHERE buddy_id=?',
+                                                  (buddy_id,)).fetchone()),
+                                 (buddy_id, 'prefer', 'keep this buddy'))
                 self.assertEqual(db.execute("SELECT COUNT(*) FROM catalog_pending WHERE adapter='claude'").fetchone()[0], 0)
 
     def test_a_ba_restores_identity_and_preserves_human_intent(self):
         first = self.record(catalog())
-        profile_id = 'dsh:fixture:alpha:max'
+        buddy_id = 'dsh:fixture:alpha:max'
         with self.e.db.write() as db:
-            db.execute('UPDATE evaluation_profiles SET enabled=1 WHERE profile_id=?', (profile_id,))
+            db.execute('UPDATE buddies SET enabled=1 WHERE buddy_id=?', (buddy_id,))
             db.execute("INSERT INTO model_service_notes VALUES('dsh','fixture','alpha','human text','now')")
-            db.execute("INSERT INTO evaluation_preferences VALUES(?,'prefer','my reason')", (profile_id,))
-        # A first confirmed absence is pending, not a retirement: the profile
+            db.execute("INSERT INTO evaluation_preferences VALUES(?,'prefer','my reason')", (buddy_id,))
+        # A first confirmed absence is pending, not a retirement: the buddy
         # keeps its metadata, its routability and the user's intent (ADR-027).
         self.record(catalog(models=()))
-        pending = catalog_store.profiles(self.e, {'includeUnavailable': True})
-        self.assertTrue(pending['profiles'][0]['available'])
-        self.assertEqual(pending['profiles'][0]['catalogStatus'], 'pending')
-        self.assertTrue(pending['profiles'][0]['enabled'])
+        pending = catalog_store.buddies(self.e, {'includeUnavailable': True})
+        self.assertTrue(pending['buddies'][0]['available'])
+        self.assertEqual(pending['buddies'][0]['catalogStatus'], 'pending')
+        self.assertTrue(pending['buddies'][0]['enabled'])
         self.clock.advance(3601)
         self.record(catalog(models=()))
-        retired = catalog_store.profiles(self.e, {'includeUnavailable': True})
-        self.assertFalse(retired['profiles'][0]['available'])
-        self.assertTrue(retired['profiles'][0]['enabled'])
+        retired = catalog_store.buddies(self.e, {'includeUnavailable': True})
+        self.assertFalse(retired['buddies'][0]['available'])
+        self.assertTrue(retired['buddies'][0]['enabled'])
         last = self.record(catalog())
         self.assertTrue(last['duplicate'])
         self.assertGreater(last['observationId'], first['observationId'])
         current = self.e.snapshot({})
-        self.assertTrue(current['profiles'][0]['available'])
-        self.assertEqual(current['profiles'][0]['catalogStatus'], 'available')
-        self.assertNotIn('pendingSince', current['profiles'][0])
-        self.assertTrue(current['profiles'][0]['enabled'])
+        self.assertTrue(current['buddies'][0]['available'])
+        self.assertEqual(current['buddies'][0]['catalogStatus'], 'available')
+        self.assertNotIn('pendingSince', current['buddies'][0])
+        self.assertTrue(current['buddies'][0]['enabled'])
         self.assertEqual(current['modelServiceNotes'][0]['text'], 'human text')
         self.assertEqual({key: current['modelServiceNotes'][0][key] for key in ('adapter', 'provider', 'model')},
                          {'adapter': 'dsh', 'provider': 'fixture', 'model': 'alpha'})
@@ -250,25 +250,25 @@ class CatalogObservationTests(BoardTestCase):
             self.assertIsNotNone(catalog_store.current(db).lookup('dsh', 'fixture', 'new'))
             self.assertIsNone(catalog_store.current(db).lookup('dsh', 'fixture', 'old'))
 
-    def test_retired_configuration_history_is_paginated_and_new_profiles_disabled(self):
+    def test_retired_buddy_history_is_paginated_and_new_buddies_disabled(self):
         self.record(catalog(models=('a', 'b', 'c')))
         self.record(catalog(models=('c',)))
         self.clock.advance(3601)
         self.record(catalog(models=('c',)))
-        page = catalog_store.profiles(self.e, {'limit': 1, 'includeUnavailable': True})
-        self.assertEqual(len(page['profiles']), 1)
-        next_page = catalog_store.profiles(self.e, {'limit': 1, 'includeUnavailable': True, 'after': page['nextCursor']})
-        self.assertNotEqual(page['profiles'][0]['profileId'], next_page['profiles'][0]['profileId'])
-        active = catalog_store.profiles(self.e, {})
-        self.assertEqual([p['model'] for p in active['profiles']], ['c'])
-        self.assertFalse(active['profiles'][0]['enabled'])
+        page = catalog_store.buddies(self.e, {'limit': 1, 'includeUnavailable': True})
+        self.assertEqual(len(page['buddies']), 1)
+        next_page = catalog_store.buddies(self.e, {'limit': 1, 'includeUnavailable': True, 'after': page['nextCursor']})
+        self.assertNotEqual(page['buddies'][0]['buddyId'], next_page['buddies'][0]['buddyId'])
+        active = catalog_store.buddies(self.e, {})
+        self.assertEqual([p['model'] for p in active['buddies']], ['c'])
+        self.assertFalse(active['buddies'][0]['enabled'])
 
     def test_history_search_filters_before_paging_and_treats_wildcards_literally(self):
         self.record(catalog(models=('a', 'b', 'c')))
         self.record(catalog(models=()))
         self.clock.advance(3601)
         self.record(catalog(models=()))
-        page = catalog_store.profiles(self.e, {'limit': 1, 'includeUnavailable': True, 'query': 'fixture c', 'adapter': 'dsh'})
-        self.assertEqual([p['model'] for p in page['profiles']], ['c'])
+        page = catalog_store.buddies(self.e, {'limit': 1, 'includeUnavailable': True, 'query': 'fixture c', 'adapter': 'dsh'})
+        self.assertEqual([p['model'] for p in page['buddies']], ['c'])
         self.assertIsNone(page['nextCursor'])
-        self.assertEqual(catalog_store.profiles(self.e, {'includeUnavailable': True, 'query': '%'})['profiles'], [])
+        self.assertEqual(catalog_store.buddies(self.e, {'includeUnavailable': True, 'query': '%'})['buddies'], [])

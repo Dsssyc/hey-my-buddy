@@ -98,7 +98,7 @@ METHOD_MAP: dict[str, tuple[str, str]] = {
     "selection-get": ("control", "selection_get"),
     "selection-list": ("control", "selection_list"),
     "model-catalog-refresh": ("control", "model_catalog_refresh"),
-    "model-profiles": ("control", "model_profiles"),
+    "buddy-list": ("control", "buddy_list"),
     "stop": ("control", "service_control"),
     "restart": ("control", "service_control"),
     "wait-capacity": ("wait", "wait_capacity"),
@@ -207,7 +207,7 @@ def _request(endpoint: dict, operation: str, params: dict, resource: str = "cont
     # The token travels with the operation's own parameters and is verified by the
     # resource before any schema validation happens.
     payload = {"token": endpoint["token"], **params}
-    if operation in {'capabilities', 'model_profiles', 'model_catalog_refresh', 'workflow_submit', 'selection_request', 'console_snapshot'}:
+    if operation in {'capabilities', 'buddy_list', 'model_catalog_refresh', 'workflow_submit', 'selection_request', 'console_snapshot'}:
         payload['_harnessPathHint'] = os.environ.get('PATH', '')
     request = encode_message(payload)
     contract = BuddyControl if resource == "control" else BuddyWait

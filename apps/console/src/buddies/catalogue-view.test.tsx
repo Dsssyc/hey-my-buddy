@@ -3,7 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { App } from "../App";
 import { ApiError, type ConsoleApi } from "../api";
-import type { HarnessHealth, Profile, Snapshot } from "../types";
+import type { HarnessHealth, Buddy, Snapshot } from "../types";
 import {
   effortCell, foldHandle, level, levelPreference, levelSwitch, listed, modelButton, modelRow, catalogue, note, pane, search, selectModel,
 } from "./page.testing";
@@ -20,9 +20,9 @@ const sol = { adapter: "codex", provider: "openai", model: "gpt-6-sol" };
 const SONNET = "claude / anthropic / claude-sonnet-5";
 const SOL = "codex / openai / gpt-6-sol";
 
-function profile(modelService: typeof sonnet, effort: string, extra: Partial<Profile> = {}): Profile {
+function buddy(modelService: typeof sonnet, effort: string, extra: Partial<Buddy> = {}): Buddy {
   return {
-    profileId: `${modelService.adapter}:${modelService.provider}:${modelService.model}:${effort}`, label: `${modelService.model} · ${effort}`, ...modelService, effort,
+    buddyId: `${modelService.adapter}:${modelService.provider}:${modelService.model}:${effort}`, label: `${modelService.model} · ${effort}`, ...modelService, effort,
     available: true, enabled: false, capabilities: [], contextWindow: null, description: "", source: "catalog:fixture", ...extra,
   };
 }
@@ -31,8 +31,8 @@ function snapshot(extra: Partial<Snapshot> = {}): Snapshot & { harnesses: Harnes
   return {
     csrfToken: "csrf", eventCursor: 0, consoleSession: { id: "fixture-session", canWrite: true, reason: null },
 
-    configuration: { routerProfileIds: [], routerRetryIntervalSeconds: 600, defaultRoutingMode: "review", routingBudget: "standard" },
-    profiles: [profile(sonnet, "medium", { enabled: true }), profile(sonnet, "high"), profile(sol, "medium"), profile(sol, "low")],
+    configuration: { routerBuddyIds: [], routerRetryIntervalSeconds: 600, defaultRoutingMode: "review", routingBudget: "standard" },
+    buddies: [buddy(sonnet, "medium", { enabled: true }), buddy(sonnet, "high"), buddy(sol, "medium"), buddy(sol, "low")],
     preferences: [], modelServiceNotes: [], decisions: [],
  modelServiceConcurrency: [{ ...sonnet, limit: 2, active: 0 }],
     tasks: { pendingCount: 0 }, capabilities: {},
@@ -68,9 +68,9 @@ function open(f: ReturnType<typeof fixture>) {
   render(<App suppliedApi={f.api} />);
 }
 
-/** One page of retained rows, as `model_profiles` returns it. */
-function page(profiles: Profile[], _state: Snapshot) {
-  return { profiles, preferences: [], modelServiceNotes: [],
+/** One page of retained rows, as `buddy_list` returns it. */
+function page(buddies: Buddy[], _state: Snapshot) {
+  return { buddies, preferences: [], modelServiceNotes: [],
  modelServiceConcurrency: [], nextCursor: null };
 }
 
@@ -83,7 +83,7 @@ afterEach(() => {
 
 describe("an empty catalogue", () => {
   it("says that there are no models yet and how to find some, and opens no drawer", async () => {
-    const f = fixture(snapshot({ profiles: [], modelServiceConcurrency: [] }));
+    const f = fixture(snapshot({ buddies: [], modelServiceConcurrency: [] }));
     open(f);
     await listed(0, 0);
     expect(screen.getByText("还没有模型")).toBeTruthy();
@@ -109,10 +109,10 @@ describe("an empty catalogue", () => {
 describe("the harness sections", () => {
   it("keeps an unavailable harness, its state and account when filters hide every model", async () => {
     const state = snapshot();
-    state.profiles = state.profiles.map(entry => entry.adapter === "claude"
+    state.buddies = state.buddies.map(entry => entry.adapter === "claude"
       ? { ...entry, available: false, unavailableReason: "HARNESS_UNHEALTHY" } : entry);
     state.harnesses[0] = { ...state.harnesses[0], status: "login-required", available: false };
-    const f = fixture(state, { model_profiles: () => page(state.profiles.filter(entry => !entry.available), state) });
+    const f = fixture(state, { buddy_list: () => page(state.buddies.filter(entry => !entry.available), state) });
     const user = userEvent.setup();
     open(f);
     await listed(0, 2);
@@ -141,7 +141,7 @@ describe("the harness sections", () => {
     expect(foldHandle("Claude Code").getAttribute("aria-expanded")).toBe("false");
     await user.click(foldHandle("Claude Code"));
     expect(modelButton(SONNET)).toBeTruthy();
-    expect(f.command.mock.calls.every(([operation]) => operation === "model_profiles")).toBe(true);
+    expect(f.command.mock.calls.every(([operation]) => operation === "buddy_list")).toBe(true);
   });
 });
 
@@ -197,7 +197,7 @@ describe("a buddy's own preference", () => {
     await user.type(within(level("medium")).getByRole("textbox", { name: "medium 的偏好理由" }), "机械改动");
     await user.click(screen.getByRole("button", { name: "保存" }));
     await screen.findByText("设置已保存");
-    expect(f.published[0].preferenceChanges).toEqual([{ profileId: "codex:openai:gpt-6-sol:medium", mode: "prefer", reason: "机械改动" }]);
+    expect(f.published[0].preferenceChanges).toEqual([{ buddyId: "codex:openai:gpt-6-sol:medium", mode: "prefer", reason: "机械改动" }]);
     expect(f.published[0]).not.toHaveProperty("familyPreferenceChanges");
   });
 });
@@ -225,29 +225,29 @@ describe("a session that cannot write", () => {
 });
 
 describe("what the view says about its own reads", () => {
-  const retired = profile({ adapter: "claude", provider: "anthropic", model: "claude-old" }, "high", { available: false, unavailableReason: "provider paused" });
+  const retired = buddy({ adapter: "claude", provider: "anthropic", model: "claude-old" }, "high", { available: false, unavailableReason: "provider paused" });
 
   it("says that it is reading unavailable buddies, and shows them when the read ends", async () => {
-    const state = snapshot({ unavailableProfileCount: 1 });
+    const state = snapshot({ unavailableBuddyCount: 1 });
     let finish!: (value: unknown) => void;
-    const f = fixture(state, { model_profiles: () => new Promise(resolve => { finish = resolve; }) });
+    const f = fixture(state, { buddy_list: () => new Promise(resolve => { finish = resolve; }) });
     const user = userEvent.setup();
     open(f);
     await listed(1, 4);
     await user.click(screen.getByRole("checkbox", { name: "显示不可用 1" }));
     expect(await screen.findByText("正在读取不可用的 buddy")).toBeTruthy();
-    finish(page([...state.profiles, retired], state));
+    finish(page([...state.buddies, retired], state));
     await listed(1, 5);
     expect(screen.queryByText("正在读取不可用的 buddy")).toBeNull();
   });
 
   it("reports a failed read as a failure with a retry, and reads again only when asked", async () => {
-    const state = snapshot({ unavailableProfileCount: 1 });
+    const state = snapshot({ unavailableBuddyCount: 1 });
     let attempt = 0;
-    const f = fixture(state, { model_profiles: () => {
+    const f = fixture(state, { buddy_list: () => {
       attempt += 1;
       if (attempt === 1) throw new ApiError("NETWORK", "读取不可用的 buddy 失败");
-      return page([...state.profiles, retired], state);
+      return page([...state.buddies, retired], state);
     } });
     const user = userEvent.setup();
     open(f);
@@ -266,10 +266,10 @@ describe("what the view says about its own reads", () => {
   });
 
   it("says where the list of unavailable buddies was cut", async () => {
-    const state = snapshot({ unavailableProfileCount: 700 });
-    const many = Array.from({ length: 600 }, (_, index) => profile({ adapter: "claude", provider: "anthropic", model: "claude-old" }, `e${index}`,
+    const state = snapshot({ unavailableBuddyCount: 700 });
+    const many = Array.from({ length: 600 }, (_, index) => buddy({ adapter: "claude", provider: "anthropic", model: "claude-old" }, `e${index}`,
       { available: false, unavailableReason: "provider paused" }));
-    const f = fixture(state, { model_profiles: () => ({ ...page(many, state), nextCursor: "more" }) });
+    const f = fixture(state, { buddy_list: () => ({ ...page(many, state), nextCursor: "more" }) });
     const user = userEvent.setup();
     open(f);
     await listed(1, 4);
@@ -277,7 +277,7 @@ describe("what the view says about its own reads", () => {
     await user.click(screen.getByRole("checkbox", { name: "显示不可用 700" }));
     expect(await screen.findByText("只显示前 600 个不可用的 buddy；更早的请用搜索查找。")).toBeTruthy();
     // The cut is a hard stop: one bounded read, no further page.
-    expect(f.command.mock.calls.filter(([operation]) => operation === "model_profiles")).toHaveLength(1);
+    expect(f.command.mock.calls.filter(([operation]) => operation === "buddy_list")).toHaveLength(1);
   });
 
   it("says why the discovery button is closed while a discovery is under way, on the same button", async () => {

@@ -2,28 +2,28 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import type { ConsoleApi } from "./api";
 import { errorText } from "./api";
 import { modelServiceKey } from "./console-data";
-import type { ModelService, ProfilePage, Snapshot } from "./types";
+import type { ModelService, BuddyPage, Snapshot } from "./types";
 
 /** One bounded page of retained identities, including unavailable history. */
-export const PROFILE_PAGE_SIZE = 100;
+export const BUDDY_PAGE_SIZE = 100;
 /**
  * Display budget for the paged view. Entries beyond it stay reachable through a
  * targeted server search, which filters before pagination.
  */
-export const MAX_HISTORY_PROFILES = 600;
-/** `model_profiles` accepts at most 200 characters and 8 terms; bound first. */
+export const MAX_HISTORY_BUDDIES = 600;
+/** `buddy_list` accepts at most 200 characters and 8 terms; bound first. */
 export const MAX_QUERY_CHARS = 200;
 export const MAX_QUERY_TERMS = 8;
 /** Typing settles before a server search runs; the view never polls. */
 export const FILTER_DEBOUNCE_MS = 300;
 
-/** Rejects an incomplete envelope instead of rendering invented profile facts. */
-export function parseProfilePage(value: unknown): ProfilePage {
-  const page = value as ProfilePage | null;
+/** Rejects an incomplete envelope instead of rendering invented buddy facts. */
+export function parseBuddyPage(value: unknown): BuddyPage {
+  const page = value as BuddyPage | null;
   // Model service notes are optional on a page, but a present value must be a list.
   const optionalList = (value: unknown) => value === undefined || Array.isArray(value);
   const valid = !!page
-    && Array.isArray(page.profiles)
+    && Array.isArray(page.buddies)
     && Array.isArray(page.preferences)
     && optionalList(page.modelServiceNotes)
     && Array.isArray(page.modelServiceConcurrency)
@@ -39,7 +39,7 @@ export function parseProfilePage(value: unknown): ProfilePage {
  * filters before paging, so a matching retained row is found without loading
  * the whole archive.
  */
-export function boundProfileQuery(raw: string): string {
+export function boundBuddyQuery(raw: string): string {
   const terms = raw.trim().split(/\s+/).filter(Boolean).slice(0, MAX_QUERY_TERMS);
   const kept: string[] = [];
   let length = 0;
@@ -54,9 +54,9 @@ export function boundProfileQuery(raw: string): string {
   return kept.join(" ");
 }
 
-function addMissing<T extends { profileId: string }>(current: T[], extra: T[]): T[] {
-  const known = new Set(current.map((entry) => entry.profileId));
-  const added = extra.filter((entry) => !known.has(entry.profileId) && (known.add(entry.profileId), true));
+function addMissing<T extends { buddyId: string }>(current: T[], extra: T[]): T[] {
+  const known = new Set(current.map((entry) => entry.buddyId));
+  const added = extra.filter((entry) => !known.has(entry.buddyId) && (known.add(entry.buddyId), true));
   return added.length ? [...current, ...added] : current;
 }
 
@@ -69,10 +69,10 @@ function addMissingModelServices<T extends ModelService>(current: T[], extra: T[
 /**
  * Appends one page within the current source content generation.
  */
-export function mergePage(previous: ProfilePage | null, next: ProfilePage): ProfilePage {
+export function mergePage(previous: BuddyPage | null, next: BuddyPage): BuddyPage {
   if (!previous) return next;
   return {
-    profiles: addMissing(previous.profiles, next.profiles),
+    buddies: addMissing(previous.buddies, next.buddies),
     preferences: addMissing(previous.preferences, next.preferences),
     modelServiceNotes: addMissingModelServices(previous.modelServiceNotes ?? [], next.modelServiceNotes ?? []),
     modelServiceConcurrency: addMissingModelServices(previous.modelServiceConcurrency, next.modelServiceConcurrency),
@@ -80,7 +80,7 @@ export function mergePage(previous: ProfilePage | null, next: ProfilePage): Prof
   };
 }
 
-export type ProfileHistoryFilters = {
+export type BuddyHistoryFilters = {
   /** Local search text; it is bounded before it becomes a server query. */
   query: string;
   /** Harness (adapter) filter, applied by the server before pagination. */
@@ -95,19 +95,19 @@ export type ProfileHistoryFilters = {
 export function historySourceKey(snapshot: Snapshot): string {
   return JSON.stringify({
     eventCursor: snapshot.eventCursor,
-    profiles: snapshot.profiles.map(({ profileId, available, enabled }) => [profileId, available, enabled]),
+    buddies: snapshot.buddies.map(({ buddyId, available, enabled }) => [buddyId, available, enabled]),
     preferences: snapshot.preferences,
     modelServiceNotes: snapshot.modelServiceNotes,
     modelServiceConcurrency: snapshot.modelServiceConcurrency.map(({ adapter, provider, model, limit }) => [adapter, provider, model, limit]),
     configuration: snapshot.configuration,
-    unavailableProfileCount: snapshot.unavailableProfileCount,
+    unavailableBuddyCount: snapshot.unavailableBuddyCount,
   });
 }
 
-type StoredPage = { sourceKey: string; key: string; page: ProfilePage | null };
+type StoredPage = { sourceKey: string; key: string; page: BuddyPage | null };
 
 /**
- * Pages the retained profile history through `model_profiles` with
+ * Pages the retained buddy history through `buddy_list` with
  * `includeUnavailable: true`. Reading it never writes and never calls a model.
  *
  * The stored page is only exposed while its source content and filter match the
@@ -116,13 +116,13 @@ type StoredPage = { sourceKey: string; key: string; page: ProfilePage | null };
  * change drops the cursor and asks the server for a fresh first page; the view
  * never fetches more than the explicitly requested bounded pages.
  */
-export function useProfileHistory(
+export function useBuddyHistory(
   api: ConsoleApi,
   csrfToken: string,
   sourceKey: string,
-  filters: ProfileHistoryFilters,
+  filters: BuddyHistoryFilters,
 ) {
-  const query = boundProfileQuery(filters.query);
+  const query = boundBuddyQuery(filters.query);
   const adapter = filters.adapter.trim();
   const filterKey = `${query}\u0000${adapter}`;
   const [stored, setStored] = useState<StoredPage>({
@@ -152,14 +152,14 @@ export function useProfileHistory(
     setLoading(true);
     setError("");
     try {
-      const value = await api.command<ProfilePage>("model_profiles", {
+      const value = await api.command<BuddyPage>("buddy_list", {
         includeUnavailable: true,
-        limit: PROFILE_PAGE_SIZE,
+        limit: BUDDY_PAGE_SIZE,
         ...(search ? { query: search } : {}),
         ...(harness ? { adapter: harness } : {}),
         ...(after ? { after } : {}),
       }, csrf.current);
-      const next = parseProfilePage(value);
+      const next = parseBuddyPage(value);
       if (!alive.current || request !== sequence.current) return;
       // A reply from an older snapshot or filter cannot seed the current view.
       if (key !== params.current.key || source !== params.current.sourceKey) return;
@@ -190,7 +190,7 @@ export function useProfileHistory(
   }, [wanted, filters.autoOpen, filters.enabled, sourceKey, filterKey, fetchPage]);
 
   const page = stored.sourceKey === sourceKey && stored.key === filterKey ? stored.page : null;
-  const loaded = page?.profiles.length ?? 0;
+  const loaded = page?.buddies.length ?? 0;
   const open = useCallback(() => {
     const key = `${sourceKey}\u0000${filterKey}`;
     if (!stored.page || stored.sourceKey !== sourceKey || stored.key !== filterKey) {
@@ -206,7 +206,7 @@ export function useProfileHistory(
   }, [fetchPage]);
   const loadMore = useCallback(() => {
     const cursor = page?.nextCursor;
-    if (!cursor || loading || loaded >= MAX_HISTORY_PROFILES) return;
+    if (!cursor || loading || loaded >= MAX_HISTORY_BUDDIES) return;
     void fetchPage(cursor, false);
   }, [page?.nextCursor, loading, loaded, fetchPage]);
   return {
@@ -214,8 +214,8 @@ export function useProfileHistory(
     loading,
     error,
     /** True while the current filter still has retained identities to page. */
-    hasMore: !!page?.nextCursor && loaded < MAX_HISTORY_PROFILES,
-    limitReached: loaded >= MAX_HISTORY_PROFILES,
+    hasMore: !!page?.nextCursor && loaded < MAX_HISTORY_BUDDIES,
+    limitReached: loaded >= MAX_HISTORY_BUDDIES,
     open,
     reload,
     loadMore,

@@ -337,10 +337,10 @@ export function integrationHostPaths(value: IntegrationRecord | null | undefined
 }
 
 /**
- * ADR-018 §18: whether the delegation's explicit configuration is a user
+ * ADR-018 §18: whether the delegation's explicit buddy is a user
  * hard constraint. Absent is unknown, not a default.
  */
-export function configurationLockText(locked: boolean | null | undefined): string | null {
+export function buddyLockText(locked: boolean | null | undefined): string | null {
   if (locked === true) return "用户要求锁定，续做时不能更换";
   if (locked === false) return "续做时可由 Host 附理由更换配置";
   return null;

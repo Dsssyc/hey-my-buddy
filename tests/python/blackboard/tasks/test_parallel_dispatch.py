@@ -46,9 +46,9 @@ from hey_my_buddy.buddy.runtime import worker as worker_module
 from hey_my_buddy.buddy.runtime.worker import ReceiptSpool, Worker
 
 
-PROFILE_ID = "dsh:deepseek-official:deepseek-flash:off"
-PROFILE = {
-    "profileId": PROFILE_ID,
+BUDDY_ID = "dsh:deepseek-official:deepseek-flash:off"
+BUDDY = {
+    "buddyId": BUDDY_ID,
     "label": "DeepSeek-V41-Flash · off",
     "adapter": "dsh",
     "provider": "deepseek-official",
@@ -61,7 +61,7 @@ PROFILE = {
     "description": "fixture decision model",
     "source": "manual",
 }
-PROFILE_MODEL_SERVICE = {"adapter": PROFILE["adapter"], "provider": PROFILE["provider"], "model": PROFILE["model"]}
+BUDDY_MODEL_SERVICE = {"adapter": BUDDY["adapter"], "provider": BUDDY["provider"], "model": BUDDY["model"]}
 
 NONCE = "n" * 32
 #: The adapters one generic worker can honestly serve. The real pool advertises the
@@ -131,17 +131,17 @@ class CapacityTestCase(BoardTestCase):
 
 
 
-            "profileSettings": [{"profileId": PROFILE_ID, "enabled": True},
-                                {"profileId": "dsh:deepseek-official:deepseek-v4-pro:off", "enabled": True}],
-            "configuration": {"defaultRoutingMode": "review", "routerProfileIds": [PROFILE_ID]},
+            "buddySettings": [{"buddyId": BUDDY_ID, "enabled": True},
+                                {"buddyId": "dsh:deepseek-official:deepseek-v4-pro:off", "enabled": True}],
+            "configuration": {"defaultRoutingMode": "review", "routerBuddyIds": [BUDDY_ID]},
         }
         if model_limit is not None:
-            params["modelServiceConcurrency"] = [{**PROFILE_MODEL_SERVICE, "limit": model_limit}]
+            params["modelServiceConcurrency"] = [{**BUDDY_MODEL_SERVICE, "limit": model_limit}]
         return board.console_call("user_policy_publish", params)
 
     def selection(self, board, request_id: str) -> dict:
         return board.call(
-            "selection_request", {"requestId": request_id, "task": "pick a configuration for this goal"}
+            "selection_request", {"requestId": request_id, "task": "pick a buddy for this goal"}
         )
 
     def business_task(
@@ -505,10 +505,10 @@ class ModelServiceFairnessTests(CapacityTestCase):
         self.assertEqual(worker.run_once(), "ran")
         decision = board.call("selection_get", {"decisionId": selection["decisionId"], "includeAudit": True})["decision"]
         self.assertEqual(decision["status"], "completed", decision.get("reason"))
-        self.assertEqual(decision["profileId"], PROFILE_ID)
+        self.assertEqual(decision["buddyId"], BUDDY_ID)
         capacity = board.store.capacity_report()
         self.assertEqual(capacity["totalActive"], 1)
-        self.assertIn({**PROFILE_MODEL_SERVICE, "limit": 2, "active": 0}, capacity["models"])
+        self.assertIn({**BUDDY_MODEL_SERVICE, "limit": 2, "active": 0}, capacity["models"])
         self.assertEqual(self.status(board, first["runId"]), "failed")
         self.assertEqual(self.status(board, second["runId"]), "running")
 
@@ -978,10 +978,10 @@ class DaemonPoolTests(CapacityTestCase):
 
                 # Keep this a real Router attempt competing for the free pool
                 # slot; a sole legal candidate is now resolved synchronously.
-                "profileSettings": [{"profileId": PROFILE_ID, "enabled": True},
-                                    {"profileId": "dsh:deepseek-official:deepseek-v4-pro:off", "enabled": True}],
-                "configuration": {"defaultRoutingMode": "review", "routerProfileIds": [PROFILE_ID]},
-                "modelServiceConcurrency": [{**PROFILE_MODEL_SERVICE, "limit": 2}],
+                "buddySettings": [{"buddyId": BUDDY_ID, "enabled": True},
+                                    {"buddyId": "dsh:deepseek-official:deepseek-v4-pro:off", "enabled": True}],
+                "configuration": {"defaultRoutingMode": "review", "routerBuddyIds": [BUDDY_ID]},
+                "modelServiceConcurrency": [{**BUDDY_MODEL_SERVICE, "limit": 2}],
             }, csrf=csrf)
             self.assertEqual(status, 200, body)
             selection = client.call("selection_request", {"requestId": "pool-pick", "task": "pick while busy"})
@@ -994,11 +994,11 @@ class DaemonPoolTests(CapacityTestCase):
             decision = wait_for(terminal, timeout=90)
             self.assertIsNotNone(decision, "the decision never reached a terminal state")
             self.assertEqual(decision["status"], "completed", decision.get("reason"))
-            self.assertEqual(decision["profileId"], PROFILE_ID)
+            self.assertEqual(decision["buddyId"], BUDDY_ID)
             capacity = client.health()["capacity"]
             self.assertEqual(capacity["totalLimit"], 3)
             self.assertEqual(capacity["totalActive"], 2)
-            self.assertIn({**PROFILE_MODEL_SERVICE, "limit": 2, "active": 0}, capacity["models"])
+            self.assertIn({**BUDDY_MODEL_SERVICE, "limit": 2, "active": 0}, capacity["models"])
             self.release_gate("decision-1")
             self.release_gate("decision-2")
 

@@ -2,7 +2,7 @@
 
 The blackboard owns publication and atomic terminal events. The
 Worker runtime owns native handles, budgets, input verification and stop receipts.
-Router answers choose a legal configuration or abstain; preference judgments are
+Router answers choose a legal buddy or abstain; preference judgments are
 recorded, never used as an additional veto.
 """
 from __future__ import annotations
@@ -38,7 +38,7 @@ MAX_LIST_LIMIT = 100
 #: The shared row projection for one decision. The paginated list reader adds
 #: ``decision_requests.rowid`` as its stable keyset; nothing here persists anything.
 _ROW_COLUMNS = (
-    "d.decision_id, d.status, d.task, d.profile_id, d.reason,"
+    "d.decision_id, d.status, d.task, d.buddy_id, d.reason,"
     " d.created_at, d.error, r.request_id, r.kind, r.input_fingerprint,"
     " r.task_id AS decision_task_id, r.attempt_id AS decision_attempt_id,"
     " r.generation AS decision_generation,"
@@ -57,7 +57,7 @@ ANSWER_VALIDATION_CODES = frozenset({
 #: Harness bounds mirrored from the decision helper's request validation. They are
 #: the hard ceiling for one bounded selection request, never a silent truncation
 #: point: a complete current table above them becomes an explicit needs-host outcome.
-MAX_DECISION_PROFILES = 200
+MAX_DECISION_BUDDIES = 200
 MAX_DECISION_PREFERENCES = 256
 MAX_DECISION_ANNOTATIONS = 200
 MAX_DECISION_INPUT_BYTES = 128 * 1024
@@ -69,12 +69,12 @@ DEFAULT_TIMEOUT_SECONDS = 300
 #: the helper is still shutting its detached child down.
 TIMEOUT_GRACE_SECONDS = 10
 
-NEEDS_HOST_NO_PROFILE = (
+NEEDS_HOST_NO_BUDDY = (
     "Router 不可用：尚未设置可用的 Router buddy；请指定完整合法 buddy，"
     "或由用户更新 Router 设置后显式 reroute。"
 )
 NEEDS_HOST_NO_CANDIDATE = (
-    "no enabled, available, capability-matching profile is a legal candidate under the published pins and "
+    "no enabled, available, capability-matching buddy is a legal candidate under the published pins and "
     "excludes, so there is nothing honest to recommend"
 )
 #: The recorded reason when the frozen candidate set holds exactly one legal
@@ -82,7 +82,7 @@ NEEDS_HOST_NO_CANDIDATE = (
 SOLE_CANDIDATE_REASON = "唯一合法候选，未调用 Router"
 #: Retain the complete supported catalog's exclusions. An oversized legacy table
 #: still reports its exact total alongside the bounded entries.
-MAX_FROZEN_EXCLUSIONS = MAX_DECISION_PROFILES
+MAX_FROZEN_EXCLUSIONS = MAX_DECISION_BUDDIES
 
 def decision_spec(spec: dict) -> dict | None:
     """The decision descriptor of a task specification, when this is a decision task."""
@@ -154,22 +154,22 @@ class DecisionCoordinator:
                     if row["decision_task_id"] else None)
         if dispatch is None:
             return None
-        identity = dispatch["profile"]
+        identity = dispatch["buddy"]
         return (identity["adapter"], identity["provider"], identity["model"])
 
     # -- request-time policy -------------------------------------------------
-    def _decision_profile(self, connection: sqlite3.Connection) -> tuple[dict | None, str | None]:
+    def _decision_buddy(self, connection: sqlite3.Connection) -> tuple[dict | None, str | None]:
         """The current Router for read-only projections; resolving changes nothing."""
         resolution = router.current_router(connection)
-        return resolution.profile, resolution.problem["reason"] if resolution.problem else None
+        return resolution.buddy, resolution.problem["reason"] if resolution.problem else None
 
     @staticmethod
     def _candidate_bounds(*, required_capabilities, constraints, coding_only: bool = True) -> tuple[list[str], list[Any]]:
         """The hard-bound SQL clauses shared by the candidate and exclusion scans.
 
         Every bound here is program-enforced Python filtering: enabled and
-        available profiles, a ready harness, required capabilities, fixed
-        configuration fields and complete coding tuples. Preference policy is
+        available buddies, a ready harness, required capabilities, fixed
+        buddy fields and complete coding tuples. Preference policy is
         deliberately absent — the two scans apply it in opposite directions.
         """
         clauses = [
@@ -185,8 +185,8 @@ class DecisionCoordinator:
             clauses.append("p.adapter IN (" + ",".join("?" for _ in schemas.CODING_ADAPTERS) + ")")
             values.extend(schemas.CODING_ADAPTERS)
         for key, value in (constraints or {}).items():
-            if key not in schemas.CONFIGURATION_FIELDS:
-                raise BoardError("INVALID_ARGUMENT", "Unknown configuration constraint")
+            if key not in schemas.BUDDY_FIELDS:
+                raise BoardError("INVALID_ARGUMENT", "Unknown buddy constraint")
             clauses.append(f"p.{key}=?")
             values.append(value)
         return clauses, values
@@ -208,7 +208,7 @@ class DecisionCoordinator:
 
         Pin/exclude is enforced here in Python and never delegated to the model;
         ``prefer`` stays a soft ordering hint that only enters the bounded input.
-        Without ``decision_id`` this is a pure read: exhausted configurations stay
+        Without ``decision_id`` this is a pure read: exhausted buddies stay
         excluded and nothing is claimed. Inside a decision's write transaction a
         no-reset exhaustion whose retry window is open is admitted exactly once —
         the claim is durable in that same transaction, so a concurrent decision
@@ -221,14 +221,14 @@ class DecisionCoordinator:
             required_capabilities=required_capabilities, constraints=constraints, coding_only=coding_only)
         clauses.append("COALESCE(f.mode,'')!='exclude'")
         clauses.append("(NOT EXISTS(SELECT 1 FROM evaluation_preferences WHERE mode='pin') OR f.mode='pin')")
-        values.append(MAX_DECISION_PROFILES + 1)
+        values.append(MAX_DECISION_BUDDIES + 1)
         from ..evaluation.native_observations import exhausted
         from .quota_routing import claim
         selected: list[sqlite3.Row] = []
         retried: list[str] = []
         health_available = {}
         for row in connection.execute(
-            "SELECT p.* FROM evaluation_profiles p LEFT JOIN evaluation_preferences f ON f.profile_id=p.profile_id "
+            "SELECT p.* FROM buddies p LEFT JOIN evaluation_preferences f ON f.buddy_id=p.buddy_id "
             "WHERE " + " AND ".join(clauses) + " ORDER BY p.rowid LIMIT ?", values):
             from ..service.harness_health import read_health
             if row['adapter'] not in health_available:
@@ -239,18 +239,18 @@ class DecisionCoordinator:
                 selected.append(row)
             elif decision_id is not None and claim(
                     connection, row, decision_id=decision_id, consume=consume_retries, now=now) is not None:
-                # A profile admitted through a retry window is retried whether it
+                # A buddy admitted through a retry window is retried whether it
                 # claimed the window itself or shares the record this decision
                 # already claimed: both entered only because the window opened.
                 selected.append(row)
-                retried.append(row["profile_id"])
+                retried.append(row["buddy_id"])
         return selected, retried
 
-    def _excluded_profiles(self, connection: sqlite3.Connection, *, required_capabilities: list[str], constraints: dict | None = None) -> tuple[list[dict], int]:
-        """The user-excluded configurations inside these hard bounds, frozen now.
+    def _excluded_buddies(self, connection: sqlite3.Connection, *, required_capabilities: list[str], constraints: dict | None = None) -> tuple[list[dict], int]:
+        """The user-excluded buddies inside these hard bounds, frozen now.
 
         These are the exclusions that narrowed this request's candidate set: each
-        profile passes every hard bound (enabled, available, healthy, complete
+        buddy passes every hard bound (enabled, available, healthy, complete
         coding tuple, required capabilities, fixed fields) and only the user's
         effective ``exclude`` preference removes it. Pins are not considered,
         because a pin narrows the set without excluding anything.
@@ -258,19 +258,19 @@ class DecisionCoordinator:
         clauses, values = self._candidate_bounds(
             required_capabilities=required_capabilities, constraints=constraints)
         clauses.append("COALESCE(f.mode,'')='exclude'")
-        from_sql = (" FROM evaluation_profiles p"
-                    " LEFT JOIN evaluation_preferences f ON f.profile_id=p.profile_id"
+        from_sql = (" FROM buddies p"
+                    " LEFT JOIN evaluation_preferences f ON f.buddy_id=p.buddy_id"
                     " WHERE " + " AND ".join(clauses))
         total = int(connection.execute("SELECT COUNT(*) AS count" + from_sql, values).fetchone()["count"])
         rows = connection.execute(
-            "SELECT p.profile_id, p.adapter, p.provider, p.model, p.effort,"
+            "SELECT p.buddy_id, p.adapter, p.provider, p.model, p.effort,"
             " f.reason AS preference_reason" + from_sql +
             " ORDER BY p.rowid LIMIT ?",
             [*values, MAX_FROZEN_EXCLUSIONS],
         ).fetchall()
         entries = [
             {
-                "profileId": row["profile_id"],
+                "buddyId": row["buddy_id"],
                 "adapter": row["adapter"],
                 "provider": row["provider"],
                 "model": row["model"],
@@ -289,17 +289,17 @@ class DecisionCoordinator:
         no candidates. The submission's hard constraints stay in the request
         itself; this object carries what the constraints alone cannot show.
         """
-        excluded, excluded_count = self._excluded_profiles(
+        excluded, excluded_count = self._excluded_buddies(
             connection, required_capabilities=required_capabilities, constraints=constraints)
-        basis = {"candidateCount": len(candidates), "excludedCount": excluded_count, "excludedProfiles": excluded}
+        basis = {"candidateCount": len(candidates), "excludedCount": excluded_count, "excludedBuddies": excluded}
         if quota_retry:
-            basis["quotaRetryProfileIds"] = quota_retry
+            basis["quotaRetryBuddyIds"] = quota_retry
         return basis
 
     # -- bounded model input -------------------------------------------------
-    def _profile_input(self, row: sqlite3.Row) -> dict:
+    def _buddy_input(self, row: sqlite3.Row) -> dict:
         entry = {
-            "profileId": row["profile_id"],
+            "buddyId": row["buddy_id"],
             "label": row["label"],
             "adapter": row["adapter"],
             "provider": row["provider"],
@@ -320,7 +320,7 @@ class DecisionCoordinator:
         self,
         connection: sqlite3.Connection,
         *,
-        profiles: list[sqlite3.Row],
+        buddies: list[sqlite3.Row],
         include_preferences: bool,
     ) -> dict:
         """The complete bounded table slice for one request — never a silent truncation.
@@ -329,36 +329,36 @@ class DecisionCoordinator:
         helper's request bounds, :meth:`_assemble_input` reports an explicit
         oversized outcome instead of picking rows by insertion order.
         """
-        profile_ids = [row["profile_id"] for row in profiles]
+        buddy_ids = [row["buddy_id"] for row in buddies]
         preferences: list[dict] = []
         if include_preferences:
-            preferences = user_policy.preferences(connection, profile_ids)
+            preferences = user_policy.preferences(connection, buddy_ids)
         return {
-            "profiles": [self._profile_input(row) for row in profiles],
+            "buddies": [self._buddy_input(row) for row in buddies],
             "preferences": preferences,
-            # User notes are kept per model service; the model service key is on every profile.
-            "annotations": user_policy.model_service_notes(connection, profile_ids),
+            # User notes are kept per model service; the model service key is on every buddy.
+            "annotations": user_policy.model_service_notes(connection, buddy_ids),
         }
 
-    def _assemble_input(self, connection: sqlite3.Connection, *, kind: str, request_id: str, profile_row: sqlite3.Row | None, table: dict, task_text: str | None, preserve_oversized: bool = False) -> tuple[dict | None, str | None]:
+    def _assemble_input(self, connection: sqlite3.Connection, *, kind: str, request_id: str, buddy_row: sqlite3.Row | None, table: dict, task_text: str | None, preserve_oversized: bool = False) -> tuple[dict | None, str | None]:
         """Build the exact bounded document the model sees, or report why it cannot.
 
         Returns ``(document, oversized_reason)``. Nothing is dropped to make a
         document fit: exceeding a harness bound or the byte ceiling is an honest
-        ``needs-host`` outcome. ``profile_row=None`` builds the request's common
+        ``needs-host`` outcome. ``buddy_row=None`` builds the request's common
         packet without the current actor — the base input every dispatch copies,
         where only the actor and its same-tier budget vary per item.
         """
         document: dict[str, Any] = {
             "operation": kind, "requestId": request_id,
         }
-        if profile_row is not None:
-            document["profile"] = {key: profile_row[key] for key in schemas.CONFIGURATION_FIELDS}
+        if buddy_row is not None:
+            document["buddy"] = {key: buddy_row[key] for key in schemas.BUDDY_FIELDS}
         if kind == "select":
             document["task"] = task_text
         document.update(table)
         for name, limit in (
-            ("profiles", MAX_DECISION_PROFILES),
+            ("buddies", MAX_DECISION_BUDDIES),
             ("preferences", MAX_DECISION_PREFERENCES),
             ("annotations", MAX_DECISION_ANNOTATIONS),
         ):
@@ -377,20 +377,20 @@ class DecisionCoordinator:
             )
         return document, None
 
-    def _select_input(self, connection: sqlite3.Connection, *, request_id: str, profile_row: sqlite3.Row | None, task_text: str, candidates: list[sqlite3.Row], hard_constraints: dict | None = None, preserve_oversized: bool = False) -> tuple[dict | None, str | None]:
-        if len(candidates) > MAX_DECISION_PROFILES and not preserve_oversized:
-            return None, "The legal candidate set exceeds the bounded decision profile limit; narrow the task constraints"
+    def _select_input(self, connection: sqlite3.Connection, *, request_id: str, buddy_row: sqlite3.Row | None, task_text: str, candidates: list[sqlite3.Row], hard_constraints: dict | None = None, preserve_oversized: bool = False) -> tuple[dict | None, str | None]:
+        if len(candidates) > MAX_DECISION_BUDDIES and not preserve_oversized:
+            return None, "The legal candidate set exceeds the bounded decision buddy limit; narrow the task constraints"
         table = self._table_input(
-            connection, profiles=candidates, include_preferences=True
+            connection, buddies=candidates, include_preferences=True
         )
         # The program-computed preference truth for this request. It is request-local
         # (it depends on this candidate slice and the user's published prefer entries),
         # so it is part of the variable suffix the model sees after the stable table
         # snapshot. Task-local routing preferences are retired Host input (ADR-021).
         table["policyFacts"] = selection_policy.policy_facts(
-            profiles=table["profiles"],
-            prefer_profile_ids=[
-                entry["profileId"] for entry in table["preferences"] if entry["mode"] == "prefer"
+            buddies=table["buddies"],
+            prefer_buddy_ids=[
+                entry["buddyId"] for entry in table["preferences"] if entry["mode"] == "prefer"
             ],
             hard_constraints=hard_constraints or {},
         )
@@ -398,7 +398,7 @@ class DecisionCoordinator:
             connection,
             kind="select",
             request_id=request_id,
-            profile_row=profile_row,
+            buddy_row=buddy_row,
             table=table,
             task_text=task_text,
             preserve_oversized=preserve_oversized,
@@ -410,7 +410,7 @@ class DecisionCoordinator:
             if key in params:
                 raise BoardError(
                     "INVALID_ARGUMENT",
-                    f"{key} is retired Host routing input; " + schemas.PARTIAL_CONFIGURATION_HINT,
+                    f"{key} is retired Host routing input; " + schemas.PARTIAL_BUDDY_HINT,
                     field=key,
                 )
         schemas.reject_unknown(params, SELECT_FIELDS, "selection.request")
@@ -471,7 +471,7 @@ class DecisionCoordinator:
             sole_candidate: sqlite3.Row | None = None
             resolution = None
             snapshot: dict | None = None
-            facts = {"routerProfileId": None, "routingMode": None, "budget": None}
+            facts = {"routerBuddyId": None, "routingMode": None, "budget": None}
             if len(candidates) == 1:
                 # One frozen legal candidate leaves the Router nothing to compare,
                 # so the program selects it directly: no Router task is created and
@@ -502,7 +502,7 @@ class DecisionCoordinator:
                 # The admission scan's limit protects model routing. For an
                 # oversized Host packet only, retain the entire legal slice,
                 # without changing admission or consuming any quota retry.
-                if len(candidates) > MAX_DECISION_PROFILES:
+                if len(candidates) > MAX_DECISION_BUDDIES:
                     clauses, values = self._candidate_bounds(
                         required_capabilities=request.get("requiredCapabilities", []),
                         constraints=request.get("constraints"), coding_only=True)
@@ -513,14 +513,14 @@ class DecisionCoordinator:
                     from ..service.harness_health import read_health
                     complete_candidates, complete_retries = [], []
                     for item in connection.execute(
-                        "SELECT p.* FROM evaluation_profiles p LEFT JOIN evaluation_preferences f ON f.profile_id=p.profile_id WHERE "
+                        "SELECT p.* FROM buddies p LEFT JOIN evaluation_preferences f ON f.buddy_id=p.buddy_id WHERE "
                         + " AND ".join(clauses) + " ORDER BY p.rowid", values):
                         if not read_health(connection, item["adapter"])["available"]:
                             continue
                         if exhausted(connection, item, now=now) is not None:
                             if claim(connection, item, decision_id=decision_id, consume=False, now=now) is None:
                                 continue
-                            complete_retries.append(item["profile_id"])
+                            complete_retries.append(item["buddy_id"])
                         complete_candidates.append(item)
                     candidates = complete_candidates
                     request["routingBasis"] = self._freeze_routing_basis(
@@ -528,7 +528,7 @@ class DecisionCoordinator:
                         required_capabilities=request.get("requiredCapabilities", []),
                         constraints=request.get("constraints"), quota_retry=complete_retries)
                 base_input, problem = self._select_input(
-                    connection, request_id=request_id, profile_row=None,
+                    connection, request_id=request_id, buddy_row=None,
                     task_text=task_text, candidates=candidates,
                     hard_constraints=request.get("constraints") or {},
                     preserve_oversized=True)
@@ -542,7 +542,7 @@ class DecisionCoordinator:
                     base_input["executionWorkspace"] = request.get("executionWorkspace")
                 if facts["routingMode"] is not None:
                     base_input["outputSchema"] = router.answer_schema(
-                        [item["profileId"] for item in base_input["profiles"]], facts["routingMode"])
+                        [item["buddyId"] for item in base_input["buddies"]], facts["routingMode"])
                 snapshot = {"facts": facts, "baseInput": base_input,
                             "inspections": [dict(entry) for entry in resolution.inspections]}
                 input_bytes = len(canonical_json(base_input).encode("utf-8"))
@@ -553,12 +553,12 @@ class DecisionCoordinator:
                         f"{MAX_DECISION_INPUT_BYTES}-byte decision input ceiling; nothing was truncated or sent to a model.")
                 elif needs_host_reason is not None:
                     status, reason = "needs-host", needs_host_reason
-                elif facts["routingMode"] is None or resolution.profile is None:
+                elif facts["routingMode"] is None or resolution.buddy is None:
                     status, reason = "needs-host", (
-                        resolution.problem["reason"] if resolution.problem else NEEDS_HOST_NO_PROFILE)
+                        resolution.problem["reason"] if resolution.problem else NEEDS_HOST_NO_BUDDY)
             task_id = None
             connection.execute(
-                "INSERT INTO evaluation_decisions(decision_id, status, task, profile_id, reason,"
+                "INSERT INTO evaluation_decisions(decision_id, status, task, buddy_id, reason,"
                 " created_at, error) VALUES(?,?,?,?,?,?,?)",
                 (
                     decision_id,
@@ -591,7 +591,7 @@ class DecisionCoordinator:
                 # same transaction.
                 router_sequence.freeze_request(connection, decision_id, snapshot=snapshot, now=now)
                 self._record_preflight_walk(connection, request_id, resolution.inspections, now=now)
-            if status == "queued" and resolution is not None and resolution.profile is not None:
+            if status == "queued" and resolution is not None and resolution.buddy is not None:
                 try:
                     task_id = self._queue_router_dispatch(
                         connection, self._row(connection, decision_id), resolution=resolution, now=now)
@@ -631,7 +631,7 @@ class DecisionCoordinator:
     def route_workflow(self, connection, *, run_id: str, sequence: int, spec: dict, manifest: dict | None = None) -> dict:
         """Admit a fixed-selector task with the Goal in its existing transaction.
 
-        The selector itself is always the configured decision profile. Only the
+        The selector itself is always the configured decision buddy. Only the
         bounded business candidate set is filtered; no recursive workflow submit
         and no provider/model call occurs during admission.
         """
@@ -650,7 +650,7 @@ class DecisionCoordinator:
             "kind": "select", "task": task_text,
             "executionWorkspace": manifest,
             "requiredCapabilities": required_capabilities,
-            "constraints": schemas.configuration_constraints(spec),
+            "constraints": schemas.buddy_constraints(spec),
             "workflowRouting": True,
         }
         needs_host_reason = None
@@ -662,7 +662,7 @@ class DecisionCoordinator:
             needs_host_reason = (
                 f"The complete Goal contains {task_bytes} UTF-8 bytes, above the selector's "
                 f"{MAX_DECISION_TASK_BYTES}-byte task limit. No model call was made. "
-                "Continue the same Goal with a complete configuration; its full task remains unchanged."
+                "Continue the same Goal with a complete buddy; its full task remains unchanged."
             )
         return self._create(f"workflow:{run_id}:{sequence}", request, connection=connection,
                             needs_host_reason=needs_host_reason)
@@ -745,7 +745,7 @@ class DecisionCoordinator:
                 continue
             record_outcome(
                 connection,
-                profile_id=entry["profileId"],
+                buddy_id=entry["buddyId"],
                 plane="work",
                 request_id=request_id,
                 task_id=None,
@@ -780,14 +780,14 @@ class DecisionCoordinator:
             state = connection.execute("SELECT state FROM tasks WHERE task_id=?", (current_task,)).fetchone()
             if (existing is not None and state is not None and state["state"] == "queued"
                     and existing["routerIndex"] == resolution.router_index
-                    and existing["profileId"] == resolution.profile_id):
+                    and existing["buddyId"] == resolution.buddy_id):
                 return current_task
-        identity_map = {key: resolution.profile[key] for key in schemas.CONFIGURATION_FIELDS}
+        identity_map = {key: resolution.buddy[key] for key in schemas.BUDDY_FIELDS}
         document = {
             **(json.loads(row["input_json"]) if row["input_json"] else snapshot["baseInput"]),
-            "profile": identity_map,
-            "routerProfileId": resolution.profile_id,
-            "routerProfile": identity_map,
+            "buddy": identity_map,
+            "routerBuddyId": resolution.buddy_id,
+            "routerBuddy": identity_map,
             "routerIndex": resolution.router_index,
         }
         input_bytes = len(canonical_json(document).encode("utf-8"))
@@ -811,7 +811,7 @@ class DecisionCoordinator:
             decision_id=decision_id,
             task_id=task_id,
             router_index=resolution.router_index,
-            profile={"profileId": resolution.profile_id, **identity_map},
+            buddy={"buddyId": resolution.buddy_id, **identity_map},
             document=document,
             now=now,
         )
@@ -821,7 +821,7 @@ class DecisionCoordinator:
             " output_json=NULL, input_json=?, input_sha256=?, updated_at=? WHERE decision_id=?",
             (task_id, canonical_json(document), digest, now, decision_id),
         )
-        connection.execute("UPDATE evaluation_decisions SET status='queued',profile_id=NULL,error=NULL,reason=? WHERE decision_id=?",
+        connection.execute("UPDATE evaluation_decisions SET status='queued',buddy_id=NULL,error=NULL,reason=? WHERE decision_id=?",
                            ("queued for the next frozen Router dispatch", decision_id))
         self.board.workflow.routing_dispatched(connection, decision_id=decision_id, task_id=task_id, now=now)
         return task_id
@@ -857,7 +857,7 @@ class DecisionCoordinator:
             return "decision-closed"
         facts = json.loads(row["requested_json"])
         from .router_history import router_state
-        state = router_state(connection, profile_id=dispatch["profileId"],
+        state = router_state(connection, buddy_id=dispatch["buddyId"],
                              interval_seconds=facts["routerRetryIntervalSeconds"], now=now)
         if state["retryInProgress"]:
             # One in-flight retry per buddy: this request queues behind it without
@@ -865,7 +865,7 @@ class DecisionCoordinator:
             return "router-retry-in-progress"
         recheck = router.current_router(
             connection, frozen=facts, after_index=dispatch["routerIndex"] - 1, now=now)
-        if recheck.profile is not None and recheck.router_index == dispatch["routerIndex"]:
+        if recheck.buddy is not None and recheck.router_index == dispatch["routerIndex"]:
             return None
         started = connection.execute(
             "SELECT 1 FROM attempts WHERE task_id=? LIMIT 1", (task["task_id"],)
@@ -883,7 +883,7 @@ class DecisionCoordinator:
         self._cancel_queued_task(connection, task, now, "the Router item is unavailable before the model call")
         advance = router.current_router(connection, frozen=facts, after_index=dispatch["routerIndex"], now=now)
         self._record_preflight_walk(connection, row["request_id"], advance.inspections, now=now, selection_retry=bool(json.loads(row["requested_json"]).get("selectionRetry")))
-        if advance.profile is None:
+        if advance.buddy is None:
             self._finish(connection, row, status="needs-host", now=now,
                          reason=advance.problem["reason"], error=advance.problem["code"],
                          output={"status": "error", "code": advance.problem["code"]})
@@ -930,7 +930,7 @@ class DecisionCoordinator:
         # its frozen model identity, so the frozen model-input document
         # itself stays byte-identical from admission to publication.
         from ..service.harness_health import read_health
-        tool_policy = {"systemSandbox": bool(read_health(connection, dispatch["profile"]["adapter"])["systemSandbox"])}
+        tool_policy = {"systemSandbox": bool(read_health(connection, dispatch["buddy"]["adapter"])["systemSandbox"])}
         self._mark_running(
             connection, row, attempt_id=attempt_id, generation=generation,
             document=document, now=now,
@@ -1095,7 +1095,7 @@ class DecisionCoordinator:
         checked = {"answer_valid": False, "abstained": False, "changed": False,
                    "code": "router-unavailable" if released else "router-no-answer",
                    "reason": error or "The bounded Router call produced no usable answer",
-                   "output": output, "profile_id": None, "selected": None, "evidence": []}
+                   "output": output, "buddy_id": None, "selected": None, "evidence": []}
         completion_event = connection.execute(
             "SELECT payload_json FROM events WHERE task_id=? AND attempt_id=? AND kind='task.completed'"
             " ORDER BY seq DESC LIMIT 1", (task["task_id"], attempt["attempt_id"])).fetchone()
@@ -1141,7 +1141,7 @@ class DecisionCoordinator:
         from .router_history import record_outcome
 
         def record(value):
-            record_outcome(connection, profile_id=dispatch["profileId"], plane="work", request_id=row["request_id"],
+            record_outcome(connection, buddy_id=dispatch["buddyId"], plane="work", request_id=row["request_id"],
                            task_id=task["task_id"], attempt_id=attempt["attempt_id"], outcome=value,
                            code=checked["code"] if value == "no_answer" else None, phase=stage,
                            facts={"routerIndex": dispatch["routerIndex"], "selectionRetry": bool(json.loads(row["requested_json"]).get("selectionRetry"))}, now=now)
@@ -1160,7 +1160,7 @@ class DecisionCoordinator:
             advance = router.current_router(connection, frozen=json.loads(row["requested_json"]),
                                             after_index=dispatch["routerIndex"], now=now)
             self._record_preflight_walk(connection, row["request_id"], advance.inspections, now=now, selection_retry=bool(json.loads(row["requested_json"]).get("selectionRetry")))
-            if advance.profile is not None:
+            if advance.buddy is not None:
                 try:
                     self._queue_router_dispatch(connection, row, resolution=advance, now=now)
                 except BoardError as failure:
@@ -1175,7 +1175,7 @@ class DecisionCoordinator:
                                                           "code": checked["code"]})
         elif outcome in ("answered", "abstained"):
             self._finish(connection, row, status="completed" if outcome == "answered" else "needs-host", now=now,
-                         reason=checked["reason"], output=checked["output"], profile_id=checked["profile_id"],
+                         reason=checked["reason"], output=checked["output"], buddy_id=checked["buddy_id"],
                          selected=checked["selected"])
             # _finish owns the final atomic quota claim. Do not record success if
             # another decision already consumed that retry at this last gate.
@@ -1191,7 +1191,7 @@ class DecisionCoordinator:
             self._finish(connection, row, status="cancelled" if outcome == "cancelled" else "needs-host" if outcome == "changed" else "failed" if shutdown_confirmed is not True else "needs-host",
                          output={**(output or {}), "code": code}, now=now, reason=reason, error=code)
         current = self._row(connection, row["decision_id"])
-        return {**summary, "status": current["status"], "outcome": outcome, "profileId": current["profile_id"],
+        return {**summary, "status": current["status"], "outcome": outcome, "buddyId": current["buddy_id"],
                 "reason": current["reason"]}
 
 
@@ -1239,7 +1239,7 @@ class DecisionCoordinator:
                                          else resolution.facts["budget"]["timeoutSeconds"])
             request["budget"] = {**resolution.facts["budget"], "timeoutSeconds": request["timeoutSeconds"]}
         document, oversized = self._select_input(
-            connection, request_id=row["request_id"], profile_row=None, task_text=request["task"],
+            connection, request_id=row["request_id"], buddy_row=None, task_text=request["task"],
             candidates=candidates, hard_constraints=request.get("constraints") or {}, preserve_oversized=True)
         document.update({**resolution.facts, "budget": request.get("budget"),
                          "routingBasis": request["routingBasis"], "constraints": request.get("constraints", {}),
@@ -1248,10 +1248,10 @@ class DecisionCoordinator:
             document["executionWorkspace"] = request.get("executionWorkspace")
         if resolution.facts["routingMode"] is not None:
             document["outputSchema"] = router.answer_schema(
-                [item["profileId"] for item in document["profiles"]], resolution.facts["routingMode"])
+                [item["buddyId"] for item in document["buddies"]], resolution.facts["routingMode"])
         connection.execute("UPDATE decision_requests SET requested_json=?, input_json=? WHERE decision_id=?",
                            (canonical_json(request), canonical_json(document), row["decision_id"]))
-        if oversized or resolution.profile is None:
+        if oversized or resolution.buddy is None:
             problem = resolution.problem or {"code": "router-input-too-large", "reason": oversized}
             self._finish(connection, self._row(connection, row["decision_id"]), status="needs-host", now=now,
                          error=problem["code"], reason=reason + "; rerouting cannot continue: " + problem["reason"],
@@ -1289,7 +1289,7 @@ class DecisionCoordinator:
         if not reported:
             return {"code": unverified, "reason": "The receipt reports no native root identity"}
         expected_binding = {
-            "adapter": (document.get("profile") or {}).get("adapter"),
+            "adapter": (document.get("buddy") or {}).get("adapter"),
             "taskId": row["decision_task_id"],
             "attemptId": row["decision_attempt_id"],
             "generation": row["decision_generation"],
@@ -1320,7 +1320,7 @@ class DecisionCoordinator:
         document = json.loads(row["input_json"]) if row["input_json"] else {}
         request = json.loads(row["requested_json"])
         checked = {"answer_valid": False, "abstained": False, "changed": False,
-                   "code": None, "reason": "", "output": output, "profile_id": None,
+                   "code": None, "reason": "", "output": output, "buddy_id": None,
                    "selected": None, "evidence": []}
 
         def refuse(code, reason, *, changed=False):
@@ -1367,13 +1367,13 @@ class DecisionCoordinator:
             problem = {"code": "router-tool-evidence-unverified", "reason": "The receipt's tool count differs from its native events"}
         if problem is not None:
             return refuse(problem["code"], problem["reason"])
-        profiles = document.get("profiles") or []
+        buddies = document.get("buddies") or []
         try:
-            decision = router.validate_answer(output.get("decision"), [item["profileId"] for item in profiles], document.get("routingMode", "review"))
+            decision = router.validate_answer(output.get("decision"), [item["buddyId"] for item in buddies], document.get("routingMode", "review"))
         except BoardError as failure:
             return refuse(failure.code, failure.message)
-        reason, profile_id = decision["reason"], decision["profileId"]
-        if profile_id is None:
+        reason, buddy_id = decision["reason"], decision["buddyId"]
+        if buddy_id is None:
             return {**checked, "answer_valid": True, "abstained": True, "reason": reason,
                     "output": {**output, "decision": decision, "policyCheck": None}, "evidence": decision["evidence"]}
         # Recheck hard bounds only. Cached harness health/Router qualification
@@ -1384,32 +1384,32 @@ class DecisionCoordinator:
             constraints=request.get("constraints"), coding_only=True)
         clauses = [clause for clause in clauses if clause !=
                    "EXISTS(SELECT 1 FROM harness_health h WHERE h.adapter=p.adapter AND h.status='ready')"]
-        clauses.extend(["p.profile_id=?", "COALESCE(f.mode,'')!='exclude'",
+        clauses.extend(["p.buddy_id=?", "COALESCE(f.mode,'')!='exclude'",
                         "(NOT EXISTS(SELECT 1 FROM evaluation_preferences WHERE mode='pin') OR f.mode='pin')"])
         candidate = connection.execute(
-            "SELECT p.* FROM evaluation_profiles p LEFT JOIN evaluation_preferences f ON f.profile_id=p.profile_id WHERE "
-            + " AND ".join(clauses), [*values, profile_id]).fetchone()
-        selected = next(dict(item) for item in profiles if item["profileId"] == profile_id)
+            "SELECT p.* FROM buddies p LEFT JOIN evaluation_preferences f ON f.buddy_id=p.buddy_id WHERE "
+            + " AND ".join(clauses), [*values, buddy_id]).fetchone()
+        selected = next(dict(item) for item in buddies if item["buddyId"] == buddy_id)
         from ..evaluation.native_observations import exhausted
         from .quota_routing import claim
-        if (candidate is None or any(candidate[key] != selected[key] for key in schemas.CONFIGURATION_FIELDS)
+        if (candidate is None or any(candidate[key] != selected[key] for key in schemas.BUDDY_FIELDS)
                 or (exhausted(connection, candidate, now=now) is not None
                     and claim(connection, candidate, decision_id=row["decision_id"], consume=False, now=now) is None)):
-            current = connection.execute("SELECT p.*,f.mode AS preference_mode FROM evaluation_profiles p"
-                                         " LEFT JOIN evaluation_preferences f ON f.profile_id=p.profile_id WHERE p.profile_id=?",
-                                         (profile_id,)).fetchone()
+            current = connection.execute("SELECT p.*,f.mode AS preference_mode FROM buddies p"
+                                         " LEFT JOIN evaluation_preferences f ON f.buddy_id=p.buddy_id WHERE p.buddy_id=?",
+                                         (buddy_id,)).fetchone()
             problem = ("removed from the candidate table" if current is None else
                        "disabled" if not current["enabled"] else
                        "unavailable" if not current["available"] else
                        "excluded by the user" if current["preference_mode"] == "exclude" else
                        "missing a required task capability" if not set(request.get("requiredCapabilities") or []) <= set(json.loads(current["capabilities_json"])) else
                        "outside current pins, task constraints, or quota limits")
-            return refuse("router-out-of-bounds", f"Selected buddy {profile_id} is {problem}", changed=True)
+            return refuse("router-out-of-bounds", f"Selected buddy {buddy_id} is {problem}", changed=True)
         expected_facts = selection_policy.policy_facts(
-            profiles=profiles, prefer_profile_ids=[item["profileId"] for item in document.get("preferences", []) if item.get("mode") == "prefer"],
+            buddies=buddies, prefer_buddy_ids=[item["buddyId"] for item in document.get("preferences", []) if item.get("mode") == "prefer"],
             hard_constraints=request.get("constraints") or {})
-        policy_check = selection_policy.expected_policy_check(expected_facts, profile_id)
-        return {**checked, "answer_valid": True, "reason": reason, "profile_id": profile_id,
+        policy_check = selection_policy.expected_policy_check(expected_facts, buddy_id)
+        return {**checked, "answer_valid": True, "reason": reason, "buddy_id": buddy_id,
                 "evidence": decision["evidence"], "selected": selected,
                 "output": {**output, "decision": decision, "policyCheck": policy_check}}
 
@@ -1426,7 +1426,7 @@ class DecisionCoordinator:
             "SELECT status FROM evaluation_decisions WHERE decision_id=?", (decision_id,)
         ).fetchone()["status"]
 
-    def _finish(self, connection: sqlite3.Connection, row: sqlite3.Row, *, status: str, now: str, reason: str | None = None, error: str | None = None, profile_id: str | None = None, output: dict | None = None, selected: dict | None = None) -> None:
+    def _finish(self, connection: sqlite3.Connection, row: sqlite3.Row, *, status: str, now: str, reason: str | None = None, error: str | None = None, buddy_id: str | None = None, output: dict | None = None, selected: dict | None = None) -> None:
         """One atomic terminal transition for a decision and its audit material."""
         current = self._row(connection, row["decision_id"])
         if (current is None or (current["decision_task_id"] is not None and current["status"] in TERMINAL_DECISION_STATUSES)
@@ -1434,24 +1434,24 @@ class DecisionCoordinator:
                 or current["decision_attempt_id"] != row["decision_attempt_id"]
                 or current["decision_generation"] != row["decision_generation"]):
             return
-        if status == "completed" and profile_id and selected:
+        if status == "completed" and buddy_id and selected:
             from .quota_routing import claim
             # Candidate inspection must not spend an unchosen provider's retry.
             # Selection and this single-use claim share the write transaction;
             # another selector either sees exhaustion or rechecks its bounds.
             if claim(connection, selected, decision_id=row["decision_id"], now=now) is None:
-                status, profile_id, selected = "needs-host", None, None
+                status, buddy_id, selected = "needs-host", None, None
                 reason, error = "The selected quota retry was consumed by another decision", "router-out-of-bounds"
                 output = {**(output or {}), "code": error}
         if status not in DECISION_STATUSES:
             raise BoardError("INTERNAL_ERROR", f"Unknown decision status {status!r}")
         connection.execute(
-            "UPDATE evaluation_decisions SET status=?, reason=?, profile_id=?, error=?"
+            "UPDATE evaluation_decisions SET status=?, reason=?, buddy_id=?, error=?"
             " WHERE decision_id=?",
             (
                 status,
                 (reason or "")[:MAX_DECISION_REASON],
-                profile_id,
+                buddy_id,
                 error,
                 row["decision_id"],
             ),
@@ -1482,7 +1482,7 @@ class DecisionCoordinator:
             row["decision_id"],
             {
                 "status": status,
-                "profileId": profile_id,
+                "buddyId": buddy_id,
                 "reason": (reason or "")[:MAX_DECISION_REASON],
                 "error": error,
                 "errorCode": error_code,
@@ -1515,27 +1515,27 @@ class DecisionCoordinator:
         still derived from the frozen request and stored exactly as a Router
         answer's would be.
         """
-        profile_id = candidate["profile_id"]
-        profiles = [self._profile_input(candidate)]
-        preferences = user_policy.preferences(connection, [profile_id])
+        buddy_id = candidate["buddy_id"]
+        buddies = [self._buddy_input(candidate)]
+        preferences = user_policy.preferences(connection, [buddy_id])
         facts = selection_policy.policy_facts(
-            profiles=profiles,
-            prefer_profile_ids=[entry["profileId"] for entry in preferences if entry["mode"] == "prefer"],
+            buddies=buddies,
+            prefer_buddy_ids=[entry["buddyId"] for entry in preferences if entry["mode"] == "prefer"],
             hard_constraints=request.get("constraints") or {})
-        policy_check = selection_policy.expected_policy_check(facts, profile_id)
-        selected = dict(profiles[0])
+        policy_check = selection_policy.expected_policy_check(facts, buddy_id)
+        selected = dict(buddies[0])
         self._finish(
             connection,
             row,
             status="completed",
             now=now,
             reason=SOLE_CANDIDATE_REASON,
-            profile_id=profile_id,
+            buddy_id=buddy_id,
             selected=selected,
             output={
                 "programSelection": {
                     "code": "single-candidate",
-                    "profileId": profile_id,
+                    "buddyId": buddy_id,
                     "candidateCount": 1,
                     "reason": SOLE_CANDIDATE_REASON,
                     "preferences": preferences,
@@ -1556,7 +1556,7 @@ class DecisionCoordinator:
         program selections cannot prove recovery, and immutable event codes and
         bound attempt receipts survive late changes to the retained output.
 
-        ``available``, ``reasonCode`` and ``currentRouterProfileId`` come from the
+        ``available``, ``reasonCode`` and ``currentRouterBuddyId`` come from the
         one ordered-list resolution entry and its skip periods, never from the old
         three-failure diagnostic threshold. Each ``routers`` entry is projected by
         the R2 history interfaces from that buddy's own immutable facts and
@@ -1567,7 +1567,7 @@ class DecisionCoordinator:
         listed under ``unattributed`` and never guessed onto any buddy. Reading
         writes no events, timers, settings or probe sessions.
         """
-        from .router_history import profile_timeline, router_state, unattributed_records
+        from .router_history import buddy_timeline, router_state, unattributed_records
         limit = 20
         kinds = "('decision.completed','decision.failed','decision.needs_host','decision.cancelled')"
         source = (
@@ -1621,8 +1621,8 @@ class DecisionCoordinator:
                              and payload.get("errorCode") is None and output.get("code") is None
                              and receipt.get("status") == "ok" and receipt.get("shutdownConfirmed") is True
                              and output.get("modelStarted") is not False
-                             and isinstance(decision, dict) and decision.get("profileId", False) is None
-                             and set(decision) == {"profileId", "reason", "evidence"})
+                             and isinstance(decision, dict) and decision.get("buddyId", False) is None
+                             and set(decision) == {"buddyId", "reason", "evidence"})
                 original_code = output.get("code")
                 diagnostic_code = original_code if isinstance(original_code, str) and original_code in special_counts else code
                 special = row["kind"] in ("decision.failed", "decision.needs_host") and diagnostic_code in special_counts
@@ -1645,28 +1645,28 @@ class DecisionCoordinator:
             facts = resolution.facts
             interval = facts.get("routerRetryIntervalSeconds")
             mode = facts.get("routingMode")
-            ids = facts.get("routerProfileIds") or []
+            ids = facts.get("routerBuddyIds") or []
             identities = facts.get("routerIdentities") or []
             inspected = {entry["index"]: entry for entry in resolution.inspections}
             budget_codes = frozenset({*timeout_codes, "router-budget-exhausted", "readonly-budget-exhausted"})
             routers = []
-            for index, profile_id in enumerate(ids):
+            for index, buddy_id in enumerate(ids):
                 # A nonempty list always carries validated settings, so the
                 # interval is an integer; an absent one has no entries to project.
-                state = router_state(connection, profile_id=profile_id,
+                state = router_state(connection, buddy_id=buddy_id,
                                      interval_seconds=interval if isinstance(interval, int) else 1, now=now)
-                window = profile_timeline(connection, profile_id=profile_id)[-limit:]
+                window = buddy_timeline(connection, buddy_id=buddy_id)[-limit:]
                 inspection = inspected.get(index)
                 if inspection is not None:
                     eligible, code = inspection["eligible"], inspection["code"]
                 elif state["inSkipWindow"]:
                     eligible, code = False, "router-skip-window"
                 else:
-                    profile, code, _reason = router.profile_problem(connection, profile_id, mode)
-                    eligible = profile is not None
+                    buddy, code, _reason = router.buddy_problem(connection, buddy_id, mode)
+                    eligible = buddy is not None
                 last_error = next((entry for entry in reversed(window) if entry["outcome"] == "no_answer"), None)
                 routers.append({
-                    "profileId": profile_id, "index": index,
+                    "buddyId": buddy_id, "index": index,
                     "identity": identities[index] if index < len(identities) else None,
                     "eligible": eligible, "code": code,
                     "inSkipWindow": state["inSkipWindow"], "skipUntil": state["skipUntil"],
@@ -1687,9 +1687,9 @@ class DecisionCoordinator:
                         "code": last_error.get("code"), "at": last_error["at"], "phase": last_error.get("phase")},
                 })
             unattributed = unattributed_records(connection)
-        return {"available":resolution.profile_id is not None,
+        return {"available":resolution.buddy_id is not None,
                 "reasonCode":resolution.problem["code"] if resolution.problem else None,
-                "currentRouterProfileId":resolution.profile_id,
+                "currentRouterBuddyId":resolution.buddy_id,
                 "routers":routers,
                 "windowSize":limit, "sampleCount":len(rows), "failureCount":len(failed),
                 "attemptCount":sum(bool(row["has_attempt"]) for row in rows),
@@ -1720,7 +1720,7 @@ class DecisionCoordinator:
         """One decision. Compact by default; ``includeAudit=true`` adds the audit.
 
         The compact summary is the low-token Host path: it carries the frozen
-        selected worker configuration and the decision's own model identity as
+        selected worker buddy and the decision's own model identity as
         separate keys, and never the persisted model input, the helper envelope or
         the bounded table collections.
         """
@@ -1812,13 +1812,13 @@ class DecisionCoordinator:
             "status": row["status"],
             "task": row["task"],
             "runId": row["decision_task_id"],
-            "profileId": row["profile_id"],
+            "buddyId": row["buddy_id"],
             # The frozen execution identity the Host can delegate with directly,
             # captured from the admitted input. ``decisionModel`` is the decision
             # call's own requested/resolved identity and is deliberately separate.
-            "selectedProfile": selected,
+            "selectedBuddy": selected,
             "decisionModel": {
-                "requested": actor["profile"] if actor else None,
+                "requested": actor["buddy"] if actor else None,
                 "resolved": (output or {}).get("resolved"),
                 "observed": (output or {}).get("observed"),
             },
@@ -1841,7 +1841,7 @@ class DecisionCoordinator:
             "updatedAt": row["request_updated_at"],
         }
         if actor is None:
-            view.update(routerProfileId=None, routerProfile=None, routerIndex=None)
+            view.update(routerBuddyId=None, routerBuddy=None, routerIndex=None)
         if row["error"]:
             view["error"] = row["error"]
         if connection is not None:
@@ -1864,11 +1864,11 @@ class DecisionCoordinator:
                     "input": input_document,
                     "inputSha256": row["input_sha256"],
                     "output": output,
-                    # The decision call's own configuration, kept separate from the
-                    # selected worker configuration above.
-                    "requestedProfile": actor["profile"] if actor else None,
-                    "resolvedProfile": (output or {}).get("resolved"),
-                    "observedProfile": (output or {}).get("observed"),
+                    # The decision call's own buddy, kept separate from the
+                    # selected worker buddy above.
+                    "requestedBuddy": actor["buddy"] if actor else None,
+                    "resolvedBuddy": (output or {}).get("resolved"),
+                    "observedBuddy": (output or {}).get("observed"),
                     "usage": (output or {}).get("usage"),
                     "elapsedSeconds": (output or {}).get("elapsedSeconds"),
                     "helperShutdownConfirmed": (output or {}).get("shutdownConfirmed"),

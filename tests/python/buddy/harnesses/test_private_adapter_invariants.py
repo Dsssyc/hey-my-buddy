@@ -258,7 +258,7 @@ class PrivateAdapterInvariants(unittest.TestCase):
         context = ExecutionContext("task", "attempt-1", 1,
             {"adapter": "dsh", **dsh_tests.SPEC,
              "cwd": str(fixture.cwd), "timeoutSeconds": 3}, evidence, {}, fixture.environment)
-        request = NoToolStructuredRequest(str(fixture.cwd), "Choose a profile", dsh_tests.SCHEMA, 3)
+        request = NoToolStructuredRequest(str(fixture.cwd), "Choose a buddy", dsh_tests.SCHEMA, 3)
         handle = start_router_preparation(FastPreparation("dsh",  request, context, fixture.cwd))
         self.addCleanup(lambda: handle.terminate(grace_seconds=0.1) if handle.group_alive() else None)
         self.assertEqual(handle.wait(8), 0)
@@ -301,7 +301,7 @@ class PrivateAdapterInvariants(unittest.TestCase):
                     {"adapter": adapter.name, **spec, "cwd": str(fixture.cwd), "timeoutSeconds": 3},
                     evidence, {}, environment)
                 native = adapter()
-                request = NoToolStructuredRequest(str(fixture.cwd), "Pick a profile", codex_fast_tests.SCHEMA, 3)
+                request = NoToolStructuredRequest(str(fixture.cwd), "Pick a buddy", codex_fast_tests.SCHEMA, 3)
                 handle = start_router_preparation(FastPreparation(native.name,  request, context, fixture.cwd))
                 self.addCleanup(lambda h=handle: h.terminate(grace_seconds=0.1) if h.group_alive() else None)
                 self.assertEqual(handle.wait(8), 0)
@@ -366,8 +366,8 @@ class PrivateAdapterInvariants(unittest.TestCase):
                 context = ExecutionContext("task", "attempt", 1,
                     {"adapter": "decision", "cwd": str(fixture.cwd), "timeoutSeconds": 60},
                     Path(env["BUDDY_STATE_DIR"]) / "attempts/task/attempt", {}, env,
-                    decision_input={"profile": {"adapter": name, **spec},
-                        "profiles": [{"profileId": "legal"}], "routingMode": "fast",
+                    decision_input={"buddy": {"adapter": name, **spec},
+                        "buddies": [{"buddyId": "legal"}], "routingMode": "fast",
                         "task": "Select", "outputSchema": router.answer_schema(["legal"]),
                         "budget": {"timeoutSeconds": 60}})
                 handle = DecisionAdapter().start(context)

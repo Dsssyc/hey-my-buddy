@@ -3,7 +3,7 @@
  * derived from recorded facts only: no cost or token claims, no invented
  * durations, and 结束未确认 is never presented as stopped. Positioning and
  * folding stay in the frozen macro-task-timeline-layout module; this file only
- * names things, assigns configuration colours and flattens the chronological
+ * names things, assigns buddy colours and flattens the chronological
  * list view.
  */
 
@@ -12,7 +12,7 @@ import type {
   MacroTaskCategory,
   MacroTaskSummary,
   MacroTaskTimeline,
-  TimelineConfiguration,
+  TimelineBuddy,
   TimelineEvent,
   TimelineRow,
   TimelineSpan,
@@ -253,11 +253,11 @@ export function titleLineTooltip(line: TitleLine): string {
   return line.fromTask ? line.fullText : line.fullText;
 }
 
-/* ---- configuration identity, naming and colour assignment ---- */
+/* ---- buddy identity, naming and colour assignment ---- */
 
-export function configurationKey(config: TimelineConfiguration | null | undefined): string | null {
-  if (!config) return null;
-  return JSON.stringify([config.adapter ?? "", config.provider ?? "", config.model ?? ""]);
+export function buddyKey(buddy: TimelineBuddy | null | undefined): string | null {
+  if (!buddy) return null;
+  return JSON.stringify([buddy.adapter ?? "", buddy.provider ?? "", buddy.model ?? ""]);
 }
 
 /** Product names for known native model ids (0.16 0.3); unknown ids stay as is. */
@@ -267,39 +267,39 @@ const KNOWN_MODEL_NAMES: Record<string, string> = {
   "glm-5.3": "GLM-5.3",
 };
 
-/** A snapshot profile reduced to the fields friendly naming needs. */
-export type FriendlyProfile = { adapter: string; provider: string; model: string; label?: string; effort?: string };
+/** A snapshot buddy reduced to the fields friendly naming needs. */
+export type FriendlyBuddy = { adapter: string; provider: string; model: string; label?: string; effort?: string };
 
 /**
- * Builds the friendly-name resolver: a snapshot profile whose adapter,
- * provider and model all match wins with its profileName; then the fixed
+ * Builds the friendly-name resolver: a snapshot buddy whose adapter,
+ * provider and model all match wins with its buddyName; then the fixed
  * known-id map; then the raw model id. Colour assignment keeps using
- * configurationKey, so renaming never changes an assigned colour.
+ * buddyKey, so renaming never changes an assigned colour.
  */
-export function configurationNamer(profiles?: readonly FriendlyProfile[] | null): (config: TimelineConfiguration | null | undefined) => { text: string; title: string } {
-  const byTuple = new Map<string, FriendlyProfile>();
-  for (const profile of profiles ?? []) {
-    const key = JSON.stringify([profile.adapter ?? "", profile.provider ?? "", profile.model ?? ""]);
-    if (!byTuple.has(key)) byTuple.set(key, profile);
+export function buddyNamer(buddies?: readonly FriendlyBuddy[] | null): (buddy: TimelineBuddy | null | undefined) => { text: string; title: string } {
+  const byTuple = new Map<string, FriendlyBuddy>();
+  for (const buddy of buddies ?? []) {
+    const key = JSON.stringify([buddy.adapter ?? "", buddy.provider ?? "", buddy.model ?? ""]);
+    if (!byTuple.has(key)) byTuple.set(key, buddy);
   }
-  return (config) => {
-    if (!config) return { text: "配置未记录", title: "配置未记录" };
-    const raw = [config.adapter, config.provider, config.model, config.effort]
+  return (buddy) => {
+    if (!buddy) return { text: "配置未记录", title: "配置未记录" };
+    const raw = [buddy.adapter, buddy.provider, buddy.model, buddy.effort]
       .map(part => (part ?? "").trim()).filter(Boolean).join(" / ");
-    const matched = byTuple.get(JSON.stringify([config.adapter ?? "", config.provider ?? "", config.model ?? ""]));
+    const matched = byTuple.get(JSON.stringify([buddy.adapter ?? "", buddy.provider ?? "", buddy.model ?? ""]));
     const name = matched
-      ? profileDisplayName(matched)
-      : KNOWN_MODEL_NAMES[(config.model ?? "").trim()] ?? (config.model ?? "").trim();
-    const effort = effortDisplay(config.effort);
+      ? buddyDisplayName(matched)
+      : KNOWN_MODEL_NAMES[(buddy.model ?? "").trim()] ?? (buddy.model ?? "").trim();
+    const effort = effortDisplay(buddy.effort);
     const text = name && effort ? `${name} · ${effort}` : name || effort || "配置未记录";
     return { text, title: raw || text };
   };
 }
 
-/** profileName() behaviour for a snapshot profile (label minus its effort tail). */
-function profileDisplayName(profile: FriendlyProfile): string {
-  const label = (profile.label ?? "").trim();
-  const effort = (profile.effort ?? "").trim();
+/** buddyName() behaviour for a snapshot buddy (label minus its effort tail). */
+function buddyDisplayName(buddy: FriendlyBuddy): string {
+  const label = (buddy.label ?? "").trim();
+  const effort = (buddy.effort ?? "").trim();
   if (label && effort) {
     const suffix = ` · ${effort}`;
     if (label.endsWith(suffix)) {
@@ -307,65 +307,65 @@ function profileDisplayName(profile: FriendlyProfile): string {
       if (stripped) return stripped;
     }
   }
-  return label || profile.model;
+  return label || buddy.model;
 }
 
-/** effortText() behaviour without importing the profile module. */
+/** effortText() behaviour without importing the buddy module. */
 function effortDisplay(effort: string | null | undefined): string {
   // Native values keep their recorded name, `off` included.
   return (effort ?? "").trim();
 }
 
-const defaultNamer = configurationNamer(null);
+const defaultNamer = buddyNamer(null);
 
 /**
  * One consistent “友好名 · effort” form for the legend, row subtitles, the
  * inspector and details; the raw adapter/provider/model/effort belongs in the
  * tooltip (0.16 0.3).
  */
-export function configurationLabel(config: TimelineConfiguration | null | undefined, profiles?: readonly FriendlyProfile[] | null): string {
-  return (profiles ? configurationNamer(profiles) : defaultNamer)(config).text;
+export function buddyLabel(buddy: TimelineBuddy | null | undefined, buddies?: readonly FriendlyBuddy[] | null): string {
+  return (buddies ? buddyNamer(buddies) : defaultNamer)(buddy).text;
 }
 
 /** The raw identity line for tooltips. */
-export function configurationRawLabel(config: TimelineConfiguration | null | undefined): string {
-  return defaultNamer(config).title;
+export function buddyRawLabel(buddy: TimelineBuddy | null | undefined): string {
+  return defaultNamer(buddy).title;
 }
 
-export type ConfigurationStyle = { key: string; label: string; rawTitle: string; color: number; striped: boolean };
+export type BuddyStyle = { key: string; label: string; rawTitle: string; color: number; striped: boolean };
 
 /**
- * Stable execution-configuration colours. `assignments` maps a configuration
+ * Stable execution-buddy colours. `assignments` maps a buddy
  * key to the slot it received when first seen for this macroTask and persists
- * across refreshes, so a newly appearing configuration — even in an earlier
- * row — never recolours an existing one; the palette lists the configurations
+ * across refreshes, so a newly appearing buddy — even in an earlier
+ * row — never recolours an existing one; the palette lists the buddies
  * present in the current read by assignment order. Beyond six slots, colours
  * cycle and gain a stripe on both the legend and the execution bars.
  */
-export function configurationPalette(
+export function buddyPalette(
   spansByRun: Map<string, TimelineSpan[]>,
   assignments?: Map<string, number>,
-  profiles?: readonly FriendlyProfile[] | null,
-): ConfigurationStyle[] {
+  buddies?: readonly FriendlyBuddy[] | null,
+): BuddyStyle[] {
   const slots = assignments ?? new Map<string, number>();
-  const byKey = new Map<string, ConfigurationStyle>();
-  const namer = configurationNamer(profiles);
+  const byKey = new Map<string, BuddyStyle>();
+  const namer = buddyNamer(buddies);
   for (const spans of spansByRun.values()) {
     for (const span of spans) {
       if (span.kind !== "execution") continue;
-      const key = configurationKey(span.configuration);
+      const key = buddyKey(span.buddy);
       if (key === null || byKey.has(key)) continue;
       if (!slots.has(key)) slots.set(key, slots.size);
       const slot = slots.get(key)!;
-      const named = namer(span.configuration);
+      const named = namer(span.buddy);
       byKey.set(key, { key, label: named.text, rawTitle: named.title, color: slot % 6 + 1, striped: slot >= 6 });
     }
   }
   return [...byKey.values()].sort((left, right) => (slots.get(left.key) ?? 0) - (slots.get(right.key) ?? 0));
 }
 
-export function paletteIndex(palette: ConfigurationStyle[], config: TimelineConfiguration | null | undefined): ConfigurationStyle | null {
-  const key = configurationKey(config);
+export function paletteIndex(palette: BuddyStyle[], buddy: TimelineBuddy | null | undefined): BuddyStyle | null {
+  const key = buddyKey(buddy);
   return key === null ? null : palette.find(entry => entry.key === key) ?? null;
 }
 
@@ -480,7 +480,7 @@ export function spanFacts(
   span: TimelineSpan,
   row: TimelineRow,
   observedAtMs: number | null,
-  profiles?: readonly FriendlyProfile[] | null,
+  buddies?: readonly FriendlyBuddy[] | null,
 ): { item: TimelineItem; startMs: number | null; endMs: number | null; recordedEndMs: number | null; outcome: SpanOutcome } {
   const outcome = spanOutcome(span);
   const { startMs, recordedEndMs, endMs } = spanPlacement(span, observedAtMs);
@@ -489,7 +489,7 @@ export function spanFacts(
   if (span.kind === "execution" || span.kind === "routing") {
     if (span.turnIndex !== null && span.turnIndex !== undefined) parts.push(`第 ${span.turnIndex} 轮`);
   }
-  if (span.kind === "execution" && span.configuration) parts.push(configurationLabel(span.configuration));
+  if (span.kind === "execution" && span.buddy) parts.push(buddyLabel(span.buddy));
   if (span.kind === "host" && span.summary) parts.push(span.summary);
   // A terminal span without a recorded end never borrows "now": it says the
   // end time is missing, exactly like a missing start.
@@ -514,7 +514,7 @@ export function spanFacts(
     item: {
       key: `span:${span.spanId}`,
       runId: row.runId,
-      ...(span.kind === "routing" ? { decisionId: span.decisionId || undefined, ariaLabel: routingSpanLabel(span, profiles) } : {}),
+      ...(span.kind === "routing" ? { decisionId: span.decisionId || undefined, ariaLabel: routingSpanLabel(span, buddies) } : {}),
       section: SPAN_SECTION[span.kind],
       head,
       parts,
@@ -677,7 +677,7 @@ export function buildChronology(
 }
 
 /** Describe the selected target, never the Router's own configuration. */
-export function routingSpanLabel(span: TimelineSpan, profiles?: readonly FriendlyProfile[] | null): string {
-  const selected = span.routing?.selectedProfile;
-  return `${recordedRoutingMode(span.routing?.routingMode)}路由 · 已选 ${selected ? configurationLabel(selected, profiles) : "未记录"} · ${outcomeLabel(span, spanOutcome(span))}`;
+export function routingSpanLabel(span: TimelineSpan, buddies?: readonly FriendlyBuddy[] | null): string {
+  const selected = span.routing?.selectedBuddy;
+  return `${recordedRoutingMode(span.routing?.routingMode)}路由 · 已选 ${selected ? buddyLabel(selected, buddies) : "未记录"} · ${outcomeLabel(span, spanOutcome(span))}`;
 }

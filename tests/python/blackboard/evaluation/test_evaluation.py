@@ -1,4 +1,4 @@
-"""Published profiles, user settings and catalog discovery.
+"""Published buddies, user settings and catalog discovery.
 
 These tests exercise the production store and the production resource
 implementations in-process against private state directories; only the C-Two
@@ -13,9 +13,9 @@ from support import BoardTestCase
 
 from hey_my_buddy.errors import BoardError
 
-PROFILE_ID = "dsh:deepseek-official:deepseek-flash:off"
-PROFILE = {
-    "profileId": PROFILE_ID,
+BUDDY_ID = "dsh:deepseek-official:deepseek-flash:off"
+BUDDY = {
+    "buddyId": BUDDY_ID,
     "label": "DeepSeek-V41-Flash · off",
     "adapter": "dsh",
     "provider": "deepseek-official",
@@ -25,22 +25,22 @@ PROFILE = {
     "enabled": True,
     "capabilities": ["execution:dsh", "effort:off"],
     "contextWindow": 1000000,
-    "description": "fixture profile",
+    "description": "fixture buddy",
     "source": "manual",
 }
-SECOND_PROFILE_ID = "dsh:deepseek-official:deepseek-v4-pro:high"
-SECOND_PROFILE = {
-    **PROFILE,
-    "profileId": SECOND_PROFILE_ID,
+SECOND_BUDDY_ID = "dsh:deepseek-official:deepseek-v4-pro:high"
+SECOND_BUDDY = {
+    **BUDDY,
+    "buddyId": SECOND_BUDDY_ID,
     "label": "DeepSeek-V4-Pro · high",
     "model": "deepseek-v4-pro",
     "effort": "high",
 }
 
 
-def model_service_key(profile: dict) -> dict:
+def model_service_key(buddy: dict) -> dict:
     """The ``(adapter, provider, model)`` key a model-service-keyed row or patch uses."""
-    return {key: profile[key] for key in ("adapter", "provider", "model")}
+    return {key: buddy[key] for key in ("adapter", "provider", "model")}
 
 
 class EvaluationTestCase(BoardTestCase):
@@ -72,10 +72,10 @@ class EvaluationTestCase(BoardTestCase):
     def publish(self, board, *, request_id: str = "write-1", command_id: str = "cmd-1", **collections) -> dict:
         return self.publish_with(board, self.publication_params(board), command_id, **collections)
 
-    def seed_profiles(self, board, *profiles) -> dict:
+    def seed_buddies(self, board, *buddies) -> dict:
         self.seed_catalog(board)
-        selected = profiles or (PROFILE,)
-        return self.publish(board, profileSettings=[{"profileId": item["profileId"], "enabled": True} for item in selected])
+        selected = buddies or (BUDDY,)
+        return self.publish(board, buddySettings=[{"buddyId": item["buddyId"], "enabled": True} for item in selected])
 
 
     def refused_publish(self, board, code: str, *, request_id: str = "refused", command_id: str = "refused", **collections) -> BoardError:
@@ -89,12 +89,12 @@ class EvaluationPublishTests(EvaluationTestCase):
     def test_catalog_permissions_persist_through_user_publication(self):
         board = self.board()
         catalog_result = self.seed_catalog(board)
-        profile = next(item for item in catalog_result["profiles"] if item["profileId"] == PROFILE_ID)
+        buddy = next(item for item in catalog_result["buddies"] if item["buddyId"] == BUDDY_ID)
         expected_permissions = {"permission:read", "permission:write", "permission:full"}
-        self.assertEqual({cap for cap in profile["capabilities"] if cap.startswith("permission:")},
+        self.assertEqual({cap for cap in buddy["capabilities"] if cap.startswith("permission:")},
                          expected_permissions)
-        self.publish(board, profileSettings=[{"profileId": PROFILE_ID, "enabled": True}])
-        published = next(item for item in self.snapshot(board)["profiles"] if item["profileId"] == PROFILE_ID)
+        self.publish(board, buddySettings=[{"buddyId": BUDDY_ID, "enabled": True}])
+        published = next(item for item in self.snapshot(board)["buddies"] if item["buddyId"] == BUDDY_ID)
         self.assertEqual({cap for cap in published["capabilities"] if cap.startswith("permission:")},
                          expected_permissions)
 
@@ -102,9 +102,9 @@ class EvaluationPublishTests(EvaluationTestCase):
         board = self.board()
         snapshot = self.snapshot(board)
         self.assertNotIn("tableRevision", snapshot)
-        self.assertEqual(snapshot["configuration"]["routerProfileIds"], [])
+        self.assertEqual(snapshot["configuration"]["routerBuddyIds"], [])
         self.assertEqual(snapshot["configuration"]["routingBudget"], "standard")
-        self.assertEqual(snapshot["profiles"], [])
+        self.assertEqual(snapshot["buddies"], [])
         self.assertEqual(snapshot["preferences"], [])
         self.assertEqual(snapshot["modelServiceNotes"], [])
         self.assertEqual(snapshot["decisions"], [])
@@ -112,50 +112,50 @@ class EvaluationPublishTests(EvaluationTestCase):
         # fresh settings remain empty until the user chooses each slot.
         self.assertIsInstance(snapshot["capabilities"]["selection"], bool)
         self.assertEqual(snapshot["configuration"]["defaultRoutingMode"], "fast")
-        self.assertEqual(snapshot["configuration"]["routerProfileIds"], [])
+        self.assertEqual(snapshot["configuration"]["routerBuddyIds"], [])
         self.assertIn("runs", snapshot["tasks"])
 
     def test_user_patches_preserve_omitted_fields(self):
         board = self.board()
         self.seed_catalog(board)
         first = self.publish(board, command_id="c1",
-                             profileSettings=[{"profileId": PROFILE_ID, "enabled": True}],
-                             preferenceChanges=[{"profileId": PROFILE_ID, "mode": "prefer", "reason": "cheap and fast"}],
-                             modelServiceNoteChanges=[{**model_service_key(PROFILE), "text": "human context"}])
+                             buddySettings=[{"buddyId": BUDDY_ID, "enabled": True}],
+                             preferenceChanges=[{"buddyId": BUDDY_ID, "mode": "prefer", "reason": "cheap and fast"}],
+                             modelServiceNoteChanges=[{**model_service_key(BUDDY), "text": "human context"}])
         self.assertTrue(first["published"])
-        self.publish(board, command_id="c2", profileSettings=[])
+        self.publish(board, command_id="c2", buddySettings=[])
         snapshot = self.snapshot(board)
-        self.assertTrue(next(item for item in snapshot["profiles"] if item["profileId"] == PROFILE_ID)["enabled"])
+        self.assertTrue(next(item for item in snapshot["buddies"] if item["buddyId"] == BUDDY_ID)["enabled"])
         self.assertEqual(snapshot["preferences"][0]["reason"], "cheap and fast")
         self.assertEqual(snapshot["modelServiceNotes"][0]["text"], "human context")
 
     def test_program_fields_are_rejected(self):
         board = self.board()
-        self.seed_profiles(board)
+        self.seed_buddies(board)
         self.refused_publish(board, "INVALID_ARGUMENT",
-                             profileSettings=[{"profileId": PROFILE_ID, "enabled": True, "available": True}])
+                             buddySettings=[{"buddyId": BUDDY_ID, "enabled": True, "available": True}])
 
     def test_two_setting_drafts_last_write_wins_and_command_replays(self):
         board = self.board()
         self.seed_catalog(board)
         params = self.publication_params(board)
-        first = self.publish_with(board, params, "first-tab", modelServiceNoteChanges=[{**model_service_key(PROFILE), "text": "first"}])
+        first = self.publish_with(board, params, "first-tab", modelServiceNoteChanges=[{**model_service_key(BUDDY), "text": "first"}])
         second = self.publish_with(board, params, "second-tab",
-                                   modelServiceNoteChanges=[{**model_service_key(PROFILE), "text": "second"}])
+                                   modelServiceNoteChanges=[{**model_service_key(BUDDY), "text": "second"}])
         snapshot = self.snapshot(board)
         self.assertTrue(first["published"] and second["published"])
-        self.assertFalse(next(p for p in snapshot["profiles"] if p["profileId"] == PROFILE_ID)["enabled"])
+        self.assertFalse(next(p for p in snapshot["buddies"] if p["buddyId"] == BUDDY_ID)["enabled"])
         self.assertEqual(snapshot["modelServiceNotes"][0]["text"], "second")
-        self.assertTrue(self.publish_with(board, params, "first-tab", modelServiceNoteChanges=[{**model_service_key(PROFILE), "text": "first"}])["duplicate"])
+        self.assertTrue(self.publish_with(board, params, "first-tab", modelServiceNoteChanges=[{**model_service_key(BUDDY), "text": "first"}])["duplicate"])
         self.assertEqual(self.snapshot(board)["modelServiceNotes"][0]["text"], "second")
 
-    def test_profile_execution_identity_is_program_owned(self):
+    def test_buddy_execution_identity_is_program_owned(self):
         board = self.board()
-        self.seed_profiles(board)
-        original = next(item for item in self.snapshot(board)["profiles"] if item["profileId"] == PROFILE_ID)
+        self.seed_buddies(board)
+        original = next(item for item in self.snapshot(board)["buddies"] if item["buddyId"] == BUDDY_ID)
         self.refused_publish(board, "INVALID_ARGUMENT", request_id="w2", command_id="c2",
-                             profiles=[{**PROFILE, "model": "deepseek-v4-pro"}])
-        current = next(item for item in self.snapshot(board)["profiles"] if item["profileId"] == PROFILE_ID)
+                             buddies=[{**BUDDY, "model": "deepseek-v4-pro"}])
+        current = next(item for item in self.snapshot(board)["buddies"] if item["buddyId"] == BUDDY_ID)
         self.assertEqual(current["model"], original["model"])
         self.assertEqual(current["source"], original["source"])
 
@@ -163,53 +163,53 @@ class EvaluationPublishTests(EvaluationTestCase):
         from protocol.fixtures import mock_readonly
         mock_readonly.install(self)
         board = self.board()
-        self.seed_profiles(board, PROFILE, SECOND_PROFILE)
+        self.seed_buddies(board, BUDDY, SECOND_BUDDY)
         self.refused_publish(board, "NOT_FOUND", request_id="w2", command_id="c2",
-                             preferenceChanges=[{"profileId": "dsh:nope:nope:off", "mode": "prefer", "reason": "unknown"}])
+                             preferenceChanges=[{"buddyId": "dsh:nope:nope:off", "mode": "prefer", "reason": "unknown"}])
         self.publish(board, request_id="w3", command_id="c3",
-                     preferenceChanges=[{"profileId": SECOND_PROFILE_ID, "mode": "pin", "reason": "user pin"}],
-                     configuration={"routerProfileIds": [SECOND_PROFILE_ID]})
+                     preferenceChanges=[{"buddyId": SECOND_BUDDY_ID, "mode": "pin", "reason": "user pin"}],
+                     configuration={"routerBuddyIds": [SECOND_BUDDY_ID]})
         self.publish(board, request_id="w4", command_id="c4",
-                     profileSettings=[{"profileId": SECOND_PROFILE_ID, "enabled": False}],
-                     modelServiceNoteChanges=[{**model_service_key(PROFILE), "text": "other edit"}])
+                     buddySettings=[{"buddyId": SECOND_BUDDY_ID, "enabled": False}],
+                     modelServiceNoteChanges=[{**model_service_key(BUDDY), "text": "other edit"}])
         snapshot = self.snapshot(board)
         self.assertEqual(snapshot["preferences"][0]["mode"], "pin")
-        self.assertEqual(snapshot["configuration"]["routerProfileIds"], [SECOND_PROFILE_ID])
+        self.assertEqual(snapshot["configuration"]["routerBuddyIds"], [SECOND_BUDDY_ID])
         self.assertEqual(snapshot["modelServiceNotes"][0]["text"], "other edit")
 
-    def test_configuration_carries_router_profile_and_budget_without_maintenance(self):
+    def test_configuration_carries_router_buddy_and_budget_without_maintenance(self):
         from protocol.fixtures import mock_readonly
         mock_readonly.install(self)
         board = self.board()
-        self.seed_profiles(board)
+        self.seed_buddies(board)
         self.publish(board, request_id="w2", command_id="c2",
-                     configuration={"routerProfileIds": [PROFILE_ID]})
-        self.assertEqual(self.snapshot(board)["configuration"]["routerProfileIds"], [PROFILE_ID])
+                     configuration={"routerBuddyIds": [BUDDY_ID]})
+        self.assertEqual(self.snapshot(board)["configuration"]["routerBuddyIds"], [BUDDY_ID])
         self.assertEqual(self.snapshot(board)["configuration"]["routingBudget"], "standard")
         self.refused_publish(board, "INVALID_ARGUMENT", request_id="w3", command_id="c3",
-                             configuration={"routerProfileIds": [PROFILE_ID], "autoMaintain": True})
+                             configuration={"routerBuddyIds": [BUDDY_ID], "autoMaintain": True})
         self.refused_publish(board, "NOT_FOUND", request_id="w4", command_id="c4",
-                             configuration={"routerProfileIds": ["dsh:nope:nope:off"]})
-        self.assertEqual(self.snapshot(board)["configuration"]["routerProfileIds"], [PROFILE_ID])
+                             configuration={"routerBuddyIds": ["dsh:nope:nope:off"]})
+        self.assertEqual(self.snapshot(board)["configuration"]["routerBuddyIds"], [BUDDY_ID])
 
     def test_availability_is_refreshed_by_catalog_and_new_enable_requires_it(self):
         board = self.board()
         self.refused_publish(board, "NOT_FOUND", request_id="w1", command_id="c1",
-                             profileSettings=[{"profileId": PROFILE_ID, "enabled": True}])
+                             buddySettings=[{"buddyId": BUDDY_ID, "enabled": True}])
         self.seed_catalog(board)
-        self.assertTrue(next(item for item in self.snapshot(board)["profiles"] if item["profileId"] == PROFILE_ID)["available"])
+        self.assertTrue(next(item for item in self.snapshot(board)["buddies"] if item["buddyId"] == BUDDY_ID)["available"])
         self.refused_publish(board, "NOT_FOUND", request_id="w2", command_id="c2",
-                             profileSettings=[{"profileId": "dsh:nope:nope:off", "enabled": True}])
+                             buddySettings=[{"buddyId": "dsh:nope:nope:off", "enabled": True}])
 
-    def test_pin_requires_an_available_enabled_profile(self):
+    def test_pin_requires_an_available_enabled_buddy(self):
         board = self.board()
         self.seed_catalog(board)
-        self.refused_publish(board, "CONFIGURATION_UNAVAILABLE", request_id="w1", command_id="c1",
-                             preferenceChanges=[{"profileId": PROFILE_ID, "mode": "pin", "reason": "wanted"}])
+        self.refused_publish(board, "BUDDY_UNAVAILABLE", request_id="w1", command_id="c1",
+                             preferenceChanges=[{"buddyId": BUDDY_ID, "mode": "pin", "reason": "wanted"}])
         self.publish(board, request_id="w2", command_id="c2",
-                     profileSettings=[{"profileId": PROFILE_ID, "enabled": True}])
+                     buddySettings=[{"buddyId": BUDDY_ID, "enabled": True}])
         self.publish(board, request_id="w3", command_id="c3",
-                     preferenceChanges=[{"profileId": PROFILE_ID, "mode": "pin", "reason": "wanted"}])
+                     preferenceChanges=[{"buddyId": BUDDY_ID, "mode": "pin", "reason": "wanted"}])
         self.assertEqual(self.snapshot(board)["preferences"][0]["mode"], "pin")
 
     def test_omitted_collections_and_explicit_null_are_distinct_commands(self):
@@ -217,7 +217,7 @@ class EvaluationPublishTests(EvaluationTestCase):
         self.seed_catalog(board)
         grant = self.publication_params(board)
         base = {"commandId": "same-command", **grant}
-        payload = {**base, "modelServiceNoteChanges": [{**model_service_key(PROFILE), "text": "first"}]}
+        payload = {**base, "modelServiceNoteChanges": [{**model_service_key(BUDDY), "text": "first"}]}
         board.console_call("user_policy_publish", payload)
         self.assertTrue(board.console_call("user_policy_publish", payload)["duplicate"])
         self.assert_code("CONFLICT", board.console_call, "user_policy_publish",
@@ -235,65 +235,65 @@ class EvaluationPublishTests(EvaluationTestCase):
         self.seed_catalog(board)
         grant = self.publication_params(board)
         self.publish_with(board, grant, "c1",
-                          modelServiceNoteChanges=[{**model_service_key(PROFILE), "text": "visible opinion"}])
+                          modelServiceNoteChanges=[{**model_service_key(BUDDY), "text": "visible opinion"}])
         raw = json.dumps(self.snapshot(board))
         self.assertNotIn(board.service.token, raw)
         self.assertNotIn("token_verifier", raw)
 
-    def test_buddy_preferences_are_saved_per_profile_and_can_be_cleared(self):
+    def test_buddy_preferences_are_saved_per_buddy_and_can_be_cleared(self):
         board = self.board()
         self.seed_catalog(board)
-        other_effort = next(item for item in self.snapshot(board)["profiles"]
-                            if item["model"] == PROFILE["model"] and item["profileId"] != PROFILE_ID)
+        other_effort = next(item for item in self.snapshot(board)["buddies"]
+                            if item["model"] == BUDDY["model"] and item["buddyId"] != BUDDY_ID)
         published = self.publish(board, request_id="w1", command_id="c1",
-                                 preferenceChanges=[{"profileId": PROFILE_ID, "mode": "prefer",
+                                 preferenceChanges=[{"buddyId": BUDDY_ID, "mode": "prefer",
                                                      "reason": "cheap and fast"}])
         self.assertEqual(published["counts"]["preferenceChanges"], 1)
         snapshot = self.snapshot(board)
         self.assertEqual(snapshot["preferences"],
-                         [{"profileId": PROFILE_ID, "mode": "prefer", "reason": "cheap and fast"}])
-        self.assertNotIn(other_effort["profileId"],
-                         {entry["profileId"] for entry in snapshot["preferences"]})
+                         [{"buddyId": BUDDY_ID, "mode": "prefer", "reason": "cheap and fast"}])
+        self.assertNotIn(other_effort["buddyId"],
+                         {entry["buddyId"] for entry in snapshot["preferences"]})
         self.publish(board, request_id="w2", command_id="c2",
-                     preferenceChanges=[{"profileId": other_effort["profileId"], "mode": "prefer",
+                     preferenceChanges=[{"buddyId": other_effort["buddyId"], "mode": "prefer",
                                          "reason": "higher effort"},
-                                        {"profileId": PROFILE_ID, "mode": "exclude", "reason": "too costly"}])
-        other_preference = {"profileId": other_effort["profileId"], "mode": "prefer",
+                                        {"buddyId": BUDDY_ID, "mode": "exclude", "reason": "too costly"}])
+        other_preference = {"buddyId": other_effort["buddyId"], "mode": "prefer",
                             "reason": "higher effort"}
         self.assertEqual(self.snapshot(board)["preferences"],
                          sorted([other_preference,
-                                 {"profileId": PROFILE_ID, "mode": "exclude", "reason": "too costly"}],
-                                key=lambda entry: entry["profileId"]))
+                                 {"buddyId": BUDDY_ID, "mode": "exclude", "reason": "too costly"}],
+                                key=lambda entry: entry["buddyId"]))
         self.publish(board, request_id="w3", command_id="c3",
-                     preferenceChanges=[{"profileId": PROFILE_ID, "mode": None}])
+                     preferenceChanges=[{"buddyId": BUDDY_ID, "mode": None}])
         self.assertEqual(self.snapshot(board)["preferences"], [other_preference])
 
     def test_retired_preference_shapes_are_rejected_without_changes(self):
         board = self.board()
         self.seed_catalog(board)
         self.refused_publish(board, "INVALID_ARGUMENT", request_id="w1", command_id="c1",
-                             familyPreferenceChanges=[{**model_service_key(PROFILE), "mode": "prefer"}])
+                             familyPreferenceChanges=[{**model_service_key(BUDDY), "mode": "prefer"}])
         self.refused_publish(board, "INVALID_ARGUMENT", request_id="w2", command_id="c2",
-                             preferenceChanges=[{"profileId": PROFILE_ID, "mode": "none"}])
+                             preferenceChanges=[{"buddyId": BUDDY_ID, "mode": "none"}])
         self.assertEqual(self.snapshot(board)["preferences"], [])
 
     def test_model_service_notes_write_update_and_clear(self):
         board = self.board()
         self.seed_catalog(board)
         first = self.publish(board, request_id="w1", command_id="c1",
-                             modelServiceNoteChanges=[{**model_service_key(PROFILE), "text": "first note"}])
+                             modelServiceNoteChanges=[{**model_service_key(BUDDY), "text": "first note"}])
         self.assertEqual(first["counts"]["modelServiceNoteChanges"], 1)
         note = self.snapshot(board)["modelServiceNotes"][0]
         self.assertEqual((note["adapter"], note["provider"], note["model"]),
-                         (PROFILE["adapter"], PROFILE["provider"], PROFILE["model"]))
+                         (BUDDY["adapter"], BUDDY["provider"], BUDDY["model"]))
         self.assertEqual(note["text"], "first note")
         self.assertTrue(note["updatedAt"])
         self.publish(board, request_id="w2", command_id="c2",
-                     modelServiceNoteChanges=[{**model_service_key(PROFILE), "text": "second note"}])
+                     modelServiceNoteChanges=[{**model_service_key(BUDDY), "text": "second note"}])
         updated = self.snapshot(board)["modelServiceNotes"][0]
         self.assertEqual(updated["text"], "second note")
         self.publish(board, request_id="w3", command_id="c3",
-                     modelServiceNoteChanges=[{**model_service_key(PROFILE), "text": ""}])
+                     modelServiceNoteChanges=[{**model_service_key(BUDDY), "text": ""}])
         self.assertEqual(self.snapshot(board)["modelServiceNotes"], [])
 
 
@@ -306,18 +306,18 @@ class CatalogRefreshTests(EvaluationTestCase):
         self.assertEqual(refreshed["catalog"]["source"], f"file:{self.directory / 'model-catalog.json'}")
         self.assertEqual(refreshed["catalog"]["harnessVersion"], "test-harness-1")
         self.assertEqual(refreshed["catalog"]["providers"][0]["efforts"], ["off", "low", "high", "max"])
-        proposals = refreshed["profiles"]
+        proposals = refreshed["buddies"]
         self.assertTrue(proposals)
-        self.assertTrue(all(item["enabled"] is False for item in proposals), "discovered profiles start disabled")
+        self.assertTrue(all(item["enabled"] is False for item in proposals), "discovered buddies start disabled")
         self.assertTrue(all(item["available"] is True for item in proposals))
         self.assertIn("refreshed", refreshed["note"])
         self.assertNotIn("tableRevision", refreshed)
-        self.assertEqual(len(self.snapshot(board)["profiles"]), len(proposals))
-        profile_ids = [profile["profileId"] for profile in self.snapshot(board)["profiles"]]
-        # A new observation of identical native metadata keeps the same profiles.
+        self.assertEqual(len(self.snapshot(board)["buddies"]), len(proposals))
+        buddy_ids = [buddy["buddyId"] for buddy in self.snapshot(board)["buddies"]]
+        # A new observation of identical native metadata keeps the same buddies.
         repeated = board.call("model_catalog_refresh", {"requestId": "cat-2"})
         self.assertTrue(repeated["duplicate"])
-        self.assertEqual([profile["profileId"] for profile in self.snapshot(board)["profiles"]], profile_ids)
+        self.assertEqual([buddy["buddyId"] for buddy in self.snapshot(board)["buddies"]], buddy_ids)
 
         # A failed discovery keeps the previous recorded catalog and the table.
         from hey_my_buddy.blackboard.catalog import catalog
@@ -329,7 +329,7 @@ class CatalogRefreshTests(EvaluationTestCase):
             self.assert_code("CATALOG_UNAVAILABLE", board.call, "model_catalog_refresh", {"requestId": "cat-3"})
         finally:
             catalog.discover = original
-        self.assertEqual(len(self.snapshot(board)["profiles"]), len(proposals))
+        self.assertEqual(len(self.snapshot(board)["buddies"]), len(proposals))
 
 
 if __name__ == "__main__":
@@ -342,8 +342,8 @@ class ConsoleCoreTests(BoardTestCase):
     def test_core_carries_the_state_keys_and_snapshot_wraps_them(self):
         board = self.board()
         core = board.evaluation.console_core()
-        for key in ("configuration", "configurationError", "profiles",
-                    "modelServiceConcurrency", "unavailableProfileCount", "preferences", "modelServiceNotes",
+        for key in ("configuration", "configurationError", "buddies",
+                    "modelServiceConcurrency", "unavailableBuddyCount", "preferences", "modelServiceNotes",
                     "decisions"):
             self.assertIn(key, core)
         snapshot = board.evaluation.snapshot({})

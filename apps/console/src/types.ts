@@ -115,17 +115,17 @@ export type QuotaRoutingRecord = {
 
 /**
  * The board's model-level catalog state (ADR-027 §2/§6), published on every
- * profile view. `pending` marks a model absent from a confirmed reading: it
+ * buddy view. `pending` marks a model absent from a confirmed reading: it
  * stays usable until a later reading confirms the absence. The console only
  * renders this state; the board owns every judgment about it.
  */
 export type CatalogStatus = "available" | "pending" | "unavailable";
 
-export type Profile = {
+export type Buddy = {
   billing?: BillingFact;
   quotaExhausted?: boolean;
   quotaRetry?: QuotaRetryWindow;
-  profileId: string;
+  buddyId: string;
   label: string;
   adapter: string;
   provider: string;
@@ -148,7 +148,7 @@ export type Profile = {
 };
 /** A user's preference for one buddy; an absent row means no preference. */
 export type PreferenceMode = "prefer" | "pin" | "exclude";
-export type Preference = { profileId: string; mode: PreferenceMode; reason: string };
+export type Preference = { buddyId: string; mode: PreferenceMode; reason: string };
 /** The model service's human note. */
 export type ModelServiceNote = ModelService & {
   text: string;
@@ -160,7 +160,7 @@ export type Decision = {
   requestId?: string;
   status: string;
   task: string;
-  profileId: string | null;
+  buddyId: string | null;
   reason: string;
   evidence?: { kind: "annotation" | "preference" | "file"; ref: string }[] | null;
   createdAt: string;
@@ -175,7 +175,7 @@ export type Delegation = {
   parentRunId: string | null;
   rootRunId: string | null;
   project: { id: string; path: string | null; label: string };
-  configuration: { adapter: string; provider: string; model: string; effort: string } | null;
+  buddy: { adapter: string; provider: string; model: string; effort: string } | null;
 };
 export type TaskPage = { runs: Task[]; total: number; nextCursor: string | null };
 export type TaskQuery = {
@@ -294,13 +294,13 @@ export type RoutingMode = "fast" | "review";
 export type RoutingBudget = "brief" | "standard" | "deep";
 export type RoutingBudgetLimits = { preset: RoutingBudget; timeoutSeconds: number; toolCalls: number; bytesRead: number };
 /**
- * The ordered Router list settings (ADR-021 §2). `routerProfileIds` is the
+ * The ordered Router list settings (ADR-021 §2). `routerBuddyIds` is the
  * user's order; the head is the preferred first choice and the tail follows it.
- * The retired single/dual slot fields (`routerProfileId`, `fastRouterProfileId`,
- * `reviewRouterProfileId`, `decisionProfileId`) are never valid keys again.
+ * The retired single/dual slot fields (`routerBuddyId`, `fastRouterBuddyId`,
+ * `reviewRouterBuddyId`, `decisionBuddyId`) are never valid keys again.
  */
 export type Configuration = {
-  routerProfileIds: string[];
+  routerBuddyIds: string[];
   routerRetryIntervalSeconds: number;
   defaultRoutingMode: RoutingMode;
   routingBudget: RoutingBudget;
@@ -316,7 +316,7 @@ export type RouterHealthIdentity = { adapter: string; provider: string; model: s
  * failure; input-changed and cancelled records are not no-answers at all.
  */
 export type RouterHealthEntry = {
-  profileId: string;
+  buddyId: string;
   index: number;
   identity: RouterHealthIdentity | null;
   eligible: boolean;
@@ -343,7 +343,7 @@ export type RoutingHealth = {
   available?: boolean;
   reasonCode?: string | null;
   /** The buddy currently holding the Router role, or null while none can serve. */
-  currentRouterProfileId?: string | null;
+  currentRouterBuddyId?: string | null;
   /** Per-buddy facts in the user's list order; absent data is unknown, not success. */
   routers?: RouterHealthEntry[];
   /** Terminal selection records whose attribution or nature cannot be proven. */
@@ -397,18 +397,18 @@ export type Snapshot = {
   consoleAccess?: ConsoleAccess;
   configuration: Configuration | null;
   configurationError?: { code: string; message: string } | null;
-  profiles: Profile[];
+  buddies: Buddy[];
   /** Preferences for individual buddies. */
   preferences: Preference[];
   /** Model service notes. */
   modelServiceNotes: ModelServiceNote[];
   /**
-   * Every unavailable configuration in the table, including one the snapshot
+   * Every unavailable buddy in the table, including one the snapshot
    * still lists (the retained decision selector). The console subtracts the
    * unavailable rows it has already loaded and pages the rest through
-   * `model_profiles`; they are never silently dropped from the count.
+   * `buddy_list`; they are never silently dropped from the count.
    */
-  unavailableProfileCount?: number;
+  unavailableBuddyCount?: number;
   decisions: Decision[];
   /** Read-only bounded selection health; absent data is unknown, not success. */
   routingHealth?: RoutingHealth;
@@ -429,7 +429,7 @@ export type Snapshot = {
 /** Local draft of the fields a human may publish through `user_policy_publish`. */
 export type Draft = Pick<
   Snapshot,
-  "profiles" | "preferences" | "modelServiceNotes" | "configuration"
+  "buddies" | "preferences" | "modelServiceNotes" | "configuration"
 > & {
   /**
    * User limit settings keyed by the exact model service tuple. Occupancy (`active`)
@@ -441,9 +441,9 @@ export type Draft = Pick<
 export type ConsoleView = Omit<Snapshot, "modelServiceConcurrency"> & {
   modelServiceConcurrency: ModelServiceConcurrencySetting[];
 };
-/** One page of retained profile identities, including unavailable history. */
-export type ProfilePage = {
-  profiles: Profile[];
+/** One page of retained buddy identities, including unavailable history. */
+export type BuddyPage = {
+  buddies: Buddy[];
   preferences: Preference[];
   modelServiceNotes?: ModelServiceNote[];
   /** Concurrent-task entries for the model services this page represents. */

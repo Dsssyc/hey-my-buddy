@@ -1,69 +1,69 @@
-import type { Draft, Profile } from "./types";
+import type { Draft, Buddy } from "./types";
 import {
   routerFieldChanged,
   preferenceChanges,
-  profileSettings,
+  buddySettings,
 } from "./draft";
 import { concurrencyLimit, modelServiceKey, retryIntervalSeconds } from "./console-data";
-import { profileName, profileTitle } from "./profile-display";
+import { buddyName, buddyTitle } from "./buddy-name";
 
 /** The two capabilities have distinct authority and cannot stand in for each other. */
-export function hasFastRoutingCapability(profile: Profile | undefined): boolean {
-  return !!profile && (profile.capabilities ?? []).some(entry => entry.trim().toLowerCase() === "routing:fast");
+export function hasFastRoutingCapability(buddy: Buddy | undefined): boolean {
+  return !!buddy && (buddy.capabilities ?? []).some(entry => entry.trim().toLowerCase() === "routing:fast");
 }
 
-export function hasDecisionCapability(profile: Profile | undefined): boolean {
-  if (!profile) return false;
-  return (profile.capabilities ?? []).some(
+export function hasDecisionCapability(buddy: Buddy | undefined): boolean {
+  if (!buddy) return false;
+  return (buddy.capabilities ?? []).some(
     (entry) => entry.trim().toLowerCase() === "decision",
   );
 }
 
 /** Enabled, currently available and actually able to compute a selection. */
-export function isDecisionCandidate(profile: Profile | undefined): boolean {
-  return !!profile && profile.enabled && profile.available && hasDecisionCapability(profile);
+export function isDecisionCandidate(buddy: Buddy | undefined): boolean {
+  return !!buddy && buddy.enabled && buddy.available && hasDecisionCapability(buddy);
 }
 
-export function decisionCandidates(profiles: Profile[]): Profile[] {
+export function decisionCandidates(buddies: Buddy[]): Buddy[] {
   // Deterministic, locale-independent order: harness, then the stable identity.
-  return profiles
+  return buddies
     .filter(isDecisionCandidate)
-    .sort((a, b) => a.adapter.localeCompare(b.adapter) || a.profileId.localeCompare(b.profileId));
+    .sort((a, b) => a.adapter.localeCompare(b.adapter) || a.buddyId.localeCompare(b.buddyId));
 }
 
-export function isFastRouterCandidate(profile: Profile | undefined): boolean {
-  return !!profile && profile.enabled && profile.available && hasFastRoutingCapability(profile);
+export function isFastRouterCandidate(buddy: Buddy | undefined): boolean {
+  return !!buddy && buddy.enabled && buddy.available && hasFastRoutingCapability(buddy);
 }
 
-export function fastRouterCandidates(profiles: Profile[]): Profile[] {
-  return profiles.filter(isFastRouterCandidate)
-    .sort((a, b) => a.adapter.localeCompare(b.adapter) || a.profileId.localeCompare(b.profileId));
+export function fastRouterCandidates(buddies: Buddy[]): Buddy[] {
+  return buddies.filter(isFastRouterCandidate)
+    .sort((a, b) => a.adapter.localeCompare(b.adapter) || a.buddyId.localeCompare(b.buddyId));
 }
 
 /**
  * The published directory capability for a harness that can actually execute a
- * delegated helper in a workspace. `catalog.proposed_profiles` records exactly
+ * delegated helper in a workspace. `catalog.proposed_buddies` records exactly
  * `execution:<adapter>` for every executable adapter, so a newly registered
  * adapter (such as Codex) is admitted without a console-side harness list, and
  * a decision-only or mismatched row is never offered as an executor.
  */
-export function hasExecutionCapability(profile: Profile | undefined): boolean {
-  if (!profile) return false;
-  const token = `execution:${profile.adapter.trim().toLowerCase()}`;
-  return (profile.capabilities ?? []).some(
+export function hasExecutionCapability(buddy: Buddy | undefined): boolean {
+  if (!buddy) return false;
+  const token = `execution:${buddy.adapter.trim().toLowerCase()}`;
+  return (buddy.capabilities ?? []).some(
     (entry) => entry.trim().toLowerCase() === token,
   );
 }
 
 /** Enabled, currently available and able to execute a delegated helper task. */
-export function isExecutionCandidate(profile: Profile | undefined): boolean {
-  return !!profile && profile.enabled && profile.available && hasExecutionCapability(profile);
+export function isExecutionCandidate(buddy: Buddy | undefined): boolean {
+  return !!buddy && buddy.enabled && buddy.available && hasExecutionCapability(buddy);
 }
 
-export function executionCandidates(profiles: Profile[]): Profile[] {
-  return profiles
+export function executionCandidates(buddies: Buddy[]): Buddy[] {
+  return buddies
     .filter(isExecutionCandidate)
-    .sort((a, b) => a.adapter.localeCompare(b.adapter) || a.profileId.localeCompare(b.profileId));
+    .sort((a, b) => a.adapter.localeCompare(b.adapter) || a.buddyId.localeCompare(b.buddyId));
 }
 
 /**
@@ -71,43 +71,43 @@ export function executionCandidates(profiles: Profile[]): Profile[] {
  * can. The capability list is checked first because it is the one reason the
  * user cannot fix here.
  */
-export function routerRefusal(profile: Profile, mode: "fast" | "review" = "review"): string | null {
-  if (mode === "fast" && !hasFastRoutingCapability(profile)) return "所属 Harness 尚不支持无工具路由调用";
-  if (mode === "review" && !hasDecisionCapability(profile)) return "所属 Harness 尚不具备本地只读路由资格";
-  if (!profile.available) return "该推理强度当前不可用";
-  if (!profile.enabled) return "该推理强度未启用：先打开它的开关";
+export function routerRefusal(buddy: Buddy, mode: "fast" | "review" = "review"): string | null {
+  if (mode === "fast" && !hasFastRoutingCapability(buddy)) return "所属 Harness 尚不支持无工具路由调用";
+  if (mode === "review" && !hasDecisionCapability(buddy)) return "所属 Harness 尚不具备本地只读路由资格";
+  if (!buddy.available) return "该推理强度当前不可用";
+  if (!buddy.enabled) return "该推理强度未启用：先打开它的开关";
   return null;
 }
 
 /** One actionable message about a user-owned setting. */
 export type PolicyIssue = {
-  profileId: string;
+  buddyId: string;
   label: string;
   message: string;
-  /** Model service key for a model service issue; profile-level issues leave it unset. */
+  /** Model service key for a model service issue; buddy-level issues leave it unset. */
   modelService?: string;
   /** The Router itself needs attention; the page's routing status shows it. */
   router?: boolean;
 };
 
-function labelOf(profile: Profile | undefined, profileId: string): string {
-  return profile ? profileTitle(profile) : profileId;
+function labelOf(buddy: Buddy | undefined, buddyId: string): string {
+  return buddy ? buddyTitle(buddy) : buddyId;
 }
 
-function availabilityReason(profile: Profile | undefined): string {
-  if (!profile) return "已不在当前目录中";
-  return profile.unavailableReason?.trim()
-    ? `当前不可用（${profile.unavailableReason.trim()}）`
+function availabilityReason(buddy: Buddy | undefined): string {
+  if (!buddy) return "已不在当前目录中";
+  return buddy.unavailableReason?.trim()
+    ? `当前不可用（${buddy.unavailableReason.trim()}）`
     : "当前不在目录中";
 }
 
 /**
  * Why a pin is not legal right now, matching the board: a new pin requires an
- * available *and* enabled configuration. Null means it is legal.
+ * available *and* enabled buddy. Null means it is legal.
  */
-function pinRefusal(profile: Profile | undefined): string | null {
-  if (!profile || !profile.available) return availabilityReason(profile);
-  if (!profile.enabled) return "处于停用状态";
+function pinRefusal(buddy: Buddy | undefined): string | null {
+  if (!buddy || !buddy.available) return availabilityReason(buddy);
+  if (!buddy.enabled) return "处于停用状态";
   return null;
 }
 
@@ -120,30 +120,30 @@ function pinRefusal(profile: Profile | undefined): string | null {
  * has to be an integer in 1–32.
  */
 export function blockingIssues(baseline: Draft, draft: Draft): PolicyIssue[] {
-  const profiles = new Map(draft.profiles.map((p) => [p.profileId, p]));
+  const buddies = new Map(draft.buddies.map((p) => [p.buddyId, p]));
   const baselinePreferenceModes = new Map(
-    baseline.preferences.map((p) => [p.profileId, p.mode]),
+    baseline.preferences.map((p) => [p.buddyId, p.mode]),
   );
   const issues: PolicyIssue[] = [];
   for (const entry of draft.modelServiceConcurrency) {
     if (concurrencyLimit(entry.limit) !== null) continue;
-    const member = draft.profiles.find((profile) => modelServiceKey(profile) === modelServiceKey(entry));
-    const subject = member ? profileName(member) : `${entry.adapter}/${entry.provider}/${entry.model}`;
+    const member = draft.buddies.find((buddy) => modelServiceKey(buddy) === modelServiceKey(entry));
+    const subject = member ? buddyName(member) : `${entry.adapter}/${entry.provider}/${entry.model}`;
     issues.push({
-      profileId: member?.profileId ?? `${entry.adapter}/${entry.provider}/${entry.model}`,
+      buddyId: member?.buddyId ?? `${entry.adapter}/${entry.provider}/${entry.model}`,
       modelService: modelServiceKey(entry),
       label: subject,
       message: `${subject} 并发上限须为 1–32 的整数；请修改。`,
     });
   }
-  for (const setting of profileSettings(baseline, draft)) {
+  for (const setting of buddySettings(baseline, draft)) {
     if (!setting.enabled) continue;
-    const profile = profiles.get(setting.profileId);
-    if (!profile?.available) {
+    const buddy = buddies.get(setting.buddyId);
+    if (!buddy?.available) {
       issues.push({
-        profileId: setting.profileId,
-        label: labelOf(profile, setting.profileId),
-        message: `${labelOf(profile, setting.profileId)} ${availabilityReason(profile)}；无法启用，请撤销修改。`,
+        buddyId: setting.buddyId,
+        label: labelOf(buddy, setting.buddyId),
+        message: `${labelOf(buddy, setting.buddyId)} ${availabilityReason(buddy)}；无法启用，请撤销修改。`,
       });
     }
   }
@@ -151,14 +151,14 @@ export function blockingIssues(baseline: Draft, draft: Draft): PolicyIssue[] {
     if (change.mode !== "pin") continue;
     // The board requires current legality only when the mode transitions into
     // pin; a reason-only edit of an existing pin stays a legal patch.
-    if (baselinePreferenceModes.get(change.profileId) === "pin") continue;
-    const profile = profiles.get(change.profileId);
-    const refusal = pinRefusal(profile);
+    if (baselinePreferenceModes.get(change.buddyId) === "pin") continue;
+    const buddy = buddies.get(change.buddyId);
+    const refusal = pinRefusal(buddy);
     if (refusal) {
       issues.push({
-        profileId: change.profileId,
-        label: labelOf(profile, change.profileId),
-        message: `${labelOf(profile, change.profileId)} ${refusal}；无法固定，请选择可用推理强度。`,
+        buddyId: change.buddyId,
+        label: labelOf(buddy, change.buddyId),
+        message: `${labelOf(buddy, change.buddyId)} ${refusal}；无法固定，请选择可用推理强度。`,
       });
     }
   }
@@ -166,36 +166,36 @@ export function blockingIssues(baseline: Draft, draft: Draft): PolicyIssue[] {
   // blocks saving so a save can never publish an earlier valid prefix.
   if (draft.configuration && retryIntervalSeconds(draft.configuration.routerRetryIntervalSeconds) === null) {
     issues.push({
-      profileId: "", label: "重试间隔",
+      buddyId: "", label: "重试间隔",
       message: "重试间隔须为 1–2147483647 的整数秒；请修改。",
     });
   }
-  if (draft.configuration && routerFieldChanged(baseline, draft, "routerProfileIds")) {
+  if (draft.configuration && routerFieldChanged(baseline, draft, "routerBuddyIds")) {
     // Settings name published complete identities. Runtime eligibility and
     // temporary availability belong to the shared current Router resolver.
-    for (const target of draft.configuration.routerProfileIds) {
-      const profile = profiles.get(target);
-      const refusal = !profile ? "已不在当前目录中"
-        : [profile.adapter, profile.provider, profile.model, profile.effort].some(value => !value?.trim())
+    for (const target of draft.configuration.routerBuddyIds) {
+      const buddy = buddies.get(target);
+      const refusal = !buddy ? "已不在当前目录中"
+        : [buddy.adapter, buddy.provider, buddy.model, buddy.effort].some(value => !value?.trim())
           ? "buddy 身份不完整" : null;
-      if (refusal) issues.push({ profileId: target, label: labelOf(profile, target),
-        message: `${labelOf(profile, target)} ${refusal}；无法保存 Router 列表。` });
+      if (refusal) issues.push({ buddyId: target, label: labelOf(buddy, target),
+        message: `${labelOf(buddy, target)} ${refusal}；无法保存 Router 列表。` });
     }
   }
   return issues;
 }
 
 /** The Router is checked again by the service before each routing run. */
-export function routerAttention(source: Pick<Draft, "configuration" | "profiles">, mode = source.configuration?.defaultRoutingMode): PolicyIssue | null {
-  const id = source.configuration?.routerProfileIds[0] ?? null;
+export function routerAttention(source: Pick<Draft, "configuration" | "buddies">, mode = source.configuration?.defaultRoutingMode): PolicyIssue | null {
+  const id = source.configuration?.routerBuddyIds[0] ?? null;
   if (!id || !mode) return null;
-  const profile = source.profiles.find(p => p.profileId === id);
-  const refusal = profile ? routerRefusal(profile, mode) : "已不在目录中";
-  return refusal ? { profileId: id, router: true, label: labelOf(profile, id),
-    message: `当前 Router ${labelOf(profile, id)} ${refusal}：请在合格的推理强度菜单中选择“设为 Router”，或更改模式。` } : null;
+  const buddy = source.buddies.find(p => p.buddyId === id);
+  const refusal = buddy ? routerRefusal(buddy, mode) : "已不在目录中";
+  return refusal ? { buddyId: id, router: true, label: labelOf(buddy, id),
+    message: `当前 Router ${labelOf(buddy, id)} ${refusal}：请在合格的推理强度菜单中选择“设为 Router”，或更改模式。` } : null;
 }
 
-export function decisionAttention(source: Pick<Draft, "configuration" | "profiles">): PolicyIssue | null {
+export function decisionAttention(source: Pick<Draft, "configuration" | "buddies">): PolicyIssue | null {
   return routerAttention(source);
 }
 
@@ -205,21 +205,21 @@ export function decisionAttention(source: Pick<Draft, "configuration" | "profile
  * preference change or a note still commits while these remain. A pin is checked per buddy.
  */
 export function attentionIssues(
-  source: Pick<Draft, "configuration" | "profiles" | "preferences">,
+  source: Pick<Draft, "configuration" | "buddies" | "preferences">,
 ): PolicyIssue[] {
-  const profiles = new Map(source.profiles.map((p) => [p.profileId, p]));
+  const buddies = new Map(source.buddies.map((p) => [p.buddyId, p]));
   const issues: PolicyIssue[] = [];
   const attention = routerAttention(source);
   if (attention) issues.push(attention);
   for (const preference of source.preferences) {
     if (preference.mode !== "pin") continue;
-    const profile = profiles.get(preference.profileId);
-    const refusal = pinRefusal(profile);
+    const buddy = buddies.get(preference.buddyId);
+    const refusal = pinRefusal(buddy);
     if (refusal) {
       issues.push({
-        profileId: preference.profileId,
-        label: labelOf(profile, preference.profileId),
-        message: `固定选择指向 ${labelOf(profile, preference.profileId)}：${refusal}；请启用或改为“不设”。`,
+        buddyId: preference.buddyId,
+        label: labelOf(buddy, preference.buddyId),
+        message: `固定选择指向 ${labelOf(buddy, preference.buddyId)}：${refusal}；请启用或改为“不设”。`,
       });
     }
   }

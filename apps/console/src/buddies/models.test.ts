@@ -1,7 +1,7 @@
 import i18n from "i18next";
 import { describe, expect, it } from "vitest";
 import { historyView } from "../draft";
-import type { ConsoleView, HarnessHealth, Profile, Snapshot } from "../types";
+import type { ConsoleView, HarnessHealth, Buddy, Snapshot } from "../types";
 import { harnessBlocks, harnessStateText, listedModels, modelIdentity, reasonTexts } from "./models";
 
 /**
@@ -12,30 +12,30 @@ import { harnessBlocks, harnessStateText, listedModels, modelIdentity, reasonTex
 
 const t = i18n.getFixedT(null, "buddies");
 
-function profile(adapter: string, provider: string, model: string, effort: string, extra: Partial<Profile> = {}): Profile {
+function buddy(adapter: string, provider: string, model: string, effort: string, extra: Partial<Buddy> = {}): Buddy {
   return {
-    profileId: `${adapter}:${provider}:${model}:${effort}`, label: `${model.toUpperCase()} · ${effort}`, adapter, provider, model, effort,
+    buddyId: `${adapter}:${provider}:${model}:${effort}`, label: `${model.toUpperCase()} · ${effort}`, adapter, provider, model, effort,
     available: true, enabled: false, capabilities: [], contextWindow: null, description: "", source: "catalog:fixture", ...extra,
   };
 }
 
 /** A working harness with a used and an unused model, an unused harness, and one that is not logged in. */
-function profiles(): Profile[] {
+function buddies(): Buddy[] {
   return [
-    profile("dsh", "deepseek-official", "flash", "off", { enabled: true }),
-    profile("dsh", "deepseek-official", "flash", "max"),
-    profile("dsh", "second-provider", "pro", "high"),
-    profile("codex", "openai", "sol", "high"),
-    profile("claude", "anthropic", "opus", "high", { enabled: true, available: false, unavailableReason: "HARNESS_UNHEALTHY" }),
-    profile("claude", "anthropic", "opus", "max", { available: false, unavailableReason: "HARNESS_UNHEALTHY" }),
+    buddy("dsh", "deepseek-official", "flash", "off", { enabled: true }),
+    buddy("dsh", "deepseek-official", "flash", "max"),
+    buddy("dsh", "second-provider", "pro", "high"),
+    buddy("codex", "openai", "sol", "high"),
+    buddy("claude", "anthropic", "opus", "high", { enabled: true, available: false, unavailableReason: "HARNESS_UNHEALTHY" }),
+    buddy("claude", "anthropic", "opus", "max", { available: false, unavailableReason: "HARNESS_UNHEALTHY" }),
   ];
 }
 
-function snapshot(list: Profile[] = profiles()): Snapshot {
+function snapshot(list: Buddy[] = buddies()): Snapshot {
   return {
     csrfToken: "csrf", eventCursor: 0, consoleSession: { id: "s", canWrite: true, reason: null },
 
-    configuration: null, profiles: list, preferences: [],  modelServiceNotes: [], decisions: [],
+    configuration: null, buddies: list, preferences: [],  modelServiceNotes: [], decisions: [],
     modelServiceConcurrency: [{ adapter: "dsh", provider: "deepseek-official", model: "flash", limit: 3, active: 1 }],
     tasks: { pendingCount: 0 }, capabilities: {},
   };
@@ -51,14 +51,14 @@ function blocks(options: { recorded?: Snapshot; data?: ConsoleView; folded?: Rec
   const recorded = options.recorded ?? snapshot();
   const data = options.data ?? historyView(recorded, null);
   return harnessBlocks({
-    listed: listedModels(data.profiles, { query: "", enabledOnly: false, showUnavailable: true }),
+    listed: listedModels(data.buddies, { query: "", enabledOnly: false, showUnavailable: true }),
     data, recorded, harnesses: options.health ?? harnesses, folded: options.folded ?? {}, fresh: new Set(options.fresh ?? []),
   });
 }
 
 describe("which models are listed", () => {
   const names = (filters: Partial<Parameters<typeof listedModels>[1]>) =>
-    listedModels(profiles(), { query: "", enabledOnly: false, showUnavailable: false, ...filters }).map(modelIdentity);
+    listedModels(buddies(), { query: "", enabledOnly: false, showUnavailable: false, ...filters }).map(modelIdentity);
 
   it("hides a model none of whose buddies is available until the filter asks for it", () => {
     expect(names({})).toEqual(["codex / openai / sol", "dsh / deepseek-official / flash", "dsh / second-provider / pro"]);
@@ -117,10 +117,10 @@ describe("the table's blocks", () => {
     const recorded = snapshot();
     const data = { ...historyView(recorded, null), modelServiceConcurrency: [{ adapter: "dsh", provider: "deepseek-official", model: "flash", limit: 7 }] };
     const dsh = blocks({ recorded, data }).find(block => block.adapter === "dsh")!;
-    const flash = dsh.models.find(model => model.modelService.profiles[0].model === "flash")!;
+    const flash = dsh.models.find(model => model.modelService.buddies[0].model === "flash")!;
     expect([flash.limit, flash.occupancy]).toEqual([7, 1]);
     // A model the board has not reported keeps the default limit and an unknown occupancy, never 0.
-    const pro = dsh.models.find(model => model.modelService.profiles[0].model === "pro")!;
+    const pro = dsh.models.find(model => model.modelService.buddies[0].model === "pro")!;
     expect([pro.limit, pro.occupancy]).toEqual([2, null]);
   });
 
@@ -129,18 +129,18 @@ describe("the table's blocks", () => {
     const view = historyView(recorded, null);
     const data: ConsoleView = {
       ...view,
-      profiles: view.profiles.map(entry => entry.profileId === "dsh:deepseek-official:flash:max" ? { ...entry, enabled: true } : entry),
-      preferences: [{ profileId: "codex:openai:sol:high", mode: "exclude", reason: "" }],
+      buddies: view.buddies.map(entry => entry.buddyId === "dsh:deepseek-official:flash:max" ? { ...entry, enabled: true } : entry),
+      preferences: [{ buddyId: "codex:openai:sol:high", mode: "exclude", reason: "" }],
     };
     const chips = blocks({ recorded, data }).flatMap(block => block.models).flatMap(model => model.chips);
-    expect(chips.filter(chip => chip.unsaved).map(chip => chip.profile.profileId))
+    expect(chips.filter(chip => chip.unsaved).map(chip => chip.buddy.buddyId))
       .toEqual(["codex:openai:sol:high", "dsh:deepseek-official:flash:max"]);
-    expect(chips.find(chip => chip.profile.profileId === "codex:openai:sol:high")!.preference).toBe("exclude");
-    expect(chips.find(chip => chip.profile.profileId === "dsh:deepseek-official:flash:off")!.preference).toBeNull();
+    expect(chips.find(chip => chip.buddy.buddyId === "codex:openai:sol:high")!.preference).toBe("exclude");
+    expect(chips.find(chip => chip.buddy.buddyId === "dsh:deepseek-official:flash:off")!.preference).toBeNull();
   });
 
   it("marks a model as new when this page discovered it", () => {
-    const recorded = snapshot(profiles());
+    const recorded = snapshot(buddies());
     const fresh = JSON.stringify(["dsh", "second-provider", "pro"]);
     const marked = blocks({ recorded, fresh: [fresh] }).flatMap(block => block.models).filter(model => model.fresh).map(model => modelIdentity(model.modelService));
     expect(marked).toEqual(["dsh / second-provider / pro"]);

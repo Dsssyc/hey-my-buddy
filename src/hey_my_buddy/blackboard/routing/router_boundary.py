@@ -4,7 +4,7 @@ import hashlib
 import json
 
 from ...errors import BoardError
-from ...protocol.schemas import CONFIGURATION_FIELDS
+from ...protocol.schemas import BUDDY_FIELDS
 
 KINDS = ("router-unavailable", "routing-changed", "router-abstained")
 TABLE_CHANGED_REASON = "评价表在请求冻结之后已变化；请由 Host 显式 reroute"
@@ -44,11 +44,11 @@ def build_boundary(*, kind: str, code: str | None, reason: str, candidates: list
         raise BoardError("INVALID_ARGUMENT", "Router boundary helper_policy must be 'keep' or null")
     identities = []
     for candidate in candidates:
-        if (not isinstance(candidate, dict) or not isinstance(candidate.get("profileId"), str)
+        if (not isinstance(candidate, dict) or not isinstance(candidate.get("buddyId"), str)
                 or any(not isinstance(candidate.get(key), str) or not candidate[key].strip()
-                       for key in CONFIGURATION_FIELDS)):
+                       for key in BUDDY_FIELDS)):
             raise BoardError("INVALID_ARGUMENT", "A frozen Router candidate needs a complete buddy identity")
-        identities.append({key: candidate[key] for key in CONFIGURATION_FIELDS})
+        identities.append({key: candidate[key] for key in BUDDY_FIELDS})
 
     blocked = ("独立 selection-request 没有关联业务委派，不能生成 continue 命令" if run_id is None else
                "Router 或拥有的执行尚未确认停止" if not shutdown_confirmed else
@@ -65,7 +65,7 @@ def build_boundary(*, kind: str, code: str | None, reason: str, candidates: list
         # command ledger. Hash the complete template binding to keep long
         # decision IDs within continue's 128-character commandId bound.
         binding = {"decisionId": decision_id, "operation": operation, "base": base,
-                   "index": index, "configuration": identity}
+                   "index": index, "buddy": identity}
         digest = hashlib.sha256(json.dumps(binding, sort_keys=True, separators=(",", ":"),
                                           ensure_ascii=False).encode("utf-8")).hexdigest()
         return f"router-{operation}-{digest}"
@@ -73,9 +73,9 @@ def build_boundary(*, kind: str, code: str | None, reason: str, candidates: list
     choices = []
     if blocked is None:
         for index, (candidate, identity) in enumerate(zip(candidates, identities)):
-            choices.append({"profileId": candidate["profileId"], "method": "continue", "params": {
+            choices.append({"buddyId": candidate["buddyId"], "method": "continue", "params": {
                 **base, "commandId": command_id("continue", index=index, identity=identity),
-                "configuration": identity, "reason": "Host 根据路由边界的冻结候选指定 buddy 继续"}})
+                "buddy": identity, "reason": "Host 根据路由边界的冻结候选指定 buddy 继续"}})
     continue_reason = blocked or ("没有冻结的合法候选" if not choices else None)
     reroute_reason = blocked or ("尚无可知的 Router 恢复时间；可先读取 health 再决定" if retry_at is None else None)
     reroute_params = None if reroute_reason else {

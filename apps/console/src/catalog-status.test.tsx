@@ -6,7 +6,7 @@ import type { ConsoleApi } from "./api";
 import { VIEW_PREFERENCE_PREFIX } from "./view-preferences";
 import { formatDateTime } from "./i18n/format";
 import { effortCell, levelPreference, levelSwitch, listed, modelButton, modelRow, pane, selectModel } from "./buddies/page.testing";
-import type { Profile, ProfilePage, Snapshot } from "./types";
+import type { Buddy, BuddyPage, Snapshot } from "./types";
 
 const flashOff = "dsh:deepseek-official:deepseek-flash:off";
 const flashHigh = "dsh:deepseek-official:deepseek-flash:high";
@@ -28,45 +28,45 @@ const nameCell = (name: string) => modelRow(model(name));
  * One DSH catalog covering the ADR-027 §6 states: a pending model service whose
  * efforts record different first-absence times, a model service the board marks
  * catalog-available while harness health makes it unusable, a pre-ADR-027
- * fixture profile without the new fields, a pending model service that never recorded
+ * fixture buddy without the new fields, a pending model service that never recorded
  * a time, and a retired unavailable model service.
  */
-function catalog(): Profile[] {
+function catalog(): Buddy[] {
   const base = {
     adapter: "dsh", provider: "deepseek-official", capabilities: ["execution:dsh", "decision"],
     contextWindow: null, source: "catalog:fixture", description: "",
   };
   return [
-    { ...base, profileId: flashOff, model: "deepseek-flash", effort: "off", label: "deepseek-flash · off",
+    { ...base, buddyId: flashOff, model: "deepseek-flash", effort: "off", label: "deepseek-flash · off",
       available: true, enabled: true, catalogStatus: "pending" as const, pendingSince: earlyMissing },
-    { ...base, profileId: flashHigh, model: "deepseek-flash", effort: "high", label: "deepseek-flash · high",
+    { ...base, buddyId: flashHigh, model: "deepseek-flash", effort: "high", label: "deepseek-flash · high",
       available: true, enabled: false, catalogStatus: "pending" as const, pendingSince: lateMissing },
     // Catalog-available by the board, unusable by harness health: the two
     // facts must never merge into one state.
-    { ...base, profileId: plainMax, model: "plain-model", effort: "max", label: "plain-model · max",
+    { ...base, buddyId: plainMax, model: "plain-model", effort: "max", label: "plain-model · max",
       available: false, enabled: true, catalogStatus: "available" as const,
       unavailableReason: "HARNESS_UNHEALTHY" },
-    { ...base, profileId: legacyMax, model: "legacy-model", effort: "max", label: "legacy-model · max",
+    { ...base, buddyId: legacyMax, model: "legacy-model", effort: "max", label: "legacy-model · max",
       available: true, enabled: true },
-    { ...base, profileId: ghostLow, model: "ghost-model", effort: "low", label: "ghost-model · low",
+    { ...base, buddyId: ghostLow, model: "ghost-model", effort: "low", label: "ghost-model · low",
       available: true, enabled: false, catalogStatus: "pending" as const, pendingSince: null },
-    { ...base, profileId: retiredMax, model: "retired-model", effort: "max", label: "retired-model · max",
+    { ...base, buddyId: retiredMax, model: "retired-model", effort: "max", label: "retired-model · max",
       available: false, enabled: false, unavailableReason: "provider paused" },
-    { ...base, profileId: retiredLow, model: "retired-model", effort: "low", label: "retired-model · low",
+    { ...base, buddyId: retiredLow, model: "retired-model", effort: "low", label: "retired-model · low",
       available: false, enabled: false, unavailableReason: "provider paused" },
   ];
 }
 
 function fixture() {
-  const profiles = catalog();
-  const live = profiles.filter(p => p.available);
+  const buddies = catalog();
+  const live = buddies.filter(p => p.available);
   const state: Snapshot = {
     csrfToken: "csrf", eventCursor: 0, consoleSession: { id: "fixture-session", canWrite: true, reason: null },
 
-    configuration: { routerProfileIds: [flashOff], routerRetryIntervalSeconds: 600,
+    configuration: { routerBuddyIds: [flashOff], routerRetryIntervalSeconds: 600,
       defaultRoutingMode: "review" as const, routingBudget: "standard" },
-    profiles: live,
-    unavailableProfileCount: profiles.filter(p => !p.available).length,
+    buddies: live,
+    unavailableBuddyCount: buddies.filter(p => !p.available).length,
  modelServiceNotes: [], preferences: [],  decisions: [],
 
     modelServiceConcurrency: [],
@@ -77,14 +77,14 @@ function fixture() {
   const operations: string[] = [];
   const command = vi.fn(async (operation: string, params: Record<string, any>): Promise<unknown> => {
     operations.push(operation);
-    if (operation === "model_profiles") {
-      const visible = params.includeUnavailable === true ? profiles : live;
+    if (operation === "buddy_list") {
+      const visible = params.includeUnavailable === true ? buddies : live;
       const after = typeof params.after === "string" ? params.after : "";
       const limit = typeof params.limit === "number" ? params.limit : 100;
-      const slice = [...visible].sort((a, b) => a.profileId.localeCompare(b.profileId))
-        .filter(p => p.profileId > after).slice(0, limit);
-      const page: ProfilePage = {
-        profiles: slice, preferences: [],         modelServiceNotes: [], modelServiceConcurrency: [],
+      const slice = [...visible].sort((a, b) => a.buddyId.localeCompare(b.buddyId))
+        .filter(p => p.buddyId > after).slice(0, limit);
+      const page: BuddyPage = {
+        buddies: slice, preferences: [],         modelServiceNotes: [], modelServiceConcurrency: [],
         nextCursor: null,
       };
       return page;

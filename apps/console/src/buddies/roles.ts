@@ -1,5 +1,5 @@
 import { hasDecisionCapability, hasFastRoutingCapability, routerAttention } from "../policy";
-import type { Configuration, Draft, Profile, RouterHealthEntry, RouterHealthIdentity, RoutingHealth, RoutingMode } from "../types";
+import type { Configuration, Draft, Buddy, RouterHealthEntry, RouterHealthIdentity, RoutingHealth, RoutingMode } from "../types";
 
 /** The four parts of a buddy's identity: `harness / provider / model / effort`. */
 export function buddyQuad(identity: RouterHealthIdentity): string {
@@ -23,7 +23,7 @@ export function healthSummary(health: RoutingHealth | undefined): { warning: Hea
 
 /** The buddy that holds the Router role: the one the service names, the head of the list only while the snapshot carries no such fact. */
 export function currentRouterId(list: string[], health: RoutingHealth | undefined): string | null {
-  return health && "currentRouterProfileId" in health ? health.currentRouterProfileId ?? null : list[0] ?? null;
+  return health && "currentRouterBuddyId" in health ? health.currentRouterBuddyId ?? null : list[0] ?? null;
 }
 
 /** Where one buddy of the list stands: it holds the role, can take it, is skipped until a time, or cannot serve. */
@@ -33,9 +33,9 @@ export type RouterStatus =
   | { kind: "unavailable"; code: string | null };
 
 export type RouterLine = {
-  profileId: string;
+  buddyId: string;
   /** Absent once the catalogue no longer has the buddy. */
-  profile: Profile | undefined;
+  buddy: Buddy | undefined;
   /** Null where nothing is recorded: a buddy added to the draft, or a snapshot without health facts. */
   status: RouterStatus | null;
 };
@@ -45,16 +45,16 @@ export type RouterLine = {
  * published list: a buddy that is only in the draft has no health facts, so it
  * is never the current one.
  */
-export function routerLines(list: string[], recorded: string[], profiles: Profile[], health: RoutingHealth | undefined): RouterLine[] {
+export function routerLines(list: string[], recorded: string[], buddies: Buddy[], health: RoutingHealth | undefined): RouterLine[] {
   const current = currentRouterId(list, health);
-  return list.map(profileId => {
-    const entry = health?.routers?.find(candidate => candidate.profileId === profileId);
-    return { profileId, profile: profiles.find(profile => profile.profileId === profileId), status: statusOf(profileId, current, recorded, entry) };
+  return list.map(buddyId => {
+    const entry = health?.routers?.find(candidate => candidate.buddyId === buddyId);
+    return { buddyId, buddy: buddies.find(buddy => buddy.buddyId === buddyId), status: statusOf(buddyId, current, recorded, entry) };
   });
 }
 
-function statusOf(profileId: string, current: string | null, recorded: string[], entry: RouterHealthEntry | undefined): RouterStatus | null {
-  if (profileId === current && recorded.includes(profileId)) return { kind: "current" };
+function statusOf(buddyId: string, current: string | null, recorded: string[], entry: RouterHealthEntry | undefined): RouterStatus | null {
+  if (buddyId === current && recorded.includes(buddyId)) return { kind: "current" };
   if (!entry) return null;
   if (entry.inSkipWindow) return { kind: "retry", at: entry.retryAt ?? entry.skipUntil ?? null };
   if (!entry.eligible) return { kind: "unavailable", code: entry.code ?? null };
@@ -65,23 +65,23 @@ function statusOf(profileId: string, current: string | null, recorded: string[],
 export type RouterRefusal = "fast" | "review" | "unavailable" | "disabled";
 
 /** The capability comes first: it is the one reason the user cannot fix here. */
-export function routerRefusalOf(profile: Profile, mode: RoutingMode): RouterRefusal | null {
-  if (mode === "fast" && !hasFastRoutingCapability(profile)) return "fast";
-  if (mode === "review" && !hasDecisionCapability(profile)) return "review";
-  if (!profile.available) return "unavailable";
-  if (!profile.enabled) return "disabled";
+export function routerRefusalOf(buddy: Buddy, mode: RoutingMode): RouterRefusal | null {
+  if (mode === "fast" && !hasFastRoutingCapability(buddy)) return "fast";
+  if (mode === "review" && !hasDecisionCapability(buddy)) return "review";
+  if (!buddy.available) return "unavailable";
+  if (!buddy.enabled) return "disabled";
   return null;
 }
 
 /** One buddy that the list does not have yet, with the reason it cannot be added in the current mode. */
-export type RouterCandidate = { profile: Profile; refusal: RouterRefusal | null };
+export type RouterCandidate = { buddy: Buddy; refusal: RouterRefusal | null };
 
 /** The buddies of the catalogue outside the list that match the search, those that can serve in `mode` first. */
-export function routerCandidates(profiles: Profile[], list: string[], mode: RoutingMode, query: string): RouterCandidate[] {
+export function routerCandidates(buddies: Buddy[], list: string[], mode: RoutingMode, query: string): RouterCandidate[] {
   const needle = query.trim().toLowerCase();
-  const candidates = profiles
-    .filter(profile => !list.includes(profile.profileId) && buddyQuad(profile).toLowerCase().includes(needle))
-    .map(profile => ({ profile, refusal: routerRefusalOf(profile, mode) }));
+  const candidates = buddies
+    .filter(buddy => !list.includes(buddy.buddyId) && buddyQuad(buddy).toLowerCase().includes(needle))
+    .map(buddy => ({ buddy, refusal: routerRefusalOf(buddy, mode) }));
   return [...candidates.filter(entry => !entry.refusal), ...candidates.filter(entry => entry.refusal)];
 }
 
@@ -91,22 +91,22 @@ export function withConfiguration(draft: Draft, change: Partial<Configuration>):
 }
 
 function withList(draft: Draft, change: (list: string[]) => string[]): Draft {
-  return draft.configuration ? withConfiguration(draft, { routerProfileIds: change(draft.configuration.routerProfileIds) }) : draft;
+  return draft.configuration ? withConfiguration(draft, { routerBuddyIds: change(draft.configuration.routerBuddyIds) }) : draft;
 }
 
 /** Adds a buddy at the end of the list; the others keep their order. */
-export function addRouter(draft: Draft, profileId: string): Draft {
-  return withList(draft, list => [...list, profileId]);
+export function addRouter(draft: Draft, buddyId: string): Draft {
+  return withList(draft, list => [...list, buddyId]);
 }
 
-export function removeRouter(draft: Draft, profileId: string): Draft {
-  return withList(draft, list => list.filter(entry => entry !== profileId));
+export function removeRouter(draft: Draft, buddyId: string): Draft {
+  return withList(draft, list => list.filter(entry => entry !== buddyId));
 }
 
 /** Moves a buddy one place up (-1) or down (1); at the end of the list it stays. */
-export function moveRouter(draft: Draft, profileId: string, by: -1 | 1): Draft {
+export function moveRouter(draft: Draft, buddyId: string, by: -1 | 1): Draft {
   return withList(draft, list => {
-    const from = list.indexOf(profileId), to = from + by;
+    const from = list.indexOf(buddyId), to = from + by;
     if (from < 0 || to < 0 || to >= list.length) return list;
     const moved = [...list];
     [moved[from], moved[to]] = [moved[to], moved[from]];
@@ -115,7 +115,7 @@ export function moveRouter(draft: Draft, profileId: string, by: -1 | 1): Draft {
 }
 
 /** What the list needs the user to know: nobody can serve now, the first buddy is refused in the mode, or routing is failing. */
-export type RouterNote = { kind: "nobody" } | { kind: "head"; profileId: string; refusal: RouterRefusal | null } | HealthWarning;
+export type RouterNote = { kind: "nobody" } | { kind: "head"; buddyId: string; refusal: RouterRefusal | null } | HealthWarning;
 
 /**
  * The one note the list carries, in the order of what matters: no buddy of a
@@ -123,13 +123,13 @@ export type RouterNote = { kind: "nobody" } | { kind: "head"; profileId: string;
  * mode, then the warning of the recorded window. `refusal` is null once the
  * buddy is no longer in the catalogue.
  */
-export function routerNote(source: Pick<Draft, "configuration" | "profiles">, health: RoutingHealth | undefined): RouterNote | null {
-  const list = source.configuration?.routerProfileIds ?? [];
+export function routerNote(source: Pick<Draft, "configuration" | "buddies">, health: RoutingHealth | undefined): RouterNote | null {
+  const list = source.configuration?.routerBuddyIds ?? [];
   if (list.length > 0 && currentRouterId(list, health) === null) return { kind: "nobody" };
   const head = routerAttention(source);
   if (head) {
-    const profile = source.profiles.find(candidate => candidate.profileId === head.profileId);
-    return { kind: "head", profileId: head.profileId, refusal: profile ? routerRefusalOf(profile, source.configuration!.defaultRoutingMode) : null };
+    const buddy = source.buddies.find(candidate => candidate.buddyId === head.buddyId);
+    return { kind: "head", buddyId: head.buddyId, refusal: buddy ? routerRefusalOf(buddy, source.configuration!.defaultRoutingMode) : null };
   }
   return healthSummary(health).warning;
 }

@@ -6,7 +6,7 @@ this module holds only the mechanical fragments that were identical in those
 bodies and are consumed by production: the cancel flag view of the seam's
 cancel callable, the one overall deadline rule, the observer-stop marker, the
 native-identity and package-shape droppers, the owned-group halt and the
-configuration spec dict. Nothing vendor-shaped lives here — no native method
+buddy spec dict. Nothing vendor-shaped lives here — no native method
 name, no error code, no catalog, no policy — and nothing that differs between
 harnesses is unified: a fragment with differing semantics stays in the
 harness that owns it, and no switch matrix is offered to force one shape.
@@ -32,7 +32,7 @@ from .base import ProcessHandle
 from .run_contract import NativeIdentity, RunRequest
 
 __all__ = [
-    "CancelFlag", "ObserverInterrupt", "configuration_spec", "execution_deadline",
+    "CancelFlag", "ObserverInterrupt", "buddy_spec", "execution_deadline",
     "halt_owned_group", "identity_or_none", "shape_guard", "utc_now",
 ]
 
@@ -52,11 +52,11 @@ def execution_deadline(timeout_seconds) -> float:
     return math.inf if timeout_seconds == 0 else time.monotonic() + timeout_seconds
 
 
-def configuration_spec(request: RunRequest) -> dict:
+def buddy_spec(request: RunRequest) -> dict:
     """The frozen request's provider/model/effort selection as the plain spec
     dict the native bindings and readbacks compare."""
-    return {"provider": request.configuration.provider, "model": request.configuration.model,
-            "effort": request.configuration.effort}
+    return {"provider": request.buddy.provider, "model": request.buddy.model,
+            "effort": request.buddy.effort}
 
 
 class CancelFlag:

@@ -46,12 +46,12 @@ describe("the Router list", () => {
     const f = fixture(snapshot({
       routers: [MEDIUM_ID, FLASH_ID, SOL_ID, HIGH_ID],
       routingHealth: health({
-        currentRouterProfileId: MEDIUM_ID,
+        currentRouterBuddyId: MEDIUM_ID,
         routers: [
-          { profileId: MEDIUM_ID, index: 0, identity: null, eligible: true },
-          { profileId: FLASH_ID, index: 1, identity: null, eligible: true },
-          { profileId: SOL_ID, index: 2, identity: null, eligible: false, code: "router-not-eligible" },
-          { profileId: HIGH_ID, index: 3, identity: null, eligible: false, code: "router-skip-window", inSkipWindow: true, retryAt: "2026-09-27T08:00:00.000Z" },
+          { buddyId: MEDIUM_ID, index: 0, identity: null, eligible: true },
+          { buddyId: FLASH_ID, index: 1, identity: null, eligible: true },
+          { buddyId: SOL_ID, index: 2, identity: null, eligible: false, code: "router-not-eligible" },
+          { buddyId: HIGH_ID, index: 3, identity: null, eligible: false, code: "router-skip-window", inSkipWindow: true, retryAt: "2026-09-27T08:00:00.000Z" },
         ],
       }),
     }));
@@ -78,9 +78,9 @@ describe("the Router list", () => {
   it("names the buddy the service says holds the role, not the head of the list", async () => {
     const f = fixture(snapshot({
       routers: [SOL_ID, MEDIUM_ID],
-      routingHealth: health({ currentRouterProfileId: MEDIUM_ID, routers: [
-        { profileId: SOL_ID, index: 0, identity: null, eligible: false, code: "router-not-eligible" },
-        { profileId: MEDIUM_ID, index: 1, identity: null, eligible: true },
+      routingHealth: health({ currentRouterBuddyId: MEDIUM_ID, routers: [
+        { buddyId: SOL_ID, index: 0, identity: null, eligible: false, code: "router-not-eligible" },
+        { buddyId: MEDIUM_ID, index: 1, identity: null, eligible: true },
       ] }),
     }));
     await openRoles(f);
@@ -126,7 +126,7 @@ describe("the Router list", () => {
   });
 
   it("sends no command when the view is entered", async () => {
-    const f = fixture(snapshot({ routers: [MEDIUM_ID], routingHealth: health({ currentRouterProfileId: MEDIUM_ID }) }));
+    const f = fixture(snapshot({ routers: [MEDIUM_ID], routingHealth: health({ currentRouterBuddyId: MEDIUM_ID }) }));
     await openRoles(f);
     expect(f.command).not.toHaveBeenCalled();
   });
@@ -134,7 +134,7 @@ describe("the Router list", () => {
   it("keeps a large decision history out of the roles page", async () => {
     const decision = (id: string) => ({
       decisionId: id, kind: "select" as const, status: "completed", task: "不应出现在配置页的长任务说明。".repeat(200),
-      profileId: MEDIUM_ID, selectedProfile: null, reason: "", evidence: [],
+      buddyId: MEDIUM_ID, selectedBuddy: null, reason: "", evidence: [],
       createdAt: "2026-09-24T08:00:00Z", runId: id, decisionModel: null, requested: {}, input: {}, inputSha256: id, output: {},
     });
     const f = fixture(snapshot({ routers: [MEDIUM_ID], extra: { decisions: Array.from({ length: 50 }, (_, i) => decision(`history-${i}`)) } as unknown as Partial<Snapshot> }));
@@ -152,43 +152,43 @@ describe("what the list says needs the user", () => {
   const note = () => within(section("列表")).queryByRole("status");
 
   it("says nothing while a buddy that can serve holds the role", async () => {
-    const f = fixture(snapshot({ routers: [MEDIUM_ID], routingHealth: health({ currentRouterProfileId: MEDIUM_ID }) }));
+    const f = fixture(snapshot({ routers: [MEDIUM_ID], routingHealth: health({ currentRouterBuddyId: MEDIUM_ID }) }));
     await openRoles(f);
     expect(note()).toBeNull();
   });
 
   it("says that no buddy of the list can serve when the service names none", async () => {
-    const f = fixture(snapshot({ routers: [MEDIUM_ID], routingHealth: health({ available: false, reasonCode: "router-skip-window", currentRouterProfileId: null }) }));
+    const f = fixture(snapshot({ routers: [MEDIUM_ID], routingHealth: health({ available: false, reasonCode: "router-skip-window", currentRouterBuddyId: null }) }));
     await openRoles(f);
     expect(note()!.textContent).toBe("列表里没有一个 buddy 现在能担任 Router。");
   });
 
   it("names the first buddy and why the default mode refuses it, in the words of the refusal", async () => {
-    const f = fixture(snapshot({ routers: [SOL_ID, MEDIUM_ID], routingHealth: health({ currentRouterProfileId: MEDIUM_ID }) }));
+    const f = fixture(snapshot({ routers: [SOL_ID, MEDIUM_ID], routingHealth: health({ currentRouterBuddyId: MEDIUM_ID }) }));
     await openRoles(f);
     expect(note()!.textContent).toBe(`列表第一项 ${SOL}：所属 Harness 尚不具备本地只读路由资格。`);
   });
 
   it("says that the first buddy is no longer in the catalogue", async () => {
-    const f = fixture(snapshot({ routers: ["gone:p:m:e"], routingHealth: health({ currentRouterProfileId: "gone:p:m:e" }) }));
+    const f = fixture(snapshot({ routers: ["gone:p:m:e"], routingHealth: health({ currentRouterBuddyId: "gone:p:m:e" }) }));
     await openRoles(f);
     expect(note()!.textContent).toBe("列表第一项 gone:p:m:e：已不在目录中。");
   });
 
   it("says that routing keeps failing, without calling it unavailable", async () => {
-    const f = fixture(snapshot({ routers: [MEDIUM_ID], routingHealth: health({ currentRouterProfileId: MEDIUM_ID, available: true, failureCount: 4, consecutiveFailures: 4 }) }));
+    const f = fixture(snapshot({ routers: [MEDIUM_ID], routingHealth: health({ currentRouterBuddyId: MEDIUM_ID, available: true, failureCount: 4, consecutiveFailures: 4 }) }));
     await openRoles(f);
     expect(note()!.textContent).toBe("路由连续失败 4 次。");
   });
 
   it("says that the Router is unavailable, with the recorded code", async () => {
-    const f = fixture(snapshot({ routers: [], routingHealth: health({ available: false, reasonCode: "ROUTER_UNAVAILABLE", currentRouterProfileId: null }) }));
+    const f = fixture(snapshot({ routers: [], routingHealth: health({ available: false, reasonCode: "ROUTER_UNAVAILABLE", currentRouterBuddyId: null }) }));
     await openRoles(f);
     expect(note()!.textContent).toBe("Router 当前不可用（ROUTER_UNAVAILABLE）。");
   });
 
   it("is worked out from the draft: the first buddy is named as soon as the default mode refuses it, and not once it does not", async () => {
-    const f = fixture(snapshot({ routers: [FLASH_ID], configuration: { defaultRoutingMode: "fast" }, routingHealth: health({ currentRouterProfileId: FLASH_ID }) }));
+    const f = fixture(snapshot({ routers: [FLASH_ID], configuration: { defaultRoutingMode: "fast" }, routingHealth: health({ currentRouterBuddyId: FLASH_ID }) }));
     const user = userEvent.setup();
     await openRoles(f);
     expect(note()).toBeNull();
@@ -213,18 +213,18 @@ describe("adding to the list", () => {
     await user.click(saveButton());
     await screen.findByText("设置已保存");
     expect(f.published).toHaveLength(1);
-    expect(patchOf(f.published[0])).toEqual({ configuration: { routerProfileIds: [MEDIUM_ID] } });
+    expect(patchOf(f.published[0])).toEqual({ configuration: { routerBuddyIds: [MEDIUM_ID] } });
   });
 
   it("adds after the buddies already in the list and leaves their order", async () => {
-    const f = fixture(snapshot({ routers: [FLASH_ID, MEDIUM_ID], routingHealth: health({ currentRouterProfileId: FLASH_ID }) }));
+    const f = fixture(snapshot({ routers: [FLASH_ID, MEDIUM_ID], routingHealth: health({ currentRouterBuddyId: FLASH_ID }) }));
     const user = userEvent.setup();
     await openRoles(f);
     await addRouter(user, PENDING);
     expect(listed()).toEqual([FLASH, MEDIUM, PENDING]);
     await user.click(saveButton());
     await screen.findByText("设置已保存");
-    expect(patchOf(f.published[0])).toEqual({ configuration: { routerProfileIds: [FLASH_ID, MEDIUM_ID, PENDING_ID] } });
+    expect(patchOf(f.published[0])).toEqual({ configuration: { routerBuddyIds: [FLASH_ID, MEDIUM_ID, PENDING_ID] } });
   });
 
   it("adds a model that waits to be confirmed as readily as any other that is enabled", async () => {
@@ -236,7 +236,7 @@ describe("adding to the list", () => {
     await user.click(choice(PENDING));
     await user.click(saveButton());
     await screen.findByText("设置已保存");
-    expect(patchOf(f.published[0])).toEqual({ configuration: { routerProfileIds: [PENDING_ID] } });
+    expect(patchOf(f.published[0])).toEqual({ configuration: { routerBuddyIds: [PENDING_ID] } });
   });
 
   it("lists the buddies outside the list, those that can serve in the default mode first and the rest with their reason", async () => {
@@ -352,7 +352,7 @@ describe("adding to the list", () => {
 });
 
 describe("moving and removing", () => {
-  const three = () => snapshot({ routers: [MEDIUM_ID, FLASH_ID, PENDING_ID], routingHealth: health({ currentRouterProfileId: MEDIUM_ID }) });
+  const three = () => snapshot({ routers: [MEDIUM_ID, FLASH_ID, PENDING_ID], routingHealth: health({ currentRouterBuddyId: MEDIUM_ID }) });
 
   it("leaves the first line's move up and the last line's move down out of use", async () => {
     const f = fixture(three());
@@ -379,7 +379,7 @@ describe("moving and removing", () => {
     expect(unsavedIn("列表")).toHaveLength(1);
     await user.click(saveButton());
     await screen.findByText("设置已保存");
-    expect(patchOf(f.published[0])).toEqual({ configuration: { routerProfileIds: [FLASH_ID, MEDIUM_ID, PENDING_ID] } });
+    expect(patchOf(f.published[0])).toEqual({ configuration: { routerBuddyIds: [FLASH_ID, MEDIUM_ID, PENDING_ID] } });
   });
 
   it("moves a buddy up and publishes the whole list in the new order", async () => {
@@ -390,7 +390,7 @@ describe("moving and removing", () => {
     expect(listed()).toEqual([MEDIUM, PENDING, FLASH]);
     await user.click(saveButton());
     await screen.findByText("设置已保存");
-    expect(patchOf(f.published[0])).toEqual({ configuration: { routerProfileIds: [MEDIUM_ID, PENDING_ID, FLASH_ID] } });
+    expect(patchOf(f.published[0])).toEqual({ configuration: { routerBuddyIds: [MEDIUM_ID, PENDING_ID, FLASH_ID] } });
   });
 
   it("numbers the lines again after a move, and with no health facts the one now first is written as current", async () => {
@@ -414,7 +414,7 @@ describe("moving and removing", () => {
     expect(queryAddDialog()).toBeNull();
     await user.click(saveButton());
     await screen.findByText("设置已保存");
-    expect(patchOf(f.published[0])).toEqual({ configuration: { routerProfileIds: [MEDIUM_ID, PENDING_ID] } });
+    expect(patchOf(f.published[0])).toEqual({ configuration: { routerBuddyIds: [MEDIUM_ID, PENDING_ID] } });
   });
 
   it("publishes an empty list when the last buddy is removed, and lets the draft go to bring it back", async () => {
@@ -431,7 +431,7 @@ describe("moving and removing", () => {
     await user.click(remove(MEDIUM));
     await user.click(saveButton());
     await screen.findByText("设置已保存");
-    expect(patchOf(f.published[0])).toEqual({ configuration: { routerProfileIds: [] } });
+    expect(patchOf(f.published[0])).toEqual({ configuration: { routerBuddyIds: [] } });
   });
 
   it("is no change at all once the list is back in the order it was published in", async () => {
@@ -449,9 +449,9 @@ describe("moving and removing", () => {
   it("keeps the standing of a buddy with the buddy when the list is reordered", async () => {
     const f = fixture(snapshot({
       routers: [MEDIUM_ID, SOL_ID],
-      routingHealth: health({ currentRouterProfileId: MEDIUM_ID, routers: [
-        { profileId: MEDIUM_ID, index: 0, identity: null, eligible: true },
-        { profileId: SOL_ID, index: 1, identity: null, eligible: false, code: "router-not-eligible" },
+      routingHealth: health({ currentRouterBuddyId: MEDIUM_ID, routers: [
+        { buddyId: MEDIUM_ID, index: 0, identity: null, eligible: true },
+        { buddyId: SOL_ID, index: 1, identity: null, eligible: false, code: "router-not-eligible" },
       ] }),
     }));
     const user = userEvent.setup();
@@ -497,7 +497,7 @@ describe("what leaves the roles view out of use", () => {
 
   it("does not show a retained draft of the list as usable once the settings need an upgrade", () => {
     const state = snapshot({ routers: [MEDIUM_ID], configuration: null, routingHealth: health() });
-    const retained = makeDraft(snapshot({ routers: [MEDIUM_ID], routingHealth: health({ currentRouterProfileId: MEDIUM_ID }) }));
+    const retained = makeDraft(snapshot({ routers: [MEDIUM_ID], routingHealth: health({ currentRouterBuddyId: MEDIUM_ID }) }));
     const update = vi.fn();
     const editor = { view: { ...state, ...retained }, draft: retained, editing: true, sessionWritable: true, update } as unknown as Editor;
     render(<TooltipProvider><RolesView snapshot={state} editor={editor} active location={{ view: "roles" }} onNavigate={vi.fn()} hidden={false} /></TooltipProvider>);
@@ -522,12 +522,12 @@ describe("what leaves the roles view out of use", () => {
     expect(f.published).toHaveLength(1);
     expect(f.published[0]).not.toHaveProperty("configuration");
     expect(f.published[0].preferenceChanges).toEqual([
-      { profileId: MEDIUM_ID, mode: "prefer", reason: "" },
+      { buddyId: MEDIUM_ID, mode: "prefer", reason: "" },
     ]);
   });
 
   it("leaves the controls out of use in a session that cannot write, with the reason, and still shows the records", async () => {
-    const f = fixture(snapshot({ routers: [MEDIUM_ID, FLASH_ID], canWrite: false, routingHealth: health({ currentRouterProfileId: MEDIUM_ID }) }));
+    const f = fixture(snapshot({ routers: [MEDIUM_ID, FLASH_ID], canWrite: false, routingHealth: health({ currentRouterBuddyId: MEDIUM_ID }) }));
     const user = userEvent.setup();
     await openRoles(f);
     const reason = "登录已失效，重新登录后可以修改";
@@ -678,7 +678,7 @@ describe("the settings of the role", () => {
     expect([unsavedIn("列表").length, unsavedIn("默认模式").length, unsavedIn("审阅预算").length]).toEqual([1, 0, 1]);
     await user.click(saveButton());
     await screen.findByText("设置已保存");
-    expect(patchOf(f.published[0])).toEqual({ configuration: { routerProfileIds: [], routingBudget: "deep" } });
+    expect(patchOf(f.published[0])).toEqual({ configuration: { routerBuddyIds: [], routingBudget: "deep" } });
   });
 });
 
@@ -747,11 +747,11 @@ describe("the records of routing", () => {
   it("gives each buddy of the list a line of its own records, with a dash where nothing is recorded", async () => {
     const f = fixture(snapshot({
       routers: [MEDIUM_ID, FLASH_ID],
-      routingHealth: health({ currentRouterProfileId: MEDIUM_ID, routers: [
-        { profileId: MEDIUM_ID, index: 0, eligible: true, identity: { adapter: "claude", provider: "anthropic", model: "claude-sonnet-5", effort: "medium" },
+      routingHealth: health({ currentRouterBuddyId: MEDIUM_ID, routers: [
+        { buddyId: MEDIUM_ID, index: 0, eligible: true, identity: { adapter: "claude", provider: "anthropic", model: "claude-sonnet-5", effort: "medium" },
           answeredCount: 7, noAnswerCount: 0, consecutiveNoAnswers: 0, lastAnsweredAt: "2026-09-27T07:00:00.000Z",
           lastError: { code: "router-out-of-bounds", at: "2026-09-26T06:30:00.000Z" } },
-        { profileId: FLASH_ID, index: 1, eligible: true, identity: null },
+        { buddyId: FLASH_ID, index: 1, eligible: true, identity: null },
       ] }),
     }));
     await openRoles(f);
@@ -794,25 +794,25 @@ describe("the records of routing", () => {
 
 describe("addresses of the view", () => {
   it("focuses the line of the buddy serving now from #buddies/roles/current", async () => {
-    const f = fixture(snapshot({ routers: [SOL_ID, MEDIUM_ID], routingHealth: health({ currentRouterProfileId: MEDIUM_ID }) }));
+    const f = fixture(snapshot({ routers: [SOL_ID, MEDIUM_ID], routingHealth: health({ currentRouterBuddyId: MEDIUM_ID }) }));
     await openRoles(f, "#buddies/roles/current");
     await waitFor(() => expect(document.activeElement).toBe(line(MEDIUM)));
   });
 
   it("focuses the list when nobody serves, from #buddies/roles/current", async () => {
-    const f = fixture(snapshot({ routers: [MEDIUM_ID], routingHealth: health({ available: false, currentRouterProfileId: null }) }));
+    const f = fixture(snapshot({ routers: [MEDIUM_ID], routingHealth: health({ available: false, currentRouterBuddyId: null }) }));
     await openRoles(f, "#buddies/roles/current");
     await waitFor(() => expect(document.activeElement).toBe(section("列表")));
   });
 
   it("focuses the records from #buddies/roles/health", async () => {
-    const f = fixture(snapshot({ routers: [MEDIUM_ID], routingHealth: health({ currentRouterProfileId: MEDIUM_ID }) }));
+    const f = fixture(snapshot({ routers: [MEDIUM_ID], routingHealth: health({ currentRouterBuddyId: MEDIUM_ID }) }));
     await openRoles(f, "#buddies/roles/health");
     await waitFor(() => expect(document.activeElement).toBe(section("记录")));
   });
 
   it("opens the view without moving focus from #buddies/roles", async () => {
-    const f = fixture(snapshot({ routers: [MEDIUM_ID], routingHealth: health({ currentRouterProfileId: MEDIUM_ID }) }));
+    const f = fixture(snapshot({ routers: [MEDIUM_ID], routingHealth: health({ currentRouterBuddyId: MEDIUM_ID }) }));
     await openRoles(f);
     expect(rolesRegion().contains(document.activeElement)).toBe(false);
   });

@@ -411,12 +411,12 @@ def _host_boundary(
         target_params = {"targetRunId": target} if target and target != run_id else {}
         for mode, choice in (
             ("reroute", {"reroute": True}),
-            ("configuration", {"configuration": {key: f"<{key}>" for key in ("adapter", "provider", "model", "effort")}}),
+            ("buddy", {"buddy": {key: f"<{key}>" for key in ("adapter", "provider", "model", "effort")}}),
         ):
             commands.append(_boundary_command("continue", {
                 "runId": run_id, "commandId": f"{run_id}:{mode}:{revision}",
                 "controlFile": "<saved-controlFile>", "expectedRevision": revision,
-                "input": "Host has checked the configuration; continue the authorized goal.",
+                "input": "Host has checked the buddy; continue the authorized goal.",
                 **target_params, **choice,
             }))
     else:

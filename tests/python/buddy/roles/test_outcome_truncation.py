@@ -144,7 +144,7 @@ class OutcomeTruncationTests(unittest.TestCase):
 
     def test_valid_help_request_survives_summary_truncation(self):
         request = {"summary": "help", "attempted": "tried", "neededWork": "decide",
-                   "expectedArtifacts": [], "acceptance": "decided", "suggestedProfileId": None}
+                   "expectedArtifacts": [], "acceptance": "decided", "suggestedBuddyId": None}
         for harness in ("codex", "claude"):
             for disposition in ("assistance", "attention"):
                 with self.subTest(harness=harness, disposition=disposition):

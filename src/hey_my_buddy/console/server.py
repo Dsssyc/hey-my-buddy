@@ -141,7 +141,7 @@ CONSOLE_OPERATIONS = (
     "selection_get",
     "selection_list",
     "model_catalog_refresh",
-    "model_profiles",
+    "buddy_list",
     "workflow_get",
     "macro_task_stop",
     "storage_plan",
@@ -462,7 +462,6 @@ class Console:
     # -- dispatch ------------------------------------------------------------
     def command(self, operation: str, params: dict, *, session: BrowserSession | None = None) -> dict:
         # Serialize authentication and mutation with console close/session expiry.
-        # Settings concurrency is governed by their existing revision checks.
         with self._lock:
             if session is not None:
                 self._authenticate(session)

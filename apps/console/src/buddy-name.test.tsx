@@ -4,22 +4,22 @@ import userEvent from "@testing-library/user-event";
 import { App } from "./App";
 import { RoutingPanel } from "./RoutingPanel";
 import type { ConsoleApi } from "./api";
-import type { Profile, Snapshot } from "./types";
+import type { Buddy, Snapshot } from "./types";
 import type { Workflow } from "./workflow-types";
 import { catalogue, chip, listed, modelButton, pane } from "./buddies/page.testing";
 import {
   effortText,
-  profileName,
-  profileTitle,
-  profileTitleOr,
-} from "./profile-display";
+  buddyName,
+  buddyTitle,
+  buddyTitleOr,
+} from "./buddy-name";
 
 const flashOffId = "dsh:deepseek-official:deepseek-flash:off";
 const proMaxId = "dsh:deepseek-official:deepseek-v4-pro:max";
 
 /** Same shape buddy/catalog.py proposes: the label already ends in " · <effort>". */
-const flashOff: Profile = {
-  profileId: flashOffId,
+const flashOff: Buddy = {
+  buddyId: flashOffId,
   label: "DeepSeek-V41-Flash · off",
   adapter: "dsh",
   provider: "deepseek-official",
@@ -32,9 +32,9 @@ const flashOff: Profile = {
   source: "catalog:fixture",
   description: "",
 };
-const proMax: Profile = {
+const proMax: Buddy = {
   ...flashOff,
-  profileId: proMaxId,
+  buddyId: proMaxId,
   label: "DeepSeek-V4-Pro · max",
   model: "deepseek-v4-pro",
   effort: "max",
@@ -46,9 +46,9 @@ function catalogSnapshot(): Snapshot {
     csrfToken: "fixture-csrf", eventCursor: 0,
     consoleSession: { id: "fixture-session", canWrite: true, reason: null },
 
-    configuration: { routerProfileIds: [proMaxId], routerRetryIntervalSeconds: 600, defaultRoutingMode: "review" as const, routingBudget: "standard",
+    configuration: { routerBuddyIds: [proMaxId], routerRetryIntervalSeconds: 600, defaultRoutingMode: "review" as const, routingBudget: "standard",
     },
-    profiles: [flashOff, proMax],
+    buddies: [flashOff, proMax],
     preferences: [],
 
     modelServiceNotes: [],
@@ -66,15 +66,15 @@ afterEach(() => {
   window.location.hash = "";
 });
 
-describe("profile display", () => {
+describe("buddy display", () => {
   it("drops the catalog's duplicate effort tail and shows the native off once", () => {
-    expect(profileName(flashOff)).toBe("DeepSeek-V41-Flash");
-    expect(profileTitle(flashOff)).toBe("DeepSeek-V41-Flash · off");
+    expect(buddyName(flashOff)).toBe("DeepSeek-V41-Flash");
+    expect(buddyTitle(flashOff)).toBe("DeepSeek-V41-Flash · off");
   });
 
   it("keeps a custom label and appends the effort exactly once", () => {
     expect(
-      profileTitle({
+      buddyTitle({
         label: "我的稳定配置",
         model: "deepseek-flash",
         effort: "off",
@@ -89,9 +89,9 @@ describe("profile display", () => {
     expect(effortText("high")).toBe("high");
     expect(effortText("low")).toBe("low");
     expect(effortText("turbo")).toBe("turbo");
-    expect(profileTitle(proMax)).toBe("DeepSeek-V4-Pro · max");
+    expect(buddyTitle(proMax)).toBe("DeepSeek-V4-Pro · max");
     expect(
-      profileTitle({
+      buddyTitle({
         label: "实验配置",
         model: "deepseek-flash",
         effort: "turbo",
@@ -101,14 +101,14 @@ describe("profile display", () => {
 
   it("keeps off inside a name and a tail that does not match the effort", () => {
     expect(
-      profileTitle({
+      buddyTitle({
         label: "half-off 实验",
         model: "deepseek-flash",
         effort: "off",
       }),
     ).toBe("half-off 实验 · off");
     expect(
-      profileTitle({
+      buddyTitle({
         label: "DeepSeek-V4-Pro · low",
         model: "deepseek-v4-pro",
         effort: "max",
@@ -118,20 +118,20 @@ describe("profile display", () => {
 
   it("falls back to the model id and never renders a dangling separator", () => {
     expect(
-      profileTitle({ label: "", model: "deepseek-flash", effort: "off" }),
+      buddyTitle({ label: "", model: "deepseek-flash", effort: "off" }),
     ).toBe("deepseek-flash · off");
     expect(
-      profileTitle({ label: "  ", model: "deepseek-flash", effort: "" }),
+      buddyTitle({ label: "  ", model: "deepseek-flash", effort: "" }),
     ).toBe("deepseek-flash");
     expect(effortText(null)).toBe("");
     expect(effortText(undefined)).toBe("");
   });
 
-  it("keeps the recorded id when the snapshot no longer holds the profile", () => {
-    expect(profileTitleOr(undefined, "dsh:removed:model:off")).toBe(
+  it("keeps the recorded id when the snapshot no longer holds the buddy", () => {
+    expect(buddyTitleOr(undefined, "dsh:removed:model:off")).toBe(
       "dsh:removed:model:off",
     );
-    expect(profileTitleOr(flashOff, "unused")).toBe(
+    expect(buddyTitleOr(flashOff, "unused")).toBe(
       "DeepSeek-V41-Flash · off",
     );
   });
@@ -165,7 +165,7 @@ describe("the catalogue's names", () => {
 });
 
 describe("read-only routing panel (0.15.1 U4)", () => {
-  it("shows the recorded configuration and routing facts without any retry form", () => {
+  it("shows the recorded buddy and routing facts without any retry form", () => {
     const workflow: Workflow = {
       governed: true,
       runId: "parent",
@@ -176,7 +176,7 @@ describe("read-only routing panel (0.15.1 U4)", () => {
       awaitingHost: true,
       waitReason: "routing",
       continuationCount: 0,
-      executionConfiguration: {
+      buddy: {
         adapter: "dsh",
         provider: "deepseek-official",
         model: "deepseek-flash",

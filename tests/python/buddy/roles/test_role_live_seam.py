@@ -25,7 +25,7 @@ from hey_my_buddy.buddy.harnesses.run_contract import (
     HARNESS_NAMES,
     PrivateStatePaths,
     RunBudget,
-    RunConfiguration,
+    RunBuddy,
     RunIdentity,
     RunRequest,
     decode_run_request,
@@ -45,7 +45,7 @@ def identity(*, invocation_id="invocation-live") -> RunIdentity:
 def request(*, harness="zcode", invocation_id="invocation-live") -> RunRequest:
     return RunRequest(
         identity=identity(invocation_id=invocation_id), harness=harness,
-        configuration=RunConfiguration(provider="fixture-zcode", model="fixture-glm", effort="low"),
+        buddy=RunBuddy(provider="fixture-zcode", model="fixture-glm", effort="low"),
         cwd="/private/tmp", private_state=PrivateStatePaths(invocation_root="/private/tmp/invocation",
                                                             native_root="/private/tmp/invocation/native"),
         input_text="the governed turn input", tool_scope="write",

@@ -21,7 +21,7 @@ from __future__ import annotations
 from ...protocol import schemas
 
 #: The internal adapter whose model tuple is resolved from the configured decision
-#: profile at claim time, frozen onto the attempt and quota-checked before the
+#: buddy at claim time, frozen onto the attempt and quota-checked before the
 #: selection reader is admitted.
 DECISION_ADAPTER = "decision"
 
@@ -60,11 +60,11 @@ def clamp_model_limit(value: int) -> int:
 def model_service(spec: dict) -> tuple[str, str, str] | None:
     """The model service a specification will consume, or ``None`` when it has none.
 
-    The model service is the exact adapter/provider/model tuple. Partial configurations and
+    The model service is the exact adapter/provider/model tuple. Partial buddies and
     model-less work (``command``/``external``, an unresolved governed run) return
     ``None``: they are admitted against the machine-wide ceiling only. A governed
     run's effective specification already merges the resolved execution
-    configuration over the immutable original request, so this is the tuple the
+    buddy over the immutable original request, so this is the tuple the
     attempt will actually run with.
     """
     if not isinstance(spec, dict):

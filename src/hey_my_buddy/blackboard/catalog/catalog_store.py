@@ -1,4 +1,4 @@
-"""Ordered native observations and retained profile identities."""
+"""Ordered native observations and retained buddy identities."""
 from __future__ import annotations
 
 import json
@@ -42,7 +42,7 @@ def current(db):
     return CatalogView.from_payload({'source': 'current-native-observations', 'providers': providers, 'discoveries': results})
 
 
-def _profile_content(row):
+def _buddy_content(row):
     # Reading provenance does not change a buddy's facts.
     return {key: row[key] for key in row.keys()
             if key != 'source'}
@@ -73,8 +73,8 @@ def record(evaluation, discovered, observation_id=None, *, health_generation=Non
         now = evaluation._now()
         duplicate = db.execute('SELECT 1 FROM evaluation_catalog WHERE discovery_id=?', (discovery_id,)).fetchone() is not None
         db.execute('INSERT OR IGNORE INTO evaluation_catalog(discovery_id,discovered_at,source,harness_version,provider_version,payload_json,created_at) VALUES(?,?,?,?,?,?,?)', (discovery_id, now, payload['source'], payload.get('harnessVersion'), payload.get('providerVersion'), canonical_json(payload), now))
-        before = {row['profile_id']: _profile_content(row)
-                  for row in db.execute('SELECT * FROM evaluation_profiles')}
+        before = {row['buddy_id']: _buddy_content(row)
+                  for row in db.execute('SELECT * FROM buddies')}
         pending_before = [tuple(row) for row in db.execute('SELECT * FROM catalog_pending ORDER BY adapter,provider,model')]
         applied, stale = [], []
         transitions = []
@@ -124,18 +124,18 @@ def record(evaluation, discovered, observation_id=None, *, health_generation=Non
             # request context. Derive certificates from this transaction's
             # authoritative health version, not a stale or absent caller bind.
             with bound([read_health(db, name)]):
-                entries = view.proposed_profiles()
-            seen = {p['profileId'] for p in entries}
+                entries = view.proposed_buddies()
+            seen = {p['buddyId'] for p in entries}
             model_services = {(p['provider'], p['model']) for p in entries}
             pending = _pending_map(db, name)
             # The model services the last adopted catalog still listed as available.
-            # Health 0s on profile rows are deliberately absent here: they are
+            # Health 0s on buddy rows are deliberately absent here: they are
             # not evidence that a native model disappeared (ADR-027 rule 2).
             retained_identities = identities_from_payload(
                 prior['payload_json'] if prior is not None else None, name)
             retained = {(provider, model) for provider, model, _effort in retained_identities}
-            existing = db.execute('SELECT profile_id,provider,model,effort,available,unavailable_reason'
-                                  ' FROM evaluation_profiles WHERE adapter=?', (name,)).fetchall()
+            existing = db.execute('SELECT buddy_id,provider,model,effort,available,unavailable_reason'
+                                  ' FROM buddies WHERE adapter=?', (name,)).fetchall()
             model_service_rows: dict[tuple[str, str], list] = {}
             for row in existing:
                 model_service_rows.setdefault((row['provider'], row['model']), []).append(row)
@@ -149,7 +149,7 @@ def record(evaluation, discovered, observation_id=None, *, health_generation=Non
                     # An archived board can retain a user's configured buddy
                     # without retaining any catalog history. Its first trusted
                     # reading grounds the absence directly in catalog evidence.
-                    db.execute('UPDATE evaluation_profiles SET available=0,unavailable_reason=?'
+                    db.execute('UPDATE buddies SET available=0,unavailable_reason=?'
                                ' WHERE adapter=? AND provider=? AND model=?',
                                (CONFIRMED_ABSENCE_REASON, name, *model_service))
                     continue
@@ -169,13 +169,13 @@ def record(evaluation, discovered, observation_id=None, *, health_generation=Non
                     for row in rows:
                         if (row['effort'] in efforts and not row['available'] and
                                 row['unavailable_reason'] not in (CONFIRMED_ABSENCE_REASON, RETIRED_EFFORT_REASON)):
-                            db.execute('UPDATE evaluation_profiles SET available=1,unavailable_reason=NULL'
-                                       ' WHERE profile_id=?', (row['profile_id'],))
+                            db.execute('UPDATE buddies SET available=1,unavailable_reason=NULL'
+                                       ' WHERE buddy_id=?', (row['buddy_id'],))
                     transitions.append({'kind': 'catalog.model_pending', 'adapter': name,
                                         'provider': model_service[0], 'model': model_service[1], 'pendingSince': now})
                 elif (first_absence is not None and moment is not None
                         and (moment - first_absence).total_seconds() >= CONFIRMATION_SECONDS):
-                    db.execute('UPDATE evaluation_profiles SET available=0,unavailable_reason=?'
+                    db.execute('UPDATE buddies SET available=0,unavailable_reason=?'
                                ' WHERE adapter=? AND provider=? AND model=? AND available=1',
                                (CONFIRMED_ABSENCE_REASON, name, *model_service))
                     pending.pop(key, None)
@@ -187,16 +187,16 @@ def record(evaluation, discovered, observation_id=None, *, health_generation=Non
             # Effort rows missing while their model remains are metadata
             # retirements; enabled remains the user's intent.
             for old in existing:
-                if old['profile_id'] not in seen and (old['provider'], old['model']) in model_services:
-                    db.execute('UPDATE evaluation_profiles SET available=0,unavailable_reason=? WHERE profile_id=?', (RETIRED_EFFORT_REASON, old['profile_id']))
+                if old['buddy_id'] not in seen and (old['provider'], old['model']) in model_services:
+                    db.execute('UPDATE buddies SET available=0,unavailable_reason=? WHERE buddy_id=?', (RETIRED_EFFORT_REASON, old['buddy_id']))
             for p in entries:
                 health = db.execute('SELECT status FROM harness_health WHERE adapter=?', (name,)).fetchone()
                 if health is not None and health['status'] != 'ready':
                     p = {**p, 'available': False, 'unavailableReason': 'HARNESS_UNHEALTHY'}
-                existing_row = db.execute('SELECT adapter,provider,model,effort FROM evaluation_profiles WHERE profile_id=?', (p['profileId'],)).fetchone()
+                existing_row = db.execute('SELECT adapter,provider,model,effort FROM buddies WHERE buddy_id=?', (p['buddyId'],)).fetchone()
                 if existing_row and tuple(existing_row) != tuple(p[key] for key in ('adapter', 'provider', 'model', 'effort')):
-                    raise BoardError('CATALOG_INVALID', 'A native profile ID collided with a different execution identity', profileId=p['profileId'])
-                db.execute('INSERT INTO evaluation_profiles(profile_id,label,adapter,provider,model,effort,available,enabled,capabilities_json,context_window,description,source,unavailable_reason) VALUES(?,?,?,?,?,?,?,0,?,?,?,?,?) ON CONFLICT(profile_id) DO UPDATE SET label=excluded.label,available=excluded.available,capabilities_json=excluded.capabilities_json,context_window=excluded.context_window,description=excluded.description,source=excluded.source,unavailable_reason=excluded.unavailable_reason', (p['profileId'], p['label'], p['adapter'], p['provider'], p['model'], p['effort'], int(p['available']), canonical_json(p['capabilities']), p['contextWindow'], p['description'], p['source'], p['unavailableReason']))
+                    raise BoardError('CATALOG_INVALID', 'A native buddy ID collided with a different execution identity', buddyId=p['buddyId'])
+                db.execute('INSERT INTO buddies(buddy_id,label,adapter,provider,model,effort,available,enabled,capabilities_json,context_window,description,source,unavailable_reason) VALUES(?,?,?,?,?,?,?,0,?,?,?,?,?) ON CONFLICT(buddy_id) DO UPDATE SET label=excluded.label,available=excluded.available,capabilities_json=excluded.capabilities_json,context_window=excluded.context_window,description=excluded.description,source=excluded.source,unavailable_reason=excluded.unavailable_reason', (p['buddyId'], p['label'], p['adapter'], p['provider'], p['model'], p['effort'], int(p['available']), canonical_json(p['capabilities']), p['contextWindow'], p['description'], p['source'], p['unavailableReason']))
             # ADR-027 rules 2 and 6: reappearance inside a trusted reading
             # recovers the model service, clears its first absence and says so once.
             for model_service in model_services:
@@ -205,7 +205,7 @@ def record(evaluation, discovered, observation_id=None, *, health_generation=Non
                     continue
                 window = pending.pop(key, None)
                 since = window['since'] if window is not None else None
-                usable = db.execute('SELECT 1 FROM evaluation_profiles WHERE adapter=? AND provider=? AND model=? AND available=1 LIMIT 1',
+                usable = db.execute('SELECT 1 FROM buddies WHERE adapter=? AND provider=? AND model=? AND available=1 LIMIT 1',
                                     (name, *model_service)).fetchone() is not None
                 if usable:
                     transition = {'kind': 'catalog.model_recovered', 'adapter': name,
@@ -215,17 +215,17 @@ def record(evaluation, discovered, observation_id=None, *, health_generation=Non
                     transitions.append(transition)
             _write_pending_map(db, name, pending)
         table_changed = False
-        for row in db.execute('SELECT * FROM evaluation_profiles').fetchall():
-            if before.get(row['profile_id']) != _profile_content(row):
+        for row in db.execute('SELECT * FROM buddies').fetchall():
+            if before.get(row['buddy_id']) != _buddy_content(row):
                 table_changed = True
         pending_after = [tuple(row) for row in db.execute('SELECT * FROM catalog_pending ORDER BY adapter,provider,model')]
         table_changed = table_changed or pending_before != pending_after
-        active_count = db.execute('SELECT COUNT(*) FROM evaluation_profiles WHERE available=1').fetchone()[0]
+        active_count = db.execute('SELECT COUNT(*) FROM buddies WHERE available=1').fetchone()[0]
         if active_count > 200:
-            raise BoardError('CATALOG_LIMIT', 'The current native profile set exceeds 200 configurations; no entries were silently dropped')
+            raise BoardError('CATALOG_LIMIT', 'The current native buddy set exceeds 200 buddies; no entries were silently dropped')
         if table_changed:
             db.execute('UPDATE evaluation_state SET updated_at=? WHERE id=1', (now,))
-        response = {'discoveryId': discovery_id, 'observationId': observation_id, 'duplicate': duplicate, 'catalog': {**payload, 'discoveryId': discovery_id, 'observationId': observation_id, 'discoveredAt': now}, 'profiles': CatalogView.from_payload(payload).proposed_profiles(), 'appliedAdapters': applied, 'staleAdapters': stale, 'note': 'Native catalog facts were refreshed; existing user settings were retained. No model call was made.'}
+        response = {'discoveryId': discovery_id, 'observationId': observation_id, 'duplicate': duplicate, 'catalog': {**payload, 'discoveryId': discovery_id, 'observationId': observation_id, 'discoveredAt': now}, 'buddies': CatalogView.from_payload(payload).proposed_buddies(), 'appliedAdapters': applied, 'staleAdapters': stale, 'note': 'Native catalog facts were refreshed; existing user settings were retained. No model call was made.'}
         db.execute('UPDATE catalog_observations SET completed_at=?,response_json=? WHERE observation_id=?', (now, canonical_json(response), observation_id))
         for transition in transitions:
             kind = transition.pop('kind')
@@ -238,44 +238,44 @@ def record(evaluation, discovered, observation_id=None, *, health_generation=Non
     return response
 
 
-def profiles(evaluation, params):
+def buddies(evaluation, params):
     from ...protocol import schemas
-    schemas.reject_unknown(params, {'limit', 'after', 'includeUnavailable', 'query', 'adapter'}, 'model.profiles')
+    schemas.reject_unknown(params, {'limit', 'after', 'includeUnavailable', 'query', 'adapter'}, 'buddy.list')
     limit = params.get('limit', 100)
     if type(limit) is not int or not 1 <= limit <= 200:
         raise BoardError('INVALID_ARGUMENT', 'limit must be between 1 and 200')
     after = params.get('after', '')
     if not isinstance(after, str) or len(after) > 128:
-        raise BoardError('INVALID_ARGUMENT', 'after must be a profile cursor')
+        raise BoardError('INVALID_ARGUMENT', 'after must be a buddy cursor')
     include = schemas.optional_bool(params, 'includeUnavailable', False)
     query = schemas.optional_string(params, 'query', max_length=200) or ''
     adapter = schemas.optional_string(params, 'adapter', max_length=32)
-    clauses = ['p.profile_id>?', "(? OR (p.available=1 AND h.status='ready'))"]
+    clauses = ['p.buddy_id>?', "(? OR (p.available=1 AND h.status='ready'))"]
     values = [after, int(include)]
     if adapter:
         clauses.append('p.adapter=?')
         values.append(adapter)
     for term in query.split()[:8]:
         escaped = term.replace('\\', '\\\\').replace('%', '\\%').replace('_', '\\_')
-        clauses.append("(p.profile_id LIKE ? ESCAPE '\\' OR p.label LIKE ? ESCAPE '\\' OR p.model LIKE ? ESCAPE '\\' OR p.provider LIKE ? ESCAPE '\\' OR p.adapter LIKE ? ESCAPE '\\')")
+        clauses.append("(p.buddy_id LIKE ? ESCAPE '\\' OR p.label LIKE ? ESCAPE '\\' OR p.model LIKE ? ESCAPE '\\' OR p.provider LIKE ? ESCAPE '\\' OR p.adapter LIKE ? ESCAPE '\\')")
         values.extend(['%' + escaped + '%'] * 5)
     if len(query.split()) > 8:
         raise BoardError('INVALID_ARGUMENT', 'query accepts at most 8 search terms')
     with evaluation.db.read() as db:
-        rows = db.execute('SELECT p.*, h.status AS harness_status, c.status AS catalog_state, c.reason AS catalog_reason FROM evaluation_profiles p LEFT JOIN harness_health h ON h.adapter=p.adapter LEFT JOIN catalog_current c ON c.adapter=p.adapter WHERE ' + ' AND '.join(clauses) + ' ORDER BY p.profile_id LIMIT ?', [*values, limit + 1]).fetchall()
+        rows = db.execute('SELECT p.*, h.status AS harness_status, c.status AS catalog_state, c.reason AS catalog_reason FROM buddies p LEFT JOIN harness_health h ON h.adapter=p.adapter LEFT JOIN catalog_current c ON c.adapter=p.adapter WHERE ' + ' AND '.join(clauses) + ' ORDER BY p.buddy_id LIMIT ?', [*values, limit + 1]).fetchall()
         from .catalog import pending_model_services
         pending = pending_model_services(db)
-        values = [evaluation._profile_view(row, pending=pending) for row in rows[:limit]]
+        values = [evaluation._buddy_view(row, pending=pending) for row in rows[:limit]]
         from ...protocol.billing import for_provider
-        from ..routing.quota_routing import configuration_retry
+        from ..routing.quota_routing import buddy_retry
         for value in values:
             value['billing'] = for_provider(db, value['adapter'], value['provider'])
             from ..evaluation.native_observations import exhausted
             value['quotaExhausted'] = exhausted(db, value) is not None
             if value['quotaExhausted']:
-                value['quotaRetry'] = configuration_retry(db, value)
-        ids = [value['profileId'] for value in values]
+                value['quotaRetry'] = buddy_retry(db, value)
+        ids = [value['buddyId'] for value in values]
         model_services = {(value['adapter'], value['provider'], value['model']) for value in values}
-        return {'profiles': values, **user_policy.policy_view(db, ids),
+        return {'buddies': values, **user_policy.policy_view(db, ids),
                 'modelServiceConcurrency': evaluation.board.model_capacity_rows(db, model_services),
-                'nextCursor': rows[limit - 1]['profile_id'] if len(rows) > limit else None}
+                'nextCursor': rows[limit - 1]['buddy_id'] if len(rows) > limit else None}

@@ -47,7 +47,7 @@ def _request(row: dict) -> dict:
 
 def _dispatch(row: dict) -> dict:
     return {"decisionId": row["decision_id"], "taskId": row["task_id"], "routerIndex": row["router_index"],
-            "profileId": row["profile_id"], "profile": {key: row[key] for key in _IDENTITY_FIELDS},
+            "buddyId": row["buddy_id"], "buddy": {key: row[key] for key in _IDENTITY_FIELDS},
             "document": json.loads(row["document_json"]), "inputSha256": row["input_sha256"],
             "createdAt": row["created_at"]}
 
@@ -95,10 +95,10 @@ def dispatches(connection, decision_id: str) -> tuple[dict, ...]:
 
 
 def reserve_dispatch(connection, *, decision_id: str, task_id: str, router_index: int,
-                     profile: dict, document: dict, now: str) -> dict:
+                     buddy: dict, document: dict, now: str) -> dict:
     """Record one dispatch under its internal task; the caller owns the transaction.
 
-    ``profile`` is the complete buddy identity — ``profileId`` plus the four-part
+    ``buddy`` is the complete buddy identity — ``buddyId`` plus the four-part
     tuple — exactly as resolution selected it. ``document`` is the exact input that
     item will consume: the frozen base input plus this actor. Recording never
     starts a process and never rewrites another dispatch's document or hash.
@@ -107,16 +107,16 @@ def reserve_dispatch(connection, *, decision_id: str, task_id: str, router_index
     task_id = _bounded_id(task_id, "task_id")
     if isinstance(router_index, bool) or not isinstance(router_index, int) or router_index < 0:
         raise BoardError("INVALID_ARGUMENT", "router_index must be a nonnegative integer")
-    if not isinstance(profile, dict) or not isinstance(profile.get("profileId"), str):
-        raise BoardError("INVALID_ARGUMENT", "profile must carry the buddy's profileId")
-    if any(not isinstance(profile.get(key), str) or not profile[key] for key in _IDENTITY_FIELDS):
-        raise BoardError("INVALID_ARGUMENT", "profile must be the complete four-part identity")
+    if not isinstance(buddy, dict) or not isinstance(buddy.get("buddyId"), str):
+        raise BoardError("INVALID_ARGUMENT", "buddy must carry the buddy's buddyId")
+    if any(not isinstance(buddy.get(key), str) or not buddy[key] for key in _IDENTITY_FIELDS):
+        raise BoardError("INVALID_ARGUMENT", "buddy must be the complete four-part identity")
     if not isinstance(document, dict):
         raise BoardError("INVALID_ARGUMENT", "document must be the dispatch input object")
     encoded = canonical_json(document)
     row, _created = _store(connection, "router_dispatches", "task_id", {
         "task_id": task_id, "decision_id": decision_id, "router_index": router_index,
-        "profile_id": profile["profileId"], **{key: profile[key] for key in _IDENTITY_FIELDS},
+        "buddy_id": buddy["buddyId"], **{key: buddy[key] for key in _IDENTITY_FIELDS},
         "document_json": encoded, "input_sha256": sha256_text(encoded), "created_at": now,
     }, clock_field="created_at")
     return _dispatch(row)
@@ -124,13 +124,13 @@ def reserve_dispatch(connection, *, decision_id: str, task_id: str, router_index
 
 def claim(connection, attempt_id: str) -> dict | None:
     """The attempt's relational binding, with its immutable dispatch identity."""
-    row = connection.execute("SELECT c.*,d.decision_id,d.router_index,d.profile_id FROM router_claims c"
+    row = connection.execute("SELECT c.*,d.decision_id,d.router_index,d.buddy_id FROM router_claims c"
                              " JOIN router_dispatches d ON d.task_id=c.task_id WHERE c.attempt_id=?",
                              (attempt_id,)).fetchone()
     if row is None:
         return None
     return {"attemptId": row["attempt_id"], "taskId": row["task_id"], "generation": row["generation"],
-            "decisionId": row["decision_id"], "routerIndex": row["router_index"], "profileId": row["profile_id"]}
+            "decisionId": row["decision_id"], "routerIndex": row["router_index"], "buddyId": row["buddy_id"]}
 
 
 def record_claim(connection, *, task_id: str, attempt_id: str, generation: int, now: str, tool_policy: dict) -> dict:
@@ -162,7 +162,7 @@ def record_claim(connection, *, task_id: str, attempt_id: str, generation: int, 
             task_id=task_id,
             attempt_id=attempt_id,
             payload={
-                "profileId": dispatch_document["profileId"],
+                "buddyId": dispatch_document["buddyId"],
                 "plane": "work",
                 "requestId": request["request_id"],
                 "routerIndex": dispatch_document["routerIndex"],

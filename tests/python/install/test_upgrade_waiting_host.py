@@ -1,7 +1,7 @@
 """Host boundary admission and the shared upgrade entry fence."""
 from unittest import mock
 
-from blackboard.tasks.test_workflow import CONFIGURATION, WorkflowTestCase
+from blackboard.tasks.test_workflow import BUDDY, WorkflowTestCase
 from hey_my_buddy.blackboard.store import backup
 from hey_my_buddy.blackboard.store.db import SCHEMA_VERSION
 from hey_my_buddy.errors import BoardError
@@ -209,7 +209,7 @@ class WaitingHostUpgradeTests(WorkflowTestCase):
             ("workflow_scope_amend", {**command, "expectedRevision": view["revision"],
                                       "expectedScopeVersion": 1, "writeScope": ["src"], "reason": "reviewed"}),
             ("inquiry_observe", {"runId": run["runId"], "inquiryId": "same-inquiry", "question": "status?"}),
-            ("workflow_submit", {**CONFIGURATION, "requestId": "same-submission", "submissionToken": "t" * 32,
+            ("workflow_submit", {**BUDDY, "requestId": "same-submission", "submissionToken": "t" * 32,
                                   "hostId": "host-1", "task": "fixture", "cwd": str(self.workdir()),
                                   "executionWorkspace": {"kind": "existing", "access": "write"}}),
         )

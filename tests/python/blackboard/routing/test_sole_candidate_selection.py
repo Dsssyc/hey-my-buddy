@@ -1,7 +1,7 @@
 """The sole legal candidate is selected by the program without a Router call.
 
 Freezing the candidate set happens before any Router resolution: when exactly
-one enabled, available, capability-matching, complete coding profile satisfies
+one enabled, available, capability-matching, complete coding buddy satisfies
 the hard bounds, the program adopts it directly, records the precise reason
 ``唯一合法候选，未调用 Router`` and creates no Router task, usage or stop
 evidence — none of which happened. Multiple candidates keep the ordinary Router
@@ -15,12 +15,12 @@ from hey_my_buddy.blackboard.routing.decision import SOLE_CANDIDATE_REASON
 from blackboard.routing.fixtures.router_tool_receipt import claim_tool_receipt
 from blackboard.routing.test_decision import (
     DecisionTestCase,
-    PROFILE,
-    PROFILE_ID,
-    SECOND_PROFILE,
-    SECOND_PROFILE_ID,
+    CATALOG_BUDDY,
+    BUDDY_ID,
+    SECOND_BUDDY,
+    SECOND_BUDDY_ID,
 )
-from blackboard.tasks.test_workflow import CONFIGURATION, WorkflowTestCase
+from blackboard.tasks.test_workflow import BUDDY, WorkflowTestCase
 
 
 class SoleCandidateSelectionTests(DecisionTestCase):
@@ -34,11 +34,11 @@ class SoleCandidateSelectionTests(DecisionTestCase):
         self.assertEqual(request["status"], "completed")
         self.assertIsNone(request["runId"])
         decision = self.decision(board, request["decisionId"])
-        self.assertEqual(decision["profileId"], PROFILE_ID)
+        self.assertEqual(decision["buddyId"], BUDDY_ID)
         self.assertEqual(decision["reason"], SOLE_CANDIDATE_REASON)
-        self.assertEqual(decision["selectedProfile"]["profileId"], PROFILE_ID)
-        self.assertEqual({key: decision["selectedProfile"][key] for key in CONFIGURATION},
-                         {key: PROFILE[key] for key in CONFIGURATION})
+        self.assertEqual(decision["selectedBuddy"]["buddyId"], BUDDY_ID)
+        self.assertEqual({key: decision["selectedBuddy"][key] for key in BUDDY},
+                         {key: CATALOG_BUDDY[key] for key in BUDDY})
         # No model ran, so no model evidence exists: nothing is fabricated.
         self.assertIsNone(decision["input"])
         self.assertIsNone(decision["runId"])
@@ -47,7 +47,7 @@ class SoleCandidateSelectionTests(DecisionTestCase):
             self.assertIsNone(decision[absent], absent)
         self.assertIs(decision["routerCalled"], False)
         self.assertEqual(decision["routingBasis"],
-                         {"candidateCount": 1, "excludedCount": 0, "excludedProfiles": []})
+                         {"candidateCount": 1, "excludedCount": 0, "excludedBuddies": []})
         self.assertEqual(decision["output"]["programSelection"]["code"], "single-candidate")
         self.assertEqual(decision["policyCheck"],
                          {"hardConstraints": {}, "userPreference": "none"})
@@ -62,7 +62,7 @@ class SoleCandidateSelectionTests(DecisionTestCase):
 
     def test_sole_candidate_does_not_depend_on_router_availability(self):
         board = self.board()
-        self.seed(board, decision_profile=None)
+        self.seed(board, decision_buddy=None)
         sole = board.call("selection_request", {
             "requestId": "pick-sole-no-router", "task": "needs image input",
             "requiredCapabilities": ["input:image"],
@@ -90,7 +90,7 @@ class SoleCandidateSelectionTests(DecisionTestCase):
 
     def test_sole_candidate_records_bounds_capabilities_and_preference_check(self):
         board = self.board()
-        self.seed(board, preferences=[{"profileId": PROFILE_ID, "mode": "prefer", "reason": "prefer flash"}])
+        self.seed(board, preferences=[{"buddyId": BUDDY_ID, "mode": "prefer", "reason": "prefer flash"}])
         request = board.store.decisions._create(
             "sole-bounds",
             {"kind": "select", "task": "bounded selection",
@@ -111,7 +111,7 @@ class SoleCandidateSelectionTests(DecisionTestCase):
         # The program's preference check keeps the user's published prefer entries;
         # task-local routing preferences are retired and no longer contribute.
         self.assertEqual(check["userPreference"], "matched")
-        self.assertNotIn("routingPreference", decision["selectedProfile"])
+        self.assertNotIn("routingPreference", decision["selectedBuddy"])
 
     def test_sole_candidate_replay_returns_the_same_completed_decision(self):
         board = self.board()
@@ -133,7 +133,7 @@ class SoleCandidateSelectionTests(DecisionTestCase):
     def test_routing_basis_freezes_the_user_exclusions_of_the_request(self):
         board = self.board()
         self.seed(board, preferences=[
-            {"profileId": SECOND_PROFILE_ID, "mode": "exclude", "reason": "excluded for this test"}])
+            {"buddyId": SECOND_BUDDY_ID, "mode": "exclude", "reason": "excluded for this test"}])
         request = board.store.decisions._create(
             "basis-freeze",
             {"kind": "select", "task": "bounded selection", "constraints": {"adapter": "dsh"},
@@ -143,16 +143,16 @@ class SoleCandidateSelectionTests(DecisionTestCase):
         decision = self.decision(board, request["decisionId"])
         self.assertEqual(decision["routingBasis"]["candidateCount"], 1)
         self.assertEqual(decision["routingBasis"]["excludedCount"], 1)
-        [excluded] = decision["routingBasis"]["excludedProfiles"]
-        self.assertEqual(excluded["profileId"], SECOND_PROFILE_ID)
+        [excluded] = decision["routingBasis"]["excludedBuddies"]
+        self.assertEqual(excluded["buddyId"], SECOND_BUDDY_ID)
         self.assertEqual(excluded["reason"], "excluded for this test")
         self.assertNotIn("source", excluded)
-        self.assertEqual({key: excluded[key] for key in CONFIGURATION},
-                         {key: SECOND_PROFILE[key] for key in CONFIGURATION})
+        self.assertEqual({key: excluded[key] for key in BUDDY},
+                         {key: SECOND_BUDDY[key] for key in BUDDY})
         # A later preference change never rewrites the frozen basis.
         self.publish_user_patch(
             board, request_id="basis-change", command_id="basis-change",
-            preferenceChanges=[{"profileId": SECOND_PROFILE_ID, "mode": "prefer", "reason": "changed later"}])
+            preferenceChanges=[{"buddyId": SECOND_BUDDY_ID, "mode": "prefer", "reason": "changed later"}])
         refreshed = self.decision(board, request["decisionId"])
         self.assertEqual(refreshed["routingBasis"], decision["routingBasis"])
 
@@ -175,14 +175,14 @@ class SoleCandidateSelectionTests(DecisionTestCase):
 
     def test_direct_selection_retains_the_pin_that_narrowed_the_candidates(self):
         board = self.board()
-        self.seed(board, preferences=[{"profileId": PROFILE_ID, "mode": "pin", "reason": "fixed by user"}])
+        self.seed(board, preferences=[{"buddyId": BUDDY_ID, "mode": "pin", "reason": "fixed by user"}])
         request = self.request(board, request_id="pinned-direct")
         original = self.decision(board, request["decisionId"])
         self.assertEqual(original["reason"], SOLE_CANDIDATE_REASON)
         frozen = original["output"]["programSelection"]["preferences"]
-        self.assertEqual(frozen, [{"profileId": PROFILE_ID, "mode": "pin", "reason": "fixed by user"}])
+        self.assertEqual(frozen, [{"buddyId": BUDDY_ID, "mode": "pin", "reason": "fixed by user"}])
         self.publish_user_patch(board, request_id="unpin", command_id="unpin",
-            preferenceChanges=[{"profileId": PROFILE_ID, "mode": None}])
+            preferenceChanges=[{"buddyId": BUDDY_ID, "mode": None}])
         self.assertEqual(self.decision(board, request["decisionId"])["output"]["programSelection"]["preferences"], frozen)
 
 
@@ -217,9 +217,9 @@ class SoleCandidateWorkflowTests(WorkflowTestCase):
         self.assertIsNone(routing["taskId"])
         self.assertIsNone(routing["attemptId"])
         self.assertEqual(routing["routingBasis"],
-                         {"candidateCount": 1, "excludedCount": 0, "excludedProfiles": []})
-        self.assertEqual(submitted["executionConfiguration"],
-                         {key: SECOND_PROFILE[key] for key in CONFIGURATION})
+                         {"candidateCount": 1, "excludedCount": 0, "excludedBuddies": []})
+        self.assertEqual(submitted["buddy"],
+                         {key: SECOND_BUDDY[key] for key in BUDDY})
         self.assertEqual(submitted["counts"]["turns"], 0)
         self.assertFalse(submitted["awaitingHost"])
         with board.store.db.read() as connection:
@@ -231,20 +231,20 @@ class SoleCandidateWorkflowTests(WorkflowTestCase):
             resolved = json.loads(connection.execute(
                 "SELECT payload_json FROM events WHERE kind='workflow.routing_resolved'").fetchone()[0])
         self.assertEqual(resolved["source"], "single-candidate")
-        self.assertEqual(resolved["configuration"], {key: SECOND_PROFILE[key] for key in CONFIGURATION})
+        self.assertEqual(resolved["buddy"], {key: SECOND_BUDDY[key] for key in BUDDY})
         # Replaying the same submission is a duplicate, not a second route.
         self.assertTrue(self.routed(board, requiredCapabilities=["effort:high"])["duplicate"])
-        # The run proceeds into ordinary execution under the adopted configuration.
+        # The run proceeds into ordinary execution under the adopted buddy.
         # The coding worker declares the capability that narrowed the candidates.
         board.call("worker_register", {"workerId": "w1", "capabilities": ["dsh", "command", "effort:high"]})
         claim = self.claim(board, run_id=submitted["runId"], claim_request_id="coding")
-        self.assertEqual(claim["claim"]["task"]["spec"]["model"], SECOND_PROFILE["model"])
+        self.assertEqual(claim["claim"]["task"]["spec"]["model"], SECOND_BUDDY["model"])
         self.assertEqual(claim["claim"]["turn"]["input"]["context"]["routing"]["decisionId"],
                          routing["decisionId"])
 
     def test_large_task_uses_the_sole_candidate_without_a_router_input(self):
         board = self.board()
-        self.seed(board, decision_profile=None)
+        self.seed(board, decision_buddy=None)
         task = "完整工作说明" * 3000
         submitted = self.routed(board, task=task, requiredCapabilities=["effort:high"])
         self.assertEqual(submitted["routing"]["status"], "completed")
@@ -280,14 +280,14 @@ class SoleCandidateWorkflowTests(WorkflowTestCase):
                        "stopEvidence": {"shutdownConfirmed": True, "native": {"shutdownConfirmed": True}},
                        "inputVerification": {"unchanged": True, "snapshotSha256": "fixture-digest",
                                              "manifestSha256": claim["decisionInput"]["executionWorkspace"]["manifestSha256"]},
-                       "decision": {"profileId": PROFILE_ID, "reason": "fixture selection", "evidence": []}},
+                       "decision": {"buddyId": BUDDY_ID, "reason": "fixture selection", "evidence": []}},
         })
         settled = board.call("workflow_get", {"runId": submitted["runId"]})
         continued = self.continue_run(board, settled, command_id="reroute-unlocked", reroute=True)
         board.store.workflow.prepare_continuation_workspace({"runId": continued["runId"]})
         self.publish_user_patch(
             board, request_id="exclude-one", command_id="exclude-one",
-            preferenceChanges=[{"profileId": SECOND_PROFILE_ID, "mode": "exclude", "reason": "narrowed later"}])
+            preferenceChanges=[{"buddyId": SECOND_BUDDY_ID, "mode": "exclude", "reason": "narrowed later"}])
         routed = board.call("workflow_get", {"runId": submitted["runId"]})
         self.assertEqual(routed["routing"]["status"], "queued")
         self.assertEqual(routed["routing"]["constraints"], {})
@@ -309,7 +309,7 @@ class SoleCandidateWorkflowTests(WorkflowTestCase):
         # stops at the Host boundary with the frozen basis naming the exclusion.
         self.publish_user_patch(
             board, request_id="exclude-high", command_id="exclude-high",
-            preferenceChanges=[{"profileId": SECOND_PROFILE_ID, "mode": "exclude", "reason": "no longer wanted"}])
+            preferenceChanges=[{"buddyId": SECOND_BUDDY_ID, "mode": "exclude", "reason": "no longer wanted"}])
         current = board.call("workflow_get", {"runId": submitted["runId"]})
         pending = self.continue_run(board, current, command_id="reroute-after-change", reroute=True)
         board.store.workflow.prepare_continuation_workspace({"runId": pending["runId"]})
@@ -322,7 +322,7 @@ class SoleCandidateWorkflowTests(WorkflowTestCase):
         basis = continued["routing"]["routingBasis"]
         self.assertEqual(basis["candidateCount"], 0)
         self.assertEqual(basis["excludedCount"], 1)
-        self.assertEqual(basis["excludedProfiles"][0]["profileId"], SECOND_PROFILE_ID)
+        self.assertEqual(basis["excludedBuddies"][0]["buddyId"], SECOND_BUDDY_ID)
         # The earlier program selection stays completed, and the history keeps
         # each route's own recorded source.
         old = board.call("selection_get", {"decisionId": submitted["routing"]["decisionId"]})["decision"]
@@ -342,8 +342,8 @@ class SoleCandidateWorkflowTests(WorkflowTestCase):
         self.assertEqual(submitted["routing"]["source"], "model-selection")
         board.call("worker_register", {"workerId": "router", "adapter": "decision", "capabilities": ["decision"]})
         claim = self.claim(board, "router", run_id=submitted["routing"]["taskId"], claim_request_id="router-claim")["claim"]
-        self.assertEqual([profile["profileId"] for profile in claim["decisionInput"]["profiles"]],
-                         [PROFILE_ID, SECOND_PROFILE_ID])
+        self.assertEqual([buddy["buddyId"] for buddy in claim["decisionInput"]["buddies"]],
+                         [BUDDY_ID, SECOND_BUDDY_ID])
         board.call("worker_result", {
             "workerId": "router", "attemptId": claim["attempt"]["attemptId"],
             "generation": claim["attempt"]["generation"], "nonce": "n" * 16,
@@ -353,12 +353,12 @@ class SoleCandidateWorkflowTests(WorkflowTestCase):
                        "stopEvidence": {"shutdownConfirmed": True, "native": {"shutdownConfirmed": True}},
                        "inputVerification": {"unchanged": True, "snapshotSha256": "fixture-digest",
                                              "manifestSha256": claim["decisionInput"]["executionWorkspace"]["manifestSha256"]},
-                       "decision": {"profileId": PROFILE_ID, "reason": "fixture selection", "evidence": []}},
+                       "decision": {"buddyId": BUDDY_ID, "reason": "fixture selection", "evidence": []}},
         })
         view = board.call("workflow_get", {"runId": submitted["runId"]})
         self.assertEqual(view["routing"]["status"], "completed")
         self.assertEqual(view["routing"]["source"], "model-selection")
-        self.assertEqual(view["executionConfiguration"], CONFIGURATION)
+        self.assertEqual(view["buddy"], BUDDY)
 
 
 if __name__ == "__main__":

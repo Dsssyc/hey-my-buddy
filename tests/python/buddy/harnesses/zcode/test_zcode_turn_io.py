@@ -84,14 +84,14 @@ class SharedTurnIOTests(ZcodeFixtureCase):
 
     def test_request_suggestion_null_means_no_suggestion_and_other_values_stay_refused(self):
         # The incident's invalid argument is valid now: an explicit null
-        # suggestedProfileId is the honest spelling of "no suggestion" and
+        # suggestedBuddyId is the honest spelling of "no suggestion" and
         # validates exactly like an absent key; non-string values still fail
         # the shared turn contract every adapter imports.
         def outcome(value=None, *, include: bool) -> dict:
             request = {"summary": "help", "attempted": "tried", "neededWork": "decide",
                        "expectedArtifacts": [], "acceptance": "decided"}
             if include:
-                request["suggestedProfileId"] = value
+                request["suggestedBuddyId"] = value
             return {"disposition": "attention", "summary": "fixture", "remaining": [], "decisions": [],
                     "artifacts": [], "request": request}
 

@@ -20,7 +20,7 @@ from hey_my_buddy.errors import BoardError
 T0 = "2026-01-01T00:00:00.000Z"
 T1 = "2026-01-01T00:01:00.000Z"
 FACTS = {
-    "routerProfileIds": ["dsh:fixture:alpha:max", "dsh:fixture:bravo:max"],
+    "routerBuddyIds": ["dsh:fixture:alpha:max", "dsh:fixture:bravo:max"],
     "routerIdentities": [
         {"adapter": "dsh", "provider": "fixture", "model": "alpha", "effort": "max"},
         {"adapter": "dsh", "provider": "fixture", "model": "bravo", "effort": "max"},
@@ -34,7 +34,7 @@ BASE_INPUT = {
     "operation": "select",
     "requestId": "pick-1",
     "task": "fix the parser",
-    "profiles": [{"profileId": "dsh:fixture:alpha:max"}, {"profileId": "dsh:fixture:bravo:max"}],
+    "buddies": [{"buddyId": "dsh:fixture:alpha:max"}, {"buddyId": "dsh:fixture:bravo:max"}],
     "preferences": [],
     "annotations": [],
     "policyFacts": {},
@@ -42,11 +42,11 @@ BASE_INPUT = {
     "budget": {"timeoutSeconds": 60},
     "routingMode": "fast",
 }
-ALPHA = {"profileId": "dsh:fixture:alpha:max", "adapter": "dsh", "provider": "fixture",
+ALPHA = {"buddyId": "dsh:fixture:alpha:max", "adapter": "dsh", "provider": "fixture",
          "model": "alpha", "effort": "max"}
-BRAVO = {"profileId": "dsh:fixture:bravo:max", "adapter": "dsh", "provider": "fixture",
+BRAVO = {"buddyId": "dsh:fixture:bravo:max", "adapter": "dsh", "provider": "fixture",
          "model": "bravo", "effort": "max"}
-INSPECTIONS = [{"index": 0, "profileId": ALPHA["profileId"], "eligible": True, "code": None,
+INSPECTIONS = [{"index": 0, "buddyId": ALPHA["buddyId"], "eligible": True, "code": None,
                 "reason": None, "selected": True}]
 
 
@@ -56,14 +56,14 @@ def snapshot_dict() -> dict:
 
 def alpha_document() -> dict:
     identity = {key: ALPHA[key] for key in ("adapter", "provider", "model", "effort")}
-    return {**BASE_INPUT, "profile": identity, "routerProfileId": ALPHA["profileId"],
-            "routerProfile": identity, "routerIndex": 0}
+    return {**BASE_INPUT, "buddy": identity, "routerBuddyId": ALPHA["buddyId"],
+            "routerBuddy": identity, "routerIndex": 0}
 
 
 def bravo_document() -> dict:
     identity = {key: BRAVO[key] for key in ("adapter", "provider", "model", "effort")}
-    return {**BASE_INPUT, "profile": identity, "routerProfileId": BRAVO["profileId"],
-            "routerProfile": identity, "routerIndex": 1}
+    return {**BASE_INPUT, "buddy": identity, "routerBuddyId": BRAVO["buddyId"],
+            "routerBuddy": identity, "routerIndex": 1}
 
 
 class RouterSequenceTestCase(BoardTestCase):
@@ -106,7 +106,7 @@ class RouterSequenceTestCase(BoardTestCase):
 class FreezeRequestTests(RouterSequenceTestCase):
     def test_complete_snapshot_body_survives_reopen_and_read_copy_mutation(self):
         snapshot = {**snapshot_dict(),
-                    "hostPacket": {"profiles": [], "privateHostFact": {"notes": ["retained, never sent"]}},
+                    "hostPacket": {"buddies": [], "privateHostFact": {"notes": ["retained, never sent"]}},
                     "additionalHostContext": {"evidence": [{"kind": "private", "text": "保留正文"}]}}
         expected = {**deepcopy(snapshot), "frozenAt": T0}
         with self.board_.store.db.write() as db:
@@ -120,7 +120,7 @@ class FreezeRequestTests(RouterSequenceTestCase):
         with reopened.read() as db:
             persisted = router_sequence.request_snapshot(db, "dec-1")
             self.assertEqual(persisted, expected)
-            persisted["hostPacket"]["profiles"].append({"injected": True})
+            persisted["hostPacket"]["buddies"].append({"injected": True})
             self.assertEqual(router_sequence.request_snapshot(db, "dec-1"), expected)
             row = db.execute("SELECT snapshot_json,frozen_at FROM router_requests WHERE decision_id='dec-1'").fetchone()
             self.assertEqual(json.loads(row["snapshot_json"]), {key: value for key, value in expected.items() if key != "frozenAt"})
@@ -128,7 +128,7 @@ class FreezeRequestTests(RouterSequenceTestCase):
         self.assertEqual(self.stored("router_requests", "decision_id", "dec-1"), original)
 
     def test_replay_compares_every_snapshot_field_and_keeps_the_first_clock(self):
-        snapshot = {**snapshot_dict(), "hostPacket": {"profiles": [], "privateHostFact": "retained"},
+        snapshot = {**snapshot_dict(), "hostPacket": {"buddies": [], "privateHostFact": "retained"},
                     "additionalHostContext": {"evidence": ["retained extension"]}}
         with self.board_.store.db.write() as db:
             first = router_sequence.freeze_request(db, "dec-1", snapshot=snapshot, now=T0)
@@ -140,7 +140,7 @@ class FreezeRequestTests(RouterSequenceTestCase):
             replay = router_sequence.freeze_request(db, "dec-1", snapshot={**reordered, "frozenAt": T1}, now=T1)
         self.assertEqual(replay, first)
         changes = (
-            {**snapshot, "hostPacket": {"profiles": [], "privateHostFact": "different"}},
+            {**snapshot, "hostPacket": {"buddies": [], "privateHostFact": "different"}},
             {**snapshot, "hostPacket": None},
             {key: value for key, value in snapshot.items() if key != "hostPacket"},
             {**snapshot, "additionalHostContext": {"evidence": ["different extension"]}},
@@ -208,22 +208,22 @@ class FreezeRequestTests(RouterSequenceTestCase):
 
 
 class ReserveDispatchTests(RouterSequenceTestCase):
-    def reserved(self, task_id: str, *, profile=ALPHA, document: dict | None = None, router_index: int = 0,
+    def reserved(self, task_id: str, *, buddy=ALPHA, document: dict | None = None, router_index: int = 0,
                  now: str = T0):
         with self.board_.store.db.write() as db:
             router_sequence.freeze_request(db, "dec-1", snapshot=snapshot_dict(), now=T0)
             return router_sequence.reserve_dispatch(
                 db, decision_id="dec-1", task_id=task_id, router_index=router_index,
-                profile=profile, document=document or alpha_document(), now=now)
+                buddy=buddy, document=document or alpha_document(), now=now)
 
     def test_reserve_records_the_complete_identity_document_and_hash(self):
         stored = self.reserved("task-alpha")
         self.assertEqual(stored["decisionId"], "dec-1")
         self.assertEqual(stored["taskId"], "task-alpha")
         self.assertEqual(stored["routerIndex"], 0)
-        self.assertEqual(stored["profileId"], ALPHA["profileId"])
-        self.assertEqual(stored["profile"], {key: ALPHA[key] for key in ("adapter", "provider", "model", "effort")})
-        self.assertEqual(stored["document"]["routerProfileId"], ALPHA["profileId"])
+        self.assertEqual(stored["buddyId"], ALPHA["buddyId"])
+        self.assertEqual(stored["buddy"], {key: ALPHA[key] for key in ("adapter", "provider", "model", "effort")})
+        self.assertEqual(stored["document"]["routerBuddyId"], ALPHA["buddyId"])
         self.assertEqual(stored["createdAt"], T0)
         self.assertEqual(stored["inputSha256"], sha256_text(canonical_json(alpha_document())))
 
@@ -232,7 +232,7 @@ class ReserveDispatchTests(RouterSequenceTestCase):
         with self.board_.store.db.write() as db:
             replay = router_sequence.reserve_dispatch(
                 db, decision_id="dec-1", task_id="task-alpha", router_index=0,
-                profile=ALPHA, document=alpha_document(), now=T0)
+                buddy=ALPHA, document=alpha_document(), now=T0)
         self.assertEqual(replay["createdAt"], T0)
         later = self.reserved("task-alpha", now=T1)
         self.assertEqual(later, replay)
@@ -246,7 +246,7 @@ class ReserveDispatchTests(RouterSequenceTestCase):
 
     def test_two_dispatches_of_one_request_keep_their_own_documents_and_hashes(self):
         alpha = self.reserved("task-alpha")
-        bravo = self.reserved("task-bravo", profile=BRAVO, document=bravo_document(), router_index=1)
+        bravo = self.reserved("task-bravo", buddy=BRAVO, document=bravo_document(), router_index=1)
         self.assertNotEqual(alpha["inputSha256"], bravo["inputSha256"])
         with self.board_.store.db.read() as db:
             first = router_sequence.dispatch(db, "task-alpha")
@@ -260,7 +260,7 @@ class ReserveDispatchTests(RouterSequenceTestCase):
 
     def test_dispatches_follow_router_index_when_task_ids_have_reverse_order(self):
         first = self.reserved("task-bravo")
-        second = self.reserved("task-alpha", profile=BRAVO, document=bravo_document(), router_index=1)
+        second = self.reserved("task-alpha", buddy=BRAVO, document=bravo_document(), router_index=1)
         with self.board_.store.db.read() as db:
             dispatches = router_sequence.dispatches(db, "dec-1")
             self.assertEqual([item["taskId"] for item in dispatches], ["task-bravo", "task-alpha"])
@@ -271,9 +271,9 @@ class ReserveDispatchTests(RouterSequenceTestCase):
 
     def test_incomplete_identity_or_document_is_rejected(self):
         broken_identity = {**ALPHA, "effort": ""}
-        for profile, index in ((broken_identity, 0), ({"profileId": "x"}, 0), (ALPHA, -1), (ALPHA, True)):
-            with self.subTest(profile=profile, index=index), self.assertRaises(BoardError) as caught:
-                self.reserved("task-alpha", profile=profile, router_index=index)
+        for buddy, index in ((broken_identity, 0), ({"buddyId": "x"}, 0), (ALPHA, -1), (ALPHA, True)):
+            with self.subTest(buddy=buddy, index=index), self.assertRaises(BoardError) as caught:
+                self.reserved("task-alpha", buddy=buddy, router_index=index)
             self.assertEqual(caught.exception.code, "INVALID_ARGUMENT")
         with self.assertRaises(BoardError) as caught:
             self.reserved("task-alpha", document="not-an-object")
@@ -292,24 +292,24 @@ class RecordClaimTests(RouterSequenceTestCase):
         self.reserved_claim_setup()
         stored = self.claim("att-1")
         self.assertEqual(stored, {"taskId": "task-alpha", "attemptId": "att-1", "generation": 1,
-                                  "decisionId": "dec-1", "routerIndex": 0, "profileId": ALPHA["profileId"]})
+                                  "decisionId": "dec-1", "routerIndex": 0, "buddyId": ALPHA["buddyId"]})
         policy = json.loads(json.loads(self.stored("router_claims", "attempt_id", "att-1"))["tool_policy_json"])
         self.assertEqual(policy, {"systemSandbox": False})
         events = self.events()
         self.assertEqual(len(events), 1)
-        self.assertEqual(events[0], {"profileId": ALPHA["profileId"], "plane": "work", "requestId": "pick-1",
+        self.assertEqual(events[0], {"buddyId": ALPHA["buddyId"], "plane": "work", "requestId": "pick-1",
                                      "routerIndex": 0, "taskId": "task-alpha", "attemptId": "att-1",
                                      "generation": 1})
         # The binding is a fresh copy; mutating it touches nothing stored.
-        stored["profileId"] = "mutated"
-        self.assertEqual(self.claim("att-1")["profileId"], ALPHA["profileId"])
+        stored["buddyId"] = "mutated"
+        self.assertEqual(self.claim("att-1")["buddyId"], ALPHA["buddyId"])
         self.assertEqual(len(self.events()), 1)
 
     def reserved_claim_setup(self):
         with self.board_.store.db.write() as db:
             router_sequence.freeze_request(db, "dec-1", snapshot=snapshot_dict(), now=T0)
             router_sequence.reserve_dispatch(db, decision_id="dec-1", task_id="task-alpha",
-                                             router_index=0, profile=ALPHA,
+                                             router_index=0, buddy=ALPHA,
                                              document=alpha_document(), now=T0)
 
     def test_different_binding_for_one_attempt_conflicts(self):
@@ -322,10 +322,10 @@ class RecordClaimTests(RouterSequenceTestCase):
         # Another attempt of another dispatch claims its own binding.
         with self.board_.store.db.write() as db:
             router_sequence.reserve_dispatch(db, decision_id="dec-1", task_id="task-bravo",
-                                             router_index=1, profile=BRAVO,
+                                             router_index=1, buddy=BRAVO,
                                              document=bravo_document(), now=T0)
         second = self.claim("att-2", task_id="task-bravo", generation=1)
-        self.assertEqual(second["profileId"], BRAVO["profileId"])
+        self.assertEqual(second["buddyId"], BRAVO["buddyId"])
         self.assertEqual(len(self.events()), 2)
 
     def test_frozen_tool_policy_cannot_be_replaced_by_a_replayed_claim(self):
@@ -366,10 +366,10 @@ class RelationalBindingTests(RouterSequenceTestCase):
     def reserve(self, db):
         router_sequence.freeze_request(db, "dec-1", snapshot=snapshot_dict(), now=T0)
         router_sequence.reserve_dispatch(db, decision_id="dec-1", task_id="task-alpha", router_index=0,
-                                         profile=ALPHA, document=alpha_document(), now=T0)
+                                         buddy=ALPHA, document=alpha_document(), now=T0)
 
     def outcome(self, db, *, task_id="task-alpha", attempt_id=None):
-        return router_history.record_outcome(db, profile_id=ALPHA["profileId"], plane="work",
+        return router_history.record_outcome(db, buddy_id=ALPHA["buddyId"], plane="work",
             request_id="pick-1", task_id=task_id, attempt_id=attempt_id, outcome="answered", code=None,
             phase="result", facts={"routerIndex":0}, now=T0)
 
@@ -383,7 +383,7 @@ class RelationalBindingTests(RouterSequenceTestCase):
                     if task_id == "missing-task":
                         router_sequence.freeze_request(db, decision_id, snapshot=snapshot_dict(), now=T0)
                     router_sequence.reserve_dispatch(db, decision_id=decision_id, task_id=task_id,
-                        router_index=0, profile=ALPHA, document=alpha_document(), now=T0)
+                        router_index=0, buddy=ALPHA, document=alpha_document(), now=T0)
         self.assertIsNone(self.stored("router_requests", "decision_id", "dec-1"))
         self.assertIsNone(self.stored("router_dispatches", "task_id", "task-alpha"))
 
@@ -391,7 +391,7 @@ class RelationalBindingTests(RouterSequenceTestCase):
         with self.board_.store.db.write() as db:
             self.reserve(db)
             second = router_sequence.reserve_dispatch(db, decision_id="dec-1", task_id="task-bravo", router_index=0,
-                                                      profile=BRAVO, document=bravo_document(), now=T0)
+                                                      buddy=BRAVO, document=bravo_document(), now=T0)
         with self.board_.store.db.read() as db:
             first = router_sequence.dispatch(db, "task-alpha")
             self.assertEqual(router_sequence.dispatch(db, "task-bravo"), second)
@@ -401,7 +401,7 @@ class RelationalBindingTests(RouterSequenceTestCase):
         with self.assertRaises(BoardError) as caught:
             with self.board_.store.db.write() as db:
                 router_sequence.reserve_dispatch(db, decision_id="dec-1", task_id="task-alpha", router_index=0,
-                                                 profile=BRAVO, document=bravo_document(), now=T0)
+                                                 buddy=BRAVO, document=bravo_document(), now=T0)
         self.assertEqual(caught.exception.code, "CONFLICT")
         with self.board_.store.db.read() as db:
             self.assertEqual(router_sequence.dispatch(db, "task-alpha"), first)
@@ -449,7 +449,7 @@ class RelationalBindingTests(RouterSequenceTestCase):
             with self.assertRaisesRegex(sqlite3.IntegrityError,
                                         r"UNIQUE constraint failed: router_outcomes.event_seq"):
                 db.execute("INSERT INTO router_outcomes SELECT 'another-receipt',plane,request_id,router_index,"
-                           "profile_id,phase,task_id,attempt_id,outcome,code,event_seq,recorded_at FROM router_outcomes")
+                           "buddy_id,phase,task_id,attempt_id,outcome,code,event_seq,recorded_at FROM router_outcomes")
         with self.board_.store.db.read() as db:
             self.assertEqual([row[0] for row in db.execute("SELECT event_seq FROM router_outcomes")], [first['seq']])
         self.assertEqual(len(self.events("router.answered")), 1)

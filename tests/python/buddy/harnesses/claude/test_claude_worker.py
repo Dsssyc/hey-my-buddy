@@ -15,7 +15,7 @@ from support import wait_for
 from blackboard.tasks.test_workflow_worker import GovernedWorkerTestCase
 
 
-CONFIGURATION = {"adapter": "claude", "provider": "anthropic",
+BUDDY = {"adapter": "claude", "provider": "anthropic",
                  "model": "claude-opus-5-5[1m]", "effort": "high"}
 FIXTURE = Path(__file__).parent / "fixtures/fake_claude.py"
 
@@ -33,7 +33,7 @@ class ClaudeWorkerTests(GovernedWorkerTestCase):
         self.catalog_fixture({"source": "file:claude-worker-fixture", "providers": [{
             "adapter": "claude", "provider": "anthropic", "displayName": "Anthropic",
             "packageName": "claude-code", "packageVersion": "fixture",
-            "models": [{"id": CONFIGURATION["model"], "name": "Opus fixture",
+            "models": [{"id": BUDDY["model"], "name": "Opus fixture",
                         "efforts": ["high"], "inputModalities": ["text"]}]}], "warnings": []})
         FIXTURE.chmod(0o755)
 
@@ -44,7 +44,7 @@ class ClaudeWorkerTests(GovernedWorkerTestCase):
 
     def execute_fixture(self):
         code, submission = self.cli("submit", json.dumps({
-            **CONFIGURATION, "requestId": "claude-private-worker", "hostId": "host-1",
+            **BUDDY, "requestId": "claude-private-worker", "hostId": "host-1",
             "task": "Exercise only the mock native protocol", "cwd": str(self.repo),
             "timeoutSeconds": 20,
             "executionWorkspace": {"kind": "worktree", "access": "write",

@@ -15,15 +15,19 @@ from hey_my_buddy.install import upgrade
 
 
 SETTING_COLUMNS = {
-    "evaluation_profiles": ("profile_id", "enabled"),
-    "evaluation_preferences": ("profile_id", "mode", "reason"),
+    "buddies": ("buddy_id", "enabled"),
+    "evaluation_preferences": ("buddy_id", "mode", "reason"),
     "model_service_notes": ("adapter", "provider", "model", "text"),
     "model_service_concurrency": ("adapter", "provider", "model", "concurrency_limit"),
 }
 UPGRADE_BASE_TABLES = {
-    "evaluation_profiles": "evaluation_profiles",
+    "buddies": "evaluation_profiles",
     "model_service_notes": "family_annotations",
     "model_service_concurrency": "model_concurrency",
+}
+UPGRADE_BASE_COLUMNS = {
+    "buddies": ("profile_id", "enabled"),
+    "evaluation_preferences": ("profile_id", "mode", "reason"),
 }
 HISTORY_TABLES = (
     "tasks", "attempts", "workflow_runs", "workflow_host_conclusions",
@@ -45,13 +49,14 @@ class UpgradeMigrationTests(BoardTestCase):
         self.fixture = load_fixture(self.state)
 
     def test_verified_schema_18_stock_becomes_new_schema_with_only_settings(self):
-        original_settings = {table: rows(self.state, UPGRADE_BASE_TABLES[table], columns)
+        original_settings = {table: rows(self.state, UPGRADE_BASE_TABLES[table],
+                                         UPGRADE_BASE_COLUMNS.get(table, columns))
                              for table, columns in SETTING_COLUMNS.items() if table != "evaluation_preferences"}
         original_settings["evaluation_preferences"] = rows(
-            self.state, "effective_preferences", SETTING_COLUMNS["evaluation_preferences"])
+            self.state, "effective_preferences", UPGRADE_BASE_COLUMNS["evaluation_preferences"])
         original_router = dict(rows(self.state, "meta", ("key", "value")))
         expected_router = {
-            "routerProfileIds": json.loads(original_router["router_profile_ids"]),
+            "routerBuddyIds": json.loads(original_router["router_profile_ids"]),
             "defaultRoutingMode": original_router["router_default_mode"],
             "routingBudget": original_router["router_budget_preset"],
             "routerRetryIntervalSeconds": int(original_router["router_retry_interval_seconds"]),

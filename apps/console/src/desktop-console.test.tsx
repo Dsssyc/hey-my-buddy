@@ -4,7 +4,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { App } from "./App";
 import type { ConsoleApi } from "./api";
 import { formatDateTime } from "./i18n/format";
-import type { Profile, Snapshot, Task, TaskQuery } from "./types";
+import type { Buddy, Snapshot, Task, TaskQuery } from "./types";
 import type { Workflow } from "./workflow-types";
 import { catalogue, effortCell, levelSwitch, listed, modelButton, note, pane, selectModel } from "./buddies/page.testing";
 
@@ -13,14 +13,14 @@ const GLM = "zcode / bigmodel-api / GLM-5.3";
 
 // The installed catalog contains four DSH model services with four efforts each and
 // two ZCode model services with three each. Only the four recorded choices are enabled.
-function catalog(): Profile[] {
+function catalog(): Buddy[] {
   const enabled = new Set(["dsh:deepseek-flash:off", "dsh:deepseek-flash:max", "zcode:GLM-5.3:high", "zcode:GLM-5.3-Flash:max"]);
   return [
     ...["deepseek-flash", "deepseek-v4-flash", "deepseek-v4-pro", "deepseek-v4-flash-vision-exp"]
       .flatMap(model => ["off", "low", "high", "max"].map(effort => ({ adapter: "dsh", provider: "deepseek-official", model, effort }))),
     ...["GLM-5.3", "GLM-5.3-Flash"].flatMap(model => ["low", "high", "max"]
       .map(effort => ({ adapter: "zcode", provider: "bigmodel-api", model, effort }))),
-  ].map(p => ({ ...p, profileId: [p.adapter, p.provider, p.model, p.effort].join(":"), label: `${p.model} · ${p.effort}`,
+  ].map(p => ({ ...p, buddyId: [p.adapter, p.provider, p.model, p.effort].join(":"), label: `${p.model} · ${p.effort}`,
     available: true, enabled: enabled.has([p.adapter, p.model, p.effort].join(":")), capabilities: [],
     contextWindow: null, source: "catalog:fixture", description: "" }));
 }
@@ -30,7 +30,7 @@ function goal(runId: string, sourceHostId = "codex-source", projectId = "source-
     workflow: { state: "executing", awaitingHost: false, hostId: "current-host", ownerGeneration: 2, revision: 1 },
     delegation: { kind: "goal", sourceHostId, currentHostId: "current-host", parentRunId: null, rootRunId: runId,
       project: { id: projectId, label: projectId, path: `/source/${projectId}` },
-      configuration: { adapter: "dsh", provider: "deepseek-official", model: "deepseek-flash", effort: "off" } } };
+      buddy: { adapter: "dsh", provider: "deepseek-official", model: "deepseek-flash", effort: "off" } } };
 }
 function workflow(task: Task): Workflow {
   return { governed: true, runId: task.runId, hostId: "current-host", ownerGeneration: 2, revision: 1,
@@ -42,7 +42,7 @@ function workflow(task: Task): Workflow {
     children: [], artifacts: [], integrations: [], finalArtifactId: null, finalAttemptId: null, task };
 }
 function fixture(records: Task[] = []) {
-  const profiles = catalog();
+  const buddies = catalog();
   // The board-wide awaiting-Host root count the slim snapshot carries; the
   // fixture computes it with the server's own dedup semantics.
   const pendingCount = new Set(records.filter(t => t.workflow?.awaitingHost)
@@ -50,8 +50,8 @@ function fixture(records: Task[] = []) {
   const snapshot: Snapshot = { csrfToken: "csrf", eventCursor: 0,
     consoleSession: { id: "fixture-session", canWrite: true, reason: null },
 
-    configuration: { routerProfileIds: [profiles[0].profileId], routerRetryIntervalSeconds: 600, defaultRoutingMode: "review" as const, routingBudget: "standard"},
-    profiles,
+    configuration: { routerBuddyIds: [buddies[0].buddyId], routerRetryIntervalSeconds: 600, defaultRoutingMode: "review" as const, routingBudget: "standard"},
+    buddies,
     preferences: [], modelServiceNotes: [], decisions: [],
     modelServiceConcurrency: [],
     tasks: { pendingCount },

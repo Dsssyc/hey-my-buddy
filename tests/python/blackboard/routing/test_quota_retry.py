@@ -2,8 +2,8 @@
 
 A persisted exhaustion without a recorded reset carries exactly one single-use
 window: one hour after the blocking observation (or the last consumed retry) one
-routing decision may admit the configuration again. The claim is durable and
-transactional with the selected configuration; reads never consume or
+routing decision may admit the buddy again. The claim is durable and
+transactional with the selected buddy; reads never consume or
 open a window; unknown or partial observations neither clear the exhaustion nor
 advance the window; and the explicit re-detect opens the window without any
 model call or balance query. Every case uses a private board and a fake clock.
@@ -16,10 +16,10 @@ import unittest
 from hey_my_buddy.blackboard.routing.decision import DecisionCoordinator
 from hey_my_buddy.errors import BoardError
 from hey_my_buddy.blackboard.evaluation.native_observations import exhausted
-from hey_my_buddy.blackboard.routing.quota_routing import RETRY_WAIT_SECONDS, configuration_retry, record, retry_facts, routing_facts
+from hey_my_buddy.blackboard.routing.quota_routing import RETRY_WAIT_SECONDS, buddy_retry, record, retry_facts, routing_facts
 from support import BoardTestCase, FakeClock
 import blackboard.routing.test_decision as _decision_fixtures
-from blackboard.routing.test_decision import PROFILE_ID, SECOND_PROFILE_ID
+from blackboard.routing.test_decision import BUDDY_ID, SECOND_BUDDY_ID
 
 T0 = "2026-01-01T00:00:00.000Z"
 CONFIG = {"requestId": "recheck-1", "adapter": "dsh", "provider": "deepseek-official", "model": "deepseek-flash"}
@@ -46,7 +46,7 @@ class QuotaRetryBoard(BoardTestCase):
         self.clock = FakeClock(T0)
         self.new_board = self.board
         self.board = self.new_board(clock=self.clock)
-        self.seed(self.board, decision_profile=None)
+        self.seed(self.board, decision_buddy=None)
         self.exhaust_provider()
 
     def exhaust_provider(self, **changes):
@@ -59,7 +59,7 @@ class QuotaRetryBoard(BoardTestCase):
         with board.store.db.write() as db:
             rows, retried = DecisionCoordinator._scan_candidates(
                 db, [], coding_only=True, decision_id=decision_id, consume_retries=consume, now=self.clock.value)
-            return [row["profile_id"] for row in rows], retried
+            return [row["buddy_id"] for row in rows], retried
 
     def marker_value(self):
         with self.board.store.db.read() as db:
@@ -74,17 +74,17 @@ class QuotaRetryBoard(BoardTestCase):
 
 class QuotaRetryTests(QuotaRetryBoard):
     def test_window_opens_after_one_hour_and_is_consumed_exactly_once(self):
-        # Before the hour the configuration stays excluded and no marker exists.
+        # Before the hour the buddy stays excluded and no marker exists.
         self.assertEqual(self.candidates("dec-first")[0], [])
         self.assertIsNone(self.marker_value())
         self.clock.advance(RETRY_WAIT_SECONDS - 1)
         self.assertEqual(self.candidates("dec-early")[0], [])
         # One second later the window opens: one decision admits both provider
-        # profiles and claims the single window durably in the same transaction.
+        # buddies and claims the single window durably in the same transaction.
         self.clock.advance(1)
         rows, retried = self.candidates("dec-first")
-        self.assertEqual(rows, [PROFILE_ID, SECOND_PROFILE_ID])
-        self.assertEqual(retried, [PROFILE_ID, SECOND_PROFILE_ID])
+        self.assertEqual(rows, [BUDDY_ID, SECOND_BUDDY_ID])
+        self.assertEqual(retried, [BUDDY_ID, SECOND_BUDDY_ID])
         marker = self.marker_value()
         self.assertEqual(marker["consumedBy"], "dec-first")
         self.assertEqual(parse(marker["consumedAt"]), parse(self.clock.value))
@@ -98,7 +98,7 @@ class QuotaRetryTests(QuotaRetryBoard):
         self.clock.advance(RETRY_WAIT_SECONDS - 1)
         self.assertEqual(self.candidates("dec-third")[0], [])
         self.clock.advance(1)
-        self.assertEqual(self.candidates("dec-third")[0], [PROFILE_ID, SECOND_PROFILE_ID])
+        self.assertEqual(self.candidates("dec-third")[0], [BUDDY_ID, SECOND_BUDDY_ID])
 
     def test_publish_bounds_recheck_accepts_only_the_consuming_decision(self):
         self.clock.advance(RETRY_WAIT_SECONDS)
@@ -108,8 +108,8 @@ class QuotaRetryTests(QuotaRetryBoard):
             # keeps its own frozen answer legal at the publish-time re-check.
             rows, retried = DecisionCoordinator._scan_candidates(
                 db, [], coding_only=True, decision_id="dec-first", consume_retries=False, now=self.clock.value)
-            self.assertEqual([row["profile_id"] for row in rows], [PROFILE_ID, SECOND_PROFILE_ID])
-            self.assertEqual(retried, [PROFILE_ID, SECOND_PROFILE_ID])
+            self.assertEqual([row["buddy_id"] for row in rows], [BUDDY_ID, SECOND_BUDDY_ID])
+            self.assertEqual(retried, [BUDDY_ID, SECOND_BUDDY_ID])
             self.assertEqual(self.marker_value()["consumedBy"], "dec-first")
             rows, _retried = DecisionCoordinator._scan_candidates(
                 db, [], coding_only=True, decision_id="dec-other", consume_retries=False, now=self.clock.value)
@@ -119,9 +119,9 @@ class QuotaRetryTests(QuotaRetryBoard):
         self.clock.advance(RETRY_WAIT_SECONDS)
         self.board.call("console_snapshot", {})
         self.board.call("capabilities", {})
-        self.board.call("model_profiles", {"query": "deepseek"})
+        self.board.call("buddy_list", {"query": "deepseek"})
         self.board.call("selection_list", {})
-        # The read-only candidate projection still reports the configuration
+        # The read-only candidate projection still reports the buddy
         # excluded, and no marker was written by any read.
         with self.board.store.db.read() as db:
             rows, retried = DecisionCoordinator._scan_candidates(db, [], coding_only=True, now=self.clock.value)
@@ -138,7 +138,7 @@ class QuotaRetryTests(QuotaRetryBoard):
         self.assertEqual(self.candidates("dec-a")[0], [])
         self.clock.advance(1)
         rows, _retried = self.candidates("dec-a")
-        self.assertEqual(rows, [PROFILE_ID, SECOND_PROFILE_ID])
+        self.assertEqual(rows, [BUDDY_ID, SECOND_BUDDY_ID])
 
     def test_unknown_observation_preserves_the_consumed_retry_and_state_identity(self):
         self.clock.advance(RETRY_WAIT_SECONDS)
@@ -156,7 +156,7 @@ class QuotaRetryTests(QuotaRetryBoard):
         self.assertEqual(self.marker_value(), marker)
         self.assertEqual(self.candidates("dec-next"), ([], []))
         self.clock.advance(RETRY_WAIT_SECONDS - 60)
-        self.assertEqual(self.candidates("dec-next")[0], [PROFILE_ID, SECOND_PROFILE_ID])
+        self.assertEqual(self.candidates("dec-next")[0], [BUDDY_ID, SECOND_BUDDY_ID])
 
     def test_newer_available_observation_clears_exhaustion_and_drops_the_marker(self):
         self.clock.advance(RETRY_WAIT_SECONDS)
@@ -167,7 +167,7 @@ class QuotaRetryTests(QuotaRetryBoard):
                                "observedAt": moment(RETRY_WAIT_SECONDS + 60), "ordinaryUsageAllowed": True})
             self.assertIsNone(exhausted(db, CONFIG, now=self.clock.value))
         self.assertIsNone(self.marker_value())
-        self.assertEqual(self.candidates("dec-b")[0], [PROFILE_ID, SECOND_PROFILE_ID])
+        self.assertEqual(self.candidates("dec-b")[0], [BUDDY_ID, SECOND_BUDDY_ID])
 
     def test_newer_blocked_observation_restarts_the_hour(self):
         self.clock.advance(RETRY_WAIT_SECONDS)
@@ -180,14 +180,14 @@ class QuotaRetryTests(QuotaRetryBoard):
             self.assertIsNotNone(exhausted(db, CONFIG, now=self.clock.value))
         self.assertEqual(self.candidates("dec-second")[0], [])
         self.clock.advance(RETRY_WAIT_SECONDS)
-        self.assertEqual(self.candidates("dec-second")[0], [PROFILE_ID, SECOND_PROFILE_ID])
+        self.assertEqual(self.candidates("dec-second")[0], [BUDDY_ID, SECOND_BUDDY_ID])
 
     def test_known_reset_keeps_scheduled_recovery_and_no_retry_window(self):
         self.exhaust_provider(observedAt=moment(10), resetsAt=moment(7200))
         with self.board.store.db.write() as db:
             item = {"adapter": "dsh", **routing_facts(db, "dsh", now=self.clock.value)[0]}
             self.assertIsNone(retry_facts(db, item, now=self.clock.value))
-            self.assertIsNone(configuration_retry(db, CONFIG, now=self.clock.value))
+            self.assertIsNone(buddy_retry(db, CONFIG, now=self.clock.value))
         self.clock.advance(RETRY_WAIT_SECONDS)
         self.assertEqual(self.candidates("dec-a")[0], [])
         # At the recorded reset the ordinary recovery applies with no claim.
@@ -195,7 +195,7 @@ class QuotaRetryTests(QuotaRetryBoard):
         with self.board.store.db.write() as db:
             self.assertIsNone(exhausted(db, CONFIG, now=self.clock.value))
         rows, retried = self.candidates("dec-a")
-        self.assertEqual(rows, [PROFILE_ID, SECOND_PROFILE_ID])
+        self.assertEqual(rows, [BUDDY_ID, SECOND_BUDDY_ID])
         self.assertEqual(retried, [])
         self.assertIsNone(self.marker_value())
 
@@ -212,12 +212,12 @@ class QuotaRetryTests(QuotaRetryBoard):
             self.assertEqual(parse(facts[0]["retry"]["eligibleAt"]), parse(moment(5 + RETRY_WAIT_SECONDS)))
             self.assertFalse(facts[0]["retry"]["open"])
         snapshot = self.board.call("console_snapshot", {})
-        profile = next(item for item in snapshot["profiles"] if item["profileId"] == PROFILE_ID)
-        self.assertTrue(profile["quotaExhausted"])
-        self.assertEqual(parse(profile["quotaRetry"]["eligibleAt"]), parse(moment(RETRY_WAIT_SECONDS)))
-        self.assertFalse(profile["quotaRetry"]["open"])
-        listed = self.board.call("model_profiles", {"query": "flash"})
-        entry = next(item for item in listed["profiles"] if item["profileId"] == PROFILE_ID)
+        buddy = next(item for item in snapshot["buddies"] if item["buddyId"] == BUDDY_ID)
+        self.assertTrue(buddy["quotaExhausted"])
+        self.assertEqual(parse(buddy["quotaRetry"]["eligibleAt"]), parse(moment(RETRY_WAIT_SECONDS)))
+        self.assertFalse(buddy["quotaRetry"]["open"])
+        listed = self.board.call("buddy_list", {"query": "flash"})
+        entry = next(item for item in listed["buddies"] if item["buddyId"] == BUDDY_ID)
         self.assertEqual(parse(entry["quotaRetry"]["eligibleAt"]), parse(moment(RETRY_WAIT_SECONDS)))
         health = next(row for row in self.board.call("capabilities", {})["harnesses"] if row["adapter"] == "dsh")
         self.assertEqual(health["quotaRouting"][0]["provider"], CONFIG["provider"])
@@ -225,33 +225,33 @@ class QuotaRetryTests(QuotaRetryBoard):
         # the recorded fact the console explains from.
         self.assertEqual(parse(health["quotaRouting"][0]["retry"]["eligibleAt"]), parse(moment(RETRY_WAIT_SECONDS)))
 
-    def test_explicit_host_configuration_is_reminded_and_never_consumes_a_window(self):
+    def test_explicit_host_buddy_is_reminded_and_never_consumes_a_window(self):
         self.clock.advance(RETRY_WAIT_SECONDS)
         result = self.board.call("workflow_submit", {"requestId": "explicit-after-window", "hostId": "host",
             "task": "Explicit choice", "cwd": str(self.git_workdir()),
             "executionWorkspace": {"kind": "existing", "access": "write"},
             "adapter": "dsh", "provider": "deepseek-official", "model": "deepseek-flash", "effort": "off"})
-        self.assertEqual(result["executionConfiguration"]["model"], "deepseek-flash")
+        self.assertEqual(result["buddy"]["model"], "deepseek-flash")
         self.assertEqual(result["quotaWarnings"][0]["code"], "HARNESS_QUOTA_EXHAUSTED")
         self.assertIsNone(self.marker_value())
 
     def test_sole_candidate_retry_completes_by_program_selection(self):
         # Exactly one capability-matching candidate: before the window opens the
         # decision is an honest Host boundary, after it the program selects the
-        # retried configuration without any Router call.
+        # retried buddy without any Router call.
         reply = self.board.call("selection_request", {"requestId": "pick-image", "task": "needs image input",
                                                       "requiredCapabilities": ["input:image"]})
         self.assertEqual(reply["status"], "needs-host")
         decision = self.board.call("selection_get", {"decisionId": reply["decisionId"]})["decision"]
         self.assertEqual(decision["routingBasis"]["candidateCount"], 0)
-        self.assertNotIn("quotaRetryProfileIds", decision["routingBasis"])
+        self.assertNotIn("quotaRetryBuddyIds", decision["routingBasis"])
         self.clock.advance(RETRY_WAIT_SECONDS)
         reply = self.board.call("selection_request", {"requestId": "pick-image-open", "task": "needs image input",
                                                       "requiredCapabilities": ["input:image"]})
         self.assertEqual(reply["status"], "completed")
         decision = self.board.call("selection_get", {"decisionId": reply["decisionId"]})["decision"]
-        self.assertEqual(decision["profileId"], PROFILE_ID)
-        self.assertEqual(decision["routingBasis"]["quotaRetryProfileIds"], [PROFILE_ID])
+        self.assertEqual(decision["buddyId"], BUDDY_ID)
+        self.assertEqual(decision["routingBasis"]["quotaRetryBuddyIds"], [BUDDY_ID])
         # The single window is spent: a later decision cannot repeat the trial.
         again = self.board.call("selection_request", {"requestId": "pick-image-again", "task": "needs image input",
                                                       "requiredCapabilities": ["input:image"]})
@@ -259,11 +259,11 @@ class QuotaRetryTests(QuotaRetryBoard):
 
     def test_unresolved_router_does_not_consume_any_candidate_window(self):
         self.clock.advance(RETRY_WAIT_SECONDS)
-        reply = self.board.call("selection_request", {"requestId": "no-router", "task": "choose a configuration"})
+        reply = self.board.call("selection_request", {"requestId": "no-router", "task": "choose a buddy"})
         self.assertEqual(reply["status"], "needs-host")
         self.assertIsNone(self.marker_value())
         with self.board.store.db.read() as db:
-            self.assertTrue(configuration_retry(db, CONFIG, now=self.clock.value)["open"])
+            self.assertTrue(buddy_retry(db, CONFIG, now=self.clock.value)["open"])
 
     def test_two_concurrent_program_selections_share_one_retry(self):
         from concurrent.futures import ThreadPoolExecutor
@@ -316,7 +316,7 @@ class RedetectTests(QuotaRetryBoard):
         second = self.board.call("quota_redetect", {"requestId": "recheck-1", "adapter": "dsh", "provider": "deepseek-official"})["quota"]
         self.assertEqual(second, first)
         # The opened window admits exactly one decision, immediately.
-        self.assertEqual(self.candidates("dec-manual")[0], [PROFILE_ID, SECOND_PROFILE_ID])
+        self.assertEqual(self.candidates("dec-manual")[0], [BUDDY_ID, SECOND_BUDDY_ID])
         self.assertEqual(self.candidates("dec-next")[0], [])
         # A lost reply replayed after consumption cannot reopen the chance.
         replay = self.board.call("quota_redetect", {"requestId": "recheck-1", "adapter": "dsh", "provider": "deepseek-official"})
@@ -325,7 +325,7 @@ class RedetectTests(QuotaRetryBoard):
         # After the trial a new explicit re-detect opens a fresh window.
         third = self.board.call("quota_redetect", {"requestId": "recheck-2", "adapter": "dsh", "provider": "deepseek-official"})["quota"]
         self.assertEqual(third["opened"], [None])
-        self.assertEqual(self.candidates("dec-manual-2")[0], [PROFILE_ID, SECOND_PROFILE_ID])
+        self.assertEqual(self.candidates("dec-manual-2")[0], [BUDDY_ID, SECOND_BUDDY_ID])
 
     def test_redetect_reports_known_resets_without_state_change(self):
         with self.board.store.db.write() as db:

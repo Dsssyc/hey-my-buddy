@@ -219,7 +219,7 @@ class CodexAdapterTests(unittest.TestCase):
         path = _binding_path(native_root(Path(self.environment['BUDDY_STATE_DIR']), 'codex', 'goal-1'),
                              first.result['sessionId'])
         binding = json.loads(path.read_text())
-        self.assertEqual(set(binding), {'taskId', 'threadId', 'cwd', 'configuration',
+        self.assertEqual(set(binding), {'taskId', 'threadId', 'cwd', 'buddy',
                                         'lastTurnId', 'lastAttemptId', 'lastInputSha256'})
         second = self.execute(self.context(index=2, previous=first.result['sessionId']))
         self.assertEqual(second.status, 'ok', second.to_report())
@@ -458,7 +458,7 @@ class CodexAdapterTests(unittest.TestCase):
         self.assertTrue(result.shutdown_confirmed)
         raw = result.result["rawAnswer"]
         answer = json.loads(raw) if isinstance(raw, str) else raw
-        self.assertEqual(answer["profileId"], "legal")
+        self.assertEqual(answer["buddyId"], "legal")
         self.assertIsNone(result.result["usage"]["bytesRead"])
         self.assertFalse((self.root / "attempt-43" / "turn-output.json").exists())
 

@@ -24,7 +24,7 @@ from types import SimpleNamespace
 from hey_my_buddy.blackboard.store.db import canonical_json
 from hey_my_buddy.buddy.harnesses.registry import adapter as registry_adapter
 
-from blackboard.tasks.test_workflow import CONFIGURATION, WorkflowTestCase
+from blackboard.tasks.test_workflow import BUDDY, WorkflowTestCase
 
 CANDIDATE_SESSION = "dsh-candidate-native-1"
 
@@ -180,7 +180,7 @@ class DshResumeSelectionTests(WorkflowTestCase):
         self.assertEqual(turn["input"]["context"]["resumeReason"], "harness-version-changed")
 
 
-    def test_a_configuration_change_reconstructs_without_a_resume_reason(self):
+    def test_a_buddy_change_reconstructs_without_a_resume_reason(self):
         self.elect_candidate()
         board = self.board()
         self.register(board)
@@ -190,20 +190,20 @@ class DshResumeSelectionTests(WorkflowTestCase):
                          result_mutator=self.goal_owned_storage())
         view = board.call("workflow_get", {"runId": submitted["runId"]})
         self.continue_run(board, view, command_id="continue-new-effort",
-                          configuration={**CONFIGURATION, "effort": "high"},
+                          buddy={**BUDDY, "effort": "high"},
                           access="read",
                           reason="Host raised effort after the prior turn")
         resumed = self.claim(board, claim_request_id="turn-new-effort")
         turn = resumed["claim"]["turn"]
         self.assertEqual(turn["resumeMode"], "reconstructed-new-session")
-        self.assertEqual(turn["input"]["context"]["executionConfiguration"]["effort"], "high")
+        self.assertEqual(turn["input"]["context"]["buddy"]["effort"], "high")
         self.assertNotIn("resumeReason", turn["input"]["context"])
 
     def test_old_attempt_private_native_storage_reconstructs_with_the_home_reason(self):
         """A pre-wiring DSH result reporting attempt-private storage never resumes.
 
         The prior turn is otherwise fully qualified: concluded, same session,
-        configuration and harness version. The common ownership
+        buddy and harness version. The common ownership
         judgment — the same storageOwner qualification codex already applies —
         must reconstruct with an explicit reason instead of selecting
         native-session and failing later inside the native module.

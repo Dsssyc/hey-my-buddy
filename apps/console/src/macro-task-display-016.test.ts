@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { MacroTaskSummary, TimelineEvent, TimelineRow, TimelineSpan } from "./macro-task-types";
 import {
-  acceptanceWaitMs, acceptanceWaitText, configurationLabel, configurationNamer, eventClusterGlyph,
+  acceptanceWaitMs, acceptanceWaitText, buddyLabel, buddyNamer, eventClusterGlyph,
   eventClusterLabel, eventSentence, macroTaskProgressText, macroTaskStateLabel, spanFacts,
 } from "./macro-task-display";
 
@@ -34,28 +34,28 @@ describe("0.16 status vocabulary (0.2)", () => {
   });
 });
 
-describe("0.16 friendly configuration names (0.3)", () => {
+describe("0.16 friendly buddy names (0.3)", () => {
   const config = (model: string, effort: string | null = "high") => ({
     adapter: "claude", provider: "anthropic", model, effort,
   });
 
-  it("prefers a matching snapshot profile name, then known ids, then the raw id", () => {
-    const profiles = [{ adapter: "claude", provider: "anthropic", model: "claude-opus-5-5", label: "Claude Opus 5.5 · high", effort: "high" }];
-    expect(configurationLabel(config("claude-opus-5-5"), profiles)).toBe("Claude Opus 5.5 · high");
-    expect(configurationLabel(config("claude-sonnet-5"))).toBe("Claude Sonnet 5 · high");
-    expect(configurationLabel(config("glm-5.3", "max"))).toBe("GLM-5.3 · max");
-    expect(configurationLabel(config("my-own-model"))).toBe("my-own-model · high");
-    expect(configurationLabel(null)).toBe("配置未记录");
+  it("prefers a matching snapshot buddy name, then known ids, then the raw id", () => {
+    const buddies = [{ adapter: "claude", provider: "anthropic", model: "claude-opus-5-5", label: "Claude Opus 5.5 · high", effort: "high" }];
+    expect(buddyLabel(config("claude-opus-5-5"), buddies)).toBe("Claude Opus 5.5 · high");
+    expect(buddyLabel(config("claude-sonnet-5"))).toBe("Claude Sonnet 5 · high");
+    expect(buddyLabel(config("glm-5.3", "max"))).toBe("GLM-5.3 · max");
+    expect(buddyLabel(config("my-own-model"))).toBe("my-own-model · high");
+    expect(buddyLabel(null)).toBe("配置未记录");
   });
 
   it("omits the effort half when it is empty, and keeps every native name including off", () => {
-    expect(configurationLabel(config("glm-5.3", ""))).toBe("GLM-5.3");
-    expect(configurationLabel(config("glm-5.3", null))).toBe("GLM-5.3");
-    expect(configurationNamer(null)(config("glm-5.3", "off")).text).toBe("GLM-5.3 · off");
+    expect(buddyLabel(config("glm-5.3", ""))).toBe("GLM-5.3");
+    expect(buddyLabel(config("glm-5.3", null))).toBe("GLM-5.3");
+    expect(buddyNamer(null)(config("glm-5.3", "off")).text).toBe("GLM-5.3 · off");
   });
 
   it("keeps the raw adapter/provider/model/effort identity for tooltips", () => {
-    expect(configurationNamer(null)(config("claude-opus-5-5")).title).toBe("claude / anthropic / claude-opus-5-5 / high");
+    expect(buddyNamer(null)(config("claude-opus-5-5")).title).toBe("claude / anthropic / claude-opus-5-5 / high");
   });
 });
 
@@ -63,7 +63,7 @@ describe("0.16 Host event sentences and cluster glyphs (P1.7)", () => {
   const row = (title: string): TimelineRow => ({
     runId: "r1", parentRunId: null, rootRunId: "r1", title, titleSource: "title", taskSummary: null, summary: null,
     createdAt: "2026-09-26T01:00:00Z", state: "delivered", status: "completed", category: "review",
-    shutdownConfirmed: true, depth: 0, kind: "goal", configuration: null, acceptedAt: null, acceptanceVerdict: null,
+    shutdownConfirmed: true, depth: 0, kind: "goal", buddy: null, acceptedAt: null, acceptanceVerdict: null,
   });
   const event = (kind: string, at = "2026-09-26T05:20:00Z", extra: Partial<TimelineEvent> = {}): TimelineEvent => ({
     seq: 1, runId: "r1", kind, at, label: "", summary: "", actor: null,
@@ -99,16 +99,16 @@ describe("0.16 span-facts locator (T4)", () => {
     runId: "r1", parentRunId: null, rootRunId: "r1", title: "修复标题错位", titleSource: "title", taskSummary: null,
     summary: null, createdAt: "2026-09-26T01:00:00Z", state: "delivered", status: "completed", category: "review",
     shutdownConfirmed: true, depth: 0, kind: "goal",
-    configuration: { adapter: "claude", provider: "anthropic", model: "claude-opus-5-5", effort: "high" },
+    buddy: { adapter: "claude", provider: "anthropic", model: "claude-opus-5-5", effort: "high" },
     acceptedAt: null, acceptanceVerdict: null,
   };
   const span = (overrides: Partial<TimelineSpan> = {}): TimelineSpan => ({
     spanId: "s1", runId: "r1", kind: "execution", startAt: "2026-09-26T05:29:00Z", endAt: "2026-09-26T05:34:00Z",
     state: "finished", attemptId: "a1", turnId: null, turnIndex: 1, requestId: null,
-    configuration: row.configuration, shutdownConfirmed: true, uncertain: false, clockSkew: false, ...overrides,
+    buddy: row.buddy, shutdownConfirmed: true, uncertain: false, clockSkew: false, ...overrides,
   });
 
-  it("states only the round and time; no title and no configuration", () => {
+  it("states only the round and time; no title and no buddy", () => {
     expect(spanFacts(span(), row, null).item.locator).toMatch(/^第 1 轮 \d{2}:\d{2}–\d{2}:\d{2}$/);
     expect(spanFacts(span(), row, null).item.locator).not.toContain("修复标题错位");
     expect(spanFacts(span(), row, null).item.locator).not.toContain("claude");
@@ -123,12 +123,12 @@ describe("0.16 acceptance wait (P1.8)", () => {
   const row: TimelineRow = {
     runId: "r1", parentRunId: null, rootRunId: "r1", title: "修复标题错位", titleSource: "title", taskSummary: null,
     summary: null, createdAt: "2026-09-26T01:00:00Z", state: "accepted", status: "completed", category: "ended",
-    shutdownConfirmed: true, depth: 0, kind: "goal", configuration: null,
+    shutdownConfirmed: true, depth: 0, kind: "goal", buddy: null,
     acceptedAt: "2026-09-26T07:25:00Z", acceptanceVerdict: "accepted",
   };
   const execution = (startAt: string, endAt: string | null, overrides: Partial<TimelineSpan> = {}): TimelineSpan => ({
     spanId: "e", runId: "r1", kind: "execution", startAt, endAt, state: "finished",
-    attemptId: "a", turnId: null, turnIndex: 1, requestId: null, configuration: null,
+    attemptId: "a", turnId: null, turnIndex: 1, requestId: null, buddy: null,
     shutdownConfirmed: true, uncertain: false, clockSkew: false, ...overrides,
   });
 

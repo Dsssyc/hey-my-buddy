@@ -90,7 +90,7 @@ def _freeze_review_run(harness, context, request, *, mutation, timeout, stopped,
     """
     from hey_my_buddy.buddy.harnesses.base import open_logs
     from hey_my_buddy.buddy.harnesses.run_contract import (
-        CheckedConfiguration, CheckedValue, EvidenceRef, NativeIdentity, ResultConfiguration,
+        CheckedBuddy, CheckedValue, EvidenceRef, NativeIdentity, ResultBuddy,
         RunEnd, RunIdentity, RunResult, RunValue, StopEvidence, StopLayer,
         decode_run_result, encode_run_request, encode_run_result)
     from hey_my_buddy.buddy.harnesses.registry import adapter as registry_adapter
@@ -156,7 +156,7 @@ def _freeze_review_run(harness, context, request, *, mutation, timeout, stopped,
         identity=built_request.identity, harness=harness,
         end=RunEnd(status="ok", native_exit_code=0),
         model_started=True,
-        configuration=ResultConfiguration(requested=built_request.configuration, checked=CheckedConfiguration(
+        buddy=ResultBuddy(requested=built_request.buddy, checked=CheckedBuddy(
             provider=CheckedValue(value=context.spec["provider"]),
             model=CheckedValue(value=checked_model or context.spec["model"]),
             effort=CheckedValue(value=context.spec["effort"]))),

@@ -3,25 +3,25 @@ import json
 from unittest.mock import patch
 
 from hey_my_buddy.errors import BoardError
-from blackboard.tasks.test_workflow import CONFIGURATION, WorkflowTestCase
+from blackboard.tasks.test_workflow import BUDDY, WorkflowTestCase
 
 
 class HostAdmissionTests(WorkflowTestCase):
-    def test_override_cannot_enable_a_disabled_configuration(self):
-        from support import enable_fixture_configuration
+    def test_override_cannot_enable_a_disabled_buddy(self):
+        from support import enable_fixture_buddy
         board = self.board()
         submitted = self.submit(board)
-        replacement = {**CONFIGURATION, "effort": "high"}
-        enable_fixture_configuration(board.store, replacement)
+        replacement = {**BUDDY, "effort": "high"}
+        enable_fixture_buddy(board.store, replacement)
         with board.store.db.write() as db:
-            db.execute("UPDATE evaluation_profiles SET enabled=0 WHERE effort='high'")
+            db.execute("UPDATE buddies SET enabled=0 WHERE effort='high'")
         with self.assertRaises(BoardError) as caught:
             board.call("workflow_continue", {"runId": submitted["runId"], "commandId": "disabled-override",
-                "expectedRevision": submitted["revision"], "input": "Continue", "configuration": replacement,
-                "reason": "Try disabled profile", **self.control(submitted)})
-        self.assertEqual(caught.exception.code, "CONFIGURATION_UNAVAILABLE")
+                "expectedRevision": submitted["revision"], "input": "Continue", "buddy": replacement,
+                "reason": "Try disabled buddy", **self.control(submitted)})
+        self.assertEqual(caught.exception.code, "BUDDY_UNAVAILABLE")
         with board.store.db.read() as db:
-            self.assertEqual(db.execute("SELECT enabled FROM evaluation_profiles WHERE effort='high'").fetchone()[0], 0)
+            self.assertEqual(db.execute("SELECT enabled FROM buddies WHERE effort='high'").fetchone()[0], 0)
 
     def test_macro_task_of_is_atomic_scoped_and_idempotent(self):
         board = self.board()
@@ -37,7 +37,7 @@ class HostAdmissionTests(WorkflowTestCase):
             self.submit(board, kind="worktree", request_id="ambiguous", macroTaskOf=first["runId"], macroTaskId=first["macroTaskId"])
         self.assertEqual(board.store.count_tasks(), 2)
 
-    def test_failed_explicit_configuration_can_change_with_a_reason(self):
+    def test_failed_explicit_buddy_can_change_with_a_reason(self):
         board = self.board()
         submitted = self.submit(board)
         self.register(board)
@@ -45,30 +45,30 @@ class HostAdmissionTests(WorkflowTestCase):
         self.finish_turn(board, claimed, runner_status="failed", exit_code=1, seal=False)
         current = board.call("workflow_get", {"runId": submitted["runId"]})
         self.assertEqual(current["state"], "failed")
-        changed = {**CONFIGURATION, "effort": "high"}
-        continued = self.continue_run(board, current, configuration=changed)
-        self.assertEqual(continued["executionConfiguration"], changed)
-        self.assertFalse(continued["configurationLocked"])
+        changed = {**BUDDY, "effort": "high"}
+        continued = self.continue_run(board, current, buddy=changed)
+        self.assertEqual(continued["buddy"], changed)
+        self.assertFalse(continued["buddyLocked"])
         with board.store.db.read() as db:
             original = json.loads(db.execute("SELECT goal_json FROM workflow_runs").fetchone()[0])
             self.assertEqual(original["effort"], "off")
-            event = db.execute("SELECT payload_json FROM events WHERE kind='workflow.configuration_overridden'").fetchone()
-            self.assertEqual(json.loads(event[0])["configuration"], changed)
+            event = db.execute("SELECT payload_json FROM events WHERE kind='workflow.buddy_overridden'").fetchone()
+            self.assertEqual(json.loads(event[0])["buddy"], changed)
 
-    def test_locked_configuration_is_part_of_identity_and_survives_failure(self):
+    def test_locked_buddy_is_part_of_identity_and_survives_failure(self):
         board = self.board()
-        submitted = self.submit(board, configurationLocked=True)
-        self.assertTrue(submitted["configurationLocked"])
+        submitted = self.submit(board, buddyLocked=True)
+        self.assertTrue(submitted["buddyLocked"])
         with self.assertRaises(BoardError) as caught:
-            self.submit(board, configurationLocked=False)
+            self.submit(board, buddyLocked=False)
         self.assertEqual(caught.exception.code, "CONFLICT")
         self.register(board)
         claimed = self.claim(board)
         self.finish_turn(board, claimed, runner_status="failed", exit_code=1, seal=False)
         current = board.call("workflow_get", {"runId": submitted["runId"]})
         with self.assertRaises(BoardError) as caught:
-            self.continue_run(board, current, configuration={**CONFIGURATION, "effort": "high"})
-        self.assertEqual(caught.exception.code, "CONFIGURATION_CONFLICT")
+            self.continue_run(board, current, buddy={**BUDDY, "effort": "high"})
+        self.assertEqual(caught.exception.code, "BUDDY_CONFLICT")
 
 
 class HostCompletionTests(WorkflowTestCase):
@@ -369,7 +369,7 @@ class HostConclusionCleanupTests(LifecycleTestCase):
     def test_cancelled_goal_can_cleanup_only_after_a_recorded_conclusion(self):
         board = self.board()
         submitted = board.call("workflow_submit", {
-            **CONFIGURATION, "requestId": "cancel-before-start", "hostId": "host-1", "task": "cancelled work",
+            **BUDDY, "requestId": "cancel-before-start", "hostId": "host-1", "task": "cancelled work",
             "cwd": str(self.repo), "submissionToken": "t" * 32,
             "executionWorkspace": {"kind": "worktree", "access": "write", "writeScope": ["."]},
         })

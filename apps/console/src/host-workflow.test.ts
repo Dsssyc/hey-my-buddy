@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
-  QUOTA_NEAR_LIMIT_PERCENT, artifactKindLabel, artifactStateView, configurationLockText,
+  QUOTA_NEAR_LIMIT_PERCENT, artifactKindLabel, artifactStateView, buddyLockText,
   cumulativePatchView, formatCount, hostConclusionView, integrationHostPaths, parseQuota,
   parseTokenUsage, quotaView, tokenUsageView,
 } from "./host-workflow";
@@ -224,11 +224,11 @@ describe("partial outputs and cumulative patches (ADR-018 §17, §20)", () => {
   });
 });
 
-describe("explicit configuration lock (ADR-018 §18)", () => {
+describe("explicit buddy lock (ADR-018 §18)", () => {
   it("states lock, host choice and unknown separately", () => {
-    expect(configurationLockText(true)).toContain("不能更换");
-    expect(configurationLockText(false)).toContain("可由 Host");
-    expect(configurationLockText(undefined)).toBeNull();
-    expect(configurationLockText(null)).toBeNull();
+    expect(buddyLockText(true)).toContain("不能更换");
+    expect(buddyLockText(false)).toContain("可由 Host");
+    expect(buddyLockText(undefined)).toBeNull();
+    expect(buddyLockText(null)).toBeNull();
   });
 });

@@ -43,7 +43,7 @@ from hey_my_buddy.buddy.harnesses.run_contract import (
     PrivateStatePaths,
     ResumeCheckpoint,
     RunBudget,
-    RunConfiguration,
+    RunBuddy,
     RunContinuation,
     RunFeedback,
     RunIdentity,
@@ -60,8 +60,8 @@ FIXTURE = Path(__file__).parent / "fixtures/mock_codex.py"
 FAST_FIXTURE = Path(__file__).parent / "fixtures/no_tool_codex.py"
 #: The output schema the registered native-schema Worker format really sends.
 OUTCOME_SCHEMA = worker_format("codex").schema
-FAST_SCHEMA = {"type": "object", "additionalProperties": False, "required": ["profileId"],
-               "properties": {"profileId": {"type": "string", "enum": ["legal"]}}}
+FAST_SCHEMA = {"type": "object", "additionalProperties": False, "required": ["buddyId"],
+               "properties": {"buddyId": {"type": "string", "enum": ["legal"]}}}
 REVIEW_SCHEMA = answer_schema(["legal"])
 
 
@@ -129,7 +129,7 @@ class SeamCase(unittest.TestCase):
                                  generation=1, invocation_id=uuid.uuid4().hex,
                                  turn_id=turn_id, input_sha256=input_sha256),
             harness="codex",
-            configuration=RunConfiguration(provider="openai", model="fixture-model", effort="low"),
+            buddy=RunBuddy(provider="openai", model="fixture-model", effort="low"),
             cwd=str(self.cwd),
             private_state=PrivateStatePaths(
                 invocation_root=str(self.base / f"invocation-{marker}"),
@@ -168,12 +168,12 @@ class SeamCase(unittest.TestCase):
                 request = self.request(tool_scope=scope, output_schema=schema, prompt='Choose',
                                        turn_id='turn-check' if scope == 'write' else None,
                                        input_sha256='a' * 64 if scope == 'write' else None)
-                request = request.model_copy(update={'configuration': RunConfiguration(
+                request = request.model_copy(update={'buddy': RunBuddy(
                     provider=provider, model='fixture-model', effort='low')})
                 result = run(request, observer=lambda _facts: FEEDBACK_CONTINUE,
                              services=RunServices(), cancelled=lambda: False)
                 self.assertEqual(result.end.status, 'ok', result.end.message)
-                self.assertEqual(result.configuration.checked.provider.value, expected)
+                self.assertEqual(result.buddy.checked.provider.value, expected)
                 state = json.loads(trace.read_text())
                 params = (state['thread'] if scope == 'none'
                           else state['threads'][result.native_identity.session_id]['start'])
@@ -201,17 +201,17 @@ class FastSeamTests(SeamCase):
     def fast_run(self, case: str, correction: FastCorrection, *, timeout: int = 6,
                  observer=None):
         self.set_case(case)
-        prompt = "Pick a profile"
+        prompt = "Pick a buddy"
         return run(self.request(tool_scope="none", output_schema=FAST_SCHEMA,
                                 prompt=prompt, timeout=timeout),
                    observer=observer or correction.observer, services=None,
                    cancelled=lambda: False)
 
     def test_a_settled_no_tool_answer_is_a_final_value_fact(self):
-        correction = FastCorrection(FAST_SCHEMA, "Pick a profile")
+        correction = FastCorrection(FAST_SCHEMA, "Pick a buddy")
         result = self.fast_run("ok", correction)
         self.assertEqual(result.end.status, "ok", result.end.message)
-        self.assertEqual(result.value.raw, '{"profileId": "legal"}')
+        self.assertEqual(result.value.raw, '{"buddyId": "legal"}')
         self.assertEqual(result.value.schema_status, "unknown")
         self.assertEqual(result.value.correction_count, 0)
         self.assertIsNone(correction.stop_reason)
@@ -226,14 +226,14 @@ class FastSeamTests(SeamCase):
         self.assertIs(result.completion_evidence.stream_end, True)
 
     def test_inherited_native_environment_notifications_keep_the_thread_identity(self):
-        correction = FastCorrection(FAST_SCHEMA, "Pick a profile")
+        correction = FastCorrection(FAST_SCHEMA, "Pick a buddy")
         result = self.fast_run("native-metadata", correction)
         self.assertEqual(result.end.status, "ok", result.end.message)
         self.assertEqual(result.native_identity.session_id, "thread-1")
         self.assertEqual(result.tool_evidence.value["toolCalls"], 0)
 
     def test_thread_scoped_unknown_notification_is_retained_without_stopping_fast_call(self):
-        correction = FastCorrection(FAST_SCHEMA, "Pick a profile")
+        correction = FastCorrection(FAST_SCHEMA, "Pick a buddy")
         result = self.fast_run("thread-notification", correction)
         self.assertEqual(result.end.status, "ok", result.end.message)
         self.assertIsNone(correction.stop_reason)
@@ -241,10 +241,10 @@ class FastSeamTests(SeamCase):
         self.assertEqual(facts, {"countsByType": {"thread/futureNotification": 1}, "total": 1})
 
     def test_connection_unknown_notifications_before_thread_and_during_turn_keep_answer(self):
-        correction = FastCorrection(FAST_SCHEMA, "Pick a profile")
+        correction = FastCorrection(FAST_SCHEMA, "Pick a buddy")
         result = self.fast_run("connection-notification", correction)
         self.assertEqual(result.end.status, "ok", result.end.message)
-        self.assertEqual(result.value.raw, '{"profileId": "legal"}')
+        self.assertEqual(result.value.raw, '{"buddyId": "legal"}')
         self.assertIsNone(correction.stop_reason)
         self.assertEqual(result.native_evidence.unknown_events.to_payload(),
                          {"countsByType": {"account/updated": 2}, "total": 2})
@@ -259,7 +259,7 @@ class FastSeamTests(SeamCase):
                                    ("foreign-thread", "Unbound native event", "thread/futureNotification"),
                                    ("foreign-thread-started", "Unbound native event", "thread/started")):
             with self.subTest(case=case):
-                correction = FastCorrection(FAST_SCHEMA, "Pick a profile")
+                correction = FastCorrection(FAST_SCHEMA, "Pick a buddy")
                 result = self.fast_run(case, correction)
                 self.assertEqual(result.end.reason_code, "invalid-native-result")
                 self.assertIn(text, result.end.message)
@@ -267,7 +267,7 @@ class FastSeamTests(SeamCase):
                 self.assertLessEqual(len(result.end.message.encode()), 512)
 
     def test_fast_failed_turn_retains_native_error_in_public_evidence(self):
-        correction = FastCorrection(FAST_SCHEMA, "Pick a profile")
+        correction = FastCorrection(FAST_SCHEMA, "Pick a buddy")
         result = self.fast_run("native-failure", correction)
         self.assertEqual(result.end.reason_code, "native-turn-failed")
         self.assertEqual(result.native_error.value["error"]["message"], "Native request failed: invalid_json_schema")
@@ -292,12 +292,12 @@ class FastSeamTests(SeamCase):
                 ("usage-format", 34, 6, 10, "complete"),
                 ("usage-then-missing", 17, 3, 5, "partial")):
             with self.subTest(case=case):
-                correction = FastCorrection(FAST_SCHEMA, "Pick a profile")
+                correction = FastCorrection(FAST_SCHEMA, "Pick a buddy")
                 result = self.fast_run(case, correction)
                 self.assertEqual(result.end.status, "ok", result.end.message)
                 self.assertEqual(result.usage.value["inputTokens"], input_tokens)
                 self.assertEqual(result.usage.value["completeness"], completeness)
-                request = self.request(tool_scope="none", output_schema=FAST_SCHEMA, prompt="Pick a profile")
+                request = self.request(tool_scope="none", output_schema=FAST_SCHEMA, prompt="Pick a buddy")
                 receipt = _fast_result(result, request, {"elapsedMs": 1})
                 self.assertEqual(receipt["tokenUsage"]["inputTokens"], input_tokens)
                 self.assertEqual(receipt["tokenUsage"]["completeness"], completeness)
@@ -306,10 +306,10 @@ class FastSeamTests(SeamCase):
                 self.assertNotIn("totalTokens", receipt["tokenUsage"])
 
     def test_user_config_layers_mcp_and_native_home_are_preserved(self):
-        request = self.request(tool_scope="none", output_schema=FAST_SCHEMA, prompt="Pick a profile")
+        request = self.request(tool_scope="none", output_schema=FAST_SCHEMA, prompt="Pick a buddy")
         (self.home / "config.toml").write_text('[mcp_servers.user]\ncommand = "user-tool"\n')
         self.set_case("ok")
-        correction = FastCorrection(FAST_SCHEMA, "Pick a profile")
+        correction = FastCorrection(FAST_SCHEMA, "Pick a buddy")
         result = run(request, observer=correction.observer, services=None, cancelled=lambda: False)
         self.assertEqual(result.end.status, "ok", result.end.message)
         trace = json.loads(Path(os.environ["BUDDY_CODEX_FIXTURE_STATE"]).read_text())
@@ -324,20 +324,20 @@ class FastSeamTests(SeamCase):
         self.assertIsNone(result.usage)
 
     def test_one_format_correction_runs_a_second_turn_on_the_same_thread(self):
-        correction = FastCorrection(FAST_SCHEMA, "Pick a profile")
+        correction = FastCorrection(FAST_SCHEMA, "Pick a buddy")
         result = self.fast_run("format", correction)
         self.assertEqual(result.end.status, "ok", result.end.message)
         self.assertEqual(result.value.correction_count, 1)
-        self.assertEqual(result.value.raw, '{"profileId": "legal"}')
+        self.assertEqual(result.value.raw, '{"buddyId": "legal"}')
         # Both root turns are listed as native roots of this one run.
         self.assertEqual(len(result.tool_evidence.value["nativeIdentity"]), 2)
         trace = json.loads(Path(os.environ["BUDDY_CODEX_FIXTURE_STATE"]).read_text())
         self.assertEqual([turn["input"][0]["text"] for turn in trace["turns"]],
-                         ["Pick a profile",
-                          "Pick a profile\n\nFormat correction: answer-invalid-json" + CORRECTION_SUFFIX])
+                         ["Pick a buddy",
+                          "Pick a buddy\n\nFormat correction: answer-invalid-json" + CORRECTION_SUFFIX])
 
     def test_tool_facts_stop_the_run_through_the_observer_feedback(self):
-        correction = FastCorrection(FAST_SCHEMA, "Pick a profile")
+        correction = FastCorrection(FAST_SCHEMA, "Pick a buddy")
         result = self.fast_run("typed", correction)
         self.assertEqual(result.end.status, "cancelled")
         self.assertEqual(result.end.reason_code, "observer-interrupt")
@@ -348,7 +348,7 @@ class FastSeamTests(SeamCase):
         self.assertTrue(result.stop_evidence.interrupt.requested)
 
     def test_unknown_events_continue_through_the_observer_to_a_result(self):
-        correction = FastCorrection(FAST_SCHEMA, "Pick a profile")
+        correction = FastCorrection(FAST_SCHEMA, "Pick a buddy")
         seen = []
 
         def observer(facts):
@@ -365,7 +365,7 @@ class FastSeamTests(SeamCase):
                         [facts["unknownEvents"] for facts in seen])
 
     def test_a_denied_interaction_is_refused_then_stops_the_run(self):
-        correction = FastCorrection(FAST_SCHEMA, "Pick a profile")
+        correction = FastCorrection(FAST_SCHEMA, "Pick a buddy")
         result = self.fast_run("request", correction)
         self.assertEqual(result.end.status, "cancelled")
         self.assertEqual(result.end.reason_code, "observer-interrupt")
@@ -386,7 +386,7 @@ class FastSeamTests(SeamCase):
         # The observed EOF is a stream fact of its own: an unknown group must
         # not overwrite it, and the unknown stays unknown.
         with self.halt_reported_unconfirmed():
-            correction = FastCorrection(FAST_SCHEMA, "Pick a profile")
+            correction = FastCorrection(FAST_SCHEMA, "Pick a buddy")
             result = self.fast_run("ok", correction)
         self.assertEqual(result.end.status, "error")
         self.assertEqual(result.end.reason_code, "native-shutdown-failed")
@@ -398,7 +398,7 @@ class FastSeamTests(SeamCase):
         self.assertIsNone(result.stop_evidence.interrupt.requested)
 
     def test_eof_without_settlement_fails_the_stream(self):
-        correction = FastCorrection(FAST_SCHEMA, "Pick a profile")
+        correction = FastCorrection(FAST_SCHEMA, "Pick a buddy")
         result = self.fast_run("eof", correction)
         self.assertEqual(result.end.status, "error")
         self.assertEqual(result.end.reason_code, "transport-error")
@@ -406,9 +406,9 @@ class FastSeamTests(SeamCase):
         self.assertIsNot(result.completion_evidence.stream_end, True)
 
     def test_deadline_stops_reports_interrupt_and_removes_private_auth(self):
-        correction = FastCorrection(FAST_SCHEMA, "Pick a profile")
+        correction = FastCorrection(FAST_SCHEMA, "Pick a buddy")
         request = self.request(tool_scope="none", output_schema=FAST_SCHEMA,
-                               prompt="Pick a profile", timeout=1)
+                               prompt="Pick a buddy", timeout=1)
         self.set_case("hang")
         result = run(request, observer=correction.observer, services=None,
                      cancelled=lambda: False)
@@ -424,7 +424,7 @@ class FastSeamTests(SeamCase):
         self.assertFalse((Path(request.private_state.native_root) / "codex-home" / "auth.json").is_symlink())
 
     def test_unverified_no_tool_policy_continues_with_readback_facts(self):
-        result = self.fast_run("config-mismatch", FastCorrection(FAST_SCHEMA, "Pick a profile"))
+        result = self.fast_run("config-mismatch", FastCorrection(FAST_SCHEMA, "Pick a buddy"))
         self.assertEqual(result.end.status, "ok", result.end.message)
         self.assertTrue(result.model_started)
         facts = native_run.native_evidence(result)
@@ -434,16 +434,16 @@ class FastSeamTests(SeamCase):
     def test_unreadable_no_tool_model_continues_with_unknown_checked_model(self):
         for case in ("missing-model", "unreadable-model"):
             with self.subTest(case=case):
-                result = self.fast_run(case, FastCorrection(FAST_SCHEMA, "Pick a profile"))
+                result = self.fast_run(case, FastCorrection(FAST_SCHEMA, "Pick a buddy"))
                 self.assertEqual(result.end.status, "ok", result.end.message)
                 self.assertTrue(result.model_started)
-                self.assertIsNone(result.configuration.checked.model)
+                self.assertIsNone(result.buddy.checked.model)
                 self.assertEqual(native_run.native_evidence(result)["policyCheck"]["selectedModel"]["status"], "unknown")
 
     def test_different_no_tool_model_is_refused_before_model_input(self):
-        result = self.fast_run("wrong-model", FastCorrection(FAST_SCHEMA, "Pick a profile"))
+        result = self.fast_run("wrong-model", FastCorrection(FAST_SCHEMA, "Pick a buddy"))
         self.assertEqual(result.end.status, "error")
-        self.assertEqual(result.end.reason_code, "configuration-mismatch")
+        self.assertEqual(result.end.reason_code, "buddy-mismatch")
         self.assertIsNone(result.model_started)
         self.assertEqual(native_run.native_evidence(result)["nativeThreadReceipt"]["model"], "other")
         trace = json.loads(Path(os.environ["BUDDY_CODEX_FIXTURE_STATE"]).read_text())
@@ -452,22 +452,22 @@ class FastSeamTests(SeamCase):
     def test_fast_provider_mismatch_refuses_and_unreadable_provider_continues(self):
         for case in ("provider-wrong", "provider-missing", "provider-unreadable"):
             with self.subTest(case=case):
-                result = self.fast_run(case, FastCorrection(FAST_SCHEMA, "Pick a profile"))
+                result = self.fast_run(case, FastCorrection(FAST_SCHEMA, "Pick a buddy"))
                 trace = json.loads(Path(os.environ["BUDDY_CODEX_FIXTURE_STATE"]).read_text())
                 if case == "provider-wrong":
-                    self.assertEqual(result.end.reason_code, "configuration-mismatch")
+                    self.assertEqual(result.end.reason_code, "buddy-mismatch")
                     self.assertIsNone(result.model_started)
                     self.assertNotIn("turns", trace)
                 else:
                     self.assertEqual(result.end.status, "ok", result.end.message)
-                    self.assertIsNone(result.configuration.checked.provider)
+                    self.assertIsNone(result.buddy.checked.provider)
                     self.assertIn("modelProvider", native_run.native_evidence(result)["nativeThreadReceipt"])
 
     def test_unfamiliar_startup_items_continue_and_reach_result_facts(self):
         for case, label in (("startup-unknown", "futureThing"),
                             ("startup-unreadable", "turn/start-items-unreadable")):
             with self.subTest(case=case):
-                result = self.fast_run(case, FastCorrection(FAST_SCHEMA, "Pick a profile"),
+                result = self.fast_run(case, FastCorrection(FAST_SCHEMA, "Pick a buddy"),
                                        observer=lambda _facts: FEEDBACK_CONTINUE)
                 self.assertEqual(result.end.status, "ok", result.end.message)
                 facts = result.native_evidence.unknown_events.to_payload()
@@ -477,7 +477,7 @@ class FastSeamTests(SeamCase):
         def observe(facts):
             observations.append(facts)
             return FEEDBACK_CONTINUE
-        result = self.fast_run("startup-tool", FastCorrection(FAST_SCHEMA, "Pick a profile"), observer=observe)
+        result = self.fast_run("startup-tool", FastCorrection(FAST_SCHEMA, "Pick a buddy"), observer=observe)
         self.assertEqual(result.end.status, "ok", result.end.message)
         self.assertEqual(result.tool_evidence.value["toolCalls"], 1)
         self.assertTrue(any(facts["toolMarkerFrames"] == 1 for facts in observations))
@@ -486,7 +486,7 @@ class FastSeamTests(SeamCase):
         from hey_my_buddy.protocol.tool_evidence import judge_tool_evidence
         for case in ("startup-unreadable", "startup-unreadable-item", "startup-unreadable-type"):
             with self.subTest(case=case):
-                result = self.fast_run(case, FastCorrection(FAST_SCHEMA, "Pick a profile"),
+                result = self.fast_run(case, FastCorrection(FAST_SCHEMA, "Pick a buddy"),
                                        observer=lambda _facts: FEEDBACK_CONTINUE)
                 self.assertEqual(result.end.status, "ok", result.end.message)
                 self.assertFalse(result.tool_evidence.value["streamComplete"])
@@ -494,7 +494,7 @@ class FastSeamTests(SeamCase):
                 self.assertIsNotNone(result.native_evidence.unknown_events)
 
     def test_unfamiliar_drain_frame_continues_and_retains_unknown_shape(self):
-        result = self.fast_run("late-unknown-frame", FastCorrection(FAST_SCHEMA, "Pick a profile"),
+        result = self.fast_run("late-unknown-frame", FastCorrection(FAST_SCHEMA, "Pick a buddy"),
                                observer=lambda _facts: FEEDBACK_CONTINUE)
         self.assertEqual(result.end.status, "ok", result.end.message)
         self.assertTrue(result.completion_evidence.stream_end)
@@ -507,8 +507,8 @@ class FastSeamTests(SeamCase):
         garbage.chmod(0o755)
         os.environ["BUDDY_CODEX_CLI"] = str(garbage)
         request = self.request(tool_scope="none", output_schema=FAST_SCHEMA,
-                               prompt="Pick a profile", timeout=5)
-        correction = FastCorrection(FAST_SCHEMA, "Pick a profile")
+                               prompt="Pick a buddy", timeout=5)
+        correction = FastCorrection(FAST_SCHEMA, "Pick a buddy")
         result = run(request, observer=correction.observer, services=None,
                      cancelled=lambda: False)
         self.assertEqual(result.end.status, "error")
@@ -524,10 +524,10 @@ class FastSeamTests(SeamCase):
         # The no-tool carrier shares the one relaxed initialization check: the
         # selected name reaches the native thread and turn, and the native
         # rejection is the failure; the absence fact stays on the run result.
-        correction = FastCorrection(FAST_SCHEMA, "Pick a profile")
+        correction = FastCorrection(FAST_SCHEMA, "Pick a buddy")
         self.set_case("unlisted-model")
         result = run(self.request(tool_scope="none", output_schema=FAST_SCHEMA,
-                                  prompt="Pick a profile", timeout=6),
+                                  prompt="Pick a buddy", timeout=6),
                      observer=correction.observer, services=None, cancelled=lambda: False)
         self.assertEqual(result.end.status, "error")
         self.assertEqual(result.end.reason_code, "native-rpc-error")
@@ -576,7 +576,7 @@ class CodexSeamCase(SeamCase):
 
 class ProviderReceiptSeamTests(CodexSeamCase):
     def test_worker_and_review_provider_mismatch_refuses_before_model_input(self):
-        for mode, code in (("worker", "configuration-mismatch"), ("review", "readonly-configuration-mismatch")):
+        for mode, code in (("worker", "buddy-mismatch"), ("review", "readonly-configuration-mismatch")):
             with self.subTest(mode=mode):
                 result = getattr(self, mode + "_run")("provider-wrong")
                 self.assertEqual(result.end.reason_code, code)
@@ -590,14 +590,14 @@ class ProviderReceiptSeamTests(CodexSeamCase):
                 with self.subTest(mode=mode, case=case):
                     result = getattr(self, mode + "_run")(case)
                     self.assertEqual(result.end.status, "ok", result.end.message)
-                    self.assertIsNone(result.configuration.checked.provider)
+                    self.assertIsNone(result.buddy.checked.provider)
 
     def test_resumed_worker_provider_mismatch_refuses_before_another_turn(self):
         first = self.worker_run("ok")
         self.assertEqual(first.end.status, "ok", first.end.message)
         continuation = RunContinuation(mode="native-session", previous_session_id=first.native_identity.session_id)
         result = self.worker_run("provider-wrong", continuation=continuation)
-        self.assertEqual(result.end.reason_code, "configuration-mismatch")
+        self.assertEqual(result.end.reason_code, "buddy-mismatch")
         self.assertIsNone(result.model_started)
         trace = json.loads(Path(os.environ["BUDDY_CODEX_FIXTURE_STATE"]).read_text())
         thread = trace["threads"][first.native_identity.session_id]
@@ -660,7 +660,7 @@ class ReviewSeamTests(CodexSeamCase):
     def test_review_failed_turn_retains_native_error_in_public_evidence(self):
         result = self.review_run("schema-failure")
         self.assertEqual(result.end.reason_code, "native-turn-failed")
-        self.assertIn("suggestedProfileId", result.native_error.value["error"]["message"])
+        self.assertIn("suggestedBuddyId", result.native_error.value["error"]["message"])
         self.assertEqual(native_run.native_evidence(result)["nativeFailure"], result.native_error.value)
     def test_a_fast_native_correction_publishes_the_second_round_final_activity(self):
         self.set_case("readonly-repair")
@@ -704,7 +704,7 @@ class ReviewSeamTests(CodexSeamCase):
         result = self.review_run("ok")
         self.assertEqual(result.end.status, "ok", result.end.message)
         self.assertEqual(result.value.raw,
-                         json.dumps({"profileId": "legal", "reason": "Read-only fixture", "evidence": []}))
+                         json.dumps({"buddyId": "legal", "reason": "Read-only fixture", "evidence": []}))
         self.assertEqual(result.value.correction_count, 0)
         package = result.tool_evidence.value
         self.assertEqual(len(package["nativeIdentity"]), 1)
@@ -774,7 +774,7 @@ class ReviewSeamTests(CodexSeamCase):
                 result = self.review_run(case)
                 self.assertEqual(result.end.status, "ok", result.end.message)
                 self.assertTrue(result.model_started)
-                self.assertIsNone(result.configuration.checked.model)
+                self.assertIsNone(result.buddy.checked.model)
                 self.assertEqual(native_run.native_evidence(result)["policyCheck"]["selectedModel"]["status"], "unknown")
 
     def test_different_review_model_is_refused_before_model_input(self):
@@ -922,7 +922,7 @@ class WorkerSeamTests(CodexSeamCase):
         failure = result.native_error.value
         self.assertEqual(failure["nativeThreadId"], result.native_identity.session_id)
         self.assertEqual(failure["nativeTurnId"], result.native_identity.turn_id)
-        self.assertEqual(failure["error"]["message"], "Invalid schema: required is missing suggestedProfileId")
+        self.assertEqual(failure["error"]["message"], "Invalid schema: required is missing suggestedBuddyId")
         self.assertEqual(failure["error"]["codexErrorInfo"], {"httpConnectionFailed": {"httpStatusCode": 400}})
         self.assertNotIn("unrelated", failure["error"])
         self.assertEqual(_worker_facts(result)["nativeFailure"], failure)
@@ -939,8 +939,8 @@ class WorkerSeamTests(CodexSeamCase):
         result = self.worker_run("config-unreadable")
         self.assertEqual(result.end.status, "ok", result.end.message)
         self.assertTrue(result.model_started)
-        self.assertIsNone(result.configuration.checked.model)
-        self.assertIsNone(result.configuration.checked.effort)
+        self.assertIsNone(result.buddy.checked.model)
+        self.assertIsNone(result.buddy.checked.effort)
         self.assertEqual(native_run.native_evidence(result)["catalogRead"]["discovery"]["reason"], "config-shape-unreadable")
         self.assertIn("model-catalog", result.native_evidence.unconfirmed)
 
@@ -950,8 +950,8 @@ class WorkerSeamTests(CodexSeamCase):
         facts = native_run.native_evidence(result)
         self.assertEqual(facts["catalogRead"]["discovery"]["status"], "unknown")
         self.assertNotIn("selectedModelListed", facts)
-        self.assertIsNone(result.configuration.checked.model)
-        self.assertIsNone(result.configuration.checked.effort)
+        self.assertIsNone(result.buddy.checked.model)
+        self.assertIsNone(result.buddy.checked.effort)
 
     def test_completed_worker_turn_reports_checkpoint_binding_and_activity(self):
         result = self.worker_run("ok")
@@ -994,12 +994,12 @@ class WorkerSeamTests(CodexSeamCase):
                       identities_from_payload(json.dumps(normalized), "codex"))
         request = self.request(tool_scope="write", output_schema=OUTCOME_SCHEMA, prompt="Work",
                                turn_id="turn-1", input_sha256="a" * 64, native="worker-native")
-        request = request.model_copy(update={"configuration": RunConfiguration(
+        request = request.model_copy(update={"buddy": RunBuddy(
             provider="fixture-provider", model="fixture-model", effort="low")})
         result = run(request, observer=lambda facts: FEEDBACK_CONTINUE,
                      services=RunServices(), cancelled=lambda: False)
         self.assertEqual(result.end.status, "ok", result.end.message)
-        self.assertEqual(result.configuration.checked.provider.value, "fixture-provider")
+        self.assertEqual(result.buddy.checked.provider.value, "fixture-provider")
         state = json.loads(Path(os.environ["BUDDY_CODEX_FIXTURE_STATE"]).read_text())
         thread = state["threads"][result.native_identity.session_id]
         self.assertEqual(thread["start"]["modelProvider"], "fixture-provider")
@@ -1016,7 +1016,7 @@ class WorkerSeamTests(CodexSeamCase):
         root = self.base / "worker-native"
         path = native_run._binding_path(root, first.native_identity.session_id)
         binding = json.loads(path.read_text())
-        self.assertEqual(set(binding), {"taskId", "threadId", "cwd", "configuration", "lastTurnId",
+        self.assertEqual(set(binding), {"taskId", "threadId", "cwd", "buddy", "lastTurnId",
                                         "lastAttemptId", "lastInputSha256"})
         binding.update(codexHome="<old-private-home>", credentialSource={"source": "native"})
         path.write_text(json.dumps(binding))
@@ -1025,15 +1025,15 @@ class WorkerSeamTests(CodexSeamCase):
         self.assertEqual(resumed.end.reason_code, "native-resume-unavailable")
         self.assertIsNone(resumed.model_started)
 
-    def test_codex_schema_accepts_a_nullable_profile_suggestion(self):
+    def test_codex_schema_accepts_a_nullable_buddy_suggestion(self):
         from hey_my_buddy.buddy.roles.turn_io import validate_outcome
         request = OUTCOME_SCHEMA["properties"]["outcome"]["anyOf"][1]["properties"]["request"]
-        self.assertIn("suggestedProfileId", request["properties"])
-        for suggestion in (None, "helper-profile"):
+        self.assertIn("suggestedBuddyId", request["properties"])
+        for suggestion in (None, "helper-buddy"):
             outcome = {"disposition": "assistance", "summary": "Needs help", "decisions": [],
                        "remaining": [], "artifacts": [], "request": {
                            "summary": "Help", "attempted": "Inspected", "neededWork": "Verify",
-                           "acceptance": "Verified", "expectedArtifacts": [], "suggestedProfileId": suggestion}}
+                           "acceptance": "Verified", "expectedArtifacts": [], "suggestedBuddyId": suggestion}}
             self.assertIsNone(validate_outcome(outcome))
 
     def test_worker_native_usage_and_quota_snapshot_are_retained(self):
@@ -1775,7 +1775,7 @@ class CatalogTrustTests(CodexSeamCase):
                                  generation=1, invocation_id=uuid.uuid4().hex,
                                  turn_id="turn-check", input_sha256=input_hash(turn_input)),
             harness="codex",
-            configuration=RunConfiguration(provider="openai", model="fixture-model", effort="medium"),
+            buddy=RunBuddy(provider="openai", model="fixture-model", effort="medium"),
             cwd=str(self.cwd),
             private_state=PrivateStatePaths(
                 invocation_root=str(self.base / f"invocation-{marker}"),
@@ -1786,7 +1786,7 @@ class CatalogTrustTests(CodexSeamCase):
             observer=lambda _facts: FEEDBACK_CONTINUE,
             services=self.worker_services(), cancelled=lambda: False)
         self.assertEqual(result.end.status, "error")
-        self.assertEqual(result.end.reason_code, "invalid-configuration")
+        self.assertEqual(result.end.reason_code, "invalid-buddy")
         self.assertIn("not in the current native catalog", result.end.message)
         # The refusal precedes any native thread, and records no absence fact.
         state = json.loads(Path(os.environ["BUDDY_CODEX_FIXTURE_STATE"]).read_text()) \
@@ -1802,7 +1802,7 @@ class CatalogTrustTests(CodexSeamCase):
         # never reaches a thread or turn, and never counts as an absence.
         result = self.worker_run("no-efforts-row")
         self.assertEqual(result.end.status, "error")
-        self.assertEqual(result.end.reason_code, "invalid-configuration")
+        self.assertEqual(result.end.reason_code, "invalid-buddy")
         self.assertIn("not in the current native catalog", result.end.message)
         state = json.loads(Path(os.environ["BUDDY_CODEX_FIXTURE_STATE"]).read_text()) \
             if Path(os.environ["BUDDY_CODEX_FIXTURE_STATE"]).exists() else {"threads": {}}

@@ -12,7 +12,7 @@ import {
 import type { HistoryEntries, UserPolicyPublication } from "./draft";
 import { attentionIssues, blockingIssues } from "./policy";
 import type { ConsoleView, Draft, Snapshot } from "./types";
-import { historySourceKey } from "./use-profile-history";
+import { historySourceKey } from "./use-buddy-history";
 
 /** Local Buddy settings draft with a single idempotent policy publication. */
 export function useEditor(
@@ -76,7 +76,7 @@ export function useEditor(
   const view: ConsoleView = useMemo(() => {
     const recorded = historyView(snapshot, currentHistory);
     if (!draft) return recorded;
-    const edited = { ...recorded, profiles: draft.profiles,
+    const edited = { ...recorded, buddies: draft.buddies,
       preferences: draft.preferences,
       modelServiceNotes: draft.modelServiceNotes, configuration: draft.configuration,
       modelServiceConcurrency: draft.modelServiceConcurrency };

@@ -24,9 +24,9 @@ from protocol.fixtures import mock_readonly
 from blackboard.routing.fixtures.router_tool_receipt import claim_tool_receipt
 from hey_my_buddy.buddy.runtime.worker import Worker
 
-PROFILE_ID = "dsh:deepseek-official:deepseek-flash:off"
-PROFILE = {
-    "profileId": PROFILE_ID,
+BUDDY_ID = "dsh:deepseek-official:deepseek-flash:off"
+CATALOG_BUDDY = {
+    "buddyId": BUDDY_ID,
     "label": "DeepSeek-V41-Flash · off",
     "adapter": "dsh",
     "provider": "deepseek-official",
@@ -39,21 +39,21 @@ PROFILE = {
     "description": "fixture decision model",
     "source": "manual",
 }
-SECOND_PROFILE_ID = "dsh:deepseek-official:deepseek-v4-pro:high"
-SECOND_PROFILE = {
-    **PROFILE,
-    "profileId": SECOND_PROFILE_ID,
+SECOND_BUDDY_ID = "dsh:deepseek-official:deepseek-v4-pro:high"
+SECOND_BUDDY = {
+    **CATALOG_BUDDY,
+    "buddyId": SECOND_BUDDY_ID,
     "label": "DeepSeek-V4-Pro · high",
     "model": "deepseek-v4-pro",
     "effort": "high",
     "capabilities": ["execution:dsh", "effort:high", *permission_capabilities("dsh")],
 }
-#: A second effort-high profile, so a test can pin or constrain to `effort:
+#: A second effort-high buddy, so a test can pin or constrain to `effort:
 #: high` and still leave two legal candidates for the Router path.
-THIRD_PROFILE_ID = "dsh:deepseek-official:deepseek-flash:high"
-THIRD_PROFILE = {
-    **PROFILE,
-    "profileId": THIRD_PROFILE_ID,
+THIRD_BUDDY_ID = "dsh:deepseek-official:deepseek-flash:high"
+THIRD_BUDDY = {
+    **CATALOG_BUDDY,
+    "buddyId": THIRD_BUDDY_ID,
     "label": "DeepSeek-V41-Flash · high",
     "effort": "high",
 }
@@ -75,8 +75,8 @@ class DecisionTestCase(BoardTestCase):
         self,
         board,
         *,
-        profiles=(PROFILE, SECOND_PROFILE),
-        decision_profile: str | None = PROFILE_ID,
+        buddies=(CATALOG_BUDDY, SECOND_BUDDY),
+        decision_buddy: str | None = BUDDY_ID,
         preferences=None,
     ) -> dict:
         board.call("model_catalog_refresh", {"requestId": "catalog-seed"})
@@ -84,9 +84,9 @@ class DecisionTestCase(BoardTestCase):
             "user_policy_publish",
             {
                 "commandId": "seed-1",
-                "profileSettings": [{"profileId": item["profileId"], "enabled": True} for item in profiles],
+                "buddySettings": [{"buddyId": item["buddyId"], "enabled": True} for item in buddies],
                 "preferenceChanges": preferences or [],
-                "configuration": {"defaultRoutingMode": "review", "routerProfileIds": [decision_profile] if decision_profile else []},
+                "configuration": {"defaultRoutingMode": "review", "routerBuddyIds": [decision_buddy] if decision_buddy else []},
             },
         )
         return result
@@ -123,9 +123,9 @@ class DecisionTestCase(BoardTestCase):
         return caught.exception
 
     @classmethod
-    def valid_decision(cls, document: dict, profile_id: str | None, *,
+    def valid_decision(cls, document: dict, buddy_id: str | None, *,
                        reason: str = "fixture selection", evidence: list[dict] | None = None) -> dict:
-        return {"profileId": profile_id, "reason": reason, "evidence": list(evidence or [])}
+        return {"buddyId": buddy_id, "reason": reason, "evidence": list(evidence or [])}
 
 
 class SelectionRequestTests(DecisionTestCase):
@@ -145,8 +145,8 @@ class SelectionRequestTests(DecisionTestCase):
         self.assertEqual(queued["kind"], "select")
         self.assertEqual(queued["requestId"], "pick-1")
         self.assertEqual(queued["requested"]["task"], "fix the failing parser test")
-        self.assertEqual([p["profileId"] for p in queued["input"]["profiles"]],
-                         [PROFILE_ID, SECOND_PROFILE_ID])
+        self.assertEqual([p["buddyId"] for p in queued["input"]["buddies"]],
+                         [BUDDY_ID, SECOND_BUDDY_ID])
         # The queued recommendation is cancelled through the ordinary task operation.
         board.call("task_cancel", {"runId": first["runId"], "reason": "not needed"})
         self.assertEqual(self.decision(board, first["decisionId"])["status"], "cancelled")
@@ -162,7 +162,7 @@ class SelectionRequestTests(DecisionTestCase):
         self.run_worker(board)
         decision = self.decision(board, request["decisionId"])
         self.assertEqual(decision["status"], "completed")
-        self.assertEqual(decision["profileId"], PROFILE_ID)
+        self.assertEqual(decision["buddyId"], BUDDY_ID)
         self.assertIn("mock select chose", decision["reason"])
         # Exactly the decision's own run exists; no business task was submitted.
         tasks = board.call("task_list", {"limit": 50})["runs"]
@@ -170,10 +170,10 @@ class SelectionRequestTests(DecisionTestCase):
         self.assertEqual(tasks[0]["adapter"], "decision")
         # The Host decides and starts work explicitly: the recommendation returns the
         # parameters, and the decision run itself is not an execution permit.
-        self.assertEqual(decision["requestedProfile"]["model"], PROFILE["model"])
-        self.assertEqual(decision["requestedProfile"]["effort"], PROFILE["effort"])
-        self.assertIsNone(decision["resolvedProfile"])
-        self.assertIsNone(decision["observedProfile"])
+        self.assertEqual(decision["requestedBuddy"]["model"], CATALOG_BUDDY["model"])
+        self.assertEqual(decision["requestedBuddy"]["effort"], CATALOG_BUDDY["effort"])
+        self.assertIsNone(decision["resolvedBuddy"])
+        self.assertIsNone(decision["observedBuddy"])
         self.assertTrue(decision["stopEvidence"]["shutdownConfirmed"])
         self.assert_code("UNSUPPORTED", board.call, "task_retry", {"runId": request["runId"]})
         self.assert_code(
@@ -187,14 +187,14 @@ class SelectionRequestTests(DecisionTestCase):
         self.run_worker(board)
         decision = self.decision(board, request["decisionId"])
         self.assertEqual(decision["status"], "completed")
-        self.assertEqual(decision["profileId"], PROFILE_ID)
+        self.assertEqual(decision["buddyId"], BUDDY_ID)
         self.assertEqual(decision["evidence"], [])
         document = decision["input"]
         self.assertEqual(document["operation"], "select")
         self.assertEqual(document["requestId"], "pick-1")
         self.assertEqual(document["task"], "fix the failing parser test")
         self.assertEqual(
-            [profile["profileId"] for profile in document["profiles"]], [PROFILE_ID, SECOND_PROFILE_ID]
+            [buddy["buddyId"] for buddy in document["buddies"]], [BUDDY_ID, SECOND_BUDDY_ID]
         )
         self.assertNotIn("cards", document)
         self.assertNotIn("evidence", document)
@@ -211,44 +211,44 @@ class SelectionRequestTests(DecisionTestCase):
 
     def test_pins_and_excludes_are_enforced_in_python_before_and_after_the_call(self):
         board = self.board()
-        # Three enabled profiles keep two candidates legal after the exclusion, so
+        # Three enabled buddies keep two candidates legal after the exclusion, so
         # the Router path still runs; a single remaining candidate would be
         # selected by the program directly (covered in test_sole_candidate_selection).
-        self.seed(board, profiles=(PROFILE, SECOND_PROFILE, THIRD_PROFILE),
-                  preferences=[{"profileId": PROFILE_ID, "mode": "exclude", "reason": "user excluded"}])
-        self.use_helper(profile_id=SECOND_PROFILE_ID)
+        self.seed(board, buddies=(CATALOG_BUDDY, SECOND_BUDDY, THIRD_BUDDY),
+                  preferences=[{"buddyId": BUDDY_ID, "mode": "exclude", "reason": "user excluded"}])
+        self.use_helper(buddy_id=SECOND_BUDDY_ID)
         request = self.request(board)
         self.run_worker(board)
         decision = self.decision(board, request["decisionId"])
         self.assertEqual(decision["status"], "completed")
-        self.assertEqual(decision["profileId"], SECOND_PROFILE_ID)
-        self.assertEqual(sorted(profile["profileId"] for profile in decision["input"]["profiles"]),
-                         sorted([SECOND_PROFILE_ID, THIRD_PROFILE_ID]))
+        self.assertEqual(decision["buddyId"], SECOND_BUDDY_ID)
+        self.assertEqual(sorted(buddy["buddyId"] for buddy in decision["input"]["buddies"]),
+                         sorted([SECOND_BUDDY_ID, THIRD_BUDDY_ID]))
 
         # A pin limits the candidate set; a recommendation outside it is refused.
-        self.use_helper(profile_id=PROFILE_ID)
+        self.use_helper(buddy_id=BUDDY_ID)
         self.publish_user_patch(
             board,
             request_id="pin-1",
             command_id="pin-1",
-            preferenceChanges=[{"profileId": SECOND_PROFILE_ID, "mode": "pin", "reason": "only these two"},
-                               {"profileId": THIRD_PROFILE_ID, "mode": "pin", "reason": "only these two"}],
+            preferenceChanges=[{"buddyId": SECOND_BUDDY_ID, "mode": "pin", "reason": "only these two"},
+                               {"buddyId": THIRD_BUDDY_ID, "mode": "pin", "reason": "only these two"}],
         )
         pinned = self.request(board, request_id="pick-2")
         self.run_worker(board, worker_id="w-pinned")
         pinned_decision = self.decision(board, pinned["decisionId"])
         self.assertEqual(pinned_decision["status"], "needs-host")
         self.assertEqual(pinned_decision["output"]["code"], "router-out-of-bounds")
-        self.assertEqual(sorted(profile["profileId"] for profile in pinned_decision["input"]["profiles"]),
-                         sorted([SECOND_PROFILE_ID, THIRD_PROFILE_ID]))
+        self.assertEqual(sorted(buddy["buddyId"] for buddy in pinned_decision["input"]["buddies"]),
+                         sorted([SECOND_BUDDY_ID, THIRD_BUDDY_ID]))
         # The Router input carries the stored buddy preferences.
         self.assertEqual(pinned_decision["input"]["preferences"],
                          sorted([
-                             {"profileId": SECOND_PROFILE_ID, "mode": "pin",
+                             {"buddyId": SECOND_BUDDY_ID, "mode": "pin",
                               "reason": "only these two"},
-                             {"profileId": THIRD_PROFILE_ID, "mode": "pin",
+                             {"buddyId": THIRD_BUDDY_ID, "mode": "pin",
                               "reason": "only these two"},
-                         ], key=lambda entry: entry["profileId"]))
+                         ], key=lambda entry: entry["buddyId"]))
 
     def test_requested_capabilities_filter_the_candidate_set(self):
         board = self.board()
@@ -262,7 +262,7 @@ class SelectionRequestTests(DecisionTestCase):
         self.assertEqual(request["status"], "completed")
         self.assertIsNone(request["runId"])
         decision = self.decision(board, request["decisionId"])
-        self.assertEqual(decision["profileId"], PROFILE_ID)
+        self.assertEqual(decision["buddyId"], BUDDY_ID)
         self.assertEqual(decision["reason"], "唯一合法候选，未调用 Router")
         self.assertEqual(decision["routingBasis"]["candidateCount"], 1)
         self.readonly_start.assert_not_called()
@@ -281,26 +281,26 @@ class SelectionRequestTests(DecisionTestCase):
     def test_new_pin_and_exclusion_cannot_adopt_an_old_frozen_candidate(self):
         board = self.board()
         self.seed(board)
-        for mode, chosen, bounded in (("pin", SECOND_PROFILE_ID, PROFILE_ID),
-                                     ("exclude", PROFILE_ID, PROFILE_ID)):
+        for mode, chosen, bounded in (("pin", SECOND_BUDDY_ID, BUDDY_ID),
+                                     ("exclude", BUDDY_ID, BUDDY_ID)):
             with self.subTest(mode=mode):
-                # Each case begins with both profiles legal, then changes the hard
+                # Each case begins with both buddies legal, then changes the hard
                 # policy after request. Claim must retain the original input.
                 with board.store.db.write() as connection:
                     connection.execute("DELETE FROM evaluation_preferences")
-                self.use_helper(profile_id=chosen)
+                self.use_helper(buddy_id=chosen)
                 request = self.request(board, request_id=f"freeze-{mode}")
                 frozen = self.decision(board, request["decisionId"])["input"]
-                self.assertEqual([p["profileId"] for p in frozen["profiles"]], [PROFILE_ID, SECOND_PROFILE_ID])
+                self.assertEqual([p["buddyId"] for p in frozen["buddies"]], [BUDDY_ID, SECOND_BUDDY_ID])
                 self.publish_user_patch(board, request_id=f"policy-{mode}", command_id=f"policy-{mode}",
-                                        preferenceChanges=[{"profileId": bounded, "mode": mode, "reason": "new hard bound"}])
+                                        preferenceChanges=[{"buddyId": bounded, "mode": mode, "reason": "new hard bound"}])
                 self.run_worker(board, worker_id=f"w-freeze-{mode}")
                 decision = self.decision(board, request["decisionId"])
                 with board.store.db.read() as connection:
                     retained = json.loads(connection.execute("SELECT document_json FROM router_dispatches WHERE task_id=?", (request["runId"],)).fetchone()[0])
                 self.assertEqual(retained, frozen)
                 self.assertEqual(decision["status"], "completed")
-                self.assertEqual(decision["profileId"], PROFILE_ID if mode == "pin" else SECOND_PROFILE_ID)
+                self.assertEqual(decision["buddyId"], BUDDY_ID if mode == "pin" else SECOND_BUDDY_ID)
                 self.assertFalse(decision["routerCalled"])
                 self.assertTrue(decision["requested"]["selectionRetry"])
 
@@ -308,15 +308,15 @@ class SelectionRequestTests(DecisionTestCase):
         board = self.board()
         # The effort-high constraint leaves two legal candidates, so the frozen
         # input really reaches a Router and adoption rechecks the hard bounds.
-        self.seed(board, profiles=(PROFILE, SECOND_PROFILE, THIRD_PROFILE))
+        self.seed(board, buddies=(CATALOG_BUDDY, SECOND_BUDDY, THIRD_BUDDY))
         for name, constraints, field, replacement in (
             ("fixed", {"effort": "high"}, "effort", "off"),
             ("capability", {"requiredCapabilities": ["execution:dsh"]}, "capabilities_json", "[]"),
         ):
             with self.subTest(name=name):
-                self.use_helper(profile_id=SECOND_PROFILE_ID)
+                self.use_helper(buddy_id=SECOND_BUDDY_ID)
                 if name == "fixed":
-                    # Only workflow routing carries fixed configuration fields.
+                    # Only workflow routing carries fixed buddy fields.
                     # Supply the same internal request used by workflow admission.
                     request = board.store.decisions._create(
                         request_id=f"freeze-{name}", request={"kind": "select", "task": "bounded selection",
@@ -330,25 +330,25 @@ class SelectionRequestTests(DecisionTestCase):
                 client.register_worker(worker, adapter="decision", capabilities=["decision"])
                 claim = client.claim(worker, f"claim-{name}", "n" * 32, task_id=request["runId"])["claim"]
                 with board.store.db.write() as connection:
-                    before = connection.execute(f"SELECT {field} FROM evaluation_profiles WHERE profile_id=?", (SECOND_PROFILE_ID,)).fetchone()[0]
-                    connection.execute(f"UPDATE evaluation_profiles SET {field}=? WHERE profile_id=?", (replacement, SECOND_PROFILE_ID))
+                    before = connection.execute(f"SELECT {field} FROM buddies WHERE buddy_id=?", (SECOND_BUDDY_ID,)).fetchone()[0]
+                    connection.execute(f"UPDATE buddies SET {field}=? WHERE buddy_id=?", (replacement, SECOND_BUDDY_ID))
                 output = {**claim_tool_receipt(claim), "status": "ok", "operation": "select",
                           "stopEvidence": {"shutdownConfirmed": True, "native": {"shutdownConfirmed": True}},
                           "inputVerification": {"unchanged": True, "snapshotSha256": "fixture-digest", "manifestSha256": None},
                           "usage": {"elapsedMs": 100, "toolCalls": 0},
-                          "decision": self.valid_decision(claim["decisionInput"], SECOND_PROFILE_ID)}
+                          "decision": self.valid_decision(claim["decisionInput"], SECOND_BUDDY_ID)}
                 client.submit_result(worker, claim["attempt"]["attemptId"], claim["attempt"]["generation"],
                                      "n" * 32, {"status": "ok", "shutdownConfirmed": True, "result": output})
                 decision = self.decision(board, request["decisionId"])
                 self.assertTrue(decision["requested"].get("selectionRetry"), decision)
                 self.assertIn(decision["status"], ("queued", "completed"))
-                self.assertNotEqual(decision["profileId"], SECOND_PROFILE_ID)
+                self.assertNotEqual(decision["buddyId"], SECOND_BUDDY_ID)
                 with board.store.db.write() as connection:
-                    connection.execute(f"UPDATE evaluation_profiles SET {field}=? WHERE profile_id=?", (before, SECOND_PROFILE_ID))
+                    connection.execute(f"UPDATE buddies SET {field}=? WHERE buddy_id=?", (before, SECOND_BUDDY_ID))
 
-    def test_missing_decision_profile_is_needs_host_without_a_model_call(self):
+    def test_missing_decision_buddy_is_needs_host_without_a_model_call(self):
         board = self.board()
-        self.seed(board, decision_profile=None)
+        self.seed(board, decision_buddy=None)
         request = self.request(board)
         self.assertEqual(request["status"], "needs-host")
         self.assertIsNone(request["runId"])
@@ -409,7 +409,7 @@ class DecisionGateTests(DecisionTestCase):
         self.seed(board)
         request = self.request(board)
         self.publish_user_patch(board, request_id="before-claim", command_id="before-claim",
-                                preferenceChanges=[{"profileId": PROFILE_ID, "mode": "prefer", "reason": "new preference"}])
+                                preferenceChanges=[{"buddyId": BUDDY_ID, "mode": "prefer", "reason": "new preference"}])
         self.run_worker(board)
         decision = self.decision(board, request["decisionId"])
         self.assertEqual(decision["status"], "completed")
@@ -485,7 +485,7 @@ class DecisionFailureTests(DecisionTestCase):
         decision = self.outcome(board, "out_of_candidate")
         self.assertEqual(decision["status"], "needs-host")
         self.assertEqual(decision["output"]["code"], "router-out-of-bounds")
-        self.assertIsNone(decision["selectedProfile"])
+        self.assertIsNone(decision["selectedBuddy"])
         health = board.call("health", {})["routingHealth"]
         self.assertEqual(health["boundsRejectedCount"], 1)
         self.assertEqual(health["failureCount"], 0)
@@ -526,19 +526,19 @@ class DecisionFailureTests(DecisionTestCase):
 
     def test_alternative_without_model_notes_completes_and_is_audited(self):
         board = self.board()
-        self.seed(board, profiles=(PROFILE, SECOND_PROFILE, THIRD_PROFILE),
-                  preferences=[{"profileId": THIRD_PROFILE_ID, "mode": "prefer", "reason": "prefer high"}])
-        self.use_helper(profile_id=SECOND_PROFILE_ID, evidence="none")
+        self.seed(board, buddies=(CATALOG_BUDDY, SECOND_BUDDY, THIRD_BUDDY),
+                  preferences=[{"buddyId": THIRD_BUDDY_ID, "mode": "prefer", "reason": "prefer high"}])
+        self.use_helper(buddy_id=SECOND_BUDDY_ID, evidence="none")
         request = board.call("selection_request", {
             "requestId": "pick-alternative", "task": "choose for this task"})
         self.run_worker(board)
         decision = self.decision(board, request["decisionId"])
         self.assertEqual(decision["status"], "completed", decision.get("reason"))
-        self.assertEqual(decision["profileId"], SECOND_PROFILE_ID)
-        self.assertEqual([entry["profileId"] for entry in decision["input"]["profiles"]],
-                         [PROFILE_ID, THIRD_PROFILE_ID, SECOND_PROFILE_ID])
-        self.assertEqual(decision["input"]["policyFacts"]["userPreferredProfileIds"],
-                         [THIRD_PROFILE_ID])
+        self.assertEqual(decision["buddyId"], SECOND_BUDDY_ID)
+        self.assertEqual([entry["buddyId"] for entry in decision["input"]["buddies"]],
+                         [BUDDY_ID, THIRD_BUDDY_ID, SECOND_BUDDY_ID])
+        self.assertEqual(decision["input"]["policyFacts"]["userPreferredBuddyIds"],
+                         [THIRD_BUDDY_ID])
         self.assertEqual(decision["output"]["policyCheck"]["userPreference"], "alternative")
         self.assertNotIn("taskPreference", decision["output"]["policyCheck"])
         self.assertEqual(decision["evidence"], [])
@@ -568,7 +568,7 @@ class DecisionFailureTests(DecisionTestCase):
         self.seed(board)
         decision = self.outcome(board, "json_answer")
         self.assertEqual(decision["status"], "completed")
-        self.assertEqual(set(decision["output"]["decision"]), {"profileId", "reason", "evidence"})
+        self.assertEqual(set(decision["output"]["decision"]), {"buddyId", "reason", "evidence"})
         self.assertEqual(decision["usage"], {"elapsedMs": 200, "toolCalls": 1, "bytesRead": None})
         self.assertEqual(decision["nativeIdentity"]["sessionId"], "mock-native")
 
@@ -583,7 +583,7 @@ class DecisionFailureTests(DecisionTestCase):
             self.assertEqual(decision["status"], "needs-host")
             self.assertEqual(decision["output"]["code"], code)
             self.assertTrue(decision["stopEvidence"]["shutdownConfirmed"])
-            self.assertIsNone(decision["selectedProfile"])
+            self.assertIsNone(decision["selectedBuddy"])
         self.assertFalse(decision["inputVerification"]["unchanged"])
         # A changed copy is kept for inspection.
         _, changed_root, _ = self.input_verify.call_args.args
@@ -635,7 +635,7 @@ class DecisionFailureTests(DecisionTestCase):
         self.seed(board)
         decision = self.outcome(board, "abstain_with_evidence")
         self.assertEqual(decision["status"], "needs-host")
-        self.assertIsNone(decision["profileId"])
+        self.assertIsNone(decision["buddyId"])
         self.assertEqual(decision["output"]["decision"]["evidence"], [{"kind": "file", "ref": "input.txt"}])
         self.assertIsNone(decision["policyCheck"])
         self.assertEqual(board.call("health", {})["routingHealth"]["abstentionCount"], 1)
@@ -703,13 +703,13 @@ class DecisionFailureTests(DecisionTestCase):
             **claim_tool_receipt(claim),
             "status": "ok",
             "operation": "select",
-            "requested": {"provider": PROFILE["provider"], "model": PROFILE["model"], "reasoningEffort": PROFILE["effort"]},
+            "requested": {"provider": CATALOG_BUDDY["provider"], "model": CATALOG_BUDDY["model"], "reasoningEffort": CATALOG_BUDDY["effort"]},
             "resolved": None,
             "observed": None,
             "usage": {"elapsedMs": 100, "toolCalls": 0, "bytesRead": 0},
             "stopEvidence": {"shutdownConfirmed": True, "native": {"shutdownConfirmed": True}},
             "inputVerification": {"unchanged": True, "manifestSha256": None, "snapshotSha256": "fixture-digest"},
-            "decision": self.valid_decision(claim["decisionInput"], PROFILE_ID, reason="too late"),
+            "decision": self.valid_decision(claim["decisionInput"], BUDDY_ID, reason="too late"),
         }
         restarted.client().submit_result(
             "w-restart",
@@ -720,7 +720,7 @@ class DecisionFailureTests(DecisionTestCase):
         )
         late = self.decision(restarted, first["decisionId"])
         self.assertEqual(late["status"], "failed")
-        self.assertIsNone(late["profileId"])
+        self.assertIsNone(late["buddyId"])
         self.assertIsNone(late["output"])
         with restarted.store.db.read() as connection:
             receipt = json.loads(connection.execute("SELECT result_json FROM attempts WHERE attempt_id=?",
@@ -739,13 +739,13 @@ class DecisionFailureTests(DecisionTestCase):
             **claim_tool_receipt(claim),
             "status": "ok",
             "operation": "select",
-            "requested": document["profile"],
+            "requested": document["buddy"],
             "resolved": None,
             "observed": None,
             "usage": {"elapsedMs": 100, "toolCalls": 0, "bytesRead": 0},
             "stopEvidence": {"shutdownConfirmed": True, "native": {"shutdownConfirmed": True}},
             "inputVerification": {"unchanged": True, "manifestSha256": None, "snapshotSha256": "fixture-digest"},
-            "decision": self.valid_decision(document, PROFILE_ID, reason="replayed once"),
+            "decision": self.valid_decision(document, BUDDY_ID, reason="replayed once"),
         }
         report = {"status": "ok", "result": envelope, "shutdownConfirmed": True, "exitCode": 0}
         first = client.submit_result(
@@ -801,9 +801,9 @@ class DecisionSurfaceTests(DecisionTestCase):
         """The default read is the low-token delegation path, not the full audit."""
         board = self.board()
         self.seed(board)
-        # The decision model and the selected worker profile are different, so the two
+        # The decision model and the selected worker buddy are different, so the two
         # identities cannot be confused in the summary.
-        self.use_helper(profile_id=SECOND_PROFILE_ID)
+        self.use_helper(buddy_id=SECOND_BUDDY_ID)
         request = self.request(board, request_id="pick-compact")
         self.run_worker(board)
         compact = self.decision(board, request["decisionId"], audit=False)
@@ -817,8 +817,8 @@ class DecisionSurfaceTests(DecisionTestCase):
                 "status",
                 "task",
                 "runId",
-                "profileId",
-                "selectedProfile",
+                "buddyId",
+                "selectedBuddy",
                 "decisionModel",
                 "reason",
                 "evidence",
@@ -827,8 +827,8 @@ class DecisionSurfaceTests(DecisionTestCase):
                 "routingBasis",
                 "constraints", "requiredCapabilities",
                 "routerCalled",
-                "routingMode", "routerProfileId", "routerProfile", "routerProblem",
-                "routerProfileIds", "routerIdentities", "routerRetryIntervalSeconds", "routingBudget", "routerIndex", "routerTrials",
+                "routingMode", "routerBuddyId", "routerBuddy", "routerProblem",
+                "routerBuddyIds", "routerIdentities", "routerRetryIntervalSeconds", "routingBudget", "routerIndex", "routerTrials",
                 "usage",
                 "nativeIdentity",
                 "stopEvidence",
@@ -837,11 +837,11 @@ class DecisionSurfaceTests(DecisionTestCase):
                 "updatedAt",
             },
         )
-        self.assertEqual(compact["selectedProfile"]["profileId"], SECOND_PROFILE_ID)
-        self.assertEqual(compact["selectedProfile"]["model"], SECOND_PROFILE["model"])
-        self.assertEqual(compact["selectedProfile"]["effort"], SECOND_PROFILE["effort"])
-        self.assertEqual(compact["selectedProfile"]["adapter"], "dsh")
-        self.assertEqual(compact["decisionModel"]["requested"]["model"], PROFILE["model"])
+        self.assertEqual(compact["selectedBuddy"]["buddyId"], SECOND_BUDDY_ID)
+        self.assertEqual(compact["selectedBuddy"]["model"], SECOND_BUDDY["model"])
+        self.assertEqual(compact["selectedBuddy"]["effort"], SECOND_BUDDY["effort"])
+        self.assertEqual(compact["selectedBuddy"]["adapter"], "dsh")
+        self.assertEqual(compact["decisionModel"]["requested"]["model"], CATALOG_BUDDY["model"])
         # The ordered list and each dispatch's compact trial add explicit facts;
         # the summary still omits the frozen model packet and raw tool stream.
         self.assertLess(len(json.dumps(compact)), 3600, "the default read includes frozen Router settings and bounded receipts but stays small")
@@ -849,11 +849,11 @@ class DecisionSurfaceTests(DecisionTestCase):
         audit = self.decision(board, request["decisionId"])
         self.assertEqual(audit["input"]["operation"], "select")
         self.assertEqual(audit["requested"]["task"], "fix the failing parser test")
-        self.assertEqual(audit["requestedProfile"]["model"], PROFILE["model"])
+        self.assertEqual(audit["requestedBuddy"]["model"], CATALOG_BUDDY["model"])
         self.assertEqual(audit["attemptId"], compact["runId"] and audit["attemptId"])
-        self.assertEqual(audit["profileId"], compact["profileId"])
+        self.assertEqual(audit["buddyId"], compact["buddyId"])
         self.assertEqual(audit["reason"], compact["reason"])
-        self.assertEqual(audit["selectedProfile"], compact["selectedProfile"])
+        self.assertEqual(audit["selectedBuddy"], compact["selectedBuddy"])
         self.assert_code("INVALID_ARGUMENT", board.call, "selection_get", {"decisionId": "x", "nope": True})
 
     def test_decision_history_is_bounded_and_conflict_types_are_distinct(self):
@@ -885,7 +885,7 @@ class DecisionWorkerProcessTests(DecisionTestCase):
         self.assertEqual(decision["status"], "completed", decision.get("reason"))
         attempt_dir = self.directory / "attempts" / decision["runId"] / decision["attemptId"]
         envelope = json.loads((attempt_dir / "runner.stdout.log").read_text())
-        self.assertEqual(set(envelope["rawAnswer"]), {"profileId", "reason", "evidence"})
+        self.assertEqual(set(envelope["rawAnswer"]), {"buddyId", "reason", "evidence"})
         self.assertTrue(envelope["processState"]["shutdownConfirmed"])
         self.assertTrue(decision["stopEvidence"]["shutdownConfirmed"])
         self.assertTrue(decision["inputVerification"]["unchanged"])

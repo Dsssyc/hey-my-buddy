@@ -218,16 +218,16 @@ def validate_outcome(outcome: object) -> str | None:
     if outcome["disposition"] == "completed":
         return None if request is None else "a completed outcome requires request: null"
     required = {"summary", "attempted", "neededWork", "expectedArtifacts", "acceptance"}
-    if not isinstance(request, dict) or not required <= set(request) or set(request) - required - {"suggestedProfileId"}:
+    if not isinstance(request, dict) or not required <= set(request) or set(request) - required - {"suggestedBuddyId"}:
         return "an assistance or attention outcome requires the current request fields"
     if any(not text(request[k]) for k in ("summary", "attempted", "neededWork", "acceptance")):
         return "the turn request requires nonblank summary, attempted, neededWork and acceptance"
-    # An explicit ``suggestedProfileId: null`` is the honest spelling of "no
+    # An explicit ``suggestedBuddyId: null`` is the honest spelling of "no
     # suggestion" and equals an absent key; every other non-string value stays
     # refused so the field can never smuggle an unbounded payload.
     if not strings(request["expectedArtifacts"]) or (
-            "suggestedProfileId" in request and request["suggestedProfileId"] is not None
-            and not text(request["suggestedProfileId"], 256)):
+            "suggestedBuddyId" in request and request["suggestedBuddyId"] is not None
+            and not text(request["suggestedBuddyId"], 256)):
         return "the turn request references are invalid"
     return None
 

@@ -12,7 +12,7 @@ from pydantic import ValidationError
 from buddy.harnesses.zcode.test_native_run import NativeRunCase
 from hey_my_buddy.buddy.harnesses.run_contract import (
     MAX_UNKNOWN_EVENT_TYPES, UNLISTED_NATIVE_EVENTS,
-    RunContinuation, RunFeedback, RunConfiguration,
+    RunContinuation, RunFeedback, RunBuddy,
 )
 from hey_my_buddy.buddy.harnesses.zcode import native_run
 from hey_my_buddy.buddy.harnesses.zcode.protocol import NativeError
@@ -94,9 +94,9 @@ class NoToolShapeTests(unittest.TestCase):
 class BoundaryAndDrainTests(unittest.TestCase):
     def test_known_missing_model_and_effort_capabilities_still_reject(self):
         spec = {"provider": "api", "model": "model", "effort": "low"}
-        for choices, code in (([], "configuration-unavailable"),
+        for choices, code in (([], "buddy-unavailable"),
                               ([{"ref": {"providerId": "api", "modelId": "model"},
-                                 "reasoning": {"levels": [{"value": "high"}]}}], "invalid-configuration")):
+                                 "reasoning": {"levels": [{"value": "high"}]}}], "invalid-buddy")):
             with self.subTest(code=code):
                 connection = mock.Mock()
                 snapshot = {"session": {"sessionId": "root"}, "settings": {"model": {"available": choices}}}
@@ -120,7 +120,7 @@ class BoundaryAndDrainTests(unittest.TestCase):
                         "settings": {"model": {"available": [refusing, unreadable]}}}
             with self.assertRaises(NativeError) as error:
                 native_run.configure_session(connection, snapshot, spec)
-            self.assertEqual(error.exception.code, "invalid-configuration")
+            self.assertEqual(error.exception.code, "invalid-buddy")
             connection.call.assert_not_called()
         with self.subTest(case="target-supported-effort-continues-with-the-fact"):
             unknown = []
@@ -131,7 +131,7 @@ class BoundaryAndDrainTests(unittest.TestCase):
             result = native_run.configure_session(connection, snapshot, spec, note_unknown=unknown.append)
             self.assertEqual([call.args[0] for call in connection.call.call_args_list],
                              ["session/setModel", "session/setThoughtLevel"])
-            self.assertIn("configuration-catalog-unrecognized", unknown)
+            self.assertIn("buddy-catalog-unrecognized", unknown)
             self.assertEqual(result, {"provider": None, "model": None, "effort": None})
         with self.subTest(case="readable-catalog-without-the-target-refuses"):
             connection = mock.Mock()
@@ -139,14 +139,14 @@ class BoundaryAndDrainTests(unittest.TestCase):
                         "settings": {"model": {"available": [other]}}}
             with self.assertRaises(NativeError) as error:
                 native_run.configure_session(connection, snapshot, spec)
-            self.assertEqual(error.exception.code, "configuration-unavailable")
+            self.assertEqual(error.exception.code, "buddy-unavailable")
             connection.call.assert_not_called()
 
-    def test_blank_configuration_fields_are_refused_at_the_request_boundary(self):
+    def test_blank_buddy_fields_are_refused_at_the_request_boundary(self):
         for key in ("provider", "model", "effort"):
             spec = {"provider": "api", "model": "model", "effort": "low", key: " \t"}
             with self.subTest(key=key), self.assertRaises(BoardError):
-                RunConfiguration(**spec)
+                RunBuddy(**spec)
 
     def test_continuation_boundary_rejects_invalid_mode_and_missing_session(self):
         for spec in ({"mode": "other"}, {"mode": "native-session"},
@@ -261,9 +261,9 @@ class NativeShapeRoundTests(NativeRunCase):
         result, facts = self.execute_shape(lambda source: source.replace(
             "'providerId':provider,'modelId':'fixture-model',\n          'options':{'reasoningLevel':'low'}",
             "'unrecognized':'secret'"))
-        self.assertIn("configuration-selection-unrecognized", facts)
-        self.assertIsNone(result.configuration.checked.model)
-        self.assertIsNone(result.configuration.checked.effort)
+        self.assertIn("buddy-selection-unrecognized", facts)
+        self.assertIsNone(result.buddy.checked.model)
+        self.assertIsNone(result.buddy.checked.effort)
 
     def test_rpc_shape_continues_with_result_and_observer_facts(self):
         _result, facts = self.execute_shape(lambda source: source.replace(
@@ -291,9 +291,9 @@ class NativeShapeRoundTests(NativeRunCase):
         with mock.patch.object(native_run.NativeConnection, "call", call):
             result = native_run.run(self.fast_request("Return only one JSON value matching this schema: {}"),
                 observer=lambda _facts: RunFeedback(action="continue"), services=None, cancelled=lambda: False)
-        self.assertEqual(result.end.reason_code, "configuration-mismatch")
+        self.assertEqual(result.end.reason_code, "buddy-mismatch")
         self.assertIsNone(result.model_started)
-        self.assertIsNone(result.configuration.checked.model)
+        self.assertIsNone(result.buddy.checked.model)
         self.assertIsNone(result.completion_evidence)
         self.assertNotIn("session/send", calls)
 

@@ -16,7 +16,7 @@ from .router_boundary import build_boundary
 _CHANGED_CODES = frozenset({
     "router-input-changed",
     "router-out-of-bounds", "router-dispatch-unverified", "workflow-routing-fenced",
-    "ACCOUNT_BINDING_CHANGED", "CONFIGURATION_CONFLICT", "router-input-too-large",
+    "ACCOUNT_BINDING_CHANGED", "BUDDY_CONFLICT", "router-input-too-large",
 })
 
 
@@ -52,11 +52,11 @@ def _stopped(connection, task_id):
     return bool(attempts) or task["state"] not in ("running", "cancelling", "reconciliation-needed")
 
 
-def _state(connection, profile_id, facts, now):
+def _state(connection, buddy_id, facts, now):
     interval = facts.get("routerRetryIntervalSeconds")
     if type(interval) is not int or interval < 1:
         return {}
-    return router_history.router_state(connection, profile_id=profile_id, interval_seconds=interval, now=now)
+    return router_history.router_state(connection, buddy_id=buddy_id, interval_seconds=interval, now=now)
 
 
 def _cached_available(connection, adapter):
@@ -65,10 +65,10 @@ def _cached_available(connection, adapter):
     return health is not None and health['status'] == 'ready'
 
 
-def _quota_recovery(connection, profile, now):
+def _quota_recovery(connection, buddy, now):
     """Only recorded reset times are recovery facts; never invent a quota fuse."""
     from .quota_routing import blocking_records
-    records = blocking_records(connection, profile, now=now)
+    records = blocking_records(connection, buddy, now=now)
     if not records:
         return False, None
     resets = [record["item"].get("resetsAt") for record in records]
@@ -82,10 +82,10 @@ def _preflight_no_answer(connection, item, event, state, now):
     """Project a recorded qualification failure, including after a dispatch queued."""
     item.update(outcome="no_answer", phase=event["payload"].get("phase"),
                 code=event["payload"].get("code"), retryAt=None)
-    profile = connection.execute("SELECT * FROM evaluation_profiles WHERE profile_id=?",
-                                 (item["profileId"],)).fetchone()
-    if profile is not None and item["code"] == "router-quota-exhausted":
-        _, item["retryAt"] = _quota_recovery(connection, profile, now)
+    buddy = connection.execute("SELECT * FROM buddies WHERE buddy_id=?",
+                                 (item["buddyId"],)).fetchone()
+    if buddy is not None and item["code"] == "router-quota-exhausted":
+        _, item["retryAt"] = _quota_recovery(connection, buddy, now)
         if (item["retryAt"] and state.get("inSkipWindow")
                 and router_history._parse(state["retryAt"]) > router_history._parse(item["retryAt"])):
             item["retryAt"] = state["retryAt"]
@@ -122,27 +122,27 @@ def router_trials(connection, row, *, now):
         payload = event["payload"]
         if event["kind"] == "router.no_answer" and payload.get("phase") == "preflight" and payload.get("taskId") is None:
             index = payload.get("routerIndex")
-            inspected.setdefault(index, {"index": index, "profileId": payload.get("profileId"),
+            inspected.setdefault(index, {"index": index, "buddyId": payload.get("buddyId"),
                                          "code": payload.get("code"), "reason": None})
-    for index, profile_id in enumerate(facts.get("routerProfileIds") or []):
-        inspected.setdefault(index, {"index": index, "profileId": profile_id, "unvisited": True})
+    for index, buddy_id in enumerate(facts.get("routerBuddyIds") or []):
+        inspected.setdefault(index, {"index": index, "buddyId": buddy_id, "unvisited": True})
     trials = []
     for index in sorted(set(inspected) | set(dispatched)):
         inspection = inspected.get(index, {})
         doc = dispatched.get(index)
-        profile_id = doc["profileId"] if doc else inspection.get("profileId")
+        buddy_id = doc["buddyId"] if doc else inspection.get("buddyId")
         identities = facts.get("routerIdentities") or []
-        identity = doc["profile"] if doc else inspection.get("identity") or (
+        identity = doc["buddy"] if doc else inspection.get("identity") or (
             identities[index] if type(index) is int and index < len(identities) else None)
-        state = _state(connection, profile_id, facts, now) if profile_id else {}
-        item = {"profileId": profile_id, "identity": deepcopy(identity), "index": index,
+        state = _state(connection, buddy_id, facts, now) if buddy_id else {}
+        item = {"buddyId": buddy_id, "identity": deepcopy(identity), "index": index,
                 "phase": "preflight", "outcome": "unknown", "code": inspection.get("code"),
                 "reason": inspection.get("reason"), "taskId": doc["taskId"] if doc else None,
                 "attemptId": None, "shutdownConfirmed": None,
                 "consecutiveNoAnswers": state.get("consecutiveNoAnswers"),
                 "retryAt": state.get("retryAt"), "usage": None, "nativeIdentity": None}
         matching = [event for event in events if event["payload"].get("routerIndex") == index
-                    and event["payload"].get("profileId") == profile_id]
+                    and event["payload"].get("buddyId") == buddy_id]
         if doc is None:
             no_answer = next((event for event in reversed(matching) if event["kind"] == "router.no_answer"), None)
             if no_answer is not None:
@@ -159,9 +159,9 @@ def router_trials(connection, row, *, now):
                 item.update(phase=None, outcome="skipped", reason="This item was not reached by a recorded dispatch or inspection")
             if item["code"] not in (None, "router-skip-window"):
                 item["retryAt"] = None
-                profile = connection.execute("SELECT * FROM evaluation_profiles WHERE profile_id=?", (profile_id,)).fetchone()
-                if profile is not None and item["code"] == "router-quota-exhausted":
-                    _, item["retryAt"] = _quota_recovery(connection, profile, now)
+                buddy = connection.execute("SELECT * FROM buddies WHERE buddy_id=?", (buddy_id,)).fetchone()
+                if buddy is not None and item["code"] == "router-quota-exhausted":
+                    _, item["retryAt"] = _quota_recovery(connection, buddy, now)
                     if item["retryAt"] and state.get("inSkipWindow") and router_history._parse(state["retryAt"]) > router_history._parse(item["retryAt"]):
                         item["retryAt"] = state["retryAt"]
                 if item["retryAt"] is None:
@@ -179,7 +179,7 @@ def router_trials(connection, row, *, now):
             if (binding.get("decisionId") == row["decision_id"] and binding.get("taskId") == task_id
                     and binding.get("attemptId") == attempt["attempt_id"]
                     and binding.get("generation") == attempt["generation"]
-                    and binding.get("profileId") == profile_id and binding.get("routerIndex") == index):
+                    and binding.get("buddyId") == buddy_id and binding.get("routerIndex") == index):
                 bound.append(attempt)
         if not bound:
             item.update(phase="queued", outcome="queued", code=None, reason=None)
@@ -319,20 +319,20 @@ def _continuation_context(connection, row, run_id, owner_run_id):
 
 
 def _candidate_problem(connection, candidate, request, run, now):
-    published = connection.execute("SELECT * FROM evaluation_profiles WHERE profile_id=?", (candidate["profileId"],)).fetchone()
-    if published is None or any(published[key] != candidate[key] for key in schemas.CONFIGURATION_FIELDS):
+    published = connection.execute("SELECT * FROM buddies WHERE buddy_id=?", (candidate["buddyId"],)).fetchone()
+    if published is None or any(published[key] != candidate[key] for key in schemas.BUDDY_FIELDS):
         return "The published identity no longer matches the frozen buddy tuple"
     if not published["enabled"] or not published["available"]:
         return "The frozen buddy is no longer enabled and available"
     constraints = request.get("constraints") or {}
-    if run is not None and run["configuration_locked"]:
-        constraints = {**constraints, **schemas.configuration_constraints(_json(run["goal_json"], {}))}
+    if run is not None and run["buddy_locked"]:
+        constraints = {**constraints, **schemas.buddy_constraints(_json(run["goal_json"], {}))}
     if any(candidate.get(key) != value for key, value in constraints.items()):
         return "The frozen buddy no longer satisfies the goal's hard constraints"
     capabilities = set(_json(published["capabilities_json"], []))
     if not set(request.get("requiredCapabilities") or []) <= capabilities:
         return "The frozen buddy no longer provides the required capabilities"
-    preference = connection.execute("SELECT mode FROM evaluation_preferences WHERE profile_id=?", (candidate["profileId"],)).fetchone()
+    preference = connection.execute("SELECT mode FROM evaluation_preferences WHERE buddy_id=?", (candidate["buddyId"],)).fetchone()
     pins = connection.execute("SELECT 1 FROM evaluation_preferences WHERE mode='pin' LIMIT 1").fetchone()
     if preference and preference[0] == "exclude" or pins and (not preference or preference[0] != "pin"):
         return "The frozen buddy no longer satisfies the published pins and exclusions"
@@ -350,14 +350,14 @@ def _retry_at(connection, facts, trials, *, now, kind):
     if kind in ("routing-changed", "router-abstained"):
         return now
     known = []
-    for index, profile_id in enumerate(facts.get("routerProfileIds") or []):
+    for index, buddy_id in enumerate(facts.get("routerBuddyIds") or []):
         identity = (facts.get("routerIdentities") or [])[index]
-        profile = connection.execute("SELECT * FROM evaluation_profiles WHERE profile_id=?", (profile_id,)).fetchone()
-        if profile is None or identity is None or any(profile[key] != identity[key] for key in schemas.CONFIGURATION_FIELDS) or not profile["enabled"] or not profile["available"]:
+        buddy = connection.execute("SELECT * FROM buddies WHERE buddy_id=?", (buddy_id,)).fetchone()
+        if buddy is None or identity is None or any(buddy[key] != identity[key] for key in schemas.BUDDY_FIELDS) or not buddy["enabled"] or not buddy["available"]:
             continue
-        if not _cached_available(connection, profile["adapter"]):
+        if not _cached_available(connection, buddy["adapter"]):
             continue
-        quota_blocked, quota_at = _quota_recovery(connection, profile, now)
+        quota_blocked, quota_at = _quota_recovery(connection, buddy, now)
         if quota_blocked and quota_at is None:
             continue
         trial = next((item for item in reversed(trials) if item["index"] == index), None)
@@ -366,7 +366,7 @@ def _retry_at(connection, facts, trials, *, now, kind):
             # Qualification/health/quota has no known restoration time. Its
             # no-answer event is real, but interval expiry cannot repair it.
             continue
-        state = _state(connection, profile_id, facts, now)
+        state = _state(connection, buddy_id, facts, now)
         if state.get("retryInProgress"):
             continue
         if quota_at is not None:
@@ -419,7 +419,7 @@ def routing_boundary(connection, row, *, now, run_id=None, revision=None,
         facts = deepcopy(snapshot.get("hostPacket") or snapshot["baseInput"])
         facts.update(deepcopy(snapshot["facts"]))
         facts["inspections"] = deepcopy(snapshot["inspections"])
-    candidates = facts.get("profiles") or []
+    candidates = facts.get("buddies") or []
     retry_at = _retry_at(connection, request if request.get("selectionRetry") else snapshot["facts"],
                          trials, now=now, kind=kind)
     if retry_at is None:

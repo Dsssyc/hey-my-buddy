@@ -144,7 +144,7 @@ def fold_unknown_events(counts: dict[str, int], name: str, occurrences: int = 1)
     counts[name] = counts.get(name, 0) + occurrences
 
 
-class RunConfiguration(InternalModel):
+class RunBuddy(InternalModel):
     """The frozen provider/model/effort selection; no default buddy, no fallback."""
 
     provider: Annotated[Text(128), AfterValidator(_nonblank)]
@@ -227,7 +227,7 @@ class RunRequest(InternalModel):
 
     identity: RunIdentity
     harness: HarnessName
-    configuration: RunConfiguration
+    buddy: RunBuddy
     cwd: AbsolutePath
     private_state: PrivateStatePaths
     input_text: NonEmptyInputText
@@ -293,28 +293,28 @@ class RunEnd(InternalModel):
 
 
 class CheckedValue(InternalModel):
-    """One configuration value actually checked by the native path."""
+    """One buddy identity value actually checked by the native path."""
 
     value: Text(128)
 
 
-class CheckedConfiguration(InternalModel):
-    """Per-value checked configuration; a requested value never stands in for one."""
+class CheckedBuddy(InternalModel):
+    """Per-value checked buddy; a requested value never stands in for one."""
 
     provider: Optional[CheckedValue] = None
     model: Optional[CheckedValue] = None
     effort: Optional[CheckedValue] = None
 
 
-class ResultConfiguration(InternalModel):
-    """Requested and checked configuration, kept strictly apart.
+class ResultBuddy(InternalModel):
+    """Requested and checked buddy, kept strictly apart.
 
     The legacy receipts' ``observed`` key stays the role projection's ``None``
     placeholder; the native readback lands here as checked values, never as a look-alike observed block.
     """
 
-    requested: Optional[RunConfiguration] = None
-    checked: CheckedConfiguration = Field(default_factory=CheckedConfiguration)
+    requested: Optional[RunBuddy] = None
+    checked: CheckedBuddy = Field(default_factory=CheckedBuddy)
 
 
 class RunValue(InternalModel):
@@ -626,7 +626,7 @@ class RunResult(InternalModel):
     native_event_count: Optional[Count] = None
     native_evidence: Optional[NativeEvidence] = None
     model_started: Optional[bool] = None
-    configuration: ResultConfiguration = Field(default_factory=ResultConfiguration)
+    buddy: ResultBuddy = Field(default_factory=ResultBuddy)
     native_identity: Optional[NativeIdentity] = None
     value: Optional[RunValue] = None
     completion_evidence: Optional[CompletionEvidence] = None
@@ -693,12 +693,12 @@ __all__ = [
     "FEEDBACK_CONTINUE", "FEEDBACK_STOP",
     "FORMAT_VERSION",
     "FrozenJson", "HARNESS_NAMES", "HarnessRun", "MAX_RUN_REQUEST_BYTES",
-    "MAX_RUN_RESULT_BYTES", "MAX_COUNT", "CheckedConfiguration", "CheckedValue",
+    "MAX_RUN_RESULT_BYTES", "MAX_COUNT", "CheckedBuddy", "CheckedValue",
     "CompletionEvidence", "ContinuationFacts", "EffectivePolicy", "EvidenceRef",
     "InterruptEvidence", "NativeIdentity", "NativeEvidence", "UnknownEvents", "PrivateStatePaths",
     "MAX_UNKNOWN_EVENT_TYPES", "MAX_UNCONFIRMED_ITEMS", "MAX_UNCONFIRMED_NAME_CHARS",
     "UNLISTED_NATIVE_EVENTS",
-    "ResumeCheckpoint", "RunBudget", "RunConfiguration", "RunContinuation", "RunEnd", "RunFeedback", "RunIdentity",
+    "ResumeCheckpoint", "RunBudget", "RunBuddy", "RunContinuation", "RunEnd", "RunFeedback", "RunIdentity",
     "WorkerPermission", "RunRequest", "RunResult", "RunValue", "SessionService", "StopEvidence",
     "StopLayer", "canonical_json",
     "decode_run_request", "decode_run_result", "encode_run_request", "encode_run_result",

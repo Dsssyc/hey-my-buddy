@@ -31,7 +31,7 @@ from hey_my_buddy.buddy.harnesses.run_contract import (
     RunFeedback,
     PrivateStatePaths,
     RunBudget,
-    RunConfiguration,
+    RunBuddy,
     RunContinuation,
     RunIdentity,
     RunRequest,
@@ -159,7 +159,7 @@ class NativeRunCase(FakeAppServerTests):
             identity=RunIdentity(task_id="task", attempt_id=f"attempt-{uuid.uuid4().hex[:8]}",
                                  generation=1, invocation_id=uuid.uuid4().hex),
             harness="zcode",
-            configuration=RunConfiguration(provider="fixture-api", model="fixture-model", effort="low"),
+            buddy=RunBuddy(provider="fixture-api", model="fixture-model", effort="low"),
             cwd=str(self.cwd),
             private_state=PrivateStatePaths(invocation_root=str(self.base / f"invocation-{uuid.uuid4().hex[:8]}"),
                                             native_root=str(self.base / f"native-{uuid.uuid4().hex[:8]}")),
@@ -192,7 +192,7 @@ class MockNativeCase(ZcodeFixtureCase):
                                  generation=identity["generation"], invocation_id=uuid.uuid4().hex,
                                  turn_id=identity["turnId"], input_sha256=input_hash(turn_input)),
             harness="zcode",
-            configuration=RunConfiguration(provider="fixture-api", model="fixture-model", effort="low"),
+            buddy=RunBuddy(provider="fixture-api", model="fixture-model", effort="low"),
             cwd=str(self.cwd),
             private_state=PrivateStatePaths(invocation_root=str(invocation),
                                             native_root=str(self.base / "worker-native")),
@@ -219,7 +219,7 @@ class FastSeamTests(NativeRunCase):
 
     def test_a_settled_answer_is_a_final_message_fact_with_role_checked_schema(self):
         os.environ["BUDDY_ZCODE_TEST_CASE"] = "ok"
-        prompt = no_tool_prompt("Choose a profile", SCHEMA)
+        prompt = no_tool_prompt("Choose a buddy", SCHEMA)
         correction = FastCorrection(SCHEMA, prompt)
         seen = []
 
@@ -250,7 +250,7 @@ class FastSeamTests(NativeRunCase):
 
     def test_one_format_correction_runs_a_second_session_on_the_same_process(self):
         os.environ["BUDDY_ZCODE_TEST_CASE"] = "correct"
-        prompt = no_tool_prompt("Choose a profile", SCHEMA)
+        prompt = no_tool_prompt("Choose a buddy", SCHEMA)
         correction = FastCorrection(SCHEMA, prompt)
         result = run(self.fast_request(prompt), observer=correction.observer,
                      services=None, cancelled=lambda: False)
@@ -263,7 +263,7 @@ class FastSeamTests(NativeRunCase):
 
     def test_a_tool_fact_stops_the_run_through_the_observer_feedback(self):
         os.environ["BUDDY_ZCODE_TEST_CASE"] = "tool"
-        prompt = no_tool_prompt("Choose a profile", SCHEMA)
+        prompt = no_tool_prompt("Choose a buddy", SCHEMA)
         correction = FastCorrection(SCHEMA, prompt)
         result = run(self.fast_request(prompt), observer=correction.observer,
                      services=None, cancelled=lambda: False)
@@ -281,7 +281,7 @@ class FastSeamTests(NativeRunCase):
         # bounded observer that corrects twice proves the second correction
         # really runs — and terminates — instead of looping or being capped.
         os.environ["BUDDY_ZCODE_TEST_CASE"] = "ok"
-        prompt = no_tool_prompt("Choose a profile", SCHEMA)
+        prompt = no_tool_prompt("Choose a buddy", SCHEMA)
         request = self.fast_request(prompt)
         rounds = {"count": 0}
 
@@ -306,7 +306,7 @@ class FastSeamTests(NativeRunCase):
         # that. No external review eligibility is implied.
         from hey_my_buddy.buddy.harnesses.run_contract import FEEDBACK_CONTINUE
         os.environ["BUDDY_ZCODE_TEST_CASE"] = "write-final"
-        prompt = no_tool_prompt("Choose a profile", SCHEMA)
+        prompt = no_tool_prompt("Choose a buddy", SCHEMA)
         request = self.fast_request(prompt)
         scoped = RunRequest.from_payload(request.to_payload() | {"toolScope": "write"})
         result = run(scoped, observer=lambda _facts: FEEDBACK_CONTINUE,
@@ -326,7 +326,7 @@ class FastSeamTests(NativeRunCase):
         # frame by reading the tool scope itself.
         from hey_my_buddy.buddy.harnesses.run_contract import FEEDBACK_CONTINUE
         os.environ["BUDDY_ZCODE_TEST_CASE"] = "write-post-close"
-        prompt = no_tool_prompt("Choose a profile", SCHEMA)
+        prompt = no_tool_prompt("Choose a buddy", SCHEMA)
         request = self.fast_request(prompt)
         scoped = RunRequest.from_payload(request.to_payload() | {"toolScope": "write"})
         result = run(scoped, observer=lambda _facts: FEEDBACK_CONTINUE,
@@ -348,7 +348,7 @@ class FastSeamTests(NativeRunCase):
         # never a leaked process behind an invalid-native-result.
         from unittest import mock as _mock
         os.environ["BUDDY_ZCODE_TEST_CASE"] = "ok"
-        prompt = no_tool_prompt("Choose a profile", SCHEMA)
+        prompt = no_tool_prompt("Choose a buddy", SCHEMA)
         correction = FastCorrection(SCHEMA, prompt)
         with _mock.patch("hey_my_buddy.buddy.harnesses.zcode.native_run.NativeConnection",
                          side_effect=OSError("pipe gone")):
@@ -378,7 +378,7 @@ class FastSeamTests(NativeRunCase):
             return False
 
         os.environ["BUDDY_ZCODE_TEST_CASE"] = "ok"
-        prompt = no_tool_prompt("Choose a profile", SCHEMA)
+        prompt = no_tool_prompt("Choose a buddy", SCHEMA)
         correction = FastCorrection(SCHEMA, prompt)
         with _mock.patch.object(ProcessHandle, "shutdown_confirmed", unconfirmed):
             result = run(self.fast_request(prompt), observer=correction.observer,
@@ -406,7 +406,7 @@ class FastSeamTests(NativeRunCase):
         # the same id and records it — and only then does the role's stop take
         # effect on the driver's next boundary, with no settlement behind it.
         os.environ["BUDDY_ZCODE_TEST_CASE"] = "reverse-request"
-        prompt = no_tool_prompt("Choose a profile", SCHEMA)
+        prompt = no_tool_prompt("Choose a buddy", SCHEMA)
         correction = FastCorrection(SCHEMA, prompt)
         started = time.monotonic()
         result = run(self.fast_request(prompt, timeout=8), observer=correction.observer,
@@ -425,7 +425,7 @@ class FastSeamTests(NativeRunCase):
 
     def test_a_reverse_request_before_the_rpc_reply_stops_after_the_refusal(self):
         os.environ["BUDDY_ZCODE_TEST_CASE"] = "reverse-before-send-reply"
-        prompt = no_tool_prompt("Choose a profile", SCHEMA)
+        prompt = no_tool_prompt("Choose a buddy", SCHEMA)
         correction = FastCorrection(SCHEMA, prompt)
         started = time.monotonic()
         result = run(self.fast_request(prompt, timeout=8), observer=correction.observer,
@@ -454,7 +454,7 @@ class FastSeamTests(NativeRunCase):
         # reaches the role observer first: the fast rule stops with its own
         # reason instead of the protocol layer's foreign-session code.
         os.environ["BUDDY_ZCODE_TEST_CASE"] = "post-close-foreign"
-        prompt = no_tool_prompt("Choose a profile", SCHEMA)
+        prompt = no_tool_prompt("Choose a buddy", SCHEMA)
         correction = FastCorrection(SCHEMA, prompt)
         result = run(self.fast_request(prompt), observer=correction.observer,
                      services=None, cancelled=lambda: False)
@@ -467,7 +467,7 @@ class FastSeamTests(NativeRunCase):
     def test_a_failed_close_keeps_the_final_message_facts(self):
         from hey_my_buddy.buddy.harnesses.run_contract import FEEDBACK_CONTINUE
         os.environ["BUDDY_ZCODE_TEST_CASE"] = "close-fail"
-        prompt = no_tool_prompt("Choose a profile", SCHEMA)
+        prompt = no_tool_prompt("Choose a buddy", SCHEMA)
         request = self.fast_request(prompt)
         result = run(request, observer=lambda _facts: FEEDBACK_CONTINUE,
                      services=None, cancelled=lambda: False)
@@ -487,7 +487,7 @@ class FastSeamTests(NativeRunCase):
         for case in ("reverse-request", "reverse-oauth"):
             with self.subTest(case=case):
                 os.environ["BUDDY_ZCODE_TEST_CASE"] = case
-                prompt = no_tool_prompt("Choose a profile", SCHEMA)
+                prompt = no_tool_prompt("Choose a buddy", SCHEMA)
                 correction = FastCorrection(SCHEMA, prompt)
                 started = time.monotonic()
                 result = run(self.fast_request(prompt, timeout=8), observer=correction.observer,
@@ -508,7 +508,7 @@ class FastSeamTests(NativeRunCase):
         from unittest import mock as _mock
         from hey_my_buddy.buddy.harnesses.zcode.protocol import NativeError as _NativeError
         os.environ["BUDDY_ZCODE_TEST_CASE"] = "ok"
-        prompt = no_tool_prompt("Choose a profile", SCHEMA)
+        prompt = no_tool_prompt("Choose a buddy", SCHEMA)
         correction = FastCorrection(SCHEMA, prompt)
         with _mock.patch("hey_my_buddy.buddy.harnesses.zcode.native_run._spawn_app_server",
                          side_effect=_NativeError("adapter-unavailable", "no native start")):
@@ -517,11 +517,11 @@ class FastSeamTests(NativeRunCase):
         self.assertEqual(result.end.status, "error")
         self.assertEqual(result.end.reason_code, "adapter-unavailable")
         # Nothing is claimed that the run never reached: no session opened, no
-        # effective policy, no configuration check, no completion, no model,
+        # effective policy, no buddy check, no completion, no model,
         # and no native exit code — the holding side's own never-spawned fact.
         self.assertIsNone(result.model_started)
         self.assertIsNone(result.effective_policy.tools)
-        checked = result.configuration.checked
+        checked = result.buddy.checked
         self.assertIsNone(checked.provider)
         self.assertIsNone(checked.model)
         self.assertIsNone(checked.effort)
@@ -753,7 +753,7 @@ class WorkerSeamTests(MockNativeCase):
 
     def test_one_unrepresentable_package_keeps_every_other_observed_fact(self):
         # The usage package alone is unrepresentable; the run's identity,
-        # value, receipt, configuration and stop facts all stay, and the end
+        # value, receipt, buddy and stop facts all stay, and the end
         # is not rewritten — the fallback never blankets knowns into unknowns.
         from unittest import mock as _mock
         os.environ.update(self.environment)
@@ -771,7 +771,7 @@ class WorkerSeamTests(MockNativeCase):
         provenance = json.loads(Path(next(ref.location for ref in result.evidence_refs
                                           if ref.kind == "turn-provenance")).read_bytes())
         self.assertTrue(provenance["receiptVerified"])
-        self.assertEqual(result.configuration.checked.model.value, "fixture-model")
+        self.assertEqual(result.buddy.checked.model.value, "fixture-model")
         self.assertEqual(result.stop_evidence.native.group_state, "gone")
 
     def test_a_post_configure_failure_keeps_every_reached_stage_fact(self):
@@ -792,7 +792,7 @@ class WorkerSeamTests(MockNativeCase):
         # Configure ran and the readback confirmed; the session opened; the
         # input was sent. Each reached stage keeps its fact in the failure: the
         # readback values, the session-create fact and the model start.
-        self.assertEqual(result.configuration.checked.model.value, "fixture-model")
+        self.assertEqual(result.buddy.checked.model.value, "fixture-model")
         self.assertIsNotNone(result.effective_policy.tools)
         self.assertTrue(result.model_started)
         self.assertIsNone(result.completion_evidence)
@@ -818,7 +818,7 @@ class WorkerSeamTests(MockNativeCase):
         # The mock exports no message-boundary token records, so usage stays an
         # honest absent fact here; the adapter-path suites cover the real shape.
         self.assertIsNone(result.usage)
-        self.assertEqual(result.configuration.checked.model.value, "fixture-model")
+        self.assertEqual(result.buddy.checked.model.value, "fixture-model")
         # The governed turn's evidence parts are retained for the role's record;
         # the verified finish receipt and its call identity travel in the
         # provenance, read back through the size- and digest-checked reference.

@@ -37,10 +37,10 @@ _RECORD_KINDS = ("decision.completed", "decision.failed", "decision.needs_host",
 _RECORD_KIND_LITERALS = "(" + ",".join(f"'{kind}'" for kind in _RECORD_KINDS) + ")"
 #: json_valid guards every json_extract over an untrusted stored column: a malformed
 #: payload must fail neither the write path's expression index nor a projection read
-#: and simply never matches an attribution. Keep the profile expression aligned with
+#: and simply never matches an attribution. Keep the buddy expression aligned with
 #: the events_router_outcome_idx definition so the index stays usable.
-_PROFILE_EXPRESSION = ("json_extract(CASE WHEN json_valid(payload_json) THEN payload_json END,"
-                       " '$.profileId')")
+_BUDDY_EXPRESSION = ("json_extract(CASE WHEN json_valid(payload_json) THEN payload_json END,"
+                       " '$.buddyId')")
 _VALID_REQUESTED = "CASE WHEN json_valid(r.requested_json) THEN r.requested_json END"
 _VALID_EVENT_PAYLOAD = "CASE WHEN json_valid(e.payload_json) THEN e.payload_json END"
 MAX_CODE = 128
@@ -76,7 +76,7 @@ def _optional_identifier(value: object, name: str) -> str | None:
     if value is None:
         return None
     if not isinstance(value, str) or not IDENTIFIER_PATTERN.fullmatch(value):
-        raise BoardError("INVALID_ARGUMENT", f"{name} must be a profileId or null")
+        raise BoardError("INVALID_ARGUMENT", f"{name} must be a buddyId or null")
     return value
 
 
@@ -93,7 +93,7 @@ def _append_event(connection, *, kind: str, task_id: str | None, attempt_id: str
     return seq
 
 
-def record_outcome(connection, *, profile_id: str, plane: str, request_id: str, task_id: str | None,
+def record_outcome(connection, *, buddy_id: str, plane: str, request_id: str, task_id: str | None,
                    attempt_id: str | None, outcome: str, code: str | None, phase: str,
                    facts: dict, now: str) -> dict:
     """Record one idempotent Router outcome fact for any plane; never executes anything.
@@ -105,8 +105,8 @@ def record_outcome(connection, *, profile_id: str, plane: str, request_id: str, 
     Only callers that observed an actual outcome record one: cancellations, input or
     settings changes, fencing and stop-unknown are never recorded as answers here.
     """
-    if not isinstance(profile_id, str) or not IDENTIFIER_PATTERN.fullmatch(profile_id):
-        raise BoardError("INVALID_ARGUMENT", "profile_id must be a profileId")
+    if not isinstance(buddy_id, str) or not IDENTIFIER_PATTERN.fullmatch(buddy_id):
+        raise BoardError("INVALID_ARGUMENT", "buddy_id must be a buddyId")
     if plane not in PLANES:
         raise BoardError("INVALID_ARGUMENT", "plane must be work, maintenance or portrait")
     if outcome not in OUTCOMES:
@@ -125,37 +125,37 @@ def record_outcome(connection, *, profile_id: str, plane: str, request_id: str, 
     router_index = facts["routerIndex"]
     selection_retry = facts.get("selectionRetry", False)
     payload = {"plane": plane, "requestId": request_id, "routerIndex": router_index,
-               "profileId": profile_id, "phase": phase, "taskId": task_id,
+               "buddyId": buddy_id, "phase": phase, "taskId": task_id,
                "attemptId": attempt_id, "outcome": outcome, "code": code}
     if selection_retry:
         payload["selectionRetry"] = True
     key = hashlib.sha256(canonical_json(
         [plane, request_id, selection_retry, router_index, phase, task_id, attempt_id, outcome]).encode("utf-8")).hexdigest()
     kind = f"router.{outcome}"
-    stored = connection.execute("SELECT plane,request_id,router_index,profile_id,phase,task_id,attempt_id,"
+    stored = connection.execute("SELECT plane,request_id,router_index,buddy_id,phase,task_id,attempt_id,"
                                 "outcome,code,event_seq FROM router_outcomes WHERE receipt_id=?", (key,)).fetchone()
     if stored is not None:
-        expected = (plane, request_id, router_index, profile_id, phase, task_id, attempt_id, outcome, code)
+        expected = (plane, request_id, router_index, buddy_id, phase, task_id, attempt_id, outcome, code)
         if tuple(stored)[:-1] != expected:
             raise BoardError("CONFLICT", "router outcome facts conflict with the recorded receipt",
-                             profileId=profile_id, requestId=request_id)
+                             buddyId=buddy_id, requestId=request_id)
         return {"recorded": False, "seq": int(stored[-1]), "event": kind}
     seq = _append_event(connection, kind=kind, task_id=task_id, attempt_id=attempt_id,
                         payload=payload, now=now)
-    connection.execute("INSERT INTO router_outcomes(receipt_id,plane,request_id,router_index,profile_id,phase,"
+    connection.execute("INSERT INTO router_outcomes(receipt_id,plane,request_id,router_index,buddy_id,phase,"
                        "task_id,attempt_id,outcome,code,event_seq,recorded_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
-                       (key, plane, request_id, router_index, profile_id, phase, task_id, attempt_id,
+                       (key, plane, request_id, router_index, buddy_id, phase, task_id, attempt_id,
                         outcome, code, seq, now))
     return {"recorded": True, "seq": seq, "event": kind}
 
 
-def _fact_entries(connection, profile_id: str) -> list[dict]:
+def _fact_entries(connection, buddy_id: str) -> list[dict]:
     """Recorded fact events of one buddy, ordered by the event sequence."""
     entries = []
     rows = connection.execute(
         "SELECT seq, kind, created_at, payload_json FROM events"
         " WHERE kind IN ('router.answered','router.no_answer')"
-        f" AND {_PROFILE_EXPRESSION}=? ORDER BY seq", (profile_id,))
+        f" AND {_BUDDY_EXPRESSION}=? ORDER BY seq", (buddy_id,))
     for row in rows:
         try:
             payload = json.loads(row["payload_json"])
@@ -191,8 +191,8 @@ def _valid_answer(receipt: dict | None, output: dict | None) -> bool:
 def _abstained(kind: str, output: dict) -> bool:
     decision = output.get("decision") if isinstance(output, dict) else None
     return (kind == "decision.needs_host" and isinstance(output, dict) and output.get("status") == "ok"
-            and isinstance(decision, dict) and decision.get("profileId", False) is None
-            and set(decision) == {"profileId", "reason", "evidence"})
+            and isinstance(decision, dict) and decision.get("buddyId", False) is None
+            and set(decision) == {"buddyId", "reason", "evidence"})
 
 
 def _classify_record(kind: str, output: dict, receipt: dict | None, event_payload: dict | None = None) -> tuple[str, str | None]:
@@ -221,18 +221,18 @@ def _classify_record(kind: str, output: dict, receipt: dict | None, event_payloa
     return "unknown", code
 
 
-def _record_rows(connection, profile_id: str | None) -> list[dict]:
+def _record_rows(connection, buddy_id: str | None) -> list[dict]:
     """Terminal select records attributed (or not attributable) through their own frozen input."""
-    if profile_id is None:
-        attribution = (f"json_extract({_VALID_REQUESTED}, '$.routerProfileId') IS NULL"
+    if buddy_id is None:
+        attribution = (f"json_extract({_VALID_REQUESTED}, '$.routerBuddyId') IS NULL"
                        " AND (json_extract(" + _VALID_REQUESTED + ",'$.routerCalled') IS NULL"
                        " OR json_extract(" + _VALID_REQUESTED + ",'$.routerCalled')!=0)"
                        " AND (json_extract(" + _VALID_REQUESTED + ",'$.routingBasis.candidateCount') IS NULL"
                        " OR json_extract(" + _VALID_REQUESTED + ",'$.routingBasis.candidateCount')!=0)")
         values: tuple = ()
     else:
-        attribution = f"json_extract({_VALID_REQUESTED}, '$.routerProfileId')=?"
-        values = (profile_id,)
+        attribution = f"json_extract({_VALID_REQUESTED}, '$.routerBuddyId')=?"
+        values = (buddy_id,)
     rows = connection.execute(
         "SELECT e.seq AS event_seq, e.kind AS kind, e.created_at AS at, e.payload_json AS event_payload,"
         " r.decision_id AS decision_id, r.request_id AS request_id, r.task_id AS task_id,"
@@ -267,7 +267,7 @@ def _record_rows(connection, profile_id: str | None) -> list[dict]:
     return entries
 
 
-def profile_timeline(connection, *, profile_id: str) -> list[dict]:
+def buddy_timeline(connection, *, buddy_id: str) -> list[dict]:
     """One buddy's merged outcome timeline: recorded facts plus pre-list records.
 
     Old records are deduplicated against facts by request identity, so a request the
@@ -275,13 +275,13 @@ def profile_timeline(connection, *, profile_id: str) -> list[dict]:
     entries with an unprovable nature are carried as ``unknown`` instead of being
     counted as an answer, a no-answer or a model rejection.
     """
-    if not isinstance(profile_id, str) or not IDENTIFIER_PATTERN.fullmatch(profile_id):
-        raise BoardError("INVALID_ARGUMENT", "profile_id must be a profileId")
-    facts = _fact_entries(connection, profile_id)
+    if not isinstance(buddy_id, str) or not IDENTIFIER_PATTERN.fullmatch(buddy_id):
+        raise BoardError("INVALID_ARGUMENT", "buddy_id must be a buddyId")
+    facts = _fact_entries(connection, buddy_id)
     seen_requests = {entry["requestId"] for entry in facts if entry["requestId"] is not None}
     seen_attempts = {entry["attemptId"] for entry in facts if entry["attemptId"] is not None}
     timeline = list(facts)
-    for entry in _record_rows(connection, profile_id):
+    for entry in _record_rows(connection, buddy_id):
         row = entry["row"]
         if row["request_id"] in seen_requests or (row["attempt_id"] and row["attempt_id"] in seen_attempts):
             continue
@@ -315,7 +315,7 @@ def unattributed_records(connection) -> list[dict]:
     return entries
 
 
-def active_executions(connection, *, profile_id: str) -> list[dict]:
+def active_executions(connection, *, buddy_id: str) -> list[dict]:
     """Active or shutdown-unconfirmed executions bound to one buddy, as facts only.
 
     Bindings come from recorded ``router.claimed`` events and from selection requests
@@ -323,15 +323,15 @@ def active_executions(connection, *, profile_id: str) -> list[dict]:
     anything: the single-retry constraint and capacity queuing belong to the
     execution layers.
     """
-    if not isinstance(profile_id, str) or not IDENTIFIER_PATTERN.fullmatch(profile_id):
-        raise BoardError("INVALID_ARGUMENT", "profile_id must be a profileId")
+    if not isinstance(buddy_id, str) or not IDENTIFIER_PATTERN.fullmatch(buddy_id):
+        raise BoardError("INVALID_ARGUMENT", "buddy_id must be a buddyId")
     markers = ",".join("?" for _ in ACTIVE_ATTEMPT_STATES)
     executions: dict[str, dict] = {}
     rows = connection.execute(
         "SELECT e.task_id AS task_id, e.attempt_id AS attempt_id, e.created_at AS at, e.payload_json AS payload_json"
         " FROM events e WHERE e.kind='router.claimed'"
-        " AND json_extract(CASE WHEN json_valid(e.payload_json) THEN e.payload_json END, '$.profileId')=?"
-        " ORDER BY e.seq", (profile_id,))
+        " AND json_extract(CASE WHEN json_valid(e.payload_json) THEN e.payload_json END, '$.buddyId')=?"
+        " ORDER BY e.seq", (buddy_id,))
     for row in rows:
         executions[row["attempt_id"]] = {"taskId": row["task_id"], "attemptId": row["attempt_id"],
                                          "startedAt": row["at"], "source": "claimed"}
@@ -341,8 +341,8 @@ def active_executions(connection, *, profile_id: str) -> list[dict]:
         " COALESCE(a.started_at, a.created_at) AS started_at"
         " FROM decision_requests r JOIN attempts a ON a.task_id=r.task_id AND a.attempt_id=r.attempt_id"
         " AND a.generation=r.generation"
-        f" WHERE r.kind='select' AND json_extract({_VALID_REQUESTED}, '$.routerProfileId')=?"
-        f" AND a.execution_state IN ({markers})", (profile_id, *ACTIVE_ATTEMPT_STATES))
+        f" WHERE r.kind='select' AND json_extract({_VALID_REQUESTED}, '$.routerBuddyId')=?"
+        f" AND a.execution_state IN ({markers})", (buddy_id, *ACTIVE_ATTEMPT_STATES))
     for row in rows:
         executions[row["attempt_id"]] = {"taskId": row["task_id"], "attemptId": row["attempt_id"],
                                          "generation": row["generation"], "requestId": row["request_id"],
@@ -393,20 +393,20 @@ def summarize(timeline: list[dict], *, interval_seconds: int, now: str | None = 
             "retryAt": skip_until, "inSkipWindow": in_window}
 
 
-def router_state(connection, *, profile_id: str, interval_seconds: int, now: str | None = None) -> dict:
+def router_state(connection, *, buddy_id: str, interval_seconds: int, now: str | None = None) -> dict:
     """The read-only retry facts of one buddy for the resolution entry.
 
     ``retryInProgress`` is true only while the buddy still owes an answer and one of
     its executions is active or shutdown-unconfirmed; after a valid answered, the
     same active execution is ordinary capacity, not a retry.
     """
-    timeline = profile_timeline(connection, profile_id=profile_id)
+    timeline = buddy_timeline(connection, buddy_id=buddy_id)
     summary = summarize(timeline, interval_seconds=interval_seconds, now=now)
-    attempts = active_executions(connection, profile_id=profile_id)
-    return {**summary, "profileId": profile_id,
+    attempts = active_executions(connection, buddy_id=buddy_id)
+    return {**summary, "buddyId": buddy_id,
             "retryInProgress": bool(attempts) and summary["consecutiveNoAnswers"] > 0,
             "activeAttempts": attempts}
 
 
 __all__ = ["ACTIVE_ATTEMPT_STATES", "OUTCOMES", "PLANES", "active_executions",
-           "profile_timeline", "record_outcome", "router_state", "summarize", "unattributed_records"]
+           "buddy_timeline", "record_outcome", "router_state", "summarize", "unattributed_records"]

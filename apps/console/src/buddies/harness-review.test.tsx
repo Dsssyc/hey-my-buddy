@@ -53,7 +53,7 @@ describe("local review eligibility", () => {
   });
 
   it("does not retry a retired request after a lost reply", async () => {
-    sessionStorage.setItem("buddy-review-intent:codex", JSON.stringify({ requestId: "lost-reply", profileId: "codex-profile", expectedRevision: 3 }));
+    sessionStorage.setItem("buddy-review-intent:codex", JSON.stringify({ requestId: "lost-reply", buddyId: "codex-buddy", expectedRevision: 3 }));
     const f = fixture({ harnesses: [codex()] });
     await openHarness(f);
     expectNoVerificationControls();
@@ -61,7 +61,7 @@ describe("local review eligibility", () => {
   });
 
   it("does not restore a retired paid verification on reloading", async () => {
-    sessionStorage.setItem("buddy-review-intent:codex", JSON.stringify({ requestId: "old-request", profileId: "codex-profile", expectedRevision: 3 }));
+    sessionStorage.setItem("buddy-review-intent:codex", JSON.stringify({ requestId: "old-request", buddyId: "codex-buddy", expectedRevision: 3 }));
     await openHarness(fixture({ harnesses: [codex()] }));
     expectNoVerificationControls();
     cleanup();

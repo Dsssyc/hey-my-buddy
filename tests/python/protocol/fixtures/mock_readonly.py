@@ -19,7 +19,7 @@ runner log.
 
 Isolation boundary: nothing here ran a harness or a model. The tool facts are the
 shared ``router_tool_receipt`` fixture package (fake receipts), the native root
-identity is the constant ``mock-native``, the checked configuration stays empty,
+identity is the constant ``mock-native``, the checked buddy stays empty,
 and the verdict elapsed time is a fixture constant. The frame reports the
 simulated native outcome a completed review would report — a started model and a
 settled stop — so the blackboard's publication, abstention and health rules judge
@@ -99,7 +99,7 @@ def start(harness, context, request, fixture, options):
 
     assert context.turn is None and context.agent_credential is None
     assert context.cwd == request.cwd
-    assert set(request.output_schema["properties"]) == {"profileId", "reason", "evidence"}
+    assert set(request.output_schema["properties"]) == {"buddyId", "reason", "evidence"}
     assert request.budget == context.decision_input["budget"]
     identity = RunIdentity(task_id=context.task_id, attempt_id=context.attempt_id,
                            generation=context.generation, invocation_id=uuid.uuid4().hex)
@@ -148,8 +148,8 @@ def start(harness, context, request, fixture, options):
 
 def _answer(document, options, mode):
     """The stand-in's answer choice plus its honest schema fact."""
-    profiles = document["profiles"]
-    chosen = options.get("profile_id") or profiles[0]["profileId"]
+    buddies = document["buddies"]
+    chosen = options.get("buddy_id") or buddies[0]["buddyId"]
     evidence = []
     if options.get("evidence") == "none":
         evidence = []
@@ -160,7 +160,7 @@ def _answer(document, options, mode):
         evidence = [{"kind": "file", "ref": "input.txt"}] if mode == "abstain_with_evidence" else []
     if mode == "out_of_candidate":
         chosen = "dsh:not-a-candidate:model:off"
-    answer = {"profileId": chosen, "reason": f"mock select chose {chosen}", "evidence": evidence}
+    answer = {"buddyId": chosen, "reason": f"mock select chose {chosen}", "evidence": evidence}
     if mode == "answer_error":
         # Not JSON at all: the raw carrier keeps the delivery text, nothing parsed.
         return "{not json", None, "invalid"
@@ -184,7 +184,7 @@ _END = {"error": ("call-timeout", 1), "protocol_error": ("invalid-native-result"
 
 def main(control_path):
     from hey_my_buddy.buddy.harnesses.run_contract import (
-        NativeIdentity, ResultConfiguration, RunEnd, RunResult, RunValue,
+        NativeIdentity, ResultBuddy, RunEnd, RunResult, RunValue,
         StopEvidence, StopLayer, decode_run_result, encode_run_request, encode_run_result)
     from hey_my_buddy.buddy.roles import run_execution
     from hey_my_buddy.buddy.roles.turn_io import _private_bytes, canonical_json, private_json
@@ -215,7 +215,7 @@ def main(control_path):
         end=RunEnd(status="error" if mode in _END else "ok", reason_code=reason_code,
                    native_exit_code=exit_code),
         model_started=True,
-        configuration=ResultConfiguration(requested=request.configuration),
+        buddy=ResultBuddy(requested=request.buddy),
         native_identity=NativeIdentity(session_id="mock-native"),
         value=None if mode in _END else RunValue(schema_status=schema_status, raw=raw, parsed=parsed),
         tool_evidence=tool_receipt(binding, 1, native_identity={"sessionId": "mock-native"})["toolEvidence"],

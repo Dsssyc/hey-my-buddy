@@ -33,10 +33,10 @@ from hey_my_buddy.buddy.runtime.worker import Worker
 from hey_my_buddy.json_codec import canonical_json
 from hey_my_buddy.protocol.client import BoardClient
 from hey_my_buddy.protocol.contracts import HarnessRunLive
-from support import enable_fixture_configuration
+from support import enable_fixture_buddy
 
 
-CONFIGURATION = dict(adapter="dsh", provider="deepseek-official",
+BUDDY = dict(adapter="dsh", provider="deepseek-official",
                      model="deepseek-flash", effort="off")
 SELF = Path(__file__).resolve()
 
@@ -299,7 +299,7 @@ def service(root):
     def private_service():
         service = original()
         service.automatic_discovery = False
-        enable_fixture_configuration(daemon.store, CONFIGURATION)
+        enable_fixture_buddy(daemon.store, BUDDY)
         # Discovery is synthetic; all service, task, lease and live RPCs are real.
         record = {"adapter": "dsh", "available": True, "status": "ready", "revision": 0,
                   "command": [sys.executable], "version": "model-free-fixture"}

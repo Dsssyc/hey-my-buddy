@@ -7,7 +7,7 @@ from hey_my_buddy.protocol import schemas
 from hey_my_buddy.errors import BoardError
 from blackboard.routing.fixtures.router_tool_receipt import claim_tool_receipt
 from support import BoardTestCase, FakeClock
-from blackboard.routing.test_decision import DecisionTestCase, PROFILE_ID, SECOND_PROFILE_ID
+from blackboard.routing.test_decision import DecisionTestCase, BUDDY_ID, SECOND_BUDDY_ID
 
 
 class RoutingModesTests(BoardTestCase):
@@ -28,12 +28,12 @@ class RoutingModesTests(BoardTestCase):
         board = self.board()
         fresh = board.call('console_snapshot', {})['configuration']
         self.assertEqual(fresh['defaultRoutingMode'], 'fast')
-        self.assertEqual(fresh['routerProfileIds'], [])
+        self.assertEqual(fresh['routerBuddyIds'], [])
         self.seed(board)
-        self.configure(board, routerProfileIds=[SECOND_PROFILE_ID], defaultRoutingMode='fast')
+        self.configure(board, routerBuddyIds=[SECOND_BUDDY_ID], defaultRoutingMode='fast')
         self.configure(board, routingBudget='brief')
         settings = board.call('console_snapshot', {})['configuration']
-        self.assertEqual(settings['routerProfileIds'], [SECOND_PROFILE_ID])
+        self.assertEqual(settings['routerBuddyIds'], [SECOND_BUDDY_ID])
         self.assertEqual(settings['defaultRoutingMode'], 'fast')
         self.assertEqual(settings['routingBudget'], 'brief')
         from hey_my_buddy.blackboard.store.db import SCHEMA_VERSION
@@ -46,7 +46,7 @@ class RoutingModesTests(BoardTestCase):
         board = self.board()
         self.seed(board)
         # The mode comes from the Router setting; the submission no longer carries it.
-        self.configure(board, routerProfileIds=[PROFILE_ID], defaultRoutingMode='fast')
+        self.configure(board, routerBuddyIds=[BUDDY_ID], defaultRoutingMode='fast')
         result = board.call('selection_request', {'requestId': 'fast', 'task': 'choose a tiny edit', 'timeoutSeconds': 500})
         view = board.call('selection_get', {'decisionId': result['decisionId'], 'includeAudit': True})['decision']
         self.assertEqual(view['routingMode'], 'fast')
@@ -58,7 +58,7 @@ class RoutingModesTests(BoardTestCase):
     def test_review_unconfigured_stops_host_without_using_available_fast_buddy(self):
         board = self.board()
         self.seed(board)
-        self.configure(board, routerProfileIds=[], defaultRoutingMode='review')
+        self.configure(board, routerBuddyIds=[], defaultRoutingMode='review')
         result = board.call('selection_request', {'requestId': 'no-fallback', 'task': 'choose'})
         self.assertEqual(result['status'], 'needs-host')
         self.assertIsNone(result['runId'])
@@ -72,12 +72,12 @@ class RoutingModesTests(BoardTestCase):
     def test_current_router_has_no_internal_mode_fallback(self):
         board = self.board()
         self.seed(board)
-        self.configure(board, routerProfileIds=[])
+        self.configure(board, routerBuddyIds=[])
         with board.store.db.read() as connection:
             resolution = router.current_router(connection)
             with self.assertRaises(TypeError):
                 router.current_router(connection, 'review', False)
-        self.assertIsNone(resolution.profile)
+        self.assertIsNone(resolution.buddy)
         self.assertEqual(resolution.facts['routingMode'], 'review')
         self.assertNotIn('fallback', resolution.facts)
         self.assertEqual(resolution.problem['code'], 'router-not-configured')
@@ -108,7 +108,7 @@ class RoutingModesTests(BoardTestCase):
         self.seed(board)
         params = {'requestId': 'frozen-mode', 'task': 'choose'}
         original = board.call('selection_request', params)
-        self.configure(board, defaultRoutingMode='fast', routerProfileIds=[PROFILE_ID])
+        self.configure(board, defaultRoutingMode='fast', routerBuddyIds=[BUDDY_ID])
         replay = board.call('selection_request', params)
         self.assertTrue(replay['duplicate'])
         self.assertEqual(original['decisionId'], replay['decisionId'])
@@ -139,7 +139,7 @@ class RoutingModesTests(BoardTestCase):
         clock = FakeClock()
         board = self.board(clock=clock)
         self.seed(board)
-        self.configure(board, routerProfileIds=[PROFILE_ID], defaultRoutingMode='fast')
+        self.configure(board, routerBuddyIds=[BUDDY_ID], defaultRoutingMode='fast')
         nonce = 'nonce-abcdefghijklmnop'
         for index, (proof, count, expected, code) in enumerate((
                 (True, 0, 'completed', None),
@@ -159,7 +159,7 @@ class RoutingModesTests(BoardTestCase):
                 'result': {**facts, 'status': 'ok', 'operation': 'select',
                     'stopEvidence': {'shutdownConfirmed': True, 'native': {'shutdownConfirmed': True}},
                     'zeroToolVerified': proof, 'usage': {'elapsedMs': 100, 'toolCalls': count},
-                    'decision': {'profileId': PROFILE_ID, 'reason': 'candidate match', 'evidence': []}}})
+                    'decision': {'buddyId': BUDDY_ID, 'reason': 'candidate match', 'evidence': []}}})
             decision = board.call('selection_get', {'decisionId': result['decisionId']})['decision']
             self.assertEqual(decision['status'], expected)
             if expected == 'needs-host':
@@ -168,12 +168,12 @@ class RoutingModesTests(BoardTestCase):
 
     def test_file_evidence_is_rejected_even_if_schema_was_bypassed(self):
         with self.assertRaises(BoardError) as caught:
-            router.validate_answer({'profileId': 'legal', 'reason': 'x', 'evidence': [{'kind': 'file', 'ref': 'src/a.py'}]}, ['legal'], 'fast')
+            router.validate_answer({'buddyId': 'legal', 'reason': 'x', 'evidence': [{'kind': 'file', 'ref': 'src/a.py'}]}, ['legal'], 'fast')
         self.assertEqual(caught.exception.code, 'router-evidence-out-of-bounds')
 
     def test_fast_prompt_drops_repository_and_history_payloads(self):
         prompt = router.render_prompt({'routingMode': 'fast', 'task': 'choose', 'evidence': ['secret-evidence'],
-                                       'executionWorkspace': {'inputTree': 'secret-tree'}, 'profiles': []})
+                                       'executionWorkspace': {'inputTree': 'secret-tree'}, 'buddies': []})
         self.assertNotIn('secret-evidence', prompt)
         self.assertNotIn('secret-tree', prompt)
 

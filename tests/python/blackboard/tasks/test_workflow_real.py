@@ -29,9 +29,9 @@ from hey_my_buddy.buddy.roles.controller import worker_executor
 from hey_my_buddy.blackboard.store.db import canonical_json, sha256_text
 from hey_my_buddy.private_dirs import attempt_root
 
-REPOSITORY_ROOT = Path(__file__).resolve().parents[3]
+REPOSITORY_ROOT = Path(__file__).resolve().parents[4]
 
-CONFIGURATION = {"adapter": "dsh", "provider": "deepseek-official", "model": "deepseek-flash", "effort": "off"}
+BUDDY = {"adapter": "dsh", "provider": "deepseek-official", "model": "deepseek-flash", "effort": "off"}
 
 GIT_ENV = {
     "GIT_AUTHOR_NAME": "Buddy Test",
@@ -109,7 +109,7 @@ class RealWorkspaceTestCase(BoardTestCase):
         return board.call(
             "workflow_submit",
             {
-                **CONFIGURATION,
+                **BUDDY,
                 "requestId": request_id,
                 "hostId": "host-1",
                 "task": "real workspace task",
@@ -258,11 +258,11 @@ class RealAdapterTests(RealWorkspaceTestCase):
     the registered DSH validator) and the shared collection over this project's
     offline fake ACP agent, whose finish receipts the real role rules mint.
     The agent declares its own fixture selectors (provider ``fake``, model
-    ``m1``), so the executor context's configuration is the fixture's, not the
+    ``m1``), so the executor context's buddy is the fixture's, not the
     board task's; the board submission only supplies the real run identity.
     """
 
-    FIXTURE_CONFIGURATION = {"adapter": "dsh", "provider": "fake", "model": "m1", "effort": "high"}
+    FIXTURE_BUDDY = {"adapter": "dsh", "provider": "fake", "model": "m1", "effort": "high"}
 
     def _agent_record(self, index: int, *extra: str) -> Path:
         """A selected-harness record pointing at the offline fake ACP agent."""
@@ -306,7 +306,7 @@ class RealAdapterTests(RealWorkspaceTestCase):
             task_id=run_id,
             attempt_id=attempt_id,
             generation=index,
-            spec={**self.FIXTURE_CONFIGURATION, "task": "do work", "cwd": manifest["path"], "timeoutSeconds": 60},
+            spec={**self.FIXTURE_BUDDY, "task": "do work", "cwd": manifest["path"], "timeoutSeconds": 60},
             directory=attempt,
             runtime={"identity": "test"},
             environment=environment,
@@ -508,7 +508,7 @@ class TransferredCheckoutContinuationTests(RealWorkspaceTestCase):
                 "reason": "hand the checkout over",
                 "helpers": [
                     {
-                        **CONFIGURATION,
+                        **BUDDY,
                         "requestId": "helper-1",
                         "task": "helper work on the shared checkout",
                         "cwd": str(self.repo),
@@ -638,7 +638,7 @@ class PinnedHelperHandoffTests(RealWorkspaceTestCase):
                 "reason": "two independent helpers",
                 "helpers": [
                     {
-                        **CONFIGURATION,
+                        **BUDDY,
                         "requestId": f"helper-{index}",
                         "task": f"helper {index}",
                         "cwd": str(self.repo),
@@ -774,7 +774,7 @@ class ContinuationCheckoutReuseTests(TransferredCheckoutContinuationTests):
                 "reason": "sequential helper",
                 "helpers": [
                     {
-                        **CONFIGURATION,
+                        **BUDDY,
                         "requestId": "helper-1",
                         "task": "helper on the shared checkout",
                         "cwd": str(self.repo),

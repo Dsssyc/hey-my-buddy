@@ -22,7 +22,7 @@ from hey_my_buddy.buddy.harnesses.registry import worker_format
 from hey_my_buddy.buddy.harnesses.run_contract import (
     PrivateStatePaths,
     RunBudget,
-    RunConfiguration,
+    RunBuddy,
     RunIdentity,
     RunRequest,
     RunValue,
@@ -76,7 +76,7 @@ class NativeCheckpointTests(unittest.TestCase):
             identity=RunIdentity(task_id="goal", attempt_id="attempt", generation=1,
                                  invocation_id="invocation", turn_id="turn",
                                  input_sha256=input_hash(self.document)),
-            harness="codex", configuration=RunConfiguration(provider="openai", model="fixture-model", effort="low"),
+            harness="codex", buddy=RunBuddy(provider="openai", model="fixture-model", effort="low"),
             cwd="/fixture", private_state=PrivateStatePaths(invocation_root="/fixture/invocation",
                                                             native_root="/fixture/native"),
             input_text="prompt", tool_scope="write", output_schema={},
