@@ -30,14 +30,15 @@ function apiFor(task: Task): ConsoleApi {
 }
 
 describe("task identifiers and recorded attribution", () => {
-  it.each(["macro-", "run:"])("copies the complete %s identity beside the macro task title", async prefix => {
+  it.each(["macro-", "run:"])("copies the complete %s identity from macro task details", async prefix => {
     const user = userEvent.setup();
     const write = vi.spyOn(navigator.clipboard, "writeText").mockResolvedValue();
     const summary = { ...macroTaskTimelineFixture().macroTask, macroTaskId: prefix + runId,
       kind: prefix === "run:" ? "standalone" as const : "macro-task" as const };
     render(<MacroTaskOverview summary={summary} timeline={null} loading={false} stale={false} onBackToList={vi.fn()} />);
     const header = screen.getByRole("heading", { name: summary.title }).closest("header")!;
-    await user.click(within(header).getByRole("button", { name: `复制标识 ${prefix}${runId}` }));
+    await user.click(within(header).getByRole("button", { name: "时间统计" }));
+    await user.click(within(screen.getByRole("dialog", { name: "时间统计" })).getByRole("button", { name: `复制标识 ${prefix}${runId}` }));
     expect(write).toHaveBeenCalledWith(prefix + runId);
   });
 

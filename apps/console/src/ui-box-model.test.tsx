@@ -1,6 +1,8 @@
+import { TooltipProvider } from "./components/ui/tooltip";
+import type { ReactElement } from "react";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
-import { cleanup, render } from "@testing-library/react";
+import { cleanup, render as baseRender } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { MacroTaskTimeline } from "./MacroTaskTimeline";
 import type { MacroTaskTimelineProps } from "./MacroTaskTimeline";
@@ -15,7 +17,7 @@ import type { MacroTaskTimeline as MacroTaskTimelineData, TimelineRow, TimelineS
 let injected: HTMLStyleElement;
 beforeEach(() => {
   injected = document.createElement("style");
-  injected.textContent = readFileSync(resolve(process.cwd(), "src/styles.css"), "utf8");
+  injected.textContent = readFileSync(resolve(process.cwd(), "src/styles.css"), "utf8") + readFileSync(resolve(process.cwd(), "src/macro-list.css"), "utf8");
   document.head.append(injected);
 });
 afterEach(() => { injected.remove(); cleanup(); });
@@ -126,26 +128,27 @@ describe("U5: duration geometry and borders share one boundary", () => {
 describe("U5: audited controls retain the shared global box model and normal sizes", () => {
   it("lets the rendered list use its full width without reserving an idle scrollbar gutter", () => {
     const rows = listFixture();
-    const { getByLabelText } = render(<MacroTaskList
-      rows={rows} total={rows.length} loading={false} error="" nextCursor={null} reorder={null}
-      filter="all" query="" projectId="" hostId="" choices={{ projects: [], hosts: [] }}
-      selected={null} rail={false}
-      onFilterChange={vi.fn()} onQueryChange={vi.fn()} onProjectChange={vi.fn()} onHostChange={vi.fn()}
+    render(<MacroTaskList
+      rows={rows} totals={{all:rows.length,active:1,host:1,review:1}} onCollapse={vi.fn()} loading={false} error="" nextCursor={null} reorder={null}
+      filter="all" query=""
+      selected={null}
+      onFilterChange={vi.fn()} onQueryChange={vi.fn()}
       onSelect={vi.fn()} onRetry={vi.fn()} onMore={vi.fn()} onApplyReorder={vi.fn()}
     />);
-    const scroll = getByLabelText("宏任务条目");
+    const scroll = document.querySelector<HTMLElement>(".macro-list-scroll [data-slot=scroll-area-viewport]")!;
     const css = getComputedStyle(scroll);
     expect(css.getPropertyValue("scrollbar-gutter")).toBe("auto");
-    expect(css.overflowY).toBe("auto");
+    expect(["auto", "scroll"]).toContain(css.overflowY);
     expect(css.overflowX).toBe("hidden");
     expect(["0", "0px"]).toContain(css.minHeight);
     expect(css.getPropertyValue("overscroll-behavior")).toBe("contain");
-    expect(css.getPropertyValue("scrollbar-width")).not.toBe("none");
+    // Radix draws the shared scrollbar and hides the native one. Keyboard and touch still scroll.
+    expect(scroll.closest("[data-slot=scroll-area]")).toBeTruthy();
     expect(css.getPropertyValue("touch-action")).not.toBe("none");
     expect(scroll.tabIndex).toBe(0);
     scroll.focus();
     expect(document.activeElement).toBe(scroll);
-    const entries = scroll.querySelectorAll(".group-heading, .task-row");
+    const entries = scroll.querySelectorAll(".macro-group-heading, .macro-entry");
     expect(entries.length).toBeGreaterThan(0);
     for (const entry of entries) {
       expect(getComputedStyle(entry).width).toBe("100%");
@@ -198,3 +201,5 @@ describe("U6.4: reading insets stay inside real label widths", () => {
     }
   });
 });
+
+function render(ui: ReactElement) { return baseRender(ui, { wrapper: TooltipProvider }); }

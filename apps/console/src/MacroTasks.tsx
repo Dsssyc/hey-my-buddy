@@ -5,10 +5,15 @@ import type { ConsoleApi } from "./api";
 import type { Snapshot } from "./types";
 import type { MacroTaskFilter, MacroTaskSummary } from "./macro-task-types";
 import type { TimelineItem } from "./macro-task-display";
-import { CATEGORY_LABEL, categoryTone } from "./macro-task-display";
+
 import type { InspectorSelection } from "./inspector-card";
 import { Tasks } from "./Tasks";
-import { SplitView } from "./SplitView";
+import { ListFold } from "./MacroTaskList";
+import { Hint } from "./components/hint";
+import { Popover, PopoverContent, PopoverTrigger } from "./components/ui/popover";
+import { Dialog, DialogContent, DialogTitle, DialogDescription } from "./components/ui/dialog";
+import { StateMark } from "./components/ui/state-mark";
+import { formatClockMinutes, formatNumber } from "./i18n/format";
 import { MacroTaskList } from "./MacroTaskList";
 import { MacroTaskTimeline } from "./MacroTaskTimeline";
 import { TaskDetail } from "./task-detail/TaskDetail";
@@ -20,10 +25,18 @@ import { useMacroTaskTimeline } from "./use-macro-task-timeline";
 import { stopScope, stopStatus, useMacroTaskStop } from "./macro-task-stop";
 import type { StopScope } from "./macro-task-stop";
 import type { AuthorityLatch } from "./console-session";
-import { LOGIN_EXPIRED_ACTION_REFUSAL } from "./console-session";
+
 import { displayTitle } from "./macro-task-display";
-import { useBackgroundInert } from "./modal";
+
 import { useViewPreference } from "./view-preferences";
+
+function ConnectionStrip({ error, verifiedAtMs, retry }: { error: string; verifiedAtMs: number | null; retry: () => void }) {
+  const { t } = useTranslation("tasks");
+  return <div className="macro-offline" role="alert"><StateMark kind="fail"/><Hint text={error}><span tabIndex={0}>{t("offline")}</span></Hint>
+    {verifiedAtMs !== null && <small>{t("lastRead", { time: formatClockMinutes(verifiedAtMs) })}</small>}
+    <button type="button" onClick={retry}>{t("retry")}</button>
+  </div>;
+}
 
 /** The macroTask stop's explicit confirmation: names the macroTask and its scope. */
 function StopDialog({ summary, scope, onConfirm, onCancel }: {
@@ -32,26 +45,14 @@ function StopDialog({ summary, scope, onConfirm, onCancel }: {
   onConfirm: () => void;
   onCancel: () => void;
 }) {
-  const { t } = useTranslation("shell");
+  const { t } = useTranslation(["shell", "tasks"]);
   const cancelRef = useRef<HTMLButtonElement>(null);
-  const backdrop = useRef<HTMLDivElement>(null);
-  useBackgroundInert(backdrop);
-  useEffect(() => { cancelRef.current?.focus(); }, []);
-  useEffect(() => {
-    const onKey = (event: KeyboardEvent) => {
-      if (event.key !== "Escape") return;
-      event.preventDefault();
-      onCancel();
-    };
-    document.addEventListener("keydown", onKey);
-    return () => document.removeEventListener("keydown", onKey);
-  }, [onCancel]);
-  const title = displayTitle(summary.titleSource, summary.title).text;
-  return <div className="dialog-backdrop" ref={backdrop}>
-    <div className="dialog stop-dialog" role="dialog" aria-modal="true" aria-labelledby="stop-macro-task-title" aria-describedby="stop-macro-task-name stop-macro-task-body stop-macro-task-counts">
-      <h2 id="stop-macro-task-title">{t("macroStop.title")}</h2>
-      <p id="stop-macro-task-name" className="stop-dialog-task-title" title={title}>{title}</p>
-      <p id="stop-macro-task-body">{t("macroStop.scope")}</p>
+  const title = summary.titleSource === "none" ? t("tasks:unnamed") : displayTitle(summary.titleSource, summary.title).text;
+  return <Dialog open onOpenChange={open => { if (!open) onCancel(); }}>
+    <DialogContent className="stop-dialog" onOpenAutoFocus={event => { event.preventDefault(); cancelRef.current?.focus(); }} aria-describedby="stop-macro-task-name stop-macro-task-body stop-macro-task-counts">
+      <DialogTitle>{t("macroStop.title")}</DialogTitle>
+      <Hint text={title}><p id="stop-macro-task-name" tabIndex={0} className="stop-dialog-task-title">{title}</p></Hint>
+      <DialogDescription id="stop-macro-task-body">{t("macroStop.scope")}</DialogDescription>
       <ul id="stop-macro-task-counts" className="stop-dialog-counts">
         <li>{t("macroStop.scopeRoots", { count: scope.roots })}</li>
         <li>{t("macroStop.scopeHelpers", { count: scope.helpers })}</li>
@@ -63,8 +64,8 @@ function StopDialog({ summary, scope, onConfirm, onCancel }: {
         <button ref={cancelRef} type="button" className="button" onClick={onCancel}>{t("macroStop.cancel")}</button>
         <button type="button" className="button danger" onClick={onConfirm}>{t("macroStop.confirm")}</button>
       </div>
-    </div>
-  </div>;
+    </DialogContent>
+  </Dialog>;
 }
 
 /**
@@ -79,12 +80,14 @@ function StopDialog({ summary, scope, onConfirm, onCancel }: {
  * browser's history, and choosing a step of a micro task only replaces the one
  * it is on.
  */
-export function MacroTasks({ snapshot, api, refresh, active = true, authority, writesAvailable = true, onAddress }: {
+export function MacroTasks({ snapshot, api, refresh, active = true, authority, writesAvailable = true, onAddress, connectionError = "", verifiedAtMs = null }: {
   snapshot: Snapshot; api: ConsoleApi; refresh: () => Promise<Snapshot | null>; active?: boolean;
   authority?: AuthorityLatch; writesAvailable?: boolean;
   /** Told where the page is, so that the link back to the tasks leads to the same place. */
   onAddress?: (hash: string) => void;
+  connectionError?: string; verifiedAtMs?: number | null;
 }) {
+  const { t } = useTranslation("tasks");
   const [view, setView] = useState<"macroTasks" | "records">("macroTasks");
   const [listCollapsed, setListCollapsed] = useViewPreference("micro-task-list-collapsed");
   const [location, setLocation] = useState<TasksLocation>(() => tasksLocation(window.location.hash) ?? TASKS_ROOT);
@@ -113,16 +116,15 @@ export function MacroTasks({ snapshot, api, refresh, active = true, authority, w
     window.addEventListener("popstate", changed);
     return () => { window.removeEventListener("hashchange", changed); window.removeEventListener("popstate", changed); };
   }, []);
-  const destination = view === "macroTasks" ? "全部执行记录" : "宏任务";
-  const listNavigation = <button type="button" className="button small-button history-view-toggle"
-    title={`切换到${destination}`} aria-label={`切换到${destination}`}
-    onClick={() => setView(current => current === "macroTasks" ? "records" : "macroTasks")}>
-    <span aria-hidden="true">⇄</span>
-  </button>;
+  const listNavigation = (loaded?: number) => <div className="macro-list-navigation" role="group" aria-label={t("list")}>
+    <Hint text={loaded === undefined ? undefined : t("loaded", { n: formatNumber(loaded) })}><button type="button" aria-pressed={view === "macroTasks"} onClick={() => setView("macroTasks")}>{t("macro")}</button></Hint>
+    <button type="button" aria-pressed={view === "records"} onClick={() => setView("records")}>{t("records")}</button>
+  </div>;
   return <div className="history-switch">
+    {view === "records" && connectionError && <ConnectionStrip error={connectionError} verifiedAtMs={verifiedAtMs} retry={() => { void refresh(); }}/>}
     <div className="history-view" hidden={view !== "macroTasks"}>
       <MacroTasksWorkspace snapshot={snapshot} api={api} refresh={refresh}
-        active={active && view === "macroTasks"} authority={authority} writesAvailable={writesAvailable}
+        active={active && view === "macroTasks"} authority={authority} writesAvailable={writesAvailable} connectionError={connectionError} verifiedAtMs={verifiedAtMs}
         location={location} origin={origin} go={go}
         listNavigation={listNavigation} listCollapsed={listCollapsed}
         onCollapseList={() => setListCollapsed(true)} onExpandList={() => setListCollapsed(false)} />
@@ -130,27 +132,37 @@ export function MacroTasks({ snapshot, api, refresh, active = true, authority, w
     <div className="history-view" hidden={view !== "records"}>
       <Tasks snapshot={snapshot} api={api} refresh={refresh} active={active && view === "records"}
         onOpenMicroTask={(macroTaskId, runId) => go({ macroTaskId, runId, step: null }, "push")}
-        listNavigation={listNavigation} listCollapsed={listCollapsed}
+        listNavigation={listNavigation()} listCollapsed={listCollapsed}
         onCollapseList={() => setListCollapsed(true)} onExpandList={() => setListCollapsed(false)} />
     </div>
   </div>;
 }
 
-function MacroTasksWorkspace({ snapshot, api, refresh, active, authority, writesAvailable, location, origin, go, listNavigation, listCollapsed, onCollapseList, onExpandList }: {
+function MacroTasksWorkspace({ snapshot, api, refresh, active, authority, writesAvailable, location, origin, go, listNavigation, listCollapsed, onCollapseList, onExpandList, connectionError, verifiedAtMs }: {
   snapshot: Snapshot; api: ConsoleApi; refresh: () => Promise<Snapshot | null>; active: boolean;
-  authority?: AuthorityLatch; writesAvailable: boolean;
+  authority?: AuthorityLatch; writesAvailable: boolean; connectionError: string; verifiedAtMs: number | null;
   location: TasksLocation; origin: string | null;
   go: (next: TasksLocation, how: "push" | "replace", from?: string | null) => void;
-  listNavigation: ReactNode; listCollapsed: boolean; onCollapseList: () => void; onExpandList: () => void;
+  listNavigation: (loaded?: number) => ReactNode; listCollapsed: boolean; onCollapseList: () => void; onExpandList: () => void;
 }) {
-  const { t } = useTranslation("shell");
+  const { t } = useTranslation(["tasks", "shell"]);
   const [filter, setFilter] = useState<MacroTaskFilter>("all");
-  const [query, setQuery] = useState(""), [projectId, setProjectId] = useState(""), [hostId, setHostId] = useState("");
+  const [query, setQuery] = useState("");
   const selected = location.macroTaskId;
+  const [menuOpen, setMenuOpen] = useState(false);
+  useEffect(() => setMenuOpen(false), [active, selected]);
   const detailRunId = selected ? location.runId : null;
+  const [narrow, setNarrow] = useState(false);
+  useEffect(() => {
+    if (!window.matchMedia) return;
+    const media = window.matchMedia("(max-width: 760px)");
+    const changed = () => setNarrow(media.matches);
+    changed(); media.addEventListener("change", changed);
+    return () => media.removeEventListener("change", changed);
+  }, []);
   // The pinned inspector selection, kept per macroTask so switching back restores it.
   const [selectionByMacroTask, setSelectionByMacroTask] = useState<Map<string, InspectorSelection>>(() => new Map());
-  const list = useMacroTaskList(api, { query, projectId, hostId, filter }, active);
+  const list = useMacroTaskList(api, { query, filter }, active);
   const timeline = useMacroTaskTimeline(api, selected, active);
   const detailClient = useMemo(() => createTaskDetailClient(api, snapshot.csrfToken), [api, snapshot.csrfToken]);
   // The list row is freshest, but a list refresh must never unmount an open
@@ -166,25 +178,6 @@ function MacroTasksWorkspace({ snapshot, api, refresh, active, authority, writes
   }, [listedSummary, selected]);
   const selectedSummary = listedSummary
     ?? (summarySnapshot?.macroTaskId === selected ? summarySnapshot : null);
-  const choices = useMemo(() => ({
-    projects: [...new Map(list.rows.map(row => [row.project.id, row.project])).values()],
-    hosts: [...new Set(list.rows.map(row => row.sourceHostId).filter((id): id is string => !!id))].sort(),
-  }), [list.rows]);
-
-  // The viewport picks the layout: at 760px or below the list gives way to the
-  // macro task that is chosen, and the detail's two columns stack.
-  const railButtonRef = useRef<HTMLButtonElement>(null);
-  const [narrowViewport, setNarrowViewport] = useState(false);
-  useEffect(() => {
-    if (typeof window.matchMedia !== "function") return;
-    const query = window.matchMedia("(max-width: 760px)");
-    const update = () => setNarrowViewport(query.matches);
-    update();
-    query.addEventListener("change", update);
-    return () => query.removeEventListener("change", update);
-  }, []);
-  const railActive = listCollapsed;
-
   // MacroTask-level stop: the one retained write, with its explicit
   // confirmation and a retained command identity. Nothing here locks browsing.
   const reload = async () => {
@@ -226,43 +219,28 @@ function MacroTasksWorkspace({ snapshot, api, refresh, active, authority, writes
   }
   const backToTimeline = () => go({ macroTaskId: selected, runId: null, step: null }, "push");
 
-  // The header's stop control: one macro-task-level action, its honest status,
-  // and the replay entry for a lost reply. Read-only sessions see the reason.
   let stopControl: ReactNode = null;
   if (selectedSummary) {
     const stopping = stopEntry?.phase === "stopping";
     const scope = stopScope(selectedSummary);
-    const stoppingAvailable = scope.roots + scope.helpers > 0;
-    stopControl = <span className="stop-control">
-      <button type="button" className="button small-button danger"
-        disabled={!stop.writable || stopping || !stoppingAvailable}
-        title={!stop.writable ? LOGIN_EXPIRED_ACTION_REFUSAL : stopping ? t("macroStop.pending") : !stoppingAvailable ? t("macroStop.noActive") : t("macroStop.actionHint")}
-        onClick={() => stop.requestStop(selectedSummary, scope)}>{t("macroStop.title")}</button>
-      {stopState && <span className={`stop-status stop-${stopState.phase}`} role="status"
-        title={stopState.detail}>{stopState.label}</span>}
-      {stopState?.phase === "unknown" && stop.writable && !stopping
-        && <button type="button" className="button small-button"
-          title={t("macroStop.retryHint")}
-          onClick={() => stop.retryStop(selectedSummary)}>{t("macroStop.retry")}</button>}
-      {stopState?.phase === "refused"
-        && <button type="button" className="button small-button" onClick={() => stop.dismissStop(selectedSummary.macroTaskId)}>{t("macroStop.dismiss")}</button>}
-    </span>;
+    const reason = !stop.writable ? t("readonly") : stopping ? t("stopping") : scope.roots + scope.helpers === 0 ? t("shell:macroStop.noActive") : undefined;
+    stopControl = <div className="macro-stop-menu">
+      {stopState && <Hint text={stopState.detail}><span className={`macro-stop-state stop-${stopState.phase}`} role="status">{stopState.label}</span></Hint>}
+      {stopState?.phase === "unknown" && stop.writable && !stopping && <Hint text={t("shell:macroStop.retryHint")}><button type="button" className="button small-button" onClick={() => stop.retryStop(selectedSummary)}>{t("shell:macroStop.retry")}</button></Hint>}
+      {stopState?.phase === "refused" && <button type="button" className="button small-button" onClick={() => stop.dismissStop(selectedSummary.macroTaskId)}>{t("shell:macroStop.dismiss")}</button>}
+      <Popover open={menuOpen && active} onOpenChange={setMenuOpen}><PopoverTrigger asChild><button type="button" className="macro-menu-button" aria-label={t("more")}>⋯</button></PopoverTrigger>
+        <PopoverContent align="end" className="macro-menu-content p-1 w-40 rounded-none">
+          <Hint text={reason}><button type="button" className="macro-stop-action" aria-label={t("shell:macroStop.title")} aria-disabled={!!reason} onClick={() => { if (!reason) { setMenuOpen(false); stop.requestStop(selectedSummary, scope); } }}>{t("stop")}</button></Hint>
+        </PopoverContent>
+      </Popover>
+    </div>;
   }
-
-  const listPane = <MacroTaskList
-    rows={list.rows} total={list.total} loading={list.loading} error={list.error} verifiedAtMs={list.verifiedAtMs}
-    nextCursor={list.nextCursor} reorder={list.reorder}
-    filter={filter} query={query} projectId={projectId} hostId={hostId} choices={choices}
-    selected={selected}
-    active={active}
-    visible={active && !railActive && !(narrowViewport && !!selected)}
-    rail={railActive} railButtonRef={railButtonRef}
-    listNavigation={listNavigation}
-    onCollapse={onCollapseList}
-    onToggleRail={onExpandList}
-    onFilterChange={setFilter} onQueryChange={setQuery} onProjectChange={setProjectId} onHostChange={setHostId}
-    onSelect={selectMacroTask} onRetry={list.retry} onMore={list.more}
-    onApplyReorder={list.applyReorder} />;
+  const listPane = !listCollapsed && <MacroTaskList
+    rows={list.rows} totals={list.totals} loading={list.loading} error={list.error} verifiedAtMs={list.verifiedAtMs}
+    nextCursor={list.nextCursor} reorder={list.reorder} filter={filter} query={query} selected={selected}
+    active={active} visible={active && !(narrow && !!selected)} listNavigation={listNavigation(list.rows.length)} onCollapse={onCollapseList}
+    onFilterChange={setFilter} onQueryChange={setQuery} onSelect={selectMacroTask}
+    onRetry={list.retry} onMore={list.more} onApplyReorder={list.applyReorder} />;
 
   // The detail takes the place of the timeline, under the macro task's own header.
   const detail = detailRunId ? <TaskDetail key={detailRunId} client={detailClient} runId={detailRunId}
@@ -287,6 +265,7 @@ function MacroTasksWorkspace({ snapshot, api, refresh, active, authority, writes
     openedRunId={detailRunId}
     selection={selection}
     headerActions={stopControl}
+    listToggle={listCollapsed ? <ListFold label={t("expand")} onClick={onExpandList}/> : undefined}
     buddies={snapshot.buddies}
     onSelectItem={selectItem}
     onOpenItem={openItem}
@@ -296,23 +275,23 @@ function MacroTasksWorkspace({ snapshot, api, refresh, active, authority, writes
     onRetry={() => void timeline.retry()}
     onBackToList={() => selectMacroTask(null)} /> : null;
 
-  const detailPane = <aside className="panel detail-panel" aria-label="宏任务详情">
-    {selected && <div className="panel-toolbar list-mobile-navigation">
-      {listNavigation}<h2>宏任务</h2>
-      <button type="button" className="button small-button" title={listCollapsed ? "展开宏任务列表" : "收起宏任务列表"}
-        aria-label={listCollapsed ? "展开宏任务列表" : "收起宏任务列表"}
-        onClick={listCollapsed ? onExpandList : onCollapseList}>{listCollapsed ? "展开列表" : "收起列表"}</button>
-    </div>}
+  const disconnected = !!connectionError || !!list.error;
+  const lastRead = list.verifiedAtMs ?? verifiedAtMs;
+  const empty = !list.loading && !list.error && list.totals.all === 0 && !query && filter === "all";
+  const detailPane = <aside className="panel detail-panel" aria-label={t("detail")}>
     {selected
       ? <div className="right-stage"><div className="right-stage-pane">{timelinePane}</div></div>
-      : <div className="detail-placeholder">
-        <h2>选择一个宏任务</h2>
-
-      </div>}
+      : <>
+        {listCollapsed && <div className="macro-empty-head"><ListFold label={t("expand")} onClick={onExpandList}/>{listNavigation(list.rows.length)}</div>}
+        <div className="macro-first-use">{empty && <svg width="40" height="40" viewBox="3 3 58 58" className="macro-empty-mark" aria-hidden="true"><polygon points="12,13 22,13 22,61 12,54"/><polygon points="22,32 30,28 30,38 22,42"/><polygon points="42,3 52,10 52,51 42,51"/><polygon points="34,26 42,22 42,32 34,36"/><polygon points="30,28 34,26 34,36 30,38"/></svg>}<h2>{t(empty ? "emptyTitle" : "choose")}</h2>
+          {empty && <><p>{t("emptyBody")}</p><div className="ready"><span>{t("harnesses", { n: formatNumber((snapshot.harnesses ?? []).filter(h => h.status === "ready").length) })}</span><span>{t("buddies", { n: formatNumber(snapshot.buddies.filter(b => b.enabled).length) })}</span><a href="#buddies">{t("buddy")}</a></div></>}
+        </div>
+      </>}
   </aside>;
   return <>
-    <div className="workspace-wrap">
-      <SplitView selected={!!selected} rail={railActive} list={listPane} detail={detailPane} />
+    <div className="workspace-wrap macro-shell">
+      {disconnected && <ConnectionStrip error={connectionError || list.error} verifiedAtMs={lastRead} retry={() => { if (connectionError) void refresh(); else list.retry(); }}/>}
+      <div className={`macro-workspace${selected ? " has-selection" : ""}${listCollapsed ? " list-collapsed" : ""}${empty ? " is-empty" : ""}`}>{listPane}{detailPane}</div>
     </div>
     {stop.confirming && <StopDialog summary={stop.confirming.summary} scope={stop.confirming.scope}
       onConfirm={() => stop.confirmStop(stop.confirming!.summary)}

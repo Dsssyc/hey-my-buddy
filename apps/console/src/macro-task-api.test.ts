@@ -5,7 +5,7 @@ import { macroTaskTimelineFixture } from "./macro-task-fixtures";
 
 describe("work macro task reads", () => {
   it("reports macroTask list verification from each HTTP response without changing its envelope", async () => {
-    const page: MacroTaskPage = { macroTasks: [], total: 0, nextCursor: null, cursor: 41, changed: false };
+    const page: MacroTaskPage = { macroTasks: [], totals: { all: 0, active: 0, host: 0, review: 0 }, nextCursor: null, cursor: 41, changed: false };
     const firstDate = "Fri, 09 Oct 2026 18:00:00 GMT";
     const secondDate = "Fri, 09 Oct 2026 18:05:00 GMT";
     const fetcher = vi.fn<typeof fetch>()
@@ -21,7 +21,7 @@ describe("work macro task reads", () => {
     expect(fetcher.mock.calls[1][1]?.headers).toEqual({ "If-None-Match": '"macroTasks"' });
   });
   it("sends list filters through GET /api/macro-tasks with the caller's abort signal", async () => {
-    const page: MacroTaskPage = { macroTasks: [], total: 7, nextCursor: "keyset+cursor/==", cursor: 41, changed: true };
+    const page: MacroTaskPage = { macroTasks: [], totals: { all: 7, active: 3, host: 2, review: 1 }, nextCursor: "keyset+cursor/==", cursor: 41, changed: true };
     const fetcher = vi.fn<typeof fetch>(async () => new Response(JSON.stringify(page)));
     const api = createApi("/private/", fetcher);
     const controller = new AbortController();
@@ -38,7 +38,7 @@ describe("work macro task reads", () => {
   });
 
   it("omits empty optional list parameters instead of sending blank filters", async () => {
-    const fetcher = vi.fn<typeof fetch>(async () => new Response(JSON.stringify({ macroTasks: [], total: 0, nextCursor: null, cursor: 0, changed: false })));
+    const fetcher = vi.fn<typeof fetch>(async () => new Response(JSON.stringify({ macroTasks: [], totals: { all: 0, active: 0, host: 0, review: 0 }, nextCursor: null, cursor: 0, changed: false })));
     const api = createApi("/private", fetcher);
     await api.macroTasks({ query: "", projectId: "", hostId: "", filter: "all" });
     const url = new URL(String(fetcher.mock.calls[0][0]), "http://localhost");
@@ -46,10 +46,13 @@ describe("work macro task reads", () => {
   });
 
   it("rejects incomplete list envelopes instead of treating them as an empty page", async () => {
-    for (const payload of [{ macroTasks: [], total: 0 }, { macroTasks: {}, total: 0, nextCursor: null, cursor: 0, changed: false },
-      { macroTasks: [], total: "0", nextCursor: null, cursor: 0, changed: false },
-      { macroTasks: [], total: 0, nextCursor: 1, cursor: 0, changed: false },
-      { macroTasks: [], total: 0, nextCursor: null, cursor: 0 }]) {
+    const totals = { all: 0, active: 0, host: 0, review: 0 };
+    for (const payload of [{ macroTasks: [], totals }, { macroTasks: {}, totals, nextCursor: null, cursor: 0, changed: false },
+      { macroTasks: [], totals: { ...totals, all: "0" }, nextCursor: null, cursor: 0, changed: false },
+      { macroTasks: [], totals: { ...totals, review: -1 }, nextCursor: null, cursor: 0, changed: false },
+      { macroTasks: [], totals: { all: 0, active: 0, host: 0 }, nextCursor: null, cursor: 0, changed: false },
+      { macroTasks: [], totals, nextCursor: 1, cursor: 0, changed: false },
+      { macroTasks: [], totals, nextCursor: null, cursor: 0 }]) {
       const api = createApi("/private", vi.fn(async () => new Response(JSON.stringify(payload))) as typeof fetch);
       await expect(api.macroTasks({})).rejects.toHaveProperty("code", "INVALID_RESPONSE");
     }
@@ -77,9 +80,31 @@ describe("work macro task reads", () => {
       const reader = createApi("/private", vi.fn(async () => new Response(JSON.stringify(malformed))) as typeof fetch);
       await expect(reader.macroTaskTimeline("macro-1", {})).rejects.toHaveProperty("code", "INVALID_RESPONSE");
     }
-    const badList = { macroTasks: [{ ...good.macroTask, description: [] }], total: 1, nextCursor: null, cursor: 0, changed: false };
+    const badList = { macroTasks: [{ ...good.macroTask, description: [] }], totals: { all: 1, active: 1, host: 0, review: 0 }, nextCursor: null, cursor: 0, changed: false };
     const listApi = createApi("/private", vi.fn(async () => new Response(JSON.stringify(badList))) as typeof fetch);
     await expect(listApi.macroTasks({})).rejects.toHaveProperty("code", "INVALID_RESPONSE");
+    for (const malformed of [
+      { ...good.macroTask, summary: undefined },
+      { ...good.macroTask, sourceHostId: undefined },
+      { ...good.macroTask, project: { ...good.macroTask.project, path: 4 } },
+      { ...good.macroTask, counts: { ...good.macroTask.counts, host: -1 } },
+    ]) {
+      const reader = createApi("/private", vi.fn(async () => new Response(JSON.stringify({
+        macroTasks: [malformed], totals: { all: 1, active: 1, host: 0, review: 0 },
+        nextCursor: null, cursor: 0, changed: false,
+      }))) as typeof fetch);
+      await expect(reader.macroTasks({})).rejects.toHaveProperty("code", "INVALID_RESPONSE");
+    }
+  });
+
+  it("accepts nullable summary fields from the service's standalone projection", async () => {
+    const source = macroTaskTimelineFixture().macroTask;
+    const standalone = { ...source, kind: "standalone", titleSource: "none", description: null,
+      summary: null, sourceHostId: null, project: null, createdAt: null, lastActivityAt: null };
+    const payload = { macroTasks: [standalone], totals: { all: 1, active: 1, host: 0, review: 0 },
+      nextCursor: null, cursor: 41, changed: false };
+    const api = createApi("/private", vi.fn(async () => new Response(JSON.stringify(payload))) as typeof fetch);
+    await expect(api.macroTasks({})).resolves.toEqual(payload);
   });
 
   it("reads one macroTask's timeline from its encoded path with the bounded limit", async () => {

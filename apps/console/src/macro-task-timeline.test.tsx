@@ -143,23 +143,20 @@ describe("macroTask timeline rendering", () => {
     expect(item("span:s-r5-e")!.className).not.toContain("failed");
   });
 
-  it("shows the vitals header, folded time statistics and the archival note", async () => {
+  it("shows the overview context and state counts with recorded details in the popover", async () => {
     const timeline = macroTaskTimelineFixture();
     render(<MacroTaskTimeline {...baseProps(timeline)} />);
     const head = document.querySelector(".tl-head") as HTMLElement;
     expect(within(head).getByText("宏任务时间轴：设计、接口与实现")).toBeTruthy();
-    // U2: the header beneath the title shows only status, accepted progress
-    // and latest activity; the description sits right under the title.
-    expect(within(head).getByText(/按用户认可的第 X 节设计宏任务时间轴/)).toBeTruthy();
-    const vitals = head.querySelector(".macro-task-vitals") as HTMLElement;
-    expect(vitals.textContent).toContain("进行中");
-    expect(vitals.textContent).toContain("2 / 5 个微任务已验收");
-    expect(vitals.textContent).toMatch(/最近活动 \d{2}:\d{2}（/);
-    // The plain-sentence durations and the record source fold into 时间统计 (§3).
+    expect(head.querySelector(".macro-overview-facts")!.textContent).toMatch(/项目hey-my-buddy.*Hostcodex-desktop.*开始.*历时/);
+    expect(head.querySelector(".macro-overview-counts")!.textContent).toContain("1进行中");
+    expect(head.querySelector(".macro-overview-counts")!.textContent).toContain("2已验收");
+    expect(head.textContent).not.toContain("按用户认可的第 X 节");
     const stats = head.querySelector(".time-stats") as HTMLElement;
-    expect(within(stats).getByText("时间统计")).toBeTruthy();
+    expect(within(head).getByRole("button", { name: "时间统计" })).toBe(stats);
     await userEvent.setup().click(stats);
     const body = screen.getByRole("dialog", { name: "时间统计" }).querySelector(".time-stats-body") as HTMLElement;
+    expect(body.textContent).toContain("按用户认可的第 X 节");
     expect(body.textContent).toMatch(/从开始到最近一次活动：\S+/);
     expect(body.textContent).toMatch(/其间至少有一项在运行的时间：\S+/);
     // The fixture has overlapping executions, so the cumulative sum exceeds
@@ -171,11 +168,12 @@ describe("macroTask timeline rendering", () => {
     expect(body.textContent).toContain("当前 Host codex-desktop");
   });
 
-  it("labels a standalone root honestly and keeps its note distinct", () => {
+  it("labels a standalone root honestly in its details", async () => {
     const timeline = macroTaskTimelineFixture();
     timeline.macroTask = { ...timeline.macroTask, kind: "standalone", title: "修复标题回退在 CRLF 输入下的显示" };
     render(<MacroTaskTimeline {...baseProps(timeline)} />);
-    expect(screen.getByText("历史独立微任务")).toBeTruthy();
+    await userEvent.setup().click(screen.getByRole("button", { name: "时间统计" }));
+    expect(screen.getByRole("dialog", { name: "时间统计" }).textContent).toContain("历史独立微任务");
   });
 
   it("renders every span kind and terminal state with non-colour markers", () => {
@@ -259,10 +257,6 @@ describe("macroTask timeline rendering", () => {
     expect(label.querySelector(".lbl-name")!.textContent).not.toBe(LONG_TASK_LINE);
     // The tooltip carries the complete first line while the label stays short.
     expect(label.getAttribute("title")).toBe(LONG_TASK_LINE);
-    // The card title is the clipped line itself.
-    const single = container.querySelector(".micro-task-card.single") as HTMLElement;
-    expect(single.textContent).not.toContain("做什么");
-    expect(single.textContent).not.toContain(LONG_TASK_LINE);
   });
 
   it("shows fixed idle blocks with ranges and removes every expand control", () => {
@@ -323,55 +317,12 @@ describe("macroTask timeline rendering", () => {
     fireEvent.click(screen.getByRole("button", { name: "时间统计" }));
     const warn = screen.getByRole("dialog", { name: "时间统计" }).querySelector(".metric-warn") as HTMLElement;
     expect(warn.textContent).toContain("不完整");
-    expect(warn.getAttribute("title")).toContain("执行片段已截断");
+    expect(warn.textContent).toContain("执行片段已截断");
     first.unmount();
     const filtered = macroTaskTimelineFixture({ filtered: true, scopeComplete: false, totals: { rows: 2, spans: 15, events: 9, allRows: 6 } });
     const second = render(<MacroTaskTimeline {...baseProps(filtered)} />);
     expect(second.getByRole("status").textContent).toContain("已按筛选显示 6 / 6 个微任务");
     expect(second.queryByRole("button", { name: /已折叠，展开/ })).toBeNull();
-  });
-
-  it("keeps compact cards in creation order and expands the remaining cards", () => {
-    const timeline = macroTaskTimelineFixture();
-    const { container } = render(<MacroTaskTimeline {...baseProps(timeline)} />);
-    const strip = container.querySelector(".micro-task-strip") as HTMLElement;
-    expect(strip.querySelectorAll(".micro-task-card").length).toBe(4);
-    fireEvent.click(screen.getByRole("button", { name: "展开全部 5 个" }));
-    const cards = [...strip.querySelectorAll<HTMLElement>(".micro-task-card")];
-    expect(cards.length).toBe(5);
-    // T3: bold two-line title, top-right status, one-line result with the
-    // Worker 自述 label, and no 做什么/微任务摘要 labels.
-    const first = cards[0]!;
-    expect(first.querySelector(".micro-task-card-title")!.textContent).toBe("设计宏任务时间轴视图与交互规范");
-    expect(first.querySelector(".micro-task-card-state")!.textContent).toContain("已验收");
-    expect(first.textContent).toContain("结果：已完成时间轴视图与交互规范设计并交付审阅。");
-    expect(within(first).getByText("Worker 自述")).toBeTruthy();
-    expect(first.textContent).not.toContain("做什么");
-    expect(first.textContent).not.toContain("微任务摘要");
-    const executing = cards.find(card => card.textContent!.includes("时间轴界面带截图的视觉与交互审查"))!;
-    expect(executing.textContent).toContain("结果未知");
-    expect(within(executing).queryByText("Worker 自述")).toBeNull();
-    expect(cards.at(-1)!.textContent).toContain("修正折叠区间展开后的键盘焦点顺序");
-  });
-
-  it("replaces the card strip with one expanded card for a single root, helpers included", () => {
-    const timeline = macroTaskTimelineFixture({
-      rows: [macroTaskTimelineFixture().rows[0]!, macroTaskTimelineFixture().rows[2]!],
-      spans: macroTaskTimelineFixture().spans.filter(span => ["s-r1-q", "s-r1-e"].includes(span.spanId)),
-      events: [],
-      macroTask: { ...macroTaskTimelineFixture().macroTask, counts: { roots: 1, helpers: 1, accepted: 0, active: 0, host: 0, review: 0, ended: 2,
-        stoppableRoots: 0, stoppableHelpers: 0, delivered: 0, awaitingHost: 0 } },
-    });
-    timeline.rows[1] = { ...timeline.rows[1]!, parentRunId: "r1", rootRunId: "r1", rootLeadRunId: null, depth: 1, kind: "helper" };
-    const { container } = render(<MacroTaskTimeline {...baseProps(timeline)} />);
-    // The single root keeps one expanded card inside the collapsible band.
-    expect(container.querySelectorAll(".micro-task-strip .micro-task-card:not(.single)")).toHaveLength(0);
-    const single = container.querySelector(".micro-task-card.single") as HTMLElement;
-    expect(single).toBeTruthy();
-    expect(single.textContent).toContain("已验收");
-    expect(within(single).getByRole("button", { name: "打开详情" })).toBeTruthy();
-    expect(single.textContent).not.toContain("第 1 轮");
-    expect(single.textContent).not.toContain("待决");
   });
 
   it("shows skeleton, error and stale states without inventing data", async () => {

@@ -23,11 +23,11 @@ export type MacroTaskSummary = {
   description: string | null;
   /** Latest recorded own result, separate from intent; groups do not synthesize one. */
   summary: string | null;
-  project: { id: string; path: string | null; label: string };
+  project: { id: string; path: string | null; label: string } | null;
   sourceHostId: string | null;
   currentHostIds: string[];
-  createdAt: string;
-  lastActivityAt: string;
+  createdAt: string | null;
+  lastActivityAt: string | null;
   lastActivitySeq: number;
   /** Summary state: the highest-priority category present among the members. */
   state: MacroTaskCategory;
@@ -41,7 +41,10 @@ export type MacroTaskQuery = {
   query?: string; filter?: MacroTaskFilter;
 };
 export type MacroTaskPage = {
-  macroTasks: MacroTaskSummary[]; total: number; nextCursor: string | null;
+  macroTasks: MacroTaskSummary[];
+  /** Exact matching group counts for the current project, Host and text scope. */
+  totals: Record<MacroTaskFilter, number>;
+  nextCursor: string | null;
   /** Current event head. */
   cursor: number;
   /** True when activity after the first page may have reordered groups: offer a refresh. */

@@ -36,6 +36,15 @@ export function formatClockMinutes(ms: number): string {
   return minuteClock.format(ms);
 }
 
+/** A local instant without seconds, with enough date context to distinguish older days. */
+export function formatMomentMinutes(ms: number, nowMs: number): string {
+  const date = new Date(ms);
+  const now = new Date(nowMs);
+  if (date.toDateString() === now.toDateString()) return formatClockMinutes(ms);
+  const short = formatShortDateTime(ms);
+  return date.getFullYear() === now.getFullYear() ? short : `${date.getFullYear()}-${short}`;
+}
+
 /** 12,000 */
 export function formatNumber(value: number): string {
   return whole.format(value);
@@ -58,6 +67,15 @@ export function formatDuration(ms: number, fine = false): string {
   if (h > 0) return fine ? `${part("hour", h)} ${part("minute", m, true)} ${part("second", s, true)}` : m ? `${part("hour", h)} ${part("minute", m)}` : part("hour", h);
   if (m > 0) return fine ? `${part("minute", m)} ${part("second", s, true)}` : total < 600 && s ? `${part("minute", m)} ${part("second", s)}` : part("minute", m);
   return part("second", s);
+}
+
+/** Wall time in whole minutes, including an explicit zero-minute part after hours. */
+export function formatDurationMinutes(ms: number): string {
+  const total = Math.max(0, Math.floor(ms / 60_000));
+  const hours = Math.floor(total / 60);
+  const minutes = total % 60;
+  const minute = (n: number) => i18n.t("shell:duration.minute", { n: formatNumber(n) });
+  return hours ? `${i18n.t("shell:duration.hour", { n: formatNumber(hours) })} ${minute(minutes)}` : minute(minutes);
 }
 
 /** 19 minutes ago, in the nearest unit, written like a duration; an instant that has not come yet reads as now. */

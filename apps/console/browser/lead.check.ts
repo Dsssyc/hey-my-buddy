@@ -123,22 +123,25 @@ for (const { locale, language, tasks } of [
       const stopName = zh ? "停止宏任务" : "Stop macro task";
       const cancelName = zh ? "取消" : "Cancel";
       const confirmName = zh ? "确认停止宏任务" : "Confirm stop";
+      const more = page.getByRole("button", { name: zh ? "更多" : "More", exact: true });
+      await more.click();
       const stop = page.getByRole("button", { name: stopName, exact: true });
       await expect(stop).toBeEnabled();
       await stop.click();
       const dialog = page.getByRole("dialog", { name: stopName, exact: true });
       const summary = timeline.macroTask;
-      await expect(dialog.locator(".stop-dialog-task-title")).toHaveAttribute("title", summary.title);
+      await expect(dialog.locator(".stop-dialog-task-title")).toHaveAttribute("aria-description", summary.title);
       await expect(dialog.locator(".stop-dialog-task-title")).toHaveText(summary.title);
       await expect(dialog.locator("#stop-macro-task-counts li")).toHaveCount(5);
       await expect(dialog.locator("#stop-macro-task-body")).not.toContainText(summary.title);
       await expect(dialog.locator("#stop-macro-task-counts")).toContainText(zh
         ? `停止 ${summary.counts.stoppableRoots} 个微任务`
-        : `${summary.counts.stoppableRoots} micro task${summary.counts.stoppableRoots === 1 ? "" : "s"} to stop`);
+        : `Micro tasks to stop ${summary.counts.stoppableRoots}`);
       await expect(dialog.locator("#stop-macro-task-counts")).toContainText(zh
         ? `停止 ${summary.counts.stoppableHelpers} 个协助任务`
-        : `${summary.counts.stoppableHelpers} helper task${summary.counts.stoppableHelpers === 1 ? "" : "s"} to stop`);
+        : `Helper tasks to stop ${summary.counts.stoppableHelpers}`);
       await expect(dialog.getByRole("button", { name: cancelName, exact: true })).toBeFocused();
+      await settle(page);
       await expectWholeAndApart(page.locator("body"), dialog);
       await expectWholeAndApart(dialog, dialog.locator(":scope > h2, :scope > p, :scope > ul, :scope > .actions"));
       await expectWholeAndApart(dialog.locator(".actions"), dialog.getByRole("button"));
@@ -147,6 +150,7 @@ for (const { locale, language, tasks } of [
       await expect(dialog).toBeHidden();
       expect(commands).toEqual([]);
 
+      await more.click();
       await stop.click();
       await dialog.getByRole("button", { name: cancelName, exact: true }).press("Tab");
       const confirm = dialog.getByRole("button", { name: confirmName, exact: true });
@@ -162,9 +166,9 @@ for (const { locale, language, tasks } of [
       expect(commands).toEqual([{ operation: "macro_task_stop", params: { macroTaskId: MACRO, commandId: expect.any(String) } }]);
       expect(response.request().postDataJSON().params.commandId).not.toBe("");
       await expect(dialog).toBeHidden();
-      const status = page.locator(".stop-status");
+      const status = page.locator(".macro-stop-state");
       await expect(status).toHaveText(zh ? "停止请求未提交" : "Stop request was refused");
-      await expect(status).toHaveAttribute("title", /This synthetic preview never performs mutations/);
+      await expect(status).toHaveAttribute("aria-description", /This synthetic preview never performs mutations/);
       await expectTextUncut(status);
       await expect(page.getByText(zh ? "已停止" : "Stopped", { exact: true })).toHaveCount(0);
       await expect(page.getByRole("button", { name: zh ? "重试停止" : "Retry stop", exact: true })).toHaveCount(0);
@@ -177,6 +181,7 @@ for (const { locale, language, tasks } of [
       await expectReadableStart(row(page, WAITING).locator(".lbl-sub"), "等待 Lead");
       await page.getByRole("button", { name: zh ? "知道了" : "Dismiss", exact: true }).click();
       await expect(status).toHaveCount(0);
+      await more.click();
       await expect(stop).toBeEnabled();
       await expectNoSidewaysScroll(page);
       expect(errors.page).toEqual([]);
@@ -201,10 +206,12 @@ for (const locale of ["zh-CN", "en-US"]) test.describe(`a long stop title in ${l
     });
     await open(page, "#tasks");
     await page.locator(`[data-macro-task-id="${MACRO}"] button`).click();
+    await page.getByRole("button", { name: locale === "zh-CN" ? "更多" : "More", exact: true }).click();
     await page.getByRole("button", { name: locale === "zh-CN" ? "停止宏任务" : "Stop macro task", exact: true }).click();
     const dialog = page.getByRole("dialog");
     const titleLine = dialog.locator(".stop-dialog-task-title");
-    await expect(titleLine).toHaveAttribute("title", title);
+    await settle(page);
+    await expect(titleLine).toHaveAttribute("aria-description", title);
     await expect(titleLine).toHaveText(title);
     await expect(dialog).toHaveAccessibleDescription(new RegExp(title.slice(0, 24)));
     expect(await titleLine.evaluate(element => {

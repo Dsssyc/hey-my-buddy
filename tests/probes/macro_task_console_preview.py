@@ -1372,13 +1372,17 @@ def group_matching(group: str, applied: dict) -> set[str]:
 def macro_task_page(params: dict) -> dict:
     limit = parse_limit(params, 50, 100)
     applied = applied_filters(params)
+    base_scope = {key: value for key, value in applied.items() if key != "filter"}
+    totals = {name: sum(bool(group_matching(group, {**base_scope, "filter": name}))
+                        for group in FIXTURES["groups"])
+              for name in ("all", "active", "host", "review")}
     rows = [(FIXTURES["group_activity"][group][0], group)
             for group in FIXTURES["groups"] if group_matching(group, applied)]
     rows.sort(key=lambda item: (item[0], item[1]), reverse=True)
     return {
         "macroTasks": [macro_task_summary(group, group_matching(group, applied))
                        for _seq, group in rows[:limit]],
-        "total": len(rows), "nextCursor": None, "cursor": FIXTURES["head"], "changed": False,
+        "totals": totals, "nextCursor": None, "cursor": FIXTURES["head"], "changed": False,
     }
 
 
@@ -2080,8 +2084,8 @@ def resolve_asset(root: Path, relative: str) -> Path | None:
 # Self checks                                                                   #
 # --------------------------------------------------------------------------- #
 REQUIRED_KEYS = {
-    "MacroTaskPage": {"macroTasks", "total", "nextCursor", "cursor", "changed"},
-    "MacroTaskSummary": {"macroTaskId", "kind", "title", "titleSource", "description", "project",
+    "MacroTaskPage": {"macroTasks", "totals", "nextCursor", "cursor", "changed"},
+    "MacroTaskSummary": {"macroTaskId", "kind", "title", "titleSource", "description", "summary", "project",
                          "sourceHostId", "currentHostIds", "createdAt", "lastActivityAt", "lastActivitySeq",
                          "state", "counts", "matchingRuns", "rootRunIds"},
     "MacroTaskCounts": {"roots", "helpers", "accepted", "active", "host", "review", "ended",
@@ -2247,6 +2251,11 @@ def validate_fixtures() -> list[str]:
         problems.append("preview-run-b5 must keep the unclaimed owned micro task that allows the Lead to wait")
     if set(page) != REQUIRED_KEYS["MacroTaskPage"]:
         problems.append(f"MacroTaskPage: keys {sorted(set(page))}")
+    expected_totals = {name: sum(bool(group_matching(group, {"filter": name}))
+                                 for group in FIXTURES["groups"])
+                       for name in ("all", "active", "host", "review")}
+    if page["totals"] != expected_totals or macro_task_page({"filter": "host"})["totals"] != expected_totals:
+        problems.append("macro task totals must count each category across the same scope regardless of selected filter")
     if json.dumps(macro_task_page({}), sort_keys=True) != json.dumps(macro_task_page({}), sort_keys=True):
         problems.append("macro task list is not stable across reads")
     if json.dumps(macro_task_timeline({"macroTaskId": MACRO_B}, "normal"), sort_keys=True) != json.dumps(

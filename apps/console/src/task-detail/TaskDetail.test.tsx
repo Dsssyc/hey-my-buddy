@@ -108,6 +108,10 @@ describe("the head of the detail", () => {
     expect(head.textContent).toContain("等待验收");
     expect(head.textContent).toContain("回合2");
     expect(head.textContent).toMatch(/开始.*历时/);
+    const started = within(head).getByText("开始").nextElementSibling;
+    expect(started?.textContent).toMatch(/\d{2}:\d{2}$/);
+    expect(started?.textContent).not.toMatch(/:\d{2}:\d{2}$/);
+    expect(head.querySelector("[data-slot=detail-status]")?.parentElement?.querySelector("button[aria-label=重新读取]")).toBeTruthy();
   });
 
   it("falls back to the first line of the task for a title, and says so", async () => {
@@ -305,7 +309,7 @@ describe("a turn", () => {
     expect(text()).toContain("读到第二个文件。");
     expect(text()).toContain("无法送达");
     expect(text()).not.toContain("第二轮的问询");
-    expect(text()).toContain("第一轮：读完了旧的详情");
+    await waitFor(() => expect(text()).toContain("第一轮：读完了旧的详情"));
     // The band of the seal: kind, short commit, base to output, files; it opens to the evidence.
     const seal = within(pane()).getByRole("button", { name: /封存/ });
     expect(seal.textContent).toContain("3f9a2c1");

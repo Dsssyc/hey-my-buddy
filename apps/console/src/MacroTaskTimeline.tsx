@@ -11,7 +11,7 @@ import {
   eventItem, toMs, buddyPalette, acceptanceWaitMs, acceptanceWaitText, titleLineTooltip,
 } from "./macro-task-display";
 import { MacroTaskChronology } from "./MacroTaskChronology";
-import { MicroTaskStrip, MacroTaskOverview } from "./MacroTaskOverview";
+import { MacroTaskOverview } from "./MacroTaskOverview";
 import { TimelineInspector } from "./TimelineInspector";
 import { MarkerPopover, type MarkerClusterView } from "./MarkerPopover";
 import { Popover } from "./Popover";
@@ -91,6 +91,7 @@ export type MacroTaskTimelineProps = {
   selection: InspectorSelection | null;
   /** MacroTask-level actions rendered in the overview header (停止宏任务, U4). */
   headerActions?: ReactNode;
+  listToggle?: ReactNode;
   /** Snapshot buddies for friendly buddy names (0.16 0.3). */
   buddies?: readonly FriendlyBuddy[] | null;
   onSelectItem: (item: TimelineItem) => void;
@@ -188,8 +189,6 @@ export function MacroTaskTimeline(props: MacroTaskTimelineProps) {
 
   // The micro task band (P2.1): default follows the viewport height, and the
   // user's toggle then applies to every macroTask for this page session.
-  const [cardsCollapsed, setCardsCollapsed] = useState<boolean | null>(null);
-  const cardsActuallyCollapsed = cardsCollapsed ?? (compactViewport || narrowViewport);
 
   // The Host event row is collapsible and defaults collapsed; the choice is
   // remembered per macroTask for this page session (P1.7).
@@ -998,14 +997,10 @@ export function MacroTaskTimeline(props: MacroTaskTimelineProps) {
         : null;
 
   return <div className={"timeline-view" + (hidden ? " [&>:not(.tl-head,[data-slot=task-detail])]:hidden" : "")} ref={rootRef}>
-    <MacroTaskOverview summary={props.summary} timeline={timeline} loading={loading} stale={stale}
+    <MacroTaskOverview active={active} nowMs={props.displayObservedAt ? Date.parse(props.displayObservedAt) : undefined} summary={props.summary} timeline={timeline} loading={loading} stale={stale}
       compact={compactViewport || narrowViewport}
-      onBackToList={props.onBackToList} headerActions={props.headerActions} />
+      onBackToList={props.onBackToList} headerActions={props.headerActions} listToggle={props.listToggle} />
     {props.detail}
-    {timeline && <MicroTaskStrip timeline={timeline} selectedRunId={selectedRunId}
-      collapsed={cardsActuallyCollapsed}
-      onToggleCollapsed={() => setCardsCollapsed(!cardsActuallyCollapsed)}
-      onSelectRun={props.onSelectRun} onOpenRun={props.onOpenRun} />}
     <div className="tl-toolbar">
       <button ref={legendButtonRef} type="button" className="button small-button" aria-expanded={legendOpen}
         aria-controls="timeline-legend-popover" title="图例" onClick={() => setLegendOpen(current => !current)}>图例</button>

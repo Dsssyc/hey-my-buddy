@@ -83,7 +83,7 @@ class ConsoleMacroTaskFixtureTests(unittest.TestCase):
                 with fixture_module.HandlerProbe(fixture.board) as probe:
                     first, body = probe.request("identity")
                     self.assertEqual(first["status"], 200)
-                    self.assertEqual(body["total"], 3)
+                    self.assertEqual(body["totals"]["all"], 3)
                     self.assertEqual(len(body["macroTasks"]), 3)
                     self.assertTrue(first["etag"])
                     self.assertEqual(first["summaryCalls"], 3)

@@ -160,7 +160,7 @@ export function macroTaskTimelineFixture(overrides: Partial<MacroTaskTimeline> =
 }
 
 export function macroTaskPageFixture(macroTasks: MacroTaskSummary[] = [macroTaskSummary()]): MacroTaskPage {
-  return { macroTasks, total: macroTasks.length, nextCursor: null, cursor: 41, changed: false };
+  return { macroTasks, totals: { all: macroTasks.length, active: macroTasks.length, host: 0, review: 0 }, nextCursor: null, cursor: 41, changed: false };
 }
 
 /** The standalone-root and second-project rows used by the list tests. */

@@ -99,14 +99,14 @@ describe("macro task stop scope and evidence", () => {
   it("localizes stop status in English", async () => {
     await i18n.changeLanguage("en");
     const confirmed = read({ r4: { state: "cancelled", status: "cancelled", shutdownConfirmed: true } });
-    expect(stopStatus(entry(), confirmed)?.detail).toBe("Stopped 1 micro task; 0 helper tasks");
+    expect(stopStatus(entry(), confirmed)?.detail).toBe("Stopped Micro tasks 1; Helper tasks 0");
     const two = entry({ result: { macroTaskId: "macro-1", duplicate: false, results: [
       { runId: "r4", state: "cancelled", stopped: true },
       { runId: "r7", state: "cancelled", stopped: true },
     ] } });
     const second = { ...confirmed, rows: [...confirmed.rows,
       { ...confirmed.rows.find(row => row.runId === "r4")!, runId: "r7" }] };
-    expect(stopStatus(two, second)?.detail).toBe("Stopped 2 micro tasks; 0 helper tasks");
-    expect(stopStatus(entry(), read())?.detail).toBe("1 stop remains unconfirmed");
+    expect(stopStatus(two, second)?.detail).toBe("Stopped Micro tasks 2; Helper tasks 0");
+    expect(stopStatus(entry(), read())?.detail).toBe("Stops unconfirmed 1");
   });
 });

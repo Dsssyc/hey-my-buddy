@@ -1,4 +1,4 @@
-import { cleanup, render, screen, within } from "@testing-library/react";
+import { act, cleanup, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { useState } from "react";
 import { vi } from "vitest";
@@ -30,6 +30,11 @@ export function open(options: Options = {}) {
 export const rail = () => screen.getByRole("navigation", { name: "步骤" });
 export const selected = () => within(rail()).getByRole("button", { current: "step" });
 export const pane = () => document.querySelector("[data-slot=detail-pane]") as HTMLElement;
-export const ready = () => screen.findByRole("navigation", { name: "步骤" });
+/** The rail can arrive before the mock's subsequent workflow and audit reads. Flush their effects before assertions. */
+export async function ready() {
+  const navigation = await screen.findByRole("navigation", { name: "步骤" });
+  await act(async () => {});
+  return navigation;
+}
 export const step = (name: string | RegExp) => within(rail()).getByRole("button", { name });
 

@@ -75,12 +75,12 @@ class ConsoleMacroTaskCacheTests(unittest.TestCase):
             with store.db.write() as connection:
                 connection.execute("UPDATE workflow_runs SET micro_task_json=json_set(micro_task_json,'$.task','fictional-http-needle') WHERE run_id=?",(root,))
             _, matched = probe.request("identity",query="limit=50&query=fictional-http-needle")
-            self.assertEqual(matched["total"],1)
+            self.assertEqual(matched["totals"]["all"],1)
             self.assertEqual(matched["macroTasks"][0]["matchingRuns"],1)
             with store.db.write() as connection:
                 connection.execute("UPDATE workflow_runs SET micro_task_json=json_set(micro_task_json,'$.task','fictional-http-removed') WHERE run_id=?",(root,))
             _, removed = probe.request("identity",query="limit=50&query=fictional-http-needle")
-            self.assertEqual(removed["total"],0)
+            self.assertEqual(removed["totals"]["all"],0)
 
     def test_other_filtered_macro_commit_does_not_recompute_visible_summary(self):
         group, other = self.fixture.macros[:2]

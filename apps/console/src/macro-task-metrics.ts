@@ -277,14 +277,6 @@ export function runRollup(row: TimelineRow, timeline: MacroTaskTimeline): RunRol
   return { row, executions, pending, helpers, executionMs: ms, limitations: [...new Set([...scope, ...limitations])] };
 }
 
-/** Root micro tasks in recorded creation order — the overview card order. */
-export function rootRollups(timeline: MacroTaskTimeline): RunRollup[] {
-  const roots = timeline.rows.filter(row => row.parentRunId === null);
-  const withOrder = roots.map(row => ({ row, createdAtMs: parseTimelineInstant(row.createdAt) ?? Number.POSITIVE_INFINITY }));
-  withOrder.sort((left, right) => left.createdAtMs - right.createdAtMs || left.row.runId.localeCompare(right.row.runId));
-  return withOrder.map(entry => runRollup(entry.row, timeline));
-}
-
 /**
  * Honest text of one micro task's latest execution result; null only when no
  * execution was recorded at all. Ordering prefers recorded turn indices, then

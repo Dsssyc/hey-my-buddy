@@ -7,7 +7,7 @@ import { describe, expect, it } from "vitest";
  * of the page that frames them and of the shared components, and finds no
  * character of the Chinese scripts and no full-width punctuation outside comments.
  */
-const sources = import.meta.glob<string>(["../App.tsx", "../BuddyConfig.tsx", "../buddies/*.{ts,tsx}", "../task-detail/*.{ts,tsx}", "../components/**/*.{ts,tsx}"], { query: "?raw", import: "default", eager: true });
+const sources = import.meta.glob<string>(["../MacroTaskList.tsx", "../MacroTaskOverview.tsx", "../MacroTasks.tsx", "../api.ts", "../ui.tsx", "../App.tsx", "../BuddyConfig.tsx", "../buddies/*.{ts,tsx}", "../task-detail/*.{ts,tsx}", "../components/**/*.{ts,tsx}"], { query: "?raw", import: "default", eager: true });
 const chinese = /[　-〿一-鿿＀-￯]/;
 const support = /\.(test|testing|fixtures)\.tsx?$/;
 

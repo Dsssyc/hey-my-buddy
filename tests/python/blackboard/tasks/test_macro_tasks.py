@@ -317,7 +317,8 @@ class MacroTaskReadTests(WorkflowTestCase):
     def test_list_groups_macro_tasks_and_standalone_roots_by_latest_activity(self):
         board, first, second, loose = self.grouped_board()
         listed = self.list_(board)
-        self.assertEqual(listed['total'], 2)
+        self.assertEqual(listed['totals'], {'all': 2, 'active': 2, 'host': 0, 'review': 0})
+        self.assertNotIn('total', listed)
         self.assertIsNone(listed['nextCursor'])
         self.assertFalse(listed['changed'])
         ids = [item['macroTaskId'] for item in listed['macroTasks']]
@@ -346,6 +347,7 @@ class MacroTaskReadTests(WorkflowTestCase):
         self.assertTrue(page['nextCursor'])
         rest = self.list_(board, limit=1, before=page['nextCursor'])
         self.assertEqual(len(rest['macroTasks']), 1)
+        self.assertEqual(rest['totals'], page['totals'])
         self.assertNotEqual(rest['macroTasks'][0]['macroTaskId'], page['macroTasks'][0]['macroTaskId'])
         self.assertIsNone(rest['nextCursor'])
         self.assertFalse(rest['changed'])
@@ -358,6 +360,7 @@ class MacroTaskReadTests(WorkflowTestCase):
         # A filter keeps overall counts and reports how many members matched.
         queried = self.list_(board, query='standalone')
         self.assertEqual([item['macroTaskId'] for item in queried['macroTasks']], [f"run:{loose['runId']}"])
+        self.assertEqual(queried['totals'], {'all': 1, 'active': 1, 'host': 0, 'review': 0})
         self.assertEqual(queried['macroTasks'][0]['matchingRuns'], 1)
 
     def test_changed_signals_activity_after_the_first_page(self):

@@ -149,7 +149,7 @@ async function parseEntry(entry: ManifestEntry): Promise<Outcome> {
         installed: version.installed !== null };
     } else if (entry.kind === "macro-tasks-page") {
       const page = await api.macroTasks({});
-      outcome.facts = { total: page.total, cursor: page.cursor, changed: page.changed };
+      outcome.facts = { totals: page.totals, cursor: page.cursor, changed: page.changed };
     } else if (entry.kind === "macro-task-timeline") {
       const { timeline } = await api.macroTaskTimeline(entry.request?.macroTaskId ?? "", {});
       for (const event of timeline.events) if (event.actor !== null) expect(parseActor(event.actor)).toEqual(event.actor);

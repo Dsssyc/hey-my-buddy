@@ -1,250 +1,96 @@
-import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
+import { TooltipProvider } from "./components/ui/tooltip";
+import type { ReactElement } from "react";
+import { cleanup, fireEvent, render as baseRender, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { MacroTaskList } from "./MacroTaskList";
 import { listFixture } from "./macro-task-fixtures";
-import type { MacroTaskSummary } from "./macro-task-types";
+import type { MacroTaskListProps } from "./MacroTaskList";
 
-const rows = listFixture();
-const props = () => ({
-  rows, total: rows.length, loading: false, error: "", nextCursor: null, reorder: null,
-  filter: "all" as const, query: "", projectId: "", hostId: "",
-  choices: {
-    projects: [{ id: "p1", label: "hey-my-buddy", path: "~/projects/hey-my-buddy" },
-      { id: "p2", label: "dsh-harness", path: "~/projects/dsh-harness" }],
-    hosts: ["codex-desktop", "dsh-host-02"],
-  },
-  selected: null, rail: false, onExpand: vi.fn(), collapsible: false, onCollapse: vi.fn(),
-  onFilterChange: vi.fn(), onQueryChange: vi.fn(), onProjectChange: vi.fn(), onHostChange: vi.fn(),
-  onSelect: vi.fn(), onRefresh: vi.fn(), onRetry: vi.fn(), onMore: vi.fn(), onApplyReorder: vi.fn(),
+const props = (): MacroTaskListProps => ({
+  rows: listFixture(), totals: { all: 12, active: 2, host: 1, review: 3 }, loading: false, error: "", nextCursor: null, reorder: null,
+  filter: "all", query: "", selected: null, listNavigation: <span>宏任务</span>,
+  onCollapse: vi.fn(), onFilterChange: vi.fn(), onQueryChange: vi.fn(), onSelect: vi.fn(), onRetry: vi.fn(), onMore: vi.fn(), onApplyReorder: vi.fn(),
 });
-
-afterEach(() => cleanup());
-
-describe("macroTask list (0.16 P1.4)", () => {
-  it("shows only the supplied read verification time and explicitly names missing evidence", () => {
-    const checked = Date.parse("2026-10-09T11:12:13Z");
-    const view = render(<MacroTaskList {...props()} verifiedAtMs={checked} />);
-    expect(view.container.querySelector(".local-read-state")!.textContent).toBe(`核对时间 ${new Date(checked).toLocaleString("zh-CN", { hour12: false })}`);
-    view.rerender(<MacroTaskList {...props()} verifiedAtMs={null} />);
-    expect(view.container.querySelector(".local-read-state")!.textContent).toBe("核对时间未记录");
-  });
-
-  it("groups by project name and count; standalone roots are 历史独立微任务 and folded by default", async () => {
-    const user = userEvent.setup();
-    const p = props();
-    render(<MacroTaskList {...p} />);
-    // Project headings carry only the name and a small count; the path and the
-    // loaded count live in the tooltip.
-    const heading = screen.getByRole("button", { name: /▾ hey-my-buddy/ });
-    expect(heading.textContent).toContain("2");
-    expect(heading.textContent).not.toContain("已加载");
-    expect(heading.getAttribute("title")).toContain("~/projects/hey-my-buddy");
-    expect(heading.getAttribute("title")).toContain("已加载 2 个");
-    // The standalone row is collapsed away by default with its own heading.
-    expect(screen.queryByRole("button", { name: /修复标题回退在 CRLF 输入下的显示/ })).toBeNull();
-    const standaloneHeading = screen.getByRole("button", { name: /历史独立微任务（1）/ });
-    expect(standaloneHeading.getAttribute("aria-expanded")).toBe("false");
-    await user.click(standaloneHeading);
-    expect(screen.getByRole("button", { name: /修复标题回退在 CRLF 输入下的显示/ })).toBeTruthy();
-    // No join or archive affordance anywhere.
-    expect(screen.queryByRole("button", { name: /归档到|移出|加入宏任务/ })).toBeNull();
-  });
-
-  it("renders two-line entries: title over state + progress + relative time, Host ID only in the tooltip", () => {
-    const p = props();
-    render(<MacroTaskList {...p} />);
-    const first = screen.getByRole("button", { name: /宏任务时间轴：设计、接口与实现/ });
-    // The state word and the counts-derived progress sentence share the second line.
-    expect(within(first).getByText("进行中")).toBeTruthy();
-    expect(within(first).getByText("5 个微任务 · 进行中")).toBeTruthy();
-    // The old count chips, summary line and visible Host row are gone.
-    expect(within(first).queryByText(/待验收 1/)).toBeNull();
-    expect(within(first).queryByText(/共 6 个微任务/)).toBeNull();
-    expect(within(first).queryByText(/结果：/)).toBeNull();
-    expect(within(first).queryByText(/来源 Host：/)).toBeNull();
-    // The Host ID stays available through the row tooltip.
-    expect(first.getAttribute("title")).toContain("来源 Host：codex-desktop");
-    expect(first.getAttribute("title")).toContain("最近活动");
-    // The review group's progress names the waiting count; the host one says 等待 Host.
-    const review = screen.getByRole("button", { name: /0\.13 控制台入口候选版收尾与文档/ });
-    expect(within(review).getByText("等待验收")).toBeTruthy();
-    expect(within(review).getByText("6 个微任务 · 1 个等待验收")).toBeTruthy();
-    const hostGroup = screen.getByRole("button", { name: /DSH 插件在 Windows 路径下的沙箱回归排查/ });
-    expect(within(hostGroup).getByText("等待 Host")).toBeTruthy();
-    expect(within(hostGroup).getByText("2 个微任务 · 等待 Host")).toBeTruthy();
-  });
-
-  it("says 已完成 only when every root is accepted; other ended groups keep an acceptance count", () => {
-    const allAccepted: MacroTaskSummary[] = [rows[0]!, rows[1]!].map(row => ({
-      ...row, state: "ended" as const,
-      counts: { ...row.counts, accepted: row.counts.roots, active: 0, host: 0, review: 0 },
-    }));
-    const view = render(<MacroTaskList {...{ ...props(), rows: allAccepted }} />);
-    const done = screen.getByRole("button", { name: /宏任务时间轴：设计、接口与实现/ });
-    expect(within(done).getByText("已完成")).toBeTruthy();
-    expect(within(done).getByText("5 个微任务 · 全部已验收")).toBeTruthy();
-    view.unmount();
-    const partly = [{ ...rows[1]!, state: "ended" as const, counts: { ...rows[1]!.counts, accepted: 5, review: 0 } }];
-    render(<MacroTaskList {...{ ...props(), rows: partly }} />);
-    const ended = screen.getByRole("button", { name: /0\.13 控制台入口候选版收尾与文档/ });
-    expect(within(ended).getByText("已结束")).toBeTruthy();
-    expect(within(ended).getByText("6 个微任务 · 5 个已验收")).toBeTruthy();
-  });
-
-  it("keeps the loaded-count summary in the heading tooltip and the load-more button", () => {
-    const p = { ...props(), nextCursor: "older-page" };
-    render(<MacroTaskList {...p} />);
-    expect(screen.getByRole("heading", { name: "宏任务" }).getAttribute("title")).toBe("按最近活动排序 · 已加载 4 个");
-    expect(screen.getByRole("button", { name: "加载更早宏任务" })).toBeTruthy();
-    // The possibly-more note lives in the standalone heading tooltip.
-    const standaloneHeading = screen.getByRole("button", { name: /历史独立微任务（1）/ });
-    expect(standaloneHeading.getAttribute("title")).toContain("已加载 1 个，还有更多");
-    expect(screen.queryByText(/已加载 4 个记录 · 可能还有更多/)).toBeNull();
-  });
-
-  it("folds the project, host and show-kind selectors into one 筛选 popup", async () => {
-    const user = userEvent.setup();
-    const p = props();
-    render(<MacroTaskList {...p} />);
-    // No standalone project/host selects outside the popup.
-    expect(screen.queryByLabelText("目标项目筛选")).toBeNull();
-    expect(screen.queryByLabelText("目标委派方筛选")).toBeNull();
-    expect(screen.getByRole("button", { name: "筛选" })).toBeTruthy();
-    await user.click(screen.getByRole("button", { name: "筛选" }));
-    const dialog = screen.getByRole("dialog", { name: "筛选" });
-    const show = within(dialog).getByLabelText("显示") as HTMLSelectElement;
-    expect(show.value).toBe("macroTasks");
-    await user.selectOptions(show, "standalone");
-    expect(screen.getByRole("button", { name: /修复标题回退在 CRLF 输入下的显示/ })).toBeTruthy();
+afterEach(cleanup);
+describe("macro task list", () => {
+  it("groups by project with loaded counts and puts collapsed standalone micro tasks last", async () => {
+    const p = props(); render(<MacroTaskList {...p}/>);
+    const groups = [...document.querySelectorAll(".macro-group-heading")];
+    expect(groups[0].textContent).toContain("hey-my-buddy");
+    expect(groups[0].textContent).toContain("2");
+    expect(groups.at(-1)?.textContent).toContain("独立微任务");
+    expect(groups.at(-1)?.getAttribute("aria-expanded")).toBe("false");
+    expect(document.querySelector(`[data-macro-task-id="${p.rows.find(row => row.kind === "standalone")!.macroTaskId}"]`)).toBeNull();
+    await userEvent.click(groups.at(-1)!);
+    expect(document.querySelector(`[data-macro-task-id="${p.rows.find(row => row.kind === "standalone")!.macroTaskId}"]`)).toBeTruthy();
+    await userEvent.click(groups[0]);
     expect(screen.queryByRole("button", { name: /宏任务时间轴：设计、接口与实现/ })).toBeNull();
-    // Non-default filters badge the button with a count and clear in one step.
-    expect(screen.getByRole("button", { name: /筛选 · 1/ })).toBeTruthy();
-    await user.click(within(screen.getByRole("dialog", { name: "筛选" })).getByRole("button", { name: "清除筛选" }));
-    expect(screen.getByRole("button", { name: "筛选" }).textContent).toBe("筛选");
+    expect(document.querySelectorAll("[title]")).toHaveLength(0);
+    expect(screen.queryByRole("button", { name: /筛选|归档|移出|加入/ })).toBeNull();
   });
-
-  it("moves the standalone explanation into the section tooltip", () => {
-    render(<MacroTaskList {...props()} />);
-    const heading = screen.getByRole("button", { name: /历史独立微任务（1）/ });
-    expect(heading.getAttribute("title")).toContain("未指定宏任务");
-    expect(screen.queryByText("未指定宏任务")).toBeNull();
+  it("keeps a project named like the independent group expanded", () => {
+    const p=props(); p.rows=[{...p.rows[0],project:{id:"standalone",label:"独立项目",path:null}},p.rows.find(row => row.kind === "standalone")!];
+    render(<MacroTaskList {...p}/>);
+    expect(screen.getByRole("button",{name:/独立项目/}).getAttribute("aria-expanded")).toBe("true");
+    expect(screen.getByRole("button",{name:/独立微任务/}).getAttribute("aria-expanded")).toBe("false");
+    expect(screen.getByRole("button",{name:/宏任务时间轴：设计、接口与实现/})).toBeTruthy();
   });
-
-  it("reorders silently at the top when the pointer is outside the visible list", () => {
-    const p = props();
-    const view = render(<MacroTaskList {...p} />);
-    view.rerender(<MacroTaskList {...p} reorder={{ count: 1 }} />);
-    expect(p.onApplyReorder).toHaveBeenCalledTimes(1);
-    expect(view.container.querySelector(".new-records")).toBeNull();
+  it("shows server totals on four tabs and sends search and selection without write controls", async () => {
+    const p = props(); render(<MacroTaskList {...p}/>);
+    expect(screen.getByRole("tab", { name: "全部 12" }).getAttribute("aria-selected")).toBe("true");
+    for (const name of ["进行中 2", "等待 Host 1", "等待验收 3"]) expect(screen.getByRole("tab", { name })).toBeTruthy();
+    await userEvent.click(screen.getByRole("tab", { name: "等待 Host 1" })); expect(p.onFilterChange).toHaveBeenCalledWith("host");
+    fireEvent.change(screen.getByRole("textbox"), { target: { value: "原文" } }); expect(p.onQueryChange).toHaveBeenCalledWith("原文");
+    const row = screen.getByRole("button", { name: /宏任务时间轴：设计、接口与实现/ });
+    expect(row.querySelector("time")?.getAttribute("datetime")).toBe(p.rows[0].lastActivityAt);
+    expect(within(row).getByLabelText("进行中 1")).toBeTruthy();
+    expect(within(row).getByLabelText("已验收 2")).toBeTruthy();
+    await userEvent.click(row); expect(p.onSelect).toHaveBeenCalledWith(p.rows[0].macroTaskId);
   });
-
-  it("defers while hovered and applies the heading marker without losing selection", async () => {
-    const user = userEvent.setup();
-    const p = { ...props(), selected: "macro-2" };
-    const view = render(<MacroTaskList {...p} />);
-    await user.click(screen.getByRole("button", { name: /0.13 控制台入口候选版收尾与文档/ }));
-    expect(p.onSelect).toHaveBeenCalledWith("macro-2");
-    fireEvent.pointerEnter(screen.getByRole("region", { name: "宏任务列表" }));
-    view.rerender(<MacroTaskList {...p} reorder={{ count: 1 }} />);
-    expect(p.onApplyReorder).not.toHaveBeenCalled();
-    const marker = screen.getByRole("button", { name: "有更新" });
-    expect(marker.closest(".panel-toolbar")).not.toBeNull();
-    await user.click(marker);
-    expect(p.onApplyReorder).toHaveBeenCalledTimes(1);
-    expect(screen.getByRole("button", { name: /0.13 控制台入口候选版收尾与文档/ }).getAttribute("aria-pressed")).toBe("true");
+  it("uses first line with provenance in Hint, clips it at 40 characters and names missing titles", () => {
+    const p = props(); p.rows = [{ ...p.rows[0], titleSource: "task", title: "任".repeat(80) }, { ...p.rows[1], titleSource: "none", title: "" }];
+    render(<MacroTaskList {...p}/>);
+    const row = screen.getByRole("button", { name: new RegExp("任".repeat(40)) });
+    expect(row.getAttribute("aria-description")).toContain("取自首行");
+    expect(row.querySelector(".macro-entry-title")?.textContent).toBe("任".repeat(40));
+    expect(screen.getByText("未命名")).toBeTruthy();
   });
-
-  it("waits below the top, then applies when scrolling back to the top", () => {
-    const p = props();
-    const view = render(<MacroTaskList {...p} />);
-    const scroll = screen.getByLabelText("宏任务条目");
-    scroll.scrollTop = 80;
-    view.rerender(<MacroTaskList {...p} reorder={{ count: null }} />);
-    expect(p.onApplyReorder).not.toHaveBeenCalled();
-    expect(screen.getByRole("button", { name: "有更新" })).toBeTruthy();
-    scroll.scrollTop = 0;
-    fireEvent.scroll(scroll);
-    expect(p.onApplyReorder).toHaveBeenCalledTimes(1);
+  it("distinguishes empty and unmatched and preserves entries after read failure", () => {
+    const p = props(); const f = render(<MacroTaskList {...p} rows={[]} totals={{all:0, active:0, host:0, review:0}}/>);
+    expect(screen.getByText("没有宏任务")).toBeTruthy();
+    f.rerender(<MacroTaskList {...p} rows={[]} query="找不到"/>); expect(screen.getByText("没有匹配的宏任务")).toBeTruthy();
+    f.rerender(<MacroTaskList {...p} error="offline"/>); expect(screen.getByRole("button", { name: /宏任务时间轴：设计、接口与实现/ })).toBeTruthy();
   });
-
-  it("applies on pointer leave at the top, but never from a hidden list", () => {
-    const p = props();
-    const view = render(<MacroTaskList {...p} />);
-    const region = screen.getByRole("region", { name: "宏任务列表" });
+  it("renders the nullable fields the service can return without inventing a time", async () => {
+    const p=props(); p.rows=[{...p.rows[0],kind:"standalone",project:null,createdAt:null,lastActivityAt:null}];
+    render(<MacroTaskList {...p}/>); await userEvent.click(screen.getByRole("button",{name:/独立微任务/}));
+    expect(document.querySelector(".macro-entry time")?.textContent).toBe("未记录");
+    expect(document.querySelector(".macro-entry time")?.hasAttribute("datetime")).toBe(false);
+  });
+  it("loads earlier only when available and idle, and collapses through one button", async () => {
+    const p=props(); const f=render(<MacroTaskList {...p} nextCursor="older"/>);
+    await userEvent.click(screen.getByRole("button", {name:"更早"})); expect(p.onMore).toHaveBeenCalledTimes(1);
+    f.rerender(<MacroTaskList {...p} nextCursor="older" loading/>);
+    await userEvent.click(screen.getByRole("button", {name:"读取中"})); expect(p.onMore).toHaveBeenCalledTimes(1);
+    await userEvent.click(screen.getByRole("button", {name:"收起宏任务列表"})); expect(p.onCollapse).toHaveBeenCalledTimes(1);
+  });
+  it("defers activity reorder under pointer, then applies on leaving or explicit marker, never twice", () => {
+    const p=props(); const f=render(<MacroTaskList {...p}/>); const region=screen.getByRole("region", {name:"宏任务列表"});
     fireEvent.pointerEnter(region);
-    view.rerender(<MacroTaskList {...p} reorder={{ count: 2 }} />);
-    expect(p.onApplyReorder).not.toHaveBeenCalled();
-    fireEvent.pointerLeave(region);
-    expect(p.onApplyReorder).toHaveBeenCalledTimes(1);
-    p.onApplyReorder.mockClear();
-    view.rerender(<MacroTaskList {...p} reorder={null} />);
-    view.rerender(<MacroTaskList {...p} reorder={{ count: 2 }} visible={false} />);
-    expect(screen.queryByRole("button", { name: "有更新" })).toBeNull();
-    expect(p.onApplyReorder).not.toHaveBeenCalled();
-    view.rerender(<MacroTaskList {...p} reorder={{ count: 2 }} visible />);
-    expect(p.onApplyReorder).toHaveBeenCalledTimes(1);
+    f.rerender(<MacroTaskList {...p} reorder={{count:1}}/>); expect(p.onApplyReorder).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", {name:"有新的活动，按最近活动排序"})); expect(p.onApplyReorder).toHaveBeenCalledTimes(1);
+    fireEvent.pointerLeave(region); expect(p.onApplyReorder).toHaveBeenCalledTimes(1);
   });
-
-  it("pages older macroTasks through the load-more affordance", async () => {
-    const user = userEvent.setup();
-    const p = { ...props(), nextCursor: "older-page" };
-    render(<MacroTaskList {...p} />);
-    await user.click(screen.getByRole("button", { name: "加载更早宏任务" }));
-    expect(p.onMore).toHaveBeenCalled();
-  });
-
-  it("shows the empty state only without filters and a matching state otherwise", () => {
-    const empty = { ...props(), rows: [] as MacroTaskSummary[], total: 0 };
-    const first = render(<MacroTaskList {...empty} />);
-    expect(screen.getByText("还没有宏任务")).toBeTruthy();
-    expect(screen.getByText("还没有宏任务")).toBeTruthy();
-    first.unmount();
-    render(<MacroTaskList {...empty} filter="host" query="任意" />);
-    expect(screen.getByText("没有匹配的宏任务")).toBeTruthy();
-  });
-
-  it("switching macroTasks stays free while a detail is open — no navigation lock (U4)", () => {
-    const p = { ...props(), selected: "macro-1" };
-    render(<MacroTaskList {...p} />);
-    const selected = screen.getByRole("button", { name: /宏任务时间轴：设计、接口与实现/ });
-    expect(selected).toHaveProperty("disabled", false);
-    const other = screen.getByRole("button", { name: /0.13 控制台入口候选版收尾与文档/ });
-    expect(other).toHaveProperty("disabled", false);
-  });
-
-  it("renders the rail while keeping list content mounted and hidden", () => {
-    const onToggleRail = vi.fn();
-    const view = render(<MacroTaskList { ...{ ...props(), rail: true, onToggleRail } } />);
-    const expand = screen.getByRole("button", { name: /宏任务/ });
-    expect(expand.getAttribute("aria-expanded")).toBe("false");
-    expect(expand.textContent).toContain("›");
-    // The rail shows only the strip: no filters, no rows.
-    expect(view.container.querySelector(".list-filters")!.closest("[hidden]")).not.toBeNull();
-    expect(view.container.querySelector(".task-list")!.closest("[hidden]")).not.toBeNull();
-    expect(view.container.querySelector(".rail-state")).toBeNull();
-    fireEvent.click(expand);
-    expect(onToggleRail).toHaveBeenCalled();
-    view.unmount();
-  });
-
-  it("shows a task first-line fallback as one ~40-character line with the 任务首行 note (U3)", async () => {
-    const user = userEvent.setup();
-    render(<MacroTaskList {...props()} />);
-    await user.click(screen.getByRole("button", { name: /历史独立微任务（1）/ }));
-    const standalone = screen.getByRole("button", { name: /修复标题回退在 CRLF 输入下的显示/ });
-    const title = standalone.querySelector("strong.task-title") as HTMLElement;
-    expect(title.className).toContain("single-line");
-    expect(title.textContent).toContain("任务首行");
-    // One line of ~40 characters: the clipped label, not the whole task line.
-    expect(title.textContent!.replace("任务首行", "").length).toBeLessThanOrEqual(45);
-    expect(title.textContent).not.toBe(listFixture()[2]!.title);
-    // §5: the tooltip carries the clipped line plus the pointer to detail.
-    const tooltip = title.getAttribute("title")!;
-    expect(tooltip).toBe(listFixture()[2]!.title);
-    // An explicit macroTask title keeps its recorded bounded text and tooltip.
-    const macroTask = screen.getByRole("button", { name: /宏任务时间轴：设计、接口与实现/ });
-    expect(macroTask.querySelector("strong.task-title")!.getAttribute("title")).toBe("宏任务时间轴：设计、接口与实现");
-    expect(macroTask.querySelector(".title-source-note")).toBeNull();
+  it("defers while scrolled, invisible or inactive; reaching top applies when pointer is outside", () => {
+    const p=props(); const f=render(<MacroTaskList {...p}/>);
+    const viewport=document.querySelector("[data-slot=scroll-area-viewport]")!;
+    Object.defineProperty(viewport,"scrollTop",{configurable:true,writable:true,value:120});
+    f.rerender(<MacroTaskList {...p} reorder={{count:1}}/>); expect(p.onApplyReorder).not.toHaveBeenCalled();
+    Object.defineProperty(viewport,"scrollTop",{value:0}); fireEvent.scroll(viewport); expect(p.onApplyReorder).toHaveBeenCalledTimes(1);
+    f.rerender(<MacroTaskList {...p} reorder={null}/>); p.onApplyReorder=vi.fn();
+    f.rerender(<MacroTaskList {...p} visible={false} reorder={{count:1}}/>); expect(p.onApplyReorder).not.toHaveBeenCalled();
   });
 });
+
+function render(ui: ReactElement) { return baseRender(ui, { wrapper: TooltipProvider }); }
