@@ -264,7 +264,7 @@ class HarnessHealth:
                 if status != 'ready':
                     # Same boundary as invalidate: health grounds the rows it
                     # marks, never the ones a catalog fact already grounded.
-                    _set_buddies_unavailable(db, name, record.get('reason') or make_reason('harness.probe-failed', operation='probe'))
+                    _set_buddies_unavailable(db, name, record['reason'])
                 elif old['status'] != 'ready':
                     # ADR-027: health availability and adopted catalog facts are
                     # separate. Recovering health restores the model availability

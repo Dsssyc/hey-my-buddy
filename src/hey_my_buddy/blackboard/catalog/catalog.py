@@ -8,7 +8,6 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 import hashlib
-from contextlib import nullcontext
 import json
 import os
 import re
@@ -59,27 +58,19 @@ CATALOG_FACT_REASONS = (CONFIRMED_ABSENCE_REASON, RETIRED_EFFORT_REASON, "catalo
 CATALOG_UNAVAILABLE_REASON = "catalog-unavailable"
 
 # The discovery receipt crosses a process boundary. These are the reasons the
-# registered native readers and this module can emit at its two reason sites.
-_HEALTH_REASONS = frozenset({
-    "harness.account-read-failed", "harness.auth-unverified", "harness.interpreter-missing",
-    "harness.launch-failed", "harness.login-required", "harness.node-missing",
-    "harness.not-checked", "harness.not-found", "harness.output-limit",
-    "harness.pipe-failed", "harness.probe-failed", "harness.scan-timeout",
-    "harness.shutdown-unverified", "harness.timeout", "harness.version-unknown",
-})
+# registered native readers emit, plus the discovery carrier's wait expiry.
 _DISCOVERY_REASONS = frozenset({
     "config-options-shape-unreadable", "config-shape-unreadable",
     "model-list-shape-unreadable", "model-cursor-shape-unreadable",
     "catalog.model-shape-unreadable", "native-metadata-wait-expired",
-    "catalog.discovery-failed", *_HEALTH_REASONS,
 })
 _WARNING_REASONS = frozenset({
     "catalog.model-identity-omitted", "catalog.model-identity-or-effort-omitted",
     "catalog.effort-directory-omitted", "catalog.model-list-unreadable",
     "catalog.initialize-incomplete", "catalog.acp-initialize-unreadable",
-    "catalog.model-shape-unreadable", "catalog.native-warning",
-    "catalog.discovery-failed", *_HEALTH_REASONS,
+    "catalog.model-shape-unreadable",
 })
+_MODEL_REASONS = frozenset({"catalog.native-unavailable"})
 
 #: The service's bounded native re-read uses its existing harness execution path.
 _catalog_reread: dict[str, Callable[[str], None]] = {}
@@ -296,29 +287,45 @@ def _receipt_reason(value: Any, *, allowed: frozenset[str], field: str,
     return value
 
 
-def canonical_payload(value: Any) -> dict:
-    """Validate a discovery receipt once, then keep only bounded metadata."""
+def discovery_payload(value: Any, *, harness: str | None = None) -> dict:
+    """Check one native discovery receipt or external catalog override."""
     if not isinstance(value, dict):
         raise BoardError("CATALOG_INVALID", "The discovered catalog must be a JSON object")
-    discoveries = value.get("discoveries", [])
-    if not isinstance(discoveries, list):
-        raise BoardError("CATALOG_INVALID", "discoveries must be bounded per-harness observations")
-    for item in discoveries:
-        if isinstance(item, dict) and item.get("reason") is not None:
-            _receipt_reason(item["reason"], allowed=_DISCOVERY_REASONS,
-                            field="discovery.reason", harness=item.get("harness"))
-    warnings = value.get("warnings") or []
-    if not isinstance(warnings, list) or len(warnings) > 16:
-        raise BoardError("CATALOG_INVALID", "warnings must be a list of at most 16 entries")
+    warnings = value.get("warnings", [])
+    if not isinstance(warnings, list):
+        raise BoardError("CATALOG_INVALID", "warnings must be a list")
     for item in warnings:
-        if isinstance(item, dict) and "reason" in item:
-            _receipt_reason(item["reason"], allowed=_WARNING_REASONS,
-                            field="warning.reason", harness=item.get("harness"))
-    return _normalized_payload(value)
+        if not isinstance(item, dict):
+            raise BoardError("CATALOG_INVALID", "Each warning must be an object")
+        _receipt_reason(item.get("reason"), allowed=_WARNING_REASONS, field="warning.reason")
+        if "diagnostic" in item and not isinstance(item["diagnostic"], dict):
+            raise BoardError("CATALOG_INVALID", "warning.diagnostic must be an object")
+    payload = canonical_payload(value)
+    payload["warnings"] = [{key: item[key] for key in ("reason", "diagnostic") if key in item}
+                           for item in payload["warnings"]]
+    if harness is not None and any(item["harness"] != harness
+                                   for item in [*payload["providers"], *payload["discoveries"]]):
+        raise BoardError("CATALOG_INVALID", "A harness advertised another harness identity")
+    for provider in value["providers"]:
+        for model in provider["models"]:
+            if model.get("unavailableReason") is not None:
+                _receipt_reason(model["unavailableReason"], allowed=_MODEL_REASONS,
+                                field="model.unavailableReason")
+            content = model.get("unavailableContent")
+            if content is not None and (not isinstance(content, str) or len(content) > MAX_TEXT):
+                raise BoardError("CATALOG_INVALID", "model.unavailableContent must be bounded text")
+    for item in value.get("discoveries", []):
+        if item.get("reason") is not None:
+            _receipt_reason(item["reason"], allowed=_DISCOVERY_REASONS,
+                            field="discovery.reason", harness=item["harness"])
+        content = item.get("content")
+        if content is not None and (not isinstance(content, str) or len(content) > MAX_TEXT):
+            raise BoardError("CATALOG_INVALID", "discovery.content must be bounded text")
+    return payload
 
 
-def _normalized_payload(value: dict) -> dict:
-    """Normalize an already checked receipt or an assembly of checked receipts."""
+def canonical_payload(value: dict) -> dict:
+    """Normalize checked native metadata and internally assembled catalog facts."""
     source = _identity(value.get("source"), "source", 1024)
     raw_providers = value.get("providers")
     if not isinstance(raw_providers, list) or len(raw_providers) > MAX_PROVIDERS:
@@ -356,10 +363,8 @@ def _normalized_payload(value: dict) -> dict:
                 context = None
             available = model.get("available", True) is True
             native_content = model.get("unavailableContent")
-            if native_content is None and isinstance(model.get("unavailableReason"), str):
-                native_content = model["unavailableReason"]
             native_reason = model.get("unavailableReason")
-            if not available and not isinstance(native_reason, dict):
+            if not available and native_reason is None:
                 native_reason = reason("catalog.native-unavailable")
             models.append({
                 "id": model_id,
@@ -404,21 +409,8 @@ def _normalized_payload(value: dict) -> dict:
                             "content": native_content})
     if any(p["harness"] not in seen for p in providers):
         raise BoardError("CATALOG_INVALID", "Every provider must have a harness observation")
-    raw_warnings = value.get("warnings") or []
-    if not isinstance(raw_warnings, list):
-        raise BoardError("CATALOG_INVALID", "warnings must be a list")
-    warnings = []
-    for item in raw_warnings[:16]:
-        if not isinstance(item, dict) or "reason" not in item or set(item) - {
-                "reason", "harness", "content", "diagnostic"}:
-            raise BoardError("CATALOG_INVALID", "Each warning must have a reason")
-        warning_harness = item.get("harness")
-        if warning_harness is not None:
-            warning_harness = _identity(warning_harness, "warning.harness", 32)
-        for key in ("content", "diagnostic"):
-            if key in item and (not isinstance(item[key], str) or len(item[key]) > MAX_TEXT):
-                raise BoardError("CATALOG_INVALID", f"warning.{key} must be bounded text")
-        warnings.append(item)
+    warnings = [{key: item[key] for key in ("reason", "harness", "content", "diagnostic") if key in item}
+                for item in value.get("warnings", [])[:16]]
     return {
         "source": source,
         "harnessVersion": _text(value.get("harnessVersion"), 256) or None,
@@ -441,7 +433,7 @@ def _override() -> dict | None:
         if len(raw) > MAX_CATALOG_BYTES:
             raise BoardError("CATALOG_INVALID", "The catalog override exceeds the metadata size bound")
         document = json.loads(raw)
-        payload = canonical_payload(document)
+        payload = discovery_payload(document)
     except OSError as error:
         raise BoardError("CATALOG_UNAVAILABLE", "The catalog override could not be read") from error
     except ValueError as error:
@@ -467,7 +459,7 @@ def discovery_available() -> bool:
     return any(item.model_discovery and item.discovery_available()[0] for item in adapters().values())
 
 
-def discover(*, directory: Path, harnesses=None) -> dict:
+def discover(*, directory: Path, harnesses: list[dict]) -> dict:
     override = _override()
     if override is not None:
         return override
@@ -476,24 +468,20 @@ def discover(*, directory: Path, harnesses=None) -> dict:
     for name, instance in adapters().items():
         if not instance.model_discovery:
             continue
-        from ...buddy.harnesses.runtime_selection import selected, bound
-        selected_health = (next((item for item in harnesses if item['harness'] == name), None)
-                           if harnesses is not None else selected(name))
+        from ...buddy.harnesses.runtime_selection import bound
+        selected_health = next(item for item in harnesses if item['harness'] == name)
         try:
             environment = dict(os.environ)
-            with bound([selected_health], environment=environment) if selected_health else nullcontext():
+            with bound([selected_health], environment=environment):
                 usable, _availability_detail = instance.discovery_available()
                 if not usable:
-                    health_reason = selected_health.get("reason") if selected_health else None
-                    unavailable = health_reason or reason("harness.not-checked", operation="probe")
+                    unavailable = selected_health["reason"]
                     warnings.append({"harness": name, "reason": unavailable})
                     discoveries.append({"harness": name, "status": "unknown", "accountStatus": "unknown",
                                         "reason": unavailable})
                     continue
                 payload = instance.discover_models()
-            payload = canonical_payload(payload)
-            if any(entry["harness"] != name for entry in payload["providers"]):
-                raise BoardError("CATALOG_INVALID", "A harness advertised another harness identity")
+            payload = discovery_payload(payload, harness=name)
         except BoardError as error:
             failure = reason("catalog.discovery-failed", harness=name, errorCode=error.code)
             warnings.append({"harness": name, "reason": failure})
@@ -510,7 +498,7 @@ def discover(*, directory: Path, harnesses=None) -> dict:
         sources.append(payload["source"])
         if payload.get("harnessVersion"):
             versions.append(f"{name}:{payload['harnessVersion']}")
-    return _normalized_payload({
+    return canonical_payload({
         "source": "; ".join(sources) or "native-discovery", "harnessVersion": "; ".join(versions),
         "providers": providers, "warnings": warnings, "discoveries": discoveries,
     })
@@ -637,11 +625,9 @@ class CatalogView:
 
     @classmethod
     def from_payload(cls, payload: Any, row: Any | None = None) -> "CatalogView":
-        canonical = _normalized_payload(payload)
+        canonical = canonical_payload(payload)
         return cls(canonical, discovery_id=row["discovery_id"] if row is not None else None,
                    recorded_at=row["discovered_at"] if row is not None else canonical.get("discoveredAt"))
-
-    canonical_payload = staticmethod(canonical_payload)
 
     @property
     def source(self) -> str:

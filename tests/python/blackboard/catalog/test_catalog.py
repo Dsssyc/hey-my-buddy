@@ -36,7 +36,8 @@ class CatalogTests(unittest.TestCase):
 
         with patch("hey_my_buddy.buddy.harnesses.registry.adapters", return_value={"missing": MissingHarness()}), \
              patch.object(catalog, "_override", return_value=None):
-            result = catalog.discover(directory=self.directory)
+            result = catalog.discover(directory=self.directory, harnesses=[{
+                "harness": "missing", "reason": {"code": "harness.not-checked", "params": {"operation": "probe"}}}])
         self.assertEqual(result["discoveries"], [{"harness": "missing", "status": "unknown", "accountStatus": "unknown",
                                                   "reason": {"code": "harness.not-checked", "params": {"operation": "probe"}},
                                                   "content": None}])
@@ -54,14 +55,15 @@ class CatalogTests(unittest.TestCase):
             payload = {"source": name + "-fixture", "providers": [{"harness": name, "provider": "fixture",
                        "models": [{"id": "alpha", "efforts": ["high"]}]}],
                        "discoveries": [{"harness": name, **fact}],
-                       "warnings": [{"reason": {"code": "catalog.native-warning", "params": {}},
-                                     "content": name + " warning"}],
+                       "warnings": [{"reason": {"code": "catalog.model-shape-unreadable", "params": {}},
+                                     "diagnostic": {"event": name}}],
                        "harnessVersion": "fixture-1"}
             instances[name] = SimpleNamespace(model_discovery=True, discovery_available=lambda: (True, None),
                                               discover_models=lambda payload=payload: payload)
         with patch("hey_my_buddy.buddy.harnesses.registry.adapters", return_value=instances), \
              patch.object(catalog, "_override", return_value=None):
-            result = catalog.discover(directory=self.directory)
+            result = catalog.discover(directory=self.directory, harnesses=[{
+                "harness": name, "reason": None, "status": "ready"} for name in ("codex", "claude", "dsh", "zcode")])
         self.assertEqual(result["discoveries"], [
             {"harness": name, "status": fact["status"], "accountStatus": fact["accountStatus"],
              "reason": fact.get("reason") if fact["status"] == "unknown" else None,
@@ -69,8 +71,8 @@ class CatalogTests(unittest.TestCase):
             for name, fact in observations.items()])
         self.assertEqual([entry["harness"] for entry in result["providers"]], list(observations))
         self.assertEqual(result["warnings"], [
-            {"reason": {"code": "catalog.native-warning", "params": {}},
-             "content": name + " warning", "harness": name}
+            {"reason": {"code": "catalog.model-shape-unreadable", "params": {}},
+             "diagnostic": {"event": name}, "harness": name}
             for name in observations])
         self.assertEqual(result["source"], "; ".join(name + "-fixture" for name in observations))
         self.assertEqual(result["harnessVersion"], "; ".join(name + ":fixture-1" for name in observations))
@@ -80,17 +82,58 @@ class CatalogTests(unittest.TestCase):
         payload["discoveries"] = [{"harness": "dsh", "status": "unknown",
                                    "reason": "native-metadata-wait-expired"}]
         with self.assertRaisesRegex(BoardError, "discovery.reason"):
-            catalog.canonical_payload(payload)
+            catalog.discovery_payload(payload)
         payload["discoveries"][0]["reason"] = {"code": "catalog.model-shape-unreadable", "params": {"extra": "x"}}
         with self.assertRaisesRegex(BoardError, "discovery.reason"):
-            catalog.canonical_payload(payload)
+            catalog.discovery_payload(payload)
         payload["discoveries"][0]["reason"] = {"code": "native-metadata-wait-expired", "params": {}}
         payload["warnings"] = ["native warning"]
         with self.assertRaisesRegex(BoardError, "warning"):
-            catalog.canonical_payload(payload)
+            catalog.discovery_payload(payload)
         payload["warnings"] = [{"reason": {"code": "catalog.model-list-unreadable", "params": {}}}]
         with self.assertRaisesRegex(BoardError, "warning.reason"):
-            catalog.canonical_payload(payload)
+            catalog.discovery_payload(payload)
+
+    def test_native_boundary_checks_model_reasons_content_and_receipt_shape(self):
+        valid = copy.deepcopy(FIXTURE_CATALOG)
+        valid["discoveries"] = [{"harness": "dsh", "status": "unknown",
+                                  "reason": {"code": "model-list-shape-unreadable", "params": {}},
+                                  "content": "native detail"}]
+        self.assertEqual(catalog.discovery_payload(valid)["discoveries"][0]["content"], "native detail")
+        invalid_values = [None, [], "catalog"]
+        for content in (1, [], "x" * (catalog.MAX_TEXT + 1)):
+            value = copy.deepcopy(valid)
+            value["discoveries"][0]["content"] = content
+            invalid_values.append(value)
+        for cause in ({"code": "harness.not-checked", "params": {"operation": "probe"}},
+                      {"code": "catalog.native-unavailable", "params": {"extra": "bad"}},
+                      "native unavailable"):
+            value = copy.deepcopy(valid)
+            value["providers"][0]["models"][0].update(available=False, unavailableReason=cause)
+            invalid_values.append(value)
+        for cause in ("catalog.account-status-unknown", "catalog.native-unknown", "history.reason-unavailable"):
+            value = copy.deepcopy(valid)
+            params = {"recordId": "old"} if cause.startswith("history.") else {"harness": "dsh"}
+            value["discoveries"][0]["reason"] = {"code": cause, "params": params}
+            invalid_values.append(value)
+        value = copy.deepcopy(valid)
+        value["warnings"] = [{"reason": {"code": "catalog.model-shape-unreadable", "params": {}},
+                              "diagnostic": 123}]
+        invalid_values.append(value)
+        for value in invalid_values:
+            with self.subTest(value=value), self.assertRaises(BoardError) as caught:
+                catalog.discovery_payload(value)
+            self.assertEqual(caught.exception.code, "CATALOG_INVALID")
+
+    def test_native_warning_limit_keeps_one_normalization_rule_and_diagnostics(self):
+        value = copy.deepcopy(FIXTURE_CATALOG)
+        value["warnings"] = [{"reason": {"code": "catalog.model-shape-unreadable", "params": {}},
+                              "diagnostic": {"unknownCount": number}, "harness": ["not-native"], "content": 123}
+                             for number in range(20)]
+        native = catalog.discovery_payload(value)
+        self.assertEqual(native["warnings"], [
+            {"reason": item["reason"], "diagnostic": item["diagnostic"]} for item in value["warnings"][:16]])
+        self.assertEqual(catalog.canonical_payload(native)["warnings"], native["warnings"])
 
     def test_capability_report_uses_health_reason_only_for_harnesses(self):
         def adapter():
@@ -114,7 +157,8 @@ class CatalogTests(unittest.TestCase):
                                                             "discoveries": []})
         with patch("hey_my_buddy.buddy.harnesses.registry.adapters", return_value={"dsh": instance}), \
              patch.object(catalog, "_override", return_value=None):
-            result = catalog.discover(directory=self.directory)
+            result = catalog.discover(directory=self.directory, harnesses=[{
+                "harness": name, "reason": None, "status": "ready"} for name in ("codex", "claude", "dsh", "zcode")])
         self.assertEqual(result["discoveries"], [{"harness": "dsh", "status": "complete",
                                                  "accountStatus": "unknown", "reason": None, "content": None}])
 
@@ -134,7 +178,8 @@ class CatalogTests(unittest.TestCase):
             self.assertFalse(instance.available()[0])
             self.assertFalse(instance.available()[0])
             self.assertEqual(probe.call_count, 1)
-            refreshed = catalog.discover(directory=self.directory)
+            refreshed = catalog.discover(directory=self.directory, harnesses=[{
+                "harness": "claude", "reason": None, "status": "ready"}])
             self.assertEqual(refreshed["discoveries"], [{"harness": "claude", "status": "complete",
                                                          "accountStatus": "not-applicable", "reason": None,
                                                          "content": None}])
@@ -151,7 +196,8 @@ class CatalogTests(unittest.TestCase):
             "apiKey": "private-provider-secret",
             "models": [
                 {"id": "deepseek-flash", "name": "Same model id", "efforts": ["low", "high"], "contextWindow": 1000},
-                {"id": "basic", "efforts": ["off"], "available": False, "unavailableReason": "Unsupported auth",
+                {"id": "basic", "efforts": ["off"], "available": False, "unavailableReason": {"code": "catalog.native-unavailable", "params": {}},
+                 "unavailableContent": "Unsupported auth",
                  "requestHeaders": {"Authorization": "private-model-secret"}},
             ],
         })
@@ -246,19 +292,19 @@ class CatalogTests(unittest.TestCase):
         payload = self.payload()
         payload["providers"].append(copy.deepcopy(payload["providers"][0]))
         with self.assertRaisesRegex(BoardError, "Repeated catalog provider"):
-            catalog.canonical_payload(payload)
+            catalog.discovery_payload(payload)
 
     def test_model_bound_refuses_an_incomplete_catalog(self):
         payload = copy.deepcopy(FIXTURE_CATALOG)
         payload["providers"][0]["models"] = [{"id": f"model-{i}"} for i in range(catalog.MAX_MODELS + 1)]
         with self.assertRaisesRegex(BoardError, "at most"):
-            catalog.canonical_payload(payload)
+            catalog.discovery_payload(payload)
 
     def test_harness_identity_is_required_without_dsh_default(self):
         payload = copy.deepcopy(FIXTURE_CATALOG)
         del payload["providers"][0]["harness"]
         with self.assertRaises(BoardError):
-            catalog.canonical_payload(payload)
+            catalog.discovery_payload(payload)
 
     def test_explicit_validation_does_not_select_or_guess_an_effort(self):
         class Harness:

@@ -23,6 +23,38 @@ class CatalogObservationTests(BoardTestCase):
     def record(self, payload, observation=None):
         return self.e.record_catalog(payload, observation)
 
+    def test_automatic_refresh_records_the_health_fallback_then_its_current_copy(self):
+        self.b.service.automatic_discovery = True
+        with patch.object(self.b.service.harnesses, 'refresh'):
+            first = self.b.call('model_catalog_refresh', {'requestId': 'health-fallback'})
+            second = self.b.call('model_catalog_refresh', {'requestId': 'health-current-copy'})
+        self.assertEqual(first['catalog']['source'], 'harness-health')
+        self.assertEqual(second['catalog']['source'], 'current-native-observations')
+        self.assertEqual({item['harness']: item['reason'] for item in second['catalog']['discoveries']},
+                         {item['harness']: {'code': 'catalog.native-unknown',
+                                           'params': {'harness': item['harness']}}
+                          for item in first['catalog']['discoveries']})
+
+    def test_automatic_refresh_preserves_internal_board_reasons(self):
+        causes = [
+            {'code': 'catalog.account-status-unknown', 'params': {'harness': 'dsh'}},
+            {'code': 'catalog.native-unknown', 'params': {'harness': 'dsh'}},
+            {'code': 'history.reason-unavailable', 'params': {'recordId': 'old-reading'}},
+        ]
+        self.b.service.automatic_discovery = True
+        with patch.object(self.b.service.harnesses, 'refresh'):
+            for index, cause in enumerate(causes):
+                with self.subTest(cause=cause):
+                    if index == 0:
+                        self.record(catalog(account_status='unknown'))
+                    else:
+                        value = catalog(status='unknown')
+                        value['discoveries'][0]['reason'] = cause
+                        self.record(value)
+                    result = self.b.call('model_catalog_refresh', {'requestId': f'board-reason-{index}'})
+                    self.assertEqual(result['catalog']['source'], 'current-native-observations')
+                    self.assertEqual(result['catalog']['discoveries'][0]['reason'], cause)
+
     def table_facts(self):
         with self.e.db.read() as db:
             return (db.execute('SELECT COUNT(*) FROM events').fetchone()[0],
@@ -88,7 +120,7 @@ class CatalogObservationTests(BoardTestCase):
         self.record(payload)
         for field, value in [('name', 'new label'), ('description', 'new description'),
                              ('contextWindow', 12345), ('inputModalities', ['text', 'image']),
-                             ('available', False), ('unavailableReason', 'native unavailable'),
+                             ('available', False), ('unavailableContent', 'native unavailable'),
                              ('available', True)]:
             with self.subTest(field=field, value=value):
                 before = self.table_facts()
@@ -104,22 +136,23 @@ class CatalogObservationTests(BoardTestCase):
         payload = catalog()
         model = payload['providers'][0]['models'][0]
         model['available'] = False
-        model['unavailableReason'] = '  原生限制：quota=0\n'
+        model['unavailableReason'] = {'code': 'catalog.native-unavailable', 'params': {}}
+        model['unavailableContent'] = '  原生限制：quota=0\n'
         recorded = self.record(payload)
         proposed = recorded['buddies'][0]
         self.assertEqual(proposed['unavailableReason'], {'code': 'catalog.native-unavailable', 'params': {}})
-        self.assertEqual(proposed['unavailableContent'], model['unavailableReason'])
+        self.assertEqual(proposed['unavailableContent'], model['unavailableContent'])
         with self.e.db.read() as db:
             row = db.execute('SELECT unavailable_code,unavailable_params_json,unavailable_content FROM buddies').fetchone()
-            self.assertEqual(tuple(row), ('catalog.native-unavailable', '{}', model['unavailableReason']))
+            self.assertEqual(tuple(row), ('catalog.native-unavailable', '{}', model['unavailableContent']))
             current = catalog_store.current(db).lookup('dsh', 'fixture', 'alpha')
-            self.assertEqual(current['unavailableContent'], model['unavailableReason'])
+            self.assertEqual(current['unavailableContent'], model['unavailableContent'])
         with self.e.db.write() as db:
             db.execute("UPDATE harness_health SET status='unhealthy' WHERE harness='dsh'")
         with self.e.db.read() as db:
             current = catalog_store.current(db).lookup('dsh', 'fixture', 'alpha')
             self.assertEqual(current['unavailableReason'], {'code': 'catalog.native-unavailable', 'params': {}})
-            self.assertEqual(current['unavailableContent'], model['unavailableReason'])
+            self.assertEqual(current['unavailableContent'], model['unavailableContent'])
 
     def test_addition_pending_confirmation_and_recovery_change_only_actual_facts(self):
         self.record(catalog())

@@ -45,13 +45,12 @@ class CatalogRefreshServiceTests(BoardTestCase):
         for status, account_status, reason in (("unknown", "confirmed", {"code": "catalog.model-shape-unreadable", "params": {}}),
                                                 ("unknown", "not-applicable", None),
                                                 ("complete", "not-applicable", None),
-                                                ("complete", "confirmed", "native discovery note")):
+                                                ("complete", "confirmed", None)):
             with self.subTest(status=status, accountStatus=account_status, reason=reason):
                 with patch.object(catalog_store, "record", wraps=catalog_store.record) as record:
                     self.refresh_catalog(account_status, status=status, reason=reason)
-                observation = {"harness": "dsh", "status": status, "accountStatus": account_status}
-                if reason is not None:
-                    observation["reason"] = reason
+                observation = {"harness": "dsh", "status": status, "accountStatus": account_status,
+                               "reason": reason if status == "unknown" else None, "content": None}
                 self.assertEqual(record.call_args.args[1]["discoveries"], [observation])
                 row, _, _ = self.catalog_state()
                 self.assertEqual(row["status"], status)
@@ -113,15 +112,15 @@ class CatalogRefreshServiceTests(BoardTestCase):
 
     def test_refresh_without_own_observation_keeps_complete_and_unknown_account(self):
         payload = native_payload("confirmed")
-        payload["discoveries"] = [{"harness": "codex", "status": "unknown", "accountStatus": "confirmed",
-                                   "reason": "another harness reading"}]
+        payload["discoveries"] = []
+        payload["providers"] = []
         stub = SimpleNamespace(discover_models=lambda: payload,
                                local_read_only_check=lambda: {"eligible": False, "systemSandbox": False})
         with patch("hey_my_buddy.buddy.harnesses.registry.adapter", return_value=stub), \
              patch.object(catalog_store, "record", wraps=catalog_store.record) as record:
             self.service._refresh_harness_catalog("dsh", self.record)
         self.assertEqual(record.call_args.args[1]["discoveries"],
-                         [{"harness": "dsh", "status": "complete", "accountStatus": "unknown"}])
+                         [{"harness": "dsh", "status": "complete", "accountStatus": "unknown", "reason": None, "content": None}])
         row, buddies, read_at = self.catalog_state()
         self.assertEqual(row["status"], "unknown")
         self.assertEqual(row["reason"], {"code": "catalog.account-status-unknown", "params": {"harness": "dsh"}})

@@ -483,7 +483,7 @@ class BoardService(_BaseResource):
 
     def _refresh_harness_catalog(self, name, record, catalog_scan_claimed=False):
         from ...protocol.reasons import reason
-        from ..catalog import catalog_store
+        from ..catalog import catalog, catalog_store
         from ...buddy.harnesses.registry import adapter
         from ...buddy.harnesses.runtime_selection import bound
         if self.harnesses.get(name)['revision'] != record['revision']:
@@ -491,12 +491,10 @@ class BoardService(_BaseResource):
         observation = catalog_store.begin(self.evaluation, harnesses=[record])
         try:
             with bound([record], environment=self.harnesses.environment()):
-                payload = adapter(name).discover_models()
-            native_fact = next((item for item in payload.get('discoveries', [])
-                                if isinstance(item, dict) and item.get('harness') == name), None)
-            payload['discoveries'] = [{'harness': name, 'status': native_fact['status'] if native_fact else 'complete',
-                                       'accountStatus': (native_fact or {}).get('accountStatus', 'unknown'),
-                                       **({'reason': native_fact['reason']} if native_fact and native_fact.get('reason') is not None else {})}]
+                payload = catalog.discovery_payload(adapter(name).discover_models(), harness=name)
+            native_fact = next((item for item in payload['discoveries'] if item['harness'] == name), None)
+            payload['discoveries'] = [native_fact or {'harness': name, 'status': 'complete',
+                                                     'accountStatus': 'unknown', 'reason': None, 'content': None}]
             catalog_store.record(self.evaluation, payload, observation['observationId'], health_generation=(name, record['revision']))
         except BoardError as error:
             if error.code != 'UPGRADE_IN_PROGRESS':

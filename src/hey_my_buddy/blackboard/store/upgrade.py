@@ -37,7 +37,7 @@ _DISCOVERY_ERRORS = frozenset((
     'HARNESS_UNAVAILABLE', 'INVALID_ARGUMENT', 'LIVE_ENDPOINT_START_FAILED',
     'LIVE_UNAVAILABLE', 'NOT_FOUND', 'PRIVATE_PATH_UNSAFE', 'ROLE_RUN_UNREGISTERED',
     'UNAUTHORIZED', 'UNSUPPORTED', 'UNSUPPORTED_ADAPTER', 'UNSUPPORTED_CAPABILITY',
-    'UNSUPPORTED_HARNESS', 'UPGRADE_IN_PROGRESS',
+    'UNSUPPORTED_HARNESS',
 ))
 _PROBE_CODES = {
     'HARNESS_NOT_CHECKED': 'harness.not-checked',
@@ -132,18 +132,15 @@ def _health_record(value: dict, *, owning_harness: str | None = None, status: st
                                      isinstance(value['lastProbe'], dict) and
                                      set(value['lastProbe']) == {'status', 'reasonCode', 'observedAt', 'candidates'} and
                                      value['lastProbe']['status'] == 'unknown')
-        ready_without_root_reason = (status == 'ready' and value.get('status') == 'ready' and
-                                     isinstance(value.get('lastProbe'), dict) and
-                                     value['lastProbe'].get('status') == 'complete' and
-                                     value['lastProbe'].get('reasonCode') is None)
+        ready_without_root_reason = status == 'ready' and value.get('status') == 'ready'
         if status == 'unknown' and (bare_claim or unknown_probe_after_claim):
             # Schema 24's bare scan claim started with {}; an unknown probe
             # could then add just lastProbe. read_health supplied this root
             # cause on reads but never wrote it to either row shape.
             value['reason'] = make_reason('harness.not-checked', operation='probe')
         elif ready_without_root_reason:
-            # The fixed schema-24 base has a successful probe record with no
-            # root reasonCode; read_health exposed its reason as null.
+            # Codex account recovery removes the root reasonCode while the
+            # last probe may still describe an older unknown result.
             value['reason'] = None
         elif status is not None:
             raise BoardError('UPGRADE_INVALID_BOARD', 'Stored health reason is missing')
@@ -194,7 +191,7 @@ def _health_record(value: dict, *, owning_harness: str | None = None, status: st
 
 
 def _catalog_reason(value: str | None, harness: str, *, program: bool,
-                    native_program: bool = False, native_timeout: bool = False) -> tuple[dict | None, str | None]:
+                    native_program: bool = False) -> tuple[dict | None, str | None]:
     if value is None:
         return None, None
     if value == 'ACCOUNT_STATUS_UNKNOWN' and program:
@@ -202,8 +199,6 @@ def _catalog_reason(value: str | None, harness: str, *, program: bool,
     if native_program and value in _NATIVE_DISCOVERY_CODES:
         return make_reason(_NATIVE_DISCOVERY_CODES[value]), None
     if value == 'native-metadata-wait-expired':
-        if not native_timeout:
-            raise BoardError('UPGRADE_INVALID_BOARD', 'Native metadata timeout has unknown ownership')
         return make_reason('native-metadata-wait-expired'), None
     if program and value in _PROBE_CODES:
         return _harness_reason(value), None
@@ -222,12 +217,16 @@ def _catalog_payload(value: dict) -> dict:
                          if harness not in provider_harnesses and old is not None
                          and f'{harness}: {old}' in old_warnings}
     source_parts = {part.strip() for part in value.get('source', '').split(';')}
+    service_copy = value.get('source') in ('current-native-observations', 'harness-health')
     native_harnesses = {name for name, source in _NATIVE_SOURCES.items() if source in source_parts}
     for provider in value.get('providers', []):
         for model in provider.get('models', []):
             old = model.pop('unavailableReason', None)
             if old is None or model.get('available', True):
                 model['unavailableReason'] = None
+                model['unavailableContent'] = None
+            elif value.get('source') == 'current-native-observations' and old == 'HARNESS_UNHEALTHY':
+                model['unavailableReason'] = _harness_reason(old)
                 model['unavailableContent'] = None
             else:
                 if old == 'native route is unavailable':
@@ -237,10 +236,8 @@ def _catalog_payload(value: dict) -> dict:
     for discovery in value.get('discoveries', []):
         old = discovery.get('reason')
         discovery['reason'], discovery['content'] = _catalog_reason(
-            old, discovery['harness'], program=discovery['harness'] in program_harnesses,
-            native_program=_NATIVE_SOURCES.get(discovery['harness']) in source_parts,
-            native_timeout=('native-discovery' in source_parts and discovery['harness'] not in provider_harnesses
-                            and discovery['status'] == 'unknown'))
+            old, discovery['harness'], program=service_copy or discovery['harness'] in program_harnesses,
+            native_program=_NATIVE_SOURCES.get(discovery['harness']) in source_parts)
         if (discovery['harness'] == 'zcode' and 'zcode' in native_harnesses
                 and discovery['status'] == 'unknown' and old is None
                 and 'The native model catalog shape was not fully recognized; this reading cannot retire missing buddies'
@@ -303,21 +300,12 @@ def _catalog_payload(value: dict) -> dict:
 
 def _upgrade_catalog_and_health(connection: sqlite3.Connection) -> None:
     refresh_errors = set()
-    account_errors = set()
-    for seq, kind, raw in connection.execute(
-            "SELECT seq,kind,payload_json FROM events WHERE kind IN "
-            "('harness.invalidated','harness.account_read_failed','harness.account_read_unknown')").fetchall():
+    for raw, in connection.execute(
+            "SELECT payload_json FROM events WHERE kind='harness.invalidated'").fetchall():
         payload = json.loads(raw)
         harness, code = payload.get('harness'), payload.get('reasonCode')
         if code in _DISCOVERY_ERRORS:
-            if kind != 'harness.invalidated' or 'accountReadFailure' in payload:
-                account_errors.add((harness, code))
-            elif code == 'UPGRADE_IN_PROGRESS':
-                raise BoardError('UPGRADE_INVALID_BOARD', 'Upgrade fence cannot invalidate catalog health')
-            else:
-                refresh_errors.add((harness, code))
-    if refresh_errors & account_errors:
-        raise BoardError('UPGRADE_INVALID_BOARD', 'Catalog refresh failure conflicts with account read evidence')
+            refresh_errors.add((harness, code))
     for row in connection.execute('SELECT harness,status,record_json FROM harness_health').fetchall():
         value = _health_record(json.loads(row[2]), owning_harness=row[0], status=row[1],
                                refresh_errors=refresh_errors)
@@ -325,11 +313,14 @@ def _upgrade_catalog_and_health(connection: sqlite3.Connection) -> None:
                            (canonical_json(value), row[0]))
     copied_reasons = {}
     for row in connection.execute('SELECT observation_id,harnesses_json,response_json FROM catalog_observations').fetchall():
-        harnesses = [_health_record(item, refresh_errors=refresh_errors) for item in json.loads(row[1])]
+        harnesses = [_health_record(item, status=item['status'], refresh_errors=refresh_errors)
+                     for item in json.loads(row[1])]
         response = json.loads(row[2]) if row[2] is not None else None
         if response is not None:
             old_discoveries = {item['harness']: item.get('reason')
                                for item in response['catalog'].get('discoveries', [])}
+            old_model_reasons = {(provider['harness'], provider['provider'], model['id']): model.get('unavailableReason')
+                                 for provider in response['catalog']['providers'] for model in provider['models']}
             _catalog_payload(response['catalog'])
             for item in response['catalog'].get('discoveries', []):
                 copied_reasons[(row[0], item['harness'])] = (old_discoveries[item['harness']], item['reason'])
@@ -337,8 +328,9 @@ def _upgrade_catalog_and_health(connection: sqlite3.Connection) -> None:
                              for provider in response['catalog']['providers'] for model in provider['models']}
             for buddy in response.get('buddies', []):
                 old = buddy.pop('unavailableReason', None)
-                model = model_reasons.get((buddy['harness'], buddy['provider'], buddy['model']))
-                if model is None or old != model['unavailableContent']:
+                key = (buddy['harness'], buddy['provider'], buddy['model'])
+                model = model_reasons.get(key)
+                if model is None or old != old_model_reasons[key]:
                     raise BoardError('UPGRADE_INVALID_BOARD', 'Catalog buddy reason lacks native model ownership')
                 buddy['unavailableReason'] = model['unavailableReason']
                 buddy['unavailableContent'] = model['unavailableContent']
@@ -411,7 +403,10 @@ def _upgrade_catalog_and_health(connection: sqlite3.Connection) -> None:
     connection.execute('ALTER TABLE buddies_upgrade RENAME TO buddies')
     connection.execute('CREATE INDEX buddies_current_idx ON buddies(available, buddy_id)')
     connection.execute('CREATE INDEX buddies_harness_idx ON buddies(harness, buddy_id)')
-    for seq, raw in connection.execute("SELECT seq,payload_json FROM events WHERE kind='harness.invalidated'").fetchall():
+    for seq, raw in connection.execute(
+            "SELECT seq,payload_json FROM events WHERE kind IN "
+            "('harness.checked','harness.probe_unknown','harness.account_read_failed',"
+            "'harness.account_read_unknown','harness.invalidated')").fetchall():
         payload = json.loads(raw)
         _health_record(payload, refresh_errors=refresh_errors)
         connection.execute('UPDATE events SET payload_json=? WHERE seq=?', (canonical_json(payload), seq))

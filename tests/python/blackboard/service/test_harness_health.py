@@ -649,7 +649,8 @@ class HealthRecoveryRestoreTests(BoardTestCase):
 
     def reading(self, efforts):
         models = [{'id': 'alpha', 'efforts': list(efforts), 'available': True},
-                  {'id': 'gamma', 'efforts': ['max'], 'available': False, 'unavailableReason': 'native-disabled'}]
+                  {'id': 'gamma', 'efforts': ['max'], 'available': False, 'unavailableReason': {'code': 'catalog.native-unavailable', 'params': {}},
+                   'unavailableContent': 'native-disabled'}]
         return {'source': 'fixture-native', 'providers': [{'harness': 'dsh', 'provider': 'fixture', 'models': models}],
                 'discoveries': [{'harness': 'dsh', 'status': 'complete', 'accountStatus': 'confirmed'}]}
 
@@ -708,7 +709,8 @@ class CatalogHealthOwnershipTests(BoardTestCase):
 
     def reading(self, efforts, *, beta):
         models = [{'id': 'alpha', 'efforts': list(efforts), 'available': True},
-                  {'id': 'gamma', 'efforts': ['high'], 'available': False, 'unavailableReason': 'native-disabled'}]
+                  {'id': 'gamma', 'efforts': ['high'], 'available': False, 'unavailableReason': {'code': 'catalog.native-unavailable', 'params': {}},
+                   'unavailableContent': 'native-disabled'}]
         if beta:
             models.append({'id': 'beta', 'efforts': ['high'], 'available': True})
         return {'source': 'fixture-native', 'providers': [{'harness': 'dsh', 'provider': 'fixture', 'models': models}],
@@ -790,6 +792,20 @@ class CatalogHealthOwnershipTests(BoardTestCase):
 
 class StaleRereadServiceCallbackTests(BoardTestCase):
     """The stale-catalog re-read through the real service callback (rule 4)."""
+
+    def test_non_object_native_receipt_is_a_catalog_failure(self):
+        from types import SimpleNamespace
+        board = self.board()
+        service = board.service
+        record = service.harnesses.get('dsh')
+        with patch('hey_my_buddy.buddy.harnesses.registry.adapter',
+                   return_value=SimpleNamespace(discover_models=lambda: [],
+                                                local_read_only_check=lambda: {"eligible": False, "systemSandbox": False})):
+            service._refresh_harness_catalog('dsh', record)
+        self.assertEqual(service.harnesses.get('dsh')['reason'], {
+            'code': 'catalog.discovery-failed',
+            'params': {'harness': 'dsh', 'errorCode': 'CATALOG_INVALID'},
+        })
 
     def test_native_failure_inside_the_service_callback_invalidates_for_the_caller(self):
         from types import SimpleNamespace

@@ -828,8 +828,8 @@ class UpgradeFixtureTests(unittest.TestCase):
 
     def test_old_controller_timeout_receipt_uses_its_native_reason(self):
         fixture, connection = self.restored('native-timeout-receipt')
-        # The 0.42.0 and 0.45.3 controller emitted this reason when its bounded
-        # metadata wait expired. Another harness may succeed in the same read.
+        # The schema-24 execution controller emitted this reason when its
+        # bounded metadata wait expired. Another harness may succeed too.
         old = {'source': 'dsh-acp-session-config; native-discovery',
                'providers': [{'harness': 'dsh', 'provider': 'fixture', 'models': []}],
                'warnings': [],
@@ -863,20 +863,52 @@ class UpgradeFixtureTests(unittest.TestCase):
         self.assertEqual(json.loads(connection.execute('SELECT reason FROM catalog_current WHERE harness=?',
                                                        ('zcode',)).fetchone()[0]), stored['discoveries'][1]['reason'])
 
-    def test_native_timeout_with_no_writer_provenance_rolls_back(self):
-        fixture, connection = self.restored('native-timeout-unknown-origin')
-        old = {'source': 'fixture-native', 'providers': [], 'warnings': [],
+    def test_native_timeout_literal_converts_the_current_catalog_copy(self):
+        fixture, connection = self.restored('native-timeout-literal')
+        old = {'source': 'current-native-observations', 'providers': [], 'warnings': [],
                'discoveries': [{'harness': 'codex', 'status': 'unknown',
                                 'accountStatus': 'unknown', 'reason': 'native-metadata-wait-expired'}]}
         connection.execute('INSERT INTO evaluation_catalog(discovery_id,discovered_at,source,payload_json,created_at) '
-                           'VALUES(?,?,?,?,?)', ('unknown-timeout', '2026-10-16T00:00:00Z',
+                           'VALUES(?,?,?,?,?)', ('literal-timeout', '2026-10-16T00:00:00Z',
                                                old['source'], json.dumps(old), '2026-10-16T00:00:00Z'))
         connection.commit()
-        before = backup.database_snapshot(connection, exact=True)
-        with self.assertRaises(BoardError) as caught:
-            upgrade_schema_24_to_25(fixture['state'])
-        self.assertEqual(caught.exception.code, 'UPGRADE_INVALID_BOARD')
-        self.assertEqual(backup.database_snapshot(connection, exact=True), before)
+        upgrade_schema_24_to_25(fixture['state'])
+        converted = json.loads(connection.execute('SELECT payload_json FROM evaluation_catalog WHERE discovery_id=?',
+                                                   ('literal-timeout',)).fetchone()[0])
+        self.assertEqual(converted['discoveries'][0]['reason'],
+                         {'code': 'native-metadata-wait-expired', 'params': {}})
+        self.assertIsNone(converted['discoveries'][0]['content'])
+
+    def test_codex_account_recovery_ready_record_allows_older_unknown_probes(self):
+        for probe_reason in ('scan-timeout', 'version-unknown'):
+            with self.subTest(probe_reason=probe_reason):
+                fixture, connection = self.restored('codex-recovered-' + probe_reason)
+                record = json.loads(connection.execute(
+                    "SELECT record_json FROM harness_health WHERE harness='codex'").fetchone()[0])
+                record.update(status='ready', available=True,
+                              lastProbe={'status': 'unknown' if probe_reason == 'scan-timeout' else 'complete',
+                                         'reasonCode': probe_reason,
+                                         'observedAt': '2026-10-16T00:00:00Z', 'candidates': []})
+                record.pop('reasonCode', None)
+                connection.execute("UPDATE harness_health SET status='ready',record_json=? WHERE harness='codex'",
+                                   (json.dumps(record),))
+                observation = connection.execute('SELECT observation_id,harnesses_json FROM catalog_observations LIMIT 1').fetchone()
+                snapshots = json.loads(observation['harnesses_json'])
+                snapshot = next(item for item in snapshots if item['harness'] == 'codex')
+                snapshot.update(record)
+                snapshot.pop('reasonCode', None)
+                connection.execute('UPDATE catalog_observations SET harnesses_json=? WHERE observation_id=?',
+                                   (json.dumps(snapshots), observation['observation_id']))
+                connection.commit()
+                upgrade_schema_24_to_25(fixture['state'])
+                upgraded = json.loads(connection.execute(
+                    "SELECT record_json FROM harness_health WHERE harness='codex'").fetchone()[0])
+                self.assertIsNone(upgraded['reason'])
+                self.assertEqual(upgraded['lastProbe']['reason']['code'], 'harness.' + probe_reason)
+                snapshots = json.loads(connection.execute('SELECT harnesses_json FROM catalog_observations '
+                                                          'WHERE observation_id=?',
+                                                          (observation['observation_id'],)).fetchone()[0])
+                self.assertIsNone(next(item for item in snapshots if item['harness'] == 'codex')['reason'])
 
     def test_old_unknown_scan_claim_gains_the_read_time_reason(self):
         fixture, connection = self.restored('empty-scan-claim')
@@ -981,6 +1013,102 @@ class UpgradeFixtureTests(unittest.TestCase):
                                               'ORDER BY seq DESC LIMIT 1').fetchone()[0])
         self.assertEqual(event['reason'], expected)
         self.assertNotIn('reasonCode', event)
+
+    def test_all_old_harness_events_convert_reason_codes(self):
+        fixture, connection = self.restored('harness-event-reasons')
+        cases = (
+            ('harness.checked', {'harness': 'codex', 'status': 'unhealthy', 'revision': 2, 'version': None,
+                                 'reasonCode': 'HARNESS_HANDSHAKE_FAILED'}, 'harness.probe-failed'),
+            ('harness.probe_unknown', {'harness': 'codex', 'revision': 3, 'reasonCode': 'scan-timeout'},
+             'harness.scan-timeout'),
+            ('harness.account_read_failed', {'harness': 'codex', 'reasonCode': 'HARNESS_ACCOUNT_READ_FAILED',
+                                             'revision': 2, 'currentRevision': 2,
+                                             'accountReadFailure': {'reasonCode': 'HARNESS_ACCOUNT_READ_FAILED',
+                                                                    'errorType': 'OSError', 'message': 'native failure',
+                                                                    'observedAt': '2026-10-16T00:00:00Z', 'status': 'failed'}},
+             'harness.account-read-failed'),
+            ('harness.account_read_unknown', {'harness': 'codex', 'reasonCode': 'deadline', 'revision': 2, 'currentRevision': 2,
+                                              'accountReadFailure': {'reasonCode': 'deadline',
+                                                                     'errorType': 'CodexProtocolError', 'message': 'native wait expired',
+                                                                     'observedAt': '2026-10-16T00:00:00Z', 'status': 'unknown'}},
+             'harness.account-read-failed'),
+            ('harness.invalidated', {'harness': 'codex', 'reasonCode': 'HARNESS_START_FAILED'},
+             'harness.launch-failed'),
+        )
+        event_seqs = []
+        for kind, payload, _ in cases:
+            event_seqs.append(self.old_event(connection, kind, payload=payload))
+        connection.commit()
+        upgrade_schema_24_to_25(fixture['state'])
+        for (kind, _, code), seq in zip(cases, event_seqs):
+            with self.subTest(kind=kind):
+                payload = json.loads(connection.execute('SELECT payload_json FROM events WHERE seq=?',
+                                                        (seq,)).fetchone()[0])
+                self.assertNotIn('reasonCode', payload)
+                self.assertEqual(payload['reason']['code'], code)
+                if 'accountReadFailure' in payload:
+                    self.assertEqual(payload['accountReadFailure']['reason']['code'], code)
+                    self.assertNotIn('reasonCode', payload['accountReadFailure'])
+
+    def test_service_catalog_copies_use_board_reason_tables(self):
+        for source, old, expected in (
+            ('current-native-observations', 'ACCOUNT_STATUS_UNKNOWN', 'catalog.account-status-unknown'),
+            ('current-native-observations', 'CATALOG_UNAVAILABLE', 'catalog.discovery-failed'),
+            ('harness-health', 'HARNESS_NOT_CHECKED', 'harness.not-checked'),
+        ):
+            with self.subTest(source=source, old=old):
+                fixture, connection = self.restored('service-copy-' + old)
+                payload = {'source': source, 'providers': [], 'warnings': [],
+                           'discoveries': [{'harness': 'codex', 'status': 'unknown',
+                                            'accountStatus': 'unknown', 'reason': old}]}
+                connection.execute('INSERT INTO evaluation_catalog(discovery_id,discovered_at,source,payload_json,created_at) '
+                                   'VALUES(?,?,?,?,?)', (source + old, '2026-10-16T00:00:00Z',
+                                                       source, json.dumps(payload), '2026-10-16T00:00:00Z'))
+                connection.commit()
+                upgrade_schema_24_to_25(fixture['state'])
+                converted = json.loads(connection.execute('SELECT payload_json FROM evaluation_catalog '
+                                                          'WHERE discovery_id=?',
+                                                          (source + old,)).fetchone()[0])
+                discovery = converted['discoveries'][0]
+                self.assertEqual(discovery['reason']['code'], expected)
+                self.assertIsNone(discovery['content'])
+
+    def test_current_catalog_model_health_copy_keeps_the_board_reason(self):
+        fixture, connection = self.restored('current-model-health-copy')
+        observation = connection.execute('SELECT response_json,harnesses_json FROM catalog_observations '
+                                         'WHERE response_json IS NOT NULL LIMIT 1').fetchone()
+        response = json.loads(observation['response_json'])
+        payload = response['catalog']
+        payload['source'] = 'current-native-observations'
+        response['discoveryId'] = 'old-health-copy'
+        # The old current() reader replaced each model's reason with this
+        # constant whenever the harness was unhealthy, before refresh recorded it.
+        for provider in payload['providers']:
+            for model in provider['models']:
+                model.update(available=False, unavailableReason='HARNESS_UNHEALTHY')
+        for buddy in response['buddies']:
+            buddy.update(available=False, unavailableReason='HARNESS_UNHEALTHY')
+        connection.execute('INSERT INTO evaluation_catalog(discovery_id,discovered_at,source,payload_json,created_at) '
+                           'VALUES(?,?,?,?,?)', ('old-health-copy', '2026-10-16T00:00:00Z', payload['source'],
+                                               json.dumps(payload), '2026-10-16T00:00:00Z'))
+        connection.execute('INSERT INTO catalog_observations(request_id,created_at,completed_at,response_json,harnesses_json) '
+                           'VALUES(?,?,?,?,?)', ('old-health-copy', '2026-10-16T00:00:00Z', '2026-10-16T00:00:00Z',
+                                               json.dumps(response), observation['harnesses_json']))
+        connection.commit()
+        upgrade_schema_24_to_25(fixture['state'])
+        converted = json.loads(connection.execute('SELECT payload_json FROM evaluation_catalog '
+                                                  "WHERE discovery_id='old-health-copy'").fetchone()[0])
+        expected = {'code': 'harness.probe-failed', 'params': {'operation': 'probe'}}
+        for provider in converted['providers']:
+            for model in provider['models']:
+                self.assertEqual(model['unavailableReason'], expected)
+                self.assertIsNone(model['unavailableContent'])
+        recorded = json.loads(connection.execute("SELECT response_json FROM catalog_observations "
+                                                 "WHERE request_id='old-health-copy'").fetchone()[0])
+        self.assertEqual(recorded['catalog'], converted)
+        for buddy in recorded['buddies']:
+            self.assertEqual(buddy['unavailableReason'], expected)
+            self.assertIsNone(buddy['unavailableContent'])
 
     def test_known_native_warning_becomes_reason_and_unknown_source_rolls_back(self):
         fixture, connection = self.restored('native-warning')

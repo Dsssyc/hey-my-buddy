@@ -56,7 +56,7 @@ class CatalogTrustTests(BoardTestCase):
             self.clock.advance(elapsed)
             with patch('hey_my_buddy.buddy.harnesses.registry.adapters', return_value={'dsh': instance}), \
                  patch.object(catalog, '_override', return_value=None):
-                discovered = catalog.discover(directory=self.board.directory)
+                discovered = catalog.discover(directory=self.board.directory, harnesses=[{'harness': 'dsh', 'reason': None}])
             result = catalog_store.record(self.evaluation, discovered)
             row, pending, read_at, buddies = self.state()
             self.assertEqual(row['status'], 'unknown')

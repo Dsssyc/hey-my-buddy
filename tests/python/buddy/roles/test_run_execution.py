@@ -51,13 +51,19 @@ class DiscoveryReceiptTests(unittest.TestCase):
 
     def test_expired_native_metadata_wait_has_a_structured_reason(self):
         handle = SimpleNamespace(wait=lambda timeout: None, terminate=lambda **kwargs: None)
-        collection = SimpleNamespace(payload={"status": "unknown"}, exit_code=0, stop_confirmed=True)
+        collection = SimpleNamespace(payload=None, exit_code=0, stop_confirmed=True)
         with mock.patch.object(run_execution, "launch_controller", return_value=handle), \
              mock.patch.object(run_execution, "collect_controller", return_value=collection):
             result = run_execution.discover_models("codex")
         self.assertEqual(result["discoveries"], [{"harness": "codex", "status": "unknown",
                          "accountStatus": "unknown",
                          "reason": {"code": "native-metadata-wait-expired", "params": {}}}])
+
+    def test_a_non_object_controller_receipt_is_a_board_error(self):
+        with self.assertRaises(BoardError) as caught:
+            self._discover([])
+        self.assertEqual(caught.exception.code, 'HARNESS_UNAVAILABLE')
+        self.assertTrue(caught.exception.discovery_shutdown_confirmed)
 
     def test_a_refused_discovery_keeps_the_harness_s_own_reason(self):
         with self.assertRaises(BoardError) as caught:

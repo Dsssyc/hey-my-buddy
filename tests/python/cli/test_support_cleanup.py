@@ -140,7 +140,7 @@ class FixtureCleanupTests(unittest.TestCase):
                     store = BoardStore(state)
                     store.initialize()
                     ipc = configure_local_endpoint(state)
-                    payload = discover(directory=state)
+                    payload = discover(directory=state, harnesses=[])
                 keys = {'VIRTUAL_ENV', 'UV_PROJECT_ENVIRONMENT', 'HOME', 'USERPROFILE',
                         'CODEX_HOME', 'CLAUDE_CONFIG_DIR', 'ZCODE_DATA_BASE_DIR',
                         'DSH_HOME', 'ZCODE_BUILTIN_PROVIDER_CONFIG_FILE', 'ZCODE_PERSONAL_PROVIDER_CONFIG_FILE',
