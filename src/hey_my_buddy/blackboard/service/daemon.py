@@ -286,10 +286,7 @@ class Daemon:
         if getattr(self, 'harnesses', None) is not None:
             self.harnesses.close()
         self.live_registry.close()
-        try:
-            cc.shutdown()
-        except Exception:
-            pass
+        cc.shutdown()
         if self.console is not None:
             self.console.close()
         self.store.db.close()

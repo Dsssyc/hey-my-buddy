@@ -1201,7 +1201,7 @@ class Database:
         self.path = self.directory / DB_FILE
         self._lock = threading.Lock()
         self._secret: bytes | None = None
-        self._connection_lock = threading.Lock()
+        self._connection_lock = threading.Condition(threading.Lock())
         self._connections: dict[tuple[int, int], sqlite3.Connection] = {}
         self._connection_files: dict[tuple[int, int], tuple[int, int]] = {}
         self._connection_depths: dict[int, int] = {}
@@ -1260,16 +1260,24 @@ class Database:
             yield connection
         finally:
             with self._connection_lock:
-                self._connection_depths[identity] = depth
+                if depth:
+                    self._connection_depths[identity] = depth
+                else:
+                    del self._connection_depths[identity]
                 if self._connection_files[key] != self._file_identity:
                     connection.close()
                     del self._connections[key]
                     del self._connection_files[key]
+                self._connection_lock.notify_all()
 
     def close(self) -> None:
-        """Close all surviving thread connections after the service has stopped."""
+        """Refuse new borrows and wait for all borrowed connections before closing."""
         with self._connection_lock:
             self._closed = True
+            # Request callbacks and background threads can outlive their
+            # listener/scheduler. Only connect()'s exit proves SQLite is idle.
+            while self._connection_depths:
+                self._connection_lock.wait()
             for connection in self._connections.values():
                 connection.close()
             self._connections.clear()
