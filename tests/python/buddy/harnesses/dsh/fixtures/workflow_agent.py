@@ -32,13 +32,11 @@ lives under this run's patch-pinned private session root.
 """
 from __future__ import annotations
 
-import argparse
 import importlib.util
 import json
 import os
 import time
 from pathlib import Path
-from types import SimpleNamespace
 
 _SPEC = importlib.util.spec_from_file_location(
     "dsh_fake_agent_base", Path(__file__).resolve().parent.parent / "acp" / "fake_agent.py")
@@ -205,41 +203,26 @@ class WorkflowAgent(fake_agent.FakeAgent):
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--log", default=None)
-    # The public launch face the run module's driver always passes.
-    parser.add_argument("--profile", default=None)
-    parser.add_argument("--patch", default=None)
+    # The shared agent's own construction face, plus this fixture's switches
+    # (an omitted ``--log`` defaults under the patch-pinned private root). Every
+    # other default - including a switch added to the shared agent later - comes
+    # from there, so this fixture cannot fall behind it.
+    parser = fake_agent.build_parser(log_required=False)
     parser.add_argument("--workflow-mode", default="auto", choices=["auto", "completed", "quota"])
     parser.add_argument("--native-error-code", default="QUOTA")
+    # The governed carrier with no checkpoint call: the mount binding is
+    # derived from session/new instead.
+    parser.set_defaults(prompt_mode="governed")
     args = parser.parse_args()
     if not args.log:
         args.log = str(Path(args.patch).parent / "fixture-agent.log")
-    # The shared agent's construction face, pinned to the governed carrier with
-    # no checkpoint call: the mount binding is derived from session/new instead.
-    shared = SimpleNamespace(
-        log=args.log, delay=[], garbage_on=[], duplicate_on=[], die_before_answer=[],
-        orphan_on=[], respond_then_exit=[], raw_frame=[], freeze_stdin_on=[], fs_path="x.txt",
-        spam_notifications=0, option_count=1, malformed_permission=False, error_data_on=[],
-        freeze_mid_prompt=False, survive_eof=0.0, allowed_title=None,
-        prompt_mode="governed", final_answer=[], emit_unknown_update=False,
-        bridge_config=None, finish_tool=None, checkpoint_tool=None,
-        governed_permission=False, finish_fail_then_retry=False, no_finish=False,
-        forge_receipt=False, stop_reason=None, hang_prompt=False, park_prompt=False,
-        emit_tool_update=False, bare_final=False, session_record=None, stderr_note=None,
-        emit_foreign_chunk=False, spam_unknown_kinds=0, late_tool_update=False,
-        wait_for_inquiry=0.0, answer_inquiry=False, forge_checkpoint=False,
-        replay_history=False, resume_echo_foreign_id=False, resume_foreign_root=False)
-    namespace = SimpleNamespace(**{**vars(shared), "workflow_mode": args.workflow_mode,
-                                   "native_error_code": args.native_error_code,
-                                   "profile": args.profile, "patch": args.patch})
     log_path = Path(args.log)
     log_path.parent.mkdir(parents=True, exist_ok=True)
     if not fake_agent.check_private_home(log_path):
         return 3
     fake_agent.log(log_path, {"event": "launch-face", "profile": args.profile,
                               "patch": args.patch, "workflowMode": args.workflow_mode})
-    WorkflowAgent(namespace).serve()
+    WorkflowAgent(args).serve()
     return 0
 
 
