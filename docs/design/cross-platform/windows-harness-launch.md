@@ -6,9 +6,9 @@
 
 依据[跨系统计划](plan.md)的“Windows 分批计划”、开发者的五项决定，以及[清单](inventory.md)的 W01、W02、T03。本项属于第一批的入口发现、启动和可执行测试夹具，不改变第二批的执行所有权、Job 生命周期、停止证据、ACL 与耐久性承诺。目标环境为 Windows 11 x64、本地 NTFS、同一登录会话和 Python 3.12；WSL2 按 Linux，Windows 10 未验证，Windows ARM、网络盘、FAT/exFAT 和 Windows 服务形态不在首发支持范围。Claude skill 的目录联接、检出的名字与链接限制、断电保证以及 C-Two 的相关决定照原计划分批处理，不能用本设计声称这些工作已完成。
 
-建议采用一种启动规则：产品只把独立 argv 交给原生可执行程序，Windows 上不把 harness 的动态参数交给 `cmd.exe` 或 PowerShell。原生 `.exe` 直接启动；对完整识别的 npm Node `.cmd` shim，只读取其启动描述，解析为原生 `node.exe` 与原来的 JS 入口后直接启动；未知脚本明确拒绝。任务和角色文字继续用现有原生标准输入协议。这消除了 cmd 对整个命令的再次解析，也覆盖必须留在 argv 中的 Claude 模型名和 schema、ZCode 的 cwd、DSH 的 patch 路径。
+建议采用一种启动规则：产品只把独立 argv 交给原生可执行程序，Windows 上不把 harness 的动态参数交给 `cmd.exe` 或 PowerShell。原生 `.exe` 直接启动；对可识别的 npm Node `.cmd` shim，只读取其启动描述，解析为原生 `node.exe` 与原来的 JS 入口后直接启动；未知脚本明确拒绝。任务和角色文字继续用现有原生标准输入协议。这消除了 cmd 对整个命令的再次解析，也覆盖必须留在 argv 中的 Claude 模型名和 schema、ZCode 的 cwd、DSH 的 patch 路径。
 
-这是一项有意收窄入口类型的设计：当前已有的任意 `.cmd` 与 `.ps1` 启动不再保留；普通 `.bat` 也不增设 shell 支持。已识别的 npm shim 是静态启动描述，不是任意 batch 解释器。若安装只提供未知脚本，报告该入口不可启动，并在诊断中写明原因和可选择的原生入口；不能回退到 shell 或更宽权限。四个 CLI 的实际 Windows 发行入口及 npm 模板均未验证，不能据此声称四家目前都可用。
+这是一项有意收窄入口类型的设计：当前已有的任意 `.cmd` 与 `.ps1` 启动不再保留；普通 `.bat` 也不增设 shell 支持。已识别的 npm shim 是静态启动描述，不是任意 batch 解释器。若安装只提供未知脚本，报告该入口不可启动，并在诊断中写明原因和可选择的原生入口；不能回退到 shell 或更宽权限。四个 CLI 的实际 Windows 发行入口及 shim 识别结果均未验证，不能据此声称四家目前都可用。
 
 [ADR-023](../../decisions/023-harness-integration-principles.md) 第 1、2、7、8 条要求保留原生能力、如实声明差异、复用执行载体和仅作能力检查；因此四个运行器的 stream-json、App Server、ACP 协议及权限映射继续沿用，不改用另一套“Windows 专用运行协议”。解析 shim 只解决如何启动原来的程序，不检查厂商代码以证明工具限制。[ADR-030](../../decisions/030-harness-layer-scope.md) 第 2、3、6、8 条继续适用：不改用户的配置、登录、MCP、钩子或主目录，不执行登录 shell，角色文本仍在任务正文最前面。
 
@@ -32,7 +32,7 @@ Windows 的 `_variants`（212–215 行）固定生成 `.exe`、`.cmd`、`.ps1`�
 
 `_candidate_handshake`（673–758 行）给这个命令追加 `--version`；Codex 再追加 `login status`，Claude 再追加 `auth status --json`。普通探针由 `probe:463–512` 启动，标准输入为 DEVNULL；DSH 的版本探针由 `_probe_dsh_version:515–562` 复用 ACP launcher，并关闭输入。两者都没有对 cmd 参数作专门编码。
 
-发现得到的 `command` 原样进入健康记录（`discovery.py:756–757,822–831`；`blackboard/service/harness_health.py:252–260`），`runtime_selection.py:41–50` 的 `command_for` 取已有选择或重新发现，再返回 command。Claude 与 Codex 的 `config.py:53–68`、`21–39`，ZCode 的 `config.py:14–34` 通常取这份选择；开发态 `HMB_DEV_SOURCE=1` 且指定 `HMB_*_CLI` 时，各自还有直接返回路径的分支，ZCode 对 JS 另拼 Node。DSH 的 `native_run.py:603` 直接使用 `command_for`。实现唯一解析边界时也必须收敛这三条开发态路径，不能只修正式发现。
+发现得到的 `command` 原样进入健康记录（`discovery.py:756–757,822–831`；`blackboard/service/harness_health.py:252–260`），`runtime_selection.py:41–50` 的 `command_for` 取已有选择或重新发现，再返回 command。Claude 与 Codex 的 `config.py:53–68`、`21–39`，ZCode 的 `config.py:14–34` 通常取这份选择；开发态 `HMB_DEV_SOURCE=1` 且指定 `HMB_*_CLI` 时，各自还有直接返回路径的分支，ZCode 对 JS 另拼 Node。DSH 的 `native_run.py:603` 直接使用 `command_for`。实现时这三条显式路径也使用同一入口解析边界，并删除其中走不到的查找回退，不能只修正式发现。
 
 正式启动最终仍是 Python 的 `owned_popen`：Claude `native_run.py:308–335`，Codex `native_run.py:472–501`，ZCode `native_run.py:729–768`，DSH `acp/launch.py:202–228`。这些调用都使用 argv 列表和管道，没有 `shell=True`；如果列表本身已含 cmd 前缀，`shell=False` 并不会消除 cmd 的解释过程。`protocol/owned_process.py:68–89` 处理进程归属并调用 Popen，不提供 cmd 语言的转义。
 
@@ -67,74 +67,92 @@ Windows 的 `_variants`（212–215 行）固定生成 `.exe`、`.cmd`、`.ps1`�
 
 ## 4. 选定的做法与边界
 
-在 `buddy/harnesses/` 增加一个共享的入口解析模块，例如 `launch_command.py`，提供 `resolve_command(path: Path, environment: Mapping[str, str], *, deadline: float) -> list[str]`。它只接受一个已选候选路径，返回可以直接启动的 argv 前缀，或返回带路径与原因的解析失败；不接收 prompt，不启动一次回合，也不持有数据库。发现、Node 定位和三家的开发态显式 CLI 路径都使用它；常规运行继续从服务选择记录取得同一个结果。解析后内部运行器只按各自原生约定追加参数，不再各自判断后缀或补 shell。
+沿用 `discovery.py` 中 `_script_uses_node`、`_node_for`、`_launch_command` 和 `_candidate_handshake` 的现有边界，不新增模块。将 `_script_uses_node` 的布尔判定改为给出 Node 入口路径：直接 JS 或现有 POSIX Node 入口返回自身，已识别的 npm `.cmd` 返回它引用的 JS 路径；原生程序不产生 Node 入口。启动前缀的组装集中在现有 `_launch_command` 边界，发现、探针和三家开发态显式路径都复用，避免在调用方复制 Node 解析。最终结果为 `[原生可执行文件]` 或 `[原生 Node, JS 入口]`，常规运行继续从服务选择记录取得结果，各运行器按自己的原生协议追加参数。
 
-Windows 上 `.exe` 是直接启动的共同基础；`.com` 虽可能出现在 PATHEXT，首批只列为候选并报不支持，原生启动语义未验证，不凭后缀推断 PE。`.js/.cjs/.mjs` 和已经识别为 Node 的无后缀入口保留现有 Node 机制，最终解释器必须是直接启动的原生 `node.exe`。不支持的无后缀非 Node 文件在 spawn 前拒绝。macOS/Linux 继续使用原生可执行文件和现有 Node 入口；本设计不增加 `.py` 生产入口或通用 shebang 解释器。脚本类型校验只在这一个边界做，不在 `owned_popen` 或四个运行器重复校验。
+Windows 自动候选名固定为 `<name>.exe`、`<name>.cmd`，按这个顺序枚举；`.ps1`、`.bat`、`.com` 和无后缀名都不列为候选。手动指定这些不支持的入口也在 spawn 前拒绝，不给 `shell=False` 的 batch 隐式启动留下路径。手动指定的 `.js/.cjs/.mjs` 仍复用现有 Node 机制，Windows 的最终 Node 程序必须为直接运行的原生 `node.exe`。macOS/Linux 保留当前原生可执行文件和 Node 入口机制；本设计不增加 `.py` 生产入口或通用 shebang 解释器。
 
-对 npm `.cmd` 的解析必须以完整模板为单位，限定文件大小和编码，只接受已经在离线样本中核对过的 Node shim：除定位脚本目录、选择 Node、调用一个固定 JS 入口并原样转交参数外，没有其他可观察操作。不是“找到一行 node 就运行”，不执行 wrapper，不读取 npm 包源代码来猜入口，也不忽略 wrapper 中的环境设置、额外命令或未知控制流。允许的模板语法及字节样本要随实现的测试固定下来；当前仓库没有足够样本，本轮未核实具体 npm/cmd-shim 版本，模板集合标为未验证，不能凭记忆写一个宽松正则后宣布支持。
+npm shim 的识别只提取一个启动事实：程序是 Node，恰好有一个带引号、以 `%dp0%` 或 `%~dp0` 开头的相对目标，而且该目标文件存在。这里的目标是 Node 调用的目标操作数，不把旁边 `node.exe` 的位置或它在条件赋值中的引用算成另一个 JS 目标；有多个符合条件的目标、目标不带引号、不是相对目标、程序不是 Node 或目标不存在，都拒绝。Node 名字可以直接写出，也可以由 shim 的字面 Node 选择赋值表明；只提取该事实，不模拟 batch 的控制流、环境或参数展开。
 
-解析只把已识别模板里的脚本目录变量还原为 shim 所在目录，并取其字面相对 JS 路径；不展开任意 `%变量%`、命令替换、shell 变量或用户参数。路径按本机规则组合并归一化，验证实际文件与允许的模板结构，不使用按 harness 名硬编码的 node_modules 位置。按该模板本来的规则先选旁边的 `node.exe`，不存在再使用同一发现机制选出的原生 Node；不接受 Node 自己再是一层 `.cmd/.bat/.ps1` 的递归解释。若模板要求额外语义而解析器无法等价表达，拒绝该模板。最终结果形如 `[绝对 node.exe 路径, 绝对 JS 入口路径]`，运行器将自己的参数作为独立元素追加。
+读取 shim 复用 `_record_text:56–62`，沿用其 4096 字节界限和 UTF-8 读取行为，不另立大小或编码规则。只将目标前面的脚本目录记号还原为 shim 所在目录，按本机路径规则组合目标；不运行 shim，不展开其余 shell 表达式。识别不作整模板逐字节比对，不因无关或未知的环境赋值拒绝，不把任何第三方 shim 模板正文抄入仓库；测试自行写出只包含必要事实的最小 shim。安全边界是永远不经 cmd 执行，用户和模型的动态参数只能成为原生 argv 或标准输入的数据，不取决于 shim 是否与某一模板逐字相符。
 
-这个机制按安装入口类型工作，不按 harness 名分支。不会修改用户的原生配置、强制关闭功能、替换 Node 包版本或绕过定制脚本；自定义 wrapper 做了什么，解析器无法完整表达就明确不支持。候选拒绝仍可按现有选择规则继续寻找其他候选，并在结果中呈现失败路径与最终选择；这里禁止的是把同一个失败候选偷偷改用 shell 启动，不取消现有候选优先级规则。
+对已识别的 `.cmd`，把解析出的 JS 路径交给原来的命令组装过程，Node 选择复用 `_node_for` 的“先相邻、后发现”。相邻位置以原 shim 所在目录为准（现有 `_node_for:590–591` 本来就在解析符号链接前取 launcher 目录），不能改成深处的 node_modules/JS 目录；最终命令为 `[绝对 node.exe 路径, 绝对 JS 路径]`。Node 自己不再接受 batch 或 PowerShell 转发，也不递归解析 Node shim。ZCode 的 `provider_paths` 仍从 command 末项定位原来的 CLI 相邻配置，不能为了通过初始化而复制或猜造配置文件。
 
-`.bat`、未知 `.cmd`、`.ps1` 在新规则下都在 spawn 前报告“该启动脚本暂不支持，请选择原生可执行文件或受支持的 Node 入口”。删除 `_launch_command` 中 cmd 和 PowerShell 分支，删除原来的 PowerShell 命令构造测试，改测明确拒绝和无进程创建。保留 PowerShell 作为第二启动策略需要另一个保真与安全论证，本设计没有选择它。纯粹把正文搬到 stdin 已由现状实现，却不足以保护其他 argv；另写 cmd 转义器会继续承担多层引号、变量展开和不同 wrapper 的转发语义，故本设计不采用。
+删除 `_launch_command:631–641` 中 cmd 与 PowerShell 两个分支；未知 `.cmd` 和不支持的脚本类型在这个解析边界失败，候选诊断保留失败路径。候选拒绝后仍按当前优先级规则尝试其他候选，并呈现最终选择；禁止的是把同一个失败入口改用 shell 运行。四家共用入口类型规则，不按 harness 名另造机制，不改各家原生的任务输入、配置、登录、权限或工具。
+
+三家 `config.py` 的开发态条件已经要求 `HMB_*_CLI` 非空，后续 `value = env.get(...) or shutil.which(...)` 中的 which 走不到。Claude 的缺失值分支、Codex 的 which/app bundle/缺失值回退，以及 ZCode 的 which/DEFAULT_CLI 回退均是这个条件之下的死分支（分别见 `claude/config.py:53–68`、`codex/config.py:21–39`、`zcode/config.py:14–34`），实现时一并删除及清理无用导入/常量。开发态若显式给路径，就只解析这条路径；未给时按当前条件走 `command_for`。ZCode 为直接 JS 寻找 Node 的行为仍有实际用途，改为复用上述发现边界，不把它误当作死代码一起删掉。
+
+### 失败原因、命令行上限与版本
+
+本设计确定专用原因码 `harness.entry-unsupported`，参数为 `operation`，发现时取 `probe`；具体路径沿用候选诊断的 `path` 字段。含义是“已找到入口，但该入口类型或 Node 目标无法识别；请选择原生可执行文件或可识别的 npm Node 入口”。在 `discovery.PROBE_REASON_CODES`、`protocol/reason-codes.json` 和控制台中英文原因文本中注册，同步契约测试。不能把这个情况归为 `not-found`、`interpreter-missing` 或一般启动失败；它发生在创建进程之前，不运行版本或认证探针。Node 解释器确实缺失仍用既有 `node-missing`，两类失败不能混在一起。
+
+还要处理 Windows 命令行长度。`buddy/harnesses/run_contract.py:81` 的 `MAX_SCHEMA_BYTES` 为 65536，而 Claude `--json-schema` 会把整个 canonical JSON 放入 argv（`claude/config.py:132`）。Windows CreateProcess 的命令行上限是 32767 个 UTF-16 代码单元，含末尾 NUL；schema 即使符合请求大小上限，也可能无法形成可启动的 Windows 命令行，中文、emoji、引号与反斜杠的编码还会影响最终长度。不能只检查 schema 的 UTF-8 字节数，也不能只把各参数的 Python 字符数相加。
+
+在共享进程创建边界检查最终的完整 argv：使用与 Python Windows Popen 一致的 `subprocess.list2cmdline(argv)` 结果，计算其 UTF-16 代码单元数并加上结尾 NUL；超过 32767 时，在创建进程和登记创建意图之前明确失败，不截断 schema、参数或正文，也不自动改用另一套 CLI。检查放在 `protocol/owned_process.py` 的共同创建路径；`discovery.probe` 不经 owned_popen 的分支复用同一检查，每条创建路径只检查一次，不把检查散落到四个运行器。失败必须保留“未创建进程、已确认无进程需要停止”的现有归属证据约定，不能留下未决 spawn intent，不能被探针的通用异常处理吞成不明原因。
+
+长度失败确定为 `harness.command-line-too-long`，参数为 `operation`、`utf16Units` 和 `limit`，limit 为 32767；诊断只报告计数与上限，不复述大段任务/schema。发现探针与正式运行均保留这个明确原因。对接四家的原生错误结果时可以沿用各家的错误封装，但要保住同一原因和未创建进程的证据。此前没有为任意长参数执行提供保证，这个拒绝不是对 schema 的静默改写。CreateProcess 实际边界与这套计算在 Windows 上尚未验证，实现必须用原生假可执行文件确认临界值、非 BMP 字符和引号扩展，不调用真实 harness。
+
+新增专用原因码属于 Host 合同变化；实现这一批必须提升中版本，并把 `CONTRACT_VERSION` 更新为新中版本的 `.0`，同步 `pyproject.toml`、`uv.lock`、`protocol/contracts.py` 和 `tests/python/protocol/contract_signatures.json` 等版本约束。当前源码为 0.50.1、`CONTRACT_VERSION` 为 0.50.0，下一中版本由 Host 整合时确定，不能把这批当作仅补丁版本安装。C-Two 方法签名不因原因码变化而改写，但其新合同版本和既有签名摘要须一致；`tests/python/protocol/test_contract_version.py:36–44` 是对应检查。设计文档本身不改版本。
 
 | CLI | 本方案在源码调用层是否成立 | Windows 发行入口的未验证项与办法 |
 | --- | --- | --- |
-| Claude Code CLI | 成立：保留 stream-json，模型、effort 和 JSON schema 可继续作为原生进程的参数，不经 shell。 | 原生 `.exe` 的真实可用性、npm 安装是否提供可识别 Node shim均未验证。未来显式探针记录 CLI 与 npm/shim 版本、入口类型及完整转发样本；用无模型的 initialize 核对 schema 等参数是否原样到达。原生 Windows 权限档位是 W03 的独立边界。 |
-| Codex CLI | 成立：仍运行 app-server，并经标准输入传 thread/turn 请求。 | `.exe` 与 npm Node shim 的具体安装形态、原生进程对参数的解析未验证；未来核对入口，再用已有无 prompt 的 App Server 初始化/目录读取探针验证。不能因此改成 exec 的另一套运行器。 |
-| ZCode CLI | 成立：现有配置已经支持 `[node, JS]`；仍运行 app-server。 | Windows 是否有独立 CLI、npm shim 的内容、Node 版本要求与 provider 文件邻近布局未验证；未来收集版本化入口样本，用无 prompt 初始化核对。特别验证 `provider_paths(environment, command)` 在解析后的真实 JS 路径下仍找到原来的内置文件，不能复制或猜造配置来让检查通过。 |
-| DSH CLI | 成立：仍用原来的 ACP launcher 和 `--patch` 文件。 | 真实 Windows 入口和 npm shim、ACP 管道运行情况未验证；未来核对入口，用版本探针和无 prompt 的 ACP initialize/session 配置验证。停止证据和 Job 问题另按第二批验收。 |
+| Claude Code CLI | 成立：保留 stream-json，模型、effort 和 JSON schema 继续作为原生参数；最终命令行超限则在启动前明确失败。 | 原生 `.exe` 的真实可用性、npm 安装的目标是否满足识别条件均未验证。未来显式探针记录 CLI 与安装器版本、入口类型和识别结果，用无模型 initialize 核对参数；真实超长 schema 的原生接受能力不作承诺。原生 Windows 权限档位仍是 W03 的独立边界。 |
+| Codex CLI | 成立：仍运行 app-server，并经标准输入传 thread/turn 请求。 | `.exe` 与 npm Node shim 的具体安装形态、原生参数解析未验证；未来核对入口，再用已有无 prompt 的 App Server 初始化/目录读取探针验证。不能改用 exec 的另一套运行器。 |
+| ZCode CLI | 成立：现有配置已经支持 `[node, JS]`；仍运行 app-server。 | Windows 独立 CLI、shim 目标、Node 版本要求与 provider 文件邻近布局未验证；未来核对入口，用无 prompt 初始化验证。特别验证解析后真实 JS 入口仍能定位原来的内置 provider 文件。 |
+| DSH CLI | 成立：仍用原来的 ACP launcher 和 `--patch` 文件。 | 真实 Windows 入口、shim 目标和 ACP 管道运行情况未验证；未来核对入口，用版本探针和无 prompt 的 ACP initialize/session 配置验证。停止证据和 Job 问题按第二批验收。 |
 
-表中“成立”只表示本项目现有协议无需为这个启动方案另造通道；不表示厂商 CLI 在 Windows 上已经受测。真实 harness 探针按计划放在首次发版之后，经后续明确授权运行，结果记录 CLI 形态、版本、系统和验证范围。本轮与实现的常规 CI 均只使用假程序，不访问真实 harness 或调用模型。
+表中“成立”只表示本项目现有协议无需为此另造通道，不表示厂商 CLI 已在 Windows 受测。真实 harness 探针按计划放在首次发版之后，后续明确授权后记录 CLI 形态、版本、系统和验证范围。本轮与实现的常规 CI 均只使用假程序，不访问真实 harness 或调用模型。
 
-### PATHEXT、路径来源与缓存
+### 固定候选、路径来源与 PATH
 
-W02 的候选枚举改为使用调用方传入的环境。在一个公共候选函数中，枚举该环境 PATHEXT 给出的名字，对每个现有来源目录按 Python 3.12 的 `shutil.which` 查找规则核对，限定在该绝对目录内、排除隐式当前工作目录搜索，去重并保留后缀顺序；保留同目录多个候选以维持现有版本选择，而不只取 which 的第一个返回值。不再维护另一张固定 `.exe/.cmd/.ps1` 列表。显式 JS/无后缀 Node 与手动路径保留；没有列在 PATHEXT 的 `.ps1` 不额外猜测。PATHEXT 只决定去哪里找什么名字，解析器再按支持的入口类型给出命令或明确拒绝，不能把 PATHEXT 当作执行授权。
+W02 的 Windows 候选枚举明确保留固定表，但收窄为 `.exe`、`.cmd`；不改用 PATHEXT 枚举或 shutil.which，不增加系统可能执行而本产品不支持的类型。`_variants`、`has_candidate` 与 `_node_for` 使用同一候选规则，Node 最终只选原生 `.exe`。PATHEXT 未设、为空、改变顺序、添加 `.JS/.PS1/.BAT/.COM` 都不改变产品枚举的名字和优先级。环境白名单可以继续传递用户的 PATHEXT，这与产品选定哪些 harness 入口是两回事；用户的配置不被产品改写。
 
-具体 `shutil.which` 在自定义 environment 下的 PATHEXT、大小写和当前目录行为必须先读实现环境的 Python 3.12 标准库并在 Windows CI 核对；不能在查找时临时改进程全局环境，因为服务有并发扫描。测试覆盖 PATHEXT 未设、空值、自定义顺序、大小写与重复项，以及当前目录的同名诱饵。`has_candidate` 和 `_node_for` 使用同一规则，避免 PATH hint 与真正发现各认一套名字；保留有界候选数和原有来源优先级。
+注册表读取在输入边界保留类型，只对 `REG_EXPAND_SZ` 按 Windows 环境展开规则展开一次，普通 `REG_SZ` 不误展开，明确所用环境来自 Windows。常见目录从 APPDATA、LOCALAPPDATA、ProgramFiles 等实际环境/系统目录来源取得，不重造 `C:` 和 AppData 布局；缺少来源时不猜另一盘符。Windows app bundle 的默认位置没有证据，不在这批补猜。注册表展开与目录来源各有独立测试，不能把候选后缀修正当作 W02 全部完成。
 
-注册表读取在输入边界保留类型，只对 `REG_EXPAND_SZ` 按 Windows 环境展开规则展开一次，明确区分注册表来源和给定进程环境；普通 `REG_SZ` 不误展开。常见目录从 APPDATA、LOCALAPPDATA、ProgramFiles、SYSTEMROOT 等实际环境/系统目录来源取得，不重造 `C:` 和 AppData 布局。优先用已有目录，缺少来源时不猜另一盘符；Windows app bundle 的默认位置没有证据，不在这批补猜。新增路径来源测试与 PATHEXT 测试分别覆盖它们，不能把后者通过当成 W02 全部完成。
+已核实 `native_environment:303–313` 目前反向遍历整个 command，对每一个绝对且存在的文件把其父目录前置 PATH。解析为 `[node.exe, JS]` 后会把 JS 目录和 Node 目录都前置，而且反向遍历使 JS 目录先于 Node 目录；Windows 默认 PATHEXT 包含 `.JS`，后续按名字启动程序时可能命中那个目录中的 JS。这个目录扩大来自产品，而不是用户自己提供的 PATH；具体命中行为未在本轮 Windows 实测。
 
-缓存不能继续只看到 shim：当前 `candidate_snapshot:244–265` 的候选和 Node stat 指纹不包含从 `.cmd` 提取的 JS 入口；`HarnessHealth.refresh:190–204` 可能按位置指纹直接重用记录。实现时把解析出的 Node 与 JS 文件 stat 纳入命令选择的失效依据，wrapper 自身仍保留指纹；只改 shim、只改 JS、只换 Node 和删除任何一项，都应使下次 preflight 重新发现。保留位置扫描只 stat 不读取候选内容的性质（`test_harness_discovery.py:78–95`），可从已选 command 中的绝对文件路径派生这些 stat，首次解析后再形成完整位置签名；不在每轮廉价扫描重读所有 wrapper。
+实现时只从 `command[0]` 取实际执行程序的目录并前置 PATH；command 为空则不前置，原来环境中的 PATH 照常拼接在后，不从其余绝对参数取目录，不移除用户原有的路径或 PATHEXT。对 `[node.exe, JS]` 只加 Node 目录，对协议测试的 `[sys.executable, fixture]` 只加 Python 目录。单元测试逐项核对前缀和保留的原 PATH，Windows 整链用例在 JS 目录放同名诱饵，确认它不会因这次前置逻辑获得搜索优先级。
 
-新的位置签名纳入固定的本次启动规则标识，使旧健康缓存的 cmd/PowerShell command 在新执行的 preflight 中自然失效并重新发现；这是现有不透明指纹的计算规则，无须增加一个兼容旧 launcher 的分支。`runtime_selection.command_for` 继续消费此次发现的 argv，不能把旧缓存命令未经 preflight 交给新的执行。检查 `buddy/runtime/execution.py:389` 起的 preflight 链、目录读取和其他服务调用，给旧健康记录加入回归用例，证明实际运行前已经刷新；不能只测显式 refresh。
+### 缓存边界
 
-缓存方案保持 `command` 为 argv、既有健康记录字段含义和跨进程事实格式不变，不新增存储字段或改写封存证据；位置签名的 Node/JS stat 从已有 command 派生。若实现确实需要新存储结构或服务与执行之间的新字段，应先调整本设计，按仓库规则作显式升级、扩充 schema 27 基准夹具并重判中版本与 CONTRACT_VERSION，不能悄悄靠旧新双格式共存。已运行的执行仍用其固定运行时，不据新源码声称它们已采用新启动规则。
+沿用现有位置指纹、过期与失败失效机制。`candidate_snapshot:244–265` 已记录 shim 自身与 Node 候选的 stat；不把解析出的 JS 入口 stat 纳入签名，不做先解析再补签名的两阶段过程。`HarnessHealth.refresh:190–204` 按现有位置指纹和有效期判断是否重用，`READY_SECONDS` 在 `blackboard/service/harness_health.py:17` 为 3600；启动失败可经既有 `invalidate:129–148` 路径令记录失效。JS 内容单独改变不会立即改变位置签名，最多到现有过期/重新发现边界再重判，接受这个边界，不添加第二种监测机制。
+
+Windows 尚未发版，没有要兼容的 Windows cmd/PowerShell 健康记录存量；不向位置签名加入启动规则标识，不为旧记录加迁移、保留分支或回归用例，不因这批新增存储字段或 schema 升级。只验证当前形态下已有的 shim 指纹、正常过期和真实启动失败后的失效路径；不把封存的执行证据改写为新启动描述。本批中版本变化由新增 Host 原因码触发，和存储升级无关。
 
 ## 5. 测试里的假 harness
 
-先校正数量的含义：在这个提交中，以 `tests/python/**/test_*.py` 为范围全文搜索 `chmod`，得到恰好 42 个文件；同范围出现字面 `#!` 的只有 11 个文件。前者包括凭据权限、目录私有性、Git 可执行位和故意拒绝的路径，并非 42 个文件都“创建 shebang 假 harness”。例如 `cli/test_cli.py:326–357` 是凭据/控制文件，`install/test_backup_windows.py:23–25` 是备份材料权限，`buddy/harnesses/claude/test_native_run.py:73–75` 则对共享 Python fixture chmod。迁移验收应清除所有需要启动的 POSIX 假入口，不能机械删除这 42 个文件中的 chmod，也不能把原本仅测试模式位的材料都变成可运行程序。
+数量的口径保持核实结果：这个提交的 `tests/python/**/test_*.py` 中含 chmod 的恰好 42 个文件，含字面 `#!` 的只有 11 个。42 个文件还包括凭据权限、目录私有性和 Git 可执行位；不能按这个数量把所有 chmod 都改成启动夹具。需要解除的是对 POSIX 直接执行 shebang 的依赖，选择记录通道已有完整 argv 能力，协议测试无需每次再造一个系统 launcher。
 
-新增测试侧 `tests/python/fake_executable.py`，给出一个公共形态 `make_fake_executable(directory: Path, name: str, *, source: str | Path) -> Path`。`source` 是内联 Python 测试程序或现有 Python fixture 路径，返回在该测试私有目录生成的真实入口路径：Windows 为 `<name>.exe`，macOS/Linux 为 `<name>`。它只负责形成可执行入口，不伪造健康结果、模型目录或权限声明；版本、登录、初始化和协议行为仍由各家原来的 fixture 负责。输入 name 是单个文件名，输出材料全部属于调用测试的私有根，正文显式 UTF-8/LF；不 chmod 或覆写仓库中的共享 fixture。
+只为“发现加启动整条链”的用例提供 `tests/python/fake_executable.py` 中的 helper，形态为 `make_fake_executable(directory: Path, name: str, *, source: str | Path) -> Path`。它返回产品实际能发现的入口路径：Windows 为 `<name>.exe`，macOS/Linux 为 `<name>`；版本、认证、初始化和协议行为仍由 fixture 自己提供。四家各一条整链用例经过真实发现、选择记录和运行器；手动路径与 PATH 可以作为同一用例的子场景，不把这个生成器扩散到所有协议测试。
 
-选择成熟的 console-script launcher 生成器，建议将 `distlib` 作为仅供检查环境使用的依赖锁定，在三系统由同一个 helper 使用其 ScriptMaker/PE launcher 能力生成入口，指定当前检查进程的 Python 3.12。当前 `pyproject.toml`、`uv.lock` 没有 distlib；这是实现需要补入的依赖，不依赖机器恰好安装的 pip 或其私有 vendored 包，不下载浮动版本，不自己拼写 PE 或在 CI 临时编译 C 程序。准确 API、x64 launcher 资源、许可与发行包包含情况本轮未验证；实现时从锁定分发包的公开接口核对并运行 helper 的三系统测试后，才可把它描述成可用。
+在 `pyproject.toml` 的 `[dependency-groups] dev` 中加入并在 `uv.lock` 锁定 distlib，只供上述整链测试生成 console-script 入口，明确用当前检查进程的 Python 3.12。当前项目没有 distlib 依赖，这是实现新增的开发依赖，不进入产品运行依赖；检查环境安装该组，不依赖机器恰好有的 pip 私有包，不下载浮动版本，不自己拼 PE 或编译 C 程序。distlib 的公开脚本 API、x64 launcher 资源、许可与分发包包含情况本轮未验证，实施时核对锁定分发包并在三系统验证。
 
-helper 生成一份自包含的 Python 包装脚本，再经生成器的公开脚本接口形成系统入口，不依赖 harness 环境保留测试模块的 PYTHONPATH。内联 source 落在私有根；Path source 只读执行原 fixture，例如使用标准库 runpy 的 `run_name='__main__'`，并显式给其相邻导入保留搜索路径，避免搬走 `mock_codex.py` 后丢掉 `protocol_items.py`（后者见 `tests/python/buddy/harnesses/codex/fixtures/mock_codex.py:11`）。保持原 fixture 的 `__file__`、参数尾部、stdin/stdout/stderr、退出码、信号/取消观察和相邻资源语义，不 chmod 共享源文件，不将参数串交给 shell。生成器的公开脚本 API 在实现时核实，不能依赖私有方法。Windows PE launcher 可能多出一个启动器进程，必须由生命周期测试观察其子 Python 与后代的结束，不能在日志里把 launcher 退出等同于 harness 已停止；POSIX 的有空格解释器路径也要由生成器正确处理并测试。这些属于 helper 的可验证要求，不能把库名当作完成证明。
+helper 生成自包含的 Python 包装脚本，再经生成器公开接口形成入口，不依赖 harness 环境保留测试模块的 PYTHONPATH。内联 source 落在私有根，Path source 只读运行原 fixture，例如通过标准库 runpy 的 `run_name='__main__'` 并给相邻导入保留搜索路径，使 `tests/python/buddy/harnesses/codex/fixtures/mock_codex.py:11` 仍能导入 protocol_items。保留 `__file__`、argv 尾部、标准流和退出码，不 chmod 或改写共享 fixture，不经 shell 传参。整链用例观察 Windows launcher 的子 Python 与后代结束，不能把 launcher 自己退出当作停止证明。
 
-调用点只拿返回路径。例如发现测试把 `make_fake_executable(bin_dir, 'codex', source=...)` 的返回值交给 `discover(..., manual_path=...)`，并另测仅 PATH 发现；Claude/Codex/ZCode 协议测试将返回路径放进自己的 `HMB_*_CLI` 或真实候选目录，DSH 也通过同样入口走发现与 ACP 启动。这样 Windows 经产品原有 `.exe` 路径运行，POSIX 经原生可执行路径运行；不能为测试向产品增加识别 Python 文件、预制 ready record 或测试专属脚本语法的通道。已有只测试传输且显式用 `[sys.executable, fixture]` 的用例（如 `dsh/acp/support.py:57–59`）本来就可移植；保留传输单元测试，并新增经 helper 发现的 DSH 整链用例。
+协议与运行器测试统一复用产品现有的选择记录通道。直接运行的测试用 `runtime_selection.bound`（19–27 行）给出 `{'harness': 名字, 'status': 'ready', 'command': [sys.executable, str(fixture)]}`；需要跨 controller 子进程的测试把按 harness 名索引的同形记录写入私有 JSON 文件，通过 `HMB_HARNESS_RECORD_FILE` 传入，`selected:30–38` 读取，`controller_environment:59–88` 已能传递/物化选择记录。必须去掉相应 `HMB_*_CLI` 覆盖，避免三家开发态分支抢先命中；需要用户环境、fixture case/state 或 ZCode 邻近资源的内容仍按原通道提供。
 
-需要迁移的已核实入口包括 `buddy/harnesses/test_harness_discovery.py` 的本地 executable 工厂；Claude 的 `test_claude.py`、`test_claude_config.py`、`test_claude_worker.py`、`test_native_run.py`、`test_claude_tool_evidence.py`；Codex 的 `test_codex.py`、`test_in_turn_inquiry.py`、`test_native_run.py`；ZCode 的 `test_native_config.py`、`test_zcode.py`、`test_zcode_request_input_probe.py`、`test_zcode_tool_evidence.py`；以及 `test_adapter_usage.py`、`buddy/roles/test_registered_run_wiring.py`、`blackboard/evaluation/test_other_native_observations.py` 对共享 fixture 的直接执行。`protocol/test_path_state.py`、`test_public_state.py` 的“不得调用原生程序”哨兵与 `console/test_console.py` 的诱饵也用同一 helper，避免 Windows 上由于脚本根本起不来而出现假通过。
+这不是为测试新增生产接口：现有 `codex/test_native_run.py:1754–1778` 已用 `[sys.executable, native.py]` 配合 bound；`dsh/test_no_tool_dsh.py:45–75` 已用私有 record 文件。测试保留真实 Python 子进程、原生协议、错误与归属观察，所省略的是这类测试不负责的命令发现。只有每家一条整链用例负责从真实路径证明发现和启动，不能拿选择记录测试替代它；也不能为测试给生产发现增加 `.py` 支持。
 
-不能把迁移限制在 chmod 命中：`buddy/harnesses/codex/test_no_tool_codex.py:56` 直接把已跟踪的 shebang fixture 放进 `HMB_CODEX_CLI`，同目录的 `test_codex_continuation.py`、`test_codex_tool_evidence.py`、`test_delete_sessions.py` 和 `blackboard/tasks/test_host_workflow_worker.py:151` 也有 fixture 入口或消费者，应随公共 fixture 工厂一并迁移；`buddy/runtime/test_worker_sessions.py:90–99` 复用另一个测试的 setup，须确认它取得 helper 返回路径。实施清点须联合检查 shebang、chmod、HMB_*_CLI、选中 command、fixture 路径及被启动的子进程，验收标准是所有需要启动的假程序都用同一 helper 或本来可移植的显式 Python argv，不能以“42 个文件已动过”代替整条启动链的验证。
+迁移清单因此缩小到两类。`buddy/harnesses/test_harness_discovery.py` 不再用本地 executable 工厂为所有场景生成 launcher，把真实发现加启动的断言集中到四家各一条整链用例并使用 distlib helper；纯候选/解析单元测试只造文件与必要的 probe 边界 mock，直接检验 probe 生命周期的用例用显式 Python argv，保留原来的实际子进程观察。共同的参数保真、长度和拒绝类型用例复用这四条整链测试的假入口，不新增四套 launcher 工厂。Claude 的 `test_claude.py`、`test_claude_worker.py`、`test_native_run.py`、`test_claude_tool_evidence.py`，Codex 的 `test_codex.py`、`test_in_turn_inquiry.py`、`test_native_run.py`、`test_no_tool_codex.py`、`test_codex_continuation.py`、`test_codex_tool_evidence.py`、`test_delete_sessions.py`，ZCode 的 `test_native_config.py`、`test_zcode.py`、`test_zcode_request_input_probe.py`、`test_zcode_tool_evidence.py`，以及 `test_adapter_usage.py`、`buddy/roles/test_registered_run_wiring.py`、`blackboard/evaluation/test_other_native_observations.py`、`blackboard/tasks/test_host_workflow_worker.py` 的协议 fixture 改用选择记录，不生成可执行副本；`buddy/runtime/test_worker_sessions.py:90–99` 复用的 setup 随对应工厂修改。已经采用显式 Python argv 的 ACP 传输测试保持现有方式。
 
-T03 中假 uv、假 Python、计数 Git wrapper 等属于共同的“假可执行文件”问题：`install/test_runtime.py:88–117`、`install/test_launcher.py:31–61`、`blackboard/tasks/test_workspace_batch.py:266–269` 的通用测试程序改写为 Python 并使用同一 helper。夹具内部再生成 venv 解释器时也要使用本机 `Scripts/python.exe` 或 `bin/python` 的布局，不能只修最外面的入口。故意不可执行、格式损坏、POSIX 信号、FIFO 或文件 mode 的测试保留各自明确的目的和系统条件；不能给整文件加 Windows skip 来掩盖本应共用的启动契约。T03 其他未涉及的文件占用与权限机制继续由原计划负责。
+`claude/test_claude_config.py` 等对显式 CLI 入口的边界测试用上述整链测试入口或 mock 检查解析调用，不把所有配置测试都变成生成器测试。路径哨兵和诱饵若需证明绝无启动，应断言产品 spawn 边界未被调用；若需要运行它来检验发现，就归入整链用例。凭据 chmod、Git mode、私有目录测试、假 uv/安装布局、FIFO、信号等 T03 其他内容不因本设计批量改写或给整文件加 Windows skip，仍按各自系统机制处理。验收清点联合检查 chmod、shebang、HMB_*_CLI 与实际被启动的 fixture，确保所有共用的协议测试不再把 shebang 路径当可执行文件，不要求“42 个文件全部动过”。
 
 ## 实现文件与验证
 
-实现预计修改 `src/hey_my_buddy/buddy/harnesses/discovery.py`，新增共享 `launch_command.py`，收敛 `claude/config.py`、`codex/config.py`、`zcode/config.py` 的开发态入口；调整 `runtime_selection.py` 与 `blackboard/service/harness_health.py` 的选择及缓存失效衔接，并核对 `buddy/runtime/execution.py` 的 preflight。四个 `native_run.py` 只在确有调用点需要收敛时修改，不在其中增加平台 shell 分支。解析错误须在发现诊断中保留路径和可操作原因，沿用现有失败结果外形；若需要新增结构化 reason code，则同步 `protocol/reasons.py` 及其约束测试，并按 Host 合同变化审定版本，不能用 `not-found` 掩盖“已找到但不支持”。
+实现修改 `src/hey_my_buddy/buddy/harnesses/discovery.py` 的现有入口识别、Node 选择、固定候选、注册表展开、目录来源、PATH 前置和原因映射；不新增入口解析模块，不改健康位置签名。三家 `claude/config.py`、`codex/config.py`、`zcode/config.py` 删除走不到的回退代码，显式路径复用原有解析边界。`protocol/owned_process.py` 加共享的 Windows 最终命令行长度边界，`discovery.probe` 的普通 Popen 分支复用；四家 `native_run.py` 只在需要保留明确长度失败及归属证据的映射处调整，不加平台 shell 逻辑，不另造协议。
 
-测试侧新增 `tests/python/fake_executable.py` 和有实际启动断言的 helper 测试，迁移上节列出的所有可执行夹具调用点，清点其余 chmod 命中以免漏掉间接复制/运行共享 fixture 的路径；`pyproject.toml`、`uv.lock` 以及检查环境的依赖准备补入锁定的 launcher 生成依赖。新增 launcher 解析专项测试可放在 `tests/python/buddy/harnesses/test_launch_command.py`，继续扩充 `test_harness_discovery.py`、`blackboard/service/test_harness_health.py` 和四家的现有运行器测试。实现行为稳定后更新 `docs/reference/harness-integration.md`、相关 harness 参考页与 `docs/reference/operations.md` 的支持入口说明，验收记录写入 `docs/acceptance/`；本轮不改这些文件。
+新增原因注册放在 `protocol/reason-codes.json`，对应消费者由 `protocol/reasons.py` 读取；更新 `apps/console/src/i18n/zh/reasons.ts` 和 `en/reasons.ts` 的文本及其原因码一致性测试。中版本及 CONTRACT_VERSION 的修改同步 `pyproject.toml`、`uv.lock`、`protocol/contracts.py`、`tests/python/protocol/contract_signatures.json` 和既有版本约束材料，不为未发布 Windows 记录新增存储升级。最终变更若触及前端原因文本，按仓库规则运行前端测试；只有纯 Python 时才无需前端检查，不因本批仅改原因文案要求浏览器布局检查。
 
-测试按以下独立证据验收，均不用真实 CLI 或模型：
+测试侧新增 `tests/python/fake_executable.py`，dev 组锁定 distlib；在 `tests/python/buddy/harnesses/test_harness_discovery.py` 或其同目录专项文件集中四条整链测试，其他协议调用点改用现有 record/bound。扩充 `blackboard/service/test_harness_health.py` 的正常过期和启动失败失效测试、进程创建边界的长度测试及三家 config 的不可达代码清理测试。实现稳定后更新 `docs/reference/harness-integration.md`、相关 harness 参考页、`docs/reference/operations.md` 的支持入口与长度边界说明，验收记录写入 `docs/acceptance/`；本轮只改本文。
 
-1. 在原生 Windows CI 上，经公开发现路径找到 helper 生成的四家入口，完成 `--version`、必要的假登录、各自假初始化以及一次假协议回合；同时覆盖手动路径与仅 PATH、已选记录交给运行器的路径。macOS/Linux 跑同组用例，证明 helper 不使生产解析器出现测试特例。
-2. 给入口、Node、JS、私有状态根和 cwd 使用 NTFS 允许的空格、括号、中文、`&`、`^`、`%`、`!` 组合；把 `& | < > ^ % " !`、换行、反斜杠尾部、空串、中文和超长正文放在参数/协议数据里。`| < > "` 不能作为 Windows 文件名字符，不伪造这样的目录测试。假进程逐元素记录实际 argv，逐字节核对 schema、模型与 cwd，逐字节核对 stdin 正文，并用私有 sentinel 证明没有附加命令被执行。
-3. npm shim 的解析用完整已核实模板样本覆盖相邻 Node、PATH Node、CRLF、大小写扩展名和 JS 相对位置；用假 Node 原生入口记录真实转发结果。未知模板、额外命令、未知环境赋值、动态变量、缺失入口/解释器、超限文件、错误编码和递归 wrapper 均在 spawn 前失败。负例断言没有创建子进程；不能仅断言解析函数返回了列表。四家的 fixture 初始化仍核对原生参数，尤其 Claude schema 与 ZCode provider 路径。
-4. PATHEXT、注册表类型展开、常见目录实际环境、隐式 cwd 诱饵分别测试；`.bat`、`.ps1`、`.com` 即使被发现也明确不可启动。发现探针与正式运行必须采用同一个解析结果，`HMB_DEV_SOURCE` 的显式路径也走同一边界。
-5. 从旧健康记录中的 cmd/PowerShell 前缀开始，不手动 force refresh，走真实 preflight 取得新命令；分别替换 shim、Node、JS，确认缓存失效。未知模板被拒时保留失败诊断；其他可用候选按现有优先级选出且显示最终来源。位置扫描继续只 stat，不读取所有候选文件。
-6. helper 证明版本/认证分支、退出码、无缓冲双向协议、EOF、取消、快速退出和后代进程的真实结束；测试环境的 Python 或夹具路径带空格/中文时仍可启动。进程未知仍是未知，不把第二批 Job/ACL 缺陷用 mock 或放宽断言抹掉。未通过的 Windows 停止证据仍要单独上报。
+实施按以下证据验收，均不使用真实 CLI 或模型：
 
-按仓库检查入口运行受影响测试：`uv run --frozen python -m hey_my_buddy.cli.checks` 后跟具体测试文件或目录；清除继承的日常 runtime、state 和 agent 凭据变量，依赖只在锁定范围内安装。实现影响发现、测试共同设施和多个运行器，合入前在三个系统跑完整 Python 检查并保留结果。若第二批的独立问题仍阻断检查，逐项报告实际失败，不声称整轮通过。本项没有改前端，不为设计或纯 Python 入口变更重复跑前端/浏览器检查。
+1. 原生 Windows CI 上四家各一条整链用例，以 helper 入口经过发现、必要的假认证/版本探针、选择记录、初始化和假协议回合；macOS/Linux 跑同样四条用例。协议/运行器用例则经 record/bound 启动 `[sys.executable, fixture]`，无 shebang 执行依赖，argv、标准流、退出码与原来的断言一致。
+2. 在入口、Node、JS、私有根和 cwd 中使用 NTFS 允许的空格、括号、中文、`&`、`^`、`%`、`!`；在参数/协议中使用 `& | < > ^ % " !`、换行、尾部反斜杠、空串和非 BMP 字符，逐元素核对真实 argv、逐字节核对 stdin，并确认没有私有 sentinel 附加命令被执行。`| < > "` 不能作为 Windows 文件名字符，不造这样的目录测试。
+3. shim 样本由测试自行写出最小内容，覆盖 `%dp0%` 与 `%~dp0`、引号目标、相邻 Node/PATH Node 和已有目标；增加无关环境赋值仍可接受的正例。不带引号、零个/多个目标、非 Node 程序、缺失目标或超出 `_record_text` 现有界限时，在 spawn 前以 `harness.entry-unsupported` 失败；缺少 Node 用 `node-missing`。不保存第三方模板全文，不测试逐字节模板相等。
+4. 固定候选只含 `.exe/.cmd`，不同 PATHEXT 值不改变候选；`.ps1/.bat/.com/无后缀` 自动搜索不出现，手动指定时明确拒绝。注册表按类型展开、常见目录实际环境、三家显式开发路径及 PATH 只前置 `command[0]` 分别测试；JS 目录的同名诱饵不获额外优先级。保留位置扫描只 stat 的原有测试。
+5. 在最终 list2cmdline 编码后测 32767 个 UTF-16 代码单元的边界，计入末尾 NUL、emoji 的代理对、引号与反斜杠的编码扩展及 exe/Node/JS 前缀；超限时没有创建进程和未决 spawn intent，原因是 `harness.command-line-too-long`，schema 与任务均未截断。用请求大小合法但命令行过长的 Claude schema 覆盖这条实际路径，并检查探针异常映射没有吞掉原因。
+6. 保留 shim 自身指纹变化、ready 记录正常过期、启动失败后现有 invalidate 的测试，不新增 JS stat 或两段签名用例。四条整链与 record/bound 协议测试均观察 EOF、取消、快速退出和子孙进程的真实结束；进程未知仍是未知，不把第二批 Job/ACL 问题以 mock 或放宽断言抹掉。
 
-本轮验证边界：只读源码、规划与 ADR，完成设计文档和静态一致性检查；没有实现 parser/helper，没有运行 Python 检查套件，没有 Windows 启动、真实 CLI、模型调用、安装、日常看板或服务验证。Host 审过本设计后另开实现微任务，不能把本文或独立只读审查当作实现验收。
+按仓库检查入口 `uv run --frozen python -m hey_my_buddy.cli.checks` 后跟受影响文件或目录运行，清除继承的日常 runtime、state 和 agent 凭据变量，只安装锁定依赖与 dev 组。实现触及发现、进程创建、测试共同设施和 Host 原因码，合入前在三个系统跑完整 Python 检查并保留结果；更新前端原因文本则另跑 `npm --prefix apps/console test`。第二批独立问题仍阻断时逐项报告实际失败，不声称整轮通过。设计文档修改不运行这些实现测试。
+
+本轮验证边界：按 Host 的十项审查意见修订并复核源码位置、PATH 前置、现有记录通道、原因注册与版本约束；没有实现 parser/helper，没有运行 Python 检查套件，没有 Windows 启动、真实 CLI、模型调用、安装、日常看板或服务验证。Host 审过定稿后另开实现微任务，本文不作为实现验收。
