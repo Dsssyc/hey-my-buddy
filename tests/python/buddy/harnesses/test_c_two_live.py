@@ -1558,15 +1558,31 @@ def run_deadline_client() -> int:
                                 token=config["token"], state_dir=Path(config["stateDir"]))
     phases = []
     connection_elapsed = []
+    connection_succeeded = False
     native_connect = cc.connect
+    native_call = channel._call
+    window_clock = mock.Mock(return_value=1000.0)
 
-    def recording_connect(*args, **kwargs):
-        started = time.monotonic()
+    def recording_call(*args, **kwargs):
         try:
-            return native_connect(*args, **kwargs)
+            return native_call(*args, **kwargs)
         except CallDeadlineExceeded as error:
+            # Either connect or the subsequent call can exhaust the window.
             phases.append(error.transport_phase)
             raise
+
+    def recording_connect(*args, **kwargs):
+        nonlocal connection_succeeded
+        started = time.monotonic()
+        try:
+            connected = native_connect(*args, **kwargs)
+            connection_succeeded = True
+            if config["mode"] == "warm":
+                # Advance only the product's window clock, after real C-Two
+                # connection success. The SDK keeps its real clock and gets
+                # zero remaining call budget, regardless of machine speed.
+                window_clock.return_value = 1005.0
+            return connected
         finally:
             connection_elapsed.append(time.monotonic() - started)
 
@@ -1587,7 +1603,8 @@ def run_deadline_client() -> int:
                                  {"inquiryDelivery": "cooperative-checkpoint"})
             reply({"stage": "ready"})
             case.assertEqual(sys.stdin.readline().strip(), "go")
-            with mock.patch.object(cc, "connect", side_effect=recording_connect):
+            with mock.patch.object(cc, "connect", side_effect=recording_connect), \
+                    mock.patch.object(channel, "_call", side_effect=recording_call):
                 started = time.monotonic()
                 if config["mode"] == "budget":
                     answer = channel.request(inquiry_request(), timeout_ms=500)
@@ -1599,17 +1616,29 @@ def run_deadline_client() -> int:
                     reply({"stage": "budget-expired", "elapsed": elapsed,
                            "connectionElapsed": connection_elapsed[0], "reason": answer.reason_code})
                 else:
-                    answer = channel.observe(limit=1, timeout_ms=150)
+                    with ExitStack() as window:
+                        if config["mode"] == "warm":
+                            window.enter_context(mock.patch.object(
+                                ctl, "time", SimpleNamespace(monotonic=window_clock)))
+                        answer = channel.observe(
+                            limit=1, timeout_ms=5000 if config["mode"] == "warm" else 150)
                     elapsed = time.monotonic() - started
                     case.assertEqual((answer.observed, answer.reason),
                                      (False, "transport-window-expired"))
                     case.assertEqual(phases, ["pre_dispatch"])
-                    case.assertGreaterEqual(elapsed, 0.14)
-                    case.assertLess(elapsed, 1.0)
+                    if config["mode"] == "warm":
+                        case.assertTrue(connection_succeeded)
+                    else:
+                        case.assertGreaterEqual(elapsed, 0.14)
+                        case.assertLess(elapsed, 1.0)
                     reply({"stage": "expired", "phase": phases[0], "elapsed": elapsed})
                     case.assertEqual(sys.stdin.readline().strip(), "resume")
                     case.assertEqual(channel.capabilities().inquiry_delivery,
                                      "cooperative-checkpoint")
+                    if config["mode"] == "warm":
+                        case.assertEqual(json.loads(raw.capabilities(
+                            canonical_json(query.to_payload()))),
+                            {"inquiryDelivery": "cooperative-checkpoint"})
                     reply({"stage": "recovered"})
         return 0
     finally:
@@ -1678,18 +1707,21 @@ class NativeDeadlineTests(LivePeerCase):
                 peer.assert_group_gone()
 
     def connect_expiry(self, mode):
+        """Expire a cold connection or a warm call, then reuse the client."""
         peer = self.spawn()
         client = None
         paused = False
         try:
             client = self.start_client(peer, mode)
-            os.killpg(peer.process.pid, signal.SIGSTOP)
-            paused = True
+            if mode == "fresh":
+                os.killpg(peer.process.pid, signal.SIGSTOP)
+                paused = True
             self.client_command(client, "go")
-            fact = self.client_line(client, 2.0)
+            fact = self.client_line(client, 7.0 if mode == "warm" else 2.0)
             self.assertEqual((fact["stage"], fact["phase"]), ("expired", "pre_dispatch"))
-            os.killpg(peer.process.pid, signal.SIGCONT)
-            paused = False
+            if paused:
+                os.killpg(peer.process.pid, signal.SIGCONT)
+                paused = False
             self.client_command(client, "resume")
             self.assertEqual(self.client_line(client, 2.0)["stage"], "recovered")
             self.assertEqual(client.wait(timeout=3), 0)
