@@ -558,7 +558,7 @@ class _TurnCollector:
                         self.root_stop_requested = True
                         self.root_unanswered_input = self.bridge.report()["unansweredDelivered"] > 0
                         self._request_interrupt()
-                        self._native_handle.terminate(grace_seconds=1.0)
+                        _halt_owned_group(self._native_handle, self._connection.deadline)
                 self._observe_inquiry_tool(frame)
                 self.bridge.note_event({"kind": frame.get("type") or "event"},
                                        "finishing" if self.evidence.result is not None else "running")
