@@ -15,13 +15,14 @@ from unittest.mock import Mock, patch
 
 from hey_my_buddy import locking, process_observation as observation
 from hey_my_buddy.cli import checks
+from hey_my_buddy.paths import native_path
 from hey_my_buddy.blackboard.tasks import storage
 from process_observation_fakes import native_references, proc_references, process, processes
 
 
 def hold_lock(path: Path) -> int:
     """An open fd that owns ``path``'s lock until the caller closes it."""
-    fd = os.open(path, os.O_RDWR)
+    fd = os.open(native_path(path), os.O_RDWR)
     locking.lock(fd)
     return fd
 
@@ -151,6 +152,51 @@ class ChecksEnvironmentTests(unittest.TestCase):
 
 
 class ResidueObservationTests(unittest.TestCase):
+    def test_directory_with_a_lifetime_lock_name_is_not_silently_dropped(self):
+        with tempfile.TemporaryDirectory(prefix="hey-my-buddy-checks-test-") as raw:
+            root = Path(raw)
+            (root / "board-owner.lock").mkdir()
+            with self.assertRaises(OSError):
+                checks.held_locks(root)
+
+    def test_long_lock_scans_do_not_enter_outside_links(self):
+        with tempfile.TemporaryDirectory(prefix="hey-my-buddy-checks-test-") as raw:
+            container = Path(raw)
+            root = container / "private"
+            state = root
+            while len(str(state)) < 310:
+                state /= "directory-" + "a" * 35
+            native_path(state).mkdir(parents=True)
+            for name in ("board-owner.lock", "control-daemon.lock"):
+                native_path(state / name).touch()
+            outside = container / "outside"
+            outside.mkdir()
+            (outside / "control-daemon.lock").touch()
+            link = root / "outside-link"
+            if os.name == "nt":
+                result = subprocess.run(["cmd", "/c", "mklink", "/J", str(link), str(outside)],
+                                        capture_output=True)
+                self.assertEqual(result.returncode, 0, (result.stdout, result.stderr))
+                self.assertTrue(link.is_junction())
+            else:
+                link.symlink_to(outside, target_is_directory=True)
+            inside_fd = hold_lock(state / "board-owner.lock")
+            outside_fd = hold_lock(outside / "control-daemon.lock")
+            try:
+                self.assertEqual(checks.held_locks(root), {"daemon": [state / "board-owner.lock"]})
+                with (patch.object(checks, "os", wraps=os) as windows,
+                      patch.object(checks, "_windows_owned_processes", return_value=([], [], [])),
+                      patch.object(checks, "held_locks", return_value={"daemon": []}),
+                      patch.object(checks, "_request_daemon_stop") as stop):
+                    windows.name = "nt"
+                    self.assertEqual(checks.request_cooperative_stop(root, timeout=0),
+                                     [f"private service stop reply unconfirmed: {state}"])
+                    stop.assert_not_called()
+            finally:
+                release_lock(inside_fd)
+                release_lock(outside_fd)
+                checks.remove_private_test_root(root)
+
     def test_lock_is_held_requires_an_owner(self):
         with tempfile.TemporaryDirectory(prefix="hey-my-buddy-checks-test-") as raw:
             path = Path(raw) / "lifetime.lock"
