@@ -32,6 +32,8 @@ Daily [installation is 0.26.0/schema 15](acceptance/installed-0.26.0.md): the sh
 | Document | Role |
 | --- | --- |
 | [reference/usage.md](reference/usage.md) | Practical path from install to reviewed result: task packets, workspace choice, supervised goals, observation and background follow-up |
+| [reference/host-codex.md](reference/host-codex.md) | Codex Host waiting flow: one monitoring-only subagent per delegation, the launcher's sandbox rule and Codex-specific limits |
+| [reference/host-claude-code.md](reference/host-claude-code.md) | Claude Code Host waiting flow: one background `await` per running goal, the launcher's sandbox settings and the session-wakeup limits |
 | [reference/workflow.md](reference/workflow.md) | Governed goal lifecycle: routing boundaries, Host decisions, helpers, continuation and takeover, workspace/artifact rules and cancellation |
 | [reference/workspace-lifecycle.md](reference/workspace-lifecycle.md) | Host-owned scope changes, recorded conflict recovery, verified integration and exact-worktree cleanup |
 | [reference/codex.md](reference/codex.md) | Native Codex App Server execution, account-plan discovery, structured results and session bindings |

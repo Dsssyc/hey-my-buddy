@@ -42,6 +42,12 @@ A good packet lets the worker finish without guessing:
 
 Delegate a coherent work unit with a verifiable output. A deterministic file listing, status query or already-known calculation usually belongs in a script; open-ended diagnosis and implementation may benefit from a coding Worker buddy. A read-only cross-platform artifact audit can still be complex. Give the worker the owning reference and relevant evidence, rather than automatically loading every design document or the complete project history. Choose native subagents and Worker buddies independently: context isolation and comparative cost/capability solve different problems.
 
+Delegate one independently reviewable outcome per delegation: about one module or one concern, carrying its own checks. Keep mechanical work — collection, deterministic queries, artifact gathering — separate from open-ended diagnosis, and split a long agenda into several delegations under the same work objective instead of writing one oversized packet. Example: one user agenda, "harden the state store", becomes one objective with three delegations:
+
+- replace the on-disk journal format and add its migration test;
+- diagnose and fix the read regression that test exposes;
+- collect the before/after timings and write the report.
+
 Long work may explicitly set `"timeoutSeconds": 0` to run without an overall execution deadline. An omitted value still defaults to 1800 seconds; a positive value must be 10–86400 seconds. The no-deadline choice belongs to that task and any helper explicitly configured the same way. `await` remains a bounded, resumable caller wait; its window does not end an active execution. Observe long work and use the Host's ordinary `cancel` command if it must stop.
 
 - goal and why; expected inputs and outputs;
@@ -74,7 +80,7 @@ Ordinary submit fields stay flat. A complete explicit `adapter`, `provider`, `mo
 "$BUDDY" await '{"runId":"<runId>","waitSeconds":28800}'
 ```
 
-`await` never starts work. It stays connected to the durable goal until a Host decision boundary, a terminal outcome or this call's window end (`waitSeconds` 1–86400, default 86400), and prints one envelope. Its initial status read attaches to a healthy service or starts one if none is running, but it never creates a task. A [Codex monitoring subagent](#waiting-from-codex) owns this wait while the Host continues independent work; [Claude Code](#waiting-from-claude-code) uses its background Bash command. Keep one wait per running goal and preserve its workspace ownership.
+`await` never starts work. It stays connected to the durable goal until a Host decision boundary, a terminal outcome or this call's window end (`waitSeconds` 1–86400, default 86400), and prints one envelope. Its initial status read attaches to a healthy service or starts one if none is running, but it never creates a task. Your Host's guide owns the exact wait — [Codex](host-codex.md) or [Claude Code](host-claude-code.md); read only the one for your Host. Keep one wait per running goal and preserve its workspace ownership.
 
 The normal boundary is `outcome: "waiting-host"`: a routing boundary may have no agent turn or result yet, and `goalComplete` is `false`, and the envelope names the current `request`, `turn`, pinned artifacts and `nextCommands`; the goal stays unfinished. Waiting on already-authorized helper work can continue inside the same wait. Terminal task outcomes, `wait-timeout` and `unavailable` are covered below and in [cli.md](cli.md#await-envelope).
 
@@ -159,40 +165,13 @@ Killing the waiting CLI process (Ctrl-C, closed terminal, `waitSeconds` expiry) 
 
 Never describe a wait timeout as an execution failure, never restart work the user stopped, and never relaunch because a result was delayed. Recovery invariants are in [operations.md](operations.md#cancellation-and-recovery).
 
-## Waiting from Codex
+## Waiting from your Host
 
-After `submit`, retain `runId`, `objectiveId` and the private `controlFile` in the parent Host. Spawn one monitoring-only native subagent for each running delegation. Explicitly select the cheapest model currently available to Codex that can execute commands, at the lowest reasoning effort, with `fork_turns: "none"`. `[agents]` defaults may select an expensive model or effort and must be overridden when spawning: the monitor only repeats one command and returns its result unchanged, so it does not need a stronger model. Do not rely on a role name or a request written only inside the prompt to select the model. Use the actual exposed tool schema; if it cannot honor both overrides, use foreground `await` and report that limitation. Avoid a custom agent whose configuration overrides the requested model, and do not copy the repository or full Host history into the monitor.
-
-Give the monitor only the resolved absolute launcher path, the existing `runId`, any explicitly selected private state/runtime roots, and this instruction (replace the path and identifier before spawning):
-
-```text
-Only monitor this existing run. Run /absolute/path/to/.agents/skills/buddy/scripts/buddy await '{"runId":"<runId>"}' outside the sandbox with a non-login shell. Do not read the repository, settings or memory; do not use skills, do other work, create agents or request the Host control file. Never submit, decide, continue, cancel or acknowledge. If the command is still running, wait on that same process. Only an await envelope with outcome wait-timeout calls for another await on the same runId. At waiting-host or a terminal outcome, return the brief JSON envelope unchanged, including runId, status/workflowState, outcome, request summary and nextCommands when present; preserve errors, truncation and shutdown evidence. Do not execute nextCommands. If permissions, tools or the service are unavailable, return the error immediately to the parent. Do not send periodic progress messages.
-```
-
-The launcher needs permission outside the Host sandbox to write private state and communicate with the local service. Codex subagents inherit the parent's live sandbox and approval policy; noninteractive approval requests can fail instead of waiting for a person ([official subagent permissions](https://learn.chatgpt.com/docs/agent-configuration/subagents#approvals-and-sandbox-controls)). The parent must establish a user-approved command rule or permission mode that also applies to the child before spawning; a one-time approval on an unrelated parent command is not proof. Follow the installed skill's exact-launcher rule, use the current tool's supported escalation mechanism when required, and fall back to foreground `await` if the child cannot obtain it. A full-access session already covers this requirement. Do not change user settings, broaden permissions or enable a feature automatically.
-
-The parent continues other authorized work after spawning and uses the native agent wait tool when it needs the result. At the returned boundary, the parent reads `get`, reviews the result and fixed artifacts, and performs any authorized decision, continuation, integration or acknowledgement itself. If several delegations run, give each one a separate monitor. If agent capacity is unavailable, use foreground waiting for that run until monitoring can be established; never silently leave it unmonitored or start a second Buddy run.
-
-There are three separate wait limits. `buddy await` has its durable 24-hour default window; command-tool yield windows may return a live process handle much earlier; and the parent agent wait tool has its own timeout. A command yield means wait on that same process, and `outcome: "wait-timeout"` means repeat `await` for the same run. A parent wait-tool timeout does not end the subagent: wait on the same agent again. If the monitor itself fails, exceeds its agreed overall duration or cannot continue, end that monitor and use foreground `await` on the same Buddy run. Stopping a monitor or waiting CLI never authorizes cancelling the delegation. When the current harness exposes only interrupt rather than close, interrupt an active failed monitor before taking over; a completed monitor needs no new turn.
-
-Choose waits to fit the expected work duration rather than polling unchanged state. The current desktop collaboration tool advertises `wait_agent(timeout_ms)` with a 30-second default, a 10-second minimum and a 3,600,000-ms maximum. The paid acceptance probe exercised 10-second and 60-second calls; an hour-long call was not tested. These are properties of that exposed tool, not Buddy or a guarantee for every Codex version. The tested desktop runs 0.158.0-alpha.2.1, records `multi_agent_version: "v2"` in native turn metadata and exposes `collaboration.spawn_agent` and `collaboration.wait_agent`. A separate CLI 0.157.0 on the same machine reports `multi_agent=true` and `multi_agent_v2=false`; its flags do not describe this desktop session. No feature change was needed. Inspect current tools and ask the user before any required feature change. [Acceptance](../acceptance/codex-monitor-and-continuation-0.19.0.md) records the observed distinction.
-
-For command waits, avoid an outer tool wrapper returning before the inner process wait finishes. In a code-mode host, choose the outer `functions.exec` yield to cover its nested `exec_command` or `write_stdin` wait, then resume the same yielded cell if one is returned. The monitor still has model overhead each time it processes a tool result. The parent produced no model-response or token events inside the tested blocking wait intervals; requesting the wait and processing its return did consume tokens. Model selection was confirmed from native turn metadata, not independently attested by the provider. Monitoring is the chosen Host workflow, not a promise that total tokens or money always decrease; tool definitions and base instructions also enter a fresh child's context. These waits do not wake a closed Host session after its turn ends.
-
-## Waiting from Claude Code
-
-The user chose this Claude Code Host flow on 2026-09-26. Claude Code runs each wait as its own background command and keeps working:
-
-1. `submit` the goal and keep `runId` and `controlFile`.
-2. Run `"$BUDDY" await '{"runId":"<runId>"}'` with the Bash tool's `run_in_background: true`. Start one background wait per running goal; concurrent goals each have their own.
-3. Continue with other Host work, including reviewing goals that already finished. The harness delivers a notification when the command exits: during an active turn it arrives with the next step, and an idle session is woken. The notification carries the brief `await` envelope.
-4. At the notification read `get`, verify the artifact, then `integration-record` and `acknowledge` as usual. An `outcome` of `wait-timeout` or `unavailable` ends only that wait; start another background `await` for the same `runId`.
-
-Claude Code exports `ANTHROPIC_BASE_URL` to its commands, so a service cold-started from a Claude Code session cannot run Claude Workers ([Claude](claude.md)); attaching to an already running service is unaffected. Do not add a polling loop of `get`, `status` or `wait` beside the background wait. The background command belongs to the Claude Code session: if the session or app closes, the goal keeps running and is resumed by awaiting the same `runId` later. This is a bounded wait, not a scheduler, and it gives no wakeup to a session that no longer exists.
+Each Host waits in its own way, and each way is owned by one per-Host guide: [Codex](host-codex.md) or [Claude Code](host-claude-code.md). Read only the guide for your Host; both own that Host's waiting flow, launcher sandbox allowance and known limits.
 
 ## Background work that outlives the turn
 
-`submit` is not reserved for background work: it starts the default flow, whose current Host turn retains a Codex monitor or a Claude Code background `await`. When the user explicitly wants the work to outlive the turn:
+`submit` is not reserved for background work: it starts the default flow, whose current Host turn retains a [Codex monitor](host-codex.md) or a Claude Code [background `await`](host-claude-code.md). When the user explicitly wants the work to outlive the turn:
 
 1. `submit` the goal (or `execution-submit` a non-coding record) and capture the `runId` (and `controlFile` for a governed goal).
 2. Register an official App heartbeat automation on the original task before ending the turn; its prompt calls this same CLI to read the result, verify the artifacts and record the governed or execution acknowledgement.
@@ -208,6 +187,6 @@ Capacity and cwd/exclusive-resource conflicts queue with a `queueReason` instead
 
 ## Operating rules
 
-State the user's language explicitly in every Worker task packet and require the result summary in that language. Every delegation in an agenda retains its objectiveId and a short intent title. The browser never translates results or invokes a model for wording. Codex Hosts use the monitoring-subagent flow above; Claude Code keeps its background `await` flow.
+State the user's language explicitly in every Worker task packet and require the result summary in that language. Every delegation in an agenda retains its objectiveId and a short intent title. The browser never translates results or invokes a model for wording. Each Host keeps its own waiting flow and reads only its own guide ([Codex](host-codex.md), [Claude Code](host-claude-code.md)).
 
 Backup and upgrade use service-owned `buddy backup` and new-package `buddy upgrade` with one verified rolling `backups/current/`, automatic failure rollback and idle-only cutover. Never make ad-hoc whole-state/source archives. Installation requires separate user authorization. Storage plan is read-only; apply requires confirmation of its exact guarded plan. The console defaults to login-free access at the stable bookmarkable `http://127.0.0.1:<port>/`. `buddy console` opens it; `console {"browser":false}` returns it. Settings can enable login with a single-use 10-minute entry, sessions without a 30-day expiry and explicit logout/revocation. All admitted windows can edit settings subject to revision conflict checks. [Console](console.md) owns the HTTP boundary and session contract. Source verification and actual installation remain separate facts.

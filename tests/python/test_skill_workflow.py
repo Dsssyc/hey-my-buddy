@@ -64,11 +64,11 @@ class SkillWorkflowTests(unittest.TestCase):
                 self.assertIn(marker, self.text)
 
     def test_waiting_pointers_name_codex_and_claude_paths(self):
-        self.assertIn("monitoring-only native subagent", self.text)
-        self.assertIn("background `await`", self.text)
-        for anchor in ("#waiting-from-codex", "#waiting-from-claude-code"):
-            with self.subTest(anchor=anchor):
-                self.assertIn(anchor, self.text)
+        """The skill routes waiting to the per-Host guides instead of describing either flow."""
+        for guide in ("host-codex.md", "host-claude-code.md"):
+            with self.subTest(guide=guide):
+                self.assertIn(f"(../../docs/reference/{guide})", self.text)
+        self.assertNotIn("#waiting-from-", self.text)
 
     def test_launcher_help_and_the_three_input_modes_are_documented(self):
         for marker in ("--params-file", "stdin", "buddy help", "output"):
@@ -92,6 +92,42 @@ class SkillWorkflowTests(unittest.TestCase):
             with self.subTest(reference=relative, marker=marker):
                 page = (REFERENCES / relative).read_text(encoding="utf-8")
                 self.assertIn(marker, page.lower())
+
+
+class HostGuideTests(unittest.TestCase):
+    """Each per-Host guide carries only its own waiting flow, sandbox allowance and limits."""
+
+    MARKERS = {
+        "host-codex.md": (
+            "monitoring-only native subagent",  # one monitor per running delegation
+            "fork_turns",  # the monitor spawns with an empty history
+            "wait-timeout",  # the three separate wait limits
+            "~/.codex/rules",  # launcher sandbox allowance
+            "prefix_rule",
+            "not wake a closed Host session",  # the turn-end limit
+        ),
+        "host-claude-code.md": (
+            "background `await`",  # one background wait per running goal
+            "run_in_background: true",
+            "wait-timeout",
+            "sandbox.excludedCommands",  # launcher sandbox allowance
+            "permissions.allow",
+            "ANTHROPIC_BASE_URL",  # the cold-start limit for Claude Workers
+        ),
+    }
+
+    def test_each_guide_carries_its_own_host_instructions(self):
+        for name, markers in self.MARKERS.items():
+            page = (REFERENCES / name).read_text(encoding="utf-8")
+            for marker in markers:
+                with self.subTest(guide=name, marker=marker):
+                    self.assertIn(marker, page)
+
+    def test_neither_guide_describes_the_other_host(self):
+        with self.subTest(guide="host-codex.md"):
+            self.assertNotIn("Claude", (REFERENCES / "host-codex.md").read_text(encoding="utf-8"))
+        with self.subTest(guide="host-claude-code.md"):
+            self.assertNotIn("Codex", (REFERENCES / "host-claude-code.md").read_text(encoding="utf-8"))
 
 
 class SkillLinkTests(unittest.TestCase):
