@@ -7,6 +7,7 @@ import signal
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import unittest
 from unittest import mock
@@ -18,17 +19,17 @@ from hey_my_buddy.errors import BoardError
 from hey_my_buddy.protocol import process_identity as identity
 
 
-RECORD = {"bootId": "linux:00000000-0000-4000-8000-000000000001", "pid": 301, "startedAt": 10.5,
+RECORD = {"bootId": "linux:00000000-0000-4000-8000-000000000001", "pid": 301, "startedAt": 105,
           "processGroupId": 301, "jobName": None,
-          "worker": {"bootId": "linux:00000000-0000-4000-8000-000000000001", "pid": 201, "startedAt": 8.5}}
+          "worker": {"bootId": "linux:00000000-0000-4000-8000-000000000001", "pid": 201, "startedAt": 85}}
 
 
 class Source:
     def __init__(self):
         self.boot = RECORD["bootId"]
-        self.starts = {201: 8.5, 301: 10.5}
+        self.starts = {201: 85, 301: 105}
         self.pgid = 301
-        self.members = [301]
+        self.group = True
         self.job = [301]
         self.signals = []
         self.inspections = 0
@@ -42,17 +43,17 @@ class Source:
     def group_id(self, pid):
         return self.pgid
 
-    def group_members(self, pgid):
+    def group_alive(self, pgid):
         self.inspections += 1
-        return self.members
+        return self.group
 
     def job_members(self, name):
         self.inspections += 1
         return self.job
 
-    def stop_group(self, pgid):
-        self.signals.append(("group", pgid))
-        self.members = []
+    def signal_group(self, pgid, sig):
+        self.signals.append(("group", pgid, sig))
+        self.group = False
         self.starts.pop(301, None)
 
     def stop_job(self, name):
@@ -64,7 +65,7 @@ class Source:
 class ProcessIdentityTests(unittest.TestCase):
     def test_validates_one_unambiguous_identity(self):
         self.assertIs(identity.validate_process_identity(RECORD), RECORD)
-        for update in ({"pid": True}, {"startedAt": float("nan")},
+        for update in ({"pid": True}, {"startedAt": float("nan")}, {"startedAt": 10.5},
                        {"processGroupId": None}, {"jobName": "job"}):
             with self.subTest(update=update), self.assertRaises(BoardError):
                 identity.validate_process_identity({**RECORD, **update})
@@ -78,14 +79,14 @@ class ProcessIdentityTests(unittest.TestCase):
     def test_group_and_root_absence_prove_stopped(self):
         source = Source()
         source.starts.pop(301)
-        source.members = []
+        source.group = False
         self.assertEqual(identity.inspect_process_identity(RECORD, source=source), "identity-absent")
 
     def test_reused_root_pid_is_not_the_old_group(self):
         source = Source()
-        source.starts[301] = 22.0
+        source.starts[301] = 220
         self.assertEqual(identity.inspect_process_identity(RECORD, source=source), "unknown")
-        source.members = []
+        source.group = False
         self.assertEqual(identity.inspect_process_identity(RECORD, source=source), "identity-absent")
         source.starts.pop(201)
         self.assertEqual(identity.stop_orphan_process(RECORD, source=source), "identity-absent")
@@ -96,26 +97,49 @@ class ProcessIdentityTests(unittest.TestCase):
         source.starts.pop(201)
         self.assertEqual(identity.inspect_process_identity(RECORD, source=source), "alive")
         self.assertEqual(identity.stop_orphan_process(RECORD, source=source), "worker-stopped")
-        self.assertEqual(source.signals, [("group", 301)])
-        self.assertGreaterEqual(source.inspections, 3)
+        self.assertEqual(source.signals, [("group", 301, signal.SIGTERM)])
+        self.assertGreaterEqual(source.inspections, 2)
 
     def test_live_original_worker_is_never_signalled(self):
         source = Source()
         self.assertEqual(identity.stop_orphan_process(RECORD, source=source), "unknown")
         self.assertEqual(source.signals, [])
 
-    def test_uninspectable_identity_and_unanchored_descendants_remain_unknown(self):
-        import psutil
+    def test_term_grace_then_kill_and_confirm(self):
+        source = Source()
+        source.starts.pop(201)
 
+        def signal_group(pgid, sig):
+            source.signals.append((pgid, sig))
+            if sig == signal.SIGKILL:
+                source.group = False
+                source.starts.pop(301)
+
+        source.signal_group = signal_group
+        self.assertEqual(identity.stop_orphan_process(RECORD, source=source,
+                                                      settle_seconds=0.05), "worker-stopped")
+        self.assertEqual(source.signals, [(301, signal.SIGTERM), (301, signal.SIGKILL)])
+
+    def test_group_probe_reports_only_esrch_as_absent(self):
+        with mock.patch.object(identity.os, "killpg", side_effect=ProcessLookupError):
+            self.assertFalse(identity._group_alive(301))
+        with mock.patch.object(identity.os, "killpg", side_effect=PermissionError):
+            with self.assertRaises(PermissionError):
+                identity._group_alive(301)
+        with mock.patch.object(identity.os, "killpg", return_value=None) as probe:
+            self.assertTrue(identity._group_alive(301))
+            probe.assert_called_once_with(301, 0)
+
+    def test_uninspectable_identity_and_unanchored_descendants_remain_unknown(self):
         source = Source()
         source.starts.pop(301)
         self.assertEqual(identity.inspect_process_identity(RECORD, source=source), "unknown")
         source.starts.pop(201)
         self.assertEqual(identity.stop_orphan_process(RECORD, source=source), "unknown")
         self.assertEqual(source.signals, [])
-        with mock.patch.object(source, "group_members", side_effect=PermissionError):
+        with mock.patch.object(source, "group_alive", side_effect=PermissionError):
             self.assertEqual(identity.inspect_process_identity(RECORD, source=source), "unknown")
-        with mock.patch.object(source, "started_at", side_effect=psutil.AccessDenied(pid=301)):
+        with mock.patch.object(source, "started_at", side_effect=PermissionError):
             self.assertEqual(identity.inspect_process_identity(RECORD, source=source), "unknown")
             self.assertIsNone(identity.worker_identity_alive(RECORD, source=source))
 
@@ -137,7 +161,7 @@ class ProcessIdentityTests(unittest.TestCase):
         self.assertEqual(identity.inspect_process_identity(record, source=source), "unknown")
         source.starts.pop(301)
         self.assertEqual(identity.inspect_process_identity(record, source=source), "identity-absent")
-        source.starts[301] = 22.0
+        source.starts[301] = 220
         self.assertEqual(identity.inspect_process_identity(record, source=source), "identity-absent")
 
     def test_windows_system_source_reopens_named_job_for_query_and_stop(self):
@@ -196,6 +220,13 @@ time.sleep(60)
         handle = ProcessHandle(process, own_group=True, log_paths={})
         try:
             record = handle.identity()
+            import psutil
+            wall, boot = time.time(), psutil.boot_time()
+            for shift in (-86_400, 86_400):
+                with self.subTest(shift=shift), mock.patch.object(time, 'time', return_value=wall + shift), \
+                     mock.patch.object(psutil, 'boot_time', return_value=boot + shift):
+                    self.assertEqual(identity.inspect_process_identity(record), 'alive')
+                    self.assertTrue(identity.worker_identity_alive(record))
             os.killpg(handle.pgid, signal.SIGKILL)
             process.wait(timeout=5)
             self.assertEqual(identity.inspect_process_identity(record), "identity-absent")
@@ -233,6 +264,8 @@ time.sleep(60)
                     return None
                 return identity._started_at(pid)
 
+        reaper = threading.Thread(target=process.wait, kwargs={"timeout": 5}, daemon=True)
+        reaper.start()
         self.assertEqual(identity.stop_orphan_process(record, source=MissingWorker()), "worker-stopped")
-        process.wait(timeout=5)
+        reaper.join(timeout=5)
         self.assertEqual(identity.inspect_process_identity(record), "identity-absent")

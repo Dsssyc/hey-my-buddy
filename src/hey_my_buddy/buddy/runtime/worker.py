@@ -458,9 +458,9 @@ class Worker:
             self.log(f"orphan identity publication unavailable ({error.code})")
 
     def recover_orphans(self) -> None:
-        """Stop only a still verified orphan group and ask the board to settle it."""
+        """Stop only a still verified orphan group and report evidence for the service sweep."""
         from ...protocol.process_identity import (
-            read_native_process_journal, stop_orphan_process, worker_identity_alive,
+            read_native_process_journal, stop_orphan_process,
         )
 
         self._publish_orphan_identity()
@@ -483,8 +483,6 @@ class Worker:
             identity = candidate["processIdentity"]
             # The process-identity boundary checks the complete boot/PID/start
             # tuple again immediately before it sends any group or Job signal.
-            if worker_identity_alive(identity) is not False:
-                continue
             evidence = stop_orphan_process(identity)
             if evidence == "unknown":
                 continue

@@ -152,13 +152,12 @@ CREATE TABLE IF NOT EXISTS attempt_process_identities (
     ordinal             INTEGER NOT NULL CHECK (ordinal >= 0),
     boot_id             TEXT NOT NULL,
     root_pid            INTEGER NOT NULL CHECK (root_pid > 0),
-    root_started_at     REAL NOT NULL CHECK (root_started_at > 0),
+    root_started_at     INTEGER NOT NULL CHECK (root_started_at > 0),
     process_group_id    INTEGER CHECK (process_group_id > 0),
     job_name            TEXT,
     worker_boot_id      TEXT NOT NULL,
     worker_pid          INTEGER NOT NULL CHECK (worker_pid > 0),
-    worker_started_at   REAL NOT NULL CHECK (worker_started_at > 0),
-    shutdown_confirmed  INTEGER NOT NULL DEFAULT 0 CHECK (shutdown_confirmed IN (0,1)),
+    worker_started_at   INTEGER NOT NULL CHECK (worker_started_at > 0),
     PRIMARY KEY (attempt_id, ordinal),
     CHECK ((process_group_id IS NOT NULL AND job_name IS NULL)
         OR (process_group_id IS NULL AND job_name IS NOT NULL))
@@ -169,22 +168,6 @@ CREATE TABLE IF NOT EXISTS attempt_process_identities (
 CREATE TABLE IF NOT EXISTS attempt_legacy_starts (
     attempt_id          TEXT PRIMARY KEY REFERENCES attempts(attempt_id) ON DELETE RESTRICT,
     started_at          TEXT NOT NULL
-);
-
-CREATE TABLE IF NOT EXISTS attempt_native_process_identities (
-    attempt_id          TEXT NOT NULL REFERENCES attempts(attempt_id) ON DELETE RESTRICT,
-    ordinal             INTEGER NOT NULL CHECK (ordinal >= 0),
-    boot_id             TEXT NOT NULL,
-    root_pid            INTEGER NOT NULL CHECK (root_pid > 0),
-    root_started_at     REAL NOT NULL CHECK (root_started_at > 0),
-    process_group_id    INTEGER CHECK (process_group_id > 0),
-    job_name            TEXT,
-    worker_boot_id      TEXT NOT NULL,
-    worker_pid          INTEGER NOT NULL CHECK (worker_pid > 0),
-    worker_started_at   REAL NOT NULL CHECK (worker_started_at > 0),
-    PRIMARY KEY (attempt_id, ordinal),
-    CHECK ((process_group_id IS NOT NULL AND job_name IS NULL)
-        OR (process_group_id IS NULL AND job_name IS NOT NULL))
 );
 
 CREATE TABLE IF NOT EXISTS attempt_interruptions (

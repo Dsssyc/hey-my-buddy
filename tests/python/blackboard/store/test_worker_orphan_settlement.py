@@ -46,6 +46,10 @@ class OrphanSettlementTests(BoardTestCase):
         with patch.object(process_identity, 'worker_identity_alive', return_value=False), \
              patch.object(process_identity, 'inspect_process_identity', return_value='identity-absent'):
             replacement.recover_orphans()
+            self.assertTrue(orphan.exists())
+            self.assertFalse(client.get(runId=task['taskId'])['shutdownConfirmed'])
+            self.assertEqual(board.store.recover_interrupted_attempts(), 1)
+            replacement.recover_orphans()
         self.assertFalse(orphan.exists())
         self.assertEqual(replacement.recovery_pending(), [])
         self.assertTrue(client.get(runId=task['taskId'])['shutdownConfirmed'])

@@ -11,6 +11,11 @@ from ...protocol import process_identity as processes
 from ..store.db import canonical_json
 
 
+# Old records contain wall time only. Reserve one hour for an early forward
+# clock correction; records closer to boot cannot establish reboot evidence.
+LEGACY_BOOT_MARGIN_SECONDS = 60 * 60
+
+
 def read_identity(connection, attempt_id: str) -> dict | None:
     row = connection.execute('SELECT * FROM attempt_process_identities WHERE attempt_id=? ORDER BY ordinal DESC LIMIT 1',
                              (attempt_id,)).fetchone()
@@ -41,10 +46,9 @@ def record_identity(connection, attempt_id: str, record: dict, *, previous_stopp
             raise BoardError('CONFLICT', 'An execution process identity is immutable', attemptId=attempt_id)
         ordinal = connection.execute('SELECT MAX(ordinal)+1 FROM attempt_process_identities WHERE attempt_id=?',
                                      (attempt_id,)).fetchone()[0]
-        connection.execute('UPDATE attempt_process_identities SET shutdown_confirmed=1 WHERE attempt_id=?', (attempt_id,))
     worker = record['worker']
     connection.execute(
-        'INSERT INTO attempt_process_identities VALUES(?,?,?,?,?,?,?,?,?,?,0)',
+        'INSERT INTO attempt_process_identities VALUES(?,?,?,?,?,?,?,?,?,?)',
         (attempt_id, ordinal, record['bootId'], record['pid'], record['startedAt'], record['processGroupId'],
          record['jobName'], worker['bootId'], worker['pid'], worker['startedAt']))
 
@@ -55,16 +59,19 @@ def legacy_boot_evidence(started_at: str) -> bool:
         boot = processes.boot_started_at()
     except OSError:
         return False
-    return datetime.fromisoformat(started_at.replace('Z', '+00:00')).timestamp() < boot
+    return datetime.fromisoformat(started_at.replace('Z', '+00:00')).timestamp() < boot - LEGACY_BOOT_MARGIN_SECONDS
 
 
-def _snapshot(board, *, legacy_only: bool = False) -> list[tuple[dict, dict | None, str | None]]:
+def _snapshot(board, *, legacy_only: bool = False, attempt_id: str | None = None, unobserved_only: bool = False) -> list[tuple[dict, dict | None, str | None]]:
     with board.db.read() as connection:
         rows = connection.execute(
             "SELECT a.*,l.started_at AS legacy_started_at FROM attempts a"
             " LEFT JOIN attempt_legacy_starts l ON l.attempt_id=a.attempt_id"
             " WHERE a.execution_state='uncertain'" +
-            (' AND l.attempt_id IS NOT NULL' if legacy_only else '')).fetchall()
+            (' AND l.attempt_id IS NOT NULL' if legacy_only else '') +
+            (' AND a.attempt_id=?' if attempt_id is not None else '') +
+            (' AND NOT EXISTS(SELECT 1 FROM attempt_interruptions i WHERE i.attempt_id=a.attempt_id)'
+             if unobserved_only else ''), (() if attempt_id is None else (attempt_id,))).fetchall()
         return [(dict(row), read_identity(connection, row['attempt_id']), row['legacy_started_at'])
                 for row in rows]
 
@@ -87,27 +94,7 @@ def _native_identities(board, attempt: dict, identity: dict) -> list[dict] | Non
     value = processes.read_native_process_journal(journal['path'], journal['binding'])
     if value is None or value['pending']:
         return None
-    identities = value['identities']
-    # The stopped controller is the only writer, so these identities cannot grow
-    # between this read and the durable import. The journal is a process boundary.
-    with board.db.write() as connection:
-        stored = connection.execute(
-            'SELECT COUNT(*) FROM attempt_native_process_identities WHERE attempt_id=?',
-            (attempt['attempt_id'],)).fetchone()[0]
-        if stored and stored != len(identities):
-            raise BoardError('CONFLICT', 'Stopped native process journal changed')
-        for ordinal, record in enumerate(identities):
-            worker = record['worker']
-            values = (attempt['attempt_id'], ordinal, record['bootId'], record['pid'], record['startedAt'],
-                      record['processGroupId'], record['jobName'], worker['bootId'], worker['pid'], worker['startedAt'])
-            previous = connection.execute(
-                'SELECT * FROM attempt_native_process_identities WHERE attempt_id=? AND ordinal=?',
-                (attempt['attempt_id'], ordinal)).fetchone()
-            if previous is None:
-                connection.execute('INSERT INTO attempt_native_process_identities VALUES(?,?,?,?,?,?,?,?,?,?)', values)
-            elif tuple(previous) != values:
-                raise BoardError('CONFLICT', 'A native execution process identity is immutable')
-    return identities
+    return value['identities']
 
 
 def _evidence(board, attempt: dict, record: dict | None, legacy_start: str | None) -> str:
@@ -135,6 +122,12 @@ def _evidence(board, attempt: dict, record: dict | None, legacy_start: str | Non
 def recover(board, *, legacy_only: bool = False) -> int:
     settled = 0
     for attempt, record, legacy_start in _snapshot(board, legacy_only=legacy_only):
+        with board.db.read() as connection:
+            pending = connection.execute('SELECT evidence_kind FROM attempt_interruptions WHERE attempt_id=?',
+                                         (attempt['attempt_id'],)).fetchone()
+        if pending is not None:
+            settled += _settle(board, attempt, record, pending['evidence_kind'], legacy_start)
+            continue
         # A surviving original Worker still owns collection and its durable
         # receipt, including a child that completed while the Worker was asleep.
         if record is not None and processes.worker_identity_alive(record) is not False:
@@ -164,21 +157,21 @@ def worker_recover(board, params: dict) -> dict:
             observed = board._attempt_row(connection, observe_attempt)
             if observed['worker_id'] != worker_id:
                 raise BoardError('UNAUTHORIZED', 'The local orphan belongs to a different Worker')
-    if attempt_id is None:
-        recover(board)
     candidates = []
-    for attempt, record, legacy_start in _snapshot(board):
+    for attempt, record, legacy_start in _snapshot(board, attempt_id=attempt_id, unobserved_only=attempt_id is None):
         if record is None or processes.worker_identity_alive(record) is not False:
             continue
-        observed = _evidence(board, attempt, record, legacy_start)
         if attempt_id == attempt['attempt_id']:
+            observed = _evidence(board, attempt, record, legacy_start)
             if observed not in ('boot-changed', 'identity-absent'):
                 return {'settled': False, 'evidence': observed}
             # The new Worker reports its exact stop action; the service independently
             # confirms the recorded execution has no survivor before committing it.
             kind = 'worker-stopped' if evidence == 'worker-stopped' and observed == 'identity-absent' else observed
-            return {'settled': bool(_settle(board, attempt, record, kind, legacy_start)), 'evidence': kind}
-        if observed == 'alive' or _native_journal(board, attempt, record) is not None:
+            reserved = _reserve(board, attempt, record, kind)
+            return {'settled': False, 'stopObserved': reserved is not None, 'evidence': reserved}
+        observed = processes.inspect_process_identity(record)
+        if observed == 'alive' or (observed == 'identity-absent' and _native_journal(board, attempt, record) is not None):
             candidate = {'attemptId': attempt['attempt_id'], 'processIdentity': record}
             journal = _native_journal(board, attempt, record)
             if journal is not None:
@@ -201,15 +194,13 @@ def worker_recover(board, params: dict) -> dict:
     return response
 
 
-def _settle(board, snapshot: dict, identity: dict | None, kind: str, legacy_start: str | None) -> int:
+def _reserve(board, snapshot: dict, identity: dict | None, kind: str) -> str | None:
+    """Fence late receipts after complete stop evidence, before any Git work."""
     attempt_id = snapshot['attempt_id']
-    # Reserve the proven stop before Git side effects. A normal durable result
-    # that won this transaction is kept; after this point the recovery owns the
-    # finalization, and failed sealing is retried by the existing sweep.
     with board.db.write() as connection:
         attempt = board._attempt_row(connection, attempt_id)
         if attempt['execution_state'] != 'uncertain' or read_identity(connection, attempt_id) != identity:
-            return 0
+            return None
         board._require_effective_attempt(connection, attempt)
         pending = connection.execute('SELECT * FROM attempt_interruptions WHERE attempt_id=?', (attempt_id,)).fetchone()
         if pending is None:
@@ -217,6 +208,14 @@ def _settle(board, snapshot: dict, identity: dict | None, kind: str, legacy_star
                                (attempt_id, kind, board.now()))
         else:
             kind = pending['evidence_kind']
+    return kind
+
+
+def _settle(board, snapshot: dict, identity: dict | None, kind: str, legacy_start: str | None) -> int:
+    attempt_id = snapshot['attempt_id']
+    kind = _reserve(board, snapshot, identity, kind)
+    if kind is None:
+        return 0
     result = {'interruptionEvidence': {'kind': kind, 'legacyStartedAt': legacy_start},
               'partialOutput': {'reason': 'interrupted', 'verified': False, 'final': False}}
     # No SQLite write transaction spans Git. A completed stop proof precedes all
@@ -227,15 +226,18 @@ def _settle(board, snapshot: dict, identity: dict | None, kind: str, legacy_star
             result['partialWorkspaceSeal'] = seal
     except (BoardError, OSError) as error:
         detail = f'{error.code}: {error.message}' if isinstance(error, BoardError) else f'{type(error).__name__}: {error}'
-        with board.db.write() as connection:
-            row = connection.execute('SELECT seal_error FROM attempt_interruptions WHERE attempt_id=?', (attempt_id,)).fetchone()
-            connection.execute('UPDATE attempt_interruptions SET seal_error=? WHERE attempt_id=?', (detail, attempt_id))
-            if row['seal_error'] != detail:
-                board._append_event(connection, 'attempt.interruption_seal_pending', task_id=snapshot['task_id'],
-                                    attempt_id=attempt_id, payload={'error': detail, 'evidence': kind})
-            head = board._head_of(connection)
-        board._notify(head)
-        return 0
+        if isinstance(error, BoardError) and error.code in ('WORKSPACE_SCOPE_VIOLATION', 'WORKSPACE_CHANGED'):
+            result['workspaceSealError'] = detail
+        else:
+            with board.db.write() as connection:
+                row = connection.execute('SELECT seal_error FROM attempt_interruptions WHERE attempt_id=?', (attempt_id,)).fetchone()
+                connection.execute('UPDATE attempt_interruptions SET seal_error=? WHERE attempt_id=?', (detail, attempt_id))
+                if row['seal_error'] != detail:
+                    board._append_event(connection, 'attempt.interruption_seal_pending', task_id=snapshot['task_id'],
+                                        attempt_id=attempt_id, payload={'error': detail, 'evidence': kind})
+                head = board._head_of(connection)
+            board._notify(head)
+            return 0
     result.update(board.workflow.interrupted_native_facts(attempt_id))
     with board.db.write() as connection:
         attempt = board._attempt_row(connection, attempt_id)
@@ -244,12 +246,11 @@ def _settle(board, snapshot: dict, identity: dict | None, kind: str, legacy_star
         task = connection.execute('SELECT * FROM tasks WHERE task_id=?', (attempt['task_id'],)).fetchone()
         board._require_effective_attempt(connection, attempt)
         now = board.now()
-        payload = {'status': 'failed', 'result': result, 'error': 'Execution was interrupted',
+        payload = {'status': 'failed', 'result': result, 'error': result.get('workspaceSealError', 'Execution was interrupted'),
                    'exitCode': None, 'signal': None, 'shutdownConfirmed': True,
                    'terminationReason': 'interrupted', 'artifacts': [], 'completedAt': now,
                    'logPaths': json.loads(attempt['log_paths']), 'runtimeIdentity': attempt['runtime_identity']}
         board._transition_attempt(connection, attempt, 'finished')
-        connection.execute('UPDATE attempt_process_identities SET shutdown_confirmed=1 WHERE attempt_id=?', (attempt_id,))
         connection.execute(
             "UPDATE attempts SET result_json=?,result_command_id=?,error=?,shutdown_confirmed=1,"
             "ownership='owned',finished_at=?,updated_at=?,revision=revision+1 WHERE attempt_id=?",
@@ -260,7 +261,7 @@ def _settle(board, snapshot: dict, identity: dict | None, kind: str, legacy_star
                            (attempt['task_id'],))
         board._release_claims(connection, attempt_id)
         connection.execute(
-            "UPDATE workers SET state='idle',current_attempt_id=NULL,revision=revision+1"
+            "UPDATE workers SET state='lost',current_attempt_id=NULL,revision=revision+1"
             ' WHERE worker_id=? AND current_attempt_id=?', (attempt['worker_id'], attempt_id))
         board._append_event(connection, 'task.failed', task_id=attempt['task_id'], attempt_id=attempt_id,
                             revision=task['revision'] + 1,

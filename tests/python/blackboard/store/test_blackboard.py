@@ -351,9 +351,9 @@ class TestCrashWindows(BoardTestCase):
         handle.shutdown_confirmed = lambda: True
         handle.identity = lambda: {
             'bootId': 'macos:00000000-0000-4000-8000-000000000001', 'pid': 123,
-            'startedAt': 10.5, 'processGroupId': 123, 'jobName': None,
+            'startedAt': 10, 'processGroupId': 123, 'jobName': None,
             'worker': {'bootId': 'macos:00000000-0000-4000-8000-000000000001',
-                       'pid': 122, 'startedAt': 8.5}}
+                       'pid': 122, 'startedAt': 8}}
         return handle
 
     def test_crash_before_spawn_releases_the_attempt_honestly(self):

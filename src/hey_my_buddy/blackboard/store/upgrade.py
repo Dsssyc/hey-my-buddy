@@ -238,7 +238,7 @@ def migrate(state: Path) -> None:
             _rebuild(connection, 'workflow_turns', lambda row: _turn(connection, row))
             _rebuild(connection, 'attempts', lambda row: _attempt(row, stops))
             for name in ('attempt_process_identities', 'attempt_legacy_starts',
-                         'attempt_native_process_identities', 'attempt_interruptions'):
+                         'attempt_interruptions'):
                 ddl, indexes = _fresh_ddl(name)
                 connection.execute(ddl)
                 for index in indexes:

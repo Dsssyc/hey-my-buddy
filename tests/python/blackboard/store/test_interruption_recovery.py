@@ -9,9 +9,9 @@ from hey_my_buddy.blackboard.tasks import interruption
 from hey_my_buddy.cli.cli_views import task_brief
 
 
-IDENTITY = {'bootId': 'macos:00000000-0000-0000-0000-000000000001', 'pid': 123, 'startedAt': 123.25,
+IDENTITY = {'bootId': 'macos:00000000-0000-0000-0000-000000000001', 'pid': 123, 'startedAt': 123250000,
             'processGroupId': 123, 'jobName': None,
-            'worker': {'bootId': 'macos:00000000-0000-0000-0000-000000000001', 'pid': 122, 'startedAt': 120.5}}
+            'worker': {'bootId': 'macos:00000000-0000-0000-0000-000000000001', 'pid': 122, 'startedAt': 120500000}}
 
 
 class InterruptionRecoveryTests(BoardTestCase):
@@ -34,7 +34,7 @@ class InterruptionRecoveryTests(BoardTestCase):
         board, _, _, claim, actor = self.claimed()
         with board.store.db.read() as connection:
             self.assertEqual(interruption.read_identity(connection, actor['attemptId']), IDENTITY)
-            self.assertEqual(connection.execute('SELECT root_started_at FROM attempt_process_identities').fetchone()[0], 123.25)
+            self.assertEqual(connection.execute('SELECT root_started_at FROM attempt_process_identities').fetchone()[0], 123250000)
         board.call('worker_progress', {**actor, 'processIdentity': IDENTITY})
         for change, code in (({'nonce': 'wrong'}, 'UNAUTHORIZED'), ({'generation': 2}, 'STALE_GENERATION'),
                              ({'processIdentity': {**IDENTITY, 'pid': 456, 'processGroupId': 456}}, 'CONFLICT')):
@@ -74,6 +74,7 @@ class InterruptionRecoveryTests(BoardTestCase):
                     events = connection.execute("SELECT kind FROM events WHERE attempt_id=?", (actor['attemptId'],)).fetchall()
                     self.assertIn('task.failed', [row[0] for row in events])
                     self.assertEqual(connection.execute('SELECT execution_state FROM attempts').fetchone()[0], 'finished')
+                    self.assertEqual(connection.execute('SELECT state,current_attempt_id FROM workers').fetchone()[:], ('lost', None))
 
     def test_unknown_or_live_identity_retains_claims_without_retry(self):
         for observation in ('unknown', 'alive'):
@@ -103,7 +104,13 @@ class InterruptionRecoveryTests(BoardTestCase):
         with patch.object(interruption.processes, 'inspect_process_identity', return_value='identity-absent'), \
              patch.object(interruption.processes, 'worker_identity_alive', return_value=False):
             settled = board.call('worker_recover', {'workerId': 'replacement', 'attemptId': actor['attemptId'], 'evidence': 'worker-stopped'})
-        self.assertTrue(settled['settled'])
+        self.assertFalse(settled['settled'])
+        self.assertTrue(settled['stopObserved'])
+        self.assertFalse(client.get(runId=task['taskId'])['shutdownConfirmed'])
+        with patch.object(board.store.workflow, 'seal_interrupted_turn', wraps=board.store.workflow.seal_interrupted_turn) as seal:
+            self.assertEqual(board.call('worker_recover', {'workerId': 'replacement'})['candidates'], [])
+            seal.assert_not_called()
+        self.assertEqual(board.store.recover_interrupted_attempts(), 1)
         view = board.call('task_get', {'runId': task['taskId']})['task']
         self.assertEqual(view['interruptionEvidence']['kind'], 'worker-stopped')
 
@@ -137,3 +144,27 @@ class InterruptionRecoveryTests(BoardTestCase):
                 with patch.object(interruption.processes, 'boot_started_at', return_value=2_000_000_000 if before_boot else 1):
                     board.store.reconcile_startup()
                 self.assertEqual(board.call('task_get', {'runId': task['taskId']})['task']['shutdownConfirmed'], before_boot)
+
+    def test_legacy_clock_corrections_within_margin_remain_unknown(self):
+        from datetime import datetime, timezone
+        started = datetime(2026, 1, 1, tzinfo=timezone.utc)
+        for correction in (-1800, 0, 1800, 3599, 3600, 5400):
+            with self.subTest(correction=correction), patch.object(
+                    interruption.processes, 'boot_started_at', return_value=started.timestamp() + correction):
+                self.assertEqual(interruption.legacy_boot_evidence(started.isoformat()), correction > 3600)
+
+    def test_idle_worker_does_not_run_settlement_or_native_journal_scan(self):
+        board, client, task, _, actor = self.claimed()
+        with patch.object(interruption.processes, 'inspect_process_identity', return_value='unknown'):
+            board.store.reconcile_startup()
+        with patch.object(interruption, 'recover') as recover, \
+             patch.object(interruption, '_native_identities') as journal, \
+             patch.object(board.store.workflow, 'seal_interrupted_turn') as seal, \
+             patch.object(interruption.processes, 'worker_identity_alive', return_value=False), \
+             patch.object(interruption.processes, 'inspect_process_identity', return_value='identity-absent'):
+            for _ in range(4):
+                self.assertEqual(board.call('worker_recover', {'workerId': 'original'})['candidates'], [])
+            recover.assert_not_called()
+            journal.assert_not_called()
+            seal.assert_not_called()
+        self.assertFalse(client.get(runId=task['taskId'])['shutdownConfirmed'])

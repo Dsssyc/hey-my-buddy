@@ -2539,8 +2539,6 @@ class BoardStore:
                 # unconfirmed keeps its claims retained: a replacement must not
                 # touch resources a survivor may still be writing.
                 self._release_claims(connection, attempt["attempt_id"])
-                connection.execute('UPDATE attempt_process_identities SET shutdown_confirmed=1 WHERE attempt_id=?',
-                                   (attempt["attempt_id"],))
             else:
                 self._retain_claims(connection, attempt["attempt_id"])
             worker_row = connection.execute(

@@ -19,6 +19,13 @@ BINDING = {"taskId": "task-1", "attemptId": "attempt-1", "generation": 1}
 
 
 class NativeProcessJournalTests(unittest.TestCase):
+    def test_journal_path_preserves_large_creation_token_exactly(self):
+        with tempfile.TemporaryDirectory() as directory:
+            token = 13_425_896_000_000_001
+            path = identity.native_process_journal_path(
+                Path(directory), {"pid": 73, "startedAt": token})
+            self.assertEqual(path.name, f"native-process-journal-73-{token}.json")
+
     def test_every_owned_native_group_is_durable_before_handle_returns(self):
         with tempfile.TemporaryDirectory() as directory:
             path = identity.native_process_journal_path(Path(directory))

@@ -16,13 +16,13 @@ class NativeTreeRecoveryTests(BoardTestCase):
 
     def test_confirmed_premodel_retry_appends_root_without_changing_its_history(self):
         board, client, task, claim, actor = self.claimed()
-        second = {**helpers.IDENTITY, 'pid': 456, 'processGroupId': 456, 'startedAt': 130.25}
+        second = {**helpers.IDENTITY, 'pid': 456, 'processGroupId': 456, 'startedAt': 130250000}
         board.call('worker_progress', {**actor, 'processIdentity': second, 'previousProcessStopped': True})
         board.call('worker_progress', {**actor, 'processIdentity': helpers.IDENTITY})
         with board.store.db.read() as connection:
             rows = [tuple(row) for row in connection.execute(
-                'SELECT ordinal,root_pid,shutdown_confirmed FROM attempt_process_identities ORDER BY ordinal')]
-            self.assertEqual(rows, [(0, 123, 1), (1, 456, 0)])
+                'SELECT ordinal,root_pid FROM attempt_process_identities ORDER BY ordinal')]
+            self.assertEqual(rows, [(0, 123), (1, 456)])
             self.assertEqual(interruption.read_identity(connection, actor['attemptId']), second)
 
     def harness_attempt(self):
@@ -49,7 +49,7 @@ class NativeTreeRecoveryTests(BoardTestCase):
                 self.assertFalse(client.get(runId=task['taskId'])['shutdownConfirmed'])
                 self.assertEqual(len(board.store.resource_claims()), 1)
 
-    def test_native_group_is_imported_and_must_be_gone_before_settlement(self):
+    def test_native_journal_group_must_be_gone_before_settlement(self):
         board, client, task, claim, actor, journal = self.harness_attempt()
         native = {**helpers.IDENTITY, 'pid': 223, 'processGroupId': 223}
         owner = processes.NativeProcessJournal(Path(journal['path']), journal['binding'])
@@ -62,11 +62,13 @@ class NativeTreeRecoveryTests(BoardTestCase):
             board.store.reconcile_startup()
             self.assertFalse(client.get(runId=task['taskId'])['shutdownConfirmed'])
             with board.store.db.read() as connection:
-                self.assertEqual(connection.execute('SELECT root_pid FROM attempt_native_process_identities').fetchone()[0], 223)
+                self.assertIsNone(connection.execute("SELECT name FROM sqlite_master WHERE name='attempt_native_process_identities'").fetchone())
         with patch.object(processes, 'worker_identity_alive', return_value=False), \
              patch.object(processes, 'inspect_process_identity', return_value='identity-absent'):
             response = board.call('worker_recover', {'workerId': 'original', 'attemptId': actor['attemptId'], 'evidence': 'worker-stopped'})
-        self.assertTrue(response['settled'])
+        self.assertFalse(response['settled'])
+        self.assertTrue(response['stopObserved'])
+        self.assertEqual(board.store.recover_interrupted_attempts(), 1)
         self.assertEqual(client.get(runId=task['taskId'])['interruptionEvidence']['kind'], 'worker-stopped')
 
     def test_failed_seal_remains_retryable_and_fences_results_before_git(self):

@@ -114,12 +114,12 @@ class MarkerWriteFailureTests(unittest.TestCase):
         self.assertTrue((directory / "spawn.intent").is_file())
         self.assertFalse((directory / "spawn.marker").exists())
 
-    def test_replacement_worker_stops_only_after_full_owner_identity_is_absent(self):
+    def test_replacement_worker_uses_primitive_evidence_and_does_not_report_unknown(self):
         from hey_my_buddy.protocol import process_identity
 
-        identity = {"bootId": "boot", "pid": 42, "startedAt": 10.0,
+        identity = {"bootId": "boot", "pid": 42, "startedAt": 10,
                     "processGroupId": 42, "jobName": None,
-                    "worker": {"bootId": "boot", "pid": 41, "startedAt": 9.0}}
+                    "worker": {"bootId": "boot", "pid": 41, "startedAt": 9}}
 
         class Client:
             def __init__(self):
@@ -133,16 +133,11 @@ class MarkerWriteFailureTests(unittest.TestCase):
 
         client = Client()
         worker = Worker("w-orphan", self.state, client=client, log=silent)
-        with mock.patch.object(process_identity, "worker_identity_alive", return_value=True), \
-                mock.patch.object(process_identity, "stop_orphan_process") as stop:
+        with mock.patch.object(process_identity, "stop_orphan_process", return_value="unknown") as stop:
             worker.recover_orphans()
-            stop.assert_not_called()
-        with mock.patch.object(process_identity, "worker_identity_alive", return_value=None), \
-                mock.patch.object(process_identity, "stop_orphan_process") as stop:
-            worker.recover_orphans()
-            stop.assert_not_called()
-        with mock.patch.object(process_identity, "worker_identity_alive", return_value=False), \
-                mock.patch.object(process_identity, "stop_orphan_process", return_value="worker-stopped") as stop:
+            stop.assert_called_once_with(identity)
+        self.assertEqual([params for _, params in client.calls if "evidence" in params], [])
+        with mock.patch.object(process_identity, "stop_orphan_process", return_value="worker-stopped") as stop:
             worker.recover_orphans()
             stop.assert_called_once_with(identity)
         self.assertEqual(client.calls[-1], ("worker_recover", {
@@ -151,9 +146,9 @@ class MarkerWriteFailureTests(unittest.TestCase):
     def test_replacement_worker_publishes_durable_identity_from_orphan_marker(self):
         from hey_my_buddy.protocol import process_identity
 
-        identity = {"bootId": "boot", "pid": 42, "startedAt": 10.0,
+        identity = {"bootId": "boot", "pid": 42, "startedAt": 10,
                     "processGroupId": 42, "jobName": None,
-                    "worker": {"bootId": "boot", "pid": 41, "startedAt": 9.0}}
+                    "worker": {"bootId": "boot", "pid": 41, "startedAt": 9}}
         intent = {"workerId": "w-orphan", "instanceId": "old-instance", "attemptId": "attempt-orphan",
                   "taskId": "task-orphan", "generation": 1, "nonce": "n" * 32,
                   "claimRequestId": "claim-orphan"}
@@ -197,12 +192,12 @@ class MarkerWriteFailureTests(unittest.TestCase):
     def test_native_journal_must_prove_every_child_stopped_before_settlement(self):
         from hey_my_buddy.protocol import process_identity
 
-        outer = {"bootId": "boot", "pid": 42, "startedAt": 10.0,
+        outer = {"bootId": "boot", "pid": 42, "startedAt": 10,
                  "processGroupId": 42, "jobName": None,
-                 "worker": {"bootId": "boot", "pid": 41, "startedAt": 9.0}}
-        native = {"bootId": "boot", "pid": 52, "startedAt": 11.0,
+                 "worker": {"bootId": "boot", "pid": 41, "startedAt": 9}}
+        native = {"bootId": "boot", "pid": 52, "startedAt": 11,
                   "processGroupId": 52, "jobName": None,
-                  "worker": {"bootId": "boot", "pid": 42, "startedAt": 10.0}}
+                  "worker": {"bootId": "boot", "pid": 42, "startedAt": 10}}
         binding = {"taskId": "task-orphan", "attemptId": "attempt-orphan", "generation": 1}
 
         class Client:
@@ -218,13 +213,11 @@ class MarkerWriteFailureTests(unittest.TestCase):
 
         client = Client()
         worker = Worker("w-orphan", self.state, client=client, log=silent)
-        with mock.patch.object(process_identity, "worker_identity_alive", return_value=False), \
-                mock.patch.object(process_identity, "stop_orphan_process", return_value="identity-absent"), \
+        with mock.patch.object(process_identity, "stop_orphan_process", return_value="identity-absent"), \
                 mock.patch.object(process_identity, "read_native_process_journal", return_value=None):
             worker.recover_orphans()
         self.assertEqual([params for _, params in client.calls if "evidence" in params], [])
-        with mock.patch.object(process_identity, "worker_identity_alive", return_value=False), \
-                mock.patch.object(process_identity, "stop_orphan_process", side_effect=["identity-absent", "worker-stopped"]), \
+        with mock.patch.object(process_identity, "stop_orphan_process", side_effect=["identity-absent", "worker-stopped"]), \
                 mock.patch.object(process_identity, "read_native_process_journal",
                                   return_value={"identities": [native], "pending": 0}):
             worker.recover_orphans()
@@ -248,9 +241,9 @@ class MarkerWriteFailureTests(unittest.TestCase):
         from hey_my_buddy.buddy.runtime.worker import TERMINATION_GRACE_EXPIRED
 
         handle = ProcessHandle(mock.Mock(pid=None), own_group=False, log_paths={})
-        handle.identity = lambda: {"bootId": "test-boot", "pid": 1, "startedAt": 1.0,
+        handle.identity = lambda: {"bootId": "test-boot", "pid": 1, "startedAt": 1,
                                    "processGroupId": 1, "jobName": None,
-                                   "worker": {"bootId": "test-boot", "pid": 2, "startedAt": 2.0}}
+                                   "worker": {"bootId": "test-boot", "pid": 2, "startedAt": 2}}
         handle.cancel_requested, handle.stop_initiator = True, "host"
         handle.wrap_up_started, handle.grace_deadline = True, 0.0
         handle.wait = mock.Mock(side_effect=[None, 0])
@@ -271,9 +264,9 @@ class MarkerWriteFailureTests(unittest.TestCase):
     def test_timely_wrap_up_keeps_its_reason_and_partial_reason_when_collected_late(self):
         from hey_my_buddy.buddy.harnesses.base import AdapterOutcome
         handle = ProcessHandle(mock.Mock(pid=None), own_group=False, log_paths={})
-        handle.identity = lambda: {"bootId": "test-boot", "pid": 1, "startedAt": 1.0,
+        handle.identity = lambda: {"bootId": "test-boot", "pid": 1, "startedAt": 1,
                                    "processGroupId": 1, "jobName": None,
-                                   "worker": {"bootId": "test-boot", "pid": 2, "startedAt": 2.0}}
+                                   "worker": {"bootId": "test-boot", "pid": 2, "startedAt": 2}}
         handle.cancel_requested, handle.stop_initiator = True, "console"
         handle.grace_deadline, handle.grace_expired = 0.0, True
         handle.wait = lambda timeout: 0
@@ -406,8 +399,8 @@ class PreparationBoardErrorTests(unittest.TestCase):
         binding = {"taskId": "task-prep", "attemptId": "attempt-prep", "generation": 1}
         self.assertEqual(native_process_journal_path(self.root), native_process_journal_path(
             self.root, {"pid": os.getpid(), "startedAt": _creation_time(os.getpid())}))
-        first = native_process_journal_path(self.root, {"pid": 101, "startedAt": 1.5})
-        second = native_process_journal_path(self.root, {"pid": 102, "startedAt": 2.5})
+        first = native_process_journal_path(self.root, {"pid": 101, "startedAt": 1})
+        second = native_process_journal_path(self.root, {"pid": 102, "startedAt": 2})
         self.assertNotEqual(first, second)
         NativeProcessJournal(first, binding)
         NativeProcessJournal(second, binding)
@@ -484,9 +477,9 @@ class PreparationBoardErrorTests(unittest.TestCase):
                 super().__init__(mock.Mock(pid=None), own_group=False, log_paths={})
 
             def identity(self):
-                return {"bootId": "test-boot", "pid": 1, "startedAt": 1.0,
+                return {"bootId": "test-boot", "pid": 1, "startedAt": 1,
                         "processGroupId": 1, "jobName": None,
-                        "worker": {"bootId": "test-boot", "pid": 2, "startedAt": 2.0}}
+                        "worker": {"bootId": "test-boot", "pid": 2, "startedAt": 2}}
 
             def wait(self, timeout=None):
                 return 0
@@ -565,9 +558,9 @@ class PreparationBoardErrorTests(unittest.TestCase):
                 self.root_pid = pid
 
             def identity(self):
-                return {"bootId": "test-boot", "pid": self.root_pid, "startedAt": float(self.root_pid),
+                return {"bootId": "test-boot", "pid": self.root_pid, "startedAt": self.root_pid,
                         "processGroupId": self.root_pid, "jobName": None,
-                        "worker": {"bootId": "test-boot", "pid": 2, "startedAt": 2.0}}
+                        "worker": {"bootId": "test-boot", "pid": 2, "startedAt": 2}}
 
             def wait(self, timeout=None):
                 return 0

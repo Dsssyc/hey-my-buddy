@@ -7,7 +7,6 @@ remains unknown; a numeric PID or process-group ID alone is never authority.
 from __future__ import annotations
 
 import ctypes
-import math
 import os
 import signal
 import sys
@@ -20,6 +19,7 @@ from pathlib import Path
 from ..errors import BoardError
 from ..json_codec import canonical_json, decode_strict_json
 from ..private_dirs import linked_component, open_regular_fd
+from .process_start import process_start
 
 
 _active_native_journal = None
@@ -35,7 +35,7 @@ def native_process_journal_path(private_root: Path, root_identity: dict | None =
     else:
         pid = root_identity["pid"]
         started_at = root_identity["startedAt"]
-    return Path(private_root) / f"native-process-journal-{pid}-{float(started_at).hex()}.json"
+    return Path(private_root) / f"native-process-journal-{pid}-{started_at}.json"
 
 
 class NativeProcessJournal:
@@ -189,44 +189,26 @@ def boot_id() -> str:
     raise OSError(f"unsupported platform: {sys.platform}")
 
 
-def _creation_time(pid: int) -> float | None:
-    import psutil
+def _creation_time(pid: int) -> int | None:
+    return process_start(pid, include_exited=True)
 
+
+def _started_at(pid: int) -> int | None:
+    return process_start(pid, include_exited=False)
+
+
+def _group_alive(pgid: int) -> bool:
     try:
-        return psutil.Process(pid).create_time()
-    except (psutil.NoSuchProcess, psutil.ZombieProcess):
-        return None
-
-
-def _started_at(pid: int) -> float | None:
-    import psutil
-
-    try:
-        process = psutil.Process(pid)
-        if process.status() == psutil.STATUS_ZOMBIE:
-            return None
-        return process.create_time()
-    except (psutil.NoSuchProcess, psutil.ZombieProcess):
-        return None
-
-
-def _group_members(pgid: int) -> list[int]:
-    import psutil
-
-    members = []
-    for process in psutil.process_iter():
-        try:
-            if process.status() != psutil.STATUS_ZOMBIE and os.getpgid(process.pid) == pgid:
-                members.append(process.pid)
-        except (psutil.NoSuchProcess, psutil.ZombieProcess, ProcessLookupError):
-            continue
-    return members
+        os.killpg(pgid, 0)
+    except ProcessLookupError:
+        return False
+    return True
 
 
 class _SystemSource:
     boot_id = staticmethod(boot_id)
     started_at = staticmethod(_started_at)
-    group_members = staticmethod(_group_members)
+    group_alive = staticmethod(_group_alive)
 
     @staticmethod
     def group_id(pid: int) -> int:
@@ -259,8 +241,8 @@ class _SystemSource:
             api.close(handle)
 
     @staticmethod
-    def stop_group(pgid: int) -> None:
-        os.killpg(pgid, signal.SIGKILL)
+    def signal_group(pgid: int, sig: int) -> None:
+        os.killpg(pgid, sig)
 
 
 def validate_process_identity(record: object) -> dict:
@@ -282,8 +264,7 @@ def validate_process_identity(record: object) -> dict:
             raise BoardError("INVALID_ARGUMENT", "boot identifier is invalid") from error
         if type(subject["pid"]) is not int or subject["pid"] <= 0:
             raise BoardError("INVALID_ARGUMENT", "process ID must be positive")
-        if type(subject["startedAt"]) not in (int, float) or not math.isfinite(subject["startedAt"]) \
-                or subject["startedAt"] <= 0:
+        if type(subject["startedAt"]) is not int or not 0 < subject["startedAt"] < 2**63:
             raise BoardError("INVALID_ARGUMENT", "process creation time is invalid")
     pgid, job = record["processGroupId"], record["jobName"]
     if (type(pgid) is int and pgid > 0 and job is None) == (pgid is None and isinstance(job, str) and bool(job)):
@@ -328,7 +309,7 @@ def capture_process_identity(handle) -> dict:
         else:
             if current_group != handle.pgid:
                 raise OSError("owned process group changed before identity capture")
-    return validate_process_identity(record)
+    return record
 
 
 def worker_identity_alive(record: dict, *, source=None) -> bool | None:
@@ -362,21 +343,21 @@ def inspect_process_identity(record: dict, *, source=None) -> str:
                 return "unknown"
             return "alive"
         root_start = source.started_at(record["pid"])
-        members = source.group_members(record["processGroupId"])
-        if root_start is None and not members:
+        group_alive = source.group_alive(record["processGroupId"])
+        if root_start is None and not group_alive:
             return "identity-absent"
         if root_start is not None and root_start != record["startedAt"]:
             # A recycled root PID is not the old leader. With group members
             # still present, its provenance cannot be proven from the PGID.
-            return "unknown" if members else "identity-absent"
+            return "unknown" if group_alive else "identity-absent"
         if root_start is None:
             # A bare PGID cannot prove these are the original descendants.
             return "unknown"
-        if not members:
+        if not group_alive:
             return "unknown"
         if source.group_id(record["pid"]) != record["processGroupId"]:
             return "unknown"
-        # The root may exit and its PID be reused during a process scan.
+        # The root may exit and its PID be reused during observation.
         return "alive" if source.started_at(record["pid"]) == root_start else "unknown"
     except Exception as error:
         if not _observation_failure(error):
@@ -392,30 +373,40 @@ def stop_orphan_process(record: dict, *, source=None, settle_seconds: float = 2.
     observation = inspect_process_identity(record, source=source)
     if observation != "alive":
         return observation
-    # The second inspection is intentional: the prior read may precede a PID
-    # or group transition.  Never signal on a cached lone PID.
-    if inspect_process_identity(record, source=source) != "alive":
-        return "unknown"
     try:
         if record["jobName"] is not None:
             source.stop_job(record["jobName"])
         else:
-            source.stop_group(record["processGroupId"])
+            source.signal_group(record["processGroupId"], signal.SIGTERM)
     except Exception as error:
         if not _observation_failure(error):
             raise
         return "unknown"
-    deadline = time.monotonic() + settle_seconds
+    started = time.monotonic()
+    grace_deadline = started + min(0.5, settle_seconds / 2)
+    deadline = started + settle_seconds
+    escalated = False
     while True:
         observation = inspect_process_identity(record, source=source)
         if observation in ("boot-changed", "identity-absent"):
             return "worker-stopped"
+        if (record["jobName"] is None and not escalated and observation == "alive"
+                and time.monotonic() >= grace_deadline):
+            if worker_identity_alive(record, source=source) is not False:
+                return "unknown"
+            try:
+                # Recheck the complete root/group identity directly before escalation.
+                if inspect_process_identity(record, source=source) == "alive":
+                    source.signal_group(record["processGroupId"], signal.SIGKILL)
+                    escalated = True
+            except Exception as error:
+                if not _observation_failure(error):
+                    raise
+                return "unknown"
         if time.monotonic() >= deadline:
             return "unknown"
         time.sleep(0.025)
 
 
 def _observation_failure(error: Exception) -> bool:
-    import psutil
-
-    return isinstance(error, (OSError, psutil.Error))
+    return isinstance(error, OSError)

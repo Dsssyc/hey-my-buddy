@@ -46,7 +46,7 @@ from hey_my_buddy.buddy.runtime.worker import (
     _Renewal,
     classify_termination,
 )
-from hey_my_buddy.protocol.process_identity import inspect_process_identity, stop_orphan_process
+from hey_my_buddy.protocol.process_identity import _creation_time, inspect_process_identity, stop_orphan_process
 
 SOURCE_ROOT = Path(__file__).resolve().parents[4] / "src"
 TEST_ROOT = Path(__file__).resolve().parent
@@ -509,12 +509,12 @@ class RealDaemonRestart(RecoveryBase):
                 self.assertEqual(inspect_process_identity(identity), "alive")
                 self.assertTrue(wait_for(starts.exists, 5))
                 worker = psutil.Process(identity["worker"]["pid"])
-                self.assertEqual(worker.create_time(), identity["worker"]["startedAt"])
+                self.assertEqual(_creation_time(worker.pid), identity["worker"]["startedAt"])
                 self.assertEqual(worker.pid, supervisor.pid)
                 if kill_child:
                     worker.suspend()
                     child = psutil.Process(identity["pid"])
-                    self.assertEqual(child.create_time(), identity["startedAt"])
+                    self.assertEqual(_creation_time(child.pid), identity["startedAt"])
                     descendants = child.children(recursive=True)
                     for process in descendants:
                         process.kill()
@@ -529,8 +529,10 @@ class RealDaemonRestart(RecoveryBase):
                     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True,
                 )
                 self.children.append(replacement)
-                self.assertTrue(wait_for(lambda: self._status(run_id, environment)["attemptState"] == "finished", 40),
-                                "the private supervisor's replacement Worker and service sweep must settle the attempt")
+                # A lease sweep first exposes uncertainty; the replacement then
+                # stops/reports, and only the following service sweep settles.
+                self.assertTrue(wait_for(lambda: self._status(run_id, environment)["attemptState"] == "finished", 70),
+                                "lease expiry, orphan observation and the next service sweep must settle the attempt")
                 self.assertEqual(starts.read_text().splitlines(), ["start"])
                 result = self.cli("result", json.dumps({"runId": run_id}), env=environment)[1]
                 self.assertEqual(result["attemptId"], attempt_id)
@@ -591,14 +593,14 @@ class RealDaemonRestart(RecoveryBase):
                 identity = json.loads(marker.read_text())["processIdentity"]
                 worker_identity = identity["worker"]
                 worker_process = psutil.Process(worker_identity["pid"])
-                self.assertEqual(worker_process.create_time(), worker_identity["startedAt"])
+                self.assertEqual(_creation_time(worker_process.pid), worker_identity["startedAt"])
                 self.assertEqual(worker_process.pid, supervisor.pid)
                 worker_process.suspend()
                 paused = True
                 self.assertTrue(wait_for(lambda: self._status(run_id, environment)["attemptState"] == "uncertain", 35),
                                 "the lease sweep must mark the paused attempt unknown")
                 self.assertEqual(self._status(run_id, environment)["status"], "running")
-                self.assertEqual(worker_process.create_time(), worker_identity["startedAt"])
+                self.assertEqual(_creation_time(worker_process.pid), worker_identity["startedAt"])
                 worker_process.resume()
                 paused = False
                 self.assertTrue(wait_for(lambda: self._status(run_id, environment)["attemptState"] == "executing", 12),
