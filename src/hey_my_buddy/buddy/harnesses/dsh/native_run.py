@@ -387,17 +387,24 @@ def _binding_path(native_root: Path, session_id: str) -> Path:
     return Path(native_root) / (hashlib.sha256(session_id.encode()).hexdigest() + ".json")
 
 
-def _micro_task_binding(request: RunRequest, session_id: str) -> dict:
+def _micro_task_binding(request: RunRequest, session_id: str, *, status: str) -> dict:
     """The resumable micro task binding of one session: task, session, cwd, buddy.
 
     The buddy is the frozen requested selection — the same values the
     native readback confirmed for the turn that wrote the binding.
     """
     return {"taskId": request.identity.task_id, "sessionId": session_id,
+            "lastTurnStatus": status,
             "cwd": request.cwd,
             "buddy": {"provider": request.buddy.provider,
                               "model": request.buddy.model,
                               "effort": request.buddy.effort}}
+
+
+def _valid_micro_task_binding(request: RunRequest, session_id: str, binding: object) -> bool:
+    status = binding.get("lastTurnStatus") if isinstance(binding, dict) else None
+    return (status in ("completed", "cancelled")
+            and binding == _micro_task_binding(request, session_id, status=status))
 
 
 def _continuation_of(request: RunRequest) -> tuple[str, str | None]:
@@ -580,6 +587,7 @@ class _RunState:
     attention_error: str | None = None
     update_overflow: bool = False
     prompt_stop_reason: str | None = None
+    interrupted_turn_closed: bool = False
     event_count: int = 0
     #: The update pump's cumulative unknown-notification counts. The run's
     #: result projection reads this same mapping; an empty one carries no
@@ -1027,7 +1035,7 @@ def run(request: RunRequest, *, observer: Callable[[Mapping[str, Any]], RunFeedb
             except (OSError, ValueError):
                 raise NativeError("native-resume-unavailable",
                                   "the previous native session has no private micro task binding") from None
-            if binding != _micro_task_binding(request, previous):
+            if not _valid_micro_task_binding(request, previous, binding):
                 raise NativeError("native-resume-unavailable",
                                   "the previous native session does not match this micro task, "
                                   "checkout and buddy")
@@ -1108,24 +1116,24 @@ def run(request: RunRequest, *, observer: Callable[[Mapping[str, Any]], RunFeedb
     else:
         record = None
     continuation = None
-    if micro_task and sessions and state.status == "ok" and state.provenance is not None \
-            and state.stop.get("shutdown") is True:
+    completed = state.status == "ok" and state.provenance is not None
+    interrupted = (state.status == "cancelled" and state.interrupt_requested
+                   and state.prompt_stop_reason == "cancelled" and state.interrupted_turn_closed)
+    if micro_task and sessions and (completed or interrupted) and state.stop.get("shutdown") is True:
         # The reusable binding needs the complete native turn, its verified
-        # provenance, the correct session binding and the really-gone group —
-        # a resumed turn keeps the binding it already verified; a fresh root
-        # writes its own once, and nothing else may stand in for either.
+        # provenance or acknowledged cancellation, plus the really-gone
+        # group. A resumed prompt invalidated its old binding before admission.
         session_id = sessions[-1]
-        expected = _micro_task_binding(request, session_id)
+        expected = _micro_task_binding(request, session_id,
+                                       status="cancelled" if interrupted else "completed")
         try:
             binding_file = _binding_path(native_root, session_id)
-            if binding_file.is_file():
-                bound = decode_json(binding_file.read_bytes()) == expected
-            else:
-                private_json(binding_file, expected, exclusive=True)
-                bound = True
-        except (OSError, ValueError, BoardError):
-            bound = False
-        if bound:
+            private_json(binding_file, expected, exclusive=True)
+        except (OSError, ValueError, BoardError) as error:
+            state.status, state.reason = "error", "native-binding-save-failed"
+            state.error_text = f"the DSH session binding could not be saved: {error}"[:512]
+            continuation = ContinuationFacts(resumable=False)
+        else:
             continuation = ContinuationFacts(resumable=True)
     return _build_result(request, state=state, tools=tools, activity=activity, client=client,
                          sessions=sessions, evidence=evidence, raw_answer=raw_answer,
@@ -1403,6 +1411,11 @@ def _micro_task_round(*, client: AcpClient, pump: _Pump, request: RunRequest,
         inquiry_bridge.activate(session_id)
     state.configured = True
     state.checked = _configure(client, session_id, snapshot, request.buddy, state.native_facts)
+    if mode == "native-session":
+        # The previous terminal binding ceases to describe the session when
+        # another prompt is admitted. A fresh one follows this turn's own
+        # confirmed terminal response and group stop.
+        _binding_path(Path(request.private_state.native_root), session_id).unlink()
     publisher = ActivityPublisher(services.live.publish_activity if services.live else None)
 
     def micro_task_fold(message: object) -> bool:
@@ -1421,6 +1434,10 @@ def _micro_task_round(*, client: AcpClient, pump: _Pump, request: RunRequest,
     if value.get("stopReason") == "cancelled":
         # A cancelled turn owes no finish receipt; the reason, not a missing
         # tool, is what the turn's end means.
+        state.prompt_stop_reason = "cancelled"
+        if state.interrupt_requested:
+            _close_session(client, session_id)
+            state.interrupted_turn_closed = True
         raise NativeError("native-cancelled", "the native root turn stopped cancelled")
     failure = _settle_stop_reason(state, value.get("stopReason"))
     if state.status == "unknown":

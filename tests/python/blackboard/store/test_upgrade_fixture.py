@@ -19,6 +19,7 @@ from hey_my_buddy.blackboard.store.db import Database
 from hey_my_buddy.blackboard.tasks import workspace
 from hey_my_buddy.blackboard.tasks.workflow import WorkflowCoordinator
 from hey_my_buddy.install import upgrade
+from hey_my_buddy.private_dirs import native_root
 
 
 class UpgradeFixtureTests(unittest.TestCase):
@@ -31,6 +32,51 @@ class UpgradeFixtureTests(unittest.TestCase):
         connection.row_factory = sqlite3.Row
         self.addCleanup(connection.close)
         return fixture, connection
+
+    def native_bindings(self, state):
+        bindings = []
+        for harness in ('codex', 'dsh'):
+            task_id, session_id = 'fixture-' + harness, 'session-' + harness
+            path = native_root(state, harness, task_id) / (hashlib.sha256(session_id.encode()).hexdigest() + '.json')
+            path.parent.mkdir(parents=True)
+            binding = {'taskId': task_id, 'cwd': '/fixture/checkout',
+                       'buddy': {'provider': 'fixture', 'model': 'fixture', 'effort': 'fixture'}}
+            if harness == 'codex':
+                binding.update(threadId=session_id, lastTurnId='native-turn', lastAttemptId='attempt',
+                               lastInputSha256='a' * 64)
+            else:
+                binding['sessionId'] = session_id
+            path.write_text(json.dumps(binding))
+            bindings.append((path, binding))
+        return bindings
+
+    def test_upgrade_converts_native_bindings_to_one_explicit_terminal_form(self):
+        fixture, connection = self.restored()
+        connection.close()
+        bindings = self.native_bindings(fixture['state'])
+        board_upgrade.migrate(fixture['state'])
+        for path, binding in bindings:
+            self.assertEqual(json.loads(path.read_bytes()), {**binding, 'lastTurnStatus': 'completed'})
+
+    def test_native_binding_conversion_failure_rolls_back_board_and_binding_stock(self):
+        fixture, connection = self.restored()
+        connection.close()
+        bindings = self.native_bindings(fixture['state'])
+        write = board_upgrade._write_native_binding
+        calls = 0
+        def fail_second(path, binding):
+            nonlocal calls
+            calls += 1
+            if calls == 2:
+                raise OSError('fixture binding publication failed')
+            write(path, binding)
+        with mock.patch.object(board_upgrade, '_write_native_binding', side_effect=fail_second):
+            with self.assertRaisesRegex(OSError, 'fixture binding publication failed'):
+                board_upgrade.migrate(fixture['state'])
+        for path, binding in bindings:
+            self.assertEqual(json.loads(path.read_bytes()), binding)
+        with sqlite3.connect(fixture['state'] / 'board.sqlite3') as board:
+            self.assertEqual(board.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone()[0], '19')
 
     def sample(self, fixture, connection):
         run_id = fixture['stableIds']['delivered']
@@ -174,6 +220,8 @@ class UpgradeFixtureTests(unittest.TestCase):
             fresh_schema = [tuple(row) for row in baseline.execute(
                 'SELECT type,name,tbl_name,sql FROM sqlite_master ORDER BY type,name')]
             self.assertEqual(source_schema, fresh_schema)
+            migrated_columns = {row[1] for row in upgraded.execute('PRAGMA table_info(attempts)')}
+            self.assertTrue({'stop_initiator', 'grace_deadline'} <= migrated_columns)
             self.assertEqual(router.configuration(upgraded), expected_settings)
             self.assertEqual(dict(upgraded.execute('SELECT run_id,state FROM workflow_runs')), expected_runs)
             self.assertEqual(dict(upgraded.execute('SELECT run_id,request_fingerprint FROM workflow_runs')),
@@ -281,6 +329,7 @@ class UpgradeFixtureTests(unittest.TestCase):
         with sqlite3.connect(fixture['state'] / 'board.sqlite3') as current:
             converted = json.loads(current.execute('SELECT result_json FROM attempts WHERE attempt_id=?', (attempt_id,)).fetchone()[0])
             self.assertIsNone(converted['terminationReason'])
+            self.assertIsNone(converted['stopInitiator'])
             self.assertEqual(converted['result'], native)
             cached = json.loads(current.execute("SELECT response_json FROM commands WHERE command_id='deadline-cache'").fetchone()[0])
             self.assertIsNone(cached['attempt']['result']['terminationReason'])
@@ -288,6 +337,105 @@ class UpgradeFixtureTests(unittest.TestCase):
             self.assertIsNone(cached['task']['terminationReason'])
             router = board_upgrade._receipt_object({'taskId': 'router', 'adapter': 'decision', 'terminationReason': 'deadline'})
             self.assertEqual(router['terminationReason'], 'deadline')
+
+    def test_migration_records_unknown_legacy_stop_without_changing_native_report(self):
+        fixture, connection = self.restored()
+        attempt_id, raw = connection.execute(
+            "SELECT attempt_id,result_json FROM attempts WHERE result_json IS NOT NULL LIMIT 1").fetchone()
+        receipt = json.loads(raw)
+        native = {'terminationReason': 'user-cancel', 'origin': 'native report'}
+        receipt.update(terminationReason='user-cancel', shutdownConfirmed=True, result=native)
+        connection.execute(
+            'UPDATE attempts SET cancel_requested_at=?,result_json=? WHERE attempt_id=?',
+            ('2026-01-01T00:00:00Z', json.dumps(receipt), attempt_id))
+        cached = {'attempt': {'taskId': 'service-task', 'attemptId': attempt_id, 'adapter': 'command',
+                              'cancelRequestedAt': '2026-01-01T00:00:00Z', 'result': receipt},
+                  'task': {'runId': 'service-task', 'adapter': 'command', 'terminationReason': 'user-cancel',
+                           'shutdownConfirmed': True,
+                           'resultMeta': {'terminationReason': 'user-cancel', 'shutdownConfirmed': True},
+                           'result': native}}
+        connection.execute("INSERT INTO commands(command_id,kind,request_hash,response_json,created_at) VALUES('legacy-stop','worker.result','legacy-hash',?,'2026-01-01')",
+                           (json.dumps(cached),))
+        connection.execute("INSERT INTO events(task_id,attempt_id,kind,payload_json,created_at) VALUES(NULL,?,'attempt.finished',?,'2026-01-01')",
+                           (attempt_id, json.dumps({'terminationReason': 'user-cancel', 'shutdownConfirmed': True,
+                                                    'report': native})))
+        connection.commit()
+        connection.close()
+        board_upgrade.migrate(fixture['state'])
+        with sqlite3.connect(fixture['state'] / 'board.sqlite3') as current:
+            initiator, deadline, raw = current.execute(
+                'SELECT stop_initiator,grace_deadline,result_json FROM attempts WHERE attempt_id=?',
+                (attempt_id,)).fetchone()
+            self.assertEqual((initiator, deadline), ('unknown', None))
+            converted = json.loads(raw)
+            self.assertEqual(converted['terminationReason'], 'unknown-stop')
+            self.assertEqual(converted['stopInitiator'], 'unknown')
+            self.assertEqual(converted['result'], native)
+            cached = json.loads(current.execute(
+                "SELECT response_json FROM commands WHERE command_id='legacy-stop'").fetchone()[0])
+            self.assertEqual(cached['attempt']['stopInitiator'], 'unknown')
+            self.assertIsNone(cached['attempt']['graceDeadline'])
+            self.assertEqual(cached['attempt']['result']['terminationReason'], 'unknown-stop')
+            self.assertEqual(cached['attempt']['result']['stopInitiator'], 'unknown')
+            self.assertEqual(cached['attempt']['result']['result'], native)
+            self.assertEqual(cached['task']['terminationReason'], 'unknown-stop')
+            self.assertEqual(cached['task']['stopInitiator'], 'unknown')
+            self.assertEqual(cached['task']['resultMeta']['terminationReason'], 'unknown-stop')
+            self.assertEqual(cached['task']['resultMeta']['stopInitiator'], 'unknown')
+            self.assertEqual(cached['task']['result'], native)
+            event = json.loads(current.execute(
+                "SELECT payload_json FROM events WHERE kind='attempt.finished' ORDER BY seq DESC LIMIT 1").fetchone()[0])
+            self.assertEqual(event['terminationReason'], 'unknown-stop')
+            self.assertEqual(event['stopInitiator'], 'unknown')
+            self.assertEqual(event['report'], native)
+
+    def test_migration_does_not_claim_an_unconfirmed_legacy_stop(self):
+        fixture, connection = self.restored()
+        attempt_id, raw = connection.execute(
+            "SELECT attempt_id,result_json FROM attempts WHERE result_json IS NOT NULL LIMIT 1").fetchone()
+        receipt = json.loads(raw)
+        native = {'terminationReason': 'user-cancel', 'origin': 'native report'}
+        receipt.update(terminationReason='user-cancel', shutdownConfirmed=False, result=native)
+        connection.execute('UPDATE attempts SET shutdown_confirmed=0,result_json=? WHERE attempt_id=?',
+                           (json.dumps(receipt), attempt_id))
+        cached = {'task': {'runId': 'service-task', 'adapter': 'command', 'shutdownConfirmed': False,
+                           'terminationReason': 'user-cancel', 'resultMeta': receipt, 'result': native}}
+        connection.execute("INSERT INTO commands(command_id,kind,request_hash,response_json,created_at) VALUES('unconfirmed-stop','task.result','legacy-hash',?,'2026-01-01')",
+                           (json.dumps(cached),))
+        connection.execute("INSERT INTO events(task_id,attempt_id,kind,payload_json,created_at) VALUES(NULL,?,'attempt.unconfirmed',?,'2026-01-01')",
+                           (attempt_id, json.dumps({'terminationReason': 'user-cancel',
+                                                    'shutdownConfirmed': False, 'report': native})))
+        connection.execute("INSERT INTO events(task_id,attempt_id,kind,payload_json,created_at) VALUES(NULL,?,'attempt.missing-stop-evidence',?,'2026-01-01')",
+                           (attempt_id, json.dumps({'terminationReason': 'user-cancel', 'report': native})))
+        connection.commit()
+        connection.close()
+        board_upgrade.migrate(fixture['state'])
+        with sqlite3.connect(fixture['state'] / 'board.sqlite3') as current:
+            initiator, deadline, raw = current.execute(
+                'SELECT stop_initiator,grace_deadline,result_json FROM attempts WHERE attempt_id=?',
+                (attempt_id,)).fetchone()
+            self.assertEqual((initiator, deadline), ('unknown', None))
+            converted = json.loads(raw)
+            self.assertIsNone(converted['terminationReason'])
+            self.assertEqual(converted['stopInitiator'], 'unknown')
+            self.assertEqual(converted['result'], native)
+            cached = json.loads(current.execute(
+                "SELECT response_json FROM commands WHERE command_id='unconfirmed-stop'").fetchone()[0])
+            self.assertIsNone(cached['task']['terminationReason'])
+            self.assertEqual(cached['task']['stopInitiator'], 'unknown')
+            self.assertIsNone(cached['task']['resultMeta']['terminationReason'])
+            self.assertEqual(cached['task']['resultMeta']['stopInitiator'], 'unknown')
+            self.assertEqual(cached['task']['result'], native)
+            event = json.loads(current.execute(
+                "SELECT payload_json FROM events WHERE kind='attempt.unconfirmed'").fetchone()[0])
+            self.assertIsNone(event['terminationReason'])
+            self.assertEqual(event['stopInitiator'], 'unknown')
+            self.assertEqual(event['report'], native)
+            missing = json.loads(current.execute(
+                "SELECT payload_json FROM events WHERE kind='attempt.missing-stop-evidence'").fetchone()[0])
+            self.assertIsNone(missing['terminationReason'])
+            self.assertEqual(missing['stopInitiator'], 'unknown')
+            self.assertEqual(missing['report'], native)
 
     def test_installed_upgrade_restores_schema19_backup_when_conversion_fails(self):
         fixture, connection = self.restored()

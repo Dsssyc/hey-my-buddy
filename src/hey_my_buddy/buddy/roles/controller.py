@@ -3,6 +3,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
+import signal
+import time
 from typing import Callable, Mapping, TYPE_CHECKING
 
 from ...errors import BoardError
@@ -27,6 +29,7 @@ __all__ = [
     'run_harness',
     'start_router_preparation',
     'worker_cancel',
+    'worker_stop',
     'worker_collect',
     'worker_executor',
     'worker_start',
@@ -92,12 +95,79 @@ def worker_collect(executor: Adapter | WorkerRunExecutor, handle: ProcessHandle,
     return executor.collect(handle, context)
 
 
+def stop_termination_reason(*, shutdown_confirmed: bool, stop_initiator: str | None,
+                            grace_expired: bool = False, graceful_delivered: bool = False) -> str | None:
+    """Classify a stop once, separately from its initiator and shutdown evidence."""
+    if shutdown_confirmed is not True:
+        return None
+    if stop_initiator == "host":
+        return "grace-expired" if grace_expired else "graceful-stop" if graceful_delivered else "forced-stop"
+    if stop_initiator == "console":
+        return "console-stop"
+    return "unknown-stop"
+
+
 def worker_cancel(executor: Adapter | WorkerRunExecutor, handle: ProcessHandle, *, grace_seconds: float | None = None) -> None:
     """Cancel through the executor; a None grace keeps each adapter's own default."""
+    if _force_role_stop(executor, handle, getattr(handle, "stop_initiator", None) or "unknown"):
+        return
     if grace_seconds is None:
         executor.cancel(handle)
     else:
         executor.cancel(handle, grace_seconds=grace_seconds)
+
+
+def _force_role_stop(executor: Adapter | WorkerRunExecutor, handle: ProcessHandle,
+                     initiator: str) -> bool:
+    """Tell an owned role controller to cancel native work before outer kill."""
+    control = getattr(handle, "role_run_control", None)
+    identity = getattr(handle, "role_run_identity", None)
+    if not isinstance(control, dict) or identity is None:
+        return False  # A command adapter directly owns the work it terminates.
+    from .turn_io import private_json
+    from .run_execution import _STOP_CONTROL
+
+    private_json(Path(control["privateRoot"]) / _STOP_CONTROL, {
+        "kind": "force-stop", "stopInitiator": initiator,
+        "binding": identity.to_payload(),
+    })
+    handle.force_stop_requested = True
+    # This is only time for the controller to reap its native group and return
+    # its receipt. It must not launch or continue a model turn after this mark.
+    executor.cancel(handle, grace_seconds=5.0)
+    return True
+
+
+def worker_stop(executor: Adapter | WorkerRunExecutor, handle: ProcessHandle, *,
+                stop_initiator: str, grace_deadline: float | None) -> None:
+    """Ask a resumable Worker to summarize, or stop its owned process now."""
+    if (stop_initiator != "host" or grace_deadline is None
+            or not getattr(getattr(executor, "description", None), "native_resume", False)):
+        handle.stop_initiator = stop_initiator
+        handle.grace_deadline = None
+        handle.grace_expired = False
+        handle.force_stop_requested = True
+        if not _force_role_stop(executor, handle, stop_initiator):
+            executor.cancel(handle, grace_seconds=0)
+        return
+    if getattr(handle, "stop_initiator", None) == "host":
+        return  # Repeated Host cancel retains its original absolute deadline.
+    from .turn_io import private_json
+    from .run_execution import _STOP_CONTROL
+
+    control = handle.role_run_control
+    private_json(Path(control["privateRoot"]) / _STOP_CONTROL, {
+        "kind": "host-graceful-stop", "stopInitiator": "host",
+        "graceDeadline": grace_deadline,
+        "binding": handle.role_run_identity.to_payload(),
+    }, exclusive=True)
+    handle.stop_initiator = "host"
+    handle.graceful_stop_started = True
+    handle.force_stop_requested = False
+    handle.grace_deadline = grace_deadline
+    handle.cancel_requested = True
+    handle.signalled_at = time.monotonic()
+    handle.signal_group(signal.SIGTERM)
 
 
 # -- the Router's preparation results and carrier call point ------------------

@@ -22,7 +22,7 @@ from pathlib import Path
 from unittest import mock
 
 from hey_my_buddy.buddy.harnesses.claude import adapter as claude_module
-from hey_my_buddy.buddy.roles import turn_io
+from hey_my_buddy.buddy.roles import controller, run_execution, turn_io
 from hey_my_buddy.buddy.harnesses.base import ExecutionContext
 from hey_my_buddy.buddy.harnesses.claude.adapter import ClaudeAdapter
 from hey_my_buddy.buddy.harnesses.claude.native_run import validate_turn_provenance
@@ -307,6 +307,32 @@ class ClaudeAdapterTests(ClaudeFixtureCase):
         self.assertIs(outcome.result.get("nativeInterruptRequested"), True)
         self.assertIs(outcome.result.get("nativeInterruptAcknowledged"), True,
                       "the receipt must distinguish a native interrupt reply from forced shutdown")
+
+    def _force_stop_hanging_role(self, *, initiator):
+        context = self.context("hang", timeout=None)
+        handle = self.executor.start(context)
+        self.addCleanup(lambda: handle.terminate(grace_seconds=0.2) if handle.group_alive() else None)
+        self.wait_for_native_user_turn()
+        controller.worker_stop(self.executor, handle, stop_initiator=initiator,
+                               grace_deadline=time.monotonic() + 300 if initiator == "host" else None)
+        self.assertIsNotNone(handle.wait(15), "Claude fixture controller did not exit after force stop")
+        outcome = self.executor.collect(handle, context)
+        self.assertEqual(outcome.status, "cancelled", outcome.to_report())
+        self.assertTrue(outcome.shutdown_confirmed, outcome.to_report())
+        self.assertEqual(outcome.result["stopReason"],
+                         "forced-stop" if initiator == "host" else "console-stop")
+        self.assertNotIn("turn", outcome.result)
+        self.assertFalse((Path(handle.role_run_control["privateRoot"]) /
+                          run_execution._STOP_SUMMARY).exists(), "force stop must not launch a summary turn")
+        state = self.fixture_state()
+        self.assertEqual(state["userTurns"], 1, "force stop must not send a second user turn")
+        self.assertTrue(state["interrupted"], "the native child must receive its interrupt request")
+
+    def test_host_stop_for_unsupported_claude_forces_native_shutdown(self):
+        self._force_stop_hanging_role(initiator="host")
+
+    def test_console_stop_forces_native_shutdown(self):
+        self._force_stop_hanging_role(initiator="console")
 
     def test_deadline_ends_the_native_process_group(self):
         outcome = self.execute(self.context("hang", timeout=1))

@@ -855,6 +855,46 @@ class WorkerSeamTests(MockNativeCase):
         self.assertEqual(second.native_identity.session_id, session)
         self.assertTrue(second.continuation.resumable)
 
+    def test_failed_resumed_turn_invalidates_its_previous_binding(self):
+        os.environ.update(self.environment)
+        os.environ["HMB_ZCODE_TEST_CASE"] = "ok"
+        request, services = self.worker_request(self.turn_input())
+        first = run(request, observer=worker_observer, services=services, cancelled=lambda: False)
+        self.assertEqual(first.end.status, "ok")
+        session = first.native_identity.session_id
+        binding = request.private_state.native_root
+        binding = Path(binding) / (hashlib.sha256(session.encode()).hexdigest() + ".json")
+        self.assertTrue(binding.is_file())
+        request, services = self.worker_request(
+            self.turn_input(previous=session),
+            continuation=RunContinuation(mode="native-session", previous_session_id=session))
+        os.environ["HMB_ZCODE_TEST_CASE"] = "wrong-input"
+        failed = run(request, observer=worker_observer, services=services, cancelled=lambda: False)
+        self.assertEqual(failed.end.reason_code, "wrong-native-turn")
+        self.assertFalse(binding.exists())
+        refused = run(request, observer=worker_observer, services=services, cancelled=lambda: False)
+        self.assertEqual(refused.end.reason_code, "native-resume-unavailable")
+
+    def test_binding_write_failure_is_a_reported_run_error(self):
+        os.environ.update(self.environment)
+        os.environ["HMB_ZCODE_TEST_CASE"] = "ok"
+        request, services = self.worker_request(self.turn_input())
+        original = native_run.private_json
+        native_root = Path(request.private_state.native_root)
+
+        def write(path, value, *, exclusive=False):
+            if Path(path).parent == native_root and exclusive:
+                raise OSError("fixture binding write denied")
+            return original(path, value, exclusive=exclusive)
+
+        with mock.patch.object(native_run, "private_json", side_effect=write):
+            result = run(request, observer=worker_observer, services=services, cancelled=lambda: False)
+        self.assertEqual(result.end.status, "error")
+        self.assertEqual(result.end.reason_code, "native-binding-save-failed")
+        self.assertIn("fixture binding write denied", result.end.message)
+        self.assertEqual(result.stop_evidence.native.group_state, "gone")
+        self.assertIs(result.continuation.resumable, False)
+
     def test_a_failed_close_keeps_the_observed_completion_tool_facts(self):
         # The value was already taken through the verified completion-tool
         # receipt; the unacknowledged close fails the run but never rewrites

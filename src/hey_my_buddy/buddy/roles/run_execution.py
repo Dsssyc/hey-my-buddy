@@ -12,6 +12,7 @@ import shutil
 import secrets
 import sys
 import tempfile
+import time
 import uuid
 from pathlib import Path
 
@@ -40,6 +41,8 @@ _STRICT_RESULT_BYTES = STRICT_RESULT_BYTES
 _CONTROL = "role-run-control.json"
 _REQUEST = "role-run-request.json"
 _VERDICT = "role-run-verdict.json"
+_STOP_CONTROL = "role-stop-control.json"
+_STOP_SUMMARY = "role-stop-summary.json"
 
 
 def _evidence(result, kind: str) -> dict | None:
@@ -438,17 +441,41 @@ def _read_frame(path: Path, maximum: int, decode):
 def _read_run(handle: ProcessHandle, path: Path) -> RunResult | None:
     try:
         result = _read_frame(path, MAX_RUN_RESULT_BYTES, decode_run_result)
-        if result.identity != handle.role_run_identity or result.harness != handle.role_run_control["harness"]:
+        if result.harness != handle.role_run_control["harness"]:
             return None
+        handle.role_run_active_control = handle.role_run_control
+        handle.role_run_active_identity = handle.role_run_identity
+        if result.identity != handle.role_run_identity:
+            if (getattr(handle, "stop_initiator", None) != "host"
+                    and getattr(handle, "graceful_stop_started", False) is not True):
+                return None
+            descriptor = read_strict_result(Path(handle.role_run_control["privateRoot"]) / _STOP_SUMMARY)
+            if (not isinstance(descriptor, dict) or set(descriptor) != {"parent", "identity", "control"}
+                    or descriptor["parent"] != handle.role_run_identity.to_payload()
+                    or descriptor["identity"] != result.identity.to_payload()
+                    or not isinstance(descriptor["control"], dict)):
+                return None
+            control = descriptor["control"]
+            root = Path(handle.role_run_control["privateRoot"])
+            if (control.get("privateRoot") != str(root / "stop-summary")
+                    or control.get("nativeRoot") != handle.role_run_control["nativeRoot"]
+                    or control.get("outputFile") != handle.role_run_control["outputFile"]
+                    or control.get("requestFile") != str(root / "stop-summary" / _REQUEST)
+                    or control.get("verdictFile") != str(root / "stop-summary" / _VERDICT)):
+                return None
+            handle.role_run_active_control = control
+            handle.role_run_active_identity = result.identity
         return result
     except (OSError, ValueError, BoardError, RecursionError):
         return None
 
 
 def _read_request(handle: ProcessHandle) -> RunRequest:
-    request = _read_frame(Path(handle.role_run_control["requestFile"]),
+    control = getattr(handle, "role_run_active_control", handle.role_run_control)
+    request = _read_frame(Path(control["requestFile"]),
                           MAX_RUN_REQUEST_BYTES, decode_run_request)
-    if request.identity != handle.role_run_identity or request.harness != handle.role_run_control["harness"]:
+    expected = getattr(handle, "role_run_active_identity", handle.role_run_identity)
+    if request.identity != expected or request.harness != handle.role_run_control["harness"]:
         raise BoardError("INVALID_ARGUMENT", "The run request does not match its owned invocation")
     return request
 
@@ -620,8 +647,14 @@ class WorkerRunExecutor:
                     raise BoardError("INVALID_ARGUMENT", "A native report could not be verified")
                 if shutdown:
                     from ..harnesses.registry import worker_format
+                    active_control = getattr(handle, "role_run_active_control", handle.role_run_control)
+                    if (active_control is not handle.role_run_control
+                            and (request.continuation is None
+                                 or result.native_identity is None
+                                 or result.native_identity.session_id != request.continuation.previous_session_id)):
+                        raise BoardError("INVALID_ARGUMENT", "The summary run changed its native session")
                     if worker_format(self.name) is not None:
-                        verdict = read_strict_result(Path(handle.role_run_control["verdictFile"]))
+                        verdict = read_strict_result(Path(active_control["verdictFile"]))
                         if not isinstance(verdict, dict):
                             raise BoardError("INVALID_ARGUMENT", "The Worker role verdict is missing")
                         error = verdict.get("workerError")
@@ -631,7 +664,7 @@ class WorkerRunExecutor:
                                     or not isinstance(error["message"], str) or len(error["message"]) > 1024):
                                 raise BoardError("INVALID_ARGUMENT", "The Worker role error is invalid")
                             raise BoardError(error["code"], error["message"])
-                    _worker_result(result, handle.role_run_control, context.turn_input, request.input_text, payload)
+                    _worker_result(result, active_control, context.turn_input, request.input_text, payload)
             except (OSError, ValueError, BoardError, RecursionError) as problem:
                 role_invalid = isinstance(problem, BoardError) and problem.code == "invalid-result"
                 payload.update(status="error", code="invalid-result" if role_invalid else "invalid-role-result",
@@ -664,6 +697,15 @@ class WorkerRunExecutor:
         if payload.get("attentionRequired") is True and record is not None and record["outcome"]["disposition"] == "completed":
             error = ("a native interactive request was refused during this turn; a completed outcome "
                      "cannot stand in for the Host attention that request requires")
+        stop_initiator = getattr(handle, "stop_initiator", None)
+        deadline = getattr(handle, "grace_deadline", None)
+        expired = (getattr(handle, "grace_expired", False) is True
+                   or stop_initiator == "host" and deadline is not None and time.monotonic() >= deadline)
+        original_completed = (result is not None and payload.get("status") == "ok"
+                              and result.identity == handle.role_run_identity and exit_code == 0 and shutdown
+                              and record is not None and error is None and not expired)
+        if original_completed:
+            status = "ok"
         seal_error = None
         payload["turnResultPath"] = str(context.turn_output_file())
         session_id = payload.get("sessionId") or (record or {}).get("sessionId")
@@ -685,14 +727,29 @@ class WorkerRunExecutor:
             payload["turnError"] = error
             if status == "ok":
                 status = "failed"
-        elif record is not None and status == "ok":
+        elif record is not None and status in ("ok", "cancelled"):
             payload["turn"] = record
-            seal, seal_error = turn_io.seal_workspace(context)
-            if seal_error:
-                payload["workspaceSealError"] = seal_error
-                status = "failed"
-            elif seal:
-                payload["workspaceSeal"] = seal
+            if status == "ok":
+                seal, seal_error = turn_io.seal_workspace(context)
+                if seal_error:
+                    payload["workspaceSealError"] = seal_error
+                    status = "failed"
+                elif seal:
+                    payload["workspaceSeal"] = seal
+        if seal_error:
+            original_completed = False
+        if not original_completed and (handle.cancel_requested or status == "cancelled" or stop_initiator is not None):
+            from .controller import stop_termination_reason
+            control = getattr(handle, "role_run_active_control", handle.role_run_control)
+            verdict = read_strict_result(Path(control["verdictFile"]))
+            graceful = (stop_initiator == "host" and deadline is not None
+                        and getattr(handle, "force_stop_requested", False) is not True
+                        and result is not None
+                        and result.stop_evidence.native.group_state == "gone"
+                        and isinstance(verdict, dict) and verdict.get("gracefulStop") is True
+                        and record is not None and error is None)
+            payload["stopReason"] = stop_termination_reason(shutdown_confirmed=shutdown,
+                stop_initiator=stop_initiator, grace_expired=expired, graceful_delivered=graceful)
         return AdapterOutcome(status=status, result=payload, error=payload.get("error") or error or seal_error,
                               exit_code=exit_code, signal=signal_name(exit_code), shutdown_confirmed=shutdown,
                               artifacts=_artifacts(context, handle) if shutdown else [])

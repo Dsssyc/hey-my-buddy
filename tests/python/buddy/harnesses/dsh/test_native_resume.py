@@ -24,6 +24,7 @@ import threading
 import time
 import unittest
 from pathlib import Path
+from unittest import mock
 
 from hey_my_buddy.buddy.harnesses.run_contract import RunContinuation
 from hey_my_buddy.buddy.harnesses.dsh import native_run
@@ -75,6 +76,55 @@ class NativeResumeCase(NativeRunCase):
 
 class ResumeTurnTests(NativeResumeCase):
     """V-R2 and V-R4: the resumed turn itself, its launch and its buddy."""
+
+    def test_binding_write_failure_reports_error_after_confirmed_stop(self):
+        request, bound, mount = self.worker_request()
+        self.micro_task_agent_args(mount)
+        self.extra_agent_args += ["--session-record", "usage"]
+        original = native_run.private_json
+
+        def write(path, value, *, exclusive=False):
+            if Path(path).parent == self.root and exclusive:
+                raise OSError("fixture binding write denied")
+            return original(path, value, exclusive=exclusive)
+
+        with mock.patch.object(native_run, "private_json", side_effect=write):
+            result = run(request, observer=worker_observer, services=bound.services,
+                         cancelled=lambda: False)
+        self.assertEqual(result.end.status, "error")
+        self.assertEqual(result.end.reason_code, "native-binding-save-failed")
+        self.assertIn("fixture binding write denied", result.end.message)
+        self.assertEqual(result.stop_evidence.native.group_state, "gone")
+        self.assertIs(result.continuation.resumable, False)
+
+    def test_acknowledged_cancelled_prompt_can_resume_after_confirmed_stop(self):
+        request, bound, mount = self.worker_request(timeout=None)
+        self.micro_task_agent_args(mount)
+        self.extra_agent_args.append("--hang-prompt")
+        flag = threading.Event()
+
+        def stop_soon():
+            self.assertTrue(self.wait_for(lambda: any(
+                entry.get("event") == "hanging-prompt" for entry in self.agent_log())))
+            flag.set()
+
+        thread = threading.Thread(target=stop_soon)
+        thread.start()
+        try:
+            first = run(request, observer=worker_observer, services=bound.services,
+                        cancelled=flag.is_set)
+        finally:
+            thread.join()
+        self.assertEqual(first.end.status, "cancelled")
+        self.assertEqual(first.stop_evidence.native.group_state, "gone")
+        self.assertIs(first.continuation.resumable, True)
+        previous = first.native_identity.session_id
+        binding = self.root / (hashlib.sha256(previous.encode()).hexdigest() + ".json")
+        self.assertEqual(json.loads(binding.read_text())["lastTurnStatus"], "cancelled")
+        _, _, _, second = self.resumed_turn(previous)
+        self.assertEqual(second.end.status, "ok", second.end.message)
+        self.assertEqual(second.native_identity.session_id, previous)
+        self.assertTrue(second.continuation.resumable)
 
     def assert_same_permission(self, level, mode):
         _, _, _, first = self.first_turn(level=level)
@@ -250,6 +300,7 @@ class ResumeFailureTests(NativeResumeCase):
         self.micro_task_agent_args(mount)
         binding = self.root / (hashlib.sha256(b"foreign-micro-task-session").hexdigest() + ".json")
         binding.write_text(json.dumps({"taskId": "another-task", "sessionId": "foreign-micro-task-session",
+                                       "lastTurnStatus": "completed",
                                        "cwd": request.cwd,
                                        "buddy": {"provider": "fake", "model": "m1",
                                                          "effort": "high"}}))
@@ -267,7 +318,8 @@ class ResumeFailureTests(NativeResumeCase):
         self.micro_task_agent_args(mount)
         binding = self.root / (hashlib.sha256(b"ghost-session").hexdigest() + ".json")
         binding.write_text(json.dumps({"taskId": request.identity.task_id,
-                                       "sessionId": "ghost-session", "cwd": request.cwd,
+                                       "sessionId": "ghost-session", "lastTurnStatus": "completed",
+                                       "cwd": request.cwd,
                                        "buddy": {"provider": "fake", "model": "m1",
                                                          "effort": "high"}}))
         result = run(request, observer=worker_observer, services=bound.services,
@@ -278,6 +330,18 @@ class ResumeFailureTests(NativeResumeCase):
         # The agent that refused the resume was never asked for a new session.
         self.assertEqual(self.methods_after_last_initialize(), ["initialize", "session/resume"])
         self.assertIsNone(result.native_identity)
+
+    def test_binding_without_terminal_status_is_refused(self):
+        request, bound, mount, first = self.first_turn()
+        self.assertEqual(first.end.status, "ok")
+        previous = first.native_identity.session_id
+        binding_path = self.root / (hashlib.sha256(previous.encode()).hexdigest() + ".json")
+        binding = json.loads(binding_path.read_text())
+        self.assertEqual(binding.pop("lastTurnStatus"), "completed")
+        binding_path.write_text(json.dumps(binding))
+        _, _, _, refused = self.resumed_turn(previous)
+        self.assertEqual(refused.end.reason_code, "native-resume-unavailable")
+        self.assertIsNone(refused.model_started)
 
     def test_a_foreign_session_id_echoed_by_the_resume_answer_fails(self):
         _request1, _bound1, _mount1, result1 = self.first_turn()

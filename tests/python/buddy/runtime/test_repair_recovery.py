@@ -34,7 +34,11 @@ from hey_my_buddy.buddy.runtime.worker import (
     TERMINATION_DEADLINE,
     TERMINATION_HARNESS_ERROR,
     TERMINATION_TRANSPORT_ERROR,
-    TERMINATION_USER_CANCEL,
+    TERMINATION_UNKNOWN_STOP,
+    TERMINATION_GRACEFUL_STOP,
+    TERMINATION_GRACE_EXPIRED,
+    TERMINATION_FORCED_STOP,
+    TERMINATION_CONSOLE_STOP,
     Worker,
     _Renewal,
     classify_termination,
@@ -383,24 +387,40 @@ class TerminationTruth(RecoveryBase):
         self.assertFalse(thread.is_alive(), "an ordinary execution must remain cancellable")
         cancelled = client.result(runId=pending["runId"])
         self.assertEqual(cancelled["status"], "cancelled")
-        self.assertEqual(cancelled["resultMeta"]["terminationReason"], TERMINATION_USER_CANCEL)
+        self.assertEqual(cancelled["resultMeta"]["terminationReason"], TERMINATION_UNKNOWN_STOP)
+        self.assertEqual(cancelled["resultMeta"]["stopInitiator"], "unknown")
 
     def test_the_classification_keeps_every_real_reason_distinct(self):
         completed = AdapterOutcome(status="ok", result={"status": "ok"}, shutdown_confirmed=True)
-        failed = AdapterOutcome(status="failed", result={"status": "nonzero"}, error="boom")
+        failed = AdapterOutcome(status="failed", result={"status": "nonzero"}, error="boom", shutdown_confirmed=True)
         transport = AdapterOutcome(status="failed", result={"status": "error", "failureKind": "transport"}, error="socket")
         self.assertEqual(classify_termination(completed, timed_out=True, cancel_requested=True), TERMINATION_COMPLETED)
         self.assertEqual(classify_termination(failed, timed_out=True, cancel_requested=True), TERMINATION_DEADLINE)
-        self.assertEqual(classify_termination(failed, timed_out=False, cancel_requested=True), TERMINATION_USER_CANCEL)
+        self.assertEqual(classify_termination(failed, timed_out=False, cancel_requested=True), TERMINATION_UNKNOWN_STOP)
+        summary = AdapterOutcome(status="cancelled", result={"stopReason": "graceful-stop"}, shutdown_confirmed=True)
+        self.assertEqual(classify_termination(summary, timed_out=False, cancel_requested=True,
+                                             stop_initiator="host"), TERMINATION_GRACEFUL_STOP)
+        self.assertEqual(classify_termination(summary, timed_out=False, cancel_requested=True,
+                                             stop_initiator="host", grace_expired=True), TERMINATION_GRACE_EXPIRED)
+        self.assertEqual(classify_termination(failed, timed_out=False, cancel_requested=True,
+                                             stop_initiator="host"), TERMINATION_FORCED_STOP)
+        self.assertEqual(classify_termination(failed, timed_out=False, cancel_requested=True,
+                                             stop_initiator="console"), TERMINATION_CONSOLE_STOP)
+        unconfirmed = AdapterOutcome(status="cancelled", result={}, shutdown_confirmed=False)
+        for initiator in ("host", "console", "unknown"):
+            with self.subTest(initiator=initiator):
+                self.assertIsNone(classify_termination(unconfirmed, timed_out=False, cancel_requested=True,
+                                                       stop_initiator=initiator, grace_expired=initiator == "host"))
         self.assertEqual(classify_termination(transport, timed_out=False, cancel_requested=False), TERMINATION_TRANSPORT_ERROR)
         self.assertEqual(classify_termination(failed, timed_out=False, cancel_requested=False), TERMINATION_HARNESS_ERROR)
         self.assertEqual(
-            {TERMINATION_COMPLETED, TERMINATION_USER_CANCEL, TERMINATION_DEADLINE, TERMINATION_HARNESS_ERROR,
-             TERMINATION_TRANSPORT_ERROR},
+            {TERMINATION_COMPLETED, TERMINATION_UNKNOWN_STOP, TERMINATION_DEADLINE, TERMINATION_HARNESS_ERROR,
+             TERMINATION_TRANSPORT_ERROR, TERMINATION_GRACEFUL_STOP, TERMINATION_GRACE_EXPIRED,
+             TERMINATION_FORCED_STOP, TERMINATION_CONSOLE_STOP},
             set(TERMINATION_REASONS),
         )
 
-    def test_a_user_cancel_is_recorded_as_user_cancel(self):
+    def test_an_unattributed_cancel_is_recorded_as_unknown_stop(self):
         board = self.board(lease_seconds=15)
         client = board.client()
         task = client.submit(
@@ -422,7 +442,8 @@ class TerminationTruth(RecoveryBase):
         self.assertFalse(thread.is_alive(), "the worker must observe the durable cancel intent and stop its child")
         result = client.result(runId=task["runId"])
         self.assertEqual(result["status"], "cancelled")
-        self.assertEqual(result["resultMeta"]["terminationReason"], TERMINATION_USER_CANCEL)
+        self.assertEqual(result["resultMeta"]["terminationReason"], TERMINATION_UNKNOWN_STOP)
+        self.assertEqual(result["resultMeta"]["stopInitiator"], "unknown")
 
 
 

@@ -25,7 +25,7 @@ def capture(context, outcome):
             payload["partialWorkspaceSeal"] = seal
             payload["workspaceManifest"] = manifest
             payload["partialOutput"] = {"partial": True, "verified": False, "final": False,
-                                        "reason": payload.get("code") or outcome.status}
+                                        "reason": payload.get("stopReason") or payload.get("code") or outcome.status}
     except BoardError as error:
         payload["partialSealError"] = {"code": error.code, "message": error.message}
 

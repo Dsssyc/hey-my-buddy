@@ -4,11 +4,13 @@ from __future__ import annotations
 from contextlib import closing
 import hashlib
 import json
+import os
 from pathlib import Path
 import re
 import sqlite3
 
-from ...json_codec import canonical_json
+from ...json_codec import canonical_json, decode_strict_json
+from ...private_dirs import open_regular_fd
 from ...protocol import schemas
 from .db import SCHEMA, SCHEMA_VERSION
 
@@ -76,23 +78,61 @@ def _turn(connection: sqlite3.Connection, row: dict) -> dict:
     return row
 
 
-def _receipt_object(value, member: str | None = None):
+def _attempt(row: dict) -> dict:
+    receipt = json.loads(row['result_json']) if row['result_json'] is not None else None
+    old_stop = isinstance(receipt, dict) and receipt.get('terminationReason') == 'user-cancel'
+    row['stop_initiator'] = 'unknown' if row['cancel_requested_at'] or old_stop else None
+    row['grace_deadline'] = None
+    if receipt is not None:
+        converted = _receipt_object(receipt, service_receipt=True, adapter=row['adapter'])
+        row['result_json'] = canonical_json(converted)
+    return row
+
+
+def _termination(value: dict, *, adapter: str | None = None) -> dict:
+    reason = value.get('terminationReason')
+    if reason == 'user-cancel':
+        value['terminationReason'] = 'unknown-stop' if value.get('shutdownConfirmed') is True else None
+        value['stopInitiator'] = 'unknown'
+    elif reason == 'deadline' and adapter is not None and adapter != 'decision':
+        # A historical Worker deadline was a task time limit, not a Router budget.
+        value['terminationReason'] = None
+    value.setdefault('stopInitiator', None)
+    return value
+
+
+def _receipt_object(value, member: str | None = None, *, service_receipt: bool = False,
+                    adapter: str | None = None):
     """Update durable service task projections; leave native outcomes alone."""
     if isinstance(value, list):
-        return [_receipt_object(item) for item in value]
+        return [_receipt_object(item, service_receipt=service_receipt, adapter=adapter) for item in value]
     if not isinstance(value, dict):
         return value
-    # Model outcomes and original turn inputs are evidence, never service views.
-    value = {key: item if key in ('result', 'outcome', 'spec', 'input', 'context', 'provenance')
-             else _receipt_object(item, key) for key, item in value.items()}
-    task_view = ('taskId' in value or 'runId' in value) and 'adapter' in value
-    if task_view and value['adapter'] != 'decision':
-        if value.get('terminationReason') == 'deadline':
-            value['terminationReason'] = None
-        for member in ('result', 'resultMeta'):
-            receipt = value.get(member)
-            if isinstance(receipt, dict) and receipt.get('terminationReason') == 'deadline':
-                value[member] = {**receipt, 'terminationReason': None}
+    # Native model outcomes and original inputs are evidence. The result immediately
+    # under an attempt view is a service receipt; its own result remains native.
+    attempt_view = ('attemptId' in value and 'adapter' in value
+                    and any(key in value for key in ('generation', 'executionState', 'cancelRequestedAt', 'result')))
+    value = {key: (_receipt_object(item, key, service_receipt=True, adapter=value.get('adapter'))
+                   if key == 'result' and attempt_view else
+                   item if key in ('result', 'outcome', 'spec', 'input', 'context', 'provenance', 'report')
+                   else _receipt_object(item, key)) for key, item in value.items()}
+    task_view = ('taskId' in value or 'runId' in value) and 'adapter' in value and not attempt_view
+    if task_view or service_receipt or 'terminationReason' in value:
+        _termination(value, adapter=value.get('adapter', adapter))
+    if attempt_view:
+        receipt = value.get('result')
+        value['stopInitiator'] = ('unknown' if value.get('cancelRequestedAt')
+                                  or isinstance(receipt, dict) and receipt.get('stopInitiator') == 'unknown'
+                                  else None)
+        value['graceDeadline'] = None
+    if task_view:
+        # A task result may carry resultMeta without a selected attempt view.
+        selected = value.get('selectedAttempt')
+        meta = value.get('resultMeta')
+        value['stopInitiator'] = ('unknown' if isinstance(selected, dict) and selected.get('stopInitiator') == 'unknown'
+                                  or isinstance(meta, dict) and meta.get('stopInitiator') == 'unknown'
+                                  or value.get('stopInitiator') == 'unknown' else None)
+        value['graceDeadline'] = None
     if task_view and 'timeoutSeconds' in value:
         old = value.pop('timeoutSeconds')
         if value['adapter'] == 'decision':
@@ -110,6 +150,35 @@ def _receipt_object(value, member: str | None = None):
     return value
 
 
+def _native_bindings(state: Path) -> list[tuple[Path, dict]]:
+    """The base saved Codex and DSH bindings only for confirmed completed turns."""
+    bindings = []
+    for harness in ('codex', 'dsh'):
+        for path in (state / 'harnesses' / harness / 'micro-tasks').glob('*/native/*.json'):
+            if re.fullmatch(r'[0-9a-f]{64}\.json', path.name) is None:
+                continue
+            with os.fdopen(open_regular_fd(path, os.O_RDONLY), 'rb') as stream:
+                raw = stream.read(65537)
+            if len(raw) > 65536:
+                raise ValueError('Native binding exceeds its upgrade boundary')
+            binding = decode_strict_json(raw)
+            fields = {'taskId', 'cwd', 'buddy'} | ({'threadId', 'lastTurnId', 'lastAttemptId', 'lastInputSha256'}
+                                                 if harness == 'codex' else {'sessionId'})
+            session_field = 'threadId' if harness == 'codex' else 'sessionId'
+            if (not isinstance(binding, dict) or set(binding) != fields
+                    or not isinstance(binding['taskId'], str) or not isinstance(binding[session_field], str)
+                    or path.name != hashlib.sha256(binding[session_field].encode()).hexdigest() + '.json'
+                    or path.parents[1].name != hashlib.sha256(binding['taskId'].encode()).hexdigest()):
+                raise ValueError('Native binding differs from the schema-19 base form')
+            bindings.append((path, binding))
+    return bindings
+
+
+def _write_native_binding(path: Path, binding: dict) -> None:
+    from ..service.daemon import atomic_json
+    atomic_json(path, binding)
+
+
 def migrate(state: Path) -> None:
     """Convert a stopped schema-19 board after a verified backup was published.
 
@@ -120,19 +189,14 @@ def migrate(state: Path) -> None:
         connection.row_factory = sqlite3.Row
         connection.execute('PRAGMA foreign_keys=OFF')
         connection.execute('BEGIN IMMEDIATE')
+        replaced_bindings = []
         try:
             version = connection.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone()
             if version is None or version[0] != str(BASE_SCHEMA_VERSION):
                 raise ValueError('Expected the schema-19 upgrade base')
             _rebuild(connection, 'tasks', _task)
             _rebuild(connection, 'workflow_turns', lambda row: _turn(connection, row))
-            # A historical Worker deadline cannot be relabelled as a Router budget.
-            for row in connection.execute("SELECT attempt_id,result_json FROM attempts WHERE adapter!='decision' AND result_json IS NOT NULL").fetchall():
-                receipt = json.loads(row['result_json'])
-                if receipt.get('terminationReason') == 'deadline':
-                    receipt['terminationReason'] = None
-                    connection.execute('UPDATE attempts SET result_json=? WHERE attempt_id=?',
-                                       (canonical_json(receipt), row['attempt_id']))
+            _rebuild(connection, 'attempts', _attempt)
             for row in connection.execute('SELECT run_id,micro_task_json FROM workflow_runs').fetchall():
                 spec, _, _ = _spec(json.loads(row['micro_task_json']))
                 connection.execute('UPDATE workflow_runs SET micro_task_json=?,micro_task_fingerprint=? WHERE run_id=?',
@@ -144,10 +208,14 @@ def migrate(state: Path) -> None:
                     request['routerBudgetSeconds'] = old
                 connection.execute('UPDATE decision_requests SET requested_json=? WHERE decision_id=?',
                                    (canonical_json(request), row['decision_id']))
-            for row in connection.execute("SELECT command_id,response_json FROM commands WHERE response_json LIKE '%timeoutSeconds%'").fetchall():
+            for row in connection.execute("SELECT command_id,response_json FROM commands").fetchall():
                 response = _receipt_object(json.loads(row['response_json']))
                 connection.execute('UPDATE commands SET response_json=? WHERE command_id=?',
                                    (canonical_json(response), row['command_id']))
+            for row in connection.execute("SELECT seq,payload_json FROM events WHERE payload_json LIKE '%terminationReason%'").fetchall():
+                payload = _receipt_object(json.loads(row['payload_json']))
+                connection.execute('UPDATE events SET payload_json=? WHERE seq=?',
+                                   (canonical_json(payload), row['seq']))
             for row in connection.execute(
                 "SELECT c.command_id,t.request_id,t.input_fingerprint FROM commands c"
                 " JOIN tasks t ON t.task_id=c.task_id WHERE c.kind='task.submit'"
@@ -161,7 +229,14 @@ def migrate(state: Path) -> None:
                 raise ValueError('Foreign-key check failed after schema conversion')
             if connection.execute('PRAGMA integrity_check').fetchone()[0] != 'ok':
                 raise ValueError('Integrity check failed after schema conversion')
+            for path, binding in _native_bindings(Path(state)):
+                replaced_bindings.append((path, binding))
+                _write_native_binding(path, {**binding, 'lastTurnStatus': 'completed'})
             connection.execute('COMMIT')
         except BaseException:
-            connection.execute('ROLLBACK')
+            try:
+                for path, binding in reversed(replaced_bindings):
+                    _write_native_binding(path, binding)
+            finally:
+                connection.execute('ROLLBACK')
             raise

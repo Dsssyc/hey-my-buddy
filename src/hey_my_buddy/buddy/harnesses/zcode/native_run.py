@@ -1165,6 +1165,18 @@ def _run(request: RunRequest, *, services: Any, no_tool: bool, completion_carrie
         drained = _stop_collection(spawn=spawn, deadline=deadline, cancel=cancel, state=state,
                                    tools=tools, classifier=classifier, facts=facts, notify=notify,
                                    completion_carrier=completion_carrier, outcome=outcome)
+    if (completion_carrier and state.status == "ok" and state.shutdown
+            and state.exit_code == 0 and outcome.record is not None
+            and outcome.binding_path is not None and outcome.session_id is not None):
+        try:
+            private_json(outcome.binding_path, {"taskId": request.identity.task_id,
+                                                "sessionId": outcome.session_id,
+                                                "cwd": request.cwd, "buddy": outcome.resolved},
+                         exclusive=True)
+        except (OSError, BoardError) as error:
+            state.status = "error"
+            state.reason = "native-binding-save-failed"
+            state.error_text = f"the native session binding could not be saved: {error}"[:512]
     tool_package = None
     if state.session_opened:
         # A stream is complete only when it was read to its EOF with the owned
@@ -1352,6 +1364,11 @@ def _micro_task_turn(*, connection: NativeConnection, request: RunRequest, servi
         publish_activity()
 
     def bind_worker_session(opened_session: str) -> None:
+        # Once another turn can be sent, an earlier terminal binding no longer
+        # proves this session's last turn. A new binding follows only the new
+        # completed turn and confirmed process-group stop.
+        if mode == "native-session":
+            outcome.binding_path.unlink()
         outcome.evidence = RootTurnEvidence(
             opened_session, mount.input_id, mount.finish_tool, mount.bridge,
             checkpoint_name=mount.checkpoint_tool, answer_name=mount.answer_tool,
@@ -1374,10 +1391,6 @@ def _micro_task_turn(*, connection: NativeConnection, request: RunRequest, servi
         state.configured = True
         if mode != "native-session":
             outcome.binding_path = native_root / (hashlib.sha256(opened_session.encode()).hexdigest() + ".json")
-            private_json(outcome.binding_path, {"taskId": request.identity.task_id,
-                                                "sessionId": opened_session,
-                                                "cwd": request.cwd, "buddy": resolved_spec},
-                         exclusive=True)
 
     def after_admit(opened_session: str) -> None:
         if outcome.inquiry_bridge is not None:
@@ -1646,7 +1659,8 @@ def _build_result(request: RunRequest, *, spawn, state, owned_spawn, resolved, s
     continuation = None
     if binding_path is not None and session_id is not None:
         continuation = ContinuationFacts(
-            resumable=bool(binding_path.is_file() and state.shutdown and record is not None))
+            resumable=bool(state.status == "ok" and binding_path.is_file()
+                           and state.shutdown and record is not None))
     return RunResult(
         identity=request.identity, harness="zcode",
         end=RunEnd(status=state.status, reason_code=state.reason,

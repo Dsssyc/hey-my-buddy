@@ -24,6 +24,7 @@ exact removal so concurrent admission cannot register a checkout being removed.
 from __future__ import annotations
 
 from contextlib import ExitStack, contextmanager
+from datetime import datetime, timedelta
 import json
 import re
 import threading
@@ -3353,7 +3354,7 @@ class WorkflowCoordinator:
         run_id = run_row["run_id"]
         # Fence the root before descendants settle: a transferred checkout must
         # not be handed back to a micro task cancelled in this transaction.
-        self._cancel_owned_run(connection, task, now, explicit=True)
+        self._cancel_owned_run(connection, task, now, explicit=True, actor=actor)
         self._cancel_children(connection, run_id, reason, now, actor=actor)
         self.board._append_event(
             connection, "workflow.cancelled", task_id=run_id, revision=run_row["revision"] + 1,
@@ -3383,7 +3384,7 @@ class WorkflowCoordinator:
             task = connection.execute("SELECT * FROM tasks WHERE task_id=?", (child["child_task_id"],)).fetchone()
             if task is None:
                 continue
-            if self._cancel_owned_run(connection, task, now):
+            if self._cancel_owned_run(connection, task, now, actor=actor):
                 self.board._append_event(
                     connection, "workflow.helper_cancelled", task_id=task["task_id"], revision=task["revision"] + 1,
                     payload={"parentRunId": child["parent_run_id"], "cancelledByRunId": run_id, "reason": reason,
@@ -3428,7 +3429,7 @@ class WorkflowCoordinator:
         if pending is not None:
             raise BoardError("CONFLICT", "Model selection is still pending; wait or cancel its owning Micro task before continuing")
 
-    def _cancel_routes(self, connection, run_id: str, reason: str, now: str) -> bool:
+    def _cancel_routes(self, connection, run_id: str, reason: str, now: str, *, actor: str | None = None) -> bool:
         fenced = False
         for link in connection.execute("SELECT * FROM workflow_routes WHERE run_id=?", (run_id,)).fetchall():
             decision = self.board.decisions._row(connection, link["decision_id"])
@@ -3445,11 +3446,7 @@ class WorkflowCoordinator:
                     self.board._transition_task(connection, task, "cancelling" if unconfirmed else "cancelled")
                 connection.execute("UPDATE tasks SET queue_reason=NULL WHERE task_id=?", (task["task_id"],))
                 if unconfirmed:
-                    connection.execute(
-                        "UPDATE attempts SET cancel_requested_at=COALESCE(cancel_requested_at,?),updated_at=?,revision=revision+1"
-                        " WHERE task_id=? AND (execution_state!='finished' OR shutdown_confirmed!=1)",
-                        (now, now, task["task_id"]),
-                    )
+                    self._request_attempt_stop(connection, task["task_id"], now, actor=actor, graceful=False)
                 self.board.decisions.cancelled(connection, task=task, reason=reason, now=now)
                 self.board._append_event(connection, "task.cancel_requested" if unconfirmed else "task.cancelled",
                                          task_id=task["task_id"], payload={"reason": reason, "owningRunId": run_id})
@@ -3503,7 +3500,29 @@ class WorkflowCoordinator:
             raise BoardError("ANCESTOR_TERMINAL", "An owned helper cannot continue beneath a cancelled or accepted ancestor",
                              runId=run_id, ancestorRunId=ancestor["run_id"], ancestorState=ancestor["state"])
 
-    def _cancel_owned_run(self, connection, task, now: str, *, explicit: bool = False) -> bool:
+    def _request_attempt_stop(self, connection, task_id: str, now: str, *, actor: str | None,
+                              graceful: bool = True) -> None:
+        initiator = ("host" if actor and actor.startswith("host:") else
+                     "console" if actor and actor.startswith("console:") else "unknown")
+        for attempt in connection.execute(
+            "SELECT * FROM attempts WHERE task_id=? AND (execution_state!='finished' OR shutdown_confirmed!=1)",
+            (task_id,),
+        ).fetchall():
+            if attempt["cancel_requested_at"] is not None and initiator == "host":
+                continue
+            deadline = None
+            if (graceful and initiator == "host" and attempt["adapter"] in ("codex", "dsh", "zcode", "claude")
+                    and attempt["execution_state"] in ("starting", "executing")):
+                deadline = (datetime.fromisoformat(now.replace("Z", "+00:00")) + timedelta(seconds=300)).isoformat(
+                    timespec="milliseconds").replace("+00:00", "Z")
+            connection.execute(
+                "UPDATE attempts SET cancel_requested_at=COALESCE(cancel_requested_at,?),stop_initiator=?,"
+                " grace_deadline=?,updated_at=?,revision=revision+1 WHERE attempt_id=?",
+                (now, initiator, deadline, now, attempt["attempt_id"]),
+            )
+
+    def _cancel_owned_run(self, connection, task, now: str, *, explicit: bool = False,
+                          actor: str | None = None) -> bool:
         run_id = task["task_id"]
         run_row = self._run_row(connection, run_id)
         cancel_micro_task = explicit or run_row["state"] not in ("delivered", "accepted", "concluded", "failed")
@@ -3514,7 +3533,7 @@ class WorkflowCoordinator:
             "UPDATE workflow_continuations SET state='cancelled' WHERE run_id=? AND state IN ('recorded','queued')", (run_id,),
         )
         self._revoke_credentials(connection, run_id, now)
-        self._cancel_routes(connection, run_id, "Owning Micro task cancelled", now)
+        self._cancel_routes(connection, run_id, "Owning Micro task cancelled", now, actor=actor)
         if cancel_micro_task:
             connection.execute(
                 "UPDATE workflow_runs SET state='cancelled', active_request_id=NULL, updated_at=?, revision=revision+1 WHERE run_id=?",
@@ -3533,11 +3552,7 @@ class WorkflowCoordinator:
             self.board._transition_task(connection, task, "cancelled" if stopped else "cancelling")
             connection.execute("UPDATE tasks SET queue_reason=NULL, updated_at=? WHERE task_id=?", (now, run_id))
         if not stopped:
-            connection.execute(
-                "UPDATE attempts SET cancel_requested_at=?, updated_at=?, revision=revision+1 WHERE task_id=?"
-                " AND (execution_state != 'finished' OR shutdown_confirmed != 1) AND cancel_requested_at IS NULL",
-                (now, now, run_id),
-            )
+            self._request_attempt_stop(connection, run_id, now, actor=actor)
         return cancel_micro_task
 
     def _late_cancelled_turn(self, connection, run_row, turn_row, attempt, payload, now):
@@ -6362,7 +6377,8 @@ class WorkflowCoordinator:
                 raise BoardError("WORKSPACE_INVALID", "A partial output requires a stopped failed attempt")
             bound = json.loads(turn_row["input_json"])["executionWorkspace"]
             workspace_module()._validate_output_record(bound, partial)
-        if params.get("status") != "ok" or not params.get("shutdownConfirmed"):
+        if (params.get("status") != "ok" and params.get("terminationReason") != "graceful-stop"
+                or not params.get("shutdownConfirmed")):
             return
         if turn_row is None:
             raise BoardError("TURN_INVALID", "the micro-task attempt has no service-owned turn to import")

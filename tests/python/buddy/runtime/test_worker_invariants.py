@@ -10,12 +10,14 @@ daemon, no harness and no model.
 from __future__ import annotations
 
 from contextlib import nullcontext
+from datetime import datetime, timedelta, timezone
 import json
 import os
 from pathlib import Path
 import sys
 import tempfile
 import unittest
+from types import SimpleNamespace
 from unittest import mock
 
 from hey_my_buddy.errors import BoardError
@@ -101,6 +103,75 @@ class MarkerWriteFailureTests(unittest.TestCase):
         directory = self.state / "attempts" / "task-unavailable" / "attempt-unavailable"
         self.assertTrue((directory / "spawn.intent").is_file())
         self.assertFalse((directory / "spawn.marker").exists())
+
+    def test_host_grace_deadline_forces_stop_and_cannot_be_reported_as_a_summary(self):
+        from hey_my_buddy.buddy.harnesses.base import AdapterOutcome
+        from hey_my_buddy.buddy.runtime.worker import TERMINATION_GRACE_EXPIRED
+
+        handle = SimpleNamespace(pid=None, pgid=None, cancel_requested=True, stop_initiator="host",
+                                 grace_deadline=0.0, wait=lambda timeout: 0)
+        executor = SimpleNamespace(
+            name="command", available=lambda: (True, None), prepare=lambda context: None,
+            start=lambda context: handle,
+            collect=lambda owned, context: AdapterOutcome("cancelled", {"stopReason": "graceful-stop"},
+                                                          shutdown_confirmed=True),
+        )
+        with mock.patch.object(worker_module.role_seam, "worker_executor", return_value=executor), \
+                mock.patch.object(worker_module.role_seam, "worker_cancel") as forced:
+            report = self.worker.execute(self.claim("attempt-grace", "task-grace"))["report"]
+        forced.assert_called_once_with(executor, handle, grace_seconds=0)
+        self.assertTrue(handle.grace_expired)
+        self.assertEqual(report["terminationReason"], TERMINATION_GRACE_EXPIRED)
+        self.assertEqual(report["stopInitiator"], "host")
+
+
+class DurableStopObservationTests(unittest.TestCase):
+    def renewal(self, view):
+        client = SimpleNamespace(call=lambda *args: {"task": view}, renew=lambda *args: view)
+        worker = SimpleNamespace(client=client, log=lambda message: None, _nonce=lambda: "nonce", worker_id="worker")
+        handle = SimpleNamespace(cancel_requested=False)
+        executor = SimpleNamespace(description=SimpleNamespace(native_resume=True))
+        renewal = worker_module._Renewal(worker, {"attempt": {"taskId": "task", "attemptId": "attempt",
+                                                             "generation": 1}}, handle, executor)
+        return renewal, handle, executor
+
+    def test_host_summary_keeps_lease_and_original_deadline(self):
+        view = {"cancelRequested": True, "stopInitiator": "host", "graceDeadline":
+                (datetime.now(timezone.utc) + timedelta(seconds=300)).isoformat()}
+        renewal, handle, executor = self.renewal(view)
+        def stopped(*args, stop_initiator, grace_deadline):
+            handle.cancel_requested = True
+            handle.stop_initiator = stop_initiator
+            handle.grace_deadline = grace_deadline
+        with mock.patch.object(worker_module.role_seam, "worker_stop", side_effect=stopped) as stop, \
+                mock.patch.object(renewal, "_refresh_live_binding"):
+            self.assertFalse(renewal._cancel_observed())
+            deadline = handle.grace_deadline
+            view["graceDeadline"] = (datetime.now(timezone.utc) + timedelta(seconds=600)).isoformat()
+            self.assertTrue(renewal._renew())
+            self.assertFalse(renewal._cancel_observed())
+        self.assertEqual(handle.grace_deadline, deadline)
+        stop.assert_called_once()
+
+    def test_console_escalation_clears_host_grace_and_forces_immediate_stop(self):
+        view = {"cancelRequested": True, "stopInitiator": "console", "graceDeadline": None}
+        renewal, handle, executor = self.renewal(view)
+        handle.cancel_requested, handle.stop_initiator = True, "host"
+        handle.grace_deadline, handle.grace_expired = 123.0, True
+        executor.cancel = mock.Mock()
+        self.assertTrue(renewal._cancel_observed())
+        executor.cancel.assert_called_once_with(handle, grace_seconds=0)
+        self.assertEqual(handle.stop_initiator, "console")
+        self.assertIsNone(handle.grace_deadline)
+        self.assertFalse(handle.grace_expired)
+
+    def test_host_without_confirmed_execution_has_no_summary_deadline(self):
+        renewal, handle, executor = self.renewal({"cancelRequested": True, "stopInitiator": "host",
+                                                "graceDeadline": None})
+        executor.cancel = mock.Mock()
+        self.assertTrue(renewal._cancel_observed())
+        executor.cancel.assert_called_once_with(handle, grace_seconds=0)
+        self.assertIsNone(handle.grace_deadline)
 
 
 class PreparationBoardErrorTests(unittest.TestCase):
