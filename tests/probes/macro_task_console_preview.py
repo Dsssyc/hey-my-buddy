@@ -3939,10 +3939,18 @@ def smoke(assets: Path, scenario: str) -> int:
               and version.get("running", {}).get("mode") == "runtime"
               and version.get("installed", {}).get("softwareVersion") == "0.0.0", f"status={status}")
         status, page, _headers = call("GET", "/api/macro-tasks")
-        check("GET /api/macro-tasks", status == 200 and len(page["groups"]) == 3
-              and page["groups"][-1]["id"] == "standalone"
-              and sum(group["total"] for group in page["groups"]) == len(FIXTURES["groups"]) + 6
-              and page["cursor"] == FIXTURES["head"] and page["changed"] is False, f"status={status}")
+        # Expected groups come from the same rows the server pages, so each
+        # scenario's own fixtures decide the shape, not one scenario's numbers.
+        expected_totals: dict[str, int] = {}
+        for row in preview_list_rows({}, None):
+            identity = "standalone" if row["kind"] == "standalone" else f"project:{row['project']['id']}"
+            expected_totals[identity] = expected_totals.get(identity, 0) + 1
+        served_totals = {group["id"]: group["total"] for group in page.get("groups", [])}
+        check("GET /api/macro-tasks", status == 200 and served_totals == expected_totals
+              and ("standalone" not in expected_totals
+                   or bool(page.get("groups")) and page["groups"][-1]["id"] == "standalone")
+              and page["cursor"] == FIXTURES["head"] and page["changed"] is False,
+              f"status={status} served={served_totals} expected={expected_totals}")
         status, timeline, _headers = call("GET", f"/api/macro-tasks/{MACRO_A}/timeline")
         if scenario == "error":
             check("timeline fails closed in error scenario", status == 503
