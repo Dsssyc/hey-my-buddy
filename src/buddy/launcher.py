@@ -41,6 +41,9 @@ SERVICE_ENVIRONMENT_KEYS = frozenset({
     'XDG_CONFIG_HOME', 'XDG_DATA_HOME', 'XDG_CACHE_HOME', 'XDG_STATE_HOME', 'XDG_RUNTIME_DIR',
     'HTTP_PROXY', 'HTTPS_PROXY', 'ALL_PROXY', 'NO_PROXY',
     'http_proxy', 'https_proxy', 'all_proxy', 'no_proxy',
+    # CA certificate paths: they name trust roots, never credentials.
+    'SSL_CERT_FILE', 'SSL_CERT_DIR', 'REQUESTS_CA_BUNDLE', 'CURL_CA_BUNDLE',
+    'NODE_EXTRA_CA_CERTS',
     # Native harness account configuration. Model authentication stays native.
     'CLAUDE_CONFIG_DIR', 'CODEX_HOME', 'ZCODE_DATA_BASE_DIR', 'DSH_HOME',
     # This program's private roots, interpreter selection and launch settings.

@@ -217,7 +217,8 @@ def run_turn(case):
                                          "behavior": (response.get("response") or {}).get("behavior")}})
         if (response.get("response") or {}).get("behavior") != "deny":
             raise RuntimeError("the controller unexpectedly approved the native tool request")
-    if case in ("hang", "quota-rejected", "quota-bad-type", "warning-then-rejected", "interrupt-quota"):
+    if case in ("hang", "quota-rejected", "quota-bad-type", "quota-free-text-type", "warning-then-rejected",
+                "interrupt-quota"):
         if case == "warning-then-rejected":
             send({"type": "rate_limit_event", "rate_limit_info": {
                 "status": "allowed_warning", "rateLimitType": "seven_day", "utilization": .9}})
@@ -227,6 +228,10 @@ def run_turn(case):
                 "utilization": {"fiveHourPctUsed": 100}}})
         if case == "quota-bad-type":
             send({"type": "rate_limit_event", "rate_limit_info": {"status": "rejected"}})
+        if case == "quota-free-text-type":
+            send({"type": "rate_limit_event", "rate_limit_info": {
+                "status": "rejected", "rateLimitType": "Bearer sk-ant-api03-SECRET-FRAGMENT\n",
+                "resetsAt": "2026-09-26T12:00:00Z"}})
         wait_for_interrupt()
         return
     send({"type": "system", "subtype": "init",

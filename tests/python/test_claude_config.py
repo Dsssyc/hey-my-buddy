@@ -253,6 +253,9 @@ class ClaudeConfigTests(unittest.TestCase):
     def test_native_environment_is_a_bounded_allowlist(self):
         env = {"PATH": "/bin", "HOME": "/users/fixture", "TMPDIR": "/tmp/fixture", "LANG": "C",
                "ANTHROPIC_API_KEY": "first-party-key", "CLAUDE_CONFIG_DIR": "/users/fixture/.claude",
+               "SSL_CERT_FILE": "/certs/root.pem", "SSL_CERT_DIR": "/certs/dirs",
+               "REQUESTS_CA_BUNDLE": "/certs/bundle.pem", "CURL_CA_BUNDLE": "/certs/curl.pem",
+               "NODE_EXTRA_CA_CERTS": "/certs/node.pem",
                "CLAUDECODE": "1", "CLAUDE_CODE_EFFORT_LEVEL": "max", "ANTHROPIC_MODEL": "claude-other",
                "ANTHROPIC_AUTH_TOKEN": "bearer-secret", "ANTHROPIC_BASE_URL": "https://gateway.example.invalid",
                "BUDDY_AGENT_CREDENTIAL": "worker-secret", "BUDDY_AGENT_CREDENTIAL_FILE": "/private/cred.json",
@@ -263,6 +266,12 @@ class ClaudeConfigTests(unittest.TestCase):
         self.assertEqual(result["PATH"], "/bin")
         self.assertEqual(result["HOME"], "/users/fixture")
         self.assertEqual(result["TMPDIR"], "/tmp/fixture")
+        # Certificate paths name trust roots, not credentials, and survive.
+        self.assertEqual(result["SSL_CERT_FILE"], "/certs/root.pem")
+        self.assertEqual(result["SSL_CERT_DIR"], "/certs/dirs")
+        self.assertEqual(result["REQUESTS_CA_BUNDLE"], "/certs/bundle.pem")
+        self.assertEqual(result["CURL_CA_BUNDLE"], "/certs/curl.pem")
+        self.assertEqual(result["NODE_EXTRA_CA_CERTS"], "/certs/node.pem")
         self.assertNotIn('ANTHROPIC_API_KEY', result)
         self.assertEqual(result["CLAUDE_CONFIG_DIR"], "/users/fixture/.claude")
         self.assertEqual(result["BUDDY_CLAUDE_FIXTURE_CASE"], "ok")

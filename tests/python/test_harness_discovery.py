@@ -306,6 +306,19 @@ class HarnessDiscoveryTests(unittest.TestCase):
         self.assertEqual((result["USER"], result["LOGNAME"], result["USERNAME"]), ("user", "user", "user"))
         self.assertNotIn("ANTHROPIC_API_KEY", result)
 
+    def test_native_environment_keeps_ca_certificate_paths(self):
+        # Certificate paths name trust roots, not credentials; everything else
+        # outside the allowlist (provider keys, Buddy state) stays filtered.
+        certificates = {"SSL_CERT_FILE": "/certs/root.pem", "SSL_CERT_DIR": "/certs/dirs",
+                        "REQUESTS_CA_BUNDLE": "/certs/bundle.pem", "CURL_CA_BUNDLE": "/certs/curl.pem",
+                        "NODE_EXTRA_CA_CERTS": "/certs/node.pem"}
+        result = discovery.native_environment({"PATH": "/usr/bin", "HOME": "/home/user",
+                                               "OPENAI_API_KEY": "secret", "BUDDY_STATE_DIR": "/private/state",
+                                               **certificates})
+        self.assertEqual({key: result.get(key) for key in certificates}, certificates)
+        self.assertNotIn("OPENAI_API_KEY", result)
+        self.assertNotIn("BUDDY_STATE_DIR", result)
+
 
 if __name__ == "__main__":
     unittest.main()

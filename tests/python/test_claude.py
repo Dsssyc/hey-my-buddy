@@ -148,6 +148,15 @@ class ClaudeAdapterTests(unittest.TestCase):
         self.assertEqual(outcome.result["code"], "quota-rejected")
         self.assertEqual(outcome.result["quotaFailure"], {"rateLimitType": "unknown", "resetsAt": None})
 
+    def test_a_free_text_rate_limit_identity_is_sanitized_not_copied(self):
+        outcome = self.execute(self.context("quota-free-text-type"))
+        self.assertEqual(outcome.status, "failed", outcome.to_report())
+        self.assertEqual(outcome.result["code"], "quota-rejected")
+        # Only the bounded reset time survives; the free-text identity never does.
+        self.assertEqual(outcome.result["quotaFailure"],
+                         {"rateLimitType": "unknown", "resetsAt": "2026-09-26T12:00:00Z"})
+        self.assertNotIn("SECRET-FRAGMENT", json.dumps(outcome.result))
+
     def test_missing_controller_receipt_is_not_imported(self):
         context = self.context()
         handle = self.adapter.start(context)

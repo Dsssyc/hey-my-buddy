@@ -336,10 +336,8 @@ def _load_native_metadata() -> dict:
 def _quota_failure(value: object) -> dict:
     """Only rateLimitType and resetsAt, typed and bounded; never native error text."""
     source = value if isinstance(value, dict) else {}
-    rate_limit_type = source.get("rateLimitType")
     resets = source.get("resetsAt")
-    return {"rateLimitType": rate_limit_type if isinstance(rate_limit_type, str) and rate_limit_type
-            and len(rate_limit_type) <= 64 else "unknown",
+    return {"rateLimitType": usage.identifier(source.get("rateLimitType")) or "unknown",
             "resetsAt": resets if isinstance(resets, str) and len(resets) <= 64
             else resets if isinstance(resets, (int, float)) and not isinstance(resets, bool) and math.isfinite(resets)
             else None}

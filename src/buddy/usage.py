@@ -19,7 +19,10 @@ counted as this attempt.
 Quota is a native fact too: an observation time, a native source, the applicable
 provider/account scope and the reported windows. A window without a native
 percentage is dropped rather than reported as ``0``; a quota failure keeps its
-native structured code.
+native structured code. Identifier-shaped quota fields (window names, reached
+types, scope identities, native codes and sources) accept only identifier
+characters: a value with free text is dropped or replaced with ``unknown``
+instead of being persisted.
 
 Every ``normalize_*`` function is idempotent: replaying the same record through it
 again returns the same canonical value and never accumulates a second time.
@@ -72,6 +75,12 @@ TIMESTAMP = re.compile(
 )
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
 
+#: Identifier-shaped strings in native quota facts — window names, reached
+#: types, scope identities, native codes, source labels and rate-limit types —
+#: accept only identifier characters, never free text. ``/`` stays an identifier
+#: character because native source labels use it as the harness/origin separator.
+IDENTIFIER = re.compile(r"^[A-Za-z0-9._:/-]{1,64}$")
+
 #: Native codes that mean "the account quota or budget is exhausted".
 _QUOTA_NATIVE_CODES = frozenset({
     "QUOTA",
@@ -107,6 +116,18 @@ def _bounded_string(value: Any, *, maximum: int) -> str | None:
     except UnicodeError:
         return None
     return value if len(value) <= maximum else None
+
+
+def identifier(value: Any) -> str | None:
+    """One identifier-shaped native string, or ``None`` when it is not one.
+
+    A value carrying whitespace, control characters or other free text —
+    including anything resembling a credential fragment — is refused outright
+    rather than trimmed or truncated, so it is never persisted as an identifier.
+    """
+    if not isinstance(value, str) or not value or "\0" in value:
+        return None
+    return value if IDENTIFIER.fullmatch(value) else None
 
 
 def _timestamp(value: Any) -> str | None:
@@ -260,7 +281,7 @@ def normalize_quota_window(value: Any) -> dict | None:
     """One native quota window, or ``None`` when no percentage was reported."""
     if not isinstance(value, dict):
         return None
-    name = _bounded_string(value.get("name"), maximum=MAX_WINDOW_NAME)
+    name = identifier(value.get("name"))
     used = value.get("usedPercent")
     if name is None or not _is_number(used) or not (0 <= used <= 100):
         # A window without its native percentage is dropped, never shown as 0.
@@ -275,7 +296,7 @@ def normalize_quota_window(value: Any) -> dict | None:
     duration = value.get("windowDurationMins")
     if _is_count(duration) and duration > 0:
         window["windowDurationMins"] = duration
-    limit_id = _bounded_string(value.get("limitId"), maximum=MAX_WINDOW_NAME)
+    limit_id = identifier(value.get("limitId"))
     if limit_id is not None:
         window["limitId"] = limit_id
     return window
@@ -292,6 +313,8 @@ def normalize_quota(value: Any) -> dict | None:
     Returns ``None`` when the value carries no fact at all: no window, no
     ordinary-usage permission and no reached state. Missing fields are never
     filled in with zero, and a window without a native percentage is dropped.
+    Identifier-shaped fields accept only identifier characters; a non-conforming
+    value is omitted (or ``unknown`` for ``source``), never persisted as-is.
     """
     if not isinstance(value, dict):
         return None
@@ -312,19 +335,19 @@ def normalize_quota(value: Any) -> dict | None:
                 windows.append(window)
     allowed = value.get("ordinaryUsageAllowed")
     ordinary: bool | None = allowed if isinstance(allowed, bool) else None
-    reached = _bounded_string(value.get("reachedType"), maximum=MAX_WINDOW_NAME)
+    reached = identifier(value.get("reachedType"))
     if not windows and ordinary is None and reached is None:
         return None
     scope_source = value.get("scope") if isinstance(value.get("scope"), dict) else value
     scope = {
-        "provider": _bounded_string(scope_source.get("provider"), maximum=MAX_WINDOW_NAME),
-        "nativeAccountId": _bounded_string(scope_source.get("nativeAccountId"), maximum=MAX_WINDOW_NAME),
-        "limitId": _bounded_string(scope_source.get("limitId"), maximum=MAX_WINDOW_NAME),
-        "planType": _bounded_string(scope_source.get("planType"), maximum=MAX_WINDOW_NAME),
+        "provider": identifier(scope_source.get("provider")),
+        "nativeAccountId": identifier(scope_source.get("nativeAccountId")),
+        "limitId": identifier(scope_source.get("limitId")),
+        "planType": identifier(scope_source.get("planType")),
     }
     normalized = {
         "version": QUOTA_VERSION,
-        "source": _bounded_string(value.get("source"), maximum=MAX_SOURCE) or "unknown",
+        "source": identifier(value.get("source")) or "unknown",
         "observedAt": observed_at,
         "scope": scope,
         "windows": windows,
@@ -362,7 +385,7 @@ def normalize_quota_failure(value: Any) -> dict | None:
         return None
     if "version" in value and (type(value["version"]) is not int or value["version"] != 1):
         return None
-    native_code = _bounded_string(value.get("nativeCode"), maximum=MAX_SOURCE)
+    native_code = identifier(value.get("nativeCode"))
     if native_code is None:
         return None
     observed_at = _timestamp(value.get("observedAt"))
@@ -370,7 +393,7 @@ def normalize_quota_failure(value: Any) -> dict | None:
         "version": QUOTA_FAILURE_VERSION,
         "code": classify_quota_code(native_code),
         "nativeCode": native_code,
-        "source": _bounded_string(value.get("source"), maximum=MAX_SOURCE) or "unknown",
+        "source": identifier(value.get("source")) or "unknown",
     }
     if observed_at is not None:
         failure["observedAt"] = observed_at
@@ -484,6 +507,7 @@ def read_sidecar(path: str | Path, *, task_id: str, attempt_id: str, generation:
 __all__ = [
     "ATTEMPT_SCOPE",
     "COMPLETENESS_VALUES",
+    "IDENTIFIER",
     "INPUT_BASES",
     "INPUT_BASIS_EXCLUDES_CACHED",
     "INPUT_BASIS_INCLUDES_CACHED",
@@ -495,6 +519,7 @@ __all__ = [
     "SIDECAR_VERSION",
     "TOKEN_USAGE_VERSION",
     "classify_quota_code",
+    "identifier",
     "normalize_last_assistant_message",
     "normalize_quota",
     "normalize_quota_failure",

@@ -20,6 +20,7 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 
+from ..usage import identifier as _identifier
 from .native_observations import bound_native_text, native_counter
 from .turn_io import canonical_json
 
@@ -315,10 +316,9 @@ def rate_limit_observation(frame: dict) -> tuple[str, dict] | None:
     info = frame.get("rate_limit_info")
     if not isinstance(info, dict):
         return None
-    rate_limit_type, status = info.get("rateLimitType"), info.get("status")
-    if not isinstance(rate_limit_type, str) or not rate_limit_type or len(rate_limit_type) > 64:
-        return None
-    if status not in ("allowed", "allowed_warning", "rejected"):
+    rate_limit_type = _identifier(info.get("rateLimitType"))
+    status = info.get("status")
+    if rate_limit_type is None or status not in ("allowed", "allowed_warning", "rejected"):
         return None
     observation = {"status": status, "resetsAt": _bounded_resets_at(info.get("resetsAt"))}
     utilization = _finite_utilization(info.get("utilization"))
@@ -447,9 +447,7 @@ class TurnEvidence:
             if isinstance(info, dict) and info.get("status") == "rejected":
                 # A rejection fails the attempt even when the rate-limit identity
                 # is absent or malformed; the published facts stay sanitized.
-                rate_limit_type = info.get("rateLimitType")
-                rate_limit_type = rate_limit_type if isinstance(rate_limit_type, str) and rate_limit_type \
-                    and len(rate_limit_type) <= 64 else "unknown"
+                rate_limit_type = _identifier(info.get("rateLimitType")) or "unknown"
                 self.quota_observed_at = self.quota_observed_at or _utc_now()
                 self.quota_rejection_type = rate_limit_type
                 raise QuotaRejected(rate_limit_type, _bounded_resets_at(info.get("resetsAt")))

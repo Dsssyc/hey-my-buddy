@@ -266,7 +266,11 @@ def _scan_hash(snapshot: dict) -> str:
 
 
 def native_environment(environment: dict, *, command: tuple[str, ...] | list[str] = ()) -> dict:
-    """Build an account-preserving, credential-free environment for native CLIs."""
+    """Build an account-preserving, credential-free environment for native CLIs.
+
+    CA certificate path variables are preserved alongside the proxy variables:
+    they name trust roots, never credentials.
+    """
     # The login name is identity, not a credential: Claude Code on macOS looks up
     # its keychain login by USER and reports "not logged in" without it.
     allowed = ("HOME", "USER", "LOGNAME", "USERNAME", "USERPROFILE", "HOMEDRIVE", "HOMEPATH", "APPDATA", "LOCALAPPDATA",
@@ -277,7 +281,9 @@ def native_environment(environment: dict, *, command: tuple[str, ...] | list[str
                "LC_ADDRESS", "LC_TELEPHONE", "LC_MEASUREMENT", "LC_IDENTIFICATION",
                "TMPDIR", "TMP", "TEMP", "SYSTEMROOT", "WINDIR", "COMSPEC", "PATHEXT",
                "TERM", "COLORTERM", "PATH", "HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY",
-               "NO_PROXY", "http_proxy", "https_proxy", "all_proxy", "no_proxy")
+               "NO_PROXY", "http_proxy", "https_proxy", "all_proxy", "no_proxy",
+               "SSL_CERT_FILE", "SSL_CERT_DIR", "REQUESTS_CA_BUNDLE", "CURL_CA_BUNDLE",
+               "NODE_EXTRA_CA_CERTS")
     result = {key: environment[key] for key in allowed if key in environment}
     prefixes = []
     for item in reversed(command):

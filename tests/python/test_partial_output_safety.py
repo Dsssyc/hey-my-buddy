@@ -21,6 +21,32 @@ class PartialOutputSafetyTests(unittest.TestCase):
                 workspace.assert_not_called()
                 self.assertNotIn("partialWorkspaceSeal", result.result)
 
+    def test_model_started_without_changed_paths_publishes_no_partial_output(self):
+        # The runners set modelStarted before the request is sent, so it only
+        # guards retry; an unchanged checkout carries no work evidence to publish.
+        module = SimpleNamespace(seal=Mock(return_value={"changedPaths": []}))
+        result = AdapterOutcome("failed", result={"modelStarted": True, "code": "transport-error"},
+                                shutdown_confirmed=True)
+        with patch("buddy.workflow.workspace_module", return_value=module):
+            capture(self.context(), result)
+        module.seal.assert_called_once()
+        for key in ("partialWorkspaceSeal", "workspaceManifest", "partialOutput"):
+            self.assertNotIn(key, result.result)
+
+    def test_changed_paths_publish_the_partial_output_regardless_of_model_state(self):
+        for payload in ({"modelStarted": True, "code": "transport-error"},
+                        {"modelStarted": None, "code": "native-exit"}, {}):
+            with self.subTest(payload=payload), patch(
+                    "buddy.workflow.workspace_module",
+                    return_value=SimpleNamespace(seal=Mock(return_value={"changedPaths": ["src/one.py"]}))):
+                result = AdapterOutcome("failed", result=dict(payload), shutdown_confirmed=True)
+                capture(self.context(), result)
+                self.assertEqual(result.result["partialWorkspaceSeal"]["changedPaths"], ["src/one.py"])
+                self.assertEqual(result.result["workspaceManifest"], {"path": "/private/fixture"})
+                self.assertEqual(result.result["partialOutput"],
+                                 {"partial": True, "verified": False, "final": False,
+                                  "reason": payload.get("code") or "failed"})
+
     def test_out_of_scope_failure_preserves_conflict_instead_of_a_partial_output(self):
         module = SimpleNamespace(seal=Mock(side_effect=BoardError("WORKSPACE_SCOPE_VIOLATION", "outside declared scope")))
         result = AdapterOutcome("failed", result={"modelStarted": True}, shutdown_confirmed=True)

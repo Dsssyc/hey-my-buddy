@@ -18,9 +18,10 @@ def capture(context, outcome):
         from .workflow import workspace_module
         seal = payload.pop("workspaceSeal", None) or workspace_module().seal(
             Path(state), manifest, context.task_id, context.attempt_id)
-        # A protocol preflight with unknown model state must not become model work.
-        # Changed managed files are concrete work evidence even after a lost stream.
-        if seal and (payload.get("modelStarted") is True or seal.get("changedPaths")):
+        # A partial output is work evidence, not a process record: the runners
+        # set modelStarted before the request is sent, so it only guards retry
+        # and never proves work. Changed managed files are the concrete evidence.
+        if seal and seal.get("changedPaths"):
             payload["partialWorkspaceSeal"] = seal
             payload["workspaceManifest"] = manifest
             payload["partialOutput"] = {"partial": True, "verified": False, "final": False,

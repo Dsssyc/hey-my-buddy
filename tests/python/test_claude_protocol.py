@@ -168,6 +168,24 @@ class TurnEvidenceTests(unittest.TestCase):
                                                                  "rateLimitType": {"bad": "type"}}})
         self.assertEqual(malformed.exception.rate_limit_type, "unknown")
 
+    def test_a_free_text_rate_limit_identity_is_never_kept_as_a_fact(self):
+        # A rate-limit identity is an identifier, never free text: whitespace,
+        # control characters or credential-like fragments are dropped or
+        # replaced with "unknown" instead of being published.
+        for bad in ("five hour", "Bearer sk-ant-api03-fragment\n", "primary?x=1", "x" * 65):
+            with self.subTest(bad=bad):
+                self.assertIsNone(rate_limit_observation(
+                    {"type": "rate_limit_event", "rate_limit_info": {"status": "allowed", "rateLimitType": bad}}))
+                with self.assertRaises(QuotaRejected) as caught:
+                    TurnEvidence("session-1", "/tmp/checkout-a").observe(
+                        {"type": "rate_limit_event",
+                         "rate_limit_info": {"status": "rejected", "rateLimitType": bad}})
+                self.assertEqual(caught.exception.rate_limit_type, "unknown")
+        evidence = TurnEvidence("session-1", "/tmp/checkout-a")
+        evidence.observe({"type": "rate_limit_event", "rate_limit_info": {
+            "status": "allowed", "rateLimitType": "five_hour", "utilization": 12.5}})
+        self.assertEqual(list(evidence.rate_limits), ["five_hour"])
+
     def test_assistant_tool_use_reports_tool_activity(self):
         evidence = TurnEvidence("session-1", "/tmp/checkout-a")
         phase, tool = evidence.observe({"type": "assistant", "message": {

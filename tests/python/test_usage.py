@@ -187,6 +187,35 @@ class QuotaTests(unittest.TestCase):
         self.assertEqual(reached["reachedType"], "rate_limit_reached")
         self.assertEqual(reached["windows"], [])
 
+    def test_free_text_identifier_values_never_enter_the_normalized_quota(self):
+        leaked = "Bearer sk-ant-api03-SECRET-FRAGMENT"
+        normalized = usage.normalize_quota({
+            "source": leaked, "observedAt": "2026-01-01T00:00:00Z", "provider": "openai sandbox",
+            "nativeAccountId": "account\n800-1", "limitId": leaked, "planType": "pro plan",
+            "reachedType": "rate limit reached",
+            "windows": [{"name": "primary window", "usedPercent": 42.5, "limitId": leaked},
+                        {"name": "primary", "usedPercent": 42.5, "limitId": "codex"}]})
+        # A non-identifier value is omitted (or "unknown" for source), never kept.
+        self.assertEqual(normalized["source"], "unknown")
+        self.assertEqual(normalized["scope"], {"provider": None, "nativeAccountId": None,
+                                               "limitId": None, "planType": None})
+        self.assertNotIn("reachedType", normalized)
+        self.assertEqual([window["name"] for window in normalized["windows"]], ["primary"])
+        self.assertEqual(normalized["windows"][0]["limitId"], "codex")
+        self.assertNotIn("SECRET-FRAGMENT", json.dumps(normalized))
+
+    def test_normal_identifier_values_are_kept_unchanged(self):
+        normalized = usage.normalize_quota({
+            "source": "codex/app-server-rate-limits", "observedAt": "2026-01-01T00:00:00Z",
+            "provider": "openai", "nativeAccountId": "account-fixture-0001", "limitId": "codex",
+            "planType": "pro", "reachedType": "rate_limit_reached",
+            "windows": [{"name": "five_hour", "usedPercent": 10, "limitId": "codex:primary"}]})
+        self.assertEqual(normalized["source"], "codex/app-server-rate-limits")
+        self.assertEqual(normalized["scope"], {"provider": "openai", "nativeAccountId": "account-fixture-0001",
+                                               "limitId": "codex", "planType": "pro"})
+        self.assertEqual(normalized["reachedType"], "rate_limit_reached")
+        self.assertEqual(normalized["windows"][0]["limitId"], "codex:primary")
+
     def test_no_quota_fact_at_all_returns_none(self):
         for value in (None, {}, "quota", {"source": "fixture"}, {"observedAt": "2026-01-01T00:00:00Z"}):
             with self.subTest(value=value):
@@ -214,6 +243,18 @@ class QuotaFailureTests(unittest.TestCase):
         for value in (None, {}, {"code": "quota-exceeded"}, {"nativeCode": ""}, {"nativeCode": 5}):
             with self.subTest(value=value):
                 self.assertIsNone(usage.normalize_quota_failure(value))
+
+    def test_free_text_failure_values_are_refused_or_unknown(self):
+        # A free-text native code is not a structured fact and is refused; a
+        # free-text source is replaced with "unknown". Neither is ever copied.
+        for bad in ("Bearer sk-ant-api03-SECRET-FRAGMENT", "usage limit exceeded!", "quota\nexceeded"):
+            with self.subTest(bad=bad):
+                self.assertIsNone(usage.normalize_quota_failure({"nativeCode": bad, "source": "fixture"}))
+        failure = usage.normalize_quota_failure({"nativeCode": "usage_limit_reached",
+                                                 "source": "Bearer sk-ant-api03-SECRET-FRAGMENT"})
+        self.assertEqual(failure["nativeCode"], "usage_limit_reached")
+        self.assertEqual(failure["source"], "unknown")
+        self.assertNotIn("SECRET-FRAGMENT", json.dumps(failure))
 
 
 class LastAssistantMessageTests(unittest.TestCase):

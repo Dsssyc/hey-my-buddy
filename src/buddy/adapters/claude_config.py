@@ -66,14 +66,16 @@ MODEL_FALLBACK_VARIABLES = (
 #: harness credentials (``BUDDY_*``) must never leak to a model-driven process,
 #: so everything not named here is dropped. First-party auth is preserved: the
 #: subscription login lives under the user's config dir, and ``ANTHROPIC_API_KEY``
-#: is the documented first-party key path. ``BUDDY_CLAUDE_FIXTURE_*`` are local
+#: is the documented first-party key path. CA certificate path variables name
+#: trust roots, not credentials. ``BUDDY_CLAUDE_FIXTURE_*`` are local
 #: test-fixture controls only; they carry no credentials and never exist in
 #: production environments.
 NATIVE_ENVIRONMENT_ALLOWLIST = (
     "PATH", "HOME", "SHELL", "USER", "LOGNAME", "TMPDIR", "TEMP", "TMP",
     "LANG", "TZ", "TERM", "TERMINFO", "TERM_PROGRAM", "NO_COLOR", "FORCE_COLOR",
     "XDG_CONFIG_HOME", "XDG_DATA_HOME", "XDG_CACHE_HOME", "XDG_STATE_HOME",
-    "SSL_CERT_FILE", "SSL_CERT_DIR",
+    "SSL_CERT_FILE", "SSL_CERT_DIR", "REQUESTS_CA_BUNDLE", "CURL_CA_BUNDLE",
+    "NODE_EXTRA_CA_CERTS",
     "HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY", "http_proxy", "https_proxy", "no_proxy",
     "CLAUDE_CONFIG_DIR",
 )

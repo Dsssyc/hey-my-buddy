@@ -101,6 +101,17 @@ class ServiceEnvironmentBuilderTests(unittest.TestCase):
         self.assertNotIn("BUDDY_DEV_SOURCE", environment)
         self.assertNotIn("BUDDY_CLAUDE_CLI", environment)
 
+    def test_ca_certificate_paths_reach_the_service_environment(self):
+        # Certificate paths name trust roots, not credentials: the service and
+        # its native children need them for TLS while Host secrets stay behind.
+        certificates = {"SSL_CERT_FILE": "/certs/root.pem", "SSL_CERT_DIR": "/certs/dirs",
+                        "REQUESTS_CA_BUNDLE": "/certs/bundle.pem", "CURL_CA_BUNDLE": "/certs/curl.pem",
+                        "NODE_EXTRA_CA_CERTS": "/certs/node.pem"}
+        with mock.patch.dict(os.environ, {**HOST_SESSION_VARIABLES, **certificates}, clear=True):
+            environment = launcher.service_environment()
+        self.assertEqual({key: environment.get(key) for key in certificates}, certificates)
+        self.assertEqual(forbidden_environment(environment), set())
+
     def test_the_development_extension_names_each_fixture_instead_of_a_prefix_rule(self):
         inherited = {**HOST_SESSION_VARIABLES,
                      "BUDDY_DEV_SOURCE": "1",
