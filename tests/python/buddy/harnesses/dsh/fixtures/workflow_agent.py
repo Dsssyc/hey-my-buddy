@@ -201,7 +201,7 @@ class WorkflowAgent(fake_agent.FakeAgent):
 
     @staticmethod
     def turn_input(message: dict) -> dict:
-        """The prompt's final JSON projection: turn identity and context."""
+        """The prompt's complete final turn-input JSON: identity and context."""
         text = fake_agent.FakeAgent.prompt_text(message.get("params") or {})
         for line in reversed(text.splitlines()):
             line = line.strip()

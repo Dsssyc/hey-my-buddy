@@ -135,7 +135,7 @@ class NativeRunCase(unittest.TestCase):
         """
         identity = {"taskId": "task", "attemptId": f"attempt-{uuid.uuid4().hex[:8]}",
                     "generation": 1, "turnId": "turn-1"}
-        turn_input = {"taskId": identity["taskId"], "attemptId": identity["attemptId"],
+        turn_input = {"version": 3, "taskId": identity["taskId"], "attemptId": identity["attemptId"],
                       "generation": 1, "turnId": "turn-1", "context": dict(context or {}),
                       "executionWorkspace": {"path": str(self.base / "cwd"), "access": "write"}}
         attention = self.base / f"attention-{uuid.uuid4().hex[:8]}.json"
@@ -786,7 +786,7 @@ class WorkerSeamTests(NativeRunCase):
     def test_large_utf8_worker_prompt_reaches_native_acp_peer_complete(self):
         capture = self.base / "native-prompt.ndjson"
         task_text = "核对文件🙂，正文只出现一次-97ba54"
-        context = {"task": task_text, "evidence": "完整上下文😀\n\"quoted\"\\path " * 75000}
+        context = {"evidence": "完整上下文😀\n\"quoted\"\\path " * 75000}
         frozen_context = json.dumps(context, ensure_ascii=False)
         request, bound, mount = self.worker_request(task_text=task_text, context=context)
         self.assertGreater(len(request.input_text.encode("utf-8")), 2 * 1024 * 1024)

@@ -219,15 +219,19 @@ class LifecycleTests(WorkflowTestCase):
     def test_turn_input_versions_keep_their_frozen_annotation_keys(self):
         board = self.board()
         self.register(board)
-        submitted = self.submit(board)
+        task = "historical task " * 1000
+        submitted = self.submit(board, task=task)
         claimed = self.claim(board)['claim']
         original = claimed['turn']['input']
-        self.assertEqual(original['version'], 2)
+        self.assertEqual(original['version'], 3)
+        self.assertNotIn('task', original['context'])
+        self.assertNotIn('taskTruncated', original['context'])
         turn_id = claimed['turn']['turnId']
         for version, key in ((1, 'reason'), (2, 'note')):
             with self.subTest(version=version):
                 payload = {**original, 'version': version,
-                           'context': {**original['context'], 'hostDecision': {key: 'Host text'}}}
+                           'context': {**original['context'], 'task': task[:8000], 'taskTruncated': True,
+                                       'hostDecision': {key: 'Host text'}}}
                 raw = json.dumps(payload)
                 with board.store.db.write() as connection:
                     connection.execute('UPDATE workflow_turns SET input_json=? WHERE turn_id=?', (raw, turn_id))
@@ -238,7 +242,7 @@ class LifecycleTests(WorkflowTestCase):
                                                         (turn_id,)).fetchone()[0], raw)
         with board.store.db.write() as connection:
             connection.execute('UPDATE workflow_turns SET input_json=? WHERE turn_id=?',
-                               (json.dumps({**original, 'version': 3}), turn_id))
+                               (json.dumps({**original, 'version': 4}), turn_id))
         with self.assertRaises(BoardError) as unknown:
             board.call('workflow_get', {'runId': submitted['runId']})
         self.assertEqual(unknown.exception.code, 'TURN_INVALID')
@@ -1916,13 +1920,13 @@ class CompactReadBoundTests(WorkflowTestCase):
         audit = board.call("workflow_get", {"runId": submitted["runId"], "includeAudit": True})
         self.assertNotIn("spec", audit["audit"])
         self.assertEqual(audit["audit"]["microTask"]["task"], big_task)
-        self.assertEqual(audit["audit"]["turns"][0]["input"]["context"]["task"], big_task)
+        self.assertNotIn("task", audit["audit"]["turns"][0]["input"]["context"])
         self.assertNotIn("taskTruncated", audit["audit"]["turns"][0]["input"]["context"])
         self.assertGreater(len(json.dumps(audit["audit"])), len(serialized))
 
 
 class CompleteTurnInputTests(WorkflowTestCase):
-    def test_turn_keeps_frozen_helpers_task_and_all_artifact_references(self):
+    def test_turn_keeps_frozen_context_without_repeating_the_task(self):
         board = self.board()
         task = "task " * 70000
         submitted = self.submit(board, task=task)
@@ -1931,7 +1935,7 @@ class CompleteTurnInputTests(WorkflowTestCase):
             self.finish_turn(board, claim)
             view = board.call("workflow_get", {"runId": submitted["runId"]})
             continuation = self.continue_run(board, view, command_id=f"continue-{index}")
-        helpers = [{"taskId": f"helper-{index}", "state": "completed", "summary": "s" * 5000,
+        helpers = [{"taskId": f"helper-{index}", "state": "completed", "summary": "s" * 24000,
                     "remaining": ["r" * 4097] + ["remaining"] * 36} for index in range(12)]
         # A continuation freezes accumulated helper outcomes before the next admission.
         with board.store.db.write() as connection:
@@ -1943,7 +1947,8 @@ class CompleteTurnInputTests(WorkflowTestCase):
         claim = self.claim(board, claim_request_id="complete-context", run_id=submitted["runId"])
         turn = claim["claim"]["turn"]
         context = turn["input"]["context"]
-        self.assertEqual(context["task"], task)
+        self.assertEqual(turn["input"]["version"], 3)
+        self.assertNotIn("task", context)
         self.assertEqual(context["helperOutcomes"], helpers)
         # Admission pins this turn's input artifact after assembling its input.
         self.assertEqual(len(context["artifacts"]), count)
@@ -1951,6 +1956,47 @@ class CompleteTurnInputTests(WorkflowTestCase):
         self.assertEqual(len(context["nextActions"]), 2)
         for field in ("taskTruncated", "helperOutcomeTotal", "artifactTotal", "artifactsTruncated"):
             self.assertNotIn(field, context)
+        with board.store.db.read() as connection:
+            rows = connection.execute("SELECT input_json FROM workflow_turns WHERE run_id=?",
+                                      (submitted["runId"],)).fetchall()
+            spec = json.loads(connection.execute("SELECT spec_json FROM tasks WHERE task_id=?",
+                                                (submitted["runId"],)).fetchone()[0])
+        self.assertEqual(spec["task"], task)
+        for row in rows:
+            document = json.loads(row["input_json"])
+            self.assertEqual(document["version"], 3)
+            self.assertNotIn("task", document["context"])
+            self.assertNotIn("taskTruncated", document["context"])
+
+    def test_a_new_turn_preserves_its_previous_v2_input_without_copying_task_text(self):
+        board = self.board()
+        task = "original task " * 1000
+        submitted = self.submit(board, task=task)
+        first = self.claim(board)
+        turn = first["claim"]["turn"]
+        historical = {**turn["input"], "version": 2,
+                      "context": {**turn["input"]["context"], "task": task[:8000], "taskTruncated": True}}
+        frozen = workflow_module.canonical_json(historical)
+        turn["input"] = historical
+        turn["inputSha256"] = workflow_module.sha256_text(frozen)
+        with board.store.db.write() as connection:
+            connection.execute("UPDATE workflow_turns SET input_json=? WHERE turn_id=?", (frozen, turn["turnId"]))
+        self.finish_turn(board, first)
+        view = board.call("workflow_get", {"runId": submitted["runId"]})
+        self.continue_run(board, view)
+        second = self.claim(board, claim_request_id="after-v2", run_id=submitted["runId"])
+        new_input = second["claim"]["turn"]["input"]
+        self.assertEqual(new_input["version"], 3)
+        self.assertNotIn("task", new_input["context"])
+        self.assertNotIn("taskTruncated", new_input["context"])
+        with board.store.db.read() as connection:
+            retained = connection.execute("SELECT input_json FROM workflow_turns WHERE turn_id=?",
+                                          (turn["turnId"],)).fetchone()[0]
+        self.assertEqual(retained, frozen)
+        audit = board.call("workflow_get", {"runId": submitted["runId"], "includeAudit": True})
+        prior = next(row for row in audit["audit"]["turns"] if row["turnId"] == turn["turnId"])
+        self.assertEqual(prior["input"], historical)
+        self.assertEqual(prior["inputSha256"], workflow_module.sha256_text(frozen))
 
     def test_host_continuation_uses_the_task_text_byte_budget(self):
         board = self.board()

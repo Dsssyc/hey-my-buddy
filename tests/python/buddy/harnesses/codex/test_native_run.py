@@ -852,8 +852,8 @@ class ReviewSeamTests(CodexSeamCase):
 class WorkerSeamTests(CodexSeamCase):
     def test_complete_worker_prompt_over_two_mib_reaches_the_native_peer(self):
         task = "Execute this task once: 单份任务正文-2fef3c"
-        turn = {"taskId": "micro-task-1", "attemptId": "attempt-check", "generation": 7,
-                "turnId": "turn-check", "context": {"task": task, "delegationAuthority": False,
+        turn = {"version": 3, "taskId": "micro-task-1", "attemptId": "attempt-check", "generation": 7,
+                "turnId": "turn-check", "context": {"delegationAuthority": False,
                     "evidence": "完整上下文😀\n\"quoted\"\\path " * 75000}}
         frozen_input = json.dumps(turn, ensure_ascii=False)
         frozen_hash = input_hash(turn)

@@ -102,7 +102,7 @@ LEAD_OWNED_OPERATIONS = LEAD_OPERATIONS - {"workflow_submit"} | (
     AGENT_RUN_BOUND_OPERATIONS - {"workflow_suggest"}
 )
 
-TURN_INPUT_VERSION = 2
+TURN_INPUT_VERSION = 3
 TURN_OUTPUT_VERSION = 1
 TURN_DISPOSITIONS = ("completed", "assistance", "attention", "waiting")
 MAX_ACTIVE_TURNS_VIEW = 10
@@ -189,7 +189,7 @@ def workspace_module():
 def _turn_input_context(input_json: str) -> dict:
     """The frozen context object of one supported turn input."""
     document = json.loads(input_json)
-    if type(document["version"]) is not int or document["version"] not in (1, TURN_INPUT_VERSION):
+    if type(document["version"]) is not int or document["version"] not in (1, 2, TURN_INPUT_VERSION):
         raise BoardError("TURN_INVALID", "The frozen turn input version is not supported")
     return document["context"]
 
@@ -6109,7 +6109,7 @@ class WorkflowCoordinator:
                         and not permission_reconstruction):
                     resume_mode = "native-session"
         turn_id = str(uuid.uuid4())
-        context = self._turn_context(connection, run_row, task, spec, continuation, previous, turn_index)
+        context = self._turn_context(connection, run_row, continuation, previous, turn_index)
         if previous is not None:
             # A refused native resume can fail before producing any new message.
             # Keep the last already-recorded assistant evidence through that hop.
@@ -6624,11 +6624,8 @@ class WorkflowCoordinator:
                  for row in rows]
         return {"ownedMicroTasks": facts, "ownedFactsCursor": cursor}
 
-    def _turn_context(self, connection, run_row, task, spec, continuation, previous, turn_index) -> dict:
-        micro_task = json.loads(task["spec_json"])
-        task_text = micro_task.get("task") if isinstance(micro_task.get("task"), str) else ""
+    def _turn_context(self, connection, run_row, continuation, previous, turn_index) -> dict:
         context: dict[str, Any] = {
-            "task": task_text,
             "taskId": run_row["run_id"],
             "turnIndex": turn_index,
             "buddy": self._buddy(run_row),
