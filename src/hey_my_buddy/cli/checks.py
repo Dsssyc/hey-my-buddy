@@ -323,7 +323,8 @@ def _collect_output(stream, chunks: list[bytes]) -> None:
 
 def run_suite_child(root: Path, private_root: Path, directory_name: str, label: str,
                     commands: list[list[str]], live: set, guard: threading.Lock,
-                    stop: threading.Event, *, cwd: Path | None = None) -> ChildOutcome | None:
+                    stop: threading.Event, *, cwd: Path | None = None,
+                    environment_overrides: dict[str, str] | None = None) -> ChildOutcome | None:
     """Run a suite's commands in order inside one private state, runtime and temp root.
 
     Returns ``None`` without starting anything once the run has been interrupted.
@@ -333,6 +334,7 @@ def run_suite_child(root: Path, private_root: Path, directory_name: str, label: 
     child_root = private_root / directory_name
     environment = child_environment(root, child_root,
                                     home_root=private_root / f"{directory_name}-home")
+    environment.update(environment_overrides or {})
     started = time.monotonic()
     (child_root / "tmp").mkdir(mode=private_dirs.directory_mode(), parents=True)
     stdout: list[str] = []
@@ -395,6 +397,7 @@ def run_frontend_suite(root: Path, private_root: Path, live: set, guard: threadi
         [[node, str(tsc), "--noEmit"],
          [node, str(vitest), "run", "--maxWorkers=1", "--reporter=dot"]],
         live, guard, stop, cwd=console,
+        environment_overrides={"HMB_PREVIEW_PYTHON": sys.executable},
     )
 
 
