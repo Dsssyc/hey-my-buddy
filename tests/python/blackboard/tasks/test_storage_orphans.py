@@ -156,20 +156,20 @@ class StorageOrphanTests(WorkflowTestCase):
                 ('nested', {'manifestSha256': manifest['manifestSha256']}),
                 ('nested', {'output': str(checkout.parent / 'outputs' / 'retained.patch')})]
 
-    def test_all_integration_states_and_path_identity_forms_are_retained(self):
+    def test_integration_strategies_and_path_identity_forms_are_retained(self):
         manifest, checkout, planned = self.orphan()
         parent = self.submit(self.board_instance, request_id='other-run', cwd=str(self.repo), kind='existing')
         forms = self.retained_reference_forms(manifest, checkout)
         with self.board_instance.store.db.write() as connection:
-            for state in ('verified', 'not-required', 'conflict'):
+            for strategy in ('patch', 'merge', 'not-required'):
                 for index, (kind, value) in enumerate(forms):
-                    with self.subTest(state=state, kind=kind, form=index):
-                        identity = state + '-' + str(index)
+                    with self.subTest(strategy=strategy, kind=kind, form=index):
+                        identity = strategy + '-' + str(index)
                         connection.execute('''INSERT INTO workflow_integrations
-                            (integration_id,run_id,artifact_id,state,strategy,binding_sha256,target_kind,
+                            (integration_id,run_id,artifact_id,strategy,binding_sha256,
                              target_path,target_checkout_id,verification_json,actor_role,actor_id,created_at)
-                            VALUES (?,?,? ,?,'patch',?,'checkout',?,?,?,'host','host-1',?)''',
-                            (identity, parent['runId'], 'private-artifact', state, identity,
+                            VALUES (?,?,?,?,?,?,?,?,'host','host-1',?)''',
+                            (identity, parent['runId'], 'private-artifact', strategy, identity,
                              value if kind == 'path' else '', value if kind == 'identity' else None,
                              json.dumps(value if kind == 'nested' else {}), '2026-01-01T00:00:00Z'))
                         rows = [(table, row) for table, row in storage._workspace_reference_rows(connection)
@@ -194,8 +194,8 @@ class StorageOrphanTests(WorkflowTestCase):
                         identity = state + '-' + str(index)
                         connection.execute('''INSERT INTO workspace_cleanup_plans
                             (plan_id,run_id,workspace_id,checkout_id,path,kind,state,evidence_json,
-                             retention_json,actor_role,actor_id,created_at,expires_at)
-                            VALUES (?,?,'other-workspace',?,?,'worktree',?,?,'{}','host','host-1',?,?)''',
+                             retention_json,created_at,expires_at)
+                            VALUES (?,?,'other-workspace',?,?,'worktree',?,?,'{}',?,?)''',
                             (identity, parent['runId'], value if kind == 'identity' else 'other-checkout',
                              value if kind == 'path' else '', state,
                              json.dumps(value if kind == 'nested' else {}),

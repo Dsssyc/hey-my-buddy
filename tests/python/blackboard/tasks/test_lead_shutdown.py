@@ -176,7 +176,7 @@ class LeadShutdownTests(WorkflowTestCase):
         coordinator = board.store.workflow
         real_conflict = coordinator._open_conflict
         with patch.object(coordinator, "_open_conflict", side_effect=lambda db, run_id: (
-                {"conflict_id": "open-lead-conflict", "blocking_paths_json": '["outside.txt"]'}
+                {"conflict_id": "open-lead-conflict", "evidence_json": '{"blockingPaths":["outside.txt"]}'}
                 if run_id == lead["runId"] else real_conflict(db, run_id))):
             with self.assertRaises(BoardError) as caught:
                 self.conclude(board, lead)

@@ -22,7 +22,7 @@ class UpgradeTests(BoardTestCase):
         state.mkdir()
         target = self.directory / 'runtimes' / ('a' * 32)
         with mock.patch.object(upgrade, 'command', return_value={}) as command, \
-             mock.patch.object(upgrade, 'idle_snapshot'):
+             mock.patch.object(upgrade, 'ensure_idle'):
             upgrade.detach(state, target)
         command.assert_called_once_with(state, target, 'restart', {'drainSeconds': 0})
 
@@ -59,7 +59,8 @@ class UpgradeTests(BoardTestCase):
         state.mkdir()
         root = self.directory / 'runtimes'
         previous, target = root / ('a' * 32), root / ('b' * 32)
-        journal = {'phase': 'verified', 'contractChanged': True, 'previous': str(previous), 'target': str(target), 'before': {}}
+        journal = {'phase': 'verified', 'contractChanged': True, 'previous': str(previous),
+                   'target': str(target), 'before': {}, 'expected': {}}
         marker = state / 'upgrade.json'
         upgrade.write_journal(marker, journal)
 
@@ -106,7 +107,7 @@ class UpgradeTests(BoardTestCase):
                 mock.patch('hey_my_buddy.install.upgrade.runtime.is_ready', return_value=True), \
              mock.patch('hey_my_buddy.install.upgrade.runtime.read_ready', return_value={'sourceCommit': 'f' * 40}), \
                 mock.patch('hey_my_buddy.install.upgrade.probe', return_value=health), \
-                mock.patch('hey_my_buddy.install.upgrade.idle_snapshot', side_effect=busy), \
+                mock.patch('hey_my_buddy.install.upgrade.ensure_idle', side_effect=busy), \
                 mock.patch('hey_my_buddy.install.upgrade.runtime.materialize') as materialize:
             with self.assertRaises(BoardError) as caught:
                 upgrade.upgrade({}, skill_source=source, skill_target=skill)
@@ -165,7 +166,6 @@ class UpgradeTests(BoardTestCase):
         endpoint = {'runtimeIdentity': 'runtime:' + previous.name, 'serviceId': 'old', 'pid': 123, 'contractVersion': '0.19.0'}
         (state / 'control.json').write_text(json.dumps(endpoint))
         health = {**endpoint, 'maxConcurrent': 1, 'waitCapacity': 32}
-        before = upgrade.idle_snapshot(state)
         busy = BoardError('UPGRADE_NOT_IDLE', 'raced task', active=[{'runId': 'raced', 'state': 'queued'}])
         with mock.patch.dict(os.environ, {'HMB_RUNTIME_ROOT': str(root)}), \
              mock.patch('hey_my_buddy.install.upgrade.get_state_dir', return_value=state), \
@@ -173,8 +173,8 @@ class UpgradeTests(BoardTestCase):
              mock.patch('hey_my_buddy.install.upgrade.runtime.read_ready', return_value={'sourceCommit': 'f' * 40}), \
              mock.patch('hey_my_buddy.install.upgrade.probe', return_value=health), \
              mock.patch('hey_my_buddy.install.upgrade.runtime.materialize', return_value={'runtimeDir': str(target)}), \
-             mock.patch('hey_my_buddy.install.upgrade.idle_snapshot', side_effect=[before, before, busy]), \
-             mock.patch('hey_my_buddy.install.upgrade.detach') as detach, \
+             mock.patch('hey_my_buddy.install.upgrade.ensure_idle', return_value=SCHEMA_VERSION), \
+             mock.patch('hey_my_buddy.install.upgrade.detach', side_effect=busy) as detach, \
              mock.patch('hey_my_buddy.install.upgrade.backup.create') as create:
             result = upgrade.upgrade({})
         self.assertEqual(result['error']['code'], 'UPGRADE_NOT_IDLE')
@@ -186,7 +186,7 @@ class UpgradeTests(BoardTestCase):
         journal = json.loads((state / 'upgrade-last.json').read_text())
         self.assertEqual(journal['phase'], 'not-switched')
         self.assertEqual(journal['failure'], reason)
-        detach.assert_not_called()
+        detach.assert_called_once()
         create.assert_not_called()
         self.assertFalse((state / 'upgrade.json').exists())
         self.assertEqual(json.loads((state / 'control.json').read_text()), endpoint)
@@ -263,6 +263,11 @@ class UpgradeTests(BoardTestCase):
             upgrade.idle_snapshot(board.directory)
         self.assertEqual(caught.exception.code, 'UPGRADE_NOT_IDLE')
         self.assertEqual(board.call('task_get', {'runId':run})['task']['state'], 'queued')
+
+    def test_idle_preflight_checks_admission_without_scanning_all_rows(self):
+        board = self.board()
+        with mock.patch.object(backup, 'database_snapshot', side_effect=AssertionError('full scan during preflight')):
+            self.assertEqual(upgrade.preflight(board.directory, contract_changed=True), {'schema': SCHEMA_VERSION})
 
     def test_upgrade_journal_fences_admission_without_cancellation(self):
         board=self.board()
@@ -386,6 +391,15 @@ class UpgradeTests(BoardTestCase):
         self.assertEqual(caught.exception.code, 'UPGRADE_UNSAFE')
         self.assertEqual(sentinel.read_bytes(), b'keep outside')
         self.assertTrue(control.is_symlink())
+
+    def test_restore_rejects_parent_traversal_before_verifying_backup(self):
+        state = self.directory / 'state' / '..' / 'state'
+        current = self.directory / 'backups/current'
+        with mock.patch.object(backup, 'verify') as verify:
+            with self.assertRaises(BoardError) as caught:
+                upgrade.restore(state, current)
+        self.assertEqual(caught.exception.code, 'UPGRADE_UNSAFE')
+        verify.assert_not_called()
 
     @unittest.skipUnless(hasattr(os, 'mkfifo'), 'requires POSIX FIFOs')
     def test_restore_refuses_special_existing_targets_before_changing_board(self):

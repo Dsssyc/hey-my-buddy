@@ -553,10 +553,10 @@ class MacroTaskDeletionTests(WorkflowTestCase):
         with board.store.db.write() as db:
             db.execute("UPDATE workflow_routes SET state='resolved' WHERE decision_id='pending-decision'")
             db.execute("INSERT INTO workspace_cleanup_plans(plan_id,run_id,workspace_id,checkout_id,path,kind,"
-                       "state,evidence_json,retention_json,actor_role,actor_id,created_at,expires_at)"
-                       " VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                       "state,evidence_json,retention_json,created_at,expires_at)"
+                       " VALUES(?,?,?,?,?,?,?,?,?,?,?)",
                        ("applying-plan", run["runId"], "workspace", "checkout", "private", "worktree",
-                        "applying", "{}", "{}", "host", "fixture", now, now))
+                        "applying", "{}", "{}", now, now))
         self.assert_code("MACRO_TASK_BUSY", macro_task_deletion.preview, board.store, target)
         self.assert_code("MACRO_TASK_BUSY", macro_task_deletion.delete, board.store, target, 1)
         with board.store.db.read() as db:
@@ -672,18 +672,18 @@ class MacroTaskDeletionTests(WorkflowTestCase):
                        "write_scope_json,stopped_evidence_json,created_at) VALUES(?,?,?,?,?,?,?)",
                        (run["runId"], 900, "host", "fixture", "{}", "{}", now))
             db.execute("INSERT INTO workflow_workspace_conflicts(conflict_id,run_id,attempt_id,"
-                       "manifest_sha256,observed_fingerprint,blocking_paths_json,evidence_json,state,"
-                       "created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?)",
-                       ("owned-conflict", run["runId"], "old-attempt", "manifest", "fingerprint",
-                        "[]", "{}", "abandoned", now, now))
+                       "observed_fingerprint,evidence_json,state,"
+                       "created_at,updated_at) VALUES(?,?,?,?,?,?,?,?)",
+                       ("owned-conflict", run["runId"], "old-attempt", "fingerprint",
+                        '{"manifestSha256":"manifest","blockingPaths":[]}', "abandoned", now, now))
             db.execute("INSERT INTO workflow_artifacts(artifact_id,run_id,kind,manifest_json,"
                        "manifest_sha256,created_at) VALUES(?,?,?,?,?,?)",
                        ("owned-workflow-artifact", run["runId"], "output", "{}", "owned-hash", now))
-            db.execute("INSERT INTO workflow_integrations(integration_id,run_id,artifact_id,state,"
-                       "strategy,binding_sha256,target_kind,verification_json,actor_role,actor_id,created_at)"
-                       " VALUES(?,?,?,?,?,?,?,?,?,?,?)",
-                       ("owned-integration", run["runId"], "owned-workflow-artifact", "not-required",
-                        "fixture", "owned-binding", "none", "{}", "host", "fixture", now))
+            db.execute("INSERT INTO workflow_integrations(integration_id,run_id,artifact_id,"
+                       "strategy,binding_sha256,verification_json,actor_role,actor_id,created_at)"
+                       " VALUES(?,?,?,?,?,?,?,?,?)",
+                       ("owned-integration", run["runId"], "owned-workflow-artifact",
+                        "not-required", "owned-binding", "{}", "host", "fixture", now))
             db.execute("INSERT INTO workflow_suggestions(suggestion_id,run_id,body,created_at)"
                        " VALUES(?,?,?,?)", ("owned-suggestion", run["runId"], "private", now))
             db.execute("INSERT INTO workspace_reservations(reservation_id,workspace_id,checkout_id,repository_id,"
@@ -756,10 +756,10 @@ class MacroTaskDeletionTests(WorkflowTestCase):
             now = board.store.now()
             with board.store.db.write() as db:
                 db.execute('INSERT INTO workspace_cleanup_plans(plan_id,run_id,workspace_id,checkout_id,path,kind,'
-                           'state,evidence_json,retention_json,actor_role,actor_id,created_at,expires_at)'
-                           ' VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)',
+                           'state,evidence_json,retention_json,created_at,expires_at)'
+                           ' VALUES(?,?,?,?,?,?,?,?,?,?,?)',
                            ('held-plan',run['runId'],'ws-'+'a'*32,'checkout',str(directory/'checkout'),'worktree',
-                            'applying','{}','{}','host','fixture',now,now))
+                            'applying','{}','{}',now,now))
             self.assert_code('MACRO_TASK_BUSY',macro_task_deletion.delete,board.store,run['macroTaskId'],1)
         with board.store.db.read() as db:
             self.assertEqual(db.execute('SELECT COUNT(*) FROM macro_task_deletions').fetchone()[0],0)

@@ -410,7 +410,11 @@ class LifecycleTestCase(RealWorkspaceTestCase):
         with board.store.db.read() as connection:
             stored = connection.execute("SELECT verification_json FROM workflow_integrations WHERE integration_id=?",
                                         (accepted["integration"]["integrationId"],)).fetchone()[0]
+        self.assertEqual(set(json.loads(stored)),
+                         {"matchingPaths", "differingPaths", "missingPaths", "hostPaths", "note"})
         self.assertEqual(json.loads(stored)["matchingPaths"], expected)
+        self.assertTrue(verification["verified"])
+        self.assertEqual(verification["summary"], "")
         self.assertTrue(checkout.exists())
         for number in range(file_count):
             (checkout / name("new", number)).write_text("unsealed\n")
@@ -1962,6 +1966,9 @@ class LifecycleTestCase(RealWorkspaceTestCase):
             ).fetchone())
             events = connection.execute("SELECT payload_json FROM events WHERE task_id=? AND kind='workflow.cleanup_applied'",
                                         (submitted["runId"],)).fetchall()
+        self.assertEqual(json.loads(after["result_json"]), {"alreadyRemoved": False})
+        self.assertNotIn("commandReceipts", json.loads(after["retention_json"]))
+        self.assertTrue(recovered["plan"]["retention"]["commandReceipts"])
         for column in before.keys() - {"state", "revision", "applied_at", "result_json"}:
             self.assertEqual(after[column], before[column], column)
         self.assertEqual(after["revision"], before["revision"] + 1)

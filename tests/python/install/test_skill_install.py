@@ -138,7 +138,7 @@ class SkillPackageTests(unittest.TestCase):
                 journal.unlink()
             with mock.patch.dict(os.environ, {**self._upgrade_environment(root, state), 'HMB_AGENT_SKILLS_DIR': str(root / 'skills')}, clear=True), \
                  mock.patch('hey_my_buddy.install.upgrade.upgrade', side_effect=recover) as recovery, \
-                 mock.patch('hey_my_buddy.install.upgrade.idle_snapshot', side_effect=BoardError('UPGRADE_NOT_IDLE', 'raced work')), \
+                 mock.patch('hey_my_buddy.install.upgrade.ensure_idle', side_effect=BoardError('UPGRADE_NOT_IDLE', 'raced work')), \
                  mock.patch('hey_my_buddy.install.skill_install._place') as place:
                 with self.assertRaises(BoardError) as caught:
                     skill_install.install({})
@@ -159,7 +159,7 @@ class SkillPackageTests(unittest.TestCase):
             (target / 'SKILL.md').write_text('changed generation')
             with mock.patch.dict(os.environ, self._upgrade_environment(root, state), clear=True), \
                  mock.patch.object(skill_install, 'packaged_skill', return_value=source), \
-                 mock.patch.object(upgrade_module, 'idle_snapshot', side_effect=AssertionError('idle checked')), \
+                 mock.patch.object(upgrade_module, 'ensure_idle', side_effect=AssertionError('idle checked')), \
                  mock.patch.object(upgrade_module.backup, 'create', side_effect=AssertionError('backup created')), \
                  mock.patch.object(upgrade_module, 'preflight', wraps=upgrade_module.preflight) as preflight, \
                  mock.patch.object(upgrade_module, 'upgrade', return_value={'upgraded': True}) as cutover:
@@ -181,7 +181,7 @@ class SkillPackageTests(unittest.TestCase):
                 connection.execute('CREATE TABLE meta(key TEXT PRIMARY KEY,value TEXT)')
                 connection.execute("INSERT INTO meta VALUES('schema_version',?)", (str(SCHEMA_VERSION),))
             with mock.patch.dict(os.environ, self._upgrade_environment(root, state), clear=True), \
-                 mock.patch.object(upgrade_module, 'idle_snapshot', side_effect=AssertionError('idle checked')), \
+                 mock.patch.object(upgrade_module, 'ensure_idle', side_effect=AssertionError('idle checked')), \
                  mock.patch.object(upgrade_module.backup, 'create', side_effect=AssertionError('backup created')), \
                  mock.patch('hey_my_buddy.install.launcher.selected_runtime', side_effect=AssertionError('source inspected')):
                 upgrade_module.install_preflight(state)
@@ -197,7 +197,7 @@ class SkillPackageTests(unittest.TestCase):
                 connection.execute("INSERT INTO meta VALUES('schema_version',?)", (str(SCHEMA_VERSION - 1),))
             before = (state / 'board.sqlite3').read_bytes()
             with mock.patch.dict(os.environ, self._upgrade_environment(root, state), clear=True), \
-                 mock.patch.object(upgrade_module, 'idle_snapshot', side_effect=AssertionError('idle checked')), \
+                 mock.patch.object(upgrade_module, 'ensure_idle', side_effect=AssertionError('idle checked')), \
                  mock.patch.object(upgrade_module.backup, 'create', side_effect=AssertionError('backup created')):
                 with self.assertRaises(BoardError) as caught:
                     skill_install.install({})

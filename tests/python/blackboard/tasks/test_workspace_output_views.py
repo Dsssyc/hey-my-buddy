@@ -44,17 +44,18 @@ class WorkspaceOutputViewTests(unittest.TestCase):
         self.assert_bounded({"artifacts": [view] * 32})
 
     def test_integration_acceptance_and_get_views_keep_complete_verification_in_row(self):
-        verification = {"verified": True, "matchingPaths": self.paths, "differingPaths": [],
-                        "missingPaths": [], "adjustments": [], "hostPaths": [], "unrecordedPaths": []}
+        verification = {"matchingPaths": self.paths, "differingPaths": [],
+                        "missingPaths": [], "hostPaths": [], "note": None}
         row = {"integration_id": "integration", "run_id": "run", "artifact_id": "artifact",
-               "attempt_id": "attempt", "state": "verified", "strategy": "patch",
-               "target_kind": "checkout", "target_path": "/private/target", "target_ref": "HEAD",
+               "strategy": "patch", "target_path": "/private/target", "target_ref": "HEAD",
                "target_repository_id": "repository", "target_checkout_id": "checkout",
                "source_commit": "source", "source_tree": "source-tree", "before_commit": "before",
                "after_commit": "after", "before_tree": "before-tree", "after_tree": "after-tree",
                "verification_json": json.dumps(verification), "note": "accepted", "actor_role": "host",
                "actor_id": "host-1", "created_at": "now"}
-        view = WorkflowCoordinator._integration_view(row)
+        connection = mock.Mock()
+        connection.execute.return_value.fetchone.return_value = {"attempt_id": "attempt"}
+        view = WorkflowCoordinator._integration_view(object.__new__(WorkflowCoordinator), connection, row)
         self.assertEqual(len(json.loads(row["verification_json"])["matchingPaths"]), 3000)
         self.assertEqual(view["verification"]["matchingPaths"], [path[:500] for path in self.paths[:32]])
         self.assertEqual(view["verification"]["matchingPathsCount"], 3000)
@@ -64,14 +65,14 @@ class WorkspaceOutputViewTests(unittest.TestCase):
 
     def test_conflict_and_resolution_path_views_are_bounded(self):
         row = {"conflict_id": "conflict", "run_id": "run", "attempt_id": "attempt", "turn_id": "turn",
-               "manifest_sha256": "manifest", "observed_fingerprint": "fingerprint",
-               "blocking_paths_json": json.dumps(self.paths), "resolved_paths_json": json.dumps(self.paths),
+               "observed_fingerprint": "fingerprint", "resolved_paths_json": json.dumps(self.paths),
                "conflicting_paths_json": json.dumps(self.paths),
-               "evidence_json": json.dumps({"entries": [{"path": path} for path in self.paths]}),
+               "evidence_json": json.dumps({"manifestSha256": "manifest", "blockingPaths": self.paths,
+                                            "entries": [{"path": path} for path in self.paths]}),
                "delivery_json": None, "state": "open", "action": None, "artifact_id": None,
-               "output_commit": None, "output_tree": None, "actor_role": None, "actor_id": None,
+               "actor_role": None, "actor_id": None,
                "note": None, "created_at": "now", "updated_at": "now"}
-        view = WorkflowCoordinator._conflict_view(row)
+        view = WorkflowCoordinator._conflict_view(object.__new__(WorkflowCoordinator), mock.Mock(), row)
         self.assertEqual(view["blockingPathsCount"], 3000)
         self.assertEqual(view["resolvedPathsCount"], 3000)
         self.assertEqual(view["conflictingPathsCount"], 3000)

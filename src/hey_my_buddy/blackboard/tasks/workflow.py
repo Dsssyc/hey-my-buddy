@@ -590,13 +590,9 @@ class WorkflowCoordinator:
             (run_id,),
         ).fetchone()
 
-    @staticmethod
-    def _conflict_view(row) -> dict:
+    def _conflict_view(self, connection, row) -> dict:
         entries = []
-        try:
-            evidence = json.loads(row["evidence_json"])
-        except (TypeError, ValueError):
-            evidence = {}
+        evidence = json.loads(row["evidence_json"])
         for entry in (evidence.get("entries") if isinstance(evidence, dict) else []) or []:
             if not isinstance(entry, dict):
                 continue
@@ -604,14 +600,13 @@ class WorkflowCoordinator:
                             "authorizedIndex": entry.get("authorizedIndex"), "observed": entry.get("observed"),
                             "observedIndex": entry.get("observedIndex"), "changed": entry.get("changed"),
                             "indexChanged": entry.get("indexChanged"), "excludedChanged": entry.get("excludedChanged")})
-        delivery = None
-        try:
-            candidate = json.loads(row["delivery_json"]) if row["delivery_json"] else None
-            delivery = candidate if isinstance(candidate, dict) else None
-        except (TypeError, ValueError):
-            delivery = None
+        delivery = self._resolution_delivery_view(row)
+        artifact = connection.execute(
+            "SELECT manifest_json FROM workflow_artifacts WHERE artifact_id=?", (row["artifact_id"],)
+        ).fetchone() if row["artifact_id"] else None
+        output = json.loads(artifact["manifest_json"]) if row["artifact_id"] else {}
         paths = WorkflowCoordinator._bounded_path_fields({
-            "blockingPaths": json.loads(row["blocking_paths_json"]),
+            "blockingPaths": evidence["blockingPaths"],
             "resolvedPaths": json.loads(row["resolved_paths_json"]),
             "conflictingPaths": json.loads(row["conflicting_paths_json"]),
         }, ("blockingPaths", "resolvedPaths", "conflictingPaths"))
@@ -620,15 +615,15 @@ class WorkflowCoordinator:
             "runId": row["run_id"],
             "attemptId": row["attempt_id"],
             "turnId": row["turn_id"],
-            "manifestSha256": row["manifest_sha256"],
+            "manifestSha256": evidence["manifestSha256"],
             "observedFingerprint": row["observed_fingerprint"],
             **paths,
             **WorkflowCoordinator._bounded_path_fields({"paths": entries}, ("paths",)),
             "state": row["state"],
             "action": row["action"],
             "artifactId": row["artifact_id"],
-            "outputCommit": row["output_commit"],
-            "outputTree": row["output_tree"],
+            "outputCommit": output.get("commit"),
+            "outputTree": output.get("tree"),
             "actor": {"role": row["actor_role"], "id": row["actor_id"]} if row["actor_role"] else None,
             "note": row["note"],
             "delivery": delivery,
@@ -636,22 +631,32 @@ class WorkflowCoordinator:
             "updatedAt": row["updated_at"],
         }
 
-    @staticmethod
-    def _integration_view(row) -> dict:
-        try:
-            verification = json.loads(row["verification_json"])
-        except (TypeError, ValueError):
-            verification = {}
+    def _integration_view(self, connection, row) -> dict:
+        verification = json.loads(row["verification_json"])
+        artifact = connection.execute(
+            "SELECT attempt_id FROM workflow_artifacts WHERE artifact_id=?", (row["artifact_id"],)
+        ).fetchone()
+        not_required = row["strategy"] == "not-required"
         target = None
-        if row["state"] != "not-required":
-            target = {"kind": row["target_kind"], "path": row["target_path"], "ref": row["target_ref"],
+        if not not_required:
+            target = {"kind": "checkout", "path": row["target_path"], "ref": row["target_ref"],
                       "repositoryId": row["target_repository_id"], "checkoutId": row["target_checkout_id"]}
+            verification.update(
+                verified=True, strategy=row["strategy"], target=target,
+                sourceCommit=row["source_commit"], sourceTree=row["source_tree"],
+                beforeCommit=row["before_commit"], beforeTree=row["before_tree"],
+                afterCommit=row["after_commit"], afterTree=row["after_tree"],
+                artifactAncestor=row["strategy"] == "merge",
+                adjustments=sorted({item["path"] for item in verification["differingPaths"]}
+                                   | set(verification["missingPaths"])),
+                unrecordedPaths=[], summary="",
+            )
         return {
             "integrationId": row["integration_id"],
             "runId": row["run_id"],
             "artifactId": row["artifact_id"],
-            "attemptId": row["attempt_id"],
-            "state": row["state"],
+            "attemptId": artifact["attempt_id"],
+            "state": "not-required" if not_required else "verified",
             "strategy": row["strategy"],
             "target": target,
             "sourceCommit": row["source_commit"],
@@ -661,7 +666,7 @@ class WorkflowCoordinator:
             "beforeTree": row["before_tree"],
             "afterTree": row["after_tree"],
             "verification": WorkflowCoordinator._bounded_path_fields(verification, INTEGRATION_PATH_FIELDS),
-            "notRequired": row["state"] == "not-required",
+            "notRequired": not_required,
             "note": row["note"],
             "actor": {"role": row["actor_role"], "id": row["actor_id"]} if row["actor_role"] else None,
             "createdAt": row["created_at"],
@@ -675,6 +680,11 @@ class WorkflowCoordinator:
         if isinstance(evidence.get("workspace"), dict):
             evidence["workspace"] = WorkflowCoordinator._bounded_path_fields(
                 evidence["workspace"], ("unsealedPaths",))
+        retention = json.loads(row["retention_json"])
+        result = ({"removed": True, "path": row["path"], "alreadyRemoved": json.loads(row["result_json"])["alreadyRemoved"],
+                   "repositoryId": row["repository_id"], "checkoutId": row["checkout_id"],
+                   "retention": {**retention, "commandReceipts": True}}
+                  if row["result_json"] else None)
         return {
             "planId": row["plan_id"],
             "runId": row["run_id"],
@@ -687,8 +697,8 @@ class WorkflowCoordinator:
             "eligible": row["state"] == "planned",
             "reasons": json.loads(row["reasons_json"]),
             "evidence": evidence,
-            "retention": json.loads(row["retention_json"]),
-            "result": json.loads(row["result_json"]) if row["result_json"] else None,
+            "retention": {**retention, "commandReceipts": True},
+            "result": result,
             "revision": row["revision"],
             "createdAt": row["created_at"],
             "appliedAt": row["applied_at"],
@@ -819,8 +829,8 @@ class WorkflowCoordinator:
             "children": [self._child_view(row) for row in children],
             "artifacts": [self._artifact_view(row) for row in artifacts],
             "scope": self._current_scope(connection, run_row),
-            "workspaceConflicts": [self._conflict_view(row) for row in conflicts],
-            "integrations": [self._integration_view(row) for row in integrations],
+            "workspaceConflicts": [self._conflict_view(connection, row) for row in conflicts],
+            "integrations": [self._integration_view(connection, row) for row in integrations],
             "cleanup": self._plan_view(cleanup),
             "hostConclusion": host_conclusions.view(host_conclusion),
             "counts": {
@@ -4046,8 +4056,8 @@ class WorkflowCoordinator:
         if recorded is None:
             return True
         if not_required is not None:
-            return recorded["state"] != "not-required" or (recorded["note"] or "") != not_required
-        if recorded["state"] != "verified":
+            return recorded["strategy"] != "not-required" or (recorded["note"] or "") != not_required
+        if recorded["strategy"] == "not-required":
             return True
         # The recorded path is the repository-resolved identity; compare the
         # request in the same normalized form so a path alias is not a new claim.
@@ -4317,15 +4327,13 @@ class WorkflowCoordinator:
         if existing is None:
             integration_id = f"int-{uuid.uuid4()}"
             connection.execute(
-                "INSERT INTO workflow_integrations(integration_id, run_id, artifact_id, attempt_id, state, strategy,"
-                " binding_sha256, target_kind, target_path, target_ref, target_repository_id, target_checkout_id,"
+                "INSERT INTO workflow_integrations(integration_id, run_id, artifact_id, strategy,"
+                " binding_sha256, target_path, target_ref, target_repository_id, target_checkout_id,"
                 " source_commit, source_tree, before_commit, after_commit, before_tree, after_tree, verification_json,"
-                " note, command_id, actor_role, actor_id, created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                " note, command_id, actor_role, actor_id, created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                 (
-                    integration_id, run_id, artifact_id, artifact["attempt_id"],
-                    "not-required" if not_required is not None else "verified",
+                    integration_id, run_id, artifact_id,
                     "not-required" if not_required is not None else verification["strategy"], binding_sha,
-                    "not-required" if not_required is not None else "checkout",
                     "" if not_required is not None else verification["target"]["path"],
                     "" if not_required is not None else verification["target"]["ref"],
                     None if not_required is not None else verification["target"]["repositoryId"],
@@ -4335,7 +4343,10 @@ class WorkflowCoordinator:
                     None if not_required is not None else verification.get("afterCommit"),
                     None if not_required is not None else verification.get("beforeTree"),
                     None if not_required is not None else verification.get("afterTree"),
-                    canonical_json(verification), not_required, command_id, actor["role"], actor["id"], now,
+                    canonical_json({key: verification[key] for key in
+                                    ("matchingPaths", "differingPaths", "missingPaths", "hostPaths", "note")}
+                                   if not_required is None else {}),
+                    not_required, command_id, actor["role"], actor["id"], now,
                 ),
             )
             self.board._append_event(
@@ -4416,7 +4427,7 @@ class WorkflowCoordinator:
                     "targetRunId": run_id, "targetRevision": run_row["revision"],
                     "integrationId": integration["integration_id"]}
         if integration is not None:
-            response["integration"] = self._integration_view(integration)
+            response["integration"] = self._integration_view(connection, integration)
         if resolution is not None:
             response["resolutionDelivery"] = self._resolution_delivery_result(resolution)
         self.board._store_receipt(
@@ -4600,7 +4611,7 @@ class WorkflowCoordinator:
             conflict = self._open_conflict(connection, target_id)
             if conflict is not None:
                 raise BoardError("CONFLICT", "Resolve the Lead workspace conflict before concluding its owned work",
-                                 conflictId=conflict["conflict_id"], paths=json.loads(conflict["blocking_paths_json"]))
+                                 conflictId=conflict["conflict_id"], paths=json.loads(conflict["evidence_json"])["blockingPaths"])
             task = connection.execute("SELECT * FROM tasks WHERE task_id=?", (target_id,)).fetchone()
             if lead["state"] not in ("failed", "cancelled", "delivered") or not self._stop_proven(connection, task):
                 self._cancel_in_transaction(connection, lead, task, None, actor, initiator, self.now(),
@@ -4656,7 +4667,7 @@ class WorkflowCoordinator:
                 "Resolve the workspace conflict before concluding; an unresolved out-of-scope site is never "
                 "sealed by a conclusion",
                 conflictId=conflict["conflict_id"],
-                paths=json.loads(conflict["blocking_paths_json"]),
+                paths=json.loads(conflict["evidence_json"])["blockingPaths"],
             )
         if connection.execute("SELECT 1 FROM workflow_continuations WHERE run_id=? AND state IN ('recorded','queued') LIMIT 1", (run_id,)).fetchone():
             raise BoardError("CONFLICT", "A continuation is still pending")
@@ -4864,7 +4875,7 @@ class WorkflowCoordinator:
         """The newest verified integration record (or explicit not-required) of one artifact."""
         rows = connection.execute(
             "SELECT * FROM workflow_integrations WHERE run_id=? AND artifact_id=?"
-            " AND state IN ('verified','not-required') ORDER BY created_at DESC, rowid DESC",
+            " ORDER BY created_at DESC, rowid DESC",
             (run_id, artifact_id),
         ).fetchall()
         if not rows:
@@ -5019,9 +5030,10 @@ class WorkflowCoordinator:
                 candidate = document.get("executionWorkspace") if isinstance(document, dict) else None
                 if isinstance(candidate, dict):
                     execution = candidate
-        if execution.get("manifestSha256") != conflict["manifest_sha256"]:
+        manifest_sha = json.loads(conflict["evidence_json"])["manifestSha256"]
+        if execution.get("manifestSha256") != manifest_sha:
             execution = json.loads(run_row["workspace_manifest_json"] or "{}")
-        if execution.get("manifestSha256") != conflict["manifest_sha256"]:
+        if execution.get("manifestSha256") != manifest_sha:
             raise BoardError("WORKSPACE_CONFLICT",
                              "The recorded conflict does not match the run's execution manifest",
                              conflictId=conflict["conflict_id"])
@@ -5029,11 +5041,14 @@ class WorkflowCoordinator:
 
     @staticmethod
     def _resolution_delivery_view(conflict) -> dict | None:
-        try:
-            delivery = json.loads(conflict["delivery_json"]) if conflict["delivery_json"] else None
-        except (TypeError, ValueError):
+        if not conflict["delivery_json"]:
             return None
-        return delivery if isinstance(delivery, dict) and delivery.get("state") == "delivered" else None
+        facts = json.loads(conflict["delivery_json"])
+        return {"state": "delivered", "kind": "host-resolution", "action": conflict["action"],
+                "artifactId": conflict["artifact_id"], "attemptId": conflict["attempt_id"],
+                "turnId": conflict["turn_id"], "turnOutcome": "completed",
+                "resolvedFingerprint": facts["resolvedFingerprint"],
+                "commandId": conflict["command_id"], "deliveredAt": facts["deliveredAt"]}
 
     @staticmethod
     def _resolution_delivery_result(resolution) -> dict:
@@ -5120,7 +5135,7 @@ class WorkflowCoordinator:
         ).fetchall()
         for conflict in conflicts:
             delivery = self._resolution_delivery_view(conflict)
-            if delivery is None or delivery.get("artifactId") != artifact["artifact_id"]:
+            if delivery is None or conflict["artifact_id"] != artifact["artifact_id"]:
                 continue
             proof = self._resolution_native_completion(connection, run_row, conflict)
             if proof is None or proof["disposition"] != "completed":
@@ -5249,18 +5264,14 @@ class WorkflowCoordinator:
                 # acknowledged without another model turn. The failed attempt, its
                 # failed turn and its command receipts stay exactly as they were; the
                 # Host-resolution delivery is recorded separately on the conflict.
-                delivery = {"state": "delivered", "kind": "host-resolution", "action": action,
-                            "artifactId": artifact_id, "attemptId": current["attempt_id"],
-                            "turnId": current["turn_id"], "turnOutcome": proof["disposition"],
-                            "resolvedFingerprint": result["resolvedFingerprint"], "commandId": command_id,
-                            "deliveredAt": now}
+                delivery = {"resolvedFingerprint": result["resolvedFingerprint"], "deliveredAt": now}
             connection.execute(
                 "UPDATE workflow_workspace_conflicts SET state=?, action=?, resolved_paths_json=?,"
-                " conflicting_paths_json=?, artifact_id=?, output_commit=?, output_tree=?, actor_role=?, actor_id=?, note=?,"
+                " conflicting_paths_json=?, artifact_id=?, actor_role=?, actor_id=?, note=?,"
                 " command_id=?, delivery_json=?, updated_at=? WHERE conflict_id=? AND state='open'",
                 (result["state"], action, canonical_json(result["resolvedPaths"]),
-                 canonical_json(result["remainingPaths"]), artifact_id, (record or {}).get("commit"),
-                 (record or {}).get("tree"), actor["role"], actor["id"], note, command_id,
+                 canonical_json(result["remainingPaths"]), artifact_id,
+                 actor["role"], actor["id"], note, command_id,
                  canonical_json(delivery) if delivery is not None else None, now, conflict_id),
             )
             closed_requests = []
@@ -5317,6 +5328,7 @@ class WorkflowCoordinator:
                 run_row = self._run_row(connection, run_id)
             else:
                 run_row = self._bump_run(connection, run_row, now)
+            recorded_conflict = self._conflict_row(connection, run_id, conflict_id)
             response = {
                 **self.compact(connection, run_row),
                 "duplicate": False,
@@ -5344,7 +5356,7 @@ class WorkflowCoordinator:
                     "adoptedPaths": (record or {}).get("adoptedPaths") or [],
                 }, ("changedPaths", "adoptedPaths")),
                 "delivered": delivery is not None,
-                "delivery": delivery,
+                "delivery": self._resolution_delivery_view(recorded_conflict),
                 "nextBoundaryRequestId": boundary_request_id,
                 "targetRunId": run_id,
                 "targetRevision": run_row["revision"],
@@ -5366,6 +5378,10 @@ class WorkflowCoordinator:
     def _resolved_duplicate(self, connection, run_row, conflict) -> dict:
         view = self.compact(connection, run_row)
         delivery = self._resolution_delivery_view(conflict)
+        artifact = connection.execute(
+            "SELECT manifest_json FROM workflow_artifacts WHERE artifact_id=?", (conflict["artifact_id"],)
+        ).fetchone() if conflict["artifact_id"] else None
+        output = json.loads(artifact["manifest_json"]) if conflict["artifact_id"] else {}
         return {
             **view,
             "duplicate": True,
@@ -5382,12 +5398,12 @@ class WorkflowCoordinator:
             "resolvedFingerprint": None,
             "artifactId": conflict["artifact_id"],
             "artifact": self._artifact_row_view(connection, conflict["artifact_id"]),
-            "outputCommit": conflict["output_commit"],
-            "outputTree": conflict["output_tree"],
+            "outputCommit": output.get("commit"),
+            "outputTree": output.get("tree"),
             "diffPath": None,
             "diffSha256": None,
             "snapshotSha256": None,
-            "manifestSha256": conflict["manifest_sha256"],
+            "manifestSha256": json.loads(conflict["evidence_json"])["manifestSha256"],
             "baseCommit": None,
             "inputCommit": None,
             **self._bounded_path_fields({"changedPaths": [], "adoptedPaths": []},
@@ -5502,7 +5518,6 @@ class WorkflowCoordinator:
             "fixedRefs": [],
             "outputPatches": [],
             "artifactIds": [],
-            "commandReceipts": True,
         }
         for row in connection.execute(
             "SELECT * FROM workflow_artifacts WHERE run_id=? ORDER BY rowid LIMIT 64", (run_row["run_id"],)
@@ -5607,12 +5622,12 @@ class WorkflowCoordinator:
                         "targetRunId": run_id, "targetRevision": run_row["revision"]}
             connection.execute(
                 "INSERT INTO workspace_cleanup_plans(plan_id, run_id, workspace_id, checkout_id, repository_id, path,"
-                " kind, state, evidence_json, retention_json, reasons_json, command_id, actor_role, actor_id, revision, created_at,"
-                " expires_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,1,?,?)",
+                " kind, state, evidence_json, retention_json, reasons_json, command_id, revision, created_at,"
+                " expires_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,1,?,?)",
                 (plan_id, run_id, workspace["workspaceId"], workspace["checkoutId"], workspace["repositoryId"],
                  workspace["path"], workspace["kind"],
                  "blocked" if reasons else "planned", canonical_json(evidence), canonical_json(retention),
-                 canonical_json(reasons), command_id, actor["role"], actor["id"], now, expires_at),
+                 canonical_json(reasons), command_id, now, expires_at),
             )
             self.board._append_event(
                 connection,
@@ -5810,28 +5825,26 @@ class WorkflowCoordinator:
             ).fetchone()
             if plan["state"] not in ("applying", "applied"):
                 raise BoardError("REVISION_CONFLICT", "The cleanup plan changed while the removal ran", planId=plan_id)
-            result = {"removed": True, "path": plan["path"],
-                      "alreadyRemoved": removed is None or bool(removed.get("alreadyRemoved")),
-                      "repositoryId": plan["repository_id"], "checkoutId": plan["checkout_id"],
-                      "retention": json.loads(plan["retention_json"])}
+            already_removed = removed is None or bool(removed.get("alreadyRemoved"))
             if plan["state"] == "applying":
                 connection.execute(
                     "UPDATE workspace_cleanup_plans SET state='applied', applied_at=?, result_json=?, revision=revision+1"
                     " WHERE plan_id=? AND state='applying'",
-                    (now, canonical_json(result), plan_id),
+                    (now, canonical_json({"alreadyRemoved": already_removed}), plan_id),
                 )
                 self.board._append_event(
                     connection,
                     "workflow.cleanup_applied",
                     task_id=run_id,
                     revision=run_row["revision"] + 1,
-                    payload={"planId": plan_id, "path": plan["path"], "alreadyRemoved": result["alreadyRemoved"]},
+                    payload={"planId": plan_id, "path": plan["path"], "alreadyRemoved": already_removed},
                 )
                 run_row = self._bump_run(connection, run_row, now)
             plan = connection.execute("SELECT * FROM workspace_cleanup_plans WHERE plan_id=?", (plan_id,)).fetchone()
             run_row = self._run_row(connection, run_id)
-            response = {**self.compact(connection, run_row), "duplicate": False, "plan": self._plan_view(plan),
-                        "removed": True, "retention": result["retention"],
+            plan_view = self._plan_view(plan)
+            response = {**self.compact(connection, run_row), "duplicate": False, "plan": plan_view,
+                        "removed": True, "retention": plan_view["retention"],
                         "targetRunId": run_id, "targetRevision": run_row["revision"]}
             self.board._store_receipt(connection, command_id, "workflow.cleanup_apply", request_key, response, task_id=run_id)
             head = self.board._head_of(connection)
@@ -6543,7 +6556,7 @@ class WorkflowCoordinator:
                     "The failed attempt left changes outside its authorized write scope; restore, adopt or abandon "
                     "the recorded conflict before continuing",
                     conflictId=conflict["conflict_id"],
-                    paths=json.loads(conflict["blocking_paths_json"]),
+                    paths=json.loads(conflict["evidence_json"])["blockingPaths"],
                 )
         sealed = self._latest_handoff(connection, run_row, manifest)
         if recovered_attempt is not None:
@@ -7392,17 +7405,15 @@ class WorkflowCoordinator:
             conflict_id = f"wsc-{uuid.uuid4()}"
             connection.execute(
                 "INSERT INTO workflow_workspace_conflicts(conflict_id, run_id, attempt_id, turn_id,"
-                " manifest_sha256, observed_fingerprint, blocking_paths_json, evidence_json, state,"
+                " observed_fingerprint, evidence_json, state,"
                 " resolved_paths_json, conflicting_paths_json, created_at, updated_at)"
-                " VALUES(?,?,?,?,?,?,?,?,'open','[]','[]',?,?)",
+                " VALUES(?,?,?,?,?,?,'open','[]','[]',?,?)",
                 (
                     conflict_id,
                     run_row["run_id"],
                     attempt["attempt_id"],
                     turn_row["turn_id"],
-                    manifest.get("manifestSha256"),
                     fingerprint,
-                    canonical_json(paths),
                     canonical_json(record),
                     now,
                     now,
@@ -7417,7 +7428,7 @@ class WorkflowCoordinator:
             % ",".join("?" for _ in conflict_ids),
             tuple(conflict_ids),
         ).fetchall()
-        paths = sorted({path for row in conflicts for path in json.loads(row["blocking_paths_json"])})
+        paths = sorted({path for row in conflicts for path in json.loads(row["evidence_json"])["blockingPaths"]})
         request_id = self._record_system_request(
             connection, run_row, make_reason("workspace-scope-violation", conflictIds=list(conflict_ids), paths=paths[:MAX_CONFLICT_PATH_VIEW]),
             {}, now, turn_row=turn_row,

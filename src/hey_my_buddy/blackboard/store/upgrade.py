@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from contextlib import closing
 from pathlib import Path
+import json
 import sqlite3
 
 from .db import DB_FILE, SCHEMA, SCHEMA_VERSION
@@ -14,12 +15,96 @@ _REBUILT_TABLES = (
     "agent_credentials", "workflow_artifacts", "workflow_suggestions",
     "workflow_host_conclusions", "attempt_activity", "attempt_reminders",
     "workflow_routes", "workflow_continuations", "workspace_reservations",
+    "workflow_workspace_conflicts", "workflow_integrations", "workspace_cleanup_plans",
 )
 _DEAD_TABLES = ("cursors", "evaluation_state", "model_facts")
 _DEAD_INDEXES = (
     "tasks_request_idx", "attempts_task_idx", "workflow_turns_run_idx",
     "workflow_scope_versions_run_idx", "commands_kind_idx",
 )
+
+
+def _prune_workflow_records(connection: sqlite3.Connection) -> None:
+    """Check old same-write copies once, then remove only those copies.
+
+    None of these JSON documents is a digest preimage. The integration binding
+    hashes a separate request identity; physical scope evidence and all sealed
+    artifacts, receipts and command responses remain byte-for-byte unchanged.
+    """
+    def rows(table):
+        cursor = connection.execute(f'SELECT * FROM "{table}"')
+        names = [item[0] for item in cursor.description]
+        return [dict(zip(names, row)) for row in cursor]
+
+    def require(actual, expected, name):
+        if actual != expected:
+            raise ValueError(f"Inconsistent {name} in upgrade stock")
+
+    def encode(value):
+        return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+
+    for row in rows("workflow_workspace_conflicts"):
+        evidence = json.loads(row["evidence_json"])
+        require(row["manifest_sha256"], evidence["manifestSha256"], "conflict.manifest_sha256")
+        require(json.loads(row["blocking_paths_json"]), evidence["blockingPaths"], "conflict.blocking_paths_json")
+        artifact = json.loads(connection.execute(
+            "SELECT manifest_json FROM workflow_artifacts WHERE artifact_id=?", (row["artifact_id"],)
+        ).fetchone()[0]) if row["artifact_id"] else {}
+        require(row["output_commit"], artifact.get("commit"), "conflict.output_commit")
+        require(row["output_tree"], artifact.get("tree"), "conflict.output_tree")
+        if row["delivery_json"] is not None:
+            delivery = json.loads(row["delivery_json"])
+            redundant = {"state": "delivered", "kind": "host-resolution", "action": row["action"],
+                         "artifactId": row["artifact_id"], "attemptId": row["attempt_id"],
+                         "turnId": row["turn_id"], "turnOutcome": "completed", "commandId": row["command_id"]}
+            for key, value in redundant.items():
+                require(delivery.pop(key), value, "conflict.delivery_json." + key)
+            connection.execute("UPDATE workflow_workspace_conflicts SET delivery_json=? WHERE conflict_id=?",
+                               (encode(delivery), row["conflict_id"]))
+
+    for row in rows("workflow_integrations"):
+        attempt = connection.execute("SELECT attempt_id FROM workflow_artifacts WHERE artifact_id=?",
+                                     (row["artifact_id"],)).fetchone()[0]
+        require(row["attempt_id"], attempt, "integration.attempt_id")
+        not_required = row["strategy"] == "not-required"
+        require(row["state"], "not-required" if not_required else "verified", "integration.state")
+        require(row["target_kind"], "not-required" if not_required else "checkout", "integration.target_kind")
+        verification = json.loads(row["verification_json"])
+        if not_required:
+            require(verification, {}, "integration.verification_json")
+            for key in ("source_commit", "source_tree", "before_commit", "after_commit", "before_tree", "after_tree",
+                        "target_repository_id", "target_checkout_id"):
+                require(row[key], None, "integration." + key)
+            for key in ("target_path", "target_ref"):
+                require(row[key], "", "integration." + key)
+            continue
+        redundant = {"verified": True, "strategy": row["strategy"],
+                     "target": {"kind": "checkout", "path": row["target_path"], "ref": row["target_ref"],
+                                "repositoryId": row["target_repository_id"], "checkoutId": row["target_checkout_id"]},
+                     "sourceCommit": row["source_commit"], "sourceTree": row["source_tree"],
+                     "beforeCommit": row["before_commit"], "afterCommit": row["after_commit"],
+                     "beforeTree": row["before_tree"], "afterTree": row["after_tree"],
+                     "artifactAncestor": row["strategy"] == "merge",
+                     "adjustments": sorted({item["path"] for item in verification["differingPaths"]}
+                                           | set(verification["missingPaths"])),
+                     "unrecordedPaths": [], "summary": ""}
+        for key, value in redundant.items():
+            require(verification.pop(key), value, "integration.verification_json." + key)
+        connection.execute("UPDATE workflow_integrations SET verification_json=? WHERE integration_id=?",
+                           (encode(verification), row["integration_id"]))
+
+    for row in rows("workspace_cleanup_plans"):
+        retention = json.loads(row["retention_json"])
+        require(retention.pop("commandReceipts"), True, "cleanup.retention_json.commandReceipts")
+        result = json.loads(row["result_json"]) if row["result_json"] is not None else None
+        if result is not None:
+            redundant = {"removed": row["state"] == "applied", "path": row["path"],
+                         "repositoryId": row["repository_id"], "checkoutId": row["checkout_id"],
+                         "retention": json.loads(row["retention_json"])}
+            for key, value in redundant.items():
+                require(result.pop(key), value, "cleanup.result_json." + key)
+        connection.execute("UPDATE workspace_cleanup_plans SET retention_json=?,result_json=? WHERE plan_id=?",
+                           (encode(retention), encode(result) if result is not None else None, row["plan_id"]))
 
 
 def _convert(connection: sqlite3.Connection) -> None:
@@ -64,6 +149,7 @@ def _convert(connection: sqlite3.Connection) -> None:
     ):
         if elapsed != max(0.0, _seconds(created) - _seconds(started)):
             raise ValueError("Inconsistent attempt_reminders.elapsed_seconds in upgrade stock")
+    _prune_workflow_records(connection)
     # Only completed deletions lose their receipts. A physical deletion still in
     # progress retains its fence, tasks and commands so it can finish normally.
     connection.execute("DELETE FROM commands WHERE deletion_id IN "
@@ -75,9 +161,7 @@ def _convert(connection: sqlite3.Connection) -> None:
     for name in _DEAD_TABLES:
         connection.execute(f'DROP TABLE "{name}"')
 
-    reminder_sequence = connection.execute(
-        "SELECT seq FROM sqlite_sequence WHERE name='attempt_reminders'"
-    ).fetchone()
+    sequences = dict(connection.execute("SELECT name,seq FROM sqlite_sequence"))
 
     # Take DDL from the fresh schema, keeping constraints and indexes identical
     # without maintaining a second copy of the current table definitions.
@@ -93,10 +177,11 @@ def _convert(connection: sqlite3.Connection) -> None:
             connection.execute("DROP TABLE upgrade_saved")
             for ddl, in fresh.execute("SELECT sql FROM sqlite_master WHERE type='index' AND tbl_name=? AND sql IS NOT NULL", (table,)):
                 connection.execute(ddl)
-    # Rebuilding an AUTOINCREMENT table must retain ids consumed by deleted rows.
-    connection.execute("DELETE FROM sqlite_sequence WHERE name='attempt_reminders'")
-    if reminder_sequence is not None:
-        connection.execute("INSERT INTO sqlite_sequence(name,seq) VALUES('attempt_reminders',?)", reminder_sequence)
+            # Rebuilding an AUTOINCREMENT table must retain ids consumed by
+            # deleted rows, and must not invent a sequence for a never-used table.
+            connection.execute("DELETE FROM sqlite_sequence WHERE name=?", (table,))
+            if table in sequences:
+                connection.execute("INSERT INTO sqlite_sequence(name,seq) VALUES(?,?)", (table, sequences[table]))
 
 
 def upgrade(state: Path) -> None:

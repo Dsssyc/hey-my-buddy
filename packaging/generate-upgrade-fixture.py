@@ -185,6 +185,11 @@ def populate(args):
             operations.append({"operation": name, "params": params, "response": result})
             return result
 
+        def internal_call(name, params):
+            result = getattr(store.workflow, name)(params)
+            operations.append({"operation": "workflow." + name, "params": params, "response": result})
+            return result
+
         def publish(**changes):
             label = "publish-" + str(len(operations))
             return call("user_policy_publish", {"commandId": label, **changes}, human=True)
@@ -196,7 +201,7 @@ def populate(args):
                                "response": {"reason": response.get("reason")}})
             return response["claim"]
 
-        def report(claim, nonce, *, status, result):
+        def report(claim, nonce, *, status, result, error=None):
             attempt = claim["attempt"]
             if claim.get("turn") is not None:
                 result = {"workspaceManifest": claim["turn"]["input"]["executionWorkspace"], **result}
@@ -204,7 +209,8 @@ def populate(args):
             fsync_json(directory / RECEIPT, {"taskId": claim["task"]["taskId"],
                 "attemptId": attempt["attemptId"], "generation": attempt["generation"], "createdAt": AT,
                 "report": {"status": status, "shutdownConfirmed": True,
-                           "exitCode": 0 if status == "ok" else 1, "result": result}})
+                           "exitCode": 0 if status == "ok" else 1, "result": result,
+                           **({"error": error} if error is not None else {})}})
             if claim["sessionRecordPath"] is not None:
                 record = SessionRecord(Path(claim["sessionRecordPath"]), attempt["attemptId"])
                 record.append(MessageChunk(session_update="agent_message_chunk",
@@ -214,6 +220,19 @@ def populate(args):
             recorded_sha256((directory / RECEIPT).read_bytes())
             return call("execution_result", {"attemptId": attempt["attemptId"],
                 "generation": attempt["generation"], "nonce": nonce, "receipt": receipt_reference(directory)})
+
+        def completed_record(claim, label):
+            attempt, turn = claim["attempt"], claim["turn"]
+            return {"version": 1, "taskId": claim["task"]["taskId"], "attemptId": attempt["attemptId"],
+                    "generation": attempt["generation"], "turnId": turn["turnId"], "resumeMode": turn["resumeMode"],
+                    "previousSessionId": turn["input"]["previousSessionId"], "sessionId": "fixture-session-" + label,
+                    "promptSha256": "a" * 64, "inputSha256": turn["inputSha256"],
+                    "outcome": {"disposition": "completed", "summary": "模拟结果：无模型执行。", "remaining": [],
+                                "decisions": [], "artifacts": [], "request": None},
+                    "provenance": {"harness": "codex", "turnEnd": "completed", "outputSchemaValidated": True,
+                                   "finalMessageCompleted": True, "nativeTurnStarted": True, "nativeTurnCompleted": True,
+                                   "nativeThreadId": "fixture-session-" + label, "nativeTurnId": "fixture-turn-" + label,
+                                   "finalItemId": "fixture-item", "eventSeq": 2}}
 
         call("harness_set", {"harness": "codex", "path": None})
         call("model_catalog_refresh", {"requestId": "fixture-catalog"})
@@ -297,16 +316,7 @@ def populate(args):
             if label == "delivered":
                 (work / "workspaces" / label / "fixture.txt").write_text("fixture sealed change\n")
             sealed = workspace.seal(work / "state", manifest, run_id, attempt["attemptId"])
-            record = {"version": 1, "taskId": run_id, "attemptId": attempt["attemptId"],
-                      "generation": attempt["generation"], "turnId": turn["turnId"], "resumeMode": turn["resumeMode"],
-                      "previousSessionId": turn["input"]["previousSessionId"], "sessionId": "fixture-session-" + label,
-                      "promptSha256": "a" * 64, "inputSha256": turn["inputSha256"],
-                      "outcome": {"disposition": "completed", "summary": "模拟结果：无模型执行。", "remaining": [],
-                                  "decisions": [], "artifacts": [], "request": None},
-                      "provenance": {"harness": "codex", "turnEnd": "completed", "outputSchemaValidated": True,
-                                     "finalMessageCompleted": True, "nativeTurnStarted": True, "nativeTurnCompleted": True,
-                                     "nativeThreadId": "fixture-session-" + label, "nativeTurnId": "fixture-turn-" + label,
-                                     "finalItemId": "fixture-item", "eventSeq": 2}}
+            record = completed_record(claim, label)
             report(claim, nonce, status="ok", result={"status": "ok", "turn": record, "workspaceSeal": sealed,
                                                       "processState": {"shutdownConfirmed": True}, "fixture": True})
             view = call("workflow_get", {"runId": run_id})
@@ -317,6 +327,97 @@ def populate(args):
                     "keepCheckout": True, **control})
             elif label == "delivered":
                 call("workflow_conclude", {"runId": run_id, "note": "Fixture Host concluded the delivered work", **control})
+
+        # Additional old-writer stock for the three forms absent from the first
+        # four runs. These IDs are deliberately separate from stableIds.
+        stock_ids = {}
+        adopted = call("workflow_submit", {"requestId": "fixture-adopted", "hostId": "fixture-host",
+            "submissionToken": "fixture-submission-token-adopted", "task": "fixture adopted scope site",
+            "harness": "codex", "provider": "openai", "model": "fixture-alpha", "effort": "high",
+            "cwd": str(work / "repository"),
+            "executionWorkspace": {"kind": "worktree", "access": "write", "writeScope": ["README.md"]},
+            "macroTaskOf": ids["delivered"]})
+        stock_ids["adopted"] = adopted["runId"]
+        adopted_claim = admit(nonce, adopted["runId"])
+        adopted_manifest = adopted_claim["turn"]["input"]["executionWorkspace"]
+        adopted_checkout = Path(adopted_manifest["path"])
+        (adopted_checkout / "README.md").write_text("fixture authorized change\n")
+        (adopted_checkout / "outside.txt").write_text("fixture adopted change\n")
+        try:
+            workspace.seal(work / "state", adopted_manifest, adopted["runId"], adopted_claim["attempt"]["attemptId"])
+        except BoardError as error:
+            assert error.code == "WORKSPACE_SCOPE_VIOLATION", error
+        else:
+            raise AssertionError("Expected an adoptable scope failure")
+        seal_error = "WORKSPACE_SCOPE_VIOLATION: managed changes outside the declared write scope"
+        report(adopted_claim, nonce, status="failed", error=seal_error, result={
+            "status": "failed", "workspaceSealError": seal_error,
+            "turn": completed_record(adopted_claim, "adopted"), "processState": {"shutdownConfirmed": True}})
+        adopted_view = call("workflow_get", {"runId": adopted["runId"]})
+        adopted_conflict = adopted_view["workspaceConflicts"][0]
+        resolved = call("workflow_workspace_resolve", {"runId": adopted["runId"],
+            "commandId": "adopt-fixture", "expectedRevision": adopted_view["revision"],
+            "conflictId": adopted_conflict["conflictId"],
+            "observedFingerprint": adopted_conflict["observedFingerprint"], "action": "adopt",
+            "note": "Fixture Host adopts the observed site", **adopted["control"]})
+        assert resolved["delivered"] and resolved["delivery"]["resolvedFingerprint"]
+        adopted_view = call("workflow_get", {"runId": adopted["runId"]})
+        adopted_accepted = call("workflow_accept", {"runId": adopted["runId"],
+            "artifactId": adopted_view["finalArtifactId"], "note": "fixture adopted acceptance",
+            "notRequired": "Adopted fixture site needs no separate target", "keepCheckout": True,
+            **adopted["control"]})
+        adopted_plan = internal_call("cleanup_plan", {"runId": adopted["runId"],
+            "commandId": "plan-adopted-fixture", "expectedRevision": adopted_accepted["revision"],
+            **adopted["control"]})
+        assert adopted_plan["plan"]["state"] == "planned"
+
+        verified = call("workflow_submit", {"requestId": "fixture-verified", "hostId": "fixture-host",
+            "submissionToken": "fixture-submission-token-verified", "task": "fixture verified integration",
+            "harness": "codex", "provider": "openai", "model": "fixture-alpha", "effort": "high",
+            "cwd": str(work / "repository"),
+            "executionWorkspace": {"kind": "worktree", "access": "write", "writeScope": ["README.md"]},
+            "macroTaskOf": ids["delivered"]})
+        stock_ids["verified"] = verified["runId"]
+        verified_claim = admit(nonce, verified["runId"])
+        verified_manifest = verified_claim["turn"]["input"]["executionWorkspace"]
+        (Path(verified_manifest["path"]) / "README.md").write_text("fixture verified integration\n")
+        verified_seal = workspace.seal(work / "state", verified_manifest, verified["runId"],
+                                         verified_claim["attempt"]["attemptId"])
+        report(verified_claim, nonce, status="ok", result={"status": "ok",
+            "turn": completed_record(verified_claim, "verified"), "workspaceSeal": verified_seal,
+            "processState": {"shutdownConfirmed": True}})
+        verified_view = call("workflow_get", {"runId": verified["runId"]})
+        assert verified_view["state"] == "delivered"
+        artifact = next(item for item in verified_view["artifacts"] if item["kind"] == "output")
+        target = work / "workspaces" / "cancelled"
+        before = subprocess.check_output(["git", "-C", str(target), "rev-parse", "HEAD"], text=True).strip()
+        run(["git", "-C", str(target), "apply", "--binary", artifact["diffPath"]])
+        (target / "README.md").write_text("fixture adjusted integration\n")
+        (target / "fixture-host.txt").write_text("fixture Host-owned target path\n")
+        run(["git", "-C", str(target), "add", "README.md", "fixture-host.txt"])
+        commit_env = {**os.environ, "GIT_AUTHOR_DATE": "2026-01-01T00:00:00 +0000",
+                      "GIT_COMMITTER_DATE": "2026-01-01T00:00:00 +0000"}
+        run(["git", "-C", str(target), "-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid",
+             "commit", "--quiet", "-m", "Fixture integration"], env=commit_env)
+        after = subprocess.check_output(["git", "-C", str(target), "rev-parse", "HEAD"], text=True).strip()
+        run(["git", "-C", str(work / "repository"), "update-ref", "refs/hey-my-buddy/fixture-target", after])
+        verified_accepted = call("workflow_accept", {"runId": verified["runId"],
+            "artifactId": artifact["artifactId"], "note": "Fixture Host adjusted the output in the target",
+            "target": {"path": str(target), "ref": "HEAD"}, "beforeCommit": before,
+            "adjusted": True, "hostPaths": ["fixture-host.txt"], "keepCheckout": True,
+            **verified["control"]})
+        assert verified_accepted["integration"]["state"] == "verified"
+        assert verified_accepted["integration"]["verification"]["adjustments"] == ["README.md"]
+        assert verified_accepted["integration"]["verification"]["hostPaths"] == ["fixture-host.txt"]
+        verified_plan = internal_call("cleanup_plan", {"runId": verified["runId"],
+            "commandId": "plan-verified-fixture", "expectedRevision": verified_accepted["revision"],
+            **verified["control"]})
+        assert verified_plan["plan"]["state"] == "planned"
+        verified_applied = internal_call("cleanup_apply", {"runId": verified["runId"],
+            "planId": verified_plan["plan"]["planId"], "commandId": "apply-verified-fixture",
+            "expectedRevision": verified_plan["targetRevision"],
+            "confirmPath": verified_plan["plan"]["path"], **verified["control"]})
+        assert verified_applied["plan"]["state"] == "applied"
         call("inquiry_observe", {"runId": ids["delivered"], "inquiryId": "fixture-inquiry",
                               "question": "fixture question after the execution ended"})
         # The failed execution above recorded a native quota refusal through
@@ -354,7 +455,7 @@ def populate(args):
         with patch.object(macro_task_deletion, "_delete_sessions",
                           side_effect=BoardError("FIXTURE_STOP", "Retain in-progress deletion stock")):
             pending = call("macro_task_delete", {"macroTaskId": pending_target,
-                           "confirm": True, "microTaskCount": 4}, human=True)
+                           "confirm": True, "microTaskCount": 6}, human=True)
         assert pending["state"] == "deleting"
         # These retired projections have no public writer left in the base.
         # Explicit synthetic old-format stock verifies that pruning handles data,
@@ -467,7 +568,7 @@ def populate(args):
             "sourceFiles": {str(p.relative_to(source)): digest(p.read_bytes()) for p in
                             [*sorted((source / "src/hey_my_buddy").rglob("*.py")), source / "pyproject.toml",
                              source / "uv.lock", source / "packaging/runtime-assets.json"]},
-            "stableIds": ids,
+            "stableIds": ids, "stockIds": stock_ids,
             "routerBuddyIds": PROFILES, "fixedTimestamp": AT,
             "secret": "ab" * 32, "serviceToken": "fixture-service-token",
             "syntheticRetiredStock": ["cursors", "evaluation_state.decision_buddy_id", "tasks.queue_position", "attempt_interruptions",
@@ -492,8 +593,15 @@ def export_resources(work, workspace, preimages):
         return text.replace(str(work), "<fixture-root>")
 
     identities, checkouts = {}, {}
-    for label in ("delivered", "accepted", "failed", "cancelled"):
-        actual = workspace.inspect(str(work / "workspaces" / label))
+    for label in ("delivered", "accepted", "failed", "cancelled", "adopted"):
+        checkout = ((work / "state" / "workspaces") if label == "adopted" else (work / "workspaces"))
+        if label == "adopted":
+            checkout = next(path / "checkout" for path in checkout.iterdir()
+                            if path.is_dir() and (path / "checkout").exists()
+                            and (path / "checkout" / "outside.txt").exists())
+        else:
+            checkout /= label
+        actual = workspace.inspect(str(checkout))
         checkouts[label] = template(actual["checkoutRoot"])
         for role, path in (("checkoutId", actual["gitDir"]), ("repositoryId", actual["repositoryPath"])):
             identities[actual[role]] = template(path)
@@ -576,12 +684,25 @@ def verify(output, restored):
         assert connection.execute("SELECT COUNT(*) FROM router_claims").fetchone()[0] == 2
         assert set(connection.execute("SELECT plane,outcome FROM router_outcomes")) == {
             ("routing", "answered"), ("routing", "no_answer")}
-        assert connection.execute("SELECT COUNT(*) FROM workflow_workspace_conflicts").fetchone()[0] == 1
+        assert connection.execute("SELECT COUNT(*) FROM workflow_workspace_conflicts").fetchone()[0] == 2
+        assert connection.execute("SELECT COUNT(*) FROM workflow_workspace_conflicts WHERE delivery_json IS NOT NULL").fetchone()[0] == 1
+        assert connection.execute("SELECT COUNT(*) FROM workflow_workspace_conflicts WHERE action='adopt'"
+                                  " AND artifact_id IS NOT NULL AND output_commit IS NOT NULL"
+                                  " AND output_tree IS NOT NULL AND delivery_json IS NOT NULL").fetchone()[0] == 1
         for table, expected in (("workflow_children", 1), ("workflow_suggestions", 2),
                                 ("attempt_activity", 1), ("attempt_reminders", 2),
                                 ("workflow_routes", 1), ("workflow_continuations", 1),
-                                ("workflow_integrations", 1)):
+                                ("workflow_integrations", 3)):
             assert connection.execute(f'SELECT COUNT(*) FROM "{table}"').fetchone()[0] == expected
+        assert connection.execute("SELECT COUNT(*) FROM workflow_integrations WHERE state='verified'"
+                                  " AND json_array_length(json_extract(verification_json,'$.adjustments'))>0"
+                                  " AND json_array_length(json_extract(verification_json,'$.hostPaths'))>0").fetchone()[0] == 1
+        assert connection.execute("SELECT COUNT(*) FROM workspace_cleanup_plans WHERE state='planned'"
+                                  " AND result_json IS NULL AND actor_role='host' AND actor_id='fixture-host'"
+                                  " AND json_extract(retention_json,'$.commandReceipts')=1").fetchone()[0] == 1
+        assert connection.execute("SELECT COUNT(*) FROM workspace_cleanup_plans WHERE state='applied'"
+                                  " AND result_json IS NOT NULL AND actor_role='host' AND actor_id='fixture-host'"
+                                  " AND json_extract(retention_json,'$.commandReceipts')=1").fetchone()[0] == 1
         assert connection.execute("SELECT COUNT(*) FROM agent_credentials WHERE expires_at IS NOT NULL").fetchone()[0] == 0
         assert set(connection.execute("SELECT author FROM workflow_suggestions")) == {
             ("agent",), (f"attempt:{connection.execute('SELECT selected_attempt_id FROM tasks WHERE task_id=?', (metadata['stableIds']['accepted'],)).fetchone()[0]}",)}
@@ -600,8 +721,9 @@ def verify(output, restored):
             "SELECT COUNT(*) FROM workflow_continuations WHERE input_bytes=length(CAST(input_text AS BLOB))"
         ).fetchone()[0] == 1
         states = dict(connection.execute("SELECT run_id,state FROM workflow_runs"))
-        assert states == {metadata["stableIds"][key]: value for key, value in
-                          (("delivered", "concluded"), ("accepted", "accepted"), ("failed", "concluded"), ("cancelled", "cancelled"))}
+        assert states == {**{metadata["stableIds"][key]: value for key, value in
+                            (("delivered", "concluded"), ("accepted", "accepted"), ("failed", "concluded"), ("cancelled", "cancelled"))},
+                          **{metadata["stockIds"][key]: "accepted" for key in ("adopted", "verified")}}
         keys = dict(connection.execute("SELECT key,value FROM meta"))
         assert set(keys) == {"schema_version", "created_at", "capability_secret"}
         assert list(connection.execute("SELECT buddy_id FROM router_buddies ORDER BY position")) == [(item,) for item in PROFILES]
