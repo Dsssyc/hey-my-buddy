@@ -19,6 +19,7 @@ from typing import Any
 from ...protocol import schemas
 from ..evaluation import user_policy
 from . import selection_policy, router, router_sequence, router_failover
+from .router_boundary import TABLE_CHANGED_REASON
 from ...protocol import tool_evidence
 from ..store.db import canonical_json, sha256_text
 from ...errors import BoardError
@@ -1041,7 +1042,7 @@ class DecisionCoordinator:
                     "reason": "Router 不可用：buddy 的完整身份与请求冻结值不一致；这是情况变化，不能作为普通无答案切换"}
         if int(self._state(connection)["table_revision"]) != int(snapshot["baseInput"]["tableRevision"]):
             return {"status": "needs-host", "code": "router-table-changed",
-                    "reason": "请求冻结后评价表 revision 已变化；这是情况变化，不能记 Router 失败或切换"}
+                    "reason": TABLE_CHANGED_REASON}
         if row["reader_id"]:
             reader = connection.execute(
                 "SELECT released_at FROM evaluation_readers WHERE reader_id=?", (row["reader_id"],)
@@ -1193,7 +1194,7 @@ class DecisionCoordinator:
         table_revision = int(document["tableRevision"])
         if table_revision != int(self._state(connection)["table_revision"]):
             self._finish(connection, row, status="needs-host", now=now,
-                         reason="Router 不可用：admission 后评价表 revision 已变化；请由 Host 显式 reroute",
+                         reason=TABLE_CHANGED_REASON,
                          error="router-table-changed", output={"status": "error", "code": "router-table-changed"})
             self._cancel_queued_task(connection, task, now, "Frozen routing table changed")
             return "decision-closed", None

@@ -1,4 +1,6 @@
 """Current native facts change without replacing user history or accepting late results."""
+from copy import deepcopy
+from unittest.mock import patch
 from support import BoardTestCase, FakeClock
 from hey_my_buddy.blackboard.catalog import catalog_store
 
@@ -17,6 +19,116 @@ class CatalogObservationTests(BoardTestCase):
 
     def record(self, payload, observation=None):
         return self.e.record_catalog(payload, observation)
+
+    def table_facts(self):
+        with self.e.db.read() as db:
+            return (db.execute('SELECT table_revision FROM evaluation_state').fetchone()[0],
+                    db.execute('SELECT COUNT(*) FROM evaluation_revisions').fetchone()[0],
+                    db.execute('SELECT COUNT(*) FROM events').fetchone()[0])
+
+    def test_identical_read_records_observation_and_confirmed_time_without_revision_or_event(self):
+        first = self.record(catalog())
+        facts = self.table_facts()
+        with self.e.db.read() as db:
+            profile = tuple(db.execute('SELECT * FROM evaluation_profiles').fetchone())
+        self.clock.advance(21601)
+        with patch.object(self.b.store, '_notify') as notify:
+            second = self.record({**catalog(), 'discoveredAt': self.clock.value})
+        self.assertEqual(self.table_facts(), facts)
+        self.assertEqual(second['tableRevision'], first['tableRevision'])
+        self.assertTrue(second['duplicate'])
+        self.assertGreater(second['observationId'], first['observationId'])
+        notify.assert_not_called()
+        with self.e.db.read() as db:
+            self.assertEqual(tuple(db.execute('SELECT * FROM evaluation_profiles').fetchone()), profile)
+            self.assertEqual(db.execute("SELECT value FROM meta WHERE key='catalog-read-at:dsh'").fetchone()[0], self.clock.value)
+            self.assertEqual(db.execute("SELECT updated_at FROM catalog_current WHERE adapter='dsh'").fetchone()[0], self.clock.value)
+            self.assertEqual(db.execute('SELECT completed_at FROM catalog_observations WHERE observation_id=?',
+                                        (second['observationId'],)).fetchone()[0], self.clock.value)
+
+    def test_provenance_and_discovery_identity_alone_do_not_change_revision(self):
+        first = self.record(catalog())
+        facts = self.table_facts()
+        different = {**catalog(), 'source': 'another-native-reading', 'harnessVersion': 'next',
+                     'warnings': ['observation detail'], 'quota': {'remaining': 42}, 'observedAt': 'now'}
+        second = self.record(different)
+        self.assertNotEqual(first['discoveryId'], second['discoveryId'])
+        self.assertEqual(self.table_facts(), facts)
+        with self.e.db.read() as db:
+            row = db.execute('SELECT source,created_revision,updated_revision FROM evaluation_profiles').fetchone()
+        self.assertEqual(row['source'], 'catalog:' + second['discoveryId'])
+        self.assertEqual(row['created_revision'], row['updated_revision'])
+
+    def test_metadata_fields_each_advance_one_revision(self):
+        payload = catalog()
+        self.record(payload)
+        for field, value in [('name', 'new label'), ('description', 'new description'),
+                             ('contextWindow', 12345), ('inputModalities', ['text', 'image']),
+                             ('available', False), ('unavailableReason', 'native unavailable'),
+                             ('available', True)]:
+            with self.subTest(field=field, value=value):
+                before = self.table_facts()
+                payload = deepcopy(payload)
+                payload['providers'][0]['models'][0][field] = value
+                response = self.record(payload)
+                after = self.table_facts()
+                self.assertEqual(after[:2], (before[0] + 1, before[1] + 1))
+                self.assertEqual(response['tableRevision'], after[0])
+                self.assertGreater(after[2], before[2])
+                with self.e.db.read() as db:
+                    self.assertEqual(db.execute('SELECT updated_revision FROM evaluation_profiles').fetchone()[0], after[0])
+
+    def test_addition_pending_confirmation_and_recovery_version_only_actual_changes(self):
+        first = self.record(catalog())
+        added = self.record(catalog(models=('alpha', 'beta')))
+        self.assertEqual(added['tableRevision'], first['tableRevision'] + 1)
+        pending = self.record(catalog(models=('alpha',)))
+        self.assertEqual(pending['tableRevision'], added['tableRevision'] + 1)
+        facts = self.table_facts()
+        self.clock.advance(3599)
+        self.record(catalog(models=('alpha',)))
+        self.assertEqual(self.table_facts(), facts)
+        self.clock.advance(2)
+        confirmed = self.record(catalog(models=('alpha',)))
+        self.assertEqual(confirmed['tableRevision'], pending['tableRevision'] + 1)
+        facts = self.table_facts()
+        self.record(catalog(models=('alpha',)))
+        self.assertEqual(self.table_facts(), facts)
+        recovered = self.record(catalog(models=('alpha', 'beta')))
+        self.assertEqual(recovered['tableRevision'], confirmed['tableRevision'] + 1)
+
+    def test_unknown_reading_keeps_revision_unless_it_restores_retained_availability(self):
+        self.record(catalog())
+        facts = self.table_facts()
+        self.record(catalog(models=('untrusted',), account_status='unknown'))
+        self.assertEqual(self.table_facts(), facts)
+        with self.e.db.write() as db:
+            db.execute("UPDATE evaluation_profiles SET available=0,unavailable_reason='HARNESS_UNHEALTHY'")
+        restored = self.record(catalog(models=(), status='unknown'))
+        self.assertEqual(restored['tableRevision'], facts[0] + 1)
+        with self.e.db.read() as db:
+            row = db.execute('SELECT available,updated_revision FROM evaluation_profiles').fetchone()
+        self.assertEqual(tuple(row), (1, restored['tableRevision']))
+
+    def test_effort_retirement_changes_revision_once(self):
+        payload = catalog()
+        payload['providers'][0]['models'][0]['efforts'] = ['max', 'high']
+        first = self.record(payload)
+        retired = self.record(catalog())
+        self.assertEqual(retired['tableRevision'], first['tableRevision'] + 1)
+        facts = self.table_facts()
+        self.record(catalog())
+        self.assertEqual(self.table_facts(), facts)
+
+    def test_first_unknown_observation_and_stale_read_do_not_publish(self):
+        facts = self.table_facts()
+        self.record(catalog(status='unknown'))
+        self.assertEqual(self.table_facts(), facts)
+        slow = catalog_store.begin(self.e, 'revision-slow')['observationId']
+        self.record(catalog())
+        facts = self.table_facts()
+        self.record(catalog(models=('too-late',)), slow)
+        self.assertEqual(self.table_facts(), facts)
 
     def test_claude_first_party_reread_preserves_existing_buddy(self):
         from hey_my_buddy.buddy.harnesses.claude.native_run import _catalog

@@ -41,6 +41,12 @@ def current(db):
     return CatalogView.from_payload({'source': 'current-native-observations', 'providers': providers, 'discoveries': results})
 
 
+def _profile_content(row):
+    # Reading provenance and revision stamps do not change a buddy's facts.
+    return {key: row[key] for key in row.keys()
+            if key not in ('source', 'created_revision', 'updated_revision')}
+
+
 def record(evaluation, discovered, observation_id=None, *, health_generation=None):
     payload = canonical_payload(discovered)
     if observation_id is None:
@@ -67,6 +73,9 @@ def record(evaluation, discovered, observation_id=None, *, health_generation=Non
         duplicate = db.execute('SELECT 1 FROM evaluation_catalog WHERE discovery_id=?', (discovery_id,)).fetchone() is not None
         db.execute('INSERT OR IGNORE INTO evaluation_catalog(discovery_id,discovered_at,source,harness_version,provider_version,payload_json,created_at) VALUES(?,?,?,?,?,?,?)', (discovery_id, now, payload['source'], payload.get('harnessVersion'), payload.get('providerVersion'), canonical_json(payload), now))
         revision = int(evaluation._state(db)['table_revision']) + 1
+        before = {row['profile_id']: _profile_content(row)
+                  for row in db.execute('SELECT * FROM evaluation_profiles')}
+        pending_before = [tuple(row) for row in db.execute('SELECT * FROM catalog_pending ORDER BY adapter,provider,model')]
         applied, stale, changed = [], [], 0
         transitions = []
         from .catalog import (CONFIRMATION_SECONDS, CONFIRMED_ABSENCE_REASON, RETIRED_EFFORT_REASON,
@@ -158,9 +167,9 @@ def record(evaluation, discovered, observation_id=None, *, health_generation=Non
                                         'provider': family[0], 'model': family[1], 'pendingSince': now})
                 elif (first_absence is not None and moment is not None
                         and (moment - first_absence).total_seconds() >= CONFIRMATION_SECONDS):
-                    db.execute('UPDATE evaluation_profiles SET available=0,unavailable_reason=?,updated_revision=?'
+                    db.execute('UPDATE evaluation_profiles SET available=0,unavailable_reason=?'
                                ' WHERE adapter=? AND provider=? AND model=? AND available=1',
-                               (CONFIRMED_ABSENCE_REASON, revision, name, *family))
+                               (CONFIRMED_ABSENCE_REASON, name, *family))
                     pending.pop(key, None)
                     transitions.append({'kind': 'catalog.model_unavailable', 'adapter': name,
                                         'provider': family[0], 'model': family[1],
@@ -171,7 +180,7 @@ def record(evaluation, discovered, observation_id=None, *, health_generation=Non
             # retirements; enabled remains the user's intent.
             for old in existing:
                 if old['profile_id'] not in seen and (old['provider'], old['model']) in families:
-                    db.execute('UPDATE evaluation_profiles SET available=0,unavailable_reason=?,updated_revision=? WHERE profile_id=?', (RETIRED_EFFORT_REASON, revision, old['profile_id']))
+                    db.execute('UPDATE evaluation_profiles SET available=0,unavailable_reason=? WHERE profile_id=?', (RETIRED_EFFORT_REASON, old['profile_id']))
             for p in entries:
                 health = db.execute('SELECT status FROM harness_health WHERE adapter=?', (name,)).fetchone()
                 if health is not None and health['status'] != 'ready':
@@ -179,7 +188,7 @@ def record(evaluation, discovered, observation_id=None, *, health_generation=Non
                 existing_row = db.execute('SELECT adapter,provider,model,effort FROM evaluation_profiles WHERE profile_id=?', (p['profileId'],)).fetchone()
                 if existing_row and tuple(existing_row) != tuple(p[key] for key in ('adapter', 'provider', 'model', 'effort')):
                     raise BoardError('CATALOG_INVALID', 'A native profile ID collided with a different execution identity', profileId=p['profileId'])
-                db.execute('INSERT INTO evaluation_profiles(profile_id,label,adapter,provider,model,effort,available,enabled,capabilities_json,context_window,description,source,unavailable_reason,created_revision,updated_revision) VALUES(?,?,?,?,?,?,?,0,?,?,?,?,?,?,?) ON CONFLICT(profile_id) DO UPDATE SET label=excluded.label,available=excluded.available,capabilities_json=excluded.capabilities_json,context_window=excluded.context_window,description=excluded.description,source=excluded.source,unavailable_reason=excluded.unavailable_reason,updated_revision=excluded.updated_revision', (p['profileId'], p['label'], p['adapter'], p['provider'], p['model'], p['effort'], int(p['available']), canonical_json(p['capabilities']), p['contextWindow'], p['description'], p['source'], p['unavailableReason'], revision, revision))
+                db.execute('INSERT INTO evaluation_profiles(profile_id,label,adapter,provider,model,effort,available,enabled,capabilities_json,context_window,description,source,unavailable_reason,created_revision,updated_revision) VALUES(?,?,?,?,?,?,?,0,?,?,?,?,?,?,?) ON CONFLICT(profile_id) DO UPDATE SET label=excluded.label,available=excluded.available,capabilities_json=excluded.capabilities_json,context_window=excluded.context_window,description=excluded.description,source=excluded.source,unavailable_reason=excluded.unavailable_reason', (p['profileId'], p['label'], p['adapter'], p['provider'], p['model'], p['effort'], int(p['available']), canonical_json(p['capabilities']), p['contextWindow'], p['description'], p['source'], p['unavailableReason'], revision, revision))
             # ADR-027 rules 2 and 6: reappearance inside a trusted reading
             # recovers the family, clears its first absence and says so once.
             for family in families:
@@ -197,11 +206,17 @@ def record(evaluation, discovered, observation_id=None, *, health_generation=Non
                         transition['pendingSince'] = since
                     transitions.append(transition)
             _write_pending_map(db, name, pending)
-            changed += len(entries)
+        for row in db.execute('SELECT * FROM evaluation_profiles').fetchall():
+            if before.get(row['profile_id']) != _profile_content(row):
+                changed += 1
+                db.execute('UPDATE evaluation_profiles SET updated_revision=? WHERE profile_id=?',
+                           (revision, row['profile_id']))
+        pending_after = [tuple(row) for row in db.execute('SELECT * FROM catalog_pending ORDER BY adapter,provider,model')]
+        table_changed = changed > 0 or pending_before != pending_after
         active_count = db.execute('SELECT COUNT(*) FROM evaluation_profiles WHERE available=1').fetchone()[0]
         if active_count > 200:
             raise BoardError('CATALOG_LIMIT', 'The current native profile set exceeds 200 configurations; no entries were silently dropped')
-        if applied:
+        if table_changed:
             db.execute('UPDATE evaluation_state SET table_revision=?,updated_at=? WHERE id=1', (revision, now))
             db.execute('INSERT INTO evaluation_revisions(revision,kind,writer_id,actor,counts_json,created_at) VALUES(?,?,?,?,?,?)', (revision, 'catalog', None, 'native-discovery', canonical_json({'profiles': changed, 'observationId': observation_id, 'provided': ['catalog']}), now))
         actual_revision = int(evaluation._state(db)['table_revision'])
@@ -210,9 +225,11 @@ def record(evaluation, discovered, observation_id=None, *, health_generation=Non
         for transition in transitions:
             kind = transition.pop('kind')
             evaluation.board._append_event(db, kind, revision=actual_revision, payload=transition)
-        evaluation.board._append_event(db, 'evaluation.catalog_discovered', revision=actual_revision, payload={'discoveryId': discovery_id, 'observationId': observation_id, 'appliedAdapters': applied, 'staleAdapters': stale})
+        if table_changed:
+            evaluation.board._append_event(db, 'evaluation.catalog_discovered', revision=actual_revision, payload={'discoveryId': discovery_id, 'observationId': observation_id, 'appliedAdapters': applied, 'staleAdapters': stale})
         head = evaluation.board._head_of(db)
-    evaluation.board._notify(head)
+    if table_changed:
+        evaluation.board._notify(head)
     return response
 
 

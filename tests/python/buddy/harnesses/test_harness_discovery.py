@@ -55,8 +55,8 @@ class HarnessDiscoveryTests(unittest.TestCase):
                 snapshot = discovery.candidate_snapshot("codex", manual_path=str(cli),
                                                         environment={"PATH": str(bin_dir), "OPENAI_API_KEY": "secret"})
             self.assertEqual(snapshot["candidates"][0]["source"], "manual")
-            self.assertEqual(snapshot["candidates"][0]["fingerprint"], discovery.file_fingerprint(cli))
-            self.assertEqual(snapshot["managerRecords"][0]["fingerprint"], discovery.file_fingerprint(record))
+            self.assertEqual(snapshot["candidates"][0]["fingerprint"], discovery._content_fingerprint(cli))
+            self.assertEqual(snapshot["managerRecords"][0]["fingerprint"], discovery._content_fingerprint(record))
             self.assertNotIn("secret", str(snapshot))
             self.assertNotIn("OPENAI_API_KEY", str(snapshot))
 
@@ -154,9 +154,72 @@ class HarnessDiscoveryTests(unittest.TestCase):
                 discovery, "_common_dirs", return_value=[]
             ), patch.object(discovery, "_app_paths", return_value=[]):
                 first = discovery.candidate_snapshot("node", environment={"PATH": ""})
+                stamp = record.stat()
                 record.write_text("v24.0.0")
+                os.utime(record, ns=(stamp.st_atime_ns, stamp.st_mtime_ns))
                 second = discovery.candidate_snapshot("node", environment={"PATH": ""})
             self.assertNotEqual(discovery._scan_hash(first), discovery._scan_hash(second))
+            self.assertNotEqual(discovery.location_fingerprint(first), discovery.location_fingerprint(second))
+
+    def test_location_fingerprint_ignores_empty_paths_but_tracks_present_order_and_content(self):
+        with tempfile.TemporaryDirectory() as directory:
+            home = Path(directory)
+            a, b, empty = (home / name for name in ('a', 'b', 'empty'))
+            a.mkdir()
+            b.mkdir()
+            empty.mkdir()
+            with patch.object(discovery, '_home', return_value=home), \
+                 patch.object(discovery, '_common_dirs', return_value=[]), \
+                 patch.object(discovery, '_app_paths', return_value=[]), \
+                 patch.object(discovery, '_registry_paths', return_value=[]):
+                def fingerprint(*paths):
+                    return discovery.location_fingerprint(discovery.candidate_snapshot(
+                        'codex', environment={'PATH': os.pathsep.join(map(str, paths))}))
+
+                missing = fingerprint(a, b)
+                self.assertEqual(missing, fingerprint(b, empty, a))
+                cli = a / 'codex'
+                cli.write_text('one')
+                appeared = fingerprint(a, b)
+                self.assertNotEqual(missing, appeared)
+                self.assertEqual(appeared, fingerprint(empty, b, a))
+                # Same size and restored timestamp must still reveal changed bytes.
+                stamp = cli.stat()
+                os.utime(cli, ns=(stamp.st_atime_ns, stamp.st_mtime_ns + 1000000000))
+                self.assertEqual(appeared, fingerprint(a, b))
+                cli.write_text('two')
+                os.utime(cli, ns=(stamp.st_atime_ns, stamp.st_mtime_ns))
+                changed = fingerprint(a, b)
+                self.assertNotEqual(appeared, changed)
+                (b / 'codex').write_text('other')
+                self.assertNotEqual(fingerprint(a, b), fingerprint(b, a))
+                (b / 'codex').unlink()
+                cli.unlink()
+                self.assertNotEqual(changed, fingerprint(a, b))
+                self.assertEqual(missing, fingerprint(a, b))
+
+    def test_empty_paths_do_not_consume_candidate_limit(self):
+        with tempfile.TemporaryDirectory() as directory:
+            home = Path(directory)
+            cli = home / 'bin/codex'
+            cli.parent.mkdir()
+            cli.write_text('fixture')
+            paths = [str(home / f'empty-{index}') for index in range(discovery._MAX_CANDIDATES + 1)]
+            with patch.object(discovery, '_home', return_value=home), \
+                 patch.object(discovery, '_common_dirs', return_value=[]), \
+                 patch.object(discovery, '_app_paths', return_value=[]):
+                first = discovery.candidate_snapshot('codex', environment={'PATH': str(cli.parent)})
+                second = discovery.candidate_snapshot('codex', environment={
+                    'PATH': os.pathsep.join([*paths, str(cli.parent)])})
+                with patch.object(discovery, '_candidate_handshake', return_value={
+                        'path': str(cli), 'source': 'path', 'status': 'ready', 'reasonCode': None,
+                        'command': [str(cli)], 'version': '1.0', 'fingerprint': {}}) as handshake:
+                    result = discovery.discover('codex', environment={
+                        'PATH': os.pathsep.join([*paths, str(cli.parent)])})
+            self.assertEqual(discovery.location_fingerprint(first), discovery.location_fingerprint(second))
+            self.assertGreater(len(second['candidates']), discovery._MAX_CANDIDATES)
+            handshake.assert_called_once()
+            self.assertEqual(result['status'], 'ready')
 
     def test_cli_scan_changes_when_adjacent_node_changes(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -173,6 +236,7 @@ class HarnessDiscoveryTests(unittest.TestCase):
                 node.write_text("node-two-with-new-size")
                 second = discovery.candidate_snapshot("codex", manual_path=str(cli), environment={"PATH": ""})
             self.assertNotEqual(discovery._scan_hash(first), discovery._scan_hash(second))
+            self.assertNotEqual(discovery.location_fingerprint(first), discovery.location_fingerprint(second))
 
     def test_claude_login_check_and_dsh_missing_without_native_cli(self):
         with tempfile.TemporaryDirectory() as directory:

@@ -7,6 +7,7 @@ from ...errors import BoardError
 from ...protocol.schemas import CONFIGURATION_FIELDS
 
 KINDS = ("router-unavailable", "routing-changed", "router-abstained")
+TABLE_CHANGED_REASON = "评价表在请求冻结之后已变化；请由 Host 显式 reroute"
 
 
 def build_boundary(*, kind: str, code: str | None, reason: str, candidates: list,
@@ -80,7 +81,8 @@ def build_boundary(*, kind: str, code: str | None, reason: str, candidates: list
     reroute_params = None if reroute_reason else {
         **base, "commandId": command_id("reroute"), "reroute": True,
         "reason": "在 Router 再试时间之后重新路由同一工作目标"}
-    if kind in ("router-unavailable", "routing-changed") and "取消后重新提交没有用" not in reason:
+    if (code != "router-table-changed" and kind in ("router-unavailable", "routing-changed")
+            and "取消后重新提交没有用" not in reason):
         reason += "；取消后重新提交没有用。"
     return deepcopy({"kind": kind, "code": code, "reason": reason, "routerTrials": router_trials,
                      "candidates": candidates, "facts": facts, "retryAt": retry_at,
