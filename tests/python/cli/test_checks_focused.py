@@ -262,7 +262,10 @@ class FocusedChecksTests(unittest.TestCase):
         retained, = self.temporary.iterdir()
         self.assertEqual(int((retained / checks.CREATOR_FILE_NAME).read_text(encoding="utf-8")), os.getpid())
         evidence = json.loads((retained / checks.EVIDENCE_FILE_NAME).read_text(encoding="utf-8"))
-        self.assertIn("incomplete", evidence["observation"]["problems"][0])
+        if os.name == "nt":
+            self.assertEqual(evidence["observation"]["problems"], ["fixture process observation incomplete"])
+        else:
+            self.assertIn("psutil process enumeration incomplete", evidence["observation"]["problems"][0])
         self.assertIn(f"tests passed; teardown incomplete; preserved {retained}; exit 3",
                       output.splitlines()[-1])
 
@@ -287,6 +290,36 @@ class FocusedChecksTests(unittest.TestCase):
                       output.splitlines()[-1])
 
 
+class WindowsSweepTests(unittest.TestCase):
+    def test_windows_refuses_sweep_without_changing_roots_or_evidence(self):
+        with tempfile.TemporaryDirectory(prefix="checks-sweep-refused-") as raw:
+            directory = Path(raw)
+            root = checks.create_private_root(directory=directory)
+            original = b'{"original":"shutdown unknown"}\n'
+            evidence = root / checks.EVIDENCE_FILE_NAME
+            evidence.write_bytes(original)
+            before = {path.relative_to(root): path.read_bytes() for path in root.rglob("*") if path.is_file()}
+            errors = io.StringIO()
+            with (patch.object(checks, "os", wraps=os) as windows,
+                  patch.object(checks, "sweep_private_roots") as sweep,
+                  patch.dict(os.environ, {"HMB_CHECKS_TMPDIR": str(directory)}),
+                  contextlib.redirect_stderr(errors)):
+                windows.name = "nt"
+                with self.assertRaises(SystemExit) as result:
+                    checks.main(["--sweep"])
+            self.assertEqual(result.exception.code, 2)
+            self.assertIn("without the original process and Job handles", errors.getvalue())
+            self.assertIn("inspect retained evidence", errors.getvalue())
+            self.assertIn("remove roots manually", errors.getvalue())
+            sweep.assert_not_called()
+            self.assertTrue(root.exists())
+            after = {path.relative_to(root): path.read_bytes() for path in root.rglob("*") if path.is_file()}
+            self.assertEqual(after, before)
+            self.assertEqual(evidence.read_bytes(), original)
+            checks._windows_suite_children.pop(root, None)
+
+
+@unittest.skipIf(os.name == "nt", "POSIX sweep; Windows rejects --sweep before inspecting roots")
 class SweepTests(unittest.TestCase):
     def setUp(self):
         self.container = tempfile.TemporaryDirectory(prefix="checks-sweep-")
@@ -303,9 +336,6 @@ class SweepTests(unittest.TestCase):
                     if table is None else processes(*(process(pid, argv) for pid, argv in table)))
         output = io.StringIO()
         with (observer,
-              patch.object(checks, "_windows_owned_processes",
-                           return_value=([], ["fixture process observation incomplete"], []))
-              if os.name == "nt" and table is None else contextlib.nullcontext(),
               patch.object(checks, "_open_file_pids", return_value=(set(), None, True)),
               patch.dict(os.environ, {"HMB_CHECKS_TMPDIR": str(self.directory)}),
               contextlib.redirect_stdout(output), contextlib.redirect_stderr(io.StringIO())):
@@ -367,7 +397,7 @@ class SweepTests(unittest.TestCase):
         code, output = self.sweep(None)
         self.assertEqual(code, 3, output)
         report = json.loads((root / checks.EVIDENCE_FILE_NAME).read_text(encoding="utf-8"))
-        self.assertIn("incomplete", report["observation"]["problems"][0])
+        self.assertIn("psutil process enumeration incomplete", report["observation"]["problems"][0])
 
     def test_unreadable_creator_record_is_retained(self):
         root = self.abandoned()

@@ -129,6 +129,17 @@ class ChecksEnvironmentTests(unittest.TestCase):
         finally:
             shutil.rmtree(root)
 
+    def test_windows_temp_and_tmp_override_inherited_paths(self):
+        with tempfile.TemporaryDirectory(prefix="checks-temp-") as raw:
+            root = Path(raw)
+            with (patch.object(checks, "os", wraps=os) as windows,
+                  patch.dict(os.environ, {"TEMP": str(root / "outside-temp"), "TMP": str(root / "outside-tmp")})):
+                windows.name = "nt"
+                environment = checks.child_environment(Path("/repo"), root / "child", home_root=root / "home")
+            self.assertEqual(environment["TEMP"], str(root / "child/tmp"))
+            self.assertEqual(environment["TMP"], str(root / "child/tmp"))
+            self.assertEqual(environment["TMPDIR"], str(root / "child/tmp"))
+
     def test_daemon_stop_uses_explicit_state_and_ends_its_rpc_session(self):
         endpoint = {"address": "ipc://private-checks-mock", "token": "fixture"}
         state = Path("/private-test-state")
@@ -354,9 +365,8 @@ class WindowsOwnedCleanupTests(unittest.TestCase):
             with (self.subTest(reply=reply),
                   patch("hey_my_buddy.protocol.transport._read_endpoint", return_value={"token": "fixture"}),
                   patch("hey_my_buddy.protocol.transport._request", return_value=reply),
-                  patch("c_two.shutdown", return_value={"completed": True}),
-                  self.assertRaisesRegex(RuntimeError, "shutdown unconfirmed")):
-                checks._request_daemon_stop(self.root)
+                  patch("c_two.shutdown", return_value={"completed": True})):
+                self.assertFalse(checks._request_daemon_stop(self.root))
 
     def test_released_locks_do_not_replace_a_lost_stop_reply(self):
         checks._windows_suite_children[self.root] = []
@@ -365,6 +375,26 @@ class WindowsOwnedCleanupTests(unittest.TestCase):
               patch.object(checks, "_request_daemon_stop", return_value=False)):
             problems = checks.request_cooperative_stop(self.root, timeout=1)
         self.assertIn("stop reply unconfirmed", problems[0])
+
+    def test_unconfirmed_stop_requests_each_state_only_once_and_continues_draining(self):
+        checks._windows_suite_children[self.root] = []
+        first = self.root / "first/control-daemon.lock"
+        second = self.root / "second/board-owner.lock"
+        with (patch.object(checks, "held_locks", side_effect=[{"daemon": [first, second]},
+                                                            {"daemon": [first, second]}, {"daemon": []}]),
+              patch.object(checks, "_request_daemon_stop", side_effect=[False, True]) as request):
+            problems = checks.request_cooperative_stop(self.root, timeout=2)
+        self.assertEqual([args.args[0] for args in request.call_args_list], [first.parent, second.parent])
+        self.assertEqual(problems, [f"private service stop reply unconfirmed: {first.parent}"])
+
+    def test_teardown_reports_one_observation_problem_and_releases_handles_once(self):
+        child = self.child()
+        child.job.active.side_effect = OSError("query denied")
+        with patch.object(checks, "_release_suite_handles", wraps=checks._release_suite_handles) as release:
+            evidence = checks._safe_teardown(self.root)
+        self.assertEqual(evidence["observation"]["problems"], ["owned suite observation failed: query denied"])
+        release.assert_called_once_with(self.root)
+        child.job.close.assert_called_once_with()
 
     def test_parent_keeps_service_state_a_suite_left_without_a_stop_reply(self):
         checks._windows_suite_children[self.root] = []
@@ -378,11 +408,23 @@ class WindowsOwnedCleanupTests(unittest.TestCase):
 
 @unittest.skipUnless(os.name == "nt", "Windows owned Job descendants")
 class NativeWindowsOwnedCleanupTests(unittest.TestCase):
+    def test_suite_job_allows_breakaway_without_kill_on_close(self):
+        api = checks._SuiteWindowsAPI()
+        import uuid
+
+        job = api.create_job(f"Local\\HeyMyBuddy-{uuid.uuid4()}")
+        try:
+            limits = api._call(api.job.QueryInformationJobObject, job, api.job.JobObjectExtendedLimitInformation)
+            flags = limits["BasicLimitInformation"]["LimitFlags"]
+            self.assertTrue(flags & api.job.JOB_OBJECT_LIMIT_BREAKAWAY_OK)
+            self.assertFalse(flags & api.job.JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE)
+        finally:
+            api.close(job)
+
     def test_venv_descendant_survives_root_exit_until_held_job_becomes_empty(self):
         import threading
 
         root = checks.create_private_root()
-        self.addCleanup(checks._release_suite_handles, root)
         release = root / "release"
         descendant = ("import sys,time; from pathlib import Path; "
                       "release=Path(sys.argv[1]); "
@@ -395,10 +437,11 @@ class NativeWindowsOwnedCleanupTests(unittest.TestCase):
         )
         try:
             self.assertEqual(outcome.returncode, 0, outcome.stderr)
-            evidence = checks.teardown_private_root(root, drain_seconds=0)
-            self.assertIsNotNone(evidence)
-            self.assertTrue(evidence["processes"][0]["activeProcesses"])
-            self.assertFalse(evidence["processes"][0]["rootRunning"])
+            processes, problems, _ = checks.observed_processes(root)
+            self.assertEqual(problems, [])
+            self.assertTrue(processes[0]["activeProcesses"])
+            self.assertFalse(processes[0]["rootRunning"])
+            self.assertTrue(root.exists())
         finally:
             release.touch()
             self.assertIsNone(checks.teardown_private_root(root, drain_seconds=15))

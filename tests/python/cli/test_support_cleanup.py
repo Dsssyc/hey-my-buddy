@@ -9,7 +9,7 @@ import sys
 import textwrap
 import unittest
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 from support import (
     BoardTestCase, PYTHON_ROOT, _child_environment, _lock_held, private_state_dir,
@@ -31,6 +31,94 @@ def assert_released(test: unittest.TestCase, handles: list[int]) -> None:
 
 
 class FixtureCleanupTests(unittest.TestCase):
+    def test_daemon_fixture_cooperates_on_windows_and_keeps_posix_sigterm(self):
+        for platform, fail_stop in (("nt", False), ("nt", True), ("posix", False)):
+            with self.subTest(platform=platform, fail_stop=fail_stop):
+                fixture = BoardTestCase("runTest")
+                fixture.setUp()
+                process = Mock()
+                process.poll.return_value = None
+                events = []
+                failure = AssertionError("cooperative shutdown unconfirmed")
+
+                def cooperate(directory):
+                    self.assertEqual(directory, fixture.directory)
+                    events.append("stop")
+                    if fail_stop:
+                        raise failure
+
+                process.terminate.side_effect = lambda: events.append("terminate")
+                process.wait.side_effect = lambda **kwargs: events.append("wait")
+                try:
+                    with (patch.object(support, "os", wraps=os) as native,
+                          patch.object(support.subprocess, "Popen", return_value=process),
+                          patch("hey_my_buddy.protocol.rpc_config.configure_client"),
+                          patch("hey_my_buddy.protocol.transport._read_endpoint", return_value={"token": "fixture"}),
+                          patch("hey_my_buddy.protocol.transport._request", return_value={}),
+                          patch.object(support, "stop_private_service", side_effect=cooperate)):
+                        native.name = platform
+                        if fail_stop:
+                            with self.assertRaises(AssertionError) as raised:
+                                with fixture.daemon():
+                                    events.append("body")
+                            self.assertIs(raised.exception, failure)
+                            self.assertEqual(fixture._cleanup_failures, [failure])
+                        else:
+                            with fixture.daemon():
+                                events.append("body")
+                    expected = (["body", "stop", "terminate", "wait"] if fail_stop else
+                                ["body", "stop", "wait"] if platform == "nt" else
+                                ["body", "terminate", "wait"])
+                    self.assertEqual(events, expected)
+                    process.kill.assert_not_called()
+                finally:
+                    process.poll.return_value = 0
+                    fixture._cleanup_failures.clear()
+                    fixture.doCleanups()
+
+    def test_private_tree_cleanup_keeps_posix_observation_over_the_whole_base(self):
+        from hey_my_buddy.cli import checks
+
+        with private_state_dir() as base:
+            state = base / "state"
+            for residue in ("process", "lock", "unknown"):
+                with (self.subTest(residue=residue),
+                      patch.object(support, "os", wraps=os) as native,
+                      patch.object(support, "stop_private_service") as stop,
+                      patch.object(support, "shutdown_private_rpc"),
+                      patch.object(checks, "request_cooperative_stop", return_value=[]) as drain,
+                      patch.object(checks, "held_locks", return_value={"daemon": [base / "elsewhere/board-owner.lock"]
+                                                                    if residue == "lock" else []}),
+                      patch.object(checks, "observed_processes", return_value=(
+                          [{"pid": 123}] if residue == "process" else [],
+                          ["observation incomplete"] if residue == "unknown" else [], [])) as observe,
+                      patch.object(support, "remove_private_test_root") as remove):
+                    native.name = "posix"
+                    with self.assertRaisesRegex(AssertionError, "preserved"):
+                        support.cleanup_private_tree(base, (state,))
+                    stop.assert_called_once_with(state)
+                    drain.assert_called_once_with(base)
+                    observe.assert_called_once_with(base)
+                    remove.assert_not_called()
+
+    def test_private_tree_cleanup_uses_windows_service_evidence_without_unregistered_jobs(self):
+        from hey_my_buddy.cli import checks
+
+        with private_state_dir() as base:
+            state = base / "state"
+            with (patch.object(support, "os", wraps=os) as native,
+                  patch.object(support, "stop_private_service") as stop,
+                  patch.object(support, "shutdown_private_rpc") as shutdown,
+                  patch.object(checks, "held_locks", return_value={"daemon": []}) as locks,
+                  patch.object(checks, "observed_processes", side_effect=AssertionError("unregistered Job")),
+                  patch.object(support, "remove_private_test_root") as remove):
+                native.name = "nt"
+                support.cleanup_private_tree(base, (state,))
+            stop.assert_called_once_with(state)
+            shutdown.assert_called_once_with()
+            locks.assert_called_once_with(base)
+            remove.assert_called_once_with(base)
+
     def test_windows_service_check_uses_lifecycle_locks(self):
         with private_state_dir() as root:
             with (patch.object(support, "os", wraps=os) as windows,

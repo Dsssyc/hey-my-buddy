@@ -4,8 +4,8 @@
 the console typecheck and unit tests.
 ``python -m hey_my_buddy.cli.checks [--jobs N] PATH...`` runs only the given
 ``tests/python/test_*.py`` files or package directories, relative to the checkout
-or absolute. ``python -m hey_my_buddy.cli.checks --sweep`` retires abandoned
-private roots without running tests.
+or absolute. On POSIX, ``python -m hey_my_buddy.cli.checks --sweep`` retires
+abandoned private roots without running tests; Windows rejects this operation.
 
 Exit codes are 0 for passing tests and complete teardown (or no retained sweep
 roots), 1 for failed tests regardless of teardown, 2 for usage errors, and 3 for
@@ -32,13 +32,15 @@ incomplete or unobservable one preserves the root together with a written eviden
 report. On Windows it holds each suite's creating process handle and a Job
 that allows explicit service breakaway, and confirms the root exited and the
 held Job is empty. Private services drain through their stop reply and lifetime
-locks. A later Windows sweep lacks those handles and preserves unknown roots.
+locks. A later Windows sweep lacks those handles and is rejected without
+changing retained roots or evidence.
 On POSIX process observation is strictly read-only (psutil argv/cwd/mapping
-observation plus the native file-reference channels psutil cannot fully cover): the teardown never signals or kills a process,
-never matches or touches a process outside its own private root, and never reads or
-prints environment content. Only an interrupted parallel run stops processes, and
-then only the suite children it started itself; whatever those leave behind is the
-teardown's to observe.
+observation plus the native file-reference channels psutil cannot fully cover).
+The drain uses authenticated stop requests. An interrupted run terminates only
+suite children whose creating handles it holds, and ownership setup failures
+stop only children they created. Observation never authorizes signals to a
+discovered PID, never matches a process outside the private root and never reads
+or prints environment content.
 """
 from __future__ import annotations
 
@@ -84,19 +86,9 @@ _windows_spawn_problems: dict[Path, list[str]] = {}
 
 class _SuiteWindowsAPI(WindowsAPI):
     def create_job(self, name):
-        handle = super().create_job(name)
-        try:
-            limits = self._call(self.job.QueryInformationJobObject, handle,
-                                self.job.JobObjectExtendedLimitInformation)
-            # Private services explicitly break away and drain through their own
-            # lifecycle. Ordinary descendants, including venv forwarders, stay.
-            limits["BasicLimitInformation"]["LimitFlags"] = self.job.JOB_OBJECT_LIMIT_BREAKAWAY_OK
-            self._call(self.job.SetInformationJobObject, handle,
-                       self.job.JobObjectExtendedLimitInformation, limits)
-            return handle
-        except BaseException:
-            self.close(handle)
-            raise
+        # Services explicitly break away; ordinary descendants remain in this
+        # non-kill-on-close Job until their own shutdown is observed.
+        return super().create_job(name, limit_flags=self.job.JOB_OBJECT_LIMIT_BREAKAWAY_OK)
 
 
 def _suite_popen(root: Path, command: list[str], **kwargs):
@@ -108,7 +100,6 @@ def _suite_popen(root: Path, command: list[str], **kwargs):
         process = owned_popen(command, windows_api=_SuiteWindowsAPI(), **kwargs)
         handle = ProcessHandle(process, own_group=True, log_paths={})
         children.append(handle)
-        handle.identity()  # Capture the exact FILETIME while the creating handle is held.
         return process
     except BaseException as error:
         evidence = getattr(error, "owned_popen_evidence", None)
@@ -134,8 +125,6 @@ def _windows_owned_processes(root: Path) -> tuple[list[dict], list[str], list[st
                 raise OSError("creating Job handle is no longer held")
             active = handle.job.active()
             finished = handle.finished
-            if active is None:
-                raise OSError("owned Job membership is unknown")
             if active or not finished:
                 findings.append({**identity, "source": "ownedJob", "activeProcesses": active,
                                  "rootRunning": not finished})
@@ -666,9 +655,7 @@ def _request_daemon_stop(state_dir: Path) -> bool:
         return False
     try:
         reply = _request(endpoint, "service_control", {"action": "stop", "drainSeconds": 10}, state_dir=state_dir)
-        if os.name == "nt" and (not reply.get("stopped") or reply.get("unresolvedAttempts")):
-            raise RuntimeError(f"Private service shutdown unconfirmed: {reply}")
-        return True
+        return (bool(reply.get("stopped")) and not reply.get("unresolvedAttempts")) if os.name == "nt" else True
     except ServiceError:
         # The endpoint may already be disappearing; the lifetime locks decide.
         return False
@@ -682,10 +669,10 @@ def _request_daemon_stop(state_dir: Path) -> bool:
 def request_cooperative_stop(root: Path, timeout: float = 30.0) -> list[str]:
     """Bounded drain: ask observed survivors to stop; never signal a process.
 
-    Waits until no hey-my-buddy daemon lifetime lock under the root is held and no
-    live process names the root in its argv. An execution remains tied to the
-    private service, whose stop operation drains it. Returns observation problems; an
-    empty list means the drain observed both channels clear.
+    Waits for released daemon lifetime locks and, on Windows, exited suite roots
+    and empty held Jobs; POSIX observes processes naming the root in argv. Each
+    private state is asked to drain once. Windows also requires its confirmed
+    stop reply. Returns observation and unconfirmed-drain problems.
     """
     prefixes = _root_prefixes(root)
     requested: set[Path] = set()
@@ -711,13 +698,12 @@ def request_cooperative_stop(root: Path, timeout: float = 30.0) -> list[str]:
             return [*problems, *(f"private service stop reply unconfirmed: {state}" for state in sorted(unconfirmed))]
         for path in residue["daemon"]:
             if path.parent not in requested:
+                requested.add(path.parent)
                 if os.name == "nt":
                     unconfirmed.add(path.parent)
                     if _request_daemon_stop(path.parent):
-                        requested.add(path.parent)
                         unconfirmed.discard(path.parent)
                 else:
-                    requested.add(path.parent)
                     _request_daemon_stop(path.parent)
         if time.monotonic() >= deadline:
             return [*problems, *(f"private service stop reply unconfirmed: {state}" for state in sorted(unconfirmed))]
@@ -754,7 +740,8 @@ def remove_private_test_root(directory: Path) -> None:
         if os.name != "nt" or operation is not os.unlink or getattr(error, "winerror", None) != 5:
             raise error
         path = Path(name)
-        # Never chmod a link/reparse target, including through a replaced ancestor.
+        # Open only a regular leaf within the private root, without traversing
+        # a link or reparse ancestor.
         for part in (path, *path.parents):
             info = part.lstat()
             attributes = getattr(info, "st_file_attributes", 0)
@@ -810,10 +797,15 @@ def teardown_private_root(root: Path, drain_seconds: float = 30.0) -> dict | Non
     """
     if not root.exists():
         return None
-    problems = request_cooperative_stop(root, timeout=drain_seconds)
-    residue = held_locks(root)
-    processes, observation_problems, notes = observed_processes(root)
+    try:
+        problems = request_cooperative_stop(root, timeout=drain_seconds)
+        residue = held_locks(root)
+        processes, observation_problems, notes = observed_processes(root)
+    finally:
+        _release_suite_handles(root)
     problems = [*problems, *observation_problems]
+    if os.name == "nt":
+        problems = list(dict.fromkeys(problems))
     evidence: dict = {
         "root": str(root),
         "held": {
@@ -838,7 +830,6 @@ def teardown_private_root(root: Path, drain_seconds: float = 30.0) -> dict | Non
     clean = not problems and not processes and not residue["daemon"]
     if clean:
         try:
-            _release_suite_handles(root)
             remove_private_test_root(root)
         except OSError as error:
             evidence["cleanupError"] = f"{type(error).__name__}: {error}"
@@ -861,10 +852,7 @@ def teardown_private_root(root: Path, drain_seconds: float = 30.0) -> dict | Non
 
 def _safe_teardown(private_root: Path) -> dict | None:
     try:
-        try:
-            return teardown_private_root(private_root)
-        finally:
-            _release_suite_handles(private_root)
+        return teardown_private_root(private_root)
     except Exception as error:  # noqa: BLE001 - teardown must never mask the suite result
         print(f"hey_my_buddy.cli.checks: teardown itself failed ({type(error).__name__}: {error}); "
               f"preserved {private_root}", file=sys.stderr)
@@ -942,6 +930,9 @@ def main(argv: list[str] | None = None) -> None:
     if options.sweep:
         if options.paths or options.jobs is not None:
             parser.error("--sweep cannot be combined with paths or --jobs")
+        if os.name == "nt":
+            parser.error("Windows --sweep cannot prove shutdown without the original process and Job handles; "
+                         "inspect retained evidence, then remove roots manually")
         raise SystemExit(sweep_private_roots(private_root_directory()))
     try:
         jobs = resolve_jobs(options.jobs)

@@ -7,7 +7,7 @@ import stat
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import Mock, patch
+from unittest.mock import Mock, call, patch
 
 from support import BoardTestCase, InProcessBoard, private_state_dir, remove_private_test_root
 from hey_my_buddy.blackboard.store.store import BoardStore
@@ -103,9 +103,17 @@ class PrivateRootCleanupTests(unittest.TestCase):
             with self.assertRaises(PermissionError) as raised:
                 self.windows_delete(root, path, self.failure(5), delete_error=error)
             self.assertIs(raised.exception, error)
-            self.assertEqual(len(self.delete_calls), 1)
+            self.assertEqual(self.delete_calls, [call(path)])
             self.assertFalse(self.unlink_calls)
             self.assertTrue(path.exists())
+
+    def test_readonly_regular_leaf_deletes_the_exact_path_by_handle(self):
+        with private_state_dir() as root:
+            path = root / "object"
+            path.write_bytes(b"fixture")
+            self.windows_delete(root, path, self.failure(5))
+            self.assertEqual(self.delete_calls, [call(path)])
+            self.assertFalse(self.unlink_calls)
 
     def test_board_close_failure_is_reported_and_preserves_root(self):
         fixture = BoardTestCase('runTest')

@@ -90,13 +90,9 @@ class CwdIndependentCliTests(unittest.TestCase):
         self.second_cwd.mkdir()
 
     def cleanup_private(self):
-        from hey_my_buddy.cli.checks import teardown_private_root
+        from support import cleanup_private_tree
 
-        # The last pool slots may still be starting when health returns. Keep
-        # state until process observation AND lifetime locks prove every slot
-        # stopped; a one-time glob of existing lock files misses late starters.
-        evidence = teardown_private_root(self.base)
-        self.assertIsNone(evidence, f"Private launcher processes remain; preserved {self.base}")
+        cleanup_private_tree(self.base, (self.state,))
 
     def environment(self) -> dict:
         # The launcher selects Python 3.12 for its uv project; give it a private
