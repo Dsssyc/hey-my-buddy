@@ -2,7 +2,14 @@ import i18n from "i18next";
 import { locale } from "./i18n";
 import { parseTimelineInstant } from "./timeline/instant";
 import { excerpt } from "./task-state";
-import type { TimelineBuddy, TimelineRow, TimelineSpan } from "./macro-task-types";
+import { actorRoleText } from "./actor";
+import type { TimelineBuddy, TimelineEvent, TimelineRow, TimelineSpan } from "./macro-task-types";
+
+/** The same recorded event has one name on the timeline and in its detail. */
+export function eventName(event: TimelineEvent): string {
+  return event.kind === "cancel" ? i18n.t("tasks:drawing.stoppedBy", { actor: actorRoleText(event.actor?.role) })
+    : i18n.t(`tasks:drawing.events.${event.kind}`);
+}
 
 /** Recorded execution states that keep a null-ended span visually open. */
 const OPEN_EXECUTION_STATES = new Set(["starting", "executing", "finalizing", "running", "active"]);
@@ -62,7 +69,7 @@ const ROW_STATE_STYLE: Record<string, { tone: "green" | "amber" | "red" | "neutr
   delivered: { tone: "neutral", glyph: "✓", glyphClass: "muted" },
   accepted: { tone: "neutral", glyph: "✓", glyphClass: "ok" },
   cancelled: { tone: "neutral", glyph: "⊘", glyphClass: "muted" },
-  cancelling: { tone: "amber", glyph: "◆", glyphClass: "warn" },
+  cancelling: { tone: "green", glyph: "▸", glyphClass: "running" },
   failed: { tone: "red", glyph: "✕", glyphClass: "bad" },
   "reconciliation-needed": { tone: "amber", glyph: "?", glyphClass: "warn" },
 };

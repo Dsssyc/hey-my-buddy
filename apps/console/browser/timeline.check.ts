@@ -1,11 +1,10 @@
 import { expect, type Page } from "@playwright/test";
-import { open, test, settle, expectNoSidewaysScroll, expectWholeAndApart } from "./preview";
+import { screenshots as shots, open, test, settle, expectNoSidewaysScroll, expectWholeAndApart } from "./preview";
 
 const macro = "macro-11111111-1111-4111-8111-111111111111";
 const waiting = "preview-run-a1-h1";
 const names = (page: Page) => page.locator('[data-slot=task-names]');
 const row = (page: Page, id: string) => page.locator(`[data-slot=timeline-row-name][data-run-id="${id}"]:visible`);
-const shots = process.env.HMB_TIMELINE_SHOTS;
 
 for (const locale of ["zh-CN", "en-US"]) for (const theme of ["light", "dark"]) for (const width of [1440, 800, 390]) {
   test.describe(`new task structure ${locale} ${theme} ${width}`, () => {
@@ -23,14 +22,14 @@ for (const locale of ["zh-CN", "en-US"]) for (const theme of ["light", "dark"]) 
       await expectNoSidewaysScroll(page);
       const overflow = await page.locator('[data-slot=timeline-tracks]').evaluate(node => node.scrollWidth > node.clientWidth);
       expect(overflow).toBe(false);
-      if (shots && locale === "zh-CN" && width !== 800) await page.screenshot({ path: `${shots}/timeline-${theme}-${width}.png` });
+      if (locale === "zh-CN" && width !== 800) await page.screenshot({ path: `${shots}/timeline-${theme}-${width}.png` });
       // At the intermediate width the fitted marks can cover a short turn.
       // Zoom once to expose its own pointer target, then exercise the readout.
       if (width === 800) await page.getByRole("button", { name: locale === "zh-CN" ? "放大（+）" : "Zoom in (+)", exact: true }).click();
       const segment = page.locator('[data-key="span:execution:att-a1-2"]');
       await segment.hover();
       await expect(page.locator('[data-slot=timeline-status]')).toContainText(locale === "zh-CN" ? "回合" : "Turn");
-      if (shots && locale === "zh-CN" && theme === "light" && width === 1440) await page.screenshot({ path: `${shots}/segment-readout.png` });
+      if (locale === "zh-CN" && theme === "light" && width === 1440) await page.screenshot({ path: `${shots}/segment-readout.png` });
       await selected.dblclick();
       await expect(page.locator('[data-slot=task-detail]')).toBeVisible();
       await expect(page.locator('[data-slot=detail-rail]')).toBeVisible();
@@ -55,7 +54,7 @@ for (const locale of ["zh-CN", "en-US"]) for (const theme of ["light", "dark"]) 
         expect((await row(page, waiting).boundingBox())!.y).toBeCloseTo(after!.y, 0);
         await names(page).evaluate(node => { node.scrollTop = 0; });
       }
-      if (shots && locale === "zh-CN" && width !== 800) await page.screenshot({ path: `${shots}/detail-${theme}-${width}.png` });
+      if (locale === "zh-CN" && width !== 800) await page.screenshot({ path: `${shots}/detail-${theme}-${width}.png` });
       await page.locator('[data-slot=detail-header]').getByRole("button", { name: locale === "zh-CN" ? "收起详情" : "Close detail" }).click();
       await expect(page).toHaveURL(new RegExp(`#tasks/${macro}$`));
       await expect(row(page, waiting)).toBeFocused();
@@ -155,7 +154,7 @@ for (const locale of ["zh-CN", "en-US"]) for (const width of [1440, 390]) test.d
     const readout = await page.locator('[data-slot=timeline-status]').innerText();
     await expect(page.getByRole("button", { name: readout, exact: true })).toBeFocused();
     await expect(fragment(keys[0]).locator('[data-slot=fragment-focus]')).toHaveCSS("opacity", "1");
-    await page.screenshot({ path: `${process.env.HMB_BROWSER_SHOTS ?? "../../tmp/polish-shots"}/fragment-focus.png` });
+    await page.screenshot({ path: `${shots}/fragment-focus.png` });
     await page.keyboard.press("ArrowLeft");
     await expect(selected).toBeFocused();
     await page.keyboard.press("End"); await expect(fragment(keys.at(-1)!)).toBeFocused();

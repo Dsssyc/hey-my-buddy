@@ -1,11 +1,9 @@
 import { expect, type Page } from "@playwright/test";
-import { fileURLToPath } from "node:url";
 import type { MacroTaskTimeline } from "../src/macro-task-types";
-import { expectNoSidewaysScroll, expectTextUncut, open, settle, test } from "./preview";
+import { expectNoSidewaysScroll, expectTextUncut, open, screenshots as shots, settle, test } from "./preview";
 
 const MACRO_A = "macro-11111111-1111-4111-8111-111111111111";
 const MACRO_B = "macro-22222222-2222-4222-8222-222222222222";
-const shots = fileURLToPath(new URL("../../../tmp/step4-small-shots", import.meta.url));
 const row = (page: Page, id: string) => page.locator(`[data-slot=timeline-row-name][data-run-id="${id}"]:visible`);
 
 async function timeline(page: Page, macro: string) {
@@ -15,11 +13,12 @@ async function timeline(page: Page, macro: string) {
   const response = await read;
   expect(response.headers()["x-hey-my-buddy-preview"]).toBe("synthetic-fixture-data");
   await expect(page.locator("[data-slot=timeline-axis]")).toBeVisible();
+  await expect(page.locator(`[data-slot=macro-list] [data-macro-task-id="${macro}"]`)).toHaveCount(1);
   return await response.json() as MacroTaskTimeline;
 }
 
 for (const locale of ["zh-CN", "en-US"] as const) for (const theme of ["light", "dark"] as const) {
-  test.describe(`small console regressions ${locale} ${theme}`, () => {
+  test.describe(`timeline states and focus ${locale} ${theme}`, () => {
     test.use({ locale, viewport: { width: 1440, height: 1000 }, reducedMotion: "reduce" });
     test.beforeEach(async ({ page }) => {
       await page.addInitScript(value => localStorage.setItem("hey-my-buddy.console.theme", value), theme);
@@ -79,38 +78,38 @@ for (const locale of ["zh-CN", "en-US"] as const) for (const theme of ["light", 
       expect(data.macroTask.state).toBe("active");
       await expect(page.locator("[data-slot=macro-stop-state]")).toHaveText(stopping);
       await expect(page.locator("[data-slot=macro-overview-counts]")).toContainText(zh ? "进行中" : "Running");
+      const live = await page.locator('[data-key="span:execution:att-b8-1"] [data-slot=execution-bar]').evaluate(node => getComputedStyle(node).fill);
+      await expect(page.locator("[data-slot=macro-stop-state]")).toHaveCSS("color", live);
+      for (const id of ["preview-run-b7", "preview-run-b8"]) {
+        await expect(row(page, id).locator(":scope > span:last-child > span")).toHaveCSS("color", live);
+        await expect(row(page, id).locator("[data-slot=state-mark]")).toHaveAttribute("data-kind", "live");
+        await expect(row(page, id).locator("[data-slot=state-mark] circle")).toHaveCSS("fill", live);
+      }
       for (const [id, lead] of [["preview-run-b6", "preview-run-b3"], ["preview-run-b8", "preview-run-b7"]]) {
-        const event = data.events.find(event => event.runId === id && event.kind === "cancel" && event.actor?.role === "lead")!;
+        const stops = data.events.filter(event => event.runId === id && event.kind === "cancel");
+        expect(stops).toHaveLength(1);
+        const event = stops[0]!;
         expect(event.actor).toEqual({ role: "lead", id: lead });
-        // The Lead request and the later Host cancellation remain two facts in
-        // the cluster; the first initiator is never borrowed from the later one.
-        if (id === "preview-run-b8") {
-          const cluster = page.locator(`[data-key="cluster:event:${event.seq}"]`);
-          await cluster.focus();
-          await expect(page.locator("[data-slot=timeline-status]")).toContainText(stop);
-          await settle(page);
-          if (locale === "zh-CN") await page.screenshot({ path: `${shots}/lead-stop-pending-timeline-${theme}.png` });
-          await cluster.press("Enter");
-        }
-        const marker = id === "preview-run-b8"
-          ? page.locator("[data-slot=popover-content]").getByRole("button", { name: new RegExp(`^${stop}`) })
-          : page.locator(`[data-key="event:${event.seq}"]`);
+        expect(event.eventKind).toBe("workflow.cancelled");
+        const marker = page.locator(`[data-key="event:${event.seq}"]`);
         await expect(marker).toHaveAccessibleName(new RegExp(stop));
         await marker.focus();
         await expect(page.locator("[data-slot=timeline-status]")).toContainText(stop);
-        if (locale === "zh-CN" && id === "preview-run-b6") {
-          await settle(page);
-          await page.screenshot({ path: `${shots}/lead-stopped-timeline-${theme}.png` });
-        }
+        await settle(page);
+        if (locale === "zh-CN") await page.screenshot({ path: `${shots}/lead-${id === "preview-run-b6" ? "stopped" : "stop-pending"}-timeline-${theme}.png` });
         await marker.press("Enter");
         const detail = page.locator("[data-slot=task-detail]");
         await expect(detail).toBeVisible();
-        await expect(page.locator("[data-slot=detail-rail] [aria-current=step]")).toContainText(`Lead · ${lead}`);
+        const step = page.locator("[data-slot=detail-rail] [aria-current=step]");
+        await expect(step).toHaveAccessibleName(new RegExp(`^${stop}`));
+        await expect(step).toContainText(`Lead · ${lead}`);
         const pane = detail.locator("[data-slot=detail-pane]");
+        await expect(pane.getByRole("heading", { level: 3, name: stop, exact: true })).toBeVisible();
         await expect(pane).toContainText(stop);
         await expect(pane).toContainText(lead!);
         await expectTextUncut(pane.locator("h3, dt, dd, p"));
         await expect(page.locator("[data-slot=detail-status]")).toHaveText(id === "preview-run-b8" ? stopping : zh ? "已结束" : "Ended");
+        if (id === "preview-run-b8") await expect(page.locator("[data-slot=detail-status]")).toHaveCSS("color", live);
         await expectNoSidewaysScroll(page);
         await settle(page);
         if (locale === "zh-CN") await page.screenshot({ path: `${shots}/lead-${id === "preview-run-b6" ? "stopped" : "stop-pending"}-${theme}.png` });
@@ -120,9 +119,13 @@ for (const locale of ["zh-CN", "en-US"] as const) for (const theme of ["light", 
       await expect(row(page, "preview-run-b7")).toHaveAccessibleName(new RegExp(stopping));
       await row(page, "preview-run-b7").press("Enter");
       await expect(page.locator("[data-slot=detail-status]")).toHaveText(stopping);
+      await expect(page.locator("[data-slot=detail-status]")).toHaveCSS("color", live);
       await expect(page.locator("[data-slot=detail-status]")).toHaveAttribute("aria-description",
         zh ? "停止未确认，1 项执行尚未核实" : "Stop not confirmed; executions not yet verified: 1");
       await expect(page.locator("[data-slot=macro-stop-state]")).toHaveText(stopping);
+      const hostStop = zh ? "Host 停止" : "Stopped by Host";
+      await page.locator("[data-slot=detail-rail]").getByRole("button", { name: new RegExp(`^${hostStop}`) }).click();
+      await expect(page.locator("[data-slot=detail-pane]").getByRole("heading", { level: 3, name: hostStop, exact: true })).toBeVisible();
       await settle(page);
       if (locale === "zh-CN") await page.screenshot({ path: `${shots}/lead-stopping-${theme}.png` });
     });

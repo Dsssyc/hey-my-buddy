@@ -1,7 +1,7 @@
 import { mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { expect } from "@playwright/test";
-import { expectNoSidewaysScroll, open, settle, test } from "./preview";
+import { screenshots as shots, expectNoSidewaysScroll, open, settle, test } from "./preview";
 
 const macro = "macro-11111111-1111-4111-8111-111111111111";
 const views = [
@@ -28,11 +28,8 @@ for (const width of [1280, 390]) for (const theme of ["light", "dark"] as const)
         await page.getByRole("dialog").waitFor();
       }
       await settle(page);
-      const shots = process.env.HMB_DESIGN_SHOTS;
-      if (shots) {
-        mkdirSync(shots, { recursive: true });
-        await page.screenshot({ path: join(shots, `${view.name}-${width}-${theme}.png`), fullPage: true, animations: "disabled" });
-      }
+      mkdirSync(shots, { recursive: true });
+      await page.screenshot({ path: join(shots, `${view.name}-${width}-${theme}.png`), fullPage: true, animations: "disabled" });
       await expectNoSidewaysScroll(page);
       // This uses the built CSS: inheritance and the reset matter as much as
       // the classes a component declares. Hidden rulers are excluded.

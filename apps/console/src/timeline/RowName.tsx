@@ -19,7 +19,7 @@ export const RowName = forwardRef<HTMLButtonElement, {
   const repairTitle = row.fixes ? displayTitle(row.fixesTitleSource!, row.fixesTitle!).fullText : null;
   const repair = row.fixes ? t("fixes", { title: repairTitle }) : null;
   const tone = row.status === "queued" ? null : state.tone === "amber" || row.category === "host" || row.state === "delivered" ? "hand"
-    : row.category === "active" ? "live" : row.state === "failed" || row.status === "failed" || row.acceptanceVerdict === "failed" ? "fail" : "past";
+    : state.tone === "green" || row.category === "active" ? "live" : row.state === "failed" || row.status === "failed" || row.acceptanceVerdict === "failed" ? "fail" : "past";
   const mark = tone === "live" ? "live" : null;
   const button = <button ref={ref} type="button" data-key={`row:${row.runId}`} data-slot="timeline-row-name" data-run-id={row.runId} data-fixes={row.fixes}
     tabIndex={tabIndex} aria-expanded={open} aria-label={[title.fullText, repair, state.label].filter(Boolean).join(" · ")} onClick={onClick} onDoubleClick={onOpen} onKeyDown={event => { if (event.key === "Enter") { event.preventDefault(); onOpen(); } }}

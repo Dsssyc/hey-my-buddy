@@ -19,7 +19,7 @@ export type StateWord = { key: "running" | "stopping" | "queued" | "host" | "lea
 
 /** The one word a micro task's state has, and the mark that goes with it. */
 export function stateWord(task: Task, lead: boolean, workflowState: string | null = task.workflow?.state ?? null): StateWord {
-  if (taskStatus(task) === "cancelling") return { key: "stopping", mark: "hand" };
+  if (taskStatus(task) === "cancelling") return { key: "stopping", mark: "live" };
   if (task.status === "queued") return { key: "queued", mark: "idle" };
   switch (workflowState) {
     case "awaiting-host": return { key: lead ? "lead" : "host", mark: "hand" };
