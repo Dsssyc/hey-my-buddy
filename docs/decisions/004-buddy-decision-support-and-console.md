@@ -179,11 +179,11 @@ Jev/Laya 是可选实验后端，不是默认依赖。Laya 的上下文切分管
 
 | 范围 | 当前依据 | 提案目标 |
 | --- | --- | --- |
-| 模型与参数选择 | [schemas.py](../../src/buddy/schemas.py) 接受 `model`、`provider`、`effort` 字符串；[run.mjs](../../harnesses/dsh/scripts/run.mjs) 返回 requested 配置 | 有界评价卡、合法 profile、带校验的决策记录与 requested/resolved/observed 证据 |
-| 评估与验收 | [store.py](../../src/buddy/store.py) 的 `task_acknowledge` 不改变执行结果；相同 note/verdict 可重放，改变已有验收会冲突；没有独立的评价更正操作 | 保留原验收，新增可追溯 assessment 与更正记录；引用准确 attempt/revision，重放不重复计样本 |
+| 模型与参数选择 | [schemas.py](../../src/hey_my_buddy/protocol/schemas.py) 接受 `model`、`provider`、`effort` 字符串；[run.mjs](../../harnesses/dsh/scripts/run.mjs) 返回 requested 配置 | 有界评价卡、合法 profile、带校验的决策记录与 requested/resolved/observed 证据 |
+| 评估与验收 | [store.py](../../src/hey_my_buddy/blackboard/store/store.py) 的 `task_acknowledge` 不改变执行结果；相同 note/verdict 可重放，改变已有验收会冲突；没有独立的评价更正操作 | 保留原验收，新增可追溯 assessment 与更正记录；引用准确 attempt/revision，重放不重复计样本 |
 | 本地控制台与身份 | `dashboard.py` 使用独立只读 token；C-Two 统一 service token 与 owner 归属字段尚不构成 Host/Worker 角色隔离 | 配置、模型卡片、任务与待处理视图，以及不复用只读授权的受控写入 |
-| 资源与辅助任务 | [store.py](../../src/buddy/store.py) 在领取执行时占用 cwd；真实停止后释放 claim，不等待验收；取消只针对当前 task，无依赖级联 | 执行槽与工作区写权分别管理，增加依赖取消、移交和固定产物验收，保留真实停止证据 |
-| 跨回合接续 | [service.py](../../src/buddy/service.py) 明确没有自动 resume | 结构化回合结论与 Host 批准的接续 |
+| 资源与辅助任务 | [store.py](../../src/hey_my_buddy/blackboard/store/store.py) 在领取执行时占用 cwd；真实停止后释放 claim，不等待验收；取消只针对当前 task，无依赖级联 | 执行槽与工作区写权分别管理，增加依赖取消、移交和固定产物验收，保留真实停止证据 |
+| 跨回合接续 | [service.py](../../src/hey_my_buddy/blackboard/service/service.py) 明确没有自动 resume | 结构化回合结论与 Host 批准的接续 |
 | 成本 | 提交字段没有预算 | 保持可选、延期 |
 
 验收要求以第二部分第 8 条的失效场景为集合，并补充以下底线：

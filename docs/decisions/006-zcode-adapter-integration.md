@@ -51,7 +51,7 @@ daemon 与 supervisor 是分离的 OS 进程。Worker 对象跑在 supervisor �
 
 ### 适配器契约
 
-[adapters/base.py](../../src/buddy/adapters/base.py) 定义了执行器与黑板之间的全部界面，适配器拿不到数据库句柄、不写权威状态：
+[adapters/base.py](../../src/hey_my_buddy/buddy/harnesses/base.py) 定义了执行器与黑板之间的全部界面，适配器拿不到数据库句柄、不写权威状态：
 
 - `ExecutionContext`：一次 attempt 能知道的一切——taskId、attemptId、generation、规范化 spec（含 `cwd`、`task`、`timeoutSeconds`）、attempt 目录、运行时信息、环境变量。`task_file()` 约定任务文本写到 attempt 目录的 `task.txt`。
 - `Adapter.prepare(context)`：spawn 前校验可用性，不满足抛 `ADAPTER_UNAVAILABLE`。
@@ -65,7 +65,7 @@ daemon 与 supervisor 是分离的 OS 进程。Worker 对象跑在 supervisor �
 
 ### 契约与校验面
 
-[schemas.py](../../src/buddy/schemas.py) 是提交请求的唯一校验点：`ADAPTERS = ("dsh", "command", "external")`（schemas.py:38）是适配器白名单，`SUBMIT_FIELDS` 冻结了全部可提交字段（未知字段 `INVALID_ARGUMENT`），任务文本上限 `MAX_TASK_BYTES = 1 MiB`（schemas.py:22），超时 10–86400 秒、默认 1800。按适配器的条件校验有先例：`argv` 只对 `command` 合法（`_argv`，schemas.py:153）。`model`/`provider`/`effort` 是通用 spec 字段，由各适配器自行决定如何消费。
+[schemas.py](../../src/hey_my_buddy/protocol/schemas.py) 是提交请求的唯一校验点：`ADAPTERS = ("dsh", "command", "external")`（schemas.py:38）是适配器白名单，`SUBMIT_FIELDS` 冻结了全部可提交字段（未知字段 `INVALID_ARGUMENT`），任务文本上限 `MAX_TASK_BYTES = 1 MiB`（schemas.py:22），超时 10–86400 秒、默认 1800。按适配器的条件校验有先例：`argv` 只对 `command` 合法（`_argv`，schemas.py:153）。`model`/`provider`/`effort` 是通用 spec 字段，由各适配器自行决定如何消费。
 
 注意一个容易混淆的数值：runner.md 里"超过 32,000 字节改为文件投递"是 `run.mjs` 自己的内联/文件分界，不是黑板的任务大小上限；黑板接受到 1 MiB。
 
@@ -98,7 +98,7 @@ buddy submit(requestId, adapter="dsh", cwd, task, timeoutSeconds, [model/provide
 
 ### 适配器实际承担的职责
 
-`DshAdapter`（[adapters/dsh.py](../../src/buddy/adapters/dsh.py)）本体只做六件事：可用性探测（node 二进制与 runner 入口，支持 `BUDDY_NODE`/`BUDDY_RUNNER_PATH` 覆盖）；写任务文件；生成 inquiry 凭据（socket 路径、hex token、0600 落盘，绝不进公共任务视图）；组装 argv 并以新会话 spawn；从 stdout 解析最后一个 JSON 并做诚实映射（`exit 0 ∧ status=="ok" ∧ shutdownConfirmed` 三者同时成立才是 ok，cancel 未确认停机算 failed，解析不出算 `invalid-result`）；从 runner 自报的路径（capture 与两份 runner 日志）计算 SHA-256 后发现 artifacts。
+`DshAdapter`（[adapters/dsh.py](../../src/hey_my_buddy/buddy/harnesses/dsh/adapter.py)）本体只做六件事：可用性探测（node 二进制与 runner 入口，支持 `BUDDY_NODE`/`BUDDY_RUNNER_PATH` 覆盖）；写任务文件；生成 inquiry 凭据（socket 路径、hex token、0600 落盘，绝不进公共任务视图）；组装 argv 并以新会话 spawn；从 stdout 解析最后一个 JSON 并做诚实映射（`exit 0 ∧ status=="ok" ∧ shutdownConfirmed` 三者同时成立才是 ok，cancel 未确认停机算 failed，解析不出算 `invalid-result`）；从 runner 自报的路径（capture 与两份 runner 日志）计算 SHA-256 后发现 artifacts。
 
 ### run.mjs 承担的职责
 
