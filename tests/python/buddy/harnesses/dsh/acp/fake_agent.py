@@ -27,13 +27,16 @@ import subprocess
 import sys
 import threading
 import time
+import traceback
 from datetime import datetime, timezone
 from pathlib import Path
+
+from hey_my_buddy.paths import native_path
 
 
 def log(log_path: Path, event: dict) -> None:
     entry = {"ts": datetime.now(timezone.utc).isoformat(timespec="milliseconds"), **event}
-    with log_path.open("a", encoding="utf-8", newline="\n") as handle:
+    with native_path(log_path).open("a", encoding="utf-8", newline="\n") as handle:
         handle.write(json.dumps(entry, default=str, sort_keys=True) + "\n")
 
 
@@ -52,13 +55,13 @@ def check_private_home(log_path: Path, fixture_root: Path) -> bool:
         # JSON is valid YAML. Only synthetic fixture settings are opened, by
         # this fake native program rather than by the production run module.
         settings = Path(native_home) / "settings.yaml"
-        if settings.is_file():
-            entry["settings"] = json.loads(settings.read_text(encoding="utf-8"))
+        if native_path(settings).is_file():
+            entry["settings"] = json.loads(native_path(settings).read_text(encoding="utf-8"))
         for field, relative in (("homePatch", "cordis.patch.yml"),
                                 ("profilePatch", "profiles/acp/cordis.patch.yml")):
             path = Path(native_home) / relative
-            if path.is_file():
-                entry[field] = path.read_text(encoding="utf-8")
+            if native_path(path).is_file():
+                entry[field] = native_path(path).read_text(encoding="utf-8")
     log(log_path, entry)
     return ok
 
@@ -213,7 +216,7 @@ class FakeAgent:
                 process.stdin.write((json.dumps(payload) + "\n").encode())
                 process.stdin.flush()
                 try:
-                    reply = replies.get(timeout=5)
+                    reply = replies.get(timeout=30)
                 except queue.Empty as error:
                     raise TimeoutError("fake agent MCP handshake did not answer") from error
                 if isinstance(reply, OSError):
@@ -264,29 +267,24 @@ class FakeAgent:
         The public ``session-persistence-jsonl`` row names the root DSH writes
         its rollouts under; the fake reads it from its own patch so a Worker
         run's records land in the task's shared native root while configuration
-        stays in the inherited user home. An unreadable or absent patch falls back to
-        this fake's own ``DSH_HOME`` sessions directory.
+        stays in the inherited user home. Without a pinned root, use this
+        fake's own ``DSH_HOME`` sessions directory.
         """
         if self.patch_path:
-            try:
-                for row in json.loads(Path(self.patch_path).read_text(encoding="utf-8")):
-                    if (isinstance(row, dict) and row.get("id") == "session-persistence-jsonl"
-                            and isinstance(row.get("config"), dict)
-                            and isinstance(row["config"].get("root"), str)):
-                        return Path(row["config"]["root"])
-            except (OSError, ValueError, TypeError):
-                pass
+            for row in json.loads(native_path(Path(self.patch_path)).read_text(encoding="utf-8")):
+                if row["id"] == "session-persistence-jsonl":
+                    return Path(row["config"]["root"])
         return Path(os.environ.get("DSH_HOME") or Path(os.environ["HOME"]) / ".dsh") / "sessions"
 
     def persist_session(self, session_id: str, session: dict, *, new: bool = False) -> bool:
         """Record a session in the pinned root; claim new IDs across processes."""
         directory = self.sessions_dir()
-        directory.mkdir(mode=0o700, parents=True, exist_ok=True)
+        native_path(directory).mkdir(mode=0o700, parents=True, exist_ok=True)
         marker = directory / f"{session_id}.fake-session.json"
-        if new and any(directory.glob(f"{session_id}.v3.jsonl*")):
+        if new and any(native_path(directory).glob(f"{session_id}.v3.jsonl*")):
             return False
         try:
-            with marker.open("x" if new else "w", encoding="utf-8", newline="\n") as handle:
+            with native_path(marker).open("x" if new else "w", encoding="utf-8", newline="\n") as handle:
                 json.dump({"cwd": session["cwd"], "model": session["model"],
                            "effort": session["effort"]}, handle)
         except FileExistsError:
@@ -295,19 +293,19 @@ class FakeAgent:
             raise
         storage = Path(os.environ.get("DSH_HOME") or Path(os.environ["HOME"]) / ".dsh") / "storages"
         if self.patch_path:
-            for row in json.loads(Path(self.patch_path).read_text(encoding="utf-8")):
+            for row in json.loads(native_path(Path(self.patch_path)).read_text(encoding="utf-8")):
                 if row.get("id") == "storage-json":
                     storage = Path(row["config"]["root"])
         index = storage / "session_projcache" / "sessions"
-        index.mkdir(mode=0o700, parents=True, exist_ok=True)
-        (index / f"{session_id}.json").write_text(json.dumps({"sessionId": session_id, "cwd": session["cwd"]}), encoding="utf-8", newline="\n")
+        native_path(index).mkdir(mode=0o700, parents=True, exist_ok=True)
+        native_path(index / f"{session_id}.json").write_text(json.dumps({"sessionId": session_id, "cwd": session["cwd"]}), encoding="utf-8", newline="\n")
         return True
 
     def restore_session(self, session_id):
         """The persisted session state, or ``None`` when no store carries it."""
         marker = self.sessions_dir() / f"{session_id}.fake-session.json"
         try:
-            value = json.loads(marker.read_text(encoding="utf-8"))
+            value = json.loads(native_path(marker).read_text(encoding="utf-8"))
         except (OSError, ValueError):
             return None
         if not isinstance(value, dict):
@@ -576,7 +574,7 @@ class FakeAgent:
     def emit_session_fixture(self, session_id: str) -> None:
         """Explicit synthetic ACP display samples, separate from native rollouts."""
         if self.session_updates_fixture:
-            fixture = json.loads(Path(self.session_updates_fixture).read_text(encoding="utf-8"))
+            fixture = json.loads(native_path(Path(self.session_updates_fixture)).read_text(encoding="utf-8"))
             for update in fixture["updates"]:
                 self.notify_client("session/update", {"sessionId": session_id, "update": update})
 
@@ -658,7 +656,7 @@ class FakeAgent:
             self.send({"jsonrpc": "2.0", "id": request_id, "result": {"stopReason": self.stop_reason}})
             return
         from hey_my_buddy.buddy.roles import worker_services
-        configuration = json.loads(Path(self.bridge_config).read_text(encoding="utf-8"))
+        configuration = json.loads(native_path(Path(self.bridge_config)).read_text(encoding="utf-8"))
         if self.micro_task_permission:
             answer = self.request_client("session/request_permission", {
                 "sessionId": session_id,
@@ -802,7 +800,7 @@ class FakeAgent:
                 self.write_resumed_session_record(session_id, prompt_text, mode)
             return
         directory = self.sessions_dir()
-        directory.mkdir(mode=0o700, parents=True, exist_ok=True)
+        native_path(directory).mkdir(mode=0o700, parents=True, exist_ok=True)
         now_ms = int(time.time() * 1000)
         source = {"kind": "model", "provider": "fake", "model": "m1"}
 
@@ -857,14 +855,14 @@ class FakeAgent:
             lines += "malformed record frame\n"
         if mode == "corrupt":
             path = directory / f"{session_id}.v3.jsonl.zstd"
-            path.write_bytes(b"this is not a zstd stream\n")
+            native_path(path).write_bytes(b"this is not a zstd stream\n")
         elif mode == "plain":
             path = directory / f"{session_id}.v3.jsonl"
-            path.write_text(lines, encoding="utf-8", newline="\n")
+            native_path(path).write_text(lines, encoding="utf-8", newline="\n")
         else:
             import zstandard
             path = directory / f"{session_id}.v3.jsonl.zstd"
-            path.write_bytes(zstandard.ZstdCompressor().compress(lines.encode()))
+            native_path(path).write_bytes(zstandard.ZstdCompressor().compress(lines.encode()))
         log(self.log_path, {"event": "session-record-written", "mode": mode,
                             "path": str(path), "sessionId": session_id})
 
@@ -881,13 +879,13 @@ class FakeAgent:
         """
         import zstandard
         directory = self.sessions_dir()
-        directory.mkdir(mode=0o700, parents=True, exist_ok=True)
+        native_path(directory).mkdir(mode=0o700, parents=True, exist_ok=True)
         path = directory / f"{session_id}.v3.jsonl.zstd"
         existing: list[bytes] = []
-        if path.is_file():
+        if native_path(path).is_file():
             try:
                 existing = [line + b"\n" for line in zstandard.ZstdDecompressor() \
-                            .decompress(path.read_bytes()).splitlines() if line]
+                            .decompress(native_path(path).read_bytes()).splitlines() if line]
             except (OSError, ValueError):
                 existing = []
         now_ms = int(time.time() * 1000)
@@ -923,7 +921,7 @@ class FakeAgent:
         if mode == "resume-missing":
             # The rollout the freeze saw no longer carries its records: emptied
             # in place, the matching file set the driver needs is gone.
-            path.write_bytes(b"")
+            native_path(path).write_bytes(b"")
             log(self.log_path, {"event": "session-record-written", "mode": mode,
                                 "path": str(path), "sessionId": session_id})
             return
@@ -941,13 +939,13 @@ class FakeAgent:
                           "totalTokens": 11111, "cacheReadTokens": 90,
                           "reasoningTokens": 9}}}).encode()
                 for index in range(max(1, len(existing)))]
-            path.write_bytes(zstandard.ZstdCompressor().compress(b"\n".join(rewritten) + b"\n"))
+            native_path(path).write_bytes(zstandard.ZstdCompressor().compress(b"\n".join(rewritten) + b"\n"))
             log(self.log_path, {"event": "session-record-written", "mode": mode,
                                 "path": str(path), "sessionId": session_id})
             return
         if mode == "resume-shorten":
             kept = existing[:max(1, len(existing) // 2)]
-            path.write_bytes(zstandard.ZstdCompressor().compress(b"".join(kept)))
+            native_path(path).write_bytes(zstandard.ZstdCompressor().compress(b"".join(kept)))
             log(self.log_path, {"event": "session-record-written", "mode": mode,
                                 "path": str(path), "sessionId": session_id})
             return
@@ -959,7 +957,7 @@ class FakeAgent:
         if mode == "resume-flood":
             lines.insert(len(lines) - 1, json.dumps({"type": "fixture/oversized", "seq": seq + 7.5,
                                                      "data": {"blob": "x" * (4 * 1024 * 1024)}}).encode() + b"\n")
-        path.write_bytes(zstandard.ZstdCompressor().compress(b"".join(lines)))
+        native_path(path).write_bytes(zstandard.ZstdCompressor().compress(b"".join(lines)))
         log(self.log_path, {"event": "session-record-written", "mode": mode,
                             "path": str(path), "sessionId": session_id})
 
@@ -1070,7 +1068,7 @@ class FakeAgent:
             log(self.log_path, {"event": "malformed-client-frame"})
             return
         if self.capture_method is not None and message.get("method") == self.capture_method:
-            self.capture_path.write_bytes(line + b"\n")
+            native_path(self.capture_path).write_bytes(line + b"\n")
         if "id" in message and "method" not in message:
             with self.lock:
                 pending = self.client_pending.get(message.get("id"))
@@ -1083,7 +1081,19 @@ class FakeAgent:
             # Set this before starting the handler, so the main loop cannot
             # permit another pipe read while that thread reaches its freeze.
             self._stop_reading.set()
-        threading.Thread(target=self.handle, args=(message,), daemon=True).start()
+        threading.Thread(target=self.handle_request, args=(message,), daemon=True).start()
+
+    def handle_request(self, message: dict) -> None:
+        try:
+            self.handle(message)
+        except Exception as error:
+            details = f"{type(error).__name__}: {error}"
+            log(self.log_path, {"event": "request-error", "method": message.get("method"),
+                                "id": message.get("id"), "error": details,
+                                "traceback": traceback.format_exc()})
+            if "id" in message:
+                self.send({"jsonrpc": "2.0", "id": message["id"],
+                           "error": {"code": -32603, "message": details}})
 
 
 def build_parser(*, log_required: bool = True) -> argparse.ArgumentParser:
@@ -1204,7 +1214,7 @@ def build_parser(*, log_required: bool = True) -> argparse.ArgumentParser:
 def main() -> int:
     args = build_parser().parse_args()
     log_path = Path(args.log)
-    log_path.parent.mkdir(parents=True, exist_ok=True)
+    native_path(log_path.parent).mkdir(parents=True, exist_ok=True)
     if not check_private_home(log_path, Path(args.fixture_root)):
         return 3
     log(log_path, {"event": "launch-face", "profile": args.profile, "patch": args.patch})

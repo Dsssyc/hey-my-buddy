@@ -7,6 +7,7 @@ survives, and a slow EOF drain.
 """
 from __future__ import annotations
 
+import json
 import sys
 import threading
 import time
@@ -14,11 +15,68 @@ import unittest
 
 from hey_my_buddy.buddy.harnesses.dsh.acp import AcpClient
 from hey_my_buddy.buddy.harnesses.dsh.acp.connection import AcpConnectionClosed, AcpRequestError
+from hey_my_buddy.paths import native_path
+from hey_my_buddy.private_dirs import remove_tree
 
 from .support import AcpTestCase, MCP_STUB
 
 
 class NewSessionTest(AcpTestCase):
+    def test_session_storage_failure_answers_and_logs_the_failed_request(self):
+        blocked = self.test_dir / "blocked-sessions"
+        blocked.write_text("a file cannot hold sessions", encoding="utf-8")
+        patch = self.test_dir / "launch-patch.json"
+        patch.write_text(json.dumps([
+            {"id": "session-persistence-jsonl", "config": {"root": str(blocked)}}]),
+            encoding="utf-8")
+        client = self.start_client("--patch", str(patch))
+        client.initialize(timeout=15.0)
+        with self.assertRaises(AcpRequestError) as caught:
+            client.new_session(str(self.root), timeout=15.0)
+        self.assertEqual(-32603, caught.exception.error["code"])
+        self.assertIn("FileExistsError", caught.exception.error["message"])
+        failures = [entry for entry in self.agent_log() if entry.get("event") == "request-error"]
+        self.assertEqual(1, len(failures))
+        self.assertEqual("session/new", failures[0]["method"])
+        self.assertIsInstance(failures[0]["id"], int)
+        self.assertIn("persist_session", failures[0]["traceback"])
+        self.assertEqual([], client.connection.request("session/list", {}, 15.0)["sessions"])
+
+    def test_deep_patch_and_session_store_keep_the_pinned_paths(self):
+        branch = self.test_dir / "deep-store"
+        deep = branch
+        while len(str(deep)) < 330:
+            deep /= "session-directory-" + "x" * 30
+        native_path(deep).mkdir(parents=True)
+        self.addCleanup(remove_tree, branch)
+        sessions = deep / "sessions"
+        storage = deep / "storages"
+        patch = deep / "launch-patch.json"
+        native_path(patch).write_text(json.dumps([
+            {"id": "session-persistence-jsonl", "config": {"root": str(sessions)}},
+            {"id": "storage-json", "config": {"root": str(storage)}}]), encoding="utf-8")
+        client = self.start_client("--patch", str(patch), "--prompt-mode", "final",
+                                   "--session-record", "plain")
+        client.initialize(timeout=15.0)
+        session_id = client.new_session(str(self.root), timeout=15.0)["sessionId"]
+        client.set_config_option(session_id, "reasoning_effort", "low", timeout=15.0)
+        client.resume_session(session_id, str(self.root), timeout=15.0)
+        self.assertEqual("end_turn", client.prompt(session_id, "private fixture", timeout=30.0)["stopReason"])
+        marker = sessions / f"{session_id}.fake-session.json"
+        self.assertEqual("low", json.loads(native_path(marker).read_text(encoding="utf-8"))["effort"])
+        self.assertTrue(native_path(sessions / f"{session_id}.v3.jsonl").is_file())
+        index = storage / "session_projcache" / "sessions" / f"{session_id}.json"
+        self.assertEqual(str(self.root), json.loads(native_path(index).read_text(encoding="utf-8"))["cwd"])
+        client.close_session(session_id, timeout=15.0)
+        resumed_root = self.sibling_dir("resumed-native-root")
+        (resumed_root / "logs").mkdir()
+        resumed = AcpClient.start(self.agent_argv("--patch", str(patch)), private_root=resumed_root)
+        self.addCleanup(self._shutdown_client, resumed)
+        resumed.initialize(timeout=15.0)
+        configuration = resumed.resume_session(session_id, str(self.root), timeout=15.0)["configOptions"]
+        self.assertEqual("low", configuration[1]["currentValue"])
+        resumed.close_session(session_id, timeout=15.0)
+
     def test_new_session_always_carries_mcp_servers(self):
         client = self.start_client()
         client.initialize(timeout=15.0)
@@ -42,6 +100,29 @@ class NewSessionTest(AcpTestCase):
         self.assertTrue(evidence["shutdownConfirmed"])
         mounted_events = [entry for entry in self.agent_log() if entry.get("event") == "stub-mounted"]
         self.assertEqual(1, len(mounted_events))
+
+    def test_mcp_mount_allows_slow_child_startup(self):
+        client = self.start_client()
+        client.initialize(timeout=15.0)
+        servers = [{"name": "slow-private-mcp", "command": sys.executable,
+                    "args": ["-c", "import runpy,sys,time; time.sleep(6); runpy.run_path(sys.argv[1], run_name='__main__')",
+                             str(MCP_STUB)], "env": []}]
+        session = client.new_session(str(self.root), mcp_servers=servers, timeout=30.0)
+        self.assertTrue(session["mountedMcp"][0]["mounted"])
+        self.assertEqual(["deliver_outcome"], session["mountedMcp"][0]["tools"])
+        client.close_session(session["sessionId"], timeout=15.0)
+
+    def test_mcp_child_exit_finishes_the_mount_without_waiting_for_the_deadline(self):
+        client = self.start_client()
+        client.initialize(timeout=15.0)
+        servers = [{"name": "exited-private-mcp", "command": sys.executable,
+                    "args": ["-c", "raise SystemExit(7)"], "env": []}]
+        started = time.monotonic()
+        session = client.new_session(str(self.root), mcp_servers=servers, timeout=30.0)
+        self.assertFalse(session["mountedMcp"][0]["mounted"])
+        self.assertIn("error", session["mountedMcp"][0])
+        self.assertLess(time.monotonic() - started, 20.0)
+        client.close_session(session["sessionId"], timeout=15.0)
 
 
 class ConfigurationEchoTest(AcpTestCase):
