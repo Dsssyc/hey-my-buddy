@@ -46,9 +46,9 @@ describe("the step strip along the top of a micro task's detail", () => {
     fireEvent.click(stripSlice("span:h1")!);
     await Promise.resolve();
     expect(pane().textContent).toContain("需要读取样例目录");
-    // The step a wait ends in carries the selection; its mark sits in the cluster of that instant.
-    expect(stripSlice("cluster:event:2")!.getAttribute("aria-pressed")).toBe("true");
-    expect(stripSlice("span:h1")!.getAttribute("aria-pressed")).toBe("false");
+    // The wait is focused within the step that ends it.
+    expect(stripSlice("cluster:event:2")!.getAttribute("aria-pressed")).toBe("false");
+    expect(stripSlice("span:h1")!.getAttribute("aria-pressed")).toBe("true");
     expect(stripSlice("span:r1")!.getAttribute("aria-pressed")).toBe("false");
     const delegation = strip().querySelector('[data-key="delegation"]')!;
     expect(delegation.getAttribute("aria-pressed")).toBe("false");
@@ -83,7 +83,7 @@ describe("the step strip along the top of a micro task's detail", () => {
     await f.user.click(previous());
     expect(pane().textContent).toContain("实现微任务详情");
     expect(previous().getAttribute("aria-disabled")).toBe("true");
-    fireEvent.click(strip().querySelector('[data-key="acceptance-wait"]')!);
+    fireEvent.click(strip().querySelector('[data-key="settle:m1"]')!);
     expect(next().getAttribute("aria-disabled")).toBe("true");
     await f.user.click(next());
     expect(next().getAttribute("aria-disabled")).toBe("true");
@@ -92,7 +92,7 @@ describe("the step strip along the top of a micro task's detail", () => {
   it("offers a delivered micro task's open acceptance as its own slice at the end of the record", async () => {
     open({ timeline: timeline(), origin: "span:e2" });
     await ready();
-    const acceptance = strip().querySelector('[data-key="acceptance-wait"]')!;
+    const acceptance = strip().querySelector('[data-key="settle:m1"]')!;
     expect(acceptance.getAttribute("aria-pressed")).toBe("false");
     expect(acceptance.getAttribute("aria-label")).toContain("等待验收");
     fireEvent.click(acceptance);
@@ -104,7 +104,7 @@ describe("the step strip along the top of a micro task's detail", () => {
   it("decides the opening position once even when the first step is the open acceptance with no instant of its own", async () => {
     const f = open({ origin: "settle:m1" });
     await ready();
-    expect(strip().querySelector('[data-key="acceptance-wait"]')!.getAttribute("aria-pressed")).toBe("true");
+    expect(strip().querySelector('[data-key="settle:m1"]')!.getAttribute("aria-pressed")).toBe("true");
     // The wait's recorded start anchors the one centre-on-open; the reader's own scrolling then stands.
     const centred = scroll().scrollLeft;
     expect(centred).toBeGreaterThan(0);
@@ -122,7 +122,7 @@ describe("the step strip along the top of a micro task's detail", () => {
     const settled = timeline();
     settled.events.push(event(4, "integrate", at("11:03")), event(5, "accept", at("11:05")));
     settled.rows = [row({ state: "accepted", acceptedAt: at("11:05") })];
-    open({ timeline: settled, origin: "settle:m1" });
+    open({ timeline: settled, step: 8 });
     await ready();
     expect(pane().textContent).toContain("已验收");
     const accept = stripSlice("event:5")!;

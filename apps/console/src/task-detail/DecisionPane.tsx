@@ -46,7 +46,7 @@ export function DecisionPane({ step, ctx }: { step: Step; ctx: Context }) {
   const title = step.kind === "continue" ? t("step.continue") : request ? t(`decision.kind.${kindKey(request)}`) : t("step.decision");
   return <Pane>
     <PaneTitle title={title} state={open ? wait : undefined} tone="hand">
-      {when && <Moment at={when} />}
+      {when && <Moment at={when} itemKey={step.key} label={title} />}
     </PaneTitle>
     {full && <>
       <Section name={t("decision.summary")} className="border-t">
@@ -73,7 +73,7 @@ export function DecisionPane({ step, ctx }: { step: Step; ctx: Context }) {
       {open ? <p className="text-hand">{wait}</p> : <Facts items={[
         [t("decision.what"), step.kind === "continue" ? t("step.continue") : decided ? t(`decision.state.${decided.state}`, { defaultValue: decided.state }) : t("unrecorded")],
         [t("decision.who"), who ? actorText(who) : t("unrecorded")],
-        [t("decision.when"), <Moment key="when" at={when} />],
+        [t("decision.when"), <Moment key="when" at={when} itemKey={step.key} label={title} />],
         ...(full && "decision" in full && full.decision?.note ? [[t("decision.reason"), full.decision.note] as [string, string]] : []),
       ]} />}
     </Section>

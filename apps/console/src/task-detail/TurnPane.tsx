@@ -141,7 +141,7 @@ export function TurnPane({ step, ctx }: { step: Step; ctx: Context }) {
       tone={running ? "live" : rejected ? "past" : failed ? "fail" : unknown ? "hand" : "past"}
       warnings={[...(reminders.overdue ? [shell("reminders.overdue")] : []), ...(reminders.possiblyStuck ? [shell("reminders.possiblyStuck")] : [])]}
       note={note || undefined}>
-      <MomentRange start={step.at} end={span.endAt}/>
+      <MomentRange start={step.at} end={span.endAt} itemKey={step.key} label={t("step.turn", { n: index })}/>
       {expected !== null && <span className="tabular-nums text-ink3">{t("turn.expected", { time: formatDuration(expected * 1000) })}</span>}
       {step.ms !== null && <b className="text-sm font-normal text-foreground tabular-nums">{formatDuration(step.ms, "fine")}</b>}
     </PaneTitle>
@@ -161,7 +161,7 @@ export function TurnPane({ step, ctx }: { step: Step; ctx: Context }) {
         ? <Node mark="input"><Quote><Fold text={ctx.view.task.task} /></Quote></Node>
         : continuation && <Node mark="input"><Quote><Fold text={continuation.input} /></Quote></Node>}
       {cut && <p className="py-1.5 pl-8 text-xs text-ink3">{t("inquiry.more")}</p>}
-      {asked.map(inquiry => <Ask key={inquiry.messageId} inquiry={inquiry} highlighted={ctx.highlightedInquiry === inquiry.inquiryId} />)}
+      {asked.map(inquiry => <Ask key={inquiry.messageId} inquiry={inquiry} />)}
       {!running && <Node mark="result">
         <div className="min-w-0 flex-1">
           <p className="text-xs text-ink3">{t("result.name")}</p>

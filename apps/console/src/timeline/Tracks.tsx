@@ -18,7 +18,7 @@ import { fitAdjacentLabel, fitLabel, useTextMeasure } from "./labels";
 import type { Interval, Label, Occupancy } from "./labels";
 import { MarkerCluster, markerAt, markerHasKey, markerKey } from "./MarkerCluster";
 import { ConclusionMark } from "./ConclusionMark";
-import { IdlePattern, WaitingDiamond, TIMELINE_OUTSET_PX as INSET_PX } from "./trackMarks";
+import { fragmentHitPath, IdlePattern, WaitingDiamond, TIMELINE_OUTSET_PX as INSET_PX } from "./trackMarks";
 import { eventActions } from "./events";
 import { CLUSTER_SELECTION_PADDING_PX, clusterHalfWidth } from "./ClusterMark";
 import type { TimelineMarker } from "./MarkerCluster";
@@ -150,12 +150,14 @@ export function Axis({ scale, ongoing, nowMs, pointerX = null, pointerBounds, co
 type PositionedSpan = { span: TimelineSpan; start: number; end: number; execution: boolean; outcome: ReturnType<typeof spanOutcome> };
 const diamond = (x: number, y: number) => `M${x} ${y - 5.5}l5.5 5.5-5.5 5.5-5.5-5.5Z`;
 
-export function Track({ row, spans, events, scale, nowMs, ongoing, buddies, onOpen, onSelect, onHover, onFocusSpan, onMarker, buddyColors, selected, selectedKey = null, highlightedKey = null, ownedWaits, tabKey, boundary, height = 52, surface = "background", selectionRef }: {
+export function Track({ row, spans, events, scale, nowMs, ongoing, buddies, onOpen, onSelect, onHover, onFocusSpan, onMarker, buddyColors, selected, selectedKey = null, highlightedKey = null, ownedWaits, tabKey, boundary, height = 52, surface = "background", selectionRef, itemLinks }: {
   row: TimelineRow; spans: TimelineSpan[]; events: TimelineEvent[]; scale: TimelineScale; nowMs: number; ongoing: boolean;
   buddies?: readonly FriendlyBuddy[] | null; selected: boolean; tabKey?: string | null; boundary?: HTMLElement | null;
   /** Only this fragment is outlined; the selected row has its own neutral wash. */
   selectedKey?: string | null;
   highlightedKey?: string | null;
+  /** Detail overview links; its targets are all reachable with Tab. */
+  itemLinks?: ReadonlyMap<string, string>;
   /** The drawn selection's scale coordinates, computed from the same facts and dimensions as the SVG. */
   selectionRef?: Ref<Interval | null>;
   /** A Lead's waits for its owned micro tasks, drawn like other waits from the recorded facts. */
@@ -172,16 +174,7 @@ export function Track({ row, spans, events, scale, nowMs, ongoing, buddies, onOp
   const isHighlighted = (key: string) => selectedKey === key || highlightedKey === key;
   const middle = height / 2;
   const paper = surface === "card" ? "stroke-card" : "stroke-background";
-  const hitBox = (start: number, end: number) => {
-    const width = Math.max(28, end - start + 6);
-    return { x: Math.max(-INSET_PX, Math.min(scale.widthPx + INSET_PX - width, (start + end) / 2 - width / 2)), width };
-  };
-  // The extra width sits above and below the drawing, leaving neighbouring short bars reachable.
-  const hitPath = (start: number, end: number) => {
-    const { x, width } = hitBox(start, end);
-    const right = Math.max(start + 1, end);
-    return `M${x} ${middle - 14}H${x + width}V${middle - 11}H${right}V${middle + 11}H${x + width}V${middle + 14}H${x}V${middle + 11}H${start}V${middle - 11}H${x}Z`;
-  };
+  const hitPath = (start: number, end: number) => fragmentHitPath(start, end, middle, -INSET_PX, scale.widthPx + INSET_PX);
   const barTextY = middle + 4;
   const topTextY = 12;
   const positioned: PositionedSpan[] = [];
@@ -316,8 +309,8 @@ export function Track({ row, spans, events, scale, nowMs, ongoing, buddies, onOp
       const tail = tails.find(entry => entry.item.span === span);
       const buddyMark = buddyMarks.get(span.spanId);
       const cross = crosses.find(entry => entry.item.span === span);
-      return <Hint key={span.spanId} text={span.kind === "execution" ? identity(span) : spanReadout(span, nowMs, buddies, row)}><g role="button" tabIndex={tabKey === `span:${span.spanId}` ? 0 : -1} data-at={instant(span.startAt)!} data-key={`span:${span.spanId}`} aria-pressed={selectedKey === `span:${span.spanId}`} aria-label={t("segment", { label: spanReadout(span, nowMs, buddies, row) })}
-      onKeyDown={event => { if (event.key === "Enter") { event.preventDefault(); onOpen(row.runId, `span:${span.spanId}`); } }}
+      return <Hint key={span.spanId} text={span.kind === "execution" ? identity(span) : spanReadout(span, nowMs, buddies, row)}><g role="button" tabIndex={itemLinks?.has(`span:${span.spanId}`) || tabKey === `span:${span.spanId}` ? 0 : -1} data-linked-item={itemLinks?.get(`span:${span.spanId}`)} data-at={instant(span.startAt)!} data-key={`span:${span.spanId}`} aria-pressed={selectedKey === `span:${span.spanId}`} aria-label={t("segment", { label: spanReadout(span, nowMs, buddies, row) })}
+      onKeyDown={event => { if ((event.key === "Enter" || event.key === " ")) { event.preventDefault(); onOpen(row.runId, `span:${span.spanId}`); } }}
       onFocus={() => onFocusSpan(span)} onBlur={() => onFocusSpan(null)} onClick={event => { if (event.detail > 1) return; onSelect(row.runId, `span:${span.spanId}`); onOpen(row.runId, `span:${span.spanId}`); }} onPointerEnter={() => onHover(span)} onPointerLeave={() => onHover(null)} className="group/fragment outline-none">
       {isHighlighted(`span:${span.spanId}`) && <rect data-slot="selected-item" x={selection.left} y={execution ? middle - 13 : middle - 3} width={selection.right - selection.left} height={execution ? 26 : 6} fill="none" className="pointer-events-none stroke-focus"/>}
       <path data-slot="span-hit" d={hitPath(Math.min(start, buddyMark?.left ?? start), Math.max(end, buddyMark?.right ?? end, cross ? cross.left + 8.4 : end))} fill="transparent"/>
@@ -350,16 +343,16 @@ export function Track({ row, spans, events, scale, nowMs, ongoing, buddies, onOp
     {acceptance && <WaitingDiamond x={acceptance.start} y={middle}/>}
     {positioned.filter(item => item.span.kind === "host").map(item => <WaitingDiamond key={item.span.spanId} x={item.start} y={middle}/>)}
     {expected.map(entry => <IsolatedStatusMark slot="expected-mark" key={entry.item.span.spanId} d={`M${entry.x} ${middle - 16}v32`} paper={paper} stroke="stroke-hand-mark"/>)}
-    {singletonInquiries.map(marker => <Hint key={markerKey(marker)} text={markerReadout(marker)}><g role="button" tabIndex={tabKey === markerKey(marker) ? 0 : -1} data-at={Date.parse(markerAt(marker))} data-key={markerKey(marker)} aria-pressed={selectedKey === markerKey(marker)} aria-label={markerReadout(marker)}
+    {singletonInquiries.map(marker => <Hint key={markerKey(marker)} text={markerReadout(marker)}><g role="button" tabIndex={itemLinks?.has(markerKey(marker)) || tabKey === markerKey(marker) ? 0 : -1} data-linked-item={itemLinks?.get(markerKey(marker))} data-at={Date.parse(markerAt(marker))} data-key={markerKey(marker)} aria-pressed={selectedKey === markerKey(marker)} aria-label={markerReadout(marker)}
       onPointerEnter={() => focusMarker(marker, "hover")} onPointerLeave={() => focusMarker(null, "hover")} onFocus={() => focusMarker(marker, "focus")} onBlur={() => focusMarker(null, "focus")}
-      onClick={event => { if (event.detail > 1) return; onSelect(row.runId, markerKey(marker)); onOpen(row.runId, markerKey(marker)); }} onKeyDown={key => { if (key.key === "Enter") { key.preventDefault(); onOpen(row.runId, markerKey(marker)); } }} className="group/fragment outline-none">
+      onClick={event => { if (event.detail > 1) return; onSelect(row.runId, markerKey(marker)); onOpen(row.runId, markerKey(marker)); }} onKeyDown={key => { if ((key.key === "Enter" || key.key === " ")) { key.preventDefault(); onOpen(row.runId, markerKey(marker)); } }} className="group/fragment outline-none">
       <path data-slot="marker-hit" d={hitPath(marker.x - 5.5, marker.x + 5.5)} fill="transparent"/>
       {isHighlighted(markerKey(marker)) && <rect data-slot="selected-item" x={marker.x - INQUIRY_SELECTION_RADIUS_PX} y={middle - 9} width={INQUIRY_SELECTION_RADIUS_PX * 2} height={18} fill="none" className="pointer-events-none stroke-focus"/>}
       <path data-slot="inquiry-mark" d={diamond(marker.x, middle)} className="fill-card stroke-ink2" strokeWidth={1.3}/>
       <rect aria-hidden="true" data-slot="fragment-focus" x={marker.x - 8} y={middle - 10} width={16} height={20} fill="none" strokeWidth={2} className={cn("pointer-events-none stroke-ink opacity-0", !isHighlighted(markerKey(marker)) && "group-focus/fragment:opacity-100")}/>
     </g></Hint>)}
-    {singletonEvents.map(marker => { const { event, x } = marker; const highlighted = markerHasKey(marker, selectedKey) || markerHasKey(marker, highlightedKey); return <Hint key={event.seq} text={markerReadout(marker)}><g role="button" tabIndex={tabKey === `event:${event.seq}` ? 0 : -1} data-at={instant(event.at)!} data-key={`event:${event.seq}`} aria-pressed={markerHasKey(marker, selectedKey)} aria-label={markerReadout(marker)} onPointerEnter={() => focusMarker(marker, "hover")} onPointerLeave={() => focusMarker(null, "hover")} onFocus={() => focusMarker(marker, "focus")} onBlur={() => focusMarker(null, "focus")}
-      onClick={click => { if (click.detail > 1) return; onSelect(row.runId, `event:${event.seq}`); onOpen(row.runId, `event:${event.seq}`); }} onKeyDown={key => { if (key.key === "Enter") { key.preventDefault(); onOpen(row.runId, `event:${event.seq}`); } }} className="group/fragment outline-none">
+    {singletonEvents.map(marker => { const { event, x } = marker; const highlighted = markerHasKey(marker, selectedKey) || markerHasKey(marker, highlightedKey); return <Hint key={event.seq} text={markerReadout(marker)}><g role="button" tabIndex={itemLinks?.has(markerKey(marker)) || tabKey === `event:${event.seq}` ? 0 : -1} data-linked-item={itemLinks?.get(markerKey(marker))} data-at={instant(event.at)!} data-key={`event:${event.seq}`} aria-pressed={markerHasKey(marker, selectedKey)} aria-label={markerReadout(marker)} onPointerEnter={() => focusMarker(marker, "hover")} onPointerLeave={() => focusMarker(null, "hover")} onFocus={() => focusMarker(marker, "focus")} onBlur={() => focusMarker(null, "focus")}
+      onClick={click => { if (click.detail > 1) return; onSelect(row.runId, `event:${event.seq}`); onOpen(row.runId, `event:${event.seq}`); }} onKeyDown={key => { if ((key.key === "Enter" || key.key === " ")) { key.preventDefault(); onOpen(row.runId, `event:${event.seq}`); } }} className="group/fragment outline-none">
       <path data-slot="marker-hit" d={hitPath(x - (isConclusion(event) ? 8 : 2.5), x + (isConclusion(event) ? 8 : 2.5))} fill="transparent"/>
       {highlighted && <rect data-slot="selected-item" x={x - EVENT_SELECTION_RADIUS_PX} y={middle - 10} width={EVENT_SELECTION_RADIUS_PX * 2} height={20} fill="none" className="pointer-events-none stroke-focus"/>}
       {isConclusion(event) ? <g data-slot={event.kind === "accept" ? "accept-mark" : "failed-conclusion-mark"}>
@@ -370,7 +363,7 @@ export function Track({ row, spans, events, scale, nowMs, ongoing, buddies, onOp
     {markerGroups.filter(group => group.length > 1).map(group => {
       const center = group.reduce((sum, marker) => sum + marker.x, 0) / group.length;
       return <MarkerCluster key={markerKey(group[0]!)} markers={group} x={center} y={middle} hitPath={hitPath(center - 9, center + 9)}
-        runId={row.runId} taskTitle={displayTitle(row.titleSource, row.title).fullText} tabKey={tabKey} boundary={boundary} onOpen={onOpen} onSelect={onSelect} onFocusMarker={focusMarker} markerName={markerName} markerReadout={markerReadout} selectedKey={selectedKey} highlightedKey={highlightedKey}/>;
+        runId={row.runId} taskTitle={displayTitle(row.titleSource, row.title).fullText} tabKey={tabKey} boundary={boundary} onOpen={onOpen} onSelect={onSelect} onFocusMarker={focusMarker} markerName={markerName} markerReadout={markerReadout} selectedKey={selectedKey} highlightedKey={highlightedKey} itemLinks={itemLinks}/>;
     })}
     {labels.map((label, index) => <text aria-hidden="true" pointerEvents="none" data-slot="track-label" data-event-key={label.eventKey} key={index} x={label.left} y={label.y} className={label.className}>{label.text}</text>)}
   </svg>;

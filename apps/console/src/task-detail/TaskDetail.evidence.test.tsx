@@ -42,7 +42,7 @@ describe("a stop that is not confirmed", () => {
     found.events = found.events.filter(item => item.kind === "dispatch" || item.kind === "continue");
     open({ step: 7, timeline: found, replies: { workflow: workflow({ state: "executing" }) } });
     await ready();
-    expect(strip().querySelector('[data-key="acceptance-wait"]')).toBeNull();
+    expect(strip().querySelector('[data-key="settle:m1"]')).toBeNull();
     expect(pane().textContent).toContain("结束未确认");
   });
 });
@@ -64,7 +64,7 @@ describe("the integration and the acceptance", () => {
     expect(pane().textContent).toContain("等待验收");
     expect(pane().textContent).not.toContain("已结束");
     expect(pane().textContent).toContain("new-integration.ts");
-    expect(strip().querySelector('[data-key="acceptance-wait"]')!.getAttribute("aria-label")).toContain("等待验收");
+    expect(strip().querySelector('[data-key="settle:m1"]')!.getAttribute("aria-label")).toContain("等待验收");
     expect(head().textContent).toContain("等待验收");
   });
 
