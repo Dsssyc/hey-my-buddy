@@ -50,7 +50,7 @@ function fixture(records: Task[] = []) {
   const pendingCount = new Set(records.filter(t => t.workflow?.awaitingHost)
     .map(t => t.lineage?.rootRunId || t.runId)).size;
   const snapshot: Snapshot = { csrfToken: "csrf", eventCursor: 0,
-    consoleSession: { id: "fixture-session", canWrite: true, reason: null },
+    consoleSession: { id: "fixture-session" },
 
     configuration: { routerBuddyIds: [buddies[0].buddyId], routerRetryIntervalSeconds: 600, defaultRoutingMode: "review" as const, routingBudget: "standard"},
     buddies,

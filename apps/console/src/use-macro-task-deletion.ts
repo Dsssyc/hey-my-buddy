@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { ApiError, isSessionExpiredRefusal, uncertainResponse } from "./api";
 import type { ConsoleApi } from "./api";
+import { sessionCanWrite } from "./console-session";
 import type { AuthorityLatch } from "./console-session";
 import type { Snapshot } from "./types";
 import { parseMacroTaskDeletionPreview, parseMacroTaskDeletionResult } from "./macro-task-deletion";
@@ -31,7 +32,7 @@ export function useMacroTaskDeletion(macroTaskId: string, client: MacroTaskDelet
   const completed = useRef(false);
   const canWrite = () => {
     const { snapshot, authority, writesAvailable } = current.current;
-    return writesAvailable && (authority ? authority.writable(snapshot) : snapshot.consoleSession?.canWrite === true);
+    return writesAvailable && (authority ? authority.writable(snapshot) : sessionCanWrite(snapshot));
   };
   const loseAuthority = (error: unknown) => {
     if (isSessionExpiredRefusal(error)) current.current.authority?.lose(current.current.snapshot.consoleSession.id);

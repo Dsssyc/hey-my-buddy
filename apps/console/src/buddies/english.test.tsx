@@ -73,9 +73,9 @@ const buddies = [
   buddy("zcode", "zhipu", "glm-5", "default", { available: false, unavailableReason: { code: "catalog.model-absent", params: {} } }),
 ];
 
-function world(canWrite = true) {
+function world(sessionPresent = true) {
   return fixture(snapshot({
-    routers: [buddies[0].buddyId], canWrite,
+    routers: [buddies[0].buddyId], sessionPresent,
     routingHealth: health({ consecutiveFailures: 2, failureCount: 3, abstentionCount: 1, boundsRejectedCount: 1,
       recentFailures: [{ decisionId: "decision-1", runId: "run-1", at: AT, code: "routing-bounds-rejected" }] }),
     extra: { buddies, modelServiceConcurrency: [{ harness: "dsh", provider: "deepseek-official", model: "deepseek-flash", limit: 2, active: 1 }], harnesses, unavailableBuddyCount: 3 },

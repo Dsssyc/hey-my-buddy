@@ -30,18 +30,14 @@ export function isSessionExpiredRefusal(error: unknown): boolean {
 
 /**
  * Strict parse of the authenticated snapshot's session descriptor. The live
- * service issues exactly `{id, canWrite: true, reason: null}` for a valid
- * login; anything else — a missing descriptor, a non-string id, a non-true
- * `canWrite` or any non-null reason — is malformed and never grants write
- * access. An expired or absent login is reported by the HTTP layer as a 401
- * `CONSOLE_SESSION_EXPIRED`, not by a writable-but-flagged descriptor.
+ * service issues `{id}` for a valid login. A missing descriptor or invalid id
+ * is malformed and never grants write access. An expired or absent login is
+ * reported by the HTTP layer as a 401 `CONSOLE_SESSION_EXPIRED`.
  */
 function parseConsoleSession(value: unknown): ConsoleSession {
   const session = value as Partial<ConsoleSession> | null | undefined;
   const valid = !!session && typeof session === "object" && !Array.isArray(session)
-    && typeof session.id === "string" && session.id.trim().length > 0
-    && session.canWrite === true
-    && session.reason === null;
+    && typeof session.id === "string" && session.id.trim().length > 0;
   if (!valid) {
     throw new ApiError(
       "INVALID_RESPONSE",

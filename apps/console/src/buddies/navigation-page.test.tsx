@@ -80,7 +80,7 @@ type SnapshotWithHarnesses = Snapshot & { harnesses: HarnessHealth[] };
 function snapshot(routerBuddyId: string | null = solMediumId): SnapshotWithHarnesses {
   const base: Snapshot = {
     csrfToken: "csrf", eventCursor: 0,
-    consoleSession: { id: "fixture-session", canWrite: true, reason: null },
+    consoleSession: { id: "fixture-session" },
 
     configuration: { routerBuddyIds: routerBuddyId ? [routerBuddyId] : [], routerRetryIntervalSeconds: 600,
       defaultRoutingMode: "review" as const, routingBudget: "standard" },

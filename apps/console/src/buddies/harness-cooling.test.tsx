@@ -68,7 +68,7 @@ describe("provider cooldown", () => {
 
   it("honors write permission and does not send from a read-only session", async () => {
     const user = userEvent.setup();
-    const f = fixture({ harnesses: rows(), readOnly: true });
+    const f = fixture({ harnesses: rows(), missingSession: true });
     await openHarness(f);
     expect(clear().getAttribute("aria-disabled")).toBe("true");
     await user.click(clear());

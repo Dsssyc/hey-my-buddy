@@ -40,7 +40,7 @@ type LimitPatch = { harness: string; provider: string; model: string; limit: num
 function fixture(options: { discoveryLimit?: number } = {}) {
   const buddies = catalog();
   let state: Snapshot = {
-    csrfToken: "csrf", eventCursor: 0, consoleSession: { id: "fixture-session", canWrite: true, reason: null },
+    csrfToken: "csrf", eventCursor: 0, consoleSession: { id: "fixture-session" },
 
     configuration: { routerBuddyIds: [flashOff], routerRetryIntervalSeconds: 600, defaultRoutingMode: "review" as const, routingBudget: "standard"},
     buddies,

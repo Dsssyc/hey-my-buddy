@@ -216,7 +216,7 @@ describe("synthetic preview fixtures through the real console parsers", () => {
   it("declares the seven preview reads and internal lineage records and a self-consistent manifest", () => {
     expect(manifest.fixtureVersion).toBe(1);
     expect(manifest.source).toBe("tests/probes/macro_task_console_preview.py");
-    expect(manifest.scenarios).toEqual(["normal", "readonly", "truncated", "error"]);
+    expect(manifest.scenarios).toEqual(["normal", "truncated", "error"]);
     expect(new Set(manifest.files.map(entry => entry.kind))).toEqual(
       new Set(["console-snapshot", "lineage-records", "runtime-version", "macro-tasks-page", "macro-task-timeline", "workflow-get", "workflow-audit", "message-list"]));
     for (const entry of manifest.files) {
@@ -235,13 +235,11 @@ describe("synthetic preview fixtures through the real console parsers", () => {
     });
     expect(failed, JSON.stringify(failed.map(item => `${item.path}: accepted=${item.accepted} code=${item.code} ${String(item.facts.refusal ?? "")}`))).toEqual([]);
 
-    // The four preview scenarios stay covered, and the error scenario stays visibly broken.
+    // The three preview scenarios stay covered, and the error scenario stays visibly broken.
     const byScenario = new Map<string, Outcome[]>();
     for (const outcome of outcomes) byScenario.set(outcome.scenario, [...(byScenario.get(outcome.scenario) ?? []), outcome]);
     const entryFor = (outcome: Outcome) => manifest.files.find(item => item.path === outcome.path)!;
     expect([...byScenario.keys()].sort()).toEqual([...manifest.scenarios, "incompatible"].sort());
-    expect(byScenario.get("readonly")!.some(outcome => outcome.kind === "console-snapshot" && outcome.code === "INVALID_RESPONSE")).toBe(true);
-    expect(byScenario.get("readonly")!.some(outcome => outcome.kind === "workflow-get" && outcome.accepted)).toBe(true);
     expect(byScenario.get("truncated")!.find(outcome => outcome.kind === "macro-task-timeline")!.accepted).toBe(true);
     expect(byScenario.get("error")!.filter(outcome => !outcome.accepted).map(outcome => outcome.code))
       .toEqual(["SERVICE_UNAVAILABLE", "SERVICE_UNAVAILABLE"]);

@@ -55,7 +55,7 @@ const otherHarness: Buddy = { ...worker, buddyId: "zcode:bigmodel-api:glm:high",
 function snapshot(buddies: Buddy[] = [worker], extra: Partial<Snapshot> = {}): Snapshot {
   return {
     csrfToken: "csrf", eventCursor: 0,
-    consoleSession: { id: "fixture-session", canWrite: true, reason: null },
+    consoleSession: { id: "fixture-session" },
 
     configuration: { routerBuddyIds: [worker.buddyId], routerRetryIntervalSeconds: 600, defaultRoutingMode: "review" as const, routingBudget: "standard"},
     buddies,

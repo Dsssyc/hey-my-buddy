@@ -2,12 +2,11 @@ import i18n from "i18next";
 import type { Snapshot } from "./types";
 
 /**
- * Whether this snapshot grants write authority. A missing or malformed
- * descriptor never counts as write access, so an unrecognized response cannot
- * enable a mutation control.
+ * Whether this snapshot carries a session. The API parser validates its id
+ * when it crosses the HTTP boundary.
  */
 export function sessionCanWrite(snapshot: Snapshot): boolean {
-  return snapshot?.consoleSession?.canWrite === true;
+  return Boolean(snapshot?.consoleSession);
 }
 
 /**
@@ -16,7 +15,7 @@ export function sessionCanWrite(snapshot: Snapshot): boolean {
  * A definite `CONSOLE_SESSION_EXPIRED` (HTTP 401) refusal latches the loss
  * for that public session id: the refusal proves the board no longer accepts
  * this session's writes, and a later render that still carries an older
- * writable snapshot must not silently restore write access. Only a genuinely
+ * valid snapshot must not silently restore write access. Only a genuinely
  * different session id (a fresh login, normally a page reload) can be
  * writable again. The latch is deliberately not a security boundary; the
  * board enforces authority regardless of UI state.

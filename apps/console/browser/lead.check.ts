@@ -95,7 +95,7 @@ for (const { locale, language, tasks } of [
 
     });
 
-    test("confirms the Lead's macro task stop scope and keeps the real read-only refusal honest", async ({ page }) => {
+    test("confirms the Lead's macro task stop scope and shows the synthetic preview refusal", async ({ page }) => {
       const errors = observeErrors(page);
       const commands: unknown[] = [];
       page.on("request", request => {
@@ -146,13 +146,14 @@ for (const { locale, language, tasks } of [
       const response = await refusal;
       expect(response.status()).toBe(403);
       expect(response.headers()["x-hey-my-buddy-preview"]).toBe("synthetic-fixture-data");
-      expect(await response.json()).toMatchObject({ ok: false, error: { code: "CONSOLE_READ_ONLY" } });
+      expect(await response.json()).toMatchObject({ ok: false, error: { code: "FORBIDDEN" } });
       expect(commands).toEqual([{ operation: "macro_task_stop", params: { macroTaskId: MACRO, commandId: expect.any(String) } }]);
       expect(response.request().postDataJSON().params.commandId).not.toBe("");
       await expect(dialog).toBeHidden();
       const status = page.locator("[data-slot=macro-stop-state]");
       await expect(status).toHaveText(zh ? "停止请求未提交" : "Stop request was refused");
-      await expect(status).toHaveAttribute("aria-description", /This synthetic preview simulates deletion only; other writes are refused/);
+      await expect(status).toHaveAttribute("aria-description", zh
+        ? "无操作权限；请重新打开控制台。" : "You may not do this; reopen the console.");
       await expectTextUncut(status);
       await expect(page.getByText(zh ? "已停止" : "Stopped", { exact: true })).toHaveCount(0);
       await expect(page.getByRole("button", { name: zh ? "重试停止" : "Retry stop", exact: true })).toHaveCount(0);

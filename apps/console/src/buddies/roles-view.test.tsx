@@ -527,7 +527,7 @@ describe("what leaves the roles view out of use", () => {
   });
 
   it("leaves the controls out of use in a session that cannot write, with the reason, and still shows the records", async () => {
-    const f = fixture(snapshot({ routers: [MEDIUM_ID, FLASH_ID], canWrite: false, routingHealth: health({ currentRouterBuddyId: MEDIUM_ID }) }));
+    const f = fixture(snapshot({ routers: [MEDIUM_ID, FLASH_ID], sessionPresent: false, routingHealth: health({ currentRouterBuddyId: MEDIUM_ID }) }));
     const user = userEvent.setup();
     await openRoles(f);
     const reason = "浏览器授权已失效，重新授权后可以修改";

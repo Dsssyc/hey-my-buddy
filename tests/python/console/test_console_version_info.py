@@ -15,6 +15,7 @@ from support import BoardTestCase
 from hey_my_buddy.blackboard.store.db import SCHEMA_VERSION
 from hey_my_buddy.console import version_info
 from hey_my_buddy.console.console_sessions import ConsoleSessions
+from hey_my_buddy.errors import BoardError
 from hey_my_buddy.install import launcher, runtime
 from hey_my_buddy.protocol.contracts import CONTRACT_VERSION
 
@@ -121,19 +122,29 @@ class VersionInfoTests(unittest.TestCase):
         self.assertEqual(info["running"]["sourceCommit"], "installed-ready-commit")
         self.assertEqual(info["running"]["installedAt"], "2026-09-30T01:02:03Z")
 
-    def test_missing_or_damaged_metadata_stays_unknown_without_git(self):
-        (self.source / "src/hey_my_buddy/build-info.json").write_text("broken json", encoding="utf-8", newline="\n")
-        (self.source / "pyproject.toml").write_text("broken toml", encoding="utf-8", newline="\n")
-        self.ready(recorded=False)
-        (self.installed / "src/hey_my_buddy/protocol/contracts.py").write_text("# not recorded\n", encoding="utf-8", newline="\n")
-        (self.installed / "src/hey_my_buddy/blackboard/store/db.py").write_text("# not recorded\n", encoding="utf-8", newline="\n")
+    def test_malformed_or_unreadable_source_metadata_propagates(self):
+        build_info = self.source / "src/hey_my_buddy/build-info.json"
         with mock.patch.object(runtime.subprocess, "check_output") as git:
-            info = version_info.version_info(self.state)
+            build_info.write_text("broken json", encoding="utf-8", newline="\n")
+            with self.assertRaises(json.JSONDecodeError):
+                version_info.version_info(self.state)
+            build_info.write_text(json.dumps({"sourceCommit": "source-recorded-commit"}), encoding="utf-8")
+            (self.source / "pyproject.toml").write_text("broken toml", encoding="utf-8", newline="\n")
+            with self.assertRaises(ValueError):
+                version_info.version_info(self.state)
         git.assert_not_called()
-        self.assertIsNone(info["running"]["softwareVersion"])
-        self.assertIsNone(info["running"]["sourceCommit"])
-        for field in ("contractVersion", "schemaVersion", "sourceCommit", "installedAt"):
-            self.assertIsNone(info["installed"][field])
+
+    def test_malformed_ready_metadata_propagates(self):
+        self.ready()
+        contract = self.installed / "src/hey_my_buddy/protocol/contracts.py"
+        contract.write_text("# missing declaration\n", encoding="utf-8", newline="\n")
+        with self.assertRaises(ValueError):
+            version_info.version_info(self.state)
+
+    def test_ready_runtime_without_required_identity_fails(self):
+        self.ready(recorded=False)
+        with self.assertRaises(KeyError):
+            version_info.version_info(self.state)
 
     def test_source_uses_validated_active_old_runtime_without_a_pin(self):
         self.ready(pin=False)
@@ -166,32 +177,21 @@ class VersionInfoTests(unittest.TestCase):
         self.assertEqual(info["running"]["softwareVersion"], "7.2.1")
         self.assertIsNone(info["installed"])
 
-    def test_source_keeps_running_facts_when_active_metadata_is_damaged(self):
+    def test_source_reports_damaged_active_metadata(self):
         self.ready(pin=False)
         launcher.write_active_runtime(self.state, self.installed)
         pointer = self.state / "active-runtime.json"
         for damaged in ("broken json", "[]", json.dumps({"format": 1, "contentId": "wrong", "runtimeDir": str(self.installed)}),
-                        json.dumps({"format": 1, "contentId": self.source.name, "runtimeDir": str(self.source)}),
-                        json.dumps({"format": 1, "contentId": "c" * 32, "runtimeDir": str(self.installed.parent / ("c" * 32))})):
+                        json.dumps({"format": 1, "contentId": self.source.name, "runtimeDir": str(self.source)})):
             with self.subTest(pointer=damaged):
                 pointer.write_text(damaged, encoding="utf-8", newline="\n")
-                try:
-                    info = version_info.version_info(self.state)
-                except Exception as error:
-                    self.fail(f"Damaged installation metadata hid running facts: {type(error).__name__}")
-                self.assertEqual(info["running"]["softwareVersion"], "7.2.1")
-                self.assertEqual(info["running"]["sourceCommit"], "source-recorded-commit")
-                self.assertIsNone(info["installed"])
+                with self.assertRaises((BoardError, AttributeError)):
+                    version_info.version_info(self.state)
 
-    def test_source_keeps_running_facts_when_active_selection_is_unreadable(self):
+    def test_source_reports_unreadable_active_selection(self):
         with mock.patch.object(launcher, "selected_runtime", side_effect=OSError("private-state-unreadable")):
-            try:
-                info = version_info.version_info(self.state)
-            except Exception as error:
-                self.fail(f"Unreadable installation metadata hid running facts: {type(error).__name__}")
-        self.assertEqual(info["running"]["mode"], "source")
-        self.assertEqual(info["running"]["softwareVersion"], "7.2.1")
-        self.assertIsNone(info["installed"])
+            with self.assertRaisesRegex(OSError, "private-state-unreadable"):
+                version_info.version_info(self.state)
 
 
 class _VersionConsoleTestCase(BoardTestCase):

@@ -32,7 +32,7 @@ describe("L4 ordered Router list configuration", () => {
 
 describe("snapshot upgrade boundary and routing health", () => {
   const configuration = { routerBuddyIds: ["head"], routerRetryIntervalSeconds: 600, defaultRoutingMode: "fast", routingBudget: "standard" };
-  const snapshot = { csrfToken: "csrf", eventCursor: 0, consoleSession: { id: "session", canWrite: true, reason: null }, configuration, configurationError: null, buddies: [],
+  const snapshot = { csrfToken: "csrf", eventCursor: 0, consoleSession: { id: "session" }, configuration, configurationError: null, buddies: [],
     preferences: [], modelServiceNotes: [], modelServiceConcurrency: [],
     tasks: { pendingCount: 0 } };
   const error = { code: "router-settings-upgrade-required", message: "Router 设置需升级" };
@@ -237,7 +237,7 @@ describe("local read verification evidence", () => {
 });
 
 describe("conditional reads (ETag / If-None-Match / 304)", () => {
-  const snapshot = { csrfToken: "csrf", eventCursor: 0, consoleSession: { id: "session", canWrite: true, reason: null }, configuration: { routerBuddyIds: [], routerRetryIntervalSeconds: 600, defaultRoutingMode: "fast", routingBudget: "brief" },
+  const snapshot = { csrfToken: "csrf", eventCursor: 0, consoleSession: { id: "session" }, configuration: { routerBuddyIds: [], routerRetryIntervalSeconds: 600, defaultRoutingMode: "fast", routingBudget: "brief" },
     configurationError: null, buddies: [], preferences: [], modelServiceNotes: [], modelServiceConcurrency: [], tasks: { pendingCount: 3 } };
   function jsonResponse(value: unknown, etag?: string) {
     const headers: Record<string, string> = { "Content-Type": "application/json" };
@@ -317,8 +317,8 @@ describe("conditional reads (ETag / If-None-Match / 304)", () => {
     const fetcher = queued([
       () => jsonResponse(snapshot, '"s1"'),
       () => new Response(JSON.stringify({ ok: false, error: { code: "CONSOLE_SESSION_EXPIRED", message: "expired" } }), { status: 401 }),
-      () => jsonResponse({ ...snapshot, csrfToken: "csrf-2", consoleSession: { id: "session-2", canWrite: true, reason: null } }, '"s2"'),
-      () => jsonResponse({ ...snapshot, csrfToken: "csrf-2", consoleSession: { id: "session-2", canWrite: true, reason: null } }, '"s2"'),
+      () => jsonResponse({ ...snapshot, csrfToken: "csrf-2", consoleSession: { id: "session-2" } }, '"s2"'),
+      () => jsonResponse({ ...snapshot, csrfToken: "csrf-2", consoleSession: { id: "session-2" } }, '"s2"'),
     ]);
     const api = createApi("/private/", fetcher);
     await api.snapshot();
@@ -360,7 +360,7 @@ describe("conditional reads (ETag / If-None-Match / 304)", () => {
   });
 
   it("never publishes a reply issued before a session change after the clear", async () => {
-    const sessionB = { ...snapshot, csrfToken: "csrf-b", consoleSession: { id: "session-b", canWrite: true, reason: null } };
+    const sessionB = { ...snapshot, csrfToken: "csrf-b", consoleSession: { id: "session-b" } };
     let releaseTask: ((value: Response) => void) | undefined;
     const taskReply = new Promise<Response>(resolve => { releaseTask = resolve; });
     const fetcher = vi.fn<typeof fetch>()
@@ -402,7 +402,7 @@ describe("conditional reads (ETag / If-None-Match / 304)", () => {
   });
 
   it("refuses a 304 whose session changed in flight instead of serving the previous session's body", async () => {
-    const sessionB = { ...snapshot, csrfToken: "csrf-b", consoleSession: { id: "session-b", canWrite: true, reason: null } };
+    const sessionB = { ...snapshot, csrfToken: "csrf-b", consoleSession: { id: "session-b" } };
     let release304: ((value: Response) => void) | undefined;
     const reply304 = new Promise<Response>(resolve => { release304 = resolve; });
     const fetcher = vi.fn<typeof fetch>()

@@ -5,17 +5,15 @@ projection depends on has changed. This module owns the honesty rules of that
 shortcut:
 
 * The database marker is ``PRAGMA data_version`` read on **one persistent
-  connection** of this cache, prefixed by that connection's epoch. The value
+  connection** of this cache, prefixed by the connection's epoch. The value
   only moves when another connection commits, so it covers every committed
   change — including this process's own writes, which always travel through
   their own short-lived connections. A new connection per check would restart
-  the baseline and mistake real changes for stillness, and a reconnection
-  (a replaced database file, a transient error) can repeat an earlier value;
-  the epoch makes every reconnect invalidate the whole cache, which is why
-  the connection lives here and nowhere else.
+  the baseline and mistake real changes for stillness. Closing and reopening
+  the same console reconnects this cache, so its epoch still distinguishes the
+  retained entries from the new connection's repeated data_version.
 * A projection is generated between two marker reads. If the marker moved in
-  between, the body is never bound to the newer marker; generation retries and
-  the final attempt is served uncached rather than guessing. Non-database
+  between, the body is served uncached. Non-database
   marker components (a callable ``extra_marker``, such as the console's
   session-set fingerprint) follow the same double-read rule.
 * Fields derived from the current time do not force per-poll recomputation.
@@ -42,12 +40,11 @@ from __future__ import annotations
 import gzip
 import hashlib
 import json
-import os
 import sqlite3
 import threading
 import time
 from collections import OrderedDict
-from datetime import datetime, timezone
+from datetime import datetime
 from typing import Any, Callable
 
 #: Keys whose absolute value is a semantic boundary: when the clock passes it,
@@ -65,24 +62,12 @@ MAX_ENTRY_SECONDS = 3600.0
 #: keeps a pathological client from pinning memory with unique queries.
 MAX_ENTRIES = 64
 
-#: Generation retries before serving an unstable read uncached.
-MAX_GENERATION_ATTEMPTS = 3
 
-
-def parse_boundary(value: Any) -> float | None:
-    """One absolute timestamp as epoch seconds, or ``None`` when unparseable."""
-    if not isinstance(value, str) or not value:
+def parse_boundary(value: str | None) -> float | None:
+    """One board timestamp as epoch seconds; absent optional boundaries stay absent."""
+    if value is None:
         return None
-    text = value.strip()
-    if text.endswith(("Z", "z")):
-        text = text[:-1] + "+00:00"
-    try:
-        moment = datetime.fromisoformat(text)
-    except ValueError:
-        return None
-    if moment.tzinfo is None:
-        moment = moment.replace(tzinfo=timezone.utc)
-    return moment.timestamp()
+    return datetime.strptime(value, "%Y-%m-%dT%H:%M:%S.%f%z").timestamp()
 
 
 def collect_deadline(projection: Any, *, after: float) -> float:
@@ -119,66 +104,31 @@ class _MarkerConnection:
 
     Every board write commits through its own short-lived connection, so this
     connection always observes other-connection commits — the only kind there
-    is. ``PRAGMA data_version`` is per-connection state whose absolute value
-    can repeat: a replaced database file (a restore, a rollback) restarts it,
-    and a fresh connection on the same file re-reads the same value. A later
-    connection must therefore never vouch for bodies cached under an earlier
-    one, so the marker carries a connection epoch — a counter incremented on
-    every (re)connect — and every reconnect invalidates the whole cache.
-    Over-reporting costs one recomputation per entry; a repeated value would
-    freeze every other query and session on pre-replacement data.
-
-    The file identity (device, inode) is recorded when the connection opens
-    and re-checked on every read: a path that now names a different file
-    closes the connection and reports ``None`` (treated as "changed"), as
-    does any OS error. ``None`` is never a reusable marker value.
+    is. The connection stays open for this cache's lifetime so the value can
+    be compared across reads.
     """
 
     def __init__(self, database):
         self._database = database
         self._connection: sqlite3.Connection | None = None
-        self._identity: tuple[int, int] | None = None
         self._epoch = 0
         self._lock = threading.Lock()
 
-    def data_version(self) -> tuple[int, int] | None:
+    def data_version(self) -> tuple[int, int]:
         with self._lock:
-            try:
-                if self._connection is None:
-                    self._connection = sqlite3.connect(
-                        self._database.path, isolation_level=None, timeout=10, check_same_thread=False
-                    )
-                    self._database._configure(self._connection)
-                    self._identity = self._path_identity()
-                    self._epoch += 1
-                elif self._path_identity() != self._identity:
-                    self._close_locked()
-                    return None
-                return (self._epoch, int(self._connection.execute("PRAGMA data_version").fetchone()[0]))
-            except (sqlite3.Error, OSError):
-                self._close_locked()
-                return None
-
-    def _path_identity(self) -> tuple[int, int] | None:
-        """The (device, inode) the marker's path currently names, or ``None``."""
-        try:
-            information = os.stat(self._database.path)
-        except OSError:
-            return None
-        return (information.st_dev, information.st_ino)
+            if self._connection is None:
+                self._connection = sqlite3.connect(
+                    self._database.path, isolation_level=None, timeout=10, check_same_thread=False
+                )
+                self._database._configure(self._connection)
+                self._epoch += 1
+            return (self._epoch, int(self._connection.execute("PRAGMA data_version").fetchone()[0]))
 
     def close(self) -> None:
         with self._lock:
-            self._close_locked()
-
-    def _close_locked(self) -> None:
-        self._identity = None
-        if self._connection is not None:
-            try:
+            if self._connection is not None:
                 self._connection.close()
-            except sqlite3.Error:
-                pass
-            self._connection = None
+                self._connection = None
 
 
 class Entry:
@@ -203,19 +153,11 @@ class Entry:
 
     def validator(self, coding: str) -> str:
         """The strong validator of one representation, quoted per RFC 9110."""
-        if coding == "gzip":
-            return self.gzip_etag
-        if coding == "identity":
-            return self.identity_etag
-        raise ValueError(f"unknown representation coding: {coding!r}")
+        return self.gzip_etag if coding == "gzip" else self.identity_etag
 
     def representation(self, coding: str) -> bytes:
         """The exact bytes of one representation."""
-        if coding == "gzip":
-            return self.gzip
-        if coding == "identity":
-            return self.body
-        raise ValueError(f"unknown representation coding: {coding!r}")
+        return self.gzip if coding == "gzip" else self.body
 
 
 def gzip_body(body: bytes) -> bytes:
@@ -289,10 +231,6 @@ class ReadOutcome:
         self.entry = entry
         self.not_modified = not_modified
 
-    @property
-    def value(self) -> dict:
-        return json.loads(self.entry.body)
-
 
 class ReadCache:
     """Marker-checked, session-private response cache for one console."""
@@ -304,35 +242,23 @@ class ReadCache:
         self._marker_connection = _MarkerConnection(database)
         self._lock = threading.RLock()
         self._entries: OrderedDict[tuple, Entry] = OrderedDict()
-        #: Per-route generation counters, in-process evidence for tests and the
-        #: measurement script: a cache hit must not move them.
-        self.calls: dict[str, dict[str, int]] = {}
 
     def close(self) -> None:
         self._marker_connection.close()
 
-    def _count(self, kind: str, name: str) -> None:
-        counts = self.calls.setdefault(kind, {"projections": 0, "serializations": 0})
-        counts[name] = counts.get(name, 0) + 1
-
-    def marker(self, extra: tuple | Callable[[], tuple] = ()) -> tuple | None:
-        """The current change marker, or ``None`` when it cannot be trusted.
+    def marker(self, extra: tuple | Callable[[], tuple] = ()) -> tuple:
+        """The current change marker.
 
         The database component is ``(epoch, data_version)`` of one persistent
-        connection: the epoch increments on every reconnect, so a replaced
-        database or a transient connection error invalidates every cached
-        entry at once even when the new connection's ``data_version`` repeats
-        an earlier value. ``extra`` may be a tuple or a callable returning
+        connection. ``extra`` may be a tuple or a callable returning
         one; a callable is re-evaluated on every read so non-database state
         (for example the console's session set) follows the same
         before/after double-read rule as the database version.
         """
-        identity = self._marker_connection.data_version()
-        if identity is None:
-            return None
+        version = self._marker_connection.data_version()
         if callable(extra):
             extra = extra()
-        return (*identity, *extra)
+        return (*version, *extra)
 
     def serve(
         self,
@@ -359,8 +285,6 @@ class ReadCache:
         database version.
         """
         now = self._clock()
-        if coding not in ("identity", "gzip"):
-            raise ValueError(f"unknown representation coding: {coding!r}")
         cached_key = (kind, key, session)
         with self._lock:
             entry = self._entries.get(cached_key)
@@ -369,22 +293,17 @@ class ReadCache:
         marker = self.marker(extra_marker)
         if (
             entry is not None
-            and marker is not None
             and entry.marker == marker
             and now < entry.deadline
         ):
             if if_none_match is not None and if_none_match_matches(if_none_match, entry.validator(coding)):
                 return ReadOutcome(entry, not_modified=True)
             return ReadOutcome(entry)
-        for _ in range(MAX_GENERATION_ATTEMPTS):
-            before = self.marker(extra_marker)
-            self._count(kind, "projections")
-            projection, hint = generate()
-            self._count(kind, "serializations")
-            body = json.dumps(projection, ensure_ascii=False).encode()
-            after = self.marker(extra_marker)
-            if before is None or after is None or before != after:
-                continue
+        before = marker
+        projection, hint = generate()
+        body = json.dumps(projection, ensure_ascii=False).encode()
+        after = self.marker(extra_marker)
+        if before == after:
             boundaries = [now + max_age]
             if hint is not None:
                 boundaries.append(hint)
@@ -398,14 +317,5 @@ class ReadCache:
             if if_none_match is not None and if_none_match_matches(if_none_match, entry.validator(coding)):
                 return ReadOutcome(entry, not_modified=True)
             return ReadOutcome(entry)
-        # The board kept changing under generation; answer with fresh bytes that
-        # no marker vouches for rather than caching a torn projection.
-        self._count(kind, "projections")
-        projection, _hint = generate()
-        self._count(kind, "serializations")
-        return ReadOutcome(Entry(json.dumps(projection, ensure_ascii=False).encode(), (), float("inf"), now))
-
-    def invalidate(self) -> None:
-        """Drop every entry (used when console-level state shifts underneath)."""
-        with self._lock:
-            self._entries.clear()
+        # A concurrent write left this generation without a stable marker.
+        return ReadOutcome(Entry(body, (), float("inf"), now))

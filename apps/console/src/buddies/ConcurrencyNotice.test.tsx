@@ -19,10 +19,10 @@ const languages = [
   },
 ];
 
-async function openDrawer(canWrite = true) {
+async function openDrawer(sessionPresent = true) {
   const user = userEvent.setup();
   window.location.hash = "#buddies/catalog";
-  render(<App suppliedApi={fixture(snapshot({ canWrite })).api} />);
+  render(<App suppliedApi={fixture(snapshot({ sessionPresent })).api} />);
   await user.click(await screen.findByRole("button", { name: MODEL }));
   return screen.getByRole("region", { name: MODEL });
 }
@@ -35,10 +35,10 @@ afterEach(async () => {
 });
 
 describe("the concurrency notice in the model settings", () => {
-  for (const copy of languages) for (const canWrite of [true, false]) {
-    it(`shows the full ${copy.language} copy and associates it with the limit in a ${canWrite ? "writable" : "read-only"} session`, async () => {
+  for (const copy of languages) for (const sessionPresent of [true, false]) {
+    it(`shows the full ${copy.language} copy and associates it with the limit with ${sessionPresent ? "a session" : "no session"}`, async () => {
       await i18n.changeLanguage(copy.language);
-      const drawer = await openDrawer(canWrite);
+      const drawer = await openDrawer(sessionPresent);
       const notice = within(drawer).getByRole("note", { name: copy.title });
       expect(within(notice).getByRole("heading", { name: copy.title }).textContent).toBe(copy.title);
       expect(within(notice).getByText(copy.body).textContent).toBe(copy.body);
@@ -46,7 +46,7 @@ describe("the concurrency notice in the model settings", () => {
       const descriptions = input.getAttribute("aria-describedby")!.split(" ").map(id => document.getElementById(id)!);
       expect(descriptions).toContain(notice);
       expect(descriptions.map(element => element.textContent).join(" ")).toContain(copy.body);
-      expect(input.readOnly).toBe(!canWrite);
+      expect(input.readOnly).toBe(!sessionPresent);
       expect(within(drawer).getByRole("textbox", { name: copy.note })).toBeTruthy();
       expect(notice.closest("[role=tooltip]")).toBeNull();
     });

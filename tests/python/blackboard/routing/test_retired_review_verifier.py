@@ -67,6 +67,9 @@ class RetiredVerifierSurfaceTests(unittest.TestCase):
 class RetiredVerifierServiceTests(BoardTestCase):
     def test_service_and_console_entries_reject_without_native_work(self):
         board = self.board()
+        board.console.start(issue_ticket=False)
+        session = board.console._local_session
+        board.service.register_console_authority(session.cookie, session.id)
         with mock.patch("subprocess.Popen", side_effect=AssertionError("native process")), \
              mock.patch("subprocess.run", side_effect=AssertionError("native process")):
             for params in ({"harness": "codex"},
@@ -77,7 +80,7 @@ class RetiredVerifierServiceTests(BoardTestCase):
                     board.call("harness_verify", params)
                 self.assertEqual(refused.exception.code, "METHOD_NOT_FOUND")
             with self.assertRaises(BoardError) as refused:
-                board.console.command("harness_verify", {"harness": "codex", "execute": True})
+                board.console.command("harness_verify", {"harness": "codex", "execute": True}, session=session)
             self.assertEqual(refused.exception.code, "METHOD_NOT_FOUND")
             self.assertNotIn("harness_verify", CONSOLE_OPERATIONS)
             with board.store.db.read() as db:

@@ -51,7 +51,7 @@ export function snapshot(rows: HarnessHealth[] = harnesses()): HarnessSnapshot {
     enabled: true, capabilities: ["execution:claude", "decision"], contextWindow: 200_000, description: "", source: "catalog:fixture" };
   return {
     csrfToken: "csrf", eventCursor: 0,
-    consoleSession: { id: "fixture-session", canWrite: true, reason: null },
+    consoleSession: { id: "fixture-session" },
 
     configuration: { routerBuddyIds: [mediumId], routerRetryIntervalSeconds: 600, defaultRoutingMode: "review", routingBudget: "standard" },
     buddies: [buddy],
@@ -67,8 +67,8 @@ export function snapshot(rows: HarnessHealth[] = harnesses()): HarnessSnapshot {
 type Reply = (params: Record<string, any>) => unknown;
 type FixtureOptions = {
   harnesses?: HarnessHealth[];
-  /** The session cannot write. */
-  readOnly?: boolean;
+  /** No browser session was supplied to the view. */
+  missingSession?: boolean;
   failFirstCheck?: boolean;
   failFirstSet?: boolean;
   /** Answers for any other command, by operation. */
@@ -77,7 +77,7 @@ type FixtureOptions = {
 
 export function fixture(options: FixtureOptions = {}) {
   let state = snapshot(options.harnesses);
-  if (options.readOnly) state = { ...state, consoleSession: { id: "expired", canWrite: false, reason: null } };
+  if (options.missingSession) state = { ...state, consoleSession: undefined as unknown as Snapshot["consoleSession"] };
   const calls: { operation: string; params: Record<string, any> }[] = [];
   let checksToFail = options.failFirstCheck ? 1 : 0;
   let setsToFail = options.failFirstSet ? 1 : 0;

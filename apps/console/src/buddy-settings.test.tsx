@@ -83,7 +83,7 @@ type HarnessSnapshot = Snapshot & { harnesses: HarnessHealth[] };
 function snapshot(options: Options = {}): HarnessSnapshot {
   const base: Snapshot = {
     csrfToken: "csrf", eventCursor: 0,
-    consoleSession: { id: "fixture-session", canWrite: true, reason: null },
+    consoleSession: { id: "fixture-session" },
 
     configuration: options.configurationUnavailable ? null : { routerBuddyIds: options.routerBuddyId === undefined ? [mediumId] : options.routerBuddyId === null ? [] : [options.routerBuddyId],
       routerRetryIntervalSeconds: 600, defaultRoutingMode: "review" as const, routingBudget: "standard" },

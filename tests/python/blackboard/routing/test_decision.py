@@ -836,18 +836,22 @@ class DecisionSurfaceTests(DecisionTestCase):
             self.assertIn(method, cli.METHODS)
         board = self.board()
         self.seed(board)
+        board.console.start(issue_ticket=False)
+        session = board.console._local_session
+        board.service.register_console_authority(session.cookie, session.id)
         # A model-calling request is not reachable through the browser surface...
         self.assert_code(
             "METHOD_NOT_FOUND",
             board.console.command,
             "selection_request",
             {"requestId": "http-1", "task": "over http"},
+            session=session,
         )
         # ...while the same named read still reaches exactly the validated operation.
         created = self.request(board, request_id="surface-1")
-        fetched = board.console.command("selection_get", {"decisionId": created["decisionId"]})
+        fetched = board.console.command("selection_get", {"decisionId": created["decisionId"]}, session=session)
         self.assertEqual(fetched["decision"]["requestId"], "surface-1")
-        self.assert_code("METHOD_NOT_FOUND", board.console.command, "task_submit", {})
+        self.assert_code("METHOD_NOT_FOUND", board.console.command, "task_submit", {}, session=session)
 
     def test_selection_get_defaults_to_a_compact_host_summary(self):
         """The default read is the low-token micro task path, not the full audit."""

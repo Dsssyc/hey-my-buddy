@@ -42,7 +42,7 @@ const proMax: Buddy = {
 function catalogSnapshot(): Snapshot {
   return {
     csrfToken: "fixture-csrf", eventCursor: 0,
-    consoleSession: { id: "fixture-session", canWrite: true, reason: null },
+    consoleSession: { id: "fixture-session" },
 
     configuration: { routerBuddyIds: [proMaxId], routerRetryIntervalSeconds: 600, defaultRoutingMode: "review" as const, routingBudget: "standard",
     },

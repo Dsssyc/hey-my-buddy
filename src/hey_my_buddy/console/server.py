@@ -19,7 +19,7 @@ from __future__ import annotations
 
 import json
 import hmac
-import mimetypes
+import logging
 import os
 import re
 import secrets
@@ -33,13 +33,12 @@ from typing import Any
 from urllib.parse import parse_qs, unquote, urlsplit
 
 from ..errors import BoardError
-from .console_sessions import BrowserSession, ConsoleSessions, ENTRY_SECONDS, COOKIE_SECONDS, READ_OPERATIONS
+from .console_sessions import BrowserSession, ConsoleSessions, ENTRY_SECONDS, COOKIE_SECONDS
 from .read_cache import ReadCache, encoding_unacceptable, select_encoding
 from . import reads, session_content
 from ..blackboard.service.service import call_operation
 
 MAX_BODY_BYTES = 1024 * 1024
-MAX_ASSET_BYTES = 8 * 1024 * 1024
 SESSION_COOKIE = "hey_my_buddy_console_session"
 CSRF_HEADER = "X-Hey-My-Buddy-CSRF"
 ACCESS_OPERATIONS = frozenset({"console_access_set", "console_logout", "console_session_revoke"})
@@ -112,7 +111,7 @@ CONSOLE_OPERATIONS = (
 #: Fields the console server owns. A browser that supplies one is refused: console
 #: authority is the session this server registered with the service, never a JSON
 #: value a caller can choose.
-BROWSER_REFUSED_FIELDS = frozenset({"consoleAuthority", "userOverride", "consoleUser", "adminOverride"})
+BROWSER_REFUSED_FIELDS = frozenset({"consoleAuthority"})
 
 STATUS_BY_CODE = {
     "INVALID_ARGUMENT": 400,
@@ -159,8 +158,7 @@ STATUS_BY_CODE = {
     "CONSOLE_LIMIT": 429,
 }
 
-#: Static assets the console is willing to serve. Anything else is a 404, so an
-#: unrelated file dropped into the asset directory is not reachable by URL.
+#: Content types for the built console assets.
 ASSET_TYPES = {
     ".html": "text/html; charset=utf-8",
     ".js": "text/javascript; charset=utf-8",
@@ -181,8 +179,6 @@ ASSET_TYPES = {
     ".txt": "text/plain; charset=utf-8",
     ".wasm": "application/wasm",
 }
-
-SAFE_SEGMENT = re.compile(r"^[A-Za-z0-9._-]+$")
 
 CONTENT_SECURITY_POLICY = (
     "default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; "
@@ -227,45 +223,36 @@ class _ConsoleHTTPServer(ThreadingHTTPServer):
         error = sys.exc_info()[1]
         if isinstance(error, (ConnectionError, TimeoutError, OSError)):
             return
-        sys.stderr.write(f"hey-my-buddy-console: {type(error).__name__}\n")
+        logging.getLogger(__name__).exception("Console connection failed")
 
 
 class Console:
     """One loopback console instance owned by the service."""
 
-    def __init__(self, store, service, *, assets_dir: Path | str | None = None, host: str = "127.0.0.1", port: int | None = None, clock=time.time):
+    def __init__(self, store, service, *, assets_dir: Path | str | None = None, port: int | None = None, clock=time.time):
         self.store = store
         self.service = service
         self.assets_dir = Path(assets_dir) if assets_dir is not None else default_assets_dir()
-        if host != "127.0.0.1":
-            raise BoardError("INVALID_ARGUMENT", "Console must bind numeric loopback 127.0.0.1")
-        self.host = host
+        self.host = "127.0.0.1"
         self._persist_port = port is None
         from ..install.launcher import read_private
         self._settings = read_private(self.store.directory / "console-settings.json") or {}
         self.require_login = self._settings.get("requireLogin", False)
         self.access_revision = self._settings.get("revision", 0)
-        if type(self.require_login) is not bool or type(self.access_revision) is not int or self.access_revision < 0:
-            raise BoardError("CONSOLE_SESSION_STORE", "Invalid console access settings")
-        try:
-            if port is None:
-                value = os.environ.get("HMB_CONSOLE_PORT", self._settings.get("port", 49637))
-                self.port = int(value)
-                if isinstance(value, bool):
+        self.port = port if port is not None else self._settings.get("port", 49637)
+        if port is None and "HMB_CONSOLE_PORT" in os.environ:
+            try:
+                self.port = int(os.environ["HMB_CONSOLE_PORT"])
+                if not 0 <= self.port <= 65535:
                     raise ValueError()
-            else:
-                self.port = port
-            if isinstance(self.port, bool) or not isinstance(self.port, int) or not 0 <= self.port <= 65535:
-                raise ValueError()
-        except (ValueError, TypeError, KeyError) as error:
-            raise BoardError("INVALID_ARGUMENT", "HMB_CONSOLE_PORT must be an integer port") from error
+            except ValueError as error:
+                raise BoardError("INVALID_ARGUMENT", "HMB_CONSOLE_PORT must be an integer port") from error
         self._server: ThreadingHTTPServer | None = None
         self._thread: threading.Thread | None = None
         self._lock = threading.RLock()
         self._clock = clock
         self._sessions: ConsoleSessions | None = None
         self._local_session: BrowserSession | None = None
-        self._expiry_stop: threading.Event | None = None
         #: Marker-checked, session-private response cache for the read routes.
         self.read_cache = ReadCache(store.db, clock=clock)
         self.origin: str | None = None
@@ -294,11 +281,6 @@ class Console:
                 self.origin = f"http://{self.host}:{server.server_address[1]}"
                 self._thread = threading.Thread(target=server.serve_forever, name="hey-my-buddy-console", daemon=True)
                 self._thread.start()
-                stop = threading.Event()
-                self._expiry_stop = stop
-                threading.Thread(target=self._expire_loop, args=(self._sessions.console_id, stop),
-                                 name="hey-my-buddy-console-expiry", daemon=True).start()
-            self._expire_sessions()
             if not issue_ticket:
                 return self.status()
             ticket = self._sessions.issue() if self.require_login else None
@@ -319,9 +301,6 @@ class Console:
             if expected_console_id is not None and console_id is not None and expected_console_id != console_id:
                 return {"closed": False, "reason": "replaced", "consoleId": console_id}
             server, self._server = self._server, None
-            if self._expiry_stop is not None:
-                self._expiry_stop.set()
-                self._expiry_stop = None
             if self._sessions is not None:
                 for session in self._sessions.sessions.values():
                     self.service.revoke_console_authority(session.cookie)
@@ -337,30 +316,12 @@ class Console:
             server.server_close()
         return {"closed": True, "consoleId": console_id}
 
-    def _expire_sessions(self) -> None:
-        if self._sessions is not None:
-            for session in self._sessions.expire():
-                self.service.revoke_console_authority(session.cookie)
-
-    def expire(self, console_id: str) -> None:
-        """Expire from a private timer; status and rejected HTTP never renew activity."""
-        with self._lock:
-            if self._sessions is None or self._sessions.console_id != console_id:
-                return
-            self._expire_sessions()
-
-    def _expire_loop(self, console_id: str, stop: threading.Event) -> None:
-        while not stop.wait(5):
-            self.expire(console_id)
-
     def status(self) -> dict:
         with self._lock:
             return {
                 "consoleId": self._sessions.console_id if self._sessions else None,
                 "running": self._server is not None,
                 "sessionCount": len(self._sessions.sessions) if self._sessions else 0,
-                "idleTimeoutSeconds": None,
-                "sessionLifetimeSeconds": None,
                 "requireLogin": self.require_login,
                 "baseUrl": self.origin + "/" if self.origin else None,
                 "assetsBuilt": assets_ready(self.assets_dir),
@@ -439,17 +400,13 @@ class Console:
             return self.access_view(current), current
 
     # -- dispatch ------------------------------------------------------------
-    def command(self, operation: str, params: dict, *, session: BrowserSession | None = None) -> dict:
-        # Serialize authentication and mutation with console close/session expiry.
+    def command(self, operation: str, params: dict, *, session: BrowserSession) -> dict:
+        # Serialize authentication and mutation with console close/revocation.
         with self._lock:
-            if session is not None:
-                self._authenticate(session)
-            if operation in CONSOLE_OPERATIONS and operation not in READ_OPERATIONS:
-                if session is None:
-                    raise BoardError("CONSOLE_SESSION_EXPIRED", "An authenticated console session is required")
+            self._authenticate(session)
             return self._command(operation, params, session=session)
 
-    def _command(self, operation: str, params: dict, *, session: BrowserSession | None) -> dict:
+    def _command(self, operation: str, params: dict, *, session: BrowserSession) -> dict:
         if operation not in CONSOLE_OPERATIONS:
             raise BoardError(
                 "METHOD_NOT_FOUND",
@@ -464,8 +421,7 @@ class Console:
                 "INVALID_ARGUMENT",
                 f"{refused[0]} is not accepted from the browser; console authority is attached by the console server",
             )
-        if session is not None:
-            params["consoleAuthority"] = {"sessionId": session.cookie}
+        params["consoleAuthority"] = {"sessionId": session.cookie}
         return call_operation(self.service, operation, params)
 
     def _compose_snapshot(self, session: BrowserSession, projection: dict) -> dict:
@@ -477,13 +433,6 @@ class Console:
             snapshot["consoleAccess"] = self.access_view(session)
         snapshot["capabilities"] = {**projection["capabilities"], "consoleAssets": assets_ready(self.assets_dir)}
         return snapshot
-
-    def snapshot(self, session: BrowserSession) -> dict:
-        """The slim console snapshot, composed uncached for direct callers."""
-        with self._lock:
-            self._authenticate(session)
-        projection, _deadline = reads.console_snapshot_projection(self.service, clock=self._clock)
-        return self._compose_snapshot(session, projection)
 
     def _sessions_marker(self) -> tuple:
         """The snapshot overlay's session-set and activity-minute fingerprint.
@@ -705,13 +654,11 @@ class Console:
                         self._error(401, "CONSOLE_SESSION_EXPIRED", "The console is closed; run hey-my-buddy console again")
                         return None
                     try:
-                        console._expire_sessions()
                         self.browser_session = sessions.authenticate(None, self._cookie()) if console.require_login else console._local_session
                         console.service.register_console_authority(self.browser_session.cookie, self.browser_session.id)
                     except BoardError as error:
                         self._board_error(error)
                         return None
-                    self.session_path = sessions.path(self.browser_session)
                     return path
 
             def _launch(self, path: str) -> None:
@@ -721,15 +668,10 @@ class Console:
                         sessions = console._sessions
                         if sessions is None or re.fullmatch(r"[A-Za-z0-9_-]{43}", ticket) is None:
                             raise BoardError("CONSOLE_ENTRY_EXPIRED", "This entry link is unavailable; run hey-my-buddy console again")
-                        console._expire_sessions()
                         session = sessions.redeem(ticket, self._cookie())
                         console.service.register_console_authority(session.cookie, session.id)
-                        target = sessions.path(session)
                 except BoardError as error:
-                    try:
-                        body = (console.assets_dir / "index.html").read_bytes()
-                    except OSError:
-                        return self._error(500, "INTERNAL_ERROR", "The console page could not be read")
+                    body = (console.assets_dir / "index.html").read_bytes()
                     body = body.replace(
                         b"</head>",
                         b'<meta name="hey-my-buddy-reason" content="console.entry-unavailable"></head>',
@@ -737,7 +679,7 @@ class Console:
                     ).replace(b'./assets/', b'/assets/')
                     return self._send(STATUS_BY_CODE.get(error.code, 400), body, "text/html; charset=utf-8")
                 self.send_response(303)
-                self.send_header("Location", target)
+                self.send_header("Location", "/")
                 self.send_header("Set-Cookie", f"{SESSION_COOKIE}={session.cookie}; Path=/; Max-Age={COOKIE_SECONDS}; HttpOnly; SameSite=Strict")
                 self.send_header("Content-Length", "0")
                 self.send_header("Cache-Control", "no-store")
@@ -745,7 +687,17 @@ class Console:
                 self.end_headers()
 
             # -- routes ----------------------------------------------------
+            def _handle_request(self, dispatch) -> None:
+                try:
+                    dispatch()
+                except Exception:
+                    logging.getLogger(__name__).exception("Console request failed")
+                    self._error(500, "INTERNAL_ERROR", "The console request failed inside the service")
+
             def do_GET(self):  # noqa: N802 - BaseHTTPRequestHandler API
+                self._handle_request(self._get)
+
+            def _get(self):
                 if not self._trusted_request():
                     return
                 path = self._path()
@@ -785,14 +737,11 @@ class Console:
                 index = console.assets_dir / "index.html"
                 if not index.is_file():
                     body = SETUP_PAGE.format(
-                        api=f"{console.origin}{self.session_path}api/console",
+                        api=f"{console.origin}/api/console",
                         detail=f"Asset directory: {console.assets_dir}",
                     ).encode()
                     return self._send(503, body, "text/html; charset=utf-8")
-                try:
-                    body = index.read_bytes()
-                except OSError:
-                    return self._error(500, "INTERNAL_ERROR", "The console page could not be read")
+                body = index.read_bytes()
                 self._send(200, body, "text/html; charset=utf-8", cache="no-cache")
 
             def _asset(self, relative: str) -> None:
@@ -809,13 +758,8 @@ class Console:
                     ):
                         return self._page()
                     return self._error(404, "NOT_FOUND", "Not found")
-                try:
-                    body = target.read_bytes()
-                except OSError:
-                    return self._error(500, "INTERNAL_ERROR", "The console asset could not be read")
-                content_type = ASSET_TYPES.get(target.suffix.lower())
-                if content_type is None:
-                    content_type = mimetypes.guess_type(target.name)[0] or "application/octet-stream"
+                body = target.read_bytes()
+                content_type = ASSET_TYPES.get(target.suffix.lower(), "application/octet-stream")
                 cache = "no-cache" if target.suffix.lower() == ".html" else "private, max-age=31536000, immutable"
                 self._send(200, body, content_type, cache=cache)
 
@@ -832,17 +776,12 @@ class Console:
                     )
                 except BoardError as error:
                     return self._board_error(error)
-                except Exception:  # noqa: BLE001 - no traceback crosses the boundary
-                    return self._error(500, "INTERNAL_ERROR", "The console could not read the snapshot")
                 self._send_read(outcome, coding)
 
             def _runtime_version(self) -> None:
                 """Version facts are read only when settings explicitly asks for them."""
                 from .version_info import version_info
-                try:
-                    report = version_info(console.store.directory)
-                except Exception:  # noqa: BLE001 - no private paths or traceback cross the boundary
-                    return self._error(500, "INTERNAL_ERROR", "The runtime version could not be read")
+                report = version_info(console.store.directory)
                 self._json(200, report)
 
             def _macro_task_read(self, operation: str, fixed: dict, allowed: frozenset[str]) -> None:
@@ -869,8 +808,6 @@ class Console:
                     )
                 except BoardError as error:
                     return self._board_error(error)
-                except Exception:  # noqa: BLE001 - no traceback crosses the boundary
-                    return self._error(500, "INTERNAL_ERROR", "The work macro tasks could not be read")
                 self._send_read(outcome, coding)
 
             def _session_content(self, task_id: str, attempt_id: str) -> None:
@@ -879,8 +816,6 @@ class Console:
                     view = session_content.read(console.store, task_id, attempt_id, params)
                 except BoardError as error:
                     return self._board_error(error)
-                except Exception:  # noqa: BLE001 - no private paths cross the boundary
-                    return self._error(500, "INTERNAL_ERROR", "The session record could not be read")
                 self._json(200, view)
 
             def _task(self, run_id: str) -> None:
@@ -892,8 +827,6 @@ class Console:
                         view = {**view, **call_operation(console.service, "task_result", {"runId": run_id})}
                 except BoardError as error:
                     return self._board_error(error)
-                except Exception:  # noqa: BLE001 - no traceback crosses the boundary
-                    return self._error(500, "INTERNAL_ERROR", "The task could not be read")
                 self._json(200, view)
 
             def _board_error(self, error: BoardError) -> None:
@@ -901,6 +834,9 @@ class Console:
                 self._error(status, error.code, error.message, error.details or None)
 
             def do_POST(self):  # noqa: N802 - BaseHTTPRequestHandler API
+                self._handle_request(self._post)
+
+            def _post(self):
                 if not self._trusted_request():
                     return
                 path = self._path()
@@ -934,8 +870,6 @@ class Console:
                         result = console.command(operation, value.get("params", {}), session=self.browser_session)
                 except BoardError as error:
                     return self._board_error(error)
-                except Exception:  # noqa: BLE001 - no traceback crosses the boundary
-                    return self._error(500, "INTERNAL_ERROR", "The command failed inside the service")
                 self._json(200, {"ok": True, "result": result})
 
             def _read_body(self) -> bytes | None:
@@ -968,31 +902,14 @@ class Console:
 
     # -- assets --------------------------------------------------------------
     def resolve_asset(self, relative: str) -> Path | None:
-        """Resolve one static asset, refusing traversal, symlinks and directories."""
-        value = relative.lstrip("/")
-        if not value or "\0" in value or "\\" in value:
-            return None
-        parts = value.split("/")
-        if any(part in ("", ".", "..") or not SAFE_SEGMENT.match(part) for part in parts):
-            return None
-        suffix = Path(parts[-1]).suffix.lower()
-        if suffix not in ASSET_TYPES:
-            return None
+        """Resolve one static asset inside the asset root, never a directory."""
         root = self.assets_dir.resolve()
-        candidate = root.joinpath(*parts)
         try:
-            resolved = candidate.resolve()
+            resolved = (root / relative.lstrip("/")).resolve()
             resolved.relative_to(root)
         except (OSError, ValueError):
             return None
-        if not resolved.is_file():
-            return None
-        try:
-            if resolved.stat().st_size > MAX_ASSET_BYTES:
-                return None
-        except OSError:
-            return None
-        return resolved
+        return resolved if resolved.is_file() else None
 
 
 __all__ = ["Console", "CONSOLE_OPERATIONS", "assets_ready", "default_assets_dir"]
