@@ -287,7 +287,11 @@ function validMacroTaskSummary(value: unknown): boolean {
 function validTimelineRows(rows: unknown): boolean {
   return Array.isArray(rows) && rows.every(row => {
     const entry = row as TimelineRow | null;
-    return !!entry && (entry.taskSummary === null || typeof entry.taskSummary === "string");
+    return !!entry && typeof entry === "object"
+      && (entry.taskSummary === null || typeof entry.taskSummary === "string")
+      && (!Object.hasOwn(entry, "fixes") || (typeof entry.fixes === "string" && entry.fixes.length > 0))
+      && (!Object.hasOwn(entry, "fixedBy") || (Array.isArray(entry.fixedBy) && entry.fixedBy.length > 0
+        && entry.fixedBy.every(runId => typeof runId === "string" && runId.length > 0)));
   });
 }
 

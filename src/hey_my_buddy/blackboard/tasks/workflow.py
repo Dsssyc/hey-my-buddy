@@ -35,6 +35,7 @@ from typing import Any
 
 from ...protocol import schemas
 from ...protocol.stop import WRAP_UP_INITIATORS
+from . import fixes as task_fixes
 from . import host_conclusions
 from ..store.db import canonical_json, sha256_text
 from ...errors import BoardError
@@ -753,6 +754,7 @@ class WorkflowCoordinator:
             "shutdown": self.shutdown_summary(connection, run_row["run_id"]),
             "task": self._task_summary(connection, task_row),
         }
+        view.update(task_fixes.view(connection, run_row["run_id"]))
         if view["task"].get("quotaFailure") is not None:
             view["quotaFailure"] = view["task"]["quotaFailure"]
         if (current_scope() or {}).get("kind") != AGENT_KIND:
@@ -1573,6 +1575,7 @@ class WorkflowCoordinator:
         buddyLocked: bool = False,
         delegationAuthority: bool = False,
         lead: dict | None = None,
+        fixes: str | None = None,
         now: str,
     ) -> str:
         """Insert the run, its reservation and its pinned input manifest.
@@ -1588,8 +1591,14 @@ class WorkflowCoordinator:
             self._require_enabled_buddy(connection, buddy)
         if lead is not None:
             self._active_credential(connection, lead)
-        macro_task_id = (self._run_row(connection, lead["runId"])["macro_task_id"] if lead is not None else
-                         attach_macro_task(connection, presentation, spec=spec, host_id=hostId, manifest=manifest, now=now))
+        if fixes is not None:
+            macro_task_id = task_fixes.submission_macro_task(
+                connection, fixes, host_id=hostId, lead_run_id=lead["runId"] if lead else None,
+                presentation=presentation,
+            )
+        else:
+            macro_task_id = (self._run_row(connection, lead["runId"])["macro_task_id"] if lead is not None else
+                             attach_macro_task(connection, presentation, spec=spec, host_id=hostId, manifest=manifest, now=now))
         connection.execute(
             "INSERT INTO workflow_runs(run_id, host_id, owner_generation, control_verifier, micro_task_json,"
             " micro_task_fingerprint, request_fingerprint, submission_verifier, execution_workspace_json,"
@@ -1613,6 +1622,13 @@ class WorkflowCoordinator:
         )
         connection.execute("UPDATE workflow_runs SET macro_task_id=?,title=?,buddy_locked=?,delegation_authority=? WHERE run_id=?",
                            (macro_task_id, presentation.get("title"), int(buddyLocked), int(delegationAuthority), run_id))
+        if fixes is not None:
+            connection.execute(
+                "INSERT INTO workflow_fixes(run_id,fixed_run_id,created_at) VALUES(?,?,?)",
+                (run_id, fixes, now),
+            )
+            self.board._append_event(connection, "workflow.fix_submitted", task_id=run_id,
+                                     payload={"fixes": fixes})
         if lead is not None:
             connection.execute(
                 "INSERT INTO workflow_lead_tasks(owned_run_id,lead_run_id,lead_turn_id,created_at) VALUES(?,?,?,?)",
@@ -1700,7 +1716,8 @@ class WorkflowCoordinator:
         fingerprint = schemas.spec_fingerprint(spec)
         request_fingerprint = schemas.workflow_request_fingerprint(
             spec, normalized["executionWorkspace"], host_id, presentation=normalized["presentation"],
-            buddy_locked=normalized["buddyLocked"], delegation_authority=normalized["delegationAuthority"]
+            buddy_locked=normalized["buddyLocked"], delegation_authority=normalized["delegationAuthority"],
+            fixes=normalized["fixes"]
         )
 
         # Recovery first: an idempotent submit must recover the original prepared
@@ -1772,6 +1789,7 @@ class WorkflowCoordinator:
                             "buddyLocked": normalized["buddyLocked"],
                             "delegationAuthority": normalized["delegationAuthority"],
                             "lead": lead,
+                            "fixes": normalized["fixes"],
                         },
                     )
                 except BoardError as error:

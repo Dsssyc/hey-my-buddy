@@ -191,6 +191,17 @@ class UpgradeFixtureTests(unittest.TestCase):
                 'SELECT silence_seconds,revision FROM reminder_settings WHERE id=1').fetchone()), (900, 1))
             self.assertEqual(upgraded.execute('SELECT COUNT(*) FROM attempt_reminders').fetchone()[0], 0)
             self.assertEqual(upgraded.execute('SELECT COUNT(*) FROM workflow_lead_tasks').fetchone()[0], 0)
+            self.assertEqual(upgraded.execute('SELECT COUNT(*) FROM workflow_fixes').fetchone()[0], 0)
+            fix_columns = {row['name']: row for row in upgraded.execute('PRAGMA table_info(workflow_fixes)')}
+            self.assertEqual(set(fix_columns), {'run_id', 'fixed_run_id', 'created_at'})
+            self.assertEqual(fix_columns['run_id']['pk'], 1)
+            fix_fks = {(row['from'], row['table'], row['to']) for row in upgraded.execute(
+                'PRAGMA foreign_key_list(workflow_fixes)')}
+            self.assertEqual(fix_fks, {('run_id', 'workflow_runs', 'run_id'),
+                                       ('fixed_run_id', 'workflow_runs', 'run_id')})
+            fix_indexes = [row['name'] for row in upgraded.execute('PRAGMA index_list(workflow_fixes)')]
+            self.assertIn(('fixed_run_id', 'created_at'), [tuple(row['name'] for row in upgraded.execute(
+                f'PRAGMA index_info({name})')) for name in fix_indexes])
             self.assertEqual({row[0] for row in upgraded.execute(
                 'SELECT delegation_authority FROM workflow_runs')}, {0})
             attempt_columns = {row[1] for row in upgraded.execute('PRAGMA table_info(attempts)')}
@@ -206,6 +217,43 @@ class UpgradeFixtureTests(unittest.TestCase):
                 expected_preferences)
             self.assertEqual(upgraded.execute('PRAGMA integrity_check').fetchone()[0], 'ok')
             self.assertEqual(upgraded.execute('PRAGMA foreign_key_check').fetchall(), [])
+
+    def test_upgrade_refuses_existing_fix_storage_without_changing_the_board(self):
+        definitions = (
+            ('CREATE TABLE workflow_fixes(run_id TEXT PRIMARY KEY, fixed_run_id TEXT, created_at TEXT)', None),
+            ('CREATE TABLE workflow_fixes(run_id TEXT PRIMARY KEY, fixed_run_id TEXT, created_at TEXT)',
+             "INSERT INTO workflow_fixes VALUES('prior', 'target', '2026-01-01T00:00:00Z')"),
+            ('CREATE VIEW workflow_fixes AS SELECT run_id,run_id AS fixed_run_id,created_at FROM workflow_runs', None),
+        )
+        for index, (definition, insert) in enumerate(definitions):
+            with self.subTest(index=index):
+                fixture, connection = self.restored(f'existing-fixes-{index}')
+                connection.execute(definition)
+                if insert:
+                    connection.execute(insert)
+                connection.commit()
+                before = connection.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone()[0]
+                with self.assertRaises(BoardError) as caught:
+                    board_upgrade.migrate(fixture['state'])
+                self.assertEqual(caught.exception.code, 'UPGRADE_INVALID_BOARD')
+                self.assertEqual(connection.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone()[0], before)
+                self.assertIsNone(connection.execute(
+                    "SELECT name FROM sqlite_master WHERE name='reminder_settings'").fetchone())
+
+    def test_migrated_snapshot_rejects_a_fix_row_inserted_after_upgrade(self):
+        fixture, connection = self.restored('changed-fixes')
+        before = upgrade.idle_snapshot(fixture['state'])
+        board_upgrade.migrate(fixture['state'])
+        after = upgrade.idle_snapshot(fixture['state'], event_head=before['eventHead'])
+        upgrade.verify_migrated_snapshot(before, after)
+        connection.execute('INSERT INTO workflow_fixes(run_id,fixed_run_id,created_at) VALUES(?,?,?)',
+                           (fixture['stableIds']['accepted'], fixture['stableIds']['delivered'],
+                            '2026-01-01T00:00:00Z'))
+        connection.commit()
+        corrupted = upgrade.idle_snapshot(fixture['state'], event_head=before['eventHead'])
+        with self.assertRaises(BoardError) as caught:
+            upgrade.verify_migrated_snapshot(before, corrupted)
+        self.assertEqual(caught.exception.code, 'UPGRADE_VERIFY_FAILED')
 
     def insert_stop_receipt(self, fixture, connection):
         old = {'macroTaskId': 'run:' + fixture['stableIds']['cancelled'],

@@ -221,6 +221,8 @@ def micro_task_brief(view: dict, *, turn_summary: bool = True) -> dict:
                 "quotaFailure",
                 "macroTaskId",
                 "title",
+                "fixes",
+                "fixedBy",
             ),
         )
     )
@@ -428,7 +430,7 @@ _TASK_BRIEF = (
 
 def task_brief(view: dict) -> dict:
     """Brief projection of one execution task view (no spec, task text or runner payload)."""
-    brief = _pick(view, _TASK_BRIEF)
+    brief = _pick(view, (*_TASK_BRIEF, "fixes", "fixedBy"))
     lineage = view.get("lineage")
     if isinstance(lineage, dict):
         buddy = lineage.get("buddy")

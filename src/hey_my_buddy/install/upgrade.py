@@ -300,11 +300,12 @@ def verify_migrated_snapshot(before: dict, after: dict) -> None:
     """Prove that the pending migration changed only its declared stored form."""
     retained = set(before['tables']) - {'meta', 'commands'}
     if (after['schema'] != SCHEMA_VERSION or after['eventHead'] != before['eventHead']
-            or set(after['tables']) != set(before['tables']) | {'reminder_settings', 'attempt_reminders'}
+            or set(after['tables']) != set(before['tables']) | {'reminder_settings', 'attempt_reminders', 'workflow_fixes'}
             or after['tables']['meta'] != before['tables']['meta']
             or after['tables']['commands'] != before['tables']['commands']
             or after['fingerprints']['commands'] != before['migratedCommandsFingerprint']
             or after['tables']['reminder_settings'] != 1 or after['tables']['attempt_reminders'] != 0
+            or after['tables']['workflow_fixes'] != 0
             or any(after['tables'][name] != before['tables'][name]
                    or after['fingerprints'].get(name) != before['fingerprints'].get(name)
                    for name in retained)):

@@ -21,6 +21,11 @@ export default {
     stop: { host: "Stopped by Host", lead: "Stopped by Lead", console: "Stopped in console", service: "Service stopped", unknown: "Stopped (initiator unknown)" },
   },
   skipToContent: "Skip to main content",
+  timelineFix: {
+    fixes: "Fixes {{title}}",
+    fixedBy: "Fixes: {{count}}",
+    target: "Micro task being fixed",
+  },
   nav: {
     label: "Main navigation",
     tasks: "Tasks",

@@ -17,7 +17,7 @@ import re
 import uuid
 from typing import Any
 
-from . import micro_task
+from . import fixes, micro_task
 from ..routing import router
 from ...protocol import schemas
 from ...errors import BoardError
@@ -548,6 +548,7 @@ def _timeline_row(connection, row, depth: int) -> dict:
     # task that claims to run without any attempt record is not proven stopped either.
     unproven = row["state"] in ("running", "cancelling", "reconciliation-needed") and attempts == 0
     return {
+        **fixes.view(connection, row["task_id"]),
         "runId": row["task_id"],
         "parentRunId": row["child_parent_run_id"],
         "rootRunId": row["root_run_id"],

@@ -7,7 +7,7 @@ import sqlite3
 
 from ...errors import BoardError
 from ...json_codec import canonical_json, decode_strict_json
-from .db import REMINDER_SCHEMA, SCHEMA_VERSION, utc_now
+from .db import FIX_SCHEMA, REMINDER_SCHEMA, SCHEMA_VERSION, utc_now
 
 
 BASE_SCHEMA_VERSION = 21
@@ -56,16 +56,16 @@ def migrate(state: Path) -> None:
             existing = connection.execute(
                 "SELECT name FROM sqlite_master WHERE name IN "
                 "('reminder_settings','attempt_reminders','attempt_reminders_expected_idx',"
-                "'attempt_reminders_silence_idx')"
+                "'attempt_reminders_silence_idx','workflow_fixes','workflow_fixes_target_idx')"
             ).fetchall()
             if existing:
-                raise BoardError('UPGRADE_INVALID_BOARD', 'Schema-21 board already contains reminder structure')
+                raise BoardError('UPGRADE_INVALID_BOARD', 'Schema-21 board already contains pending upgrade structure')
             for command_id, raw in connection.execute(
                 "SELECT command_id,response_json FROM commands WHERE kind='macro_task.stop'"
             ).fetchall():
                 connection.execute('UPDATE commands SET response_json=? WHERE command_id=?',
                                    (migrated_stop_response(raw), command_id))
-            for statement in REMINDER_SCHEMA.split(';'):
+            for statement in (REMINDER_SCHEMA + FIX_SCHEMA).split(';'):
                 if statement.strip():
                     connection.execute(statement)
             connection.execute(

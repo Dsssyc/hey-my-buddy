@@ -559,8 +559,8 @@ def build_runs() -> dict[str, dict]:
                               usage=None)],
             markers=[marker(instant(6, 56), "dispatch", actor=host_actor(HOST_A))]),
         run("preview-run-a2", project="alpha", group=MACRO_A,
-            title="核对 Host 等待片段与决定标记的渲染", title_source="title",
-            task_text="核对等待 Host 的开放片段、决定标记与协助请求在时间轴和详情中的呈现。",
+            title="修正 Host 等待片段与决定标记的渲染", title_source="title",
+            task_text="修正第一轮时间轴中等待 Host 的开放片段、决定标记与协助请求的呈现。",
             created=instant(8, 30), updated=instant(9, 20), state="awaiting-host", status="completed",
             category="host", buddy=CFG_CLAUDE, result=True, continuation_count=1,
             result_summary="核对 Host 等待片段与决定标记的渲染", routing=ROUTING_A2_ABSTENTION,
@@ -604,8 +604,8 @@ def build_runs() -> dict[str, dict]:
                 marker(instant(9, 1), "continue", actor=host_actor(HOST_A), continuation_id="cont-a2-1"),
             ]),
         run("preview-run-a3", project="alpha", group=MACRO_A,
-            title="实现折叠区间的键盘焦点顺序", title_source="title",
-            task_text="实现折叠空闲区间展开后的键盘焦点顺序，并补充可访问性检查。",
+            title="修正折叠区间的键盘焦点顺序", title_source="title",
+            task_text="修正第一轮时间轴中折叠空闲区间的键盘焦点顺序，并补充可访问性检查。",
             created=instant(9, 35), updated=instant(9, 39), state="executing", status="running",
             category="active", buddy=CFG_CLAUDE, shutdown_confirmed=False, routing=ROUTING_A3,
             spans=[
@@ -1107,11 +1107,14 @@ def task_first_line(task_text: str) -> str | None:
     return None
 
 
+PREVIEW_FIXES = {"preview-run-a2": "preview-run-a1", "preview-run-a3": "preview-run-a1"}
+
+
 def timeline_row(entry: dict, depth: int) -> dict:
     attempts = entry["attempts"]
     confirmed = sum(1 for item in attempts if item["state"] == "finished" and item["shutdownConfirmed"])
     buddy = entry["buddy"]
-    return {
+    row = {
         "runId": entry["runId"], "parentRunId": entry["parentRunId"], "rootRunId": entry["rootRunId"],
         "rootLeadRunId": entry["lineage"]["rootLeadRunId"],
         "leadOwnership": entry["lineage"]["leadOwnership"],
@@ -1125,6 +1128,12 @@ def timeline_row(entry: dict, depth: int) -> dict:
                           if buddy else None),
         "acceptedAt": entry["acceptedAt"], "acceptanceVerdict": entry["acceptanceVerdict"],
     }
+    if entry["runId"] in PREVIEW_FIXES:
+        row["fixes"] = PREVIEW_FIXES[entry["runId"]]
+    fixed_by = [run_id for run_id, target in PREVIEW_FIXES.items() if target == entry["runId"]]
+    if fixed_by:
+        row["fixedBy"] = fixed_by
+    return row
 
 
 def macro_task_summary(group: str, matching: set[str]) -> dict:
@@ -2043,6 +2052,15 @@ def validate_fixtures() -> list[str]:
             for key in ("rootLeadRunId", "leadOwnership"):
                 if key not in row or row[key] != lineage[key]:
                     problems.append(f"{row['runId']}: timeline {key} differs from task lineage")
+    fixes = {row["runId"]: row for row in timeline["rows"]}
+    if (fixes["preview-run-a2"].get("fixes") != "preview-run-a1"
+            or fixes["preview-run-a3"].get("fixes") != "preview-run-a1"
+            or fixes["preview-run-a1"].get("fixedBy") != ["preview-run-a2", "preview-run-a3"]):
+        problems.append("preview must show two fixes of the same accepted micro task")
+    for run_id, fixed_run_id in PREVIEW_FIXES.items():
+        target = FIXTURES["runs"][fixed_run_id]
+        if target["state"] != "accepted" or target["acceptedAt"] > FIXTURES["runs"][run_id]["createdAt"]:
+            problems.append(f"{run_id}: a fix must follow the target's acceptance")
     lead = workflow_get({"runId": "preview-run-b3"})
     waiting = workflow_get({"runId": "preview-run-b4"})
     active = workflow_get({"runId": "preview-run-b5"})
