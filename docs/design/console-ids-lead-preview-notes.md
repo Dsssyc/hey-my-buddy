@@ -67,3 +67,17 @@ C 已通过本回合执行凭据 `submit --params-file tmp/fixture-repair-submit
 本次检查遗漏形成一条后续验收要求：凡名下微任务改动控制台，验收之前先运行 `npm --prefix apps/console run typecheck`，因为 `npm test` 不执行类型检查；这条也写入后续微任务提示。它只补齐本次工作检查，不修改产品行为或其他文档。
 
 供 Host 另查的 harness 失败证据：微任务 B 为 `97e3de5a-d4f5-4d15-ba79-a8362b8b8701`，首回合 `af8881ef-3ac7-43da-a968-392b67692206`，尝试 `59fa3a0a-d0d3-49f4-bd35-d735de450984`，Codex CLI，`openai / gpt-6.1-sol / max`；`get.currentTurn.createdAt` 为 `2026-10-15T05:26:53.511Z`，`updatedAt` 为 `2026-10-15T06:06:25.624Z`。当时 `get` 输出 `state: failed`、`disposition: null`，`result.selectedAttempt.exitCode: 1`、`error: multiple native final messages completed`，同份结果中 `turnError: the runner did not exit zero`、`terminationReason: harness-error`、`shutdownConfirmed: true`；没有有效三句模型交付，只有标记为 partial / unverified 的固定部分产物 `ce2fd2ae-fef8-488f-8ffe-5dfd829158d7`（提交 `29ffedbd`）。通过本轮执行凭据读取自身名下的 `get` / `result` 的原始 JSON 保留在 ignored `tmp/preview-failed-get.json`、`tmp/preview-failed-result.json`，未读取日常服务日志或私有 harness 记录。
+
+## 最后交付检查
+
+C 由默认路由选出的 DSH CLI `deepseek-official / deepseek-flash / max` 完成，返修 0 次；固定最终产物为 `25c87167-6a4f-412f-9402-7dd50bac91dd`，输出提交 `b987ef84`，只改声明的一个文件。差异增加完整的 `Task` 夹具，按参数覆盖需要测试的属性，两处错误断言改用该夹具，命令执行用例仍验证即使记录了 buddy 也应隐藏，未使用 `as unknown as`、`any`、忽略编译错误或改配置。
+
+Lead 对 C 先运行 `npm --prefix apps/console run typecheck`，退出码 0，再运行 `npm --prefix apps/console test`，81 文件 1,119 项全部通过，退出码 0，用时 25.08 秒；单文件固定差异的 `git diff --check` 通过。原样差异整合为 `bd309c86`，`git diff --exit-code b987ef84 HEAD -- apps/console` 退出码 0，证明最终整合的控制台树与刚才验证的产物相同。用本回合执行凭据对 C 的最终 artifactId 和本 Lead 检出的实际提交 `bd309c86` 调用 `accept`，返回退出码 0、`accepted`、`integration.state: verified`、`reclaim.removed: true`，整合标识 `int-aeba5b24-de70-41be-9e5f-faa99271d259`；三项名下微任务均已验收，没有未收齐的工作。
+
+依 Host 的继续指令，在整合状态上接续运行 `npm --prefix apps/console run test:browser`，106 项全部通过，退出码 0，耗时 16.6 秒（原始输出 `tmp/console-browser-final.log`）；然后 `npm --prefix apps/console run build` 退出码 0，重建打包的控制台资源（原始输出 `tmp/console-build-final.log`）；最后清除继承运行时、Worker 和凭据环境变量，以 Host 指定解释器运行 `PYTHONPATH=src <指定解释器> -m hey_my_buddy.cli.checks tests/python/cli/test_host_preview.py`，采用默认 4 进程，3 项通过，私有根删除、退出码 0（原始输出 `tmp/python-preview-final.log`）。没有运行 Python 全量检查，没有安装产品，没有启动、停止或重启日常服务或 Worker。
+
+资源替换仅涉及旧脚本 `index-DnzGstcH.js` 换成新脚本 `index-iWDO4HEY.js` 及 `index.html` 引用更新，旧脚本是本次被替换的产物，其他打包资源保留。最终验收仍由整合 Host 完成，以上是本 Lead 对源码及合成预览的检查证据，不代表安装或发布。
+
+额外以 ignored `tmp/copy-browser.config.mts` 与 `tmp/copy-browser.check.ts` 在真实 Chromium 中复核原生剪贴板：中英文、1440 与 390 宽度，宏任务标题、微任务检查器、详情的按钮都复制完整标识，悬停可读完整值，独立微任务在宏任务标题处复制 `run:preview-run-c1`；宏任务头部与检查器控件无重叠、页面无横向溢出，详情仍显示委派它的 Lead。8 个场景最终全部通过；首次脚本在 390 宽度仍选择隐藏的桌面 `.tl-label` 而有两项超时（6 项通过），改为窄屏实际使用的 `.tl-entry` 后只重跑这两项，2 项通过、退出码 0，属于临时检查脚本的入口错误，没有修改产品源码。原始结果分别在 `tmp/copy-browser.log` 与 `tmp/copy-browser-narrow.log`。
+
+最终交回：四项改动、夹具返修与重建资源都在本 Lead 检出；前端全量 1,119 项、浏览器全量 106 项、指定 Python 3 项通过，另有原生复制与窄屏 8 场景通过。名下共 3 项，A 为 Codex CLI `gpt-6.1-sol / high`（返修 0）、B 为 Codex CLI `gpt-6.1-sol / max`（返修 1）、C 为 DSH CLI `deepseek-flash / max`（返修 0），均经默认路由、固定产物审查与实际提交验收，已回收子检出。本次 Lead 的凭据、正常交付叫醒、失败叫醒、恢复、范围修订、累计产物整合和三次验收可用；最不顺的是 B 首回合约 39 分钟后失败，以及 Lead 验收前未先做 typecheck、误以为晚发现问题需要 Host 另批返修路径造成的额外回合，证据和纠正均已记录。
