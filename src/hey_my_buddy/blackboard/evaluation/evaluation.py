@@ -648,8 +648,10 @@ class EvaluationStore:
                                        "revision": int(state["configuration_revision"])}
             configured_ids = (settings or {}).get("routerProfileIds") or []
             configured_marks = ",".join("?" for _ in configured_ids) or "NULL"
+            from ..catalog.catalog import pending_families
+            pending = pending_families(connection)
             profiles = [
-                self._profile_view(row)
+                self._profile_view(row, pending=pending)
                 for row in connection.execute(
                     "SELECT p.*, h.status AS harness_status, c.status AS catalog_state, c.reason AS catalog_reason FROM evaluation_profiles p "
                     "LEFT JOIN harness_health h ON h.adapter=p.adapter "
@@ -2591,7 +2593,7 @@ class EvaluationStore:
 
     # -- views ---------------------------------------------------------------
     @staticmethod
-    def _profile_view(row: sqlite3.Row) -> dict:
+    def _profile_view(row: sqlite3.Row, *, pending: dict | None = None) -> dict:
         from ...buddy.harnesses.registry import adapters
         native = adapters().get(row["adapter"])
         capabilities = json.loads(row["capabilities_json"])
@@ -2623,6 +2625,19 @@ class EvaluationStore:
         if "catalog_state" in row.keys():
             view["catalogState"] = row["catalog_state"] or "unknown"
             view["catalogReason"] = row["catalog_reason"]
+        if "catalog_state" in row.keys() or pending is not None:
+            # ADR-027 rule 6: the model-level catalog judgment, separate from the
+            # harness-level reading state above. Pending is per model identity.
+            from ..catalog.catalog import CONFIRMED_ABSENCE_REASON
+            family = (row["adapter"], row["provider"], row["model"])
+            since = (pending or {}).get(family)
+            if since:
+                view["catalogStatus"] = "pending"
+                view["pendingSince"] = since
+            elif not row["available"] and row["unavailable_reason"] == CONFIRMED_ABSENCE_REASON:
+                view["catalogStatus"] = "unavailable"
+            else:
+                view["catalogStatus"] = "available"
         return view
 
     @staticmethod

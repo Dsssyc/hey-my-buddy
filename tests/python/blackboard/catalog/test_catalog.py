@@ -29,13 +29,14 @@ class CatalogTests(unittest.TestCase):
         with patch("hey_my_buddy.buddy.harnesses.registry.adapters", return_value={"missing": MissingHarness()}), \
              patch.object(catalog, "_override", return_value=None):
             result = catalog.discover()
-        self.assertEqual(result["discoveries"], [{"adapter": "missing", "status": "unknown",
+        self.assertEqual(result["discoveries"], [{"adapter": "missing", "status": "unknown", "accountStatus": "unknown",
                                                   "reason": "fixture executable missing"}])
 
     def test_explicit_discovery_refreshes_cached_unavailable_authentication(self):
         from hey_my_buddy.buddy.harnesses.claude import adapter as claude
         native = {"source": "claude-fixture", "providers": [{"adapter": "claude", "provider": "anthropic",
-                  "models": [{"id": "fixture-opus", "efforts": ["high"]}]}]}
+                  "models": [{"id": "fixture-opus", "efforts": ["high"]}]}],
+                  "discoveries": [{"adapter": "claude", "status": "complete", "accountStatus": "not-applicable"}]}
         instance = claude.ClaudeAdapter()
         claude._reset_metadata_cache()
         self.addCleanup(claude._reset_metadata_cache)
@@ -49,7 +50,8 @@ class CatalogTests(unittest.TestCase):
             self.assertFalse(instance.available()[0])
             self.assertEqual(probe.call_count, 1)
             refreshed = catalog.discover()
-            self.assertEqual(refreshed["discoveries"], [{"adapter": "claude", "status": "complete", "reason": None}])
+            self.assertEqual(refreshed["discoveries"], [{"adapter": "claude", "status": "complete",
+                                                         "accountStatus": "not-applicable", "reason": None}])
             self.assertEqual(probe.call_count, 2, "Explicit discovery must bypass the old auth failure")
             self.assertTrue(instance.available()[0])
             profiles = catalog.CatalogView.from_payload(refreshed).proposed_profiles()

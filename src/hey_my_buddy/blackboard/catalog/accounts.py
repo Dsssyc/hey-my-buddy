@@ -251,6 +251,10 @@ def _invalidate(connection, adapter, account):
     connection.execute("UPDATE harness_health SET status='unknown',record_json=?,checked_at=NULL,expires_at=NULL,scan_after=NULL,revision=revision+1 WHERE adapter=?",
                        (canonical_json(record), adapter))
     connection.execute("UPDATE catalog_current SET status='unknown',reason='ACCOUNT_BINDING_CHANGED' WHERE adapter=?", (adapter,))
+    # ADR-027: disappearance windows and confirmed-read facts belong to the
+    # account whose readings produced them; a new binding never inherits them.
+    from .catalog import clear_confirmed_read
+    clear_confirmed_read(connection, adapter)
 
 
 class Accounts:

@@ -182,6 +182,12 @@ class HarnessHealth:
                     db.execute('UPDATE harness_health SET scan_after=? WHERE adapter=? AND revision=?', (_later(SCAN_SECONDS), name, old['revision']))
                 if name == "codex":
                     self._codex_account_read(old)
+                # ADR-027 rule 4: an unchanged health state still owes a catalog
+                # re-read once the last confirmed reading passed its shelf life.
+                if not self._closed and self.catalog_refresh and self._catalog_expired(name, now):
+                    current = self.get(name)
+                    if current['available']:
+                        self.catalog_refresh(name, current)
                 return self.get(name)
             with self.board.db.write() as db:
                 if self._closed or (self.board.directory / 'upgrade.json').exists():
@@ -227,9 +233,24 @@ class HarnessHealth:
                 return current
             if name == "codex" and status == "ready":
                 self._codex_account_read(current)
-            if not self._closed and status == 'ready' and self.catalog_refresh and (force or old['status'] != 'ready' or old.get('version') != record.get('version') or not unchanged):
+            if not self._closed and status == 'ready' and self.catalog_refresh and (force or old['status'] != 'ready' or old.get('version') != record.get('version') or not unchanged or self._catalog_expired(name, now)):
                 self.catalog_refresh(name, current)
             return self.get(name)
+
+    def _catalog_expired(self, name, now):
+        """ADR-027 rule 4: a catalog past its shelf life needs a confirmed re-read.
+
+        Only a confirmed (trusted) reading advances the read time, so a streak of
+        unknown readings never extends the deadline.
+        """
+        from ..catalog.catalog import CATALOG_SHELF_SECONDS, catalog_read_at
+        from ..evaluation.native_observations import _time
+        with self.board.db.read() as db:
+            read_at = catalog_read_at(db, name)
+        if read_at is None:
+            return False
+        read, moment = _time(read_at), _time(now)
+        return read is None or moment is None or (moment - read).total_seconds() >= CATALOG_SHELF_SECONDS
 
     def _codex_account_read(self, health):
         """One on-demand account read per 180 seconds, even across forced refreshes."""

@@ -265,6 +265,10 @@ class BoardService(_BaseResource):
         from .harness_health import HarnessHealth
         self.automatic_discovery = automatic_discovery
         self.harnesses = HarnessHealth(store, catalog_refresh=self._refresh_harness_catalog)
+        # ADR-027 rule 3: explicit-configuration validation borrows this service's
+        # own bounded native refresh for its single re-read of one harness.
+        from ..catalog.catalog import register_catalog_reread
+        register_catalog_reread(store.directory, self._reread_catalog_for_validation)
         from ..catalog.accounts import Accounts
         self.account_settings = Accounts(store)
         from ..catalog.account_operations import AccountOperations
@@ -538,11 +542,24 @@ class BoardService(_BaseResource):
                 with native_operation(self.store.db, record['account'], 'catalog') as stop:
                     payload = adapter(name).discover_models()
                     stop['shutdownConfirmed'] = True
-            payload['discoveries'] = [{'adapter': name, 'status': 'complete'}]
+            # The harness's own observation carries this session's account-status
+            # fact; the service never hardcodes a confirmed reading over it.
+            native_fact = next((item for item in payload.get('discoveries', [])
+                                if isinstance(item, dict) and item.get('adapter') == name), None)
+            payload['discoveries'] = [{'adapter': name, 'status': 'complete',
+                                       'accountStatus': (native_fact or {}).get('accountStatus', 'unknown')}]
             catalog_store.record(self.evaluation, payload, observation['observationId'], health_generation=(name, record['revision']))
         except BoardError as error:
             if error.code != 'UPGRADE_IN_PROGRESS':
                 self.harnesses.invalidate(name, record['revision'], error.code, account=record['account'])
+
+    def _reread_catalog_for_validation(self, name):
+        """ADR-027 rule 3: one bounded re-read through the service's own refresh.
+
+        The health refresh keeps the service environment, the account binding and
+        the native subprocess deadlines; no second native channel exists here.
+        """
+        self.harnesses.refresh(name, force=True)
 
     def harness_set(self, request_json: str) -> str:
         def handler(params):
