@@ -89,3 +89,7 @@ Host 已核对第 1、3、4 项、整合与先前记录的全量检查，但复�
 新增顺序微任务 D，以交回时封存的完整整合提交 `1adae637` 为基点，集中修改 `apps/console/src/console-data.ts` 中“这次执行有没有模型 buddy”的共享规则，让执行列表、详情头部、记录细节共同使用，补 WorkflowPanel 实际渲染命令记录细节的回归；同时删除 `CopyableIdentifier` 标识 span 的原生 `title` 并更新相应行为断言。写入范围限制为上述数据工具、三个消费组件、复制组件及其相关现有测试，不动 Python、浏览器测试、文档或打包资源；文件间无并行写入。D 只跑 typecheck 和明确列出的相关组件 / 数据工具测试，Lead 验收前先重跑 typecheck 与相关测试，整合后再跑前端全量、浏览器全量并重建打包资源。
 
 D 用第七回合执行凭据 `submit --params-file tmp/command-record-repair-submit.json` 提交，退出码 0，runId 为 `8b26486c-f55e-40b7-979b-44f57a80d720`，回执为 `executing` / `queued`、`awaiting-model-selection`，未指定 buddy；提示带完整环境规矩、三句交付和验收前 typecheck 要求。D 返修 0 次，等待交回；前三项验收状态保持。
+
+第八回合因 D 交付自动叫醒；D 路由为 ZCode CLI `bigmodel-api-2 / GLM-5.3 / max`，首份固定产物 `862e3a62-06d0-4402-97e4-b6ef9e73c3e7`、提交 `813d0121`，6 个文件均在授权范围。Lead 重跑 typecheck 退出 0，5 个指定测试文件 37 项通过，退出码 0；但逐项审查发现 `hasModelBuddy(task)` 仍只读详情任务 `spec.adapter`，WorkflowPanel 仍可能把接口返回的 `{adapter: command}` 当模型 buddy：新增回归额外修改了详情任务 spec，未覆盖 Host 只替换工作流 buddy 的原始复现。此处未因测试通过而验收，也未整合首份产物。
+
+Lead 用 `continue`（`commandId: command-record-rework-1`、`expectedRevision: 4`）打回，明确要求共享规则识别实际工作流 buddy 的适配器标记、WorkflowPanel 本身不另写判断，并从原夹具只替换接口返回 buddy 做回归；复制组件去原生 title 的修复保留。调用退出码 0，D 返修累计 1 次，等待下一份交付；检查仍限先 typecheck，再原五个定向测试文件。
