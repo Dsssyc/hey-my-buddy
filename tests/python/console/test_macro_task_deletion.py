@@ -23,8 +23,8 @@ class ConsoleMacroTaskDeletionTests(workflow_fixtures.WorkflowTestCase, ConsoleT
         workspace_fixtures.WorkspaceTests._seed_repository(self)
         self.enterContext(patch.object(workflow, '_workspace_module', workspace))
 
-    def create(self, board, request_id='owned', *, settled=True, **extra):
-        run = self.submit(board, request_id=request_id, cwd=str(self.repo), kind='worktree', **extra)
+    def create(self, board, request_id='owned', *, settled=True, kind='worktree', **extra):
+        run = self.submit(board, request_id=request_id, cwd=str(self.repo), kind=kind, **extra)
         if settled:
             board.call('workflow_cancel', {'runId': run['runId'], **self.control(run)})
         return run
@@ -86,21 +86,30 @@ class ConsoleMacroTaskDeletionTests(workflow_fixtures.WorkflowTestCase, ConsoleT
         })['state'], 'deleted')
 
     def test_missing_repository_with_allocation_deletes_macro_task_records(self):
-        self.missing_repository_deletion(allocation_present=True)
+        self.missing_repository_deletion(layout='checkout')
 
     def test_missing_repository_with_only_refs_deletes_macro_task_records(self):
-        self.missing_repository_deletion(allocation_present=False)
+        self.missing_repository_deletion(layout='refs')
 
-    def missing_repository_deletion(self, *, allocation_present):
+    def test_missing_repository_with_logical_allocation_removes_private_records(self):
+        self.missing_repository_deletion(layout='logical')
+
+    def test_missing_repository_without_checkout_removes_private_records(self):
+        self.missing_repository_deletion(layout='no-checkout')
+
+    def missing_repository_deletion(self, *, layout):
         board = self.board()
-        run = self.create(board, macroTask={'title': 'Missing repository'})
+        run = self.create(board, kind='existing' if layout == 'logical' else 'worktree',
+                          macroTask={'title': 'Missing repository'})
         with board.store.db.read() as connection:
             manifest = json.loads(connection.execute(
                 'SELECT workspace_manifest_json FROM workflow_runs WHERE run_id=?',
                 (run['runId'],)).fetchone()[0])
         directory = board.store.directory / 'workspaces' / manifest['workspaceId']
-        if not allocation_present:
+        if layout == 'refs':
             directory.rename(directory.with_name('retained-' + manifest['workspaceId']))
+        elif layout == 'no-checkout':
+            (directory / 'checkout').rename(self.repo.with_name('retained-checkout'))
         prefix = f"refs/hey-my-buddy/workspaces/{manifest['workspaceId']}/"
         refs = self.git('for-each-ref', '--format=%(refname)%00%(objectname)', prefix)
         self.assertTrue(refs)
@@ -114,7 +123,7 @@ class ConsoleMacroTaskDeletionTests(workflow_fixtures.WorkflowTestCase, ConsoleT
             self.assertEqual(result['state'], 'deleted')
             self.assertIsNotNone(result['deletedAt'])
             self.assertEqual(result['skipped'], [{
-                'kind': 'allocation' if allocation_present else 'ref',
+                'kind': 'ref' if layout == 'refs' else 'allocation',
                 'path': manifest['snapshot']['repositoryPath'], 'workspaceId': manifest['workspaceId'],
                 'reason': {'code': 'macro-task-deletion.repository-missing', 'params': {}},
             }])
@@ -125,7 +134,8 @@ class ConsoleMacroTaskDeletionTests(workflow_fixtures.WorkflowTestCase, ConsoleT
                               'workspace_reservations', 'commands'):
                     self.assertEqual(connection.execute(f'SELECT COUNT(*) FROM {table}').fetchone()[0], 0, table)
                 self.assertEqual(connection.execute('PRAGMA foreign_key_check').fetchall(), [])
-            self.assertEqual(directory.exists(), allocation_present)
+            self.assertEqual(directory.exists(), layout == 'checkout')
+            self.assertFalse((directory.parent / ('.deleting-' + manifest['workspaceId'])).exists())
             self.assertEqual(self.git('for-each-ref', '--format=%(refname)%00%(objectname)', prefix,
                                       cwd=retained), refs)
         finally:
