@@ -19,7 +19,6 @@ import tempfile
 import time
 
 from .db import SCHEMA_VERSION, Database, utc_now
-from .upgrade import BASE_SCHEMA_VERSION
 from ...protocol.contracts import CONTRACT_VERSION
 from ...errors import BoardError
 from ...protocol import attempt_evidence
@@ -316,31 +315,23 @@ def _private_copy(source: Path, target: Path) -> None:
         os.fsync(dst.fileno())
 
 
-def database_snapshot(connection, *, event_head: int | None = None, exact: bool = False,
-                      changes: dict | None = None, table_names: set[str] | None = None) -> dict:
+def database_snapshot(connection, *, event_head: int | None = None, exact: bool = False) -> dict:
     """Hash the historical sorted JSON format with SQLite's bounded sorter.
 
-    Python retains one row at a time. Optional sparse changes describe expected
-    rows, before any statements execute. A third sparse value names deleted
-    row keys. ``exact`` adds the lifecycle rows normally exempted by backup.
-    Neither option changes ordinary backup metadata.
+    Python retains one row at a time. ``exact`` adds the lifecycle rows normally
+    exempted by backup without changing ordinary backup metadata.
     """
-    from heapq import merge
-
-    tables = [row[0] for row in connection.execute("SELECT name FROM sqlite_master WHERE type='table'")
-              if table_names is None or row[0] in table_names]
+    tables = [row[0] for row in connection.execute("SELECT name FROM sqlite_master WHERE type='table'")]
     counts = {name:connection.execute('SELECT COUNT(*) FROM "'+name.replace('"','""')+'"').fetchone()[0]
               for name in tables}
     if event_head is None:
         event_head = connection.execute('SELECT COALESCE(MAX(seq),0) FROM events').fetchone()[0]
 
     def fingerprint(name, *, exempt=False):
-        updates, inserts, deletes = (changes or {}).get(name, ({}, {}, set()))
-        if not counts[name] and not inserts:
+        if not counts[name]:
             return hashlib.sha256(b'').hexdigest()
 
         def encode(*row):
-            row = updates.get(row[0], row)
             return json.dumps(list(row), ensure_ascii=False, separators=(',', ':'), default=lambda value:value.hex())
 
         quoted = '"' + name.replace('"','""') + '"'
@@ -351,36 +342,28 @@ def database_snapshot(connection, *, event_head: int | None = None, exact: bool 
         if wide:
             # SELECT * also supports generated columns and tables wider than a
             # SQLite function call. Join bounded chunks in the same JSON format.
-            def encode_part(offset, key, *row):
-                if key in updates:
-                    row = updates[key][offset:offset + len(row)]
+            def encode_part(*row):
                 return json.dumps(list(row), ensure_ascii=False, separators=(',', ':'), default=lambda value:value.hex())[1:-1]
 
             connection.create_function('hey_my_buddy_snapshot_part', -1, encode_part)
             quoted_columns = ['"' + column.replace('"', '""') + '"' for column in columns]
-            parts = ['hey_my_buddy_snapshot_part(' + str(offset) + ',' + quoted_columns[0] + ','
-                     + ','.join(quoted_columns[offset:offset + limit - 2]) + ')'
-                     for offset in range(0, len(columns), limit - 2)]
+            parts = ['hey_my_buddy_snapshot_part(' + ','.join(quoted_columns[offset:offset + limit]) + ')'
+                     for offset in range(0, len(columns), limit)]
             arguments = "'[' || " + " || ',' || ".join(parts) + " || ']'"
         else:
             arguments = 'hey_my_buddy_snapshot_row(' + arguments + ')'
         sql, args = 'SELECT ' + arguments + ' AS encoded FROM ' + quoted, ()
-        if deletes:
-            first_column = '"' + columns[0].replace('"', '""') + '"'
-            connection.create_function('hey_my_buddy_snapshot_keep', 1, lambda key: key not in deletes)
-            sql += ' WHERE hey_my_buddy_snapshot_keep(' + first_column + ')'
         if name == 'events':
-            sql += ' AND seq<=?' if deletes else ' WHERE seq<=?'; args = (event_head,)
+            sql += ' WHERE seq<=?'; args = (event_head,)
         elif name == 'sqlite_sequence' and not exempt:
-            sql += " AND name NOT IN ('events','workers')" if deletes else " WHERE name NOT IN ('events','workers')"
+            sql += " WHERE name NOT IN ('events','workers')"
         sql += ' ORDER BY encoded COLLATE BINARY'
         connection.create_function('hey_my_buddy_snapshot_row', -1, encode)
         try:
             rows = (row[0] for row in connection.execute(sql, args))
-            added = sorted(encode(*row) for row in inserts.values())
             result = hashlib.sha256()
             separator = b''
-            for encoded in merge(rows, added):
+            for encoded in rows:
                 result.update(separator)
                 result.update(encoded.encode())
                 separator = b'\n'
@@ -389,16 +372,9 @@ def database_snapshot(connection, *, event_head: int | None = None, exact: bool 
             connection.create_function('hey_my_buddy_snapshot_row', -1, None)
             if wide:
                 connection.create_function('hey_my_buddy_snapshot_part', -1, None)
-            if deletes:
-                connection.create_function('hey_my_buddy_snapshot_keep', 1, None)
 
     fingerprints = {name:fingerprint(name) for name in tables if name != 'workers'}
-    def projected_count(name):
-        _updates, inserts, deletes = (changes or {}).get(name, ({}, {}, set()))
-        return counts[name] + len(inserts) - len(deletes)
-
-    result = {'tables':{name:projected_count(name) for name in tables},
-              'fingerprints':fingerprints, 'eventHead':event_head}
+    result = {'tables':counts, 'fingerprints':fingerprints, 'eventHead':event_head}
     if exact:
         result['exemptFingerprints'] = {name:fingerprint(name, exempt=True)
                                       for name in ('workers', 'sqlite_sequence') if name in tables}
@@ -417,7 +393,7 @@ def _verify(directory: Path) -> dict:
     _guard(directory)
     with _open(directory / 'manifest.json', 'rb') as stream:
         manifest = json.load(stream)
-    if manifest.get('format') != 1 or manifest.get('schema') not in (BASE_SCHEMA_VERSION, SCHEMA_VERSION):
+    if manifest.get('format') != 1 or manifest.get('schema') != SCHEMA_VERSION:
         raise BoardError('BACKUP_INVALID', 'Unsupported backup format or schema')
     policy = manifest.get('attemptEvidencePolicy')
     if policy is not None and policy != attempt_evidence.POLICY:
@@ -457,8 +433,7 @@ def _verify(directory: Path) -> dict:
             schema = connection.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone()
             if schema is None or int(schema[0]) != manifest['schema']:
                 raise BoardError('BACKUP_INVALID', 'Backup schema does not match its manifest')
-        if manifest['schema'] == SCHEMA_VERSION:
-            Database(trial).initialize()
+        Database(trial).initialize()
     return manifest
 
 

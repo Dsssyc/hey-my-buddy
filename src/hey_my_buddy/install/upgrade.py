@@ -15,7 +15,7 @@ import subprocess
 import time
 import uuid
 
-from ..blackboard.store import backup, upgrade as board_upgrade
+from ..blackboard.store import backup
 from .. import private_dirs
 from . import runtime
 from .launcher import write_active_runtime
@@ -58,9 +58,9 @@ def idle_snapshot(state: Path, *, event_head: int | None = None, exact: bool = F
     with closing(sqlite3.connect((state / 'board.sqlite3').as_uri() + '?mode=ro', uri=True)) as connection:
         connection.execute('BEGIN')
         schema = connection.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone()
-        if schema is None or str(schema[0]) not in (str(board_upgrade.BASE_SCHEMA_VERSION), str(SCHEMA_VERSION)):
+        if schema is None or str(schema[0]) != str(SCHEMA_VERSION):
             raise BoardError('UNSUPPORTED_SCHEMA',
-                             f'Upgrade accepts schema {board_upgrade.BASE_SCHEMA_VERSION} or {SCHEMA_VERSION} only')
+                             f'Upgrade accepts schema {SCHEMA_VERSION} only')
         # A micro-task Host boundary has no autonomous next turn. A recorded or
         # queued continuation still has work to prepare/claim, even if the run
         # currently reports a Host boundary. Routing and helper tasks are checked
@@ -81,60 +81,6 @@ def idle_snapshot(state: Path, *, event_head: int | None = None, exact: bool = F
             raise BoardError('UPGRADE_INVALID_BOARD', 'Board integrity or foreign key checks failed')
         snapshot = {**backup.database_snapshot(connection, event_head=event_head, exact=exact),
                     'schema': int(schema[0])}
-        if snapshot['schema'] == board_upgrade.BASE_SCHEMA_VERSION:
-            # Hash complete expected rows before conversion. The sparse changes
-            # replace only the declared fields; every other value stays exact.
-            cursor = connection.execute("SELECT * FROM commands WHERE kind='macro_task.stop'")
-            response_index = [column[0] for column in cursor.description].index('response_json')
-            updates = {}
-            for row in cursor:
-                expected = list(row)
-                expected[response_index] = board_upgrade.migrated_stop_response(row[response_index])
-                updates[row[0]] = expected
-            deletes = board_upgrade.obsolete_receipt_ids(connection)
-            projected = backup.database_snapshot(connection, event_head=event_head,
-                                                 table_names={'commands'}, changes={'commands': (updates, {}, deletes)})
-            snapshot['migratedCommandsFingerprint'] = projected['fingerprints']['commands']
-            snapshot['migratedCommandsCount'] = projected['tables']['commands']
-            cursor = connection.execute(
-                'SELECT r.*,t.adapter FROM workflow_runs r JOIN tasks t ON t.task_id=r.run_id'
-                ' WHERE r.buddy_json IS NOT NULL'
-            )
-            buddy_index = [column[0] for column in cursor.description].index('buddy_json')
-            updates = {}
-            for row in cursor:
-                converted = board_upgrade.migrated_buddy(row[buddy_index], row[-1])
-                if converted != row[buddy_index]:
-                    expected = list(row[:-1])
-                    expected[buddy_index] = converted
-                    updates[row[0]] = expected
-            projected = backup.database_snapshot(connection, event_head=event_head,
-                                                 table_names={'workflow_runs'}, changes={'workflow_runs': (updates, {}, set())})
-            snapshot['migratedWorkflowRunsFingerprint'] = projected['fingerprints']['workflow_runs']
-            cursor = connection.execute(
-                "SELECT e.*,r.micro_task_json FROM events e LEFT JOIN workflow_runs r ON r.run_id=e.task_id"
-                " WHERE e.kind='workflow.buddy_selected' AND e.seq<=?", (snapshot['eventHead'],)
-            )
-            columns = [column[0] for column in cursor.description]
-            kind_index, payload_index = columns.index('kind'), columns.index('payload_json')
-            updates = {}
-            for row in cursor:
-                kind, payload = board_upgrade.migrated_selection_event(row[payload_index], row[-1])
-                if kind != row[kind_index]:
-                    expected = list(row[:-1])
-                    expected[kind_index] = kind
-                    expected[payload_index] = payload
-                    updates[row[0]] = expected
-            projected = backup.database_snapshot(connection, event_head=event_head,
-                                                 table_names={'events'}, changes={'events': (updates, {}, set())})
-            snapshot['migratedEventsFingerprint'] = projected['fingerprints']['events']
-            meta = connection.execute("SELECT * FROM meta WHERE key='schema_version'")
-            value_index = [column[0] for column in meta.description].index('value')
-            row = list(meta.fetchone())
-            row[value_index] = str(SCHEMA_VERSION)
-            projected = backup.database_snapshot(connection, table_names={'meta'},
-                                                 changes={'meta': ({'schema_version': row}, {}, set())})
-            snapshot['migratedMetaFingerprint'] = projected['fingerprints']['meta']
         return snapshot
 
 
@@ -336,29 +282,6 @@ def backup_readiness(state: Path) -> dict:
         raise BoardError('BACKUP_PREFLIGHT_FAILED', 'Backup inventory contains unsafe paths',
                          rejected=report['rejected'])
     return report
-
-
-def verify_migrated_snapshot(before: dict, after: dict) -> None:
-    """Prove that the pending migration changed only its declared stored form."""
-    converted = {'commands': 'migratedCommandsFingerprint',
-                 'workflow_runs': 'migratedWorkflowRunsFingerprint',
-                 'events': 'migratedEventsFingerprint'}
-    retained = set(before['tables']) - {'meta', *converted}
-    if (after['schema'] != SCHEMA_VERSION or after['eventHead'] != before['eventHead']
-            or set(after['tables']) != set(before['tables']) | {'reminder_settings', 'attempt_reminders', 'workflow_fixes'}
-            or after['tables']['meta'] != before['tables']['meta']
-            or after['fingerprints']['meta'] != before['migratedMetaFingerprint']
-            or after['exemptFingerprints'] != before['exemptFingerprints']
-            or after['tables']['commands'] != before['migratedCommandsCount']
-            or any((name != 'commands' and after['tables'][name] != before['tables'][name])
-                   or after['fingerprints'].get(name) != before[expected]
-                   for name, expected in converted.items())
-            or after['tables']['reminder_settings'] != 1 or after['tables']['attempt_reminders'] != 0
-            or after['tables']['workflow_fixes'] != 0
-            or any(after['tables'][name] != before['tables'][name]
-                   or after['fingerprints'].get(name) != before['fingerprints'].get(name)
-                   for name in retained)):
-        raise BoardError('UPGRADE_VERIFY_FAILED', 'Schema conversion changed retained board data')
 
 
 def verify_started(state: Path, target: Path, health: dict, before: dict) -> dict:
@@ -566,17 +489,7 @@ def upgrade(params: dict, *, skill_source: Path | None = None, skill_target: Pat
                     journal['before'] = before
                 journal.update(phase='backed-up', backup=backed_up)
                 write_journal(marker, journal)
-                if before['schema'] == board_upgrade.BASE_SCHEMA_VERSION:
-                    journal['phase'] = 'migrating'
-                    write_journal(marker, journal)
-                    board_upgrade.migrate(state)
-                    expected = idle_snapshot(state, event_head=before['eventHead'], exact=True)
-                    verify_migrated_snapshot(before, expected)
-                    expected['runtimeSettings'] = runtime_settings
-                    journal.update(phase='migrated', expected=expected)
-                    write_journal(marker, journal)
-                else:
-                    expected = before
+                expected = before
             active = target
             health = start(state, target)
             evidence = verify_started(state, target, health, expected)
