@@ -34,6 +34,9 @@ jobs:
           node-version: '24'
           cache: npm
           cache-dependency-path: apps/console/package-lock.json
+      - uses: astral-sh/setup-uv@v6
+        with:
+          version: '0.12.19'
       - name: Install console dependencies
         run: |
           npm --prefix apps/console ci 2>&1 | tee "$RUNNER_TEMP/logs/npm-ci.log"
@@ -217,7 +220,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest, macos-latest]
+        os: [ubuntu-latest, windows-latest, windows-11-arm, macos-latest]
         shard: [1, 2, 3, 4]
     env:
       CHECK_OS: ${{ matrix.os }}
@@ -251,6 +254,9 @@ jobs:
       - name: Select Python test shard
         id: shard
         # Splits by measured per-file durations (.github/check-durations.json).
+        # ARM Windows uses the x64 Windows profile for the same file split.
+        env:
+          CHECK_OS: ${{ matrix.os == 'windows-11-arm' && 'windows-latest' || matrix.os }}
         run: python .github/select-test-shard.py
       - name: Python check shard
         id: python-check
