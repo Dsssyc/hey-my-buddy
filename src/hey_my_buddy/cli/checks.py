@@ -53,7 +53,7 @@ import threading
 import time
 
 from .. import locking, private_dirs
-from ..blackboard.tasks.storage import observe_open_paths, observe_process_argv
+from ..process_observation import observe_open_paths, observe_process_argv
 
 #: Inherited virtual environment pins not covered by the prefix filter below.
 SANITIZED_VARIABLES = (
@@ -499,7 +499,7 @@ def _open_file_pids(root: Path) -> tuple[set[int], str | None, bool]:
     channels. Neither can prove a private root clear; the teardown decides how
     to record that uncertainty alongside its own argv and lifetime-lock checks.
     """
-    opened, error, available = observe_open_paths(proc_fds=True)
+    opened, error, available = observe_open_paths()
     prefixes = _root_prefixes(root)
     pids = {pid for pid, paths in opened.items()
             if any(filename == prefix or filename.startswith(prefix + os.sep)

@@ -11,7 +11,7 @@ import unittest
 from unittest.mock import patch
 
 from hey_my_buddy.cli import checks
-from hey_my_buddy.blackboard.tasks import storage
+from hey_my_buddy import process_observation as observation
 from process_observation_fakes import process, processes
 
 
@@ -53,7 +53,7 @@ class FocusedChecksTests(unittest.TestCase):
         unreachable.write_text("", encoding="utf-8", newline="\n")
 
     def invoke(self, arguments, *, process_table=()):
-        observer = (patch.object(storage.psutil, "pids", side_effect=storage.psutil.AccessDenied())
+        observer = (patch.object(observation.psutil, "pids", side_effect=observation.psutil.AccessDenied())
                     if process_table is None else
                     processes(*(process(pid, argv) for pid, argv in process_table)))
         output = io.StringIO()
@@ -185,7 +185,7 @@ class SweepTests(unittest.TestCase):
         return root
 
     def sweep(self, table):
-        observer = (patch.object(storage.psutil, "pids", side_effect=storage.psutil.AccessDenied())
+        observer = (patch.object(observation.psutil, "pids", side_effect=observation.psutil.AccessDenied())
                     if table is None else processes(*(process(pid, argv) for pid, argv in table)))
         output = io.StringIO()
         with (observer,

@@ -4,13 +4,15 @@ import json
 import os
 from pathlib import Path
 import stat
+import subprocess
+import sys
 from types import SimpleNamespace
 from unittest import mock, skipIf
 from hey_my_buddy.errors import BoardError
-from hey_my_buddy import private_dirs, locking
+from hey_my_buddy import private_dirs, locking, process_observation as observation
 from hey_my_buddy.blackboard.tasks import storage
 from support import BoardTestCase
-from process_observation_fakes import process, processes
+from process_observation_fakes import native_references, proc_references, process, processes
 
 class StorageTests(BoardTestCase):
     def test_session_record_inventory_is_disjoint_protected_and_does_not_follow_links(self):
@@ -724,31 +726,18 @@ class ProcessInventoryServiceTests(BoardTestCase):
         self.assertEqual(orphans, [])
         self.assertTrue(known)
 
-    def test_unreadable_or_changed_processes_keep_runtime_status_unknown(self):
-        for error in (storage.psutil.AccessDenied(104), AttributeError('cmdline missing')):
-            with self.subTest(error=type(error).__name__):
-                fixture = process(104, ['python'])
-                fixture.cmdline.side_effect = error
-                with processes(fixture):
-                    _, commands, known = storage.process_inventory(self.directory)
-                self.assertFalse(known)
-                self.assertEqual(storage.runtime_usage(self.directory, commands, known),
-                                 ['process-inspection-unavailable'])
+    def test_unreadable_processes_keep_runtime_status_unknown(self):
         fixture = process(104, ['python'])
-        replacement = process(104)
-        replacement.create_time.return_value = 124.0
-        with processes(fixture, current={104: replacement}):
-            self.assertFalse(storage.process_inventory(self.directory)[2])
+        fixture.cmdline.side_effect = observation.psutil.AccessDenied(104)
+        with processes(fixture):
+            _, commands, known = storage.process_inventory(self.directory)
+        self.assertFalse(known)
+        self.assertEqual(storage.runtime_usage(self.directory, commands, known),
+                         ['process-inspection-unavailable'])
 
-    def test_missing_cmdline_and_unreadable_identity_are_unknown(self):
-        for attribute, result in (('cmdline', None), ('create_time', None)):
-            with self.subTest(attribute=attribute):
-                fixture = process(104)
-                getattr(fixture, attribute).return_value = result
-                with processes(fixture):
-                    self.assertFalse(storage.process_inventory(self.directory)[2])
-        with mock.patch.object(storage.psutil, 'pids', return_value=[104]), \
-             mock.patch.object(storage.psutil, 'Process', side_effect=storage.psutil.NoSuchProcess(104)):
+    def test_process_ended_before_opening_its_snapshot_entry_is_not_unknown(self):
+        with mock.patch.object(observation.psutil, 'pids', return_value=[104]), \
+             mock.patch.object(observation.psutil, 'Process', side_effect=observation.psutil.NoSuchProcess(104)):
             self.assertTrue(storage.process_inventory(self.directory)[2])
 
     def test_unreadable_service_files_keep_state_and_runtime_usage_unknown(self):
@@ -780,15 +769,31 @@ class ProcessInventoryServiceTests(BoardTestCase):
                                   mappings=[runtime / 'library.so'] if channel == 'mappings' else [])
                 opened = (f'p104\nn{runtime}/unlinked (deleted)\n' if channel == 'deleted-file' else
                           f'p104\nn{runtime}\n' if channel == 'directory-fd' else 'p104\n')
+                linux = channel in ('cwd', 'mappings')
                 with (processes(fixture),
-                      mock.patch.object(storage.psutil, 'WINDOWS', False),
-                      mock.patch.object(storage.psutil, 'LINUX', True),
-                      mock.patch.object(storage.shutil, 'which', return_value='lsof'),
-                      mock.patch.object(storage.subprocess, 'run',
-                                        return_value=SimpleNamespace(stdout=opened, stderr='', returncode=0)) as native):
+                      mock.patch.object(observation.psutil, 'WINDOWS', False),
+                      mock.patch.object(observation.psutil, 'LINUX', linux),
+                      mock.patch.object(observation.psutil, 'MACOS', not linux),
+                      proc_references() if linux else native_references(opened)):
                     self.assertEqual(storage.runtime_usage(runtime, [], True), ['runtime-in-use'])
-                self.assertIn('^cwd,^mem,^DEL,^txt', native.call_args.args[0])
                 fixture.open_files.assert_not_called()  # Native descriptors are the one channel.
+
+    @skipIf(os.name == 'nt', 'POSIX cwd and symbolic-link runtime observation')
+    def test_runtime_with_linked_parent_is_in_use_by_a_real_process_cwd(self):
+        parent = self.directory / 'real parent'
+        (parent / 'runtime').mkdir(parents=True)
+        alias = self.directory / 'linked parent'
+        alias.symlink_to(parent, target_is_directory=True)
+        child = subprocess.Popen(
+            [sys.executable, '-c', 'import sys; print("ready", flush=True); sys.stdin.read()'],
+            cwd=alias / 'runtime', stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True)
+        try:
+            self.assertEqual(child.stdout.readline(), 'ready\n')
+            self.assertEqual(storage.runtime_usage(alias / 'runtime', [], True), ['runtime-in-use'])
+        finally:
+            child.stdin.close()
+            child.wait(timeout=10)
+            child.stdout.close()
 
     @skipIf(os.name == 'nt', 'POSIX runtime absence proof; Windows remains unknown')
     def test_incomplete_path_observation_never_releases_a_runtime(self):
@@ -796,12 +801,12 @@ class ProcessInventoryServiceTests(BoardTestCase):
             with self.subTest(attribute=attribute):
                 fixture = process(104)
                 getattr(fixture, attribute).side_effect = storage.psutil.AccessDenied(104)
+                linux = attribute != 'status'
                 with (processes(fixture),
-                      mock.patch.object(storage.psutil, 'WINDOWS', False),
-                      mock.patch.object(storage.psutil, 'LINUX', True),
-                      mock.patch.object(storage.shutil, 'which', return_value='lsof'),
-                      mock.patch.object(storage.subprocess, 'run',
-                                        return_value=SimpleNamespace(stdout='', stderr='', returncode=0))):
+                      mock.patch.object(observation.psutil, 'WINDOWS', False),
+                      mock.patch.object(observation.psutil, 'LINUX', linux),
+                      mock.patch.object(observation.psutil, 'MACOS', not linux),
+                      proc_references() if linux else native_references('')):
                     self.assertEqual(storage.runtime_usage(self.directory, [], True),
                                      ['process-inspection-unavailable'])
 
@@ -813,8 +818,9 @@ class ProcessInventoryServiceTests(BoardTestCase):
                                  (SimpleNamespace(stdout='', stderr='', returncode=1),
                                   ['process-inspection-unavailable'])):
             with self.subTest(native=native), processes(process(104)), \
-                 mock.patch.object(storage.psutil, 'WINDOWS', False), \
-                 mock.patch.object(storage.psutil, 'LINUX', True), \
-                 mock.patch.object(storage.shutil, 'which', return_value='lsof'), \
-                 mock.patch.object(storage.subprocess, 'run', return_value=native):
+                 mock.patch.object(observation.psutil, 'WINDOWS', False), \
+                 mock.patch.object(observation.psutil, 'LINUX', False), \
+                 mock.patch.object(observation.psutil, 'MACOS', True), \
+                 mock.patch.object(observation.shutil, 'which', return_value='lsof'), \
+                 mock.patch.object(observation.subprocess, 'run', return_value=native):
                 self.assertEqual(storage.runtime_usage(self.directory, [], True), expected)
