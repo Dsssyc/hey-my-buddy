@@ -30,6 +30,32 @@ export function decisionCandidates(profiles: Profile[]): Profile[] {
     .sort((a, b) => a.adapter.localeCompare(b.adapter) || a.profileId.localeCompare(b.profileId));
 }
 
+/**
+ * The published directory capability for a harness that can actually execute a
+ * delegated helper in a workspace. `catalog.proposed_profiles` records exactly
+ * `execution:<adapter>` for every executable adapter, so a newly registered
+ * adapter (such as Codex) is admitted without a console-side harness list, and
+ * a decision-only or mismatched row is never offered as an executor.
+ */
+export function hasExecutionCapability(profile: Profile | undefined): boolean {
+  if (!profile) return false;
+  const token = `execution:${profile.adapter.trim().toLowerCase()}`;
+  return (profile.capabilities ?? []).some(
+    (entry) => entry.trim().toLowerCase() === token,
+  );
+}
+
+/** Enabled, currently available and able to execute a delegated helper task. */
+export function isExecutionCandidate(profile: Profile | undefined): boolean {
+  return !!profile && profile.enabled && profile.available && hasExecutionCapability(profile);
+}
+
+export function executionCandidates(profiles: Profile[]): Profile[] {
+  return profiles
+    .filter(isExecutionCandidate)
+    .sort((a, b) => a.adapter.localeCompare(b.adapter) || a.profileId.localeCompare(b.profileId));
+}
+
 /** One actionable message about a user-owned setting. */
 export type PolicyIssue = {
   profileId: string;

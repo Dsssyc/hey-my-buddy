@@ -33,12 +33,17 @@ export function Models({ snapshot, editor, api, refresh, active = true, mutation
     && g.profiles.some(p => [p.label, p.model, p.provider, p.adapter, effortText(p.effort)].join(" ").toLowerCase().includes(query.toLowerCase())));
   const shownProfiles = data.profiles.filter(p => showUnavailable || p.available);
   const hiddenCount = data.profiles.length - shownProfiles.length;
-  // `unavailableProfileCount` counts the retired identities the snapshot does
-  // not list, so only the retained rows this page has actually loaded are
-  // subtracted; a snapshot-listed unavailable row is not part of that count.
-  const listedIds = new Set(snapshot.profiles.map(p => p.profileId));
-  const loadedRetained = data.profiles.filter(p => !p.available && !listedIds.has(p.profileId)).length;
-  const unlisted = Math.max(0, (snapshot.unavailableProfileCount ?? loadedRetained) - loadedRetained);
+  // `unavailableProfileCount` is the table-wide count of every unavailable row,
+  // including one the bounded snapshot still lists (the retained decision
+  // selector). Subtract each unavailable row the local view already holds —
+  // listed plus paged history, deduplicated by profileId — exactly once; rows
+  // that are not loaded stay counted. A backend that omits the field reports
+  // nothing rather than an invented number.
+  const unavailableTotal = snapshot.unavailableProfileCount;
+  const loadedUnavailable = data.profiles.filter(p => !p.available).length;
+  const unlisted = typeof unavailableTotal === "number" && Number.isFinite(unavailableTotal)
+    ? Math.max(0, unavailableTotal - loadedUnavailable)
+    : 0;
   const profile = data.profiles.find(p => p.profileId === selected);
   const family = profile && families.find(g => g.key === familyKey(profile));
   // A refusal only stays on screen while it still describes the current state.

@@ -5,7 +5,9 @@ import {
   blockingIssues,
   decisionAttention,
   decisionCandidates,
+  executionCandidates,
   hasDecisionCapability,
+  hasExecutionCapability,
   isDecisionCandidate,
 } from "./policy";
 import type { Profile, Snapshot, WriterGrant } from "./types";
@@ -87,6 +89,42 @@ describe("decision capability", () => {
   it("offers enabled, available, decision-capable candidates in a stable order", () => {
     expect(decisionCandidates([coder, otherHarness, disabled, worker, retired]).map(p => p.profileId))
       .toEqual([worker.profileId, otherHarness.profileId]);
+  });
+});
+
+describe("execution capability admission", () => {
+  const codex: Profile = {
+    ...worker,
+    profileId: "codex:openai:gpt-5:high",
+    adapter: "codex",
+    provider: "openai",
+    model: "gpt-5",
+    effort: "high",
+    capabilities: ["execution:codex", "input:text"],
+  };
+
+  it("accepts exactly the adapter's published `execution:<adapter>` token", () => {
+    // `catalog.proposed_profiles` publishes this token for every executable
+    // adapter, so Codex is admitted without a console-side harness list.
+    expect(hasExecutionCapability(worker)).toBe(true);
+    expect(hasExecutionCapability(codex)).toBe(true);
+    expect(hasExecutionCapability(coder)).toBe(true);
+    // A decision-only row, a mismatched adapter and invented aliases never pass.
+    expect(hasExecutionCapability({ ...worker, capabilities: ["decision"] })).toBe(false);
+    expect(hasExecutionCapability(otherHarness)).toBe(false);
+    expect(hasExecutionCapability({ ...worker, capabilities: [] })).toBe(false);
+    expect(hasExecutionCapability({ ...worker, capabilities: ["EXECUTION:DSH"] })).toBe(true);
+    expect(hasExecutionCapability({ ...worker, capabilities: [" execution:dsh "] })).toBe(true);
+    expect(hasExecutionCapability({ ...worker, capabilities: ["execution:"] })).toBe(false);
+    expect(hasExecutionCapability({ ...worker, capabilities: ["execution:dsh:extra"] })).toBe(false);
+    expect(hasExecutionCapability(undefined)).toBe(false);
+  });
+
+  it("offers only enabled, available, execution-capable candidates in a stable order", () => {
+    expect(executionCandidates([worker, codex, otherHarness, disabled, retired]).map(p => p.profileId))
+      .toEqual([codex.profileId, worker.profileId]);
+    expect(executionCandidates([{ ...codex, capabilities: ["decision"] }])).toEqual([]);
+    expect(executionCandidates([{ ...codex, available: false }])).toEqual([]);
   });
 });
 

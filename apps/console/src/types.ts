@@ -186,10 +186,10 @@ export type Snapshot = {
   /** Human opinions, kept apart from the automatic evidence-linked cards. */
   annotations: Annotation[];
   /**
-   * Retired configurations the snapshot does not list (a snapshot-listed
-   * unavailable row, such as the current decision profile, is not counted).
-   * The console pages the unlisted ones through `model_profiles`; they are
-   * never silently dropped from the count.
+   * Every unavailable configuration in the table, including one the snapshot
+   * still lists (the retained decision selector). The console subtracts the
+   * unavailable rows it has already loaded and pages the rest through
+   * `model_profiles`; they are never silently dropped from the count.
    */
   unavailableProfileCount?: number;
   evidence: Evidence[];

@@ -2,7 +2,7 @@ import { useEffect } from "react";
 import type { ReactNode } from "react";
 import type { ConsoleApi } from "./api";
 import type { Snapshot, Task } from "./types";
-import type { HelperDraft } from "./workflow-types";
+import type { HelperDraft, IntegrationRecord } from "./workflow-types";
 import { useWorkflow } from "./use-workflow";
 import { HelperForm } from "./HelperForm";
 import { RoutingPanel, needsRouting } from "./RoutingPanel";
@@ -12,8 +12,14 @@ import { DetailTabs } from "./DetailTabs";
 import { useRecordDraft } from "./record-drafts";
 import { RoutingDetails } from "./RoutingDetails";
 import { TaskActivityView } from "./task-activity";
+import { executionCandidates } from "./policy";
+import { finalArtifact, finalIntegration, recordedIntegrations } from "./integration";
+import { formatDate } from "./ui";
+import { NativeSessionView } from "./native-session";
 
 const lines = (text: string) => text.split("\n").map(s => s.trim()).filter(Boolean);
+const integrationLabel = (record: IntegrationRecord) =>
+  record.state === "not-required" ? "整合：Host 记录无需整合" : "整合：已验证";
 
 export function WorkflowPanel({ task, snapshot, api, refresh, selectTask, active = true, onLockChange, onTaskUpdate, recordInfo, routingRequest = 0 }: {
   task: Task;
@@ -54,7 +60,9 @@ export function WorkflowPanel({ task, snapshot, api, refresh, selectTask, active
     setDraftRequest(requestId);
     setReason(""); setHelpers([]); setAutoContinue(true);
   }, [requestId, state.uncertain]);
-  const profiles = snapshot.profiles.filter(p => p.enabled && p.available && ["dsh", "zcode"].includes(p.adapter));
+  // Helper candidates come from the directory capability published by
+  // `catalog.proposed_profiles` (`execution:<adapter>`), never a harness list.
+  const profiles = executionCandidates(snapshot.profiles);
   const locked = state.busy || state.uncertain || !value;
   const activeHelpers = value?.children.some(c => c.role === "helper" && c.state === "active");
   const canApprove = helpers.length > 0 && helpers.every(h =>
@@ -85,7 +93,14 @@ export function WorkflowPanel({ task, snapshot, api, refresh, selectTask, active
       }),
     });
   }
-  const artifact = value?.artifacts.find(a => a.kind === "output" && a.attemptId === value.finalAttemptId);
+  const artifact = finalArtifact(value);
+  const integration = finalIntegration(value, artifact);
+  // `recordedIntegrations` is newest first, so the first record per artifact is
+  // the newest one — the same record acceptance binds.
+  const integrationsByArtifact = new Map<string, IntegrationRecord>();
+  for (const record of recordedIntegrations(value)) {
+    if (!integrationsByArtifact.has(record.artifactId)) integrationsByArtifact.set(record.artifactId, record);
+  }
   return <div className="workflow-panel">
     {state.error && <p className="error-message" role="alert">{state.error}</p>}
     {state.notice && <p className="success-message" role="status">{state.notice}</p>}
@@ -160,12 +175,35 @@ export function WorkflowPanel({ task, snapshot, api, refresh, selectTask, active
       </div>
       <div id={tabsId + "-artifacts"} role="tabpanel" aria-labelledby={tabsId + "-artifacts-tab"} hidden={selectedSection !== "artifacts"}>
       {value.artifacts.length > 0 ? <section className="detail-section"><h3>固定产物引用</h3><ul className="artifact-list">
-        {value.artifacts.map(a => <li key={a.artifactId}><details><summary>{a.kind} · {!a.sourceTaskId || a.sourceTaskId === value.runId ? "本任务" : "关联任务"} · {(a.outputCommit || a.commit || a.artifactId).slice(0, 12)}</summary><code>{a.artifactId}</code>{(a.outputCommit || a.commit) && <code>commit {a.outputCommit || a.commit}</code>}<code>SHA-256 {a.snapshotSha256 || a.manifestSha256}</code>{a.diffPath && <code>{a.diffPath}</code>}</details></li>)}
+        {value.artifacts.map(a => <li key={a.artifactId}><details><summary>{a.kind} · {!a.sourceTaskId || a.sourceTaskId === value.runId ? "本任务" : "关联任务"} · {(a.outputCommit || a.commit || a.artifactId).slice(0, 12)}</summary><code>{a.artifactId}</code>{(a.outputCommit || a.commit) && <code>commit {a.outputCommit || a.commit}</code>}<code>SHA-256 {a.snapshotSha256 || a.manifestSha256}</code>{a.diffPath && <code>{a.diffPath}</code>}{integrationsByArtifact.get(a.artifactId) && <code>{integrationLabel(integrationsByArtifact.get(a.artifactId)!)}</code>}</details></li>)}
       </ul><p className="small muted">这些引用固定在具体执行。验收前仍须检查实际 diff 和测试结果。</p></section> : <p className="muted">尚无固定产物。</p>}
+      {artifact && <section className="detail-section" aria-label="最终产物与整合证据">
+        <h3>最终产物与整合证据</h3>
+        <dl className="facts">
+          <dt>最终产物</dt><dd className="mono wrap">{artifact.artifactId}</dd>
+          <dt>产物类型</dt><dd>{artifact.kind === "resolved-output" ? "Host 恢复交付的解析输出" : "执行输出"}</dd>
+          {(artifact.outputCommit || artifact.commit) && <><dt>产物提交</dt><dd className="mono wrap">{artifact.outputCommit || artifact.commit}</dd></>}
+          <dt>产物校验</dt><dd className="mono wrap">SHA-256 {artifact.snapshotSha256 || artifact.manifestSha256}</dd>
+        </dl>
+        {integration ? <dl className="facts">
+          <dt>整合状态</dt><dd>{integration.state === "not-required" ? "Host 已明确记录无需整合" : "已验证整合"}</dd>
+          {integration.state !== "not-required" && integration.strategy && <><dt>整合方式</dt><dd>{integration.strategy}</dd></>}
+          {integration.state !== "not-required" && integration.target && <><dt>整合目标</dt><dd className="mono wrap">{`${integration.target.path} @ ${integration.target.ref}`}</dd></>}
+          {integration.state !== "not-required" && integration.beforeCommit && integration.afterCommit
+            && <><dt>目标变更</dt><dd className="mono wrap">{`${integration.beforeCommit} → ${integration.afterCommit}`}</dd></>}
+          {integration.reason && <><dt>记录原因</dt><dd className="wrap">{integration.reason}</dd></>}
+          {typeof integration.verification?.summary === "string" && integration.verification.summary.trim()
+            && <><dt>验证摘要</dt><dd className="wrap">{integration.verification.summary.trim()}</dd></>}
+          <dt>记录来源</dt><dd>{`${integration.actor} · ${formatDate(integration.createdAt)}`}</dd>
+        </dl> : <p className="banner guard-banner" role="status">
+          尚未记录最终产物的整合证明。Host 需要先检查并完成实际整合，再用 <code>workflow_integration_record</code>（integration-record）记录目标提交、整合方式与验证证据；控制台不会自动登记“无需整合”来绕过验证。
+        </p>}
+      </section>}
       </div>
       <div id={tabsId + "-execution"} role="tabpanel" aria-labelledby={tabsId + "-execution-tab"} hidden={selectedSection !== "execution"}>
       {recordInfo}
-      <h3>执行记录</h3><dl className="facts"><dt>本记录权限</dt><dd>{value.hostId} · 第 {value.ownerGeneration} 代</dd><dt>执行位置</dt><dd>{value.workspace?.path || "未记录"}</dd><dt>当前回合</dt><dd>{value.currentTurn?.turnId || "尚未开始"}</dd><dt>执行尝试</dt><dd>{value.currentTurn?.attemptId || "尚未开始"}</dd><dt>原生会话</dt><dd>{value.currentTurn?.sessionId || "未记录"}</dd></dl>
+      <h3>执行记录</h3><dl className="facts"><dt>本记录权限</dt><dd>{value.hostId} · 第 {value.ownerGeneration} 代</dd><dt>执行位置</dt><dd>{value.workspace?.path || "未记录"}</dd><dt>当前回合</dt><dd>{value.currentTurn?.turnId || "尚未开始"}</dd><dt>执行尝试</dt><dd>{value.currentTurn?.attemptId || "尚未开始"}</dd><dt>回合会话</dt><dd>{value.currentTurn?.sessionId || "未记录"}</dd></dl>
+      <NativeSessionView task={task} turnSessionId={value.currentTurn?.sessionId} />
       <details className="detail-section"><summary>原始目标</summary><p className="read-text">{task.task}</p></details>
       <details className="detail-section"><summary>更换 Host 或取消目标</summary><fieldset className="workflow-controls" disabled={locked}>
         <label className="field"><span>新的 Host ID</span><input value={host} maxLength={256} onChange={e => setHost(e.target.value)} /></label>
@@ -179,8 +217,19 @@ export function WorkflowPanel({ task, snapshot, api, refresh, selectTask, active
     </div>
     {selectedSection === "artifacts" && value?.state === "delivered" && <fieldset className="workflow-controls acceptance-controls" disabled={locked || activeHelpers || value.task.shutdownConfirmed !== true || value.shutdown?.descendantsConfirmed !== true}>
       <legend>最终验收</legend><label className="field"><span>实际检查依据</span><textarea rows={2} value={note} maxLength={2000} onChange={e => setNote(e.target.value)} /></label>
-      <div className="actions">{(["accepted", "rejected"] as const).map(verdict => <button key={verdict} className={`button ${verdict === "accepted" ? "primary" : ""}`} disabled={!note.trim() || !artifact}
-        onClick={() => void command("workflow_acknowledge", { artifactId: artifact?.artifactId, verdict, note: note.trim() })}>{verdict === "accepted" ? "接受最终交付" : "记录验收问题"}</button>)}</div>
+      <p className="small muted">接受交付必须绑定当前最终产物，以及它自己已记录的整合证明（已验证或 Host 明确记录无需整合）；拒绝不需要整合记录。</p>
+      <div className="actions">
+        <button className="button primary" disabled={!note.trim() || !artifact || !integration}
+          onClick={() => void command("workflow_acknowledge", {
+            ...(artifact ? { artifactId: artifact.artifactId } : {}),
+            ...(integration ? { integrationId: integration.integrationId } : {}),
+            verdict: "accepted", note: note.trim(),
+          })}>接受最终交付</button>
+        <button className="button" disabled={!note.trim()}
+          onClick={() => void command("workflow_acknowledge", {
+            ...(artifact ? { artifactId: artifact.artifactId } : {}), verdict: "rejected", note: note.trim(),
+          })}>记录验收问题</button>
+      </div>
     </fieldset>}
   </div>;
 }

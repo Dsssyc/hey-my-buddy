@@ -42,6 +42,37 @@ export type WorkflowRequest = {
   origin?: { runId: string; requestId: string };
   preparationError?: { code: string; message: string };
 };
+/**
+ * One durable integration record from `workflow_get`. `state` is `verified` for
+ * a checked target relationship or `not-required` for an explicit Host
+ * decision; only those two satisfy acceptance for the named artifact.
+ */
+export type IntegrationRecord = {
+  integrationId: string;
+  runId: string;
+  artifactId: string;
+  attemptId: string;
+  state: string;
+  strategy: string;
+  target: null | {
+    kind: string;
+    path: string;
+    ref: string;
+    repositoryId: string | null;
+    checkoutId: string | null;
+  };
+  sourceCommit: string | null;
+  sourceTree: string | null;
+  beforeCommit: string | null;
+  afterCommit: string | null;
+  beforeTree: string | null;
+  afterTree: string | null;
+  verification: { verified?: boolean; notRequired?: boolean; reason?: string; summary?: string } & Record<string, unknown>;
+  notRequired: boolean;
+  reason: string | null;
+  actor: string;
+  createdAt: string;
+};
 export type Workflow = {
   governed: true;
   runId: string;
@@ -95,6 +126,8 @@ export type Workflow = {
     outputCommit?: string;
     diffPath?: string;
   }[];
+  /** Host-recorded integration evidence, newest first. */
+  integrations: IntegrationRecord[];
   finalArtifactId: string | null;
   finalAttemptId: string | null;
   task: Partial<Task> & Pick<Task, "runId" | "revision" | "status">;

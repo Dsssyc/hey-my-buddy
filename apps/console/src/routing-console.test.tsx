@@ -63,7 +63,7 @@ function workflow(record = task()): Workflow {
       reason: "已记录当前配置的选择依据" },
     workspace: { path: "/repo", kind: "worktree", access: "write", inputCommit: "input", manifestSha256: "manifest" },
     currentTurn: { turnId: "turn-current", turnIndex: 2, attemptId: "attempt-current", resumeMode: "native-session" },
-    activeRequest: null, children: [], artifacts: [], finalArtifactId: null, finalAttemptId: null, task: record,
+    activeRequest: null, children: [], artifacts: [], integrations: [], finalArtifactId: null, finalAttemptId: null, task: record,
   };
 }
 function apiFor(state: Snapshot, command: ReturnType<typeof vi.fn>): ConsoleApi {

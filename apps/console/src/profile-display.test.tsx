@@ -306,6 +306,7 @@ describe("helper and routing selectors", () => {
       activeRequest: null,
       children: [],
       artifacts: [],
+      integrations: [],
       finalArtifactId: null,
       finalAttemptId: null,
       task: {

@@ -34,7 +34,7 @@ function workflow(task: Task): Workflow {
     workspace: { path: task.cwd, kind: "worktree", access: "write", inputCommit: "input", manifestSha256: "hash" },
     currentTurn: null, activeRequest: { requestId: `request-${task.runId}`, kind: "assistance", state: "open",
       summary: `协助 ${task.runId}`, attempted: "已有检查", neededWork: ["补充测试"], expectedArtifacts: [], acceptance: "检查通过" },
-    children: [], artifacts: [], finalArtifactId: null, finalAttemptId: null, task };
+    children: [], artifacts: [], integrations: [], finalArtifactId: null, finalAttemptId: null, task };
 }
 function fixture(records: Task[] = []) {
   const profiles = catalog();

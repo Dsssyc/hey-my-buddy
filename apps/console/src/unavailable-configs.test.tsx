@@ -68,10 +68,10 @@ function fixture(options: { staleDecision?: boolean; stalePin?: boolean; pageSiz
     gate: { phase: "open", readers: 0, waitingWriters: 0, writer: null },
     configuration: { revision: 1, decisionProfileId: decisionId },
     profiles: live,
-    // The snapshot carries the unlisted retained identities only as a count
-    // (a listed unavailable row, such as the current decision profile, is not
-    // included in it).
-    unavailableProfileCount: profiles.filter(p => !p.available && p.profileId !== decisionId).length,
+    // `unavailableProfileCount` counts every unavailable row in the table,
+    // including a listed one such as the retained decision profile; the console
+    // subtracts what it has loaded and pages the rest.
+    unavailableProfileCount: profiles.filter(p => !p.available).length,
     cards: cards.filter(c => live.some(p => p.profileId === c.profileId)),
     annotations: annotations.filter(a => live.some(p => p.profileId === a.profileId)),
     preferences: preferences.filter(p => live.some(p => p.profileId === p.profileId)),
@@ -159,6 +159,28 @@ describe("unavailable configurations", () => {
     // Inspecting a retired variant never marks it enabled by itself.
     expect(within(detail).getByRole("button", { name: "max，已启用，目录不可用，正在查看" }).getAttribute("aria-pressed")).toBe("true");
     expect(screen.getByText(/4 个执行配置/)).toBeTruthy();
+  });
+
+  it("counts a listed offline decision selector once without double-counting loaded rows", async () => {
+    const f = fixture({ staleDecision: true, pageSize: 2 });
+    const user = userEvent.setup();
+    window.location.hash = "#models";
+    render(<App suppliedApi={f.api} />);
+    await screen.findByRole("heading", { name: "模型 1" });
+    // The snapshot lists the unavailable decision selector (retired-model · max)
+    // and `unavailableProfileCount` counts it too, so exactly the one still
+    // unloaded retained identity may be reported.
+    expect(await screen.findByText("目录中另有 1 个不可用配置保留在历史记录中；勾选“显示不可用配置”可按页查看。")).toBeTruthy();
+    await user.click(screen.getByLabelText("显示不可用配置"));
+    await screen.findByRole("heading", { name: "模型 2" });
+    // The first retained page contains only rows the snapshot already lists.
+    await user.click(await screen.findByRole("button", { name: "加载更多历史配置" }));
+    await waitFor(() => expect(screen.getByText(/4 个执行配置/)).toBeTruthy());
+    // Every unavailable row is loaded now; switching the toggle back off must
+    // report none left over instead of counting the listed selector twice.
+    await user.click(screen.getByLabelText("显示不可用配置"));
+    expect(screen.queryByText(/目录中另有/)).toBeNull();
+    expect(screen.getByText(/已隐藏 2 个不可用配置/)).toBeTruthy();
   });
 
   it("pages the retained history through the server cursor", async () => {

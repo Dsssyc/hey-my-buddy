@@ -2,12 +2,26 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { cleanup, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { WorkflowPanel } from "./WorkflowPanel";
-import type { Workflow } from "./workflow-types";
+import type { IntegrationRecord, Workflow } from "./workflow-types";
 import type { ConsoleApi } from "./api";
 import { ApiError } from "./api";
 import type { Snapshot, Task } from "./types";
 
 afterEach(cleanup);
+
+/** One verified integration binding, as `workflow_get` returns it. */
+function verifiedIntegration(artifactId: string, overrides: Partial<IntegrationRecord> = {}): IntegrationRecord {
+  return {
+    integrationId: "int-" + artifactId, runId: "parent", artifactId, attemptId: "attempt-final",
+    state: "verified", strategy: "cherry-pick",
+    target: { kind: "checkout", path: "/target-repo", ref: "main", repositoryId: "repo-1", checkoutId: "co-1" },
+    sourceCommit: "source-commit", sourceTree: "source-tree",
+    beforeCommit: "before-commit", afterCommit: "after-commit", beforeTree: "before-tree", afterTree: "after-tree",
+    verification: { verified: true, summary: "目标仓库集成测试通过" },
+    notRequired: false, reason: "", actor: "host", createdAt: "2026-09-25",
+    ...overrides,
+  };
+}
 
 function fixture() {
   const task: Task = {
@@ -23,11 +37,11 @@ function fixture() {
     workspace: { path: "/repo", kind: "existing", access: "write", inputCommit: "commit-a", manifestSha256: "manifest-a" },
     currentTurn: { turnId: "turn-a", turnIndex: 1, attemptId: "attempt-a", resumeMode: "initial", summary: "需要补充测试" },
     activeRequest: { requestId: "request-a", kind: "assistance", state: "open", summary: "补充并发测试", attempted: "已跑基础测试", neededWork: ["并发测试"], expectedArtifacts: ["tests/concurrent.py"], acceptance: "测试覆盖竞争" },
-    children: [], artifacts: [], finalArtifactId: null, finalAttemptId: null, task,
+    children: [], artifacts: [], integrations: [], finalArtifactId: null, finalAttemptId: null, task,
   };
   const snapshot = {
     csrfToken: "fixture-csrf",
-    profiles: [{ profileId: "flash-max", label: "Flash 工作", enabled: true, available: true, adapter: "dsh", provider: "deepseek-official", model: "deepseek-flash", effort: "max" }],
+    profiles: [{ profileId: "flash-max", label: "Flash 工作", enabled: true, available: true, adapter: "dsh", provider: "deepseek-official", model: "deepseek-flash", effort: "max", capabilities: ["execution:dsh", "effort:max"] }],
   } as Snapshot;
   const mutation = vi.fn(async (_op: string, _params: unknown) => ({}));
   const command = vi.fn(async (op: string, params: unknown) => op === "workflow_get" ? structuredClone(workflow) : mutation(op, params));
@@ -68,6 +82,32 @@ describe("governed workflow console", () => {
     expect(f.mutation).not.toHaveBeenCalled();
   });
 
+  it("shows the recorded native session evidence in the execution detail", async () => {
+    const f = fixture();
+    Object.assign(f.props.task, {
+      selectedAttempt: {
+        attemptId: "attempt-a", adapter: "zcode",
+        result: {
+          status: "ok", shutdownConfirmed: true,
+          result: {
+            nativeSession: {
+              adapter: "zcode", sessionId: "sess-z", captured: true, storageScope: "task-private",
+              storageOwner: "buddy-attempt", nativeAppVisibility: "not-listed-in-native-app",
+              resumeMode: "native-session", bindingPresent: true, resumable: true,
+            },
+          },
+        },
+      },
+    });
+    const user = userEvent.setup();
+    render(<WorkflowPanel {...f.props} />);
+    await user.click(await screen.findByRole("tab", { name: "执行记录" }));
+    const view = screen.getByRole("region", { name: "原生会话（只读）" });
+    expect(view.textContent).toContain("sess-z");
+    expect(view.textContent).toContain("未在原生 App 中列出");
+    expect(f.mutation).not.toHaveBeenCalled();
+  });
+
   it("leaves helper model fields absent for automatic routing", async () => {
     const f = fixture();
     f.props.snapshot.profiles = [];
@@ -85,7 +125,7 @@ describe("governed workflow console", () => {
 
   it("dispatches the selected ZCode helper without substituting a DSH identity", async () => {
     const f = fixture();
-    Object.assign(f.props.snapshot.profiles[0], { adapter: "zcode", provider: "bigmodel-api", model: "GLM-5.3", effort: "high" });
+    Object.assign(f.props.snapshot.profiles[0], { adapter: "zcode", provider: "bigmodel-api", model: "GLM-5.3", effort: "high", capabilities: ["execution:zcode", "effort:high"] });
     const user = userEvent.setup();
     render(<WorkflowPanel {...f.props} />);
     await user.type(await screen.findByLabelText("决定理由"), "使用已验证的 ZCode 配置");
@@ -97,6 +137,41 @@ describe("governed workflow console", () => {
     expect(f.mutation).toHaveBeenCalledWith("workflow_decide", expect.objectContaining({
       helpers: [expect.objectContaining({ adapter: "zcode", provider: "bigmodel-api", model: "GLM-5.3", effort: "high" })],
     }));
+  });
+
+  it("admits a Codex helper from its declared execution capability, not a harness allowlist", async () => {
+    const f = fixture();
+    Object.assign(f.props.snapshot.profiles[0], {
+      profileId: "codex-max", adapter: "codex", provider: "openai", model: "gpt-5", effort: "high",
+      capabilities: ["execution:codex", "effort:high"],
+    });
+    const user = userEvent.setup();
+    render(<WorkflowPanel {...f.props} />);
+    await user.type(await screen.findByLabelText("决定理由"), "使用已声明的 Codex 执行能力");
+    await user.click(screen.getByRole("button", { name: "添加协助任务" }));
+    await user.selectOptions(screen.getByLabelText("执行配置"), "codex-max");
+    await user.type(screen.getByLabelText("工作内容与验收条件"), "运行 Codex 适配检查");
+    await user.type(screen.getByLabelText("允许写入的相对路径（每行一项）"), "apps/console/src/x.ts");
+    await user.click(screen.getByRole("button", { name: "批准所列协助" }));
+    expect(f.mutation).toHaveBeenCalledWith("workflow_decide", expect.objectContaining({
+      helpers: [expect.objectContaining({ adapter: "codex", provider: "openai", model: "gpt-5", effort: "high" })],
+    }));
+  });
+
+  it("does not offer a profile whose capabilities lack its own adapter's execution token", async () => {
+    const f = fixture();
+    Object.assign(f.props.snapshot.profiles[0], { capabilities: ["decision"] });
+    f.props.snapshot.profiles.push({
+      profileId: "zcode-mismatch", label: "Mismatch", enabled: true, available: true, adapter: "zcode",
+      provider: "bigmodel-api", model: "GLM-5.3", effort: "high", capabilities: ["execution:dsh"],
+    } as (typeof f.props.snapshot.profiles)[number]);
+    const user = userEvent.setup();
+    render(<WorkflowPanel {...f.props} />);
+    await user.type(await screen.findByLabelText("决定理由"), "只保留自动路由");
+    await user.click(screen.getByRole("button", { name: "添加协助任务" }));
+    const select = screen.getByLabelText("执行配置") as HTMLSelectElement;
+    expect([...select.options].map(option => option.textContent)).toEqual(["自动路由：由固定决策 Buddy 选择"]);
+    expect(screen.getByText(/未指定配置时将请求自动路由/)).toBeTruthy();
   });
 
   it("recovers a helper routing boundary through the root owner without minting helper control", async () => {
@@ -188,25 +263,99 @@ describe("governed workflow console", () => {
     expect(f.props.selectTask).toHaveBeenCalledWith("child-a");
   });
 
-  it("binds final acceptance to the delivered attempt artifact, not an earlier helper", async () => {
+  it("binds final acceptance to the recorded final artifact, not an earlier helper", async () => {
     const f = fixture();
-    Object.assign(f.workflow, { state: "delivered", awaitingHost: false, activeRequest: null, finalAttemptId: "attempt-final" });
+    Object.assign(f.workflow, { state: "delivered", awaitingHost: false, activeRequest: null, finalAttemptId: "attempt-final", finalArtifactId: "final" });
     f.workflow.artifacts = [
       { artifactId: "old", attemptId: "attempt-old", sourceTaskId: "helper", kind: "output", manifestSha256: "old-hash" },
       { artifactId: "final", attemptId: "attempt-final", sourceTaskId: "parent", kind: "output", manifestSha256: "final-hash" },
     ];
+    f.workflow.integrations = [verifiedIntegration("final")];
     const user = userEvent.setup();
     render(<WorkflowPanel {...f.props} />);
     await user.type(await screen.findByLabelText("实际检查依据"), "检查 final diff 并运行并发测试通过");
     await user.click(screen.getByRole("button", { name: "接受最终交付" }));
-    expect(f.mutation).toHaveBeenCalledWith("workflow_acknowledge", expect.objectContaining({ artifactId: "final", verdict: "accepted" }));
+    expect(f.mutation).toHaveBeenCalledWith("workflow_acknowledge", expect.objectContaining({
+      artifactId: "final", integrationId: "int-final", verdict: "accepted",
+    }));
+  });
+
+  it("accepts a resolved-output delivery through its own verified integration", async () => {
+    const f = fixture();
+    Object.assign(f.workflow, { state: "delivered", awaitingHost: false, activeRequest: null, finalAttemptId: "attempt-final", finalArtifactId: "final-resolved" });
+    f.workflow.artifacts = [
+      { artifactId: "plain-output", attemptId: "attempt-final", sourceTaskId: "parent", kind: "output", manifestSha256: "plain-hash" },
+      { artifactId: "final-resolved", attemptId: "attempt-final", sourceTaskId: "parent", kind: "resolved-output", manifestSha256: "resolved-hash" },
+    ];
+    f.workflow.integrations = [verifiedIntegration("final-resolved")];
+    const user = userEvent.setup();
+    render(<WorkflowPanel {...f.props} />);
+    // The Host-resolution delivery is displayed with its target evidence.
+    expect(await screen.findByText(/cherry-pick/)).toBeTruthy();
+    expect(screen.getByText(/目标仓库集成测试通过/)).toBeTruthy();
+    expect(screen.getByText(/before-commit/)).toBeTruthy();
+    await user.type(screen.getByLabelText("实际检查依据"), "检查解析输出并运行集成测试");
+    const accept = screen.getByRole("button", { name: "接受最终交付" });
+    expect(accept).toHaveProperty("disabled", false);
+    await user.click(accept);
+    expect(f.mutation).toHaveBeenCalledWith("workflow_acknowledge", expect.objectContaining({
+      artifactId: "final-resolved", integrationId: "int-final-resolved", verdict: "accepted",
+    }));
+  });
+
+  it("keeps acceptance disabled until the final artifact has its own integration record", async () => {
+    const f = fixture();
+    Object.assign(f.workflow, { state: "delivered", awaitingHost: false, activeRequest: null, finalAttemptId: "attempt-final", finalArtifactId: "final" });
+    f.workflow.artifacts = [
+      { artifactId: "final", attemptId: "attempt-final", sourceTaskId: "parent", kind: "output", manifestSha256: "final-hash" },
+      { artifactId: "other", attemptId: "attempt-other", sourceTaskId: "helper", kind: "output", manifestSha256: "other-hash" },
+    ];
+    // A record for another artifact never satisfies the final one.
+    f.workflow.integrations = [verifiedIntegration("other")];
+    const user = userEvent.setup();
+    render(<WorkflowPanel {...f.props} />);
+    await user.type(await screen.findByLabelText("实际检查依据"), "Host 尚未完成整合");
+    const accept = screen.getByRole("button", { name: "接受最终交付" });
+    expect(accept).toHaveProperty("disabled", true);
+    // The Host is pointed at the real recorded operation; nothing is auto-created.
+    expect(screen.getByText(/workflow_integration_record/)).toBeTruthy();
+    expect(f.mutation).not.toHaveBeenCalled();
+    // Rejection stays a reviewed outcome that needs no integration record.
+    await user.click(screen.getByRole("button", { name: "记录验收问题" }));
+    expect(f.mutation).toHaveBeenCalledTimes(1);
+    expect(f.mutation).toHaveBeenCalledWith("workflow_acknowledge", expect.objectContaining({ artifactId: "final", verdict: "rejected" }));
+    expect(f.mutation.mock.calls[0][1]).not.toHaveProperty("integrationId");
+  });
+
+  it("accepts an explicit not-required integration record with its reason", async () => {
+    const f = fixture();
+    Object.assign(f.workflow, { state: "delivered", awaitingHost: false, activeRequest: null, finalAttemptId: "attempt-final", finalArtifactId: "final" });
+    f.workflow.artifacts = [{ artifactId: "final", attemptId: "attempt-final", sourceTaskId: "parent", kind: "output", manifestSha256: "final-hash" }];
+    // An older verified record stays on file; the newest not-required decision
+    // is what both the artifact label and the acceptance binding must use.
+    f.workflow.integrations = [verifiedIntegration("final", {
+      integrationId: "int-not-required", state: "not-required", notRequired: true,
+      strategy: "not-required", target: null, reason: "纯只读核查，无需整合",
+    }), verifiedIntegration("final", { integrationId: "int-older-verified" })];
+    const user = userEvent.setup();
+    render(<WorkflowPanel {...f.props} />);
+    expect(await screen.findByText(/纯只读核查，无需整合/)).toBeTruthy();
+    expect(screen.getByText("整合：Host 记录无需整合")).toBeTruthy();
+    await user.type(screen.getByLabelText("实际检查依据"), "只读核查通过");
+    const accept = screen.getByRole("button", { name: "接受最终交付" });
+    expect(accept).toHaveProperty("disabled", false);
+    await user.click(accept);
+    expect(f.mutation).toHaveBeenCalledWith("workflow_acknowledge", expect.objectContaining({
+      integrationId: "int-not-required", verdict: "accepted",
+    }));
   });
 
   it("keeps final acceptance disabled while a descendant has no stop proof", async () => {
     const f = fixture();
-    Object.assign(f.workflow, { state: "delivered", awaitingHost: false, activeRequest: null, finalAttemptId: "attempt-final" });
+    Object.assign(f.workflow, { state: "delivered", awaitingHost: false, activeRequest: null, finalAttemptId: "attempt-final", finalArtifactId: "final" });
     f.workflow.shutdown = { selfConfirmed: true, descendantsConfirmed: false, unconfirmedRunIds: ["child"], unconfirmedCount: 1, truncated: false };
     f.workflow.artifacts = [{ artifactId: "final", attemptId: "attempt-final", sourceTaskId: "parent", kind: "output", manifestSha256: "hash" }];
+    f.workflow.integrations = [verifiedIntegration("final")];
     const user = userEvent.setup();
     render(<WorkflowPanel {...f.props} />);
     await screen.findByLabelText("实际检查依据");
@@ -219,9 +368,10 @@ describe("governed workflow console", () => {
 
   it("keeps final acceptance disabled for a queued helper even before a new process starts", async () => {
     const f = fixture();
-    Object.assign(f.workflow, { state: "delivered", awaitingHost: false, activeRequest: null, finalAttemptId: "attempt-final" });
+    Object.assign(f.workflow, { state: "delivered", awaitingHost: false, activeRequest: null, finalAttemptId: "attempt-final", finalArtifactId: "final" });
     f.workflow.children.push({ taskId: "resumed-child", state: "active", role: "helper", requestId: "request-a" });
     f.workflow.artifacts = [{ artifactId: "final", attemptId: "attempt-final", sourceTaskId: "parent", kind: "output", manifestSha256: "hash" }];
+    f.workflow.integrations = [verifiedIntegration("final")];
     render(<WorkflowPanel {...f.props} />);
     await screen.findByLabelText("实际检查依据");
     expect(screen.getByRole("button", { name: "接受最终交付" }).closest("fieldset")).toHaveProperty("disabled", true);
