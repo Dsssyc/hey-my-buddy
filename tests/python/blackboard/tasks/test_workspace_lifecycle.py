@@ -1968,7 +1968,7 @@ class LifecycleTestCase(RealWorkspaceTestCase):
                                         (submitted["runId"],)).fetchall()
         self.assertEqual(json.loads(after["result_json"]), {"alreadyRemoved": False})
         self.assertNotIn("commandReceipts", json.loads(after["retention_json"]))
-        self.assertTrue(recovered["plan"]["retention"]["commandReceipts"])
+        self.assertTrue(recovered["retention"]["commandReceipts"])
         for column in before.keys() - {"state", "revision", "applied_at", "result_json"}:
             self.assertEqual(after[column], before[column], column)
         self.assertEqual(after["revision"], before["revision"] + 1)
