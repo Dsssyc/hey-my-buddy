@@ -4,16 +4,11 @@ import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { cleanup, render as baseRender } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { MacroTaskTimeline } from "./MacroTaskTimeline";
-import type { MacroTaskTimelineProps } from "./MacroTaskTimeline";
 import { MacroTaskList } from "./MacroTaskList";
-import { listFixture, macroTaskSummary, macroTaskTimelineFixture } from "./macro-task-fixtures";
+import { listFixture } from "./macro-task-fixtures";
 import { Status } from "./ui";
-import type { MacroTaskTimeline as MacroTaskTimelineData, TimelineRow, TimelineSpan } from "./macro-task-types";
 
-// Check the rendered cascade and declared decoration geometry. jsdom cannot
-// measure widths, paint, native zoom or elementsFromPoint. Host checks those.
-// Existing non-defective controls keep their typography and the global reset.
+// Check the shared box model and keyboard scrolling for controls that remain.
 let injected: HTMLStyleElement;
 beforeEach(() => {
   injected = document.createElement("style");
@@ -27,104 +22,6 @@ function rule(selector: string) {
   expect(matches.length, selector).toBeGreaterThan(0);
   return matches.at(-1)!.style;
 }
-const OBSERVED_AT = "2026-09-26T08:12:00Z";
-
-function timeline(kinds: Array<Partial<TimelineSpan>>): MacroTaskTimelineData {
-  const base: TimelineRow = {
-    runId: "r1", parentRunId: null, rootRunId: "r1", rootLeadRunId: null, title: "短记录与盒模型", titleSource: "title",
-    taskSummary: null, summary: null, createdAt: "2026-09-26T01:12:00Z", state: "running", status: "running",
-    category: "active", shutdownConfirmed: false, depth: 0, kind: "micro-task", buddy: null,
-    acceptedAt: null, acceptanceVerdict: null, reviewRejectedAt: null, reviewRejectionNote: null,
-  };
-  const spans = kinds.map((overrides, index) => ({
-    spanId: `s-${index}`, runId: "r1", kind: "execution" as const, startAt: null, endAt: null, state: "finished",
-    attemptId: null, turnId: null, turnIndex: 1, requestId: null, buddy: null,
-    shutdownConfirmed: null, uncertain: false, clockSkew: false, ...overrides,
-  })) as TimelineSpan[];
-  return {
-    macroTask: macroTaskSummary(), observedAt: OBSERVED_AT, cursor: 1, rows: [base], spans, events: [],
-    totals: { rows: 1, spans: spans.length, events: 0, allRows: 1 },
-    truncated: { rows: false, spans: false, events: false }, scopeComplete: true, filtered: false,
-  };
-}
-
-function props(data: MacroTaskTimelineData): MacroTaskTimelineProps {
-  return {
-    summary: data.macroTask, timeline: data, loading: false, error: "", stale: false,
-    newRunIds: new Set<string>(), hidden: false, openedKey: null, openedRunId: null, selection: null,
-    onSelectItem: vi.fn(), onOpenItem: vi.fn(), onSelectRun: vi.fn(), onOpenRun: vi.fn(),
-    onClearSelection: vi.fn(), onRetry: vi.fn(), onBackToList: vi.fn(),
-  } as MacroTaskTimelineProps;
-}
-
-describe("U5: duration geometry and borders share one boundary", () => {
-  it("keeps every rendered variant and state free of width-taking padding/borders", () => {
-    render(<MacroTaskTimeline {...props(macroTaskTimelineFixture())} />);
-    const spans = document.querySelectorAll<HTMLElement>(".tl-scroll .sp");
-    expect(spans.length).toBeGreaterThan(0);
-    for (const span of spans) {
-      for (const state of ["", "selected", "run-member", "failed", "running", "cancelled"]) {
-        if (state) span.classList.add(state);
-        const css = getComputedStyle(span);
-        expect(css.boxSizing, span.className).toBe("border-box");
-        expect(css.paddingLeft, span.className).toBe("0px");
-        expect(css.paddingRight, span.className).toBe("0px");
-        expect(css.borderLeftWidth, span.className).toBe("0px");
-        expect(css.borderRightWidth, span.className).toBe("0px");
-        expect(css.minWidth, span.className).toBe(span.matches(".routing.failed") ? "14px" : "4px");
-        if (state) span.classList.remove(state);
-      }
-    }
-  });
-
-  it("contains all state borders in the shared pseudo-element box instead of enlarging the button", () => {
-    const decoration = rule(".sp::before");
-    expect(decoration.position).toBe("absolute");
-    expect(["0", "0px"]).toContain(decoration.getPropertyValue("inset"));
-    expect(decoration.boxSizing).toBe("border-box");
-    expect(decoration.pointerEvents).toBe("none");
-    expect(rule(".sp.wait::before").border).toBe("1.5px dashed var(--warning)");
-    expect(rule(".sp.wait.open::before").borderRightWidth).toBe("0px");
-    expect(rule(".sp.routing.running::before").outline).toBe("3px double var(--line-strong)");
-    expect(rule(".sp.routing.running::before").outlineOffset).toBe("-3px");
-    expect(rule(".sp.queue::before").border).toBe("1px solid var(--line-strong)");
-    expect(rule(".sp.unknown::before").border).toBe("1.5px dotted var(--c)");
-  });
-
-  it("U5.3: keeps a millisecond span at its recorded width without a box-model override", () => {
-    const data = timeline([
-      { spanId: "short", kind: "execution", state: "finished", startAt: "2026-09-26T01:14:00Z", endAt: "2026-09-26T01:14:00.001Z", resultStatus: "failed", shutdownConfirmed: true },
-      { spanId: "wait", kind: "host", state: "open", startAt: "2026-09-26T01:14:00.001Z", endAt: null },
-    ]);
-    const { container } = render(<MacroTaskTimeline {...props(data)} />);
-    const failed = container.querySelector<HTMLElement>('.tl-scroll [data-key="span:short"]')!;
-    const wait = container.querySelector<HTMLElement>('.tl-scroll [data-key="span:wait"]')!;
-    expect(Number.parseFloat(failed.style.width)).toBeCloseTo((772 / 788) * 100 / (418 * 60 * 1000), 12);
-    expect(failed.style.left).toMatch(/%$/);
-    expect(failed.style.padding).toBe("");
-    expect(wait.previousElementSibling).toBe(failed);
-    expect(failed.querySelector(".end-mark.bad")).not.toBeNull();
-    expect(getComputedStyle(failed.querySelector(".sp-text")!).overflow).toBe("hidden");
-    expect(getComputedStyle(failed).getPropertyValue("--tl-item-height")).toBe("22px");
-    expect(rule(".sp.queue").getPropertyValue("--tl-item-height")).toBe("8px");
-  });
-
-  it("U5.4: keeps fixed decoration sizes and reserves 16px beside terminal circles", () => {
-    expect(rule(".end-mark").width).toBe("15px");
-    expect(rule(".end-mark").height).toBe("15px");
-    expect(rule(".end-mark").lineHeight).toBe("12px");
-    expect(rule(".mk").width).toBe("18px");
-    expect(rule(".mk").marginLeft).toBe("-9px");
-    render(<MacroTaskTimeline {...props(macroTaskTimelineFixture())} />);
-    const solidText = document.querySelector(".tl-scroll .sp-solid-text")!;
-    expect(getComputedStyle(solidText).paddingLeft).toBe("16px");
-    expect(getComputedStyle(solidText).paddingRight).toBe("16px");
-    expect(rule(".sp-text").overflow).toBe("hidden");
-    expect(rule(".sp-text").textOverflow).toBe("ellipsis");
-    expect(rule(".sp.unknown .solid").padding).toBe("");
-  });
-});
-
 describe("U5: audited controls retain the shared global box model and normal sizes", () => {
   it("keeps the rendered list viewport focusable for keyboard scrolling", () => {
     const rows = listFixture();
@@ -151,14 +48,12 @@ describe("U5: audited controls retain the shared global box model and normal siz
     expect(scroll.querySelectorAll("[data-slot=macro-entry]").length).toBeGreaterThan(0);
   });
 
-  it("uses the existing global border-box reset for badges, filters, titles and floating layers", () => {
+  it("uses the existing global border-box reset for badges and inputs", () => {
     const { container } = render(<>
       <Status status="waiting-host" />
       <input type="checkbox" />
-      <div className="inspector-card-head">标题</div>
-      <div className="marker-popover">详情</div>
     </>);
-    for (const element of container.querySelectorAll<HTMLElement>(".badge, input, .inspector-card-head, .marker-popover")) {
+    for (const element of container.querySelectorAll<HTMLElement>(".badge, input")) {
       expect(getComputedStyle(element).boxSizing, element.className).toBe("border-box");
     }
     const badge = getComputedStyle(container.querySelector(".badge")!);
@@ -166,32 +61,6 @@ describe("U5: audited controls retain the shared global box model and normal siz
     expect(badge.lineHeight).not.toBe("1");
     expect(getComputedStyle(container.querySelector("input")!).width).toBe("16px");
     expect(rule("*").boxSizing).toBe("border-box");
-  });
-});
-
-describe("U6.4: reading insets stay inside real label widths", () => {
-  it("gives ordinary, terminal, solid and tail text their reading space inside real geometry", () => {
-    render(<MacroTaskTimeline {...props(macroTaskTimelineFixture())} />);
-    for (const selector of [".exec:not(.unknown) .sp-text", ".wait .sp-text", ".sp-solid-text", ".sp-tail"]) {
-      const labels = document.querySelectorAll<HTMLElement>(`.tl-scroll ${selector}`);
-      expect(labels.length, selector).toBeGreaterThan(0);
-      for (const label of labels) {
-        const css = getComputedStyle(label);
-        expect(css.paddingLeft, selector).toBe("16px");
-        expect(css.paddingRight, selector).toBe(label.matches(".sp-solid-text, .exec.failed > .sp-text, .exec.cancelled > .sp-text") ? "16px" : "8px");
-        expect(css.boxSizing, selector).toBe("border-box");
-        expect(css.overflow, selector).toBe("hidden");
-        expect(css.textOverflow, selector).toBe("ellipsis");
-        expect(css.pointerEvents, selector).toBe("none");
-        expect(css.flexShrink, selector).toBe("0");
-        expect(label.style.width, selector).toMatch(/px$/);
-        const parent = getComputedStyle(label.parentElement!);
-        expect(parent.paddingLeft).toBe("0px");
-        expect(parent.paddingRight).toBe("0px");
-        expect(parent.borderLeftWidth).toBe("0px");
-        expect(parent.borderRightWidth).toBe("0px");
-      }
-    }
   });
 });
 

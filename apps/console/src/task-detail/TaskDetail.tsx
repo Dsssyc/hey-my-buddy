@@ -1,8 +1,8 @@
 import { useEffect, useMemo } from "react";
 import type { ReactNode } from "react";
+import { createPortal } from "react-dom";
 import { useTranslation } from "react-i18next";
 import { Button } from "@/components/ui/button";
-import { ScrollArea } from "@/components/ui/scroll-area";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import type { MacroTaskTimeline } from "../macro-task-types";
 import { AcceptancePane } from "./AcceptancePane";
@@ -27,6 +27,8 @@ type Props = {
   /** The macro task's timeline the page has read; null while it is read or when it could not be. */
   timeline: MacroTaskTimeline | null;
   timelineLoading: boolean;
+  /** The expanded timeline row owns the step rail's place in the persistent name column. */
+  railTarget: HTMLElement | null;
   /** The display clock, in epoch milliseconds: open waits run to it. Without one the detail reads the clock as it draws. */
   nowMs: number | null;
   /** The step the address names, counted from 1. */
@@ -60,12 +62,12 @@ function elapsedEnd(view: TaskView, workflow: Workflow | null, nowMs: number): n
 }
 
 /**
- * The detail of one micro task, organised by turn: its row of the timeline
- * stood on end on the left, and on the right what the chosen step has to say.
+ * The detail of one micro task, organised by turn: its timeline row holds the
+ * step rail, and the detail area says what the chosen step has to say.
  * It reads through the client it is given, hands the address back to its owner,
  * and writes nothing.
  */
-export function TaskDetail({ client, runId, timeline, timelineLoading, nowMs, step, origin, active, onStep, onBack, onOpenRun }: Props) {
+export function TaskDetail({ client, runId, timeline, timelineLoading, railTarget, nowMs, step, origin, active, onStep, onBack, onOpenRun }: Props) {
   const { t } = useTranslation("taskDetail");
   const now = nowMs ?? Date.now();
   const decisionIds = useMemo(() => (timeline?.spans ?? []).flatMap(span => (span.runId === runId && span.kind === "routing" && span.decisionId ? [span.decisionId] : [])), [timeline, runId]);
@@ -101,7 +103,7 @@ export function TaskDetail({ client, runId, timeline, timelineLoading, nowMs, st
 
   // The view brings its own hints, so that it stands in any page.
   const bare = (body: ReactNode) => <TooltipProvider delayDuration={300}>
-    <section data-slot="task-detail" aria-label={t("label")} className="flex min-h-0 min-w-0 flex-1 flex-col bg-card max-[760px]:flex-none">{body}</section>
+    <section data-slot="task-detail" aria-label={t("label")} className="flex min-h-0 min-w-0 flex-1 flex-col bg-card [container-type:inline-size]">{body}</section>
   </TooltipProvider>;
   if (!view) {
     return bare(<div className="flex flex-1 flex-col items-center justify-center gap-3 p-6 text-center">
@@ -109,10 +111,7 @@ export function TaskDetail({ client, runId, timeline, timelineLoading, nowMs, st
         ? <>
           <h2 className="text-base font-semibold">{t("failed")}</h2>
           <p role="alert" className="max-w-prose text-fail wrap-anywhere">{read.error}</p>
-          <div className="flex gap-2">
-            <Button variant="outline" onClick={read.refresh}>{t("retry")}</Button>
-            <Button variant="outline" onClick={onBack}>{t("back.timeline")}</Button>
-          </div>
+          <Button variant="outline" onClick={read.refresh}>{t("retry")}</Button>
         </>
         : <p role="status" className="text-ink2">{t("loading")}</p>}
     </div>);
@@ -128,19 +127,14 @@ export function TaskDetail({ client, runId, timeline, timelineLoading, nowMs, st
   const reminder = (item: Step) => (attempt !== null && item.kind === "turn" && item.outcome === "running" && attempt.attemptId === item.span?.attemptId
     ? attempt.possiblyStuck ? "possiblyStuck" as const : attempt.overdue ? "overdue" as const : null : null);
   return bare(<>
+    {railTarget && steps && current && ctx && createPortal(
+      <Rail result={steps} selected={chosen!} lead={view.lead} reminder={reminder} onSelect={index => onStep(index + 1)} buddyName={buddyName} />,
+      railTarget,
+    )}
     <Header view={view} workflow={workflow} turns={workflow ? workflow.counts.turns : null} endMs={elapsedEnd(view, workflow, now)} nowMs={now}
-      verifiedAtMs={read.verifiedAtMs} error={read.error} busy={read.busy} onBack={onBack} onRefresh={read.refresh} />
+      verifiedAtMs={read.verifiedAtMs} error={read.error} busy={read.busy} onRefresh={read.refresh} />
     {steps && current && ctx
-      ? <div className="grid min-h-0 flex-1 grid-cols-[300px_minmax(0,1fr)] max-[760px]:flex-none max-[760px]:grid-cols-1 max-[760px]:grid-rows-[auto_auto]">
-        <ScrollArea className="min-h-0 bg-background max-[760px]:border-b min-[761px]:border-r max-[760px]:[&>[data-slot=scroll-area-viewport]]:max-h-[40dvh]">
-          <div className="w-0 min-w-full">
-            <Rail result={steps} selected={chosen!} lead={view.lead} reminder={reminder} onSelect={index => onStep(index + 1)} buddyName={buddyName} />
-          </div>
-        </ScrollArea>
-        <div key={current.key} className="flex min-h-0 min-w-0 flex-col">
-          {pane(current, ctx)}
-        </div>
-      </div>
+      ? <div key={current.key} className="flex min-h-0 min-w-0 flex-1 flex-col">{pane(current, ctx)}</div>
       : <p role="status" className="p-6 text-ink2">{t("loading")}</p>}
   </>);
 }

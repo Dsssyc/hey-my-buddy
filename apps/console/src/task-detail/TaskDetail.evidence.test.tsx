@@ -284,17 +284,16 @@ describe("the head", () => {
     await ready();
     const row1 = head().firstElementChild as HTMLElement;
     const children = [...row1.children];
-    expect(children[0]!.textContent).toContain("时间轴");
-    const titled = children[1] as HTMLElement;
+    const titled = children[0] as HTMLElement;
     expect(titled.querySelector("h2")!.textContent).toBe("微任务详情");
     expect(titled.firstElementChild!.getAttribute("data-slot")).toBe("state-mark");
     expect(titled.textContent).not.toContain("等待验收");
-    const right = children[2] as HTMLElement;
+    const right = children[1] as HTMLElement;
     expect(right.textContent).toMatch(/开始.*历时.*回合/);
     expect(within(right).getByText("等待验收")).toBeTruthy();
     expect(right.querySelector("[data-slot=detail-status]")?.parentElement?.querySelector("button[aria-label=重新读取]")).toBeTruthy();
     expect(within(right).getByRole("button", { name: "重新读取" })).toBeTruthy();
-    expect(children).toHaveLength(3);
+    expect(children).toHaveLength(2);
   });
 
   it("shows a read under way, and lets a second press change nothing", async () => {

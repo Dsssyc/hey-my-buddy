@@ -72,12 +72,12 @@ describe("macro task page", () => {
       const row = screen.getByRole("button", { name: /宏任务时间轴：设计、接口与实现/ });
       fireEvent.click(row);
       await act(async () => { await vi.advanceTimersByTimeAsync(0); });
-      const chipAtLoad = document.querySelector(".now-chip")!.textContent!;
+      const chipAtLoad = document.querySelector("[data-slot=timeline-axis] .fill-live")!.textContent!;
       expect(chipAtLoad).toContain(clockTime(OBSERVED_AT));
       // One unchanged poll 61 seconds later: the display clock advanced past
       // the source anchor's minute.
       await act(async () => { await vi.advanceTimersByTimeAsync(61_000); });
-      const chipAdvanced = document.querySelector(".now-chip")!.textContent!;
+      const chipAdvanced = document.querySelector("[data-slot=timeline-axis] .fill-live")!.textContent!;
       expect(chipAdvanced).not.toBe(chipAtLoad);
       expect(chipAdvanced).toContain(clockTime(new Date(Date.parse(OBSERVED_AT) + 61_000).toISOString()));
       f.unmount();

@@ -1,15 +1,10 @@
-import type { MacroTaskTimeline } from "../macro-task-types";
+import type { MacroTaskTimeline, TimelineSpan } from "../macro-task-types";
 
 const MINUTE = 60_000;
 const BREAK_PX = 54;
 const MIN_REAL_PX = 64;
 const TICK_MINUTES = [1, 2, 5, 10, 15, 30, 60, 120, 240, 480, 720, 1440];
-const OPEN_STATES = new Set([
-  "queued", "admitted", "pending", "starting", "executing", "finalizing", "uncertain",
-  "running", "active", "open", "in-progress", "in_progress", "paused",
-  "waiting", "waiting-host", "waiting_host", "awaiting-host", "awaiting_host",
-  "cancelling", "canceling", "reconciliation-needed",
-]);
+const ACTIVE_EXECUTION_STATES = new Set(["starting", "executing", "finalizing", "uncertain"]);
 
 export type TimeInterval = { startMs: number; endMs: number };
 
@@ -18,7 +13,7 @@ export type ScaleInput = {
   busy: TimeInterval[];
   instants: number[];
   canFold: boolean;
-  nowMs: number;
+  nowAtEnd: boolean;
 };
 
 function instant(value: string | null): number | null {
@@ -27,8 +22,34 @@ function instant(value: string | null): number | null {
   return Number.isFinite(ms) ? ms : null;
 }
 
-/** Recorded time bounds use the reply's observedAt; nowMs locates the display clock. */
-export function timelineScaleInput(timeline: MacroTaskTimeline, nowMs: number): ScaleInput {
+function hasBusyDuration(busy: TimeInterval[]): boolean {
+  return busy.some(interval => interval.endMs > interval.startMs);
+}
+
+/** An acceptance wait starts only after the last execution has proven its stop. */
+function confirmedExecutionEnd(spans: readonly TimelineSpan[]): number | null {
+  if (spans.length === 0) return null;
+  let last: { atMs: number; confirmed: boolean } | null = null;
+  for (const span of spans) {
+    const atMs = instant(span.endAt);
+    if (atMs === null || span.clockSkew) return null;
+    if (last === null || atMs > last.atMs) last = { atMs, confirmed: span.shutdownConfirmed === true };
+  }
+  return last?.confirmed ? last.atMs : null;
+}
+
+/** The service's open states are exact and differ by span kind. */
+function isOpenState(kind: MacroTaskTimeline["spans"][number]["kind"], state: string): boolean {
+  switch (kind) {
+    case "queue": return state === "queued";
+    case "routing":
+    case "execution": return ACTIVE_EXECUTION_STATES.has(state);
+    case "host": return state === "open";
+  }
+}
+
+/** Recorded time bounds and open tails use the reply's observedAt. */
+export function timelineScaleInput(timeline: MacroTaskTimeline): ScaleInput {
   const observedAtMs = instant(timeline.observedAt);
   const instants: number[] = [];
   const busy: TimeInterval[] = [];
@@ -41,7 +62,7 @@ export function timelineScaleInput(timeline: MacroTaskTimeline, nowMs: number): 
     if (startMs !== null) instants.push(startMs);
     if (recordedEndMs !== null) instants.push(recordedEndMs);
     const open = span.shutdownConfirmed !== true && (
-      span.uncertain || (span.endAt === null && OPEN_STATES.has(span.state.trim().toLowerCase()))
+      span.uncertain || (span.endAt === null && isOpenState(span.kind, span.state))
     );
     const endMs = open ? observedAtMs : recordedEndMs;
     const ordered = startMs !== null && endMs !== null && endMs >= startMs
@@ -56,6 +77,22 @@ export function timelineScaleInput(timeline: MacroTaskTimeline, nowMs: number): 
       busy.push({ startMs, endMs });
     }
   }
+  for (const row of timeline.rows) {
+    for (const at of [row.acceptedAt, row.reviewRejectedAt]) {
+      if (at === null) continue;
+      const ms = instant(at);
+      if (ms === null) trustworthy = false;
+      else instants.push(ms);
+    }
+    if (row.state !== "delivered" || row.acceptedAt !== null || row.reviewRejectedAt !== null) continue;
+    const endMs = confirmedExecutionEnd(timeline.spans.filter(span => span.runId === row.runId && span.kind === "execution"));
+    if (endMs === null || observedAtMs === null || observedAtMs < endMs) {
+      trustworthy = false;
+      continue;
+    }
+    ongoing = true;
+    instants.push(observedAtMs);
+  }
   for (const event of timeline.events) {
     const ms = instant(event.at);
     if (ms === null) trustworthy = false;
@@ -65,11 +102,13 @@ export function timelineScaleInput(timeline: MacroTaskTimeline, nowMs: number): 
   const sorted = [...new Set(instants)].sort((a, b) => a - b);
   const domain = sorted.length === 0 ? null : {
     startMs: sorted[0]!,
-    endMs: ongoing ? observedAtMs! : sorted[sorted.length - 1]!,
+    endMs: sorted[sorted.length - 1]!,
   };
   return {
-    domain, busy, instants: sorted, nowMs,
-    canFold: domain !== null && timeline.scopeComplete && trustworthy && !timeline.filtered
+    domain, busy, instants: sorted,
+    nowAtEnd: ongoing && domain?.endMs === observedAtMs,
+    canFold: domain !== null && hasBusyDuration(busy)
+      && timeline.scopeComplete && trustworthy && !timeline.filtered
       && !Object.values(timeline.truncated).some(Boolean),
   };
 }
@@ -110,9 +149,6 @@ function fitScale(units: Unit[], durationMs: number, viewportWidth: number, canF
     .sort((a, b) => (a.endMs - a.startMs) - (b.endMs - b.startMs));
   let realMs = durationMs - idle.reduce((sum, unit) => sum + unit.endMs - unit.startMs, 0);
   let breakCount = idle.length;
-  // With no proportional time, all waits may fold. Choose a finite scale
-  // strictly above the shortest gap's threshold; there is no real track to reserve.
-  if (realMs === 0) return BREAK_PX * (1 + Number.EPSILON) * MINUTE / (idle[0]!.endMs - idle[0]!.startMs);
   let ppm = Math.max(MIN_REAL_PX, viewportWidth - breakCount * BREAK_PX) * MINUTE / realMs;
   // Start with all candidates folded and unfold shortest first. Removed gaps
   // remain below the threshold; the first wider gap proves all remaining ones fold.
@@ -128,11 +164,11 @@ function fitScale(units: Unit[], durationMs: number, viewportWidth: number, canF
 
 function ticksFor(
   domain: TimeInterval, breaks: TimelineBreak[], ppm: number,
-  toX: (atMs: number) => number | null, nowMs: number,
+  toX: (atMs: number) => number | null, nowAtEnd: boolean,
 ): TimelineTick[] {
   const step = TICK_MINUTES.find(minutes => minutes * ppm >= 56);
   const ticks: TimelineTick[] = [];
-  const nowX = nowMs === domain.endMs ? toX(nowMs)! : Number.POSITIVE_INFINITY;
+  const nowX = nowAtEnd ? toX(domain.endMs)! : Number.POSITIVE_INFINITY;
   let previousLabelX = Number.NEGATIVE_INFINITY;
   let startMs = domain.startMs;
   for (const endMs of [...breaks.map(gap => gap.startMs), domain.endMs]) {
@@ -175,11 +211,12 @@ export function createTimelineScale(input: ScaleInput, viewportWidth: number, pi
     };
   }
   const units = unitsFor(input, domain);
-  const ppm = pixelsPerMinute ?? fitScale(units, domain.endMs - domain.startMs, viewportWidth, input.canFold);
+  const canFold = input.canFold && hasBusyDuration(input.busy);
+  const ppm = pixelsPerMinute ?? fitScale(units, domain.endMs - domain.startMs, viewportWidth, canFold);
   const breaks: TimelineBreak[] = [];
   let widthPx = 0;
   const pieces = units.map(unit => {
-    const folded = input.canFold && unit.idle && (unit.endMs - unit.startMs) / MINUTE * ppm > BREAK_PX;
+    const folded = canFold && unit.idle && (unit.endMs - unit.startMs) / MINUTE * ppm > BREAK_PX;
     const startX = widthPx;
     widthPx += folded ? BREAK_PX : (unit.endMs - unit.startMs) / MINUTE * ppm;
     const piece = { ...unit, startX, endX: widthPx };
@@ -198,5 +235,5 @@ export function createTimelineScale(input: ScaleInput, viewportWidth: number, pi
     const piece = pieces.find(unit => x <= unit.endX)!;
     return piece.startMs + (x - piece.startX) / (piece.endX - piece.startX) * (piece.endMs - piece.startMs);
   }
-  return { widthPx, pixelsPerMinute: ppm, breaks, ticks: ticksFor(domain, breaks, ppm, toX, input.nowMs), toX, toTime };
+  return { widthPx, pixelsPerMinute: ppm, breaks, ticks: ticksFor(domain, breaks, ppm, toX, input.nowAtEnd), toX, toTime };
 }

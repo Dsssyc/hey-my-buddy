@@ -14,8 +14,10 @@ export type Options = { replies?: Replies; timeline?: MacroTaskTimeline | null; 
 /** The page owns the step and the detail asks it to change: this holds the step as the address would. */
 function Harness({ options, onStep, onBack, onOpenRun }: { options: Options; onStep: (step: number) => void; onBack: () => void; onOpenRun: (runId: string) => void }) {
   const [step, setStep] = useState<number | null>(options.step ?? null);
+  const [railTarget, setRailTarget] = useState<HTMLElement | null>(null);
   const reads = options.client ?? client(options.replies);
-  return <TooltipProvider><TaskDetail client={reads} runId="m1" timeline={options.timeline === undefined ? timeline() : options.timeline}
+  return <TooltipProvider><div data-testid="rail-target" ref={setRailTarget} /><TaskDetail client={reads} runId="m1" timeline={options.timeline === undefined ? timeline() : options.timeline}
+    railTarget={railTarget}
     timelineLoading={options.timelineLoading ?? false} nowMs={Date.parse(at("11:30"))} step={step} origin={options.origin ?? null} active={options.active ?? true}
     onStep={next => { onStep(next); setStep(next); }} onBack={onBack} onOpenRun={onOpenRun} /></TooltipProvider>;
 }

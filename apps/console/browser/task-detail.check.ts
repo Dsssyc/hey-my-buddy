@@ -10,13 +10,13 @@ const B = "macro-22222222-2222-4222-8222-222222222222";
 
 const languages = [
   {
-    locale: "zh-CN", back: "时间轴", refresh: "重新读取", turn: (n: number) => `回合 ${n}`, route: "路由", delegate: "委派", acceptance: "验收",
+    locale: "zh-CN", refresh: "重新读取", turn: (n: number) => `回合 ${n}`, route: "路由", delegate: "委派", acceptance: "验收",
     running: "进行中", stuck: "可能卡住", overdue: "已超过预期", waitingHost: "等待 Host", failed: "失败", mode: "快速",
     answered: "已答复", unavailable: "无法送达", delivered: "已送达，等待答复", conclusion: "Host 的结论", notCounted: "不计入验收",
     integration: "整合", reported: /上报 \d+ 分钟前/, handoff: "换手", unsure: "结束未确认", helperDone: "已完成", ask: "上一轮停下了吗？",
   },
   {
-    locale: "en-US", back: "Timeline", refresh: "Read again", turn: (n: number) => `Turn ${n}`, route: "Route", delegate: "Delegate", acceptance: "Acceptance",
+    locale: "en-US", refresh: "Read again", turn: (n: number) => `Turn ${n}`, route: "Route", delegate: "Delegate", acceptance: "Acceptance",
     running: "Running", stuck: "Possibly stuck", overdue: "Overdue", waitingHost: "Waiting for Host", failed: "Failed", mode: "Fast",
     answered: "Answered", unavailable: "Could not be delivered", delivered: "Delivered, awaiting answer", conclusion: "Host's conclusion", notCounted: "not counted as accepted",
     integration: "Integration", reported: /Reported \d+ min ago/, handoff: "Handoff", unsure: "Stop not confirmed", helperDone: "Done", ask: "上一轮停下了吗？",
@@ -48,8 +48,8 @@ async function expectDetailWhole(page: Page, { skipTitle = false } = {}) {
 /** The title takes its own line on narrow screens; status stays beside refresh. */
 async function expectOneLineHead(page: Page, refresh: string, narrow: boolean) {
   const header = detail(page).locator("[data-slot=detail-header]");
-  const [back, title, figures, status, again, mark] = await Promise.all([
-    header.getByRole("button").first().boundingBox(), header.locator("h2").boundingBox(), header.locator("dl").boundingBox(),
+  const [title, figures, status, again, mark] = await Promise.all([
+    header.locator("h2").boundingBox(), header.locator("dl").boundingBox(),
     header.locator("[data-slot=detail-status]").boundingBox(), header.getByRole("button", { name: refresh }).boundingBox(),
     header.locator("[data-slot=state-mark]").first().boundingBox(),
   ]);
@@ -57,13 +57,11 @@ async function expectOneLineHead(page: Page, refresh: string, narrow: boolean) {
   expect(Math.abs(centre(status!) - centre(again!)), "the state stays beside refresh").toBeLessThan(10);
   expect(Math.abs(centre(mark!) - centre(title!)), "the mark stays beside the title").toBeLessThan(10);
   if (narrow) {
-    expect(title!.y, "the title has its own line").toBeGreaterThan(back!.y + back!.height);
     expect(figures!.y, "facts follow the title").toBeGreaterThan(title!.y);
     expect(status!.y, "state and refresh follow the facts").toBeGreaterThanOrEqual(figures!.y + figures!.height);
   } else {
     expect(Math.abs(centre(again!) - centre(figures!)), "wide, refresh shares the facts line").toBeLessThan(10);
     expect(again!.x, "wide, refresh is at the right end").toBeGreaterThan(figures!.x);
-    expect(Math.abs(centre(back!) - centre(title!)), "wide, the way back and title share a line").toBeLessThan(10);
     expect(Math.abs(centre(title!) - centre(figures!)), "wide, the head is one line").toBeLessThan(10);
   }
 }
@@ -75,7 +73,7 @@ async function go(page: Page, hash: string): Promise<void> {
 
 const step = (page: Page, text: string | RegExp) => rail(page).locator("button").filter({ hasText: text });
 
-for (const { locale, back, refresh, turn, route, delegate, acceptance, running, stuck, overdue, waitingHost, failed, mode, answered, unavailable, delivered, conclusion, notCounted, integration, reported, handoff, unsure, helperDone, ask } of languages)
+for (const { locale, refresh, turn, route, delegate, acceptance, running, stuck, overdue, waitingHost, failed, mode, answered, unavailable, delivered, conclusion, notCounted, integration, reported, handoff, unsure, helperDone, ask } of languages)
   for (const width of [1440, 1280, 390]) {
     test.describe(`the detail of a micro task in ${locale} at ${width}px`, () => {
       // Colours are read at rest: under reduced motion the page makes no transitions.
@@ -84,15 +82,16 @@ for (const { locale, back, refresh, turn, route, delegate, acceptance, running, 
       test("opens from the timeline, by address, with Escape, and goes back and forward by the browser's history", async ({ page }) => {
         await open(page, `#tasks/${A}`);
         // Opened from a span of the timeline, the detail opens on the turn that span belongs to.
-        const span = page.locator(`${width > 760 ? ".tl-scroll" : ".tl-list"} [data-key="span:execution:att-a1-2"]`);
+        const span = page.locator('[data-slot=timeline-tracks] [data-key="span:execution:att-a1-2"]');
         await span.waitFor();
-        await span.dblclick();
+        await span.click();
         await expect(detail(page)).toBeVisible();
         await expect(page).toHaveURL(new RegExp(`#tasks/${A}/preview-run-a1/7$`));
         await expect(rail(page).locator("[aria-current=step]")).toContainText(turn(2));
-        // The macro task's own header stays, and the timeline gives way to the detail.
+        // The macro task's own header and row labels stay while the time tracks give way to the detail.
         await expect(page.locator("[data-slot=macro-overview-header] h2")).toBeVisible();
-        await expect(page.locator(".tl-grid, .tl-list").first()).toBeHidden();
+        await expect(page.locator('[data-slot=task-names] [data-key="row:preview-run-a1"]')).toBeVisible();
+        await expect(page.locator('[data-slot=timeline-tracks]')).toHaveAttribute("aria-hidden", "true");
         await page.goBack();
         await expect(page).toHaveURL(new RegExp(`#tasks/${A}$`));
         await expect(detail(page)).toHaveCount(0);
@@ -124,26 +123,32 @@ for (const { locale, back, refresh, turn, route, delegate, acceptance, running, 
         // A step that does not exist is replaced by the first choice.
         await go(page, `#tasks/${A}/preview-run-a1/99`);
         await expect(page).toHaveURL(new RegExp(`#tasks/${A}/preview-run-a1/7$`));
-        // A micro task whose read is not what was asked for reads as a failure, with the way back.
+        // A micro task whose read is not what was asked for reads as a failure.
         await page.route("**/api/tasks/no-such-run", route => route.fulfill({ json: { runId: "another-run" } }));
         await go(page, `#tasks/${A}/no-such-run`);
         await expect(detail(page).getByRole("alert")).toBeVisible();
-        await expect(detail(page).getByRole("button", { name: back })).toBeVisible();
-        await detail(page).getByRole("button", { name: back }).click();
+        await expect(detail(page).getByRole("button", { name: locale === "zh-CN" ? "重试读取" : "Retry" })).toBeVisible();
+        await page.keyboard.press("Escape");
         await expect(page).toHaveURL(new RegExp(`#tasks/${A}$`));
       });
 
-      test("lays the rail beside the step, or above it on a narrow screen, and every part whole", async ({ page }) => {
+      test("hangs the rail below the selected row while the step fills the detail area", async ({ page }) => {
         await open(page, `#tasks/${A}/preview-run-a1/7`);
         await expect(detail(page)).toBeVisible();
-        // The rail scrolls in its own area: that area, not the whole of what it holds, sits beside or above the step.
-        const [railBox, paneBox] = [(await rail(page).locator("xpath=ancestor::*[@data-slot='scroll-area']").boundingBox())!, (await pane(page).boundingBox())!];
+        await expect(rail(page)).toBeVisible();
+        await expect(detail(page).locator("[data-slot=detail-rail]")).toHaveCount(0);
+        const [rowBox, railBox, paneBox, namesBox] = [
+          (await page.locator('[data-slot=task-names] [data-key="row:preview-run-a1"]').boundingBox())!,
+          (await rail(page).boundingBox())!,
+          (await pane(page).boundingBox())!,
+          (await page.locator('[data-slot=task-names]').boundingBox())!,
+        ];
+        expect(railBox.y).toBeGreaterThanOrEqual(rowBox.y + rowBox.height - 1);
+        expect(Math.abs(railBox.x - rowBox.x)).toBeLessThanOrEqual(3);
         if (width > 760) {
           expect(paneBox.x).toBeGreaterThanOrEqual(railBox.x + railBox.width - 1);
-          expect(Math.abs(paneBox.y - railBox.y)).toBeLessThan(2);
         } else {
-          expect(paneBox.y).toBeGreaterThanOrEqual(railBox.y + railBox.height - 1);
-          expect(Math.abs(paneBox.x - railBox.x)).toBeLessThan(2);
+          expect(paneBox.y).toBeGreaterThanOrEqual(namesBox.y + namesBox.height - 1);
         }
         await expectDetailWhole(page, { skipTitle: true });
         await expectOneLineHead(page, refresh, width <= 760);
@@ -315,7 +320,7 @@ test.describe("the detail of a micro task in the dark theme", () => {
     await open(page, `#tasks/${A}/preview-run-a3`);
     await expect(page.locator("html")).toHaveAttribute("data-theme", "dark");
     await expect(detail(page)).toBeVisible();
-    for (const text of await detail(page).locator("h2, h3, [data-slot=detail-band] span, [data-slot=detail-live] span, [data-slot=detail-rail] span").all()) {
+    for (const text of await page.locator("[data-slot=task-detail] h2, [data-slot=task-detail] h3, [data-slot=detail-band] span, [data-slot=detail-live] span, [data-slot=detail-rail] span").all()) {
       if (!(await text.locator("*").count()) && (await text.innerText()).trim()) expect(await contrastOf(text), await text.innerText()).toBeGreaterThanOrEqual(4.5);
     }
   });

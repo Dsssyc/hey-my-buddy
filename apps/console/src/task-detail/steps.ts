@@ -1,4 +1,4 @@
-import { parseTimelineInstant } from "../macro-task-timeline-layout";
+import { parseTimelineInstant } from "../timeline/instant";
 import { acceptanceWaitMs, spanOutcome } from "../macro-task-display";
 import type { SpanOutcome } from "../macro-task-display";
 import type { MacroTaskTimeline, TimelineBuddy, TimelineEvent, TimelineSpan } from "../macro-task-types";

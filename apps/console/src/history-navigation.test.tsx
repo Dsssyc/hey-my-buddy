@@ -59,9 +59,9 @@ function narrow(matches: boolean) {
   vi.stubGlobal("matchMedia", vi.fn(() => ({ matches, addEventListener: vi.fn(), removeEventListener: vi.fn() })));
 }
 async function openDetail(f: ReturnType<typeof harness>) {
-  if (!document.querySelector(".timeline-view")) await f.user.click(await screen.findByRole("button", { name: /宏任务时间轴：设计、接口与实现/ }));
+  if (!document.querySelector("[data-slot=task-work]")) await f.user.click(await screen.findByRole("button", { name: /宏任务时间轴：设计、接口与实现/ }));
   await waitFor(() => expect(document.querySelector('[data-key="span:s-r1-e"]')).toBeTruthy());
-  await f.user.dblClick(document.querySelector('[data-key="span:s-r1-e"]') as HTMLElement);
+  await f.user.click(document.querySelector('[data-key="span:s-r1-e"]') as HTMLElement);
   await screen.findByRole("region", { name: "微任务详情" });
 }
 
@@ -96,9 +96,9 @@ describe("macro task navigation", () => {
     await f.user.click(screen.getByRole("button", { name: "收起宏任务列表" }));
     expect(localStorage.getItem(preference)).toBe("true");
     expect(screen.queryByRole("region", { name: "宏任务列表" })).toBeNull();
-    await f.user.click(within(screen.getByRole("region", { name: "微任务详情" })).getByRole("button", { name: "时间轴" }));
+    await f.user.keyboard("{Escape}");
     await openDetail(f);
-    await f.user.click(within(screen.getByRole("region", { name: "微任务详情" })).getByRole("button", { name: "时间轴" }));
+    await f.user.keyboard("{Escape}");
     expect(screen.getByRole("button", { name: "展开宏任务列表" })).toBeTruthy();
     expect(localStorage.getItem(preference)).toBe("true");
     await f.user.click(screen.getByRole("button", { name: "展开宏任务列表" }));

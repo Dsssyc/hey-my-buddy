@@ -17,6 +17,8 @@ describe("opening the detail of a micro task", () => {
     expect(f.reads.audit).toHaveBeenCalledWith("m1", ["decision-1"]);
     expect(f.reads.inquiries).toHaveBeenCalledWith("m1");
     expect(selected().textContent).toContain("回合 2");
+    expect(within(screen.getByTestId("rail-target")).getByRole("navigation", { name: "步骤" })).toBe(rail());
+    expect(document.querySelector("[data-slot=task-detail] [data-slot=detail-rail]")).toBeNull();
     expect(f.onStep).toHaveBeenCalledExactlyOnceWith(7);
   });
 
@@ -64,19 +66,18 @@ describe("opening the detail of a micro task", () => {
     expect(pane().textContent).toContain("实现微任务详情");
   });
 
-  it("goes back by its button and by Escape, unless the key is for a field or a dialog, and not while the page is elsewhere", async () => {
+  it("goes back by Escape, unless the key is for a field or a dialog, and not while the page is elsewhere", async () => {
     const f = open();
     await ready();
-    await f.user.click(screen.getByRole("button", { name: "时间轴" }));
-    expect(f.onBack).toHaveBeenCalledTimes(1);
+    expect(screen.queryByRole("button", { name: "时间轴" })).toBeNull();
     fireEvent.keyDown(document.body, { key: "Escape" });
-    expect(f.onBack).toHaveBeenCalledTimes(2);
+    expect(f.onBack).toHaveBeenCalledTimes(1);
     const field = document.body.appendChild(document.createElement("input"));
     fireEvent.keyDown(field, { key: "Escape" });
     const dialog = document.body.appendChild(document.createElement("div"));
     dialog.setAttribute("role", "dialog");
     fireEvent.keyDown(dialog, { key: "Escape" });
-    expect(f.onBack).toHaveBeenCalledTimes(2);
+    expect(f.onBack).toHaveBeenCalledTimes(1);
     field.remove();
     dialog.remove();
     cleanup();
@@ -85,14 +86,13 @@ describe("opening the detail of a micro task", () => {
     expect(away.onBack).not.toHaveBeenCalled();
   });
 
-  it("shows a read that failed as a failure with the way back, and a retry that reads again", async () => {
+  it("shows a read that failed as a failure with a retry that reads again", async () => {
     const reads = client();
     (reads.task as ReturnType<typeof vi.fn>).mockRejectedValueOnce(new ApiError("NOT_FOUND", "Unknown runId"));
     const f = open({ client: reads });
     expect((await screen.findByRole("alert")).textContent).toContain("Unknown runId");
     expect(screen.getByRole("heading", { name: "读取微任务失败" })).toBeTruthy();
-    await f.user.click(screen.getByRole("button", { name: "时间轴" }));
-    expect(f.onBack).toHaveBeenCalledTimes(1);
+    expect(screen.queryByRole("button", { name: "时间轴" })).toBeNull();
     await f.user.click(screen.getByRole("button", { name: "重试读取" }));
     await ready();
     expect(reads.task).toHaveBeenCalledTimes(2);

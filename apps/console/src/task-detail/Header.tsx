@@ -1,5 +1,5 @@
 import { cn } from "cn";
-import { ChevronLeft, RefreshCw } from "lucide-react";
+import { RefreshCw } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { Hint } from "@/components/hint";
 import { useTextClipped } from "@/components/use-text-clipped";
@@ -30,13 +30,13 @@ export function stateWord(task: Task, lead: boolean, workflowState: string | nul
 }
 
 /**
- * The head of the detail: the way back, what the micro task is, when it began
+ * The head of the detail: what the micro task is, when it began
  * and how long it has gone on, and the one control
  * that reads it again. Reading is all it does; nothing here changes the board.
  */
-export function Header({ view, workflow, turns, endMs, nowMs, verifiedAtMs, error, busy, onBack, onRefresh }: {
+export function Header({ view, workflow, turns, endMs, nowMs, verifiedAtMs, error, busy, onRefresh }: {
   view: TaskView; workflow: Workflow | null; turns: number | null; endMs: number; nowMs: number;
-  verifiedAtMs: number | null; error: string; busy: boolean; onBack: () => void; onRefresh: () => void;
+  verifiedAtMs: number | null; error: string; busy: boolean; onRefresh: () => void;
 }) {
   const { t } = useTranslation("taskDetail");
   const shell = useTranslation("shell").t;
@@ -49,20 +49,19 @@ export function Header({ view, workflow, turns, endMs, nowMs, verifiedAtMs, erro
   const titleHint = title.source === "task" ? t("title.fromTask", { title: title.fullText }) : clipped && title.source !== "none" ? title.fullText : undefined;
   return <header data-slot="detail-header" className="shrink-0 border-b bg-card">
     <div className="flex flex-wrap items-center gap-x-2.5 gap-y-2 px-4 py-3 sm:px-6">
-      <Button variant="outline" size="sm" onClick={onBack} className="mr-1.5 max-[760px]:order-1"><ChevronLeft strokeWidth={1.5} aria-hidden="true" />{t("back.timeline")}</Button>
-      <div className="flex min-w-0 flex-1 items-center gap-2.5 max-[760px]:order-2 max-[760px]:basis-full">
+      <div className="flex min-w-0 flex-1 items-center gap-2.5 @max-[650px]:order-1 @max-[650px]:basis-full">
         <StateMark kind={word.mark} />
         <Hint text={titleHint}>
           <h2 ref={titleRef} tabIndex={0} className="min-w-0 truncate rounded-sm text-base font-semibold outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50">{text}</h2>
         </Hint>
       </div>
-      <div className="ml-auto flex shrink-0 items-center gap-x-4 max-[760px]:order-3 max-[760px]:w-full max-[760px]:flex-wrap max-[760px]:gap-2">
-        <dl className="flex flex-wrap gap-x-4 gap-y-1 text-xs tabular-nums max-[760px]:basis-full">
+      <div className="ml-auto flex shrink-0 items-center gap-x-4 @max-[650px]:order-2 @max-[650px]:w-full @max-[650px]:flex-wrap @max-[650px]:gap-2">
+        <dl className="flex flex-wrap gap-x-4 gap-y-1 text-xs tabular-nums @max-[650px]:basis-full">
           <div className="flex gap-1.5"><dt className="text-ink3">{t("header.started")}</dt><dd>{Number.isFinite(start) ? formatMomentMinutes(start, nowMs) : t("unrecorded")}</dd></div>
           <div className="flex gap-1.5"><dt className="text-ink3">{t("header.elapsed")}</dt><dd>{Number.isFinite(start) ? formatDuration(Math.max(0, endMs - start)) : t("unrecorded")}</dd></div>
           {turns !== null && <div className="flex gap-1.5"><dt className="text-ink3">{t("header.turns")}</dt><dd>{turns}</dd></div>}
         </dl>
-        <div className="flex shrink-0 items-center gap-2 max-[760px]:ml-auto">
+        <div className="flex shrink-0 items-center gap-2 @max-[650px]:ml-auto">
           <span data-slot="detail-status" className={cn("text-xs whitespace-nowrap", word.mark === "hand" ? "text-hand" : word.mark === "live" ? "text-live" : word.mark === "fail" ? "text-fail" : "text-ink2")}>{t(`state.${word.key}`)}</span>
           {reminders.overdue && <span className="text-xs whitespace-nowrap text-hand">{shell("reminders.overdue")}</span>}
           {reminders.possiblyStuck && <span className="text-xs whitespace-nowrap text-hand">{shell("reminders.possiblyStuck")}</span>}
