@@ -316,12 +316,13 @@ function parseQuotaRouting(value: unknown): QuotaRoutingRecord[] | undefined {
     const record = entry as QuotaRoutingRecord | null;
     if (!record || typeof record !== "object") return null;
     if (typeof record.provider !== "string" || !record.provider.trim()) return null;
-    for (const key of ["code", "source", "observedAt"] as const) {
+    for (const key of ["source", "observedAt"] as const) {
       if (typeof record[key] !== "string") return null;
     }
     if (!(record.limitId === null || typeof record.limitId === "string")) return null;
     if (!(record.resetsAt === null || typeof record.resetsAt === "string")) return null;
     if (typeof record.blocked !== "boolean") return null;
+    if (record.blocked ? typeof record.code !== "string" : record.code !== null) return null;
     if (!("retry" in record) || record.retry === null) return { ...record, retry: null };
     const retry = parseQuotaRetry(record.retry);
     return retry ? { ...record, retry } : null;

@@ -34,9 +34,8 @@ class QuotaVisibilityTests(BoardTestCase):
         with board.store.db.write() as db:
             record_quota(db, "codex", once, now=once["observedAt"])
             self.assertEqual(latest_quota(db, "codex"), once)
-            for table in ("harness_quota_observations", "quota_current"):
-                row = db.execute(f"SELECT native_account_id FROM {table} WHERE adapter='codex'").fetchone()
-                self.assertEqual(row["native_account_id"], "fixture-account")
+            row = db.execute("SELECT native_account_id FROM quota_current WHERE adapter='codex'").fetchone()
+            self.assertEqual(row["native_account_id"], "fixture-account")
 
 
     def test_missing_cache_cannot_be_relabelled_as_an_inclusive_input_total(self):
@@ -146,9 +145,10 @@ class QuotaVisibilityTests(BoardTestCase):
             record_quota(db, "codex", unknown, now=clock())
             self.assertIsNotNone(exhausted(db, config, now=clock()))
             self.assertEqual(latest_quota(db, "codex"), unknown)
-            for table in ("harness_quota_observations", "quota_current"):
-                row = db.execute(f"SELECT native_account_id FROM {table} WHERE adapter='codex'").fetchone()
-                self.assertEqual(row["native_account_id"], "second-login")
+            row = db.execute("SELECT * FROM quota_current WHERE adapter='codex'").fetchone()
+            self.assertEqual(row["native_account_id"], "first-login")
+            self.assertEqual(row["observed_at"], "2026-09-29T10:00:00Z")
+            self.assertEqual(row["last_observed_at"], clock())
             record_quota(db, "codex", {**base, "observedAt": "2026-09-29T09:59:00Z",
                          "ordinaryUsageAllowed": True, "scope": {"nativeAccountId": "first-login"}}, now=clock())
             self.assertIsNotNone(exhausted(db, config, now=clock()))
@@ -166,6 +166,30 @@ class QuotaVisibilityTests(BoardTestCase):
             record_quota(db, "codex", {**base, "observedAt": clock(), "ordinaryUsageAllowed": True,
                          "scope": {"nativeAccountId": "third-login"}}, now=clock())
             self.assertIsNone(exhausted(db, config, now=clock()), "A newer available observation ends exhaustion")
+
+    def test_available_state_has_no_exhaustion_code_and_rejects_contradictory_storage(self):
+        import sqlite3
+        from hey_my_buddy.blackboard.routing.quota_routing import routing_facts
+        board = self.board()
+        base = {"source": "native-fixture", "provider": "openai", "windows": []}
+        with board.store.db.write() as db:
+            record_quota(db, "codex", {**base, "observedAt": "2026-09-29T10:00:00Z",
+                         "reachedType": "usage_limit_reached", "scope": {"nativeAccountId": "first-login"}})
+            blocked = routing_facts(db, "codex")[0]
+            self.assertTrue(blocked["blocked"])
+            self.assertFalse(blocked["available"])
+            self.assertEqual(blocked["code"], "HARNESS_QUOTA_EXHAUSTED")
+            with self.assertRaises(sqlite3.IntegrityError):
+                db.execute("UPDATE quota_current SET code=NULL WHERE adapter='codex'")
+            record_quota(db, "codex", {**base, "observedAt": "2026-09-29T10:01:00Z",
+                         "ordinaryUsageAllowed": True, "scope": {"nativeAccountId": "second-login"}})
+            available = routing_facts(db, "codex")[0]
+            self.assertFalse(available["blocked"])
+            self.assertTrue(available["available"])
+            self.assertIsNone(available["code"])
+            self.assertEqual(available["nativeAccountId"], "second-login")
+            with self.assertRaises(sqlite3.IntegrityError):
+                db.execute("UPDATE quota_current SET code='HARNESS_QUOTA_EXHAUSTED' WHERE adapter='codex'")
 
     def test_temporary_rate_limit_warns_without_creating_exhaustion(self):
         board = self.board()

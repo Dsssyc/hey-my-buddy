@@ -120,6 +120,10 @@ describe("a quota observation on the wire", () => {
       observedAt: CHECKED_AT, resetsAt: null, blocked: true, retry: null };
     const parse = (quotaRouting: unknown) => snapshotHarnesses({ harnesses: [harness({ adapter: "dsh", status: "ready", quotaRouting: quotaRouting as never })] } as unknown as Snapshot)[0].quotaRouting;
     expect(parse([record])).toEqual([record]);
+    const available = { ...record, blocked: false, code: null };
+    expect(parse([record, available])).toEqual([record, available]);
+    expect(parse([{ ...record, code: null }])).toBeUndefined();
+    expect(parse([{ ...available, code: "HARNESS_QUOTA_EXHAUSTED" }])).toBeUndefined();
     expect(parse([record, { ...record, retry: { eligibleAt: 42, open: "yes" } }])).toBeUndefined();
     expect(parse([{ ...record, provider: " " }])).toBeUndefined();
     expect(parse("blocked")).toBeUndefined();

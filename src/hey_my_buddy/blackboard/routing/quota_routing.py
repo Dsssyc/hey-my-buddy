@@ -55,31 +55,31 @@ def evidence(quota, *, now=None):
             'observedAt': quota['observedAt'], 'blocked': blocked, 'available': available and not blocked,
             'resetsAt': reset.isoformat().replace('+00:00', 'Z') if reset and reset > observed else None,
             'source': identifier(quota.get('source')) or 'unknown',
-            'code': 'HARNESS_BALANCE_ZERO' if quota.get('balanceZero') is True else 'HARNESS_QUOTA_EXHAUSTED'}
+            'code': ('HARNESS_BALANCE_ZERO' if quota.get('balanceZero') is True else 'HARNESS_QUOTA_EXHAUSTED') if blocked else None}
 
 
 def _item(row):
     return {'adapter': row['adapter'], 'provider': row['provider'], 'limitId': row['limit_id'] or None,
-            'blocked': bool(row['blocked']), 'available': bool(row['available']),
+            'blocked': bool(row['blocked']), 'available': not bool(row['blocked']),
             'code': row['code'], 'source': row['source'], 'observedAt': row['observed_at'],
             'lastObservedAt': row['last_observed_at'], 'resetsAt': row['resets_at'],
             'nativeAccountId': row['native_account_id']}
 
 
 def _marker(connection, adapter, provider, limit_id):
-    row = connection.execute('SELECT retry_basis,retry_manual_at,retry_consumed_at,retry_consumed_by '
+    row = connection.execute('SELECT retry_manual_at,retry_consumed_at,retry_consumed_by '
                              'FROM quota_current WHERE adapter=? AND provider=? AND limit_id=?',
                              (adapter, provider, limit_id or '')).fetchone()
-    if row is None or row['retry_basis'] is None:
+    if row is None:
         return None
-    return {'basis': row['retry_basis'], 'manualAt': row['retry_manual_at'],
+    return {'manualAt': row['retry_manual_at'],
             'consumedAt': row['retry_consumed_at'], 'consumedBy': row['retry_consumed_by']}
 
 
 def _write_marker(connection, adapter, provider, limit_id, marker):
-    connection.execute('UPDATE quota_current SET retry_basis=?,retry_manual_at=?,retry_consumed_at=?,'
+    connection.execute('UPDATE quota_current SET retry_manual_at=?,retry_consumed_at=?,'
                        'retry_consumed_by=? WHERE adapter=? AND provider=? AND limit_id=?',
-                       (marker['basis'], marker['manualAt'], marker['consumedAt'], marker['consumedBy'],
+                       (marker['manualAt'], marker['consumedAt'], marker['consumedBy'],
                         adapter, provider, limit_id or ''))
 
 
@@ -98,10 +98,6 @@ def retry_facts(connection, item, *, now=None):
         return None
     adapter, provider, limit_id = item.get('adapter'), item.get('provider'), item.get('limitId')
     marker = _marker(connection, adapter, provider, limit_id)
-    # A marker bound to an older observation is evidence of a newer exhaustion
-    # event; the fresh observation owns a fresh natural window.
-    if marker and marker.get('basis') != item.get('observedAt'):
-        marker = None
     manual = consumed = consumed_by = None
     if marker:
         manual, consumed = _time(marker.get('manualAt')), _time(marker.get('consumedAt'))
@@ -144,18 +140,18 @@ def record(connection, adapter, quota, *, now=None):
     native_id = (quota.get('scope') or {}).get('nativeAccountId')
     if not item['blocked'] and not item['available']:
         if row:
-            connection.execute('UPDATE quota_current SET last_observed_at=?,native_account_id=? '
+            connection.execute('UPDATE quota_current SET last_observed_at=? '
                                'WHERE adapter=? AND provider=? AND limit_id=?',
-                               (item['observedAt'], native_id, *binding))
+                               (item['observedAt'], *binding))
         return
-    connection.execute('INSERT INTO quota_current(adapter,provider,limit_id,blocked,available,code,source,'
-                       'observed_at,last_observed_at,resets_at,native_account_id) VALUES(?,?,?,?,?,?,?,?,?,?,?) '
+    connection.execute('INSERT INTO quota_current(adapter,provider,limit_id,blocked,code,source,'
+                       'observed_at,last_observed_at,resets_at,native_account_id) VALUES(?,?,?,?,?,?,?,?,?,?) '
                        'ON CONFLICT(adapter,provider,limit_id) DO UPDATE SET blocked=excluded.blocked,'
-                       'available=excluded.available,code=excluded.code,source=excluded.source,'
+                       'code=excluded.code,source=excluded.source,'
                        'observed_at=excluded.observed_at,last_observed_at=excluded.last_observed_at,'
                        'resets_at=excluded.resets_at,native_account_id=excluded.native_account_id,'
-                       'retry_basis=NULL,retry_manual_at=NULL,retry_consumed_at=NULL,retry_consumed_by=NULL',
-                       (*binding, int(item['blocked']), int(item['available']), item['code'], item['source'],
+                       'retry_manual_at=NULL,retry_consumed_at=NULL,retry_consumed_by=NULL',
+                       (*binding, int(item['blocked']), item['code'], item['source'],
                         item['observedAt'], item['observedAt'], item['resetsAt'], native_id))
 
 
@@ -222,7 +218,7 @@ def claim(connection, configuration, *, decision_id, consume=True, now=None):
             claimed.append({**facts, 'claimed': False})
             continue
         marker = {'adapter': item['adapter'], 'provider': item['provider'], 'limitId': item.get('limitId'),
-                  'basis': item.get('observedAt'), 'manualAt': None,
+                  'manualAt': None,
                   'consumedAt': now or utc_now(), 'consumedBy': decision_id}
         _write_marker(connection, item['adapter'], item['provider'], item.get('limitId'), marker)
         claimed.append({**facts, 'claimed': True, 'consumedAt': marker['consumedAt'], 'consumedBy': decision_id})
@@ -243,7 +239,7 @@ def redetect(connection, adapter, provider, *, now=None):
             already.append(item['limitId'])
             view['retry'] = facts
         else:
-            marker = {'basis': item['observedAt'], 'manualAt': now or utc_now(),
+            marker = {'manualAt': now or utc_now(),
                       'consumedAt': None, 'consumedBy': None}
             _write_marker(connection, adapter, provider, item['limitId'], marker)
             opened.append(item['limitId'])

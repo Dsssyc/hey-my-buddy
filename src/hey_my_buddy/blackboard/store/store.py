@@ -1794,12 +1794,6 @@ class BoardStore:
                 ),
             )
             effective_cwd = chosen["cwd"] or spec["cwd"]
-            from ...protocol.harness_names import HARNESS_NAMES
-            harness = chosen_family[0] if chosen_family else chosen['adapter']
-            if harness in HARNESS_NAMES:
-                from ..service.harness_health import read_health
-                connection.execute('INSERT INTO meta(key,value) VALUES(?,?)',
-                                   ('attempt-harness:' + attempt_id, canonical_json(read_health(connection, harness))))
             for kind, values in (("cwd", [effective_cwd]), ("exclusive", spec.get("exclusiveResources", []))):
                 for resource in values:
                     # (task, resource) is unique, so a retried task re-holds its own

@@ -29,10 +29,9 @@ def record_quota(connection, adapter, quota, *, now=None):
     previous = latest_quota(connection, adapter)
     if previous is not None and _time(previous['observedAt']) >= _time(quota['observedAt']):
         return
-    connection.execute('INSERT INTO harness_quota_observations(adapter,observed_at,native_account_id,quota_json) '
-                       'VALUES(?,?,?,?) ON CONFLICT(adapter) DO UPDATE SET observed_at=excluded.observed_at,'
-                       'native_account_id=excluded.native_account_id,quota_json=excluded.quota_json',
-                       (adapter, quota['observedAt'], (quota.get('scope') or {}).get('nativeAccountId'), canonical_json(quota)))
+    connection.execute('INSERT INTO harness_quota_observations(adapter,quota_json) '
+                       'VALUES(?,?) ON CONFLICT(adapter) DO UPDATE SET quota_json=excluded.quota_json',
+                       (adapter, canonical_json(quota)))
 
 
 def persist(connection, attempt, result):

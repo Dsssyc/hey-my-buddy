@@ -14,6 +14,7 @@ class HarnessServiceTests(BoardTestCase):
         self.board = BoardStore(self.directory / 'state')
         self.board.initialize()
         self.service = BoardService(self.board, token='host', control={}, on_stop=lambda p: {}, on_restart=lambda p: {}, automatic_discovery=True)
+        self.enterContext(patch('hey_my_buddy.buddy.harnesses.codex.account_probe.read', return_value=(None, None)))
         self.service.harnesses.kick = Mock()
         self.service.harnesses.catalog_refresh = Mock()
         self.addCleanup(self.service.harnesses.close)

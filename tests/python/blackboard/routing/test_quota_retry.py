@@ -63,12 +63,12 @@ class QuotaRetryBoard(BoardTestCase):
 
     def marker_value(self):
         with self.board.store.db.read() as db:
-            row = db.execute("SELECT retry_basis,retry_manual_at,retry_consumed_at,retry_consumed_by "
+            row = db.execute("SELECT retry_manual_at,retry_consumed_at,retry_consumed_by "
                              "FROM quota_current WHERE adapter='dsh' AND provider='deepseek-official' "
                              "AND limit_id='' ").fetchone()
-        if row is None or row['retry_basis'] is None:
+        if row is None or all(row[key] is None for key in row.keys()):
             return None
-        return {'basis': row['retry_basis'], 'manualAt': row['retry_manual_at'],
+        return {'manualAt': row['retry_manual_at'],
                 'consumedAt': row['retry_consumed_at'], 'consumedBy': row['retry_consumed_by']}
 
 
@@ -139,6 +139,24 @@ class QuotaRetryTests(QuotaRetryBoard):
         self.clock.advance(1)
         rows, _retried = self.candidates("dec-a")
         self.assertEqual(rows, [PROFILE_ID, SECOND_PROFILE_ID])
+
+    def test_unknown_observation_preserves_the_consumed_retry_and_state_identity(self):
+        self.clock.advance(RETRY_WAIT_SECONDS)
+        self.candidates("dec-first")
+        marker = self.marker_value()
+        self.clock.advance(60)
+        with self.board.store.db.write() as db:
+            record(db, "dsh", {"provider": CONFIG["provider"], "source": "native-fixture",
+                               "observedAt": self.clock.value, "windows": [],
+                               "scope": {"nativeAccountId": "different-login"}}, now=self.clock.value)
+            item = routing_facts(db, "dsh", now=self.clock.value)[0]
+            self.assertIsNone(item["nativeAccountId"])
+            self.assertEqual(item["observedAt"], T0)
+            self.assertEqual(item["lastObservedAt"], self.clock.value)
+        self.assertEqual(self.marker_value(), marker)
+        self.assertEqual(self.candidates("dec-next"), ([], []))
+        self.clock.advance(RETRY_WAIT_SECONDS - 60)
+        self.assertEqual(self.candidates("dec-next")[0], [PROFILE_ID, SECOND_PROFILE_ID])
 
     def test_newer_available_observation_clears_exhaustion_and_drops_the_marker(self):
         self.clock.advance(RETRY_WAIT_SECONDS)
@@ -319,7 +337,7 @@ class RedetectTests(QuotaRetryBoard):
         self.assertIsNone(reply["records"][0]["retry"])
         self.assertEqual(parse(reply["records"][0]["resetsAt"]), parse(moment(7200)))
         with self.board.store.db.read() as db:
-            self.assertEqual(db.execute("SELECT COUNT(*) FROM quota_current WHERE retry_basis IS NOT NULL").fetchone()[0], 0)
+            self.assertEqual(db.execute("SELECT COUNT(*) FROM quota_current WHERE retry_manual_at IS NOT NULL OR retry_consumed_at IS NOT NULL OR retry_consumed_by IS NOT NULL").fetchone()[0], 0)
 
     def test_redetect_is_honest_about_unknown_providers_and_refuses_free_text(self):
         reply = self.board.call("quota_redetect", {"requestId": "recheck-1", "adapter": "dsh", "provider": "not-recorded"})["quota"]

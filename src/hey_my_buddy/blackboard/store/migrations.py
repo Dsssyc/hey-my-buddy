@@ -24,23 +24,21 @@ _NEW_DDL = (
     provider TEXT NOT NULL,
     limit_id TEXT NOT NULL,
     blocked INTEGER NOT NULL CHECK (blocked IN (0,1)),
-    available INTEGER NOT NULL CHECK (available IN (0,1)),
-    code TEXT NOT NULL,
+    code TEXT,
     source TEXT NOT NULL,
     observed_at TEXT NOT NULL,
     last_observed_at TEXT NOT NULL,
     resets_at TEXT,
     native_account_id TEXT,
-    retry_basis TEXT,
     retry_manual_at TEXT,
     retry_consumed_at TEXT,
     retry_consumed_by TEXT,
-    PRIMARY KEY (adapter, provider, limit_id)
+    PRIMARY KEY (adapter, provider, limit_id),
+    CHECK ((blocked=1 AND code IS NOT NULL AND code IN ('HARNESS_BALANCE_ZERO','HARNESS_QUOTA_EXHAUSTED'))
+           OR (blocked=0 AND code IS NULL))
 );"""),
     ("harness_quota_observations", """CREATE TABLE harness_quota_observations (
     adapter TEXT PRIMARY KEY,
-    observed_at TEXT NOT NULL,
-    native_account_id TEXT,
     quota_json TEXT NOT NULL
 );"""),
     ("harness_account_reads", """CREATE TABLE harness_account_reads (

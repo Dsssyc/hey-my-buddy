@@ -228,7 +228,7 @@ describe("an exhausted quota", () => {
     const view = harnessDetailsView(row({ quotaRouting: [
       record(),
       record({ provider: "other", limitId: "tokens", code: "HARNESS_QUOTA_EXHAUSTED" }),
-      record({ provider: "settled", blocked: false }),
+      record({ provider: "settled", blocked: false, code: null }),
     ] }), t);
     expect(view.exhausted.map(entry => [entry.provider, entry.limitId, entry.word])).toEqual([
       ["deepseek-official", null, "余额为零"], ["other", "tokens", "额度耗尽"]]);
@@ -237,7 +237,7 @@ describe("an exhausted quota", () => {
 
   it("offers a retry only for a blocked provider with no reset, once each", () => {
     expect(retryProviders([record(), record({ limitId: "b" }), record({ provider: "known", resetsAt: "2026-09-29T13:00:00.000Z", retry: null }),
-      record({ provider: "free", blocked: false })])).toEqual(["deepseek-official"]);
+      record({ provider: "free", blocked: false, code: null })])).toEqual(["deepseek-official"]);
     expect(retryProviders([])).toEqual([]);
   });
 });

@@ -109,20 +109,32 @@ class HarnessHealth:
         with self.board.db.read() as db:
             return read_health(db, _name(name))
 
-    def invalidate(self, name, revision, reason='HARNESS_START_FAILED'):
+    def invalidate(self, name, revision, reason='HARNESS_START_FAILED', *, account_read_failure=None):
         with self.board.db.write() as db:
             row = read_health(db, _name(name))
-            if row['revision'] != revision:
+            if account_read_failure is not None and (self._closed or (self.board.directory / 'upgrade.json').exists()):
                 return row
-            db.execute("UPDATE harness_health SET status='unhealthy',record_json=?,expires_at=NULL,scan_after=NULL,revision=revision+1 WHERE adapter=?", (canonical_json({**row, "reasonCode": reason, "available": False}), name))
-            # ADR-027: a health failure must not erase catalog facts. Rows a
-            # confirmed absence or an effort retirement already grounded stay
-            # with their own reason; health only grounds the rest.
-            from ..catalog.catalog import CATALOG_FACT_REASONS
-            db.execute('UPDATE evaluation_profiles SET available=0,unavailable_reason=?'
-                       ' WHERE adapter=? AND (unavailable_reason IS NULL OR unavailable_reason NOT IN (?,?))',
-                       (reason, name, *CATALOG_FACT_REASONS))
-            self.board._append_event(db, 'harness.invalidated', payload={'adapter': name, 'reasonCode': reason})
+            if row['revision'] != revision:
+                if account_read_failure is None:
+                    return row
+                self.board._append_event(db, 'harness.account_read_failed', payload={
+                    'adapter': name, 'reasonCode': reason, 'revision': revision,
+                    'currentRevision': row['revision'], 'accountReadFailure': account_read_failure})
+            else:
+                record = json.loads(db.execute('SELECT record_json FROM harness_health WHERE adapter=?', (name,)).fetchone()[0])
+                record.update(reasonCode=reason, available=False)
+                if account_read_failure is not None:
+                    record['accountReadFailure'] = account_read_failure
+                db.execute("UPDATE harness_health SET status='unhealthy',record_json=?,expires_at=NULL,scan_after=NULL,revision=revision+1 WHERE adapter=?", (canonical_json(record), name))
+                # ADR-027: a health failure must not erase catalog facts. Rows a
+                # confirmed absence or an effort retirement already grounded stay
+                # with their own reason; health only grounds the rest.
+                from ..catalog.catalog import CATALOG_FACT_REASONS
+                db.execute('UPDATE evaluation_profiles SET available=0,unavailable_reason=?'
+                           ' WHERE adapter=? AND (unavailable_reason IS NULL OR unavailable_reason NOT IN (?,?))',
+                           (reason, name, *CATALOG_FACT_REASONS))
+                self.board._append_event(db, 'harness.invalidated', payload={'adapter': name, 'reasonCode': reason,
+                    **({'accountReadFailure': account_read_failure} if account_read_failure is not None else {})})
             head = self.board._head_of(db)
         self.board._notify(head)
         return self.get(name)
@@ -198,12 +210,16 @@ class HarnessHealth:
             except Exception:
                 record = {'adapter': name, 'status': 'unhealthy', 'reasonCode': 'HARNESS_HANDSHAKE_FAILED',
                           'remedy': 'Repair the native CLI installation and run buddy adapters with refresh:true'}
-            retained = {key: old[key] for key in ("billingByProvider",) if key in old}
+            retained = {key: old[key] for key in ("billingByProvider", "accountReadFailure") if key in old}
             if record.get("status") != "ready" or old.get("fingerprint") != record.get("fingerprint"):
                 retained.pop("billingByProvider", None)
             record = {**retained, **record, 'locationFingerprint': signature,
                       'systemSandbox': old['systemSandbox']}
             status = record.get('status')
+            native_ready = status == 'ready'
+            if native_ready and 'accountReadFailure' in record:
+                status = 'unhealthy'
+                record.update(status=status, available=False, reasonCode=record['accountReadFailure']['reasonCode'])
             if status not in ('ready', 'missing', 'login-required', 'unhealthy'):
                 raise BoardError('HARNESS_INVALID_RESULT', 'Discovery returned an invalid health status')
             if len(canonical_json(record).encode()) > 65536:
@@ -236,8 +252,10 @@ class HarnessHealth:
                 head = self.board._head_of(db)
             self.board._notify(head)
             current = self.get(name)
-            if name == "codex" and status == "ready":
+            if name == "codex" and native_ready:
                 self._codex_account_read(current)
+                current = self.get(name)
+                status = current['status']
             # Necessary eager reads (manual force, a status or version change, a
             # moved binary) stay outside the shared window; only the stale-catalog
             # read shares rule 3's claim and single flight.
@@ -314,7 +332,7 @@ class HarnessHealth:
 
     def _codex_account_read(self, health):
         """One on-demand native read per harness every 180 seconds."""
-        if health.get('status') != 'ready' or not health.get('command'):
+        if (health.get('status') != 'ready' and not health.get('accountReadFailure')) or not health.get('command'):
             return
         if self._closed or (self.board.directory / 'upgrade.json').exists():
             return
@@ -327,11 +345,16 @@ class HarnessHealth:
                 return
             db.execute('INSERT INTO harness_account_reads(adapter,checked_at) VALUES(?,?) '
                        'ON CONFLICT(adapter) DO UPDATE SET checked_at=excluded.checked_at', ('codex', now))
+        from ...buddy.harnesses.codex.protocol import CodexProtocolError
         try:
             from ...buddy.harnesses.codex.account_probe import read
             billing, quota = read(health['command'], self.environment())
-        except Exception:
-            billing = quota = None
+        except (BoardError, CodexProtocolError, OSError, ValueError, RuntimeError) as error:
+            reason = error.code if isinstance(error, (BoardError, CodexProtocolError)) else 'HARNESS_ACCOUNT_READ_FAILED'
+            self.invalidate('codex', health['revision'], reason, account_read_failure={
+                'reasonCode': reason, 'errorType': type(error).__name__, 'message': str(error)[:512],
+                'observedAt': utc_now()})
+            return
         with self.board.db.write() as db:
             if self._closed or (self.board.directory / 'upgrade.json').exists():
                 return
@@ -342,12 +365,20 @@ class HarnessHealth:
                 from ..evaluation.native_observations import record_quota
                 record_quota(db, 'codex', {**quota, 'provider': 'openai'})
             record = json.loads(row['record_json'])
+            recovered = record.pop('accountReadFailure', None) is not None
+            if recovered:
+                record.pop('reasonCode', None)
+                record.update(status='ready', available=True)
             observed_at = utc_now()
             if billing is None:
                 from ...protocol.billing import fact
                 billing = fact('unknown', 'codex/account-read', observed_at)
             record['billingByProvider'] = {'openai': billing}
-            db.execute("UPDATE harness_health SET record_json=? WHERE adapter='codex'", (canonical_json(record),))
+            db.execute("UPDATE harness_health SET record_json=?,status='ready',expires_at=? WHERE adapter='codex'",
+                       (canonical_json(record), _later(READY_SECONDS)))
+            if recovered:
+                from ..catalog.catalog import restore_retained_availability
+                restore_retained_availability(db, 'codex')
             self.board._append_event(db, 'harness.account_observed', payload={'adapter': 'codex',
                 'observedAt': observed_at, 'billing': record['billingByProvider'], 'quotaRecorded': quota is not None})
             head = self.board._head_of(db)

@@ -106,7 +106,7 @@ export type QuotaRetryWindow = {
 export type QuotaRoutingRecord = {
   provider: string;
   limitId: string | null;
-  code: string;
+  code: string | null;
   source: string;
   observedAt: string;
   resetsAt: string | null;

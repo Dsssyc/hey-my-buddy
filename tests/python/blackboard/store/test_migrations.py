@@ -72,6 +72,12 @@ class Schema16UpgradeTests(BoardTestCase):
         for table in migrations.NEW_TABLES:
             self.assertEqual(self.connection.execute(f'SELECT COUNT(*) FROM {table}').fetchone()[0], 0)
         self.assertNotIn('quota_json', [row[1] for row in self.connection.execute('PRAGMA table_info(harness_health)')])
+        quota_columns = {row[1] for row in self.connection.execute('PRAGMA table_info(quota_current)')}
+        self.assertFalse({'available', 'retry_basis'} & quota_columns)
+        self.assertEqual(
+            {row[1] for row in self.connection.execute('PRAGMA table_info(harness_quota_observations)')},
+            {'adapter', 'quota_json'},
+        )
 
     def test_all_retired_stock_is_deleted_and_every_historical_value_is_preserved(self):
         old = rows(self.connection)

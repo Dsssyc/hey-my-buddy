@@ -282,9 +282,9 @@ Host 修改的 owning reference 包括 harnesses、workers、codex、claude、cl
 
 ## 9. 冻结的存储方案
 
-本节落实第二回合 Host 的定案，优先于上文第一回合建议：唯一升级基点改为已安装 0.29.0、提交 `2bee001e9ef37acb256c19f97a29b2a5ece3a7fb`、schema16，目标17；旧15→16迁移与专属夹具／测试退休。Host 在副本上已量到没有独立来源或账户目录，因此本批不做文件系统与钥匙串清理，也不保留清理协议。原生登录身份只作事实，不用于本批判断。
+本节落实第二回合 Host 的定案与第五回合第4条的修订，优先于上文第一回合建议：唯一升级基点改为已安装 0.29.0、提交 `2bee001e9ef37acb256c19f97a29b2a5ece3a7fb`、schema16，目标17；旧15→16迁移与专属夹具／测试退休。Host 在副本上已量到没有独立来源或账户目录，因此本批不做文件系统与钥匙串清理，也不保留清理协议。原生登录身份只作事实，不用于本批判断。
 
-额度状态的键为 adapter/provider/limit_id；空字符串 limit_id 明确表示供应方整体限额，公开读取仍投影为 null，不保留两种存储形式。最新额度观察每个 harness 一行，与现有显示粒度一致；其 quota JSON 是规范化的原生正文，account 本地桶标签删除，原生标识同时在 native_account_id 列记录事实。主动账户读取的180秒窗口每个 harness 一行；目录可信读取与扫描窗口继续由 ADR-027 所有者管理，本批只清旧来源的存量。
+额度状态的键为 adapter/provider/limit_id；空字符串 limit_id 明确表示供应方整体限额，公开读取仍投影为 null，不保留两种存储形式。最新额度观察每个 harness 一行，与现有显示粒度一致；其 quota JSON 是规范化的原生正文，account 本地桶标签删除，observedAt与原生标识仅留在正文里；quota_current.native_account_id只记录确立该状态的观察身份，结论不明的后续观察不改它。主动账户读取的180秒窗口每个 harness 一行；目录可信读取与扫描窗口继续由 ADR-027 所有者管理，本批只清旧来源的存量。
 
 ```sql
 CREATE TABLE quota_current (
@@ -292,23 +292,21 @@ CREATE TABLE quota_current (
     provider TEXT NOT NULL,
     limit_id TEXT NOT NULL,
     blocked INTEGER NOT NULL CHECK (blocked IN (0,1)),
-    available INTEGER NOT NULL CHECK (available IN (0,1)),
-    code TEXT NOT NULL,
+    code TEXT,
     source TEXT NOT NULL,
     observed_at TEXT NOT NULL,
     last_observed_at TEXT NOT NULL,
     resets_at TEXT,
     native_account_id TEXT,
-    retry_basis TEXT,
     retry_manual_at TEXT,
     retry_consumed_at TEXT,
     retry_consumed_by TEXT,
-    PRIMARY KEY (adapter, provider, limit_id)
+    PRIMARY KEY (adapter, provider, limit_id),
+    CHECK ((blocked=1 AND code IS NOT NULL AND code IN ('HARNESS_BALANCE_ZERO','HARNESS_QUOTA_EXHAUSTED'))
+           OR (blocked=0 AND code IS NULL))
 );
 CREATE TABLE harness_quota_observations (
     adapter TEXT PRIMARY KEY,
-    observed_at TEXT NOT NULL,
-    native_account_id TEXT,
     quota_json TEXT NOT NULL
 );
 CREATE TABLE harness_account_reads (
@@ -320,9 +318,9 @@ CREATE TABLE harness_account_reads (
 | 旧键／字段 | 16→17 的处置 | 当前代码的唯一去向 |
 | --- | --- | --- |
 | account-selection、account-credential、account-mutation、attempt-account、account-operation 前缀 | 清除所有行，不判断状态 | 来源选择、变更与预留功能删除 |
-| account-quota、quota-routing、quota-retry 前缀与 harness_health.quota_json | 清除存量，不把旧桶归到用户原生登录 | 新观察写 harness_quota_observations 与 quota_current；旧 quota_json 列物理删除 |
+| account-quota、quota-routing、quota-retry 前缀与 harness_health.quota_json | 清除存量，不把旧桶归到用户原生登录 | 规范化最近正文仅写 harness_quota_observations.quota_json；确立的额度状态写 quota_current，available由blocked推出、code只在耗尽时非空；旧quota_json列物理删除 |
 | account-read-at 前缀与 codex_account_read_at | 清除存量 | harness_account_reads 记录一次主动原生读取的限频时刻 |
-| catalog-accounts、catalog-account、attempt-routing-accounts、attempt-harness 前缀 | 清除存量 | 账户 CAS 链删除；目录 observationId、health revision 守门保留 |
+| catalog-accounts、catalog-account、attempt-routing-accounts、attempt-harness 前缀 | 清除存量 | 账户CAS链与无读者的attempt-harness认领写入删除；目录observationId、health revision守门保留 |
 | catalog-harnesses:<observationId> 快照的 account 字段 | 清除整个旧快照缓存 | 新快照只带只读登录事实，不用于账户选择 |
 | harness_health.record_json 的 account、billingByProvider、quotaCheckedAt 等旧当前投影 | 清当前观察并置 unknown，保留 manual_path 与 revision | 健康重读后写无来源／代次的只读登录、计费投影 |
 | catalog-read-at、catalog-account-status、catalog-scan-after 与 catalog_pending | 清旧当前窗口／确认状态和 pending，catalog_current 置 unknown 并清当前payload指针 | ADR-027 继续按 harness 重建可信读取与缺席窗口，不继承独立来源的事实 |
@@ -337,7 +335,7 @@ CREATE TABLE harness_account_reads (
 
 三个新表已接入当前额度状态、最新原生观察与180秒读取窗口，旧 meta 双读／materialize 与本地账户桶去掉；原生 native_account_id 只作事实。执行用量归原 attempt，评价保留四段配置；额度归 harness/provider/limit。原生观察比较解析后的时间，避免整秒与小数秒字符串顺序误判；unknown／迟到观察不清耗尽，reset／更新的可用观察与单次重试规则保留。共享 harness 名称放 protocol/harness_names.py，黑板的 command/external 额度边界不再导入原生 runner 契约。
 
-目录重读仍单飞与限频，去掉来源 epoch，保留 observationId 顺序、health revision、ADR-027 accountStatus 与缺席确认。升级清旧 evaluation_profiles 的 available/unavailable_reason 并全列核验其他字段不变，避免健康恢复而目录仍 unknown 时旧来源模型继续路由；enabled、身份、卡片与偏好不清。attempt-harness 也是旧来源健康快照，迁移一并清，之后新 claim 只写当前只读形状。
+目录重读仍单飞与限频，去掉来源 epoch，保留 observationId 顺序、health revision、ADR-027 accountStatus 与缺席确认。升级清旧 evaluation_profiles 的 available/unavailable_reason 并全列核验其他字段不变，避免健康恢复而目录仍 unknown 时旧来源模型继续路由；enabled、身份、卡片与偏好不清。attempt-harness也是旧来源健康快照，迁移一并清；第二回合候选仍写过只读快照，第13节删除了这处无读者的写入。
 
 Codex 私有主目录未删除；它原有 native credentialSource 的 home/source=native/credentialRevision=0/identity 形状本批保留，仅由本机路径生成，用于私有会话绑定，不是额度桶，不再读取账户选择或 workerAccount。修改此私有持久形式与撤销 home 仍属于批次3b，避免本批在禁止文件系统升级时让旧 native 会话失去绑定。
 
@@ -443,3 +441,29 @@ Host报告在封存候选 fc516168 上前端类型检查通过，78个前端文�
 
 
 额外改动的 install.test_upgrade_migration 全文件16项通过（33.942秒）；本回合共81项尝试，80项通过，只有上述真实HTTP用例受环境限制。最终 git diff --check 通过；当前剩余请求仅为Host补跑 blackboard.tasks.test_console_objective_fixture，确认四项整文件通过，无需再次补跑第11节的其他模块。
+
+
+## 13. 第五回合：Host验收打回四处的修正
+
+Host报告封存候选f725eda7的类型检查与78个前端文件／1119项通过，Python完整检查3644项、216个文件里215个通过，唯一失败为基点已知的cli.test_host_preview；本节不把这份机械结果视为产品行为验收，第五回合四处实际问题均已修正。第5条列明的控制台构建、architecture版本文字与Codex私有主目录／固定native绑定未动，分别留给Host和批次3b。
+
+Codex账户／额度读取不再把真实失败变成计费未知。BoardError保留本来的原因码，CodexProtocolError保留原生协议码，明确的I/O／解码／运行失败以HARNESS_ACCOUNT_READ_FAILED带errorType、受限message和observedAt记录；未列明的意外异常直接失败，不用笼统except Exception转换为成功观察。当前健康代次被标为unhealthy／available=false，并在同一事务写harness.invalidated事件，事件和harness_health.record_json中的accountReadFailure都保留原因；失败不写harness.account_observed或新的额度事实，不启动目录读取。健康失效只保存本来的原生记录正文，不再把read_health算出的账户／额度投影倒灌进正文。
+
+账户读取失败在后续握手成功但账户读取被180秒限频时仍保持不可用；只有实际账户与额度读取成功才清accountReadFailure与该原因、恢复健康和可信目录中允许恢复的模型。迟到失败不覆盖新健康代次，但仍以harness.account_read_failed事件保存其旧代次与当前代次；关闭或升级栅栏仍阻止迟到写入。account_probe自身原来把account/rateLimits/read异常吞成quota=None的分支也删除，普通额度RPC失败先完成既有真实停止核验，再交给健康边界如实记录；停止未确认继续优先暴露HARNESS_ACCOUNT_STOP_UNCONFIRMED，不恢复任何账户预留记录。
+
+quota_current的native_account_id属于确立blocked状态的那一次观察。不证明耗尽也不证明可用的观察只更新last_observed_at，保留原生标识、状态依据、reset和已消费重试；最近正文仍记录这一次观察自己的身份，二者表达的事实不同。删quota_current.available，公开available取not blocked；可用行code为NULL，耗尽行必须有两个既有耗尽原因码之一，CHECK同时明确IS NOT NULL，避免SQLite的NULL表达式绕过约束。
+
+retry_basis的所有旧writer都取本行observed_at：消费取blocking_records的当前行，redetect取当前行，确立更新同时清所有重试列，不明更新不改变状态依据或标记。不存在独立含义，原来的“依据不匹配”回退不可达；列、writer与回退一并删除。三列retry_manual_at／retry_consumed_at／retry_consumed_by继续承载开放与单次消费窗口。harness_quota_observations的observed_at与native_account_id列删除，只留adapter／quota_json，单调比较从当前正文observedAt读取；没有两套读取或启动转换。第9节DDL和旧键处置表已经同步修订，唯一待发16→17迁移与新建schema一致。
+
+BoardStore原生认领的attempt-harness:<attemptId>写入、只服务它的harness名称判断及健康读取导入已删；只剩迁移退休前缀。0.29.0基点公开操作生成的schema16夹具保持原始五文件与来源哈希，不为当前schema17的修订而手改旧stock；现有升级对照测试将这份真实旧stock迁移到修订后的新表，另明确断言退休列不存在、最近观察表只有adapter／quota_json，并在原生认领测试核验无attempt-harness行。没有新增meta形状。
+
+边界接口也同步：QuotaRoutingRecord.code为string|null，解析器对blocked行要求字符串、可用行要求null；补回归确认耗尽行和可用行同在一组时完整保留，并拒绝互相矛盾的原因码。此前解析器要求所有code都是字符串，会把含可用行的整组quotaRouting丢掉，此处修在解析边界。前端需Host补跑typecheck／test，受影响文件为apps/console/src/buddies/harness-wire.test.ts与harness.test.ts及共享API解析；没有构建。
+
+新增健康回归覆盖停止未确认、强制刷新但被限频时仍不可用、成功重读恢复、普通BoardError／原生RPC／OSError各自原因、迟到代次失败的事件及rateLimits RPC异常经停止核验后传播；新增额度回归覆盖账户A建立耗尽之后未知B不能改写标识、已消费重试保持、可用原因码为空、SQL拒绝矛盾状态。原有调度／路径健康fixture现在显式提供无模型账户读取结果，不再靠不存在的假CLI被静默吞错来假装ready。
+
+受影响聚焦检查用Host授权的只读解释器和清除十个绑定的环境执行：额度与观察四文件48项通过（blackboard.evaluation.test_native_observations、blackboard.routing.test_quota_retry、test_nonretryable_quota、protocol.test_billing_quota）；最终健康／只读服务／原生停止／计费四文件65项通过（blackboard.service.test_harness_health、test_harness_service、blackboard.catalog.test_native_discovery_stop、protocol.test_billing_quota）；升级／夹具／存储／命令工作流五文件98项通过（blackboard.store.test_migrations、test_upgrade_fixture、test_store、install.test_upgrade_migration、blackboard.tasks.test_workflow）；七个目录信任与Router边界文件110项通过（blackboard.catalog.test_catalog_observations、test_catalog_trust、test_native_discovery_stop；blackboard.tasks.test_catalog_trust、test_continue_catalog_trust；blackboard.routing.test_catalog_trust、test_router_boundary_integration）。组之间有重复覆盖，数字不能相加当成不同测试数。
+
+未能获得通过证据的是install.test_upgrade_service的test_real_private_service_reads_the_fixed_upgrade_and_uses_public_host_conclusions，仍在私有daemon监听127.0.0.1:0时被沙盒拒绝，不能进入服务断言；没有绕过、mock或跳过这条边界。其余完整检查、浏览器、空HOME演练与故障注入依旧由Host执行。
+
+
+最终静态核对：git diff --check通过；源码attempt-harness只剩迁移清理，retry_basis只剩测试断言退休列不存在，最新观察writer只写adapter／quota_json。五个schema16固定夹具文件与metadata中的内容哈希、生成器来源哈希仍一致，未篡改生成stock。该回合剩余验证仅为上述私有升级服务用例和更新后的前端typecheck／test，由Host在允许的环境补验。

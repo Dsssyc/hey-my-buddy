@@ -32,11 +32,8 @@ def read(command: list[str], environment: dict) -> tuple[dict | None, dict | Non
         account = connection.call("account/read", {"refreshToken": False}).get("account")
         observed_at = utc_now()
         billing = codex_account(account, observed_at)
-        try:
-            response = connection.call("account/rateLimits/read", {})
-            quota = normalize_quota(quota_candidate_from_response(response, observed_at=utc_now()))
-        except Exception:
-            quota = None
+        response = connection.call("account/rateLimits/read", {})
+        quota = normalize_quota(quota_candidate_from_response(response, observed_at=utc_now()))
         return billing, quota
     finally:
         handle.terminate(grace_seconds=0.25)
