@@ -4,6 +4,7 @@ from unittest.mock import patch
 
 from hey_my_buddy.errors import BoardError
 from blackboard.tasks.test_workflow import BUDDY, WorkflowTestCase
+from support import macro_summaries
 
 
 class HostAdmissionTests(WorkflowTestCase):
@@ -317,7 +318,7 @@ class HostCompletionTests(WorkflowTestCase):
                 with self.assertRaises(BoardError):
                     board.call("workflow_conclude", {**params, "note": "Different"})
                 self.assertEqual(board.call("task_list", {"filter": "review"})["runs"], [])
-                summary = next(item for item in board.call("macro_task_list", {})["macroTasks"]
+                summary = next(item for item in macro_summaries(board.call("macro_task_list", {}))
                                if item["macroTaskId"] == submitted["macroTaskId"])
                 self.assertEqual(summary["counts"]["review"], 0)
 

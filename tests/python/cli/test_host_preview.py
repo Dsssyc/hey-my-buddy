@@ -33,6 +33,7 @@ import unittest
 from contextlib import contextmanager
 from pathlib import Path
 from urllib.parse import quote
+from support import macro_summaries
 
 ROOT = Path(__file__).resolve().parents[3]
 PREVIEW = ROOT / "tests" / "probes" / "macro_task_console_preview.py"
@@ -576,21 +577,24 @@ class PreviewDeletionTest(unittest.TestCase):
 
     def test_macro_task_list_sort_matches_requested_order(self) -> None:
         preview = self.preview
+        older = [f"macro-preview-list-{index}" for index in range(1, 7)]
         expected = {
-            "activity-desc": [preview.MACRO_B, preview.MACRO_A, preview.STANDALONE_GROUP, preview.MACRO_C],
-            "activity-asc": [preview.MACRO_C, preview.STANDALONE_GROUP, preview.MACRO_A, preview.MACRO_B],
-            "created-desc": [preview.MACRO_A, preview.STANDALONE_GROUP, preview.MACRO_B, preview.MACRO_C],
-            "created-asc": [preview.MACRO_C, preview.MACRO_B, preview.STANDALONE_GROUP, preview.MACRO_A],
+            "activity-desc": [preview.MACRO_B, preview.MACRO_A, preview.MACRO_C,
+                              *reversed(older[-3:]), preview.STANDALONE_GROUP],
+            "activity-asc": [*older[:5], preview.MACRO_B, preview.STANDALONE_GROUP],
+            "created-desc": [preview.MACRO_A, preview.MACRO_C,
+                             *reversed(older[-3:]), preview.MACRO_B, preview.STANDALONE_GROUP],
+            "created-asc": [*older[:5], preview.MACRO_B, preview.STANDALONE_GROUP],
         }
         with self.server() as server:
             status, default = self.call(server, "/api/macro-tasks")
             self.assertEqual(200, status)
-            self.assertEqual(expected["activity-desc"], [row["macroTaskId"] for row in default["macroTasks"]])
+            self.assertEqual(expected["activity-desc"], [row["macroTaskId"] for row in macro_summaries(default)])
             for sort, order in expected.items():
                 with self.subTest(sort=sort):
                     status, result = self.call(server, f"/api/macro-tasks?sort={sort}")
                     self.assertEqual(200, status)
-                    self.assertEqual(order, [row["macroTaskId"] for row in result["macroTasks"]])
+                    self.assertEqual(order, [row["macroTaskId"] for row in macro_summaries(result)])
                     self.assertEqual(default["totals"], result["totals"])
             for sort in ("random", "", "created-desc&sort=activity-asc"):
                 status, result = self.call(server, f"/api/macro-tasks?sort={sort}")
@@ -708,7 +712,7 @@ class PreviewDeletionTest(unittest.TestCase):
             self.assertEqual("deleted", receipt["state"])
             self.assertFalse(receipt["duplicate"])
             _, after = self.call(server, "/api/macro-tasks")
-            self.assertNotIn(target, [row["macroTaskId"] for row in after["macroTasks"]])
+            self.assertNotIn(target, [row["macroTaskId"] for row in macro_summaries(after)])
             self.assertEqual(before["totals"]["all"] - 1, after["totals"]["all"])
             self.assertEqual(before["cursor"] + 1, after["cursor"])
             _, snapshot_after = self.call(server, "/api/console")

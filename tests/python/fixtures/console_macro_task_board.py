@@ -489,7 +489,8 @@ class HandlerProbe:
                    wireBodyBytes=len(body), rawBodyBytes=len(raw),
                    gzipBodyBytes=len(body) if encoding == "gzip" else None,
                    bodySha256=hashlib.sha256(body).hexdigest(), rawSha256=hashlib.sha256(raw).hexdigest(),
-                   responseHeaders=response_headers, returnedMacros=len(parsed["macroTasks"]) if parsed else 0,
+                   responseHeaders=response_headers,
+                   returnedMacros=sum(len(group["macroTasks"]) for group in parsed["groups"]) if parsed else 0,
                    totalMacros=parsed["totals"]["all"] if parsed else None)
         return row, parsed
 
@@ -508,12 +509,13 @@ def measure(fixture: SyntheticBoard, *, samples=5, on_sample=None):
     with HandlerProbe(fixture.board) as probe:
         first, page = probe.request("identity")
         warmups.append({"scenario": "initial-page", **first})
-        relevant = page["macroTasks"][0]["macroTaskId"]
+        visible_rows = [item for group in page["groups"] for item in group["macroTasks"]]
+        relevant = visible_rows[0]["macroTaskId"]
         # Other macro starts off-page at full scale; its activity may move it
         # onto the page. It is unrelated to the pinned relevant macro, not to
         # the entire board-wide list. Smoke uses one group's stable task-name
         # filter and retains limit=50. The exact query is saved in every sample.
-        visible = {item["macroTaskId"] for item in page["macroTasks"]}
+        visible = {item["macroTaskId"] for item in visible_rows}
         outside = [item for item in fixture.macros if item not in visible]
         other = outside[0] if outside else next(item for item in fixture.macros if item != relevant)
         query = "limit=50" if outside else f"limit=50&query=macro-{fixture.macros.index(relevant):03d}"

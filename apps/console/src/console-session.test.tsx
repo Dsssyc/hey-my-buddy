@@ -10,7 +10,7 @@ import { VIEW_PREFERENCE_PREFIX } from "./view-preferences";
 import type { ConsoleSession, Buddy, Snapshot, Task } from "./types";
 import { listed, note, selectModel } from "./buddies/page.testing";
 import { timelineOfRecords } from "./task-detail/task-detail.fixtures";
-import { macroTaskSummary } from "./macro-task-fixtures";
+import { macroTaskGroups, macroTaskSummary } from "./macro-task-fixtures";
 
 const bannerNotice = /新窗口已取得写权限，此页面现在是只读/;
 const actionRefusal = /浏览器授权已失效/;
@@ -126,8 +126,8 @@ function fixture(options: {
   });
   const api = { runtimeVersion: vi.fn(async () => ({ running: { mode: "source", softwareVersion: null, contractVersion: null, schemaVersion: null, sourceCommit: null, installedAt: null }, installed: null })),
     snapshot, command, task: vi.fn(async (runId: string) => records.find(t => t.runId === runId)),
-    macroTasks: vi.fn(async () => ({ macroTasks: roots.map(row => macroTaskSummary({ macroTaskId: `run:${row.runId}`, title: row.task, titleSource: "task", project: row.lineage?.project ?? null })),
-      totals: { all: roots.length, active: roots.length, host: 0, review: 0 }, nextCursor: null, cursor: 0, changed: false })),
+    macroTasks: vi.fn(async () => ({ groups: macroTaskGroups(roots.map(row => macroTaskSummary({ macroTaskId: `run:${row.runId}`, kind: "standalone", title: row.task, titleSource: "task", project: row.lineage?.project ?? null }))),
+      totals: { all: roots.length, active: roots.length, host: 0, review: 0 }, cursor: 0, changed: false })),
     macroTaskTimeline: vi.fn(async (macroTaskId: string) => ({ timeline: timelineOfRecords(macroTaskId, records), verifiedAtMs: null })) } as unknown as ConsoleApi;
   return { api, command, operations, published, snapshot,
     state: () => state,
@@ -334,6 +334,7 @@ describe("invalid login session (0.16 multi-window: no handoff UX)", () => {
     expect((await screen.findAllByText(/暂时不能发现模型/)).length).toBeGreaterThan(0);
     // Browsing and the read-only detail keep working.
     await user.click(screen.getByRole("link", { name: "任务" }));
+    await user.click(await screen.findByRole("button", { name: /独立微任务/ }));
     await user.click(await screen.findByRole("button", { name: /只读微任务/ }));
     await waitFor(() => expect(document.querySelector('[data-key="row:readonly-task"]')).toBeTruthy());
     await user.dblClick(document.querySelector('[data-key="row:readonly-task"]') as HTMLElement);

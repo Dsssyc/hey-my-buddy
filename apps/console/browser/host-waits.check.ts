@@ -20,11 +20,8 @@ for (const { locale, width, theme } of [
     const list = page.locator("[data-slot=macro-list]");
     const entry = list.locator(`[data-macro-task-id="${macro}"] [data-slot=macro-entry]`);
     await expect(entry).toBeVisible();
-    await expect(entry).toHaveClass(/before:bg-hand-mark/);
-    const counts = entry.locator("[data-slot=macro-entry-counts]");
-    await expect(counts.locator('[data-kind="hand"]')).toHaveCount(1);
-    await expect(counts.locator('[data-kind="fail"]')).toHaveCount(1);
-    await expect(counts.locator('.sr-only')).toHaveText(zh ? ["等待接手 2", "失败 1", "已验收 2", "已结束 2"] : ["Waiting on someone 2", "Failed 1", "Accepted 2", "Ended 2"]);
+    await expect(entry.locator('[data-slot="state-mark"]')).toHaveAttribute("data-kind", "hand");
+    await expect(entry.locator("[data-slot=macro-entry-counts]")).toHaveCount(0);
     await expect(page.getByRole("link", { name: zh ? /^任务 5 / : /^Tasks 5 / })).toBeVisible();
     await settle(page);
     await page.screenshot({ path: `${captures}/${name}-list.png`, animations: "disabled" });

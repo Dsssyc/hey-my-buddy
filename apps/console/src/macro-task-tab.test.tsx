@@ -6,7 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { MacroTasks } from "./MacroTasks";
 import type { ConsoleApi } from "./api";
 import type { Snapshot } from "./types";
-import { macroTaskTimelineFixture, OBSERVED_AT } from "./macro-task-fixtures";
+import { macroTaskGroups, macroTaskTimelineFixture, OBSERVED_AT } from "./macro-task-fixtures";
 import { clockTime } from "./macro-task-display";
 
 function snapshotFixture(): Snapshot {
@@ -28,7 +28,7 @@ function harness() {
     snapshot: vi.fn(async () => structuredClone(snapshot)),
     command: vi.fn(),
     task: vi.fn(),
-    macroTasks: vi.fn(async () => ({ macroTasks: [timeline.macroTask], totals: { all: 1, active: 1, host: 0, review: 0 }, nextCursor: null, cursor: 41, changed: false })),
+    macroTasks: vi.fn(async () => ({ groups: macroTaskGroups([timeline.macroTask]), totals: { all: 1, active: 1, host: 0, review: 0 }, cursor: 41, changed: false })),
     macroTaskTimeline: vi.fn(async () => ({ timeline, verifiedAtMs: null })),
   } as unknown as ConsoleApi;
   const refresh = vi.fn(async () => structuredClone(snapshot));
@@ -94,15 +94,15 @@ describe("macro task page", () => {
     await waitFor(() => expect(f.api.macroTaskTimeline).toHaveBeenCalled());
     const macroTask = f.timeline.macroTask;
     const newer = { ...macroTask, macroTaskId: "macro-new", title: "刚有活动的目标", lastActivitySeq: macroTask.lastActivitySeq + 1 };
-    vi.mocked(f.api.macroTasks).mockResolvedValueOnce({ macroTasks: [newer, macroTask], totals: { all: 2, active: 2, host: 0, review: 0 },
-      nextCursor: null, cursor: 42, changed: true });
+    vi.mocked(f.api.macroTasks).mockResolvedValueOnce({ groups: macroTaskGroups([newer, macroTask]), totals: { all: 2, active: 2, host: 0, review: 0 },
+      cursor: 42, changed: true });
     let finishRefresh!: (value: Awaited<ReturnType<ConsoleApi["macroTasks"]>>) => void;
     vi.mocked(f.api.macroTasks).mockImplementationOnce(() => new Promise(resolve => { finishRefresh = resolve; }));
     await waitFor(() => expect(f.api.macroTasks).toHaveBeenCalledTimes(3), { timeout: 4500 });
     expect(screen.getByRole("button", { name: /宏任务时间轴：设计、接口与实现/ }).getAttribute("aria-pressed")).toBe("true");
     expect(screen.queryByRole("heading", { name: "选择一个宏任务" })).toBeNull();
     expect(screen.getByRole("complementary", { name: "宏任务详情" })).toBeTruthy();
-    finishRefresh({ macroTasks: [newer, macroTask], totals: { all: 2, active: 2, host: 0, review: 0 }, nextCursor: null, cursor: 42, changed: false });
+    finishRefresh({ groups: macroTaskGroups([newer, macroTask]), totals: { all: 2, active: 2, host: 0, review: 0 }, cursor: 42, changed: false });
     await waitFor(() => expect(screen.getByRole("button", { name: /刚有活动的目标/ })).toBeTruthy());
     expect(screen.getByRole("button", { name: /宏任务时间轴：设计、接口与实现/ }).getAttribute("aria-pressed")).toBe("true");
   });

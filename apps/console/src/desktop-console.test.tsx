@@ -6,7 +6,7 @@ import type { ConsoleApi } from "./api";
 import { formatDateTime } from "./i18n/format";
 import type { Buddy, Snapshot, Task } from "./types";
 import { timelineOfRecords } from "./task-detail/task-detail.fixtures";
-import { macroTaskSummary } from "./macro-task-fixtures";
+import { macroTaskGroups, macroTaskSummary } from "./macro-task-fixtures";
 import { catalogue, effortCell, levelSwitch, listed, modelButton, note, pane, selectModel } from "./buddies/page.testing";
 
 const dsh = (model: string) => `dsh / deepseek-official / ${model}`;
@@ -75,8 +75,8 @@ function fixture(records: Task[] = []) {
   const api = { runtimeVersion: vi.fn(async () => ({ running: { mode: "source", softwareVersion: null, contractVersion: null, schemaVersion: null, sourceCommit: null, installedAt: null }, installed: null })),
       snapshot: vi.fn(async () => structuredClone(snapshot)), command,
     task: vi.fn(async (runId: string) => records.find(t => t.runId === runId)),
-    macroTasks: vi.fn(async () => ({ macroTasks: roots.map(t => macroTaskSummary({ macroTaskId: `run:${t.runId}`, title: t.task, titleSource: "task", project: t.lineage?.project ?? null })),
-      totals: { all: roots.length, active: roots.length, host: 0, review: 0 }, nextCursor: null, cursor: 0, changed: false })),
+    macroTasks: vi.fn(async () => ({ groups: macroTaskGroups(roots.map(t => macroTaskSummary({ macroTaskId: `run:${t.runId}`, kind: "standalone", title: t.task, titleSource: "task", project: t.lineage?.project ?? null }))),
+      totals: { all: roots.length, active: roots.length, host: 0, review: 0 }, cursor: 0, changed: false })),
     macroTaskTimeline: vi.fn(async (macroTaskId: string) => ({ timeline: timelineOfRecords(macroTaskId, records), verifiedAtMs: null })) } as unknown as ConsoleApi;
   return { snapshot, records, api, command, workflows };
 }
@@ -190,6 +190,7 @@ describe("desktop console", () => {
     const f = fixture([record]);
     const user = userEvent.setup();
     render(<App suppliedApi={f.api} />);
+    await user.click(await screen.findByRole("button", { name: /独立微任务/ }));
     await user.click(await screen.findByRole("button", { name: /目标 one/ }));
     await waitFor(() => expect(window.location.hash).toBe("#tasks/run%3Aone"));
     await waitFor(() => expect(document.querySelector('[data-key="row:one"]')).toBeTruthy());

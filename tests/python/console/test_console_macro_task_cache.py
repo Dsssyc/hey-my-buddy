@@ -6,7 +6,7 @@ import unittest
 from unittest.mock import patch
 from urllib.parse import urlencode
 
-from support import private_state_dir
+from support import private_state_dir, macro_summaries
 from blackboard.tasks.test_console_macro_task_fixture import fixture_module, SOURCE
 from hey_my_buddy.blackboard.tasks import macro_tasks
 
@@ -23,7 +23,7 @@ class ConsoleMacroTaskCacheTests(unittest.TestCase):
         with fixture_module.HandlerProbe(self.fixture.board) as probe:
             first, page = probe.request("identity")
             self.assertEqual(first["summaryCalls"], 3)
-            group = page["macroTasks"][0]["macroTaskId"]
+            group = macro_summaries(page)[0]["macroTaskId"]
             other = next(identifier for identifier in self.fixture.macros if identifier != group)
             for scenario in ("no-write", "unrelated-meta", "unrelated-plain"):
                 with self.subTest(scenario=scenario):
@@ -54,10 +54,10 @@ class ConsoleMacroTaskCacheTests(unittest.TestCase):
         group = self.fixture.macros[0]
         with fixture_module.HandlerProbe(self.fixture.board) as probe:
             first, page = probe.request("identity",query="limit=1")
-            cursor = page["nextCursor"]
-            second_query = urlencode({"limit":1,"before":cursor})
+            cursor = page["groups"][0]["nextCursor"]
+            second_query = urlencode({"group": page["groups"][0]["id"], "limit":1,"before":cursor})
             _, second = probe.request("identity",query=second_query)
-            self.assertNotEqual(page["macroTasks"][0]["macroTaskId"],second["macroTasks"][0]["macroTaskId"])
+            self.assertNotEqual(macro_summaries(page)[0]["macroTaskId"],macro_summaries(second)[0]["macroTaskId"])
             with store.db.write() as connection:
                 connection.execute("UPDATE macro_tasks SET activity_seq=999999,title='Fictional HTTP title' WHERE macro_task_id=?",(group,))
                 root = connection.execute("SELECT run_id FROM workflow_runs WHERE macro_task_id=? ORDER BY created_at,rowid LIMIT 1",(group,)).fetchone()[0]
@@ -65,18 +65,18 @@ class ConsoleMacroTaskCacheTests(unittest.TestCase):
             row, updated = probe.request("identity",first["etag"],query="limit=1")
             self.assertEqual(row["status"],200)
             self.assertEqual(row["summaryGroups"],[group])
-            summary = updated["macroTasks"][0]
+            summary = macro_summaries(updated)[0]
             self.assertEqual(summary["macroTaskId"],group)
             self.assertEqual(summary["title"],"Fictional HTTP title")
             self.assertEqual(summary["description"],"Fictional HTTP correction")
-            self.assertNotEqual(updated["nextCursor"],cursor)
+            self.assertNotEqual(updated["groups"][0]["nextCursor"],cursor)
             _, after_page = probe.request("identity",query=second_query)
             self.assertTrue(after_page["changed"])
             with store.db.write() as connection:
                 connection.execute("UPDATE tasks SET spec_json=json_set(spec_json,'$.task','fictional-http-needle') WHERE task_id=?",(root,))
             _, matched = probe.request("identity",query="limit=50&query=fictional-http-needle")
             self.assertEqual(matched["totals"]["all"],1)
-            self.assertEqual(matched["macroTasks"][0]["matchingRuns"],1)
+            self.assertEqual(macro_summaries(matched)[0]["matchingRuns"],1)
             with store.db.write() as connection:
                 connection.execute("UPDATE tasks SET spec_json=json_set(spec_json,'$.task','fictional-http-removed') WHERE task_id=?",(root,))
             _, removed = probe.request("identity",query="limit=50&query=fictional-http-needle")
@@ -94,7 +94,7 @@ class ConsoleMacroTaskCacheTests(unittest.TestCase):
             # group's summary stayed identical. Standard ETag reflects the body.
             self.assertEqual(row["status"],200)
             self.assertEqual(row["summaryCalls"],0)
-            self.assertEqual(changed["macroTasks"],page["macroTasks"])
+            self.assertEqual(macro_summaries(changed),macro_summaries(page))
 
     def test_write_during_summary_compute_serves_uncached_then_regenerates(self):
         store=self.fixture.board.store
@@ -114,11 +114,11 @@ class ConsoleMacroTaskCacheTests(unittest.TestCase):
                 row,page=probe.request("identity")
                 self.assertEqual(wrote,[True])
                 self.assertEqual(row["summaryGroups"].count(group),1)
-                self.assertEqual({item["macroTaskId"]:item for item in page["macroTasks"]}[group]["title"],"Fictional macro 000")
+                self.assertEqual({item["macroTaskId"]:item for item in macro_summaries(page)}[group]["title"],"Fictional macro 000")
                 replay,updated=probe.request("identity",row["etag"])
                 self.assertEqual(replay["status"],200)
                 self.assertEqual(replay["summaryGroups"],[group])
-                self.assertEqual({item["macroTaskId"]:item for item in updated["macroTasks"]}[group]["title"],"Fictional during compute")
+                self.assertEqual({item["macroTaskId"]:item for item in macro_summaries(updated)}[group]["title"],"Fictional during compute")
                 cached,_=probe.request("identity",replay["etag"])
                 self.assertEqual(cached["status"],304)
                 self.assertEqual(cached["summaryCalls"],0)
@@ -171,13 +171,13 @@ class MacroTaskReadCacheIntegrationTests(unittest.TestCase):
         with patch.object(macro_tasks,"_summary",side_effect=compute) as counter:
             result=self.read()
             self.assertEqual(writes,[True])
-            rows={row["macroTaskId"]:row for row in json.loads(result.entry.body)["macroTasks"]}
+            rows={row["macroTaskId"]:row for row in macro_summaries(json.loads(result.entry.body))}
             self.assertEqual(rows[group]["title"],"Fictional macro 000")
             self.assertEqual([call.args[1] for call in counter.call_args_list].count(group),1)
             self.assertEqual(counter.call_count,3)
             regenerated=self.read(etag=result.entry.identity_etag)
             self.assertFalse(regenerated.not_modified)
-            refreshed={row["macroTaskId"]:row for row in json.loads(regenerated.entry.body)["macroTasks"]}
+            refreshed={row["macroTaskId"]:row for row in macro_summaries(json.loads(regenerated.entry.body))}
             self.assertEqual(refreshed[group]["title"],"Fictional cache race")
             self.assertEqual([call.args[1] for call in counter.call_args_list].count(group),2)
             counter.reset_mock()
@@ -194,8 +194,8 @@ class MacroTaskReadCacheIntegrationTests(unittest.TestCase):
             writer.execute("UPDATE workflow_runs SET macro_task_id=NULL WHERE run_id=?",(root,))
         changed=self.read(etag=first.entry.identity_etag,params={"query":"fictional-cache-needle","limit":1})
         self.assertFalse(changed.not_modified)
-        self.assertEqual(json.loads(first.entry.body)["macroTasks"][0]["macroTaskId"],group)
-        self.assertEqual(json.loads(changed.entry.body)["macroTasks"][0]["macroTaskId"],"run:"+root)
+        self.assertEqual(macro_summaries(json.loads(first.entry.body))[0]["macroTaskId"],group)
+        self.assertEqual(macro_summaries(json.loads(changed.entry.body))[0]["macroTaskId"],"run:"+root)
 
 
 if __name__ == "__main__":

@@ -26,7 +26,8 @@ SPEC.loader.exec_module(preview)
 class LeadStopPreviewTests(unittest.TestCase):
     def test_unconcluded_failures_and_cancellations_wait_for_host(self):
         page = preview.macro_task_page({'filter': 'host'})
-        summary = next(item for item in page['macroTasks'] if item['macroTaskId'] == preview.MACRO_C)
+        summary = next(item for group in page['groups'] for item in group['macroTasks']
+                       if item['macroTaskId'] == preview.MACRO_C)
         self.assertEqual(summary['state'], 'host')
         self.assertEqual({key: summary['counts'][key] for key in ('host', 'failed', 'ended', 'accepted')},
                          {'host': 2, 'failed': 1, 'ended': 5, 'accepted': 2})

@@ -11,7 +11,7 @@ import { MacroTasks } from "./MacroTasks";
 import { MacroTaskDeleteDialog } from "./MacroTaskDeleteDialog";
 import { TooltipProvider } from "./components/ui/tooltip";
 import { createAuthorityLatch } from "./console-session";
-import { macroTaskSummary, macroTaskTimelineFixture } from "./macro-task-fixtures";
+import { macroTaskGroups, macroTaskSummary, macroTaskTimelineFixture } from "./macro-task-fixtures";
 import type { MacroTaskSummary, MacroTaskTimeline } from "./macro-task-types";
 import type { DeletionBlocker, DeletionBlockerKind, MacroTaskDeletionPreview } from "./macro-task-deletion";
 
@@ -354,7 +354,7 @@ function workspaceHarness(extraRows: MacroTaskSummary[] = []) {
     if (operation === "macro_task_delete") { rows = rows.filter(row => row.macroTaskId !== "macro-1"); return receipt(); }
     throw new Error(`Unexpected fixture operation: ${operation} ${JSON.stringify(params)}`);
   });
-  const api = { command, macroTasks: vi.fn(async () => ({ macroTasks: rows, totals: { all: rows.length, active: rows.length, host: 0, review: 0 }, nextCursor: null, cursor: 41, changed: false })),
+  const api = { command, macroTasks: vi.fn(async () => ({ groups: macroTaskGroups(rows), totals: { all: rows.length, active: rows.length, host: 0, review: 0 }, cursor: 41, changed: false })),
     macroTaskTimeline: vi.fn(async (id: string) => ({ timeline: id === "macro-1" ? timeline : { ...timeline, macroTask: rows.find(row => row.macroTaskId === id)!, rows: [], spans: [], events: [] }, verifiedAtMs: null })) } as unknown as ConsoleApi;
   const refresh = vi.fn(async (): Promise<Snapshot | null> => structuredClone(snapshot));
   const onAddress = vi.fn();

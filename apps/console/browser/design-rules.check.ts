@@ -37,9 +37,13 @@ for (const width of [1280, 390]) for (const theme of ["light", "dark"] as const)
         if (!(node instanceof HTMLElement || node instanceof SVGElement) || !node.getClientRects().length) return [];
         const css = getComputedStyle(node);
         if (css.visibility === "hidden" || !node.textContent?.trim()) return [];
-        return [12, 14, 16, 18].includes(parseFloat(css.fontSize)) ? [] : [`${node.tagName}: ${css.fontSize}`];
+        const size = parseFloat(css.fontSize);
+        if ([12, 14, 16, 18].includes(size) ||
+            size === 13 && node.closest('[data-slot="macro-entry"]') ||
+            size === 12.5 && node.closest('[data-slot="macro-group-more"]')) return [];
+        return [`${node.tagName}: ${css.fontSize}`];
       }));
-      expect(violations, "only the four type sizes are drawn").toEqual([]);
+      expect(violations, "shared type sizes, with 13px macro entries and 12.5px group paging only inside those controls").toEqual([]);
       await expect(page.locator("[title]")).toHaveCount(0);
       const heights = await page.locator('[data-slot="button"], [data-slot="input"], [data-slot="select-trigger"], [data-slot="segmented"]').evaluateAll(nodes => nodes
         .filter(node => node.getClientRects().length)

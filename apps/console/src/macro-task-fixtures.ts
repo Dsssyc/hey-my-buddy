@@ -5,6 +5,7 @@
  */
 
 import type {
+  MacroTaskGroup,
   MacroTaskSummary,
   MacroTaskTimeline,
   TimelineBuddy,
@@ -12,6 +13,21 @@ import type {
   TimelineRow,
   TimelineSpan,
 } from "./macro-task-types";
+
+/** Group the projection exactly as the list API does, with standalone last. */
+export function macroTaskGroups(rows: MacroTaskSummary[], nextCursor: string | null = null): MacroTaskGroup[] {
+  const projects = new Map<string, MacroTaskGroup>();
+  const standalone: MacroTaskSummary[] = [];
+  for (const row of rows) {
+    if (row.kind === "standalone") { standalone.push(row); continue; }
+    const id = `project:${row.project!.id}`;
+    if (!projects.has(id)) projects.set(id, { id, project: row.project, total: 0, macroTasks: [], nextCursor });
+    const group = projects.get(id)!;
+    group.macroTasks.push(row);
+    group.total++;
+  }
+  return [...projects.values(), ...(standalone.length ? [{ id: "standalone", project: null, total: standalone.length, macroTasks: standalone, nextCursor }] : [])];
+}
 
 const OPUS: TimelineBuddy = { harness: "claude", provider: "anthropic", model: "claude-opus-5-5", effort: "high" };
 const CODEX: TimelineBuddy = { harness: "codex", provider: "openai", model: "gpt-5-codex", effort: "max" };

@@ -7,7 +7,7 @@ from hey_my_buddy.errors import BoardError
 from hey_my_buddy.blackboard.routing import router_sequence
 from hey_my_buddy.blackboard.store.db import canonical_json, sha256_text
 from blackboard.tasks.test_workflow import BUDDY, WorkflowTestCase
-from support import enable_fixture_buddy
+from support import enable_fixture_buddy, macro_summaries
 
 
 class ProjectLabelTests(WorkflowTestCase):
@@ -36,7 +36,7 @@ class ProjectLabelTests(WorkflowTestCase):
         metadata = board.call("task_get", {"runId": submitted["runId"]})["task"]["lineage"]
         self.assertEqual(metadata["project"], expected)
         group_id = submitted.get("macroTaskId") or f"run:{submitted['runId']}"
-        summary = next(row for row in board.call("macro_task_list", {})["macroTasks"]
+        summary = next(row for row in macro_summaries(board.call("macro_task_list", {}))
                        if row["macroTaskId"] == group_id)
         self.assertEqual(summary["project"], expected)
         timeline = board.call("macro_task_timeline", {"macroTaskId": group_id})
@@ -474,7 +474,7 @@ class MacroTaskReadTests(WorkflowTestCase):
         with board.store.db.write() as db:
             db.execute("UPDATE workflow_runs SET title=NULL WHERE run_id=?", (run['runId'],))
             db.execute("UPDATE tasks SET spec_json=json_set(spec_json,'$.task','') WHERE task_id=?", (run['runId'],))
-        standalone = next(group for group in self.list_(board)['macroTasks']
+        standalone = next(group for group in macro_summaries(self.list_(board))
                           if group['macroTaskId'] == f"run:{run['runId']}")
         self.assertEqual((standalone['title'], standalone['titleSource']), (None, 'none'))
 
@@ -484,7 +484,7 @@ class MacroTaskReadTests(WorkflowTestCase):
         self.register(board)
         claimed = self.claim(board, run_id=submitted['runId'])
         self.finish_turn(board, claimed)
-        group = self.list_(board)['macroTasks'][0]
+        group = macro_summaries(self.list_(board))[0]
         self.assertEqual(group['title'], 'Implement bounded routing')
         self.assertEqual(group['titleSource'], 'task')
         self.assertTrue(group['summary'])
@@ -515,11 +515,14 @@ class MacroTaskReadTests(WorkflowTestCase):
         listed = self.list_(board)
         self.assertEqual(listed['totals'], {'all': 2, 'active': 2, 'host': 0, 'review': 0})
         self.assertNotIn('total', listed)
-        self.assertIsNone(listed['nextCursor'])
+        self.assertTrue(all(group['nextCursor'] is None for group in listed['groups']))
         self.assertFalse(listed['changed'])
-        ids = [item['macroTaskId'] for item in listed['macroTasks']]
-        self.assertEqual(ids, [f"run:{loose['runId']}", first['macroTaskId']], 'latest activity first')
-        standalone, grouped = listed['macroTasks']
+        ids = [item['macroTaskId'] for item in macro_summaries(listed)]
+        self.assertEqual(ids, [first['macroTaskId'], f"run:{loose['runId']}"])
+        self.assertEqual([group['id'] for group in listed['groups']],
+                         ['project:' + listed['groups'][0]['project']['id'], 'standalone'])
+        self.assertEqual([group['total'] for group in listed['groups']], [1, 1])
+        grouped, standalone = macro_summaries(listed)
         self.assertEqual(standalone['kind'], 'standalone')
         self.assertEqual(standalone['title'], 'standalone work')
         self.assertEqual(standalone['titleSource'], 'task')
@@ -534,7 +537,7 @@ class MacroTaskReadTests(WorkflowTestCase):
         claim = self.claim(board, run_id=first['runId'])
         self.finish_turn(board, claim)
         self.list_(board)
-        self.assertEqual(self.list_(board)['macroTasks'][0]['macroTaskId'], first['macroTaskId'])
+        self.assertEqual(macro_summaries(self.list_(board))[0]['macroTaskId'], first['macroTaskId'])
 
     def test_list_sort_orders_and_paginates_by_activity_or_creation(self):
         board, first, _second, loose = self.grouped_board()
@@ -550,30 +553,31 @@ class MacroTaskReadTests(WorkflowTestCase):
                        ('2026-01-01T00:00:00Z', 20, other['runId']))
 
         tied = sorted([loose_id, other_id])
-        expected = {
-            'activity-desc': [macro_id, other_id, loose_id],
-            'activity-asc': [loose_id, other_id, macro_id],
-            'created-desc': [macro_id, *reversed(tied)],
-            'created-asc': [*tied, macro_id],
+        expected_standalone = {
+            'activity-desc': [other_id, loose_id],
+            'activity-asc': [loose_id, other_id],
+            'created-desc': list(reversed(tied)),
+            'created-asc': tied,
         }
-        self.assertEqual([row['macroTaskId'] for row in self.list_(board)['macroTasks']],
-                         expected['activity-desc'])
-        for sort, order in expected.items():
+        self.assertEqual([row['macroTaskId'] for row in macro_summaries(self.list_(board))],
+                         [macro_id, *expected_standalone['activity-desc']])
+        for sort, order in expected_standalone.items():
             with self.subTest(sort=sort):
                 full = self.list_(board, sort=sort)
-                self.assertEqual([row['macroTaskId'] for row in full['macroTasks']], order)
+                self.assertEqual([row['macroTaskId'] for row in macro_summaries(full)], [macro_id, *order])
                 seen, before = [], None
                 for _ in order:
-                    page = self.list_(board, sort=sort, limit=1, **({'before': before} if before else {}))
+                    page = self.list_(board, sort=sort, group='standalone', limit=1,
+                                      **({'before': before} if before else {}))['groups'][0]
                     self.assertEqual(len(page['macroTasks']), 1)
                     seen.extend(row['macroTaskId'] for row in page['macroTasks'])
                     before = page['nextCursor']
                 self.assertEqual(seen, order)
                 self.assertIsNone(before)
 
-        first_page = self.list_(board, sort='created-asc', limit=1)
+        first_page = self.list_(board, sort='created-asc', group='standalone', limit=1)['groups'][0]
         with self.assertRaises(BoardError) as error:
-            self.list_(board, sort='created-desc', limit=1, before=first_page['nextCursor'])
+            self.list_(board, sort='created-desc', group='standalone', limit=1, before=first_page['nextCursor'])
         self.assertEqual((error.exception.code, error.exception.details.get('field')),
                          ('INVALID_ARGUMENT', 'before'))
         for sort in ('created', 'activity', 'updated-desc', 'created-oldest', ''):
@@ -586,11 +590,11 @@ class MacroTaskReadTests(WorkflowTestCase):
         self.register(board)
 
         def counts():
-            return next(item['counts'] for item in self.list_(board)['macroTasks']
+            return next(item['counts'] for item in macro_summaries(self.list_(board))
                         if item['macroTaskId'] == group_id)
 
         def assert_host_wait(run_id):
-            summary = next(item for item in self.list_(board, filter='host')['macroTasks']
+            summary = next(item for item in macro_summaries(self.list_(board, filter='host'))
                            if item['macroTaskId'] == group_id)
             self.assertEqual(summary['state'], 'host')
             self.assertEqual(summary['matchingRuns'], 1)
@@ -616,7 +620,7 @@ class MacroTaskReadTests(WorkflowTestCase):
         self.assertEqual(counts()['failed'], 1)
         self.assertEqual(counts()['host'], 0)
         self.assertEqual(counts()['ended'], 1)
-        self.assertEqual(self.list_(board, filter='host')['macroTasks'], [])
+        self.assertEqual(macro_summaries(self.list_(board, filter='host')), [])
 
         claim = self.claim(board, claim_request_id='cancelled-root-claim', run_id=second['runId'])
         board.call('workflow_cancel', {
@@ -633,45 +637,47 @@ class MacroTaskReadTests(WorkflowTestCase):
         self.assertEqual(counts()['failed'], 1)
         self.assertEqual(counts()['host'], 0)
         self.assertEqual(counts()['ended'], 2)
-        self.assertEqual(self.list_(board, filter='host')['macroTasks'], [])
-        self.assertEqual(self.list_(board, query='standalone')['macroTasks'][0]['counts']['failed'], 0)
+        self.assertEqual(macro_summaries(self.list_(board, filter='host')), [])
+        self.assertEqual(macro_summaries(self.list_(board, query='standalone'))[0]['counts']['failed'], 0)
 
         self.finish_turn(board, self.claim(board, run_id=loose['runId']), runner_status='failed',
                          exit_code=1, seal=False)
-        standalone = self.list_(board, filter='host')['macroTasks']
+        standalone = macro_summaries(self.list_(board, filter='host'))
         self.assertEqual([item['macroTaskId'] for item in standalone], [f"run:{loose['runId']}"])
         self.assertEqual(standalone[0]['counts']['host'], 1)
         self.assertEqual(standalone[0]['counts']['failed'], 0)
 
     def test_filters_match_members_and_cursor_is_bound_to_them(self):
         board, first, second, loose = self.grouped_board()
-        page = self.list_(board, limit=1)
-        self.assertEqual(len(page['macroTasks']), 1)
-        self.assertTrue(page['nextCursor'])
-        rest = self.list_(board, limit=1, before=page['nextCursor'])
-        self.assertEqual(len(rest['macroTasks']), 1)
+        self.submit(board, request_id='another-standalone', kind='worktree')
+        page = self.list_(board, group='standalone', limit=1)
+        self.assertEqual(len(page['groups'][0]['macroTasks']), 1)
+        self.assertTrue(page['groups'][0]['nextCursor'])
+        rest = self.list_(board, group='standalone', limit=1, before=page['groups'][0]['nextCursor'])
+        self.assertEqual(len(rest['groups'][0]['macroTasks']), 1)
         self.assertEqual(rest['totals'], page['totals'])
-        self.assertNotEqual(rest['macroTasks'][0]['macroTaskId'], page['macroTasks'][0]['macroTaskId'])
-        self.assertIsNone(rest['nextCursor'])
+        self.assertNotEqual(rest['groups'][0]['macroTasks'][0]['macroTaskId'], page['groups'][0]['macroTasks'][0]['macroTaskId'])
+        self.assertIsNone(rest['groups'][0]['nextCursor'])
         self.assertFalse(rest['changed'])
         with self.assertRaises(BoardError) as error:
-            self.list_(board, limit=1, before=page['nextCursor'], query='Frontend')
+            self.list_(board, group='standalone', limit=1, before=page['groups'][0]['nextCursor'], query='Frontend')
         self.assertEqual(error.exception.code, 'INVALID_ARGUMENT')
         for bad in ({'before': 'not a cursor'}, {'filter': 'mine'}, {'limit': 101}, {'unknown': 1}):
             with self.assertRaises(BoardError):
                 self.list_(board, **bad)
         # A filter keeps overall counts and reports how many members matched.
         queried = self.list_(board, query='standalone')
-        self.assertEqual([item['macroTaskId'] for item in queried['macroTasks']], [f"run:{loose['runId']}"])
+        self.assertEqual([item['macroTaskId'] for item in macro_summaries(queried)], [f"run:{loose['runId']}"])
         self.assertEqual(queried['totals'], {'all': 1, 'active': 1, 'host': 0, 'review': 0})
-        self.assertEqual(queried['macroTasks'][0]['matchingRuns'], 1)
+        self.assertEqual(macro_summaries(queried)[0]['matchingRuns'], 1)
 
     def test_changed_signals_activity_after_the_first_page(self):
         board, first, second, loose = self.grouped_board()
-        page = self.list_(board, limit=1)
+        self.submit(board, request_id='another-standalone', kind='worktree')
+        page = self.list_(board, group='standalone', limit=1)
         self.register(board)
         self.finish_turn(board, self.claim(board, run_id=first['runId']))
-        rest = self.list_(board, limit=1, before=page['nextCursor'])
+        rest = self.list_(board, group='standalone', limit=1, before=page['groups'][0]['nextCursor'])
         self.assertTrue(rest['changed'])
 
     def test_timeline_rows_spans_markers_and_unknown_stop(self):
@@ -889,7 +895,7 @@ class MacroTaskReadTests(WorkflowTestCase):
                 self.assertEqual(summary['counts']['active'], 1)
                 self.assertEqual(summary['counts']['host'], 0)
                 self.assertEqual(summary['counts']['failed'], 0)
-                self.assertEqual(self.list_(board, filter='host')['macroTasks'], [])
+                self.assertEqual(macro_summaries(self.list_(board, filter='host')), [])
                 active = board.call('macro_task_timeline', {'macroTaskId': root['macroTaskId'], 'filter': 'active'})
                 self.assertEqual({row['runId'] for row in active['rows']}, {root['runId']})
                 self.assertEqual({row['category'] for row in active['rows']}, {'active'})

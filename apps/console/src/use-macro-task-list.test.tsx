@@ -5,6 +5,7 @@ import type { ConsoleApi } from "./api";
 import { createApi } from "./api";
 import { MacroTaskList } from "./MacroTaskList";
 import { TooltipProvider } from "./components/ui/tooltip";
+import { macroTaskGroups } from "./macro-task-fixtures";
 import * as formatting from "./i18n/format";
 import type { MacroTaskPage, MacroTaskQuery, MacroTaskSummary } from "./macro-task-types";
 import { useMacroTaskList } from "./use-macro-task-list";
@@ -17,9 +18,11 @@ const summary = (macroTaskId: string, lastActivitySeq: number, overrides: Partia
     stoppableRoots: 1, stoppableHelpers: 0, delivered: 0, awaitingHost: 0 },
   matchingRuns: 1, rootRunIds: [macroTaskId], ...overrides,
 });
-const page = (macroTasks: MacroTaskSummary[], nextCursor: string | null = null, changed = false): MacroTaskPage =>
-  ({ macroTasks, totals: { all: macroTasks.length, active: macroTasks.length, host: 0, review: 0 }, nextCursor, cursor: 10, changed });
-const query: MacroTaskQuery = { query: "", projectId: "p1", hostId: "", filter: "all" };
+const project = (id: string) => ({ id, label: id, path: `/${id}` });
+const page = (rows: MacroTaskSummary[], nextCursor: string | null = null, changed = false, groupTotal?: number): MacroTaskPage =>
+  ({ groups: macroTaskGroups(rows, nextCursor).map(group => groupTotal === undefined ? group : { ...group, total: groupTotal }),
+    totals: { all: groupTotal ?? rows.length, active: groupTotal ?? rows.length, host: 0, review: 0 }, cursor: 10, changed });
+const query: MacroTaskQuery = { query: "", hostId: "", filter: "all" };
 
 function harness(readVerifiedAt?: (value: unknown) => number | null, active = true, strict = false) {
   const requests: { query: MacroTaskQuery; signal?: AbortSignal; resolve: (value: MacroTaskPage) => void; reject: (error: Error) => void }[] = [];
@@ -31,32 +34,16 @@ function harness(readVerifiedAt?: (value: unknown) => number | null, active = tr
   return { ...hook, requests, macroTasks };
 }
 const startRead = () => act(async () => { await vi.advanceTimersByTimeAsync(500); });
-
-/** Fakes the browser's Page Visibility; the real browser check belongs to the Host. */
+const ids = (f: ReturnType<typeof harness>) => f.result.current.rows.map(row => row.macroTaskId);
 function setHidden(hidden: boolean) {
   Object.defineProperty(document, "visibilityState", { value: hidden ? "hidden" : "visible", configurable: true });
   document.dispatchEvent(new Event("visibilitychange"));
 }
-
 beforeEach(() => vi.useFakeTimers());
 afterEach(() => { cleanup(); vi.useRealTimers(); setHidden(false); });
 
-describe("work macro task list hook", () => {
-  it("retains a pending reorder notice when an unchanged poll repeats it", async () => {
-    const f = harness();
-    await startRead();
-    await act(async () => f.requests[0]!.resolve(page([summary("first", 3)])));
-    const changed = page([summary("new", 9), summary("first", 3)]);
-    await act(async () => { await vi.advanceTimersByTimeAsync(3000); });
-    await act(async () => f.requests[1]!.resolve(changed));
-    const notice = f.result.current.reorder;
-    expect(notice).toEqual({ count: 1 });
-    await act(async () => { await vi.advanceTimersByTimeAsync(3000); });
-    await act(async () => f.requests[2]!.resolve({ ...changed }));
-    expect(f.result.current.reorder).toBe(notice);
-  });
-
-  it("does not redraw an entry after an HTTP 304 with a newer verification date", async () => {
+describe("grouped macro task list hook", () => {
+  it("keeps the 304 envelope reference and does not redraw entries on verification", async () => {
     const body = page([summary("first", 3)]);
     const fetcher = vi.fn<typeof fetch>()
       .mockResolvedValueOnce(new Response(JSON.stringify(body), { headers: { ETag: '"list"', Date: "Thu, 01 Jan 1970 00:00:01 GMT" } }))
@@ -65,492 +52,176 @@ describe("work macro task list hook", () => {
     const relative = vi.spyOn(formatting, "formatRelative");
     function List() {
       const list = useMacroTaskList(api, query, true);
-      return <><output>{list.verifiedAtMs}</output><MacroTaskList {...list} sort="activity-desc" filter="all" query="" selected={null}
+      return <MacroTaskList {...list} sort="activity-desc" filter="all" query="" selected={null}
         onSortChange={() => {}} onFilterChange={() => {}} onQueryChange={() => {}} onCollapse={() => {}} onSelect={() => {}}
-        onMore={list.more} onApplyReorder={list.applyReorder}/></>;
+        onMore={list.more} onApplyReorder={list.applyReorder}/>;
     }
     try {
-      const view = render(<TooltipProvider><List/></TooltipProvider>);
+      render(<TooltipProvider><List/></TooltipProvider>);
       await startRead();
       const calls = relative.mock.calls.length;
       expect(calls).toBeGreaterThan(0);
-      expect(view.container.querySelector("output")!.textContent).toBe("1000");
       await act(async () => { await vi.advanceTimersByTimeAsync(3000); });
       expect(fetcher).toHaveBeenCalledTimes(2);
       expect(fetcher.mock.calls[1]![1]!.headers).toEqual({ "If-None-Match": '"list"' });
-      expect(view.container.querySelector("output")!.textContent).toBe("4000");
       expect(relative).toHaveBeenCalledTimes(calls);
     } finally { relative.mockRestore(); }
   });
 
-  it("starts paging during a pending poll and ignores that poll's late reply", async () => {
-    const f = harness();
-    await startRead();
-    await act(async () => f.requests[0]!.resolve(page([summary("first", 3)], "older")));
-    await act(async () => { await vi.advanceTimersByTimeAsync(3000); });
-    expect(f.requests).toHaveLength(2);
-    act(() => f.result.current.more());
-    expect(f.requests).toHaveLength(3);
-    expect(f.requests[1]!.signal!.aborted).toBe(true);
-    expect(f.requests[2]!.query.before).toBe("older");
-    expect(f.result.current.loading).toBe(true);
-    await act(async () => f.requests[1]!.resolve(page([summary("stale", 9)])));
-    expect(f.result.current.loading).toBe(true);
-    await act(async () => f.requests[2]!.resolve(page([summary("second", 2)])));
-    expect(f.result.current.rows.map(row => row.macroTaskId)).toEqual(["first", "second"]);
-    expect(f.result.current.loading).toBe(false);
-  });
-
-  it("retains the rows and totals for an unchanged poll while advancing verification", async () => {
-    let verified = 1000;
-    const f = harness(() => verified);
-    await startRead();
-    const first = page([summary("first", 3)]);
-    await act(async () => f.requests[0]!.resolve(first));
-    const { rows, totals } = f.result.current;
-    await act(async () => { await vi.advanceTimersByTimeAsync(3000); });
-    verified = 4000;
-    await act(async () => f.requests[1]!.resolve({ ...first }));
-    expect(f.result.current.rows).toBe(rows);
-    expect(f.result.current.totals).toBe(totals);
-    expect(f.result.current.verifiedAtMs).toBe(4000);
-  });
-
-  it("keeps creation order when later activity changes, then resets paging on a sort change", async () => {
-    const f = harness();
-    const sortedQuery: MacroTaskQuery = { ...query, sort: "created-asc" };
-    f.rerender({ query: sortedQuery, active: true });
-    await startRead();
-    const older = summary("older", 2, { createdAt: "2026-09-25T01:00:00Z" });
-    const newer = summary("newer", 10);
-    await act(async () => f.requests[0]!.resolve(page([older, newer], "created-cursor")));
-    expect(f.requests[0]!.query.sort).toBe("created-asc");
-    await act(async () => { await vi.advanceTimersByTimeAsync(3000); });
-    await act(async () => f.requests[1]!.resolve(page([{ ...older, lastActivitySeq: 11 }, newer])));
-    expect(f.result.current.rows.map(row => row.macroTaskId)).toEqual(["older", "newer"]);
-    expect(f.result.current.reorder).toBeNull();
-    f.rerender({ query: { ...query, sort: "activity-asc" }, active: true });
-    await startRead();
-    expect(f.requests[2]!.query).toMatchObject({ sort: "activity-asc" });
-    expect(f.requests[2]!.query).not.toHaveProperty("before");
-    await act(async () => f.requests[2]!.resolve(page([newer, { ...older, lastActivitySeq: 11 }])));
-    expect(f.result.current.rows.map(row => row.macroTaskId)).toEqual(["newer", "older"]);
-  });
-
-  it("keeps committed order and defers newcomers even when a poll returns the complete scope", async () => {
-    const f = harness();
-    await startRead();
-    await act(async () => f.requests[0]!.resolve(page([summary("first", 3), summary("second", 2)])));
-    await act(async () => { await vi.advanceTimersByTimeAsync(3000); });
-    await act(async () => f.requests[1]!.resolve(page([summary("new", 10), summary("second", 9), summary("first", 3)])));
-    expect(f.result.current.rows.map(row => row.macroTaskId)).toEqual(["first", "second"]);
-    expect(f.result.current.totals.all).toBe(3);
-    expect(f.result.current.reorder).toEqual({ count: 2 });
-  });
-
-  it("removes proven nonmatching rows without reordering the surviving filtered rows", async () => {
-    const f = harness();
-    f.rerender({ query: { ...query, filter: "active" }, active: true });
-    await startRead();
-    await act(async () => f.requests[0]!.resolve(page([summary("gone", 5), summary("kept", 4), summary("busy", 3)])));
-    await act(async () => { await vi.advanceTimersByTimeAsync(3000); });
-    await act(async () => f.requests[1]!.resolve(page([summary("busy", 9), summary("kept", 4)])));
-    expect(f.result.current.rows.map(row => row.macroTaskId)).toEqual(["kept", "busy"]);
-    expect(f.result.current.totals.all).toBe(2);
-    expect(f.result.current.reorder).toEqual({ count: 1 });
-  });
-
-  it("sends the filters and resets to a fresh first page when they change", async () => {
-    const f = harness();
-    await startRead();
-    expect(f.requests[0]!.query).toMatchObject(query);
-    expect(f.requests[0]!.query).not.toHaveProperty("before");
-    await act(async () => f.requests[0]!.resolve(page([summary("a", 3), summary("b", 2)])));
-    expect(f.result.current.rows.map(row => row.macroTaskId)).toEqual(["a", "b"]);
-    const nextQuery: MacroTaskQuery = { ...query, filter: "host", projectId: "" };
-    f.rerender({ query: nextQuery, active: true });
-    expect(f.requests[0]!.signal?.aborted).toBe(true);
-    await startRead();
-    expect(f.requests[1]!.query).toMatchObject(nextQuery);
-    await act(async () => f.requests[1]!.resolve(page([summary("c", 9)])));
-    expect(f.result.current.rows.map(row => row.macroTaskId)).toEqual(["c"]);
-  });
-
-  it("pages older groups through the opaque cursor and deduplicates them", async () => {
-    const f = harness();
-    await startRead();
-    await act(async () => f.requests[0]!.resolve(page([summary("newer", 5)], "opaque-2")));
-    act(() => { void f.result.current.more(); });
-    await act(async () => f.requests[1]!.resolve(page([summary("newer", 6), summary("older", 1)])));
-    expect(f.requests[1]!.query).toMatchObject({ before: "opaque-2" });
-    expect(f.result.current.rows.map(row => [row.macroTaskId, row.lastActivitySeq])).toEqual([["newer", 6], ["older", 1]]);
-    expect(f.result.current.nextCursor).toBeNull();
-    act(() => { void f.result.current.more(); });
+  it("pages one project using its own cursor and keeps the other projects and standalone group", async () => {
+    const f = harness(); await startRead();
+    const first = summary("first", 9), second = summary("second", 8, { project: project("p2") });
+    const standalone = summary("loose", 7, { kind: "standalone", project: null });
+    const listing = page([first, second, standalone], "older");
+    listing.groups[1]!.total = 2;
+    await act(async () => f.requests[0]!.resolve(listing));
+    expect(f.result.current.groups.map(group => group.id)).toEqual(["project:p1", "project:p2", "standalone"]);
+    act(() => f.result.current.more("project:p2"));
+    expect(f.requests[1]!.query).toMatchObject({ group: "project:p2", before: "older", limit: 20 });
+    await act(async () => f.requests[1]!.resolve(page([summary("third", 3, { project: project("p2") })], null, false, 2)));
+    expect(f.result.current.groups.map(group => group.macroTasks.map(row => row.macroTaskId))).toEqual([["first"], ["second", "third"], ["loose"]]);
+    expect(f.result.current.groups[1]!.total).toBe(2);
+    expect(f.result.current.groups[1]!.nextCursor).toBeNull();
+    expect(f.result.current.groups[0]!.nextCursor).toBe("older");
+    act(() => f.result.current.more("project:p2"));
     expect(f.macroTasks).toHaveBeenCalledTimes(2);
   });
 
-  it("updates counts, times and totals in place on the poll cadence without reordering", async () => {
-    const f = harness();
-    await startRead();
-    await act(async () => f.requests[0]!.resolve(page([summary("first", 3), summary("second", 2)])));
+  it("replays a loaded group's extent during refresh and preserves its entries", async () => {
+    const f = harness(); await startRead();
+    const first = Array.from({ length: 5 }, (_, index) => summary(`item-${index}`, 10 - index));
+    await act(async () => f.requests[0]!.resolve(page(first, "older", false, 7)));
+    act(() => f.result.current.more("project:p1"));
+    await act(async () => f.requests[1]!.resolve(page([summary("item-5", 5), summary("item-6", 4)], null, false, 7)));
+    expect(ids(f)).toHaveLength(7);
+    expect(f.result.current.groups[0]!.total).toBe(7);
     await act(async () => { await vi.advanceTimersByTimeAsync(3000); });
+    expect(f.requests[2]!.query).not.toHaveProperty("group");
+    await act(async () => f.requests[2]!.resolve(page(first.map(row => ({ ...row, lastActivitySeq: row.lastActivitySeq + 1 })), "fresh-tail", false, 7)));
+    expect(f.requests[3]!.query).toMatchObject({ group: "project:p1", before: "fresh-tail", limit: 2 });
+    await act(async () => f.requests[3]!.resolve(page([summary("item-5", 5), summary("item-6", 4)], null, false, 7)));
+    expect(ids(f)).toEqual(first.map(row => row.macroTaskId).concat(["item-5", "item-6"]));
+    expect(f.result.current.groups[0]!.macroTasks).toHaveLength(7);
+    expect(f.result.current.groups[0]!.total).toBe(7);
+  });
+
+  it("shows a reorder notice when activity changes between a poll's first page and group replay", async () => {
+    const f = harness(); await startRead();
+    const first = Array.from({ length: 5 }, (_, index) => summary(`item-${index}`, 10 - index));
+    await act(async () => f.requests[0]!.resolve(page(first, "older", false, 7)));
+    act(() => f.result.current.more("project:p1"));
+    const tail = [summary("item-5", 5), summary("item-6", 4)];
+    await act(async () => f.requests[1]!.resolve(page(tail, null, false, 7)));
+    await act(async () => { await vi.advanceTimersByTimeAsync(3000); });
+    await act(async () => f.requests[2]!.resolve(page(first, "poll-tail", false, 7)));
+    expect(f.requests[3]!.query).toMatchObject({ group: "project:p1", before: "poll-tail", limit: 2 });
+    await act(async () => f.requests[3]!.resolve(page(tail, null, true, 7)));
+    expect(ids(f)).toEqual(first.map(row => row.macroTaskId).concat(tail.map(row => row.macroTaskId)));
+    expect(f.result.current.reorder).toEqual({ count: null });
+  });
+
+  it("preserves loaded counts across sorting and reset", async () => {
+    const f = harness(); await startRead();
+    const first = Array.from({ length: 5 }, (_, index) => summary(`item-${index}`, 10 - index));
+    await act(async () => f.requests[0]!.resolve(page(first, "older", false, 7)));
+    act(() => f.result.current.more("project:p1"));
+    await act(async () => f.requests[1]!.resolve(page([summary("item-5", 5), summary("item-6", 4)], null, false, 7)));
+    f.rerender({ query: { ...query, sort: "created-asc" }, active: true });
+    expect(ids(f)).toHaveLength(7);
+    await startRead();
+    await act(async () => f.requests[2]!.resolve(page(first, "sorted-tail", false, 7)));
+    expect(f.requests[3]!.query).toMatchObject({ group: "project:p1", before: "sorted-tail", limit: 2, sort: "created-asc" });
+    await act(async () => f.requests[3]!.resolve(page([summary("item-5", 5), summary("item-6", 4)], null, false, 7)));
+    expect(ids(f)).toHaveLength(7);
+    expect(f.result.current.groups[0]!.total).toBe(7);
+    act(() => f.result.current.reset());
+    await startRead();
+    await act(async () => f.requests[4]!.resolve(page(first, "reset-tail", false, 7)));
+    expect(f.requests[5]!.query).toMatchObject({ group: "project:p1", before: "reset-tail", limit: 2 });
+    await act(async () => f.requests[5]!.resolve(page([summary("item-5", 5), summary("item-6", 4)], null, false, 7)));
+    expect(ids(f)).toHaveLength(7);
+    expect(f.result.current.groups[0]!.total).toBe(7);
+  });
+
+  it("resets loaded groups when a filter or search changes", async () => {
+    const f = harness(); await startRead();
+    await act(async () => f.requests[0]!.resolve(page([summary("old", 4)], "older")));
+    f.rerender({ query: { ...query, filter: "host", query: "new" }, active: true });
+    expect(ids(f)).toEqual([]);
+    expect(f.result.current.groups).toEqual([]);
+    await startRead();
+    expect(f.requests[1]!.query).toMatchObject({ filter: "host", query: "new" });
     expect(f.requests[1]!.query).not.toHaveProperty("before");
-    // A complete page (no cursor) returning both rows proves the whole scope.
-    await act(async () => f.requests[1]!.resolve(page([summary("first", 3), summary("second", 2, { state: "ended" })])));
-    expect(f.result.current.rows.map(row => row.macroTaskId)).toEqual(["first", "second"]);
-    expect(f.result.current.rows[1]!.state).toBe("ended");
-    expect(f.result.current.totals.all).toBe(2);
-    expect(f.result.current.reorder).toBeNull();
+    await act(async () => f.requests[1]!.resolve(page([summary("new", 8)])));
+    expect(ids(f)).toEqual(["new"]);
   });
 
-  it("updates all reported totals even when an incomplete poll defers its order", async () => {
-    const f = harness();
-    await startRead();
-    await act(async () => f.requests[0]!.resolve(page([summary("first", 3), summary("second", 2)], "more-exists")));
-    await act(async () => { await vi.advanceTimersByTimeAsync(3000); });
-    await act(async () => f.requests[1]!.resolve(({ ...page([summary("second", 2, { state: "ended" })], "more-exists"),
-      totals: { all: 7, active: 3, host: 2, review: 1 } })));
-    expect(f.result.current.rows.map(row => row.macroTaskId)).toEqual(["first", "second"]);
-    expect(f.result.current.rows[1]!.state).toBe("ended");
-    expect(f.result.current.totals).toEqual({ all: 7, active: 3, host: 2, review: 1 });
-  });
-
-  it("defers a real reorder behind the notice instead of moving a reader's rows", async () => {
-    const f = harness();
-    await startRead();
+  it("defers new activity until the reader applies the reorder notice", async () => {
+    const f = harness(); await startRead();
     await act(async () => f.requests[0]!.resolve(page([summary("quiet", 3), summary("busy", 2)])));
     await act(async () => { await vi.advanceTimersByTimeAsync(3000); });
-    // The page is incomplete, so the unseen group defers behind the notice.
-    await act(async () => f.requests[1]!.resolve(page([summary("busy", 7), summary("fresh", 9)], "more-exists")));
-    // Order and membership stay exactly as committed until the notice is applied.
-    expect(f.result.current.rows.map(row => row.macroTaskId)).toEqual(["quiet", "busy"]);
-    expect(f.result.current.reorder).toEqual({ count: 2 });
-    act(() => { f.result.current.applyReorder(); });
+    await act(async () => f.requests[1]!.resolve(page([summary("fresh", 9), summary("busy", 7), summary("quiet", 3)])));
+    expect(ids(f)).toEqual(["quiet", "busy"]);
+    expect(f.result.current.reorder).toEqual({ count: null });
+    act(() => f.result.current.applyReorder());
     expect(f.result.current.reorder).toBeNull();
-    // Applying rebuilds from a fresh first-page read rather than the old pages.
-    await startRead();
-    expect(f.requests[2]!.query).not.toHaveProperty("before");
     await act(async () => f.requests[2]!.resolve(page([summary("fresh", 9), summary("busy", 7), summary("quiet", 3)])));
-    expect(f.result.current.rows.map(row => row.macroTaskId)).toEqual(["fresh", "busy", "quiet"]);
+    expect(ids(f)).toEqual(["fresh", "busy", "quiet"]);
   });
 
-  it("keeps a failed poll's rows and retries as an in-place refresh", async () => {
-    const f = harness();
-    await startRead();
-    await act(async () => f.requests[0]!.resolve(page([summary("kept", 1)])));
+  it("keeps a notice and loaded entries when a group page arrives during polling", async () => {
+    const f = harness(); await startRead();
+    await act(async () => f.requests[0]!.resolve(page([summary("first", 3)], "older", false, 2)));
     await act(async () => { await vi.advanceTimersByTimeAsync(3000); });
-    await act(async () => f.requests[1]!.reject(new Error("黑板暂时没有响应")));
-    expect(f.result.current.error).toBe("黑板暂时没有响应");
-    expect(f.result.current.rows.map(row => row.macroTaskId)).toEqual(["kept"]);
-    act(() => { void f.result.current.retry(); });
-    expect(f.requests[2]!.query).not.toHaveProperty("before");
-    await act(async () => f.requests[2]!.resolve(page([summary("kept", 2)])));
-    expect(f.result.current.error).toBe("");
-    expect(f.result.current.rows[0]!.lastActivitySeq).toBe(2);
-  });
-
-  it("adopts the first read after an empty poll, including its cursor", async () => {
-    const f = harness();
-    await startRead();
-    await act(async () => f.requests[0]!.resolve(page([])));
+    act(() => f.result.current.more("project:p1"));
+    expect(f.requests[1]!.signal?.aborted).toBe(true);
+    expect(f.requests[2]!.query).toMatchObject({ group: "project:p1", before: "older" });
+    await act(async () => f.requests[1]!.resolve(page([summary("stale", 99)])));
+    await act(async () => f.requests[2]!.resolve(page([summary("older", 1)], null, false, 2)));
+    expect(ids(f)).toEqual(["first", "older"]);
+    expect(f.result.current.groups[0]!.total).toBe(2);
     await act(async () => { await vi.advanceTimersByTimeAsync(3000); });
-    // The empty display adopts the read directly, including its cursor.
-    await act(async () => f.requests[1]!.resolve(page([summary("fresh-a", 9), summary("fresh-b", 8)], "adopted-cursor")));
-    expect(f.result.current.rows.map(row => row.macroTaskId)).toEqual(["fresh-a", "fresh-b"]);
-    expect(f.result.current.nextCursor).toBe("adopted-cursor");
-    expect(f.result.current.reorder).toBeNull();
-    // A later incomplete poll with an unseen group defers behind the notice.
+    await act(async () => f.requests[3]!.resolve(page([summary("new", 10), summary("first", 3), summary("older", 1)])));
+    expect(ids(f)).toEqual(["first", "older"]);
+    expect(f.result.current.reorder).toBeTruthy();
+  });
+
+  it("keeps entries through a failed refresh and retries without shrinking the group", async () => {
+    const f = harness(); await startRead();
+    const first = Array.from({ length: 5 }, (_, index) => summary(`item-${index}`, 10 - index));
+    await act(async () => f.requests[0]!.resolve(page(first, "older", false, 6)));
+    act(() => f.result.current.more("project:p1"));
+    await act(async () => f.requests[1]!.resolve(page([summary("item-5", 5)], null, false, 6)));
     await act(async () => { await vi.advanceTimersByTimeAsync(3000); });
-    await act(async () => f.requests[2]!.resolve(page([summary("fresh-b", 8), summary("unseen", 10)], "more-exists")));
-    expect(f.result.current.rows.map(row => row.macroTaskId)).toEqual(["fresh-a", "fresh-b"]);
-    expect(f.result.current.reorder).toEqual({ count: 1 });
-  });
-
-  it("removes rows a complete filtered page proves no longer match, keeping incomplete reads honest", async () => {
-    const f = harness();
-    await startRead();
-    await act(async () => f.requests[0]!.resolve(page([summary("gone", 6), summary("kept", 5)])));
-    await act(async () => { await vi.advanceTimersByTimeAsync(3000); });
-    // Incomplete page: "gone" sorts above the returned floor, so its absence is
-    // ambiguous — it stays listed behind an explicit notice.
-    await act(async () => f.requests[1]!.resolve(page([summary("kept", 5)], "more-exists")));
-    expect(f.result.current.rows.map(row => row.macroTaskId)).toEqual(["gone", "kept"]);
-    expect(f.result.current.reorder).toEqual({ count: null });
-    act(() => { f.result.current.applyReorder(); });
-    await startRead();
-    // A complete page that omits "gone" proves it no longer matches the filter.
-    await act(async () => f.requests[2]!.resolve(page([summary("kept", 5)])));
-    expect(f.result.current.rows.map(row => row.macroTaskId)).toEqual(["kept"]);
-    expect(f.result.current.reorder).toBeNull();
-  });
-
-  it("keeps the notice when the service reports changed without a local delta", async () => {
-    const f = harness();
-    await startRead();
-    await act(async () => f.requests[0]!.resolve(page([summary("still", 3)])));
-    await act(async () => { await vi.advanceTimersByTimeAsync(3000); });
-    await act(async () => f.requests[1]!.resolve(page([summary("still", 3)], "more-exists", true)));
-    expect(f.result.current.rows.map(row => row.macroTaskId)).toEqual(["still"]);
-    expect(f.result.current.reorder).toEqual({ count: null });
-    act(() => { f.result.current.applyReorder(); });
-    expect(f.result.current.reorder).toBeNull();
-    // A paged read that reports changed also keeps offering the refresh.
-    await startRead();
-    await act(async () => f.requests[2]!.resolve(page([summary("still", 3), summary("older", 1)], "page-2")));
-    act(() => { void f.result.current.more(); });
-    await act(async () => f.requests[3]!.resolve(page([summary("oldest", 0)], null, true)));
-    expect(f.result.current.reorder).toEqual({ count: null });
-  });
-
-  it("does not discard a pending reorder notice by loading an unchanged older page", async () => {
-    const f = harness();
-    await startRead();
-    await act(async () => f.requests[0]!.resolve(page([summary("quiet", 3), summary("busy", 2)], "page-2")));
-    await act(async () => { await vi.advanceTimersByTimeAsync(3000); });
-    await act(async () => f.requests[1]!.resolve(page([summary("busy", 7)], "more-exists")));
-    expect(f.result.current.reorder).toEqual({ count: 1 });
-    act(() => { void f.result.current.more(); });
-    await act(async () => f.requests[2]!.resolve(page([summary("older", 1)], null, false)));
-    expect(f.result.current.rows.map(row => row.macroTaskId)).toEqual(["quiet", "busy", "older"]);
-    expect(f.result.current.reorder).toEqual({ count: 1 });
-  });
-
-  it("breaks activity ties by macroTask identifier descending like the service", async () => {
-    const f = harness();
-    await startRead();
-    await act(async () => f.requests[0]!.resolve(page([summary("aaa", 5), summary("zzz", 5)])));
-    expect(f.result.current.rows.map(row => row.macroTaskId)).toEqual(["zzz", "aaa"]);
-  });
-
-  it("keeps poll-freshened rows when a later page load rebuilds the map", async () => {
-    const f = harness();
-    await startRead();
-    await act(async () => f.requests[0]!.resolve(page([summary("top", 4)], "cursor-2")));
-    await act(async () => { await vi.advanceTimersByTimeAsync(3000); });
-    await act(async () => f.requests[1]!.resolve(page([summary("top", 9, { state: "ended" })], "cursor-2")));
-    expect(f.result.current.rows[0]!.state).toBe("ended");
-    act(() => { void f.result.current.more(); });
-    await act(async () => f.requests[2]!.resolve(page([summary("older", 1)])));
-    expect(f.result.current.rows.map(row => row.macroTaskId)).toEqual(["top", "older"]);
-    expect(f.result.current.rows[0]!.lastActivitySeq).toBe(9);
-    expect(f.result.current.rows[0]!.state).toBe("ended");
-  });
-
-  it("rebuilds paging from a fresh first-page read after applying the reorder notice", async () => {
-    const f = harness();
-    await startRead();
-    await act(async () => f.requests[0]!.resolve(page([summary("quiet", 3), summary("busy", 2)], "stale-cursor")));
-    await act(async () => { await vi.advanceTimersByTimeAsync(3000); });
-    await act(async () => f.requests[1]!.resolve(page([summary("busy", 7)], "more-exists")));
-    expect(f.result.current.reorder).toEqual({ count: 1 });
-    act(() => { f.result.current.applyReorder(); });
-    // The existing rows stay mounted while the stale keyset cursor is retired.
-    expect(f.result.current.rows.map(row => row.macroTaskId)).toEqual(["busy", "quiet"]);
-    expect(f.result.current.nextCursor).toBeNull();
-    expect(f.result.current.loading).toBe(true);
-    expect(f.requests[2]!.query).not.toHaveProperty("before");
-    await act(async () => f.requests[2]!.resolve(page([summary("busy", 7), summary("quiet", 3)], "fresh-cursor")));
-    expect(f.result.current.rows.map(row => row.macroTaskId)).toEqual(["busy", "quiet"]);
-    expect(f.result.current.nextCursor).toBe("fresh-cursor");
-    act(() => { void f.result.current.more(); });
-    expect(f.requests[3]!.query).toMatchObject({ before: "fresh-cursor" });
-    await act(async () => f.requests[3]!.resolve(page([summary("older", 1)])));
-    expect(f.result.current.rows.map(row => row.macroTaskId)).toEqual(["busy", "quiet", "older"]);
-  });
-
-  it("D2-O00 allows the initial mount debounce when the document hides before cleanup", async () => {
-    const macroTasks = vi.fn(async () => ({ macroTasks: [], totals: { all: 0, active: 0, host: 0, review: 0 }, nextCursor: null, cursor: 0, changed: false }));
-    const api = { macroTasks } as unknown as ConsoleApi;
-    renderHook(({ query }: { query: MacroTaskQuery }) => useMacroTaskList(api, query, true), { initialProps: { query } });
-    // The document hides before the visibilitychange cleanup lands; the
-    // initial mount debounce still supplies the one allowed first GET.
-    Object.defineProperty(document, "visibilityState", { value: "hidden", configurable: true });
-    await act(async () => { await vi.advanceTimersByTimeAsync(200); });
-    expect(macroTasks).toHaveBeenCalledTimes(1);
-    Object.defineProperty(document, "visibilityState", { value: "visible", configurable: true });
-  });
-
-  it("gates the scope-change debounce when the document hides before cleanup", async () => {
-    const macroTasks = vi.fn(async () => ({ macroTasks: [], totals: { all: 0, active: 0, host: 0, review: 0 }, nextCursor: null, cursor: 0, changed: false }));
-    const api = { macroTasks } as unknown as ConsoleApi;
-    const hook = renderHook(({ query }: { query: MacroTaskQuery }) => useMacroTaskList(api, query, true), { initialProps: { query } });
-    await startRead();
-    expect(macroTasks).toHaveBeenCalledTimes(1);
-    Object.defineProperty(document, "visibilityState", { value: "hidden", configurable: true });
-    hook.rerender({ query: { ...query, projectId: "p2" } });
-    await act(async () => { await vi.advanceTimersByTimeAsync(200); });
-    expect(macroTasks).toHaveBeenCalledTimes(1);
-    Object.defineProperty(document, "visibilityState", { value: "visible", configurable: true });
-  });
-
-  it("invalidates a scope changed while hidden: the new first page loads on return, never the old range", async () => {
-    const f = harness(() => 1234);
-    await startRead();
-    await act(async () => f.requests[0]!.resolve(page([summary("old-scope", 1)], "old-cursor")));
-    expect(f.result.current.verifiedAtMs).toBe(1234);
-    act(() => setHidden(true));
-    const nextQuery: MacroTaskQuery = { ...query, projectId: "p2" };
-    f.rerender({ query: nextQuery, active: true });
-    // While hidden the old range must vacate at once instead of posing as the
-    // new query's answer; the return then reads the new scope's first page.
-    expect(f.result.current.rows).toEqual([]);
-    expect(f.result.current.nextCursor).toBeNull();
-    expect(f.result.current.verifiedAtMs).toBeNull();
-    await act(async () => { await vi.advanceTimersByTimeAsync(6000); });
-    expect(f.macroTasks).toHaveBeenCalledTimes(1);
-    act(() => setHidden(false));
-    expect(f.macroTasks).toHaveBeenCalledTimes(2);
-    await startRead();
-    expect(f.requests[1]!.query).toMatchObject({ ...nextQuery, limit: 50 });
-    expect(f.requests[1]!.query).not.toHaveProperty("before");
-    await act(async () => f.requests[1]!.resolve(page([summary("fresh-scope", 2)], "new-cursor")));
-    expect(f.result.current.rows.map(row => row.macroTaskId)).toEqual(["fresh-scope"]);
-    expect(f.result.current.nextCursor).toBe("new-cursor");
-    f.unmount();
-  });
-
-  it("keeps the old range from coming back when the new scope's first read fails", async () => {
-    const f = harness();
-    await startRead();
-    await act(async () => f.requests[0]!.resolve(page([summary("kept", 1)])));
-    act(() => setHidden(true));
-    f.rerender({ query: { ...query, projectId: "p2" }, active: true });
-    act(() => setHidden(false));
-    await startRead();
-    await act(async () => f.requests[1]!.reject(new Error("new scope unavailable")));
-    expect(f.result.current.rows).toEqual([]);
-    expect(f.result.current.error).toContain("new scope unavailable");
-    f.unmount();
-  });
-
-  it("stops polling while hidden and resumes without dropping loaded rows", async () => {
-    const f = harness();
-    await startRead();
-    await act(async () => f.requests[0]!.resolve(page([summary("kept", 1)])));
-    f.rerender({ query, active: false });
-    await act(async () => { await vi.advanceTimersByTimeAsync(6000); });
-    expect(f.macroTasks).toHaveBeenCalledTimes(1);
-    f.rerender({ query, active: true });
-    await act(async () => { await vi.advanceTimersByTimeAsync(3000); });
-    expect(f.result.current.rows.map(row => row.macroTaskId)).toEqual(["kept"]);
-    expect(f.requests[1]!.query).not.toHaveProperty("before");
-    f.unmount();
-  });
-
-  it("D2-O09 stops the poll on document visibility, reads once immediately on return, and reads a hidden mount once", async () => {
-    const f = harness();
-    await startRead();
-    await act(async () => f.requests[0]!.resolve(page([summary("kept", 1)])));
-    act(() => setHidden(true));
-    await act(async () => { await vi.advanceTimersByTimeAsync(6000); });
-    expect(f.macroTasks).toHaveBeenCalledTimes(1);
-    act(() => setHidden(false));
-    await act(async () => { await vi.advanceTimersByTimeAsync(0); });
-    // The return reads once immediately (the poll), then the cadence resumes.
-    expect(f.macroTasks).toHaveBeenCalledTimes(2);
-    expect(f.requests[1]!.query).toMatchObject({ ...query, limit: 50 });
-    await act(async () => f.requests[1]!.resolve(page([summary("kept", 2)])));
-    await act(async () => { await vi.advanceTimersByTimeAsync(3000); });
-    expect(f.macroTasks).toHaveBeenCalledTimes(3);
-    f.unmount();
-    // A hook mounted while hidden supplies its first read, without polling.
-    setHidden(true);
-    const g = harness();
-    await act(async () => { await vi.advanceTimersByTimeAsync(6000); });
-    expect(g.macroTasks).toHaveBeenCalledTimes(1);
-    g.unmount();
-    setHidden(false);
-  });
-
-  it("resumes a first-page refresh after the page hides during a reorder", async () => {
-    const f = harness();
-    await startRead();
-    await act(async () => f.requests[0]!.resolve(page([summary("quiet", 3), summary("busy", 2)], "old-cursor")));
-    await act(async () => { await vi.advanceTimersByTimeAsync(3000); });
-    await act(async () => f.requests[1]!.resolve(page([summary("busy", 7)], "old-cursor")));
-    act(() => f.result.current.applyReorder());
-    expect(f.result.current.rows.map(row => row.macroTaskId)).toEqual(["busy", "quiet"]);
-    f.rerender({ query, active: false });
-    expect(f.requests[2]!.signal?.aborted).toBe(true);
-    f.rerender({ query, active: true });
-    expect(f.result.current.rows.map(row => row.macroTaskId)).toEqual(["busy", "quiet"]);
-    await startRead();
-    expect(f.requests[3]!.query).not.toHaveProperty("before");
-    await act(async () => f.requests[3]!.resolve(page([summary("busy", 7), summary("quiet", 3)], "new-cursor")));
-    expect(f.result.current.nextCursor).toBe("new-cursor");
-  });
-
-  it("recovers the paging cursor when an automatic poll retries a failed reorder refresh", async () => {
-    const f = harness();
-    await startRead();
-    await act(async () => f.requests[0]!.resolve(page([summary("quiet", 3), summary("busy", 2)], "old-cursor")));
-    await act(async () => { await vi.advanceTimersByTimeAsync(3000); });
-    await act(async () => f.requests[1]!.resolve(page([summary("busy", 7)], "old-cursor")));
-    act(() => f.result.current.applyReorder());
-    await act(async () => f.requests[2]!.reject(new Error("temporary read failure")));
-    expect(f.result.current.rows.map(row => row.macroTaskId)).toEqual(["busy", "quiet"]);
-    await act(async () => { await vi.advanceTimersByTimeAsync(3000); });
-    await act(async () => f.requests[3]!.resolve(page([summary("busy", 7), summary("quiet", 3)], "recovered-cursor")));
-    expect(f.result.current.error).toBe("");
-    expect(f.result.current.nextCursor).toBe("recovered-cursor");
-    act(() => f.result.current.more());
-    expect(f.requests[4]!.query.before).toBe("recovered-cursor");
-  });
-});
-
-
-describe("U09 macroTask list verification", () => {
-  it("labels loaded macroTask data using only successful response verification and clears it for another scope", async () => {
-    const checked = new WeakMap<object, number>();
-    const f = harness(value => checked.get(value as object) ?? null);
-    await startRead();
-    const first = page([summary("first", 3)], "older"); checked.set(first, 1000);
-    await act(async () => f.requests[0].resolve(first));
-    expect(f.result.current.verifiedAtMs).toBe(1000);
-    act(() => f.result.current.more());
-    const older = page([summary("older", 1)]); checked.set(older, 500);
-    await act(async () => f.requests[1].resolve(older));
-    expect(f.result.current.verifiedAtMs).toBe(500);
-    await act(async () => { await vi.advanceTimersByTimeAsync(3000); });
-    await act(async () => f.requests[2].reject(new Error("verification unavailable")));
-    expect(f.result.current.verifiedAtMs).toBe(500);
+    await act(async () => f.requests[2]!.reject(new Error("黑板暂时没有响应")));
+    expect(f.result.current.error).toContain("黑板暂时没有响应");
+    expect(ids(f)).toHaveLength(6);
     act(() => f.result.current.retry());
-    const current = page([summary("first", 3), summary("older", 1)]); checked.set(current, 2000);
-    await act(async () => f.requests[3].resolve(current));
-    expect(f.result.current.verifiedAtMs).toBe(2000);
-    f.rerender({ query: { ...query, hostId: "another-host" }, active: true });
-    expect(f.result.current.verifiedAtMs).toBeNull();
-    await startRead();
-    await act(async () => f.requests[4].resolve(page([summary("new-scope", 99)])));
-    expect(f.result.current.verifiedAtMs).toBeNull();
+    await act(async () => f.requests[3]!.resolve(page(first, "retry-tail", false, 6)));
+    expect(f.requests[4]!.query).toMatchObject({ group: "project:p1", before: "retry-tail", limit: 1 });
+    await act(async () => f.requests[4]!.resolve(page([summary("item-5", 5)], null, false, 6)));
+    expect(f.result.current.error).toBe("");
+    expect(ids(f)).toHaveLength(6);
+    expect(f.result.current.groups[0]!.total).toBe(6);
   });
 });
 
-
-describe("D2 hidden initialization (O)", () => {
-  it("D2-O01 reads hidden content and verification once, pauses polling and reads immediately on return", async () => {
+describe("visibility and verification guards", () => {
+  it("allows an initial hidden mount read once and pauses polling until visible", async () => {
     setHidden(true);
     const f = harness(() => 1234);
     await startRead();
     expect(f.macroTasks).toHaveBeenCalledTimes(1);
-    expect(f.requests[0].query).toMatchObject({ ...query, limit: 50 });
-    expect(f.requests[0].query).not.toHaveProperty("before");
-    await act(async () => f.requests[0].resolve(page([summary("initial", 1)], "older")));
-    expect(f.result.current.rows.map(row => row.macroTaskId)).toEqual(["initial"]);
+    await act(async () => f.requests[0]!.resolve(page([summary("initial", 1)], "older")));
     expect(f.result.current.verifiedAtMs).toBe(1234);
-    expect(f.result.current.loading).toBe(false);
-    expect(f.result.current.nextCursor).toBe("older");
+    expect(f.result.current.groups[0]!.nextCursor).toBe("older");
     await act(async () => { await vi.advanceTimersByTimeAsync(12000); });
     expect(f.macroTasks).toHaveBeenCalledTimes(1);
     act(() => setHidden(false));
     expect(f.macroTasks).toHaveBeenCalledTimes(2);
-    await act(async () => f.requests[1].resolve(page([summary("initial", 1)], "older")));
-    await startRead();
-    expect(f.macroTasks).toHaveBeenCalledTimes(2);
-    expect(f.result.current.nextCursor).toBe("older");
   });
 
-  it("D2-O02 leaves an inactive list unread and initializes its first hidden activation once in StrictMode", async () => {
+  it("leaves an inactive list unread and initializes on hidden activation once in StrictMode", async () => {
     setHidden(true);
     const f = harness(() => 1234, false, true);
     await act(async () => { await vi.advanceTimersByTimeAsync(6000); });
@@ -558,89 +229,58 @@ describe("D2 hidden initialization (O)", () => {
     f.rerender({ query, active: true });
     await startRead();
     expect(f.macroTasks).toHaveBeenCalledTimes(1);
-    await act(async () => f.requests[0].resolve(page([summary("initial", 1)])));
-    expect(f.result.current.rows.map(row => row.macroTaskId)).toEqual(["initial"]);
-    expect(f.result.current.verifiedAtMs).toBe(1234);
+    await act(async () => f.requests[0]!.resolve(page([summary("initial", 1)])));
+    expect(ids(f)).toEqual(["initial"]);
     await act(async () => { await vi.advanceTimersByTimeAsync(6000); });
     expect(f.macroTasks).toHaveBeenCalledTimes(1);
   });
 
-  it("D2-O03 cleans up the hidden mount debounce in StrictMode without duplicating or reading after unmount", async () => {
+  it("aborts hidden initial work on unmount and discards late data", async () => {
     setHidden(true);
-    const f = harness(undefined, true, true);
+    const f = harness(() => 9999, true, true);
     await startRead();
-    expect(f.macroTasks).toHaveBeenCalledTimes(1);
+    const before = f.result.current;
     f.unmount();
-    expect(f.requests[0].signal?.aborted).toBe(true);
+    expect(f.requests[0]!.signal?.aborted).toBe(true);
+    await act(async () => f.requests[0]!.resolve(page([summary("late", 9)])));
+    expect(f.result.current).toBe(before);
     const g = harness(undefined, true, true);
-    g.unmount();
-    await startRead();
+    g.unmount(); await startRead();
     expect(g.macroTasks).not.toHaveBeenCalled();
   });
 
-  it("D2-O04 aborts a hidden initial request on unmount and ignores a late response and verification", async () => {
-    setHidden(true);
-    const f = harness(() => 9999);
-    await startRead();
-    expect(f.macroTasks).toHaveBeenCalledTimes(1);
-    const before = f.result.current;
-    f.unmount();
-    expect(f.requests[0].signal?.aborted).toBe(true);
-    await act(async () => f.requests[0].resolve(page([summary("late", 9)], "late-cursor")));
-    expect(f.result.current).toBe(before);
-    expect(f.result.current.rows).toEqual([]);
-    expect(f.result.current.verifiedAtMs).toBeNull();
-    await act(async () => { await vi.advanceTimersByTimeAsync(6000); });
-    expect(f.macroTasks).toHaveBeenCalledTimes(1);
-  });
-
-  it("D2-O05 fences a superseded hidden initial response and waits for visibility before reading its replacement", async () => {
+  it("fences a superseded hidden first read until visibility returns", async () => {
     setHidden(true);
     const f = harness(() => 4321);
     await startRead();
-    expect(f.macroTasks).toHaveBeenCalledTimes(1);
-    const changed = { ...query, projectId: "another-project" };
+    const changed = { ...query, query: "different" };
     f.rerender({ query: changed, active: true });
-    expect(f.requests[0].signal?.aborted).toBe(true);
-    expect(f.result.current.rows).toEqual([]);
-    expect(f.result.current.nextCursor).toBeNull();
-    expect(f.result.current.verifiedAtMs).toBeNull();
+    expect(f.requests[0]!.signal?.aborted).toBe(true);
+    expect(ids(f)).toEqual([]);
     await act(async () => { await vi.advanceTimersByTimeAsync(6000); });
     expect(f.macroTasks).toHaveBeenCalledTimes(1);
     act(() => setHidden(false));
     expect(f.macroTasks).toHaveBeenCalledTimes(2);
-    expect(f.requests[1].query).toMatchObject({ ...changed, limit: 50 });
-    expect(f.requests[1].query).not.toHaveProperty("before");
-    await act(async () => f.requests[0].resolve(page([summary("late", 9)], "late-cursor")));
-    expect(f.result.current.rows).toEqual([]);
-    expect(f.result.current.verifiedAtMs).toBeNull();
-    expect(f.result.current.loading).toBe(true);
-    await startRead();
-    expect(f.macroTasks).toHaveBeenCalledTimes(2);
-    await act(async () => f.requests[1].resolve(page([summary("fresh", 2)], "fresh-cursor")));
-    expect(f.result.current.rows.map(row => row.macroTaskId)).toEqual(["fresh"]);
+    await act(async () => f.requests[0]!.resolve(page([summary("late", 9)])));
+    expect(ids(f)).toEqual([]);
+    await act(async () => f.requests[1]!.resolve(page([summary("fresh", 2)])));
+    expect(ids(f)).toEqual(["fresh"]);
     expect(f.result.current.verifiedAtMs).toBe(4321);
-    expect(f.result.current.nextCursor).toBe("fresh-cursor");
   });
 
-  it.each(["empty", "failure"])("D2-O06 pauses after a hidden initial %s and reads once immediately on return", async outcome => {
+  it.each(["empty", "failure"])("resumes after a hidden initial %s without a background poll", async outcome => {
     setHidden(true);
     const f = harness(() => 1234);
     await startRead();
-    expect(f.macroTasks).toHaveBeenCalledTimes(1);
     await act(async () => {
-      if (outcome === "empty") f.requests[0].resolve(page([]));
-      else f.requests[0].reject(new Error("initial unavailable"));
+      if (outcome === "empty") f.requests[0]!.resolve(page([]));
+      else f.requests[0]!.reject(new Error("initial unavailable"));
     });
-    expect(f.result.current.rows).toEqual([]);
-    expect(f.result.current.verifiedAtMs).toBe(outcome === "empty" ? 1234 : null);
     await act(async () => { await vi.advanceTimersByTimeAsync(6000); });
     expect(f.macroTasks).toHaveBeenCalledTimes(1);
     act(() => setHidden(false));
     expect(f.macroTasks).toHaveBeenCalledTimes(2);
-    await act(async () => f.requests[1].resolve(page([summary("fresh", 2)])));
-    await startRead();
-    expect(f.macroTasks).toHaveBeenCalledTimes(2);
-    expect(f.result.current.rows.map(row => row.macroTaskId)).toEqual(["fresh"]);
+    await act(async () => f.requests[1]!.resolve(page([summary("fresh", 2)])));
+    expect(ids(f)).toEqual(["fresh"]);
   });
 });

@@ -239,6 +239,7 @@ class CliViewTests(RealWorkspaceTestCase):
         self.assertEqual(code, 0, macros)
         self.assertEqual(set(macros["totals"]), {"all", "active", "host", "review"})
         self.assertNotIn("total", macros)
+        self.assertIn("groups", macros)
         code, status, _ = self.cli("status", {"runId": run_id})
         self.assertEqual(code, 0, status)
         self.assertIn("state", status)

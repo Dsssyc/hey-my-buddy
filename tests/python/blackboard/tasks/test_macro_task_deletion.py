@@ -10,6 +10,7 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 from blackboard.tasks.test_workflow import WorkflowTestCase
+from support import macro_summaries
 from hey_my_buddy.blackboard.tasks import macro_task_deletion, macro_tasks, worker_sessions
 from hey_my_buddy.buddy.harnesses import registry as harness_registry
 from hey_my_buddy.private_dirs import micro_task_root
@@ -472,7 +473,7 @@ class MacroTaskDeletionTests(WorkflowTestCase):
             native_path(record).write_bytes(b'private session')
             records.append(record)
         self.assertNotIn('run:' + lead_owned['runId'],
-                         {row['macroTaskId'] for row in board.call('macro_task_list', {})['macroTasks']})
+                         {row['macroTaskId'] for row in macro_summaries(board.call('macro_task_list', {}))})
         self.assertEqual(macro_task_deletion.preview(board.store, target)["microTaskCount"], 4)
         with self.without_physical_io()[0]:
             self.assertEqual(macro_task_deletion.delete(board.store, target, 4)["state"], "deleted")

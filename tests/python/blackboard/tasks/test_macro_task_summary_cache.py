@@ -13,7 +13,7 @@ from contextlib import closing
 from concurrent.futures import ThreadPoolExecutor
 from unittest.mock import Mock, patch
 
-from support import private_state_dir
+from support import private_state_dir, macro_summaries
 from blackboard.tasks.test_console_macro_task_fixture import fixture_module, SOURCE
 from hey_my_buddy.blackboard.tasks import macro_tasks, macro_task_summary_cache as memo, micro_task
 
@@ -79,7 +79,7 @@ class MacroTaskSummaryCacheTests(unittest.TestCase):
         return macro_tasks.macro_task_list(self.store, params)
 
     def rows(self, **params):
-        return {row["macroTaskId"]: row for row in self.read(**params)["macroTasks"]}
+        return {row["macroTaskId"]: row for row in macro_summaries(self.read(**params))}
 
     def sql(self, statement, params=()):
         with self.store.db.write() as connection:
@@ -105,18 +105,18 @@ class MacroTaskSummaryCacheTests(unittest.TestCase):
                 finally:
                     with self.store.db.read() as connection:
                         connection.set_trace_callback(None)
-                self.assertEqual(len(page["macroTasks"]), limit)
+                self.assertEqual(len(macro_summaries(page)), limit)
                 # Count actual SQL, including any separate matching scan of
                 # the member relation; patching the loader alone misses that.
                 members = [sql for sql in statements if "SELECT h.*, ownership.group_id" in sql]
                 failures = [sql for sql in statements if "execution_status='failed'" in sql]
                 self.assertEqual(len(members), 1)
                 self.assertEqual(len(failures), 1)
-                self.assertEqual(sum(row["matchingRuns"] for row in page["macroTasks"]),
+                self.assertEqual(sum(row["matchingRuns"] for row in macro_summaries(page)),
                                  sum(row["counts"]["roots"] + row["counts"]["helpers"]
-                                     for row in page["macroTasks"]))
+                                     for row in macro_summaries(page)))
                 with self.store.db.read() as connection:
-                    for summary in page["macroTasks"]:
+                    for summary in macro_summaries(page):
                         members = macro_tasks._members(connection, summary["macroTaskId"])
                         self.assertEqual(summary["rootRunIds"], [row["task_id"] for row in members
                                          if row["micro_task_run_id"] is not None
@@ -355,15 +355,15 @@ class MacroTaskSummaryCacheTests(unittest.TestCase):
         group = self.fixture.macros[1]
         root = self.root_for(group)
         project = "fictional-corrected-project"
-        self.assertEqual(self.read(projectId=project)["totals"]["all"], 0)
+        self.assertEqual(self.read(group="project:" + project)["groups"][0]["total"], 0)
         self.read()
         with patch.object(macro_tasks, "_summary", wraps=macro_tasks._summary) as counter:
             self.sql("UPDATE macro_tasks SET project_id=? WHERE macro_task_id=?", (project, group))
             self.sql("UPDATE workflow_artifacts SET manifest_json=json_set(manifest_json,'$.repositoryId',?) WHERE run_id=? AND kind='input'", (project, root))
             self.assertEqual(self.rows()[group]["project"]["id"], project)
             self.assert_recomputed(counter, [group])
-            self.assertEqual(self.rows(projectId=project)[group]["matchingRuns"], 1)
-            self.assert_recomputed(counter, [group])
+            self.assertEqual(self.rows(group="project:" + project)[group]["matchingRuns"], 4)
+            self.assert_recomputed(counter, [])
             self.sql("UPDATE events SET payload_json=json_set(payload_json,'$.microTask.sourceHostId','fictional-corrected-source') WHERE task_id=? AND kind='task.submitted'", (root,))
             self.assertNotIn(group, self.rows(query="fictional-corrected-source"))
             self.sql("UPDATE workflow_runs SET source_host_id='fictional-corrected-source' WHERE run_id=?", (root,))
@@ -534,21 +534,22 @@ class MacroTaskSummaryCacheTests(unittest.TestCase):
     def test_filters_query_matches_page_order_addition_and_removal(self):
         group = self.fixture.macros[0]
         root = self.root_for(group)
-        first = self.read(limit=1)
+        project_group = "project:" + self.rows()[group]["project"]["id"]
+        first = self.read(group=project_group, limit=1)
         self.assertEqual(first["totals"]["all"], 3)
-        second = self.read(limit=1,before=first["nextCursor"])
-        self.assertNotEqual(first["macroTasks"][0]["macroTaskId"], second["macroTasks"][0]["macroTaskId"])
+        second = self.read(group=project_group, limit=1,before=first["groups"][0]["nextCursor"])
+        self.assertNotEqual(macro_summaries(first)[0]["macroTaskId"], macro_summaries(second)[0]["macroTaskId"])
         self.assertEqual(self.read(query="needle-fictional")["totals"]["all"],0)
         self.sql("UPDATE tasks SET spec_json=json_set(spec_json,'$.task','needle-fictional') WHERE task_id=?", (root,))
-        self.assertEqual(self.read(query="needle-fictional")["macroTasks"][0]["matchingRuns"],1)
+        self.assertEqual(macro_summaries(self.read(query="needle-fictional"))[0]["matchingRuns"],1)
         self.sql("UPDATE tasks SET spec_json=json_set(spec_json,'$.task','other-fictional') WHERE task_id=?", (root,))
         self.assertEqual(self.read(query="needle-fictional")["totals"]["all"],0)
         self.sql("UPDATE macro_tasks SET activity_seq=999999 WHERE macro_task_id=?", (group,))
-        self.assertEqual(self.read(limit=1)["macroTasks"][0]["macroTaskId"],group)
-        self.assertTrue(self.read(limit=1,before=first["nextCursor"])["changed"])
+        self.assertEqual(macro_summaries(self.read(limit=1))[0]["macroTaskId"],group)
+        self.assertTrue(self.read(group=project_group, limit=1,before=first["groups"][0]["nextCursor"])["changed"])
         self.sql("UPDATE workflow_runs SET macro_task_id=NULL WHERE macro_task_id=?", (group,))
         after = self.read()
-        self.assertNotIn(group,{row["macroTaskId"] for row in after["macroTasks"]})
+        self.assertNotIn(group,{row["macroTaskId"] for row in macro_summaries(after)})
         self.assertGreater(after["totals"]["all"],3)
         self.assertEqual(self.read(hostId="not-a-fictional-host")["totals"]["all"],0)
         self.assertTrue(self.read(filter="host")["totals"]["host"])
@@ -558,7 +559,7 @@ class MacroTaskSummaryCacheTests(unittest.TestCase):
         group = self.fixture.macros[0]
         summary = self.rows()[group]
         scopes = ({}, {"query": "needle-fictional"},
-                  {"projectId": summary["project"]["id"]},
+                  {"group": "project:" + summary["project"]["id"]},
                   {"hostId": summary["sourceHostId"]})
         for scope in scopes:
             with self.subTest(scope=scope):
@@ -566,7 +567,7 @@ class MacroTaskSummaryCacheTests(unittest.TestCase):
                 for filter_name in ("all", "active", "host", "review"):
                     page = self.read(**scope, filter=filter_name, limit=100)
                     self.assertEqual(page["totals"], totals)
-                    self.assertEqual(len(page["macroTasks"]), totals[filter_name])
+                    self.assertEqual(len(macro_summaries(page)), totals[filter_name])
                     self.assertNotIn("total", page)
 
     def test_matching_count_changes_in_cached_group_and_metadata_queries(self):

@@ -8,7 +8,7 @@ import { MacroTasks } from "./MacroTasks";
 import type { ConsoleApi } from "./api";
 import { ApiError } from "./api";
 import type { Snapshot, Task } from "./types";
-import { macroTaskSummary, macroTaskTimelineFixture } from "./macro-task-fixtures";
+import { macroTaskGroups, macroTaskSummary, macroTaskTimelineFixture } from "./macro-task-fixtures";
 import type { MacroTaskStopResult, MacroTaskTimeline } from "./macro-task-types";
 
 function render(ui: ReactElement, options?: RenderOptions) {
@@ -105,7 +105,7 @@ function harness(options: StopOptions = {}) {
     command,
     task: vi.fn(async (runId: string) => structuredClone(tasks.get(runId) ?? taskFixture(runId))),
     tasks: vi.fn(async () => ({ runs: [], total: 0, nextCursor: null })),
-    macroTasks: vi.fn(async () => ({ macroTasks: listed, totals: { all: listed.length, active: listed.length, host: 0, review: 0 }, nextCursor: null, cursor: 41, changed: false })),
+    macroTasks: vi.fn(async () => ({ groups: macroTaskGroups(listed), totals: { all: listed.length, active: listed.length, host: 0, review: 0 }, cursor: 41, changed: false })),
     macroTaskTimeline: timelineReader,
   } as unknown as ConsoleApi;
   const refresh = vi.fn(async () => structuredClone(snapshot));
@@ -268,7 +268,7 @@ describe("the detail of a micro task in its macro task", () => {
     await openSpan(f, "s-r1-q");
     // The next list read returns an empty page (a refresh or filter gap); the
     // timeline's own summary keeps the detail alive.
-    (f.api.macroTasks as ReturnType<typeof vi.fn>).mockResolvedValueOnce({ macroTasks: [], totals: { all: 0, active: 0, host: 0, review: 0 }, nextCursor: null, cursor: 41, changed: false });
+    (f.api.macroTasks as ReturnType<typeof vi.fn>).mockResolvedValueOnce({ groups: [], totals: { all: 0, active: 0, host: 0, review: 0 }, cursor: 41, changed: false });
     // The existing bounded periodic read is the trigger; there is no shell broadcast.
     await waitFor(() => expect(f.api.macroTasks).toHaveBeenCalledTimes(2), { timeout: 4500 });
     expect(screen.getByRole("group", { name: "这个微任务的各步" })).toBeTruthy();
