@@ -524,6 +524,38 @@ class LifecycleTestCase(RealWorkspaceTestCase):
             self.assertTrue(any(r['path'] == str(native.resolve()) for r in result['removed']))
             self.assertFalse(list(native.parent.glob('.reclaim-*')))
 
+    def test_storage_apply_keeps_unsealed_change_reasons_after_planning(self):
+        for preserve_stat in (False, True):
+            with self.subTest(preserve_stat=preserve_stat):
+                board = self.board()
+                self.register(board)
+                submitted, claimed, manifest, checkout, seal, view, artifact = self.run_worktree(
+                    board, request_id=f"storage-dirty-{preserve_stat}")
+                target = self.target_with_artifact(artifact, name=f"storage-dirty-target-{preserve_stat}")
+                self.accept(board, view, artifact, target=target, keepCheckout=True)
+                with mock.patch.dict(os.environ, {'BUDDY_RUNTIME_ROOT': str(self.directory / 'runtime')}), \
+                        mock.patch('hey_my_buddy.blackboard.tasks.storage.process_inventory', return_value=([], [], True)):
+                    planned = board.call('storage_plan', {})
+                    candidate = next(row for row in planned['candidates'] if row['path'] == str(checkout))
+                    self.assertTrue(candidate['eligible'], candidate)
+                    tracked = checkout / 'tracked.txt'
+                    facts = tracked.stat()
+                    tracked.write_text('dirty! output\n')
+                    if preserve_stat:
+                        os.utime(tracked, ns=(facts.st_atime_ns, facts.st_mtime_ns))
+                    retained = {path.relative_to(checkout): path.read_bytes()
+                                for path in checkout.rglob('*') if path.is_file()}
+                    refs = git(self.repo, 'for-each-ref', '--format=%(refname) %(objectname)', 'refs/buddy/')
+                    result = board.call('storage_apply', {
+                        'planId': planned['planId'], 'commandId': f'storage-dirty-{preserve_stat}', 'confirm': True})
+                skipped = next(row for row in result['skipped'] if row['path'] == str(checkout))
+                self.assertEqual(skipped['reasons'], ['unsealed-changes'])
+                self.assertFalse(any(row['path'] == str(checkout) for row in result['removed']))
+                self.assertTrue(checkout.is_dir())
+                self.assertEqual({path.relative_to(checkout): path.read_bytes()
+                                  for path in checkout.rglob('*') if path.is_file()}, retained)
+                self.assertEqual(git(self.repo, 'for-each-ref', '--format=%(refname) %(objectname)', 'refs/buddy/'), refs)
+
     # -- continuation cleanup -------------------------------------------------
     def two_turn_worktree(self, *, request_id="continuation-cleanup"):
         """One managed worktree whose second stage is prepared from the first seal.
@@ -1622,6 +1654,46 @@ class LifecycleTestCase(RealWorkspaceTestCase):
         self.assertTrue(replay["removed"])
         self.assertTrue(replay["alreadyRemoved"])
         self.assertTrue(Path(artifact["diffPath"]).is_file())
+
+    def test_refused_started_reclaim_preserves_every_plan_column_and_the_capture_fence(self):
+        (self.repo / "kept.txt").write_text("retained tracked file\n")
+        git(self.repo, "add", "kept.txt")
+        git(self.repo, "commit", "-qm", "another retained file")
+        board, submitted, manifest, checkout, artifact, view = self.accepted_worktree(
+            request_id="interrupted-dirty-reclaim")
+        with mock.patch.object(workspace_module, "cleanup_remove",
+                               side_effect=RuntimeError("lost after applying, before removal")):
+            with self.assertRaises(RuntimeError):
+                self.reclaim(board, view)
+        run_id = submitted["runId"]
+        with board.store.db.read() as connection:
+            before = dict(connection.execute(
+                "SELECT * FROM workspace_cleanup_plans WHERE run_id=? ORDER BY rowid DESC LIMIT 1",
+                (run_id,),
+            ).fetchone())
+        self.assertEqual(before["state"], "applying")
+        (checkout / "tracked.txt").unlink()
+        retained = {path.relative_to(checkout): path.read_bytes()
+                    for path in checkout.rglob("*") if path.is_file()}
+        refs = git(self.repo, "for-each-ref", "--format=%(refname) %(objectname)", "refs/buddy/")
+        with self.assertRaises(BoardError) as refused:
+            self.reclaim(board, self.view(board, run_id))
+        self.assertEqual(refused.exception.code, "NOT_READY")
+        self.assertEqual(refused.exception.details["reasons"], ["unsealed-changes"])
+        with board.store.db.read() as connection:
+            after = dict(connection.execute(
+                "SELECT * FROM workspace_cleanup_plans WHERE plan_id=?", (before["plan_id"],),
+            ).fetchone())
+        self.assertEqual(after, before)
+        with self.assertRaises(BoardError) as fenced:
+            board.store.workflow._cleanup_fence(str(checkout))
+        self.assertEqual(fenced.exception.code, "PREPARATION_CONFLICT")
+        self.assertEqual(fenced.exception.details["planId"], before["plan_id"])
+        self.assertFalse((checkout / "tracked.txt").exists())
+        self.assertEqual({path.relative_to(checkout): path.read_bytes()
+                          for path in checkout.rglob("*") if path.is_file()}, retained)
+        self.assertEqual((checkout / "kept.txt").read_text(), "retained tracked file\n")
+        self.assertEqual(git(self.repo, "for-each-ref", "--format=%(refname) %(objectname)", "refs/buddy/"), refs)
 
     # -- an attached branch blocks removal with its honest diagnosis ----------
     def branch_ref(self, name):

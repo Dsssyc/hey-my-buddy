@@ -26,7 +26,7 @@
 
 `cleanup_plan` 删除整轮 `cleanup_inspect` 和其 Git 证明，仅依据看板资格、清单、`resolve_allocation` 与路径记录 `planned` 或 `blocked`；计划的分配路径和身份来自这些事实。原有计划期限、控制授权、revision 复核、幂等回执与事件名保留。`planned` 表示看板一侧允许尝试回收。
 
-`cleanup_apply` 在原来的位置证明一次，仍在写入 `applying` 之前；该证明把现场证据与固定引用保留清单写进计划。拒绝时同一复核事务写 `blocked`、原因和证据，调用者仍得到 `NOT_READY`，挂载分支时仍带 `attachedBranch`。检出已经消失时仍收敛为已回收；真实移除前的身份、登记、分配锁标识和 detached 核对，以及失败后的重新加锁证据均保留。
+`cleanup_apply` 在原来的位置证明一次，仍在写入 `applying` 之前；该证明把现场证据与固定引用保留清单写进计划。只有当前仍为 `planned` 的计划，拒绝时才在同一复核事务写 `blocked`、原因和证据；当前已为 `applying` 的计划在任何记录写入前报 `NOT_READY`，它的所有列原样保留，围栏继续生效。挂载分支时仍带 `attachedBranch`。检出已经消失时仍收敛为已回收；真实移除前的身份、登记、分配锁标识和 detached 核对，以及失败后的重新加锁证据均保留。
 
 `_cleanup_proof` 删除写对象、构树与重复观察，封存后只读一次现场并比固定封存指纹。相等直接证明内容一致；不等时以只读 OID 和封存 tree map 在内存求未封存路径，保留排除路径与范围诊断，不把诊断变成仓库写入。没有 seal 时仍以固定执行指纹证明内容。固定 input/staged/output 引用的逐一 OID 核对移入这条回收专用路径，没有用截断的展示清单代替证明。
 
@@ -52,18 +52,18 @@
 
 | 七个文件 | 改前测试 | 改后测试 | 改前 Git | 改后 Git |
 | --- | ---: | ---: | ---: | ---: |
-| test_workspace_lifecycle.py | 49 | 51 | 13065 | 8580 |
+| test_workspace_lifecycle.py | 49 | 53 | 13065 | 9042 |
 | test_workflow_preparation.py | 30 | 31 | 6116 | 4482 |
 | test_storage_orphans.py | 35 | 35 | 5824 | 4113 |
 | test_scope_recovery.py | 18 | 18 | 2822 | 2003 |
 | test_workspace.py | 26 | 28 | 2883 | 2451 |
 | test_workflow_real.py | 11 | 11 | 2857 | 2022 |
 | test_workspace_submission_cleanup.py | 20 | 20 | 2488 | 1913 |
-| 合计 | 189 | 194 | 36055 | 25564 |
+| 合计 | 189 | 196 | 36055 | 26026 |
 
-七文件总数减少 10,491 次（29.1%）。
+七文件总数减少 10,029 次（27.8%）。Host 复核后的两条新回归测试包含在最终计数里，正常主例的各项调用数没有变化；其余六文件的调用数与首次交付相同。
 
-改前 189 条测试，最终改后 194 条测试；新增场景的 Git 也包含在七文件改后总数里，因此总数不是保持测试数不变的预算。主例的夹具/直接 Git 均为 8 次，产品 216 → 124 次，少 92 次（42.6%）；主例未经过原生 harness 的独立回合开始与累计补丁收集，不代表所有微任务的一生上限。
+改前 189 条测试，最终改后 196 条测试；新增场景的 Git 也包含在七文件改后总数里，因此总数不是保持测试数不变的预算。主例的夹具/直接 Git 均为 8 次，产品 216 → 124 次，少 92 次（42.6%）；主例未经过原生 harness 的独立回合开始与累计补丁收集，不代表所有微任务的一生上限。
 
 ## 测试变更与验证
 
@@ -77,9 +77,19 @@
 
 修改的 stash 直接测试：`test_reads_commit_ids_and_full_descriptions`、`test_a_repository_without_stashes_is_an_empty_observation`、改名后的 `test_worktrees_share_stash_through_the_common_git_directory`、`test_sha256_repositories_report_full_length_commits`、`test_the_entry_list_is_bounded_and_marks_truncation`、`test_undecodable_description_bytes_stay_canonically_encodable`、`test_adding_the_65th_stash_never_reports_the_unchanged_oldest_entry_lost`、`test_a_truncated_start_side_cannot_claim_new_entries_but_keeps_provable_losses`、`test_the_recorded_recovery_command_restores_a_dropped_entry` 和 `test_claim_and_result_freeze_real_shared_stash_facts_end_to_end` 都改传公共目录，原来的 stash 内容、边界、恢复与端到端断言保留。
 
-新增五条测试：`test_missing_input_and_output_refs_allow_seal_and_verification_but_block_cleanup` 覆盖初回合清引用后的封存与对象验收；`test_cleared_workspace_refs_allow_turns_and_acceptance_but_block_cleanup` 覆盖清引用后的续接、回合开始、第二次封存、目标验收与回收拒绝；`test_matching_seal_cleanup_proof_does_not_write_git_objects` 检查实际 Git 写命令未被调用；`test_matching_seal_fingerprint_needs_no_git_object_writes_for_cleanup_proof` 检查对象写入与构树入口都没有被调用；`test_replayed_continuation_rechecks_changes_after_its_input_was_prepared` 证明删除 fresh 路径复问后，磁盘重放仍拒绝后来改动。
+首次交付新增五条测试：`test_missing_input_and_output_refs_allow_seal_and_verification_but_block_cleanup` 覆盖初回合清引用后的封存与对象验收；`test_cleared_workspace_refs_allow_turns_and_acceptance_but_block_cleanup` 覆盖清引用后的续接、回合开始、第二次封存、目标验收与回收拒绝；`test_matching_seal_cleanup_proof_does_not_write_git_objects` 检查实际 Git 写命令未被调用；`test_matching_seal_fingerprint_needs_no_git_object_writes_for_cleanup_proof` 检查对象写入与构树入口都没有被调用；`test_replayed_continuation_rechecks_changes_after_its_input_was_prepared` 证明删除 fresh 路径复问后，磁盘重放仍拒绝后来改动。
 
-最终源码检查：`tests/python/blackboard/tasks/` 全目录与 `tests/python/cli/test_repository_hygiene.py` 合计 42 文件、695 条测试、0 跳过，退出 0；最终计数轮的七文件合计 194 条测试、0 跳过，退出 0。两轮均由检查器确认私有根移除。改前七文件 189 条测试也通过；首轮集成七文件 194 条测试通过，之后还有已知指纹复问的删除，计数表只使用最终轮。`git diff --check` 通过；本说明另核对 UTF-8、段落物理行、机器路径、表格合计与改动范围。
+Host 复核修正后的最终源码检查：`tests/python/blackboard/tasks/` 全目录与 `tests/python/cli/test_repository_hygiene.py` 合计 42 文件、697 条测试、0 跳过，退出 0；重测计数轮的七文件合计 196 条测试、0 跳过，退出 0。两轮均由检查器确认私有根移除。首次交付的任务目录加卫生检查 695 条、七文件计数检查 194 条及改前七文件 189 条检查保留为历史验证；表中改后数已更新为本轮最终源码和新增场景的实测。`git diff --check` 通过；本说明另核对 UTF-8、段落物理行、机器路径、表格合计与改动范围。
+
+## Host 复核后的两处修正
+
+`cleanup_apply` 原先用同一条 UPDATE 把 `planned` 和 `applying` 的拒绝都写成 `blocked`，这会放开一次已经开始、可能只删了一部分的回收围栏。现在在原复核事务中根据当前计划状态判断：拒绝的 `applying` 在写入之前直接返回原 `NOT_READY`，任何一列都不更新；只有 `planned` 的拒绝才保存 `blocked` 和证据。成功路径及原来的证明位置不变，没有增加 Git 调用。
+
+存储执行原先只记录 `NOT_READY` 错误码，现在把它携带的具体 reasons 写进跳过项；没有具体理由的拒绝仍保留错误码。普通文件改动还有更早的路径：无 Git 库存的文件系统指纹已经变化，会直接跳过为 `candidate-changed`。本轮在路径和类别未变、看板仍允许、已有分配的受管检出上增加一次只读诊断，保留其 `unsealed-changes` 等具体理由；这个分支已经决定不删除，诊断通过也仍以 `candidate-changed` 跳过，原计划变更保护没有放开。孤立检出及其他类别不走这条诊断，正常删除仍只由 `cleanup_apply` 证明一次。新诊断改变了拒绝路径调用数，因此重新量了七文件；本轮新测试中诊断分支实发 21 次 Git。
+
+新增 `test_refused_started_reclaim_preserves_every_plan_column_and_the_capture_fence`：在 `applying` 落盘后、真实移除之前中断，删除一个已跟踪文件，再回收，验证 `NOT_READY` 原因、计划所有列逐项相等、`_cleanup_fence` 仍拒绝，以及其余文件和固定引用不变。新增 `test_storage_apply_keeps_unsealed_change_reasons_after_planning`：分别用普通改动和保持原 stat 信息的同长度内容改动覆盖提前跳过与 `cleanup_apply` 拒绝，均验证具体原因 `unsealed-changes`、未删除及文件、引用原样。两个子场景使用独立目标目录。
+
+修正前的私有回归注入复现了计划变为 `blocked` 及跳过原因为 `candidate-changed`；首个测试草稿的第二个子场景还因目标目录复用而失败，已改为独立目标，最终两个子场景均通过。复核要求之外的源码削减没有变动。
 
 ## 裁定的限定与本步未做
 

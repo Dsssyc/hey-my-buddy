@@ -741,6 +741,19 @@ def plan(store, params: dict) -> dict:
         return result
 
 
+def _changed_workspace_reasons(store, candidate: dict) -> list[str]:
+    """Diagnose a retained checkout without authorizing its changed storage plan."""
+    from . import workspace
+    with store.db.read() as connection:
+        run = store.workflow._run_row(connection, candidate['runId'])
+        manifest = json.loads(run['workspace_manifest_json'])
+        retained = store.workflow._allocation_provenance(connection, run)
+        sealed = store.workflow._latest_handoff(connection, run, manifest)
+    proof = workspace.cleanup_inspect(store.directory, manifest, sealed=sealed, retained=retained,
+                                      allowed=store.workflow._board_adopted_paths(run['run_id'], manifest))
+    return proof['reasons'] or ['candidate-changed']
+
+
 def apply(store, params: dict) -> dict:
     schemas.reject_unknown(params, {'planId', 'commandId', 'confirm'}, 'storage.apply')
     plan_id = schemas.required_string(params, 'planId', max_length=64, pattern=re.compile(r'^stg-[0-9a-f]{32}$'))
@@ -800,11 +813,16 @@ def apply(store, params: dict) -> dict:
                     _save_receipt(receipt, result)
                 continue
             fresh = current.get(candidate['id'])
-            if (fresh is None or not fresh['eligible'] or
-                    any(fresh.get(key) != candidate.get(key) for key in ('category', 'path', 'fingerprint'))):
-                result['skipped'].append({'id': candidate['id'], 'path': candidate['path'], 'reasons': fresh['reasons'] if fresh and not fresh['eligible'] else ['candidate-changed']})
-                continue
             try:
+                if (fresh is None or not fresh['eligible'] or
+                        any(fresh.get(key) != candidate.get(key) for key in ('category', 'path', 'fingerprint'))):
+                    reasons = fresh['reasons'] if fresh and not fresh['eligible'] else ['candidate-changed']
+                    if (fresh is not None and fresh['eligible'] and fresh['category'] == 'workspaces'
+                            and not fresh.get('orphan')
+                            and all(fresh.get(key) == candidate.get(key) for key in ('category', 'path'))):
+                        reasons = _changed_workspace_reasons(store, fresh)
+                    result['skipped'].append({'id': candidate['id'], 'path': candidate['path'], 'reasons': reasons})
+                    continue
                 if candidate['category'] == 'workspaces':
                     if fresh.get('orphan') is True:
                         _remove_orphan_workspace(store, candidate)
@@ -844,7 +862,11 @@ def apply(store, params: dict) -> dict:
             except (BoardError, OSError) as error:
                 if result.get('pending'):
                     raise BoardError('STORAGE_INCOMPLETE', 'Removal is incomplete; retry the same commandId and planId', planId=plan_id) from error
-                result['skipped'].append({'id': candidate['id'], 'path': candidate['path'], 'reasons': [error.code if isinstance(error, BoardError) else 'filesystem-error']})
+                if isinstance(error, BoardError):
+                    reasons = (error.details.get('reasons') or [error.code]) if error.code == 'NOT_READY' else [error.code]
+                else:
+                    reasons = ['filesystem-error']
+                result['skipped'].append({'id': candidate['id'], 'path': candidate['path'], 'reasons': reasons})
             _save_receipt(receipt, result)
         result['complete'] = True
         _save_receipt(receipt, result)

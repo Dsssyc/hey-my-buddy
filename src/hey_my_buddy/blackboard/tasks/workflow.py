@@ -5347,6 +5347,11 @@ class WorkflowCoordinator:
             # delete, so its reasons cannot block; anything still occupying the exact
             # planned path keeps every NOT_READY reason.
         blocked = inspection is not None and bool(inspection["reasons"]) and (path.exists() or path.is_symlink())
+        if blocked:
+            details = {"reasons": inspection["reasons"]}
+            if inspection.get("attachedBranch") is not None:
+                details["attachedBranch"] = inspection["attachedBranch"]
+            refusal = BoardError("NOT_READY", "This checkout is not eligible for cleanup", **details)
         now = self.now()
         with self.db.write() as connection:
             owner = self._run_row(connection, owner_run_id)
@@ -5365,6 +5370,10 @@ class WorkflowCoordinator:
                 return {**self.compact(connection, run_row), "duplicate": True, "plan": self._plan_view(plan),
                         "targetRunId": run_id, "targetRevision": run_row["revision"]}
             self._cleanup_apply_precheck(connection, run_row, plan)
+            if blocked and plan["state"] == "applying":
+                # A started removal keeps its fence even when its resumption is
+                # refused; no part of that journal may be rewritten here.
+                raise refusal
             evidence = json.loads(plan["evidence_json"])
             retention = json.loads(plan["retention_json"])
             if inspection is not None:
@@ -5378,17 +5387,14 @@ class WorkflowCoordinator:
             connection.execute(
                 "UPDATE workspace_cleanup_plans SET state=?, evidence_json=?, retention_json=?, reasons_json=?,"
                 " command_id=?, revision=revision+1 WHERE plan_id=?"
-                " AND state IN ('planned','applying')",
+                " AND state=?",
                 ("blocked" if blocked else "applying", canonical_json(evidence), canonical_json(retention),
-                 canonical_json(inspection["reasons"] if blocked else []), command_id, plan_id),
+                 canonical_json(inspection["reasons"] if blocked else []), command_id, plan_id, plan["state"]),
             )
             head = self.board._head_of(connection)
         self.board._notify(head)
         if blocked:
-            details = {"reasons": inspection["reasons"]}
-            if inspection.get("attachedBranch") is not None:
-                details["attachedBranch"] = inspection["attachedBranch"]
-            raise BoardError("NOT_READY", "This checkout is not eligible for cleanup", **details)
+            raise refusal
         removed = None
         if path.exists() or path.is_symlink():
             removed = workspace_module().cleanup_remove(self.board.directory, manifest, retained=retained)
