@@ -200,7 +200,7 @@ def offline_facts_source(directory: Path) -> str:
 
 
 def _child_environment(directory: Path, overrides: dict | None = None) -> dict:
-    environment = {key: value for key, value in os.environ.items() if key not in _INHERITED_CHILD_KEYS and not key.startswith(("BUDDY_", "ANTHROPIC_", "CLAUDE_CODE_", "C2_"))}
+    environment = {key: value for key, value in os.environ.items() if key not in _INHERITED_CHILD_KEYS and not key.startswith(("BUDDY_", "ANTHROPIC_", "CLAUDE_CODE_", "DSH_", "DEEPSEEK_", "C2_"))}
     # HOME and SDK locations belong to this fixture, never to the interpreter's
     # inherited account. Do not create native configuration files in this home.
     private_home = directory / "home"

@@ -41,6 +41,23 @@ def wait_until(predicate, timeout: float = 5.0, interval: float = 0.01):
 
 
 class ChecksEnvironmentTests(unittest.TestCase):
+    def test_dsh_configuration_and_deepseek_keys_are_removed_by_prefix(self):
+        from support import _child_environment
+
+        inherited = {"DSH_HOME": "/users/fixture/dsh.v2 用户 设置",
+                     "DSH_PERMISSION_MODE": "danger-full-access", "DSH_UNLISTED_FLAG": "inherited",
+                     "DEEPSEEK_API_KEY": "fixture-secret", "DEEPSEEK_SEARCH_BASE_URL": "https://fixture.invalid",
+                     "DEEPSEEK_UNLISTED_KEY": "inherited"}
+        with patch.dict(os.environ, inherited):
+            environment = checks.test_environment(Path("/repo"))
+            with tempfile.TemporaryDirectory() as directory:
+                state = Path(directory)
+                fixture_environment = _child_environment(state)
+                self.assertEqual(fixture_environment["DSH_HOME"], str(state / "home/.dsh"))
+        self.assertFalse(any(key.startswith(("DSH_", "DEEPSEEK_")) for key in environment))
+        self.assertEqual({key for key in fixture_environment if key.startswith(("DSH_", "DEEPSEEK_"))},
+                         {"DSH_HOME"})
+
     def test_shell_provider_flags_are_removed_by_prefix_in_both_test_environments(self):
         from hey_my_buddy.buddy.harnesses.discovery import native_environment
         from support import _child_environment

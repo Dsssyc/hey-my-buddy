@@ -20,6 +20,7 @@ import os
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from hey_my_buddy.buddy.harnesses.dsh import session_records
 from hey_my_buddy.buddy.harnesses.dsh.session_records import (
@@ -303,12 +304,15 @@ class ResumeBoundaryTests(SessionRecordCase):
     def test_a_non_session_first_line_keeps_the_resume_usage_unknown(self):
         # A later session header cannot prove where the target session's
         # existing records began when the file's first line is not that header.
-        prefix = {"type": "user/message", "id": SESSION, "seq": 0,
+        # The id and version deliberately match: only the header's type check
+        # can reject this otherwise plausible first record.
+        prefix = {"type": "user/message", "version": 3, "id": SESSION, "seq": 0,
                   "data": {"id": "orphan"}}
         self.write_rollout([prefix, *turn_one()], compressed=False)
 
         baseline = self.freeze()
         self.assertFalse(baseline.reliable)
+        self.write_rollout([prefix, *turn_one(), *turn_two_append()], compressed=False)
         facts = resumed_session_record_facts(self.sessions, baseline)
         self.assertFalse(facts["resumeBoundary"]["proven"])
         self.assertEqual(facts["resumeBoundary"]["reason"], "baseline-unreadable")
@@ -319,17 +323,23 @@ class ResumeBoundaryTests(SessionRecordCase):
         # total-byte cap, so freeze_session_records itself encounters the bound.
         path = self.sessions / f"{SESSION}.v3.jsonl"
         payload = "x" * (1024 * 1024)
-        padding = json.dumps({"type": "fixture/padding", "data": {"blob": payload}})
         with path.open("w", encoding="utf-8") as rollout:
             rollout.write(json.dumps(turn_one()[0]) + "\n")
-            for _ in range(66):
-                rollout.write(padding)
+            for seq in range(66):
+                rollout.write(json.dumps({"type": "fixture/padding", "seq": seq,
+                                          "data": {"blob": payload}}))
                 rollout.write("\n")
         self.assertGreater(path.stat().st_size, session_records._MAX_RECORD_TOTAL_BYTES)
 
         baseline = self.freeze()
         self.assertFalse(baseline.reliable)
-        facts = resumed_session_record_facts(self.sessions, baseline)
+        with path.open("a", encoding="utf-8") as rollout:
+            for event in turn_two_append():
+                rollout.write(json.dumps(event) + "\n")
+        # Let the final read see the entire file: its own truncation and replay
+        # checks must not mask a missing reliability check in the earlier freeze.
+        with patch.object(session_records, "_MAX_RECORD_TOTAL_BYTES", path.stat().st_size + 1):
+            facts = resumed_session_record_facts(self.sessions, baseline)
         self.assertFalse(facts["resumeBoundary"]["proven"])
         self.assertEqual(facts["resumeBoundary"]["reason"], "baseline-unreadable")
         self.assertIsNone(facts["usage"])

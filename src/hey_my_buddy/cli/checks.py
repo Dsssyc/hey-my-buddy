@@ -67,8 +67,8 @@ EVIDENCE_FILE_NAME = "teardown-evidence.json"
 def test_environment(root: Path) -> dict:
     """The child environment every test suite runs with: checkout first, no pins."""
     # Test isolation is independent of the product's native configuration:
-    # inherited ownership, credentials and Claude provider flags cannot select a fixture.
-    values = {key: value for key, value in os.environ.items() if key not in SANITIZED_VARIABLES and not key.startswith(("BUDDY_", "ANTHROPIC_", "CLAUDE_CODE_", "C2_"))}
+    # inherited ownership, credentials and harness flags cannot select a fixture.
+    values = {key: value for key, value in os.environ.items() if key not in SANITIZED_VARIABLES and not key.startswith(("BUDDY_", "ANTHROPIC_", "CLAUDE_CODE_", "DSH_", "DEEPSEEK_", "C2_"))}
     source = str(root / "src")
     tests = str(root / "tests" / "python")
     inherited = values.get("PYTHONPATH")

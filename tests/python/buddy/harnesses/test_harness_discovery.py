@@ -405,6 +405,13 @@ class HarnessDiscoveryTests(unittest.TestCase):
             self.assertNotIn("ANTHROPIC_BASE_URL", result)
             self.assertNotIn("BUDDY_AGENT_CREDENTIAL", result)
 
+    def test_native_environment_preserves_the_users_dsh_home_verbatim(self):
+        source = {"HOME": "/users/fixture", "DSH_HOME": "/users/fixture/config.v2 用户 设置",
+                  "DSH_PERMISSION_MODE": "danger-full-access", "DEEPSEEK_API_KEY": "fixture-secret"}
+        values = discovery.native_environment(source)
+        self.assertEqual(values, {"HOME": source["HOME"], "DSH_HOME": source["DSH_HOME"], "PATH": ""})
+        self.assertNotIn("DSH_HOME", discovery.native_environment({"HOME": source["HOME"]}))
+
     def test_native_environment_keeps_the_login_name_for_keychain_logins(self):
         result = discovery.native_environment({"PATH": "/usr/bin", "HOME": "/home/user", "USER": "user",
                                                "LOGNAME": "user", "USERNAME": "user",
