@@ -4,7 +4,7 @@
 
 [English](README.md)
 
-hey-my-buddy 让 Host buddy（拥有目标的 agent）把边界明确的工作交给运行在本地编码 harness 中的 Worker buddy，同时保留对整体目标的责任。两者都是地位对等的 buddy，只通过共享黑板协作，区别在于角色。Host 可以亲自实现一部分，再把其他部分交给能力、成本或模型更适合的 Worker。目前接入的编码 harness 是 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness)（`dsh`）、ZCode（`zcode`）以及实验性的 Codex App Server（`codex`）；Claude Code 适配器（`claude`，[参考文档](docs/reference/claude.md)）作为 P1 适配器加入，默认采用用户确认的隔离设置；已授权的实机探针验证了原生结果、取消和有界沙箱路径，随后又通过已安装服务完成了单独获准的只读委派链路验收。
+hey-my-buddy 让 Host buddy（拥有目标的 agent）把边界明确的工作交给运行在本地编码 harness 中的 Worker buddy，同时保留对整体目标的责任。两者都是地位对等的 buddy，只通过共享黑板协作，区别在于角色。Host 可以亲自实现一部分，再把其他部分交给能力、成本或模型更适合的 Worker。目前接入的编码 harness 是 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness)（`dsh`）、ZCode（`zcode`）以及实验性的 Codex App Server（`codex`）；Claude Code 适配器（`claude`，[参考文档](docs/reference/claude-code.md)）作为 P1 适配器加入，默认采用用户确认的隔离设置；已授权的实机探针验证了原生结果、取消和有界沙箱路径，随后又通过已安装服务完成了单独获准的只读委派链路验收。
 
 目标、决定与结果保存在本地 SQLite 黑板中。编码任务有明确的 Git 工作区和固定输入、产物快照；私有 React/Vite 控制台可以查看任务、路由、共享模型配置、用户偏好、模型并发设置和评价卡片。
 
@@ -92,7 +92,7 @@ Codex Host 为每个运行中的委派派生一个只做监控的原生子代理
 
 日常安装是 [0.29.0/contract 0.29.0/schema 16](docs/acceptance/installed-0.29.0.md)。它由 0.27.0 经显式的 schema 15 → 16 升级而来，升级前做了经过校验的备份，记录全部保留。[0.29.0 安装记录](docs/acceptance/installed-0.29.0.md)列出这个版本带来了什么，并区分已验证的行为与尚未确认的部分。
 
-日常运行时支持 macOS 与 Linux、本地单用户 SQLite 状态；Windows 的代码与脚本可移植，但未在真机验证。ZCode 支持活动观察和协作式询问：问题等待根任务的下一个工具检查点或结束尝试，无法打断正在运行的工具，也不会开启新回合。原生权限请求和需要长时间等待的 Host 决策仍通过 attention/assistance 边界处理。Codex 使用实验性的 App Server，未声明 inquiry。0.19.0 源码在 macOS 的 Codex CLI 0.157.0 上验证了 `openai / gpt-6-sol / high` 的只读 Router，推荐 `standard` 预算；Linux/Windows 与其他 harness 仍未验证。安装不会修改用户的 Router 设置。Claude P1 需要 Anthropic 第一方认证，默认使用隔离设置，每次接续都重建会话，未声明 inquiry。其[参考文档](docs/reference/claude.md)记录已验证的原生路径、日常安装的只读委派链路、模拟回归覆盖和其余限制。目前不提供货币预算、自动社区评价、内置定期维护或原生 App 回合结束后唤醒。后台回访需要用户明确要求。
+日常运行时支持 macOS 与 Linux、本地单用户 SQLite 状态；Windows 的代码与脚本可移植，但未在真机验证。ZCode 支持活动观察和协作式询问：问题等待根任务的下一个工具检查点或结束尝试，无法打断正在运行的工具，也不会开启新回合。原生权限请求和需要长时间等待的 Host 决策仍通过 attention/assistance 边界处理。Codex 使用实验性的 App Server，未声明 inquiry。0.19.0 源码在 macOS 的 Codex CLI 0.157.0 上验证了 `openai / gpt-6-sol / high` 的只读 Router，推荐 `standard` 预算；Linux/Windows 与其他 harness 仍未验证。安装不会修改用户的 Router 设置。Claude P1 需要 Anthropic 第一方认证，默认使用隔离设置，每次接续都重建会话，未声明 inquiry。其[参考文档](docs/reference/claude-code.md)记录已验证的原生路径、日常安装的只读委派链路、模拟回归覆盖和其余限制。目前不提供货币预算、自动社区评价、内置定期维护或原生 App 回合结束后唤醒。后台回访需要用户明确要求。
 
 ## 文档与开发
 
