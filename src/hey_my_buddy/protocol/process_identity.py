@@ -10,12 +10,12 @@ import ctypes
 import os
 import signal
 import sys
-import tempfile
 import threading
 import time
 import uuid
 from pathlib import Path
 
+from ..private_files import publish_bytes
 from ..errors import BoardError
 from ..json_codec import canonical_json, decode_strict_json
 from ..private_dirs import linked_component, open_regular_fd
@@ -52,29 +52,7 @@ class NativeProcessJournal:
         path = self.path
         if linked_component(path) is not None:
             raise BoardError("PRIVATE_PATH_UNSAFE", "Native process journal contains a linked component")
-        raw = canonical_json(self.state).encode()
-        if initial:
-            fd = open_regular_fd(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL)
-            with os.fdopen(fd, "wb") as stream:
-                stream.write(raw)
-                stream.flush()
-                os.fsync(stream.fileno())
-        else:
-            fd, temporary = tempfile.mkstemp(prefix=".native-process-", dir=path.parent)
-            try:
-                with os.fdopen(fd, "wb") as stream:
-                    stream.write(raw)
-                    stream.flush()
-                    os.fsync(stream.fileno())
-                os.replace(temporary, path)
-            finally:
-                Path(temporary).unlink(missing_ok=True)
-        if os.name != "nt":
-            directory = os.open(path.parent, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
-            try:
-                os.fsync(directory)
-            finally:
-                os.close(directory)
+        publish_bytes(path, canonical_json(self.state).encode(), immutable=initial)
 
     def begin(self) -> str:
         with self.lock:

@@ -15,7 +15,7 @@ import subprocess
 import time
 import uuid
 
-from ... import private_dirs
+from ... import private_dirs, private_files
 from ...protocol import schemas
 from ..store.db import utc_now
 from . import host_conclusions
@@ -676,24 +676,11 @@ def _read_storage_json(path: Path, *, missing_ok: bool = False) -> dict | None:
 def _atomic_storage_json(path: Path, value: dict) -> None:
     _guard_storage(path)
     raw = json.dumps(value, ensure_ascii=False, allow_nan=False).encode('utf-8')
-    temporary = path.with_name(f'.{path.name}.{uuid.uuid4().hex}.tmp')
-    _guard_storage(temporary)
     try:
-        try:
-            fd = private_dirs.open_regular_fd(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-        except BoardError as error:
-            raise BoardError('STORAGE_UNSAFE', 'Storage temporary file is unsafe', path=str(temporary)) from error
-        with os.fdopen(fd, 'wb') as stream:
-            stream.write(raw)
-            stream.flush()
-            os.fsync(stream.fileno())
-        _guard_storage(path)
-        _guard_storage(temporary)
-        os.replace(temporary, path)
-        _guard_storage(path)
-    finally:
-        _guard_storage(temporary)
-        temporary.unlink(missing_ok=True)
+        private_files.publish_bytes(path, raw, validate=_guard_storage)
+    except BoardError as error:
+        raise BoardError('STORAGE_UNSAFE', 'Storage record is unsafe', path=str(path)) from error
+    _guard_storage(path)
 
 
 def _validate_pending(result: dict, planned: dict, state: Path) -> None:
@@ -909,8 +896,8 @@ def _finish_pending(result: dict, receipt: Path) -> None:
                 tree_info(original)[1:] != (pending['fingerprint'], True)):
             raise BoardError('STORAGE_CHANGED', 'Pending removal no longer matches its candidate')
         os.rename(original, tomb)
-        from ..store.backup import sync_dir
-        sync_dir(original.parent)
+        _guard_storage(original.parent)
+        private_files.sync_directory(original.parent)
         tomb_exists = True
     if tomb_exists:
         identity = tomb.lstat()
@@ -920,8 +907,8 @@ def _finish_pending(result: dict, receipt: Path) -> None:
             private_dirs.remove_tree(tomb)
         else:
             tomb.unlink()
-        from ..store.backup import sync_dir
-        sync_dir(tomb.parent)
+        _guard_storage(tomb.parent)
+        private_files.sync_directory(tomb.parent)
     result['removed'].append({k:pending[k] for k in ('id','path','bytes')})
     result['removedBytes'] += pending['bytes']
     del result['pending']
@@ -957,6 +944,4 @@ def prune_old_runtimes(store) -> dict:
 
 
 def _save_receipt(path: Path, result: dict) -> None:
-    from ..store.backup import sync_dir
     _atomic_storage_json(path, result)
-    sync_dir(path.parent)

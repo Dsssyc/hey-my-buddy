@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 from contextlib import closing
-import ctypes
 from ... import locking
 import gzip
 import hashlib
@@ -12,7 +11,6 @@ from pathlib import Path
 import shutil
 import stat
 import sqlite3
-import sys
 import tempfile
 import time
 import zlib
@@ -22,6 +20,7 @@ from ...protocol.contracts import CONTRACT_VERSION
 from ...errors import BoardError
 from ... import private_dirs
 from ...private_dirs import linked as _linked
+from ...private_files import publish_bytes, sync_directory
 
 
 def digest(path: Path) -> str:
@@ -30,49 +29,15 @@ def digest(path: Path) -> str:
 
 
 def sync_dir(path: Path) -> None:
-    """Flush POSIX directory metadata.
-
-    Python has no portable Windows directory flush. On Windows the backup
-    journal and payload files are flushed, but a power-loss guarantee for
-    directory renames is not claimed; recovery covers process interruption.
-    """
+    """Keep the installer-facing directory sync entry point."""
     _guard(path)
-    if _windows():
-        return
-    fd = os.open(path, os.O_RDONLY | getattr(os, 'O_NOFOLLOW', 0))
-    try:
-        os.fsync(fd)
-    finally:
-        os.close(fd)
-
-
-def _windows() -> bool:
-    return sys.platform == 'win32'
+    sync_directory(path)
 
 
 def _rename(source: Path, target: Path) -> None:
     _guard(source)
     _guard(target)
     os.replace(source, target)
-
-
-def exchange(left: Path, right: Path) -> None:
-    """Atomic directory exchange: after a crash current is always one whole copy."""
-    _guard(left)
-    _guard(right)
-    libc = ctypes.CDLL(None, use_errno=True)
-    if sys.platform == 'darwin':
-        fn = libc.renamex_np
-        fn.argtypes = [ctypes.c_char_p, ctypes.c_char_p, ctypes.c_uint]
-        result = fn(os.fsencode(left), os.fsencode(right), 2)  # RENAME_SWAP
-    elif sys.platform.startswith('linux'):
-        fn = libc.renameat2
-        fn.argtypes = [ctypes.c_int, ctypes.c_char_p, ctypes.c_int, ctypes.c_char_p, ctypes.c_uint]
-        result = fn(-100, os.fsencode(left), -100, os.fsencode(right), 2)  # RENAME_EXCHANGE
-    else:
-        raise BoardError('BACKUP_UNSUPPORTED', 'Atomic backup exchange is unavailable on this platform')
-    if result:
-        raise OSError(ctypes.get_errno(), 'Atomic backup exchange failed')
 
 
 #: Bound for state-relative paths carried in errors.
@@ -300,25 +265,27 @@ def _publication_journal(root: Path, *, had_current: bool) -> None:
     if journal.exists() or temporary.exists():
         raise BoardError('BACKUP_RECOVERY_REQUIRED', 'Existing publication journal must be recovered')
     raw = json.dumps({'format': 1, 'hadCurrent': had_current}).encode('utf-8')
-    with _open(temporary, 'xb') as stream:
-        stream.write(raw)
-        stream.flush()
-        os.fsync(stream.fileno())
+    publish_bytes(temporary, raw, immutable=True)
     _rename(temporary, journal)
     sync_dir(root)
 
 
 def _recover_publication(root: Path) -> None:
-    """Converge a journaled Windows publication under the backup lock."""
+    """Converge a journaled publication under the backup lock."""
     incoming, current, previous, journal, temporary = _backup_paths(root)
     if not journal.exists():
         if previous.exists():
             raise BoardError('BACKUP_RECOVERY_REQUIRED', 'Previous backup exists without a publication journal')
         temporary.unlink(missing_ok=True)  # An unpublished journal draft.
-        if _windows() and not current.exists() and incoming.exists():
+        if not current.exists() and incoming.exists():
             # A first publication can stop immediately before its journal
             # rename. A fully verified candidate is the only available copy.
-            _verify(incoming)
+            try:
+                _verify(incoming)
+            except BoardError:
+                # No complete generation has been published yet. A later
+                # create may discard this incomplete candidate and rebuild.
+                return
             _rename(incoming, current)
             sync_dir(root)
         elif current.exists() and incoming.exists():
@@ -347,7 +314,7 @@ def _recover_publication(root: Path) -> None:
         if current.exists():
             try:
                 _verify(current)
-            except Exception:
+            except BoardError:
                 # Retain both copies if the old copy cannot be proved valid.
                 _verify(previous)
                 _rename(current, incoming)
@@ -428,17 +395,9 @@ def create(state: Path, *, runtime_identity: dict | None, plugin_commit: str | N
     except BlockingIOError:
         os.close(lock)
         raise BoardError('BACKUP_BUSY', 'Another backup is in progress')
-    published = False
     try:
-        if _windows() and not journal.exists() and not current.exists() and incoming.exists():
-            try:
-                _verify(incoming)
-            except Exception:
-                # No valid backup existed yet; let this call rebuild it.
-                shutil.rmtree(incoming)
         _recover_publication(root)
-        # An unpublished POSIX candidate can be removed; Windows journaled
-        # publication has already been recovered above.
+        # An unpublished candidate can be removed after recovery.
         if incoming.exists():
             shutil.rmtree(incoming)
         incoming.mkdir(mode=0o700)
@@ -453,6 +412,8 @@ def create(state: Path, *, runtime_identity: dict | None, plugin_commit: str | N
         with _open(snapshot, 'rb') as source, _open(incoming / 'board.sqlite3.gz', 'xb') as compressed:
             with gzip.GzipFile(fileobj=compressed, mode='wb', compresslevel=6) as target:
                 shutil.copyfileobj(source, target)
+            compressed.flush()
+            os.fsync(compressed.fileno())
         snapshot.unlink()
         for name in STATE_FILES:
             path = state / name
@@ -464,46 +425,26 @@ def create(state: Path, *, runtime_identity: dict | None, plugin_commit: str | N
                     'files': files}
         manifest_path = incoming / 'manifest.json'
         raw = json.dumps(manifest, ensure_ascii=False, sort_keys=True).encode('utf-8')
-        with _open(manifest_path, 'xb') as stream:
-            stream.write(raw)
-            stream.flush()
-            os.fsync(stream.fileno())
+        publish_bytes(manifest_path, raw, immutable=True)
         verify(incoming)
-        for path in _regular_files(incoming):
-            with _open(path, 'rb') as stream:
-                os.fsync(stream.fileno())
         for directory, _, _ in os.walk(incoming, topdown=False):
             sync_dir(Path(directory))
-        if _windows():
-            _publication_journal(root, had_current=current.exists())
-            if current.exists():
-                _rename(current, previous)
-                sync_dir(root)
-            _rename(incoming, current)
+        _publication_journal(root, had_current=current.exists())
+        if current.exists():
+            _rename(current, previous)
             sync_dir(root)
-            _verify(current)
-            if previous.exists():
-                shutil.rmtree(previous)
-                sync_dir(root)
-            journal.unlink()
-            sync_dir(root)
-        elif current.exists():
-            exchange(incoming, current)
-        else:
-            os.replace(incoming, current)
-        published = True
+        _rename(incoming, current)
         sync_dir(root)
-        if incoming.exists():
-            shutil.rmtree(incoming)
+        _verify(current)
+        if previous.exists():
+            shutil.rmtree(previous)
             sync_dir(root)
+        journal.unlink()
+        sync_dir(root)
         return {'path': str(current), 'verified': True, 'schema': schema,
                 'bytes': sum(row['bytes'] for row in files.values()) + manifest_path_size(current),
                 'fileCount': len(files),
                 'durationSeconds': round(time.monotonic() - started, 3)}
-    except Exception:
-        if not published and not journal.exists() and incoming.exists() and not _linked(incoming):
-            shutil.rmtree(incoming)
-        raise
     finally:
         locking.unlock(lock)
         os.close(lock)

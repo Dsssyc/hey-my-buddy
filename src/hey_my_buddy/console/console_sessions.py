@@ -5,12 +5,12 @@ from dataclasses import dataclass, field
 import hashlib
 import hmac
 import json
-import os
 from pathlib import Path
 import secrets
 import time
 from typing import Callable
 
+from ..private_files import publish_bytes
 from ..errors import BoardError
 
 ENTRY_SECONDS = 10 * 60
@@ -62,16 +62,7 @@ class ConsoleSessions:
         if self.file is None:
             return
         rows = [{"id": s.id, "tokenHash": s.token_hash, "lastSeen": s.last_seen} for s in self.sessions.values()]
-        temporary = self.file.with_name(self.file.name + ".tmp-" + secrets.token_hex(8))
-        fd = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-        try:
-            with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as stream:
-                json.dump({"version": 1, "sessions": rows}, stream)
-                stream.flush()
-                os.fsync(stream.fileno())
-            os.replace(temporary, self.file)
-        finally:
-            temporary.unlink(missing_ok=True)
+        publish_bytes(self.file, json.dumps({"version": 1, "sessions": rows}).encode("utf-8"))
 
     def issue(self) -> str:
         self.expire()

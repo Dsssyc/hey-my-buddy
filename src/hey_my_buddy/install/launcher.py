@@ -14,7 +14,6 @@ import re
 import stat
 import sys
 import tempfile
-import uuid
 
 LAUNCH_KEYS = {'HMB_MAX_CONCURRENT': (1, 32), 'HMB_WAIT_CAPACITY': (1, 1024)}
 HOST_INTERNAL_KEYS = frozenset({
@@ -164,17 +163,8 @@ def read_private(path: Path) -> dict | None:
 
 
 def write_private(path: Path, value: dict) -> None:
-    temporary = path.with_name('.' + path.name + '.' + uuid.uuid4().hex)
-    fd = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-    try:
-        with os.fdopen(fd, 'w', encoding="utf-8", newline="\n") as stream:
-            json.dump(value, stream)
-            stream.flush();os.fsync(stream.fileno())
-        os.replace(temporary, path)
-        from hey_my_buddy.blackboard.store.backup import sync_dir
-        sync_dir(path.parent)
-    finally:
-        temporary.unlink(missing_ok=True)
+    from hey_my_buddy.private_files import publish_bytes
+    publish_bytes(path, json.dumps(value).encode("utf-8"))
 
 
 def launch_defaults(state: Path) -> dict[str, str]:

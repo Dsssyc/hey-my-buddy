@@ -10,7 +10,7 @@ sandbox or a claim that every physical file remains unchanged.
 from contextlib import ExitStack, contextmanager
 from ...paths import is_absolute_path
 from ... import locking
-from ... import private_dirs
+from ... import private_dirs, private_files
 from collections import Counter
 import hashlib
 import json
@@ -534,32 +534,14 @@ def _record(path):
 
 
 def _write_once(path, data):
-    if _WINDOWS:
-        windows_paths.write_once(path, data)
-        return
-    existing = _read(path)
-    if existing is not None:
-        if existing != data:
-            raise BoardError("WORKSPACE_CONFLICT", "An immutable workspace artifact already has different contents", path=str(path))
-        return
-    with tempfile.NamedTemporaryFile(prefix=".pending-", dir=path.parent, delete=False) as stream:
-        temporary = Path(stream.name)
-        try:
-            stream.write(data)
-            stream.flush()
-            os.fsync(stream.fileno())
-            try:
-                os.link(temporary, path)
-            except FileExistsError:
-                if _read(path) != data:
-                    raise BoardError("WORKSPACE_CONFLICT", "An immutable workspace artifact collided", path=str(path))
-            descriptor = os.open(path.parent, os.O_RDONLY | os.O_DIRECTORY)
-            try:
-                os.fsync(descriptor)
-            finally:
-                os.close(descriptor)
-        finally:
-            temporary.unlink()
+    try:
+        if _WINDOWS:
+            windows_paths.write_once(path, data)
+        else:
+            private_files.publish_bytes(path, data, immutable=True)
+    except FileExistsError as error:
+        raise BoardError("WORKSPACE_CONFLICT", "An immutable workspace artifact already has different contents",
+                         path=str(path)) from error
 
 
 @contextmanager

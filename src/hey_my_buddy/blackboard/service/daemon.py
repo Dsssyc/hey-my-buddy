@@ -22,6 +22,7 @@ from ..tasks import scheduling
 from ...console.server import Console
 from ...protocol.contracts import CONTROL_NAME, CONTRACT_VERSION, WAIT_NAME, BuddyControl, BuddyWait
 from ..store.db import SCHEMA_VERSION, utc_now
+from ...private_files import publish_bytes
 from ...errors import BoardError
 from .service import BoardService, WaitAdmission, WaitService
 from .execution_scheduler import ExecutionScheduler
@@ -33,16 +34,7 @@ DRAIN_SECONDS_DEFAULT = 10
 
 
 def atomic_json(path: Path, value: dict) -> None:
-    temporary = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")
-    try:
-        fd = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-        with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as stream:
-            json.dump(value, stream, ensure_ascii=False, allow_nan=False)
-            stream.flush()
-            os.fsync(stream.fileno())
-        os.replace(temporary, path)
-    finally:
-        temporary.unlink(missing_ok=True)
+    publish_bytes(path, json.dumps(value, ensure_ascii=False, allow_nan=False).encode("utf-8"))
 
 
 class Daemon:

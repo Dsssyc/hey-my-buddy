@@ -11,6 +11,7 @@ from pathlib import Path
 
 import c_two as cc
 
+from ..private_files import publish_bytes
 from ..errors import BoardError
 from ..json_codec import canonical_json, decode_strict_json
 from ..private_dirs import ensure_private_dir, attempt_root, open_regular_fd
@@ -27,26 +28,10 @@ RECEIPT = "result-receipt.json"
 BUDGET = "execution-budget.json"
 
 
-def fsync_json(path: Path, value: dict) -> None:
-    """Publish private JSON only after the file and its directory are durable."""
+def fsync_json(path: Path, value: dict, *, immutable: bool = False) -> None:
+    """Serialize the execution envelope unchanged and publish complete bytes."""
     path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
-    temporary = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")
-    raw = json.dumps(value, ensure_ascii=False, allow_nan=False).encode("utf-8")
-    fd = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-    try:
-        with os.fdopen(fd, "wb") as stream:
-            stream.write(raw)
-            stream.flush()
-            os.fsync(stream.fileno())
-    except BaseException:
-        temporary.unlink(missing_ok=True)
-        raise
-    os.replace(temporary, path)
-    descriptor = os.open(path.parent, os.O_RDONLY)
-    try:
-        os.fsync(descriptor)
-    finally:
-        os.close(descriptor)
+    publish_bytes(path, json.dumps(value, ensure_ascii=False, allow_nan=False).encode("utf-8"), immutable=immutable)
 
 
 def private_adapter(claim: dict) -> str:

@@ -358,7 +358,8 @@ def _materialize_locked(root: Path, target: Path, uv_bin: str | None,
                 resources=absent,
             )
         record = manifest(root)
-        (working / "manifest.json").write_text(json.dumps(record, indent=2, sort_keys=True) + "\n", encoding="utf-8", newline="\n")
+        from ..private_files import publish_bytes
+        publish_bytes(working / "manifest.json", (json.dumps(record, indent=2, sort_keys=True) + "\n").encode("utf-8"), immutable=True)
         # Publish the complete source tree under the FINAL content-addressed name
         # before any environment is created inside it.
         if target.exists():
@@ -422,7 +423,7 @@ def _materialize_locked(root: Path, target: Path, uv_bin: str | None,
             "resources": {name: str(path) for name, path in resource_paths(target).items()},
         }
         _rewrite_environment_paths(environment, target)
-        (target / READY_FILE).write_text(json.dumps(ready, indent=2, sort_keys=True) + "\n", encoding="utf-8", newline="\n")
+        publish_bytes(target / READY_FILE, (json.dumps(ready, indent=2, sort_keys=True) + "\n").encode("utf-8"), immutable=True)
         result = {"runtime": read_ready(target), "installed": True, "runtimeDir": str(target)}
         return result
     finally:

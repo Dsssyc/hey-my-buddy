@@ -31,9 +31,8 @@ OWNER_LOCK_TIMEOUT_SECONDS = 15
 
 
 def write_journal(path: Path, value: dict) -> None:
-    from ..blackboard.service.daemon import atomic_json
-    atomic_json(path, value)
-    backup.sync_dir(path.parent)
+    from ..private_files import publish_bytes
+    publish_bytes(path, json.dumps(value, ensure_ascii=False, allow_nan=False).encode("utf-8"))
 
 
 def clear_journal(path: Path) -> None:

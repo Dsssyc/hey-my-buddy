@@ -14,8 +14,8 @@ import ntpath
 import os
 from pathlib import Path
 import struct
-import uuid
 
+from ... import private_files
 from ...paths import is_absolute_path
 from ...errors import BoardError
 
@@ -349,23 +349,42 @@ def lock_fd(path, *, create=True, api=None):
             raise
 
 
-def write_once(path, data, *, api=None):
-    """Publish a flushed private file by compare-and-create hard link."""
-    with parent(path, api=api) as (api, path):
-        existing = read(path, api=api)
-        if existing is not None:
-            if existing != data:
-                raise BoardError("WORKSPACE_CONFLICT", "An immutable workspace artifact already has different contents", path=str(path))
-            return
-        temporary = path.with_name(".pending-" + uuid.uuid4().hex)
+class _WorkspacePublishOperations:
+    """Use the workspace's held Windows handles for shared byte publication."""
+
+    def __init__(self, api):
+        self.api = api
+
+    def open(self, path):
+        handle, _ = _open_checked(self.api, path, action="create")
         try:
-            write_new(temporary, data, api=api, sync=True)
-            try:
-                api.link(temporary, path)
-            except FileExistsError:
-                if read(path, api=api) != data:
-                    raise BoardError("WORKSPACE_CONFLICT", "An immutable workspace artifact collided", path=str(path))
-            from ..store.backup import sync_dir
-            sync_dir(path.parent)
-        finally:
-            remove(temporary, missing_ok=True, api=api)
+            return self.api.fd(handle, os.O_WRONLY)
+        except BaseException:
+            self.api.close(handle)
+            raise
+
+    def read(self, path):
+        contents = read(path, api=self.api)
+        if contents is None:
+            raise FileNotFoundError(path)
+        return contents
+
+    def link(self, source, target):
+        self.api.link(source, target)
+
+    def replace(self, source, target):
+        os.replace(source, target)
+
+    def unlink(self, path):
+        remove(path, missing_ok=True, api=self.api)
+
+
+def write_once(path, data, *, api=None):
+    """Publish an immutable artifact under the held Windows workspace parent."""
+    with parent(path, api=api) as (api, path):
+        try:
+            private_files.publish_bytes(path, data, immutable=True,
+                                        operations=_WorkspacePublishOperations(api))
+        except FileExistsError as error:
+            raise BoardError("WORKSPACE_CONFLICT", "An immutable workspace artifact already has different contents",
+                             path=str(path)) from error

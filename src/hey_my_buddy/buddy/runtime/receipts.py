@@ -19,7 +19,7 @@ def receipt_directory(state: Path, private_adapter: str, task_id: str, attempt_i
 
 
 def write_receipt(directory: Path, receipt: dict) -> None:
-    fsync_json(directory / RECEIPT, receipt)
+    fsync_json(directory / RECEIPT, receipt, immutable=True)
 
 
 def deliver_receipt(client, receipt: dict, directory: Path, *, nonce: str, log=lambda message: None,
@@ -53,6 +53,6 @@ def deliver_receipt(client, receipt: dict, directory: Path, *, nonce: str, log=l
             accepted = True
         # The acknowledgement is durable before removing the pending receipt.
         # A crash before it is written replays the same attempt result.
-        fsync_json(directory / DELIVERY, {"attemptId": receipt["attemptId"], "accepted": accepted})
+        fsync_json(directory / DELIVERY, {"attemptId": receipt["attemptId"], "accepted": accepted}, immutable=True)
         (directory / RECEIPT).unlink(missing_ok=True)
         return accepted
