@@ -364,13 +364,15 @@ class UpgradeTests(BoardTestCase):
 
     def test_upgrade_refuses_another_schema_without_conversion(self):
         board=self.board()
-        with board.store.db.write() as connection:
-            connection.execute("UPDATE meta SET value='999' WHERE key='schema_version'")
-        with self.assertRaises(BoardError) as caught:
-            upgrade.idle_snapshot(board.directory)
-        self.assertEqual(caught.exception.code, 'UNSUPPORTED_SCHEMA')
-        with board.store.db.read() as connection:
-            self.assertEqual(connection.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone()[0],'999')
+        for version in ('19', '999'):
+            with self.subTest(schema=version):
+                with board.store.db.write() as connection:
+                    connection.execute("UPDATE meta SET value=? WHERE key='schema_version'", (version,))
+                with self.assertRaises(BoardError) as caught:
+                    upgrade.idle_snapshot(board.directory)
+                self.assertEqual(caught.exception.code, 'UNSUPPORTED_SCHEMA')
+                with board.store.db.read() as connection:
+                    self.assertEqual(connection.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone()[0], version)
 
     def test_retained_event_prefix_detects_rewrites_but_allows_new_events(self):
         board=self.board()

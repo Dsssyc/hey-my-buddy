@@ -4,7 +4,6 @@ from unittest import mock
 from support import BoardTestCase
 from blackboard.store.upgrade_fixture import load_fixture
 from hey_my_buddy.blackboard.store.db import Database, SCHEMA_VERSION
-from hey_my_buddy.blackboard.store import upgrade as board_upgrade
 from hey_my_buddy.blackboard.routing import router
 from hey_my_buddy.buddy.harnesses.codex.adapter import CodexAdapter
 from hey_my_buddy.protocol.transport import _read_endpoint, _request
@@ -14,7 +13,6 @@ class UpgradeServiceTests(BoardTestCase):
     def test_private_service_reads_settings_and_preserved_work(self):
         state = self.directory
         fixture = load_fixture(state)
-        board_upgrade.migrate(state)
         Database(state).initialize()
         with mock.patch.object(CodexAdapter, "local_read_only_check", return_value={
             "eligible": True, "reasonCode": None, "reason": None,
