@@ -490,6 +490,46 @@ class SessionFixtureTest(unittest.TestCase):
         self.assertEqual(2400, output.count("完整快照输出行。"))
         self.assertTrue(output.endswith("FULL_OUTPUT_END"))
 
+    def test_session_result_shapes_cover_duplicate_bodies_and_missing_values(self) -> None:
+        preview = self.preview
+
+        def updates(pair):
+            return [event["update"] for event in preview.session_events(pair)]
+
+        codex = updates(preview.SESSION_LONG)
+        command = next(update for update in codex if update.get("toolCallId") == "codex-setup-00"
+                       and update["sessionUpdate"] == "tool_call_update")
+        self.assertEqual(command["rawOutput"]["aggregatedOutput"], command["content"][0]["content"]["text"])
+        no_output = next(update for update in codex if update.get("toolCallId") == "codex-no-output-command"
+                         and update["sessionUpdate"] == "tool_call_update")
+        self.assertNotIn("content", no_output)
+        self.assertEqual({"aggregatedOutput": None, "exitCode": 0, "durationMs": 17, "output": None},
+                         no_output["rawOutput"])
+        edit = next(update for update in codex if update.get("toolCallId") == "codex-edit-fixture"
+                    and update["sessionUpdate"] == "tool_call_update")
+        self.assertEqual(edit["rawOutput"]["changes"][0]["diff"], edit["content"][0]["content"]["text"])
+        markers = [update for update in codex if update.get("_meta", {}).get("nativeType")
+                   in {"subAgentActivity", "contextCompaction"}]
+        self.assertEqual(["subAgentActivity", "subAgentActivity", "contextCompaction"],
+                         [marker["_meta"]["nativeType"] for marker in markers])
+        self.assertTrue(all(marker["content"]["text"] == f'[{marker["_meta"]["nativeType"]}]'
+                            for marker in markers))
+
+        claude = updates(preview.SESSION_CLAUDE)
+        read = next(update for update in claude if update.get("toolCallId") == "claude-read-guide"
+                    and update["sessionUpdate"] == "tool_call_update")
+        self.assertEqual(read["rawOutput"], read["content"][0]["content"]["text"])
+        zcode = updates(preview.SESSION_ZCODE)
+        read = next(update for update in zcode if update.get("toolCallId") == "zcode-read"
+                    and update["sessionUpdate"] == "tool_call_update")
+        self.assertEqual(read["rawOutput"]["content"], read["content"][0]["content"]["text"])
+        self.assertEqual((True, False, 1),
+                         (read["rawOutput"]["success"], read["rawOutput"]["truncated"],
+                          read["rawOutput"]["lineCount"]))
+        running = updates(preview.SESSION_RUNNING)
+        self.assertTrue(any(update.get("toolCallId") == "claude-running-pending"
+                            and update.get("status") == "in_progress" for update in running))
+
 
 class PreviewDeletionTest(unittest.TestCase):
     """Exercise only the loopback synthetic server; it never imports product operations."""

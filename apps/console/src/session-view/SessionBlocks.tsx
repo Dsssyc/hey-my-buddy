@@ -7,18 +7,22 @@ import { Trace, TraceCollapsible, TraceCollapsibleContent, TraceCollapsibleTrigg
 import { CodeBlockCopyButton } from "../components/ui/code-block";
 import { Hint } from "../components/hint";
 import { MessageResponse } from "./Markdown";
-import { ToolRow, Output, kindIcon } from "./ToolRow";
+import { ToolRow, Output, kindIcon, CallStatus } from "./ToolRow";
 import { Answer } from "./Answer";
-import { markerBody, taskExcerpt } from "./rows";
+import { markerBody, markerName, taskExcerpt, groupStatus } from "./rows";
 import type { SessionRow, CallGroup, ToolKind } from "./rows";
 
 export type Expansion = { expanded: Set<string>; toggle: (key: string, open: boolean) => void };
 export function CallSummary({ group }: { group: CallGroup }) {
   const { t } = useTranslation("taskDetail");
   const counts = Object.entries(group.counts).map(([kind, count]) => t(`sessionView.counts.${kind as ToolKind}`, { count }));
-  const markers = group.items.filter(item => item.type === "message").length;
-  if (markers) counts.push(t("sessionView.counts.marker", { count: markers }));
-  return <><span className="min-w-0 flex-1 text-left wrap-anywhere">{counts.join(t("sessionView.groupSeparator"))}</span>{group.failed > 0 && <span className="shrink-0 text-fail">{t("sessionView.failures", { count: group.failed })}</span>}</>;
+  const markers = new Map<string | undefined, number>();
+  for (const item of group.items) if (item.type === "message") {
+    const type = item.update._meta?.nativeType;
+    markers.set(type, (markers.get(type) ?? 0) + 1);
+  }
+  for (const [type, count] of markers) counts.push(t("sessionView.markerCount", { name: markerName(type, t), count }));
+  return <><span className="min-w-0 flex-1 text-left wrap-anywhere">{counts.join(t("sessionView.groupSeparator"))}</span>{group.failed > 0 && <span className="shrink-0 text-fail">{t("sessionView.failures", { count: group.failed })}</span>}<CallStatus status={groupStatus(group)}/></>;
 }
 export function SessionBlocks({ rows, expansion, taskText, checkoutRoot, routingMode }: { rows: SessionRow[]; expansion: Expansion; taskText: string; checkoutRoot: string; routingMode?: "fast" | "review" | null }) {
   const { t } = useTranslation("taskDetail");
@@ -33,7 +37,7 @@ export function SessionBlocks({ rows, expansion, taskText, checkoutRoot, routing
           <span className="flex shrink-0 gap-1" aria-hidden>{Object.keys(row.counts).map(kind => { const Icon = kindIcon(kind as ToolKind); return <Icon key={kind} size={13}/>; })}</span>
           <CallSummary group={row}/>
         </TraceCollapsibleTrigger>
-        <TraceCollapsibleContent className="mt-0 mb-0 ml-1.5 pl-4 pr-0"><div data-slot="session-call-group">{row.items.map(item => item.type === "tool" ? <ToolRow key={item.key} block={item} expansion={expansion} checkoutRoot={checkoutRoot}/> : <Marker key={item.key} className="py-1 text-xs"><MarkerContent>{item.update.content.text || item.update._meta?.nativeType}</MarkerContent></Marker>)}</div></TraceCollapsibleContent>
+        <TraceCollapsibleContent className="mt-0 mb-0 ml-1.5 pl-4 pr-0"><div data-slot="session-call-group">{row.items.map(item => item.type === "tool" ? <ToolRow key={item.key} block={item} expansion={expansion} checkoutRoot={checkoutRoot}/> : <Marker key={item.key} className="py-1 text-xs text-ink3"><MarkerContent>{markerName(item.update._meta?.nativeType, t)}</MarkerContent></Marker>)}</div></TraceCollapsibleContent>
       </TraceCollapsible></Trace>;
       else if (row.type === "tool") body = <Trace><ToolRow block={row.tool} markers={row.markers} expansion={expansion} checkoutRoot={checkoutRoot}/></Trace>;
       else if (row.type === "blackboard") body = <div className="-my-3"><TraceCollapsible open={open} onOpenChange={next => expansion.toggle(key, next)}>
@@ -54,7 +58,7 @@ export function SessionBlocks({ rows, expansion, taskText, checkoutRoot, routing
           </div>;
         } else if (row.type === "reasoning") body = <Trace><TraceCollapsible open={open} onOpenChange={next => expansion.toggle(key, next)}><TraceCollapsibleTrigger data-session-focus={key} className="text-xs"><TraceLine><TraceIcon><Brain size={13}/></TraceIcon>{t("sessionView.reasoning")}</TraceLine></TraceCollapsibleTrigger><TraceCollapsibleContent className="text-sm"><MessageResponse>{text}</MessageResponse></TraceCollapsibleContent></TraceCollapsible></Trace>;
         else if (row.type === "marker") body = <Trace><TraceCollapsible open={open} onOpenChange={next => expansion.toggle(key, next)}>
-          <TraceCollapsibleTrigger data-session-focus={key} className="min-h-[30px] text-xs"><ChevronRight size={13} aria-hidden className={open ? "rotate-90" : undefined}/>{row.message.update._meta?.nativeType === "turn/diff/updated" ? t("sessionView.turnChanges") : t("sessionView.nativeMarker", { type: row.message.update._meta?.nativeType ?? t("unknown") })}</TraceCollapsibleTrigger>
+          <TraceCollapsibleTrigger data-session-focus={key} className="min-h-[30px] text-xs"><ChevronRight size={13} aria-hidden className={open ? "rotate-90" : undefined}/>{markerName(row.message.update._meta?.nativeType, t)}</TraceCollapsibleTrigger>
           <TraceCollapsibleContent className="ml-0 border-0 pl-0"><Output text={markerBody(row.message)} id={`${key}:body`} expansion={expansion} language={row.message.update._meta?.nativeType === "turn/diff/updated" ? "diff" : "text"}/></TraceCollapsibleContent>
         </TraceCollapsible></Trace>;
         else body = <div className="group/message relative max-w-[700px] min-w-0">

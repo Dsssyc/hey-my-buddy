@@ -1,5 +1,6 @@
 import { expect, type Page } from "@playwright/test";
 import { mkdirSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import { open, test, expectNoSidewaysScroll, screenshots } from "./preview";
 
 const A = "macro-11111111-1111-4111-8111-111111111111";
@@ -7,6 +8,7 @@ const B = "macro-22222222-2222-4222-8222-222222222222";
 const step = (run: string, number: number, macro = A) => `#tasks/${macro}/${run}/${number}`;
 const session = (run: string, number: number, macro = A) => `${step(run, number, macro)}?tab=session`;
 const long = session("preview-run-a1", 7);
+const correctionShots = fileURLToPath(new URL("../../../tmp", import.meta.url));
 type Language = "en" | "zh";
 
 const panel = (page: Page) => page.locator('[data-slot="session-view"]');
@@ -75,10 +77,11 @@ test.describe("session content and navigation", () => {
 
     await expect(row(page, "calls").first()).toContainText(/Ran \d+ commands/);
     await expect(row(page, "marker").filter({ hasText: "Changes in this turn" })).toHaveCount(1);
+    await panel(page).locator('[data-session-focus="calls:tool:codex-no-output-command"]').click();
     const failed = await expandTool(page, "codex-failed-command");
     await expect(failed.locator('[data-slot="trace-collapsible-trigger"]')).toContainText("synthetic-preview-missing --verify");
     await expect(failed).toContainText("command not found");
-    await expect(failed).toContainText("127");
+    await expect(failed.locator('[data-slot="session-result"]')).toHaveCount(0);
     await expect(failed.locator('[aria-label="Failed"]')).toBeAttached();
 
     const task = row(page, "task");
@@ -88,6 +91,39 @@ test.describe("session content and navigation", () => {
     await prompt.click();
     await expect(prompt).toHaveAttribute("aria-expanded", "true");
     await expect(task.locator('[data-slot="session-output"]')).toContainText("请检查合成预览的会话分页和完整工具输出。");
+  });
+
+  test("shows one output for duplicate Codex results and only non-null fields without a body", async ({ page }) => {
+    await openSession(page, long);
+    await loadEarlier(page);
+    const completed = row(page, "calls").filter({ has: page.locator('[data-session-focus="calls:tool:codex-setup-00"]') });
+    await expect(completed.locator('[data-slot="session-call-status"]')).toHaveAttribute("data-status", "completed");
+    await completed.locator('[data-slot="trace-collapsible-trigger"]').first().click();
+    const command = await expandTool(page, "codex-setup-00");
+    await expect(command.locator('[data-slot="session-output"]')).toHaveCount(1);
+    await expect(command.locator('[data-slot="session-result"]')).toHaveCount(0);
+    await expect(command.locator('[data-slot="session-output"]')).toContainText("fixture-0: checked");
+
+    const mixed = row(page, "calls").filter({ has: page.locator('[data-session-focus="calls:tool:codex-no-output-command"]') });
+    await expect(mixed.locator('[data-slot="session-call-status"]')).toHaveAttribute("data-status", "failed");
+    await mixed.locator('[data-slot="trace-collapsible-trigger"]').first().click();
+    const noOutput = await expandTool(page, "codex-no-output-command");
+    await expect(noOutput).toContainText("printf first");
+    await expect(noOutput).toContainText("printf second");
+    await expect(noOutput).not.toContainText("bash -lc");
+    await expect(noOutput.locator('[data-slot="session-output"]')).toHaveCount(0);
+    await expect(noOutput.locator('[data-slot="session-result"] dt')).toHaveText(["exitCode", "durationMs"]);
+    await expect(noOutput.locator('[data-slot="session-result"] dd')).toHaveText(["0", "17"]);
+    const edit = await expandTool(page, "codex-edit-fixture");
+    await expect(edit.locator('[data-slot="session-output"]')).toHaveCount(1);
+    await expect(edit.locator('[data-slot="session-result"]')).toHaveCount(0);
+    await expect(edit.locator('[data-slot="session-output"]')).toContainText("+new");
+  });
+
+  test("shows active status on a running call group", async ({ page }) => {
+    await openSession(page, session("preview-run-a3", 3));
+    const group = row(page, "calls").filter({ has: page.locator('[data-session-focus="calls:tool:claude-running-read"]') });
+    await expect(group.locator('[data-slot="session-call-status"]')).toHaveAttribute("data-status", "in_progress");
   });
 
   test("clamps a short page to the available scroll end when earlier content arrives", async ({ page }) => {
@@ -337,10 +373,16 @@ test.describe("four harness preview records", () => {
     const read = await expandTool(page, "claude-read-guide");
     await expect(read).toContainText("file_path");
     await expect(read).toContainText("docs/reference/path-guide.md");
+    await expect(read.locator('[data-slot="session-output"]')).toHaveCount(1);
+    await expect(read.locator('[data-slot="session-result"]')).toHaveCount(0);
+    await expect(read.locator('[data-slot="session-output"]')).toContainText("文档中的相对路径示例。");
     const search = await expandTool(page, "claude-search-path");
     await expect(search).toContainText("pattern");
     await expect(search).toContainText("synthetic/path");
     await expect(search).toContainText("docs/**/*.md");
+    await expect(search.locator('[data-slot="trace-collapsible-trigger"]')).toContainText('“synthetic/path” docs/**/*.md');
+    await expect(search.locator('[data-slot="session-output"]')).toHaveCount(1);
+    await expect(search.locator('[data-slot="session-result"]')).toHaveCount(0);
     const note = row(page, "note");
     await expect(note).toContainText("路径示例与说明一致，准备提交结构化核对结果。");
     await expect(note).not.toContainText("Answer");
@@ -362,6 +404,8 @@ test.describe("four harness preview records", () => {
     await expect(read).toContainText("synthetic/path-guide.txt");
     await expect(read).toContainText("path");
     await expect(read).toContainText("路径示例已读取。");
+    await expect(read.locator('[data-slot="session-output"]')).toHaveCount(1);
+    await expect(read.locator('[data-slot="session-result"]')).toHaveCount(0);
     await expect(row(page, "blackboard")).toHaveCount(2);
     await expect(row(page, "blackboard").first()).toContainText("Check Host questions");
     await expect(row(page, "blackboard").last()).toContainText("Return result");
@@ -374,7 +418,8 @@ test.describe("four harness preview records", () => {
     await openSession(page, session("preview-run-b1", 2, B));
     const read = await expandTool(page, "zcode-old-read");
     await expect(read).toContainText("旧记录没有保留工具输入。");
-    await expect(read.locator("dt")).toHaveCount(0);
+    await expect(read.locator('[data-slot="session-input"]')).toHaveCount(0);
+    await expect(read.locator('[data-slot="session-result"] dt')).toHaveText(["content"]);
     await expect(row(page, "blackboard")).toHaveCount(0);
   });
 
@@ -414,6 +459,57 @@ test.describe("four harness preview records", () => {
     await expect(row(page, "answer")).toContainText("合成证据不足，请 Host 选择。");
   });
 });
+
+for (const language of ["en", "zh"] as const) for (const theme of ["dark", "light"] as const) {
+  test.describe(`named session markers ${language} ${theme}`, () => {
+    test.use({ locale: language === "zh" ? "zh-CN" : "en-US", viewport: { width: 1440, height: 900 }, reducedMotion: "reduce", colorScheme: theme });
+    test("counts each type and names it inside the group", async ({ page }) => {
+      await page.addInitScript(value => localStorage.setItem("hey-my-buddy.console.theme", value), theme);
+      await openSession(page, long);
+      await loadEarlier(page, language);
+      const completed = panel(page).locator('[data-session-focus="calls:tool:codex-setup-00"] [data-slot="session-call-status"]');
+      await expect(completed.locator(".lucide-check")).toHaveCount(1);
+      const group = row(page, "calls").filter({ has: page.locator('[data-session-focus="calls:tool:codex-no-output-command"]') });
+      const summary = group.locator('[data-slot="trace-collapsible-trigger"]').first();
+      const text = await summary.innerText();
+      if (language === "zh") {
+        expect(text).toContain("子代理活动 2 次");
+        expect(text).toContain("上下文压缩 1 次");
+      } else {
+        expect(text).toMatch(/sub.?agent activity.*2/i);
+        expect(text).toMatch(/context compaction.*1/i);
+      }
+      await expect(group.locator('[data-slot="session-call-status"]')).toHaveAttribute("data-status", "failed");
+      await expect(summary.locator(".lucide-x")).toHaveCount(1);
+      await summary.click();
+      const names = await group.locator('[data-slot="session-call-group"]').innerText();
+      if (language === "zh") {
+        expect(names.match(/子代理活动/g)).toHaveLength(2);
+        expect(names.match(/上下文压缩/g)).toHaveLength(1);
+      } else {
+        expect(names.match(/sub.?agent activity/gi)).toHaveLength(2);
+        expect(names.match(/context compaction/gi)).toHaveLength(1);
+      }
+      await expectNoSidewaysScroll(page);
+      if (language === "en") {
+        await expandTool(page, "codex-no-output-command");
+        await expandTool(page, "codex-edit-fixture");
+        await group.scrollIntoViewIfNeeded();
+        mkdirSync(correctionShots, { recursive: true });
+        await page.screenshot({ path: `${correctionShots}/session-view-corrections-${theme}.png`, fullPage: true });
+      }
+      await page.evaluate(hash => { location.hash = hash; }, session("preview-run-b10", 2, B));
+      await panel(page).locator('[data-session-focus="calls:tool:claude-read-guide"]').click();
+      await expect(tool(page, "claude-search-path").locator('[data-slot="trace-collapsible-trigger"]'))
+        .toContainText("“synthetic/path” docs/**/*.md");
+      await page.emulateMedia({ reducedMotion: "no-preference" });
+      await page.evaluate(hash => { location.hash = hash; }, session("preview-run-a3", 3));
+      const running = panel(page).locator('[data-session-focus="calls:tool:claude-running-read"] [data-slot="session-call-status"]');
+      await expect(running).toHaveAttribute("data-status", "in_progress");
+      await expect(running.locator(".lucide-loader-circle")).toHaveCSS("animation-name", "spin");
+    });
+  });
+}
 
 for (const language of ["en", "zh"] as const) test.describe(`structured answers on a narrow light screen: ${language}`, () => {
   test.use({ locale: language === "zh" ? "zh-CN" : "en-US", viewport: { width: 390, height: 844 }, reducedMotion: "reduce", colorScheme: "light" });
