@@ -202,21 +202,22 @@ class _BaseResource:
 
     def _waiting_for_host(self, params: dict) -> dict:
         """Count the default Host history filters after the operation has finished."""
+        host_id = params.get('hostId')
+        run_id = params.get('runId') or params.get('taskId')
+        request_id = params.get('requestId')
+        if not (host_id or run_id or request_id):
+            return {}
         with self.store.db.read() as connection:
-            host_id = params.get('hostId')
             if not host_id:
-                run_id = params.get('runId') or params.get('taskId')
                 if run_id:
                     row = connection.execute(
                         'SELECT host_id FROM workflow_runs WHERE run_id=?', (run_id,),
                     ).fetchone()
-                elif params.get('requestId'):
+                else:
                     row = connection.execute(
                         'SELECT r.host_id FROM workflow_runs r JOIN tasks t ON t.task_id=r.run_id '
-                        'WHERE t.request_id=?', (params['requestId'],),
+                        'WHERE t.request_id=?', (request_id,),
                     ).fetchone()
-                else:
-                    return {}
                 if row is None:
                     return {}
                 host_id = row['host_id']
