@@ -33,6 +33,7 @@ import uuid
 from pathlib import Path
 from typing import Any
 
+from ...paths import is_absolute_path
 from ...protocol import schemas
 from ...protocol.reasons import reason as make_reason, reason_from_json
 from ...protocol.stop import WRAP_UP_INITIATORS
@@ -3923,7 +3924,7 @@ class WorkflowCoordinator:
             target = schemas.require_object(params.get("target"), "target")
             schemas.reject_unknown(target, {"path", "ref", "repositoryId", "checkoutId"}, "integration target")
             target_path = schemas.required_string(target, "path", max_length=4096)
-            if not target_path.startswith("/"):
+            if not is_absolute_path(target_path):
                 raise BoardError("INVALID_ARGUMENT", "target.path must be an absolute checkout path")
             schemas.required_string(target, "ref", max_length=512)
         normalized_target = ({key: target.get(key) for key in ("path", "ref", "repositoryId", "checkoutId")}

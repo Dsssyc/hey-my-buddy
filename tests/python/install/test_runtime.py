@@ -9,12 +9,13 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import ntpath
 import select
 import subprocess
 import sys
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
-from pathlib import Path
+from pathlib import Path, PurePosixPath, PureWindowsPath
 import tempfile
 from types import SimpleNamespace
 from threading import Event
@@ -31,6 +32,39 @@ class RuntimeInterpreterTests(unittest.TestCase):
         with patch.object(runtime, 'os', SimpleNamespace(name='nt')):
             self.assertEqual(str(runtime.runtime_python(directory)).replace('\\', '/'), '/private/runtime/venv/Scripts/python.exe')
         self.assertEqual(runtime.runtime_python(directory), directory / 'venv/bin/python')
+
+
+class LexicalWindowsPath(PureWindowsPath):
+    def resolve(self):
+        raise OSError("no Windows filesystem in this lexical fixture")
+
+
+class RuntimePathTests(unittest.TestCase):
+    def test_windows_lexical_interpreter_containment(self):
+        with patch.object(runtime, "Path", LexicalWindowsPath), patch.object(
+            runtime, "os", SimpleNamespace(path=ntpath)
+        ):
+            for root, child in ((r"D:\runtime", "d:/RUNTIME/venv/Scripts/python.exe"),
+                                (r"\\server\share\runtime", "//SERVER/share/runtime/venv/Scripts/python.exe")):
+                with self.subTest(root=root):
+                    self.assertTrue(runtime._inside(LexicalWindowsPath(root), child, allow_lexical=True))
+                    self.assertFalse(runtime._inside(LexicalWindowsPath(root), child))
+            for child in (r"D:\runtime-other\python.exe", r"E:\runtime\python.exe"):
+                self.assertFalse(runtime._inside(LexicalWindowsPath(r"D:\runtime"), child, allow_lexical=True))
+
+    def test_plugin_cache_comparison_uses_native_components(self):
+        for flavor, cached, unrelated in (
+            (PureWindowsPath, (r"D:\plugins\cache\package\file", "D:/Plugins/Cache/package/file",
+                               r"\\server\share\plugins\cache\package"),
+             (r"D:\plugins\cache-other\file", r"D:\other-plugins\cache\file")),
+            (PurePosixPath, ("/plugins/cache/package/file", "/work/plugins/cache/package"),
+             ("/plugins/cache-other/file", "/Plugins/Cache/package")),
+        ):
+            with self.subTest(platform=flavor.__name__), patch.object(runtime, "Path", flavor):
+                for value in cached:
+                    self.assertTrue(runtime._in_plugin_cache(value), value)
+                for value in unrelated:
+                    self.assertFalse(runtime._in_plugin_cache(value), value)
 
 REAL_ROOT = Path(__file__).resolve().parents[3]
 
@@ -91,7 +125,7 @@ def fake_uv(directory: Path, *, gate: Path | None = None) -> Path:
     script.write_text(
         f"#!{sys.executable}\n"
         "import os\n"
-        "from pathlib import Path\n"
+        "from pathlib import Path, PurePosixPath, PureWindowsPath\n"
         "base = Path(__file__).parent\n"
         "with (base / 'invocations').open('a') as stream:\n"
         "    stream.write('sync\\n')\n"

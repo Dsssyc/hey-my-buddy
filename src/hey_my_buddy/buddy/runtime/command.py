@@ -9,6 +9,7 @@ import subprocess
 import time
 from pathlib import Path
 
+from ...paths import is_absolute_path
 from ...errors import BoardError
 from ...protocol.capabilities import adapter_capabilities
 from ..harnesses.base import Adapter, AdapterOutcome, ExecutionContext, ProcessHandle, open_logs
@@ -26,7 +27,7 @@ class CommandAdapter(Adapter):
         if not argv:
             raise BoardError("INVALID_ARGUMENT", "the command adapter requires an explicit argv")
         executable = argv[0]
-        resolved = shutil.which(executable) if not os.path.isabs(executable) else executable
+        resolved = shutil.which(executable) if not is_absolute_path(executable) else executable
         if resolved is None or not Path(resolved).exists():
             raise BoardError(
                 "ADAPTER_UNAVAILABLE",

@@ -14,6 +14,7 @@ import uuid
 from pathlib import Path
 from typing import Any, Callable, Iterable
 
+from ...paths import is_absolute_path
 from ...protocol import activity as activity_module
 from ..tasks import micro_task
 from ..tasks import scheduling
@@ -69,11 +70,8 @@ UNKNOWN_QUEUE_REASON = "execution-connection-unknown"
 
 def _overlaps(left: str, right: str) -> bool:
     """True when one canonical path is the other or lives inside it."""
-    if left == right:
-        return True
-    left_prefix = left.rstrip("/") + "/"
-    right_prefix = right.rstrip("/") + "/"
-    return left.startswith(right_prefix) or right.startswith(left_prefix)
+    left_path, right_path = Path(left), Path(right)
+    return left_path.is_relative_to(right_path) or right_path.is_relative_to(left_path)
 
 
 def _public_result_payload(payload: dict) -> dict:
@@ -1848,7 +1846,7 @@ class BoardStore:
                 raise BoardError("INVALID_ARGUMENT", f"artifacts[{index}].sizeBytes must be a nonnegative integer")
             kind = schemas.optional_string(entry, "kind") or "file"
             path = Path(location)
-            if not path.is_absolute():
+            if not is_absolute_path(path):
                 raise BoardError(
                     "INVALID_ARGUMENT", f"artifacts[{index}].location must be an absolute path", location=location
                 )

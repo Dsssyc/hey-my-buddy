@@ -13,13 +13,14 @@ import hashlib
 import json
 import tempfile
 import unittest
-from pathlib import Path
+from pathlib import Path, PurePosixPath, PureWindowsPath
 from unittest import mock
 
 from pydantic import ValidationError
 
 from hey_my_buddy.buddy.harnesses import run_contract as rc
 from hey_my_buddy.errors import BoardError
+from hey_my_buddy import paths as local_paths
 
 FIXTURES = Path(__file__).parent / "fixtures" / "run_contract"
 PAYLOADS = {"codex": json.loads((FIXTURES / "codex-payloads.json").read_text())}
@@ -90,13 +91,13 @@ def full_result() -> rc.RunResult:
         continuation=rc.ContinuationFacts(resumable=None),
         stop_evidence=rc.StopEvidence(native=rc.StopLayer(group_state="gone"),
                                       interrupt=rc.InterruptEvidence(requested=False)),
-        evidence_refs=(rc.EvidenceRef(kind="runner-stdout", location=str(Path("/tmp") / "runner.log"),
+        evidence_refs=(rc.EvidenceRef(kind="runner-stdout", location=str(Path(tempfile.gettempdir()).resolve() / "runner.log"),
                                       size_bytes=120, sha256="c" * 64),))
 
 
 class NativeEvidenceContractTests(unittest.TestCase):
     def test_blank_buddy_and_previous_session_are_refused_at_the_boundary(self):
-        request = full_request(Path("/private/tmp")).to_payload()
+        request = full_request(Path(tempfile.gettempdir()).resolve()).to_payload()
         for blank in (" ", "\t\n", "\u3000"):
             for field in ("provider", "model", "effort"):
                 with self.subTest(field=field, blank=blank):
@@ -155,7 +156,7 @@ class NativeEvidenceContractTests(unittest.TestCase):
 
 class CodecRoundtripTests(unittest.TestCase):
     def test_run_request_carries_one_permission_level(self):
-        request = edited(full_request(Path("/private/tmp")), permission="write")
+        request = edited(full_request(Path(tempfile.gettempdir()).resolve()), permission="write")
         self.assertEqual(rc.RunRequest.from_payload(request.to_payload()).permission, "write")
         self.assertNotIn("workerPermission", request.to_payload())
         self.assertNotIn("toolScope", request.to_payload())
@@ -165,7 +166,7 @@ class CodecRoundtripTests(unittest.TestCase):
     def test_codex_full_worker_selects_the_worker_carrier(self):
         from hey_my_buddy.buddy.harnesses.codex import native_run as codex
         from hey_my_buddy.buddy.harnesses.registry import require_permission
-        request = edited(full_request(Path("/private/tmp")), harness="codex",
+        request = edited(full_request(Path(tempfile.gettempdir()).resolve()), harness="codex",
                          permission="full")
         require_permission({"harness": "codex"}, "full")
         with mock.patch.object(codex, "_run", return_value=object()) as native:
@@ -197,7 +198,7 @@ class CodecRoundtripTests(unittest.TestCase):
                 rc.RunContinuation.from_payload(fields | {"checkpoint": partial})
 
     def test_removed_native_restrictions_are_rejected_on_the_wire(self):
-        request = full_request(Path("/private/tmp"))
+        request = full_request(Path(tempfile.gettempdir()).resolve())
         for fields in ({"networkAllowedDomains": []}, {"additionalDeniedTools": ["mcp__*"]},
                        {"toolScope": "read"}, {"workerPermission": {"level": "read"}}):
             with self.subTest(fields=fields), self.assertRaises(BoardError):
@@ -306,7 +307,7 @@ class CodecRoundtripTests(unittest.TestCase):
             del node[leaf]
             return payload
 
-        request = full_request(Path("/tmp")).to_payload()
+        request = full_request(Path(tempfile.gettempdir()).resolve()).to_payload()
         # Ordinary default semantics since the step 2-B simplification: a
         # default-valued field may be omitted, a required field may not.
         for path in ("identity.turnId", "identity.inputSha256", "sessionServices.0.toolNames",
@@ -370,13 +371,29 @@ class CodecRoundtripTests(unittest.TestCase):
         with self.assertRaises(BoardError):
             rc.RunResult.from_payload(payload)
 
-    def test_windows_absolute_paths_and_32bit_exit_codes_are_existing_values(self):
-        paths = rc.PrivateStatePaths(invocation_root="C:\\private\\inv", native_root="C:/private/native")
-        self.assertEqual(paths.invocation_root, "C:\\private\\inv")
-        unc = rc.PrivateStatePaths(invocation_root="\\\\host\\share\\inv", native_root="/tmp/native")
-        self.assertTrue(unc.invocation_root.startswith("\\\\"))
-        with self.assertRaises(BoardError):
-            rc.PrivateStatePaths(invocation_root="relative/inv", native_root="/tmp/native")
+    def test_all_request_paths_follow_the_execution_platform(self):
+        cases = (
+            (PureWindowsPath, (r"D:\private", r"D:/private", r"\\host\share\private"),
+             ("relative/private", r"D:private", r"\private", "/private")),
+            (PurePosixPath, ("/private", "/private/with space", "/private/非ASCII"),
+             ("relative/private", r"D:\private", r"D:/private", r"\\host\share\private")),
+        )
+        for flavor, roots, invalid in cases:
+            # Pure paths select the OS semantics without a Windows filesystem.
+            with self.subTest(platform=flavor.__name__), mock.patch.object(local_paths, "Path", flavor):
+                for root in roots:
+                    request = full_request(flavor(root))
+                    self.assertEqual(rc.RunRequest.from_payload(request.to_payload()), request)
+                for value in invalid:
+                    request = full_request(flavor(roots[0]))
+                    for field in ("cwd", "session_record_path"):
+                        with self.subTest(field=field, value=value), self.assertRaises(BoardError):
+                            edited(request, **{field: value})
+                    for field in ("invocation_root", "native_root"):
+                        fields = dict(request.private_state.__dict__)
+                        fields[field] = value
+                        with self.subTest(field=field, value=value), self.assertRaises(BoardError):
+                            rc.PrivateStatePaths(**fields)
 
 
 class StrictScalarTypeTests(unittest.TestCase):
@@ -389,7 +406,7 @@ class StrictScalarTypeTests(unittest.TestCase):
     """
 
     def test_python_construction_refuses_int_for_bool_and_str_for_int(self):
-        request = full_request(Path("/tmp"))
+        request = full_request(Path(tempfile.gettempdir()).resolve())
         with self.assertRaises(BoardError, msg="capture_evidence"):
             edited(request, capture_evidence=1)
         with self.assertRaises(BoardError, msg="budget.timeout_seconds"):
@@ -405,15 +422,15 @@ class StrictScalarTypeTests(unittest.TestCase):
             rc.RunEnd(status="ok", native_exit_code="0")
 
     def test_the_wire_entries_refuse_int_for_bool_and_str_for_int(self):
-        payload = full_request(Path("/tmp")).to_payload()
+        payload = full_request(Path(tempfile.gettempdir()).resolve()).to_payload()
         payload["captureEvidence"] = 1
         with self.assertRaises(BoardError, msg="captureEvidence"):
             rc.RunRequest.from_payload(payload)
-        payload = full_request(Path("/tmp")).to_payload()
+        payload = full_request(Path(tempfile.gettempdir()).resolve()).to_payload()
         payload["budget"]["timeoutSeconds"] = "60"
         with self.assertRaises(BoardError, msg="timeoutSeconds"):
             rc.RunRequest.from_payload(payload)
-        payload = full_request(Path("/tmp")).to_payload()
+        payload = full_request(Path(tempfile.gettempdir()).resolve()).to_payload()
         payload["identity"]["generation"] = True
         with self.assertRaises(BoardError, msg="generation"):
             rc.RunRequest.from_payload(payload)
@@ -429,7 +446,7 @@ class StrictScalarTypeTests(unittest.TestCase):
 
 class SessionRecordFailureTests(unittest.TestCase):
     def test_ungrouped_request_omits_the_session_record_path(self):
-        payload = full_request(Path("/tmp")).to_payload()
+        payload = full_request(Path(tempfile.gettempdir()).resolve()).to_payload()
         del payload["sessionRecordPath"]
         request = rc.RunRequest.from_payload(payload)
         self.assertIsNone(request.session_record_path)
@@ -455,11 +472,12 @@ class FreezingTests(unittest.TestCase):
         requested = {"provider": "fixture-provider", "model": "fixture-model", "effort": "off"}
         schema = {"type": "object", "properties": {"answer": {"type": "string"}}}
         tools = ["mcp__finish__hey_my_buddy_finish_turn"]
+        root = Path(tempfile.gettempdir()).resolve()
         request = rc.RunRequest(
             identity=rc.RunIdentity.from_payload(mutable_identity), harness="codex",
-            buddy=rc.RunBuddy.from_payload(requested), cwd="/tmp/checkout",
-            private_state=rc.PrivateStatePaths(invocation_root="/tmp/inv", native_root="/tmp/native"),
-            session_record_path="/tmp/session.jsonl",
+            buddy=rc.RunBuddy.from_payload(requested), cwd=str(root / "checkout"),
+            private_state=rc.PrivateStatePaths(invocation_root=str(root / "inv"), native_root=str(root / "native")),
+            session_record_path=str(root / "session.jsonl"),
             input_text="x",
             permission="none",
             output_schema=rc.FrozenJson(schema), budget=rc.RunBudget(timeout_seconds=60),
@@ -497,7 +515,7 @@ class FreezingTests(unittest.TestCase):
             rc.FrozenJson.from_value({"blob": "x" * 70000}, "catalog model extra", maximum=65536)
 
     def test_nested_values_reject_in_place_mutation(self):
-        request = full_request(Path("/tmp"))
+        request = full_request(Path(tempfile.gettempdir()).resolve())
         with self.assertRaises(ValidationError):
             request.budget.timeout_seconds = 1
         service = rc.SessionService(tool_names=["mcp__finish__hey_my_buddy_finish_turn"])
@@ -511,7 +529,7 @@ class NonEmptyInputTests(unittest.TestCase):
     """The whole-input nonempty bound holds on both entries; NUL still rides."""
 
     def request(self, **changes):
-        base = full_request(Path("/tmp"))
+        base = full_request(Path(tempfile.gettempdir()).resolve())
         fields = dict(base.__dict__)
         fields.update(changes)
         return rc.RunRequest(**fields)
@@ -519,7 +537,7 @@ class NonEmptyInputTests(unittest.TestCase):
     def test_construction_and_decode_refuse_an_empty_whole_input(self):
         with self.assertRaises(BoardError):
             self.request(input_text="")
-        payload = full_request(Path("/tmp")).to_payload()
+        payload = full_request(Path(tempfile.gettempdir()).resolve()).to_payload()
         payload["inputText"] = ""
         with self.assertRaises(BoardError):
             rc.RunRequest.from_payload(payload)
@@ -586,7 +604,7 @@ class RunFeedbackTests(unittest.TestCase):
 
 class InterfaceSurfaceTests(unittest.TestCase):
     def test_no_role_authority_or_secret_material_fits_the_request(self):
-        payload = full_request(Path("/tmp")).to_payload()
+        payload = full_request(Path(tempfile.gettempdir()).resolve()).to_payload()
         for forbidden in ("role", "routingMode", "agentCredential", "boardClient", "turnInput",
                           "taskBrief", "database", "controlToken", "frozenAccount", "network"):
             mutated = dict(payload)

@@ -19,6 +19,7 @@ import tempfile
 import time
 import selectors
 
+from ...paths import is_absolute_path
 from ...protocol.reasons import reason as make_reason
 
 
@@ -239,7 +240,7 @@ def candidate_snapshot(harness: str, *, manual_path: str | None = None,
     places.extend(("registry", path) for directory in _registry_paths() for path in _variants(Path(directory), name))
     caller_path = (os.environ if environment is None else environment).get("PATH", "")
     caller_path = caller_path if isinstance(caller_path, str) else ""
-    places.extend(("path", path) for directory in caller_path.split(os.pathsep) if directory and Path(directory).is_absolute()
+    places.extend(("path", path) for directory in caller_path.split(os.pathsep) if directory and is_absolute_path(directory)
                   for path in _variants(Path(directory), name))
     candidates = []
     seen = set()
@@ -305,7 +306,7 @@ def native_environment(environment: dict, *, command: tuple[str, ...] | list[str
         if not isinstance(item, str):
             continue
         path = Path(item)
-        if path.is_absolute() and file_fingerprint(path):
+        if is_absolute_path(path) and file_fingerprint(path):
             parent = str(path.parent)
             if parent not in prefixes:
                 prefixes.append(parent)

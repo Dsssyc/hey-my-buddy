@@ -2,6 +2,7 @@
 from __future__ import annotations
 from contextlib import contextmanager, ExitStack
 from datetime import datetime, timedelta, timezone
+from ...paths import is_absolute_path
 from ... import locking
 import hashlib
 import json
@@ -196,7 +197,7 @@ def _legacy_runtime_identity(directory: Path, ready: Path) -> bool:
     if not isinstance(interpreter, str):
         return False
     python_path = Path(interpreter)
-    if not python_path.is_absolute() or '..' in python_path.parts or not python_path.is_relative_to(directory):
+    if not is_absolute_path(python_path) or '..' in python_path.parts or not python_path.is_relative_to(directory):
         return False
     return (marker.get('state') == 'READY' and marker.get('contentId') == directory.name
             and marker.get('runtimeRoot') == str(directory.parent))
@@ -288,7 +289,7 @@ def _allocation_reference_sets(rows, allocations):
                 yield from matches(item)
         elif isinstance(value, str):
             yield from tokens.get(value, ())
-            if os.path.isabs(value):
+            if is_absolute_path(value):
                 for path in {value, os.path.normpath(value)}:
                     while True:
                         yield from paths.get(path, ())
@@ -724,7 +725,7 @@ def _validate_pending(result: dict, planned: dict, state: Path) -> None:
     category = candidate.get('category')
     if (candidate.get('eligible') is not True or category not in ('harnesses', 'zcode', 'runtimes') or
             any(pending.get(key) != candidate.get(key) for key in ('id', 'path', 'fingerprint', 'bytes')) or
-            not isinstance(pending.get('path'), str) or not Path(pending['path']).is_absolute() or
+            not isinstance(pending.get('path'), str) or not is_absolute_path(pending['path']) or
             pending['id'] != hashlib.sha256(pending['path'].encode()).hexdigest()[:24]):
         raise BoardError('STORAGE_UNSAFE', 'Pending removal does not match its eligible plan candidate')
     original = Path(pending['path'])

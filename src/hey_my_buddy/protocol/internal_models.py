@@ -30,6 +30,7 @@ from pydantic import (
 from pydantic.alias_generators import to_camel
 from pydantic_core import core_schema
 
+from ..paths import is_absolute_path
 from ..errors import BoardError
 from ..json_codec import canonical_json, decode_strict_json
 
@@ -199,12 +200,9 @@ ExitCode = Annotated[int, Field(ge=MIN_EXIT_CODE, le=MAX_EXIT_CODE)]
 
 def _absolute_path(value: str) -> str:
     check_text(value, "value", maximum=MAX_PATH_BYTES)
-    # Existing absolute paths of both platform syntaxes are legitimate values:
-    # POSIX "/..." and Windows drive "C:\..." / "C:/..." and UNC "\\..." forms.
-    posix_absolute = value.startswith("/")
-    windows_absolute = (len(value) >= 3 and value[1] == ":" and value[2] in "\\/" and value[0].isalpha()) \
-        or value.startswith("\\\\")
-    if not posix_absolute and not windows_absolute:
+    # RunRequest paths come from the local execution controller: its checkout,
+    # private invocation/native roots and service-owned session record file.
+    if not is_absolute_path(value):
         raise fail("the value must be an absolute path")
     return value
 

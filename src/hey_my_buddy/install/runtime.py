@@ -21,6 +21,7 @@ node_modules and any existing virtual environment are never copied.
 """
 from __future__ import annotations
 
+from ..paths import is_absolute_path
 from .. import home, locking, private_dirs
 from contextlib import contextmanager
 import hashlib
@@ -81,7 +82,7 @@ def _declared_relative(value: Any, field: str, path: Path) -> str:
     if not isinstance(value, str) or not value.strip():
         raise _invalid(f"{field} must be a nonempty root-relative path", path)
     text = value.strip()
-    if Path(text).is_absolute() or ".." in Path(text).parts or "\\" in text or text.startswith("~"):
+    if is_absolute_path(text) or ".." in Path(text).parts or "\\" in text or text.startswith("~"):
         raise _invalid(f"{field} must stay inside the project: {text!r}", path)
     return text
 
@@ -509,11 +510,7 @@ def _inside(directory: Path | None, candidate: str | None, *, allow_lexical: boo
     """
     if not directory or not candidate:
         return False
-    root_text = os.path.abspath(str(directory))
-    candidate_text = os.path.abspath(str(candidate))
-    if allow_lexical and (
-        candidate_text == root_text or candidate_text.startswith(root_text.rstrip("/") + "/")
-    ):
+    if allow_lexical and Path(os.path.abspath(candidate)).is_relative_to(Path(os.path.abspath(directory))):
         return True
     try:
         resolved = Path(candidate).resolve()
@@ -632,6 +629,11 @@ def runtime_identity() -> str:
         return "runtime:unavailable"
 
 
+def _in_plugin_cache(value: str) -> bool:
+    parts = Path(value).parts
+    return any(Path(*pair) == Path("plugins") / "cache" for pair in zip(parts, parts[1:]))
+
+
 def source_leaks(runtime: dict | None = None) -> list[str]:
     """Paths inside a runtime that still point at disposable plugin source.
 
@@ -658,7 +660,7 @@ def source_leaks(runtime: dict | None = None) -> list[str]:
                 resolved = Path(candidate).resolve()
             except OSError:
                 continue
-            if "/plugins/cache/" in candidate:
+            if _in_plugin_cache(candidate):
                 leaks.append(f"{pth}: {candidate}")
                 continue
             # An editable/relative reference is fine only when it stays inside this
@@ -667,12 +669,12 @@ def source_leaks(runtime: dict | None = None) -> list[str]:
             if root and root not in resolved.parents and resolved != root:
                 leaks.append(f"{pth}: {candidate}")
     for value in (runtime.get("source"), runtime.get("projectRoot"), runtime.get("runtimeDir"), runtime.get("python")):
-        if isinstance(value, str) and "/plugins/cache/" in value:
+        if isinstance(value, str) and _in_plugin_cache(value):
             leaks.append(value)
     for name, value in (runtime.get("resources") or {}).items():
         if not isinstance(value, str):
             continue
-        if "/plugins/cache/" in value:
+        if _in_plugin_cache(value):
             leaks.append(f"{name}: {value}")
         elif root and not _inside(root, value):
             leaks.append(f"{name} resolves outside the runtime: {value}")

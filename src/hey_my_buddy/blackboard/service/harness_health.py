@@ -8,6 +8,7 @@ import os
 from pathlib import Path
 import threading
 
+from ...paths import is_absolute_path
 from ..store.db import canonical_json, utc_now
 from ...errors import BoardError
 from ...protocol.reasons import reason as make_reason
@@ -97,7 +98,7 @@ class HarnessHealth:
         if not isinstance(path, str) or len(path) > 32768:
             return
         from ...buddy.harnesses.discovery import has_candidate
-        parts = dict.fromkeys(part for part in path.split(os.pathsep) if part and Path(part).is_absolute())
+        parts = dict.fromkeys(part for part in path.split(os.pathsep) if part and is_absolute_path(part))
         with self._path_hint_lock:
             hints = list(self._path_hints)
             for part in parts:
@@ -162,7 +163,7 @@ class HarnessHealth:
 
     def set_path(self, name, path):
         name = _name(name)
-        if path is not None and (not isinstance(path, str) or len(path) > 4096 or not Path(path).expanduser().is_absolute()):
+        if path is not None and (not isinstance(path, str) or len(path) > 4096 or not is_absolute_path(Path(path).expanduser())):
             raise BoardError('INVALID_ARGUMENT', 'path must be an absolute executable path, or null for automatic detection')
         with self.board.db.write() as db:
             db.execute("INSERT INTO harness_health(harness,manual_path,revision,record_json) VALUES(?,?,1,?) ON CONFLICT(harness) DO UPDATE SET manual_path=excluded.manual_path,revision=revision+1,status='unknown',record_json=excluded.record_json,checked_at=NULL,expires_at=NULL,scan_after=NULL", (name, str(Path(path).expanduser()) if path else None, canonical_json({'lastProbe': None, 'reason': _not_checked()})))

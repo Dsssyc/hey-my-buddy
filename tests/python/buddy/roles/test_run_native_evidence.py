@@ -15,7 +15,7 @@ from buddy.harnesses.test_run_contract import full_request, full_result
 
 class NativeEvidenceRoleTests(unittest.TestCase):
     def request(self, harness="zcode"):
-        fields = full_request(Path("/private/tmp")).to_payload()
+        fields = full_request(Path(tempfile.gettempdir()).resolve()).to_payload()
         fields.update(harness=harness, permission="none", sessionServices=[], captureEvidence=False)
         return rc.RunRequest.from_payload(fields)
 

@@ -1,6 +1,7 @@
 """Contract-aware runtime cutover, with offline backup only for upgrades."""
 from __future__ import annotations
 from contextlib import contextmanager, closing
+from ..paths import is_absolute_path
 from .. import locking
 import gzip
 import json
@@ -339,7 +340,7 @@ def _skill_paths(journal: dict) -> tuple[Path, Path, Path] | None:
         target, staged, previous = (Path(journal[name]) for name in ('skillTarget', 'skillStage', 'skillPrevious'))
         expected = agent_skills_home().resolve() / SKILL
         suffix = staged.name.removeprefix('.hey-my-buddy-upgrade-stage-')
-        if (not all(path.is_absolute() and not path.is_symlink() for path in (target, staged, previous))
+        if (not all(is_absolute_path(path) and not path.is_symlink() for path in (target, staged, previous))
                 or target.resolve() != expected or staged.parent.resolve() != expected.parent
                 or previous.parent.resolve() != expected.parent
                 or re.fullmatch(r'[0-9a-f]{32}', suffix) is None

@@ -28,9 +28,9 @@ from __future__ import annotations
 import base64
 import binascii
 import json
-import os
 import re
 import sqlite3
+from pathlib import Path
 from typing import Any, Sequence
 
 from ...errors import BoardError
@@ -288,12 +288,11 @@ def _complete_buddy(value: Any) -> dict | None:
 def project_label(path: str | None, repository_path: str | None) -> str | None:
     """Name the repository, falling back to the submitted directory without Git."""
     if repository_path:
-        path = repository_path.rstrip("/")
-        if os.path.basename(path) == ".git":
-            path = os.path.dirname(path)
+        repository = Path(repository_path)
+        path = str(repository.parent if repository.name == ".git" else repository)
     if not path:
         return None
-    name = os.path.basename(path.rstrip("/"))
+    name = Path(path).name
     return name or path
 
 

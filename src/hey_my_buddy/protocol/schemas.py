@@ -13,6 +13,7 @@ import re
 from pathlib import Path
 from typing import Any
 
+from ..paths import is_absolute_path
 from ..blackboard.store.db import canonical_json, sha256_text
 from ..errors import BoardError
 
@@ -200,7 +201,7 @@ def string_list(params: dict, name: str, *, limit: int, pattern: re.Pattern | No
 
 
 def _canonical_cwd(raw: Any) -> str:
-    if not isinstance(raw, str) or not raw.startswith("/"):
+    if not isinstance(raw, str) or not is_absolute_path(raw):
         raise BoardError("INVALID_ARGUMENT", "cwd must be an absolute path")
     try:
         resolved = Path(os.path.realpath(raw))

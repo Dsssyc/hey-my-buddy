@@ -8,6 +8,7 @@ ignored environments and caches are excluded unless selected. This is not an OS
 sandbox or a claim that every physical file remains unchanged.
 """
 from contextlib import ExitStack, contextmanager
+from ...paths import is_absolute_path
 from ... import locking
 from ... import private_dirs
 from collections import Counter
@@ -689,7 +690,7 @@ def _worktree_record(root, target):
         for line in record.split(b"\0"):
             key, _, value = line.partition(b" ")
             fields[os.fsdecode(key)] = os.fsdecode(value)
-        if fields.get("worktree") == str(target):
+        if "worktree" in fields and Path(fields["worktree"]).resolve() == Path(target).resolve():
             return fields
     return None
 
@@ -764,7 +765,7 @@ def _new_worktree_identity(target, source):
     if not pointer.startswith("gitdir: "):
         raise BoardError("WORKSPACE_UNSAFE", "The new checkout has no Git directory pointer")
     git_dir = Path(pointer[len("gitdir: "):])
-    if not git_dir.is_absolute():
+    if not is_absolute_path(git_dir):
         git_dir = target / git_dir
     return {"checkoutId": _identity(git_dir), "repositoryId": source["repositoryId"],
             "physicalId": _identity(target)}
@@ -854,7 +855,7 @@ def _validate_manifest(manifest):
     if manifest["kind"] not in ("existing", "worktree") or manifest["access"] not in ("read", "write", "full"):
         raise BoardError("INVALID_WORKSPACE", "Invalid manifest kind or access")
     for value in (manifest["path"], manifest["checkoutRoot"], manifest["snapshot"]["repositoryPath"]):
-        if not isinstance(value, str) or not Path(value).is_absolute():
+        if not isinstance(value, str) or not is_absolute_path(value):
             raise BoardError("INVALID_WORKSPACE", "Manifest paths must be absolute")
     for values in (manifest["writeScope"], manifest["snapshot"]["executionSelectors"]):
         if not isinstance(values, list) or any(_relative(value, allow_root=True) != value for value in values):
@@ -1933,7 +1934,7 @@ def _validate_output_record(final_input, artifact):
         raise BoardError("WORKSPACE_MANIFEST_CHANGED", "The final output record kind is invalid")
     patch_path = artifact.get("diffPath")
     if (not isinstance(commit, str) or not isinstance(ref, str) or ref != expected_ref
-            or not isinstance(patch_path, str) or not Path(patch_path).is_absolute()):
+            or not isinstance(patch_path, str) or not is_absolute_path(patch_path)):
         raise BoardError("WORKSPACE_MANIFEST_CHANGED", "The final output record is inconsistent")
 
 
@@ -2242,7 +2243,7 @@ def _cleanup_resume_registration(repository, checkout_root, allocation, manifest
     if backlink is None:
         refuse("identity-changed")
     pointed_back = Path(os.fsdecode(backlink).strip())
-    if not pointed_back.is_absolute():
+    if not is_absolute_path(pointed_back):
         pointed_back = git_dir / pointed_back
     if pointed_back.resolve() != (checkout_root / ".git").resolve():
         refuse("identity-changed")
@@ -2254,7 +2255,7 @@ def _cleanup_resume_registration(repository, checkout_root, allocation, manifest
         if not pointer.startswith("gitdir: "):
             refuse("identity-changed")
         pointed = Path(pointer[len("gitdir: "):])
-        if not pointed.is_absolute():
+        if not is_absolute_path(pointed):
             pointed = checkout_root / pointed
         if pointed.resolve() != git_dir.resolve():
             refuse("identity-changed")
