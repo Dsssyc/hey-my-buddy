@@ -141,10 +141,8 @@ class ReminderFacts(BoardTestCase):
         reminders.collect(self.store)
         self.assertEqual([record['expectedMultiple'] for record in self.records()], [1, 2, 3])
         self.assertEqual(self.consume()['reminder']['expectedMultiple'], 1)
-        # New service resource, same durable SQLite state: no process-local cursor.
-        from hey_my_buddy.blackboard.service.service import BoardService
-        service = BoardService(self.store, token='test-token', control={}, on_stop=lambda p: {}, on_restart=lambda p: {})
-        next_view = service.store_task_wait({'runId': self.task['runId'], 'timeoutMs': 0, 'consumeReminders': True,
+        # Waiting reads the durable reminder cursor from this store.
+        next_view = self.store.task_wait({'runId': self.task['runId'], 'timeoutMs': 0, 'consumeReminders': True,
                                             'reminderWaitId': str(uuid.uuid4())})
         self.assertEqual(next_view['reminder']['expectedMultiple'], 2)
 

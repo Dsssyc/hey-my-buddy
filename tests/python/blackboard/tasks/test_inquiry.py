@@ -248,8 +248,7 @@ def attach_owner(case, board, client, task, adapter):
         return connection
     case.enterContext(mock.patch.object(ctl.cc, "connect", side_effect=connect))
     case.enterContext(mock.patch.object(ctl.cc, "with_call_options", side_effect=with_call_options))
-    # Require BoardService's production initialization before injecting a factory.
-    case.assertIsInstance(getattr(board.store, "live_registry", None), LiveRegistry)
+    # This in-process fixture supplies the daemon-owned live registry.
     board.store.live_registry = LiveRegistry()
     channel = ExecutionChannel(CTwoLiveChannel(
         identity, HarnessRunLive, name='inquiry fixture', address='fixture://execution-live',

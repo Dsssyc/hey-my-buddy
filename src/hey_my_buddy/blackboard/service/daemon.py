@@ -24,6 +24,7 @@ from ..store.db import SCHEMA_VERSION, utc_now
 from ...errors import BoardError
 from .service import BoardService, WaitAdmission, WaitService
 from .execution_scheduler import ExecutionScheduler
+from .live_registry import LiveRegistry
 from ..store.store import BoardStore
 from ...protocol.transport import ServiceError
 
@@ -61,6 +62,7 @@ class Daemon:
         self.store = BoardStore(
             self.directory, max_concurrent=_env_int("HMB_MAX_CONCURRENT", scheduling.TOTAL_CONCURRENCY_DEFAULT)
         )
+        self.store.live_registry = LiveRegistry()
         self.control = {
             "service_id": self.service_id,
             "contract_version": CONTRACT_VERSION,

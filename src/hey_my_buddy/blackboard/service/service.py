@@ -11,7 +11,6 @@ import json
 from contextlib import nullcontext
 import os
 import threading
-import time
 from pathlib import Path
 from typing import Any, Callable
 
@@ -293,8 +292,6 @@ class BoardService(_BaseResource):
             # One coordinator, one evaluation store: the store hooks (claim, result,
             # cancel, recovery) and this resource must fence the same gate.
             store.decisions.evaluation = evaluation
-        from .live_registry import LiveRegistry
-        store.live_registry = LiveRegistry()
         self.execution_scheduler = None
         self.started_at = utc_now()
 
@@ -864,48 +861,7 @@ class BoardService(_BaseResource):
         return self._guard("task.acknowledge", request_json, self.store.task_acknowledge)
 
     def task_wait(self, request_json: str) -> str:
-        return self._guard("task.wait", request_json, self.store_task_wait)
-
-    def store_task_wait(self, params: dict) -> dict:
-        schemas.reject_unknown(params, {"runId", "taskId", "afterRevision", "timeoutMs", "consumeReminders", "reminderWaitId"}, "task.wait")
-        consume_reminders = schemas.optional_bool(params, "consumeReminders", False)
-        if consume_reminders:
-            schemas.required_string(params, "reminderWaitId", max_length=128)
-        elif "reminderWaitId" in params:
-            raise BoardError("INVALID_ARGUMENT", "reminderWaitId requires consumeReminders")
-        timeout_ms = schemas.optional_int(params, "timeoutMs", 30000, 0, 30000)
-        after_revision = params.get("afterRevision")
-        if after_revision is not None and (
-            isinstance(after_revision, bool) or not isinstance(after_revision, int) or after_revision < 0
-        ):
-            raise BoardError("INVALID_ARGUMENT", "afterRevision must be a nonnegative integer")
-        deadline = time.monotonic() + timeout_ms / 1000.0
-        while True:
-            head = self.store.head()
-            if consume_reminders:
-                from ..tasks.reminders import consume
-                reminder = consume(self.store, params)
-                if reminder is not None:
-                    view = self.store.task_get({"runId": params.get("runId"), "taskId": params.get("taskId")})["task"]
-                    return {**view, "reminder": reminder}
-            view = self.store.task_get({"runId": params.get("runId"), "taskId": params.get("taskId")})["task"]
-            # Re-check after subscribing so a change between read and subscribe is
-            # never lost; the recheck happens inside events_wait.
-            if view["resultAvailable"] or timeout_ms == 0 or (
-                after_revision is not None and view["revision"] > after_revision
-            ):
-                return view
-            remaining = deadline - time.monotonic()
-            if remaining <= 0:
-                return view
-            self.store.events_wait(
-                {
-                    "after": head,
-                    "timeoutMs": int(max(1, remaining * 1000)),
-                    "taskId": view["taskId"],
-                    "limit": 1,
-                }
-            )
+        return self._guard("task.wait", request_json, self.store.task_wait)
 
     # -- executions ---------------------------------------------------------
     def admit_execution(self, nonce: str, task_id: str | None = None) -> dict:
@@ -965,10 +921,6 @@ class BoardService(_BaseResource):
     def events_read(self, request_json: str) -> str:
         return self._guard("events.read", request_json, self.store.events_read)
 
-    def shutdown(self) -> None:  # pragma: no cover - exercised through the daemon
-        """C-Two on_shutdown hook: nothing authoritative is dropped here."""
-        self.control["stopping"] = True
-
 
 class WaitService(_BaseResource):
     """Dedicated bounded wait resource."""
@@ -997,11 +949,7 @@ class WaitService(_BaseResource):
         return self._bounded("events.wait", request_json, self.store.events_wait)
 
     def task_wait(self, request_json: str) -> str:
-        def handler(params: dict) -> dict:
-            service = BoardService(self.store, token=self.token, control={}, on_stop=lambda _p: {}, on_restart=lambda _p: {})
-            return service.store_task_wait(params)
-
-        return self._bounded("task.wait", request_json, handler)
+        return self._bounded("task.wait", request_json, self.store.task_wait)
 
     def message_wait(self, request_json: str) -> str:
         return self._bounded("message.wait", request_json, self.store.message_wait)
