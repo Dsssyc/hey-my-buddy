@@ -19,9 +19,9 @@ Host 在 `ca1cad90` 后传达用户的决定：交给 harness 的内容清单是
 
 Host 在本次续接输入中报告：真实 ZCode 0.16.9 无须另外指定就能以发现、Worker、无工具三种方式启动，目录的 12 个四段名字与原有目录相同，启动前后用户供应方文件与应用包内置文件均未改写；额度用尽时 Worker 与无工具路径均带回原生失败原因和额度事实，回合里的记忆与搜索答复来自用户设置。这些是 Host 对标题覆盖删除前源码的实测，本实现方没有执行真实 CLI 或读取用户文件；删除覆盖后、原生生成标题时的无工具真实调用留给 Host 复核，不能用模拟程序的通过代替。
 
-`InstalledZcodeTests.setUp` 先调用 `test_zcode.ZcodeFixtureCase.setUp`，后者在测试临时根下创建 `native-user-home`，用它覆盖环境里的 HOME、USERPROFILE 和 `ZCODE_DATA_BASE_DIR`；真实 CLI 测试随后把数据根换成同一临时根下的 `account-empty`，其包装脚本只指定临时根下的合成个人供应方文件与内置测试副本。`ExecutionContext.environment` 带入这些值，控制器再经现有原生环境白名单把 HOME、USERPROFILE、数据根带给 CLI，所以真实 CLI 不会从继承的主目录读写用户 `~/.zcode`。包装脚本的 bundled 内置路径仍是应用包里的公开内置文件；它不是用户个人配置。该测试需要真实 CLI、loopback HTTP 服务、macOS sandbox-exec 和角色启动器，本回合没有运行它。
+`InstalledZcodeTests.setUp` 先调用 `test_zcode.ZcodeFixtureCase.setUp`，后者在测试临时根下创建 `native-user-home`，用它覆盖环境里的 HOME、USERPROFILE 和 `ZCODE_DATA_BASE_DIR`；真实 CLI 测试随后把数据根换成同一临时根下的 `account-empty`，其包装脚本只指定临时根下的合成个人供应方文件与内置测试副本。`ExecutionContext.environment` 带入这些值，控制器再经现有原生环境白名单把 HOME、USERPROFILE、数据根带给 CLI，这只能证明传入的配置位置和 HOME 等环境值是私有的，不能据此断言原生运行状态也完全隔离；此前“原有隔离成立”的结论过强，按下文 Host 实测纠正。包装脚本的 bundled 内置路径仍是应用包里的公开内置文件；它不是用户个人配置。该测试需要真实 CLI、loopback HTTP 服务、macOS sandbox-exec 和角色启动器，本回合没有运行它。
 
-另两条真实 CLI 测试是 `test_zcode_hooks_probe.FreeProbePipelineTests.test_free_probe_pipeline_is_isolated_and_selftested` 与 `test_gather_versions_reports_native_identities`；核对发现它们原来继承主目录，版本读取也直接继承整个测试进程环境。本次只在这组测试的 setUp 清除继承的 `BUDDY_`、`ZCODE_`、`ZAI_`、`ZHIPU_`、`GLM_` 配置/供应方变量及虚拟环境固定项，并把 HOME、USERPROFILE、数据根换成该测试临时根下的私有 home。`gather_versions` 的子进程因此继承私有 HOME 与数据根；`build_private_environment` 在 hooks 探针的版本与 plugins list 子进程里只透传这个私有 HOME，不透传数据根，ZCode 默认数据位置也就落在私有 HOME 的 `.zcode`，个人供应方文件变量为空。新增的非真实 CLI 回归以合成 bundle 初始化同一测试 fixture，证明继承的 HOME、数据根与个人供应方变量被替换或清除；没有修改 hooks 探针的实验行为。其余 ZCode 单元测试使用合成可执行文件或协议重放，启动命令由私有 fixture 显式固定；旧的跨 harness 安装发现测试按 Host 决定由 DSH 微任务处理，本批不改。
+另两条真实 CLI 测试是 `test_zcode_hooks_probe.FreeProbePipelineTests.test_free_probe_pipeline_is_isolated_and_selftested` 与 `test_gather_versions_reports_native_identities`；核对发现它们原来继承主目录，版本读取也直接继承整个测试进程环境。本次只在这组测试的 setUp 清除继承的 `BUDDY_`、`ZCODE_`、`ZAI_`、`ZHIPU_`、`GLM_` 配置/供应方变量及虚拟环境固定项，并把 HOME、USERPROFILE、数据根换成该测试临时根下的私有 home。`gather_versions` 的子进程因此继承私有 HOME 与数据根；`build_private_environment` 在 hooks 探针的版本与 plugins list 子进程里只透传这个私有 HOME，不透传数据根，个人供应方文件变量为空；这是出站环境的检查，不证明 ZCode 所有运行状态都跟着这些路径走。新增的非真实 CLI 回归以合成 bundle 初始化同一测试 fixture，证明继承的 HOME、数据根与个人供应方变量被替换或清除；没有修改 hooks 探针的实验行为。其余 ZCode 单元测试使用合成可执行文件或协议重放，启动命令由私有 fixture 显式固定；旧的跨 harness 安装发现测试按 Host 决定由 DSH 微任务处理，本批不改。
 
 ## 删除与保留
 
@@ -189,3 +189,13 @@ Host 仍需完整运行上述启动器/IPC 用例，以及 `cli.test_checks_clea
 本次标题更正后的验证（2026-10-12）：可运行集合 158 项通过，第一组 139 项（36.162 秒，退出码 0），第二组完整的 `buddy.harnesses.test_runtime_version` 19 项（16.968 秒，退出码 0）；原始输出在 `tmp/adr030-batch3c-title-tests.log`、`tmp/adr030-batch3c-title-version-tests.log`，第一组的精确选择在 `tmp/adr030-batch3c-title-test-selection.txt`。第一组覆盖第三回合的 127 项集合，另完整运行 hooks 文件的 `RedactionTests`、`EnvironmentIsolationTests`、`SnapshotTests` 与 `HookAssemblyTests`；其中新增的 fixture 隔离回归没有启动真实 CLI。文中更新后的探针 Python 语法通过，源码和问询探针的出站建会话参数不含标题常量，`git diff --check` 通过。
 
 本次未运行的新增待验项是上文明确命名的两条 `FreeProbePipelineTests` 真实 CLI 用例；`InstalledZcodeTests` 及其他已列明的角色启动器/IPC 用例也仍交 Host，在最终标题默认行为上重跑。没有执行真实 ZCode、没有模型调用，没有新增标题事件处理，也没有触碰共享角色、发现白名单或 DSH 代码；请 Host 在最终源码上检查标题生成时的 Worker/无工具真实回合、更新后握手探针、真实 CLI 测试隔离与完整检查，再作验收。
+
+## 本次 Host 打回：两处断言与标题证据清理
+
+Host 在 `0a1c05d4` 上报告用户批准的三次真实调用均正常结束：经角色控制器、用户真实主目录的可写回合、同一原生会话的续接和无工具调用；删除标题参数后无工具路径不受影响，启动前后用户供应方文件未改写。Host 的合并树完整检查为 217 个文件中 215 个通过，剩余两处是本批改动后没有更新的测试断言；这些是 Host 提供的实测结果，本实现方没有执行真实调用。
+
+本次给 `WorkerSeamTests.test_a_failed_close_keeps_the_observed_completion_tool_facts` 的允许证据集合加入 `native-runtime-preferences`，保持失败关闭不能发布角色记录的其余断言；给 `FastRegisteredRunTests.test_fast_consumes_public_frames_and_corrects_on_the_registered_process` 删除标题字段期望。仓库检索未找到运行代码单独读取 `titleGenerationEnabled`：`run_execution._fast_result` 与 `router` 只转发整个 `nativeEvidence`，因此删除 ZCode `native_evidence` 中这项旧标题覆盖投影，并同步更新该文件的 `NativeEvidenceProjectionTests`；保留事件数、工具清单、EOF 和原生身份的既有投影，不改共享角色实现。
+
+Host 此次以私有主目录跑完整检查，结束后在那个继承主目录下发现 `.zcode/v2/runtime/provider`，说明真实 ZCode 测试即使使用自己的供应方文件，仍可能把原生运行状态写到继承来的主目录；用用户主目录跑时会写入用户 `~/.zcode/v2/runtime/`。此前静态环境检查不构成“原有隔离成立”的证明；本次已经修正上文结论，不追认那些测试完全隔离，也不猜测是哪条测试或哪项原生路径导致。按 Host 明确分工，测试子进程主目录私有化的通用防线由 DSH 微任务修改检查运行器，本批不另改运行器、安装测试或启动环境。
+
+本回合可执行检查 21 项通过（10.884 秒，退出码 0）：`buddy.roles.test_registered_run_wiring.NativeEvidenceProjectionTests`、`RegisteredDescriptionTests` 与 `buddy.harnesses.zcode.test_native_run.FastSeamTests` 全类；原始输出在忽略目录 `tmp/adr030-batch3c-evidence-tests.log`，使用同一只读解释器和前述清理后的测试环境。Host 指定的 `buddy.harnesses.zcode.test_native_run.WorkerSeamTests.test_a_failed_close_keeps_the_observed_completion_tool_facts` 与 `buddy.roles.test_registered_run_wiring.FastRegisteredRunTests.test_fast_consumes_public_frames_and_corrects_on_the_registered_process` 本回合未运行，按 Host 的真实失败输出更新断言，等待 Host 复跑及整合后的完整检查；没有再次执行真实 CLI、模型调用或服务启动。

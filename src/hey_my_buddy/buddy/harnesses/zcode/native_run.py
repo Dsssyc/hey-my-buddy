@@ -1561,7 +1561,6 @@ def native_evidence(result: RunResult) -> dict:
     completion = result.completion_evidence
     return {"eventCount": result.native_event_count,
             "toolAllowlist": settings.get("toolAllowlist"),
-            "titleGenerationEnabled": settings.get("titleGenerationEnabled"),
             "streamEof": completion.stream_end if completion is not None else None}
 
 

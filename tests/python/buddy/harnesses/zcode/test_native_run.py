@@ -736,7 +736,7 @@ class WorkerSeamTests(MockNativeCase):
         self.assertIsNotNone(result.native_identity.turn_id)
         # No role record is publishable from a failed close.
         self.assertEqual({ref.kind for ref in result.evidence_refs},
-                         {"inquiry-report", "native-stderr", "denied-interactions", "attention-report"} & {ref.kind for ref in result.evidence_refs})
+                         {"inquiry-report", "native-stderr", "denied-interactions", "attention-report", "native-runtime-preferences"} & {ref.kind for ref in result.evidence_refs})
 
     def test_the_request_refuses_mismatched_service_descriptions(self):
         os.environ.update(self.environment)
