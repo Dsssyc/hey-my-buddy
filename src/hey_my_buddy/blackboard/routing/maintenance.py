@@ -231,8 +231,8 @@ class Maintenance:
             feedback_ref = json.loads(event[0])["feedback"]
             feedback = files.read(self.store.directory, run["maintenance_run_id"], feedback_ref)
             if feedback["errors"]:
-                params["errors"] = feedback["errors"]
-                code = code or "answer-shape"
+                code = "maintenance-answer-invalid"
+                params = {"errors": feedback["errors"]}
         elif code is None:
             code = "router-no-answer"
         connection.execute("UPDATE maintenance_runs SET state=?,reason_code=?,reason_params_json=?,finished_at=? WHERE task_id=?",

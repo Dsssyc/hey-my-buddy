@@ -11,6 +11,7 @@ export default {
   "answer-invalid-json": "Router 的回答不是有效 JSON。",
   "answer-not-json": "Router 的回答未包含 JSON 对象。",
   "answer-shape": "Router 的回答形状不符合要求。",
+  "maintenance-answer-invalid": "维护的回答最终仍不合格。",
   "answer-unexpected-field": "Router 的回答包含未声明的字段。",
   "all-candidates-cooling": "所有候选都在冷却，约 {{retryAt}} 可再试。",
   "bridge-refused": "问询桥拒绝了请求。",
