@@ -85,6 +85,9 @@ class MockWorkspace:
             "snapshot": {"repositoryPath": "mock+repo:" + self._repository_root(intent.get("cwd") or path),
                          "included": list(intent.get("includeUntracked", [])), "excluded": [], "staged": {}, "unstaged": {}},
         }
+        prefix = f"refs/hey-my-buddy/workspaces/{manifest['workspaceId']}/"
+        manifest["snapshot"].update(inputRef=prefix + "input", stagedRef=prefix + "staged",
+                                    stagedCommit=manifest["inputCommit"])
         manifest["manifestSha256"] = sha256_text(canonical_json(manifest))
         return manifest
 

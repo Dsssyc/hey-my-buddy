@@ -17,12 +17,7 @@ def for_run(connection, run_id: str) -> dict | None:
     ).fetchone()
     if row is None:
         return None
-    try:
-        payload = json.loads(row["payload_json"])
-    except (TypeError, ValueError):
-        payload = {}
-    if not isinstance(payload, dict):
-        payload = {}
+    payload = json.loads(row["payload_json"])
 
     actor = {"role": row["actor_role"], "id": row["actor_id"]} if row["actor_role"] else None
     return {"actor": actor, "note": payload.get("note")}

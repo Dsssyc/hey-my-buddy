@@ -3,7 +3,6 @@ import json
 import os
 from pathlib import Path
 import stat
-import tempfile
 from types import SimpleNamespace
 from unittest import mock
 
@@ -180,7 +179,7 @@ class PrivateDirectoryTests(BoardTestCase):
         self.assertTrue(temporary.is_symlink())
         self.assertEqual(sentinel.read_bytes(), b'retained')
 
-    def test_cleanup_removes_credentials_and_exact_fallback_socket_only(self):
+    def test_cleanup_removes_credentials_without_following_links(self):
         state = self.directory.resolve()
         root = private_dirs.ensure_private_dir(private_dirs.attempt_root(state, 'dsh', 'microTask', 'fixture-attempt'))
         outside = state / 'outside-auth'
@@ -190,20 +189,11 @@ class PrivateDirectoryTests(BoardTestCase):
         (root / 'agent-credential.json').write_text('secret', encoding="utf-8", newline="\n")
         (root / 'execution-start.json').write_text('private startup claim and nonce', encoding="utf-8", newline="\n")
         (root / 'diagnostic.json').write_text('retained', encoding="utf-8", newline="\n")
-        fallback = Path(tempfile.gettempdir()).resolve() / 'hey-my-buddy-inquiry' / 'fixture-attempt'
-        fallback.mkdir(parents=True, exist_ok=True)
-        (fallback / 'inquiry.sock').write_text('socket', encoding="utf-8", newline="\n")
-        (root / 'inquiry.json').write_text(json.dumps({'socketPath': str(fallback / 'inquiry.sock'), 'token': 'secret'}), encoding="utf-8", newline="\n")
+        (root / 'inquiry.json').write_text(json.dumps({'token': 'secret'}), encoding="utf-8", newline="\n")
         result = private_dirs.cleanup_attempt_credentials(state, 'dsh', 'microTask', 'fixture-attempt')
         self.assertGreaterEqual(result['count'], 4)
-        self.assertFalse(fallback.exists())
+        self.assertFalse((root / 'inquiry.json').exists())
         self.assertFalse((home / 'auth.json').is_symlink())
         self.assertFalse((root / 'execution-start.json').exists())
         self.assertEqual(outside.read_text(encoding="utf-8"), 'secret')
         self.assertEqual((root / 'diagnostic.json').read_text(encoding="utf-8"), 'retained')
-        unrelated = state / 'unrelated' / 'fixture-attempt'
-        unrelated.mkdir(parents=True)
-        (unrelated / 'inquiry.sock').write_text('outside', encoding="utf-8", newline="\n")
-        (root / 'inquiry.json').write_text(json.dumps({'socketPath':str(unrelated / 'inquiry.sock')}), encoding="utf-8", newline="\n")
-        private_dirs.cleanup_attempt_credentials(state, 'dsh', 'microTask', 'fixture-attempt')
-        self.assertEqual((unrelated / 'inquiry.sock').read_text(encoding="utf-8"), 'outside')

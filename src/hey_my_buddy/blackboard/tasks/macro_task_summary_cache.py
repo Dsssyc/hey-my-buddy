@@ -89,31 +89,9 @@ class SummaryCache:
 
 def _bounded(expression, *, kind=None):
     # JSON scalars and objects can have the same SQLite text representation.
-    # Preserve their type too, including for raw-SQL corrections outside normal
-    # admission limits. A long field declines reuse instead of trusting a prefix.
+    # Preserve their type too. A long field declines reuse instead of trusting a prefix.
     kind = kind or f"typeof(({expression}))"
-    # SQLite substr/length stop at an embedded NUL; Python strings do not.
-    # Report that case as over-bound so a suffix correction cannot collide.
-    length = (
-        f"CASE WHEN instr(({expression}),char(0)) > 0 THEN {TEXT_BOUND + 1}"
-        f" ELSE length(({expression})) END"
-    )
-    return f"substr(({expression}),1,{TEXT_BOUND}), {length}, {kind}"
-
-
-def _unique_keys(expression, key_test, *, path=None):
-    """SQLite-only duplicate detection, returning no document or object values.
-
-    json_extract selects the first matching key, while the existing Python
-    json.loads presentation uses the last. Reuse is safe only when the keys
-    consumed by that presentation are unique. json_each compares decoded keys,
-    so escaped spellings are covered too; unrelated duplicate keys stay harmless.
-    """
-    source = expression if path is None else f"{expression},'{path}'"
-    return (
-        f"NOT EXISTS (SELECT 1 FROM json_each({source}) cache_key"
-        f" WHERE {key_test} GROUP BY cache_key.key HAVING COUNT(*) > 1)"
-    )
+    return f"substr(({expression}),1,{TEXT_BOUND}), length(({expression})), {kind}"
 
 
 def dependencies(connection, members):
@@ -165,25 +143,19 @@ def dependencies(connection, members):
             ).fetchone()
             groups[group].append(("macro-task", *tuple(row)))
             # The first run follows the same created_at/rowid ordering as _summary.
-            # Raw correction of the original event needs its actual small payload
-            # fields, not MAX(seq), length alone or an event activity counter.
-            event_json = "CASE WHEN json_valid(e.payload_json) THEN e.payload_json ELSE '{}' END"
+            # The original event's description is part of the summary marker.
             event = connection.execute(
-                "SELECT e.seq," + _bounded(f"json_extract({event_json},'$.macroTaskId')",
-                                           kind=f"json_type({event_json},'$.macroTaskId')") + ","
-                + _bounded(f"json_extract({event_json},'$.description')",
-                           kind=f"json_type({event_json},'$.description')") + ","
-                " (json_valid(e.payload_json) AND json_type(" + event_json + ")='object'"
-                " AND (json_type(" + event_json + ",'$.description') IS NULL"
-                " OR json_type(" + event_json + ",'$.description') IN ('text','null')) AND "
-                + _unique_keys(event_json, "cache_key.key IN ('macroTaskId','description')") + ")"
+                "SELECT e.seq," + _bounded("json_extract(e.payload_json,'$.macroTaskId')",
+                                           kind="json_type(e.payload_json,'$.macroTaskId')") + ","
+                + _bounded("json_extract(e.payload_json,'$.description')",
+                           kind="json_type(e.payload_json,'$.description')") +
                 " FROM events e WHERE e.kind='workflow.macro_task_created' AND e.task_id=("
                 " SELECT run_id FROM workflow_runs WHERE macro_task_id=? ORDER BY created_at,rowid LIMIT 1)"
                 " ORDER BY e.seq LIMIT 1", (group,),
             ).fetchone()
             if event is not None:
                 groups[group].append(("description", *tuple(event)))
-                reusable[group] = bool(event[7]) and all(
+                reusable[group] = all(
                     length is None or length <= TEXT_BOUND for length in (event[2], event[5])
                 )
 

@@ -16,7 +16,7 @@ from ...protocol.inquiry import (
 )
 # The shared live frames of the registered-seam path (ADR-025 step 2-C2): the
 # board builds and reads the common channel formats, never a specific harness.
-from ...buddy.harnesses.live import MAX_OBSERVE_LIMIT, InquiryPayload, LiveRequest, LiveReply, LiveSnapshot
+from ...buddy.harnesses.live import MAX_OBSERVE_LIMIT, InquiryPayload, LiveObservation, LiveRequest, LiveReply, LiveSnapshot
 from ...protocol.harness_names import HARNESS_NAMES
 
 if TYPE_CHECKING:
@@ -143,7 +143,7 @@ def observe(store: BoardStore, params: dict, *, live_registry: LiveRegistry) -> 
                                        fields=("observation",))
             if snapshot.observed is True and snapshot.observation is not None:
                 bridge["observed"] = True
-                live = _live(_observation_value(snapshot.observation))
+                live = _live(snapshot.observation)
             else:
                 bridge["reason"] = snapshot.reason or "observation-unavailable"
                 bridge["error"] = snapshot.error
@@ -240,18 +240,6 @@ class _ExecutionChannel:
         return LiveSnapshot.from_payload(self.channel.observe(**kwargs))
 
 
-def _observation_value(observation) -> dict:
-    """The bridge's raw observation value, rebuilt from the channel's typed model.
-
-    ``_live`` keeps reading exactly the fields it always read; the channel's
-    ``recentActivity`` metadata is handed over under the ``activity`` key it
-    had on the wire.
-    """
-    value = observation.to_payload()
-    value["activity"] = value.pop("recentActivity", [])
-    return value
-
-
 def _mark_unavailable(store: BoardStore, task_id: str, inquiry_id: str, code: str) -> None:
     """Record the refusal of the question just posted by observe."""
     reason = (make_reason("inquiry-observe-only") if code == "unsupported"
@@ -282,44 +270,34 @@ def _inquiry_view(message: dict, duplicate: bool) -> dict:
     }
 
 
-def _activity_metadata(value: Any) -> list[dict]:
-    """Publish only event metadata; native argument previews are never progress."""
-    if not isinstance(value, list):
-        return []
-    fields = {"phase", "kind", "tool", "toolName", "callId", "at", "seq", "durationMs", "isError"}
-    return [{key: item[key][:200] if isinstance(item[key], str) else item[key]
-             for key in fields & item.keys() if item[key] is None or isinstance(item[key], (str, int, bool))}
-            for item in value[-20:] if isinstance(item, dict)]
-
-
-def _live(value: dict) -> dict:
-    if value.get("ready") is not True:
+def _live(value: LiveObservation) -> dict:
+    if not value.ready:
         return {
             "available": False,
-            "error": value.get("error"),
-            "deliveryMode": value.get("deliveryMode"),
+            "error": value.error,
+            "deliveryMode": value.delivery_mode,
             "unavailable": ["sessionId", "agentStatus", "inbox", "lastEvent", "activity", "replyTool"],
             "limits": LIMITS,
         }
     return {
         "available": True,
-        "error": value.get("error"),
-        "observedAt": value.get("observedAt"),
-        "sessionId": value.get("sessionId"),
-        "agentStatus": value.get("agentStatus"),
-        "inbox": value.get("inbox"),
-        "lastEvent": value.get("lastEvent"),
-        "activity": _activity_metadata(value.get("activity")),
-        "activityDropped": value.get("activityDropped"),
-        "replyTool": value.get("replyTool"),
-        "capability": value.get("capability") or ("inquiry" if value.get("replyTool") else "observe"),
-        "supported": value.get("supported") is not False,
-        "deliveryMode": value.get("deliveryMode"),
-        "journal": value.get("journal"),
+        "error": value.error,
+        "observedAt": value.observed_at,
+        "sessionId": value.session_id,
+        "agentStatus": value.agent_status,
+        "inbox": value.inbox.value if value.inbox else None,
+        "lastEvent": value.last_event.to_payload() if value.last_event else None,
+        "activity": [event.to_payload() for event in value.recent_activity],
+        "activityDropped": value.activity_dropped,
+        "replyTool": value.reply_tool.value if value.reply_tool else None,
+        "capability": value.capability or ("inquiry" if value.reply_tool else "observe"),
+        "supported": value.supported is not False,
+        "deliveryMode": value.delivery_mode,
+        "journal": value.journal.value if value.journal else None,
         # Bounded, metadata-only evidence that the native harness asked for an
         # interactive capability this adapter cannot grant. It is surfaced verbatim
         # for the Host boundary and never fabricated when absent.
-        "attention": value.get("attention") if isinstance(value.get("attention"), (dict, list)) else None,
-        "unavailable": value.get("unavailable") or [],
+        "attention": value.attention.value if value.attention else None,
+        "unavailable": list(value.unavailable),
         "limits": LIMITS,
     }

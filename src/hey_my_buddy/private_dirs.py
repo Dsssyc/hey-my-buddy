@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import hashlib
-import json
 import os
 from pathlib import Path
 import re
@@ -215,36 +214,6 @@ def remove_tree(path: Path, *, keep: frozenset[Path] = frozenset()) -> bool:
     return descend(path)
 
 
-def inquiry_fallback(path: Path, attempt_id: str) -> Path | None:
-    """Resolve only the fixed short-socket fallback from a private inquiry file."""
-    path = Path(path)
-    if linked(path) or not path.is_file():
-        return None
-    try:
-        if path.stat().st_size > 8192:
-            return None
-        value = json.loads(path.read_text(encoding="utf-8"))
-        socket = value.get('socketPath') if isinstance(value, dict) else None
-    except (OSError, ValueError):
-        return None
-    if not isinstance(socket, str):
-        return None
-    socket_path = Path(socket)
-    if socket_path.name != 'inquiry.sock' or not is_absolute_path(socket_path):
-        return None
-    fallback = socket_path.parent
-    allowed = {Path('/tmp').resolve() / 'hey-my-buddy-inquiry' / attempt_id,
-               Path(tempfile.gettempdir()).resolve() / 'hey-my-buddy-inquiry' / attempt_id}
-    return fallback if fallback.resolve(strict=False) in allowed and not linked(fallback) else None
-
-
-def cleanup_inquiry_fallback(path: Path, attempt_id: str) -> Path | None:
-    fallback = inquiry_fallback(path, attempt_id)
-    if fallback is not None and remove_tree(fallback):
-        return fallback
-    return None
-
-
 def cleanup_attempt_credentials(state: Path, adapter: str, task_id: str, attempt_id: str) -> dict:
     """Remove credentials after the caller has independently proved native stop."""
     root = attempt_root(state, adapter, task_id, attempt_id)
@@ -254,10 +223,6 @@ def cleanup_attempt_credentials(state: Path, adapter: str, task_id: str, attempt
     if not root.is_dir():
         raise BoardError('PRIVATE_PATH_UNSAFE', 'Private attempt root is not a directory', path=str(root))
     removed = []
-    inquiry = root / 'inquiry.json'
-    fallback = cleanup_inquiry_fallback(inquiry, attempt_id)
-    if fallback is not None:
-        removed.append(str(fallback))
     def inspect(directory: Path) -> None:
         _guard_parents(directory)
         with os.scandir(directory) as entries:
