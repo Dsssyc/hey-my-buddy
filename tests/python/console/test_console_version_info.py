@@ -225,7 +225,7 @@ class VersionInfoHTTPTests(_VersionConsoleTestCase):
         board = self.board()
         stated, browser = self.open_console(board)
         stranger = Browser(stated["url"], redeem=False)
-        expected = {"running": {"mode": "source", "softwareVersion": "0.37.1",
+        expected = {"running": {"mode": "source", "softwareVersion": "0.38.0",
                     "contractVersion": CONTRACT_VERSION, "schemaVersion": SCHEMA_VERSION,
                     "sourceCommit": None, "installedAt": None}, "installed": None}
         with mock.patch.object(version_info, "version_info", return_value=expected) as read:
