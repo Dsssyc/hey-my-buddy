@@ -1,5 +1,5 @@
 {
-  "fixtureSqlSha256": "df3c47f4ec6370c825f7079133e12ba23245c571def3689e286cf559fa4395a6",
+  "fixtureSqlSha256": "ff34e0fdcde2d672e36c5d793fd19b3fd051d271d26f3e4df8c8d7849a440799",
   "schemaSha256": "fe82c73ae64fc261d1d02555baff243e7b9e3ce3b59e939531e00f330abb5166",
   "sourceCommit": "bad89c7b24c5a110bf1117cf8ea4b6a428026e96",
   "sources": {
@@ -43,11 +43,11 @@
     },
     "attempts": {
       "rows": 22,
-      "sha256": "89725c7efbd61156a644804479f01bb2f034e74da75188cb3c8a1ffdf6750b1d"
+      "sha256": "2835c74ec0d2efeff5f50196cbaed5521c69326ff4df266f10bcb09b56239eab"
     },
     "buddies": {
       "rows": 3,
-      "sha256": "b63c235c6997e49ee21e7ffb18e5d65eaf03fd403fb68e965f52049ad3e12617"
+      "sha256": "220a1fb630ff447a8b4e361cbc849891b811df25646e38fafad268bb4d1dbb14"
     },
     "buddy_infrastructure_failures": {
       "rows": 1,
@@ -59,7 +59,7 @@
     },
     "catalog_observations": {
       "rows": 4,
-      "sha256": "b7a1e8eb1b82f3fccd52575b8172fbd8242c9e4d2772919bae96ea4ef2d1fbc8"
+      "sha256": "ea43430e621adac690e4bbf995933e6afe2cfbb39c7e594b21652dd097d269ab"
     },
     "catalog_pending": {
       "rows": 2,
@@ -67,11 +67,11 @@
     },
     "commands": {
       "rows": 43,
-      "sha256": "9177513d0856ea8c9d968d67b2689eb1ca77b4e686969b618151fc64b83d06e5"
+      "sha256": "1ddb84d27c4b2b29f2f62287ecd4105db5a118a7c8e4af7a4188d7c9240958c6"
     },
     "decision_requests": {
       "rows": 8,
-      "sha256": "11a3219036f7ad2f851833ad5ceb40c5867b31b02129bb779b0318c1b8b32b09"
+      "sha256": "9e8d4e2e5b7a6fe011a1d1b2f4e8e73cc769871d8c039ae22ecc7b109ce56c92"
     },
     "domain_nodes": {
       "rows": 0,
@@ -79,7 +79,7 @@
     },
     "evaluation_catalog": {
       "rows": 3,
-      "sha256": "839c473d6f8486caa89d8a14831d5540ece6147f168b04003dbe9f72624f1b4f"
+      "sha256": "41a1c7f6298b227edf16b96801c7da78b3b85e30a5dc553d35b4c3841186fbcc"
     },
     "evaluation_decisions": {
       "rows": 8,
@@ -91,7 +91,7 @@
     },
     "events": {
       "rows": 294,
-      "sha256": "83d8d0f8c08c1e6077feee12b9a98eae8921b657ffc2847b8b5ffd26776b6688"
+      "sha256": "fc095524ce30c2ec69745eb726bbc2eeef865f902f16c51cb8e606036a9a5b3e"
     },
     "execution_issues": {
       "rows": 0,
@@ -135,7 +135,7 @@
     },
     "macro_tasks": {
       "rows": 2,
-      "sha256": "85acdf199c7198513cd1825ce3e27cdc6a20fdebaa65ad9d39454e09956e58e1"
+      "sha256": "ad0e1b8cb8ffa69e05b7777912f4b84f73380573a29623796d8afdf74d6a9629"
     },
     "maintenance_runs": {
       "rows": 0,
@@ -171,7 +171,7 @@
     },
     "resource_claims": {
       "rows": 21,
-      "sha256": "9d2200bd29d3d0363cde052bb0c244d4dc0b893a8bac3c67c994662687c11415"
+      "sha256": "8a5466c1c4c034f6b4b03849ea96edf1cce81d768c221e32eed24a4511fd3b22"
     },
     "router_buddies": {
       "rows": 2,
@@ -191,7 +191,7 @@
     },
     "router_requests": {
       "rows": 11,
-      "sha256": "44908e9777d83273cc3a7e99f1525543a4d5d41a0f64c30fb7cdc85b608c5a03"
+      "sha256": "47935b88bdd2c4090d18a72fca20cadb5111ad73c9155f972cf23bef768cafca"
     },
     "router_settings": {
       "rows": 1,
@@ -211,19 +211,19 @@
     },
     "tasks": {
       "rows": 23,
-      "sha256": "b8aff4e306e419d89d8be021d4f6c6294a23c25e14beaaf93e530e3f466c8a89"
+      "sha256": "d6f18098c3426a55e0230c1ee62e0711f350dcc5d919305f38342a9a20c98ae0"
     },
     "workflow_artifacts": {
       "rows": 53,
-      "sha256": "ef1995c6b3566b23c1382d992fd7528649bf251e0f72eba803fecc81a760d28e"
+      "sha256": "083711cf8d822a1548ff07ce7f0cd61514badd7475ea38ef72b9f21dd7d023d9"
     },
     "workflow_children": {
       "rows": 2,
-      "sha256": "a978849cd45aaaa3d2af7ef4f75446cd1c15d6b66ec7d345529c0153e570d9cd"
+      "sha256": "480243562d4cc8e47ace5110b4ec75e3641cd7c63324afe6fb7e53aca6cd42b8"
     },
     "workflow_continuations": {
       "rows": 1,
-      "sha256": "79a2853bf5e1d16c0f4739cc8d6a31dc1dcc74bf2632956c64b479f4b72dd308"
+      "sha256": "7a6471a63b8472a22a6bcac203290743928ca11453cfab9557367dc0577f8dcd"
     },
     "workflow_fixes": {
       "rows": 0,
@@ -235,7 +235,7 @@
     },
     "workflow_integrations": {
       "rows": 5,
-      "sha256": "9f561035b2164e9ff3e35eecccbb3b6e48bf57bcd7e95593eb90a70c35c17804"
+      "sha256": "6c1d4ba904ada2e922f02cd518ef3c492507c102cae28054aa552ae36d8559b5"
     },
     "workflow_lead_tasks": {
       "rows": 1,
@@ -243,7 +243,7 @@
     },
     "workflow_requests": {
       "rows": 7,
-      "sha256": "430222d4cb0665063d30850c136185ff2f10dcc9943e76a77db5d33463df3a20"
+      "sha256": "7886accf59d7cc3bd9bbd9ae4b29fb5048d34372e290aaf77779f5c73031879b"
     },
     "workflow_routes": {
       "rows": 1,
@@ -251,11 +251,11 @@
     },
     "workflow_runs": {
       "rows": 16,
-      "sha256": "88bbe96f98de347a9ea4a744eb6a240b6f0da9d93f7e7f3ef4f5663101349029"
+      "sha256": "3a547849ba56941c63ba262f11b22240ed6d4cdb21c30f11c7f3a1b5ff33a00b"
     },
     "workflow_scope_versions": {
       "rows": 16,
-      "sha256": "09693296e6bcbdf14d5015d228e2289e5f1ae6bbea9f521146e6f689fe7e239d"
+      "sha256": "89f42589bcb142cecc4ff25342971120ece595048facceb898731125ff0b402e"
     },
     "workflow_suggestions": {
       "rows": 2,
@@ -263,23 +263,19 @@
     },
     "workflow_turns": {
       "rows": 15,
-      "sha256": "0969ad1281082fd38ef8ac395fee34247407defce22143fa2d3eb5570c1cec98"
+      "sha256": "ce17fd04e8095107844564e82fa649b2f052a5d16b6f8ebd4e11b3e7c7de2219"
     },
     "workflow_workspace_conflicts": {
       "rows": 3,
-      "sha256": "c5c895322a8b26261a1ac4adb50c89ea82ef8350fea24b008b3fd62b85eb5784"
+      "sha256": "7a4df40a79eb8f2c06364c79105f94cf96306b8441ee9f408b5033b15c46fc7a"
     },
     "workspace_cleanup_plans": {
       "rows": 6,
-      "sha256": "8f80c3e4a46acc8246df29678069c48872c459e46b119cb20d7e1c770c2365ca"
+      "sha256": "375f71e072a0288c8bfde3192747870a0fe820dab9679f7ac79c0142e26ab1c1"
     },
     "workspace_reservations": {
       "rows": 16,
-      "sha256": "299cfa9211aa68d0a416b1394b968a2cbec64a9d0bac6e6f05b5f5f21661edcd"
+      "sha256": "2bfa8695d9de4c2b43b9c61d38c62c3300b275c78b0be2b5f83f17fdd083e447"
     }
-  },
-  "upgrade": {
-    "sourceSchema": 30,
-    "targetSchema": 31
   }
 }

@@ -1049,7 +1049,7 @@ class UpgradeFixtureTests(unittest.TestCase):
     def test_cleanup_stock_records_its_current_generator_and_fixed_floor(self):
         metadata = json.loads((FIXTURE / 'metadata.json').read_text())
         root = Path(__file__).resolve().parents[4]
-        self.assertEqual(metadata['generatorSha256'], '53bc339e01bf2f083a3f2c0e621dda633a944e9bc1b1ea4af7dca632f1de5cc4')
+        self.assertEqual(metadata['generatorSha256'], 'a3113a5b19f125cedfe435653db26ebb87594738be9f20c1cb7835f76d8f10f7')
         self.assertNotIn('baseGeneratorSha256', metadata)
         self.assertEqual(metadata['cleanupStockGeneratorSha256'], _sha((root / 'packaging/generate-upgrade-fixture.py').read_bytes()))
         self.assertEqual(metadata['cleanupStockBaseSha256'], _sha((FIXTURE / 'board.sql').read_bytes()))

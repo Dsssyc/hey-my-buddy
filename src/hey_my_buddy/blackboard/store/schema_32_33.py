@@ -16,6 +16,14 @@ import tempfile
 
 PROJECT_REF = "refs/hey-my-buddy/project"
 
+ALLOCATION_REVOCATIONS_DDL = """
+CREATE TABLE IF NOT EXISTS allocation_revocations (
+    allocation_id TEXT PRIMARY KEY,
+    request_id    TEXT NOT NULL,
+    revoked_at    TEXT NOT NULL
+);
+"""
+
 RESERVATIONS_DDL = """
 CREATE TABLE IF NOT EXISTS workspace_reservations (
     reservation_id  TEXT PRIMARY KEY,
@@ -235,6 +243,7 @@ def _cleanup_evidence(raw: str) -> str:
 
 
 def upgrade(connection):
+    connection.execute(ALLOCATION_REVOCATIONS_DDL)
     manifests = list(_manifests(connection))
     _mark_old_projects(manifests)
     roots = {(manifest["workspaceId"], manifest["manifestSha256"]): manifest["checkoutRoot"]

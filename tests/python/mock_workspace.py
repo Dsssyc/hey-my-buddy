@@ -145,7 +145,7 @@ class MockWorkspace:
         return manifest["snapshot"]["repositoryPath"]
 
     @contextmanager
-    def submission_preparation(self, state_dir, request_id, intent, *, shared_locks=None):
+    def submission_preparation(self, state_dir, request_id, intent, *, shared_locks=None, before_prepare=None):
         yield {"manifest": self.prepare(state_dir, request_id, intent), "newAllocation": False}
 
     def scope_conflicts(self, state_dir, manifest, task_id, attempt_id):

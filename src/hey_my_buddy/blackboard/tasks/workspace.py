@@ -537,12 +537,24 @@ def _write_once(path, data):
 @contextmanager
 def _lock(directory, *, create=True):
     flags = os.O_RDWR | (os.O_CREAT if create else 0)
-    descriptor = private_dirs.open_regular_fd(directory / ".lock", flags)
+    path = directory / ".lock"
+    if _WINDOWS:
+        from ...windows_files import open_regular_fd
+        descriptor = open_regular_fd(private_dirs._absolute(path), flags, delete=True)
+    else:
+        descriptor = private_dirs.open_regular_fd(path, flags)
     try:
         try:
             locking.lock(descriptor, blocking=False)
         except BlockingIOError as error:
             raise BoardError("WORKSPACE_BUSY", "Another operation is preparing or sealing this workspace") from error
+        held = os.fstat(descriptor)
+        try:
+            current = native_path(path).lstat()
+        except FileNotFoundError as error:
+            raise BoardError("WORKSPACE_BUSY", "The workspace lock was removed while acquiring it") from error
+        if (held.st_dev, held.st_ino) != (current.st_dev, current.st_ino):
+            raise BoardError("WORKSPACE_BUSY", "The workspace lock changed while acquiring it")
         yield
     finally:
         os.close(descriptor)
@@ -933,7 +945,7 @@ def recovery_inputs(manifest: dict) -> list[str]:
 
 @contextmanager
 def submission_preparation(state_dir: Path, request_id: str, intent: dict, *, shared_locks=None,
-                           _preparation=None):
+                           _preparation=None, before_prepare=None):
     """Hold the original allocation lock through preparation and admission.
 
     Both kinds are new allocations when no manifest existed before this
@@ -944,16 +956,9 @@ def submission_preparation(state_dir: Path, request_id: str, intent: dict, *, sh
     with _errors():
         intent = _intent(intent)
         workspace_id, directory = _workspace_directory(state_dir, request_id)
-    prepared = {"afterRelease": None}
-
-    def after_release():
-        if prepared["afterRelease"] is not None:
-            prepared["afterRelease"]()
-
+    prepared = {}
     with ExitStack() as local_stack:
         stack, held = shared_locks if shared_locks is not None else (local_stack, set())
-        # This callback precedes the lock entry, so it runs after lock release.
-        stack.callback(after_release)
         if directory not in held:
             stack.enter_context(_lock(directory))
             held.add(directory)
@@ -968,6 +973,8 @@ def submission_preparation(state_dir: Path, request_id: str, intent: dict, *, sh
                 if fresh != borrowed:
                     raise BoardError("WORKSPACE_CHANGED", "The borrowed allocation changed while its lock was acquired")
             new = _record(directory / "manifest.json") is None
+            if new and before_prepare is not None:
+                before_prepare(directory)
             if _preparation is None:
                 manifest = _prepare_locked(directory, workspace_id, request_id, intent, state_dir=state_dir)
             else:
@@ -1037,18 +1044,15 @@ def submission_revoke_plan(state_dir, manifest):
         return plan
 
 
-def revoke_submission(plan):
+def revoke_submission(plan, *, before_request_remove):
     """Remove a proven, unregistered allocation, preserving sweep evidence on failure.
 
     The original allocation lock is held and retained board uses were checked.
     The worktree goes before its manifest so failed Git removal retains the
     record the orphan sweep needs. All remaining removals follow creation in
     reverse order.
-    The lock file and directory are removed after release by that context's
-    callback. With three callers for one requestId, a second caller can lock the
-    unlinked old inode while a third creates and locks a new file, breaking
-    mutual exclusion. This window remains accepted; deleting the lock file
-    while holding it requires separate Windows verification.
+    The caller finishes the lock-file and directory removal under this same
+    lock, after persisting the revocation before removing its request.
     """
     with _errors():
         manifest, directory = plan["manifest"], plan["directory"]
@@ -1068,20 +1072,9 @@ def revoke_submission(plan):
         for suffix, commit in (("retained/staged", manifest["snapshot"]["stagedCommit"]),
                                ("retained/input", manifest["inputCommit"])):
             _git(repository, "update-ref", "--no-deref", "-d", prefix + suffix, commit)
+        before_request_remove()
         (directory / "request.json").unlink()
         return {"removed": True}
-
-
-def finish_submission_revoke(directory):
-    """Finish the same revocation after its original allocation lock is released.
-
-    With three callers for a request, unlinking a locked inode can let a third
-    create a different lock while a second holds the old one. The existing
-    post-release cleanup window stays accepted; deleting a held lock file
-    requires separate Windows verification.
-    """
-    (directory / ".lock").unlink()
-    directory.rmdir()
 
 
 def _borrowed_submission_allocation(state_dir, intent):

@@ -72,7 +72,7 @@ def generate(args):
     # Frozen writers include source paths in IDs, refs and Git commit messages.
     # Generate at one private canonical path, then retain the whole work tree
     # at the caller's fresh destination. Each run still starts from empty stock.
-    work = root / "tmp" / "schema33-stub" / ".upgrade-fixture-generation-active"
+    work = root / "tmp" / ".upgrade-fixture-generation-active"
     work.mkdir(exist_ok=False)
     try:
         generate_in_canonical_slot(args, root, work)

@@ -1853,8 +1853,10 @@ class WorkflowCoordinator:
             # and file observations happen after the short read transaction ends.
             for reader_id, manifest in readers:
                 self._verify_read_snapshot(manifest, actual["checkoutRoot"], reader_id)
+        from . import allocation_revocations
         with workspace_module().submission_preparation(
-                self.board.directory, request_id, intent, shared_locks=shared_locks) as prepared:
+                self.board.directory, request_id, intent, shared_locks=shared_locks,
+                before_prepare=lambda directory: allocation_revocations.prepare(self.board, directory)) as prepared:
             try:
                 yield prepared
             except Exception as error:
@@ -1867,16 +1869,14 @@ class WorkflowCoordinator:
 
         The original preparation lock stays held through physical inspection,
         the read-only reference snapshot, and removal of the checkout, refs and records.
-        Lock-file and directory removal follows lock release. With three callers
-        for the same requestId, a second can lock the unlinked old inode while a
-        third recreates and locks a new file, breaking mutual exclusion. This
-        window remains accepted; holding the lock through deletion needs separate
-        Windows verification.
+        The revocation is durable before removing request.json. Lock-file and
+        directory removal finishes before releasing the original lock.
         """
-        from . import storage
+        from . import allocation_revocations, storage
         module = workspace_module()
         manifest = prepared["manifest"]
         directory = None
+        revocation_recorded = False
         facts = {"requestId": request_id, "workspaceId": manifest["workspaceId"],
                  "path": manifest["checkoutRoot"], "manifestSha256": manifest["manifestSha256"],
                  "removed": False}
@@ -1894,7 +1894,7 @@ class WorkflowCoordinator:
                     original_error.details["submissionCleanup"] = facts
             else:
                 original_error.add_note("Submission cleanup: " + json.dumps(facts, sort_keys=True))
-            if not facts["removed"] and directory is not None:
+            if not facts["removed"] and directory is not None and not revocation_recorded:
                 try:
                     module._write_once(directory / ("submission-cleanup-" + uuid.uuid4().hex + ".json"), module._json(facts))
                 except Exception as error:
@@ -1908,19 +1908,17 @@ class WorkflowCoordinator:
             if reasons or plan["reasons"]:
                 facts["reasons"] = sorted(set(reasons + plan["reasons"]))
             else:
-                facts.update(module.revoke_submission(plan))
+                def record_revocation():
+                    nonlocal revocation_recorded
+                    with storage.locked(self.board):
+                        allocation_revocations.record(self.board, directory, request_id)
+                    revocation_recorded = True
+                module.revoke_submission(plan, before_request_remove=record_revocation)
+                allocation_revocations.finish(self.board, directory)
+                facts['removed'] = True
         except Exception as error:
             cleanup_error(error)
-        if facts["removed"]:
-            def after_release():
-                try:
-                    module.finish_submission_revoke(directory)
-                except Exception as error:
-                    cleanup_error(error)
-                record()
-            prepared["afterRelease"] = after_release
-        else:
-            record()
+        record()
         return facts
 
     @staticmethod
