@@ -15,7 +15,7 @@ from support import wait_for
 from blackboard.tasks.test_workflow_worker import GovernedWorkerTestCase
 
 
-CONFIGURATION = {"adapter": "claude", "provider": "anthropic",
+CONFIGURATION = {"adapter": "claude", "provider": "firstParty",
                  "model": "claude-opus-5-5[1m]", "effort": "high"}
 FIXTURE = Path(__file__).parent / "fixtures/fake_claude.py"
 
@@ -31,7 +31,7 @@ class ClaudeWorkerTests(GovernedWorkerTestCase):
     def setUp(self):
         super().setUp()
         self.catalog_fixture({"source": "file:claude-worker-fixture", "providers": [{
-            "adapter": "claude", "provider": "anthropic", "displayName": "Anthropic",
+            "adapter": "claude", "provider": "firstParty", "displayName": "firstParty",
             "packageName": "claude-code", "packageVersion": "fixture",
             "models": [{"id": CONFIGURATION["model"], "name": "Opus fixture",
                         "efforts": ["high"], "inputModalities": ["text"]}]}], "warnings": []})
@@ -79,7 +79,7 @@ class ClaudeWorkerTests(GovernedWorkerTestCase):
             self.assertIsNotNone(view["finalArtifactId"])
             native = receipt["result"]["nativeSession"]
             self.assertFalse(native["resumable"])
-            self.assertEqual(native["storageScope"], "harness-user-store")
+            self.assertEqual(native["storageScope"], "none")
             self.assertEqual(receipt["result"]["turn"]["provenance"]["adapter"], "claude")
             self.assertEqual((self.repo / "tracked.txt").read_text(), "base\n")
 
@@ -111,7 +111,7 @@ class ClaudeWorkerTests(GovernedWorkerTestCase):
 
 class ClaudeCatalogRuleTests(unittest.TestCase):
     def test_effort_directory_never_mixes_default_with_explicit_efforts(self):
-        catalog, _ = _catalog({"account": {"apiProvider": "firstParty", "tokenSource": "subscription"},
+        catalog = _catalog({"account": {"apiProvider": "firstParty", "tokenSource": "subscription"},
             "models": [{"value": "bad", "resolvedModel": "bad-model", "supportedEffortLevels": ["default", "high"]},
                        {"value": "haiku", "resolvedModel": "haiku"}]}, "fixture")
         self.assertEqual([m["id"] for m in catalog["providers"][0]["models"]], ["haiku"])

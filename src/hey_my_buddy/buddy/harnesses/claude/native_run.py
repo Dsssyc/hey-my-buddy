@@ -2,8 +2,8 @@
 
 ADR-025 step 3-B1, plus the 3-C StructuredOutput correction. This module is the
 single native execution body of the Claude Code harness: the policy gates, the
-isolated settings, the owned native process, the initialize handshake with the
-catalog and account check, the user-message boundary, the send/wait/drain
+native permission settings, the owned native process, the initialize handshake with the
+catalog check, the user-message boundary, the send/wait/drain
 settlement and the two-layer stop evidence happen exactly once here, driven
 only by the frozen :class:`~hey_my_buddy.buddy.harnesses.run_contract.RunRequest`.
 What differed between the governed Worker turn and the read-only structured
@@ -90,16 +90,11 @@ from .config import (
     DEFAULT_MODEL_ALIAS,
     TOOL_DENIAL_MESSAGE,
     ClaudeUnavailable,
-    account_problem,
     cli_command,
     discovery_args,
     execution_args,
     native_environment,
-    read_auth_status,
     sandbox_settings,
-    settings_policy,
-    third_party_overrides,
-    token_source_missing,
 )
 from .protocol import (
     QUOTA_REJECTED_ERROR,
@@ -128,26 +123,14 @@ _DRAIN_SECONDS = 10.0
 supported_request_controls = ("network_allowed_domains", "additional_denied_tools")
 
 
-def _catalog(initialize: dict, version: str, verify_login=None) -> tuple[dict, dict]:
-    """The catalog from initialize only: no user message, no model turn.
+def _catalog(initialize: dict, version: str) -> dict:
+    """Read native model and account facts without selecting a provider or login."""
+    from ....protocol.billing import native_provider
 
-    ``verify_login`` is the bounded auth-status fallback for the one eligible
-    shape (first-party provider, tokenSource absent or null); any other account
-    problem, or a failed readback, is refused with its bounded reason. The
-    discovery receipt's account fact comes from that same validation: reaching
-    the model list means this session's account readback (or its one bounded
-    readback) proved the first-party login, so the entry is ``confirmed``; a
-    refused account produces no reading at all, and its reason travels on the
-    error for the board to treat as an unknown reading.
-    """
     account = initialize.get("account")
-    problem = account_problem(account)
-    if problem:
-        if verify_login is None or not token_source_missing(account):
-            raise ClaudeProtocolError("first-party-auth-required", problem)
-        auth_problem = verify_login()
-        if auth_problem:
-            raise ClaudeProtocolError("first-party-auth-required", auth_problem)
+    provider = native_provider(account, "apiProvider")
+    token_source = account.get("tokenSource") if isinstance(account, dict) else None
+    account_status = "confirmed" if isinstance(token_source, str) and token_source not in ("", "none") else "unknown"
     entries = initialize.get("models")
     if not isinstance(entries, list):
         raise ClaudeProtocolError("invalid-catalog", "Claude returned no model list")
@@ -178,13 +161,13 @@ def _catalog(initialize: dict, version: str, verify_login=None) -> tuple[dict, d
                        "inputModalities": ["text"], "available": True})
     catalog = {"source": "claude-code-initialize", "adapter": "claude", "harnessVersion": version,
                "discoveredAt": datetime.now(timezone.utc).isoformat(),
-               "providers": [{"adapter": "claude", "provider": "anthropic",
-                              "displayName": "Anthropic Claude (first-party)", "packageName": "claude-code",
+               "providers": [{"adapter": "claude", "provider": provider,
+                              "displayName": provider, "packageName": "claude-code",
                               "packageVersion": version, "models": models}],
                "discoveries": [{"adapter": "claude", "status": "complete",
-                                "accountStatus": "confirmed"}],
+                                "accountStatus": account_status}],
                "warnings": list(dict.fromkeys(warnings))}
-    return catalog, {"apiProvider": account.get("apiProvider"), "tokenSource": account.get("tokenSource")}
+    return catalog
 
 
 def _interrupt(connection: Connection | None) -> bool:
@@ -246,6 +229,7 @@ class _RunState:
     error_text: str | None = None
     quota_failure: dict | None = None
     catalog_checked: bool = False
+    provider: str | None = None
     terminal_ok: bool = False
     drained: bool | None = None
     shutdown: bool = False
@@ -292,18 +276,6 @@ def _prepare(request: RunRequest) -> _Preparation:
                                   "a reconstructed claude turn must allocate a fresh session id")
     deadline = execution_deadline(request.budget.timeout_seconds)
     incoming = dict(os.environ)
-    # Refusals and the policy gate inspect the incoming environment before the
-    # allowlisted child environment would drop the offending names.
-    overrides = third_party_overrides(incoming)
-    if overrides:
-        raise ClaudeProtocolError(
-            "third-party-provider",
-            "Claude execution refuses third-party provider overrides: " + ", ".join(overrides))
-    if settings_policy(incoming) is None:
-        raise ClaudeProtocolError(
-            "settings-policy-unsupported",
-            "Claude P1 supports only BUDDY_CLAUDE_SETTINGS_POLICY=isolated; an explicit unsupported "
-            "settings policy was supplied")
     command = cli_command(incoming)
     environment = native_environment(incoming)
     # The network allowlist and the extra session-wide denials come from the
@@ -381,25 +353,16 @@ def _native_request_response(frame: dict) -> dict:
 # -- phase 3: the initialize handshake and the catalog check ---------------------
 
 
-def _initialize(spawn: _Spawn, preparation: _Preparation, request: RunRequest) -> dict:
-    """Initialize once and return the catalog the response itself reported.
-
-    A missing/null tokenSource is verified through the SAME resolved
-    executable, allowlisted child environment and cwd as this execution; every
-    other account problem is refused outright by the catalog builder.
-    """
+def _initialize(spawn: _Spawn) -> dict:
+    """Initialize once and return the catalog the response itself reported."""
     initialize = spawn.connection.call({"subtype": "initialize"})
-    catalog, _account = _catalog(initialize, spawn.version or "unknown",
-                                 verify_login=lambda: read_auth_status(
-                                     preparation.command, cwd=request.cwd,
-                                     environment=preparation.environment))
-    return catalog
+    return _catalog(initialize, spawn.version or "unknown")
 
 
 def _check_catalog(request: RunRequest, catalog: dict) -> None:
-    """The requested provider/model/effort must be in the current native catalog."""
+    """The requested model and effort must be in the current native catalog."""
     configuration = request.configuration
-    if configuration.provider != "anthropic" or not any(
+    if not any(
             model["id"] == configuration.model and configuration.effort in model["efforts"]
             for model in catalog["providers"][0]["models"]):
         raise ClaudeProtocolError("invalid-configuration",
@@ -433,6 +396,7 @@ class _TurnCollector:
         self.unsupported_requests = 0
         self.early_messages: list[tuple[bool, dict]] = []
         self.user_sent = False
+        self.provider = "unknown"
         self.last_activity: dict | None = None
         self._connection: Connection | None = None
         self._last_tool_calls = 0
@@ -480,7 +444,7 @@ class _TurnCollector:
         self.user_sent = True
         connection.send({"type": "user", "message": {"role": "user",
                        "content": [{"type": "text", "text": input_text}]}})
-        self.evidence = TurnEvidence(session_id, cwd)
+        self.evidence = TurnEvidence(session_id, cwd, provider=self.provider)
         connection.on_message = self.observe
 
     def replay_early(self) -> None:
@@ -810,13 +774,12 @@ def _build_result(request: RunRequest, *, state: _RunState, collector: _TurnColl
         completion = CompletionEvidence(stream_end=stream_ended)
     checked = CheckedConfiguration()
     if state.catalog_checked:
-        # The checked block restates the requested values the native checks
-        # confirmed: the account readback proved the first-party provider, the
-        # initialize catalog proved the model and effort membership. No
+        # Initialize reports the provider as used and confirms model and effort
+        # membership; the provider is never copied from the request. No
         # applied-effort readback exists in the native result, so none is
         # claimed for it.
         checked = CheckedConfiguration(
-            provider=CheckedValue(value=request.configuration.provider),
+            provider=CheckedValue(value=state.provider),
             model=CheckedValue(value=request.configuration.model),
             effort=CheckedValue(value=request.configuration.effort))
     effective = _effective_policy(preparation) if preparation is not None else EffectivePolicy()
@@ -952,7 +915,10 @@ def run(request: RunRequest, *, observer: Callable[[Mapping[str, Any]], RunFeedb
                               invocation_root=preparation.invocation_root, deadline=preparation.deadline,
                               cancel=cancel, owned=owned_spawn)
         collector.install(spawn.connection)
-        _check_catalog(request, _initialize(spawn, preparation, request))
+        catalog = _initialize(spawn)
+        state.provider = catalog["providers"][0]["provider"]
+        collector.provider = state.provider
+        _check_catalog(request, catalog)
         state.catalog_checked = True
         _send_and_settle(collector, spawn, preparation, request)
         state.drained = True
@@ -1042,8 +1008,7 @@ def run_discovery(*, cwd: str, invocation_root: Path, native_root: Path, timeout
 
     Discovery reuses the same spawn, handshake and conservative stop as an
     execution run. It never sends a user frame, never persists a session and
-    never checks the settings policy (the isolated gate guards executions,
-    not the metadata read); the third-party provider refusal still applies.
+    reads the user's configuration sources without selecting providers or login.
     The return value is the catalog receipt shape consumed by the registered
     discovery callers; success is returned only after the owned native group
     is confirmed stopped with a zero exit.
@@ -1053,12 +1018,6 @@ def run_discovery(*, cwd: str, invocation_root: Path, native_root: Path, timeout
     invocation_root = ensure_private_dir(Path(invocation_root))
     ensure_private_dir(Path(native_root))
     incoming = dict(os.environ)
-    overrides = third_party_overrides(incoming)
-    if overrides:
-        # Refused before any spawn: the known never-started fact.
-        raise _with_stop_fact(ClaudeProtocolError(
-            "third-party-provider",
-            "Claude execution refuses third-party provider overrides: " + ", ".join(overrides)), True)
     try:
         command = cli_command(incoming)
         environment = native_environment(incoming)
@@ -1079,9 +1038,7 @@ def run_discovery(*, cwd: str, invocation_root: Path, native_root: Path, timeout
     try:
         spawn.connection.on_request = lambda frame: spawn.connection.send(_native_request_response(frame))
         initialize = spawn.connection.call({"subtype": "initialize"})
-        catalog, _account = _catalog(initialize, spawn.version or "unknown",
-                                     verify_login=lambda: read_auth_status(command, cwd=cwd,
-                                                                           environment=environment))
+        catalog = _catalog(initialize, spawn.version or "unknown")
     except (ClaudeProtocolError, OSError, ValueError, TypeError, KeyError, AttributeError,
             RecursionError) as caught:
         error = caught
@@ -1112,25 +1069,7 @@ def prepare_run_services() -> RunServices:
 
 
 def check_preparation(spec: dict, environment: dict) -> None:
-    """The harness-side pre-spawn refusals of one prepared role execution.
-
-    These are the checks the legacy ``prepare`` made before any process
-    existed: the first-party provider requirement, the isolated settings
-    policy, the third-party provider refusal and a resolvable CLI. The
-    governed-turn, resume-mode and private-state rules belong to the shared
-    executor and are not repeated here.
-    """
-    if spec.get("provider") != "anthropic":
-        raise BoardError("INVALID_ARGUMENT",
-                         "Claude execution requires the first-party Anthropic provider", adapter="claude")
-    if settings_policy(environment) is None:
-        raise BoardError("ADAPTER_UNAVAILABLE",
-                         "Claude P1 supports only BUDDY_CLAUDE_SETTINGS_POLICY=isolated; "
-                         "an explicit unsupported settings policy was supplied", adapter="claude")
-    overrides = third_party_overrides(environment)
-    if overrides:
-        raise BoardError("ADAPTER_UNAVAILABLE",
-                         "Claude refuses third-party provider overrides: " + ", ".join(overrides), adapter="claude")
+    """Confirm the selected executable exists before preparing a role execution."""
     try:
         cli_command(environment)
     except ClaudeUnavailable as error:
@@ -1138,18 +1077,11 @@ def check_preparation(spec: dict, environment: dict) -> None:
 
 
 def session_facts(native_root: Path, session_id: str | None) -> dict:
-    """The native storage and visibility facts of a claude session.
-
-    The session lives in the user's own Claude Code store; this module keeps no
-    private binding for it, so the fact package reports the store scope and the
-    unverified visibility exactly as the legacy ``_native_session`` did. The
-    role adds the resume mode and decides reuse.
-    """
+    """The invocation disables native session persistence and never resumes."""
     return {
         "adapter": "claude", "sessionId": session_id, "captured": session_id is not None,
-        "storageScope": "harness-user-store", "nativeAppVisibility": "unknown",
-        "note": ("P1 allocates a fresh --session-id for every attempt, never resumes a native session and makes no "
-                 "native-session claim; the session lives in the user's own Claude Code store with unverified visibility"),
+        "storageScope": "none", "nativeAppVisibility": "none",
+        "note": "Each attempt allocates a fresh session with --no-session-persistence and never resumes it.",
     }
 
 

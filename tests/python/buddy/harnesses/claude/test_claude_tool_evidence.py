@@ -496,7 +496,6 @@ class RunnerReceiptTests(unittest.TestCase):
                             and key not in ("VIRTUAL_ENV", "UV_PROJECT_ENVIRONMENT")}
         self.environment.update(BUDDY_CONSOLE_PORT="0", BUDDY_CLAUDE_CLI=str(FIXTURE),
                                 BUDDY_CLAUDE_FIXTURE_STATE=str(self.root / "fixture.json"),
-                                BUDDY_CLAUDE_SETTINGS_POLICY="isolated",
                                 BUDDY_STATE_DIR=str(self.root / "state"), BUDDY_RUNTIME_ROOT=str(self.root / "runtime"),
                                 BUDDY_DEV_SOURCE="1")
         claude_module._reset_metadata_cache()
@@ -506,7 +505,7 @@ class RunnerReceiptTests(unittest.TestCase):
     def context(self, case):
         return ExecutionContext(task_id="goal-1", attempt_id=f"attempt-{uuid.uuid4().hex[:8]}", generation=1,
                                 spec={"cwd": str(self.cwd), "task": "Review the frozen copy", "timeoutSeconds": 20,
-                                      "provider": "anthropic", "model": "claude-opus-5-5[1m]", "effort": "low"},
+                                      "provider": "firstParty", "model": "claude-opus-5-5[1m]", "effort": "low"},
                                 directory=self.root / "attempt-1", runtime={},
                                 environment={**self.environment, "BUDDY_CLAUDE_FIXTURE_CASE": case}, turn=None)
 

@@ -9,6 +9,12 @@ def fact(kind: str, source: str, observed_at: str) -> dict:
             "source": source, "observedAt": observed_at}
 
 
+def native_provider(account: object, field: str) -> str:
+    """Keep the harness's provider spelling; an absent identity stays unknown."""
+    value = account.get(field) if isinstance(account, dict) else None
+    return value if isinstance(value, str) and value.strip() else UNKNOWN
+
+
 def codex_account(account: object, observed_at: str) -> dict:
     kind = UNKNOWN
     if isinstance(account, dict):
@@ -22,11 +28,11 @@ def codex_account(account: object, observed_at: str) -> dict:
 
 def claude_status(status: object, observed_at: str) -> dict:
     kind = UNKNOWN
-    if isinstance(status, dict) and status.get("loggedIn") is True and status.get("apiProvider") in ("anthropic", "firstParty"):
+    if isinstance(status, dict) and status.get("loggedIn") is True:
         method = status.get("authMethod")
         if method in ("claude.ai", "claudeai") and isinstance(status.get("subscriptionType"), str):
             kind = "subscription"
-        elif method in ("api_key", "apiKey", "console"):
+        elif status.get("apiProvider") in ("anthropic", "firstParty") and method in ("api_key", "apiKey", "console"):
             kind = "metered"
     return fact(kind, "claude/auth-status", observed_at)
 

@@ -63,7 +63,6 @@ class ClaudeFixtureCase(unittest.TestCase):
                             if not key.startswith("BUDDY_") and not key.startswith(("ANTHROPIC_", "CLAUDE_"))
                             and key not in ("VIRTUAL_ENV", "UV_PROJECT_ENVIRONMENT")}
         self.environment.update(BUDDY_CONSOLE_PORT="0", BUDDY_CLAUDE_CLI=str(FIXTURE), BUDDY_CLAUDE_FIXTURE_STATE=str(self.root / "fixture.json"),
-                                BUDDY_CLAUDE_SETTINGS_POLICY="isolated",
                                 BUDDY_STATE_DIR=str(self.root / "state"), BUDDY_RUNTIME_ROOT=str(self.root / "runtime"),
                                 BUDDY_DEV_SOURCE="1")
         claude_module._reset_metadata_cache()
@@ -77,7 +76,7 @@ class ClaudeFixtureCase(unittest.TestCase):
                       "previousSessionId": previous, "context": {}, "executionWorkspace": {}}
         return ExecutionContext(task_id="goal-1", attempt_id=f"attempt-{index}", generation=index,
                                 spec={"cwd": str(self.cwd), "task": "Write a fixture result", "timeoutSeconds": timeout,
-                                      "provider": "anthropic", "model": model, "effort": effort},
+                                      "provider": "firstParty", "model": model, "effort": effort},
                                 directory=self.root / f"attempt-{index}", runtime={},
                                 environment={**self.environment, "BUDDY_CLAUDE_FIXTURE_CASE": case},
                                 turn={"turnId": f"turn-{index}", "input": turn_input})
@@ -89,33 +88,7 @@ class ClaudeFixtureCase(unittest.TestCase):
 class ClaudeAvailabilityTests(ClaudeFixtureCase):
     """Capability reads over the cached discovery probe."""
 
-    def test_available_uses_cached_metadata_and_reports_missing_first_party_auth(self):
-        with mock.patch.dict("os.environ", {**self.environment, "BUDDY_CLAUDE_FIXTURE_CASE": "ok"}, clear=False):
-            self.assertEqual(self.adapter.available(), (True, None))
-            with mock.patch.dict("os.environ", {"BUDDY_CLAUDE_FIXTURE_CASE": "no-auth"}, clear=False):
-                # Briefly cached: a repeated capability read does not respawn the CLI.
-                self.assertEqual(self.adapter.available(), (True, None))
-                with self.assertRaises(BoardError):
-                    self.adapter.discover_models()
-                usable, reason = self.adapter.available()
-                self.assertFalse(usable)
-                self.assertIn("tokenSource none", reason)
-        with mock.patch.dict("os.environ", {"PATH": str(self.root)}, clear=False):
-            self.assertFalse(self.adapter.available()[0])
-        with mock.patch.dict("os.environ", {**self.environment, "ANTHROPIC_BASE_URL": "https://secret.example.invalid"},
-                             clear=False):
-            usable, reason = self.adapter.available()
-            self.assertFalse(usable)
-            self.assertIn("ANTHROPIC_BASE_URL", reason)
-            self.assertNotIn("secret.example.invalid", reason)
 
-    def test_unauthenticated_failures_are_cached_not_respawned(self):
-        (self.root / "fixture.json").unlink(missing_ok=True)
-        with mock.patch.dict("os.environ", {**self.environment, "BUDDY_CLAUDE_FIXTURE_CASE": "no-auth"}, clear=False):
-            self.assertFalse(self.adapter.available()[0])
-            self.assertFalse(self.adapter.available()[0])
-            self.assertEqual(self.fixture_runs(), 1,
-                             "the unauthenticated failure is cached briefly, not respawned per read")
 
     def test_concurrent_capability_reads_share_one_metadata_probe(self):
         from concurrent.futures import ThreadPoolExecutor
@@ -137,26 +110,6 @@ class ClaudeAvailabilityTests(ClaudeFixtureCase):
                              [(False, "fixture unauthenticated")] * 8)
             self.assertEqual(discover.call_count, 1)
 
-    def test_unverified_auth_status_fails_closed_with_bounded_reasons(self):
-        for proof, expected in (("logged-out", "active first-party login"),
-                                ("third-party", "not first-party"),
-                                ("missing-provider", "not first-party"),
-                                ("malformed", "not valid JSON"),
-                                ("nonzero", "exited nonzero"),
-                                ("timeout", "time bound")):
-            with self.subTest(proof=proof):
-                (self.root / "fixture.json").unlink(missing_ok=True)
-                environment = {**self.environment, "BUDDY_CLAUDE_FIXTURE_CASE": "null-token",
-                               "BUDDY_CLAUDE_FIXTURE_AUTH_STATUS": proof}
-                with mock.patch.dict("os.environ", environment, clear=False):
-                    claude_module._reset_metadata_cache()
-                    usable, reason = self.adapter.available()
-                self.assertFalse(usable)
-                self.assertIn(expected, reason)
-                self.assertLessEqual(len(reason), 200, "the refusal reason stays bounded")
-                for leak in ("claude.ai", "subscriptionType", "{not json"):
-                    self.assertNotIn(leak, reason)
-                self.assertEqual(self.fixture_state()["userTurns"], 0)
 
     def fixture_state(self):
         return json.loads((self.root / "fixture.json").read_text())
@@ -217,8 +170,8 @@ class ClaudeAdapterTests(ClaudeFixtureCase):
         self.assertEqual(outcome.result["sessionModel"], "claude-opus-5-5[1m]")
         self.assertNotIn("--resume", argv)
         native_session = outcome.result["nativeSession"]
-        self.assertEqual(native_session["storageScope"], "harness-user-store")
-        self.assertEqual(native_session["nativeAppVisibility"], "unknown")
+        self.assertEqual(native_session["storageScope"], "none")
+        self.assertEqual(native_session["nativeAppVisibility"], "none")
         self.assertFalse(native_session["resumable"])
 
     def test_observed_model_identity_stays_null_with_a_bounded_observed_set(self):
@@ -444,7 +397,7 @@ class ClaudeAdapterTests(ClaudeFixtureCase):
         with mock.patch.dict("os.environ", self.environment, clear=False):
             catalog = self.adapter.discover_models()
         provider = catalog["providers"][0]
-        self.assertEqual(provider["provider"], "anthropic")
+        self.assertEqual(provider["provider"], "firstParty")
         # The account fact comes from the same initialize session's validation.
         self.assertEqual(catalog["discoveries"],
                          [{"adapter": "claude", "status": "complete", "accountStatus": "confirmed"}])
@@ -460,89 +413,45 @@ class ClaudeAdapterTests(ClaudeFixtureCase):
         self.assertEqual(state["userTurns"], 0, "discovery must never send a user message")
         self.assertNotIn("--session-id", state["argv"])
 
-    def test_discovery_accepts_missing_or_null_token_source_with_verified_auth(self):
-        for case in ("null-token", "missing-token"):
+    def test_discovery_records_unknown_login_without_a_proof_process(self):
+        for case in ("null-token", "missing-token", "no-auth"):
             with self.subTest(case=case):
                 (self.root / "fixture.json").unlink(missing_ok=True)
-                environment = {**self.environment, "BUDDY_CLAUDE_FIXTURE_CASE": case,
-                               "BUDDY_CLAUDE_FIXTURE_AUTH_STATUS": "ok"}
+                environment = {**self.environment, "BUDDY_CLAUDE_FIXTURE_CASE": case}
                 with mock.patch.dict("os.environ", environment, clear=False):
                     catalog = self.adapter.discover_models()
                 self.assertEqual(catalog["discoveries"],
-                                 [{"adapter": "claude", "status": "complete", "accountStatus": "confirmed"}])
+                                 [{"adapter": "claude", "status": "complete", "accountStatus": "unknown"}])
                 self.assertEqual([model["id"] for model in catalog["providers"][0]["models"]],
                                  ["claude-opus-5-5[1m]", "claude-fable-5-1", "claude-sonnet-5",
                                   "claude-haiku-4-5-20251001"])
                 state = self.fixture_state()
                 self.assertTrue(state["initialize"])
                 self.assertEqual(state["userTurns"], 0, "discovery must never send a user message")
-                self.assertEqual(state["authStatusRuns"], 1,
-                                 "the missing tokenSource is verified by exactly one bounded auth status readback")
+                self.assertNotIn("authStatusRuns", state)
 
-    def test_governed_turn_accepts_null_token_source_with_verified_auth(self):
+    def test_governed_turn_leaves_unknown_login_to_the_native_cli(self):
         context = self.context("null-token")
-        context.environment["BUDDY_CLAUDE_FIXTURE_AUTH_STATUS"] = "ok"
         outcome = self.execute(context)
         self.assertEqual(outcome.status, "ok", outcome.to_report())
         self.assertEqual(outcome.result["turn"]["outcome"]["disposition"], "completed")
         state = self.fixture_state()
         self.assertEqual(state["userTurns"], 1)
-        self.assertEqual(state["authStatusRuns"], 1)
+        self.assertNotIn("authStatusRuns", state)
 
-    def test_explicit_none_stays_refused_without_an_auth_status_process(self):
-        # The existing account validation is this harness's account fact: a
-        # discovery that cannot confirm the login produces no reading at all,
-        # and its bounded reason travels on the refusal for the board to treat
-        # as an unknown reading — never as a models-plus-unknown receipt.
-        (self.root / "fixture.json").unlink(missing_ok=True)
-        environment = {**self.environment, "BUDDY_CLAUDE_FIXTURE_CASE": "no-auth",
-                       "BUDDY_CLAUDE_FIXTURE_AUTH_STATUS": "ok"}
-        with mock.patch.dict("os.environ", environment, clear=False):
-            with self.assertRaises(BoardError) as caught:
-                self.adapter.discover_models()
-            self.assertEqual(caught.exception.code, "ADAPTER_UNAVAILABLE")
-            self.assertIn("tokenSource none", caught.exception.message)
-            usable, reason = self.adapter.available()
-        self.assertFalse(usable)
-        self.assertIn("tokenSource none", reason)
-        state = self.fixture_state()
-        self.assertEqual(state.get("authStatusRuns", 0), 0,
-                         "an explicit none is a decision; no auth status readback may run")
-        self.assertEqual(state["userTurns"], 0)
 
-    def test_default_policy_executes_with_private_settings_and_empty_sources(self):
+    def test_execution_keeps_user_sources_and_native_permission_settings(self):
         context = self.context()
-        context.environment.pop("BUDDY_CLAUDE_SETTINGS_POLICY", None)
         outcome = self.execute(context)
         self.assertEqual(outcome.status, "ok", outcome.to_report())
         self.assertTrue(outcome.shutdown_confirmed)
         argv = self.fixture_state()["argv"]
-        self.assertEqual(flag_value(argv, "--setting-sources"), "")
-        self.assertIn("--strict-mcp-config", argv)
+        for flag in ("--setting-sources", "--strict-mcp-config", "--mcp-config", "--safe-mode"):
+            self.assertNotIn(flag, argv)
+        self.assertIn("--no-session-persistence", argv)
         self.assertTrue(Path(flag_value(argv, "--settings")).resolve().is_relative_to(context_root(context, "claude").resolve()))
 
-    def test_unsupported_settings_policy_is_refused_before_any_model_input(self):
-        for policy in ("", "global"):
-            with self.subTest(policy=policy):
-                context = self.context()
-                context.environment["BUDDY_CLAUDE_SETTINGS_POLICY"] = policy
-                with self.assertRaises(BoardError) as caught:
-                    self.executor.prepare(context)
-                self.assertEqual(caught.exception.code, "ADAPTER_UNAVAILABLE")
-                self.assertIn("BUDDY_CLAUDE_SETTINGS_POLICY=isolated", caught.exception.message)
-        self.assertFalse((self.root / "fixture.json").exists(), "no native child may start with an unsupported policy")
 
-    def test_third_party_env_override_is_refused_before_any_model_input(self):
-        context = self.context()
-        context.environment["ANTHROPIC_BASE_URL"] = "https://secret-gateway.example.invalid"
-        with self.assertRaises(BoardError) as caught:
-            self.executor.prepare(context)
-        self.assertEqual(caught.exception.code, "ADAPTER_UNAVAILABLE")
-        self.assertIn("ANTHROPIC_BASE_URL", caught.exception.message)
-        self.assertNotIn("secret-gateway.example.invalid", caught.exception.message)
-        self.assertFalse((self.root / "fixture.json").exists())
-        outcome = self.execute(self.context())
-        self.assertEqual(outcome.status, "ok", outcome.to_report())
 
     def test_model_and_effort_must_be_in_the_native_catalog(self):
         for index, (model, effort) in enumerate((("claude-unknown", "low"),
@@ -582,15 +491,15 @@ class ClaudeAdapterTests(ClaudeFixtureCase):
         self.assertNotEqual(second.result["turn"]["sessionId"], first.result["turn"]["sessionId"])
         uuid.UUID(second.result["turn"]["sessionId"], version=4)
 
-    def test_isolated_settings_and_sandbox_file_are_strict(self):
+    def test_native_permission_settings_and_file_mode_are_preserved(self):
         context = self.context()
         outcome = self.execute(context)
         self.assertEqual(outcome.status, "ok", outcome.to_report())
         argv = self.fixture_state()["argv"]
-        for flag in ("--safe-mode", "--strict-mcp-config", "--restricted"):
-            self.assertIn(flag, argv)
-        self.assertEqual(flag_value(argv, "--setting-sources"), "")
-        self.assertEqual(flag_value(argv, "--mcp-config"), '{"mcpServers":{}}')
+        self.assertIn("--restricted", argv)
+        self.assertIn("--no-session-persistence", argv)
+        for flag in ("--safe-mode", "--strict-mcp-config", "--setting-sources", "--mcp-config"):
+            self.assertNotIn(flag, argv)
         self.assertEqual(flag_value(argv, "--permission-prompt-tool"), "stdio")
         self.assertEqual(flag_value(argv, "--permission-mode"), "acceptEdits")
         from hey_my_buddy.buddy.harnesses.registry import worker_format
@@ -598,6 +507,7 @@ class ClaudeAdapterTests(ClaudeFixtureCase):
         control = self.control(context)
         settings_path = Path(control["nativeRoot"], "settings.json")
         settings = json.loads(settings_path.read_text())
+        self.assertEqual(set(settings), {"sandbox"})
         self.assertTrue(settings["sandbox"]["enabled"])
         self.assertTrue(settings["sandbox"]["network"]["strictAllowlist"])
         self.assertEqual(stat.S_IMODE(settings_path.stat().st_mode), 0o600)
@@ -632,18 +542,6 @@ class ClaudeAdapterTests(ClaudeFixtureCase):
         self.assertEqual(state["seenBuddyEnv"], ["BUDDY_CLAUDE_FIXTURE_CASE", "BUDDY_CLAUDE_FIXTURE_STATE"])
         self.assertEqual(state["seenAnthropicEnv"], [])
 
-    def test_prepared_roles_refuse_overrides_and_unsupported_policy_before_the_native_child(self):
-        cases = {"third-party-provider": {"ANTHROPIC_AWS_BASE_URL": "https://aws.example.invalid"},
-                 "settings-policy-unsupported": {"BUDDY_CLAUDE_SETTINGS_POLICY": "global"}}
-        for code, extra in cases.items():
-            with self.subTest(code=code):
-                context = self.context()
-                context.environment.update(extra)
-                with self.assertRaises(BoardError) as caught:
-                    self.executor.prepare(context)
-                self.assertEqual(caught.exception.code, "ADAPTER_UNAVAILABLE")
-        self.assertFalse((self.root / "fixture.json").exists(),
-                         "the refusal must fire before any native child starts")
 
     def test_preserved_final_activity_tracks_the_native_turn(self):
         context = self.context()

@@ -64,7 +64,7 @@ def controller_environment(directory, environment=None, *, read_only=False):
     allowed = ('PYTHONPATH', 'PYTHONSAFEPATH', 'PYTHONUTF8', 'PYTHONIOENCODING',
                'ZCODE_BUILTIN_PROVIDER_CONFIG_FILE', 'ZCODE_PERSONAL_PROVIDER_CONFIG_FILE',
                'BUDDY_STATE_DIR', 'BUDDY_RUNTIME_ROOT', 'BUDDY_RUNTIME', 'BUDDY_RUNTIME_IDENTITY',
-               'BUDDY_HARNESS_RECORD_FILE', 'BUDDY_CLAUDE_SETTINGS_POLICY')
+               'BUDDY_HARNESS_RECORD_FILE')
     for key in allowed:
         if key in source:
             env[key] = source[key]
@@ -75,7 +75,7 @@ def controller_environment(directory, environment=None, *, read_only=False):
     if source.get('BUDDY_DEV_SOURCE') == '1':
         for key in ('BUDDY_DEV_SOURCE', 'BUDDY_CLAUDE_CLI', 'BUDDY_CODEX_CLI', 'BUDDY_ZCODE_CLI',
                     'BUDDY_NODE', 'BUDDY_CODEX_FIXTURE_CASE', 'BUDDY_CODEX_FIXTURE_STATE',
-                    'BUDDY_CLAUDE_FIXTURE_CASE', 'BUDDY_CLAUDE_FIXTURE_STATE', 'BUDDY_CLAUDE_FIXTURE_AUTH_STATUS',
+                    'BUDDY_CLAUDE_FIXTURE_CASE', 'BUDDY_CLAUDE_FIXTURE_STATE',
                     'BUDDY_ZCODE_TEST_CASE'):
             if key in source:
                 env[key] = source[key]

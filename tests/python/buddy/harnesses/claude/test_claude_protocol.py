@@ -85,6 +85,16 @@ class QuotaParsingTests(unittest.TestCase):
 
 
 class TurnEvidenceTests(unittest.TestCase):
+    def test_quota_facts_keep_the_native_provider_without_assuming_anthropic(self):
+        for provider in ("bedrock", "firstParty", "unknown"):
+            with self.subTest(provider=provider):
+                evidence = TurnEvidence("session", "/fixture", provider=provider)
+                evidence.observe({"type": "rate_limit_event", "rate_limit_info": {
+                    "status": "allowed", "rateLimitType": "five_hour", "utilization": 0.2}})
+                quota = evidence.quota_candidate()
+                self.assertEqual(quota["provider"], provider)
+                self.assertEqual(quota["windows"][0]["usedPercent"], 20)
+
     def test_init_binds_session_and_cwd_and_records_model_readback(self):
         evidence = TurnEvidence("session-1", "/tmp/checkout-a")
         evidence.observe({"type": "system", "subtype": "init", "session_id": "session-1",

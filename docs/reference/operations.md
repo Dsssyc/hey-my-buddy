@@ -39,7 +39,7 @@ After installation or upgrade, start a new Host task so it loads the installed s
 
 `health` reports contract, schema, runtime identity and integrity; `runtime` reports the same identity plus a source-leak report; `adapters` reports one recorded health row per harness with the selected path, version and source, or the reason and repair advice. The current Host session can call the launcher's absolute path outside its sandbox; a new session loads the skill itself.
 
-Requirements are macOS or Linux, [uv](https://docs.astral.sh/uv/) with Python 3.12–3.14 (the bootstrap scripts can place a fixed private uv when the machine has none), Node.js 20+ for the DSH runner, and a working local `dsh` and/or ZCode installation with its own provider credentials (or the Codex App Server with an existing account-plan login, which requires no API key). The `claude` P1 adapter additionally needs the installed Claude Code CLI with a first-party Anthropic account and stays unavailable until that CLI is authenticated. hey-my-buddy never writes global harness model settings.
+Requirements are macOS or Linux, [uv](https://docs.astral.sh/uv/) with Python 3.12–3.14 (the bootstrap scripts can place a fixed private uv when the machine has none), Node.js 20+ for the DSH runner, and a working local `dsh` and/or ZCode installation with its own provider credentials (or the Codex App Server with an existing account-plan login, which requires no API key). The `claude` P1 adapter additionally needs the installed Claude Code CLI with its native user configuration and login. hey-my-buddy never writes global harness model settings.
 
 Windows is not validated on a real machine. The code and scripts are portable — `install.ps1`, `buddy.cmd` and `buddy.ps1` exist, PATH is read from the registry — but symbolic-link creation, forced process termination and registry-based discovery still need native verification.
 
@@ -251,7 +251,6 @@ All authoritative state is local SQLite under `BUDDY_STATE_DIR` (default `~/.loc
 | `BUDDY_WORKER_ID` | `local` | pool prefix: this ID, then `<prefix>-2`, `<prefix>-3`, up to the machine-wide ceiling |
 | `BUDDY_NODE` | unset | Node.js binary used to start a ZCode CLI that is installed as a JavaScript entry file |
 | `BUDDY_ZCODE_CLI` | unset | ZCode CLI path when it is not on `PATH` (the macOS bundle default is used otherwise) |
-| `BUDDY_CLAUDE_SETTINGS_POLICY` | `isolated` | User-approved Claude P1 default: private settings, empty setting sources and strict MCP. Explicit empty or unsupported values are refused before execution; see [claude.md](claude.md) and its installation boundary |
 | `BUDDY_CLAUDE_CLI` | `claude` on `PATH` | Claude Code executable override; discovery is initialize-only and never sends a user message |
 | `BUDDY_AGENT_CREDENTIAL` / `BUDDY_AGENT_CREDENTIAL_FILE` | set by the adapter | attempt-scoped CLI credential: restricted to its own run; Host operations are denied and it never falls back to the administrator token |
 | `BUDDY_TASK_ID`, `BUDDY_ATTEMPT_ID`, `BUDDY_TASK_FILE`, `BUDDY_LOG_DIR` | set for child processes | attribution and paths passed to `command` children |
