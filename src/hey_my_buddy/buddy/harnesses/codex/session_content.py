@@ -1,8 +1,8 @@
-"""Project this attempt's typed Codex items into the ACP v1 display record.
+"""Project this attempt's Codex items into the ACP v1 display record.
 
-Codex CLI 0.162.1's offline item samples are the baseline. Raw response,
-account and usage notifications are never display carriers. No native thread
-or native storage is read by this projector.
+Codex CLI 0.164.0's loopback turn supplies message, reasoning and raw tool
+items. Account and usage notifications are never display carriers. No native
+thread or native storage is read by this projector.
 """
 from __future__ import annotations
 
@@ -12,7 +12,8 @@ from ....protocol.session_content import (
 )
 from ....protocol.tool_evidence import normalize_tool_event
 from ..session_record import SessionRecord
-from .tool_evidence import TYPED_TOOL_ITEMS, TYPED_TOOL_OUTPUTS, native_identity
+from .tool_evidence import (RAW_TOOL_OUTPUTS, RAW_TOOL_STARTS, TYPED_TOOL_ITEMS,
+                            TYPED_TOOL_OUTPUTS, native_identity)
 
 
 class CodexSessionProjector:
@@ -63,7 +64,11 @@ class CodexSessionProjector:
             if method in ("item/started", "item/updated", "item/completed", "item/agentMessage/delta",
                           "item/reasoning/summaryTextDelta", "item/reasoning/textDelta",
                           "item/reasoning/summaryPartAdded", "item/commandExecution/outputDelta",
-                          "turn/diff/updated", "turn/completed"):
+                          "turn/diff/updated", "turn/completed") or (
+                method == "rawResponseItem/completed" and isinstance(params, dict)
+                and isinstance(params.get("item"), dict)
+                and params["item"].get("type") in RAW_TOOL_STARTS | RAW_TOOL_OUTPUTS
+            ):
                 self.unbound.append(message)
             return
         identity = native_identity(params)
@@ -76,6 +81,10 @@ class CodexSessionProjector:
             if (isinstance(item, dict) and isinstance(item.get("id"), str) and item["id"]
                     and isinstance(item.get("type"), str)):
                 self._item(root, method, item, identity)
+        elif method == "rawResponseItem/completed":
+            item = params.get("item")
+            if isinstance(item, dict):
+                self._raw_tool(root, item, identity)
         elif method in ("item/agentMessage/delta", "item/reasoning/summaryTextDelta", "item/reasoning/textDelta"):
             item_id, delta = params.get("itemId"), params.get("delta")
             if not isinstance(item_id, str) or not item_id or not isinstance(delta, str):
@@ -175,6 +184,38 @@ class CodexSessionProjector:
         value = f"[{label}]" + ("\n" + text if isinstance(text, str) and text else "")
         self._changed_content((*key, "marker", 0), value, "agent_message_chunk", self._meta(item, marker=True))
 
+    def _raw_tool(self, root: tuple, item: dict, identity: dict) -> None:
+        kind = item.get("type")
+        call_id = item.get("call_id") or item.get("id")
+        if not isinstance(call_id, str) or not call_id:
+            return
+        key = (*root, call_id)
+        if kind in RAW_TOOL_STARTS:
+            self.flush()
+            name = item.get("name") or kind
+            event = normalize_tool_event("codex", {"nativeIdentity": identity, "callId": call_id,
+                                                  "toolName": name, "phase": "start"})
+            raw_input = {field: item[field] for field in ("arguments", "input", "action") if field in item}
+            payload = {"title": name, "kind": event["category"], "status": "in_progress",
+                       **({"rawInput": raw_input} if raw_input else {})}
+            previous = self.tools.get(key)
+            if previous is None:
+                self.record.append(ToolCall(tool_call_id=call_id, **payload))
+                self.tools[key] = payload
+            return
+        if kind in RAW_TOOL_OUTPUTS and key in self.tools:
+            self.flush()
+            output = {field: item[field] for field in ("output", "status", "tools") if field in item}
+            previous = self.tools[key]
+            status = "failed" if previous.get("status") == "failed" or item.get("status") == "failed" else "completed"
+            changed = {"status": status, "rawOutput": {**previous.get("rawOutput", {}), **output}}
+            if any(previous.get(field) != value for field, value in changed.items()):
+                self.record.append(ToolCallUpdate(tool_call_id=call_id, **changed))
+                self.tools[key] = {**previous, **changed}
+            if (isinstance(item.get("output"), str)
+                    and "aggregatedOutput" not in previous.get("rawOutput", {})):
+                self._snapshot((*key, "output", 0), item["output"], "tool", call_id)
+
     def _tool(self, key: tuple, method: str, item: dict, identity: dict) -> None:
         self.flush()
         call_id, kind = item["id"], item["type"]
@@ -203,6 +244,9 @@ class CodexSessionProjector:
             self.record.append(ToolCall(tool_call_id=call_id, **payload))
             self.tools[key] = payload
         else:
+            for field in ("rawInput", "rawOutput"):
+                if field in payload and field in previous:
+                    payload[field] = {**previous[field], **payload[field]}
             changed = {name: value for name, value in payload.items() if previous.get(name) != value}
             if changed:
                 self.record.append(ToolCallUpdate(tool_call_id=call_id, **changed))

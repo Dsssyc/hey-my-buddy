@@ -44,7 +44,7 @@ export default {
     highlightFailed: "代码高亮加载失败",
     title: "会话", content: "会话内容", loading: "正在读取会话…",
     loadingEarlier: "正在读取更早内容…", empty: "此执行尚无会话内容", newContent: "有新内容",
-    coverage: { title: "会话内容", evidenced: "有证据", unverified: "未核实", unavailable: "不提供：{{reason}}",
+    coverage: { title: "会话内容", evidenced: "有证据 · {{version}}", unverified: "未核实", unavailable: "不提供：{{reason}}",
       kinds: { messages: "消息", reasoning: "推理", "tool-input": "工具输入", "tool-output": "工具输出", plan: "计划" } },
     reasoning: "推理", plan: "计划",
     copy: "复制全文", copied: "已复制", copyFailed: "复制失败", recordingStopped: "会话记录已停止：{{reason}}",

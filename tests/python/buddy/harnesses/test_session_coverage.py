@@ -1,6 +1,5 @@
 """Declaration completeness; projection tests alone cannot prove native coverage."""
 from pathlib import Path
-import re
 import unittest
 
 from hey_my_buddy.buddy.harnesses.registry import SESSION_COVERAGE, session_coverage
@@ -24,13 +23,18 @@ class SessionCoverageTests(unittest.TestCase):
                     if isinstance(declaration, Evidenced):
                         self.assertTrue(declaration.version.strip(), "evidence needs a harness form and version")
                         self.assertTrue(declaration.source.strip(), "evidence needs its native source")
-                        references = re.findall(r'((?:tests|docs)/[^\s;:]+):(\d+)(?:-(\d+))?', declaration.source)
-                        self.assertTrue(references, "evidence needs a repository source reference")
-                        for file, first, last in references:
-                            lines = (repository / file).read_text(encoding="utf-8").splitlines()
-                            self.assertLessEqual(1, int(first))
-                            self.assertLessEqual(int(first), int(last or first))
-                            self.assertLessEqual(int(last or first), len(lines))
+                        for reference in declaration.source.split(";"):
+                            file, separator, heading = reference.strip().partition("#")
+                            self.assertTrue(file.startswith(("tests/", "docs/")),
+                                            "evidence needs a repository source reference")
+                            path = repository / file
+                            self.assertTrue(path.is_file(), f"missing evidence file: {file}")
+                            if path.suffix == ".md":
+                                self.assertTrue(separator and heading, "document evidence needs a section title")
+                            if separator:
+                                titles = [line.lstrip("#").strip() for line in
+                                          path.read_text(encoding="utf-8").splitlines() if line.startswith("#")]
+                                self.assertIn(heading, titles, f"missing evidence section: {reference}")
                     elif isinstance(declaration, Unavailable):
                         self.assertEqual(set(declaration.reason), {"code", "params"})
                         self.assertIn(declaration.reason["code"], REGISTERED_REASON_PARAMETERS)

@@ -1,4 +1,4 @@
-"""Offline stream-json display records; synthetic thinking is not native proof."""
+"""Stream-json projection, including Claude Code CLI 2.1.299 loopback frames."""
 import json
 import os
 import unittest
@@ -34,6 +34,37 @@ class ProjectorTests(unittest.TestCase):
 
     def stream(self, kind, **fields):
         self.emit("stream_event", event={"type": kind, **fields})
+
+    def test_recorded_native_block_frames_keep_reasoning_and_all_inter_tool_body(self):
+        fixture = json.loads((Path(__file__).with_name("fixtures") /
+                              "session-content-claude.json").read_text())
+        self.projector.start_prompt(fixture["sessionId"], "probe prompt")
+        for frame in fixture["events"]:
+            self.projector.observe_frame(frame)
+        segments = {}
+        for event in self.record.events:
+            if event["sessionUpdate"] in ("agent_message_chunk", "agent_thought_chunk"):
+                key = (event["_meta"]["nativeItemId"], event["_meta"]["contentSegment"])
+                before = "" if event["_meta"].get("replace") else segments.get(key, "")
+                segments[key] = before + event["content"]["text"]
+        self.assertEqual(list(segments.values()), ["probe reasoning before tools", "probe body before tools",
+                                                   "probe body between tools", "probe body after tools"])
+        calls = [event for event in self.record.events if event["sessionUpdate"] == "tool_call"]
+        self.assertEqual([event["title"] for event in calls], ["Read", "Read", "StructuredOutput"])
+        self.assertEqual(calls[0]["rawInput"], {"file_path": "<probe-root>/cwd/probe.txt"})
+        self.assertTrue(any("loopback fixture tool output" in str(event.get("rawOutput"))
+                            for event in self.record.events))
+        self.assertFalse(any(event["sessionUpdate"] == "plan" for event in self.record.events))
+
+    def test_native_block_uuid_reconciles_partial_stream_and_duplicate_completed_frames(self):
+        self.stream("message_start", message={"id": "message"})
+        for index, text in enumerate(("before", "between")):
+            self.stream("content_block_start", index=index, content_block={"type": "text", "text": ""})
+            self.stream("content_block_delta", index=index, delta={"type": "text_delta", "text": text})
+            self.assistant([{"type": "text", "text": text}], uuid=f"frame-{index}")
+            self.assistant([{"type": "text", "text": text}], uuid=f"frame-{index}")
+        self.assertEqual([event["content"]["text"] for event in self.record.events],
+                         ["prompt 中文", "before", "between"])
 
     def test_complete_blocks_reasoning_tools_and_native_results(self):
         self.assistant([{"type": "thinking", "thinking": "supplied thought 中文"},
@@ -78,12 +109,9 @@ class ProjectorTests(unittest.TestCase):
         self.assistant(blocks)
         self.assertEqual(len(self.record.events), count)
         self.assertEqual([e["content"]["text"] for e in self.record.events], ["prompt 中文", "ab", "c", "thought"])
-        self.assistant([{"type": "text", "text": "revised"}])
-        self.assertTrue(self.record.events[-1]["_meta"]["replace"])
-        self.assertEqual(self.record.events[-1]["content"]["text"], "")  # Removed thought segment.
         self.emit("result", result="not display text", structured_output={"outcome": "not text"})
         self.assistant([{"type": "text", "text": "unadmitted followup"}])
-        self.assertEqual(len(self.record.events), count + 2)
+        self.assertEqual(len(self.record.events), count)
 
     def test_stream_tool_start_and_complete_input_deduplicate(self):
         block = {"type": "tool_use", "id": "call", "name": "Read", "input": {}}
@@ -146,22 +174,6 @@ class ProjectorTests(unittest.TestCase):
         self.assistant([{"type": "text", "text": "admitted"}])
         self.assertEqual(len(self.record.events), 2)
 
-    def test_versioned_redacted_sample_proves_text_only_not_thinking_absence(self):
-        sample = json.loads((Path(__file__).with_name("fixtures") / "native-usage-claude.json").read_text(encoding="utf-8"))
-        self.assertEqual(sample["harnessVersion"], "2.1.284")
-        self.projector.start_prompt("session-fixture-0001", "input")
-        for frame in sample["assistantFrames"]:
-            self.projector.observe_frame(frame)
-        rendered = {}
-        for event in self.record.events:
-            if event["sessionUpdate"] != "agent_message_chunk":
-                continue
-            meta = event["_meta"]
-            key = (meta["nativeItemId"], meta["contentSegment"])
-            rendered[key] = ("" if meta.get("replace") else rendered.get(key, "")) + event["content"]["text"]
-        self.assertEqual([value for value in rendered.values() if value and value != "[reasoning]"],
-                         ["Read the fixture file first.", "Fixture final answer: the bounded work is done."])
-        self.assertFalse(any(e["sessionUpdate"] == "agent_thought_chunk" for e in self.record.events))
 
 
 class RunRecordTests(NativeRunCase):

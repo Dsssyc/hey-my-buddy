@@ -12,7 +12,7 @@ it("opens all five categories, distinguishes missing evidence and absence, and c
   await user.click(trigger);
   const table = screen.getByRole("table", { name: "会话内容" });
   expect(within(table).getAllByRole("row")).toHaveLength(5);
-  expect(within(table).getByText("有证据")).not.toBeNull();
+  expect(within(table).getByText("有证据 · fixture CLI 1")).not.toBeNull();
   expect(within(table).getAllByText("未核实")).toHaveLength(3);
   expect(within(table).getByText(/不提供：Codex 内部推理/)).not.toBeNull();
   await user.keyboard("{Escape}");

@@ -14,7 +14,7 @@ export function SessionCoverage({ harness, coverage }: { harness: string; covera
           const declaration = coverage[kind];
           return <tr key={kind}>
             <th scope="row" className="w-24 py-0.5 pr-4 align-top font-normal text-ink">{t(`sessionView.coverage.kinds.${kind}`)}</th>
-            <td className="py-0.5">{declaration.status === "unavailable" ? t("sessionView.coverage.unavailable", { reason: reasonText(declaration.reason) }) : t(`sessionView.coverage.${declaration.status}`)}</td>
+            <td className="py-0.5">{declaration.status === "unavailable" ? t("sessionView.coverage.unavailable", { reason: reasonText(declaration.reason) }) : declaration.status === "evidenced" ? t("sessionView.coverage.evidenced", { version: declaration.version }) : t("sessionView.coverage.unverified")}</td>
           </tr>;
         })}</tbody>
       </table>

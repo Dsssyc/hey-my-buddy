@@ -53,6 +53,65 @@ class SessionProjectionTests(unittest.TestCase):
             blocks[key] = text if meta.get('replace') else blocks.get(key, '') + text
         return blocks
 
+    def test_installed_0_164_0_loopback_events_cover_messages_summary_and_tool_io(self):
+        fixture = json.loads((Path(__file__).parent / 'fixtures/session-content-codex-0.164.0.json').read_text())
+        self.assertEqual(fixture['observedWith'], 'Codex CLI 0.164.0')
+        for event in fixture['events']:
+            self.projector.observe_notification(event)
+        self.projector.flush()
+        rows = self.updates()
+        blocks = self.displayed_blocks(rows)
+        self.assertIn('Body before tools.', blocks.values())
+        self.assertIn('Body between tools.', blocks.values())
+        self.assertIn('Body after tools.', blocks.values())
+        self.assertIn('Probe reasoning summary.', blocks.values())
+        ordered = {}
+        for row in rows:
+            if row['sessionUpdate'] == 'tool_call':
+                ordered[('tool', row['toolCallId'])] = row['toolCallId']
+            elif row['sessionUpdate'] in ('agent_thought_chunk', 'agent_message_chunk'):
+                meta = row['_meta']
+                key = (meta['nativeItemId'], meta['contentSegment'])
+                ordered[key] = ('' if meta.get('replace') else ordered.get(key, '')) + row['content']['text']
+        self.assertEqual(list(ordered.values()), ['Probe reasoning summary.', 'Body before tools.', 'call_probe_1',
+                                                 'Body between tools.', 'call_probe_2', 'Body after tools.'])
+        calls = [row for row in rows if row['sessionUpdate'] == 'tool_call']
+        self.assertEqual([call['toolCallId'] for call in calls], ['call_probe_1', 'call_probe_2'])
+        self.assertEqual([call['kind'] for call in calls], ['execute', 'execute'])
+        self.assertEqual(calls[0]['rawInput']['arguments'], '{"cmd": "printf probe-tool-output-1"}')
+        self.assertEqual(calls[1]['rawInput']['arguments'], '{"cmd": "printf probe-tool-output-2"}')
+        native = fixture['nativeResponses']
+        native_bodies = [part['text'] for item in native if item['type'] == 'message'
+                         for part in item['content'] if part['type'] == 'output_text']
+        self.assertEqual(native_bodies, [text for text in blocks.values() if text.startswith('Body ')])
+        native_calls = [item for item in native if item['type'] == 'function_call']
+        self.assertEqual([call['rawInput']['arguments'] for call in calls],
+                         [call['arguments'] for call in native_calls])
+        self.assertEqual([call['toolCallId'] for call in calls], [call['call_id'] for call in native_calls])
+        self.assertEqual([part['text'] for item in native if item['type'] == 'reasoning'
+                          for part in item['summary']], ['Probe reasoning summary.'])
+        for result in (item for item in native if item['type'] == 'function_call_output'):
+            self.assertTrue(any(row.get('toolCallId') == result['call_id'] and
+                                row.get('rawOutput', {}).get('output') == result['output'] for row in rows))
+        for index in (1, 2):
+            self.assertEqual(sum(text == f'probe-tool-output-{index}' for text in blocks.values()), 1)
+        self.assertTrue(all(any(row.get('status') == 'completed' and row.get('toolCallId') == call['toolCallId']
+                                for row in rows) for call in calls))
+        self.assertFalse(any(row['sessionUpdate'] == 'plan' for row in rows))
+
+    def test_raw_output_keeps_a_typed_command_failure(self):
+        self.frame('rawResponseItem/completed', item={
+            'type': 'function_call', 'call_id': 'failed-call', 'name': 'exec_command',
+            'arguments': '{"cmd":"false"}'})
+        self.item('item/completed', 'commandExecution', 'failed-call', command='false',
+                  status='failed', exitCode=1, aggregatedOutput='')
+        self.frame('rawResponseItem/completed', item={
+            'type': 'function_call_output', 'call_id': 'failed-call', 'output': 'Process exited with code 1'})
+        self.projector.flush()
+        statuses = [row['status'] for row in self.updates() if row.get('toolCallId') == 'failed-call'
+                    and 'status' in row]
+        self.assertEqual(statuses[-1], 'failed')
+
     def test_record_is_not_opened_until_the_first_write(self):
         record = SessionRecord(self.state / 'other' / 'unstarted.jsonl', 'unstarted')
         record.close()

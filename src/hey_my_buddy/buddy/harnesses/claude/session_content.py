@@ -1,7 +1,8 @@
 """Display projection of this invocation's Claude Code stream-json frames.
 
-Complete assistant blocks are snapshots. Optional native stream events append
-text to those same message/block keys; enabling partial output is not our job.
+Assistant frames complete individual blocks of one model message. Their UUIDs
+bind each frame to its block offset; optional native stream events append text
+to those same message/block keys. Enabling partial output is not our job.
 Result summaries and structured outcomes are never a second source of text.
 """
 from __future__ import annotations
@@ -29,6 +30,8 @@ class ClaudeSessionProjector:
         self.stream_item: str | None = None
         self.text: dict[tuple[str, str], str] = {}
         self.tools: dict[str, dict] = {}
+        self.block_offsets: dict[tuple[str, str], int] = {}
+        self.next_block: dict[str, int] = {}
 
     def start_prompt(self, session_id: str, input_text: str) -> None:
         self.session_id = session_id
@@ -82,12 +85,16 @@ class ClaudeSessionProjector:
         if kind == "user" and not self.started:
             return
         item = self._item(frame, message)
+        offset = 0
+        frame_id = frame.get("uuid")
+        if kind == "assistant" and _identity(frame_id):
+            key = (item, frame_id)
+            if key not in self.block_offsets:
+                self.block_offsets[key] = self.next_block.get(item, 0)
+                self.next_block[item] = self.block_offsets[key] + len(content)
+            offset = self.block_offsets[key]
         for index, block in enumerate(content):
-            self._block(item, index, block, kind)
-        if kind == "assistant":
-            for native_item, segment in list(self.text):
-                if native_item == item and segment.startswith("block/") and int(segment[6:]) >= len(content):
-                    self._text(item, segment, "", "agent_message_chunk")
+            self._block(item, offset + index, block, kind)
 
     def _item(self, frame: dict, message: object) -> str:
         item = message.get("id") if isinstance(message, dict) else None
