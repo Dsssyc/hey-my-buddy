@@ -105,43 +105,32 @@ class HostQuotaRecoveryTests(MicroTaskWorkerTestCase):
             self.assertEqual(refused["error"]["code"], "BUDDY_CONFLICT")
             self.assertEqual(self.call("get", {"runId": failed["runId"]})["counts"]["turns"], 1)
 
-    def test_failed_micro_task_conclusion_reclaims_checkout_but_retains_partial_artifacts(self):
+    def test_sealed_failed_turn_conclusion_keeps_host_edits_out_of_its_partial_output(self):
         with self.daemon(env=self.env()):
             submitted, failed, partial = self.provider_rejection()
             common = {"runId": failed["runId"], "controlFile": submitted["controlFile"]}
-            # The Host edits the failed checkout inside the authorized scope before
-            # concluding: the conclusion must seal these changes as its own
-            # independent partial output without overwriting the Worker's earlier
-            # fixed partial of the same attempt.
             checkout = Path(failed["workspace"]["path"])
             (checkout / "tracked.txt").write_text("host review notes after the failure\n", encoding="utf-8", newline="\n")
             worker_partial_manifest = partial["manifestSha256"]
-            concluded = self.cli("conclude", json.dumps({
-                **common,
-                "note": "Incomplete work is retained in the partial artifact; no further execution.",
-            }), env=self.env())[1]
+            params = {**common, "note": "Incomplete work is retained in the partial artifact; no further execution."}
+            concluded = self.call("conclude", params)
             self.assertEqual(concluded["status"], "concluded")
             self.assertEqual(concluded["verdict"], "concluded")
             self.assertIsNotNone(concluded["hostConclusion"])
-            self.assertTrue(concluded["reclaim"]["removed"], concluded["reclaim"])
-            self.assertFalse(checkout.exists())
-            # The Host seal is a new artifact with its own binding; the Worker's
-            # partial artifact, ref and manifest stay exactly as they were.
-            self.assertNotEqual(concluded["partialArtifactId"], partial["artifactId"])
+            self.assertIsNone(concluded["partialArtifactId"])
+            # The last turn is already sealed. Later Host edits stay in the
+            # checkout and block its reclaim until the Host handles them.
+            self.assertFalse(concluded["reclaim"]["removed"])
+            self.assertIn("unsealed-changes", concluded["reclaim"]["reasons"])
+            self.assertEqual((checkout / "tracked.txt").read_text(encoding="utf-8"),
+                             "host review notes after the failure\n")
+            sealed = self.call("get", {"runId": failed["runId"], "includeAudit": True})
+            partials = [row for row in sealed["artifacts"] if row["kind"] == "partial-output"]
+            self.assertEqual([row["artifactId"] for row in partials], [partial["artifactId"]])
+            self.assertEqual(partials[0]["manifestSha256"], worker_partial_manifest)
             self.assertTrue(native_path(Path(partial["diffPath"])).is_file())
             self.assertTrue(native_path(Path(partial["cumulativePatch"]["path"])).is_file())
-            sealed = self.call("get", {"runId": failed["runId"], "includeAudit": True})
-            artifacts = {row["artifactId"]: row for row in sealed["artifacts"]}
-            self.assertIn(partial["artifactId"], artifacts)
-            self.assertEqual(artifacts[partial["artifactId"]]["manifestSha256"], worker_partial_manifest)
-            host_artifact = artifacts[concluded["partialArtifactId"]]
-            self.assertEqual(host_artifact["kind"], "partial-output")
-            self.assertNotEqual(host_artifact["outputCommit"], partial["outputCommit"])
-            replay = self.cli("conclude", json.dumps({**common, "note": "Incomplete work is retained in the "
-                "partial artifact; no further execution."}), env=self.env())[1]
-            self.assertTrue(replay["duplicate"])
-            # Both partial outputs stay readable after the reclaim.
-            self.assertTrue(native_path(Path(host_artifact["diffPath"])).is_file())
+            self.assertTrue(self.call("conclude", params)["duplicate"])
 
 
 class CrossHarnessProviderRejectionRecoveryTests(HostQuotaRecoveryTests):

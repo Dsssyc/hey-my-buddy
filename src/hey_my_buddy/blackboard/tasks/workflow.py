@@ -483,6 +483,8 @@ class WorkflowCoordinator:
             reason = _preparation_reason(problem.get("details"))
             if reason is not None:
                 view["preparationError"]["reason"] = reason
+            if problem["code"] == "WORKSPACE_BASE_MISMATCH" and problem.get("details"):
+                view["preparationError"]["details"] = problem["details"]
         if include_audit:
             view["decision"] = json.loads(row["decision_json"]) if row["decision_json"] else None
             view["decisionCommandId"] = row["decision_command_id"]
@@ -4445,8 +4447,8 @@ class WorkflowCoordinator:
 
         A failed, cancelled or delivered-but-unaccepted micro task receives one
         independent Host conclusion next to the real execution result; an
-        accepted micro task is already closed. After the stop evidence holds, writable
-        changes that no fixed output has sealed yet become an independent Host
+        accepted micro task is already closed. After the stop evidence holds, a
+        writable turn without a fixed output receives an independent Host
         partial output (never overwriting an earlier partial of the same
         attempt), the conclusion and that seal commit together, and the
         reservations are released and the registered checkout is reclaimed.
@@ -4639,12 +4641,22 @@ class WorkflowCoordinator:
         return task
 
     def _conclude_seal_work(self, connection, run_row, task):
-        """A writable attempt's Host partial seal, allowed paths and identity."""
+        """Seal only when the latest turn has no fixed output covering its writes."""
         manifest = json.loads(run_row["workspace_manifest_json"])
         if manifest["access"] == "read" or not task["selected_attempt_id"]:
             # Read-only work and an unstarted checkout have no changes to seal.
             # Ending a reader does not depend on its checkout still matching
             # the frozen input, and a partial output needs an attempt identity.
+            return None
+        if connection.execute(
+            "SELECT 1 FROM workflow_artifacts WHERE run_id=?"
+            " AND kind IN ('output','resolved-output','partial-output') AND turn_id=("
+            " SELECT turn_id FROM workflow_turns WHERE run_id=? ORDER BY turn_index DESC LIMIT 1) LIMIT 1",
+            (run_row["run_id"], run_row["run_id"]),
+        ).fetchone() is not None:
+            # A fixed output covers this stopped turn's writes. Preparing a new
+            # continuation workspace alone does not start another turn that
+            # could leave unsealed Worker changes.
             return None
         allowed = self._board_adopted_paths(run_row["run_id"], manifest)
         return manifest, allowed, task["selected_attempt_id"]
@@ -5605,6 +5617,11 @@ class WorkflowCoordinator:
                 reasons, evidence, retention = self._cleanup_reasons(connection, run_row, task, manifest)
                 resume = plan["state"] == "applying"
                 sealed = self._latest_handoff(connection, run_row, manifest)
+                seal_owner = run_id if sealed is None else sealed["taskId"]
+                if seal_owner != run_id:
+                    retained.extend(self._allocation_provenance(connection, self._run_row(connection, seal_owner)))
+                sealed_input = manifest if sealed is None else next(
+                    item for item in (manifest, *retained) if item["manifestSha256"] == sealed["manifestSha256"])
                 from .checkout_processes import first_execution_time
                 first_execution_at = first_execution_time(connection, manifest)
             inspection = None
@@ -5612,7 +5629,7 @@ class WorkflowCoordinator:
             if not reasons and workspace_module()._path_present(path):
                 inspection = workspace_module().cleanup_inspect(
                     self.board.directory, manifest, sealed=sealed, retained=retained,
-                    allowed=self._board_adopted_paths(run_id, manifest), resume=resume,
+                    allowed=self._board_adopted_paths(seal_owner, sealed_input), resume=resume,
                     repository=repository)
                 if workspace_module()._path_present(path):
                     reasons.extend(inspection["reasons"])

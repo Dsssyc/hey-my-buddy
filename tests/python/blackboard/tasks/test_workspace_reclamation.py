@@ -139,7 +139,7 @@ class ReclamationTests(LifecycleTestCase):
         self.assertIsNone(workspace._worktree_record(self.repo, checkout))
         self.assertFalse((board.directory / 'workspaces' / manifest['workspaceId']).exists())
 
-    def test_continue_prepared_then_cancelled_uses_the_conclusion_seal(self):
+    def test_continue_prepared_then_cancelled_keeps_the_last_turn_seal(self):
         board = self.board()
         submitted, claimed, manifest, checkout, seal, view, artifact = self.run_worktree(
             board, disposition="attention")
@@ -162,8 +162,9 @@ class ReclamationTests(LifecycleTestCase):
             current = json.loads(run["workspace_manifest_json"])
             self.assertNotEqual(current["manifestSha256"], manifest["manifestSha256"])
             handoff = board.store.workflow._latest_handoff(connection, run, current)
-            self.assertEqual(handoff["kind"], "host-output")
-            self.assertEqual(handoff["manifestSha256"], current["manifestSha256"])
+            self.assertEqual(handoff["snapshotSha256"], seal["snapshotSha256"])
+            self.assertEqual(handoff["manifestSha256"], manifest["manifestSha256"])
+            self.assertIsNone(concluded["partialArtifactId"])
             self.assertEqual(connection.execute("SELECT COUNT(*) FROM workflow_turns WHERE run_id=?",
                                                 (view["runId"],)).fetchone()[0], 1)
 

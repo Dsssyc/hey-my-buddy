@@ -635,7 +635,13 @@ def _snapshot(source, intent, workspace_id, *, state_dir):
         # source HEAD. Such a ref is an exact content handoff, not permission to
         # silently absorb unrelated edits made after that turn was sealed.
         if base != source["headCommit"] and input_tree != base_tree:
-            raise BoardError("WORKSPACE_BASE_MISMATCH", "The working tree does not match the explicitly pinned handoff commit")
+            paths = sorted(_tree_changes(root, base_tree, input_tree))
+            raise BoardError(
+                "WORKSPACE_BASE_MISMATCH",
+                "The checkout changed after the previous turn was sealed; cancel and conclude this micro task and start a new one "
+                "from the current checkout state. Compare the working tree with the handoff commit in Git for the full diff",
+                handoffCommit=base, paths=paths[:32], pathsCount=len(paths), pathsTruncated=len(paths) > 32,
+            )
         snapshot.update(includedUntracked=sorted(observed["included"]),
                         excludedUntracked=sorted(set(observed["untracked"]) - set(observed["included"])),
                         excludedEntries={path: value for path, value in observed["untracked"].items() if path not in observed["included"]},
@@ -2481,6 +2487,15 @@ def _cleanup_inspect(state_dir, manifest, sealed=None, retained=None, allowed=No
                 if Path(manifest["checkoutRoot"]) != state_dir / "workspaces" / manifest["workspaceId"] / "checkout":
                     result["reasons"].append("unsafe-path")
             return result
+        sealed_input = manifest
+        if sealed is not None:
+            sealed_input = next((item for item in (manifest, *(retained or ()))
+                                 if item["manifestSha256"] == sealed["manifestSha256"]
+                                 and item["checkoutRoot"] == manifest["checkoutRoot"]
+                                 and manifest_project_id(item) == manifest_project_id(manifest)), None)
+            if sealed_input is None:
+                result["reasons"].append("unsealed-handoff")
+                return result
         checkout_root = Path(allocation["path"])
         if not _inside(manifest["path"], checkout_root):
             result["reasons"].append("unsafe-path")
@@ -2497,7 +2512,7 @@ def _cleanup_inspect(state_dir, manifest, sealed=None, retained=None, allowed=No
             if record is None:
                 result["eligible"] = not result["reasons"]
                 return result
-            restored = _cleanup_restore(checkout_root, repository, git_dir, manifest, sealed,
+            restored = _cleanup_restore(checkout_root, repository, git_dir, sealed_input, sealed,
                                         state_dir=state_dir, allowed=tuple(allowed or ()))
         try:
             actual = (_inspect(str(checkout_root), checkout=manifest) if repository is not None
@@ -2514,7 +2529,7 @@ def _cleanup_inspect(state_dir, manifest, sealed=None, retained=None, allowed=No
         try:
             _cleanup_proof(Path(actual["repositoryPath"]), checkout_root, allocation, manifest, retained, sealed,
                            result, state_dir=state_dir, allowed=tuple(allowed or ()), observation=restored,
-                           resume=resume)
+                           resume=resume, sealed_input=sealed_input)
         except BoardError:
             # The registered owner of this exact path may complete the same removal
             # while its eligibility is still being proven. The checkout then holds no
@@ -2529,7 +2544,7 @@ def _cleanup_inspect(state_dir, manifest, sealed=None, retained=None, allowed=No
         return result
 
 
-def _cleanup_proof(repository, checkout_root, allocation, manifest, retained, sealed, result, *, state_dir, allowed=(), observation=None, resume=False) -> None:
+def _cleanup_proof(repository, checkout_root, allocation, manifest, retained, sealed, result, *, state_dir, sealed_input, allowed=(), observation=None, resume=False) -> None:
     """Fill one cleanup view with the worktree, seal and unsealed-change proof.
 
     ``allowed`` carries the exact paths earlier Host decisions already promoted on
@@ -2556,9 +2571,10 @@ def _cleanup_proof(repository, checkout_root, allocation, manifest, retained, se
         result["locked"] = record.get("locked")
     result["refs"] = _allocation_refs(repository, allocation["workspaceId"], manifest, retained)
     def fixed_refs_match(include_output):
-        snapshot = manifest["snapshot"]
-        expected = ((snapshot["inputRef"], manifest["inputCommit"]),
-                    (snapshot["stagedRef"], snapshot["stagedCommit"]))
+        inputs = {item["manifestSha256"]: item for item in (manifest, sealed_input)}
+        expected = tuple(pair for item in inputs.values() for pair in (
+            (item["snapshot"]["inputRef"], item["inputCommit"]),
+            (item["snapshot"]["stagedRef"], item["snapshot"]["stagedCommit"])))
         if include_output:
             expected += ((sealed["ref"], sealed["commit"]),)
         try:
@@ -2583,12 +2599,8 @@ def _cleanup_proof(repository, checkout_root, allocation, manifest, retained, se
     result["sealedObservation"] = snapshot.get("observationSha256")
     # Cleanup compares the latest seal with its own prepared input. Integration
     # separately compares the run's original input with this final output.
-    if (sealed.get("manifestSha256") != manifest["manifestSha256"]
-            or snapshot.get("inputCommit") != manifest["inputCommit"]):
-        result["reasons"].append("unsealed-handoff")
-        return
     try:
-        _artifact_binding(manifest, manifest, sealed)
+        _artifact_binding(sealed_input, sealed_input, sealed)
     except BoardError as error:
         if error.code == "WORKSPACE_GIT_UNKNOWN":
             raise
@@ -2598,8 +2610,8 @@ def _cleanup_proof(repository, checkout_root, allocation, manifest, retained, se
         result["reasons"].append("sealed-output-invalid")
         return
     if observation is None:
-        observation = _observe(checkout_root, manifest["snapshot"]["executionSelectors"], state_dir=state_dir,
-                               capture=[*manifest["writeScope"], *allowed])
+        observation = _observe(checkout_root, sealed_input["snapshot"]["executionSelectors"], state_dir=state_dir,
+                               capture=[*sealed_input["writeScope"], *allowed])
     if observation["fingerprint"] == snapshot.get("observationSha256"):
         return
     unsealed = []
@@ -2610,13 +2622,13 @@ def _cleanup_proof(repository, checkout_root, allocation, manifest, retained, se
         # restore. Only that absent path is removal progress; surviving changes
         # and newly appearing paths still need the ordinary output proof.
         removed_excluded = set()
-        if resume and manifest["kind"] == "existing":
-            excluded = manifest["snapshot"]["excludedEntries"]
+        if resume and sealed_input["kind"] == "existing":
+            excluded = sealed_input["snapshot"]["excludedEntries"]
             candidates = (excluded.keys() - observation["untracked"].keys()
                           - set(snapshot.get("excludedChangedPaths") or [])
                           - sealed_entries.keys())
             removed_excluded = {path for path in candidates if not _path_present(checkout_root / path)}
-        entries_now, _changed, excluded_changes, _adopted = _output_entries(checkout_root, manifest, observation,
+        entries_now, _changed, excluded_changes, _adopted = _output_entries(checkout_root, sealed_input, observation,
                                                                            allowed_paths=(*allowed, *removed_excluded))
         unsealed = sorted(path for path in entries_now.keys() | sealed_entries.keys()
                           if entries_now.get(path) != sealed_entries.get(path))
