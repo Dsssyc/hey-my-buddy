@@ -10,7 +10,7 @@ Linux 使用 Docker Desktop 的 `python:3.13-slim`、`--platform linux/amd64`，
 
 macOS 使用指定整合检出的既有虚拟环境解释器（CPython 3.13.3），以 `PYTHONPATH=src <integration-checkout>/.venv/bin/python -m hey_my_buddy.cli.checks --jobs 2 <files>` 检查当前受管检出的源码。入口清除了继承的 `HMB_STATE_DIR`、`HMB_RUNTIME_ROOT`、`HMB_RUNTIME`、`HMB_RUNTIME_IDENTITY`、`HMB_AGENT_CREDENTIAL_FILE`、`HMB_AGENT_CREDENTIAL_FD`、`VIRTUAL_ENV` 和 `UV_PROJECT_ENVIRONMENT`；其余测试隔离由检查运行器负责。
 
-两个平台的最终 `<files>` 相同，均为下列十个文件，新增组校验用例也在 `test_transport_attach.py` 内；没有运行完整检查，也没有手动启动 unittest 进程。
+上一回合两个平台的 `<files>` 相同，均为下列十个文件；本轮按续接范围只复验 `test_transport_attach.py`，新增组校验用例也在该文件内。没有运行完整检查，也没有手动启动 unittest 进程。
 
 ```text
 tests/python/blackboard/service/test_service_environment.py
@@ -33,9 +33,15 @@ tests/python/install/test_runtime.py
 
 读码所得：运行器为 `<private-root>/pNNN/tmp` 执行 `mkdir(mode=0o700, parents=True)`；Python 自动创建中间父目录时使用默认权限，再受调用者 umask 影响，故 `pNNN` 在 `0002` 下为 `0775`。旧 `_trusted_ancestors` 把非 sticky 祖先的组可写位与其他用户可写位一起拒绝，没有区分只有本人可用的私有主组；真实用户在相同 umask 下创建的 `~/.local`、`~/.local/share` 也会受该规则影响。该处需要表达的是能否被其他用户替换，不能仅由组可写位判断。
 
-改法：`protocol/transport.py` 对非 sticky 的组可写祖先查询系统账户和组数据库，仅当目录组是当前有效用户的主组、组名与用户名一致、组成员列表不含其他用户时允许该组写权限。没有账户或组记录时不授予这项信任；共享组、非主组、含其他成员的组，以及非 sticky 的其他用户可写目录仍然拒绝，祖先属主仍须为本人或 root。冷启动仍将状态目录设为 `0700`，读端仍拒绝状态目录自身的组或其他用户权限；此次例外只适用于祖先。macOS 与 Linux 使用同一条 POSIX 规则，没有读取 login.defs 或 PAM 配置，没有修改运行器的建目录方式或 umask。
+验收补充的复现：建立 tester 私有主组，再建立以 tester 组为主组的 other 账户，组数据库的 `gr_mem` 仍为空，other 却能修改该组可写的上层目录。`gr_mem` 只列附加成员，不能据此认定除本人以外没有账户属于该组。本轮新增的“另一个 UID 以同一 GID 为主组”回归用例在前一候选上返回信任并失败，补上账户枚举后通过。
 
-验证依据：新增用例模拟账户、组和目录元数据，覆盖私有主组的空成员列表及仅含本人时接受，共享组名、非主组 GID、含其他用户的成员列表及非 sticky 的其他用户可写目录时拒绝；另有用例确认即使组被判为私有，组可写的状态目录仍被拒绝。这些测试不依赖运行机器的实际组配置。旧实现使新增的两个私有组接受子用例失败，修改后通过；Linux 同一个 `su` 会话的独立预检在目录权限、属主和属组均未改变的情况下通过，`_trusted_ancestors` 返回 `True`。
+改法：`protocol/transport.py` 对非 sticky 的组可写祖先查询系统账户和组数据库，仅当目录组是当前有效用户的主组、组名与用户名一致、`gr_mem` 不含其他用户，并且 `pwd.getpwall()` 中没有其他 UID 以该 GID 为主组时允许该组写权限。没有账户或组记录时不授予这项信任；共享组、非主组、含其他附加或主组成员的组，以及非 sticky 的其他用户可写目录仍然拒绝，祖先属主仍须为本人或 root。冷启动仍将状态目录设为 `0700`，读端仍拒绝状态目录自身的组或其他用户权限；此次例外只适用于祖先。macOS 与 Linux 使用同一条 POSIX 规则，没有读取 login.defs 或 PAM 配置，没有修改运行器的建目录方式或 umask，也没有增加开关或第二套机制。
+
+账户数据库边界：这项信任依赖账户数据库如实反映组的归属；对于不能枚举账户的 NSS 或 LDAP 配置，`pwd.getpwall()` 只看得到本地账户，不能证明没有未被枚举的远端主组成员。本次没有加入额外检测机制，也不声称覆盖该配置下不可见的归属。
+
+验证依据：账户与组判断使用 `pwd.getpwuid`、`pwd.getpwall` 和 `grp.getgrgid` 边界替身，覆盖私有主组的空附加成员列表及仅含本人时接受，共享组名、非主组 GID、其他附加成员、其他 UID 的同组主组成员及非 sticky 的其他用户可写目录时拒绝；其他账户使用不同主组时仍可信任。另分别模拟 `pwd.getpwuid` 与 `grp.getgrgid` 抛出 `KeyError`，确认返回不信任而不把异常传给冷启动。这些测试不依赖运行机器的实际组配置。
+
+真实元数据验证：在真实临时目录下建立 `0770` 的上层目录和 `0700` 的状态目录，仅将 `_private_primary_group` 分别替换为真与假，确认 `_trusted_directory` 相应接受和拒绝，并确认传入组校验的是实际目录的 GID；没有替换该用例的目录元数据。另有用例继续确认即使组被判为私有，组可写的状态目录自身仍被拒绝。上一回合 Linux `su` 会话的独立预检也已在权限、属主和属组不变的情况下由拒绝变为通过。
 
 解释器边界：共享技能的 POSIX 启动器在开发模式及 install/upgrade 入口明确选择 `--python 3.12`，产品物化命令同样指定 3.12；项目允许 `>=3.12,<3.15`，外层检查使用镜像中的 3.13、子命令另行获取 3.12 是现有明确选择。本次未改动该选择；首轮独立的 `uv python install 3.12` 也已成功下载并安装 CPython 3.12.15。
 
@@ -65,11 +71,11 @@ tests/python/install/test_runtime.py
 
 首次 macOS 修复验证中，测试夹具一度使用 `os.dup` 保留旧 inode；重复描述符也保留了 flock，导致锁测试阻塞。终止这一私有测试进程后，检查运行器清理了私有根；随后将其改为独立打开并重新运行同一组文件。该中间验证不计为通过证据。
 
-## 最终检查和清理
+## 检查结果和清理
 
-macOS 最终同组十个文件全部通过，共 129 个测试、0 个跳过，检查运行器退出 0 并确认私有根已清理。新增的 6 个测试包含在内；`test_runtime.py` 的锁竞争用例和两个使用私有运行时夹具的文件也均通过。
+上一回合 macOS 同组十个文件全部通过，共 129 个测试、0 个跳过，检查运行器退出 0 并确认私有根已清理。当时新增的 6 个测试包含在内；`test_runtime.py` 的锁竞争用例和两个使用私有运行时夹具的文件也均通过。此为补充主组成员枚举之前的记录，不作为本轮最终源码的同组重验。
 
-Linux 最终同组检查在 `su tester` 的 `0002` 会话中运行，八个文件通过，两个文件失败，检查运行器退出 1 并确认私有根已清理。通过文件共报告 105 个测试；通过文件为 `test_service_environment.py`、`test_transport_attach.py`、`test_local_launcher.py`、`test_distribution.py`、`test_upgrade_host_cutover.py`、`test_execution_install_fence.py`、`test_packaging.py` 和 `test_runtime.py`。没有出现权限拒绝、共享库缺失、inode 编号误判或超时。
+上一回合 Linux 同组检查在 `su tester` 的 `0002` 会话中运行，八个文件通过，两个文件失败，检查运行器退出 1 并确认私有根已清理。通过文件共报告 105 个测试；通过文件为 `test_service_environment.py`、`test_transport_attach.py`、`test_local_launcher.py`、`test_distribution.py`、`test_upgrade_host_cutover.py`、`test_execution_install_fence.py`、`test_packaging.py` 和 `test_runtime.py`。没有出现权限拒绝、共享库缺失、inode 编号误判或超时。此记录同样早于本轮主组成员枚举补充。
 
 Linux 仅 `test_inquiry_owner.py` 的两个用例与 `test_state_boundaries.py` 的三个子用例保留空 HOME 内出现 `.cache` 的断言失败。为确认写入内容，再通过检查运行器只跑这两个文件，同时在容器内只读观察私有目录：三个失败 HOME 的 `.cache` 都只包含 `rosetta` 子目录，没有其他条目；该复查同样退出 1 并清理私有根。依本轮决定，这些失败归于模拟环境，不计为本次产品缺陷；两文件的原生 Linux 通过证据仍待后续补充。
 
@@ -77,6 +83,8 @@ Linux 仅 `test_inquiry_owner.py` 的两个用例与 `test_state_boundaries.py` 
 
 原始检查输出与探针输出留在忽略目录 `tmp/linux-portability/`，不作为公开仓库文件提交。
 
-本次两轮创建的容器及系统临时目录内的克隆均已删除，没有操作其他容器或镜像；检查运行器的基线、最终、缓存复查及中间中断运行均报告私有根已清理。没有删除检出内的文件，没有使用 git stash，也没有改动分支、标签或版本。
+本轮最终源码按续接要求只验证 `tests/python/protocol/test_transport_attach.py`：macOS 使用前述指定解释器和检查运行器，45 个测试全部通过、0 个跳过，退出 0；Linux 使用同样的临时克隆、amd64 镜像和 `su tester` 会话，实际 UID/GID 为 1000、umask 为 `0002`，通过检查运行器运行同一文件，45 个测试全部通过、0 个跳过，退出 0。两个运行器均确认私有根已清理；本轮没有重新运行其他九个文件，也没有运行完整检查。
+
+本轮创建的容器及系统临时目录内的克隆已删除，没有操作其他容器或镜像；前轮创建的容器和临时克隆也已在各轮结束时清理。没有删除检出内的文件，没有使用 git stash，也没有改动分支、标签或版本。
 
 与本轮要求不一致的情形：没有；Linux 两个缓存断言的保留和后续原生验证依照本轮明确决定记录。

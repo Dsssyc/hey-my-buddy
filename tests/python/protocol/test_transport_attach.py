@@ -90,17 +90,18 @@ class AttachFixture(unittest.TestCase):
 
 @unittest.skipIf(os.name == "nt", "POSIX directory ownership and account databases")
 class AncestorGroupTrustTests(unittest.TestCase):
-    def trusted(self, *, mode=0o775, directory_gid=2000, group_name="fixture-user", members=()):
+    def trusted(self, *, mode=0o775, directory_gid=2000, group_name="fixture-user", members=(), other_accounts=()):
         parents = {
             Path("/fixture"): os.stat_result((stat.S_IFDIR | mode, 1, 1, 1, 1000,
                                               directory_gid, 0, 0, 0, 0)),
             Path("/"): os.stat_result((stat.S_IFDIR | 0o755, 2, 1, 1, 0, 0, 0, 0, 0, 0)),
         }
-        account = SimpleNamespace(pw_name="fixture-user", pw_gid=2000)
+        account = SimpleNamespace(pw_name="fixture-user", pw_uid=1000, pw_gid=2000)
         group = SimpleNamespace(gr_name=group_name, gr_mem=list(members))
         with patch.object(transport.os, "geteuid", return_value=1000), \
                 patch.object(transport.os, "lstat", side_effect=lambda path: parents[Path(path)]), \
                 patch("pwd.getpwuid", return_value=account), \
+                patch("pwd.getpwall", return_value=[account, *other_accounts]), \
                 patch("grp.getgrgid", return_value=group):
             return transport._trusted_ancestors(Path("/fixture/state"))
 
@@ -117,6 +118,26 @@ class AncestorGroupTrustTests(unittest.TestCase):
 
     def test_group_writable_ancestor_with_another_member_is_not_trusted(self):
         self.assertFalse(self.trusted(members=("fixture-user", "another-user")))
+
+    def test_group_writable_ancestor_with_another_primary_member_is_not_trusted(self):
+        other = SimpleNamespace(pw_uid=1001, pw_gid=2000)
+        self.assertFalse(self.trusted(other_accounts=(other,)))
+
+    def test_account_with_another_primary_group_does_not_prevent_trust(self):
+        other = SimpleNamespace(pw_uid=1001, pw_gid=2001)
+        self.assertTrue(self.trusted(other_accounts=(other,)))
+
+    def test_missing_account_or_group_record_is_not_trusted(self):
+        account = SimpleNamespace(pw_name="fixture-user", pw_uid=1000, pw_gid=2000)
+        group = SimpleNamespace(gr_name="fixture-user", gr_mem=[])
+        for missing in ("account", "group"):
+            with self.subTest(missing=missing), \
+                    patch.object(transport.os, "geteuid", return_value=1000), \
+                    patch("pwd.getpwuid", return_value=account) as lookup_account, \
+                    patch("grp.getgrgid", return_value=group) as lookup_group, \
+                    patch("pwd.getpwall", return_value=[account]):
+                (lookup_account if missing == "account" else lookup_group).side_effect = KeyError(1000)
+                self.assertFalse(transport._private_primary_group(2000))
 
     def test_world_writable_ancestor_without_sticky_bit_is_not_trusted(self):
         self.assertFalse(self.trusted(mode=0o777))
@@ -220,6 +241,20 @@ class TrustBoundaryTests(AttachFixture):
         with patch.object(transport, "_private_primary_group", return_value=True) as group:
             self.assert_rejected_by_validation()
         group.assert_not_called()
+
+    @unittest.skipIf(os.name == "nt", "POSIX directory modes")
+    def test_real_group_writable_ancestor_requires_private_group(self):
+        parent = Path(self.temp.name) / "group-writable"
+        parent.mkdir(mode=0o770)
+        parent.chmod(0o770)
+        directory = parent / "state"
+        directory.mkdir(mode=0o700)
+        self.assertEqual(stat.S_IMODE(parent.stat().st_mode), 0o770)
+        for private in (True, False):
+            with self.subTest(private=private), \
+                    patch.object(transport, "_private_primary_group", return_value=private) as group:
+                self.assertEqual(_trusted_directory(directory), private)
+                group.assert_any_call(parent.stat().st_gid)
 
     def test_private_but_unreadable_directory_is_not_trusted(self):
         self.directory.chmod(0o000)

@@ -144,14 +144,19 @@ def _private_primary_group(gid: int) -> bool:
     import grp
     import pwd
 
+    uid = os.geteuid()
     try:
-        account = pwd.getpwuid(os.geteuid())
+        account = pwd.getpwuid(uid)
         if account.pw_gid != gid:
             return False
         group = grp.getgrgid(gid)
     except KeyError:
         return False
-    return group.gr_name == account.pw_name and all(member == account.pw_name for member in group.gr_mem)
+    return (
+        group.gr_name == account.pw_name
+        and all(member == account.pw_name for member in group.gr_mem)
+        and not any(other.pw_gid == gid and other.pw_uid != uid for other in pwd.getpwall())
+    )
 
 
 def _trusted_ancestors(directory: Path) -> bool:
