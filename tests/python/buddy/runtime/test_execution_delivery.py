@@ -7,12 +7,15 @@ import signal
 import subprocess
 import sys
 import tempfile
+import threading
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 from unittest import mock
 
 from hey_my_buddy.buddy.runtime import execution as entry
 from hey_my_buddy.buddy.runtime.receipts import deliver_receipt
+from hey_my_buddy.buddy.harnesses.base import AdapterOutcome
 from hey_my_buddy.errors import BoardError
 from hey_my_buddy.protocol.execution import read_execution_receipt, receipt_reference
 
@@ -28,6 +31,103 @@ class ExecutionDeliveryTests(unittest.TestCase):
         self.state = Path(temporary.name)
         self.execution = entry.Execution(CLAIM, self.state, "n" * 64, client=mock.Mock())
         self.execution.directory.mkdir(parents=True, mode=0o700)
+
+    def budget_execution(self, client, suffix=""):
+        task_id, attempt_id = "router-task" + suffix, "router-attempt" + suffix
+        claim = {"task": {"taskId": task_id, "spec": {
+            "adapter": "decision", "routerBudgetSeconds": 60, "cwd": str(self.state)}},
+            "attempt": {"taskId": task_id, "attemptId": attempt_id, "generation": 1},
+            "decisionInput": {"buddy": {"harness": "codex"}, "routingMode": "fast",
+                              "budget": {"timeoutSeconds": 60}}}
+        execution = entry.Execution(claim, self.state, "n" * 64, client=client)
+        execution.directory.mkdir(parents=True, mode=0o700)
+        return execution, claim
+
+    def execute_budget(self, execution, claim, on_start):
+        handle = mock.Mock(cancel_requested=False, stop_initiator=None, grace_expired=False,
+                           result=None, evidence_retention_failure=None)
+        handle.wait.return_value = 0
+        def start(*_args):
+            on_start()
+            return handle
+        with mock.patch("hey_my_buddy.install.runtime.resolve_runtime", return_value={"identity": "fixture"}), \
+             mock.patch.object(entry.role_seam, "worker_executor"), \
+             mock.patch.object(entry.role_seam, "prepare_worker_run", return_value=SimpleNamespace(available=True, error=None)), \
+             mock.patch.object(entry.role_seam, "worker_start", side_effect=start), \
+             mock.patch.object(entry.role_seam, "worker_collect", return_value=AdapterOutcome("ok", shutdown_confirmed=True)):
+            return execution._execute_selected(claim, claim["task"], claim["task"]["spec"],
+                claim["attempt"], execution.directory, {"preflightControl": mock.Mock()})
+
+    def test_budget_is_notified_before_native_start_and_offline_notice_is_retained(self):
+        for offline in (False, True):
+            with self.subTest(offline=offline):
+                client = mock.Mock()
+                execution, claim = self.budget_execution(client, suffix=f"-{int(offline)}")
+                delivered = []
+                def progress(*_args, **kwargs):
+                    budget = json.loads((execution.directory / entry.BUDGET).read_bytes())
+                    self.assertEqual(budget["binding"], {"taskId": claim["task"]["taskId"],
+                        "attemptId": claim["attempt"]["attemptId"], "generation": 1})
+                    self.assertEqual(kwargs["data"], {"waitingReason": None})
+                    if offline and client.progress.call_count == 1:
+                        raise BoardError("SERVICE_UNAVAILABLE", "offline")
+                    delivered.append(budget["deadline"])
+                client.progress.side_effect = progress
+                def start():
+                    self.assertEqual(client.progress.call_count, 1)
+                    if offline:
+                        self.assertIn("waitingReason", execution._hints)
+                        with mock.patch.object(entry.time, "monotonic", return_value=execution._next_hint_at):
+                            self.assertTrue(execution.flush_hints())
+                    self.assertEqual(len(delivered), 1)
+                receipt = self.execute_budget(execution, claim, start)
+                self.assertEqual(receipt["report"]["status"], "ok")
+
+    def test_an_older_identical_hint_ack_cannot_erase_the_budget_notification(self):
+        client = mock.Mock()
+        execution, claim = self.budget_execution(client)
+        entered, release, published = threading.Event(), threading.Event(), threading.Event()
+        seen_budget, errors = [], []
+        def progress(*_args, **_kwargs):
+            seen_budget.append((execution.directory / entry.BUDGET).exists())
+            if client.progress.call_count == 1:
+                entered.set()
+                if not release.wait(2):
+                    raise RuntimeError("fixture hint acknowledgement remained gated")
+        client.progress.side_effect = progress
+        execution.hint(waitingReason=None)
+        older = threading.Thread(target=execution.flush_hints, daemon=True)
+        original_publish = entry.fsync_json
+        def publish(path, *args, **kwargs):
+            original_publish(path, *args, **kwargs)
+            if path.name == entry.BUDGET:
+                published.set()
+        def start():
+            self.assertEqual(seen_budget, [False, True])
+        def run():
+            try:
+                self.execute_budget(execution, claim, start)
+            except BaseException as error:
+                errors.append(error)
+        current = threading.Thread(target=run, daemon=True)
+        with mock.patch.object(entry, "fsync_json", side_effect=publish):
+            older.start()
+            try:
+                self.assertTrue(entered.wait(2))
+                current.start()
+                self.assertTrue(published.wait(2))
+                release.set()
+                older.join(2)
+                current.join(2)
+                self.assertFalse(older.is_alive())
+                self.assertFalse(current.is_alive())
+                self.assertEqual(errors, [])
+                self.assertEqual(seen_budget, [False, True])
+            finally:
+                release.set()
+                older.join(2)
+                if current.ident is not None:
+                    current.join(2)
 
     def test_receipt_is_private_durable_and_has_no_authority_secret(self):
         report = {"status": "failed", "shutdownConfirmed": True,

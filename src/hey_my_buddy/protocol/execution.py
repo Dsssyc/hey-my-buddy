@@ -5,6 +5,7 @@ import json
 import hashlib
 import os
 import sys
+import threading
 import time
 import uuid
 from pathlib import Path
@@ -167,8 +168,22 @@ def read_execution_receipt(directory: Path, *, binding: dict | None = None,
     return value
 
 
+def execution_live_error(error: Exception) -> BoardError:
+    """Preserve C-Two's diagnostic facts without inferring process death."""
+    details = dict(getattr(error, "details", {}))
+    for source in (error.__cause__, error):
+        if source is None:
+            continue
+        for field in ("io_kind", "raw_os_error", "io_operation", "retryable", "transport_phase"):
+            value = getattr(source, field, None)
+            if value is not None:
+                details[field] = value
+    return BoardError("LIVE_UNAVAILABLE", "The execution endpoint is unavailable",
+                      **{**details, "causeType": type(error).__name__, "cause": str(error)})
+
+
 class ExecutionLiveClient:
-    """One authenticated connection per bounded operation; no liveness inference."""
+    """One held proxy for every operation and its physical connection observation."""
 
     def __init__(self, identity: RunIdentity, *, address: str, name: str,
                  instance_id: str, token: str, state_dir: Path):
@@ -179,30 +194,33 @@ class ExecutionLiveClient:
         self.token = token
         self.state_dir = Path(state_dir)
         self._closed = False
+        self._lock = threading.Lock()
+        self._peer = None
+        self.connection_observation = None
 
     def _frame(self, **values) -> str:
         return canonical_json({"identity": self.identity.to_payload(),
                                "instanceId": self.instance_id, "token": self.token, **values})
 
     def _call(self, method: str, timeout: float, **values) -> dict:
-        if self._closed:
-            raise BoardError("LIVE_UNAVAILABLE", "The execution channel is closed")
-        rpc_config.configure_client(self.state_dir)
         try:
-            with cc.connect(ExecutionLive, name=self.name, address=self.address, timeout=timeout) as peer:
-                bounded = cc.with_call_options(peer, timeout=timeout)
+            with self._lock:
+                if self._closed:
+                    raise BoardError("LIVE_UNAVAILABLE", "The execution channel is closed")
+                if self._peer is None:
+                    rpc_config.configure_client(self.state_dir)
+                    peer = cc.connect(ExecutionLive, name=self.name, address=self.address, timeout=timeout)
+                    try:
+                        self.connection_observation = cc.connection_observation(peer)
+                    except BaseException:
+                        cc.close(peer)
+                        raise
+                    self._peer = peer
+                peer = self._peer
+            with cc.with_call_options(peer, timeout=timeout) as bounded:
                 raw = getattr(bounded, method)(self._frame(**values))
         except Exception as error:
-            details = dict(getattr(error, "details", {}))
-            for source in (error.__cause__, error):
-                if source is None:
-                    continue
-                for field in ("io_kind", "raw_os_error", "io_operation", "retryable", "transport_phase"):
-                    value = getattr(source, field, None)
-                    if value is not None:
-                        details[field] = value
-            raise BoardError("LIVE_UNAVAILABLE", "The execution endpoint is unavailable",
-                             **{**details, "causeType": type(error).__name__, "cause": str(error)}) from error
+            raise execution_live_error(error) from error
         try:
             response = decode_strict_json(raw)
         except (TypeError, ValueError, RecursionError) as error:
@@ -211,10 +229,10 @@ class ExecutionLiveClient:
             raise BoardError("LIVE_UNAVAILABLE", "The execution endpoint returned an invalid frame")
         return response
 
-    def wait(self) -> bool:
-        if self._call("wait", 5.0) != {"alive": True}:
-            raise BoardError("LIVE_UNAVAILABLE", "The execution wait reply is invalid")
-        return True
+    def connect(self) -> None:
+        # A physical connection alone has not authenticated the private token.
+        # observe also answers before a native run is bound to the execution.
+        self.observe(limit=1, timeout_ms=1000)
 
     def stop(self, initiator: str = "unknown", grace_deadline: float | None = None,
              force: bool = False) -> dict:
@@ -239,7 +257,12 @@ class ExecutionLiveClient:
         return self._call("capabilities", 5.0)
 
     def close(self, reason: str = "service-detached") -> None:
-        self._closed = True
+        with self._lock:
+            if self._closed:
+                return
+            self._closed = True
+            if self._peer is not None:
+                cc.close(self._peer)
 
 
 def read_execution_endpoint(directory: Path, identity: RunIdentity, *, state_dir: Path,

@@ -67,7 +67,7 @@ class InterruptionRecoveryTests(BoardTestCase):
                 location = _RecoveredExecution(directory, binding, RunIdentity(
                     task_id=task['taskId'], attempt_id=actor['attemptId'], generation=1, invocation_id='execution'))
                 endpoint = Mock()
-                endpoint.wait.side_effect = lambda: scheduler._stopping.set() or True
+                endpoint.connect.side_effect = scheduler._stopping.set
                 reads = []
 
                 def publish_endpoint(*_args, **_kwargs):
@@ -86,8 +86,10 @@ class InterruptionRecoveryTests(BoardTestCase):
                 with patch('hey_my_buddy.blackboard.service.execution_scheduler.read_execution_endpoint',
                            side_effect=publish_endpoint), patch(
                            'hey_my_buddy.blackboard.service.execution_scheduler.inspect_process_identity',
-                           return_value='alive'):
-                    scheduler._observe(claim, location, IDENTITY)
+                           return_value='alive'), patch.object(
+                           scheduler, '_watch_connection', return_value=Mock(error=None)):
+                    scheduler._observed[actor['attemptId']] = -1
+                    scheduler._monitor(claim, location, IDENTITY)
                 self.assertEqual(len(reads), 2)
                 if acknowledgement == 'after-first-wait':
                     self.assertEqual(client.get(runId=task['taskId'])['attemptState'], 'starting')
@@ -282,6 +284,16 @@ class InterruptionRecoveryTests(BoardTestCase):
         for field in ('io_kind', 'raw_os_error', 'io_operation'):
             self.assertIn(field, issue['message'])
         self.assertFalse(client.get(runId=task['taskId'])['shutdownConfirmed'])
+
+    def test_unchanged_progress_notifies_observer_without_creating_an_event(self):
+        board, _, _, _, actor = self.claimed()
+        scheduler = Mock()
+        board.service.execution_scheduler = scheduler
+        head = board.store.head()
+        response = board.call('execution_progress', {**actor, 'data': {'waitingReason': None}})
+        self.assertTrue(response['recorded'])
+        self.assertEqual(board.store.head(), head)
+        scheduler.wake.assert_called_once_with()
 
     def test_no_receipt_preserves_the_persisted_stop_reason(self):
         for initiator, expected in (('console', 'console-stop'), ('service', 'service-stop'),
@@ -493,7 +505,9 @@ class InterruptionRecoveryTests(BoardTestCase):
         with patch.object(processes, 'inspect_process_identity', return_value='alive'):
             board.store.reconcile_startup()
         scheduler = ExecutionScheduler(board.service, live_registry=board.live_registry)
-        with patch.object(scheduler, '_start_observer') as observe:
+        def retain_observer(claim, *_args):
+            scheduler._observed[claim['attempt']['attemptId']] = -1
+        with patch.object(scheduler, '_start_observer', side_effect=retain_observer) as observe:
             scheduler._resume_executions()
             scheduler._resume_executions()
         observe.assert_called_once()

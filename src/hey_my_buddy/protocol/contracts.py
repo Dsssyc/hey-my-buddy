@@ -223,6 +223,3 @@ class ExecutionLive:
 
     def stop(self, request_json: str) -> str:
         ...
-
-    def wait(self, request_json: str) -> str:
-        ...

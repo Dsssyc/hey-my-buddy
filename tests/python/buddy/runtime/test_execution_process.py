@@ -59,28 +59,72 @@ class ExecutionEndpointTests(unittest.TestCase):
     def test_endpoint_connection_and_call_errors_retain_structured_cause(self):
         identity = launch_protocol.RunIdentity(task_id="task", attempt_id="attempt", generation=1,
                                               invocation_id="execution")
-        client = launch_protocol.ExecutionLiveClient(identity, address="private-address", name="fixture",
-            instance_id="i" * 64, token="t" * 64, state_dir=Path("/private/fixture"))
         details = {"io_kind": "permission_denied", "raw_os_error": 13, "io_operation": "connect"}
         for stage in ("connection", "call"):
             with self.subTest(stage=stage):
+                client = launch_protocol.ExecutionLiveClient(identity, address="private-address", name="fixture",
+                    instance_id="i" * 64, token="t" * 64, state_dir=Path("/private/fixture"))
                 error = RuntimeError("native IPC failed")
                 for field, value in details.items():
                     setattr(error, field, value)
                 peer = mock.Mock()
-                peer.stop.side_effect = error
-                connection = mock.MagicMock()
-                connection.__enter__.return_value = peer
+                bounded = mock.Mock()
+                bounded.stop.side_effect = error
+                call_view = mock.MagicMock()
+                call_view.__enter__.return_value = bounded
                 with mock.patch.object(launch_protocol.rpc_config, "configure_client"), \
-                     mock.patch.object(launch_protocol.cc, "connect", return_value=connection,
+                     mock.patch.object(launch_protocol.cc, "connect", return_value=peer,
                                        side_effect=error if stage == "connection" else None), \
-                     mock.patch.object(launch_protocol.cc, "with_call_options", return_value=peer), \
-                     self.assertRaises(BoardError) as caught:
-                    client.stop("service", force=True)
+                     mock.patch.object(launch_protocol.cc, "connection_observation", return_value=object()), \
+                     mock.patch.object(launch_protocol.cc, "with_call_options", return_value=call_view), \
+                     mock.patch.object(launch_protocol.cc, "close") as close:
+                    try:
+                        with self.assertRaises(BoardError) as caught:
+                            client.stop("service", force=True)
+                    finally:
+                        client.close()
+                    if stage == "call":
+                        close.assert_called_once_with(peer)
+                    else:
+                        close.assert_not_called()
                 self.assertEqual(caught.exception.code, "LIVE_UNAVAILABLE")
                 for field, value in details.items():
                     self.assertEqual(caught.exception.details[field], value)
                 self.assertIs(caught.exception.__cause__, error)
+
+    def test_one_held_proxy_serves_all_live_calls(self):
+        identity = launch_protocol.RunIdentity(task_id="task", attempt_id="attempt", generation=1,
+                                              invocation_id="execution")
+        client = launch_protocol.ExecutionLiveClient(identity, address="private-address", name="fixture",
+            instance_id="i" * 64, token="t" * 64, state_dir=Path("/private/fixture"))
+        peer = mock.Mock()
+        observation = object()
+        bounded = mock.Mock()
+        bounded.observe.return_value = canonical_json({"observed": True})
+        bounded.stop.return_value = canonical_json({"accepted": True})
+        bounded.send.return_value = canonical_json({"status": "unavailable"})
+        bounded.capabilities.return_value = canonical_json({"inquiryDelivery": "unsupported"})
+        call_view = mock.MagicMock()
+        call_view.__enter__.return_value = bounded
+        with mock.patch.object(launch_protocol.rpc_config, "configure_client"), \
+             mock.patch.object(launch_protocol.cc, "connect", return_value=peer) as connect, \
+             mock.patch.object(launch_protocol.cc, "connection_observation", return_value=observation) as observe_connection, \
+             mock.patch.object(launch_protocol.cc, "with_call_options", return_value=call_view) as options, \
+             mock.patch.object(launch_protocol.cc, "close") as close:
+            try:
+                client.connect()
+                self.assertIs(client.connection_observation, observation)
+                self.assertEqual(client.stop("service", force=True), {"accepted": True})
+                self.assertEqual(client.request({"kind": "inquiry"}, timeout_ms=500), {"status": "unavailable"})
+                self.assertEqual(client.observe(limit=1), {"observed": True})
+                self.assertEqual(client.capabilities(), {"inquiryDelivery": "unsupported"})
+                connect.assert_called_once()
+                observe_connection.assert_called_once_with(peer)
+                self.assertEqual(options.call_count, 5)
+                self.assertTrue(all(call.args == (peer,) for call in options.call_args_list))
+            finally:
+                client.close()
+            close.assert_called_once_with(peer)
 
     def test_context_uses_validated_turn_and_optional_private_adapter(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -247,29 +291,31 @@ class ExecutionEndpointTests(unittest.TestCase):
                 client = read_execution_endpoint(execution.directory, execution.live.identity,
                     state_dir=state, process_identity=process_identity)
                 self.assertIsNotNone(client)
-                self.assertTrue(client.wait())
-                response = client.stop("console", force=True)
-                self.assertEqual(response, {"accepted": True})
-                self.assertNotIn(material["token"], json.dumps(response))
-                self.assertTrue(execution.stop_requested())
-                self.assertEqual(client.observe(limit=1)["unavailable"], "source-unavailable")
-                native = mock.Mock()
-                native.capabilities_local.return_value = canonical_json({"inquiryDelivery": "unsupported"})
-                native.observe_local.return_value = canonical_json({"observed": True})
-                native.request_local.return_value = canonical_json({"status": "unavailable"})
-                execution.live.bind_native(native)
-                self.assertEqual(client.capabilities(), {"inquiryDelivery": "unsupported"})
-                self.assertEqual(client.observe(limit=1), {"observed": True})
-                request = LiveRequest(identity=execution.live.identity, request_id="request-1",
-                    kind="inquiry", payload=InquiryPayload(question_id="question-1", question="Ready?"))
-                reply = execution.live.send(client._frame(request=request.to_payload(), timeoutMs=3000,
-                    deadlineMonotonic=time.monotonic() + 3))
-                self.assertEqual(json.loads(reply), {"status": "unavailable"})
-                native.request_local.assert_called_once()
-                native.request.assert_not_called()
-                native.capabilities.assert_not_called()
-                native.observe.assert_not_called()
-                execution.live.unbind_native(native)
+                try:
+                    client.connect()
+                    self.assertIsNotNone(client.connection_observation)
+                    response = client.stop("console", force=True)
+                    self.assertEqual(response, {"accepted": True})
+                    self.assertNotIn(material["token"], json.dumps(response))
+                    self.assertTrue(execution.stop_requested())
+                    self.assertEqual(client.observe(limit=1)["unavailable"], "source-unavailable")
+                    native = mock.Mock()
+                    native.capabilities_local.return_value = canonical_json({"inquiryDelivery": "unsupported"})
+                    native.observe_local.return_value = canonical_json({"observed": True})
+                    native.request_local.return_value = canonical_json({"status": "unavailable"})
+                    execution.live.bind_native(native)
+                    self.assertEqual(client.capabilities(), {"inquiryDelivery": "unsupported"})
+                    self.assertEqual(client.observe(limit=1), {"observed": True})
+                    request = LiveRequest(identity=execution.live.identity, request_id="request-1",
+                        kind="inquiry", payload=InquiryPayload(question_id="question-1", question="Ready?"))
+                    self.assertEqual(client.request(request, timeout_ms=3000), {"status": "unavailable"})
+                    native.request_local.assert_called_once()
+                    native.request.assert_not_called()
+                    native.capabilities.assert_not_called()
+                    native.observe.assert_not_called()
+                    execution.live.unbind_native(native)
+                finally:
+                    client.close()
                 rejected = {**client.identity.to_payload()}
                 with self.assertRaises(BoardError) as refused:
                     execution.live.stop(canonical_json({"identity": rejected,
@@ -299,6 +345,36 @@ class ExecutionEndpointTests(unittest.TestCase):
                     reap.assert_called_once()
                     self.assertFalse((execution.directory / "execution-live.json").exists())
             finally:
+                execution.live.finish()
+
+    def test_closing_one_proxy_does_not_stop_shared_physical_connection(self):
+        with tempfile.TemporaryDirectory() as directory:
+            state = Path(directory)
+            claim = {"task": {"taskId": "task-shared", "spec": {"adapter": "command"}},
+                     "attempt": {"taskId": "task-shared", "attemptId": "attempt-shared", "generation": 1}}
+            execution = Execution(claim, state, "c" * 64, client=object())
+            execution.directory.mkdir(parents=True, mode=0o700)
+            process_identity = {"bootId": boot_id(), "pid": os.getpid(),
+                "startedAt": _creation_time(os.getpid()), "processGroupId": os.getpid(), "jobName": None}
+            execution.live.start(process_identity)
+            clients = []
+            try:
+                for _ in range(2):
+                    client = read_execution_endpoint(execution.directory, execution.live.identity,
+                        state_dir=state, process_identity=process_identity)
+                    self.assertIsNotNone(client)
+                    clients.append(client)
+                    client.connect()
+                first, second = clients
+                observation = first.connection_observation
+                self.assertEqual(observation.connection_id, second.connection_observation.connection_id)
+                first.close()
+                self.assertIsNone(observation.wait_closed(timeout=0))
+                self.assertEqual(second.observe(limit=1)["unavailable"], "source-unavailable")
+                self.assertFalse(execution.stop_requested())
+            finally:
+                for client in clients:
+                    client.close()
                 execution.live.finish()
 
     def test_endpoint_material_survives_native_stop_while_receipt_waits_for_service(self):
@@ -332,7 +408,11 @@ class ExecutionEndpointTests(unittest.TestCase):
                     self.assertTrue((execution.directory / "result-receipt.json").exists())
                     client = read_execution_endpoint(execution.directory, execution.live.identity,
                         state_dir=state, process_identity=process_identity)
-                    self.assertTrue(client.wait())
+                    try:
+                        client.connect()
+                        self.assertIsNotNone(client.connection_observation)
+                    finally:
+                        client.close()
                     self.assertTrue((execution.directory / "execution-live.json").exists())
                 finally:
                     online.set()

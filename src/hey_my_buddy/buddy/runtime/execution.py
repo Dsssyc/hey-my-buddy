@@ -208,7 +208,6 @@ class _ExecutionLive:
         self.token = secrets.token_hex(32)
         self._lock = threading.RLock()
         self._native: CTwoLiveEndpoint | None = None
-        self._done = threading.Event()
         self._started = False
 
     def start(self, process_identity: dict) -> None:
@@ -237,7 +236,6 @@ class _ExecutionLive:
                 self._native = None
 
     def finish(self) -> None:
-        self._done.set()
         if self._started:
             try:
                 cc.unregister(self.name)
@@ -313,12 +311,6 @@ class _ExecutionLive:
             raise BoardError("INVALID_ARGUMENT", "Invalid stop deadline")
         self.execution.request_stop(value["initiator"], deadline, force=value["force"])
         return canonical_json({"accepted": True})
-
-    def wait(self, request_json: str) -> str:
-        self._auth(request_json, set())
-        self._done.wait(3.0)
-        return canonical_json({"alive": True})
-
 
 class Execution:
     def __init__(self, claim: dict, state_dir: Path, nonce: str, *,
@@ -671,6 +663,15 @@ class Execution:
                             "generation": attempt["generation"]},
                 "deadline": deadline,
             })
+        # An older in-flight hint must finish before registering the budget's
+        # notification; its acknowledgement could otherwise erase the same
+        # waitingReason=None value written after the budget was published.
+        with self._flush_lock:
+            self.hint(waitingReason=None)
+        if deadline is not None:
+            # A failed send stays pending for the control/delivery path, and
+            # reconnect reads the file even if this notification was lost.
+            self.flush_hints()
         holder["adapter"] = implementation
         # A previous pre-model retry may have proved its own child stopped. That
         # proof cannot cover this start(): it might spawn before raising a handle.
@@ -682,7 +683,6 @@ class Execution:
         holder["handle"] = handle
         holder["started"] = True
         control.attach(handle, implementation)
-        self.hint(waitingReason=None)
         timed_out = False
         while True:
             control.raise_fatal()
