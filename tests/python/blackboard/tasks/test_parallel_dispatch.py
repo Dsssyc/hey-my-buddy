@@ -5,13 +5,22 @@ import sys
 import time
 import os
 import signal
+import json
+import sqlite3
+from contextlib import closing
 from datetime import datetime, timezone
+from itertools import islice
+
+import c_two as cc
 import psutil
 from pathlib import Path
 
 from support import BoardTestCase, wait_for
 from hey_my_buddy.protocol.client import BoardClient
+from hey_my_buddy.protocol import rpc_config, transport
+from hey_my_buddy.protocol.contracts import BuddyControl, CONTROL_NAME
 from hey_my_buddy.protocol.process_identity import inspect_process_identity
+from hey_my_buddy.private_dirs import attempt_root
 
 
 class DirectAdmissionTests(BoardTestCase):
@@ -122,6 +131,123 @@ class ModelServiceAdmissionTests(BoardTestCase):
 
 
 class PrivateDaemonDispatchTests(BoardTestCase):
+    def execution_diagnostics(self, runs: dict[str, Path]) -> str:
+        """Read bounded failure evidence without changing the private board."""
+        def capture(read):
+            try:
+                return read()
+            except Exception as error:
+                return {"diagnosticError": f"{type(error).__name__}: {error}"[:2048]}
+
+        def file_tail(path):
+            try:
+                with path.open("rb") as stream:
+                    stat = os.fstat(stream.fileno())
+                    stream.seek(max(0, stat.st_size - 4096))
+                    return {"exists": True, "mtimeNs": stat.st_mtime_ns, "size": stat.st_size,
+                            "tail": stream.read(4096).decode("utf-8", errors="replace")}
+            except FileNotFoundError:
+                return {"exists": False}
+
+        def native_journals(directory):
+            journals = {path.name: capture(lambda: file_tail(path))
+                        for path in islice(directory.glob("native-process-journal-*.json"), 4)}
+            return {"exists": bool(journals), "files": journals}
+
+        def read_rpc(operation, params):
+            rpc_config.configure_client(self.directory, create=False)
+            endpoint = transport._read_endpoint(self.directory)
+            if endpoint is None:
+                raise RuntimeError("Private service endpoint is unavailable")
+            with cc.connect(BuddyControl, name=CONTROL_NAME, address=endpoint["address"], timeout=2) as peer:
+                with cc.with_call_options(peer, timeout=2) as bounded:
+                    return transport._invoke(bounded, endpoint, operation, params)
+
+        client = BoardClient(self.directory, call=read_rpc, autostart=False)
+
+        def task_get(run_id):
+            view = client.get(runId=run_id)
+            # Keep the mechanical state, excluding command text and result output.
+            facts = {key: view.get(key) for key in (
+                "runId", "state", "attemptState", "queueReason", "selectedAttemptId",
+                "activeAttemptId", "shutdownConfirmed", "cancelRequested", "terminationReason")}
+            attempt = view.get("selectedAttempt")
+            facts["selectedAttempt"] = ({key: attempt.get(key) for key in (
+                "attemptId", "generation", "executionState", "ownership", "processIdentity",
+                "startedAt", "updatedAt", "finishedAt", "shutdownConfirmed", "cancelRequestedAt",
+                "stopInitiator", "graceDeadline", "forceRequestedAt", "forceReason", "exitCode", "signal")}
+                                        if attempt is not None else None)
+            if attempt is not None:
+                error = attempt.get("error")
+                facts["selectedAttempt"]["error"] = error[:2048] if error is not None else None
+                facts["selectedAttempt"]["issues"] = [
+                    {**issue, "message": issue["message"][:2048]} for issue in attempt["issues"][:32]]
+            return facts
+
+        details = {"capturedAt": datetime.now(timezone.utc).isoformat(),
+                   "limits": {"events": 32, "issues": 32, "attemptsPerRun": 4,
+                              "journalsPerAttempt": 4, "fileTailBytes": 4096,
+                              "rpcConnectSeconds": 2, "rpcCallSeconds": 2},
+                   "runs": {run_id: {"taskGet": capture(lambda: task_get(run_id)),
+                                     "started": capture(lambda: file_tail(started)), "attempts": {}}
+                            for run_id, started in runs.items()}}
+        bindings = {run_id: set() for run_id in runs}
+        for run_id, facts in details["runs"].items():
+            attempt = facts["taskGet"].get("selectedAttempt")
+            if attempt is not None:
+                bindings[run_id].add(attempt["attemptId"])
+
+        def database_facts():
+            with closing(sqlite3.connect((self.directory / "board.sqlite3").as_uri() + "?mode=ro",
+                                         uri=True, timeout=.2)) as connection:
+                connection.row_factory = sqlite3.Row
+
+                def rows(sql, params=()):
+                    return [dict(row) for row in connection.execute(sql, params)]
+
+                details["serviceIssues"] = capture(lambda: rows(
+                    "SELECT stage,code,substr(message,1,2048) AS message,observed_at"
+                    " FROM service_issues ORDER BY stage LIMIT 32"))
+                details["recentEvents"] = capture(lambda: rows(
+                    "SELECT seq,task_id,attempt_id,kind,substr(payload_json,1,2048) AS payload_json,created_at"
+                    " FROM events ORDER BY seq DESC LIMIT 32"))
+                for run_id, facts in details["runs"].items():
+                    attempts = capture(lambda: rows(
+                        "SELECT attempt_id,generation,execution_state,ownership,identity_confirmed_at,"
+                        " started_at,updated_at,finished_at FROM attempts WHERE task_id=?"
+                        " ORDER BY generation DESC LIMIT 4", (run_id,)))
+                    facts["storedAttempts"] = attempts
+                    if isinstance(attempts, list):
+                        bindings[run_id].update(row["attempt_id"] for row in attempts)
+                    facts["executionIssues"] = capture(lambda: rows(
+                        "SELECT e.attempt_id,e.stage,e.code,substr(e.message,1,2048) AS message,e.observed_at"
+                        " FROM execution_issues e JOIN attempts a ON a.attempt_id=e.attempt_id"
+                        " WHERE a.task_id=? ORDER BY a.generation DESC,e.stage LIMIT 32", (run_id,)))
+
+        database_error = capture(database_facts)
+        if database_error is not None:
+            details["database"] = database_error
+        for run_id, attempt_ids in bindings.items():
+            for attempt_id in sorted(attempt_ids)[:4]:
+                evidence = self.directory / "attempts" / run_id / attempt_id
+                private = attempt_root(self.directory, "command", run_id, attempt_id)
+                facts = {name: capture(lambda: file_tail(evidence / name)) for name in (
+                    "spawn.intent", "spawn.marker", "execution.stdout.log", "execution.stderr.log")}
+                facts["nativeJournals"] = capture(lambda: native_journals(private))
+                details["runs"][run_id]["attempts"][attempt_id] = facts
+        details["daemonLog"] = capture(lambda: file_tail(self.directory / "test-daemon.log"))
+        return json.dumps(details, ensure_ascii=False, indent=2)
+
+    def wait_for_execution(self, predicate, runs: dict[str, Path], *, timeout: float):
+        value = wait_for(predicate, timeout=timeout)
+        if not value:
+            try:
+                evidence = self.execution_diagnostics(runs)
+            except Exception as error:
+                evidence = f"Diagnostic collection failed: {type(error).__name__}: {error}"[:2048]
+            self.fail(f"Execution wait timed out after {timeout}s\n{evidence}")
+        return value
+
     @staticmethod
     def native_stopped(pid: int) -> bool:
         try:
@@ -148,21 +274,22 @@ class PrivateDaemonDispatchTests(BoardTestCase):
             client = BoardClient(self.directory, autostart=False)
             first, first_started, first_release = self.gated("first")
             second, second_started, second_release = self.gated("second")
+            runs = {first: first_started, second: second_started}
             third_release = self.directory / "third.release"
             try:
-                self.assertTrue(wait_for(lambda: first_started.exists() and second_started.exists(), timeout=60),
-                                (self.directory / "test-daemon.log").read_text(encoding="utf-8")[-3000:])
+                # R2 (2026-10-25): 27 starts took 0.6–3.3s under load; 60s detects a stall.
+                self.wait_for_execution(lambda: first_started.exists() and second_started.exists(), runs, timeout=60)
                 self.assertEqual(client.health()["capacity"]["totalActive"], 2)
                 third, third_started, third_release = self.gated("third")
+                runs[third] = third_started
                 self.assertEqual(client.get(runId=third)["queueReason"], "capacity")
                 first_release.touch()
-                self.assertTrue(wait_for(lambda: third_started.exists(), timeout=60),
-                                (self.directory / "test-daemon.log").read_text(encoding="utf-8")[-3000:])
+                self.wait_for_execution(third_started.exists, runs, timeout=60)
                 second_release.touch()
                 third_release.touch()
                 for run_id in (first, second, third):
-                    self.assertTrue(wait_for(lambda: client.get(runId=run_id)["state"] == "completed", timeout=60),
-                                    (run_id, client.get(runId=run_id)))
+                    self.wait_for_execution(lambda: client.get(runId=run_id)["state"] == "completed",
+                                            runs, timeout=60)
                 self.assertEqual(client.health()["capacity"]["totalActive"], 0)
             finally:
                 first_release.touch()
@@ -174,7 +301,7 @@ class PrivateDaemonDispatchTests(BoardTestCase):
             client = BoardClient(self.directory, autostart=False)
             run_id, started, release = self.gated("stop-running")
             try:
-                self.assertTrue(wait_for(started.exists, timeout=60))
+                self.wait_for_execution(started.exists, {run_id: started}, timeout=60)
                 client.cancel(runId=run_id)
                 self.assertTrue(wait_for(lambda: client.get(runId=run_id)["state"] == "cancelled",
                                          timeout=60), client.get(runId=run_id))
@@ -186,7 +313,7 @@ class PrivateDaemonDispatchTests(BoardTestCase):
         with self.daemon(env={"HMB_MAX_CONCURRENT": "1"}) as first:
             client = BoardClient(self.directory, autostart=False)
             run_id, started, release = self.gated("zero-drain")
-            self.assertTrue(wait_for(started.exists, timeout=45))
+            self.wait_for_execution(started.exists, {run_id: started}, timeout=45)
             self.assertIsNotNone(wait_for(lambda: (client.get(runId=run_id).get("selectedAttempt") or {}).get(
                 "processIdentity"), timeout=20))
             attempt_id = client.get(runId=run_id)["selectedAttemptId"]
@@ -214,7 +341,7 @@ class PrivateDaemonDispatchTests(BoardTestCase):
             with self.daemon(env={"HMB_MAX_CONCURRENT": "1"}) as first:
                 client = BoardClient(self.directory, autostart=False)
                 run_id, started, release = self.gated("restart-running")
-                self.assertTrue(wait_for(started.exists, timeout=60))
+                self.wait_for_execution(started.exists, {run_id: started}, timeout=60)
                 attempt_id = client.get(runId=run_id)["selectedAttemptId"]
                 reply = client.call("service_control", {"action": "restart"})
                 self.assertTrue(reply["restarting"])
@@ -223,8 +350,8 @@ class PrivateDaemonDispatchTests(BoardTestCase):
                 client = BoardClient(self.directory, autostart=False)
                 self.assertEqual(client.get(runId=run_id)["selectedAttemptId"], attempt_id)
                 release.touch()
-                self.assertTrue(wait_for(lambda: client.get(runId=run_id)["state"] == "completed",
-                                         timeout=60), client.get(runId=run_id))
+                self.wait_for_execution(lambda: client.get(runId=run_id)["state"] == "completed",
+                                        {run_id: started}, timeout=60)
         finally:
             release.touch()
 
@@ -233,7 +360,7 @@ class PrivateDaemonDispatchTests(BoardTestCase):
             client = BoardClient(self.directory, autostart=False)
             run_id, started, release = self.gated("death-running")
             try:
-                self.assertTrue(wait_for(started.exists, timeout=60))
+                self.wait_for_execution(started.exists, {run_id: started}, timeout=60)
                 def published():
                     return (client.get(runId=run_id).get("selectedAttempt") or {}).get("processIdentity")
                 identity = wait_for(published, timeout=30)
@@ -261,7 +388,7 @@ class PrivateDaemonDispatchTests(BoardTestCase):
             run_id = self.submit_execution(requestId="frozen", task="ignore stop", cwd=str(self.workdir("frozen")),
                                    adapter="command", argv=[sys.executable, "-c", script],
                                    expectedSeconds=120)["task"]["runId"]
-            self.assertTrue(wait_for(started.exists, timeout=45))
+            self.wait_for_execution(started.exists, {run_id: started}, timeout=45)
             execution_pid = client.get(runId=run_id)["selectedAttempt"]["processIdentity"]["pid"]
             client.cancel(runId=run_id)
             self.assertTrue(wait_for(lambda: client.get(runId=run_id)["attemptState"] == "finished",
@@ -278,7 +405,7 @@ class PrivateDaemonDispatchTests(BoardTestCase):
         with self.daemon(env={"HMB_MAX_CONCURRENT": "1"}):
             client = BoardClient(self.directory, autostart=False)
             run_id, started, release = self.gated("freeze-execution")
-            self.assertTrue(wait_for(started.exists, timeout=45))
+            self.wait_for_execution(started.exists, {run_id: started}, timeout=45)
             identity = wait_for(lambda: (client.get(runId=run_id).get("selectedAttempt") or {}).get(
                 "processIdentity"), timeout=20)
             self.assertIsNotNone(identity)
