@@ -88,6 +88,37 @@ class InterruptionRecoveryTests(BoardTestCase):
                 self.assertEqual(len(board.store.resource_claims()), 1)
                 self.assertEqual(view['attemptGeneration'], 1)
 
+    def test_registration_replaces_predecessor_state_before_interruption_settlement(self):
+        board, client, task, claim, actor = self.claimed()
+        with patch.object(interruption.processes, 'inspect_process_identity', return_value='unknown'):
+            board.store.reconcile_startup()
+        registered = client.register_worker('original', adapter='command', capabilities=['command'], pid=987)['worker']
+        self.assertEqual(registered['state'], 'idle')
+        self.assertIsNone(registered['currentAttemptId'])
+        self.assertEqual(len(board.store.resource_claims()), 1)
+        with patch.object(interruption.processes, 'inspect_process_identity', return_value='identity-absent'), \
+             patch.object(interruption.processes, 'worker_identity_alive', return_value=False):
+            self.assertEqual(board.store.recover_interrupted_attempts(), 1)
+        workers = board.call('worker_list', {})['workers']
+        self.assertEqual(len(workers), 1)
+        self.assertEqual(workers[0]['state'], 'idle')
+        self.assertEqual(workers[0]['pid'], 987)
+        self.assertIsNone(workers[0]['currentAttemptId'])
+        self.assertEqual(client.get(runId=task['taskId'])['terminationReason'], 'interrupted')
+        self.assertEqual(board.call('worker_list', {'state': 'lost'})['workers'], [])
+
+    def test_registration_before_startup_recovery_is_not_marked_lost(self):
+        board, client, task, _, _ = self.claimed()
+        client.register_worker('original', adapter='command', capabilities=['command'], pid=987)
+        with patch.object(interruption.processes, 'inspect_process_identity', return_value='identity-absent'), \
+             patch.object(interruption.processes, 'worker_identity_alive', return_value=False):
+            self.assertEqual(board.store.reconcile_startup()['interrupted'], 1)
+        worker = board.call('worker_list', {})['workers'][0]
+        self.assertEqual(worker['state'], 'idle')
+        self.assertIsNone(worker['currentAttemptId'])
+        self.assertEqual(worker['pid'], 987)
+        self.assertEqual(client.get(runId=task['taskId'])['terminationReason'], 'interrupted')
+
     def test_worker_recovery_requires_owner_absence_and_independent_stop_proof(self):
         board, client, task, _, actor = self.claimed()
         client.register_worker('replacement', adapter='command', capabilities=['command'])

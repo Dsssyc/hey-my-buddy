@@ -241,6 +241,8 @@ def _settle(board, snapshot: dict, identity: dict | None, kind: str) -> int:
         connection.execute('UPDATE tasks SET active_attempt_id=NULL,queue_reason=NULL WHERE task_id=?',
                            (attempt['task_id'],))
         board._release_claims(connection, attempt_id)
+        # Registration clears the predecessor's pointer. Only a row still bound
+        # to this interrupted attempt can be marked lost; a new owner is untouched.
         connection.execute(
             "UPDATE workers SET state='lost',current_attempt_id=NULL,revision=revision+1"
             ' WHERE worker_id=? AND current_attempt_id=?', (attempt['worker_id'], attempt_id))

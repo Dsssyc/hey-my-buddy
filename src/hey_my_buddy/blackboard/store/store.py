@@ -1479,8 +1479,9 @@ class BoardStore:
             else:
                 connection.execute(
                     "UPDATE workers SET identity=?, adapter=?, capabilities=?, host=?, pid=?, last_seen_at=?,"
+                    " registered_at=?, state='idle', current_attempt_id=NULL,"
                     " revision=revision+1 WHERE worker_id=?",
-                    (identity, adapter, canonical_json(capabilities), host, pid, now, worker_id),
+                    (identity, adapter, canonical_json(capabilities), host, pid, now, now, worker_id),
                 )
                 event = "worker.registered"
             self._append_event(connection, event, payload={"workerId": worker_id, "adapter": adapter, "capabilities": capabilities})
