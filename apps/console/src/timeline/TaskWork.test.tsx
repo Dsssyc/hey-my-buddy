@@ -8,6 +8,7 @@ import type { TimelineBuddy, TimelineRow } from "../macro-task-types";
 import { RowName } from "./RowName";
 import type { TaskWorkProps } from "./TaskWork";
 import { TaskWork } from "./TaskWork";
+import * as display from "../macro-task-display";
 import { groupLanes, laneSummary, ownedWaits } from "./lanes";
 
 
@@ -23,6 +24,23 @@ const row = (id: string) => document.querySelector<HTMLButtonElement>(`[data-slo
 const status = () => document.querySelector('[data-slot=timeline-status] [role=status]')!.textContent;
 
 describe("the lanes and the detail workspace", () => {
+  it("keeps an unchanged name cell while updating its event handlers", () => {
+    const fixture = macroTaskTimelineFixture();
+    const label = vi.spyOn(display, "buddyLabel");
+    try {
+      const props = { row: fixture.rows[0]!, rows: fixture.rows, tabIndex: 0, current: false, fresh: false,
+        onClick: vi.fn(), onEnter: vi.fn(), onLeave: vi.fn(), onFocus: vi.fn(), onBlur: vi.fn() };
+      const view = render(<TooltipProvider><RowName {...props}/></TooltipProvider>);
+      const count = label.mock.calls.length;
+      const click = vi.fn();
+      view.rerender(<TooltipProvider><RowName {...props} onClick={click}/></TooltipProvider>);
+      expect(label).toHaveBeenCalledTimes(count);
+      fireEvent.click(row(props.row.runId));
+      expect(click).toHaveBeenCalledTimes(1);
+      expect(props.onClick).not.toHaveBeenCalled();
+    } finally { label.mockRestore(); }
+  });
+
   it("replaces the lanes with the detail workspace: a plain micro task list beside the detail", () => {
     const { rerender, props } = setup();
     expect(document.querySelector("[data-slot=timeline-tracks]")).toBeTruthy();

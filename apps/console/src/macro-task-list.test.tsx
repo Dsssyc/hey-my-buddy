@@ -7,6 +7,7 @@ import { MacroTaskList } from "./MacroTaskList";
 import { listFixture } from "./macro-task-fixtures";
 import type { MacroTaskListProps } from "./MacroTaskList";
 import i18n from "i18next";
+import * as formatting from "./i18n/format";
 
 const props = (): MacroTaskListProps => ({
   sort: "activity-desc", onSortChange: vi.fn(),
@@ -16,6 +17,19 @@ const props = (): MacroTaskListProps => ({
 });
 afterEach(() => { cleanup(); vi.restoreAllMocks(); });
 describe("macro task list", () => {
+  it("does not render unchanged entries on verification or loading updates, and uses the latest action", () => {
+    const relative = vi.spyOn(formatting, "formatRelative");
+    const p = props();
+    const view = render(<MacroTaskList {...p}/>);
+    const calls = relative.mock.calls.length;
+    expect(calls).toBeGreaterThan(0);
+    const select = vi.fn();
+    view.rerender(<MacroTaskList {...p} loading onSelect={select}/>);
+    expect(relative).toHaveBeenCalledTimes(calls);
+    fireEvent.click(document.querySelector('[data-slot="macro-entry"]')!);
+    expect(select).toHaveBeenCalledTimes(1);
+  });
+
   it.each([{ clipped: false, scrollWidth: 80 }, { clipped: true, scrollWidth: 140 }])("uses the same fade and full-text hint rule for project names and titles when clipped=$clipped", async ({ clipped, scrollWidth }) => {
     // jsdom supplies only the overflow condition; real glyph widths are checked in the browser.
     vi.spyOn(HTMLElement.prototype, "clientWidth", "get").mockReturnValue(100);

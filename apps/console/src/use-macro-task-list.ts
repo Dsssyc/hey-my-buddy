@@ -2,7 +2,7 @@ import { useCopyState } from "./i18n/use-copy-state";
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { ConsoleApi } from "./api";
 import { errorText, isAbortError } from "./api";
-import { waitForRead } from "./global-refresh";
+import { retainEqual } from "./retain-equal";
 import { documentVisibleNow, useDocumentVisible } from "./page-visibility";
 import type { MacroTaskFilter, MacroTaskPage, MacroTaskQuery, MacroTaskSort, MacroTaskSummary } from "./macro-task-types";
 
@@ -24,7 +24,7 @@ function compareRows(left: MacroTaskSummary, right: MacroTaskSummary, sort: Macr
  */
 export function useMacroTaskList(api: ConsoleApi, query: MacroTaskQuery, active: boolean) {
   const [page, setPage] = useState<PageState>({ rows: [], totals: emptyTotals(), nextCursor: null });
-  const [latest, setLatest] = useState<Map<string, MacroTaskSummary>>(() => new Map());
+  const latestRef = useRef(new Map<string, MacroTaskSummary>());
   const [loading, setLoading] = useState(active), [error, setError] = useCopyState();
   const [reorder, setReorder] = useState<{ count: number | null } | null>(null);
   const [verifiedAtMs, setVerifiedAtMs] = useState<number | null>(null);
@@ -33,9 +33,8 @@ export function useMacroTaskList(api: ConsoleApi, query: MacroTaskQuery, active:
   const visible = useDocumentVisible();
   const previousVisible = useRef(visible);
   const initialReadStarted = useRef(false);
-  const pageRef = useRef(page), latestRef = useRef(latest);
+  const pageRef = useRef(page);
   pageRef.current = page;
-  latestRef.current = latest;
   const key = JSON.stringify(query);
   const current = useRef({ query, active, cursor: page.nextCursor });
   current.current = { query, active, cursor: page.nextCursor };
@@ -43,21 +42,20 @@ export function useMacroTaskList(api: ConsoleApi, query: MacroTaskQuery, active:
   const pendingNew = useRef<Map<string, MacroTaskSummary>>(new Map());
   const needsFirst = useRef(false);
 
-  const fetchPage = useCallback(async (mode: "first" | "more" | "poll", strict = false) => {
-    if (!current.current.active) return;
+  const fetchPage = useCallback(async (mode: "first" | "more" | "poll", foreground = mode !== "poll") => {
+    if (!current.current.active || mode === "more" && !current.current.cursor) return;
     if (pending.current) {
-      if (!strict) return;
-      await waitForRead(() => pending.current);
-      if (!current.current.active) return;
+      if (!foreground) return;
+      ++generation.current;
+      request.current?.abort();
     }
     // A failed reorder refresh invalidated its cursor. The next automatic read
     // must rebuild the first page before normal polling/paging can resume.
     if (mode === "poll" && needsFirst.current) mode = "first";
-    if (mode === "more" && !current.current.cursor) return;
     const version = generation.current, controller = new AbortController();
     initialReadStarted.current = true;
     request.current = controller; pending.current = true;
-    if (mode !== "poll") { setLoading(true); setError(""); }
+    if (foreground || mode === "first") { setLoading(true); setError(""); }
     try {
       const limit = mode === "poll"
         ? Math.max(50, Math.min(100, pageRef.current.rows.length || 50))
@@ -75,7 +73,7 @@ export function useMacroTaskList(api: ConsoleApi, query: MacroTaskQuery, active:
       // Both load modes merge into the existing freshest map, so a page load
       // never discards newer poll data for already-known rows.
       const fresh = new Map(latestRef.current);
-      for (const summary of next.macroTasks) fresh.set(summary.macroTaskId, summary);
+      for (const summary of next.macroTasks) fresh.set(summary.macroTaskId, retainEqual(fresh.get(summary.macroTaskId), summary)!);
       if (mode === "poll") {
         const previous = pageRef.current;
         // An empty display adopts the read directly (including its cursor);
@@ -84,11 +82,12 @@ export function useMacroTaskList(api: ConsoleApi, query: MacroTaskQuery, active:
         // a group, or an unseen group appearing — defers behind the notice.
         if (!previous.rows.length) {
           pendingNew.current.clear();
-          setLatest(fresh);
-          setPage({ rows: [...next.macroTasks].sort(byOrder), totals: next.totals, nextCursor: next.nextCursor });
+          latestRef.current = fresh;
+          setPage(previous => retainEqual(previous, { rows: next.macroTasks.map(row => fresh.get(row.macroTaskId)!).sort(byOrder), totals: next.totals, nextCursor: next.nextCursor }));
           return;
         }
-        const known = new Set(previous.rows.map(row => row.macroTaskId));
+        const previousById = new Map(previous.rows.map(row => [row.macroTaskId, row]));
+        const known = new Set(previousById.keys());
         const hasNew = next.macroTasks.some(row => !known.has(row.macroTaskId));
         // A complete filtered first page proves the whole matching scope: rows
         // it no longer returns have stopped matching and leave the list (an
@@ -113,24 +112,24 @@ export function useMacroTaskList(api: ConsoleApi, query: MacroTaskQuery, active:
         const sorted = [...merged].sort(byOrder);
         const orderChanged = hasNew || sorted.some((row, index) => merged[index]!.macroTaskId !== row.macroTaskId);
         const changedCount = merged.filter(row => {
-          const committed = previous.rows.find(candidate => candidate.macroTaskId === row.macroTaskId);
+          const committed = previousById.get(row.macroTaskId);
           return committed === undefined || row.lastActivitySeq > committed.lastActivitySeq;
         }).length;
-        setLatest(fresh);
+        latestRef.current = fresh;
         // The committed order stays behind the notice, while reported totals
         // always reflect the newest read.
-        setPage(previous => ({ rows: retained, totals: next.totals, nextCursor: complete ? null : previous.nextCursor }));
-        if (orderChanged) setReorder(existing => changedCount > 0 ? { count: changedCount } : existing ?? { count: null });
+        setPage(previous => retainEqual(previous, { rows: retained, totals: next.totals, nextCursor: complete ? null : previous.nextCursor }));
+        if (orderChanged) setReorder(existing => changedCount > 0 ? existing?.count === changedCount ? existing : { count: changedCount } : existing ?? { count: null });
         else if (next.changed || droppedAmbiguous.length > 0) setReorder(existing => existing ?? { count: null });
       } else {
         const known = new Set(mode === "more" ? pageRef.current.rows.map(row => row.macroTaskId) : []);
         const rows = mode === "more"
           ? [...pageRef.current.rows.map(row => fresh.get(row.macroTaskId) ?? row),
             ...next.macroTasks.filter(row => !known.has(row.macroTaskId)).map(row => fresh.get(row.macroTaskId) ?? row)]
-          : [...next.macroTasks].sort(byOrder);
-        setPage({ rows, totals: next.totals, nextCursor: next.nextCursor });
+          : next.macroTasks.map(row => fresh.get(row.macroTaskId)!).sort(byOrder);
+        setPage(previous => retainEqual(previous, { rows, totals: next.totals, nextCursor: next.nextCursor }));
         if (mode === "first") { pendingNew.current.clear(); needsFirst.current = false; }
-        setLatest(mode === "first" ? new Map(next.macroTasks.map(row => [row.macroTaskId, row])) : fresh);
+        latestRef.current = mode === "first" ? new Map(rows.map(row => [row.macroTaskId, row])) : fresh;
         // Loading an unchanged older page never discards a pending reorder
         // notice; a paged read that reports `changed` still offers one because
         // activity above the first page is not visible in this reply.
@@ -139,9 +138,8 @@ export function useMacroTaskList(api: ConsoleApi, query: MacroTaskQuery, active:
       }
     } catch (failure) {
       if (version === generation.current && !controller.signal.aborted && !isAbortError(failure)) setError(() => errorText(failure));
-      if (strict && !isAbortError(failure)) throw failure;
     } finally {
-      if (version === generation.current) { pending.current = false; if (mode !== "poll") setLoading(false); }
+      if (version === generation.current) { pending.current = false; if (foreground || mode === "first") setLoading(false); }
     }
   }, [api]);
   // Keep the committed rows on screen while the new first page replaces the
@@ -171,7 +169,7 @@ export function useMacroTaskList(api: ConsoleApi, query: MacroTaskQuery, active:
     setPage({ rows: [], totals: emptyTotals(), nextCursor: null });
     pendingNew.current.clear();
     needsFirst.current = false;
-    setLatest(new Map());
+    latestRef.current = new Map();
     setReorder(null);
     setVerifiedAtMs(null);
   };
@@ -225,7 +223,7 @@ export function useMacroTaskList(api: ConsoleApi, query: MacroTaskQuery, active:
     const poll = async () => {
       if (documentVisibleNow() && !armed.current) {
         const mode = pageRef.current.rows.length && !needsFirst.current ? "poll" : "first";
-        await fetchPage(mode);
+        await fetchPage(mode, false);
       }
       if (!stopped && documentVisibleNow()) timer = setTimeout(poll, 3000);
     };
@@ -234,11 +232,11 @@ export function useMacroTaskList(api: ConsoleApi, query: MacroTaskQuery, active:
   }, [active, visible, fetchPage]);
 
   // Freshest summaries win for display; committed order stays until applied.
-  const rows = page.rows.map(row => latest.get(row.macroTaskId) ?? row);
+  const rows = page.rows;
   return {
     rows, verifiedAtMs, totals: page.totals, nextCursor: page.nextCursor, loading, error, reorder,
     more: () => void fetchPage("more"),
-    retry: () => void fetchPage(needsFirst.current || pageRef.current.rows.length === 0 ? "first" : "poll"),
+    retry: () => void fetchPage(needsFirst.current || pageRef.current.rows.length === 0 ? "first" : "poll", true),
     reset: () => setRevision(value => value + 1),
     applyReorder,
   };

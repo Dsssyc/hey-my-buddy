@@ -35,6 +35,20 @@ function harness(strict = false) {
 }
 
 describe("the console snapshot read", () => {
+  it("keeps unchanged snapshot content while updating response verification separately", async () => {
+    let checked = 1000;
+    const body = { buddies: [{ model: "one" }] } as Snapshot;
+    const api = { snapshot: vi.fn(async () => structuredClone(body)), readVerifiedAt: () => checked } as unknown as ConsoleApi;
+    const hook = renderHook(() => useConsole(api));
+    await act(async () => {});
+    const first = hook.result.current.snapshot;
+    checked = 4000;
+    await act(async () => { await vi.advanceTimersByTimeAsync(3000); });
+    expect(hook.result.current.snapshot).toBe(first);
+    expect(hook.result.current.snapshot!.buddies).toBe(first!.buddies);
+    expect(hook.result.current.verifiedAtMs).toBe(4000);
+  });
+
   it("reads immediately and keeps the 3-second cadence while visible", async () => {
     const f = harness();
     f.releaseFirst(snapshot);

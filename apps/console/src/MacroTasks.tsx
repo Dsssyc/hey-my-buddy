@@ -1,7 +1,7 @@
 import { cn } from "cn";
 import { Button } from "./components/ui/button";
 import { Collapsible, CollapsibleContent } from "./components/ui/collapsible";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { memo, useEffect, useMemo, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import { Ellipsis } from "lucide-react";
@@ -35,11 +35,11 @@ import { MacroTaskDeleteDialog } from "./MacroTaskDeleteDialog";
 import { useViewPreference } from "./view-preferences";
 
 
-function ConnectionStrip({ error, verifiedAtMs, retry }: { error: string; verifiedAtMs: number | null; retry: () => void }) {
+function ConnectionStrip({ error, verifiedAtMs, retry, busy }: { error: string; verifiedAtMs: number | null; retry: () => void; busy: boolean }) {
   const { t } = useTranslation("tasks");
   return <div data-slot="macro-offline" className="flex min-h-9 shrink-0 flex-wrap items-center gap-x-2.5 gap-y-1 border-b bg-fail-wash px-4 py-1 text-sm sm:px-6" role="alert"><StateMark kind="fail"/><Hint text={error}><span tabIndex={0}>{t("offline")}</span></Hint>
     {verifiedAtMs !== null && <span className="text-xs text-ink2 tabular-nums">{t("lastRead", { time: formatClockMinutes(verifiedAtMs) })}</span>}
-    <Button variant="outline" size="sm" className="ml-auto" onClick={retry}>{t("retry")}</Button>
+    <Button variant="outline" size="sm" className="ml-auto" aria-busy={busy} disabled={busy} onClick={retry}>{t(busy ? "loading" : "retry")}</Button>
   </div>;
 }
 
@@ -80,7 +80,7 @@ function StopDialog({ summary, scope, onConfirm, onCancel }: {
  * browser's history, and choosing a step of a micro task only replaces the one
  * it is on.
  */
-export function MacroTasks({ snapshot, api, refresh, active = true, authority, writesAvailable = true, onAddress, connectionError = "", verifiedAtMs = null }: {
+export const MacroTasks = memo(function MacroTasks({ snapshot, api, refresh, active = true, authority, writesAvailable = true, onAddress, connectionError = "", verifiedAtMs = null }: {
   snapshot: Snapshot; api: ConsoleApi; refresh: () => Promise<Snapshot | null>; active?: boolean;
   authority?: AuthorityLatch; writesAvailable?: boolean;
   /** Told where the page is, so that the link back to the tasks leads to the same place. */
@@ -120,7 +120,7 @@ export function MacroTasks({ snapshot, api, refresh, active = true, authority, w
     active={active} authority={authority} writesAvailable={writesAvailable} connectionError={connectionError} verifiedAtMs={verifiedAtMs}
     location={location} origin={origin} go={go} listCollapsed={listCollapsed}
     onCollapseList={() => setListCollapsed(true)} onExpandList={() => setListCollapsed(false)} />;
-}
+});
 
 function MacroTasksWorkspace({ snapshot, api, refresh, active, authority, writesAvailable, location, origin, go, listCollapsed, onCollapseList, onExpandList, connectionError, verifiedAtMs }: {
   snapshot: Snapshot; api: ConsoleApi; refresh: () => Promise<Snapshot | null>; active: boolean;
@@ -284,7 +284,7 @@ function MacroTasksWorkspace({ snapshot, api, refresh, active, authority, writes
         {(deletionNotice.refreshFailed || list.error) && <p role="alert" className="text-fail">{t("macroHeader:deletion.refreshFailed")}</p>}
         <Button variant="ghost" size="sm" onClick={() => setDeletionNotice(null)}>{t("macroHeader:deletion.dismiss")}</Button>
       </div>}
-      {disconnected && <ConnectionStrip error={connectionError || list.error} verifiedAtMs={lastRead} retry={() => { if (connectionError) void refresh(); else list.retry(); }}/>}
+      {disconnected && <ConnectionStrip busy={!connectionError && list.loading} error={connectionError || list.error} verifiedAtMs={lastRead} retry={() => { if (connectionError) void refresh(); else list.retry(); }}/>}
       <Collapsible open={!listCollapsed} onOpenChange={open => open ? onExpandList() : onCollapseList()} asChild>
         <div data-slot="macro-workspace" className={cn("grid min-h-0 flex-1 transition-[grid-template-columns] duration-200 motion-reduce:transition-none max-[760px]:flex max-[760px]:flex-col", listCollapsed ? "grid-cols-[0px_minmax(0,1fr)]" : "grid-cols-[316px_minmax(0,1fr)]")}>
           <CollapsibleContent data-slot="macro-sidebar" className={cn("h-full min-h-0 min-w-0 w-full", !showNarrowList && !empty && "max-[760px]:hidden", empty && "max-[760px]:h-auto max-[760px]:shrink-0")}>{listPane}</CollapsibleContent>

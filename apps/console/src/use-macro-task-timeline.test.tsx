@@ -31,6 +31,31 @@ function setHidden(hidden: boolean) {
 afterEach(() => setHidden(false));
 
 describe("work macro task timeline hook", () => {
+  it("retries during a background read and retains unchanged rows and spans", async () => {
+    vi.useFakeTimers();
+    try {
+      const fixture = macroTaskTimelineFixture();
+      const f = harness(fixture);
+      await act(async () => f.reads[0]!.resolve(readWith(fixture, 1000)));
+      const first = f.result.current.timeline;
+      await act(async () => { await vi.advanceTimersByTimeAsync(3000); });
+      expect(f.reads).toHaveLength(2);
+      let retry!: Promise<void>;
+      act(() => { retry = f.result.current.retry(); });
+      expect(f.reads).toHaveLength(3);
+      expect(f.result.current.loading).toBe(true);
+      await act(async () => f.reads[1]!.resolve(readWith({ ...fixture, rows: [] }, 2000)));
+      expect(f.result.current.timeline).toBe(first);
+      expect(f.result.current.loading).toBe(true);
+      await act(async () => { f.reads[2]!.resolve(readWith(structuredClone(fixture), 4000)); await retry; });
+      expect(f.result.current.timeline).toBe(first);
+      expect(f.result.current.timeline!.rows).toBe(first!.rows);
+      expect(f.result.current.timeline!.spans).toBe(first!.spans);
+      expect(Date.parse(f.result.current.displayObservedAt!)).toBe(4000);
+      expect(f.result.current.loading).toBe(false);
+    } finally { vi.useRealTimers(); }
+  });
+
   it("reads the bounded timeline for the selection without marking a fresh view new", async () => {
     const fixture = macroTaskTimelineFixture();
     const f = harness(fixture);

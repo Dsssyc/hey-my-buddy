@@ -1,5 +1,5 @@
 import i18n from "i18next";
-import { locale } from "./i18n";
+import { dateTimeFormat } from "./i18n/format";
 import { parseTimelineInstant } from "./timeline/instant";
 import { excerpt } from "./task-state";
 import { stopActorText } from "./actor";
@@ -191,10 +191,14 @@ function effortDisplay(effort: string | null | undefined): string {
 }
 
 const defaultNamer = buddyNamer(null);
+const buddyNamers = new WeakMap<readonly FriendlyBuddy[], ReturnType<typeof buddyNamer>>();
 
 /** The shared display name and native effort, available separately for execution bars. */
 export function buddyNameParts(buddy: TimelineBuddy | null | undefined, buddies?: readonly FriendlyBuddy[] | null): BuddyNameParts {
-  return (buddies ? buddyNamer(buddies) : defaultNamer)(buddy);
+  if (!buddies) return defaultNamer(buddy);
+  let namer = buddyNamers.get(buddies);
+  if (!namer) { namer = buddyNamer(buddies); buddyNamers.set(buddies, namer); }
+  return namer(buddy);
 }
 
 /** One consistent friendly name and effort form for task rows and timeline spans. */
@@ -208,7 +212,7 @@ export function buddyLabel(buddy: TimelineBuddy | null | undefined, buddies?: re
 function format(value: string | number | null | undefined, options: Intl.DateTimeFormatOptions): string {
   if (value === null || value === undefined || value === "") return i18n.t("console:notRecorded");
   const date = new Date(value);
-  return Number.isNaN(date.getTime()) ? i18n.t("console:notRecorded") : new Intl.DateTimeFormat(locale, options).format(date);
+  return Number.isNaN(date.getTime()) ? i18n.t("console:notRecorded") : dateTimeFormat(options).format(date);
 }
 
 export function clockTime(value: string | number | null | undefined): string {

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import type { MacroTaskFilter, MacroTaskSort, MacroTaskSummary } from "./macro-task-types";
 import { Hint } from "./components/hint";
@@ -31,9 +31,9 @@ export function MacroListHeading({ count }: { count: number }) {
     <span data-slot="macro-list-total" className="shrink-0 text-sm font-normal tabular-nums text-ink3">{formatNumber(count)}</span>
   </h2>;
 }
-function FilterTab({ value, label, full, count, tone }: { value: MacroTaskFilter; label: string; full: string; count?: number; tone?: "hand" }) {
+function FilterTab({ value, label, full, count, tone, busy }: { value: MacroTaskFilter; label: string; full: string; count?: number; tone?: "hand"; busy?: boolean }) {
   const text = useFadingText(label);
-  return <Hint text={(text.hint || label !== full) ? full : undefined}><TabsTrigger value={value} className="min-w-0 flex-initial" aria-label={count === undefined ? full : `${full} ${formatNumber(count)}`}>
+  return <Hint text={(text.hint || label !== full) ? full : undefined}><TabsTrigger value={value} className={cn("min-w-0 flex-initial", busy && "state-breathe")} aria-busy={busy || undefined} aria-label={count === undefined ? full : `${full} ${formatNumber(count)}`}>
     <span ref={text.ref} data-slot="macro-filter-name" className={cn("min-w-0", text.className)}>{label}</span>
     {count !== undefined && <span data-slot="macro-filter-count" className={cn("shrink-0 tabular-nums", tone === "hand" ? "text-hand" : "text-ink3")}>{formatNumber(count)}</span>}
   </TabsTrigger></Hint>;
@@ -58,7 +58,20 @@ function GroupHeading({ label, count, open }: { label: string; count: number; op
     <span className="flex min-w-0 items-center gap-1"><Disclosure open={open}/><span ref={text.ref} className={cn("min-w-0", text.className)}>{label}</span></span><span className="tabular-nums">{formatNumber(count)}</span>
   </button></CollapsibleTrigger></Hint>;
 }
-function Entry({ row, basis, selected, onSelect }: { row: MacroTaskSummary; basis: "created" | "activity"; selected: string | null; onSelect: (id: string) => void }) {
+/** Only the time label ticks, at the next boundary its displayed unit uses. */
+function RelativeStamp({ at }: { at: number }) {
+  const [now, setNow] = useState(Date.now);
+  useEffect(() => {
+    const seconds = Math.max(0, (now - at) / 1000), rounded = Math.round(seconds);
+    const unit = rounded < 60 ? 1 : rounded < 3600 ? 60 : rounded < 86400 ? 3600 : 86400;
+    const nextUnit = rounded < 60 ? 59.5 : rounded < 3600 ? 3599.5 : rounded < 86400 ? 86399.5 : Infinity;
+    const next = Math.min((Math.round(rounded / unit) + 0.5) * unit, nextUnit);
+    const timer = setTimeout(() => setNow(Date.now()), Math.max(1, at + next * 1000 - now));
+    return () => clearTimeout(timer);
+  }, [at, now]);
+  return formatRelative(at, now);
+}
+const Entry = memo(function Entry({ row, basis, selected, onSelect }: { row: MacroTaskSummary; basis: "created" | "activity"; selected: boolean; onSelect: (id: string) => void }) {
   const { t } = useTranslation("tasks");
   const text = row.titleSource === "none" ? t("unnamed") : row.titleSource === "task" ? Array.from(row.title!).slice(0, 40).join("") : row.title!;
   const title = useFadingText(text);
@@ -68,14 +81,17 @@ function Entry({ row, basis, selected, onSelect }: { row: MacroTaskSummary; basi
   const hint = row.titleSource === "task" ? `${row.title} · ${t("source")}` : title.hint;
   const stamp = basis === "created" ? row.createdAt : row.lastActivityAt;
   return <li data-macro-task-id={row.macroTaskId}><Hint text={hint}>
-    <button type="button" data-slot="macro-entry" className={cn("relative grid w-full grid-cols-[minmax(0,1fr)_auto] items-baseline gap-x-2 gap-y-0.5 border-t px-4 py-2.5 text-left text-sm text-foreground hover:bg-muted aria-pressed:hover:bg-selection-hover transition-colors duration-150 motion-reduce:transition-none outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50", edge && "before:absolute before:inset-y-0 before:left-0 before:w-[3px]", edge, selected === row.macroTaskId ? "bg-selection" : "bg-transparent")} aria-pressed={selected === row.macroTaskId} onClick={() => onSelect(row.macroTaskId)}>
-      <span ref={title.ref} data-slot="macro-entry-title" className={cn("min-w-0 font-medium", title.className)}>{text}</span><time className="whitespace-nowrap text-xs text-ink3 tabular-nums" dateTime={stamp ?? undefined}><span className="sr-only">{t(basis === "created" ? "sort.created" : "sort.activity")}</span>{stamp === null ? t("unknown") : formatRelative(Date.parse(stamp), Date.now())}</time><span className="sr-only">{t(status)}</span>
+    <button type="button" data-slot="macro-entry" className={cn("relative grid w-full grid-cols-[minmax(0,1fr)_auto] items-baseline gap-x-2 gap-y-0.5 border-t px-4 py-2.5 text-left text-sm text-foreground hover:bg-muted aria-pressed:hover:bg-selection-hover transition-colors duration-150 motion-reduce:transition-none outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50", edge && "before:absolute before:inset-y-0 before:left-0 before:w-[3px]", edge, selected ? "bg-selection" : "bg-transparent")} aria-pressed={selected} onClick={() => onSelect(row.macroTaskId)}>
+      <span ref={title.ref} data-slot="macro-entry-title" className={cn("min-w-0 font-medium", title.className)}>{text}</span><time className="whitespace-nowrap text-xs text-ink3 tabular-nums" dateTime={stamp ?? undefined}><span className="sr-only">{t(basis === "created" ? "sort.created" : "sort.activity")}</span>{stamp === null ? t("unknown") : <RelativeStamp at={Date.parse(stamp)}/>}</time><span className="sr-only">{t(status)}</span>
       <span data-slot="macro-entry-counts" className="col-span-2 flex gap-3 text-xs text-ink2"><MacroCounts row={row}/></span>
     </button>
   </Hint></li>;
-}
+});
 export function MacroTaskList(props: MacroTaskListProps) {
   const { t } = useTranslation("tasks");
+  const selection = useRef(props.onSelect);
+  selection.current = props.onSelect;
+  const onSelect = useCallback((id: string) => selection.current(id), []);
   const [collapsed, setCollapsed] = useState<Set<string>>(() => new Set(["standalone"]));
   const scroll = useRef<HTMLDivElement>(null), pointer = useRef(false), applying = useRef(false);
   const visible = props.visible ?? props.active !== false;
@@ -113,10 +129,10 @@ export function MacroTaskList(props: MacroTaskListProps) {
         <Input data-slot="macro-search" className="mt-2.5 h-8 text-sm" aria-label={t("search")} placeholder={t("search")} value={props.query} maxLength={200} onChange={e => props.onQueryChange(e.target.value)}/>
         <Tabs data-slot="macro-filter-tabs" className="mt-3 gap-0" value={props.filter} onValueChange={value => props.onFilterChange(value as MacroTaskFilter)}>
           <TabsList variant="line" className="w-full justify-between gap-2" aria-label={t("list")}>
-            <FilterTab value="all" label={t("all")} full={t("all")}/>
-            <FilterTab value="active" label={t("active")} full={t("active")} count={props.totals.active}/>
-            <FilterTab value="host" label={t("filterHost")} full={t("host")} count={props.totals.host} tone="hand"/>
-            <FilterTab value="review" label={t("filterReview")} full={t("review")} count={props.totals.review} tone="hand"/>
+            <FilterTab value="all" busy={props.loading && props.filter === "all"} label={t("all")} full={t("all")}/>
+            <FilterTab value="active" busy={props.loading && props.filter === "active"} label={t("active")} full={t("active")} count={props.totals.active}/>
+            <FilterTab value="host" busy={props.loading && props.filter === "host"} label={t("filterHost")} full={t("host")} count={props.totals.host} tone="hand"/>
+            <FilterTab value="review" busy={props.loading && props.filter === "review"} label={t("filterReview")} full={t("review")} count={props.totals.review} tone="hand"/>
           </TabsList>
         </Tabs>
       </>}
@@ -124,11 +140,11 @@ export function MacroTaskList(props: MacroTaskListProps) {
     <ScrollArea ref={scroll} className="min-h-0 flex-1" viewportProps={{ "aria-label": t("entries"), tabIndex: 0 }} onScrollCapture={idle}>
       {groups.map(group => <Collapsible key={group.id} data-slot="macro-group" open={!collapsed.has(group.id)} onOpenChange={open => setCollapsed(old => { const next = new Set(old); if (open) next.delete(group.id); else next.add(group.id); return next; })}>
         <GroupHeading label={group.label} count={group.rows.length} open={!collapsed.has(group.id)}/>
-        <CollapsibleContent><ul className="m-0 list-none p-0">{group.rows.map(row => <Entry key={row.macroTaskId} row={row} basis={basis} selected={props.selected} onSelect={props.onSelect}/>)}</ul></CollapsibleContent>
+        <CollapsibleContent><ul className="m-0 list-none p-0">{group.rows.map(row => <Entry key={row.macroTaskId} row={row} basis={basis} selected={props.selected === row.macroTaskId} onSelect={onSelect}/>)}</ul></CollapsibleContent>
       </Collapsible>)}
       {empty && <p className="p-4 text-xs text-ink3">{t(props.query || props.filter !== "all" ? "noMatch" : "noTasks")}</p>}
       {props.loading && !props.rows.length && <p className="p-4 text-xs text-ink3" role="status">{t("loading")}</p>}
-      {props.nextCursor && <Button variant="outline" size="sm" className="mx-auto my-3 flex text-xs" aria-busy={props.loading} onClick={() => { if (!props.loading) props.onMore(); }}>{t(props.loading ? "loading" : "earlier")}</Button>}
+      {props.nextCursor && <Button variant="outline" size="sm" className="mx-auto my-3 flex text-xs" aria-busy={props.loading} disabled={props.loading} onClick={() => { if (!props.loading) props.onMore(); }}>{t(props.loading ? "loading" : "earlier")}</Button>}
     </ScrollArea>
   </section>;
 }

@@ -404,8 +404,10 @@ describe("macro task deletion workspace integration", () => {
     f.setRows([summary]);
     f.command.mockImplementation(async (operation: string): Promise<unknown> => {
       if (operation === "macro_task_stop") {
-        Object.assign(row, { state: "cancelled", status: "cancelled", shutdownConfirmed: true });
-        Object.assign(summary, { state: "ended", counts: { ...summary.counts, active: 0, ended: 1, stoppableRoots: 0 } });
+        const stopped = { ...summary, state: "ended" as const, counts: { ...summary.counts, active: 0, ended: 1, stoppableRoots: 0 } };
+        f.timeline.rows = [{ ...row, state: "cancelled", status: "cancelled", shutdownConfirmed: true }];
+        f.timeline.macroTask = stopped;
+        f.setRows([stopped]);
         return { macroTaskId: "macro-1", duplicate: false, results: [{ runId: row.runId, state: "cancelled", stopped: true }] };
       }
       if (operation === "macro_task_deletion_preview") return preview({ microTaskCount: 1, unconcludedFailureCount: 1 });

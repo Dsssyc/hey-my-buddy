@@ -1,5 +1,5 @@
 import { cn } from "cn";
-import { forwardRef, type FocusEvent } from "react";
+import { forwardRef, memo, useImperativeHandle, useMemo, useRef, type ComponentProps, type FocusEvent } from "react";
 import type { ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import { Tooltip, TooltipContent, TooltipTrigger } from "../components/ui/tooltip";
@@ -21,7 +21,7 @@ import type { TimelineRow } from "../macro-task-types";
  * header places its collapse toggle beside this cell as a sibling, never
  * inside it.
  */
-export const RowName = forwardRef<HTMLButtonElement, {
+const RowNameView = memo(forwardRef<HTMLButtonElement, {
   row: TimelineRow; rows: readonly TimelineRow[]; tabIndex: number; current: boolean; fresh: boolean; buddies?: readonly FriendlyBuddy[] | null;
   /** The plain list beside an open detail: no open hint, the current row is where the reader is. */
   list?: boolean;
@@ -77,4 +77,20 @@ export const RowName = forwardRef<HTMLButtonElement, {
     {!!row.fixedBy?.length && <span className="block">{t("fixedBy", { n: row.fixedBy.length })}</span>}
     {hoverExtra}
   </TooltipContent></Tooltip> : button;
+}));
+
+/** Keep event bindings current without redrawing an unchanged name cell. */
+export const RowName = forwardRef<HTMLButtonElement, ComponentProps<typeof RowNameView>>(function RowName(props, ref) {
+  const current = useRef(props);
+  current.current = props;
+  const button = useRef<HTMLButtonElement>(null);
+  useImperativeHandle(ref, () => button.current!);
+  const handlers = useMemo(() => ({
+    onClick: () => current.current.onClick(),
+    onEnter: () => current.current.onEnter(),
+    onLeave: () => current.current.onLeave(),
+    onFocus: (event: FocusEvent<HTMLButtonElement>) => current.current.onFocus(event),
+    onBlur: () => current.current.onBlur(),
+  }), []);
+  return <RowNameView {...props} {...handlers} ref={button}/>;
 });

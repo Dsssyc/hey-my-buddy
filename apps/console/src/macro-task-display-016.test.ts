@@ -1,8 +1,19 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { TimelineRow, TimelineSpan } from "./macro-task-types";
 import { acceptanceWaitMs, buddyLabel, buddyNameParts, rowStateInfo, spanOutcome } from "./macro-task-display";
 
 describe("0.16 friendly buddy names (0.3)", () => {
+  it("builds a directory once and picks up a replacement directory", () => {
+    const entry = { harness: "codex", provider: "openai", model: "test", label: "First" };
+    const directory = [entry];
+    const iterate = vi.spyOn(directory, Symbol.iterator);
+    const identity = { ...entry, effort: null };
+    expect(buddyNameParts(identity, directory).name).toBe("First");
+    expect(buddyNameParts(identity, directory).name).toBe("First");
+    expect(iterate).toHaveBeenCalledTimes(1);
+    expect(buddyNameParts(identity, [{ ...entry, label: "Second" }]).name).toBe("Second");
+  });
+
   const config = (model: string, effort: string | null = "high") => ({
     harness: "claude", provider: "anthropic", model, effort,
   });

@@ -2,8 +2,8 @@ import { buddyUsesLightInk, leadingBuddyColor, runningBuddyColor } from "./buddy
 import { IsolatedStatusMark } from "./IsolatedStatusMark";
 import { HarnessLogo } from "../buddies/HarnessLogo";
 import { Hint } from "../components/hint";
-import { useId, useImperativeHandle, useLayoutEffect, useRef, useState } from "react";
-import type { Ref } from "react";
+import { memo, useMemo, useId, useImperativeHandle, useLayoutEffect, useRef, useState } from "react";
+import type { ComponentProps, Ref } from "react";
 import i18n from "i18next";
 import { cn } from "cn";
 import { useTranslation } from "react-i18next";
@@ -150,7 +150,7 @@ export function Axis({ scale, ongoing, nowMs, pointerX = null, pointerBounds, co
 type PositionedSpan = { span: TimelineSpan; start: number; end: number; execution: boolean; outcome: ReturnType<typeof spanOutcome> };
 const diamond = (x: number, y: number) => `M${x} ${y - 5.5}l5.5 5.5-5.5 5.5-5.5-5.5Z`;
 
-export function Track({ row, spans, events, scale, nowMs, ongoing, buddies, onOpen, onSelect, onHover, onFocusSpan, onMarker, buddyColors, selected, selectedKey = null, highlightedKey = null, ownedWaits, tabKey, boundary, height = 52, surface = "background", selectionRef, itemLinks }: {
+const TrackView = memo(function Track({ row, spans, events, scale, nowMs, ongoing, buddies, onOpen, onSelect, onHover, onFocusSpan, onMarker, buddyColors, selected, selectedKey = null, highlightedKey = null, ownedWaits, tabKey, boundary, height = 52, surface = "background", selectionRef, itemLinks }: {
   row: TimelineRow; spans: TimelineSpan[]; events: TimelineEvent[]; scale: TimelineScale; nowMs: number; ongoing: boolean;
   buddies?: readonly FriendlyBuddy[] | null; selected: boolean; tabKey?: string | null; boundary?: HTMLElement | null;
   /** Only this fragment is outlined; the selected row has its own neutral wash. */
@@ -367,4 +367,18 @@ export function Track({ row, spans, events, scale, nowMs, ongoing, buddies, onOp
     })}
     {labels.map((label, index) => <text aria-hidden="true" pointerEvents="none" data-slot="track-label" data-event-key={label.eventKey} key={index} x={label.left} y={label.y} className={label.className}>{label.text}</text>)}
   </svg>;
+});
+
+/** Event handlers follow the latest selection; stable facts keep the SVG. */
+export function Track(props: ComponentProps<typeof TrackView>) {
+  const current = useRef(props);
+  current.current = props;
+  const handlers = useMemo(() => ({
+    onOpen: (runId: string, key: string) => current.current.onOpen(runId, key),
+    onSelect: (runId: string, key?: string) => current.current.onSelect(runId, key),
+    onHover: (span: TimelineSpan | null) => current.current.onHover(span),
+    onFocusSpan: (span: TimelineSpan | null) => current.current.onFocusSpan(span),
+    onMarker: (marker: TimelineMarker | null, source: "hover" | "focus") => current.current.onMarker(marker, source),
+  }), []);
+  return <TrackView {...props} {...handlers}/>;
 }
