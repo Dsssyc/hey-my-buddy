@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import threading
 from pathlib import Path
 from unittest.mock import Mock, patch
 
@@ -12,6 +13,30 @@ from hey_my_buddy.blackboard.service.execution_scheduler import _ExecutionObserv
 from hey_my_buddy.errors import BoardError
 from hey_my_buddy.protocol import process_identity as processes
 from hey_my_buddy.protocol.execution import fsync_json, RECEIPT
+
+
+class CommitFailingConnection:
+    """Delegate one cached SQLite connection, failing its next COMMIT once.
+
+    ``Database.write`` holds its per-thread connection in a cache; substituting
+    that entry lets the real transaction run every statement and fail exactly
+    at ``connection.execute("COMMIT")``, with no product test hook.
+    """
+
+    def __init__(self, connection):
+        self._connection = connection
+        self.fail_commit = False
+        self.statements = []
+
+    def execute(self, sql, parameters=()):
+        self.statements.append(sql)
+        if self.fail_commit and sql == "COMMIT":
+            self.fail_commit = False  # The fault is removed after firing once.
+            raise RuntimeError("commit failed")
+        return self._connection.execute(sql, parameters)
+
+    def __getattr__(self, attribute):
+        return getattr(self._connection, attribute)
 
 IDENTITY = {'bootId': 'macos:00000000-0000-0000-0000-000000000001', 'pid': 123,
             'startedAt': 123250000, 'processGroupId': 123, 'jobName': None}
@@ -95,15 +120,26 @@ class InterruptionRecoveryTests(BoardTestCase):
         board, _client, _task, _claim, actor = self.claimed(identity=False)
         windows = {'pid': 301, 'startedAt': 1339247086400000000,
                    'jobName': 'Local\\HeyMyBuddy-00000000-0000-4000-8000-0000000000d3'}
-        with patch.object(board.store, '_record_process_identity',
-                          side_effect=RuntimeError('identity commit failed')):
-            with self.assertRaises(RuntimeError):
-                board.store.execution_progress({**actor, 'processIdentity': windows},
-                                               verify_identity=lambda *_args: windows)
+        # Substitute this thread's cached connection so the real transaction
+        # fails at Database.write's own COMMIT, after every statement ran.
+        with board.store.db.connect() as connection:
+            proxy = CommitFailingConnection(connection)
+        board.store.db._connections[(threading.get_ident(), 0)] = proxy
+        proxy.fail_commit = True
+        with self.assertRaises(RuntimeError):
+            board.store.execution_progress({**actor, 'processIdentity': windows},
+                                           verify_identity=lambda *_args: windows)
+        # Both writes were issued inside the transaction; the failed COMMIT is
+        # the last statement, so the failure is the commit and nothing earlier.
+        issued = ' '.join(proxy.statements)
+        self.assertIn('INSERT INTO attempt_process_identities', issued)
+        self.assertIn('identity_confirmed_at', issued)
+        self.assertEqual(proxy.statements[-1], 'COMMIT')
         with board.store.db.read() as connection:
             self.assertIsNone(interruption.read_identity(connection, actor['attemptId']))
         self.assertFalse(board.store.execution_identity_confirmed(actor['attemptId']))
-        # The failed commit fences nothing: the retried report confirms normally.
+        # The failed commit fences nothing: the same report, retried through
+        # the service path after the fault is gone, confirms normally.
         board.call('execution_progress', {**actor, 'processIdentity': windows})
         with board.store.db.read() as connection:
             self.assertEqual(interruption.read_identity(connection, actor['attemptId']), windows)
