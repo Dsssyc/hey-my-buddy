@@ -43,6 +43,23 @@ Router 输入删除卡片、评价证据和它们的引用集合，只保留任�
 
 `docs/reference/evaluation-maintenance.md` 删除；`docs/reference/evaluation.md` 保留模型、用户设置、控制台与路由的内容，并删除卡片和维护说明。`docs/README.md` 删除维护参考页入口并纠正 ADR-008 仍现行的陈述。共享 skill 删除模型卡片更新那一句；skill 构建按存在的参考页收集文件，删除页面后不再进入构建清单。纯维护测试 `blackboard/evaluation/test_external_evaluation.py`、`blackboard/routing/test_evaluation_routing.py` 和 `console/test_console_gate_deadlines.py` 删除；卡片/证据/维护写者的专用用例删除，其他测试迁移为直接设置发布与当前输入。
 
+## Host 续做决定与测试清理
+
+第一续做回合发现基点中缺失的 `WorkspaceIdentityFixture.snapshot`、`migrate`、`all_rows`、`historical` 导致 7 个测试文件失败。Host 确认第一个升级微任务删除身份归一换算时删掉了这些助手，但遗漏了调用它们的测试；随后授权在本微任务内处理，并把 `tests/probes` 加入范围第 2 版。没有恢复任何助手、换算或旧形式读法，也没有修改运行期读别名的源码。
+
+本次只删除以下两条身份归一专用测试；通用的宏任务筛选、游标、路由边界与请求重放仍由各自现有测试覆盖。
+
+| 删除的测试（`blackboard/tasks/test_workflow_preparation.py`） | 原来守护的行为 | 删除依据 |
+| --- | --- | --- |
+| `test_three_identity_eras_keep_macro_filters_cursors_attach_and_replay` | 归一前几代 repositoryId 的宏任务与微任务筛选、旧游标、附着和请求重放，归一后均映射到当前项目 | 身份归一换算已删除；不恢复几代存量换算 |
+| `test_router_boundary_keeps_the_legacy_checkout_after_index_normalization` | 旧 checkoutId 索引归一之后，路由继续边界仍找到旧检出并使用当前索引身份 | 只服务于已归一存量上的别名读取；按 Host 决定随旧准备步骤删除 |
+
+`test_workflow_preparation.py` 保留并改写三条测试：`test_initial_immutable_input_wins_over_later_manifest_reservation_and_cwd` 用当前提交创建不可变 input artifact，再让可变记录偏离，重建私有 board 后确认最初输入仍决定项目归属；`test_restart_helper_transfer_handoff_and_return_keep_single_ownership` 用当前协助操作移交检出，重建 board 后验证竞争者被挡、封存交还与唯一持有者；`test_restart_failed_helper_partial_recovery_uses_the_same_checkout` 用当前失败协助任务留下部分文件，重建 board 后确认同一检出恢复，旧回合输入及摘要不变。类改为当前操作的 `RestartPreparationTests`，删除了身份归一专用的导入。
+
+`test_workspace_lifecycle.py` 没有删除测试。五个末尾场景改用当前操作创建状态并重建私有 board：`test_restart_native_seams_continue_seal_integrate_and_reclaim_allocation` 保留续跑、封存、集成、归还和不可变输入；`test_restart_preserves_accepted_target_and_cleanup_plan_before_apply` 保留目标身份、验收重放与跨重启清理计划；`test_restart_cannot_remove_a_copied_worktree_git_directory` 保留复制 Git 目录后的身份拒绝；`test_restart_scope_restore_keeps_the_failure_and_continues_helper` 保留协助范围冲突恢复与续跑；`test_restart_abandon_returns_input_and_preserves_the_failed_site` 保留放弃冲突与失败现场。测试名移去旧身份准备的描述，不再绑定缺失的助手，仍使用原来存在的 `fixed_files` 检查证据文件不变。
+
+`tests/probes/objective_console_preview.py` 删除 `evaluation_history`、`evaluation_write_begin`、`evaluation_write_renew`、`evaluation_write_abort` 的允许入口及维护历史回复；删除快照的 `gate`、`cards`、`evidence`、`pendingEvidence`、`sampleCounts` 和维护能力，删除模型分页的卡片/样本、决策的维护发布字段、`SAMPLE_COUNTS` 与 `sample_counts()`。保留设置版本、用户策略、路由健康统计、微任务结果与原生执行证据；决策的现存引用仍用 `evidence`。`tests/probes/router_fast.py` 同步删除准备包的空 `cards` 字段，没有执行真实 Router 调用。真实前端解析器的预览检查现在也核对快照不再携带旧字段；`App.test.tsx` 与 `desktop-console.test.tsx` 删除混合用例中的旧卡片/观察字段断言，保留设置和草稿行为。
+
 ## 留给下一个微任务的版本闸门
 
 `blackboard/store/db.py` 的 `evaluation_state.table_revision`、`configuration_revision` 和仍现存的旧名字不变，`migrations.py` 带走两种版本及所有既定设置的行为不变。`evaluation_revisions`、profile 的 created/updated revision、偏好/备注的更新版本继续存在。
@@ -55,21 +72,19 @@ Router 输入删除卡片、评价证据和它们的引用集合，只保留任�
 
 ## 验证和边界
 
-本轮在最终删除源码上运行指定的五个 Python 目录：`tests/python/blackboard`、`tests/python/buddy/roles`、`tests/python/console`、`tests/python/cli`、`tests/python/protocol`。检查器使用任务指定解释器及 `PYTHONPATH=src`，清除继承的 `BUDDY_STATE_DIR`、`BUDDY_RUNTIME_ROOT`、`BUDDY_RUNTIME`、`BUDDY_RUNTIME_IDENTITY`、`BUDDY_WORKER_STATE`、`BUDDY_WORKER_ID`、`BUDDY_AGENT_CREDENTIAL`、`BUDDY_AGENT_CREDENTIAL_FILE`、`VIRTUAL_ENV`、`UV_PROJECT_ENVIRONMENT`。共调度 146 个文件，138 个文件通过，检查器汇总这批通过文件为 2,105 项、0 跳过；8 个文件失败，最终退出 1，私有根已删除。这不是全量 Python 检查，也没有任何安装、日常看板或真实 harness / 付费模型调用。
+最终在本次源码上运行指定的五个 Python 目录：`tests/python/blackboard`、`tests/python/buddy/roles`、`tests/python/console`、`tests/python/cli`、`tests/python/protocol`。检查器使用任务指定解释器及 `PYTHONPATH=src`，清除继承的 `BUDDY_STATE_DIR`、`BUDDY_RUNTIME_ROOT`、`BUDDY_RUNTIME`、`BUDDY_RUNTIME_IDENTITY`、`BUDDY_WORKER_STATE`、`BUDDY_WORKER_ID`、`BUDDY_AGENT_CREDENTIAL`、`BUDDY_AGENT_CREDENTIAL_FILE`、`VIRTUAL_ENV`、`UV_PROJECT_ENVIRONMENT`，并使用支持的 Node 24.21.0 供跨组件检查调用。146 个文件、2,253 项测试通过，0 跳过，最终退出 0，私有测试根已删除。没有运行完整 Python 检查，没有安装、日常看板或真实 harness / 付费模型调用。
 
-8 个失败中的 `blackboard/catalog/test_catalog_trust.py` 引用了基点里已经不存在的 `blackboard.store.test_migrations.rows`。本轮将该用例改为直接比较私有数据库全部当前表的行，保留目录发布失败时整个事务回滚的断言；最后单独通过同一检查器重跑该文件，16 项通过，退出 0，私有根已删除。后端审查还单独运行了 `blackboard/evaluation/test_evaluation.py` 与 `blackboard/routing/test_decision.py`，52 项通过、退出 0；二者也在上述目录检查中通过。
+第一续做回合的五目录检查曾退出 1：138 个文件通过，8 个文件失败。目录回滚测试引用了基点里已删除的 `blackboard.store.test_migrations.rows`，已改为比较私有数据库全部当前表的行，保留整个目录发布事务回滚的断言，单独重跑 16 项通过；其余 7 个文件由上节缺失助手造成，现已在最终五目录检查中全部通过。第二续做回合还分别聚焦检查了 `test_workspace_lifecycle.py`（49 项）、`test_workflow_preparation.py`（30 项）和 `cli/test_host_preview.py`（3 项），均退出 0、私有根已删除。第一续做回合的后端两文件聚焦检查另有 52 项通过。
 
-剩余 7 个文件受同一个基点夹具缺失影响：`blackboard/tasks/test_workspace_lifecycle.py`、`blackboard/tasks/test_host_workflow.py`、`blackboard/tasks/test_permission_levels.py`、`blackboard/tasks/test_workspace_api.py`、`blackboard/tasks/test_workflow_preparation.py`、`cli/test_cli_views.py`、`cli/test_checks_parallel.py`。`test_workspace_lifecycle.py` 的类定义引用不存在的 `WorkspaceIdentityFixture.snapshot`，同一处还引用缺失的 `migrate`、`all_rows`、`historical`；`test_workflow_preparation.py` 的 5 个历史身份准备场景调用缺失的 `historical` 或 `migrate`。`test_workspace_identity.py`、这两份测试及其缺失引用在 `e9c1988f` 与输入 `63306ec5` 中已是同样形式，删除维护的差异没有修改它们。单独重跑 `test_workspace_lifecycle.py` 也在加载类时以相同 AttributeError 退出 1，私有根已删除。这些测试在要求旧历史保留的迁移助手，须由 Host 与安装/升级微任务确定当前测试契约；本轮未恢复旧换算、未删除这些非维护用例，也未跳过失败文件，因此“全部规定测试通过”尚未达成。
+前端依赖在第一续做回合以 `npm --prefix apps/console ci` 准备，退出 0。本回合最终使用支持的 Node 24.21.0 运行 `npm --prefix apps/console test -- --maxWorkers=4`，78 个文件、1,098 项通过、退出 0。此前默认并发下 `desktop-console.test.tsx` 的备注草稿交互用例触发 5 秒超时，单文件重跑 13 项通过；最终限制测试进程并发，没有修改断言或超时阈值。
 
-前端使用支持的 Node 24.21.0：`npm --prefix apps/console ci` 退出 0；最终 `npm --prefix apps/console test` 为 78 个文件、1,098 项通过、退出 0；随后 `npm --prefix apps/console run build` 退出 0。最终打包文件为 `assets/index-BR2BiGHz.js`（772.41 kB）与 `assets/index-BN6Y1rxs.css`（114.81 kB），`index.html` 指向这两个文件；旧 JS 被构建替换。构建只有现存的大于 500 kB 分块提示，没有编译错误。
+前端全套通过后运行 `npm --prefix apps/console run test:browser -- --config .worker-playwright.config.ts`，其前置构建退出 0，并在清理后的合成预览上运行 `apps/console/browser/*.check.ts`，96 项通过，命令退出 0。仓库默认浏览器配置用 uv 启动预览，本回合的临时配置只把启动命令换成任务指定解释器，并清除继承的运行时/凭据变量；配置已删除。Chromium 使用检出内 `apps/console/node_modules/.cache/ms-playwright`，npm 使用检出内缓存。最终打包文件为 `assets/index-BR2BiGHz.js`（772.41 kB）与 `assets/index-BN6Y1rxs.css`（114.81 kB），`index.html` 指向这两个文件；旧 JS 已被替换。构建只有大于 500 kB 分块的提示，没有编译错误。
 
-真实浏览器在同一打包资产的合成预览上运行 `apps/console/browser/*.check.ts`，96 项通过、退出 0。仓库的 `test:browser` 默认用 uv 启动预览，因此本轮使用检出内临时 Playwright 配置，将预览启动命令改为指定解释器并清除继承的运行时/凭据变量；配置已删除。Chromium 只使用检出内 `apps/console/node_modules/.cache/ms-playwright`。浏览器回归验证绘制行为；下述范围外预览的旧数据字段仍须清理，不能将该通过结果当作预览契约已迁移的证据。`git diff --check` 通过；安装代码、安装测试与固定 `tests/fixtures` 没有差异。
+说明文件完成后，按指定检查器重跑 `cli/test_repository_hygiene.py`，5 项通过、退出 0，私有根已删除。`git diff --check` 通过；安装代码、安装测试、固定 `tests/fixtures` 与运行期读别名源码没有差异。源码与合成预览验证不代表安装或 Host 验收。
 
-`packaging/generate-upgrade-fixture.py` 保留旧操作：它固定从发布基点源码生成 schema 18 的 stock，测试不执行它，不能把固定基点改成新板。`tests/fixtures` 原样保留。允许范围之外的 README 与现行 CLI/console 参考页仍有旧维护描述或链接，交由 Host 同步；本次没有修改它们。版本与安装由其所属微任务处理。
+`packaging/generate-upgrade-fixture.py` 保留旧操作：它固定从发布基点源码生成 schema 18 的 stock，测试不执行它，不能把固定基点改成新板。`tests/fixtures` 原样保留。版本与安装由其所属微任务处理。
 
-范围外还发现合成预览 `tests/probes/objective_console_preview.py` 保留旧契约：`ALLOWED_OPERATIONS` 仍列 `evaluation_history`、`evaluation_write_begin`、`evaluation_write_renew`、`evaluation_write_abort`；`READ_OPERATIONS` 仍列 `evaluation_history`；快照仍返回 `gate`、`cards`、`evidence`、`pendingEvidence`、`sampleCounts` 与维护能力，模型分页仍返回卡片/样本，路由详情仍带维护发布字段，帮助仍介绍旧读法。该文件不在本微任务写入范围，未修改，需 Host 删除这些旧操作、字段与专用样本夹具，保持微任务结果及原生执行证据。它在浏览器回归中额外提供旧字段，测试通过不能证明预览夹具已经遵守新契约。
-
-Host 另需同步的范围外现行文档：`README.md` 与 `README.zh-CN.md` 的维护说明；`docs/reference/cli.md` 的维护操作与写者字段；`docs/reference/decision.md` 的 Host 维护段；`docs/reference/architecture.md` 的写者排队理由与维护契约；`docs/reference/console.md` 的维护/写者描述。`docs/design/console-frontend.md` 中“evaluation-history 不受影响”的记录也已过时。历史 ADR 与旧验收记录可作为历史证据保留。
+Host 另需同步的范围外现行文档：`README.md` 与 `README.zh-CN.md` 的维护说明；`docs/reference/cli.md` 的维护操作与写者字段；`docs/reference/decision.md` 的 Host 维护段；`docs/reference/architecture.md` 的写者排队理由与维护契约；`docs/reference/console.md` 的维护/写者描述。`docs/design/console-frontend.md` 中“evaluation-history 不受影响”的记录也已过时。历史 ADR 与旧验收记录可作为历史证据保留；本微任务没有修改这些范围外文档。
 
 ## 执行偏差
 
@@ -77,4 +92,4 @@ Host 另需同步的范围外现行文档：`README.md` 与 `README.zh-CN.md` �
 
 同一代理最初未设置浏览器下载目录，Chromium 下载向默认的 `~/Library/Caches/ms-playwright` 缓存写入，在约 50% 时中断；没有检查或删除该外部缓存。随后改用检出内 `apps/console/node_modules/.cache/ms-playwright` 安装并运行浏览器回归。这两项偏差不计为源码验证的通过证据；前端与 Python 的最终结果以规定命令的最后一次输出为准。
 
-本轮前端代理的 npm 命令未覆盖 npm 缓存，沿用本机配置，未核实其确切目录；没有检查或删除外部 npm 缓存。主代理随后的一次额外前端测试使用了默认 Node 25.8.1，虽也通过 1,098 项，但不作为支持版本的最终证据；最后已在 Node 24.21.0 上重跑全部前端测试并重建资产，两者退出 0，且为这两次命令显式设置检出内 `apps/console/node_modules/.cache/npm` 缓存。本轮没有使用 uv，也没有向指定解释器环境安装包。
+第一续做回合前端代理的 npm 命令未覆盖 npm 缓存，沿用本机配置，未核实其确切目录；没有检查或删除外部 npm 缓存。主代理随后的一次额外前端测试使用了默认 Node 25.8.1，虽也通过 1,098 项，但不作为支持版本的最终证据；最后已在 Node 24.21.0 上重跑全部前端测试并重建资产，两者退出 0，且为这两次命令显式设置检出内 `apps/console/node_modules/.cache/npm` 缓存。两个续做回合没有使用 uv，也没有向指定解释器环境安装包。

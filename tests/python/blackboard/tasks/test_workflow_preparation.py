@@ -11,8 +11,6 @@ from unittest.mock import patch
 
 from support import FakeClock
 from blackboard.tasks.test_workflow import WorkflowTestCase
-import blackboard.tasks.test_workspace_identity as identity_fixtures
-from hey_my_buddy.blackboard.routing.router_boundary_data import _continuation_context
 from hey_my_buddy.blackboard.tasks import workflow as workflow_module, workspace
 from hey_my_buddy.blackboard.store.db import canonical_json
 from hey_my_buddy.errors import BoardError
@@ -561,78 +559,34 @@ class PreparationTests(WorkflowTestCase):
         self.assertEqual(resumed["claim"]["turn"]["input"]["executionWorkspace"]["baseCommit"], json.loads(artifact[0])["commit"])
 
 
-class RestartIdentityPreparationTests(identity_fixtures.WorkspaceIdentityFixture):
-    """Historical inputs remain fixed while canonical ownership drives new work."""
+class RestartPreparationTests(WorkflowTestCase):
+    """Persisted preparation and ownership survive a new board coordinator."""
 
+    _repository_template = None
+    git = PreparationTests.git
+    repository = PreparationTests.repository
     failed_helper = PreparationTests.failed_helper
     rows = PreparationTests.rows
 
     def setUp(self):
         super().setUp()
-        self.enterContext(patch.dict(os.environ, {"BUDDY_STATE_DIR": str(self.directory)}))
+        self.workspace = workspace
+        workflow_module._workspace_module = workspace
+        self.repo = self.repository("repo")
 
-    def test_three_identity_eras_keep_macro_filters_cursors_attach_and_replay(self):
-        board, first, original = self.legacy_run(request_id="era-before", device_delta=2)
-        _, extra, _ = self.legacy_run(board, request_id="era-before-extra", device_delta=2)
-        _, second, second_original = self.legacy_run(board, request_id="era-after", device_delta=4)
-        old_project = original["repositoryId"]
-        self.assertNotEqual(second_original["repositoryId"], old_project)
-        old_page = board.call("objective_list", {"projectId": old_project, "limit": 1})
-        self.assertIsNotNone(old_page["nextCursor"])
-        old_task_page = board.call("task_list", {"projectId": old_project, "limit": 1})
-        self.assertIsNotNone(old_task_page["nextCursor"])
-        history, files = self.historical(board), self.fixed_files()
-        self.migrate(board)
-        self.assertEqual(self.historical(board), history)
-        self.assertEqual(self.fixed_files(), files)
-        current_project = workspace.inspect(str(self.repo))["repositoryId"]
-        self.assertNotEqual(current_project, old_project)
-        # The opaque cursor is still bound to the user's recorded filter value.
-        rest = board.call("objective_list", {
-            "projectId": old_project, "limit": 1, "before": old_page["nextCursor"],
-        })
-        self.assertEqual(len(rest["objectives"]), 1)
-        self.assertFalse(rest["changed"])
-        self.assertNotEqual(rest["objectives"][0]["objectiveId"], old_page["objectives"][0]["objectiveId"])
-        task_rest = board.call("task_list", {
-            "projectId": old_project, "limit": 1, "before": old_task_page["nextCursor"],
-        })
-        self.assertEqual(len(task_rest["runs"]), 1)
-        stable = self.submit(board, request_id="era-stable", cwd=str(self.repo),
-                             executionWorkspace={"kind": "worktree", "access": "write"},
-                             objective={"title": "stable macro"})
-        macros = {run["objectiveId"] for run in (first, extra, second, stable)}
-        for project in (old_project, second_original["repositoryId"], current_project):
-            with self.subTest(project=project):
-                listed = board.call("objective_list", {"projectId": project})
-                self.assertEqual({row["objectiveId"] for row in listed["objectives"]}, macros)
-                self.assertTrue(all(row["project"]["id"] == current_project for row in listed["objectives"]))
-        attached = []
-        for index, run in enumerate((first, second, stable)):
-            child = self.submit(board, request_id=f"era-attached-{index}", cwd=str(self.repo),
-                                executionWorkspace={"kind": "worktree", "access": "write"},
-                                objectiveId=run["objectiveId"])
-            attached.append(child)
-            timeline = board.call("objective_timeline", {"objectiveId": run["objectiveId"]})
-            self.assertEqual({row["runId"] for row in timeline["rows"]}, {run["runId"], child["runId"]})
-            self.assertEqual(timeline["objective"]["project"]["id"], current_project)
-        replay = self.submit(board, request_id="era-before", cwd=str(self.repo),
-                             executionWorkspace={"kind": "worktree", "access": "write"},
-                             objective={"title": "era-before macro"})
-        self.assertTrue(replay["duplicate"])
-        self.assertEqual(replay["runId"], first["runId"])
-        expected_runs = {run["runId"] for run in (first, extra, second, stable, *attached)}
-        for project in (old_project, second_original["repositoryId"], current_project):
-            listed = board.call("task_list", {"projectId": project})
-            self.assertEqual({row["runId"] for row in listed["runs"]}, expected_runs)
-            self.assertTrue(all(row["delegation"]["project"]["id"] == current_project
-                                for row in listed["runs"]))
-        self.assertEqual(self.manifest(board, first["runId"]), original)
-        self.assertEqual(self.manifest(board, second["runId"]), second_original)
+    def manifest(self, board, run_id):
+        with board.store.db.read() as connection:
+            return json.loads(connection.execute(
+                "SELECT workspace_manifest_json FROM workflow_runs WHERE run_id=?", (run_id,)
+            ).fetchone()[0])
 
     def test_initial_immutable_input_wins_over_later_manifest_reservation_and_cwd(self):
-        board, run, original = self.legacy_run(request_id="initial-project")
-        self.migrate(board)
+        board = self.board()
+        self.register(board)
+        run = self.submit(board, request_id="initial-project", cwd=str(self.repo),
+                          executionWorkspace={"kind": "worktree", "access": "write"},
+                          objective={"title": "initial project"})
+        original = self.manifest(board, run["runId"])
         project = workspace.inspect(str(self.repo))["repositoryId"]
         other = self.repository("other-project")
         foreign = self.submit(board, request_id="foreign-project", cwd=str(other),
@@ -646,11 +600,11 @@ class RestartIdentityPreparationTests(identity_fixtures.WorkspaceIdentityFixture
             connection.execute("UPDATE workspace_reservations SET repository_id=?,path=? WHERE holder_task_id=?",
                                (foreign_manifest["repositoryId"], foreign_manifest["path"], run["runId"]))
             connection.execute("UPDATE tasks SET cwd=? WHERE task_id=?", (str(other), run["runId"]))
+        board = self.board()
         task = board.call("task_get", {"runId": run["runId"]})["task"]
         self.assertEqual(task["delegation"]["project"]["id"], project)
-        for identifier in (original["repositoryId"], project):
-            listed = board.call("task_list", {"projectId": identifier})
-            self.assertIn(run["runId"], {row["runId"] for row in listed["runs"]})
+        listed = board.call("task_list", {"projectId": project})
+        self.assertIn(run["runId"], {row["runId"] for row in listed["runs"]})
         foreign_list = board.call("task_list", {"projectId": foreign_manifest["repositoryId"]})
         self.assertNotIn(run["runId"], {row["runId"] for row in foreign_list["runs"]})
         timeline = board.call("objective_timeline", {"objectiveId": run["objectiveId"]})
@@ -661,47 +615,22 @@ class RestartIdentityPreparationTests(identity_fixtures.WorkspaceIdentityFixture
                 (run["runId"],)).fetchone()[0])
         self.assertEqual(retained, original)
 
-    def test_router_boundary_keeps_the_legacy_checkout_after_index_normalization(self):
-        board, run, original = self.legacy_run(request_id="router-restart")
-        with board.store.db.write() as connection:
-            connection.execute("INSERT INTO evaluation_decisions(decision_id,status,task,table_revision,created_at)"
-                               " VALUES('identity-routing','needs-host','fixture',0,'then')")
-            connection.execute("INSERT INTO decision_requests(decision_id,request_id,kind,input_fingerprint,created_at,updated_at)"
-                               " VALUES('identity-routing','identity-request','select','fixture','then','then')")
-            connection.execute("UPDATE workflow_runs SET current_routing_id='identity-routing' WHERE run_id=?", (run["runId"],))
-            connection.execute("INSERT INTO workflow_routes(decision_id,run_id,owner_generation,state,created_at,updated_at)"
-                               " VALUES('identity-routing',?,1,'needs-host','then','then')", (run["runId"],))
-        self.migrate(board)
-        with board.store.db.read() as connection:
-            allowed, reason, _policy, _run = _continuation_context(
-                connection, {"decision_id": "identity-routing"}, run["runId"], None)
-            held = connection.execute("SELECT checkout_id FROM workspace_reservations WHERE holder_task_id=? AND state='held'",
-                                      (run["runId"],)).fetchone()[0]
-        self.assertTrue(allowed)
-        self.assertIsNone(reason)
-        self.assertNotEqual(held, original["checkoutId"])
-        self.assertEqual(held, workspace.inspect(original["path"])["checkoutId"])
-
     def test_restart_helper_transfer_handoff_and_return_keep_single_ownership(self):
         board = self.board()
         self.register(board)
-        with self.legacy():
-            root = self.submit(board, request_id="restart-parent", cwd=str(self.repo),
-                               executionWorkspace={"kind": "existing", "access": "write"})
-            parent = self.claim(board, run_id=root["runId"])
-            (self.repo / "tracked.txt").write_text("parent output\n")
-            self.finish_turn(board, parent, disposition="assistance")
-            view = board.call("workflow_get", {"runId": root["runId"]})
-            approved = self.decide(board, view, view["activeRequest"]["requestId"], helpers=[{
-                "requestId": "restart-shared-helper", "task": "finish shared checkout", "cwd": str(self.repo),
-                "executionWorkspace": {"kind": "existing", "access": "write"},
-            }])
+        root = self.submit(board, request_id="restart-parent", cwd=str(self.repo),
+                           executionWorkspace={"kind": "existing", "access": "write"})
+        parent = self.claim(board, run_id=root["runId"])
+        (self.repo / "tracked.txt").write_text("parent output\n")
+        self.finish_turn(board, parent, disposition="assistance")
+        view = board.call("workflow_get", {"runId": root["runId"]})
+        approved = self.decide(board, view, view["activeRequest"]["requestId"], helpers=[{
+            "requestId": "restart-shared-helper", "task": "finish shared checkout", "cwd": str(self.repo),
+            "executionWorkspace": {"kind": "existing", "access": "write"},
+        }])
         helper_id = approved["children"][0]["taskId"]
         old = parent["claim"]["turn"]["input"]["executionWorkspace"]
-        history, files = self.historical(board), self.fixed_files()
-        self.migrate(board)
-        self.assertEqual(self.historical(board), history)
-        self.assertEqual(self.fixed_files(), files)
+        board = self.board()
         for access in ("read", "write"):
             with self.subTest(access=access):
                 with self.assertRaises(BoardError) as blocked:
@@ -729,15 +658,11 @@ class RestartIdentityPreparationTests(identity_fixtures.WorkspaceIdentityFixture
         self.assertEqual([row[0] for row in holders], [root["runId"]])
 
     def test_restart_failed_helper_partial_recovery_uses_the_same_checkout(self):
-        with self.legacy():
-            board, parent, helper_id, failed, checkout = self.failed_helper()
+        board, parent, helper_id, failed, checkout = self.failed_helper()
         with board.store.db.read() as connection:
             original_turn = tuple(connection.execute("SELECT input_json,input_sha256 FROM workflow_turns WHERE attempt_id=?",
                                                     (failed["claim"]["attempt"]["attemptId"],)).fetchone())
-        history, files = self.historical(board), self.fixed_files()
-        self.migrate(board)
-        self.assertEqual(self.historical(board), history)
-        self.assertEqual(self.fixed_files(), files)
+        board = self.board()
         view = board.call("workflow_get", {"runId": parent["runId"]})
         continuation = self.continue_run(board, view, targetRunId=helper_id,
                                          command_id="restart-recover-partial", input="finish the preserved partial tests")

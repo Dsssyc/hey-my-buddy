@@ -43,7 +43,7 @@ def packet(args):
         'task': '极小任务：将 README 中一句中文句末的英文句点改成中文句号。只选择执行配置，不执行修改。',
         'routingMode': 'fast', 'requestedRoutingMode': 'fast', 'fallback': None,
         'captureEvidence': True,
-        'profiles': profiles, 'cards': [], 'preferences': [], 'annotations': [],
+        'profiles': profiles, 'preferences': [], 'annotations': [],
         'policyFacts': selection_policy.policy_facts(profiles=profiles,
                                                     prefer_profile_ids=[], hard_constraints={}),
         'requestId': 'native-fast-check', 'tableRevision': 0,

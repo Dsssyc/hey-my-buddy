@@ -150,9 +150,6 @@ describe("desktop console", () => {
     await user.click(effortCell("low"));
     expect(levelSwitch("low")).toBeTruthy();
     expect(within(detail).queryByRole("switch", { name: "启用 off" })).toBeNull();
-    // The automatic assessment is program-owned: there is no field for it or for an observation.
-    expect(within(detail).queryByRole("textbox", { name: "当前评价" })).toBeNull();
-    expect(within(detail).queryByRole("textbox", { name: "补充观察" })).toBeNull();
     expect(within(detail).queryByRole("checkbox")).toBeNull();
     expect(f.command).not.toHaveBeenCalled();
   });
@@ -179,13 +176,9 @@ describe("desktop console", () => {
     expect(note()).toHaveProperty("value", "flash 的备注");
     await user.click(modelButton(dsh("deepseek-v4-pro")));
     expect(note()).toHaveProperty("value", "pro 的备注");
-    // Snapshot polling keeps the draft; only Save would take a lease.
+    // Snapshot polling keeps the draft without publishing it.
     await waitFor(() => expect((f.api.snapshot as ReturnType<typeof vi.fn>).mock.calls.length).toBeGreaterThan(1), { timeout: 4500 });
     expect(note()).toHaveProperty("value", "pro 的备注");
-    // The automatic card stays program-owned and cannot be typed into.
-    expect(screen.queryByLabelText("当前评价")).toBeNull();
-    expect(screen.queryByRole("textbox", { name: "补充观察" })).toBeNull();
-    expect(screen.queryByLabelText("作为卡片依据")).toBeNull();
     await user.click(await screen.findByRole("button", { name: "放弃" }));
     expect(f.command).not.toHaveBeenCalled();
   });
