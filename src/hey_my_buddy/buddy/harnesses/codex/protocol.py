@@ -12,6 +12,9 @@ from datetime import datetime, timezone
 from ....json_codec import canonical_json, decode_strict_json
 
 MAX_FRAME_BYTES = 8 * 1024 * 1024
+#: The bound on one native error message carried into a refusal; nothing past
+#: the ``error.message`` string itself (no ``error.data`` or other content).
+MAX_NATIVE_ERROR_MESSAGE_CHARS = 256
 _WINDOWS_PIPE = os.name == "nt"
 
 
@@ -129,6 +132,14 @@ class Connection:
         response = self.responses.pop(request_id)
         self.pending_ids.discard(request_id)
         if "error" in response:
+            # The native refusal keeps its own bounded message beside the
+            # stable machine code; an error without a usable message keeps the
+            # method-only fallback, and nothing else of the error is expanded.
+            error = response.get("error")
+            message = error.get("message") if isinstance(error, dict) else None
+            if isinstance(message, str) and message.strip():
+                raise CodexProtocolError("native-rpc-error",
+                                         f"Codex rejected {method}: {message[:MAX_NATIVE_ERROR_MESSAGE_CHARS]}")
             raise CodexProtocolError("native-rpc-error", f"Codex rejected {method}")
         result = response.get("result")
         if not isinstance(result, dict):

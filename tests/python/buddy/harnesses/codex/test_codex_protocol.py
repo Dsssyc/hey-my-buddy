@@ -1,6 +1,7 @@
 """Codex transport deadline boundary checks; no model network or shared state is used."""
 import json
 import math
+import os
 import subprocess
 import sys
 import threading
@@ -222,6 +223,45 @@ class NativeUsageEvidenceTests(unittest.TestCase):
                                       "reasoningOutputTokens": 0, "totalTokens": 0}, "total": {}}):
             self.notify(evidence, token_usage.get("last"), token_usage.get("total"))
         self.assertIsNone(attempt_token_usage(evidence))
+
+
+class NativeRpcErrorTests(unittest.TestCase):
+    """A settled native error keeps its bounded message beside the machine code."""
+
+    def connection_with_error(self, error: dict) -> Connection:
+        read_fd, write_fd = os.pipe()
+        self.addCleanup(os.close, read_fd)
+        self.addCleanup(os.close, write_fd)
+        process = SimpleNamespace(stdin=SimpleNamespace(fileno=lambda: write_fd),
+                                  stdout=SimpleNamespace(readline=lambda _maximum: b""))
+        connection = Connection(process, time.monotonic() + 5, threading.Event())
+        connection.responses[connection.next_id] = {"id": connection.next_id, "error": error}
+        return connection
+
+    def call_with_error(self, error: dict) -> CodexProtocolError:
+        with self.assertRaises(CodexProtocolError) as caught:
+            self.connection_with_error(error).call("turn/start", {})
+        return caught.exception
+
+    def test_a_native_error_keeps_its_message_and_expands_nothing_else(self):
+        error = self.call_with_error({"code": -32000, "message": "model not found: fixture-model",
+                                      "data": {"accountPlan": "must never appear"}})
+        self.assertEqual(error.code, "native-rpc-error")
+        self.assertEqual(error.args[0], "Codex rejected turn/start: model not found: fixture-model")
+
+    def test_an_over_long_native_message_is_bounded(self):
+        error = self.call_with_error({"code": -32000, "message": "长" * 2000})
+        self.assertEqual(error.code, "native-rpc-error")
+        self.assertTrue(error.args[0].startswith("Codex rejected turn/start: "))
+        self.assertLessEqual(len(error.args[0].encode()), 800)
+
+    def test_an_error_without_a_usable_message_keeps_the_method_fallback(self):
+        for error in ({"code": -32000}, {"code": -32000, "message": None},
+                      {"code": -32000, "message": 47}, {"code": -32000, "message": "   "}):
+            with self.subTest(error=error):
+                failure = self.call_with_error(error)
+                self.assertEqual(failure.code, "native-rpc-error")
+                self.assertEqual(failure.args[0], "Codex rejected turn/start")
 
 
 if __name__ == "__main__":

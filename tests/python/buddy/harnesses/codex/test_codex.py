@@ -102,6 +102,20 @@ class CodexAdapterTests(unittest.TestCase):
         self.assertEqual(outcome.status, "ok", outcome.to_report())
         self.assertEqual(outcome.result["turn"]["outcome"]["disposition"], "assistance")
 
+    def test_an_unlisted_model_reaches_the_native_turn_and_its_public_fact_reaches_the_receipt(self):
+        # The full governed chain: the relaxed check hands the selected name to
+        # the native turn, the native rejection (message retained) is the
+        # failure, and the absence fact lands on the coding receipt beside the
+        # selected identity.
+        outcome = self.execute(self.context("unlisted-model"))
+        self.assertEqual(outcome.status, "failed", outcome.to_report())
+        self.assertEqual(outcome.result["code"], "native-rpc-error")
+        self.assertEqual(outcome.result["error"],
+                         "Codex rejected turn/start: model not found: fixture-model")
+        self.assertIs(outcome.result["selectedModelListed"], False)
+        self.assertEqual(outcome.result["selectedModel"],
+                         {"provider": "openai", "model": "fixture-model", "effort": "low"})
+
     def test_coding_home_is_private_per_goal_and_keeps_source_auth_untouched(self):
         from hey_my_buddy.private_dirs import native_root
         auth = self.home / 'auth.json'

@@ -134,10 +134,17 @@ def main():
             send({'id': ident, 'result': {'config': configured}})
         elif method == "account/read":
             if case == "account-unknown":
-                send({"id": ident, "result": {"account": {"type": "unrecognized"}, "requiresOpenaiAuth": True}})
+                account = {"type": "unrecognized"}
+            elif case == "account-plan-missing":
+                account = {"type": "chatgpt", "email": None}
+            elif case == "account-plan-null":
+                account = {"type": "chatgpt", "email": None, "planType": None}
+            elif case == "account-plan-unknown":
+                account = {"type": "chatgpt", "email": None, "planType": "unknown"}
             else:
-                send({"id": ident, "result": {"account": {"type": "apiKey" if case == "api-key" or os.environ.get("OPENAI_API_KEY") or os.environ.get("CODEX_API_KEY") else "chatgpt",
-                                                                "email": None, "planType": "plus"}, "requiresOpenaiAuth": True}})
+                account = {"type": "apiKey" if case == "api-key" or os.environ.get("OPENAI_API_KEY") or os.environ.get("CODEX_API_KEY") else "chatgpt",
+                           "email": None, "planType": "plus"}
+            send({"id": ident, "result": {"account": account, "requiresOpenaiAuth": True}})
         elif method == "account/rateLimits/read":
             if case in ("usage", "quota-failure"):
                 # The rolling notifications already carried the quota; a failed
@@ -153,6 +160,15 @@ def main():
                 send({"id": ident, "result": {"data": [{"model": "other-model", "displayName": "Other",
                     "description": "not the selected model", "hidden": False, "isDefault": True,
                     "defaultReasoningEffort": "low", "supportedReasoningEfforts": [{"reasoningEffort": "low"}, {"reasoningEffort": "high"}]}],
+                    "nextCursor": None}})
+                continue
+            if case == "no-efforts-row":
+                # The read lists the selected model's identity but offers no
+                # legal effort for it: the discovery omits the row, and the
+                # execution must still see the model as listed.
+                send({"id": ident, "result": {"data": [{"model": "fixture-model", "displayName": "Fixture",
+                    "description": "listed with no legal efforts", "hidden": False, "isDefault": True,
+                    "defaultReasoningEffort": "low", "supportedReasoningEfforts": []}],
                     "nextCursor": None}})
                 continue
             send({"id": ident, "result": {"data": [] if case == "empty-catalog" else [{"id": "fixture-model", "model": "fixture-model",

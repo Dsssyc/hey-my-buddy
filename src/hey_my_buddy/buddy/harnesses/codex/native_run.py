@@ -571,10 +571,16 @@ def _catalog(connection: Connection, version: str | None) -> dict:
             raise CodexProtocolError("invalid-catalog", "Codex model cursor is invalid")
         seen.add(cursor)
     models, warnings = [], []
+    listed_ids: set[str] = set()
     for item in data:
         if not isinstance(item, dict) or item.get("hidden") is True:
             continue
         model_id = item.get("model")
+        if isinstance(model_id, str) and model_id:
+            # The native identity the on-the-spot read listed, kept beside the
+            # publishable rows: a listed row with no legal effort still names
+            # its model, and execution must see that fact (ADR-027 rule 5).
+            listed_ids.add(model_id)
         efforts = [e.get("reasoningEffort") for e in item.get("supportedReasoningEfforts", []) if isinstance(e, dict)]
         efforts = list(dict.fromkeys(e for e in efforts if isinstance(e, str) and e))
         if not isinstance(model_id, str) or not model_id or not efforts:
@@ -583,11 +589,12 @@ def _catalog(connection: Connection, version: str | None) -> dict:
         models.append({"id": model_id, "name": item.get("displayName") or model_id,
                        "description": item.get("description") or "", "efforts": efforts,
                        "inputModalities": item.get("inputModalities") or ["text"], "available": True})
-    return {"source": "codex-native-app-server", "adapter": "codex", "harnessVersion": version or "unknown",
-            "discoveredAt": datetime.now(timezone.utc).isoformat(),
-            "providers": [{"adapter": "codex", "provider": "openai", "displayName": "OpenAI ChatGPT plan",
-                           "packageName": "codex", "packageVersion": version or "unknown", "models": models}],
-            "warnings": list(dict.fromkeys(warnings))}
+    catalog = {"source": "codex-native-app-server", "adapter": "codex", "harnessVersion": version or "unknown",
+               "discoveredAt": datetime.now(timezone.utc).isoformat(),
+               "providers": [{"adapter": "codex", "provider": "openai", "displayName": "OpenAI ChatGPT plan",
+                              "packageName": "codex", "packageVersion": version or "unknown", "models": models}],
+               "warnings": list(dict.fromkeys(warnings))}
+    return catalog, listed_ids
 
 
 def _account_binding(prep: _Preparation, services: RunServices) -> dict:
@@ -609,15 +616,35 @@ def _account_binding(prep: _Preparation, services: RunServices) -> dict:
     return {}
 
 
+def _discovery_account_status(account, independent: bool) -> str:
+    """The same session's account fact, reported and never judged (ADR-027).
+
+    A chatgpt account whose plan the readback does not name — the field
+    missing, empty or ``unknown`` — stays an unknown account; type alone never
+    confirms it. An independent worker's apiKey binding keeps its existing
+    rule; the board decides whether to trust any reading.
+    """
+    if not isinstance(account, dict) or account.get("type") not in (
+            ("chatgpt", "apiKey") if independent else ("chatgpt",)):
+        return "unknown"
+    if account.get("type") == "chatgpt":
+        plan = account.get("planType")
+        if not isinstance(plan, str) or not plan or plan == "unknown":
+            return "unknown"
+    return "confirmed"
+
+
 def _initialize(connection: Connection, prep: _Preparation, services: RunServices,
                 mode: str, spec: dict) -> bool:
     """Initialization phase: handshake, account check, catalog and membership.
 
-    The provider gate stays exact, and a model the on-the-spot catalog lists
-    keeps its effort check. A model that reading does not list never fails
-    here (ADR-027 rule 5): the selected name is handed to the native turn as
-    usual, the caller records the absence as this run's public fact, and the
-    real native error decides the failure.
+    The provider gate stays exact. The listed/unlisted fact comes from every
+    non-hidden identity this model/list read named, even a row whose efforts
+    are empty or invalid: a listed model without the selected effort is
+    refused here and never reaches a thread or turn, while a model this read
+    did not name never fails here (ADR-027 rule 5) — the selected name is
+    handed to the native turn as usual, the caller records the absence as
+    this run's public fact, and the real native error decides the failure.
     """
     experimental = {"capabilities": {"experimentalApi": True}} if mode in ("fast", "review") else {}
     connection.call("initialize", {**_INIT_CLIENT, **experimental})
@@ -628,16 +655,18 @@ def _initialize(connection: Connection, prep: _Preparation, services: RunService
             (("chatgpt", "apiKey") if independent else ("chatgpt",))):
         raise CodexProtocolError("account-plan-required",
                                  "Codex requires an existing ChatGPT account-plan login")
-    catalog = _catalog(connection, prep.version)
+    catalog, listed_ids = _catalog(connection, prep.version)
     if spec.get("provider") != "openai":
         raise CodexProtocolError("invalid-configuration",
                                  "the selected Codex model and effort are not in the current native catalog")
+    if spec.get("model") not in listed_ids:
+        return False
     listed = next((model for model in catalog["providers"][0]["models"]
                    if model["id"] == spec.get("model")), None)
-    if listed is not None and spec.get("effort") not in listed["efforts"]:
+    if listed is None or spec.get("effort") not in listed["efforts"]:
         raise CodexProtocolError("invalid-configuration",
                                  "the selected Codex model and effort are not in the current native catalog")
-    return listed is not None
+    return True
 
 
 # -- phase 3: configuration (one thread per carrier) -------------------------------
@@ -1696,16 +1725,13 @@ def run_discovery(*, cwd: str, invocation_root: Path, native_root: Path,
         connection = spawn.connection
         connection.call("initialize", _INIT_CLIENT)
         connection.send({"method": "initialized", "params": {}})
-        account_status = "unknown"
         try:
             account = connection.call("account/read", {"refreshToken": False}).get("account")
         except CodexProtocolError:
             account = None
         independent = _account_binding(prep, RunServices()).get("source") == "worker"
-        if isinstance(account, dict) and account.get("type") in (
-                ("chatgpt", "apiKey") if independent else ("chatgpt",)):
-            account_status = "confirmed"
-        catalog_value = _catalog(connection, version)
+        account_status = _discovery_account_status(account, independent)
+        catalog_value, _listed_ids = _catalog(connection, version)
         catalog_value["discoveries"] = [{"adapter": "codex", "status": "complete",
                                          "accountStatus": account_status}]
         if account_status == "unknown":

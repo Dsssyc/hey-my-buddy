@@ -92,7 +92,7 @@ class CodexModelCheckProjectionTests(unittest.TestCase):
                                        size_bytes=len(raw), sha256=hashlib.sha256(raw).hexdigest()))
         return rc.RunResult(identity=request.identity, harness="codex",
                             end=rc.RunEnd(status=status, reason_code="native-rpc-error",
-                                          message="Codex rejected turn/start"),
+                                          message="Codex rejected turn/start: model not found: gpt-6.1-sol"),
                             evidence_refs=refs)
 
     def test_the_fast_receipt_publishes_the_absence_fact_at_its_own_level(self):
@@ -103,6 +103,9 @@ class CodexModelCheckProjectionTests(unittest.TestCase):
         self.assertEqual(payload["selectedModel"],
                          {"provider": "openai", "model": "gpt-6.1-sol", "effort": "high"})
         self.assertEqual(payload["code"], "native-rpc-error")
+        # The native refusal message reaches the receipt's own error field.
+        self.assertEqual(payload["error"],
+                         "Codex rejected turn/start: model not found: gpt-6.1-sol")
 
     def test_the_review_receipt_merges_the_same_projection(self):
         request = self._request("read")
@@ -111,6 +114,35 @@ class CodexModelCheckProjectionTests(unittest.TestCase):
         self.assertEqual(payload["selectedModelListed"], False)
         self.assertEqual(payload["selectedModel"],
                          {"provider": "openai", "model": "gpt-6.1-sol", "effort": "high"})
+
+    def test_the_coding_receipt_publishes_the_absence_fact_from_its_verified_ref(self):
+        request = self._request("write")
+        payload = run_execution._worker_facts(self._result(request, with_ref=True))
+        self.assertIs(payload["selectedModelListed"], False)
+        self.assertEqual(payload["selectedModel"],
+                         {"provider": "openai", "model": "gpt-6.1-sol", "effort": "high"})
+        self.assertEqual(payload["error"],
+                         "Codex rejected turn/start: model not found: gpt-6.1-sol")
+
+    def test_the_coding_receipt_without_an_absence_fact_publishes_nothing(self):
+        request = self._request("write")
+        payload = run_execution._worker_facts(self._result(request, with_ref=False))
+        self.assertNotIn("selectedModelListed", payload)
+        self.assertNotIn("selectedModel", payload)
+
+    def test_a_changed_model_check_reference_fails_the_coding_receipt(self):
+        # The governed receipt keeps the same verified-evidence rule as every
+        # other reference: a changed digest fails the collection, never silently.
+        request = self._request("write")
+        result = self._result(request, with_ref=True)
+        changed = rc.RunResult(
+            identity=request.identity, harness="codex", end=result.end,
+            evidence_refs=[rc.EvidenceRef(kind="model-check",
+                                          location=result.evidence_refs[0].location,
+                                          size_bytes=result.evidence_refs[0].size_bytes,
+                                          sha256="0" * 64)])
+        with self.assertRaises(BoardError):
+            run_execution._worker_facts(changed)
 
     def test_a_run_without_the_absence_fact_publishes_nothing(self):
         request = self._request("none")

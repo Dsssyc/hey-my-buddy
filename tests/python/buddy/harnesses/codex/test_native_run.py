@@ -306,7 +306,9 @@ class FastSeamTests(SeamCase):
                      observer=correction.observer, services=None, cancelled=lambda: False)
         self.assertEqual(result.end.status, "error")
         self.assertEqual(result.end.reason_code, "native-rpc-error")
-        self.assertEqual(result.end.message, "Codex rejected turn/start")
+        # The bounded native refusal message rides beside the machine code.
+        self.assertEqual(result.end.message,
+                         "Codex rejected turn/start: model not found")
         trace = json.loads(Path(os.environ["BUDDY_CODEX_FIXTURE_STATE"]).read_text())
         self.assertEqual(trace["thread"]["model"], "fixture-model")
         evidence = native_run.native_evidence(result)
@@ -832,6 +834,25 @@ class CatalogTrustTests(CodexSeamCase):
         self.assertTrue(any("account" in warning for warning in catalog["warnings"]),
                         catalog["warnings"])
 
+    def test_a_chatgpt_account_without_a_usable_plan_stays_unknown(self):
+        # Type alone never confirms the account: a chatgpt readback whose plan
+        # is missing, null or "unknown" keeps the reading unknown, with the
+        # models still reported beside the fact.
+        for case in ("account-plan-missing", "account-plan-null", "account-plan-unknown"):
+            with self.subTest(case=case):
+                self.set_case(case)
+                catalog = run_discovery(cwd=str(self.cwd),
+                                        invocation_root=self.base / f"discovery-{case}",
+                                        native_root=self.base / f"discovery-native-{case}",
+                                        timeout_seconds=10, cancelled=lambda: False)
+                self.assertEqual([model["id"] for model in catalog["providers"][0]["models"]],
+                                 ["fixture-model"])
+                self.assertEqual(catalog["discoveries"],
+                                 [{"adapter": "codex", "status": "complete",
+                                   "accountStatus": "unknown"}])
+                self.assertTrue(any("account" in warning for warning in catalog["warnings"]),
+                                catalog["warnings"])
+
     def _model_check_ref(self, result):
         ref = next(ref for ref in result.evidence_refs if ref.kind == "model-check")
         raw = Path(ref.location).read_bytes()
@@ -843,10 +864,12 @@ class CatalogTrustTests(CodexSeamCase):
         result = self.worker_run("unlisted-model")
         # The relaxed check did not refuse: the selected name went to the
         # native thread and turn under its own identity, and the native
-        # rejection — not a catalog reading — is the failure.
+        # rejection — not a catalog reading — is the failure, with the
+        # native refusal message retained beside the machine code.
         self.assertEqual(result.end.status, "error")
         self.assertEqual(result.end.reason_code, "native-rpc-error")
-        self.assertEqual(result.end.message, "Codex rejected turn/start")
+        self.assertEqual(result.end.message,
+                         "Codex rejected turn/start: model not found: fixture-model")
         state = json.loads(Path(os.environ["BUDDY_CODEX_FIXTURE_STATE"]).read_text())
         thread = next(iter(state["threads"].values()))
         self.assertEqual(thread["model"], "fixture-model")
@@ -893,6 +916,35 @@ class CatalogTrustTests(CodexSeamCase):
         self.assertIsNone(result.model_started)
         self.assertFalse(any(ref.kind == "model-check" for ref in result.evidence_refs))
         remove_coding_auth(self.base / "worker-native")
+
+    def test_a_listed_model_without_a_legal_effort_is_refused_before_any_turn(self):
+        # The read names the selected model's identity but offers no legal
+        # effort for it: the publishable catalog omits the row, yet execution
+        # still sees the model as listed and refuses the effort here — it
+        # never reaches a thread or turn, and never counts as an absence.
+        result = self.worker_run("no-efforts-row")
+        self.assertEqual(result.end.status, "error")
+        self.assertEqual(result.end.reason_code, "invalid-configuration")
+        self.assertIn("not in the current native catalog", result.end.message)
+        state = json.loads(Path(os.environ["BUDDY_CODEX_FIXTURE_STATE"]).read_text()) \
+            if Path(os.environ["BUDDY_CODEX_FIXTURE_STATE"]).exists() else {"threads": {}}
+        self.assertEqual(state["threads"], {})
+        self.assertIsNone(result.model_started)
+        self.assertFalse(any(ref.kind == "model-check" for ref in result.evidence_refs))
+        remove_coding_auth(self.base / "worker-native")
+
+    def test_discovery_omits_a_row_without_a_legal_effort(self):
+        # The discovery receipt stays publishable: the effort-less row is
+        # omitted with its warning, never emitted as an illegal catalog model.
+        self.set_case("no-efforts-row")
+        catalog = run_discovery(cwd=str(self.cwd), invocation_root=self.base / "discovery",
+                                native_root=self.base / "discovery-native",
+                                timeout_seconds=10, cancelled=lambda: False)
+        self.assertEqual(catalog["providers"][0]["models"], [])
+        self.assertTrue(any("omitted" in warning for warning in catalog["warnings"]),
+                        catalog["warnings"])
+        self.assertEqual(catalog["discoveries"],
+                         [{"adapter": "codex", "status": "complete", "accountStatus": "confirmed"}])
 
 
 if __name__ == "__main__":
