@@ -519,9 +519,14 @@ class _LexicalRegions:
     One sequential scan covers line and block comments, plain strings, template
     literals — one span each, interpolations included, nested templates and
     their escapes handled — and regex literals, whose escapes and character
-    classes never end the literal early. A slash after an identifier, a
-    number, a closing bracket or a finished literal divides; a slash after
-    ``)`` divides unless the group is a control-statement header; every other
+    classes never end the literal early. Every span records its kind —
+    ``comment``, ``string`` or ``regex`` — because the two behave differently
+    when a following slash is classified: a comment is transparent to the code
+    before it, while a finished string, template or regex literal does end an
+    expression. A slash after an identifier, a number, a closing bracket or a
+    finished literal divides; a slash after ``)`` divides unless the group is a
+    control-statement header, matched through the same masking so brackets
+    inside strings, comments, templates and regexes never shift it; every other
     position — including after ``}``, where minified bundles essentially never
     divide — masks as a regex, the fail-closed direction. Strings, comments,
     templates and regexes therefore never provide definitions, calls,
@@ -532,9 +537,9 @@ class _LexicalRegions:
     def __init__(self, text: str):
         self.text = text
         self.spans = self._scan(text)
-        self._starts = tuple(start for start, _ in self.spans)
+        self._starts = tuple(span[0] for span in self.spans)
         code = bytearray(len(text))
-        for start, end in self.spans:
+        for start, end, _kind in self.spans:
             code[start:end] = b"\x01" * (end - start)
         self._code = code
 
@@ -588,27 +593,31 @@ class _LexicalRegions:
                     continue
                 if c in "'\"":
                     j = _plain_string_end(text, i, c)
-                    add((i, j))
+                    add((i, j, "string"))
                     i = j
                     continue
+                kind = None
                 if i + 1 < n and text[i + 1] == "/":
                     k = find("\n", i)
                     j = n if k < 0 else k
+                    kind = "comment"
                 elif i + 1 < n and text[i + 1] == "*":
                     k = find("*/", i + 2)
                     j = n if k < 0 else k + 2
+                    kind = "comment"
                 elif _slash_is_regex(text, i, spans):
                     j = _regex_end(text, i)
+                    kind = "regex"
                 else:
                     i += 1
                     continue
-                add((i, j))
+                add((i, j, kind))
                 i = j
                 continue
             if stack[-1][1] == 0:  # template text: escapes, close, or interpolation
                 m = _TEXT_SCAN.search(text, i)
                 if m is None:
-                    add((stack.pop()[0], n))
+                    add((stack.pop()[0], n, "string"))
                     i = n
                     break
                 i = m.start()
@@ -619,7 +628,7 @@ class _LexicalRegions:
                 if c == "`":
                     start = stack.pop()[0]
                     if not stack:
-                        add((start, i + 1))
+                        add((start, i + 1, "string"))
                     i += 1
                     continue
                 stack[-1][1] = 1
@@ -627,7 +636,7 @@ class _LexicalRegions:
                 continue
             m = _CODE_SCAN.search(text, i)  # interpolation code
             if m is None:
-                add((stack.pop()[0], n))
+                add((stack.pop()[0], n, "string"))
                 i = n
                 break
             i = m.start()
@@ -709,14 +718,27 @@ def _regex_end(text: str, i: int) -> int:
 
 
 def _prev_code_pos(text: str, i: int, spans) -> int | None:
+    """The last position of the previous code token, comments transparent.
+
+    A comment never ends an expression, so the walk jumps over it and the code
+    before the comment decides what a following slash is; a finished string,
+    template or regex literal does end one, so the walk stops on the literal's
+    last character and the caller classifies the slash as a division.
+    """
     j = i - 1
-    if j < 0:
-        return None
-    if spans and j < spans[-1][1]:
-        return spans[-1][1] - 1
-    while j >= 0 and text[j].isspace():
+    k = len(spans) - 1
+    while j >= 0:
+        while k >= 0 and j < spans[k][0]:
+            k -= 1
+        if k >= 0 and j < spans[k][1]:
+            if spans[k][2] == "comment":
+                j = spans[k][0] - 1
+                continue
+            return spans[k][1] - 1
+        if not text[j].isspace():
+            return j
         j -= 1
-    return None if j < 0 else j
+    return None
 
 
 def _slash_is_regex(text: str, i: int, spans) -> bool:
@@ -739,7 +761,7 @@ def _slash_is_regex(text: str, i: int, spans) -> bool:
     if prev == "]":
         return False
     if prev == ")":
-        group_start = _group_open_back(text, j)
+        group_start = _group_open_back(text, j, spans)
         if group_start is None:
             return True  # unresolvable context: mask, the fail-closed direction
         k = _prev_code_pos(text, group_start, spans)
@@ -756,11 +778,24 @@ def _slash_is_regex(text: str, i: int, spans) -> bool:
     return True  # after an operator, an opener or a brace, a regex may start
 
 
-def _group_open_back(text: str, close: int) -> int | None:
+def _group_open_back(text: str, close: int, spans=()) -> int | None:
+    """The opening paren of the group closing at ``close``, masked spans skipped.
+
+    The backward match shares the lexical region: brackets inside strings,
+    comments, templates and regex literals never shift it. When the window or
+    the masking leaves the group unresolvable, ``None`` is returned and every
+    caller keeps its fail-closed branch.
+    """
     depth = 1
     j = close - 1
+    k = len(spans) - 1
     limit = max(0, close - _MAX_GROUP_WINDOW)
     while j >= limit:
+        while k >= 0 and j < spans[k][0]:
+            k -= 1
+        if k >= 0 and j < spans[k][1]:
+            j = spans[k][0] - 1
+            continue
         c = text[j]
         if c == ")":
             depth += 1
@@ -796,12 +831,17 @@ class _ScopeMap:
     """Function, block, catch, loop and method scopes with their bound names.
 
     One pass over the code context tracks every brace with its kind, the
-    parameters of function, method, arrow and catch headers, ``var`` hoisting
-    to the enclosing function, ``let``/``const`` in their block, for-of/for-in
-    headers, and destructuring patterns (whose binding positions feed the
-    constant write analysis). A scope whose parameter list cannot be read — a
-    computed-key method, ``]`` before the brace — is marked fuzzy and shadows
-    every name inside it, so an unreadable context fails closed.
+    parameters of function, method, arrow and catch headers — a single
+    unparenthesized arrow parameter included, kept for the braced body it
+    governs — ``var`` hoisting to the enclosing function, from loop headers as
+    from plain declarations, ``let``/``const`` in their block, for-of/for-in
+    headers, and destructuring patterns read completely, last items included,
+    whose binding positions feed the constant write analysis. A brace-less
+    loop body binds for its whole supported statement; a body the bounded
+    grammar cannot read keeps the loop's bindings over a fuzzy span. A scope
+    whose parameter list cannot be read — a computed-key method, ``]`` before
+    the brace — is marked fuzzy and shadows every name inside it, so an
+    unreadable context fails closed.
     """
 
     def __init__(self, text: str, regions: _LexicalRegions):
@@ -822,46 +862,63 @@ class _ScopeMap:
         text, regions = self.text, self.regions
         nodes = self.nodes
         stack = []     # node indices of open braces
-        pending = None  # (kind, group_end, names) claimed by the next brace
+        pending = []   # (node index, claim end, header start) claims, innermost last
+
+        def parent_at(pos):
+            if stack:
+                return stack[-1]
+            for claim in reversed(pending):
+                if claim[2] <= pos < claim[1]:
+                    return claim[0]
+            return -1
+
         for m in _SCOPE_SCAN.finditer(text):
             if not regions.is_code(m.start()):
                 continue
             token = m.group(0)
             if token == "{":
+                if pending and m.start() >= pending[-1][1]:
+                    stack.append(pending.pop()[0])
+                    continue
+                parent = parent_at(m.start())
                 kind, names, start = "block", set(), m.start()
-                if pending is not None and m.start() >= pending[1]:
-                    kind, names, start = pending[0], set(pending[2]), min(pending[3], m.start())
-                    pending = None
-                elif pending is None:
+                if not pending:
                     kind, names, start = self._classify_brace(m.start())
-                # A brace inside a pending header group (destructured default
-                # values) is a plain pattern brace and keeps the pending claim.
-                # Function-kind spans open at the parameter group so a default
-                # initializer's writes resolve against the parameters' scope.
-                nodes.append([start, None, kind, names, stack[-1] if stack else -1])
+                # A brace inside a pending header group — a destructuring
+                # pattern or a default initializer — is a plain pattern brace
+                # parented to the claimed scope, so positions inside it still
+                # resolve that function's parameters. Claimed scopes open at
+                # their parameter group for the same reason.
+                nodes.append([start, None, kind, names, parent])
                 stack.append(len(nodes) - 1)
             elif token == "}":
                 if stack:
                     nodes[stack.pop()][1] = m.end()
             elif token == "=>":
-                self._arrow(m.start(), m.end(), stack)
+                claim = self._arrow(m.start(), m.end(), parent_at(m.start()))
+                if claim is not None:
+                    pending.append(claim)
             else:
                 keyword = token
+                parent = parent_at(m.start())
+                claim = None
                 if keyword == "function":
-                    pending = self._function_header(m.start(), m.end(), stack)
+                    claim = self._function_header(m.start(), m.end(), stack, parent)
                 elif keyword == "for":
-                    pending = self._for_header(m.end(), stack)
+                    claim = self._for_header(m.end(), parent)
                 elif keyword == "catch":
-                    pending = self._catch_header(m.end())
+                    claim = self._catch_header(m.end(), parent)
                 elif keyword == "class":
                     name = self._name_after(m.end())
                     if name is not None and self._statement_position(m.start()):
-                        self._bind_in_function(stack, name)
+                        self._bind_in_function(parent, name)
                 elif keyword in ("var", "let", "const"):
                     k = bisect.bisect_right(self._for_header_starts, m.start()) - 1
                     inside_for = (k >= 0 and m.start() < self._for_headers[k][1])
                     if not inside_for:
                         self._declarations(m.end(), keyword, stack)
+                if claim is not None:
+                    pending.append(claim)
 
     def _classify_brace(self, pos):
         """The kind, parameter names and header start of an unclaimed brace."""
@@ -877,6 +934,13 @@ class _ScopeMap:
                 if group_start is not None:
                     return ("arrow", set(self._group_names(group_start, group_close)),
                             group_start)
+            if group_close is not None and (self.text[group_close].isalnum()
+                                            or self.text[group_close] in "_$"):
+                back = group_close
+                while back >= 0 and (self.text[back].isalnum()
+                                     or self.text[back] in "_$"):
+                    back -= 1
+                return "arrow", {self.text[back + 1:group_close + 1]}, back + 1
             return "arrow", set(), pos
         if kind == "op" and value == ")":
             group_start = self._group_open_back(pos - 1)
@@ -890,19 +954,30 @@ class _ScopeMap:
             return "fuzzy", set(), pos  # a computed-key method: parameters unreadable
         return "block", set(), pos
 
-    def _arrow(self, arrow_start: int, arrow_end: int, stack):
+    def _arrow(self, arrow_start: int, arrow_end: int, parent: int):
         """Arrow parameters bind at the body, braced or a single expression."""
         before = self._token_before(arrow_start)
         params = []
+        start = arrow_start
         if before is not None:
             if before[0] == "op" and before[1] == ")":
                 group_start = self._group_open_back(arrow_start - 1)
                 if group_start is not None:
                     params = self._group_names(group_start, arrow_start - 1)
+                    start = group_start
             elif before[0] == "ident":
-                params = [before[1]]
+                # A single unparenthesized parameter is a binding too; the
+                # claim keeps it for the braced body, where the brace itself
+                # would otherwise read no parameter at all.
+                back = self._skip_ws_back(arrow_start)
+                while back >= 0 and (self.text[back].isalnum()
+                                     or self.text[back] in "_$"):
+                    back -= 1
+                params, start = [before[1]], back + 1
         if self._next_code_char(arrow_end) == "{":
-            return  # the braced body is classified as an arrow scope at its brace
+            index = len(self.nodes)
+            self.nodes.append([start, None, "arrow", set(params), parent])
+            return (index, arrow_end, start)
         # ``x => expression``: the binding region runs to the end of the
         # enclosing statement or argument list; over-extending only shadows
         # more, which fails closed.
@@ -918,10 +993,10 @@ class _ScopeMap:
             elif c in ";," and depth == 0:
                 stop = pos
                 break
-        self.nodes.append([arrow_start, stop, "arrow", set(params),
-                           stack[-1] if stack else -1])
+        self.nodes.append([arrow_start, stop, "arrow", set(params), parent])
+        return None
 
-    def _function_header(self, keyword_start, keyword_end, stack):
+    def _function_header(self, keyword_start, keyword_end, stack, parent: int):
         """Parse ``[*][name](params)`` after a ``function`` keyword."""
         i = self._skip_ws(keyword_end)
         if i < len(self.text) and self.text[i] == "*":
@@ -935,10 +1010,12 @@ class _ScopeMap:
         if close is None:
             return None
         if name is not None and self._statement_position(keyword_start):
-            self._bind_in_function(stack, name)
-        return ("function", close + 1, self._group_names(i, close), i)
+            self._bind_in_function(stack[-1] if stack else -1, name)
+        index = len(self.nodes)
+        self.nodes.append([i, None, "function", set(self._group_names(i, close)), parent])
+        return (index, close + 1, i)
 
-    def _for_header(self, pos, stack):
+    def _for_header(self, pos, parent: int):
         i = self._skip_ws(pos)
         if self._name_at(i) == "await":
             i = self._skip_ws(i + 5)
@@ -949,24 +1026,36 @@ class _ScopeMap:
             return None
         self._for_headers.append((i, close))
         self._for_header_starts.append(i)
-        names, targets = self._for_header_names(i + 1, close)
+        names, targets, keyword = self._for_header_names(i + 1, close)
         for target in targets:
             self.for_writes.setdefault(target, []).append(i)
+        if keyword == "var":
+            # A ``var`` loop variable hoists to the enclosing function and so
+            # shadows every reference in it, including calls made before the
+            # loop; ``let``/``const`` bind the loop alone.
+            for name in names:
+                self._bind("var", parent, name)
         if not names:
             return None
         if self._next_code_char(close + 1) != "{":
-            # A non-block loop body: the bindings live in the header alone.
-            self.nodes.append([i, close + 1, "for", set(names),
-                               stack[-1] if stack else -1])
+            # A brace-less body runs to the end of its complete supported
+            # statement; an unreadable one keeps the bindings over a fuzzy
+            # span, so references it affects fail closed.
+            body_end, supported = self._statement_span(close + 1)
+            self.nodes.append([i, body_end, "for" if supported else "fuzzy",
+                               set(names), parent])
             return None
-        return ("for", close + 1, names, i)
+        index = len(self.nodes)
+        self.nodes.append([i, None, "for", set(names), parent])
+        return (index, close + 1, i)
 
     def _for_header_names(self, start, close):
         text = self.text
         i = self._skip_ws(start)
-        declared, targets = [], []
+        declared, targets, keyword = [], [], None
         m = _IDENT_RE.match(text, i)
         if m is not None and m.group(0) in ("let", "const", "var"):
+            keyword = m.group(0)
             i = self._skip_ws(m.end())
             if i < close:
                 c = text[i]
@@ -980,7 +1069,7 @@ class _ScopeMap:
                     if ident is not None:
                         declared.append(ident.group(0))
                         targets.append(ident.group(0))
-            return declared, targets
+            return declared, targets, keyword
         # No declaration keyword: a bare or destructured assignment target.
         if i < close:
             c = text[i]
@@ -991,16 +1080,21 @@ class _ScopeMap:
                 ident = _IDENT_RE.match(text, i)
                 if ident is not None:
                     targets.append(ident.group(0))
-        return declared, targets
+        return declared, targets, keyword
 
-    def _catch_header(self, pos):
+    def _catch_header(self, pos, parent: int):
         i = self._skip_ws(pos)
         if i < len(self.text) and self.text[i] == "(":
             close = self._group_close_forward(i)
             if close is None:
                 return None
-            return ("catch", close + 1, self._group_names(i, close), i)
-        return ("catch", 0 if i >= len(self.text) or self.text[i] != "{" else i, [], pos)
+            index = len(self.nodes)
+            self.nodes.append([i, None, "catch", set(self._group_names(i, close)), parent])
+            return (index, close + 1, i)
+        brace = i if i < len(self.text) and self.text[i] == "{" else 0
+        index = len(self.nodes)
+        self.nodes.append([pos, None, "catch", set(), parent])
+        return (index, brace, pos)
 
     def _declarations(self, pos, keyword, stack):
         """Collect one declarator list's binding names, destructuring included."""
@@ -1013,7 +1107,7 @@ class _ScopeMap:
                 if c in "[{":
                     end = self._pattern_close_forward(i)
                     for name in self._pattern_names(i + 1, end):
-                        self._bind(keyword, stack, name)
+                        self._bind(keyword, stack[-1] if stack else -1, name)
                         self.destructured.setdefault(name, []).append(i)
                     i = self._skip_ws(end + 1)
                     expect_name = False
@@ -1021,7 +1115,7 @@ class _ScopeMap:
                 ident = _IDENT_RE.match(text, i)
                 if ident is None:
                     return
-                self._bind(keyword, stack, ident.group(0))
+                self._bind(keyword, stack[-1] if stack else -1, ident.group(0))
                 i = self._skip_ws(ident.end())
                 expect_name = False
                 continue
@@ -1038,18 +1132,20 @@ class _ScopeMap:
         """The binding identifiers of a destructuring pattern, keys excluded.
 
         Identifiers are read between structural events: one before ``:`` in an
-        object pattern is a key, one before ``,`` ``]`` ``}`` or ``=`` is a
-        binding, and everything inside a default expression is skipped whole.
+        object pattern is a key, never a binding; one before ``,`` ``=`` or a
+        closing bracket is a binding, so the pattern's last item is read too,
+        and everything inside a default expression is skipped whole — only its
+        target binds.
         """
         text = self.text
         names = []
         depth = 0
         skipping = None
-        for pos, c in self.regions.events(start, stop=end):
+        for pos, c in self.regions.events(start, stop=end + 1):
             if skipping is not None:
-                if c in "[{":
+                if c in "([{":
                     skipping += 1
-                elif c in "]}":
+                elif c in ")]}":
                     if skipping <= depth:
                         skipping = None  # the closer of this pattern level
                     else:
@@ -1062,6 +1158,9 @@ class _ScopeMap:
                 continue
             if c in "]}":
                 depth -= 1
+                ident = self._ident_before(pos, start)
+                if ident is not None:
+                    names.append(ident)
                 continue
             if c in ",=" or (c == ":" and depth > 0):
                 ident = self._ident_before(pos, start)
@@ -1086,27 +1185,27 @@ class _ScopeMap:
         candidate = self.text[w + 1:j + 1]
         return candidate if _IDENT_RE.fullmatch(candidate) else None
 
-    def _bind(self, keyword, stack, name):
+    def _bind(self, keyword, parent: int, name):
         """Bind a declared name; ``var`` hoists to the enclosing function."""
         if keyword == "var":
-            target = self._enclosing_function(stack)
+            target = self._enclosing_function(parent)
         else:
-            target = stack[-1] if stack else -1
+            target = parent
         if target < 0:
             self.top_names.add(name)
         else:
             self.nodes[target][3].add(name)
 
-    def _bind_in_function(self, stack, name):
-        target = self._enclosing_function(stack)
+    def _bind_in_function(self, parent: int, name):
+        target = self._enclosing_function(parent)
         if target < 0:
             self.top_names.add(name)
         else:
             self.nodes[target][3].add(name)
 
-    def _enclosing_function(self, stack):
-        """The innermost open function-kind node index, or -1 for the top level."""
-        target = stack[-1] if stack else -1
+    def _enclosing_function(self, parent: int):
+        """The innermost function-kind node at or above ``parent``, or -1."""
+        target = parent
         while target >= 0 and self.nodes[target][2] not in _FUNCTION_KINDS:
             target = self.nodes[target][4]
         return target
@@ -1208,19 +1307,7 @@ class _ScopeMap:
         return None
 
     def _group_open_back(self, close: int):
-        depth = 1
-        i = close - 1
-        limit = max(0, close - _MAX_GROUP_WINDOW)
-        while i >= limit:
-            c = self.text[i]
-            if c == ")":
-                depth += 1
-            elif c == "(":
-                depth -= 1
-                if depth == 0:
-                    return i
-            i -= 1
-        return None
+        return _group_open_back(self.text, close, self.regions.spans)
 
     def _group_close_forward(self, open_pos: int):
         depth = 0
@@ -1232,6 +1319,64 @@ class _ScopeMap:
                 if depth == 0:
                     return pos
         return None
+
+    def _statement_span(self, start: int):
+        """The ``(end, supported)`` extent of one brace-less loop-body statement.
+
+        The statement is read with the same bounded token grammar every proof
+        region uses; it is supported only when it parses completely and ends at
+        a real terminator — a consumed semicolon, an enclosing closer, the end
+        of the text, or a token no expression can continue. An unsupported
+        statement still gets a conservative span ending at its next top-level
+        semicolon or closer, and the caller marks the loop fuzzy over it, so
+        bindings the grammar cannot read fail closed instead of silently
+        ending at the header.
+        """
+        text = self.text
+        begin = self._skip_ws(start)
+        if begin >= len(text):
+            return len(text), False
+        limit = min(len(text), begin + _MAX_REGION_CHARS)
+        pulled = []
+
+        def remember(token):
+            pulled.append(token)
+            return token
+
+        parser = _Parser(remember(token) for token in _token_iter(text, begin, limit))
+        try:
+            parser.parse_statement()
+        except _ParseError:
+            return self._unresolved_statement_end(begin), False
+        following = parser.peek()
+        # Consumption is strictly sequential, so the parser's consumed count
+        # indexes the same stream the generator pulled, lookaheads included.
+        last = pulled[parser.consumed - 1] if parser.consumed else None
+        if last is not None and last[0] == "punct" and last[1] == ";":
+            return last[3], True
+        if following is None:
+            if last is not None and limit >= len(text):
+                return last[3], True
+            return self._unresolved_statement_end(begin), False
+        if following[0] == "punct" and following[1] in (";", "}", ")"):
+            return (following[3] if following[1] == ";" else following[2]), True
+        if following[0] in ("id", "num", "str"):
+            return last[3], True
+        return self._unresolved_statement_end(begin), False
+
+    def _unresolved_statement_end(self, begin: int) -> int:
+        """A conservative end for an unreadable statement: fail closed."""
+        depth = 0
+        for pos, c in self.regions.events(begin):
+            if c in "([{":
+                depth += 1
+            elif c in ")]}":
+                if depth == 0:
+                    return pos  # the closer belongs to an enclosing context
+                depth -= 1
+            elif c == ";" and depth == 0:
+                return pos + 1
+        return len(self.text)
 
     def _pattern_close_forward(self, open_pos: int):
         """The matching bracket of a destructuring pattern opener."""
