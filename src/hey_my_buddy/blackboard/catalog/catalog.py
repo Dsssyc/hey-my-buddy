@@ -85,7 +85,7 @@ def _family_key(provider: str, model: str) -> str:
     return provider + "\x1f" + model
 
 
-def _pending_map(db, adapter: str) -> dict[str, str]:
+def _pending_map(db, adapter: str) -> dict:
     row = db.execute("SELECT value FROM meta WHERE key=?", (_PENDING_PREFIX + adapter,)).fetchone()
     if row is None:
         return {}
@@ -96,7 +96,23 @@ def _pending_map(db, adapter: str) -> dict[str, str]:
     return saved if isinstance(saved, dict) else {}
 
 
-def _write_pending_map(db, adapter: str, pending: dict[str, str]) -> None:
+def _pending_entry(value: Any) -> dict:
+    """One pending entry: the first absence plus the last legal efforts.
+
+    The legal efforts are the ones the last trusted reading still declared when
+    the model first went absent; a later health reason is never native metadata
+    (ADR-027 rule 2). A legacy plain timestamp keeps its time, without efforts.
+    """
+    if isinstance(value, dict):
+        efforts = value.get("efforts")
+        return {"since": value.get("since") if isinstance(value.get("since"), str) else None,
+                "efforts": sorted({item for item in efforts if isinstance(item, str)}) if isinstance(efforts, list) else None}
+    if isinstance(value, str):
+        return {"since": value, "efforts": None}
+    return {"since": None, "efforts": None}
+
+
+def _write_pending_map(db, adapter: str, pending: dict) -> None:
     from ...json_codec import canonical_json
 
     db.execute("INSERT INTO meta(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
@@ -112,20 +128,27 @@ def pending_families(db) -> dict[tuple[str, str, str], str]:
     families: dict[tuple[str, str, str], str] = {}
     for row in db.execute("SELECT key FROM meta WHERE key LIKE ?", (_PENDING_PREFIX + "%",)):
         adapter = row["key"][len(_PENDING_PREFIX):]
-        for name, since in _pending_map(db, adapter).items():
+        for name, value in _pending_map(db, adapter).items():
             provider, _, model = name.partition("\x1f")
-            families[(adapter, provider, model)] = since
+            since = _pending_entry(value)["since"]
+            if since:
+                families[(adapter, provider, model)] = since
     return families
 
 
 def pending_model_efforts(db, adapter: str, provider: str, model: str) -> list[str] | None:
     """Legal efforts retained for a pending model family, or None when not pending.
 
-    The retained profiles carry the model metadata of the last reading that had
-    it, so explicit validation and routing keep working through the window.
+    The recorded last legal efforts of the window lead; the retained profiles
+    are only a defensive fallback, so explicit validation keeps working through
+    health noise without adopting a health reason as native metadata.
     """
-    if _family_key(provider, model) not in _pending_map(db, adapter):
+    value = _pending_map(db, adapter).get(_family_key(provider, model))
+    if value is None:
         return None
+    efforts = _pending_entry(value)["efforts"]
+    if efforts:
+        return list(efforts)
     rows = db.execute(
         "SELECT effort FROM evaluation_profiles WHERE adapter=? AND provider=? AND model=?"
         " AND available=1 ORDER BY effort",
@@ -161,53 +184,70 @@ def catalog_read_at(db, adapter: str) -> str | None:
     return current["updated_at"] if current["status"] == "complete" else current["discovered_at"]
 
 
-def families_from_payload(payload_json: Any, adapter: str) -> set[tuple[str, str]]:
-    """Model families a retained confirmed catalog still lists as available.
+def identities_from_payload(payload_json: Any, adapter: str) -> set[tuple[str, str, str]]:
+    """Legal adapter/provider/model/effort identities a retained catalog lists.
 
-    A model the retained reading itself declared unavailable is not listed: its
-    unavailability is a native fact, not a health artifact (ADR-027 rule 1).
+    A model the retained reading itself declared unavailable contributes none
+    of its efforts: that unavailability is a native fact, not a health artifact
+    (ADR-027 rule 1).
     """
-    families: set[tuple[str, str]] = set()
+    identities: set[tuple[str, str, str]] = set()
     if not isinstance(payload_json, str) or not payload_json:
-        return families
+        return identities
     try:
         providers = json.loads(payload_json).get("providers")
     except ValueError:
-        return families
+        return identities
     if not isinstance(providers, list):
-        return families
+        return identities
     for entry in providers:
         if not isinstance(entry, dict) or entry.get("adapter") != adapter:
             continue
         for model in entry.get("models") or []:
             if isinstance(model, dict) and model.get("available", True):
-                families.add((str(entry.get("provider")), str(model.get("id"))))
-    return families
+                for effort in model.get("efforts") or []:
+                    if isinstance(effort, str) and effort:
+                        identities.add((str(entry.get("provider")), str(model.get("id")), effort))
+    return identities
+
+
+def families_from_payload(payload_json: Any, adapter: str) -> set[tuple[str, str]]:
+    """Model families a retained confirmed catalog still lists as available."""
+    return {(provider, model) for provider, model, _effort in identities_from_payload(payload_json, adapter)}
 
 
 def restore_retained_availability(db, adapter: str) -> int:
     """Restore the model availability of the retained catalog after health noise.
 
-    ADR-027 separates health availability from adopted catalog facts: the 0s a
-    harness health failure left on ``evaluation_profiles`` are never evidence
-    that a native model disappeared. Rows whose family the retained confirmed
-    catalog still lists, or that still await disappearance confirmation, become
-    available again; a confirmed absence, a retired effort and a native
-    unavailable declaration are catalog facts and are never restored here.
+    ADR-027 separates health availability from adopted catalog facts, at the
+    effort level: the 0s a harness health failure left on ``evaluation_profiles``
+    are never evidence that a native configuration disappeared. A row returns
+    only when the retained confirmed catalog still lists its exact
+    adapter/provider/model/effort identity, or when it is one of the last legal
+    efforts recorded for a family still awaiting disappearance confirmation. A
+    confirmed absence, a retired effort and a native unavailable declaration are
+    catalog facts and are never restored here.
     """
     row = db.execute(
         "SELECT d.payload_json FROM catalog_current c"
         " LEFT JOIN evaluation_catalog d ON d.discovery_id=c.discovery_id WHERE c.adapter=?",
         (adapter,)).fetchone()
-    retained = families_from_payload(row[0] if row is not None else None, adapter)
-    pending = {tuple(key.partition("\x1f")[::2]) for key in _pending_map(db, adapter)}
+    identities = identities_from_payload(row[0] if row is not None else None, adapter)
+    pending_efforts = {}
+    for key, value in _pending_map(db, adapter).items():
+        provider, _, model = key.partition("\x1f")
+        pending_efforts[(provider, model)] = _pending_entry(value)["efforts"]
     restored = 0
     for profile in db.execute(
-            "SELECT profile_id, provider, model, available, unavailable_reason FROM evaluation_profiles WHERE adapter=?",
+            "SELECT profile_id, provider, model, effort, available, unavailable_reason"
+            " FROM evaluation_profiles WHERE adapter=?",
             (adapter,)).fetchall():
         if profile["available"] or profile["unavailable_reason"] in CATALOG_FACT_REASONS:
             continue
-        if (profile["provider"], profile["model"]) in retained or (profile["provider"], profile["model"]) in pending:
+        family = (profile["provider"], profile["model"])
+        identity = (*family, profile["effort"])
+        legal_pending = pending_efforts.get(family)
+        if identity in identities or (family in pending_efforts and (legal_pending is None or profile["effort"] in legal_pending)):
             db.execute("UPDATE evaluation_profiles SET available=1,unavailable_reason=NULL WHERE profile_id=?",
                        (profile["profile_id"],))
             restored += 1
