@@ -1,0 +1,51 @@
+# 有界保存实现的独立审查：删除路径、升级与重放
+
+2026-10-16，审查对象是 `c605b127..9749b60b` 的全部差异（两份设计记录、`store.py`、`upgrade.py`、`command_receipts.py`、`backup.py`、`install/upgrade.py`、契约与测试），对照 `docs/design/bounded-history-design.md` 与 `docs/design/bounded-history-notes.md`。下文路径从 `src/hey_my_buddy/` 起算，行号对应 `9749b60b`。方法是读差异全文、沿调用链读当前源码，另在临时目录里用独立的内存/临时 SQLite 库做了两次小实验（查询计划与耗时、遍历中更新同表）；没有运行检查套件，没有启动服务或 harness，没有读日常看板，也没有看 Host 的结论。
+
+结论：A 一条，B 两条另加一条记录项，C 两条，D 六条；没有发现会丢数据、给出错误重放回答或让升级处于不可恢复状态的缺陷，全部可以作为顺带项处理。
+
+## A. 删除路径
+
+A1（中低，性能）：替换旧状态的删除在每次写入都扫描整张事件表。`blackboard/store/store.py:170-178` 的两条 `DELETE FROM events WHERE kind=? AND attempt_id=? AND seq<?` 与 `... json_extract(payload_json,'$.harness')=? AND seq<?` 没有可用的索引：`events` 只有 `events_task_idx(task_id, seq)` 和几条限定在 decision/router 种类上的部分索引（`blackboard/store/db.py:222-249`）。在同样表结构的临时库上 `EXPLAIN QUERY PLAN` 给出 `SEARCH events USING INTEGER PRIMARY KEY (rowid<?)`，也就是从头扫到新序号；实测热缓存下每次删除 2 万行约 2.2 ms、10 万行约 11 ms，加上 `task_id=?` 后分别约 0.02 ms 与 0.1 ms。这条删除位于 `execution_progress` 的写事务里（`store.py:1886-1894`），每个运行中的执行最快每 2 秒一次，而业务事件按设计无限累计，所以写锁内的这段成本随看板单调增长。修法只是一条谓词：活动写入时 attempt 的 task_id 已知，加 `task_id=?`；三类 harness 事件写入时没有 task_id，加 `task_id IS NULL`，两者都落到既有的 `events_task_idx`，不需要新索引。
+
+读者逐个核对，没有读者需要被删的行。events/read 与 events/wait（`store.py:187-245`）按 `seq > after` 读、头部取 `MAX(seq)`，删除只删比新行小的同类行，所以旧游标在被删位置上继续走到新行，按 taskId 过滤的头部也只会前进；`cli/blocking.py:557-565` 的停止证据等待用的就是这个头部。Lead 唤醒只认 `OWNED_WAKE_EVENTS`（`blackboard/tasks/workflow.py:130-135`，不含 activity 与 harness），`_wake_lead` 按序号回读事件（`workflow.py:6755-6756`）只发生在这些种类上；`changedSincePreviousTurn` 比较的是 `workflow_runs.activity_seq` 这个数（`workflow.py:6806-6807`，写入在 `blackboard/tasks/macro_tasks.py:157-176`），不回读事件。时间轴标记只取 `HOST_MARKERS`（`macro_tasks.py:777-786`）。Router 历史、决策与边界数据只读 router.*、decision.*、attempt.released、task.completed（`blackboard/routing/router_history.py:153-156,237-245,332`，`routing/decision.py:959,1088,1562`，`routing/router_boundary_data.py:34-38,216`）；取消与来源 Host 只读 workflow.* 和 task.submitted（`blackboard/tasks/cancellation.py:12-16`，`blackboard/tasks/micro_task.py:118-136`）。提醒读 `attempt_activity` 投影（`blackboard/tasks/reminders.py:38`）；`attempt_activity.event_seq` 存的是原生事件序号 `activity.eventSeq`（`store.py:826-842`），不是看板序号，没有外键。控制台源码和控制台服务端都不读这四种事件。唯一引用 `events(seq)` 的外键是 `router_outcomes.event_seq`（`db.py:1025`），只指向 router 结果事件。
+
+删除失败与无关写入的耦合：删除和调用方的其余写入在同一事务里，这是设计要的原子性。可预见的单独失败只有 `event_payload["harness"]` 缺键时的 KeyError（`store.py:177`），而三个写入点都带 harness（`blackboard/service/harness_health.py:227-228,271-272,416-417`）；磁盘或损坏类错误同样会让前面的 INSERT 失败。没有发现"删不掉而连带回滚了无关事实"的独立路径。
+
+A 的第二问：没有找到只靠被剥掉的收据文字或被删事件保护、现在会被误删的分配。理由如下。孤立分配是不在任何微任务当前清单和保留来源里的目录（`blackboard/tasks/storage.py:500-545`，来源见 `workflow.py:5364-5400`），对它的引用扫描按 workspaceId、分配的 requestId、manifestSha256、checkoutId 与工作区目录的祖先路径匹配（`storage.py:277-301`），扫描 22 张表（`storage.py:246-251`）。被剥掉的回答全部由这些表投影而来：`compact` 读 workflow_turns、workflow_requests、workflow_children、workflow_lead_tasks、workflow_artifacts、workflow_workspace_conflicts、workflow_integrations 与 Host 结论（`workflow.py:624-660` 起），计划视图来自 workspace_cleanup_plans（`workflow.py:601-621`），整合视图来自 workflow_integrations（`workflow.py:570-598`），execution.result 的回答是 attempts/tasks 的视图加上 settle_turn 的结果（`store.py:2262-2290`），这些表都在扫描清单里，而且源码里没有任何删除这些固定行的语句（全部 `DELETE FROM` 只落在 events、commands 升级、service_issues、execution_issues、router_buddies、偏好与 catalog_pending 上）。微任务的执行清单只在 `workflow.py:6672-6676` 改变，同一处先把新清单写进 workflow_continuations，旧清单仍留在 workflow_turns 与更早的 continuation 行里，所以"收据里那一刻的清单"总有权威副本。分配的 requestId：提交与 helper 的落在 tasks.request_id；续接准备用的 `run_id:continuation_id`（`workflow.py:6619-6621`）从未进入任何收据，它靠 continuation 行里的清单路径保护，与本次改动无关。活动事件的字段只有阶段、时间、原生序号、会话标识、工具名、等待文本与计数（`protocol/activity.py:91-140`），harness 事件只有 harness、状态、版本、原因与计费观察，都不承载分配路径；等待文本或工具名里偶然出现的路径不是所有权依据，这与方案一致。
+
+## B. 升级 23→24
+
+B1（低）：转换在遍历 `commands` 的游标上同时更新同一张表（`blackboard/store/upgrade.py:27-35`），而 `stored_response` 不幂等。对已剥离的行再转一次，workflow.conclude 与两种 cleanup 会因 `response["conclusion"]`、`response["plan"]` 缺失而 KeyError（整个事务回滚，响亮），workflow.accept 带 resolutionConflictId 的行会因为没有 `resolutionDelivery` 而被悄悄改成不带它（`blackboard/tasks/command_receipts.py:45-48`），这是静默的。SQLite 文档把"语句开始后同一连接上的修改是否被该语句看到"定为未定义；就当前实现而言，commands 是 rowid 表、该查询是全表扫描（实验里 `SCAN commands`），更新 response_json 不移动行，我在 SQLite 3.53.2 的临时库上更新 5000 行时每行恰好访问一次，所以现在不会触发。改成先 `fetchall()` 再更新即可去掉对未定义行为的依赖。
+
+B2（低，验收边界）：转换假定每条 schema 23 的回答都是当前生产代码的形状，形状不符就 KeyError/TypeError，整个升级回滚、安装失败但数据不动。升级样板库里只有 workflow.accept、workflow.cancel、workflow.cleanup_plan、workflow.conclude、execution.result、user_policy.publish 等种类（`tests/fixtures/upgrade-base/board.sql`），decide、continue、takeover、scope_amend、workspace_resolve、cleanup_apply 的存量转换只通过 `tests/python/blackboard/tasks/test_command_receipts.py` 用当前生产者的回答间接覆盖。`workflow.py` 在 `9baa0524` 与 `c605b127` 之间没有变化，0.40.0 与 0.41.0 写下的行应当与当前形状一致；日常看板上更早版本写下的行是否存在、是什么形状，我没有也不能在这里核对。失败方式是安全的，但这正是"在真实数据的副本上跑一次"要回答的问题。
+
+记录项（不是缺陷）：安装校验原本依赖"序号不大于 eventHead 的事件不再变化"，指纹只取 `seq<=eventHead` 的事件（`blackboard/store/backup.py:200-201`）。替换规则打破了这个构造性前提：新服务一旦写入一条 harness.checked，就会删掉一条序号不大于 eventHead 的旧行，`verify_started` 的指纹比较就会失败（`install/upgrade.py:306-312`）。现在不会发生，因为三类 harness 写入都在 `upgrade.json` 存在时返回（`harness_health.py:126,176,203,217,249,353,380`），而契约变化的安装要求看板空闲、没有活动写入；recover 的 verified 分支也在标记存在时校验。将来若新增这四种事件的写入点而不检查该标记，后果是安装回滚，不丢数据。建议把这条依赖写进方案或参考文档，而不是加第二道守卫。
+
+其余按问题核对，未发现缺陷。备份、转换与预期快照的先后：契约变化时先在两把所有者锁内做精确空闲快照，再按原字节建立并验证离线备份，日志写 `backed-up` 后才转换，转换后用 `before['eventHead']` 取 expected，日志写 `migrated`（`install/upgrade.py:500-517`）；转换不删除任何类别里序号最大的那一行，`MAX(seq)` 不变，eventHead 仍然成立。转换中途失败：同一个 `BEGIN IMMEDIATE` 事务回滚（`upgrade.py:21-47`），外层 except 看到 `backed_up` 非空且阶段不是 preflight，用备份恢复、启动旧运行时、按 schema 23 的 before 校验，日志写 `rolled-back` 并清除标记（`install/upgrade.py:540-569`）；进程在转换提交之后、`migrated` 之前被杀，recover 走非 verified、非 preflight 分支，恢复 `backups/current` 再起旧运行时（`install/upgrade.py:634-656`）。回滚用旧运行时：`_verify` 接受 schema 23 的备份清单，只对当前 schema 调 `Database.initialize`（`backup.py:239,270-271`），恢复的是原字节，旧运行时按 23 打开；`backup.create` 改收路径是因为 `BoardStore` 打不开 schema 23 的库。转换范围：十种 workflow 剥离、execution.result 删除、macro_task.stop 与 harness.prepare 及其他小回答不动、活动按 attempt 留最大序号、三类 harness 按 kind 与 harness 留最大序号，与运行时规则一一对应，没有转了不该转的，也没有漏掉该转的种类（全部 `_store_receipt` 调用点共二十种，逐个核对过）。takeover 的旧收据里存着明文 controlToken，转换后不再落库，这是一项改进。
+
+## C. 重放
+
+C1（低，未确认可达）：workspace_resolve 的重放从 `workflow_artifacts.manifest_json` 重建 outputCommit、outputTree、diffPath、diffSha256、snapshotSha256、manifestSha256、baseCommit、inputCommit、changedPaths 与 adoptedPaths（`command_receipts.py:158-164`），原回答取的是这一次操作的 `record`（`workflow.py:5301-5310`）。`_pin_artifact` 在同一 run、同一 attempt、同一 snapshotSha256 已有固定行时直接返回旧行（`workflow.py:1272-1277`），此时 manifest_json 是更早那次的记录。如果两次记录在快照身份以外的字段上不同（例如 resolved-output 与 abandoned-site 的 adoptedPaths 或 diffPath），重放就与第一次回答不同。这条路径能否在真实操作序列里出现我没有确认；它也说明了 D2 的风险。
+
+C2（低，测试缺口）：accept 带解决冲突交付的重放（`command_receipts.py:110-118`，存储侧 `:47-48`）没有测试守着：`test_command_receipts.py` 的 accept 场景不带冲突解决，`tests/python/blackboard/tasks/test_scope_recovery.py:563-564` 只断言第一次回答。按代码读它是对的：只有 restored/adopted 的冲突能成为交付（`workflow.py:5087-5091`），冲突行只在 `state='open'` 时可改（`workflow.py:5226-5229`），所以重放读到的 delivery_json 就是第一次的；但没有测试，以后改冲突状态机时不会被发现。
+
+各种类的核对，未发现缺陷。takeover：存颁发代次与上一代次，重放先由 `_authorize_takeover_replay` 要求当前代次等于颁发代次、当前 Host 等于收据的 Host，并核对原一代的控制能力（`workflow.py:3380-3419`），token 由 `control_token(runId, generation)` 确定推导，与原回答逐字相同；更晚一代之后重放得到 STALE_GENERATION，与原行为一致。decide：decision 从 `workflow_requests.decision_json` 读，该列在请求关闭后只会在 `state='open'` 的行上改写（`workflow.py:2272,2335,2569,2600,5245`），所以值固定。continue：目标 run、输入哈希与 helperPolicy 来自 continuation 行，视图属于控制微任务，与原回答相同。workspace_resolve：首命令的 action、各路径、两个指纹、交付标志与下一边界编号都存在收据里，不受后续局部恢复覆盖；delivered 时读的冲突行已不可改。scope_amend：按 run 与 scope_version 定位那一版，previousScopeVersion 为减一，与原值相等。cleanup_plan 与 cleanup_apply：按 planId 读当前计划，planned 前进到 applied 后照实返回；重放的 targetRevision 现在是当前修订号而不是当时的，这两个操作只有内部调用方（reclaim 用新的 uuid 命令号，`workflow.py:4778`；存储清理与验收后清理见 `storage.py:850-853,927-944`），服务接口与 CLI 不暴露，没有调用方会拿重放的修订号去拼一个已执行过的 apply。conclude、accept、cancel 从固定行或固定常量重建，与原回答相同。同一编号不同请求的冲突检查与执行身份检查在 `store.py:290-305` 原样保留，先于重建执行。
+
+execution.result：原来的收据分支在 `result_json` 为空时才查收据（基点 `store.py:2088-2091`），而收据与 result_json 在同一事务里写入、result_json 从不清空，所以这条分支实际上只在"另一个 attempt 显式传入别人的 commandId"时起作用（原为 UNAUTHORIZED 或 CONFLICT）。现在已提交结果的重投、补充停止证据与异值冲突完全由 `store.py:2063-2099` 的同值比较和代次核对决定，重投得到 `committed: true, duplicate: true`，异值为 CONFLICT，旧代为 STALE_GENERATION，与原来一致；唯一变化是上面那种跨 attempt 的 commandId 现在被接受并写进 result_command_id，而该值已无读者（见 D1）。
+
+## D. 0.x 规矩
+
+D1（中）：execution.result 的 commandId 成了只写不读的残留。参数仍被接受并默认成 `result:<attemptId>`（`store.py:1919,1968`），写进 `attempts.result_command_id`（`store.py:2174`），`confirm_execution_shutdown` 把它读出来只为再写一遍（`store.py:2031`）；执行进程仍生成它（`buddy/runtime/execution.py:702`），持久回执格式要求它（`protocol/execution.py:155-157`），投递时附上它（`buddy/runtime/receipts.py:36`）。方案已定"execution.result 的唯一提交身份是 attempt"，0.42.0 本身就是契约变化，这一处应当一起断干净：去掉参数、回执字段与列（列的删除并入同一个待定升级）。
+
+D2（中低）：每种 workflow 回答有两个构造器。十个入口在 `workflow.py` 里各自拼第一次的回答，`command_receipts.replay_response` 又逐字段拼一遍；workspace_resolve 有二十多个字段两处各写一份（`workflow.py:5287-5314` 对 `command_receipts.py:137-168`），取消说明的整段文字两处各有一份（`workflow.py:3589-3592` 对 `command_receipts.py:21-24`）。以后改一处忘了另一处，重放就悄悄和第一次回答不同，而测试只比较少数字段。一个机制的做法是每种回答一个构造函数，入口提交时和重放时都用存下的提交身份去调它；C1 就是两套构造已经不完全同源的例子。
+
+D3（低）：`backup.create` 同时接受路径和 store（`blackboard/store/backup.py:407`）。唯一的生产调用传路径（`install/upgrade.py:503`），store 形式只剩测试在用（如 `tests/python/install/test_backup.py`、`tests/python/install/test_backup_windows.py`）。应只留路径一种，测试跟着改。
+
+D4（低）：`upgrade.py:34` 手写了一份规范 JSON 编码，而项目只有一个共享实现 `json_codec.canonical_json`（`json_codec.py:22-24`，ADR-025 决定 6），两者在 `allow_nan` 上已经不同。直接用共享实现。
+
+D5（低）：转换里有两处重复判断。`upgrade.py:25` 在运行时检查代码常量 `SCHEMA_VERSION != 24`，这由测试钉住即可；`upgrade.py:29` 用 `kind NOT IN ('execution.result','harness.prepare')` 排除不需要转的种类，而 `stored_response` 已按种类原样返回小回答（`command_receipts.py:33-34`），execution.result 的行又在 `upgrade.py:36` 整体删除，同一个"哪些不转"的决定写了两遍。
+
+D6（低）：takeover 的存储形式把同一个代次存了两遍，`ownerGeneration` 与 `control.ownerGeneration`（`command_receipts.py:41-44`），重放只用前者（`command_receipts.py:95-99`）。`control` 里只需 hostId。
+
+没有发现新增的吞掉异常或回退：转换的 `except BaseException` 回滚后原样抛出，重放路径上的 `if artifact is not None` 对应的是确实可以没有交付物的操作。另有一项文档状态留给 Host：`AGENTS.md` 的 Invariants 仍写着没有待定升级，而 23→24 现在是待定升级。
