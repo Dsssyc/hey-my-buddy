@@ -240,7 +240,9 @@ class MockWorkspace:
     def adopted_paths(self, state_dir, manifest):
         return []
 
-    def host_seal(self, state_dir, manifest, task_id, attempt_id, *, allowed_paths=()):
+    def host_seal(self, state_dir, manifest, task_id, attempt_id, *, allowed_paths=(), admission_check=None):
+        if admission_check is not None:
+            admission_check()
         return self.seal(state_dir, manifest, task_id, attempt_id)
 
     def resolve_allocation(self, state_dir, manifest, retained=None):

@@ -311,8 +311,9 @@ def delete_workspaces(store, manifests: list[dict], artifacts: list[dict]) -> li
                 skipped.append(_skip("allocation", str(tomb), "OWNER_UNPROVEN", identifier))
                 continue
         # Windows cannot rename a directory while its descendant .lock is open.
-        # The caller still holds the storage lock and the durable deletion mark
-        # fences new workspace operations after the allocation proof above.
+        # The caller keeps the storage lock. Host sealing and scope resolution
+        # check the durable deletion mark under this same workspace lock before
+        # writing files or refs, so neither can cross the proof-to-rename gap.
         native_path(directory).rename(native_path(tomb))
         private_dirs.remove_tree(tomb)
     return skipped
