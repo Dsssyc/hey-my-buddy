@@ -1,4 +1,5 @@
 import i18n from "i18next";
+import { recordSummary } from "./record-metadata";
 import { locale } from "./i18n";
 import type { RuntimeVersionInfo, VersionFacts, Configuration, ConsoleAccess, ConsoleSession, ReminderSettings, RoutingHealth, Snapshot, TaskPage, TaskQuery } from "./types";
 import type {
@@ -679,7 +680,7 @@ export function createApi(prefix: string, fetcher: typeof fetch = fetch) {
         if (value !== undefined && value !== "") query.set(key, String(value));
       }
       const { data, verifiedAtMs } = await conditionalRead(`/tasks?${query}`, signal) as { data: TaskPage; verifiedAtMs: number | null };
-      if (!data || !Array.isArray(data.runs) || !Number.isInteger(data.total)
+      if (!data || !Array.isArray(data.runs) || !data.runs.every(recordSummary) || !Number.isInteger(data.total)
         || !(data.nextCursor === null || typeof data.nextCursor === "string")) {
         throw new ApiError("INVALID_RESPONSE", i18n.t("common:error.history"));
       }

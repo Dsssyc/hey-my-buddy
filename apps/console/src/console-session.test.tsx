@@ -33,7 +33,7 @@ function microTask(runId: string, task: string, extra: Partial<Task> = {}): Task
   return { runId, task, status: "queued", owner: "worker:fixture", cwd: `/worktrees/${runId}`,
     revision: 1, createdAt: "2026-09-24T10:00:00Z", updatedAt: "2026-09-24T10:00:00Z", acceptedAt: null, acceptanceVerdict: null, reviewRejectedAt: null, reviewRejectionNote: null,
     workflow: { state: "executing", awaitingHost: false, hostId: "current-host", ownerGeneration: 2, revision: 1 },
-    lineage: { kind: "micro-task", sourceHostId: "codex-source", currentHostId: "current-host", parentRunId: null, rootRunId: runId, rootLeadRunId: null,
+    lineage: { kind: "micro-task", sourceHostId: "codex-source", currentHostId: "current-host", parentRunId: null, rootRunId: runId, rootLeadRunId: null, routingTask: null,
       project: { id: "fixture-project", label: "fixture-project", path: "/source/fixture-project" },
       buddy: { harness: "dsh", provider: "deepseek-official", model: "deepseek-flash", effort: "off" } },
     ...extra };
@@ -317,7 +317,7 @@ describe("invalid login session (0.16 multi-window: no handoff UX)", () => {
     // Navigation keeps working and no control reacquires authority.
     await user.click(screen.getByRole("link", { name: "任务" }));
     await user.click(await screen.findByRole("button", { name: "记录" }));
-    expect(screen.getByRole("heading", { name: "选择一项微任务" })).toBeTruthy();
+    expect(screen.getByText("选择一条记录。")).toBeTruthy();
     expect(f.operations).toEqual([]);
     // Refreshing again never regains rights without a new login.
     // The edit cluster only exists on the settings tabs (P1.2), so return there.
@@ -551,7 +551,7 @@ describe("invalid login session (0.16 multi-window: no handoff UX)", () => {
     expect(await within(detail).findByText("协助 browse-task")).toBeTruthy();
     // Filters and searches stay usable without any write attempt.
     await user.click(screen.getAllByRole("button", { name: "记录" })[0]!);
-    await user.type(screen.getByLabelText("搜索微任务"), "可浏览");
+    await user.type(within(screen.getByRole("region", { name: "记录列表" })).getByLabelText("搜索标题、项目、Host 或编号"), "可浏览");
     await waitFor(() => expect(f.tasks).toHaveBeenLastCalledWith(expect.objectContaining({ query: "可浏览" }), expect.any(AbortSignal)));
     await user.click(screen.getByRole("link", { name: /Buddy/ }));
     await user.click(await screen.findByRole("checkbox", { name: "显示不可用 1" }));
@@ -561,26 +561,23 @@ describe("invalid login session (0.16 multi-window: no handoff UX)", () => {
     expect(f.operations.every(operation => ["selection_get", "selection_list", "buddy_list", "workflow_get", "message_list"].includes(operation))).toBe(true);
   });
 
-  it("excludes a Lead tree's helper from the Host wait filter", async () => {
+  it("labels a Lead tree's helper with its own waiting state in the complete record list", async () => {
     const waiting = { state: "awaiting-host", awaitingHost: true, hostId: "current-host", ownerGeneration: 2, revision: 1 };
-    const host = microTask("host-wait", "Host 等待项", { workflow: waiting });
-    const root = microTask("lead-root", "Lead 根任务", { workflow: waiting,
+    const host = microTask("host-wait", "Host 等待项", { status: "running", workflow: waiting });
+    const root = microTask("lead-root", "Lead 根任务", { status: "running", workflow: waiting,
       lineage: { ...microTask("lead-root", "").lineage!, rootLeadRunId: "lead-1",
         leadOwnership: { leadRunId: "lead-1", leadTurnId: "turn-1", createdAt: "2026-09-24T10:00:00Z" } } });
-    const helper = microTask("lead-helper", "Lead 协助任务", { workflow: waiting,
+    const helper = microTask("lead-helper", "Lead 协助任务", { status: "running", workflow: waiting,
       lineage: { ...root.lineage!, kind: "helper", parentRunId: root.runId, rootRunId: root.runId, leadOwnership: null } });
     const f = fixture({ records: [host, root, helper] });
     const user = userEvent.setup();
     render(<App suppliedApi={f.api} />);
     await user.click(await screen.findByRole("button", { name: "记录" }));
-    await user.click(screen.getByRole("checkbox", { name: "显示协助任务与内部执行" }));
     await screen.findByRole("button", { name: /Lead 协助任务/ });
     const helperRow = screen.getByRole("button", { name: /Lead 协助任务/ });
     expect(helperRow.textContent).toContain("等待 Lead");
-    await user.click(screen.getByRole("button", { name: "等待 Host", pressed: false }));
-    expect(await screen.findByRole("button", { name: /Host 等待项/ })).toBeTruthy();
-    expect(screen.queryByRole("button", { name: /Lead 根任务/ })).toBeNull();
-    expect(screen.queryByRole("button", { name: /Lead 协助任务/ })).toBeNull();
+    expect(screen.getByRole("button", { name: /Host 等待项/ })).toBeTruthy();
+    expect(screen.getByRole("button", { name: /Lead 根任务/ })).toBeTruthy();
   });
 
   const failedPolls: [string, ApiError][] = [

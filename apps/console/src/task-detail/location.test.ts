@@ -28,6 +28,14 @@ describe("the address of the tasks page", () => {
     expect(tasksLocation("#tasks/%E0%A4%A")).toEqual(TASKS_ROOT);
   });
 
+  it("names the records view and its selected record independently of macro tasks", () => {
+    const root = { ...TASKS_ROOT, records: true as const };
+    expect(tasksHash(root)).toBe("#tasks/records");
+    expect(tasksLocation("#tasks/records")).toEqual(root);
+    expect(tasksHash({ ...root, runId: "route/a b" })).toBe("#tasks/records/route%2Fa%20b");
+    expect(tasksLocation("#tasks/records/route%2Fa%20b")).toEqual({ ...root, runId: "route/a b" });
+  });
+
   it("takes the macro task of a micro task from its record, else its own standalone group", () => {
     expect(macroTaskKey({ workflow: { macroTaskId: "macro-7" }, lineage: { rootRunId: "root" } })).toBe("macro-7");
     expect(macroTaskKey({ workflow: { macroTaskId: null }, lineage: { rootRunId: "root" } })).toBe("run:root");

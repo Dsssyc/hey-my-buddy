@@ -1091,6 +1091,7 @@ class TestTaskHistory(BoardTestCase):
         "rootRunId",
         "project",
         "buddy",
+        "routingTask",
         "delegationAuthority",
         "leadOwnership",
         "rootLeadRunId",
@@ -1122,6 +1123,7 @@ class TestTaskHistory(BoardTestCase):
         self.assertIsNone(metadata["parentRunId"])
         self.assertIsNone(metadata["rootRunId"])
         self.assertIsNone(metadata["buddy"])
+        self.assertIsNone(metadata["routingTask"])
         self.assertFalse(metadata["delegationAuthority"])
         self.assertIsNone(metadata["leadOwnership"])
         self.assertIsNone(metadata["rootLeadRunId"])

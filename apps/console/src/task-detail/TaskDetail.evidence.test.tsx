@@ -498,6 +498,12 @@ describe("what a turn says of its session, its usage and its buddy's origin", ()
 });
 
 describe("the delegation", () => {
+  it("names a missing project in the console language", async () => {
+    open({ step: 1, replies: { task: task({ lineage: { ...task().lineage, project: null } }) } });
+    await ready();
+    expect(pane().textContent).toContain("未记录项目");
+  });
+
   it("says the delegator is not recorded when it is not, and shows the title, not the result, in the head", async () => {
     open({ step: 1, replies: { task: task({ lineage: { ...task().lineage, sourceHostId: null, currentHostId: null } }) } });
     await ready();

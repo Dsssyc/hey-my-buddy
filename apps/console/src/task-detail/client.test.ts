@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import type { ConsoleApi } from "../api";
 import { createTaskDetailClient } from "./client";
+import { task } from "./task-detail.fixtures";
 
 const entry = (id: string) => ({ decisionId: id, status: "completed", source: "model-selection", selectedBuddy: null, routerBuddy: null, routingMode: "fast", reason: null });
 const reply = (entries: string[], nextCursor: number | null, audit = true) => ({
@@ -43,6 +44,34 @@ describe("the routing decisions of a micro task", () => {
     const client = createTaskDetailClient({ command, readVerifiedAt: () => null } as unknown as ConsoleApi, "csrf");
     expect((await client.basis("d1")).value.constraints).toEqual({ harness: "dsh" });
     expect(command).toHaveBeenCalledExactlyOnceWith("selection_get", { decisionId: "d1", includeAudit: true }, "csrf");
+  });
+});
+
+describe("a Router calculation's own decision", () => {
+  const calculation = task({ workflow: undefined, lineage: { ...task().lineage, kind: "decision" }, spec: { adapter: "decision", decision: { decisionId: "d1", kind: "select" } } });
+  const selection = { decision: { decisionId: "d1", status: "completed", selectedBuddy: { harness: "codex", provider: "openai", model: "gpt-6-sol", effort: "high" },
+    routerBuddy: { harness: "codex", provider: "openai", model: "gpt-6-luna", effort: "low" }, routingMode: "fast", reason: "适合任务" } };
+
+  it("reads the compact decision after the task and retains the older verification time", async () => {
+    const command = vi.fn(async () => selection);
+    const readVerifiedAt = vi.fn((reply: unknown) => reply === selection ? 10 : 7);
+    const taskRead = vi.fn(async () => calculation);
+    const client = createTaskDetailClient({ task: taskRead, command, readVerifiedAt } as unknown as ConsoleApi, "csrf");
+    const value = await client.task("m1", new AbortController().signal);
+    expect(value.verifiedAtMs).toBe(7);
+    expect(value.value.routing).toMatchObject({ decisionId: "d1", selectedBuddy: selection.decision.selectedBuddy, reason: "适合任务" });
+    expect(command).toHaveBeenCalledExactlyOnceWith("selection_get", { decisionId: "d1" }, "csrf");
+  });
+
+  it("keeps a raw calculation without a decision ID and reads a command only once", async () => {
+    const command = vi.fn();
+    const taskRead = vi.fn(async () => calculation);
+    taskRead.mockResolvedValueOnce({ ...calculation, spec: {} });
+    const client = createTaskDetailClient({ task: taskRead, command, readVerifiedAt: () => 7 } as unknown as ConsoleApi, "csrf");
+    expect((await client.task("m1", new AbortController().signal)).value.routing).toBeNull();
+    taskRead.mockResolvedValueOnce(task({ workflow: undefined, lineage: { ...task().lineage, kind: "execution" } }));
+    expect((await client.task("m1", new AbortController().signal)).value.record).toBe("record");
+    expect(command).not.toHaveBeenCalled();
   });
 });
 

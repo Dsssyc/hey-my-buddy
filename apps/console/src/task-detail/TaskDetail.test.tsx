@@ -666,10 +666,14 @@ describe("a run with no collaboration record", () => {
     status: "completed", selectedAttempt: { attemptId: "att-c", startedAt: at("10:00"), finishedAt: at("10:02"), result: { result: { finalText: "42 passed" } } }, ...overrides });
 
   it("has one step, whose band names no buddy, and reads no collaboration record", async () => {
-    const f = open({ replies: { task: command() }, timeline: null });
+    const f = open({ replies: { task: command() }, timeline: null, backTo: "records" });
     await ready();
-    expect(within(rail()).getAllByRole("button")).toHaveLength(1);
-    expect(within(pane()).getByRole("heading", { name: "执行" })).toBeTruthy();
+    expect(screen.queryByRole("navigation", { name: "步骤" })).toBeNull();
+    const head = document.querySelector("[data-slot=detail-header]") as HTMLElement;
+    expect(within(head).getByRole("heading").textContent).toContain("命令执行");
+    expect(head.textContent).toMatch(/开始\d{2}:00:00.*结束\d{2}:02:00.*历时/);
+    await f.user.click(within(head).getByRole("button", { name: "记录" }));
+    expect(f.onBack).toHaveBeenCalledTimes(1);
     const band = pane().querySelector("[data-slot=detail-band]") as HTMLElement;
     expect(band.textContent).toContain("命令执行");
     expect(band.textContent).not.toMatch(/codex|claude|Worker/);
@@ -681,12 +685,34 @@ describe("a run with no collaboration record", () => {
   });
 
   it("is, for a Router's calculation, laid out as a route", async () => {
-    open({ replies: { task: command({ lineage: { ...task().lineage, kind: "decision", buddy: ROUTER_QUAD }, task: "为微任务选择 buddy" }) }, timeline: null });
+    const f = open({ replies: { task: command({ lineage: { ...task().lineage, kind: "decision", buddy: ROUTER_QUAD,
+      routingTask: { runId: "source-task", title: "时间轴比例尺", titleSource: "title", macroTaskId: "macro-1", macroTaskTitle: "控制台前端重建" } }, task: "为微任务选择 buddy" }) }, timeline: null });
     await ready();
-    expect(within(pane()).getByRole("heading", { name: "路由计算" })).toBeTruthy();
+    expect(screen.queryByRole("navigation", { name: "步骤" })).toBeNull();
+    expect(document.querySelector("[data-slot=detail-header] h2")?.textContent).toBe("路由计算时间轴比例尺");
     const band = pane().querySelector("[data-slot=detail-band]") as HTMLElement;
     expect(band.textContent).toContain("Router");
     expect(band.textContent).toContain("gpt-6-luna");
+    expect(pane().textContent).toContain("控制台前端重建");
+    await f.user.click(within(pane()).getByRole("button", { name: "时间轴比例尺" }));
+    expect(f.onOpenRun).toHaveBeenCalledExactlyOnceWith("source-task", "macro-1");
+  });
+
+  it("shows a Router calculation's recorded choice and reason without finalText", async () => {
+    const reads = client({ task: command({ lineage: { ...task().lineage, kind: "decision", buddy: ROUTER_QUAD },
+      spec: { decision: { decisionId: "d1" } }, selectedAttempt: { attemptId: "att-c", startedAt: at("10:00"), finishedAt: at("10:02"), result: { result: { decision: { buddyId: "chosen", reason: "代码审查", evidence: [] } } } } }) });
+    const original = await reads.task("m1", new AbortController().signal);
+    (reads.task as ReturnType<typeof vi.fn>).mockResolvedValue({ ...original, value: { ...original.value, routing: {
+      decisionId: "d1", status: "completed", source: null, selectedBuddy: CODEX, routerBuddy: ROUTER_QUAD, routingMode: "fast", reason: "代码审查",
+    } } });
+    open({ client: reads, timeline: null });
+    await ready();
+    const band = pane().querySelector("[data-slot=detail-band]") as HTMLElement;
+    expect(band.textContent).toContain("快速");
+    expect(pane().textContent).toContain("选择");
+    expect(pane().textContent).toContain("gpt-6.1-sol");
+    expect(pane().textContent).toContain("代码审查");
+    expect(pane().querySelector("[data-slot=detail-thread]")?.textContent).not.toContain("未记录");
   });
 });
 

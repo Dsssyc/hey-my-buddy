@@ -22,7 +22,7 @@ function snapshotFixture(): Snapshot {
 
 const rawRecord = (): Task => ({ runId: "cmd-9", task: "外部命令记录", status: "completed", owner: "fixture",
   cwd: "/worktrees/cmd-9", revision: 1, createdAt: "2026-09-26T05:00:00Z", updatedAt: "2026-09-26T05:00:00Z", acceptedAt: null, acceptanceVerdict: null, reviewRejectedAt: null, reviewRejectionNote: null,
-  lineage: { kind: "execution", sourceHostId: null, currentHostId: null, parentRunId: null, rootRunId: "cmd-9", rootLeadRunId: null,
+  lineage: { kind: "execution", sourceHostId: null, currentHostId: null, parentRunId: null, rootRunId: "cmd-9", rootLeadRunId: null, routingTask: null,
     project: { id: "px", label: "外部", path: null }, buddy: null } });
 
 function harness() {
@@ -62,23 +62,19 @@ describe("微任务记录 tab views", () => {
     expect(f.api.tasks).not.toHaveBeenCalled();
   });
 
-  it("keeps the raw, raw task history reachable through the labelled secondary switch", async () => {
+  it("keeps all task history reachable through the labelled records switch", async () => {
     const f = harness();
     const user = f.user;
     await screen.findByRole("button", { name: /宏任务时间轴：设计、接口与实现/ });
     await user.click(screen.getByRole("button", { name: "记录" }));
-    // The existing records view: its toolbar, checkbox and rows stay as before.
-    expect(await within(screen.getByRole("region", { name: "微任务列表" })).findByRole("heading", { name: "全部执行记录" })).toBeTruthy();
-    expect(screen.getByLabelText("显示协助任务与内部执行")).toHaveProperty("checked", false);
-    await user.click(screen.getByLabelText("显示协助任务与内部执行"));
-    expect(await screen.findByRole("button", { name: /外部命令记录/ })).toBeTruthy();
+    expect(await within(screen.getByRole("region", { name: "记录列表" })).findByRole("button", { name: /外部命令记录/ })).toBeTruthy();
+    expect(within(screen.getByRole("region", { name: "记录列表" })).getByLabelText("搜索标题、项目、Host 或编号")).toBeTruthy();
+    expect(screen.queryByLabelText("显示协助任务与内部执行")).toBeNull();
     expect(f.api.tasks).toHaveBeenCalledWith(expect.objectContaining({ rootsOnly: false }), expect.any(AbortSignal));
     // Switching back keeps the macroTasks data and hides the records view.
     await user.click(screen.getByRole("button", { name: "宏任务" }));
     expect(await screen.findByRole("button", { name: /宏任务时间轴：设计、接口与实现/ })).toBeTruthy();
-    const checkbox = screen.getByLabelText("显示协助任务与内部执行") as HTMLInputElement;
-    expect(checkbox.closest("[hidden]")).not.toBeNull();
-    expect(checkbox.checked).toBe(true);
+    expect(document.querySelector("[data-slot=records-list]")!.closest("[hidden]")).not.toBeNull();
   });
 
   it("advances the timeline's 现在 clock across an unchanged poll through the parent wiring", async () => {

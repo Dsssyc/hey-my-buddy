@@ -425,7 +425,7 @@ def _summary(connection, group_id: str, clauses: list[str], values: list[Any]) -
         repository_path = next((row["project_repository_path"] for row in members
                                 if row["project_repository_path"]), None)
         project = {"id": macro_task["project_id"], "path": macro_task["project_path"],
-                   "label": micro_task.project_label(macro_task["project_path"], repository_path, "未记录项目")}
+                   "label": micro_task.project_label(macro_task["project_path"], repository_path)}
         source_host, created_at = macro_task["source_host_id"], macro_task["created_at"]
         activity_seq, activity_at = macro_task["activity_seq"], macro_task["activity_at"]
         roots = [row["task_id"] for row in members if row["child_parent_run_id"] is None]

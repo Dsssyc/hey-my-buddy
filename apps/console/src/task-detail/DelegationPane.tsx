@@ -49,7 +49,7 @@ export function DelegationPane({ step, ctx }: { step: Step; ctx: Context }) {
       <Facts items={[
         [t("delegation.originalDelegator"), taskHost(task)],
         [t("delegation.currentOwner"), workflowOwnerText(task, workflow.hostId)],
-        [t("delegation.project"), <Hint key="project" text={project.path ?? undefined}><span tabIndex={0} className="rounded-sm outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50">{project.label}</span></Hint>],
+        [t("delegation.project"), <Hint key="project" text={project?.path ?? undefined}><span tabIndex={0} className="rounded-sm outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50">{project?.label ?? t("delegation.unknownProject")}</span></Hint>],
         [t("delegation.id"), <CopyableIdentifier key="id" value={task.runId} />],
         ...(parent ? [[t("delegation.parent"), <LinkButton key="parent" hint={parent} onClick={() => ctx.open(parent)}>{title(parent)}</LinkButton>] as [string, ReactNode]] : []),
         [t("delegation.cwd"), workflow.cwd ?? task.cwd, true],

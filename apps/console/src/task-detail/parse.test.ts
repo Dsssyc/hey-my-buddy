@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { ApiError } from "../api";
-import { parseAudit, parseBasis, parseInquiries, parseRoutingPage, parseTask, parseTokenUsage, parseWorkflow } from "./parse";
+import { parseAudit, parseBasis, parseInquiries, parseRoutingPage, parseSelection, parseTask, parseTokenUsage, parseWorkflow } from "./parse";
 import { task } from "./task-detail.fixtures";
 
 const usage = { inputTokens: 20000, cachedInputTokens: 15000, outputTokens: 800, source: "codex-native", scope: "attempt" };
@@ -173,6 +173,17 @@ describe("what a decision was bound by", () => {
   });
 });
 
+describe("a calculation's selected route", () => {
+  const buddy = { harness: "codex", provider: "openai", model: "gpt-6-sol", effort: "high" };
+  const decision = { decisionId: "d1", status: "completed", selectedBuddy: buddy, routerBuddy: buddy, routingMode: "review", reason: "适合检查", source: null };
+
+  it("reads the board's chosen buddy, reason and mode, bound to the task's decision ID", () => {
+    expect(parseSelection({ decision }, "d1")).toMatchObject({ decisionId: "d1", selectedBuddy: buddy, reason: "适合检查", routingMode: "review" });
+    expect(() => parseSelection({ decision }, "d2")).toThrow(ApiError);
+    expect(() => parseSelection({ decision: { ...decision, routingMode: "slow" } }, "d1")).toThrow(ApiError);
+  });
+});
+
 describe("the inquiries", () => {
   const message = (id: string, state: string, extra: Record<string, unknown> = {}) => ({ messageId: id, attemptId: "a1", question: "问", author: "host", createdAt: "t", state, reason: null, delivery: null, answer: null, ...extra });
 
@@ -208,16 +219,19 @@ describe("the task view", () => {
     }
   });
 
-  it("refuses a lineage or a project that is not one, and an actor that is not one", () => {
+  it("refuses malformed metadata and actors while accepting an unrecorded project", () => {
     expect(() => parseTask(task({ lineage: { ...task().lineage, kind: "other" } }), "m1")).toThrow(ApiError);
-    expect(() => parseTask(task({ lineage: { ...task().lineage, project: null } }), "m1")).toThrow(ApiError);
+    expect(parseTask(task({ lineage: { ...task().lineage, project: null } }), "m1").task.lineage?.project).toBeNull();
+    expect(() => parseTask(task({ lineage: { ...task().lineage, routingTask: undefined } }), "m1")).toThrow(ApiError);
     expect(() => parseTask(task({ status: "cancelled", cancellation: { actor: { role: "robot", id: "x" }, reason: null } }), "m1")).toThrow(ApiError);
     expect(() => parseTask(task({ selectedAttempt: { reminders: null } }), "m1")).toThrow(ApiError);
   });
 
   it("tells a run with no collaboration record, and a Router's calculation from a command", () => {
     expect(parseTask(task({ workflow: undefined, lineage: { ...task().lineage, kind: "execution" } }), "m1").record).toBe("record");
-    expect(parseTask(task({ workflow: undefined, lineage: { ...task().lineage, kind: "decision" } }), "m1").record).toBe("calculation");
+    expect(parseTask(task({ workflow: undefined, lineage: { ...task().lineage, kind: "decision" } }), "m1")).toMatchObject({ record: "calculation", decisionId: null, routing: null });
+    expect(parseTask(task({ workflow: undefined, lineage: { ...task().lineage, kind: "decision" }, spec: { decision: { decisionId: "d-1" } } }), "m1").decisionId).toBe("d-1");
+    expect(() => parseTask(task({ workflow: undefined, lineage: { ...task().lineage, kind: "decision" }, spec: { decision: { decisionId: 1 } } }), "m1")).toThrow(ApiError);
     expect(parseTask(task({ lineage: { ...task().lineage, rootLeadRunId: "lead-1" } }), "m1").lead).toBe(true);
   });
 

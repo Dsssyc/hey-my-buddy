@@ -2,11 +2,12 @@
  * Where the tasks page is: a macro task, one of its micro tasks, one step of it.
  * `#tasks/<macro task>/<micro task>/<n>`, each part encoded; `n` counts from 1.
  */
-export type TasksLocation = { macroTaskId: string | null; runId: string | null; step: number | null };
+export type TasksLocation = { macroTaskId: string | null; runId: string | null; step: number | null; records?: true };
 
 export const TASKS_ROOT: TasksLocation = { macroTaskId: null, runId: null, step: null };
 
-export function tasksHash({ macroTaskId, runId, step }: TasksLocation): string {
+export function tasksHash({ macroTaskId, runId, step, records }: TasksLocation): string {
+  if (records) return "#tasks/records" + (runId ? "/" + encodeURIComponent(runId) : "");
   if (!macroTaskId) return "#tasks";
   const parts = ["tasks", macroTaskId];
   if (runId) {
@@ -21,6 +22,7 @@ export function tasksLocation(hash: string): TasksLocation | null {
   const [page, macro, run, step] = hash.slice(1).split("/");
   if (page !== "tasks") return null;
   try {
+    if (macro === "records") return { macroTaskId: null, runId: run ? decodeURIComponent(run) : null, step: null, records: true };
     const macroTaskId = macro ? decodeURIComponent(macro) : null;
     const runId = macroTaskId && run ? decodeURIComponent(run) : null;
     return { macroTaskId, runId, step: runId && step && /^[1-9]\d{0,3}$/.test(step) ? Number(step) : null };

@@ -1,4 +1,5 @@
 export const tasks = {
+  recordsList: "记录列表", recordsEntries: "记录条目", recordsCollapse: "收起记录列表", recordsExpand: "展开记录列表", recordsChoose: "选择一条记录。", recordsEmpty: "还没有记录。", recordsNoMatch: "没有匹配的记录。", recordsFailed: "读取失败", recordsNew: "新记录 <count>{{n}}</count>", recordsLatest: "回到最新", today: "今天", yesterday: "昨天", helper: "协助任务", calculation: "路由计算", command: "命令执行",
   waiting: "等人接手", failed: "失败",
   unknownProject: "未记录项目", macro: "宏任务", records: "记录", list: "宏任务列表", entries: "宏任务条目", collapse: "收起宏任务列表", expand: "展开宏任务列表",
   search: "搜索标题、项目、Host 或编号", all: "全部", active: "进行中", host: "等待 Host", review: "等待验收", accepted: "已验收", ended: "已结束",

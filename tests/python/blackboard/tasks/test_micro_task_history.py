@@ -15,7 +15,7 @@ import unittest
 from unittest.mock import patch
 
 from support import FakeClock
-from blackboard.routing.test_decision import DecisionTestCase
+from blackboard.routing.test_decision import CATALOG_BUDDY, DecisionTestCase
 from blackboard.tasks.test_workflow import BUDDY, NONCE, WorkflowTestCase
 
 from hey_my_buddy.blackboard.tasks import micro_task
@@ -377,7 +377,9 @@ class MicroTaskProvenanceTests(MicroTaskTestCase):
                     "requestId": "route-1",
                     "hostId": "host-a",
                     "submissionToken": "s" * 32,
-                    "task": "Produce a verified implementation",
+                    "task": "Produce a verified implementation\nWith details",
+                    "title": "Verified implementation",
+                    "macroTask": {"title": "Release work"},
                     "cwd": str(self.workdir()),
                     "executionWorkspace": {"kind": "existing", "access": "write"},
                 },
@@ -394,7 +396,24 @@ class MicroTaskProvenanceTests(MicroTaskTestCase):
         self.assertEqual(router["sourceHostId"], "host-a")
         self.assertEqual(router["currentHostId"], "host-a")
         self.assertEqual(router["project"], micro_task["project"])
-        self.assertIsNone(router["buddy"])
+        self.assertEqual(router["routingTask"], {"runId": micro_task_id,
+                                                   "title": "Verified implementation",
+                                                   "titleSource": "title",
+                                                   "macroTaskId": submitted["macroTaskId"],
+                                                   "macroTaskTitle": "Release work"})
+        self.assertEqual(router["buddy"], {key: CATALOG_BUDDY[key]
+                                            for key in ("harness", "provider", "model", "effort")})
+        listed = next(item for item in self.history(board)["runs"] if item["runId"] == router_id)
+        self.assertEqual(listed["lineage"], router)
+        self.assertEqual({row["runId"] for row in self.history(board, query="Verified implementation")["runs"]},
+                         {micro_task_id, router_id})
+        with board.store.db.write() as connection:
+            connection.execute("UPDATE workflow_runs SET title=NULL WHERE run_id=?", (micro_task_id,))
+        self.assertEqual(self.micro_task_of(board, router_id)["routingTask"], {
+            "runId": micro_task_id, "title": "Produce a verified implementation",
+            "titleSource": "first-line", "macroTaskId": submitted["macroTaskId"],
+            "macroTaskTitle": "Release work",
+        })
         self.assertEqual([row["runId"] for row in self.history(board, rootsOnly=True)["runs"]], [micro_task_id])
 
     def test_selection_decision_outside_a_micro_task_is_classified_and_has_no_lineage(self):
@@ -412,7 +431,10 @@ class MicroTaskProvenanceTests(MicroTaskTestCase):
         self.assertIsNone(metadata["rootRunId"])
         self.assertIsNone(metadata["sourceHostId"])
         self.assertIsNone(metadata["currentHostId"])
-        self.assertEqual(metadata["project"], {"id": "internal-decisions", "path": None, "label": "内部决策"})
+        self.assertIsNone(metadata["project"])
+        self.assertIsNone(metadata["routingTask"])
+        self.assertEqual(metadata["buddy"], {key: CATALOG_BUDDY[key]
+                                              for key in ("harness", "provider", "model", "effort")})
         self.assertEqual(self.history(board, rootsOnly=True)["total"], 0)
 
     def test_every_decorated_view_carries_the_same_metadata(self):

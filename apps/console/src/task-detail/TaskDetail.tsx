@@ -42,7 +42,7 @@ type Props = {
   /** The step the detail shows changed, by the reader or by the detail choosing a first one. */
   onStep: (step: number) => void;
   onBack: () => void;
-  onOpenRun: (runId: string) => void;
+  onOpenRun: (runId: string, macroTaskId?: string) => void;
 };
 
 function pane(step: Step, ctx: Context) {
@@ -136,7 +136,9 @@ export function TaskDetail({ client, runId, timeline, timelineLoading, nowMs, st
   return bare(<>
     <Header view={view} workflow={workflow} turns={workflow ? workflow.counts.turns : null} endMs={elapsedEnd(view, workflow, now)} nowMs={now}
       verifiedAtMs={read.verifiedAtMs} error={read.error} busy={read.busy} backTo={backTo} onBack={onBack} onRefresh={read.refresh} />
-    {steps && current && (view.record !== null || ctx)
+    {steps && current && view.record !== null
+      ? <RecordPane step={current} view={view} onOpenRun={onOpenRun} />
+      : steps && current && ctx
       ? <div className="grid min-h-0 flex-1 grid-cols-[300px_minmax(0,1fr)] max-[760px]:flex-none max-[760px]:grid-cols-1 max-[760px]:grid-rows-[auto_auto]">
         <ScrollArea className="min-h-0 bg-background max-[760px]:border-b min-[761px]:border-r max-[760px]:[&>[data-slot=scroll-area-viewport]]:max-h-[40dvh]">
           <div className="w-0 min-w-full">
@@ -144,7 +146,7 @@ export function TaskDetail({ client, runId, timeline, timelineLoading, nowMs, st
           </div>
         </ScrollArea>
         <div key={current.key} className="flex min-h-0 min-w-0 flex-col">
-          {view.record !== null ? <RecordPane step={current} view={view} /> : pane(current, ctx!)}
+          {pane(current, ctx)}
         </div>
       </div>
       : <p role="status" className="p-6 text-ink2">{t("loading")}</p>}

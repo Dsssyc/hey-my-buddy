@@ -5,7 +5,7 @@ import i18n from "i18next";
 import { MacroTaskOverview } from "./MacroTaskOverview";
 import { TaskDetail } from "./task-detail/TaskDetail";
 import { createTaskDetailClient } from "./task-detail/client";
-import { Tasks } from "./Tasks";
+import { Records } from "./Records";
 import { TimelineInspector } from "./TimelineInspector";
 import { macroTaskTimelineFixture } from "./macro-task-fixtures";
 import { rowLabelItem, spanFacts } from "./macro-task-display";
@@ -21,7 +21,7 @@ function commandTask(): Task {
     createdAt: "2026-10-15T00:00:00Z", updatedAt: "2026-10-15T00:00:00Z", acceptedAt: null, acceptanceVerdict: null, reviewRejectedAt: null, reviewRejectionNote: null,
     spec: { adapter: "command", argv: ["npm", "test"] },
     activity: { phase: "waiting-host", waitingReason: "the run was cancelled" },
-    lineage: { kind: "execution", sourceHostId: null, currentHostId: null, rootRunId: null, rootLeadRunId: null, parentRunId: null,
+    lineage: { kind: "execution", sourceHostId: null, currentHostId: null, rootRunId: null, rootLeadRunId: null, parentRunId: null, routingTask: null,
       project: { id: "project", label: "project", path: "~/project" }, buddy: null } };
 }
 function apiFor(task: Task): ConsoleApi {
@@ -80,11 +80,12 @@ describe("task identifiers and recorded attribution", () => {
   it("omits a command's buddy in the execution list and details, and does not show the blackboard's waiting sentence", async () => {
     const user = userEvent.setup();
     const task = commandTask();
-    const view = render(<Tasks snapshot={snapshot} api={apiFor(task)} refresh={vi.fn()} onOpenMicroTask={vi.fn()} />);
+    const view = render(<Records snapshot={snapshot} api={apiFor(task)} selected={null} onSelect={vi.fn()} onOpenMicroTask={vi.fn()}
+      onCollapseList={vi.fn()} onExpandList={vi.fn()} />);
     const row = await screen.findByRole("button", { name: /Run checks/ });
-    expect(within(row).getByText("未记录委派方").getAttribute("title")).toBe("未记录委派方");
     expect(row.textContent).not.toMatch(/undefined|buddy|→/);
-    await user.click(row);
+    view.rerender(<Records snapshot={snapshot} api={apiFor(task)} selected={runId} onSelect={vi.fn()} onOpenMicroTask={vi.fn()}
+      onCollapseList={vi.fn()} onExpandList={vi.fn()} />);
     const band = await waitFor(() => {
       const found = view.container.querySelector("[data-slot=detail-band]");
       if (!found) throw new Error("no band yet");
@@ -92,7 +93,7 @@ describe("task identifiers and recorded attribution", () => {
     });
     // The band of a command names the command, not a buddy.
     expect(band.textContent).toContain("命令执行");
-    expect(view.container.querySelector(".detail-panel")!.textContent).not.toMatch(/undefined|执行 buddy 待确定|Worker/);
+    expect(view.container.querySelector("[data-slot=task-detail]")!.textContent).not.toMatch(/undefined|执行 buddy 待确定|Worker/);
     // The sentence the blackboard gives for why it waits is English and belongs to the board: the detail does not show it.
     expect(screen.queryByText(/the run was cancelled/)).toBeNull();
   });

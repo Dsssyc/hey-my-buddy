@@ -63,6 +63,9 @@ _TIMESTAMP_PATTERN = re.compile(r"^[0-9A-Za-z:.+-]{1,64}$")
 QUERY_COLUMNS = (
     "task_id",
     "task",
+    "workflow_title",
+    "route_run_title",
+    "route_run_task",
     "project_path",
     "source_host_id",
     "current_host_id",
@@ -183,6 +186,15 @@ SELECT
     COALESCE(c.parent_run_id, wr.run_id) AS delegated_parent_run_id,
     dr.decision_id AS decision_id,
     wr.run_id AS route_run_id,
+    r.title AS workflow_title,
+    routed_run.title AS route_run_title,
+    json_extract(routed_run.micro_task_json, '$.task') AS route_run_task,
+    routed_run.macro_task_id AS route_macro_task_id,
+    routed_macro.title AS route_macro_task_title,
+    dispatch.harness AS router_harness,
+    dispatch.provider AS router_provider,
+    dispatch.model AS router_model,
+    dispatch.effort AS router_effort,
     COALESCE(rt.root_run_id, r.run_id, wr_roots.root_run_id, wr.run_id) AS root_run_id,
     root_run.host_id AS root_host_id,
     root_run.owner_generation AS root_owner_generation,
@@ -192,7 +204,7 @@ SELECT
          THEN NULL
          ELSE COALESCE(json_extract(root_task.spec_json, '$.cwd'), json_extract(t.spec_json, '$.cwd')) END AS project_path,
     CASE WHEN (dr.decision_id IS NOT NULL OR t.adapter = 'decision') AND root_run.run_id IS NULL
-         THEN 'internal-decisions'
+         THEN NULL
          ELSE COALESCE(
         (SELECT json_extract(artifact.manifest_json, '$.repositoryId') FROM workflow_artifacts artifact
           WHERE artifact.run_id = root_run.run_id AND artifact.kind = 'input'
@@ -240,6 +252,9 @@ LEFT JOIN (
      GROUP BY task_id
 ) dr ON dr.task_id = t.task_id
 LEFT JOIN workflow_routes wr ON wr.decision_id = dr.decision_id
+LEFT JOIN workflow_runs routed_run ON routed_run.run_id = wr.run_id
+LEFT JOIN macro_tasks routed_macro ON routed_macro.macro_task_id = routed_run.macro_task_id
+LEFT JOIN router_dispatches dispatch ON dispatch.task_id = t.task_id
 LEFT JOIN roots wr_roots ON wr_roots.task_id = wr.run_id
 LEFT JOIN source_hosts source_run ON source_run.run_id = COALESCE(r.run_id, wr.run_id)
 LEFT JOIN tasks root_task ON root_task.task_id = COALESCE(rt.root_run_id, r.run_id, wr_roots.root_run_id, wr.run_id)
@@ -267,14 +282,14 @@ def _complete_buddy(value: Any) -> dict | None:
     return buddy
 
 
-def project_label(path: str | None, repository_path: str | None, fallback: str) -> str:
+def project_label(path: str | None, repository_path: str | None) -> str | None:
     """Name the repository, falling back to the submitted directory without Git."""
     if repository_path:
         path = repository_path.rstrip("/")
         if os.path.basename(path) == ".git":
             path = os.path.dirname(path)
     if not path:
-        return fallback
+        return None
     name = os.path.basename(path.rstrip("/"))
     return name or path
 
@@ -295,19 +310,30 @@ def metadata_from_row(row: sqlite3.Row) -> dict:
     parent_run = row["delegated_parent_run_id"] if isinstance(row["delegated_parent_run_id"], str) else None
     root_run = row["root_run_id"] if isinstance(row["root_run_id"], str) else None
     buddy = _complete_buddy(row["run_buddy_json"] if micro_task else row["spec_json"])
+    if row["router_harness"] is not None:
+        buddy = {field: row[f"router_{field}"] for field in BUDDY_FIELDS}
+    route_title = row["route_run_title"]
+    route_task = row["route_run_task"]
+    if route_title is None and route_task:
+        route_title = route_task.strip().splitlines()[0].strip() or None
+    routing_task = ({"runId": row["route_run_id"], "title": route_title,
+                     "titleSource": "title" if row["route_run_title"] is not None else
+                                    "first-line" if route_title is not None else None,
+                     "macroTaskId": row["route_macro_task_id"],
+                     "macroTaskTitle": row["route_macro_task_title"]}
+                    if row["route_run_id"] is not None else None)
+    project = ({"id": identifier or path, "path": path,
+                "label": project_label(path, row["project_repository_path"])}
+               if identifier or path else None)
     result = {
         "kind": kind,
         "sourceHostId": source_host if root_run else None,
         "currentHostId": current_host if root_run else None,
         "parentRunId": parent_run,
         "rootRunId": root_run,
-        "project": {
-            "id": identifier or path or row["task_id"],
-            "path": path,
-            "label": project_label(path, row["project_repository_path"],
-                                   "内部决策" if kind == "decision" and root_run is None else "未记录项目"),
-        },
+        "project": project,
         "buddy": buddy,
+        "routingTask": routing_task,
         "delegationAuthority": bool(row["run_delegation_authority"]),
         "rootLeadRunId": row["root_lead_run_id"],
         "leadOwnership": ({"leadRunId": row["lead_run_id"], "leadTurnId": row["lead_turn_id"],
