@@ -2,7 +2,7 @@
 
 ## 状态
 
-已接受：用户于 2026-09-28 在讨论中确认了下列方向，并在审阅本文后接受。用户随后授权实现并单独同意 schema 14；0.19.0 源码已实现下列范围，验收见 [local-harness-discovery-0.19.0.md](../acceptance/local-harness-discovery-0.19.0.md)。日常仍是 0.18.0/schema 13；日常安装、迁移、配置与发布未执行，仍需单独授权。Windows 真机与 Linux/Windows Router 尚未验证，CI 仅构建产物与校验信息，尚未发布。本文扩展 [ADR-015](015-shared-agent-skill-distribution.md)：skill 位置（`~/.agents/skills/buddy` 及 `~/.claude/skills/buddy` 链接）、不做复制回退、插件退役与不设项目级 skill 不变；安装入口、启动器、版本切换与 harness 发现以本文为准。
+已接受：开发者于 2026-09-28 在讨论中确认了下列方向，并在审阅本文后接受。开发者随后授权实现并单独同意 schema 14；0.19.0 源码已实现下列范围，验收见 [local-harness-discovery-0.19.0.md](../acceptance/local-harness-discovery-0.19.0.md)。日常仍是 0.18.0/schema 13；日常安装、迁移、配置与发布未执行，仍需单独授权。Windows 真机与 Linux/Windows Router 尚未验证，CI 仅构建产物与校验信息，尚未发布。本文扩展 [ADR-015](015-shared-agent-skill-distribution.md)：skill 位置（`~/.agents/skills/buddy` 及 `~/.claude/skills/buddy` 链接）、不做复制回退、插件退役与不设项目级 skill 不变；安装入口、启动器、版本切换与 harness 发现以本文为准。
 
 ## 背景
 
@@ -28,7 +28,7 @@
 
 ### 安装
 
-6. **安装入口是发布包加一条命令。** 每个 tag 由 CI 构建并发布一个包含运行所需全部文件（skill、启动器、前端产物、DSH 脚本）的 Python 包，并附校验信息。安装与更新都是一条固定版本的跨平台命令，例如 `uvx hey-my-buddy@<版本> install`（包名待确认可用）。发布包只负责运送：`install` 把内容物化为版本化运行时，服务始终从运行时目录运行，而不是从包管理器的安装位置运行，从而保证忙时拒绝与回滚成立。不安装全局 `buddy` 命令，避免与 skill 内的启动器形成两个入口。是否公开发布到 PyPI 由用户决定；不公开时改用 GitHub Release 中的 wheel，命令形式相同。
+6. **安装入口是发布包加一条命令。** 每个 tag 由 CI 构建并发布一个包含运行所需全部文件（skill、启动器、前端产物、DSH 脚本）的 Python 包，并附校验信息。安装与更新都是一条固定版本的跨平台命令，例如 `uvx hey-my-buddy@<版本> install`（包名待确认可用）。发布包只负责运送：`install` 把内容物化为版本化运行时，服务始终从运行时目录运行，而不是从包管理器的安装位置运行，从而保证忙时拒绝与回滚成立。不安装全局 `buddy` 命令，避免与 skill 内的启动器形成两个入口。是否公开发布到 PyPI 由开发者决定；不公开时改用 GitHub Release 中的 wheel，命令形式相同。
 7. **引导脚本只负责 uv。** `install.sh`（macOS、Linux）与 `install.ps1`（Windows）只做一件事：没有 uv 时下载固定版本的 uv，放进 buddy 自己的目录（不改 PATH、不改 shell 配置），然后执行上一条的命令。
 8. **为大模型安装而设计。** README 给出固定版本的安装命令，以及一段可直接交给 agent 的安装提示。安装在沙盒外执行，不需要 sudo，只写用户目录（skill、Claude Code 链接、`~/.local/share/hey-my-buddy`、私有 uv），除 skill 链接外不改 shell 配置与 Host 设置，执行前列出将写入的路径。每一步输出稳定错误码和一行修复办法；结束时附诊断摘要，并说明新会话会加载 skill、当前会话可直接使用启动器的绝对路径。重复执行即修复或更新。
 
@@ -54,12 +54,12 @@
 
 ## 考虑过的方案
 
-- **由操作系统管理服务（launchd、systemd user service、Windows 计划任务）。** 环境最稳定，但需要额外权限，三个系统各一套，对用户系统的改动也更大；用户选择按需拉起。
-- **跨环境或远程 Worker，由在各 harness 可用环境中启动的 Worker 负责执行。** 能绕开服务环境的问题，但要解决工作区路径映射、外部 Worker 的生命周期与停止证据以及注册信任；用户选择钉死在本机。
+- **由操作系统管理服务（launchd、systemd user service、Windows 计划任务）。** 环境最稳定，但需要额外权限，三个系统各一套，对用户系统的改动也更大；开发者选择按需拉起。
+- **跨环境或远程 Worker，由在各 harness 可用环境中启动的 Worker 负责执行。** 能绕开服务环境的问题，但要解决工作区路径映射、外部 Worker 的生命周期与停止证据以及注册信任；开发者选择钉死在本机。
 - **要求用户配置 `BUDDY_<X>_CLI`。** 用户难以确定位置；只保留为检测失败时的手动路径设置（界面或命令）。
 - **执行用户的交互式 shell（如 `zsh -i`）解析命令位置。** 结果与终端一致，但要执行 shell 配置文件：慢，可能卡在交互提问上，可能启动 tmux 等程序，还会带出配置里的 API key。改为读取版本管理器的记录文件。
 - **以用户在终端里安装的时刻为准。** 多数用户由大模型代为安装，安装命令运行在 Host 环境中，这个时刻并不存在。
-- **更新时等待空闲。** 任务持续到来时可能永远等不到；用户选择直接拒绝。
+- **更新时等待空闲。** 任务持续到来时可能永远等不到；开发者选择直接拒绝。
 - **借用各 Host 的插件安装机制避开沙盒。** 会回到按 Host 分别打包（ADR-015 放弃的方向），而服务仍须在沙盒外运行。
 - **用 `uv tool install` 或 `pip install` 安装全局 `buddy` 命令。** 会与 skill 内的启动器形成两个入口，包管理器原地升级还会替换运行中服务的文件。
 - **后台定时重扫 harness。** 没有调用时无人需要这些信息，也不符合黑板被动、不擅自运行的原则。
@@ -71,4 +71,4 @@
 - 需要 CI 在 tag 上构建发布包与校验信息，新增 `install.sh` 与 `install.ps1`；`buddy install` 扩展为物化运行时、列出写入路径、忙时拒绝并输出诊断。
 - `buddy adapters` 增加刷新与诊断，新增 `buddy harness set`；Buddy 配置页增加 harness 状态与重新检测。
 - 实现时同步更新 README、SKILL.md、operations.md、architecture.md 与 ADR-015 的相关说明；实现之前，现行行为仍以现有参考文档为准。
-- 与 Windows 适配一并实施。真实安装、发布到 PyPI 与日常升级都需要用户单独授权。
+- 与 Windows 适配一并实施。真实安装、发布到 PyPI 与日常升级都需要开发者单独授权。

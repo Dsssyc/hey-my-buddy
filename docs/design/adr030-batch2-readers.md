@@ -275,7 +275,7 @@ Host 修改的 owning reference 包括 harnesses、workers、codex、claude、cl
 7. accounts 只读入口与 harness-account.ts 只读 parser 应保留重接，批次2的 Worker 分支和批次3b的 native 私有 home 应分开删除；目前清单行号与源码已有偏移，以符号／条件核对，不把原生 accountStatus 当退休账户对象。
 8. 当前预览数据在 tests/probes/objective_console_preview.py，测试专属账户文件不止计划的“五个”；通用文档／打包、i18n unused、storage 保护、环境与载体净化、Host command 读投影回归也要列入实现检查。
 
-实现仍等 Host 过目后授权；受影响 Python 模块按用户规定使用 uv frozen unittest，先清继承的 runtime／Worker／agent 环境，前端仅 typecheck/test，装不上照实交 Host。完整 Python 检查、真实浏览器、构建、空 HOME 安装演练、真实数据副本与故障注入都由 Host 执行，本回合没有宣称它们通过。
+实现仍等 Host 过目后授权；受影响 Python 模块按开发者规定使用 uv frozen unittest，先清继承的 runtime／Worker／agent 环境，前端仅 typecheck/test，装不上照实交 Host。完整 Python 检查、真实浏览器、构建、空 HOME 安装演练、真实数据副本与故障注入都由 Host 执行，本回合没有宣称它们通过。
 
 与角色说明微任务重叠的 schema_worker.py、worker_services.py、turn_io.py、router.py、router_input.py 及 packaging/runtime-assets.json，只改账户载体相关行；其他提示词与资源接线保留整合方的版本，不借批次 2 重写。
 
@@ -347,7 +347,7 @@ Host command 读取缺陷修在 native_observations.warnings 的原生事实边�
 
 规定的 uv unittest 命令未进入测试，多个聚焦组在依赖下载／构建依赖阶段失败：PyPI DNS不可达，涉及 typing-inspection、typing-extensions、fastdb4py、zstandard、hatchling／portalocker。没有以系统 Python 或安装运行时替代规定的完整测试，也没有绕过网络沙盒。前端使用支持的 Node24尝试 npm ci，沙盒连接拒绝 EPERM；npm typecheck 缺 vitest/globals 退出2，npm test 因 vitest 不存在退出127。前端的语法／解析与文案静态核对不能替代这两个命令。
 
-以下 Python 模块需在依赖可用后运行；路径均相对于 tests/python，执行时设置 PYTHONPATH=tests/python:src，清用户指定的十个继承绑定，用 uv run --frozen python -m unittest 加对应点分模块名。
+以下 Python 模块需在依赖可用后运行；路径均相对于 tests/python，执行时设置 PYTHONPATH=tests/python:src，清开发者指定的十个继承绑定，用 uv run --frozen python -m unittest 加对应点分模块名。
 
 | 组 | 模块 |
 | --- | --- |

@@ -1,6 +1,6 @@
 # ADR-021 逻辑线第二阶段执行计划
 
-本宏任务在独立 worktree 的 socu/adr021-logic-stage2 实现 L4 和 L5，最后按用户 2026-10-03 的方向调整收尾。已合入 socu/buddy-core 的 26f9dd0，遵循 ADR-021 第 2、3、4、20、23 条与 ADR-023；不修改 main、core 或其他会话的检出，不推送、不安装、不改日常配置与数据。最初计划与历次修改保存在本分支提交历史及备查分支 socu/adr021-review-carrier-reference（15be750）。本文件现在描述最终交付；早先的 DSH/ZCode 独立只读通道设计不再执行。
+本宏任务在独立 worktree 的 socu/adr021-logic-stage2 实现 L4 和 L5，最后按开发者 2026-10-03 的方向调整收尾。已合入 socu/buddy-core 的 26f9dd0，遵循 ADR-021 第 2、3、4、20、23 条与 ADR-023；不修改 main、core 或其他会话的检出，不推送、不安装、不改日常配置与数据。最初计划与历次修改保存在本分支提交历史及备查分支 socu/adr021-review-carrier-reference（15be750）。本文件现在描述最终交付；早先的 DSH/ZCode 独立只读通道设计不再执行。
 
 ## 最终范围
 
@@ -38,7 +38,7 @@ Codex/Claude Code 保留原生沙盒、策略核对和工具流。原生检查�
 
 ## 检查安排
 
-Console 依赖已用 package.json 支持的 Node 24 执行 npm --prefix apps/console ci，最小适配的 659 项前端检查及 typecheck/build 已通过。收尾不改前端。先跑免费资格/删除防护、四投影、fast、Router claim/发布/切换与原相关回归，再跑打包/资源和完整检查。只删除用户明确移出的独立通道/静态证明检查；公共防护场景保留，投影测试改接纯事实接口，资格测试改验不可用而不是删除。
+Console 依赖已用 package.json 支持的 Node 24 执行 npm --prefix apps/console ci，最小适配的 659 项前端检查及 typecheck/build 已通过。收尾不改前端。先跑免费资格/删除防护、四投影、fast、Router claim/发布/切换与原相关回归，再跑打包/资源和完整检查。只删除开发者明确移出的独立通道/静态证明检查；公共防护场景保留，投影测试改接纯事实接口，资格测试改验不可用而不是删除。
 
 所有测试使用 checks 框架的私有 state/runtime/temp 根，清除继承的 BUDDY_STATE_DIR、BUDDY_RUNTIME_ROOT、BUDDY_RUNTIME、BUDDY_RUNTIME_IDENTITY、BUDDY_WORKER_STATE、BUDDY_WORKER_ID、BUDDY_AGENT_CREDENTIAL、BUDDY_AGENT_CREDENTIAL_FILE、BUDDY_ACCOUNT_SELECTION、BUDDY_SUPERVISOR_START_ID、VIRTUAL_ENV、UV_PROJECT_ENVIRONMENT；子环境剔除第三方 Claude 网关变量。完整检查不调用模型，运行期间 worktree 冻结。此前 test_harness_discovery 一次因停止观察窗口返回 shutdown-unverified 而失败，同一原测试 17 项单独复查通过；不放宽断言，最终完整检查可用两并发降低时序竞争，并记录真实结果。
 

@@ -1,6 +1,6 @@
 # ADR-017 implementation plan
 
-This plan is prepared against `dcd482a` for the 0.19.0 source candidate. Implementation is authorized; the schema 14 change below was separately approved by the user on 2026-09-28. No daily installation, board migration, configuration change or package publication is authorized.
+This plan is prepared against `dcd482a` for the 0.19.0 source candidate. Implementation is authorized; the schema 14 change below was separately approved by the developer on 2026-09-28. No daily installation, board migration, configuration change or package publication is authorized.
 
 ## Approved schema 14
 
@@ -18,4 +18,4 @@ Healthy version changes trigger the existing monotone per-harness catalog public
 
 ## Delivery
 
-Stage 1 implements discovery, health, effective availability and diagnostics, with focused tests and its own commit. Stage 2 switches the daily launcher to the active runtime, enforces sandbox preflight and coordinated idle cutover, and documents verified Host permission configuration. Stage 3 builds an installable distribution and private-uv bootstrap scripts without publishing. Codex GPT-6 Sol high Router probes start only after Stage 1 and user authorization for each fresh output directory (the user subsequently granted continuing probe authorization during this agenda); capability remains unverified until the recorded native evidence meets every acceptance criterion. The cleanup and SQLite warning repairs are independent commits. Final acceptance includes the complete checks and an explicit list of remaining native/Windows/publication boundaries.
+Stage 1 implements discovery, health, effective availability and diagnostics, with focused tests and its own commit. Stage 2 switches the daily launcher to the active runtime, enforces sandbox preflight and coordinated idle cutover, and documents verified Host permission configuration. Stage 3 builds an installable distribution and private-uv bootstrap scripts without publishing. Codex GPT-6 Sol high Router probes start only after Stage 1 and developer authorization for each fresh output directory (the developer subsequently granted continuing probe authorization during this agenda); capability remains unverified until the recorded native evidence meets every acceptance criterion. The cleanup and SQLite warning repairs are independent commits. Final acceptance includes the complete checks and an explicit list of remaining native/Windows/publication boundaries.

@@ -2,7 +2,7 @@
 
 ## 状态与边界
 
-这是 0.16.0 用户授权议程第四块（UI 人类友好修缮）以及第二、三块中控制台部分（存储面板、多窗口编辑设置）的交互设计说明，由 Claude（Opus 5.5 / high）按 [claude-code.md](../reference/claude-code.md) 的分工起草。它只是设计：尚未实现、未经截图审查、未验收，也不改变任何契约。行为契约以先行更新的 [console.md](../reference/console.md)、[objectives.md](../reference/objectives.md) 第“0.16.0 human presentation contract”节和 [operations.md](../reference/operations.md) 第“0.16.0 backup, upgrade and storage contract”节为准；本说明与它们冲突时以契约为准，并应退回 Host 修订本说明。
+这是 0.16.0 开发者授权议程第四块（UI 人类友好修缮）以及第二、三块中控制台部分（存储面板、多窗口编辑设置）的交互设计说明，由 Claude（Opus 5.5 / high）按 [claude-code.md](../reference/claude-code.md) 的分工起草。它只是设计：尚未实现、未经截图审查、未验收，也不改变任何契约。行为契约以先行更新的 [console.md](../reference/console.md)、[objectives.md](../reference/objectives.md) 第“0.16.0 human presentation contract”节和 [operations.md](../reference/operations.md) 第“0.16.0 backup, upgrade and storage contract”节为准；本说明与它们冲突时以契约为准，并应退回 Host 修订本说明。
 
 本说明不新增功能、读字段、API 或 schema（仍为 12）。所有界面只展示已记录的事实：界面不翻译、不调用模型、不推断时间或结果。文中的源码位置指向 `5288ca4` 的只读定位，实现者以当时的代码为准。以下各节依次覆盖 T1–T4、P1、P2、存储确认面板和多窗口编辑设置；每节末尾给出验收标准，最后一节汇总跨项的可访问性与浏览器检查。
 

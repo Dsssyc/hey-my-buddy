@@ -2,7 +2,7 @@
 
 ## 状态
 
-已接受：用户于 2026-09-28 确认。本决定只统一领域语言和文档用词，不改变运行时行为、C-Two 契约、CLI、schema 或代码标识符。术语的定义以 [CONTEXT.md](../../CONTEXT.md) 为准。本决定延续 [ADR-002](002-host-directed-assistance-and-workspaces.md) 的原则：Host 与 Worker 的区分表达任务控制关系，不构成能力等级。
+已接受：开发者于 2026-09-28 确认。本决定只统一领域语言和文档用词，不改变运行时行为、C-Two 契约、CLI、schema 或代码标识符。术语的定义以 [CONTEXT.md](../../CONTEXT.md) 为准。本决定延续 [ADR-002](002-host-directed-assistance-and-workspaces.md) 的原则：Host 与 Worker 的区分表达任务控制关系，不构成能力等级。
 
 ## 背景
 

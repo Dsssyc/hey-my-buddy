@@ -20,14 +20,14 @@ Use it for scoped implementation, testing, reproducible investigations, document
 
 hey-my-buddy is one shared Agent Skill, `buddy`, that carries its own CLI, plus one local service per state directory. The verified daily installation is 0.29.0 (contract 0.29.0, schema 16), upgraded from 0.27.0 on 2026-10-11; the current source is the same version. The skill is placed in `~/.agents/skills/buddy`, Claude Code reaches the same directory through the `~/.claude/skills/buddy` link, and the retired Codex plugin is no longer used. Source and daily installation are separate facts. The [native sandbox review acceptance](docs/acceptance/native-sandbox-review-0.27.0.md) records probe-owned verification that no longer reads model output. The [routing validation acceptance](docs/acceptance/routing-validation-0.25.0.md) covers retained review diagnostics and bounded quota recovery. It implements ADR-018 Host workflows: file/stdin packets, method help, objective reuse, direct Host completion, failure conclusions and cleanup, partial output, configuration changes on continuation, cumulative patches and native usage/quota observations. The [Host-workflow acceptance](docs/acceptance/host-workflow-0.21.0.md) records the checks and remaining limits. It is not published; schema 14 → 15 migrates only through an explicit idle upgrade.
 
-Once the user decides the release channel and the exact version, the install entry is one fixed-version package command:
+Once the developer decides the release channel and the exact version, the install entry is one fixed-version package command:
 
 ```sh
 # After the release channel and version are decided; not available today
 uvx hey-my-buddy@0.21.0 install
 ```
 
-The package name's availability and whether it is published on PyPI are still the user's decisions, and this candidate has not been published there. Until a release exists, build the wheel from the frozen source and install from its absolute path:
+The package name's availability and whether it is published on PyPI are still the developer's decisions, and this candidate has not been published there. Until a release exists, build the wheel from the frozen source and install from its absolute path:
 
 ```sh
 uv build --wheel --out-dir dist
