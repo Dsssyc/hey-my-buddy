@@ -925,7 +925,7 @@ def wait_reason(entry: dict) -> str:
     if entry["state"] == "awaiting-host":
         return ("the current turn requested Host assistance"
                 if entry["activeRequest"] and entry["activeRequest"]["kind"] == "assistance"
-                else "the current turn concluded and the Host decides the next turn")
+                else "the current turn returned and the Host decides the next turn")
     if entry["state"] == "accepted":
         return "the final artifact was acknowledged"
     if entry["state"] == "cancelled":
@@ -940,7 +940,7 @@ def turn_views(entry: dict) -> list[dict]:
         views.append({
             "turnId": item["turnId"], "turnIndex": item["turnIndex"], "attemptId": item["attemptId"],
             "generation": item["generation"], "resumeMode": "reconstructed-new-session",
-            "sessionId": None, "state": "concluded" if item["state"] == "finished" else "open",
+            "sessionId": None, "state": "returned" if item["state"] == "finished" else "open",
             "disposition": item["disposition"], "createdAt": item["startedAt"],
             "updatedAt": item["finishedAt"] or item["startedAt"],
             "buddy": item["buddy"],

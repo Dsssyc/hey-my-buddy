@@ -35,7 +35,7 @@ from ...errors import BoardError
 #: Documented task transition table. A transition outside this map is rejected.
 TASK_TRANSITIONS: dict[str, frozenset[str]] = {
     "queued": frozenset({"queued", "running", "cancelling", "cancelled", "reconciliation-needed"}),
-    # ``running -> queued`` is the micro-task yield: a turn concluded with a structured
+    # ``running -> queued`` is the micro-task yield: a turn returned a structured
     # assistance/attention outcome, the attempt stopped with confirmed shutdown and
     # the same logical task waits for the Host instead of pretending to be complete.
     "running": frozenset(

@@ -131,6 +131,7 @@ class CliViewTests(RealWorkspaceTestCase):
                                (json.dumps(truncated), submitted["runId"]))
         code, brief, _ = self.cli("get", {"runId": submitted["runId"]})
         self.assertEqual(code, 0, brief)
+        self.assertEqual(brief["currentTurn"]["state"], "returned")
         self.assertEqual(brief["currentTurn"]["outcomeTruncated"], truncated)
 
     def test_get_brief_keeps_next_command_identifiers_and_full_is_unchanged(self):

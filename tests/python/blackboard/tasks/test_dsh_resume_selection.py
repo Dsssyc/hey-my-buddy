@@ -87,7 +87,7 @@ class DshResumeSelectionTests(WorkflowTestCase):
             rows = db.execute(
                 "SELECT session_id, state FROM workflow_turns WHERE run_id=? ORDER BY turn_index",
                 (submitted["runId"],)).fetchall()
-        self.assertEqual([row["state"] for row in rows], ["concluded", "concluded"])
+        self.assertEqual([row["state"] for row in rows], ["returned", "returned"])
         self.assertEqual(rows[-1]["session_id"], CANDIDATE_SESSION)
 
     def test_a_false_capability_executor_keeps_reconstruction(self):
@@ -202,7 +202,7 @@ class DshResumeSelectionTests(WorkflowTestCase):
     def test_old_attempt_private_native_storage_reconstructs_with_the_home_reason(self):
         """A pre-wiring DSH result reporting attempt-private storage never resumes.
 
-        The prior turn is otherwise fully qualified: concluded, same session,
+        The prior turn is otherwise fully qualified: returned, same session,
         buddy and harness version. The common ownership
         judgment — the same storageOwner qualification codex already applies —
         must reconstruct with an explicit reason instead of selecting

@@ -1,8 +1,8 @@
 """ADR-012 XI.3 task-title fallback: the read-only workflow.resultSummary projection.
 
 The projection must expose, on every micro-task task read, this run's newest
-concluded turn outcome summary — selected by turn_index, never by clock
-timestamps — bounded to 2000 characters, without hiding a concluded result
+returned turn outcome summary — selected by turn_index, never by clock
+timestamps — bounded to 2000 characters, without hiding a returned result
 behind a newer prepared/running turn and without substituting a helper's or an
 older nonempty result. Every test drives the real store and the real decorated
 reads through the in-process board harness with private state directories; the
@@ -31,7 +31,7 @@ class TitleFallbackTests(WorkflowTestCase):
         self.catalog_fixture()
 
     def two_turn_run(self, board, *, second_summary="second result"):
-        """Turn 1 concludes for assistance; turn 2 concludes completed."""
+        """Turn 1 returns assistance; turn 2 returns completed."""
         self.register(board)
         submitted = self.submit(board, request_id="run-1", task="fix the login flow\nkeep the schema stable")
         run_id = submitted["runId"]
@@ -56,7 +56,7 @@ class TitleFallbackTests(WorkflowTestCase):
         self.assertEqual(board.call("workflow_get", {"runId": run_id})["state"], "delivered")
         return run_id
 
-    def test_newest_concluded_own_result_reaches_every_micro_task_read(self):
+    def test_newest_returned_own_result_reaches_every_micro_task_read(self):
         board = self.board(max_concurrent=1)
         run_id = self.two_turn_run(board, second_summary="整合完成并已验证")
         summary = "整合完成并已验证"
@@ -90,7 +90,7 @@ class TitleFallbackTests(WorkflowTestCase):
         )["task"]
         self.assertNotIn("workflow", plain)
 
-    def test_running_turn_does_not_hide_the_last_concluded_result(self):
+    def test_running_turn_does_not_hide_the_last_returned_result(self):
         board = self.board(max_concurrent=1)
         self.register(board)
         submitted = self.submit(board, request_id="run-1", task="resolve the incident")
@@ -101,7 +101,7 @@ class TitleFallbackTests(WorkflowTestCase):
         self.continue_run(board, view)
         self.claim(board, claim_request_id="c2")
         self.assertEqual(board.call("workflow_get", {"runId": run_id})["state"], "executing")
-        # The second turn is prepared/running; the first concluded summary still shows.
+        # The second turn is prepared/running; the first returned summary still shows.
         self.assertEqual(workflow_summary(micro_task_view(board, run_id)), "need the Host")
         listed = board.call("task_list", {"limit": 10})["runs"]
         self.assertEqual([row["workflow"]["resultSummary"] for row in listed if row["runId"] == run_id], ["need the Host"])
