@@ -165,13 +165,13 @@ class SupervisorHandle:
 class WorkerPool:
     """The daemon-managed generic worker pool.
 
-    One independent supervisor per configured execution slot: ``max_concurrent``
-    business slots plus ``decision_concurrent`` decision slots, under stable IDs
-    derived from the configured worker prefix (``local``, ``local-2``, ``local-3``).
-    This is ordinary queue/worker infrastructure, not a second scheduler: the pool
-    only starts processes, recognizes its own already-running supervisors by their
-    lifetime lock, and asks them to stop through durable request files. It never
-    signals a process it does not own.
+    One independent supervisor per configured execution slot: the machine-wide
+    ``BUDDY_MAX_CONCURRENT`` ceiling, under stable IDs derived from the configured
+    worker prefix (``local``, ``local-2``, ``local-3``). This is ordinary
+    queue/worker infrastructure, not a second scheduler: the pool only starts
+    processes, recognizes its own already-running supervisors by their lifetime
+    lock, and asks them to stop through durable request files. It never signals a
+    process it does not own.
 
     Ownership is recorded in a private manifest of the exact IDs this pool started,
     durably *before* the first process exists. A ``local-99`` folder an operator
@@ -179,7 +179,7 @@ class WorkerPool:
     appears in the pool report. Manifest values pass the registry's own worker-ID
     validation; a malformed JSON value is dropped instead of becoming a path.
 
-    Lowering the configured limits never cancels live work. A surplus supervisor
+    Lowering the configured limit never cancels live work. A surplus supervisor
     receives a *retire* intent only while it owns no unresolved attempt and holds no
     receipt or startup intent still waiting for reconciliation; the owning Worker
     observes that intent between attempts and runs replay-only retirement, so an
@@ -201,11 +201,9 @@ class WorkerPool:
     #: How long a missing surplus owner waits between replay-only restarts.
     REPLAY_BACKOFF_SECONDS = 5.0
 
-    def __init__(self, directory: Path, *, prefix: object, business_limit: int, decision_limit: int):
+    def __init__(self, directory: Path, *, prefix: object, total_limit: int):
         self.directory = Path(directory)
-        self.business_limit = business_limit
-        self.decision_limit = decision_limit
-        self.total_limit = business_limit + decision_limit
+        self.total_limit = max(1, int(total_limit))
         self.worker_ids = scheduling.pool_worker_ids(prefix, self.total_limit)
         #: The effective base ID: an invalid configured prefix falls back to the
         #: default instead of ever reaching a directory name or an argv value.
@@ -271,8 +269,6 @@ class WorkerPool:
             "prefix": self.prefix,
             "configuredPrefixValid": self.configured_prefix_valid,
             "totalLimit": self.total_limit,
-            "businessLimit": self.business_limit,
-            "decisionLimit": self.decision_limit,
             "workerIds": list(self.worker_ids),
             "unstartedWorkerIds": list(unstarted),
             "stoppedWorkerIds": list(stopped),
@@ -475,17 +471,16 @@ class Daemon:
         self.wait_admission = WaitAdmission(wait_capacity)
         self.store = BoardStore(
             self.directory,
-            max_concurrent=_env_int("BUDDY_MAX_CONCURRENT", 2),
-            decision_concurrent=_env_int("BUDDY_MAX_DECISIONS", 1),
+            max_concurrent=_env_int("BUDDY_MAX_CONCURRENT", scheduling.TOTAL_CONCURRENCY_DEFAULT),
             lease_seconds=_env_int("BUDDY_LEASE_SECONDS", 120),
         )
-        #: One generic supervisor per slot: the business limit plus the independently
-        #: reserved decision limit. Existing supervisors are reused by lock ownership.
+        #: One generic supervisor per slot of the machine-wide ceiling. Routing and
+        #: execution share it and the same per-family counters. Existing supervisors
+        #: are reused by lock ownership.
         self.pool = WorkerPool(
             self.directory,
             prefix=os.environ.get("BUDDY_WORKER_ID", "local"),
-            business_limit=self.store.max_concurrent,
-            decision_limit=self.store.decision_concurrent,
+            total_limit=self.store.max_concurrent,
         )
         self.control = {
             "service_id": self.service_id,

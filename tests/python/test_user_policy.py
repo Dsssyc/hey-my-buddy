@@ -96,3 +96,32 @@ class UserPolicyTests(BoardTestCase):
         self.assertEqual(packet['annotations'][0]['text'], 'human experience')
         archived = self.board_.call('evaluation_prepare', {'requestId': 'prepare-retired', 'profileId': 'retired', 'limit': 1})
         self.assertEqual([p['profileId'] for p in archived['profiles']], ['retired'])
+
+    def test_model_concurrency_is_a_console_only_human_patch(self):
+        grant = self.grant()
+        patch = [{'adapter': 'dsh', 'provider': 'fixture', 'model': 'live', 'limit': 3}]
+        # The authenticated console writer may set family limits...
+        result = self.user('user_policy_publish', self.payload(grant, modelConcurrency=patch))
+        self.assertEqual(result['counts']['modelConcurrency'], 1)
+        with self.board_.store.db.read() as db:
+            stored = db.execute('SELECT concurrency_limit FROM model_concurrency').fetchall()
+        self.assertEqual([row['concurrency_limit'] for row in stored], [3])
+        # ...and a maintenance writer can neither patch nor keep the field.
+        maintenance = self.grant('maintenance', 'limits-maintainer')
+        self.assert_denied('assessment_publish', self.payload(maintenance, modelConcurrency=patch), 'INVALID_ARGUMENT')
+
+    def test_model_concurrency_rejects_derived_fields_and_bad_limits(self):
+        grant = self.grant()
+        for patch in (
+            [{'adapter': 'dsh', 'provider': 'fixture', 'model': 'live', 'limit': 3, 'active': 1}],
+            [{'adapter': 'dsh', 'provider': 'fixture', 'model': 'live', 'limit': 0}],
+            [{'adapter': 'dsh', 'provider': 'fixture', 'model': 'live', 'limit': 33}],
+            [{'adapter': 'dsh', 'provider': 'fixture', 'model': 'live', 'effort': 'max', 'limit': 3}],
+            [{'adapter': 'dsh', 'provider': 'fixture', 'model': 'live', 'limit': 3},
+             {'adapter': 'dsh', 'provider': 'fixture', 'model': 'live', 'limit': 4}],
+        ):
+            with self.assertRaises(BoardError) as caught:
+                self.user('user_policy_publish', self.payload(grant, modelConcurrency=patch))
+            self.assertEqual(caught.exception.code, 'INVALID_ARGUMENT')
+        with self.board_.store.db.read() as db:
+            self.assertEqual(db.execute('SELECT COUNT(*) AS count FROM model_concurrency').fetchone()['count'], 0)

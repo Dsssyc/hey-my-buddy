@@ -7,8 +7,36 @@ from . import schemas
 from .db import canonical_json
 from .errors import BoardError
 
-PATCH_FIELDS = frozenset({'profileSettings', 'preferenceChanges', 'annotationChanges', 'configuration'})
+PATCH_FIELDS = frozenset({'profileSettings', 'preferenceChanges', 'annotationChanges', 'configuration', 'modelConcurrency'})
 GRANT_FIELDS = ('writerId', 'generation', 'writerToken', 'expectedRevision')
+
+#: The per-family limit a user may set, and the fields one patch entry accepts.
+#: ``active`` and every other derived field are rejected: occupancy is observation,
+#: never input. There is no effort dimension — effort variants share one family.
+MODEL_CONCURRENCY_FIELDS = frozenset({'adapter', 'provider', 'model', 'limit'})
+
+
+def _model_concurrency_changes(params: dict) -> list[dict]:
+    """Validate the ``modelConcurrency`` patch: family tuples and limits only."""
+    values = params.get('modelConcurrency', [])
+    if not isinstance(values, list) or len(values) > 200:
+        raise BoardError('INVALID_ARGUMENT', 'modelConcurrency must contain at most 200 patches')
+    seen: set[tuple[str, str, str]] = set()
+    for value in values:
+        if not isinstance(value, dict):
+            raise BoardError('INVALID_ARGUMENT', 'modelConcurrency entries must be objects')
+        schemas.reject_unknown(value, MODEL_CONCURRENCY_FIELDS, 'modelConcurrency')
+        family = tuple(
+            schemas.required_string(value, name, max_length=256)
+            for name in ('adapter', 'provider', 'model')
+        )
+        if family in seen:
+            raise BoardError('INVALID_ARGUMENT', 'modelConcurrency repeats a model family')
+        seen.add(family)
+        limit = value.get('limit')
+        if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= 32:
+            raise BoardError('INVALID_ARGUMENT', 'limit must be an integer between 1 and 32')
+    return values
 
 
 def require_writer_kind(kind: str) -> None:
@@ -46,6 +74,7 @@ def publish(evaluation, connection, *, revision: int, writer, now: str, params: 
     settings = _changes(params, 'profileSettings', {'profileId', 'enabled'})
     preferences = _changes(params, 'preferenceChanges', {'profileId', 'mode', 'reason'})
     annotations = _changes(params, 'annotationChanges', {'profileId', 'text'})
+    model_limits = _model_concurrency_changes(params)
     profiles = {}
     for entry in settings + preferences + annotations:
         profile_id = entry['profileId']
@@ -85,6 +114,26 @@ def publish(evaluation, connection, *, revision: int, writer, now: str, params: 
         else:
             connection.execute('INSERT INTO evaluation_annotations(profile_id,text,revision,updated_at) VALUES(?,?,?,?) ON CONFLICT(profile_id) DO UPDATE SET text=excluded.text,revision=excluded.revision,updated_at=excluded.updated_at', (entry['profileId'], text, revision, now))
     configuration_revision = int(evaluation._state(connection)['configuration_revision'])
+    for entry in model_limits:
+        # A family setting is independent of profile availability: it survives
+        # discovery marking a model unavailable and applies again when the family
+        # returns. Only the named families are touched; unrelated settings and
+        # fields keep their stored values.
+        connection.execute(
+            'INSERT INTO model_concurrency(adapter,provider,model,concurrency_limit,updated_revision,created_at,updated_at)'
+            ' VALUES(?,?,?,?,?,?,?)'
+            ' ON CONFLICT(adapter,provider,model) DO UPDATE SET concurrency_limit=excluded.concurrency_limit,'
+            ' updated_revision=excluded.updated_revision, updated_at=excluded.updated_at',
+            (
+                entry['adapter'],
+                entry['provider'],
+                entry['model'],
+                entry['limit'],
+                revision,
+                now,
+                now,
+            ),
+        )
     if 'configuration' in provided:
         configuration = evaluation._validate_configuration(params['configuration'])
         profile_id = configuration['decisionProfileId']
@@ -96,7 +145,13 @@ def publish(evaluation, connection, *, revision: int, writer, now: str, params: 
                 raise BoardError('UNSUPPORTED', 'This configuration has no verified decision capability')
         configuration_revision += 1
         connection.execute('UPDATE evaluation_state SET decision_profile_id=?,configuration_revision=? WHERE id=1', (profile_id, configuration_revision))
-    counts = {'profileSettings': len(settings), 'preferenceChanges': len(preferences), 'annotationChanges': len(annotations), 'provided': sorted(provided)}
+    counts = {
+        'profileSettings': len(settings),
+        'preferenceChanges': len(preferences),
+        'annotationChanges': len(annotations),
+        'modelConcurrency': len(model_limits),
+        'provided': sorted(provided),
+    }
     connection.execute('INSERT INTO evaluation_revisions(revision,kind,writer_id,actor,counts_json,created_at) VALUES(?,?,?,?,?,?)', (revision, 'human', writer['writer_id'], writer['writer_id'], canonical_json(counts), now))
     connection.execute('UPDATE evaluation_state SET table_revision=?,updated_at=? WHERE id=1', (revision, now))
     return {'revision': revision, 'configurationRevision': configuration_revision, 'counts': counts}

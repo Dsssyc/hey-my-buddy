@@ -1,8 +1,12 @@
-"""Lane classification and managed worker-pool identity.
+"""Model-family admission constants and managed worker-pool identity.
 
-Two facts must stay identical in the store and the daemon: which execution lane an
-adapter belongs to, and the stable IDs of the daemon's generic pool. Both live here
-so there is exactly one scheduler, one naming rule and no second job engine.
+Two facts must stay identical in the store and the daemon: how a model family and
+its limits are derived, and the stable IDs of the daemon's generic pool. Both live
+here so there is exactly one scheduler, one naming rule and no second job engine.
+
+ADR-011 removed the separate business/decision lanes: routing and execution share
+one machine-wide ceiling and the same per-family counters. A model family is the
+exact adapter/provider/model tuple; effort variants share one limit.
 
 Pool *ownership* is deliberately not inferred from these names: the daemon records
 the exact IDs it started in its private manifest (``worker-pool.json``) and only
@@ -16,37 +20,62 @@ from __future__ import annotations
 
 from . import schemas
 
-#: The internal adapter whose attempts always have their own reserved lane.
+#: The internal adapter whose model tuple is resolved from the configured decision
+#: profile at claim time, frozen onto the attempt and quota-checked before the
+#: selection reader is admitted.
 DECISION_ADAPTER = "decision"
 
-LANE_BUSINESS = "business"
-LANE_DECISION = "decision"
-LANES = (LANE_BUSINESS, LANE_DECISION)
+#: One machine-wide concurrent-attempt ceiling (BUDDY_MAX_CONCURRENT).
+TOTAL_CONCURRENCY_DEFAULT = 8
+TOTAL_CONCURRENCY_MIN = 1
+TOTAL_CONCURRENCY_MAX = 32
 
-#: Queue-reason names. The business lane keeps the historical ``capacity`` name so
-#: existing clients and receipts keep their meaning; the decision lane is explicit
-#: so an operator can tell which limit is holding the work.
-REASON_BUSINESS_CAPACITY = "capacity"
-REASON_DECISION_CAPACITY = "decision-capacity"
+#: Per-family concurrent-attempt limit bounds. Families without an explicit user
+#: setting use the default; effort never widens or narrows the family.
+MODEL_LIMIT_DEFAULT = 2
+MODEL_LIMIT_MIN = 1
+MODEL_LIMIT_MAX = 32
+
+#: Queue-reason names. ``capacity`` keeps the historical name for the machine-wide
+#: ceiling so existing clients and receipts keep their meaning; a full model family
+#: is explicit so an operator can tell which family limit is holding the work.
+REASON_TOTAL_CAPACITY = "capacity"
+REASON_MODEL_CAPACITY = "model-capacity"
 
 #: The worker ID every pool falls back to when the configured prefix is not a valid
 #: worker identity. A malformed environment value is never turned into a path.
 DEFAULT_WORKER_PREFIX = "local"
 
 
-def lane_for_adapter(adapter: object) -> str:
-    """The lane an adapter belongs to.
+def clamp_total(value: int) -> int:
+    """The machine-wide ceiling as a bounded integer."""
+    return max(TOTAL_CONCURRENCY_MIN, min(int(value), TOTAL_CONCURRENCY_MAX))
 
-    Only ``task.adapter == 'decision'`` is the decision lane; every other adapter,
-    including ``external``/``command``, an unresolved adapter and the coding
-    harnesses, counts as business work.
+
+def clamp_model_limit(value: int) -> int:
+    """A per-family limit as a bounded integer."""
+    return max(MODEL_LIMIT_MIN, min(int(value), MODEL_LIMIT_MAX))
+
+
+def model_family(spec: dict) -> tuple[str, str, str] | None:
+    """The model family a specification will consume, or ``None`` when it has none.
+
+    The family is the exact adapter/provider/model tuple. Partial configurations and
+    model-less work (``command``/``external``, an unresolved governed run) return
+    ``None``: they are admitted against the machine-wide ceiling only. A governed
+    run's effective specification already merges the resolved execution
+    configuration over the immutable original request, so this is the tuple the
+    attempt will actually run with.
     """
-    return LANE_DECISION if adapter == DECISION_ADAPTER else LANE_BUSINESS
-
-
-def capacity_reason(lane: str) -> str:
-    """The queue reason that names the full lane."""
-    return REASON_DECISION_CAPACITY if lane == LANE_DECISION else REASON_BUSINESS_CAPACITY
+    if not isinstance(spec, dict):
+        return None
+    adapter = spec.get("adapter")
+    provider = spec.get("provider")
+    model = spec.get("model")
+    if not (isinstance(adapter, str) and adapter and isinstance(provider, str) and provider
+            and isinstance(model, str) and model):
+        return None
+    return (adapter, provider, model)
 
 
 def valid_worker_id(value: object) -> str | None:

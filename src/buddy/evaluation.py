@@ -687,8 +687,18 @@ class EvaluationStore:
             sample_counts = {
                 profile_id: self._sample_count(connection, profile_id) for profile_id in profile_ids
             }
-            unavailable_count = connection.execute("SELECT COUNT(*) FROM evaluation_profiles WHERE available=0").fetchone()[0]
+            unavailable_count = connection.execute(
+                "SELECT COUNT(*) AS count FROM evaluation_profiles WHERE available=0"
+            ).fetchone()["count"]
             gate = self._gate_view(connection, now)
+            # One row per model family represented in this response, with the
+            # effective limit (explicit setting or default) and the unresolved
+            # attempt count. Effort variants collapse into their shared family.
+            families = {
+                (profile["adapter"], profile["provider"], profile["model"])
+                for profile in profiles
+            }
+            model_concurrency = self.board.model_capacity_rows(connection, families)
         tasks = self.board.task_list({"limit": 100, "offset": 0})
         return {
             "csrfToken": "",
@@ -699,6 +709,7 @@ class EvaluationStore:
                 "decisionProfileId": state["decision_profile_id"],
             },
             "profiles": profiles,
+            "modelConcurrency": model_concurrency,
             "unavailableProfileCount": unavailable_count,
             "preferences": preferences,
             "annotations": annotations,

@@ -18,7 +18,7 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Iterator
 
-SCHEMA_VERSION = 10
+SCHEMA_VERSION = 11
 DB_FILE = "board.sqlite3"
 SECRET_KEY = "capability_secret"
 CAPABILITY_VERSION = 1
@@ -104,6 +104,14 @@ CREATE TABLE IF NOT EXISTS attempts (
     ownership           TEXT NOT NULL DEFAULT 'owned' CHECK (ownership IN ('owned','uncertain')),
     runtime_identity    TEXT,
     adapter             TEXT NOT NULL,
+    -- Frozen model-family identity (adapter/provider/model, no effort dimension).
+    -- Written once by the claim transaction that resolved it and never updated
+    -- afterwards, so a historical or shutdown-uncertain attempt can never change
+    -- which family's concurrency slot it occupies. NULL for model-less work
+    -- (command/external) which counts only against the machine-wide ceiling.
+    model_adapter       TEXT,
+    model_provider      TEXT,
+    model_model         TEXT,
     log_paths           TEXT NOT NULL DEFAULT '{}',
     result_json         TEXT,
     result_command_id   TEXT,
@@ -126,6 +134,8 @@ CREATE INDEX IF NOT EXISTS attempts_task_idx ON attempts(task_id, generation);
 CREATE UNIQUE INDEX IF NOT EXISTS attempts_effective_unique ON attempts(task_id)
     WHERE execution_state IN ('starting','executing','finalizing','uncertain');
 CREATE INDEX IF NOT EXISTS attempts_active_idx ON attempts(execution_state);
+CREATE INDEX IF NOT EXISTS attempts_model_family_idx
+    ON attempts(model_adapter, model_provider, model_model) WHERE model_model IS NOT NULL;
 
 CREATE TABLE IF NOT EXISTS workers (
     worker_id           TEXT PRIMARY KEY,
@@ -557,6 +567,24 @@ CREATE TABLE IF NOT EXISTS evaluation_maintenance_checkpoints (
     scope        TEXT PRIMARY KEY,
     review_seq   INTEGER NOT NULL,
     updated_at   TEXT NOT NULL
+);
+""",
+    # User-owned per-family concurrent-attempt limits (ADR-011). A family is the
+    # exact adapter/provider/model tuple; effort variants share one row. The row
+    # is independent of ``evaluation_profiles`` availability on purpose: a setting
+    # survives discovery marking a model unavailable, and a family without a row
+    # uses the code-owned default. Only the authenticated console writer patch in
+    # ``user_policy.py`` ever writes here.
+    """
+CREATE TABLE IF NOT EXISTS model_concurrency (
+    adapter           TEXT NOT NULL,
+    provider          TEXT NOT NULL,
+    model             TEXT NOT NULL,
+    concurrency_limit INTEGER NOT NULL DEFAULT 2 CHECK (concurrency_limit BETWEEN 1 AND 32),
+    updated_revision  INTEGER NOT NULL,
+    created_at        TEXT NOT NULL,
+    updated_at        TEXT NOT NULL,
+    PRIMARY KEY (adapter, provider, model)
 );
 """,
 )

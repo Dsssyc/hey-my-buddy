@@ -147,6 +147,19 @@ class DecisionCoordinator:
 
         return DecisionAdapter().available()
 
+    def selector_family(self, connection: sqlite3.Connection) -> tuple[str, str, str] | None:
+        """The model family the fixed decision profile will actually consume.
+
+        Resolved inside the caller's claim transaction from the same configured
+        profile :meth:`claim` admits, so the store can quota-check the selector's
+        own family *before* the claim commits and before the selection reader is
+        granted, and freeze that exact tuple onto the routing attempt.
+        """
+        profile_row, _reason = self._decision_profile(connection)
+        if profile_row is None:
+            return None
+        return (profile_row["adapter"], profile_row["provider"], profile_row["model"])
+
     # -- request-time policy -------------------------------------------------
     def _decision_profile(self, connection: sqlite3.Connection) -> tuple[sqlite3.Row | None, str | None]:
         profile_id = self._state(connection)["decision_profile_id"]

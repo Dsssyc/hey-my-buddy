@@ -250,10 +250,11 @@ class BoardService(_BaseResource):
                 "runtimeIdentity": identity.get("identity"),
                 "runtimeStable": bool(identity.get("stable")),
                 "runtimeContentId": identity.get("contentId"),
-                # The aggregate execution limit is the two lanes added together; the
-                # lane limits themselves are explicit so a caller never has to infer
-                # which capacity refused a claim.
-                "maxConcurrent": self.store.max_concurrent + self.store.decision_concurrent,
+                # One machine-wide concurrent-attempt ceiling shared by routing and
+                # execution; ``capacity.models`` reports the per-family limits and
+                # occupancy so a caller never has to infer which limit refused a
+                # claim.
+                "maxConcurrent": self.store.max_concurrent,
                 "capacity": self.store.capacity_report(),
                 "managedWorkerIds": list(pool.get("workerIds") or []),
                 "unstartedWorkerIds": list(pool.get("unstartedWorkerIds") or []),
@@ -436,7 +437,21 @@ class BoardService(_BaseResource):
 
     def model_profiles(self, request_json: str) -> str:
         from . import catalog_store
-        return self._guard("model.profiles", request_json, lambda params: catalog_store.profiles(self.evaluation, params))
+
+        def handler(params: dict) -> dict:
+            response = catalog_store.profiles(self.evaluation, params)
+            # One modelConcurrency row per model family represented on this page,
+            # including defaults for families without an explicit override. ``active``
+            # counts unresolved attempts and is observation only.
+            families = {
+                (profile["adapter"], profile["provider"], profile["model"])
+                for profile in response["profiles"]
+            }
+            with self.store.db.read() as connection:
+                response["modelConcurrency"] = self.store.model_capacity_rows(connection, families)
+            return response
+
+        return self._guard("model.profiles", request_json, handler)
 
     # -- governed workflow --------------------------------------------------
     def workflow_submit(self, request_json: str) -> str:
