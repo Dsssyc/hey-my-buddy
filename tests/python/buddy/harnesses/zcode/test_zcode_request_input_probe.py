@@ -214,6 +214,7 @@ def handle(message):
     if method == "runtime/capabilities":
         send({"id": request_id, "result": {"independentPlanState": True}})
     elif method == "session/create":
+        assert "titleGenerationEnabled" not in params
         workspace_cwd = params["workspace"]["workspacePath"]
         ask_runtime_preferences()
         send({"id": request_id, "result": snapshot()})

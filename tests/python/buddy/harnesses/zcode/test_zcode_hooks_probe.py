@@ -78,6 +78,30 @@ class EnvironmentIsolationTests(unittest.TestCase):
             with self.assertRaises(SystemExit):
                 probe.build_private_environment(Path(tmp), require_provider=True)
 
+    def test_free_probe_fixture_replaces_inherited_home_and_provider_pins(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            bundle = Path(tmp) / "fake-zcode.cjs"
+            bundle.write_text("")
+            fixture = FreeProbePipelineTests("test_gather_versions_reports_native_identities")
+            inherited = {"HOME": str(Path(tmp) / "user-home"),
+                         "ZCODE_DATA_BASE_DIR": str(Path(tmp) / "user-data"),
+                         "ZCODE_PERSONAL_PROVIDER_CONFIG_FILE": str(Path(tmp) / "user-provider.json")}
+            with mock.patch.dict(os.environ, inherited), mock.patch.object(
+                FreeProbePipelineTests, "BUNDLE", str(bundle)
+            ), mock.patch.object(probe, "resolve_node", return_value="fixture-node"):
+                try:
+                    fixture.setUp()
+                    home = Path(os.environ["HOME"])
+                    self.assertTrue(home.is_relative_to(fixture.private_root))
+                    self.assertEqual(os.environ["USERPROFILE"], str(home))
+                    self.assertEqual(os.environ["ZCODE_DATA_BASE_DIR"], str(home))
+                    self.assertNotIn("ZCODE_PERSONAL_PROVIDER_CONFIG_FILE", os.environ)
+                    environment = probe.build_private_environment(Path(tmp) / "work", require_provider=False)
+                    self.assertEqual(environment["HOME"], str(home))
+                    self.assertNotIn("ZCODE_PERSONAL_PROVIDER_CONFIG_FILE", environment)
+                finally:
+                    fixture.doCleanups()
+
 
 class SnapshotTests(unittest.TestCase):
     def test_snapshot_and_diff_detect_every_change_kind(self):
@@ -168,6 +192,16 @@ class FreeProbePipelineTests(unittest.TestCase):
     def setUp(self):
         if not Path(self.BUNDLE).exists() or not probe.resolve_node(None):
             self.skipTest("native bundle or node runtime not present")
+        temporary = tempfile.TemporaryDirectory(prefix="zcode-hooks-native-test-")
+        self.addCleanup(temporary.cleanup)
+        self.private_root = Path(temporary.name)
+        home = self.private_root / "home"
+        home.mkdir(mode=0o700)
+        environment = {key: value for key, value in os.environ.items()
+                       if not key.startswith(("BUDDY_", "ZCODE_", "ZAI_", "ZHIPU_", "GLM_"))
+                       and key not in ("VIRTUAL_ENV", "UV_PROJECT_ENVIRONMENT")}
+        environment.update(HOME=str(home), USERPROFILE=str(home), ZCODE_DATA_BASE_DIR=str(home))
+        self.enterContext(mock.patch.dict(os.environ, environment, clear=True))
 
     def test_free_probe_pipeline_is_isolated_and_selftested(self):
         with tempfile.TemporaryDirectory() as tmp:

@@ -375,7 +375,7 @@ def run_probe(root: Path, *, cwd: Path, provider: str | None, model: str | None,
         connection.call("runtime/capabilities", {})
         phase("capabilities")
         snapshot = connection.call("session/create", {"workspace": {"workspacePath": str(cwd), "workspaceKey": str(cwd)},
-                                                      "mode": "yolo", "titleGenerationEnabled": False})
+                                                      "mode": "yolo"})
         session_id = (snapshot.get("session") or {}).get("sessionId")
         if not isinstance(session_id, str) or not session_id:
             raise NativeError("no-session", "the app server created no session")

@@ -2,9 +2,9 @@
 
 本说明对应原输入提交 `71f0a3f6` 与第一回合封存 `e51f0e12` 后 Host 的续接决定，仅是实现方的说明与验证记录，等待 Host 验收；不是验收结论。版本与 schema 未变，没有改 Claude Code、Codex、DSH、角色代码、共享发现的环境白名单或共享计费规则，没有启动服务、Worker 或真实 ZCode，没有读用户自己的配置或凭据，没有模型调用。
 
-## Host 续接决定的四项最终改动
+## Host 首次续接决定的四项更正
 
-上一实现回合封存为 `b00d4ada` 的四项更正如下，本收尾回合只检查和验证已有实现、补记本说明，没有再改设计或实现代码。
+第二实现回合封存为 `b00d4ada` 的四项更正如下；第三回合封存 `ca1cad90` 只检查和验证已有实现、补记本说明，没有再改设计或实现代码。
 
 1. 内置供应方文件改为定位安装中的原文件，绝不复制，且缺失在可用性与准备边界报真实不可用；个人文件由 ZCode 自己定位，计费读取失败只标未知。
 2. 删除 `ZCODE_MODEL_TELEMETRY_ENABLED=0`，按 Host 传达的用户决定让遥测跟 ZCode 自己的设置走。
@@ -12,6 +12,16 @@
 4. 修正非密钥供应方准备测试的成功判据，要求调用成功并产生输入文件；模拟 CLI 与版本包装命令补齐原生必需的合成内置文件布局。
 
 收尾检查确认 `check_preparation` 只调用 `cli_command` 与 `provider_paths`；运行模块、协议泵与探针里均没有 `SUPPORTED_ACCESS`、`unsupported-provider`、`restored-api-key-only` 或 `snapshot_provider_files`，临时恢复的密钥类拒绝没有留在源码里。四项更正的依据与边界分别写在下文，Host 先前报告的真实探测结果仍只作为 Host 提供的证据，不冒充本回合实测。
+
+## 本次续接：标题用原生默认，核对真实 CLI 测试隔离
+
+Host 在 `ca1cad90` 后传达用户的决定：交给 harness 的内容清单是穷尽的，省一次模型调用也不是例外。本次从发现、带会话工具的 Worker 与最终消息载体的两种范围中删除 `titleGenerationEnabled=False`，问询实验与本说明的握手探针同步删除该字段。会话标题跟 ZCode 原生默认走；空工具清单、空会话 MCP、off-peak 与 dynamic workflow 的关闭仍表达无工具权限，不改；没有为可能出现的标题事件增加处理。模拟原生程序在收到建会话参数时明确断言没有标题覆盖，带工具的模拟程序对建会话与续接参数都作同一检查。
+
+Host 在本次续接输入中报告：真实 ZCode 0.16.9 无须另外指定就能以发现、Worker、无工具三种方式启动，目录的 12 个四段名字与原有目录相同，启动前后用户供应方文件与应用包内置文件均未改写；额度用尽时 Worker 与无工具路径均带回原生失败原因和额度事实，回合里的记忆与搜索答复来自用户设置。这些是 Host 对标题覆盖删除前源码的实测，本实现方没有执行真实 CLI 或读取用户文件；删除覆盖后、原生生成标题时的无工具真实调用留给 Host 复核，不能用模拟程序的通过代替。
+
+`InstalledZcodeTests.setUp` 先调用 `test_zcode.ZcodeFixtureCase.setUp`，后者在测试临时根下创建 `native-user-home`，用它覆盖环境里的 HOME、USERPROFILE 和 `ZCODE_DATA_BASE_DIR`；真实 CLI 测试随后把数据根换成同一临时根下的 `account-empty`，其包装脚本只指定临时根下的合成个人供应方文件与内置测试副本。`ExecutionContext.environment` 带入这些值，控制器再经现有原生环境白名单把 HOME、USERPROFILE、数据根带给 CLI，所以真实 CLI 不会从继承的主目录读写用户 `~/.zcode`。包装脚本的 bundled 内置路径仍是应用包里的公开内置文件；它不是用户个人配置。该测试需要真实 CLI、loopback HTTP 服务、macOS sandbox-exec 和角色启动器，本回合没有运行它。
+
+另两条真实 CLI 测试是 `test_zcode_hooks_probe.FreeProbePipelineTests.test_free_probe_pipeline_is_isolated_and_selftested` 与 `test_gather_versions_reports_native_identities`；核对发现它们原来继承主目录，版本读取也直接继承整个测试进程环境。本次只在这组测试的 setUp 清除继承的 `BUDDY_`、`ZCODE_`、`ZAI_`、`ZHIPU_`、`GLM_` 配置/供应方变量及虚拟环境固定项，并把 HOME、USERPROFILE、数据根换成该测试临时根下的私有 home。`gather_versions` 的子进程因此继承私有 HOME 与数据根；`build_private_environment` 在 hooks 探针的版本与 plugins list 子进程里只透传这个私有 HOME，不透传数据根，ZCode 默认数据位置也就落在私有 HOME 的 `.zcode`，个人供应方文件变量为空。新增的非真实 CLI 回归以合成 bundle 初始化同一测试 fixture，证明继承的 HOME、数据根与个人供应方变量被替换或清除；没有修改 hooks 探针的实验行为。其余 ZCode 单元测试使用合成可执行文件或协议重放，启动命令由私有 fixture 显式固定；旧的跨 harness 安装发现测试按 Host 决定由 DSH 微任务处理，本批不改。
 
 ## 删除与保留
 
@@ -40,7 +50,7 @@
 | `BUDDY_ZCODE_CLI` / `BUDDY_NODE` | 沿用开发命令选择，不传给原生 | 安装后的命令仍来自服务选定的运行时 |
 | locale、代理、CA 路径与其他共用白名单项 | 未改 | 不在本批改共享发现规则 |
 
-会话请求的 `yolo` 保留为当前 Worker 权限；快速调用的空工具清单、空会话 MCP、off-peak 与 dynamic workflow 关闭保留为无工具范围的表达。`titleGenerationEnabled=False` 保留，避免任务以外的标题模型调用。反向 `session/requestRuntimePreferences` 现在使用下面两项用户设置；无工具范围只收紧搜索。自动回答用户问题仍关闭，`modelContextBudgetStrategy=preflight-v1` 仍为当前宿主常量：Host 已确认应用设置里没有该策略键。
+会话请求的 `yolo` 保留为当前 Worker 权限；快速调用的空工具清单、空会话 MCP、off-peak 与 dynamic workflow 关闭保留为无工具范围的表达。建会话不传标题开关，标题用原生默认。反向 `session/requestRuntimePreferences` 现在使用下面两项用户设置；无工具范围只收紧搜索。自动回答用户问题仍关闭，`modelContextBudgetStrategy=preflight-v1` 仍为当前宿主常量：Host 已确认应用设置里没有该策略键。
 
 ### 文件逐项
 
@@ -59,7 +69,7 @@
 
 ## 供应方名字与计费
 
-改前目录的供应方名字来自 `settings.model.available[].ref.providerId`，只是经过访问类型筛选；改后仍来自同一字段，删除筛选，`providerLabel` 仍只作显示名称。模型 ID 仍是 `ref.modelId`，推理强度仍是原生 `reasoning.levels[].value`，harness 仍是 `zcode`。原来已被接受的供应方不会改名；同一份配置内容交给同一原生 CLI，四段身份的来源没有变。Host 在第二回合输入中报告：用真实 ZCode 0.16.9、只补内置定位的无模型探针读到 12 个四段名字，与日常记录全部一致，配置读回等于请求；这是 Host 的探测证据，本实现方没有读日常看板或执行真实 CLI。最终原文件定位与新偏好仍须由 Host 复核，模拟 CLI 不证明真实接口。
+改前目录的供应方名字来自 `settings.model.available[].ref.providerId`，只是经过访问类型筛选；改后仍来自同一字段，删除筛选，`providerLabel` 仍只作显示名称。模型 ID 仍是 `ref.modelId`，推理强度仍是原生 `reasoning.levels[].value`，harness 仍是 `zcode`。原来已被接受的供应方不会改名；同一份配置内容交给同一原生 CLI，四段身份的来源没有变。Host 在第二回合输入中报告：用真实 ZCode 0.16.9、只补内置定位的无模型探针读到 12 个四段名字，与日常记录全部一致，配置读回等于请求；这是 Host 的探测证据，本实现方没有读日常看板或执行真实 CLI。Host 在本次续接输入中已报告原文件定位与用户偏好的真实复核结果，见上节；模拟 CLI 不证明真实接口。
 
 没有增加名为 `unknown` 的供应方或向原生 setter 传入伪造名字。ZCode 这条接口报告的是每个可用模型自己的 `ref.providerId`，没有依赖“缺省供应方”的目录分支；用户的默认选择来自原生 `settings.model.current.providerId`，配置核对使用显式请求与原生读回。缺少这些身份事实时，本批没有猜一个通用内置名字；真实 CLI 若出现这样的形状，交 Host 根据原生证据决定。
 
@@ -106,7 +116,7 @@ for mode in ("discovery", "worker", "no-tool"):
     cwd.mkdir(parents=True, mode=0o700)
     invocation = private / "invocation"
     native = private / "native"
-    params = {"titleGenerationEnabled": False}
+    params = {}
     if mode == "worker":
         identity = {"taskId": str(uuid.uuid4()), "attemptId": str(uuid.uuid4()),
                     "generation": 1, "turnId": str(uuid.uuid4())}
@@ -156,15 +166,17 @@ print(root)  # 保留本次证据供 Host 看；没有确认停止前不删除�
 
 审阅调用没有变更过的启动路径：`ZcodeAdapter.read_only_structured=False`，`local_read_only_check()` 应仍返回 `eligible=False`、`readonly-worker-carrier-unimplemented`；审阅在资格边界停下，不启动 CLI。本批没有另造审阅执行载体。续接的模型前握手可在上面 Worker 会话关闭后、同一 storage/DB 环境中新起原生进程，调用 `session/resume` 并核对同一 sessionId、cwd 和 setter 读回；这只验证原生续接接口，完整绑定续接测试仍由下节的 Worker 测试覆盖。
 
+三个建会话请求均不含 `titleGenerationEnabled`，不再要求原生读回标题关闭；握手探针不发送 `session/send`，标题生成期间的事件与无工具真实调用是否能正常结算，由 Host 在最终源码上实测，探针本身不证明这一点。
+
 ## 实现方验证与交接
 
-第一回合可运行集合 119 项通过（30.715 秒，退出码 0）；最终收尾回合的可运行集合 156 项通过，具体结果见本节末尾，历史结果不替代这次验证。文中的 Host 无模型探针仅做了 Python 语法解析，本实现方没有执行。使用 Host 指定的只读 Python，`PYTHONPATH=src:tests/python`，清除 AGENTS.md 的运行时、Worker、agent、虚拟环境变量及 `BUDDY_`、`ZCODE_`、`ZAI_`、`ZHIPU_`、`GLM_`、`ANTHROPIC_`、`CLAUDE_CODE_`、`C2_` 前缀，再显式设置 `BUDDY_DEV_SOURCE=1`。`cli/checks.py` 与 `tests/python/support.py` 只按任务要求增加 ZCode 与相关供应方前缀的测试隔离，没有修改产品环境构造；ZCode 的模拟 CLI 测试也清除这些继承变量，并把 HOME、USERPROFILE 与原生数据根设为私有合成目录。
+第一回合可运行集合 119 项通过（30.715 秒，退出码 0）；第三回合收尾的可运行集合 156 项通过，具体结果见下文，历史结果不替代本次验证。文中的 Host 无模型探针仅做了 Python 语法解析，本实现方没有执行。使用 Host 指定的只读 Python，`PYTHONPATH=src:tests/python`，清除 AGENTS.md 的运行时、Worker、agent、虚拟环境变量及 `BUDDY_`、`ZCODE_`、`ZAI_`、`ZHIPU_`、`GLM_`、`ANTHROPIC_`、`CLAUDE_CODE_`、`C2_` 前缀，再显式设置 `BUDDY_DEV_SOURCE=1`。`cli/checks.py` 与 `tests/python/support.py` 只按任务要求增加 ZCode 与相关供应方前缀的测试隔离，没有修改产品环境构造；ZCode 的模拟 CLI 测试也清除这些继承变量，并把 HOME、USERPROFILE 与原生数据根设为私有合成目录。
 
 本环境可运行的检查集合是：`buddy.harnesses.zcode.test_native_config`、`test_zcode_protocol`、`test_zcode_request_input_probe` 全文件；`test_native_run.FastSeamTests`、`NoToolReverseRequestTests`、`DiscoveryStopTests`；`test_no_tool_zcode.NoToolPolicyTests`；`test_zcode_tool_evidence.ProjectionTests`、`ProjectionOrderingTests`；`cli.test_checks_cleanup.ChecksEnvironmentTests`；`cli.test_support_cleanup.FixtureCleanupTests.test_child_environment_drops_inherited_ownership_and_credentials`。新测试用私有原生配置路径与带点号、空格、非 ASCII 字符的 CLI/cwd，覆盖非密钥供应方发现与选择、计费未知、没有快照、私有会话位置、失败归因/额度、成功用量与格式纠正的累计用量。
 
 第一回合还尝试了 `test_no_tool_zcode.NoToolFakeProtocolTests` 与 `test_zcode_tool_evidence.NoToolReceiptWiringTests`：所有经共享角色控制器启动的这些用例都未得到有效结果，报告 `invalid-native-result`，stderr 为空，取消用例没有等到模拟 CLI 收到提示词；没有证据把它归因于 ZCode 原生接口，不改共享角色或启动器来绕过。按任务中真实启动器的环境边界交 Host 在验收环境重跑，以上本地失败不算通过；Host 在第二回合输入中报告这些控制器测试均已通过，完整检查 217 个文件中 216 个通过（3,654 项），前端全量通过，唯一失败是下述准备测试断言。直接运行模块的新测试不经过这个控制器。
 
-最终改动后仍由 Host 重跑 `test_zcode.py`、`test_native_run.WorkerSeamTests` 与 `ProducerContractTests`、`test_zcode_native.InstalledZcodeTests`、`test_zcode_checkpoint.py`、`test_zcode_inquiry.py`、`test_zcode_tool_refusals.py`、`buddy.roles.test_registered_run_wiring`、`blackboard.evaluation.test_other_native_observations` 的 ZCode 控制器用例，以及 `cli.test_checks_cleanup`、`cli.test_support_cleanup` 剩余需要私有服务/IPC 的用例；其中已存的精确续接回归要保持通过。完整 Python 检查、真实 Worker/Router 回合与停止故障注入按原任务由 Host 做。第一回合原文件定位缺失由 Host 无模型探针查出；最终原文件定位与偏好答复的真实 CLI 复核仍由 Host 执行，没有前端改动。
+最终改动后仍由 Host 重跑 `test_zcode.py`、`test_native_run.WorkerSeamTests` 与 `ProducerContractTests`、`test_zcode_native.InstalledZcodeTests`、`test_zcode_checkpoint.py`、`test_zcode_inquiry.py`、`test_zcode_tool_refusals.py`、`buddy.roles.test_registered_run_wiring`、`blackboard.evaluation.test_other_native_observations` 的 ZCode 控制器用例，以及 `cli.test_checks_cleanup`、`cli.test_support_cleanup` 剩余需要私有服务/IPC 的用例；其中已存的精确续接回归要保持通过。完整 Python 检查、真实 Worker/Router 回合与停止故障注入按原任务由 Host 做。第一回合原文件定位缺失由 Host 无模型探针查出；原文件定位与偏好答复的真实 CLI 复核由 Host 在本次续接输入中报告，标题取消后的真实回合仍由 Host 复核，没有前端改动。
 
 第二回合修正 `test_zcode.ZcodeAdapterTests.test_oauth_provider_is_not_rejected_during_preparation`：`prepare` 成功返回 None，不断言返回值，改为要求调用不拒绝并产生本回合的输入文件。正常代码下该测试通过；在仅测试进程中临时恢复按访问类型拒绝的准备逻辑时，该测试因 restored-api-key-only 错误而失败，退出后 mock 自动恢复，没有改源文件。模拟原生 CLI 的安装布局补上必需的合成内置文件；版本测试里的 ZCode 包装命令也使用该合成布局，不增加对其他 harness 的测试配置或产品改动。
 
@@ -172,4 +184,8 @@ print(root)  # 保留本次证据供 Host 看；没有确认停止前不删除�
 
 第二组首次扩展为 32 项时，`cli.test_checks_cleanup.PrivateRootTeardownTests.test_teardown_removes_a_clean_private_root` 失败，失败证据明确为 `ps process enumeration failed; residue status is unknown` 两次，属于沙盒不能枚举进程，不是 ZCode 断言失败，没有修改检查运行器来绕过。该组另外两项 `test_teardown_preserves_evidence_when_a_supervisor_survives` 与 `test_teardown_preserves_evidence_when_a_daemon_survives` 虽显示通过，也有同样的观察问题，不能把它们当成在本环境完整验证了收尾；三项都交 Host 无沙盒重跑。首次 32 项的输出保留在 `tmp/adr030-batch3c-final-tests2.log`，后续 29 项只排除了这三项，没有更改源码或测试。
 
-Host 仍需完整运行上述启动器/IPC 用例，以及 `cli.test_checks_cleanup.PrivateRootTeardownTests` 全类和 `cli.test_support_cleanup.FixtureCleanupTests.test_cleanup_stops_cli_started_replacement_after_restart`、`test_private_state_context_stops_its_cli_started_service`；本回合没有尝试需要套接字、共享内存或真实角色启动器的用例。请用本说明的最终探针复核原文件定位、两项用户偏好与无工具收紧事实，完成原任务规定的真实回合、续接、停止故障注入与整合后的完整检查，再记录验收结论；遥测与运行偏好的归类决定已经落实，共享环境白名单、模型目录/计费共享部分和角色代码不需要本批改动。
+Host 仍需完整运行上述启动器/IPC 用例，以及 `cli.test_checks_cleanup.PrivateRootTeardownTests` 全类和 `cli.test_support_cleanup.FixtureCleanupTests.test_cleanup_stops_cli_started_replacement_after_restart`、`test_private_state_context_stops_its_cli_started_service`；本回合没有尝试需要套接字、共享内存或真实角色启动器的用例。请用本说明的最终探针复核取消标题覆盖后的握手，完成原任务规定的真实回合、续接、停止故障注入与整合后的完整检查，再记录验收结论；遥测与运行偏好的归类决定已经落实，共享环境白名单、模型目录/计费共享部分和角色代码不需要本批改动。
+
+本次标题更正后的验证（2026-10-12）：可运行集合 158 项通过，第一组 139 项（36.162 秒，退出码 0），第二组完整的 `buddy.harnesses.test_runtime_version` 19 项（16.968 秒，退出码 0）；原始输出在 `tmp/adr030-batch3c-title-tests.log`、`tmp/adr030-batch3c-title-version-tests.log`，第一组的精确选择在 `tmp/adr030-batch3c-title-test-selection.txt`。第一组覆盖第三回合的 127 项集合，另完整运行 hooks 文件的 `RedactionTests`、`EnvironmentIsolationTests`、`SnapshotTests` 与 `HookAssemblyTests`；其中新增的 fixture 隔离回归没有启动真实 CLI。文中更新后的探针 Python 语法通过，源码和问询探针的出站建会话参数不含标题常量，`git diff --check` 通过。
+
+本次未运行的新增待验项是上文明确命名的两条 `FreeProbePipelineTests` 真实 CLI 用例；`InstalledZcodeTests` 及其他已列明的角色启动器/IPC 用例也仍交 Host，在最终标题默认行为上重跑。没有执行真实 ZCode、没有模型调用，没有新增标题事件处理，也没有触碰共享角色、发现白名单或 DSH 代码；请 Host 在最终源码上检查标题生成时的 Worker/无工具真实回合、更新后握手探针、真实 CLI 测试隔离与完整检查，再作验收。

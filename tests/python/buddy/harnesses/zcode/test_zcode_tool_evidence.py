@@ -60,12 +60,13 @@ for line in sys.stdin:
     if method == 'runtime/capabilities':
         send({'method':'startup/storageState','params':{'phase':'ready','elapsedMs':10}})
     if method == 'session/create':
+        assert 'titleGenerationEnabled' not in p
         if case == 'discovery' or case == 'native-config' and 'mcpServers' not in p:
-            assert p['toolAllowlist'] == [] and p['titleGenerationEnabled'] is False
+            assert p['toolAllowlist'] == []
         elif case in ('write-final', 'write-post-close'):
-            assert p.get('mode') == 'yolo' and p['mcpServers'] == [] and p['titleGenerationEnabled'] is False
+            assert p.get('mode') == 'yolo' and p['mcpServers'] == []
         else:
-            assert p['toolAllowlist'] == [] and p['titleGenerationEnabled'] is False and p['mcpServers'] == []
+            assert p['toolAllowlist'] == [] and p['mcpServers'] == []
             assert p['offPeakToolEnabled'] is False and p['dynamicWorkflowEnabled'] is False
         session += 1; workspace = p['workspace']; subscribed = False; closed = False; prompt_sent = False
         result = {'session':{'sessionId':f's-{session}','sessionKind':'interactive','workspace':workspace},

@@ -1116,7 +1116,7 @@ def _final_message_rounds(*, connection: NativeConnection, request: RunRequest, 
 
     input_text = request.input_text
     if no_tool:
-        create_params = {"titleGenerationEnabled": False, "toolAllowlist": [],
+        create_params = {"toolAllowlist": [],
                          "mcpServers": [], "offPeakToolEnabled": False,
                          "dynamicWorkflowEnabled": False}
     else:
@@ -1124,7 +1124,7 @@ def _final_message_rounds(*, connection: NativeConnection, request: RunRequest, 
         # final-message carrier over the session's own default tools;
         # the effective policy reports that honestly and the external
         # review eligibility is untouched.
-        create_params = {"mode": "yolo", "titleGenerationEnabled": False, "mcpServers": []}
+        create_params = {"mode": "yolo", "mcpServers": []}
     state.create_params = create_params
     while True:
         protocol_holder[:] = []
@@ -1172,8 +1172,7 @@ def _governed_turn(*, connection: NativeConnection, request: RunRequest, service
     mount = services.mount
     _check_service_descriptions(request, mount)
     mode, previous = _continuation_of(request)
-    create_params = {"mode": "yolo", "titleGenerationEnabled": False,
-                     "mcpServers": list(mount.mcp_servers)}
+    create_params = {"mode": "yolo", "mcpServers": list(mount.mcp_servers)}
     state.create_params = create_params
     snapshot = None
     if mode == "native-session":
@@ -1599,7 +1598,6 @@ def run_discovery(*, cwd: str, invocation_root: Path, native_root: Path, timeout
             spawn.connection.call("runtime/capabilities", {})
             workspace = {"workspacePath": cwd, "workspaceKey": cwd}
             snapshot = spawn.connection.call("session/create", {"workspace": workspace,
-                                                                "titleGenerationEnabled": False,
                                                                 "toolAllowlist": []})
             session_id = snapshot["session"]["sessionId"]
             version = spawn.version if spawn.version is not None else "unknown"
