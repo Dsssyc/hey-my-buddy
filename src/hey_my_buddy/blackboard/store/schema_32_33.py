@@ -147,6 +147,10 @@ def _manifests(connection):
             yield nested["workspaceManifest"]
 
 
+class _NotRepository(RuntimeError):
+    """Git reports that the old location no longer holds a repository."""
+
+
 def _git(repository: Path, *args: str, data: bytes | None = None) -> bytes:
     environment = {key: value for key, value in os.environ.items() if not key.startswith("GIT_")}
     environment.update(LC_ALL="C", GIT_OPTIONAL_LOCKS="0", GIT_TERMINAL_PROMPT="0")
@@ -169,7 +173,10 @@ def _git(repository: Path, *args: str, data: bytes | None = None) -> bytes:
                 f"stdout=''; stderr={str(error)!r}"
             ) from error
     if result.returncode:
-        raise RuntimeError(
+        error_type = RuntimeError
+        if any(line.startswith(b"fatal: not a git repository") for line in result.stderr.splitlines()):
+            error_type = _NotRepository
+        raise error_type(
             f"Git failed at {repository}: {' '.join(args)}; "
             f"stdout={result.stdout.decode('utf-8', errors='replace')!r}; "
             f"stderr={result.stderr.decode('utf-8', errors='replace')!r}"
@@ -224,7 +231,10 @@ def _mark_old_projects(manifests) -> None:
             [str(resolved), facts.st_ino], sort_keys=True, separators=(",", ":"),
             ensure_ascii=True).encode("utf-8")).hexdigest()
         if old_id == project_id:
-            _mark_project(repository, project_id)
+            try:
+                _mark_project(repository, project_id)
+            except _NotRepository:
+                continue
 
 
 def _json(value: dict) -> str:
