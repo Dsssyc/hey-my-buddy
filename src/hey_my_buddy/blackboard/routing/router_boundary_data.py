@@ -77,6 +77,8 @@ def router_trials(connection, row, *, now):
     """Every observed/dispatch item, with its own receipt; unknown stays null."""
     snapshot = router_sequence.request_snapshot(connection, row["decision_id"])
     if snapshot is None:
+        # Schema 15->16 did not backfill earlier decisions' frozen snapshots;
+        # retain this until the explicit upgrade converts or marks that stock.
         return []
     request = _json(row["requested_json"], {})
     facts = request if request.get("selectionRetry") else snapshot["facts"]
@@ -335,6 +337,10 @@ def routing_boundary(connection, row, *, now, run_id=None, revision=None,
             helper_policy=helper_policy, shutdown_confirmed=stopped, continuation_problem=problem,
             explicit_buddy=True)
     snapshot = router_sequence.request_snapshot(connection, row["decision_id"])
+    if snapshot is None:
+        # Schema 15->16 did not backfill earlier decisions' frozen snapshots;
+        # retain this until the explicit upgrade converts or marks that stock.
+        return None
     trials = router_trials(connection, row, now=now)
     code = row["reason_code"] or (request.get("routerProblem") or {}).get("code")
     current = [item for item in trials if item["taskId"] == row["decision_task_id"] and item["outcome"] == "answered"]
