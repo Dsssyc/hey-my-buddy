@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import json
 import os
-from pathlib import Path
 import subprocess
 import sys
 import unittest
@@ -59,20 +58,15 @@ class ColdStartPreflightTests(BoardTestCase):
             cwd=self.directory, env=environment, capture_output=True, text=True, encoding='utf-8', timeout=180)
         self.assertEqual(completed.returncode, 1, completed.stdout + completed.stderr)
         error = json.loads(completed.stdout)['error']
-        # The public Runtime retains the failed-start bind error in its barrier
-        # result. A completed shutdown with that error is not clean under the
-        # public example's criterion, so the probe must retain its namespace.
-        self.assertEqual(error['code'], 'LAUNCH_IO_ERROR', error)
-        self.assertEqual(error['details']['io_operation'], 'shutdown', error)
+        self.assertEqual(error['code'], 'LAUNCH_ACCESS_DENIED', error)
+        self.assertEqual(error['details']['io_operation'], 'bind', error)
+        self.assertIn('Operation not permitted', error['message'])
         outcome = error['details']['shutdownOutcome']
         self.assertIs(outcome['completed'], True)
         self.assertIn('Operation not permitted', outcome['runtime_barrier_error'])
-        namespace = Path(error['details']['path'])
-        self.assertEqual(namespace.parent, self.directory)
-        self.assertTrue(namespace.is_dir())
         self.assertFalse((self.directory / 'board.sqlite3').exists())
         self.assertFalse((self.directory / 'control.log').exists())
         self.assertFalse((self.directory / 'control-start.lock').exists())
-        self.assertEqual(list(self.directory.glob('.launch-ipc-*')), [namespace])
+        self.assertFalse(list(self.directory.glob('.launch-ipc-*')))
         self.assertFalse(list(self.directory.rglob('READY.json')))
 

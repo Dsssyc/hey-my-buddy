@@ -575,8 +575,8 @@ def upgrade(state: Path, *, skill_source: Path | None = None, skill_target: Path
                     if backed_up is not None:
                         with file_lock(state / 'control-daemon.lock', timeout=OWNER_LOCK_TIMEOUT_SECONDS), \
                              file_lock(state / 'board-owner.lock', timeout=OWNER_LOCK_TIMEOUT_SECONDS):
-                            restore(state, Path(backed_up['path']))
                             ensure_idle(state)
+                            restore(state, Path(backed_up['path']))
                             _rebuild_ipc_root(state)
                     # A race admitted work before the old daemon detached: preserve it
                     # and restart the previous runtime without restoring an older DB.
@@ -675,6 +675,7 @@ def recover(state: Path, root: Path) -> dict:
     with file_lock(state / 'control-daemon.lock', timeout=OWNER_LOCK_TIMEOUT_SECONDS), \
          file_lock(state / 'board-owner.lock', timeout=OWNER_LOCK_TIMEOUT_SECONDS):
         if contract_changed:
+            ensure_idle(state)
             saved = journal.get('backup')
             if saved is not None:
                 current = state / 'backups/current'

@@ -370,17 +370,12 @@ def read_execution_endpoint(directory: Path, identity: RunIdentity, *, state_dir
         raise BoardError("LIVE_UNAVAILABLE", "Execution endpoint descriptor is invalid")
     if type(descriptor["hostPid"]) is not int or descriptor["hostPid"] != observed_process_identity["pid"]:
         raise BoardError("LIVE_UNAVAILABLE", "Execution endpoint host PID differs")
-    credential_json = descriptor["endpointCredential"]
-    if credential_json is None:
-        if os.name != "nt":
-            raise BoardError("LIVE_UNAVAILABLE", "Execution endpoint credential is absent")
-    else:
-        credential = cc.EndpointCredential.from_json(credential_json)
-        trusted = cc.local_endpoint_context()
-        if credential.address != descriptor["address"] or (
-                credential.context.platform, credential.context.namespace_id, credential.context.root) != (
-                trusted.platform, trusted.namespace_id, trusted.root):
-            raise BoardError("LIVE_UNAVAILABLE", "Execution endpoint credential differs")
+    credential = cc.EndpointCredential.from_json(descriptor["endpointCredential"])
+    trusted = cc.local_endpoint_context()
+    if credential.address != descriptor["address"] or (
+            credential.context.platform, credential.context.namespace_id, credential.context.root) != (
+            trusted.platform, trusted.namespace_id, trusted.root):
+        raise BoardError("LIVE_UNAVAILABLE", "Execution endpoint credential differs")
     token = value["token"]
     if not isinstance(token, str) or len(token) != 64 or any(c not in "0123456789abcdef" for c in token):
         raise BoardError("LIVE_UNAVAILABLE", "Execution endpoint token is invalid")
@@ -414,21 +409,16 @@ def cleanup_execution_endpoint(directory: Path, process_identity: dict, *, state
         return {"status": "unverified", "reason": "endpoint-host-mismatch"}
     rpc_config.configure_server(Path(state_dir))
     rpc_config.configure_client(Path(state_dir))
-    credential_json = descriptor.get("endpointCredential")
-    if credential_json is None:
-        result = {"status": "not-applicable" if os.name == "nt" else "unverified",
-                  "reason": "endpoint-credential-unavailable"}
-    else:
-        try:
-            credential = cc.EndpointCredential.from_json(credential_json)
-        except (ValueError, TypeError):
-            return {"status": "unverified", "reason": "endpoint-credential-invalid"}
-        context = cc.local_endpoint_context()
-        if credential.address != descriptor.get("address") or (
-                credential.context.platform, credential.context.namespace_id, credential.context.root) != (
-                context.platform, context.namespace_id, context.root):
-            return {"status": "unverified", "reason": "endpoint-domain-mismatch"}
-        result = cc.reap_endpoint(descriptor["address"], credential, context=context)
+    try:
+        credential = cc.EndpointCredential.from_json(descriptor.get("endpointCredential"))
+    except (ValueError, TypeError):
+        return {"status": "unverified", "reason": "endpoint-credential-invalid"}
+    context = cc.local_endpoint_context()
+    if credential.address != descriptor.get("address") or (
+            credential.context.platform, credential.context.namespace_id, credential.context.root) != (
+            context.platform, context.namespace_id, context.root):
+        return {"status": "unverified", "reason": "endpoint-domain-mismatch"}
+    result = cc.reap_endpoint(descriptor["address"], credential, context=context)
     if result["status"] in ("reaped", "already-absent", "not-applicable"):
         native_path(path).unlink(missing_ok=True)
     return result

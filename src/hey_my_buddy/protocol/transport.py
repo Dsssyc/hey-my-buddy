@@ -332,22 +332,21 @@ def _probe_local_ipc(directory: Path) -> None:
     runtime = cc.Runtime()
     namespace = Path(tempfile.mkdtemp(prefix='.launch-ipc-', dir=directory))
     namespace_fd = os.open(namespace, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    start_error = None
     try:
-        runtime.set_local_endpoint(root=str(namespace))
-        runtime.set_server(startup_timeout=rpc_config.SERVICE_STARTUP_TIMEOUT_SECONDS)
-        runtime.start()
-    finally:
         try:
+            runtime.set_local_endpoint(root=str(namespace))
+            runtime.set_server(startup_timeout=rpc_config.SERVICE_STARTUP_TIMEOUT_SECONDS)
+            runtime.start()
+        except (CoreError, CCError) as error:
+            start_error = error
+        finally:
             outcome = runtime.shutdown(timeout=rpc_config.SERVICE_STARTUP_TIMEOUT_SECONDS)
-            if (outcome['completed'] is not True
-                    or any(outcome[key] for key in ('runtime_barrier_error', 'route_close_error',
-                                                   'ipc_client_close_error', 'relay_errors'))
-                    or any(route['active_drained'] is not True or route['close_error']
-                           for route in outcome['route_outcomes'])):
+            if outcome['completed'] is not True:
                 raise ServiceError('LAUNCH_IO_ERROR', 'Local IPC probe shutdown is unconfirmed; temporary root preserved',
                                    io_operation='shutdown', path=str(namespace), shutdownOutcome=outcome)
-            # The independent runtime's namespace is flat. Retire only its closed
-            # runtime's entries through the pinned directory, including its gate.
+            # This one-use namespace belongs to this process. Completed shutdown
+            # permits retiring its files even when the receipt retains a start error.
             for name in os.listdir(namespace_fd):
                 os.unlink(name, dir_fd=namespace_fd)
             opened = os.fstat(namespace_fd)
@@ -356,8 +355,15 @@ def _probe_local_ipc(directory: Path) -> None:
                 raise ServiceError('LAUNCH_IO_ERROR', 'Local IPC probe directory was replaced; path preserved',
                                    io_operation='cleanup', path=str(namespace))
             namespace.rmdir()
-        finally:
-            os.close(namespace_fd)
+        if start_error is not None:
+            failure = local_rpc_error(start_error)
+            if (any(outcome[key] for key in ('runtime_barrier_error', 'route_close_error',
+                                            'ipc_client_close_error', 'relay_errors'))
+                    or any(route['close_error'] for route in outcome['route_outcomes'])):
+                failure.details['shutdownOutcome'] = outcome
+            raise failure from start_error
+    finally:
+        os.close(namespace_fd)
 
 
 def _cold_start_preflight(directory: Path) -> None:

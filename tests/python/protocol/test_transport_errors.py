@@ -201,9 +201,21 @@ class PreflightFailureTests(unittest.TestCase):
             self.assertTrue(socket_directory.is_symlink())
 
     @unittest.skipIf(os.name == 'nt', 'POSIX independent native namespace')
-    def test_unclean_probe_shutdown_keeps_its_namespace(self):
+    def test_incomplete_probe_shutdown_keeps_its_namespace(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            runtime = Mock()
+            runtime.shutdown.return_value = {**CLEAR_SHUTDOWN, 'completed': False}
+            with patch.object(transport.cc, 'Runtime', return_value=runtime), \
+                 self.assertRaises(transport.ServiceError) as caught:
+                transport._cold_start_preflight(Path(temporary))
+            self.assertEqual(caught.exception.code, 'LAUNCH_IO_ERROR')
+            self.assertEqual(caught.exception.details['io_operation'], 'shutdown')
+            self.assertTrue(Path(caught.exception.details['path']).is_dir())
+
+    @unittest.skipIf(os.name == 'nt', 'POSIX independent native namespace')
+    def test_completed_probe_shutdown_retires_namespace_even_with_errors(self):
         for field, value in (
-                ('completed', False), ('runtime_barrier_error', 'barrier refused'),
+                ('runtime_barrier_error', 'barrier refused'),
                 ('route_close_error', 'route refused'), ('ipc_client_close_error', 'client refused'),
                 ('relay_errors', ['relay refused']),
                 ('route_outcomes', [{'active_drained': False, 'close_error': None}]),
@@ -211,11 +223,28 @@ class PreflightFailureTests(unittest.TestCase):
             with self.subTest(field=field, value=value), tempfile.TemporaryDirectory() as temporary:
                 runtime = Mock()
                 runtime.shutdown.return_value = {**CLEAR_SHUTDOWN, field: value}
-                with patch.object(transport.cc, 'Runtime', return_value=runtime), \
-                     self.assertRaises(transport.ServiceError) as caught:
+                with patch.object(transport.cc, 'Runtime', return_value=runtime):
                     transport._cold_start_preflight(Path(temporary))
-                self.assertEqual(caught.exception.details['io_operation'], 'shutdown')
-                self.assertTrue(Path(caught.exception.details['path']).is_dir())
+                self.assertFalse(list(Path(temporary).glob('.launch-ipc-*')))
+
+    @unittest.skipIf(os.name == 'nt', 'POSIX independent runtime bind')
+    def test_start_failure_retains_its_cause_and_completed_shutdown_errors(self):
+        error = core_failure('permission_denied')
+        error.io_operation = 'bind'
+        outcome = {**CLEAR_SHUTDOWN, 'runtime_barrier_error': 'same bind refusal'}
+        runtime = Mock()
+        runtime.start.side_effect = error
+        runtime.shutdown.return_value = outcome
+        with tempfile.TemporaryDirectory() as temporary:
+            with patch.object(transport.cc, 'Runtime', return_value=runtime), \
+                 self.assertRaises(transport.ServiceError) as caught:
+                transport._cold_start_preflight(Path(temporary))
+            self.assertEqual(caught.exception.code, 'LAUNCH_ACCESS_DENIED')
+            self.assertEqual(caught.exception.details['io_operation'], 'bind')
+            self.assertEqual(caught.exception.details['raw_os_error'], errno.EACCES)
+            self.assertEqual(caught.exception.details['shutdownOutcome'], outcome)
+            self.assertIs(caught.exception.__cause__, error)
+            self.assertFalse(list(Path(temporary).glob('.launch-ipc-*')))
 
     @unittest.skipIf(os.name == 'nt', 'POSIX independent runtime namespace')
     def test_public_runtime_probe_cleans_coordination_files_and_leaves_default_domain(self):

@@ -40,7 +40,7 @@ from ...json_codec import canonical_json, decode_strict_json
 from ...protocol.stop import WRAP_UP_INITIATORS, TERMINATION_REASONS
 from ..harnesses.registry import ExecutionContext
 from ..harnesses.c_two_live import CTwoLiveEndpoint
-from ...protocol.internal_models import Hex64, InternalModel, NonNegativeInt, OptionalText, Text, fail
+from ...protocol.internal_models import Hex64, InternalModel, NonNegativeInt, Text, fail
 from ..harnesses.live import (LIVE_FIELDS, MAX_REQUEST_ID, MAX_OBSERVE_LIMIT,
     MIN_TRANSPORT_TIMEOUT_MS, MAX_TRANSPORT_TIMEOUT_MS, LiveReply, LiveRequest, LiveSnapshot)
 from ..roles import controller as role_seam
@@ -95,7 +95,7 @@ class LiveEndpointDescriptor(InternalModel):
     name: Text(128)
     instance_id: Hex64
     host_pid: NonNegativeInt
-    endpoint_credential: OptionalText(8192) = None
+    endpoint_credential: Text(8192)
 
 def _timeout_ms(value: Any, label: str) -> int:
     """The preserved transport window bound, checked exactly as the live seam does."""
