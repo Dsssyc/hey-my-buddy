@@ -1,6 +1,7 @@
 /* The console's one palette (ADR-029 clause 8). Settled execution bars identify
    models; every other colour has one meaning.
-   Live is what runs, is current or is selected. Hand is what waits for someone:
+   Selected-row marks only the selected timeline row.
+   Live is what runs, is current or is selected outside the timeline tracks. Hand is what waits for someone:
    a Host's decision or acceptance, unsaved changes, a quota near its limit. Fail
    is failure and nothing else. Ink and past are the record. The top bar keeps
    the logo's ink in both themes, so what sits on it has its own colours. */
@@ -16,6 +17,7 @@
   --line2: #cfcdc3;
   --live: #24654d;
   --live-wash: #dcede2;
+  --selected-row: rgb(0 0 0 / 4%);
   --hand: #b2461e;
   --hand-mark: #d85a30;
   --hand-wash: #fbede5;
@@ -52,6 +54,7 @@
   --line2: #363940;
   --live: #7cc79f;
   --live-wash: #1d3b2b;
+  --selected-row: rgb(255 255 255 / 5%);
   --hand: #f0997b;
   --hand-mark: #f0997b;
   --hand-wash: #33231c;

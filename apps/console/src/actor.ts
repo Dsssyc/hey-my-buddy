@@ -21,6 +21,11 @@ export function actorRoleText(name?: ActorRole): string {
   return name ? roles[name] : i18n.t("shell:actor.unknownOrigin");
 }
 
+/** One attribution for a recorded stop across the timeline, detail and shell. */
+export function stopActorText(role: ActorRole | "unknown" | null | undefined): string {
+  return i18n.t(`shell:actor.stop.${role ?? "unknown"}`);
+}
+
 export function actorText(actor: Actor | null | undefined): string {
   if (!actor) return i18n.t("shell:actor.unrecorded");
   return i18n.t("shell:actor.identity", { role: actorRoleText(actor.role), id: actor.id });

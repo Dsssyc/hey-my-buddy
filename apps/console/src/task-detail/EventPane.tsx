@@ -1,6 +1,6 @@
 import { useTranslation } from "react-i18next";
 import { Section } from "@/components/section";
-import { actorText } from "../actor";
+import { actorText, stopActorText } from "../actor";
 import { eventName } from "../macro-task-display";
 import { Facts, Moment, Pane, PaneTitle } from "./parts";
 import { quad } from "./names";
@@ -26,7 +26,7 @@ export function EventPane({ step, ctx }: { step: Step; ctx: Context }) {
         : <Facts items={[
           [t("decision.who"), event?.actor ? actorText(event.actor) : unrecorded],
           [t("decision.when"), <Moment key="when" at={step.at} />],
-          ...(stopped ? [[t("event.stoppedBy"), t(`stop.${stopped}`, { defaultValue: stopped })] as [string, string]] : []),
+          ...(stopped ? [[t("event.stoppedBy"), stopActorText(stopped)] as [string, string]] : []),
           ...(reason ? [[t("event.reason"), reason] as [string, string]] : []),
           ...(event?.summary ? [[t("event.summary"), event.summary] as [string, string]] : []),
         ]} />}

@@ -24,7 +24,7 @@ export const RowName = forwardRef<HTMLButtonElement, {
   const button = <button ref={ref} type="button" data-key={`row:${row.runId}`} data-slot="timeline-row-name" data-run-id={row.runId} data-fixes={row.fixes}
     tabIndex={tabIndex} aria-expanded={open} aria-label={[title.fullText, repair, state.label].filter(Boolean).join(" · ")} onClick={onClick} onDoubleClick={onOpen} onKeyDown={event => { if (event.key === "Enter") { event.preventDefault(); onOpen(); } }}
     onPointerEnter={onEnter} onPointerLeave={onLeave} onFocus={onFocus} onBlur={onBlur}
-    className={cn("group flex h-[62px] w-full shrink-0 flex-col justify-center gap-1 border-t px-3 text-left outline-none transition-colors duration-150 motion-reduce:transition-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-live",
+    className={cn("select-none", "group flex h-[62px] w-full shrink-0 flex-col justify-center gap-1 border-t px-3 text-left outline-none transition-colors duration-150 motion-reduce:transition-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-live",
       selected ? "bg-live-wash hover:bg-live-wash" : "hover:bg-sunk", open ? "max-[760px]:sticky max-[760px]:top-0 max-[760px]:z-20 min-[761px]:relative" : "relative")}
     style={{ paddingLeft: 13 + row.depth * 18, boxShadow: tone ? `inset 3px 0 var(--${tone === "hand" ? "hand-mark" : tone})` : undefined }} data-state-tone={tone ?? "queued"}>
     <span className="flex w-full min-w-0 items-center gap-1.5 text-sm">

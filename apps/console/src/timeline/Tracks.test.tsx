@@ -4,7 +4,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { macroTaskTimelineFixture } from "../macro-task-fixtures";
 import type { TimelineEvent, TimelineSpan } from "../macro-task-types";
 import { createTimelineScale } from "./scale";
-import { fitLabel } from "./labels";
+import { fitAdjacentLabel, fitLabel } from "./labels";
 import { Axis, Track, spanReadout } from "./Tracks";
 
 afterEach(cleanup);
@@ -12,8 +12,8 @@ const at = (minutes: number) => new Date(Date.UTC(2026, 9, 17, 8, minutes)).toIS
 const scale = createTimelineScale({ domain: { startMs: Date.parse(at(0)), endMs: Date.parse(at(40)) }, busy: [], instants: [], canFold: false, nowAtEnd: true }, 800);
 const base = macroTaskTimelineFixture();
 const execution = (extra: Partial<TimelineSpan> = {}): TimelineSpan => ({ ...base.spans.find(span => span.kind === "execution")!, spanId: "e", startAt: at(5), endAt: at(15), resultStatus: "ok", state: "finished", uncertain: false, shutdownConfirmed: true, expectedSeconds: 600, reminders: null, inquiries: [], ...extra });
-function track(spans: TimelineSpan[], extra: { state?: string; events?: TimelineEvent[]; width?: number; tabKey?: string; onOpen?: (runId: string, key: string) => void; onSelect?: (runId: string, key?: string) => void } = {}) {
-  return render(<Track row={{ ...base.rows[0]!, state: extra.state ?? "accepted", acceptedAt: null, reviewRejectedAt: null }} spans={spans} events={extra.events ?? []} scale={extra.width ? createTimelineScale({ domain: { startMs: Date.parse(at(0)), endMs: Date.parse(at(40)) }, busy: [], instants: [], canFold: false, nowAtEnd: true }, extra.width, extra.width / 40) : scale} nowMs={Date.parse(at(40))} ongoing buddies={[]} onOpen={extra.onOpen ?? vi.fn()} onSelect={extra.onSelect ?? vi.fn()} onHover={vi.fn()} onFocusSpan={vi.fn()} onMarker={vi.fn()} modelColors={new Map([[execution().buddy?.model ?? "", "var(--model-1)"]])} selected={false} tabKey={extra.tabKey}/>);
+function track(spans: TimelineSpan[], extra: { state?: string; events?: TimelineEvent[]; width?: number; selectedKey?: string; selected?: boolean; tabKey?: string; onOpen?: (runId: string, key: string) => void; onSelect?: (runId: string, key?: string) => void } = {}) {
+  return render(<Track row={{ ...base.rows[0]!, state: extra.state ?? "accepted", acceptedAt: null, reviewRejectedAt: null }} spans={spans} events={extra.events ?? []} scale={extra.width ? createTimelineScale({ domain: { startMs: Date.parse(at(0)), endMs: Date.parse(at(40)) }, busy: [], instants: [], canFold: false, nowAtEnd: true }, extra.width, extra.width / 40) : scale} nowMs={Date.parse(at(40))} ongoing buddies={[]} onOpen={extra.onOpen ?? vi.fn()} onSelect={extra.onSelect ?? vi.fn()} onHover={vi.fn()} onFocusSpan={vi.fn()} onMarker={vi.fn()} modelColors={new Map([[execution().buddy?.model ?? "", "var(--model-1)"]])} selected={extra.selected ?? false} selectedKey={extra.selectedKey} tabKey={extra.tabKey}/>);
 }
 const slot = (name: string) => document.querySelector(`[data-slot=${name}]`);
 
@@ -218,4 +218,44 @@ it("merges mixed shape and label clearances before finding free space", () => {
   expect(fitLabel(["too wide"], { left: 0, right: 200 }, occupied, () => 95)).toBeNull();
   const label = fitLabel(["fits"], { left: 0, right: 200 }, occupied, () => 90)!;
   expect(occupied[1]!.left - label.right).toBeGreaterThanOrEqual(12);
+});
+
+
+describe("event labels stay adjacent to their marker", () => {
+  const mark = { left: 92, right: 108 };
+  const bounds = { left: 0, right: 240 };
+  it("uses the immediate right even when the left is also free", () => {
+    expect(fitAdjacentLabel("Continue", mark, bounds, [], () => 50)).toEqual({ kind: "label", text: "Continue", left: 112, right: 162 });
+  });
+  it("uses the immediate left when the right meets a bar or a connector", () => {
+    expect(fitAdjacentLabel("Continue", mark, bounds, [{ kind: "obstacle", left: 120, right: 160 }], () => 50)).toEqual({ kind: "label", text: "Continue", left: 38, right: 88 });
+  });
+  it("omits the name when both neighbours are blocked, even with room farther away", () => {
+    expect(fitAdjacentLabel("Continue", mark, bounds, [{ kind: "obstacle", left: 30, right: 90 }, { kind: "obstacle", left: 120, right: 160 }], () => 50)).toBeNull();
+  });
+  it("respects track bounds and twelve pixels between neighbouring names", () => {
+    expect(fitAdjacentLabel("Continue", mark, { left: 80, right: 145 }, [], () => 50)).toBeNull();
+    expect(fitAdjacentLabel("Continue", mark, bounds, [{ kind: "label", left: 163, right: 200 }], () => 50)?.left).toBe(38);
+  });
+});
+
+it("highlights a selected row separately from exactly one selected span or marker", () => {
+  const events = [{ ...base.events[0]!, seq: 50, kind: "continue", at: at(25) }];
+  track([execution()], { events, selected: true });
+  expect(slot("selected-row")).toBeTruthy();
+  expect(slot("selected-item")).toBeNull();
+  cleanup();
+  track([execution(), execution({ spanId: "other", startAt: at(20), endAt: at(22) })], { events, selected: true, selectedKey: "span:e" });
+  expect(document.querySelectorAll('[data-slot=selected-item]')).toHaveLength(1);
+  expect(slot("selected-item")?.parentElement?.getAttribute("data-key")).toBe("span:e");
+  cleanup();
+  track([execution()], { events, selected: true, selectedKey: "event:50" });
+  expect(document.querySelectorAll('[data-slot=selected-item]')).toHaveLength(1);
+  expect(slot("selected-item")?.parentElement?.getAttribute("data-key")).toBe("event:50");
+});
+
+it("omits labels beside acceptance and failed conclusion glyphs", () => {
+  track([], { state: "failed", events: [{ ...base.events[0]!, seq: 50, kind: "accept", at: at(5) }, { ...base.events[0]!, seq: 51, kind: "conclude", at: at(35) }] });
+  expect(document.querySelectorAll('[data-event-key]')).toHaveLength(0);
+  expect(document.querySelector('[data-key="event:50"]')?.getAttribute("aria-label")).toContain("已验收");
 });

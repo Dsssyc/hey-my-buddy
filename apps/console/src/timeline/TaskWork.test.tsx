@@ -34,7 +34,8 @@ describe("persistent task rows and basic SVG tracks", () => {
     rerender(<TooltipProvider><TaskWork {...props} openedRunId={null}/></TooltipProvider>);
     expect(first.getAttribute("aria-expanded")).toBe("false");
     expect(first.className).toContain("bg-live-wash");
-    expect(document.querySelectorAll('[data-key="span:s-r1-e"] [data-slot=selected-span]')).toHaveLength(1);
+    expect(document.querySelectorAll('[data-slot=selected-item]')).toHaveLength(0);
+    expect(document.querySelector('[data-run-id="r1"] [data-slot=selected-row]')).toBeTruthy();
     expect(props.onClose).not.toHaveBeenCalled();
   });
   it("opens a row without an origin, and a segment with its exact identity; arrows move between rows", () => {

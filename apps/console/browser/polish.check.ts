@@ -12,7 +12,8 @@ for (const theme of ["light", "dark"]) for (const width of [1440, 390]) test.des
     await expect(row).toHaveAttribute("aria-expanded", "false");
     await expect(page).toHaveURL(new RegExp(`#tasks/${macro}$`));
     await expect(row).toHaveCSS("background-color", theme === "dark" ? "rgb(29, 59, 43)" : "rgb(220, 237, 226)");
-    await expect(page.locator('[data-slot=timeline-row][data-run-id="preview-run-a1"] [data-slot=selected-span]').first()).toBeAttached();
+    await expect(page.locator('[data-slot=timeline-row][data-run-id="preview-run-a1"] [data-slot=selected-row]')).toHaveCount(1);
+    await expect(page.locator('[data-slot=timeline-row][data-run-id="preview-run-a1"] [data-slot=selected-item]')).toHaveCount(0);
     await row.hover();
     await expect(row).toHaveCSS("background-color", theme === "dark" ? "rgb(29, 59, 43)" : "rgb(220, 237, 226)");
     await page.screenshot({ path: `${shots}/selected-${theme}-${width}.png` });
