@@ -12,7 +12,7 @@ from unittest import mock
 from buddy.adapters.base import ProcessHandle
 from buddy.adapters.zcode_mcp import respond
 from buddy.adapters.zcode_protocol import (NativeConnection, NativeError, RootTurnEvidence, decode_json,
-                                           verify_receipt)
+                                           sign_receipt, verify_inquiry_receipt, verify_receipt)
 from buddy.adapters.zcode_runner import catalog, configure_session, execution_deadline
 
 
@@ -129,6 +129,195 @@ class ReceiptTests(unittest.TestCase):
         self.assertIs(tracker.receipt, accepted)
         with self.assertRaises(NativeError):
             self.root_event(tracker, 5, "tool.updated", {"kind": "scheduled", "toolName": "finish", "toolCallId": "duplicate"})
+
+
+class InquiryReceiptTests(unittest.TestCase):
+    def setUp(self):
+        self.bridge = {"identity": {"taskId": "goal", "attemptId": "attempt", "generation": 1, "turnId": "logical"},
+                       "inputSha256": "a" * 64, "key": "b" * 64}
+
+    def receipt(self, kind: str, payload: dict) -> str:
+        receipt = {"version": 1, "kind": kind, "identity": self.bridge["identity"], "receiptId": "e" * 32, **payload}
+        receipt["signature"] = sign_receipt(receipt, self.bridge["key"])
+        return json.dumps(receipt)
+
+    def test_checkpoint_and_answer_receipts_verify_and_bind_to_identity(self):
+        checkpoint = self.receipt("inquiry-checkpoint", {"inquiries": [
+            {"inquiryId": "q-1", "question": "what?", "questionSha256": "c" * 64, "state": "queued",
+             "askedAt": "2026-01-01T00:00:00Z"}]})
+        verified = verify_inquiry_receipt(checkpoint, self.bridge, "inquiry-checkpoint")
+        self.assertEqual(verified["inquiries"][0]["inquiryId"], "q-1")
+        answer = self.receipt("inquiry-answer", {"inquiryId": "q-1", "questionSha256": "c" * 64, "answer": "this"})
+        self.assertEqual(verify_inquiry_receipt(answer, self.bridge, "inquiry-answer")["answer"], "this")
+
+    def test_forged_stale_or_malformed_receipts_are_rejected(self):
+        valid = self.receipt("inquiry-answer", {"inquiryId": "q-1", "questionSha256": "c" * 64, "answer": "this"})
+        cases = {
+            "changed answer": json.dumps({**json.loads(valid), "answer": "that"}),
+            "changed signature": json.dumps({**json.loads(valid), "signature": "0" * 64}),
+            "foreign key": None,  # verified below with a different configuration
+            "foreign identity": json.dumps({**json.loads(valid),
+                                            "identity": {**self.bridge["identity"], "attemptId": "other"}}),
+            "wrong kind": json.dumps({**json.loads(valid), "kind": "inquiry-checkpoint"}),
+            "missing field": json.dumps({k: v for k, v in json.loads(valid).items() if k != "inquiryId"}),
+            "extra field": json.dumps({**json.loads(valid), "extra": 1}),
+            "oversized answer": self.receipt("inquiry-answer", {"inquiryId": "q-1", "questionSha256": "c" * 64,
+                                                                "answer": "x" * 4001}),
+            "bad hash": self.receipt("inquiry-answer", {"inquiryId": "q-1", "questionSha256": "not-hex", "answer": "x"}),
+            "prose": "the answer is: " + valid,
+        }
+        for name, raw in cases.items():
+            with self.subTest(case=name):
+                if raw is None:
+                    with self.assertRaises(NativeError):
+                        verify_inquiry_receipt(valid, {**self.bridge, "key": "d" * 64}, "inquiry-answer")
+                    continue
+                with self.assertRaises(NativeError):
+                    verify_inquiry_receipt(raw, self.bridge, "inquiry-answer")
+        oversized = self.receipt("inquiry-checkpoint", {"inquiries": [
+            {"inquiryId": f"q-{index}", "question": "x" * 4000, "questionSha256": "c" * 64,
+             "state": "queued", "askedAt": "t"} for index in range(33)]})
+        with self.assertRaises(NativeError):
+            verify_inquiry_receipt(oversized, self.bridge, "inquiry-checkpoint")
+
+    def test_checkpoint_entries_must_be_well_formed(self):
+        base = {"inquiryId": "q-1", "question": "what?", "questionSha256": "c" * 64, "state": "queued",
+                "askedAt": "2026-01-01T00:00:00Z"}
+        for mutation in ({"state": "answered"}, {"question": " "}, {"questionSha256": "z" * 64},
+                         {"inquiryId": ""}, {"askedAt": 5}, {"deliveredAt": 7}, {"unknownField": True}):
+            with self.subTest(mutation=mutation):
+                raw = self.receipt("inquiry-checkpoint", {"inquiries": [{**base, **mutation}]})
+                with self.assertRaises(NativeError):
+                    verify_inquiry_receipt(raw, self.bridge, "inquiry-checkpoint")
+
+
+class InquiryEvidenceTests(unittest.TestCase):
+    """The root-turn tracker owns inquiry authority; relays and forgeries fail."""
+
+    def setUp(self):
+        self.bridge = {"identity": {"taskId": "goal", "attemptId": "attempt", "generation": 1, "turnId": "logical"},
+                       "inputSha256": "a" * 64, "key": "b" * 64}
+        self.deliveries: list[tuple[dict, str]] = []
+        self.answers: list[tuple[dict, str]] = []
+        self.tracker = RootTurnEvidence(
+            "sess-root", "input-root", "mcp__buddy_x__buddy_finish_turn", self.bridge,
+            checkpoint_name="mcp__buddy_x__buddy_checkpoint",
+            answer_name="mcp__buddy_x__buddy_answer_inquiry",
+            on_delivery=lambda receipt, call: self.deliveries.append((receipt, call)),
+            on_answer=lambda receipt, call: self.answers.append((receipt, call)))
+
+    def event(self, seq: int, kind: str, payload: dict, **identity) -> None:
+        self.tracker.observe({"method": "session/event", "params": {
+            "sessionId": "sess-root", "turnId": "native-turn", "seq": seq,
+            "type": kind, "payload": payload, **identity,
+        }}, seq)
+
+    def started(self):
+        self.event(1, "turn.started", {"inputId": "input-root"})
+
+    def receipt_text(self, kind: str, payload: dict) -> str:
+        receipt = {"version": 1, "kind": kind, "identity": self.bridge["identity"], "receiptId": "e" * 32, **payload}
+        receipt["signature"] = sign_receipt(receipt, self.bridge["key"])
+        return json.dumps(receipt)
+
+    def test_verified_checkpoint_and_answer_results_reach_the_callbacks(self):
+        self.started()
+        content = self.receipt_text("inquiry-checkpoint", {"inquiries": [
+            {"inquiryId": "q-1", "question": "what?", "questionSha256": "c" * 64, "state": "queued",
+             "askedAt": "t"}]})
+        self.event(2, "tool.updated", {"kind": "scheduled", "toolName": "mcp__buddy_x__buddy_checkpoint",
+                                       "toolCallId": "ckpt-1"})
+        self.event(3, "tool.updated", {"kind": "result", "toolCallId": "ckpt-1",
+                                       "result": {"success": True, "truncated": False, "content": content}})
+        self.assertEqual(self.deliveries[0][1], "ckpt-1")
+        answer = self.receipt_text("inquiry-answer", {"inquiryId": "q-1", "questionSha256": "c" * 64,
+                                                      "answer": "this"})
+        self.event(4, "tool.updated", {"kind": "scheduled", "toolName": "mcp__buddy_x__buddy_answer_inquiry",
+                                       "toolCallId": "ans-1"})
+        self.event(5, "tool.updated", {"kind": "result", "toolCallId": "ans-1",
+                                       "result": {"success": True, "truncated": False, "content": answer}})
+        self.assertEqual(self.answers[0][0]["inquiryId"], "q-1")
+        self.assertEqual(self.answers[0][1], "ans-1")
+
+    def test_child_relays_and_foreign_turns_never_reach_the_callbacks(self):
+        self.started()
+        content = self.receipt_text("inquiry-checkpoint", {"inquiries": []})
+        seq = 2
+        for relay in ({"source": "subagent"}, {"agentId": "agent-1"}, {"background": True},
+                      {"childSessionId": "sess-child"}, {"childToolCallId": "child-1"}, {"parentToolCallId": "p"}):
+            with self.subTest(relay=relay):
+                self.event(seq, "tool.updated", {"kind": "scheduled", "toolName": "mcp__buddy_x__buddy_checkpoint",
+                                                 "toolCallId": "relay-call", **relay})
+                self.event(seq + 1, "tool.updated", {"kind": "result", "toolCallId": "relay-call", **relay,
+                                                     "result": {"success": True, "truncated": False, "content": content}})
+                seq += 2
+        self.event(seq, "tool.updated", {"kind": "scheduled", "toolName": "mcp__buddy_x__buddy_checkpoint",
+                                         "toolCallId": "other-turn-call"})
+        self.event(seq + 1, "tool.updated", {"kind": "result", "toolCallId": "other-turn-call",
+                                             "result": {"success": True, "truncated": False, "content": content}},
+                   turnId="turn-other")
+        self.assertEqual(self.deliveries, [])
+
+    def test_failed_inquiry_tool_results_allow_a_corrected_retry(self):
+        self.started()
+        self.event(2, "tool.updated", {"kind": "scheduled", "toolName": "mcp__buddy_x__buddy_checkpoint",
+                                       "toolCallId": "ckpt-bad"})
+        self.event(3, "tool.updated", {"toolCallId": "ckpt-bad", "kind": "error", "error": "unknown inquiry"})
+        self.event(4, "tool.updated", {"toolCallId": "ckpt-bad2", "kind": "error", "error": "again"})
+        self.assertEqual(self.deliveries, [])
+        content = self.receipt_text("inquiry-checkpoint", {"inquiries": []})
+        self.event(5, "tool.updated", {"kind": "scheduled", "toolName": "mcp__buddy_x__buddy_checkpoint",
+                                       "toolCallId": "ckpt-good"})
+        self.event(6, "tool.updated", {"kind": "result", "toolCallId": "ckpt-good",
+                                       "result": {"success": True, "truncated": False, "content": content}})
+        self.assertEqual(len(self.deliveries), 1)
+
+    def test_forged_truncated_or_duplicate_results_fail_the_turn(self):
+        content = self.receipt_text("inquiry-checkpoint", {"inquiries": []})
+        for case, result in (
+            ("forged", {"success": True, "truncated": False, "content": content[:-8] + '"changed"}'}),
+            ("truncated", {"success": True, "truncated": True, "content": content}),
+            ("no-success", {"truncated": False, "content": content}),
+            ("duplicate", {"success": True, "truncated": False, "content": content}),
+        ):
+            with self.subTest(case=case):
+                tracker = RootTurnEvidence(
+                    "sess-root", "input-root", "mcp__buddy_x__buddy_finish_turn", self.bridge,
+                    checkpoint_name="mcp__buddy_x__buddy_checkpoint",
+                    on_delivery=lambda receipt, call: None)
+                tracker.observe({"method": "session/event", "params": {
+                    "sessionId": "sess-root", "turnId": "native-turn", "seq": 1, "type": "turn.started",
+                    "payload": {"inputId": "input-root"}}}, 1)
+                tracker.observe({"method": "session/event", "params": {
+                    "sessionId": "sess-root", "turnId": "native-turn", "seq": 2, "type": "tool.updated",
+                    "payload": {"kind": "scheduled", "toolName": "mcp__buddy_x__buddy_checkpoint",
+                                "toolCallId": "ckpt-1"}}}, 2)
+                if case == "duplicate":
+                    good = {"success": True, "truncated": False, "content": content}
+                    tracker.observe({"method": "session/event", "params": {
+                        "sessionId": "sess-root", "turnId": "native-turn", "seq": 3, "type": "tool.updated",
+                        "payload": {"kind": "result", "toolCallId": "ckpt-1", "result": good}}}, 3)
+                with self.assertRaises(NativeError) as error:
+                    tracker.observe({"method": "session/event", "params": {
+                        "sessionId": "sess-root", "turnId": "native-turn", "seq": 4, "type": "tool.updated",
+                        "payload": {"kind": "result", "toolCallId": "ckpt-1", "result": result}}}, 4)
+                self.assertIn(error.exception.code, ("invalid-inquiry-receipt", "invalid-provenance"))
+
+    def test_a_result_without_its_scheduled_call_is_ignored(self):
+        self.started()
+        content = self.receipt_text("inquiry-checkpoint", {"inquiries": []})
+        self.event(2, "tool.updated", {"kind": "result", "toolCallId": "never-scheduled",
+                                       "result": {"success": True, "truncated": False, "content": content}})
+        self.assertEqual(self.deliveries, [])
+
+    def test_no_inquiry_tool_may_be_scheduled_after_the_finish_call(self):
+        self.started()
+        self.event(2, "tool.updated", {"kind": "scheduled", "toolName": "mcp__buddy_x__buddy_finish_turn",
+                                       "toolCallId": "finish-1"})
+        with self.assertRaises(NativeError) as error:
+            self.event(3, "tool.updated", {"kind": "scheduled", "toolName": "mcp__buddy_x__buddy_checkpoint",
+                                           "toolCallId": "late-ckpt"})
+        self.assertEqual(error.exception.code, "duplicate-finish")
 
 
 class ConfigurationTests(unittest.TestCase):

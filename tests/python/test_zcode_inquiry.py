@@ -1,15 +1,17 @@
-"""ZCode observation-only inquiry, native attention and the real activity sidecar.
+"""ZCode cooperative inquiry bridge, MCP tools and native attention.
 
-The first half drives the controller's private bridge directly: it proves that a
-question is recorded as an honest, attempt-bound refusal and that no code path can
-send a native command. The second half runs the real adapter, runner and MCP bridge
-against the deterministic native fixture, so the refused native interactive
-requests, the attention-only finish tool and the ``buddy.activity`` sidecar are
-exercised end to end without a paid call.
+The first half drives the controller's private bridge directly: it proves that
+a question is queued with one committed identity, that only the controller's
+verified transitions move it to delivered/answered/unavailable, and that no
+code path can send a native command. The second half exercises the real MCP
+tool surface (checkpoint, answer, finish refusal) against a private journal.
+End-to-end turn flows with the real runner and fixture live in
+``test_zcode_checkpoint.py``.
 """
 from __future__ import annotations
 
 import json
+import tempfile
 import time
 import unittest
 from pathlib import Path
@@ -19,11 +21,13 @@ from test_zcode import ZcodeFixtureCase
 from buddy import activity as activity_module
 from buddy import inquiry as inquiry_module
 from buddy.adapters import turn_io
-from buddy.adapters.zcode_mcp import attention_requests, respond
-from buddy.adapters.zcode_protocol import NATIVE_INQUIRY_UNSUPPORTED, NativeError, verify_receipt
+from buddy.adapters.zcode_mcp import attention_requests, pending_inquiries, respond
+from buddy.adapters.zcode_protocol import (COOPERATIVE_INQUIRY_NOTE, MAX_ANSWER_BYTES, MAX_INQUIRIES,
+                                            NativeError, verify_inquiry_receipt, verify_receipt)
 from buddy.adapters.zcode_runner import InquiryBridge
 
 IDENTITY = {"taskId": "task-1", "attemptId": "attempt-1", "generation": 1, "turnId": "turn-1"}
+OTHER_IDENTITY = {"taskId": "task-2", "attemptId": "attempt-9", "generation": 1, "turnId": "turn-9"}
 
 
 class BridgeHarness:
@@ -58,99 +62,267 @@ class BridgeHarness:
         self.bridge.close()
 
 
-class BridgeRefusalTests(unittest.TestCase):
-    def setUp(self):
-        import tempfile
+def checkpoint_receipt(inquiries: list[dict], config: dict) -> str:
+    from buddy.adapters.zcode_protocol import sign_receipt
+    receipt = {"version": 1, "kind": "inquiry-checkpoint", "identity": config["identity"],
+               "inquiries": inquiries, "receiptId": "0" * 31 + "1"}
+    receipt["signature"] = sign_receipt(receipt, config["key"])
+    return json.dumps(receipt)
 
+
+def answer_receipt(inquiry_id: str, answer: str, config: dict, *, sha: str = "b" * 64) -> str:
+    from buddy.adapters.zcode_protocol import sign_receipt
+    receipt = {"version": 1, "kind": "inquiry-answer", "identity": config["identity"],
+               "inquiryId": inquiry_id, "questionSha256": sha, "answer": answer, "receiptId": "0" * 31 + "2"}
+    receipt["signature"] = sign_receipt(receipt, config["key"])
+    return json.dumps(receipt)
+
+
+class BridgeQueueTests(unittest.TestCase):
+    def setUp(self):
         self.temporary = tempfile.TemporaryDirectory(prefix="buddy-zcode-inquiry-")
         self.addCleanup(self.temporary.cleanup)
         self.harness = BridgeHarness(Path(self.temporary.name))
         self.addCleanup(self.harness.close)
 
-    def test_observation_is_bounded_and_reports_the_native_limitation(self):
-        observed = self.harness.request("observe")
-        self.assertTrue(observed["ok"], observed)
-        value = observed["value"]
-        self.assertTrue(value["ready"])
-        self.assertEqual(value["agentStatus"], "running")
-        self.assertEqual(value["capability"], "observe")
-        self.assertFalse(value["supported"])
-        self.assertIsNone(value["replyTool"])
-        self.assertEqual(value["limits"]["inquiry"], "unsupported")
-        self.assertIsNone(value["limits"]["requestedDelivery"])
-        self.assertFalse(value["limits"]["startsNewTurn"])
-        self.assertFalse(value["limits"]["extendsDeadline"])
-        self.assertIn("no turn-bound in-turn input", value["limitation"])
-        self.assertIn("toolArguments", value["unavailable"])
-
-    def test_a_question_is_refused_with_one_committed_identity_and_no_native_command(self):
-        asked = self.harness.request("ask", inquiryId="q-1", question="what is blocking you?")
+    def ask(self, inquiry_id="q-1", question="what is blocking you?") -> dict:
+        asked = self.harness.request("ask", inquiryId=inquiry_id, question=question)
         self.assertTrue(asked["ok"], asked)
-        value = asked["value"]
-        self.assertFalse(value["accepted"])
-        self.assertFalse(value["supported"])
-        self.assertEqual(value["state"], "unavailable")
+        return asked["value"]
+
+    def test_a_question_queues_with_one_committed_identity_and_no_native_command(self):
+        value = self.ask()
+        self.assertTrue(value["accepted"])
+        self.assertTrue(value["supported"])
+        self.assertEqual(value["state"], "queued")
         self.assertFalse(value["duplicate"])
-        self.assertNotIn("startNow", json.dumps(value))
-        self.assertIn("no turn-bound in-turn input", value["reason"])
-        self.assertEqual(value["delivery"]["startsNewTurn"], False)
+        self.assertEqual(value["delivery"]["admittedDelivery"], "cooperative-checkpoint")
+        self.assertFalse(value["delivery"]["startsNewTurn"])
         records = self.harness.records()
         self.assertEqual(len(records), 1, records)
-        self.assertEqual(records[0]["state"], "unavailable")
-        self.assertEqual(records[0]["questionSha256"], value["questionSha256"])
-        self.assertEqual((records[0]["taskId"], records[0]["attemptId"]), ("task-1", "attempt-1"))
+        self.assertEqual(records[0]["state"], "queued")
+        self.assertEqual(records[0]["question"], "what is blocking you?")
+        self.assertEqual(records[0]["taskId"], "task-1")
+        self.assertEqual(records[0]["sessionId"], "sess-1")
 
-        # Repeating the identical question returns the same committed state as a
-        # duplicate and appends nothing; a changed question under the same id is a
-        # conflict. No retry can ever inject anything because no injection exists.
+    def test_identical_replay_is_a_duplicate_at_every_state_and_changed_text_conflicts(self):
+        self.ask()
         duplicate = self.harness.request("ask", inquiryId="q-1", question="what is blocking you?")
         self.assertTrue(duplicate["ok"])
         self.assertTrue(duplicate["value"]["duplicate"])
-        self.assertEqual(duplicate["value"]["questionSha256"], value["questionSha256"])
-        self.assertEqual(duplicate["value"]["delivery"], value["delivery"])
-        self.assertEqual(len(self.harness.records()), 1)
+        self.assertEqual(duplicate["value"]["state"], "queued")
         conflict = self.harness.request("ask", inquiryId="q-1", question="a different question")
         self.assertFalse(conflict["ok"])
         self.assertEqual(conflict["code"], "conflict")
         self.assertEqual(len(self.harness.records()), 1)
+        # After the controller records the answer, the identical replay still
+        # returns the same committed identity with the terminal state.
+        self.harness.bridge.record_answer(
+            verify_inquiry_receipt(answer_receipt("q-1", "resolved", self._config(), sha=self.harness.bridge.entries["q-1"]["questionSha256"]),
+                                   self._config(), "inquiry-answer"),
+            "root-answer-call")
+        replay = self.harness.request("ask", inquiryId="q-1", question="what is blocking you?")
+        self.assertTrue(replay["ok"])
+        self.assertTrue(replay["value"]["duplicate"])
+        self.assertEqual(replay["value"]["state"], "answered")
+        changed = self.harness.request("ask", inquiryId="q-1", question="a different question")
+        self.assertFalse(changed["ok"])
+
+    def _config(self) -> dict:
+        return {"identity": IDENTITY, "key": "c" * 64}
+
+    def test_ask_before_admission_or_after_close_is_not_ready(self):
+        harness = BridgeHarness(Path(self.temporary.name) / "not-ready")
+        harness.bridge.active = False
+        self.addCleanup(harness.close)
+        early = harness.request("ask", inquiryId="q-early", question="status?")
+        self.assertFalse(early["ok"])
+        self.assertEqual(early["code"], "not-ready")
+        self.assertEqual(harness.records(), [])
+        closed = BridgeHarness(Path(self.temporary.name) / "closed")
+        closed.close()
+        late = closed.request("ask", inquiryId="q-late", question="status?")
+        self.assertFalse(late["ok"])
+        self.assertEqual(late["reason"], "bridge-unreachable")
+
+    def test_bounds_are_enforced_before_any_state_change(self):
+        for payload, code in (({"inquiryId": "q-big", "question": "x" * 4001}, "bad-request"),
+                              ({"inquiryId": "i" * 129, "question": "ok?"}, "bad-request"),
+                              ({"inquiryId": "q-blank", "question": "  "}, "bad-request")):
+            with self.subTest(code=code):
+                result = self.harness.request("ask", **payload)
+                self.assertFalse(result["ok"])
+                self.assertEqual(result["code"], code)
+        for index in range(MAX_INQUIRIES):
+            self.ask(f"q-{index}")
+        self.assertEqual(self.harness.request("ask", inquiryId="q-over", question="one too many")["code"], "too-many")
+
+    def test_discard_withdraws_an_unanswered_question(self):
+        self.ask()
+        discarded = self.harness.request("discard", inquiryId="q-1")
+        self.assertTrue(discarded["ok"], discarded)
+        self.assertEqual(discarded["value"]["state"], "discarded")
+        again = self.harness.request("discard", inquiryId="q-1")
+        self.assertFalse(again["ok"])
+        self.assertEqual(again["code"], "conflict")
+        unknown = self.harness.request("discard", inquiryId="q-none")
+        self.assertFalse(unknown["ok"])
+        self.assertEqual(unknown["code"], "not-ready")
+        # A withdrawn question no longer counts as pending for the finish tool.
+        self.assertEqual(self.harness.bridge.entries["q-1"]["state"], "discarded")
+
+    def test_controller_transitions_require_committed_root_evidence(self):
+        config = self._config()
+        self.ask()
+        sha = self.harness.bridge.entries["q-1"]["questionSha256"]
+        good = verify_inquiry_receipt(checkpoint_receipt(
+            [{"inquiryId": "q-1", "question": "what is blocking you?", "questionSha256": sha,
+              "state": "queued", "askedAt": "2026-01-01T00:00:00Z"}], config), config, "inquiry-checkpoint")
+        self.harness.bridge.deliver_inquiries(good, "root-checkpoint-call")
+        self.assertEqual(self.harness.bridge.entries["q-1"]["state"], "delivered")
+        self.assertEqual(self.harness.bridge.entries["q-1"]["toolCallId"], "root-checkpoint-call")
+        delivered_records = [record for record in self.harness.records() if record.get("state") == "delivered"]
+        # An identical redelivery is a true no-op; forgeries fail the turn.
+        self.harness.bridge.deliver_inquiries(good, "root-checkpoint-call-2")
+        self.assertEqual([record for record in self.harness.records() if record.get("state") == "delivered"],
+                         delivered_records)
+        forged = verify_inquiry_receipt(checkpoint_receipt(
+            [{"inquiryId": "q-unknown", "question": "never committed", "questionSha256": "d" * 64,
+              "state": "queued", "askedAt": "2026-01-01T00:00:00Z"}], config), config, "inquiry-checkpoint")
+        with self.assertRaises(NativeError):
+            self.harness.bridge.deliver_inquiries(forged, "root-checkpoint-call-3")
+        hashed_wrong = verify_inquiry_receipt(checkpoint_receipt(
+            [{"inquiryId": "q-1", "question": "what is blocking you?", "questionSha256": "e" * 64,
+              "state": "queued", "askedAt": "2026-01-01T00:00:00Z"}], config), config, "inquiry-checkpoint")
+        with self.assertRaises(NativeError):
+            self.harness.bridge.deliver_inquiries(hashed_wrong, "root-checkpoint-call-4")
+
+    def test_answers_bind_to_the_committed_question_and_first_answer_wins(self):
+        config = self._config()
+        self.ask()
+        sha = self.harness.bridge.entries["q-1"]["questionSha256"]
+        answer = verify_inquiry_receipt(answer_receipt("q-1", "do this", config, sha=sha), config, "inquiry-answer")
+        self.harness.bridge.record_answer(answer, "root-answer-call")
+        entry = self.harness.bridge.entries["q-1"]
+        self.assertEqual(entry["state"], "answered")
+        self.assertEqual(entry["answer"]["text"], "do this")
+        self.assertEqual(entry["answer"]["toolCallId"], "root-answer-call")
+        self.assertEqual(entry["answer"]["via"], "tool:buddy_answer_inquiry")
+        # An identical binding replay changes nothing; a different answer conflicts.
+        self.harness.bridge.record_answer(answer, "root-answer-call-2")
+        conflicting = verify_inquiry_receipt(answer_receipt("q-1", "do that instead", config, sha=sha), config, "inquiry-answer")
+        with self.assertRaises(NativeError):
+            self.harness.bridge.record_answer(conflicting, "root-answer-call-3")
+        unknown = verify_inquiry_receipt(answer_receipt("q-none", "do this", config, sha=sha), config, "inquiry-answer")
+        with self.assertRaises(NativeError):
+            self.harness.bridge.record_answer(unknown, "root-answer-call-4")
+        self.assertEqual(entry["answer"]["text"], "do this")
+
+    def test_close_marks_unanswered_entries_unavailable_without_waking_anything(self):
+        self.ask("q-queued", "first?")
+        self.ask("q-answered", "second?")
+        config = self._config()
+        sha = self.harness.bridge.entries["q-answered"]["questionSha256"]
+        self.harness.bridge.record_answer(
+            verify_inquiry_receipt(answer_receipt("q-answered", "done", config, sha=sha), config, "inquiry-answer"),
+            "root-answer-call")
+        self.harness.close()
+        states = {record["inquiryId"]: record for record in self.harness.records()}
+        self.assertEqual(self.harness.bridge.entries["q-queued"]["state"], "unavailable")
+        self.assertIn("ended before this inquiry was answered", states["q-queued"]["reason"])
+        self.assertEqual(self.harness.bridge.entries["q-answered"]["state"], "answered")
+        self.assertFalse(Path(self.harness.credentials["socketPath"]).exists())
+        # A closed bridge is unreachable: a late question cannot even queue.
+        self.assertEqual(self.harness.request("ask", inquiryId="q-after", question="late?")["reason"],
+                         "bridge-unreachable")
+
+    def test_observation_is_bounded_and_reports_the_cooperative_channel(self):
+        self.ask()
+        observed = self.harness.request("observe")
+        self.assertTrue(observed["ok"], observed)
+        value = observed["value"]
+        self.assertTrue(value["ready"])
+        self.assertEqual(value["capability"], "inquiry")
+        self.assertTrue(value["supported"])
+        self.assertEqual(value["deliveryMode"], "cooperative-checkpoint")
+        self.assertEqual(value["inbox"]["pending"], 1)
+        self.assertEqual(value["replyTool"]["name"], "buddy_answer_inquiry")
+        self.assertEqual(value["limits"]["inquiry"], "cooperative-checkpoint")
+        self.assertFalse(value["limits"]["startsNewTurn"])
+        self.assertFalse(value["limits"]["extendsDeadline"])
+        self.assertIn("never injected", value["limitation"])
+        self.assertIn("immediateDelivery", value["unavailable"])
+
+    def test_live_answer_view_reports_state_and_receipt_shape(self):
+        self.ask()
+        pending = self.harness.request("answer", inquiryId="q-1")
+        self.assertTrue(pending["ok"], pending)
+        self.assertFalse(pending["value"]["answer"]["available"])
+        self.assertEqual(pending["value"]["state"], "queued")
+        config = self._config()
+        sha = self.harness.bridge.entries["q-1"]["questionSha256"]
+        self.harness.bridge.record_answer(
+            verify_inquiry_receipt(answer_receipt("q-1", "all good", config, sha=sha), config, "inquiry-answer"),
+            "root-answer-call")
+        answered = self.harness.request("answer", inquiryId="q-1")
+        self.assertTrue(answered["ok"], answered)
+        self.assertEqual(answered["value"]["state"], "answered")
+        self.assertEqual(answered["value"]["answer"]["text"], "all good")
+        self.assertEqual(answered["value"]["answer"]["toolCallId"], "root-answer-call")
+        # The exact shape the board importer normalizes from a live answer view.
+        normalized = inquiry_module.normalize_journal_answer({"answer": answered["value"]["answer"]})
+        self.assertEqual(normalized["text"], "all good")
+        self.assertEqual(normalized["toolCallId"], "root-answer-call")
 
     def test_the_bridge_has_no_native_injection_path_at_all(self):
-        # The proof for "a duplicate never injects again" is stronger than a
-        # counter: this class holds no native connection and exposes no drain,
-        # inject or reply-recording API, and the connection has no send_text.
-        self.assertFalse(hasattr(self.harness.bridge, "drain"))
-        self.assertFalse(hasattr(self.harness.bridge, "record_answer"))
+        # The proof that delivery stays cooperative is structural: this class
+        # holds no native connection and exposes no inject or drain API, and the
+        # connection has no send_text or command surface for questions.
         self.assertFalse(hasattr(self.harness.bridge, "_inject"))
+        self.assertFalse(hasattr(self.harness.bridge, "drain"))
         from buddy.adapters.zcode_protocol import NativeConnection
 
         self.assertFalse(hasattr(NativeConnection, "send_text"))
         self.assertNotIn("commandId", json.dumps(self.harness.records()))
 
     def test_the_journal_merges_identity_hash_and_delivery_across_records_and_restarts(self):
-        self.harness.request("ask", inquiryId="q-merge", question="status?")
+        self.ask("q-merge", "status?")
         committed = self.harness.bridge.entries["q-merge"]
         self.harness.bridge._journal({**self.harness.bridge._identity_fields(), "inquiryId": "q-merge",
-                                      "state": "unavailable", "reason": "a later bounded record"})
+                                      "state": "delivered", "deliveredAt": "2026-01-01T00:00:00Z"})
         merged = self.harness.bridge.entries["q-merge"]
         self.assertEqual(merged["questionSha256"], committed["questionSha256"])
+        self.assertEqual(merged["question"], "status?")
         self.assertEqual(merged["delivery"], committed["delivery"])
-        self.assertEqual(merged["reason"], "a later bounded record")
-        # A controller restart replays the journal and must keep the same
-        # committed identity, so the same question is still a duplicate.
+        self.assertEqual(merged["deliveredAt"], "2026-01-01T00:00:00Z")
+        # A controller restart replays the journal and keeps the same committed
+        # identity, so the same question is still a duplicate.
         restarted = InquiryBridge(self.harness.credentials, identity=IDENTITY,
                                   journal_path=self.harness.credentials["resultsPath"])
         restarted._load_journal()
         self.assertEqual(restarted.entries["q-merge"]["questionSha256"], committed["questionSha256"])
+        self.assertEqual(restarted.entries["q-merge"]["question"], "status?")
         self.assertEqual(restarted.entries["q-merge"]["delivery"], committed["delivery"])
 
-    def test_questions_are_refused_before_the_root_turn_is_admitted(self):
-        harness = BridgeHarness(Path(self.temporary.name) / "not-ready")
-        harness.bridge.active = False
-        self.addCleanup(harness.close)
-        asked = harness.request("ask", inquiryId="q-early", question="status?")
-        self.assertTrue(asked["ok"], asked)
-        self.assertFalse(asked["value"]["accepted"], "an unadmitted turn still cannot receive a question")
-        self.assertEqual(asked["value"]["state"], "unavailable")
+    def test_the_board_journal_importer_reads_the_real_records(self):
+        from buddy.adapters.zcode_protocol import sign_receipt
+
+        self.ask("q-import", "what next?")
+        sha = self.harness.bridge.entries["q-import"]["questionSha256"]
+        receipt = {"version": 1, "kind": "inquiry-answer", "identity": IDENTITY, "inquiryId": "q-import",
+                   "questionSha256": sha, "answer": "proceed", "receiptId": "0" * 32}
+        receipt["signature"] = sign_receipt(receipt, "c" * 64)
+        self.harness.bridge.record_answer(verify_inquiry_receipt(json.dumps(receipt), {"identity": IDENTITY, "key": "c" * 64},
+                                                                 "inquiry-answer"), "root-answer-call")
+        journal = inquiry_module.read_journal(self.harness.credentials["resultsPath"])
+        self.assertTrue(journal["available"])
+        merged = journal["entries"]["q-import"]
+        self.assertEqual(merged["state"], "answered")
+        self.assertEqual(merged["taskId"], "task-1")
+        answer = inquiry_module.normalize_journal_answer(merged)
+        self.assertEqual(answer["text"], "proceed")
+        self.assertEqual(answer["toolCallId"], "root-answer-call")
+        self.assertEqual(answer["via"], "tool:buddy_answer_inquiry")
 
     def test_attention_is_bounded_and_readable_while_the_turn_is_live(self):
         for index in range(10):
@@ -164,14 +336,13 @@ class BridgeRefusalTests(unittest.TestCase):
 
 class FinishToolTests(unittest.TestCase):
     def setUp(self):
-        import tempfile
-
         self.temporary = tempfile.TemporaryDirectory(prefix="buddy-zcode-finish-")
         self.addCleanup(self.temporary.cleanup)
         self.root = Path(self.temporary.name)
         self.attention = self.root / "attention.json"
+        self.journal = self.root / "inquiry.results.jsonl"
         self.config = {"identity": IDENTITY, "inputSha256": "a" * 64, "key": "b" * 64,
-                       "attentionPath": str(self.attention)}
+                       "attentionPath": str(self.attention), "inquiryJournalPath": str(self.journal)}
 
     def call(self, name: str, arguments: dict) -> dict:
         return respond({"jsonrpc": "2.0", "id": 1, "method": "tools/call",
@@ -185,11 +356,121 @@ class FinishToolTests(unittest.TestCase):
         return {"disposition": disposition, "summary": "fixture", "remaining": [], "decisions": [],
                 "artifacts": [], "request": request}
 
-    def test_only_the_finish_tool_is_exposed(self):
+    def queue(self, inquiry_id="q-1", question="what is the deployment word?", *, identity=IDENTITY) -> None:
+        import hashlib
+
+        self.journal.parent.mkdir(parents=True, exist_ok=True)
+        with self.journal.open("a") as stream:
+            stream.write(json.dumps({"inquiryId": inquiry_id, "state": "queued", "question": question,
+                                     "questionSha256": hashlib.sha256(question.encode()).hexdigest(),
+                                     "askedAt": "2026-01-01T00:00:00Z",
+                                     "taskId": identity["taskId"], "attemptId": identity["attemptId"],
+                                     "generation": identity["generation"], "turnId": identity["turnId"]}) + "\n")
+
+    def test_all_three_session_tools_are_exposed(self):
         listed = respond({"jsonrpc": "2.0", "id": 1, "method": "tools/list", "params": {}}, self.config)
         names = [tool["name"] for tool in listed["result"]["tools"]]
-        self.assertEqual(names, ["buddy_finish_turn"])
-        self.assertNotIn("buddy_inquiry_reply", json.dumps(listed))
+        self.assertEqual(names, ["buddy_checkpoint", "buddy_answer_inquiry", "buddy_finish_turn"])
+
+    def test_checkpoint_returns_a_signed_receipt_of_the_pending_questions(self):
+        self.queue()
+        result = self.call("buddy_checkpoint", {})
+        self.assertFalse(result.get("isError"), result)
+        receipt = verify_inquiry_receipt(result["content"][0]["text"], self.config, "inquiry-checkpoint")
+        self.assertEqual(receipt["inquiries"][0]["inquiryId"], "q-1")
+        self.assertEqual(receipt["inquiries"][0]["question"], "what is the deployment word?")
+        # The handler is read-only, so another checkpoint still exposes the same
+        # unanswered question under an independent receipt.
+        again = self.call("buddy_checkpoint", {})
+        second = verify_inquiry_receipt(again["content"][0]["text"], self.config, "inquiry-checkpoint")
+        self.assertEqual(second["inquiries"], receipt["inquiries"])
+        self.assertNotEqual(second["receiptId"], receipt["receiptId"])
+
+    def test_a_foreign_journal_identity_is_never_exposed(self):
+        self.queue("q-foreign", "other attempt question?", identity=OTHER_IDENTITY)
+        result = self.call("buddy_checkpoint", {})
+        receipt = verify_inquiry_receipt(result["content"][0]["text"], self.config, "inquiry-checkpoint")
+        self.assertEqual(receipt["inquiries"], [])
+        refused = self.call("buddy_answer_inquiry", {"inquiryId": "q-foreign", "answer": "nope"})
+        self.assertTrue(refused["isError"])
+        self.assertIn("unknown inquiryId", refused["content"][0]["text"])
+
+    def test_answer_receipts_are_bound_and_bounded(self):
+        self.queue()
+        accepted = self.call("buddy_answer_inquiry", {"inquiryId": "q-1", "answer": "deploy-ok"})
+        self.assertFalse(accepted.get("isError"), accepted)
+        receipt = verify_inquiry_receipt(accepted["content"][0]["text"], self.config, "inquiry-answer")
+        self.assertEqual(receipt["answer"], "deploy-ok")
+        for arguments, fragment in (
+            ({"inquiryId": "q-1", "answer": "  "}, "nonblank"),
+            ({"inquiryId": "q-1", "answer": "x" * 4001}, "4000-byte"),
+            ({"inquiryId": "q-missing", "answer": "fine"}, "unknown inquiryId"),
+            ({"inquiryId": "q-1"}, "exactly"),
+            ({}, "exactly"),
+        ):
+            with self.subTest(fragment=fragment):
+                refused = self.call("buddy_answer_inquiry", arguments)
+                self.assertTrue(refused["isError"], refused)
+                self.assertIn(fragment, refused["content"][0]["text"])
+        # A tampered receipt must fail controller verification.
+        tampered = json.loads(accepted["content"][0]["text"])
+        tampered["answer"] = "changed after signing"
+        with self.assertRaises(NativeError):
+            verify_inquiry_receipt(json.dumps(tampered), self.config, "inquiry-answer")
+        with self.assertRaises(NativeError):
+            verify_inquiry_receipt(accepted["content"][0]["text"], {**self.config, "key": "d" * 64}, "inquiry-answer")
+
+    def test_an_answered_inquiry_cannot_be_reanswered(self):
+        import hashlib
+
+        question = "what is the deployment word?"
+        answered = {"inquiryId": "q-1", "state": "answered", "question": question,
+                    "questionSha256": hashlib.sha256(question.encode()).hexdigest(),
+                    "answer": {"text": "deploy-ok", "bytes": 10, "truncated": False,
+                               "via": "tool:buddy_answer_inquiry", "toolCallId": "root-call",
+                               "at": "2026-01-01T00:00:00Z"}, **IDENTITY}
+        with self.journal.open("a") as stream:
+            stream.write(json.dumps(answered) + "\n")
+        refused = self.call("buddy_answer_inquiry", {"inquiryId": "q-1", "answer": "another"})
+        self.assertTrue(refused["isError"])
+        self.assertIn("already has its recorded answer", refused["content"][0]["text"])
+
+    def test_completed_is_refused_while_a_question_is_unanswered(self):
+        self.queue()
+        refused = self.call("buddy_finish_turn", self.outcome("completed"))
+        self.assertTrue(refused["isError"], refused)
+        self.assertIn("what is the deployment word?", refused["content"][0]["text"])
+        self.assertIn("q-1", refused["content"][0]["text"])
+        self.assertIn("buddy_checkpoint", refused["content"][0]["text"])
+        # Assistance and attention stay legal with a pending question.
+        for disposition in ("assistance", "attention"):
+            with self.subTest(disposition=disposition):
+                accepted = self.call("buddy_finish_turn", self.outcome(disposition))
+                self.assertFalse(accepted.get("isError"), accepted)
+        # Once answered, completion passes again.
+        import hashlib
+
+        question = "what is the deployment word?"
+        with self.journal.open("a") as stream:
+            stream.write(json.dumps({"inquiryId": "q-1", "state": "answered", "question": question,
+                                     "questionSha256": hashlib.sha256(question.encode()).hexdigest(),
+                                     "answer": {"text": "deploy-ok", "bytes": 10, "truncated": False,
+                                                "via": "tool:buddy_answer_inquiry", "toolCallId": "root-call",
+                                                "at": "2026-01-01T00:00:00Z"}, **IDENTITY}) + "\n")
+        settled = self.call("buddy_finish_turn", self.outcome("completed"))
+        self.assertFalse(settled.get("isError"), settled)
+        verify_receipt(settled["content"][0]["text"], self.config)
+
+    def test_pending_inquiries_is_none_without_a_journal(self):
+        bare = {k: v for k, v in self.config.items() if k != "inquiryJournalPath"}
+        self.assertIsNone(pending_inquiries(bare))
+        checkpoint = respond({"jsonrpc": "2.0", "id": 1, "method": "tools/call",
+                              "params": {"name": "buddy_checkpoint", "arguments": {}}}, bare)["result"]
+        self.assertTrue(checkpoint["isError"])
+        refused = respond({"jsonrpc": "2.0", "id": 1, "method": "tools/call",
+                           "params": {"name": "buddy_answer_inquiry",
+                                      "arguments": {"inquiryId": "q-1", "answer": "x"}}}, bare)["result"]
+        self.assertTrue(refused["isError"])
 
     def test_completed_is_refused_while_a_native_request_is_unresolved(self):
         self.assertEqual(attention_requests(self.config), 0)
@@ -313,35 +594,40 @@ class ZcodeInquiryIntegrationTests(ZcodeFixtureCase):
         path = context.directory / "native-logs" / name
         return path.read_text() if path.exists() else ""
 
-    def test_a_live_question_is_refused_without_touching_the_native_session(self):
+    def test_a_live_question_queues_without_touching_the_native_session(self):
         context = self.context("live", timeout=30)
         handle = self.adapter.start(context)
         self.addCleanup(lambda: handle.terminate(grace_seconds=0.2) if handle.group_alive() else None)
         credentials = self.credentials(context)
         asked = inquiry_module.bridge_request(credentials, "ask", {"inquiryId": "q-live", "question": "what is the status?"}, timeout_ms=4000)
         self.assertTrue(asked["ok"], asked)
-        self.assertFalse(asked["value"]["accepted"])
-        self.assertEqual(asked["value"]["state"], "unavailable")
+        self.assertTrue(asked["value"]["accepted"])
+        self.assertEqual(asked["value"]["state"], "queued")
         duplicate = inquiry_module.bridge_request(credentials, "ask", {"inquiryId": "q-live", "question": "what is the status?"}, timeout_ms=4000)
         self.assertTrue(duplicate["value"]["duplicate"])
+        answered = inquiry_module.bridge_request(credentials, "answer", {"inquiryId": "q-live"}, timeout_ms=4000)
+        self.assertTrue(answered["ok"], answered)
+        self.assertFalse(answered["value"]["answer"]["available"])
         (context.directory / "native-logs").mkdir(exist_ok=True)
         (context.directory / "native-logs" / "release-turn").touch()
         self.assertIsNotNone(handle.wait(30), "controller did not exit")
         outcome = self.adapter.collect(handle, context)
         self.assertEqual(outcome.status, "ok", outcome.to_report())
-        # No client command was ever sent, and the refused question is bound to the
-        # attempt with a single committed record.
+        # The root never checkpointed, so its completed finish was refused with
+        # the question and it honestly settled on assistance; the unanswered
+        # question became unavailable without any native injection.
+        self.assertEqual(outcome.result["turn"]["outcome"]["disposition"], "assistance")
         self.assertEqual(self.native_log(context, "commands.jsonl"), "")
         self.assertNotIn("v4/command", self.native_log(context, "methods.jsonl"))
         self.assertEqual(self.native_log(context, "methods.jsonl").split().count("session/send"), 1)
         records = [record for record in self.records(credentials) if record["inquiryId"] == "q-live"]
-        self.assertEqual(len(records), 1, records)
-        self.assertEqual(records[0]["state"], "unavailable")
+        self.assertEqual(records[0]["state"], "queued")
         self.assertEqual(records[0]["questionSha256"], asked["value"]["questionSha256"])
+        self.assertEqual(records[-1]["state"], "unavailable")
         self.assertFalse(records[0]["delivery"]["startsNewTurn"])
-        self.assertEqual(outcome.result["inquiry"]["supported"], False)
+        self.assertEqual(outcome.result["inquiry"]["supported"], True)
         self.assertEqual(outcome.result["inquiry"]["refused"], 1)
-        self.assertIn("no turn-bound in-turn input", outcome.result["inquiry"]["limitation"])
+        self.assertIn("never injected", outcome.result["inquiry"]["limitation"])
         self.assertEqual(outcome.result["nativeAttention"]["requests"], 0)
 
     def test_the_question_socket_is_gone_after_a_settled_turn(self):
@@ -383,15 +669,25 @@ class ZcodeInquiryIntegrationTests(ZcodeFixtureCase):
         self.assertNotIn("turn", outcome.result)
         self.assertTrue(any(item["kind"] == "native-attention" for item in outcome.artifacts), outcome.artifacts)
 
-    def test_observation_has_a_limitation_and_no_reply_tool_in_the_prompt(self):
+    def test_the_bridge_config_and_prompt_wire_the_cooperative_channel(self):
         context = self.context(timeout=20)
         _, outcome = self.execute(context)
         self.assertEqual(outcome.status, "ok", outcome.to_report())
         tree = json.loads((context.directory / "finish-bridge.json").read_text())
         self.assertIn("attentionPath", tree)
-        self.assertNotIn("journalPath", tree)
-        self.assertIn(NATIVE_INQUIRY_UNSUPPORTED, outcome.result["inquiry"]["limitation"])
-        self.assertNotIn("buddy_inquiry_reply", (context.directory / "finish-bridge.json").read_text())
+        credentials = json.loads((context.directory / "inquiry.json").read_text())
+        self.assertEqual(tree["inquiryJournalPath"], credentials["resultsPath"])
+        self.assertEqual(tree["identity"], {"taskId": "goal-1", "attemptId": "attempt-1",
+                                            "generation": 1, "turnId": "turn-1"})
+        self.assertIn(COOPERATIVE_INQUIRY_NOTE, outcome.result["inquiry"]["limitation"])
+        from buddy.adapters.zcode_runner import governed_prompt
+
+        prompt = governed_prompt("task", {"turn": 1}, "mcp__buddy_x__buddy_finish_turn",
+                                 checkpoint_tool="mcp__buddy_x__buddy_checkpoint",
+                                 answer_tool="mcp__buddy_x__buddy_answer_inquiry")
+        self.assertIn("mcp__buddy_x__buddy_checkpoint", prompt)
+        self.assertIn("mcp__buddy_x__buddy_answer_inquiry", prompt)
+        self.assertIn("never on a timer", prompt)
 
 
 class NativeCatalogEmptyTests(ZcodeFixtureCase):

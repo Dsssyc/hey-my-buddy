@@ -21,11 +21,16 @@ from .zcode_protocol import NativeError, decode_json
 
 class ZcodeAdapter(Adapter):
     name = "zcode"
-    #: ``observe`` is the honest capability: this adapter publishes bounded
-    #: native activity and records native attention, but the installed native
-    #: protocol has no turn-bound in-turn input method, so it cannot ask
-    #: correlated questions and deliberately does not declare ``inquiry``.
-    capabilities = ("zcode", "observe", "workspace", "cancel", "artifacts", "deadline", "native-session")
+    #: ``observe`` publishes bounded native activity. ``inquiry`` is the
+    #: cooperative checkpoint channel: a Host question is queued by the
+    #: controller's bridge and delivered only at the root's own
+    #: ``buddy_checkpoint``/``buddy_answer_inquiry`` session tools inside the one
+    #: admitted native turn, never injected through a native send, command,
+    #: restart or new turn (see zcode_protocol.COOPERATIVE_INQUIRY_NOTE). The
+    #: native input protocol still has no turn-bound in-turn method, so native
+    #: permissions stay auto-denied and native questions still end as
+    #: structured attention.
+    capabilities = ("zcode", "observe", "inquiry", "workspace", "cancel", "artifacts", "deadline", "native-session")
     native_resume = True
     model_discovery = True
 
@@ -62,10 +67,11 @@ class ZcodeAdapter(Adapter):
         root = Path(state) / "harnesses" / "zcode" / hashlib.sha256(context.task_id.encode()).hexdigest()
         root.mkdir(mode=0o700, parents=True, exist_ok=True)
         os.chmod(root, 0o700)
-        # The controller hosts the private observation socket: read-only activity
-        # is always available, and every question is recorded as an honest
-        # refusal because no native command may inject one (see
-        # zcode_protocol.NATIVE_INQUIRY_UNSUPPORTED).
+        # The controller hosts the private inquiry bridge: read-only activity is
+        # always available, and a Host question is queued for cooperative
+        # delivery at the root's next checkpoint (see
+        # zcode_protocol.COOPERATIVE_INQUIRY_NOTE). No native command may inject
+        # one.
         inquiry = turn_io.inquiry_paths(context)
         turn_io.private_json(context.directory / "zcode-control.json", {
             "directory": str(context.directory.resolve()), "nativeRoot": str(root.resolve()),

@@ -18,6 +18,14 @@ from ..activity import MAX_SESSION_ID, MAX_TOOL_NAME, MAX_WAITING_REASON, PHASES
 
 MAX_MESSAGE_BYTES = 8 * 1024 * 1024
 
+#: Shared inquiry bounds, identical to the board and the DSH bridge. The MCP
+#: tools, the controller's verification and the observation bridge all enforce
+#: the same budget so a bounded value can never be rejected after mutation.
+MAX_QUESTION_BYTES = 4000
+MAX_ANSWER_BYTES = 4000
+MAX_INQUIRIES = 32
+MAX_INQUIRY_ID_BYTES = 128
+
 
 class NativeError(Exception):
     def __init__(self, code: str, message: str):
@@ -42,18 +50,26 @@ def sign_receipt(payload: dict, key: str) -> str:
     return hmac.new(bytes.fromhex(key), canonical_json(payload).encode(), hashlib.sha256).hexdigest()
 
 
-#: Why this adapter cannot ask correlated questions, stated once and reported
-#: verbatim. This adapter uses app-server: its strict ``session/send`` schema
-#: has no delivery/expectedTurnId fields and rejects a send during an active
-#: prompt. The separate v4 sendText gateway can defer unbound guide input or
-#: start a new turn. Neither exposes the internal expected-turn-fenced steerTurn.
-#: An acknowledgement check after sending cannot make that race safe.
-NATIVE_INQUIRY_UNSUPPORTED = (
-    "the installed ZCode app-server session/send has no turn-bound in-turn input and "
-    "rejects input while a prompt is active; the separate v4 sendText guide can defer "
-    "input or open a new turn, and the internal steerTurn expectedTurnId is not exposed "
-    "to clients, so this adapter observes only and never injects a question"
+#: How this adapter carries Host questions, stated once and reported verbatim.
+#: The native protocol still has no turn-bound in-turn input: ``session/send``
+#: has no delivery/expectedTurn fields and rejects a send during an active
+#: prompt, and the v4 sendText guide can only defer unbound input or start a
+#: new turn. The cooperative channel never injects anything: a question is
+#: queued by the bridge and reaches the root only through the session-private
+#: ``buddy_checkpoint``/``buddy_finish_turn`` tools inside the one admitted
+#: native turn, and only ``buddy_answer_inquiry`` evidence verified against
+#: that turn's own tool events counts as an answer.
+COOPERATIVE_INQUIRY_NOTE = (
+    "Host questions are queued by the bridge and delivered only at the root's next buddy_checkpoint "
+    "or finish refusal inside the same admitted native turn; they are never injected through "
+    "session/send, a v4 command, a stop, a restart or a new turn, and an answer counts only through "
+    "buddy_answer_inquiry verified against the root turn's own tool evidence"
 )
+
+#: Honest bounds of the signed inquiry receipts the MCP tools return. A
+#: checkpoint receipt may carry every queued question, so its budget covers
+#: ``MAX_INQUIRIES`` x ``MAX_QUESTION_BYTES`` plus framing.
+MAX_INQUIRY_RECEIPT_BYTES = 200 * 1024
 
 
 class ActivityProjection:
@@ -152,6 +168,65 @@ def verify_receipt(raw: object, configuration: dict) -> dict:
         return receipt
     except (ValueError, TypeError, KeyError, RecursionError):
         raise NativeError("invalid-finish", "the finish tool receipt failed identity, signature or outcome validation") from None
+
+
+def _valid_inquiry_id(value: object) -> bool:
+    return isinstance(value, str) and 0 < len(value.encode()) <= MAX_INQUIRY_ID_BYTES
+
+
+def _valid_question_sha(value: object) -> bool:
+    return isinstance(value, str) and len(value) == 64 and all(c in "0123456789abcdef" for c in value)
+
+
+def verify_inquiry_receipt(raw: object, configuration: dict, kind: str) -> dict:
+    """Verify one signed checkpoint or answer receipt from the session tools.
+
+    The MCP handler only ever returns a tentative signed receipt; this is the
+    controller-side authority check. The signature binds the attempt identity
+    and the exact payload, so a tampered, stale or cross-attempt receipt fails
+    here before any bridge state changes.
+    """
+    if kind not in ("inquiry-checkpoint", "inquiry-answer"):
+        raise ValueError("unknown inquiry receipt kind")
+    fields = ({"version", "kind", "identity", "inquiries", "receiptId", "signature"} if kind == "inquiry-checkpoint"
+              else {"version", "kind", "identity", "inquiryId", "questionSha256", "answer", "receiptId", "signature"})
+    if not isinstance(raw, str) or len(raw.encode()) > MAX_INQUIRY_RECEIPT_BYTES:
+        raise NativeError("invalid-inquiry-receipt", f"the {kind} tool returned no bounded JSON receipt")
+    try:
+        receipt = decode_json(raw)
+        if not isinstance(receipt, dict) or set(receipt) != fields:
+            raise ValueError("receipt fields")
+        signature = receipt.pop("signature")
+        if not isinstance(signature, str) or not hmac.compare_digest(signature, sign_receipt(receipt, configuration["key"])):
+            raise ValueError("signature")
+        if receipt["version"] != 1 or receipt["kind"] != kind or receipt["identity"] != configuration["identity"]:
+            raise ValueError("identity")
+        if not isinstance(receipt["receiptId"], str) or len(receipt["receiptId"]) != 32:
+            raise ValueError("receiptId")
+        if kind == "inquiry-answer":
+            if (not _valid_inquiry_id(receipt["inquiryId"]) or not _valid_question_sha(receipt["questionSha256"])
+                    or not isinstance(receipt["answer"], str) or not receipt["answer"].strip()
+                    or len(receipt["answer"].encode()) > MAX_ANSWER_BYTES):
+                raise ValueError("answer binding")
+        else:
+            inquiries = receipt["inquiries"]
+            if not isinstance(inquiries, list) or len(inquiries) > MAX_INQUIRIES:
+                raise ValueError("inquiries")
+            for item in inquiries:
+                if (not isinstance(item, dict)
+                        or set(item) - {"inquiryId", "question", "questionSha256", "state", "askedAt", "deliveredAt"}
+                        or not {"inquiryId", "question", "questionSha256", "state", "askedAt"} <= set(item)
+                        or not _valid_inquiry_id(item["inquiryId"]) or not _valid_question_sha(item["questionSha256"])
+                        or item["state"] not in ("queued", "delivered")
+                        or not isinstance(item["question"], str) or not item["question"].strip()
+                        or len(item["question"].encode()) > MAX_QUESTION_BYTES
+                        or not isinstance(item["askedAt"], str)
+                        or not isinstance(item.get("deliveredAt", ""), str)):
+                    raise ValueError("inquiry entry")
+        return receipt
+    except (ValueError, TypeError, KeyError, RecursionError):
+        raise NativeError("invalid-inquiry-receipt",
+                          f"the {kind} receipt failed identity, signature or binding validation") from None
 
 
 class NativeConnection:
@@ -291,10 +366,24 @@ class NativeConnection:
 
 
 class RootTurnEvidence:
-    """Only a signed finish result in the explicitly admitted root turn can count."""
+    """Only signed results in the explicitly admitted root turn can count.
 
-    def __init__(self, session_id: str, input_id: str, tool_name: str, bridge: dict):
+    Besides the finish tool this tracker owns the inquiry channel's authority:
+    a question only becomes ``delivered`` when a ``buddy_checkpoint`` result in
+    this root session and native turn succeeded untruncated with a signed
+    receipt, and an answer only counts when a ``buddy_answer_inquiry`` result
+    in the same turn carried a signed receipt the controller re-verified against
+    the bridge's committed state. Child sessions, relayed sources, agent and
+    background calls are excluded exactly like finish evidence.
+    """
+
+    def __init__(self, session_id: str, input_id: str, tool_name: str, bridge: dict, *,
+                 checkpoint_name: str | None = None, answer_name: str | None = None,
+                 on_delivery: Callable[[dict, str], None] | None = None,
+                 on_answer: Callable[[dict, str], None] | None = None):
         self.session_id, self.input_id, self.tool_name, self.bridge = session_id, input_id, tool_name, bridge
+        self.checkpoint_name, self.answer_name = checkpoint_name, answer_name
+        self.on_delivery, self.on_answer = on_delivery, on_answer
         self.turn_id: str | None = None
         self.call_id: str | None = None
         self.receipt: dict | None = None
@@ -302,6 +391,8 @@ class RootTurnEvidence:
         self.last_seq = -1
         self.start_seq = self.call_seq = self.result_seq = self.end_seq = -1
         self.completed_ordinal = self.settled_ordinal = self.close_ordinal = 0
+        self.checkpoint_calls: dict[str, dict] = {}
+        self.answer_calls: dict[str, dict] = {}
 
     def observe(self, message: dict, ordinal: int) -> None:
         p = message.get("params")
@@ -345,30 +436,74 @@ class RootTurnEvidence:
         if p.get("type") != "tool.updated" or any(data.get(k) for k in ("source", "parentToolCallId", "childSessionId", "childToolCallId", "agentId", "background")):
             return
         kind = data.get("kind")
+        tool_call_id = data.get("toolCallId")
         if kind == "scheduled":
             if self.call_id is not None:
                 raise NativeError("duplicate-finish", "the root scheduled another tool after its finish call")
-            if data.get("toolName") == self.tool_name:
-                if not isinstance(data.get("toolCallId"), str) or not data["toolCallId"]:
+            name = data.get("toolName")
+            if name == self.tool_name:
+                if not isinstance(tool_call_id, str) or not tool_call_id:
                     raise NativeError("invalid-provenance", "the root finish call has no identity")
-                self.call_id, self.call_seq = data["toolCallId"], seq
+                self.call_id, self.call_seq = tool_call_id, seq
+            elif name == self.checkpoint_name and self.checkpoint_name is not None:
+                if not isinstance(tool_call_id, str) or not tool_call_id or tool_call_id in self.checkpoint_calls:
+                    raise NativeError("invalid-provenance", "the root checkpoint call has no usable identity")
+                self.checkpoint_calls[tool_call_id] = {"seq": seq, "result": None}
+            elif name == self.answer_name and self.answer_name is not None:
+                if not isinstance(tool_call_id, str) or not tool_call_id or tool_call_id in self.answer_calls:
+                    raise NativeError("invalid-provenance", "the root answer call has no usable identity")
+                self.answer_calls[tool_call_id] = {"seq": seq, "result": None}
             return
-        if data.get("toolCallId") != self.call_id or self.call_id is None:
-            return
-        if kind == "error":
-            self._retry_failed_finish()
-            return
-        if kind == "result":
-            result = data.get("result") or {}
-            if self.receipt is not None or result.get("truncated") is not False:
-                raise NativeError("finish-tool-failed", "the native finish result was duplicate, unsuccessful or truncated")
-            if result.get("success") is False:
+        if self.call_id is not None and tool_call_id == self.call_id:
+            if kind == "error":
                 self._retry_failed_finish()
                 return
-            if result.get("success") is not True:
-                raise NativeError("finish-tool-failed", "the native finish result has no explicit success evidence")
-            self.receipt = verify_receipt(result.get("content"), self.bridge)
-            self.result_seq = seq
+            if kind == "result":
+                result = data.get("result") or {}
+                if self.receipt is not None or result.get("truncated") is not False:
+                    raise NativeError("finish-tool-failed", "the native finish result was duplicate, unsuccessful or truncated")
+                if result.get("success") is False:
+                    self._retry_failed_finish()
+                    return
+                if result.get("success") is not True:
+                    raise NativeError("finish-tool-failed", "the native finish result has no explicit success evidence")
+                self.receipt = verify_receipt(result.get("content"), self.bridge)
+                self.result_seq = seq
+            return
+        if kind in ("result", "error") and tool_call_id in self.checkpoint_calls:
+            self._inquiry_result(self.checkpoint_calls[tool_call_id], data, kind, seq, "inquiry-checkpoint", tool_call_id)
+            return
+        if kind in ("result", "error") and tool_call_id in self.answer_calls:
+            self._inquiry_result(self.answer_calls[tool_call_id], data, kind, seq, "inquiry-answer", tool_call_id)
+            return
+
+    def _inquiry_result(self, call: dict, data: dict, kind: str, seq: int, receipt_kind: str, tool_call_id: str) -> None:
+        """Import one checkpoint/answer tool result under root-turn authority.
+
+        An ordinary tool error keeps the turn alive for a corrected retry, exactly
+        like a failed finish. A successful result must carry a signed receipt the
+        controller re-verifies; the bridge callback then applies the state change
+        or raises for a forged, stale or conflicting binding. A duplicate terminal
+        result for one call identity is a protocol violation.
+        """
+        if call["result"] is not None:
+            raise NativeError("invalid-provenance", f"the native {receipt_kind} call produced a duplicate terminal result")
+        if kind == "error":
+            call["result"] = "tool-error"
+            return
+        result = data.get("result") or {}
+        if result.get("truncated") is not False:
+            raise NativeError("invalid-inquiry-receipt", f"the native {receipt_kind} result was truncated")
+        if result.get("success") is False:
+            call["result"] = "tool-error"
+            return
+        if result.get("success") is not True:
+            raise NativeError("invalid-inquiry-receipt", f"the native {receipt_kind} result has no explicit success evidence")
+        receipt = verify_inquiry_receipt(result.get("content"), self.bridge, receipt_kind)
+        call["result"] = receipt
+        callback = self.on_delivery if receipt_kind == "inquiry-checkpoint" else self.on_answer
+        if callback is not None:
+            callback(receipt, tool_call_id)
 
     def _retry_failed_finish(self) -> None:
         # Native schema validation and MCP isError responses are ordinary tool

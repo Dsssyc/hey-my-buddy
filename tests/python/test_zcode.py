@@ -79,14 +79,17 @@ class ZcodeAdapterTests(ZcodeFixtureCase):
         self.assertEqual(self.personal.read_bytes(), original)
         self.assertNotIn("fixture-secret-never-public", json.dumps(outcome.to_report()))
         self.assertFalse(any("provider" in x["location"] or "bridge" in x["location"] for x in outcome.artifacts))
-        # Observation is a declared capability backed by this attempt's private
-        # bridge; correlated inquiry is deliberately absent because the installed
-        # native protocol has no turn-bound in-turn input method. The session facts
-        # stay separate from the Git workspace facts.
+        # Observation and the cooperative inquiry channel are declared
+        # capabilities backed by this attempt's private bridge: questions queue
+        # for delivery at the root's own checkpoint inside the one admitted
+        # native turn, never through an injected send. The session facts stay
+        # separate from the Git workspace facts.
         self.assertIn("observe", self.adapter.capabilities)
-        self.assertNotIn("inquiry", self.adapter.capabilities)
+        self.assertIn("inquiry", self.adapter.capabilities)
         self.assertTrue(outcome.result["inquiry"]["mounted"], outcome.result["inquiry"])
-        self.assertFalse(outcome.result["inquiry"]["supported"])
+        self.assertTrue(outcome.result["inquiry"]["supported"])
+        self.assertEqual(outcome.result["inquiry"]["deliveryMode"], "cooperative-checkpoint")
+        self.assertEqual(outcome.result["inquiry"]["answered"], 0)
         native = outcome.result["nativeSession"]
         self.assertEqual(native["sessionId"], turn["sessionId"])
         self.assertEqual(native["storageScope"], "task-private")

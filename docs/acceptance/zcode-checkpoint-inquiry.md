@@ -1,0 +1,45 @@
+# ZCode cooperative checkpoint inquiry — source acceptance
+
+This is the source acceptance record for the ZCode cooperative inquiry channel, verified on 2026-09-25 in an isolated Buddy worktree from `acd2b27` (goal `47d73dad-5587-40f8-ab2b-c8ce45fd01d5`). It records the focused source verification and the bounded real native app-server proof that authorizes the adapter's `inquiry` capability declaration. It is not an installed-runtime acceptance: the daily board and the installed plugin are untouched, and the Host integrates the fixed artifacts separately.
+
+## What was built
+
+The ZCode adapter previously declared `observe` only and recorded every Host question as a durable `unavailable` refusal, because the installed native protocol has no turn-bound in-turn input (`session/send` has no delivery/expectedTurn fields and rejects sends during an active prompt; the v4 sendText guide can only defer unbound input or start a new turn; the internal expected-turn-fenced steer is not client-visible). That native limitation is unchanged and nothing injects input. The new channel is **cooperative inside the one admitted native turn**:
+
+- The controller's private `InquiryBridge` queues a Host question (`ask`) with its committed identity, question text and hash, reusing the shared bounds (32 inquiries per run, 4000-byte questions and answers, idempotent identical replay at every state, changed text under the same id a conflict). Asking before admission is `not-ready`; after settlement the socket is gone.
+- The session-private MCP server exposes `buddy_checkpoint` (a signed receipt listing the still-answerable questions) and `buddy_answer_inquiry` (a signed tentative receipt binding attempt identity, inquiryId, question hash and exact answer). The MCP layer never writes inquiry state; it reads the bridge journal read-only and enforces the same bounds.
+- Only the controller moves journal state, and only after `RootTurnEvidence` matched the current root session and native turn, the tool call identity, a successful untruncated `tool.updated` result and a re-verified receipt signature, excluding child/source/agent/background relays exactly like finish evidence: `queued → delivered` at a verified checkpoint result, `delivered/queued → answered` at a verified answer result. A forged, stale or duplicate-conflicting receipt fails the whole turn (`invalid-inquiry-receipt`, `conflicting-inquiry-answer`); an identical binding replay is a no-op.
+- `buddy_finish_turn` refuses a `completed` outcome with the pending question text while a question is queued or delivered, until it is answered, withdrawn (`discard`) or explicitly unavailable; assistance/attention remain legal. Settlement (or stop/cancel) marks unanswered entries `unavailable` in the journal without waking a model, including a question that raced in after the final finish receipt. The governed prompt asks the root to checkpoint at natural milestones and before finishing, never on a timer.
+- The bridge socket, journal and entry state are guarded by one lock across the socket thread, the native pump thread and shutdown. Existing signed finish semantics, native attention handling (auto-denied permissions, declined native questions ending as structured attention), activity publication (including the same-phase refresh fix) and real shutdown evidence are unchanged.
+
+The board importer (`buddy.inquiry`) reads the same journal unchanged: the ask receipt, live `answer` view and `queued`/`delivered`/`answered`/`discarded`/`unavailable` journal records match the existing message-state model, and the answered record carries the importer's answer shape (text, bytes, via `tool:buddy_answer_inquiry`, native toolCallId, answeredAt).
+
+## Focused source verification
+
+All focused ZCode suites passed from the isolated worktree with inherited `BUDDY_*`/`ZCODE_*` pins, `VIRTUAL_ENV` and `UV_PROJECT_ENVIRONMENT` cleared and private state/runtime roots: 94 tests across `test_zcode.py`, `test_zcode_protocol.py`, `test_zcode_inquiry.py`, `test_zcode_checkpoint.py` (new), `test_zcode_turn_io.py` and the real-CLI localhost-native `test_zcode_native.py` (installed ZCode 3.14.3 CLI with a loopback model fixture, no paid calls). Coverage includes: real runner + fixture ask/checkpoint/answer/finish flows; same-id replay before and after the answer; wrong-session, wrong-turn and child-relay tool results that cannot deliver or answer; forged/truncated/duplicate-conflicting receipts failing the turn; invalid signature, unknown id and overlimit answers refused at the MCP layer; a question arriving during finish refusal and after the final finish receipt; queued-at-settlement unavailability; withdrawal by discard; cancellation with a queued question; unchanged exactly one native `session/send` with no `v4/command`; and the real finish after the reply.
+
+Two assertions in the Host-owned `tests/python/test_inquiry.py` encode the previous contract (`inquiry_capable("zcode")` false, and the observe-only refusal path for a zcode worker) and fail against the new capability declaration; they are the Host's integration-side updates and are listed in the goal outcome, not silently rewritten here.
+
+## Real native acceptance proof
+
+One bounded private paid probe (of at most two authorized) was run against the real installed ZCode app-server with the real `zai-api` provider (API-key access), model **GLM-5.3-Flash**, effort `low`, in a private scratch state/runtime with no board and no global config or credential writes; test subprocess pins were cleared. The probe script and secret-redacted raw evidence are retained under the ignored `.dsh-skill-build/zcode-inquiry-probe/` directory (the report was scanned for API keys before retention).
+
+While the task was live, the probe queued the Host question "what is the exact acknowledgement word you were told to reply with?" through the private bridge socket. The real root model then, inside the single admitted turn: created `probe-output.txt` with exactly `inquiry-channel-verified`, called `buddy_checkpoint`, answered the question through `buddy_answer_inquiry` with exactly `checkpoint-ok`, and concluded `completed` through the signed finish tool. Verified facts from the controller receipt, turn record and journal:
+
+| Check | Evidence |
+| --- | --- |
+| Live queue while the turn ran | question queued (`ask` receipt `state: queued`) after the bridge reported the admitted root turn |
+| Cooperative delivery | journal `queued → delivered` bound to the root checkpoint call `call_065daa35ec1e46f99ac3fbc0` (`via: tool:buddy_checkpoint`) |
+| Correlated answer | journal `delivered → answered` bound to the root answer call `call_402eeb6de350458b9bb8040e`, answer text exactly `checkpoint-ok` |
+| Completed finish after the reply | accepted finish receipt `call_9bbe21d1f8e8431e846a528e` with disposition `completed` and `request: null` |
+| One admitted turn | native session `sess_6844535b-c33f-4041-a01c-ed6a6061ece4`, turn `turn_1a3b174f-b0ae-49fd-8423-e962e267f924`, input `buddy-3bd3e1db…`, ordered provenance `turnStartSeq 2 < toolCallSeq 52 < toolResultSeq 54 < turnEndSeq 63`, settlement `session-closed` |
+| Honest side effects | controller status `ok`, both process groups confirmed shutdown, zero refused native interactive requests, no injected native command |
+
+The single probe passed every check (43 seconds wall clock); the second authorized probe was not needed. This real evidence is what authorizes the `inquiry` capability in the adapter registry — the declaration is not based on the fixture suite alone.
+
+## Boundaries
+
+- Delivery is voluntary: a root that never checkpoints leaves questions queued, and settlement honestly marks them `unavailable`; a live turn is never woken, extended, paused or restarted for a question.
+- The channel cannot deliver a native permission or native question to a Host; those remain auto-denied/declined and surface as structured attention exactly as before, and no user consent is ever claimed.
+- `waitMs` on a board inquiry still bounds only the caller's wait, and the model-facing tool names are session-hashed (`mcp__buddy_<hash>__*`), so they differ per attempt.
+- The installed runtime keeps its current contract until the Host integrates these artifacts; `docs/reference/architecture.md` and the console-facing capability summaries are the Host's updates and must not describe this channel as installed before that happens.

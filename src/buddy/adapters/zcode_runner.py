@@ -22,16 +22,19 @@ from ..errors import BoardError
 from .base import ProcessHandle
 from .turn_io import ASSISTANCE_HINTS, canonical_json, input_hash, private_json
 from .zcode_config import SUPPORTED_ACCESS, cli_command, snapshot_provider_files
-from .zcode_protocol import (ActivityProjection, NATIVE_INQUIRY_UNSUPPORTED, NativeConnection, NativeError,
+from .zcode_protocol import (COOPERATIVE_INQUIRY_NOTE, MAX_ANSWER_BYTES, MAX_INQUIRIES, MAX_INQUIRY_ID_BYTES,
+                             MAX_QUESTION_BYTES, ActivityProjection, NativeConnection, NativeError,
                              RootTurnEvidence, decode_json)
 
-MAX_QUESTION_BYTES = 4000
-MAX_ANSWER_BYTES = 4000
-MAX_INQUIRIES = 32
 MAX_JOURNAL_BYTES = 1024 * 1024
 MAX_BRIDGE_FRAME_BYTES = 16 * 1024
 BRIDGE_PROTOCOL_VERSION = 1
 BRIDGE_WAIT_SECONDS = 5.0
+
+#: Terminal states an inquiry entry can never leave.
+ANSWERED_STATES = ("answered", "discarded", "unavailable")
+#: States a checkpoint may deliver and an answer may act on.
+ANSWERABLE_STATES = ("queued", "delivered")
 
 
 def _now() -> str:
@@ -39,19 +42,23 @@ def _now() -> str:
 
 
 class InquiryBridge:
-    """Owner-private observation bridge for one governed ZCode root turn.
+    """Owner-private cooperative inquiry bridge for one governed ZCode root turn.
 
     The bridge lives inside the controller process because only this process holds
-    the native connection. It answers bounded, metadata-only ``observe`` requests,
-    and it records every question once as an honest refusal: the installed native
-    protocol has no turn-bound in-turn input method, so nothing here may inject a
-    question into the native session. See
-    :data:`zcode_protocol.NATIVE_INQUIRY_UNSUPPORTED` for the verified limitation.
+    the native connection. A Host question is only ever *queued* here; it reaches
+    the root exclusively through the session-private ``buddy_checkpoint`` tool
+    inside the one admitted native turn, and only the controller — after
+    verifying that turn's own ``tool.updated`` evidence and the signed receipt —
+    journals ``delivered`` or ``answered`` state. Nothing here injects input, and
+    no MCP handler writes this journal. See
+    :data:`zcode_protocol.COOPERATIVE_INQUIRY_NOTE` for the channel contract.
 
     The journal is attempt-private transport evidence. A committed question keeps
     its identity, question hash and delivery record across state changes, so a
     replay of the identical question is always a duplicate instead of a conflict,
-    and a changed question under the same id is always a conflict.
+    and a changed question under the same id is always a conflict. The socket
+    thread, the native pump thread and shutdown all touch this object, so one
+    lock guards every entry, journal and state transition.
     """
 
     def __init__(self, credentials: dict, *, identity: dict, journal_path: str, attention_path: str | None = None):
@@ -63,9 +70,11 @@ class InquiryBridge:
         self.token = credentials.get("token")
         self.session_id: str | None = None
         self.entries: dict[str, dict] = {}
+        self.lock = threading.RLock()
         self.listener: socket.socket | None = None
         self.thread: threading.Thread | None = None
         self.active = False
+        self.closed = False
         self.mounted = False
         self.bridge_started_at: str | None = None
         self.agent_status = "starting"
@@ -111,10 +120,26 @@ class InquiryBridge:
             pass
 
     def close(self) -> None:
-        """Stop accepting; the socket never outlives the owned root turn."""
-        self.active = False
-        self.agent_status = "ended"
-        listener, self.listener = self.listener, None
+        """Stop accepting and terminalize what can no longer be answered.
+
+        Every queued or delivered-but-unanswered entry is journaled
+        ``unavailable``: settlement is the honest end of the answer window, and
+        marking it requires waking no model. The socket never outlives the owned
+        root turn, and a late ask after this point cannot queue anything.
+        """
+        with self.lock:
+            if self.closed:
+                return
+            self.closed = True
+            self.active = False
+            self.agent_status = "ended"
+            for inquiry_id, entry in list(self.entries.items()):
+                if entry.get("state") in ANSWERABLE_STATES:
+                    self._journal({**self._identity_fields(), "inquiryId": inquiry_id, "state": "unavailable",
+                                   "unavailableAt": _now(),
+                                   "reason": "the governed root turn ended before this inquiry was answered",
+                                   "limitation": COOPERATIVE_INQUIRY_NOTE})
+            listener, self.listener = self.listener, None
         if listener is not None:
             try:
                 listener.close()
@@ -128,10 +153,11 @@ class InquiryBridge:
             pass
 
     def activate(self, session_id: str) -> None:
-        self.session_id = session_id
-        self.active = True
-        self.agent_status = "running"
-        self.bridge_started_at = _now()
+        with self.lock:
+            self.session_id = session_id
+            self.active = True
+            self.agent_status = "running"
+            self.bridge_started_at = _now()
 
     # -- journal -------------------------------------------------------------
     def _load_journal(self) -> None:
@@ -164,8 +190,8 @@ class InquiryBridge:
 
         Only the delta is appended (so the journal stays a linear transport log)
         while the in-memory entry keeps every committed field. This is what makes
-        a replayed question recognizable: ``questionSha256`` and ``delivery`` are
-        never dropped by a later state record.
+        a replayed question recognizable: ``questionSha256``, ``question`` and
+        ``delivery`` are never dropped by a later state record.
         """
         inquiry_id = record["inquiryId"]
         self.entries[inquiry_id] = {**self.entries.get(inquiry_id, {}), **record}
@@ -184,10 +210,69 @@ class InquiryBridge:
             self.error = self.error or "the inquiry journal could not be written"
 
     def describe_answer(self, inquiry_id: str) -> dict:
-        """This adapter can never record a correlated answer; say so explicitly."""
-        entry = self.entries.get(inquiry_id) or {}
-        return {"answer": {"available": False, "reason": entry.get("reason") or NATIVE_INQUIRY_UNSUPPORTED},
-                "state": entry.get("state") or "unavailable", "inquiryId": inquiry_id, "supported": False}
+        """The live view of one inquiry, including its correlated answer."""
+        with self.lock:
+            entry = self.entries.get(inquiry_id) or {}
+            answer = entry.get("answer")
+            value = {"available": False, "reason": entry.get("reason") or "no correlated answer yet"}
+            if isinstance(answer, dict) and isinstance(answer.get("text"), str) and answer["text"].strip():
+                value = {**answer, "available": True}
+            return {"answer": value, "state": entry.get("state") or "unknown", "inquiryId": inquiry_id,
+                    "supported": True, "deliveryMode": "cooperative-checkpoint"}
+
+    # -- controller-authority transitions ------------------------------------
+    def deliver_inquiries(self, receipt: dict, tool_call_id: str) -> None:
+        """Mark exactly the receipt's inquiries delivered, after root evidence.
+
+        Called only from :class:`RootTurnEvidence` with a receipt whose signature
+        and attempt identity already verified and whose native ``tool.updated``
+        result was a successful, untruncated root-turn checkpoint call. Each
+        listed inquiry must match a committed question by id and hash; an unknown
+        id or a changed hash is forgery and fails the turn. Entries that left the
+        answerable window while the call was in flight (answered, withdrawn or
+        made unavailable) keep their terminal state instead of failing the turn.
+        """
+        with self.lock:
+            for item in receipt["inquiries"]:
+                inquiry_id = item["inquiryId"]
+                entry = self.entries.get(inquiry_id)
+                if entry is None or entry.get("questionSha256") != item["questionSha256"]:
+                    raise NativeError("invalid-inquiry-evidence",
+                                      "a checkpoint receipt referenced an inquiry this attempt never committed")
+                if entry.get("state") == "queued":
+                    self._journal({**self._identity_fields(), "inquiryId": inquiry_id, "state": "delivered",
+                                   "deliveredAt": _now(), "via": "tool:buddy_checkpoint", "toolCallId": tool_call_id})
+
+    def record_answer(self, receipt: dict, tool_call_id: str) -> None:
+        """Record one correlated answer after verified root tool evidence.
+
+        The receipt's signature, attempt identity, inquiry id, question hash and
+        exact answer text bind the answer. The first verified answer is terminal;
+        a byte-identical replay is an idempotent no-op, and anything else under
+        the same inquiry id is a conflict that fails the turn rather than
+        silently replacing a recorded answer.
+        """
+        inquiry_id = receipt["inquiryId"]
+        answer = receipt["answer"]
+        with self.lock:
+            entry = self.entries.get(inquiry_id)
+            if entry is None or entry.get("questionSha256") != receipt["questionSha256"]:
+                raise NativeError("invalid-inquiry-evidence",
+                                  "an answer receipt referenced an inquiry this attempt never committed")
+            if entry.get("state") == "answered":
+                recorded = (entry.get("answer") or {}).get("text")
+                if recorded == answer:
+                    return  # an identical binding replay changes nothing
+                raise NativeError("conflicting-inquiry-answer",
+                                  "a different answer was already recorded for this inquiry")
+            if entry.get("state") not in ANSWERABLE_STATES:
+                raise NativeError("invalid-inquiry-evidence",
+                                  "the inquiry left its answerable window before this answer arrived")
+            self._journal({**self._identity_fields(), "inquiryId": inquiry_id, "state": "answered",
+                           "answeredAt": _now(),
+                           "answer": {"text": answer, "bytes": len(answer.encode()), "truncated": False,
+                                      "via": "tool:buddy_answer_inquiry", "toolCallId": tool_call_id,
+                                      "at": _now()}})
 
     # -- observation ---------------------------------------------------------
     def note_event(self, message: dict, phase: str) -> None:
@@ -197,60 +282,74 @@ class InquiryBridge:
         kind = params.get("type") if isinstance(params, dict) else None
         if method == "state.updated":
             kind = f"state:{str((params or {}).get('reason'))[:40]}"
-        self.last_event = {"at": _now(), "kind": (kind or method or "event")[:80]}
-        entry = {"at": self.last_event["at"], "kind": self.last_event["kind"]}
+        last_event = {"at": _now(), "kind": (kind or method or "event")[:80]}
+        entry = {"at": last_event["at"], "kind": last_event["kind"]}
         data = (params or {}).get("payload") if isinstance(params, dict) else None
         if isinstance(data, dict) and isinstance(data.get("toolName"), str) and data["toolName"]:
             entry["toolName"] = data["toolName"][:120]
-        self.activity.append(entry)
-        if len(self.activity) > 20:
-            self.activity = self.activity[-20:]
-            self.activity_dropped += 1
-        self.agent_status = "finishing" if phase == "finishing" else ("running" if self.active else self.agent_status)
+        with self.lock:
+            self.last_event = last_event
+            self.activity.append(entry)
+            if len(self.activity) > 20:
+                self.activity = self.activity[-20:]
+                self.activity_dropped += 1
+            self.agent_status = "finishing" if phase == "finishing" else ("running" if self.active else self.agent_status)
 
     def snapshot(self) -> dict:
-        entries = list(self.entries.values())
-        refused = sum(1 for entry in entries if entry.get("state") == "unavailable")
+        with self.lock:
+            entries = list(self.entries.values())
+            counts = {state: sum(1 for entry in entries if entry.get("state") == state)
+                      for state in ("queued", "delivered", "answered", "discarded", "unavailable")}
+            activity = list(self.activity)
+            last_event = dict(self.last_event) if self.last_event else None
+            attention = ({"requests": len(self.attention), "last": self.attention[-1]} if self.attention else None)
         return {
             "ready": self.active,
             "observedAt": _now(),
             "sessionId": self.session_id,
             "agentStatus": self.agent_status,
             "bridgeStartedAt": self.bridge_started_at,
-            "inbox": {"pending": 0, "delivered": 0, "answered": 0, "refused": refused},
-            "lastEvent": self.last_event,
-            "activity": self.activity,
+            "inbox": {"pending": counts["queued"], "delivered": counts["delivered"], "answered": counts["answered"],
+                      "discarded": counts["discarded"], "refused": counts["unavailable"]},
+            "lastEvent": last_event,
+            "activity": activity,
             "activityDropped": self.activity_dropped,
-            "replyTool": None,
-            "attention": ({"requests": len(self.attention), "last": self.attention[-1]} if self.attention else None),
-            "unavailable": ["nativeReasoning", "toolArguments", "toolOutput", "providerCredentials",
-                            "correlatedQuestions"],
+            "replyTool": {"name": "buddy_answer_inquiry", "checkpointTool": "buddy_checkpoint",
+                          "delivery": "cooperative-checkpoint"},
+            "attention": attention,
+            "unavailable": ["nativeReasoning", "toolArguments", "toolOutput", "providerCredentials", "immediateDelivery"],
             "journal": {"enabled": True, "truncated": bool(getattr(self, "truncated", False)), "entries": len(entries)},
-            "capability": "observe",
-            "supported": False,
-            "limitation": NATIVE_INQUIRY_UNSUPPORTED,
+            "capability": "inquiry",
+            "supported": True,
+            "deliveryMode": "cooperative-checkpoint",
+            "limitation": COOPERATIVE_INQUIRY_NOTE,
             "limits": {"maxQuestionBytes": MAX_QUESTION_BYTES, "maxAnswerBytes": MAX_ANSWER_BYTES,
                        "maxInquiriesPerRun": MAX_INQUIRIES, "maxFrameBytes": MAX_BRIDGE_FRAME_BYTES,
-                       "inquiry": "unsupported", "requestedDelivery": None,
-                       "startsNewTurn": False, "extendsDeadline": False},
+                       "inquiry": "cooperative-checkpoint", "deliveryMode": "cooperative-checkpoint",
+                       "requestedDelivery": None, "startsNewTurn": False, "extendsDeadline": False},
             "error": self.error,
         }
 
     def report(self) -> dict:
-        entries = list(self.entries.values())
-        refused = sum(1 for entry in entries if entry.get("state") == "unavailable")
+        with self.lock:
+            entries = list(self.entries.values())
+            counts = {state: sum(1 for entry in entries if entry.get("state") == state)
+                      for state in ("queued", "delivered", "answered", "discarded", "unavailable")}
         return {
             "enabled": self.mounted or self.error is not None,
             "mounted": self.mounted,
             "error": self.error,
-            "capability": "observe",
-            "supported": False,
-            "inquiry": "unsupported",
-            "limitation": NATIVE_INQUIRY_UNSUPPORTED,
+            "capability": "inquiry",
+            "supported": True,
+            "inquiry": "cooperative-checkpoint",
+            "deliveryMode": "cooperative-checkpoint",
+            "limitation": COOPERATIVE_INQUIRY_NOTE,
             "requested": len(entries),
-            "refused": refused,
-            "answered": 0,
-            "delivered": 0,
+            "queued": counts["queued"],
+            "delivered": counts["delivered"],
+            "answered": counts["answered"],
+            "discarded": counts["discarded"],
+            "refused": counts["unavailable"],
             "journalEntries": len(entries),
             "requestedDelivery": None,
             "startsNewTurn": False,
@@ -264,20 +363,22 @@ class InquiryBridge:
         unsupported interactive request is outstanding, so the file has to exist
         before the tool call, not only in the controller's final report.
         """
-        self.attention.append(record)
-        del self.attention[:-8]
-        if self.attention_path is not None:
-            try:
-                private_json(self.attention_path, {
-                    "version": 1,
-                    **{k: self.identity.get(k) for k in ("taskId", "attemptId", "generation", "turnId")},
-                    "requests": self.attention,
-                })
-            except OSError:
-                self.error = self.error or "the native attention record could not be written"
+        with self.lock:
+            self.attention.append(record)
+            del self.attention[:-8]
+            if self.attention_path is not None:
+                try:
+                    private_json(self.attention_path, {
+                        "version": 1,
+                        **{k: self.identity.get(k) for k in ("taskId", "attemptId", "generation", "turnId")},
+                        "requests": self.attention,
+                    })
+                except OSError:
+                    self.error = self.error or "the native attention record could not be written"
 
     def attention_report(self) -> dict:
-        return {"requests": len(self.attention), "last": self.attention[-1] if self.attention else None}
+        with self.lock:
+            return {"requests": len(self.attention), "last": self.attention[-1] if self.attention else None}
 
     # -- socket protocol -----------------------------------------------------
     def _accept_loop(self) -> None:
@@ -333,64 +434,97 @@ class InquiryBridge:
             return response(True, value=self.snapshot())
         if method == "ask":
             return self._ask(frame, response)
+        if method == "discard":
+            return self._discard(frame, response)
         if method == "answer":
             inquiry_id = frame.get("inquiryId")
             if not isinstance(inquiry_id, str) or not inquiry_id:
                 return response(False, error="bad-request")
-            if inquiry_id not in self.entries:
-                return response(False, error="not-ready")
+            with self.lock:
+                if inquiry_id not in self.entries:
+                    return response(False, error="not-ready")
             return response(True, value=self.describe_answer(inquiry_id))
         return response(False, error="unsupported-method")
 
     def _ask(self, frame: dict, response) -> dict:
-        """Record one question as an honest, attempt-bound refusal.
+        """Queue one question for cooperative delivery at the next checkpoint.
 
-        No native command is ever sent: the installed protocol cannot bind an
-        input to the live turn (see ``NATIVE_INQUIRY_UNSUPPORTED``). The first
-        question is journaled once with its committed question hash and refusal
-        delivery; an identical replay returns the same committed state as a
-        duplicate and a changed question under the same id is a conflict. That
-        keeps retries idempotent without any retry ever injecting anything.
+        No native command is ever sent: the question waits in this bridge until
+        the root calls ``buddy_checkpoint`` inside the one admitted turn (see
+        ``COOPERATIVE_INQUIRY_NOTE``). The first question is journaled once with
+        its committed text, question hash and delivery record; an identical
+        replay returns the current committed state as a duplicate and a changed
+        question under the same id is a conflict. Before the turn is admitted
+        there is nothing to deliver into yet, so the ask is refused as not-ready
+        and the asking side may retry the identical id.
         """
         inquiry_id, question = frame.get("inquiryId"), frame.get("question")
-        if not isinstance(inquiry_id, str) or not inquiry_id or len(inquiry_id) > 128:
+        if (not isinstance(inquiry_id, str) or not inquiry_id or len(inquiry_id.encode()) > MAX_INQUIRY_ID_BYTES
+                or not isinstance(question, str) or not question.strip() or len(question.encode()) > MAX_QUESTION_BYTES):
             return response(False, error="bad-request")
-        if not isinstance(question, str) or not question.strip() or len(question.encode()) > MAX_QUESTION_BYTES:
+        with self.lock:
+            if not self.active or self.closed:
+                return response(False, error="not-ready")
+            digest = hashlib.sha256(question.encode()).hexdigest()
+            existing = self.entries.get(inquiry_id)
+            if existing is not None:
+                if existing.get("questionSha256") != digest:
+                    return response(False, error="conflict")
+                return response(True, value=self._question_value(inquiry_id, existing, duplicate=True))
+            if len(self.entries) >= MAX_INQUIRIES:
+                return response(False, error="too-many")
+            delivery = {"requestedDelivery": None, "admittedDelivery": "cooperative-checkpoint",
+                        "startsNewTurn": False, "extendsDeadline": False, "supported": True, "at": _now()}
+            self._journal({**self._identity_fields(), "inquiryId": inquiry_id, "state": "queued",
+                           "question": question, "questionSha256": digest, "askedAt": _now(),
+                           "delivery": delivery, "limitation": COOPERATIVE_INQUIRY_NOTE})
+            return response(True, value=self._question_value(inquiry_id, self.entries[inquiry_id], duplicate=False))
+
+    def _discard(self, frame: dict, response) -> dict:
+        """Withdraw one still-unanswered question; it stops blocking completion."""
+        inquiry_id = frame.get("inquiryId")
+        if not isinstance(inquiry_id, str) or not inquiry_id:
             return response(False, error="bad-request")
-        digest = hashlib.sha256(question.encode()).hexdigest()
-        existing = self.entries.get(inquiry_id)
-        if existing is not None:
-            if existing.get("questionSha256") != digest:
+        with self.lock:
+            entry = self.entries.get(inquiry_id)
+            if entry is None:
+                return response(False, error="not-ready")
+            if entry.get("state") not in ANSWERABLE_STATES:
                 return response(False, error="conflict")
-            return response(True, value=self._refusal_value(inquiry_id, existing, duplicate=True))
-        if len(self.entries) >= MAX_INQUIRIES:
-            return response(False, error="too-many")
-        delivery = {"requestedDelivery": None, "admittedDelivery": None, "startsNewTurn": False,
-                    "extendsDeadline": False, "supported": False, "at": _now()}
-        self._journal({**self._identity_fields(), "inquiryId": inquiry_id, "state": "unavailable",
-                       "questionSha256": digest, "reason": "native-inquiry-unsupported",
-                       "limitation": NATIVE_INQUIRY_UNSUPPORTED, "delivery": delivery, "refusedAt": _now()})
-        return response(True, value=self._refusal_value(inquiry_id, self.entries[inquiry_id], duplicate=False))
+            self._journal({**self._identity_fields(), "inquiryId": inquiry_id, "state": "discarded",
+                           "discardedAt": _now(),
+                           "reason": "withdrawn by the asking side; it no longer blocks turn completion"})
+            return response(True, value={"inquiryId": inquiry_id, "state": "discarded",
+                                         "questionSha256": entry.get("questionSha256")})
 
     @staticmethod
-    def _refusal_value(inquiry_id: str, entry: dict, *, duplicate: bool) -> dict:
+    def _question_value(inquiry_id: str, entry: dict, *, duplicate: bool) -> dict:
         return {
-            "accepted": False,
-            "supported": False,
-            "state": entry.get("state") or "unavailable",
+            "accepted": True,
+            "supported": True,
+            "state": entry.get("state") or "queued",
             "duplicate": duplicate,
             "inquiryId": inquiry_id,
             "questionSha256": entry.get("questionSha256"),
-            "reason": entry.get("limitation") or NATIVE_INQUIRY_UNSUPPORTED,
+            "reason": entry.get("reason"),
             "delivery": entry.get("delivery") or {},
         }
 
 
-def governed_prompt(task_text: str, turn_input: dict, tool_name: str) -> str:
-    """Bounded governed root prompt: scope, finish contract and assistance triggers."""
+def governed_prompt(task_text: str, turn_input: dict, finish_tool: str, *,
+                    checkpoint_tool: str | None = None, answer_tool: str | None = None) -> str:
+    """Bounded governed root prompt: scope, inquiry channel, finish contract."""
+    inquiry = (
+        f"Host inquiries arrive cooperatively: call {checkpoint_tool} at natural work milestones and again just "
+        f"before finishing to pick up any queued Host questions (an empty list means none). Answer each listed "
+        f"question with {answer_tool} using its exact inquiryId. A completed finish is refused while a question "
+        f"is still unanswered; a withdrawn or explicitly unavailable question no longer blocks it. Checkpointing "
+        "is voluntary and never on a timer, and no input is ever injected into your turn."
+    ) if checkpoint_tool and answer_tool else ""
     return "\n\n".join([
         "This is a governed Buddy root turn. Complete the authorized task using the available coding tools and internal subagents. Follow the frozen Host input and its allocated workspace.",
-        f"Only the root may conclude this Buddy turn. After your work and internal subagents settle, obtain one successful receipt from {tool_name} with the complete structured outcome. Include all six fields: disposition, summary, remaining, decisions, artifacts, request. Completed requires request: null. Use assistance for bounded help or attention for a Host decision. If a native permission or user-input request was refused, you must conclude with attention instead of completed. If the tool explicitly fails, correct the arguments and retry in this turn. Plain final text is not a recorded outcome. After a successful finish receipt, do not start more tools; end the native turn.",
+        f"Only the root may conclude this Buddy turn. After your work and internal subagents settle, obtain one successful receipt from {finish_tool} with the complete structured outcome. Include all six fields: disposition, summary, remaining, decisions, artifacts, request. Completed requires request: null. Use assistance for bounded help or attention for a Host decision. If a native permission or user-input request was refused, you must conclude with attention instead of completed. If the tool explicitly fails, correct the arguments and retry in this turn. Plain final text is not a recorded outcome. After a successful finish receipt, do not start more tools; end the native turn.",
+        inquiry,
         *ASSISTANCE_HINTS,
         task_text, canonical_json(turn_input),
     ])
@@ -529,10 +663,16 @@ def run(control: dict, cancelled: threading.Event) -> tuple[dict, int]:
             attention_path = directory / "attention.json"
             bridge = {"identity": identity, "inputSha256": input_hash(turn_input), "key": secrets.token_hex(32),
                       "attentionPath": str(attention_path)}
+            if inquiry is not None and isinstance(inquiry.get("resultsPath"), str):
+                # The MCP tools only read this journal; every record in it is
+                # written by this controller after root-turn evidence verified.
+                bridge["inquiryJournalPath"] = inquiry["resultsPath"]
             bridge_path = directory / "finish-bridge.json"
             private_json(bridge_path, bridge, exclusive=True)
             server_name = "buddy_" + hashlib.sha256(identity["attemptId"].encode()).hexdigest()[:16]
-            tool_name = f"mcp__{server_name}__buddy_finish_turn"
+            finish_tool = f"mcp__{server_name}__buddy_finish_turn"
+            checkpoint_tool = f"mcp__{server_name}__buddy_checkpoint"
+            answer_tool = f"mcp__{server_name}__buddy_answer_inquiry"
             mcp = [{"name": server_name, "command": sys.executable,
                     "args": ["-m", "buddy.adapters.zcode_mcp", "--config", str(bridge_path)],
                     "env": [{"name": "PYTHONPATH", "value": os.environ["PYTHONPATH"]}] if os.environ.get("PYTHONPATH") else [],
@@ -574,7 +714,13 @@ def run(control: dict, cancelled: threading.Event) -> tuple[dict, int]:
                 private_json(binding_path, {"taskId": identity["taskId"], "sessionId": session_id, "cwd": control["cwd"],
                                            "configuration": result["resolved"]}, exclusive=True)
             input_id = "buddy-" + hashlib.sha256(canonical_json(identity).encode()).hexdigest()
-            evidence = RootTurnEvidence(session_id, input_id, tool_name, bridge)
+            evidence = RootTurnEvidence(
+                session_id, input_id, finish_tool, bridge,
+                checkpoint_name=checkpoint_tool if inquiry is not None else None,
+                answer_name=answer_tool if inquiry is not None else None,
+                on_delivery=(lambda receipt, call_id: inquiry_bridge.deliver_inquiries(receipt, call_id)) if inquiry is not None else None,
+                on_answer=(lambda receipt, call_id: inquiry_bridge.record_answer(receipt, call_id)) if inquiry is not None else None,
+            )
             projection = ActivityProjection(session_id)
             # The real helper owns validation, atomic replacement and throttling;
             # its state lives for the whole controller so same-phase updates are
@@ -614,7 +760,9 @@ def run(control: dict, cancelled: threading.Event) -> tuple[dict, int]:
             connection.call("session/subscribe", {"sessionId": session_id, "deliveryKind": "web-remote-replayable", "includeSnapshot": False})
             projection.phase = "waiting-model"
             publish_activity()
-            prompt = governed_prompt(Path(control["taskFile"]).read_text(), turn_input, tool_name)
+            prompt = governed_prompt(Path(control["taskFile"]).read_text(), turn_input, finish_tool,
+                                     checkpoint_tool=checkpoint_tool if inquiry is not None else None,
+                                     answer_tool=answer_tool if inquiry is not None else None)
             accepted = connection.call("session/send", {"sessionId": session_id, "inputId": input_id, "content": prompt})
             if accepted.get("accepted") is not True or accepted.get("sessionId") != session_id:
                 raise NativeError("native-admission-failed", "ZCode did not admit the intended root input")
