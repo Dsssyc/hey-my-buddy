@@ -588,19 +588,23 @@ class WorkerSeamTests(MockNativeCase):
         permission = worker_permission("zcode", second_level)
         request = request.model_copy(update={"tool_scope": permission.tool_scope, "worker_permission": permission})
         os.environ["BUDDY_ZCODE_TEST_CASE"] = case
-        calls = []
+        calls, mode_readbacks = [], []
         original = native_run.NativeConnection.call
 
         def call(connection, method, params):
             calls.append((method, params))
-            return original(connection, method, params)
+            result = original(connection, method, params)
+            if method in ("session/resume", "session/setMode"):
+                mode_readbacks.append((method, result["settings"]["mode"]))
+            return result
 
         with mock.patch.object(native_run.NativeConnection, "call", call):
             second = run(request, observer=worker_observer, services=services, cancelled=lambda: False)
-        return first, second, calls
+        return first, second, calls, mode_readbacks
 
     def check_resumed_level(self, first_level, second_level, native_mode):
-        first, second, calls = self.resume_with_levels(first_level, second_level)
+        first, second, calls, readbacks = self.resume_with_levels(first_level, second_level,
+            case="mode-plan-required" if second_level == "read" else "ok")
         self.assertEqual(second.end.status, "ok", second.end.message)
         self.assertEqual(second.native_identity.session_id, first.native_identity.session_id)
         self.assertEqual([params for method, params in calls if method == "session/setMode"],
@@ -611,6 +615,12 @@ class WorkerSeamTests(MockNativeCase):
         self.assertLess(methods.index("session/setMode"), methods.index("session/send"))
         self.assertEqual(second.effective_policy.tools.requested.value, {"mode": native_mode})
         self.assertEqual(second.value.schema_status, "valid")
+        underlying = "build" if first_level == "read" else "yolo"
+        self.assertEqual(readbacks, [("session/resume", {"current": underlying}),
+                                   ("session/setMode", {"current": underlying if native_mode == "plan" else "yolo"})])
+        if native_mode == "plan":
+            self.assertEqual(dict(second.native_evidence.unknown_events.counts_by_type)
+                             ["permission-mode-readback-unconfirmed"], 1)
 
     def test_read_to_write_resume_sets_yolo_on_the_same_session(self):
         self.check_resumed_level("read", "write", "yolo")
@@ -618,21 +628,24 @@ class WorkerSeamTests(MockNativeCase):
     def test_write_to_read_resume_sets_plan_on_the_same_session(self):
         self.check_resumed_level("write", "read", "plan")
 
+    def test_read_to_read_resume_reapplies_plan_despite_build_readback(self):
+        self.check_resumed_level("read", "read", "plan")
+
     def test_resume_mode_mismatch_fails_before_model_input_and_retains_requested_mode(self):
-        _first, second, calls = self.resume_with_levels("write", "read", case="mode-mismatch")
+        _first, second, calls, _readbacks = self.resume_with_levels("read", "write", case="mode-mismatch")
         self.assertEqual(second.end.reason_code, "configuration-mismatch")
-        self.assertEqual(second.effective_policy.tools.requested.value, {"mode": "plan"})
+        self.assertEqual(second.effective_policy.tools.requested.value, {"mode": "yolo"})
         self.assertNotIn("session/send", [method for method, _ in calls])
         self.assertEqual(second.stop_evidence.native.group_state, "gone")
 
     def test_unrecognized_resume_mode_is_a_fact_and_the_turn_can_complete(self):
-        _first, second, _calls = self.resume_with_levels("read", "write", case="mode-unrecognized")
+        _first, second, _calls, _readbacks = self.resume_with_levels("read", "write", case="mode-unrecognized")
         self.assertEqual(second.end.status, "ok", second.end.message)
         self.assertEqual(dict(second.native_evidence.unknown_events.counts_by_type)["permission-mode-readback-unconfirmed"], 1)
         self.assertEqual(second.effective_policy.tools.requested.value, {"mode": "yolo"})
 
     def test_resume_mode_readback_from_another_session_is_refused(self):
-        _first, second, calls = self.resume_with_levels("read", "write", case="mode-foreign-session")
+        _first, second, calls, _readbacks = self.resume_with_levels("write", "read", case="mode-foreign-session")
         self.assertEqual(second.end.reason_code, "wrong-native-session")
         self.assertNotIn("session/send", [method for method, _ in calls])
 

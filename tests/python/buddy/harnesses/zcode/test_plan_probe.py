@@ -83,6 +83,14 @@ class PlanProbeModelTests(unittest.TestCase):
         report = self.probe.operation_reports({"write": None, "command": None}, False)[0]
         self.assertEqual(report["handling"], "allowed")
 
+    def test_touch_requires_an_existing_empty_file_to_count_as_allowed(self):
+        self.probe.operations = [("touch_command", "Bash", {"command": "touch /tmp/probe"})]
+        self.probe.observations = [{"operation": "touch_command", "callId": "call_touch", "modelToolResults": []}]
+        missing = self.probe.operation_reports({"touch_command": None}, False)[0]
+        empty = self.probe.operation_reports({"touch_command": ""}, False)[0]
+        self.assertEqual(missing["handling"], "other")
+        self.assertEqual(empty["handling"], "allowed")
+
     def test_resume_sequence_ignores_the_previous_turns_tool_results(self):
         self.probe.operations = [self.probe.operations[0], self.probe.operations[-1]]
         self.probe.call_prefix = "call_probe_resumed"
@@ -94,7 +102,7 @@ class PlanProbeModelTests(unittest.TestCase):
         self.assertEqual(self.probe.observations[0]["modelToolResults"], [current])
         self.assertEqual(len(self.probe.observations), 2)
 
-    def test_probe_can_resume_the_same_plan_session_through_the_offline_native_path(self):
+    def offline_probe(self):
         from buddy.harnesses.zcode.test_zcode import ZcodeFixtureCase
         probe = self.module.ModeProbe()
         self.addCleanup(probe.doCleanups)
@@ -104,16 +112,18 @@ class PlanProbeModelTests(unittest.TestCase):
         probe.command_target = probe.cwd / "command.txt"
         probe.read_target = probe.cwd / "read.txt"
         probe.read_target.write_text(self.module.MARKERS["read"])
-        original = self.module.native_run.run
+        return probe
 
-        def offline(request, **kwargs):
-            # Only the model ID differs between the installed and offline
-            # fixtures; the probe's own session/service/mode path is exercised.
-            request = request.model_copy(update={"configuration":
-                request.configuration.model_copy(update={"model": "fixture-model"})})
-            return original(request, **kwargs)
+    def offline_run(self, request, **kwargs):
+        # The model ID differs between installed and offline fixtures.
+        request = request.model_copy(update={"configuration":
+            request.configuration.model_copy(update={"model": "fixture-model"})})
+        return self.original_run(request, **kwargs)
 
-        with mock.patch.object(self.module.native_run, "run", side_effect=offline):
+    def test_probe_can_resume_the_same_plan_session_through_the_offline_native_path(self):
+        probe = self.offline_probe()
+        self.original_run = self.module.native_run.run
+        with mock.patch.object(self.module.native_run, "run", side_effect=self.offline_run):
             first = probe.measure("plan", 10)
             second = probe.measure("yolo", 10, previous=probe.last_result.native_identity.session_id)
         self.assertTrue(first["turnCompleted"], first["end"])
@@ -124,5 +134,31 @@ class PlanProbeModelTests(unittest.TestCase):
         self.assertEqual(switched[0]["params"], {"sessionId": second["previousSessionId"], "mode": "yolo"})
         self.assertEqual(switched[0]["readback"], {"current": "yolo"})
         self.assertEqual([item["operation"] for item in first["operations"]],
-                         ["write", "command", "read", "read_command", "finish"])
+                         ["write", "command", "python_command", "tee_command", "touch_command",
+                          "copy_command", "read", "read_command", "finish"])
         self.assertEqual([item["operation"] for item in second["operations"]], ["write", "finish"])
+        self.assertEqual(first["modeCalls"][0]["readback"], {"current": "build"})
+
+    def test_probe_plan_continuations_finish_with_underlying_build_or_yolo_readback(self):
+        self.original_run = self.module.native_run.run
+        for initial_mode, expected in (("plan", "build"), ("yolo", "yolo")):
+            with self.subTest(initial=initial_mode):
+                probe = self.offline_probe()
+                with mock.patch.object(self.module.native_run, "run", side_effect=self.offline_run):
+                    first = probe.measure(initial_mode, 10)
+                    resumed = probe.measure("plan", 10, previous=probe.last_result.native_identity.session_id)
+                    resumed_target = probe.write_target
+                    if initial_mode == "plan":
+                        third = probe.measure("yolo", 10, previous=probe.last_result.native_identity.session_id)
+                self.assertTrue(first["turnCompleted"], first["end"])
+                self.assertTrue(resumed["turnCompleted"], resumed["end"])
+                self.assertTrue(resumed["sameSession"])
+                switched = [call for call in resumed["modeCalls"] if call["method"] == "session/setMode"]
+                self.assertEqual(switched[0]["params"]["mode"], "plan")
+                self.assertEqual(switched[0]["readback"], {"current": expected})
+                self.assertEqual(len(resumed["operations"]), 9)
+                if initial_mode == "plan":
+                    self.assertTrue(third["turnCompleted"], third["end"])
+                    self.assertTrue(third["sameSession"])
+                    self.assertEqual(probe.turn_index, 3)
+                    self.assertNotEqual(resumed_target, probe.write_target)

@@ -142,7 +142,9 @@ def configure_mode(connection: NativeConnection, session_id: str, mode: str) -> 
     settings = snapshot.get("settings")
     setting = settings.get("mode") if isinstance(settings, dict) else None
     actual = setting.get("current") if isinstance(setting, dict) else None
-    if not isinstance(actual, str) or not actual.strip() or len(actual.encode()) > 128:
+    # Native mode.current reports the underlying permission mode. plan is a
+    # separate tool restriction and is never confirmed by that readback.
+    if mode == "plan" or not isinstance(actual, str) or not actual.strip() or len(actual.encode()) > 128:
         connection.on_unknown("permission-mode-readback-unconfirmed")
     elif actual != mode:
         raise NativeError("configuration-mismatch", "native ZCode did not retain the requested permission mode")
