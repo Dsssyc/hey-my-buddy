@@ -1391,6 +1391,10 @@ class DecisionCoordinator:
             "cancelled": "decision.cancelled",
             "stale": "decision.stale",
         }[status]
+        # Freeze only an exact, bounded machine code; never parse error prose.
+        error_code = (output or {}).get("code")
+        if not isinstance(error_code, str) or not re.fullmatch(r"[a-z][a-z0-9-]{0,79}", error_code):
+            error_code = None
         self._append_event(
             connection,
             event,
@@ -1400,6 +1404,7 @@ class DecisionCoordinator:
                 "profileId": profile_id,
                 "reason": (reason or "")[:MAX_DECISION_REASON],
                 "error": error,
+                "errorCode": error_code,
                 "tableRevision": int(self._state(connection)["table_revision"]),
             },
             revision=int(self._state(connection)["table_revision"]),
@@ -1466,57 +1471,80 @@ class DecisionCoordinator:
     def health_summary(self) -> dict:
         """Bounded, model-free health over settled selection events, not task prose.
 
-        Terminal event time is immutable; a later stale receipt cannot move the
-        last-success clock. The partial event index avoids scanning task history.
+        Only an adopted Router success resets the failure streak. Neutral events
+        and program selections cannot prove recovery. Immutable event codes and
+        bound attempt receipts survive late changes to the retained output.
         """
         limit = 20
         kinds = "('decision.completed','decision.failed','decision.needs_host','decision.cancelled','decision.stale')"
         source = (
             " FROM events e JOIN decision_requests r ON r.decision_id=json_extract(e.payload_json,'$.decisionId')"
+            " LEFT JOIN attempts a ON a.attempt_id=r.attempt_id AND a.task_id=r.task_id AND a.generation=r.generation"
             " WHERE e.kind IN " + kinds + " AND r.kind='select'"
+        )
+        router_success = (
+            "e.kind='decision.completed' AND a.attempt_id IS NOT NULL"
+            " AND json_extract(a.result_json,'$.status')='ok'"
+            " AND json_extract(a.result_json,'$.shutdownConfirmed')=1"
+            " AND json_extract(a.result_json,'$.result.status')='ok'"
+            " AND json_extract(a.result_json,'$.result.modelStarted') IS NOT 0"
         )
         with self.db.read() as connection:
             rows = connection.execute(
                 "SELECT e.kind,e.created_at,e.payload_json,r.decision_id,r.task_id,r.output_json,"
+                " a.result_json AS receipt_json,(" + router_success + ") AS router_success,"
                 " (SELECT w.run_id FROM workflow_routes w WHERE w.decision_id=r.decision_id LIMIT 1) AS goal_id"
                 + source + " ORDER BY e.seq DESC LIMIT ?", (limit,),
             ).fetchall()
             success = connection.execute(
                 "SELECT e.created_at,r.decision_id" + source
-                + " AND e.kind='decision.completed' ORDER BY e.seq DESC LIMIT 1",
+                + " AND " + router_success + " ORDER BY e.seq DESC LIMIT 1",
             ).fetchone()
         failed = []
         streak = 0
         still_failing = True
+        all_timeouts = True
+        timeout_codes = {"timeout", "call-timeout", "deadline", "router-timeout"}
         abstentions = cancellations = stale = 0
         special_counts = {"router-budget-exhausted": 0, "router-out-of-bounds": 0, "router-input-changed": 0}
         for row in rows:
-            output = json.loads(row["output_json"]) if row["output_json"] else {}
+            payload = json.loads(row["payload_json"])
+            receipt = json.loads(row["receipt_json"]) if row["receipt_json"] else {}
+            # The request output may be replaced by a late, fenced result. Prefer
+            # the immutable receipt; old events without one retain their output.
+            if receipt:
+                output = receipt.get("result")
+            else:
+                output = json.loads(row["output_json"]) if row["output_json"] else {}
             output = output if isinstance(output, dict) else {}
+            code = payload.get("errorCode") or output.get("code")
+            if not isinstance(code, str) or not re.fullmatch(r"[a-z][a-z0-9-]{0,79}", code):
+                code = "needs-host" if row["kind"] == "decision.needs_host" else "call-failed"
             decision = output.get("decision") or {}
             abstained = (row["kind"] == "decision.needs_host" and output.get("status") == "ok"
                          and isinstance(decision, dict) and decision.get("profileId", False) is None
                          and set(decision) == {"profileId", "reason", "evidence"})
-            special = row["kind"] in ("decision.failed", "decision.needs_host") and output.get("code") in special_counts
+            special = row["kind"] in ("decision.failed", "decision.needs_host") and code in special_counts
             if special:
-                special_counts[output["code"]] += 1
-            is_failure = not special and (row["kind"] == "decision.failed" or
+                special_counts[code] += 1
+            # Bounds and input changes remain independent diagnostic counters.
+            # Budget exhaustion also means the Router failed to return an answer.
+            is_failure = code not in ("router-out-of-bounds", "router-input-changed") and (row["kind"] == "decision.failed" or
                          (row["kind"] == "decision.needs_host" and not abstained))
             if still_failing and is_failure:
                 streak += 1
-            else:
+                all_timeouts = all_timeouts and (code in timeout_codes or receipt.get("terminationReason") == "deadline")
+            elif row["router_success"]:
                 still_failing = False
             abstentions += int(abstained)
             cancellations += int(row["kind"] == "decision.cancelled")
             stale += int(row["kind"] == "decision.stale")
             if is_failure:
-                code = output.get("code")
-                # Only a bounded machine code is public here, never provider text.
-                if not isinstance(code, str) or not re.fullmatch(r'[a-z][a-z0-9-]{0,79}', code):
-                    code = 'needs-host' if row["kind"] == "decision.needs_host" else 'call-failed'
                 failed.append({"decisionId":row["decision_id"], "runId":row["goal_id"] or row["task_id"],
                                "at":row["created_at"], "code":code})
-        return {"windowSize":limit, "sampleCount":len(rows), "failureCount":len(failed),
+        reason_code = ("router-consecutive-timeouts" if all_timeouts else "router-consecutive-failures") if streak >= 3 else None
+        return {"available":streak < 3, "reasonCode":reason_code,
+                "windowSize":limit, "sampleCount":len(rows), "failureCount":len(failed),
                 "budgetExhaustedCount":special_counts["router-budget-exhausted"],
                 "boundsRejectedCount":special_counts["router-out-of-bounds"],
                 "inputChangedCount":special_counts["router-input-changed"],
