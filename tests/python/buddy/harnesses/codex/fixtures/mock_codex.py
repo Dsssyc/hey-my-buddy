@@ -242,6 +242,10 @@ def main():
         elif method == "turn/start":
             thread_id = params["threadId"]
             state = read_state()
+            state['threads'][thread_id].setdefault('turnRequests', []).append(
+                {key: params[key] for key in ('cwd', 'approvalPolicy', 'sandboxPolicy', 'permissions')
+                 if key in params})
+            write_state(state)
             turn_index = len(state['threads'][thread_id]['turns'])
             turn_id = f"native-turn-{turn_index + 1}"
             if case in ("unlisted-model", "long-native-error"):
