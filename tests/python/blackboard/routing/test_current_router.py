@@ -96,11 +96,11 @@ class CurrentRouterTestCase(BoardTestCase):
                 "created_at) VALUES(?,?,?,?,?)",
                 (decision, "failed", "task", buddy_id, at))
             db.execute(
-                "INSERT INTO decision_requests(decision_id,request_id,kind,input_fingerprint,task_id,attempt_id,"
-                "generation,requested_json,output_json,created_at,updated_at)"
-                " VALUES(?,?,'select','digest',?,?,?,?,?,?,?)",
+                "INSERT INTO decision_requests(decision_id,request_id,input_fingerprint,task_id,attempt_id,"
+                "generation,requested_json,output_json,updated_at)"
+                " VALUES(?,?,'digest',?,?,?,?,?,?)",
                 (decision, request, task_id, attempt_id, 0,
-                 canonical_json(requested), canonical_json(output or {}), at, at))
+                 canonical_json(requested), canonical_json(output or {}), at))
             self.board_.store._append_event(db, kind, task_id=task_id, attempt_id=attempt_id,
                                             payload={"decisionId": decision,
                                                      **({"errorCode": code} if code else {})})

@@ -42,12 +42,12 @@ MAX_LIST_LIMIT = 100
 #: ``decision_requests.rowid`` as its stable keyset; nothing here persists anything.
 _ROW_COLUMNS = (
     "d.decision_id, d.status, d.task, d.buddy_id, d.reason_code, d.reason_params_json, d.note,"
-    " d.created_at, r.request_id, r.kind, r.input_fingerprint,"
+    " d.created_at, r.request_id, 'select' AS kind, r.input_fingerprint,"
     " r.task_id AS decision_task_id, r.attempt_id AS decision_attempt_id,"
     " r.generation AS decision_generation,"
     " r.selected_json, r.input_json, r.input_sha256, r.output_json,"
     " r.requested_json,"
-    " r.created_at AS request_created_at, r.updated_at AS request_updated_at"
+    " r.updated_at AS request_updated_at"
 )
 _ROW_FROM = " FROM decision_requests r JOIN evaluation_decisions d ON d.decision_id = r.decision_id"
 
@@ -505,17 +505,14 @@ class DecisionCoordinator:
                 ),
             )
             connection.execute(
-                "INSERT INTO decision_requests(decision_id, request_id, kind, input_fingerprint,"
-                " task_id, requested_json, created_at,"
-                " updated_at) VALUES(?,?,?,?,?,?,?,?)",
+                "INSERT INTO decision_requests(decision_id, request_id, input_fingerprint,"
+                " task_id, requested_json, updated_at) VALUES(?,?,?,?,?,?)",
                 (
                     decision_id,
                     request_id,
-                    kind,
                     fingerprint,
                     None,
                     canonical_json(request),
-                    now,
                     now,
                 ),
             )
@@ -1438,7 +1435,7 @@ class DecisionCoordinator:
         limit = 20
         source = (
             " FROM evaluation_decisions d JOIN decision_requests r ON r.decision_id=d.decision_id"
-            " WHERE r.kind='select' AND d.status IN ('completed','needs-host','failed','cancelled')"
+            " WHERE d.status IN ('completed','needs-host','failed','cancelled')"
             " AND EXISTS(SELECT 1 FROM router_dispatches dispatched WHERE dispatched.decision_id=d.decision_id)"
         )
         router_success = (
@@ -1587,25 +1584,16 @@ class DecisionCoordinator:
             raise BoardError("INVALID_ARGUMENT", "kind must be 'select'", field="kind")
         limit = schemas.optional_int(params, "limit", DEFAULT_LIST_LIMIT, 1, MAX_LIST_LIMIT)
         before = schemas.optional_positive_int(params, "before")
-        filter_sql = "r.kind=?" if kind is not None else None
-        filter_values: tuple[Any, ...] = (kind,) if kind is not None else ()
         with self.board.db.read() as connection:
             total = int(
                 connection.execute(
-                    f"SELECT COUNT(*) AS count FROM decision_requests r"
-                    + (f" WHERE {filter_sql}" if filter_sql else ""),
-                    filter_values,
+                    "SELECT COUNT(*) AS count FROM decision_requests",
                 ).fetchone()["count"]
             )
             query = f"SELECT r.rowid AS request_rowid, {_ROW_COLUMNS}{_ROW_FROM}"
-            values: list[Any] = list(filter_values)
-            if filter_sql:
-                query += f" WHERE {filter_sql}"
-                if before is not None:
-                    query += " AND r.rowid<?"
-            elif before is not None:
-                query += " WHERE r.rowid<?"
+            values: list[Any] = []
             if before is not None:
+                query += " WHERE r.rowid<?"
                 values.append(before)
             query += " ORDER BY r.rowid DESC LIMIT ?"
             values.append(limit)
@@ -1615,10 +1603,8 @@ class DecisionCoordinator:
             if len(rows) == limit:
                 last_rowid = int(rows[-1]["request_rowid"])
                 more = connection.execute(
-                    "SELECT 1 FROM decision_requests r"
-                    + (f" WHERE {filter_sql} AND r.rowid<?" if filter_sql else " WHERE r.rowid<?")
-                    + " LIMIT 1",
-                    (*filter_values, last_rowid),
+                    "SELECT 1 FROM decision_requests r WHERE r.rowid<? LIMIT 1",
+                    (last_rowid,),
                 ).fetchone()
                 if more is not None:
                     next_cursor = last_rowid

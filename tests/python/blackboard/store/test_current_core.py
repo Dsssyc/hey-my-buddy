@@ -67,7 +67,7 @@ class CurrentCoreTests(BoardTestCase):
         self.assertNotIn("legacy", replay["task"])
         self.assertEqual(replay["task"]["fingerprintVersion"], schemas.FINGERPRINT_VERSION_CURRENT)
 
-    def test_meta_writers_are_only_the_three_board_singletons(self):
+    def test_meta_writers_are_only_the_two_board_singletons(self):
         source = Path(__file__).resolve().parents[4] / "src" / "hey_my_buddy"
         writes = []
         for path in source.rglob("*.py"):
@@ -78,14 +78,14 @@ class CurrentCoreTests(BoardTestCase):
                         writes.append((path.relative_to(source).as_posix(), node.value))
         self.assertEqual(sorted(writes), sorted([
             ("blackboard/store/db.py", "INSERT INTO meta(key, value) VALUES('schema_version', ?)"),
-            ("blackboard/store/db.py", "INSERT INTO meta(key, value) VALUES('created_at', ?)"),
             ("blackboard/store/db.py", "INSERT INTO meta(key, value) VALUES(?, ?)"),
             ("blackboard/store/upgrade.py", "UPDATE meta SET value=? WHERE key='schema_version'"),
+            ("blackboard/store/upgrade.py", "DELETE FROM meta WHERE key='created_at'"),
         ]))
         board = self.board()
         with board.store.db.read() as connection:
             self.assertEqual({row[0] for row in connection.execute("SELECT key FROM meta")},
-                             {"schema_version", "created_at", "capability_secret"})
+                             {"schema_version", "capability_secret"})
         self.assertFalse(hasattr(Database, "meta"))
         self.assertFalse(hasattr(Database, "set_meta"))
 

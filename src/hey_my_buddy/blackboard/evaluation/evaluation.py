@@ -68,7 +68,8 @@ class EvaluationStore:
             decisions = [
                 self._decision_view(row)
                 for row in connection.execute(
-                    "SELECT d.*, r.kind AS kind, r.task_id AS run_id, r.updated_at AS updated_at"
+                    "SELECT d.*, CASE WHEN r.decision_id IS NOT NULL THEN 'select' END AS kind,"
+                    " r.task_id AS run_id, r.updated_at AS updated_at"
                     " FROM evaluation_decisions d LEFT JOIN decision_requests r ON r.decision_id = d.decision_id"
                     " ORDER BY d.created_at DESC, d.decision_id DESC LIMIT ?",
                     (MAX_DECISION_PAGE,),

@@ -128,7 +128,7 @@ def _stop_reason(attempt):
         return attempt['force_reason']
     initiator, deadline = attempt['stop_initiator'], attempt['grace_deadline']
     if deadline and initiator in ('host', 'lead'):
-        if datetime.now(timezone.utc) >= datetime.fromisoformat(deadline.replace('Z', '+00:00')):
+        if datetime.now(timezone.utc) >= datetime.fromisoformat(deadline):
             return 'grace-expired'
         return 'forced-stop'
     return {'console': 'console-stop', 'service': 'service-stop', 'unknown': 'unknown-stop'}.get(initiator,

@@ -142,7 +142,7 @@ class HarnessHealth:
                     'currentRevision': row['revision'], 'accountReadFailure': account_read_failure})
             else:
                 record = json.loads(db.execute('SELECT record_json FROM harness_health WHERE harness=?', (name,)).fetchone()[0])
-                record.update(reason=cause, available=False)
+                record['reason'] = cause
                 if account_read_failure is not None:
                     record['accountReadFailure'] = account_read_failure
                 db.execute("UPDATE harness_health SET status='unhealthy',record_json=?,expires_at=NULL,scan_after=NULL,revision=revision+1 WHERE harness=?", (canonical_json(record), name))
@@ -244,18 +244,20 @@ class HarnessHealth:
             native_ready = status == 'ready'
             if native_ready and (record.get('accountReadFailure', {}).get('reason') or {}).get('code') == 'harness.shutdown-unverified':
                 status = 'unhealthy'
-                record.update(status=status, available=False, reason=record['accountReadFailure']['reason'])
+                record['reason'] = record['accountReadFailure']['reason']
             if status not in ('ready', 'missing', 'login-required', 'unhealthy'):
                 raise BoardError('HARNESS_INVALID_RESULT', 'Discovery returned an invalid health status')
             if len(canonical_json(record).encode()) > 65536:
                 raise BoardError('HARNESS_INVALID_RESULT', 'Discovery diagnostics exceeded their bound')
+            stored_record = canonical_json({key: value for key, value in record.items()
+                                            if key not in ('harness', 'status', 'available')})
             with self.board.db.write() as db:
                 if (self.board.directory / 'upgrade.json').exists():
                     return read_health(db, name)
                 if read_health(db, name)['revision'] != generation:
                     return read_health(db, name)
                 db.execute('UPDATE harness_health SET status=?,record_json=?,checked_at=?,expires_at=? WHERE harness=? AND revision=?',
-                           (status, canonical_json(record), now, _later(READY_SECONDS if status == 'ready' else SCAN_SECONDS), name, generation))
+                           (status, stored_record, now, _later(READY_SECONDS if status == 'ready' else SCAN_SECONDS), name, generation))
                 if status != 'ready':
                     # Same boundary as invalidate: health grounds the rows it
                     # marks, never the ones a catalog fact already grounded.
@@ -395,7 +397,6 @@ class HarnessHealth:
                 recovered_stop = previous_failure is not None and (previous_failure.get('reason') or {}).get('code') == 'harness.shutdown-unverified'
                 if recovered_stop:
                     record['reason'] = None
-                    record.update(status='ready', available=True)
                 if failure is not None:
                     record['accountReadFailure'] = failure
                 observed_at = utc_now()

@@ -170,17 +170,14 @@ def publish(evaluation, connection, *, now: str, params: dict) -> dict:
         # returns. Only the named model services are touched; unrelated settings and
         # fields keep their stored values.
         connection.execute(
-            'INSERT INTO model_service_concurrency(harness,provider,model,concurrency_limit,created_at,updated_at)'
-            ' VALUES(?,?,?,?,?,?)'
-            ' ON CONFLICT(harness,provider,model) DO UPDATE SET concurrency_limit=excluded.concurrency_limit,'
-            ' updated_at=excluded.updated_at',
+            'INSERT INTO model_service_concurrency(harness,provider,model,concurrency_limit)'
+            ' VALUES(?,?,?,?)'
+            ' ON CONFLICT(harness,provider,model) DO UPDATE SET concurrency_limit=excluded.concurrency_limit',
             (
                 entry['harness'],
                 entry['provider'],
                 entry['model'],
                 entry['limit'],
-                now,
-                now,
             ),
         )
     if 'configuration' in provided:

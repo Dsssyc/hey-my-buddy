@@ -8,7 +8,7 @@ def _time(value):
     if not isinstance(value, str):
         return None
     try:
-        stamp = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        stamp = datetime.fromisoformat(value)
         return stamp.astimezone(timezone.utc) if stamp.tzinfo else None
     except ValueError:
         return None

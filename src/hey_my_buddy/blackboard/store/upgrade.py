@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from contextlib import closing
+from datetime import datetime
 from pathlib import Path
 import json
 import sqlite3
@@ -16,11 +17,13 @@ _REBUILT_TABLES = (
     "workflow_host_conclusions", "attempt_activity", "attempt_reminders",
     "workflow_routes", "workflow_continuations", "workspace_reservations",
     "workflow_workspace_conflicts", "workflow_integrations", "workspace_cleanup_plans",
+    "catalog_observations", "evaluation_catalog", "decision_requests",
+    "model_service_concurrency", "router_outcomes",
 )
 _DEAD_TABLES = ("cursors", "evaluation_state", "model_facts")
 _DEAD_INDEXES = (
     "tasks_request_idx", "attempts_task_idx", "workflow_turns_run_idx",
-    "workflow_scope_versions_run_idx", "commands_kind_idx",
+    "workflow_scope_versions_run_idx", "commands_kind_idx", "decision_requests_created_idx",
 )
 
 
@@ -117,6 +120,19 @@ def _convert(connection: sqlite3.Connection) -> None:
                           "OR body_bytes != length(CAST(body AS BLOB)) LIMIT 1").fetchone():
         raise ValueError("Inconsistent messages.correlation_id/body_bytes in upgrade stock")
     checks = (
+        ("decision_requests.kind/created_at",
+         "SELECT 1 FROM decision_requests r JOIN evaluation_decisions d USING(decision_id) "
+         "WHERE r.kind != 'select' OR r.created_at IS NOT d.created_at"),
+        ("evaluation_catalog.source/harness_version/provider_version",
+         "SELECT 1 FROM evaluation_catalog WHERE source IS NOT json_extract(payload_json,'$.source') "
+         "OR harness_version IS NOT json_extract(payload_json,'$.harnessVersion') "
+         "OR provider_version IS NOT json_extract(payload_json,'$.providerVersion')"),
+        ("router_outcomes.recorded_at",
+         "SELECT 1 FROM router_outcomes r JOIN events e ON e.seq=r.event_seq "
+         "WHERE r.recorded_at IS NOT e.created_at"),
+        ("agent_credentials.attempt_id",
+         "SELECT 1 FROM agent_credentials c LEFT JOIN attempts a ON a.attempt_id=c.attempt_id "
+         "WHERE a.attempt_id IS NULL"),
         ("workflow_runs.micro_task_json/micro_task_fingerprint",
          "SELECT 1 FROM workflow_runs r JOIN tasks t ON t.task_id=r.run_id "
          "WHERE r.micro_task_json IS NOT t.spec_json OR r.micro_task_fingerprint IS NOT t.input_fingerprint"),
@@ -142,13 +158,23 @@ def _convert(connection: sqlite3.Connection) -> None:
             raise ValueError(f"Inconsistent {name} in upgrade stock")
     # The same timestamp algorithm generated the old stored elapsed value. The
     # reminder event and any sealed input containing it remain untouched.
-    from ..tasks.reminders import _seconds
     for elapsed, created, started in connection.execute(
         "SELECT r.elapsed_seconds,r.created_at,a.started_at FROM attempt_reminders r "
         "JOIN attempts a ON a.attempt_id=r.attempt_id"
     ):
-        if elapsed != max(0.0, _seconds(created) - _seconds(started)):
+        if elapsed != max(0.0, datetime.fromisoformat(created).timestamp() - datetime.fromisoformat(started).timestamp()):
             raise ValueError("Inconsistent attempt_reminders.elapsed_seconds in upgrade stock")
+    # read_health has always overlaid these three keys from the row. In
+    # particular invalidate left JSON status stale, so equality with the column
+    # is not an invariant of old stock. Remove the overridden keys, retaining
+    # every independent diagnostic and all frozen observation snapshots.
+    for harness, raw in connection.execute("SELECT harness,record_json FROM harness_health").fetchall():
+        record = json.loads(raw)
+        for key in ("harness", "status", "available"):
+            record.pop(key, None)
+        connection.execute("UPDATE harness_health SET record_json=? WHERE harness=?",
+                           (json.dumps(record, ensure_ascii=False, sort_keys=True, separators=(",", ":")), harness))
+    connection.execute("DELETE FROM meta WHERE key='created_at'")
     _prune_workflow_records(connection)
     # Only completed deletions lose their receipts. A physical deletion still in
     # progress retains its fence, tasks and commands so it can finish normally.

@@ -75,9 +75,9 @@ class RouterSequenceTestCase(BoardTestCase):
                 "INSERT INTO evaluation_decisions(decision_id,status,task,"
                 "created_at) VALUES('dec-1','queued','task',?)", (T0,))
             db.execute(
-                "INSERT INTO decision_requests(decision_id,request_id,kind,input_fingerprint,"
-                "requested_json,created_at,updated_at)"
-                " VALUES('dec-1','pick-1','select','digest','{}',?,?)", (T0, T0))
+                "INSERT INTO decision_requests(decision_id,request_id,input_fingerprint,"
+                "requested_json,updated_at)"
+                " VALUES('dec-1','pick-1','digest','{}',?)", (T0,))
             for task_id in ("task-alpha", "task-bravo"):
                 db.execute(
                     "INSERT INTO tasks(task_id,request_id,owner,spec_json,input_fingerprint,"
@@ -433,7 +433,7 @@ class RelationalBindingTests(RouterSequenceTestCase):
             with self.assertRaisesRegex(sqlite3.IntegrityError,
                                         r"UNIQUE constraint failed: router_outcomes.event_seq"):
                 db.execute("INSERT INTO router_outcomes SELECT 'another-receipt',plane,request_id,router_index,"
-                           "buddy_id,phase,task_id,attempt_id,outcome,code,event_seq,recorded_at FROM router_outcomes")
+                           "buddy_id,phase,task_id,attempt_id,outcome,code,event_seq FROM router_outcomes")
         with self.board_.store.db.read() as db:
             self.assertEqual([row[0] for row in db.execute("SELECT event_seq FROM router_outcomes")], [first['seq']])
         self.assertEqual(len(self.events("router.answered")), 1)

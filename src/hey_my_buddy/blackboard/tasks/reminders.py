@@ -8,7 +8,7 @@ from ...protocol.schemas import CODING_HARNESSES
 
 
 def _seconds(value: str) -> float:
-    return datetime.fromisoformat(value.replace('Z', '+00:00')).timestamp()
+    return datetime.fromisoformat(value).timestamp()
 
 
 def view(row) -> dict:

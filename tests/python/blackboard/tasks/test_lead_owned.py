@@ -155,8 +155,8 @@ class LeadOwnedTests(WorkflowTestCase):
         lead, claim = self.lead(board)
         owned = self.owned(board, claim)
         with board.store.db.write() as db:
-            db.execute("INSERT INTO model_service_concurrency(harness,provider,model,concurrency_limit,created_at,updated_at)"
-                       " VALUES(?,?,?,4,?,?)", (BUDDY["harness"], BUDDY["provider"], BUDDY["model"], board.store.now(), board.store.now()))
+            db.execute("INSERT INTO model_service_concurrency(harness,provider,model,concurrency_limit)"
+                       " VALUES(?,?,?,4)", (BUDDY["harness"], BUDDY["provider"], BUDDY["model"]))
         foreign = self.submit(board, request_id="host-own", cwd=str(self.workdir("host-own")))
         host_view, host_claim = self.finish_owned(board, foreign, disposition="assistance")
         other, other_claim = self.lead(board, "other-lead", "w3")
@@ -341,8 +341,8 @@ class LeadOwnedTests(WorkflowTestCase):
         board = self.board(max_concurrent=4)
         _, claim = self.lead(board)
         with board.store.db.write() as db:
-            db.execute("INSERT INTO model_service_concurrency(harness,provider,model,concurrency_limit,created_at,updated_at)"
-                       " VALUES(?,?,?,4,?,?)", (BUDDY["harness"], BUDDY["provider"], BUDDY["model"], board.store.now(), board.store.now()))
+            db.execute("INSERT INTO model_service_concurrency(harness,provider,model,concurrency_limit)"
+                       " VALUES(?,?,?,4)", (BUDDY["harness"], BUDDY["provider"], BUDDY["model"]))
         owned = self.owned(board, claim)
         host = self.submit(board, request_id="host-root", cwd=str(self.workdir("host-root")))
         _, other_claim = self.lead(board, "other-lead", "w3")

@@ -876,8 +876,8 @@ class RoutingSpanTests(WorkflowTestCase):
             note = (output or {}).get('decision', {}).get('note')
             db.execute("INSERT INTO evaluation_decisions(decision_id,status,task,buddy_id,note,created_at)"
                        " VALUES('recorded-decision',?,'task',?,?,'2026-01-01T00:00:00Z')", (status, buddy_id, note))
-            db.execute("INSERT INTO decision_requests(decision_id,request_id,kind,input_fingerprint,task_id,selected_json,output_json,requested_json,created_at,updated_at)"
-                       " VALUES('recorded-decision','recorded-request','select','fingerprint',?,?,?,?,'2026-01-01T00:00:00Z','2026-01-01T00:00:00Z')",
+            db.execute("INSERT INTO decision_requests(decision_id,request_id,input_fingerprint,task_id,selected_json,output_json,requested_json,updated_at)"
+                       " VALUES('recorded-decision','recorded-request','fingerprint',?,?,?,?,'2026-01-01T00:00:00Z')",
                        (task_id, json.dumps(selected) if selected else None, json.dumps(output) if output else None,
                         json.dumps({'budget': {'preset': 'deep'}})))
             now = '2026-01-01T00:00:00Z'
@@ -914,8 +914,8 @@ class RoutingSpanTests(WorkflowTestCase):
             db.execute("UPDATE tasks SET spec_json=json_set(spec_json,'$.model','current-model') WHERE task_id=?", (task_id,))
             db.execute("INSERT INTO evaluation_decisions(decision_id,status,task,buddy_id,created_at)"
                        " VALUES('current-decision','completed','current task','current-buddy','2026-01-02T00:00:00Z')")
-            db.execute("INSERT INTO decision_requests(decision_id,request_id,kind,input_fingerprint,task_id,selected_json,output_json,created_at,updated_at)"
-                       " VALUES('current-decision','current-request','select','other-fingerprint','other-calculation',?,?,'2026-01-02T00:00:00Z','2026-01-02T00:00:00Z')",
+            db.execute("INSERT INTO decision_requests(decision_id,request_id,input_fingerprint,task_id,selected_json,output_json,updated_at)"
+                       " VALUES('current-decision','current-request','other-fingerprint','other-calculation',?,?,'2026-01-02T00:00:00Z')",
                        (json.dumps({**selected, 'model': 'current-model'}), json.dumps({'budget': {'preset': 'deep'}})))
             for decision_id in ('recorded-decision', 'current-decision'):
                 db.execute("INSERT INTO workflow_routes(decision_id,run_id,owner_generation,state,created_at)"

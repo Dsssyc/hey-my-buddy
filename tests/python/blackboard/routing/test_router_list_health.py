@@ -98,11 +98,11 @@ class RouterListHealthTestCase(BoardTestCase):
                 "created_at) VALUES(?,?,?,?,?)",
                 (decision, "failed", "task", buddy_id, at))
             db.execute(
-                "INSERT INTO decision_requests(decision_id,request_id,kind,input_fingerprint,task_id,attempt_id,"
-                "generation,requested_json,output_json,created_at,updated_at)"
-                " VALUES(?,?,'select','digest',?,?,0,?,?,?,?)",
+                "INSERT INTO decision_requests(decision_id,request_id,input_fingerprint,task_id,attempt_id,"
+                "generation,requested_json,output_json,updated_at)"
+                " VALUES(?,?,'digest',?,?,0,?,?,?)",
                 (decision, f"legacy-request-{decision}", task_id, attempt_id,
-                 canonical_json(requested), canonical_json(output or {}), at, at))
+                 canonical_json(requested), canonical_json(output or {}), at))
             if dispatched:
                 router_sequence.freeze_request(db, decision, snapshot={
                     "facts": {"routerBuddyIds": [buddy_id]}, "baseInput": {}, "inspections": []}, now=at)

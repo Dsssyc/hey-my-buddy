@@ -72,7 +72,7 @@ def _timestamp(value: Any, field: str) -> str:
     if value[-1] != "Z" and (int(value[-5:-3]) > 23 or int(value[-2:]) > 59):
         raise _invalid(f"activity.{field} must be an ISO-8601 timestamp", field=f"activity.{field}")
     try:
-        datetime.fromisoformat(value.replace("Z", "+00:00"))
+        datetime.fromisoformat(value)
     except ValueError:
         raise _invalid(f"activity.{field} must be a real ISO-8601 timestamp", field=f"activity.{field}") from None
     return value
@@ -151,7 +151,7 @@ def normalize_activity(value: Any) -> dict:
 
 def _instant(value: str) -> tuple[int, Decimal]:
     """Exact UTC second and fractional second for an already validated timestamp."""
-    parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    parsed = datetime.fromisoformat(value)
     seconds = parsed.toordinal() * 86400 + parsed.hour * 3600 + parsed.minute * 60 + parsed.second
     seconds -= int(parsed.utcoffset().total_seconds())
     fraction = _TIMESTAMP.fullmatch(value).group("fraction")

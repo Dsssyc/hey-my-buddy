@@ -139,7 +139,7 @@ class SingleRouterClaimTests(DecisionTestCase):
         board = self.board(max_concurrent=3)
         self.seed(board)
         with board.store.db.write() as connection:
-            connection.execute("INSERT INTO model_service_concurrency(harness,provider,model,concurrency_limit,created_at,updated_at) VALUES(?,?,?,1,'fixture','fixture')",
+            connection.execute("INSERT INTO model_service_concurrency(harness,provider,model,concurrency_limit) VALUES(?,?,?,1)",
                                (CATALOG_BUDDY['harness'], CATALOG_BUDDY['provider'], CATALOG_BUDDY['model']))
         first = self.request(board, request_id='one')
         second = self.request(board, request_id='two')
@@ -163,7 +163,7 @@ class SingleRouterClaimTests(DecisionTestCase):
         board = self.board(max_concurrent=3)
         self.seed(board)
         with board.store.db.write() as connection:
-            connection.execute("INSERT INTO model_service_concurrency(harness,provider,model,concurrency_limit,created_at,updated_at) VALUES(?,?,?,1,'fixture','fixture')",
+            connection.execute("INSERT INTO model_service_concurrency(harness,provider,model,concurrency_limit) VALUES(?,?,?,1)",
                                ('dsh', 'deepseek-official', 'deepseek-flash'))
         first = self.request(board, request_id='one')
         second = self.request(board, request_id='two')

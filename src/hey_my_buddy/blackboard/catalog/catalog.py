@@ -134,7 +134,7 @@ def _parse_time(value: Any) -> datetime | None:
     if not isinstance(value, str):
         return None
     try:
-        stamp = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        stamp = datetime.fromisoformat(value)
         return stamp.astimezone(timezone.utc) if stamp.tzinfo else None
     except ValueError:
         return None
@@ -618,10 +618,9 @@ class CatalogView:
         self.payload, self.discovery_id, self.recorded_at = payload, discovery_id, recorded_at
 
     @classmethod
-    def from_payload(cls, payload: Any, row: Any | None = None) -> "CatalogView":
+    def from_payload(cls, payload: Any) -> "CatalogView":
         canonical = canonical_payload(payload)
-        return cls(canonical, discovery_id=row["discovery_id"] if row is not None else None,
-                   recorded_at=row["discovered_at"] if row is not None else canonical.get("discoveredAt"))
+        return cls(canonical, recorded_at=canonical.get("discoveredAt"))
 
     @property
     def source(self) -> str:
