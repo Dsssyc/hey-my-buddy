@@ -1,5 +1,6 @@
 """Disposable samples use only private synthetic boards, never daily state."""
 from contextlib import closing
+import json
 import os
 from pathlib import Path
 import runpy
@@ -9,10 +10,12 @@ import sys
 from unittest.mock import patch
 
 from blackboard.tasks.test_workflow import WorkflowTestCase
+from blackboard.store.upgrade_fixture import load_fixture
 from console.test_console import Browser
 from support import InProcessBoard, write_catalog_fixture, _child_environment, wait_for
-from hey_my_buddy.blackboard.store.db import DB_FILE, SCHEMA_VERSION, SECRET_KEY, Database
+from hey_my_buddy.blackboard.store.db import DB_FILE, SCHEMA_VERSION, SECRET_KEY, UPGRADE_BASE_SCHEMA, Database
 from hey_my_buddy import private_dirs
+from hey_my_buddy.errors import BoardError
 from hey_my_buddy.buddy.harnesses.session_record import SessionRecord
 from hey_my_buddy.protocol.session_content import MessageChunk, TextContent
 from hey_my_buddy.protocol.transport import _read_endpoint, _request
@@ -75,6 +78,9 @@ class ExportBoardSampleTests(WorkflowTestCase):
         unrelated = private_dirs.session_record_path(board.directory, 'run:' + running['runId'], 'unrelated')
         private_dirs.ensure_private_dir(unrelated.parent)
         unrelated.write_text('unselected session')
+        inquiry = board.directory / 'attempts' / first['runId'] / attempt / 'inquiry.results.jsonl'
+        private_dirs.ensure_private_dir(inquiry.parent)
+        inquiry.write_bytes(b'{"first":"accepted"}\n')
         source_secret = board.store.db.secret.hex()
         board.store.db.close()
         before = files(board.directory)
@@ -84,6 +90,7 @@ class ExportBoardSampleTests(WorkflowTestCase):
         self.assertFalse((output / 'harnesses').exists())
         self.assertEqual([p.name for p in (output / 'sessions').rglob('*.jsonl')], [attempt + '.jsonl'])
         self.assertEqual(private_dirs.session_record_path(output, first['macroTaskId'], attempt).read_bytes(), path.read_bytes())
+        self.assertEqual((output / inquiry.relative_to(board.directory)).read_bytes(), inquiry.read_bytes())
         with closing(sqlite3.connect(output / DB_FILE)) as connection:
             self.assertEqual(set(row[0] for row in connection.execute('SELECT run_id FROM workflow_runs')),
                              {first['runId'], second['runId']})
@@ -201,6 +208,72 @@ class ExportBoardSampleTests(WorkflowTestCase):
         after = files(board.directory)
         self.assert_source_unchanged(before, after)
 
+    def test_nonregular_inquiry_journal_is_refused_without_publishing(self):
+        board = self.source_board()
+        run, attempt = self.accepted(board, 'accepted')
+        journal = board.directory / 'attempts' / run['runId'] / attempt / 'inquiry.results.jsonl'
+        private_dirs.ensure_private_dir(journal.parent)
+        journal.mkdir()
+        board.store.db.close()
+        before = files(board.directory)
+        output = self.directory / 'sample'
+        with self.assertRaisesRegex(BoardError, 'ordinary file'):
+            export_sample(board.directory, output)
+        self.assertFalse(output.exists())
+        self.assert_source_unchanged(before, files(board.directory))
+
+    def test_upgrade_base_export_keeps_schema_and_every_selected_attempt_journal(self):
+        fixture = load_fixture(self.directory / 'source')
+        source = fixture['state']
+        with closing(sqlite3.connect(source / DB_FILE)) as connection:
+            routed = connection.execute(
+                'SELECT r.run_id FROM workflow_routes r '
+                'JOIN router_dispatches d ON d.decision_id=r.decision_id '
+                'JOIN attempts a ON a.task_id=d.task_id LIMIT 1').fetchone()
+            self.assertIsNotNone(routed, 'The base fixture must include a Router attempt')
+            connection.execute("UPDATE workflow_runs SET state='accepted' WHERE run_id=?", routed)
+            connection.execute("UPDATE tasks SET accepted_at='2026-01-02T00:00:00.000Z' WHERE task_id=?", routed)
+            connection.execute("UPDATE attempts SET execution_state='finished',"
+                               "shutdown_confirmed=1,cleanup_pending=0")
+            connection.execute("UPDATE tasks SET state='completed',active_attempt_id=NULL "
+                               "WHERE state NOT IN ('completed','concluded','failed','cancelled') "
+                               "OR active_attempt_id IS NOT NULL")
+            connection.commit()
+            attempts = list(connection.execute('SELECT task_id,attempt_id FROM attempts'))
+            source_schema = list(connection.execute(
+                "SELECT type,name,tbl_name,sql FROM sqlite_master "
+                "WHERE type IN ('table','index') AND name NOT LIKE 'sqlite_%' "
+                "ORDER BY type,name"))
+        for task, attempt in attempts:
+            journal = source / 'attempts' / task / attempt / 'inquiry.results.jsonl'
+            private_dirs.ensure_private_dir(journal.parent)
+            journal.write_bytes((json.dumps({'taskId': task, 'attemptId': attempt}) + '\n').encode())
+        before = files(source)
+        output = export_sample(source, self.directory / 'sample')
+        with closing(sqlite3.connect(output / DB_FILE)) as connection:
+            self.assertEqual(connection.execute(
+                "SELECT value FROM meta WHERE key='schema_version'").fetchone()[0],
+                str(UPGRADE_BASE_SCHEMA))
+            self.assertEqual(list(connection.execute(
+                "SELECT type,name,tbl_name,sql FROM sqlite_master "
+                "WHERE type IN ('table','index') AND name NOT LIKE 'sqlite_%' "
+                "ORDER BY type,name")), source_schema)
+            columns = {row[1] for row in connection.execute('PRAGMA table_info(messages)')}
+            self.assertIn('recipient', columns)
+            selected_attempts = set(connection.execute('SELECT task_id,attempt_id FROM attempts'))
+            self.assertTrue(selected_attempts)
+            self.assertGreater(connection.execute(
+                'SELECT COUNT(*) FROM attempts a JOIN router_dispatches d ON d.task_id=a.task_id'
+            ).fetchone()[0], 0)
+        self.assertLess(len(selected_attempts), len(attempts))
+        self.assertEqual({path.relative_to(output).as_posix() for path in output.rglob('inquiry.results.jsonl')},
+                         {f'attempts/{task}/{attempt}/inquiry.results.jsonl'
+                          for task, attempt in selected_attempts})
+        for task, attempt in selected_attempts:
+            relative = Path('attempts') / task / attempt / 'inquiry.results.jsonl'
+            self.assertEqual((output / relative).read_bytes(), (source / relative).read_bytes())
+        self.assert_source_unchanged(before, files(source))
+
     def test_source_service_can_commit_during_snapshot_and_destination_creation(self):
         board = self.source_board()
         run, _ = self.accepted(board, 'accepted')
@@ -232,7 +305,7 @@ class ExportBoardSampleTests(WorkflowTestCase):
                 namespace = export_sample.__globals__
                 original_rows = namespace['_rows']
                 original_select = namespace['_select']
-                original_initialize = Database.initialize
+                original_create_schema = namespace['_create_schema']
                 readers = []
 
                 def wait_commit(version):
@@ -255,15 +328,15 @@ class ExportBoardSampleTests(WorkflowTestCase):
                     readers.append(reader)
                     return original_select(reader)
 
-                def initialize_destination(database):
+                def create_destination(connection, version, definitions):
                     self.assertEqual(len(readers), 1)
                     with self.assertRaises(sqlite3.ProgrammingError):
                         readers[0].execute('SELECT 1')
                     wait_commit(2)
-                    original_initialize(database)
+                    original_create_schema(connection, version, definitions)
 
-                with patch.dict(namespace, {'_rows': interleave_rows, '_select': capture_reader}), \
-                        patch.object(Database, 'initialize', initialize_destination):
+                with patch.dict(namespace, {'_rows': interleave_rows, '_select': capture_reader,
+                                            '_create_schema': create_destination}):
                     output = export_sample(board.directory, self.directory / 'sample')
                 with closing(sqlite3.connect(output / DB_FILE)) as connection:
                     self.assertEqual(connection.execute('SELECT acceptance_note FROM tasks').fetchone()[0],

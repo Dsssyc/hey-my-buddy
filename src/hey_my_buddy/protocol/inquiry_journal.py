@@ -2,12 +2,12 @@
 from __future__ import annotations
 
 import hashlib
-import json
 import os
 import stat
 from pathlib import Path
 
 from .. import locking
+from ..json_codec import canonical_json, decode_strict_json
 from .run_identity import RunIdentity
 
 #: Byte cap of the inquiry journal one attempt replays; the controller writer
@@ -46,6 +46,8 @@ def read_shared_snapshot(path, max_bytes: int) -> bytes | None:
                 break
             chunks.extend(block)
         return bytes(chunks[:max_bytes + 1])
+    except OSError:
+        return None
     finally:
         os.close(fd)  # closing releases the shared lock
 
@@ -109,13 +111,17 @@ def read_inquiry_journal(identity: RunIdentity | dict, journal_path: str | Path 
     bound_records: dict[str, list[dict]] = {}
     rejection: dict[str, str] = {}
     anchors: dict[str, dict] = {}
-    for line in raw.decode("utf-8", errors="replace").splitlines():
-        line = line.strip()
-        if not line:
-            continue
+    for raw_line in raw.splitlines():
         try:
-            record = json.loads(line)
-        except ValueError:
+            line = raw_line.decode('utf-8').strip()
+            if not line:
+                continue
+            record = decode_strict_json(line)
+            # Escaped unpaired surrogates can survive JSON decoding even when
+            # the input bytes are UTF-8. Such a value was never a writable
+            # journal record and must not reach SQLite or an answer projection.
+            canonical_json(record).encode('utf-8')
+        except (ValueError, RecursionError):
             continue  # a torn line is ignored, never fatal
         if not isinstance(record, dict):
             continue

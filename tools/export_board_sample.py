@@ -4,8 +4,9 @@ source-checkout development.
 Run from the repository root:
     uv run --frozen python tools/export_board_sample.py OUTPUT [--source STATE]
 
-Only console history and its fixed session records are exported. The destination
-is published only after the candidate passes the current-schema and stop checks.
+Only console history, its fixed session records, and inquiry journals belonging
+to selected attempts are exported. The destination retains the source schema
+and is published only after the candidate passes the stop checks.
 """
 from __future__ import annotations
 
@@ -13,6 +14,7 @@ import argparse
 from contextlib import closing
 import os
 from pathlib import Path
+import re
 import secrets
 import shutil
 import sqlite3
@@ -23,8 +25,9 @@ import tempfile
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from hey_my_buddy import private_dirs
-from hey_my_buddy.blackboard.store.db import DB_FILE, SCHEMA_VERSION, Database
+from hey_my_buddy.blackboard.store.db import DB_FILE, SCHEMA_VERSION, SECRET_KEY, UPGRADE_BASE_SCHEMA, utc_now
 from hey_my_buddy.blackboard.tasks.macro_tasks import MEMBERS_SQL, RUN_GROUPS_SQL
+from hey_my_buddy.blackboard.routing.router import initialize_configuration
 from hey_my_buddy.protocol.transport import get_state_dir
 
 MAX_TASKS = 100
@@ -40,9 +43,6 @@ def _rows(connection, table: str, column: str, values) -> list[dict]:
 
 
 def _select(connection) -> tuple[dict[str, list[dict]], list[tuple[str, str, str]]]:
-    version = connection.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone()
-    if version is None or version[0] != str(SCHEMA_VERSION):
-        raise ValueError(f"Source must use current schema {SCHEMA_VERSION}")
     # The most recently accepted micro tasks are selected; the reversed list
     # writes them into the destination oldest first.
     selected = [row[0] for row in connection.execute(
@@ -100,6 +100,50 @@ def _select(connection) -> tuple[dict[str, list[dict]], list[tuple[str, str, str
     return records, sessions
 
 
+def _source_schema(connection) -> tuple[str, list[tuple[str, str]]]:
+    version = connection.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone()
+    if version is None or version[0] not in (str(UPGRADE_BASE_SCHEMA), str(SCHEMA_VERSION)):
+        raise ValueError(f"Source must use schema {UPGRADE_BASE_SCHEMA} or {SCHEMA_VERSION}")
+    definitions = [(row['type'], row['sql']) for row in connection.execute(
+        "SELECT type,sql FROM sqlite_master WHERE type IN ('table','index') "
+        "AND sql IS NOT NULL AND name NOT LIKE 'sqlite_%' "
+        "ORDER BY CASE type WHEN 'table' THEN 0 ELSE 1 END, rowid")]
+    return version[0], definitions
+
+
+def _create_schema(connection, version: str, definitions: list[tuple[str, str]]) -> None:
+    for _kind, ddl in definitions:
+        connection.execute(ddl)
+    connection.execute("INSERT INTO meta(key,value) VALUES('schema_version',?)", (version,))
+    connection.execute("INSERT INTO meta(key,value) VALUES(?,?)", (SECRET_KEY, secrets.token_hex(32)))
+    initialize_configuration(connection)
+    connection.execute(
+        'INSERT INTO reminder_settings(id,silence_seconds,updated_at,revision) VALUES(1,900,?,1)',
+        (utc_now(),))
+
+
+_PRIVATE_ID = re.compile(r'[A-Za-z0-9][A-Za-z0-9._-]{0,127}\Z')
+
+
+def _journal_path(state: Path, task_id: str, attempt_id: str) -> Path:
+    if any(not isinstance(value, str) or _PRIVATE_ID.fullmatch(value) is None or value in ('.', '..')
+           for value in (task_id, attempt_id)):
+        raise ValueError('Sample contains an unsafe inquiry journal identity')
+    return state / 'attempts' / task_id / attempt_id / 'inquiry.results.jsonl'
+
+
+def _copy_optional_regular(origin: Path, target: Path) -> None:
+    try:
+        fd = private_dirs.open_regular_fd(origin, os.O_RDONLY)
+    except FileNotFoundError:
+        return
+    with os.fdopen(fd, 'rb') as stream:
+        private_dirs.ensure_private_dir(target.parent)
+        with os.fdopen(private_dirs.open_regular_fd(
+                target, os.O_WRONLY | os.O_CREAT | os.O_EXCL), 'wb') as destination:
+            shutil.copyfileobj(stream, destination)
+
+
 def _validate(connection) -> None:
     # Finished is not enough on its own: an unconfirmed stop must never escape.
     # ownership is not judged: a lost connection freezes it at 'uncertain' even
@@ -136,14 +180,18 @@ def export_sample(source: Path, output: Path) -> Path:
     with closing(sqlite3.connect((source / DB_FILE).as_uri() + '?mode=ro', uri=True)) as reader:
         reader.row_factory = sqlite3.Row
         reader.execute('BEGIN')
+        version, definitions = _source_schema(reader)
         records, sessions = _select(reader)
     with tempfile.TemporaryDirectory(prefix='.board-sample-', dir=output.parent) as temporary:
         stage = Path(temporary) / 'state'
-        database = Database(stage)
-        try:
-            database.initialize()
-            with database.write() as writer:
+        private_dirs.ensure_private_dir(stage)
+        with closing(sqlite3.connect(stage / DB_FILE)) as writer:
+            writer.row_factory = sqlite3.Row
+            writer.execute('PRAGMA foreign_keys=ON')
+            writer.execute('BEGIN')
+            try:
                 writer.execute('PRAGMA defer_foreign_keys=ON')
+                _create_schema(writer, version, definitions)
                 for table, rows in records.items():
                     for row in rows:
                         columns = ','.join(f'"{key}"' for key in row)
@@ -155,19 +203,18 @@ def export_sample(source: Path, output: Path) -> Path:
                     f'SELECT task_id,group_id FROM ({MEMBERS_SQL})')}
                 for task, attempt, group in sessions:
                     origin = private_dirs.session_record_path(source, group, attempt)
-                    try:
-                        fd = private_dirs.open_regular_fd(origin, os.O_RDONLY)
-                    except FileNotFoundError:
-                        continue  # Historical attempts may never have recorded a session.
-                    with os.fdopen(fd, 'rb') as stream:
-                        target = private_dirs.session_record_path(stage, target_groups[task], attempt)
-                        private_dirs.ensure_private_dir(target.parent)
-                        with os.fdopen(private_dirs.open_regular_fd(
-                                target, os.O_WRONLY | os.O_CREAT | os.O_EXCL), 'wb') as destination:
-                            shutil.copyfileobj(stream, destination)
+                    target = private_dirs.session_record_path(stage, target_groups[task], attempt)
+                    _copy_optional_regular(origin, target)
+                for attempt in records['attempts']:
+                    origin = _journal_path(source, attempt['task_id'], attempt['attempt_id'])
+                    target = _journal_path(stage, attempt['task_id'], attempt['attempt_id'])
+                    _copy_optional_regular(origin, target)
                 _validate(writer)
-        finally:
-            database.close()
+                writer.commit()
+            except BaseException:
+                writer.rollback()
+                raise
+        os.chmod(stage / DB_FILE, 0o600)
         if output.exists():
             output.rmdir()  # Only an empty destination can be replaced.
         stage.rename(output)
