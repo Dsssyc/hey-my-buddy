@@ -11,7 +11,6 @@ import hashlib
 import json
 import os
 import threading
-from datetime import datetime, timezone
 from pathlib import Path
 
 from ... import locking
@@ -19,6 +18,7 @@ from ...protocol.inquiry_journal import (INQUIRY_JOURNAL_VERSION, MAX_JOURNAL_BY
                                          read_inquiry_journal, read_shared_snapshot)
 from ...errors import BoardError
 from ...json_codec import canonical_json
+from ...timestamps import utc_now as _now
 from .live import (
     LiveJournal,
     LiveObservation,
@@ -35,10 +35,6 @@ from .session_receipts import (
 
 #: States a checkpoint may deliver and an answer may act on.
 ANSWERABLE_STATES = ("queued", "delivered")
-
-
-def _now() -> str:
-    return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
 
 
 class InquiryBridge:

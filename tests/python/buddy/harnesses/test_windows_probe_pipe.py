@@ -63,16 +63,21 @@ class WindowsProbePipeTests(unittest.TestCase):
         process.poll.return_value = 0
         process.stdout.fileno.return_value = 123
         peek = mock.Mock(return_value=(b'', 0, 0))
+        clock = SimpleNamespace(now=0.0)
+
+        def sleep(seconds):
+            clock.now += seconds
+
         with mock.patch.dict(sys.modules, {'msvcrt': SimpleNamespace(get_osfhandle=lambda _: 456),
                                           'pywintypes': SimpleNamespace(error=Win32Error),
                                           'win32pipe': SimpleNamespace(PeekNamedPipe=peek)}), \
-             mock.patch.object(discovery.time, 'monotonic', side_effect=[0, 0.2]), \
-             mock.patch.object(discovery.time, 'sleep'), \
+             mock.patch.object(discovery.time, 'monotonic', side_effect=lambda: clock.now), \
+             mock.patch.object(discovery.time, 'sleep', side_effect=sleep), \
              mock.patch.object(discovery.os, 'read') as read, \
              mock.patch.object(discovery.subprocess, 'run'):
             result = discovery._probe_windows(process, 0.1)
         self.assertEqual(result, ('timeout', b'', False))
-        peek.assert_called_once_with(456, 0)
+        peek.assert_called_with(456, 0)
         read.assert_not_called()
         process.kill.assert_not_called()
         process.stdout.close.assert_called_once()

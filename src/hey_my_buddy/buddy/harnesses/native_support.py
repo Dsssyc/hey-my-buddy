@@ -22,12 +22,13 @@ import math
 import subprocess
 import threading
 import time
-from datetime import datetime, timezone
 from typing import Any, Callable
 
 from pydantic import TypeAdapter
 
 from ...errors import BoardError
+from ...text import truncate_utf8
+from ...timestamps import utc_now
 from .base import ProcessHandle
 from .run_contract import NativeIdentity, RunRequest
 
@@ -36,11 +37,6 @@ __all__ = [
     "halt_owned_group", "identity_or_none", "shape_guard", "utc_now",
     "bounded_utf8", "truncate_utf8", "truncate_text",
 ]
-
-
-def utc_now() -> str:
-    """The UTC timestamp string the run facts share (ISO 8601, ``Z`` suffix)."""
-    return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
 
 
 def execution_deadline(timeout_seconds: int | None) -> float:
@@ -149,10 +145,6 @@ INQUIRY_FAILURE_BYTES = 4000
 
 def bounded_utf8(value: str | None, limit: int) -> str | None:
     return value if isinstance(value, str) and len(value.encode()) <= limit else None
-
-
-def truncate_utf8(value: str, limit: int, *, errors: str = "strict") -> str:
-    return value.encode("utf-8", errors=errors)[:limit].decode("utf-8", errors="ignore")
 
 
 def truncate_text(value: str, limit: int) -> str:

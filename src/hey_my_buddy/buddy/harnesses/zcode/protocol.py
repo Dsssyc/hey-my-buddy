@@ -8,13 +8,13 @@ import select
 import subprocess
 import threading
 import time
-from datetime import datetime, timezone
 from typing import Callable
 
 from ..native_observations import bound_native_text, native_counter
 from ..session_receipts import (refusal_shaped, verify_receipt, verify_tool_refusal,
                                 verify_inquiry_receipt)
 from ....json_codec import canonical_json, decode_strict_json
+from ....timestamps import utc_now as _now
 from ....protocol.activity import PHASES, native_tool_name
 from ....protocol.reasons import reason as make_reason
 
@@ -150,10 +150,6 @@ class ActivityProjection:
             "waitingReason": self.waiting_reason,
             "counts": dict(self.counts),
         }
-
-
-def _now() -> str:
-    return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
 
 
 def _unknown_shape(value: object) -> str:
@@ -748,7 +744,7 @@ class NativeConnection:
         record = {
             "kind": "unsupported-native-request",
             "method": method[:120] if isinstance(method, str) else "unknown",
-            "at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+            "at": _now(),
             "outcome": outcome,
             "hostAction": "no interactive Host is attached; the turn must report assistance or attention in its own structured outcome",
         }

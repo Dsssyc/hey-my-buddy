@@ -39,7 +39,6 @@ from __future__ import annotations
 
 import argparse
 import concurrent.futures
-import io
 import json
 import os
 from pathlib import Path
@@ -52,6 +51,7 @@ import tempfile
 import threading
 import time
 
+from ..text import configure_utf8_output
 from .. import locking, private_dirs
 from ..process_observation import observe_open_paths, observe_process_argv
 
@@ -762,9 +762,7 @@ def sweep_private_roots(directory: Path) -> int:
 
 
 def main(argv: list[str] | None = None) -> None:
-    for stream in (sys.stdout, sys.stderr):
-        if isinstance(stream, io.TextIOWrapper):
-            stream.reconfigure(encoding="utf-8", newline="\n")
+    configure_utf8_output()
     root = Path(__file__).resolve().parents[3]
     parser = argparse.ArgumentParser(prog="hey_my_buddy.cli.checks", add_help=False, allow_abbrev=False)
     parser.add_argument("--jobs")

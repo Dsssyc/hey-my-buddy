@@ -21,9 +21,9 @@ counts. Trusted root identities enter only through the driver's own
 from __future__ import annotations
 
 from collections import deque
-from datetime import datetime, timezone
 from pathlib import Path
 from ....json_codec import canonical_json
+from ....timestamps import utc_now as _now
 from ....protocol.activity import (
     MAX_EVENT_SEQ,
     native_tool_name,
@@ -59,10 +59,6 @@ class NativeError(Exception):
         super().__init__(message)
         self.code = code
         self.failure = failure
-
-
-def _now() -> str:
-    return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
 
 
 # -- the tool-fact projection -----------------------------------------------------
