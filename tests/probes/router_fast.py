@@ -20,6 +20,7 @@ from hey_my_buddy.buddy.harnesses.base import ExecutionContext
 from hey_my_buddy.buddy.roles.router import DecisionAdapter
 from hey_my_buddy.buddy.roles.turn_io import private_json
 from hey_my_buddy.blackboard.store.db import canonical_json, sha256_text
+from hey_my_buddy.private_dirs import directory_mode
 
 
 def parser():
@@ -54,8 +55,11 @@ def packet(args):
 
 def run(args):
     root = args.output_root.resolve()
-    root.mkdir(mode=0o700, parents=True, exist_ok=True)
-    if root.stat().st_mode & 0o077:
+    root.mkdir(mode=directory_mode(), parents=True, exist_ok=True)
+    if os.name == 'nt':
+        from hey_my_buddy.windows_files import check_state_root
+        check_state_root(root)
+    elif root.stat().st_mode & 0o077:
         raise ValueError('output root must be owner-private')
     document = packet(args)
     prepared = root / 'prepared.json'

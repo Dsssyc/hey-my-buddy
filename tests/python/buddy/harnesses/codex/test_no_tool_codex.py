@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 import os
 import tempfile
+from temporary import TemporaryDirectory
 import unittest
 from pathlib import Path
 from buddy.harnesses.fixture_selection import select_fixture
@@ -29,8 +30,8 @@ SCHEMA = {"type": "object", "additionalProperties": False, "required": ["buddyId
 
 class NoToolCodexTests(unittest.TestCase):
     def setUp(self):
-        self.temp = tempfile.TemporaryDirectory(prefix="hey-my-buddy-no-tool-codex-",
-                                                dir=os.environ.get("HMB_CHECKS_TMPDIR", "/tmp"))
+        self.temp = TemporaryDirectory(prefix="hey-my-buddy-no-tool-codex-",
+                                                dir=os.environ.get("HMB_CHECKS_TMPDIR", tempfile.gettempdir()))
         self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name)
         self.runtime = self.root / 'empty-runtime'
@@ -52,7 +53,7 @@ class NoToolCodexTests(unittest.TestCase):
         directory = self.root / ("run-" + case)
         directory.mkdir(mode=0o700)
         environment = {key: os.environ[key] for key in ("PATH", "TMPDIR", "LANG", "USER", "LOGNAME") if key in os.environ}
-        environment.update(HOME=str(self.root), CODEX_HOME=str(self.home),
+        environment.update(HOME=str(self.root), USERPROFILE=str(self.root), CODEX_HOME=str(self.home),
                            PYTHONPATH=os.pathsep.join(filter(None, (str(SOURCE), os.environ.get('PYTHONPATH')))),
                            HMB_STATE_DIR=str(self.root / 'state'), HMB_RUNTIME_ROOT=str(self.runtime),
                            HMB_DEV_SOURCE="1",
@@ -122,7 +123,7 @@ class NoToolCodexTests(unittest.TestCase):
     def test_adapter_entrypoint_and_collector(self):
         directory = self.root / "harness"
         environment = {key: os.environ[key] for key in ("PATH", "TMPDIR", "LANG", "USER", "LOGNAME") if key in os.environ}
-        environment.update(HOME=str(self.root), CODEX_HOME=str(self.home),
+        environment.update(HOME=str(self.root), USERPROFILE=str(self.root), CODEX_HOME=str(self.home),
                            PYTHONPATH=os.pathsep.join(filter(None, (str(SOURCE), os.environ.get('PYTHONPATH')))),
                            HMB_RUNTIME_ROOT=str(self.runtime),
                            HMB_DEV_SOURCE="1",

@@ -91,6 +91,7 @@ class CurrentCoreTests(BoardTestCase):
         request = {"requestId": "same-current-input", "task": "current task", "cwd": str(self.workdir()), "adapter": "command", "argv": ["/bin/true"]}
         first = board.submit_execution(**request)
         reopened = BoardStore(self.directory)
+        self.addCleanup(reopened.db.close)
         reopened.initialize()
         replay = reopened.task_submit(request)
         self.assertTrue(replay["duplicate"])
@@ -175,7 +176,9 @@ class CurrentCoreTests(BoardTestCase):
             from hey_my_buddy import state_root
             current = state_root.get_state_dir()
             self.assertEqual(current, (archive / "state").resolve())
-            Database(current).initialize()
+            database = Database(current)
+            self.addCleanup(database.close)
+            database.initialize()
         self.assertEqual(old_file.read_bytes(), before)
         self.assertTrue((current / "board.sqlite3").is_file())
 

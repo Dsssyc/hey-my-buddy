@@ -260,6 +260,7 @@ class FixtureCleanupTests(unittest.TestCase):
                 "VIRTUAL_ENV": str(directory / "inherited-venv"),
                 "UV_PROJECT_ENVIRONMENT": str(directory / "inherited-uv"),
                 "HOME": str(directory / "inherited-home"),
+                "USERPROFILE": str(directory / "inherited-home"),
                 "CODEX_HOME": str(directory / "inherited-codex"),
                 "CLAUDE_CONFIG_DIR": str(directory / "inherited-claude"),
                 "DSH_HOME": str(directory / "inherited-dsh"),
@@ -312,12 +313,13 @@ class FixtureCleanupTests(unittest.TestCase):
             self.assertEqual(probe["catalog"], f"file:{catalog}")
             self.assertEqual(probe["environment"]["HMB_MODEL_CATALOG_FILE"], str(catalog))
             for key in inherited.keys() - {"HMB_STATE_DIR", "HMB_RUNTIME_ROOT", "HMB_MODEL_CATALOG_FILE",
-                                           "HOME", "CODEX_HOME", "CLAUDE_CONFIG_DIR"}:
+                                           "HOME", "USERPROFILE", "CODEX_HOME", "CLAUDE_CONFIG_DIR"}:
                 if key == "DSH_HOME":
                     self.assertNotEqual(probe["environment"][key], inherited[key])
                     continue
                 self.assertNotIn(key, probe["environment"])
             self.assertEqual(probe["environment"]["HOME"], str(directory / "home"))
+            self.assertEqual(probe["environment"]["USERPROFILE"], str(directory / "home"))
             self.assertEqual(probe["environment"]["CODEX_HOME"], str(directory / "home/.codex"))
             self.assertEqual(probe["environment"]["CLAUDE_CONFIG_DIR"], str(directory / "home/.claude"))
             database = Path(probe["database"])

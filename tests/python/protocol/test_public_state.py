@@ -122,7 +122,8 @@ def cleanup_owned_case(state, modes, handles, evidence):
 
 def run_case(name: str, work: Path, *, substitutes_only: bool = False) -> None:
     """Own and collect every daemon handle; never switch native roots in process."""
-    default = Path(os.environ["HOME"]) / ".local/share/hey-my-buddy/state"
+    default = (Path(os.environ["LOCALAPPDATA"]) / "hey-my-buddy/state" if os.name == "nt"
+               else Path(os.environ["HOME"]) / ".local/share/hey-my-buddy/state")
     state = work / "selected" if name.startswith(("explicit", "environment", "late")) else default
     client = None
     if name.startswith("explicit"):

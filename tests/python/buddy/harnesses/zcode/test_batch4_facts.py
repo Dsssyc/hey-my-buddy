@@ -2,7 +2,7 @@
 import json
 import os
 import queue
-import tempfile
+from temporary import TemporaryDirectory
 import types
 import unittest
 from pathlib import Path
@@ -174,7 +174,7 @@ class BoundaryAndDrainTests(unittest.TestCase):
         facts = native_run._RunFacts()
         for index in range(70):
             facts.note_unknown(f"future-method-{index}")
-        with tempfile.TemporaryDirectory(prefix="hey-my-buddy-zcode-facts-") as root:
+        with TemporaryDirectory(prefix="hey-my-buddy-zcode-facts-") as root:
             invocation = native_run.ensure_private_dir(Path(root))
             refs = native_run._evidence_refs(invocation_root=invocation,
                                              stderr_path=invocation / "missing-stderr.log",

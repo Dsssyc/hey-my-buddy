@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
-import tempfile
+from temporary import TemporaryDirectory
 import unittest
 from unittest import mock
 
@@ -27,7 +27,7 @@ class ExplicitEntryTests(unittest.TestCase):
                     self.assertEqual(child, {own + "CASE": "ok", own + "STATE": "/fixture/state"})
 
     def test_each_override_uses_the_shared_resolver_and_preserves_refusal(self):
-        with tempfile.TemporaryDirectory() as temporary, mock.patch.dict(os.environ, {"HMB_DEV_SOURCE": "1"}):
+        with TemporaryDirectory() as temporary, mock.patch.dict(os.environ, {"HMB_DEV_SOURCE": "1"}):
             entry = Path(temporary) / "native-entry.exe"
             for name, config, exception in (("claude", claude, claude.ClaudeUnavailable),
                                             ("codex", codex, codex.CodexUnavailable),
@@ -63,7 +63,7 @@ class ExplicitEntryTests(unittest.TestCase):
             resolve.assert_not_called()
 
     def test_development_controller_preserves_all_four_overrides(self):
-        with tempfile.TemporaryDirectory() as temporary:
+        with TemporaryDirectory() as temporary:
             source = {'HMB_DEV_SOURCE': '1', **{f'HMB_{name.upper()}_CLI': f'{name}.exe'
                        for name in ('claude', 'codex', 'zcode', 'dsh')}}
             result = runtime_selection.controller_environment(temporary, source)

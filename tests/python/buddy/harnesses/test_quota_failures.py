@@ -2,7 +2,7 @@
 from copy import deepcopy
 from pathlib import Path
 from types import SimpleNamespace
-import tempfile
+from temporary import TemporaryDirectory
 import unittest
 from unittest.mock import Mock, patch
 
@@ -82,7 +82,7 @@ class ZcodeQuotaProtocolTests(unittest.TestCase):
 
 class NativeQuotaFailureTests(unittest.TestCase):
     def setUp(self):
-        temporary = tempfile.TemporaryDirectory(prefix="hey-my-buddy-quota-run-")
+        temporary = TemporaryDirectory(prefix="hey-my-buddy-quota-run-")
         self.addCleanup(temporary.cleanup)
         self.root = Path(temporary.name)
 

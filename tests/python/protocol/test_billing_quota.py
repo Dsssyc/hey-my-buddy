@@ -68,15 +68,19 @@ class BillingTests(BoardTestCase):
     def test_mock_codex_account_read_has_no_model_turn(self):
         from hey_my_buddy.buddy.harnesses.codex.account_probe import read
         path = Path(__file__).resolve().parents[1] / "buddy/harnesses/codex/fixtures/mock_codex.py"
-        billing = read([sys.executable, str(path)], {"HOME": str(self.directory), "PATH": os.environ.get("PATH", "")})
+        billing = read([sys.executable, str(path)], {"HOME": str(self.directory),
+                                                          "USERPROFILE": str(self.directory),
+                                                          "PATH": os.environ.get("PATH", "")})
         self.assertEqual(billing["kind"], "subscription")
         self.assertEqual(billing["provider"], "openai")
 
     def test_codex_on_demand_read_is_throttled_even_for_forced_refresh(self):
         from hey_my_buddy.blackboard.store.store import BoardStore
         board = BoardStore(self.directory / "health")
+        self.addCleanup(board.db.close)
         board.initialize()
         health = HarnessHealth(board)
+        self.addCleanup(health.close)
         health.initialize()
         with board.db.write() as db:
             db.execute("UPDATE harness_health SET record_json=? WHERE harness='codex'",
@@ -90,7 +94,6 @@ class BillingTests(BoardTestCase):
             self.assertEqual(probe.call_count, 1)
             self.assertEqual(health.get("codex")["billingByProvider"]["openai"]["kind"], "subscription")
             self.assertNotIn("reviewVerification", health.get("codex"))
-        health.close()
 
 
 if __name__ == "__main__":

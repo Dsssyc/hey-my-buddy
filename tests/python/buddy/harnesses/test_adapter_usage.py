@@ -8,7 +8,7 @@ from __future__ import annotations
 import json
 import os
 import sys
-import tempfile
+from temporary import TemporaryDirectory
 import unittest
 from pathlib import Path
 from buddy.harnesses.fixture_selection import mock_role_workspace, select_fixture
@@ -26,7 +26,7 @@ CODEX_NATIVE = json.loads((FIXTURES / "codex/fixtures/native-usage-codex.json").
 
 class CodexUsageContractTests(unittest.TestCase):
     def setUp(self):
-        self.temporary = tempfile.TemporaryDirectory(prefix="hey-my-buddy-codex-usage-")
+        self.temporary = TemporaryDirectory(prefix="hey-my-buddy-codex-usage-")
         self.addCleanup(self.temporary.cleanup)
         self.root = Path(self.temporary.name)
         self.cwd = self.root / "checkout"

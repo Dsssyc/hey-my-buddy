@@ -74,7 +74,8 @@ class CatalogNativeStopTests(NativeDiscoveryFixture, BoardTestCase):
         # The actual private controller may only encounter an unavailable synthetic harness.
         self.record.update(status='unavailable', command=[], reasonCode='HARNESS_UNAVAILABLE',
                            remedy='fixture has no native harness')
-        with patch.dict(os.environ, {'HOME': str(self.directory), 'CODEX_HOME': str(self.directory / '.codex'),
+        with patch.dict(os.environ, {'HOME': str(self.directory), 'USERPROFILE': str(self.directory),
+                                    'CODEX_HOME': str(self.directory / '.codex'),
                                      'HMB_CODEX_CLI': ''}):
             return self.invoke(lambda: run_execution.discover_models('codex', state_dir=Path(os.environ["HMB_STATE_DIR"])))
 
@@ -217,7 +218,8 @@ class CatalogNativeStopTests(NativeDiscoveryFixture, BoardTestCase):
             self.assertEqual(payload['harnessVersion'], 'unknown')
             return payload
 
-        with patch.dict(os.environ, {'HOME': str(self.directory), 'CODEX_HOME': str(self.directory / '.codex'),
+        with patch.dict(os.environ, {'HOME': str(self.directory), 'USERPROFILE': str(self.directory),
+                                    'CODEX_HOME': str(self.directory / '.codex'),
                                      'HMB_CODEX_CLI': ''}), \
              patch.object(native_run, 'probe_version', side_effect=probe_version):
             result = self.invoke(read)
@@ -241,7 +243,8 @@ class CatalogNativeStopTests(NativeDiscoveryFixture, BoardTestCase):
             self.assertEqual(process.returncode, 7)
             return reason, output, False
 
-        with patch.dict(os.environ, {'HOME': str(self.directory), 'CODEX_HOME': str(self.directory / '.codex'),
+        with patch.dict(os.environ, {'HOME': str(self.directory), 'USERPROFILE': str(self.directory),
+                                    'CODEX_HOME': str(self.directory / '.codex'),
                                      'HMB_CODEX_CLI': ''}), \
              patch.object(discovery, '_probe_posix', side_effect=observed) as observation, \
              patch.object(native_run, 'probe_version', wraps=version.probe_version) as shared, \

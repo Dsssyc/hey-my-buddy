@@ -99,7 +99,9 @@ class RouterPublicationTests(WorkflowTestCase):
         self.enterContext(patch('hey_my_buddy.blackboard.routing.decision.DecisionCoordinator._adapter_available', return_value=(True, None)))
 
     def settle(self, buddy, *, code=None, preferences=None, result_status=None):
-        board = self.board()
+        from support import InProcessBoard
+        board = InProcessBoard(self.directory / (code or "publication"))
+        self._stack.append(board)
         self.seed(board, preferences=preferences)
         request = board.call('selection_request', {'requestId': 'route', 'task': 'choose'})
         pass  # Admission is owned by the service.

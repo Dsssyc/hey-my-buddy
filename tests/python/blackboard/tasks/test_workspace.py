@@ -11,7 +11,7 @@ from unittest.mock import patch
 from types import SimpleNamespace
 
 from hey_my_buddy.errors import BoardError
-from hey_my_buddy.blackboard.tasks import workspace, macro_task_deletion_workspace
+from hey_my_buddy.blackboard.tasks import workspace, macro_task_deletion_workspace, windows_paths
 from hey_my_buddy.cli.checks import remove_private_test_root
 from hey_my_buddy.paths import native_path
 
@@ -230,7 +230,7 @@ class WorkspaceTests(unittest.TestCase):
         manifest = self.prepare(includeUntracked=["src/selected.bin", "src/link"])
         target = Path(manifest["checkoutRoot"])
         self.assertEqual((target / "src/file.txt").read_bytes(), source.read_bytes())
-        self.assertTrue((target / "src/file.txt").stat().st_mode & 0o111)
+        self.assertEqual(bool((target / "src/file.txt").stat().st_mode & 0o111), os.name != "nt")
         self.assertEqual((target / "src/selected.bin").read_bytes(), selected.read_bytes())
         self.assertEqual(os.readlink(target / "src/link"), str(outside))
         self.assertFalse((target / "src/excluded.txt").exists())
@@ -322,7 +322,8 @@ class WorkspaceTests(unittest.TestCase):
         self.assertEqual(output["changedPaths"], ["src/file.txt", "src/link", "src/new.txt"])
         self.assertEqual(self.git("show", output["commit"] + ":src/file.txt"), b"output\x00\xff\n")
         self.assertEqual(self.git("show", output["commit"] + ":src/link"), b"../../external-missing")
-        self.assertIn(b"100755", self.git("ls-tree", output["commit"], "src/new.txt"))
+        self.assertIn(b"100644" if os.name == "nt" else b"100755",
+                      self.git("ls-tree", output["commit"], "src/new.txt"))
         self.assertEqual(output["diffSha256"], hashlib.sha256(Path(output["diffPath"]).read_bytes()).hexdigest())
         self.assertEqual(self.git("rev-parse", output["commit"] + "^").decode().strip(), manifest["inputCommit"])
         self.assertEqual(workspace.seal(self.state, manifest, "task", "attempt"), output)
@@ -331,7 +332,7 @@ class WorkspaceTests(unittest.TestCase):
         self.git("apply", "--binary", output["diffPath"], cwd=integration)
         self.assertEqual((integration / "src/file.txt").read_bytes(), b"output\x00\xff\n")
         self.assertEqual(os.readlink(integration / "src/link"), "../../external-missing")
-        self.assertTrue((integration / "src/new.txt").stat().st_mode & 0o111)
+        self.assertEqual(bool((integration / "src/new.txt").stat().st_mode & 0o111), os.name != "nt")
         self.git("worktree", "unlock", str(target))
         self.git("worktree", "remove", "--force", str(target))
         self.git("gc", "--prune=now")
@@ -515,6 +516,7 @@ class WorkspaceTests(unittest.TestCase):
         result = subprocess.run(["git", "-C", str(self.repo), "show-ref", "--verify", "refs/heads/unborn-target"], capture_output=True)
         self.assertNotEqual(result.returncode, 0)
 
+    @unittest.skipIf(os.name == "nt", "control characters are not Windows file names")
     def test_explicit_ignored_untracked_input_and_unusual_filenames(self):
         (self.repo / ".gitignore").write_text("*.secret\n", encoding="utf-8", newline="\n")
         self.git("add", ".gitignore")
@@ -530,6 +532,13 @@ class WorkspaceTests(unittest.TestCase):
         self.assertTrue(workspace.verify(manifest)["unchanged"])
         (Path(manifest["path"]) / name).write_bytes(b"changed selected input")
         self.assert_error("WORKSPACE_CHANGED", workspace.verify, manifest)
+
+    @unittest.skipUnless(os.name == "nt", "Windows Git path boundary")
+    def test_windows_rejects_unportable_selected_git_paths(self):
+        for name in ("src/odd\nname.secret", "src/odd\tname.secret", "src/odd\nname\t.secret"):
+            with self.subTest(name=name):
+                self.assert_error("WORKSPACE_UNSUPPORTED", windows_paths.validate_git_path, name)
+                self.assert_error("WORKSPACE_UNSUPPORTED", self.prepare, name, includeUntracked=[name])
 
     def test_ignored_caches_do_not_interfere_with_managed_input_or_output(self):
         (self.repo / ".gitignore").write_text("*.ignored\n", encoding="utf-8", newline="\n")
@@ -573,9 +582,9 @@ class WorkspaceTests(unittest.TestCase):
         (self.repo / "local-environment").mkdir()
         (self.repo / "local-environment/secret").write_text("ignored by repository exclude", encoding="utf-8", newline="\n")
         read = workspace._file
-        def managed_read(root, path):
+        def managed_read(root, path, **kwargs):
             self.assertFalse(path.startswith(("node_modules/", ".venv/", "tmp/", "local-environment/")), path)
-            return read(root, path)
+            return read(root, path, **kwargs)
         with patch.object(workspace, "_file", side_effect=managed_read):
             manifest = self.prepare(kind="existing", access="read", writeScope=[], base={"kind": "commit", "ref": "HEAD"})
             self.assertTrue(workspace.verify(manifest)["unchanged"])
@@ -598,9 +607,9 @@ class WorkspaceTests(unittest.TestCase):
         ignored.chmod(0)
         self.addCleanup(ignored.chmod, 0o700)
         read = workspace._file
-        def selected_read(root, path):
+        def selected_read(root, path, **kwargs):
             self.assertFalse(path.startswith("other-private/"), path)
-            return read(root, path)
+            return read(root, path, **kwargs)
         with patch.object(workspace, "_file", side_effect=selected_read):
             manifest = self.prepare(kind="existing", access="read", writeScope=[], includeUntracked=["fixtures/private"])
             self.assertTrue(workspace.verify(manifest)["unchanged"])

@@ -6,7 +6,7 @@ import json
 import os
 from pathlib import Path
 import sys
-import tempfile
+from temporary import TemporaryDirectory
 import time
 from types import SimpleNamespace
 import unittest
@@ -22,7 +22,7 @@ from hey_my_buddy.buddy.harnesses.codex import config as codex
 
 class LiteralShimTests(unittest.TestCase):
     def setUp(self):
-        self.directory = self.enterContext(tempfile.TemporaryDirectory())
+        self.directory = self.enterContext(TemporaryDirectory())
         self.root = Path(self.directory).resolve()
         self.bin = self.root / 'runtime/bin'
         self.bin.mkdir(parents=True)

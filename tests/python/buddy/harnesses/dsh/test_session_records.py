@@ -18,6 +18,7 @@ from __future__ import annotations
 import json
 import os
 import tempfile
+from temporary import TemporaryDirectory
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -88,8 +89,8 @@ def foreign_rollout(session_id: str) -> list[dict]:
 
 class SessionRecordCase(unittest.TestCase):
     def setUp(self):
-        container = tempfile.TemporaryDirectory(
-            prefix="dsh-session-records-", dir=os.environ.get("HMB_CHECKS_TMPDIR", "/tmp"))
+        container = TemporaryDirectory(
+            prefix="dsh-session-records-", dir=os.environ.get("HMB_CHECKS_TMPDIR", tempfile.gettempdir()))
         self.addCleanup(container.cleanup)
         self.root = Path(container.name).resolve()
         self.sessions = self.root / "sessions"

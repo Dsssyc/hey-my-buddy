@@ -73,7 +73,7 @@ class RealWorkspaceTestCase(BoardTestCase):
 
     def git(self, *arguments: str, check: bool = True) -> str:
         completed = subprocess.run(
-            ["git", *arguments],
+            ["git", "-c", "core.longpaths=true", *arguments],
             cwd=self.repo,
             env={**os.environ, **GIT_ENV},
             capture_output=True,
@@ -279,7 +279,7 @@ class RealAdapterTests(RealWorkspaceTestCase):
         environment = {key: value for key, value in os.environ.items()
                        if not key.startswith("HMB_") and key not in ("VIRTUAL_ENV", "UV_PROJECT_ENVIRONMENT", "HOME")}
         environment.update(
-            HOME=str(home), DSH_HOME=str(home / ".dsh"), HMB_STATE_DIR=str(self.directory),
+            HOME=str(home), USERPROFILE=str(home), DSH_HOME=str(home / ".dsh"), HMB_STATE_DIR=str(self.directory),
             HMB_RUNTIME_ROOT=str(self.directory / "runtime"), HMB_DEV_SOURCE="1",
             PYTHONPATH=str(REPOSITORY_ROOT / "src") + os.pathsep + str(REPOSITORY_ROOT / "tests" / "python"),
             HMB_HARNESS_RECORD_FILE=str(record),

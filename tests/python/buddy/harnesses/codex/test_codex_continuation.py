@@ -28,6 +28,7 @@ class CodexContinuationTests(WorkflowTestCase):
             environment = {key: value for key, value in os.environ.items() if not key.startswith("HMB_")}
             environment.update(HMB_DEV_SOURCE="1", HMB_STATE_DIR=str(self.directory),
                                CODEX_HOME=str(self.directory / 'native-account'), HOME=str(self.directory),
+                               USERPROFILE=str(self.directory),
                                HMB_RUNTIME_ROOT=str(self.directory / "runtime"),
                                HMB_CODEX_FIXTURE_STATE=str(self.directory / "native-state.json"),
                                HMB_CODEX_FIXTURE_CASE=case,

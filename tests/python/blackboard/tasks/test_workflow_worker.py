@@ -44,7 +44,7 @@ def harness_environment(directory: Path, entry: Path) -> dict:
     """
     home = directory / "home"
     prepare_test_home(home)
-    return {"HOME": str(home), "HMB_DSH_CLI": str(entry)}
+    return {"HOME": str(home), "USERPROFILE": str(home), "HMB_DSH_CLI": str(entry)}
 
 
 class MicroTaskWorkerTestCase(BoardTestCase):

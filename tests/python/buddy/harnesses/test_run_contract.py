@@ -13,6 +13,7 @@ import hashlib
 import json
 import os
 import tempfile
+from temporary import TemporaryDirectory
 import unittest
 from pathlib import Path, PurePosixPath, PureWindowsPath
 from unittest import mock
@@ -219,7 +220,7 @@ class CodecRoundtripTests(unittest.TestCase):
                 rc.RunRequest.from_payload(request.to_payload() | fields)
 
     def setUp(self):
-        self.temporary = tempfile.TemporaryDirectory(prefix="hey-my-buddy-run-contract-")
+        self.temporary = TemporaryDirectory(prefix="hey-my-buddy-run-contract-")
         self.addCleanup(self.temporary.cleanup)
         self.root = Path(self.temporary.name)
 

@@ -18,6 +18,7 @@ import json
 import os
 import sys
 import tempfile
+from temporary import TemporaryDirectory
 import time
 import unittest
 from pathlib import Path
@@ -32,8 +33,8 @@ class AcpTestCase(unittest.TestCase):
 
     def setUp(self) -> None:
         name = self.id().rsplit(".", 1)[-1]
-        self.container = tempfile.TemporaryDirectory(
-            prefix=f"acp-{name}-", dir=os.environ.get("HMB_CHECKS_TMPDIR", "/tmp"))
+        self.container = TemporaryDirectory(
+            prefix=f"acp-{name}-", dir=os.environ.get("HMB_CHECKS_TMPDIR", tempfile.gettempdir()))
         self.addCleanup(self.container.cleanup)
         self.test_dir = Path(self.container.name).resolve()
         self.root = self.test_dir / "native-root"
@@ -43,7 +44,8 @@ class AcpTestCase(unittest.TestCase):
         self.dsh_home.mkdir(mode=0o700, parents=True)
         self.home.mkdir(mode=0o700)
         self.logs.mkdir(mode=0o700, parents=True)
-        environment = mock.patch.dict(os.environ, {"HOME": str(self.home), "DSH_HOME": str(self.dsh_home)})
+        environment = mock.patch.dict(os.environ, {"HOME": str(self.home), "USERPROFILE": str(self.home),
+                                                   "DSH_HOME": str(self.dsh_home)})
         environment.start()
         self.addCleanup(environment.stop)
 

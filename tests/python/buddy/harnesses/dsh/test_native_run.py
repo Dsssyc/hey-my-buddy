@@ -21,6 +21,7 @@ import math
 import os
 import sys
 import tempfile
+from temporary import TemporaryDirectory
 import threading
 import time
 import unittest
@@ -47,6 +48,7 @@ from hey_my_buddy.buddy.roles.run_observers import FastCorrection, worker_observ
 from hey_my_buddy.buddy.roles.structured_call import structured_prompt
 from hey_my_buddy.buddy.roles.turn_io import input_hash, validate_outcome
 from hey_my_buddy.errors import BoardError
+from hey_my_buddy.paths import native_path
 
 from buddy.harnesses.dsh.acp.support import FAKE_AGENT
 
@@ -76,8 +78,8 @@ class NativeRunCase(unittest.TestCase):
 
     def setUp(self):
         name = self.id().rsplit(".", 1)[-1]
-        container = tempfile.TemporaryDirectory(prefix=f"dsh-native-{name}-",
-                                                dir=os.environ.get("HMB_CHECKS_TMPDIR", "/tmp"))
+        container = TemporaryDirectory(prefix=f"dsh-native-{name}-",
+                                                dir=os.environ.get("HMB_CHECKS_TMPDIR", tempfile.gettempdir()))
         self.addCleanup(container.cleanup)
         self.base = Path(container.name).resolve()
         self.state_dir = self.base / "state"
@@ -92,7 +94,7 @@ class NativeRunCase(unittest.TestCase):
         (self.base / "cwd").mkdir(mode=0o700)
         # A run inherits HOME by contract; these tests pin it to this test's
         # private directory; it models the user's home, outside native evidence.
-        environment = mock.patch.dict(os.environ, {"HOME": str(self.home),
+        environment = mock.patch.dict(os.environ, {"HOME": str(self.home), "USERPROFILE": str(self.home),
                                                   "DSH_HOME": str(self.base / "source-dsh-home")})
         environment.start()
         self.addCleanup(environment.stop)
@@ -223,7 +225,7 @@ class FastSeamTests(NativeRunCase):
                 ref = next(ref for ref in result.evidence_refs if ref.kind == "native-stderr")
                 path = Path(request.private_state.invocation_root) / "native-stderr.log"
                 self.assertEqual(ref.location, str(path))
-                raw = path.read_bytes()
+                raw = native_path(path).read_bytes()
                 self.assertIn(note.encode(), raw)
                 self.assertEqual(ref.size_bytes, len(raw))
                 self.assertEqual(ref.sha256, hashlib.sha256(raw).hexdigest())
@@ -459,7 +461,7 @@ class FastSeamTests(NativeRunCase):
         self.assertIsNotNone(result.effective_policy.tools)
         self.assertEqual(result.effective_policy.tools.requested.value,
                          {"permissionMode": "workspace-write"})
-        self.assertTrue((Path(request.private_state.invocation_root) / "dsh-launch-patch.json").is_file())
+        self.assertTrue(native_path(Path(request.private_state.invocation_root) / "dsh-launch-patch.json").is_file())
         observed = [entry for entry in self.agent_log() if entry.get("event") == "home-check"][-1]
         self.assertEqual(observed["permissionMode"], "workspace-write")
 
@@ -473,7 +475,7 @@ class FastSeamTests(NativeRunCase):
         self.assertEqual(result.end.status, "ok", result.end.message)
         policy = result.effective_policy
         self.assertEqual(policy.tools.requested.value, {"permissionMode": "read-only"})
-        self.assertTrue((Path(request.private_state.invocation_root) / "dsh-launch-patch.json").is_file())
+        self.assertTrue(native_path(Path(request.private_state.invocation_root) / "dsh-launch-patch.json").is_file())
         observed = [entry for entry in self.agent_log() if entry.get("event") == "home-check"][-1]
         self.assertEqual(observed["home"], str(self.home))
         self.assertEqual(observed["dshHome"], os.environ["DSH_HOME"])
@@ -488,10 +490,10 @@ class FastSeamTests(NativeRunCase):
                      services=None, cancelled=lambda: False)
         self.assertEqual(result.end.status, "ok", result.end.message)
         patch_path = Path(request.private_state.invocation_root) / "dsh-launch-patch.json"
-        self.assertTrue(patch_path.is_file())
+        self.assertTrue(native_path(patch_path).is_file())
         observed = [entry for entry in self.agent_log() if entry.get("event") == "home-check"][-1]
         self.assertIsNone(observed["permissionMode"])
-        rows = json.loads(patch_path.read_text(encoding="utf-8"))
+        rows = json.loads(native_path(patch_path).read_text(encoding="utf-8"))
         # The storage roots precede the disabled tool rows and plan-mode.
         self.assertEqual([row["id"] for row in rows],
                          ["session-persistence-jsonl", "storage-json", *CONFIRMED_NONE_ROWS,
@@ -1227,7 +1229,7 @@ class RoleSeamFunctionTests(unittest.TestCase):
                              "a bound record decides without a discovery scan")
 
     def test_session_facts_report_private_storage_and_the_real_binding_presence(self):
-        with tempfile.TemporaryDirectory(prefix="dsh-session-facts-") as container:
+        with TemporaryDirectory(prefix="dsh-session-facts-") as container:
             root = Path(container) / "native-root"
             root.mkdir(mode=0o700)
             facts = native_run.session_facts(root, "session-1")
@@ -1570,7 +1572,7 @@ class NativeConfigurationTests(NativeRunCase):
                         result = run(request, observer=worker_observer, services=bound.services,
                                      cancelled=lambda: False)
                         self.assertEqual(result.end.status, "ok", result.end.message)
-                        self.assertFalse((Path(request.private_state.invocation_root) / "dsh-home").exists())
+                        self.assertFalse(native_path(Path(request.private_state.invocation_root) / "dsh-home").exists())
                     else:
                         self.extra_agent_args = ["--prompt-mode", "final", "--final-answer", '{"choice":"a"}']
                         request = self.fast_request("prompt")
@@ -1585,7 +1587,7 @@ class NativeConfigurationTests(NativeRunCase):
                     self.assertEqual(observed["profilePatch"], "profile-user-patch\n")
                     patch_root = (self.base / "disc-inv" if carrier == "discovery" else
                                   Path(request.private_state.invocation_root))
-                    rows = json.loads((patch_root / "dsh-launch-patch.json").read_text(encoding="utf-8"))
+                    rows = json.loads(native_path(patch_root / "dsh-launch-patch.json").read_text(encoding="utf-8"))
                     expected = (["session-persistence-jsonl", "storage-json"]
                                 + ([*CONFIRMED_NONE_ROWS, "plan-mode"] if carrier == "fast" else []))
                     self.assertEqual([row["id"] for row in rows], expected)

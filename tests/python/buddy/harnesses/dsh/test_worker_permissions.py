@@ -8,6 +8,7 @@ from hey_my_buddy.buddy.harnesses.dsh import native_run
 from hey_my_buddy.buddy.harnesses.registry import require_permission
 from hey_my_buddy.buddy.harnesses.run_contract import RunContinuation, RunResult
 from hey_my_buddy.buddy.roles.run_observers import worker_observer
+from hey_my_buddy.paths import native_path
 
 from .test_native_run import NativeRunCase
 
@@ -32,14 +33,14 @@ class WorkerPermissionTests(NativeRunCase):
                 self.assertEqual(native_run.native_evidence(result)["nativePolicy"], {"permissionMode": mode})
                 observed = [entry for entry in self.agent_log() if entry.get("event") == "home-check"][-1]
                 self.assertEqual(observed["permissionMode"], mode)
-                patch = json.loads((Path(request.private_state.invocation_root) / "dsh-launch-patch.json").read_text(encoding="utf-8"))
+                patch = json.loads(native_path(Path(request.private_state.invocation_root) / "dsh-launch-patch.json").read_text(encoding="utf-8"))
                 self.assertEqual([row["id"] for row in patch], ["session-persistence-jsonl", "storage-json"])
                 provenance = next(ref for ref in result.evidence_refs if ref.kind == "turn-provenance")
-                proof = json.loads(Path(provenance.location).read_text(encoding="utf-8"))
+                proof = json.loads(native_path(Path(provenance.location)).read_text(encoding="utf-8"))
                 self.assertEqual(proof["nativeTool"], mount.finish_tool)
                 self.assertTrue(proof["receiptVerified"])
                 inquiry = next(ref for ref in result.evidence_refs if ref.kind == "inquiry-report")
-                self.assertEqual(json.loads(Path(inquiry.location).read_text(encoding="utf-8"))["deliveryMode"],
+                self.assertEqual(json.loads(native_path(Path(inquiry.location)).read_text(encoding="utf-8"))["deliveryMode"],
                                  "cooperative-checkpoint")
 
     def test_presets_remain_requested_facts_when_initialize_fails_before_a_session_opens(self):

@@ -248,7 +248,8 @@ class BatchedObjectTests(unittest.TestCase):
         observed = workspace._observe(self.repo, [])
         for path, oid in expected.items():
             self.assertEqual(observed["tracked"][path][1], oid, path)
-        self.assertEqual(observed["tracked"]["script.sh"][0], "100755")
+        self.assertEqual(observed["tracked"]["script.sh"][0],
+                         "100644" if os.name == "nt" else "100755")
         self.assertEqual(observed["tracked"]["link"][0], "120000")
         written = workspace._observe(self.repo, [], write=True, state_dir=self.state)
         self.assertEqual(written["tracked"], observed["tracked"])

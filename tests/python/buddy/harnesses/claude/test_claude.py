@@ -14,6 +14,7 @@ import math
 import os
 import sys
 import tempfile
+from temporary import TemporaryDirectory
 import threading
 import time
 import unittest
@@ -50,8 +51,8 @@ class ClaudeFixtureCase(unittest.TestCase):
     """The shared fake-CLI harness: private roots, scrubbed environment."""
 
     def setUp(self):
-        self.temp = tempfile.TemporaryDirectory(prefix="hey-my-buddy-claude-test-",
-                                                dir=os.environ.get("HMB_CHECKS_TMPDIR", "/tmp"))
+        self.temp = TemporaryDirectory(prefix="hey-my-buddy-claude-test-",
+                                                dir=os.environ.get("HMB_CHECKS_TMPDIR", tempfile.gettempdir()))
         self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name)
         (self.root / "state").mkdir(mode=directory_mode())

@@ -34,7 +34,7 @@ def main() -> None:
         codex_home.mkdir()
         env = {key: os.environ[key] for key in ("PATH", "LANG", "LC_ALL", "LC_CTYPE", "TMPDIR")
                if key in os.environ}
-        env.update(HOME=str(home), CODEX_HOME=str(codex_home))
+        env.update(HOME=str(home), USERPROFILE=str(home), CODEX_HOME=str(codex_home))
         version = subprocess.check_output([CODEX, "--version"], env=env, text=True).strip()
         subprocess.run([CODEX, "app-server", "generate-json-schema", "--experimental", "--out", str(schema_root)],
                        env=env, cwd=root, check=True, capture_output=True, text=True)

@@ -53,7 +53,7 @@ def result_for(request, *, status="cancelled", session="native-session", resumab
 class RoleStopTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory(prefix="hmb-role-stop-",
-                                                 dir=os.environ.get("HMB_CHECKS_TMPDIR", "/tmp"))
+                                                 dir=os.environ.get("HMB_CHECKS_TMPDIR", tempfile.gettempdir()))
         self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name)
         self.invocation = ensure_private_dir(self.root / "invocation")

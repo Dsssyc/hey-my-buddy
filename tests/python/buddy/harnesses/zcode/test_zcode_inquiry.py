@@ -17,7 +17,7 @@ import json
 import os
 import subprocess
 import sys
-import tempfile
+from temporary import TemporaryDirectory
 import threading
 import time
 import unittest
@@ -26,7 +26,8 @@ from pathlib import Path
 from hey_my_buddy import locking
 from hey_my_buddy.protocol import activity as activity_module
 from hey_my_buddy.protocol.inquiry_journal import read_inquiry_journal, merged_inquiry_records, normalize_inquiry_record
-from hey_my_buddy.private_dirs import context_root
+from hey_my_buddy.private_dirs import context_root, open_regular_fd
+from hey_my_buddy.paths import native_path
 from hey_my_buddy.buddy.roles import turn_io
 from hey_my_buddy.buddy.roles.worker_services import attention_requests, pending_inquiries, read_inquiry_entries
 from hey_my_buddy.buddy.harnesses.session_receipts import (
@@ -155,7 +156,7 @@ def answer_receipt(inquiry_id: str, answer: str, config: dict, *, sha: str = "b"
 
 class BridgeQueueTests(unittest.TestCase):
     def setUp(self):
-        self.temporary = tempfile.TemporaryDirectory(prefix="hey-my-buddy-zcode-inquiry-")
+        self.temporary = TemporaryDirectory(prefix="hey-my-buddy-zcode-inquiry-")
         self.addCleanup(self.temporary.cleanup)
         self.harness = BridgeHarness(Path(self.temporary.name))
         self.addCleanup(self.harness.close)
@@ -629,7 +630,7 @@ class JournalBarrierTests(unittest.TestCase):
     """
 
     def setUp(self):
-        self.temporary = tempfile.TemporaryDirectory(prefix="hey-my-buddy-zcode-journal-")
+        self.temporary = TemporaryDirectory(prefix="hey-my-buddy-zcode-journal-")
         self.addCleanup(self.temporary.cleanup)
         self.root = Path(self.temporary.name)
         self.journal = self.root / "inquiry.results.jsonl"
@@ -672,7 +673,7 @@ class JournalBarrierTests(unittest.TestCase):
 
     def test_a_shared_reader_waits_for_the_exclusive_writer_transaction(self):
         record = self.queued_record("q-barrier")
-        fd = os.open(self.journal, os.O_WRONLY | os.O_CREAT | os.O_APPEND | os.O_NOFOLLOW, 0o600)
+        fd = open_regular_fd(self.journal, os.O_WRONLY | os.O_CREAT | os.O_APPEND)
         observed: list[dict] = []
         try:
             locking.lock(fd)
@@ -693,7 +694,7 @@ class JournalBarrierTests(unittest.TestCase):
         config_path = self.root / "bridge.json"
         config_path.write_text(json.dumps(self.config), encoding="utf-8", newline="\n")
         record = self.queued_record("q-cross-process")
-        fd = os.open(self.journal, os.O_WRONLY | os.O_CREAT | os.O_APPEND | os.O_NOFOLLOW, 0o600)
+        fd = open_regular_fd(self.journal, os.O_WRONLY | os.O_CREAT | os.O_APPEND)
         environment = {key: value for key, value in os.environ.items()
                        if not key.startswith(("HMB_", "ZCODE_")) and key not in ("VIRTUAL_ENV", "UV_PROJECT_ENVIRONMENT")}
         process = subprocess.Popen([sys.executable, "-m", "hey_my_buddy.buddy.roles.session_mcp", "--config", str(config_path)],
@@ -785,7 +786,7 @@ class JournalBarrierTests(unittest.TestCase):
 
 class FinishToolTests(unittest.TestCase):
     def setUp(self):
-        self.temporary = tempfile.TemporaryDirectory(prefix="hey-my-buddy-zcode-finish-")
+        self.temporary = TemporaryDirectory(prefix="hey-my-buddy-zcode-finish-")
         self.addCleanup(self.temporary.cleanup)
         self.root = Path(self.temporary.name)
         self.attention = self.root / "attention.json"
@@ -1195,7 +1196,7 @@ class ZcodeInquiryIntegrationTests(ZcodeFixtureCase):
         context = self.context(timeout=20)
         handle, outcome = self.execute(context)
         self.assertEqual(outcome.status, "ok", outcome.to_report())
-        tree = json.loads((Path(handle.request.private_state.invocation_root) / "finish-bridge.json").read_text(encoding="utf-8"))
+        tree = json.loads(native_path(Path(handle.request.private_state.invocation_root) / "finish-bridge.json").read_text(encoding="utf-8"))
         self.assertIn("attentionPath", tree)
         control = handle.role_run_control
         self.assertEqual(tree["inquiryJournalPath"], control["inquiry"]["resultsPath"])

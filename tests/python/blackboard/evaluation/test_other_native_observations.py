@@ -11,6 +11,7 @@ from __future__ import annotations
 import json
 import os
 import tempfile
+from temporary import TemporaryDirectory
 import time
 import unittest
 from pathlib import Path
@@ -153,7 +154,7 @@ class ClaudeAdapterObservationTests(unittest.TestCase):
 
     def setUp(self):
         mock_role_workspace(self)
-        self.temporary = tempfile.TemporaryDirectory(prefix="hey-my-buddy-claude-native-usage-")
+        self.temporary = TemporaryDirectory(prefix="hey-my-buddy-claude-native-usage-")
         self.addCleanup(self.temporary.cleanup)
         self.root = Path(self.temporary.name)
         self.cwd = self.root / "checkout"
@@ -423,7 +424,7 @@ class ZcodeAdapterObservationTests(unittest.TestCase):
 
     def setUp(self):
         mock_role_workspace(self)
-        self.temporary = tempfile.TemporaryDirectory(prefix="hey-my-buddy-zcode-native-usage-")
+        self.temporary = TemporaryDirectory(prefix="hey-my-buddy-zcode-native-usage-")
         self.addCleanup(self.temporary.cleanup)
         self.root = Path(self.temporary.name)
         self.cwd = self.root / "checkout"

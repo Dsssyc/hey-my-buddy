@@ -26,6 +26,7 @@ from unittest import mock
 from support import BoardTestCase, wait_for
 
 from hey_my_buddy.errors import BoardError
+from hey_my_buddy.paths import native_path
 from hey_my_buddy.buddy.harnesses.base import AdapterOutcome, ProcessHandle
 from hey_my_buddy.private_dirs import attempt_root, ensure_private_dir
 from hey_my_buddy.blackboard.store.store import ATTEMPT_TRANSITIONS, TASK_TRANSITIONS
@@ -301,8 +302,8 @@ class TestCrashWindows(BoardTestCase):
         }
         execution = Execution(claim, self.directory, "a" * 32,
                               client=client, log=lambda _message: None)
-        execution.directory.mkdir(parents=True, mode=0o700, exist_ok=True)
-        execution.evidence_directory.mkdir(parents=True, mode=0o700, exist_ok=True)
+        native_path(execution.directory).mkdir(parents=True, mode=0o700, exist_ok=True)
+        native_path(execution.evidence_directory).mkdir(parents=True, mode=0o700, exist_ok=True)
         return execution, claim
 
     @staticmethod
@@ -347,7 +348,7 @@ class TestCrashWindows(BoardTestCase):
                     self.directory, private_harness, claim["task"]["taskId"], claim["attempt"]["attemptId"]
                 ))
                 credential = private_root / "agent-credential.json"
-                credential.write_text('{"token":"private-test-sentinel"}', encoding="utf-8", newline="\n")
+                native_path(credential).write_text('{"token":"private-test-sentinel"}', encoding="utf-8", newline="\n")
                 handle = self._finished_fake_handle()
                 handle.shutdown_confirmed = lambda: False
                 cancelled = []
@@ -366,7 +367,7 @@ class TestCrashWindows(BoardTestCase):
                     receipt = worker.execute()
                 self.assertFalse(receipt["report"]["shutdownConfirmed"])
                 self.assertEqual(cancelled, [handle])
-                self.assertTrue(credential.exists(), "unknown native stop must retain credentials")
+                self.assertTrue(native_path(credential).exists(), "unknown native stop must retain credentials")
 
     def test_native_collect_proof_survives_later_receipt_failure(self):
         """A durable receipt error cannot erase a completed native stop proof."""
@@ -377,7 +378,7 @@ class TestCrashWindows(BoardTestCase):
             self.directory, "codex", claim["task"]["taskId"], claim["attempt"]["attemptId"]
         ))
         credential = private_root / "agent-credential.json"
-        credential.write_text('{"token":"private-test-sentinel"}', encoding="utf-8", newline="\n")
+        native_path(credential).write_text('{"token":"private-test-sentinel"}', encoding="utf-8", newline="\n")
         handle = self._finished_fake_handle()
         fake_adapter = SimpleNamespace(
             name=claim["task"]["spec"]["adapter"],
@@ -404,7 +405,7 @@ class TestCrashWindows(BoardTestCase):
             receipt = worker.execute()
         self.assertEqual(calls, 2)
         self.assertTrue(receipt["report"]["shutdownConfirmed"])
-        self.assertTrue(credential.exists(), "service owns cleanup after execution death")
+        self.assertTrue(native_path(credential).exists(), "service owns cleanup after execution death")
 
     def test_execution_writes_receipt_without_deleting_its_credentials(self):
         import hey_my_buddy.buddy.runtime.execution as worker_module
@@ -414,7 +415,7 @@ class TestCrashWindows(BoardTestCase):
             self.directory, "claude", claim["task"]["taskId"], claim["attempt"]["attemptId"]
         ))
         credential = private_root / "agent-credential.json"
-        credential.write_text('{"token":"private-test-sentinel"}', encoding="utf-8", newline="\n")
+        native_path(credential).write_text('{"token":"private-test-sentinel"}', encoding="utf-8", newline="\n")
         handle = self._finished_fake_handle()
         fake_adapter = SimpleNamespace(
             name=claim["task"]["spec"]["adapter"],
@@ -427,7 +428,7 @@ class TestCrashWindows(BoardTestCase):
             receipt = worker.execute()
         self.assertTrue(receipt["report"]["shutdownConfirmed"])
         self.assertEqual(receipt["report"]["status"], "failed")
-        self.assertTrue(credential.exists(), "service owns cleanup after execution death")
+        self.assertTrue(native_path(credential).exists(), "service owns cleanup after execution death")
 
     def test_virtual_adapter_receipt_retains_evidence_failure_paths(self):
         import hey_my_buddy.buddy.runtime.execution as worker_module
@@ -468,7 +469,7 @@ class TestCrashWindows(BoardTestCase):
         def start(_context):
             nonlocal starts
             starts += 1
-            credential.write_text('{"token":"private-test-sentinel"}', encoding="utf-8", newline="\n")
+            native_path(credential).write_text('{"token":"private-test-sentinel"}', encoding="utf-8", newline="\n")
             if starts == 2:
                 raise RuntimeError("spawn may have happened before start returned")
             return first_handle
@@ -488,7 +489,7 @@ class TestCrashWindows(BoardTestCase):
             receipt = worker.execute()
         self.assertEqual(starts, 2, "the first confirmed pre-model failure must trigger one retry")
         self.assertFalse(receipt["report"]["shutdownConfirmed"])
-        self.assertTrue(credential.exists(), "second start's uncertain child retains its credential")
+        self.assertTrue(native_path(credential).exists(), "second start's uncertain child retains its credential")
 
     def test_start_error_without_handle_does_not_retry_unknown_child(self):
         """A matching executable error cannot prove start failed before spawn."""
@@ -504,7 +505,7 @@ class TestCrashWindows(BoardTestCase):
         def uncertain_start(_context):
             nonlocal starts
             starts += 1
-            credential.write_text('{"token":"private-test-sentinel"}', encoding="utf-8", newline="\n")
+            native_path(credential).write_text('{"token":"private-test-sentinel"}', encoding="utf-8", newline="\n")
             raise FileNotFoundError(2, "injected after possible spawn", "mock")
 
         fake_adapter = SimpleNamespace(
@@ -519,7 +520,7 @@ class TestCrashWindows(BoardTestCase):
             receipt = worker.execute()
         self.assertEqual(starts, 1, "unknown first start cannot safely launch a retry")
         self.assertFalse(receipt["report"]["shutdownConfirmed"])
-        self.assertTrue(credential.exists(), "unknown stop retains the credential")
+        self.assertTrue(native_path(credential).exists(), "unknown stop retains the credential")
 
     def test_retry_preparation_failure_preserves_previous_stop_proof(self):
         """A failed validation before the next start leaves the prior proof intact."""

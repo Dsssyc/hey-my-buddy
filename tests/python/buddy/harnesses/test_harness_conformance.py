@@ -18,7 +18,7 @@ import inspect
 import os
 import re
 import sqlite3
-import tempfile
+from temporary import TemporaryDirectory
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -355,7 +355,7 @@ class HarnessConformanceTests(unittest.TestCase):
             with self.subTest(boundary="native allowlist", variable=variable):
                 self.assertEqual(native.get(variable), "/fixture/daily")
         self.assertNotIn("HMB_AGENT_CREDENTIAL_FILE", native)
-        with tempfile.TemporaryDirectory() as directory:
+        with TemporaryDirectory() as directory:
             controller = controller_environment(Path(directory), dict(parent))
             readonly = controller_environment(Path(directory), dict(parent), read_only=True)
         for variable in variables:
@@ -364,7 +364,7 @@ class HarnessConformanceTests(unittest.TestCase):
                 self.assertEqual(readonly.get(variable), "/fixture/daily")
         self.assertEqual(controller.get("HMB_AGENT_CREDENTIAL_FILE"), "/fixture/credential.json")
         self.assertNotIn("HMB_AGENT_CREDENTIAL_FILE", readonly)
-        with tempfile.TemporaryDirectory() as directory, \
+        with TemporaryDirectory() as directory, \
                 mock.patch.dict(os.environ, {**{variable: "/users/fixture/daily" for variable in variables},
                                              "HMB_AGENT_CREDENTIAL_FILE": "/fixture/credential.json",
                                              "UV_CACHE_DIR": directory}):

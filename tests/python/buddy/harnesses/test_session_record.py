@@ -1,7 +1,7 @@
 """Session display failures stay separate from native execution facts."""
 from pathlib import Path
 import json
-import tempfile
+from temporary import TemporaryDirectory
 import unittest
 from unittest import mock
 import os
@@ -12,7 +12,7 @@ from hey_my_buddy.protocol.session_content import MessageChunk, TextContent
 
 class SessionRecordTests(unittest.TestCase):
     def setUp(self):
-        temporary = tempfile.TemporaryDirectory()
+        temporary = TemporaryDirectory()
         self.addCleanup(temporary.cleanup)
         self.path = Path(temporary.name) / "attempt.jsonl"
         self.record = SessionRecord(self.path, "attempt")

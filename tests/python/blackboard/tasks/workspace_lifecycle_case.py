@@ -23,11 +23,12 @@ from hey_my_buddy.blackboard.tasks import workflow as workflow_module
 from hey_my_buddy.blackboard.tasks import workspace as workspace_module
 from hey_my_buddy.blackboard.store.db import canonical_json
 from hey_my_buddy.errors import BoardError
+from hey_my_buddy.paths import native_path
 from hey_my_buddy.protocol import transport
 
 def git(path, *arguments: str) -> str:
     completed = subprocess.run(
-        ["git", "-C", str(path), *arguments], env={**os.environ, **GIT_ENV}, capture_output=True, text=True, encoding="utf-8",
+        ["git", "-c", "core.longpaths=true", "-C", str(path), *arguments], env={**os.environ, **GIT_ENV}, capture_output=True, text=True, encoding="utf-8",
     )
     if completed.returncode != 0:
         raise AssertionError(f"git {' '.join(arguments)} failed: {completed.stderr}")
@@ -174,13 +175,13 @@ class LifecycleTestCase(RealWorkspaceTestCase):
     def rename_lifecycle(self, *, long_paths=False, historical=False):
         file_count = 3000 if long_paths else 1000
         prefix = Path(*(["x" * 220] * 3)) if long_paths else Path()
-        (self.repo / prefix).mkdir(parents=True, exist_ok=True)
+        native_path(self.repo / prefix).mkdir(parents=True, exist_ok=True)
 
         def name(kind, number):
             return prefix / f"{kind}-{number:04d}.txt"
 
         for number in range(file_count):
-            (self.repo / name("old", number)).write_text(f"file {number}\n", encoding="utf-8", newline="\n")
+            native_path(self.repo / name("old", number)).write_text(f"file {number}\n", encoding="utf-8", newline="\n")
         self.git("add", ".")
         self.git("commit", "-qm", "rename input")
         original = self.git("rev-parse", "HEAD").strip()
@@ -196,7 +197,7 @@ class LifecycleTestCase(RealWorkspaceTestCase):
         manifest = claimed["claim"]["turn"]["input"]["executionWorkspace"]
         checkout = Path(manifest["path"])
         for number in range(file_count):
-            (checkout / name("old", number)).rename(checkout / name("new", number))
+            native_path(checkout / name("old", number)).rename(native_path(checkout / name("new", number)))
         sealed = workspace_module.seal(self.directory, manifest, run_id,
                                        claimed["claim"]["attempt"]["attemptId"])
         expected = sorted(str(name(kind, number)).replace(os.sep, "/")
@@ -271,13 +272,13 @@ class LifecycleTestCase(RealWorkspaceTestCase):
         self.assertNotIn("summary", verification)
         self.assertTrue(checkout.exists())
         for number in range(file_count):
-            (checkout / name("new", number)).write_text("unsealed\n", encoding="utf-8", newline="\n")
+            native_path(checkout / name("new", number)).write_text("unsealed\n", encoding="utf-8", newline="\n")
         cleanup = workspace_module.cleanup_inspect(self.directory, manifest, sealed=sealed)
         self.assertFalse(cleanup["eligible"])
         self.assertEqual(cleanup["unsealedPaths"], sorted(str(name("new", number)).replace(os.sep, "/")
                                                        for number in range(file_count)))
         for number in range(file_count):
-            (checkout / name("new", number)).write_text(f"file {number}\n", encoding="utf-8", newline="\n")
+            native_path(checkout / name("new", number)).write_text(f"file {number}\n", encoding="utf-8", newline="\n")
         self.assertTrue(self.reclaim(board, self.view(board, run_id))["removed"])
         self.assertFalse(checkout.exists())
         for path, original_bytes in historical_bytes.items():

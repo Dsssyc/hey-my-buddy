@@ -50,7 +50,8 @@ class ChecksUvCacheTests(unittest.TestCase):
         caller_home = self.directory / "caller-home"
         caller_cache = self.directory / "caller-cache"
         cache = caller_cache / "uv"
-        caller = {"HOME": str(caller_home), "XDG_CACHE_HOME": str(caller_cache)}
+        caller = {"HOME": str(caller_home), "USERPROFILE": str(caller_home),
+                  "XDG_CACHE_HOME": str(caller_cache)}
         observed = {}
 
         def locate_cache(command, **keywords):
@@ -86,7 +87,8 @@ class ChecksUvCacheTests(unittest.TestCase):
                 self.assert_private_directories(values)
 
     def test_uv_selects_the_callers_default_cache(self):
-        caller = {"HOME": str(self.directory / "caller-home"), "PATH": os.environ["PATH"]}
+        caller = {"HOME": str(self.directory / "caller-home"),
+                  "USERPROFILE": str(self.directory / "caller-home"), "PATH": os.environ["PATH"]}
         with patch.dict(os.environ, caller, clear=True):
             expected = subprocess.run(
                 ["uv", "cache", "dir"], capture_output=True, text=True, check=True, encoding="utf-8",

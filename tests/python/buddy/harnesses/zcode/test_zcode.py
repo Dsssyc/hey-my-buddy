@@ -4,7 +4,7 @@ from __future__ import annotations
 import json
 import math
 import os
-import tempfile
+from temporary import TemporaryDirectory
 import time
 import unittest
 from pathlib import Path
@@ -17,13 +17,14 @@ from hey_my_buddy.buddy.harnesses.base import ExecutionContext
 from hey_my_buddy.buddy.harnesses.live import InquiryPayload, LiveReply, LiveRequest, LiveSnapshot
 from hey_my_buddy.buddy.roles.controller import worker_executor
 from hey_my_buddy.buddy.harnesses.registry import adapter
+from hey_my_buddy.paths import native_path
 
 FIXTURE = Path(__file__).parent / "fixtures/mock_zcode.py"
 
 
 class ZcodeFixtureCase(unittest.TestCase):
     def setUp(self):
-        self.temporary = tempfile.TemporaryDirectory(prefix="hey-my-buddy-zcode-test-")
+        self.temporary = TemporaryDirectory(prefix="hey-my-buddy-zcode-test-")
         self.addCleanup(self.temporary.cleanup)
         self.root = Path(self.temporary.name)
         self.cwd = self.root / "checkout"
@@ -138,21 +139,21 @@ class ZcodeFixtureCase(unittest.TestCase):
     def release(self, context):
         from hey_my_buddy.private_dirs import context_root
 
-        next(context_root(context, "zcode").glob("run-*/native-logs")).joinpath("release-turn").touch()
+        next(native_path(context_root(context, "zcode")).glob("run-*/native-logs")).joinpath("release-turn").touch()
 
     def native_log(self, context, name):
         from hey_my_buddy.private_dirs import context_root
 
-        path = next(context_root(context, "zcode").glob("run-*/native-logs/" + name), None)
+        path = next(native_path(context_root(context, "zcode")).glob("run-*/native-logs/" + name), None)
         return path.read_text(encoding="utf-8") if path is not None and path.exists() else ""
 
     def wait_file(self, context, name, timeout=20):
         from hey_my_buddy.private_dirs import context_root
 
-        path = next(context_root(context, "zcode").glob("run-*/native-logs/" + name), None)
+        path = next(native_path(context_root(context, "zcode")).glob("run-*/native-logs/" + name), None)
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
-            path = next(context_root(context, "zcode").glob("run-*/native-logs/" + name), None)
+            path = next(native_path(context_root(context, "zcode")).glob("run-*/native-logs/" + name), None)
             if path is not None:
                 return path.read_text(encoding="utf-8")
             time.sleep(0.05)
@@ -228,11 +229,11 @@ class ZcodeAdapterTests(ZcodeFixtureCase):
         control = handle.role_run_control
         self.assertEqual(control["inquiry"], {"resultsPath": str(context.directory / "inquiry.results.jsonl")})
         self.assertEqual(control, handle.role_run_control)
-        self.assertFalse((private_root / "inquiry.json").exists(),
+        self.assertFalse(native_path(private_root / "inquiry.json").exists(),
                          "the retired per-turn inquiry.json must not be written")
         self.assertNotIn("live", control)
         self.assertNotIn("executionLiveFile", control)
-        self.assertFalse((private_root / "execution-live.json").exists())
+        self.assertFalse(native_path(private_root / "execution-live.json").exists())
 
     def test_child_finish_does_not_replace_or_disable_root_finish(self):
         _, outcome = self.execute(self.context("child-first"))

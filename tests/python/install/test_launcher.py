@@ -33,13 +33,13 @@ class LauncherTests(unittest.TestCase):
             venv.EnvBuilder(with_pip=False, symlinks=os.name != 'nt').create(target / 'venv')
             python = runtime.runtime_python(target)
             write_runtime_hint(skill, target)
-            environment = current_environment(HOME=str(root), HMB_STATE_DIR=str(root / 'state'),
+            environment = current_environment(HOME=str(root), USERPROFILE=str(root), HMB_STATE_DIR=str(root / 'state'),
                                               HMB_RUNTIME_ROOT=str(root / 'runtime'), UV_BIN=str(root / 'missing-uv'))
             environment.pop('HMB_BOOTSTRAP_PYTHON', None)
             for status in (0, 37):
                 with self.subTest(exit_code=status):
                     result = subprocess.run(launcher_argv('ping', str(status), launcher=skill / 'scripts/hey-my-buddy'),
-                                            env=environment, capture_output=True, text=True, encoding="utf-8", timeout=30)
+                                            env=environment, capture_output=True, text=True, encoding="utf-8", timeout=240)
                     self.assertEqual(result.returncode, status, result.stdout + result.stderr)
                     self.assertEqual(json.loads(result.stdout), {'used': 'stable-hint', 'python': str(python),
                                                                  'args': ['ping', str(status)]})
@@ -65,7 +65,7 @@ class LauncherTests(unittest.TestCase):
             for status in (0, 37):
                 with self.subTest(exit_code=status):
                     completed = subprocess.run(launcher_argv('ping', str(status)), env=environment,
-                                               capture_output=True, text=True, check=False, encoding="utf-8", timeout=30)
+                                               capture_output=True, text=True, check=False, encoding="utf-8", timeout=240)
                     self.assertEqual(completed.returncode, status, completed.stdout + completed.stderr)
                     self.assertEqual(json.loads(completed.stdout), {'used': 'active', 'python': str(python),
                                                                    'args': ['ping', str(status)]})
