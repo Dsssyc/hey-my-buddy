@@ -31,6 +31,9 @@ import { eventActions } from "./events";
 import type { TimelineMarker } from "./MarkerCluster";
 import { Axis, Track, spanReadout, markerReadout } from "./Tracks";
 import { TIMELINE_OUTSET_PX as SLACK_PX } from "./trackMarks";
+import { useViewPreference } from "../view-preferences";
+import { visibleTimeline } from "./visibleTimeline";
+import { RowFilter } from "./RowFilter";
 
 export type TaskWorkProps = {
   readGoals: import("../api").ConsoleApi["macroTaskGoals"];
@@ -56,6 +59,9 @@ const NO_EVENTS: MacroTaskTimeline["events"] = [];
 export function TaskWork(props: TaskWorkProps) {
   const { t } = useTranslation(["tasks", "taskDetail"]);
   const { timeline, openedRunId, displayObservedAt } = props;
+  const [unfinished, setUnfinished] = useViewPreference("timeline-unfinished");
+  const visible = useMemo(() => timeline ? visibleTimeline(timeline, unfinished) : null, [timeline, unfinished]);
+  const rows = visible?.rows ?? [];
   const [nameWidth, setNameWidth] = useNameWidth();
   const [focusKey, setFocusKey] = useState<string | null>(null);
   const [selectedRunId, setSelectedRunId] = useState(openedRunId);
@@ -83,7 +89,7 @@ export function TaskWork(props: TaskWorkProps) {
   const wasOpen = useRef<string | null>(null);
   const open = openedRunId !== null;
   const nowMs = instant(displayObservedAt ?? timeline?.observedAt) ?? 0;
-  const displayed = useMemo(() => timeline ? { ...timeline, observedAt: displayObservedAt ?? timeline.observedAt } : null, [timeline, displayObservedAt]);
+  const displayed = useMemo(() => visible ? { ...visible, observedAt: displayObservedAt ?? visible.observedAt } : null, [visible, displayObservedAt]);
   const lastInput = useRef<ScaleInput | null>(null);
   const input = useMemo(() => {
     lastInput.current = retainEqual(lastInput.current, displayed ? timelineScaleInput(displayed) : null);
@@ -109,7 +115,7 @@ export function TaskWork(props: TaskWorkProps) {
   // Fit the actual scroll viewport, which excludes its reserved scrollbar gutter.
   const originX = narrow ? SLACK_PX : nameWidth + SLACK_PX;
   const available = Math.max(1, width - (narrow ? SLACK_PX * 2 : nameWidth + SLACK_PX * 2));
-  const { scale, change: zoom, zoomAt, atMinimum } = useTimelineZoom(input, available, macroId, viewportRef, anchorAt, nowMs, originX);
+  const { scale, change: zoom, zoomAt, atMinimum } = useTimelineZoom(input, available, macroId, viewportRef, anchorAt, nowMs, originX, unfinished);
   // Keep the pointer in viewport coordinates: zoom and scrolling move the
   // content beneath it, never the pointer itself.
   const pointerX = pointerScreenX === null || !scale || !narrow && pointerScreenX < nameWidth ? null
@@ -128,7 +134,6 @@ export function TaskWork(props: TaskWorkProps) {
     }
     wasOpen.current = openedRunId;
   }, [openedRunId, open, narrow, workspace]);
-  const rows = timeline?.rows ?? [];
   const layout = useMemo(() => groupLanes(rows), [rows]);
   const summaries = useMemo(() => layout.lanes.map(lane => laneSummary(lane, timeline!)), [layout, timeline]);
   const spansByRow = useMemo(() => {
@@ -145,7 +150,7 @@ export function TaskWork(props: TaskWorkProps) {
     }
     return grouped;
   }, [timeline?.events]);
-  const tabKey = focusKey ?? `row:${selectedRunId ?? rows[0]?.runId}`;
+  const tabKey = focusKey ?? `row:${rows.find(row => row.runId === selectedRunId)?.runId ?? rows[0]?.runId}`;
   const focusRow = (runId: string) => rowsRef.current.get(runId)?.focus();
   const fragments = (runId: string) => Array.from(document.querySelectorAll<SVGElement>("[data-slot=timeline-track] [data-key]"))
     .filter(element => element.closest("[data-run-id]")?.getAttribute("data-run-id") === runId)
@@ -280,6 +285,12 @@ export function TaskWork(props: TaskWorkProps) {
     {layout.lanes.length > 0 && layout.ordinary.length > 0 && <div className="mt-6 flex h-9 items-center px-4 text-xs text-ink3">{t("otherMicroTasks")}</div>}
     {layout.ordinary.map(row => renderName(row, { list: true }))}
   </>;
+  const rowFilter = <RowFilter unfinished={unfinished} count={rows.length} onChange={value => {
+    setUnfinished(value);
+    setFocusKey(null); setSelectedKey(null);
+    if (!open) setSelectedRunId(null);
+    setPointerScreenX(null); setHoveredRow(null); setFocusedRow(null); setHoveredSpan(null); setFocusedSpan(null); setHoveredMarker(null); setFocusedMarker(null);
+  }}/>;
   const lanesView = <div data-slot="timeline-viewport" className="relative flex min-h-0 min-w-0 flex-1"><ScrollArea className="min-h-0 min-w-0 flex-1 bg-background" orientation="both" reserveScrollbarGutter
     viewportProps={{ ref: setViewport, "data-slot": "timeline-tracks",
       onScroll: event => { lanesScrollLeft.current = event.currentTarget.scrollLeft; namesScrollTop.current = event.currentTarget.scrollTop; setScrollLeft(event.currentTarget.scrollLeft); },
@@ -296,10 +307,11 @@ export function TaskWork(props: TaskWorkProps) {
       onPointerLeave: () => { setPointerScreenX(null); setHoveredSpan(null); setHoveredRow(null); setHoveredMarker(null); } }}>
     {scale && input && <div data-slot="timeline-canvas" data-ppm={scale.pixelsPerMinute} className="relative min-h-full pb-8" style={{ width: narrow ? trackWidth : `max(100%, ${nameWidth + trackWidth}px)`, minWidth: "100%" }}>
       <div data-slot="timeline-ruler" className="sticky top-0 z-30 border-b border-line">
+        {narrow && <div className="sticky left-0 z-40" style={{ width }}>{rowFilter}</div>}
         <ZoomRuler ref={setRuler} viewportWidth={width} atMinimum={atMinimum} onChange={zoom} style={narrow ? undefined : { display: "grid", gridTemplateColumns: `${nameWidth}px ${trackWidth}px minmax(0,1fr)` }}>
         {narrow
           ? <Axis scale={scale} ongoing={input.nowAtEnd} nowMs={nowMs} pointerX={pointerX} pointerBounds={{ left: Math.max(0, scrollLeft - originX), right: Math.min(scale.widthPx, scrollLeft - originX + width) }}/>
-          : <><div className="sticky left-0 z-40 flex h-9 items-center justify-between bg-ruler pl-4 pr-3 text-xs text-ink3"><span>{t("microTasks")}</span><span>{rows.length}</span></div>
+          : <><div className="sticky left-0 z-40">{rowFilter}</div>
             <Axis scale={scale} ongoing={input.nowAtEnd} nowMs={nowMs} pointerX={pointerX} pointerBounds={{ left: Math.max(0, scrollLeft - originX), right: Math.min(scale.widthPx, scrollLeft - originX + width) }}/>
             <div className="bg-ruler"/></>}
         </ZoomRuler>
@@ -314,6 +326,7 @@ export function TaskWork(props: TaskWorkProps) {
       </section>)}
       {layout.lanes.length > 0 && layout.ordinary.length > 0 && <div className="sticky left-0 mt-6 flex h-9 w-max items-center bg-background px-4 text-xs text-ink3">{t("otherMicroTasks")}</div>}
       {layout.ordinary.map(row => trackRow(row))}
+      {rows.length === 0 && <p className="sticky left-0 w-fit p-6 text-sm text-ink2">{t("noUnfinishedMicroTasks")}</p>}
     </div>}
   </ScrollArea>
     {!narrow && <NameDivider width={nameWidth} onChange={setNameWidth}/>}
@@ -361,13 +374,13 @@ export function TaskWork(props: TaskWorkProps) {
     {props.error && <div role="alert" className="flex shrink-0 flex-wrap items-center gap-2 border-b bg-hand-wash px-4 py-2 text-xs text-hand">{t("timelineReadFailed", { at: clockTime(timeline?.observedAt) })}<span className="wrap-anywhere">{props.error}</span><Button variant="outline" size="sm" aria-busy={props.loading} disabled={props.loading} onClick={props.onRetry}>{t(props.loading ? "loading" : "retry")}</Button></div>}
     {props.stale && !props.error && <p role="status" className="border-b bg-hand-wash px-4 py-2 text-xs text-hand">{t("staleTimeline")}</p>}
     {!timeline && props.loading ? <div role="status" className="flex flex-1 animate-pulse items-center justify-center motion-reduce:animate-none">{t("loading")}</div>
-      : timeline && rows.length === 0 && !open ? <p className="p-6 text-sm text-ink2">{t("noMicroTasks")}</p> : <>
+      : timeline && timeline.rows.length === 0 && !open ? <p className="p-6 text-sm text-ink2">{t("noMicroTasks")}</p> : <>
         {open
           ? <div data-slot="timeline-detail-stage" className="relative grid min-h-0 min-w-0 flex-1" style={{ gridTemplateColumns: narrow ? "minmax(0,1fr)" : `${nameWidth}px minmax(0,1fr)` }}>
             <ScrollArea className={cn("min-h-0 min-w-0 bg-card", narrow && "hidden")}
               viewportProps={{ ref: setDetailViewport, "data-slot": "task-names", onScroll: event => { namesScrollTop.current = event.currentTarget.scrollTop; } }}>
               <div className="w-0 min-w-full">
-              <div className="sticky top-0 z-30 flex h-[37px] shrink-0 items-center justify-between border-b border-line bg-ruler pl-4 pr-3 text-xs text-ink3"><span>{t("microTasks")}</span><span>{rows.length}</span></div>
+              <div className="sticky top-0 z-30 border-b border-line">{rowFilter}</div>
               {detailNames}
               {!rows.some(row => row.runId === openedRunId) && <Button variant="ghost" size="sm" className="mt-2" onClick={props.onClose}>{t("closeDetail")}</Button>}
               </div>

@@ -32,21 +32,28 @@ export const ZoomRuler = forwardRef<HTMLDivElement, {
   const [element, setElement] = useState<HTMLDivElement | null>(null);
   const [anchorOffset, setAnchorOffset] = useState(0);
   const pointer = useRef<number | null>(null);
+  const [hintOpen, setHintOpen] = useState(false);
+  const excluded = useRef(false);
   const attach = useCallback((node: HTMLDivElement | null) => {
     setElement(node);
     if (typeof ref === "function") ref(node); else if (ref) ref.current = node;
   }, [ref]);
   const viewport = element?.closest<HTMLElement>("[data-radix-scroll-area-viewport]");
   const bounds = viewport?.getBoundingClientRect();
-  return <Tooltip onOpenChange={open => {
+  return <Tooltip open={hintOpen} onOpenChange={open => {
+    if (open && excluded.current) return;
+    setHintOpen(open);
     if (open) setAnchorOffset((pointer.current ?? viewport!.getBoundingClientRect().left + viewport!.clientWidth / 2) - element!.getBoundingClientRect().left);
   }}><TooltipPrimitive.Trigger asChild aria-description={t("zoomRulerHint")}
     onFocus={event => {
-      if (!(event.target as Element).matches(":focus-visible")) { event.preventDefault(); return; }
+      if (event.target !== event.currentTarget || !(event.target as Element).matches(":focus-visible")) { event.preventDefault(); return; }
+      excluded.current = false;
       pointer.current = null;
     }}><RulerTrigger rulerRef={attach} anchorOffset={anchorOffset} data-slot="zoom-ruler" tabIndex={0}
     className={cn("relative bg-ruler outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring", className)} style={{ touchAction: "pan-x", ...style }}
     onPointerMove={event => {
+      excluded.current = !!(event.target as Element).closest("[data-zoom-exclude]");
+      if (excluded.current) { event.preventDefault(); setHintOpen(false); return; }
       pointer.current = event.clientX;
     }}
     onKeyDown={event => {
