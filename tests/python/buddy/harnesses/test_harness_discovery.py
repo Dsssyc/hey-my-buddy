@@ -201,7 +201,7 @@ class HarnessDiscoveryTests(unittest.TestCase):
             self.assertEqual(result["status"], "ready")
             self.assertEqual(result["executable"], str(dsh))
 
-    def test_dsh_version_probe_uses_a_private_home_and_preserves_native_environment(self):
+    def test_dsh_version_probe_preserves_the_users_native_home_and_environment(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory).resolve()
             daily = root / "daily-dsh"
@@ -211,7 +211,7 @@ class HarnessDiscoveryTests(unittest.TestCase):
                 "import json, os, sys\nfrom pathlib import Path\n"
                 "assert sys.argv[1:] == ['--version']\n"
                 "assert sys.stdin.read() == ''\n"
-                f"private = Path(os.environ.get('DSH_HOME', {str(daily)!r}))\n"
+                "private = Path(os.environ['DSH_HOME'])\n"
                 "assert private.is_dir()\n"
                 "(private / 'probe-marker').write_text('owned')\n"
                 f"Path({str(snapshot)!r}).write_text(json.dumps({{'dshHome': str(private), "
@@ -229,13 +229,12 @@ class HarnessDiscoveryTests(unittest.TestCase):
             self.assertEqual(result["status"], "ready")
             self.assertEqual(result["version"], "1.2.0")
             observed = json.loads(snapshot.read_text())
-            self.assertNotEqual(observed["dshHome"], str(daily))
-            self.assertFalse(Path(observed["dshHome"]).parent.exists())
+            self.assertEqual(observed["dshHome"], str(daily))
             self.assertEqual(observed["home"], str(root))
             self.assertEqual(observed["proxy"], "https://proxy.invalid")
             self.assertEqual(observed["ca"], str(root / "ca.pem"))
             self.assertNotIn("OPENAI_API_KEY", observed["keys"])
-            self.assertEqual(list(daily.iterdir()), [])
+            self.assertEqual((daily / "probe-marker").read_text(), "owned")
 
     @unittest.skipIf(os.name == "nt", "POSIX process-group observation")
     def test_dsh_version_probe_retains_its_directory_when_stop_is_unknown(self):
@@ -256,7 +255,7 @@ class HarnessDiscoveryTests(unittest.TestCase):
                 code, output = discovery._probe_dsh_version([str(cli)], {"PATH": ""},
                                                             time.monotonic() + 5)
             self.assertEqual((code, output), ("shutdown-unverified", b""))
-            self.assertTrue((private / "dsh-home").is_dir())
+            self.assertFalse((private / "dsh-home").exists())
             self.assertIn(str(private), notes.output[0])
             # The injected uncertainty retains the directory. The test itself
             # verifies the actual group is gone before its fixture cleans up.

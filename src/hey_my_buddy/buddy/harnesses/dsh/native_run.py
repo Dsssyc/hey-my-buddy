@@ -1,62 +1,18 @@
-"""The one native DSH run: a frozen request in, one factual result out.
+"""One native DSH ACP run over the user's configuration.
 
-ADR-025 step 4-B1. This module is the single native execution body of the DSH
-harness: the public launch configuration, the owned ACP spawn, the session open,
-the model/effort selection with its native readback, the prompt/update loop, the
-session close and the conservative group stop happen exactly once here, driven
-only by the frozen :class:`~hey_my_buddy.buddy.harnesses.run_contract.RunRequest`.
-Every launch — a run, a discovery, a fake agent under test — goes through the
-already-accepted :mod:`.acp.launch` wrapper, which forces this run's private
-``DSH_HOME`` over the ``native_environment`` allow-list, so no DSH process ever
-reaches the user's daily home.
-
-The tool scope is satisfied by DSH's own public launch configuration and
-reported as facts: ``none`` disables the confirmed tool rows plus the plan-mode
-row through a launch patch, ``read`` injects the public read-only permission
-preset, and ``write`` keeps the default workspace-write preset. The permission
-callback only refuses escalations; a new tool row the agent reports is a
-retained fact, never a claimed restriction, and tools are classified through
-the shared fixed table by native name with ``other`` for everything unknown.
-
-The driver owns protocol integrity and facts only: identity binding, the signed
-finish/inquiry receipts, the native configuration readback, tool and update
-facts, the conservative stop evidence. Whether an unknown event or a tool fact
-fails a run stays with the role observer; the discovery operation
-(:func:`run_discovery`) is a separate no-prompt metadata read that never
-masquerades as a model run. The owning harness's settings and credentials are
-never relocated or read: when the source home carries them, the public launch
-patch points DSH's own ``settings`` and ``credentials`` rows at those paths and
-re-pins the session-record root inside this run's private ``DSH_HOME``, so a
-real run keeps its configuration and login without this module ever opening
-either file. The observed model identity and the per-step usage of a real turn
-live only in DSH's private session record; the optional reader below turns a
-matching record into the shared usage facts with bounded streaming reads, and
-a missing, foreign or unreadable record stays an unknown fact.
-
-The role-facing seams of the shared harness registry live here too, and nowhere
-else in this package: the process-free service binding (:func:`prepare_services`
-and its mount), the no-spawn preparation check (:func:`check_preparation`), the
-turn provenance validator and the storage facts (:func:`validate_turn_provenance`,
-:func:`session_facts`), the fast channel's native evidence projection
-(:func:`native_evidence`), and the controller-supplied live endpoint over
-the shared cooperative inquiry bridge. Host
-questions are only ever queued by the bridge and delivered at the root's own
-checkpoint tool call inside the admitted turn; the journal advances only after
-this driver verified the signed root-turn receipt. Native resume runs on the
-governed Worker carrier only: a ``native-session`` continuation continues the
-exact previous root session through the client's own ``session/resume`` — the
-resume request is the session identity's evidence source, because the observed
-resume answer carries none — after this run's own private goal binding
-(task, session, cwd, configuration) confirmed the session belongs to this goal;
-a ``reconstructed-new-session`` continuation rebuilds a fresh root session, and
-the fast and review carriers never resume. A resumable binding is saved only
-after a complete native turn with verified provenance, the correct session
-binding and a confirmed group stop, and a missing binding, a native refusal or
-a foreign resumed identity fails the run honestly — never a silent new session.
-The fast and discovery carriers keep their own attempt-private roots; a Worker
-run pins its shared session rollout under the task's native root and keeps
-DSH_HOME, the profile, the launch patch and the frame logs inside this
-invocation's private root.
+The selected CLI loads its own ACP profile, settings, credentials, home/profile
+patches, skills and MCP. HOME and DSH_HOME are inherited unchanged. The private
+launch patch pins session storage, expresses the existing tool scope, and
+suppresses title model calls for private sessions; telemetry follows the user.
+The owned connection supplies native configuration readback, tool/update facts,
+signed turn receipts and conservative stop evidence. Discovery creates a bare
+session without sending a prompt. Worker native resume continues the exact
+bound task/session/cwd/configuration with fresh per-attempt mounts; a refusal
+fails the turn without a new-session fallback. Worker records and bindings stay
+in the task's shared native root; launch controls and frame logs stay private
+to the invocation. Fast and discovery records retain their attempt-private
+session path. Optional session records supply observed model and usage facts;
+resumed usage counts only an extension of a reliable frozen record boundary.
 """
 from __future__ import annotations
 
@@ -163,13 +119,9 @@ NONE_SCOPE_DISABLED_ROWS: tuple[str, ...] = (
     "tool-subagent", "tool-subagent-fork", "tool-workflow", "tool-todo",
     "tool-goal", "tool-ralph", "tool-web",
 )
-#: The rows every launch patch disables for cost and privacy, registered as the
-#: fourth and fifth accepted behavior differences (2026-10-06): hey-my-buddy's
-#: own DSH launches — runs, fast calls and no-input discovery alike — turn off
-#: the title LLM (extra model calls) and the OTel exporter (leaves the private
-#: home) through this run's private patch only; a user's own interactive DSH is
-#: untouched and no user configuration is changed.
-_ALWAYS_DISABLED_ROWS = ("session-title-llm", "session-telemetry-otel")
+#: Private session titles are not displayed, so generating them would spend
+#: model quota without a consumer. Telemetry remains the user's own setting.
+_ALWAYS_DISABLED_ROWS = ("session-title-llm",)
 
 # -- the private session record's launch constants ------------------------------------
 
@@ -177,7 +129,7 @@ _ALWAYS_DISABLED_ROWS = ("session-title-llm", "session-telemetry-otel")
 #: patch pins. A Worker run pins the task's shared native-root sessions
 #: directory — the directory a later attempt of the same micro-task resumes —
 #: while the fast and discovery carriers keep the rollout inside their own
-#: attempt-private ``DSH_HOME``.
+#: attempt-private sessions directory.
 _SESSIONS_DIRNAME = "sessions"
 #: The public row id whose config root is re-pinned to the sessions dir.
 _SESSION_ROOT_ROW = "session-persistence-jsonl"
@@ -220,77 +172,6 @@ def tool_scope_launch(scope: str) -> tuple[list[dict], dict[str, str]]:
                 for name in (*NONE_SCOPE_DISABLED_ROWS, PLAN_MODE_ROW)]
         return rows, {}
     raise NativeError("invalid-tool-scope", f"the tool scope {scope!r} is not a declared scope")
-
-
-def source_home(environment: Mapping[str, str]) -> Path:
-    """The owning DSH home this harness binds to, by path only.
-
-    The convention of the existing entries (the direct-LLM runner and the
-    catalog probe): the parent ``DSH_HOME`` when set, else the user's default
-    DSH home. This module never reads the home's files; the settings and
-    credentials documents stay where they are and are only ever named in the
-    public launch patch.
-    """
-    return Path(environment.get("DSH_HOME") or Path.home() / ".dsh").resolve()
-
-
-def source_binding_rows(source: Path) -> list[dict]:
-    """The two patch rows that keep a real run's configuration and login.
-
-    When the owning home carries the settings document or the credentials
-    store, DSH's own public ``settings``/``credentials`` rows are pointed at
-    those paths (``watch`` off): path passing only, no content is read, copied
-    or written, and no new login happens. Files that do not exist contribute no
-    row, so a test or probe home binds nothing.
-    """
-    rows: list[dict] = []
-    settings = source / "settings.yaml"
-    credentials = source / ".credentials.yaml"
-    if settings.is_file():
-        rows.append({"id": "settings", "config": {"path": str(settings), "watch": False}})
-    if credentials.is_file():
-        rows.append({"id": "credentials", "config": {"path": str(credentials), "watch": False}})
-    return rows
-
-
-_ACP_PROFILE_MANIFEST = {
-    "name": "dsh-profile-acp", "private": True, "dependencies": {},
-    "dsh": {"profile": {"bundles": ["@deepseek-ai/dsh-base", "@deepseek-ai/dsh-acp-app"],
-                        "patchReload": "startup"}}}
-_ACP_PROFILE_CORDIS = (
-    "# dsh profile root — an empty entry list. The tree is composed as patches:\n"
-    "# each bundle in package.json's dsh.profile.bundles, then cordis.patch.yml, then any\n"
-    "# --patch overlays. Edit cordis.patch.yml, not this file.\n[]\n")
-_ACP_PROFILE_PATCH = (
-    "# Your patch layer for this dsh profile, applied after every bundle layer:\n"
-    "# a top-level YAML array of loader patch entries (id-targeted config\n"
-    "# overrides, disables, and insert lists; `!!js` expressions allowed).\n[]\n")
-_ACP_PROFILE_WORKSPACE = "packages:\n  - .\n\nnodeLinker: hoisted\nautoInstallPeers: false\n"
-
-
-def materialize_acp_profile(dsh_home: Path) -> None:
-    """Write the private home's acp profile: the Host-proven boot composition.
-
-    The manifest names the two ACP bundles; the dsh installation resolves them
-    itself (the owning home carries no acp profile to copy, and eligibility
-    stays at the selected command). The files are written once per private
-    home; a home that already carries them is left exactly as it is.
-    """
-    profile = dsh_home / "profiles" / "acp"
-    if (profile / "package.json").is_file():
-        return
-    profile.mkdir(mode=0o700, parents=True, exist_ok=True)
-    private_json(profile / "package.json", _ACP_PROFILE_MANIFEST)
-    for name, text in (("cordis.yml", _ACP_PROFILE_CORDIS),
-                       ("cordis.patch.yml", _ACP_PROFILE_PATCH),
-                       ("pnpm-workspace.yaml", _ACP_PROFILE_WORKSPACE)):
-        target = profile / name
-        fd = open_regular_fd(target, os.O_WRONLY | os.O_CREAT | os.O_EXCL
-                             | getattr(os, "O_NOFOLLOW", 0), 0o600)
-        try:
-            os.write(fd, text.encode())
-        finally:
-            os.close(fd)
 
 
 # -- the role-facing service binding ---------------------------------------------
@@ -536,13 +417,13 @@ def session_facts(native_root: Path, session_id: str | None) -> dict:
 
     The storage owner follows the root's real placement in ``private_dirs``'
     layout: a Worker run whose rollout is pinned into the task's shared
-    native-root ``sessions`` directory — with DSH_HOME, the acp profile, the
+    native-root ``sessions`` directory — with the launch
     patch and the frame logs in the invocation's private root — is
     goal-owned storage, while a fast or review carrier's own private root
     stays attempt-owned; the placement is a directory fact, and an old
-    attempt root is never misreported as goal storage. The owning settings
-    and credentials stay in the user's DSH home by path only, so the
-    installed app never lists this session. The binding fact is the private
+    attempt root is never misreported as goal storage. The native settings
+    and credentials stay in the user's DSH home; the session root remains
+    separate from the native app's session store. The binding fact is the private
     goal binding's real presence on disk: it is written only after a
     complete, verified, confirmed-stopped native turn, and its absence is
     the honest fact — presence alone never proves the session resumable;
@@ -553,10 +434,10 @@ def session_facts(native_root: Path, session_id: str | None) -> dict:
         scope, owner = "task-shared-sessions", "buddy-goal"
         note = (
             "a Worker run's session rollout lives under the task's shared native-root sessions "
-            "directory, pinned there by this run's private launch patch, while DSH_HOME, the acp "
-            "profile, the patch and the frame logs stay in this invocation's private root; the DSH "
-            "home, settings and credentials store stay with the owning harness by path only, so the "
-            "installed app lists none of it. A resumable goal binding (task, session, cwd, "
+            "directory, pinned there by this run's private launch patch, while the launch "
+            "patch and the frame logs stay in this invocation's private root; the DSH "
+            "home, settings and credentials store are loaded by the owning harness; the "
+            "session root is separate from the native app store. A resumable goal binding (task, session, cwd, "
             "configuration) is saved under the native root only after a complete native turn with "
             "verified provenance and a confirmed group stop"
         )
@@ -565,8 +446,8 @@ def session_facts(native_root: Path, session_id: str | None) -> dict:
         note = (
             "this run's session rollout lives under a private sessions root of this carrier's own "
             "private root, not the task's shared native root; the DSH home, settings and "
-            "credentials store stay with the owning harness by path only, so the installed app "
-            "lists none of it. A resumable goal binding (task, session, cwd, configuration) is "
+            "credentials store are loaded by the owning harness; the session root is "
+            "separate from the native app store. A resumable goal binding (task, session, cwd, configuration) is "
             "saved under the run's native root only after a complete native turn with verified "
             "provenance and a confirmed group stop"
         )
@@ -699,40 +580,25 @@ def _remaining(deadline: float) -> float:
     return deadline - time.monotonic()
 
 
-def _launch_agent(*, cwd: str, launch_root: Path, invocation_root: Path, dsh_home: Path,
+def _launch_agent(*, cwd: str, launch_root: Path, invocation_root: Path,
                   sessions_root: Path, scope_rows: list[dict], extra_env: dict[str, str],
                   permission_policy) -> AcpClient:
-    """Spawn the one owned ACP agent through the accepted private-launch wrapper.
+    """Launch ACP with the user's configuration and a private session root.
 
-    ``DSH_HOME`` is always a real private directory inside ``launch_root`` —
-    the invocation's own root for a Worker run, the run's native root for the
-    fast and discovery carriers — the child environment keeps exactly the
-    ``native_environment`` allow-list plus the validated homes and the scope's
-    public key, and the whole argv — the selected DSH command, the ``acp``
-    profile and this run's patch — is recorded in the wrapper's launch log.
-    ``HOME`` stays inherited; a caller that needs this run's private home names
-    it through the wrapper itself, which validates it like ``DSH_HOME``. Every
-    launch of this module carries the same patch order: the owning home's
-    settings/credentials rows first, then the private session-record root pin
-    (the task's shared native-root sessions directory for a Worker run, so a
-    bound setting cannot move the rollout anywhere else), then the tool
-    scope's rows, then the two always-off rows last. Any failure after the
-    child exists keeps the ownership evidence on the error instead of dropping
-    the child.
+    The public patch pins session storage, expresses the existing tool scope,
+    and disables title generation for sessions with no user-visible title.
+    HOME and DSH_HOME are inherited; telemetry follows the user's settings.
     """
     command = command_for("dsh", dict(os.environ))
     argv = [*command, "--profile", "acp"]
-    rows = [*source_binding_rows(source_home(os.environ)),
-            {"id": _SESSION_ROOT_ROW, "config": {"root": str(sessions_root)}},
+    rows = [{"id": _SESSION_ROOT_ROW, "config": {"root": str(sessions_root)}},
             *scope_rows,
             *({"id": name, "disabled": True} for name in _ALWAYS_DISABLED_ROWS)]
-    if rows:
-        patch_path = invocation_root / "dsh-launch-patch.json"
-        private_json(patch_path, rows, exclusive=True)
-        argv += ["--patch", str(patch_path)]
-    materialize_acp_profile(dsh_home)
+    patch_path = invocation_root / "dsh-launch-patch.json"
+    private_json(patch_path, rows, exclusive=True)
+    argv += ["--patch", str(patch_path)]
     try:
-        return AcpClient.start(argv, private_root=launch_root, dsh_home=dsh_home,
+        return AcpClient.start(argv, private_root=launch_root,
                                extra_env=extra_env or None, cwd=Path(cwd),
                                frame_log=FrameMetaLog(launch_root / "logs" / "frames.jsonl"),
                                permission_policy=permission_policy)
@@ -1013,15 +879,13 @@ def run(request: RunRequest, *, observer: Callable[[Mapping[str, Any]], RunFeedb
     if governed:
         # The Worker run's shared rollout root is the task's native root — the
         # root a later attempt of the same micro-task resumes — while this
-        # invocation's own private root holds DSH_HOME, the profile, the launch
+        # invocation's own private root holds the launch
         # patch, the bridge material and the frame logs. The fast and discovery
         # carriers keep everything inside their own attempt-private native root.
         sessions_root = ensure_private_dir(native_root / _SESSIONS_DIRNAME)
-        dsh_home = ensure_private_dir(invocation_root / "dsh-home")
         launch_root = invocation_root
     else:
-        dsh_home = ensure_private_dir(native_root / "dsh-home")
-        sessions_root = dsh_home / _SESSIONS_DIRNAME
+        sessions_root = ensure_private_dir(native_root / "dsh-home" / _SESSIONS_DIRNAME)
         launch_root = native_root
     state = _RunState()
     facts = _RunFacts()
@@ -1108,7 +972,7 @@ def run(request: RunRequest, *, observer: Callable[[Mapping[str, Any]], RunFeedb
         policy = (_AttentionPolicy(services.mount.bridge, state, inquiry_bridge)
                   if governed else PermissionPolicy())
         client = _launch_agent(cwd=request.cwd, launch_root=launch_root,
-                               invocation_root=invocation_root, dsh_home=dsh_home,
+                               invocation_root=invocation_root,
                                sessions_root=sessions_root,
                                scope_rows=scope_rows, extra_env=extra_env,
                                permission_policy=policy)
@@ -1810,12 +1674,11 @@ def run_discovery(*, cwd: str, invocation_root: Path, native_root: Path,
     deadline = execution_deadline(timeout_seconds)
     invocation_root = ensure_private_dir(Path(invocation_root))
     native_root = ensure_private_dir(Path(native_root))
-    dsh_home = ensure_private_dir(native_root / "dsh-home")
+    sessions_root = ensure_private_dir(native_root / "dsh-home" / _SESSIONS_DIRNAME)
     # Discovery carries the same uniform patch as every launch of this module —
-    # the source binding, its own private session-record root pin and the two
-    # always-off rows — with no tool-scope rows: it never sends a prompt.
+    # its private session-record root pin and the title suppression row — with no tool-scope rows: it never sends a prompt.
     client = _launch_agent(cwd=cwd, launch_root=native_root, invocation_root=invocation_root,
-                           dsh_home=dsh_home, sessions_root=dsh_home / _SESSIONS_DIRNAME,
+                           sessions_root=sessions_root,
                            scope_rows=[], extra_env={},
                            permission_policy=PermissionPolicy())
     catalog_value: dict | None = None
@@ -1918,9 +1781,8 @@ def _catalog(options: list, version: str) -> dict:
             "The no-prompt ACP surface exposes the declared model and effort selectors only; "
             "per-model effort availability and context windows stay unknown until a real session.",
             "The account status is not applicable to this reading: the discovery launches the "
-            "installed DSH with this run's private DSH_HOME and points DSH's own settings and "
-            "credentials rows by file path at the owning DSH home, so the read presumes that "
-            "home's login without this module reading or copying any credential content, and "
+            "installed DSH with the user's inherited HOME and DSH_HOME, so DSH loads its own "
+            "configuration and login without this module reading or copying credential content, and "
             "the no-prompt session carries no separate account read.",
         ],
     }

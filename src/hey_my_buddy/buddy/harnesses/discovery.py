@@ -477,9 +477,9 @@ def probe(command: list[str], environment: dict, *, deadline: float | None = Non
 
 
 def _probe_dsh_version(command: list[str], environment: dict, deadline: float) -> tuple[str | None, bytes]:
-    """Use the same private DSH launcher for the no-input version check.
+    """Use the same owned DSH launcher for the no-input version check.
 
-    Keep the caller's HOME and native environment, force only DSH_HOME, and
+    Keep the caller's HOME, DSH_HOME and native environment unchanged, and
     retain the directory if the owned group cannot be confirmed stopped.
     """
     from .dsh.acp.launch import LaunchOwnershipError, LaunchRejected, launch
@@ -488,7 +488,6 @@ def _probe_dsh_version(command: list[str], environment: dict, deadline: float) -
     if start >= deadline:
         return "scan-timeout", b""
     root = Path(tempfile.mkdtemp(prefix="buddy-dsh-probe-")).resolve()
-    (root / "dsh-home").mkdir(mode=0o700)
     process = handle = None
     stopped = True  # No child exists until launch returns or transfers ownership.
     code, output = "launch-failed", b""

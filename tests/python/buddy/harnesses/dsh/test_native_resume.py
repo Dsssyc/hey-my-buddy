@@ -19,6 +19,7 @@ from __future__ import annotations
 import dataclasses
 import hashlib
 import json
+import os
 import threading
 import time
 import unittest
@@ -165,14 +166,17 @@ class ResumeTurnTests(NativeResumeCase):
         request2, _bound2, _mount2, result2 = self.resumed_turn(previous)
         self.assertEqual(result2.end.status, "ok", result2.end.message)
         invocation = Path(request2.private_state.invocation_root)
-        # The launch bookkeeping — DSH_HOME, the launch log, the frame log and
+        # The launch bookkeeping — the launch log, the frame log and
         # the patch — lives inside this invocation's private root, while the
         # shared sessions directory the rollout was pinned to lives under the
         # task's native root and the record is really there.
         launches = [json.loads(line) for line
                     in (invocation / "logs" / "launches.jsonl").read_text().splitlines() if line]
         record2 = launches[-1]
-        self.assertTrue(record2["dshHome"].startswith(str(invocation)))
+        self.assertFalse((invocation / "dsh-home").exists())
+        inherited = [entry for entry in self.agent_log() if entry.get("event") == "home-check"][-1]
+        self.assertEqual(inherited["home"], str(self.home))
+        self.assertEqual(inherited["dshHome"], os.environ["DSH_HOME"])
         self.assertTrue((invocation / "logs" / "frames.jsonl").is_file())
         patch_path = Path(record2["argv"][record2["argv"].index("--patch") + 1])
         self.assertTrue(str(patch_path).startswith(str(invocation)))
@@ -180,12 +184,10 @@ class ResumeTurnTests(NativeResumeCase):
         self.assertEqual(rows[0]["id"], "session-persistence-jsonl")
         self.assertEqual(rows[0]["config"]["root"], str(self.root / "sessions"))
         self.assertEqual([row["id"] for row in rows[1:]],
-                         ["session-title-llm", "session-telemetry-otel"])
+                         ["session-title-llm"])
         rollout = list((self.root / "sessions").glob(f"{previous}.v3.jsonl*"))
         self.assertEqual(len(rollout), 1, "the resumed rollout lives in the shared root")
-        # The fixture's prepared directory under the native root stays empty:
-        # a Worker run's DSH_HOME lives in its invocation root, never here.
-        self.assertEqual(list((self.root / "dsh-home").iterdir()), [])
+        self.assertFalse((self.root / "dsh-home").exists())
         # The model and effort were selected and read back on the resumed
         # session through the public configuration options.
         checked = result2.configuration.checked

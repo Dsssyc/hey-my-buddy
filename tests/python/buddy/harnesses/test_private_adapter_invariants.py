@@ -403,7 +403,7 @@ class PrivateAdapterInvariants(unittest.TestCase):
                 self.assertEqual(Path(control["nativeRoot"]), native_root(state, "dsh", context.task_id))
                 self.assertTrue((Path(control["nativeRoot"]) / "sessions").is_dir())
                 request = rc.decode_run_request(Path(control["requestFile"]).read_bytes())
-                self.assertTrue((Path(request.private_state.invocation_root) / "dsh-home").is_dir())
+                self.assertFalse((Path(request.private_state.invocation_root) / "dsh-home").exists())
                 self.assertTrue(Path(request.private_state.invocation_root).is_relative_to(context_root(context, "dsh")))
                 records = list((Path(control["nativeRoot"]) / "sessions").rglob("*.v3.jsonl.zstd"))
                 self.assertTrue(records, "the native rollout is in the shared task root")

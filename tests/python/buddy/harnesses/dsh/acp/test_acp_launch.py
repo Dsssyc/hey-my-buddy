@@ -1,11 +1,4 @@
-"""Launch-wrapper tests: the private-home contract is enforced before any spawn.
-
-Every rejection case uses a fake executable that would write a marker if it ran;
-a rejection must leave no marker. The legal controls prove the same argv runs
-under the native child environment with this run's private ``DSH_HOME`` and an
-explicit private ``HOME``. Post-spawn bookkeeping failures must never lose
-ownership of the child.
-"""
+"""Private evidence guards, inherited configuration and retained ownership."""
 from __future__ import annotations
 
 import json
@@ -18,8 +11,7 @@ from unittest import mock
 from importlib import import_module
 
 from hey_my_buddy.buddy.harnesses.dsh.acp.launch import (LaunchOwnershipError, LaunchRejected,
-                                                        child_environment, default_dsh_home,
-                                                        launch, real_user_home)
+                                                        child_environment, launch)
 
 #: The submodule object itself: the package re-exports the ``launch`` function
 #: under the same name, so attribute access would resolve to the function.
@@ -54,41 +46,11 @@ class LaunchRejectionTest(AcpTestCase):
         self.assertIn("private root", message)
         self.assert_marker_absent()
 
-    def test_unprepared_homes_are_refused(self):
-        empty = self.sibling_dir("empty-root")
-        message = self.launch_expecting_rejection(private_root=empty,
-                                                  dsh_home=empty / "dsh-home",
-                                                  home=empty / "home")
-        self.assertIn("does not exist", message)
-        self.assert_marker_absent()
-
-    def test_user_default_dsh_home_is_refused(self):
-        message = self.launch_expecting_rejection(dsh_home=default_dsh_home())
-        self.assertIn("default DSH home", message)
-        self.assert_marker_absent()
-
-    def test_symlinked_home_is_refused(self):
-        link = self.root / "link-home"
-        link.symlink_to(self.sibling_dir("link-target"))
-        message = self.launch_expecting_rejection(dsh_home=link)
-        self.assertIn("symlink", message)
-        self.assert_marker_absent()
-
-    def test_home_outside_the_private_root_is_refused(self):
-        message = self.launch_expecting_rejection(home=self.sibling_dir("outside-root"))
-        self.assertIn("outside the private root", message)
-        self.assert_marker_absent()
-
-    def test_user_real_home_is_refused(self):
-        message = self.launch_expecting_rejection(home=real_user_home())
-        self.assertIn("real home", message)
-        self.assert_marker_absent()
-
-    def test_reserved_env_keys_cannot_override_the_private_homes(self):
+    def test_reserved_env_keys_cannot_override_inherited_homes(self):
         for reserved in ("HOME", "DSH_HOME"):
             message = self.launch_expecting_rejection(
                 extra_env={reserved: str(self.sibling_dir(f"redirect-{reserved}"))})
-            self.assertIn("reserved", message)
+            self.assertIn("inherited home", message)
             self.assert_marker_absent()
 
     def test_launch_log_outside_the_private_root_is_refused(self):
@@ -98,11 +60,10 @@ class LaunchRejectionTest(AcpTestCase):
         self.assertFalse(outside_log.exists(), "no log may be written outside the private root")
         self.assert_marker_absent()
 
-    def test_rejections_are_recorded_in_the_launch_log(self):
-        self.launch_expecting_rejection(dsh_home=default_dsh_home())
-        log_path = self.root / "logs" / "launches.jsonl"
-        entries = [json.loads(line) for line in log_path.read_text().splitlines()]
-        self.assertEqual(1, len(entries))
+    def test_spawn_failure_is_recorded_in_the_launch_log(self):
+        with self.assertRaises(OSError):
+            launch([str(self.root / "missing-cli")], private_root=self.root)
+        entries = [json.loads(line) for line in (self.logs / "launches.jsonl").read_text().splitlines()]
         self.assertTrue(entries[0]["rejected"])
         self.assertIsNone(entries[0]["pid"])
 
@@ -127,17 +88,18 @@ class LegalLaunchTest(AcpTestCase):
         self.assertEqual(process.pid, entry["pid"])
         self.assertIn("PATH", entry["envKeys"])
         self.assertIn("DSH_HOME", entry["envKeys"])
-        self.assertEqual(str(self.dsh_home), entry["dshHome"])
-        self.assertIsNone(entry["home"], "no explicit home was given for this launch")
+        self.assertNotIn("dshHome", entry)
+        self.assertNotIn("home", entry)
         # No environment value may appear in the launch record.
         raw = (self.root / "logs" / "launches.jsonl").read_text()
         self.assertNotIn(junk_value, raw)
         self.assertNotIn(os.environ["PATH"], raw)
 
-    def test_child_environment_is_native_environment_plus_the_forced_homes(self):
+    def test_child_environment_inherits_native_homes_and_adds_permission_controls(self):
         synthetic = {
             "PATH": "/usr/bin:/bin",
-            "HOME": "/Users/synthetic-person",
+            "HOME": "/users/synthetic-person",
+            "DSH_HOME": "/users/synthetic-person/native.v2 用户 配置",
             "USER": "synthetic-person",
             "LOGNAME": "synthetic-person",
             "LANG": "en_US.UTF-8",
@@ -152,13 +114,11 @@ class LegalLaunchTest(AcpTestCase):
             "ACP_TEST_SECRET": "synthetic-secret-value",
         }
         extras = {"DSH_PERMISSION_MODE": "read-only"}
-        explicit = child_environment(self.dsh_home, self.home, extras, source=synthetic)
+        explicit = child_environment(extras, source=synthetic)
         expected = native_environment(dict(synthetic))
         expected.update(extras)
-        expected["HOME"] = str(self.home)
-        expected["DSH_HOME"] = str(self.dsh_home)
         self.assertEqual(expected, explicit,
-                         "the child environment is native_environment plus this run's homes")
+                         "the child environment inherits the native homes unchanged")
         self.assertEqual("synthetic-person", explicit["USER"])
         self.assertEqual("en_US.UTF-8", explicit["LANG"])
         self.assertEqual("/synthetic/tmp", explicit["TMPDIR"])
@@ -170,30 +130,26 @@ class LegalLaunchTest(AcpTestCase):
         self.assertNotIn("BUDDY_AGENT_CREDENTIAL", explicit)
         self.assertNotIn("ACP_TEST_SECRET", explicit)
 
-    def test_parent_home_is_kept_without_an_explicit_private_home(self):
-        synthetic = {"PATH": "/usr/bin:/bin", "HOME": "/Users/synthetic-person",
-                     "TMPDIR": "/synthetic/tmp"}
-        inherited = child_environment(self.dsh_home, None, source=synthetic)
-        self.assertEqual("/Users/synthetic-person", inherited["HOME"],
-                         "without an explicit private home the parent HOME is kept")
-        self.assertEqual(str(self.dsh_home), inherited["DSH_HOME"])
-        self.assertEqual(dict(native_environment(dict(synthetic)),
-                              DSH_HOME=str(self.dsh_home)), inherited)
+    def test_an_unset_dsh_home_stays_unset(self):
+        synthetic = {"PATH": "/usr/bin:/bin", "HOME": "/users/synthetic-person"}
+        inherited = child_environment(source=synthetic)
+        self.assertEqual(synthetic, inherited)
+        self.assertNotIn("DSH_HOME", inherited)
 
-    def test_spawned_child_receives_the_native_environment_with_forced_homes(self):
+    def test_spawned_child_receives_inherited_native_homes(self):
         junk_value = "secret-junk-value"
         os.environ["ACP_TEST_JUNK"] = junk_value
         self.addCleanup(os.environ.pop, "ACP_TEST_JUNK", None)
         argv = [sys.executable, "-c", "import json,os;print(json.dumps(dict(os.environ)))"]
         extras = {"DSH_PERMISSION_MODE": "read-only"}
-        process, handle = launch(argv, private_root=self.root, home=self.home, extra_env=extras)
+        process, handle = launch(argv, private_root=self.root, extra_env=extras)
         try:
             out, _ = process.communicate(timeout=30)
             self.assertEqual(0, process.returncode)
         finally:
             handle.wait(5)
         child_env = json.loads(out.decode())
-        expected = child_environment(self.dsh_home, self.home, extras)
+        expected = child_environment(extras)
         # A child Python may re-exec itself once (PEP 538 locale coercion) and
         # CoreFoundation adds the encoding var; those are the child's own keys.
         interpreter_added = {"LC_CTYPE", "__CF_USER_TEXT_ENCODING"}
@@ -202,7 +158,7 @@ class LegalLaunchTest(AcpTestCase):
         for key, value in expected.items():
             self.assertEqual(value, child_env[key])
         self.assertEqual(str(self.home), child_env["HOME"],
-                         "the explicit private home is what the child runs under")
+                         "the parent home is what the child runs under")
         self.assertNotIn("ACP_TEST_JUNK", child_env,
                          "a parent key outside the native allow-list never crosses")
 
@@ -227,7 +183,6 @@ class LegalLaunchTest(AcpTestCase):
         outside = self.sibling_dir("outside-frames") / "frames.jsonl"
         with self.assertRaises(LaunchRejected):
             AcpClient.start(self.agent_argv(), private_root=self.root,
-                            dsh_home=self.dsh_home, home=self.home,
                             frame_log=FrameMetaLog(outside))
         self.assertFalse(outside.exists())
 
