@@ -38,7 +38,7 @@ for (const theme of ["dark", "light"]) for (const width of [1440, 390]) test.des
     const card = page.getByRole("dialog", { name: "图例", exact: true });
     await expect(card).toBeVisible();
     await expect(card.locator('[data-slot=legend-item]')).toHaveCount(10);
-    await expect(card.locator('[data-kind=waiting]')).toContainText("等待 Host 或 Lead 决定或验收的时段。");
+    await expect(card.locator('[data-kind=waiting]')).toContainText("菱形标出工作交给 Host 或 Lead 的地方，虚线表示仍在等。");
     await expect(card.locator('[data-kind=cluster]')).toContainText("挨近的记号合成一个，数字是个数，点开看每一项。");
     await expect(card.locator('[data-kind=inquiry]')).toContainText("Host 向运行中的回合提出的问题。");
     await expect(card.locator('[data-slot=tooltip-trigger]')).toHaveCount(0);

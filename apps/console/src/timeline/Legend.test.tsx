@@ -56,6 +56,10 @@ describe("the timeline legend", () => {
     expect(cluster.querySelector("circle")?.getAttribute("class")).toBe("fill-card stroke-past");
     expect(cluster.querySelector("text")?.textContent).toBe("2");
     expect(dialog.querySelectorAll("i")).toHaveLength(0);
-    expect(dialog.querySelector('[data-kind="idle"] [aria-hidden="true"]')?.getAttribute("class")).toContain("var(--line)");
+    const pattern = dialog.querySelector('[data-kind="idle"] [data-slot="idle-pattern"]')!;
+    expect(pattern.getAttribute("width")).toBe("14");
+    expect(pattern.querySelector("path")?.getAttribute("stroke-opacity")).toBe("0.4");
+    expect(dialog.querySelector('[data-kind="waiting"] [data-slot="waiting-diamond"]')?.getAttribute("class")).toBe("fill-hand-mark");
+    expect(dialog.querySelector('[data-kind="waiting"] line')?.getAttribute("stroke-dasharray")).toBe("5 4");
   });
 });

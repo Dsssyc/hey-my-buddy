@@ -104,7 +104,10 @@ for (const theme of ["dark", "light"]) test.describe(`tooltip policy ${theme}`, 
     expect(await stripe.count()).toBeGreaterThan(1);
     const stripeColor = await stripe.first().evaluate(node => getComputedStyle(node).stroke);
     for (const mark of await page.locator('[data-slot=axis-break-mark]').all()) expect(await mark.evaluate(node => getComputedStyle(node).stroke)).toBe(stripeColor);
-    expect(await legend.locator('[data-kind=idle] [aria-hidden=true]').evaluate(node => getComputedStyle(node).backgroundImage)).toContain(stripeColor);
+    const idle = legend.locator('[data-kind=idle] [data-slot=idle-pattern]');
+    expect(await idle.locator("path").evaluate(node => getComputedStyle(node).stroke)).toBe(stripeColor);
+    await expect(idle).toHaveAttribute("width", "14");
+    for (const path of await stripe.all()) expect(await path.evaluate(node => getComputedStyle(node).strokeOpacity)).toBe("0.4");
     await capture(page, `timeline-${theme}`);
     await page.keyboard.press("Escape");
     await page.locator('[data-slot=macro-overview-header] h2').hover();

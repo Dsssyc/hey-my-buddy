@@ -8,7 +8,7 @@ import { Button } from "@/components/ui/button";
 import type { MacroTaskTimeline, TimelineRow } from "../macro-task-types";
 import { buddyColorsFor } from "../timeline/buddyColors";
 import { Axis, Track } from "../timeline/Tracks";
-import { CONCLUSION_OUTSET_PX as SLACK } from "../timeline/ConclusionMark";
+import { TIMELINE_OUTSET_PX as SLACK } from "../timeline/trackMarks";
 import { timelineScaleInput } from "../timeline/scale";
 import { useTimelineZoom } from "../timeline/useTimelineZoom";
 import { useTimelineGestures } from "../timeline/useTimelineGestures";

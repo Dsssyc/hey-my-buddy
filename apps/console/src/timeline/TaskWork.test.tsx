@@ -496,7 +496,7 @@ it("selects empty track space without opening on either click or double click", 
   expect(props.onOpen).not.toHaveBeenCalled();
 });
 
-it("uses the same display name in the row and on a wide execution bar", () => {
+it("keeps the current buddy's display name in the row and only duration on its bar", () => {
   const timeline = macroTaskTimelineFixture();
   const source = timeline.spans.find(span => span.kind === "execution")!;
   const buddy = { harness: "codex", provider: "openai", model: "gpt-6.1-sol", effort: "high" };
@@ -507,7 +507,8 @@ it("uses the same display name in the row and on a wide execution bar", () => {
   setup({ timeline, buddies: [{ ...buddy, label: "GPT-6.1-Sol · high" }] });
   expect(row(source.runId).textContent).toContain("GPT-6.1-Sol · high");
   const labels = [...document.querySelectorAll('[data-slot=track-label]')].map(node => node.textContent);
-  expect(labels.some(label => label?.startsWith("GPT-6.1-Sol ·"))).toBe(true);
+  expect(labels.some(label => label?.startsWith("GPT-6.1-Sol ·"))).toBe(false);
+  expect(document.querySelector('[data-slot=execution-buddy]')).toBeNull();
   expect(labels.some(label => label?.includes("gpt-6.1-sol") || label?.includes("high"))).toBe(false);
 });
 

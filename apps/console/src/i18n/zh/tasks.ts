@@ -17,7 +17,7 @@ export const tasks = {
     events: { dispatch: "派发", decide: "决定", continue: "续接", integrate: "整合", accept: "已验收", reject: "打回", conclude: "结论", takeover: "接管" },
   },
   legendMeaning: {
-    execution: "buddy 执行工作的时段，颜色区分 buddy。", wait: "两项活动之间的等待时段。", waiting: "等待 Host 或 Lead 决定或验收的时段。",
+    execution: "buddy 执行工作的时段，颜色区分 buddy。", wait: "两项活动之间的等待时段。", waiting: "菱形标出工作交给 Host 或 Lead 的地方，虚线表示仍在等。",
     silent: "执行仍在进行，但一段时间没有原生活动。", inquiry: "Host 向运行中的回合提出的问题。", event: "已记录的一次决定或其他动作。",
     accepted: "这项微任务已通过验收。", failed: "这项微任务以失败结论结束。", cluster: "挨近的记号合成一个，数字是个数，点开看每一项。", idle: "较长的无活动时段在时间轴上折叠显示。",
   },
