@@ -136,7 +136,7 @@ def pending_root_count(store) -> int:
 def attach_macro_task(connection, presentation: dict, *, spec: dict, host_id: str, manifest: dict, now: str,
                       fixed_run=None) -> str | None:
     """Run within the task's admission transaction; failed admission creates nothing."""
-    project_id = manifest.get("repositoryId") or spec["cwd"]
+    project_id = manifest["repositoryId"]
     identifier = presentation.get("macroTaskId")
     if fixed_run is not None and not any(key in presentation for key in ("macroTask", "macroTaskId", "macroTaskOf")):
         identifier = fixed_run["macro_task_id"]

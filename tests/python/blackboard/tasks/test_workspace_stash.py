@@ -105,13 +105,15 @@ class SharedStashInventoryTests(StashInventoryTestCase):
         self.assertTrue(all(character in "0123456789abcdef" for character in entry["commit"]))
         self.assertEqual(entry["description"], "On main: sha256 stash")
 
-    def test_the_entry_list_is_bounded_and_marks_truncation(self):
-        for number in range(workspace.STASH_ENTRY_LIMIT + 5):
+    def test_all_entries_are_retained_beyond_the_old_limit(self):
+        for number in range(69):
             self.stash(f"flood {number}")
         inventory = workspace.shared_stash_inventory(self.common_git_dir())
-        self.assertTrue(inventory["truncated"])
-        self.assertEqual(inventory["totalCount"], workspace.STASH_ENTRY_LIMIT + 5)
-        self.assertEqual(len(inventory["entries"]), workspace.STASH_ENTRY_LIMIT)
+        self.assertFalse(inventory["truncated"])
+        self.assertEqual(inventory["totalCount"], 69)
+        self.assertEqual(len(inventory["entries"]), 69)
+        self.assertIn("flood 0", inventory["entries"][-1]["description"])
+        self.assertIn("flood 68", inventory["entries"][0]["description"])
 
     def test_undecodable_description_bytes_stay_canonically_encodable(self):
         commit = self.stash("temporary")
@@ -206,11 +208,30 @@ class SharedStashComparisonTests(unittest.TestCase):
         self.assertEqual(workspace.shared_stash_comparison(observed, None)["unknownSides"], ["seal"])
         self.assertEqual(workspace.shared_stash_comparison(None, observed)["unknownSides"], ["start"])
 
+    def test_all_lost_and_new_entries_survive_the_old_comparison_limit(self):
+        start = [self.entry(f"{number:040x}", f"lost {number}") for number in range(20)]
+        seal = [self.entry(f"{number + 100:040x}", f"new {number}") for number in range(21)]
+        comparison = workspace.shared_stash_comparison(self.observed(start), self.observed(seal))
+        self.assertEqual(comparison["state"], "observed")
+        self.assertTrue(comparison["changed"])
+        self.assertFalse(comparison["truncated"])
+        self.assertEqual(comparison["lostCount"], len(comparison["lostEntries"]))
+        self.assertEqual(comparison["newCount"], len(comparison["newEntries"]))
+        self.assertEqual({item["commit"] for item in comparison["lostEntries"]},
+                         {item["commit"] for item in start})
+        self.assertEqual({item["commit"] for item in comparison["newEntries"]},
+                         {item["commit"] for item in seal})
 
-class TruncatedObservationHonestyTests(StashInventoryTestCase):
-    """A bounded observation cannot prove anything about entries beyond its cut."""
+    def test_unknown_reason_retains_its_full_text(self):
+        reason = "read failed: " + "x" * 600 + " final detail"
+        unknown = workspace.stash_observation_unknown("repo", reason)
+        self.assertEqual(unknown["reason"], reason)
 
-    def test_adding_the_65th_stash_never_reports_the_unchanged_oldest_entry_lost(self):
+
+class CompleteObservationTests(StashInventoryTestCase):
+    """Complete observations compare entries on both sides of the old cut."""
+
+    def test_adding_the_65th_stash_keeps_the_oldest_and_reports_only_the_new_entry(self):
         self.stash("first")
         for number in range(63):
             self.stash(f"entry-{number}")
@@ -220,40 +241,32 @@ class TruncatedObservationHonestyTests(StashInventoryTestCase):
         newest = self.stash("new-65th-entry")
         after = workspace.shared_stash_inventory(self.common_git_dir())
         self.assertEqual(after["totalCount"], 65)
-        self.assertTrue(after["truncated"])
+        self.assertFalse(after["truncated"])
         comparison = workspace.shared_stash_comparison(before, after)
-        # The seal side was truncated, so disappearance is unprovable: the entry
-        # that fell off the observed window still exists in the real shared
-        # stash, and no loss and no recovery command may be fabricated for it.
-        self.assertEqual(comparison["state"], "partial")
+        self.assertEqual(comparison["state"], "observed")
         self.assertEqual(comparison["lostCount"], 0)
         self.assertEqual(comparison["lostEntries"], [])
         self.assertNotIn("causeNote", comparison)
-        self.assertEqual(comparison["truncatedSides"], ["seal"])
-        self.assertEqual(comparison["unprovenDirections"], ["lost"])
-        # Appearance stays provable: the start side was read completely.
+        self.assertNotIn("truncatedSides", comparison)
+        self.assertNotIn("unprovenDirections", comparison)
         self.assertEqual(comparison["newCount"], 1)
         self.assertEqual(comparison["newEntries"][0]["commit"], newest)
 
-    def test_a_truncated_start_side_cannot_claim_new_entries_but_keeps_provable_losses(self):
+    def test_dropping_one_of_65_stashes_reports_exactly_that_loss(self):
         for number in range(65):
             self.stash(f"entry-{number}")
         before = workspace.shared_stash_inventory(self.common_git_dir())
-        self.assertTrue(before["truncated"])
+        self.assertFalse(before["truncated"])
         dropped = self.git("rev-parse", "stash@{0}").strip()
         self.git("stash", "drop", "stash@{0}")
         after = workspace.shared_stash_inventory(self.common_git_dir())
         self.assertFalse(after["truncated"])
         comparison = workspace.shared_stash_comparison(before, after)
-        self.assertEqual(comparison["state"], "partial")
-        # Appearance is unprovable: an entry beyond the start cut may have
-        # existed before the turn and only re-entered the observed window.
+        self.assertEqual(comparison["state"], "observed")
         self.assertEqual(comparison["newCount"], 0)
         self.assertEqual(comparison["newEntries"], [])
-        self.assertEqual(comparison["truncatedSides"], ["start"])
-        self.assertEqual(comparison["unprovenDirections"], ["new"])
-        # Disappearance stays provable: the seal side was read completely, and
-        # the dropped entry really is gone from the whole shared stash.
+        self.assertNotIn("truncatedSides", comparison)
+        self.assertNotIn("unprovenDirections", comparison)
         self.assertEqual(comparison["lostCount"], 1)
         self.assertEqual(comparison["lostEntries"][0]["commit"], dropped)
         self.assertNotIn("causeNote", comparison)

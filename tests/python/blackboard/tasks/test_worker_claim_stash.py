@@ -117,6 +117,28 @@ class ClaimCollectionScopeTests(ClaimStashTestCase):
         document = claimed["claim"]["turn"]["input"]
         self.assertEqual(document["context"]["sharedStash"]["start"]["entries"][0]["commit"], "a" * 40)
 
+    def test_claim_freezes_all_entries_in_a_large_observation(self):
+        board = self.board()
+        submitted = self.submit(board, request_id="req-large", cwd=self.workdir("many-stashes"))
+        repository = "mock+repo:" + str(self.workdir("many-stashes"))
+        entries = [entry(f"{number:040x}", f"entry {number}") for number in range(69)]
+        self.workspace.stash_inventories[repository] = observed(entries)
+        claimed = self.claim(board, run_id=submitted["runId"])
+        start = claimed["claim"]["turn"]["input"]["context"]["sharedStash"]["start"]
+        self.assertEqual(start["entries"], entries)
+        self.assertEqual(start["totalCount"], 69)
+        self.assertFalse(start["truncated"])
+
+    def test_claim_keeps_the_complete_collector_failure_reason(self):
+        board = self.board()
+        submitted = self.submit(board, request_id="long-failure", cwd=self.workdir("unreadable"))
+        reason = "start: " + "故障" * 600 + " :end"
+        with mock.patch.object(self.workspace, "shared_stash_inventory", side_effect=OSError(reason)):
+            claimed = self.claim(board, run_id=submitted["runId"])
+        start = claimed["claim"]["turn"]["input"]["context"]["sharedStash"]["start"]
+        self.assertEqual(start["state"], "unknown")
+        self.assertEqual(start["reason"], reason)
+
     def test_one_claim_reads_at_most_a_bounded_set_of_repositories(self):
         board = self.board()
         for number in range(workflow_module.WorkflowCoordinator._CLAIM_STASH_REPOSITORIES + 4):

@@ -230,7 +230,7 @@ class ClientToolWorkerTests(SeamCase):
                 self.assertEqual(report["unansweredDelivered"], int(not answered))
                 self.assertFalse(any(ref.kind == "inquiry-tool-failures" for ref in result.evidence_refs))
                 from hey_my_buddy.buddy.roles.run_execution import worker_delivery
-                outcome, provenance, _truncated = worker_delivery(result)
+                outcome, provenance = worker_delivery(result)
                 self.assertEqual(outcome["disposition"], "completed" if answered else "attention")
                 self.assertIsNone(native_run.validate_turn_provenance({
                     "sessionId": result.native_identity.session_id, "provenance": provenance,

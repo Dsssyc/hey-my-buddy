@@ -14,6 +14,13 @@ from hey_my_buddy.buddy.roles import turn_io
 
 
 class SharedTurnIOTests(ZcodeFixtureCase):
+    def test_private_turn_input_keeps_content_beyond_a_message_frame(self):
+        context = self.context()
+        context.turn_input["context"] = {"task": "汉" * 100000, "tail": "complete-input"}
+        turn_io.prepare_turn(context)
+        self.assertGreater(context.turn_input_file().stat().st_size, 256 * 1024)
+        self.assertEqual(json.loads(context.turn_input_file().read_text()), context.turn_input)
+
     def test_canonical_input_and_scoped_credential_are_distinct_private_files(self):
         context = self.context()
         context.spec.update(adapter="zcode", harness="zcode")

@@ -55,16 +55,16 @@ from ..harnesses.session_receipts import (
 
 MAX_PENDING_IN_FINISH_REFUSAL = 4
 
-STRINGS = {"type": "array", "maxItems": 32, "items": {"type": "string", "maxLength": 4096}}
+STRINGS = {"type": "array", "items": {"type": "string"}}
 OUTCOME_SCHEMA = {
     "type": "object", "additionalProperties": False,
     "required": ["disposition", "summary", "remaining", "decisions", "artifacts", "request"],
     "properties": {
         "disposition": {"type": "string", "enum": ["completed", "assistance", "attention"]},
-        "summary": {"type": "string", "minLength": 1, "maxLength": 65536,
+        "summary": {"type": "string", "minLength": 1,
                     "description": "The entire serialized outcome, including this report, must fit in 64 KiB of UTF-8."},
         "remaining": STRINGS, "decisions": STRINGS,
-        "artifacts": {"type": "array", "maxItems": 32, "items": {"anyOf": [{"type": "string"}, {"type": "object", "additionalProperties": True}]}},
+        "artifacts": {"type": "array", "items": {"anyOf": [{"type": "string"}, {"type": "object", "additionalProperties": True}]}},
         "request": {"description": "Required for every outcome. Use null when disposition is completed; otherwise provide the complete assistance or attention request.", "anyOf": [
             {"type": "null"},
             {"type": "object", "additionalProperties": False,
@@ -134,7 +134,7 @@ INQUIRY_CHANNEL_ABSENT = "this turn has no mounted inquiry channel"
 def micro_task_prompt(task_text: str, turn_input: dict, finish_tool: str, *,
                     checkpoint_tool: str | None = None, answer_tool: str | None = None,
                     credential_file: str | None = None) -> str:
-    """Bounded micro task root prompt: scope, inquiry channel, finish contract."""
+    """Micro task root prompt: scope, inquiry channel, finish contract."""
     inquiry = (
         f"Host inquiries arrive cooperatively: call {checkpoint_tool} at natural work milestones and again just "
         f"before finishing to pick up any queued Host questions (an empty list means none). Answer each listed "

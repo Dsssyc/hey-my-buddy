@@ -1136,12 +1136,6 @@ def _prepare_locked(directory, workspace_id, request_id, intent, preparation=Non
         raise
 
 
-#: Bounded per-entry observation of one repository's shared stash list. The
-#: bound keeps a flooded stash reflog from inflating a frozen turn input; the
-#: ``truncated`` flag keeps the cut honest instead of silent.
-STASH_ENTRY_LIMIT = 64
-#: Bounded per-side entries carried by one frozen stash comparison record.
-STASH_COMPARISON_LIMIT = 16
 RESOLUTION_ACTIONS = ("restore", "adopt", "abandon")
 
 
@@ -1455,7 +1449,7 @@ def stash_observation_unknown(repository_path, reason) -> dict:
     were no stash entries" from "the stash list could not be read".
     """
     return {"version": 1, "repositoryPath": str(repository_path), "state": "unknown",
-            "reason": str(reason)[-512:], "entries": None, "truncated": False, "totalCount": None}
+            "reason": str(reason), "entries": None, "truncated": False, "totalCount": None}
 
 
 def shared_stash_inventory(repository_path) -> dict:
@@ -1497,10 +1491,8 @@ def shared_stash_inventory(repository_path) -> dict:
         if re.fullmatch(r"[0-9a-f]{40}|[0-9a-f]{64}", name) is None:
             return _stash_unknown(path, "the stash reflog did not parse as commit ids and descriptions")
         entries.append({"commit": name, "description": description})
-    total = len(entries)
     return {"version": 1, "repositoryPath": path, "state": "observed",
-            "entries": entries[:STASH_ENTRY_LIMIT], "truncated": total > STASH_ENTRY_LIMIT,
-            "totalCount": total}
+            "entries": entries, "truncated": False, "totalCount": len(entries)}
 
 
 def shared_stash_comparison(start, seal) -> dict:
@@ -1510,16 +1502,10 @@ def shared_stash_comparison(start, seal) -> dict:
     stashed twice with different descriptions is two entries, an identical
     re-registration of the same pair is not a change, and the stash's stack
     position is not part of its identity because popping one entry shifts every
-    index without losing content. ``state`` describes the quality of the
-    comparison: ``observed`` when both sides were completely read, ``partial``
-    when a side carried only its bounded entry list, ``unknown`` when a side
-    could not be read at all. A truncated side hides entries beyond its cut, so
-    disappearance can only be proven against a completely read seal side and
-    appearance only against a completely read start side; the unprovable
-    direction claims nothing and fabricates no loss — the real entries may
-    simply sit beyond the observed window. This record is evidence for a Host;
-    it restores nothing, judges nothing and can never fail a seal or a
-    verification.
+    index without losing content. ``state`` is ``observed`` when both sides
+    were read and ``unknown`` when a side could not be read. This record is
+    evidence for a Host; it restores nothing, judges nothing and can never
+    fail a seal or a verification.
     """
     def observed(record):
         return (isinstance(record, dict) and record.get("version") == 1 and record.get("state") == "observed"
@@ -1536,44 +1522,28 @@ def shared_stash_comparison(start, seal) -> dict:
     if unknown:
         record["unknownSides"] = unknown
         return record
-    truncated_sides = [side for side, value in (("start", start), ("seal", seal)) if value.get("truncated")]
-    record["truncated"] = bool(truncated_sides)
-    # Only a completely read opposite side can prove a direction: entries missing
-    # from a truncated seal may exist beyond its cut, entries absent from a
-    # truncated start may have existed before its cut.
-    lost_provable = not seal.get("truncated")
-    new_provable = not start.get("truncated")
     lost_entries, new_entries = [], []
-    if lost_provable:
-        lost = counted(start)
-        lost.subtract(counted(seal))
-        for (commit, description), count in sorted((item for item in lost.items() if item[1] > 0),
-                                                    key=lambda item: (-item[1], item[0][0], item[0][1])):
-            for _ in range(count):
-                lost_entries.append({"commit": commit, "description": description, "cause": "unknown",
-                                     "recoverCommand": f"git stash store -m {_shell_quoted(description)} {commit}"})
-    if new_provable:
-        new = counted(seal)
-        new.subtract(counted(start))
-        for (commit, description), count in sorted((item for item in new.items() if item[1] > 0),
-                                                    key=lambda item: (-item[1], item[0][0], item[0][1])):
-            for _ in range(count):
-                new_entries.append({"commit": commit, "description": description})
+    lost = counted(start)
+    lost.subtract(counted(seal))
+    for (commit, description), count in sorted((item for item in lost.items() if item[1] > 0),
+                                                key=lambda item: (-item[1], item[0][0], item[0][1])):
+        for _ in range(count):
+            lost_entries.append({"commit": commit, "description": description, "cause": "unknown",
+                                 "recoverCommand": f"git stash store -m {_shell_quoted(description)} {commit}"})
+    new = counted(seal)
+    new.subtract(counted(start))
+    for (commit, description), count in sorted((item for item in new.items() if item[1] > 0),
+                                               key=lambda item: (-item[1], item[0][0], item[0][1])):
+        for _ in range(count):
+            new_entries.append({"commit": commit, "description": description})
     record.update(
-        lostEntries=lost_entries[:STASH_COMPARISON_LIMIT],
-        newEntries=new_entries[:STASH_COMPARISON_LIMIT],
+        lostEntries=lost_entries,
+        newEntries=new_entries,
         lostCount=len(lost_entries),
         newCount=len(new_entries),
+        state="observed",
+        changed=bool(lost_entries or new_entries),
     )
-    if not truncated_sides:
-        record["state"] = "observed"
-        record["changed"] = bool(lost_entries or new_entries)
-    else:
-        record["state"] = "partial"
-        record["truncatedSides"] = truncated_sides
-        unproven = [direction for direction, provable in (("lost", lost_provable), ("new", new_provable))
-                    if not provable]
-        record["unprovenDirections"] = unproven
     return record
 
 

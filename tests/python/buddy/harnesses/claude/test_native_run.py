@@ -180,7 +180,7 @@ class NativeInquiryTests(NativeRunCase):
         self.assertEqual(report["answered"], 0)
         self.assertEqual(report["unansweredDelivered"], 1)
         from hey_my_buddy.buddy.roles.run_execution import worker_delivery
-        outcome, provenance, _truncated = worker_delivery(result)
+        outcome, provenance = worker_delivery(result)
         self.assertEqual(outcome["disposition"], "attention")
         self.assertIsNone(native_run.validate_turn_provenance({
             "sessionId": result.native_identity.session_id, "provenance": provenance,

@@ -281,14 +281,65 @@ class SealFactPinningTests(WorkflowStashTestCase):
         self.assertEqual(summary["comparison"]["lostCount"], 0)
         self.assertEqual(finished["workflow"]["state"], "delivered")
 
+    def test_shared_refs_seal_retains_every_changed_entry(self):
+        board = self.board()
+        repository = self.repo_key()
+        lost = [entry(f"{number:040x}", f"lost {number}") for number in range(20)]
+        added = [entry(f"{number + 100:040x}", f"new {number}") for number in range(21)]
+        self.workspace.stash_inventories[repository] = observed(lost)
+        claimed = self.submit_and_claim(board)
+        self.workspace.stash_inventories[repository] = observed(added)
+        self.finish(board, claimed)
+        with board.store.db.read() as connection:
+            pinned = json.loads(connection.execute(
+                "SELECT manifest_json FROM workflow_artifacts WHERE run_id=? AND kind='shared-refs'",
+                (self.run_id,)).fetchone()[0])
+        self.assertEqual(pinned["version"], 1)
+        self.assertEqual(pinned["startStash"]["totalCount"], 20)
+        self.assertEqual(pinned["sealStash"]["totalCount"], 21)
+        self.assertEqual(len(pinned["comparison"]["lostEntries"]), 20)
+        self.assertEqual(len(pinned["comparison"]["newEntries"]), 21)
+        self.assertFalse(pinned["comparison"]["truncated"])
+        self.assertEqual(pinned["manifestSha256"], board.store.workflow.shared_refs_record_digest(pinned))
+
+    def test_reading_a_historical_partial_seal_does_not_recompute_it(self):
+        board = self.board()
+        repository = self.repo_key()
+        self.workspace.stash_inventories[repository] = observed([entry("a" * 40, "old entry")])
+        claimed = self.submit_and_claim(board)
+        self.finish(board, claimed)
+        with board.store.db.write() as connection:
+            row = connection.execute(
+                "SELECT artifact_id, manifest_json FROM workflow_artifacts WHERE run_id=? AND kind='shared-refs'",
+                (self.run_id,)).fetchone()
+            historical = json.loads(row["manifest_json"])
+            historical["startStash"].update(truncated=True, totalCount=65)
+            historical["comparison"].update(state="partial", changed=None, truncated=True,
+                                            truncatedSides=["start"], unprovenDirections=["new"])
+            historical["manifestSha256"] = board.store.workflow.shared_refs_record_digest(historical)
+            sealed_json = canonical_json(historical)
+            connection.execute(
+                "UPDATE workflow_artifacts SET manifest_json=?, manifest_sha256=? WHERE artifact_id=?",
+                (sealed_json, historical["manifestSha256"], row["artifact_id"]),
+            )
+        self.workspace.stash_inventories[repository] = observed([entry("b" * 40, "later entry")])
+        board.call("workflow_get", {"runId": self.run_id})
+        with board.store.db.read() as connection:
+            stored = connection.execute(
+                "SELECT manifest_json FROM workflow_artifacts WHERE artifact_id=?", (row["artifact_id"],)
+            ).fetchone()[0]
+        self.assertEqual(stored, sealed_json)
+        self.assertEqual(json.loads(stored)["comparison"]["state"], "partial")
+
     def test_a_failed_seal_collection_is_an_honest_unknown(self):
         board = self.board()
         repository = self.repo_key()
         self.workspace.stash_inventories[repository] = observed([entry("a" * 40, "kept entry")])
         claimed = self.submit_and_claim(board)
-        self.workspace.fail_stash_inventory = True
-        finished = self.finish(board, claimed)
-        self.workspace.fail_stash_inventory = False
+        reason = "start: " + "故障" * 600 + " :end"
+        with mock.patch.object(self.workspace, "shared_stash_inventory",
+                               side_effect=BoardError("WORKSPACE_GIT_UNKNOWN", reason)):
+            finished = self.finish(board, claimed)
         summary = finished["workflow"]["sharedStash"]
         self.assertEqual(summary["seal"]["state"], "unknown")
         self.assertEqual(summary["comparison"]["state"], "unknown")
@@ -296,6 +347,11 @@ class SealFactPinningTests(WorkflowStashTestCase):
         view = board.call("workflow_get", {"runId": self.run_id})
         artifact = next(row for row in view["artifacts"] if row["kind"] == "shared-refs")
         self.assertEqual(artifact["sharedStash"]["seal"]["state"], "unknown")
+        with board.store.db.read() as connection:
+            pinned = json.loads(connection.execute(
+                "SELECT manifest_json FROM workflow_artifacts WHERE artifact_id=?",
+                (artifact["artifactId"],)).fetchone()[0])
+        self.assertEqual(pinned["sealStash"]["reason"], f"WORKSPACE_GIT_UNKNOWN: {reason}")
 
     def test_a_failed_import_still_freezes_the_facts(self):
         board = self.board()

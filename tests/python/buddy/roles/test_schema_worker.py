@@ -32,18 +32,18 @@ class CodexSchemaTests(unittest.TestCase):
             parsed=SimpleNamespace(value={"outcome": outcome})))
         for harness in ("codex", "claude"):
             policy = worker_format(harness)
-            delivered, provenance, _truncated = policy.delivery(
+            delivered, provenance = policy.delivery(
                 result, {"unansweredDeliveredInquiries": 1})
             self.assertEqual(delivered["disposition"], "attention", harness)
             self.assertTrue(provenance["controllerAttention"])
             self.assertFalse(provenance[policy.validation_key])
-            answered, _provenance, _truncated = policy.delivery(
+            answered, _provenance = policy.delivery(
                 result, {"unansweredDeliveredInquiries": 0})
             self.assertEqual(answered["disposition"], "completed", harness)
             assistance = {**outcome, "disposition": "assistance", "request": delivered["request"]}
             assistance_result = SimpleNamespace(value=SimpleNamespace(
                 parsed=SimpleNamespace(value={"outcome": assistance})))
-            pending, _provenance, _truncated = policy.delivery(
+            pending, _provenance = policy.delivery(
                 assistance_result, {"unansweredDeliveredInquiries": 1})
             self.assertEqual(pending["disposition"], "attention", harness)
             self.assertEqual(pending["request"], assistance["request"])

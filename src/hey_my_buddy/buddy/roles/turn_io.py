@@ -12,10 +12,7 @@ from ...private_dirs import context_root, ensure_private_dir
 from ..harnesses.base import ExecutionContext
 from ..harnesses.session_receipts import MAX_OUTCOME_BYTES  # noqa: F401 - the shared byte bound
 
-MAX_INPUT_BYTES = 262144
 MAX_RECORD_BYTES = 98304
-MAX_OUTCOME_ITEMS = 32
-MAX_OUTCOME_ITEM_BYTES = 4096
 
 
 def input_hash(value: dict) -> str:
@@ -37,8 +34,6 @@ def prepare_turn(context: ExecutionContext) -> None:
 
 
 def write_turn_files(context: ExecutionContext) -> None:
-    if len(canonical_json(context.turn_input).encode()) > MAX_INPUT_BYTES:
-        raise BoardError("INVALID_ARGUMENT", "the micro task turn input exceeds its byte bound")
     private_json(context.turn_input_file(), context.turn_input)
     if context.agent_credential:
         ensure_private_dir(context_root(context))
@@ -64,61 +59,28 @@ def verify_workspace(context: ExecutionContext) -> None:
     context.effective_workspace = manifest
 
 
-def truncate_outcome_summaries(outcome: object) -> tuple[object, dict]:
-    """Bound final-message summaries without hiding other outcome violations.
-
-    Completion tools retain the strict validator and their in-turn retry.
-    The original document must still fit its overall byte budget, and an
-    invalid item must not disappear in a dropped suffix or shortened string.
-    """
-    if not isinstance(outcome, dict) or len(canonical_json(outcome).encode()) > MAX_OUTCOME_BYTES:
-        return outcome, {}
-    bounded = dict(outcome)
-    truncated = {}
-    for field in ("remaining", "decisions"):
-        items = outcome.get(field)
-        if not isinstance(items, list) or any(
-                not isinstance(item, str) or not item.strip() or "\0" in item for item in items):
-            continue
-        kept = []
-        shortened = 0
-        for item in items[:MAX_OUTCOME_ITEMS]:
-            raw = item.encode()
-            if len(raw) > MAX_OUTCOME_ITEM_BYTES:
-                item = raw[:MAX_OUTCOME_ITEM_BYTES].decode("utf-8", errors="ignore")
-                shortened += 1
-            kept.append(item)
-        dropped = max(0, len(items) - MAX_OUTCOME_ITEMS)
-        if dropped or shortened:
-            bounded[field] = kept
-            truncated[field] = {"droppedItems": dropped, "shortenedItems": shortened}
-    return bounded, truncated
-
-
 def validate_outcome(outcome: object, *, delegation_authority: bool = False) -> str | None:
     fields = {"disposition", "summary", "remaining", "decisions", "artifacts", "request"}
     if not isinstance(outcome, dict) or set(outcome) != fields:
         return "the outcome must contain exactly the current outcome fields"
-    def text(value: object, limit: int = 8000) -> bool:
-        return isinstance(value, str) and bool(value.strip()) and "\0" not in value and len(value.encode()) <= limit
+    def text(value: object) -> bool:
+        return isinstance(value, str) and bool(value.strip()) and "\0" not in value
     def strings(value: object) -> bool:
-        return isinstance(value, list) and len(value) <= MAX_OUTCOME_ITEMS and all(text(x, MAX_OUTCOME_ITEM_BYTES) for x in value)
+        return isinstance(value, list) and all(text(x) for x in value)
     dispositions = ("completed", "assistance", "attention", "waiting") if delegation_authority else (
         "completed", "assistance", "attention")
     if outcome["disposition"] not in dispositions:
         return "the turn outcome requires a valid disposition and nonblank summary"
-    # A report can occupy the bounded outcome. Request text and references keep
-    # their smaller bounds; JSON framing and all other fields still count below.
-    if not text(outcome["summary"], MAX_OUTCOME_BYTES):
-        return "the turn summary is blank, contains NUL or exceeds its byte bound"
+    if not text(outcome["summary"]):
+        return "the turn summary is blank or contains NUL"
     if not strings(outcome["remaining"]) or not strings(outcome["decisions"]):
-        return "remaining and decisions must be bounded string arrays"
+        return "remaining and decisions must be nonblank string arrays without NUL"
     artifacts = outcome["artifacts"]
-    if not isinstance(artifacts, list) or len(artifacts) > 32:
-        return "artifacts must be a bounded array"
+    if not isinstance(artifacts, list):
+        return "artifacts must be an array"
     try:
-        if any(not (text(x, 4096) or isinstance(x, dict) and bool(x)) or len(canonical_json(x).encode()) > 4096 for x in artifacts):
-            return "artifacts must contain bounded nonempty references"
+        if any(not (text(x) or isinstance(x, dict) and bool(x)) for x in artifacts):
+            return "artifacts must contain nonempty references"
         if len(canonical_json(outcome).encode()) > MAX_OUTCOME_BYTES:
             return "the outcome exceeds its byte bound"
     except (TypeError, ValueError, RecursionError):
@@ -136,7 +98,7 @@ def validate_outcome(outcome: object, *, delegation_authority: bool = False) -> 
     # refused so the field can never smuggle an unbounded payload.
     if not strings(request["expectedArtifacts"]) or (
             "suggestedBuddyId" in request and request["suggestedBuddyId"] is not None
-            and not text(request["suggestedBuddyId"], 256)):
+            and (not text(request["suggestedBuddyId"]) or len(request["suggestedBuddyId"].encode()) > 256)):
         return "the turn request references are invalid"
     return None
 

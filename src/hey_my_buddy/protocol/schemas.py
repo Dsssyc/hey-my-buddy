@@ -44,7 +44,6 @@ SHA256_PATTERN = re.compile(r"^[0-9a-f]{64}$")
 RESOURCE_ID_PATTERN = re.compile(r"^[A-Za-z0-9._:/@+-]{1,512}$")
 
 # -- micro-task workflow bounds ------------------------------------------------
-MAX_WORKFLOW_INPUT_BYTES = 64 * 1024
 MAX_WORKFLOW_HELPERS = 8
 MAX_WORKFLOW_ARTIFACTS = 32
 MAX_CONTROL_TOKEN = 256

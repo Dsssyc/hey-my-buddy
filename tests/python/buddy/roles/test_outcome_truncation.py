@@ -1,4 +1,4 @@
-"""Final-message delivery bounds summaries; completion tools still allow retry."""
+"""Complete outcomes retain their content within the shared document byte bound."""
 from __future__ import annotations
 
 import hashlib
@@ -22,7 +22,7 @@ def outcome(**changes):
             "decisions": [], "artifacts": [], "request": None, **changes}
 
 
-class OutcomeTruncationTests(unittest.TestCase):
+class CompleteOutcomeTests(unittest.TestCase):
     def setUp(self):
         self.temporary = tempfile.TemporaryDirectory(prefix="hey-my-buddy-outcome-")
         self.addCleanup(self.temporary.cleanup)
@@ -61,34 +61,30 @@ class OutcomeTruncationTests(unittest.TestCase):
                 self.assertEqual(record["outcome"]["disposition"], "waiting")
                 self.turn.pop("context")
 
-    def test_final_message_item_count_is_truncated_and_recorded(self):
+    def test_final_message_keeps_every_item(self):
         for harness in ("codex", "claude"):
-            for field in ("remaining", "decisions"):
+            for field in ("remaining", "decisions", "artifacts"):
                 for parsed in (False, True):
                     with self.subTest(harness=harness, field=field, parsed=parsed):
                         value = outcome(**{field: [str(i) for i in range(37)]})
                         original = canonical_json(value)
                         record, _raw = self.record(self.result(harness, value, parsed=parsed))
-                        self.assertEqual(record["outcome"][field], value[field][:32])
-                        self.assertEqual(record["outcomeTruncated"],
-                                         {field: {"droppedItems": 5, "shortenedItems": 0}})
+                        self.assertEqual(record["outcome"], value)
+                        self.assertNotIn("outcomeTruncated", record)
                         self.assertEqual(canonical_json(value), original)
                         self.assertNotIn("outcomeTruncated", record["outcome"])
                         self.assertNotIn("outcomeTruncated", record["provenance"])
 
-    def test_final_message_long_items_keep_complete_utf8_characters(self):
+    def test_final_message_long_items_keep_every_utf8_character(self):
         for harness in ("codex", "claude"):
-            for field in ("remaining", "decisions"):
+            for field in ("remaining", "decisions", "artifacts"):
                 with self.subTest(harness=harness, field=field):
                     items = ["a" * 4095 + "汉", "a" * 4092 + "😀z", "汉" * 1366]
                     record, _raw = self.record(self.result(harness, outcome(**{field: items})))
-                    self.assertEqual(record["outcome"][field],
-                                     ["a" * 4095, "a" * 4092 + "😀", "汉" * 1365])
-                    self.assertEqual(record["outcomeTruncated"],
-                                     {field: {"droppedItems": 0, "shortenedItems": 3}})
-                    self.assertTrue(all(len(item.encode()) <= 4096 for item in record["outcome"][field]))
+                    self.assertEqual(record["outcome"][field], items)
+                    self.assertNotIn("outcomeTruncated", record)
 
-    def test_both_arrays_report_dropped_and_retained_shortened_items(self):
+    def test_long_arrays_keep_the_native_provenance(self):
         for harness in ("codex", "claude"):
             with self.subTest(harness=harness):
                 value = outcome(decisions=["d" * 4097] + ["decision"] * 35 + ["d" * 4097],
@@ -102,16 +98,13 @@ class OutcomeTruncationTests(unittest.TestCase):
                                  initObserved=True, backgroundSettled=True, nativeSessionId="native-session",
                                  modelUsage=[], permissionDenials=0)
                 record, _raw = self.record(self.result(harness, value, facts=facts))
-                self.assertEqual(record["outcomeTruncated"], {
-                    "decisions": {"droppedItems": 5, "shortenedItems": 1},
-                    "remaining": {"droppedItems": 2, "shortenedItems": 2}})
-                self.assertEqual(len(record["outcome"]["decisions"]), 32)
-                self.assertEqual(len(record["outcome"]["remaining"]), 32)
+                self.assertEqual(record["outcome"], value)
+                self.assertNotIn("outcomeTruncated", record)
                 self.assertIsNone(turn_io.validate_outcome(record["outcome"]))
                 policy = worker_format(harness)
                 self.assertEqual(record["provenance"],
                                  {**facts, "turnEnd": "completed", policy.validation_key: True})
-    def test_untruncated_record_is_byte_identical_and_has_no_metadata(self):
+    def test_record_is_byte_identical_and_has_no_truncation_metadata(self):
         for harness in ("codex", "claude"):
             with self.subTest(harness=harness):
                 value = outcome(decisions=["汉" * 1365 + "a"], remaining=["item"] * 32)
@@ -123,10 +116,10 @@ class OutcomeTruncationTests(unittest.TestCase):
                 self.assertEqual(raw, canonical_json(expected).encode())
                 self.assertNotIn("outcomeTruncated", record)
 
-    def test_other_validation_failures_are_not_hidden_by_truncation(self):
+    def test_invalid_fields_in_long_outcomes_are_rejected(self):
         invalid = [outcome(summary=" "), outcome(extra=True), outcome(disposition="unknown"),
-                   outcome(request={}), outcome(artifacts=["artifact"] * 33),
-                   outcome(artifacts=["a" * 4097]), outcome(remaining="not an array"),
+                   outcome(request={}), outcome(artifacts=["artifact"] * 33 + [{}]),
+                   outcome(artifacts=["a" * 4097 + "\0"]), outcome(remaining="not an array"),
                    outcome(disposition="assistance", request={"summary": "help"}),
                    outcome(decisions=["d"] * 32 + [None]),
                    outcome(decisions=["d"] * 32 + [" "]),
@@ -143,7 +136,7 @@ class OutcomeTruncationTests(unittest.TestCase):
     def test_complete_turn_record_is_bounded_before_publication(self):
         result = self.result("codex", outcome())
         oversized = {"nativeData": "x" * turn_io.MAX_RECORD_BYTES}
-        with mock.patch.object(run_execution, "worker_delivery", return_value=(outcome(), oversized, {})):
+        with mock.patch.object(run_execution, "worker_delivery", return_value=(outcome(), oversized)):
             with self.assertRaises(BoardError) as caught:
                 self.record(result)
         self.assertEqual(caught.exception.code, "invalid-result")
@@ -158,9 +151,10 @@ class OutcomeTruncationTests(unittest.TestCase):
                     with self.assertRaises(BoardError):
                         self.record(self.result(harness, value))
 
-    def test_valid_help_request_survives_summary_truncation(self):
-        request = {"summary": "help", "attempted": "tried", "neededWork": "decide",
-                   "expectedArtifacts": [], "acceptance": "decided", "suggestedBuddyId": None}
+    def test_help_request_keeps_long_text_and_all_expected_artifacts(self):
+        request = {"summary": "s" * 8001, "attempted": "t" * 8001, "neededWork": "n" * 8001,
+                   "expectedArtifacts": ["a" * 4097] + ["artifact"] * 36,
+                   "acceptance": "a" * 8001, "suggestedBuddyId": None}
         for harness in ("codex", "claude"):
             for disposition in ("assistance", "attention"):
                 with self.subTest(harness=harness, disposition=disposition):
@@ -176,7 +170,7 @@ class OutcomeTruncationTests(unittest.TestCase):
                 fields = policy.receipt_fields(self.result(harness, outcome(decisions=["d"] * 33)))
                 self.assertNotIn("outcomeValidationError", fields)
 
-    def test_controller_attention_replaces_outcome_without_stale_truncation_metadata(self):
+    def test_controller_attention_replaces_outcome_without_truncation_metadata(self):
         for harness, facts in (("codex", {"nativeRequestMethod": "interaction/request"}),
                                ("claude", {"permissionDenials": 1})):
             with self.subTest(harness=harness):
@@ -206,8 +200,8 @@ class OutcomeTruncationTests(unittest.TestCase):
     def test_completion_tools_refuse_oversize_and_accept_corrected_retry(self):
         configuration = {"identity": self.turn, "inputSha256": "a" * 64, "key": "b" * 64,
                          "attentionPath": str(self.root / "attention.json")}
-        for field in ("remaining", "decisions"):
-            for items in (["item"] * 33, ["汉" * 1366]):
+        for field in ("remaining", "decisions", "artifacts"):
+            for items in (["item"] * 10000, ["汉" * 22000]):
                 with self.subTest(field=field, item_count=len(items)):
                     value = outcome(**{field: items})
                     raw = canonical_json(value)
@@ -215,21 +209,22 @@ class OutcomeTruncationTests(unittest.TestCase):
                     self.assertTrue(refused["isError"])
                     self.assertEqual(json.loads(refused["content"][0]["text"])["reason"], "invalid-arguments")
                     self.assertEqual(canonical_json(value), raw)
-                    corrected = outcome(**{field: ["short"]})
+                    corrected = outcome(**{field: ["汉" * 1366] + ["item"] * 36})
                     accepted = worker_services.call_session_tool("hey_my_buddy_finish_turn", corrected, configuration)
                     receipt = verify_receipt(accepted["content"][0]["text"], configuration, turn_io.validate_outcome)
                     self.assertEqual(receipt["outcome"], corrected)
                     self.assertNotIn("outcomeTruncated", receipt)
 
-    def test_completion_tool_role_delivery_is_unchanged_and_still_strict(self):
+    def test_completion_tool_role_delivery_keeps_all_content(self):
         for harness in ("dsh", "zcode"):
             with self.subTest(harness=harness):
-                value = outcome()
+                value = outcome(decisions=["d"] * 37, remaining=["r" * 4097],
+                                artifacts=[{"path": "a" * 4097}] + ["artifact"] * 36)
                 record, _raw = self.record(self.result(harness, value))
                 self.assertEqual(record["outcome"], value)
                 self.assertEqual(record["provenance"], self.facts)
                 self.assertNotIn("outcomeTruncated", record)
-                for invalid in (outcome(decisions=["d"] * 33), outcome(remaining=["r" * 4097])):
+                for invalid in (outcome(decisions=["d"] * 33 + [None]), outcome(remaining=["r" * 65536])):
                     with self.assertRaises(BoardError) as caught:
                         run_execution.worker_delivery(self.result(harness, invalid))
                     self.assertEqual(caught.exception.code, "INVALID_ARGUMENT")

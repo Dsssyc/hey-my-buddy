@@ -117,7 +117,7 @@ class WorkerPermissionTests(NativeRunCase):
                 self.fixture_case(case)
                 result = self.execute(self.worker_request("write"))
                 self.assertEqual(result.end.status, "ok", result.end.message)
-                outcome, facts, _ = worker_delivery(result)
+                outcome, facts = worker_delivery(result)
                 summary = facts["deniedOperationSummary"]
                 self.assertLessEqual(len(summary.encode("utf-8")), 512)
                 self.assertTrue(summary.startswith(expected))

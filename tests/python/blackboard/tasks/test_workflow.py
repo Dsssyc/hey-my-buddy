@@ -257,15 +257,30 @@ class LifecycleTests(WorkflowTestCase):
             self.assertEqual(connection.execute('SELECT COUNT(*) FROM tasks').fetchone()[0], 0)
             self.assertEqual(connection.execute('SELECT COUNT(*) FROM workflow_runs').fetchone()[0], 0)
 
-    def test_outcome_truncation_is_stored_and_returned_with_the_turn(self):
+    def test_new_outcome_truncation_metadata_is_rejected(self):
+        board = self.board()
+        submitted = self.submit(board)
+        claim = self.claim(board)
+        result = self.finish_turn(board, claim, record=self.turn_record(claim, outcomeTruncated={}))
+        self.assertEqual(result["taskState"], "failed")
+        view = board.call("workflow_get", {"runId": submitted["runId"]})
+        self.assertEqual(view["state"], "failed")
+        self.assertEqual(view["currentTurn"]["state"], "failed")
+        receipt = board.call("task_result", {"runId": submitted["runId"]})["result"]
+        self.assertEqual(receipt["microTaskError"]["code"], "TURN_INVALID")
+        self.assertIn("outcomeTruncated", receipt["microTaskError"]["message"])
+
+    def test_stored_outcome_truncation_metadata_stays_readable(self):
         board = self.board()
         self.register(board)
         submitted = self.submit(board)
         claim = self.claim(board)
         truncated = {"remaining": {"droppedItems": 5, "shortenedItems": 1}}
-        record = self.turn_record(claim, outcomeTruncated=truncated)
-
-        self.finish_turn(board, claim, record=record)
+        self.finish_turn(board, claim)
+        # Model a turn already stored before S4; new receipts cannot publish this field.
+        with board.store.db.write() as connection:
+            connection.execute("UPDATE workflow_turns SET outcome_truncated_json=? WHERE turn_id=?",
+                               (json.dumps(truncated), claim["claim"]["turn"]["turnId"]))
 
         with board.store.db.read() as connection:
             stored = connection.execute(
@@ -1667,14 +1682,13 @@ class AcknowledgementBoundaryTests(WorkflowTestCase):
             "workflow_cancel", {"runId": submitted["runId"], 'note': "stop", **self.control(submitted)}
         )
         self.assertEqual(cancelled["state"], "cancelled")
-        truncated = {"decisions": {"droppedItems": 2, "shortenedItems": 0}}
-        late = self.finish_turn(board, claim, record=self.turn_record(claim, outcomeTruncated=truncated))
+        late = self.finish_turn(board, claim)
         self.assertEqual(late["workflow"]["state"], "cancelled")
         self.assertTrue(late["workflow"]["late"])
         parent = board.call("workflow_get", {"runId": submitted["runId"]})
         self.assertEqual(parent["state"], "cancelled")
         self.assertEqual(parent["currentTurn"]["state"], "returned")
-        self.assertEqual(parent["currentTurn"]["outcomeTruncated"], truncated)
+        self.assertIsNone(parent["currentTurn"]["outcomeTruncated"])
 
 
 class NativeRequestShapeTests(WorkflowTestCase):
@@ -1710,6 +1724,18 @@ class NativeRequestShapeTests(WorkflowTestCase):
         self.assertEqual(view["activeRequest"]["acceptance"], "the design is approved")
         self.assertEqual(view["activeRequest"]["expectedArtifacts"], ["a reviewed design"])
 
+    def test_request_projection_keeps_long_text_and_every_reference(self):
+        board = self.board()
+        submitted = self.submit(board)
+        outcome = self._native_request_outcome()
+        request = outcome["request"]
+        request["neededWork"] = "n" * 8001
+        request["expectedArtifacts"] = ["a" * 4097] + ["artifact"] * 36
+        self.finish_turn(board, self.claim(board), outcome=outcome)
+        view = board.call("workflow_get", {"runId": submitted["runId"], "includeAudit": True})
+        self.assertEqual(view["activeRequest"]["neededWork"], [request["neededWork"]])
+        self.assertEqual(view["activeRequest"]["expectedArtifacts"], request["expectedArtifacts"])
+
     def test_helper_attention_proxies_the_native_needed_work(self):
         board = self.board()
         self.register(board)
@@ -1731,15 +1757,22 @@ class NativeRequestShapeTests(WorkflowTestCase):
         )
         child = approved["children"][0]["taskId"]
         helper = self.claim(board, claim_request_id="c2", run_id=child)
+        outcome = self._native_request_outcome()
+        outcome["summary"] = "s" * 5000
+        outcome["remaining"] = ["r" * 4097] + ["remaining"] * 36
         self.finish_turn(
             board,
             helper,
             disposition="attention",
-            outcome=self._native_request_outcome(),
+            outcome=outcome,
         )
         parent = board.call("workflow_get", {"runId": submitted["runId"]})
         self.assertEqual(parent["activeRequest"]["kind"], "helper-attention")
         self.assertEqual(parent["activeRequest"]["neededWork"], ["decide the schema"])
+        with board.store.db.read() as connection:
+            frozen = board.store.workflow._helper_outcomes(connection, submitted["runId"])[0]
+        self.assertEqual(frozen["summary"], outcome["summary"])
+        self.assertEqual(frozen["remaining"], outcome["remaining"])
 
 
 class HelperDependencyTests(WorkflowTestCase):
@@ -1883,9 +1916,63 @@ class CompactReadBoundTests(WorkflowTestCase):
         audit = board.call("workflow_get", {"runId": submitted["runId"], "includeAudit": True})
         self.assertNotIn("spec", audit["audit"])
         self.assertEqual(audit["audit"]["microTask"]["task"], big_task)
-        self.assertIn(big_task[:8000], audit["audit"]["turns"][0]["input"]["context"]["task"])
-        self.assertTrue(audit["audit"]["turns"][0]["input"]["context"]["taskTruncated"])
+        self.assertEqual(audit["audit"]["turns"][0]["input"]["context"]["task"], big_task)
+        self.assertNotIn("taskTruncated", audit["audit"]["turns"][0]["input"]["context"])
         self.assertGreater(len(json.dumps(audit["audit"])), len(serialized))
+
+
+class CompleteTurnInputTests(WorkflowTestCase):
+    def test_turn_keeps_frozen_helpers_task_and_all_artifact_references(self):
+        board = self.board()
+        task = "task " * 70000
+        submitted = self.submit(board, task=task)
+        for index in range(4):
+            claim = self.claim(board, claim_request_id=f"turn-{index}", run_id=submitted["runId"])
+            self.finish_turn(board, claim)
+            view = board.call("workflow_get", {"runId": submitted["runId"]})
+            continuation = self.continue_run(board, view, command_id=f"continue-{index}")
+        helpers = [{"taskId": f"helper-{index}", "state": "completed", "summary": "s" * 5000,
+                    "remaining": ["r" * 4097] + ["remaining"] * 36} for index in range(12)]
+        # A continuation freezes accumulated helper outcomes before the next admission.
+        with board.store.db.write() as connection:
+            connection.execute("UPDATE workflow_continuations SET helper_outcomes_json=? WHERE continuation_id=?",
+                               (json.dumps(helpers), continuation["continuationId"]))
+            count = connection.execute("SELECT COUNT(*) FROM workflow_artifacts WHERE run_id=?",
+                                       (submitted["runId"],)).fetchone()[0]
+        self.assertGreater(count, 8)
+        claim = self.claim(board, claim_request_id="complete-context", run_id=submitted["runId"])
+        turn = claim["claim"]["turn"]
+        context = turn["input"]["context"]
+        self.assertEqual(context["task"], task)
+        self.assertEqual(context["helperOutcomes"], helpers)
+        # Admission pins this turn's input artifact after assembling its input.
+        self.assertEqual(len(context["artifacts"]), count)
+        self.assertGreater(len(workflow_module.canonical_json(turn["input"]).encode()), 256 * 1024)
+        self.assertEqual(len(context["nextActions"]), 2)
+        for field in ("taskTruncated", "helperOutcomeTotal", "artifactTotal", "artifactsTruncated"):
+            self.assertNotIn(field, context)
+
+    def test_host_continuation_uses_the_task_text_byte_budget(self):
+        board = self.board()
+        submitted = self.submit(board)
+        self.finish_turn(board, self.claim(board))
+        view = board.call("workflow_get", {"runId": submitted["runId"]})
+        maximum = workflow_module.schemas.MAX_TASK_BYTES
+        inputs = ["汉" * (maximum // 3) + "x" * (maximum % 3), {"text": "x" * (maximum - 11)}]
+        for index, value in enumerate(inputs):
+            with self.subTest(kind=type(value).__name__):
+                oversized = value + "x" if isinstance(value, str) else {"text": value["text"] + "x"}
+                with self.assertRaises(BoardError) as caught:
+                    self.continue_run(board, view, command_id=f"over-{index}", input=oversized)
+                self.assertEqual(caught.exception.code, "INVALID_ARGUMENT")
+                self.continue_run(board, view, command_id=f"full-{index}", input=value)
+                claim = self.claim(board, claim_request_id=f"full-{index}", run_id=submitted["runId"])
+                text = claim["claim"]["turn"]["input"]["context"]["continuation"]["input"]
+                expected = value if isinstance(value, str) else workflow_module.canonical_json(value)
+                self.assertEqual(text, expected)
+                self.assertEqual(len(text.encode()), maximum)
+                self.finish_turn(board, claim)
+                view = board.call("workflow_get", {"runId": submitted["runId"]})
 
 
 class CancellationCascadeTests(WorkflowTestCase):
