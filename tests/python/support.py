@@ -188,6 +188,9 @@ def _child_environment(directory: Path, overrides: dict | None = None) -> dict:
         BUDDY_RUNTIME_ROOT=str(directory / "runtime-root"),
         PYTHONPATH=str(PYTHON_ROOT) + (os.pathsep + environment["PYTHONPATH"] if environment.get("PYTHONPATH") else ""),
         BUDDY_DEV_SOURCE="1",
+        # A test child never shares the console backend's fixed default port; the
+        # operating system assigns a private one. Tests may override this explicitly.
+        BUDDY_CONSOLE_PORT="0",
     )
     environment.update(overrides or {})
     # Test-supplied paths may vary within the fixture, but must not redirect its
