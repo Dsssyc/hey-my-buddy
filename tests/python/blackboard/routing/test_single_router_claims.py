@@ -25,7 +25,7 @@ def stopped_answer(claim, *, state_dir, buddy_id=BUDDY_ID):
             'stopEvidence': {'shutdownConfirmed': True, 'native': {'shutdownConfirmed': True}},
             'inputVerification': {'unchanged': True, 'snapshotSha256': 'private-fixture-digest',
                                   'manifestSha256': (document.get('executionWorkspace') or {}).get('manifestSha256')},
-            'decision': {'buddyId': buddy_id, "note": 'Frozen legal candidate', 'evidence': []}}
+            'decision': {"domainNodeId": None, "taskType": "change", 'buddyId': buddy_id, "note": 'Frozen legal candidate', 'evidence': []}}
 
 
 class SingleRouterClaimTests(DecisionTestCase):

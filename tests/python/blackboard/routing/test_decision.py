@@ -124,7 +124,7 @@ class DecisionTestCase(BoardTestCase):
     @classmethod
     def valid_decision(cls, document: dict, buddy_id: str | None, *,
                        reason: str = "fixture selection", evidence: list[dict] | None = None) -> dict:
-        return {"buddyId": buddy_id, "note": reason, "evidence": list(evidence or [])}
+        return {"domainNodeId": None, "taskType": "change", "buddyId": buddy_id, "note": reason, "evidence": list(evidence or [])}
 
 
 class SelectionRequestTests(DecisionTestCase):
@@ -650,7 +650,7 @@ class DecisionFailureTests(DecisionTestCase):
         self.seed(board)
         decision = self.outcome(board, "json_answer")
         self.assertEqual(decision["status"], "completed")
-        self.assertEqual(set(decision["output"]["decision"]), {"buddyId", "note", "evidence"})
+        self.assertEqual(set(decision["output"]["decision"]), {"buddyId", "domainNodeId", "taskType", "note", "evidence"})
         self.assertEqual(decision["usage"], {"elapsedMs": 200, "toolCalls": 1, "bytesRead": None})
         self.assertEqual(decision["nativeIdentity"]["sessionId"], "mock-native")
 
@@ -954,7 +954,7 @@ class DecisionSurfaceTests(DecisionTestCase):
         self.assertEqual(compact["decisionModel"]["requested"]["model"], CATALOG_BUDDY["model"])
         # The ordered list and each dispatch's compact trial add explicit facts;
         # the summary still omits the frozen model packet and raw tool stream.
-        self.assertLess(len(json.dumps(compact)), 3600, "the default read includes frozen Router settings and bounded receipts but stays small")
+        self.assertLess(len(json.dumps(compact)), 3700, "the default read includes frozen Router settings and bounded receipts but stays small")
         self.assertTrue({"input", "output", "requested", "toolEvidence"}.isdisjoint(compact))
         audit = self.decision(board, request["decisionId"])
         self.assertEqual(audit["input"]["operation"], "select")
@@ -993,7 +993,7 @@ class DecisionWorkerProcessTests(DecisionTestCase):
         self.run_worker(board)
         decision = self.decision(board, request["decisionId"])
         self.assertEqual(decision["status"], "completed", decision.get("reason"))
-        self.assertEqual(set(decision["output"]["decision"]), {"buddyId", "note", "evidence"})
+        self.assertEqual(set(decision["output"]["decision"]), {"buddyId", "domainNodeId", "taskType", "note", "evidence"})
         self.assertTrue(decision["stopEvidence"]["shutdownConfirmed"])
         self.assertTrue(decision["inputVerification"]["unchanged"])
         harness, context, request_view = self.readonly_start.call_args.args

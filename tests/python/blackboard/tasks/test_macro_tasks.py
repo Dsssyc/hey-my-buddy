@@ -945,7 +945,7 @@ class RoutingSpanTests(WorkflowTestCase):
     def test_frozen_selection_and_top_level_facts_come_from_exact_decision_task(self):
         board, task_id = self.recorded_task()
         selected = {'harness': 'codex', 'provider': 'openai', 'model': 'historic-model', 'effort': 'high'}
-        output = {'status': 'ok', 'decision': {'buddyId': 'frozen-buddy', 'note': 'frozen note',
+        output = {'status': 'ok', 'decision': {"domainNodeId": None, "taskType": "change", 'buddyId': 'frozen-buddy', 'note': 'frozen note',
                   'evidence': [], 'policyCheck': {'ignored': True}},
                   'policyCheck': {'taskPreference': {'ruleIndex': 2, 'outcome': 'matched'}, 'userPreference': 'alternative'},
                   'budget': {'preset': 'quick', 'toolCalls': 8},
@@ -999,12 +999,12 @@ class RoutingSpanTests(WorkflowTestCase):
 
     def test_abstention_uses_recorded_decision_code_and_cancel_is_not(self):
         cases = [
-            ('ok', True, 'needs-host', {'status': 'ok', 'decision': {'buddyId': None, 'note': 'insufficient', 'evidence': []}}, True),
-            ('ok', False, 'needs-host', {'status': 'ok', 'decision': {'buddyId': None, 'note': 'insufficient', 'evidence': []}}, True),
-            ('cancelled', True, 'needs-host', {'status': 'ok', 'decision': {'buddyId': None, 'note': 'insufficient', 'evidence': []}}, False),
+            ('ok', True, 'needs-host', {'status': 'ok', 'decision': {"domainNodeId": None, "taskType": "change", 'buddyId': None, 'note': 'insufficient', 'evidence': []}}, True),
+            ('ok', False, 'needs-host', {'status': 'ok', 'decision': {"domainNodeId": None, "taskType": "change", 'buddyId': None, 'note': 'insufficient', 'evidence': []}}, True),
+            ('cancelled', True, 'needs-host', {'status': 'ok', 'decision': {"domainNodeId": None, "taskType": "change", 'buddyId': None, 'note': 'insufficient', 'evidence': []}}, False),
             ('ok', True, 'needs-host', {'status': 'ok', 'decision': {'buddyId': None, 'reason': 'legacy', 'evidenceIds': []}}, False),
-            ('ok', True, 'needs-host', {'status': 'error', 'decision': {'buddyId': None, 'note': 'failed', 'evidence': []}}, False),
-            ('ok', True, 'completed', {'status': 'ok', 'decision': {'buddyId': None, 'note': 'other', 'evidence': []}}, False),
+            ('ok', True, 'needs-host', {'status': 'error', 'decision': {"domainNodeId": None, "taskType": "change", 'buddyId': None, 'note': 'failed', 'evidence': []}}, False),
+            ('ok', True, 'completed', {'status': 'ok', 'decision': {"domainNodeId": None, "taskType": "change", 'buddyId': None, 'note': 'other', 'evidence': []}}, False),
         ]
         board, task_id = self.recorded_task()
         self.decision(board, task_id, buddy_id=None)
@@ -1027,7 +1027,7 @@ class RoutingSpanTests(WorkflowTestCase):
         board, task_id = self.recorded_task()
         self.decision(board, task_id, status='needs-host', buddy_id=None,
                       output={'status': 'ok', 'code': 'router-out-of-bounds',
-                              'decision': {'buddyId': 'old-candidate', 'note': 'chosen', 'evidence': []}})
+                              'decision': {"domainNodeId": None, "taskType": "change", 'buddyId': 'old-candidate', 'note': 'chosen', 'evidence': []}})
         span = self.spans(board, task_id)[0]
         self.assertEqual(span['resultStatus'], 'ok')
         self.assertEqual(span['disposition'], 'routing-failed')

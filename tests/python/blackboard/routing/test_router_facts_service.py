@@ -38,8 +38,8 @@ class RouterFactsServiceTests(BoardTestCase):
             packet = decision["input"]
             self.assertEqual(packet["expectedSeconds"], 1800)
             for buddy in packet["buddies"]:
-                self.assertEqual(buddy["statistics"]["samples"], 0)
-                self.assertEqual(buddy["statistics"]["usage"]["samples"], 0)
+                self.assertEqual(buddy["statistics"]["overall"]["samples"], 0)
+                self.assertEqual(buddy["statistics"]["overall"]["usage"]["samples"], 0)
                 self.assertEqual(buddy["infrastructureFailures"], {"count": 0, "lastAt": None})
                 self.assertIn("kind", buddy["billing"])
                 self.assertIn("wait", buddy["load"])

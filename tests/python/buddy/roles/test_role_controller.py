@@ -221,7 +221,7 @@ class RouterCallPointTests(unittest.TestCase):
         from types import SimpleNamespace
         from hey_my_buddy.buddy.roles import router as calls
 
-        document = {"buddy": {"harness": "dsh"}, "routingMode": "review",
+        document = {"domainNodes": [], "buddy": {"harness": "dsh"}, "routingMode": "review",
                     "budget": {"timeoutSeconds": 60, "toolCalls": 2},
                     "outputSchema": {"type": "object"}, "task": "choose", "buddies": []}
         context = self.context(decision_input=document)
@@ -244,7 +244,7 @@ class RouterCallPointTests(unittest.TestCase):
         from hey_my_buddy.buddy.harnesses.base import AdapterOutcome
         from hey_my_buddy.buddy.roles import router as calls
 
-        context = self.context(decision_input={"buddy": {}, "routingMode": "review",
+        context = self.context(decision_input={"domainNodes": [], "buddy": {}, "routingMode": "review",
                                                "budget": {"timeoutSeconds": 60}, "buddies": []})
         native = AdapterOutcome(status="failed", result={"code": "deadline", "usage": {"elapsedMs": 200}},
                                 shutdown_confirmed=False)
@@ -257,7 +257,7 @@ class RouterCallPointTests(unittest.TestCase):
         from hey_my_buddy.buddy.harnesses.base import AdapterOutcome
         from hey_my_buddy.buddy.roles import router as calls
 
-        context = self.context(decision_input={"buddy": {}, "routingMode": "review",
+        context = self.context(decision_input={"domainNodes": [], "buddy": {}, "routingMode": "review",
                                                "budget": {"timeoutSeconds": 60},
                                                "buddies": [{"buddyId": "chosen"}]})
         handle = SimpleNamespace(router_input=(None, self.root, "digest"))
@@ -326,7 +326,7 @@ class RouterCallPointTests(unittest.TestCase):
         return ExecutionContext(**values)
 
     def preparation(self, kind, native=None):
-        document = {"routingMode": "fast" if kind == "fast" else "review", "task": "choose", "buddies": [],
+        document = {"domainNodes": [], "routingMode": "fast" if kind == "fast" else "review", "task": "choose", "buddies": [],
                     "outputSchema": {"type": "object"}, "budget": {"timeoutSeconds": 60}}
         native = native if native is not None else self.Native()
         context = self.context()

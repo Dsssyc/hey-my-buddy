@@ -35,7 +35,7 @@ class RoutingHealthTests(BoardTestCase):
         if output is None:
             output = {"operation": "select", "status": "ok" if status == "completed" else "error"}
             if status == "completed":
-                output["decision"] = {"buddyId": "worker-fixture", "note": "fixture choice", "evidence": []}
+                output["decision"] = {"domainNodeId": None, "taskType": "change", "buddyId": "worker-fixture", "note": "fixture choice", "evidence": []}
         if code is not None:
             output = {**output, "code": code}
         receipt_status = "cancelled" if status == "cancelled" else "ok" if output.get("status") == "ok" else "failed"
@@ -143,7 +143,7 @@ class RoutingHealthTests(BoardTestCase):
             self.timeout()
             self.settle(code="router-out-of-bounds")
             self.settle(code="router-input-changed")
-            self.settle(output={"status": "ok", "operation": "select", "decision": {
+            self.settle(output={"status": "ok", "operation": "select", "decision": {"domainNodeId": None, "taskType": "change",
                 "buddyId": None, "note": "insufficient evidence", "evidence": []}})
         health = self.coordinator.health_summary()
         self.assertFalse(health["available"])
@@ -164,7 +164,7 @@ class RoutingHealthTests(BoardTestCase):
 
     def test_rejected_null_buddy_cannot_hide_a_failed_answer_in_the_overview(self):
         self.settle(output={"status": "ok", "operation": "select", "code": "router-tools-forbidden",
-                            "decision": {"buddyId": None, "note": "cannot choose", "evidence": []}})
+                            "decision": {"domainNodeId": None, "taskType": "change", "buddyId": None, "note": "cannot choose", "evidence": []}})
         health = self.coordinator.health_summary()
         self.assertEqual(health["failureCount"], 1)
         self.assertEqual(health["abstentionCount"], 0)

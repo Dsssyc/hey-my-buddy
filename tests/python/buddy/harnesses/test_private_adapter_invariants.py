@@ -314,7 +314,7 @@ class PrivateAdapterInvariants(unittest.TestCase):
                     {"adapter": "decision", "cwd": str(fixture.cwd), "routerBudgetSeconds": 60},
                     Path(env["HMB_STATE_DIR"]) / "attempts/task/attempt", {}, env,
                     session_record_path=str(fixture.root / "session-attempt.jsonl"),
-                    decision_input={"buddy": {"harness": name, **spec},
+                    decision_input={"domainNodes": [], "buddy": {"harness": name, **spec},
                         "buddies": [{"buddyId": "legal"}], "routingMode": "fast",
                         "task": "Select", "outputSchema": router.answer_schema(["legal"]),
                         "budget": {"timeoutSeconds": 60}})
@@ -339,7 +339,7 @@ class PrivateAdapterInvariants(unittest.TestCase):
             with self.subTest(harness=harness):
                 fixture = self.fixture(kind)
                 if harness == "dsh":
-                    fixture.select('{"buddyId":"legal","note":"fixture","evidence":[]}')
+                    fixture.select('{"buddyId":"legal","note":"fixture","evidence":[],"domainNodeId":null,"taskType":"change"}')
                     env = fixture.environment
                     buddy = {"harness": harness, **dsh_tests.SPEC}
                 elif harness == "zcode":
@@ -364,7 +364,7 @@ class PrivateAdapterInvariants(unittest.TestCase):
                 claim = {"task": {"taskId": task_id, "spec": {
                     "adapter": "decision", "cwd": str(fixture.cwd), "routerBudgetSeconds": 5}},
                     "attempt": {"taskId": task_id, "attemptId": attempt_id, "generation": 1},
-                    "decisionInput": {"buddy": buddy, "buddies": [{"buddyId": "legal"}],
+                    "decisionInput": {"domainNodes": [], "buddy": buddy, "buddies": [{"buddyId": "legal"}],
                         "routingMode": "fast", "task": "Select", "requestId": task_id,
                         "outputSchema": router.answer_schema(["legal"]),
                         "budget": {"timeoutSeconds": 5}}}

@@ -63,7 +63,7 @@ def _answer(document, options, mode):
         evidence = [{"kind": "file", "ref": "input.txt"}] if mode == "abstain_with_evidence" else []
     if mode == "out_of_candidate":
         chosen = "dsh:not-a-candidate:model:off"
-    answer = {"buddyId": chosen, "note": f"mock select chose {chosen}", "evidence": evidence}
+    answer = {"domainNodeId": None, "taskType": "change", "buddyId": chosen, "note": f"mock select chose {chosen}", "evidence": evidence}
     if mode == "answer_error":
         return "{not json", None, "invalid"
     if mode == "answer_extra":
@@ -91,7 +91,7 @@ def start(harness, context, request, fixture, options):
 
     assert context.turn is None and context.agent_credential is None
     assert context.cwd == request.cwd
-    assert set(request.output_schema["properties"]) == {"buddyId", "note", "evidence"}
+    assert set(request.output_schema["properties"]) == {"buddyId", "domainNodeId", "taskType", "note", "evidence"}
     assert request.budget == context.decision_input["budget"]
     identity = RunIdentity(task_id=context.task_id, attempt_id=context.attempt_id,
                            generation=context.generation, invocation_id=uuid.uuid4().hex)

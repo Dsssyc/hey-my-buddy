@@ -61,7 +61,7 @@ class FailoverTests(RouterDispatchTestCase):
                 "stopEvidence": {"shutdownConfirmed": True, "native": {"shutdownConfirmed": True}},
                 "inputVerification": {"unchanged": True, "snapshotSha256": "private-fixture-copy",
                                       "manifestSha256": (doc.get("executionWorkspace") or {}).get("manifestSha256")},
-                "decision": {"buddyId": buddy_id, "note": "The frozen legal choice", "evidence": []}}
+                "decision": {"domainNodeId": None, "taskType": "change", "buddyId": buddy_id, "note": "The frozen legal choice", "evidence": []}}
 
     def failure(self, claim, code="timeout"):
         return {**self.answer(claim), "status": "error", "code": code, "decision": None}

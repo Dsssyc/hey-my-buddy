@@ -24,7 +24,7 @@ from hey_my_buddy.buddy.roles.structured_call import structured_prompt
 from hey_my_buddy.protocol.tool_evidence import judge_tool_evidence
 
 
-ANSWER = '{"buddyId":"legal","note":"fixture","evidence":[]}'
+ANSWER = '{"buddyId":"legal","note":"fixture","evidence":[],"domainNodeId":null,"taskType":"change"}'
 SCHEMA = router.answer_schema(["legal"], "review")
 
 
@@ -49,7 +49,7 @@ class _ReviewCases:
             session_record_path=str(self.base / ("session-" + uuid.uuid4().hex + ".jsonl")))
 
     def document(self) -> dict:
-        return {"routingMode": "review", "task": "Choose the legal buddy",
+        return {"domainNodes": [], "routingMode": "review", "task": "Choose the legal buddy",
                 "buddy": {"harness": self.harness},
                 "buddies": [{"buddyId": "legal"}], "outputSchema": SCHEMA,
                 "budget": {"timeoutSeconds": 10, "toolCalls": 0}}
@@ -83,7 +83,7 @@ class _ReviewCases:
         self.assertEqual(request.input_text, structured_prompt("Choose the legal buddy", SCHEMA))
         self.assertEqual(self.native_prompts(), [request.input_text])
         self.assertEqual(json.loads(payload["rawAnswer"]),
-                         {"buddyId": "legal", "note": "fixture", "evidence": []})
+                         {"domainNodeId": None, "taskType": "change", "buddyId": "legal", "note": "fixture", "evidence": []})
         self.assertEqual(payload["usage"]["toolCalls"], 0)
         self.assertLessEqual(payload["usage"]["toolCalls"], control["readOnlyRequest"]["budget"]["toolCalls"])
         self.assertIsNone(judge_tool_evidence(payload["toolEvidence"], "read",
@@ -125,7 +125,7 @@ class _ReviewCases:
             outcome = adapter.collect(handle, context)
         self.assertEqual(outcome.status, "ok", outcome.result)
         self.assertEqual(outcome.result["decision"],
-                         {"buddyId": "legal", "note": "fixture", "evidence": []})
+                         {"domainNodeId": None, "taskType": "change", "buddyId": "legal", "note": "fixture", "evidence": []})
         self.assertTrue(outcome.result["inputVerification"]["unchanged"])
         self.assertLessEqual(outcome.result["usage"]["toolCalls"], document["budget"]["toolCalls"])
         self.assertIsNone(judge_tool_evidence(outcome.result["toolEvidence"], "read",

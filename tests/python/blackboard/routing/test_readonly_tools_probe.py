@@ -35,7 +35,7 @@ class ReadonlyToolsProbeTests(unittest.TestCase):
         result = {**tool_receipt(packet['binding'], 1, state_dir=state_dir), 'resolved': packet['buddy'],
                   'usage': {'toolCalls': 1, 'bytesRead': None}, 'correctionCount': 0,
                   'processState': {'shutdownConfirmed': True},
-                  'rawAnswer': {'buddyId': packet['expected']['buddyId'],
+                  'rawAnswer': {"domainNodeId": None, "taskType": "change", 'buddyId': packet['expected']['buddyId'],
                                 'note': packet['expected']['marker'], 'evidence': []}}
         return AdapterOutcome(status='ok', result=result, shutdown_confirmed=True)
 

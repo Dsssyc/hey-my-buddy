@@ -346,7 +346,7 @@ class PrivateExecutionRecoveryTests(BoardTestCase):
             f"        root=Path({str(self.directory)!r})\n"
             "        (root/'router.started').touch()\n"
             "        while not (root/'router.release').exists(): time.sleep(.05)\n"
-            f"        self.final_answers=[json.dumps({{'buddyId':{candidate!r},'note':'offline fixture choice','evidence':[]}})]\n"
+            f"        self.final_answers=[json.dumps({{'domainNodeId':None,'taskType':'change','buddyId':{candidate!r},'note':'offline fixture choice','evidence':[]}})]\n"
             "        return module.fake_agent.FakeAgent.run_final_prompt(self,message)\n"
             "module.WorkflowAgent=GatedAgent\n"
             f"sys.argv[1:1] = ['--fixture-root', {str(self.directory)!r}]\n"
@@ -601,7 +601,7 @@ class ReconnectedRouterContractTests(RouterDispatchTestCase):
                   "stopEvidence": {"shutdownConfirmed": True, "native": {"shutdownConfirmed": True}},
                   "inputVerification": {"unchanged": True, "snapshotSha256": "private-fixture-copy",
                                         "manifestSha256": (claim["decisionInput"].get("executionWorkspace") or {}).get("manifestSha256")},
-                  "decision": {"buddyId": "dsh:fixture:bravo:max", "note": "The frozen legal choice",
+                  "decision": {"domainNodeId": None, "taskType": "change", "buddyId": "dsh:fixture:bravo:max", "note": "The frozen legal choice",
                                "evidence": []}}
         settled = self.board_.call("execution_result", {**actor, "status": "ok",
                                                          "shutdownConfirmed": True, "result": output})

@@ -19,6 +19,7 @@ import uuid
 from typing import Any
 
 from ...protocol import schemas
+from ...protocol.task_types import TASK_TYPES
 from ..evaluation import user_policy
 from . import selection_policy, router, router_sequence, router_failover, evidence
 from ...protocol import tool_evidence
@@ -209,11 +210,14 @@ class DecisionCoordinator:
             "buddies": [{**self._buddy_input(row), **candidate_evidence[row["buddy_id"]]}
                         for row in buddies],
             "preferences": preferences,
+            "domainNodes": [{"nodeId": row["node_id"], "name": row["name"]} for row in connection.execute(
+                "SELECT node_id,name FROM domain_nodes WHERE merged_into_id IS NULL ORDER BY node_id")],
+            "taskTypes": [{"id": key, "definition": value} for key, value in TASK_TYPES.items()],
             # User notes are kept per model service; the model service key is on every buddy.
             "annotations": user_policy.model_service_notes(connection, buddy_ids),
         }
 
-    def _select_input(self, connection: sqlite3.Connection, *, request_id: str, task_text: str, candidates: list[sqlite3.Row], now: str, expected_seconds: int, hard_constraints: dict | None = None) -> dict:
+    def _select_input(self, connection: sqlite3.Connection, *, request_id: str, task_text: str, candidates: list[sqlite3.Row], now: str, expected_seconds: int, project: dict | None, hard_constraints: dict | None = None) -> dict:
         table = self._table_input(
             connection, buddies=candidates, include_preferences=True, now=now
         )
@@ -229,7 +233,7 @@ class DecisionCoordinator:
             hard_constraints=hard_constraints or {},
         )
         return {"operation": "select", "requestId": request_id, "task": task_text,
-                "expectedSeconds": expected_seconds, **table}
+                "expectedSeconds": expected_seconds, "project": project, **table}
 
     # -- request operations --------------------------------------------------
     def request_select(self, params: dict) -> dict:
@@ -314,7 +318,7 @@ class DecisionCoordinator:
                 base_input = self._select_input(
                     connection, request_id=request_id,
                     task_text=task_text, candidates=candidates,
-                    now=now, expected_seconds=expected_seconds,
+                    now=now, expected_seconds=expected_seconds, project=request.get("project"),
                     hard_constraints=request.get("constraints") or {})
                 base_input.update(facts)
                 base_input["routingBasis"] = request["routingBasis"]
@@ -325,7 +329,8 @@ class DecisionCoordinator:
                     base_input["executionWorkspace"] = request.get("executionWorkspace")
                 if facts["routingMode"] is not None:
                     base_input["outputSchema"] = router.answer_schema(
-                        [item["buddyId"] for item in base_input["buddies"]], facts["routingMode"])
+                        [item["buddyId"] for item in base_input["buddies"]], facts["routingMode"],
+                        domain_node_ids=[node["nodeId"] for node in base_input["domainNodes"]])
                 snapshot = {"facts": facts, "baseInput": base_input,
                             "inspections": [dict(entry) for entry in resolution.inspections]}
                 if facts["routingMode"] is None or resolution.buddy is None:
@@ -409,7 +414,10 @@ class DecisionCoordinator:
         required_capabilities = list(spec.get("requiredCapabilities", []))
         if f"permission:{access}" not in required_capabilities:
             required_capabilities.append(f"permission:{access}")
+        from ..tasks.micro_task import resolve
+        task = connection.execute("SELECT * FROM tasks WHERE task_id=?", (run_id,)).fetchone()
         request = {
+            "project": resolve(connection, task)["project"],
             "kind": "select", "task": task_text,
             "expectedSeconds": spec["expectedSeconds"],
             "executionWorkspace": manifest,
@@ -863,6 +871,10 @@ class DecisionCoordinator:
                              reason={"code": checked["code"], "params": checked["params"]}, output={**(output or {}), "routerProblem": advance.problem["code"],
                                                           "code": checked["code"]})
         elif outcome in ("answered", "abstained"):
+            judgment = checked["output"]["decision"]
+            connection.execute(
+                "INSERT INTO routing_judgments(decision_id,domain_node_id,task_type) VALUES(?,?,?)",
+                (row["decision_id"], judgment["domainNodeId"], judgment["taskType"]))
             record("answered")
             self._finish(connection, row, status="completed" if outcome == "answered" else "needs-host", now=now,
                          reason=make_reason("router-abstained") if outcome == "abstained" else None,
@@ -932,7 +944,7 @@ class DecisionCoordinator:
             connection, request_id=row["request_id"], task_text=request["task"],
             candidates=candidates, now=now,
             expected_seconds=request.get("expectedSeconds", schemas.DEFAULT_EXPECTED_SECONDS),
-            hard_constraints=request.get("constraints") or {})
+            project=request.get("project"), hard_constraints=request.get("constraints") or {})
         document.update({**resolution.facts,
                          "routingBasis": request["routingBasis"], "constraints": request.get("constraints", {}),
                          "requiredCapabilities": request.get("requiredCapabilities", [])})
@@ -940,7 +952,8 @@ class DecisionCoordinator:
             document["executionWorkspace"] = request.get("executionWorkspace")
         if resolution.facts["routingMode"] is not None:
             document["outputSchema"] = router.answer_schema(
-                [item["buddyId"] for item in document["buddies"]], resolution.facts["routingMode"])
+                [item["buddyId"] for item in document["buddies"]], resolution.facts["routingMode"],
+                domain_node_ids=[node["nodeId"] for node in document["domainNodes"]])
         next_round = connection.execute("SELECT COALESCE(MAX(round),0)+1 FROM router_requests WHERE decision_id=?",
                                         (row["decision_id"],)).fetchone()[0]
         router_sequence.freeze_request(connection, row["decision_id"],
@@ -1045,7 +1058,8 @@ class DecisionCoordinator:
             return refuse(problem["code"])
         buddies = document.get("buddies") or []
         try:
-            decision = router.validate_answer(output.get("decision"), [item["buddyId"] for item in buddies], document.get("routingMode", "review"))
+            decision = router.validate_answer(output.get("decision"), [item["buddyId"] for item in buddies], document["routingMode"],
+                                              domain_node_ids=[node["nodeId"] for node in document["domainNodes"]])
         except BoardError as failure:
             return refuse(failure.code, **failure.details)
         note, buddy_id = decision["note"], decision["buddyId"]

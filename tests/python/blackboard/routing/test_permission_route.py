@@ -14,7 +14,8 @@ class WorkflowPermissionRouteTests(unittest.TestCase):
         connection.execute.return_value.fetchone.return_value = None
         coordinator = DecisionCoordinator.__new__(DecisionCoordinator)
         spec = {"task": "work", "expectedSeconds": 1800, "requiredCapabilities": ["input:text", "permission:full"]}
-        with patch.object(DecisionCoordinator, "_create", return_value={}) as create:
+        with patch.object(DecisionCoordinator, "_create", return_value={}) as create, \
+                patch("hey_my_buddy.blackboard.tasks.micro_task.resolve", return_value={"project": None}):
             coordinator.route_workflow(connection, run_id="run-1", sequence=1, spec=spec,
                                        manifest={"access": "read"})
         request = create.call_args.args[1]
@@ -25,7 +26,8 @@ class WorkflowPermissionRouteTests(unittest.TestCase):
         connection = Mock()
         connection.execute.return_value.fetchone.return_value = None
         coordinator = DecisionCoordinator.__new__(DecisionCoordinator)
-        with patch.object(DecisionCoordinator, "_create", return_value={}) as create:
+        with patch.object(DecisionCoordinator, "_create", return_value={}) as create, \
+                patch("hey_my_buddy.blackboard.tasks.micro_task.resolve", return_value={"project": None}):
             coordinator.route_workflow(connection, run_id="run-1", sequence=1,
                                        spec={"task": "work", "expectedSeconds": 1800}, manifest={"access": "full"})
         self.assertEqual(create.call_args.args[1]["requiredCapabilities"], ["permission:full"])
