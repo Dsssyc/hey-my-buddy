@@ -35,11 +35,13 @@ def cli_command(environment: dict | None = None) -> list[str]:
 
 
 def provider_paths(environment: dict, command: list[str]) -> tuple[Path, Path]:
-    """Billing locations resolved from the native launch environment and CLI."""
+    """Required built-in location and optional personal billing location."""
     env = environment
     cli = Path(command[-1])
     candidates = [cli.parent.parent / "config/provider/zcode-builtin.json", cli.parent / "provider/zcode-builtin.json"]
-    builtin = next((p for p in candidates if p.is_file()), candidates[0])
+    builtin = next((p for p in candidates if p.is_file()), None)
+    if builtin is None:
+        raise NativeError("adapter-unavailable", "ZCode's installed built-in provider configuration file is missing")
     personal = Path(env.get("ZCODE_DATA_BASE_DIR") or Path.home()) / ".zcode/v2/provider_config.json"
     return builtin, personal
 
@@ -71,3 +73,19 @@ def provider_access_types(builtin: Path, personal: Path) -> dict[str, str]:
         return result
     except (OSError, ValueError, KeyError, TypeError, AttributeError):
         return {}
+
+
+def load_runtime_preferences(environment: dict) -> dict:
+    """Read only the two optional app settings the CLI asks its host to supply."""
+    path = Path(environment.get("ZCODE_DATA_BASE_DIR") or Path.home()) / ".zcode/v2/setting.json"
+    try:
+        document = json.loads(path.read_text())
+    except (OSError, ValueError):
+        document = None
+    settings = document if isinstance(document, dict) else {}
+    result = {}
+    for key, default in (("memoryEnabled", False), ("nativeSearchEnhancementsEnabled", True)):
+        value = settings.get(key)
+        result[key] = {"value": value if type(value) is bool else default,
+                       "source": "user-settings" if type(value) is bool else "fallback"}
+    return result

@@ -626,7 +626,10 @@ def combined_usage(rounds: list[ZcodeAttemptUsage]) -> dict | None:
 class NativeConnection:
     """Responses and reverse requests are pumped together; no request holds a reader."""
 
-    def __init__(self, process: subprocess.Popen, deadline: float, cancelled: threading.Event, *, no_tools: bool = False):
+    def __init__(self, process: subprocess.Popen, deadline: float, cancelled: threading.Event, *,
+                 runtime_preferences: dict, no_tools: bool = False):
+        self.runtime_preferences = runtime_preferences
+        self.runtime_preferences_facts: dict | None = None
         self.process, self.deadline, self.cancelled = process, deadline, cancelled
         self.no_tools = no_tools
         self.messages: queue.Queue = queue.Queue(maxsize=128)
@@ -704,10 +707,7 @@ class NativeConnection:
         self.ordinal += 1
         if "id" in message and "method" in message:
             if message["method"] == "session/requestRuntimePreferences":
-                self.send({"id": message["id"], "result": {
-                    "nativeSearchEnhancementsEnabled": not self.no_tools, "memoryEnabled": False,
-                    "askUserQuestionAutoResolutionEnabled": False, "modelContextBudgetStrategy": "preflight-v1",
-                }})
+                self.answer_runtime_preferences(message)
                 return
             if self.no_tools:
                 # Every native interaction in a no-tool call — provider headers
@@ -746,6 +746,23 @@ class NativeConnection:
             self.responses[message["id"]] = message
         else:
             self.observe(message, self.ordinal)
+
+    def answer_runtime_preferences(self, message: dict) -> None:
+        """Answer from the startup reading, then retain only the values sent."""
+        memory = self.runtime_preferences["memoryEnabled"]
+        search = self.runtime_preferences["nativeSearchEnhancementsEnabled"]
+        result = {"memoryEnabled": memory["value"],
+                  "nativeSearchEnhancementsEnabled": search["value"] and not self.no_tools,
+                  "askUserQuestionAutoResolutionEnabled": False,
+                  "modelContextBudgetStrategy": "preflight-v1"}
+        self.send({"id": message["id"], "result": result})
+        self.runtime_preferences_facts = {
+            "memoryEnabled": dict(memory),
+            "nativeSearchEnhancementsEnabled": {
+                "value": result["nativeSearchEnhancementsEnabled"], "source": search["source"],
+                "configuredValue": search["value"], "restrictedByToolScope": self.no_tools},
+            "askUserQuestionAutoResolutionEnabled": {"value": False, "source": "governed-role"},
+            "modelContextBudgetStrategy": {"value": "preflight-v1", "source": "harness-controller"}}
 
     def attention_request(self, message: dict, *, outcome: str = "refused-with-jsonrpc-error") -> None:
         """Record one unsupported interactive request; never raises on its own."""

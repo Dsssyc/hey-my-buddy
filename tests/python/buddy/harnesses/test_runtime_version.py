@@ -86,6 +86,10 @@ class RuntimeVersionTests(unittest.TestCase):
         fixture = {"claude": claude_cases.FIXTURE, "codex": codex_cases.FAST_FIXTURE,
                    "zcode": getattr(case, "fake", None)}[name]
         script = case.base / "version-cli.py"
+        if name == "zcode":
+            builtin = script.parent / "provider/zcode-builtin.json"
+            builtin.parent.mkdir(exist_ok=True)
+            builtin.write_text('{"config":{"providerConfigRules":{"templateRules":[],"providerRules":[]}}}')
         if action == "nonzero":
             body = "sys.exit(7)"
         elif action == "timeout":

@@ -31,6 +31,10 @@ MOUNTED_TOOLS = ("buddy_checkpoint", "buddy_answer_inquiry", "buddy_finish_turn"
 from hey_my_buddy.buddy.roles.turn_io import validate_outcome
 
 
+FALLBACK_PREFERENCES = {"memoryEnabled": {"value": False, "source": "fallback"},
+                        "nativeSearchEnhancementsEnabled": {"value": True, "source": "fallback"}}
+
+
 class ReceiptTests(unittest.TestCase):
     def setUp(self):
         self.bridge = {"identity": {"taskId": "goal", "attemptId": "attempt", "generation": 1, "turnId": "logical"},
@@ -673,7 +677,7 @@ class UnlimitedDeadlineTests(unittest.TestCase):
             process.stdout.close()
 
         self.addCleanup(stop)
-        connection = NativeConnection(process, math.inf, threading.Event())
+        connection = NativeConnection(process, math.inf, threading.Event(), runtime_preferences=FALLBACK_PREFERENCES)
         started = time.monotonic()
         connection.pump()  # no message arrives: the bounded per-pump wait must still return
         self.assertLess(time.monotonic() - started, 5.0)

@@ -139,6 +139,10 @@ def fixture_live_channel(case, identity, *, credentials, journal_path, activity_
     return channel
 
 
+FALLBACK_PREFERENCES = {"memoryEnabled": {"value": False, "source": "fallback"},
+                        "nativeSearchEnhancementsEnabled": {"value": True, "source": "fallback"}}
+
+
 class NativeRunCase(FakeAppServerTests):
     """The shared fake-app-server harness for direct fast-seam calls."""
 
@@ -854,7 +858,7 @@ class NoToolReverseRequestTests(unittest.TestCase):
 
         self.addCleanup(reap)
         recorded = []
-        connection = NativeConnection(process, time.monotonic() + 10, threading.Event(), no_tools=True)
+        connection = NativeConnection(process, time.monotonic() + 10, threading.Event(), no_tools=True, runtime_preferences=FALLBACK_PREFERENCES)
         connection.attention = recorded.append
         connection.messages.put({"id": 7, "method": "interaction/requestPermission",
                                  "params": {"sessionId": "s", "kind": "shell"}})
@@ -874,7 +878,7 @@ class NoToolReverseRequestTests(unittest.TestCase):
             process.stdin.close()
             process.stdout.close()
         self.addCleanup(reap)
-        connection = native_run.NativeConnection(process, time.monotonic() + 10, threading.Event())
+        connection = native_run.NativeConnection(process, time.monotonic() + 10, threading.Event(), runtime_preferences=FALLBACK_PREFERENCES)
         for no_tools in (False, True):
             with self.subTest(no_tools=no_tools):
                 recorded = []

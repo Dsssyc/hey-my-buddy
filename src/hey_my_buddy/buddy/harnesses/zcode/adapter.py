@@ -1,8 +1,10 @@
 """ZCode capability description; execution belongs to the registered run."""
 from __future__ import annotations
 
+import os
+
 from . import native_run
-from .config import cli_command
+from .config import cli_command, provider_paths
 from .protocol import NativeError
 
 
@@ -28,7 +30,8 @@ class ZcodeAdapter:
         if record is not None:
             return record.get('status') == 'ready', record.get('reasonCode')
         try:
-            cli_command()
+            command = cli_command()
+            provider_paths(os.environ, command)
             return True, None
         except NativeError as error:
             return False, str(error)

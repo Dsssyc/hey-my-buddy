@@ -59,9 +59,6 @@ for line in sys.stdin:
     result = {}
     if method == 'runtime/capabilities':
         send({'method':'startup/storageState','params':{'phase':'ready','elapsedMs':10}})
-        send({'id':'runtime-preferences','method':'session/requestRuntimePreferences','params':{}})
-        reply = json.loads(sys.stdin.readline())
-        assert reply['result']['nativeSearchEnhancementsEnabled'] is (case in ('write-final', 'write-post-close'))
     if method == 'session/create':
         if case == 'discovery' or case == 'native-config' and 'mcpServers' not in p:
             assert p['toolAllowlist'] == [] and p['titleGenerationEnabled'] is False
@@ -74,6 +71,13 @@ for line in sys.stdin:
         result = {'session':{'sessionId':f's-{session}','sessionKind':'interactive','workspace':workspace},
           'settings':{'model':{'available':[{'ref':{'providerId':provider,'modelId':'fixture-model'},
           'reasoning':{'levels':[{'value':'low'}]}}]},'thoughtLevel':{'current':'low'}}}
+        send({'id':'runtime-preferences','method':'session/requestRuntimePreferences',
+              'params':{'sessionId':f's-{session}','scope':'runtime-materialization'}})
+        reply = json.loads(sys.stdin.readline())
+        Path(__file__).with_name('runtime-preferences-reply.json').write_text(json.dumps(reply['result']))
+        if case == 'preference-correct' and session == 1:
+            settings = Path(os.environ['ZCODE_DATA_BASE_DIR']) / '.zcode/v2/setting.json'
+            settings.write_text(json.dumps({'memoryEnabled':False, 'nativeSearchEnhancementsEnabled':False}))
     elif method in ('session/setModel','session/setThoughtLevel'):
         result = {'session':{'sessionId':f's-{session}','workspace':workspace},
           'settings':{'model':{'current':{'providerId':provider,'modelId':'fixture-model',
@@ -172,7 +176,7 @@ for line in sys.stdin:
         elif case == 'truncated':
             sys.exit(0)
         else:
-            answer = ('bad JSON' if case in ('correct', 'usage-correct', 'usage-correct-quota') and session == 1 else
+            answer = ('bad JSON' if case in ('correct', 'usage-correct', 'usage-correct-quota', 'preference-correct') and session == 1 else
                       '{"choice":"b"}' if case == 'enum' else '{"choice":"a"}')
             if case == 'native-stream':
                 send({'method':'computer-use/operation-event','params':{'sessionId':f's-{session}',
@@ -500,6 +504,9 @@ class FakeAppServerTests(unittest.TestCase):
         self.fake = self.root / "fake-zcode"
         self.fake.write_text(textwrap.dedent(FAKE))
         self.fake.chmod(0o755)
+        builtin = self.root / "provider/zcode-builtin.json"
+        builtin.parent.mkdir()
+        builtin.write_text('{"config":{"providerConfigRules":{"templateRules":[],"providerRules":[]}}}')
         native_home = self.root / "native-user-home"
         native_home.mkdir(mode=0o700)
         self.environment = {k: v for k, v in os.environ.items() if not k.startswith(("BUDDY_", "ZCODE_", "ZAI_", "ZHIPU_", "GLM_"))

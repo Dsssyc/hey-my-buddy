@@ -1,12 +1,12 @@
 # ADR-030 批次 3c：ZCode 供应方配置与回合事实
 
-本说明对应输入提交 `71f0a3f6`，仅是实现方的说明与验证记录，等待 Host 验收；不是验收结论。版本与 schema 未变，没有改 Claude Code、Codex、DSH、角色代码、共享发现的环境白名单或共享计费规则，没有启动服务、Worker 或真实 ZCode，没有读用户自己的配置或凭据，没有模型调用。
+本说明对应原输入提交 `71f0a3f6` 与第一回合封存 `e51f0e12` 后 Host 的续接决定，仅是实现方的说明与验证记录，等待 Host 验收；不是验收结论。版本与 schema 未变，没有改 Claude Code、Codex、DSH、角色代码、共享发现的环境白名单或共享计费规则，没有启动服务、Worker 或真实 ZCode，没有读用户自己的配置或凭据，没有模型调用。
 
 ## 删除与保留
 
-`zcode/config.py` 的 `snapshot_provider_files` 与 `SUPPORTED_ACCESS` 删除。启动不再生成 `builtin-provider.json`、`personal-provider.json`，不再设置 `ZCODE_BUILTIN_PROVIDER_CONFIG_FILE`、`ZCODE_PERSONAL_PROVIDER_CONFIG_FILE`，也不再单独剔除 `ZCODE_BUILTIN_PROVIDER_BUNDLED_CONFIG_FILE`。子进程仍使用 ADR-017/030 的共用环境白名单：没有新增供应方环境变量的透传。ZCode 加载时可能规范化并写回用户的两个供应方配置文件；现在这是 ZCode 自己对用户配置的行为，照原生做法运行。
+`zcode/config.py` 的 `snapshot_provider_files` 与 `SUPPORTED_ACCESS` 删除。启动不再生成 `builtin-provider.json`、`personal-provider.json`，不设置 `ZCODE_PERSONAL_PROVIDER_CONFIG_FILE`，也不再单独剔除 `ZCODE_BUILTIN_PROVIDER_BUNDLED_CONFIG_FILE`。按 Host 第二回合的更正，设置 `ZCODE_BUILTIN_PROVIDER_CONFIG_FILE` 指向安装中原有的内置文件：ZCode 0.16.9 脱离桌面应用时自己算不出该位置，这是把 harness 启动起来所需的定位，不是替用户挑配置，绝不做副本。子进程仍使用 ADR-017/030 的共用环境白名单，没有新增 shell 供应方变量透传。ZCode 加载时可能规范化并写回自己的供应方配置文件；现在这是 ZCode 对用户配置的行为，照原生做法运行。
 
-`ZcodeAdapter.available` 和 `check_preparation` 只检查选定的原生命令，不再读取供应方文件或按登录方式拒绝。命令不存在、缺少解释器或真实启动失败仍然失败。`configure_session` 删除访问类型参数与限制，仍核对所请求的供应方、模型、推理强度在原生清单里，调用原生 setter，并核对实际读回的选择。原生因文件读不到、登录失败或配置不可用而拒绝 RPC 的，继续作为真实原生失败上报；可选计费元数据读不到不会阻止原生启动。
+`ZcodeAdapter.available` 的本地检查和 `check_preparation` 检查选定的原生命令及必需内置文件的位置，不读取供应方文件内容或按登录方式拒绝。安装中的内置文件找不到是 `adapter-unavailable`，准备阶段即报错，不等子进程退出；计费文件的内容读不出则写未知，两者分开。命令不存在、缺少解释器或真实启动失败仍然失败。`configure_session` 删除访问类型参数与限制，仍核对所请求的供应方、模型、推理强度在原生清单里，调用原生 setter，并核对实际读回的选择。原生因文件读不到、登录失败或配置不可用而拒绝 RPC 的，继续作为真实原生失败上报；可选计费元数据读不到不会阻止原生启动。
 
 模型目录不再按访问类型筛选，不再声称 OAuth 供应方不可用。原生报告的非密钥供应方照常进入目录，能经同一配置路径选择；是否能运行由真实回合决定。`interaction/requestProviderRuntimeHeaders` 的供应方专属硬错误删除，按现有的未实现宿主请求处理：记录交互事实、发送 JSON-RPC 不支持答复，继续处理原生事件。没有伪造认证头、登录或认证宿主；无工具角色对交互事实的停止规则未改，属于后续批次。
 
@@ -20,15 +20,16 @@
 | `ZCODE_SESSION_DB_PATH` | 保留，指向同一根下的 `sessions.sqlite` | 会话续接；绑定与精确身份校验未改 |
 | `ZCODE_LOG_DIR` | 保留，指向本次 invocation 的 `native-logs` | 原生证据的位置 |
 | `ZCODE_LOG_CONSOLE=0` | 保留 | stdout 是 JSON-RPC 传输，日志走独立证据路径 |
-| `ZCODE_MODEL_TELEMETRY_ENABLED=0` | 暂保留，交 Host 定 | 旧理由是避免用户主目录里的遥测状态写入；它同时选择了原生遥测行为，不能仅凭旧理由确认属于证据位置或权限 |
+| `ZCODE_MODEL_TELEMETRY_ENABLED=0` | 删除 | Host 传达用户已同意：遥测跟用户自己的 ZCode 设置走 |
 | `ZCODE_DATA_BASE_DIR` | 沿用共用白名单，不改值 | 原生用户配置位置，计费读取使用同一位置 |
-| 两个供应方文件变量 | 不设置、不复制，也不为计费读取使用它们 | 原生使用自己的文件，shell 里的覆盖不属于共用白名单 |
+| `ZCODE_BUILTIN_PROVIDER_CONFIG_FILE` | 保留定位，等于 `provider_paths` 返回的安装内置原文件路径 | 独立 CLI 启动所需；缺失在准备阶段报不可用，不复制 |
+| `ZCODE_PERSONAL_PROVIDER_CONFIG_FILE` | 不设置 | 原生自己找得到个人配置；shell 覆盖不属于共用白名单 |
 | bundled 供应方文件变量 | 删除专门的剔除逻辑 | 不另替原生选择 bundled 文件；共用白名单未变 |
 | `BUDDY_ZCODE_TEST_CASE` | 沿用仅开发测试时的透传 | 模拟 CLI 用例选择，不属于用户供应方设置 |
 | `BUDDY_ZCODE_CLI` / `BUDDY_NODE` | 沿用开发命令选择，不传给原生 | 安装后的命令仍来自服务选定的运行时 |
 | locale、代理、CA 路径与其他共用白名单项 | 未改 | 不在本批改共享发现规则 |
 
-会话请求的 `yolo` 保留为当前 Worker 权限；快速调用的空工具清单、空会话 MCP、off-peak 与 dynamic workflow 关闭保留为无工具范围的表达。`titleGenerationEnabled=False` 保留，避免任务以外的标题模型调用。反向 `session/requestRuntimePreferences` 的现有答复未改：搜索能力随工具范围，自动回答用户问题关闭；其中 `memoryEnabled=False` 与 `modelContextBudgetStrategy=preflight-v1` 的原生含义没有在本批验证，应由 Host 判断是否也属于替用户选择配置，不能由本批宣称用户全部定制都已生效。
+会话请求的 `yolo` 保留为当前 Worker 权限；快速调用的空工具清单、空会话 MCP、off-peak 与 dynamic workflow 关闭保留为无工具范围的表达。`titleGenerationEnabled=False` 保留，避免任务以外的标题模型调用。反向 `session/requestRuntimePreferences` 现在使用下面两项用户设置；无工具范围只收紧搜索。自动回答用户问题仍关闭，`modelContextBudgetStrategy=preflight-v1` 仍为当前宿主常量：Host 已确认应用设置里没有该策略键。
 
 ### 文件逐项
 
@@ -40,13 +41,14 @@
 | native 根中的 `<sessionHash>.json` | 保留 | `{taskId,sessionId,cwd,configuration}` 的续接绑定，字段与位置不变 |
 | `sessions.sqlite` 与 `storage/` | 保留 | 原生私有会话数据，不是私有配置主目录 |
 | `native.stderr.log`、`native-logs/`、`run-end-facts.json` | 保留 | 本次原生证据；失败公开投影仍不包含供应方原始错误正文 |
+| `native-runtime-preferences.json` | 新增本次答复事实 | 只有值、来源及无工具收紧事实，通过已有 evidence_refs 绑定文件大小与摘要，未改共享结果契约 |
 | 共享角色的输入、控制与结果文件 | 未改 | 任务与结果契约不在本批重新设计 |
 
 存储清理、备份排除与私有迁移中对旧供应方副本文件名的识别未动；那是已有存量凭据材料的清理边界，不是运行时继续生成副本或快照 API 的兼容入口。
 
 ## 供应方名字与计费
 
-改前目录的供应方名字来自 `settings.model.available[].ref.providerId`，只是经过访问类型筛选；改后仍来自同一字段，删除筛选，`providerLabel` 仍只作显示名称。模型 ID 仍是 `ref.modelId`，推理强度仍是原生 `reasoning.levels[].value`，harness 仍是 `zcode`。原来已被接受的供应方不会改名；同一份配置内容交给同一原生 CLI，四段身份的来源没有变。安装前 Host 仍须把真实目录的四段名字与原有记录逐个比对，模拟 CLI 不是这个真实接口的证明。
+改前目录的供应方名字来自 `settings.model.available[].ref.providerId`，只是经过访问类型筛选；改后仍来自同一字段，删除筛选，`providerLabel` 仍只作显示名称。模型 ID 仍是 `ref.modelId`，推理强度仍是原生 `reasoning.levels[].value`，harness 仍是 `zcode`。原来已被接受的供应方不会改名；同一份配置内容交给同一原生 CLI，四段身份的来源没有变。Host 在第二回合输入中报告：用真实 ZCode 0.16.9、只补内置定位的无模型探针读到 12 个四段名字，与日常记录全部一致，配置读回等于请求；这是 Host 的探测证据，本实现方没有读日常看板或执行真实 CLI。最终原文件定位与新偏好仍须由 Host 复核，模拟 CLI 不证明真实接口。
 
 没有增加名为 `unknown` 的供应方或向原生 setter 传入伪造名字。ZCode 这条接口报告的是每个可用模型自己的 `ref.providerId`，没有依赖“缺省供应方”的目录分支；用户的默认选择来自原生 `settings.model.current.providerId`，配置核对使用显式请求与原生读回。缺少这些身份事实时，本批没有猜一个通用内置名字；真实 CLI 若出现这样的形状，交 Host 根据原生证据决定。
 
@@ -54,7 +56,17 @@
 
 这是读凭据旁边的配置：JSON 解码会把整个文件的字节读入内存，只提取 `config.providerConfigRules` 下 `templateRules[].templateId`、`providerRules[].providerId`、`providerRules[].templateId` 与各条 `config.access.type`，按原有模板继承和个人覆盖关系标注。没有访问或返回 `apiKey`、令牌、`requestAuth`、请求头、API 地址、providerName、模型规则或其他配置字段，也不落盘原始 JSON。内部的供应方 ID 只用于把计费标注连接到原生清单，不能生成目录供应方。
 
-只输出已知的 `api-key`（按量）、`zhipu-coding-plan-api-key`（套餐）或未知；文件缺失、拒绝读取、JSON 损坏、不能解析的结构与其他访问方式都标未知，不拒绝目录。这是原生配置的计费标注，不证明一次请求实际扣了资源包还是余额；没有查询厂商账户接口或根据消息文字推断扣费。
+只输出已知的 `api-key`（按量）、`zhipu-coding-plan-api-key`（套餐）或未知；可选个人文件缺失、计费内容拒绝读取、JSON 损坏、不能解析的结构与其他访问方式都标未知，不拒绝目录。安装内置文件本身缺失属于前述启动能力检查，不属于计费回退。这是原生配置的计费标注，不证明一次请求实际扣了资源包还是余额；没有查询厂商账户接口或根据消息文字推断扣费。
+
+## 两项用户运行偏好
+
+按 Host 实测的 ZCode 应用布局，在传给原生的用户数据根下读取 `.zcode/v2/setting.json`，只投影顶层 `memoryEnabled` 与 `nativeSearchEnhancementsEnabled` 两个键，且只认 JSON 布尔值。解码 JSON 必须将文件字节读入内存，但不访问、复制或返回其他字段，包括代理地址及 `askUserQuestionAutoResolutionEnabled`；不保存原文。每次启动读一次，格式纠正的多个会话使用同一读数，不随反向请求重新读取。
+
+文件缺失、拒绝读取、不是 JSON、不是对象、单个键缺失或不是布尔值时，各键分别回退：记忆关闭，有工具的搜索默认开启，无工具的搜索始终关闭。正常设置中的记忆值用于所有调用；搜索在有工具时用用户值，在无工具时强制为 false，不能放宽范围。原生布局改变、导致这份可选文件或两个键读不到时，表现就是上述回退，没有新拒绝。
+
+原生请求答复成功发送之后才记事实；回合保留 `native-runtime-preferences.json`，并用现有 `RunResult.evidence_refs` 给出文件位置、大小与 SHA-256。每项记录答复 `value` 与 `source=user-settings|fallback`；搜索另外记录 `configuredValue` 和 `restrictedByToolScope`，明确区分用户或回退的值与工具范围最终收紧的值。两个固定答复分别记录 `source=governed-role` 与 `source=harness-controller`。原生没有请求或答复没发成功时，不声称已经答复。没有新增共享契约字段或修改角色代码。
+
+共用目录的 `blackboard/catalog/catalog.py` 仍允许访问类型字面量 `zhipu-account`，现在 ZCode 计费投影不会产生它；按 Host 的明确范围决定本批不改，由 Host 排入后续清理。
 
 ## 无工具路径的失败与用量
 
@@ -112,7 +124,8 @@ for mode in ("discovery", "worker", "no-tool"):
         # 只记录非秘密的原生目录身份；与安装前目录的四段名字比较。
         names = [("zcode", m["ref"]["providerId"], m["ref"]["modelId"], level["value"])
                  for m in models for level in m.get("reasoning", {}).get("levels", [])]
-        print(json.dumps({"mode": mode, "version": spawn.version, "names": names}, ensure_ascii=False))
+        print(json.dumps({"mode": mode, "version": spawn.version, "names": names,
+                          "runtimePreferences": c.runtime_preferences_facts}, ensure_ascii=False))
         if mode != "discovery":
             # Host 也可以把 wanted 换成目录里原来已启用的那一组名字。
             _, provider, model, effort = names[0]
@@ -128,18 +141,20 @@ for mode in ("discovery", "worker", "no-tool"):
 print(root)  # 保留本次证据供 Host 看；没有确认停止前不删除。
 ```
 
-发现应返回正常用户配置中的供应方/模型/强度，不发提示词；Worker 与无工具的两个 setter 应读回 `wanted`，会话 workspacePath 应精确等于带点号、空格与非 ASCII 字符的 cwd，三个原生进程都应正常退出并确认组停止。用 Host 的进程环境观察工具另外核对：两个供应方文件变量不存在，storage、session DB 与 log 变量指向本次私有目录，用户配置根保持原值。不要打印整个环境或整个原生 snapshot。此探针不证明模型调用、MCP 工具执行或登录宿主能力。
+发现应返回正常用户配置中的供应方/模型/强度，不发提示词；Worker 与无工具的两个 setter 应读回 `wanted`，会话 workspacePath 应精确等于带点号、空格与非 ASCII 字符的 cwd，三个原生进程都应正常退出并确认组停止。用 Host 的进程环境观察工具另外核对：内置供应方变量等于安装中的原文件路径，个人供应方变量和遥测覆盖变量不存在，storage、session DB 与 log 变量指向本次私有目录，用户配置根保持原值。原生创建会话后的 `runtimePreferences` 应非空，记忆值等于用户的布尔设置；Worker 搜索值等于用户设置，发现与无工具两种模式的搜索值为 false；缺键或非法类型时，来源为 fallback，值按上节定义；自动回答问题为 false，预算策略为 preflight-v1。不要打印整个环境或整个原生 snapshot。此探针不证明模型调用、MCP 工具执行或登录宿主能力。
 
 审阅调用没有变更过的启动路径：`ZcodeAdapter.read_only_structured=False`，`local_read_only_check()` 应仍返回 `eligible=False`、`readonly-worker-carrier-unimplemented`；审阅在资格边界停下，不启动 CLI。本批没有另造审阅执行载体。续接的模型前握手可在上面 Worker 会话关闭后、同一 storage/DB 环境中新起原生进程，调用 `session/resume` 并核对同一 sessionId、cwd 和 setter 读回；这只验证原生续接接口，完整绑定续接测试仍由下节的 Worker 测试覆盖。
 
 ## 实现方验证与交接
 
-2026-10-12，最终源码上可运行集合 119 项通过（30.715 秒，退出码 0），`git diff --check` 通过；文中的 Host 无模型探针仅做了 Python 语法解析，没有执行。使用 Host 指定的只读 Python，`PYTHONPATH=src:tests/python`，清除 AGENTS.md 的运行时、Worker、agent、虚拟环境变量及 `BUDDY_`、`ZCODE_`、`ZAI_`、`ZHIPU_`、`GLM_`、`ANTHROPIC_`、`CLAUDE_CODE_`、`C2_` 前缀，再显式设置 `BUDDY_DEV_SOURCE=1`。`cli/checks.py` 与 `tests/python/support.py` 只按任务要求增加 ZCode 与相关供应方前缀的测试隔离，没有修改产品环境构造；ZCode 的模拟 CLI 测试也清除这些继承变量，并把 HOME、USERPROFILE 与原生数据根设为私有合成目录。
+第一回合可运行集合 119 项通过（30.715 秒，退出码 0）；第二回合最终验证记录见下段。文中的 Host 无模型探针仅做了 Python 语法解析，本实现方没有执行。使用 Host 指定的只读 Python，`PYTHONPATH=src:tests/python`，清除 AGENTS.md 的运行时、Worker、agent、虚拟环境变量及 `BUDDY_`、`ZCODE_`、`ZAI_`、`ZHIPU_`、`GLM_`、`ANTHROPIC_`、`CLAUDE_CODE_`、`C2_` 前缀，再显式设置 `BUDDY_DEV_SOURCE=1`。`cli/checks.py` 与 `tests/python/support.py` 只按任务要求增加 ZCode 与相关供应方前缀的测试隔离，没有修改产品环境构造；ZCode 的模拟 CLI 测试也清除这些继承变量，并把 HOME、USERPROFILE 与原生数据根设为私有合成目录。
 
 本环境可运行的检查集合是：`buddy.harnesses.zcode.test_native_config`、`test_zcode_protocol`、`test_zcode_request_input_probe` 全文件；`test_native_run.FastSeamTests`、`NoToolReverseRequestTests`、`DiscoveryStopTests`；`test_no_tool_zcode.NoToolPolicyTests`；`test_zcode_tool_evidence.ProjectionTests`、`ProjectionOrderingTests`；`cli.test_checks_cleanup.ChecksEnvironmentTests`；`cli.test_support_cleanup.FixtureCleanupTests.test_child_environment_drops_inherited_ownership_and_credentials`。新测试用私有原生配置路径与带点号、空格、非 ASCII 字符的 CLI/cwd，覆盖非密钥供应方发现与选择、计费未知、没有快照、私有会话位置、失败归因/额度、成功用量与格式纠正的累计用量。
 
-第一轮还尝试了 `test_no_tool_zcode.NoToolFakeProtocolTests` 与 `test_zcode_tool_evidence.NoToolReceiptWiringTests`：所有经共享角色控制器启动的这些用例都未得到有效结果，报告 `invalid-native-result`，stderr 为空，取消用例没有等到模拟 CLI 收到提示词；没有证据把它归因于 ZCode 原生接口，不改共享角色或启动器来绕过。按任务中真实启动器的环境边界交 Host 在验收环境重跑，以上失败不算通过。直接运行模块的新测试不经过这个控制器。
+第一回合还尝试了 `test_no_tool_zcode.NoToolFakeProtocolTests` 与 `test_zcode_tool_evidence.NoToolReceiptWiringTests`：所有经共享角色控制器启动的这些用例都未得到有效结果，报告 `invalid-native-result`，stderr 为空，取消用例没有等到模拟 CLI 收到提示词；没有证据把它归因于 ZCode 原生接口，不改共享角色或启动器来绕过。按任务中真实启动器的环境边界交 Host 在验收环境重跑，以上本地失败不算通过；Host 在第二回合输入中报告这些控制器测试均已通过，完整检查 217 个文件中 216 个通过（3,654 项），前端全量通过，唯一失败是下述准备测试断言。直接运行模块的新测试不经过这个控制器。
 
-Host 还需跑 `test_zcode.py`、`test_native_run.WorkerSeamTests` 与 `ProducerContractTests`、`test_zcode_native.InstalledZcodeTests`、`test_zcode_checkpoint.py`、`test_zcode_inquiry.py`、`test_zcode_tool_refusals.py`、`buddy.roles.test_registered_run_wiring`、`blackboard.evaluation.test_other_native_observations` 的 ZCode 控制器用例，以及 `cli.test_checks_cleanup`、`cli.test_support_cleanup` 剩余需要私有服务/IPC 的用例；其中已存的精确续接回归要保持通过。完整 Python 检查、真实 Worker/Router 回合与停止故障注入按原任务由 Host 做。实际 CLI 的无模型探针与真实目录名字对照尚未执行；没有前端改动。
+最终改动后仍由 Host 重跑 `test_zcode.py`、`test_native_run.WorkerSeamTests` 与 `ProducerContractTests`、`test_zcode_native.InstalledZcodeTests`、`test_zcode_checkpoint.py`、`test_zcode_inquiry.py`、`test_zcode_tool_refusals.py`、`buddy.roles.test_registered_run_wiring`、`blackboard.evaluation.test_other_native_observations` 的 ZCode 控制器用例，以及 `cli.test_checks_cleanup`、`cli.test_support_cleanup` 剩余需要私有服务/IPC 的用例；其中已存的精确续接回归要保持通过。完整 Python 检查、真实 Worker/Router 回合与停止故障注入按原任务由 Host 做。第一回合原文件定位缺失由 Host 无模型探针查出；最终原文件定位与偏好答复的真实 CLI 复核仍由 Host 执行，没有前端改动。
 
-交接需 Host 决定遥测开关及上文两项 runtime preferences 的归类，完成剩余测试、无模型握手与原任务规定的真实回合，再记录自己的验收结论；共享环境白名单、模型目录/计费共享部分和角色代码不需要本批改动。
+第二回合修正 `test_zcode.ZcodeAdapterTests.test_oauth_provider_is_not_rejected_during_preparation`：`prepare` 成功返回 None，不断言返回值，改为要求调用不拒绝并产生本回合的输入文件。正常代码下该测试通过；在仅测试进程中临时恢复按访问类型拒绝的准备逻辑时，该测试因 restored-api-key-only 错误而失败，退出后 mock 自动恢复，没有改源文件。模拟原生 CLI 的安装布局补上必需的合成内置文件；版本测试里的 ZCode 包装命令也使用该合成布局，不增加对其他 harness 的测试配置或产品改动。
+
+最终验证结果待本回合结束前补记。Host 还需用最终原文件定位与偏好答复复核无模型握手，完成原任务规定的真实回合与整合后的检查，再记录验收结论；遥测与运行偏好的归类决定已经全部落实，共享环境白名单、模型目录/计费共享部分和角色代码不需要本批改动。

@@ -83,7 +83,7 @@ from ..run_contract import (
     StopEvidence,
     StopLayer,
 )
-from .config import cli_command, provider_access_types, provider_paths
+from .config import cli_command, load_runtime_preferences, provider_access_types, provider_paths
 from ..inquiry_bridge import InquiryBridge
 from ..c_two_live import CTwoLiveEndpoint
 from ....protocol.activity import ActivityPublisher
@@ -295,9 +295,10 @@ def make_inquiry_bridge(*, identity: dict, journal_path: str,
 
 
 def check_preparation(spec: dict, environment: dict) -> None:
-    """Confirm the native command without inspecting provider configuration."""
+    """Confirm the native command and required installed built-in file location."""
     try:
-        cli_command(environment)
+        command = cli_command(environment)
+        provider_paths(environment, command)
     except NativeError as error:
         raise BoardError("ADAPTER_UNAVAILABLE", str(error), adapter="zcode") from None
 
@@ -595,6 +596,7 @@ class _RunState:
     inquiry: dict | None = None
     attention: dict | None = None
     token_usage: dict | None = None
+    runtime_preferences: dict | None = None
     last_assistant_message: dict | None = None
     drain_error: tuple[str, str] | None = None
 
@@ -638,13 +640,13 @@ def _spawn_app_server(*, cwd: str, invocation_root: Path, native_root: Path, dea
     private = ensure_private_dir(invocation_root)
     if incoming.get("BUDDY_DEV_SOURCE") == "1" and "BUDDY_ZCODE_TEST_CASE" in incoming:
         environment["BUDDY_ZCODE_TEST_CASE"] = incoming["BUDDY_ZCODE_TEST_CASE"]
-    # ZCODE_MODEL_TELEMETRY_ENABLED=0 short-circuits the single telemetry gate in
-    # the installed bundle before it reads ZCODE_HOME (telemetry-state.json is only
-    # touched by that path), so no telemetry state can reach the real user home.
-    # The session DB, storage and logs stay in this run's private native root.
-    environment.update({"ZCODE_STORAGE_DIR": str(root / "storage"), "ZCODE_SESSION_DB_PATH": str(root / "sessions.sqlite"),
-                        "ZCODE_LOG_DIR": str(private / "native-logs"), "ZCODE_LOG_CONSOLE": "0",
-                        "ZCODE_MODEL_TELEMETRY_ENABLED": "0"})
+    builtin, _personal = provider_paths(environment, command)
+    preferences = load_runtime_preferences(environment)
+    # The standalone CLI needs the installed built-in file's location. No
+    # provider file is copied; personal configuration and telemetry stay native.
+    environment.update({"ZCODE_BUILTIN_PROVIDER_CONFIG_FILE": str(builtin),
+                        "ZCODE_STORAGE_DIR": str(root / "storage"), "ZCODE_SESSION_DB_PATH": str(root / "sessions.sqlite"),
+                        "ZCODE_LOG_DIR": str(private / "native-logs"), "ZCODE_LOG_CONSOLE": "0"})
     version = probe_version(command, environment, cwd=cwd, deadline=deadline, owned=owned)
     fd = os.open(stderr_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | getattr(os, "O_NOFOLLOW", 0), 0o600)
     process = None
@@ -669,7 +671,7 @@ def _spawn_app_server(*, cwd: str, invocation_root: Path, native_root: Path, dea
                 owned[:] = [handle]
         finally:
             os.close(fd)
-        connection = NativeConnection(process, deadline, cancel, no_tools=no_tools)
+        connection = NativeConnection(process, deadline, cancel, no_tools=no_tools, runtime_preferences=preferences)
     except BaseException:
         # Every failure after creation, including fd close and connection setup,
         # follows the same owned-group stop. A failed stop observation leaves the
@@ -1331,6 +1333,7 @@ def _stop_collection(*, spawn: _Spawn | None, deadline: float, cancel: CancelFla
         state.attention = outcome.inquiry_bridge.attention_report()
     drained: bool | None = None
     if spawn is not None:
+        state.runtime_preferences = spawn.connection.runtime_preferences_facts
         shutdown, signalled = _stop_native(spawn, deadline)
         state.shutdown = shutdown
         state.exit_code = spawn.process.returncode
@@ -1389,6 +1392,8 @@ def _evidence_refs(*, invocation_root: Path, stderr_path: Path, state: _RunState
         retain("inquiry-report", "inquiry-report.json", state.inquiry)
     if state.attention is not None:
         retain("attention-report", "attention-report.json", state.attention)
+    if state.runtime_preferences is not None:
+        retain("native-runtime-preferences", "native-runtime-preferences.json", state.runtime_preferences)
     if facts.denied:
         # The refused interactions' own full records — timestamps included —
         # stay as their clearly-sourced evidence reference; the common result

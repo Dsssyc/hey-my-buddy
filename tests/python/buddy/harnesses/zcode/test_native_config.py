@@ -11,12 +11,13 @@ from buddy.harnesses.zcode.test_native_run import NativeRunCase
 from buddy.harnesses.zcode.test_zcode_tool_evidence import FAKE
 from hey_my_buddy.buddy.harnesses.zcode import native_run
 from hey_my_buddy.buddy.harnesses.zcode.adapter import ZcodeAdapter
-from hey_my_buddy.buddy.harnesses.zcode.config import provider_access_types
+from hey_my_buddy.buddy.harnesses.zcode.config import load_runtime_preferences, provider_access_types
+from hey_my_buddy.errors import BoardError
 from hey_my_buddy.buddy.roles.run_observers import FastCorrection, worker_observer
 from hey_my_buddy.protocol.billing import zcode_access
 
 
-class NativeConfigTests(NativeRunCase):
+class NativeConfigCase(NativeRunCase):
     def setUp(self):
         super().setUp()
         self.native_config = self.root / "用户 .配置 空格"
@@ -49,6 +50,8 @@ class NativeConfigTests(NativeRunCase):
         return native_run.run_discovery(cwd=str(self.cwd), invocation_root=self.base / "discover",
             native_root=self.base / "discovery-native", timeout_seconds=5, cancelled=lambda: False)
 
+
+class NativeConfigTests(NativeConfigCase):
     def test_non_key_native_provider_is_discovered_and_selectable_with_no_snapshots(self):
         os.environ["BUDDY_ZCODE_TEST_CASE"] = "native-config"
         receipt = self.discover()
@@ -62,7 +65,8 @@ class NativeConfigTests(NativeRunCase):
         self.assertEqual(result.end.status, "ok", result)
         self.assertEqual(result.configuration.checked.provider.value, "fixture-account")
         env = json.loads(self.fake.with_name("launch-environment.json").read_text())
-        self.assertNotIn("ZCODE_BUILTIN_PROVIDER_CONFIG_FILE", env)
+        self.assertEqual(env["ZCODE_BUILTIN_PROVIDER_CONFIG_FILE"], str(self.builtin.resolve()))
+        self.assertNotIn("ZCODE_MODEL_TELEMETRY_ENABLED", env)
         self.assertNotIn("ZCODE_PERSONAL_PROVIDER_CONFIG_FILE", env)
         self.assertEqual(env["ZCODE_STORAGE_DIR"], str(Path(request.private_state.native_root).resolve() / "storage"))
         self.assertEqual(env["ZCODE_SESSION_DB_PATH"], str(Path(request.private_state.native_root).resolve() / "sessions.sqlite"))
@@ -115,6 +119,104 @@ class NativeConfigTests(NativeRunCase):
              mock.patch.object(Path, "read_text", side_effect=AssertionError("provider read")):
             self.assertEqual(ZcodeAdapter().available(), (True, None))
             native_run.check_preparation({"provider": "fixture-account"}, dict(os.environ))
+
+    def test_missing_installed_builtin_is_unavailable_before_any_process(self):
+        self.builtin.unlink()
+        with mock.patch.object(native_run, "probe_version") as version, \
+             mock.patch.object(native_run, "owned_popen") as spawn:
+            with self.assertRaises(BoardError) as caught:
+                native_run.check_preparation({"provider": "fixture-account"}, dict(os.environ))
+            self.assertEqual(caught.exception.code, "ADAPTER_UNAVAILABLE")
+            result = native_run.run(self.fast_request("no input will be sent"),
+                observer=worker_observer, services=None, cancelled=lambda: False)
+        version.assert_not_called()
+        spawn.assert_not_called()
+        self.assertEqual(result.end.reason_code, "adapter-unavailable")
+        self.assertIsNone(result.model_started)
+
+    def test_unreadable_builtin_billing_content_does_not_refuse_preparation(self):
+        self.builtin.write_text("not JSON")
+        native_run.check_preparation({"provider": "fixture-account"}, dict(os.environ))
+        os.environ["BUDDY_ZCODE_TEST_CASE"] = "discovery"
+        self.assertEqual(self.discover()["providers"][0]["accessType"], "unknown")
+
+
+class RuntimePreferenceTests(NativeConfigCase):
+    def write_settings(self, value):
+        self.settings = self.native_config / ".zcode/v2/setting.json"
+        self.settings.write_text(json.dumps(value))
+
+    def execute_preferences(self, *, no_tools):
+        os.environ["BUDDY_ZCODE_TEST_CASE"] = "ok" if no_tools else "write-final"
+        request = self.fast_request("Return only one JSON value matching this schema: {}")
+        if not no_tools:
+            request = request.model_copy(update={"tool_scope": "write"})
+        return native_run.run(request, observer=worker_observer, services=None, cancelled=lambda: False)
+
+    def preference_facts(self, result):
+        self.assertEqual(result.end.status, "ok", result)
+        ref = next(ref for ref in result.evidence_refs if ref.kind == "native-runtime-preferences")
+        return json.loads(Path(ref.location).read_text())
+
+    def test_user_preferences_are_answered_and_no_tools_only_tightens_search(self):
+        for memory, search, no_tools in ((True, False, False), (False, True, False),
+                                        (True, True, True), (False, False, True)):
+            with self.subTest(memory=memory, search=search, no_tools=no_tools):
+                self.write_settings({"memoryEnabled": memory, "nativeSearchEnhancementsEnabled": search,
+                                     "askUserQuestionAutoResolutionEnabled": True,
+                                     "proxy": "secret-proxy-never-returned"})
+                result = self.execute_preferences(no_tools=no_tools)
+                facts = self.preference_facts(result)
+                reply = json.loads(self.fake.with_name("runtime-preferences-reply.json").read_text())
+                self.assertEqual(reply, {"memoryEnabled": memory,
+                    "nativeSearchEnhancementsEnabled": search and not no_tools,
+                    "askUserQuestionAutoResolutionEnabled": False, "modelContextBudgetStrategy": "preflight-v1"})
+                self.assertEqual(facts["memoryEnabled"], {"value": memory, "source": "user-settings"})
+                self.assertEqual(facts["nativeSearchEnhancementsEnabled"], {
+                    "value": search and not no_tools, "configuredValue": search,
+                    "source": "user-settings", "restrictedByToolScope": no_tools})
+                self.assertNotIn("secret-proxy-never-returned", json.dumps(facts))
+
+    def test_invalid_or_absent_settings_fall_back_without_refusing(self):
+        self.settings = self.native_config / ".zcode/v2/setting.json"
+        for contents in (None, "invalid JSON", "[]", "null", "{}",
+                         '{"memoryEnabled":1,"nativeSearchEnhancementsEnabled":"true"}'):
+            with self.subTest(contents=contents):
+                if contents is None:
+                    self.settings.unlink(missing_ok=True)
+                else:
+                    self.settings.write_text(contents)
+                for no_tools in (False, True):
+                    facts = self.preference_facts(self.execute_preferences(no_tools=no_tools))
+                    self.assertEqual(facts["memoryEnabled"], {"value": False, "source": "fallback"})
+                    self.assertEqual(facts["nativeSearchEnhancementsEnabled"], {
+                        "value": not no_tools, "configuredValue": True,
+                        "source": "fallback", "restrictedByToolScope": no_tools})
+        with mock.patch.object(Path, "read_text", side_effect=PermissionError("fixture denied")):
+            values = load_runtime_preferences(dict(os.environ))
+        self.assertEqual(values["memoryEnabled"], {"value": False, "source": "fallback"})
+        self.assertEqual(values["nativeSearchEnhancementsEnabled"], {"value": True, "source": "fallback"})
+
+    def test_each_key_has_its_own_source_and_only_two_keys_are_projected(self):
+        self.write_settings({"memoryEnabled": True, "nativeSearchEnhancementsEnabled": None,
+                             "proxy": "secret-proxy-never-returned"})
+        values = load_runtime_preferences(dict(os.environ))
+        self.assertEqual(values, {"memoryEnabled": {"value": True, "source": "user-settings"},
+            "nativeSearchEnhancementsEnabled": {"value": True, "source": "fallback"}})
+
+    def test_preferences_are_read_once_for_all_correction_sessions(self):
+        self.write_settings({"memoryEnabled": True, "nativeSearchEnhancementsEnabled": True})
+        os.environ["BUDDY_ZCODE_TEST_CASE"] = "preference-correct"
+        request = self.fast_request("Return only one JSON value matching this schema: {}")
+        correction = FastCorrection(request.output_schema.value, request.input_text)
+        with mock.patch.object(native_run, "load_runtime_preferences", wraps=load_runtime_preferences) as read:
+            result = native_run.run(request, observer=correction.observer, services=None, cancelled=lambda: False)
+        self.assertEqual(read.call_count, 1)
+        self.assertEqual(result.value.correction_count, 1)
+        # The mock rewrote the file after the first materialization request.
+        self.assertFalse(json.loads(self.settings.read_text())["memoryEnabled"])
+        self.assertTrue(self.preference_facts(result)["memoryEnabled"]["value"])
+        self.assertTrue(json.loads(self.fake.with_name("runtime-preferences-reply.json").read_text())["memoryEnabled"])
 
 
 class FinalMessageUsageTests(NativeRunCase):

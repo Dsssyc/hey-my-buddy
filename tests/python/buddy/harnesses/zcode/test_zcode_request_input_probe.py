@@ -361,6 +361,9 @@ class ProbeFixtureCase(unittest.TestCase):
         self.fake = self.root / "fake-app-server.py"
         self.fake.write_text(FAKE_SERVER)
         self.fake.chmod(0o755)
+        builtin = self.root / "provider/zcode-builtin.json"
+        builtin.parent.mkdir()
+        builtin.write_text('{"config":{"providerConfigRules":{"templateRules":[],"providerRules":[]}}}')
         self.nonce = "probe-nonce-4f0c2a"
         self.fake_report = self.root / "fake-report.json"
 
@@ -426,7 +429,7 @@ class ProbeAcceptFlowTests(ProbeFixtureCase):
     def test_inherited_buddy_and_native_pins_never_reach_the_probe_child(self):
         _report, fake = self.run_fake_probe("ok")
         pins = fake["nativePins"]
-        self.assertEqual(sorted(pins), ["BUDDY_ZCODE_CLI", "ZCODE_LOG_CONSOLE", "ZCODE_LOG_DIR", "ZCODE_MODEL_TELEMETRY_ENABLED",
+        self.assertEqual(sorted(pins), ["BUDDY_ZCODE_CLI", "ZCODE_BUILTIN_PROVIDER_CONFIG_FILE", "ZCODE_LOG_CONSOLE", "ZCODE_LOG_DIR",
                                         "ZCODE_SESSION_DB_PATH",
                                         "ZCODE_STORAGE_DIR"], pins)
         self.assertEqual(pins["ZCODE_LOG_CONSOLE"], "0")

@@ -51,7 +51,7 @@ REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 sys.path.insert(0, str(REPO_ROOT / "src"))
 
 from hey_my_buddy.buddy.roles.turn_io import canonical_json  # noqa: E402
-from hey_my_buddy.buddy.harnesses.zcode.config import cli_command  # noqa: E402
+from hey_my_buddy.buddy.harnesses.zcode.config import cli_command, load_runtime_preferences, provider_paths  # noqa: E402
 from hey_my_buddy.buddy.harnesses.zcode.protocol import NativeConnection, NativeError  # noqa: E402
 
 #: Inherited runtime/worker/agent variables that must never reach a probe child,
@@ -90,9 +90,9 @@ class ProbeConnection(NativeConnection):
     ``interaction/requestUserInput`` is delegated to ``on_user_input``.
     """
 
-    def __init__(self, process, deadline, cancelled, on_user_input):
+    def __init__(self, process, deadline, cancelled, on_user_input, runtime_preferences):
         self.on_user_input = on_user_input
-        super().__init__(process, deadline, cancelled)
+        super().__init__(process, deadline, cancelled, runtime_preferences=runtime_preferences)
 
     def pump(self) -> None:
         if self.cancelled.is_set():
@@ -111,10 +111,7 @@ class ProbeConnection(NativeConnection):
         self.ordinal += 1
         if "id" in message and "method" in message:
             if message["method"] == "session/requestRuntimePreferences":
-                self.send({"id": message["id"], "result": {
-                    "nativeSearchEnhancementsEnabled": True, "memoryEnabled": False,
-                    "askUserQuestionAutoResolutionEnabled": False, "modelContextBudgetStrategy": "preflight-v1",
-                }})
+                self.answer_runtime_preferences(message)
                 return
             if message["method"] == "interaction/requestUserInput":
                 self.send({"id": message["id"], "result": self.on_user_input(message)})
@@ -275,10 +272,12 @@ def isolated_environment(root: Path, *, zcode_cli: str | None = None, node: str 
     native_root = root / "native"
     (native_root / "storage").mkdir(parents=True, exist_ok=True)
     (root / "native-logs").mkdir(parents=True, exist_ok=True)
-    environment.update({"ZCODE_STORAGE_DIR": str(native_root / "storage"),
+    builtin, _ = provider_paths(environment, cli_command(environment))
+    environment.update({"ZCODE_BUILTIN_PROVIDER_CONFIG_FILE": str(builtin),
+                        "ZCODE_STORAGE_DIR": str(native_root / "storage"),
                         "ZCODE_SESSION_DB_PATH": str(native_root / "sessions.sqlite"),
                         "ZCODE_LOG_DIR": str(root / "native-logs"),
-                        "ZCODE_LOG_CONSOLE": "0", "ZCODE_MODEL_TELEMETRY_ENABLED": "0"})
+                        "ZCODE_LOG_CONSOLE": "0"})
     return environment
 
 
@@ -370,7 +369,8 @@ def run_probe(root: Path, *, cwd: Path, provider: str | None, model: str | None,
         return accept_answer(captured_questions, nonce)
 
     try:
-        connection = ProbeConnection(process, deadline, cancelled, on_user_input=handle_user_input)
+        connection = ProbeConnection(process, deadline, cancelled, on_user_input=handle_user_input,
+                                     runtime_preferences=load_runtime_preferences(environment))
         connection.observe = log.note
         connection.call("runtime/capabilities", {})
         phase("capabilities")

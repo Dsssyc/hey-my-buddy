@@ -27,15 +27,17 @@ class ZcodeFixtureCase(unittest.TestCase):
         self.root = Path(self.temporary.name)
         self.cwd = self.root / "checkout"
         self.cwd.mkdir()
-        self.builtin = self.root / "builtin.json"
-        self.personal = self.root / "personal.json"
+        self.builtin = self.root / "provider/zcode-builtin.json"
+        self.builtin.parent.mkdir()
+        self.personal = self.root / "native-user-home/.zcode/v2/provider_config.json"
+        self.personal.parent.mkdir(parents=True)
         self.builtin.write_text(json.dumps({"config": {"providerConfigRules": {"templateRules": [], "providerRules": []}}}))
         self.personal.write_text(json.dumps({"config": {"providerConfigRules": {"providerRules": [
             {"providerId": "fixture-api", "config": {"access": {"type": "api-key", "apiKey": "fixture-secret-never-public"}}}]}}}))
         FIXTURE.chmod(0o755)
         self.environment = {k: v for k, v in os.environ.items() if not k.startswith(("BUDDY_", "ANTHROPIC_", "C2_", "ZCODE_", "ZAI_", "ZHIPU_", "GLM_")) and k not in ("VIRTUAL_ENV", "UV_PROJECT_ENVIRONMENT")}
         native_home = self.root / "native-user-home"
-        native_home.mkdir(mode=0o700)
+        native_home.mkdir(mode=0o700, exist_ok=True)
         self.environment.update(HOME=str(native_home), USERPROFILE=str(native_home),
                                 ZCODE_DATA_BASE_DIR=str(native_home), BUDDY_CONSOLE_PORT="0", BUDDY_ZCODE_CLI=str(FIXTURE.resolve()), BUDDY_STATE_DIR=str(self.root / "state"),
                                 BUDDY_RUNTIME_ROOT=str(self.root / "runtime"), BUDDY_DEV_SOURCE="1",
@@ -430,8 +432,9 @@ class ZcodeAdapterTests(ZcodeFixtureCase):
         value = json.loads(self.personal.read_text())
         value["config"]["providerConfigRules"]["providerRules"][0]["config"]["access"] = {"type": "zhipu-account"}
         self.personal.write_text(json.dumps(value))
-        prepared = self.adapter.prepare(self.context())
-        self.assertIsNotNone(prepared)
+        context = self.context()
+        self.adapter.prepare(context)
+        self.assertTrue(context.turn_input_file().is_file())
 
     def test_coding_never_falls_back_to_native_defaults(self):
         from hey_my_buddy.errors import BoardError
