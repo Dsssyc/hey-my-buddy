@@ -28,6 +28,21 @@ export function pendingMark(profile: Pick<Profile, "pendingSince">): string {
 }
 
 /**
+ * One profile's catalog-state row text. An explicit board `catalogStatus` is
+ * the state and wins as recorded; recorded availability only supplies the
+ * default for fixtures from before ADR-027, because `available` also folds in
+ * harness health and can never override an explicit catalog state.
+ */
+export function catalogStateText(
+  profile: Pick<Profile, "available" | "catalogStatus" | "pendingSince">,
+): string {
+  if (profile.catalogStatus === "pending") return pendingMark(profile);
+  if (profile.catalogStatus === "available") return "可用";
+  if (profile.catalogStatus === "unavailable") return "不可用";
+  return profile.available ? "可用" : "不可用";
+}
+
+/**
  * User-facing wording for a thinking effort. Every native value — including
  * `off` — is shown as recorded, exactly like `low`, `high` and `max`; only
  * surrounding whitespace is dropped.

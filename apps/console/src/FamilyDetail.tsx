@@ -20,7 +20,7 @@ import type {
   Snapshot,
 } from "./types";
 import { Badge, Help, formatDate } from "./ui";
-import { catalogPending, effortText, pendingMark, profileTitle } from "./profile-display";
+import { catalogPending, catalogStateText, effortText, pendingMark, profileTitle } from "./profile-display";
 import {
   MODEL_CONCURRENCY_DEFAULT,
   MODEL_CONCURRENCY_MAX,
@@ -360,7 +360,7 @@ export function FamilyDetail({ family, data, recorded, editor, isNew = false, on
                     <dt>上下文</dt><dd>{profile.contextWindow ? profile.contextWindow.toLocaleString() + " tokens" : "未知"}</dd>
                     <dt>能力</dt><dd>{profile.capabilities.length ? profile.capabilities.map(capabilityLabel).join("、") : "未记录"}</dd>
                     <dt>目录来源</dt><dd>{profile.source || "未记录"}</dd>
-                    <dt>目录状态</dt><dd>{catalogPending(profile) ? pendingMark(profile) : profile.available ? "可用" : "不可用"}</dd>
+                    <dt>目录状态</dt><dd>{catalogStateText(profile)}</dd>
                     <dt>可用性</dt><dd>{profile.unavailableReason || (profile.available ? "未验证" : "目录中不可用")}</dd></dl>
                 </div>
               </details>;

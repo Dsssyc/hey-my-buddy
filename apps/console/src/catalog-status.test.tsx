@@ -9,6 +9,7 @@ import type { Profile, ProfilePage, Snapshot, WriterGrant } from "./types";
 const flashOff = "dsh:deepseek-official:deepseek-flash:off";
 const flashHigh = "dsh:deepseek-official:deepseek-flash:high";
 const plainMax = "dsh:deepseek-official:plain-model:max";
+const legacyMax = "dsh:deepseek-official:legacy-model:max";
 const ghostLow = "dsh:deepseek-official:ghost-model:low";
 const retiredMax = "dsh:deepseek-official:retired-model:max";
 const retiredLow = "dsh:deepseek-official:retired-model:low";
@@ -19,10 +20,11 @@ const early = formatDate(earlyMissing);
 const late = formatDate(lateMissing);
 
 /**
- * One DSH catalog in three states (ADR-027 §6): a pending family whose efforts
- * record different first-absence times, a plain family whose fixture predates
- * the catalogStatus field, a pending family that never recorded a time, and a
- * retired unavailable family.
+ * One DSH catalog covering the ADR-027 §6 states: a pending family whose
+ * efforts record different first-absence times, a family the board marks
+ * catalog-available while harness health makes it unusable, a pre-ADR-027
+ * fixture profile without the new fields, a pending family that never recorded
+ * a time, and a retired unavailable family.
  */
 function catalog(): Profile[] {
   const base = {
@@ -34,7 +36,12 @@ function catalog(): Profile[] {
       available: true, enabled: true, catalogStatus: "pending" as const, pendingSince: earlyMissing },
     { ...base, profileId: flashHigh, model: "deepseek-flash", effort: "high", label: "deepseek-flash · high",
       available: true, enabled: false, catalogStatus: "pending" as const, pendingSince: lateMissing },
+    // Catalog-available by the board, unusable by harness health: the two
+    // facts must never merge in the 目录状态 row.
     { ...base, profileId: plainMax, model: "plain-model", effort: "max", label: "plain-model · max",
+      available: false, enabled: true, catalogStatus: "available" as const,
+      unavailableReason: "HARNESS_UNHEALTHY" },
+    { ...base, profileId: legacyMax, model: "legacy-model", effort: "max", label: "legacy-model · max",
       available: true, enabled: true },
     { ...base, profileId: ghostLow, model: "ghost-model", effort: "low", label: "ghost-model · low",
       available: true, enabled: false, catalogStatus: "pending" as const, pendingSince: null },
@@ -118,11 +125,11 @@ describe("catalog pending display (ADR-027 §6)", () => {
     expect(pendingRow.textContent).not.toContain(late);
     expect(pendingRow.textContent).not.toContain("不可用");
     // A fixture without the new field shows no invented state.
-    const plainRow = screen.getByRole("button", { name: /^plain-model，已启用 1\/1/ });
-    expect(plainRow.textContent).not.toContain("待确认");
+    const legacyRow = screen.getByRole("button", { name: /^legacy-model，已启用 1\/1/ });
+    expect(legacyRow.textContent).not.toContain("待确认");
     // The unavailable family reads as 不可用, never as 待确认.
-    await user.click(screen.getByRole("checkbox", { name: "显示不可用配置（2）" }));
-    await screen.findByRole("heading", { name: "模型 4" });
+    await user.click(screen.getByRole("checkbox", { name: "显示不可用配置（3）" }));
+    await screen.findByRole("heading", { name: "模型 5" });
     const retiredRow = screen.getByRole("button", { name: /^retired-model，已启用 0\/2，不可用（provider paused）/ });
     expect(retiredRow.textContent).not.toContain("待确认");
   });
@@ -135,6 +142,7 @@ describe("catalog pending display (ADR-027 §6)", () => {
     // Both efforts are pending, but the family row carries exactly one mark
     // with the earliest board-recorded time.
     const pendingRow = screen.getByRole("button", { name: /^deepseek-flash，已启用 1\/2，Router，待确认/ });
+    expect(pendingRow.querySelectorAll(".family-pending-mark")).toHaveLength(1);
     const mark = pendingRow.querySelector(".family-pending-mark");
     expect(mark?.textContent).toBe(`待确认 · 自 ${early}`);
   });
@@ -184,5 +192,29 @@ describe("catalog pending display (ADR-027 §6)", () => {
     expect(ghostRow.textContent).toContain("待确认");
     expect(ghostRow.textContent).not.toContain("自 ");
     expect(ghostRow.textContent).not.toContain("未记录");
+  });
+
+  it("keeps the board's catalog-available state when harness health marks the profile unusable", async () => {
+    const f = fixture();
+    const user = userEvent.setup();
+    window.location.hash = "#models";
+    render(<App suppliedApi={f.api} />);
+    await screen.findByRole("heading", { name: "模型 3" });
+    await user.click(screen.getByRole("checkbox", { name: "显示不可用配置（3）" }));
+    await screen.findByRole("heading", { name: "模型 5" });
+    await user.click(screen.getByRole("button", { name: /^plain-model，已启用 1\/1，不可用（HARNESS_UNHEALTHY）/ }));
+    await screen.findByRole("heading", { name: "plain-model" });
+    // The 目录状态 row reads the board's explicit catalogStatus: 可用, even
+    // though harness health makes this configuration unusable right now.
+    const facts = [...document.querySelectorAll(".effort-evaluation .facts")];
+    const stateRow = facts.flatMap(fact => [...fact.querySelectorAll("dt")])
+      .find(dt => dt.textContent === "目录状态")?.nextElementSibling;
+    expect(stateRow?.textContent).toBe("可用");
+    // The overall availability stays honest: the header badge and the 可用性
+    // row both keep the recorded unavailability.
+    expect(screen.getByText("不可用", { selector: ".badge" })).toBeTruthy();
+    expect(screen.queryByText("可用", { selector: ".badge" })).toBeNull();
+    const factValues = facts.flatMap(fact => [...fact.querySelectorAll("dd")]).map(dd => dd.textContent);
+    expect(factValues).toContain("HARNESS_UNHEALTHY");
   });
 });
