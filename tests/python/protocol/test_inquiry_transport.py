@@ -34,10 +34,10 @@ class TransportTests(unittest.TestCase):
         self.run = identity()
         self.endpoint = ctl.CTwoLiveEndpoint(
             self.run, lv.LiveCapabilities(inquiry_delivery="cooperative-checkpoint"),
-            TEST_CRM, instance_id="a" * 64, token="b" * 64, state_dir=Path(os.environ["BUDDY_STATE_DIR"]))
+            TEST_CRM, instance_id="a" * 64, token="b" * 64, state_dir=Path(os.environ["HMB_STATE_DIR"]))
         self.channel = ctl.CTwoLiveChannel(
             self.run, TEST_CRM, name="Hana", address="ipc://cc" + "5" * 38,
-            instance_id="a" * 64, token="b" * 64, state_dir=Path(os.environ["BUDDY_STATE_DIR"]))
+            instance_id="a" * 64, token="b" * 64, state_dir=Path(os.environ["HMB_STATE_DIR"]))
         self.addCleanup(self.endpoint.close, reason="test-finished")
 
     def connect(self, peer):

@@ -15,7 +15,7 @@ from pathlib import Path
 import hey_my_buddy.install.skill_package as skill_package
 
 ROOT = Path(__file__).resolve().parents[3]
-SKILL = ROOT / "skills" / "buddy" / "SKILL.md"
+SKILL = ROOT / "skills" / "hey-my-buddy" / "SKILL.md"
 REFERENCES = ROOT / "docs" / "reference"
 MAX_SKILL_BYTES = 4 * 1024
 LINK = re.compile(r"\[([^\]]+)\]\(([^)\s]+)\)")
@@ -29,7 +29,7 @@ class SkillSizeTests(unittest.TestCase):
         text = SKILL.read_text(encoding="utf-8")
         self.assertIsNone(re.search(r"\b\d+\.\d+\.\d+\b", text), "SKILL.md must not name a release version")
         for removed in ("contract 0.", "schema 1", "尚未安装", "not yet installed", "already-current",
-                        "active-runtime.json", "BUDDY_DEV_SOURCE", "uvx ", "SOURCE_DATE_EPOCH"):
+                        "active-runtime.json", "HMB_DEV_SOURCE", "uvx ", "SOURCE_DATE_EPOCH"):
             with self.subTest(removed=removed):
                 self.assertNotIn(removed, text)
         # The packaging step adds the version marker; the source must not carry one.
@@ -39,7 +39,7 @@ class SkillSizeTests(unittest.TestCase):
         text = SKILL.read_text(encoding="utf-8")
         self.assertTrue(text.startswith("---\n"))
         head = text.split("\n---\n", 1)[0]
-        self.assertIn("\nname: buddy", head)
+        self.assertIn("\nname: hey-my-buddy", head)
         self.assertIn("\ndescription: ", head)
 
 

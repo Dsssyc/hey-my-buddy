@@ -55,7 +55,7 @@ elseif (-not (Test-Path $uv)) {
 $source = if ($WheelUrl) { $WheelUrl } else { "hey-my-buddy==$Version" }
 Write-Output "Package source: $source"
 Write-Output "uv: $uv"
-Write-Output "Writes: $privateDir; ~/.agents/skills/buddy; ~/.claude/skills/buddy; ~/.local/share/hey-my-buddy"
+Write-Output "Writes: $privateDir; ~/.agents/skills/hey-my-buddy; ~/.claude/skills/hey-my-buddy; ~/.local/share/hey-my-buddy"
 $oldUvBin = $env:UV_BIN
 try {
     $env:UV_BIN = $uv

@@ -9,7 +9,7 @@ import sqlite3
 import tempfile
 import unittest
 
-from blackboard.store.upgrade_fixture import load_fixture
+from blackboard.store.upgrade_fixture import load_fixture, _git, _sha, _json
 from blackboard.catalog.test_catalog_trust import reading
 from hey_my_buddy.blackboard.catalog.catalog import CONFIRMED_ABSENCE_REASON
 from hey_my_buddy.blackboard.evaluation.evaluation import EvaluationStore
@@ -20,6 +20,7 @@ from hey_my_buddy.blackboard.store.store import BoardStore
 from hey_my_buddy.blackboard.tasks import workspace
 from hey_my_buddy.blackboard.tasks.workflow import WorkflowCoordinator
 from hey_my_buddy.install.upgrade import idle_snapshot, migrate_board
+from hey_my_buddy.errors import BoardError
 
 
 class UpgradeFixtureTests(unittest.TestCase):
@@ -59,7 +60,13 @@ class UpgradeFixtureTests(unittest.TestCase):
             workspace.verify(manifest)
             for artifact in connection.execute('SELECT * FROM workflow_artifacts WHERE run_id=?', (run_id,)):
                 if artifact['kind'] == 'output':
-                    workspace.verify_sealed_output(manifest, manifest, json.loads(artifact['manifest_json']))
+                    output = json.loads(artifact['manifest_json'])
+                    # Archive evidence uses the released namespace, never the current contract.
+                    self.assertTrue(output['ref'].startswith('refs/buddy/workspaces/'))
+                    self.assertEqual(_git(Path(manifest['snapshot']['repositoryPath']), 'rev-parse', output['ref']), output['commit'])
+                    self.assertEqual(_git(Path(manifest['snapshot']['repositoryPath']), 'rev-parse', output['commit'] + '^{tree}'), output['tree'])
+                    self.assertEqual(_sha(Path(output['diffPath']).read_bytes()), output['diffSha256'])
+                    self.assertEqual(_sha(_json(output['snapshot']).encode()), output['snapshotSha256'])
                 elif artifact['kind'] == 'shared-refs':
                     WorkflowCoordinator.verify_shared_refs_record(json.loads(artifact['manifest_json']))
         self.assertEqual(connection.execute('SELECT COUNT(*) FROM workflow_host_conclusions').fetchone()[0], 2)
@@ -79,16 +86,15 @@ class UpgradeFixtureTests(unittest.TestCase):
                       'family_annotations', 'model_concurrency', 'harness_health'):
             self.assertGreater(connection.execute(f'SELECT COUNT(*) FROM {table}').fetchone()[0], 0, table)
 
-    def test_delivered_stock_can_get_a_real_independent_host_seal(self):
+    def test_archived_delivered_stock_cannot_get_a_current_host_seal(self):
         fixture, connection = self.restored()
         run_id, manifest, attempt = self.sample(fixture, connection)
         output = json.loads(connection.execute("SELECT manifest_json FROM workflow_artifacts WHERE run_id=? AND kind='output'", (run_id,)).fetchone()[0])
         worker_file = Path(output['diffPath']).with_name('output.json')
         before = worker_file.read_bytes()
-        seal = workspace.host_seal(fixture['state'], manifest, run_id, attempt)
-        self.assertEqual(seal['kind'], 'host-output')
-        self.assertEqual(workspace.verify_sealed_output(manifest, manifest, seal), {'changedPaths': []})
-        self.assertEqual(workspace.host_seal(fixture['state'], manifest, run_id, attempt), seal)
+        with self.assertRaises(BoardError) as rejected:
+            workspace.host_seal(fixture['state'], manifest, run_id, attempt)
+        self.assertEqual(rejected.exception.code, 'WORKSPACE_CONFLICT')
         self.assertEqual(worker_file.read_bytes(), before)
 
     def test_portable_roots_rebind_stable_identities_without_changing_native_history(self):

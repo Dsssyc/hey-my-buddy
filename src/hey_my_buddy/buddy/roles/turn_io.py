@@ -129,9 +129,9 @@ def write_turn_files(context: ExecutionContext) -> None:
             "token": context.agent_credential, "taskId": context.task_id,
             "attemptId": context.attempt_id, "generation": context.generation, "turnId": context.turn_id,
         })
-        context.environment["BUDDY_AGENT_CREDENTIAL_FILE"] = str(context.credential_file())
-        context.environment["BUDDY_TASK_ID"] = context.task_id
-        context.environment["BUDDY_ATTEMPT_ID"] = context.attempt_id
+        context.environment["HMB_AGENT_CREDENTIAL_FILE"] = str(context.credential_file())
+        context.environment["HMB_TASK_ID"] = context.task_id
+        context.environment["HMB_ATTEMPT_ID"] = context.attempt_id
 
 
 def workspace_cwd(context: ExecutionContext) -> str:
@@ -275,7 +275,7 @@ def seal_workspace(context: ExecutionContext) -> tuple[dict | None, str | None]:
     manifest = getattr(context, "effective_workspace", None) or (context.turn_input or {}).get("executionWorkspace")
     if not isinstance(manifest, dict) or not manifest:
         return None, None
-    state_dir = context.environment.get("BUDDY_STATE_DIR")
+    state_dir = context.environment.get("HMB_STATE_DIR")
     if not state_dir:
         return None, "the attempt has no private state directory to seal into"
     try:

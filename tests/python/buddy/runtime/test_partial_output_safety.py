@@ -11,7 +11,7 @@ from hey_my_buddy.buddy.runtime.partial_outputs import capture
 class PartialOutputSafetyTests(unittest.TestCase):
     def context(self):
         return SimpleNamespace(turn_input={"executionWorkspace": {"path": "/private/fixture"}},
-                               environment={"BUDDY_STATE_DIR": "/private/fixture-state"}, task_id="run", attempt_id="attempt")
+                               environment={"HMB_STATE_DIR": "/private/fixture-state"}, task_id="run", attempt_id="attempt")
 
     def test_unconfirmed_stop_and_explicit_pre_model_failure_never_scan_checkout(self):
         for stopped, payload in ((False, {"modelStarted": True}), (True, {"modelStarted": False})):

@@ -81,10 +81,10 @@ def fixture_live_channel(case, identity, *, credentials, journal_path, activity_
     from hey_my_buddy.buddy.harnesses.inquiry_bridge import InquiryBridge
     from hey_my_buddy.buddy.harnesses.live import EXISTING_CAPABILITIES
     endpoint = CTwoLiveEndpoint(identity, EXISTING_CAPABILITIES[harness], TEST_CRM,
-                               instance_id="c"*64, token="d"*64, state_dir=Path(os.environ["BUDDY_STATE_DIR"]))
+                               instance_id="c"*64, token="d"*64, state_dir=Path(os.environ["HMB_STATE_DIR"]))
     address = f"fixture-address-{uuid.uuid4().hex}"
     channel = CTwoLiveChannel(identity, TEST_CRM, name="Test Producer", address=address,
-                             instance_id="c"*64, token="d"*64, state_dir=Path(os.environ["BUDDY_STATE_DIR"]))
+                             instance_id="c"*64, token="d"*64, state_dir=Path(os.environ["HMB_STATE_DIR"]))
     # DSH creates its owner when the native turn starts; its endpoint must not
     # acquire a competing fixture consumer before that owner exists.
     bridge = None
@@ -148,8 +148,8 @@ class NativeRunCase(FakeAppServerTests):
 
     def setUp(self):
         super().setUp()
-        self.temp = tempfile.TemporaryDirectory(prefix="buddy-zcode-seam-",
-                                                 dir=os.environ.get("BUDDY_CHECKS_TMPDIR", "/tmp"))
+        self.temp = tempfile.TemporaryDirectory(prefix="hey-my-buddy-zcode-seam-",
+                                                 dir=os.environ.get("HMB_CHECKS_TMPDIR", "/tmp"))
         self.addCleanup(self.temp.cleanup)
         self.base = Path(self.temp.name)
         self.enterContext(mock.patch.dict(os.environ, self.environment, clear=True))
@@ -173,8 +173,8 @@ class MockNativeCase(ZcodeFixtureCase):
 
     def setUp(self):
         super().setUp()
-        self.temp = tempfile.TemporaryDirectory(prefix="buddy-zcode-seam-w-",
-                                                 dir=os.environ.get("BUDDY_CHECKS_TMPDIR", "/tmp"))
+        self.temp = tempfile.TemporaryDirectory(prefix="hey-my-buddy-zcode-seam-w-",
+                                                 dir=os.environ.get("HMB_CHECKS_TMPDIR", "/tmp"))
         self.addCleanup(self.temp.cleanup)
         self.base = Path(self.temp.name)
 
@@ -184,7 +184,7 @@ class MockNativeCase(ZcodeFixtureCase):
         mount = prepare_session_service(
             invocation_root=invocation, identity=identity, input_sha256=input_hash(turn_input),
             attention_path=self.base / "attention.json",
-            session_tools=worker_services.session_tools(), completion_tool="buddy_finish_turn")
+            session_tools=worker_services.session_tools(), completion_tool="hey_my_buddy_finish_turn")
         prompt = worker_services.micro_task_prompt("fixture task", turn_input, mount.finish_tool,
                                                  checkpoint_tool=None, answer_tool=None)
         request = RunRequest(
@@ -218,7 +218,7 @@ class FastSeamTests(NativeRunCase):
         native.assert_not_called()
 
     def test_a_settled_answer_is_a_final_message_fact_with_role_checked_schema(self):
-        os.environ["BUDDY_ZCODE_TEST_CASE"] = "ok"
+        os.environ["HMB_ZCODE_TEST_CASE"] = "ok"
         prompt = no_tool_prompt("Choose a buddy", SCHEMA)
         correction = FastCorrection(SCHEMA, prompt)
         seen = []
@@ -249,7 +249,7 @@ class FastSeamTests(NativeRunCase):
         self.assertNotIn("reported", policy.to_payload())
 
     def test_one_format_correction_runs_a_second_session_on_the_same_process(self):
-        os.environ["BUDDY_ZCODE_TEST_CASE"] = "correct"
+        os.environ["HMB_ZCODE_TEST_CASE"] = "correct"
         prompt = no_tool_prompt("Choose a buddy", SCHEMA)
         correction = FastCorrection(SCHEMA, prompt)
         result = run(self.fast_request(prompt), observer=correction.observer,
@@ -262,7 +262,7 @@ class FastSeamTests(NativeRunCase):
         self.assertEqual(correction.correction_count, 1)
 
     def test_a_tool_fact_stops_the_run_through_the_observer_feedback(self):
-        os.environ["BUDDY_ZCODE_TEST_CASE"] = "tool"
+        os.environ["HMB_ZCODE_TEST_CASE"] = "tool"
         prompt = no_tool_prompt("Choose a buddy", SCHEMA)
         correction = FastCorrection(SCHEMA, prompt)
         result = run(self.fast_request(prompt), observer=correction.observer,
@@ -280,7 +280,7 @@ class FastSeamTests(NativeRunCase):
         # executes settled feedback under the shared deadline and cancel. A
         # bounded observer that corrects twice proves the second correction
         # really runs — and terminates — instead of looping or being capped.
-        os.environ["BUDDY_ZCODE_TEST_CASE"] = "ok"
+        os.environ["HMB_ZCODE_TEST_CASE"] = "ok"
         prompt = no_tool_prompt("Choose a buddy", SCHEMA)
         request = self.fast_request(prompt)
         rounds = {"count": 0}
@@ -305,7 +305,7 @@ class FastSeamTests(NativeRunCase):
         # session's own default tools, and the effective policy says exactly
         # that. No external review eligibility is implied.
         from hey_my_buddy.buddy.harnesses.run_contract import FEEDBACK_CONTINUE
-        os.environ["BUDDY_ZCODE_TEST_CASE"] = "write-final"
+        os.environ["HMB_ZCODE_TEST_CASE"] = "write-final"
         prompt = no_tool_prompt("Choose a buddy", SCHEMA)
         request = self.fast_request(prompt)
         scoped = RunRequest.from_payload(request.to_payload() | {"toolScope": "write"})
@@ -325,7 +325,7 @@ class FastSeamTests(NativeRunCase):
         # rule that stops marks it incomplete — the driver never fails the
         # frame by reading the tool scope itself.
         from hey_my_buddy.buddy.harnesses.run_contract import FEEDBACK_CONTINUE
-        os.environ["BUDDY_ZCODE_TEST_CASE"] = "write-post-close"
+        os.environ["HMB_ZCODE_TEST_CASE"] = "write-post-close"
         prompt = no_tool_prompt("Choose a buddy", SCHEMA)
         request = self.fast_request(prompt)
         scoped = RunRequest.from_payload(request.to_payload() | {"toolScope": "write"})
@@ -335,7 +335,7 @@ class FastSeamTests(NativeRunCase):
         self.assertTrue(result.completion_evidence.stream_end)
         self.assertEqual(result.tool_evidence.value["toolCalls"], 1)
         stopping = FastCorrection(SCHEMA, prompt)
-        os.environ["BUDDY_ZCODE_TEST_CASE"] = "post-close-tool"
+        os.environ["HMB_ZCODE_TEST_CASE"] = "post-close-tool"
         stopped = run(self.fast_request(prompt), observer=stopping.observer,
                       services=None, cancelled=lambda: False)
         self.assertEqual(stopped.end.status, "error")
@@ -347,7 +347,7 @@ class FastSeamTests(NativeRunCase):
         # result reports a child that existed and was confirmed stopped —
         # never a leaked process behind an invalid-native-result.
         from unittest import mock as _mock
-        os.environ["BUDDY_ZCODE_TEST_CASE"] = "ok"
+        os.environ["HMB_ZCODE_TEST_CASE"] = "ok"
         prompt = no_tool_prompt("Choose a buddy", SCHEMA)
         correction = FastCorrection(SCHEMA, prompt)
         with _mock.patch("hey_my_buddy.buddy.harnesses.zcode.native_run.NativeConnection",
@@ -377,7 +377,7 @@ class FastSeamTests(NativeRunCase):
             observed.append(handle)
             return False
 
-        os.environ["BUDDY_ZCODE_TEST_CASE"] = "ok"
+        os.environ["HMB_ZCODE_TEST_CASE"] = "ok"
         prompt = no_tool_prompt("Choose a buddy", SCHEMA)
         correction = FastCorrection(SCHEMA, prompt)
         with _mock.patch.object(ProcessHandle, "shutdown_confirmed", unconfirmed):
@@ -405,7 +405,7 @@ class FastSeamTests(NativeRunCase):
         # The refusal answer completes first — the peer reads the reply with
         # the same id and records it — and only then does the role's stop take
         # effect on the driver's next boundary, with no settlement behind it.
-        os.environ["BUDDY_ZCODE_TEST_CASE"] = "reverse-request"
+        os.environ["HMB_ZCODE_TEST_CASE"] = "reverse-request"
         prompt = no_tool_prompt("Choose a buddy", SCHEMA)
         correction = FastCorrection(SCHEMA, prompt)
         started = time.monotonic()
@@ -424,7 +424,7 @@ class FastSeamTests(NativeRunCase):
         self.assertEqual(result.stop_evidence.interrupt.basis, "observer-request")
 
     def test_a_reverse_request_before_the_rpc_reply_stops_after_the_refusal(self):
-        os.environ["BUDDY_ZCODE_TEST_CASE"] = "reverse-before-send-reply"
+        os.environ["HMB_ZCODE_TEST_CASE"] = "reverse-before-send-reply"
         prompt = no_tool_prompt("Choose a buddy", SCHEMA)
         correction = FastCorrection(SCHEMA, prompt)
         started = time.monotonic()
@@ -453,7 +453,7 @@ class FastSeamTests(NativeRunCase):
         # A late tool frame from a child session keeps its projected fact and
         # reaches the role observer first: the fast rule stops with its own
         # reason instead of the protocol layer's foreign-session code.
-        os.environ["BUDDY_ZCODE_TEST_CASE"] = "post-close-foreign"
+        os.environ["HMB_ZCODE_TEST_CASE"] = "post-close-foreign"
         prompt = no_tool_prompt("Choose a buddy", SCHEMA)
         correction = FastCorrection(SCHEMA, prompt)
         result = run(self.fast_request(prompt), observer=correction.observer,
@@ -466,7 +466,7 @@ class FastSeamTests(NativeRunCase):
 
     def test_a_failed_close_keeps_the_final_message_facts(self):
         from hey_my_buddy.buddy.harnesses.run_contract import FEEDBACK_CONTINUE
-        os.environ["BUDDY_ZCODE_TEST_CASE"] = "close-fail"
+        os.environ["HMB_ZCODE_TEST_CASE"] = "close-fail"
         prompt = no_tool_prompt("Choose a buddy", SCHEMA)
         request = self.fast_request(prompt)
         result = run(request, observer=lambda _facts: FEEDBACK_CONTINUE,
@@ -486,7 +486,7 @@ class FastSeamTests(NativeRunCase):
         # event and no timeout wait may be needed to end the run.
         for case in ("reverse-request", "reverse-oauth"):
             with self.subTest(case=case):
-                os.environ["BUDDY_ZCODE_TEST_CASE"] = case
+                os.environ["HMB_ZCODE_TEST_CASE"] = case
                 prompt = no_tool_prompt("Choose a buddy", SCHEMA)
                 correction = FastCorrection(SCHEMA, prompt)
                 started = time.monotonic()
@@ -507,7 +507,7 @@ class FastSeamTests(NativeRunCase):
     def test_a_pre_spawn_failure_claims_nothing_that_never_happened(self):
         from unittest import mock as _mock
         from hey_my_buddy.buddy.harnesses.zcode.protocol import NativeError as _NativeError
-        os.environ["BUDDY_ZCODE_TEST_CASE"] = "ok"
+        os.environ["HMB_ZCODE_TEST_CASE"] = "ok"
         prompt = no_tool_prompt("Choose a buddy", SCHEMA)
         correction = FastCorrection(SCHEMA, prompt)
         with _mock.patch("hey_my_buddy.buddy.harnesses.zcode.native_run._spawn_app_server",
@@ -564,7 +564,7 @@ class WorkerSeamTests(MockNativeCase):
     def test_worker_levels_keep_the_micro_task_carrier_and_record_the_sent_mode(self):
         from hey_my_buddy.buddy.harnesses.registry import worker_permission
         os.environ.update(self.environment)
-        os.environ["BUDDY_ZCODE_TEST_CASE"] = "ok"
+        os.environ["HMB_ZCODE_TEST_CASE"] = "ok"
         original_open = native_run._open_root
         for level in ("read", "write", "full"):
             with self.subTest(level=level):
@@ -586,7 +586,7 @@ class WorkerSeamTests(MockNativeCase):
     def resume_with_levels(self, first_level, second_level, *, case="ok"):
         from hey_my_buddy.buddy.harnesses.registry import worker_permission
         os.environ.update(self.environment)
-        os.environ["BUDDY_ZCODE_TEST_CASE"] = "ok"
+        os.environ["HMB_ZCODE_TEST_CASE"] = "ok"
         request, services = self.worker_request(self.turn_input())
         permission = worker_permission("zcode", first_level)
         request = request.model_copy(update={"tool_scope": permission.tool_scope, "worker_permission": permission})
@@ -597,7 +597,7 @@ class WorkerSeamTests(MockNativeCase):
             continuation=RunContinuation(mode="native-session", previous_session_id=session))
         permission = worker_permission("zcode", second_level)
         request = request.model_copy(update={"tool_scope": permission.tool_scope, "worker_permission": permission})
-        os.environ["BUDDY_ZCODE_TEST_CASE"] = case
+        os.environ["HMB_ZCODE_TEST_CASE"] = case
         calls, mode_readbacks = [], []
         original = native_run.NativeConnection.call
 
@@ -616,7 +616,7 @@ class WorkerSeamTests(MockNativeCase):
         from hey_my_buddy.protocol.usage import normalize_token_usage
         fixture = Path(__file__).parent / "fixtures/mock_zcode_usage.py"
         expected = json.loads(fixture.with_name("native-usage-zcode.json").read_text())["expectedMessages"]
-        with mock.patch.dict(self.environment, {"BUDDY_ZCODE_CLI": str(fixture)}):
+        with mock.patch.dict(self.environment, {"HMB_ZCODE_CLI": str(fixture)}):
             for first_level, second_level, before, after in (
                     ("read", "write", "build", "yolo"),
                     ("write", "read", "yolo", "yolo"),
@@ -696,9 +696,9 @@ class WorkerSeamTests(MockNativeCase):
         from hey_my_buddy.buddy.harnesses.live import EXISTING_CAPABILITIES
         from hey_my_buddy.protocol.activity import is_newer
         os.environ.update(self.environment)
-        os.environ["BUDDY_ZCODE_TEST_CASE"] = "task-tool"
+        os.environ["HMB_ZCODE_TEST_CASE"] = "task-tool"
         request, services = self.worker_request(self.turn_input())
-        endpoint = CTwoLiveEndpoint(request.identity, EXISTING_CAPABILITIES["zcode"], TEST_CRM, state_dir=Path(os.environ["BUDDY_STATE_DIR"]))
+        endpoint = CTwoLiveEndpoint(request.identity, EXISTING_CAPABILITIES["zcode"], TEST_CRM, state_dir=Path(os.environ["HMB_STATE_DIR"]))
         services = dataclasses.replace(services, live=endpoint)
         seen = []
         original = endpoint.publish_activity
@@ -725,7 +725,7 @@ class WorkerSeamTests(MockNativeCase):
 
     def test_no_live_endpoint_keeps_the_native_activity_final_fact(self):
         os.environ.update(self.environment)
-        os.environ["BUDDY_ZCODE_TEST_CASE"] = "task-tool"
+        os.environ["HMB_ZCODE_TEST_CASE"] = "task-tool"
         request, services = self.worker_request(self.turn_input())
         self.assertIsNone(services.live)
         result = run(request, observer=worker_observer, services=services, cancelled=lambda: False)
@@ -739,9 +739,9 @@ class WorkerSeamTests(MockNativeCase):
         from hey_my_buddy.buddy.harnesses.c_two_live import CTwoLiveEndpoint
         from hey_my_buddy.buddy.harnesses.live import EXISTING_CAPABILITIES
         os.environ.update(self.environment)
-        os.environ["BUDDY_ZCODE_TEST_CASE"] = "task-tool"
+        os.environ["HMB_ZCODE_TEST_CASE"] = "task-tool"
         request, services = self.worker_request(self.turn_input())
-        endpoint = CTwoLiveEndpoint(request.identity, EXISTING_CAPABILITIES["zcode"], TEST_CRM, state_dir=Path(os.environ["BUDDY_STATE_DIR"]))
+        endpoint = CTwoLiveEndpoint(request.identity, EXISTING_CAPABILITIES["zcode"], TEST_CRM, state_dir=Path(os.environ["HMB_STATE_DIR"]))
         services = dataclasses.replace(services, live=endpoint)
         with mock.patch.object(endpoint, "publish_activity", return_value=False) as publish:
             result = run(request, observer=worker_observer, services=services, cancelled=lambda: False)
@@ -757,7 +757,7 @@ class WorkerSeamTests(MockNativeCase):
         # is not rewritten — the fallback never blankets knowns into unknowns.
         from unittest import mock as _mock
         os.environ.update(self.environment)
-        os.environ["BUDDY_ZCODE_TEST_CASE"] = "ok"
+        os.environ["HMB_ZCODE_TEST_CASE"] = "ok"
         turn_input = self.turn_input()
         request, services = self.worker_request(turn_input)
         with _mock.patch("hey_my_buddy.buddy.harnesses.zcode.protocol.ZcodeAttemptUsage.raw_usage",
@@ -777,13 +777,13 @@ class WorkerSeamTests(MockNativeCase):
     def test_a_post_configure_failure_keeps_every_reached_stage_fact(self):
         import os as _os
         _os.environ.update(self.environment)
-        _os.environ["BUDDY_ZCODE_TEST_CASE"] = "wrong-input"
+        _os.environ["HMB_ZCODE_TEST_CASE"] = "wrong-input"
         turn_input = self.turn_input()
         request, services = self.worker_request(turn_input)
         from buddy.harnesses.fixtures.c_two_live_peer import TEST_CRM
         from hey_my_buddy.buddy.harnesses.c_two_live import CTwoLiveEndpoint
         from hey_my_buddy.buddy.harnesses.live import EXISTING_CAPABILITIES
-        endpoint = CTwoLiveEndpoint(request.identity, EXISTING_CAPABILITIES["zcode"], TEST_CRM, state_dir=Path(os.environ["BUDDY_STATE_DIR"]))
+        endpoint = CTwoLiveEndpoint(request.identity, EXISTING_CAPABILITIES["zcode"], TEST_CRM, state_dir=Path(os.environ["HMB_STATE_DIR"]))
         services = dataclasses.replace(services, live=endpoint)
         with mock.patch.object(endpoint, "publish_activity", wraps=endpoint.publish_activity) as publish:
             result = run(request, observer=worker_observer, services=services, cancelled=lambda: False)
@@ -807,7 +807,7 @@ class WorkerSeamTests(MockNativeCase):
 
     def test_a_micro_task_turn_settles_with_a_verified_completion_tool_value(self):
         os.environ.update(self.environment)
-        os.environ["BUDDY_ZCODE_TEST_CASE"] = "ok"
+        os.environ["HMB_ZCODE_TEST_CASE"] = "ok"
         turn_input = self.turn_input()
         request, services = self.worker_request(turn_input)
         result = run(request, observer=worker_observer, services=services, cancelled=lambda: False)
@@ -840,7 +840,7 @@ class WorkerSeamTests(MockNativeCase):
 
     def test_native_resume_reuses_the_bound_session_through_the_request_continuation(self):
         os.environ.update(self.environment)
-        os.environ["BUDDY_ZCODE_TEST_CASE"] = "ok"
+        os.environ["HMB_ZCODE_TEST_CASE"] = "ok"
         first_input = self.turn_input()
         request, services = self.worker_request(first_input)
         first = run(request, observer=worker_observer, services=services, cancelled=lambda: False)
@@ -860,7 +860,7 @@ class WorkerSeamTests(MockNativeCase):
         # receipt; the unacknowledged close fails the run but never rewrites
         # the mechanism or erases the outcome, call and receipt facts.
         os.environ.update(self.environment)
-        os.environ["BUDDY_ZCODE_TEST_CASE"] = "close-failed"
+        os.environ["HMB_ZCODE_TEST_CASE"] = "close-failed"
         turn_input = self.turn_input()
         request, services = self.worker_request(turn_input)
         result = run(request, observer=worker_observer, services=services, cancelled=lambda: False)
@@ -875,11 +875,11 @@ class WorkerSeamTests(MockNativeCase):
 
     def test_the_request_refuses_mismatched_service_descriptions(self):
         os.environ.update(self.environment)
-        os.environ["BUDDY_ZCODE_TEST_CASE"] = "ok"
+        os.environ["HMB_ZCODE_TEST_CASE"] = "ok"
         turn_input = self.turn_input()
         request, services = self.worker_request(turn_input)
         broken = request.model_copy(update={"session_services": (
-            SessionService(tool_names=["mcp__other__buddy_finish_turn"]),)})
+            SessionService(tool_names=["mcp__other__hey_my_buddy_finish_turn"]),)})
         with self.assertRaises(BoardError):
             run(broken, observer=worker_observer, services=services, cancelled=lambda: False)
 
@@ -892,7 +892,7 @@ class WorkerSeamTests(MockNativeCase):
         # verified (the signed refusal and the accepted receipt) leave the
         # package.
         os.environ.update(self.environment)
-        os.environ["BUDDY_ZCODE_TEST_CASE"] = "refusal-argument"
+        os.environ["HMB_ZCODE_TEST_CASE"] = "refusal-argument"
         turn_input = self.turn_input()
         request, services = self.worker_request(turn_input)
         result = run(request, observer=worker_observer, services=services, cancelled=lambda: False)
@@ -922,7 +922,7 @@ class WorkerSeamTests(MockNativeCase):
         # the verified turn, and the native activity projection keeps its own original
         # counts — a separate fact from this package.
         os.environ.update(self.environment)
-        os.environ["BUDDY_ZCODE_TEST_CASE"] = "task-tool"
+        os.environ["HMB_ZCODE_TEST_CASE"] = "task-tool"
         turn_input = self.turn_input()
         request, services = self.worker_request(turn_input)
         result = run(request, observer=worker_observer, services=services, cancelled=lambda: False)
@@ -943,7 +943,7 @@ class WorkerSeamTests(MockNativeCase):
 
     def test_a_request_schema_differring_from_the_mounted_contract_is_refused(self):
         os.environ.update(self.environment)
-        os.environ["BUDDY_ZCODE_TEST_CASE"] = "ok"
+        os.environ["HMB_ZCODE_TEST_CASE"] = "ok"
         turn_input = self.turn_input()
         request, services = self.worker_request(turn_input)
         # The completion mechanism serves exactly the role session-tool
@@ -960,7 +960,7 @@ class WorkerSeamTests(MockNativeCase):
 
     def test_a_read_scope_reports_unrestricted_honestly(self):
         os.environ.update(self.environment)
-        os.environ["BUDDY_ZCODE_TEST_CASE"] = "ok"
+        os.environ["HMB_ZCODE_TEST_CASE"] = "ok"
         turn_input = self.turn_input()
         request, services = self.worker_request(turn_input)
         scoped = request.model_copy(update={"tool_scope": "read"})
@@ -1046,7 +1046,7 @@ class ProducerContractTests(NativeRunCase):
         from hey_my_buddy.buddy.harnesses.live import EXISTING_CAPABILITIES
         from hey_my_buddy.protocol.activity import ActivityPublisher
         request = self.fast_request("fixture")
-        endpoint = CTwoLiveEndpoint(request.identity, EXISTING_CAPABILITIES["zcode"], TEST_CRM, state_dir=Path(os.environ["BUDDY_STATE_DIR"]))
+        endpoint = CTwoLiveEndpoint(request.identity, EXISTING_CAPABILITIES["zcode"], TEST_CRM, state_dir=Path(os.environ["HMB_STATE_DIR"]))
         now = [0.0]
         callback = mock.Mock(wraps=endpoint.publish_activity)
         publisher = ActivityPublisher(callback, clock=lambda: now[0])
@@ -1070,8 +1070,8 @@ class ProducerContractTests(NativeRunCase):
         make_inquiry_bridge = fixture_inquiry_bridge
         bind_live_channel = lambda *args, **kwargs: fixture_live_channel(self, *args, **kwargs)
         from hey_my_buddy.protocol import activity as activity_protocol
-        managed = tempfile.TemporaryDirectory(prefix="buddy-zcode-live-",
-                                              dir=os.environ.get("BUDDY_CHECKS_TMPDIR", "/tmp"))
+        managed = tempfile.TemporaryDirectory(prefix="hey-my-buddy-zcode-live-",
+                                              dir=os.environ.get("HMB_CHECKS_TMPDIR", "/tmp"))
         self.addCleanup(managed.cleanup)
         temp = Path(managed.name)
         credentials = {"socketPath": str(temp / "inquiry.sock"), "token": "a" * 64}
@@ -1117,8 +1117,8 @@ class ProducerContractTests(NativeRunCase):
         from hey_my_buddy.buddy.harnesses.live import InquiryPayload, LiveRequest
         make_inquiry_bridge = fixture_inquiry_bridge
         bind_live_channel = lambda *args, **kwargs: fixture_live_channel(self, *args, **kwargs)
-        managed = tempfile.TemporaryDirectory(prefix="buddy-zcode-live-a-",
-                                              dir=os.environ.get("BUDDY_CHECKS_TMPDIR", "/tmp"))
+        managed = tempfile.TemporaryDirectory(prefix="hey-my-buddy-zcode-live-a-",
+                                              dir=os.environ.get("HMB_CHECKS_TMPDIR", "/tmp"))
         self.addCleanup(managed.cleanup)
         temp = Path(managed.name)
         credentials = {"socketPath": str(temp / "inquiry.sock"), "token": "a" * 64}
@@ -1158,8 +1158,8 @@ class ProducerContractTests(NativeRunCase):
 
     def test_foreign_activity_and_journal_records_read_as_nothing(self):
         bind_live_channel = lambda *args, **kwargs: fixture_live_channel(self, *args, **kwargs)
-        managed = tempfile.TemporaryDirectory(prefix="buddy-zcode-live-f-",
-                                              dir=os.environ.get("BUDDY_CHECKS_TMPDIR", "/tmp"))
+        managed = tempfile.TemporaryDirectory(prefix="hey-my-buddy-zcode-live-f-",
+                                              dir=os.environ.get("HMB_CHECKS_TMPDIR", "/tmp"))
         self.addCleanup(managed.cleanup)
         temp = Path(managed.name)
         identity = RunIdentity(task_id="task", attempt_id="attempt-live", generation=1,
@@ -1186,8 +1186,8 @@ class ProducerContractTests(NativeRunCase):
     def test_journal_states_follow_the_direct_reader_semantics(self):
         """Empty is available, over-limit and unreadable keep their own reasons."""
         bind_live_channel = lambda *args, **kwargs: fixture_live_channel(self, *args, **kwargs)
-        managed = tempfile.TemporaryDirectory(prefix="buddy-zcode-live-j-",
-                                              dir=os.environ.get("BUDDY_CHECKS_TMPDIR", "/tmp"))
+        managed = tempfile.TemporaryDirectory(prefix="hey-my-buddy-zcode-live-j-",
+                                              dir=os.environ.get("HMB_CHECKS_TMPDIR", "/tmp"))
         self.addCleanup(managed.cleanup)
         temp = Path(managed.name)
         identity = RunIdentity(task_id="task", attempt_id="attempt-live", generation=1,
@@ -1227,8 +1227,8 @@ class ProducerContractTests(NativeRunCase):
         # The final effective record decides: the answer imports, the stale
         # rejection is gone, and the reader's count covers the question once.
         bind_live_channel = lambda *args, **kwargs: fixture_live_channel(self, *args, **kwargs)
-        managed = tempfile.TemporaryDirectory(prefix="buddy-zcode-live-sup-",
-                                              dir=os.environ.get("BUDDY_CHECKS_TMPDIR", "/tmp"))
+        managed = tempfile.TemporaryDirectory(prefix="hey-my-buddy-zcode-live-sup-",
+                                              dir=os.environ.get("HMB_CHECKS_TMPDIR", "/tmp"))
         self.addCleanup(managed.cleanup)
         temp = Path(managed.name)
         identity = RunIdentity(task_id="task", attempt_id="attempt-live", generation=1,
@@ -1240,7 +1240,7 @@ class ProducerContractTests(NativeRunCase):
         valid = {"version": 1, "taskId": "task", "attemptId": "attempt-live", "generation": 1,
                  "turnId": "turn-live", "inquiryId": "q-last", "state": "answered",
                  "answer": {"text": "owned answer", "bytes": 12,
-                            "via": "tool:buddy_answer_inquiry"}}
+                            "via": "tool:hey_my_buddy_answer_inquiry"}}
         journal.write_text(json.dumps(foreign) + "\n" + json.dumps(valid) + "\n")
         channel = bind_live_channel(identity, credentials={"socketPath": "", "token": "a" * 64},
                                     journal_path=str(journal), activity_path=temp / "activity.json")
@@ -1255,8 +1255,8 @@ class ProducerContractTests(NativeRunCase):
         # leaves exactly one rejection for that id — never an accumulation of
         # every historical refusal — and no bound record is projected for it.
         bind_live_channel = lambda *args, **kwargs: fixture_live_channel(self, *args, **kwargs)
-        managed = tempfile.TemporaryDirectory(prefix="buddy-zcode-live-rej-",
-                                              dir=os.environ.get("BUDDY_CHECKS_TMPDIR", "/tmp"))
+        managed = tempfile.TemporaryDirectory(prefix="hey-my-buddy-zcode-live-rej-",
+                                              dir=os.environ.get("HMB_CHECKS_TMPDIR", "/tmp"))
         self.addCleanup(managed.cleanup)
         temp = Path(managed.name)
         identity = RunIdentity(task_id="task", attempt_id="attempt-live", generation=1,
@@ -1288,8 +1288,8 @@ class ProducerContractTests(NativeRunCase):
         from hey_my_buddy.json_codec import canonical_json
         bind_live_channel = lambda *args, **kwargs: fixture_live_channel(self, *args, **kwargs)
         from hey_my_buddy.buddy.harnesses.zcode.protocol import COOPERATIVE_INQUIRY_NOTE
-        managed = tempfile.TemporaryDirectory(prefix="buddy-zcode-live-frame-",
-                                              dir=os.environ.get("BUDDY_CHECKS_TMPDIR", "/tmp"))
+        managed = tempfile.TemporaryDirectory(prefix="hey-my-buddy-zcode-live-frame-",
+                                              dir=os.environ.get("HMB_CHECKS_TMPDIR", "/tmp"))
         self.addCleanup(managed.cleanup)
         temp = Path(managed.name)
         identity = RunIdentity(task_id="task", attempt_id="attempt", generation=1,
@@ -1300,7 +1300,7 @@ class ProducerContractTests(NativeRunCase):
             rows.append({"version": 1, "taskId": "task", "attemptId": "attempt", "generation": 1,
                          "turnId": "turn", "inquiryId": f"q{index}", "state": "answered",
                          "answer": {"text": "x" * 3500, "bytes": 3500,
-                                    "via": "tool:buddy_answer_inquiry", "toolCallId": f"call-{index}",
+                                    "via": "tool:hey_my_buddy_answer_inquiry", "toolCallId": f"call-{index}",
                                     "at": "2026-10-06T00:00:00Z", "truncated": False},
                          "limitation": COOPERATIVE_INQUIRY_NOTE})
         for index in range(16, 32):
@@ -1339,8 +1339,8 @@ class ProducerContractTests(NativeRunCase):
         import hashlib as _hashlib
         make_inquiry_bridge = fixture_inquiry_bridge
         bind_live_channel = lambda *args, **kwargs: fixture_live_channel(self, *args, **kwargs)
-        managed = tempfile.TemporaryDirectory(prefix="buddy-zcode-live-s-",
-                                              dir=os.environ.get("BUDDY_CHECKS_TMPDIR", "/tmp"))
+        managed = tempfile.TemporaryDirectory(prefix="hey-my-buddy-zcode-live-s-",
+                                              dir=os.environ.get("HMB_CHECKS_TMPDIR", "/tmp"))
         self.addCleanup(managed.cleanup)
         temp = Path(managed.name)
         credentials = {"socketPath": str(temp / "inquiry.sock"), "token": "a" * 64,
@@ -1369,7 +1369,7 @@ class ProducerContractTests(NativeRunCase):
         self.assertEqual(entry.status, "answered")
         self.assertEqual(entry.answer, "the verified answer")
         self.assertEqual(entry.tool_call_id, "call-answer")
-        self.assertEqual(entry.via, "tool:buddy_answer_inquiry")
+        self.assertEqual(entry.via, "tool:hey_my_buddy_answer_inquiry")
         self.assertTrue(entry.at)
         self.assertEqual(entry.bytes, len("the verified answer".encode()))
         self.assertIs(entry.truncated, False)
@@ -1390,8 +1390,8 @@ class ProducerContractTests(NativeRunCase):
         from hey_my_buddy.buddy.harnesses.live import LiveObservation
         make_inquiry_bridge = fixture_inquiry_bridge
         bind_live_channel = lambda *args, **kwargs: fixture_live_channel(self, *args, **kwargs)
-        managed = tempfile.TemporaryDirectory(prefix="buddy-zcode-live-o-",
-                                              dir=os.environ.get("BUDDY_CHECKS_TMPDIR", "/tmp"))
+        managed = tempfile.TemporaryDirectory(prefix="hey-my-buddy-zcode-live-o-",
+                                              dir=os.environ.get("HMB_CHECKS_TMPDIR", "/tmp"))
         self.addCleanup(managed.cleanup)
         temp = Path(managed.name)
         credentials = {"socketPath": str(temp / "inquiry.sock"), "token": "a" * 64}
@@ -1417,7 +1417,7 @@ class ProducerContractTests(NativeRunCase):
         self.assertEqual(observation.session_id, "sess-live")
         self.assertEqual(observation.agent_status, "running")
         self.assertEqual(observation.delivery_mode, "cooperative-checkpoint")
-        self.assertEqual(observation.reply_tool.value["name"], "buddy_answer_inquiry")
+        self.assertEqual(observation.reply_tool.value["name"], "hey_my_buddy_answer_inquiry")
         self.assertEqual(observation.journal.value["enabled"], True)
         self.assertEqual(observation.recent_activity[0].kind, "k" * 80)
         self.assertEqual(observation.recent_activity[0].tool_name, "t" * 120)
@@ -1444,8 +1444,8 @@ class ProducerContractTests(NativeRunCase):
         import hashlib as _hashlib
         make_inquiry_bridge = fixture_inquiry_bridge
         bind_live_channel = lambda *args, **kwargs: fixture_live_channel(self, *args, **kwargs)
-        managed = tempfile.TemporaryDirectory(prefix="buddy-zcode-live-a2-",
-                                              dir=os.environ.get("BUDDY_CHECKS_TMPDIR", "/tmp"))
+        managed = tempfile.TemporaryDirectory(prefix="hey-my-buddy-zcode-live-a2-",
+                                              dir=os.environ.get("HMB_CHECKS_TMPDIR", "/tmp"))
         self.addCleanup(managed.cleanup)
         temp = Path(managed.name)
         credentials = {"socketPath": str(temp / "inquiry.sock"), "token": "a" * 64}
@@ -1490,7 +1490,7 @@ class ProducerContractTests(NativeRunCase):
         self.assertEqual(entry.status, "answered")
         self.assertEqual(entry.answer, "the point answer")
         self.assertEqual(entry.tool_call_id, "call-answer")
-        self.assertEqual(entry.via, "tool:buddy_answer_inquiry")
+        self.assertEqual(entry.via, "tool:hey_my_buddy_answer_inquiry")
         self.assertEqual(entry.bytes, len("the point answer".encode()))
         self.assertIs(entry.truncated, False)
         self.assertTrue(entry.at)
@@ -1499,8 +1499,8 @@ class ProducerContractTests(NativeRunCase):
         from hey_my_buddy.buddy.harnesses.live import InquiryPayload, LiveRequest
         make_inquiry_bridge = fixture_inquiry_bridge
         bind_live_channel = lambda *args, **kwargs: fixture_live_channel(self, *args, **kwargs)
-        managed = tempfile.TemporaryDirectory(prefix="buddy-zcode-live-r-",
-                                              dir=os.environ.get("BUDDY_CHECKS_TMPDIR", "/tmp"))
+        managed = tempfile.TemporaryDirectory(prefix="hey-my-buddy-zcode-live-r-",
+                                              dir=os.environ.get("HMB_CHECKS_TMPDIR", "/tmp"))
         self.addCleanup(managed.cleanup)
         temp = Path(managed.name)
         credentials = {"socketPath": str(temp / "inquiry.sock"), "token": "a" * 64}
@@ -1546,7 +1546,7 @@ if __name__ == "__main__":
 class DiscoveryStopTests(NativeRunCase):
     """The existing private app-server fixture, with real stop collection."""
     def discover(self):
-        os.environ['BUDDY_ZCODE_TEST_CASE'] = 'discovery'
+        os.environ['HMB_ZCODE_TEST_CASE'] = 'discovery'
         return native_run.run_discovery(cwd=str(self.cwd), invocation_root=self.base / 'discover',
                                        native_root=self.base / 'native-discover', timeout_seconds=3,
                                        cancelled=lambda: False)
@@ -1876,7 +1876,7 @@ class DiscoveryStopTests(NativeRunCase):
     def test_actual_failed_discovery_crosses_controller_and_role(self):
         from hey_my_buddy.buddy.roles import run_execution
         self.broken_snapshot()
-        os.environ['BUDDY_ZCODE_TEST_CASE'] = 'discovery'
+        os.environ['HMB_ZCODE_TEST_CASE'] = 'discovery'
         with self.assertRaises(BoardError) as caught:
             run_execution.discover_models('zcode')
         self.assertIs(getattr(caught.exception, "discovery_shutdown_confirmed", None), True)

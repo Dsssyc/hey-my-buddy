@@ -36,7 +36,7 @@ def respond(message: dict, configuration: dict) -> dict | None:
     result: dict = {}
     if method == "initialize":
         result = {"protocolVersion": "2024-11-05", "capabilities": {"tools": {}},
-                  "serverInfo": {"name": "buddy-finish-turn", "version": "1"}}
+                  "serverInfo": {"name": "hey-my-buddy", "version": "1"}}
     elif method == "tools/list":
         result = {"tools": worker_services.session_tools()}
     elif method == "tools/call":

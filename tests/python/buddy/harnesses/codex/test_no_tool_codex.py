@@ -27,8 +27,8 @@ SCHEMA = {"type": "object", "additionalProperties": False, "required": ["buddyId
 
 class NoToolCodexTests(unittest.TestCase):
     def setUp(self):
-        self.temp = tempfile.TemporaryDirectory(prefix="buddy-no-tool-codex-",
-                                                dir=os.environ.get("BUDDY_CHECKS_TMPDIR", "/tmp"))
+        self.temp = tempfile.TemporaryDirectory(prefix="hey-my-buddy-no-tool-codex-",
+                                                dir=os.environ.get("HMB_CHECKS_TMPDIR", "/tmp"))
         self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name)
         self.runtime = self.root / 'empty-runtime'
@@ -52,9 +52,9 @@ class NoToolCodexTests(unittest.TestCase):
         environment = {key: os.environ[key] for key in ("PATH", "TMPDIR", "LANG", "USER", "LOGNAME") if key in os.environ}
         environment.update(HOME=str(self.root), CODEX_HOME=str(self.home),
                            PYTHONPATH=os.pathsep.join(filter(None, (str(SOURCE), os.environ.get('PYTHONPATH')))),
-                           BUDDY_STATE_DIR=str(self.root / 'state'), BUDDY_RUNTIME_ROOT=str(self.runtime),
-                           BUDDY_DEV_SOURCE="1", BUDDY_CODEX_CLI=str(FIXTURE),
-                           BUDDY_CODEX_FIXTURE_CASE=case, BUDDY_CODEX_FIXTURE_STATE=str(directory / "trace.json"))
+                           HMB_STATE_DIR=str(self.root / 'state'), HMB_RUNTIME_ROOT=str(self.runtime),
+                           HMB_DEV_SOURCE="1", HMB_CODEX_CLI=str(FIXTURE),
+                           HMB_CODEX_FIXTURE_CASE=case, HMB_CODEX_FIXTURE_STATE=str(directory / "trace.json"))
         context = ExecutionContext("router-task", "router-attempt", 7,
                                    {"provider": "openai", "model": "fixture-model", "effort": "low",
                                     "cwd": str(self.cwd), "timeoutSeconds": timeout}, directory, {}, environment)
@@ -121,10 +121,10 @@ class NoToolCodexTests(unittest.TestCase):
         environment = {key: os.environ[key] for key in ("PATH", "TMPDIR", "LANG", "USER", "LOGNAME") if key in os.environ}
         environment.update(HOME=str(self.root), CODEX_HOME=str(self.home),
                            PYTHONPATH=os.pathsep.join(filter(None, (str(SOURCE), os.environ.get('PYTHONPATH')))),
-                           BUDDY_RUNTIME_ROOT=str(self.runtime),
-                           BUDDY_DEV_SOURCE="1", BUDDY_CODEX_CLI=str(FIXTURE),
-                           BUDDY_STATE_DIR=str(self.root / "state"),
-                           BUDDY_CODEX_FIXTURE_STATE=str(directory / "trace.json"))
+                           HMB_RUNTIME_ROOT=str(self.runtime),
+                           HMB_DEV_SOURCE="1", HMB_CODEX_CLI=str(FIXTURE),
+                           HMB_STATE_DIR=str(self.root / "state"),
+                           HMB_CODEX_FIXTURE_STATE=str(directory / "trace.json"))
         context = ExecutionContext("task", "attempt", 1,
                                    {"provider": "openai", "model": "fixture-model", "effort": "low",
                                     "cwd": str(self.cwd), "timeoutSeconds": 3}, directory, {}, environment)

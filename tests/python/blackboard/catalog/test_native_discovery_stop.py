@@ -68,7 +68,7 @@ class CatalogNativeStopTests(NativeDiscoveryFixture, BoardTestCase):
         self.record.update(status='unavailable', command=[], reasonCode='HARNESS_UNAVAILABLE',
                            remedy='fixture has no native harness')
         with patch.dict(os.environ, {'HOME': str(self.directory), 'CODEX_HOME': str(self.directory / '.codex'),
-                                     'BUDDY_CODEX_CLI': ''}):
+                                     'HMB_CODEX_CLI': ''}):
             return self.invoke(lambda: run_execution.discover_models('codex'))
 
     def test_controller_log_emfile_without_spawn_preserves_stop_evidence(self):
@@ -210,7 +210,7 @@ class CatalogNativeStopTests(NativeDiscoveryFixture, BoardTestCase):
             return payload
 
         with patch.dict(os.environ, {'HOME': str(self.directory), 'CODEX_HOME': str(self.directory / '.codex'),
-                                     'BUDDY_CODEX_CLI': ''}), \
+                                     'HMB_CODEX_CLI': ''}), \
              patch.object(native_run, 'probe_version', side_effect=probe_version):
             result = self.invoke(read)
         self.assertEqual(receipts, [{'created': True, 'shutdown': True, 'exit_code': 7}])
@@ -234,7 +234,7 @@ class CatalogNativeStopTests(NativeDiscoveryFixture, BoardTestCase):
             return reason, output, False
 
         with patch.dict(os.environ, {'HOME': str(self.directory), 'CODEX_HOME': str(self.directory / '.codex'),
-                                     'BUDDY_CODEX_CLI': ''}), \
+                                     'HMB_CODEX_CLI': ''}), \
              patch.object(discovery, '_probe_posix', side_effect=observed) as observation, \
              patch.object(native_run, 'probe_version', wraps=version.probe_version) as shared, \
              patch.object(native_run, 'owned_popen', wraps=native_run.owned_popen) as main:

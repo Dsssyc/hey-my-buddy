@@ -72,8 +72,8 @@ def run(args):
         stream.write(datetime.now(timezone.utc).isoformat())
     from hey_my_buddy.cli.checks import SANITIZED_VARIABLES
     environment = {key: value for key, value in os.environ.items() if key not in SANITIZED_VARIABLES}
-    environment.update(BUDDY_DEV_SOURCE='1', BUDDY_STATE_DIR=str(root / 'state'),
-                       BUDDY_RUNTIME_ROOT=str(root / 'runtime'))
+    environment.update(HMB_DEV_SOURCE='1', HMB_STATE_DIR=str(root / 'state'),
+                       HMB_RUNTIME_ROOT=str(root / 'runtime'))
     context = ExecutionContext(task_id=str(uuid.uuid4()), attempt_id=str(uuid.uuid4()), generation=1,
         spec={'adapter': 'decision', 'cwd': str(root), 'timeoutSeconds': 70},
         directory=root / 'attempt', runtime={'identity': 'source:fast-probe'},

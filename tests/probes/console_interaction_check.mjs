@@ -35,7 +35,7 @@ try {
     }
     if (!['/api/console', '/api/macro-tasks'].includes(url.pathname)) return route.continue();
     const response = await route.fetch();
-    assert.equal(response.headers()['x-buddy-preview'], 'synthetic-fixture-data');
+    assert.equal(response.headers()['x-hey-my-buddy-preview'], 'synthetic-fixture-data');
     const data = await response.json();
     if (url.pathname === '/api/console') data.consoleAccess = access;
     else {
@@ -51,7 +51,7 @@ try {
     return route.fulfill({ response, json: data });
   });
   const response = await page.goto(new URL('#tasks', base).href);
-  assert.equal(response.headers()['x-buddy-preview'], 'synthetic-fixture-data');
+  assert.equal(response.headers()['x-hey-my-buddy-preview'], 'synthetic-fixture-data');
   const list = page.getByRole('region', { name: '工作目标列表', exact: true });
   await list.locator('[data-macro-task-id]').first().waitFor();
   const firstId = () => list.locator('[data-macro-task-id]').first().getAttribute('data-macro-task-id');

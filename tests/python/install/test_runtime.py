@@ -124,14 +124,14 @@ def private_runtime_root(directory: Path):
     environment = {
         name: value
         for name, value in os.environ.items()
-        if not name.startswith("BUDDY_") and name not in ("VIRTUAL_ENV", "UV_PROJECT_ENVIRONMENT")
+        if not name.startswith("HMB_") and name not in ("VIRTUAL_ENV", "UV_PROJECT_ENVIRONMENT")
     }
     environment.update(
-        BUDDY_CONSOLE_PORT="0",
-        BUDDY_STATE_DIR=str(directory.parent / "state"),
-        BUDDY_RUNTIME_ROOT=str(directory),
-        BUDDY_DEV_SOURCE="1",
-        BUDDY_CLAUDE_CLI=str(directory / "claude-not-installed"),
+        HMB_CONSOLE_PORT="0",
+        HMB_STATE_DIR=str(directory.parent / "state"),
+        HMB_RUNTIME_ROOT=str(directory),
+        HMB_DEV_SOURCE="1",
+        HMB_CLAUDE_CLI=str(directory / "claude-not-installed"),
     )
     with patch.dict(os.environ, environment, clear=True):
         yield
@@ -141,7 +141,7 @@ class DeclaredManifestTests(unittest.TestCase):
     """The manifest is the only layout declaration; nothing is guessed."""
 
     def setUp(self):
-        self.temp = tempfile.TemporaryDirectory(prefix="buddy-runtime-", dir=os.environ.get("BUDDY_CHECKS_TMPDIR", "/tmp"))
+        self.temp = tempfile.TemporaryDirectory(prefix="hey-my-buddy-runtime-", dir=os.environ.get("HMB_CHECKS_TMPDIR", "/tmp"))
         self.addCleanup(self.temp.cleanup)
         base = Path(self.temp.name).resolve()
         self.root = base / "project"
@@ -327,7 +327,7 @@ class RuntimeMaterializationTests(unittest.TestCase):
     """A runtime is published only from declared assets and keeps its own paths."""
 
     def setUp(self):
-        self.temp = tempfile.TemporaryDirectory(prefix="buddy-runtime-build-", dir=os.environ.get("BUDDY_CHECKS_TMPDIR", "/tmp"))
+        self.temp = tempfile.TemporaryDirectory(prefix="hey-my-buddy-runtime-build-", dir=os.environ.get("HMB_CHECKS_TMPDIR", "/tmp"))
         self.addCleanup(self.temp.cleanup)
         base = Path(self.temp.name).resolve()
         self.root = base / "project"
@@ -477,7 +477,7 @@ class RuntimeMaterializationTests(unittest.TestCase):
         self.root.rename(replaced)
         try:
             environment = {name: value for name, value in os.environ.items()
-                           if not name.startswith("BUDDY_") and name not in ("VIRTUAL_ENV", "UV_PROJECT_ENVIRONMENT")}
+                           if not name.startswith("HMB_") and name not in ("VIRTUAL_ENV", "UV_PROJECT_ENVIRONMENT")}
             environment["PYTHONPATH"] = str(target / "src")
             probe = subprocess.run(
                 [sys.executable, "-c",
@@ -512,7 +512,7 @@ class RuntimeMaterializationTests(unittest.TestCase):
         runner.symlink_to(outside)
         self.assertFalse(runtime.is_ready(target))
         self.assertTrue(any("fixture.runner resolves outside" in leak for leak in runtime.source_leaks(record)))
-        with patch.dict(os.environ, {"BUDDY_RUNTIME": str(target)}):
+        with patch.dict(os.environ, {"HMB_RUNTIME": str(target)}):
             with self.assertRaises(BoardError) as failure:
                 runtime.resolve_runtime()
         self.assertEqual(failure.exception.code, "RUNTIME_NOT_READY")
@@ -536,14 +536,14 @@ class RuntimeMaterializationTests(unittest.TestCase):
             "resources": record["resources"],
             "missingResources": [],
         }
-        with patch.dict(os.environ, {"BUDDY_RUNTIME": str(target)}), patch.object(runtime, "process_identity", return_value=actual):
+        with patch.dict(os.environ, {"HMB_RUNTIME": str(target)}), patch.object(runtime, "process_identity", return_value=actual):
             resolved = runtime.resolve_runtime()
         self.assertTrue(resolved["stable"])
         self.assertEqual(resolved["leaks"], [])
 
     def test_resolve_runtime_does_not_trust_a_ready_marker_alone(self):
         target = self.materialize()
-        with private_runtime_root(self.runtime_root), patch.dict(os.environ, {"BUDDY_RUNTIME": str(target)}), patch.object(
+        with private_runtime_root(self.runtime_root), patch.dict(os.environ, {"HMB_RUNTIME": str(target)}), patch.object(
             runtime, "project_root", return_value=target
         ):
             resolved = runtime.resolve_runtime()
@@ -592,7 +592,7 @@ class CheckoutRuntimeTests(unittest.TestCase):
     """The real checkout declares exactly the current resources and identity."""
 
     def setUp(self):
-        self.temp = tempfile.TemporaryDirectory(prefix="buddy-runtime-real-", dir=os.environ.get("BUDDY_CHECKS_TMPDIR", "/tmp"))
+        self.temp = tempfile.TemporaryDirectory(prefix="hey-my-buddy-runtime-real-", dir=os.environ.get("HMB_CHECKS_TMPDIR", "/tmp"))
         self.addCleanup(self.temp.cleanup)
         self.runtime_root = Path(self.temp.name) / "runtime"
         self.enterContext(private_runtime_root(self.runtime_root))
@@ -617,7 +617,7 @@ class CheckoutRuntimeTests(unittest.TestCase):
         self.assertNotIn("yamlBridge", resolved["actual"])
 
     def test_launch_target_uses_the_current_source_tree(self):
-        with private_runtime_root(self.runtime_root), patch.dict(os.environ, {"BUDDY_DEV_SOURCE": "1"}):
+        with private_runtime_root(self.runtime_root), patch.dict(os.environ, {"HMB_DEV_SOURCE": "1"}):
             target = runtime.launch_target()
         self.assertFalse(target["stable"])
         self.assertEqual(target["pythonPath"], str(REAL_ROOT / "src"))

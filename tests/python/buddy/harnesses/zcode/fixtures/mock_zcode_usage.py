@@ -22,7 +22,7 @@ if "--version" in sys.argv:
     raise SystemExit(0)
 
 FIXTURE = json.loads(Path(__file__).with_name("native-usage-zcode.json").read_text())
-case = os.environ.get("BUDDY_ZCODE_TEST_CASE", "usage-ok")
+case = os.environ.get("HMB_ZCODE_TEST_CASE", "usage-ok")
 state = Path(os.environ["ZCODE_SESSION_DB_PATH"]).with_suffix(".fixture.json")
 log_dir = Path(os.environ["ZCODE_LOG_DIR"])
 instance = hashlib.sha256(os.environ["ZCODE_SESSION_DB_PATH"].encode()).hexdigest()[:16]
@@ -92,10 +92,10 @@ def mcp_call(tool, arguments):
 
 
 def finish_turn():
-    tool = "mcp__" + mcp[0]["name"] + "__buddy_finish_turn"
+    tool = "mcp__" + mcp[0]["name"] + "__hey_my_buddy_finish_turn"
     outcome = {"disposition": "completed", "summary": "fixture work completed", "remaining": [],
                "decisions": [], "artifacts": [], "request": None}
-    content, error = mcp_call("buddy_finish_turn", outcome)
+    content, error = mcp_call("hey_my_buddy_finish_turn", outcome)
     event("tool.updated", {"kind": "scheduled", "toolName": tool, "toolCallId": "root-call"})
     event("tool.updated", {"kind": "result", "toolCallId": "root-call",
                            "result": {"success": content is not None, "truncated": False,

@@ -14,18 +14,18 @@ The tests exercise *this checkout*: ``src`` and ``tests/python`` go first on
 ``PYTHONPATH``, and inherited runtime, worker and agent-credential variables are
 removed before each child starts.
 A Worker-pinned production runtime must never leak into a test subprocess, and
-``BUDDY_DEV_SOURCE=1`` alone cannot override one.
+``HMB_DEV_SOURCE=1`` alone cannot override one.
 
 Every child runs inside one private checks root: ``TMPDIR`` points into that root, so
 the state and runtime roots each suite creates — including its ``TMPDIR`` fixtures —
 never leave it. With the default worker count the Python suite runs one subprocess per
 test file — each with its own private state, runtime and temp directories below the
 checks root; ``--jobs 1`` (or
-``BUDDY_CHECKS_JOBS=1``) runs those file subprocesses serially. After the
+``HMB_CHECKS_JOBS=1``) runs those file subprocesses serially. After the
 suites finish, passing or failing, the runner asks any
-surviving Buddy daemon or supervisor below the private root to stop through its
+surviving hey-my-buddy daemon or supervisor below the private root to stop through its
 cooperative surfaces, then waits until every observed survivor has been confirmed to
-exit and asserts a clean root: no held Buddy lifetime lock, no live process tied to
+exit and asserts a clean root: no held hey-my-buddy lifetime lock, no live process tied to
 the root, and no failed observation. A clean teardown removes the private root; an
 incomplete or unobservable one preserves the root together with a written evidence
 report. Process observation is strictly read-only (``ps`` argv matching plus
@@ -56,23 +56,23 @@ import time
 #: Inherited variables that would otherwise point a test subprocess at a production
 #: runtime, a Worker identity or an agent credential instead of its own private roots.
 SANITIZED_VARIABLES = (
-    "BUDDY_CHECKS_TMPDIR",
-    "BUDDY_SUPERVISOR_START_ID",
-    "BUDDY_STATE_DIR",
-    "BUDDY_RUNTIME_ROOT",
-    "BUDDY_RUNTIME",
-    "BUDDY_RUNTIME_IDENTITY",
-    "BUDDY_WORKER_STATE",
-    "BUDDY_WORKER_ID",
-    "BUDDY_AGENT_CREDENTIAL",
-    "BUDDY_AGENT_CREDENTIAL_FILE",
+    "HMB_CHECKS_TMPDIR",
+    "HMB_SUPERVISOR_START_ID",
+    "HMB_STATE_DIR",
+    "HMB_RUNTIME_ROOT",
+    "HMB_RUNTIME",
+    "HMB_RUNTIME_IDENTITY",
+    "HMB_WORKER_STATE",
+    "HMB_WORKER_ID",
+    "HMB_AGENT_CREDENTIAL",
+    "HMB_AGENT_CREDENTIAL_FILE",
     "VIRTUAL_ENV",
     "UV_PROJECT_ENVIRONMENT",
     "ZCODE_BUILTIN_PROVIDER_CONFIG_FILE",
     "ZCODE_PERSONAL_PROVIDER_CONFIG_FILE",
 )
 
-#: A held lock with one of these names observes a live Buddy daemon or supervisor.
+#: A held lock with one of these names observes a live hey-my-buddy daemon or supervisor.
 DAEMON_LOCK_NAMES = ("control-start.lock", "control-daemon.lock", "board-owner.lock")
 SUPERVISOR_LOCK_NAME = "supervisor.lock"
 EVIDENCE_FILE_NAME = "teardown-evidence.json"
@@ -83,7 +83,7 @@ def test_environment(root: Path) -> dict:
     """The child environment every test suite runs with: checkout first, no pins."""
     # Test isolation is independent of the product's native configuration:
     # inherited ownership, credentials and harness flags cannot select a fixture.
-    values = {key: value for key, value in os.environ.items() if key not in SANITIZED_VARIABLES and not key.startswith(("BUDDY_", "ANTHROPIC_", "CLAUDE_CODE_", "C2_", "ZCODE_", "ZAI_", "ZHIPU_", "GLM_", "DSH_", "DEEPSEEK_"))}
+    values = {key: value for key, value in os.environ.items() if key not in SANITIZED_VARIABLES and not key.startswith(("HMB_", "ANTHROPIC_", "CLAUDE_CODE_", "C2_", "ZCODE_", "ZAI_", "ZHIPU_", "GLM_", "DSH_", "DEEPSEEK_"))}
     # Resolve uv's caller cache before child_environment replaces the native home.
     if "UV_CACHE_DIR" not in values:
         values["UV_CACHE_DIR"] = subprocess.run(
@@ -94,20 +94,20 @@ def test_environment(root: Path) -> dict:
     inherited = values.get("PYTHONPATH")
     values["PYTHONPATH"] = os.pathsep.join([source, tests] + ([inherited] if inherited else []))
     # Tests must exercise this checkout, not a stable runtime install.
-    values["BUDDY_DEV_SOURCE"] = "1"
+    values["HMB_DEV_SOURCE"] = "1"
     # Claude availability reads native account metadata. Unrelated tests must not
     # launch the user's CLI; Claude fixtures override this sentinel explicitly.
-    values["BUDDY_CLAUDE_CLI"] = str(root / "tests/python/fixtures/claude-not-installed")
-    values["BUDDY_CODEX_CLI"] = str(root / "tests/python/fixtures/codex-not-installed")
+    values["HMB_CLAUDE_CLI"] = str(root / "tests/python/fixtures/claude-not-installed")
+    values["HMB_CODEX_CLI"] = str(root / "tests/python/fixtures/codex-not-installed")
     # The console backend's fixed default port belongs to the daily service; a private
     # test environment lets the operating system assign its own console ports.
-    values["BUDDY_CONSOLE_PORT"] = "0"
+    values["HMB_CONSOLE_PORT"] = "0"
     return values
 
 
 def create_private_root(*, directory: Path | None = None) -> Path:
     """One private root this runner owns and can inspect after the suites exit."""
-    root = Path(tempfile.mkdtemp(prefix="buddy-checks-", dir=directory)).resolve()
+    root = Path(tempfile.mkdtemp(prefix="hey-my-buddy-checks-", dir=directory)).resolve()
     (root / CREATOR_FILE_NAME).write_text(f"{os.getpid()}\n")
     (root / "tmp").mkdir(mode=0o700)
     return root
@@ -129,13 +129,13 @@ def child_environment(root: Path, private_root: Path, *, home_root: Path) -> dic
         "APPDATA": str(home / "AppData/Roaming"), "LOCALAPPDATA": str(home / "AppData/Local"),
     })
     values["TMPDIR"] = str(private_root / "tmp")
-    values["BUDDY_CHECKS_TMPDIR"] = str(private_root / "tmp")
-    values['BUDDY_STATE_DIR'] = str(private_root / 'state')
-    values['BUDDY_RUNTIME_ROOT'] = str(private_root / 'runtime')
+    values["HMB_CHECKS_TMPDIR"] = str(private_root / "tmp")
+    values['HMB_STATE_DIR'] = str(private_root / 'state')
+    values['HMB_RUNTIME_ROOT'] = str(private_root / 'runtime')
     # Model-facts refreshes stay offline in the check suite: the pinned source is a
     # private fixture path inside this root, and a missing one retains the snapshot
     # instead of fetching.
-    values['BUDDY_MODEL_FACTS_FILE'] = str(private_root / 'state' / 'model-facts-fixture.json')
+    values['HMB_MODEL_FACTS_FILE'] = str(private_root / 'state' / 'model-facts-fixture.json')
     return values
 
 
@@ -178,9 +178,9 @@ def default_jobs() -> int:
 
 
 def resolve_jobs(value: str | None) -> int:
-    """The worker count: ``--jobs`` wins over ``BUDDY_CHECKS_JOBS`` over the default."""
+    """The worker count: ``--jobs`` wins over ``HMB_CHECKS_JOBS`` over the default."""
     if value is None:
-        value = os.environ.get("BUDDY_CHECKS_JOBS")
+        value = os.environ.get("HMB_CHECKS_JOBS")
     if value is None:
         return default_jobs()
     try:
@@ -432,7 +432,7 @@ def run_suites_parallel(root: Path, private_root: Path, jobs: int, modules: list
 
 
 def lock_is_held(path: Path) -> bool:
-    """True when some process still holds this Buddy lifetime lock."""
+    """True when some process still holds this hey-my-buddy lifetime lock."""
     try:
         fd = os.open(path, os.O_RDWR)
     except FileNotFoundError:
@@ -466,7 +466,7 @@ def held_locks(root: Path) -> dict[str, list[Path]]:
 def _root_prefixes(root: Path) -> tuple[str, ...]:
     """Both spellings of the private root path for argv matching.
 
-    Buddy resolves state directories, so a surviving supervisor's ``--state-dir``
+    hey-my-buddy resolves state directories, so a surviving supervisor's ``--state-dir``
     argv carries the resolved form (macOS aliases ``/var`` through ``/private/var``),
     while this runner may hold the unresolved spelling of the same directory.
     """
@@ -646,7 +646,7 @@ def _request_daemon_stop(state_dir: Path) -> None:
 def request_cooperative_stop(root: Path, timeout: float = 30.0) -> list[str]:
     """Bounded drain: ask observed survivors to stop; never signal a process.
 
-    Waits until no Buddy lifetime lock under the root is held and no live process
+    Waits until no hey-my-buddy lifetime lock under the root is held and no live process
     names the root in its argv, so a supervisor whose lock file a racing cleanup
     unlinked still receives its durable stop request and must be observed to exit
     before the caller may treat the root as clean. Returns observation problems; an
@@ -717,7 +717,7 @@ def teardown_private_root(root: Path, drain_seconds: float = 30.0) -> dict | Non
     """Assert no child daemon or supervisor survives below one private root.
 
     Runs after every suite, passing or failing. A clean result requires all of: no
-    held Buddy lifetime lock under the root, no live process observably tied to the
+    held hey-my-buddy lifetime lock under the root, no live process observably tied to the
     root, and no failed observation — an unknown observation status fails
     conservatively. A clean teardown removes the private root and returns None; an
     incomplete or unobservable one preserves the root plus a written evidence report
@@ -795,7 +795,7 @@ def private_root_directory() -> Path:
     # macOS's per-user temporary path leaves too little room for nested native
     # AF_UNIX sockets (sun_path is only 104 bytes). Keep the suite's one owned
     # root short; all child TMPDIRs still stay inside it and share its teardown.
-    temporary = os.environ.get("BUDDY_CHECKS_TMPDIR")
+    temporary = os.environ.get("HMB_CHECKS_TMPDIR")
     return Path(temporary) if temporary else (Path("/tmp") if sys.platform == "darwin" else Path(tempfile.gettempdir()))
 
 
@@ -804,7 +804,7 @@ def sweep_private_roots(directory: Path) -> int:
     deleted = skipped = retained = 0
     table = _ps_argv_table()
     pids = {pid for pid, _ in table} if table is not None else None
-    for root in sorted(directory.glob("buddy-checks-*")):
+    for root in sorted(directory.glob("hey-my-buddy-checks-*")):
         metadata = root.lstat()
         if not stat.S_ISDIR(metadata.st_mode) or metadata.st_uid != os.getuid():
             continue

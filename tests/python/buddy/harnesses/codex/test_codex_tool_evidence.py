@@ -381,8 +381,8 @@ class CodexReviewToolEvidenceTests(unittest.TestCase):
     """The review controller projects unified evidence over the fixture stream."""
 
     def setUp(self):
-        self.temp = tempfile.TemporaryDirectory(prefix="buddy-codex-tool-evidence-",
-                                                dir=os.environ.get("BUDDY_CHECKS_TMPDIR", "/tmp"))
+        self.temp = tempfile.TemporaryDirectory(prefix="hey-my-buddy-codex-tool-evidence-",
+                                                dir=os.environ.get("HMB_CHECKS_TMPDIR", "/tmp"))
         self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name)
         self.cwd = self.root / "empty"
@@ -394,12 +394,12 @@ class CodexReviewToolEvidenceTests(unittest.TestCase):
     def context(self, case, *, index, task="review-task", attempt="review-attempt", generation=7):
         from hey_my_buddy.buddy.harnesses.base import ExecutionContext
         environment = {key: value for key, value in os.environ.items()
-                       if not key.startswith("BUDDY_") and key not in ("VIRTUAL_ENV", "UV_PROJECT_ENVIRONMENT")}
-        environment.update(BUDDY_CONSOLE_PORT="0", BUDDY_CODEX_CLI=str(FIXTURE),
-                           BUDDY_CODEX_FIXTURE_STATE=str(self.root / f"fixture-{index}.json"),
+                       if not key.startswith("HMB_") and key not in ("VIRTUAL_ENV", "UV_PROJECT_ENVIRONMENT")}
+        environment.update(HMB_CONSOLE_PORT="0", HMB_CODEX_CLI=str(FIXTURE),
+                           HMB_CODEX_FIXTURE_STATE=str(self.root / f"fixture-{index}.json"),
                            CODEX_HOME=str(self.home), HOME=str(self.root),
-                           BUDDY_STATE_DIR=str(self.root / "state"), BUDDY_RUNTIME_ROOT=str(self.root / "runtime"),
-                           BUDDY_DEV_SOURCE="1", BUDDY_CODEX_FIXTURE_CASE=case,
+                           HMB_STATE_DIR=str(self.root / "state"), HMB_RUNTIME_ROOT=str(self.root / "runtime"),
+                           HMB_DEV_SOURCE="1", HMB_CODEX_FIXTURE_CASE=case,
                            PYTHONPATH=str(Path(__file__).parents[5] / "src") + os.pathsep + environment.get("PYTHONPATH", ""))
         context = ExecutionContext(task_id=task, attempt_id=attempt, generation=generation,
                                   spec={"cwd": str(self.cwd), "task": "Select", "timeoutSeconds": 8,

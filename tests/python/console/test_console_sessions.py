@@ -161,12 +161,12 @@ class ConsoleSessionTests(ConsoleTestCase):
         with socket.socket() as reserved:
             reserved.bind(('127.0.0.1',0))
             port=reserved.getsockname()[1]
-        with mock.patch.dict(os.environ, {'BUDDY_CONSOLE_PORT':str(port)}):
+        with mock.patch.dict(os.environ, {'HMB_CONSOLE_PORT':str(port)}):
             board.console=Console(board.store,board.service)
             board.console.start(issue_ticket=False)
             self.assertEqual(board.console.port,port)
             board.console.close()
-        clean={k:v for k,v in os.environ.items() if k!='BUDDY_CONSOLE_PORT'}
+        clean={k:v for k,v in os.environ.items() if k!='HMB_CONSOLE_PORT'}
         with mock.patch.dict(os.environ,clean,clear=True):
             board.console=Console(board.store,board.service)
             board.console.start(issue_ticket=False)
@@ -177,10 +177,10 @@ class ConsoleSessionTests(ConsoleTestCase):
         import socket
         with socket.socket() as reserved:
             reserved.bind(('127.0.0.1',0));reserved.listen(1)
-            code,result=self.cli('health',env={'BUDDY_CONSOLE_PORT':str(reserved.getsockname()[1])})
+            code,result=self.cli('health',env={'HMB_CONSOLE_PORT':str(reserved.getsockname()[1])})
         self.assertNotEqual(code,0)
         self.assertEqual(result['error']['code'],'CONSOLE_PORT_IN_USE')
-        self.assertIn('BUDDY_CONSOLE_PORT',result['error']['message'])
+        self.assertIn('HMB_CONSOLE_PORT',result['error']['message'])
 
     def test_launch_capacity_is_bounded_and_recovers_after_expiry(self):
         board, now = self.timed_board()
@@ -195,7 +195,7 @@ class ConsoleSessionTests(ConsoleTestCase):
     def test_cookie_duplicates_and_non_ascii_forgery_are_refused(self):
         board = self.board()
         _, browser = self.open_console(board)
-        for cookie in ('buddy_console_session=é', browser.cookie + '; ' + browser.cookie):
+        for cookie in ('hey_my_buddy_console_session=é', browser.cookie + '; ' + browser.cookie):
             self.assertEqual(browser.get('/api/console', headers={'Cookie': cookie})[0], 401)
 
     def test_active_session_bound_does_not_discard_an_existing_reader(self):
@@ -250,7 +250,7 @@ class ConsoleForegroundTests(ConsoleTestCase):
             try:
                 self.assertTrue(select.select([child.stderr], [], [], 20)[0], 'CLI did not report the entry')
                 notice = child.stderr.readline()
-                self.assertTrue(notice.startswith('buddy console: the browser was not opened; entry URL: '))
+                self.assertTrue(notice.startswith('hey-my-buddy console: the browser was not opened; entry URL: '))
                 browser = Browser(notice.partition('entry URL: ')[2].strip())
                 self.assertTrue(browser.bootstrap()['consoleSession']['canWrite'])
                 child.send_signal(signal.SIGINT)

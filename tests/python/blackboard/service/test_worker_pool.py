@@ -1,6 +1,6 @@
 """The managed pool under the one machine-wide ceiling (ADR-011).
 
-The pool is sized to ``BUDDY_MAX_CONCURRENT`` total slots — there are no separate
+The pool is sized to ``HMB_MAX_CONCURRENT`` total slots — there are no separate
 business/decision supervisors any more. Ownership stays manifest-based: only the
 exact IDs this pool started are managed, and a scale-down keeps surplus members
 until their evidence is settled.

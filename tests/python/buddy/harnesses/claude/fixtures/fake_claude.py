@@ -32,7 +32,7 @@ def send(value):
 
 
 def state_path():
-    return Path(os.environ["BUDDY_CLAUDE_FIXTURE_STATE"])
+    return Path(os.environ["HMB_CLAUDE_FIXTURE_STATE"])
 
 
 def read_state():
@@ -192,7 +192,7 @@ def wait_for_interrupt():
         except ValueError:
             continue
         if frame.get("type") == "control_request":
-            handle_control(frame, os.environ.get("BUDDY_CLAUDE_FIXTURE_CASE", "ok"))
+            handle_control(frame, os.environ.get("HMB_CLAUDE_FIXTURE_CASE", "ok"))
 
 
 def run_turn(case):
@@ -206,7 +206,7 @@ def run_turn(case):
         sys.stdout.flush()
         return
     if case == "unknown-response":
-        send({"type": "control_response", "response": {"subtype": "success", "request_id": "buddy-999", "response": {}}})
+        send({"type": "control_response", "response": {"subtype": "success", "request_id": "hey-my-buddy-999", "response": {}}})
         return
     if case in ("permission", "permission-command", "permission-path", "permission-long-command"):
         tool, inputs = {
@@ -301,11 +301,11 @@ def main():
         write_state({"authStatusRuns": state.get("authStatusRuns", 0) + 1})
         send({"loggedIn": True, "apiProvider": "firstParty"})
         return
-    case = os.environ.get("BUDDY_CLAUDE_FIXTURE_CASE", "ok")
+    case = os.environ.get("HMB_CLAUDE_FIXTURE_CASE", "ok")
     state = read_state()
     write_state({"argv": sys.argv, "cwd": os.getcwd(), "initialize": False, "userTurns": 0, "interrupted": False,
                  "runs": state.get("runs", 0) + 1,
-                 "seenBuddyEnv": sorted(key for key in os.environ if key.startswith("BUDDY_")),
+                 "seenBuddyEnv": sorted(key for key in os.environ if key.startswith("HMB_")),
                  "seenAnthropicEnv": sorted(key for key in os.environ if key.startswith("ANTHROPIC_"))})
     for raw in sys.stdin:
         try:

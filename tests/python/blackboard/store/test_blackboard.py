@@ -391,10 +391,10 @@ class TestCrashWindows(BoardTestCase):
         supervisor = None
         pgid = None
         try:
-            with self.daemon(env={"BUDDY_WORKER_ID": "idle-local"}):
+            with self.daemon(env={"HMB_WORKER_ID": "idle-local"}):
                 environment = {
                     **os.environ,
-                    "BUDDY_STATE_DIR": str(self.directory),
+                    "HMB_STATE_DIR": str(self.directory),
                     "PYTHONPATH": str((Path(__file__).resolve().parents[4] / "src")),
                     "VIRTUAL_ENV": "",
                 }
@@ -451,7 +451,7 @@ class TestCrashWindows(BoardTestCase):
                 supervisor.wait(timeout=20)
                 self.assertTrue(self._group_alive(pgid), "the child must survive its killed worker")
             # A restarted daemon reconciles the attempt as uncertain and keeps its claims.
-            with self.daemon(env={"BUDDY_WORKER_ID": "idle-local"}):
+            with self.daemon(env={"HMB_WORKER_ID": "idle-local"}):
                 status = self.cli("status", json.dumps({"runId": run_id}))[1]
                 self.assertEqual(status["attemptState"], "uncertain")
                 self.assertNotEqual(status["status"], "failed", "an unknown attempt is never reported as stopped")
@@ -477,7 +477,7 @@ class TestCrashWindows(BoardTestCase):
                     ],
                     env={
                         **os.environ,
-                        "BUDDY_STATE_DIR": str(self.directory),
+                        "HMB_STATE_DIR": str(self.directory),
                         "PYTHONPATH": str((Path(__file__).resolve().parents[4] / "src")),
                         "VIRTUAL_ENV": "",
                     },
@@ -968,10 +968,10 @@ class TestLifecycle(BoardTestCase):
                 [sys.executable, "-m", "hey_my_buddy.cli.main", "await", json.dumps({"runId": run_id, "waitSeconds": 60})],
                 env={
                     **os.environ,
-                    "BUDDY_STATE_DIR": str(self.directory),
+                    "HMB_STATE_DIR": str(self.directory),
                     "PYTHONPATH": str(Path(__file__).resolve().parents[4] / "src"),
-                    "BUDDY_DEV_SOURCE": "1",
-                    "BUDDY_RUNTIME_ROOT": str(self.directory / "runtime-root"),
+                    "HMB_DEV_SOURCE": "1",
+                    "HMB_RUNTIME_ROOT": str(self.directory / "runtime-root"),
                 },
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
@@ -1420,10 +1420,10 @@ class TestExtensibility(BoardTestCase):
                 [sys.executable, str(runner)],
                 env={
                     **os.environ,
-                    "BUDDY_STATE_DIR": str(self.directory),
+                    "HMB_STATE_DIR": str(self.directory),
                     "PYTHONPATH": str(Path(__file__).resolve().parents[4] / "src"),
-                    "BUDDY_DEV_SOURCE": "1",
-                    "BUDDY_RUNTIME_ROOT": str(self.directory / "runtime-root"),
+                    "HMB_DEV_SOURCE": "1",
+                    "HMB_RUNTIME_ROOT": str(self.directory / "runtime-root"),
                 },
                 capture_output=True,
                 text=True,
@@ -1472,7 +1472,7 @@ class TestPackaging(BoardTestCase):
         if not shutil_module.which(os.environ.get("UV_BIN", "uv")):
             self.skipTest("uv is not available")
         runtime_root = self.directory / "runtime-root"
-        environment = {"BUDDY_DEV_SOURCE": "", "BUDDY_RUNTIME_ROOT": str(runtime_root)}
+        environment = {"HMB_DEV_SOURCE": "", "HMB_RUNTIME_ROOT": str(runtime_root)}
         self.addCleanup(lambda: self.cli("stop", "{}", env=environment, timeout=60))
         # The production cold-start path: no daemon pre-started by the test.
         code, health = self.cli("health", env=environment, timeout=600)

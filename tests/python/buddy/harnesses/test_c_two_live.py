@@ -62,9 +62,9 @@ PEER_LAUNCHER = (
 )
 
 SANITIZED_VARIABLES = (
-    "BUDDY_STATE_DIR", "BUDDY_RUNTIME_ROOT", "BUDDY_RUNTIME", "BUDDY_RUNTIME_IDENTITY",
-    "BUDDY_WORKER_STATE", "BUDDY_WORKER_ID", "BUDDY_AGENT_CREDENTIAL",
-    "BUDDY_AGENT_CREDENTIAL_FILE", "VIRTUAL_ENV", "UV_PROJECT_ENVIRONMENT",
+    "HMB_STATE_DIR", "HMB_RUNTIME_ROOT", "HMB_RUNTIME", "HMB_RUNTIME_IDENTITY",
+    "HMB_WORKER_STATE", "HMB_WORKER_ID", "HMB_AGENT_CREDENTIAL",
+    "HMB_AGENT_CREDENTIAL_FILE", "VIRTUAL_ENV", "UV_PROJECT_ENVIRONMENT",
 )
 
 IDENTITY_WIRE_NAMES = {"task_id": "taskId", "attempt_id": "attemptId",
@@ -967,9 +967,9 @@ class EndpointObservationTests(unittest.TestCase):
 
 class EndpointLifecycleTests(unittest.TestCase):
     def setUp(self):
-        self.temp = tempfile.TemporaryDirectory(dir=os.environ.get("BUDDY_CHECKS_TMPDIR", "/tmp"))
+        self.temp = tempfile.TemporaryDirectory(dir=os.environ.get("HMB_CHECKS_TMPDIR", "/tmp"))
         self.addCleanup(self.temp.cleanup)
-        self.enterContext(mock.patch.dict(os.environ, {"BUDDY_STATE_DIR": self.temp.name}))
+        self.enterContext(mock.patch.dict(os.environ, {"HMB_STATE_DIR": self.temp.name}))
         self.addCleanup(cc.shutdown)
 
     def test_registration_failure_preserves_the_start_failure_code_and_cause(self):
@@ -1029,7 +1029,7 @@ class EndpointLifecycleTests(unittest.TestCase):
 
 class CleanupPrimitiveTests(unittest.TestCase):
     def setUp(self):
-        self.temp = tempfile.TemporaryDirectory(dir=os.environ.get("BUDDY_CHECKS_TMPDIR", "/tmp"))
+        self.temp = tempfile.TemporaryDirectory(dir=os.environ.get("HMB_CHECKS_TMPDIR", "/tmp"))
         self.addCleanup(self.temp.cleanup)
         rpc_config.configure_client(Path(self.temp.name))
         self.addCleanup(cc.shutdown)
@@ -1117,7 +1117,7 @@ class ReadyMaterialTests(unittest.TestCase):
         spec = importlib.util.spec_from_file_location(PEER_MODULE_NAME, FIXTURE_PATH)
         peer = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(peer)
-        state = Path(os.environ["BUDDY_STATE_DIR"])
+        state = Path(os.environ["HMB_STATE_DIR"])
         command = {"op": "start", "identity": identity().to_payload(), "stateDir": str(state)}
         output = io.StringIO()
 
@@ -1196,14 +1196,14 @@ class StubPeer:
 
 class ChannelUnitTests(unittest.TestCase):
     def setUp(self):
-        self.temp = tempfile.TemporaryDirectory(dir=os.environ.get("BUDDY_CHECKS_TMPDIR", "/tmp"))
+        self.temp = tempfile.TemporaryDirectory(dir=os.environ.get("HMB_CHECKS_TMPDIR", "/tmp"))
         self.addCleanup(self.temp.cleanup)
-        self.enterContext(mock.patch.dict(os.environ, {"BUDDY_STATE_DIR": self.temp.name}))
+        self.enterContext(mock.patch.dict(os.environ, {"HMB_STATE_DIR": self.temp.name}))
         self.addCleanup(cc.shutdown)
         self.run = identity()
         self.channel = ctl.CTwoLiveChannel(self.run, TEST_CRM, name="Hana",
                                            address="ipc://cc" + "5" * 38,
-                                           instance_id="a" * 64, token="b" * 64, state_dir=Path(os.environ["BUDDY_STATE_DIR"]))
+                                           instance_id="a" * 64, token="b" * 64, state_dir=Path(os.environ["HMB_STATE_DIR"]))
         self._restore = ctl.cc
 
     def tearDown(self):
@@ -1251,7 +1251,7 @@ class ChannelUnitTests(unittest.TestCase):
             self.channel.request(inquiry_request(), timeout_ms=99)
         foreign = ctl.CTwoLiveChannel(identity(attempt_id="other"), TEST_CRM, name="Hana",
                                       address="ipc://cc" + "5" * 38, instance_id="a" * 64,
-                                      token="b" * 64, state_dir=Path(os.environ["BUDDY_STATE_DIR"]))
+                                      token="b" * 64, state_dir=Path(os.environ["HMB_STATE_DIR"]))
         self.assertEqual(foreign.request(inquiry_request(), timeout_ms=1500).reason_code,
                          "identity-mismatch")
 
@@ -1346,15 +1346,15 @@ class LivePeer:
         self.directory = Path(tempfile.mkdtemp(prefix="endpoint-", dir=root))
         environment = {key: value for key, value in os.environ.items()
                        if key not in ("VIRTUAL_ENV", "UV_PROJECT_ENVIRONMENT")
-                       and not key.startswith(("BUDDY_", "ANTHROPIC_", "C2_"))}
+                       and not key.startswith(("HMB_", "ANTHROPIC_", "C2_"))}
         source = str(REPO_ROOT / "src")
         tests = str(REPO_ROOT / "tests" / "python")
         inherited = environment.get("PYTHONPATH")
         environment["PYTHONPATH"] = os.pathsep.join(
             [source, tests] + ([inherited] if inherited else []))
-        environment["BUDDY_DEV_SOURCE"] = "1"
-        environment["BUDDY_STATE_DIR"] = str(root / "state")
-        environment["BUDDY_RUNTIME_ROOT"] = str(root / "runtime")
+        environment["HMB_DEV_SOURCE"] = "1"
+        environment["HMB_STATE_DIR"] = str(root / "state")
+        environment["HMB_RUNTIME_ROOT"] = str(root / "runtime")
         environment["HOME"] = str(self.directory / "home")
         environment["TMPDIR"] = str(self.directory / "tmp")
         environment["C2_RELAY_ANCHOR_ADDRESS"] = ""
@@ -1468,7 +1468,7 @@ class LivePeerCase(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.class_root = Path(tempfile.mkdtemp(prefix="c2-",
-            dir=os.environ.get("BUDDY_CHECKS_TMPDIR", "/tmp")))
+            dir=os.environ.get("HMB_CHECKS_TMPDIR", "/tmp")))
 
     @classmethod
     def tearDownClass(cls):

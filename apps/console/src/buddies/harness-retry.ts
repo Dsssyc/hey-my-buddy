@@ -29,7 +29,7 @@ type Reply = { duplicate?: boolean; quota?: { opened?: (string | null)[]; alread
 export async function openQuotaRetry(
   api: ConsoleApi, csrfToken: string, harness: string, provider: string, t: TFunction<"buddies">,
 ): Promise<RetryOutcome> {
-  const intentKey = `buddy-quota-redetect:${harness}:${provider}`;
+  const intentKey = `hey-my-buddy-quota-redetect:${harness}:${provider}`;
   let requestId: string;
   try {
     const retained = sessionStorage.getItem(intentKey);

@@ -88,14 +88,14 @@ decode_json = decode_strict_json
 #: prompt, and the v4 sendText guide can only defer unbound input or start a
 #: new turn. The cooperative channel never injects anything: a question is
 #: queued by the bridge and reaches the root only through the session-private
-#: ``buddy_checkpoint``/``buddy_finish_turn`` tools inside the one admitted
-#: native turn, and only ``buddy_answer_inquiry`` evidence verified against
+#: ``hey_my_buddy_checkpoint``/``hey_my_buddy_finish_turn`` tools inside the one admitted
+#: native turn, and only ``hey_my_buddy_answer_inquiry`` evidence verified against
 #: that turn's own tool events counts as an answer.
 COOPERATIVE_INQUIRY_NOTE = (
-    "Host questions are queued by the bridge and delivered only at the root's next buddy_checkpoint "
+    "Host questions are queued by the bridge and delivered only at the root's next hey_my_buddy_checkpoint "
     "or finish refusal inside the same admitted native turn; they are never injected through "
     "session/send, a v4 command, a stop, a restart or a new turn, and an answer counts only through "
-    "buddy_answer_inquiry verified against the root turn's own tool evidence"
+    "hey_my_buddy_answer_inquiry verified against the root turn's own tool evidence"
 )
 
 
@@ -845,9 +845,9 @@ class RootTurnEvidence:
     """Only signed results in the explicitly admitted root turn can count.
 
     Besides the finish tool this tracker owns the inquiry channel's authority:
-    a question only becomes ``delivered`` when a ``buddy_checkpoint`` result in
+    a question only becomes ``delivered`` when a ``hey_my_buddy_checkpoint`` result in
     this root session and native turn succeeded untruncated with a signed
-    receipt, and an answer only counts when a ``buddy_answer_inquiry`` result
+    receipt, and an answer only counts when a ``hey_my_buddy_answer_inquiry`` result
     in the same turn carried a signed receipt the controller re-verified against
     the bridge's committed state. Child sessions, relayed sources, agent and
     background calls are excluded exactly like finish evidence.
@@ -1088,7 +1088,7 @@ class RootTurnEvidence:
                 and 0 < self.completed_ordinal < self.settled_ordinal < self.close_ordinal):
             raise NativeError("invalid-provenance", "the native root result lacks ordered tool, turn and session settlement evidence")
         return {
-            "harness": "zcode", "tool": "buddy_finish_turn", "turnEnd": "completed", "rootSessionMatched": True,
+            "harness": "zcode", "tool": "hey_my_buddy_finish_turn", "turnEnd": "completed", "rootSessionMatched": True,
             "inputId": self.input_id, "nativeSessionId": self.session_id, "nativeTurnId": self.turn_id,
             "toolCallId": self.call_id, "receiptId": self.receipt["receiptId"], "receiptVerified": True,
             "turnStartSeq": self.start_seq, "toolCallSeq": self.call_seq, "toolResultSeq": self.result_seq, "turnEndSeq": self.end_seq,

@@ -98,7 +98,7 @@ class FakeWindowsAPI:
 
 class WindowsWorkspaceTests(unittest.TestCase):
     def setUp(self):
-        self.temp = tempfile.TemporaryDirectory(prefix="buddy-win-paths-")
+        self.temp = tempfile.TemporaryDirectory(prefix="hey-my-buddy-win-paths-")
         self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name).resolve()
         self.api = FakeWindowsAPI()

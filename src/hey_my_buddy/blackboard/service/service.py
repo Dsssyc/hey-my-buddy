@@ -178,7 +178,7 @@ class _BaseResource:
             return schemas.encode({"error": {"code": "INVALID_ARGUMENT", "message": "Request is too deeply nested"}})
         except Exception as error:  # pragma: no cover - defensive boundary
             detail = ""
-            if os.environ.get("BUDDY_DEBUG"):
+            if os.environ.get("HMB_DEBUG"):
                 # Never leak internals by default; an operator can opt in explicitly.
                 detail = f": {type(error).__name__}: {error}"
             return schemas.encode(

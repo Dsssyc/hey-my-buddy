@@ -300,11 +300,11 @@ class RefusalFactsTests(NativeRunCase):
         # The stream's own unknown kinds are part of the final result, not only
         # of the live observer statistics: a turn with no unread shape at all
         # still reports what it could not classify.
-        self.unknown_kinds = ("buddy_probe_unknown",)
+        self.unknown_kinds = ("hey_my_buddy_probe_unknown",)
         result = self.run_final()
         self.assert_continued(result)
         evidence = result.native_evidence
-        self.assertEqual(evidence.unknown_events.counts_by_type, (("buddy_probe_unknown", 1),))
+        self.assertEqual(evidence.unknown_events.counts_by_type, (("hey_my_buddy_probe_unknown", 1),))
         self.assertEqual(evidence.unknown_events.total, 1)
         self.assertEqual(evidence.unconfirmed, ())
 
@@ -350,14 +350,14 @@ class RefusalFactsTests(NativeRunCase):
         from hey_my_buddy.buddy.roles import run_execution
 
         self.initialize_value = []
-        self.unknown_kinds = ("buddy_probe_unknown",)
+        self.unknown_kinds = ("hey_my_buddy_probe_unknown",)
         request = self.fast_request("prompt")
         result = native_run.run(request, observer=lambda _facts: FEEDBACK_CONTINUE,
                                 services=None, cancelled=lambda: False)
         self.assertEqual(result.end.status, "ok", result.end.message)
         facts = result.native_evidence.to_payload()
         self.assertEqual(facts["unknownEvents"],
-                         {"countsByType": {"initialize": 1, "buddy_probe_unknown": 1}, "total": 2})
+                         {"countsByType": {"initialize": 1, "hey_my_buddy_probe_unknown": 1}, "total": 2})
         verdict = {"stopReason": None, "elapsedMs": 1}
         payloads = (run_execution._fast_result(result, request, verdict),
                     run_execution._review_result(result, request, verdict),

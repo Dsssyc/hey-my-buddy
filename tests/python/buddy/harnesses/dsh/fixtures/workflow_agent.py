@@ -94,7 +94,7 @@ class WorkflowAgent(fake_agent.FakeAgent):
                     self.bridge_config = arguments[arguments.index("--config") + 1]
                 server = entry.get("name")
                 if isinstance(server, str) and server:
-                    self.finish_tool = f"mcp__{server}__buddy_finish_turn"
+                    self.finish_tool = f"mcp__{server}__hey_my_buddy_finish_turn"
             fake_agent.log(self.log_path, {"event": "workflow-binding",
                                            "mode": self.workflow_mode,
                                            "bridge": self.bridge_config,

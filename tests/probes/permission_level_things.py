@@ -9,7 +9,7 @@ pypi.org:443, and starts ps to list processes. Shared memory may start Python's
 resource tracker. Each operation prints its observation; the final line is JSON.
 Permission denials and other failures retain their reasons separately; successful
 cleanup is part of each operation. No harness or repository package is required.
-It never calls a model, reads or writes a blackboard, or starts a Buddy service.
+It never calls a model, reads or writes a blackboard, or starts a hey-my-buddy service.
 """
 from __future__ import annotations
 

@@ -29,14 +29,14 @@ class DistributionTests(unittest.TestCase):
         self.assertIn("tool run --from", (ROOT / "install.ps1").read_text())
 
     def test_wheel_and_sdist_are_complete_and_clean(self):
-        with tempfile.TemporaryDirectory(prefix="buddy-dist-", dir=os.environ.get("BUDDY_CHECKS_TMPDIR")) as folder:
+        with tempfile.TemporaryDirectory(prefix="hey-my-buddy-dist-", dir=os.environ.get("HMB_CHECKS_TMPDIR")) as folder:
             root = Path(folder)
-            local_build = os.environ.get("BUDDY_DISTRIBUTION_NO_BUILD_ISOLATION") == "1"
+            local_build = os.environ.get("HMB_DISTRIBUTION_NO_BUILD_ISOLATION") == "1"
             env = {key: value for key, value in os.environ.items()
-                   if not key.startswith("BUDDY_") and key not in {"VIRTUAL_ENV", "UV_PROJECT_ENVIRONMENT"}
+                   if not key.startswith("HMB_") and key not in {"VIRTUAL_ENV", "UV_PROJECT_ENVIRONMENT"}
                    and (key != "PYTHONPATH" or local_build)}
-            env.update(BUDDY_STATE_DIR=str(root / "state"),
-                       BUDDY_RUNTIME_ROOT=str(root / "runtime"))
+            env.update(HMB_STATE_DIR=str(root / "state"),
+                       HMB_RUNTIME_ROOT=str(root / "runtime"))
             command = ["uv", "build", "--out-dir", str(root / "dist")]
             if local_build:
                 command.extend(["--no-build-isolation", "--python", "python3.12"])
@@ -52,7 +52,7 @@ class DistributionTests(unittest.TestCase):
                 expected = {
                     "hey_my_buddy/_distribution/SKILL.md",
                     "hey_my_buddy/_distribution/skill.json",
-                    "hey_my_buddy/_distribution/scripts/buddy",
+                    "hey_my_buddy/_distribution/scripts/hey-my-buddy",
                     "hey_my_buddy/_distribution/package/pyproject.toml",
                     "hey_my_buddy/_distribution/package/uv.lock",
                     "hey_my_buddy/_distribution/package/packaging/runtime-assets.json",
@@ -75,7 +75,7 @@ class DistributionTests(unittest.TestCase):
             with tarfile.open(sdist) as archive:
                 names = archive.getnames()
                 for suffix in ("packaging/hatch_build.py", "packaging/runtime-assets.json", "uv.lock",
-                               "skills/buddy/SKILL.md", "docs/reference/architecture.md",
+                               "skills/hey-my-buddy/SKILL.md", "docs/reference/architecture.md",
                                "src/hey_my_buddy/install/runtime.py", "src/hey_my_buddy/console/assets/index.html",
                                "src/hey_my_buddy/build-info.json"):
                     self.assertTrue(any(name.endswith("/" + suffix) for name in names), suffix)

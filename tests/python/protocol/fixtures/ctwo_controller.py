@@ -327,9 +327,9 @@ def main():
     parser.add_argument("--control", type=Path)
     args = parser.parse_args()
     if args.mode == "controller":
-        state_dir = os.environ.get("BUDDY_STATE_DIR")
+        state_dir = os.environ.get("HMB_STATE_DIR")
         if not state_dir:
-            parser.error("BUDDY_STATE_DIR is required for the controller process")
+            parser.error("HMB_STATE_DIR is required for the controller process")
         controller(args.control, Path(state_dir))
     else:
         globals()[args.mode](args.root)

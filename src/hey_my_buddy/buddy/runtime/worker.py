@@ -28,7 +28,7 @@ CLAIM_IDLE_SECONDS = 2.0
 
 def supervisor_start_stop_path(directory: Path) -> Path | None:
     """A daemon-created supervisor's private startup-abort channel."""
-    identity = os.environ.get("BUDDY_SUPERVISOR_START_ID", "")
+    identity = os.environ.get("HMB_SUPERVISOR_START_ID", "")
     if len(identity) == 32 and all(char in "0123456789abcdef" for char in identity):
         return directory / f"stop-{identity}.request"
     return None
@@ -412,7 +412,7 @@ class Worker:
             self.worker_id,
             adapter=adapter_names[0],
             capabilities=capabilities,
-            identity=f"buddy-worker:{self.worker_id}",
+            identity=f"hey-my-buddy-worker:{self.worker_id}",
         )
 
     def run(self, *, max_iterations: int | None = None) -> None:
@@ -634,7 +634,7 @@ class Worker:
                 if review:
                     return self._review_unavailable(claim, directory, history, 'router-unavailable')
                 return self.receipt(claim, {'status': 'failed', 'result': {'harness': record, 'harnessAttempts': history},
-                    'error': 'HARNESS_UNAVAILABLE: ' + str((record or {}).get('remedy') or 'Run buddy harnesses with refresh:true'),
+                    'error': 'HARNESS_UNAVAILABLE: ' + str((record or {}).get('remedy') or 'Run hey-my-buddy harnesses with refresh:true'),
                     'exitCode': None, 'signal': None, 'shutdownConfirmed': True, 'artifacts': [],
                     'terminationReason': TERMINATION_HARNESS_ERROR}, directory)
             selection = directory / 'harness-selection.json'
@@ -689,7 +689,7 @@ class Worker:
             spec=spec,
             directory=directory,
             runtime=runtime.resolve_runtime(),
-            environment={**os.environ, "BUDDY_STATE_DIR": str(self.state_dir), **holder.get('harnessEnvironment', {})},
+            environment={**os.environ, "HMB_STATE_DIR": str(self.state_dir), **holder.get('harnessEnvironment', {})},
             lease_seconds=self.lease_seconds,
             decision_input=claim.get("decisionInput"),
             # The service-owned turn identity and bounded context; the adapter stages
@@ -908,7 +908,7 @@ class _Renewal(threading.Thread):
     """Lease renewal and durable cancel-intent observation, independent of the daemon."""
 
     def __init__(self, worker: Worker, claim: dict, handle, implementation):
-        super().__init__(name="buddy-worker-renewal", daemon=True)
+        super().__init__(name="hey-my-buddy-worker-renewal", daemon=True)
         self.worker = worker
         self.claim = claim
         self.handle = handle

@@ -23,7 +23,7 @@ MAX_MODELS = 200
 MAX_PROVIDERS = 32
 MAX_TEXT = 2000
 MAX_CATALOG_BYTES = 2 * 1024 * 1024
-CATALOG_FILE_ENV = "BUDDY_MODEL_CATALOG_FILE"
+CATALOG_FILE_ENV = "HMB_MODEL_CATALOG_FILE"
 BUDDY_FIELDS = ("harness", "provider", "model", "effort")
 
 #: ADR-027 rule 1: the account-status fact every harness reports per discovery.
@@ -52,7 +52,7 @@ RETIRED_EFFORT_REASON = "not present in the latest complete native discovery"
 CATALOG_FACT_REASONS = (CONFIRMED_ABSENCE_REASON, RETIRED_EFFORT_REASON)
 
 #: ADR-027 rule 3: how an operator refreshes harness catalogs and their readings.
-CATALOG_REMEDY = "Run buddy harnesses with refresh:true"
+CATALOG_REMEDY = "Run hey-my-buddy harnesses with refresh:true"
 
 #: The one reason every catalog-caused refusal carries. The user's independent
 #: enabled gate keeps its own separate reason.

@@ -25,7 +25,7 @@ from ...protocol import schemas
 #: selection reader is admitted.
 DECISION_ADAPTER = "decision"
 
-#: One machine-wide concurrent-attempt ceiling (BUDDY_MAX_CONCURRENT).
+#: One machine-wide concurrent-attempt ceiling (HMB_MAX_CONCURRENT).
 TOTAL_CONCURRENCY_DEFAULT = 8
 TOTAL_CONCURRENCY_MIN = 1
 TOTAL_CONCURRENCY_MAX = 32
@@ -104,7 +104,7 @@ def pool_worker_ids(prefix: object, total: int) -> list[str]:
 
     A prefix that is not a valid worker identity — or whose generated IDs would
     exceed the registry's bound — falls back to :data:`DEFAULT_WORKER_PREFIX`, so a
-    malformed ``BUDDY_WORKER_ID`` can never escape the state directory.
+    malformed ``HMB_WORKER_ID`` can never escape the state directory.
     """
     count = max(1, int(total))
     base = valid_worker_id(prefix) or DEFAULT_WORKER_PREFIX

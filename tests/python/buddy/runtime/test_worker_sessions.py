@@ -74,7 +74,7 @@ class WorkerSessionTests(unittest.TestCase):
                'cwd': '/fixture/work', 'execution_state': 'finished', 'shutdown_confirmed': 1,
                'result_json': json.dumps({'result': {
                    'nativeSession': {'harness': 'codex', 'sessionId': 'thread-1', 'captured': True,
-                                     'storageOwner': 'buddy-micro-task', 'resumeMode': 'initial',
+                                     'storageOwner': 'hey-my-buddy-micro-task', 'resumeMode': 'initial',
                                      'nativeAppVisibility': 'unknown'},
                    'nativeCheckpoint': {'version': 1, 'sessionId': 'thread-1', 'taskId': 'micro-task-1',
                                         'attemptId': 'attempt-1'}},
@@ -92,10 +92,10 @@ class WorkerSessionTests(unittest.TestCase):
         fixture = CodexAdapterTests('test_completed_native_turn_has_structured_provenance_and_preserved_final_activity')
         fixture.setUp()
         try:
-            with mock.patch.dict(os.environ, {'BUDDY_DEV_SOURCE': '1',
-                                              'BUDDY_STATE_DIR': str(fixture.root / 'state'),
-                                              'BUDDY_RUNTIME_ROOT': str(fixture.root / 'runtime'),
-                                              'BUDDY_CODEX_CLI': str(fixture.environment['BUDDY_CODEX_CLI'])}):
+            with mock.patch.dict(os.environ, {'HMB_DEV_SOURCE': '1',
+                                              'HMB_STATE_DIR': str(fixture.root / 'state'),
+                                              'HMB_RUNTIME_ROOT': str(fixture.root / 'runtime'),
+                                              'HMB_CODEX_CLI': str(fixture.environment['HMB_CODEX_CLI'])}):
                 outcome = fixture.execute(fixture.context())
             self.assertTrue(outcome.shutdown_confirmed)
             receipt = {'result': outcome.result, 'shutdownConfirmed': True}

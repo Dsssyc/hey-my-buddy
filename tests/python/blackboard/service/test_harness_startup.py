@@ -12,13 +12,13 @@ class HarnessStartupTests(BoardTestCase):
         class NoEnvironmentDump(dict):
             def items(self):
                 raise AssertionError('Do not collect arbitrary environment values')
-        source = NoEnvironmentDump(HOME='/private/home', PATH='/usr/bin', BUDDY_STATE_DIR='/private/state',
-                                   BUDDY_AGENT_CREDENTIAL_FILE='/private/credential', OPENAI_API_KEY='fixture-secret',
+        source = NoEnvironmentDump(HOME='/private/home', PATH='/usr/bin', HMB_STATE_DIR='/private/state',
+                                   HMB_AGENT_CREDENTIAL_FILE='/private/credential', OPENAI_API_KEY='fixture-secret',
                                    UNKNOWN_SECRET='fixture-secret', OPENAI_BASE_URL='https://fixture.invalid')
         controller = controller_environment(self.directory, source)
         router = controller_environment(self.directory, source, read_only=True)
-        self.assertEqual(controller['BUDDY_AGENT_CREDENTIAL_FILE'], '/private/credential')
-        self.assertNotIn('BUDDY_AGENT_CREDENTIAL_FILE', router)
+        self.assertEqual(controller['HMB_AGENT_CREDENTIAL_FILE'], '/private/credential')
+        self.assertNotIn('HMB_AGENT_CREDENTIAL_FILE', router)
         for key in ('OPENAI_API_KEY', 'UNKNOWN_SECRET', 'OPENAI_BASE_URL'):
             self.assertNotIn(key, controller)
             self.assertNotIn(key, router)

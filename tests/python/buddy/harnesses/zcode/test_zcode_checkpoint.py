@@ -6,8 +6,8 @@ channel through the held control's ``live`` material and ready descriptor,
 queues a Host question through the real ``request`` operation while the turn
 is live, and reads the durable journal through the attempt-private
 ``resultsPath`` the integrated inquiry entry publishes. The fixture's root
-model picks the question up through the real ``buddy_checkpoint`` tool,
-answers through the real ``buddy_answer_inquiry`` tool, and only the
+model picks the question up through the real ``hey_my_buddy_checkpoint`` tool,
+answers through the real ``hey_my_buddy_answer_inquiry`` tool, and only the
 controller's verified root-turn evidence moves journal state. The flows cover
 the finish-refusal retry, settlement races, child relays, forged receipts,
 cancellation and the unchanged single native ``session/send``.
@@ -121,7 +121,7 @@ class ZcodeCheckpointFlowTests(ZcodeFixtureCase):
         self.assertEqual(records[1]["toolCallId"], "call-checkpoint-root")
         self.assertEqual(records[2]["answer"]["text"], "fixture answer for q-1")
         self.assertEqual(records[2]["answer"]["toolCallId"], "call-answer-q-1")
-        self.assertEqual(records[2]["answer"]["via"], "tool:buddy_answer_inquiry")
+        self.assertEqual(records[2]["answer"]["via"], "tool:hey_my_buddy_answer_inquiry")
         self.assertEqual(records[2]["taskId"], "micro-task-1")
         self.assertEqual(records[2]["attemptId"], context.attempt_id)
         self.assertEqual(outcome.result["inquiry"]["requested"], 1)

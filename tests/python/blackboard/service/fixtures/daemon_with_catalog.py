@@ -18,7 +18,7 @@ def service(daemon):
     # No private service integration test inspects the user's native login.
     with daemon.store.db.write() as db:
         for name in HARNESSES:
-            executable = os.environ.get('BUDDY_' + name.upper() + '_CLI')
+            executable = os.environ.get('HMB_' + name.upper() + '_CLI')
             command = [executable or 'fixture-' + name]
             if executable and Path(executable).suffix == '.py':
                 command.insert(0, sys.executable)
@@ -40,7 +40,7 @@ def service(daemon):
 
 
 if __name__ == '__main__':
-    state = Path(os.environ['BUDDY_STATE_DIR']).resolve()
-    assert Path(os.environ['BUDDY_MODEL_CATALOG_FILE']).resolve().is_relative_to(state)
+    state = Path(os.environ['HMB_STATE_DIR']).resolve()
+    assert Path(os.environ['HMB_MODEL_CATALOG_FILE']).resolve().is_relative_to(state)
     Daemon.service = service
     raise SystemExit(main())

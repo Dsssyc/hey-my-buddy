@@ -26,7 +26,7 @@ def send(value):
 
 
 def state_path():
-    return Path(os.environ["BUDDY_CLAUDE_FIXTURE_STATE"])
+    return Path(os.environ["HMB_CLAUDE_FIXTURE_STATE"])
 
 
 def read_state():
@@ -160,7 +160,7 @@ def wait_for_interrupt():
         except ValueError:
             continue
         if frame.get("type") == "control_request":
-            handle_control(frame, os.environ.get("BUDDY_CLAUDE_FIXTURE_CASE", "clean"))
+            handle_control(frame, os.environ.get("HMB_CLAUDE_FIXTURE_CASE", "clean"))
 
 
 def run_stream(case, session_id):
@@ -296,7 +296,7 @@ def main():
     if "--version" in sys.argv:
         print("2.1.282 (Claude stream fixture)")
         return
-    case = os.environ.get("BUDDY_CLAUDE_FIXTURE_CASE", "clean")
+    case = os.environ.get("HMB_CLAUDE_FIXTURE_CASE", "clean")
     state = read_state()
     write_state({"argv": sys.argv, "cwd": os.getcwd(), "initialize": False, "userTurns": 0, "interrupted": False,
                  "runs": state.get("runs", 0) + 1})

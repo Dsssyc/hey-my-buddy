@@ -75,7 +75,7 @@ class NativeRunCase(unittest.TestCase):
     def setUp(self):
         name = self.id().rsplit(".", 1)[-1]
         container = tempfile.TemporaryDirectory(prefix=f"dsh-native-{name}-",
-                                                dir=os.environ.get("BUDDY_CHECKS_TMPDIR", "/tmp"))
+                                                dir=os.environ.get("HMB_CHECKS_TMPDIR", "/tmp"))
         self.addCleanup(container.cleanup)
         self.base = Path(container.name).resolve()
         self.root = self.base / "native-root"
@@ -141,8 +141,8 @@ class NativeRunCase(unittest.TestCase):
         bound = native_run.prepare_services(
             invocation_root=invocation, identity=identity, input_sha256=input_hash(turn_input),
             attention_path=attention, session_tools=worker_services.session_tools(),
-            completion_tool="buddy_finish_turn", validate_outcome=validate_outcome,
-            inquiry=inquiry_credentials, inquiry_tools=("buddy_checkpoint", "buddy_answer_inquiry"),
+            completion_tool="hey_my_buddy_finish_turn", validate_outcome=validate_outcome,
+            inquiry=inquiry_credentials, inquiry_tools=("hey_my_buddy_checkpoint", "hey_my_buddy_answer_inquiry"),
             native_stderr=str(self.base / f"native-stderr-{uuid.uuid4().hex[:8]}.log"))
         mount = bound.services.mount
         prompt = worker_services.micro_task_prompt(
@@ -171,7 +171,7 @@ class NativeRunCase(unittest.TestCase):
     def micro_task_agent_args(self, mount, *, permission=False, **flags) -> None:
         # The mount carries all three session tools; the checkpoint's qualified
         # name exists whether or not this run wired an inquiry channel.
-        checkpoint = f"mcp__{mount.server_name}__buddy_checkpoint"
+        checkpoint = f"mcp__{mount.server_name}__hey_my_buddy_checkpoint"
         self.extra_agent_args = [
             "--prompt-mode", "micro-task",
             "--bridge-config", mount.bridge_config_path,
@@ -384,13 +384,13 @@ class FastSeamTests(NativeRunCase):
         self.assertEqual(result.end.status, "ok")
         self.assertIsNone(correction.stop_reason)
         # The unknown event's own count is the observer statistics' fact.
-        self.assertTrue(any(facts["unknownEvents"] == {"countsByType": {"buddy_probe_unknown": 1},
+        self.assertTrue(any(facts["unknownEvents"] == {"countsByType": {"hey_my_buddy_probe_unknown": 1},
                                                       "total": 1} for facts in seen),
                         [facts["unknownEvents"] for facts in seen])
         # The same count is the final result's fact: a turn without any unread
         # shape still reports what it could not classify.
         self.assertEqual(result.native_evidence.unknown_events.counts_by_type,
-                         (("buddy_probe_unknown", 1),))
+                         (("hey_my_buddy_probe_unknown", 1),))
         self.assertEqual(result.native_evidence.unknown_events.total, 1)
 
     def test_a_write_scope_without_a_service_takes_the_final_message_path(self):
@@ -718,7 +718,7 @@ class MountTests(NativeRunCase):
                                                         "generation": 1, "turnId": "u"},
             input_sha256="0" * 64, attention_path=self.base / "att2.json",
             session_tools=worker_services.session_tools(),
-            completion_tool="buddy_finish_turn")
+            completion_tool="hey_my_buddy_finish_turn")
         command = mount.mcp_servers[0]
         self.assertIn(CARRIER_MODULE, command["args"])
         self.assertIn("--config", command["args"])
@@ -732,7 +732,7 @@ class MountTests(NativeRunCase):
         request, _bound, mount = self.worker_request()
         self.assertIsNone(native_run._check_service_descriptions(request, mount))
         mismatched = self.variant_of(request,
-                                     session_services=(SessionService(tool_names=["mcp__other__buddy_finish_turn"]),))
+                                     session_services=(SessionService(tool_names=["mcp__other__hey_my_buddy_finish_turn"]),))
         with self.assertRaises(BoardError):
             native_run._check_service_descriptions(mismatched, mount)
         other_schema = run_contract.FrozenJson.from_value({"type": "object"}, "schema",
@@ -813,7 +813,7 @@ class WorkerSeamTests(NativeRunCase):
         self.assertEqual(result.end.status, "ok", result.end.message)
         self.assertEqual(result.value.parsed.value["disposition"], "completed")
         self.assertEqual(result.native_evidence.unknown_events.counts_by_type,
-                         (("buddy_probe_unknown", 1),))
+                         (("hey_my_buddy_probe_unknown", 1),))
         self.assertEqual(result.native_evidence.unknown_events.total, 1)
 
     def test_a_missing_stop_reason_ends_unknown_without_a_turn_or_binding(self):
@@ -922,7 +922,7 @@ class WorkerSeamTests(NativeRunCase):
         from buddy.harnesses.fixtures.c_two_live_peer import TEST_CRM
         from hey_my_buddy.buddy.harnesses.c_two_live import CTwoLiveEndpoint
         from hey_my_buddy.buddy.harnesses.live import EXISTING_CAPABILITIES
-        endpoint = CTwoLiveEndpoint(request.identity, EXISTING_CAPABILITIES["dsh"], TEST_CRM, state_dir=Path(os.environ["BUDDY_STATE_DIR"]))
+        endpoint = CTwoLiveEndpoint(request.identity, EXISTING_CAPABILITIES["dsh"], TEST_CRM, state_dir=Path(os.environ["HMB_STATE_DIR"]))
         services = dataclasses.replace(bound.services, live=endpoint)
         with mock.patch.object(endpoint, "publish_activity", wraps=endpoint.publish_activity) as publish:
             result = run(request, observer=worker_observer, services=services,
@@ -944,7 +944,7 @@ class WorkerSeamTests(NativeRunCase):
         from hey_my_buddy.buddy.harnesses.live import EXISTING_CAPABILITIES
         from hey_my_buddy.protocol.activity import is_newer
         request, bound, mount = self.worker_request()
-        endpoint = CTwoLiveEndpoint(request.identity, EXISTING_CAPABILITIES["dsh"], TEST_CRM, state_dir=Path(os.environ["BUDDY_STATE_DIR"]))
+        endpoint = CTwoLiveEndpoint(request.identity, EXISTING_CAPABILITIES["dsh"], TEST_CRM, state_dir=Path(os.environ["HMB_STATE_DIR"]))
         seen = []
         original = endpoint.publish_activity
 
@@ -987,7 +987,7 @@ class WorkerSeamTests(NativeRunCase):
         from hey_my_buddy.buddy.harnesses.c_two_live import CTwoLiveEndpoint
         from hey_my_buddy.buddy.harnesses.live import EXISTING_CAPABILITIES
         request, bound, mount = self.worker_request()
-        endpoint = CTwoLiveEndpoint(request.identity, EXISTING_CAPABILITIES["dsh"], TEST_CRM, state_dir=Path(os.environ["BUDDY_STATE_DIR"]))
+        endpoint = CTwoLiveEndpoint(request.identity, EXISTING_CAPABILITIES["dsh"], TEST_CRM, state_dir=Path(os.environ["HMB_STATE_DIR"]))
         services = dataclasses.replace(bound.services, live=endpoint)
         self.micro_task_agent_args(mount)
         with mock.patch.object(endpoint, "publish_activity", return_value=False) as publish:
@@ -1004,7 +1004,7 @@ class WorkerSeamTests(NativeRunCase):
         self.extra_agent_args = ["--prompt-mode", "final", "--final-answer", '{"choice":"a"}']
         request = self.fast_request("prompt", scope="write")
         described = RunRequest.from_payload(
-            request.to_payload() | {"sessionServices": [{"toolNames": ["mcp__x__buddy_finish_turn"]}]})
+            request.to_payload() | {"sessionServices": [{"toolNames": ["mcp__x__hey_my_buddy_finish_turn"]}]})
         with self.assertRaises(BoardError):
             run(described, observer=worker_observer, services=None, cancelled=lambda: False)
 
@@ -1056,7 +1056,7 @@ class ContinuationTests(NativeRunCase):
                      cancelled=lambda: False)
         self.assertEqual(result.end.status, "ok")
         facts = native_run.session_facts(micro_task, result.native_identity.session_id)
-        self.assertEqual(facts["storageOwner"], "buddy-micro-task",
+        self.assertEqual(facts["storageOwner"], "hey-my-buddy-micro-task",
                          "a normal completion over the task's shared micro task root is micro-task-owned")
         self.assertEqual(facts["storageScope"], "task-shared-sessions")
         self.assertTrue(facts["bindingPresent"])
@@ -1137,7 +1137,7 @@ class RoleSeamFunctionTests(unittest.TestCase):
             root.mkdir(mode=0o700)
             facts = native_run.session_facts(root, "session-1")
             self.assertTrue(facts["captured"])
-            self.assertEqual(facts["storageOwner"], "buddy-attempt")
+            self.assertEqual(facts["storageOwner"], "hey-my-buddy-attempt")
             self.assertEqual(facts["storageScope"], "attempt-private-sessions")
             self.assertEqual(facts["nativeAppVisibility"], "not-listed-in-native-app")
             self.assertEqual(facts["credentialsStore"], "harness-user-store")
@@ -1160,14 +1160,14 @@ class RoleSeamFunctionTests(unittest.TestCase):
             # private root.
             micro_task = private_dirs.native_root(state, "dsh", "task-1")
             facts = native_run.session_facts(micro_task, None)
-            self.assertEqual(facts["storageOwner"], "buddy-micro-task",
+            self.assertEqual(facts["storageOwner"], "hey-my-buddy-micro-task",
                              "the task's shared native root is micro-task-owned storage")
             self.assertEqual(facts["storageScope"], "task-shared-sessions")
             attempt = private_dirs.attempt_root(state, "dsh", "task-1", "attempt-1")
             other = native_run.session_facts(attempt / "dsh-private", None)
-            self.assertNotEqual(other["storageOwner"], "buddy-micro-task",
+            self.assertNotEqual(other["storageOwner"], "hey-my-buddy-micro-task",
                                 "an old attempt root is never misreported as micro task storage")
-            self.assertEqual(other["storageOwner"], "buddy-attempt")
+            self.assertEqual(other["storageOwner"], "hey-my-buddy-attempt")
             self.assertEqual(other["storageScope"], "attempt-private-sessions")
 
     def test_native_evidence_projects_the_launch_scope_and_stream_end(self):
@@ -1190,7 +1190,7 @@ class RoleSeamFunctionTests(unittest.TestCase):
                          {"eventCount": None, "disabledRows": None, "streamEof": None})
 
     def test_turn_provenance_accepts_only_the_verified_order(self):
-        provenance = {"version": 1, "harness": "dsh", "tool": "buddy_finish_turn",
+        provenance = {"version": 1, "harness": "dsh", "tool": "hey_my_buddy_finish_turn",
                       "turnEnd": "completed", "stopReason": "end_turn", "rootSessionMatched": True,
                       "receiptVerified": True, "sessionClose": "acknowledged",
                       "nativeSessionId": "session-1", "toolCallId": "call_finish_1",

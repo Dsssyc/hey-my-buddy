@@ -39,7 +39,7 @@ ZCODE_SESSION = ZCODE_NATIVE["sessionId"]
 ZCODE_TURN = ZCODE_NATIVE["turnId"]
 
 
-def clean_environment(*, drop_prefixes=("BUDDY_", "ANTHROPIC_", "CLAUDE_")):
+def clean_environment(*, drop_prefixes=("HMB_", "ANTHROPIC_", "CLAUDE_")):
     return {key: value for key, value in os.environ.items()
             if not key.startswith(drop_prefixes)
             and key not in ("VIRTUAL_ENV", "UV_PROJECT_ENVIRONMENT")}
@@ -66,7 +66,7 @@ class ScriptedConnection:
 class ClaudeNativeRecordTests(unittest.TestCase):
     """The Claude protocol layer turns the sanitized native frames into raw facts."""
 
-    cwd = "/tmp/buddy-fixture-checkout"
+    cwd = "/tmp/hey-my-buddy-fixture-checkout"
 
     def evidence(self) -> TurnEvidence:
         # This recording uses the first-party handshake supplied by its fake CLI.
@@ -178,7 +178,7 @@ class ClaudeAdapterObservationTests(unittest.TestCase):
     """The whole Claude controller path against the private stream-json fixture."""
 
     def setUp(self):
-        self.temporary = tempfile.TemporaryDirectory(prefix="buddy-claude-native-usage-")
+        self.temporary = tempfile.TemporaryDirectory(prefix="hey-my-buddy-claude-native-usage-")
         self.addCleanup(self.temporary.cleanup)
         self.root = Path(self.temporary.name)
         self.cwd = self.root / "checkout"
@@ -186,10 +186,10 @@ class ClaudeAdapterObservationTests(unittest.TestCase):
         FAKE_CLAUDE_USAGE.chmod(0o755)
         self.state = self.root / "fixture-state.json"
         self.environment = clean_environment()
-        self.environment.update(BUDDY_CONSOLE_PORT="0", BUDDY_CLAUDE_CLI=str(FAKE_CLAUDE_USAGE),
-                                BUDDY_CLAUDE_FIXTURE_STATE=str(self.state),
-                                BUDDY_STATE_DIR=str(self.root / "state"),
-                                BUDDY_RUNTIME_ROOT=str(self.root / "runtime"), BUDDY_DEV_SOURCE="1")
+        self.environment.update(HMB_CONSOLE_PORT="0", HMB_CLAUDE_CLI=str(FAKE_CLAUDE_USAGE),
+                                HMB_CLAUDE_FIXTURE_STATE=str(self.state),
+                                HMB_STATE_DIR=str(self.root / "state"),
+                                HMB_RUNTIME_ROOT=str(self.root / "runtime"), HMB_DEV_SOURCE="1")
         claude_module._reset_metadata_cache()
         self.addCleanup(claude_module._reset_metadata_cache)
         self.adapter = worker_executor("claude")
@@ -204,7 +204,7 @@ class ClaudeAdapterObservationTests(unittest.TestCase):
                                       "timeoutSeconds": timeout, "provider": "anthropic",
                                       "model": CLAUDE_MODEL, "effort": "low"},
                                 directory=self.root / f"attempt-{index}", runtime={},
-                                environment={**self.environment, "BUDDY_CLAUDE_FIXTURE_CASE": case},
+                                environment={**self.environment, "HMB_CLAUDE_FIXTURE_CASE": case},
                                 turn={"turnId": f"turn-{index}", "input": turn_input})
 
     def execute(self, case: str, **kwargs):
@@ -453,7 +453,7 @@ class ZcodeAdapterObservationTests(unittest.TestCase):
     """The whole ZCode controller path against the private app-server fixture."""
 
     def setUp(self):
-        self.temporary = tempfile.TemporaryDirectory(prefix="buddy-zcode-native-usage-")
+        self.temporary = tempfile.TemporaryDirectory(prefix="hey-my-buddy-zcode-native-usage-")
         self.addCleanup(self.temporary.cleanup)
         self.root = Path(self.temporary.name)
         self.cwd = self.root / "checkout"
@@ -465,9 +465,9 @@ class ZcodeAdapterObservationTests(unittest.TestCase):
             {"providerId": "fixture-api", "config": {"access": {"type": "api-key", "apiKey": "fixture-secret-never-public"}}}]}}}))
         MOCK_ZCODE_USAGE.chmod(0o755)
         self.environment = clean_environment()
-        self.environment.update(BUDDY_CONSOLE_PORT="0", BUDDY_ZCODE_CLI=str(MOCK_ZCODE_USAGE.resolve()),
-                                BUDDY_STATE_DIR=str(self.root / "state"),
-                                BUDDY_RUNTIME_ROOT=str(self.root / "runtime"), BUDDY_DEV_SOURCE="1",
+        self.environment.update(HMB_CONSOLE_PORT="0", HMB_ZCODE_CLI=str(MOCK_ZCODE_USAGE.resolve()),
+                                HMB_STATE_DIR=str(self.root / "state"),
+                                HMB_RUNTIME_ROOT=str(self.root / "runtime"), HMB_DEV_SOURCE="1",
                                 ZCODE_BUILTIN_PROVIDER_CONFIG_FILE=str(self.builtin),
                                 ZCODE_PERSONAL_PROVIDER_CONFIG_FILE=str(self.personal))
         self.adapter = worker_executor("zcode")
@@ -481,7 +481,7 @@ class ZcodeAdapterObservationTests(unittest.TestCase):
                                 spec={"cwd": str(self.cwd), "task": "fixture task", "timeoutSeconds": timeout,
                                       "provider": "fixture-api", "model": "fixture-model", "effort": "low"},
                                 directory=self.root / f"attempt-{index}", runtime={},
-                                environment={**self.environment, "BUDDY_ZCODE_TEST_CASE": case},
+                                environment={**self.environment, "HMB_ZCODE_TEST_CASE": case},
                                 turn={"turnId": f"turn-{index}", "input": identity})
 
     def execute(self, case: str, **kwargs):

@@ -23,7 +23,7 @@ def main():
     if "--version" in sys.argv:
         print("codex-cli 0.157.0")
         return
-    case = os.environ.get("BUDDY_CODEX_FIXTURE_CASE", "ok")
+    case = os.environ.get("HMB_CODEX_FIXTURE_CASE", "ok")
     turns = 0
     native_config = {"mcp_servers": {"user-tool": {}},
                      "web_search": "enabled", "approval_policy": "on-request"}
@@ -68,7 +68,7 @@ def main():
                  "layers": [{"name": {"type": "user", "file": "<native-user-config>"},
                              "config": {"mcp_servers": {"user-tool": {}}, "features": {"apps": True}}, "version": "1"}]}})
         elif method == "thread/start":
-            trace = Path(os.environ["BUDDY_CODEX_FIXTURE_STATE"])
+            trace = Path(os.environ["HMB_CODEX_FIXTURE_STATE"])
             trace.write_text(json.dumps({"thread": params, "home": os.environ["CODEX_HOME"], "userHome": os.environ["HOME"], "argv": sys.argv}))
             receipt = {"thread": {"id": "thread-1", "cwd": params["cwd"], "environments": []},
                        "model": "other" if case == "wrong-model" else params["model"],
@@ -86,7 +86,7 @@ def main():
             send({"id": ident, "result": receipt})
         elif method == "turn/start":
             turns += 1
-            trace = Path(os.environ["BUDDY_CODEX_FIXTURE_STATE"])
+            trace = Path(os.environ["HMB_CODEX_FIXTURE_STATE"])
             recorded = json.loads(trace.read_text())
             recorded.setdefault("turns", []).append(params)
             trace.write_text(json.dumps(recorded))

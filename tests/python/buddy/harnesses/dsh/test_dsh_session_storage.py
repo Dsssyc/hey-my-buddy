@@ -22,7 +22,7 @@ from buddy.harnesses.dsh.test_native_run import NativeRunCase
 class DshWorkspaceDefaultTests(unittest.TestCase):
     def test_the_removed_workspace_switch_is_rejected_on_submission(self):
         from hey_my_buddy.errors import BoardError
-        with tempfile.TemporaryDirectory(prefix="buddy-dsh-spec-") as root:
+        with tempfile.TemporaryDirectory(prefix="hey-my-buddy-dsh-spec-") as root:
             common = {"requestId": "dsh-default", "task": "bounded task", "cwd": root}
             # Every DSH run is execution-private now: the grouping switch is an
             # unknown submit field whatever harness or value carries it.
@@ -44,7 +44,7 @@ class StorageSplitTests(NativeRunCase):
         from hey_my_buddy.buddy.roles import worker_services
         from hey_my_buddy.buddy.roles.run_observers import worker_observer
         request, bound, mount = self.worker_request()
-        checkpoint = f"mcp__{mount.server_name}__buddy_checkpoint"
+        checkpoint = f"mcp__{mount.server_name}__hey_my_buddy_checkpoint"
         self.extra_agent_args = ["--prompt-mode", "micro-task",
                                  "--bridge-config", mount.bridge_config_path,
                                  "--finish-tool", mount.finish_tool,

@@ -447,7 +447,7 @@ class HarnessDiscoveryTests(unittest.TestCase):
 
         environment = NoEnumeration({"PATH": "/usr/bin", "HOME": "/home/user",
                                      "LC_CTYPE": "en_US.UTF-8", "LC_SECRET_TOKEN": "private",
-                                     "OPENAI_API_KEY": "private", "BUDDY_AGENT_CREDENTIAL": "private",
+                                     "OPENAI_API_KEY": "private", "HMB_AGENT_CREDENTIAL": "private",
                                      "ANTHROPIC_BASE_URL": "third-party"})
         result = discovery.native_environment(environment)
         self.assertEqual(result["LC_CTYPE"], "en_US.UTF-8")
@@ -473,12 +473,12 @@ class HarnessDiscoveryTests(unittest.TestCase):
             result = discovery.native_environment({"PATH": "/usr/bin", "HOME": "/home/user",
                                                    "HTTPS_PROXY": "proxy", "OPENAI_API_KEY": "secret",
                                                    "ANTHROPIC_BASE_URL": "third-party",
-                                                   "BUDDY_AGENT_CREDENTIAL": "internal"}, command=[str(cli)])
+                                                   "HMB_AGENT_CREDENTIAL": "internal"}, command=[str(cli)])
             self.assertEqual(result["PATH"].split(":")[0], str(cli.parent))
             self.assertEqual(result["HOME"], "/home/user")
             self.assertNotIn("OPENAI_API_KEY", result)
             self.assertNotIn("ANTHROPIC_BASE_URL", result)
-            self.assertNotIn("BUDDY_AGENT_CREDENTIAL", result)
+            self.assertNotIn("HMB_AGENT_CREDENTIAL", result)
 
     def test_native_environment_preserves_the_users_dsh_home_verbatim(self):
         source = {"HOME": "/users/fixture", "DSH_HOME": "/users/fixture/config.v2 用户 设置",
@@ -496,16 +496,16 @@ class HarnessDiscoveryTests(unittest.TestCase):
 
     def test_native_environment_keeps_ca_certificate_paths(self):
         # Certificate paths name trust roots, not credentials; everything else
-        # outside the allowlist (provider keys, Buddy state) stays filtered.
+        # outside the allowlist (provider keys, hey-my-buddy state) stays filtered.
         certificates = {"SSL_CERT_FILE": "/certs/root.pem", "SSL_CERT_DIR": "/certs/dirs",
                         "REQUESTS_CA_BUNDLE": "/certs/bundle.pem", "CURL_CA_BUNDLE": "/certs/curl.pem",
                         "NODE_EXTRA_CA_CERTS": "/certs/node.pem"}
         result = discovery.native_environment({"PATH": "/usr/bin", "HOME": "/home/user",
-                                               "OPENAI_API_KEY": "secret", "BUDDY_STATE_DIR": "/private/state",
+                                               "OPENAI_API_KEY": "secret", "HMB_STATE_DIR": "/private/state",
                                                **certificates})
         self.assertEqual({key: result.get(key) for key in certificates}, certificates)
         self.assertNotIn("OPENAI_API_KEY", result)
-        self.assertNotIn("BUDDY_STATE_DIR", result)
+        self.assertNotIn("HMB_STATE_DIR", result)
 
 
 if __name__ == "__main__":

@@ -38,7 +38,7 @@ from hey_my_buddy.json_codec import decode_strict_json
 
 # The session tools one run actually mounts; refusal envelopes verify only
 # against this set, never a fixed global one.
-MOUNTED_TOOLS = ("buddy_checkpoint", "buddy_answer_inquiry", "buddy_finish_turn")
+MOUNTED_TOOLS = ("hey_my_buddy_checkpoint", "hey_my_buddy_answer_inquiry", "hey_my_buddy_finish_turn")
 
 #: The two registered rule bundles, exercised under their registered names so
 #: a common stage can never silently standardize one driver onto the other.
@@ -52,7 +52,7 @@ class ReceiptTests(unittest.TestCase):
         self.outcome = {"disposition": "completed", "summary": "done", "remaining": [], "decisions": [], "artifacts": [], "request": None}
 
     def receipt(self):
-        result = respond({"id": 1, "method": "tools/call", "params": {"name": "buddy_finish_turn", "arguments": self.outcome}}, self.bridge)
+        result = respond({"id": 1, "method": "tools/call", "params": {"name": "hey_my_buddy_finish_turn", "arguments": self.outcome}}, self.bridge)
         self.assertNotIn("structuredContent", result["result"])
         return result["result"]["content"][0]["text"]
 
@@ -198,13 +198,13 @@ class ToolRefusalEnvelopeTests(unittest.TestCase):
     def setUp(self):
         self.bridge = {"identity": {"taskId": "micro-task", "attemptId": "attempt", "generation": 1, "turnId": "logical"},
                        "inputSha256": "a" * 64, "key": "b" * 64}
-        self.names = {"buddy_finish_turn": "mcp__buddy_x__buddy_finish_turn",
-                      "buddy_checkpoint": "mcp__buddy_x__buddy_checkpoint",
-                      "buddy_answer_inquiry": "mcp__buddy_x__buddy_answer_inquiry"}
+        self.names = {"hey_my_buddy_finish_turn": "mcp__buddy_x__hey_my_buddy_finish_turn",
+                      "hey_my_buddy_checkpoint": "mcp__buddy_x__hey_my_buddy_checkpoint",
+                      "hey_my_buddy_answer_inquiry": "mcp__buddy_x__hey_my_buddy_answer_inquiry"}
 
     def refusal(self, **overrides) -> str:
         envelope = {"version": 1, "kind": "tool-refusal", "identity": self.bridge["identity"],
-                    "inputSha256": self.bridge["inputSha256"], "tool": "buddy_finish_turn",
+                    "inputSha256": self.bridge["inputSha256"], "tool": "hey_my_buddy_finish_turn",
                     "reason": "invalid-arguments", "detail": "the turn request references are invalid",
                     "receiptId": "f" * 32}
         key = overrides.pop("key", None) or self.bridge["key"]
@@ -217,11 +217,11 @@ class ToolRefusalEnvelopeTests(unittest.TestCase):
             with self.subTest(rules=name):
                 raw = self.refusal()
                 self.assertTrue(refusal_shaped(raw))
-                envelope = verify_tool_refusal(raw, self.bridge, self.names["buddy_finish_turn"], MOUNTED_TOOLS, rules=rules)
+                envelope = verify_tool_refusal(raw, self.bridge, self.names["hey_my_buddy_finish_turn"], MOUNTED_TOOLS, rules=rules)
                 self.assertEqual(envelope["reason"], "invalid-arguments")
-                self.assertEqual(envelope["tool"], "buddy_finish_turn")
+                self.assertEqual(envelope["tool"], "hey_my_buddy_finish_turn")
                 for bare, native in self.names.items():
-                    if bare == "buddy_finish_turn":
+                    if bare == "hey_my_buddy_finish_turn":
                         continue
                     with self.subTest(native=native):
                         with self.assertRaises(ReceiptError) as error:
@@ -238,11 +238,11 @@ class ToolRefusalEnvelopeTests(unittest.TestCase):
                 raw = self.refusal()
                 framed = "MCP tool returned an error:\n" + raw
                 self.assertTrue(refusal_shaped(framed))
-                envelope = verify_tool_refusal(framed, self.bridge, self.names["buddy_finish_turn"], MOUNTED_TOOLS, rules=rules)
+                envelope = verify_tool_refusal(framed, self.bridge, self.names["hey_my_buddy_finish_turn"], MOUNTED_TOOLS, rules=rules)
                 self.assertEqual(envelope["reason"], "invalid-arguments")
                 tampered = "MCP tool returned an error:\n" + json.dumps({**json.loads(raw), "detail": "changed after signing"})
                 with self.assertRaises(ReceiptError) as error:
-                    verify_tool_refusal(tampered, self.bridge, self.names["buddy_finish_turn"], MOUNTED_TOOLS, rules=rules)
+                    verify_tool_refusal(tampered, self.bridge, self.names["hey_my_buddy_finish_turn"], MOUNTED_TOOLS, rules=rules)
                 self.assertIn("signature", str(error.exception))
                 for not_shaped in ("x" * 300 + raw, framed + " trailing", "error: {" + raw,
                                    "MCP tool returned an error:\nnot json", " ", ""):
@@ -271,7 +271,7 @@ class ToolRefusalEnvelopeTests(unittest.TestCase):
                         if case == "not an object":
                             self.assertFalse(refusal_shaped(raw))
                         with self.assertRaises(ReceiptError) as error:
-                            verify_tool_refusal(raw, self.bridge, self.names["buddy_finish_turn"], MOUNTED_TOOLS, rules=rules)
+                            verify_tool_refusal(raw, self.bridge, self.names["hey_my_buddy_finish_turn"], MOUNTED_TOOLS, rules=rules)
                         self.assertEqual(error.exception.code, "invalid-tool-refusal")
                 # Prose before a genuinely signed envelope is just framing: the prefix
                 # never enters the signature, so the envelope still verifies and can
@@ -279,28 +279,28 @@ class ToolRefusalEnvelopeTests(unittest.TestCase):
                 prose_framed = "the tool refused: " + self.refusal()
                 self.assertTrue(refusal_shaped(prose_framed))
                 self.assertEqual(verify_tool_refusal(prose_framed, self.bridge,
-                                                     self.names["buddy_finish_turn"], MOUNTED_TOOLS,
+                                                     self.names["hey_my_buddy_finish_turn"], MOUNTED_TOOLS,
                                                      rules=rules)["reason"], "invalid-arguments")
                 with self.assertRaises(ReceiptError):
-                    verify_tool_refusal(self.refusal(), {**self.bridge, "key": "d" * 64}, self.names["buddy_finish_turn"],
+                    verify_tool_refusal(self.refusal(), {**self.bridge, "key": "d" * 64}, self.names["hey_my_buddy_finish_turn"],
                                         MOUNTED_TOOLS, rules=rules)
                 with self.assertRaises(ReceiptError):
-                    verify_tool_refusal("x" * 70001, self.bridge, self.names["buddy_finish_turn"], MOUNTED_TOOLS, rules=rules)
+                    verify_tool_refusal("x" * 70001, self.bridge, self.names["hey_my_buddy_finish_turn"], MOUNTED_TOOLS, rules=rules)
 
     def test_dispatch_never_treats_a_receipt_or_prose_as_a_refusal(self):
         outcome = {"disposition": "completed", "summary": "done", "remaining": [], "decisions": [],
                    "artifacts": [], "request": None}
-        result = respond({"id": 1, "method": "tools/call", "params": {"name": "buddy_finish_turn",
+        result = respond({"id": 1, "method": "tools/call", "params": {"name": "hey_my_buddy_finish_turn",
                                                                       "arguments": outcome}}, self.bridge)["result"]
         self.assertFalse(refusal_shaped(result["content"][0]["text"]))
         self.assertFalse(refusal_shaped(None))
         self.assertFalse(refusal_shaped("plain tool error text"))
         # A genuine MCP refusal is both isError and refusal-shaped, and verifies.
-        refused = respond({"id": 1, "method": "tools/call", "params": {"name": "buddy_finish_turn",
+        refused = respond({"id": 1, "method": "tools/call", "params": {"name": "hey_my_buddy_finish_turn",
                                                                        "arguments": {"disposition": "completed"}}}, self.bridge)["result"]
         self.assertTrue(refused.get("isError"))
         self.assertTrue(refusal_shaped(refused["content"][0]["text"]))
-        envelope = verify_tool_refusal(refused["content"][0]["text"], self.bridge, self.names["buddy_finish_turn"],
+        envelope = verify_tool_refusal(refused["content"][0]["text"], self.bridge, self.names["hey_my_buddy_finish_turn"],
                                        MOUNTED_TOOLS, rules=BOUNDED_REFUSAL_DETAIL)
         self.assertEqual(envelope["reason"], "invalid-arguments")
 
@@ -321,7 +321,7 @@ class RuleDifferenceTests(unittest.TestCase):
 
     def refusal(self, detail: str) -> str:
         envelope = {"version": 1, "kind": "tool-refusal", "identity": self.bridge["identity"],
-                    "inputSha256": self.bridge["inputSha256"], "tool": "buddy_finish_turn",
+                    "inputSha256": self.bridge["inputSha256"], "tool": "hey_my_buddy_finish_turn",
                     "reason": "invalid-arguments", "detail": detail, "receiptId": "f" * 32}
         envelope["signature"] = sign_receipt(envelope, self.bridge["key"])
         return json.dumps(envelope)
@@ -339,10 +339,10 @@ class RuleDifferenceTests(unittest.TestCase):
             with self.subTest(detail=detail[:20]):
                 raw = self.refusal(detail)
                 with self.assertRaises(ReceiptError) as error:
-                    verify_tool_refusal(raw, self.bridge, "mcp__buddy_x__buddy_finish_turn", MOUNTED_TOOLS,
+                    verify_tool_refusal(raw, self.bridge, "mcp__buddy_x__hey_my_buddy_finish_turn", MOUNTED_TOOLS,
                                         rules=BOUNDED_REFUSAL_DETAIL)
                 self.assertIn("bounded reason validation", str(error.exception))
-                envelope = verify_tool_refusal(raw, self.bridge, "mcp__buddy_x__buddy_finish_turn", MOUNTED_TOOLS,
+                envelope = verify_tool_refusal(raw, self.bridge, "mcp__buddy_x__hey_my_buddy_finish_turn", MOUNTED_TOOLS,
                                                rules=TYPED_REFUSAL_DETAIL)
                 self.assertEqual(envelope["detail"], detail)
 
@@ -388,9 +388,9 @@ class RefusalWireBudgetTests(unittest.TestCase):
     def setUp(self):
         self.bridge = {"identity": {"taskId": "micro-task", "attemptId": "attempt", "generation": 1, "turnId": "logical"},
                        "inputSha256": "a" * 64, "key": "b" * 64}
-        self.finish = "mcp__buddy_x__buddy_finish_turn"
+        self.finish = "mcp__buddy_x__hey_my_buddy_finish_turn"
 
-    def mint(self, detail: str, *, tool: str = "buddy_finish_turn", reason: str = "invalid-arguments") -> str:
+    def mint(self, detail: str, *, tool: str = "hey_my_buddy_finish_turn", reason: str = "invalid-arguments") -> str:
         from hey_my_buddy.buddy.roles.worker_services import _refusal
         return _refusal(self.bridge, tool, reason, detail)["content"][0]["text"]
 

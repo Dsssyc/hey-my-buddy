@@ -129,8 +129,8 @@ class Supervisor:
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="Buddy independent worker supervisor")
-    parser.add_argument("--worker-id", default=os.environ.get("BUDDY_WORKER_ID", "local"))
+    parser = argparse.ArgumentParser(description="hey-my-buddy independent worker supervisor")
+    parser.add_argument("--worker-id", default=os.environ.get("HMB_WORKER_ID", "local"))
     parser.add_argument("--state-dir", required=True)
     parser.add_argument("--lease-seconds", type=int, default=120)
     parser.add_argument("--max-restarts", type=int, default=None)

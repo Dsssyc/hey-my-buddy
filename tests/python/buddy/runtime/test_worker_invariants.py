@@ -26,8 +26,8 @@ from hey_my_buddy.buddy.runtime.worker import TERMINATION_COMPLETED, TERMINATION
 #: Inherited variables that would point a test subprocess at a production
 #: runtime, a Worker identity or an agent credential instead of this private root.
 SANITIZED_VARIABLES = (
-    "BUDDY_STATE_DIR", "BUDDY_RUNTIME_ROOT", "BUDDY_RUNTIME", "BUDDY_RUNTIME_IDENTITY",
-    "BUDDY_WORKER_STATE", "BUDDY_WORKER_ID", "BUDDY_AGENT_CREDENTIAL", "BUDDY_AGENT_CREDENTIAL_FILE",
+    "HMB_STATE_DIR", "HMB_RUNTIME_ROOT", "HMB_RUNTIME", "HMB_RUNTIME_IDENTITY",
+    "HMB_WORKER_STATE", "HMB_WORKER_ID", "HMB_AGENT_CREDENTIAL", "HMB_AGENT_CREDENTIAL_FILE",
     "VIRTUAL_ENV", "UV_PROJECT_ENVIRONMENT",
 )
 
@@ -40,8 +40,8 @@ class MarkerWriteFailureTests(unittest.TestCase):
     """A marker write that fails after the spawn keeps the live handle supervising."""
 
     def setUp(self):
-        self.temp = tempfile.TemporaryDirectory(prefix="buddy-worker-marker-",
-                                                dir=os.environ.get("BUDDY_CHECKS_TMPDIR", "/tmp"))
+        self.temp = tempfile.TemporaryDirectory(prefix="hey-my-buddy-worker-marker-",
+                                                dir=os.environ.get("HMB_CHECKS_TMPDIR", "/tmp"))
         self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name).resolve()
         self.state = self.root / "state"
@@ -91,7 +91,7 @@ class MarkerWriteFailureTests(unittest.TestCase):
 
     def test_preparation_refusals_keep_their_exact_receipts(self):
         unavailable = self.claim("attempt-unavailable", "task-unavailable")
-        unavailable["task"]["spec"]["argv"] = ["/buddy-tests/no-such-executable"]
+        unavailable["task"]["spec"]["argv"] = ["/hey-my-buddy-tests/no-such-executable"]
         receipt = self.worker.execute(unavailable)
         report = receipt["report"]
         self.assertEqual(report["status"], "failed")
@@ -107,8 +107,8 @@ class PreparationBoardErrorTests(unittest.TestCase):
     """The captured prepare() BoardError keeps its object, code and retry boundary."""
 
     def setUp(self):
-        self.temp = tempfile.TemporaryDirectory(prefix="buddy-worker-prep-",
-                                                dir=os.environ.get("BUDDY_CHECKS_TMPDIR", "/tmp"))
+        self.temp = tempfile.TemporaryDirectory(prefix="hey-my-buddy-worker-prep-",
+                                                dir=os.environ.get("HMB_CHECKS_TMPDIR", "/tmp"))
         self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name).resolve()
         self.state = self.root / "state"
@@ -121,7 +121,7 @@ class PreparationBoardErrorTests(unittest.TestCase):
         return {
             "attempt": {"attemptId": "attempt-prep", "taskId": task_id, "generation": 1},
             "task": {"taskId": task_id,
-                     "spec": {"adapter": "dsh", "cwd": "/buddy-tests/nowhere", "task": "prep",
+                     "spec": {"adapter": "dsh", "cwd": "/hey-my-buddy-tests/nowhere", "task": "prep",
                               "timeoutSeconds": 30}},
         }
 
@@ -256,8 +256,8 @@ class LiveActivityForwardTests(unittest.TestCase):
     """
 
     def setUp(self):
-        self.temp = tempfile.TemporaryDirectory(prefix="buddy-worker-live-",
-                                                dir=os.environ.get("BUDDY_CHECKS_TMPDIR", "/tmp"))
+        self.temp = tempfile.TemporaryDirectory(prefix="hey-my-buddy-worker-live-",
+                                                dir=os.environ.get("HMB_CHECKS_TMPDIR", "/tmp"))
         self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name).resolve()
         self.state = self.root / "state"
@@ -318,7 +318,7 @@ class LiveActivityForwardTests(unittest.TestCase):
         from hey_my_buddy.buddy.harnesses.live import LiveCapabilities
         from hey_my_buddy.protocol.contracts import HarnessRunLive
         endpoint = CTwoLiveEndpoint(identity, LiveCapabilities(inquiry_delivery="unsupported"), HarnessRunLive,
-                                    instance_id="c" * 64, token="d" * 64, state_dir=Path(os.environ["BUDDY_STATE_DIR"]))
+                                    instance_id="c" * 64, token="d" * 64, state_dir=Path(os.environ["HMB_STATE_DIR"]))
         self.addCleanup(endpoint.close, reason="fixture-ended")
         self.endpoints = getattr(self, "endpoints", {})
         self.endpoints[str(directory)] = endpoint
@@ -357,7 +357,7 @@ class LiveActivityForwardTests(unittest.TestCase):
                                          "attempt_id": attempt_id, "generation": generation})
         if source_identity != endpoint.identity:
             endpoint = CTwoLiveEndpoint(source_identity, LiveCapabilities(inquiry_delivery="unsupported"), HarnessRunLive,
-                                        instance_id="c" * 64, token="d" * 64, state_dir=Path(os.environ["BUDDY_STATE_DIR"]))
+                                        instance_id="c" * 64, token="d" * 64, state_dir=Path(os.environ["HMB_STATE_DIR"]))
             self.endpoints[str(directory)] = endpoint
             self.addCleanup(endpoint.close, reason="fixture-ended")
         self.assertTrue(endpoint.publish_activity({"phase": "streaming-model", "eventSeq": event_seq,

@@ -62,8 +62,8 @@ class NativeRunCase(unittest.TestCase):
 
     def setUp(self):
         super().setUp()
-        self.temp = tempfile.TemporaryDirectory(prefix="buddy-claude-seam-",
-                                                dir=os.environ.get("BUDDY_CHECKS_TMPDIR", "/tmp"))
+        self.temp = tempfile.TemporaryDirectory(prefix="hey-my-buddy-claude-seam-",
+                                                dir=os.environ.get("HMB_CHECKS_TMPDIR", "/tmp"))
         self.addCleanup(self.temp.cleanup)
         self.base = Path(self.temp.name)
         self.cwd = self.base / "checkout"
@@ -73,23 +73,23 @@ class NativeRunCase(unittest.TestCase):
         USAGE_FIXTURE.chmod(0o755)
         self.state_path = self.base / "fixture.json"
         environment = {key: value for key, value in os.environ.items()
-                       if not key.startswith(("BUDDY_", "ANTHROPIC_", "CLAUDE_"))
+                       if not key.startswith(("HMB_", "ANTHROPIC_", "CLAUDE_"))
                        and key not in ("VIRTUAL_ENV", "UV_PROJECT_ENVIRONMENT")}
-        environment.update(BUDDY_CONSOLE_PORT="0", BUDDY_DEV_SOURCE="1", BUDDY_CLAUDE_CLI=str(FIXTURE),
-                           BUDDY_CLAUDE_FIXTURE_STATE=str(self.state_path),
-                           BUDDY_STATE_DIR=str(self.base / "state"),
-                           BUDDY_RUNTIME_ROOT=str(self.base / "runtime"))
+        environment.update(HMB_CONSOLE_PORT="0", HMB_DEV_SOURCE="1", HMB_CLAUDE_CLI=str(FIXTURE),
+                           HMB_CLAUDE_FIXTURE_STATE=str(self.state_path),
+                           HMB_STATE_DIR=str(self.base / "state"),
+                           HMB_RUNTIME_ROOT=str(self.base / "runtime"))
         self.patcher = mock.patch.dict(os.environ, environment, clear=True)
         self.patcher.start()
         self.addCleanup(self.patcher.stop)
         self.case = "ok"
 
     def fixture_case(self, case: str):
-        os.environ["BUDDY_CLAUDE_FIXTURE_CASE"] = case
+        os.environ["HMB_CLAUDE_FIXTURE_CASE"] = case
         self.case = case
 
     def use_fixture(self, fixture: Path):
-        os.environ["BUDDY_CLAUDE_CLI"] = str(fixture)
+        os.environ["HMB_CLAUDE_CLI"] = str(fixture)
 
     def request(self, *, scope: str = "write", schema=None, timeout: int = 10,
                 continuation=None, network=None, denied=()) -> RunRequest:
@@ -164,7 +164,7 @@ class Batch4FactsTests(NativeRunCase):
         self.assertEqual(facts["catalogStatus"], "unknown")
         self.assertEqual(facts["protocol"]["status"], "incomplete")
         self.assertEqual(facts["protocol"]["unreadResponses"], 1)
-        self.assertEqual(facts["protocol"]["samples"][0]["requestId"], "buddy-1")
+        self.assertEqual(facts["protocol"]["samples"][0]["requestId"], "hey-my-buddy-1")
         self.assertEqual(result.native_evidence.unknown_events.to_payload(),
                          {"countsByType": {"control-response-unread": 1}, "total": 1})
         self.assertEqual(result.native_evidence.unconfirmed, ("model-catalog",))
@@ -172,7 +172,7 @@ class Batch4FactsTests(NativeRunCase):
                                 native_root=self.base / "discovery-native", timeout_seconds=10,
                                 cancelled=lambda: False)
         self.assertEqual(catalog["discoveries"][0]["status"], "unknown")
-        self.assertTrue(any("buddy-1" in warning and "responseShape" in warning
+        self.assertTrue(any("hey-my-buddy-1" in warning and "responseShape" in warning
                             for warning in catalog["warnings"]))
         self.assertEqual(self.fixture_state()["userTurns"], 0)
 
@@ -989,7 +989,7 @@ class DiscoveryTests(NativeRunCase):
         # The unknown catalog cannot substitute for actual stop evidence.
 
     def test_discovery_refuses_an_unusable_cli(self):
-        os.environ["BUDDY_CLAUDE_CLI"] = str(self.base / "missing-cli")
+        os.environ["HMB_CLAUDE_CLI"] = str(self.base / "missing-cli")
         with self.assertRaises(native_run.ClaudeUnavailable) as caught:
             run_discovery(cwd=str(self.cwd), invocation_root=self.base / "d3",
                           native_root=self.base / "d3n", timeout_seconds=25, cancelled=lambda: False)
@@ -1003,7 +1003,7 @@ class RoleSurfaceTests(NativeRunCase):
         from hey_my_buddy.buddy.harnesses.claude.config import ClaudeUnavailable
         native_run.check_preparation({"provider": "bedrock"},
                                      {**os.environ, "ANTHROPIC_BASE_URL": "https://gateway.example"})
-        with mock.patch.dict(os.environ, {"BUDDY_DEV_SOURCE": "1", "BUDDY_CLAUDE_CLI": str(self.base / "nope")}):
+        with mock.patch.dict(os.environ, {"HMB_DEV_SOURCE": "1", "HMB_CLAUDE_CLI": str(self.base / "nope")}):
             with mock.patch.object(native_run, "cli_command", side_effect=ClaudeUnavailable("CLI missing")):
                 with self.assertRaises(BoardError) as caught:
                     native_run.check_preparation({"provider": "anthropic"}, dict(os.environ))
@@ -1039,7 +1039,7 @@ class RoleSurfaceTests(NativeRunCase):
         self.fixture_case("clean")
         request = self.request()
         endpoint = CTwoLiveEndpoint(request.identity, EXISTING_CAPABILITIES["claude"], HarnessRunLive,
-                                   instance_id="a" * 64, token="b" * 64, state_dir=Path(os.environ["BUDDY_STATE_DIR"]))
+                                   instance_id="a" * 64, token="b" * 64, state_dir=Path(os.environ["HMB_STATE_DIR"]))
         with mock.patch.object(endpoint, "publish_activity", wraps=endpoint.publish_activity) as publish:
             result = run(request, observer=lambda _facts: FEEDBACK_CONTINUE,
                          services=native_run.RunServices(live=endpoint), cancelled=lambda: False)

@@ -6,7 +6,7 @@
     "version": 3,
     "id": "session-fixture-0001",
     "createdAt": 1790265918940,
-    "cwd": "/private/tmp/buddy-native-fixture/checkout",
+    "cwd": "/private/tmp/hey-my-buddy-native-fixture/checkout",
     "isSeeded": false,
     "origin": "headless",
     "delegationDepth": 0
@@ -46,7 +46,7 @@
             {"type": "reasoning", "text": "Fixture reasoning."},
             {"type": "text", "text": "Reading the fixture file first."},
             {"type": "tool-call", "id": "call-fixture-1", "name": "read",
-             "arguments": "{\"file_path\":\"/private/tmp/buddy-native-fixture/checkout/a.txt\"}"}
+             "arguments": "{\"file_path\":\"/private/tmp/hey-my-buddy-native-fixture/checkout/a.txt\"}"}
           ],
           "source": {"kind": "model", "provider": "deepseek-official", "model": "deepseek-flash"}
         },

@@ -82,7 +82,7 @@ ANSWER_SCHEMA = {
     "required": ["inquiryId", "answer"],
     "properties": {
         "inquiryId": {"type": "string", "minLength": 1, "maxLength": 128,
-                      "description": "The inquiryId exactly as exposed by buddy_checkpoint."},
+                      "description": "The inquiryId exactly as exposed by hey_my_buddy_checkpoint."},
         "answer": {"type": "string", "minLength": 1, "maxLength": 10000,
                    "description": "The bounded answer text for that inquiry; at most 4000 UTF-8 bytes are accepted."},
     },
@@ -101,11 +101,11 @@ CHECKPOINT_DESCRIPTION = (
     "still awaiting an answer (nothing pending returns an empty list); when the serialized receipt budget "
     "cannot carry every pending question, morePending names how many stayed queued — answer the listed ones "
     "and checkpoint again to pick up the rest. Call it at natural work milestones and again just before "
-    "buddy_finish_turn; it is never required on a timer. Answer each listed question with "
-    "buddy_answer_inquiry using its exact inquiryId."
+    "hey_my_buddy_finish_turn; it is never required on a timer. Answer each listed question with "
+    "hey_my_buddy_answer_inquiry using its exact inquiryId."
 )
 ANSWER_DESCRIPTION = (
-    "Answer one Host inquiry exposed by buddy_checkpoint, using its exact inquiryId and a bounded answer. "
+    "Answer one Host inquiry exposed by hey_my_buddy_checkpoint, using its exact inquiryId and a bounded answer. "
     "Returns a signed tentative receipt; the recorded answer only becomes authoritative after the owning "
     "controller verifies it against this root turn's own tool evidence. A first accepted answer for an "
     "inquiry cannot be replaced."
@@ -250,7 +250,7 @@ def inquiry_refusal(pending: list[dict]) -> str | None:
     return (
         "This turn cannot be completed while Host inquiries are still unanswered: "
         + " | ".join(listed)
-        + f"{more}. Call buddy_checkpoint to pick them up, answer each with buddy_answer_inquiry, then retry "
+        + f"{more}. Call hey_my_buddy_checkpoint to pick them up, answer each with hey_my_buddy_answer_inquiry, then retry "
           "the finish; a question the journal shows answered, discarded or otherwise no longer answerable no "
           "longer blocks completion."
     )
@@ -344,9 +344,9 @@ def _finish_receipt(arguments: dict, configuration: dict) -> dict:
 def session_tools() -> list[dict]:
     """The three session tools this role exposes inside one native root turn."""
     return [
-        {"name": "buddy_checkpoint", "inputSchema": CHECKPOINT_SCHEMA, "description": CHECKPOINT_DESCRIPTION},
-        {"name": "buddy_answer_inquiry", "inputSchema": ANSWER_SCHEMA, "description": ANSWER_DESCRIPTION},
-        {"name": "buddy_finish_turn", "inputSchema": OUTCOME_SCHEMA, "description": FINISH_DESCRIPTION},
+        {"name": "hey_my_buddy_checkpoint", "inputSchema": CHECKPOINT_SCHEMA, "description": CHECKPOINT_DESCRIPTION},
+        {"name": "hey_my_buddy_answer_inquiry", "inputSchema": ANSWER_SCHEMA, "description": ANSWER_DESCRIPTION},
+        {"name": "hey_my_buddy_finish_turn", "inputSchema": OUTCOME_SCHEMA, "description": FINISH_DESCRIPTION},
     ]
 
 
@@ -359,31 +359,31 @@ def call_session_tool(name: object, arguments: object, configuration: dict) -> d
     the most actionable refusal first and may correct, checkpoint, answer and
     retry inside the same native turn.
     """
-    if name == "buddy_checkpoint":
+    if name == "hey_my_buddy_checkpoint":
         pending = pending_inquiries(configuration)
         if pending is None:
-            return _refusal(configuration, "buddy_checkpoint", "inquiry-channel-absent", INQUIRY_CHANNEL_ABSENT)
+            return _refusal(configuration, "hey_my_buddy_checkpoint", "inquiry-channel-absent", INQUIRY_CHANNEL_ABSENT)
         batch, more = _checkpoint_batch(pending)
         receipt = _signed({"version": 1, "kind": "inquiry-checkpoint", "identity": configuration["identity"],
                            "inquiries": batch, "morePending": more}, configuration)
         return {"content": [{"type": "text", "text": receipt}]}
-    if name == "buddy_answer_inquiry":
+    if name == "hey_my_buddy_answer_inquiry":
         return _answer_inquiry(arguments, configuration)
-    if name == "buddy_finish_turn":
+    if name == "hey_my_buddy_finish_turn":
         error = validate_outcome(arguments)
         if error:
-            return _refusal(configuration, "buddy_finish_turn", "invalid-arguments", error)
+            return _refusal(configuration, "hey_my_buddy_finish_turn", "invalid-arguments", error)
         if arguments["disposition"] == "completed" and attention_requests(configuration):
             # A refused native approval must reach the Host as attention, never
             # as silently completed work. The root is still live and can issue
             # the attention receipt in this same turn.
-            return _refusal(configuration, "buddy_finish_turn", "attention-outstanding", ATTENTION_REFUSAL)
+            return _refusal(configuration, "hey_my_buddy_finish_turn", "attention-outstanding", ATTENTION_REFUSAL)
         if arguments["disposition"] == "completed":
             refusal = inquiry_refusal(pending_inquiries(configuration) or [])
             if refusal:
                 # Same contract as a refused native approval: the root is still
                 # live, so it can checkpoint, answer and retry in this turn.
-                return _refusal(configuration, "buddy_finish_turn", "inquiry-pending", refusal)
+                return _refusal(configuration, "hey_my_buddy_finish_turn", "inquiry-pending", refusal)
             return _finish_receipt(arguments, configuration)
         return _finish_receipt(arguments, configuration)
     return None
@@ -399,14 +399,14 @@ def _answer_inquiry(arguments: object, configuration: dict) -> dict:
     still recovers as a correctable refusal controller-side.
     """
     def failure(reason: str, text: str) -> dict:
-        return _refusal(configuration, "buddy_answer_inquiry", reason, text)
+        return _refusal(configuration, "hey_my_buddy_answer_inquiry", reason, text)
     if not isinstance(arguments, dict) or set(arguments) != {"inquiryId", "answer"}:
-        return failure("invalid-arguments", "buddy_answer_inquiry requires exactly inquiryId and answer")
+        return failure("invalid-arguments", "hey_my_buddy_answer_inquiry requires exactly inquiryId and answer")
     inquiry_id, answer = arguments["inquiryId"], arguments["answer"]
     if not isinstance(inquiry_id, str) or not inquiry_id or len(inquiry_id.encode()) > MAX_INQUIRY_ID_BYTES:
-        return failure("invalid-arguments", "buddy_answer_inquiry requires a bounded nonempty inquiryId")
+        return failure("invalid-arguments", "hey_my_buddy_answer_inquiry requires a bounded nonempty inquiryId")
     if not isinstance(answer, str) or not answer.strip():
-        return failure("invalid-arguments", "buddy_answer_inquiry requires a nonblank answer")
+        return failure("invalid-arguments", "hey_my_buddy_answer_inquiry requires a nonblank answer")
     if len(answer.encode()) > MAX_ANSWER_BYTES:
         return failure("invalid-arguments", f"the answer exceeds its {MAX_ANSWER_BYTES}-byte UTF-8 bound")
     entries = read_inquiry_entries(configuration)

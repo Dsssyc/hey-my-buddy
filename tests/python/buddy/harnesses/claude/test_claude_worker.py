@@ -38,9 +38,9 @@ class ClaudeWorkerTests(MicroTaskWorkerTestCase):
         FIXTURE.chmod(0o755)
 
     def env(self):
-        return {"BUDDY_CLAUDE_CLI": str(FIXTURE),
-                "BUDDY_CLAUDE_FIXTURE_STATE": str(self.directory / "native-fixture.json"),
-                "BUDDY_CLAUDE_FIXTURE_CASE": getattr(self, "case", "ok")}
+        return {"HMB_CLAUDE_CLI": str(FIXTURE),
+                "HMB_CLAUDE_FIXTURE_STATE": str(self.directory / "native-fixture.json"),
+                "HMB_CLAUDE_FIXTURE_CASE": getattr(self, "case", "ok")}
 
     def execute_fixture(self):
         code, submission = self.cli("submit", json.dumps({

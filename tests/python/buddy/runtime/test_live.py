@@ -96,7 +96,7 @@ class FakeC2:
 
 class FakeBoard:
     def __init__(self):
-        self.state_dir = Path(os.environ["BUDDY_STATE_DIR"]).resolve()
+        self.state_dir = Path(os.environ["HMB_STATE_DIR"]).resolve()
         self.attachments = []
         self.hook = lambda attachment: None
         self.detach_hook = lambda withdrawal: None
@@ -129,7 +129,7 @@ class RecordingChannel(ctl.CTwoLiveChannel):
 
     def __init__(self, run=None):
         super().__init__(run or identity(), HarnessRunLive, name="Ada", address="ipc://controller-only",
-                         instance_id="b" * 64, token="c" * 64, state_dir=Path(os.environ["BUDDY_STATE_DIR"]))
+                         instance_id="b" * 64, token="c" * 64, state_dir=Path(os.environ["HMB_STATE_DIR"]))
         self.calls = []
         self.closes = []
         self.check = lambda: None
@@ -159,9 +159,9 @@ class RecordingChannel(ctl.CTwoLiveChannel):
 
 class WorkerLiveUnitTests(unittest.TestCase):
     def setUp(self):
-        self.temp = tempfile.TemporaryDirectory(dir=os.environ.get("BUDDY_CHECKS_TMPDIR", "/tmp"))
+        self.temp = tempfile.TemporaryDirectory(dir=os.environ.get("HMB_CHECKS_TMPDIR", "/tmp"))
         self.addCleanup(self.temp.cleanup)
-        self.enterContext(patch.dict(os.environ, {"BUDDY_STATE_DIR": self.temp.name}))
+        self.enterContext(patch.dict(os.environ, {"HMB_STATE_DIR": self.temp.name}))
         self.events = []
         self.c2 = FakeC2(self.events)
         self.enterContext(patch.object(live, "cc", self.c2))
@@ -752,16 +752,16 @@ class WorkerLiveUnitTests(unittest.TestCase):
         self.assertEqual(len(self.board.detaches), 65)
 
 
-SANITIZED = ("BUDDY_STATE_DIR", "BUDDY_RUNTIME_ROOT", "BUDDY_RUNTIME", "BUDDY_RUNTIME_IDENTITY",
-             "BUDDY_WORKER_STATE", "BUDDY_WORKER_ID", "BUDDY_AGENT_CREDENTIAL", "BUDDY_AGENT_CREDENTIAL_FILE",
+SANITIZED = ("HMB_STATE_DIR", "HMB_RUNTIME_ROOT", "HMB_RUNTIME", "HMB_RUNTIME_IDENTITY",
+             "HMB_WORKER_STATE", "HMB_WORKER_ID", "HMB_AGENT_CREDENTIAL", "HMB_AGENT_CREDENTIAL_FILE",
              "VIRTUAL_ENV", "UV_PROJECT_ENVIRONMENT")
 PEER = Path(__file__).resolve().parent / "fixtures/live_runtime_peer.py"
 
 
 def materials():
     # Retain every new directory for Host cleanup; no TemporaryDirectory teardown.
-    root = os.environ.get("BUDDY_LIVE_TEST_MATERIALS",
-                          os.environ.get("BUDDY_CHECKS_TMPDIR", tempfile.gettempdir()))
+    root = os.environ.get("HMB_LIVE_TEST_MATERIALS",
+                          os.environ.get("HMB_CHECKS_TMPDIR", tempfile.gettempdir()))
     return Path(tempfile.mkdtemp(prefix="case-", dir=root))
 
 
@@ -769,17 +769,17 @@ class Peer:
     def __init__(self):
         self.root = materials()
         env = {key: value for key, value in os.environ.items() if key not in ("VIRTUAL_ENV", "UV_PROJECT_ENVIRONMENT")
-               and not key.startswith(("BUDDY_", "ANTHROPIC_", "C2_"))}
-        self.state = Path(os.environ["BUDDY_STATE_DIR"])
+               and not key.startswith(("HMB_", "ANTHROPIC_", "C2_"))}
+        self.state = Path(os.environ["HMB_STATE_DIR"])
         from hey_my_buddy.protocol import rpc_config
         rpc_config.configure_client(self.state)
-        env.update(BUDDY_STATE_DIR=str(self.state), BUDDY_RUNTIME_ROOT=str(self.root / "runtime"),
+        env.update(HMB_STATE_DIR=str(self.state), HMB_RUNTIME_ROOT=str(self.root / "runtime"),
                    TMPDIR=str(self.root))
         env.update(C2_RELAY_ANCHOR_ADDRESS="", C2_ENV_FILE="", PYTHONDONTWRITEBYTECODE="1")
         self.stderr = (self.root / "peer-stderr.log").open("x")
         self.process = subprocess.Popen([sys.executable, "-c",
             "import os,runpy,sys; module=runpy.run_path(sys.argv[1]); "
-            "module['FakeBoardClient'].state_dir=os.environ['BUDDY_STATE_DIR']; module['worker']()",
+            "module['FakeBoardClient'].state_dir=os.environ['HMB_STATE_DIR']; module['worker']()",
             str(PEER)], stdin=subprocess.PIPE,
                                         stdout=subprocess.PIPE, stderr=self.stderr, text=True, env=env)
         self.controllers = []
@@ -857,7 +857,7 @@ class WorkerLiveRealPeerTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.state = materials() / "state"
-        cls.environment = patch.dict(os.environ, {"BUDDY_STATE_DIR": str(cls.state)})
+        cls.environment = patch.dict(os.environ, {"HMB_STATE_DIR": str(cls.state)})
         cls.environment.start()
 
     @classmethod

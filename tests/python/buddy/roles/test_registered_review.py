@@ -32,7 +32,7 @@ class RegisteredReviewTests(NativeRunCase):
                                 "budget": {"toolCalls": tool_budget}, "captureEvidence": False},
         }
         with mock.patch.dict(RUN_SEAMS, {"claude": native_run}):
-            frame, code = run_controller.execute(control, threading.Event(), state_dir=Path(os.environ["BUDDY_STATE_DIR"]))
+            frame, code = run_controller.execute(control, threading.Event(), state_dir=Path(os.environ["HMB_STATE_DIR"]))
             result = decode_run_result(frame)
             request = decode_run_request((root / "request.json").read_bytes())
             verdict = json.loads((root / "verdict.json").read_bytes())

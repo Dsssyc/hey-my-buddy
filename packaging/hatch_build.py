@@ -42,7 +42,7 @@ class CustomBuildHook(BuildHookInterface):
             from hey_my_buddy.install.skill_package import assemble
 
             staging = self._staging()
-            skill = staging / "buddy"
+            skill = staging / "hey-my-buddy"
             try:
                 assemble(root, skill)
             except Exception:
@@ -87,7 +87,7 @@ class CustomBuildHook(BuildHookInterface):
         if paths is None:
             paths = []
             self._staging_paths = paths
-        directory = Path(tempfile.mkdtemp(prefix="buddy-build-"))
+        directory = Path(tempfile.mkdtemp(prefix="hey-my-buddy-build-"))
         paths.append(directory)
         return directory
 

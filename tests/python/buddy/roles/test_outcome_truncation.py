@@ -22,7 +22,7 @@ def outcome(**changes):
 
 class OutcomeTruncationTests(unittest.TestCase):
     def setUp(self):
-        self.temporary = tempfile.TemporaryDirectory(prefix="buddy-outcome-")
+        self.temporary = tempfile.TemporaryDirectory(prefix="hey-my-buddy-outcome-")
         self.addCleanup(self.temporary.cleanup)
         self.root = Path(self.temporary.name)
         self.turn = {"taskId": "task", "attemptId": "attempt", "generation": 1,
@@ -194,12 +194,12 @@ class OutcomeTruncationTests(unittest.TestCase):
                 with self.subTest(field=field, item_count=len(items)):
                     value = outcome(**{field: items})
                     raw = canonical_json(value)
-                    refused = worker_services.call_session_tool("buddy_finish_turn", value, configuration)
+                    refused = worker_services.call_session_tool("hey_my_buddy_finish_turn", value, configuration)
                     self.assertTrue(refused["isError"])
                     self.assertEqual(json.loads(refused["content"][0]["text"])["reason"], "invalid-arguments")
                     self.assertEqual(canonical_json(value), raw)
                     corrected = outcome(**{field: ["short"]})
-                    accepted = worker_services.call_session_tool("buddy_finish_turn", corrected, configuration)
+                    accepted = worker_services.call_session_tool("hey_my_buddy_finish_turn", corrected, configuration)
                     receipt = verify_receipt(accepted["content"][0]["text"], configuration, turn_io.validate_outcome)
                     self.assertEqual(receipt["outcome"], corrected)
                     self.assertNotIn("outcomeTruncated", receipt)

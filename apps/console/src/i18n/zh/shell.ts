@@ -29,7 +29,7 @@ export default {
     unresolvedNote: "保存结果未知，可能已生效；请核对后重试。",
     unavailable: {
       connection: "连接中断；请重试连接，草稿已保留。",
-      login: "登录已失效；请运行 buddy console 重新登录，草稿已保留。",
+      login: "登录已失效；请运行 hey-my-buddy console 重新登录，草稿已保留。",
     },
     reload: "重新读取设置",
   },

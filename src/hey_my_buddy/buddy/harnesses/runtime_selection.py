@@ -9,7 +9,7 @@ from ...errors import BoardError
 
 _records = ContextVar('harness_records', default=None)
 _environment = ContextVar('harness_environment', default=None)
-RECORD_FILE = 'BUDDY_HARNESS_RECORD_FILE'
+RECORD_FILE = 'HMB_HARNESS_RECORD_FILE'
 
 
 def environment_for(environment=None):
@@ -46,7 +46,7 @@ def command_for(harness, environment=None):
         record = discover(harness, environment=env)
     if record.get('status') != 'ready' or not record.get('command'):
         raise BoardError(record.get('reasonCode') or 'HARNESS_UNAVAILABLE',
-                         record.get('remedy') or 'Run buddy harnesses with refresh:true', harness=harness)
+                         record.get('remedy') or 'Run hey-my-buddy harnesses with refresh:true', harness=harness)
     return list(record['command'])
 
 
@@ -63,20 +63,20 @@ def controller_environment(directory, environment=None, *, read_only=False):
     env = native_environment(source)
     allowed = ('PYTHONPATH', 'PYTHONSAFEPATH', 'PYTHONUTF8', 'PYTHONIOENCODING',
                'ZCODE_BUILTIN_PROVIDER_CONFIG_FILE', 'ZCODE_PERSONAL_PROVIDER_CONFIG_FILE',
-               'BUDDY_STATE_DIR', 'BUDDY_RUNTIME_ROOT', 'BUDDY_RUNTIME', 'BUDDY_RUNTIME_IDENTITY',
-               'BUDDY_HARNESS_RECORD_FILE')
+               'HMB_STATE_DIR', 'HMB_RUNTIME_ROOT', 'HMB_RUNTIME', 'HMB_RUNTIME_IDENTITY',
+               'HMB_HARNESS_RECORD_FILE')
     for key in allowed:
         if key in source:
             env[key] = source[key]
     if not read_only:
-        for key in ('BUDDY_AGENT_CREDENTIAL', 'BUDDY_AGENT_CREDENTIAL_FILE', 'BUDDY_TASK_ID', 'BUDDY_ATTEMPT_ID'):
+        for key in ('HMB_AGENT_CREDENTIAL', 'HMB_AGENT_CREDENTIAL_FILE', 'HMB_TASK_ID', 'HMB_ATTEMPT_ID'):
             if key in source:
                 env[key] = source[key]
-    if source.get('BUDDY_DEV_SOURCE') == '1':
-        for key in ('BUDDY_DEV_SOURCE', 'BUDDY_CLAUDE_CLI', 'BUDDY_CODEX_CLI', 'BUDDY_ZCODE_CLI',
-                    'BUDDY_NODE', 'BUDDY_CODEX_FIXTURE_CASE', 'BUDDY_CODEX_FIXTURE_STATE',
-                    'BUDDY_CLAUDE_FIXTURE_CASE', 'BUDDY_CLAUDE_FIXTURE_STATE',
-                    'BUDDY_ZCODE_TEST_CASE'):
+    if source.get('HMB_DEV_SOURCE') == '1':
+        for key in ('HMB_DEV_SOURCE', 'HMB_CLAUDE_CLI', 'HMB_CODEX_CLI', 'HMB_ZCODE_CLI',
+                    'HMB_NODE', 'HMB_CODEX_FIXTURE_CASE', 'HMB_CODEX_FIXTURE_STATE',
+                    'HMB_CLAUDE_FIXTURE_CASE', 'HMB_CLAUDE_FIXTURE_STATE',
+                    'HMB_ZCODE_TEST_CASE'):
             if key in source:
                 env[key] = source[key]
     records = _records.get()

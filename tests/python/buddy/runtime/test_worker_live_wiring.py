@@ -247,8 +247,8 @@ class WorkerEndpointClosureTests(unittest.TestCase):
     controller's owned endpoint is reaped and foreign endpoints survive."""
 
     def setUp(self):
-        self.temp = tempfile.TemporaryDirectory(prefix="buddy-worker-endpoint-",
-                                                dir=os.environ.get("BUDDY_CHECKS_TMPDIR", "/tmp"))
+        self.temp = tempfile.TemporaryDirectory(prefix="hey-my-buddy-worker-endpoint-",
+                                                dir=os.environ.get("HMB_CHECKS_TMPDIR", "/tmp"))
         self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name).resolve()
         self.state = self.root / "state"
@@ -256,7 +256,7 @@ class WorkerEndpointClosureTests(unittest.TestCase):
         self.work.mkdir()
         # Retained private materials (peer journals and stderr); no teardown.
         self.materials = Path(tempfile.mkdtemp(
-            prefix="live-wiring-", dir=os.environ.get("BUDDY_CHECKS_TMPDIR", tempfile.gettempdir())))
+            prefix="live-wiring-", dir=os.environ.get("HMB_CHECKS_TMPDIR", tempfile.gettempdir())))
 
     def controller_peer(self, identity, label):
         """Start a session-leading controller peer; read its real endpoint facts.
@@ -268,9 +268,9 @@ class WorkerEndpointClosureTests(unittest.TestCase):
         """
         environment = {key: value for key, value in os.environ.items()
                        if key not in ("VIRTUAL_ENV", "UV_PROJECT_ENVIRONMENT")
-                       and not key.startswith(("BUDDY_", "ANTHROPIC_", "C2_"))}
-        environment.update(BUDDY_STATE_DIR=str(self.state),
-                           BUDDY_RUNTIME_ROOT=str(self.materials / "runtime"), TMPDIR=str(self.materials))
+                       and not key.startswith(("HMB_", "ANTHROPIC_", "C2_"))}
+        environment.update(HMB_STATE_DIR=str(self.state),
+                           HMB_RUNTIME_ROOT=str(self.materials / "runtime"), TMPDIR=str(self.materials))
         environment.update(C2_RELAY_ANCHOR_ADDRESS="", C2_ENV_FILE="", PYTHONDONTWRITEBYTECODE="1")
         stderr = (self.materials / f"{label}-stderr.log").open("x")
         process = subprocess.Popen([sys.executable, str(PEER), "controller"],

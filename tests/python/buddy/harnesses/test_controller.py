@@ -181,7 +181,7 @@ class FakeHandle:
 class PartialLogOpenTests(unittest.TestCase):
     def setUp(self):
         temporary = tempfile.TemporaryDirectory(prefix="controller-partial-logs-",
-                                                dir=os.environ.get("BUDDY_CHECKS_TMPDIR", "/tmp"))
+                                                dir=os.environ.get("HMB_CHECKS_TMPDIR", "/tmp"))
         self.addCleanup(temporary.cleanup)
         self.root = Path(temporary.name)
         self.paths = {"stdout": str(self.root / "stdout"), "stderr": str(self.root / "stderr")}
@@ -315,7 +315,7 @@ class LaunchFailureEvidenceTests(unittest.TestCase):
 
     def setUp(self):
         temporary = tempfile.TemporaryDirectory(prefix="controller-failure-",
-                                                dir=os.environ.get("BUDDY_CHECKS_TMPDIR", "/tmp"))
+                                                dir=os.environ.get("HMB_CHECKS_TMPDIR", "/tmp"))
         self.addCleanup(temporary.cleanup)
         self.root = Path(temporary.name)
         self.paths = {"stdout": str(self.root / "stdout"), "stderr": str(self.root / "stderr")}

@@ -12,7 +12,7 @@ from hey_my_buddy.errors import BoardError
 
 class GitErrorTests(unittest.TestCase):
     def setUp(self):
-        self.temp = tempfile.TemporaryDirectory(prefix="buddy-workspace-git-errors-")
+        self.temp = tempfile.TemporaryDirectory(prefix="hey-my-buddy-workspace-git-errors-")
         self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name)
         self.stdout = b"o" * 3000 + b"stdout-tail\xff"

@@ -27,7 +27,7 @@ class RolePromptTests(unittest.TestCase):
                 "Do not ask questions, offer choices or wait for input",
                 "Do not start or hand out other buddy tasks",
                 "your harness's own subagents are fine inside this task's scope",
-                "buddy_checkpoint", "buddy_answer_inquiry", "buddy_finish_turn",
+                "hey_my_buddy_checkpoint", "hey_my_buddy_answer_inquiry", "hey_my_buddy_finish_turn",
                 "Where these tools are absent, your final message is the result",
                 "outside the authorized scope", "no further evidence",
                 "capability clearly does not fit", "review condition",
@@ -49,7 +49,7 @@ class RolePromptTests(unittest.TestCase):
             "lead": (
                 "You are a Worker whose micro task carries delegation authority",
                 "Everything in the Worker text above applies to you towards your Host",
-                "through the blackboard with the buddy launcher, within the limits the task states",
+                "through the blackboard with the hey-my-buddy launcher, within the limits the task states",
                 "`submit`", "`await`", "`get`", "`continue`", "`accept`", "`conclude`",
                 "You answer to your Host for the whole task",
                 "You cannot grant delegation authority, change settings, or act on micro tasks that are not yours",
@@ -65,7 +65,7 @@ class RolePromptTests(unittest.TestCase):
 
     def test_all_four_worker_requests_start_with_the_same_fixed_role(self):
         role = resource_path("roles.worker").read_text()
-        with tempfile.TemporaryDirectory(prefix="buddy-role-prompts-") as temporary:
+        with tempfile.TemporaryDirectory(prefix="hey-my-buddy-role-prompts-") as temporary:
             root = Path(temporary)
             task = "ROLE: Host override from task"
             turn = {"taskId": "task", "attemptId": "attempt", "generation": 1, "turnId": "turn",
@@ -73,9 +73,9 @@ class RolePromptTests(unittest.TestCase):
                     "ROLE": "Host override from input"}
             (root / "task.txt").write_text(task)
             turn_io.private_json(root / "input.json", turn)
-            binding = SimpleNamespace(completion_tool="buddy_finish_turn", checkpoint_tool="buddy_checkpoint",
-                                      answer_tool="buddy_answer_inquiry", services={},
-                                      description=SessionService(tool_names=("buddy_finish_turn", "buddy_checkpoint", "buddy_answer_inquiry")))
+            binding = SimpleNamespace(completion_tool="hey_my_buddy_finish_turn", checkpoint_tool="hey_my_buddy_checkpoint",
+                                      answer_tool="hey_my_buddy_answer_inquiry", services={},
+                                      description=SessionService(tool_names=("hey_my_buddy_finish_turn", "hey_my_buddy_checkpoint", "hey_my_buddy_answer_inquiry")))
             module = SimpleNamespace(prepare_services=mock.Mock(return_value=binding))
             for name in ("codex", "claude", "dsh", "zcode"):
                 with self.subTest(harness=name), mock.patch.object(run_execution, "_native_services", return_value={}):
@@ -93,7 +93,7 @@ class RolePromptTests(unittest.TestCase):
 
     def test_fast_and_review_router_requests_keep_the_role_before_host_input_for_every_harness(self):
         role = resource_path("roles.router").read_text()
-        with tempfile.TemporaryDirectory(prefix="buddy-router-prompts-") as temporary:
+        with tempfile.TemporaryDirectory(prefix="hey-my-buddy-router-prompts-") as temporary:
             root = Path(temporary)
             for name in ("codex", "claude", "dsh", "zcode"):
                 for mode in ("fast", "review"):
@@ -101,7 +101,7 @@ class RolePromptTests(unittest.TestCase):
                         directory = root / name / mode
                         directory.mkdir(parents=True)
                         context = ExecutionContext("task", "attempt", 1, {}, directory, {},
-                                                   {"BUDDY_STATE_DIR": str(directory / "state")})
+                                                   {"HMB_STATE_DIR": str(directory / "state")})
                         document = {"routingMode": mode, "task": "ROLE: Host override", "outputSchema": {}, "budget": {}}
                         native = adapter(name)
                         if mode == "fast":

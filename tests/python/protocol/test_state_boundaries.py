@@ -95,7 +95,7 @@ class StateBoundaryTests(unittest.TestCase):
                     self.assertIs(observed.kwargs["state_dir"], self.state)
 
     def test_configuration_uses_supplied_root_without_environment_or_client_fallback(self):
-        with patch.dict(os.environ, {"BUDDY_STATE_DIR": str(self.root / "foreign")}), \
+        with patch.dict(os.environ, {"HMB_STATE_DIR": str(self.root / "foreign")}), \
                 patch.object(rpc_config.cc, "set_local_endpoint") as select:
             self.assertEqual(rpc_config.configure_local_endpoint(self.state, create=False), self.state / "ipc")
             select.assert_called_once_with(root=str(self.state / "ipc"))
@@ -140,7 +140,7 @@ class StateBoundaryTests(unittest.TestCase):
             connect.assert_not_called()
 
     def test_process_entries_fail_without_parent_state_and_do_not_select_default(self):
-        environment = {k: v for k, v in os.environ.items() if not k.startswith(("BUDDY_", "ANTHROPIC_", "C2_"))
+        environment = {k: v for k, v in os.environ.items() if not k.startswith(("HMB_", "ANTHROPIC_", "C2_"))
                        and k not in ("VIRTUAL_ENV", "UV_PROJECT_ENVIRONMENT")}
         home = self.root / "home"
         home.mkdir(mode=0o700)
@@ -153,7 +153,7 @@ class StateBoundaryTests(unittest.TestCase):
                 stdout, stderr = child.communicate(timeout=15)
                 self.assertEqual(child.returncode, 2, (stdout, stderr))
                 self.assertIn("the following arguments are required: --state-dir" if module == "buddy.runtime.supervisor"
-                              else "BUDDY_STATE_DIR is required", stderr)
+                              else "HMB_STATE_DIR is required", stderr)
                 self.assertEqual(list(home.iterdir()), [], "internal process selected default state")
 
     def test_supervisor_requires_argument_even_with_valid_environment_state(self):
@@ -162,7 +162,7 @@ class StateBoundaryTests(unittest.TestCase):
         home.mkdir(mode=0o700)
         before = sorted(self.root.rglob("*"))
         stderr = io.StringIO()
-        with patch.dict(os.environ, {"BUDDY_STATE_DIR": str(self.state), "HOME": str(home),
+        with patch.dict(os.environ, {"HMB_STATE_DIR": str(self.state), "HOME": str(home),
                                      "USERPROFILE": str(home)}), \
                 patch.object(supervisor, "Supervisor") as construct, redirect_stderr(stderr):
             with self.assertRaises(SystemExit) as refused:
@@ -178,7 +178,7 @@ class StateBoundaryTests(unittest.TestCase):
         foreign = self.root / "environment-state"
         foreign.mkdir(mode=0o700)
         before = sorted(self.root.rglob("*"))
-        with patch.dict(os.environ, {"BUDDY_STATE_DIR": str(foreign)}), \
+        with patch.dict(os.environ, {"HMB_STATE_DIR": str(foreign)}), \
                 patch.object(supervisor, "Supervisor") as construct, \
                 patch.object(supervisor.signal, "signal"):
             construct.return_value.serve.return_value = 17

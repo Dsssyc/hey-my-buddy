@@ -17,30 +17,30 @@ ROOT = Path(__file__).resolve().parents[3]
 class SkillPackageTests(unittest.TestCase):
     def test_packaged_skill_carries_windows_and_posix_entrypoints(self):
         with tempfile.TemporaryDirectory() as temporary:
-            skill = Path(temporary) / 'buddy'
+            skill = Path(temporary) / 'hey-my-buddy'
             skill_package.assemble(ROOT, skill)
-            for name in ('buddy', 'buddy.cmd', 'buddy.ps1'):
+            for name in ('hey-my-buddy', 'hey-my-buddy.cmd', 'hey-my-buddy.ps1'):
                 self.assertTrue((skill / 'scripts' / name).is_file(), name)
             self.assertIn('active-runtime.json', (skill / 'package/src/hey_my_buddy/install/launcher.py').read_text())
 
     def test_same_marker_does_not_hide_a_damaged_launcher(self):
         with tempfile.TemporaryDirectory() as temporary:
-            source, target = Path(temporary) / 'source/buddy', Path(temporary) / 'installed/buddy'
+            source, target = Path(temporary) / 'source/hey-my-buddy', Path(temporary) / 'installed/hey-my-buddy'
             skill_package.assemble(ROOT, source)
             target.parent.mkdir()
             shutil.copytree(source, target)
             marker = skill_install._marker(source)
             self.assertTrue(skill_install._matches(source, target, marker))
-            (target / 'scripts/buddy').write_text('damaged')
+            (target / 'scripts/hey-my-buddy').write_text('damaged')
             self.assertFalse(skill_install._matches(source, target, marker))
             placement, previous = skill_install._place(source, target, marker)
             self.assertEqual(placement, 'updated')
             self.assertTrue(skill_install._matches(source, target, marker))
-            self.assertEqual((previous / 'scripts/buddy').read_text(), 'damaged')
+            self.assertEqual((previous / 'scripts/hey-my-buddy').read_text(), 'damaged')
 
     def _upgrade_pair(self, root: Path) -> tuple[Path, Path]:
         """An assembled source and an identical copy at the agent skills home."""
-        source, target = root / 'source/buddy', root / 'agents/buddy'
+        source, target = root / 'source/hey-my-buddy', root / 'agents/hey-my-buddy'
         skill_package.assemble(ROOT, source)
         target.parent.mkdir()
         shutil.copytree(source, target)
@@ -54,12 +54,12 @@ class SkillPackageTests(unittest.TestCase):
         return state
 
     def _upgrade_environment(self, root: Path, state: Path) -> dict:
-        return {'BUDDY_STATE_DIR': str(state), 'BUDDY_AGENT_SKILLS_DIR': str(root / 'agents'),
-                'BUDDY_CLAUDE_SKILLS_DIR': str(root / 'claude'), 'CODEX_HOME': str(root / 'codex'),
-                'BUDDY_RUNTIME_ROOT': str(root / 'runtime'), 'HOME': str(root / 'home')}
+        return {'HMB_STATE_DIR': str(state), 'HMB_AGENT_SKILLS_DIR': str(root / 'agents'),
+                'HMB_CLAUDE_SKILLS_DIR': str(root / 'claude'), 'CODEX_HOME': str(root / 'codex'),
+                'HMB_RUNTIME_ROOT': str(root / 'runtime'), 'HOME': str(root / 'home')}
 
     def test_same_marker_with_changed_content_reports_an_update(self):
-        with tempfile.TemporaryDirectory(prefix='buddy-skill-content-') as temporary:
+        with tempfile.TemporaryDirectory(prefix='hey-my-buddy-skill-content-') as temporary:
             root = Path(temporary)
             source, target = self._upgrade_pair(root)
             state = self._upgrade_state(root)
@@ -78,7 +78,7 @@ class SkillPackageTests(unittest.TestCase):
             self.assertEqual(result['service']['action'], 'upgrade')
 
     def test_same_marker_with_identical_content_stays_already_current(self):
-        with tempfile.TemporaryDirectory(prefix='buddy-skill-current-') as temporary:
+        with tempfile.TemporaryDirectory(prefix='hey-my-buddy-skill-current-') as temporary:
             root = Path(temporary)
             source, target = self._upgrade_pair(root)
             state = self._upgrade_state(root)
@@ -104,7 +104,7 @@ class SkillPackageTests(unittest.TestCase):
             (state / 'active-runtime.json').write_text('{}')
             source = root / 'source'
             active = root / 'runtime' / ('a' * 32)
-            with mock.patch.dict(os.environ, {**self._upgrade_environment(root, state), 'BUDDY_AGENT_SKILLS_DIR': str(home)}, clear=True), \
+            with mock.patch.dict(os.environ, {**self._upgrade_environment(root, state), 'HMB_AGENT_SKILLS_DIR': str(home)}, clear=True), \
                  mock.patch('hey_my_buddy.install.skill_install.packaged_skill', return_value=source), \
                  mock.patch('hey_my_buddy.install.skill_install._marker', return_value={'version': 'fixture', 'contract': 'fixture'}), \
                  mock.patch('hey_my_buddy.install.skill_install._matches', return_value=True), \
@@ -132,7 +132,7 @@ class SkillPackageTests(unittest.TestCase):
             journal.write_text('{}')
             def recover(_params):
                 journal.unlink()
-            with mock.patch.dict(os.environ, {**self._upgrade_environment(root, state), 'BUDDY_AGENT_SKILLS_DIR': str(root / 'skills')}, clear=True), \
+            with mock.patch.dict(os.environ, {**self._upgrade_environment(root, state), 'HMB_AGENT_SKILLS_DIR': str(root / 'skills')}, clear=True), \
                  mock.patch('hey_my_buddy.install.upgrade.upgrade', side_effect=recover) as recovery, \
                  mock.patch('hey_my_buddy.install.upgrade.require_archive_readiness', side_effect=BoardError('UPGRADE_NOT_IDLE', 'raced work')), \
                  mock.patch('hey_my_buddy.install.skill_install._place') as place:

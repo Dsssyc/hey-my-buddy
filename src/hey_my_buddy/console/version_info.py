@@ -65,7 +65,7 @@ def version_info(state: Path) -> dict:
     # A source checkout's content ID cannot identify an older active install.
     # Follow the existing validated state pointer, never scan other READY dirs.
     installation = identity
-    if not in_use and not os.environ.get("BUDDY_RUNTIME"):
+    if not in_use and not os.environ.get("HMB_RUNTIME"):
         try:
             selected = launcher.selected_runtime(state, allow_overrides=False)
             installation = runtime.read_ready(selected) if selected is not None else {}

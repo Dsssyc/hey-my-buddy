@@ -1,4 +1,4 @@
-"""CLI blocking wait: ``buddy await`` stays connected until the durable run ends.
+"""CLI blocking wait: ``hey-my-buddy await`` stays connected until the durable run ends.
 
 Waiting is ordinary synchronous code on top of the engine's event wait
 (``wait`` with its existing 30 s cap). There is no model call, no heartbeat and no
@@ -18,9 +18,9 @@ deadline, never to this wait. Reaching the window returns an honest
 * a transient service failure is recovered by re-reading the SAME durable
   ``runId`` (bounded reconnects), never by replaying a submission;
 * stopping this wait (Ctrl-C, a closed terminal, a killed client, ``waitSeconds``
-  expiry) only stops the *wait*. The named run ends through ``buddy cancel``
+  expiry) only stops the *wait*. The named run ends through ``hey-my-buddy cancel``
   (micro tasks, with the owner's control file), ``execution-cancel`` (execution
-  records), its own runner deadline, or a service stop (``buddy stop``/owner
+  records), its own runner deadline, or a service stop (``hey-my-buddy stop``/owner
   shutdown).
 """
 from __future__ import annotations
@@ -53,7 +53,7 @@ COMPLETED_WITHOUT_RESULT_OUTCOME = "completed-no-result"
 _NOTE = (
     "This call waited inside one CLI invocation; no model polling and no heartbeat were used. "
     "A finished run is not acceptance: inspect the real artifacts and checks before the owner "
-    "acknowledges with `buddy acknowledge` and the saved controlFile."
+    "acknowledges with `hey-my-buddy acknowledge` and the saved controlFile."
 )
 
 
@@ -61,7 +61,7 @@ class WaitAbandoned(RuntimeError):
     """This wait was abandoned (Ctrl-C, closed client, stopped wait).
 
     The durable run keeps executing and stays recoverable; it ends through an
-    explicit ``buddy cancel``/``execution-cancel``, its own runner execution
+    explicit ``hey-my-buddy cancel``/``execution-cancel``, its own runner execution
     deadline, or a service stop.
     """
 
@@ -84,41 +84,41 @@ def _identity(request_id: str | None, run_id: str | None) -> str:
 
 
 def recovery_commands(request_id: str | None, run_id: str | None) -> list[str]:
-    """Real ``buddy`` commands that inspect/recover one existing run.
+    """Real ``hey-my-buddy`` commands that inspect/recover one existing run.
 
     The JSON selector is built with :func:`json.dumps` and every argument is
     quoted with :func:`shlex.quote`, so requestIds/runIds containing quotes,
     apostrophes or non-ASCII text survive ``shlex.split`` + ``json.loads``.
     ``status``/``get``/``result``/``cancel`` only accept a ``runId``: while the run
-    ID is unknown, the only supported recovery command is ``buddy await`` by
+    ID is unknown, the only supported recovery command is ``hey-my-buddy await`` by
     ``requestId``. Cancellation is deliberately not suggested as an automatic
     step: it needs the owner's control capability, so the action text names it.
     """
     selector = shlex.quote(_identity(request_id, run_id))
     if run_id:
         return [
-            f"buddy status {selector}",
-            f"buddy get {selector}",
-            f"buddy await {selector}",
-            f"buddy result {selector}",
+            f"hey-my-buddy status {selector}",
+            f"hey-my-buddy get {selector}",
+            f"hey-my-buddy await {selector}",
+            f"hey-my-buddy result {selector}",
         ]
-    return [f"buddy await {selector}"]
+    return [f"hey-my-buddy await {selector}"]
 
 
 def _recovery(request_id: str | None, run_id: str | None, reason: str) -> dict:
     if run_id:
         action = (
-            "Inspect the SAME existing run with the commands below; `buddy status` reads the execution record and "
-            "`buddy get` the micro task view. Re-run `buddy await` with this runId to keep waiting on the same "
-            "run: the wait never starts, resumes or cancels work. A micro task ends only through `buddy cancel` "
+            "Inspect the SAME existing run with the commands below; `hey-my-buddy status` reads the execution record and "
+            "`hey-my-buddy get` the micro task view. Re-run `hey-my-buddy await` with this runId to keep waiting on the same "
+            "run: the wait never starts, resumes or cancels work. A micro task ends only through `hey-my-buddy cancel` "
             "with the current owner's saved controlFile; an infrastructure execution record ends through "
             "`execution-cancel`."
         )
     else:
         action = (
-            "Read the runId from the commands below, then inspect it. `buddy await` by this requestId waits on an "
+            "Read the runId from the commands below, then inspect it. `hey-my-buddy await` by this requestId waits on an "
             "existing run and never starts work (NOT_FOUND means this requestId was never admitted; admit a micro-task "
-            "micro task with `buddy submit`, or an execution record with `execution-submit`, then await the same "
+            "micro task with `hey-my-buddy submit`, or an execution record with `execution-submit`, then await the same "
             "requestId). `status`/`get`/`result`/`cancel` need a runId."
         )
     return {
@@ -254,11 +254,11 @@ def _malformed_result_response(full: Any, run_id: str) -> dict | None:
 
 
 def _result_command(run_id: str) -> str:
-    return f"buddy result {shlex.quote(json.dumps({'runId': run_id}, ensure_ascii=False))}"
+    return f"hey-my-buddy result {shlex.quote(json.dumps({'runId': run_id}, ensure_ascii=False))}"
 
 
 def _micro_task_get_command(run_id: str) -> str:
-    return f"buddy get {shlex.quote(json.dumps({'runId': run_id, 'includeAudit': True}, ensure_ascii=False))}"
+    return f"hey-my-buddy get {shlex.quote(json.dumps({'runId': run_id, 'includeAudit': True}, ensure_ascii=False))}"
 
 
 def _head_text(value, limit: int) -> str | None:
@@ -328,7 +328,7 @@ def _micro_task_result_view(full: dict, run_id: str) -> dict | None:
 
 
 def _boundary_command(method: str, params: dict) -> str:
-    return f"buddy {method} {shlex.quote(json.dumps(params, ensure_ascii=False))}"
+    return f"hey-my-buddy {method} {shlex.quote(json.dumps(params, ensure_ascii=False))}"
 
 
 def _host_boundary(
@@ -552,7 +552,7 @@ def _wait_until_terminal(
                     outcome="unavailable",
                     waited_seconds=clock() - started,
                     wait_seconds=wait_seconds,
-                    recovery=_recovery(request_id, run_id, "The Buddy service could not be reached; the run stays durable"),
+                    recovery=_recovery(request_id, run_id, "The hey-my-buddy service could not be reached; the run stays durable"),
                     error={"code": getattr(failure, "code", "SERVICE_ERROR"), "message": str(failure)},
                     reconnects=reconnects,
                 )
@@ -592,7 +592,7 @@ def _wait_until_terminal(
             wait_seconds=wait_seconds,
             recovery_reason=(
                 "The run is terminal but no runner result was persisted; there is no successful result to report and "
-                "the execution status is preserved. Read the run again with `buddy result` by runId, then check its "
+                "the execution status is preserved. Read the run again with `hey-my-buddy result` by runId, then check its "
                 "logs before any manual recovery."
             ),
             error={
@@ -613,7 +613,7 @@ def _wait_until_terminal(
             recovery_reason=(
                 "The run is terminal but its persisted result could not be read, so result delivery is unavailable and "
                 "there is no successful result to report; the execution status is preserved. Re-read the result by runId "
-                "(`buddy result`); do not relaunch the job because of this read failure."
+                "(`hey-my-buddy result`); do not relaunch the job because of this read failure."
             ),
             error={"code": getattr(failure, "code", "SERVICE_ERROR"), "message": str(failure)},
             reconnects=reconnects,
@@ -681,7 +681,7 @@ def await_run(
 ) -> dict:
     """Wait for an already existing durable run without starting or replaying anything.
 
-    ``buddy await`` is the only CLI blocking call: it reads the durable run and
+    ``hey-my-buddy await`` is the only CLI blocking call: it reads the durable run and
     reuses the same C-Two service and the same run ID. Its wait window is explicit
     and bounded (``waitSeconds``, default 86400, max 86400); reaching it is
     recoverable by awaiting the same run again. It never starts, resumes, retries
@@ -718,7 +718,7 @@ def await_run(
                 raise ServiceError(
                     "NOT_FOUND",
                     "No existing run has this requestId; await never starts work. Admit a micro task with "
-                    "`buddy submit`, or an execution record with `execution-submit`, then await the same requestId.",
+                    "`hey-my-buddy submit`, or an execution record with `execution-submit`, then await the same requestId.",
                 )
         run_id = run["runId"]
         request_id = run.get("requestId", request_id)

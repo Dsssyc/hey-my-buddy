@@ -5,7 +5,7 @@ trap {
 }
 # Avoid the legacy native-command binder dropping embedded JSON quotes on
 # Windows PowerShell 5.1. Newer runtimes expose ArgumentList directly.
-function ConvertTo-BuddyNativeArgument([string] $Value) {
+function ConvertTo-HeyMyBuddyNativeArgument([string] $Value) {
     return '"' + [regex]::Replace($Value, '(\\*)("|$)', {
         param($Match)
         $slashes = $Match.Groups[1].Value
@@ -13,7 +13,7 @@ function ConvertTo-BuddyNativeArgument([string] $Value) {
         return $slashes + $slashes
     }) + '"'
 }
-function Invoke-BuddyProcess([string] $Executable, [string[]] $Arguments) {
+function Invoke-HeyMyBuddyProcess([string] $Executable, [string[]] $Arguments) {
     $info = New-Object System.Diagnostics.ProcessStartInfo
     $info.FileName = $Executable
     $info.UseShellExecute = $false
@@ -21,7 +21,7 @@ function Invoke-BuddyProcess([string] $Executable, [string[]] $Arguments) {
     if ($null -ne $info.PSObject.Properties['ArgumentList']) {
         foreach ($argument in $Arguments) { $info.ArgumentList.Add($argument) }
     } else {
-        $info.Arguments = ($Arguments | ForEach-Object { ConvertTo-BuddyNativeArgument $_ }) -join ' '
+        $info.Arguments = ($Arguments | ForEach-Object { ConvertTo-HeyMyBuddyNativeArgument $_ }) -join ' '
     }
     $child = [System.Diagnostics.Process]::Start($info)
     try { $child.WaitForExit(); return $child.ExitCode } finally { $child.Dispose() }
@@ -31,14 +31,14 @@ $project = Join-Path $skill 'package'
 if (-not (Test-Path (Join-Path $project 'pyproject.toml'))) {
     $project = (Resolve-Path (Join-Path $skill '../..')).Path
 }
-$env:BUDDY_SKILL_DIR = $skill
+$env:HMB_SKILL_DIR = $skill
 $launcher = Join-Path $project 'src/hey_my_buddy/install/launcher.py'
-if (($args.Count -gt 0 -and $args[0] -in @('install', 'upgrade')) -or $env:BUDDY_DEV_SOURCE -eq '1') {
+if (($args.Count -gt 0 -and $args[0] -in @('install', 'upgrade')) -or $env:HMB_DEV_SOURCE -eq '1') {
     $uv = if ($env:UV_BIN) { $env:UV_BIN } else { 'uv' }
-    $result = Invoke-BuddyProcess $uv (@('run', '--frozen', '--python', '3.12', '--project', $project, 'python', $launcher) + $args)
+    $result = Invoke-HeyMyBuddyProcess $uv (@('run', '--frozen', '--python', '3.12', '--project', $project, 'python', $launcher) + $args)
 } else {
     $hint = Join-Path $skill '.runtime-python'
-    $python = if ($env:BUDDY_BOOTSTRAP_PYTHON) { $env:BUDDY_BOOTSTRAP_PYTHON } elseif (Test-Path $hint) { (Get-Content -Raw $hint).Trim() } else { 'python' }
-    $result = Invoke-BuddyProcess $python (@($launcher) + $args)
+    $python = if ($env:HMB_BOOTSTRAP_PYTHON) { $env:HMB_BOOTSTRAP_PYTHON } elseif (Test-Path $hint) { (Get-Content -Raw $hint).Trim() } else { 'python' }
+    $result = Invoke-HeyMyBuddyProcess $python (@($launcher) + $args)
 }
 exit $result

@@ -27,7 +27,7 @@ class PlanProbeModelTests(unittest.TestCase):
         self.probe.operations = [("write", "Write", {"file_path": "/tmp/probe", "content": "marker"}),
                                  ("command", "Bash", {"command": "printf marker"}),
                                  ("read", "Read", {"file_path": "/tmp/probe"}),
-                                 ("finish", "mcp__probe__buddy_finish_turn", {"disposition": "completed"})]
+                                 ("finish", "mcp__probe__hey_my_buddy_finish_turn", {"disposition": "completed"})]
 
     def request(self, tools, results=()):
         data = {"model": "local-fixture", "messages": [{"role": "user", "content": "probe"}, *results]}
@@ -58,7 +58,7 @@ class PlanProbeModelTests(unittest.TestCase):
     def test_four_operations_are_requested_even_when_plan_omits_write_and_command(self):
         results = []
         for operation, name, arguments in self.probe.operations:
-            call = self.request(["Read", "mcp__probe__buddy_finish_turn"], results)["tool_calls"][0]
+            call = self.request(["Read", "mcp__probe__hey_my_buddy_finish_turn"], results)["tool_calls"][0]
             self.assertEqual(call["function"]["name"], name)
             self.assertEqual(json.loads(call["function"]["arguments"]), arguments)
             results.append({"role": "tool", "tool_call_id": call["id"],
@@ -95,10 +95,10 @@ class PlanProbeModelTests(unittest.TestCase):
         self.probe.operations = [self.probe.operations[0], self.probe.operations[-1]]
         self.probe.call_prefix = "call_probe_resumed"
         old = {"role": "tool", "tool_call_id": "call_probe_previous_write", "content": "old result"}
-        first = self.request(["Write", "mcp__probe__buddy_finish_turn"], [old])["tool_calls"][0]
+        first = self.request(["Write", "mcp__probe__hey_my_buddy_finish_turn"], [old])["tool_calls"][0]
         current = {"role": "tool", "tool_call_id": first["id"], "content": "new result"}
-        second = self.request(["Write", "mcp__probe__buddy_finish_turn"], [old, current])["tool_calls"][0]
-        self.assertEqual(second["function"]["name"], "mcp__probe__buddy_finish_turn")
+        second = self.request(["Write", "mcp__probe__hey_my_buddy_finish_turn"], [old, current])["tool_calls"][0]
+        self.assertEqual(second["function"]["name"], "mcp__probe__hey_my_buddy_finish_turn")
         self.assertEqual(self.probe.observations[0]["modelToolResults"], [current])
         self.assertEqual(len(self.probe.observations), 2)
 

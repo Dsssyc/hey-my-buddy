@@ -188,7 +188,7 @@ class MockWorkspace:
             "changedPaths": ["src/feature.py"],
             "outsideScope": [],
             "snapshotSha256": (manifest.get("snapshot") and sha256_text(canonical_json(manifest["snapshot"]))) or "",
-            "ref": f"refs/buddy/workflow/{task_id}/{attempt_id}",
+            "ref": f"refs/hey-my-buddy/workflow/{task_id}/{attempt_id}",
             "diffPath": str(diff),
             "diffSha256": sha256_text(diff.read_text()),
             "sealedAfterShutdown": True,
@@ -212,7 +212,7 @@ class MockWorkspace:
         explicit adjustment names the differing paths."""
         changed = [str(item) for item in (artifact.get("changedPaths") or [])]
         target = Path(path)
-        carried = (target / ".buddy-integrated").exists()
+        carried = (target / ".hey-my-buddy-integrated").exists()
         if _confirm_adjustments and not carried:
             adjusted_paths = changed
         return {

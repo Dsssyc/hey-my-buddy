@@ -173,7 +173,7 @@ class BoundaryAndDrainTests(unittest.TestCase):
         facts = native_run._RunFacts()
         for index in range(70):
             facts.note_unknown(f"future-method-{index}")
-        with tempfile.TemporaryDirectory(prefix="buddy-zcode-facts-") as root:
+        with tempfile.TemporaryDirectory(prefix="hey-my-buddy-zcode-facts-") as root:
             invocation = native_run.ensure_private_dir(Path(root))
             refs = native_run._evidence_refs(invocation_root=invocation,
                                              stderr_path=invocation / "missing-stderr.log",
@@ -228,7 +228,7 @@ class NativeShapeRoundTests(NativeRunCase):
             if method == "session/create":
                 result["settings"]["model"]["available"] = None
             return result
-        os.environ["BUDDY_ZCODE_TEST_CASE"] = "discovery"
+        os.environ["HMB_ZCODE_TEST_CASE"] = "discovery"
         with mock.patch.object(native_run.NativeConnection, "call", call):
             receipt = native_run.run_discovery(cwd=str(self.cwd), invocation_root=self.base / "reading",
                 native_root=self.base / "reading-native", timeout_seconds=3, cancelled=lambda: False)
@@ -238,7 +238,7 @@ class NativeShapeRoundTests(NativeRunCase):
 
     def execute_shape(self, rewrite):
         self.fake.write_text(rewrite(self.fake.read_text()))
-        os.environ["BUDDY_ZCODE_TEST_CASE"] = "ok"
+        os.environ["HMB_ZCODE_TEST_CASE"] = "ok"
         seen = []
         def observer(facts):
             seen.append(facts)
@@ -282,7 +282,7 @@ class NativeShapeRoundTests(NativeRunCase):
         self.fake.write_text(self.fake.read_text().replace(
             "'providerId':provider,'modelId':'fixture-model',\n          'options':{'reasoningLevel':'low'}",
             "'providerId':provider,'modelId':'observed-model',\n          'options':{'reasoningLevel':'low'}"))
-        os.environ["BUDDY_ZCODE_TEST_CASE"] = "ok"
+        os.environ["HMB_ZCODE_TEST_CASE"] = "ok"
         original = native_run.NativeConnection.call
         calls = []
         def call(connection, method, params):
@@ -309,7 +309,7 @@ class NativeShapeRoundTests(NativeRunCase):
                              ("{'accepted':False,'sessionId':f's-{session}'}", "native-admission-failed")):
             with self.subTest(code=code):
                 self.fake.write_text(source.replace("{'accepted':True,'sessionId':f's-{session}'}", result))
-                os.environ["BUDDY_ZCODE_TEST_CASE"] = "ok"
+                os.environ["HMB_ZCODE_TEST_CASE"] = "ok"
                 outcome = native_run.run(self.fast_request("Return only one JSON value matching this schema: {}"),
                     observer=lambda _facts: RunFeedback(action="continue"), services=None, cancelled=lambda: False)
                 self.assertEqual(outcome.end.reason_code, code)

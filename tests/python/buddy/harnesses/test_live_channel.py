@@ -73,7 +73,7 @@ class LiveSeamCase(unittest.TestCase):
     def setUp(self):
         self.endpoint = ctl.CTwoLiveEndpoint(identity(), lv.EXISTING_CAPABILITIES["zcode"],
                                             TEST_CRM, instance_id="a" * 64, token="b" * 64,
-                                            name="Ada", state_dir=Path(os.environ["BUDDY_STATE_DIR"]))
+                                            name="Ada", state_dir=Path(os.environ["HMB_STATE_DIR"]))
         self.peer = EndpointConnection(self.endpoint)
         def connect(*args, timeout, **kwargs):
             self.assertGreaterEqual(timeout, 0)
@@ -85,7 +85,7 @@ class LiveSeamCase(unittest.TestCase):
         self.connection = self.enterContext(patch.object(ctl.cc, "connect", side_effect=connect))
         self.enterContext(patch.object(ctl.cc, "with_call_options", side_effect=with_call_options))
         self.channel = ctl.CTwoLiveChannel(identity(), TEST_CRM, name="Ada", address="ipc://fixture",
-                                           instance_id="a" * 64, token="b" * 64, state_dir=Path(os.environ["BUDDY_STATE_DIR"]))
+                                           instance_id="a" * 64, token="b" * 64, state_dir=Path(os.environ["HMB_STATE_DIR"]))
         self.addCleanup(self.endpoint.close, reason="fixture finished")
         self.directory = self.enterContext(tempfile.TemporaryDirectory(prefix="live-fixture-"))
         self.journal = Path(self.directory) / "inquiries.jsonl"
@@ -169,7 +169,7 @@ class LimitTests(unittest.TestCase):
         with self.assertRaises(BoardError):
             lv.InquiryPayload(question_id="q-1", question="水" * 2001)  # 6003 UTF-8 bytes, 2001 characters
         channel = ctl.CTwoLiveChannel(identity(), TEST_CRM, name="Ada", address="ipc://fixture",
-                                       instance_id="a" * 64, token="b" * 64, state_dir=Path(os.environ["BUDDY_STATE_DIR"]))
+                                       instance_id="a" * 64, token="b" * 64, state_dir=Path(os.environ["HMB_STATE_DIR"]))
         for timeout in (99, 5001, 0, "1500"):
             with self.assertRaises(BoardError, msg=str(timeout)):
                 channel.request(inquiry_request(), timeout_ms=timeout)
@@ -254,7 +254,7 @@ class RequestBindingTests(LiveSeamCase):
 
     def test_unsupported_facilities_answer_unsupported(self):
         unsupported = ctl.CTwoLiveEndpoint(identity(), lv.EXISTING_CAPABILITIES["codex"],
-                                           TEST_CRM, instance_id="a" * 64, token="b" * 64, state_dir=Path(os.environ["BUDDY_STATE_DIR"]))
+                                           TEST_CRM, instance_id="a" * 64, token="b" * 64, state_dir=Path(os.environ["HMB_STATE_DIR"]))
         self.peer.endpoint = unsupported
         reply = self.channel.request(inquiry_request(), timeout_ms=1500)
         self.assertEqual((reply.status, reply.reason_code), ("unsupported", "inquiry-unsupported"))
@@ -479,7 +479,7 @@ class ObserveSelectionTests(LiveSeamCase):
         self.endpoint.publish_journal(lv.LiveJournal(available=True, entries=1))
         self.endpoint.publish_observation(lv.LiveObservation(ready=True))
         self.publish_records([{"inquiryId": "question-9", "state": "answered",
-                              "answer": {"text": "42", "bytes": 2, "via": "tool:buddy_answer_inquiry",
+                              "answer": {"text": "42", "bytes": 2, "via": "tool:hey_my_buddy_answer_inquiry",
                                          "toolCallId": "call-9", "at": "2026-10-06T00:00:01Z",
                                          "truncated": False}}])
         snapshot = self.channel.observe(inquiry_id="question-9", timeout_ms=1500)
@@ -489,7 +489,7 @@ class ObserveSelectionTests(LiveSeamCase):
         entry = snapshot.inquiries[0]
         self.assertEqual((entry.status, entry.answer, entry.tool_call_id, entry.bytes, entry.truncated),
                          ("answered", "42", "call-9", 2, False))
-        self.assertEqual(entry.via, "tool:buddy_answer_inquiry")
+        self.assertEqual(entry.via, "tool:hey_my_buddy_answer_inquiry")
         self.assertTrue(entry.at)
         for bad in ("", "x" * (lv.MAX_REQUEST_ID + 1)):
             with self.assertRaises(BoardError):
@@ -502,7 +502,7 @@ class ObserveSelectionTests(LiveSeamCase):
             {"inquiryId": "question-1", "state": "queued",
              "delivery": {"requestedDelivery": None, "admittedDelivery": "cooperative-checkpoint"}},
             {"inquiryId": "question-1", "state": "answered",
-             "answer": {"text": "the answer", "bytes": 10, "via": "tool:buddy_answer_inquiry",
+             "answer": {"text": "the answer", "bytes": 10, "via": "tool:hey_my_buddy_answer_inquiry",
                         "toolCallId": "call-1", "at": "2026-10-06T00:00:02Z", "truncated": False}},
         ]
         entry, = lv._journal_states(journal)
@@ -511,12 +511,12 @@ class ObserveSelectionTests(LiveSeamCase):
         self.assertEqual(entry.tool_call_id, "call-1")
         self.assertEqual(entry.delivery.value["admittedDelivery"], "cooperative-checkpoint")
         bare = [{"inquiryId": "question-2", "state": "answered", "answer": "from the node journal",
-                 "answerBytes": 21, "via": "tool:buddy_inquiry_reply", "toolCallId": "call-2",
+                 "answerBytes": 21, "via": "tool:hey_my_buddy_inquiry_reply", "toolCallId": "call-2",
                  "answeredAt": "2026-09-19T05:00:04.000Z", "truncated": True}]
         entry, = lv._journal_states(bare)
         self.assertEqual((entry.status, entry.answer, entry.bytes, entry.truncated, entry.via,
                           entry.tool_call_id, entry.at),
-                         ("answered", "from the node journal", 21, True, "tool:buddy_inquiry_reply",
+                         ("answered", "from the node journal", 21, True, "tool:hey_my_buddy_inquiry_reply",
                           "call-2", "2026-09-19T05:00:04.000Z"))
 
     def test_the_journal_fact_reports_availability_count_and_rejections(self):

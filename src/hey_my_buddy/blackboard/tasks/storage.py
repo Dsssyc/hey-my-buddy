@@ -344,7 +344,7 @@ def _orphan_workspace(store, directory: Path, *, git_proof: bool = True) -> dict
                                    ('staged', manifest['snapshot']['stagedCommit']),
                                    ('retained/input', manifest['inputCommit']),
                                    ('retained/staged', manifest['snapshot']['stagedCommit'])):
-                ref = 'refs/buddy/workspaces/' + directory.name + '/' + suffix
+                ref = 'refs/hey-my-buddy/workspaces/' + directory.name + '/' + suffix
                 refs[ref] = workspace._line(repository, 'show-ref', '--verify', '--hash', ref)
                 if (suffix in ('input', 'staged') and manifest['snapshot'][suffix + 'Ref'] != ref
                         or workspace._git(repository, 'symbolic-ref', '-q', ref, allowed=(0, 1)).strip()
@@ -530,7 +530,7 @@ def inspect(store, *, git_proof: bool = True) -> dict:
         path = Path(orphan.pop('path'))
         orphan.pop('allocationRequestId', None)
         add('workspaces', path, reasons, **orphan)
-    runtime_root = Path(os.environ.get('BUDDY_RUNTIME_ROOT') or DEFAULT_RUNTIME_ROOT).expanduser().absolute()
+    runtime_root = Path(os.environ.get('HMB_RUNTIME_ROOT') or DEFAULT_RUNTIME_ROOT).expanduser().absolute()
     from ...home import default_state_dir
     foreign_default_root = (runtime_root.resolve() == Path(DEFAULT_RUNTIME_ROOT).resolve()
                             and state != default_state_dir().resolve())
@@ -694,7 +694,7 @@ def _validate_pending(result: dict, planned: dict, state: Path) -> None:
         raise BoardError('STORAGE_UNSAFE', 'Pending removal path is not a live candidate')
     root = Path(state).absolute()
     if category == 'runtimes':
-        allowed_parent = Path(os.environ.get('BUDDY_RUNTIME_ROOT') or DEFAULT_RUNTIME_ROOT).expanduser().absolute()
+        allowed_parent = Path(os.environ.get('HMB_RUNTIME_ROOT') or DEFAULT_RUNTIME_ROOT).expanduser().absolute()
         allowed = original.parent == allowed_parent
     elif category == 'zcode':
         allowed = original.parent == root / 'harnesses' / 'zcode'

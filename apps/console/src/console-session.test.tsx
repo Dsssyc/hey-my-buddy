@@ -261,7 +261,7 @@ describe("console session descriptor validation", () => {
   it("maps the 401 CONSOLE_SESSION_EXPIRED refusal to login-expired copy (0.16)", () => {
     const expired = errorText(new ApiError("CONSOLE_SESSION_EXPIRED", "server raw text"));
     expect(expired).toContain("登录已失效");
-    expect(expired).toContain("请运行 buddy console 重新登录");
+    expect(expired).toContain("请运行 hey-my-buddy console 重新登录");
     expect(expired).not.toContain("server raw text");
     expect(expired).not.toContain("新窗口");
     // The retired single-writer code no longer exists anywhere in the client.

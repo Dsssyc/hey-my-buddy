@@ -540,7 +540,7 @@ class FakeAgent:
                                                   "update": {"sessionUpdate": f"future-{index}"}})
         if self.emit_unknown_update:
             self.notify_client("session/update", {"sessionId": session_id,
-                                                  "update": {"sessionUpdate": "buddy_probe_unknown"}})
+                                                  "update": {"sessionUpdate": "hey_my_buddy_probe_unknown"}})
         if self.emit_tool_update:
             self.notify_client("session/update", {"sessionId": session_id,
                                                   "update": {"sessionUpdate": "tool_call",
@@ -588,7 +588,7 @@ class FakeAgent:
                                                   "update": {"sessionUpdate": f"future-{index}"}})
         if self.emit_unknown_update:
             self.notify_client("session/update", {"sessionId": frame_id,
-                                                  "update": {"sessionUpdate": "buddy_probe_unknown"}})
+                                                  "update": {"sessionUpdate": "hey_my_buddy_probe_unknown"}})
         sys.path.insert(0, str(Path(__file__).resolve().parents[6] / "src"))
         if self.stop_reason_unread:
             self.send({"jsonrpc": "2.0", "id": request_id, "result": {}})
@@ -652,10 +652,10 @@ class FakeAgent:
                 receipt = json.loads(checkpoint_text)
                 questions = receipt.get("inquiries") or []
                 if questions:
-                    answer_tool = self.checkpoint_tool.rsplit("__", 1)[0] + "__buddy_answer_inquiry"
+                    answer_tool = self.checkpoint_tool.rsplit("__", 1)[0] + "__hey_my_buddy_answer_inquiry"
                     tool_frame("call_answer_1", answer_tool, "in_progress")
                     answer_result = worker_services.call_session_tool(
-                        "buddy_answer_inquiry",
+                        "hey_my_buddy_answer_inquiry",
                         {"inquiryId": questions[0]["inquiryId"],
                          "answer": "the root's bounded answer to the Host question"},
                         configuration)

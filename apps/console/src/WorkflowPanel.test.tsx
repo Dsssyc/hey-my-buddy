@@ -100,7 +100,7 @@ describe("micro task workflow console (0.15.1 read-only)", () => {
           result: {
             nativeSession: {
               harness: "zcode", sessionId: "sess-z", captured: true, storageScope: "task-private",
-              storageOwner: "buddy-attempt", nativeAppVisibility: "not-listed-in-native-app",
+              storageOwner: "hey-my-buddy-attempt", nativeAppVisibility: "not-listed-in-native-app",
               resumeMode: "native-session", bindingPresent: true, resumable: true,
             },
           },

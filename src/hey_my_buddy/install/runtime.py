@@ -235,7 +235,7 @@ def content_id(root: Path | None = None) -> str:
     base = Path(root or project_root())
     declared = load_manifest(base)
     digest = hashlib.sha256()
-    digest.update(f"buddy-runtime-format:{RUNTIME_FORMAT}\n".encode())
+    digest.update(f"hey-my-buddy-runtime-format:{RUNTIME_FORMAT}\n".encode())
     digest.update(f"assets-manifest:{ASSET_MANIFEST.as_posix()}\n".encode())
     digest.update(declared["sha256"].encode())
     digest.update(b"\n")
@@ -263,7 +263,7 @@ def manifest(root: Path | None = None) -> dict:
 
 
 def runtime_root() -> Path:
-    return Path(os.environ.get("BUDDY_RUNTIME_ROOT") or DEFAULT_RUNTIME_ROOT).expanduser()
+    return Path(os.environ.get("HMB_RUNTIME_ROOT") or DEFAULT_RUNTIME_ROOT).expanduser()
 
 
 def runtime_python(directory: Path) -> Path:
@@ -526,21 +526,21 @@ def _inside(directory: Path | None, candidate: str | None, *, allow_lexical: boo
 def resolve_runtime() -> dict:
     """The runtime identity of *this process*, not merely of a directory on disk.
 
-    ``BUDDY_RUNTIME`` pins an explicit runtime directory; otherwise the READY
+    ``HMB_RUNTIME`` pins an explicit runtime directory; otherwise the READY
     runtime matching the current assets is used. ``stable`` is only true when the
-    process actually imported ``buddy`` from inside that runtime and every declared
+    process actually imported ``hey_my_buddy`` from inside that runtime and every declared
     resource resolves inside it too: finding a ``READY.json`` proves nothing by
     itself.
     """
     actual = process_identity()
-    pinned = os.environ.get("BUDDY_RUNTIME")
+    pinned = os.environ.get("HMB_RUNTIME")
     directory: Path | None = None
     if pinned:
         directory = Path(pinned).expanduser()
         if not is_ready(directory):
             raise BoardError(
                 "RUNTIME_NOT_READY",
-                "BUDDY_RUNTIME points at a directory without a READY runtime marker",
+                "HMB_RUNTIME points at a directory without a READY runtime marker",
                 runtimeDir=str(directory),
             )
     else:
@@ -597,13 +597,13 @@ def launch_target(*, log_path: Path | None = None) -> dict:
 
     The default path installs the stable runtime on first use and then starts the
     daemon, the workers and the adapters from that runtime's own interpreter and
-    installed package. ``BUDDY_DEV_SOURCE=1`` is the explicit development/test
+    installed package. ``HMB_DEV_SOURCE=1`` is the explicit development/test
     switch that runs from the checkout instead and reports ``stable=false``; it is
     never the default, so a plugin update cannot silently reintroduce the
     cache-source dependency.
     """
     identity = resolve_runtime()
-    if not identity.get("declaredStable") and not os.environ.get("BUDDY_DEV_SOURCE"):
+    if not identity.get("declaredStable") and not os.environ.get("HMB_DEV_SOURCE"):
         materialize(log_path=log_path)
         identity = resolve_runtime()
     if identity.get("state") == "READY" and identity.get("declaredStable"):

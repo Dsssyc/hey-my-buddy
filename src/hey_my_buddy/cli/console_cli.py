@@ -1,6 +1,6 @@
 """CLI-only console entry: local booleans, browser launch and fenced waits.
 
-``buddy console`` keeps the canonical single-JSON-argument form. This module owns only
+``hey-my-buddy console`` keeps the canonical single-JSON-argument form. This module owns only
 the parts of that command that live in the CLI process: validating and stripping the
 ``browser``/``wait`` booleans, launching the default browser through Python's
 :mod:`webbrowser` API, and waiting for the exact console instance that was opened.
@@ -34,7 +34,7 @@ ACTION_FIELDS = {
 #: Bounded observation interval while waiting for a console instance.
 POLL_SECONDS = 2.0
 #: stderr notice carrying the fallback entry URL while a wait blocks stdout.
-FALLBACK_NOTICE = "buddy console: the browser was not opened; entry URL: "
+FALLBACK_NOTICE = "hey-my-buddy console: the browser was not opened; entry URL: "
 
 #: A public console instance id is exactly 24 lowercase hex characters. An alternate
 #: length, case or encoding is never normalized into one: the daemon contract is exact,

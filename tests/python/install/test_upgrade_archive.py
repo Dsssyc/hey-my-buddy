@@ -49,7 +49,7 @@ class ArchiveCutoverTests(BoardTestCase):
                     "schemaVersion": SCHEMA_VERSION if path == target else 18}
 
         with ExitStack() as stack:
-            stack.enter_context(mock.patch.dict(os.environ, {"BUDDY_RUNTIME_ROOT": str(self.runtime_root)}))
+            stack.enter_context(mock.patch.dict(os.environ, {"HMB_RUNTIME_ROOT": str(self.runtime_root)}))
             for name, options in (
                 ("get_state_dir", {"return_value": self.state}),
                 ("runtime.is_ready", {"return_value": True}),

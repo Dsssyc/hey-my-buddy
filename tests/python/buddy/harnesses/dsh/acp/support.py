@@ -1,7 +1,7 @@
 """Shared harness for the ACP client tests: one private directory per test.
 
 Every test creates its materials inside its own ``TemporaryDirectory`` under
-the check runner's private temp root - ``BUDDY_CHECKS_TMPDIR``, which the check
+the check runner's private temp root - ``HMB_CHECKS_TMPDIR``, which the check
 suite provides and a direct focused run must set itself, like the other
 suites. The fixture is removed during normal teardown once the child group's
 stop is confirmed; nothing is registered, no run container or
@@ -33,7 +33,7 @@ class AcpTestCase(unittest.TestCase):
     def setUp(self) -> None:
         name = self.id().rsplit(".", 1)[-1]
         self.container = tempfile.TemporaryDirectory(
-            prefix=f"acp-{name}-", dir=os.environ.get("BUDDY_CHECKS_TMPDIR", "/tmp"))
+            prefix=f"acp-{name}-", dir=os.environ.get("HMB_CHECKS_TMPDIR", "/tmp"))
         self.addCleanup(self.container.cleanup)
         self.test_dir = Path(self.container.name).resolve()
         self.root = self.test_dir / "native-root"

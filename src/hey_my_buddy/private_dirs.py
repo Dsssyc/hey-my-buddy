@@ -41,7 +41,7 @@ def _absolute(path: Path) -> Path:
         raise BoardError('PRIVATE_PATH_UNSAFE', 'Private path must be absolute')
     # macOS spells /private/var and /private/tmp through root-level aliases.
     # Canonicalize only these OS-owned aliases; resolving the whole path would hide a hostile link
-    # inside the Buddy state tree before the component guard can inspect it.
+    # inside the hey-my-buddy state tree before the component guard can inspect it.
     if sys.platform == 'darwin' and len(path.parts) > 1 and path.parts[1] in ('var', 'tmp'):
         path = Path('/private', *path.parts[1:])
     return path
@@ -122,7 +122,7 @@ def attempt_root(state: Path, adapter: str, task_id: str, attempt_id: str) -> Pa
 
 def context_root(context, adapter: str | None = None) -> Path:
     """Resolve an execution's private root from its explicit service state root."""
-    state = context.environment['BUDDY_STATE_DIR']
+    state = context.environment['HMB_STATE_DIR']
     selected = adapter or context.spec.get('adapter')
     return attempt_root(Path(state), selected, context.task_id, context.attempt_id)
 

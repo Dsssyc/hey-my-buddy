@@ -21,7 +21,7 @@ from hey_my_buddy.buddy.harnesses.registry import worker_permission
 
 class NativeFactsTests(unittest.TestCase):
     def setUp(self):
-        self.temp = tempfile.TemporaryDirectory(prefix="buddy-codex-facts-")
+        self.temp = tempfile.TemporaryDirectory(prefix="hey-my-buddy-codex-facts-")
         self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name)
         self.request = RunRequest(
@@ -34,7 +34,7 @@ class NativeFactsTests(unittest.TestCase):
             budget=RunBudget(timeout_seconds=10))
         self.receipt = {"thread": {"id": "thread", "cwd": str(self.root), "turns": []},
                         "model": "model", "modelProvider": "openai", "cwd": str(self.root),
-                        "approvalPolicy": "never", "activePermissionProfile": {"id": "buddy-router"},
+                        "approvalPolicy": "never", "activePermissionProfile": {"id": "hey-my-buddy-router"},
                         "sandbox": {"type": "readOnly", "networkAccess": False}}
 
     def configure(self, mode, receipt=None, config=None):
@@ -175,9 +175,9 @@ class NativeFactsTests(unittest.TestCase):
         expected = native_run.tomllib.loads(native_run.read_only_config(str(self.root)))
         changes = ({"web_search": "enabled"}, {"approval_policy": "on-request"},
                    {"default_permissions": "different"},
-                   {"permissions": {"buddy-router": {"network": {"enabled": True}}}},
-                   {"permissions": {"buddy-router": {"filesystem": {str(self.root): "write"}}}},
-                   {"permissions": {"buddy-router": {"filesystem": {"/extra": "read"}}}})
+                   {"permissions": {"hey-my-buddy-router": {"network": {"enabled": True}}}},
+                   {"permissions": {"hey-my-buddy-router": {"filesystem": {str(self.root): "write"}}}},
+                   {"permissions": {"hey-my-buddy-router": {"filesystem": {"/extra": "read"}}}})
         for change in changes:
             with self.subTest(change=change):
                 connection = mock.Mock()
@@ -264,7 +264,7 @@ class NativeFactsTests(unittest.TestCase):
                    "approvalPolicy": [large], "activePermissionProfile": {"id": [large]},
                    "sandbox": {"type": "readOnly", "networkAccess": large}}
         config = {"web_search": [large], "approval_policy": [large], "default_permissions": [large],
-                  "permissions": {"buddy-router": {"filesystem": {large: []}}}}
+                  "permissions": {"hey-my-buddy-router": {"filesystem": {large: []}}}}
         for mode in ("fast", "review"):
             with self.subTest(mode=mode):
                 thread, state = self.configure(mode, receipt, config)

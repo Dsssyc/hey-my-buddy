@@ -46,13 +46,13 @@ class CandidatePrepareTests(BoardTestCase):
         super().setUp()
         self.state = self.directory / "state"
         self.state.mkdir(mode=0o700)
-        cleared = {"BUDDY_STATE_DIR", "BUDDY_RUNTIME_ROOT", "BUDDY_RUNTIME", "BUDDY_RUNTIME_IDENTITY",
-                   "BUDDY_WORKER_STATE", "BUDDY_WORKER_ID", "BUDDY_AGENT_CREDENTIAL",
-                   "BUDDY_AGENT_CREDENTIAL_FILE", "BUDDY_CHECKS_TMPDIR", "VIRTUAL_ENV",
+        cleared = {"HMB_STATE_DIR", "HMB_RUNTIME_ROOT", "HMB_RUNTIME", "HMB_RUNTIME_IDENTITY",
+                   "HMB_WORKER_STATE", "HMB_WORKER_ID", "HMB_AGENT_CREDENTIAL",
+                   "HMB_AGENT_CREDENTIAL_FILE", "HMB_CHECKS_TMPDIR", "VIRTUAL_ENV",
                    "UV_PROJECT_ENVIRONMENT"}
         self.environment = {key: value for key, value in os.environ.items()
                             if key not in cleared and not key.startswith("ANTHROPIC_")}
-        self.environment["BUDDY_STATE_DIR"] = str(self.state)
+        self.environment["HMB_STATE_DIR"] = str(self.state)
 
     def candidate_executor(self) -> WorkerRunExecutor:
         # Candidate-only injection: a fresh instance carries native_resume True,
@@ -129,7 +129,7 @@ class CandidatePrepareTests(BoardTestCase):
             document = decode_strict_json(credential.read_bytes())
             self.assertEqual(document["token"], DUMMY_CREDENTIAL)
             self.assertEqual(document["attemptId"], context.attempt_id)
-            self.assertEqual(context.environment.get("BUDDY_AGENT_CREDENTIAL_FILE"), str(credential))
+            self.assertEqual(context.environment.get("HMB_AGENT_CREDENTIAL_FILE"), str(credential))
 
     def test_different_tasks_prepare_isolated_native_roots(self):
         before = registry_adapter("dsh").native_resume

@@ -116,7 +116,7 @@ class ServiceError(BoardError):
 
 def get_state_dir(state_dir: str | Path | None = None) -> Path:
     return Path(
-        state_dir or os.environ.get("BUDDY_STATE_DIR") or home.default_state_dir()
+        state_dir or os.environ.get("HMB_STATE_DIR") or home.default_state_dir()
     ).expanduser().resolve()
 
 
@@ -307,7 +307,7 @@ def _cold_start_preflight(directory: Path) -> None:
         else:
             # State paths need not fit sockaddr_un; C-Two also uses short private
             # IPC names. Keep the probe independent of a deeply nested checkout.
-            socket_directory = Path(tempfile.mkdtemp(prefix='buddy-ipc-'))
+            socket_directory = Path(tempfile.mkdtemp(prefix='hey-my-buddy-ipc-'))
             address = str(socket_directory / 's')
             listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
             connector = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
@@ -387,15 +387,15 @@ def _ensure_service(directory: Path, *, resource: str = "control") -> dict:
 
         # Cold start installs and runs from the content-addressed stable runtime, so
         # the default path never falls back to the replaceable plugin cache. Only an
-        # explicit BUDDY_DEV_SOURCE=1 development/test run executes from the checkout,
+        # explicit HMB_DEV_SOURCE=1 development/test run executes from the checkout,
         # and that reports stable=false.
         target = runtime.launch_target(log_path=directory / "runtime-install.log")
         from ..install.launcher import launch_defaults, service_environment, write_active_runtime
         # The daemon is a service process: it is built from the explicit allowlist,
         # not from the Host session that happened to start it.
         env = {**launch_defaults(directory), **service_environment()}
-        env.update(BUDDY_STATE_DIR=str(directory), C2_RELAY_ANCHOR_ADDRESS="", C2_ENV_FILE="")
-        env["BUDDY_RUNTIME_IDENTITY"] = target["identity"]
+        env.update(HMB_STATE_DIR=str(directory), C2_RELAY_ANCHOR_ADDRESS="", C2_ENV_FILE="")
+        env["HMB_RUNTIME_IDENTITY"] = target["identity"]
         if target["pythonPath"]:
             env["PYTHONPATH"] = target["pythonPath"] + (
                 os.pathsep + env["PYTHONPATH"] if env.get("PYTHONPATH") else ""
@@ -403,7 +403,7 @@ def _ensure_service(directory: Path, *, resource: str = "control") -> dict:
         else:
             env.pop("PYTHONPATH", None)
         if target["stable"]:
-            env["BUDDY_RUNTIME"] = target["runtime"]["runtimeDir"]
+            env["HMB_RUNTIME"] = target["runtime"]["runtimeDir"]
         log_fd = os.open(directory / "control.log", os.O_CREAT | os.O_APPEND | os.O_WRONLY, 0o600)
         try:
             child = subprocess.Popen(
@@ -415,7 +415,7 @@ def _ensure_service(directory: Path, *, resource: str = "control") -> dict:
                 start_new_session=True,
                 close_fds=True,
             )
-            threading.Thread(target=child.wait, name="buddy-daemon-reaper", daemon=True).start()
+            threading.Thread(target=child.wait, name="hey-my-buddy-daemon-reaper", daemon=True).start()
         finally:
             os.close(log_fd)
         # A first cold start may install a runtime before the daemon exists.

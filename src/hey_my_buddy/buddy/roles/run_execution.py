@@ -306,8 +306,8 @@ def worker_request(control: dict, module):
         binding = module.prepare_services(
             invocation_root=invocation_root, identity=identity, input_sha256=input_hash(turn_input),
             attention_path=attention_path,
-            session_tools=worker_services.session_tools(), completion_tool="buddy_finish_turn",
-            inquiry=inquiry, inquiry_tools=("buddy_checkpoint", "buddy_answer_inquiry"),
+            session_tools=worker_services.session_tools(), completion_tool="hey_my_buddy_finish_turn",
+            inquiry=inquiry, inquiry_tools=("hey_my_buddy_checkpoint", "hey_my_buddy_answer_inquiry"),
             validate_outcome=validate_outcome,
             native_stderr=str(Path(control["directory"]) / "native.stderr.log"))
         prompt = worker_services.micro_task_prompt(
@@ -577,7 +577,7 @@ class WorkerRunExecutor:
             raise BoardError("INVALID_ARGUMENT", "Coding requires an explicit turn resume mode", harness=self.name)
         if context.turn_input.get("resumeMode") == "native-session" and not self.description.native_resume:
             raise BoardError("INVALID_ARGUMENT", "This harness does not support native-session resume", harness=self.name)
-        state = context.environment["BUDDY_STATE_DIR"]
+        state = context.environment["HMB_STATE_DIR"]
         if context.turn_output_file().exists():
             raise BoardError("CONFLICT", "The attempt already has a turn result; it cannot execute twice", harness=self.name)
         turn_io.prepare_turn(context)
@@ -718,7 +718,7 @@ def discover_models(name: str) -> dict:
             module = run_seam(name)
             if module is None or not callable(getattr(module, "run_discovery", None)):
                 raise BoardError("CATALOG_UNAVAILABLE", "The harness has no registered discovery operation", harness=name)
-            directory = Path(tempfile.mkdtemp(prefix="buddy-" + name + "-catalog-"))
+            directory = Path(tempfile.mkdtemp(prefix="hey-my-buddy-" + name + "-catalog-"))
             control = directory / _CONTROL
             private_json(control, {"operation": "discover", "harness": name,
                                    "privateRoot": str(directory), "nativeRoot": str(directory / "native"),

@@ -12,7 +12,7 @@ Per-policy JSON records are printed, followed by actual group-stop evidence.
 Native stderr is retained in the private run directory; it is not printed.
 
 Only initialize, initialized and command/exec are sent: no thread, turn, model
-call, login, blackboard access or Buddy service start occurs. Codex loads its
+call, login, blackboard access or hey-my-buddy service start occurs. Codex loads its
 normal native configuration; this probe does not read or edit credential or
 configuration files and creates no replacement configuration home. The report
 does not certify a policy's expected permissions: refusals and failures are

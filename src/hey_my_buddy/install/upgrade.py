@@ -82,20 +82,47 @@ def idle_snapshot(state: Path, *, event_head: int | None = None) -> dict:
         return {**backup.database_snapshot(connection, event_head=event_head), 'schema': int(schema[0])}
 
 
+def _legacy_runtime(target: Path) -> bool:
+    """The installed 0.34.1 generation still reads the old environment names."""
+    commit = runtime.read_ready(target).get('sourceCommit')
+    return commit == '4b7f494670efe7a3fe053062f16cce9312a5e042'
+
+
+def _write_active_runtime(state: Path, target: Path, settings: dict | None = None) -> None:
+    from .launcher import write_active_runtime
+    if settings is not None and _legacy_runtime(target):
+        settings = {'BUDDY_' + key.removeprefix('HMB_'): value for key, value in settings.items()}
+    write_active_runtime(state, target, settings)
+
+
 def _environment(state: Path, target: Path) -> dict:
     from .launcher import service_environment
     # A service started by the upgrade coordinator inherits only the explicit
     # service allowlist; the journal carries forward the operator's launch settings.
     env = service_environment()
-    for key in ('BUDDY_DEV_SOURCE', 'BUDDY_WORKER_STATE', 'BUDDY_WORKER_ID'):
+    for key in ('HMB_DEV_SOURCE', 'HMB_WORKER_STATE', 'HMB_WORKER_ID'):
         env.pop(key, None)
+    legacy = _legacy_runtime(target)
     marker = state / 'upgrade.json'
     if marker.exists():
         preserved = json.loads(marker.read_text()).get('environment', {})
-        for key in ('BUDDY_MAX_CONCURRENT', 'BUDDY_WAIT_CAPACITY'):
+        for key in ('HMB_MAX_CONCURRENT', 'HMB_WAIT_CAPACITY'):
             if key in preserved:
                 env[key] = str(preserved[key])
-    env.update(BUDDY_STATE_DIR=str(state), BUDDY_RUNTIME=str(target), BUDDY_RUNTIME_IDENTITY='runtime:' + target.name)
+    else:
+        from .launcher import read_private
+        preserved = (read_private(state / 'launch-settings.json') or {}).get('environment', {})
+        for key in ('HMB_MAX_CONCURRENT', 'HMB_WAIT_CAPACITY'):
+            stored_key = 'BUDDY_' + key.removeprefix('HMB_') if legacy else key
+            if stored_key in preserved:
+                env.setdefault(key, str(preserved[stored_key]))
+    env.update(HMB_STATE_DIR=str(state), HMB_RUNTIME_ROOT=str(target.parent),
+               HMB_RUNTIME=str(target), HMB_RUNTIME_IDENTITY='runtime:' + target.name)
+    if legacy:
+        # Only the installed 0.34.1 process receives its former interface.
+        for key in tuple(env):
+            if key.startswith('HMB_'):
+                env['BUDDY_' + key.removeprefix('HMB_')] = env.pop(key)
     return env
 
 
@@ -282,7 +309,7 @@ def archive_read(state: Path):
     The admission samples may race a writer; the authoritative destructive check
     runs after detachment under both owner locks.
     """
-    with tempfile.TemporaryDirectory(prefix='buddy-upgrade-read-') as raw:
+    with tempfile.TemporaryDirectory(prefix='hey-my-buddy-upgrade-read-') as raw:
         trial = Path(raw) / 'board.sqlite3'
         backup._private_copy(state / 'board.sqlite3', trial)
         wal = state / 'board.sqlite3-wal'
@@ -472,13 +499,13 @@ def _skill_paths(journal: dict) -> tuple[Path, Path, Path] | None:
     try:
         target, staged, previous = (Path(journal[name]) for name in ('skillTarget', 'skillStage', 'skillPrevious'))
         expected = agent_skills_home().resolve() / SKILL
-        suffix = staged.name.removeprefix('.buddy-upgrade-stage-')
+        suffix = staged.name.removeprefix('.hey-my-buddy-upgrade-stage-')
         if (not all(path.is_absolute() and not path.is_symlink() for path in (target, staged, previous))
                 or target.resolve() != expected or staged.parent.resolve() != expected.parent
                 or previous.parent.resolve() != expected.parent
                 or re.fullmatch(r'[0-9a-f]{32}', suffix) is None
-                or staged.name != '.buddy-upgrade-stage-' + suffix
-                or previous.name != '.buddy-upgrade-previous-' + suffix):
+                or staged.name != '.hey-my-buddy-upgrade-stage-' + suffix
+                or previous.name != '.hey-my-buddy-upgrade-previous-' + suffix):
             raise ValueError('unsafe skill paths')
         if journal.get('claudeLink') and Path(journal['claudeLink']).absolute() != claude_skills_home() / SKILL:
             raise ValueError('unsafe Claude link')
@@ -545,13 +572,71 @@ def _finish_skill(journal: dict) -> None:
             pass
 
 
+def _cleanup_legacy_skill() -> dict:
+    """Retire only the owned 0.34.1 skill paths after the new runtime is active."""
+    from .skill_install import agent_skills_home, claude_skills_home
+    old = agent_skills_home() / 'buddy'
+    link = claude_skills_home() / 'buddy'
+    result = {'agent': {'path': str(old)}, 'claude': {'path': str(link)}}
+    if private_dirs.linked(old) or (old.exists() and not old.is_dir()):
+        result['agent']['status'] = 'conflict'
+    elif old.is_dir():
+        marker_path = old / 'skill.json'
+        if marker_path.is_symlink():
+            marker = None
+        else:
+            try:
+                marker = json.loads(marker_path.read_text())
+            except (OSError, ValueError):
+                marker = None
+        if not isinstance(marker, dict) or marker.get('name') != 'buddy':
+            result['agent']['status'] = 'conflict'
+        else:
+            try:
+                shutil.rmtree(old)
+                result['agent']['status'] = 'removed'
+            except OSError as error:
+                result['agent'].update(status='error', error=str(error))
+    else:
+        result['agent']['status'] = 'missing'
+    # A foreign directory at the old canonical path makes its Claude link
+    # foreign too; keep both for the owner to inspect.
+    if result['agent']['status'] == 'conflict':
+        result['claude']['status'] = 'conflict' if link.exists() or link.is_symlink() else 'missing'
+    elif link.is_symlink():
+        if Path(os.path.realpath(link)) != Path(os.path.realpath(old)):
+            result['claude']['status'] = 'conflict'
+        else:
+            try:
+                link.unlink()
+                result['claude']['status'] = 'removed'
+            except OSError as error:
+                result['claude'].update(status='error', error=str(error))
+    else:
+        result['claude']['status'] = 'conflict' if link.exists() else 'missing'
+    return result
+
+
+def _report_legacy_cleanup(state: Path, journal: dict) -> dict:
+    try:
+        result = _cleanup_legacy_skill()
+    except Exception as error:
+        result = {'status': 'error', 'error': str(error)}
+    journal['legacySkillCleanup'] = result
+    try:
+        write_journal(state / 'upgrade-last.json', journal)
+    except Exception:
+        pass
+    return result
+
+
 def upgrade(params: dict, *, skill_source: Path | None = None, skill_target: Path | None = None) -> dict:
     from ..blackboard.store.store import BoardStore
     schemas.reject_unknown(params, set(), 'upgrade')
-    if os.environ.get('BUDDY_AGENT_CREDENTIAL') or os.environ.get('BUDDY_AGENT_CREDENTIAL_FILE'):
+    if os.environ.get('HMB_AGENT_CREDENTIAL') or os.environ.get('HMB_AGENT_CREDENTIAL_FILE'):
         raise BoardError('UNAUTHORIZED', 'A Worker cannot upgrade its owning service')
     state = get_state_dir().resolve()
-    root = Path(os.environ.get('BUDDY_RUNTIME_ROOT') or runtime.DEFAULT_RUNTIME_ROOT).resolve()
+    root = Path(os.environ.get('HMB_RUNTIME_ROOT') or runtime.DEFAULT_RUNTIME_ROOT).resolve()
     if (state / 'upgrade.json').exists():
         with file_lock(state / 'upgrade.lock'), file_lock(state / 'control-start.lock'):
             return recover(state, root)
@@ -567,7 +652,7 @@ def upgrade(params: dict, *, skill_source: Path | None = None, skill_target: Pat
     health_before = probe(state, previous)
     if health_before is None or health_before.get('serviceId') != endpoint.get('serviceId') or health_before.get('pid') != endpoint.get('pid'):
         raise BoardError('UPGRADE_IDENTITY_CHANGED', 'The live installed service does not match its recorded runtime identity')
-    preserved = {'BUDDY_MAX_CONCURRENT':str(health_before['maxConcurrent']), 'BUDDY_WAIT_CAPACITY':str(health_before['waitCapacity'])}
+    preserved = {'HMB_MAX_CONCURRENT':str(health_before['maxConcurrent']), 'HMB_WAIT_CAPACITY':str(health_before['waitCapacity'])}
     runtime_settings = {'maxConcurrent':health_before['maxConcurrent'], 'waitCapacity':health_before['waitCapacity']}
     require_archive_readiness(state)
     before = idle_snapshot(state)
@@ -601,12 +686,12 @@ def upgrade(params: dict, *, skill_source: Path | None = None, skill_target: Pat
         if skill_source is not None:
             if skill_target is None or skill_target.is_symlink():
                 raise BoardError('SKILL_TARGET_CONFLICT', 'Upgrade skill target is missing or linked')
-            from .skill_install import _marker, _is_buddy_skill
-            if skill_target.exists() and not (_marker(skill_target) or _is_buddy_skill(skill_target)):
-                raise BoardError('SKILL_TARGET_CONFLICT', 'Upgrade skill target is not a buddy skill')
+            from .skill_install import _marker, _is_product_skill
+            if skill_target.exists() and not (_marker(skill_target) or _is_product_skill(skill_target)):
+                raise BoardError('SKILL_TARGET_CONFLICT', 'Upgrade skill target is not a hey-my-buddy skill')
             suffix = uuid.uuid4().hex
-            skill_stage = skill_target.with_name(f'.buddy-upgrade-stage-{suffix}')
-            skill_previous = skill_target.with_name(f'.buddy-upgrade-previous-{suffix}')
+            skill_stage = skill_target.with_name(f'.hey-my-buddy-upgrade-stage-{suffix}')
+            skill_previous = skill_target.with_name(f'.hey-my-buddy-upgrade-previous-{suffix}')
             shutil.copytree(skill_source, skill_stage, symlinks=True)
             from .skill_install import write_runtime_hint
             write_runtime_hint(skill_stage, target)
@@ -672,13 +757,16 @@ def upgrade(params: dict, *, skill_source: Path | None = None, skill_target: Pat
             write_journal(marker, journal)
             _publish_skill(journal)
             write_journal(marker, journal)
-            from .launcher import write_active_runtime
-            write_active_runtime(state, target, preserved)
+            _write_active_runtime(state, target, preserved)
             journal.update(phase='verified', verification=evidence)
             write_journal(marker, journal)
             write_journal(state / 'upgrade-last.json', journal)
-            clear_journal(marker)
             _finish_skill(journal)
+            legacy_cleanup = _report_legacy_cleanup(state, journal)
+            try:
+                clear_journal(marker)
+            except OSError as error:
+                legacy_cleanup['journalError'] = str(error)
             try:
                 from ..blackboard.tasks.storage import prune_old_runtimes
                 write_journal(state / 'runtime-retention.json', {'current':target.name, 'previous':previous.name})
@@ -687,7 +775,7 @@ def upgrade(params: dict, *, skill_source: Path | None = None, skill_target: Pat
                 pruning = {'complete':False, 'error':getattr(cleanup_error, 'code', type(cleanup_error).__name__), 'note':'Upgrade verified; cleanup can be retried independently'}
             return {'upgraded':True, 'backup':backed_up, 'verification':evidence, 'previousRuntime':previous.name,
                     'archive': backed_up if journal.get('archivePath') else None,
-                    'rollback':None, 'runtimePruning':pruning}
+                    'rollback':None, 'runtimePruning':pruning, 'legacySkillCleanup':legacy_cleanup}
         except Exception as failure:
             reason = _failure_reason(failure)
             try:
@@ -695,8 +783,7 @@ def upgrade(params: dict, *, skill_source: Path | None = None, skill_target: Pat
                 if active == previous and not detached:
                     surviving = probe(state, previous)
                     if surviving is not None:
-                        from .launcher import write_active_runtime
-                        write_active_runtime(state, previous, preserved)
+                        _write_active_runtime(state, previous, preserved)
                         journal.update(phase='not-switched', failure=reason)
                         write_journal(state / 'upgrade-last.json', journal)
                         clear_journal(marker)
@@ -713,8 +800,7 @@ def upgrade(params: dict, *, skill_source: Path | None = None, skill_target: Pat
                 # and restart the previous runtime without restoring an older DB.
                 recovered = start(state, previous)
                 evidence = verify_started(state, previous, recovered, before) if backed_up else {'runtimeContentId':previous.name, 'workPreserved':True}
-                from .launcher import write_active_runtime
-                write_active_runtime(state, previous, preserved)
+                _write_active_runtime(state, previous, preserved)
                 journal.update(phase='rolled-back', rollback=evidence, failure=reason)
                 write_journal(state / 'upgrade-last.json', journal)
                 clear_journal(marker)
@@ -736,7 +822,6 @@ def recover(state: Path, root: Path) -> dict:
     marker = state / 'upgrade.json'
     journal = json.loads(marker.read_text())
     _skill_paths(journal)  # Validate destructive recovery paths before touching a service.
-    from .launcher import write_active_runtime
     previous, target = Path(journal['previous']), Path(journal['target'])
     for path in (previous, target):
         if path.parent.resolve() != root or path.is_symlink() or not runtime.is_ready(path):
@@ -746,12 +831,16 @@ def recover(state: Path, root: Path) -> dict:
     if journal.get('phase') == 'verified' and target_health is not None:
         evidence = verify_started(state, target, target_health, journal.get('expected', journal['before']))
         _verify_skill_generation(journal, target, target_health)
-        write_active_runtime(state, target, journal.get('environment'))
+        _write_active_runtime(state, target, journal.get('environment'))
         write_journal(state / 'upgrade-last.json', journal)
         _finish_skill(journal)
-        clear_journal(marker)
+        legacy_cleanup = _report_legacy_cleanup(state, journal)
+        try:
+            clear_journal(marker)
+        except OSError as error:
+            legacy_cleanup['journalError'] = str(error)
         return {'upgraded':True, 'recoveredJournal':True, 'verification':evidence,
-                'archive': journal.get('archivePath')}
+                'archive': journal.get('archivePath'), 'legacySkillCleanup':legacy_cleanup}
     if journal.get('phase') == 'preflight':
         if target_health is not None:
             raise BoardError('UPGRADE_RECOVERY_REQUIRED', 'Unexpected target owner during preflight recovery')
@@ -761,7 +850,7 @@ def recover(state: Path, root: Path) -> dict:
             # No backup/cutover happened: preserve live workers and any work that
             # raced the old-version preflight rather than attempting to retire it.
             previous_health = start(state, previous)
-        write_active_runtime(state, previous, journal.get('environment'))
+        _write_active_runtime(state, previous, journal.get('environment'))
         _restore_skill(journal)
         clear_journal(marker)
         return {'upgraded':False, 'recoveredJournal':True, 'rollback':{'runtimeContentId':previous.name,'workPreserved':True}}
@@ -791,7 +880,7 @@ def recover(state: Path, root: Path) -> dict:
         before = idle_snapshot(state)
     health = start(state, previous)
     evidence = verify_started(state, previous, health, before)
-    write_active_runtime(state, previous, journal.get('environment'))
+    _write_active_runtime(state, previous, journal.get('environment'))
     _restore_skill(journal)
     journal.update(phase='rolled-back', rollback=evidence)
     write_journal(state / 'upgrade-last.json', journal)

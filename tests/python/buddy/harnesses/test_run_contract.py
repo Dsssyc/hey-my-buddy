@@ -52,7 +52,7 @@ def full_request(tmp: Path) -> rc.RunRequest:
         output_schema=rc.FrozenJson({"type": "object", "required": ["answer"],
                                      "properties": {"answer": {"type": "string"}}}),
         budget=rc.RunBudget(timeout_seconds=60),
-        session_services=(rc.SessionService(tool_names=["mcp__finish__buddy_finish_turn"]),),
+        session_services=(rc.SessionService(tool_names=["mcp__finish__hey_my_buddy_finish_turn"]),),
         capture_evidence=True)
 
 
@@ -241,7 +241,7 @@ class CodecRoundtripTests(unittest.TestCase):
                 rc.decode_run_request(request.to_payload() | fields)
 
     def setUp(self):
-        self.temporary = tempfile.TemporaryDirectory(prefix="buddy-run-contract-")
+        self.temporary = tempfile.TemporaryDirectory(prefix="hey-my-buddy-run-contract-")
         self.addCleanup(self.temporary.cleanup)
         self.root = Path(self.temporary.name)
 
@@ -545,7 +545,7 @@ class FreezingTests(unittest.TestCase):
         mutable_identity = dict(IDENTITY)
         requested = {"provider": "fixture-provider", "model": "fixture-model", "effort": "off"}
         schema = {"type": "object", "properties": {"answer": {"type": "string"}}}
-        tools = ["mcp__finish__buddy_finish_turn"]
+        tools = ["mcp__finish__hey_my_buddy_finish_turn"]
         request = rc.RunRequest(
             identity=rc.RunIdentity.from_payload(mutable_identity), harness="codex",
             buddy=rc.RunBuddy.from_payload(requested), cwd="/tmp/checkout",
@@ -558,12 +558,12 @@ class FreezingTests(unittest.TestCase):
         mutable_identity["inputSha256"] = "f" * 64
         requested["model"] = "changed"
         schema["properties"]["answer"]["type"] = "changed"
-        tools.append("mcp__finish__buddy_checkpoint")
+        tools.append("mcp__finish__hey_my_buddy_checkpoint")
         self.assertEqual(request.identity.attempt_id, "attempt-fixture")
         self.assertEqual(request.identity.input_sha256, "a" * 64)
         self.assertEqual(request.buddy.model, "fixture-model")
         self.assertEqual(request.output_schema.value["properties"]["answer"]["type"], "string")
-        self.assertEqual(request.session_services[0].tool_names, ("mcp__finish__buddy_finish_turn",))
+        self.assertEqual(request.session_services[0].tool_names, ("mcp__finish__hey_my_buddy_finish_turn",))
 
     def test_a_dict_parsed_value_is_frozen_on_construction(self):
         mutable = {"list": [1]}
@@ -590,7 +590,7 @@ class FreezingTests(unittest.TestCase):
         request = full_request(Path("/tmp"))
         with self.assertRaises(ValidationError):
             request.budget.timeout_seconds = 1
-        service = rc.SessionService(tool_names=["mcp__finish__buddy_finish_turn"])
+        service = rc.SessionService(tool_names=["mcp__finish__hey_my_buddy_finish_turn"])
         with self.assertRaises(TypeError):
             service.tool_names[0] = "changed.example"
         with self.assertRaises(AttributeError):

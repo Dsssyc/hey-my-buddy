@@ -27,7 +27,7 @@ import type { Snapshot } from "./types";
  * the resulting report and proves the emitted tree is deterministic, so the
  * guard is part of the normal `hey_my_buddy.cli.checks` run.
  *
- * With no `BUDDY_PREVIEW_FIXTURES` in the environment (a plain `npm test`) the
+ * With no `HMB_PREVIEW_FIXTURES` in the environment (a plain `npm test`) the
  * script is run into a private temporary directory first.
  */
 
@@ -57,13 +57,13 @@ const previewScript = join(repositoryRoot, "tests", "probes", "macro_task_consol
 
 /** The preview script's emitted tree, generated once for this test file. */
 function resolveFixtures(): { directory: string; generated: boolean } {
-  const configured = process.env.BUDDY_PREVIEW_FIXTURES;
+  const configured = process.env.HMB_PREVIEW_FIXTURES;
   if (configured) return { directory: resolve(configured), generated: false };
-  const python = process.env.BUDDY_PREVIEW_PYTHON ?? "python3";
-  const directory = mkdtempSync(join(tmpdir(), "buddy-preview-"));
+  const python = process.env.HMB_PREVIEW_PYTHON ?? "python3";
+  const directory = mkdtempSync(join(tmpdir(), "hey-my-buddy-preview-"));
   const previewEnvironment = { ...process.env };
-  for (const key of ["BUDDY_STATE_DIR", "BUDDY_RUNTIME_ROOT", "BUDDY_RUNTIME", "BUDDY_RUNTIME_IDENTITY",
-    "BUDDY_WORKER_STATE", "BUDDY_WORKER_ID", "BUDDY_AGENT_CREDENTIAL", "BUDDY_AGENT_CREDENTIAL_FILE",
+  for (const key of ["HMB_STATE_DIR", "HMB_RUNTIME_ROOT", "HMB_RUNTIME", "HMB_RUNTIME_IDENTITY",
+    "HMB_WORKER_STATE", "HMB_WORKER_ID", "HMB_AGENT_CREDENTIAL", "HMB_AGENT_CREDENTIAL_FILE",
     "VIRTUAL_ENV", "UV_PROJECT_ENVIRONMENT"]) delete previewEnvironment[key];
   const result = spawnSync(python, [previewScript, "--emit-fixtures", directory], {
     cwd: repositoryRoot, encoding: "utf8", env: previewEnvironment,
@@ -78,7 +78,7 @@ const fixtures = resolveFixtures();
 const fixtureDir = fixtures.directory;
 afterAll(() => { if (fixtures.generated) rmSync(fixtureDir, { recursive: true, force: true }); });
 
-const reportPath = process.env.BUDDY_PREVIEW_REPORT ?? "";
+const reportPath = process.env.HMB_PREVIEW_REPORT ?? "";
 const manifest = JSON.parse(readFileSync(join(fixtureDir, "manifest.json"), "utf8")) as Manifest;
 
 function bodyFor(entry: ManifestEntry): unknown {

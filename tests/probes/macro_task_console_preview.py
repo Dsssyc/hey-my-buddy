@@ -6,9 +6,9 @@ Safety boundary:
 * Every ``/api/`` byte is a synthetic fixture declared in this file. Nothing is
   read from a board, state directory, credential or running service, and no
   daemon, Worker, model call or production connection is started. Responses are
-  labelled by the ``X-Buddy-Preview: synthetic-fixture-data`` header.
+  labelled by the ``X-Hey-My-Buddy-Preview: synthetic-fixture-data`` header.
 * The server binds ``127.0.0.1`` only (ephemeral port by default).
-* It never reads or sets a browser cookie. ``buddy_console_session`` is scoped
+* It never reads or sets a browser cookie. ``hey_my_buddy_console_session`` is scoped
   to host ``127.0.0.1`` without a port, so emitting one here could clobber a
   real private console on another port; the fixed synthetic session and CSRF
   strings exist only inside the JSON snapshot.
@@ -77,7 +77,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
 
-PREVIEW_HEADER = "X-Buddy-Preview"
+PREVIEW_HEADER = "X-Hey-My-Buddy-Preview"
 PREVIEW_VALUE = "synthetic-fixture-data"
 SCENARIOS = ("normal", "readonly", "truncated", "error")
 SYNTHETIC_CSRF = "synthetic-preview-csrf-not-a-credential"
@@ -1583,7 +1583,7 @@ def endpoint_lines(port: int) -> tuple[str, ...]:
 class PreviewHTTPServer(ThreadingHTTPServer):
     daemon_threads = True
     allow_reuse_address = True
-    server_version = "buddy-console-preview"
+    server_version = "hey-my-buddy-console-preview"
     sys_version = ""
 
     def __init__(self, address, *, assets: Path, scenario: str, verbose: bool):
@@ -1608,7 +1608,7 @@ class PreviewHandler(BaseHTTPRequestHandler):
         self.send_header("Content-Length", str(len(body)))
         self.send_header("Cache-Control", cache)
         self.send_header(PREVIEW_HEADER, PREVIEW_VALUE)
-        self.send_header("X-Buddy-Preview-Scenario", self.server.scenario)
+        self.send_header("X-Hey-My-Buddy-Preview-Scenario", self.server.scenario)
         self.send_header("Referrer-Policy", "no-referrer")
         self.send_header("X-Content-Type-Options", "nosniff")
         self.send_header("X-Frame-Options", "DENY")
@@ -1707,7 +1707,7 @@ class PreviewHandler(BaseHTTPRequestHandler):
             return
         if self._path() != "/api/command":
             return self._error(404, "NOT_FOUND", "Not found")
-        if (self.headers.get("X-Buddy-CSRF") or "") != SYNTHETIC_CSRF:
+        if (self.headers.get("X-Hey-My-Buddy-CSRF") or "") != SYNTHETIC_CSRF:
             return self._error(403, "FORBIDDEN", "The preview accepts only its fixed synthetic CSRF header")
         origin = self.headers.get("Origin")
         if origin is not None and origin != f"http://{self.headers.get('Host')}":
@@ -2359,7 +2359,7 @@ def emit_fixtures(directory: Path) -> int:
 # --------------------------------------------------------------------------- #
 def print_banner(server: PreviewHTTPServer, assets: Path) -> None:
     print("=" * 78)
-    print("SYNTHETIC PREVIEW ONLY — not a Buddy board; no daemon, Worker, model call or")
+    print("SYNTHETIC PREVIEW ONLY — not a hey-my-buddy board; no daemon, Worker, model call or")
     print("production connection. Every /api/ response is fixture data labelled by the")
     print(f"{PREVIEW_HEADER}: {PREVIEW_VALUE} response header.")
     print("=" * 78)
@@ -2410,7 +2410,7 @@ def smoke(assets: Path, scenario: str) -> int:
     failures: list[str] = []
 
     def call(method: str, path: str, *, payload: dict | None = None) -> tuple[int, dict, dict]:
-        headers = {"X-Buddy-CSRF": SYNTHETIC_CSRF, "Origin": base, "Content-Type": "application/json"}
+        headers = {"X-Hey-My-Buddy-CSRF": SYNTHETIC_CSRF, "Origin": base, "Content-Type": "application/json"}
         request = urllib.request.Request(base + path, method=method, headers=headers)
         if payload is not None:
             request.data = json.dumps(payload).encode()

@@ -44,12 +44,12 @@ GIT_ENV = {
 
 
 def private_environment(case):
-    removed = {"BUDDY_STATE_DIR", "BUDDY_RUNTIME_ROOT", "BUDDY_RUNTIME", "BUDDY_RUNTIME_IDENTITY",
-               "BUDDY_WORKER_STATE", "BUDDY_WORKER_ID", "BUDDY_AGENT_CREDENTIAL", "BUDDY_AGENT_CREDENTIAL_FILE",
+    removed = {"HMB_STATE_DIR", "HMB_RUNTIME_ROOT", "HMB_RUNTIME", "HMB_RUNTIME_IDENTITY",
+               "HMB_WORKER_STATE", "HMB_WORKER_ID", "HMB_AGENT_CREDENTIAL", "HMB_AGENT_CREDENTIAL_FILE",
                "VIRTUAL_ENV", "UV_PROJECT_ENVIRONMENT"}
     environment = {key: value for key, value in os.environ.items() if key not in removed}
-    environment.update(BUDDY_STATE_DIR=str(case.directory), BUDDY_RUNTIME_ROOT=str(case.directory / "runtime"),
-                       BUDDY_DEV_SOURCE="1")
+    environment.update(HMB_STATE_DIR=str(case.directory), HMB_RUNTIME_ROOT=str(case.directory / "runtime"),
+                       HMB_DEV_SOURCE="1")
     case.enterContext(patch.dict(os.environ, environment, clear=True))
 
 
@@ -283,10 +283,10 @@ class RealAdapterTests(RealWorkspaceTestCase):
     @staticmethod
     def _qualified_tools(attempt_id: str) -> tuple[str, str, str]:
         """The mount's mechanical qualified names, derived exactly as the module does."""
-        server = "buddy_" + hashlib.sha256(attempt_id.encode()).hexdigest()[:16]
-        return (f"mcp__{server}__buddy_checkpoint",
-                f"mcp__{server}__buddy_answer_inquiry",
-                f"mcp__{server}__buddy_finish_turn")
+        server = "hey_my_buddy_" + hashlib.sha256(attempt_id.encode()).hexdigest()[:16]
+        return (f"mcp__{server}__hey_my_buddy_checkpoint",
+                f"mcp__{server}__hey_my_buddy_answer_inquiry",
+                f"mcp__{server}__hey_my_buddy_finish_turn")
 
     def _context(self, run_id: str, manifest: dict, *, index: int = 1, record: Path) -> ExecutionContext:
         attempt_id = f"attempt-{index}"
@@ -295,12 +295,12 @@ class RealAdapterTests(RealWorkspaceTestCase):
         home = self.directory / f"agent-home-{index}"
         home.mkdir(mode=0o700, exist_ok=True)
         environment = {key: value for key, value in os.environ.items()
-                       if not key.startswith("BUDDY_") and key not in ("VIRTUAL_ENV", "UV_PROJECT_ENVIRONMENT", "HOME")}
+                       if not key.startswith("HMB_") and key not in ("VIRTUAL_ENV", "UV_PROJECT_ENVIRONMENT", "HOME")}
         environment.update(
-            HOME=str(home), BUDDY_STATE_DIR=str(self.directory),
-            BUDDY_RUNTIME_ROOT=str(self.directory / "runtime"), BUDDY_DEV_SOURCE="1",
+            HOME=str(home), HMB_STATE_DIR=str(self.directory),
+            HMB_RUNTIME_ROOT=str(self.directory / "runtime"), HMB_DEV_SOURCE="1",
             PYTHONPATH=str(REPOSITORY_ROOT / "src") + os.pathsep + str(REPOSITORY_ROOT / "tests" / "python"),
-            BUDDY_HARNESS_RECORD_FILE=str(record),
+            HMB_HARNESS_RECORD_FILE=str(record),
         )
         return ExecutionContext(
             task_id=run_id,

@@ -109,7 +109,7 @@ class ModelFactsTestCase(EvaluationTestCase):
 
     # -- fixture helpers -----------------------------------------------------
     def fixture_path(self) -> Path:
-        return Path(os.environ["BUDDY_MODEL_FACTS_FILE"])
+        return Path(os.environ["HMB_MODEL_FACTS_FILE"])
 
     def write_fixture(self, payload: dict | None = None, *, raw: str | None = None) -> Path:
         path = self.fixture_path()
@@ -508,7 +508,7 @@ class ModelFactsTestCase(EvaluationTestCase):
 
 
 class ModelFactsClockTestCase(BoardTestCase):
-    """The refresh boundary a later buddy-plane caller reuses, with a fake clock."""
+    """The refresh boundary a later hey-my-buddy-plane caller reuses, with a fake clock."""
 
     def test_refresh_uses_the_injected_clock_and_updates_the_dated_snapshot(self):
         clock = FakeClock()

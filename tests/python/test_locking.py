@@ -12,7 +12,7 @@ from hey_my_buddy import locking
 
 class LockingTests(unittest.TestCase):
     def setUp(self):
-        self.path = Path(tempfile.mkdtemp(prefix="buddy-lock-")) / "owner.lock"
+        self.path = Path(tempfile.mkdtemp(prefix="hey-my-buddy-lock-")) / "owner.lock"
         self.fds = []
 
     def tearDown(self):

@@ -34,11 +34,11 @@ class FocusedChecksTests(unittest.TestCase):
                 "import os, unittest\nfrom pathlib import Path\n"
                 "class Case(unittest.TestCase):\n"
                 "    def test_private_environment(self):\n"
-                "        state = Path(os.environ['BUDDY_STATE_DIR'])\n"
+                "        state = Path(os.environ['HMB_STATE_DIR'])\n"
                 "        self.assertEqual(Path(os.environ['TMPDIR']), state.parent / 'tmp')\n"
-                "        self.assertEqual(Path(os.environ['BUDDY_RUNTIME_ROOT']), state.parent / 'runtime')\n"
-                "        self.assertNotIn('BUDDY_RUNTIME', os.environ)\n"
-                "        self.assertNotIn('BUDDY_AGENT_CREDENTIAL', os.environ)\n"
+                "        self.assertEqual(Path(os.environ['HMB_RUNTIME_ROOT']), state.parent / 'runtime')\n"
+                "        self.assertNotIn('HMB_RUNTIME', os.environ)\n"
+                "        self.assertNotIn('HMB_AGENT_CREDENTIAL', os.environ)\n"
                 "        self.assertEqual(Path.home().parent, state.parent.parent)\n"
                 f"        marker = Path({str(self.markers)!r}) / __name__\n"
                 "        self.assertFalse(marker.exists(), 'file ran twice')\n"
@@ -55,9 +55,9 @@ class FocusedChecksTests(unittest.TestCase):
         errors = io.StringIO()
         with (
             patch.object(checks, "__file__", str(self.root / "src/hey_my_buddy/cli/checks.py")),
-            patch.dict(os.environ, {"BUDDY_CHECKS_TMPDIR": str(self.temporary),
-                                  "BUDDY_RUNTIME": "/fixture/pinned-runtime",
-                                  "BUDDY_AGENT_CREDENTIAL": "fixture-credential"}),
+            patch.dict(os.environ, {"HMB_CHECKS_TMPDIR": str(self.temporary),
+                                  "HMB_RUNTIME": "/fixture/pinned-runtime",
+                                  "HMB_AGENT_CREDENTIAL": "fixture-credential"}),
             patch.object(checks, "_ps_argv_table", return_value=process_table),
             patch.object(checks, "_open_file_pids", return_value=(set(), None, True)),
             contextlib.redirect_stdout(output), contextlib.redirect_stderr(errors),
@@ -183,7 +183,7 @@ class SweepTests(unittest.TestCase):
         output = io.StringIO()
         with (patch.object(checks, "_ps_argv_table", return_value=table),
               patch.object(checks, "_open_file_pids", return_value=(set(), None, True)),
-              patch.dict(os.environ, {"BUDDY_CHECKS_TMPDIR": str(self.directory)}),
+              patch.dict(os.environ, {"HMB_CHECKS_TMPDIR": str(self.directory)}),
               contextlib.redirect_stdout(output), contextlib.redirect_stderr(io.StringIO())):
             with self.assertRaises(SystemExit) as result:
                 checks.main(["--sweep"])
@@ -198,7 +198,7 @@ class SweepTests(unittest.TestCase):
         outsider = self.directory / "other-root"
         outsider.mkdir()
         (outsider / "keep").write_text("untouched")
-        symlink = self.directory / "buddy-checks-link"
+        symlink = self.directory / "hey-my-buddy-checks-link"
         symlink.symlink_to(outsider, target_is_directory=True)
         lock = dirty / "supervisor.lock"
         lock.write_text("")
@@ -270,7 +270,7 @@ class SweepTests(unittest.TestCase):
         self.assertIn("sweep deleted 0, skipped 0, retained 0", output)
 
     def test_default_sweep_location_matches_root_creation_location(self):
-        environment = {key: value for key, value in os.environ.items() if key != "BUDDY_CHECKS_TMPDIR"}
+        environment = {key: value for key, value in os.environ.items() if key != "HMB_CHECKS_TMPDIR"}
         with patch.dict(os.environ, environment, clear=True):
             with patch.object(checks.sys, "platform", "darwin"):
                 self.assertEqual(checks.private_root_directory(), Path("/tmp"))

@@ -45,7 +45,7 @@ class NewSessionTest(AcpTestCase):
     def test_declared_mcp_server_is_mounted_over_the_wire(self):
         client = self.start_client()
         client.initialize(timeout=15.0)
-        servers = [{"name": "buddy-test", "command": sys.executable, "args": [str(MCP_STUB)],
+        servers = [{"name": "hey-my-buddy-test", "command": sys.executable, "args": [str(MCP_STUB)],
                     "env": []}]
         session = client.new_session(str(self.root), mcp_servers=servers, timeout=15.0)
         mounted = session["mountedMcp"][0]

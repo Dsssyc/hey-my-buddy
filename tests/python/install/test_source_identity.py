@@ -10,7 +10,7 @@ from hey_my_buddy.install.skill_package import source_commit
 
 class SourceIdentityTests(unittest.TestCase):
     def test_archive_identity_precedes_any_enclosing_git_repository(self):
-        with tempfile.TemporaryDirectory(prefix="buddy-source-identity-") as raw:
+        with tempfile.TemporaryDirectory(prefix="hey-my-buddy-source-identity-") as raw:
             root = Path(raw)
             (root / "src/hey_my_buddy").mkdir(parents=True)
             (root / "src/hey_my_buddy/build-info.json").write_text(json.dumps({"sourceCommit": "a" * 40}))
@@ -19,7 +19,7 @@ class SourceIdentityTests(unittest.TestCase):
                 git.assert_not_called()
 
     def test_unknown_archive_identity_stays_unknown(self):
-        with tempfile.TemporaryDirectory(prefix="buddy-source-identity-") as raw:
+        with tempfile.TemporaryDirectory(prefix="hey-my-buddy-source-identity-") as raw:
             root = Path(raw)
             (root / "src/hey_my_buddy").mkdir(parents=True)
             (root / "src/hey_my_buddy/build-info.json").write_text('{"sourceCommit":null}')

@@ -35,7 +35,7 @@ class UpgradeServiceTests(BoardTestCase):
         def call(operation, params):
             return _request(_read_endpoint(state), operation, params, state_dir=state)
 
-        with self.daemon(env={"BUDDY_MAX_CONCURRENT": "1"}):
+        with self.daemon(env={"HMB_MAX_CONCURRENT": "1"}):
             self.assertEqual(call("health", {})["schemaVersion"], SCHEMA_VERSION)
             snapshot = call("console_snapshot", {})
             self.assertEqual(snapshot["configuration"]["routerBuddyIds"], fixture["routerProfileIds"])

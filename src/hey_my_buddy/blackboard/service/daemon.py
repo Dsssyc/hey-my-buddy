@@ -128,15 +128,15 @@ class SupervisorHandle:
         # A supervisor is a service process too: it inherits the explicit allowlist
         # plus its own slot identity, never the daemon's whole environment.
         environment = service_environment({
-            "BUDDY_STATE_DIR": str(state_dir),
-            "BUDDY_WORKER_ID": self.worker_id,
+            "HMB_STATE_DIR": str(state_dir),
+            "HMB_WORKER_ID": self.worker_id,
         })
         self.start_stop_request = self.directory / f"stop-{start_id}.request"
-        environment["BUDDY_SUPERVISOR_START_ID"] = start_id
+        environment["HMB_SUPERVISOR_START_ID"] = start_id
         if target["pythonPath"]:
             environment["PYTHONPATH"] = target["pythonPath"]
         if target["stable"]:
-            environment["BUDDY_RUNTIME"] = target["runtime"]["runtimeDir"]
+            environment["HMB_RUNTIME"] = target["runtime"]["runtimeDir"]
         log_fd = os.open(log_path, os.O_CREAT | os.O_APPEND | os.O_WRONLY, 0o600)
         try:
             self.process = subprocess.Popen(
@@ -156,7 +156,7 @@ class SupervisorHandle:
                 start_new_session=True,
                 close_fds=True,
             )
-            threading.Thread(target=self.process.wait, name="buddy-supervisor-reaper", daemon=True).start()
+            threading.Thread(target=self.process.wait, name="hey-my-buddy-supervisor-reaper", daemon=True).start()
         finally:
             os.close(log_fd)
         return True
@@ -177,7 +177,7 @@ class WorkerPool:
     """The daemon-managed generic worker pool.
 
     One independent supervisor per configured execution slot: the machine-wide
-    ``BUDDY_MAX_CONCURRENT`` ceiling, under stable IDs derived from the configured
+    ``HMB_MAX_CONCURRENT`` ceiling, under stable IDs derived from the configured
     worker prefix (``local``, ``local-2``, ``local-3``). This is ordinary
     queue/worker infrastructure, not a second scheduler: the pool only starts
     processes, recognizes its own already-running supervisors by their lifetime
@@ -508,23 +508,23 @@ class Daemon:
         self.started_at = utc_now()
         self.service_id = str(uuid.uuid4())
         self.token = secrets.token_urlsafe(32)
-        wait_capacity = _env_int("BUDDY_WAIT_CAPACITY", 32)
+        wait_capacity = _env_int("HMB_WAIT_CAPACITY", 32)
         if wait_capacity > rpc_config.MAX_WAIT_CAPACITY:
-            raise BoardError("INVALID_ARGUMENT", "BUDDY_WAIT_CAPACITY cannot exceed 48; control operations reserve the remaining RPC callbacks")
+            raise BoardError("INVALID_ARGUMENT", "HMB_WAIT_CAPACITY cannot exceed 48; control operations reserve the remaining RPC callbacks")
         self.wait_admission = WaitAdmission(wait_capacity)
         self._cleanup_lock = threading.Lock()
         self._cleanup_pending: set[str] = set()
         self.store = BoardStore(
             self.directory,
-            max_concurrent=_env_int("BUDDY_MAX_CONCURRENT", scheduling.TOTAL_CONCURRENCY_DEFAULT),
-            lease_seconds=_env_int("BUDDY_LEASE_SECONDS", 120),
+            max_concurrent=_env_int("HMB_MAX_CONCURRENT", scheduling.TOTAL_CONCURRENCY_DEFAULT),
+            lease_seconds=_env_int("HMB_LEASE_SECONDS", 120),
         )
         #: One generic supervisor per slot of the machine-wide ceiling. Routing and
         #: execution share it and the same per-model-service counters. Existing supervisors
         #: are reused by lock ownership.
         self.pool = WorkerPool(
             self.directory,
-            prefix=os.environ.get("BUDDY_WORKER_ID", "local"),
+            prefix=os.environ.get("HMB_WORKER_ID", "local"),
             total_limit=self.store.max_concurrent,
         )
         self.control = {
@@ -607,7 +607,7 @@ class Daemon:
             self.console = Console(self.store, service)
             self.console.start(issue_ticket=False)
             wait_service = WaitService(self.store, self.wait_admission, token=self.token)
-            # Buddy's private C-Two profile goes in before the first register: the
+            # hey-my-buddy's private C-Two profile goes in before the first register: the
             # pool, reassembly and execution capacity are set through C-Two's public
             # overrides, never through inherited environment variables.
             cc.register(
@@ -645,7 +645,7 @@ class Daemon:
                     "runtimeIdentity": self.control["runtime"],
                 },
             )
-            sweeper = threading.Thread(target=self._sweep, name="buddy-lease-sweeper", daemon=True)
+            sweeper = threading.Thread(target=self._sweep, name="hey-my-buddy-lease-sweeper", daemon=True)
             sweeper.start()
             self.stopping.wait()
             return self.finish()
@@ -715,7 +715,7 @@ class Daemon:
             "workersAskedToStop": workers_asked,
             "drainSeconds": drain,
             "note": (
-                "Buddy-owned work was asked to stop and the service drained for a bounded interval. Unresolved "
+                "hey-my-buddy-owned work was asked to stop and the service drained for a bounded interval. Unresolved "
                 "attempts keep their receipts and resource claims; their shutdown is explicitly unconfirmed and no "
                 "surviving process is assumed stopped. Unrelated dsh sessions were never touched."
             ),
@@ -835,9 +835,9 @@ def _env_int(name: str, default: int) -> int:
 
 
 def main() -> int:
-    selected = os.environ.get("BUDDY_STATE_DIR")
+    selected = os.environ.get("HMB_STATE_DIR")
     if not selected:
-        sys.stderr.write("buddy daemon: BUDDY_STATE_DIR is required\n")
+        sys.stderr.write("hey-my-buddy daemon: HMB_STATE_DIR is required\n")
         return 2
     directory = Path(selected)
     daemon = Daemon(directory)
@@ -849,7 +849,7 @@ def main() -> int:
         atomic_json(directory / "startup-error.json", {"pid": os.getpid(), **error.payload()})
         # An actionable, non-destructive failure: never fall back to an old
         # implementation and never rewrite records.
-        sys.stderr.write(f"buddy: {error.code}: {error}\n")
+        sys.stderr.write(f"hey-my-buddy: {error.code}: {error}\n")
         return 2
 
 

@@ -38,17 +38,17 @@ SPEC = {"provider": "fake", "model": "m1", "effort": "high"}
 
 def qualified_tools(attempt_id: str) -> tuple[str, str, str]:
     """The mount's mechanical qualified names, derived exactly as the module does."""
-    server = "buddy_" + hashlib.sha256(attempt_id.encode()).hexdigest()[:16]
-    return (f"mcp__{server}__buddy_checkpoint",
-            f"mcp__{server}__buddy_answer_inquiry",
-            f"mcp__{server}__buddy_finish_turn")
+    server = "hey_my_buddy_" + hashlib.sha256(attempt_id.encode()).hexdigest()[:16]
+    return (f"mcp__{server}__hey_my_buddy_checkpoint",
+            f"mcp__{server}__hey_my_buddy_answer_inquiry",
+            f"mcp__{server}__hey_my_buddy_finish_turn")
 
 
 class DshRoleCase(unittest.TestCase):
     """One private root; the micro task attempt runs through the shared executor."""
 
     def setUp(self):
-        self.temporary = tempfile.TemporaryDirectory(prefix="buddy-dsh-role-")
+        self.temporary = tempfile.TemporaryDirectory(prefix="hey-my-buddy-dsh-role-")
         self.addCleanup(self.temporary.cleanup)
         self.root = Path(self.temporary.name)
         from hey_my_buddy.protocol.rpc_config import configure_client
@@ -60,7 +60,7 @@ class DshRoleCase(unittest.TestCase):
         self.log = self.root / "logs" / "fake-agent.log"
         self.log.parent.mkdir(mode=0o700)
         self.record = self.root / "harness-record.json"
-        self.environment = {k: v for k, v in os.environ.items() if not k.startswith("BUDDY_")
+        self.environment = {k: v for k, v in os.environ.items() if not k.startswith("HMB_")
                             and k not in ("VIRTUAL_ENV", "UV_PROJECT_ENVIRONMENT")}
         self.environment["PYTHONPATH"] = str(CKROOT / "src") + os.pathsep + \
             str(CKROOT / "tests" / "python") + os.pathsep + os.environ.get("PYTHONPATH", "")
@@ -69,9 +69,9 @@ class DshRoleCase(unittest.TestCase):
         # tripwire holds off the invoking shell.
         (self.root / "home").mkdir(mode=0o700)
         self.environment.update(HOME=str(self.root / "home"),
-                                BUDDY_STATE_DIR=str(self.root / "state"),
-                                BUDDY_RUNTIME_ROOT=str(self.root / "runtime"),
-                                BUDDY_DEV_SOURCE="1", BUDDY_HARNESS_RECORD_FILE=str(self.record))
+                                HMB_STATE_DIR=str(self.root / "state"),
+                                HMB_RUNTIME_ROOT=str(self.root / "runtime"),
+                                HMB_DEV_SOURCE="1", HMB_HARNESS_RECORD_FILE=str(self.record))
 
     def point_record(self, *extra: str) -> None:
         command = [sys.executable, str(FAKE_AGENT), "--log", str(self.log), *extra]
@@ -214,7 +214,7 @@ class WorkerRegisteredRunTests(DshRoleCase):
         self.assertEqual(result.native_identity.session_id, turn["sessionId"])
         native = outcome.result["nativeSession"]
         self.assertEqual(native["sessionId"], turn["sessionId"])
-        self.assertEqual(native["storageOwner"], "buddy-micro-task")
+        self.assertEqual(native["storageOwner"], "hey-my-buddy-micro-task")
         self.assertTrue(native["bindingPresent"])
         self.assertTrue(native["resumable"], "the native facts carry a verified complete turn")
         self.assertIn("inquiry", outcome.result)
@@ -256,7 +256,7 @@ class WorkerRegisteredRunTests(DshRoleCase):
         channel = None
         while time_module.monotonic() < deadline:
             if holder:
-                _, channel = handle_live_binding(holder[0], state_dir=Path(self.environment["BUDDY_STATE_DIR"]))
+                _, channel = handle_live_binding(holder[0], state_dir=Path(self.environment["HMB_STATE_DIR"]))
             if channel is not None:
                 break
             time_module.sleep(0.05)

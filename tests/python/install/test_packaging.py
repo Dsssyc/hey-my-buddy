@@ -1,4 +1,4 @@
-"""Packaging and launcher boundary tests for the shared ``buddy`` skill (ADR-015).
+"""Packaging and launcher boundary tests for the shared ``hey-my-buddy`` skill (ADR-015).
 
 These build the real checkout with ``packaging/build-skill.py`` and run the skill's
 launcher from unrelated working directories against private state/runtime roots.
@@ -18,12 +18,12 @@ import unittest
 from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[3]
-LAUNCHER = ROOT / "skills" / "buddy" / "scripts" / "buddy"
+LAUNCHER = ROOT / "skills" / "hey-my-buddy" / "scripts" / "hey-my-buddy"
 REQUIRED_RESOURCES = {"console.assets", "roles.worker", "roles.router", "roles.lead"}
 
 
 def load_build_skill():
-    spec = importlib.util.spec_from_file_location("buddy_build_skill", ROOT / "packaging" / "build-skill.py")
+    spec = importlib.util.spec_from_file_location("hey_my_buddy_build_skill", ROOT / "packaging" / "build-skill.py")
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
@@ -34,11 +34,11 @@ def current_environment(**overrides) -> dict:
     values = {
         key: value
         for key, value in os.environ.items()
-        if not key.startswith("BUDDY_")
+        if not key.startswith("HMB_")
         and key not in {"VIRTUAL_ENV", "UV_PROJECT_ENVIRONMENT", "PYTHONPATH", "PLUGIN_DATA"}
     }
-    values["BUDDY_CONSOLE_PORT"] = "0"
-    values["BUDDY_CLAUDE_CLI"] = str(ROOT / "tests/python/fixtures/claude-not-installed")
+    values["HMB_CONSOLE_PORT"] = "0"
+    values["HMB_CLAUDE_CLI"] = str(ROOT / "tests/python/fixtures/claude-not-installed")
     values.update(overrides)
     return values
 
@@ -47,7 +47,7 @@ class SingleEntrypointTests(unittest.TestCase):
     """One launcher, one CLI script and one declared runtime manifest."""
 
     def test_the_skill_carries_the_one_public_launcher(self):
-        self.assertTrue(LAUNCHER.is_file(), "scripts/buddy is the skill launcher")
+        self.assertTrue(LAUNCHER.is_file(), "scripts/hey-my-buddy is the skill launcher")
         self.assertTrue(os.access(LAUNCHER, os.X_OK))
         self.assertFalse((ROOT / "bin").exists())
         pyproject = (ROOT / "pyproject.toml").read_text()
@@ -56,8 +56,8 @@ class SingleEntrypointTests(unittest.TestCase):
         self.assertNotIn('\nbuddy =', pyproject)
 
     def test_the_only_agent_entrypoint_is_the_shared_skill_and_no_plugin_is_published(self):
-        self.assertTrue((ROOT / "skills" / "buddy" / "SKILL.md").is_file())
-        self.assertEqual(sorted(path.name for path in (ROOT / "skills").iterdir() if path.is_dir()), ["buddy"])
+        self.assertTrue((ROOT / "skills" / "hey-my-buddy" / "SKILL.md").is_file())
+        self.assertEqual(sorted(path.name for path in (ROOT / "skills").iterdir() if path.is_dir()), ["hey-my-buddy"])
         for retired in (".codex-plugin", "plugin.json", ".agents", "packaging/stage-plugin.py"):
             self.assertFalse((ROOT / retired).exists(), retired)
 
@@ -79,7 +79,7 @@ class CwdIndependentCliTests(unittest.TestCase):
     """The single launcher reaches the same CLI from any working directory."""
 
     def setUp(self):
-        base = Path(tempfile.mkdtemp(prefix="buddy-launch-", dir=os.environ.get("BUDDY_CHECKS_TMPDIR", "/tmp"))).resolve()
+        base = Path(tempfile.mkdtemp(prefix="hey-my-buddy-launch-", dir=os.environ.get("HMB_CHECKS_TMPDIR", "/tmp"))).resolve()
         self.base = base
         self.addCleanup(self.cleanup_private)
         self.state = base / "state"
@@ -103,9 +103,9 @@ class CwdIndependentCliTests(unittest.TestCase):
         # project environment so it can never recreate the interpreter environment
         # this test suite runs in.
         return current_environment(
-            BUDDY_STATE_DIR=str(self.state),
-            BUDDY_RUNTIME_ROOT=str(self.runtime_root),
-            BUDDY_DEV_SOURCE="1",
+            HMB_STATE_DIR=str(self.state),
+            HMB_RUNTIME_ROOT=str(self.runtime_root),
+            HMB_DEV_SOURCE="1",
             UV_PROJECT_ENVIRONMENT=str(self.base / "cli-venv"),
         )
 
@@ -151,7 +151,7 @@ class CheckHarnessTests(unittest.TestCase):
             env["PYTHONPATH"].split(os.pathsep)[:2],
             [str(ROOT / "src"), str(ROOT / "tests" / "python")],
         )
-        self.assertEqual(env["BUDDY_DEV_SOURCE"], "1")
+        self.assertEqual(env["HMB_DEV_SOURCE"], "1")
 
     def test_the_check_harness_covers_all_python_harness_suites(self):
         self.assertTrue((ROOT / "tests" / "python").is_dir())
@@ -164,10 +164,10 @@ class CheckHarnessTests(unittest.TestCase):
 
     def test_unrelated_checks_cannot_inherit_a_real_claude_cli(self):
         from hey_my_buddy.cli import checks
-        with patch.dict(os.environ, {"BUDDY_CLAUDE_CLI": "/real-user-installation/claude"}):
+        with patch.dict(os.environ, {"HMB_CLAUDE_CLI": "/real-user-installation/claude"}):
             env = checks.test_environment(ROOT)
-        self.assertNotEqual(env["BUDDY_CLAUDE_CLI"], "/real-user-installation/claude")
-        self.assertFalse(Path(env["BUDDY_CLAUDE_CLI"]).exists())
+        self.assertNotEqual(env["HMB_CLAUDE_CLI"], "/real-user-installation/claude")
+        self.assertFalse(Path(env["HMB_CLAUDE_CLI"]).exists())
 
 
 class SkillBuildTests(unittest.TestCase):
@@ -175,8 +175,8 @@ class SkillBuildTests(unittest.TestCase):
 
     @classmethod
     def setUpClass(cls):
-        cls.base = Path(tempfile.mkdtemp(prefix="buddy-skill-build-")).resolve()
-        cls.skill = load_build_skill().build(ROOT, cls.base / "buddy")
+        cls.base = Path(tempfile.mkdtemp(prefix="hey-my-buddy-skill-build-")).resolve()
+        cls.skill = load_build_skill().build(ROOT, cls.base / "hey-my-buddy")
 
     @classmethod
     def tearDownClass(cls):
@@ -189,12 +189,12 @@ class SkillBuildTests(unittest.TestCase):
                          ["SKILL.md", "package", "references", "scripts", "skill.json"])
         text = (self.skill / "SKILL.md").read_text()
         head = text.split("\n---\n", 1)[0]
-        self.assertIn("\nname: buddy", head)
+        self.assertIn("\nname: hey-my-buddy", head)
         version = re.search(r'version = "([^"]+)"', (ROOT / "pyproject.toml").read_text()).group(1)
         self.assertIn(f'version: "{version}"', head)
         marker = json.loads((self.skill / "skill.json").read_text())
-        self.assertEqual((marker["name"], marker["version"], marker["contract"]), ("buddy", version, CONTRACT_VERSION))
-        self.assertTrue(os.access(self.skill / "scripts" / "buddy", os.X_OK))
+        self.assertEqual((marker["name"], marker["version"], marker["contract"]), ("hey-my-buddy", version, CONTRACT_VERSION))
+        self.assertTrue(os.access(self.skill / "scripts" / "hey-my-buddy", os.X_OK))
 
     def test_links_stay_inside_the_skill(self):
         for document in [self.skill / "SKILL.md", *sorted((self.skill / "references").glob("*.md"))]:

@@ -230,7 +230,7 @@ class WaitingHostUpgradeTests(WorkflowTestCase):
         board = self.board()
         upgrade.write_journal(board.directory / "upgrade.json", {})
         output = io.StringIO()
-        with mock.patch.dict(os.environ, {"BUDDY_STATE_DIR": str(board.directory)}), \
+        with mock.patch.dict(os.environ, {"HMB_STATE_DIR": str(board.directory)}), \
                 contextlib.redirect_stdout(output):
             self.assertEqual(launcher.main(["decide", "{}"]), 1)
         error = json.loads(output.getvalue())["error"]

@@ -25,7 +25,7 @@ from hey_my_buddy.protocol.transport import (
     ensure_service,
 )
 
-ENDPOINT = {"address": "ipc://buddy-attach-fixture", "token": "fixture-secret", "pid": 4242}
+ENDPOINT = {"address": "ipc://hey-my-buddy-attach-fixture", "token": "fixture-secret", "pid": 4242}
 LAUNCH_TARGET = {"python": sys.executable, "pythonPath": None,
                  "identity": "source:attach-fixture", "stable": False, "installed": False}
 
@@ -64,7 +64,7 @@ class MutationRecorder:
 
 class AttachFixture(unittest.TestCase):
     def setUp(self):
-        self.temp = tempfile.TemporaryDirectory(prefix="buddy-attach-")
+        self.temp = tempfile.TemporaryDirectory(prefix="hey-my-buddy-attach-")
         self.addCleanup(self.temp.cleanup)
         self.directory = Path(self.temp.name) / "state"
         self.directory.mkdir(mode=0o700)
@@ -193,7 +193,7 @@ class TrustBoundaryTests(AttachFixture):
         root-owned /tmp) is therefore unswappable and must be trusted, so a later
         attach reuses the running service instead of cold-starting again.
         """
-        shared = Path(tempfile.mkdtemp(prefix="buddy-shared-", dir=os.environ.get("BUDDY_CHECKS_TMPDIR", "/tmp")))
+        shared = Path(tempfile.mkdtemp(prefix="hey-my-buddy-shared-", dir=os.environ.get("HMB_CHECKS_TMPDIR", "/tmp")))
         self.addCleanup(lambda: shutil.rmtree(shared, ignore_errors=True))
         shared.chmod(0o777 | stat.S_ISVTX)
         nested = shared / "state"
@@ -208,7 +208,7 @@ class TrustBoundaryTests(AttachFixture):
 
     def test_state_directory_under_a_non_sticky_shared_parent_is_not_trusted(self):
         """Without the sticky bit another user can rename the entry, so refuse it."""
-        shared = Path(tempfile.mkdtemp(prefix="buddy-shared-", dir=os.environ.get("BUDDY_CHECKS_TMPDIR", "/tmp")))
+        shared = Path(tempfile.mkdtemp(prefix="hey-my-buddy-shared-", dir=os.environ.get("HMB_CHECKS_TMPDIR", "/tmp")))
         self.addCleanup(lambda: shutil.rmtree(shared, ignore_errors=True))
         shared.chmod(0o777)
         nested = shared / "state"
@@ -222,7 +222,7 @@ class TrustBoundaryTests(AttachFixture):
 
     def test_sticky_shared_parent_owned_by_a_foreign_user_is_not_trusted(self):
         """A foreign owner of the sticky parent could still rename this user's entry."""
-        shared = Path(tempfile.mkdtemp(prefix="buddy-shared-", dir=os.environ.get("BUDDY_CHECKS_TMPDIR", "/tmp")))
+        shared = Path(tempfile.mkdtemp(prefix="hey-my-buddy-shared-", dir=os.environ.get("HMB_CHECKS_TMPDIR", "/tmp")))
         self.addCleanup(lambda: shutil.rmtree(shared, ignore_errors=True))
         shared.chmod(0o777 | stat.S_ISVTX)
         nested = shared / "state"
@@ -305,7 +305,7 @@ class ColdStartTests(unittest.TestCase):
     """Cold startup keeps its authorized setup path: create, lock, spawn, wait."""
 
     def setUp(self):
-        self.temp = tempfile.TemporaryDirectory(prefix="buddy-cold-")
+        self.temp = tempfile.TemporaryDirectory(prefix="hey-my-buddy-cold-")
         self.addCleanup(self.temp.cleanup)
         self.directory = Path(self.temp.name) / "state"
         self.spawn = patch("hey_my_buddy.protocol.transport.subprocess.Popen", autospec=True).start()
@@ -334,7 +334,7 @@ class ColdStartTests(unittest.TestCase):
 
     def test_existing_service_under_a_shared_sticky_parent_attaches_read_only(self):
         """Regression: a service under a root-owned sticky /tmp is reused, not re-spawned."""
-        shared = Path(tempfile.mkdtemp(prefix="buddy-shared-", dir=os.environ.get("BUDDY_CHECKS_TMPDIR", "/tmp")))
+        shared = Path(tempfile.mkdtemp(prefix="hey-my-buddy-shared-", dir=os.environ.get("HMB_CHECKS_TMPDIR", "/tmp")))
         self.addCleanup(lambda: shutil.rmtree(shared, ignore_errors=True))
         shared.chmod(0o777 | stat.S_ISVTX)
         directory = shared / "state"
@@ -369,7 +369,7 @@ class ColdStartTests(unittest.TestCase):
 
     def test_cold_start_and_later_attach_share_the_same_trust_rule_under_a_shared_parent(self):
         """A /tmp-style state dir is trusted by cold start and by every later attach."""
-        shared = Path(tempfile.mkdtemp(prefix="buddy-shared-", dir=os.environ.get("BUDDY_CHECKS_TMPDIR", "/tmp")))
+        shared = Path(tempfile.mkdtemp(prefix="hey-my-buddy-shared-", dir=os.environ.get("HMB_CHECKS_TMPDIR", "/tmp")))
         self.addCleanup(lambda: shutil.rmtree(shared, ignore_errors=True))
         shared.chmod(0o777 | stat.S_ISVTX)
         directory = shared / "state"
@@ -446,7 +446,7 @@ class RpcReadOnlySetupTests(unittest.TestCase):
         proxy.ping.return_value = json.dumps({"error": {
             "code": "WORKSPACE_GIT_ERROR", "message": "Git workspace operation failed",
             "details": {"operation": "read-tree", "returncode": 128, "argv": ["git", "read-tree"],
-                        "reason": "fatal: cannot lock ref 'refs/buddy/workspaces/x/input'"}}})
+                        "reason": "fatal: cannot lock ref 'refs/hey-my-buddy/workspaces/x/input'"}}})
         with patch("hey_my_buddy.protocol.transport.cc.connect", return_value=proxy):
             with self.assertRaises(ServiceError) as raised:
                 _request(ENDPOINT, "ping", {}, state_dir=self.directory)
@@ -454,7 +454,7 @@ class RpcReadOnlySetupTests(unittest.TestCase):
         self.assertEqual(raised.exception.message, "Git workspace operation failed")
         self.assertEqual(raised.exception.details, {"operation": "read-tree", "returncode": 128,
                                                     "argv": ["git", "read-tree"],
-                                                    "reason": "fatal: cannot lock ref 'refs/buddy/workspaces/x/input'"})
+                                                    "reason": "fatal: cannot lock ref 'refs/hey-my-buddy/workspaces/x/input'"})
 
     def test_missing_state_does_not_create_on_board_client_attach(self):
         from hey_my_buddy.protocol.client import BoardClient
@@ -515,7 +515,7 @@ class RpcReadOnlySetupTests(unittest.TestCase):
         self.assertEqual(Path(json.loads(peer.endpoint_path.read_text())["root"]), self.directory / "ipc")
         self.assertEqual(cc.__version__, "0.7.4")
         self.enterContext(patch.object(transport, "BuddyControl", ProbeContract))
-        self.enterContext(patch.object(transport, "CONTROL_NAME", "buddy-probe"))
+        self.enterContext(patch.object(transport, "CONTROL_NAME", "hey-my-buddy-probe"))
         endpoint = {**ENDPOINT, "address": peer.address, "pid": peer.pid}
         self.endpoint_file.write_text(json.dumps(endpoint))
         return endpoint, received

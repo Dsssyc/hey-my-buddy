@@ -24,7 +24,7 @@ class PreparationTests(WorkflowTestCase):
         super().setUpClass()
         # Share only initial Git objects/config. Mutable files, index, refs,
         # worktree registration and identity facts belong to each copied site.
-        temporary = tempfile.TemporaryDirectory(prefix="buddy-preparation-repository-")
+        temporary = tempfile.TemporaryDirectory(prefix="hey-my-buddy-preparation-repository-")
         cls.addClassCleanup(temporary.cleanup)
         fixture = cls(methodName="runTest")
         fixture.directory = Path(temporary.name)

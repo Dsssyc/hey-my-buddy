@@ -40,7 +40,7 @@ from hey_my_buddy.buddy.roles import turn_io
 from hey_my_buddy.buddy.roles.session_mcp import respond
 from hey_my_buddy.errors import BoardError
 
-TASK_MATERIAL_ROOT = Path(os.environ.get("BUDDY_INQUIRY_OWNER_MATERIAL_ROOT", tempfile.gettempdir()))
+TASK_MATERIAL_ROOT = Path(os.environ.get("HMB_INQUIRY_OWNER_MATERIAL_ROOT", tempfile.gettempdir()))
 RUN = RunIdentity(task_id="task-owner", attempt_id="attempt-owner", generation=2,
                   invocation_id="invocation-owner", turn_id="turn-owner",
                   input_sha256="a" * 64)
@@ -255,7 +255,7 @@ class InquiryOwnerTests(unittest.TestCase):
         self.assertTrue(queued["ok"])
         self.assertEqual(records(local.journal_path)[0]["state"], "queued")
         checkpoint = respond({"jsonrpc": "2.0", "id": 1, "method": "tools/call",
-            "params": {"name": "buddy_checkpoint", "arguments": {}}},
+            "params": {"name": "hey_my_buddy_checkpoint", "arguments": {}}},
             {"identity": BOUND, "inputSha256": RUN.input_sha256, "key": "b" * 64,
              "inquiryJournalPath": str(local.journal_path),
              "attentionPath": str(local.attention_path)})["result"]
@@ -294,7 +294,7 @@ class InquiryJournalProjectionTests(unittest.TestCase):
 
     def test_final_effective_record_rejects_foreign_and_recovers_continuous_bound_history(self):
         queued = self.record("q-recovered", question="question", questionSha256="a" * 64)
-        delivered = self.record("q-recovered", "delivered", via="tool:buddy_checkpoint")
+        delivered = self.record("q-recovered", "delivered", via="tool:hey_my_buddy_checkpoint")
         self.write_records([queued, {**queued, "attemptId": "foreign"}, delivered,
                             self.record("q-rejected"),
                             self.record("q-rejected", attemptId="foreign"), [],
@@ -312,7 +312,7 @@ class InquiryJournalProjectionTests(unittest.TestCase):
 
     def test_projection_uses_only_shared_locked_read_and_preserves_answer_source_fields(self):
         answer = {"text": "verified", "bytes": 8, "truncated": False,
-                  "via": "tool:buddy_answer_inquiry", "toolCallId": "call-native-answer",
+                  "via": "tool:hey_my_buddy_answer_inquiry", "toolCallId": "call-native-answer",
                   "at": "2026-10-07T00:00:00Z"}
         self.write_records([self.record("q-answer", "answered", answer=answer)])
         with mock.patch.object(locking, "lock", wraps=locking.lock) as lock:
@@ -398,18 +398,18 @@ def peer_main() -> int:
                           "inquiryJournalPath": str(bridge.journal_path),
                           "attentionPath": str(bridge.attention_path)}
                 evidence = RootTurnEvidence("native-session-owner", RUN.invocation_id,
-                    "mcp__buddy_fixture__buddy_finish_turn", config,
-                    checkpoint_name="mcp__buddy_fixture__buddy_checkpoint",
-                    answer_name="mcp__buddy_fixture__buddy_answer_inquiry",
+                    "mcp__buddy_fixture__hey_my_buddy_finish_turn", config,
+                    checkpoint_name="mcp__buddy_fixture__hey_my_buddy_checkpoint",
+                    answer_name="mcp__buddy_fixture__hey_my_buddy_answer_inquiry",
                     on_delivery=bridge.deliver_inquiries, on_answer=bridge.record_answer,
                     validate_outcome=turn_io.validate_outcome,
-                    mounted_tools=("buddy_checkpoint", "buddy_answer_inquiry", "buddy_finish_turn"))
+                    mounted_tools=("hey_my_buddy_checkpoint", "hey_my_buddy_answer_inquiry", "hey_my_buddy_finish_turn"))
                 event("turn.started", {"inputId": RUN.invocation_id})
                 import c_two as cc
                 result = {"descriptor": descriptor.to_payload(),
                           "endpointRoot": cc.local_endpoint_context().root}
             elif op in ("checkpoint", "answer", "tamperedCheckpoint", "childCheckpoint"):
-                tool = "buddy_answer_inquiry" if op == "answer" else "buddy_checkpoint"
+                tool = "hey_my_buddy_answer_inquiry" if op == "answer" else "hey_my_buddy_checkpoint"
                 arguments = ({"inquiryId": command["questionId"], "answer": command["answer"]}
                              if op == "answer" else {})
                 response = respond({"jsonrpc": "2.0", "id": ordinal + 1, "method": "tools/call",
@@ -456,15 +456,15 @@ class InquiryOwnerPeerTests(unittest.TestCase):
         self.directory = new_material_directory()
         environment = {key: value for key, value in os.environ.items()
                        if key not in ("VIRTUAL_ENV", "UV_PROJECT_ENVIRONMENT")
-                       and not key.startswith(("BUDDY_", "ANTHROPIC_", "C2_"))}
+                       and not key.startswith(("HMB_", "ANTHROPIC_", "C2_"))}
         self.state = self.directory / "state"
         self.home = self.directory / "home"
         self.home.mkdir(mode=0o700)
         self.native_tmp = self.directory / "tmp"
         self.native_tmp.mkdir(mode=0o700)
         environment.update(HOME=str(self.home), TMPDIR=str(self.native_tmp),
-                           BUDDY_CHECKS_TMPDIR=str(self.native_tmp),
-                           BUDDY_RUNTIME_ROOT=str(self.directory / "runtime"),
+                           HMB_CHECKS_TMPDIR=str(self.native_tmp),
+                           HMB_RUNTIME_ROOT=str(self.directory / "runtime"),
                            C2_ENV_FILE="", C2_RELAY_ANCHOR_ADDRESS="")
         self.stderr_path = self.directory / "peer.stderr"
         self.stderr = self.stderr_path.open("x")
@@ -532,7 +532,7 @@ class InquiryOwnerPeerTests(unittest.TestCase):
         answer = self.observe(inquiry_id="q-owner").inquiries[0]
         self.assertEqual((answer.status, answer.answer, answer.bytes, answer.via,
                           answer.tool_call_id, answer.truncated),
-                         ("answered", "durably verified", 16, "tool:buddy_answer_inquiry",
+                         ("answered", "durably verified", 16, "tool:hey_my_buddy_answer_inquiry",
                           answered["callId"], False))
         self.assertIsNotNone(answer.at)
         self.assertEqual([item["state"] for item in records(self.directory / "inquiry.jsonl")],

@@ -52,7 +52,7 @@ class InstalledZcodeTests(ZcodeFixtureCase):
                 called = bool(tool_results)
                 rejected = called and 'The required parameter `request` is missing' in json.dumps(tool_results[-1])
                 captured.append({"model": data["model"], "tools": tools, "missingRequestRejected": rejected})
-                finish = next((name for name in tools if name.endswith("__buddy_finish_turn")), None)
+                finish = next((name for name in tools if name.endswith("__hey_my_buddy_finish_turn")), None)
                 outcome = {"disposition": "completed", "summary": "localhost native fixture completed",
                            "remaining": [], "decisions": [], "artifacts": [], "request": None}
                 self.send_response(200)
@@ -91,7 +91,7 @@ class InstalledZcodeTests(ZcodeFixtureCase):
         }}))
         (self.cwd / ".zcode").mkdir()
         (self.cwd / ".zcode/config.json").write_text(json.dumps({"plugins": {"enabled": False}, "features": {"skill": False, "memory": False}}))
-        self.environment.update(BUDDY_ZCODE_CLI=str(CLI), ZCODE_DATA_BASE_DIR=str(self.root / "account-empty"))
+        self.environment.update(HMB_ZCODE_CLI=str(CLI), ZCODE_DATA_BASE_DIR=str(self.root / "account-empty"))
         # Native code is real. The fixture permits only loopback network and
         # prevents writes to shared ZCode settings or agent configuration.
         wrapper = self.root / "native-cli"
@@ -106,7 +106,7 @@ class InstalledZcodeTests(ZcodeFixtureCase):
             "ZCODE_BUILTIN_PROVIDER_BUNDLED_CONFIG_FILE=" + str(BUILTIN),
         ]) + "\nexec " + shlex.join(command) + ' "$@"\n')
         wrapper.chmod(0o700)
-        self.environment["BUDDY_ZCODE_CLI"] = str(wrapper)
+        self.environment["HMB_ZCODE_CLI"] = str(wrapper)
 
     def test_native_root_finish_and_exact_resume_keep_coding_tools(self):
         context = self.context(timeout=30)
@@ -128,7 +128,7 @@ class InstalledZcodeTests(ZcodeFixtureCase):
         self.assertEqual(second.result["resolved"]["effort"], "low")
         self.assertEqual(second.result["requested"], second.result["resolved"])
         self.assertIsNone(second.result["observed"])
-        finish_names = {name for request in self.requests for name in request["tools"] if name.endswith("__buddy_finish_turn")}
+        finish_names = {name for request in self.requests for name in request["tools"] if name.endswith("__hey_my_buddy_finish_turn")}
         self.assertEqual(len(finish_names), 2, "continuation did not receive its own private finish bridge")
 
     def test_native_missing_request_can_be_corrected_in_the_same_root_turn(self):

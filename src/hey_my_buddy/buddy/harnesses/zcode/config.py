@@ -13,19 +13,19 @@ DEFAULT_CLI = Path("/Applications/ZCode.app/Contents/Resources/glm/zcode.cjs")
 
 def cli_command(environment: dict | None = None) -> list[str]:
     env = os.environ if environment is None else environment
-    if not (os.environ.get("BUDDY_DEV_SOURCE") == "1" and env.get("BUDDY_ZCODE_CLI")):
+    if not (os.environ.get("HMB_DEV_SOURCE") == "1" and env.get("HMB_ZCODE_CLI")):
         from ..runtime_selection import command_for
         from ....errors import BoardError
         try:
             return command_for("zcode", env)
         except BoardError as error:
             raise NativeError("harness-unavailable", error.message) from None
-    value = env.get("BUDDY_ZCODE_CLI") or shutil.which("zcode", path=env.get("PATH")) or str(DEFAULT_CLI)
+    value = env.get("HMB_ZCODE_CLI") or shutil.which("zcode", path=env.get("PATH")) or str(DEFAULT_CLI)
     path = Path(value).expanduser().resolve()
     if not path.is_file():
-        raise NativeError("harness-unavailable", "ZCode CLI is missing; configure BUDDY_ZCODE_CLI")
+        raise NativeError("harness-unavailable", "ZCode CLI is missing; configure HMB_ZCODE_CLI")
     if path.suffix in (".js", ".cjs", ".mjs"):
-        node = env.get("BUDDY_NODE") or shutil.which("node", path=env.get("PATH"))
+        node = env.get("HMB_NODE") or shutil.which("node", path=env.get("PATH"))
         if not node:
             raise NativeError("harness-unavailable", "Node.js is required for the installed ZCode bundle")
         return [node, str(path)]

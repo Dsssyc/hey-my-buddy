@@ -33,7 +33,7 @@ def argv_value(flag):
 
 
 def write_state(update):
-    path = os.environ.get("BUDDY_CLAUDE_FIXTURE_STATE")
+    path = os.environ.get("HMB_CLAUDE_FIXTURE_STATE")
     if not path:
         return
     state = {}
@@ -129,7 +129,7 @@ def main():
     if "--version" in sys.argv:
         print(FIXTURE["harnessVersion"] + " (Claude Code usage fixture)")
         return
-    case = os.environ.get("BUDDY_CLAUDE_FIXTURE_CASE", "usage-ok")
+    case = os.environ.get("HMB_CLAUDE_FIXTURE_CASE", "usage-ok")
     session_id = argv_value("--session-id") or "unallocated"
     for raw in sys.stdin:
         try:

@@ -21,7 +21,7 @@ class StorageTests(BoardTestCase):
 
     def test_runtime_leftovers_require_age_free_locks_and_unretained_real_paths(self):
         board = self.board()
-        root = Path(os.environ['BUDDY_RUNTIME_ROOT'])
+        root = Path(os.environ['HMB_RUNTIME_ROOT'])
         root.mkdir()
         current, previous = 'a' * 32, 'b' * 32
         (board.directory / 'runtime-retention.json').write_text(json.dumps({
@@ -82,7 +82,7 @@ class StorageTests(BoardTestCase):
 
     def test_runtime_cleanup_holds_the_installation_lock_until_directory_removal(self):
         board = self.board()
-        root = Path(os.environ['BUDDY_RUNTIME_ROOT'])
+        root = Path(os.environ['HMB_RUNTIME_ROOT'])
         candidate = root / ('c' * 32)
         candidate.mkdir(parents=True)
         (candidate / 'payload').write_text('incomplete installation')
@@ -112,7 +112,7 @@ class StorageTests(BoardTestCase):
 
     def test_unbound_build_leftover_waits_for_every_existing_installation_lock(self):
         board = self.board()
-        root = Path(os.environ['BUDDY_RUNTIME_ROOT'])
+        root = Path(os.environ['HMB_RUNTIME_ROOT'])
         build = root / '.build-abandoned'
         build.mkdir(parents=True)
         (build / 'payload').write_text('unfinished build')
@@ -138,7 +138,7 @@ class StorageTests(BoardTestCase):
         self.assertEqual(list(root.iterdir()), [lock_path])
 
     def _runtime_plan(self, board):
-        root = Path(os.environ['BUDDY_RUNTIME_ROOT'])
+        root = Path(os.environ['HMB_RUNTIME_ROOT'])
         root.mkdir()
         candidate = root / 'expired-runtime'
         candidate.mkdir()
@@ -163,7 +163,7 @@ class StorageTests(BoardTestCase):
         previous.mkdir(parents=True)
         (previous / 'READY.json').write_text('{}')
         (board.directory / 'runtime-retention.json').write_text(json.dumps({'current': 'test-current', 'previous': 'test-previous'}))
-        with mock.patch.dict(os.environ, {'BUDDY_RUNTIME_ROOT': str(shared)}), \
+        with mock.patch.dict(os.environ, {'HMB_RUNTIME_ROOT': str(shared)}), \
              mock.patch('hey_my_buddy.blackboard.tasks.storage.DEFAULT_RUNTIME_ROOT', shared), \
              mock.patch('hey_my_buddy.home.default_state_dir', return_value=self.directory / 'daily-state'), \
              mock.patch('hey_my_buddy.blackboard.tasks.storage.process_inventory', return_value=([], [], True)), \
@@ -175,7 +175,7 @@ class StorageTests(BoardTestCase):
 
     def setUp(self):
         super().setUp()
-        self.env = mock.patch.dict(os.environ, {'BUDDY_RUNTIME_ROOT':str((self.directory / 'runtime').resolve())})
+        self.env = mock.patch.dict(os.environ, {'HMB_RUNTIME_ROOT':str((self.directory / 'runtime').resolve())})
         self.env.start()
         self.addCleanup(self.env.stop)
 
@@ -231,7 +231,7 @@ class StorageTests(BoardTestCase):
 
     def test_inventory_does_not_follow_a_link_and_reports_current_previous(self):
         board = self.board()
-        root = Path(os.environ['BUDDY_RUNTIME_ROOT']);root.mkdir()
+        root = Path(os.environ['HMB_RUNTIME_ROOT']);root.mkdir()
         older = 'e' * 32
         for name in ('current','previous',older):
             target=root/name;target.mkdir()
@@ -249,7 +249,7 @@ class StorageTests(BoardTestCase):
 
     def test_pruning_reports_bad_entries_and_reclaims_an_unused_older_ready_format(self):
         board = self.board()
-        root = Path(os.environ['BUDDY_RUNTIME_ROOT'])
+        root = Path(os.environ['HMB_RUNTIME_ROOT'])
         root.mkdir()
         older = root / ('a' * 32)
         older.mkdir()
@@ -570,7 +570,7 @@ class StorageTests(BoardTestCase):
 
     def test_linked_runtime_and_ready_path_are_protected_before_ready_read(self):
         board = self.board()
-        root = Path(os.environ['BUDDY_RUNTIME_ROOT'])
+        root = Path(os.environ['HMB_RUNTIME_ROOT'])
         root.mkdir()
         outside = self.directory / 'outside-ready'
         outside.mkdir()
@@ -589,7 +589,7 @@ class StorageTests(BoardTestCase):
 
     def test_reparse_runtime_and_ready_are_protected_without_reading_ready(self):
         board = self.board()
-        root = Path(os.environ['BUDDY_RUNTIME_ROOT']).resolve()
+        root = Path(os.environ['HMB_RUNTIME_ROOT']).resolve()
         root.mkdir()
         candidate = root / 'reparse-runtime'
         candidate.mkdir()

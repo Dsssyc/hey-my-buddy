@@ -38,18 +38,18 @@ TURN_INPUT = {
 
 class CodexUsageContractTests(unittest.TestCase):
     def setUp(self):
-        self.temporary = tempfile.TemporaryDirectory(prefix="buddy-codex-usage-")
+        self.temporary = tempfile.TemporaryDirectory(prefix="hey-my-buddy-codex-usage-")
         self.addCleanup(self.temporary.cleanup)
         self.root = Path(self.temporary.name)
         self.cwd = self.root / "checkout"
         self.cwd.mkdir()
         MOCK_CODEX.chmod(0o755)
         self.environment = {key: value for key, value in os.environ.items()
-                            if not key.startswith("BUDDY_") and key not in ("VIRTUAL_ENV", "UV_PROJECT_ENVIRONMENT")}
-        self.environment.update(BUDDY_CONSOLE_PORT="0", BUDDY_CODEX_CLI=str(MOCK_CODEX),
-                                BUDDY_CODEX_FIXTURE_STATE=str(self.root / "fixture.json"),
-                                BUDDY_STATE_DIR=str(self.root / "state"), BUDDY_RUNTIME_ROOT=str(self.root / "runtime"),
-                                BUDDY_DEV_SOURCE="1")
+                            if not key.startswith("HMB_") and key not in ("VIRTUAL_ENV", "UV_PROJECT_ENVIRONMENT")}
+        self.environment.update(HMB_CONSOLE_PORT="0", HMB_CODEX_CLI=str(MOCK_CODEX),
+                                HMB_CODEX_FIXTURE_STATE=str(self.root / "fixture.json"),
+                                HMB_STATE_DIR=str(self.root / "state"), HMB_RUNTIME_ROOT=str(self.root / "runtime"),
+                                HMB_DEV_SOURCE="1")
         self.adapter = worker_executor("codex")
 
     def context(self, case: str, *, index: int = 1, previous: str | None = None) -> ExecutionContext:
@@ -60,7 +60,7 @@ class CodexUsageContractTests(unittest.TestCase):
                                 spec={"cwd": str(self.cwd), "task": "Write a fixture result", "timeoutSeconds": 8,
                                       "provider": "openai", "model": "fixture-model", "effort": "low"},
                                 directory=self.root / f"attempt-{index}", runtime={},
-                                environment={**self.environment, "BUDDY_CODEX_FIXTURE_CASE": case},
+                                environment={**self.environment, "HMB_CODEX_FIXTURE_CASE": case},
                                 turn={"turnId": f"turn-{index}", "input": turn_input})
 
     def execute(self, context: ExecutionContext):
@@ -204,7 +204,7 @@ class DshUsageContractTests(DshRoleCase):
         record = Path(written["path"])
         self.assertFalse(record.is_relative_to(context_root(context, "dsh")))
         self.assertTrue(record.is_relative_to(native_root(
-            Path(context.environment["BUDDY_STATE_DIR"]), "dsh", context.task_id)))
+            Path(context.environment["HMB_STATE_DIR"]), "dsh", context.task_id)))
         self.assertTrue(record.is_relative_to(Path(handle.role_run_control["nativeRoot"])))
         self.assertTrue(record.name.endswith(".v3.jsonl.zstd"))
 

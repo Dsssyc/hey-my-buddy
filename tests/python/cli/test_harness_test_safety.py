@@ -42,7 +42,7 @@ class HarnessTestSafetyTests(unittest.TestCase):
 
     def test_isolation_does_not_override_discovery_or_fill_the_child_root(self):
         inherited = {key: '/fixture/inherited' for key in
-                     ('BUDDY_MODEL_CATALOG_FILE', 'BUDDY_HARNESS_RECORD_FILE',
+                     ('HMB_MODEL_CATALOG_FILE', 'HMB_HARNESS_RECORD_FILE',
                       'ZCODE_BUILTIN_PROVIDER_CONFIG_FILE', 'ZCODE_PERSONAL_PROVIDER_CONFIG_FILE')}
         with patch.dict(os.environ, inherited):
             environment = self.environment()

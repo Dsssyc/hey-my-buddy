@@ -204,8 +204,8 @@ class DecisionCapabilityTests(unittest.TestCase):
                         "buddies": [{"buddyId": BUDDY_ID}], "task": "bounded read"}
             context = ExecutionContext(task_id="microTask", attempt_id="attempt", generation=1,
                                        spec={"cwd": root, "timeoutSeconds": 60}, directory=directory,
-                                       runtime={}, environment={"BUDDY_STATE_DIR": str(Path(root) / "state"),
-                                           "BUDDY_RUNTIME_ROOT": str(Path(root) / "runtime"), "BUDDY_DEV_SOURCE": "1"}, decision_input=document,
+                                       runtime={}, environment={"HMB_STATE_DIR": str(Path(root) / "state"),
+                                           "HMB_RUNTIME_ROOT": str(Path(root) / "runtime"), "HMB_DEV_SOURCE": "1"}, decision_input=document,
                                        turn={"input": {}}, agent_credential="must-not-pass")
             with mock.patch("hey_my_buddy.buddy.roles.router_input.prepare", return_value=(frozen, "digest")) as prepare, mock.patch(
                 "hey_my_buddy.buddy.harnesses.registry.adapter", return_value=Native()

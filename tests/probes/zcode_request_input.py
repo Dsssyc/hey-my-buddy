@@ -28,7 +28,7 @@ in the minified file are recorded in the acceptance document):
 
 No production adapter file is modified. The probe keeps every artifact inside one
 private root (default: the git-ignored ``tmp`` area), clears inherited
-Buddy runtime/worker variables, uses the native provider configuration, and closes the
+hey-my-buddy runtime/worker variables, uses the native provider configuration, and closes the
 owned child process group before exiting.
 """
 from __future__ import annotations
@@ -55,8 +55,8 @@ from hey_my_buddy.buddy.harnesses.zcode.config import cli_command, load_runtime_
 from hey_my_buddy.buddy.harnesses.zcode.protocol import NativeConnection, NativeError  # noqa: E402
 
 #: Inherited runtime/worker/agent variables that must never reach a probe child,
-#: matching the AGENTS.md test-subprocess rule (plus every other BUDDY_* pin).
-CLEAR_ENV_PREFIXES = ("BUDDY_", "ZCODE_", "ZAI_", "ZHIPU_", "GLM_")
+#: matching the AGENTS.md test-subprocess rule (plus every other HMB_* pin).
+CLEAR_ENV_PREFIXES = ("HMB_", "ZCODE_", "ZAI_", "ZHIPU_", "GLM_")
 CLEAR_ENV_VARS = ("VIRTUAL_ENV", "UV_PROJECT_ENVIRONMENT")
 
 MAX_EVENT_DUMP_BYTES = 32768
@@ -256,19 +256,19 @@ class EventLog:
 
 
 def isolated_environment(root: Path, *, zcode_cli: str | None = None, node: str | None = None) -> dict:
-    """One private environment; inherited Buddy and native pins never reach the child.
+    """One private environment; inherited hey-my-buddy and native pins never reach the child.
 
     Inherited ``ZCODE_*`` variables are stripped too: this probe may itself run
-    inside a Buddy harness whose variables point at that attempt's private native
+    inside a hey-my-buddy harness whose variables point at that attempt's private native
     root, and the probe must resolve the real user provider files instead. The
     explicit arguments pin only a test fake CLI or a node interpreter.
     """
     environment = {k: v for k, v in os.environ.items()
                    if not k.startswith(CLEAR_ENV_PREFIXES) and k not in CLEAR_ENV_VARS}
     if zcode_cli:
-        environment["BUDDY_ZCODE_CLI"] = zcode_cli
+        environment["HMB_ZCODE_CLI"] = zcode_cli
     if node:
-        environment["BUDDY_NODE"] = node
+        environment["HMB_NODE"] = node
     native_root = root / "native"
     (native_root / "storage").mkdir(parents=True, exist_ok=True)
     (root / "native-logs").mkdir(parents=True, exist_ok=True)

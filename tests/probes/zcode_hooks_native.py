@@ -37,7 +37,7 @@ class FreeProbePipelineTests(unittest.TestCase):
         home = self.private_root / "home"
         home.mkdir(mode=0o700)
         environment = {key: value for key, value in os.environ.items()
-                       if not key.startswith(("BUDDY_", "ZCODE_", "ZAI_", "ZHIPU_", "GLM_"))
+                       if not key.startswith(("HMB_", "ZCODE_", "ZAI_", "ZHIPU_", "GLM_"))
                        and key not in ("VIRTUAL_ENV", "UV_PROJECT_ENVIRONMENT")}
         environment.update(HOME=str(home), USERPROFILE=str(home), ZCODE_DATA_BASE_DIR=str(home))
         self.enterContext(mock.patch.dict(os.environ, environment, clear=True))

@@ -74,18 +74,18 @@ class ChecksEnvironmentTests(unittest.TestCase):
 
     def test_environment_is_private_and_unpinned(self):
         inherited = {
-            "BUDDY_STATE_DIR": "/wrong-state",
-            "BUDDY_RUNTIME_ROOT": "/wrong-runtime",
-            "BUDDY_RUNTIME": "/pinned-runtime",
-            "BUDDY_RUNTIME_IDENTITY": "pinned",
-            "BUDDY_WORKER_STATE": "/wrong-worker",
-            "BUDDY_WORKER_ID": "wrong-worker",
-            "BUDDY_AGENT_CREDENTIAL": "secret",
-            "BUDDY_AGENT_CREDENTIAL_FILE": "/secret-file",
+            "HMB_STATE_DIR": "/wrong-state",
+            "HMB_RUNTIME_ROOT": "/wrong-runtime",
+            "HMB_RUNTIME": "/pinned-runtime",
+            "HMB_RUNTIME_IDENTITY": "pinned",
+            "HMB_WORKER_STATE": "/wrong-worker",
+            "HMB_WORKER_ID": "wrong-worker",
+            "HMB_AGENT_CREDENTIAL": "secret",
+            "HMB_AGENT_CREDENTIAL_FILE": "/secret-file",
             "VIRTUAL_ENV": "/wrong-venv",
             "UV_PROJECT_ENVIRONMENT": "/wrong-uv",
-            "BUDDY_CONSOLE_PORT": "8642",
-            "BUDDY_UNLISTED_TEST_PIN": "inherited",
+            "HMB_CONSOLE_PORT": "8642",
+            "HMB_UNLISTED_TEST_PIN": "inherited",
             "ANTHROPIC_UNLISTED_TEST_PIN": "inherited",
             "ZCODE_UNLISTED_TEST_PIN": "inherited",
             "ZAI_API_KEY": "synthetic-secret",
@@ -98,18 +98,18 @@ class ChecksEnvironmentTests(unittest.TestCase):
             environment = checks.test_environment(Path("/repo"))
         for key in checks.SANITIZED_VARIABLES:
             self.assertNotIn(key, environment)
-        for key in ("BUDDY_UNLISTED_TEST_PIN", "ANTHROPIC_UNLISTED_TEST_PIN", "C2_IPC_ROOT", "C2_UNLISTED_TEST_PIN", "ZCODE_UNLISTED_TEST_PIN", "ZAI_API_KEY", "ZHIPU_API_KEY", "GLM_API_KEY"):
+        for key in ("HMB_UNLISTED_TEST_PIN", "ANTHROPIC_UNLISTED_TEST_PIN", "C2_IPC_ROOT", "C2_UNLISTED_TEST_PIN", "ZCODE_UNLISTED_TEST_PIN", "ZAI_API_KEY", "ZHIPU_API_KEY", "GLM_API_KEY"):
             self.assertNotIn(key, environment)
-        self.assertEqual(environment["BUDDY_DEV_SOURCE"], "1")
-        self.assertEqual(environment["BUDDY_CONSOLE_PORT"], "0")
-        self.assertTrue(environment["BUDDY_CLAUDE_CLI"].endswith("claude-not-installed"))
+        self.assertEqual(environment["HMB_DEV_SOURCE"], "1")
+        self.assertEqual(environment["HMB_CONSOLE_PORT"], "0")
+        self.assertTrue(environment["HMB_CLAUDE_CLI"].endswith("claude-not-installed"))
         path_entries = environment["PYTHONPATH"].split(os.pathsep)
         self.assertEqual(path_entries[:2], [str(Path("/repo/src")), str(Path("/repo/tests/python"))])
 
     def test_private_root_and_child_environment_contain_every_temp_file(self):
         root = checks.create_private_root()
         try:
-            self.assertTrue(root.name.startswith("buddy-checks-"))
+            self.assertTrue(root.name.startswith("hey-my-buddy-checks-"))
             self.assertEqual(stat.S_IMODE(os.stat(root).st_mode), 0o700)
             tmp = root / "tmp"
             self.assertTrue(tmp.is_dir())
@@ -140,7 +140,7 @@ class ChecksEnvironmentTests(unittest.TestCase):
 
 class ResidueObservationTests(unittest.TestCase):
     def test_lock_is_held_requires_an_owner(self):
-        with tempfile.TemporaryDirectory(prefix="buddy-checks-test-") as raw:
+        with tempfile.TemporaryDirectory(prefix="hey-my-buddy-checks-test-") as raw:
             path = Path(raw) / "lifetime.lock"
             path.write_text("")
             self.assertFalse(checks.lock_is_held(path))
@@ -153,9 +153,9 @@ class ResidueObservationTests(unittest.TestCase):
             self.assertFalse(checks.lock_is_held(Path(raw) / "absent.lock"))
 
     def test_held_locks_report_only_buddy_lifetime_owners(self):
-        with tempfile.TemporaryDirectory(prefix="buddy-checks-test-") as raw:
+        with tempfile.TemporaryDirectory(prefix="hey-my-buddy-checks-test-") as raw:
             root = Path(raw)
-            state = root / "buddy-test-state"
+            state = root / "hey-my-buddy-test-state"
             (state / "workers/local").mkdir(parents=True)
             for name in ("control-daemon.lock", "board-owner.lock"):
                 (state / name).write_text("")
@@ -177,7 +177,7 @@ class ResidueObservationTests(unittest.TestCase):
 class PrivateRootTeardownTests(unittest.TestCase):
     def test_teardown_removes_a_clean_private_root(self):
         root = checks.create_private_root()
-        state = root / "tmp" / "buddy-test-clean"
+        state = root / "tmp" / "hey-my-buddy-test-clean"
         (state / "workers/local").mkdir(parents=True)
         (state / "control-daemon.lock").write_text("")
         (state / "workers/local/supervisor.lock").write_text("")
@@ -186,7 +186,7 @@ class PrivateRootTeardownTests(unittest.TestCase):
 
     def test_teardown_preserves_evidence_when_a_supervisor_survives(self):
         root = checks.create_private_root()
-        state = root / "tmp" / "buddy-test-supervisor"
+        state = root / "tmp" / "hey-my-buddy-test-supervisor"
         worker = state / "workers/local"
         worker.mkdir(parents=True)
         (worker / "supervisor.lock").write_text("")
@@ -211,7 +211,7 @@ class PrivateRootTeardownTests(unittest.TestCase):
 
     def test_teardown_preserves_evidence_when_a_daemon_survives(self):
         root = checks.create_private_root()
-        state = root / "tmp" / "buddy-test-daemon"
+        state = root / "tmp" / "hey-my-buddy-test-daemon"
         state.mkdir(parents=True)
         (state / "control-daemon.lock").write_text("")
         fd = hold_lock(state / "control-daemon.lock")
@@ -233,7 +233,7 @@ class PrivateRootTeardownTests(unittest.TestCase):
         # A racing cleanup can unlink a live supervisor's lock file, leaving its
         # worker directory as the only cooperative surface still observable.
         root = checks.create_private_root()
-        worker = root / "tmp" / "buddy-test-orphan" / "workers" / "local"
+        worker = root / "tmp" / "hey-my-buddy-test-orphan" / "workers" / "local"
         worker.mkdir(parents=True)
         checks.request_cooperative_stop(root, timeout=0.1)
         try:
@@ -243,7 +243,7 @@ class PrivateRootTeardownTests(unittest.TestCase):
 
     def test_teardown_drains_a_cooperative_supervisor(self):
         root = checks.create_private_root()
-        worker = root / "tmp" / "buddy-test-drain" / "workers/local"
+        worker = root / "tmp" / "hey-my-buddy-test-drain" / "workers/local"
         worker.mkdir(parents=True)
         lock = worker / "supervisor.lock"
         lock.write_text("")
@@ -271,7 +271,7 @@ class PrivateRootTeardownTests(unittest.TestCase):
         # A racing cleanup unlinks the lock file while its holder still runs; a clean
         # teardown may only return after that holder observably exited.
         root = checks.create_private_root()
-        worker = root / "tmp" / "buddy-test-unlinked" / "workers" / "local"
+        worker = root / "tmp" / "hey-my-buddy-test-unlinked" / "workers" / "local"
         worker.mkdir(parents=True)
         lock = worker / "supervisor.lock"
         lock.write_text("")
@@ -312,7 +312,7 @@ class PrivateRootTeardownTests(unittest.TestCase):
         # No held lock is visible after the unlink, so only live-process observation
         # separates residue from a clean root; it must fail closed, not report clean.
         root = checks.create_private_root()
-        worker = root / "tmp" / "buddy-test-stuck" / "workers" / "local"
+        worker = root / "tmp" / "hey-my-buddy-test-stuck" / "workers" / "local"
         worker.mkdir(parents=True)
         lock = worker / "supervisor.lock"
         lock.write_text("")

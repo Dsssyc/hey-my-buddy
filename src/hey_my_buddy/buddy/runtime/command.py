@@ -43,10 +43,10 @@ class CommandAdapter(Adapter):
         argv = list(context.spec["argv"])
         environment = {
             **context.environment,
-            "BUDDY_TASK_ID": context.task_id,
-            "BUDDY_ATTEMPT_ID": context.attempt_id,
-            "BUDDY_TASK_FILE": str(context.task_file()),
-            "BUDDY_LOG_DIR": str(context.directory),
+            "HMB_TASK_ID": context.task_id,
+            "HMB_ATTEMPT_ID": context.attempt_id,
+            "HMB_TASK_FILE": str(context.task_file()),
+            "HMB_LOG_DIR": str(context.directory),
         }
         try:
             # ``shell=False`` is explicit: an operator-provided argv is one program

@@ -117,19 +117,19 @@ class ConsoleMacroTaskFixtureTests(unittest.TestCase):
                 self.assertEqual(second.launch_guard.call_count, 0)
 
     def test_inherited_authority_is_cleared_before_setting_private_paths(self):
-        environment = {"BUDDY_UNKNOWN_FUTURE_CREDENTIAL": "fictional", "ANTHROPIC_API_KEY": "fictional",
+        environment = {"HMB_UNKNOWN_FUTURE_CREDENTIAL": "fictional", "ANTHROPIC_API_KEY": "fictional",
                        "VIRTUAL_ENV": "fictional", "UV_PROJECT_ENVIRONMENT": "fictional", "PATH": "preserved"}
         self.assertEqual(fixture_module.clean_environment(environment), {"PATH": "preserved"})
         with private_state_dir("console-macro-task-environment-") as root:
             with patch.dict(os.environ, environment):
                 with fixture_module.private_environment(root / "state", root / "runtime", SOURCE):
-                    self.assertNotIn("BUDDY_UNKNOWN_FUTURE_CREDENTIAL", os.environ)
+                    self.assertNotIn("HMB_UNKNOWN_FUTURE_CREDENTIAL", os.environ)
                     self.assertNotIn("ANTHROPIC_API_KEY", os.environ)
                     self.assertNotIn("VIRTUAL_ENV", os.environ)
                     self.assertNotIn("UV_PROJECT_ENVIRONMENT", os.environ)
-                    self.assertEqual(os.environ["BUDDY_STATE_DIR"], str(root / "state"))
-                    self.assertEqual(os.environ["BUDDY_RUNTIME_ROOT"], str(root / "runtime"))
-                self.assertEqual(os.environ["BUDDY_UNKNOWN_FUTURE_CREDENTIAL"], "fictional")
+                    self.assertEqual(os.environ["HMB_STATE_DIR"], str(root / "state"))
+                    self.assertEqual(os.environ["HMB_RUNTIME_ROOT"], str(root / "runtime"))
+                self.assertEqual(os.environ["HMB_UNKNOWN_FUTURE_CREDENTIAL"], "fictional")
 
 
 if __name__ == "__main__":

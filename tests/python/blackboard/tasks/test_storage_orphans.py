@@ -212,7 +212,7 @@ class StorageOrphanTests(WorkflowTestCase):
         outputs.mkdir()
         (outputs / 'kept.txt').write_text('retained output')
         refs = self.git(self.repo, 'for-each-ref', '--format=%(refname):%(objectname)',
-                        'refs/buddy/workspaces/' + manifest['workspaceId'] + '/')
+                        'refs/hey-my-buddy/workspaces/' + manifest['workspaceId'] + '/')
         records = {name: (parent / name).read_bytes() for name in ('manifest.json', 'input.json', 'request.json')}
         result = self.apply(planned)
         self.assertFalse(checkout.exists())
@@ -221,7 +221,7 @@ class StorageOrphanTests(WorkflowTestCase):
         self.assertEqual((outputs / 'kept.txt').read_text(), 'retained output')
         self.assertEqual((self.repo / 'tracked.txt').read_text(), 'input\n')
         self.assertEqual(self.git(self.repo, 'for-each-ref', '--format=%(refname):%(objectname)',
-                                 'refs/buddy/workspaces/' + manifest['workspaceId'] + '/'), refs)
+                                 'refs/hey-my-buddy/workspaces/' + manifest['workspaceId'] + '/'), refs)
         self.assertEqual({name: (parent / name).read_bytes() for name in records}, records)
         with patch.object(storage, '_workspace_reference_rows', wraps=storage._workspace_reference_rows) as scan:
             replanned = self.board_instance.call('storage_plan', {})
@@ -533,7 +533,7 @@ class StorageOrphanTests(WorkflowTestCase):
         self.assertEqual(proof['reasons'], [])
         for suffix in ('input', 'staged', 'retained/input', 'retained/staged'):
             self.assertEqual(self.git(self.repo, 'show-ref', '--verify', '--hash',
-                                     'refs/buddy/workspaces/' + other['workspaceId'] + '/' + suffix),
+                                     'refs/hey-my-buddy/workspaces/' + other['workspaceId'] + '/' + suffix),
                              other['inputCommit'] if suffix.endswith('input') else other['snapshot']['stagedCommit'])
         inspected = self.board_instance.call('storage_plan', {})
         row = next(row for row in inspected['candidates'] if row['path'] == str(other_checkout))

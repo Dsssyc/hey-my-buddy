@@ -312,9 +312,9 @@ def main() -> int:
     args = parser.parse_args()
     root = args.root.absolute()
     require(root.is_dir(), "Host must create and register the exact root first")
-    require(os.environ.get("BUDDY_STATE_DIR") == str(root / "state"), "private state root required")
-    require(os.environ.get("BUDDY_RUNTIME_ROOT") == str(root / "runtime"), "private runtime root required")
-    require(os.environ.get("BUDDY_DEV_SOURCE") == "1", "source runtime required")
+    require(os.environ.get("HMB_STATE_DIR") == str(root / "state"), "private state root required")
+    require(os.environ.get("HMB_RUNTIME_ROOT") == str(root / "runtime"), "private runtime root required")
+    require(os.environ.get("HMB_DEV_SOURCE") == "1", "source runtime required")
     require(not any(k.startswith("ANTHROPIC_") or k in ("VIRTUAL_ENV", "UV_PROJECT_ENVIRONMENT")
                     for k in os.environ), "clear inherited environment before the probe")
     try:

@@ -141,7 +141,7 @@ class DiscoveryReceiptTests(unittest.TestCase):
         self.assertEqual(caught.exception.__context__.message, 'fixture native refusal')
 
     def test_unknown_stop_retains_directory_without_cleanup(self):
-        with tempfile.TemporaryDirectory(dir=os.environ.get('BUDDY_CHECKS_TMPDIR', '/tmp')) as temporary:
+        with tempfile.TemporaryDirectory(dir=os.environ.get('HMB_CHECKS_TMPDIR', '/tmp')) as temporary:
             directory = Path(temporary) / 'catalog'
             directory.mkdir()
             with mock.patch.object(run_execution.tempfile, 'mkdtemp', return_value=str(directory)), \
@@ -158,8 +158,8 @@ class CodexModelCheckProjectionTests(unittest.TestCase):
     """The run result's model-check fact, published where the role merges evidence."""
 
     def setUp(self):
-        self.temp = tempfile.TemporaryDirectory(prefix="buddy-roles-model-check-",
-                                                dir=os.environ.get("BUDDY_CHECKS_TMPDIR", "/tmp"))
+        self.temp = tempfile.TemporaryDirectory(prefix="hey-my-buddy-roles-model-check-",
+                                                dir=os.environ.get("HMB_CHECKS_TMPDIR", "/tmp"))
         self.addCleanup(self.temp.cleanup)
         self.base = Path(self.temp.name)
 

@@ -45,18 +45,18 @@ class FixtureCleanupTests(unittest.TestCase):
 
     def test_child_environment_drops_inherited_ownership_and_credentials(self):
         inherited = {
-            "BUDDY_STATE_DIR": "/wrong-state",
-            "BUDDY_RUNTIME_ROOT": "/wrong-runtime",
-            "BUDDY_RUNTIME": "/pinned-runtime",
-            "BUDDY_RUNTIME_IDENTITY": "pinned",
-            "BUDDY_WORKER_STATE": "/wrong-worker",
-            "BUDDY_WORKER_ID": "wrong-worker",
-            "BUDDY_AGENT_CREDENTIAL": "secret",
-            "BUDDY_AGENT_CREDENTIAL_FILE": "/secret-file",
+            "HMB_STATE_DIR": "/wrong-state",
+            "HMB_RUNTIME_ROOT": "/wrong-runtime",
+            "HMB_RUNTIME": "/pinned-runtime",
+            "HMB_RUNTIME_IDENTITY": "pinned",
+            "HMB_WORKER_STATE": "/wrong-worker",
+            "HMB_WORKER_ID": "wrong-worker",
+            "HMB_AGENT_CREDENTIAL": "secret",
+            "HMB_AGENT_CREDENTIAL_FILE": "/secret-file",
             "VIRTUAL_ENV": "/wrong-venv",
             "UV_PROJECT_ENVIRONMENT": "/wrong-uv",
-            "BUDDY_MODEL_CATALOG_FILE": "/inherited-catalog",
-            "BUDDY_UNKNOWN_PIN": "inherited-pin",
+            "HMB_MODEL_CATALOG_FILE": "/inherited-catalog",
+            "HMB_UNKNOWN_PIN": "inherited-pin",
             "ANTHROPIC_BASE_URL": "https://gateway.invalid",
             "ZCODE_UNLISTED_TEST_PIN": "inherited-config",
             "ZAI_API_KEY": "synthetic-secret",
@@ -74,10 +74,10 @@ class FixtureCleanupTests(unittest.TestCase):
         }
         with private_state_dir() as directory, patch.dict(os.environ, inherited):
             environment = _child_environment(directory)
-            self.assertEqual(environment["BUDDY_STATE_DIR"], str(directory))
-            self.assertEqual(environment["BUDDY_RUNTIME_ROOT"], str(directory / "runtime-root"))
-            for key in inherited.keys() - {"BUDDY_STATE_DIR", "BUDDY_RUNTIME_ROOT"}:
-                if key.startswith(("BUDDY_", "ANTHROPIC_", "CLAUDE_CODE_", "C2_", "ZCODE_", "ZAI_", "ZHIPU_", "GLM_")) or key in (
+            self.assertEqual(environment["HMB_STATE_DIR"], str(directory))
+            self.assertEqual(environment["HMB_RUNTIME_ROOT"], str(directory / "runtime-root"))
+            for key in inherited.keys() - {"HMB_STATE_DIR", "HMB_RUNTIME_ROOT"}:
+                if key.startswith(("HMB_", "ANTHROPIC_", "CLAUDE_CODE_", "C2_", "ZCODE_", "ZAI_", "ZHIPU_", "GLM_")) or key in (
                         "VIRTUAL_ENV", "UV_PROJECT_ENVIRONMENT"):
                     self.assertNotIn(key, environment)
             self.assertFalse(any(key.startswith("CLAUDE_CODE_") for key in environment))
@@ -87,31 +87,31 @@ class FixtureCleanupTests(unittest.TestCase):
             runtime_root = directory / "alternate-runtime"
             python_path = os.pathsep.join((str(PYTHON_ROOT), str(directory / "helpers")))
             environment = _child_environment(directory, {
-                "BUDDY_STATE_DIR": "/wrong-state",
-                "BUDDY_RUNTIME_ROOT": str(runtime_root),
+                "HMB_STATE_DIR": "/wrong-state",
+                "HMB_RUNTIME_ROOT": str(runtime_root),
                 "PYTHONPATH": python_path,
             })
-            self.assertEqual(environment["BUDDY_STATE_DIR"], str(directory))
-            self.assertEqual(environment["BUDDY_RUNTIME_ROOT"], str(runtime_root))
+            self.assertEqual(environment["HMB_STATE_DIR"], str(directory))
+            self.assertEqual(environment["HMB_RUNTIME_ROOT"], str(runtime_root))
             self.assertEqual(environment["PYTHONPATH"], python_path)
             with self.assertRaisesRegex(ValueError, "private state directory"):
-                _child_environment(directory, {"BUDDY_RUNTIME_ROOT": "/wrong-runtime"})
+                _child_environment(directory, {"HMB_RUNTIME_ROOT": "/wrong-runtime"})
 
     def test_r06_child_uses_private_state_and_explicit_catalog(self):
         """Probe a real interpreter and SQLite file, with default lookup refused."""
         with private_state_dir() as directory:
             catalog = write_catalog_fixture(directory)
             inherited = {
-                "BUDDY_STATE_DIR": str(directory / "inherited-state"),
-                "BUDDY_RUNTIME_ROOT": str(directory / "inherited-runtime"),
-                "BUDDY_MODEL_CATALOG_FILE": str(directory / "inherited-catalog"),
-                "BUDDY_RUNTIME": "inherited-runtime",
-                "BUDDY_RUNTIME_IDENTITY": "inherited-identity",
-                "BUDDY_AGENT_CREDENTIAL": "synthetic-secret",
-                "BUDDY_AGENT_CREDENTIAL_FILE": str(directory / "inherited-credential"),
-                "BUDDY_WORKER_ID": "inherited-worker",
-                "BUDDY_WORKER_STATE": str(directory / "inherited-worker"),
-                "BUDDY_UNKNOWN_PIN": "inherited-pin",
+                "HMB_STATE_DIR": str(directory / "inherited-state"),
+                "HMB_RUNTIME_ROOT": str(directory / "inherited-runtime"),
+                "HMB_MODEL_CATALOG_FILE": str(directory / "inherited-catalog"),
+                "HMB_RUNTIME": "inherited-runtime",
+                "HMB_RUNTIME_IDENTITY": "inherited-identity",
+                "HMB_AGENT_CREDENTIAL": "synthetic-secret",
+                "HMB_AGENT_CREDENTIAL_FILE": str(directory / "inherited-credential"),
+                "HMB_WORKER_ID": "inherited-worker",
+                "HMB_WORKER_STATE": str(directory / "inherited-worker"),
+                "HMB_UNKNOWN_PIN": "inherited-pin",
                 "ANTHROPIC_API_KEY": "synthetic-secret",
                 "ANTHROPIC_BASE_URL": "https://gateway.invalid",
                 "C2_IPC_ROOT": str(directory / "inherited-ipc"),
@@ -125,7 +125,7 @@ class FixtureCleanupTests(unittest.TestCase):
                 "ZCODE_PERSONAL_PROVIDER_CONFIG_FILE": str(directory / "inherited-personal.json"),
             }
             with patch.dict(os.environ, inherited):
-                environment = _child_environment(directory, {"BUDDY_MODEL_CATALOG_FILE": str(catalog)})
+                environment = _child_environment(directory, {"HMB_MODEL_CATALOG_FILE": str(catalog)})
             completed = subprocess.run([sys.executable, "-c", textwrap.dedent("""
                 import json, os
                 from pathlib import Path
@@ -153,7 +153,7 @@ class FixtureCleanupTests(unittest.TestCase):
                         'XDG_CONFIG_HOME', 'XDG_DATA_HOME', 'XDG_CACHE_HOME', 'XDG_STATE_HOME',
                         'XDG_RUNTIME_DIR', 'APPDATA', 'LOCALAPPDATA'}
                 selected = {key: value for key, value in os.environ.items()
-                            if key in keys or key.startswith(('BUDDY_', 'ANTHROPIC_', 'C2_'))}
+                            if key in keys or key.startswith(('HMB_', 'ANTHROPIC_', 'C2_'))}
                 result = {'environment': selected, 'state': str(state),
                           'database': str(store.db.path), 'ipc': str(ipc),
                           'runtime': str(runtime_root()), 'catalog': payload['source']}
@@ -166,8 +166,8 @@ class FixtureCleanupTests(unittest.TestCase):
             self.assertEqual(probe["runtime"], str(directory / "runtime-root"))
             self.assertEqual(probe["ipc"], str(directory / "ipc"))
             self.assertEqual(probe["catalog"], f"file:{catalog}")
-            self.assertEqual(probe["environment"]["BUDDY_MODEL_CATALOG_FILE"], str(catalog))
-            for key in inherited.keys() - {"BUDDY_STATE_DIR", "BUDDY_RUNTIME_ROOT", "BUDDY_MODEL_CATALOG_FILE",
+            self.assertEqual(probe["environment"]["HMB_MODEL_CATALOG_FILE"], str(catalog))
+            for key in inherited.keys() - {"HMB_STATE_DIR", "HMB_RUNTIME_ROOT", "HMB_MODEL_CATALOG_FILE",
                                            "HOME", "CODEX_HOME", "CLAUDE_CONFIG_DIR"}:
                 if key == "DSH_HOME":
                     self.assertNotEqual(probe["environment"][key], inherited[key])
@@ -193,28 +193,28 @@ class FixtureCleanupTests(unittest.TestCase):
         fixture.setUp()
         try:
             path = fixture.catalog_fixture()
-            with patch.dict(os.environ, {"BUDDY_MODEL_CATALOG_FILE": "/wrong-catalog"}):
-                self.assertNotIn("BUDDY_MODEL_CATALOG_FILE", _child_environment(fixture.directory))
+            with patch.dict(os.environ, {"HMB_MODEL_CATALOG_FILE": "/wrong-catalog"}):
+                self.assertNotIn("HMB_MODEL_CATALOG_FILE", _child_environment(fixture.directory))
                 owned = fixture.child_environment()
-                self.assertIn("BUDDY_MODEL_CATALOG_FILE", owned, "owner lost its explicit catalog")
-                self.assertEqual(owned["BUDDY_MODEL_CATALOG_FILE"], str(path))
+                self.assertIn("HMB_MODEL_CATALOG_FILE", owned, "owner lost its explicit catalog")
+                self.assertEqual(owned["HMB_MODEL_CATALOG_FILE"], str(path))
                 # Both public helpers must use the owner's explicit environment.
                 with patch("support.subprocess.run") as run:
                     run.return_value = subprocess.CompletedProcess([], 0, "{}", "")
                     fixture.cli("paths")
-                self.assertIn("BUDDY_MODEL_CATALOG_FILE", run.call_args.kwargs["env"])
-                self.assertEqual(run.call_args.kwargs["env"]["BUDDY_MODEL_CATALOG_FILE"], str(path))
+                self.assertIn("HMB_MODEL_CATALOG_FILE", run.call_args.kwargs["env"])
+                self.assertEqual(run.call_args.kwargs["env"]["HMB_MODEL_CATALOG_FILE"], str(path))
                 with patch("support.subprocess.Popen") as launch, patch(
                     "hey_my_buddy.protocol.transport._read_endpoint", return_value={"address": "fixture"},
                 ), patch("hey_my_buddy.protocol.transport._request", return_value={"managedWorkerIds": []}):
                     launch.return_value.poll.return_value = 0
                     with fixture.daemon():
                         pass
-                self.assertIn("BUDDY_MODEL_CATALOG_FILE", launch.call_args.kwargs["env"])
-                self.assertEqual(launch.call_args.kwargs["env"]["BUDDY_MODEL_CATALOG_FILE"], str(path))
+                self.assertIn("HMB_MODEL_CATALOG_FILE", launch.call_args.kwargs["env"])
+                self.assertEqual(launch.call_args.kwargs["env"]["HMB_MODEL_CATALOG_FILE"], str(path))
                 self.assertTrue(launch.call_args.args[0][-1].endswith("daemon_with_catalog.py"))
             with self.assertRaisesRegex(ValueError, "private state directory"):
-                fixture.child_environment({"BUDDY_MODEL_CATALOG_FILE": "/wrong-catalog"})
+                fixture.child_environment({"HMB_MODEL_CATALOG_FILE": "/wrong-catalog"})
             with self.assertRaisesRegex(ValueError, "private state directory"):
                 fixture.child_environment({"HOME": "/wrong-home"})
         finally:
@@ -227,7 +227,7 @@ class FixtureCleanupTests(unittest.TestCase):
 
         with private_state_dir() as directory:
             catalog = write_catalog_fixture(directory)
-            environment = _child_environment(directory, {"BUDDY_MODEL_CATALOG_FILE": str(catalog)})
+            environment = _child_environment(directory, {"HMB_MODEL_CATALOG_FILE": str(catalog)})
             fixture = runpy.run_path(str(PYTHON_ROOT.parent / "tests/python/blackboard/service/fixtures/daemon_with_catalog.py"))
             with patch.dict(os.environ, environment, clear=True), patch(
                 "hey_my_buddy.buddy.harnesses.discovery.candidate_snapshot",
@@ -261,7 +261,7 @@ class FixtureCleanupTests(unittest.TestCase):
         try:
             with patch.dict(os.environ):
                 fixture.catalog_fixture()
-            with fixture.daemon(env={"BUDDY_MAX_CONCURRENT": "1"}) as original:
+            with fixture.daemon(env={"HMB_MAX_CONCURRENT": "1"}) as original:
                 original_id = _read_endpoint(directory)["serviceId"]
                 code, restarted = fixture.cli("restart", json.dumps({"drainSeconds": 0}))
                 self.assertEqual(code, 0, restarted)
@@ -269,7 +269,7 @@ class FixtureCleanupTests(unittest.TestCase):
                 original.wait(timeout=20)
 
             # The CLI detaches this new daemon, so it is absent from children.
-            code, health = fixture.cli("health", env={"BUDDY_MAX_CONCURRENT": "1"})
+            code, health = fixture.cli("health", env={"HMB_MAX_CONCURRENT": "1"})
             self.assertEqual(code, 0, health)
             self.assertNotEqual(_read_endpoint(directory)["serviceId"], original_id)
             self.assertTrue(wait_for(lambda: _lock_held(directory / "workers/local/supervisor.lock")))
@@ -298,7 +298,7 @@ class FixtureCleanupTests(unittest.TestCase):
                 with private_state_dir() as directory:
                     catalog = write_catalog_fixture(directory)
                     environment = _child_environment(directory, {
-                        "BUDDY_MAX_CONCURRENT": "1", "BUDDY_MODEL_CATALOG_FILE": str(catalog),
+                        "HMB_MAX_CONCURRENT": "1", "HMB_MODEL_CATALOG_FILE": str(catalog),
                     })
                     completed = subprocess.run(
                         [sys.executable, "-m", "hey_my_buddy.cli.main", "health"], env=environment,

@@ -23,7 +23,7 @@ class SubmissionCleanupTests(workflow_tests.WorkflowTestCase):
         super().setUpClass()
         # Share only initial Git objects/config. Mutable files, index, refs,
         # worktree registration and identity facts belong to each copied site.
-        temporary = tempfile.TemporaryDirectory(prefix="buddy-submission-repository-")
+        temporary = tempfile.TemporaryDirectory(prefix="hey-my-buddy-submission-repository-")
         cls.addClassCleanup(temporary.cleanup)
         fixture = cls(methodName="runTest")
         fixture.directory = Path(temporary.name)
@@ -91,7 +91,7 @@ class SubmissionCleanupTests(workflow_tests.WorkflowTestCase):
             directory = Path(manifest['checkoutRoot']).parent
             (directory / 'outputs').mkdir()
             (directory / 'outputs/evidence.txt').write_text('retained output')
-            saved.update(manifest=manifest, refs=self.git(self.repo, 'for-each-ref', '--format=%(refname) %(objectname)', 'refs/buddy/'))
+            saved.update(manifest=manifest, refs=self.git(self.repo, 'for-each-ref', '--format=%(refname) %(objectname)', 'refs/hey-my-buddy/'))
             return original(*args, **kwargs)
         with patch.object(board.store, 'task_submit', side_effect=admission):
             with self.assertRaises(BoardError) as caught:
@@ -103,7 +103,7 @@ class SubmissionCleanupTests(workflow_tests.WorkflowTestCase):
         self.assertEqual((directory / 'outputs/evidence.txt').read_text(), 'retained output')
         self.assertTrue((directory / 'manifest.json').exists())
         self.assertEqual(source_index, (self.repo / '.git/index').read_bytes())
-        self.assertEqual(saved['refs'], self.git(self.repo, 'for-each-ref', '--format=%(refname) %(objectname)', 'refs/buddy/'))
+        self.assertEqual(saved['refs'], self.git(self.repo, 'for-each-ref', '--format=%(refname) %(objectname)', 'refs/hey-my-buddy/'))
         self.assert_no_registration(board)
 
     def test_transaction_failure_rolls_back_task_and_revokes_checkout(self):
