@@ -17,7 +17,7 @@ class NativeEvidenceRoleTests(unittest.TestCase):
     def request(self, harness="zcode"):
         fields = full_request(Path("/private/tmp")).to_payload()
         fields.update(harness=harness, toolScope="none", sessionServices=[], captureEvidence=False)
-        return rc.decode_run_request(fields)
+        return rc.RunRequest.from_payload(fields)
 
     def result(self, harness="zcode", *, evidence=None, status="ok"):
         return full_result().model_copy(update={

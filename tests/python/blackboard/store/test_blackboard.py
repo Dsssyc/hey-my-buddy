@@ -369,6 +369,8 @@ class TestCrashWindows(BoardTestCase):
         worker.spool.write_startup(
             {
                 "workerId": "w-pre",
+                "taskId": claim["claim"]["attempt"]["taskId"],
+                "privateAdapter": "command",
                 "nonce": "a" * 32,
                 "claimRequestId": "claim-crash-pre-1",
                 "attemptId": claim["claim"]["attempt"]["attemptId"],

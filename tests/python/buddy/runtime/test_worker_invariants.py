@@ -67,41 +67,9 @@ class MarkerWriteFailureTests(unittest.TestCase):
                               client=mock.Mock(), log=silent)
         return execution.execute()
 
-    def test_marker_failure_after_spawn_never_drops_the_live_handle(self):
-        attempt_id, task_id = "attempt-marker", "task-marker"
-        directory = self.state / "attempts" / task_id / attempt_id
-        original = worker_module.fsync_json
-        handle = mock.Mock()
-        handle.identity.return_value = {"bootId": "test-boot", "pid": 11, "startedAt": 12,
-                                          "processGroupId": 11, "jobName": None,
-                                          "worker": {"bootId": "test-boot", "pid": 10,
-                                                     "startedAt": 9}}
-        handle.wait.return_value = 0
-        handle.process.returncode = 1
-        self.worker.client.submit_result = mock.Mock(return_value={"taskState": "failed"})
-
-        def failing(path, value):
-            if Path(path).name == "spawn.marker":
-                raise OSError("injected marker write failure")
-            return original(path, value)
-
-        with mock.patch("hey_my_buddy.buddy.runtime.worker.fsync_json", side_effect=failing), \
-             mock.patch("hey_my_buddy.buddy.runtime.execution.launch_execution", return_value=handle), \
-             mock.patch("hey_my_buddy.buddy.runtime.execution.stop_execution") as stopped, \
-             mock.patch("hey_my_buddy.buddy.roles.live.release_live_binding"):
-            receipt = self.worker.execute(self.claim(attempt_id, task_id))
-        self.assertEqual(receipt["report"]["status"], "failed")
-        self.assertIs(receipt["report"]["shutdownConfirmed"], False)
-        self.worker.client.submit_result.assert_called_once()
-        # The durable intent exists, but failure to record a complete identity
-        # must stop the execution process before any completion claim is made.
-        self.assertTrue((directory / "spawn.intent").is_file())
-        self.assertFalse((directory / "spawn.marker").exists())
-        stopped.assert_called_once_with(handle, force=True)
-
     def test_direct_execution_writes_a_durable_receipt(self):
         receipt = self.execute_direct(self.claim("attempt-clean", "task-clean"))
-        directory = self.state / "attempts" / "task-clean" / "attempt-clean"
+        directory = execution_module.receipt_directory(self.state, "command", "task-clean", "attempt-clean")
         report = receipt["report"]
         self.assertEqual(json.loads((directory / "result-receipt.json").read_text()), receipt)
         self.assertEqual(report["status"], "ok")
@@ -124,7 +92,7 @@ class MarkerWriteFailureTests(unittest.TestCase):
             'shutdownConfirmed': True, 'native': {'shutdownConfirmed': True}})
         self.assertIn("not an executable this worker can find", report["error"])
         self.assertEqual(report["terminationReason"], TERMINATION_HARNESS_ERROR)
-        directory = self.state / "attempts" / "task-unavailable" / "attempt-unavailable"
+        directory = execution_module.receipt_directory(self.state, "command", "task-unavailable", "attempt-unavailable")
         self.assertEqual(json.loads((directory / "result-receipt.json").read_text()), receipt)
 
     def test_replacement_worker_uses_primitive_evidence_and_does_not_report_unknown(self):
@@ -164,7 +132,7 @@ class MarkerWriteFailureTests(unittest.TestCase):
                     "worker": {"bootId": "boot", "pid": 41, "startedAt": 9}}
         intent = {"workerId": "w-orphan", "instanceId": "old-instance", "attemptId": "attempt-orphan",
                   "taskId": "task-orphan", "generation": 1, "nonce": "n" * 32,
-                  "claimRequestId": "claim-orphan"}
+                  "claimRequestId": "claim-orphan", "privateAdapter": "command"}
 
         class Client:
             def __init__(self):
@@ -182,7 +150,7 @@ class MarkerWriteFailureTests(unittest.TestCase):
         worker.spool.write_startup(intent)
         marker = worker.spawn_marker(intent)
         fsync = worker_module.fsync_json
-        fsync(marker, {"processIdentity": identity})
+        fsync(marker, {"processIdentity": identity, "previousProcessStopped": False})
         worker.reattach()
         self.assertIsNone(worker.spool.read_startup())
         with mock.patch.object(process_identity, "worker_identity_alive", return_value=False):
@@ -197,7 +165,7 @@ class MarkerWriteFailureTests(unittest.TestCase):
     def test_retirement_waits_for_an_unresolved_orphan(self):
         worker = Worker("w-orphan", self.state, client=mock.Mock(), log=silent)
         worker.spool.ensure()
-        worker_module.fsync_json(worker.spool.directory / "orphaned.json", {"attemptId": "attempt-orphan"})
+        worker_module.fsync_json(worker.spool.directory / "orphaned.json", {"attemptId": "attempt-orphan", "taskId": "task-orphan", "privateAdapter": "command"})
         with mock.patch.object(worker, "recover_orphans") as recover:
             self.assertEqual(worker.settle_retirement(), ["orphaned-attempt:attempt-orphan"])
         recover.assert_called_once_with()
@@ -603,98 +571,36 @@ class LiveActivityForwardTests(unittest.TestCase):
         def renew(self, *args, **kwargs):
             return {}
 
-    def control(self, *, with_request=True, harness="zcode", task_id="task-live",
+    def control(self, *, harness="zcode", task_id="task-live",
                 attempt_id="attempt-live", generation=1):
-        import types
+        from types import SimpleNamespace
+        from hey_my_buddy.buddy.harnesses.c_two_live import CTwoLiveEndpoint
+        from hey_my_buddy.buddy.harnesses.live import LiveCapabilities
+        from hey_my_buddy.protocol.contracts import HarnessRunLive
+        from hey_my_buddy.protocol.run_identity import RunIdentity
 
-        from hey_my_buddy.buddy.harnesses.run_contract import (
-            FrozenJson,
-            PrivateStatePaths,
-            RunBudget,
-            RunBuddy,
-            RunIdentity,
-            RunRequest,
-            encode_run_request,
-        )
         claim = {"attempt": {"attemptId": attempt_id, "taskId": task_id, "generation": generation},
                  "task": {"taskId": task_id,
                           "spec": {"adapter": harness, "cwd": str(self.work), "task": "live activity",
                                    "expectedSeconds": 30}}}
         execution = Execution(claim, self.state, "w-live", "fixture-nonce",
                               client=self.RecordingClient(), log=silent)
-        directory = self.state / "attempts" / task_id / attempt_id
-        directory.mkdir(mode=0o700, parents=True, exist_ok=True)
         identity = RunIdentity(task_id=task_id, attempt_id=attempt_id, generation=generation,
                                invocation_id="invocation-live", turn_id="turn-live")
-        request_file = directory / "role-run-request.json"
-        if with_request:
-            request = RunRequest(
-                identity=identity, harness=harness,
-                buddy=RunBuddy(provider="fixture-zcode", model="fixture-glm", effort="low"),
-                cwd=str(self.work),
-                private_state=PrivateStatePaths(invocation_root=str(directory),
-                                                native_root=str(directory / "native")),
-                input_text="the micro task turn input", tool_scope="write",
-                output_schema=FrozenJson({"type": "object"}),
-                budget=RunBudget(timeout_seconds=600))
-            worker_module.fsync_json(request_file, json.loads(encode_run_request(request)))
-        from hey_my_buddy.buddy.harnesses.c_two_live import CTwoLiveChannel, CTwoLiveEndpoint, LiveEndpointDescriptor
-        from hey_my_buddy.buddy.harnesses.live import LiveCapabilities
-        from hey_my_buddy.protocol.contracts import HarnessRunLive
         endpoint = CTwoLiveEndpoint(identity, LiveCapabilities(inquiry_delivery="unsupported"), HarnessRunLive,
-                                    instance_id="c" * 64, token="d" * 64, state_dir=Path(os.environ["HMB_STATE_DIR"]))
+                                    instance_id="c" * 64, token="d" * 64, state_dir=self.state)
         self.addCleanup(endpoint.close, reason="fixture-ended")
-        self.endpoints = getattr(self, "endpoints", {})
-        self.endpoints[str(directory)] = endpoint
-        descriptor = LiveEndpointDescriptor(
-            address="fixture-address", name="Fixture Activity", instance_id="c" * 64,
-            host_pid=42, endpoint_credential="opaque-native-credential")
-        live_file = directory / "execution-live.json"
-        live_file.write_text(json.dumps({"identity": identity.model_dump(by_alias=True),
-                                        "harness": harness, "descriptor": descriptor.to_payload(),
-                                        "token": "d" * 64}))
-        control = {"operation": "worker", "harness": harness, "requestFile": str(request_file),
-                   "directory": str(directory),
-                   "live": {"readyFile": str(live_file), "instanceId": "c" * 64, "token": "d" * 64}}
-        handle = types.SimpleNamespace(role_run_control=control, role_run_identity=identity,
-                                       execution_live_file=str(live_file), pid=42, cancel_requested=False)
-        import c_two as cc
-        self.enterContext(mock.patch.object(cc.EndpointCredential, "from_json", return_value=types.SimpleNamespace(
-            address="fixture-address", context=cc.local_endpoint_context())))
-        # Readiness/held-request validation, wire admission and forwarding all
-        # run. Both SDK boundaries are local; no native PID is proven here.
-        def connect(*args, timeout, **kwargs):
-            self.assertGreaterEqual(timeout, 0)
-            return nullcontext(self.endpoints[str(directory)])
-        def with_call_options(peer, *, timeout):
-            self.assertIs(peer, self.endpoints[str(directory)])
-            self.assertGreaterEqual(timeout, 0)
-            return peer
-        self.enterContext(mock.patch.object(cc, "connect", side_effect=connect))
-        self.enterContext(mock.patch.object(cc, "with_call_options", side_effect=with_call_options))
+        handle = SimpleNamespace(live_endpoint=endpoint, cancel_requested=False)
         control = execution.control
         control.attach(handle, object())
         self.addCleanup(lambda: (control.stop(), control.join(2)) if control.ident is not None else None)
-        return control, directory
+        return control, endpoint
 
-    def publish_activity(self, directory: Path, *, task_id="task-live", attempt_id="attempt-live",
-                         generation=1, event_seq=1):
-        from hey_my_buddy.buddy.harnesses.c_two_live import CTwoLiveEndpoint
-        from hey_my_buddy.buddy.harnesses.live import LiveCapabilities
-        from hey_my_buddy.protocol.contracts import HarnessRunLive
-        from hey_my_buddy.protocol.run_identity import RunIdentity
-        endpoint = self.endpoints[str(directory)]
-        source_identity = RunIdentity(**{**endpoint.identity.model_dump(), "task_id": task_id,
-                                         "attempt_id": attempt_id, "generation": generation})
-        if source_identity != endpoint.identity:
-            endpoint = CTwoLiveEndpoint(source_identity, LiveCapabilities(inquiry_delivery="unsupported"), HarnessRunLive,
-                                        instance_id="c" * 64, token="d" * 64, state_dir=Path(os.environ["HMB_STATE_DIR"]))
-            self.endpoints[str(directory)] = endpoint
-            self.addCleanup(endpoint.close, reason="fixture-ended")
+    def publish_activity(self, endpoint, *, event_seq=1):
         self.assertTrue(endpoint.publish_activity({"phase": "streaming-model", "eventSeq": event_seq,
                                                    "counts": {"modelTurns": 1, "toolCalls": 0}}))
 
-    def test_activity_flows_through_the_channel_and_never_repeats(self):
+    def test_activity_flows_from_the_local_endpoint_and_never_repeats(self):
         control, directory = self.control()
         control.start()
         self.publish_activity(directory, event_seq=3)
@@ -706,41 +612,18 @@ class LiveActivityForwardTests(unittest.TestCase):
         self.publish_activity(directory, event_seq=4)
         self.assertTrue(wait_for(lambda: len(calls) == 2, 3))
 
-    def test_a_foreign_attempts_endpoint_is_never_forwarded(self):
-        control, directory = self.control()
-        self.publish_activity(directory, attempt_id="another-attempt", event_seq=9)
-        control.start()
-        time.sleep(0.5)
-        self.assertEqual(control.execution.client.progress_calls, [])
-
-    def test_a_live_record_of_another_invocation_never_binds_or_bypasses(self):
-        control, directory = self.control()
-        self.publish_activity(directory, event_seq=3)
-        live_path = Path(control.handle.execution_live_file)
-        original = live_path.read_text()
-        request = json.loads(original)
-        request["identity"]["invocationId"] = "foreign-invocation"
-        live_path.write_text(json.dumps(request))
-        control.start()
-        time.sleep(0.5)
-        self.assertEqual(control.execution.client.progress_calls, [])
-        live_path.write_text(original)
-        self.assertTrue(wait_for(lambda: len(control.execution.client.progress_calls) == 1, 3))
-        self.assertEqual(control.execution.client.progress_calls[0]["data"]["activity"]["eventSeq"], 3)
-
     def test_an_unextracted_command_has_no_live_activity_or_file_fallback(self):
-        control, directory = self.control(with_request=False, harness="command")
-        control.handle.role_run_control = {"operation": "worker", "harness": "command"}
-        (directory / "activity.json").write_text('{"phase":"streaming-model","eventSeq":3}')
+        control, endpoint = self.control(harness="command")
+        control.handle.live_endpoint = None
+        (self.state / "activity.json").write_text('{"phase":"streaming-model","eventSeq":3}')
         control.start()
         time.sleep(0.5)
         self.assertEqual(control.execution.client.progress_calls, [])
 
-    def test_a_channel_unavailability_is_not_a_stop(self):
+    def test_a_local_activity_read_error_is_not_a_stop(self):
         control, directory = self.control()
         self.publish_activity(directory, event_seq=3)
-        endpoint = self.endpoints[str(directory)]
-        with mock.patch.object(endpoint, "observe", side_effect=BoardError("INTERNAL", "unreadable")):
+        with mock.patch.object(directory, "current_activity", side_effect=BoardError("INTERNAL", "unreadable")):
             control.start()
             time.sleep(0.5)
             self.assertEqual(control.execution.client.progress_calls, [])

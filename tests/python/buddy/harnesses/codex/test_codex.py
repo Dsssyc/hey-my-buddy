@@ -131,7 +131,7 @@ class CodexAdapterTests(unittest.TestCase):
         # claimed for the live channel (live observation is the holder's
         # C-Two binding, exercised by the zcode live activity suite).
         self.assertFalse((context.directory / "activity.json").exists())
-        from hey_my_buddy.buddy.harnesses.run_contract import decode_run_result
+        from hey_my_buddy.buddy.harnesses.run_contract import RunResult
         frame = handle.result
         self.assertEqual(frame.identity.attempt_id, context.attempt_id)
         self.assertIsNotNone(frame.activity, "the run result carries no preserved activity")

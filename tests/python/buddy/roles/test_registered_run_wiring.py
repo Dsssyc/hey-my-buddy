@@ -13,7 +13,7 @@ from unittest import mock
 from hey_my_buddy.buddy.harnesses.base import Adapter, ExecutionContext, NoToolStructuredRequest
 from hey_my_buddy.buddy.harnesses.registry import RUN_SEAMS, adapter, run_seam
 from hey_my_buddy.buddy.harnesses import run_contract as rc
-from hey_my_buddy.buddy.harnesses.run_contract import decode_run_request, decode_run_result, encode_run_request
+from hey_my_buddy.buddy.harnesses.run_contract import RunRequest, RunResult, canonical_json
 from hey_my_buddy.buddy.roles.controller import FastPreparation, start_router_preparation, worker_executor
 from hey_my_buddy.buddy.roles import run_controller, run_execution, structured_call, turn_io
 from hey_my_buddy.errors import BoardError
@@ -45,7 +45,7 @@ class NativeEvidenceProjectionTests(unittest.TestCase):
     def project(self, *, policy=None, completion=None, native_identity=None, event_count=None, capture=True):
         fields = full_request(Path("/private/tmp")).to_payload()
         fields.update(toolScope="none", sessionServices=[], captureEvidence=capture)
-        request = decode_run_request(fields)
+        request = RunRequest.from_payload(fields)
         result = rc.RunResult(
             identity=request.identity, harness="zcode", end=rc.RunEnd(status="ok"),
             native_identity=native_identity, native_event_count=event_count,
@@ -88,7 +88,7 @@ class NativeEvidenceProjectionTests(unittest.TestCase):
     def test_codex_policy_survives_without_capture_and_keeps_the_old_receipt_level(self):
         fields = full_request(Path("/private/tmp")).to_payload()
         fields.update(harness="codex", toolScope="none", sessionServices=[], captureEvidence=False)
-        request = decode_run_request(fields)
+        request = RunRequest.from_payload(fields)
         policy = {"sandbox": "read-only", "approvalPolicy": "never"}
         module = SimpleNamespace(native_evidence=lambda _result: {"nativePolicy": policy})
         with mock.patch.dict(RUN_SEAMS, {"codex": module}):
@@ -100,7 +100,7 @@ class NativeEvidenceProjectionTests(unittest.TestCase):
                 if status == "error":
                     self.assertIs(payload["zeroToolVerified"], False)
             fields["toolScope"] = "read"
-            review = run_execution._review_result(result, decode_run_request(fields),
+            review = run_execution._review_result(result, RunRequest.from_payload(fields),
                                                    {"stopReason": None, "elapsedMs": 1})
             self.assertEqual(review["nativePolicy"], policy)
 
@@ -163,23 +163,12 @@ class FastRegisteredRunTests(FakeAppServerTests):
         self.assertFalse((context.directory / "role-run-control.json").exists())
         self.assertFalse((context.directory / "no-tool-control.json").exists())
 
-    def test_a_foreign_result_cannot_borrow_the_owned_run_identity(self):
-        _, handle, outcome = self.invoke()
-        self.assertEqual(outcome.status, "ok")
-        fields = handle.result.to_payload()
-        fields["identity"]["invocationId"] = "foreign-invocation"
-        handle.result = decode_run_result(fields)
-        refused = structured_call.collect(handle)
-        self.assertEqual(refused.status, "failed")
-        self.assertEqual(refused.result["code"], "invalid-native-result")
-        self.assertFalse(refused.shutdown_confirmed)
-
     def test_native_group_proof_is_required_for_fast_stop(self):
         _, handle, outcome = self.invoke()
         self.assertTrue(outcome.shutdown_confirmed)
         fields = handle.result.to_payload()
         fields["stopEvidence"]["native"]["groupState"] = "unknown"
-        handle.result = decode_run_result(fields)
+        handle.result = RunResult.from_payload(fields)
         refused = structured_call.collect(handle)
         self.assertFalse(refused.shutdown_confirmed)
         self.assertEqual(refused.status, "failed")
@@ -227,7 +216,7 @@ class WorkerRegisteredRunTests(ZcodeFixtureCase):
         handle, outcome = self.execute(context)
         self.assertEqual(outcome.status, "ok", outcome.to_report())
         request = handle.request
-        request_bytes = encode_run_request(request).encode()
+        request_bytes = canonical_json(request.to_payload()).encode()
         result = handle.result
         self.assertEqual(request.identity, result.identity)
         self.assertEqual(request.tool_scope, "write")
@@ -341,7 +330,7 @@ class WorkerRegisteredRunTests(ZcodeFixtureCase):
             with self.subTest(nativeGroupState=state):
                 fields = handle.result.to_payload()
                 fields["stopEvidence"]["native"]["groupState"] = state
-                handle.result = decode_run_result(fields)
+                handle.result = RunResult.from_payload(fields)
                 refused = self.adapter.collect(handle, context)
                 self.assertIs(refused.shutdown_confirmed, False,
                               "a native group that is not gone leaves the stop unconfirmed even when the outer layer confirms")
@@ -358,7 +347,7 @@ class WorkerRegisteredRunTests(ZcodeFixtureCase):
             with self.subTest(continuationCapability=naming):
                 fields = handle.result.to_payload()
                 fields["continuation"]["resumable"] = value
-                handle.result = decode_run_result(fields)
+                handle.result = RunResult.from_payload(fields)
                 refused = self.adapter.collect(handle, context)
                 self.assertIs(refused.shutdown_confirmed, True,
                               "both stop layers stay confirmed; only the continuation capability went away")

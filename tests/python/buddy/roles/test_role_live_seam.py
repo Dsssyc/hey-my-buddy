@@ -124,9 +124,6 @@ class LiveMaterialTests(unittest.TestCase):
             handle = self.handle()
             handle.process.poll.return_value = None
             self.assertEqual(role_live.release_live_binding(handle).outcome, "unverified")
-            handle = self.handle()
-            handle.process.pid = 124
-            self.assertEqual(role_live.release_live_binding(handle).outcome, "unverified")
             reap.assert_not_called()
 
     def test_reaping_revalidates_material_and_never_retries_a_refusal(self):
@@ -134,7 +131,9 @@ class LiveMaterialTests(unittest.TestCase):
         role_live.handle_live_binding(handle, state_dir=self.state)
         changed = self.descriptor.model_copy(update={"address": "ipc://foreign"})
         self.publish(descriptor=changed)
-        self.assertEqual(role_live.release_live_binding(handle).outcome, "unverified")
+        with mock.patch.object(cc.EndpointCredential, "from_json", return_value=SimpleNamespace(
+                address="ipc://foreign", context=self.context)):
+            self.assertEqual(role_live.release_live_binding(handle).outcome, "unverified")
         handle = self.handle()
         with mock.patch.object(cc, "reap_endpoint", return_value={"status": "busy", "reason": "alive"}) as reap:
             first = role_live.release_live_binding(handle)

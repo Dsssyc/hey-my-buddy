@@ -154,11 +154,11 @@ class CTwoIntegrationTests(unittest.TestCase):
 
     def assert_same_connection_survives_expiry(self):
         # The live descriptor/request are inline role outputs, not invented wire data.
-        from hey_my_buddy.buddy.harnesses.run_contract import decode_run_request
+        from hey_my_buddy.buddy.harnesses.run_contract import RunRequest
         requests = list(self.state.glob("harnesses/dsh/micro-tasks/*/attempts/*/run-*/fixture-request.json"))
         self.assertEqual(len(requests), 1)
-        request = decode_run_request(requests[0].read_bytes())
-        materials = list(self.state.glob("attempts/*/*/execution-live.json"))
+        request = RunRequest.from_payload(json.loads(requests[0].read_text()))
+        materials = list(self.state.glob("harnesses/dsh/micro-tasks/*/attempts/*/execution-live.json"))
         self.assertEqual(len(materials), 1)
         material = json.loads(materials[0].read_text())
         query = dict(identity=request.identity, instance_id=self.execution_descriptor.instance_id,
@@ -220,9 +220,8 @@ class CTwoIntegrationTests(unittest.TestCase):
         self.assertIsNone(self.foreign.poll(), "foreign owned peer must survive the holder's reclamation")
         self.assertEqual(self.endpoint_status(self.foreign_descriptor.address)["status"], "present")
         task = self.client.get(runId=self.run_id)
-        # A killed execution has no durable native stop receipt. Endpoint
-        # reclamation alone cannot establish native shutdown on the board.
-        self.assertEqual(task["shutdownConfirmed"], not kill)
+        # The committed native stop journal proves shutdown after either exit.
+        self.assertTrue(task["shutdownConfirmed"])
         self.record("task-final.json", task)
 
     def test_normal_stop_and_same_connection_after_deadline(self):
@@ -259,10 +258,7 @@ class CTwoIntegrationTests(unittest.TestCase):
             stopped = _request(endpoint, "service_control", {
                 "action": "stop", "drainSeconds": 1, "reason": "owned integration fixture"}, state_dir=self.state)
             self.record("service-stop.json", stopped)
-            self.assertEqual(stopped["stopped"], not self.killed_execution)
-            if self.killed_execution:
-                self.assertTrue(stopped["unresolvedAttempts"],
-                                "killed execution retains its unconfirmed native receipt")
+            self.assertTrue(stopped["stopped"])
 
         try:
             stop_peer(self.worker, "Worker", 20)

@@ -196,14 +196,14 @@ class Batch4FactsTests(NativeRunCase):
         self.assertTrue(all("protocolObservations" not in item for item in callbacks))
 
     def test_shared_native_facts_reach_all_three_role_results_without_samples(self):
-        from hey_my_buddy.buddy.harnesses.run_contract import decode_run_result, encode_run_result
+        from hey_my_buddy.buddy.harnesses.run_contract import RunResult
         from hey_my_buddy.buddy.roles import run_execution
         self.fixture_case("unknown-initialize-with-untyped-event")
         for scope in ("write", "read"):
             with self.subTest(scope=scope):
                 request = self.request(scope=scope, schema=READ_SCHEMA).model_copy(
                     update={"capture_evidence": False})
-                result = decode_run_result(encode_run_result(self.execute(request)))
+                result = RunResult.from_payload(self.execute(request).to_payload())
                 self.assertEqual(result.end.status, "ok", result.end.message)
                 verdict = {"stopReason": None, "elapsedMs": 1}
                 payloads = (run_execution._fast_result(result, request, verdict),

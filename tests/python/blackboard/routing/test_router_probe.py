@@ -83,7 +83,7 @@ def _freeze_review_run(harness, context, request, *, mutation, timeout, stopped,
     from hey_my_buddy.buddy.harnesses.run_contract import (
         CheckedBuddy, CheckedValue, EvidenceRef, NativeIdentity, ResultBuddy,
         RunEnd, RunIdentity, RunResult, RunValue, StopEvidence, StopLayer,
-        decode_run_result)
+        RunResult)
     from hey_my_buddy.buddy.harnesses.registry import adapter as registry_adapter
     from hey_my_buddy.buddy.roles import run_execution
     from hey_my_buddy.buddy.roles.turn_io import _private_bytes, canonical_json, guard_private_path

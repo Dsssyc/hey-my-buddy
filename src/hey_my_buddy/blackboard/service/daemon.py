@@ -297,9 +297,10 @@ class WorkerPool:
         """Replayable local evidence: durable receipts and named startup intents."""
         spool = WorkerState(self.directory, worker_id)
         intents = [intent for intent in spool.recovery_intents() if intent.get("attemptId")]
-        from ...buddy.runtime.receipts import read_receipt
+        from ...buddy.runtime.receipts import read_receipt, receipt_directory
         receipts = [receipt for intent in intents
-                    if (receipt := read_receipt(self.directory / "attempts" / intent["taskId"] / intent["attemptId"]))
+                    if (receipt := read_receipt(receipt_directory(
+                        self.directory, intent["privateAdapter"], intent["taskId"], intent["attemptId"])))
                     is not None]
         attempts = [intent["attemptId"] for intent in intents]
         return {

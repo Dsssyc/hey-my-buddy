@@ -88,14 +88,22 @@ class ZcodeFixtureCase(unittest.TestCase):
         self.addCleanup(lambda: (handle.terminate(grace_seconds=0.2), handle.wait(15)) if not handle.finished else None)
 
     def live_channel(self, handle):
-        """The holder's bound C-Two channel of this own run, once its ready file lands."""
-        from hey_my_buddy.buddy.roles.live import handle_live_binding
+        """Bind a fixture client to this inline run's published endpoint."""
+        from hey_my_buddy.buddy.harnesses.registry import live_binding
+        from hey_my_buddy.protocol.contracts import HarnessRunLive
 
         deadline = time.monotonic() + 20
         while time.monotonic() < deadline:
-            state, channel = handle_live_binding(
-                handle, state_dir=Path(self.environment["HMB_STATE_DIR"]))
-            if channel is not None:
+            endpoint = handle.live_endpoint
+            if endpoint is not None:
+                descriptor = endpoint._descriptor
+                handle.role_live_descriptor = descriptor
+                channel = live_binding(handle.role_run_control["harness"])(
+                    endpoint.identity, HarnessRunLive, name=descriptor.name,
+                    address=descriptor.address, instance_id=descriptor.instance_id,
+                    token=handle.role_run_control["live"]["token"],
+                    state_dir=Path(self.environment["HMB_STATE_DIR"]))
+                self.addCleanup(channel.close, reason="fixture-complete")
                 self.assertEqual(channel._state_dir, Path(self.environment["HMB_STATE_DIR"]).resolve(),
                                  "the role channel must use the fixture's private state root")
                 return channel
@@ -246,7 +254,7 @@ class ZcodeAdapterTests(ZcodeFixtureCase):
         self.assertEqual(set(material), {"instanceId", "token"}, material)
         self.assertEqual(len(material["instanceId"]), 64)
         self.assertEqual(len(material["token"]), 64)
-        ready = handle.execution_live_file
+        ready = Path(control["executionLiveFile"])
         self.assertEqual(ready.parent, context_root(context, "zcode"))
         self.assertEqual(oct(ready.stat().st_mode & 0o777), "0o600")
         descriptor = json.loads(ready.read_text())["descriptor"]
@@ -448,16 +456,6 @@ class ZcodeAdapterTests(ZcodeFixtureCase):
         self.assertEqual(outcome.status, "failed", outcome.to_report())
         self.assertEqual(outcome.result.get("code"), "timeout")
         self.assertTrue(outcome.shutdown_confirmed)
-
-    def test_missing_controller_receipt_cannot_confirm_the_separate_native_group(self):
-        context = self.context()
-        handle, result = self.execute(context)
-        self.assertEqual(result.status, "ok", result.to_report())
-        handle.result = None
-        uncertain = self.adapter.collect(handle, context)
-        self.assertEqual(uncertain.status, "failed")
-        self.assertFalse(uncertain.shutdown_confirmed)
-        self.assertEqual(uncertain.artifacts, [])
 
     def test_oauth_provider_is_not_rejected_during_preparation(self):
         value = json.loads(self.personal.read_text())

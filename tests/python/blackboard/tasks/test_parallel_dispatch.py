@@ -42,8 +42,8 @@ from hey_my_buddy.blackboard.service import daemon as daemon_module
 from hey_my_buddy.protocol.client import BoardClient
 from hey_my_buddy.blackboard.store.store import BoardStore
 from hey_my_buddy.buddy.runtime import supervisor as supervisor_module
-from hey_my_buddy.buddy.runtime.worker import WorkerState, Worker
-from hey_my_buddy.buddy.runtime.receipts import write_receipt
+from hey_my_buddy.buddy.runtime.worker import WorkerState, Worker, fsync_json
+from hey_my_buddy.buddy.runtime.receipts import write_receipt, receipt_directory
 
 
 BUDDY_ID = "dsh:deepseek-official:deepseek-flash:off"
@@ -259,6 +259,7 @@ class RetireStartupTests(CapacityTestCase):
             "attemptId": attempt["attemptId"],
             "taskId": attempt["taskId"],
             "generation": attempt["generation"],
+            "privateAdapter": "command",
         }
         worker.spool.write_startup(intent)
         return intent
@@ -269,7 +270,6 @@ class RetireStartupTests(CapacityTestCase):
             "taskId": attempt["taskId"],
             "generation": attempt["generation"],
             "workerId": worker_id,
-            "nonce": NONCE,
             "commandId": f"result:{attempt['attemptId']}",
             "report": {
                 "status": "ok",
@@ -294,13 +294,18 @@ class RetireStartupTests(CapacityTestCase):
         # Exactly the durable state a crashed surplus owner leaves behind: a startup
         # intent, a completion receipt, and a retire intent already on disk. The old
         # supervisor skipped Worker creation here, which lost the receipt forever.
-        self._startup_intent(worker, attempt, "retire-replay-claim")
-        write_receipt(worker.attempt_directory(attempt["taskId"], attempt["attemptId"]),
+        intent = self._startup_intent(worker, attempt, "retire-replay-claim")
+        fsync_json(worker.spawn_marker(intent), {"processIdentity": {}})
+        write_receipt(receipt_directory(self.directory, "command", attempt["taskId"], attempt["attemptId"]),
                       self._receipt(attempt, "w-retire"))
         worker.retire_request_path.write_text(json.dumps({"workerId": "w-retire", "requestedBy": "test"}))
         self.assertEqual(len(worker.recovery_pending()), 2)
 
-        worker.run()
+        # The root-gone gate itself is exercised with real processes in
+        # test_execution_handoff; this test isolates retirement orchestration.
+        with patch.object(worker, "_execution_gone", return_value=True), \
+             patch.object(worker, "_handoff_receipt"):
+            worker.run()
 
         self.assertEqual(self.status(board, first["runId"]), "completed")
         self.assertTrue(board.call("task_get", {"runId": first["runId"]})["task"]["resultAvailable"])
@@ -720,15 +725,14 @@ class SurplusRetentionTests(CapacityTestCase):
         self.write_pool_manifest(["local", "local-2", "local-3"])
         spool = WorkerState(self.directory, "local-3")
         spool.write_startup({"workerId": "local-3", "nonce": NONCE,
-                             "attemptId": "attempt-crash", "taskId": "task-crash"})
+                             "attemptId": "attempt-crash", "taskId": "task-crash", "privateAdapter": "command"})
         write_receipt(
-            self.directory / "attempts" / "task-crash" / "attempt-crash",
+            receipt_directory(self.directory, "command", "task-crash", "attempt-crash"),
             {
                 "attemptId": "attempt-crash",
                 "taskId": "task-crash",
                 "generation": 1,
                 "workerId": "local-3",
-                "nonce": NONCE,
                 "commandId": "result:attempt-crash",
                 "report": {
                     "status": "ok",

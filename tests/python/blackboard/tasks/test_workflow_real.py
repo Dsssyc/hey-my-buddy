@@ -401,17 +401,15 @@ class RealAdapterTests(RealWorkspaceTestCase):
         manifest = self.manifest_for("adapter-2")
         executor = worker_executor("dsh")
         # The micro-task fake agent holds its turn open at the cooperative
-        # checkpoint, so a collection while it runs observes an unconfirmed
-        # stop: nothing is imported and nothing is sealed.
+        # checkpoint. Collection requires the same-process result to exist.
         holding = self._micro_task_record(2, submitted["runId"], "--wait-for-inquiry", "20")
         held = self._context(submitted["runId"], manifest, index=2, record=holding)
         handle = executor.start(held)
         self.addCleanup(lambda: handle.terminate(grace_seconds=0.2) if not handle.finished else None)
-        running = executor.collect(handle, held)
+        with self.assertRaises(AssertionError):
+            executor.collect(handle, held)
         self.assertFalse(handle.finished, "the held native run must still be active at collection")
-        self.assertNotEqual(running.status, "ok")
-        self.assertNotIn("turn", running.result)
-        self.assertNotIn("workspaceSeal", running.result)
+        self.assertFalse(held.turn_output_file().exists())
         handle.terminate()
         self.assertIsNotNone(handle.wait(30))
         # Once the run settles and shutdown is confirmed, the same shared

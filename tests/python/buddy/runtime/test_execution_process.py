@@ -19,7 +19,7 @@ from unittest import mock
 from support import BoardTestCase, wait_for
 
 from hey_my_buddy.buddy.runtime.execution import Execution, launch_execution, stop_execution
-from hey_my_buddy.buddy.runtime.receipts import deliver_receipt, write_receipt
+from hey_my_buddy.buddy.runtime.receipts import deliver_receipt, receipt_directory, write_receipt
 from hey_my_buddy.buddy.runtime.worker import Worker
 from hey_my_buddy.buddy.harnesses.base import Adapter
 from hey_my_buddy.private_dirs import ensure_private_dir
@@ -71,7 +71,10 @@ class ExecutionProcessTests(BoardTestCase):
         return handle
 
     def attempt_directory(self, claim: dict) -> Path:
-        return self.directory / "attempts" / claim["task"]["taskId"] / claim["attempt"]["attemptId"]
+        adapter = claim["task"]["spec"]["adapter"]
+        if adapter == "decision":
+            adapter = claim["decisionInput"]["buddy"]["harness"]
+        return receipt_directory(self.directory, adapter, claim["task"]["taskId"], claim["attempt"]["attemptId"])
 
     def completed(self, claim: dict) -> dict | None:
         view = self.client.get(taskId=claim["task"]["taskId"])
@@ -83,6 +86,9 @@ class ExecutionProcessTests(BoardTestCase):
             claim = self.command_claim([sys.executable, "-c", f"from pathlib import Path; Path({str(marker)!r}).write_text('done')"],
                                        request_id="execution-command")
             handle = self.launch(claim)
+            self.assertEqual(handle.execution_directory, self.attempt_directory(claim))
+            self.assertEqual(handle.execution_live_file.parent, self.attempt_directory(claim))
+            self.assertEqual(handle.budget_path.parent, self.attempt_directory(claim))
             handle.wait(timeout=45)
             self.assertEqual(handle.process.returncode, 0)
             self.assertEqual(marker.read_text(), "done")
@@ -94,6 +100,11 @@ class ExecutionProcessTests(BoardTestCase):
             directory = self.attempt_directory(claim)
             self.assertFalse((directory / "result-receipt.json").exists())
             self.assertTrue((directory / "result-delivery.json").is_file())
+            self.assertFalse((self.directory / "attempts" / claim["task"]["taskId"] /
+                              claim["attempt"]["attemptId"] / "result-delivery.json").exists())
+            if os.name != "nt":
+                self.assertEqual(directory.stat().st_mode & 0o777, 0o700)
+                self.assertEqual((directory / "result-delivery.json").stat().st_mode & 0o777, 0o600)
 
     def test_private_stop_signal_stops_the_native_command_and_delivers_evidence(self):
         started = self.work / "stop-started"
@@ -106,6 +117,7 @@ class ExecutionProcessTests(BoardTestCase):
             self.assertTrue(wait_for(started.exists, 20))
             self.client.cancel(taskId=claim["task"]["taskId"], reason="private stop test")
             stop_execution(handle, initiator="unknown")
+            self.assertTrue((self.attempt_directory(claim) / "execution-stop.json").is_file())
             handle.wait(timeout=30)
             self.assertEqual(handle.process.returncode, 0)
             result = self.client.result(taskId=claim["task"]["taskId"])
@@ -141,9 +153,10 @@ class ExecutionProcessTests(BoardTestCase):
             self.assertEqual(handle.process.returncode, 0)
             result = self.client.result(runId=submitted["runId"])
             self.assertEqual(result["attemptId"], claim["attempt"]["attemptId"])
-            error_log = Path(result["resultMeta"]["logPaths"]["stderr"])
-            diagnostic = error_log.read_text(errors="replace")[-4000:] if error_log.exists() else "no runner stderr"
-            execution_log = self.attempt_directory(claim) / "execution.stdout.log"
+            stderr_path = result["resultMeta"].get("logPaths", {}).get("stderr")
+            error_log = Path(stderr_path) if stderr_path else None
+            diagnostic = error_log.read_text(errors="replace")[-4000:] if error_log and error_log.exists() else "no runner stderr"
+            execution_log = self.directory / "attempts" / claim["task"]["taskId"] / claim["attempt"]["attemptId"] / "execution.stdout.log"
             if execution_log.exists():
                 diagnostic += "\nexecution: " + execution_log.read_text(errors="replace")[-4000:]
             native_logs = list(self.directory.rglob("native-stderr.log"))
@@ -200,6 +213,7 @@ class ExecutionProcessTests(BoardTestCase):
         self.assertIsNone(handle.process.poll())
         receipt = json.loads((directory / "result-receipt.json").read_text())
         self.assertEqual(receipt["report"]["status"], "ok", receipt)
+        self.assertNotIn("nonce", receipt)
         with self.daemon(env=environment):
             handle.wait(timeout=45)
             self.assertEqual(handle.process.returncode, 0)
@@ -241,7 +255,7 @@ class ExecutionProcessTests(BoardTestCase):
             self.assertEqual(result["attemptId"], claim["attempt"]["attemptId"])
 
     def test_latest_activity_is_flushed_before_retried_result(self):
-        claim = {"task": {"taskId": "task-activity"},
+        claim = {"task": {"taskId": "task-activity", "spec": {"adapter": "command"}},
                  "attempt": {"taskId": "task-activity", "attemptId": "attempt-activity", "generation": 1}}
         calls = []
 
@@ -267,10 +281,11 @@ class ExecutionProcessTests(BoardTestCase):
         activity = {"phase": "finishing", "eventSeq": 7}
         execution.hint(activity=activity)
         receipt = {"workerId": "execution-activity", "attemptId": "attempt-activity",
-                   "taskId": "task-activity", "generation": 1, "nonce": "a" * 64,
+                   "taskId": "task-activity", "generation": 1,
                    "commandId": "result:attempt-activity", "report": {"status": "ok", "shutdownConfirmed": True}}
         write_receipt(directory, receipt)
-        self.assertTrue(deliver_receipt(client, receipt, directory, flush_hints=execution.flush_hints))
+        self.assertTrue(deliver_receipt(client, receipt, directory, nonce="a" * 64,
+                                        flush_hints=execution.flush_hints))
         self.assertEqual(calls, [("activity", False, {"activity": activity}),
                                  ("result", False, None),
                                  ("activity", True, {"activity": activity}),
@@ -281,15 +296,15 @@ class ExecutionProcessTests(BoardTestCase):
         client.submit_result.side_effect = [BoardError("INVALID_ARGUMENT", "invalid report"), {}]
         directory = self.work / "refused-receipt"
         receipt = {"workerId": "worker", "attemptId": "attempt", "taskId": "task", "generation": 1,
-                   "nonce": "n" * 64, "report": {"status": "invalid", "shutdownConfirmed": False}, "commandId": "result:attempt"}
+                   "report": {"status": "invalid", "shutdownConfirmed": False}, "commandId": "result:attempt"}
         write_receipt(directory, receipt)
-        self.assertFalse(deliver_receipt(client, receipt, directory))
+        self.assertFalse(deliver_receipt(client, receipt, directory, nonce="n" * 64))
         self.assertEqual(client.submit_result.call_count, 1)
         self.assertFalse((directory / "result-receipt.json").exists())
         self.assertFalse(json.loads((directory / "result-delivery.json").read_text())["accepted"])
 
     def test_live_observation_error_cannot_disable_native_stop(self):
-        claim = {"task": {"taskId": "task-live-error"},
+        claim = {"task": {"taskId": "task-live-error", "spec": {"adapter": "command"}},
                  "attempt": {"taskId": "task-live-error", "attemptId": "attempt-live-error", "generation": 1}}
         execution = Execution(claim, self.directory, "worker", "n" * 64, client=mock.Mock())
         observed, stopped = threading.Event(), threading.Event()
@@ -297,8 +312,8 @@ class ExecutionProcessTests(BoardTestCase):
         def unavailable(*_args, **_kwargs):
             observed.set()
             raise OSError("live endpoint unavailable")
-        with mock.patch("hey_my_buddy.buddy.roles.live.handle_live_binding", side_effect=unavailable), \
-             mock.patch("hey_my_buddy.buddy.runtime.execution.role_seam.worker_stop",
+        handle.live_endpoint = SimpleNamespace(current_activity=unavailable)
+        with mock.patch("hey_my_buddy.buddy.runtime.execution.role_seam.worker_stop",
                         side_effect=lambda *_args, **_kwargs: stopped.set()):
             execution.control.attach(handle, mock.Mock())
             execution.control.start()
@@ -320,7 +335,7 @@ class ExecutionProcessTests(BoardTestCase):
         worker = SimpleNamespace(state_dir=self.directory, live=mock.Mock(), _nonce=lambda: "n" * 64)
         worker.live.bind.side_effect = [False, True]
         claim = {"attempt": {"attemptId": "attempt", "generation": 1}}
-        renewal = _Renewal(worker, claim, handle, None)
+        renewal = _Renewal(worker, claim, handle)
         def binding(held, **_kwargs):
             held.role_run_identity = summary
             if held.role_live_channel is None:
@@ -355,6 +370,20 @@ class ExecutionProcessTests(BoardTestCase):
         self.assertEqual(len(credential), 1)
         self.assertFalse(credential[0].exists(), "a finished preparation left its bearer credential on disk")
 
+    def test_failed_startup_filename_cleanup_preserves_original_report(self):
+        claim = {"task": {"taskId": "task-cleanup-failed", "spec": {"adapter": "command"}},
+                 "attempt": {"taskId": "task-cleanup-failed", "attemptId": "attempt-cleanup-failed", "generation": 1}}
+        logs = []
+        execution = Execution(claim, self.directory, "worker", "n" * 64, client=mock.Mock(), log=logs.append)
+        ensure_private_dir(execution.directory / "execution-start.json")
+        report = {"status": "cancelled", "shutdownConfirmed": True, "terminationReason": "console-stop",
+                  "error": "original reason"}
+        receipt = execution.receipt(claim, report, execution.directory)
+        self.assertEqual(receipt["report"], report)
+        self.assertNotIn("nonce", receipt)
+        self.assertTrue(any("private credential cleanup failed" in message for message in logs))
+        self.assertTrue((execution.directory / "execution-start.json").is_dir())
+
     def test_refused_result_ends_process_and_records_refusal(self):
         with self.daemon(env=self.environment):
             claim = self.command_claim([sys.executable, "-c", "print('finished')"],
@@ -381,6 +410,7 @@ class ExecutionProcessTests(BoardTestCase):
             claim = self.command_claim([sys.executable, "-c", script], request_id="execution-fallback-receipt",
                                        worker_id=worker.worker_id, nonce=nonce, instance=worker.instance_id)
             handle = self.launch(claim, worker_id=worker.worker_id, nonce=nonce)
+            identity = handle.identity()
             self.assertTrue(wait_for(started.exists, 20))
             first.kill()
             first.wait(timeout=15)
@@ -389,10 +419,16 @@ class ExecutionProcessTests(BoardTestCase):
         self.assertTrue(wait_for(receipt_path.exists, 35))
         handle.process.kill()
         handle.wait(timeout=15)
+        from hey_my_buddy.buddy.runtime.worker import fsync_json
+        fsync_json(worker.spawn_marker(claim["attempt"]), {
+            "taskId": claim["task"]["taskId"], "attemptId": claim["attempt"]["attemptId"],
+            "generation": claim["attempt"]["generation"], "adapter": "command",
+            "processIdentity": identity, "previousProcessStopped": False})
         worker.spool.write_startup({"workerId": worker.worker_id, "instanceId": worker.instance_id,
                                     "nonce": nonce, "claimRequestId": f"claim-{claim['task']['taskId']}",
                                     "attemptId": claim["attempt"]["attemptId"],
                                     "taskId": claim["task"]["taskId"],
+                                    "privateAdapter": "command",
                                     "generation": claim["attempt"]["generation"]})
         with self.daemon(env=self.environment):
             receipt = worker.execute(claim)
@@ -422,10 +458,11 @@ class ExecutionProcessTests(BoardTestCase):
                                         "nonce": nonce, "claimRequestId": f"claim-{claim['task']['taskId']}",
                                         "attemptId": claim["attempt"]["attemptId"],
                                         "taskId": claim["task"]["taskId"],
+                                        "privateAdapter": "command",
                                         "generation": claim["attempt"]["generation"]})
             receipt = worker._settle_execution(claim, handle)
             self.assertEqual(receipt["report"]["status"], "failed")
-            self.assertIs(receipt["report"]["shutdownConfirmed"], False)
+            self.assertIs(receipt["report"]["shutdownConfirmed"], True)
             view = self.client.get(taskId=claim["task"]["taskId"])
             self.assertEqual(view["status"], "failed")
             private = attempt_root(self.directory, "command", claim["task"]["taskId"],

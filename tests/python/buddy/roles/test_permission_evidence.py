@@ -32,7 +32,7 @@ class WorkerPermissionEvidenceTests(unittest.TestCase):
         fields["privateState"]["invocationRoot"] = str(self.root)
         if permission:
             fields["workerPermission"] = worker_permission("codex", level).to_payload()
-        return rc.decode_run_request(fields)
+        return rc.RunRequest.from_payload(fields)
 
     def execute(self, request, *, status="ok", operation="worker"):
         control = {"operation": operation, "harness": "codex",

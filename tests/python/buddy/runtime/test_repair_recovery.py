@@ -92,7 +92,7 @@ class _LiveAttempt:
         return self.claim["attempt"]
 
     def renewal(self, *, worker=None) -> _Renewal:
-        return _Renewal(worker or self.worker, self.claim, self.handle, self.implementation)
+        return _Renewal(worker or self.worker, self.claim, self.handle)
 
 
 class RecoveryBase(BoardTestCase):

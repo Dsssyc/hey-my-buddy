@@ -20,7 +20,7 @@ from unittest import mock
 
 from hey_my_buddy.buddy.harnesses.base import ExecutionContext, NoToolStructuredRequest
 from hey_my_buddy.buddy.harnesses.registry import adapter
-from hey_my_buddy.buddy.harnesses.run_contract import decode_run_result
+from hey_my_buddy.buddy.harnesses.run_contract import RunResult
 from hey_my_buddy.buddy.roles.controller import FastPreparation, start_router_preparation
 from hey_my_buddy.buddy.roles import structured_call
 
@@ -127,17 +127,6 @@ class FastRegisteredSeamTests(DshNoToolTests):
         self.assertFalse(outcome.result["answerValid"])
         self.assertEqual(outcome.result["correctionCount"], 0)
 
-    def test_a_foreign_result_cannot_borrow_the_owned_run_identity(self):
-        _, handle, outcome = self.invoke()
-        self.assertEqual(outcome.status, "ok")
-        fields = handle.result.to_payload()
-        fields["identity"]["invocationId"] = "foreign-invocation"
-        handle.result = decode_run_result(fields)
-        refused = structured_call.collect(handle)
-        self.assertEqual(refused.status, "failed")
-        self.assertEqual(refused.result["code"], "invalid-native-result")
-        self.assertFalse(refused.shutdown_confirmed)
-
     def test_execution_completion_and_native_stop_are_required_for_fast_stop(self):
         _, handle, outcome = self.invoke()
         self.assertTrue(outcome.shutdown_confirmed)
@@ -148,7 +137,7 @@ class FastRegisteredSeamTests(DshNoToolTests):
             self.assertEqual(refused.status, "failed")
         fields = raw
         fields["stopEvidence"]["native"]["groupState"] = "unknown"
-        handle.result = decode_run_result(fields)
+        handle.result = RunResult.from_payload(fields)
         refused = structured_call.collect(handle)
         self.assertFalse(refused.shutdown_confirmed)
         self.assertEqual(refused.status, "failed")

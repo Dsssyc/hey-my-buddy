@@ -27,7 +27,7 @@ from .turn_io import _private_bytes, guard_private_path, private_json
 
 
 @contextmanager
-def _inline_live(control, request, services, state_dir: Path):
+def _inline_live(control, request, services, state_dir: Path, handle):
     material = control["live"]
     capabilities = (EXISTING_CAPABILITIES[request.harness] if getattr(services, "inquiry", None)
                     else LiveCapabilities(inquiry_delivery="unsupported"))
@@ -36,13 +36,14 @@ def _inline_live(control, request, services, state_dir: Path):
                                state_dir=state_dir)
     try:
         descriptor = endpoint.start()
-        if "executionLiveFile" in control:
-            private_json(Path(control["executionLiveFile"]), {
-                "identity": request.identity.to_payload(), "harness": request.harness,
-                "descriptor": descriptor.to_payload(), "token": material["token"],
-            })
+        private_json(Path(control["executionLiveFile"]), {
+            "identity": request.identity.to_payload(), "harness": request.harness,
+            "descriptor": descriptor.to_payload(), "token": material["token"],
+        })
+        handle.live_endpoint = endpoint
         yield replace(services, live=endpoint) if services is not None else None
     finally:
+        handle.live_endpoint = None
         endpoint.stop()
 
 
@@ -104,7 +105,7 @@ def _summary_run(control, request, result, module, state_dir, deadline, handle):
     if summary_cancelled():
         return control, request, result, False, time.monotonic() >= deadline
     try:
-        with _inline_live(next_control, next_request, services, state_dir) as live_services:
+        with _inline_live(next_control, next_request, services, state_dir, handle) as live_services:
             summary = run_harness(module, next_request, observer=observer, services=live_services,
                                   cancelled=summary_cancelled)
     except Exception:
@@ -159,7 +160,7 @@ def execute(control: dict, handle, state_dir: Path) -> tuple[RunResult, object, 
     handle.request = request
     original_identity = request.identity
     if input_error is None:
-        with _inline_live(control, request, services, state_dir) as live_services:
+        with _inline_live(control, request, services, state_dir, handle) as live_services:
             result = run_harness(module, request, observer=observer, services=live_services,
                                  cancelled=handle.cancelled.is_set)
     else:

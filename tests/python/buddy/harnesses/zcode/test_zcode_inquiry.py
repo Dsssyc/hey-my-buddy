@@ -1019,13 +1019,20 @@ class LiveActivityTests(ZcodeFixtureCase):
     """Actual controller/native fixture publication through the held C-Two endpoint."""
 
     def activity_channel(self, handle):
-        from hey_my_buddy.buddy.roles.live import handle_live_binding
+        from hey_my_buddy.buddy.harnesses.registry import live_binding
+        from hey_my_buddy.protocol.contracts import HarnessRunLive
+
         deadline = time.monotonic() + 8
         while time.monotonic() < deadline:
-            _, channel = handle_live_binding(handle, state_dir=Path(self.environment["HMB_STATE_DIR"]))
-            if channel is not None:
-                self.assertEqual(channel._state_dir, Path(self.environment["HMB_STATE_DIR"]).resolve(),
-                                 "the role channel must use the fixture's private state root")
+            endpoint = handle.live_endpoint
+            if endpoint is not None:
+                descriptor = endpoint._descriptor
+                channel = live_binding(handle.role_run_control["harness"])(
+                    endpoint.identity, HarnessRunLive, name=descriptor.name,
+                    address=descriptor.address, instance_id=descriptor.instance_id,
+                    token=handle.role_run_control["live"]["token"],
+                    state_dir=Path(self.environment["HMB_STATE_DIR"]))
+                self.addCleanup(channel.close, reason="fixture-complete")
                 return channel
             time.sleep(0.05)
         self.fail("the held controller endpoint never became ready")

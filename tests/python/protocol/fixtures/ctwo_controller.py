@@ -27,8 +27,10 @@ from hey_my_buddy.buddy.harnesses.live import (
     InquiryState, LiveCapabilities, LiveJournal, LiveObservation, LiveReply,
 )
 from hey_my_buddy.buddy.harnesses.run_contract import (
-    RunEnd, RunResult, StopEvidence, StopLayer, encode_run_request,
+    RunEnd, RunResult, StopEvidence, StopLayer,
 )
+from hey_my_buddy.buddy.runtime.windows_process import owned_popen
+from hey_my_buddy.protocol.process_identity import native_process_journal_active
 from hey_my_buddy.buddy.roles import controller as role_seam, inline_run
 from hey_my_buddy.buddy.roles.run_execution import WorkerRunExecutor
 from hey_my_buddy.buddy.runtime.worker import Worker
@@ -138,12 +140,13 @@ class OneSlowCallEndpoint(CTwoLiveEndpoint):
 
 def simulated_run(module, request, *, services, **options):
     """Inject only the native driver; production inline role owns the endpoint."""
+    assert native_process_journal_active(), "execution must journal native process creation"
     root = Path(request.private_state.invocation_root)
-    write_fact(root / "fixture-request.json", json.loads(encode_run_request(request)))
+    write_fact(root / "fixture-request.json", request.to_payload())
     endpoint = services.live
-    process = subprocess.Popen([sys.executable, str(SELF), "native", "--root", str(root)],
-        stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True)
-    owned = ProcessHandle(process, own_group=False, log_paths={})
+    process = owned_popen([sys.executable, str(SELF), "native", "--root", str(root)],
+        stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True, start_new_session=True)
+    owned = ProcessHandle(process, own_group=True, log_paths={})
     try:
         endpoint.publish_observation(LiveObservation(ready=True, session_id="simulated-native",
             agent_status="active", supported=True, delivery_mode="cooperative-checkpoint"))
@@ -253,8 +256,8 @@ def worker(root):
                             if getattr(handle, "role_live_descriptor", None) else None),
                         "executionPid": handle.pid if handle else None,
                         "bound": bool(client.attachments), "running": thread.is_alive(),
-                        "reports": ([json.loads((handle.execution_directory / "fixture-report.json").read_text())]
-                            if handle and (handle.execution_directory / "fixture-report.json").exists() else []), "errors": errors,
+                        "reports": ([json.loads((Path(handle.log_paths["stderr"]).parent / "fixture-report.json").read_text())]
+                            if handle and (Path(handle.log_paths["stderr"]).parent / "fixture-report.json").exists() else []), "errors": errors,
                         "cleanup": cleanup.to_payload() if cleanup else None})
                 elif command["op"] in ("finish", "kill-execution"):
                     handle = handles[0]

@@ -6,11 +6,9 @@ subprocess starts, as AGENTS.md requires.
 """
 from __future__ import annotations
 
-import importlib.util
 import json
 import os
 import time
-from contextlib import nullcontext
 from pathlib import Path
 from unittest import mock
 
@@ -21,7 +19,7 @@ from hey_my_buddy.protocol.activity import ActivityPublisher, is_newer, normaliz
 from hey_my_buddy.buddy.harnesses import c_two_live as ctl
 from hey_my_buddy.buddy.harnesses.live import LiveCapabilities
 from hey_my_buddy.buddy.harnesses.run_contract import RunIdentity
-from hey_my_buddy.buddy.roles import live as role_live
+from hey_my_buddy.protocol.contracts import HarnessRunLive
 from hey_my_buddy.buddy.harnesses.registry import ExecutionContext, adapter as get_adapter
 from hey_my_buddy.errors import BoardError
 from hey_my_buddy.buddy.runtime.worker import Worker
@@ -310,13 +308,7 @@ class ActivityProjection(BoardTestCase):
 
 
 class ExecutionActivityForwarding(BoardTestCase):
-    """Execution progress over private SQLite and a real bounded live channel.
-
-    The owned child is an explicit command fixture, not an installed harness.
-    Only the role binding is supplied: its channel uses the actual C-Two client,
-    strict wire DTOs and endpoint handler. Both SDK boundaries are replaced
-    by an in-process endpoint; this provides no cross-process/native receipt.
-    """
+    """Execution reads its own endpoint locally and forwards to authoritative state."""
 
     def live_attempt(self, *, lease_seconds: int = 15, argv=("/bin/sleep", "30"), expected_seconds: int = 120):
         board = self.board(lease_seconds=lease_seconds)
@@ -358,37 +350,16 @@ class ExecutionActivityForwarding(BoardTestCase):
         self.addCleanup(lambda: (control.stop(), control.join(2)) if control.ident is not None else None)
         return board, client, execution, attempt, directory, control
 
-    def bounded_channel(self, attempt):
-        # Reuse the existing test CRM; the fake SDK connection below reaches
-        # real named handlers, without implementing a second transport.
-        contract = getattr(type(self), "_test_contract", None)
-        if contract is None:
-            fixture = Path(__file__).resolve().parents[1] / "buddy/harnesses/fixtures/c_two_live_peer.py"
-            spec = importlib.util.spec_from_file_location("activity_c_two_live_peer", fixture)
-            module = importlib.util.module_from_spec(spec)
-            spec.loader.exec_module(module)
-            contract = type(self)._test_contract = module.TEST_CRM
+    def local_endpoint(self, attempt, control):
         identity = RunIdentity(task_id=attempt["taskId"], attempt_id=attempt["attemptId"],
                                generation=attempt["generation"], invocation_id="activity-invocation",
                                turn_id="activity-turn", input_sha256="f" * 64)
         endpoint = ctl.CTwoLiveEndpoint(identity, LiveCapabilities(inquiry_delivery="cooperative-checkpoint"),
-                                       contract, instance_id="a" * 64, token="b" * 64, state_dir=Path(os.environ["HMB_STATE_DIR"]))
-        channel = ctl.CTwoLiveChannel(identity, contract, name="Activity Fixture",
-                                     address="ipc://activity-fixture", instance_id="a" * 64, token="b" * 64, state_dir=Path(os.environ["HMB_STATE_DIR"]))
-        self.addCleanup(lambda: endpoint.close(reason="fixture-finished"))
-        self.addCleanup(lambda: channel.close(reason="fixture-finished"))
-        def connect(*args, timeout, **kwargs):
-            self.assertGreaterEqual(timeout, 0)
-            return nullcontext(endpoint)
-        def with_call_options(peer, *, timeout):
-            self.assertIs(peer, endpoint)
-            self.assertGreaterEqual(timeout, 0)
-            return peer
-        self.enterContext(mock.patch.object(ctl.cc, "connect", side_effect=connect))
-        self.enterContext(mock.patch.object(ctl.cc, "with_call_options", side_effect=with_call_options))
-        self.enterContext(mock.patch.object(role_live, "handle_live_binding",
-                                           return_value=(role_live.LIVE_BOUND, channel)))
-        return endpoint, channel
+            HarnessRunLive, instance_id="a" * 64, token="b" * 64,
+            state_dir=Path(os.environ["HMB_STATE_DIR"]))
+        self.addCleanup(endpoint.close, reason="fixture-finished")
+        control.handle.live_endpoint = endpoint
+        return endpoint
 
     @staticmethod
     def activity_events(client):
@@ -396,7 +367,7 @@ class ExecutionActivityForwarding(BoardTestCase):
 
     def test_one_bound_channel_is_forwarded_once_and_updates_are_forwarded(self):
         board, client, execution, attempt, directory, control = self.live_attempt()
-        endpoint, channel = self.bounded_channel(attempt)
+        endpoint = self.local_endpoint(attempt, control)
         publisher = ActivityPublisher(endpoint.publish_activity, min_interval_seconds=0.0)
         first = {"phase": "waiting-model", "observedAt": "2026-01-01T00:00:00.000Z", "eventSeq": 1}
         control.start()
@@ -417,12 +388,11 @@ class ExecutionActivityForwarding(BoardTestCase):
 
     def test_unavailable_binding_is_retried_without_activity_or_heartbeat(self):
         board, client, execution, attempt, directory, control = self.live_attempt()
-        endpoint, channel = self.bounded_channel(attempt)
-        with mock.patch.object(role_live, "handle_live_binding",
-                               return_value=(role_live.LIVE_UNAVAILABLE, None)) as binding:
+        endpoint = self.local_endpoint(attempt, control)
+        with mock.patch.object(endpoint, "current_activity", side_effect=BoardError("SERVICE_UNAVAILABLE", "fixture endpoint")) as observation:
             control.start()
-            self.assertTrue(wait_for(lambda: binding.call_count >= 2, 3),
-                            "unavailable does not become a cached stop fact")
+            self.assertTrue(wait_for(lambda: observation.call_count >= 2, 3),
+                            "an unavailable observation is retried without inventing progress")
         self.assertIsNone(client.get(runId=attempt["taskId"])["activity"])
         self.assertEqual(self.activity_events(client), [])
         self.assertIsNone(control.handle.process.poll())
@@ -435,7 +405,7 @@ class ExecutionActivityForwarding(BoardTestCase):
 
     def test_rejected_progress_remains_pending_until_delivery_succeeds(self):
         board, client, execution, attempt, directory, control = self.live_attempt()
-        endpoint, channel = self.bounded_channel(attempt)
+        endpoint = self.local_endpoint(attempt, control)
         payload = {"phase": "tool-running", "eventSeq": 1}
         endpoint.publish_activity(payload)
         execution.nonce = "d" * 32
@@ -449,7 +419,7 @@ class ExecutionActivityForwarding(BoardTestCase):
 
     def test_replaced_generation_rejects_an_old_executions_live_receipt(self):
         board, client, execution, attempt, directory, control = self.live_attempt()
-        endpoint, channel = self.bounded_channel(attempt)
+        endpoint = self.local_endpoint(attempt, control)
         first = {"phase": "starting", "eventSeq": 1}
         control.start()
         endpoint.publish_activity(first)
@@ -478,9 +448,7 @@ class ExecutionActivityForwarding(BoardTestCase):
                         data={"activity": existing})
         path = directory / "activity.json"
         path.write_text("retired activity file")
-        with mock.patch.object(role_live, "handle_live_binding",
-                               return_value=(role_live.LIVE_UNEXTRACTED, None)), \
-                mock.patch.object(os, "open", wraps=os.open) as opened:
+        with mock.patch.object(os, "open", wraps=os.open) as opened:
             control.start()
             time.sleep(0.4)
             control.stop()

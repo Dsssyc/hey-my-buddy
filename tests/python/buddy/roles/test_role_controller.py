@@ -17,7 +17,7 @@ from hey_my_buddy.errors import BoardError
 from hey_my_buddy.buddy.harnesses.base import Adapter, ExecutionContext
 from hey_my_buddy.buddy.harnesses.registry import RUN_SEAMS, CommandAdapter, DecisionAdapter, DshAdapter, register_run_seam, run_seam
 from hey_my_buddy.buddy.harnesses.run_contract import (
-    decode_run_request,
+    RunRequest,
     FEEDBACK_CONTINUE,
     FEEDBACK_STOP,
     FrozenJson,
@@ -181,7 +181,7 @@ class RunCallPointTests(unittest.TestCase):
         # An unregistered harness, a look-alike registered under another name,
         # and a direct call with a non-registered module are all refused here,
         # at the one call point, without a second channel existing.
-        other_request = decode_run_request(self.request.to_payload() | {"harness": "dsh"})
+        other_request = RunRequest.from_payload(self.request.to_payload() | {"harness": "dsh"})
         with self.assertRaises(BoardError) as caught:
             controller.run_harness(module, other_request, observer=observer, services=None, cancelled=lambda: False)
         self.assertEqual(caught.exception.code, "ROLE_RUN_UNREGISTERED")
@@ -206,7 +206,7 @@ class RunCallPointTests(unittest.TestCase):
                                               "inputSha256": "a" * 64}}}, "resume_checkpoint"),
         ):
             with self.subTest(control=expected):
-                self.request = decode_run_request(run_request(self.root).to_payload() | changes)
+                self.request = RunRequest.from_payload(run_request(self.root).to_payload() | changes)
                 module = FakeHarnessRun()
                 with self.assertRaises(BoardError) as caught:
                     self.run_fake(module, lambda fact: FEEDBACK_CONTINUE, None)

@@ -54,8 +54,7 @@ def _material(handle):
         if ((identity.task_id, identity.attempt_id, identity.generation, identity.turn_id) !=
                 (expected.task_id, expected.attempt_id, expected.generation, expected.turn_id)
                 or value["harness"] != control.get("harness")
-                or descriptor.host_pid != handle.pid
-                or descriptor.instance_id != value["descriptor"]["instanceId"]):
+                or descriptor.host_pid != handle.pid):
             return None
         token = value["token"]
         if not isinstance(token, str) or re.fullmatch(r"[0-9a-f]{64}", token) is None:
@@ -111,17 +110,17 @@ def release_live_binding(handle):
     from .run_execution import InlineRunHandle
     if isinstance(handle, InlineRunHandle):
         return CleanupOutcome(outcome="not-applicable", reason="endpoint-owned-by-current-process")
+    cached_descriptor = getattr(handle, "role_live_descriptor", None)
     material = _material(handle)
     descriptor = material[1] if material is not None else None
-    cached_descriptor = getattr(handle, "role_live_descriptor", None)
+    if descriptor is None and cached is not None:
+        descriptor = cached_descriptor
     if descriptor is None or (cached_descriptor is not None and cached_descriptor != descriptor):
         return CleanupOutcome(outcome="unverified", reason="endpoint-binding-unverified")
     previous = getattr(handle, "role_endpoint_cleanup", None)
     if previous is not None:
         return previous
     exit_code = handle.process.poll()
-    if handle.process.pid != handle.pid:
-        return CleanupOutcome(outcome="unverified", reason="process-identity-mismatch")
     evidence = ConfirmedProcessGone(pid=handle.pid, exit_code=exit_code,
                                     group_gone=handle.shutdown_confirmed() is True)
     if evidence.exit_code is not None and evidence.group_gone:

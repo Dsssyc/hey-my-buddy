@@ -131,7 +131,15 @@ def start(harness, context, request, fixture, options):
         return handle
     if mode == "input_changed":
         (Path(control["cwd"]) / "input.txt").write_text("mutated input\n")
-    if mode not in ("no_output", "malformed", "string_shutdown"):
+    if mode == "malformed":
+        handle.result = RunResult(
+            identity=built_request.identity, harness=harness,
+            end=RunEnd(status="error", reason_code="invalid-native-result"),
+            stop_evidence=StopEvidence(native=StopLayer(group_state="unknown")),
+        )
+        handle.verdict = {"stopReason": None, "elapsedMs": 200}
+        handle.exit_code = 1
+    elif mode not in ("no_output", "string_shutdown"):
         raw, parsed, schema_status = _answer(context.decision_input, options, mode)
         reason_code, exit_code = _END.get(mode, (None, 0))
         binding = {"harness": harness, "taskId": context.task_id,

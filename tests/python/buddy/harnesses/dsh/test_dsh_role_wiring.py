@@ -25,7 +25,7 @@ from hey_my_buddy.buddy.harnesses.base import Adapter, ExecutionContext
 from hey_my_buddy.buddy.harnesses.registry import adapter, run_seam, worker_format
 from hey_my_buddy.private_dirs import context_root
 from hey_my_buddy.buddy.harnesses.run_contract import (
-    decode_run_result)
+    RunResult)
 from hey_my_buddy.buddy.roles import turn_io
 from hey_my_buddy.buddy.roles.controller import worker_executor
 
@@ -256,12 +256,19 @@ class WorkerRegisteredRunTests(DshRoleCase):
         self.assertTrue(holder and holder[0].request, "the inline run never published its request")
         request = holder[0].request
         control = holder[0].role_run_control
-        from hey_my_buddy.buddy.roles.live import handle_live_binding
+        from hey_my_buddy.buddy.harnesses.registry import live_binding
+        from hey_my_buddy.protocol.contracts import HarnessRunLive
         channel = None
         while time_module.monotonic() < deadline:
-            if holder:
-                _, channel = handle_live_binding(holder[0], state_dir=Path(self.environment["HMB_STATE_DIR"]))
-            if channel is not None:
+            endpoint = holder[0].live_endpoint if holder else None
+            if endpoint is not None:
+                descriptor = endpoint._descriptor
+                channel = live_binding("dsh")(
+                    request.identity, HarnessRunLive, name=descriptor.name,
+                    address=descriptor.address, instance_id=descriptor.instance_id,
+                    token=control["live"]["token"],
+                    state_dir=Path(self.environment["HMB_STATE_DIR"]))
+                self.addCleanup(channel.close, reason="fixture-complete")
                 break
             time_module.sleep(0.05)
         self.assertIsNotNone(channel, "the held controller endpoint never became ready")
@@ -346,7 +353,7 @@ class WorkerRegisteredRunTests(DshRoleCase):
         self.assertEqual(original.status, "ok", original.to_report())
         fields = handle.result.to_payload()
         fields["stopEvidence"]["native"]["groupState"] = "unknown"
-        handle.result = decode_run_result(fields)
+        handle.result = RunResult.from_payload(fields)
         refused = worker_executor("dsh").collect(handle, context)
         self.assertEqual(refused.status, "failed")
         self.assertIs(refused.shutdown_confirmed, False,

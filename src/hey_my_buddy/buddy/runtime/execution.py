@@ -30,7 +30,7 @@ from ...protocol import activity as activity_module
 from ...protocol.stop import WRAP_UP_INITIATORS
 from ..harnesses.registry import ExecutionContext
 from ..roles import controller as role_seam
-from .receipts import STARTUP, DELIVERY, read_receipt, write_receipt, deliver_receipt
+from .receipts import STARTUP, read_receipt, write_receipt, deliver_receipt, receipt_directory
 from .worker import (fsync_json, _now, classify_termination, PREFLIGHT_RETRY_SECONDS,
                      PREFLIGHT_MAX_RETRY_SECONDS, TERMINATION_HARNESS_ERROR,
                      TERMINATION_WRAP_UP, TERMINATION_GRACE_EXPIRED,
@@ -38,6 +38,14 @@ from .worker import (fsync_json, _now, classify_termination, PREFLIGHT_RETRY_SEC
                      TERMINATION_SERVICE_STOP, TERMINATION_UNKNOWN_STOP)
 
 STOP = "execution-stop.json"
+BUDGET = "execution-budget.json"
+
+
+def private_adapter(claim: dict) -> str:
+    adapter = claim["task"]["spec"]["adapter"]
+    if adapter == "decision":
+        return claim["decisionInput"]["buddy"]["harness"]
+    return adapter
 
 
 class Execution:
@@ -54,7 +62,10 @@ class Execution:
         self._hints: dict = {}
         self._hint_lock = threading.Lock()
         self._flush_lock = threading.Lock()
-        self.directory = self.state_dir / "attempts" / claim["task"]["taskId"] / claim["attempt"]["attemptId"]
+        self.directory = receipt_directory(self.state_dir, private_adapter(claim),
+                                           claim["task"]["taskId"], claim["attempt"]["attemptId"])
+        self.evidence_directory = (self.state_dir / "attempts" / claim["task"]["taskId"] /
+                                   claim["attempt"]["attemptId"])
 
     def log(self, message):
         self._log(f"[execution {self.claim['attempt']['attemptId']}] {message}")
@@ -88,7 +99,7 @@ class Execution:
 
     def run(self):
         receipt = self.execute()
-        return deliver_receipt(self.client, receipt, self.directory, log=self.log,
+        return deliver_receipt(self.client, receipt, self.directory, nonce=self.nonce, log=self.log,
                                flush_hints=self.flush_hints)
 
     def execute(self) -> dict:
@@ -103,9 +114,9 @@ class Execution:
         attempt = claim["attempt"]
         task = claim["task"]
         spec = task["spec"]
-        directory = self.state_dir / "attempts" / task["taskId"] / attempt["attemptId"]
-        directory.mkdir(mode=0o700, parents=True, exist_ok=True)
-        os.chmod(directory, 0o700)
+        from ...private_dirs import ensure_private_dir
+        directory = ensure_private_dir(self.directory)
+        self.evidence_directory.mkdir(mode=0o700, parents=True, exist_ok=True)
         pending = read_receipt(directory)
         if pending is not None:
             return pending
@@ -122,7 +133,7 @@ class Execution:
             if not shutdown_confirmed and handle is not None and implementation is not None:
                 try:
                     role_seam.worker_cancel(implementation, handle)
-                    handle.wait(timeout=15)
+                    handle.wait(timeout=None)
                 except Exception as cleanup_error:  # noqa: BLE001 - keep the honest default
                     self.log(f"could not confirm this attempt's child stopped: {cleanup_error!r}")
                 try:
@@ -285,7 +296,7 @@ class Execution:
             attempt_id=attempt["attemptId"],
             generation=attempt["generation"],
             spec=spec,
-            directory=directory,
+            directory=self.evidence_directory,
             runtime=runtime.resolve_runtime(),
             environment={**os.environ, "HMB_STATE_DIR": str(self.state_dir)},
             lease_seconds=self.lease_seconds,
@@ -342,11 +353,18 @@ class Execution:
                 directory,
             )
         started = time.monotonic()
+        timeout_seconds = context.timeout_seconds
+        deadline = started + timeout_seconds if timeout_seconds is not None else None
+        if deadline is not None:
+            fsync_json(self.directory / BUDGET, {
+                "binding": {"taskId": task["taskId"], "attemptId": attempt["attemptId"],
+                            "generation": attempt["generation"]},
+                "deadline": deadline,
+            })
         holder["adapter"] = implementation
         # A previous pre-model retry may have proved its own child stopped. That
         # proof cannot cover this start(): it might spawn before raising a handle.
         holder.pop("confirmed_stopped", None)
-        holder.pop("live_release_attempted", None)
         holder.pop("handle", None)
         holder["start_invoked"] = True
         handle = role_seam.worker_start(implementation, context)
@@ -354,8 +372,6 @@ class Execution:
         holder["started"] = True
         renewal.attach(handle, implementation)
         self.hint(waitingReason=None)
-        timeout_seconds = context.timeout_seconds
-        deadline = started + timeout_seconds if timeout_seconds is not None else None
         timed_out = False
         while True:
             if handle.wait(timeout=0.25) is not None:
@@ -369,7 +385,7 @@ class Execution:
                 timed_out = True
                 self.log("Router budget reached; cancelling this owned process group")
                 role_seam.worker_cancel(implementation, handle)
-                handle.wait(timeout=10)
+                handle.wait(timeout=None)
                 break
         unknown_reads = 0
         while True:
@@ -426,8 +442,8 @@ class Execution:
         report["terminationReason"] = termination_reason
         report["elapsedSeconds"] = round(time.monotonic() - started, 1)
         log_paths = (context.log_paths() if spec["adapter"] == "command" else {
-            "stdout": str(directory / "execution.stdout.log"),
-            "stderr": str(directory / "execution.stderr.log")})
+            "stdout": str(self.evidence_directory / "execution.stdout.log"),
+            "stderr": str(self.evidence_directory / "execution.stderr.log")})
         report["logPaths"] = {name: path for name, path in log_paths.items() if Path(path).is_file()}
         report["runtimeIdentity"] = context.runtime.get("identity")
         return self.receipt(claim, report, directory)
@@ -454,16 +470,18 @@ class Execution:
         attempt = claim["attempt"]
         if report["shutdownConfirmed"] is True:
             try:
+                (directory / BUDGET).unlink(missing_ok=True)
+            except Exception as error:
+                self.log(f"private execution budget cleanup failed: {error!r}")
+            try:
                 self._cleanup_attempt_credentials(claim, claim["task"]["spec"], claim["task"], attempt)
             except Exception as error:
-                report = {**report, "status": "failed", "terminationReason": TERMINATION_HARNESS_ERROR,
-                          "error": f"private credential cleanup failed: {error!r}"}
+                self.log(f"private credential cleanup failed: {error!r}")
         receipt = {
             "attemptId": attempt["attemptId"],
             "taskId": attempt["taskId"],
             "generation": attempt["generation"],
             "workerId": self.worker_id,
-            "nonce": self.nonce,
             "commandId": f"result:{attempt['attemptId']}",
             "report": report,
             "createdAt": _now(),
@@ -521,11 +539,9 @@ class _ExecutionControl(threading.Thread):
                             stop_initiator=self.cancel_view["stopInitiator"], grace_deadline=self.deadline)
                     self.applied = requested
                 try:
-                    from ..roles.live import handle_live_binding
-                    state, channel = handle_live_binding(handle, state_dir=self.execution.state_dir)
-                    if state == "bound":
-                        snapshot = channel.observe(after_seq=None, limit=1, timeout_ms=250, fields=("activity",))
-                        activity = snapshot.activity.value if snapshot.activity is not None else None
+                    endpoint = getattr(handle, "live_endpoint", None)
+                    if endpoint is not None:
+                        activity = endpoint.current_activity()
                         if activity is not None and activity_module.is_newer(activity, self._activity):
                             self.execution.hint(activity=activity)
                             self._activity = activity
@@ -548,7 +564,10 @@ def launch_execution(claim, state_dir, worker_id, nonce, *, lease_seconds=120):
     from ...protocol.run_identity import RunIdentity
     state_dir = Path(state_dir)
     attempt = claim["attempt"]
-    directory = ensure_private_dir(state_dir / "attempts" / claim["task"]["taskId"] / attempt["attemptId"])
+    directory = ensure_private_dir(receipt_directory(
+        state_dir, private_adapter(claim), claim["task"]["taskId"], attempt["attemptId"]))
+    evidence_directory = state_dir / "attempts" / claim["task"]["taskId"] / attempt["attemptId"]
+    evidence_directory.mkdir(mode=0o700, parents=True, exist_ok=True)
     startup = directory / STARTUP
     fsync_json(startup, {"claim": claim, "stateDir": str(state_dir), "workerId": worker_id,
                          "nonce": nonce, "leaseSeconds": lease_seconds})
@@ -557,19 +576,17 @@ def launch_execution(claim, state_dir, worker_id, nonce, *, lease_seconds=120):
         environment.pop(key, None)
     handle = launch_controller(
         prepare=lambda: ([sys.executable, "-m", "hey_my_buddy.buddy.runtime.execution", "--startup", str(startup)],
-                         str(directory), environment),
-        log_paths={"stdout": str(directory / "execution.stdout.log"),
-                   "stderr": str(directory / "execution.stderr.log")})
+                         str(evidence_directory), environment),
+        log_paths={"stdout": str(evidence_directory / "execution.stdout.log"),
+                   "stderr": str(evidence_directory / "execution.stderr.log")})
     handle.execution_live_file = directory / "execution-live.json"
     handle.execution_directory = directory
+    handle.budget_path = directory / BUDGET
     handle.execution_binding = {"taskId": claim["task"]["taskId"], "attemptId": attempt["attemptId"],
                                 "generation": attempt["generation"]}
     handle.role_run_identity = RunIdentity(task_id=claim["task"]["taskId"], attempt_id=attempt["attemptId"],
         generation=attempt["generation"], invocation_id="execution", turn_id=(claim.get("turn") or {}).get("turnId"))
-    name = claim["task"]["spec"]["adapter"]
-    if name == "decision":
-        name = claim["decisionInput"]["buddy"]["harness"]
-    handle.role_run_control = {"harness": name}
+    handle.role_run_control = {"harness": private_adapter(claim)}
     return handle
 
 
@@ -584,6 +601,8 @@ def stop_execution(handle, *, initiator="unknown", grace_deadline=None, force=Fa
         handle.wrap_up_started = initiator in WRAP_UP_INITIATORS and grace_deadline is not None and not force
         handle.grace_deadline = grace_deadline
         handle.force_stop_requested = force or not handle.wrap_up_started
+        if handle.force_stop_requested and getattr(handle, "force_stop_at", None) is None:
+            handle.force_stop_at = time.monotonic()
         fsync_json(handle.execution_directory / STOP,
                    {"binding": handle.execution_binding, "initiator": initiator,
                     "graceDeadline": grace_deadline if handle.wrap_up_started else None,
@@ -625,12 +644,9 @@ def main():
     for pending in _early_signals:
         interrupted(pending, None)
     _early_signals.clear()
-    from ...private_dirs import attempt_root, ensure_private_dir
+    from ...private_dirs import ensure_private_dir
     from ...protocol.process_identity import install_native_process_journal, native_process_journal_path
-    name = execution.claim["task"]["spec"]["adapter"]
-    if name == "decision":
-        name = execution.claim["decisionInput"]["buddy"]["harness"]
-    root = ensure_private_dir(attempt_root(execution.state_dir, name, binding["taskId"], binding["attemptId"]))
+    root = ensure_private_dir(execution.directory)
     install_native_process_journal(native_process_journal_path(root), binding)
     from ..roles.run_execution import set_execution_live_file
     set_execution_live_file(execution.directory / "execution-live.json")

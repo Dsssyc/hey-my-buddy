@@ -23,7 +23,7 @@ class BackupTests(BoardTestCase):
         manifest = backup.verify(current)
         self.assertTrue(first['verified'])
         self.assertIn('state/controls/x.json', manifest['files'])
-        self.assertIn('state/attempts/run/attempt/result-receipt.json', manifest['files'])
+        self.assertNotIn('state/attempts/run/attempt/result-receipt.json', manifest['files'])
         self.assertIn('state/workers/local/startup.json', manifest['files'])
         self.assertIn('state/worker-pool.json', manifest['files'])
         self.assertFalse(any('workspaces' in p or 'harnesses' in p for p in manifest['files']))
@@ -34,7 +34,7 @@ class BackupTests(BoardTestCase):
         self.assertEqual([p.name for p in current.parent.iterdir() if p.is_dir()], ['current'])
         self.assertEqual((current / 'state/controls/x.json').stat().st_mode & 0o777, 0o600)
 
-    def test_execution_receipts_are_durable_state_and_startup_secrets_are_excluded(self):
+    def test_execution_receipts_and_startup_secrets_are_excluded_but_logs_remain_evidence(self):
         from hey_my_buddy.protocol import attempt_evidence
         board = self.board()
         directory = board.directory / "attempts" / "run" / "attempt"
@@ -44,9 +44,10 @@ class BackupTests(BoardTestCase):
         for name in ("execution-start.json", "execution-live.json", "execution-stop.json"):
             (directory / name).write_text('{"private":"launch-secret"}')
         files = backup.verify(Path(board.call("backup", {})["path"]))["files"]
-        for name in ("result-receipt.json", "result-delivery.json", "execution.stdout.log", "execution.stderr.log"):
+        for name in ("execution.stdout.log", "execution.stderr.log"):
             self.assertIn("state/attempts/run/attempt/" + name, files)
-        for name in ("execution-start.json", "execution-live.json", "execution-stop.json"):
+        for name in ("result-receipt.json", "result-delivery.json", "execution-start.json",
+                     "execution-live.json", "execution-stop.json"):
             self.assertNotIn("state/attempts/run/attempt/" + name, files)
         self.assertFalse(attempt_evidence.is_evidence("result-receipt.json"))
         self.assertFalse(attempt_evidence.is_evidence("execution-live.json"))

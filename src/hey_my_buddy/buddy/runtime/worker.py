@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import json
 import os
+import signal
 import threading
 import time
 import uuid
@@ -25,6 +26,7 @@ RECOVERY_RETRY_SECONDS = 2.0
 IDLE_WAIT_TIMEOUT_MS = 2000
 PREFLIGHT_RETRY_SECONDS = 15.0
 PREFLIGHT_MAX_RETRY_SECONDS = 180.0
+EXECUTION_STOP_GRACE_SECONDS = 8.0
 
 
 def supervisor_start_stop_path(directory: Path) -> Path | None:
@@ -402,20 +404,18 @@ class Worker:
             marker = json.loads(marker_path.read_text())
         except FileNotFoundError:
             return
-        records = [marker]
+        identity = marker["processIdentity"]
+        if worker_identity_alive(identity) is not False:
+            return
         try:
-            for record in records:
-                identity = record.get("processIdentity")
-                if identity is None or worker_identity_alive(identity) is not False:
-                    return
-                self.client.call("worker_progress", {
-                    "workerId": intent["workerId"],
-                    "attemptId": intent["attemptId"],
-                    "generation": intent["generation"],
-                    "nonce": intent["nonce"],
-                    "processIdentity": identity,
-                    "previousProcessStopped": record.get("previousProcessStopped") is True,
-                })
+            self.client.call("worker_progress", {
+                "workerId": intent["workerId"],
+                "attemptId": intent["attemptId"],
+                "generation": intent["generation"],
+                "nonce": intent["nonce"],
+                "processIdentity": identity,
+                "previousProcessStopped": marker["previousProcessStopped"],
+            })
             fsync_json(orphan_path, {**intent, "identityPublished": True})
         except BoardError as error:
             if error.code == "ATTEMPT_FINISHED":
@@ -586,43 +586,96 @@ class Worker:
         # Persist the granted attempt identity before any process exists, so a
         # crash between claim and spawn is recoverable as "never started".
         self.spool.write_startup(
-            {**intent, "attemptId": attempt["attemptId"], "taskId": attempt["taskId"], "generation": generation}
+            {**intent, "attemptId": attempt["attemptId"], "taskId": attempt["taskId"], "generation": generation,
+             "privateAdapter": self._private_adapter(claim)}
         )
         self.execute(claim)
+        if self.pending_receipts():
+            return "retry"
         self.spool.clear_startup()
         return "ran"
 
+    @staticmethod
+    def _private_adapter(claim):
+        from .execution import private_adapter
+        return private_adapter(claim)
+
+    def _receipt_directory(self, intent):
+        from .receipts import receipt_directory
+        return receipt_directory(self.state_dir, intent["privateAdapter"],
+                                 intent["taskId"], intent["attemptId"])
+
+    def _receipt_intent(self, receipt):
+        return next(intent for intent in self.spool.recovery_intents()
+                    if intent.get("attemptId") == receipt["attemptId"])
+
+    def _execution_gone(self, intent) -> bool:
+        from ...protocol.process_identity import inspect_process_identity
+        try:
+            marker = json.loads(self.spawn_marker(intent).read_text())
+        except FileNotFoundError:
+            return False
+        return inspect_process_identity(marker["processIdentity"]) in ("identity-absent", "boot-changed")
+
     def pending_receipts(self):
         from .receipts import read_receipt
-        intents = self.spool.recovery_intents()
         receipts = []
-        for intent in intents:
-            if intent and intent.get("attemptId"):
-                receipt = read_receipt(self.attempt_directory(intent.get("taskId"), intent["attemptId"]))
+        for intent in self.spool.recovery_intents():
+            if intent.get("attemptId"):
+                receipt = read_receipt(self._receipt_directory(intent))
                 if receipt is not None:
                     receipts.append(receipt)
         return receipts
 
     def replay(self, pending: list[dict]) -> str:
         for receipt in pending:
+            intent = self._receipt_intent(receipt)
+            if not self._execution_gone(intent):
+                return "retry"
             self.deliver(receipt)
         self.spool.clear_startup()
         return "replayed"
 
+    def _enforce_execution_deadline(self, handle):
+        """The supervising process bounds cancellation even if execution is frozen."""
+        from .execution import stop_execution
+        from .receipts import read_receipt
+        receipt = read_receipt(handle.execution_directory)
+        if receipt is not None and receipt["report"]["shutdownConfirmed"] is True:
+            # Native work is over. Service outage must not kill its result sender.
+            return
+        now = time.monotonic()
+        if not handle.force_stop_requested:
+            deadlines = [handle.grace_deadline] if handle.grace_deadline is not None else []
+            if handle.budget_path.exists():
+                budget = json.loads(handle.budget_path.read_text())
+                assert budget["binding"] == handle.execution_binding
+                deadlines.append(budget["deadline"])
+            if deadlines and now >= min(deadlines):
+                stop_execution(handle, initiator=handle.stop_initiator or "unknown", force=True)
+        if handle.force_stop_requested and now >= handle.force_stop_at + EXECUTION_STOP_GRACE_SECONDS:
+            # The native sessions remain in their journal for the reaping boundary.
+            handle.signal_group(signal.SIGKILL if os.name != "nt" else -1)
+
     def execute(self, claim: dict):
-        """Schedule one isolated execution; its process owns all native work and reporting."""
+        """Schedule one isolated execution; reap it before taking over native work."""
         from .execution import launch_execution, stop_execution
-        from .receipts import DELIVERY, read_receipt
+        from .receipts import DELIVERY, read_receipt, receipt_directory
         attempt = claim["attempt"]
         directory = self.attempt_directory(attempt["taskId"], attempt["attemptId"])
         directory.mkdir(mode=0o700, parents=True, exist_ok=True)
-        if read_receipt(directory) is not None or (directory / DELIVERY).exists():
+        private = receipt_directory(self.state_dir, self._private_adapter(claim),
+                                    attempt["taskId"], attempt["attemptId"])
+        if read_receipt(private) is not None or (private / DELIVERY).exists():
+            intent = {"taskId": attempt["taskId"], "attemptId": attempt["attemptId"]}
+            if not self._execution_gone(intent):
+                return None
             return self._settle_execution(claim, None)
         fsync_json(directory / "spawn.intent", {"attemptId": attempt["attemptId"],
             "taskId": attempt["taskId"], "generation": attempt["generation"],
             "adapter": claim["task"]["spec"]["adapter"], "at": _now()})
         handle = None
-        renewal = _Renewal(self, claim, None, None)
+        renewal = _Renewal(self, claim, None)
         try:
             handle = launch_execution(claim, self.state_dir, self.worker_id, self._nonce(),
                                       lease_seconds=self.lease_seconds)
@@ -636,19 +689,24 @@ class Worker:
             except Exception as error:
                 self.log(f"execution identity publication pending ({error!r})")
                 renewal.unpublished_identity = (identity, False)
-            renewal.attach(handle, None)
+            renewal.attach(handle)
             renewal.start()
             while handle.wait(timeout=0.25) is None:
                 if self.stop_requested() and not handle.cancel_requested:
                     stop_execution(handle)
+                self._enforce_execution_deadline(handle)
+            if not handle.shutdown_confirmed():
+                handle.terminate(grace_seconds=0)
             return self._settle_execution(claim, handle)
         except BaseException as error:
             self.log(f"execution launch or supervision failed ({error!r})")
             if handle is not None:
                 stop_execution(handle, force=True)
-                if handle.wait(timeout=15) is None:
+                if handle.wait(timeout=EXECUTION_STOP_GRACE_SECONDS) is None:
                     handle.terminate(grace_seconds=0)
-            return self._settle_execution(claim, handle)
+            evidence = getattr(error, "owned_popen_evidence", None)
+            return self._settle_execution(claim, handle,
+                execution_stopped=evidence is not None and evidence.shutdown_confirmed)
         finally:
             renewal.stop()
             if renewal.ident is not None:
@@ -658,25 +716,80 @@ class Worker:
                 from ..roles.live import release_live_binding
                 release_live_binding(handle)
 
-    def _settle_execution(self, claim, handle):
+    def _stop_native_survivors(self, intent, identity) -> bool:
+        """An absent execution transfers only its verified journal identities."""
+        from ...protocol.process_identity import (inspect_process_identity,
+            native_process_journal_path, read_native_process_journal, stop_orphan_process)
+        observation = inspect_process_identity(identity)
+        if observation == "boot-changed":
+            return True
+        if observation != "identity-absent":
+            return False
+        binding = {key: intent[key] for key in ("taskId", "attemptId", "generation")}
+        journal = read_native_process_journal(
+            native_process_journal_path(self._receipt_directory(intent), identity), binding)
+        if journal is None:
+            return False
+        # Pending creation keeps the complete tree unknown but does not abandon
+        # recorded survivors whose identities can already be verified.
+        evidence = [stop_orphan_process(native) for native in journal["identities"]]
+        return not journal["pending"] and all(
+            value in ("boot-changed", "identity-absent", "worker-stopped") for value in evidence)
+
+    def _handoff_receipt(self, receipt, intent, identity):
+        from .receipts import write_receipt
+        if receipt["report"]["shutdownConfirmed"] is not True:
+            receipt["report"]["shutdownConfirmed"] = self._stop_native_survivors(intent, identity)
+            if receipt["report"]["shutdownConfirmed"]:
+                from ...private_dirs import cleanup_attempt_credentials
+                try:
+                    cleanup_attempt_credentials(self.state_dir, intent["privateAdapter"],
+                                                intent["taskId"], intent["attemptId"])
+                except Exception as error:
+                    self.log(f"private credential cleanup failed: {error!r}")
+            write_receipt(self._receipt_directory(intent), receipt)
+        return receipt
+
+    def _settle_execution(self, claim, handle, *, execution_stopped=False):
         """Only a reaped execution can hand its pending receipt back to its Worker."""
-        from .receipts import DELIVERY, read_receipt, write_receipt
+        from .receipts import DELIVERY, read_receipt, write_receipt, deliver_receipt
         attempt = claim["attempt"]
-        directory = self.attempt_directory(attempt["taskId"], attempt["attemptId"])
+        intent = {**attempt, "privateAdapter": self._private_adapter(claim), "nonce": self._nonce()}
+        directory = self._receipt_directory(intent)
         if (directory / DELIVERY).exists():
             return None
         receipt = read_receipt(directory)
-        if receipt is None:
+        missing_receipt = receipt is None
+        if missing_receipt:
             receipt = {"attemptId": attempt["attemptId"], "taskId": attempt["taskId"],
-                "generation": attempt["generation"], "workerId": self.worker_id, "nonce": self._nonce(),
+                "generation": attempt["generation"], "workerId": self.worker_id,
                 "commandId": f"result:{attempt['attemptId']}", "createdAt": _now(),
                 "report": {"status": "failed", "result": None,
                     "error": "execution exited without a durable result receipt",
                     "exitCode": handle.process.returncode if handle is not None else None,
                     "signal": None, "shutdownConfirmed": False, "artifacts": [],
                     "terminationReason": TERMINATION_HARNESS_ERROR}}
+        if handle is not None:
+            identity = handle.identity()
+        else:
+            try:
+                identity = json.loads(self.spawn_marker(intent).read_text())["processIdentity"]
+            except FileNotFoundError:
+                identity = None
+        if handle is not None:
+            execution_stopped = handle.shutdown_confirmed()
+        elif identity is not None:
+            execution_stopped = self._execution_gone(intent)
+        if not execution_stopped:
+            if missing_receipt:
+                write_receipt(directory, receipt)
+            self.log("execution group stop is unconfirmed; retaining its receipt without taking delivery ownership")
+            return receipt
+        if identity is not None:
+            self._handoff_receipt(receipt, intent, identity)
+        elif missing_receipt:
             write_receipt(directory, receipt)
-        self.deliver(receipt)
+        deliver_receipt(self.client, receipt, directory, nonce=intent["nonce"], log=self.log)
         return receipt
 
     def _nonce(self):
@@ -684,21 +797,23 @@ class Worker:
 
     def deliver(self, receipt):
         from .receipts import deliver_receipt
-        directory = self.attempt_directory(receipt["taskId"], receipt["attemptId"])
-        return deliver_receipt(self.client, receipt, directory, log=self.log)
+        intent = self._receipt_intent(receipt)
+        if not self._execution_gone(intent):
+            return False
+        identity = json.loads(self.spawn_marker(intent).read_text())["processIdentity"]
+        self._handoff_receipt(receipt, intent, identity)
+        return deliver_receipt(self.client, receipt, self._receipt_directory(intent), nonce=intent["nonce"], log=self.log)
 
 
 class _Renewal(threading.Thread):
     """Lease renewal and durable cancel-intent observation, independent of the daemon."""
 
-    def __init__(self, worker: Worker, claim: dict, handle, implementation):
+    def __init__(self, worker: Worker, claim: dict, handle):
         super().__init__(name="hey-my-buddy-worker-renewal", daemon=True)
         self.worker = worker
         self.claim = claim
         self.handle = handle
-        self.implementation = implementation
         self._done = threading.Event()
-        self._wake = threading.Event()
         self._binding_lock = threading.RLock()
         self.cancel_view: dict | None = None
         self.attempt = claim["attempt"]
@@ -715,8 +830,6 @@ class _Renewal(threading.Thread):
         renew_interval = max(5.0, self.worker.lease_seconds / 3)
         next_renew = time.monotonic() + renew_interval
         while not self._done.wait(self.CANCEL_POLL_SECONDS):
-            if self.worker.stop_requested():
-                self._wake.set()
             if self._cancel_observed():
                 return
             if self.handle is not None:
@@ -741,23 +854,17 @@ class _Renewal(threading.Thread):
     def _request_cancel(self, view: dict) -> bool:
         with self._binding_lock:
             self.cancel_view = view
-            self._wake.set()
             if self.handle is None:
                 return False
             self._stop_handle(view)
         return False
 
-    def attach(self, handle, implementation) -> None:
+    def attach(self, handle) -> None:
         """Hand native ownership to the same renewal that supervised preparation."""
         with self._binding_lock:
             self.handle = handle
-            self.implementation = implementation
             if self.cancel_view is not None:
                 self._stop_handle(self.cancel_view)
-
-    def wait(self, seconds: float) -> None:
-        """Back off an unknown preflight; a stop fact wakes the owning thread."""
-        self._wake.wait(seconds)
 
     def _stop_handle(self, view: dict) -> None:
         initiator = view.get("stopInitiator") or "unknown"
@@ -830,7 +937,7 @@ class _Renewal(threading.Thread):
         """
         attempt_id = self.attempt["attemptId"]
         from .receipts import read_receipt
-        receipt = read_receipt(self.worker.attempt_directory(self.attempt["taskId"], attempt_id))
+        receipt = read_receipt(self.worker._receipt_directory({**self.attempt, "privateAdapter": self.worker._private_adapter(self.claim)}))
         if receipt is not None:
             # A live execution delivers its own result even while the service
             # is restarting. Only the reaping thread may recover a crashed sender.
@@ -904,7 +1011,6 @@ class _Renewal(threading.Thread):
 
     def stop(self) -> None:
         self._done.set()
-        self._wake.set()
 
 
 def _now() -> str:

@@ -5,6 +5,7 @@ from dataclasses import FrozenInstanceError
 import json
 import os
 from pathlib import Path
+import subprocess
 import sys
 import tempfile
 from types import SimpleNamespace
@@ -25,6 +26,9 @@ from hey_my_buddy.buddy.harnesses.base import ReadOnlyStructuredRequest
 from hey_my_buddy.buddy.harnesses.dsh.adapter import DshAdapter
 from hey_my_buddy.buddy.harnesses.zcode.adapter import ZcodeAdapter
 from hey_my_buddy.private_dirs import cleanup_attempt_credentials, context_root, native_root
+from hey_my_buddy.blackboard.tasks import interruption
+from hey_my_buddy.protocol.process_identity import read_native_process_journal
+from hey_my_buddy.buddy.runtime.receipts import receipt_directory
 from hey_my_buddy.errors import BoardError
 from hey_my_buddy.buddy.roles import structured_call as read_only, turn_io
 from hey_my_buddy.buddy.roles import run_execution
@@ -378,6 +382,83 @@ class PrivateAdapterInvariants(unittest.TestCase):
                 cleanup_attempt_credentials(Path(env["HMB_STATE_DIR"]), name, "task", "attempt")
                 self.assert_partition(context)
 
+    def test_execution_entry_journals_each_offline_fast_router_native_tree(self):
+        setups = ((dsh_tests.DshNoToolTests, "dsh"),
+                  (zcode_fast_tests.NoToolFakeProtocolTests, "zcode"),
+                  (codex_fast_tests.NoToolCodexTests, "codex"))
+        for kind, harness in setups:
+            with self.subTest(harness=harness):
+                fixture = self.fixture(kind)
+                if harness == "dsh":
+                    fixture.select('{"buddyId":"legal","reason":"fixture","evidence":[]}')
+                    env = fixture.environment
+                    buddy = {"harness": harness, **dsh_tests.SPEC}
+                elif harness == "zcode":
+                    env = {**fixture.environment, "HMB_ZCODE_TEST_CASE": "ok"}
+                    buddy = {"harness": harness, "provider": "fixture-api",
+                             "model": "fixture-model", "effort": "low"}
+                else:
+                    env = {key: os.environ[key] for key in ("PATH", "TMPDIR", "LANG", "USER", "LOGNAME") if key in os.environ}
+                    env.update(HOME=str(fixture.root), CODEX_HOME=str(fixture.home),
+                        PYTHONPATH=os.pathsep.join((str(Path(__file__).parents[4] / "src"), os.environ.get("PYTHONPATH", ""))),
+                        HMB_DEV_SOURCE="1", HMB_CODEX_CLI=str(codex_fast_tests.FIXTURE),
+                        HMB_CODEX_FIXTURE_STATE=str(fixture.root / "trace.json"),
+                        HMB_STATE_DIR=str(fixture.root / "state"), HMB_RUNTIME_ROOT=str(fixture.root / "runtime"))
+                    buddy = {"harness": harness, "provider": "openai",
+                             "model": "fixture-model", "effort": "low"}
+                state = Path(env["HMB_STATE_DIR"])
+                state.mkdir(mode=0o700, parents=True, exist_ok=True)
+                task_id, attempt_id = f"router-{harness}", f"attempt-{harness}"
+                evidence = state / "attempts" / task_id / attempt_id
+                evidence.mkdir(mode=0o700, parents=True, exist_ok=True)
+                claim = {"task": {"taskId": task_id, "spec": {
+                    "adapter": "decision", "cwd": str(fixture.cwd), "routerBudgetSeconds": 5}},
+                    "attempt": {"taskId": task_id, "attemptId": attempt_id, "generation": 1},
+                    "decisionInput": {"buddy": buddy, "buddies": [{"buddyId": "legal"}],
+                        "routingMode": "fast", "task": "Select", "requestId": task_id,
+                        "outputSchema": router.answer_schema(["legal"]),
+                        "budget": {"timeoutSeconds": 5}}}
+                startup = receipt_directory(state, harness, task_id, attempt_id) / "execution-start.json"
+                startup.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+                startup.write_text(json.dumps({"claim": claim, "stateDir": str(state),
+                    "workerId": "fixture-worker", "nonce": "n" * 64, "leaseSeconds": 120}))
+                entry = fixture.root / f"execution-entry-{harness}.py"
+                entry.write_text(
+                    "import json, os, runpy\n"
+                    "from pathlib import Path\n"
+                    "from hey_my_buddy.protocol import client, process_identity\n"
+                    "from hey_my_buddy.blackboard.service import harness_health\n"
+                    f"state = Path({str(state)!r})\n"
+                    f"identity_file = Path({str(fixture.root / 'execution-identity.json')!r})\n"
+                    f"delivery = Path({str(fixture.root / 'execution-result.json')!r})\n"
+                    "identity_file.write_text(json.dumps({'pid': os.getpid(), "
+                    "'startedAt': process_identity.process_start(os.getpid(), include_exited=True)}))\n"
+                    "harness_health.HARNESSES = ()\n"
+                    "class OfflineClient:\n"
+                    "    def __init__(self, *args, **kwargs): pass\n"
+                    "    def progress(self, *args, **kwargs): pass\n"
+                    "    def submit_result(self, *args, **kwargs):\n"
+                    "        delivery.write_text(json.dumps(args[-1]))\n"
+                    "client.BoardClient = OfflineClient\n"
+                    "runpy.run_module('hey_my_buddy.buddy.runtime.execution', run_name='__main__')\n"
+                )
+                completed = subprocess.run([sys.executable, str(entry), "--startup", str(startup)],
+                    env=env, cwd=evidence, capture_output=True, text=True, timeout=35)
+                self.assertEqual(completed.returncode, 0, completed.stderr[-4000:])
+                delivery = fixture.root / "execution-result.json"
+                self.assertTrue(delivery.is_file(), completed.stdout[-4000:])
+                report = json.loads(delivery.read_text())
+                self.assertIs(report["shutdownConfirmed"], True, report)
+                root_identity = json.loads((fixture.root / "execution-identity.json").read_text())
+                stored_attempt = {"adapter": "decision", "model_harness": harness,
+                                  "task_id": task_id, "attempt_id": attempt_id, "generation": 1}
+                journal = interruption._native_journal(SimpleNamespace(directory=state), stored_attempt, root_identity)
+                self.assertTrue(Path(journal["path"]).is_file(), journal)
+                native = read_native_process_journal(Path(journal["path"]), journal["binding"])
+                self.assertIsNotNone(native)
+                self.assertEqual(native["pending"], 0, native)
+                self.assertTrue(native["identities"], native)
+
     def test_dsh_coding_and_reconstructed_claude_continuation(self):
         fixture = self.fixture(dsh_coding_tests.DshRoleCase)
         original_record = fixture.micro_task_record
@@ -396,7 +477,8 @@ class PrivateAdapterInvariants(unittest.TestCase):
                 self.assertEqual(outcome.status, "ok", outcome.to_report())
                 control = handle.role_run_control
                 self.assertEqual(set(control["inquiry"]), {"resultsPath"})
-                self.assertEqual(handle.execution_live_file, context_root(context, "dsh") / "execution-live.json")
+                self.assertEqual(Path(control["executionLiveFile"]), context_root(context, "dsh") / "execution-live.json")
+                self.assertIsNone(handle.live_endpoint)
                 self.assertEqual(Path(control["nativeRoot"]), native_root(state, "dsh", context.task_id))
                 self.assertTrue((Path(control["nativeRoot"]) / "sessions").is_dir())
                 request = handle.request

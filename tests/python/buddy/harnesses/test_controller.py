@@ -669,16 +669,13 @@ class RouterCollectCoercionTests(unittest.TestCase):
                 self.assertEqual(outcome.status, status)
                 self.assertIs(outcome.shutdown_confirmed, confirmed)
 
-    def test_an_unreadable_router_result_stays_invalid_and_unconfirmed(self):
+    def test_a_missing_in_process_router_result_violates_the_handle_invariant(self):
         temporary = tempfile.TemporaryDirectory(prefix="controller-router-bad-")
         self.addCleanup(temporary.cleanup)
         handle = _review_handle(Path(temporary.name))
         handle.result = None
-        handle.shutdown_confirmed = lambda: False
-        outcome = structured_call.collect(handle)
-        self.assertEqual(outcome.status, "failed")
-        self.assertIs(outcome.shutdown_confirmed, False)
-        self.assertEqual(outcome.result["code"], "invalid-native-result")
+        with self.assertRaises(AssertionError):
+            structured_call.collect(handle)
 
 
 class SignalNameTests(unittest.TestCase):

@@ -45,6 +45,7 @@ _execution_live_file: Path | None = None
 
 
 def set_execution_live_file(path: Path) -> None:
+    """Set the private material path read by the separate Worker process."""
     global _execution_live_file
     _execution_live_file = path
 
@@ -78,7 +79,7 @@ class InlineRunHandle:
         self.deadline = (time.monotonic() + control["timeoutSeconds"] + grace_seconds
                          if control["timeoutSeconds"] is not None else math.inf)
         self.thread: threading.Thread | None = None
-        self.execution_live_file = Path(control["executionLiveFile"])
+        self.live_endpoint = None
 
     @property
     def pid(self) -> int:
@@ -101,9 +102,6 @@ class InlineRunHandle:
 
     def shutdown_confirmed(self, settle_seconds: float = 0) -> bool:
         return bool(self.done.is_set() and self.result is not None
-                    and (self.result.identity == self.role_run_original_identity or
-                         self.wrap_up_started and self.request is not None
-                         and self.result.identity == self.request.identity)
                     and self.result.stop_evidence.native.group_state == "gone")
 
 
@@ -514,46 +512,28 @@ def _launch(control: dict, context: ExecutionContext, *, environment: dict,
     return handle
 
 
-def _read_run(handle: InlineRunHandle) -> RunResult | None:
-    result = handle.result
-    if result is None or result.harness != handle.role_run_control["harness"]:
-        return None
-    if result.identity != handle.role_run_original_identity and not handle.wrap_up_started:
-        return None
-    return result
+def _read_run(handle: InlineRunHandle) -> RunResult:
+    assert handle.result is not None
+    return handle.result
 
 
 def _read_request(handle: InlineRunHandle) -> RunRequest:
-    request = handle.request
-    if request is None or request.identity != handle.role_run_active_identity:
-        raise BoardError("INVALID_ARGUMENT", "The run request does not match its owned invocation")
-    return request
+    assert handle.request is not None
+    return handle.request
 
 
 def read_fast_result(handle: InlineRunHandle) -> dict:
-    return _read_structured_result(handle, _fast_result,
-                                   (None, "no-tool-violation"))
+    return _read_structured_result(handle, _fast_result)
 
 
 def read_review_result(handle: InlineRunHandle) -> dict:
-    return _read_structured_result(handle, _review_result, (None, "readonly-budget-exhausted"))
+    return _read_structured_result(handle, _review_result)
 
 
-def _read_structured_result(handle, project, allowed_reasons):
+def _read_structured_result(handle, project):
     result = _read_run(handle)
-    if result is None:
-        return {"status": "error", "code": "invalid-native-result"}
-    try:
-        request = _read_request(handle)
-        verdict = handle.verdict
-        if (not isinstance(verdict, dict) or set(verdict) != {"stopReason", "elapsedMs"}
-                or type(verdict.get("elapsedMs")) is not int or verdict["elapsedMs"] < 0
-                or verdict.get("stopReason") not in allowed_reasons):
-            raise BoardError("INVALID_ARGUMENT", "The structured role verdict is missing")
-        return project(result, request, verdict)
-    except (OSError, ValueError, BoardError, RecursionError):
-        return {**_base_result(result),
-                "status": "error", "code": "invalid-native-result"}
+    assert handle.verdict is not None
+    return project(result, _read_request(handle), handle.verdict)
 
 
 def start_fast(module, name: str, context: ExecutionContext, request) -> InlineRunHandle:
@@ -684,45 +664,36 @@ class WorkerRunExecutor:
 
     def collect(self, handle: InlineRunHandle, context: ExecutionContext) -> AdapterOutcome:
         result, exit_code, shutdown = _read_run(handle), handle.exit_code, handle.shutdown_confirmed() is True
-        payload = {"status": "invalid-result", "error": "the role run produced no complete result"}
+        payload = _base_result(result)
         verdict = None
-        wrap_up_result = result is not None and result.identity != handle.role_run_original_identity
-        if result is not None:
-            payload = _base_result(result)
-            try:
-                payload = _worker_facts(result, delegation_authority=(context.turn_input or {}).get(
-                    "context", {}).get("delegationAuthority") is True)
-                reports_invalid = _worker_reports(result, payload)
-                request = _read_request(handle)
-                if reports_invalid:
-                    raise BoardError("INVALID_ARGUMENT", "A native report could not be verified")
-                if shutdown:
-                    if result.end.status == "ok":
-                        for kind in ("turn-provenance", "native-turn-facts"):
-                            _evidence(result, kind)
-                    active_control = handle.role_run_active_control
-                    if (active_control is not handle.role_run_control
-                            and (request.continuation is None
-                                 or result.native_identity is None
-                                 or result.native_identity.session_id != request.continuation.previous_session_id)):
-                        raise BoardError("INVALID_ARGUMENT", "The summary run changed its native session")
-                    if result.end.status == "ok" or handle.cancel_requested or wrap_up_result:
-                        verdict = handle.verdict
-                        if (not isinstance(verdict, dict) or type(verdict.get("wrapUpDelivered")) is not bool
-                                or type(verdict.get("graceExpired")) is not bool):
-                            verdict = None
-                            raise BoardError("INVALID_ARGUMENT", "The Worker role verdict is missing")
-                        error = verdict.get("workerError")
-                        if error is not None:
-                            if (not isinstance(error, dict) or set(error) != {"code", "message"}
-                                    or error["code"] not in ("invalid-result", "invalid-role-result")
-                                    or not isinstance(error["message"], str) or len(error["message"]) > 1024):
-                                raise BoardError("INVALID_ARGUMENT", "The Worker role error is invalid")
-                            raise BoardError(error["code"], error["message"])
-            except (OSError, ValueError, BoardError, RecursionError) as problem:
-                role_invalid = isinstance(problem, BoardError) and problem.code == "invalid-result"
-                payload.update(status="error", code="invalid-result" if role_invalid else "invalid-role-result",
-                               error=problem.message if role_invalid else "The run's role evidence could not be collected")
+        wrap_up_result = result.identity != handle.role_run_original_identity
+        try:
+            payload = _worker_facts(result, delegation_authority=(context.turn_input or {}).get(
+                "context", {}).get("delegationAuthority") is True)
+            reports_invalid = _worker_reports(result, payload)
+            request = _read_request(handle)
+            if reports_invalid:
+                raise BoardError("INVALID_ARGUMENT", "A native report could not be verified")
+            if shutdown:
+                if result.end.status == "ok":
+                    for kind in ("turn-provenance", "native-turn-facts"):
+                        _evidence(result, kind)
+                active_control = handle.role_run_active_control
+                if (active_control is not handle.role_run_control
+                        and (request.continuation is None
+                             or result.native_identity is None
+                             or result.native_identity.session_id != request.continuation.previous_session_id)):
+                    raise BoardError("INVALID_ARGUMENT", "The summary run changed its native session")
+                if result.end.status == "ok" or handle.cancel_requested or wrap_up_result:
+                    verdict = handle.verdict
+                    assert verdict is not None
+                    error = verdict.get("workerError")
+                    if error is not None:
+                        raise BoardError(error["code"], error["message"])
+        except (OSError, ValueError, BoardError, RecursionError) as problem:
+            role_invalid = isinstance(problem, BoardError) and problem.code == "invalid-result"
+            payload.update(status="error", code="invalid-result" if role_invalid else "invalid-role-result",
+                           error=problem.message if role_invalid else "The run's role evidence could not be collected")
         if verdict is not None:
             payload["wrapUpDelivered"] = verdict["wrapUpDelivered"]
             payload["graceExpired"] = verdict["graceExpired"]

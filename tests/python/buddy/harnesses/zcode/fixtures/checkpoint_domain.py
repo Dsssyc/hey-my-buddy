@@ -172,7 +172,7 @@ def serve():
                     fixture.assertEqual(Path(cc.local_endpoint_context().root), state / "ipc",
                                         "holder must use its own actual process-level IPC domain")
                     material = handle.role_run_control["live"]
-                    descriptor = json.loads(handle.execution_live_file.read_text())["descriptor"]
+                    descriptor = json.loads(Path(handle.role_run_control["executionLiveFile"]).read_text())["descriptor"]
                     facts = {"attemptId": context.attempt_id, "ownerPid": os.getpid(),
                              "controllerPid": handle.pid, "instanceId": material["instanceId"],
                              "token": material["token"], "address": descriptor["address"],

@@ -23,7 +23,7 @@ from unittest import mock
 
 from buddy.harnesses.zcode.test_zcode import ZcodeFixtureCase
 from hey_my_buddy.buddy.harnesses import run_contract as rc
-from hey_my_buddy.buddy.harnesses.run_contract import decode_run_result
+from hey_my_buddy.buddy.harnesses.run_contract import RunResult
 from hey_my_buddy.buddy.roles import turn_io
 from hey_my_buddy.buddy.roles.turn_io import private_json
 
@@ -74,12 +74,12 @@ class CheckpointOnlyResumableTests(ZcodeFixtureCase):
         refs = list(fields.get("evidenceRefs") or [])
         refs.append(self._checkpoint_ref(context, fields, checkpoint_status))
         fields["evidenceRefs"] = refs
-        handle.result = decode_run_result(fields)
+        handle.result = RunResult.from_payload(fields)
         context.turn_output_file().unlink(missing_ok=True)
         return fields
 
     def _rewrite(self, handle, fields):
-        handle.result = decode_run_result(fields)
+        handle.result = RunResult.from_payload(fields)
 
     def test_a_legal_checkpoint_alone_is_resumable_when_every_layer_confirms(self):
         context, handle = self._run()

@@ -23,12 +23,13 @@ from hey_my_buddy.blackboard.service.daemon import WorkerPool
 class WorkerPoolSizingTests(BoardTestCase):
     def test_orphan_intent_retains_its_attempt_receipt_without_worker_receipt_directory(self):
         from hey_my_buddy.buddy.runtime.worker import WorkerState, fsync_json
-        from hey_my_buddy.buddy.runtime.receipts import write_receipt
+        from hey_my_buddy.buddy.runtime.receipts import receipt_directory, write_receipt
         state = WorkerState(self.directory, "local")
         state.ensure()
         fsync_json(state.directory / "orphaned.json", {
-            "workerId": "local", "taskId": "task-orphan", "attemptId": "attempt-orphan"})
-        write_receipt(self.directory / "attempts" / "task-orphan" / "attempt-orphan", {
+            "workerId": "local", "taskId": "task-orphan", "attemptId": "attempt-orphan",
+            "privateAdapter": "command"})
+        write_receipt(receipt_directory(self.directory, "command", "task-orphan", "attempt-orphan"), {
             "attemptId": "attempt-orphan", "report": {"status": "failed"}})
         evidence = WorkerPool(self.directory, prefix="local", total_limit=1)._local_evidence("local")
         self.assertEqual(evidence["pendingReceipts"], 1)

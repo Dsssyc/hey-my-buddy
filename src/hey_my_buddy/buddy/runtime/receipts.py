@@ -14,6 +14,11 @@ RETRYABLE = frozenset({"SERVICE_UNAVAILABLE", "SERVICE_START_TIMEOUT", "SERVICE_
                        "INVALID_RESPONSE", "INTERNAL_ERROR"})
 
 
+def receipt_directory(state: Path, private_adapter: str, task_id: str, attempt_id: str) -> Path:
+    from ...private_dirs import attempt_root
+    return attempt_root(state, private_adapter, task_id, attempt_id)
+
+
 def read_receipt(directory: Path) -> dict | None:
     from ..roles.turn_io import guard_private_path
     try:
@@ -27,12 +32,10 @@ def write_receipt(directory: Path, receipt: dict) -> None:
     fsync_json(directory / RECEIPT, receipt)
 
 
-def deliver_receipt(client, receipt: dict, directory: Path, *, log=lambda message: None,
+def deliver_receipt(client, receipt: dict, directory: Path, *, nonce: str, log=lambda message: None,
                     flush_hints=None) -> bool:
     """Keep the execution alive until its result is confirmed or explicitly refused."""
     from .worker import fsync_json
-    if receipt["report"]["shutdownConfirmed"] is True:
-        (directory / STARTUP).unlink(missing_ok=True)
     delay = 0.25
     while True:
         if flush_hints is not None:
@@ -43,7 +46,7 @@ def deliver_receipt(client, receipt: dict, directory: Path, *, log=lambda messag
                 log(f"hint delivery unavailable: {error!r}")
         try:
             client.submit_result(receipt["workerId"], receipt["attemptId"], receipt["generation"],
-                                 receipt["nonce"], {**receipt["report"], "commandId": receipt["commandId"]})
+                                 nonce, {**receipt["report"], "commandId": receipt["commandId"]})
         except BoardError as error:
             if error.code not in RETRYABLE:
                 accepted = False

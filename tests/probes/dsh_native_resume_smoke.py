@@ -25,7 +25,7 @@ from hey_my_buddy.blackboard.tasks.workflow import WorkflowCoordinator
 from hey_my_buddy.buddy.harnesses.dsh.adapter import DshAdapter
 import c_two as cc
 from hey_my_buddy.buddy.harnesses.registry import run_seam
-from hey_my_buddy.buddy.harnesses.run_contract import encode_run_request
+from hey_my_buddy.buddy.harnesses.run_contract import canonical_json
 from hey_my_buddy.buddy.harnesses import controller as launcher
 from hey_my_buddy.buddy.roles import controller as role_seam
 from hey_my_buddy.buddy.roles.run_execution import WorkerRunExecutor
@@ -106,7 +106,7 @@ class CapturingExecutor(WorkerRunExecutor):
         entry = {"report": outcome.to_report(),
                  "nativeStopped": handle.shutdown_confirmed()}
         try:
-            request = encode_run_request(handle.request)
+            request = canonical_json(handle.request.to_payload())
             write_new(self.root / f"run-request-{number}.json", json.loads(request))
             native = handle.result
             record_ref = next(ref for ref in native.evidence_refs if ref.kind == "dsh-session-record")

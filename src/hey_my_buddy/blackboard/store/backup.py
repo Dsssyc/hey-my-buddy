@@ -144,17 +144,6 @@ def _regular_files(root: Path, *, scope: str = ''):
     yield from visit(root)
 
 
-EXECUTION_RECEIPT_FILES = frozenset({'result-receipt.json', 'result-delivery.json'})
-
-
-def _execution_receipt(relative: Path) -> bool:
-    return len(relative.parts) == 1 and relative.name in EXECUTION_RECEIPT_FILES
-
-
-def _attempt_backup_file(relative: Path) -> bool:
-    return attempt_evidence.is_evidence(relative.as_posix()) or _execution_receipt(relative)
-
-
 STATE_FILES = ('console-sessions.json', 'console-settings.json', 'worker-pool.json',
                'runtime-retention.json', 'active-runtime.json', 'launch-settings.json')
 
@@ -181,8 +170,7 @@ def _scan(path: Path, *, attempt_depth: int | None = None):
         link = component is not None or _linked(item)
         is_dir = stat.S_ISDIR(info.st_mode) and not link
         structural = depth is not None and (depth > 0 or not relative.parts)
-        execution_receipt = depth == 0 and _execution_receipt(relative)
-        expected_file = depth is None or depth == 0 and _attempt_backup_file(relative)
+        expected_file = depth is None or depth == 0 and attempt_evidence.is_evidence(relative)
         expected_dir = depth is None or structural or attempt_evidence.is_evidence_directory(relative)
         declared = expected_file or expected_dir
         if not declared:
@@ -203,8 +191,7 @@ def _scan(path: Path, *, attempt_depth: int | None = None):
                 # Entering the attempt establishes a new relative root.
                 yield from visit(child, new_depth, new_relative)
         elif stat.S_ISREG(info.st_mode) and (depth is None or depth == 0):
-            yield 'copied', item, ('execution-receipt' if execution_receipt else
-                                       'declared-evidence' if depth == 0 else 'durable-state')
+            yield 'copied', item, 'declared-evidence' if depth == 0 else 'durable-state'
         else:
             yield 'rejected', item, 'nonregular-evidence' if depth == 0 else 'nonregular-path'
     yield from visit(path, attempt_depth)
@@ -407,7 +394,7 @@ def _verify(directory: Path) -> dict:
     if policy == attempt_evidence.POLICY:
         for relative in manifest['files']:
             parts = Path(relative).parts
-            if parts[:2] == ('state', 'attempts') and (len(parts) < 5 or not _attempt_backup_file(Path(*parts[4:]))):
+            if parts[:2] == ('state', 'attempts') and (len(parts) < 5 or not attempt_evidence.is_evidence(Path(*parts[4:]).as_posix())):
                 raise BoardError('BACKUP_INVALID', 'Backup contains undeclared attempt evidence', file=relative)
             if parts[:2] == ('state', 'worker-session-cleanup') and (len(parts) != 3 or re.fullmatch(r'[0-9a-f]{64}\.json', parts[2]) is None):
                 raise BoardError('BACKUP_INVALID', 'Backup contains undeclared Worker session journal', file=relative)

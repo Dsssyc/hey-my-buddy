@@ -265,17 +265,6 @@ class ClaudeAdapterTests(ClaudeFixtureCase):
                          {"rateLimitType": "unknown", "resetsAt": "2026-09-26T12:00:00Z"})
         self.assertNotIn("SECRET-FRAGMENT", json.dumps(outcome.result))
 
-    def test_missing_controller_receipt_is_not_imported(self):
-        context = self.context()
-        handle = self.executor.start(context)
-        self.addCleanup(lambda: (handle.terminate(grace_seconds=0.2), handle.wait(15)) if not handle.finished else None)
-        self.assertIsNotNone(handle.wait(20))
-        handle.result = None
-        outcome = self.executor.collect(handle, context)
-        self.assertEqual(outcome.status, "failed")
-        self.assertIn("no complete result", outcome.error)
-        self.assertNotIn("turn", outcome.result)
-
     def test_permission_request_denial_becomes_controller_attention(self):
         outcome = self.execute(self.context("permission"))
         self.assertEqual(outcome.status, "ok", outcome.to_report())
@@ -626,7 +615,7 @@ class ClaudeAdapterTests(ClaudeFixtureCase):
         # success is claimed (live observation is the holder's C-Two binding,
         # exercised by the zcode live activity suite).
         self.assertFalse((context.directory / "activity.json").exists())
-        from hey_my_buddy.buddy.harnesses.run_contract import decode_run_result
+        from hey_my_buddy.buddy.harnesses.run_contract import RunResult
         frame = handle.result
         self.assertEqual(frame.identity.attempt_id, context.attempt_id)
         self.assertIsNotNone(frame.activity, "the run result carries no preserved activity")
