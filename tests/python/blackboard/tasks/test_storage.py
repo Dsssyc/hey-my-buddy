@@ -736,8 +736,13 @@ class ProcessInventoryServiceTests(BoardTestCase):
                          ['process-inspection-unavailable'])
 
     def test_process_ended_before_opening_its_snapshot_entry_is_not_unknown(self):
+        current = process(0)
+        def lookup(pid=None):
+            if pid is None:
+                return current
+            raise observation.psutil.NoSuchProcess(pid)
         with mock.patch.object(observation.psutil, 'pids', return_value=[104]), \
-             mock.patch.object(observation.psutil, 'Process', side_effect=observation.psutil.NoSuchProcess(104)):
+             mock.patch.object(observation.psutil, 'Process', side_effect=lookup):
             self.assertTrue(storage.process_inventory(self.directory)[2])
 
     def test_unreadable_service_files_keep_state_and_runtime_usage_unknown(self):

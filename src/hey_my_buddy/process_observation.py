@@ -11,21 +11,22 @@ import psutil
 
 
 def _processes() -> tuple[list[psutil.Process], bool]:
-    """One PID snapshot, scoped on POSIX to this effective user's processes.
+    """One PID snapshot, scoped to this account's processes.
 
-    Private state belongs to this user; other effective users are outside the
-    scope. An unreadable UID cannot establish that exclusion.
+    POSIX uses the effective UID; Windows uses the process username. Private
+    state belongs to this account; unreadable ownership cannot exclude a PID.
     """
     try:
         pids = psutil.pids()
+        owner = psutil.Process().username() if psutil.WINDOWS else os.geteuid()
     except (psutil.Error, OSError):
         return [], False
     processes, known = [], True
-    effective_uid = None if psutil.WINDOWS else os.geteuid()
     for pid in pids:
         try:
             process = psutil.Process(pid)
-            if psutil.WINDOWS or process.uids().effective == effective_uid:
+            user = process.username() if psutil.WINDOWS else process.uids().effective
+            if user == owner:
                 processes.append(process)
         except psutil.NoSuchProcess:
             continue
@@ -81,10 +82,10 @@ def _proc_fd_paths(pid: int) -> set[str]:
 def observe_open_paths() -> tuple[dict[int, set[str]], str | None, bool]:
     """Path references, observation failure, and channel availability.
 
-    psutil supplies cwd and Linux/Windows mappings. Linux descriptors use /proc;
+    psutil supplies cwd and Linux mappings. Linux descriptors use /proc;
     macOS descriptors and mappings use lsof, excluding the cwd already observed.
-    open_files alone omits directories and deleted files; on Windows it can also
-    silently omit handles, so Windows observations never prove completeness.
+    open_files omits directories, deleted files and some Windows handles. Windows
+    uses only cwd for cheap positive evidence and never proves completeness.
     """
     processes, known = _processes()
     problems = [] if known else ['psutil process enumeration incomplete']
@@ -93,12 +94,9 @@ def observe_open_paths() -> tuple[dict[int, set[str]], str | None, bool]:
         try:
             values = paths.setdefault(process.pid, set())
             values.add(process.cwd())
-            if psutil.LINUX or psutil.WINDOWS:
-                values.update(item.path for item in process.memory_maps())
             if psutil.LINUX:
+                values.update(item.path for item in process.memory_maps())
                 values.update(_proc_fd_paths(process.pid))
-            elif psutil.WINDOWS:
-                values.update(item.path for item in process.open_files())
         except psutil.NoSuchProcess:
             paths.pop(process.pid, None)
         except (psutil.Error, OSError) as error:
@@ -109,7 +107,7 @@ def observe_open_paths() -> tuple[dict[int, set[str]], str | None, bool]:
     available = psutil.LINUX or psutil.MACOS or psutil.WINDOWS
     native_pids = None
     if psutil.WINDOWS:
-        problems.append('Windows open-file observation is incomplete: psutil can omit handles')
+        problems.append('Windows open-file observation is incomplete: only cwd is observed')
     elif psutil.MACOS and paths:
         binary = shutil.which('lsof')
         if binary is None:
