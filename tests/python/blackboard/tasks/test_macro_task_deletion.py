@@ -609,7 +609,8 @@ class MacroTaskDeletionTests(WorkflowTestCase):
                            (attempt_id, run["runId"], generation, "fixture", "finished", "codex", 1,
                             json.dumps(receipt), now, now))
         calls = []
-        def delete_native(ids):
+        def delete_native(ids, *, state_dir):
+            self.assertIs(state_dir, board.store.directory)
             calls.append(ids)
             if len(calls) == 1:
                 raise OSError("offline adapter interruption")

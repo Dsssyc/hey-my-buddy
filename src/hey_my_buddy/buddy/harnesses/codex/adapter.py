@@ -1,6 +1,8 @@
 """Codex capability description; execution belongs to the registered run."""
 from __future__ import annotations
 
+from pathlib import Path
+
 from ....protocol.capabilities import adapter_capabilities
 from . import native_run
 from .config import CodexUnavailable, cli_command
@@ -35,10 +37,10 @@ class CodexAdapter:
 
     validate_turn_provenance = staticmethod(native_run.validate_turn_provenance)
 
-    def discover_models(self) -> dict:
+    def discover_models(self, *, state_dir: Path) -> dict:
         from ...roles.run_execution import discover_models
-        return discover_models(self.name)
+        return discover_models(self.name, state_dir=state_dir)
 
-    def delete_sessions(self, session_ids: list[str]) -> dict[str, str]:
+    def delete_sessions(self, session_ids: list[str], *, state_dir: Path) -> dict[str, str]:
         from ...roles.run_execution import delete_sessions
-        return delete_sessions(self.name, session_ids)
+        return delete_sessions(self.name, session_ids, state_dir=state_dir)

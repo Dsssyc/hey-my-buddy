@@ -27,7 +27,7 @@ class CatalogRefreshServiceTests(BoardTestCase):
         self.record = self.service.harnesses.get("dsh")
 
     def refresh_catalog(self, account_status, **reading):
-        stub = SimpleNamespace(discover_models=lambda: native_payload(account_status, **reading))
+        stub = SimpleNamespace(discover_models=lambda *, state_dir: native_payload(account_status, **reading))
         with patch("hey_my_buddy.buddy.harnesses.registry.adapter", return_value=stub):
             self.service._refresh_harness_catalog("dsh", self.record)
 

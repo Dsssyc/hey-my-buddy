@@ -49,7 +49,7 @@ def launch_for(harness, environment=None):
         return _launch_command(entry, env), shim_environment(entry)
     record = selected(harness, env)
     if record is None:
-        record = discover(harness, environment=env)
+        record = discover(harness, state_dir=Path(env["HMB_STATE_DIR"]), environment=env)
     if record.get('status') != 'ready' or not record.get('command'):
         raise BoardError('HARNESS_UNAVAILABLE', 'The selected harness is unavailable',
                          harness=harness, reason=record.get('reason'))

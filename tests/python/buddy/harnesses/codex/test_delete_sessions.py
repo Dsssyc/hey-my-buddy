@@ -49,7 +49,7 @@ class DeleteSessionTests(unittest.TestCase):
         record = private_dirs.session_record_path(self.root / 'state', 'run:owned-task', 'owned-attempt')
         private_dirs.ensure_private_dir(record.parent)
         record.write_bytes(b'private display record\n')
-        self.assertEqual(CodexAdapter().delete_sessions(["owned", "gone", "owned", "gone"]),
+        self.assertEqual(CodexAdapter().delete_sessions(["owned", "gone", "owned", "gone"], state_dir=Path(os.environ["HMB_STATE_DIR"])),
                          {"owned": "deleted", "gone": "already-gone"})
         self.assertEqual(record.read_bytes(), b'private display record\n')
         frames = self.requests()
@@ -65,7 +65,7 @@ class DeleteSessionTests(unittest.TestCase):
                  ("long-error", -32000, "native-reason-" * 60 + "-end")]
         for session_id, code, message in cases:
             with self.subTest(session_id=session_id), self.assertRaises(BoardError) as caught:
-                CodexAdapter().delete_sessions(["owned", session_id, "must-not-delete"])
+                CodexAdapter().delete_sessions(["owned", session_id, "must-not-delete"], state_dir=Path(os.environ["HMB_STATE_DIR"]))
             self.assertEqual(caught.exception.details["nativeError"], {"code": code, "message": message})
             self.assertTrue(str(caught.exception).startswith("Codex rejected thread/delete: "))
             self.assertLessEqual(len(str(caught.exception).encode("utf-8")), 512)
@@ -81,14 +81,14 @@ class DeleteSessionTests(unittest.TestCase):
             self.assertTrue(caught.exception.discovery_shutdown_confirmed)
 
     def test_additional_native_result_fields_do_not_block_deletion(self):
-        self.assertEqual(CodexAdapter().delete_sessions(["extra-result"]), {"extra-result": "deleted"})
+        self.assertEqual(CodexAdapter().delete_sessions(["extra-result"], state_dir=Path(os.environ["HMB_STATE_DIR"])), {"extra-result": "deleted"})
 
     def test_unsupported_harness_fails_without_an_empty_default(self):
         with self.assertRaises(BoardError) as caught:
-            Adapter().delete_sessions(["owned"])
+            Adapter().delete_sessions(["owned"], state_dir=Path(os.environ["HMB_STATE_DIR"]))
         self.assertEqual(caught.exception.code, "UNSUPPORTED")
         with self.assertRaises(BoardError) as caught:
-            delete_sessions("claude", ["owned"])
+            delete_sessions("claude", ["owned"], state_dir=Path(os.environ["HMB_STATE_DIR"]))
         self.assertEqual(caught.exception.code, "UNSUPPORTED")
         self.assertFalse(self.trace.exists())
 

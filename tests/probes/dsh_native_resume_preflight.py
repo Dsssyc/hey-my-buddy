@@ -314,7 +314,7 @@ class Probe:
         # selected version travels with the launch evidence.
         selection = selected("dsh", dict(os.environ))
         if selection is None:
-            selection = discover("dsh", environment=dict(os.environ))
+            selection = discover("dsh", state_dir=self.state_root, environment=dict(os.environ))
         if not isinstance(selection, dict) or selection.get("status") != "ready" \
                 or not selection.get("command"):
             raise ProbeError(f"the installed dsh command is not ready: {selection}")

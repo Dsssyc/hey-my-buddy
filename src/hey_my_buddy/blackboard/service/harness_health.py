@@ -40,9 +40,9 @@ def _snapshot(name, manual, environment=None):
     return candidate_snapshot(name, manual_path=manual, environment=environment)
 
 
-def _discover(name, manual, environment=None):
+def _discover(name, manual, environment=None, *, state_dir: Path):
     from ...buddy.harnesses.discovery import discover
-    return discover(name, manual_path=manual, environment=environment)
+    return discover(name, state_dir=state_dir, manual_path=manual, environment=environment)
 
 
 def _name(name):
@@ -211,7 +211,7 @@ class HarnessHealth:
                            'ON CONFLICT(harness) DO UPDATE SET revision=excluded.revision',
                            (name, generation, canonical_json({'reason': _not_checked()})))
             try:
-                record = _discover(name, old['manualPath'], environment)
+                record = _discover(name, old['manualPath'], environment, state_dir=self.board.directory)
             except Exception as error:
                 self.board.record_service_issue(f'harness-discovery:{name}', error)
                 record = {'harness': name, 'status': 'unhealthy',

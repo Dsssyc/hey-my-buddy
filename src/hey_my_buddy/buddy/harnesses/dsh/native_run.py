@@ -343,7 +343,7 @@ def check_preparation(spec: dict, environment: dict) -> None:
     record = selected("dsh", environment)
     if record is None:
         from ..discovery import discover
-        record = discover("dsh", environment=environment)
+        record = discover("dsh", state_dir=Path(environment["HMB_STATE_DIR"]), environment=environment)
     if not isinstance(record, dict) or record.get("status") != "ready" or not record.get("command"):
         raise BoardError("HARNESS_UNAVAILABLE",
                          "the dsh run needs a selected, ready installed dsh command; refresh the harness selection",

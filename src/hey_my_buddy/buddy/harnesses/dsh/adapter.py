@@ -11,6 +11,8 @@ deleted without a compatibility layer (ADR-025 decisions 1 and 11).
 """
 from __future__ import annotations
 
+from pathlib import Path
+
 from ....errors import BoardError
 from ....protocol.capabilities import adapter_capabilities
 from . import native_run
@@ -39,14 +41,14 @@ class DshAdapter:
         but unhealthy selection is still refused; nothing here sends a prompt
         or a model call.
         """
-        from ..runtime_selection import selected
+        from ..runtime_selection import environment_for, selected
         record = selected("dsh")
         if record is not None:
             if record.get("status") == "ready" and record.get("command"):
                 return True, None
             return False, (record.get("reason") or {}).get("code")
         from ..discovery import discover
-        detected = discover("dsh")
+        detected = discover("dsh", state_dir=Path(environment_for()["HMB_STATE_DIR"]))
         if not detected["available"]:
             return False, (detected.get("reason") or {}).get("code")
         return True, None
@@ -56,9 +58,9 @@ class DshAdapter:
 
     validate_turn_provenance = staticmethod(native_run.validate_turn_provenance)
 
-    def discover_models(self) -> dict:
+    def discover_models(self, *, state_dir: Path) -> dict:
         from ...roles.run_execution import discover_models
-        return discover_models(self.name)
+        return discover_models(self.name, state_dir=state_dir)
 
 
 __all__ = ["DshAdapter"]

@@ -6,6 +6,7 @@ never consults shell startup files or inherited provider credentials.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from functools import partial
 from importlib import import_module
 import hashlib
 import json
@@ -24,7 +25,6 @@ import selectors
 from xml.parsers.expat import ExpatError
 
 from ...paths import is_absolute_path
-from ...state_root import get_state_dir
 from ...protocol.harness_names import HARNESS_NAMES
 from .discovery_spec import AppEntry, DiscoverySpec
 from ...protocol.reasons import reason as make_reason
@@ -593,6 +593,7 @@ def probe(command: list[str], environment: dict, *, deadline: float | None = Non
 
 
 def _probe_dsh_version(command: list[str], environment: dict, deadline: float, *,
+                       state_dir: Path,
                        launch_environment: dict | None = None) -> tuple[str | dict | None, bytes]:
     """Use the same owned DSH launcher for the no-input version check.
 
@@ -606,7 +607,7 @@ def _probe_dsh_version(command: list[str], environment: dict, deadline: float, *
     if start >= deadline:
         return "scan-timeout", b""
     root = private_dirs.make_temporary_dir(prefix="hey-my-buddy-dsh-probe-",
-        directory=private_dirs.ensure_private_dir(get_state_dir() / "tmp")).resolve()
+        directory=private_dirs.ensure_private_dir(state_dir / "tmp")).resolve()
     process = handle = None
     stopped = True  # No child exists until launch returns or transfers ownership.
     code, output = "launch-failed", b""
@@ -645,6 +646,11 @@ def _probe_dsh_version(command: list[str], environment: dict, deadline: float, *
         else:
             logging.getLogger(__name__).warning("DSH probe stop unconfirmed; private directory retained: %s", root)
     return (code, output) if stopped else ("shutdown-unverified", b"")
+
+
+def _probe_cli_version(command: list[str], environment: dict, deadline: float, *,
+                       launch_environment: dict) -> tuple[str | dict | None, bytes]:
+    return probe([*command, "--version"], {**environment, **launch_environment}, deadline=deadline)
 
 
 def _version_key(version: str | None) -> tuple[int, int, int]:
@@ -842,7 +848,8 @@ def _node_for(path: Path, environment: dict, deadline: float) -> tuple[str | Non
                 return str(option), match.group(0) if match else "unknown"
             failures.append(code)
         shutdown = False
-        found = _discover("node", environment=environment, deadline=deadline)
+        found = _discover("node", environment=environment, deadline=deadline,
+                          version_probe=_probe_cli_version)
         shutdown = _code(found) != "shutdown-unverified"
         if found["available"]:
             return found["executable"], found["version"]
@@ -914,7 +921,8 @@ def _code(record: dict) -> str | None:
     return value["code"].removeprefix("harness.") if value else None
 
 
-def _candidate_handshake(harness: str, candidate: dict, environment: dict, deadline: float) -> dict:
+def _candidate_handshake(harness: str, candidate: dict, environment: dict, deadline: float, *,
+                         version_probe) -> dict:
     shutdown = True  # No child has been created in this scan stage.
     try:
         path = Path(candidate["path"])
@@ -936,8 +944,7 @@ def _candidate_handshake(harness: str, candidate: dict, environment: dict, deadl
         child_env = native_environment(environment, command=command)
         child_env.update(launch_environment)
         shutdown = False
-        code, output = (_probe_dsh_version(command, child_env, deadline, launch_environment=launch_environment) if harness == "dsh" else
-                        probe([*command, "--version"], child_env, deadline=deadline))
+        code, output = version_probe(command, child_env, deadline, launch_environment=launch_environment)
         shutdown = code != "shutdown-unverified"
         if code is not None:
             if code in ("timeout", "scan-timeout"):
@@ -1002,14 +1009,17 @@ def _candidate_handshake(harness: str, candidate: dict, environment: dict, deadl
         raise
 
 
-def discover(harness: str, *, manual_path: str | None = None, environment: dict | None = None) -> dict:
+def discover(harness: str, *, state_dir: Path, manual_path: str | None = None,
+             environment: dict | None = None) -> dict:
     """Bound the entire scan and avoid lower-priority work after a ready tier."""
     return _discover(harness, manual_path=manual_path, environment=environment,
+                     version_probe=partial(_probe_dsh_version, state_dir=state_dir)
+                     if harness == "dsh" else _probe_cli_version,
                      deadline=time.monotonic() + _SCAN_TIMEOUT)
 
 
 def _discover(harness: str, *, manual_path: str | None = None,
-              environment: dict | None = None, deadline: float) -> dict:
+              environment: dict | None = None, deadline: float, version_probe) -> dict:
     shutdown = True  # No child has been created in this scan stage.
     try:
         snapshot = candidate_snapshot(harness, manual_path=manual_path, environment=environment)
@@ -1029,7 +1039,7 @@ def _discover(harness: str, *, manual_path: str | None = None,
                 incomplete_reason = "scan-timeout"
                 break
             shutdown = False
-            attempt = _candidate_handshake(harness, item, environment, deadline)
+            attempt = _candidate_handshake(harness, item, environment, deadline, version_probe=version_probe)
             shutdown = _code(attempt) != "shutdown-unverified"
             attempts.append(attempt)
             if attempt["status"] == "ready":

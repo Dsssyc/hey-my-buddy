@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 import io
+import os
 import signal
 import sys
 import threading
@@ -64,6 +65,9 @@ def main() -> int:
     for stream in (sys.stdout, sys.stderr):
         if isinstance(stream, io.TextIOWrapper):
             stream.reconfigure(encoding="utf-8", newline="\n")
+    if not os.environ.get("HMB_STATE_DIR"):
+        sys.stderr.write("hey-my-buddy run controller: HMB_STATE_DIR is required\n")
+        return 2
     parser = argparse.ArgumentParser()
     parser.add_argument("--control", required=True)
     args = parser.parse_args()

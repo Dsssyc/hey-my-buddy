@@ -274,7 +274,7 @@ class CodexAdapterTests(unittest.TestCase):
     def test_discovery_reports_user_configured_provider(self):
         (self.home / 'config.toml').write_text('model_provider = "fixture-provider"\n', encoding="utf-8", newline="\n")
         with mock.patch.dict(os.environ, self.environment, clear=True):
-            catalog = CodexAdapter().discover_models()
+            catalog = CodexAdapter().discover_models(state_dir=Path(os.environ["HMB_STATE_DIR"]))
         self.assertEqual([provider['provider'] for provider in catalog['providers']], ['fixture-provider'])
         self.assertEqual(catalog['providers'][0]['models'][0]['id'], 'fixture-model')
 
@@ -365,7 +365,7 @@ class CodexAdapterTests(unittest.TestCase):
 
     def test_complete_empty_native_catalog_is_not_a_discovery_failure(self):
         with mock.patch.dict(os.environ, {**self.environment, "HMB_CODEX_FIXTURE_CASE": "empty-catalog"}, clear=True):
-            catalog = CodexAdapter().discover_models()
+            catalog = CodexAdapter().discover_models(state_dir=Path(os.environ["HMB_STATE_DIR"]))
         self.assertEqual(catalog["providers"][0]["models"], [])
         self.assertFalse((self.root / "fixture.json").exists(), "discovery must not start a thread")
 

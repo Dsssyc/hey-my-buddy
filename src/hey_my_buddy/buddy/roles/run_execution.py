@@ -21,7 +21,6 @@ from pathlib import Path
 from ...errors import BoardError
 from ...json_codec import decode_strict_json
 from ...private_dirs import context_root, native_root, ensure_private_dir, make_temporary_dir
-from ...state_root import get_state_dir
 from ...private_files import open_read, publish_bytes, read_bytes, read_text
 from ...protocol import usage
 from ...protocol.capabilities import PERMISSION_LEVELS
@@ -769,13 +768,13 @@ def _artifacts(context: ExecutionContext) -> list[dict]:
     return artifacts
 
 
-def discover_models(name: str) -> dict:
-    return _native_operation(name, "discover")
+def discover_models(name: str, *, state_dir: Path) -> dict:
+    return _native_operation(name, "discover", state_dir=state_dir)
 
 
-def delete_sessions(name: str, session_ids: list[str]) -> dict[str, str]:
+def delete_sessions(name: str, session_ids: list[str], *, state_dir: Path) -> dict[str, str]:
     """Delete proven native sessions, validating the controller receipt once."""
-    sessions = _native_operation(name, "delete-sessions", session_ids=session_ids)
+    sessions = _native_operation(name, "delete-sessions", state_dir=state_dir, session_ids=session_ids)
     if (not isinstance(sessions, dict) or sessions.keys() != set(session_ids)
             or any(value not in ("deleted", "already-gone") for value in sessions.values())):
         raise BoardError("INVALID_PROTOCOL", "The native session deletion receipt does not match the request",
@@ -783,7 +782,7 @@ def delete_sessions(name: str, session_ids: list[str]) -> dict[str, str]:
     return sessions
 
 
-def _native_operation(name: str, operation: str, **arguments) -> dict:
+def _native_operation(name: str, operation: str, *, state_dir: Path, **arguments) -> dict:
     from ..harnesses.registry import native_operation
     from ..harnesses.runtime_selection import controller_environment
 
@@ -794,13 +793,14 @@ def _native_operation(name: str, operation: str, **arguments) -> dict:
         try:
             native_operation(name, operation)
             directory = make_temporary_dir(prefix=f"hey-my-buddy-{name}-{specification['resultKey']}-",
-                directory=ensure_private_dir(get_state_dir() / "tmp"))
+                directory=ensure_private_dir(state_dir / "tmp"))
             control = directory / _NATIVE_CONTROL
             private_json(control, {"operation": operation, "arguments": arguments,
                                    "harness": name,
                                    "privateRoot": str(directory), "nativeRoot": str(directory / "native"),
                                    "cwd": str(directory), "timeoutSeconds": 25})
             environment = controller_environment(directory)
+            environment["HMB_STATE_DIR"] = str(state_dir)
             stopped = False  # Ownership passes to the launch boundary.
             try:
                 handle = launch_controller(

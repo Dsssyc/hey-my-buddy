@@ -1174,7 +1174,7 @@ class NativeCatalogEmptyTests(ZcodeFixtureCase):
         from unittest import mock
 
         with mock.patch.dict(os.environ, {**self.environment, "HMB_ZCODE_TEST_CASE": "catalog-empty"}, clear=True):
-            result = self.description.discover_models()
+            result = self.description.discover_models(state_dir=Path(os.environ["HMB_STATE_DIR"]))
         # A successful native snapshot with no usable provider is a complete
         # observation, so the service can retire missing buddies instead of
         # preserving them as unknown forever.
