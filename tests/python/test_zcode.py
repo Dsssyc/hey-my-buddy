@@ -72,10 +72,14 @@ class ZcodeAdapterTests(ZcodeFixtureCase):
         self.assertEqual(self.personal.read_bytes(), original)
         self.assertNotIn("fixture-secret-never-public", json.dumps(outcome.to_report()))
         self.assertFalse(any("provider" in x["location"] or "bridge" in x["location"] for x in outcome.artifacts))
-        # Inquiry is a declared capability backed by this attempt's private bridge,
-        # and the session facts stay separate from the Git workspace facts.
-        self.assertIn("inquiry", self.adapter.capabilities)
+        # Observation is a declared capability backed by this attempt's private
+        # bridge; correlated inquiry is deliberately absent because the installed
+        # native protocol has no turn-bound in-turn input method. The session facts
+        # stay separate from the Git workspace facts.
+        self.assertIn("observe", self.adapter.capabilities)
+        self.assertNotIn("inquiry", self.adapter.capabilities)
         self.assertTrue(outcome.result["inquiry"]["mounted"], outcome.result["inquiry"])
+        self.assertFalse(outcome.result["inquiry"]["supported"])
         native = outcome.result["nativeSession"]
         self.assertEqual(native["sessionId"], turn["sessionId"])
         self.assertEqual(native["storageScope"], "task-private")

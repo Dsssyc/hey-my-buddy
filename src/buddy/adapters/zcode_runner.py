@@ -5,7 +5,6 @@ import argparse
 import hashlib
 import json
 import os
-import queue
 import secrets
 import signal
 import socket
@@ -17,11 +16,13 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 
+from ..activity import ActivitySidecar
+from ..errors import BoardError
 from .base import ProcessHandle
-from .turn_io import ACTIVITY_CONTRACT, ASSISTANCE_HINTS, activity_document, canonical_json, input_hash, private_json, write_activity_sidecar
+from .turn_io import ASSISTANCE_HINTS, canonical_json, input_hash, private_json
 from .zcode_config import SUPPORTED_ACCESS, cli_command, snapshot_provider_files
-from .zcode_protocol import (ActivityProjection, InquiryReplyEvidence, NativeConnection, NativeError, RootTurnEvidence,
-                             command_envelope, decode_json)
+from .zcode_protocol import (ActivityProjection, NATIVE_INQUIRY_UNSUPPORTED, NativeConnection, NativeError,
+                             RootTurnEvidence, decode_json)
 
 MAX_QUESTION_BYTES = 4000
 MAX_ANSWER_BYTES = 4000
@@ -36,44 +37,31 @@ def _now() -> str:
     return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
 
 
-def inquiry_text(inquiry_id: str, question: str, reply_tool: str) -> str:
-    """Bounded, harness-neutral question delivery text."""
-    return "\n".join([
-        f"[buddy inquiry {inquiry_id}] The operator of this delegated run asked a progress question while you were working:",
-        question,
-        "",
-        f"Answer it with the `{reply_tool}` tool: call it once with {{\"inquiryId\":\"{inquiry_id}\",\"answer\":\"<your answer>\"}}.",
-        "It only records the answer for the operator: it never changes, restarts or extends this execution, and it is not a new task.",
-        "If that tool is not available in the current step, continue working and answer at the next step where it is offered.",
-    ])[:MAX_QUESTION_BYTES + 1024]
-
-
 class InquiryBridge:
-    """Owner-private socket bridge for one governed ZCode root turn.
+    """Owner-private observation bridge for one governed ZCode root turn.
 
     The bridge lives inside the controller process because only this process holds
-    the native connection. Questions are injected through the confirmed
-    ``v4/command`` ``sendText`` surface with an explicit ``guide`` delivery; the
-    bridge never calls ``session/send``, never starts a turn and never touches the
-    attempt deadline. Answers are correlated by ``inquiryId`` through the signed
-    session-private MCP tool, so assistant prose is never an answer.
+    the native connection. It answers bounded, metadata-only ``observe`` requests,
+    and it records every question once as an honest refusal: the installed native
+    protocol has no turn-bound in-turn input method, so nothing here may inject a
+    question into the native session. See
+    :data:`zcode_protocol.NATIVE_INQUIRY_UNSUPPORTED` for the verified limitation.
+
+    The journal is attempt-private transport evidence. A committed question keeps
+    its identity, question hash and delivery record across state changes, so a
+    replay of the identical question is always a duplicate instead of a conflict,
+    and a changed question under the same id is always a conflict.
     """
 
-    def __init__(self, credentials: dict, *, identity: dict, reply_tool: str, journal_path: str):
+    def __init__(self, credentials: dict, *, identity: dict, journal_path: str, attention_path: str | None = None):
         self.credentials = credentials
         self.identity = identity
-        self.reply_tool = reply_tool
         self.journal_path = path = Path(journal_path)
+        self.attention_path = Path(attention_path) if attention_path else None
         self.socket_path = str(credentials.get("socketPath") or "")
         self.token = credentials.get("token")
         self.session_id: str | None = None
-        self.client_id = "buddy-zcode-" + hashlib.sha256(str(identity.get("attemptId", "")).encode()).hexdigest()[:16]
         self.entries: dict[str, dict] = {}
-        self.transitions: dict[str, int] = {}
-        self.preempted = 0
-        self.queue: "queue.Queue[dict]" = queue.Queue(maxsize=MAX_INQUIRIES)
-        self.pending: dict[str, dict] = {}
-        self.lock = threading.Lock()
         self.listener: socket.socket | None = None
         self.thread: threading.Thread | None = None
         self.active = False
@@ -122,7 +110,7 @@ class InquiryBridge:
             pass
 
     def close(self) -> None:
-        """Stop accepting; terminalize questions that can no longer be answered."""
+        """Stop accepting; the socket never outlives the owned root turn."""
         self.active = False
         self.agent_status = "ended"
         listener, self.listener = self.listener, None
@@ -133,10 +121,6 @@ class InquiryBridge:
                 pass
         if self.thread is not None:
             self.thread.join(timeout=1.0)
-        for inquiry_id, entry in list(self.entries.items()):
-            if entry.get("state") == "delivered":
-                self._journal({**self._identity_fields(), "inquiryId": inquiry_id, "state": "unavailable",
-                               "reason": "the run ended before a correlated answer was recorded", "at": _now()})
         try:
             os.unlink(self.socket_path)
         except OSError:
@@ -165,11 +149,9 @@ class InquiryBridge:
             except ValueError:
                 continue  # a torn line is ignored, never fatal
             if isinstance(record, dict) and isinstance(record.get("inquiryId"), str):
-                self.entries[record["inquiryId"]] = record
-                if isinstance(record.get("state"), str):
-                    self.transitions[record["state"]] = self.transitions.get(record["state"], 0) + 1
-                if isinstance(record.get("delivery"), dict) and record["delivery"].get("preempted") is True:
-                    self.preempted += 1
+                # Merge instead of replace: the committed question hash and
+                # delivery survive a later state record and a controller restart.
+                self.entries[record["inquiryId"]] = {**self.entries.get(record["inquiryId"], {}), **record}
 
     def _identity_fields(self) -> dict:
         return {"taskId": self.identity.get("taskId"), "attemptId": self.identity.get("attemptId"),
@@ -177,12 +159,15 @@ class InquiryBridge:
                 "sessionId": self.session_id}
 
     def _journal(self, record: dict) -> None:
-        self.entries[record["inquiryId"]] = record
-        state = record.get("state")
-        if isinstance(state, str):
-            self.transitions[state] = self.transitions.get(state, 0) + 1
-        if isinstance(record.get("delivery"), dict) and record["delivery"].get("preempted") is True:
-            self.preempted += 1
+        """Append one transport record and merge it over the committed entry.
+
+        Only the delta is appended (so the journal stays a linear transport log)
+        while the in-memory entry keeps every committed field. This is what makes
+        a replayed question recognizable: ``questionSha256`` and ``delivery`` are
+        never dropped by a later state record.
+        """
+        inquiry_id = record["inquiryId"]
+        self.entries[inquiry_id] = {**self.entries.get(inquiry_id, {}), **record}
         raw = (canonical_json({"version": BRIDGE_PROTOCOL_VERSION, **record}) + "\n").encode()
         try:
             if self.journal_path.exists() and self.journal_path.stat().st_size + len(raw) > MAX_JOURNAL_BYTES:
@@ -198,28 +183,10 @@ class InquiryBridge:
             self.error = self.error or "the inquiry journal could not be written"
 
     def describe_answer(self, inquiry_id: str) -> dict:
+        """This adapter can never record a correlated answer; say so explicitly."""
         entry = self.entries.get(inquiry_id) or {}
-        answer = entry.get("answer")
-        if entry.get("state") != "answered" or not isinstance(answer, str) or not answer.strip():
-            return {}
-        return {"answer": {"text": answer, "bytes": entry.get("answerBytes"), "via": entry.get("via"),
-                           "toolCallId": entry.get("toolCallId"), "at": entry.get("answeredAt"),
-                           "truncated": entry.get("truncated") is True},
-                "state": "answered", "inquiryId": inquiry_id}
-
-    def record_answer(self, receipt: dict, tool_call_id: str) -> str | None:
-        """Correlate one signed reply with a delivered question in this attempt."""
-        inquiry_id = receipt["inquiryId"]
-        entry = self.entries.get(inquiry_id)
-        if entry is None or entry.get("state") not in ("delivered", "answered"):
-            return "no committed question with that id was asked in this attempt"
-        if entry.get("state") == "answered":
-            return "that inquiry already has a recorded answer"
-        self._journal({**self._identity_fields(), "inquiryId": inquiry_id, "state": "answered",
-                       "answer": receipt["answer"], "answerBytes": receipt["answerBytes"],
-                       "via": "tool:buddy_inquiry_reply", "toolCallId": tool_call_id,
-                       "answeredAt": _now(), "truncated": False, "receiptId": receipt["receiptId"]})
-        return None
+        return {"answer": {"available": False, "reason": entry.get("reason") or NATIVE_INQUIRY_UNSUPPORTED},
+                "state": entry.get("state") or "unavailable", "inquiryId": inquiry_id, "supported": False}
 
     # -- observation ---------------------------------------------------------
     def note_event(self, message: dict, phase: str) -> None:
@@ -242,50 +209,71 @@ class InquiryBridge:
 
     def snapshot(self) -> dict:
         entries = list(self.entries.values())
-        with self.lock:
-            pending = sum(1 for item in self.queue.queue if isinstance(item, dict))
-        delivered = sum(1 for entry in entries if entry.get("state") == "delivered")
-        answered = sum(1 for entry in entries if entry.get("state") == "answered")
+        refused = sum(1 for entry in entries if entry.get("state") == "unavailable")
         return {
             "ready": self.active,
             "observedAt": _now(),
             "sessionId": self.session_id,
             "agentStatus": self.agent_status,
             "bridgeStartedAt": self.bridge_started_at,
-            "inbox": {"pending": pending, "delivered": delivered, "answered": answered},
+            "inbox": {"pending": 0, "delivered": 0, "answered": 0, "refused": refused},
             "lastEvent": self.last_event,
             "activity": self.activity,
             "activityDropped": self.activity_dropped,
-            "replyTool": {"name": self.reply_tool, "scope": "root-session"},
+            "replyTool": None,
             "attention": ({"requests": len(self.attention), "last": self.attention[-1]} if self.attention else None),
-            "unavailable": ["nativeReasoning", "toolArguments", "toolOutput", "providerCredentials"],
+            "unavailable": ["nativeReasoning", "toolArguments", "toolOutput", "providerCredentials",
+                            "correlatedQuestions"],
             "journal": {"enabled": True, "truncated": bool(getattr(self, "truncated", False)), "entries": len(entries)},
+            "capability": "observe",
+            "supported": False,
+            "limitation": NATIVE_INQUIRY_UNSUPPORTED,
             "limits": {"maxQuestionBytes": MAX_QUESTION_BYTES, "maxAnswerBytes": MAX_ANSWER_BYTES,
                        "maxInquiriesPerRun": MAX_INQUIRIES, "maxFrameBytes": MAX_BRIDGE_FRAME_BYTES,
-                       "requestedDelivery": "guide", "startsNewTurn": False, "extendsDeadline": False},
+                       "inquiry": "unsupported", "requestedDelivery": None,
+                       "startsNewTurn": False, "extendsDeadline": False},
             "error": self.error,
         }
 
     def report(self) -> dict:
         entries = list(self.entries.values())
+        refused = sum(1 for entry in entries if entry.get("state") == "unavailable")
         return {
             "enabled": self.mounted or self.error is not None,
             "mounted": self.mounted,
             "error": self.error,
+            "capability": "observe",
+            "supported": False,
+            "inquiry": "unsupported",
+            "limitation": NATIVE_INQUIRY_UNSUPPORTED,
             "requested": len(entries),
-            "delivered": self.transitions.get("delivered", 0),
-            "answered": self.transitions.get("answered", 0),
-            "unavailable": self.transitions.get("unavailable", 0),
-            "preempted": self.preempted,
+            "refused": refused,
+            "answered": 0,
+            "delivered": 0,
             "journalEntries": len(entries),
-            "requestedDelivery": "guide",
+            "requestedDelivery": None,
             "startsNewTurn": False,
             "extendsDeadline": False,
         }
 
     def note_attention(self, record: dict) -> None:
+        """Keep one bounded record and make it readable while the turn is still live.
+
+        The session-private finish tool refuses a ``completed`` outcome while an
+        unsupported interactive request is outstanding, so the file has to exist
+        before the tool call, not only in the controller's final report.
+        """
         self.attention.append(record)
         del self.attention[:-8]
+        if self.attention_path is not None:
+            try:
+                private_json(self.attention_path, {
+                    "version": 1,
+                    **{k: self.identity.get(k) for k in ("taskId", "attemptId", "generation", "turnId")},
+                    "requests": self.attention,
+                })
+            except OSError:
+                self.error = self.error or "the native attention record could not be written"
 
     def attention_report(self) -> dict:
         return {"requests": len(self.attention), "last": self.attention[-1] if self.attention else None}
@@ -354,6 +342,15 @@ class InquiryBridge:
         return response(False, error="unsupported-method")
 
     def _ask(self, frame: dict, response) -> dict:
+        """Record one question as an honest, attempt-bound refusal.
+
+        No native command is ever sent: the installed protocol cannot bind an
+        input to the live turn (see ``NATIVE_INQUIRY_UNSUPPORTED``). The first
+        question is journaled once with its committed question hash and refusal
+        delivery; an identical replay returns the same committed state as a
+        duplicate and a changed question under the same id is a conflict. That
+        keeps retries idempotent without any retry ever injecting anything.
+        """
         inquiry_id, question = frame.get("inquiryId"), frame.get("question")
         if not isinstance(inquiry_id, str) or not inquiry_id or len(inquiry_id) > 128:
             return response(False, error="bad-request")
@@ -364,117 +361,36 @@ class InquiryBridge:
         if existing is not None:
             if existing.get("questionSha256") != digest:
                 return response(False, error="conflict")
-            value = {"accepted": True, "duplicate": True, "state": existing.get("state", "delivered"),
-                     "delivery": existing.get("delivery") or {}}
-            answer = self.describe_answer(inquiry_id)
-            return response(True, value={**value, **answer})
+            return response(True, value=self._refusal_value(inquiry_id, existing, duplicate=True))
         if len(self.entries) >= MAX_INQUIRIES:
             return response(False, error="too-many")
-        if not self.active or not self.session_id:
-            # A bridge that has not admitted its root input yet is merely not ready;
-            # one whose turn ended (or whose guide already preempted a turn) must say
-            # agent-gone so the service records the refusal honestly.
-            ended = self.agent_status in ("finishing", "ended") or self.preempted > 0
-            return response(False, error="agent-gone" if ended else "not-ready")
-        if self.agent_status in ("finishing", "ended"):
-            return response(False, error="agent-gone")
-        request = {"inquiryId": inquiry_id, "question": question, "questionSha256": digest,
-                   "commandId": secrets.token_hex(16), "event": threading.Event(), "reply": None,
-                   "requestedDelivery": "guide"}
-        try:
-            self.queue.put_nowait(request)
-        except queue.Full:
-            return response(False, error="too-many")
-        if not request["event"].wait(BRIDGE_WAIT_SECONDS):
-            request["expired"] = True
-            return response(False, error="timeout")
-        reply = request.get("reply") or {}
-        if reply.get("ok"):
-            return response(True, value=reply["value"])
-        return response(False, error=reply.get("error") or "internal")
+        delivery = {"requestedDelivery": None, "admittedDelivery": None, "startsNewTurn": False,
+                    "extendsDeadline": False, "supported": False, "at": _now()}
+        self._journal({**self._identity_fields(), "inquiryId": inquiry_id, "state": "unavailable",
+                       "questionSha256": digest, "reason": "native-inquiry-unsupported",
+                       "limitation": NATIVE_INQUIRY_UNSUPPORTED, "delivery": delivery, "refusedAt": _now()})
+        return response(True, value=self._refusal_value(inquiry_id, self.entries[inquiry_id], duplicate=False))
 
-    # -- delivery (runs on the controller's single native connection thread) --
-    def drain(self, connection: NativeConnection, evidence: RootTurnEvidence) -> None:
-        while True:
-            try:
-                request = self.queue.get_nowait()
-            except queue.Empty:
-                return
-            if request.get("expired"):
-                request["event"].set()
-                continue
-            try:
-                request["reply"] = self._inject(connection, evidence, request)
-            except NativeError as error:
-                request["reply"] = {"ok": False, "error": "agent-gone" if error.code in ("cancelled", "timeout") else "internal"}
-            except Exception:  # noqa: BLE001 - a bridge failure never aborts the turn
-                request["reply"] = {"ok": False, "error": "internal"}
-            request["event"].set()
-
-    def _inject(self, connection: NativeConnection, evidence: RootTurnEvidence, request: dict) -> dict:
-        """Deliver one question into the live root turn through ``v4/command``.
-
-        Only ``requestedDelivery: "guide"`` is ever sent. ``startNow`` preempts or
-        starts a turn (forbidden for an inquiry) and ``queue`` would leave the
-        question waiting for a next turn this adapter never creates, so a bridge
-        that cannot guide the live turn reports an honest refusal instead.
-        """
-        if (not self.active or evidence.settled_ordinal or evidence.turn_id is None
-                or getattr(evidence, "completed_ordinal", 0)):
-            # The root turn is over (or was never admitted): never inject into it.
-            return {"ok": False, "error": "agent-gone"}
-        envelope = command_envelope(command_id=request["commandId"], client_id=self.client_id,
-                                    session_id=self.session_id, type_="sendText",
-                                    payload={"text": inquiry_text(request["inquiryId"], request["question"], self.reply_tool),
-                                             "requestedDelivery": "guide"})
-        ack = connection.send_text(envelope)
-        status = ack.get("status")
-        if status == "stale":
-            return {"ok": False, "error": "conflict"}
-        if status == "rejected":
-            reason = str(ack.get("reasonCode") or "")
-            if "sessionNotFound" in reason or "no_active_turn" in reason or "turn_not_steerable" in reason:
-                return {"ok": False, "error": "agent-gone"}
-            return {"ok": False, "error": "bad-request"}
-        if status not in ("accepted", "noop", "duplicate"):
-            return {"ok": False, "error": "internal"}
-        result = ack.get("result") if isinstance(ack.get("result"), dict) else {}
-        admitted = result.get("delivery") if isinstance(result.get("delivery"), str) else None
-        delivery = {"requestedDelivery": "guide", "admittedDelivery": admitted, "inputId": result.get("inputId"),
-                    "ackStatus": status, "revisionAtDecision": ack.get("revisionAtDecision"), "at": _now()}
-        if admitted == "startNow":
-            # Confirmed native semantics: a guide with no live turn is admitted as
-            # startNow, which starts (or preempts) a turn. A question must never do
-            # that, so stop the turn this injection just started, record the
-            # boundary and refuse every further question for this attempt.
-            delivery["preempted"] = True
-            delivery["deliverySemantics"] = "preempted-or-new-turn"
-            self.active = False
-            try:
-                connection.send_text(command_envelope(command_id=secrets.token_hex(16), client_id=self.client_id,
-                                                      session_id=self.session_id, type_="stop", payload={}))
-                delivery["remediated"] = True
-            except NativeError:
-                delivery["remediated"] = False
-            self.note_attention({"kind": "guide-preempted-native-turn", "inquiryId": request["inquiryId"],
-                                 "at": _now(), "method": "v4/command:sendText",
-                                 "outcome": "the guide was admitted as startNow; a stop was requested and no further questions are injected"})
-        else:
-            delivery["deliverySemantics"] = "in-turn-steer"
-        self._journal({**self._identity_fields(), "inquiryId": request["inquiryId"], "state": "delivered",
-                       "questionSha256": request["questionSha256"], "deliveredAt": _now(),
-                       "delivery": delivery, "messageId": None,
-                       "requestedDelivery": "guide", "requestedAt": request.get("requestedAt")})
-        return {"ok": True, "value": {"accepted": True, "state": "delivered", "delivery": delivery}}
+    @staticmethod
+    def _refusal_value(inquiry_id: str, entry: dict, *, duplicate: bool) -> dict:
+        return {
+            "accepted": False,
+            "supported": False,
+            "state": entry.get("state") or "unavailable",
+            "duplicate": duplicate,
+            "inquiryId": inquiry_id,
+            "questionSha256": entry.get("questionSha256"),
+            "reason": entry.get("limitation") or NATIVE_INQUIRY_UNSUPPORTED,
+            "delivery": entry.get("delivery") or {},
+        }
 
 
-def governed_prompt(task_text: str, turn_input: dict, tool_name: str, reply_tool: str) -> str:
+def governed_prompt(task_text: str, turn_input: dict, tool_name: str) -> str:
     """Bounded governed root prompt: scope, finish contract and assistance triggers."""
     return "\n\n".join([
         "This is a governed Buddy root turn. Complete the authorized task using the available coding tools and internal subagents. Follow the frozen Host input and its allocated workspace.",
-        f"Only the root may conclude this Buddy turn. After your work and internal subagents settle, obtain one successful receipt from {tool_name} with the complete structured outcome. Include all six fields: disposition, summary, remaining, decisions, artifacts, request. Completed requires request: null. Use assistance for bounded help or attention for a Host decision. If the tool explicitly fails, correct the arguments and retry in this turn. Plain final text is not a recorded outcome. After a successful finish receipt, do not start more tools; end the native turn.",
+        f"Only the root may conclude this Buddy turn. After your work and internal subagents settle, obtain one successful receipt from {tool_name} with the complete structured outcome. Include all six fields: disposition, summary, remaining, decisions, artifacts, request. Completed requires request: null. Use assistance for bounded help or attention for a Host decision. If a native permission or user-input request was refused, you must conclude with attention instead of completed. If the tool explicitly fails, correct the arguments and retry in this turn. Plain final text is not a recorded outcome. After a successful finish receipt, do not start more tools; end the native turn.",
         *ASSISTANCE_HINTS,
-        f"If the operator asks a progress question during this turn (a `[buddy inquiry <id>]` message), answer it once with `{reply_tool}`. It is not a new task and never changes this execution's scope or deadline.",
         task_text, canonical_json(turn_input),
     ])
 
@@ -536,9 +452,15 @@ def catalog(snapshot: dict, access: dict, version: str) -> dict:
     warnings = ["OAuth account providers are unavailable through this adapter"] if any(t == "zhipu-account" for t in access.values()) else []
     if missing_effort:
         warnings.append("Models exposing no configurable native reasoning efforts were omitted")
+    if not providers:
+        # A successful native snapshot with no usable API-key provider is a
+        # complete observation, not a discovery failure: the service can retire
+        # profiles that are missing from it instead of leaving them unknown
+        # forever. The explicit ``discoveries`` status states that boundary.
+        warnings.append("The native app server returned no API-key provider; this complete empty observation retires missing ZCode profiles")
     return {"source": "zcode-native-app-server", "adapter": "zcode", "harnessVersion": version,
             "discoveredAt": datetime.now(timezone.utc).isoformat(), "providers": list(providers.values()),
-            "warnings": warnings}
+            "discoveries": [{"adapter": "zcode", "status": "complete"}], "warnings": warnings}
 
 
 def run(control: dict, cancelled: threading.Event) -> tuple[dict, int]:
@@ -588,11 +510,9 @@ def run(control: dict, cancelled: threading.Event) -> tuple[dict, int]:
                 raise NativeError("invalid-input", "the governed input is not an object")
             identity = {k: turn_input[k] for k in ("taskId", "attemptId", "generation", "turnId")}
             inquiry = control.get("inquiry") if isinstance(control.get("inquiry"), dict) else None
-            bridge = {"identity": identity, "inputSha256": input_hash(turn_input), "key": secrets.token_hex(32)}
-            if inquiry is not None and isinstance(inquiry.get("resultsPath"), str):
-                # The session-private MCP reply tool reads the same journal to
-                # refuse a reply for a question this attempt never asked.
-                bridge["journalPath"] = inquiry["resultsPath"]
+            attention_path = directory / "attention.json"
+            bridge = {"identity": identity, "inputSha256": input_hash(turn_input), "key": secrets.token_hex(32),
+                      "attentionPath": str(attention_path)}
             bridge_path = directory / "finish-bridge.json"
             private_json(bridge_path, bridge, exclusive=True)
             server_name = "buddy_" + hashlib.sha256(identity["attemptId"].encode()).hexdigest()[:16]
@@ -639,36 +559,34 @@ def run(control: dict, cancelled: threading.Event) -> tuple[dict, int]:
                                            "configuration": result["resolved"]}, exclusive=True)
             input_id = "buddy-" + hashlib.sha256(canonical_json(identity).encode()).hexdigest()
             evidence = RootTurnEvidence(session_id, input_id, tool_name, bridge)
-            reply_tool = f"mcp__{server_name}__buddy_inquiry_reply"
             projection = ActivityProjection(session_id)
-            activity_report: dict = {"published": False, "reason": "activity publishing did not run"}
+            # The real helper owns validation, atomic replacement and throttling;
+            # its state lives for the whole controller so same-phase updates are
+            # coalesced instead of rewriting the sidecar for every token event.
+            sidecar = ActivitySidecar(directory, task_id=identity["taskId"], attempt_id=identity["attemptId"],
+                                      generation=identity["generation"])
 
             def publish_activity() -> None:
-                nonlocal activity_report
-                document = activity_document(version_identity=identity, payload=projection.payload())
-                outcome = write_activity_sidecar(directory, document)
-                activity_report = {
-                    "contract": {"module": ACTIVITY_CONTRACT["helperModule"],
-                                 "function": ACTIVITY_CONTRACT["helperFunction"],
-                                 "version": ACTIVITY_CONTRACT["version"], "fileName": ACTIVITY_CONTRACT["fileName"]},
-                    "published": outcome.get("written") is True, "reason": outcome.get("reason"),
-                    "phase": document.get("phase"), "eventSeq": document.get("eventSeq"),
-                }
-                result["activity"] = activity_report
+                try:
+                    written = sidecar.publish(projection.payload())
+                except BoardError as error:
+                    # Metadata must never fail the native turn; the reason is
+                    # reported instead of writing a look-alike sidecar.
+                    result["activity"] = {"published": False, "reason": f"buddy.activity rejected the receipt ({error.code})"}
+                    return
+                result["activity"] = {"published": True, "coalesced": written is None,
+                                      "phase": projection.phase, "eventSeq": projection.event_seq}
 
             if inquiry is not None:
-                inquiry_bridge = InquiryBridge(inquiry, identity=identity, reply_tool=reply_tool,
-                                               journal_path=str(inquiry.get("resultsPath") or ""))
+                inquiry_bridge = InquiryBridge(inquiry, identity=identity,
+                                               journal_path=str(inquiry.get("resultsPath") or ""),
+                                               attention_path=str(attention_path))
                 inquiry_bridge.start()
                 result["inquiry"] = inquiry_bridge.report()
-            reply_evidence = (InquiryReplyEvidence(session_id, reply_tool, bridge, inquiry_bridge.record_answer)
-                              if inquiry_bridge is not None else None)
 
             def observe(message: dict, ordinal: int) -> None:
                 evidence.observe(message, ordinal)
                 changed = projection.note(message, ordinal)
-                if reply_evidence is not None:
-                    reply_evidence.observe(message, ordinal)
                 if inquiry_bridge is not None:
                     inquiry_bridge.note_event(message, projection.phase)
                 if changed:
@@ -679,7 +597,7 @@ def run(control: dict, cancelled: threading.Event) -> tuple[dict, int]:
             connection.call("session/subscribe", {"sessionId": session_id, "deliveryKind": "web-remote-replayable", "includeSnapshot": False})
             projection.phase = "waiting-model"
             publish_activity()
-            prompt = governed_prompt(Path(control["taskFile"]).read_text(), turn_input, tool_name, reply_tool)
+            prompt = governed_prompt(Path(control["taskFile"]).read_text(), turn_input, tool_name)
             accepted = connection.call("session/send", {"sessionId": session_id, "inputId": input_id, "content": prompt})
             if accepted.get("accepted") is not True or accepted.get("sessionId") != session_id:
                 raise NativeError("native-admission-failed", "ZCode did not admit the intended root input")
@@ -687,11 +605,9 @@ def run(control: dict, cancelled: threading.Event) -> tuple[dict, int]:
                 inquiry_bridge.activate(session_id)
             while not evidence.settled_ordinal:
                 connection.pump()
-                if inquiry_bridge is not None:
-                    inquiry_bridge.drain(connection, evidence)
             if inquiry_bridge is not None:
-                # Stop accepting questions the instant the root turn settled: an
-                # idle or finished agent is never woken for an inquiry.
+                # Stop accepting observations the instant the root turn settled:
+                # an idle or finished agent is never woken for an inquiry.
                 inquiry_bridge.close()
             projection.phase = "finishing"
             publish_activity()
@@ -713,15 +629,11 @@ def run(control: dict, cancelled: threading.Event) -> tuple[dict, int]:
         record = None
     finally:
         if inquiry_bridge is not None:
-            # Closing before the process disappears is what makes an after-end
-            # question honest instead of a dangling "pending" state.
+            # Closing before the process disappears keeps an after-end question
+            # honest instead of leaving a dangling observation.
             inquiry_bridge.close()
             result["inquiry"] = inquiry_bridge.report()
-            result["attention"] = inquiry_bridge.attention_report()
-            if inquiry_bridge.attention:
-                private_json(directory / "attention.json", {
-                    "version": 1, **{k: identity.get(k) for k in ("taskId", "attemptId", "generation", "turnId")},
-                    "requests": inquiry_bridge.attention})
+            result["nativeAttention"] = inquiry_bridge.attention_report()
         try:
             process.stdin.close()
         except OSError:

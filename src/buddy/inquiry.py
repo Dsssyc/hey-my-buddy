@@ -7,8 +7,11 @@ the Python client of that socket plus the importer of its journal: the durable b
 message rows stay authoritative, the journal is idempotent transport evidence, and a
 missing or unreachable bridge is reported honestly instead of being invented.
 
-Whether an adapter can answer questions at all comes from the adapter registry's
-declared ``inquiry`` capability, not from a second hard-coded adapter list here.
+Two capabilities come from the adapter registry, never from a second hard-coded
+adapter list here: ``inquiry`` means correlated questions are genuinely supported;
+``observe`` means bounded read-only native activity is published. ZCode declares
+only ``observe`` because its installed protocol has no turn-bound in-turn input, so
+a question against it is recorded as an honest, terminal refusal.
 """
 from __future__ import annotations
 
@@ -30,6 +33,7 @@ MAX_TRANSPORT_TIMEOUT_MS = 5000
 MAX_WAIT_MS = 30000
 MAX_RESPONSE_BYTES = 64 * 1024
 MAX_JOURNAL_BYTES = 1024 * 1024
+MAX_REASON_CHARS = 400
 POLL_INTERVAL_SECONDS = 0.3
 
 BRIDGE_ERRORS = (
@@ -69,20 +73,31 @@ NOTE = (
 )
 
 
+def adapter_capabilities(adapter: str) -> frozenset[str]:
+    """The adapter registry's declared capability set, or empty when unknown."""
+    try:
+        from .adapters import adapters
+
+        return frozenset(adapters()[adapter].capabilities)
+    except (KeyError, TypeError):
+        return frozenset()
+
+
 def inquiry_capable(adapter: str) -> bool:
-    """Whether this adapter declares the ``inquiry`` capability in its registry.
+    """Whether this adapter declares correlated ``inquiry`` in its registry.
 
     The registry is the single declaration point. A harness without it answers
     honestly that it has no inquiry capability instead of half-observing a bridge
     that was never mounted; the check never probes the native CLI or starts
     anything, so a read-only observation stays free of side effects.
     """
-    try:
-        from .adapters import adapters
+    return "inquiry" in adapter_capabilities(adapter)
 
-        return "inquiry" in adapters()[adapter].capabilities
-    except (KeyError, TypeError):
-        return False
+
+def observe_capable(adapter: str) -> bool:
+    """Whether bounded read-only native observation is declared and mounted."""
+    capabilities = adapter_capabilities(adapter)
+    return "inquiry" in capabilities or "observe" in capabilities
 
 
 def inquiry_credentials(directory: Path) -> dict | None:
@@ -236,19 +251,28 @@ def observe(store: BoardStore, params: dict) -> dict:
         duplicate = bool(posted.get("duplicate"))
 
     terminal = view["state"] in ("completed", "failed", "cancelled")
-    bridge = {"enabled": credentials is not None, "observed": False, "reason": None, "error": None}
+    can_ask = inquiry_capable(adapter)
+    can_observe = observe_capable(adapter)
+    bridge = {"enabled": credentials is not None, "observed": False, "reason": None, "error": None,
+              "canObserve": can_observe, "canAsk": can_ask}
     live: dict[str, Any] = {
         "available": False,
         "reason": "no live bridge for this attempt",
         "unavailable": ["sessionId", "agentStatus", "inbox", "lastEvent", "activity", "replyTool"],
         "limits": LIMITS,
     }
-    if not inquiry_capable(adapter):
-        bridge["reason"] = "this adapter has no inquiry capability"
+    if not can_observe:
+        bridge["reason"] = "this adapter has no observation or inquiry capability"
     elif terminal:
         bridge["reason"] = "the attempt is terminal; an idle or finished agent cannot be woken"
     elif credentials is None:
         bridge["reason"] = "the attempt has no inquiry bridge credentials yet"
+    elif inquiry_id is not None and not can_ask:
+        # The adapter can be observed but cannot ask: record the honest capability
+        # refusal instead of sending a question the native protocol cannot carry.
+        bridge["reason"] = "this adapter observes native activity but has no correlated inquiry capability"
+        bridge["capability"] = "observe"
+        _mark_unavailable(store, view["taskId"], inquiry_id, "unsupported", bridge["reason"])
     else:
         if inquiry_id is not None:
             result = bridge_request(credentials, "ask", {"inquiryId": inquiry_id, "question": question}, timeout_ms=timeout_ms)
@@ -344,8 +368,8 @@ def _journal_identity_mismatch(record: dict, task_id: str, attempt_id: str | Non
     return None
 
 
-def _mark_unavailable(store: BoardStore, task_id: str, inquiry_id: str, code: str) -> None:
-    """Record a question refused because the owned agent already ended."""
+def _mark_unavailable(store: BoardStore, task_id: str, inquiry_id: str, code: str, reason: str | None = None) -> None:
+    """Record a question refused because the owned agent cannot receive it."""
     try:
         store.message_update(
             {
@@ -353,7 +377,7 @@ def _mark_unavailable(store: BoardStore, task_id: str, inquiry_id: str, code: st
                 "inquiryId": inquiry_id,
                 "actor": "live-bridge",
                 "state": "unavailable",
-                "reason": f"the owned agent already ended; the bridge refused this question ({code})",
+                "reason": (reason or f"the owned agent already ended; the bridge refused this question ({code})")[:MAX_REASON_CHARS],
             }
         )
     except BoardError:
@@ -485,6 +509,11 @@ def _apply_journal(store: BoardStore, task_id: str, inquiry_id: str, record: dic
             patch["state"] = "delivered"
         else:
             patch["state"] = record["state"]
+            # A terminal refusal carries the bridge's own bounded reason; keep it
+            # instead of a generic "unavailable" with no explanation.
+            reason = record.get("limitation") or record.get("reason")
+            if record["state"] == "unavailable" and isinstance(reason, str) and reason.strip():
+                patch["reason"] = reason[:MAX_REASON_CHARS]
     if patch.keys() - {"runId", "inquiryId", "actor"}:
         try:
             store.message_update(patch)
@@ -521,6 +550,9 @@ def _live(value: Any) -> dict:
         "activity": _activity_metadata(value.get("activity")),
         "activityDropped": value.get("activityDropped"),
         "replyTool": value.get("replyTool"),
+        "capability": value.get("capability") or ("inquiry" if value.get("replyTool") else "observe"),
+        "supported": value.get("supported") is not False,
+        "limitation": value.get("limitation") if isinstance(value.get("limitation"), str) else None,
         "journal": value.get("journal"),
         # Bounded, metadata-only evidence that the native harness asked for an
         # interactive capability this adapter cannot grant. It is surfaced verbatim

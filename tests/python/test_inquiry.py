@@ -16,7 +16,7 @@ import threading
 import unittest
 from pathlib import Path
 
-from support import BoardTestCase
+from support import FIXTURE_CATALOG, BoardTestCase
 
 from buddy.errors import BoardError
 from buddy.inquiry import (
@@ -113,26 +113,34 @@ class TestInquiry(BoardTestCase):
         super().setUp()
         self.catalog_fixture()
 
-    def _submit_dsh(self, client, cwd, *, request_id):
+    def _submit(self, client, cwd, *, request_id, adapter="dsh", provider="deepseek-official",
+                model="deepseek-flash", effort="off"):
         environment = {**os.environ, "GIT_CONFIG_GLOBAL": "/dev/null", "GIT_CONFIG_SYSTEM": "/dev/null"}
         for arguments in (("init", "-q"), ("-c", "user.name=Buddy Test", "-c", "user.email=buddy@example.invalid",
                                            "commit", "--allow-empty", "-qm", "inquiry fixture")):
             completed = subprocess.run(["git", *arguments], cwd=cwd, env=environment, capture_output=True, text=True)
             self.assertEqual(completed.returncode, 0, completed.stderr)
         submitted = client.workflow_submit(
-            requestId=request_id, hostId="inquiry-test-host", task="do", cwd=str(cwd), adapter="dsh",
-            provider="deepseek-official", model="deepseek-flash", effort="off",
+            requestId=request_id, hostId="inquiry-test-host", task="do", cwd=str(cwd), adapter=adapter,
+            provider=provider, model=model, effort=effort,
             executionWorkspace={"kind": "existing", "access": "read"},
         )
         self.assertTrue(submitted["governed"])
         return client.get(runId=submitted["runId"])
 
-    def _attempt_directory(self, board, client, task, cwd, argv=None):
-        """Submit, claim and publish bridge credentials the way the dsh adapter does."""
-        # Inquiry is the dsh adapter's capability; this fixture publishes the same
-        # credentials the dsh adapter writes without spawning a runner.
-        task = self._submit_dsh(client, cwd, request_id="inq-task")
-        client.register_worker("w-inq", adapter="dsh", capabilities=["dsh", "inquiry"])
+    def _submit_dsh(self, client, cwd, *, request_id):
+        return self._submit(client, cwd, request_id=request_id)
+
+    def _attempt_directory(self, board, client, task, cwd, argv=None, *, adapter="dsh",
+                           capabilities=("dsh", "inquiry")):
+        """Submit, claim and publish bridge credentials the way a coding adapter does."""
+        # This fixture publishes the same credentials the adapter writes without
+        # spawning a runner; the declared capabilities decide observe vs inquire.
+        task = self._submit(client, cwd, request_id="inq-task", adapter=adapter,
+                            provider="deepseek-official" if adapter == "dsh" else "fixture-zcode",
+                            model="deepseek-flash" if adapter == "dsh" else "fixture-glm",
+                            effort="off" if adapter == "dsh" else "low")
+        client.register_worker("w-inq", adapter=adapter, capabilities=list(capabilities))
         claim = client.claim("w-inq", "claim-inq-1", "a" * 32)
         self.assertIsNotNone(claim["claim"]["turn"])
         attempt = claim["claim"]["attempt"]
@@ -318,7 +326,7 @@ class TestInquiry(BoardTestCase):
             argv=["/bin/true"],
         )["task"]
         command_result = board.call("inquiry_observe", {"runId": command_task["runId"]})
-        self.assertIn("no inquiry capability", command_result["bridge"]["reason"])
+        self.assertIn("no observation or inquiry capability", command_result["bridge"]["reason"])
         self.assertIn("agentStatus", result["live"]["unavailable"])
         self.assertEqual(result["limits"]["maxQuestionBytes"], 4000)
         self.assertEqual(result["limits"]["maxInquiriesPerRun"], 32)
@@ -338,18 +346,25 @@ class TestInquiry(BoardTestCase):
         )["task"]
         result = board.call("inquiry_observe", {"runId": task["runId"]})
         self.assertFalse(result["bridge"]["enabled"])
-        self.assertIn("no inquiry capability", result["bridge"]["reason"])
+        self.assertIn("no observation or inquiry capability", result["bridge"]["reason"])
 
     def test_inquiry_capability_comes_from_the_adapter_registry(self):
         from buddy.inquiry import inquiry_capable
 
-        # Both coding harnesses that mount a private bridge declare it; adapters
-        # without one must keep answering honestly instead of half-observing.
+        from buddy.inquiry import observe_capable
+
+        # dsh mounts a private bridge with correlated inquiry; ZCode observes
+        # native activity but deliberately cannot ask, because the installed
+        # protocol has no turn-bound in-turn input. Adapters without a bridge keep
+        # answering honestly instead of half-observing.
         self.assertTrue(inquiry_capable("dsh"))
-        self.assertTrue(inquiry_capable("zcode"))
-        self.assertFalse(inquiry_capable("command"))
-        self.assertFalse(inquiry_capable("external"))
-        self.assertFalse(inquiry_capable("not-an-adapter"))
+        self.assertTrue(observe_capable("dsh"))
+        self.assertFalse(inquiry_capable("zcode"))
+        self.assertTrue(observe_capable("zcode"))
+        for name in ("command", "external", "not-an-adapter"):
+            with self.subTest(adapter=name):
+                self.assertFalse(inquiry_capable(name))
+                self.assertFalse(observe_capable(name))
 
     def test_a_question_refused_after_the_turn_ended_is_recorded_unavailable(self):
         board = self.board()
@@ -386,6 +401,37 @@ class TestInquiry(BoardTestCase):
             self.assertIn("another", result["bridge"]["journalRejected"])
             message = client.get_message("q-foreign", runId=task["runId"])
             self.assertIsNone(message["answer"], "a foreign journal record must never be imported as an answer")
+        finally:
+            bridge.close()
+
+    def test_an_observe_only_adapter_refuses_a_question_without_asking_the_bridge(self):
+        import copy
+
+        payload = copy.deepcopy(FIXTURE_CATALOG)
+        source = payload["providers"][0]
+        payload["providers"] = [{**source, "adapter": "zcode", "provider": "fixture-zcode",
+                                 "models": [{**source["models"][0], "id": "fixture-glm", "efforts": ["low", "high"]}]}]
+        self.catalog_fixture(payload)
+        board = self.board()
+        client = board.client()
+        task, _attempt, bridge = self._attempt_directory(board, client, None, self.workdir(), adapter="zcode",
+                                                         capabilities=("zcode", "observe"))
+        try:
+            result = board.call(
+                "inquiry_observe",
+                {"runId": task["runId"], "inquiryId": "q-observe", "question": "what is the status?"},
+            )
+            self.assertTrue(result["bridge"]["canObserve"])
+            self.assertFalse(result["bridge"]["canAsk"])
+            self.assertIn("no correlated inquiry capability", result["bridge"]["reason"])
+            message = client.get_message("q-observe", runId=task["runId"])
+            self.assertEqual(message["state"], "unavailable")
+            self.assertIn("no correlated inquiry capability", message["reason"])
+            self.assertIsNone(message["answer"])
+            asked = [request for request in bridge.requests if request.get("method") == "ask"]
+            self.assertEqual(asked, [], "an observe-only adapter must never ask the bridge for a question")
+            observed = board.call("inquiry_observe", {"runId": task["runId"]})
+            self.assertTrue(observed["bridge"]["observed"], "observe stays available for an observe-only adapter")
         finally:
             bridge.close()
 

@@ -11,13 +11,16 @@ import { dirname, join } from "node:path";
 
 function flag(name) {
   const index = process.argv.indexOf(name);
-  return index >= 0 ? process.argv[index + 1] : undefined;
+  if (index >= 0) return process.argv[index + 1];
+  const prefixed = process.argv.find((value) => value.startsWith(`${name}=`));
+  return prefixed === undefined ? undefined : prefixed.slice(name.length + 1);
 }
 
 const inputPath = flag("--turn-input-file");
 const outputPath = flag("--turn-output-file");
 const logDir = flag("--log-dir");
 const cwd = flag("--cwd");
+const activityPath = flag("--activity-file");
 if (!inputPath || !outputPath) {
   process.stderr.write("mock runner: --turn-input-file and --turn-output-file are required together\n");
   process.exit(2);
@@ -63,12 +66,44 @@ writeFileSync(outputPath, JSON.stringify(record));
 writeFileSync(join(cwd, "mock-output.txt"), `output for turn ${input.turnId}\n`);
 mkdirSync(logDir, { recursive: true });
 writeFileSync(join(logDir, "capture.json"), JSON.stringify({ sessionId: record.sessionId }));
+if (activityPath !== undefined) {
+  // The real activity observer writes the frozen bounded projection for the exact
+  // attempt; this mock writes the same document shape so the adapter's sidecar
+  // handoff is exercised without a native model run.
+  const observedAt = new Date().toISOString();
+  writeFileSync(
+    activityPath,
+    `${JSON.stringify({
+      version: 1,
+      taskId: input.taskId,
+      attemptId: input.attemptId,
+      generation: input.generation,
+      updatedAt: observedAt,
+      activity: {
+        phase: "finishing",
+        observedAt,
+        eventSeq: 3,
+        nativeSessionId: record.sessionId,
+        lastNativeActivityAt: observedAt,
+        lastToolActivityAt: observedAt,
+        toolName: "mock-tool",
+        counts: { modelTurns: 1, toolCalls: 1 },
+      },
+    })}\n`,
+    { mode: 0o600 },
+  );
+}
 process.stdout.write(
   `${JSON.stringify({
     status: "ok",
     mode: "run",
     finalText: "mock done",
     logPaths: { stdout: join(logDir, "stdout.log"), stderr: join(logDir, "stderr.log"), capture: join(logDir, "capture.json") },
+    nativeActivity: {
+      enabled: activityPath !== undefined,
+      sidecar: "activity.json",
+      note: "bounded metadata-only projection this run wrote for its owning Worker",
+    },
     nativeStorage: {
       // The governed default keeps the inherited harness home so the owning
       // workspace host can verify and group the completed session.

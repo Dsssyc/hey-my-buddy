@@ -135,6 +135,24 @@ class RealWorkerTurnTests(GovernedWorkerTestCase):
             self.assertFalse(native.get("resumable"))
             self.assertEqual(native.get("sessionId"), turn["sessionId"])
 
+            # The DSH activity observer's bounded sidecar is attempt-bound and
+            # readable by the real helper the owning Worker uses.
+            from buddy import activity as activity_module
+
+            attempt_directory = self.directory / "attempts" / run_id / turn["attemptId"]
+            sidecar = activity_module.read_sidecar(
+                activity_module.sidecar_path(attempt_directory),
+                task_id=run_id,
+                attempt_id=turn["attemptId"],
+                generation=1,
+            )
+            self.assertIsNotNone(sidecar, "the dsh runner did not leave a bound activity sidecar")
+            self.assertEqual(sidecar["phase"], "finishing")
+            self.assertEqual(sidecar["nativeSessionId"], turn["sessionId"])
+            self.assertEqual(sidecar["counts"], {"modelTurns": 1, "toolCalls": 1})
+            activity_meta = (receipt.get("result") or {}).get("nativeActivity") or {}
+            self.assertTrue(activity_meta.get("sidecarWritten"))
+
             # The final acknowledgement is separate from execution and bound to the
             # actual sealed artifact. The Host records its explicit integration
             # decision through the same business method the public operation uses.
@@ -375,7 +393,7 @@ class SubmissionPreparationRaceTests(GovernedWorkerTestCase):
 class DshNativeStorageArgumentsTests(unittest.TestCase):
     """The private DSH home is only used where it cannot break session grouping."""
 
-    def arguments(self, workspace: bool) -> list[str]:
+    def arguments(self, workspace: bool, *, governed: bool = False) -> list[str]:
         import tempfile
         from unittest import mock
 
@@ -384,10 +402,15 @@ class DshNativeStorageArgumentsTests(unittest.TestCase):
 
         directory = Path(tempfile.mkdtemp(prefix="buddy-dsh-args-"))
         self.addCleanup(lambda: __import__("shutil").rmtree(directory, ignore_errors=True))
+        turn = None
+        if governed:
+            turn = {"turnId": "turn-1", "input": {"version": 1, "taskId": "task", "attemptId": "attempt",
+                                                  "generation": 1, "turnId": "turn-1", "resumeMode": "initial",
+                                                  "previousSessionId": None, "context": {}, "executionWorkspace": {}}}
         context = ExecutionContext(
             task_id="task", attempt_id="attempt", generation=1,
             spec={"cwd": str(directory), "task": "x", "timeoutSeconds": 30, "workspace": workspace},
-            directory=directory, runtime={}, environment=dict(os.environ),
+            directory=directory, runtime={}, environment=dict(os.environ), turn=turn,
         )
         with mock.patch.dict(os.environ, {"BUDDY_RUNNER_PATH": str(RUNNER)}):
             return DshAdapter().arguments(context, {"socketPath": "/tmp/inquiry.sock", "token": "a" * 64,
@@ -402,6 +425,16 @@ class DshNativeStorageArgumentsTests(unittest.TestCase):
         args = self.arguments(workspace=False)
         self.assertIn("--no-workspace", args)
         self.assertTrue(any(arg.startswith("--dsh-home=") and "dsh-home" in arg for arg in args), args)
+
+    def test_a_governed_turn_publishes_its_activity_sidecar_in_the_attempt_directory(self):
+        plain = self.arguments(workspace=True)
+        self.assertFalse(any(arg.startswith("--activity-file") for arg in plain), plain)
+        args = self.arguments(workspace=True, governed=True)
+        activity = next((arg for arg in args if arg.startswith("--activity-file=")), None)
+        self.assertIsNotNone(activity, args)
+        self.assertTrue(activity.endswith("/activity.json"), activity)
+        turn_input = args[args.index("--turn-input-file") + 1]
+        self.assertEqual(activity, "--activity-file=" + str(Path(turn_input).parent / "activity.json"))
 
 
 if __name__ == "__main__":  # pragma: no cover

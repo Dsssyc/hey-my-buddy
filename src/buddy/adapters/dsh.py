@@ -133,13 +133,17 @@ class DshAdapter(Adapter):
             if spec.get(key):
                 args.append(f"--{key}={spec[key]}")
         if context.turn_input is not None:
-            # The service supplies the paired governed turn files.
+            # The service supplies the paired governed turn files, and the runner
+            # mounts the bounded activity observer for this exact attempt. The
+            # sidecar lives in the private attempt directory the owning Worker
+            # already polls; its path never enters a public result.
             args.extend(
                 [
                     "--turn-input-file",
                     str(context.turn_input_file()),
                     "--turn-output-file",
                     str(context.turn_output_file()),
+                    f"--activity-file={activity_sidecar_path(context)}",
                 ]
             )
         return args
@@ -195,6 +199,8 @@ class DshAdapter(Adapter):
             )
         payload = {**payload, "inquiryBridge": {k: inquiry.get(k) for k in ("socketPath", "resultsPath", "errorPath")}}
         payload["nativeSession"] = _native_session(payload)
+        native_activity = payload.get("nativeActivity") if isinstance(payload.get("nativeActivity"), dict) else {}
+        payload["nativeActivity"] = {**native_activity, "sidecarWritten": activity_sidecar_path(context).is_file()}
         shutdown_confirmed = bool(payload.get("processState", {}).get("shutdownConfirmed")) or _preflight_failed(
             exit_code, stdout_path
         )
@@ -305,6 +311,11 @@ def _native_session(payload: dict) -> dict:
         "resumable": False,
         "note": native_storage.get("note"),
     }
+
+
+def activity_sidecar_path(context: ExecutionContext) -> Path:
+    """The attempt-private ``activity.json`` the DSH observer writes for the Worker."""
+    return context.directory / "activity.json"
 
 
 def _preflight_failed(exit_code: int | None, stdout_path: Path) -> bool:

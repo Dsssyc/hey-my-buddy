@@ -162,6 +162,21 @@ class InstalledZcodeTests(ZcodeFixtureCase):
         self.assertEqual(provider["packageVersion"], discovered["harnessVersion"])
         self.assertEqual(self.requests, [])
 
+    def test_native_all_provider_disabled_catalog_is_a_complete_empty_observation(self):
+        # The single configured provider becomes an OAuth account provider, which
+        # this adapter deliberately cannot use. The real native session/create still
+        # succeeds, so the correct result is a COMPLETE empty catalog (which retires
+        # missing profiles) instead of an unknown discovery that preserves them.
+        value = json.loads(self.personal.read_text())
+        value["config"]["providerConfigRules"]["providerRules"][0]["config"]["access"] = {"type": "zhipu-account"}
+        self.personal.write_text(json.dumps(value))
+        with mock.patch.dict(os.environ, self.environment, clear=True):
+            discovered = self.adapter.discover_models()
+        self.assertEqual(discovered["providers"], [])
+        self.assertEqual(discovered["discoveries"], [{"adapter": "zcode", "status": "complete"}])
+        self.assertTrue(any("empty" in warning for warning in discovered["warnings"]), discovered["warnings"])
+        self.assertEqual(self.requests, [], "discovery must never call the model")
+
 
 if __name__ == "__main__":
     unittest.main()

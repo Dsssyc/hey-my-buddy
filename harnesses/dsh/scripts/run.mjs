@@ -61,6 +61,8 @@ const CAPTURE_PLUGIN_PATH = fileURLToPath(new URL('../plugins/session-capture.mj
 const INQUIRY_PLUGIN_PATH = fileURLToPath(new URL('../plugins/inquiry-bridge.mjs', import.meta.url));
 /** Required only for governed turns; independent of optional session grouping. */
 const TURN_PLUGIN_PATH = fileURLToPath(new URL('../plugins/turn-result.mjs', import.meta.url));
+/** Bounded activity observer; mounted for governed turns when a sidecar path is supplied. */
+const ACTIVITY_PLUGIN_PATH = fileURLToPath(new URL('../plugins/activity.mjs', import.meta.url));
 /** Prefix of the private bridge failure report written next to the socket. */
 const INQUIRY_ERROR_SUFFIX = '.error.json';
 /**
@@ -121,6 +123,10 @@ const USAGE = [
   '                          must be paired with --turn-output-file',
   '  --turn-output-file <path> absent private absolute path for the structured',
   '                          root-agent result; ordinary prose is not a result',
+  '  --activity-file <path>  private absolute activity.json sidecar path: the',
+  '                          bounded metadata-only projection of this turn\'s',
+  '                          native events, written throttled and atomically for',
+  '                          the owning Worker to forward; requires a governed turn',
   '  -h, --help              print this help and exit',
   '',
   'Install the workspace bridge in the owning host profile with',
@@ -308,6 +314,7 @@ try {
       'inquiry-results': { type: 'string' },
       'turn-input-file': { type: 'string' },
       'turn-output-file': { type: 'string' },
+      'activity-file': { type: 'string' },
     },
     allowPositionals: false,
   }));
@@ -394,6 +401,18 @@ if (turnInputFlag !== undefined) {
     if (!isFile(TURN_PLUGIN_PATH)) throw new Error('Buddy turn-result plugin is missing');
   } catch (error) { fail(`invalid turn protocol: ${error.message}`); }
 }
+// The bounded activity sidecar carries the governed attempt identity, so it is
+// only meaningful with a governed turn; an invalid path fails before any spawn.
+const activityRawFile = values['activity-file'] === undefined ? undefined : values['activity-file'].trim();
+if (activityRawFile !== undefined) {
+  if (activityRawFile === '') fail('--activity-file must not be blank');
+  if (!isAbsolute(activityRawFile) || activityRawFile.includes('\0')) {
+    fail('--activity-file must be an absolute path without NUL');
+  }
+  if (turnConfig === undefined) fail('--activity-file requires a governed turn (--turn-input-file)');
+  if (!isFile(ACTIVITY_PLUGIN_PATH)) fail(`activity observer plugin is missing: ${ACTIVITY_PLUGIN_PATH}`);
+}
+const activityFile = activityRawFile === undefined ? undefined : resolve(activityRawFile);
 if (!/^\d+$/.test(values.timeout)) {
   fail(`--timeout must be an integer between ${MIN_TIMEOUT_SECONDS} and ${MAX_TIMEOUT_SECONDS} seconds`);
 }
@@ -666,6 +685,19 @@ try {
       }],
     });
   }
+  if (activityFile !== undefined && turnConfig !== undefined) {
+    // The observer writes only the frozen bounded projection for this exact
+    // attempt; the Worker validates the binding before forwarding it.
+    patchRows.push({
+      insert: [{
+        id: 'deepseek-delegate-activity', name: ACTIVITY_PLUGIN_PATH,
+        config: {
+          activityPath: activityFile, taskId: turnConfig.input.taskId, attemptId: turnConfig.input.attemptId,
+          generation: turnConfig.input.generation, promptSha256, cwd,
+        },
+      }],
+    });
+  }
   writeFileSync(patchFile, JSON.stringify(patchRows), { mode: 0o600 });
 } catch {
   if (tempDir !== undefined) rmSync(tempDir, { recursive: true, force: true });
@@ -853,6 +885,10 @@ function buildResult(status, exitCode, signal, error, workspace, shutdownConfirm
     },
     finalText: text.trim().slice(0, FINAL_TEXT_LIMIT),
     finalTextTruncated: truncated,
+    nativeActivity: activityFile === undefined
+      ? { enabled: false, reason: 'no --activity-file was supplied for this run' }
+      : { enabled: true, sidecar: 'activity.json',
+          note: 'the bounded metadata-only projection this run wrote for its owning Worker; the sidecar path stays private and only the Worker reads it' },
     workspace,
     nativeStorage: {
       // Truthful session-storage facts. The default grouped path keeps the

@@ -20,7 +20,11 @@ from .zcode_protocol import NativeError, decode_json
 
 class ZcodeAdapter(Adapter):
     name = "zcode"
-    capabilities = ("zcode", "inquiry", "workspace", "cancel", "artifacts", "deadline", "native-session")
+    #: ``observe`` is the honest capability: this adapter publishes bounded
+    #: native activity and records native attention, but the installed native
+    #: protocol has no turn-bound in-turn input method, so it cannot ask
+    #: correlated questions and deliberately does not declare ``inquiry``.
+    capabilities = ("zcode", "observe", "workspace", "cancel", "artifacts", "deadline", "native-session")
     native_resume = True
     model_discovery = True
 
@@ -57,9 +61,10 @@ class ZcodeAdapter(Adapter):
         root = Path(state) / "harnesses" / "zcode" / hashlib.sha256(context.task_id.encode()).hexdigest()
         root.mkdir(mode=0o700, parents=True, exist_ok=True)
         os.chmod(root, 0o700)
-        # The controller hosts the private inquiry socket: observe is always
-        # available, and a question is only ever injected into this attempt's live
-        # root turn through the confirmed native guide command.
+        # The controller hosts the private observation socket: read-only activity
+        # is always available, and every question is recorded as an honest
+        # refusal because no native command may inject one (see
+        # zcode_protocol.NATIVE_INQUIRY_UNSUPPORTED).
         inquiry = turn_io.inquiry_paths(context)
         turn_io.private_json(context.directory / "zcode-control.json", {
             "directory": str(context.directory.resolve()), "nativeRoot": str(root.resolve()),
@@ -99,6 +104,18 @@ class ZcodeAdapter(Adapter):
         if not handle.cancel_requested and exit_code == 0 and payload.get("status") == "ok" and shutdown:
             status = "ok"
         record, error = turn_io.read_turn(context, shutdown, exit_code, self.validate_turn_provenance)
+        # A refused native interactive request must reach the Host as attention.
+        # The session-private finish tool refuses a completed outcome while such a
+        # request is outstanding; this second check covers a receipt issued before
+        # the refusal was recorded, so a refused approval can never be delivered
+        # as silently completed work.
+        attention = payload.get("nativeAttention") if isinstance(payload.get("nativeAttention"), dict) else {}
+        attention_requests = attention.get("requests") if type(attention.get("requests")) is int else 0
+        payload["attentionRequired"] = attention_requests > 0
+        if (attention_requests > 0 and record is not None
+                and (record.get("outcome") or {}).get("disposition") == "completed"):
+            error = ("a native interactive request was refused during this turn; a completed outcome "
+                     "cannot stand in for the Host attention that request requires")
         seal_error = None
         payload["turnResultPath"] = str(context.turn_output_file())
         payload["nativeSession"] = _native_session(payload, context, shutdown, record)

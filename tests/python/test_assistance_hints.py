@@ -14,12 +14,11 @@ import unittest
 from pathlib import Path
 
 from buddy.adapters import turn_io
-from buddy.adapters.zcode_mcp import FINISH_DESCRIPTION, REPLY_DESCRIPTION
+from buddy.adapters.zcode_mcp import ATTENTION_REFUSAL, FINISH_DESCRIPTION
 from buddy.adapters.zcode_runner import governed_prompt
 
 ROOT = Path(__file__).resolve().parents[2]
 TURN_RESULT = ROOT / "harnesses/dsh/plugins/turn-result.mjs"
-REPLY_TOOL = "mcp__srv123__buddy_inquiry_reply"
 TURN_TOOL = "mcp__srv123__buddy_finish_turn"
 
 
@@ -33,19 +32,22 @@ class AssistanceHintTests(unittest.TestCase):
         self.assertLessEqual(len(text.encode()), 4096)
 
     def test_zcode_prompt_embeds_the_bounded_hints_verbatim(self):
-        prompt = governed_prompt("task text", {"resumeMode": "initial"}, TURN_TOOL, REPLY_TOOL)
+        prompt = governed_prompt("task text", {"resumeMode": "initial"}, TURN_TOOL)
         for hint in turn_io.ASSISTANCE_HINTS:
             self.assertIn(hint, prompt)
         self.assertIn(TURN_TOOL, prompt)
-        self.assertIn(REPLY_TOOL, prompt)
         self.assertIn("internal subagents", prompt)
+        # ZCode cannot inject a question, so its prompt must not offer an inquiry
+        # reply tool or imply a steer into the live turn.
+        self.assertNotIn("buddy_inquiry_reply", prompt)
         self.assertNotIn("startNow", prompt)
         self.assertLessEqual(len(prompt.encode()), 64 * 1024)
 
     def test_mcp_tool_text_is_bounded_and_never_offers_peer_dispatch(self):
-        for text in (FINISH_DESCRIPTION, REPLY_DESCRIPTION):
+        for text in (FINISH_DESCRIPTION, ATTENTION_REFUSAL):
             self.assertLessEqual(len(text.encode()), 1024)
-            self.assertIn("does not dispatch other tasks", text)
+        self.assertIn("does not dispatch other tasks", FINISH_DESCRIPTION)
+        self.assertIn("attention", ATTENTION_REFUSAL)
 
     def test_dsh_prompt_section_states_the_same_triggers(self):
         source = TURN_RESULT.read_text()
