@@ -551,14 +551,13 @@ describe("the settings of the role", () => {
   });
 
   it("chooses the review budget, writes the limits recorded for the level and publishes the one setting", async () => {
-    const f = fixture(snapshot({ configuration: { routingBudgetLimits: { preset: "standard", timeoutSeconds: 300, toolCalls: 24, bytesRead: 524288 } } }));
+    const f = fixture(snapshot({ configuration: { routingBudgetLimits: { preset: "standard", timeoutSeconds: 300, toolCalls: 24 } } }));
     const user = userEvent.setup();
     await openRoles(f);
     expect(["简要", "标准", "深入"].map(name => budgetOption(name).getAttribute("aria-checked"))).toEqual(["false", "true", "false"]);
     const budget = within(section("审阅预算"));
     expect(budget.getByText("5 分")).toBeTruthy();
     expect(budget.getByText("24 次工具调用")).toBeTruthy();
-    expect(budget.getByText("524,288 字节")).toBeTruthy();
     expect(budget.getByText("审阅预算").getAttribute("aria-description")).toBe("审阅预算只用于之后的路由，快速路由固定 1 分");
     // Limits are recorded for one level only; another level has none to show.
     await user.click(budgetOption("简要"));
@@ -573,7 +572,7 @@ describe("the settings of the role", () => {
   it("writes no limits when none are recorded", async () => {
     const f = fixture(snapshot());
     await openRoles(f);
-    expect(within(section("审阅预算")).queryByText(/\d+ (?:时|分|秒)|工具调用|字节/)).toBeNull();
+    expect(within(section("审阅预算")).queryByText(/\d+ (?:时|分|秒)|工具调用/)).toBeNull();
   });
 
   it("sets the retry interval in seconds, with the explanation on its name, and publishes the one setting", async () => {

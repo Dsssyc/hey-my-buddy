@@ -130,4 +130,4 @@ class RoutingOwnershipTests(RouterDispatchTestCase, ConsoleTestCase):
                 self.assertIsNone(span["routing"]["reason"])
                 self.assertEqual(span["routing"]["note"], "The frozen legal choice")
                 self.assertEqual(span["routing"]["usage"], {
-                    "elapsedMs": 100, "toolCalls": 0, "bytesRead": None})
+                    "elapsedMs": 100, "toolCalls": 0})

@@ -1,4 +1,4 @@
-"""Schema 31 → 32: task facts are read from the frozen specification.
+"""Schema 31 → 32: remove derived task and execution facts.
 
 No sealed content or spec is rewritten. Rebuild in SQLite's documented order;
 the caller holds the transaction with foreign keys disabled until its check.
@@ -36,6 +36,18 @@ TASKS_INDEX_DDL = """
 CREATE INDEX IF NOT EXISTS tasks_state_idx ON tasks(state, created_at);
 """
 
+ATTEMPT_PROCESS_IDENTITIES_DDL = """
+CREATE TABLE attempt_process_identities_next (
+    attempt_id          TEXT PRIMARY KEY REFERENCES attempts(attempt_id) ON DELETE RESTRICT,
+    boot_id             TEXT,
+    root_pid            INTEGER NOT NULL CHECK (root_pid > 0),
+    root_started_at     INTEGER NOT NULL CHECK (root_started_at > 0),
+    job_name            TEXT,
+    CHECK ((boot_id IS NOT NULL AND job_name IS NULL)
+        OR (boot_id IS NULL AND job_name IS NOT NULL))
+);
+"""
+
 TASK_COLUMNS = (
     "task_id",
     "request_id",
@@ -66,4 +78,18 @@ def upgrade(connection):
     connection.execute("DROP TABLE tasks")
     connection.execute("ALTER TABLE tasks_next RENAME TO tasks")
     connection.execute(TASKS_INDEX_DDL)
+    connection.execute(ATTEMPT_PROCESS_IDENTITIES_DDL)
+    columns = 'rowid,attempt_id,boot_id,root_pid,root_started_at,job_name'
+    connection.execute(f"INSERT INTO attempt_process_identities_next({columns})"
+                       f" SELECT {columns} FROM attempt_process_identities")
+    connection.execute("DROP TABLE attempt_process_identities")
+    connection.execute("ALTER TABLE attempt_process_identities_next RENAME TO attempt_process_identities")
+    connection.execute("UPDATE attempts SET result_json=json_remove(result_json,"
+                       "'$.result.usage.bytesRead','$.result.budget.bytesRead')"
+                       " WHERE json_type(result_json,'$.result.usage.bytesRead') IS NOT NULL"
+                       " OR json_type(result_json,'$.result.budget.bytesRead') IS NOT NULL")
+    connection.execute("UPDATE decision_requests SET output_json=json_remove(output_json,"
+                       "'$.usage.bytesRead','$.budget.bytesRead')"
+                       " WHERE json_type(output_json,'$.usage.bytesRead') IS NOT NULL"
+                       " OR json_type(output_json,'$.budget.bytesRead') IS NOT NULL")
     connection.execute("UPDATE meta SET value='32' WHERE key='schema_version'")

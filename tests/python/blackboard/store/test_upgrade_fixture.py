@@ -10,7 +10,7 @@ import tempfile
 import unittest
 from unittest import mock
 
-from blackboard.store.upgrade_fixture import FIXTURE, load_fixture, _git, _sha, _json
+from blackboard.store.upgrade_fixture import FIXTURE, load_fixture, complete_fixture_cleanup, _git, _sha, _json
 from hey_my_buddy.blackboard.store.store import BoardStore
 from hey_my_buddy.blackboard.routing import router_sequence
 from hey_my_buddy.blackboard.store.db import Corruption, Database, SCHEMA_VERSION
@@ -214,10 +214,12 @@ class UpgradeFixtureTests(unittest.TestCase):
     def test_floor_requires_explicit_upgrade_and_matches_fresh_structure(self):
         fixture, connection = self.restored(migrate=False)
         state = fixture['state']
+        complete_fixture_cleanup(connection)
         before = upgrade.idle_snapshot(state)
         old_rows = {name: [tuple(row) for row in connection.execute(f'SELECT rowid,* FROM "{name}" ORDER BY rowid')]
                     for name in before['tables']}
         task_columns = ['rowid', *[row[1] for row in connection.execute('PRAGMA table_info(tasks)')]]
+        identity_columns = ['rowid', *[row[1] for row in connection.execute('PRAGMA table_info(attempt_process_identities)')]]
         files = {p.relative_to(native_path(state)): p.read_bytes() for p in native_path(state).rglob('*')
                  if p.is_file() and not p.name.startswith('board.sqlite3')}
         self.assertEqual(before['schema'], UPGRADE_FLOOR_SCHEMA)
@@ -252,6 +254,9 @@ class UpgradeFixtureTests(unittest.TestCase):
                 removed = {'required_capabilities', 'exclusive_resources', 'expected_seconds', 'router_budget_seconds'}
                 keep = [i for i, column in enumerate(task_columns) if column not in removed]
                 self.assertEqual(actual, [tuple(row[i] for i in keep) for row in original])
+            elif name == 'attempt_process_identities':
+                keep = [i for i, column in enumerate(identity_columns) if column != 'process_group_id']
+                self.assertEqual(actual, [tuple(row[i] for i in keep) for row in original])
             elif name == 'router_settings':
                 self.assertEqual([row[:len(original[0])] for row in actual], original)
                 self.assertEqual(actual[0][-2:], (None, 3600))
@@ -272,6 +277,7 @@ class UpgradeFixtureTests(unittest.TestCase):
     def test_failed_second_column_addition_rolls_back_the_whole_upgrade(self):
         fixture, connection = self.restored('failed-upgrade', migrate=False)
         state = fixture['state']
+        complete_fixture_cleanup(connection)
         before = upgrade.idle_snapshot(state)
         schema = [tuple(row) for row in connection.execute(
             'SELECT type,name,tbl_name,sql FROM sqlite_master ORDER BY type,name')]
@@ -300,6 +306,7 @@ class UpgradeFixtureTests(unittest.TestCase):
 
     def test_started_verification_checks_retained_workflow_columns(self):
         fixture, connection = self.restored('projected-columns')
+        complete_fixture_cleanup(connection)
         before = upgrade.idle_snapshot(fixture['state'])
         target = self.root / 'runtimes' / ('b' * 32)
         health = {'runtimeContentId': target.name, 'runtimeStable': True, 'schemaVersion': SCHEMA_VERSION}
@@ -591,6 +598,7 @@ class UpgradeFixtureTests(unittest.TestCase):
 
     def test_started_verification_rejects_changed_retained_events(self):
         fixture, connection = self.restored()
+        complete_fixture_cleanup(connection)
         before = upgrade.idle_snapshot(fixture['state'])
         target = self.root / 'runtimes' / ('b' * 32)
         health = {'runtimeContentId': target.name, 'runtimeStable': True, 'schemaVersion': SCHEMA_VERSION}
@@ -609,6 +617,7 @@ class UpgradeFixtureTests(unittest.TestCase):
 
     def test_started_verification_checks_retained_json(self):
         fixture, connection = self.restored('checked-json-retention')
+        complete_fixture_cleanup(connection)
         before = upgrade.idle_snapshot(fixture['state'])
         target = self.root / 'runtimes' / ('b' * 32)
         health = {'runtimeContentId': target.name, 'runtimeStable': True, 'schemaVersion': SCHEMA_VERSION}
@@ -629,6 +638,7 @@ class UpgradeFixtureTests(unittest.TestCase):
 
     def test_started_verification_rejects_rewritten_command_receipts(self):
         fixture, connection = self.restored()
+        complete_fixture_cleanup(connection)
         before = upgrade.idle_snapshot(fixture['state'])
         target = self.root / 'runtimes' / ('b' * 32)
         health = {'runtimeContentId': target.name, 'runtimeStable': True, 'schemaVersion': SCHEMA_VERSION}

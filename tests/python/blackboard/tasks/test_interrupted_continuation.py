@@ -17,7 +17,7 @@ from hey_my_buddy.protocol import process_identity as processes
 
 
 IDENTITY = {"bootId": "macos:00000000-0000-0000-0000-000000000001", "pid": 123,
-            "startedAt": 123250000, "processGroupId": 123, "jobName": None}
+            "startedAt": 123250000, "jobName": None}
 
 
 class InterruptedContinuationTests(WorkflowTestCase):

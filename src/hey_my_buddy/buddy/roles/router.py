@@ -166,7 +166,7 @@ class DecisionAdapter(Adapter):
                 router_input.discard(handle.router_input[1])
         usage = {
             "elapsedMs": None,
-            "toolCalls": None, "bytesRead": None,
+            "toolCalls": None,
             **(native_result.get("usage") or {}),
         }
         result = {

@@ -178,8 +178,7 @@ def self_process_identity(job_name: str | None) -> dict:
     else:
         if job_name is not None or os.getpgrp() != pid or os.getsid(pid) != pid:
             raise BoardError("PROCESS_IDENTITY_UNKNOWN", "Execution does not own its process session")
-        record = {"bootId": boot_id(), "pid": pid, "startedAt": started_at,
-                  "processGroupId": pid, "jobName": None}
+        record = {"bootId": boot_id(), "pid": pid, "startedAt": started_at, "jobName": None}
     return validate_process_identity(record)
 
 

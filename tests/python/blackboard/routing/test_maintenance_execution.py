@@ -181,7 +181,7 @@ class MaintenanceExecutionTests(WorkflowTestCase):
         self.assertEqual((queued['active'], queued['queued']), (0, 1))
         self.assertEqual(queued['wait'], {'seconds': 0, 'atLeast': True, 'overdue': 0})
         task = self.board_.call('task_get', {'runId': started['runId']})['task']
-        self.assertIsNone(task_brief(task)['routerBudgetSeconds'])
+        self.assertNotIn('routerBudgetSeconds', task_brief(task))
         self.assertIsNone(self.board_.call('inquiry_observe', {'runId': started['runId']})['routerBudgetSeconds'])
         self.claim_maintenance(started['runId'])
         self.clock.advance(10_000)

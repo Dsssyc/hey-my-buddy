@@ -63,7 +63,6 @@ export default {
     standard: "标准",
     deep: "深入",
     toolCalls: "{{n}} 次工具调用",
-    bytes: "{{n}} 字节",
   },
   retry: {
     name: "重试间隔",

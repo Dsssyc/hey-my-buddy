@@ -423,8 +423,6 @@ _TASK_BRIEF = (
 def task_brief(view: dict) -> dict:
     """Brief projection of one execution task view (no spec, task text or runner payload)."""
     brief = _pick(view, (*_TASK_BRIEF, "fixes", "fixedBy"))
-    if "routerBudgetSeconds" in view:
-        brief["routerBudgetSeconds"] = view["routerBudgetSeconds"]
     lineage = view.get("lineage")
     if lineage is not None:
         buddy = lineage.get("buddy")

@@ -40,7 +40,7 @@ class CommitFailingConnection:
         return getattr(self._connection, attribute)
 
 IDENTITY = {'bootId': 'macos:00000000-0000-0000-0000-000000000001', 'pid': 123,
-            'startedAt': 123250000, 'processGroupId': 123, 'jobName': None}
+            'startedAt': 123250000, 'jobName': None}
 
 
 class InterruptionRecoveryTests(BoardTestCase):
@@ -73,7 +73,7 @@ class InterruptionRecoveryTests(BoardTestCase):
         board, _, _, _, actor = self.claimed()
         board.call('execution_progress', {**actor, 'processIdentity': IDENTITY})
         for change, code in (({'nonce': 'wrong'}, 'UNAUTHORIZED'), ({'generation': 2}, 'STALE_GENERATION'),
-                             ({'processIdentity': {**IDENTITY, 'pid': 456, 'processGroupId': 456}}, 'CONFLICT')):
+                             ({'processIdentity': {**IDENTITY, 'pid': 456}}, 'CONFLICT')):
             with self.subTest(change=change), self.assertRaises(BoardError) as caught:
                 board.call('execution_progress', {**actor, 'processIdentity': IDENTITY, **change})
             self.assertEqual(caught.exception.code, code)
@@ -495,7 +495,7 @@ class InterruptionRecoveryTests(BoardTestCase):
     def test_partial_native_journal_can_gain_proof_on_the_next_recovery(self):
         board, client, task, _, actor = self.claimed()
         journal = self.journal(board, actor['attemptId'])
-        native = {**IDENTITY, 'pid': 456, 'processGroupId': 456}
+        native = {**IDENTITY, 'pid': 456}
         fsync_json(Path(journal['path']), {'binding': journal['binding'], 'pending': ['a' * 32],
                                           'identities': [native]})
         with patch.object(processes, 'inspect_process_identity', return_value='identity-absent'), \

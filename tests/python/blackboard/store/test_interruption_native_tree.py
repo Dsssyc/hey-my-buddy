@@ -20,7 +20,7 @@ class NativeTreeTests(BoardTestCase):
         board, client, task, _, actor = self.claimed()
         journal = self.journal(board, actor['attemptId'])
         fsync_json(Path(journal['path']), {'binding': journal['binding'], 'pending': ['a' * 32],
-                                          'identities': [{**recovery_fixture.IDENTITY, 'pid': 456, 'processGroupId': 456}]})
+                                          'identities': [{**recovery_fixture.IDENTITY, 'pid': 456}]})
         with patch.object(processes, 'inspect_process_identity', return_value='identity-absent'), \
                 patch.object(processes, 'stop_orphan_process', return_value='orphan-stopped') as stop:
             board.store.recover_executions()
@@ -31,7 +31,7 @@ class NativeTreeTests(BoardTestCase):
         board, client, task, _, actor = self.claimed()
         journal = self.journal(board, actor['attemptId'])
         fsync_json(Path(journal['path']), {'binding': journal['binding'], 'pending': [],
-                                          'identities': [{**recovery_fixture.IDENTITY, 'pid': 456, 'processGroupId': 456}]})
+                                          'identities': [{**recovery_fixture.IDENTITY, 'pid': 456}]})
         with patch.object(processes, 'inspect_process_identity', return_value='identity-absent'), \
                 patch.object(processes, 'stop_orphan_process', return_value='orphan-stopped'):
             board.store.recover_executions()

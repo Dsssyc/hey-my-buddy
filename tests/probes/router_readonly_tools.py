@@ -118,7 +118,7 @@ def evaluate(packet, outcome, *, elapsed_ms, unchanged, state_dir: Path):
     }
     return {'status': 'passed' if all(checks.values()) else 'failed', 'checks': checks,
             'toolProblem': tool_problem, 'result': result, 'elapsedMs': elapsed_ms,
-            'bytesRead': usage.get('bytesRead'), 'permission': packet['permission']}
+            'permission': packet['permission']}
 
 
 def run(args):

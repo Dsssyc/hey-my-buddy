@@ -431,9 +431,8 @@ class MacroTaskDeletionTests(WorkflowTestCase):
                            (f"turn-{generation}", task_id, attempt_id, generation, generation,
                             "initial", "{}", "write", 60, "returned", now, now))
                 db.execute("INSERT INTO attempt_process_identities(attempt_id,boot_id,root_pid,"
-                           "root_started_at,process_group_id) VALUES(?,?,?,?,?)",
-                           (attempt_id, "fixture-boot", generation + 100, generation + 1000,
-                            generation + 100))
+                           "root_started_at) VALUES(?,?,?,?)",
+                           (attempt_id, "fixture-boot", generation + 100, generation + 1000))
                 db.execute("INSERT INTO attempt_interruptions(attempt_id,evidence_kind,state)"
                            " VALUES(?,?,?)", (attempt_id, "identity-absent", "settled"))
                 db.execute("INSERT INTO attempt_shutdown_evidence(attempt_id,evidence_kind,detail_json,observed_at)"

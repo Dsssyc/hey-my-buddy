@@ -651,7 +651,7 @@ class DecisionFailureTests(DecisionTestCase):
         decision = self.outcome(board, "json_answer")
         self.assertEqual(decision["status"], "completed")
         self.assertEqual(set(decision["output"]["decision"]), {"buddyId", "domainNodeId", "taskType", "note", "evidence"})
-        self.assertEqual(decision["usage"], {"elapsedMs": 200, "toolCalls": 1, "bytesRead": None})
+        self.assertEqual(decision["usage"], {"elapsedMs": 200, "toolCalls": 1})
         self.assertEqual(decision["nativeIdentity"]["sessionId"], "mock-native")
 
     def test_budget_and_input_changed_are_separate_from_failures_and_abstentions(self):
@@ -795,7 +795,7 @@ class DecisionFailureTests(DecisionTestCase):
             "status": "ok",
             "operation": "select",
             "requested": {"provider": CATALOG_BUDDY["provider"], "model": CATALOG_BUDDY["model"], "reasoningEffort": CATALOG_BUDDY["effort"]},
-            "usage": {"elapsedMs": 100, "toolCalls": 0, "bytesRead": 0},
+            "usage": {"elapsedMs": 100, "toolCalls": 0},
             "stopEvidence": {"shutdownConfirmed": True, "native": {"shutdownConfirmed": True}},
             "inputVerification": {"unchanged": True, "manifestSha256": None, "snapshotSha256": "fixture-digest"},
             "decision": self.valid_decision(claim["decisionInput"], BUDDY_ID, reason="survived restart"),
@@ -817,7 +817,7 @@ class DecisionFailureTests(DecisionTestCase):
         claim = admit_execution(board.client(), "n" * 32, task_id=first["runId"])["claim"]
         attempt = claim["attempt"]
         identity = {"bootId": "macos:00000000-0000-0000-0000-000000000001", "pid": 123,
-                    "startedAt": 123250000, "processGroupId": 123, "jobName": None}
+                    "startedAt": 123250000, "jobName": None}
         from hey_my_buddy.protocol.execution import fsync_json
         evidence = board.directory / "attempts" / first["runId"] / attempt["attemptId"]
         evidence.mkdir(parents=True)
@@ -855,7 +855,7 @@ class DecisionFailureTests(DecisionTestCase):
             "status": "ok",
             "operation": "select",
             "requested": document["buddy"],
-            "usage": {"elapsedMs": 100, "toolCalls": 0, "bytesRead": 0},
+            "usage": {"elapsedMs": 100, "toolCalls": 0},
             "stopEvidence": {"shutdownConfirmed": True, "native": {"shutdownConfirmed": True}},
             "inputVerification": {"unchanged": True, "manifestSha256": None, "snapshotSha256": "fixture-digest"},
             "decision": self.valid_decision(document, BUDDY_ID, reason="replayed once"),

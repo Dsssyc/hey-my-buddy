@@ -83,7 +83,7 @@ type TimelineRouting = {
   } | null;
   /** Host owns the budget schema; preserve it without offering budget controls. */
   budget?: Record<string, unknown> | null;
-  usage?: { elapsedMs?: number | null; toolCalls?: number | null; bytesRead?: number | null } | null;
+  usage?: { elapsedMs?: number | null; toolCalls?: number | null } | null;
 };
 // Non-execution kinds, including unknown or absent kinds, carry only null
 // timing facts. Routing otherwise remains unchecked except for router identity.

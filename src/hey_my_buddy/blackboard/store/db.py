@@ -199,18 +199,17 @@ CREATE INDEX IF NOT EXISTS attempts_model_service_idx
 """
 
 #: One row per recorded execution root. POSIX roots carry their boot session and
-#: process-group leader with no Job; Windows roots carry the exclusively created
-#: root Job with no boot or process-group id.
+#: session-leader PID with no Job; Windows roots carry the exclusively created
+#: root Job with no boot identifier.
 ATTEMPT_PROCESS_IDENTITIES_DDL = """
-CREATE TABLE IF NOT EXISTS attempt_process_identities (
+CREATE TABLE IF NOT EXISTS "attempt_process_identities" (
     attempt_id          TEXT PRIMARY KEY REFERENCES attempts(attempt_id) ON DELETE RESTRICT,
     boot_id             TEXT,
     root_pid            INTEGER NOT NULL CHECK (root_pid > 0),
     root_started_at     INTEGER NOT NULL CHECK (root_started_at > 0),
-    process_group_id    INTEGER CHECK (process_group_id > 0),
     job_name            TEXT,
-    CHECK ((boot_id IS NOT NULL AND process_group_id IS NOT NULL AND job_name IS NULL)
-        OR (boot_id IS NULL AND process_group_id IS NULL AND job_name IS NOT NULL))
+    CHECK ((boot_id IS NOT NULL AND job_name IS NULL)
+        OR (boot_id IS NULL AND job_name IS NOT NULL))
 );
 """
 

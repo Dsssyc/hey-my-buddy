@@ -21,6 +21,19 @@ from hey_my_buddy.blackboard.tasks.workspace import _git_command
 FIXTURE = Path(__file__).resolve().parents[3] / "fixtures/upgrade-floor"
 
 
+def complete_fixture_cleanup(connection):
+    """Prepare an install-idle fixture without changing the fixed stock.
+
+    The model-free floor writer left cleanup_pending set after receiving its
+    synthetic results. The fixture has no live endpoint or credential files.
+    Reproduce the flag update in 0.54.1's complete_execution_cleanup before
+    taking an installation preservation baseline; this is not a migration.
+    """
+    with connection:
+        connection.execute("UPDATE attempts SET cleanup_pending=0"
+                           " WHERE execution_state='finished' AND shutdown_confirmed=1 AND cleanup_pending=1")
+
+
 def _sha(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
 

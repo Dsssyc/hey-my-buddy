@@ -277,7 +277,7 @@ const routingMode = z.enum(["fast", "review"]);
 const routingBudget = z.enum(["brief", "standard", "deep"]);
 export type RoutingMode = z.infer<typeof routingMode>;
 export type RoutingBudget = z.infer<typeof routingBudget>;
-type RoutingBudgetLimits = { preset: RoutingBudget; timeoutSeconds: number; toolCalls: number; bytesRead: number };
+type RoutingBudgetLimits = { preset: RoutingBudget; timeoutSeconds: number; toolCalls: number };
 /** The ordered Router list; retired single/dual slot keys are refused even when undefined. */
 export const configurationSchema = z.looseObject({
   routerBuddyIds: z.array(nonblankString).refine(ids => new Set(ids).size === ids.length),

@@ -316,7 +316,7 @@ class ExecutionDeliveryTests(unittest.TestCase):
                                capture_output=True, text=True, timeout=10, encoding="utf-8")
         self.assertEqual(child.returncode, 0, child.stderr)
         identity = json.loads(child.stdout)
-        self.assertEqual(identity["pid"], identity["processGroupId"])
+        self.assertEqual(set(identity), {"bootId", "pid", "startedAt", "jobName"})
         self.assertIsNone(identity["jobName"])
 
     @unittest.skipIf(os.name == "nt", "POSIX reports its own identity without a marker")
@@ -327,7 +327,7 @@ class ExecutionDeliveryTests(unittest.TestCase):
                              "jobName": None, "sessionRecordPath": None})
         self.assertFalse((self.state / "attempts/task-1/attempt-1/spawn.marker").exists())
         identity = {"bootId": "linux:00000000-0000-4000-8000-000000000001",
-                    "pid": 301, "startedAt": 105, "processGroupId": 301, "jobName": None}
+                    "pid": 301, "startedAt": 105, "jobName": None}
         client = mock.Mock()
 
         def execute(_execution):

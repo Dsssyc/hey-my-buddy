@@ -414,12 +414,12 @@ class BoundaryReadingTests(RouterDispatchTestCase):
         self.report(first, self.answer(first, stream_complete=False))
         second = self.next_claim(request)
         output = self.failure(second)
-        output["usage"]["bytesRead"] = None
+        output["usage"]["toolCalls"] = None
         self.report(second, output, status="failed")
         result = self.boundary(request["decisionId"])
         self.assertEqual(result["routerTrials"][0]["code"], "router-tool-evidence-unverified")
         self.assertEqual(result["routerTrials"][0]["outcome"], "no_answer")
-        self.assertIsNone(result["routerTrials"][1]["usage"]["bytesRead"])
+        self.assertIsNone(result["routerTrials"][1]["usage"]["toolCalls"])
 
     def test_success_and_sole_candidate_paths_do_not_invent_router_boundaries(self):
         request, first = self.start()

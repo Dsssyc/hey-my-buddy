@@ -127,7 +127,6 @@ export function RolesView({ snapshot, editor, active, location, onNavigate, hidd
           {limits && limits.preset === configuration?.routingBudget && <span className="flex flex-wrap gap-x-3 text-xs text-ink2 tabular-nums">
             <span>{formatDuration(limits.timeoutSeconds * 1000)}</span>
             <span>{t("roles.budget.toolCalls", { n: limits.toolCalls.toLocaleString(locale) })}</span>
-            <span>{t("roles.budget.bytes", { n: limits.bytesRead.toLocaleString(locale) })}</span>
           </span>}
         </div>
       </Section>

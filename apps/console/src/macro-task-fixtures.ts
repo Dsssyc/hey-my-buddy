@@ -118,7 +118,7 @@ export function macroTaskTimelineFixture(overrides: Partial<MacroTaskTimeline> =
     span("s-r2-q", "r2", "queue", "2026-09-26T01:20:00Z", "2026-09-26T01:21:00Z"),
     span("s-r2-r", "r2", "routing", "2026-09-26T01:21:00Z", "2026-09-26T01:24:00Z", { decisionTaskId: "run-d02b", decisionId: "decision-r2-first", routing: {
       selectedBuddy: OPUS, reason: null, note: "适合接口审阅", policyCheck: { taskPreference: { ruleIndex: 0, outcome: "matched" }, userPreference: "none" },
-      usage: { elapsedMs: 180000, toolCalls: 3, bytesRead: 1024 },
+      usage: { elapsedMs: 180000, toolCalls: 3 },
     } }),
     span("s-r2-e1", "r2", "execution", "2026-09-26T01:24:00Z", "2026-09-26T02:10:00Z",
       { turnIndex: 1, attemptId: "att-r2a", buddy: CODEX, shutdownConfirmed: true,

@@ -174,9 +174,8 @@ class ExecutionScheduler:
             # The child's own report can close a failed parent-side capture.
             # Compare it with the creation facts retained in our owned handle.
             expected = {"bootId": boot_id(), "pid": handle.pid,
-                        "startedAt": handle.process_started_at,
-                        "processGroupId": handle.session_id, "jobName": None}
-            if identity != expected:
+                        "startedAt": handle.process_started_at, "jobName": None}
+            if handle.session_id != handle.pid or identity != expected:
                 return None
             return self._adopt_verified(attempt_id, held, identity)
         if root is not None:

@@ -33,7 +33,7 @@ class ReadonlyToolsProbeTests(unittest.TestCase):
 
     def outcome(self, packet, *, state_dir):
         result = {**tool_receipt(packet['binding'], 1, state_dir=state_dir), 'resolved': packet['buddy'],
-                  'usage': {'toolCalls': 1, 'bytesRead': None}, 'correctionCount': 0,
+                  'usage': {'toolCalls': 1}, 'correctionCount': 0,
                   'processState': {'shutdownConfirmed': True},
                   'rawAnswer': {"domainNodeId": None, "taskType": "change", 'buddyId': packet['expected']['buddyId'],
                                 'note': packet['expected']['marker'], 'evidence': []}}

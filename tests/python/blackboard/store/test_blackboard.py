@@ -327,7 +327,7 @@ class TestCrashWindows(BoardTestCase):
         handle.shutdown_confirmed = lambda: True
         handle.identity = lambda: {
             'bootId': 'macos:00000000-0000-4000-8000-000000000001', 'pid': 123,
-            'startedAt': 10, 'processGroupId': 123, 'jobName': None,
+            'startedAt': 10, 'jobName': None,
 }
         return handle
 
@@ -735,7 +735,7 @@ class TestLifecycle(BoardTestCase):
         claim = admit_execution(client, "a" * 32)
         attempt = claim['claim']['attempt']
         identity = {'bootId': 'macos:00000000-0000-0000-0000-000000000001', 'pid': 123,
-                    'startedAt': 123250000, 'processGroupId': 123, 'jobName': None}
+                    'startedAt': 123250000, 'jobName': None}
         client.progress(attempt['attemptId'], attempt['generation'], 'a' * 32, process_identity=identity)
         with mock.patch('hey_my_buddy.protocol.process_identity.inspect_process_identity', return_value='alive'):
             summary = board.store.reconcile_startup()

@@ -14,6 +14,7 @@ class WaitingHostUpgradeTests(WorkflowTestCase):
         self.register(board)
         claimed = self.claim(board)
         self.finish_turn(board, claimed, disposition=disposition)
+        board.store.complete_execution_cleanup(claimed['claim']['attempt']['attemptId'])
         return board, run, board.call("workflow_get", {"runId": run["runId"]})
 
     def snapshot(self, board):

@@ -33,7 +33,7 @@ from blackboard.tasks.test_workflow import WorkflowTestCase
 
 
 POSIX_IDENTITY = {"pid": 1, "startedAt": 123, "jobName": None,
-                  "bootId": "linux:00000000-0000-4000-8000-000000000001", "processGroupId": 1}
+                  "bootId": "linux:00000000-0000-4000-8000-000000000001"}
 
 
 class ConnectionEvents:
@@ -254,8 +254,7 @@ class ExecutionObservationTests(unittest.TestCase):
         store = Mock()
         scheduler = ExecutionScheduler(Mock(store=store), live_registry=self.live_registry)
         handle = Mock(pid=123, process_started_at=456, session_id=123, job=None)
-        identity = {"bootId": "test-boot", "pid": 123, "startedAt": 456,
-                    "processGroupId": 123, "jobName": None}
+        identity = {"bootId": "test-boot", "pid": 123, "startedAt": 456, "jobName": None}
         scheduler._handles["attempt-1"] = (handle, None)
         with patch("hey_my_buddy.blackboard.service.execution_scheduler.boot_id", return_value="test-boot"):
             self.assertIsNone(scheduler.verify_identity("attempt-1", {**identity, "startedAt": 111}, None))
@@ -339,11 +338,10 @@ class ExecutionObservationTests(unittest.TestCase):
         service = Mock()
         scheduler = ExecutionScheduler(service, live_registry=self.live_registry)
         handle = Mock()
-        captured = {"bootId": "test-boot", "pid": 1, "startedAt": 11,
-                    "processGroupId": 1, "jobName": None}
+        captured = {"bootId": "test-boot", "pid": 1, "startedAt": 11, "jobName": None}
         with scheduler._lock:
             scheduler._handles["owned"] = (handle, captured)
-        report = {**captured, "pid": 2, "processGroupId": 2}
+        report = {**captured, "pid": 2}
         self.assertIsNone(scheduler.verify_identity("owned", report, None))
         self.assertEqual(scheduler.verify_identity("owned", captured, None), captured)
         with patch("hey_my_buddy.blackboard.service.execution_scheduler.inspect_process_identity",
@@ -864,7 +862,7 @@ class ExecutionObservationTests(unittest.TestCase):
                 client = self.client()
                 identity = {"pid": 1, "startedAt": 123, "jobName": "Local\\HeyMyBuddy-" + str(uuid.uuid4())}
                 if not windows:
-                    identity.update(bootId="linux:" + str(uuid.uuid4()), processGroupId=1, jobName=None)
+                    identity.update(bootId="linux:" + str(uuid.uuid4()), jobName=None)
                 source = Mock()
                 source.boot_id.return_value = identity.get("bootId")
                 job = Mock()

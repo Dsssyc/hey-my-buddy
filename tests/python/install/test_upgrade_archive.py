@@ -9,7 +9,7 @@ from unittest import mock
 
 from hey_my_buddy.protocol.contracts import CONTRACT_VERSION
 from support import BoardTestCase
-from blackboard.store.upgrade_fixture import FIXTURE, load_fixture
+from blackboard.store.upgrade_fixture import FIXTURE, load_fixture, complete_fixture_cleanup
 from hey_my_buddy.blackboard.store import backup, schema_30_31
 from hey_my_buddy.blackboard.store.db import SCHEMA_VERSION
 from hey_my_buddy.blackboard.store.upgrade import UPGRADE_FLOOR_SCHEMA, upgrade_state
@@ -24,6 +24,8 @@ class UpgradeCutoverTests(BoardTestCase):
         super().setUp()
         self.state = self.directory / "state"
         load_fixture(self.state)
+        with closing(sqlite3.connect(self.state / 'board.sqlite3')) as connection:
+            complete_fixture_cleanup(connection)
         resources = json.loads((FIXTURE / 'workspace-resources.json').read_text(encoding='utf-8'))
         self.private_files = {relative: native_path(self.state / relative).read_bytes() for relative in resources['files']}
         native_path(self.state / "console-settings.json").write_text('{"theme":"dark"}', encoding="utf-8", newline="\n")

@@ -131,7 +131,7 @@ class ReceivedReceiptTests(BoardTestCase):
         board.call("execution_result", reference)
         credential = self.receipt_path.parent / "agent-credential.json"
         publish_bytes(credential, b"private fixture")
-        native = {**IDENTITY, "pid": 456, "processGroupId": 456}
+        native = {**IDENTITY, "pid": 456}
         journal = processes.native_process_journal_path(self.receipt_path.parent, IDENTITY)
         fsync_json(journal, {"binding": {"taskId": self.run_id, "attemptId": self.attempt_id, "generation": 1},
                              "pending": [], "identities": [native]})

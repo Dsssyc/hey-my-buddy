@@ -187,7 +187,7 @@ def _fast_result(result, request: RunRequest, verdict: dict) -> dict:
         payload["error"] = "the no-tool call was refused (" + verdict["stopReason"] + ")"
     tools = result.tool_evidence.value if result.tool_evidence is not None else {}
     calls = tools.get("toolCalls", 0)
-    payload["usage"] = {"toolCalls": calls, "bytesRead": None,
+    payload["usage"] = {"toolCalls": calls,
                         "elapsedMs": verdict["elapsedMs"]}
     if payload["status"] == "ok":
         raw = result.value.raw if result.value is not None else None
@@ -256,7 +256,7 @@ def _review_result(result, request: RunRequest, verdict: dict) -> dict:
             payload[key] = facts[key]
     tools = result.tool_evidence.value if result.tool_evidence is not None else None
     payload["usage"] = {"toolCalls": tools.get("toolCalls") if tools else None,
-                        "bytesRead": None, "elapsedMs": verdict["elapsedMs"]}
+                        "elapsedMs": verdict["elapsedMs"]}
     if tools is not None:
         payload["toolEvidence"] = tools
     if result.end.reason_code == "observer-interrupt" and verdict.get("stopReason"):

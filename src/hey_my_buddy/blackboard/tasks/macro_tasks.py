@@ -886,7 +886,7 @@ def _routing_spans(connection, decision_task_id: str, owner_run_id: str) -> list
         "note": record["note"] if record else None,
         "policyCheck": output.get("policyCheck"),
         "budget": round_facts.get("budget"),
-        "usage": {key: usage.get(key) for key in ("elapsedMs", "toolCalls", "bytesRead")},
+        "usage": {key: usage.get(key) for key in ("elapsedMs", "toolCalls")},
     }
     abstention = bool(record and record["reason_code"] == "router-abstained")
     spans = []

@@ -8,7 +8,7 @@ import tempfile
 import unittest
 from unittest import mock
 
-from blackboard.store.upgrade_fixture import FIXTURE
+from blackboard.store.upgrade_fixture import FIXTURE, complete_fixture_cleanup
 from hey_my_buddy.blackboard.store import schema_30_31, upgrade
 from hey_my_buddy.blackboard.store.db import Database, SCHEMA_VERSION
 from hey_my_buddy.install.upgrade import preflight
@@ -87,6 +87,61 @@ class UpgradeChainTests(unittest.TestCase):
             self.assertEqual(row['expected_seconds'], spec.get('expectedSeconds'))
             self.assertEqual(row['router_budget_seconds'], spec.get('routerBudgetSeconds'))
 
+    def test_process_identity_stock_preserves_root_identity_and_rowids(self):
+        rows = list(self.db.execute('SELECT * FROM attempt_process_identities'))
+        self.assertEqual(len(rows), 2)
+        self.assertTrue(all(row['process_group_id'] == row['root_pid'] for row in rows))
+        self.schema31()
+        self.assertEqual(self.db.execute('SELECT COUNT(*) FROM attempt_process_identities WHERE boot_id IS NULL AND job_name IS NOT NULL').fetchone()[0], 1)
+        query = 'SELECT rowid,attempt_id,boot_id,root_pid,root_started_at,job_name FROM attempt_process_identities ORDER BY rowid'
+        before = [tuple(row) for row in self.db.execute(query)]
+        upgrade.upgrade_state(self.state)
+        self.assertEqual([tuple(row) for row in self.db.execute(query)], before)
+        self.assertNotIn('process_group_id', {row[1] for row in self.db.execute('PRAGMA table_info(attempt_process_identities)')})
+        with self.assertRaises(sqlite3.IntegrityError):
+            self.db.execute('UPDATE attempt_process_identities SET boot_id=NULL')
+        with self.assertRaises(sqlite3.IntegrityError):
+            self.db.execute("UPDATE attempt_process_identities SET job_name='unexpected-job' WHERE boot_id IS NOT NULL")
+        self.assert_current_structure()
+
+    def test_usage_stock_drops_only_the_counters_and_keeps_frozen_content(self):
+        self.schema31()
+        frozen = {table: [tuple(row) for row in self.db.execute(f'SELECT rowid,* FROM {table} ORDER BY rowid')]
+                  for table in ('router_requests', 'workflow_turns', 'attempt_received_receipts')}
+        specs = list(self.db.execute('SELECT task_id,spec_json,input_fingerprint FROM tasks ORDER BY rowid'))
+        sources = (('attempts', 'attempt_id', 'result_json', ('result', 'usage')),
+                   ('decision_requests', 'decision_id', 'output_json', ('usage',)))
+        expected = {}
+        unchanged = {}
+        for table, key, column, path in sources:
+            rows = list(self.db.execute(f'SELECT {key},{column} FROM {table} WHERE {column} IS NOT NULL'))
+            self.assertEqual(self.db.execute(f"SELECT COUNT(*) FROM {table},json_tree({column}) WHERE json_tree.key='bytesRead'").fetchone()[0], 2)
+            expected[table], unchanged[table] = {}, {}
+            for row in rows:
+                value = json.loads(row[column])
+                usage = value
+                for field in path:
+                    usage = usage.get(field, {})
+                result = value['result'] if table == 'attempts' else value
+                budget = result.get('budget', {})
+                if 'bytesRead' in usage:
+                    self.assertIsNone(usage.pop('bytesRead'))
+                    self.assertEqual(budget.pop('bytesRead'), 2097152)
+                else:
+                    unchanged[table][row[key]] = row[column]
+                expected[table][row[key]] = value
+        upgrade.upgrade_state(self.state)
+        for table, key, column, _path in sources:
+            actual = dict(self.db.execute(f'SELECT {key},{column} FROM {table} WHERE {column} IS NOT NULL'))
+            self.assertEqual({key: json.loads(value) for key, value in actual.items()}, expected[table])
+            self.assertEqual({key: actual[key] for key in unchanged[table]}, unchanged[table])
+            self.assertEqual(self.db.execute(f"SELECT COUNT(*) FROM {table},json_tree({column}) WHERE json_tree.key='bytesRead'").fetchone()[0], 0)
+        for table, rows in frozen.items():
+            self.assertEqual([tuple(row) for row in self.db.execute(f'SELECT rowid,* FROM {table} ORDER BY rowid')], rows)
+        self.assertEqual(list(self.db.execute('SELECT task_id,spec_json,input_fingerprint FROM tasks ORDER BY rowid')), specs)
+        self.assertGreater(self.db.execute("SELECT COUNT(*) FROM router_requests,json_tree(snapshot_json) WHERE json_tree.key='bytesRead'").fetchone()[0], 0)
+        self.assertEqual(self.db.execute("SELECT json_extract(spec_json,'$.decision.document.budget.bytesRead') FROM tasks WHERE task_id='schema31-maintenance-task'").fetchone()[0], 524288)
+
     def test_floor_runs_every_step_with_schema31_stock_and_matches_a_new_board(self):
         def step_with_new_form(db):
             schema_30_31.upgrade(db)
@@ -104,6 +159,7 @@ class UpgradeChainTests(unittest.TestCase):
         columns = ['rowid', *[r[1] for r in self.db.execute('PRAGMA table_info(tasks)') if r[1] not in removed]]
         query = 'SELECT ' + ','.join(columns) + ' FROM tasks ORDER BY rowid'
         before = [tuple(r) for r in self.db.execute(query)]
+        complete_fixture_cleanup(self.db)
         self.assertEqual(preflight(self.state, contract_changed=True)['schema'], 31)
         self.assertEqual(upgrade.upgrade_state(self.state), {'sourceSchema': 31, 'targetSchema': SCHEMA_VERSION})
         self.assertEqual([tuple(r) for r in self.db.execute(query)], before)
