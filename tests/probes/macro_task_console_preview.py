@@ -42,10 +42,12 @@ Usage::
     python tests/probes/macro_task_console_preview.py --emit-fixtures DIR
 
 Scenarios: ``normal`` (complete), ``truncated`` (explicit row/span/event truncation), ``error``
-(timeline reads fail with a 503 envelope while the list stays readable).
+(timeline reads fail with a 503 envelope while the list stays readable), and ``readme``
+(a bilingual product story for documentation captures, selected with ``--language en|zh``).
 
 ``--emit-fixtures DIR`` writes the deterministic fixture tree a frontend
-regression test consumes: the exact JSON bodies of every scenario plus
+regression test consumes: the exact JSON bodies of the three regression scenarios
+(``normal``, ``truncated``, ``error``) plus
 ``manifest.json``, which lists each file with its endpoint, its exact request
 parameters, its HTTP status and the parser outcome (``accepted``, or
 ``rejected`` with the expected ``ApiError`` code). ``incompatible/`` holds
@@ -101,7 +103,7 @@ from typing import Any
 
 PREVIEW_HEADER = "X-Hey-My-Buddy-Preview"
 PREVIEW_VALUE = "synthetic-fixture-data"
-SCENARIOS = ("normal", "truncated", "error")
+SCENARIOS = ("normal", "truncated", "error", "readme")
 SYNTHETIC_CSRF = "synthetic-preview-csrf-not-a-credential"
 SYNTHETIC_SESSION_ID = "synthetic-preview-session-not-a-credential"
 HOST_A = "synthetic-host-alpha"
@@ -1200,6 +1202,11 @@ def build_runs() -> dict[str, dict]:
                                       attempt(f"att-{identifier}-2", 2, "finished", False, retry, end,
                                               buddy, result="Synthetic stop unconfirmed.")],
                             markers=[marker(start, "dispatch", actor=host_actor(HOST_A))]))
+    return index_runs(runs)
+
+
+def index_runs(runs: list[dict]) -> dict:
+    """Bind constructor records into the synthetic read projections."""
     by_id = {entry["runId"]: entry for entry in runs}
     for entry in runs:
         root = entry["runId"]
@@ -1239,7 +1246,7 @@ def build_runs() -> dict[str, dict]:
             item["taskId"] = entry["runId"]
     order = [entry["runId"] for entry in runs]
     sequence = sorted(((entry["runId"], item) for entry in runs for item in entry["markers"]),
-                      key=lambda pair: (pair[1]["at"], pair[0], pair[1]["kind"]))
+                      key=lambda pair: (pair[1]["at"], pair[0]))
     for number, (run_id, item) in enumerate(sequence, start=1):
         item["seq"] = number
         item["runId"] = run_id
@@ -1863,9 +1870,11 @@ def request_records(entry: dict) -> list[dict]:
         active = entry["activeRequest"] if entry["activeRequest"] and entry["activeRequest"]["requestId"] == span_item["requestId"] else None
         records.append(active or {
             "requestId": span_item["requestId"], "kind": span_item["requestKind"], "routing": span_item["requestKind"] == "routing",
-            "state": span_item["state"], "summary": span_item.get("summary") or "", "attempted": "合成预览：已尝试的步骤",
+            "state": span_item["state"], "summary": span_item.get("summary") or "",
+            "attempted": entry.get("requestAttempted", "合成预览：已尝试的步骤"),
             "reason": reason("router-out-of-bounds", bound="constraints") if span_item["requestKind"] == "routing" else None,
-            "neededWork": ["合成预览：需要完成的事"], "expectedArtifacts": [], "acceptance": "合成预览：验收条件",
+            "neededWork": entry.get("requestNeededWork", ["合成预览：需要完成的事"]), "expectedArtifacts": [],
+            "acceptance": entry.get("requestAcceptance", "合成预览：验收条件"),
             "childTaskId": None, "createdAt": span_item["startAt"], "decidedAt": span_item["endAt"],
         })
     return records
@@ -1964,7 +1973,7 @@ def timeline_row(entry: dict, depth: int) -> dict:
         "delegationAuthority": entry["delegationAuthority"],
         "title": entry["title"], "titleSource": entry["titleSource"],
         "taskSummary": task_first_line(entry["task"]),
-        "summary": "合成记录：已提交输出，等待按记录核对。" if entry["status"] == "completed" else None,
+        "summary": entry.get("timelineSummary", "合成记录：已提交输出，等待按记录核对。") if entry["status"] == "completed" else None,
         "createdAt": entry["createdAt"], "state": entry["state"], "status": entry["status"],
         "category": entry["category"], "shutdownConfirmed": len(attempts) == confirmed, "depth": depth,
         "kind": entry["kind"],
@@ -2176,7 +2185,7 @@ def tree_order(entries: list[dict]) -> list[tuple[dict, int]]:
     return ordered
 
 
-CAPS = {"normal": (200, 800, 800), "error": (200, 800, 800),
+CAPS = {"normal": (200, 800, 800), "error": (200, 800, 800), "readme": (200, 800, 800),
         "truncated": (3, 3, 3)}
 
 
@@ -2394,6 +2403,9 @@ def kind_evaluation_views() -> list[dict]:
 
 def console_snapshot(scenario: str, assets_ready: bool, state: PreviewState | None = None) -> dict:
     buddies = buddy_views()
+    if scenario == "readme":
+        for buddy in buddies:
+            buddy["label"] = f"{buddy['model']} · {buddy['effort']}"
     routers = router_records(buddies)
     return {
         "csrfToken": SYNTHETIC_CSRF,
@@ -3699,7 +3711,7 @@ def print_banner(server: PreviewHTTPServer, assets: Path) -> None:
     for line in endpoint_lines(server.server_address[1]):
         print(f"  {line}")
     print("fixture groups:")
-    for group in (MACRO_A, MACRO_B, MACRO_C, STANDALONE_GROUP):
+    for group in FIXTURES["groups"]:
         summary = macro_task_summary(group, set(FIXTURES["groups"][group]))
         members = summary["counts"]["roots"] + summary["counts"]["helpers"]
         print(f"  {group}  state={summary['state']} members={members} project={summary['project']['label']}")
@@ -3749,6 +3761,7 @@ def smoke(assets: Path, scenario: str) -> int:
     threading.Thread(target=server.serve_forever, kwargs={"poll_interval": 0.1}, daemon=True).start()
     base = f"http://127.0.0.1:{server.server_address[1]}"
     failures: list[str] = []
+    smoke_run = FIXTURES["groups"][MACRO_A][0]
 
     def call(method: str, path: str, *, payload: dict | None = None) -> tuple[int, dict, dict]:
         headers = {"X-Hey-My-Buddy-CSRF": SYNTHETIC_CSRF, "Origin": base, "Content-Type": "application/json"}
@@ -3799,24 +3812,26 @@ def smoke(assets: Path, scenario: str) -> int:
             check("truncated scenario reports truncation",
                   (scenario == "truncated") == bool(timeline["truncated"]["rows"]),
                   str(timeline["truncated"]))
-        biggest = max((gap[1] - gap[0] for gap in idle_gaps(MACRO_B)), default=timedelta())
-        check("truly idle gap > 30 min", biggest > timedelta(minutes=30), f"biggest={biggest}")
-        status, task, _headers = call("GET", "/api/tasks/preview-run-a1")
-        check("GET /api/tasks/<id>", status == 200 and task.get("runId") == "preview-run-a1",
+        biggest = max((gap[1] - gap[0] for gap in idle_gaps(MACRO_A if scenario == "readme" else MACRO_B)), default=timedelta())
+        minimum_idle = timedelta(minutes=20 if scenario == "readme" else 30)
+        check("truly idle gap exceeds scenario minimum", biggest > minimum_idle, f"biggest={biggest}")
+        status, task, _headers = call("GET", f"/api/tasks/{smoke_run}")
+        check("GET /api/tasks/<id>", status == 200 and task.get("runId") == smoke_run,
               f"status={status}")
+        encoded_group = MACRO_A if scenario == "readme" else STANDALONE_GROUP
         status, _, _headers = call(
-            "GET", f"/api/macro-tasks/{urllib.parse.quote(STANDALONE_GROUP, safe='')}/timeline")
+            "GET", f"/api/macro-tasks/{urllib.parse.quote(encoded_group, safe='')}/timeline")
         expected = 503 if scenario == "error" else 200
-        check("encoded standalone timeline", status == expected, f"status={status}")
+        check("encoded timeline identifier", status == expected, f"status={status}")
         status, result, _headers = call("POST", "/api/command", payload={"operation": "workflow_get",
-                                                               "params": {"runId": "preview-run-a1"}})
+                                                               "params": {"runId": smoke_run}})
         if scenario == "error":
             check("workflow_get fails closed", status == 503, f"status={status}")
         else:
-            check("POST workflow_get is read-only", status == 200 and result["result"]["microTask"]["task"] == FIXTURES["runs"]["preview-run-a1"]["task"],
+            check("POST workflow_get is read-only", status == 200 and result["result"]["microTask"]["task"] == FIXTURES["runs"][smoke_run]["task"],
                   f"status={status}")
         status, denied, _headers = call("POST", "/api/command", payload={"operation": "workflow_cancel",
-                                                               "params": {"runId": "preview-run-a1"}})
+                                                               "params": {"runId": smoke_run}})
         check("removed Host operation is METHOD_NOT_FOUND", status == 404
               and denied["error"]["code"] == "METHOD_NOT_FOUND", f"status={status}")
         status, stop, _headers = call("POST", "/api/command", payload={
@@ -3863,6 +3878,8 @@ def main(argv: list[str] | None = None) -> int:
         epilog="All data is synthetic; no board, daemon, Worker, model call or production connection is used.")
     parser.add_argument("--assets", help="absolute path of the built console assets directory")
     parser.add_argument("--scenario", choices=SCENARIOS, default="normal")
+    parser.add_argument("--language", choices=("en", "zh"), default="en",
+                        help="language of authored data in the readme scenario")
     parser.add_argument("--port", type=int, default=0, help="0 binds an ephemeral loopback port (default)")
     parser.add_argument("--palette", action="store_true", help="add a macro task with twelve synthetic buddies for colour review")
     parser.add_argument("--verbose", action="store_true", help="enable access logging (off by default)")
@@ -3890,6 +3907,10 @@ def main(argv: list[str] | None = None) -> int:
             print("--emit-fixtures requires a nonempty DIR", file=sys.stderr)
             return 2
         return emit_fixtures(Path(args.emit_fixtures))
+
+    if args.scenario == "readme":
+        from readme_console_scene import configure
+        configure(sys.modules[__name__], args.language)
 
     assets = prepare_assets(args.assets)
     if args.smoke:
