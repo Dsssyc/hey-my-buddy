@@ -60,9 +60,8 @@ class WorkspaceTests(unittest.TestCase):
         self.base = self.git("rev-parse", "HEAD").decode().strip()
 
     def git(self, *args, cwd=None, data=None):
-        env = {key: value for key, value in os.environ.items() if not key.startswith("GIT_")}
-        result = subprocess.run(["git", "-C", str(cwd or self.repo), *args], input=data,
-                                capture_output=True, env=env, timeout=30)
+        command, git_env = workspace._git_command(cwd or self.repo, *args)
+        result = subprocess.run(command, input=data, capture_output=True, env=git_env, timeout=30)
         self.assertEqual(result.returncode, 0, result.stderr.decode(errors="replace"))
         return result.stdout
 

@@ -1,6 +1,5 @@
 """Disposable real Git allocations, retained-board facts and apply-time fences."""
 import json
-import os
 from pathlib import Path
 import subprocess
 import shutil
@@ -43,8 +42,8 @@ class StorageOrphanTests(WorkflowTestCase):
         self.enterContext(patch.object(storage, 'process_inventory', return_value=([], [], True)))
 
     def git(self, root, *args):
-        env = {key: value for key, value in os.environ.items() if not key.startswith('GIT_')}
-        result = subprocess.run(['git', '-C', str(root), *args], capture_output=True, text=True, env=env, timeout=30, encoding="utf-8")
+        command, git_env = workspace._git_command(root, *args)
+        result = subprocess.run(command, capture_output=True, text=True, env=git_env, timeout=30, encoding="utf-8")
         self.assertEqual(result.returncode, 0, result.stderr)
         return result.stdout.strip()
 
