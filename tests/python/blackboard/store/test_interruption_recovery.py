@@ -413,6 +413,7 @@ class InterruptionRecoveryTests(BoardTestCase):
         view = client.get(runId=task['runId'])
         self.assertEqual(view['state'], 'failed')
         self.assertEqual(view['selectedAttempt']['result']['result']['receiptRejection'], refusal)
+        self.assertNotIn('microTaskError', view['selectedAttempt']['result']['result'])
         self.assertIn('INVALID_ARGUMENT', view['selectedAttempt']['result']['error'])
         self.assertIn(refusal['message'], view['selectedAttempt']['result']['error'])
         self.assertTrue(view['shutdownConfirmed'])
@@ -555,7 +556,9 @@ class InterruptionRecoveryTests(BoardTestCase):
                     self.assertEqual(client.get(runId=good_task['runId'])['state'], 'completed')
                     result = client.get(runId=task['runId'])['selectedAttempt']['result']
                     self.assertEqual(result['status'], 'failed')
-                    self.assertEqual(result['result']['receiptRejection']['code'], code)
+                    marker = 'microTaskError' if name == 'artifacts' else 'receiptRejection'
+                    self.assertEqual(result['result'][marker]['code'], code)
+                    self.assertNotIn('receiptRejection' if name == 'artifacts' else 'microTaskError', result['result'])
                     head = board.store.head()
                     self.assertEqual(board.store.recover_executions(), [])
                     self.assertEqual(board.store.head(), head)

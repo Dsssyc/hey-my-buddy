@@ -11,6 +11,7 @@ from hey_my_buddy.blackboard.tasks import interruption
 from hey_my_buddy.buddy.harnesses.dsh.session_records import session_record_facts
 from hey_my_buddy.buddy.roles.turn_io import input_hash
 from hey_my_buddy.private_dirs import attempt_root, native_root
+from hey_my_buddy.protocol.execution import RECEIPT, fsync_json
 from hey_my_buddy.protocol import process_identity as processes
 
 
@@ -38,6 +39,28 @@ class InterruptedContinuationTests(WorkflowTestCase):
             summary = board.store.reconcile_startup()
         self.assertEqual(summary["interrupted"], 1)
         self.assertEqual(self.workspace.seal_calls[-1], (attempt["taskId"], attempt_id))
+
+    def test_rejected_receipt_keeps_the_recovery_seal_without_publishing_it(self):
+        board = self.board()
+        submitted = self.submit(board)
+        claim = self.claim(board)
+        attempt = claim["claim"]["attempt"]
+        root = attempt_root(self.directory, "dsh", submitted["runId"], attempt["attemptId"])
+        root.mkdir(parents=True, exist_ok=True)
+        fsync_json(root / RECEIPT, {
+            "taskId": submitted["runId"], "attemptId": attempt["attemptId"],
+            "generation": attempt["generation"], "createdAt": board.store.now(),
+            "report": {"status": "invalid-status", "result": {"turn": self.turn_record(claim)}},
+        })
+        self.interrupted(board, claim)
+        result = board.call("task_result", {"runId": submitted["runId"]})["result"]
+        self.assertEqual(result["receiptRejection"]["code"], "INVALID_ARGUMENT")
+        self.assertNotIn("microTaskError", result)
+        self.assertIn("partialWorkspaceSeal", result)
+        self.assertNotIn("turn", result)
+        view = board.call("workflow_get", {"runId": submitted["runId"]})
+        self.assertEqual(view["state"], "failed")
+        self.assertFalse(any(row["kind"] in ("output", "partial-output") for row in view["artifacts"]))
 
     def test_stopped_turn_is_interrupted_and_explicit_continue_uses_partial_commit(self):
         board = self.board()

@@ -103,7 +103,7 @@ class TestAtomicity(BoardTestCase):
             "status": "ok", "result": {"status": "ok"}, "shutdownConfirmed": True,
             "artifacts": [{"location": str(cwd / "missing.bin"), "kind": "file"}],
         })
-        self.assertEqual(response["attempt"]["result"]["result"]["receiptRejection"]["code"], "ARTIFACT_MISSING")
+        self.assertEqual(response["attempt"]["result"]["result"]["microTaskError"]["code"], "ARTIFACT_MISSING")
         kinds = [event["kind"] for event in board.store.events_read({"after": 0})["events"]]
         self.assertNotIn("task.completed", kinds)
         self.assertEqual(client.get(runId=task["runId"])["state"], "failed")

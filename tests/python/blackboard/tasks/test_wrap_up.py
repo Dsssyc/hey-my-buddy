@@ -65,7 +65,7 @@ class WrapUpStopTests(WorkflowTestCase):
                                                "reason": "wrap-up"}
         receipt = board.call('execution_result', params)
         self.assertEqual(receipt["attempt"]["result"]["status"], "failed")
-        self.assertEqual(receipt["attempt"]["result"]["result"]["receiptRejection"]["code"], "TURN_INVALID")
+        self.assertEqual(receipt["attempt"]["result"]["result"]["microTaskError"]["code"], "TURN_INVALID")
         self.assertTrue(receipt["attempt"]["shutdownConfirmed"])
         self.assertEqual(receipt["task"]["state"], "failed")
         self.assertEqual(receipt["task"]["workflowState"], "cancelled")
@@ -207,7 +207,7 @@ class WrapUpStopTests(WorkflowTestCase):
         self.assertEqual(forbidden.exception.code, "INVALID_ARGUMENT")
         board.call("workflow_cancel", {"runId": run["runId"], **self.control(run)})
         rejected = self.result(board, claim, reason="console-stop")
-        self.assertEqual(rejected["attempt"]["result"]["result"]["receiptRejection"]["code"], "INVALID_ARGUMENT")
+        self.assertEqual(rejected["attempt"]["result"]["result"]["microTaskError"]["code"], "INVALID_ARGUMENT")
         self.assertNotIn("stopInitiator", rejected["attempt"]["result"])
 
     def test_harness_capability_controls_grace_without_a_name_list(self):
@@ -335,7 +335,7 @@ class WrapUpStopTests(WorkflowTestCase):
             connection.execute("UPDATE attempts SET stop_initiator='service' WHERE attempt_id=?",
                                (claim["claim"]["attempt"]["attemptId"],))
         rejected = self.result(board, claim, reason="console-stop")
-        self.assertEqual(rejected["attempt"]["result"]["result"]["receiptRejection"]["code"], "INVALID_ARGUMENT")
+        self.assertEqual(rejected["attempt"]["result"]["result"]["microTaskError"]["code"], "INVALID_ARGUMENT")
         self.assertTrue(self.attempt(board, claim)["resultAvailable"])
 
     def test_regular_endings_keep_their_own_causes(self):

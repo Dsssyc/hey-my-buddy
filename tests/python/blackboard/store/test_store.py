@@ -320,9 +320,10 @@ class ExpectedDurationTests(BoardTestCase):
         pass  # Admission is owned by the service.
         claim = admit_execution(client, "n" * 32, task_id=task["runId"])["claim"]
         response = client.submit_result(claim["attempt"]["attemptId"], claim["attempt"]["generation"], "n" * 32, {"status": "failed", "shutdownConfirmed": True, "terminationReason": "deadline"})
-        rejection = response["attempt"]["result"]["result"]["receiptRejection"]
+        rejection = response["attempt"]["result"]["result"]["microTaskError"]
         self.assertEqual(rejection["code"], "INVALID_ARGUMENT")
         self.assertIn("Router budget", rejection["message"])
+        self.assertNotIn("receiptRejection", response["attempt"]["result"]["result"])
         self.assertTrue(client.get(runId=task["runId"])["shutdownConfirmed"])
 
 

@@ -271,8 +271,8 @@ class LifecycleTests(WorkflowTestCase):
         self.assertEqual(view["state"], "failed")
         self.assertEqual(view["currentTurn"]["state"], "failed")
         receipt = board.call("task_result", {"runId": submitted["runId"]})["result"]
-        self.assertEqual(receipt["receiptRejection"]["code"], "TURN_INVALID")
-        self.assertIn("outcomeTruncated", receipt["receiptRejection"]["message"])
+        self.assertEqual(receipt["microTaskError"]["code"], "TURN_INVALID")
+        self.assertIn("outcomeTruncated", receipt["microTaskError"]["message"])
 
     def test_stored_outcome_truncation_metadata_stays_readable(self):
         board = self.board()
@@ -945,7 +945,7 @@ class WorkspaceTests(WorkflowTestCase):
 
         failed = self.finish_turn(board, claim, seal=False, result_mutator=bad_seal)
         self.assertEqual(failed["taskState"], "failed")
-        self.assertEqual(failed["attempt"]["result"]["result"]["receiptRejection"]["code"], "WORKSPACE_INVALID")
+        self.assertEqual(failed["attempt"]["result"]["result"]["microTaskError"]["code"], "WORKSPACE_INVALID")
         audit = board.call("workflow_get", {"runId": submitted["runId"], "includeAudit": True})
         self.assertEqual([row for row in audit["artifacts"] if row["kind"] == "output"], [])
 
@@ -1394,6 +1394,24 @@ class NestedSpecTests(WorkflowTestCase):
 
 
 class LateCancellationTests(WorkflowTestCase):
+    def test_late_turn_with_an_import_error_publishes_no_output(self):
+        board = self.board()
+        submitted = self.submit(board)
+        claim = self.claim(board)
+        board.call("workflow_cancel", {"runId": submitted["runId"], "note": "stop", **self.control(submitted)})
+
+        def bad_seal(result):
+            result["workspaceSeal"] = {"manifestSha256": "not-a-hash"}
+
+        failed = self.finish_turn(board, claim, seal=False, result_mutator=bad_seal)
+        result = failed["attempt"]["result"]["result"]
+        self.assertEqual(result["microTaskError"]["code"], "WORKSPACE_INVALID")
+        self.assertNotIn("receiptRejection", result)
+        view = board.call("workflow_get", {"runId": submitted["runId"]})
+        self.assertEqual(view["state"], "cancelled")
+        self.assertEqual(view["currentTurn"]["state"], "failed")
+        self.assertFalse(any(row["kind"] in ("output", "partial-output") for row in view["artifacts"]))
+
     def test_late_helper_completion_keeps_its_artifact_after_parent_cancel(self):
         board = self.board()
         self.register(board)

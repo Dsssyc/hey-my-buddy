@@ -78,6 +78,7 @@ class ServiceTurnMutationTests(WorkflowTestCase):
                 self.assertIsNotNone(turn["session_id"])
                 self.assertTrue(any(artifact["kind"] == "output" for artifact in view["artifacts"]))
                 self.assertNotIn("receiptRejection", task_result["result"])
+                self.assertNotIn("microTaskError", task_result["result"])
 
     def test_changed_identity_and_missing_session_fail_at_service_boundary(self):
         mutations = {
@@ -113,7 +114,8 @@ class ServiceTurnMutationTests(WorkflowTestCase):
         self.assertFalse(receipt["workflow"]["accepted"])
         self.assertEqual(view["state"], "failed")
         self.assertEqual(task_result["resultMeta"]["status"], "failed")
-        self.assertEqual(task_result["result"]["receiptRejection"]["code"], "TURN_INVALID")
+        self.assertEqual(task_result["result"]["microTaskError"]["code"], "TURN_INVALID")
+        self.assertNotIn("receiptRejection", task_result["result"])
         self.assertNotEqual(turn["state"], "returned")
         self.assertIsNone(turn["session_id"])
         self.assertFalse(any(artifact["kind"] == "output" for artifact in view["artifacts"]))

@@ -2186,7 +2186,7 @@ class BoardStore:
                 "result", "exitCode", "signal", "logPaths", "runtimeIdentity", "terminationReason")}
             request.update(attemptId=attempt_id, status="failed", shutdownConfirmed=True, artifacts=[],
                 result={**(params.get("result") or {}),
-                        "receiptRejection": {"code": error.code, "message": error.message}},
+                        "microTaskError": {"code": error.code, "message": error.message}},
                 error=f"Execution result refused: {error.code}: {error.message}")
             if error.code == "INVALID_ARGUMENT":
                 request["terminationReason"] = None

@@ -376,7 +376,8 @@ class LifecycleTestCase(RealWorkspaceTestCase):
         self.assertEqual(receipt['resultMeta']['status'], 'failed')
         if import_failure:
             self.assertEqual(receipt['resultMeta']['terminationReason'], 'completed')
-            self.assertIn('receiptRejection', recorded)
+            self.assertIn('microTaskError', recorded)
+            self.assertNotIn('receiptRejection', recorded)
         with board.store.db.read() as connection:
             recorded = json.loads(connection.execute('SELECT result_json FROM attempts WHERE attempt_id=?',
                                    (attempt['attemptId'],)).fetchone()['result_json'])['result']

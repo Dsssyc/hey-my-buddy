@@ -169,7 +169,8 @@ class ReceivedReceiptTests(BoardTestCase):
         self.assertEqual(len(self.recover(board)), 1)
         result = board.client().result(runId=self.run_id)["selectedAttempt"]["result"]
         self.assertEqual(result["status"], "failed")
-        self.assertEqual(result["result"]["receiptRejection"]["code"], "ARTIFACT_MISSING")
+        self.assertEqual(result["result"]["microTaskError"]["code"], "ARTIFACT_MISSING")
+        self.assertNotIn("receiptRejection", result["result"])
         self.assertFalse((self.receipt_path.parent / "receipt-rejection.json").exists())
         self.assert_final(board)
 
