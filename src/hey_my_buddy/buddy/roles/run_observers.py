@@ -9,11 +9,10 @@ the returned :class:`~hey_my_buddy.buddy.harnesses.run_contract.RunFeedback`;
 they never parse a native protocol frame and never start a native path of
 their own.
 
-Two rules exist because the two existing carriers differ in exactly this
-one place: the fast structured call refuses an unknown event, a tool fact
-and a refused native interaction immediately, while the Worker turn ignores
-unknown events and keeps working. The correction rule preserves the fast
-call's existing loop: at most one correction, never for an enum violation,
+The fast structured call stops on a tool fact or a refused native interaction,
+while the Worker turn keeps working and retains refused interactions for Host
+attention. Both keep unknown events as facts. The correction rule preserves
+the fast call's existing loop: at most one correction, never for an enum violation,
 with the same bounded correction text appended to the same base prompt, on
 the same native process and total deadline.
 """
@@ -41,13 +40,12 @@ def worker_observer(_facts: Mapping) -> RunFeedback:
 
 
 class FastCorrection:
-    """The fast structured call's rule: fail closed on facts, correct once.
+    """The fast structured call's rule: stop on tools, correct once.
 
     The precedence is the one the fast carrier always had: a refused native
     interaction, a tool marker or a projected tool fact ends the call as
-    ``no-tool-violation``; an unknown-but-legal event ends it as
-    ``invalid-protocol``; only a settled answer may be corrected, once, never
-    for an enum violation. The object also carries what the caller needs to
+    ``no-tool-violation``; unknown events remain facts; only a settled answer
+    may be corrected, once, never for an enum violation. The object also carries what the caller needs to
     project the run: the correction count and the reason of its own stop
     decision — the driver only reports that the observer interrupted.
     """
@@ -64,10 +62,6 @@ class FastCorrection:
             return self._stop("no-tool-violation")
         if int(facts.get("toolMarkerFrames") or 0) > 0 or int(facts.get("toolCalls") or 0) > 0:
             return self._stop("no-tool-violation")
-        unknown = facts.get("unknownEvents")
-        total = int(unknown.get("total") or 0) if isinstance(unknown, Mapping) else 0
-        if total > 0:
-            return self._stop("invalid-protocol")
         if facts.get("settled") and self.correction_count == 0:
             raw = facts.get("rawAnswer")
             code = correction_code(raw, self.output_schema) if isinstance(raw, str) else "answer-invalid-json"

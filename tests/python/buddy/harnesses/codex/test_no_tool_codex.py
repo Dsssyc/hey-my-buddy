@@ -164,8 +164,13 @@ class NoToolCodexTests(unittest.TestCase):
         self.assertEqual(evidence["events"], [])
         self.assertTrue(evidence["streamComplete"])
 
-    def test_unknown_partial_and_eof_rejected(self):
-        for case in ("unknown", "truncated", "eof"):
+    def test_unknown_event_keeps_a_valid_answer(self):
+        outcome, _control, _directory = self.run_case("unknown")
+        self.assertEqual(outcome.status, "ok", outcome.result)
+        self.assertTrue(outcome.result["answerValid"])
+
+    def test_partial_and_eof_rejected(self):
+        for case in ("truncated", "eof"):
             with self.subTest(case=case):
                 outcome, _control, _directory = self.run_case(case)
                 self.assertEqual(outcome.status, 'failed', outcome.result)

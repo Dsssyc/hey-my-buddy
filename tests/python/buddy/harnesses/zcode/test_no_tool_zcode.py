@@ -5,7 +5,7 @@ unified tool-evidence wiring runs against the same server; every no-tool case
 here keeps asserting the native no-tool parameters and the refusal behavior.
 The unit cases pin the step 2-B boundary: the driver's protocol checks stay
 fatal, while tool markers and unknown legal events become retained facts the
-role observer decides over (the fast rule stops, the Worker rule continues).
+role observer decides over (tools stop the fast call; unknown events continue).
 """
 from __future__ import annotations
 
@@ -52,15 +52,15 @@ class NoToolPolicyTests(unittest.TestCase):
                 # The Worker rule keeps the run running over the same fact.
                 self.assertEqual(worker_observer(mapping), FEEDBACK_CONTINUE)
 
-    def test_unknown_events_are_counts_the_fast_rule_stops_on(self):
+    def test_unknown_events_are_counts_the_fast_rule_continues_on(self):
         facts, classifier = self.chain()
         protocol = NoToolProtocol("root", "input")
         protocol.observe(self.event("turn.started", {"inputId": "input"}, seq=1), 1)
         self.assertTrue(classifier.observe(self.event("future.event")))
         correction = FastCorrection({"type": "object"}, "base")
         self.assertEqual(correction.observer(
-            facts.mapping(tool_calls=0, settled=False, raw_answer=None)).action, "stop")
-        self.assertEqual(correction.stop_reason, "invalid-protocol")
+            facts.mapping(tool_calls=0, settled=False, raw_answer=None)).action, "continue")
+        self.assertIsNone(correction.stop_reason)
         self.assertFalse(protocol.settled)
 
     def test_projected_metadata_never_proves_completion_and_marked_kinds_stop_the_fast_rule(self):
@@ -117,9 +117,13 @@ class NoToolFakeProtocolTests(FakeAppServerTests):
         self.assertFalse(outcome.result["answerValid"])
         self.assertEqual(outcome.result["correctionCount"], 0)
 
-    def test_tool_unknown_and_truncated_stream_fail_closed(self):
+    def test_unknown_event_keeps_a_valid_answer(self):
+        outcome = self.execute("unknown")
+        self.assertEqual(outcome.status, "ok", outcome.to_report())
+        self.assertTrue(outcome.result["answerValid"])
+
+    def test_tool_and_truncated_stream_fail_closed(self):
         for case, code in (("tool", "no-tool-violation"), ("post-close-tool", "no-tool-violation"),
-                           ("unknown", "invalid-protocol"),
                            ("truncated", "native-disconnected")):
             with self.subTest(case=case):
                 outcome = self.execute(case)

@@ -82,7 +82,21 @@ def _base_result(result) -> dict:
         payload["error"] = result.end.message or result.end.reason_code or "the native run failed"
         if result.end.reason_code == "native-disconnected":
             payload["failureKind"] = "transport"
+    _merge_native_evidence(result, payload)
     return payload
+
+
+def _merge_native_evidence(result: RunResult, payload: dict) -> None:
+    evidence = result.native_evidence
+    if evidence is None:
+        return
+    facts = {}
+    if evidence.unknown_events is not None and evidence.unknown_events.total:
+        facts["unknownEvents"] = evidence.unknown_events.to_payload()
+    if evidence.unconfirmed:
+        facts["unconfirmed"] = list(evidence.unconfirmed)
+    if facts:
+        payload.setdefault("nativeEvidence", {}).update(facts)
 
 
 def _fast_result(result, request: RunRequest, verdict: dict) -> dict:
@@ -120,7 +134,7 @@ def _fast_result(result, request: RunRequest, verdict: dict) -> dict:
         if top_level:
             payload.update(evidence)
         else:
-            payload["nativeEvidence"] = evidence
+            payload.setdefault("nativeEvidence", {}).update(evidence)
     if tools:
         payload["toolEvidence"] = tools
     return payload
@@ -442,7 +456,7 @@ def _role_stop(result: RunResult | None, handle: ProcessHandle) -> bool:
 
 def read_fast_result(handle: ProcessHandle, path: Path) -> dict:
     return _read_structured_result(handle, path, _fast_result,
-                                   (None, "no-tool-violation", "invalid-protocol"))
+                                   (None, "no-tool-violation"))
 
 
 def read_review_result(handle: ProcessHandle, path: Path) -> dict:

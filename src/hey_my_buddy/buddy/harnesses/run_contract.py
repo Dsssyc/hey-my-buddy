@@ -50,7 +50,9 @@ from ...protocol.internal_models import (
     fail,
 )
 
-from pydantic import BeforeValidator, Field, model_serializer, model_validator
+from pydantic import (
+    AfterValidator, BeforeValidator, Field, field_serializer, field_validator, model_serializer, model_validator,
+)
 
 #: The only internal format version. It never changes a public board contract.
 FORMAT_VERSION = 1
@@ -61,7 +63,7 @@ NATIVE_ID_KEYS = {"sessionId": "session_id", "threadId": "thread_id", "turnId": 
 
 HarnessName = Literal["codex", "claude", "zcode", "dsh"]
 ToolScope = Literal["none", "read", "write", "full"]
-EndStatus = Literal["ok", "error", "cancelled"]
+EndStatus = Literal["ok", "error", "cancelled", "unknown"]
 SchemaStatus = Literal["valid", "invalid", "unknown"]
 GroupState = Literal["gone", "alive", "unknown"]
 ContinuationMode = Literal["native-session", "reconstructed-new-session"]
@@ -92,6 +94,8 @@ MAX_SCHEMA_BYTES = 65536
 #: controller-read range; a value within it is never refused or dropped here.
 MAX_VALUE_BYTES = 512 * 1024
 MAX_UNKNOWN_EVENT_TYPES = 64
+MAX_UNCONFIRMED_ITEMS = 16
+MAX_UNCONFIRMED_NAME_CHARS = 64
 MAX_EVIDENCE_REFS = 32
 MAX_SESSION_SERVICES = 8
 MAX_SERVICE_TOOL_NAMES = 16
@@ -103,12 +107,18 @@ MAX_SERVICE_TOOL_NAMES = 16
 NonEmptyInputText = Annotated[RawText(MAX_INPUT_TEXT_BYTES), Field(min_length=1)]
 
 
+def _nonblank(value: str) -> str:
+    if not value.strip():
+        raise fail("the value must contain non-whitespace text")
+    return value
+
+
 class RunConfiguration(InternalModel):
     """The frozen provider/model/effort selection; no default buddy, no fallback."""
 
-    provider: Text(128)
-    model: Text(128)
-    effort: Text(64)
+    provider: Annotated[Text(128), AfterValidator(_nonblank)]
+    model: Annotated[Text(128), AfterValidator(_nonblank)]
+    effort: Annotated[Text(64), AfterValidator(_nonblank)]
 
 
 class PrivateStatePaths(InternalModel):
@@ -147,7 +157,7 @@ class RunContinuation(InternalModel):
     """
 
     mode: ContinuationMode
-    previous_session_id: OptionalText(512) = None
+    previous_session_id: Optional[Annotated[Text(512), AfterValidator(_nonblank)]] = None
     checkpoint: Optional[ResumeCheckpoint] = None
 
     @model_validator(mode="after")
@@ -529,6 +539,37 @@ FEEDBACK_CONTINUE = RunFeedback(action="continue")
 FEEDBACK_STOP = RunFeedback(action="stop")
 
 
+class UnknownEvents(InternalModel):
+    """Bounded native event counts, with an immutable map and an object on wire."""
+
+    counts_by_type: JsonTuple(tuple[Text(128), Count], max_items=MAX_UNKNOWN_EVENT_TYPES)
+    total: Count
+
+    @field_validator("counts_by_type", mode="before")
+    @classmethod
+    def _object_counts(cls, value: Any) -> tuple:
+        if not isinstance(value, dict):
+            raise fail("unknownEvents.countsByType must be an object")
+        return tuple(value.items())
+
+    @field_serializer("counts_by_type")
+    def _serialize_counts(self, value: tuple) -> dict:
+        return dict(value)
+
+
+class NativeEvidence(InternalModel):
+    """Native shapes not understood and requested properties not confirmed.
+
+    Names describe observations supplied by each harness; this contract gives
+    them no role verdict and defines no harness-specific vocabulary.
+    """
+
+    unknown_events: Optional[UnknownEvents] = None
+    unconfirmed: JsonTuple(Annotated[str, Field(min_length=1, max_length=MAX_UNCONFIRMED_NAME_CHARS,
+                                              pattern=r"^[a-z0-9-]+$")],
+                           max_items=MAX_UNCONFIRMED_ITEMS) = ()
+
+
 class RunResult(InternalModel):
     """One native run's facts; ``ok`` means the native interaction completed.
 
@@ -552,6 +593,7 @@ class RunResult(InternalModel):
     #: is a count, never an order — sequence and ordinal evidence is the native
     #: provenance's own.
     native_event_count: Optional[Count] = None
+    native_evidence: Optional[NativeEvidence] = None
     model_started: Optional[bool] = None
     configuration: ResultConfiguration = Field(default_factory=ResultConfiguration)
     native_identity: Optional[NativeIdentity] = None
@@ -622,7 +664,8 @@ __all__ = [
     "FrozenJson", "HARNESS_NAMES", "HarnessRun", "MAX_RUN_REQUEST_BYTES",
     "MAX_RUN_RESULT_BYTES", "MAX_COUNT", "CheckedConfiguration", "CheckedValue",
     "CompletionEvidence", "ContinuationFacts", "EffectivePolicy", "EvidenceRef",
-    "InterruptEvidence", "NativeIdentity", "PrivateStatePaths",
+    "InterruptEvidence", "NativeIdentity", "NativeEvidence", "UnknownEvents", "PrivateStatePaths",
+    "MAX_UNKNOWN_EVENT_TYPES", "MAX_UNCONFIRMED_ITEMS", "MAX_UNCONFIRMED_NAME_CHARS",
     "ResumeCheckpoint", "RunBudget", "RunConfiguration", "RunContinuation", "RunEnd", "RunFeedback", "RunIdentity",
     "WorkerPermission", "RunRequest", "RunResult", "RunValue", "SessionService", "StopEvidence",
     "StopLayer", "canonical_json",
