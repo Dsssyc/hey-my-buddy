@@ -2,6 +2,14 @@
   "format": 1,
   "assets": [
     {
+      "path": "README.md",
+      "kind": "file"
+    },
+    {
+      "path": "LICENSE",
+      "kind": "file"
+    },
+    {
       "path": "packaging/runtime-assets.json",
       "kind": "file"
     },

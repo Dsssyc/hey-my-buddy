@@ -120,7 +120,6 @@ def assemble(source: Path, skill: Path) -> dict:
         target = package / relative
         target.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(origin, target)
-    shutil.copy2(source / "LICENSE", package / "LICENSE")
     commit = source_commit(source)
     (package / "src/hey_my_buddy/build-info.json").write_bytes((json.dumps({"sourceCommit": commit}) + "\n").encode("utf-8"))
     marker = {"name": SKILL_NAME, "version": version, "contract": CONTRACT_VERSION, "sourceCommit": commit}
