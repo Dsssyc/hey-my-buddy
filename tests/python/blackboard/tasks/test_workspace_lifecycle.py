@@ -1818,7 +1818,7 @@ class LifecycleTestCase(RealWorkspaceTestCase):
         self.assertIn("lock-mismatch", mismatch.exception.details["reasons"])
         self.assertNotIn("unregistered-checkout", mismatch.exception.details["reasons"])
         self.assertNotIn("attached-branch", mismatch.exception.details["reasons"])
-        git(self.repo, "worktree", "lock", "--reason", "buddy:someone-else", str(checkout))
+        git(self.repo, "worktree", "lock", "--reason", "hey-my-buddy:someone-else", str(checkout))
         with self.assertRaises(BoardError) as foreign:
             self.reclaim(board, self.view(board, run_id))
         self.assertIn("lock-mismatch", foreign.exception.details["reasons"])
