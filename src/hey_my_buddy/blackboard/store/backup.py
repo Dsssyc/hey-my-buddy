@@ -15,9 +15,9 @@ import sqlite3
 import sys
 import tempfile
 import time
+import zlib
 
 from .db import SCHEMA_VERSION, utc_now
-from .upgrade import BASE_SCHEMA_VERSION, upgrade as upgrade_schema
 from ...protocol.contracts import CONTRACT_VERSION
 from ...errors import BoardError
 from ... import private_dirs
@@ -237,7 +237,7 @@ def _verify(directory: Path) -> dict:
                 'databaseSnapshot', 'runtime', 'pluginCommit', 'pluginCommitStatus', 'files'}
     if not isinstance(manifest, dict) or not required <= manifest.keys() or not isinstance(manifest['files'], dict):
         raise BoardError('BACKUP_INVALID', 'Backup manifest is incomplete')
-    if manifest.get('format') != 1 or manifest.get('schema') not in (BASE_SCHEMA_VERSION, SCHEMA_VERSION):
+    if manifest.get('format') != 1 or manifest.get('schema') != SCHEMA_VERSION:
         raise BoardError('BACKUP_INVALID', 'Unsupported backup format or schema')
     allowed = {'board.sqlite3.gz', *(str(Path('state') / name) for name in STATE_FILES)}
     if 'board.sqlite3.gz' not in manifest['files'] or set(manifest['files']) - allowed:
@@ -256,8 +256,11 @@ def _verify(directory: Path) -> dict:
     with tempfile.TemporaryDirectory(prefix='.verify-', dir=directory.parent) as raw:
         trial = Path(raw)
         with _open(directory / 'board.sqlite3.gz', 'rb') as compressed, _open(trial / 'board.sqlite3', 'xb') as destination:
-            with gzip.GzipFile(fileobj=compressed, mode='rb') as source:
-                shutil.copyfileobj(source, destination)
+            try:
+                with gzip.GzipFile(fileobj=compressed, mode='rb') as source:
+                    shutil.copyfileobj(source, destination)
+            except (OSError, EOFError, zlib.error) as error:
+                raise BoardError('BACKUP_INVALID', 'Backup compressed database is invalid', reason=str(error)) from error
         _guard(trial / 'board.sqlite3')
         try:
             with closing(sqlite3.connect(trial / 'board.sqlite3')) as connection:
@@ -272,8 +275,6 @@ def _verify(directory: Path) -> dict:
                     raise BoardError('BACKUP_INVALID', 'Backup database fingerprint metadata does not match')
         except sqlite3.DatabaseError as error:
             raise BoardError('BACKUP_INVALID', 'Backup database is invalid') from error
-        if manifest['schema'] == BASE_SCHEMA_VERSION:
-            upgrade_schema(trial)
     return manifest
 
 
