@@ -117,13 +117,16 @@ def ensure_private_log_path(path: Path, root: Path) -> Path:
     return path
 
 
-def child_environment(extra_env: dict | None = None, *, source: dict | None = None) -> dict:
+def child_environment(extra_env: dict | None = None, *, source: dict | None = None,
+                      launch_environment: dict | None = None) -> dict:
     """Inherit native configuration and add the explicit permission controls."""
     if extra_env:
         overlap = sorted(set(extra_env) & set(RESERVED_ENV_KEYS))
         if overlap:
             raise LaunchRejected("extra environment may not override inherited home keys", keys=overlap)
     environment = discovery.native_environment(dict(os.environ if source is None else source))
+    if launch_environment:
+        environment.update(launch_environment)
     if extra_env:
         environment.update({str(key): str(value) for key, value in extra_env.items()})
     return environment
@@ -201,7 +204,7 @@ def finalize_after_spawn_failure(process, handle, *, settle_seconds: float = 5.0
 
 def launch(argv: list[str], *, private_root: Path, extra_env: dict | None = None,
            cwd: Path | None = None, launch_log: Path | None = None,
-           source_environment: dict | None = None,
+           source_environment: dict | None = None, launch_environment: dict | None = None,
            merge_stderr: bool = False) -> tuple[subprocess.Popen, ProcessHandle]:
     """Bind private evidence, then spawn with the inherited native homes.
 
@@ -220,7 +223,7 @@ def launch(argv: list[str], *, private_root: Path, extra_env: dict | None = None
     spawn_cwd = Path(cwd) if cwd is not None else root
     log_path = ensure_private_log_path(
         Path(launch_log) if launch_log is not None else root / "logs" / "launches.jsonl", root)
-    environment = child_environment(extra_env, source=source_environment)
+    environment = child_environment(extra_env, source=source_environment, launch_environment=launch_environment)
     try:
         process = owned_popen([str(part) for part in argv], env=environment, cwd=str(spawn_cwd),
                               stdin=subprocess.PIPE, stdout=subprocess.PIPE,

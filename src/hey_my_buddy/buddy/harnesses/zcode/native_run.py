@@ -726,11 +726,11 @@ def _spawn_app_server(*, cwd: str, invocation_root: Path, native_root: Path, dea
     Failures inside ``owned_popen`` carry creation/cleanup evidence before
     registration, including a suspended child whose stop remains unknown.
     """
-    from ..discovery import native_environment
+    from ..runtime_selection import native_environment
     root = ensure_private_dir(native_root)
     incoming = dict(environment_for())
     command = cli_command(incoming)
-    environment = native_environment(incoming, command=command)
+    environment = native_environment(incoming, harness="zcode")
     private = ensure_private_dir(invocation_root)
     if incoming.get("HMB_DEV_SOURCE") == "1" and "HMB_ZCODE_TEST_CASE" in incoming:
         environment["HMB_ZCODE_TEST_CASE"] = incoming["HMB_ZCODE_TEST_CASE"]

@@ -14,12 +14,12 @@ from ..discovery import native_environment
 from ....errors import BoardError
 
 
-def read(command: list[str], environment: dict) -> dict | None:
+def read(command: list[str], environment: dict, *, entry: str | None = None) -> dict | None:
     """Read native billing and provider metadata without requesting a model turn."""
     if not command:
         return None
     child = owned_popen([*command, "app-server", "--listen", "stdio://"],
-                        env=native_environment(environment, command=command),
+                        env=native_environment(environment, command=command, entry=entry),
                         stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
                         start_new_session=True, close_fds=True)
     handle = ProcessHandle(child, own_group=True, log_paths={})

@@ -174,7 +174,7 @@ class ClaudeConfigTests(unittest.TestCase):
                "HMB_AGENT_CREDENTIAL_FILE": "/private/cred.json",
                "HMB_STATE_DIR": "/private/state", "SOME_OTHER_HARNESS_TOKEN": "peer-secret",
                "HMB_CLAUDE_FIXTURE_CASE": "ok"}
-        with mock.patch('hey_my_buddy.buddy.harnesses.claude.config.cli_command', return_value=[]):
+        with mock.patch('hey_my_buddy.buddy.harnesses.runtime_selection.launch_for', return_value=([], {})):
             result = native_environment(env)
         self.assertEqual(result["PATH"], "/bin")
         self.assertEqual(result["HOME"], "/users/fixture")

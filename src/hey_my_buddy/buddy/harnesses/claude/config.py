@@ -135,8 +135,8 @@ def execution_args(*, session_id: str, model: str, effort: str, settings_path: s
 
 def native_environment(environment: dict) -> dict:
     """Use the shared service allowlist; Claude reads its own configuration files."""
-    from ..discovery import native_environment as clean
-    result = clean(environment, command=cli_command(environment))
+    from ..runtime_selection import native_environment as clean
+    result = clean(environment, harness="claude")
     if os.environ.get("HMB_DEV_SOURCE") == "1":
         for key in ("HMB_CLAUDE_FIXTURE_CASE", "HMB_CLAUDE_FIXTURE_STATE"):
             if key in environment:

@@ -38,22 +38,34 @@ def selected(harness, environment=None):
     return records.get(harness) if records is not None else None
 
 
-def command_for(harness, environment=None):
+def launch_for(harness, environment=None):
+    """Resolve argv and derive its environment from the same selected entry."""
+    from .discovery import discover, shim_environment, _launch_command
     env = os.environ if environment is None else environment
+    override = env.get(f'HMB_{harness.upper()}_CLI') if os.environ.get('HMB_DEV_SOURCE') == '1' and harness in ('claude', 'codex', 'zcode') else None
+    if override:
+        entry = Path(override).expanduser().absolute()
+        return _launch_command(entry, env), shim_environment(entry)
     record = selected(harness, env)
     if record is None:
-        from .discovery import discover
         record = discover(harness, environment=env)
     if record.get('status') != 'ready' or not record.get('command'):
         raise BoardError('HARNESS_UNAVAILABLE', 'The selected harness is unavailable',
                          harness=harness, reason=record.get('reason'))
-    return list(record['command'])
+    return list(record['command']), shim_environment(record.get('executable'))
+
+
+def command_for(harness, environment=None):
+    return launch_for(harness, environment)[0]
 
 
 def native_environment(environment, *, harness):
     from .discovery import native_environment as clean
     environment = environment_for(environment)
-    return clean(environment, command=command_for(harness, environment))
+    command, overrides = launch_for(harness, environment)
+    result = clean(environment, command=command)
+    result.update(overrides)
+    return result
 
 
 def controller_environment(directory, environment=None, *, read_only=False):

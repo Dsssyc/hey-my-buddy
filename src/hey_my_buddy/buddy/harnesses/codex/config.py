@@ -38,9 +38,8 @@ def cli_command(environment: dict | None = None) -> list[str]:
 
 def native_environment(environment: dict) -> dict:
     """Use the native configuration with the shared service environment allowlist."""
-    from ..discovery import native_environment as clean
-    command = cli_command(environment)
-    result = clean(environment, command=command)
+    from ..runtime_selection import native_environment as clean
+    result = clean(environment, harness="codex")
     if os.environ.get("HMB_DEV_SOURCE") == "1":
         for key in ("HMB_CODEX_FIXTURE_CASE", "HMB_CODEX_FIXTURE_STATE"):
             if key in environment:

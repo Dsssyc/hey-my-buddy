@@ -17,7 +17,7 @@ from buddy.harnesses.dsh.acp.support import FAKE_AGENT
 from fake_executable import make_fake_executable
 from hey_my_buddy.buddy.harnesses import discovery
 from hey_my_buddy.buddy.harnesses.base import ProcessHandle
-from hey_my_buddy.buddy.harnesses.runtime_selection import bound, command_for
+from hey_my_buddy.buddy.harnesses.runtime_selection import bound, command_for, launch_for
 from hey_my_buddy.buddy.harnesses.run_contract import FEEDBACK_CONTINUE
 from hey_my_buddy.buddy.roles.run_observers import FastCorrection
 from hey_my_buddy.buddy.roles.structured_call import structured_prompt
@@ -78,10 +78,30 @@ class HarnessLaunchChainTests(unittest.TestCase):
             original_cwd.rename(case.cwd)
         return case
 
-    def _select(self, harness: str, root: Path, fixture: Path, *, path: bool = False):
+    def _select(self, harness: str, root: Path, fixture: Path, *, path: bool = False, electron: bool = False):
         entry_dir = root / "bin (测试)&^%!"
-        entry = make_fake_executable(entry_dir, harness,
-                                     source=_source_for(fixture, harness, root / "agent.log"))
+        source = _source_for(fixture, harness, root / "agent.log")
+        if electron:
+            source = ("import os, sys\n"
+                      "assert os.environ['ELECTRON_RUN_AS_NODE'] == '1'\n"
+                      "assert sys.argv[1] == '--fixture-internals'\n"
+                      "del sys.argv[1:3]\n" + source)
+        entry = make_fake_executable(entry_dir, harness, source=source)
+        expected = [str(entry)]
+        if electron:
+            if entry.suffix != '.exe':
+                executable = entry.with_suffix('.exe')
+                entry.rename(executable)
+            else:
+                executable = entry
+            archive = entry_dir / 'fixture.asar'
+            archive.write_bytes(b'synthetic archive')
+            target = archive / 'cli.js'
+            expected = [str(executable), '--fixture-internals', str(target)]
+            entry = entry_dir / 'entry.cmd'
+            entry.write_text('set "ELECTRON_RUN_AS_NODE=1"\n'
+                             f'"%~dp0{executable.name}" --fixture-internals "%~dp0fixture.asar\\cli.js" %*\n',
+                             encoding='utf-8')
         environment = {**os.environ, "PATH": str(entry_dir) if path else ""}
         with mock.patch.object(discovery, "_home", return_value=root), \
              mock.patch.object(discovery, "_common_dirs", return_value=[]), \
@@ -90,7 +110,7 @@ class HarnessLaunchChainTests(unittest.TestCase):
             record = discovery.discover(harness, manual_path=None if path else str(entry),
                                         environment=environment)
         self.assertEqual(record["status"], "ready", record)
-        self.assertEqual(record["command"], [str(entry)])
+        self.assertEqual(record["command"], expected)
         self.assertEqual(record["source"], "path" if path else "manual")
         return record
 
@@ -175,12 +195,12 @@ class HarnessLaunchChainTests(unittest.TestCase):
 
     def test_dsh_discovery_selection_and_acp_turn(self):
         case = self._case(dsh_cases.NativeRunCase)
-        record = self._select("dsh", case.base, FAKE_AGENT)
+        record = self._select("dsh", case.base, FAKE_AGENT, electron=True)
         request = case.fast_request("Pick a buddy")
         cwd = Path(request.cwd).with_name("checkout (测试)&^%!")
         Path(request.cwd).rename(cwd)
         request = request.model_copy(update={"cwd": str(cwd)})
-        with bound([record]), mock.patch.object(dsh_cases.native_run, "command_for", command_for):
+        with bound([record]), mock.patch.object(dsh_cases.native_run, "launch_for", launch_for):
             self.assertEqual(command_for("dsh"), record["command"])
             result = dsh_cases.run(request,
                                    observer=FastCorrection(dsh_cases.SCHEMA, "Pick a buddy").observer,
