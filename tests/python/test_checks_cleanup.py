@@ -217,6 +217,85 @@ class PrivateRootTeardownTests(unittest.TestCase):
             thread.join(timeout=5)
             shutil.rmtree(root, ignore_errors=True)
 
+    def test_teardown_waits_out_a_live_process_with_unlinked_lock(self):
+        # A racing cleanup unlinks the lock file while its holder still runs; a clean
+        # teardown may only return after that holder observably exited.
+        root = checks.create_private_root()
+        worker = root / "tmp" / "buddy-test-unlinked" / "workers" / "local"
+        worker.mkdir(parents=True)
+        lock = worker / "supervisor.lock"
+        lock.write_text("")
+        script = (
+            "import fcntl, os, sys, time\n"
+            "worker = sys.argv[1]\n"
+            "fd = os.open(os.path.join(worker, 'supervisor.lock'), os.O_RDWR)\n"
+            "fcntl.flock(fd, fcntl.LOCK_EX)\n"
+            "print('LOCKED', flush=True)\n"
+            "while not os.path.exists(os.path.join(worker, 'stop.request')):\n"
+            "    time.sleep(0.02)\n"
+            "time.sleep(0.4)\n"  # still alive, still holding the unlinked lock, after the stop request
+        )
+        process = subprocess.Popen(
+            [sys.executable, "-c", script, str(worker)],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+        try:
+            self.assertEqual(process.stdout.readline().strip(), "LOCKED")
+            lock.unlink()
+            self.assertFalse(lock.exists())
+            self.assertIsNone(checks.teardown_private_root(root, drain_seconds=20))
+            self.assertFalse(root.exists())
+            process.wait(timeout=10)
+            self.assertEqual(process.returncode, 0, "the live holder must have exited before clean")
+        finally:
+            if process.poll() is None:
+                process.terminate()
+                process.wait(timeout=10)
+            for stream in (process.stdout, process.stderr):
+                if stream is not None:
+                    stream.close()
+            shutil.rmtree(root, ignore_errors=True)
+
+    def test_teardown_reports_a_surviving_process_with_unlinked_lock(self):
+        # No held lock is visible after the unlink, so only live-process observation
+        # separates residue from a clean root; it must fail closed, not report clean.
+        root = checks.create_private_root()
+        worker = root / "tmp" / "buddy-test-stuck" / "workers" / "local"
+        worker.mkdir(parents=True)
+        lock = worker / "supervisor.lock"
+        lock.write_text("")
+        script = (
+            "import fcntl, os, sys, time\n"
+            "fd = os.open(sys.argv[1], os.O_RDWR)\n"
+            "fcntl.flock(fd, fcntl.LOCK_EX)\n"
+            "print('LOCKED', flush=True)\n"
+            "time.sleep(300)\n"
+        )
+        process = subprocess.Popen(
+            [sys.executable, "-c", script, str(lock)],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+        try:
+            self.assertEqual(process.stdout.readline().strip(), "LOCKED")
+            lock.unlink()
+            evidence = checks.teardown_private_root(root, drain_seconds=1.0)
+            self.assertIsNotNone(evidence)
+            self.assertTrue(root.exists())
+            report = json.loads((root / checks.EVIDENCE_FILE_NAME).read_text())
+            self.assertIn(process.pid, [entry["pid"] for entry in report["processes"]])
+            self.assertEqual(report["observation"]["problems"], [])
+        finally:
+            process.terminate()
+            process.wait(timeout=10)
+            for stream in (process.stdout, process.stderr):
+                if stream is not None:
+                    stream.close()
+            shutil.rmtree(root, ignore_errors=True)
+
 
 if __name__ == "__main__":
     unittest.main()
