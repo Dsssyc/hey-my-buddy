@@ -35,7 +35,7 @@ class DistributionTests(unittest.TestCase):
             env = {key: value for key, value in os.environ.items()
                    if not key.startswith("BUDDY_") and key not in {"VIRTUAL_ENV", "UV_PROJECT_ENVIRONMENT"}
                    and (key != "PYTHONPATH" or local_build)}
-            env.update(UV_CACHE_DIR=str(root / "cache"), BUDDY_STATE_DIR=str(root / "state"),
+            env.update(BUDDY_STATE_DIR=str(root / "state"),
                        BUDDY_RUNTIME_ROOT=str(root / "runtime"))
             command = ["uv", "build", "--out-dir", str(root / "dist")]
             if local_build:
