@@ -2,76 +2,158 @@ import i18n from "i18next";
 import { cn } from "cn";
 import { useTranslation } from "react-i18next";
 import { clockTime, durationText, spanOutcome, outcomeLabel, buddyLabel, acceptanceWaitMs } from "../macro-task-display";
-import type { TimelineRow, TimelineSpan } from "../macro-task-types";
+import type { TimelineEvent, TimelineRow, TimelineSpan } from "../macro-task-types";
 import type { FriendlyBuddy } from "../macro-task-display";
 import type { TimelineScale } from "./scale";
 import { parseTimelineInstant as instant } from "./instant";
+import { fitLabel, useTextMeasure } from "./labels";
+import type { Interval, Label } from "./labels";
+
+export function eventName(event: TimelineEvent): string { return i18n.t(`tasks:drawing.events.${event.kind}`); }
+
+export function timelineDuration(ms: number): string {
+  const minutes = Math.round(ms / 60_000);
+  return minutes < 1 ? i18n.t("tasks:drawing.elapsed.less") : minutes < 60 ? i18n.t("tasks:drawing.elapsed.min", { n: minutes }) : minutes % 60 ? i18n.t("tasks:drawing.elapsed.hrMin", { h: Math.floor(minutes / 60), m: minutes % 60 }) : i18n.t("tasks:drawing.elapsed.hr", { h: minutes / 60 });
+}
+
+export function eventReadout(event: TimelineEvent): string {
+  return [eventName(event), clockTime(event.at), event.summary].filter(Boolean).join(" · ");
+}
 
 export function spanReadout(span: TimelineSpan, nowMs: number, buddies?: readonly FriendlyBuddy[] | null, row?: TimelineRow): string {
   const outcome = spanOutcome(span);
   const start = instant(span.startAt);
   const end = instant(span.endAt) ?? (outcome === "running" || outcome === "open" || outcome === "unknown" ? nowMs : null);
-  const head = span.turnIndex !== null ? i18n.t("tasks:turn", { n: span.turnIndex })
-    : span.kind === "host" ? i18n.t(row?.rootLeadRunId ? "console:waitingForLead" : "console:waitingForHost")
-      : i18n.t(`tasks:kind.${span.kind}`);
+  const head = span.kind === "routing" ? i18n.t("tasks:drawing.routingMode", { mode: span.routing?.routingMode ? i18n.t(`taskDetail:routing.mode.${span.routing.routingMode}`) : i18n.t("console:notRecorded") })
+    : span.turnIndex !== null ? i18n.t("tasks:turn", { n: span.turnIndex })
+      : span.kind === "host" ? i18n.t(row?.rootLeadRunId ? "console:waitingForLead" : "console:waitingForHost") : i18n.t(`tasks:kind.${span.kind}`);
+  const reminders = span.reminders;
   return [head, start === null ? null : clockTime(start), end === null ? null : clockTime(end),
-    start !== null && end !== null ? durationText(end - start) : null, buddyLabel(span.buddy, buddies), outcomeLabel(span, outcome)].filter(Boolean).join(" · ");
+    start !== null && end !== null ? durationText(end - start) : null, buddyLabel(span.buddy, buddies), outcome === "unknown" ? i18n.t("tasks:drawing.stopUnconfirmed") : outcomeLabel(span, outcome),
+    span.expectedSeconds === null ? null : i18n.t("tasks:drawing.expected", { duration: durationText(span.expectedSeconds * 1000) }),
+    reminders?.possiblyStuck ? i18n.t("tasks:drawing.silent", { duration: durationText(nowMs - instant(reminders.lastNativeEventAt ?? span.startAt)!) }) : null,
+    ...(span.inquiries ?? []).map(inquiry => i18n.t("tasks:drawing.inquiryReadout", { author: inquiry.author, at: clockTime(inquiry.createdAt), state: i18n.t(`taskDetail:inquiry.${inquiry.state}`) })),
+  ].filter(Boolean).join(" · ");
 }
 
 /** The same scale draws the one axis and all rows; waits cross every break. */
-export function Axis({ scale, ongoing }: { scale: TimelineScale; ongoing: boolean }) {
+export function Axis({ scale, ongoing, nowMs }: { scale: TimelineScale; ongoing: boolean; nowMs: number }) {
   const { t } = useTranslation("tasks");
   const width = scale.widthPx;
+  const nowX = scale.toX(nowMs)!;
+  const now = `${t("now")} ${clockTime(nowMs)}`;
+  const gapLabels = scale.breaks.map(gap => timelineDuration(gap.endMs - gap.startMs));
+  const { measure, ruler } = useTextMeasure([now, ...gapLabels, ...scale.ticks.filter(tick => tick.labeled).map(tick => clockTime(tick.atMs))]);
+  const nowLeft = Math.max(0, Math.min(width - measure(now), nowX - measure(now)));
+  const occupied: Interval[] = scale.breaks.map(gap => ({ left: gap.startX - 4, right: gap.endX + 4 }));
+  if (ongoing) occupied.push({ left: nowLeft - 8, right: nowLeft + measure(now) + 4 });
+  const labels: Label[] = [];
+  for (const tick of scale.ticks.filter(item => item.labeled)) {
+    const text = clockTime(tick.atMs), x = scale.toX(tick.atMs)!;
+    const label = fitLabel([text], { left: 0, right: width }, occupied, measure, x - measure(text) / 2);
+    // A clock stays with its tick, even if no room is left for its text.
+    if (label && Math.abs((label.left + label.right) / 2 - x) <= measure(text) / 2 + 4) { labels.push({ ...label, y: 16, className: "fill-ink3" }); occupied.push(label); }
+  }
   return <svg data-slot="timeline-axis" viewBox={`-8 0 ${width + 16} 36`} width={width + 16} height="36" className="block max-w-none overflow-hidden text-xs" aria-label={t("timeline")}>
-    <line x1={0} x2={width} y1={30} y2={30} className="stroke-line2"/>
-    {scale.breaks.map(gap => <rect key={gap.startMs} x={gap.startX} width={gap.endX - gap.startX} height={36} className="fill-sunk"/>)}
-    {scale.ticks.map(tick => {
-      const x = scale.toX(tick.atMs)!;
-      return <g key={tick.atMs}><line x1={x} x2={x} y1={tick.labeled ? 24 : 27} y2={31} className="stroke-line2"/>
-        {tick.labeled && !(ongoing && x > width - 100) && <text x={x} y={16} textAnchor={x < 30 ? "start" : x > width - 30 ? "end" : "middle"} className="fill-ink3">{clockTime(tick.atMs)}</text>}</g>;
-    })}
-    {ongoing && <text x={width} y={16} textAnchor="end" className="fill-live">{t("now")} {clockTime(scale.toTime(width))}</text>}
+    {ruler}<line x1={0} x2={width} y1={30} y2={30} className="stroke-line2"/>
+    {scale.breaks.map((gap, index) => { const center = (gap.startX + gap.endX) / 2; return <g key={gap.startMs}>
+      <rect x={gap.startX} width={gap.endX - gap.startX} height={36} className="fill-sunk"/>
+      <path data-slot="axis-break-mark" d={`M${center - 7} 34l6-8m0 8l6-8`} className="stroke-line2"/>
+      {measure(gapLabels[index]!) <= gap.endX - gap.startX - 4 && <text data-slot="gap-label" x={center} y={16} textAnchor="middle" className="fill-ink3">{gapLabels[index]}</text>}
+    </g>; })}
+    {scale.ticks.map(tick => <line key={tick.atMs} x1={scale.toX(tick.atMs)!} x2={scale.toX(tick.atMs)!} y1={tick.labeled ? 24 : 27} y2={31} className="stroke-line2"/>)}
+    {labels.map(label => <text data-slot="axis-label" key={label.left} x={label.left} y={label.y} className={label.className}>{label.text}</text>)}
+    {ongoing && measure(now) <= width && <text data-slot="axis-label" x={nowLeft} y={16} className="fill-live">{now}</text>}
   </svg>;
 }
 
-export function Track({ row, spans, scale, nowMs, ongoing, buddies, onOpen, onHover, onFocusSpan, compact, selected }: {
-  row: TimelineRow; spans: TimelineSpan[]; scale: TimelineScale; nowMs: number; ongoing: boolean;
-  buddies?: readonly FriendlyBuddy[] | null; compact: boolean; selected: boolean;
+type PositionedSpan = { span: TimelineSpan; start: number; end: number; execution: boolean; outcome: ReturnType<typeof spanOutcome> };
+const diamond = (x: number, y: number) => `M${x} ${y - 5.5}l5.5 5.5-5.5 5.5-5.5-5.5Z`;
+
+export function Track({ row, spans, events, scale, nowMs, ongoing, buddies, onOpen, onHover, onFocusSpan, onEvent, selected }: {
+  row: TimelineRow; spans: TimelineSpan[]; events: TimelineEvent[]; scale: TimelineScale; nowMs: number; ongoing: boolean;
+  buddies?: readonly FriendlyBuddy[] | null; selected: boolean;
   onOpen: (runId: string, key: string) => void; onHover: (span: TimelineSpan | null) => void; onFocusSpan: (span: TimelineSpan | null) => void;
+  onEvent: (event: TimelineEvent | null) => void;
 }) {
   const { t } = useTranslation("tasks");
-  const height = compact ? 32 : 62;
-  const middle = height / 2;
-  const position = (ms: number | null) => ms === null ? null : scale.toX(ms);
+  const height = 62, middle = 31;
+  const positioned: PositionedSpan[] = [];
+  for (const span of spans) {
+    const outcome = spanOutcome(span), startMs = instant(span.startAt);
+    const endMs = instant(span.endAt) ?? (["running", "open", "unknown"].includes(outcome) ? nowMs : null);
+    if (startMs === null || endMs === null) continue;
+    const start = scale.toX(startMs), end = scale.toX(endMs);
+    if (start === null || end === null || end < start) continue;
+    positioned.push({ span, start, end, outcome, execution: span.kind === "execution" || span.kind === "routing" });
+  }
   const executions = spans.filter(span => span.kind === "execution");
   const latest = executions.reduce<TimelineSpan | null>((last, span) => (instant(span.endAt) ?? -Infinity) > (instant(last?.endAt) ?? -Infinity) ? span : last, null);
   const settledWait = acceptanceWaitMs(row, spans);
   const acceptanceOpen = row.state === "delivered" && executions.length > 0 && executions.every(span => span.endAt !== null && span.shutdownConfirmed === true);
   const waitStart = latest ? instant(latest.endAt) : null;
   const waitEnd = acceptanceOpen ? nowMs : settledWait !== null ? instant(row.acceptedAt ?? row.reviewRejectedAt) : null;
+  const acceptance = waitStart !== null && waitEnd !== null ? { start: scale.toX(waitStart)!, end: scale.toX(waitEnd)!, duration: timelineDuration(waitEnd - waitStart) } : null;
+  const markers = events.filter(event => event.kind !== "dispatch").map(event => ({ event, x: scale.toX(instant(event.at)!)! }));
+  const inquiries = positioned.flatMap(({ span }) => (span.inquiries ?? []).map(inquiry => ({ inquiry, x: scale.toX(instant(inquiry.createdAt)!)! })));
+  const duration = (item: PositionedSpan) => timelineDuration((instant(item.span.endAt) ?? nowMs) - instant(item.span.startAt)!);
+  const waitingKind = (span: TimelineSpan) => span.kind === "queue" ? t("kind.queue") : i18n.t(row.rootLeadRunId ? "console:waitingForLead" : "console:waitingForHost");
+  const fullLabel = (item: PositionedSpan) => item.execution ? item.outcome === "running" ? t("drawing.running", { duration: duration(item) }) : item.outcome === "failed" ? t("drawing.failed", { duration: duration(item) }) : duration(item)!
+    : t(item.span.kind === "queue" ? "drawing.queue" : "drawing.waiting", { kind: waitingKind(item.span), duration: duration(item) });
+  const tails = positioned.filter(item => item.outcome === "running" && item.span.reminders?.possiblyStuck)
+    .map(item => ({ item, x: scale.toX(instant(item.span.reminders!.lastNativeEventAt ?? item.span.startAt)!)!, duration: timelineDuration(nowMs - instant(item.span.reminders!.lastNativeEventAt ?? item.span.startAt)!) }));
+  const expected = positioned.filter(item => item.outcome === "running" && item.span.expectedSeconds !== null)
+    .map(item => ({ item, at: instant(item.span.startAt)! + item.span.expectedSeconds! * 1000 }))
+    .filter(entry => entry.at <= (scale.toTime(scale.widthPx) ?? nowMs))
+    .map(entry => ({ ...entry, x: scale.toX(entry.at)!, text: t("drawing.expected", { duration: timelineDuration(entry.item.span.expectedSeconds! * 1000) }) }));
+  const acceptanceLabel = acceptance ? t("drawing.waiting", { kind: t("review"), duration: acceptance.duration }) : "";
+  const candidates = [t("drawing.inquiry"), t("review"), ...positioned.flatMap(item => [fullLabel(item), duration(item)!, waitingKind(item.span)]),
+    ...tails.flatMap(tail => [t("drawing.silent", { duration: tail.duration }), t("drawing.silence", { duration: tail.duration })]),
+    ...expected.map(entry => entry.text), ...markers.map(marker => eventName(marker.event)), acceptanceLabel, acceptance?.duration ?? ""];
+  const { measure, ruler } = useTextMeasure(candidates);
+  const labels: Label[] = [];
+  const occupied: Record<number, Interval[]> = { 12: [], 35: [...markers, ...inquiries, ...expected].map(mark => ({ left: mark.x - 8, right: mark.x + 8 })), 58: [] };
+  const add = (texts: string[], left: number, right: number, y: number, className: string, preferred = left, blocks: Interval[] = []) => {
+    const label = fitLabel(texts, { left: Math.max(0, left), right: Math.min(scale.widthPx, right) }, [...occupied[y]!, ...blocks], measure, preferred);
+    if (label) { labels.push({ ...label, y, className }); occupied[y]!.push(label); }
+  };
+  for (const { x } of inquiries) {
+    const labelWidth = measure(t("drawing.inquiry"));
+    add([t("drawing.inquiry")], x - labelWidth / 2, x + labelWidth / 2, 12, "fill-ink2");
+  }
+  for (const entry of expected) add([entry.text], entry.item.start, Math.max(entry.item.end, entry.x), 58, entry.at < nowMs ? "fill-hand" : "fill-ink3", entry.x - measure(entry.text) - 4);
+  for (const marker of markers) add([eventName(marker.event)], marker.x + 10, scale.widthPx, 35, "fill-ink2", marker.x + 10, positioned.filter(item => item.execution).map(item => ({ left: item.start - 4, right: item.end + 4 })));
+  if (acceptance && acceptanceOpen) add([acceptanceLabel, t("review"), acceptance.duration!], acceptance.start + 10, acceptance.end, 12, "fill-hand");
+  for (const item of positioned) {
+    if (item.execution) {
+      const tail = tails.find(entry => entry.item === item);
+      add([fullLabel(item), duration(item)!], item.start + 6, (tail?.x ?? item.end) - 6, 35, item.span.kind === "execution" && ["running", "failed"].includes(item.outcome) ? "fill-card" : "fill-ink");
+      if (tail) add([t("drawing.silent", { duration: tail.duration }), t("drawing.silence", { duration: tail.duration })], tail.x + 6, item.end - 6, 35, "fill-hand");
+    } else add([fullLabel(item), duration(item)!], item.start + (item.outcome === "open" && item.span.kind === "host" ? 10 : 0), item.end, 12, item.outcome === "open" && item.span.kind === "host" ? "fill-hand" : "fill-ink3");
+  }
   return <svg data-slot="timeline-track" viewBox={`-8 0 ${scale.widthPx + 16} ${height}`} width={scale.widthPx + 16} height={height} preserveAspectRatio="none" className="block max-w-none overflow-hidden border-t text-xs" aria-label={t("track", { title: row.title })}>
-    {scale.breaks.map(gap => <rect data-slot="timeline-break" key={gap.startMs} x={gap.startX} width={gap.endX - gap.startX} height={height} className="fill-sunk"/>)}
-    {ongoing && <line data-slot="timeline-now" x1={scale.widthPx} x2={scale.widthPx} y2={height} className="stroke-live opacity-60"/>}
-    {waitStart !== null && waitEnd !== null && position(waitStart) !== null && position(waitEnd) !== null && <line data-slot="acceptance-wait" x1={position(waitStart)!} x2={position(waitEnd)!} y1={middle} y2={middle} strokeWidth={acceptanceOpen ? 2 : 1.5} strokeDasharray={acceptanceOpen ? "5 4" : undefined} className={acceptanceOpen ? "stroke-hand-mark" : "stroke-ink3"}/>}
-    {spans.map(span => {
-      const outcome = spanOutcome(span);
-      const start = position(instant(span.startAt));
-      const end = position(instant(span.endAt) ?? (["running", "open", "unknown"].includes(outcome) ? nowMs : null));
-      if (start === null || end === null || end < start) return null;
-      const execution = span.kind === "execution" || span.kind === "routing";
-      const label = spanReadout(span, nowMs, buddies, row);
-      return <g key={span.spanId} role="button" tabIndex={-1} data-key={`span:${span.spanId}`} aria-label={t("segment", { label })}
-        onKeyDown={event => { if (event.key === "Enter") { event.preventDefault(); onOpen(row.runId, `span:${span.spanId}`); } }}
-        onFocus={() => onFocusSpan(span)} onBlur={() => onFocusSpan(null)} onClick={() => onOpen(row.runId, `span:${span.spanId}`)} onPointerEnter={() => onHover(span)} onPointerLeave={() => onHover(null)}
-        className="cursor-pointer outline-none">
-        {selected && <rect data-slot="selected-span" x={Math.max(-6, start - 2)} y={execution ? middle - 9 : middle - 3} width={Math.max(5, end - start + 4)} height={execution ? 18 : 6} fill="none" className="stroke-live" strokeWidth={1}/>}
-        <rect x={start - 3} y={middle - 16} width={Math.max(6, end - start + 6)} height={32} fill="transparent"/>
-        {execution ? <rect x={start} y={middle - 7} width={Math.max(1, end - start)} height={14} rx={1}
-          strokeWidth={1} strokeDasharray={outcome === "unknown" ? "3 2" : undefined}
-          className={cn(outcome === "running" ? "fill-live stroke-live" : outcome === "failed" ? "fill-fail stroke-fail" : outcome === "unknown" ? "fill-hand-wash stroke-hand-mark" : "fill-past-wash stroke-line2", span.kind === "routing" && "fill-card")}/>
-          : <line x1={start} x2={end} y1={middle} y2={middle} strokeWidth={outcome === "open" ? 2 : 1.5} strokeDasharray={outcome === "open" ? "5 4" : undefined}
-            className={outcome === "open" ? "stroke-hand-mark" : "stroke-ink3"}/>}
-      </g>;
-    })}
+    {ruler}{scale.breaks.map(gap => <rect data-slot="timeline-break" key={gap.startMs} x={gap.startX} width={gap.endX - gap.startX} height={height} className="fill-sunk"/>)}
+    {ongoing && <line data-slot="timeline-now" x1={scale.toX(nowMs)!} x2={scale.toX(nowMs)!} y2={height} className="stroke-live opacity-60"/>}
+    {acceptance && <g><line data-slot="acceptance-wait" x1={acceptance.start} x2={acceptance.end} y1={middle} y2={middle} strokeWidth={acceptanceOpen ? 2 : 1.5} strokeDasharray={acceptanceOpen ? "5 4" : undefined} className={acceptanceOpen ? "stroke-hand-mark" : "stroke-ink3"}/>{acceptanceOpen && <path data-slot="waiting-diamond" d={diamond(acceptance.start, middle)} className="fill-hand-mark"/>}</g>}
+    {positioned.map(({ span, start, end, execution, outcome }) => <g key={span.spanId} role="button" tabIndex={-1} data-key={`span:${span.spanId}`} aria-label={t("segment", { label: spanReadout(span, nowMs, buddies, row) })}
+      onKeyDown={event => { if (event.key === "Enter") { event.preventDefault(); onOpen(row.runId, `span:${span.spanId}`); } }}
+      onFocus={() => onFocusSpan(span)} onBlur={() => onFocusSpan(null)} onClick={() => onOpen(row.runId, `span:${span.spanId}`)} onPointerEnter={() => onHover(span)} onPointerLeave={() => onHover(null)} className="cursor-pointer outline-none">
+      {selected && <rect data-slot="selected-span" x={Math.max(-6, start - 2)} y={execution ? middle - 13 : middle - 3} width={Math.max(5, end - start + 4)} height={execution ? 26 : 6} fill="none" className="stroke-live"/>}
+      <rect x={start - 3} y={middle - 14} width={Math.max(6, end - start + 6)} height={28} fill="transparent"/>
+      {execution ? <rect data-slot={span.kind === "routing" ? "routing-bar" : "execution-bar"} data-outcome={outcome} x={start} y={middle - 11} width={Math.max(1, end - start)} height={22}
+        strokeDasharray={["unknown", "cancelled", "abstention"].includes(outcome) ? "3 2" : undefined}
+        className={span.kind === "routing" ? cn("fill-card", outcome === "failed" ? "stroke-fail" : outcome === "running" ? "stroke-live" : "stroke-ink3") : cn(outcome === "running" ? "fill-live stroke-live" : outcome === "failed" ? "fill-fail stroke-fail" : outcome === "unknown" ? "fill-hand-wash stroke-hand-mark" : "fill-past-wash stroke-line2")}/>
+        : <line data-slot={`${span.kind}-wait`} x1={start} x2={end} y1={middle} y2={middle} strokeWidth={outcome === "open" && span.kind === "host" ? 2 : 1.5} strokeDasharray={outcome === "open" && span.kind === "host" ? "5 4" : undefined} className={outcome === "open" && span.kind === "host" ? "stroke-hand-mark" : "stroke-ink3"}/>}
+      {span.kind === "host" && outcome === "open" && <path data-slot="waiting-diamond" d={diamond(start, middle)} className="fill-hand-mark"/>}
+      {outcome === "unknown" && <path data-slot="unconfirmed-end" d={`M${end - 4} ${middle - 11}l4 6-4 5 4 5-4 6`} className="fill-none stroke-hand-mark" strokeWidth={2}/>}
+    </g>)}
+    {tails.map(tail => <rect pointerEvents="none" data-slot="silent-tail" key={tail.item.span.spanId} x={tail.x} y={middle - 10.25} width={Math.max(0, tail.item.end - tail.x)} height={20.5} strokeWidth={1.5} className="fill-hand-wash stroke-hand-mark"/>)}
+    {expected.map(entry => <line pointerEvents="none" data-slot="expected-mark" key={entry.item.span.spanId} x1={entry.x} x2={entry.x} y1={middle - 16} y2={middle + 16} strokeWidth={2} className={entry.at < nowMs ? "stroke-hand-mark" : "stroke-ink3"}/>)}
+    {inquiries.map(({ inquiry, x }) => <path pointerEvents="none" data-slot="inquiry-mark" key={inquiry.inquiryId} d={diamond(x, middle)} className="fill-card stroke-ink2" strokeWidth={1.3}/>)}
+    {markers.map(({ event, x }) => <g key={event.seq} role="button" tabIndex={-1} data-key={`event:${event.seq}`} aria-label={eventReadout(event)} onPointerEnter={() => onEvent(event)} onPointerLeave={() => onEvent(null)} onFocus={() => onEvent(event)} onBlur={() => onEvent(null)}
+      onClick={() => onOpen(row.runId, `event:${event.seq}`)} onKeyDown={key => { if (key.key === "Enter") onOpen(row.runId, `event:${event.seq}`); }} className="cursor-pointer outline-none">
+      {event.kind === "accept" ? <path data-slot="accept-mark" d={`M${x - 5} ${middle}l3 3 7-8`} fill="none" className="stroke-past" strokeWidth={1.8}/> : <circle data-slot="event-mark" cx={x} cy={middle} r={2.5} className="fill-past"/>}
+    </g>)}
+    {labels.map((label, index) => <text pointerEvents="none" data-slot="track-label" key={index} x={label.left} y={label.y} className={label.className}>{label.text}</text>)}
   </svg>;
 }

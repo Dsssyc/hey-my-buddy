@@ -237,3 +237,24 @@ export function createTimelineScale(input: ScaleInput, viewportWidth: number, pi
   }
   return { widthPx, pixelsPerMinute: ppm, breaks, ticks: ticksFor(domain, breaks, ppm, toX, input.nowAtEnd), toX, toTime };
 }
+
+/** Future expected marks share the real scale; future time is never folded. */
+export function scaleWithExpectedTimes(input: ScaleInput, viewportWidth: number, spans: readonly TimelineSpan[]): TimelineScale {
+  const base = createTimelineScale(input, viewportWidth);
+  const end = input.domain?.endMs;
+  if (end === undefined) return base;
+  const expected = spans.filter(span => span.kind === "execution" && span.endAt === null
+    && span.shutdownConfirmed !== true && !span.uncertain && ACTIVE_EXECUTION_STATES.has(span.state)
+    && span.expectedSeconds !== null && span.startAt !== null)
+    .flatMap(span => { const start = instant(span.startAt); return start === null ? [] : [start + span.expectedSeconds! * 1000]; });
+  const until = Math.max(end, ...expected);
+  if (until === end) return base;
+  const tail = createTimelineScale({ domain: { startMs: end, endMs: until }, instants: [end, until], busy: [], canFold: false, nowAtEnd: false },
+    viewportWidth, base.pixelsPerMinute || undefined);
+  return {
+    ...base, widthPx: base.widthPx + tail.widthPx, pixelsPerMinute: tail.pixelsPerMinute,
+    ticks: [...base.ticks, ...tail.ticks.filter(tick => tick.atMs > end)],
+    toX: at => at > end ? base.widthPx + tail.toX(at)! : base.toX(at),
+    toTime: x => x > base.widthPx ? tail.toTime(x - base.widthPx) : base.toTime(x),
+  };
+}

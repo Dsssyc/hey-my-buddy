@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { MacroTaskTimeline, TimelineEvent, TimelineSpan } from "../macro-task-types";
 import { macroTaskTimelineFixture } from "../macro-task-fixtures";
 import type { ScaleInput } from "./scale";
-import { createTimelineScale, timelineScaleInput } from "./scale";
+import { createTimelineScale, scaleWithExpectedTimes, timelineScaleInput } from "./scale";
 
 const MINUTE = 60_000;
 const BASE = Date.parse("2026-10-17T00:00:00Z");
@@ -11,7 +11,8 @@ const at = (minutes: number) => new Date(ms(minutes)).toISOString();
 const span = (overrides: Partial<TimelineSpan> = {}): TimelineSpan => ({
   spanId: "span", runId: "run", kind: "execution", startAt: at(0), endAt: at(10),
   state: "finished", attemptId: null, turnId: null, turnIndex: null, requestId: null,
-  buddy: null, shutdownConfirmed: true, uncertain: false, clockSkew: false, ...overrides,
+  buddy: null, expectedSeconds: 1800, reminders: null, inquiries: [],
+  shutdownConfirmed: true, uncertain: false, clockSkew: false, ...overrides,
 });
 const event = (minutes: number): TimelineEvent => ({
   seq: 1, runId: "run", kind: "accept", at: at(minutes), label: "", summary: "",
@@ -359,5 +360,20 @@ describe("timelineScaleInput", () => {
 
   it("has no domain without available instants", () => {
     expect(timelineScaleInput(timeline({ spans: [] })).domain).toBeNull();
+  });
+});
+
+
+describe("future expected time", () => {
+  it("keeps observed time and real breaks intact while placing a future expected mark on the same ratio", () => {
+    const live = span({ startAt: at(100), endAt: null, state: "executing", shutdownConfirmed: false, expectedSeconds: 2400 });
+    const facts = timelineScaleInput(timeline({ spans: [span(), live] }));
+    const base = createTimelineScale(facts, 600);
+    const extended = scaleWithExpectedTimes(facts, 600, [live]);
+    expect(extended.breaks).toEqual(base.breaks);
+    expect(extended.toX(ms(120))).toBe(base.widthPx);
+    expect(extended.widthPx - base.widthPx).toBeCloseTo(base.pixelsPerMinute * 20);
+    expect(extended.toTime(extended.widthPx)).toBe(ms(140));
+    expect(extended.toX(ms(130))! - extended.toX(ms(120))!).toBeCloseTo(base.pixelsPerMinute * 10);
   });
 });

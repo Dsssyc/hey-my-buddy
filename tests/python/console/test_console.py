@@ -926,6 +926,7 @@ class ConsoleDecisionBrowseTests(ConsoleTestCase):
         self.assertTrue(set(preview.ALLOWED_OPERATIONS) <= set(CONSOLE_OPERATIONS))
         self.assertEqual(set(preview.READ_OPERATIONS), set(READ_OPERATIONS) & set(preview.ALLOWED_OPERATIONS))
         self.assertIn("message_list", preview.ALLOWED_OPERATIONS)
+        self.assertEqual(preview.validate_fixtures(), [])
 
 
 if __name__ == "__main__":

@@ -1,5 +1,15 @@
 import type { tasks as zh } from "../zh/tasks";
 export const tasks = {
+  drawing: {
+    stopUnconfirmed: "Stop unconfirmed",
+    elapsed: { less: "<1m", min: "{{n}}m", hr: "{{h}}h", hrMin: "{{h}}h{{m}}m" },
+    running: "Running {{duration}}", failed: "{{duration}} failed", queue: "Queued {{duration}}",
+    expected: "Expected {{duration}}", silent: "Possibly stuck · silent {{duration}}", silence: "Silent {{duration}}", silentLegend: "Silent tail",
+    waiting: "{{kind}} {{duration}}", inquiry: "Inquiry", inquiryReadout: "Inquiry · {{author}} · {{at}} · {{state}}",
+    pointer: "{{at}}", gap: "Break {{start}}–{{end}} · compressed {{duration}}", routingMode: "Routing · {{mode}}",
+    events: { decide: "Decision", continue: "Continuation", integrate: "Integration", accept: "Accepted", reject: "Rejected", conclude: "Conclusion", cancel: "Cancelled", takeover: "Takeover" },
+  },
+
   waiting: "Waiting for a hand", failed: "Failed",
   unknownProject: "Unrecorded project", macro: "Macro tasks", list: "Macro task list", entries: "Macro task entries", collapse: "Collapse macro task list", expand: "Expand macro task list",
   search: "Search title, project, Host or ID", all: "All", active: "Running", host: "Waiting for Host", review: "Awaiting acceptance", accepted: "Accepted", ended: "Ended",
