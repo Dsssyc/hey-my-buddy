@@ -144,7 +144,7 @@ class DshUsageContractTests(DshRoleCase):
                 "original = fake_agent.FakeAgent.write_session_record\n"
                 "def record(self, session_id, prompt):\n"
                 "    original(self, session_id, prompt)\n"
-                "    path = self.sessions_dir() / (session_id + '.v3.jsonl.zstd')\n"
+                "    path = self.record_directory(session_id) / 'session.v4.jsonl.zstd'\n"
                 "    raw = zstandard.ZstdDecompressor().decompress(path.read_bytes()).decode()\n"
                 "    events = [json.loads(line) for line in raw.splitlines()]\n"
                 "    for event in events:\n"
@@ -181,7 +181,7 @@ class DshUsageContractTests(DshRoleCase):
         self.assertTrue(record.is_relative_to(native_root(
             Path(context.environment["HMB_STATE_DIR"]), "dsh", context.task_id)))
         self.assertTrue(record.is_relative_to(Path(handle.role_run_control["nativeRoot"])))
-        self.assertTrue(record.name.endswith(".v3.jsonl.zstd"))
+        self.assertTrue(record.name.endswith("session.v4.jsonl.zstd"))
 
     def test_a_bound_record_becomes_the_canonical_attempt_projection(self):
         _context, _handle, outcome = self.execute_record()

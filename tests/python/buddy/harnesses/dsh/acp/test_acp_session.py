@@ -18,6 +18,7 @@ from hey_my_buddy.buddy.harnesses.dsh.acp.connection import AcpConnectionClosed,
 from hey_my_buddy.paths import native_path
 from hey_my_buddy.private_dirs import remove_tree
 
+from .fake_agent import RECORD_WORK_DIR
 from .support import AcpTestCase, MCP_STUB
 
 
@@ -64,7 +65,8 @@ class NewSessionTest(AcpTestCase):
         self.assertEqual("end_turn", client.prompt(session_id, "private fixture", timeout=30.0)["stopReason"])
         marker = sessions / f"{session_id}.fake-session.json"
         self.assertEqual("low", json.loads(native_path(marker).read_text(encoding="utf-8"))["effort"])
-        self.assertTrue(native_path(sessions / f"{session_id}.v3.jsonl").is_file())
+        self.assertTrue(native_path(sessions / RECORD_WORK_DIR / session_id
+                                    / "session.v4.jsonl").is_file())
         index = storage / "session_projcache" / "sessions" / f"{session_id}.json"
         self.assertEqual(str(self.root), json.loads(native_path(index).read_text(encoding="utf-8"))["cwd"])
         client.close_session(session_id, timeout=15.0)

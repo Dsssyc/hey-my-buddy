@@ -273,7 +273,7 @@ class FastSeamTests(NativeRunCase):
 
     def test_usage_comes_from_the_private_session_record(self):
         # The optional record source: the fake agent writes one synthetic
-        # session.v3 rollout (a fixture, not a native record) and the driver's
+        # session.v4 rollout (a fixture, not a native record) and the driver's
         # bounded reader turns it into the shared usage facts — the old Node
         # usage expectations (per-field sums, cache derived once, complete only
         # with a seen completed turn end) on the record path.

@@ -36,6 +36,39 @@ def write_json(path: Path, value: object) -> None:
     path.write_text(json.dumps(value, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 
 
+def record_generation(name: str) -> int | None:
+    """The generation a record file's name carries, or None for any other name.
+
+    Generation 0 is ``session``, later ones ``session.vN`` without leading
+    zeros, each optionally zstandard-compressed; a migration's temporary file
+    carries no generation.
+    """
+    for suffix in (".jsonl.zstd", ".jsonl"):
+        if not name.endswith(suffix):
+            continue
+        stem = name[: -len(suffix)]
+        if stem == "session":
+            return 0
+        digits = stem[len("session.v"):] if stem.startswith("session.v") else None
+        if digits and digits.isascii() and digits.isdigit() and not digits.startswith("0"):
+            return int(digits)
+        return None
+    return None
+
+
+def latest_session_record(sessions: Path) -> Path | None:
+    """The current-generation record under the sessions root: the largest
+    generation DSH left on disk, mirroring what the native process itself uses."""
+    best: tuple[int, Path] | None = None
+    for path in sessions.rglob("session*"):
+        if not path.is_file():
+            continue
+        generation = record_generation(path.name)
+        if generation is not None and (best is None or generation > best[0]):
+            best = (generation, path)
+    return best[1] if best is not None else None
+
+
 def main() -> int:
     if not DSH.is_file() or not NODE.is_file() or not SANDBOX.is_file():
         raise RuntimeError("installed DSH CLI, Node and macOS sandbox-exec are required")
@@ -175,7 +208,8 @@ def main() -> int:
     calls = [item for item in updates if item["sessionUpdate"] == "tool_call"]
     completed = [item for item in updates if item["sessionUpdate"] == "tool_call_update"
                  and item.get("status") == "completed" and item.get("content")]
-    native_paths = list((run / "sessions").rglob("session.v3.jsonl.zstd"))
+    latest = latest_session_record(run / "sessions")
+    native_paths = [latest] if latest is not None else []
     native_events = []
     native_messages = []
     if len(native_paths) == 1:
