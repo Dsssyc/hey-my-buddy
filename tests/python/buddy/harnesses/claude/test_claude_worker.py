@@ -100,4 +100,6 @@ class ClaudeCatalogRuleTests(unittest.TestCase):
                        {"value": "haiku", "resolvedModel": "haiku"}]}, "fixture")
         self.assertEqual([m["id"] for m in catalog["providers"][0]["models"]], ["haiku"])
         self.assertEqual(catalog["providers"][0]["models"][0]["efforts"], ["default"])
+        self.assertNotIn("providerVersion", catalog)
+        self.assertFalse({"packageName", "packageVersion"} & catalog["providers"][0].keys())
         self.assertTrue(catalog["warnings"])

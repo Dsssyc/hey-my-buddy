@@ -483,6 +483,8 @@ class ZcodeAdapterTests(ZcodeFixtureCase):
         self.assertEqual(result["providers"][0]["models"][0]["efforts"], ["low", "high"])
         self.assertEqual(result["providers"][0]["harness"], "zcode")
         self.assertEqual(result["harnessVersion"], "fixture-0.16.9")
+        self.assertNotIn("providerVersion", result)
+        self.assertFalse({"packageName", "packageVersion"} & result["providers"][0].keys())
         self.assertEqual(result["providers"][0]["models"][0]["contextWindow"], 200000)
         self.assertEqual(result["providers"][0]["models"][0]["inputModalities"], ["text"])
         self.assertTrue(result["providers"][0]["models"][0]["available"])

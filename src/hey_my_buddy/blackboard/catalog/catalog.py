@@ -187,8 +187,8 @@ def identities_from_payload(payload_json: Any, harness: str) -> set[tuple[str, s
     identities: set[tuple[str, str, str]] = set()
     if payload_json is None:
         return identities
-    view = CatalogView(json.loads(payload_json))
-    for entry in view.payload["providers"]:
+    payload = canonical_payload(json.loads(payload_json))
+    for entry in payload["providers"]:
         if entry["harness"] != harness:
             continue
         for model in entry["models"]:
