@@ -1685,7 +1685,7 @@ class CompactReadBoundTests(WorkflowTestCase):
     def test_large_task_and_result_keep_normal_reads_bounded_and_audit_full(self):
         board = self.board()
         self.register(board)
-        big_task = "deliver the specification " * 4000  # ~100 KB objective
+        big_task = "deliver the specification " * 4000  # ~100 KB task
         submitted = self.submit(board, task=big_task)
         self.finish_turn(board, self.claim(board))
         view = board.call("workflow_get", {"runId": submitted["runId"]})
@@ -1697,8 +1697,8 @@ class CompactReadBoundTests(WorkflowTestCase):
         audit = board.call("workflow_get", {"runId": submitted["runId"], "includeAudit": True})
         self.assertEqual(audit["audit"]["spec"]["task"], big_task)
         self.assertEqual(audit["audit"]["goal"]["task"], big_task)
-        self.assertIn(big_task[:8000], audit["audit"]["turns"][0]["input"]["context"]["objective"])
-        self.assertTrue(audit["audit"]["turns"][0]["input"]["context"]["objectiveTruncated"])
+        self.assertIn(big_task[:8000], audit["audit"]["turns"][0]["input"]["context"]["task"])
+        self.assertTrue(audit["audit"]["turns"][0]["input"]["context"]["taskTruncated"])
         self.assertGreater(len(json.dumps(audit["audit"])), len(serialized))
 
 

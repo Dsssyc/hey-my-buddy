@@ -211,7 +211,7 @@ def governed_brief(view: dict, *, turn_summary: bool = True) -> dict:
                 "hostConclusion",
                 "quotaWarnings",
                 "quotaFailure",
-                "objectiveId",
+                "macroTaskId",
                 "title",
             ),
         )
@@ -366,7 +366,7 @@ _KNOWN_GOVERNED_FIELDS = frozenset(
         "targetRevision",
         "integration",
         "plan",
-        "objectiveId",
+        "macroTaskId",
         "title",
     }
 )
@@ -428,7 +428,7 @@ def task_brief(view: dict) -> dict:
         brief["workflow"] = _pick(
             workflow,
             ("state", "awaitingHost", "ownerGeneration", "revision", "continuationCount", "activeRequestId",
-             "resultSummary", "objectiveId", "title"),
+             "resultSummary", "macroTaskId", "title"),
         )
     if "workflowShutdown" in view:
         brief["workflowShutdown"] = _shutdown(view["workflowShutdown"])
@@ -468,8 +468,8 @@ def list_brief(response: dict) -> dict:
             title = explicit.strip()[:_TITLE_LIMIT]
         if title:
             entry["title"] = title
-        if workflow.get("objectiveId"):
-            entry["objectiveId"] = workflow["objectiveId"]
+        if workflow.get("macroTaskId"):
+            entry["macroTaskId"] = workflow["macroTaskId"]
         brief_rows.append(entry)
     brief = {"view": OUTPUT_BRIEF, "runs": brief_rows}
     brief.update(_pick(response, ("total", "cursor", "nextCursor")))

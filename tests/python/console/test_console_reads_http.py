@@ -374,14 +374,14 @@ class ConsoleReadCacheTests(ConsoleTestCase, WorkflowTestCase):
         )
         self.assertIn(status, (200, 304))
 
-    def test_task_objective_and_timeline_reads_are_conditional(self):
+    def test_task_macro_task_and_timeline_reads_are_conditional(self):
         board = self.board()
         submitted = self.submit(
-            board, request_id="cond-1", cwd=str(self.workdir("cond-1")), objective={"title": "Conditional"}
+            board, request_id="cond-1", cwd=str(self.workdir("cond-1")), macroTask={"title": "Conditional"}
         )
         browser = self.open(board)
-        for path in ("/api/tasks?limit=5", "/api/objectives?limit=5",
-                     f"/api/objectives/{submitted['objectiveId']}/timeline"):
+        for path in ("/api/tasks?limit=5", "/api/macro-tasks?limit=5",
+                     f"/api/macro-tasks/{submitted['macroTaskId']}/timeline"):
             with self.subTest(path=path):
                 status, headers, body = browser.get(path)
                 self.assertEqual(status, 200, body[:300])
@@ -391,15 +391,15 @@ class ConsoleReadCacheTests(ConsoleTestCase, WorkflowTestCase):
                 self.assertEqual(replay_headers["etag"], headers["etag"])
         # A new run changes the board: the conditional reads answer with content.
         self.submit(board, request_id="cond-2", cwd=str(self.workdir("cond-2")))
-        for path in ("/api/tasks?limit=5", "/api/objectives?limit=5"):
+        for path in ("/api/tasks?limit=5", "/api/macro-tasks?limit=5"):
             with self.subTest(path=path):
                 status, _headers, _body = browser.get(path, headers={"If-None-Match": "nope"})
                 self.assertEqual(status, 200)
         counts = board.console.read_cache.calls
         self.assertEqual(counts["tasks"]["projections"], 2)
-        # One kind covers the objective routes: two list generations plus the
+        # One kind covers the macro task routes: two list generations plus the
         # timeline's single generation.
-        self.assertEqual(counts["objectives"]["projections"], 3)
+        self.assertEqual(counts["macroTasks"]["projections"], 3)
 
 
 class ConsoleReadSessionIsolationTests(ConsoleTestCase, WorkflowTestCase):

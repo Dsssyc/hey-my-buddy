@@ -77,7 +77,7 @@ class RouterContractTests(unittest.TestCase):
     def test_prompt_prefix_stays_stable_and_excludes_display_metadata(self):
         doc = {"profiles": [{"profileId": "legal"}], "task": "first", "title": "display-only"}
         first = router.render_prompt(doc)
-        second = router.render_prompt({**doc, "task": "second", "objective": "private display label"})
+        second = router.render_prompt({**doc, "task": "second", "macroTask": "private display label"})
         self.assertEqual(first.split('\n\n')[:2], second.split('\n\n')[:2])
         self.assertNotIn("display-only", first)
         self.assertNotIn("private display label", second)

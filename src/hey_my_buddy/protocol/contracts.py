@@ -206,14 +206,14 @@ class BuddyControl:
     def workflow_suggest(self, request_json: str) -> str:
         ...
 
-    # -- work objectives (reads and console-only cancellation) --------------
-    def objective_list(self, request_json: str) -> str:
+    # -- work macro tasks (reads and console-only cancellation) --------------
+    def macro_task_list(self, request_json: str) -> str:
         ...
 
-    def objective_timeline(self, request_json: str) -> str:
+    def macro_task_timeline(self, request_json: str) -> str:
         ...
 
-    def objective_stop(self, request_json: str) -> str:
+    def macro_task_stop(self, request_json: str) -> str:
         ...
 
 

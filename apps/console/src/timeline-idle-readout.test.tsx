@@ -2,17 +2,17 @@ import { Profiler } from "react";
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { readFileSync } from "node:fs";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { ObjectiveTimeline, type ObjectiveTimelineProps } from "./ObjectiveTimeline";
+import { MacroTaskTimeline, type MacroTaskTimelineProps } from "./MacroTaskTimeline";
 import { idleReadout } from "./TimelineReadout";
-import { createTimelineLayout } from "./objective-timeline-layout";
-import { scaleTimeline } from "./objective-timeline-scale";
-import { objectiveTimelineFixture } from "./objective-fixtures";
-import { clockTime } from "./objective-display";
+import { createTimelineLayout } from "./macro-task-timeline-layout";
+import { scaleTimeline } from "./macro-task-timeline-scale";
+import { macroTaskTimelineFixture } from "./macro-task-fixtures";
+import { clockTime } from "./macro-task-display";
 
 const base = Date.parse("2026-09-26T00:00:00Z");
 const at = (minute: number) => new Date(base + minute * 60_000).toISOString();
 function data() {
-  const timeline = objectiveTimelineFixture();
+  const timeline = macroTaskTimelineFixture();
   timeline.rows = timeline.rows.filter(row => row.parentRunId === null).slice(0, 2);
   const template = timeline.spans.find(span => span.kind === "execution")!;
   timeline.spans = timeline.rows.map((row, index) => ({ ...template, spanId: `readout-${index}`, runId: row.runId,
@@ -25,8 +25,8 @@ function data() {
   timeline.truncated = { rows: false, spans: false, events: false };
   return timeline;
 }
-function props(timeline = data()): ObjectiveTimelineProps {
-  return { summary: timeline.objective, timeline, loading: false, error: "", stale: false,
+function props(timeline = data()): MacroTaskTimelineProps {
+  return { summary: timeline.macroTask, timeline, loading: false, error: "", stale: false,
     newRunIds: new Set(), hidden: false, selection: null, openedKey: null, openedRunId: null,
     onSelectItem: vi.fn(), onOpenItem: vi.fn(), onSelectRun: vi.fn(), onOpenRun: vi.fn(),
     onClearSelection: vi.fn(), onRetry: vi.fn(), onBackToList: vi.fn() };
@@ -63,8 +63,8 @@ describe("U10 idle evidence and U11 native readout", () => {
     geometry();
     const timeline = data();
     timeline.rows = timeline.rows.map(row => ({ ...row, acceptedAt: null }));
-    timeline.events = [{ ...objectiveTimelineFixture().events[0]!, seq: 1, at: at(0) }];
-    render(<ObjectiveTimeline {...props(timeline)} />);
+    timeline.events = [{ ...macroTaskTimelineFixture().events[0]!, seq: 1, at: at(0) }];
+    render(<MacroTaskTimeline {...props(timeline)} />);
     fireEvent.click(document.querySelector<HTMLButtonElement>(".markers-toggle")!);
     const zoomIn = screen.getByRole("button", { name: "放大" }) as HTMLButtonElement;
     const levels = ["fit", "+2", "max"];
@@ -92,7 +92,7 @@ describe("U10 idle evidence and U11 native readout", () => {
   it("reads real time from the existing map, reads complete idle ranges, then disappears", () => {
     geometry();
     const timeline = data();
-    render(<ObjectiveTimeline {...props(timeline)} />);
+    render(<MacroTaskTimeline {...props(timeline)} />);
     const scale = scaleTimeline(createTimelineLayout(timeline), 748, undefined, 16);
     expect(line().hidden).toBe(true);
     move(240 + scale.position(at(5))! / 100 * 748);
@@ -112,7 +112,7 @@ describe("U10 idle evidence and U11 native readout", () => {
   it("uses the updated scale after zoom and reads the scrolled track rather than viewport coordinates", () => {
     geometry();
     const timeline = data();
-    render(<ObjectiveTimeline {...props(timeline)} />);
+    render(<MacroTaskTimeline {...props(timeline)} />);
     fireEvent.click(screen.getByRole("button", { name: "放大" }));
     const scale = scaleTimeline(createTimelineLayout(timeline), 748, (748 - 16 - 32) / 20 * 1.5, 16);
     const scroller = document.querySelector<HTMLElement>(".tl-scroll")!;
@@ -131,7 +131,7 @@ describe("U10 idle evidence and U11 native readout", () => {
   it("pointer samples update only the two readout nodes and cause no React commits or row mutations", () => {
     geometry();
     const commit = vi.fn();
-    render(<Profiler id="timeline" onRender={commit}><ObjectiveTimeline {...props()} /></Profiler>);
+    render(<Profiler id="timeline" onRender={commit}><MacroTaskTimeline {...props()} /></Profiler>);
     const commits = commit.mock.calls.length;
     const rows = [...document.querySelectorAll(".tl-row")];
     const markup = rows.map(row => row.outerHTML);
@@ -147,7 +147,7 @@ describe("U10 idle evidence and U11 native readout", () => {
 
   it("hides on sticky labels, touch, scroll, unavailable time, hidden and list views", () => {
     geometry();
-    const view = render(<ObjectiveTimeline {...props()} />);
+    const view = render(<MacroTaskTimeline {...props()} />);
     move(500);
     expect(line().hidden).toBe(false);
     move(100);
@@ -157,21 +157,21 @@ describe("U10 idle evidence and U11 native readout", () => {
     move(500);
     fireEvent.scroll(document.querySelector(".tl-scroll")!);
     expect(line().hidden).toBe(true);
-    view.rerender(<ObjectiveTimeline {...props()} hidden />);
+    view.rerender(<MacroTaskTimeline {...props()} hidden />);
     expect(document.querySelector(".timeline-readout-line")).toBeNull();
-    view.rerender(<ObjectiveTimeline {...props()} />);
+    view.rerender(<MacroTaskTimeline {...props()} />);
     fireEvent.click(screen.getByRole("button", { name: "列表" }));
     expect(document.querySelector(".timeline-readout-line")).toBeNull();
     fireEvent.click(screen.getByRole("button", { name: "时间轴" }));
     const empty = { ...data(), spans: [], events: [] };
-    view.rerender(<ObjectiveTimeline {...props(empty)} />);
+    view.rerender(<MacroTaskTimeline {...props(empty)} />);
     move(500);
     expect(line().hidden).toBe(true);
   });
 
   it("shows idle start/end/duration on keyboard focus without any expansion and closes with Esc", () => {
     geometry();
-    render(<ObjectiveTimeline {...props()} />);
+    render(<MacroTaskTimeline {...props()} />);
     const block = document.querySelector<HTMLElement>(".idle-block")!;
     expect(block.tabIndex).toBe(0);
     act(() => block.focus());
@@ -188,7 +188,7 @@ describe("U10 idle evidence and U11 native readout", () => {
 
   it("Escape from inside the idle dialog closes it without reopening on returned anchor focus", async () => {
     geometry();
-    render(<ObjectiveTimeline {...props()} />);
+    render(<MacroTaskTimeline {...props()} />);
     const block = document.querySelector<HTMLElement>(".idle-block")!;
     act(() => block.focus());
     expect(screen.queryByRole("dialog", { name: "空闲区间" })).not.toBeNull();
@@ -206,13 +206,13 @@ describe("U10 idle evidence and U11 native readout", () => {
   it.each(["incomplete", "clock"])("drops the focused idle popup when refresh makes %s evidence unsafe", reason => {
     geometry();
     const timeline = data();
-    const view = render(<ObjectiveTimeline {...props(timeline)} />);
+    const view = render(<MacroTaskTimeline {...props(timeline)} />);
     act(() => document.querySelector<HTMLElement>(".idle-block")!.focus());
     expect(screen.getByRole("dialog", { name: "空闲区间" })).toBeTruthy();
     const unsafe = structuredClone(timeline);
     if (reason === "incomplete") unsafe.scopeComplete = false;
     else unsafe.spans[0]!.clockSkew = true;
-    view.rerender(<ObjectiveTimeline {...props(unsafe)} />);
+    view.rerender(<MacroTaskTimeline {...props(unsafe)} />);
     expect(document.querySelector(".idle-block")).toBeNull();
     expect(screen.queryByRole("dialog", { name: "空闲区间" })).toBeNull();
   });
@@ -227,7 +227,7 @@ describe("U10 idle evidence and U11 native readout", () => {
     if (reason === "missing") timeline.spans[0]!.endAt = null;
     if (reason === "reversed") timeline.spans[0]!.endAt = at(-1);
     if (reason === "uncertain-tail") { timeline.spans[0]!.uncertain = true; timeline.spans[0]!.shutdownConfirmed = false; }
-    render(<ObjectiveTimeline {...props(timeline)} />);
+    render(<MacroTaskTimeline {...props(timeline)} />);
     expect(document.querySelector(".idle-block")).toBeNull();
     expect(document.querySelector(".fold-band")).toBeNull();
     move(500);
@@ -240,7 +240,7 @@ describe("U10 idle evidence and U11 native readout", () => {
     document.head.append(style);
     try {
       geometry();
-      render(<ObjectiveTimeline {...props()} />);
+      render(<MacroTaskTimeline {...props()} />);
       const overlay = document.querySelector<HTMLElement>(".tl-overlay")!;
       const track = document.querySelector<HTMLElement>(".tl-row > .tl-track")!;
       const now = document.querySelector<HTMLElement>(".now-line")!;

@@ -98,23 +98,23 @@ def parse_task_history_query(query: str) -> dict:
     return params
 
 
-#: Exact parameter whitelists of the read-only objective routes; they reach the
-#: same named ``objective_list``/``objective_timeline`` operations as the CLI.
-OBJECTIVE_LIST_PARAMETERS = frozenset({"limit", "before", "projectId", "hostId", "query", "filter"})
-OBJECTIVE_TIMELINE_PARAMETERS = frozenset({"limit", "query", "filter"})
-_OBJECTIVE_ID = re.compile(r"^(obj-[A-Za-z0-9-]{1,120}|run:[A-Za-z0-9._:-]{1,128})$")
+#: Exact parameter whitelists of the read-only macro task routes; they reach the
+#: same named ``macro_task_list``/``macro_task_timeline`` operations as the CLI.
+MACRO_TASK_LIST_PARAMETERS = frozenset({"limit", "before", "projectId", "hostId", "query", "filter"})
+MACRO_TASK_TIMELINE_PARAMETERS = frozenset({"limit", "query", "filter"})
+_MACRO_TASK_ID = re.compile(r"^(macro-[A-Za-z0-9-]{1,120}|run:[A-Za-z0-9._:-]{1,128})$")
 
 
-def parse_objective_query(query: str, allowed: frozenset[str]) -> dict:
-    """Parse one objective route query string; unknown or repeated names are refused."""
+def parse_macro_task_query(query: str, allowed: frozenset[str]) -> dict:
+    """Parse one macro task route query string; unknown or repeated names are refused."""
     entries = parse_qs(query, keep_blank_values=True)
     params: dict[str, Any] = {}
     for name in sorted(entries):
         if name not in allowed:
-            raise BoardError("INVALID_ARGUMENT", f"Unknown objective parameter: {name}", field=name)
+            raise BoardError("INVALID_ARGUMENT", f"Unknown macro_task parameter: {name}", field=name)
         values = entries[name]
         if len(values) != 1:
-            raise BoardError("INVALID_ARGUMENT", f"Duplicate objective parameter: {name}", field=name)
+            raise BoardError("INVALID_ARGUMENT", f"Duplicate macro_task parameter: {name}", field=name)
         value = values[0]
         if name == "limit":
             if not _QUERY_INTEGER.match(value):
@@ -143,7 +143,7 @@ CONSOLE_OPERATIONS = (
     "model_catalog_refresh",
     "model_profiles",
     "workflow_get",
-    "objective_stop",
+    "macro_task_stop",
     "storage_plan",
     "storage_apply",
 )
@@ -783,15 +783,15 @@ class Console:
                     return self._backup_preflight()
                 if relative == "/api/runtime-version":
                     return self._runtime_version()
-                if relative == "/api/objectives":
-                    return self._objective_read("objective_list", {}, OBJECTIVE_LIST_PARAMETERS)
-                if relative.startswith("/api/objectives/") and relative.endswith("/timeline"):
+                if relative == "/api/macro-tasks":
+                    return self._macro_task_read("macro_task_list", {}, MACRO_TASK_LIST_PARAMETERS)
+                if relative.startswith("/api/macro-tasks/") and relative.endswith("/timeline"):
                     # The request path is already percent-decoded once by _path().
-                    identifier = relative[len("/api/objectives/"):-len("/timeline")]
-                    if not _OBJECTIVE_ID.match(identifier):
+                    identifier = relative[len("/api/macro-tasks/"):-len("/timeline")]
+                    if not _MACRO_TASK_ID.match(identifier):
                         return self._error(404, "NOT_FOUND", "Not found")
-                    return self._objective_read(
-                        "objective_timeline", {"objectiveId": identifier}, OBJECTIVE_TIMELINE_PARAMETERS
+                    return self._macro_task_read(
+                        "macro_task_timeline", {"macroTaskId": identifier}, MACRO_TASK_TIMELINE_PARAMETERS
                     )
                 if relative.startswith("/api/tasks/"):
                     return self._task(relative[len("/api/tasks/"):])
@@ -917,8 +917,8 @@ class Console:
                     return self._error(500, "INTERNAL_ERROR", "The task history could not be read")
                 self._send_read(outcome, coding)
 
-            def _objective_read(self, operation: str, fixed: dict, allowed: frozenset[str]) -> None:
-                """Authenticated read-only objective browsing; no lease, write authority or model call.
+            def _macro_task_read(self, operation: str, fixed: dict, allowed: frozenset[str]) -> None:
+                """Authenticated read-only macro task browsing; no lease, write authority or model call.
 
                 The summary (and the timeline) is cached by its query and the board
                 marker: keyset, filter and ``changed`` semantics are untouched, only
@@ -929,9 +929,9 @@ class Console:
                     return
                 query = urlsplit(self.path).query
                 try:
-                    params = {**parse_objective_query(query, allowed), **fixed}
+                    params = {**parse_macro_task_query(query, allowed), **fixed}
                     outcome = console.read_cache.serve(
-                        kind="objectives",
+                        kind="macroTasks",
                         key=f"{operation}:{json.dumps(params, sort_keys=True, ensure_ascii=False)}",
                         session=self.browser_session.id,
                         extra_marker=(),
@@ -942,7 +942,7 @@ class Console:
                 except BoardError as error:
                     return self._board_error(error)
                 except Exception:  # noqa: BLE001 - no traceback crosses the boundary
-                    return self._error(500, "INTERNAL_ERROR", "The work objectives could not be read")
+                    return self._error(500, "INTERNAL_ERROR", "The work macro tasks could not be read")
                 self._send_read(outcome, coding)
 
             def _task(self, run_id: str) -> None:

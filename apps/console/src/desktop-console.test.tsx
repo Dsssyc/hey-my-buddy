@@ -73,7 +73,7 @@ function fixture(records: Task[] = []) {
   const api = { runtimeVersion: vi.fn(async () => ({ running: { mode: "source", softwareVersion: null, contractVersion: null, schemaVersion: null, sourceCommit: null, installedAt: null }, installed: null })),
       snapshot: vi.fn(async () => structuredClone(snapshot)), tasks, command,
     task: vi.fn(async (runId: string) => records.find(t => t.runId === runId)),
-    objectives: vi.fn(async () => ({ objectives: [], total: 0, nextCursor: null, cursor: 0, changed: false })) } as unknown as ConsoleApi;
+    macroTasks: vi.fn(async () => ({ macroTasks: [], total: 0, nextCursor: null, cursor: 0, changed: false })) } as unknown as ConsoleApi;
   return { snapshot, records, api, tasks, command, workflows };
 }
 
@@ -105,11 +105,11 @@ describe("desktop console", () => {
       await act(async () => { await vi.advanceTimersByTimeAsync(3000); });
       expect(screen.getByRole("button", { name: "重试连接" })).toBeTruthy();
       const snapshotCount = (f.api.snapshot as ReturnType<typeof vi.fn>).mock.calls.length;
-      const objectiveCount = (f.api.objectives as ReturnType<typeof vi.fn>).mock.calls.length;
+      const macroTaskCount = (f.api.macroTasks as ReturnType<typeof vi.fn>).mock.calls.length;
       const taskCount = f.tasks.mock.calls.length;
       await act(async () => { screen.getByRole("button", { name: "重试连接" }).click(); });
       expect((f.api.snapshot as ReturnType<typeof vi.fn>).mock.calls.length).toBe(snapshotCount + 1);
-      expect((f.api.objectives as ReturnType<typeof vi.fn>).mock.calls.length).toBe(objectiveCount);
+      expect((f.api.macroTasks as ReturnType<typeof vi.fn>).mock.calls.length).toBe(macroTaskCount);
       expect(f.tasks.mock.calls.length).toBe(taskCount);
       expect(f.command).not.toHaveBeenCalled();
       expect(screen.queryByRole("button", { name: "重试连接" })).toBeNull();

@@ -109,18 +109,18 @@ class CliViewTests(RealWorkspaceTestCase):
         for key in ("runId", "requestId", "revision", "ownerGeneration", "state", "workspace"):
             self.assertIn(key, submitted)
 
-    def test_objective_id_survives_brief_submit_and_context_recovery_get(self):
+    def test_macro_task_id_survives_brief_submit_and_context_recovery_get(self):
         code, submitted, _ = self.cli("submit", {
-            **CONFIGURATION, "requestId": "views-objective", "hostId": "host-1",
+            **CONFIGURATION, "requestId": "views-macro-task", "hostId": "host-1",
             "task": PACKET, "title": "Implement bounded state transition", "cwd": str(self.repo),
-            "objective": {"title": "Ship state transition"},
+            "macroTask": {"title": "Ship state transition"},
             "executionWorkspace": {"kind": "worktree", "access": "write", "writeScope": ["."]},
         })
         self.assertEqual(code, 0, submitted)
-        self.assertTrue(submitted["objectiveId"].startswith("obj-"))
+        self.assertTrue(submitted["macroTaskId"].startswith("macro-"))
         code, fetched, _ = self.cli("get", {"runId": submitted["runId"]})
         self.assertEqual(code, 0, fetched)
-        self.assertEqual(fetched["objectiveId"], submitted["objectiveId"])
+        self.assertEqual(fetched["macroTaskId"], submitted["macroTaskId"])
         self.assertEqual(fetched["title"], submitted["title"])
 
     def test_get_brief_keeps_next_command_identifiers_and_full_is_unchanged(self):

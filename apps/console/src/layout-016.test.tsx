@@ -2,12 +2,12 @@ import { useRef, useState } from "react";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { ObjectiveTimeline } from "./ObjectiveTimeline";
-import type { ObjectiveTimelineProps } from "./ObjectiveTimeline";
-import { ObjectiveList } from "./ObjectiveList";
+import { MacroTaskTimeline } from "./MacroTaskTimeline";
+import type { MacroTaskTimelineProps } from "./MacroTaskTimeline";
+import { MacroTaskList } from "./MacroTaskList";
 import { Popover } from "./Popover";
-import { listFixture, objectiveTimelineFixture } from "./objective-fixtures";
-import type { ObjectiveTimeline as ObjectiveTimelineData } from "./objective-types";
+import { listFixture, macroTaskTimelineFixture } from "./macro-task-fixtures";
+import type { MacroTaskTimeline as MacroTaskTimelineData } from "./macro-task-types";
 import type { InspectorSelection } from "./inspector-card";
 
 /** Host UI review of the 0.16 first build (layout correctness, §1–§11). */
@@ -35,14 +35,14 @@ function stubWindow(name: "innerWidth" | "innerHeight", value: number) {
   restorers.push(() => { if (own) Object.defineProperty(window, name, own); });
 }
 
-function baseProps(timeline: ObjectiveTimelineData | null, overrides: Record<string, unknown> = {}): ObjectiveTimelineProps {
-  const props: ObjectiveTimelineProps = {
-    summary: timeline?.objective ?? null, timeline, loading: false, error: "", stale: false,
+function baseProps(timeline: MacroTaskTimelineData | null, overrides: Record<string, unknown> = {}): MacroTaskTimelineProps {
+  const props: MacroTaskTimelineProps = {
+    summary: timeline?.macroTask ?? null, timeline, loading: false, error: "", stale: false,
     newRunIds: new Set<string>(), hidden: false, openedKey: null, openedRunId: null, selection: null,
     onSelectItem: vi.fn(), onOpenItem: vi.fn(), onSelectRun: vi.fn(), onOpenRun: vi.fn(),
     onClearSelection: vi.fn(), onRetry: vi.fn(), onBackToList: vi.fn(),
   };
-  return { ...props, ...overrides } as ObjectiveTimelineProps;
+  return { ...props, ...overrides } as MacroTaskTimelineProps;
 }
 
 const fitButton = () => screen.getByRole("button", { name: "适应窗口" });
@@ -50,7 +50,7 @@ const span = (key: string) => document.querySelector<HTMLElement>(`[data-key="${
 
 describe("§3 keyboard zoom keeps browser shortcuts", () => {
   it("ignores Ctrl/Meta/Alt with +, -, = and 0; Shift+= / + still zooms", () => {
-    render(<ObjectiveTimeline {...baseProps(objectiveTimelineFixture())} />);
+    render(<MacroTaskTimeline {...baseProps(macroTaskTimelineFixture())} />);
     const target = span("span:s-r1-e");
     for (const modifier of [{ ctrlKey: true }, { metaKey: true }, { altKey: true }]) {
       for (const key of ["+", "=", "-", "0"]) {
@@ -86,7 +86,7 @@ describe("§1/§2/§4 fit width and the zoom anchor", () => {
 
   it("fits the canvas to the actual viewport with no internal overflow", () => {
     stubCanvas();
-    render(<ObjectiveTimeline {...baseProps(objectiveTimelineFixture())} />);
+    render(<MacroTaskTimeline {...baseProps(macroTaskTimelineFixture())} />);
     // 900 − 240 = 660: exactly the viewport, never a 380px floor or a
     // band-budget minimum that would force horizontal scrolling.
     expect(canvasPx()).toBe(660);
@@ -97,7 +97,7 @@ describe("§1/§2/§4 fit width and the zoom anchor", () => {
   });
 
   function zoomedScroll(selection: InspectorSelection | null, targetScreenX: number) {
-    const view = render(<ObjectiveTimeline {...baseProps(objectiveTimelineFixture(), { selection })} />);
+    const view = render(<MacroTaskTimeline {...baseProps(macroTaskTimelineFixture(), { selection })} />);
     fireEvent.keyDown(span("span:s-r1-e"), { key: "+" });
     fireEvent.keyDown(span("span:s-r1-e"), { key: "+" });
     // Scroll so the selected span's start sits at targetScreenX.
@@ -124,24 +124,24 @@ describe("§1/§2/§4 fit width and the zoom anchor", () => {
   });
 });
 
-describe("§5 zoom follows the objective", () => {
-  it("keeps a manual zoom through polling and a detail return, and resets to fit on an objective switch", () => {
-    const first = objectiveTimelineFixture();
-    const second = objectiveTimelineFixture({ objective: { ...first.objective, objectiveId: "obj-2" } });
-    const view = render(<ObjectiveTimeline {...baseProps(first)} />);
+describe("§5 zoom follows the macroTask", () => {
+  it("keeps a manual zoom through polling and a detail return, and resets to fit on a macro task switch", () => {
+    const first = macroTaskTimelineFixture();
+    const second = macroTaskTimelineFixture({ macroTask: { ...first.macroTask, macroTaskId: "macro-2" } });
+    const view = render(<MacroTaskTimeline {...baseProps(first)} />);
     fireEvent.keyDown(span("span:s-r1-e"), { key: "+" });
     expect(fitButton().getAttribute("aria-pressed")).toBe("false");
-    // Same-objective refresh (new object, later observation).
-    view.rerender(<ObjectiveTimeline {...baseProps({ ...objectiveTimelineFixture(), observedAt: "2026-09-26T08:13:00Z" })} />);
+    // Same-macroTask refresh (new object, later observation).
+    view.rerender(<MacroTaskTimeline {...baseProps({ ...macroTaskTimelineFixture(), observedAt: "2026-09-26T08:13:00Z" })} />);
     expect(fitButton().getAttribute("aria-pressed")).toBe("false");
     // Detail open and return: the view hides and shows again.
-    view.rerender(<ObjectiveTimeline {...baseProps(objectiveTimelineFixture(), { hidden: true })} />);
-    view.rerender(<ObjectiveTimeline {...baseProps(objectiveTimelineFixture())} />);
+    view.rerender(<MacroTaskTimeline {...baseProps(macroTaskTimelineFixture(), { hidden: true })} />);
+    view.rerender(<MacroTaskTimeline {...baseProps(macroTaskTimelineFixture())} />);
     expect(fitButton().getAttribute("aria-pressed")).toBe("false");
     // An actual switch starts from 适应窗口, even when switching back.
-    view.rerender(<ObjectiveTimeline {...baseProps(second)} />);
+    view.rerender(<MacroTaskTimeline {...baseProps(second)} />);
     expect(fitButton().getAttribute("aria-pressed")).toBe("true");
-    view.rerender(<ObjectiveTimeline {...baseProps(objectiveTimelineFixture())} />);
+    view.rerender(<MacroTaskTimeline {...baseProps(macroTaskTimelineFixture())} />);
     expect(fitButton().getAttribute("aria-pressed")).toBe("true");
   });
 });
@@ -149,14 +149,14 @@ describe("§5 zoom follows the objective", () => {
 describe("§6 strict stop evidence for the acceptance-wait line", () => {
   it("draws nothing when the finished, ended execution has a null or false shutdown", () => {
     for (const shutdownConfirmed of [null, false]) {
-      const timeline = objectiveTimelineFixture();
+      const timeline = macroTaskTimelineFixture();
       const exec = timeline.spans.find(entry => entry.spanId === "s-r1-e")!;
       (exec as { shutdownConfirmed: boolean | null }).shutdownConfirmed = shutdownConfirmed;
-      const view = render(<ObjectiveTimeline {...baseProps(timeline)} />);
+      const view = render(<MacroTaskTimeline {...baseProps(timeline)} />);
       expect(span("span:s-r1-e").parentElement!.querySelector(".accept-wait-line")).toBeNull();
       view.unmount();
     }
-    const confirmed = render(<ObjectiveTimeline {...baseProps(objectiveTimelineFixture())} />);
+    const confirmed = render(<MacroTaskTimeline {...baseProps(macroTaskTimelineFixture())} />);
     expect(span("span:s-r1-e").parentElement!.querySelector(".accept-wait-line")).toBeTruthy();
     confirmed.unmount();
   });
@@ -232,11 +232,11 @@ describe("§7/§8 the shared popover lifecycle", () => {
 
   it("keeps one popover open at a time: opening another closes the Host event popup", async () => {
     const user = userEvent.setup();
-    const timeline = objectiveTimelineFixture();
+    const timeline = macroTaskTimelineFixture();
     function Page({ extra }: { extra: boolean }) {
       const anchor = useRef<HTMLButtonElement>(null);
       return <>
-        <ObjectiveTimeline {...baseProps(timeline)} />
+        <MacroTaskTimeline {...baseProps(timeline)} />
         <button ref={anchor}>筛选</button>
         {extra && <Popover anchor={anchor.current} label="筛选" onClose={vi.fn()}>项目</Popover>}
       </>;
@@ -251,7 +251,7 @@ describe("§7/§8 the shared popover lifecycle", () => {
 
   it("closes the Host event popup when focus leaves it, keeping its row keyboard navigation and sentences", async () => {
     const user = userEvent.setup();
-    render(<ObjectiveTimeline {...baseProps(objectiveTimelineFixture())} />);
+    render(<MacroTaskTimeline {...baseProps(macroTaskTimelineFixture())} />);
     const dialog = await openHostEventPopup(user);
     const rows = within(dialog).getAllByRole("button").filter(button => button.hasAttribute("data-row-index"));
     expect(rows.length).toBeGreaterThan(1);
@@ -288,7 +288,7 @@ describe("§9 the inspector drawer stays reachable", () => {
     stubMedia(true);
     stubWindow("innerHeight", 400);
     const user = userEvent.setup();
-    render(<ObjectiveTimeline {...baseProps(objectiveTimelineFixture())} />);
+    render(<MacroTaskTimeline {...baseProps(macroTaskTimelineFixture())} />);
     expect(dock().className).toContain("collapsed");
     expect(dock().style.height).toBe("44px");
     expect(document.querySelector(".timeline-inspector")).toBeNull();
@@ -306,17 +306,17 @@ describe("§9 the inspector drawer stays reachable", () => {
     stubMedia(true);
     stubWindow("innerHeight", 400);
     const user = userEvent.setup();
-    const timeline = objectiveTimelineFixture();
+    const timeline = macroTaskTimelineFixture();
     const pinned: InspectorSelection = { type: "run", runId: "r1" };
-    const view = render(<ObjectiveTimeline {...baseProps(timeline)} />);
+    const view = render(<MacroTaskTimeline {...baseProps(timeline)} />);
     expect(dock().className).toContain("collapsed");
-    view.rerender(<ObjectiveTimeline {...baseProps(timeline, { selection: pinned })} />);
+    view.rerender(<MacroTaskTimeline {...baseProps(timeline, { selection: pinned })} />);
     expect(dock().className).toContain("collapsed");
     expect(dock().querySelector(".inspector-dock-title")!.textContent).toContain("整项委派");
     await user.click(within(dock()).getByRole("button", { name: "展开检查器" }));
     expect(document.querySelector(".timeline-inspector")).toBeTruthy();
     await user.click(within(dock()).getByRole("button", { name: "收起检查器" }));
-    view.rerender(<ObjectiveTimeline {...baseProps(timeline, { selection: { type: "run", runId: "r2" } })} />);
+    view.rerender(<MacroTaskTimeline {...baseProps(timeline, { selection: { type: "run", runId: "r2" } })} />);
     expect(dock().className).toContain("collapsed");
   });
 
@@ -342,7 +342,7 @@ describe("§9 the inspector drawer stays reachable", () => {
     stubGetter(HTMLElement.prototype, "offsetHeight", function (this: HTMLElement) { return sectionHeight(this); });
     stubGetter(Element.prototype, "scrollHeight", function (this: HTMLElement) { return sectionHeight(this); });
     const user = userEvent.setup();
-    render(<ObjectiveTimeline {...baseProps(objectiveTimelineFixture())} />);
+    render(<MacroTaskTimeline {...baseProps(macroTaskTimelineFixture())} />);
     await user.click(within(dock()).getByRole("button", { name: "展开检查器" }));
     const root = document.querySelector(".timeline-view")!;
     // The card-band budget also observes the column; target the drawer's
@@ -391,7 +391,7 @@ describe("§10/§11 the list filter popup", () => {
 
   it("focuses the 项目 select when opened from the keyboard", async () => {
     const user = userEvent.setup();
-    render(<ObjectiveList {...listProps()} />);
+    render(<MacroTaskList {...listProps()} />);
     const button = screen.getByRole("button", { name: "筛选" });
     button.focus();
     await user.keyboard("{Enter}");
@@ -405,20 +405,20 @@ describe("§10/§11 the list filter popup", () => {
 
   it("closes when the rail hides the list or the view is inactive, and does not reopen on return", async () => {
     const user = userEvent.setup();
-    const view = render(<ObjectiveList {...listProps()} />);
+    const view = render(<MacroTaskList {...listProps()} />);
     await user.click(screen.getByRole("button", { name: "筛选" }));
     expect(screen.getByRole("dialog", { name: "筛选" })).toBeTruthy();
-    view.rerender(<ObjectiveList {...listProps({ rail: true })} />);
+    view.rerender(<MacroTaskList {...listProps({ rail: true })} />);
     expect(screen.queryByRole("dialog", { name: "筛选" })).toBeNull();
-    view.rerender(<ObjectiveList {...listProps({ rail: false })} />);
+    view.rerender(<MacroTaskList {...listProps({ rail: false })} />);
     expect(screen.queryByRole("dialog", { name: "筛选" })).toBeNull();
     expect(screen.getByRole("button", { name: "筛选" }).getAttribute("aria-expanded")).toBe("false");
 
     await user.click(screen.getByRole("button", { name: "筛选" }));
     expect(screen.getByRole("dialog", { name: "筛选" })).toBeTruthy();
-    view.rerender(<ObjectiveList {...listProps({ active: false })} />);
+    view.rerender(<MacroTaskList {...listProps({ active: false })} />);
     expect(screen.queryByRole("dialog", { name: "筛选" })).toBeNull();
-    view.rerender(<ObjectiveList {...listProps({ active: true })} />);
+    view.rerender(<MacroTaskList {...listProps({ active: true })} />);
     expect(screen.queryByRole("dialog", { name: "筛选" })).toBeNull();
   });
 });

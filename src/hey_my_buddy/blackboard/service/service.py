@@ -91,9 +91,9 @@ CONTROL_OPERATIONS = (
     "workflow_scope_amend",
     "workflow_workspace_resolve",
     "workflow_suggest",
-    "objective_list",
-    "objective_timeline",
-    "objective_stop",
+    "macro_task_list",
+    "macro_task_timeline",
+    "macro_task_stop",
 )
 WAIT_OPERATIONS = ("events_wait", "task_wait", "message_wait", "wait_capacity")
 
@@ -756,25 +756,25 @@ class BoardService(_BaseResource):
 
         return self._guard("workflow.suggest", request_json, handler)
 
-    # -- work objectives ----------------------------------------------------
-    def objective_list(self, request_json: str) -> str:
+    # -- work macro tasks ----------------------------------------------------
+    def macro_task_list(self, request_json: str) -> str:
         # Read-only: no lease, no model call; an attempt-scoped credential is refused
         # by the agent operation allowlist before this handler runs.
-        from ..tasks import objectives
+        from ..tasks import macro_tasks
 
-        return self._guard("objective.list", request_json, lambda params: objectives.objective_list(self.store, params))
+        return self._guard("macro_task.list", request_json, lambda params: macro_tasks.macro_task_list(self.store, params))
 
-    def objective_timeline(self, request_json: str) -> str:
-        from ..tasks import objectives
+    def macro_task_timeline(self, request_json: str) -> str:
+        from ..tasks import macro_tasks
 
         return self._guard(
-            "objective.timeline", request_json, lambda params: objectives.objective_timeline(self.store, params)
+            "macro_task.timeline", request_json, lambda params: macro_tasks.macro_task_timeline(self.store, params)
         )
 
-    def objective_stop(self, request_json: str) -> str:
+    def macro_task_stop(self, request_json: str) -> str:
         return self._guard(
-            "objective.stop", request_json,
-            lambda params: self.store.workflow.stop_objective(
+            "macro_task.stop", request_json,
+            lambda params: self.store.workflow.stop_macro_task(
                 params, console_authority=workflow_module.console_authority_from_scope()
             ),
         )

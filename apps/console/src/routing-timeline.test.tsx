@@ -1,28 +1,28 @@
 import { cleanup, fireEvent, render } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { ObjectiveTimeline, type ObjectiveTimelineProps } from "./ObjectiveTimeline";
-import { objectiveTimelineFixture, OPUS } from "./objective-fixtures";
+import { MacroTaskTimeline, type MacroTaskTimelineProps } from "./MacroTaskTimeline";
+import { macroTaskTimelineFixture, OPUS } from "./macro-task-fixtures";
 import { buildInspectorCard } from "./inspector-card";
-import { spanFacts, spanOutcome } from "./objective-display";
-import { createTimelineLayout } from "./objective-timeline-layout";
-import { scaleTimeline } from "./objective-timeline-scale";
-import type { TimelineSpan } from "./objective-types";
+import { spanFacts, spanOutcome } from "./macro-task-display";
+import { createTimelineLayout } from "./macro-task-timeline-layout";
+import { scaleTimeline } from "./macro-task-timeline-scale";
+import type { TimelineSpan } from "./macro-task-types";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 
 afterEach(cleanup);
 
 function fixture(overrides: Partial<TimelineSpan> = {}) {
-  const timeline = objectiveTimelineFixture();
+  const timeline = macroTaskTimelineFixture();
   const span = timeline.spans.find(item => item.spanId === "s-r2-r")!;
   Object.assign(span, overrides);
   const row = timeline.rows.find(item => item.runId === span.runId)!;
   return { timeline, span, row };
 }
 
-function props(timeline: ReturnType<typeof objectiveTimelineFixture>): ObjectiveTimelineProps {
+function props(timeline: ReturnType<typeof macroTaskTimelineFixture>): MacroTaskTimelineProps {
   return {
-    summary: timeline.objective, timeline, loading: false, error: "", stale: false,
+    summary: timeline.macroTask, timeline, loading: false, error: "", stale: false,
     newRunIds: new Set(), hidden: false, openedKey: null, openedRunId: null, selection: null,
     onSelectItem: vi.fn(), onOpenItem: vi.fn(), onSelectRun: vi.fn(), onOpenRun: vi.fn(),
     onClearSelection: vi.fn(), onRetry: vi.fn(), onBackToList: vi.fn(),
@@ -90,7 +90,7 @@ describe("routing timeline interactions", () => {
       endAt: "2026-09-26T01:21:00.001Z", resultStatus: "failed", routing: { routingMode: "fast" },
     });
     const recordedTimes = [span.startAt, span.endAt];
-    const { container } = render(<ObjectiveTimeline {...props(timeline)} />);
+    const { container } = render(<MacroTaskTimeline {...props(timeline)} />);
     const bar = container.querySelector<HTMLButtonElement>('.tl-scroll [data-key="span:s-r2-r"]')!;
     expect(bar.classList.contains("failed")).toBe(true);
     expect(bar.querySelector(".routing-cross")).toBeNull();
@@ -120,7 +120,7 @@ describe("routing timeline interactions", () => {
   it("uses the recorded mode textures without presenting retired fallback facts", () => {
     const legacy = { requestedRoutingMode: "review", fallback: { from: "review", to: "fast", code: "NO_REVIEW", reason: "历史降级原因" } };
     const fast = fixture({ routing: { ...legacy, routingMode: "fast" } });
-    const fastView = render(<ObjectiveTimeline {...props(fast.timeline)} />);
+    const fastView = render(<MacroTaskTimeline {...props(fast.timeline)} />);
     const fastBar = fastView.container.querySelector<HTMLButtonElement>('.tl-scroll [data-key="span:s-r2-r"]')!;
     expect(fastBar.classList.contains("fast")).toBe(true);
     expect(fastBar.classList.contains("fallback")).toBe(false);
@@ -132,12 +132,12 @@ describe("routing timeline interactions", () => {
     expect(listEntry.textContent).not.toContain("已降级");
     fastView.unmount();
     const review = fixture({ routing: { routingMode: "review" } });
-    const reviewView = render(<ObjectiveTimeline {...props(review.timeline)} />);
+    const reviewView = render(<MacroTaskTimeline {...props(review.timeline)} />);
     const reviewBar = reviewView.container.querySelector<HTMLButtonElement>('.tl-scroll [data-key="span:s-r2-r"]')!;
     expect(reviewBar.classList.contains("review")).toBe(true);
     expect(reviewBar.querySelector(".routing-fallback-mark")).toBeNull();
     reviewView.unmount();
-    const historicView = render(<ObjectiveTimeline {...props(fixture({ routing: undefined }).timeline)} />);
+    const historicView = render(<MacroTaskTimeline {...props(fixture({ routing: undefined }).timeline)} />);
     const historicBar = historicView.container.querySelector<HTMLButtonElement>('.tl-scroll [data-key="span:s-r2-r"]')!;
     expect(historicBar.classList.contains("fast")).toBe(false);
     expect(historicBar.classList.contains("review")).toBe(false);
@@ -161,7 +161,7 @@ describe("routing timeline interactions", () => {
     const { timeline, span } = fixture(overrides as Partial<TimelineSpan>);
     const originalTimes = [span.startAt, span.endAt];
     const callbacks = props(timeline);
-    const { container } = render(<ObjectiveTimeline {...callbacks} />);
+    const { container } = render(<MacroTaskTimeline {...callbacks} />);
     const button = container.querySelector<HTMLButtonElement>('.tl-scroll [data-key="span:s-r2-r"]')!;
     expect(button.textContent).toBe("");
     expect(button.title).toBe(`未记录路由 · 已选 Claude Opus 5.5 · high · ${label}`);

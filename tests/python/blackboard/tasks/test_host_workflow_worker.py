@@ -8,7 +8,7 @@ from blackboard.tasks.test_workflow_worker import GovernedWorkerTestCase, CONFIG
 
 class HostQuotaRecoveryTests(GovernedWorkerTestCase):
     """The shared harness environment already selects the offline quota agent:
-    the fixture dies the quota death on a first turn whose objective is this
+    the fixture dies the quota death on a first turn whose task is this
     scenario's, and completes every later turn through the governed finish."""
 
     def setUp(self):

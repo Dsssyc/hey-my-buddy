@@ -472,8 +472,8 @@ CREATE TABLE IF NOT EXISTS workflow_turns (
 #: credential records.
 WORKFLOW_TABLES = (
     """
-CREATE TABLE IF NOT EXISTS objectives (
-    objective_id       TEXT PRIMARY KEY,
+CREATE TABLE IF NOT EXISTS macro_tasks (
+    macro_task_id       TEXT PRIMARY KEY,
     title              TEXT NOT NULL,
     project_id         TEXT NOT NULL,
     project_path       TEXT NOT NULL,
@@ -482,8 +482,8 @@ CREATE TABLE IF NOT EXISTS objectives (
     activity_seq       INTEGER NOT NULL DEFAULT 0,
     activity_at        TEXT NOT NULL
 );
-CREATE INDEX IF NOT EXISTS objectives_activity_idx ON objectives(activity_seq DESC, objective_id DESC);
-CREATE INDEX IF NOT EXISTS objectives_project_idx ON objectives(project_id, activity_seq DESC, objective_id DESC);
+CREATE INDEX IF NOT EXISTS macro_tasks_activity_idx ON macro_tasks(activity_seq DESC, macro_task_id DESC);
+CREATE INDEX IF NOT EXISTS macro_tasks_project_idx ON macro_tasks(project_id, activity_seq DESC, macro_task_id DESC);
 """,
     # The logical goal plus its Host ownership generation and prepared workspace.
     # ``goal_json``/``goal_fingerprint`` are immutable: continuations record their
@@ -491,7 +491,7 @@ CREATE INDEX IF NOT EXISTS objectives_project_idx ON objectives(project_id, acti
     """
 CREATE TABLE IF NOT EXISTS workflow_runs (
     run_id                  TEXT PRIMARY KEY REFERENCES tasks(task_id) ON DELETE RESTRICT,
-    objective_id            TEXT REFERENCES objectives(objective_id) ON DELETE RESTRICT,
+    macro_task_id            TEXT REFERENCES macro_tasks(macro_task_id) ON DELETE RESTRICT,
     title                   TEXT,
     activity_seq            INTEGER NOT NULL DEFAULT 0,
     activity_at             TEXT,
@@ -526,7 +526,7 @@ CREATE TABLE IF NOT EXISTS workflow_runs (
 """,
     """
 CREATE INDEX IF NOT EXISTS workflow_runs_state_idx ON workflow_runs(state, updated_at);
-CREATE INDEX IF NOT EXISTS workflow_runs_objective_idx ON workflow_runs(objective_id, activity_seq DESC, run_id DESC);
+CREATE INDEX IF NOT EXISTS workflow_runs_macro_task_idx ON workflow_runs(macro_task_id, activity_seq DESC, run_id DESC);
 CREATE INDEX IF NOT EXISTS workflow_runs_activity_idx ON workflow_runs(activity_seq);
 """,
     # Routing is owned work, but not a coding turn or a user-authorized helper.

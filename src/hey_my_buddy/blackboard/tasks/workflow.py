@@ -709,7 +709,7 @@ class WorkflowCoordinator:
         if view["task"].get("quotaFailure") is not None:
             view["quotaFailure"] = view["task"]["quotaFailure"]
         if (current_scope() or {}).get("kind") != AGENT_KIND:
-            view.update(title=run_row["title"], objectiveId=run_row["objective_id"])
+            view.update(title=run_row["title"], macroTaskId=run_row["macro_task_id"])
         return view
 
     @staticmethod
@@ -1480,9 +1480,9 @@ class WorkflowCoordinator:
         """
         run_id = task_row["task_id"]
         access = "read" if executionWorkspace["access"] == "read" else "write"
-        from .objectives import attach_objective
+        from .macro_tasks import attach_macro_task
         presentation = presentation or {}
-        objective_id = attach_objective(connection, presentation, spec=spec, host_id=hostId, manifest=manifest, now=now)
+        macro_task_id = attach_macro_task(connection, presentation, spec=spec, host_id=hostId, manifest=manifest, now=now)
         connection.execute(
             "INSERT INTO workflow_runs(run_id, host_id, owner_generation, control_verifier, goal_json,"
             " goal_fingerprint, request_fingerprint, submission_verifier, execution_workspace_json,"
@@ -1504,13 +1504,13 @@ class WorkflowCoordinator:
                 now,
             ),
         )
-        connection.execute("UPDATE workflow_runs SET objective_id=?,title=?,configuration_locked=? WHERE run_id=?",
-                           (objective_id, presentation.get("title"), int(configurationLocked), run_id))
-        if "objective" in presentation:
+        connection.execute("UPDATE workflow_runs SET macro_task_id=?,title=?,configuration_locked=? WHERE run_id=?",
+                           (macro_task_id, presentation.get("title"), int(configurationLocked), run_id))
+        if "macroTask" in presentation:
             self.board._append_event(
-                connection, "workflow.objective_created", task_id=run_id,
-                payload={"objectiveId": objective_id,
-                         "description": presentation["objective"].get("description")},
+                connection, "workflow.macro_task_created", task_id=run_id,
+                payload={"macroTaskId": macro_task_id,
+                         "description": presentation["macroTask"].get("description")},
             )
         if manifest:
             # The column tracks the effective execution checkout (a prepared worktree
@@ -2594,7 +2594,7 @@ class WorkflowCoordinator:
         )
         # A helper is a current-contract run too: its own scope version 1 is recorded
         # with its admission so no creation path can exist without a real scope row.
-        connection.execute("UPDATE workflow_runs SET objective_id=? WHERE run_id=?", (run_row["objective_id"], helper_task_id))
+        connection.execute("UPDATE workflow_runs SET macro_task_id=? WHERE run_id=?", (run_row["macro_task_id"], helper_task_id))
         connection.execute(
             "INSERT INTO workflow_scope_versions(run_id, scope_version, actor, reason, write_scope_json,"
             " manifest_sha256, stopped_evidence_json, created_at) VALUES(?,1,?,?,?,?,?,?)",
@@ -3251,36 +3251,36 @@ class WorkflowCoordinator:
         self.board._notify(head)
         return response
 
-    def stop_objective(self, params: dict, *, console_authority: dict | None = None) -> dict:
+    def stop_macro_task(self, params: dict, *, console_authority: dict | None = None) -> dict:
         """One browser-only cancellation scope, resolved and fenced atomically."""
-        schemas.reject_unknown(params, {"objectiveId", "commandId", "reason"}, "objective.stop")
+        schemas.reject_unknown(params, {"macroTaskId", "commandId", "reason"}, "macro_task.stop")
         if console_authority is None:
-            raise BoardError("UNAUTHORIZED", "Stopping an objective requires an authenticated console writer")
-        identifier = schemas.required_string(params, "objectiveId", max_length=134)
+            raise BoardError("UNAUTHORIZED", "Stopping a macro task requires an authenticated console writer")
+        identifier = schemas.required_string(params, "macroTaskId", max_length=134)
         command_id = schemas.required_string(params, "commandId", max_length=128)
-        reason = schemas.optional_string(params, "reason", max_length=schemas.MAX_WORKFLOW_REASON_BYTES) or "User stopped objective"
-        request = {"objectiveId": identifier, "reason": reason}
+        reason = schemas.optional_string(params, "reason", max_length=schemas.MAX_WORKFLOW_REASON_BYTES) or "User stopped macro task"
+        request = {"macroTaskId": identifier, "reason": reason}
         now = self.now()
         with self.db.write() as connection:
-            receipt = self.board._receipt(connection, command_id, "objective.stop", request)
+            receipt = self.board._receipt(connection, command_id, "macro_task.stop", request)
             if receipt is not None:
                 return {**receipt, "duplicate": True}
-            if identifier.startswith("obj-"):
+            if identifier.startswith("macro-"):
                 roots = connection.execute(
-                    "SELECT r.* FROM workflow_runs r WHERE r.objective_id=?"
+                    "SELECT r.* FROM workflow_runs r WHERE r.macro_task_id=?"
                     " AND NOT EXISTS (SELECT 1 FROM workflow_children c WHERE c.child_task_id=r.run_id)"
                     " ORDER BY r.created_at,r.run_id", (identifier,),
                 ).fetchall()
             elif identifier.startswith("run:"):
                 roots = connection.execute(
-                    "SELECT r.* FROM workflow_runs r WHERE r.run_id=? AND r.objective_id IS NULL"
+                    "SELECT r.* FROM workflow_runs r WHERE r.run_id=? AND r.macro_task_id IS NULL"
                     " AND NOT EXISTS (SELECT 1 FROM workflow_children c WHERE c.child_task_id=r.run_id)",
                     (identifier[4:],),
                 ).fetchall()
             else:
-                raise BoardError("INVALID_ARGUMENT", "objectiveId must identify an objective or standalone root")
+                raise BoardError("INVALID_ARGUMENT", "macroTaskId must identify a macro task or standalone root")
             if not roots:
-                raise BoardError("NOT_FOUND", "Unknown work objective")
+                raise BoardError("NOT_FOUND", "Unknown work macro task")
             results, accepted = [], []
             for root in roots:
                 if root["state"] == "accepted":
@@ -3290,9 +3290,9 @@ class WorkflowCoordinator:
                 results.append(self._cancel_in_transaction(
                     connection, root, task, reason, f"console:{console_authority['sessionId']}", now,
                 ))
-            response = {"objectiveId": identifier, "runIds": [r["runId"] for r in results],
+            response = {"macroTaskId": identifier, "runIds": [r["runId"] for r in results],
                         "acceptedRunIds": accepted, "results": results, "duplicate": False}
-            self.board._store_receipt(connection, command_id, "objective.stop", request, response)
+            self.board._store_receipt(connection, command_id, "macro_task.stop", request, response)
             head = self.board._head_of(connection)
         self.board._notify(head)
         return response
@@ -5496,7 +5496,7 @@ class WorkflowCoordinator:
         # Share the existing run read; the indexed subquery returns at most one
         # own outcome. json_type distinguishes text from serialized objects/arrays.
         run_row = connection.execute(
-            "SELECT r.state,r.owner_generation,r.host_id,r.revision,r.continuation_count,r.active_request_id,r.title,r.objective_id,"
+            "SELECT r.state,r.owner_generation,r.host_id,r.revision,r.continuation_count,r.active_request_id,r.title,r.macro_task_id,"
             " (SELECT CASE WHEN json_type(t.outcome_json,'$.summary')='text'"
             " THEN json_extract(t.outcome_json,'$.summary') END FROM workflow_turns t"
             " WHERE t.run_id=r.run_id AND t.state='concluded' AND t.outcome_json IS NOT NULL"
@@ -5518,7 +5518,7 @@ class WorkflowCoordinator:
             "resultSummary": summary or None,
         }
         if (current_scope() or {}).get("kind") != AGENT_KIND:
-            extension.update(title=run_row["title"], objectiveId=run_row["objective_id"])
+            extension.update(title=run_row["title"], macroTaskId=run_row["macro_task_id"])
         if run_row["active_request_id"]:
             request = connection.execute(
                 "SELECT * FROM workflow_requests WHERE request_id=?", (run_row["active_request_id"],)
@@ -6230,11 +6230,11 @@ class WorkflowCoordinator:
 
     def _turn_context(self, connection, run_row, task, spec, continuation, previous, turn_index) -> dict:
         goal = json.loads(run_row["goal_json"])
-        objective = goal.get("task") if isinstance(goal.get("task"), str) else ""
+        task_text = goal.get("task") if isinstance(goal.get("task"), str) else ""
         context: dict[str, Any] = {
             # Bounded on purpose: the immutable full text stays in the task record.
-            "objective": objective if len(objective) <= 8000 else objective[:8000],
-            "objectiveTruncated": len(objective) > 8000,
+            "task": task_text if len(task_text) <= 8000 else task_text[:8000],
+            "taskTruncated": len(task_text) > 8000,
             "taskId": run_row["run_id"],
             "turnIndex": turn_index,
             "executionConfiguration": self._configuration(run_row),
@@ -6307,7 +6307,7 @@ class WorkflowCoordinator:
             if len(artifacts) > MAX_CONTEXT_ARTIFACTS:
                 context["artifactsTruncated"] = True
         context["nextActions"] = [
-            "Continue the original objective from the recorded checkpoint.",
+            "Continue the original task from the recorded checkpoint.",
             "Report the structured outcome through this execution harness's supplied completion interface.",
         ]
         return _bound_context(context)

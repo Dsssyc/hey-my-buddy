@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { ConsoleApi, StorageApplyResult, StoragePlan } from "./api";
 import { ApiError, errorText, uncertainResponse } from "./api";
-import { clockTime } from "./objective-display";
+import { clockTime } from "./macro-task-display";
 import { useBackgroundInert } from "./modal";
 import { BackupAttention } from "./BackupAttention";
 import { useBackupPreflight } from "./use-backup-preflight";

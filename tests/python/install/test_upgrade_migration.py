@@ -28,7 +28,7 @@ UPGRADE_BASE_TABLES = {
 HISTORY_TABLES = (
     "tasks", "attempts", "workflow_runs", "workflow_host_conclusions",
     "workflow_artifacts", "events", "commands", "workspace_reservations",
-    "objectives", "decision_requests", "evaluation_decisions",
+    "macro_tasks", "decision_requests", "evaluation_decisions",
 )
 
 

@@ -8,15 +8,15 @@
  * never silently clears.
  */
 
-import type { ObjectiveTimeline, TimelineEvent, TimelineRow, TimelineSpan } from "./objective-types";
-import type { SpanOutcome, TimelineItem } from "./objective-display";
+import type { MacroTaskTimeline, TimelineEvent, TimelineRow, TimelineSpan } from "./macro-task-types";
+import type { SpanOutcome, TimelineItem } from "./macro-task-display";
 import { recordedRoutingMode } from "./routing-display";
 import {
   clockTime, configurationLabel, configurationRawLabel, displayTitle, durationText, outcomeLabel,
   rowLabelItem, rowStateInfo, settleItem, spanHead, spanOutcome, toMs,
   acceptanceWaitText, titleLineTooltip, type FriendlyProfile,
-} from "./objective-display";
-import { latestExecutionResult, relatedEventsForRun, relatedEventsForSpan, runRollup, hasScopeLimitations, type RunRollup } from "./objective-metrics";
+} from "./macro-task-display";
+import { latestExecutionResult, relatedEventsForRun, relatedEventsForSpan, runRollup, hasScopeLimitations, type RunRollup } from "./macro-task-metrics";
 
 export type InspectorSelection =
   | { type: "item"; key: string }
@@ -140,7 +140,7 @@ function rollupFields(rollup: RunRollup, profiles?: readonly FriendlyProfile[] |
  */
 export function buildInspectorCard(
   selection: InspectorSelection,
-  timeline: ObjectiveTimeline,
+  timeline: MacroTaskTimeline,
   itemsByKey: ReadonlyMap<string, TimelineItem>,
   profiles?: readonly FriendlyProfile[] | null,
 ): InspectorCard | null {

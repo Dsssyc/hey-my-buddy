@@ -1,7 +1,7 @@
 import type { RuntimeVersionInfo, VersionFacts, BackupPreflight, Configuration, ConsoleAccess, ConsoleSession, RoutingHealth, Snapshot, TaskPage, TaskQuery } from "./types";
 import type {
-  ObjectiveFilter, ObjectivePage, ObjectiveQuery, ObjectiveSummary, ObjectiveTimeline, TimelineRow,
-} from "./objective-types";
+  MacroTaskFilter, MacroTaskPage, MacroTaskQuery, MacroTaskSummary, MacroTaskTimeline, TimelineRow,
+} from "./macro-task-types";
 
 export class ApiError extends Error {
   constructor(
@@ -261,12 +261,12 @@ export function validStorageApplyResult(value: unknown): value is StorageApplyRe
 }
 
 /**
- * Strict shape checks for the 0.15.1 objective read projections: `description`
+ * Strict shape checks for the 0.15.1 macroTask read projections: `description`
  * and `taskSummary` are nullable strings and `counts.accepted` is a number, so
  * a malformed field refuses the read instead of reaching presentation.
  */
-function validObjectiveSummary(value: unknown): boolean {
-  const summary = value as ObjectiveSummary | null;
+function validMacroTaskSummary(value: unknown): boolean {
+  const summary = value as MacroTaskSummary | null;
   return !!summary && typeof summary === "object"
     && (summary.description === null || typeof summary.description === "string")
     && !!summary.counts && Number.isFinite(summary.counts.accepted);
@@ -664,16 +664,16 @@ export function createApi(prefix: string, fetcher: typeof fetch = fetch) {
       }
       return verifiedRead(data, verifiedAtMs);
     },
-    /** Read-only work-objective list for any logged-in session; no lease or model call. */
-    async objectives(params: ObjectiveQuery, signal?: AbortSignal): Promise<ObjectivePage> {      const query = new URLSearchParams();
+    /** Read-only work macro task list for any logged-in session; no lease or model call. */
+    async macroTasks(params: MacroTaskQuery, signal?: AbortSignal): Promise<MacroTaskPage> {      const query = new URLSearchParams();
       for (const [key, value] of Object.entries(params)) {
         if (value !== undefined && value !== "") query.set(key, String(value));
       }
-      const { data, verifiedAtMs } = await conditionalRead(`/objectives?${query}`, signal) as { data: ObjectivePage; verifiedAtMs: number | null };
-      if (!data || !Array.isArray(data.objectives) || !Number.isInteger(data.total)
+      const { data, verifiedAtMs } = await conditionalRead(`/macro-tasks?${query}`, signal) as { data: MacroTaskPage; verifiedAtMs: number | null };
+      if (!data || !Array.isArray(data.macroTasks) || !Number.isInteger(data.total)
         || !(data.nextCursor === null || typeof data.nextCursor === "string")
         || !Number.isInteger(data.cursor) || typeof data.changed !== "boolean"
-        || !data.objectives.every(validObjectiveSummary)) {
+        || !data.macroTasks.every(validMacroTaskSummary)) {
         throw new ApiError("INVALID_RESPONSE", "工作目标列表不完整；请检查服务版本。");
       }
       return verifiedRead(data, verifiedAtMs);
@@ -687,22 +687,22 @@ export function createApi(prefix: string, fetcher: typeof fetch = fetch) {
      * `observedAt`, which stays the recorded source fact of an older
      * generation.
      */
-    async objectiveTimeline(
-      objectiveId: string,
-      params: { limit?: number; query?: string; filter?: ObjectiveFilter },
+    async macroTaskTimeline(
+      macroTaskId: string,
+      params: { limit?: number; query?: string; filter?: MacroTaskFilter },
       signal?: AbortSignal,
-    ): Promise<{ timeline: ObjectiveTimeline; verifiedAtMs: number | null }> {
+    ): Promise<{ timeline: MacroTaskTimeline; verifiedAtMs: number | null }> {
       const query = new URLSearchParams();
       for (const [key, value] of Object.entries(params)) {
         if (value !== undefined && value !== "") query.set(key, String(value));
       }
       const { data, verifiedAtMs } = await conditionalRead(
-        `/objectives/${encodeURIComponent(objectiveId)}/timeline?${query}`,
+        `/macro-tasks/${encodeURIComponent(macroTaskId)}/timeline?${query}`,
         signal,
-      ) as { data: ObjectiveTimeline; verifiedAtMs: number | null };
+      ) as { data: MacroTaskTimeline; verifiedAtMs: number | null };
       if (!data || typeof data.observedAt !== "string"
-        || !data.objective || typeof data.objective.objectiveId !== "string"
-        || !validObjectiveSummary(data.objective)
+        || !data.macroTask || typeof data.macroTask.macroTaskId !== "string"
+        || !validMacroTaskSummary(data.macroTask)
         || !Array.isArray(data.rows) || !Array.isArray(data.spans) || !Array.isArray(data.events)
         || !validTimelineRows(data.rows)
         || !data.totals || !Number.isInteger(data.totals.rows) || !Number.isInteger(data.totals.allRows)

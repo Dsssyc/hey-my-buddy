@@ -133,7 +133,7 @@ function fixture(options: {
   });
   const api = { runtimeVersion: vi.fn(async () => ({ running: { mode: "source", softwareVersion: null, contractVersion: null, schemaVersion: null, sourceCommit: null, installedAt: null }, installed: null })),
     snapshot, tasks, command, task: vi.fn(async (runId: string) => records.find(t => t.runId === runId)),
-    objectives: vi.fn(async () => ({ objectives: [], total: 0, nextCursor: null, cursor: 0, changed: false })) } as unknown as ConsoleApi;
+    macroTasks: vi.fn(async () => ({ macroTasks: [], total: 0, nextCursor: null, cursor: 0, changed: false })) } as unknown as ConsoleApi;
   return { api, command, operations, published, snapshot, tasks,
     state: () => state,
     expireSession: () => { loginExpired = true; } };

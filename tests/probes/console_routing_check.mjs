@@ -44,7 +44,7 @@ try {
   });
   const response = await page.goto(new URL('#tasks', base).href);
   assert.equal(response.headers()['x-buddy-preview'], 'synthetic-fixture-data');
-  await page.getByRole('region', { name: '工作目标列表', exact: true }).locator('[data-objective-id]').first().getByRole('button').click();
+  await page.getByRole('region', { name: '工作目标列表', exact: true }).locator('[data-macro-task-id]').first().getByRole('button').click();
   await page.locator('button.tl-item.tl-label').first().dblclick();
   await page.getByRole('tab', { name: '路由依据', exact: true }).click({ timeout: 5000 }).catch(async error => {
     console.error((await page.locator('body').innerText()).slice(-8000)); throw error;

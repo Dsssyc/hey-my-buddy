@@ -82,7 +82,7 @@ class SubmissionCleanupTests(workflow_tests.WorkflowTestCase):
     def test_real_project_admission_rejection_removes_only_new_checkout(self):
         board = self.board()
         foreign = self.submit(board, request_id='foreign', cwd=str(self.repository('foreign')),
-                              objective={'title': 'other repository'}, executionWorkspace={'kind': 'existing', 'access': 'read'})
+                              macroTask={'title': 'other repository'}, executionWorkspace={'kind': 'existing', 'access': 'read'})
         source_index = (self.repo / '.git/index').read_bytes()
         original = board.store.task_submit
         saved = {}
@@ -95,7 +95,7 @@ class SubmissionCleanupTests(workflow_tests.WorkflowTestCase):
             return original(*args, **kwargs)
         with patch.object(board.store, 'task_submit', side_effect=admission):
             with self.assertRaises(BoardError) as caught:
-                self.rejected(board, objectiveId=foreign['objectiveId'])
+                self.rejected(board, macroTaskId=foreign['macroTaskId'])
         self.assertEqual(caught.exception.code, 'CONFLICT')
         self.assertTrue(caught.exception.details['submissionCleanup']['removed'])
         directory = self.allocation()

@@ -101,7 +101,7 @@ TERMINAL_TASK_STATES = frozenset({"completed", "failed", "cancelled"})
 #: every field one explicit helper specification accepts. The nested ``spec``
 #: spelling and ``inheritRoutingPreferences`` are retired duplicate writings
 #: (ADR-021 decisions 5 and 17).
-WORKFLOW_SUBMIT_FIELDS = SUBMIT_FIELDS | {"hostId", "executionWorkspace", "submissionToken", "title", "objective", "objectiveId", "objectiveOf", "configurationLocked"}
+WORKFLOW_SUBMIT_FIELDS = SUBMIT_FIELDS | {"hostId", "executionWorkspace", "submissionToken", "title", "macroTask", "macroTaskId", "macroTaskOf", "configurationLocked"}
 WORKFLOW_HELPER_FIELDS = SUBMIT_FIELDS | {"executionWorkspace", "integrator", "role"}
 #: The retired duplicate and routing spellings ADR-021 decisions 5 and 17 remove;
 #: naming one is an explicit rejection, never a silent ignore.
@@ -486,21 +486,21 @@ def workflow_request_fingerprint(spec: dict, execution_workspace: dict, host_id:
 def normalize_presentation(params: dict) -> dict:
     """Human display metadata is separate from every execution/selector spec."""
     result = {}
-    if sum(key in params for key in ("objective", "objectiveId", "objectiveOf")) > 1:
-        raise BoardError("INVALID_ARGUMENT", "Supply only one of objective, objectiveId or objectiveOf")
+    if sum(key in params for key in ("macroTask", "macroTaskId", "macroTaskOf")) > 1:
+        raise BoardError("INVALID_ARGUMENT", "Supply only one of macroTask, macroTaskId or macroTaskOf")
     if "title" in params:
         result["title"] = " ".join(required_string(params, "title", max_length=200).split())
-    if "objectiveOf" in params:
-        result["objectiveOf"] = required_string(params, "objectiveOf", max_length=128, pattern=IDENTIFIER_PATTERN)
-    if "objectiveId" in params:
-        result["objectiveId"] = required_string(params, "objectiveId", max_length=128,
-                                                pattern=re.compile(r"^obj-[A-Za-z0-9-]+$"))
-    if "objective" in params:
-        objective = require_object(params["objective"], "objective")
-        reject_unknown(objective, {"title", "description"}, "objective")
-        result["objective"] = {"title": " ".join(required_string(objective, "title", max_length=200).split())}
-        if "description" in objective:
-            result["objective"]["description"] = " ".join(required_string(objective, "description", max_length=300).split())
+    if "macroTaskOf" in params:
+        result["macroTaskOf"] = required_string(params, "macroTaskOf", max_length=128, pattern=IDENTIFIER_PATTERN)
+    if "macroTaskId" in params:
+        result["macroTaskId"] = required_string(params, "macroTaskId", max_length=128,
+                                                pattern=re.compile(r"^macro-[A-Za-z0-9-]+$"))
+    if "macroTask" in params:
+        macro_task = require_object(params["macroTask"], "macroTask")
+        reject_unknown(macro_task, {"title", "description"}, "macroTask")
+        result["macroTask"] = {"title": " ".join(required_string(macro_task, "title", max_length=200).split())}
+        if "description" in macro_task:
+            result["macroTask"]["description"] = " ".join(required_string(macro_task, "description", max_length=300).split())
     return result
 
 

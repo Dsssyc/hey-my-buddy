@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Preview-fixture regression for the ADR-018 console surface.
 
-The synthetic preview data (`tests/probes/objective_console_preview.py`) once
+The synthetic preview data (`tests/probes/macro_task_console_preview.py`) once
 lagged behind the console schema, and the new console refused to load it. This
 test closes that gap:
 
@@ -9,7 +9,7 @@ test closes that gap:
 2. the emitted fixture tree is deterministic, so a shape change is reproducible;
 3. the emitted tree is consumed by the *real* frontend parsers — not by a
    Python re-implementation — through ``createApi(...).snapshot()``,
-   ``.objectives()``, ``.objectiveTimeline()``, the ``workflow_get`` command
+   ``.macroTasks()``, ``.macroTaskTimeline()``, the ``workflow_get`` command
    path and ``parseWorkflowReply``, and the resulting report is asserted here.
    Four preview scenarios (normal/readonly/truncated/error) stay covered, and
    deliberately incompatible shapes are refused instead of silently accepted.
@@ -30,7 +30,7 @@ import unittest
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[3]
-PREVIEW = ROOT / "tests" / "probes" / "objective_console_preview.py"
+PREVIEW = ROOT / "tests" / "probes" / "macro_task_console_preview.py"
 CONSOLE = ROOT / "apps" / "console"
 FRONTEND_TEST = "src/preview-contract.test.ts"
 VITEST = CONSOLE / "node_modules" / "vitest" / "vitest.mjs"
@@ -123,7 +123,7 @@ class PreviewFixtureTest(unittest.TestCase):
 
     def _assert_report(self, report: dict, manifest: dict, fixtures: Path) -> None:
         self.assertEqual(1, report["fixtureVersion"])
-        self.assertEqual("tests/probes/objective_console_preview.py", manifest["source"])
+        self.assertEqual("tests/probes/macro_task_console_preview.py", manifest["source"])
         outcomes = {outcome["path"]: outcome for outcome in report["outcomes"]}
         self.assertEqual({entry["path"] for entry in manifest["files"]}, set(outcomes))
         for entry in manifest["files"]:
@@ -140,9 +140,9 @@ class PreviewFixtureTest(unittest.TestCase):
         self.assertEqual({"normal", "readonly", "truncated", "error", "incompatible"}, scenarios)
         readonly = outcomes["readonly/console.json"]
         self.assertEqual("INVALID_RESPONSE", readonly["code"])
-        truncated = outcomes["truncated/timeline-obj-a.json"]
+        truncated = outcomes["truncated/timeline-macro-a.json"]
         self.assertTrue(truncated["facts"]["truncated"]["rows"])
-        for path in ("error/timeline-obj-a.json", "error/workflow-preview-run-a1.json"):
+        for path in ("error/timeline-macro-a.json", "error/workflow-preview-run-a1.json"):
             self.assertEqual("SERVICE_UNAVAILABLE", outcomes[path]["code"])
         self.assertTrue(outcomes["error/console.json"]["accepted"])
 

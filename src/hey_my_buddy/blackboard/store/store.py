@@ -152,7 +152,7 @@ class BoardStore:
             "INSERT INTO events(task_id, attempt_id, revision, kind, payload_json, created_at) VALUES(?,?,?,?,?,?)",
             (task_id, attempt_id, revision, kind, canonical_json(payload or {}), at),
         )
-        from ..tasks.objectives import record_activity
+        from ..tasks.macro_tasks import record_activity
         record_activity(connection, task_id, int(cursor.lastrowid), at)
         return int(cursor.lastrowid)
 
@@ -1834,7 +1834,7 @@ class BoardStore:
             # partial request remains immutable in tasks/spec and workflow audit.
             response["claim"]["task"]["spec"] = spec
             # Display grouping does not travel to a Worker or its native context.
-            for key in ("title", "objectiveId"):
+            for key in ("title", "macroTaskId"):
                 response["claim"]["task"].get("workflow", {}).pop(key, None)
             turn_claim = self.workflow.begin_turn(
                 connection, task=chosen, attempt_id=attempt_id, generation=generation, spec=spec, now=now,

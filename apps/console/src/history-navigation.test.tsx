@@ -1,10 +1,10 @@
 import { cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { Objectives } from "./Objectives";
+import { MacroTasks } from "./MacroTasks";
 import type { ConsoleApi } from "./api";
 import type { Snapshot, Task, TaskQuery } from "./types";
-import { objectiveTimelineFixture } from "./objective-fixtures";
+import { macroTaskTimelineFixture } from "./macro-task-fixtures";
 import { VIEW_PREFERENCE_PREFIX } from "./view-preferences";
 import { readFileSync } from "node:fs";
 
@@ -26,18 +26,18 @@ const rawRecord = (): Task => ({ runId: "cmd-9", task: "外部命令记录", sta
 
 function harness(paged = false) {
   const snapshot = snapshotFixture();
-  const timeline = objectiveTimelineFixture();
+  const timeline = macroTaskTimelineFixture();
   const api = {
     snapshot: vi.fn(async () => structuredClone(snapshot)),
     command: vi.fn(),
     task: vi.fn(async (runId: string) => ({ ...rawRecord(), runId })),
     tasks: vi.fn(async ({ rootsOnly }: TaskQuery) => ({ runs: rootsOnly ? [] : [rawRecord()], total: 1, nextCursor: null })),
-    objectives: vi.fn(async () => ({ objectives: [timeline.objective], total: 1, nextCursor: paged ? "older" : null, cursor: 41, changed: false })),
-    objectiveTimeline: vi.fn(async () => ({ timeline, verifiedAtMs: null })),
+    macroTasks: vi.fn(async () => ({ macroTasks: [timeline.macroTask], total: 1, nextCursor: paged ? "older" : null, cursor: 41, changed: false })),
+    macroTaskTimeline: vi.fn(async () => ({ timeline, verifiedAtMs: null })),
   } as unknown as ConsoleApi;
   const refresh = vi.fn(async () => structuredClone(snapshot));
   const user = userEvent.setup();
-  const view = render(<Objectives snapshot={snapshot} api={api} refresh={refresh} active />);
+  const view = render(<MacroTasks snapshot={snapshot} api={api} refresh={refresh} active />);
   return { ...view, api, refresh, user, timeline };
 }
 
@@ -45,8 +45,8 @@ afterEach(() => { cleanup(); localStorage.clear(); vi.restoreAllMocks(); vi.unst
 
 
 const preference = VIEW_PREFERENCE_PREFIX + "delegation-list-collapsed";
-const objectiveRow = () => screen.getByRole("button", { name: /工作目标时间轴：设计、接口与实现/ });
-function objectiveRail() {
+const macroTaskRow = () => screen.getByRole("button", { name: /工作目标时间轴：设计、接口与实现/ });
+function macroTaskRail() {
   expect(screen.queryByRole("region", { name: "工作目标列表（已收起）" })).not.toBeNull();
   return screen.getByRole("region", { name: "工作目标列表（已收起）" });
 }
@@ -80,7 +80,7 @@ describe("U08 delegation navigation", () => {
     expect(await screen.findByRole("button", { name: /外部命令记录/ })).toBeTruthy();
     back.focus();
     await f.user.keyboard(" ");
-    expect(objectiveRow()).toBeTruthy();
+    expect(macroTaskRow()).toBeTruthy();
     expect(screen.getByLabelText("显示协助任务与内部执行").closest("[hidden]")).toBeTruthy();
   });
 
@@ -96,25 +96,25 @@ describe("U08 delegation navigation", () => {
     expect(list.closest("[hidden]")).toBeTruthy();
     expect(list.scrollTop).toBe(123);
     expect(screen.getByLabelText("搜索工作目标")).toBe(search);
-    expect(within(objectiveRail()).queryByRole("button", { name: "切换到全部执行记录" })).not.toBeNull();
-    await f.user.click(within(objectiveRail()).getByRole("button", { name: "切换到全部执行记录" }));
+    expect(within(macroTaskRail()).queryByRole("button", { name: "切换到全部执行记录" })).not.toBeNull();
+    await f.user.click(within(macroTaskRail()).getByRole("button", { name: "切换到全部执行记录" }));
     const rawRail = screen.getByRole("region", { name: "全部执行记录列表（已收起）" });
     expect(within(rawRail).getByRole("button", { name: "展开全部执行记录列表" })).toBeTruthy();
     await f.user.click(within(rawRail).getByRole("button", { name: "切换到工作目标" }));
-    f.rerender(<Objectives snapshot={snapshotFixture()} api={f.api} refresh={f.refresh} active={false} />);
-    f.rerender(<Objectives snapshot={snapshotFixture()} api={f.api} refresh={f.refresh} active />);
-    expect(objectiveRail()).toBeTruthy();
-    await f.user.click(within(objectiveRail()).getByRole("button", { name: "展开工作目标列表" }));
+    f.rerender(<MacroTasks snapshot={snapshotFixture()} api={f.api} refresh={f.refresh} active={false} />);
+    f.rerender(<MacroTasks snapshot={snapshotFixture()} api={f.api} refresh={f.refresh} active />);
+    expect(macroTaskRail()).toBeTruthy();
+    await f.user.click(within(macroTaskRail()).getByRole("button", { name: "展开工作目标列表" }));
     expect(screen.getByLabelText("工作目标条目")).toBe(list);
     expect(list.scrollTop).toBe(123);
     expect(screen.getByRole("button", { name: "加载更早工作目标" })).toBe(more);
     await f.user.click(more);
-    expect(f.api.objectives).toHaveBeenCalledWith(expect.objectContaining({ before: "older", limit: 50 }), expect.any(AbortSignal));
+    expect(f.api.macroTasks).toHaveBeenCalledWith(expect.objectContaining({ before: "older", limit: 50 }), expect.any(AbortSignal));
     await f.user.click(screen.getByRole("button", { name: "收起工作目标列表" }));
     f.unmount();
     const next = harness();
-    expect(objectiveRail()).toBeTruthy();
-    await next.user.click(within(objectiveRail()).getByRole("button", { name: "展开工作目标列表" }));
+    expect(macroTaskRail()).toBeTruthy();
+    await next.user.click(within(macroTaskRail()).getByRole("button", { name: "展开工作目标列表" }));
     expect(localStorage.getItem(preference)).toBe("false");
     expect(screen.getByRole("region", { name: "工作目标列表" })).toBeTruthy();
   });
@@ -123,16 +123,16 @@ describe("U08 delegation navigation", () => {
     narrow(false);
     const f = harness();
     await openDetail(f);
-    expect(objectiveRail()).toBeTruthy();
+    expect(macroTaskRail()).toBeTruthy();
     expect(localStorage.getItem(preference)).toBeNull();
     await f.user.click(within(document.querySelector(".locator") as HTMLElement).getByRole("button", { name: "关闭详情" }));
     expect(screen.getByRole("region", { name: "工作目标列表" })).toBeTruthy();
     await f.user.click(within(screen.getByRole("region", { name: "工作目标列表" })).getByRole("button", { name: "收起工作目标列表" }));
     await openDetail(f);
     await f.user.click(within(document.querySelector(".locator") as HTMLElement).getByRole("button", { name: "关闭详情" }));
-    expect(objectiveRail()).toBeTruthy();
+    expect(macroTaskRail()).toBeTruthy();
     expect(localStorage.getItem(preference)).toBe("true");
-    await f.user.click(within(objectiveRail()).getByRole("button", { name: "展开工作目标列表" }));
+    await f.user.click(within(macroTaskRail()).getByRole("button", { name: "展开工作目标列表" }));
     expect(screen.getByRole("region", { name: "工作目标列表" })).toBeTruthy();
     expect(localStorage.getItem(preference)).toBe("false");
   });
@@ -141,11 +141,11 @@ describe("U08 delegation navigation", () => {
     narrow(false);
     const f = harness();
     await openDetail(f);
-    await f.user.click(within(objectiveRail()).getByRole("button", { name: "展开工作目标列表" }));
+    await f.user.click(within(macroTaskRail()).getByRole("button", { name: "展开工作目标列表" }));
     const drawer = await screen.findByRole("dialog", { name: "工作目标列表（抽屉）" });
     await f.user.click(within(drawer).getByRole("button", { name: "收起工作目标列表" }));
     expect(localStorage.getItem(preference)).toBe("true");
-    await f.user.click(within(objectiveRail()).getByRole("button", { name: "展开工作目标列表" }));
+    await f.user.click(within(macroTaskRail()).getByRole("button", { name: "展开工作目标列表" }));
     expect(await screen.findByRole("dialog", { name: "工作目标列表（抽屉）" })).toBeTruthy();
     expect(localStorage.getItem(preference)).toBe("false");
     expect(document.querySelector(".right-dock.side")).toBeTruthy();
@@ -156,8 +156,8 @@ describe("U08 delegation navigation", () => {
     vi.spyOn(Storage.prototype, "setItem").mockImplementation(() => { throw new Error("blocked"); });
     const f = harness();
     await f.user.click(screen.getByRole("button", { name: "收起工作目标列表" }));
-    expect(objectiveRail()).toBeTruthy();
-    await f.user.click(within(objectiveRail()).getByRole("button", { name: "展开工作目标列表" }));
+    expect(macroTaskRail()).toBeTruthy();
+    await f.user.click(within(macroTaskRail()).getByRole("button", { name: "展开工作目标列表" }));
     expect(screen.getByRole("region", { name: "工作目标列表" })).toBeTruthy();
   });
 
@@ -170,7 +170,7 @@ describe("U08 delegation navigation", () => {
     const toggle = within(mobile).getByRole("button", { name: "切换到全部执行记录" });
     expect(toggle.getAttribute("title")).toBe("切换到全部执行记录");
     await f.user.click(within(mobile).getByRole("button", { name: "收起工作目标列表" }));
-    expect(objectiveRail()).toBeTruthy();
+    expect(macroTaskRail()).toBeTruthy();
     const css = readFileSync("src/styles.css", "utf8");
     expect(css).toContain(".workspace-grid.list-rail.has-selection > .rail-panel { display: flex; }");
     expect(css).toContain(".workspace-grid.list-rail { display: grid; }");

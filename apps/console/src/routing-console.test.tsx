@@ -72,7 +72,7 @@ function apiFor(state: Snapshot, command: ReturnType<typeof vi.fn>, records: Tas
     snapshot: vi.fn(async () => structuredClone(state)), command,
     tasks: vi.fn(async () => ({ runs: records, total: records.length, nextCursor: null })),
     task: vi.fn(async (runId: string) => records.find(record => record.runId === runId)),
-    objectives: vi.fn(async () => ({ objectives: [], total: 0, nextCursor: null, cursor: 0, changed: false })),
+    macroTasks: vi.fn(async () => ({ macroTasks: [], total: 0, nextCursor: null, cursor: 0, changed: false })),
   } as unknown as ConsoleApi;
 }
 function deferred<T>() {

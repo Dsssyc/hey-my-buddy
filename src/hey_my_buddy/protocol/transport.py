@@ -62,9 +62,9 @@ METHOD_MAP: dict[str, tuple[str, str]] = {
     "scope-amend": ("control", "workflow_scope_amend"),
     "workspace-resolve": ("control", "workflow_workspace_resolve"),
     "suggest": ("control", "workflow_suggest"),
-    # -- work objectives: read-only browsing of grouped delegations ----------
-    "objective-list": ("control", "objective_list"),
-    "objective-timeline": ("control", "objective_timeline"),
+    # -- work macro tasks: read-only browsing of grouped delegations ----------
+    "macro-task-list": ("control", "macro_task_list"),
+    "macro-task-timeline": ("control", "macro_task_timeline"),
     # -- execution records for command/external/decision infrastructure -----
     "execution-submit": ("control", "task_submit"),
     "execution-cancel": ("control", "task_cancel"),

@@ -2,12 +2,12 @@ import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { cleanup, render } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { ObjectiveTimeline } from "./ObjectiveTimeline";
-import type { ObjectiveTimelineProps } from "./ObjectiveTimeline";
-import { ObjectiveList } from "./ObjectiveList";
-import { listFixture, objectiveSummary, objectiveTimelineFixture } from "./objective-fixtures";
+import { MacroTaskTimeline } from "./MacroTaskTimeline";
+import type { MacroTaskTimelineProps } from "./MacroTaskTimeline";
+import { MacroTaskList } from "./MacroTaskList";
+import { listFixture, macroTaskSummary, macroTaskTimelineFixture } from "./macro-task-fixtures";
 import { Status } from "./ui";
-import type { ObjectiveTimeline as ObjectiveTimelineData, TimelineRow, TimelineSpan } from "./objective-types";
+import type { MacroTaskTimeline as MacroTaskTimelineData, TimelineRow, TimelineSpan } from "./macro-task-types";
 
 // Check the rendered cascade and declared decoration geometry. jsdom cannot
 // measure widths, paint, native zoom or elementsFromPoint. Host checks those.
@@ -27,7 +27,7 @@ function rule(selector: string) {
 }
 const OBSERVED_AT = "2026-09-26T08:12:00Z";
 
-function timeline(kinds: Array<Partial<TimelineSpan>>): ObjectiveTimelineData {
+function timeline(kinds: Array<Partial<TimelineSpan>>): MacroTaskTimelineData {
   const base: TimelineRow = {
     runId: "r1", parentRunId: null, rootRunId: "r1", title: "短记录与盒模型", titleSource: "title",
     taskSummary: null, summary: null, createdAt: "2026-09-26T01:12:00Z", state: "running", status: "running",
@@ -40,24 +40,24 @@ function timeline(kinds: Array<Partial<TimelineSpan>>): ObjectiveTimelineData {
     shutdownConfirmed: null, uncertain: false, clockSkew: false, ...overrides,
   })) as TimelineSpan[];
   return {
-    objective: objectiveSummary(), observedAt: OBSERVED_AT, cursor: 1, rows: [base], spans, events: [],
+    macroTask: macroTaskSummary(), observedAt: OBSERVED_AT, cursor: 1, rows: [base], spans, events: [],
     totals: { rows: 1, spans: spans.length, events: 0, allRows: 1 },
     truncated: { rows: false, spans: false, events: false }, scopeComplete: true, filtered: false,
   };
 }
 
-function props(data: ObjectiveTimelineData): ObjectiveTimelineProps {
+function props(data: MacroTaskTimelineData): MacroTaskTimelineProps {
   return {
-    summary: data.objective, timeline: data, loading: false, error: "", stale: false,
+    summary: data.macroTask, timeline: data, loading: false, error: "", stale: false,
     newRunIds: new Set<string>(), hidden: false, openedKey: null, openedRunId: null, selection: null,
     onSelectItem: vi.fn(), onOpenItem: vi.fn(), onSelectRun: vi.fn(), onOpenRun: vi.fn(),
     onClearSelection: vi.fn(), onRetry: vi.fn(), onBackToList: vi.fn(),
-  } as ObjectiveTimelineProps;
+  } as MacroTaskTimelineProps;
 }
 
 describe("U5: duration geometry and borders share one boundary", () => {
   it("keeps every rendered variant and state free of width-taking padding/borders", () => {
-    render(<ObjectiveTimeline {...props(objectiveTimelineFixture())} />);
+    render(<MacroTaskTimeline {...props(macroTaskTimelineFixture())} />);
     const spans = document.querySelectorAll<HTMLElement>(".tl-scroll .sp");
     expect(spans.length).toBeGreaterThan(0);
     for (const span of spans) {
@@ -94,7 +94,7 @@ describe("U5: duration geometry and borders share one boundary", () => {
       { spanId: "short", kind: "execution", state: "finished", startAt: "2026-09-26T01:14:00Z", endAt: "2026-09-26T01:14:00.001Z", resultStatus: "failed", shutdownConfirmed: true },
       { spanId: "wait", kind: "host", state: "open", startAt: "2026-09-26T01:14:00.001Z", endAt: null },
     ]);
-    const { container } = render(<ObjectiveTimeline {...props(data)} />);
+    const { container } = render(<MacroTaskTimeline {...props(data)} />);
     const failed = container.querySelector<HTMLElement>('.tl-scroll [data-key="span:short"]')!;
     const wait = container.querySelector<HTMLElement>('.tl-scroll [data-key="span:wait"]')!;
     expect(Number.parseFloat(failed.style.width)).toBeCloseTo((772 / 788) * 100 / (418 * 60 * 1000), 12);
@@ -113,7 +113,7 @@ describe("U5: duration geometry and borders share one boundary", () => {
     expect(rule(".end-mark").lineHeight).toBe("12px");
     expect(rule(".mk").width).toBe("18px");
     expect(rule(".mk").marginLeft).toBe("-9px");
-    render(<ObjectiveTimeline {...props(objectiveTimelineFixture())} />);
+    render(<MacroTaskTimeline {...props(macroTaskTimelineFixture())} />);
     const solidText = document.querySelector(".tl-scroll .sp-solid-text")!;
     expect(getComputedStyle(solidText).paddingLeft).toBe("16px");
     expect(getComputedStyle(solidText).paddingRight).toBe("16px");
@@ -126,7 +126,7 @@ describe("U5: duration geometry and borders share one boundary", () => {
 describe("U5: audited controls retain the shared global box model and normal sizes", () => {
   it("lets the rendered list use its full width without reserving an idle scrollbar gutter", () => {
     const rows = listFixture();
-    const { getByLabelText } = render(<ObjectiveList
+    const { getByLabelText } = render(<MacroTaskList
       rows={rows} total={rows.length} loading={false} error="" nextCursor={null} reorder={null}
       filter="all" query="" projectId="" hostId="" choices={{ projects: [], hosts: [] }}
       selected={null} rail={false}
@@ -175,7 +175,7 @@ describe("U5: audited controls retain the shared global box model and normal siz
 
 describe("U6.4: reading insets stay inside real label widths", () => {
   it("gives ordinary, terminal, solid and tail text their reading space inside real geometry", () => {
-    render(<ObjectiveTimeline {...props(objectiveTimelineFixture())} />);
+    render(<MacroTaskTimeline {...props(macroTaskTimelineFixture())} />);
     for (const selector of [".exec:not(.unknown) .sp-text", ".wait .sp-text", ".sp-solid-text", ".sp-tail"]) {
       const labels = document.querySelectorAll<HTMLElement>(`.tl-scroll ${selector}`);
       expect(labels.length, selector).toBeGreaterThan(0);
