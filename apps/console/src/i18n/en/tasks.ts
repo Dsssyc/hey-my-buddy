@@ -35,7 +35,7 @@ export const tasks = {
   noUnfinishedMicroTasks: "No unfinished micro tasks",
   laneRegion: "This macro task's micro tasks",
   execution: "Execution", wait: "Wait", elapsed: "Elapsed", now: "Now", leadBadge: "Lead", otherMicroTasks: "Other micro tasks",
-  laneToggle: "Collapse or expand {{title}}'s micro tasks",
+  laneMicroTasks: "{{n}} micro tasks", laneToggle: "Collapse or expand {{title}}'s micro tasks",
   fixes: "Repairs {{title}}", fixedBy: "Repaired by {{n}} micro tasks", newMicroTask: "New micro task", track: "Tracks for {{title}}", segment: "{{label}}", openWait: "Waiting {{duration}}", turnCount: "{{n}} turns", range: "{{start}}–{{end}} · {{n}} micro tasks", noTime: "Time not recorded", noMicroTasks: "No micro tasks", uncompressed: "This macro task's record is incomplete; time is not compressed", timelineReadFailed: "Read failed; time frozen at {{at}}", staleTimeline: "Showing the last read", closeDetail: "Close detail",
 } satisfies typeof zh;
 export default tasks;

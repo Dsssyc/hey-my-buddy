@@ -2,6 +2,8 @@ import { cleanup, fireEvent, render, screen, within } from "@testing-library/rea
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useState } from "react";
+import i18n from "i18next";
+import { formatDuration } from "../i18n/format";
 import { TooltipProvider } from "../components/ui/tooltip";
 import { macroTaskTimelineFixture } from "../macro-task-fixtures";
 import type { TimelineBuddy, TimelineRow } from "../macro-task-types";
@@ -12,7 +14,7 @@ import * as display from "../macro-task-display";
 import { groupLanes, laneSummary, ownedWaits } from "./lanes";
 
 
-afterEach(cleanup);
+afterEach(() => { cleanup(); localStorage.clear(); });
 const setup = (overrides: Partial<TaskWorkProps> = {}) => {
   const timeline = macroTaskTimelineFixture();
   const props: TaskWorkProps = { readGoals: vi.fn(), summary: timeline.macroTask, timeline, displayObservedAt: timeline.observedAt, loading: false, error: "", stale: false,
@@ -189,6 +191,61 @@ describe("Lead lanes from recorded ownership", () => {
     timeline.spans.find(span => span.spanId === "s-r3-e1")!.tokenUsage = { inputTokens: 50, cachedInputTokens: 0, outputTokens: 5, source: "codex-native", scope: "attempt", inputBasis: "includes-cached" };
     return timeline;
   };
+  for (const language of ["zh", "en"]) it(`puts the whole Lead group before its own row facts on hover, focus and selection in ${language}`, async () => {
+    await i18n.changeLanguage(language);
+    try {
+      const timeline = laneFixture();
+      const { props, rerender } = setup({ timeline });
+      const summary = () => document.querySelector('[data-slot=timeline-lane-summary]');
+      const check = () => {
+        expect(summary()?.textContent).toContain(language === "zh" ? "3 个微任务" : "3 micro tasks");
+        expect(summary()?.textContent).toContain(formatDuration(378 * 60_000));
+        expect(summary()?.textContent).toContain(formatDuration(107 * 60_000));
+        expect(summary()?.textContent).toContain(language === "zh" ? "输入 150（含缓存 40）" : "Input 150");
+        expect(summary()?.textContent).toContain(language === "zh" ? "输出 15" : "Output 15");
+        expect(status()?.startsWith(summary()!.textContent!)).toBe(true);
+        expect(status()).toContain(language === "zh" ? "共 2 回合" : "2 turns");
+        expect(status()).toContain("gpt-5-codex");
+      };
+      fireEvent.pointerEnter(row("r2")); check();
+      expect(screen.queryByRole("tooltip")).toBeNull();
+      fireEvent.pointerLeave(row("r2"));
+      fireEvent.focus(row("r2")); check();
+      fireEvent.blur(row("r2"));
+      fireEvent.click(document.querySelector('[data-slot=timeline-lane-lead]')!); check();
+      expect(props.onOpen).not.toHaveBeenCalled();
+      fireEvent.pointerEnter(row("r3"));
+      expect(summary()).toBeNull();
+      fireEvent.pointerLeave(row("r3"));
+      fireEvent.focus(row("r4"));
+      expect(summary()).toBeNull();
+      fireEvent.blur(row("r4")); check();
+      rerender(<TooltipProvider delayDuration={0}><TaskWork {...props} openedRunId="r2"/></TooltipProvider>);
+      expect(status()).toBe("");
+      expect(summary()).toBeNull();
+      expect(document.querySelector('[data-slot=timeline-status] [data-slot=legend-trigger]')).not.toBeNull();
+    } finally { await i18n.changeLanguage("zh"); }
+  });
+  it("keeps ended members in the Lead's cost summary when only unfinished rows are drawn", () => {
+    const timeline = laneFixture();
+    timeline.rows.find(item => item.runId === "r2")!.category = "active";
+    setup({ timeline });
+    fireEvent.click(screen.getByRole("button", { name: "只看未结束的" }));
+    expect(row("r3")).toBeNull();
+    fireEvent.pointerEnter(row("r2"));
+    const summary = document.querySelector('[data-slot=timeline-lane-summary]')!;
+    expect(summary.textContent).toContain("3 个微任务");
+    expect(summary.textContent).toContain("输入 150（含缓存 40）");
+  });
+  it("names missing Lead times as unknown and keeps missing usage unrecorded", () => {
+    const timeline = laneFixture(); timeline.spans = []; timeline.events = [];
+    setup({ timeline });
+    fireEvent.pointerEnter(row("r2"));
+    const summary = document.querySelector('[data-slot=timeline-lane-summary]')!;
+    expect(summary.textContent).toContain("历时 未知");
+    expect(summary.textContent).toContain("执行 未知");
+    expect(summary.textContent).toContain("用量未记录");
+  });
   it("groups one Lead with the micro tasks it owns and keeps the rest ordinary", () => {
     const timeline = laneFixture();
     setup({ timeline });

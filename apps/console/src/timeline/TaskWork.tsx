@@ -9,6 +9,7 @@ import { ScrollArea } from "../components/ui/scroll-area";
 import { MacroTaskOverview } from "../MacroTaskOverview";
 import { buddyLabel, clockTime, displayTitle, rowStateInfo } from "../macro-task-display";
 import { formatDuration } from "../i18n/format";
+import { usageTotalsLabel } from "../usage-totals";
 import type { FriendlyBuddy } from "../macro-task-display";
 import type { MacroTaskSummary, MacroTaskTimeline, TimelineRow, TimelineSpan } from "../macro-task-types";
 import { parseTimelineInstant as instant } from "./instant";
@@ -21,7 +22,7 @@ import { NameDivider, useNameWidth } from "./NameDivider";
 import { ZoomRuler } from "./ZoomRuler";
 import { useTimelineGestures } from "./useTimelineGestures";
 import { buddyColorsFor } from "./buddyColors";
-import { groupLanes, laneLevel, ownedWaits } from "./lanes";
+import { groupLanes, laneLevel, laneSummary, ownedWaits } from "./lanes";
 import type { ScaleInput } from "./scale";
 import type { LaneGroup } from "./lanes";
 import { markerAt, markerHasKey, markerKey } from "./MarkerCluster";
@@ -50,7 +51,7 @@ const NO_EVENTS: MacroTaskTimeline["events"] = [];
 /**
  * One macro task's working area: without a detail it is the lanes — every Lead
  * with the micro tasks it owns under one shared time scale, in one scroll area
- * whose sticky name column and lane summaries stay in view; with a detail the
+ * whose sticky name column and active Lead readout stay in view; with a detail the
  * left column becomes the plain micro task list and the detail, with its steps
  * in a strip along its top, fills the rest.
  */
@@ -133,6 +134,10 @@ export function TaskWork(props: TaskWorkProps) {
     wasOpen.current = openedRunId;
   }, [openedRunId, open, narrow, workspace]);
   const layout = useMemo(() => groupLanes(rows), [rows]);
+  // A row filter changes what is drawn, not the group's recorded cost.
+  const laneSummaries = useMemo(() => new Map(timeline ? groupLanes(timeline.rows).lanes.map(lane => [lane.lead.runId, {
+    count: lane.members.length + 1, ...laneSummary(lane, timeline),
+  }]) : []), [timeline]);
   const spansByRow = useMemo(() => {
     const grouped = new Map<string, TimelineSpan[]>();
     for (const span of timeline?.spans ?? []) {
@@ -159,7 +164,14 @@ export function TaskWork(props: TaskWorkProps) {
     const lastEnd = row.state === "delivered" && spans.filter(span => span.kind === "execution").every(span => span.shutdownConfirmed === true)
       ? Math.max(0, ...spans.filter(span => span.kind === "execution").map(span => instant(span.endAt) ?? 0)) : 0;
     const start = wait ? instant(wait.startAt) : lastEnd || null;
-    return [rowStateInfo(row, rows).label, start !== null ? t("openWait", { duration: formatDuration(Math.max(0, nowMs - start)) }) : null, t("turnCount", { n: turns }), buddyLabel(row.buddy, props.buddies)].filter(Boolean).join(" · ");
+    const own = [rowStateInfo(row, rows).label, start !== null ? t("openWait", { duration: formatDuration(Math.max(0, nowMs - start)) }) : null, t("turnCount", { n: turns }), buddyLabel(row.buddy, props.buddies)].filter(Boolean).join(" · ");
+    const summary = laneSummaries.get(row.runId);
+    return summary ? <><span data-slot="timeline-lane-summary">{[
+      t("laneMicroTasks", { n: summary.count }),
+      `${t("elapsed")} ${summary.elapsedMs === null ? t("taskDetail:unknown") : formatDuration(summary.elapsedMs)}`,
+      `${t("execution")} ${summary.executionMs === null ? t("taskDetail:unknown") : formatDuration(summary.executionMs)}`,
+      usageTotalsLabel(summary.usage),
+    ].join(" · ")}</span>{" · "}{own}</> : own;
   };
   const activeSpan = hoveredSpan ?? (hoveredRow ? null : focusedSpan ?? selectedSpan);
   const activeRow = hoveredRow ?? focusedRow ?? rows.find(row => row.runId === selectedRunId);
@@ -376,7 +388,7 @@ export function TaskWork(props: TaskWorkProps) {
             </div>
           </div>
           : <div role="region" aria-label={t("laneRegion")} className="flex min-h-0 min-w-0 flex-1 flex-col">{lanesView}</div>}
-        <div data-slot="timeline-status" className="flex min-h-9 shrink-0 items-center gap-2 border-t bg-card px-4 text-xs text-ink2 sm:px-6"><span role="status" className="min-w-0 flex-1 truncate">{!open && <>{readout}{incomplete ? ` · ${t("uncompressed")}` : ""}</>}</span><Legend/></div>
+        <div data-slot="timeline-status" className="flex min-h-9 shrink-0 items-center gap-2 border-t bg-card px-4 py-1.5 text-xs text-ink2 sm:px-6"><span data-slot="timeline-readout" role="status" className="min-w-0 flex-1 truncate">{!open && <>{readout}{incomplete ? ` · ${t("uncompressed")}` : ""}</>}</span><Legend/></div>
       </>}
   </section>;
 }

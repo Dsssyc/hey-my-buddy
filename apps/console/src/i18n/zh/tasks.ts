@@ -39,7 +39,7 @@ export const tasks = {
   now: "现在",
   leadBadge: "Lead",
   otherMicroTasks: "其他微任务",
-
+  laneMicroTasks: "{{n}} 个微任务",
   laneToggle: "收起或展开{{title}}名下的微任务",
   fixes: "修正 {{title}}",
   fixedBy: "由 {{n}} 项微任务修正",

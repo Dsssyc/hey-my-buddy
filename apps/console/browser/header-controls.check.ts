@@ -163,17 +163,23 @@ for (const reduced of [false, true]) test(`shared titles scroll by pointer and k
       await expect(text).toHaveCSS("transform", "none");
     } else {
       await expect.poll(() => text.evaluate(node => node.getAnimations().length)).toBe(1);
+      await settle(page);
+      expect(await text.evaluate(node => node.getAnimations().length)).toBe(1);
+      if (index === 0) {
+        await text.evaluate(node => { const transition = node.getAnimations()[0]!; transition.pause(); transition.currentTime = Number(transition.effect!.getComputedTiming().duration) / 2; });
+        await shot(page, "zh-dark-1280-long-title-scrolling");
+      }
       const movement = await text.evaluate(node => {
         const animation = node.getAnimations()[0]!; animation.pause();
         const at = (ms: number) => { animation.currentTime = ms; return new DOMMatrix(getComputedStyle(node).transform).m41; };
         const start = at(0), middle = at(500), next = at(1000);
         const duration = Number(animation.effect!.getComputedTiming().duration);
-        const end = at(duration - 1000), rest = at(duration - 500);
+        const end = at(duration), rest = at(duration * 2 + 2000);
         const viewport = node.parentElement!.getBoundingClientRect();
         const range = document.createRange();
         range.setStart(node.firstChild!, node.textContent!.length - 1); range.setEnd(node.firstChild!, node.textContent!.length);
         const glyph = range.getBoundingClientRect();
-        return { start, middle, next, end, rest, lastGlyphRightInset: viewport.right - glyph.right, lastGlyphLeftInset: glyph.left - viewport.left };
+        return { start, middle, next, end, rest, sampledAfterMs: duration * 2 + 2000, durationMs: duration, lastGlyphRightInset: viewport.right - glyph.right, lastGlyphLeftInset: glyph.left - viewport.left };
       });
       await mkdir(captures, { recursive: true });
       await writeFile(`${captures}/title-movement-${index}.json`, JSON.stringify(movement, null, 2) + "\n");
@@ -182,18 +188,17 @@ for (const reduced of [false, true]) test(`shared titles scroll by pointer and k
       expect(movement.lastGlyphRightInset, "the last glyph clears the right fade at the end").toBeGreaterThanOrEqual(27.5);
       expect(movement.lastGlyphLeftInset).toBeGreaterThanOrEqual(27.5);
       expect(await target.evaluate(node => getComputedStyle(node).maskImage)).toMatch(/^linear-gradient\((?:to right|90deg), rgba\(0, 0, 0, 0\)/);
-      if (index === 0) {
-        await text.evaluate(node => { const animation = node.getAnimations()[0]!; animation.currentTime = (Number(animation.effect!.getComputedTiming().duration) - 1000) / 2; });
-        await shot(page, "zh-dark-1280-long-title-scrolling");
-      }
+      if (index === 0) await shot(page, "zh-dark-1280-title-at-end");
     }
     await page.mouse.move(0, 0);
+    if (!reduced) await expect(text).toHaveCSS("transition-duration", "0.2s");
     await expect(text).toHaveCSS("transform", "none");
     await page.keyboard.press("Tab");
     const focus = target.locator("xpath=ancestor-or-self::*[self::button or self::h2][1]");
     await focus.focus();
     expect(await text.evaluate(node => node.getAnimations().length)).toBe(reduced ? 0 : 1);
     await focus.blur();
+    await expect(text).toHaveCSS("transform", "none");
     await expect(page.getByRole("tooltip")).toHaveCount(0);
   }
   if (!reduced) await shot(page, "zh-dark-1280-sidebar");

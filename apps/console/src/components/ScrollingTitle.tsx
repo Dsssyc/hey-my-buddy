@@ -24,8 +24,7 @@ export function ScrollingTitle({ text, as: Tag = "span", className, focusable = 
   }, [text]);
   return <Tag ref={viewport} data-slot="scrolling-title" data-overflow={distance > 0}
     tabIndex={focusable ? 0 : undefined} className={cn("scrolling-title", className)} style={{
-      "--title-fade": `${FADE_PX}px`, "--title-distance": `${distance}px`, "--title-duration": `${distance / 40 + 1}s`,
-      "--title-travel-end": `${distance / (distance + 40) * 100}%`,
+      "--title-fade": `${FADE_PX}px`, "--title-distance": `${distance}px`, "--title-duration": `${distance / 40}s`,
     } as CSSProperties}>
     <span ref={content} data-slot="scrolling-title-text">{text}</span>
   </Tag>;

@@ -225,21 +225,25 @@
   .goal-version { transition: none; }
 }
 
-/* A clipped title scrolls to its end, rests for a second, then reads again. */
+[data-slot="timeline-readout"]:has([data-slot="timeline-lane-summary"]) { overflow: visible; white-space: normal; text-overflow: clip; overflow-wrap: anywhere; line-height: 1.25rem; }
+
+/* A clipped title holds at its end; leaving brings it back gently. */
 .scrolling-title { display: block; min-width: 0; max-width: 100%; overflow: hidden; white-space: nowrap; }
 .scrolling-title > span { display: inline-block; width: max-content; }
 .scrolling-title[data-overflow="true"] { mask-image: linear-gradient(to right, #000 calc(100% - var(--title-fade)), transparent); }
 @media (prefers-reduced-motion: no-preference) {
+  .scrolling-title > span { transition: transform 200ms ease-out; }
   .scrolling-title[data-overflow="true"]:is(:hover, :focus-visible),
   button:is(:hover, :focus-visible) .scrolling-title[data-overflow="true"] {
     mask-image: linear-gradient(to right, transparent, #000 var(--title-fade), #000 calc(100% - var(--title-fade)), transparent);
   }
   .scrolling-title[data-overflow="true"]:is(:hover, :focus-visible) > span,
   button:is(:hover, :focus-visible) .scrolling-title[data-overflow="true"] > span {
-    animation: title-scroll var(--title-duration) linear(0, 1 var(--title-travel-end), 1) infinite;
+    transform: translateX(calc(-1 * var(--title-distance)));
+    transition-duration: var(--title-duration);
+    transition-timing-function: linear;
   }
 }
-@keyframes title-scroll { from { transform: translateX(0); } to { transform: translateX(calc(-1 * var(--title-distance))); } }
 .sidebar-resize { position: relative; z-index: 2; outline: none; }
 .sidebar-resize::after { content: ""; position: absolute; left: 0; top: 0; bottom: 0; width: 1px; background: var(--line); }
 .sidebar-resize[data-separator="hover"]::after,
