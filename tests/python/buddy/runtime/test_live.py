@@ -753,7 +753,7 @@ class WorkerLiveUnitTests(unittest.TestCase):
 
 
 SANITIZED = ("HMB_STATE_DIR", "HMB_RUNTIME_ROOT", "HMB_RUNTIME", "HMB_RUNTIME_IDENTITY",
-             "HMB_WORKER_STATE", "HMB_WORKER_ID", "HMB_AGENT_CREDENTIAL", "HMB_AGENT_CREDENTIAL_FILE",
+             "HMB_WORKER_STATE", "HMB_WORKER_ID", "HMB_AGENT_CREDENTIAL_FILE",
              "VIRTUAL_ENV", "UV_PROJECT_ENVIRONMENT")
 PEER = Path(__file__).resolve().parent / "fixtures/live_runtime_peer.py"
 

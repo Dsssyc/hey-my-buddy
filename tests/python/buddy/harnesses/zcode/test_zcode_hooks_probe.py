@@ -59,7 +59,7 @@ class EnvironmentIsolationTests(unittest.TestCase):
             fake = {
                 "HOME": tmp,
                 "PATH": "/usr/bin:/bin",
-                "HMB_AGENT_CREDENTIAL": "leak-credential",
+                "HMB_AGENT_CREDENTIAL_FILE": "/private/leak-credential.json",
                 "HMB_WORKER_ID": "leak-worker",
                 "UV_PROJECT_ENVIRONMENT": "/leak/venv",
                 "HTTP_PROXY": "http://127.0.0.1:9",

@@ -110,7 +110,7 @@ class LegalLaunchTest(AcpTestCase):
             "NO_PROXY": "localhost",
             "SSL_CERT_FILE": "/synthetic/ca.pem",
             "NODE_EXTRA_CA_CERTS": "/synthetic/node-ca.pem",
-            "HMB_AGENT_CREDENTIAL": "synthetic-credential-value",
+            "HMB_AGENT_CREDENTIAL_FILE": "/synthetic/credential.json",
             "ACP_TEST_SECRET": "synthetic-secret-value",
         }
         extras = {"DSH_PERMISSION_MODE": "read-only"}
@@ -127,7 +127,7 @@ class LegalLaunchTest(AcpTestCase):
         self.assertEqual("/synthetic/node-ca.pem", explicit["NODE_EXTRA_CA_CERTS"])
         # Nothing outside the native allow-list - least of all a credential
         # variable - is brought in from the parent environment.
-        self.assertNotIn("HMB_AGENT_CREDENTIAL", explicit)
+        self.assertNotIn("HMB_AGENT_CREDENTIAL_FILE", explicit)
         self.assertNotIn("ACP_TEST_SECRET", explicit)
 
     def test_an_unset_dsh_home_stays_unset(self):
@@ -139,14 +139,13 @@ class LegalLaunchTest(AcpTestCase):
     def test_native_child_never_receives_board_or_file_credential(self):
         source = {"PATH": "/usr/bin", "HMB_STATE_DIR": "/private/board",
                   "HMB_AGENT_CREDENTIAL_FILE": "/private/attempt/credential.json",
-                  "HMB_AGENT_CREDENTIAL": "secret", "HMB_WORKER_ID": "worker"}
+                  "HMB_WORKER_ID": "worker"}
         ordinary = child_environment(source=source)
         self.assertNotIn("HMB_STATE_DIR", ordinary)
         self.assertNotIn("HMB_AGENT_CREDENTIAL_FILE", ordinary)
         child = child_environment(source=source)
         self.assertNotIn("HMB_STATE_DIR", child)
         self.assertNotIn("HMB_AGENT_CREDENTIAL_FILE", child)
-        self.assertNotIn("HMB_AGENT_CREDENTIAL", child)
         self.assertNotIn("HMB_WORKER_ID", child)
 
     def test_spawned_child_receives_inherited_native_homes(self):

@@ -29,7 +29,7 @@ from hey_my_buddy.buddy.runtime.worker import TERMINATION_COMPLETED, TERMINATION
 #: runtime, a Worker identity or an agent credential instead of this private root.
 SANITIZED_VARIABLES = (
     "HMB_STATE_DIR", "HMB_RUNTIME_ROOT", "HMB_RUNTIME", "HMB_RUNTIME_IDENTITY",
-    "HMB_WORKER_STATE", "HMB_WORKER_ID", "HMB_AGENT_CREDENTIAL", "HMB_AGENT_CREDENTIAL_FILE",
+    "HMB_WORKER_STATE", "HMB_WORKER_ID", "HMB_AGENT_CREDENTIAL_FILE",
     "VIRTUAL_ENV", "UV_PROJECT_ENVIRONMENT",
 )
 

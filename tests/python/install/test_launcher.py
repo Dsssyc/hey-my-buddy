@@ -95,7 +95,6 @@ class LauncherTests(unittest.TestCase):
             def capture_exec(_python, _arguments, environment):
                 transferred.update(json.loads(os.read(int(environment['HMB_AGENT_CREDENTIAL_FD']), 65537)))
                 self.assertNotIn('fixture-secret', str(environment))
-                self.assertNotIn('HMB_AGENT_CREDENTIAL', environment)
                 raise SystemExit(0)
             original_read = launcher.read_private
             with mock.patch.dict(os.environ, {'HMB_AGENT_CREDENTIAL_FILE': str(credential)}, clear=True), \

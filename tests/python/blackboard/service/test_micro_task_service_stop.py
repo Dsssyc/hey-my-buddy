@@ -29,7 +29,7 @@ class MicroTaskServiceStopTests(WorkflowTestCase):
         self.assertEqual(board.call("workflow_get", {"runId": delivered["runId"]})["state"], "delivered")
         events = board.call("events_read", {"runId": queued["runId"]})["events"]
         self.assertEqual([event["payload"]["actor"] for event in events if event["kind"] == "workflow.cancelled"],
-                         ["service-stop"])
+                         [{"role": "service", "id": "stop"}])
         repeated = self.stop_daemon()
         self.assertEqual(repeated["cancelledQueued"], 0)
         events = board.call("events_read", {"runId": queued["runId"]})["events"]
@@ -58,7 +58,7 @@ class MicroTaskServiceStopTests(WorkflowTestCase):
         self.assertFalse(view["shutdown"]["descendantsConfirmed"])
         events = board.call("events_read", {"runId": child_id})["events"]
         self.assertEqual([event["payload"]["actor"] for event in events if event["kind"] == "workflow.helper_cancelled"],
-                         ["service-stop"])
+                         [{"role": "service", "id": "stop"}])
         with board.store.db.read() as connection:
             attempt = connection.execute("SELECT cancel_requested_at FROM attempts WHERE task_id=?", (child_id,)).fetchone()
             self.assertIsNotNone(attempt["cancel_requested_at"])

@@ -38,7 +38,7 @@ def flag_value(args: list[str], flag: str) -> str | None:
 #: tests.python.test_claude_config` is self-sufficient.
 FOCUSED_CLEARED_VARIABLES = (
     "HMB_STATE_DIR", "HMB_RUNTIME_ROOT", "HMB_RUNTIME", "HMB_RUNTIME_IDENTITY",
-    "HMB_WORKER_STATE", "HMB_WORKER_ID", "HMB_AGENT_CREDENTIAL",
+    "HMB_WORKER_STATE", "HMB_WORKER_ID",
     "HMB_AGENT_CREDENTIAL_FILE", "HMB_HARNESS_RECORD_FILE",
     "VIRTUAL_ENV", "UV_PROJECT_ENVIRONMENT",
 )
@@ -191,7 +191,7 @@ class ClaudeConfigTests(unittest.TestCase):
                "NODE_EXTRA_CA_CERTS": "/certs/node.pem",
                "CLAUDECODE": "1", "CLAUDE_CODE_EFFORT_LEVEL": "max", "ANTHROPIC_MODEL": "claude-other",
                "ANTHROPIC_AUTH_TOKEN": "bearer-secret", "ANTHROPIC_BASE_URL": "https://gateway.example.invalid",
-               "HMB_AGENT_CREDENTIAL": "worker-secret", "HMB_AGENT_CREDENTIAL_FILE": "/private/cred.json",
+               "HMB_AGENT_CREDENTIAL_FILE": "/private/cred.json",
                "HMB_STATE_DIR": "/private/state", "SOME_OTHER_HARNESS_TOKEN": "peer-secret",
                "HMB_CLAUDE_FIXTURE_CASE": "ok"}
         with mock.patch('hey_my_buddy.buddy.harnesses.claude.config.cli_command', return_value=[]):
@@ -210,7 +210,7 @@ class ClaudeConfigTests(unittest.TestCase):
         self.assertEqual(result["HMB_CLAUDE_FIXTURE_CASE"], "ok")
         # No host, worker, agent-credential or other-harness value may leak.
         for banned in ("CLAUDECODE", "CLAUDE_CODE_EFFORT_LEVEL", "ANTHROPIC_MODEL", "ANTHROPIC_AUTH_TOKEN",
-                       "ANTHROPIC_BASE_URL", "HMB_AGENT_CREDENTIAL", "HMB_AGENT_CREDENTIAL_FILE",
+                       "ANTHROPIC_BASE_URL", "HMB_AGENT_CREDENTIAL_FILE",
                        "HMB_STATE_DIR", "SOME_OTHER_HARNESS_TOKEN"):
             self.assertNotIn(banned, result)
 

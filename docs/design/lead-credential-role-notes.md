@@ -77,3 +77,17 @@ schema 20 → 21 重建 `workflow_runs` 时将所有已有 `request_fingerprint`
 补跑 `blackboard/store/test_blackboard.py`、`test_store.py`、`blackboard/tasks/test_host_workflow.py`、`test_workflow_routing.py` 与 `test_macro_tasks.py`，5 个文件 145 项通过，验证普通任务提交、宏任务提交重放与路由对指纹的使用；增强已有命令回执不能绕过旧提交拒绝的回归后，`test_workflow.py` 最终重跑 58 项通过。这两批及样板重跑均为退出码 0，私有根已清理；本回合 15 个受影响文件最终共 314 项通过，重复运行不重复计数，`git diff --check` 通过。
 
 与本回合要求不一致的情形：没有；README 的版本同步由 Host 处理，之前该项失败不作为本回合剩余工作。本回合只在私有测试夹具上验证升级，日常看板私有副本的再次演练由 Host 验收。
+
+
+## 整合后检查的旧测试形式清理
+
+开发者在合并后的源码上运行完整检查，指出服务停止测试的两处发起者断言仍是字符串，以及 Worker 启动拒绝测试仍提供直接令牌环境变量。本回合把两个事件断言改为 `{role: "service", id: "stop"}`；拒绝测试创建真实的私有 JSON 凭据文件，写入合成令牌及私有状态目录，通过 `HMB_AGENT_CREDENTIAL_FILE` 调用 Worker 启动入口，仍断言 `FORBIDDEN`。
+
+检索代码和测试后，将授权范围内其他 harness、运行时、Router、工作区和预览契约测试中的直接令牌变量夹具、清理条目及过时的缺席断言统一移除或改用凭据文件。没有删除 `service-stop` 终止原因及其显示和测试，也没有删除 schema 20 旧发起者的升级换算；这些分别表达执行停止原因和读取升级基点存量，不是当前发起者的字符串形式。DSH CLI 续接 probe 的 `HMB_AGENT_CREDENTIAL` 前缀过滤仍涵盖当前文件路径和私有描述符环境键，不把它当成直接令牌变量。
+
+授权范围外还有两处精确的旧变量名：`tests/probes/zcode_hooks.py` 的 `CREDENTIAL_ENV_VARS` 仍列有直接令牌键，`AGENTS.md` 的测试隔离说明也列着它。本回合只读取并记录，未改写这两个文件；需要 Host 删除该旧清理条目并同步说明，再复测 `tests/python/buddy/harnesses/zcode/test_zcode_hooks_probe.py`。
+
+
+使用规定的既有解释器及检查运行器，默认进程数，运行指定两个文件及本回合其他修改过的 14 个 Python 测试文件；首批 15 个文件 310 项通过，Worker 拒绝测试仍直接调用不读取环境的内部函数，因而仍走到了运行时选择。将该测试改走实际 CLI 文件解析入口后，指定的两个文件重跑 15 项全部通过；最终 16 个 Python 文件共 322 项通过，重复测试不重复计数，检查器确认私有根已清理。只改动了环境隔离列表的前端预览契约测试按本回合范围单独运行 `npm --prefix apps/console test -- src/preview-contract.test.ts`，3 项通过。`git diff --check` 通过，未运行完整检查，也未操作日常服务或 Worker。
+
+与本回合要求不一致的情形：授权范围内的两项失败及其他旧测试形式已修正，但上述 ZCode CLI probe 与 `AGENTS.md` 的精确旧变量名还需 Host 在范围外清理；未擅自修改，也未通过测试夹具覆盖或隐藏它们。

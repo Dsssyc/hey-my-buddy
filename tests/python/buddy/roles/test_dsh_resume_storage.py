@@ -47,7 +47,7 @@ class CandidatePrepareTests(BoardTestCase):
         self.state = self.directory / "state"
         self.state.mkdir(mode=0o700)
         cleared = {"HMB_STATE_DIR", "HMB_RUNTIME_ROOT", "HMB_RUNTIME", "HMB_RUNTIME_IDENTITY",
-                   "HMB_WORKER_STATE", "HMB_WORKER_ID", "HMB_AGENT_CREDENTIAL",
+                   "HMB_WORKER_STATE", "HMB_WORKER_ID",
                    "HMB_AGENT_CREDENTIAL_FILE", "HMB_CHECKS_TMPDIR", "VIRTUAL_ENV",
                    "UV_PROJECT_ENVIRONMENT"}
         self.environment = {key: value for key, value in os.environ.items()
