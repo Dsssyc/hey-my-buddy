@@ -138,15 +138,6 @@ class ScheduledModulesTests(unittest.TestCase):
         self.assertEqual(loaded["perFile"], loaded["discovered"])
         self.assertEqual(len(loaded["discovered"]), 3)
 
-    def test_the_slowest_first_hint_reorders_without_dropping_or_adding(self):
-        modules = checks.python_test_modules(REPOSITORY)
-        scheduled = checks._scheduled_test_modules(modules)
-        self.assertEqual(sorted(scheduled), modules)
-        self.assertEqual(len(set(scheduled)), len(scheduled))
-        hinted = [name for name in checks.SLOWEST_FILES_FIRST if name in modules]
-        self.assertEqual(scheduled[: len(hinted)], hinted)
-        self.assertEqual(checks._scheduled_test_modules(["test_b", "test_a"]), ["test_a", "test_b"])
-
 
 class ResolveJobsTests(unittest.TestCase):
     def test_the_flag_wins_over_the_environment_over_the_default(self):
@@ -299,7 +290,7 @@ class ParallelOutcomeTests(RunnerTestCase):
             assert sys.stdout.encoding == sys.stderr.encoding == "cp1252"
             with patch.object(checks, "selected_test_modules", return_value=[sys.argv[1]]):
                 try:
-                    checks.main(["--jobs", "1"])
+                    checks.main(["--jobs", "1", "tests/python/cli/test_checks_parallel.py"])
                 except SystemExit:
                     print("运行器标准错误", file=sys.stderr)
                     raise
@@ -404,7 +395,7 @@ class LeftoverProcessTests(RunnerTestCase):
             "print(leftover.pid, flush=True)\n"
         )
         outcome = checks.run_suite_child(
-            REPOSITORY, self.private_root, "p000", "leftover", [sys.executable, "-c", script],
+            REPOSITORY, self.private_root, "p000", "leftover", [[sys.executable, "-c", script]],
             set(), threading.Lock(), threading.Event(),
         )
         leftover = int(outcome.stdout.strip())

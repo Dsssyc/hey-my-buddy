@@ -6,6 +6,7 @@ import io
 import json
 import os
 from pathlib import Path
+import sys
 import tempfile
 import unittest
 from unittest.mock import patch
@@ -53,7 +54,37 @@ class FocusedChecksTests(unittest.TestCase):
         unreachable.parent.mkdir()
         unreachable.write_text("", encoding="utf-8", newline="\n")
 
-    def invoke(self, arguments, *, process_table=()):
+    def frontend(self):
+        """Synthetic entrypoints use Python as Node, without real frontend tests."""
+        console = self.root / "apps/console"
+        for name, relative, arguments in (
+            ("frontend-typecheck", "typescript/bin/tsc", ["--noEmit"]),
+            ("frontend-vitest", "vitest/vitest.mjs", ["run", "--maxWorkers=1", "--reporter=dot"]),
+        ):
+            entry = console / "node_modules" / relative
+            entry.parent.mkdir(parents=True, exist_ok=True)
+            entry.write_text(
+                "import json, os, sys, time\nfrom pathlib import Path\n"
+                f"assert sys.argv[1:] == {arguments!r}, sys.argv\n"
+                f"assert Path.cwd() == Path({str(console)!r})\n"
+                "root = Path(os.environ['HMB_STATE_DIR']).parent\n"
+                "assert Path(os.environ['TMPDIR']) == root / 'tmp'\n"
+                "assert Path(os.environ['HMB_RUNTIME_ROOT']) == root / 'runtime'\n"
+                "assert Path.home().parent == root.parent\n"
+                "assert 'HMB_RUNTIME' not in os.environ\n"
+                "assert 'HMB_AGENT_CREDENTIAL_FD' not in os.environ\n"
+                f"marker = Path({str(self.markers)!r}) / {name!r}\n"
+                "assert not marker.exists(), 'frontend command ran twice'\n"
+                "started = time.monotonic()\ntime.sleep(0.1)\n"
+                "marker.write_text(json.dumps({'root': str(root), 'start': started, "
+                "'end': time.monotonic()}), encoding='utf-8')\n"
+                + ("print('Test Files  1 passed (1)\\n     Tests  2 passed (2)')\n"
+                   if name == "frontend-vitest" else ""),
+                encoding="utf-8", newline="\n",
+            )
+        return console
+
+    def invoke(self, arguments, *, process_table=(), node=sys.executable):
         observer = (patch.object(observation.psutil, "pids", side_effect=observation.psutil.AccessDenied())
                     if process_table is None else
                     processes(*(process(pid, argv) for pid, argv in process_table)))
@@ -63,7 +94,7 @@ class FocusedChecksTests(unittest.TestCase):
             patch.object(checks, "__file__", str(self.root / "src/hey_my_buddy/cli/checks.py")),
             patch.dict(os.environ, {"HMB_CHECKS_TMPDIR": str(self.temporary),
                                     "HMB_RUNTIME": "/fixture/pinned-runtime",
-                                    "HMB_AGENT_CREDENTIAL_FD": "17"}),
+                                    "HMB_AGENT_CREDENTIAL_FD": "17", "HMB_NODE": node}),
             observer,
             patch.object(checks, "_open_file_pids", return_value=(set(), None, True)),
             contextlib.redirect_stdout(output), contextlib.redirect_stderr(errors),
@@ -130,11 +161,79 @@ class FocusedChecksTests(unittest.TestCase):
                     self.assertIn("tests passed; private root removed; exit 0", output.splitlines()[-1])
                     self.assertEqual(list(self.temporary.iterdir()), [])
 
-    def test_no_paths_runs_the_original_full_file_set(self):
+    def test_no_paths_runs_frontend_once_and_the_original_full_file_set(self):
+        self.frontend()
         code, output, errors = self.invoke(["--jobs", "1"])
         self.assertEqual(code, 0, errors + output)
         self.assertEqual({path.name for path in self.markers.iterdir()},
-                         set(checks.python_test_modules(self.root)))
+                         set(checks.python_test_modules(self.root)) | {"frontend-typecheck", "frontend-vitest"})
+        self.assertIn("apps/console ok", output)
+        self.assertIn("Tests  2 passed (2)", output)
+        self.assertIn("python tests run: 3 (skipped 0) in 3 of 3 files", output)
+        self.assertIn("tests passed; private root removed; exit 0", output.splitlines()[-1])
+        self.assertEqual(list(self.temporary.iterdir()), [])
+
+    def test_missing_node_or_frontend_dependency_fails_with_install_instruction(self):
+        console = self.frontend()
+        for missing in ("node", "typescript/bin/tsc", "vitest/vitest.mjs"):
+            with self.subTest(missing=missing):
+                for marker in self.markers.iterdir():
+                    marker.unlink()
+                node = str(self.root / "missing-node") if missing == "node" else sys.executable
+                entry = console / "node_modules" / missing
+                if missing != "node":
+                    entry.rename(entry.with_suffix(".missing"))
+                try:
+                    code, output, errors = self.invoke(["--jobs", "1"], node=node)
+                finally:
+                    if missing != "node":
+                        entry.with_suffix(".missing").rename(entry)
+                self.assertEqual(code, 1, errors + output)
+                self.assertIn("apps/console FAILED (exit 1)", output)
+                self.assertIn("run `npm --prefix apps/console ci` first", output)
+                self.assertIn("frontend suite failed: apps/console", output.splitlines()[-1])
+                self.assertIn("private root removed; exit 1", output.splitlines()[-1])
+                self.assertEqual({path.name for path in self.markers.iterdir()},
+                                 set(checks.python_test_modules(self.root)))
+                self.assertEqual(list(self.temporary.iterdir()), [])
+
+    def test_frontend_uses_one_slot_within_the_jobs_limit_and_is_first_when_serial(self):
+        self.frontend()
+        for module in checks.python_test_modules(self.root):
+            self.top.joinpath(*module.split(".")).with_suffix(".py").write_text(
+                "import json, time, unittest\nfrom pathlib import Path\n"
+                "class Case(unittest.TestCase):\n"
+                "    def test_runs(self):\n"
+                "        started = time.monotonic()\n        time.sleep(0.1)\n"
+                f"        marker = Path({str(self.markers)!r}) / __name__\n"
+                "        marker.write_text(json.dumps({'start': started, 'end': time.monotonic()}), "
+                "encoding='utf-8')\n", encoding="utf-8", newline="\n",
+            )
+        for jobs in (1, 2):
+            with self.subTest(jobs=jobs):
+                for marker in self.markers.iterdir():
+                    marker.unlink()
+                code, output, errors = self.invoke(["--jobs", str(jobs)])
+                self.assertEqual(code, 0, errors + output)
+                intervals = {path.name: json.loads(path.read_text(encoding="utf-8"))
+                             for path in self.markers.iterdir()}
+                typecheck, vitest = intervals.pop("frontend-typecheck"), intervals.pop("frontend-vitest")
+                self.assertEqual(typecheck["root"], vitest["root"])
+                self.assertLess(typecheck["end"], vitest["start"])
+                frontend = {"start": typecheck["start"], "end": vitest["end"]}
+                active = peak = 0
+                for _, delta in sorted((interval[key], delta)
+                                       for interval in [frontend, *intervals.values()]
+                                       for key, delta in (("start", 1), ("end", -1))):
+                    active += delta
+                    peak = max(peak, active)
+                self.assertLessEqual(peak, jobs, "frontend exceeded the shared worker count")
+                if jobs == 1:
+                    previous = frontend
+                    for module in checks.python_test_modules(self.root):
+                        self.assertLess(previous["end"], intervals[module]["start"])
+                        previous = intervals[module]
+                self.assertEqual(list(self.temporary.iterdir()), [])
 
     def test_failed_test_has_exit_one_with_either_cleanup_result(self):
         (self.top / "test_failure.py").write_text(

@@ -1,6 +1,7 @@
-"""Run the Python integration tests in isolated processes.
+"""Run the Python integration tests and frontend checks in isolated processes.
 
-``python -m hey_my_buddy.cli.checks [--jobs N]`` runs all Python test files.
+``python -m hey_my_buddy.cli.checks [--jobs N]`` runs all Python test files and
+the console typecheck and unit tests.
 ``python -m hey_my_buddy.cli.checks [--jobs N] PATH...`` runs only the given
 ``tests/python/test_*.py`` files or package directories, relative to the checkout
 or absolute. ``python -m hey_my_buddy.cli.checks --sweep`` retires abandoned
@@ -39,6 +40,7 @@ from __future__ import annotations
 
 import argparse
 import concurrent.futures
+from functools import partial
 import json
 import os
 from pathlib import Path
@@ -140,33 +142,7 @@ def child_environment(root: Path, private_root: Path, *, home_root: Path) -> dic
 #: daemons, CLIs and harness fixtures of its own, so a conservative cap keeps
 #: timing-sensitive tests away from an oversubscribed CPU.
 MAX_DEFAULT_JOBS = 4
-
-#: The test files measured slowest by the recorded full-suite baseline
-#: (docs/acceptance/check-runner/checks-speedup.md), slowest first. Parallel runs schedule them
-#: before the alphabetical remainder so the long tail never queues behind a busy
-#: worker. The order is a scheduling hint only: it never changes which tests run.
-SLOWEST_FILES_FIRST: tuple[str, ...] = (
-    "blackboard.tasks.test_workspace_lifecycle",
-    "blackboard.tasks.test_workflow_preparation",
-    "blackboard.tasks.test_parallel_dispatch",
-    "blackboard.store.test_blackboard",
-    "blackboard.tasks.test_workflow_real",
-    "blackboard.tasks.test_workspace",
-    "blackboard.tasks.test_scope_recovery",
-    "buddy.runtime.test_run",
-    "blackboard.tasks.test_host_workflow_worker",
-    "buddy.runtime.test_repair_recovery",
-    "blackboard.routing.test_decision",
-    "buddy.harnesses.zcode.test_zcode",
-    "buddy.harnesses.claude.test_claude",
-    "buddy.harnesses.codex.test_codex",
-    "console.test_console",
-    "protocol.test_rpc_config",
-    "install.test_first_install",
-    "protocol.test_ctwo_service",
-    "blackboard.routing.test_router",
-    "buddy.harnesses.zcode.test_zcode_native",
-)
+FRONTEND_LABEL = "apps/console"
 
 
 def default_jobs() -> int:
@@ -247,12 +223,6 @@ def selected_test_modules(root: Path, arguments: list[str]) -> list[str]:
     return sorted(selected)
 
 
-def _scheduled_test_modules(modules: list[str]) -> list[str]:
-    """The baseline-slowest modules first, then the alphabetical remainder."""
-    rank = {name: index for index, name in enumerate(SLOWEST_FILES_FIRST)}
-    return sorted(modules, key=lambda name: (rank.get(name, len(rank)), name))
-
-
 class ChildOutcome:
     """One suite child's result: its label, exit code, captured output and time."""
 
@@ -279,9 +249,9 @@ def _collect_output(stream, chunks: list[bytes]) -> None:
 
 
 def run_suite_child(root: Path, private_root: Path, directory_name: str, label: str,
-                    command: list[str], live: set, guard: threading.Lock,
-                    stop: threading.Event) -> ChildOutcome | None:
-    """Run one suite child inside its own private state, runtime and temp root.
+                    commands: list[list[str]], live: set, guard: threading.Lock,
+                    stop: threading.Event, *, cwd: Path | None = None) -> ChildOutcome | None:
+    """Run a suite's commands in order inside one private state, runtime and temp root.
 
     Returns ``None`` without starting anything once the run has been interrupted.
     The child's exit ends the wait: output is collected by reader threads, so a
@@ -291,38 +261,67 @@ def run_suite_child(root: Path, private_root: Path, directory_name: str, label: 
     environment = child_environment(root, child_root,
                                     home_root=private_root / f"{directory_name}-home")
     started = time.monotonic()
-    with guard:
-        # The interrupt check, the spawn and the registration share one lock: an
-        # interrupted run either never starts this child or already sees it as live.
-        if stop.is_set():
-            return None
-        (child_root / "tmp").mkdir(mode=private_dirs.directory_mode(), parents=True)
-        process = subprocess.Popen(
-            command,
-            cwd=str(root),
-            env=environment,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            bufsize=0,
-        )
-        live.add(process)
-    collected: tuple[list[bytes], list[bytes]] = ([], [])
-    readers = [
-        threading.Thread(target=_collect_output, args=(stream, chunks), daemon=True)
-        for stream, chunks in zip((process.stdout, process.stderr), collected)
-    ]
-    for reader in readers:
-        reader.start()
-    try:
-        process.wait()
-    finally:
+    (child_root / "tmp").mkdir(mode=private_dirs.directory_mode(), parents=True)
+    stdout: list[str] = []
+    stderr: list[str] = []
+    returncode = 0
+    for command in commands:
         with guard:
-            live.discard(process)
-    deadline = time.monotonic() + OUTPUT_DRAIN_SECONDS
-    for reader in readers:
-        reader.join(timeout=max(0.0, deadline - time.monotonic()))
-    stdout, stderr = (b"".join(list(chunks)).decode("utf-8", errors="replace") for chunks in collected)
-    return ChildOutcome(label, process.returncode, stdout, stderr, time.monotonic() - started)
+            # The interrupt check, the spawn and the registration share one lock: an
+            # interrupted run either never starts this child or already sees it as live.
+            if stop.is_set():
+                return None
+            process = subprocess.Popen(
+                command,
+                cwd=str(root if cwd is None else cwd),
+                env=environment,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                bufsize=0,
+            )
+            live.add(process)
+        collected: tuple[list[bytes], list[bytes]] = ([], [])
+        readers = [
+            threading.Thread(target=_collect_output, args=(stream, chunks), daemon=True)
+            for stream, chunks in zip((process.stdout, process.stderr), collected)
+        ]
+        for reader in readers:
+            reader.start()
+        try:
+            process.wait()
+        finally:
+            with guard:
+                live.discard(process)
+        deadline = time.monotonic() + OUTPUT_DRAIN_SECONDS
+        for reader in readers:
+            reader.join(timeout=max(0.0, deadline - time.monotonic()))
+        output, errors = (b"".join(list(chunks)).decode("utf-8", errors="replace") for chunks in collected)
+        stdout.append(output)
+        stderr.append(errors)
+        returncode = returncode or process.returncode
+    return ChildOutcome(label, returncode, "".join(stdout), "".join(stderr), time.monotonic() - started)
+
+
+def run_frontend_suite(root: Path, private_root: Path, live: set, guard: threading.Lock,
+                       stop: threading.Event) -> ChildOutcome | None:
+    """One pool job, using the same private environment for both console commands."""
+    started = time.monotonic()
+    console = root / "apps" / "console"
+    node = shutil.which(os.environ.get("HMB_NODE") or "node")
+    tsc = console / "node_modules" / "typescript" / "bin" / "tsc"
+    vitest = console / "node_modules" / "vitest" / "vitest.mjs"
+    if not node or not tsc.is_file() or not vitest.is_file():
+        return ChildOutcome(
+            FRONTEND_LABEL, 1, "",
+            "Frontend checks require Node.js and console dev dependencies; "
+            "run `npm --prefix apps/console ci` first.\n", time.monotonic() - started,
+        )
+    return run_suite_child(
+        root, private_root, "frontend", FRONTEND_LABEL,
+        [[node, str(tsc), "--noEmit"],
+         [node, str(vitest), "run", "--maxWorkers=1", "--reporter=dot"]],
+        live, guard, stop, cwd=console,
+    )
 
 
 def _report_child_output(outcome: ChildOutcome) -> None:
@@ -332,13 +331,14 @@ def _report_child_output(outcome: ChildOutcome) -> None:
             print(text, end="" if text.endswith("\n") else "\n")
 
 
-def run_suites_parallel(root: Path, private_root: Path, jobs: int, modules: list[str]) -> str | None:
-    """One private subprocess per Python test file.
+def run_suites_parallel(root: Path, private_root: Path, jobs: int, modules: list[str], *,
+                        include_frontend: bool = False) -> str | None:
+    """One pool job per Python file, with the full run's frontend job submitted first.
 
     Every child gets its own private sub-root below the checks root, so no state,
     runtime or temp directory is shared while the suites run; the whole-root teardown
-    afterwards still covers them all. The baseline-slowest Python files are submitted
-    first. A failing child's captured output is printed in full — unittest's verbose
+    afterwards still covers them all. Python files retain discovery order.
+    A failing child's captured output is printed in full — unittest's verbose
     listing names the module, class and test — and the failure is summarized by file.
     """
     # -W escapes its module argument as an exact name. Use the public warning
@@ -351,23 +351,26 @@ def run_suites_parallel(root: Path, private_root: Path, jobs: int, modules: list
                  "warnings.filterwarnings('error', category=EncodingWarning, "
                  "module=r'^hey_my_buddy(?:\\.|$)'); "
                  "runpy.run_module('unittest', run_name='__main__')")
-    tasks = [(f"p{index:03d}", module, [sys.executable, "-X", "warn_default_encoding",
-              "-W", "ignore::EncodingWarning", "-c", bootstrap, "-v", module])
-             for index, module in enumerate(_scheduled_test_modules(modules))]
-    if not tasks:
+    if not modules:
         return "python suite has no test modules"
-    print(f"hey_my_buddy.cli.checks: {len(tasks)} python test files across {jobs} workers")
+    frontend = " and 1 frontend suite" if include_frontend else ""
+    print(f"hey_my_buddy.cli.checks: {len(modules)} python test files{frontend} across {jobs} workers")
     live: set = set()
     guard = threading.Lock()
     stop = threading.Event()
+    tasks = [(module, partial(
+        run_suite_child, root, private_root, f"p{index:03d}", module,
+        [[sys.executable, "-X", "warn_default_encoding", "-W", "ignore::EncodingWarning",
+          "-c", bootstrap, "-v", module]], live, guard, stop,
+    )) for index, module in enumerate(modules)]
+    if include_frontend:
+        tasks.insert(0, (FRONTEND_LABEL, partial(run_frontend_suite, root, private_root, live, guard, stop)))
     outcomes: list[ChildOutcome] = []
     futures: list[concurrent.futures.Future] = []
     pool = concurrent.futures.ThreadPoolExecutor(max_workers=min(jobs, len(tasks)))
     try:
-        for directory_name, label, command in tasks:
-            futures.append(pool.submit(
-                run_suite_child, root, private_root, directory_name, label, command, live, guard, stop
-            ))
+        for _, run in tasks:
+            futures.append(pool.submit(run))
         for done, future in enumerate(concurrent.futures.as_completed(futures), start=1):
             outcome = future.result()
             if outcome is None:
@@ -375,7 +378,7 @@ def run_suites_parallel(root: Path, private_root: Path, jobs: int, modules: list
             outcomes.append(outcome)
             state = "ok" if outcome.returncode == 0 else f"FAILED (exit {outcome.returncode})"
             print(f"[{done}/{len(tasks)}] {outcome.label} {state} {outcome.seconds:.1f}s")
-            if outcome.returncode != 0:
+            if outcome.returncode != 0 or outcome.label == FRONTEND_LABEL:
                 _report_child_output(outcome)
     except BaseException:
         # An interrupted run starts no further suite child and leaves none of its own
@@ -403,16 +406,17 @@ def run_suites_parallel(root: Path, private_root: Path, jobs: int, modules: list
         pool.shutdown(wait=True)
     # Every scheduled suite must have reported: a file without an outcome did not run.
     reported = {outcome.label for outcome in outcomes}
-    never_ran = sorted(label for _, label, _ in tasks if label not in reported)
+    never_ran = sorted(label for label, _ in tasks if label not in reported)
+    python_outcomes = [outcome for outcome in outcomes if outcome.label != FRONTEND_LABEL]
     python_failed = sorted(
-        outcome.label for outcome in outcomes
+        outcome.label for outcome in python_outcomes
         if outcome.returncode != 0
     )
     # A parallel run prints only failing children, so the total must stay visible:
     # every passing file reports how many tests it actually ran and skipped.
     ran_total = skipped_total = 0
     uncounted = []
-    for outcome in outcomes:
+    for outcome in python_outcomes:
         if outcome.returncode != 0:
             continue
         summary = ANSI_STYLE.sub("", outcome.stderr)
@@ -423,12 +427,14 @@ def run_suites_parallel(root: Path, private_root: Path, jobs: int, modules: list
         ran_total += int(ran.group(1))
         skipped = re.search(r"^OK \(.*?skipped=(\d+)", summary, re.MULTILINE)
         skipped_total += int(skipped.group(1)) if skipped else 0
-    python_files = len(tasks)
+    python_files = len(modules)
     print(f"hey_my_buddy.cli.checks: python tests run: {ran_total} (skipped {skipped_total}) "
           f"in {python_files - len(python_failed) - len(uncounted)} of {python_files} files")
     failures = []
     if never_ran:
         failures.append(f"{len(never_ran)} suite(s) never ran: {', '.join(never_ran)}")
+    if any(outcome.label == FRONTEND_LABEL and outcome.returncode != 0 for outcome in outcomes):
+        failures.append(f"frontend suite failed: {FRONTEND_LABEL}")
     if python_failed:
         print("hey_my_buddy.cli.checks: python suite failed in "
               f"{len(python_failed)} file(s): {', '.join(python_failed)}")
@@ -820,7 +826,8 @@ def main(argv: list[str] | None = None) -> None:
     failure: str | None = None
     evidence: dict | None = None
     try:
-        failure = run_suites_parallel(root, private_root, jobs, modules)
+        failure = run_suites_parallel(root, private_root, jobs, modules,
+                                      include_frontend=not options.paths)
     finally:
         # The residue assertion runs after a failing suite too; a failure here is
         # reported alongside the suite result instead of replacing it.
