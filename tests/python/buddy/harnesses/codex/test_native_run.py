@@ -48,6 +48,7 @@ from hey_my_buddy.buddy.harnesses.run_contract import (
     RunFeedback,
     RunIdentity,
     RunRequest,
+    UNLISTED_NATIVE_EVENTS,
 )
 from hey_my_buddy.buddy.roles.run_observers import CORRECTION_SUFFIX, FastCorrection
 from hey_my_buddy.buddy.roles.structured_call import correction_code
@@ -1103,7 +1104,7 @@ class WorkerSeamTests(CodexSeamCase):
         self.assertEqual(len(counts), MAX_UNKNOWN_EVENT_TYPES)
         self.assertEqual(list(counts)[:MAX_UNKNOWN_EVENT_TYPES - 1],
                          ["account/updated", *[f"native/future/{number}" for number in range(MAX_UNKNOWN_EVENT_TYPES - 2)]])
-        self.assertEqual(counts["(unlisted-native-events)"], 3)
+        self.assertEqual(counts[UNLISTED_NATIVE_EVENTS], 3)
         self.assertEqual(result.native_evidence.unknown_events.to_payload(), seen[-1]["unknownEvents"])
 
     def test_worker_tool_facts_are_live_public_evidence(self):

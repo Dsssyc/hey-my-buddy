@@ -49,7 +49,6 @@ from ....protocol.activity import ActivityPublisher
 from ..run_contract import (
     ActivityPackage,
     MAX_SCHEMA_BYTES,
-    MAX_UNKNOWN_EVENT_TYPES,
     CheckedConfiguration,
     CheckedValue,
     CompletionEvidence,
@@ -74,6 +73,8 @@ from ..run_contract import (
     ToolEvidencePackage,
     UnknownEvents,
     UsagePackage,
+    fold_unknown_events,
+    unknown_event_name,
 )
 from ..runtime_selection import command_for
 from .acp import AcpClient
@@ -770,22 +771,6 @@ def _configure(client: AcpClient, session_id: str, snapshot: dict,
 # -- the update pump and the observer seam ------------------------------------------
 
 
-def _fold_unknown_count(counts: dict[str, int], name: str, count: int) -> None:
-    """One bounded fold of an unknown kind into a cumulative count map.
-
-    The shared contract bounds the distinct kinds, and this module produces them
-    in two places — the update pump's own classification and the fixed unread
-    shape labels — so the one rule lives here: a name that no longer fits folds
-    into one surplus bucket, and no event is ever dropped from the total.
-    """
-    if name in counts:
-        counts[name] += count
-    elif len(counts) < MAX_UNKNOWN_EVENT_TYPES - 1:
-        counts[name] = count
-    else:
-        counts["unclassified-surplus"] = counts.get("unclassified-surplus", 0) + count
-
-
 class _RunFacts:
     """The cumulative, normalized facts of one run, as the observer sees them.
 
@@ -798,8 +783,7 @@ class _RunFacts:
         self.unknown_counts = unknown_counts
 
     def note_unknown(self, label: object) -> None:
-        name = label if isinstance(label, str) and re.fullmatch(r"[A-Za-z0-9/._-]{1,64}", label) else "unknown"
-        _fold_unknown_count(self.unknown_counts, name, 1)
+        fold_unknown_events(self.unknown_counts, unknown_event_name(label))
 
     def mapping(self, *, tool_calls: int, settled: bool, raw_answer: str | None,
                 denied: int) -> dict:
@@ -1570,7 +1554,7 @@ def _native_evidence_facts(state: _RunState) -> NativeEvidence | None:
         if isinstance(fact, dict) and fact.get("status") == "unknown":
             counts[kind] = fact["count"]
     for name, count in state.unknown_counts.items():
-        _fold_unknown_count(counts, name, count)
+        fold_unknown_events(counts, name, count)
     unconfirmed = []
     scope = state.native_facts.get("toolScope")
     if isinstance(scope, dict) and scope.get("status") == "unknown":

@@ -11,6 +11,7 @@ from pydantic import ValidationError
 
 from buddy.harnesses.zcode.test_native_run import NativeRunCase
 from hey_my_buddy.buddy.harnesses.run_contract import (
+    MAX_UNKNOWN_EVENT_TYPES, UNLISTED_NATIVE_EVENTS,
     RunContinuation, RunFeedback, RunConfiguration,
 )
 from hey_my_buddy.buddy.harnesses.zcode import native_run
@@ -161,11 +162,11 @@ class BoundaryAndDrainTests(unittest.TestCase):
         facts = native_run._RunFacts()
         for index in range(70):
             facts.note_unknown(f"future-method-{index}")
-        self.assertEqual(len(facts.unknown_counts), native_run.MAX_UNKNOWN_EVENT_TYPES)
+        self.assertEqual(len(facts.unknown_counts), MAX_UNKNOWN_EVENT_TYPES)
         self.assertEqual(sum(facts.unknown_counts.values()), 70)
-        self.assertEqual(facts.unknown_counts[native_run._UNLISTED_UNKNOWN_TYPES], 7)
+        self.assertEqual(facts.unknown_counts[UNLISTED_NATIVE_EVENTS], 7)
         facts.note_unknown("future-method-0")
-        self.assertEqual(len(facts.unknown_counts), native_run.MAX_UNKNOWN_EVENT_TYPES)
+        self.assertEqual(len(facts.unknown_counts), MAX_UNKNOWN_EVENT_TYPES)
         self.assertEqual(sum(facts.unknown_counts.values()), 71)
 
     def test_the_evidence_file_and_the_shared_outcome_carry_the_same_bounded_counts(self):
@@ -180,7 +181,7 @@ class BoundaryAndDrainTests(unittest.TestCase):
             ref = next(item for item in refs if item.kind == "native-run-facts")
             retained = json.loads(Path(ref.location).read_text())["unknownEvents"]
         shared = native_run._shared_unknown_events(facts)
-        self.assertEqual(len(retained["countsByType"]), native_run.MAX_UNKNOWN_EVENT_TYPES)
+        self.assertEqual(len(retained["countsByType"]), MAX_UNKNOWN_EVENT_TYPES)
         self.assertEqual(retained["countsByType"], dict(shared.unknown_events.counts_by_type))
         self.assertEqual(retained["total"], shared.unknown_events.total)
 
