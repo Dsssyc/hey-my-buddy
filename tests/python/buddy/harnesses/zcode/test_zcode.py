@@ -270,8 +270,7 @@ class ZcodeAdapterTests(ZcodeFixtureCase):
         self.assertEqual(outcome.status, "ok", outcome.to_report())
         self.assertTrue(outcome.result["modelStarted"])
         self.assertIsNone(outcome.result["resolved"])
-        facts = next(ref for ref in outcome.result["evidenceRefs"] if ref["kind"] == "native-run-facts")
-        self.assertIn("configuration-selection-unrecognized", Path(facts["location"]).read_text())
+        self.assertEqual(outcome.result["turn"]["outcome"]["disposition"], "completed")
 
     def test_native_turn_failure_attribution_is_whitelisted_and_secret_free(self):
         from hey_my_buddy.buddy.runtime.worker import classify_termination
