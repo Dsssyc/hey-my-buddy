@@ -789,6 +789,10 @@ CREATE INDEX IF NOT EXISTS workflow_scope_versions_run_idx ON workflow_scope_ver
     # Durable evidence of a failed seal that found managed changes outside the
     # authorized write scope, plus the Host's later restore/adopt/abandon decision.
     # The failed site stays on disk and is never promoted to a baseline by itself.
+    # ``delivery_json`` separately records a Host-resolution delivery: when the only
+    # failure was that seal and the attempt's own native completed outcome is intact,
+    # a full restore/adopt makes the resolved artifact deliverable without another
+    # model turn while the original attempt, turn and command receipts stay unchanged.
     """
 CREATE TABLE IF NOT EXISTS workflow_workspace_conflicts (
     conflict_id             TEXT PRIMARY KEY,
@@ -809,6 +813,7 @@ CREATE TABLE IF NOT EXISTS workflow_workspace_conflicts (
     actor                   TEXT,
     reason                  TEXT,
     command_id              TEXT,
+    delivery_json           TEXT,
     created_at              TEXT NOT NULL,
     updated_at              TEXT NOT NULL,
     UNIQUE(run_id, attempt_id, observed_fingerprint)

@@ -9,10 +9,12 @@ to an authorized baseline, and a mechanical resolution never needs a model turn.
 from __future__ import annotations
 
 import json
+import os
+import subprocess
 import unittest
 from pathlib import Path
 
-from test_workflow_real import CONFIGURATION, RealWorkspaceTestCase
+from test_workflow_real import CONFIGURATION, GIT_ENV, RealWorkspaceTestCase
 
 from buddy import workflow as workflow_module
 from buddy import workspace as workspace_module
@@ -56,28 +58,48 @@ class ScopeRecoveryTestCase(RealWorkspaceTestCase):
             "workerId": worker_id or self.worker, "claimRequestId": request_id, "nonce": nonce, "runId": run_id,
         })
 
-    def scope_failure(self, board, claimed, *, worker_id=None):
-        """The exact failed result a refused seal produces, with real evidence on disk."""
+    def scope_failure(self, board, claimed, *, native=None, worker_id=None):
+        """The exact failed result a refused seal produces, with real evidence on disk.
+
+        ``native`` selects the disposition of the attempt's own native turn record, so a
+        scope-only failure can be checked to still carry its untouched outcome. The
+        default carries no turn record at all, exactly like a genuine harness failure.
+        """
         claim = claimed["claim"]
         attempt = claim["attempt"]
+        seal_error = "WORKSPACE_SCOPE_VIOLATION: managed changes outside the declared write scope"
+        result = {
+            "status": "failed",
+            "workspaceSealError": seal_error,
+            "turnResultPath": "/tmp/turn-result.json",
+        }
+        if native is not None:
+            result["processState"] = {"shutdownConfirmed": True}
+            result["turn"] = self.turn_record(claim, disposition=native)
         return board.call("worker_result", {
             "workerId": worker_id or self.worker,
             "attemptId": attempt["attemptId"],
             "generation": attempt["generation"],
             "nonce": "n" * 16,
             "status": "failed",
-            "result": {
-                "status": "failed",
-                "workspaceSealError": "WORKSPACE_SCOPE_VIOLATION: managed changes outside the declared write scope",
-                "turnResultPath": "/tmp/turn-result.json",
-            },
+            "result": result,
             "shutdownConfirmed": True,
             "exitCode": 1,
-            "error": "the workspace seal was refused",
+            "error": seal_error,
         })
 
     def turn_record(self, claim, *, disposition="completed"):
         attempt, turn = claim["attempt"], claim["turn"]
+        outcome = {"disposition": disposition, "summary": "did the work", "remaining": [], "decisions": [],
+                   "artifacts": [], "request": None}
+        if disposition in ("assistance", "attention"):
+            outcome["request"] = {
+                "summary": "please review the failed seal",
+                "attempted": "tried the obvious fix",
+                "neededWork": ["decide the scope"],
+                "expectedArtifacts": ["a reviewed decision"],
+                "acceptance": "the scope decision is recorded",
+            }
         return {
             "version": 1,
             "taskId": attempt["taskId"],
@@ -89,13 +111,12 @@ class ScopeRecoveryTestCase(RealWorkspaceTestCase):
             "sessionId": f"sess-{turn['turnId'][:8]}",
             "promptSha256": "a" * 64,
             "inputSha256": turn["inputSha256"],
-            "outcome": {"disposition": disposition, "summary": "did the work", "remaining": [], "decisions": [],
-                        "artifacts": [], "request": None},
+            "outcome": outcome,
             "provenance": {"tool": "buddy_finish_turn", "turnEnd": "completed", "flush": "awaited",
                            "rootSessionMatched": True},
         }
 
-    def finish_turn(self, board, claimed, seal, *, worker_id=None):
+    def finish_turn(self, board, claimed, seal, *, disposition="completed", worker_id=None):
         claim = claimed["claim"]
         attempt = claim["attempt"]
         return board.call("worker_result", {
@@ -105,8 +126,8 @@ class ScopeRecoveryTestCase(RealWorkspaceTestCase):
             "nonce": "n" * 16,
             "status": "ok",
             "result": {"status": "ok", "processState": {"shutdownConfirmed": True},
-                       "turn": self.turn_record(claim), "turnResultPath": "/tmp/turn-result.json",
-                       "workspaceSeal": seal},
+                       "turn": self.turn_record(claim, disposition=disposition),
+                       "turnResultPath": "/tmp/turn-result.json", "workspaceSeal": seal},
             "shutdownConfirmed": True,
             "exitCode": 0,
         })
@@ -168,6 +189,58 @@ class ScopeRecoveryTestCase(RealWorkspaceTestCase):
         self.assertEqual(error.code, "WORKSPACE_SCOPE_VIOLATION")
         self.scope_failure(board, claimed)
         return board, submitted, claimed, manifest, checkout
+
+    def native_scope_failure(self, *, request_id="native-run", disposition="completed"):
+        """A scope-only failure whose attempt still carries its native turn outcome."""
+        board = self.board()
+        self.register(board)
+        submitted = self.governed_submit(board, request_id=request_id, scope=("src",))
+        run_id = submitted["runId"]
+        claimed = self.claim(board, run_id)
+        manifest = claimed["claim"]["turn"]["input"]["executionWorkspace"]
+        checkout = Path(manifest["path"])
+        (checkout / "src" / "feature.py").write_text("value = 2\n")
+        (checkout / "tracked.txt").write_text("outside the authorized scope\n")
+        (checkout / "outside.txt").write_text("untracked outside\n")
+        with self.assertRaises(BoardError) as raised:
+            workspace_module.seal(self.directory, manifest, run_id, claimed["claim"]["attempt"]["attemptId"])
+        self.assertEqual(raised.exception.code, "WORKSPACE_SCOPE_VIOLATION")
+        self.scope_failure(board, claimed, native=disposition)
+        return board, submitted, claimed, manifest, checkout
+
+    def ledger(self, board, run_id):
+        """The durable identity counts and the failed result receipt of one run."""
+        with board.store.db.read() as connection:
+            attempt_id = connection.execute(
+                "SELECT attempt_id FROM attempts WHERE task_id=? ORDER BY created_at DESC LIMIT 1",
+                (run_id,),
+            ).fetchone()["attempt_id"]
+            receipt = connection.execute(
+                "SELECT * FROM commands WHERE command_id=?", (f"result:{attempt_id}",)
+            ).fetchone()
+            return {
+                "attempts": connection.execute(
+                    "SELECT COUNT(*) FROM attempts WHERE task_id=?", (run_id,)).fetchone()[0],
+                "turns": connection.execute(
+                    "SELECT COUNT(*) FROM workflow_turns WHERE run_id=?", (run_id,)).fetchone()[0],
+                "receipt": dict(receipt) if receipt is not None else None,
+            }
+
+    def verified_target(self, artifact, *, name="native-target"):
+        """A real clone that actually received the resolved artifact's patch."""
+        environment = {**os.environ, **GIT_ENV}
+        target = self.directory / name
+        subprocess.run(["git", "clone", "-q", str(self.repo), str(target)], env=environment, check=True)
+        before = subprocess.run(
+            ["git", "-C", str(target), "rev-parse", "HEAD"], env=environment, capture_output=True, text=True,
+            check=True,
+        ).stdout.strip()
+        subprocess.run(
+            ["git", "-C", str(target), "apply", "--binary", artifact["diffPath"]], env=environment, check=True,
+        )
+        subprocess.run(["git", "-C", str(target), "add", "."], env=environment, check=True)
+        subprocess.run(["git", "-C", str(target), "commit", "-qm", "integrate"], env=environment, check=True)
+        return {"path": target, "before": before}
 
     def test_scope_failure_records_evidence_and_opens_a_host_attention(self):
         board, submitted, claimed, manifest, checkout = self.scoped_failure()
@@ -444,6 +517,225 @@ class ScopeRecoveryTestCase(RealWorkspaceTestCase):
                 "SELECT input_json FROM workflow_turns WHERE attempt_id=?", (first["claim"]["attempt"]["attemptId"],)
             ).fetchone()
         self.assertEqual(json.loads(original["input_json"])["executionWorkspace"]["writeScope"], ["src"])
+
+    # -- Host-resolution delivery of a scope-only failure ---------------------
+    def test_native_scope_only_failure_is_delivered_by_a_full_restore(self):
+        board, submitted, claimed, manifest, checkout = self.native_scope_failure()
+        run_id = submitted["runId"]
+        attempt_id = claimed["claim"]["attempt"]["attemptId"]
+        turn_id = claimed["claim"]["turn"]["turnId"]
+        before = self.ledger(board, run_id)
+        view = self.view(board, run_id)
+        conflict = view["workspaceConflicts"][0]
+        resolved = self.resolve(board, view, conflict, "restore", paths=["outside.txt", "tracked.txt"],
+                                reason="only the refused seal failed")
+        self.assertTrue(resolved["delivered"])
+        self.assertEqual(resolved["state"], "delivered")
+        self.assertEqual(resolved["finalAttemptId"], attempt_id)
+        self.assertEqual(resolved["finalArtifactId"], resolved["artifactId"])
+        self.assertEqual(resolved["delivery"]["kind"], "host-resolution")
+        self.assertEqual(resolved["delivery"]["action"], "restore")
+        self.assertEqual(resolved["delivery"]["turnId"], turn_id)
+        self.assertIsNone(resolved["nextBoundaryRequestId"])
+        self.assertFalse((checkout / "outside.txt").exists())
+        self.assertEqual((checkout / "tracked.txt").read_text(), "base\n")
+        self.assertEqual((checkout / "src" / "feature.py").read_text(), "value = 2\n")
+        # The failed attempt, its failed turn and the original result receipt stay
+        # exactly as they were: the delivery is recorded separately, not rewritten.
+        self.assertEqual(self.ledger(board, run_id), before)
+        with board.store.db.read() as connection:
+            attempt = connection.execute(
+                "SELECT * FROM attempts WHERE attempt_id=?", (attempt_id,)).fetchone()
+            turn = connection.execute(
+                "SELECT * FROM workflow_turns WHERE turn_id=?", (turn_id,)).fetchone()
+            delivery = json.loads(connection.execute(
+                "SELECT delivery_json FROM workflow_workspace_conflicts WHERE conflict_id=?",
+                (conflict["conflictId"],),
+            ).fetchone()["delivery_json"])
+        self.assertEqual(attempt["shutdown_confirmed"], 1)
+        self.assertEqual(turn["state"], "failed")
+        self.assertIsNone(turn["disposition"])
+        payload = json.loads(attempt["result_json"])
+        self.assertEqual(payload["status"], "failed")
+        self.assertIn("workspaceSealError", payload["result"])
+        self.assertIn("turn", payload["result"])
+        self.assertEqual(delivery["state"], "delivered")
+        self.assertEqual(delivery["artifactId"], resolved["artifactId"])
+        self.assertEqual(resolved["workspaceConflicts"][0]["delivery"]["state"], "delivered")
+        # Integration and acknowledgement need no further model turn. The resolved
+        # artifact is verified against a real target checkout that actually received it.
+        target = self.verified_target(resolved["artifact"])
+        recorded = board.store.workflow.integration_record({
+            "runId": run_id, "commandId": "native-integration", "expectedRevision": resolved["revision"],
+            "artifactId": resolved["artifactId"], "strategy": "patch", "beforeCommit": target["before"],
+            "target": {"path": str(target["path"]), "ref": "HEAD"},
+            "reason": "the resolved output was applied to a real target", **self.control(resolved),
+        })
+        self.assertEqual(recorded["integration"]["state"], "verified")
+        self.assertEqual(recorded["integration"]["sourceCommit"], resolved["outputCommit"])
+        self.assertEqual(recorded["integration"]["verification"]["matchingPaths"], ["src/feature.py"])
+        accepted = board.call("workflow_acknowledge", {
+            "runId": run_id, "artifactId": resolved["artifactId"], "commandId": "native-ack",
+            "note": "reviewed the Host-resolved delivery", "verdict": "accepted", **self.control(recorded),
+        })
+        self.assertEqual(accepted["state"], "accepted")
+        self.assertEqual(accepted["resolutionDelivery"]["conflictId"], conflict["conflictId"])
+        self.assertEqual(accepted["resolutionDelivery"]["artifactId"], resolved["artifactId"])
+        self.assertEqual(self.ledger(board, run_id), before)
+
+    def test_native_scope_only_failure_is_delivered_by_adoption(self):
+        board, submitted, claimed, manifest, checkout = self.native_scope_failure(request_id="native-adopt")
+        run_id = submitted["runId"]
+        view = self.view(board, run_id)
+        conflict = view["workspaceConflicts"][0]
+        adopted = self.resolve(board, view, conflict, "adopt", reason="the Host accepts this exact site")
+        self.assertTrue(adopted["delivered"])
+        self.assertEqual(adopted["state"], "delivered")
+        self.assertEqual(adopted["delivery"]["action"], "adopt")
+        self.assertEqual(adopted["artifact"]["action"], "adopt")
+        self.assertEqual((checkout / "outside.txt").read_text(), "untracked outside\n")
+        self.assertEqual((checkout / "tracked.txt").read_text(), "outside the authorized scope\n")
+
+    def test_partial_restore_and_abandon_never_deliver(self):
+        board, submitted, claimed, manifest, checkout = self.native_scope_failure(request_id="native-partial")
+        run_id = submitted["runId"]
+        view = self.view(board, run_id)
+        conflict = view["workspaceConflicts"][0]
+        partial = self.resolve(board, view, conflict, "restore", paths=["outside.txt"],
+                               reason="only one path is safe to restore")
+        self.assertFalse(partial["delivered"])
+        self.assertEqual(partial["resolutionState"], "open")
+        self.assertIsNone(partial["artifactId"])
+        self.assertEqual(partial["state"], "awaiting-host")
+        current = self.view(board, run_id)
+        abandoned = self.resolve(board, current, current["workspaceConflicts"][0], "abandon",
+                                 command_id="resolve-abandon", fingerprint=partial["resolvedFingerprint"],
+                                 reason="discard this failed round")
+        self.assertFalse(abandoned["delivered"])
+        self.assertEqual(abandoned["resolutionState"], "abandoned")
+        self.assertEqual(abandoned["state"], "awaiting-host")
+        self.assertIsNone(abandoned["delivery"])
+        self.assertEqual((checkout / "src" / "feature.py").read_text(), "value = 1\n")
+
+    def test_a_scope_failure_without_a_native_turn_is_never_delivered(self):
+        board, submitted, claimed, manifest, checkout = self.scoped_failure(request_id="no-native")
+        view = self.view(board, submitted["runId"])
+        conflict = view["workspaceConflicts"][0]
+        resolved = self.resolve(board, view, conflict, "restore", paths=["outside.txt", "tracked.txt"],
+                                reason="restore a genuine harness failure")
+        self.assertTrue(resolved["resolved"])
+        self.assertFalse(resolved["delivered"])
+        self.assertIsNone(resolved["delivery"])
+        self.assertEqual(resolved["state"], "awaiting-host")
+        with board.store.db.read() as connection:
+            stored = connection.execute(
+                "SELECT delivery_json FROM workflow_workspace_conflicts WHERE conflict_id=?",
+                (conflict["conflictId"],),
+            ).fetchone()["delivery_json"]
+        self.assertIsNone(stored)
+
+    def test_a_native_record_that_no_longer_validates_is_not_delivered(self):
+        board, submitted, claimed, manifest, checkout = self.native_scope_failure(request_id="native-invalid")
+        run_id = submitted["runId"]
+        attempt_id = claimed["claim"]["attempt"]["attemptId"]
+        with board.store.db.write() as connection:
+            row = connection.execute(
+                "SELECT result_json FROM attempts WHERE attempt_id=?", (attempt_id,)).fetchone()
+            stored = json.loads(row["result_json"])
+            stored["result"]["turn"]["provenance"]["rootSessionMatched"] = False
+            connection.execute(
+                "UPDATE attempts SET result_json=? WHERE attempt_id=?", (json.dumps(stored), attempt_id))
+        view = self.view(board, run_id)
+        conflict = view["workspaceConflicts"][0]
+        resolved = self.resolve(board, view, conflict, "restore", paths=["outside.txt", "tracked.txt"],
+                                reason="the native record is broken")
+        self.assertFalse(resolved["delivered"])
+        self.assertEqual(resolved["state"], "awaiting-host")
+
+    def test_native_assistance_request_survives_as_the_next_boundary(self):
+        board, submitted, claimed, manifest, checkout = self.native_scope_failure(
+            request_id="native-assist", disposition="assistance")
+        run_id = submitted["runId"]
+        view = self.view(board, run_id)
+        conflict = view["workspaceConflicts"][0]
+        resolved = self.resolve(board, view, conflict, "restore", paths=["outside.txt", "tracked.txt"],
+                                reason="settle the scope, keep the native question")
+        self.assertTrue(resolved["resolved"])
+        self.assertFalse(resolved["delivered"])
+        self.assertEqual(resolved["state"], "awaiting-host")
+        self.assertIsNotNone(resolved["nextBoundaryRequestId"])
+        self.assertEqual(resolved["activeRequest"]["requestId"], resolved["nextBoundaryRequestId"])
+        self.assertEqual(resolved["activeRequest"]["kind"], "assistance")
+        self.assertEqual(resolved["activeRequest"]["summary"], "please review the failed seal")
+        self.assertEqual(resolved["activeRequest"]["attemptId"], claimed["claim"]["attempt"]["attemptId"])
+        with board.store.db.read() as connection:
+            delivery = connection.execute(
+                "SELECT delivery_json FROM workflow_workspace_conflicts WHERE conflict_id=?",
+                (conflict["conflictId"],),
+            ).fetchone()["delivery_json"]
+        self.assertIsNone(delivery)
+
+    # -- scope v1 rows for every creation path --------------------------------
+    def test_current_contract_runs_require_a_real_scope_v1_row(self):
+        board = self.board()
+        self.register(board)
+        submitted = self.governed_submit(board, request_id="scope-row", scope=("src",))
+        run_id = submitted["runId"]
+        view = self.view(board, run_id)
+        self.assertEqual(view["scope"]["scopeVersion"], 1)
+        self.assertTrue(view["scope"]["recorded"])
+        self.assertEqual(view["scope"]["writeScope"], ["src"])
+        with board.store.db.read() as connection:
+            rows = connection.execute(
+                "SELECT scope_version FROM workflow_scope_versions WHERE run_id=? ORDER BY scope_version",
+                (run_id,),
+            ).fetchall()
+        self.assertEqual([row["scope_version"] for row in rows], [1])
+        # Absent state is an integrity error, never a legacy fallback that would
+        # reauthorize a pre-slice run from its manifest.
+        with board.store.db.write() as connection:
+            connection.execute("DELETE FROM workflow_scope_versions WHERE run_id=?", (run_id,))
+        with self.assertRaises(BoardError) as raised:
+            self.view(board, run_id)
+        self.assertEqual(raised.exception.code, "STATE_INTEGRITY")
+        self.assertEqual(raised.exception.details["runId"], run_id)
+
+    def test_helper_admission_records_its_own_scope_v1(self):
+        board = self.board()
+        self.register(board)
+        submitted = self.governed_submit(board, request_id="helper-scope", scope=("src",))
+        run_id = submitted["runId"]
+        claimed = self.claim(board, run_id, request_id="helper-scope-claim")
+        manifest = claimed["claim"]["turn"]["input"]["executionWorkspace"]
+        (Path(manifest["path"]) / "src" / "feature.py").write_text("value = 2\n")
+        seal = workspace_module.seal(self.directory, manifest, run_id, claimed["claim"]["attempt"]["attemptId"])
+        self.finish_turn(board, claimed, seal, disposition="assistance")
+        view = self.view(board, run_id)
+        self.assertEqual(view["state"], "awaiting-host")
+        approved = board.call("workflow_decide", {
+            "runId": run_id, "requestId": view["activeRequest"]["requestId"], "commandId": "decide-helper",
+            "expectedRevision": view["revision"], "decision": "approve", "reason": "one isolated helper",
+            "helpers": [{
+                **CONFIGURATION, "requestId": "helper-scope-1", "task": "helper task", "cwd": str(self.repo),
+                "executionWorkspace": {"kind": "worktree", "access": "write"},
+            }],
+            **self.control(view),
+        })
+        self.assertEqual(len(approved["children"]), 1)
+        child = approved["children"][0]["taskId"]
+        child_view = self.view(board, child)
+        self.assertEqual(child_view["scope"]["scopeVersion"], 1)
+        self.assertTrue(child_view["scope"]["recorded"])
+        self.assertEqual(child_view["scope"]["writeScope"], ["."])
+        with board.store.db.read() as connection:
+            rows = connection.execute(
+                "SELECT scope_version, reason, stopped_evidence_json FROM workflow_scope_versions"
+                " WHERE run_id=? ORDER BY scope_version",
+                (child,),
+            ).fetchall()
+        self.assertEqual([row["scope_version"] for row in rows], [1])
+        self.assertEqual(rows[0]["reason"], "helper admission")
+        self.assertEqual(json.loads(rows[0]["stopped_evidence_json"])["parentRunId"], run_id)
 
 
 if __name__ == "__main__":

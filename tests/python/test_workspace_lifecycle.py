@@ -11,9 +11,11 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import subprocess
 import unittest
 from pathlib import Path
+from unittest import mock
 
 from support import FakeClock
 from test_workflow_real import CONFIGURATION, GIT_ENV, RealWorkspaceTestCase
@@ -396,6 +398,74 @@ class LifecycleTestCase(RealWorkspaceTestCase):
             workspace_module.cleanup_remove(self.directory, tampered)
         self.assertEqual(raised.exception.code, "WORKSPACE_UNSAFE")
         self.assertTrue((self.repo / "tracked.txt").exists())
+
+    def test_cleanup_keeps_a_foreign_stale_worktree_registry_entry(self):
+        board, submitted, manifest, checkout, artifact, view = self.accepted_worktree(
+            request_id="cleanup-foreign-stale")
+        # A missing registry entry that belongs to someone else is visible to Git
+        # until its owner prunes it; this cleanup never runs a repository-wide prune.
+        foreign = self.directory / "foreign-worktree"
+        git(self.repo, "worktree", "add", "-q", "--detach", str(foreign), "HEAD")
+        shutil.rmtree(foreign)
+        foreign_path = str(foreign.resolve())
+        self.assertIn(foreign_path, git(self.repo, "worktree", "list", "--porcelain"))
+        planned = self.plan(board, view)
+        applied = self.apply(board, planned, planned["plan"])
+        self.assertTrue(applied["removed"])
+        self.assertFalse(checkout.exists())
+        self.assertIn(foreign_path, git(self.repo, "worktree", "list", "--porcelain"))
+        # The repository owner can still repair its own stale entry afterwards.
+        git(self.repo, "worktree", "prune")
+        self.assertNotIn(foreign_path, git(self.repo, "worktree", "list", "--porcelain"))
+
+    def test_a_new_writer_cannot_claim_the_checkout_across_the_remove_boundary(self):
+        board, submitted, manifest, checkout, artifact, view = self.accepted_worktree(
+            request_id="cleanup-fence")
+        planned = self.plan(board, view)
+        plan = planned["plan"]
+        early: list = []
+        claims: list = []
+        real_remove = workspace_module.cleanup_remove
+
+        def racing_remove(state_dir, target_manifest):
+            # Exactly the documented window: the plan is committed as ``applying`` and
+            # inspected, but the directory has not been removed yet. A concurrent new
+            # existing-workspace writer first meets the early capture fence...
+            try:
+                self.submit(board, request_id="fence-writer-early", cwd=checkout)
+            except BoardError as error:
+                early.append(error)
+            else:  # pragma: no cover - the capture fence must refuse this submit
+                early.append(None)
+            # ...and with that early check disabled, the atomic reservation admission
+            # is what refuses the claim.
+            with mock.patch.object(workflow_module.WorkflowCoordinator, "_cleanup_fence",
+                                   lambda coordinator, path: None):
+                try:
+                    self.submit(board, request_id="fence-writer-claim", cwd=checkout)
+                except BoardError as error:
+                    claims.append(error)
+                else:  # pragma: no cover - the reservation fence must refuse this claim
+                    claims.append(None)
+            return real_remove(state_dir, target_manifest)
+
+        with mock.patch.object(workspace_module, "cleanup_remove", racing_remove):
+            applied = self.apply(board, planned, plan)
+        self.assertTrue(applied["removed"])
+        for attempts, label in ((early, "source capture"), (claims, "reservation admission")):
+            self.assertEqual(len(attempts), 1)
+            self.assertIsNotNone(attempts[0], f"a new writer claimed the checkout through {label}")
+            self.assertEqual(attempts[0].code, "PREPARATION_CONFLICT")
+            self.assertEqual(attempts[0].details["planId"], plan["planId"])
+            self.assertEqual(attempts[0].details["checkoutId"], manifest["checkoutId"])
+        self.assertFalse(checkout.exists())
+        # No reservation survived either refused claim.
+        with board.store.db.read() as connection:
+            held = connection.execute(
+                "SELECT COUNT(*) FROM workspace_reservations WHERE checkout_id=? AND state IN ('held','transferred')",
+                (manifest["checkoutId"],),
+            ).fetchone()[0]
+        self.assertEqual(held, 0)
 
     def test_cleanup_plan_expires_and_a_new_plan_is_required(self):
         clock = FakeClock()

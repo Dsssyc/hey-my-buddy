@@ -1376,6 +1376,8 @@ def cleanup_remove(state_dir, manifest: dict) -> dict:
     evidence. This function only proves the exact path still is this
     preparation's own locked worktree and then removes that one path; no parent
     directory, source checkout, outputs directory or Git reference is touched.
+    No repository-wide ``worktree prune`` runs here: a missing or foreign worktree
+    registry entry that belongs to someone else is never this cleanup's business.
     """
     with _errors():
         _validate_manifest(manifest)
@@ -1399,6 +1401,5 @@ def cleanup_remove(state_dir, manifest: dict) -> dict:
         _git(repository, "worktree", "remove", "--force", str(checkout_root), allowed=(0,))
         if checkout_root.exists():
             raise BoardError("WORKSPACE_IO_ERROR", "The managed checkout still exists after removal", path=str(checkout_root))
-        _git(repository, "worktree", "prune", allowed=(0, 1))
         return {"removed": True, "path": str(checkout_root), "repositoryPath": str(repository),
                 "workspaceId": workspace_id, "checkoutId": manifest["checkoutId"]}

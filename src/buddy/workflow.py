@@ -363,23 +363,25 @@ class WorkflowCoordinator:
     def _current_scope(self, connection, run_row) -> dict:
         """The current authorization scope version of one run.
 
-        A run attached before this slice has no row and reads as version 1 with
-        the manifest's own write scope, so the version is never invented from an
-        ephemeral field. The scope version stays distinct from the input snapshot
-        identity it was recorded alongside.
+        Every current-contract run records scope version 1 when it is created, and
+        later amendments append rows. A run without a scope row is not interpreted
+        through a legacy fallback: the state is reported as an integrity error so a
+        pre-slice board must be converted offline instead of silently reauthorized.
         """
         row = connection.execute(
             "SELECT * FROM workflow_scope_versions WHERE run_id=? ORDER BY scope_version DESC LIMIT 1",
             (run_row["run_id"],),
         ).fetchone()
-        if row is not None:
-            return {"scopeVersion": row["scope_version"], "writeScope": json.loads(row["write_scope_json"]),
-                    "inputManifestSha256": row["manifest_sha256"], "actor": row["actor"], "reason": row["reason"],
-                    "recorded": True, "updatedAt": row["created_at"]}
-        manifest = json.loads(run_row["workspace_manifest_json"] or "{}")
-        return {"scopeVersion": 1, "writeScope": list(manifest.get("writeScope") or []),
-                "inputManifestSha256": manifest.get("manifestSha256"), "actor": None, "reason": "original submission",
-                "recorded": False, "updatedAt": run_row["updated_at"]}
+        if row is None:
+            raise BoardError(
+                "STATE_INTEGRITY",
+                "This governed run has no recorded authorization scope; a current-contract board records scope "
+                "version 1 for every creation path, so this state must be converted offline",
+                runId=run_row["run_id"],
+            )
+        return {"scopeVersion": row["scope_version"], "writeScope": json.loads(row["write_scope_json"]),
+                "inputManifestSha256": row["manifest_sha256"], "actor": row["actor"], "reason": row["reason"],
+                "recorded": True, "updatedAt": row["created_at"]}
 
     def _open_conflict(self, connection, run_id: str):
         return connection.execute(
@@ -402,6 +404,12 @@ class WorkflowCoordinator:
                             "authorizedIndex": entry.get("authorizedIndex"), "observed": entry.get("observed"),
                             "observedIndex": entry.get("observedIndex"), "changed": entry.get("changed"),
                             "indexChanged": entry.get("indexChanged"), "excludedChanged": entry.get("excludedChanged")})
+        delivery = None
+        try:
+            candidate = json.loads(row["delivery_json"]) if row["delivery_json"] else None
+            delivery = candidate if isinstance(candidate, dict) else None
+        except (TypeError, ValueError):
+            delivery = None
         return {
             "conflictId": row["conflict_id"],
             "runId": row["run_id"],
@@ -421,6 +429,7 @@ class WorkflowCoordinator:
             "outputTree": row["output_tree"],
             "actor": row["actor"],
             "reason": row["reason"],
+            "delivery": delivery,
             "createdAt": row["created_at"],
             "updatedAt": row["updated_at"],
         }
@@ -793,6 +802,31 @@ class WorkflowCoordinator:
             params["runId"] = scope["runId"]
 
     # -- workspace reservations ---------------------------------------------
+    def _cleanup_fence(self, path: str | None) -> None:
+        """Refuse a source capture on a checkout whose cleanup plan is applying.
+
+        This is the early half of the same fence reservation admission enforces
+        atomically: it keeps a new input from even being snapshotted out of a
+        checkout that is being removed. The final claim is still refused inside the
+        write transaction, so the guarantee never depends on this read.
+        """
+        if not path:
+            return
+        with self.db.read() as connection:
+            plan = connection.execute(
+                "SELECT plan_id, checkout_id FROM workspace_cleanup_plans WHERE path=? AND state='applying'"
+                " ORDER BY rowid DESC LIMIT 1",
+                (str(Path(path).resolve()),),
+            ).fetchone()
+        if plan is not None:
+            raise BoardError(
+                "PREPARATION_CONFLICT",
+                "This checkout is being removed by an applying cleanup plan; it cannot be captured as new input",
+                checkoutId=plan["checkout_id"],
+                planId=plan["plan_id"],
+                path=str(path),
+            )
+
     def _held_writer(self, connection, checkout_id: str):
         return connection.execute(
             "SELECT * FROM workspace_reservations WHERE checkout_id=? AND state='held' AND access='write'",
@@ -815,6 +849,23 @@ class WorkflowCoordinator:
         manifest_sha = manifest.get("manifestSha256")
         if not checkout_id or not manifest_sha:
             raise BoardError("WORKSPACE_INVALID", "The prepared workspace manifest is missing checkoutId/manifestSha256")
+        # Reservation admission is the one atomic claim point for a checkout. A cleanup
+        # plan in ``applying`` has already passed its inspection but its removal has not
+        # finished, so no new writer may take the checkout across that boundary; the
+        # check and the insert below commit in the same SQLite write transaction.
+        cleanup = connection.execute(
+            "SELECT plan_id, path FROM workspace_cleanup_plans WHERE checkout_id=? AND state='applying'"
+            " ORDER BY rowid DESC LIMIT 1",
+            (checkout_id,),
+        ).fetchone()
+        if cleanup is not None:
+            raise BoardError(
+                "PREPARATION_CONFLICT",
+                "This checkout is being removed by an applying cleanup plan; no writer may claim it",
+                checkoutId=checkout_id,
+                planId=cleanup["plan_id"],
+                path=cleanup["path"],
+            )
         writer = self._held_writer(connection, checkout_id)
         if access == "write":
             if writer is not None and writer["holder_task_id"] != holder_task_id:
@@ -1313,6 +1364,7 @@ class WorkflowCoordinator:
                 return response
 
         configuration = self._validated_configuration(spec)
+        self._cleanup_fence(normalized["executionWorkspace"].get("cwd") or spec.get("cwd"))
         manifest = workspace_module().prepare(self.board.directory, request_id, normalized["executionWorkspace"])
 
         store_params = {
@@ -1651,6 +1703,8 @@ class WorkflowCoordinator:
                 if helper["inheritRoutingPreferences"]:
                     helper = {**helper, "spec": {**helper["spec"], "routingPreferences": parent_preferences}}
                 configuration = self._validated_configuration(helper["spec"])
+                self._cleanup_fence(
+                    helper["executionWorkspace"].get("cwd") or helper["spec"].get("cwd"))
                 manifest = workspace_module().prepare(
                     self.board.directory, helper["requestId"], helper["executionWorkspace"]
                 )
@@ -2202,6 +2256,15 @@ class WorkflowCoordinator:
                 now,
                 now,
             ),
+        )
+        # A helper is a current-contract run too: its own scope version 1 is recorded
+        # with its admission so no creation path can exist without a real scope row.
+        connection.execute(
+            "INSERT INTO workflow_scope_versions(run_id, scope_version, actor, reason, write_scope_json,"
+            " manifest_sha256, stopped_evidence_json, created_at) VALUES(?,1,?,?,?,?,?,?)",
+            (helper_task_id, f"host:{run_row['host_id']}", "helper admission",
+             canonical_json(list(manifest.get("writeScope") or [])), manifest.get("manifestSha256"),
+             canonical_json({"kind": "helper", "parentRunId": run_row["run_id"]}), now),
         )
         self.board._append_event(
             connection,
@@ -3052,25 +3115,31 @@ class WorkflowCoordinator:
                     attemptId=attempt["attempt_id"],
                     finalAttemptId=run_row["final_attempt_id"],
                 )
-            final_turn = connection.execute(
-                "SELECT * FROM workflow_turns WHERE attempt_id=? AND state='concluded' AND disposition='completed'",
-                (attempt["attempt_id"],),
-            ).fetchone()
-            if final_turn is None:
-                raise BoardError(
-                    "NOT_READY",
-                    "The current final attempt has no concluded completed turn to accept",
-                    attemptId=attempt["attempt_id"],
-                )
-            final_artifact = connection.execute(
-                "SELECT * FROM workflow_artifacts WHERE run_id=? AND kind='output' AND attempt_id=?"
-                " ORDER BY created_at DESC LIMIT 1",
-                (run_id, attempt["attempt_id"]),
-            ).fetchone()
+            final_artifact = None
+            if run_row["final_artifact_id"]:
+                final_artifact = connection.execute(
+                    "SELECT * FROM workflow_artifacts WHERE artifact_id=? AND run_id=?"
+                    " AND kind IN ('output','resolved-output')",
+                    (run_row["final_artifact_id"], run_id),
+                ).fetchone()
+            if final_artifact is None:
+                final_artifact = connection.execute(
+                    "SELECT * FROM workflow_artifacts WHERE run_id=? AND kind='output' AND attempt_id=?"
+                    " ORDER BY created_at DESC LIMIT 1",
+                    (run_id, attempt["attempt_id"]),
+                ).fetchone()
             if final_artifact is None:
                 raise BoardError(
                     "NOT_READY",
                     "The current final attempt produced no sealed output artifact to accept",
+                    attemptId=attempt["attempt_id"],
+                )
+            if final_artifact["attempt_id"] != attempt["attempt_id"]:
+                raise BoardError(
+                    "CONFLICT",
+                    "The recorded final artifact was not produced by the current final attempt",
+                    artifactId=final_artifact["artifact_id"],
+                    artifactAttemptId=final_artifact["attempt_id"],
                     attemptId=attempt["attempt_id"],
                 )
             if artifact_id and artifact_id != final_artifact["artifact_id"]:
@@ -3087,6 +3156,22 @@ class WorkflowCoordinator:
                     artifactKind=other["kind"],
                 )
             artifact = final_artifact
+            # A normal delivery concludes a completed turn. A Host-resolution delivery
+            # is the one alternative: the failed attempt's own native completed outcome
+            # is preserved in its immutable result, recorded separately on the
+            # conflict, and revalidated here. The failed turn row itself stays failed.
+            resolution = None
+            if connection.execute(
+                "SELECT * FROM workflow_turns WHERE attempt_id=? AND state='concluded' AND disposition='completed'",
+                (attempt["attempt_id"],),
+            ).fetchone() is None:
+                resolution = self._resolution_delivery(connection, run_row, attempt, artifact)
+                if resolution is None:
+                    raise BoardError(
+                        "NOT_READY",
+                        "The current final attempt has no concluded completed turn to accept",
+                        attemptId=attempt["attempt_id"],
+                    )
             integration = (
                 self._require_integration(connection, run_id, artifact["artifact_id"], integration_id)
                 if verdict == "accepted" else None
@@ -3103,7 +3188,10 @@ class WorkflowCoordinator:
                         acceptedAt=task["accepted_at"],
                         verdict=task["acceptance_verdict"],
                     )
-                return {**self.compact(connection, run_row, task), "duplicate": True}
+                response = {**self.compact(connection, run_row, task), "duplicate": True}
+                if resolution is not None:
+                    response["resolutionDelivery"] = self._resolution_delivery_result(resolution)
+                return response
             connection.execute(
                 "UPDATE tasks SET accepted_at=?, acceptance_note=?, acceptance_verdict=?, updated_at=?,"
                 " revision=revision+1 WHERE task_id=?",
@@ -3141,6 +3229,8 @@ class WorkflowCoordinator:
                     "actor": actor,
                     "artifactId": artifact["artifact_id"] if artifact is not None else None,
                     "integrationId": integration["integration_id"] if integration is not None else None,
+                    "resolutionDelivery": (self._resolution_delivery_result(resolution)
+                                           if resolution is not None else None),
                     "evidence": evidence,
                     "noteBytes": len(note.encode()),
                 },
@@ -3154,6 +3244,8 @@ class WorkflowCoordinator:
             response = {**view, "verdict": verdict, "duplicate": False}
             if integration is not None:
                 response["integration"] = self._integration_view(integration)
+            if resolution is not None:
+                response["resolutionDelivery"] = self._resolution_delivery_result(resolution)
             if command_id:
                 self.board._store_receipt(
                     connection, command_id, "workflow.acknowledge", request_key, response, task_id=run_id,
@@ -3349,6 +3441,107 @@ class WorkflowCoordinator:
                              conflictId=conflict["conflict_id"])
         return execution
 
+    @staticmethod
+    def _resolution_delivery_view(conflict) -> dict | None:
+        try:
+            delivery = json.loads(conflict["delivery_json"]) if conflict["delivery_json"] else None
+        except (TypeError, ValueError):
+            return None
+        return delivery if isinstance(delivery, dict) and delivery.get("state") == "delivered" else None
+
+    @staticmethod
+    def _resolution_delivery_result(resolution) -> dict:
+        delivery = resolution["delivery"]
+        return {
+            "conflictId": resolution["conflict"]["conflict_id"],
+            "state": delivery.get("state"),
+            "kind": delivery.get("kind"),
+            "action": delivery.get("action"),
+            "artifactId": delivery.get("artifactId"),
+            "attemptId": delivery.get("attemptId"),
+            "turnId": delivery.get("turnId"),
+            "turnOutcome": delivery.get("turnOutcome"),
+            "deliveredAt": delivery.get("deliveredAt"),
+        }
+
+    def _resolution_native_completion(self, connection, run_row, conflict):
+        """The failed attempt's own untouched native completed outcome, when the only failure was the seal.
+
+        The attempt, its turn and its command receipts are never rewritten: this
+        reads the immutable reported payload and revalidates the turn record against
+        the service-owned turn row. A missing turn, an unconfirmed shutdown, a
+        different failure, or a turn record that no longer validates returns None,
+        so a genuine harness failure can never be converted into a delivery.
+        """
+        attempt = connection.execute(
+            "SELECT * FROM attempts WHERE attempt_id=?", (conflict["attempt_id"],)
+        ).fetchone()
+        if attempt is None or attempt["result_json"] is None or not attempt["shutdown_confirmed"]:
+            return None
+        try:
+            stored = json.loads(attempt["result_json"])
+        except (TypeError, ValueError):
+            return None
+        if not isinstance(stored, dict) or stored.get("status") != "failed":
+            return None
+        envelope_error = stored.get("error")
+        if not isinstance(envelope_error, str) or not envelope_error.startswith("WORKSPACE_SCOPE_VIOLATION:"):
+            return None
+        payload = self.result_payload(stored)
+        seal_error = payload.get("workspaceSealError")
+        if not isinstance(seal_error, str) or not seal_error.startswith("WORKSPACE_SCOPE_VIOLATION:"):
+            return None
+        if payload.get("workspaceSeal") is not None or payload.get("turnError") is not None:
+            return None
+        runner_error = payload.get("error")
+        if runner_error is not None and runner_error != seal_error:
+            return None
+        record = payload.get("turn")
+        if not isinstance(record, dict):
+            return None
+        turn_row = connection.execute(
+            "SELECT * FROM workflow_turns WHERE turn_id=?", (conflict["turn_id"],)
+        ).fetchone()
+        if (turn_row is None or turn_row["run_id"] != run_row["run_id"]
+                or turn_row["attempt_id"] != attempt["attempt_id"]):
+            return None
+        try:
+            rejection = self._validate_turn(record, turn_row, attempt)
+        except BoardError:
+            return None
+        if rejection is not None:
+            return None
+        outcome = record.get("outcome") if isinstance(record.get("outcome"), dict) else {}
+        disposition = outcome.get("disposition")
+        if disposition not in ("completed", "assistance", "attention"):
+            return None
+        return {"attempt": attempt, "turnRow": turn_row, "turn": record, "disposition": disposition,
+                "sealError": seal_error}
+
+    def _resolution_delivery(self, connection, run_row, attempt, artifact):
+        """The recorded Host-resolution delivery of one resolved artifact, revalidated.
+
+        Acknowledgement accepts a resolved artifact only through this record: the
+        conflict must be a completed restore or adopt, its delivery record must name
+        this artifact, and the original native completed outcome must still validate.
+        """
+        if artifact["kind"] != "resolved-output":
+            return None
+        conflicts = connection.execute(
+            "SELECT * FROM workflow_workspace_conflicts WHERE run_id=? AND attempt_id=? AND artifact_id=?"
+            " AND state IN ('restored','adopted') ORDER BY rowid DESC",
+            (run_row["run_id"], attempt["attempt_id"], artifact["artifact_id"]),
+        ).fetchall()
+        for conflict in conflicts:
+            delivery = self._resolution_delivery_view(conflict)
+            if delivery is None or delivery.get("artifactId") != artifact["artifact_id"]:
+                continue
+            proof = self._resolution_native_completion(connection, run_row, conflict)
+            if proof is None or proof["disposition"] != "completed":
+                continue
+            return {"conflict": conflict, "delivery": delivery, "proof": proof}
+        return None
+
     def workspace_resolve(self, params: dict, *, console_authority: dict | None = None) -> dict:
         """Settle one recorded out-of-scope failure site without another model turn.
 
@@ -3440,14 +3633,31 @@ class WorkflowCoordinator:
                     manifest=record, attempt_id=current["attempt_id"], turn_id=current["turn_id"],
                     source_task_id=run_id, now=now,
                 )
+            proof = (self._resolution_native_completion(connection, run_row, current)
+                     if result["state"] in ("restored", "adopted") else None)
+            delivery = None
+            if proof is not None and proof["disposition"] == "completed":
+                # The only failure was the refused scope seal and this attempt's own
+                # native completed outcome survives intact, so the resolved artifact is
+                # the delivered result of this goal: it can be integrated and
+                # acknowledged without another model turn. The failed attempt, its
+                # failed turn and its command receipts stay exactly as they were; the
+                # Host-resolution delivery is recorded separately on the conflict.
+                delivery = {"state": "delivered", "kind": "host-resolution", "action": action,
+                            "artifactId": artifact_id, "attemptId": current["attempt_id"],
+                            "turnId": current["turn_id"], "turnOutcome": proof["disposition"],
+                            "resolvedFingerprint": result["resolvedFingerprint"], "commandId": command_id,
+                            "deliveredAt": now}
             connection.execute(
                 "UPDATE workflow_workspace_conflicts SET state=?, action=?, resolved_paths_json=?,"
                 " conflicting_paths_json=?, artifact_id=?, output_commit=?, output_tree=?, actor=?, reason=?,"
-                " command_id=?, updated_at=? WHERE conflict_id=? AND state='open'",
+                " command_id=?, delivery_json=?, updated_at=? WHERE conflict_id=? AND state='open'",
                 (result["state"], action, canonical_json(result["resolvedPaths"]),
                  canonical_json(result["remainingPaths"]), artifact_id, (record or {}).get("commit"),
-                 (record or {}).get("tree"), actor, reason, command_id, now, conflict_id),
+                 (record or {}).get("tree"), actor, reason, command_id,
+                 canonical_json(delivery) if delivery is not None else None, now, conflict_id),
             )
+            closed_requests = []
             if result["state"] in ("restored", "adopted", "abandoned"):
                 # The Host answered exactly this boundary; close only the requests
                 # that pointed at this recorded conflict.
@@ -3464,6 +3674,9 @@ class WorkflowCoordinator:
                                                         "state": result["state"], "actor": actor}}),
                          now, now, request["request_id"]),
                     )
+                    closed_requests.append(request["request_id"])
+            for closed_id in closed_requests:
+                self._close_proxy_ancestors(connection, self._request_row(connection, run_id, closed_id), now)
             self.board._append_event(
                 connection,
                 "workflow.workspace_resolved",
@@ -3472,9 +3685,31 @@ class WorkflowCoordinator:
                 revision=run_row["revision"] + 1,
                 payload={"conflictId": conflict_id, "action": action, "state": result["state"],
                          "resolvedPaths": result["resolvedPaths"][:32], "remainingPaths": result["remainingPaths"][:32],
-                         "artifactId": artifact_id, "actor": actor},
+                         "artifactId": artifact_id, "actor": actor, "delivered": delivery is not None},
             )
-            run_row = self._bump_run(connection, run_row, now)
+            boundary_request_id = None
+            if delivery is not None:
+                connection.execute(
+                    "UPDATE workflow_runs SET state='delivered', final_attempt_id=?, final_artifact_id=?,"
+                    " current_turn_id=?, current_attempt_id=NULL, active_request_id=NULL, updated_at=?"
+                    " WHERE run_id=?",
+                    (current["attempt_id"], artifact_id, current["turn_id"], now, run_id),
+                )
+                connection.execute("UPDATE tasks SET queue_reason=NULL, updated_at=? WHERE task_id=?", (now, run_id))
+                run_row = self._bump_run(connection, run_row, now)
+            elif proof is not None and proof["disposition"] in ("assistance", "attention"):
+                # The native turn genuinely yielded to the Host. The scope conflict is
+                # settled, but that request is the next logical boundary and is opened
+                # exactly as the completed turn would have opened it.
+                boundary_request_id = self._record_request(
+                    connection, run_row, proof["turnRow"], proof["turn"], proof["disposition"], now
+                )
+                connection.execute("UPDATE tasks SET queue_reason='awaiting-host', updated_at=? WHERE task_id=?",
+                                   (now, run_id))
+                self._propagate_boundary(connection, self._request_row(connection, run_id, boundary_request_id), now)
+                run_row = self._run_row(connection, run_id)
+            else:
+                run_row = self._bump_run(connection, run_row, now)
             response = {
                 **self.compact(connection, run_row),
                 "duplicate": False,
@@ -3499,6 +3734,9 @@ class WorkflowCoordinator:
                 "inputCommit": (record or {}).get("inputCommit"),
                 "changedPaths": (record or {}).get("changedPaths") or [],
                 "adoptedPaths": (record or {}).get("adoptedPaths") or [],
+                "delivered": delivery is not None,
+                "delivery": delivery,
+                "nextBoundaryRequestId": boundary_request_id,
             }
             self.board._store_receipt(connection, command_id, "workflow.workspace_resolve", request_key, response,
                                       task_id=run_id, attempt_id=current["attempt_id"])
@@ -3514,6 +3752,7 @@ class WorkflowCoordinator:
 
     def _resolved_duplicate(self, connection, run_row, conflict) -> dict:
         view = self.compact(connection, run_row)
+        delivery = self._resolution_delivery_view(conflict)
         return {
             **view,
             "duplicate": True,
@@ -3538,6 +3777,9 @@ class WorkflowCoordinator:
             "inputCommit": None,
             "changedPaths": [],
             "adoptedPaths": [],
+            "delivered": delivery is not None,
+            "delivery": delivery,
+            "nextBoundaryRequestId": None,
         }
 
     def integration_record(self, params: dict, *, console_authority: dict | None = None) -> dict:
@@ -4404,6 +4646,7 @@ class WorkflowCoordinator:
                     if intent is None:
                         manifest = previous
                     else:
+                        self._cleanup_fence(intent.get("cwd"))
                         manifest = workspace_module().prepare(
                             self.board.directory, f"{row['run_id']}:{row['continuation_id']}", intent
                         )
