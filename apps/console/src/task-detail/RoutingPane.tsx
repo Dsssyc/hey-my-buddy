@@ -1,5 +1,6 @@
 import { useTranslation } from "react-i18next";
 import { formatDuration } from "../i18n/format";
+import { BasisFold } from "./facts";
 import { Band, Facts, Fold, Moment, Pane, PaneTitle } from "./parts";
 import { quad } from "./names";
 import { parseTokenUsage } from "./parse";
@@ -9,29 +10,34 @@ import type { Context } from "./types";
 import { Usage } from "./usage";
 
 /**
- * One route: the Router that was asked, how, what it chose and why. The list of
- * candidates is not here: knowing who chose and why is what the reader needs,
- * and the list says nothing more. What the record lacks is said to be unrecorded.
+ * One route: the Router that was asked, how, what it chose and why. The facts
+ * are the span's own, so that two routes of one decision do not read alike; the
+ * decision's record adds only which Router was asked and how the choice was made.
+ * The list of candidates is not here: knowing who chose and why is what the
+ * reader needs, and the list says nothing more. What the record lacks is said to
+ * be unrecorded.
  */
 export function RoutingPane({ step, ctx }: { step: Step; ctx: Context }) {
   const { t } = useTranslation("taskDetail");
   const span = step.span!;
   const entry = ctx.routing.find(item => item.decisionId === span.decisionId) ?? null;
+  const basis = entry?.source === "no-candidate" || entry?.source === "single-candidate" ? ctx.bases[entry.decisionId] ?? null : null;
   const unrecorded = t("unrecorded");
-  const mode = entry?.routingMode ?? span.routing?.routingMode ?? null;
-  const selected = entry?.selectedBuddy ?? span.routing?.selectedBuddy ?? null;
-  const reason = entry?.reason ?? span.routing?.reason ?? null;
+  // The program chose without asking a Router: there is no Router to name and no mode to speak of.
+  const notCalled = entry?.source === "single-candidate" || entry?.source === "no-candidate";
+  const mode = span.routing?.routingMode ?? null;
   const usage = span.routing?.usage ?? null;
   const running = step.outcome === "running";
   const failed = step.outcome === "failed";
-  const state = running ? t("state.running") : failed ? t("state.failed") : step.outcome === "abstention" ? t("routing.abstained") : t("state.ended");
+  const state = running ? t("state.running") : failed ? t("state.failed") : step.outcome === "unknown" ? t("state.unknown")
+    : step.outcome === "abstention" ? t("routing.abstained") : t("state.ended");
   return <Pane>
-    <PaneTitle title={t("step.routing")} state={state} tone={running ? "live" : failed ? "fail" : "past"} note={failed && span.error ? span.error : undefined}>
-      <span className="font-mono tabular-nums">{step.at !== null ? <Moment at={step.at} seconds /> : unrecorded} – {span.endAt ? <Moment at={span.endAt} seconds /> : null}</span>
+    <PaneTitle title={t("step.routing")} state={state} tone={running ? "live" : failed ? "fail" : step.outcome === "unknown" ? "hand" : "past"} note={failed && span.error ? span.error : undefined}>
+      <span className="font-mono tabular-nums">{step.at !== null ? <Moment at={step.at} /> : unrecorded} – {span.endAt ? <Moment at={span.endAt} /> : null}</span>
       {step.ms !== null && <b className="text-sm font-normal text-foreground tabular-nums">{formatDuration(step.ms, true)}</b>}
     </PaneTitle>
-    <Band role="Router" identity={quad(entry?.routerBuddy) ?? <span className="font-sans text-ink3">{unrecorded}</span>}
-      end={mode ? t(`routing.mode.${mode}`) : unrecorded}
+    <Band role="Router" identity={notCalled ? undefined : quad(entry?.routerBuddy) ?? <span className="font-sans text-ink3">{unrecorded}</span>}
+      end={notCalled ? t("routing.notCalled") : mode ? t(`routing.mode.${mode}`) : unrecorded}
       second={<span className="inline-flex flex-wrap gap-x-3.5">
         <Usage usage={parseTokenUsage(span.tokenUsage)} />
         <span>{t("routing.elapsed", { time: usage?.elapsedMs != null ? formatDuration(usage.elapsedMs, true) : t("unknown") })}</span>
@@ -41,9 +47,10 @@ export function RoutingPane({ step, ctx }: { step: Step; ctx: Context }) {
       <Node mark="result">
         <div className="min-w-0 flex-1">
           <p className="text-xs text-ink3">{t("routing.chosen")}</p>
-          <p className="font-mono text-xs wrap-anywhere">{quad(selected) ?? unrecorded}</p>
-          <div className="mt-1"><Fold text={reason ?? unrecorded} className="text-foreground" limit={240} /></div>
+          <p className="font-mono text-xs wrap-anywhere">{quad(span.routing?.selectedBuddy) ?? unrecorded}</p>
+          <div className="mt-1"><Fold text={span.routing?.reason ?? unrecorded} className="text-foreground" limit={240} /></div>
           {entry?.source && entry.source !== "model-selection" && <div className="mt-2"><Facts items={[[t("routing.source"), t(`routing.sources.${entry.source}`, { defaultValue: entry.source })]]} /></div>}
+          {basis && <BasisFold basis={basis} />}
         </div>
       </Node>
     </Thread>

@@ -8,6 +8,9 @@ import { createTaskDetailClient } from "./task-detail/client";
 import type { Snapshot, Task } from "./types";
 
 const snapshot = { csrfToken: "csrf" } as Snapshot;
+/** The attempt the task view reports on, as the board writes it. */
+const attempt = (attemptId: string, result: Record<string, unknown>) => ({ attemptId, startedAt: "2026-10-01T00:00:00Z", finishedAt: "2026-10-01T00:01:00Z", error: null,
+  shutdownConfirmed: true, tokenUsage: null, reminders: { overdue: false, possiblyStuck: false, lastNativeEventAt: null, toolInProgress: false }, result });
 /** A command execution: it has no collaboration record, so the detail has the one task read to refresh. */
 const task = (runId = "command-1", extra: Partial<Task> = {}): Task => ({
   runId, task: `原始任务 ${runId}`, status: "completed", owner: "host", cwd: "~/project",
@@ -15,7 +18,7 @@ const task = (runId = "command-1", extra: Partial<Task> = {}): Task => ({
   acceptedAt: null, acceptanceVerdict: null, reviewRejectedAt: null, reviewRejectionNote: null,
   lineage: { kind: "execution", sourceHostId: "host", currentHostId: "host", parentRunId: null, rootRunId: runId, rootLeadRunId: null,
     project: { id: "project", path: "~/project", label: "project" }, buddy: null },
-  selectedAttempt: { attemptId: `att-${runId}`, result: { result: { stdout: `结果 ${runId}` } } }, ...extra,
+  selectedAttempt: attempt(`att-${runId}`, { result: { stdout: `结果 ${runId}` } }), ...extra,
 });
 function deferred<T>() {
   let resolve!: (value: T) => void;
@@ -40,7 +43,7 @@ describe("opened micro task local refresh", () => {
   it("refreshes the current plain command without resetting the detail or reading other APIs", async () => {
     const f = fixture(); const user = userEvent.setup();
     const reader = f.api.task as ReturnType<typeof vi.fn>;
-    const fresh = task("command-1", { selectedAttempt: { attemptId: "att-command-1", result: { result: { stdout: "更新后的结果" } } } });
+    const fresh = task("command-1", { selectedAttempt: attempt("att-command-1", { result: { stdout: "更新后的结果" } }) });
     reader.mockResolvedValueOnce(task()).mockResolvedValueOnce(fresh);
     const serverAt = Date.parse("2026-10-03T06:07:08Z");
     (f.api.readVerifiedAt as ReturnType<typeof vi.fn>).mockReturnValue(serverAt);
@@ -108,7 +111,7 @@ describe("opened micro task local refresh", () => {
 });
 
 describe("the list of records and the open detail", () => {
-  it("refreshes a selected raw command list at a newer revision without reading its detail again", async () => {
+  it("refreshes a selected raw command list at a newer revision, and reads its detail again for that revision, once", async () => {
     const f = fixture(); const user = userEvent.setup();
     const original = task(); const next = { ...original, revision: 2, task: "更新后的原始命令" };
     let listReads = 0;
@@ -129,9 +132,9 @@ describe("the list of records and the open detail", () => {
     await user.click(screen.getByRole("button", { name: "刷新全部执行记录" }));
     await waitFor(() => expect(lists).toHaveBeenCalledTimes(pagesBefore + 1));
     expect(lists.mock.calls.at(-1)?.[0]).toMatchObject({ rootsOnly: false, limit: 50 });
-    // The row follows the list; the detail is read again by its own button.
+    // The row follows the list, and the detail follows the row: it reads the task again for the new revision, and no more.
     await screen.findByText("更新后的原始命令", { selector: ".task-title" });
-    expect(f.api.task).toHaveBeenCalledTimes(before);
+    await waitFor(() => expect(f.api.task).toHaveBeenCalledTimes(before + 1));
     expect(f.api.command).not.toHaveBeenCalled(); expect(f.refresh).not.toHaveBeenCalled();
     expect(document.querySelector(".task-row.selected")?.getAttribute("aria-pressed")).toBe("true");
     expect(screen.getByText("结果 command-1")).toBeTruthy();
@@ -162,7 +165,7 @@ describe("the list of records and the open detail", () => {
     expect(body.scrollTop).toBe(87);
     expect(document.querySelector(".task-row.selected")?.getAttribute("aria-pressed")).toBe("true");
     expect(screen.queryByRole("button", { name: "加载更早记录" }) !== null).toBe(cursor !== null);
-    expect(f.api.task).toHaveBeenCalledTimes(detailReads);
+    await waitFor(() => expect(f.api.task).toHaveBeenCalledTimes(detailReads + 1));
     for (const name of ["command", "snapshot", "macroTasks", "macroTaskTimeline"] as const) expect(f.api[name]).not.toHaveBeenCalled();
     expect(f.refresh).not.toHaveBeenCalled();
   });

@@ -13,13 +13,13 @@ const languages = [
     locale: "zh-CN", back: "时间轴", refresh: "重新读取", turn: (n: number) => `回合 ${n}`, route: "路由", delegate: "委派", acceptance: "验收",
     running: "进行中", stuck: "可能卡住", overdue: "已超过预期", waitingHost: "等待 Host", failed: "失败", mode: "快速",
     answered: "已答复", unavailable: "无法送达", delivered: "已送达，等待答复", conclusion: "Host 的结论", notCounted: "不计入验收",
-    integration: "整合", reported: /上报 .*前/, handoff: "换手",
+    integration: "整合", reported: /上报 \d+ 分钟前/, handoff: "换手", unsure: "结束未确认", helperDone: "已完成", ask: "上一轮停下了吗？",
   },
   {
     locale: "en-US", back: "Timeline", refresh: "Read again", turn: (n: number) => `Turn ${n}`, route: "Route", delegate: "Delegate", acceptance: "Acceptance",
     running: "Running", stuck: "Possibly stuck", overdue: "Overdue", waitingHost: "Waiting for Host", failed: "Failed", mode: "Fast",
     answered: "Answered", unavailable: "Could not be delivered", delivered: "Delivered, awaiting answer", conclusion: "Host's conclusion", notCounted: "not counted as accepted",
-    integration: "Integration", reported: /Reported .* ago/, handoff: "Handoff",
+    integration: "Integration", reported: /Reported \d+ min ago/, handoff: "Handoff", unsure: "Stop not confirmed", helperDone: "Done", ask: "上一轮停下了吗？",
   },
 ];
 
@@ -32,9 +32,10 @@ const content = (page: Page) => pane(page).locator("div.w-0.min-w-full").first()
 /** Every part of the open step is whole, apart from its neighbours, and drawn in full. */
 async function expectDetailWhole(page: Page, { skipTitle = false } = {}) {
   const header = detail(page).locator("[data-slot=detail-header]");
-  const headerItems = header.locator(":scope > div:first-child > :not(h2)");
-  await expectWholeAndApart(header, skipTitle ? headerItems : header.locator(":scope > div:first-child > *"));
-  await expectTextUncut(headerItems);
+  const line = header.locator(":scope > div:first-child");
+  await expectWholeAndApart(header, line.locator(":scope > *"));
+  // The title is cut with an ellipsis by design; everything else in the head is written whole.
+  await expectTextUncut(line.locator("button, dt, dd, span:not([data-slot=state-mark])").filter({ hasNot: page.locator("h2") }));
   await expectWholeAndApart(rail(page), rail(page).locator("li"));
   await expectTextUncut(rail(page).locator("li span"));
   await expectWholeAndApart(content(page), content(page).locator(":scope > *"));
@@ -44,6 +45,20 @@ async function expectDetailWhole(page: Page, { skipTitle = false } = {}) {
   expect(sideways, "the pane scrolls sideways").toBeLessThanOrEqual(0);
 }
 
+/** The head is one line, and the control that reads again stays with the figures: on a narrow screen they wrap together. */
+async function expectOneLineHead(page: Page, refresh: string, narrow: boolean) {
+  const header = detail(page).locator("[data-slot=detail-header]");
+  const [back, title, figures, again] = await Promise.all([
+    header.getByRole("button").first().boundingBox(), header.locator("h2").boundingBox(), header.locator("dl").boundingBox(),
+    header.getByRole("button", { name: refresh }).boundingBox(),
+  ]);
+  const centre = (box: { y: number; height: number }) => box.y + box.height / 2;
+  expect(Math.abs(centre(again!) - centre(figures!)), "the control to read again is on the line of the figures").toBeLessThan(10);
+  expect(again!.x, "the control to read again is at the right end").toBeGreaterThan(figures!.x);
+  expect(Math.abs(centre(back!) - centre(title!)), "the way back and the title share a line").toBeLessThan(10);
+  if (!narrow) expect(Math.abs(centre(title!) - centre(figures!)), "wide, the head is one line").toBeLessThan(10);
+}
+
 /** A change of address inside the page, as a reader makes it: the page does not reload. */
 async function go(page: Page, hash: string): Promise<void> {
   await page.evaluate(next => { window.location.hash = next; }, hash);
@@ -51,7 +66,7 @@ async function go(page: Page, hash: string): Promise<void> {
 
 const step = (page: Page, text: string | RegExp) => rail(page).locator("button").filter({ hasText: text });
 
-for (const { locale, back, refresh, turn, route, delegate, acceptance, running, stuck, overdue, waitingHost, failed, mode, answered, unavailable, delivered, conclusion, notCounted, integration, reported, handoff } of languages)
+for (const { locale, back, refresh, turn, route, delegate, acceptance, running, stuck, overdue, waitingHost, failed, mode, answered, unavailable, delivered, conclusion, notCounted, integration, reported, handoff, unsure, helperDone, ask } of languages)
   for (const width of [1440, 1280, 390]) {
     test.describe(`the detail of a micro task in ${locale} at ${width}px`, () => {
       // Colours are read at rest: under reduced motion the page makes no transitions.
@@ -122,6 +137,7 @@ for (const { locale, back, refresh, turn, route, delegate, acceptance, running, 
           expect(Math.abs(paneBox.x - railBox.x)).toBeLessThan(2);
         }
         await expectDetailWhole(page, { skipTitle: true });
+        await expectOneLineHead(page, refresh, width <= 760);
         // A step reached by the keyboard is the one shown.
         await step(page, delegate).focus();
         await page.keyboard.press("Enter");
@@ -135,6 +151,11 @@ for (const { locale, back, refresh, turn, route, delegate, acceptance, running, 
         await expect(pane(page).getByRole("button", { name: /preview-run-a1/ })).toBeVisible();
         await expect(pane(page).getByRole("button", { name: /schema/ })).toBeVisible();
         await expect(pane(page).getByText("↩")).toBeVisible();
+        // A helper is written in the fixed words with a mark, not as the board names its state.
+        const helper = pane(page).getByRole("button", { name: /schema/ }).locator("xpath=ancestor::li");
+        await expect(helper).toContainText(helperDone);
+        await expect(helper.locator("[data-slot=state-mark]")).toHaveCount(1);
+        await expect(helper).not.toContainText(/delivered|succeeded|active/);
         await expectDetailWhole(page, { skipTitle: true });
         // A helper opens at its own address, inside the same macro task.
         await pane(page).getByRole("button", { name: /schema/ }).click();
@@ -170,6 +191,26 @@ for (const { locale, back, refresh, turn, route, delegate, acceptance, running, 
         await expectDetailWhole(page, { skipTitle: true });
         await step(page, handoff).click();
         await expect(pane(page)).toContainText("deepseek-flash");
+        await expectDetailWhole(page, { skipTitle: true });
+      });
+
+      test("an inquiry that names no attempt is shown in the turn that came after it", async ({ page }) => {
+        await open(page, `#tasks/${A}/preview-run-a1/7`);
+        await expect(pane(page).locator("[data-slot=detail-thread]")).toContainText(ask);
+        await expectDetailWhole(page, { skipTitle: true });
+        await step(page, turn(1)).click();
+        await expect(pane(page).locator("[data-slot=detail-thread]")).not.toContainText(ask);
+      });
+
+      test("a stop that is not confirmed is written as not confirmed, in the turn and on the rail", async ({ page }) => {
+        await open(page, `#tasks/${A}/preview-run-a1-h1-h1`);
+        await expect(detail(page)).toBeVisible();
+        const title = pane(page).locator("h3").first().locator("..");
+        await expect(title).toContainText(unsure);
+        await expect(title).not.toContainText(locale === "zh-CN" ? "已结束" : "Ended");
+        await expect(rail(page).locator("[aria-current=step]")).toContainText(unsure);
+        const mark = await rail(page).locator("[aria-current=step] i").evaluate(node => getComputedStyle(node).borderTopStyle);
+        expect(mark).toBe("dashed");
         await expectDetailWhole(page, { skipTitle: true });
       });
 

@@ -12,7 +12,7 @@ export default {
   title: { fromTask: "{{title}} (taken from the first line of the task)" },
   refresh: { label: "Read again", verified: "Verified {{time}}", unverified: "Verification time not recorded" },
   header: { started: "Started", elapsed: "Elapsed", turns: "Turns" },
-  state: { running: "Running", queued: "Queued", host: "Waiting for Host", lead: "Waiting for Lead", review: "Awaiting acceptance", accepted: "Accepted", done: "Done", ended: "Ended", failed: "Failed" },
+  state: { running: "Running", unknown: "Stop not confirmed", queued: "Queued", host: "Waiting for Host", lead: "Waiting for Lead", review: "Awaiting acceptance", accepted: "Accepted", done: "Done", ended: "Ended", failed: "Failed" },
   wait: { queue: "Queued", host: "Waiting for Host", lead: "Waiting for Lead", acceptance: "Awaiting acceptance" },
   rail: { label: "Steps", truncated: "The timeline read is incomplete and has no row for this micro task; only the delegation is listed." },
   step: {
@@ -27,7 +27,7 @@ export default {
     inputShort: "Input", outputShort: "Output", cacheShort: "Cache",
     input: "Input {{n}}", inputWithCache: "Input {{n}} (including cache {{cached}})", output: "Output {{n}}", source: "Source {{source}}",
     partial: "Only the part that was reported", unrecorded: "Usage not recorded",
-    scope: "This execution only; cache is counted in the input",
+    scope: "This execution only; cache is counted in the input", inputBesideCache: "Input {{n}} (cache {{cached}} counted apart)", scopeApart: "This execution only; cache is not in the input",
   },
   session: {
     name: "Session", unrecorded: "not recorded", resumed: "resumed", fresh: "new session",
@@ -35,22 +35,26 @@ export default {
     storage: {
       "task-private": "Buddy-private storage", "task-private-sessions": "Buddy-private session directory", "harness-user-store": "Harness user storage",
     },
-    visibility: { "not-listed-in-native-app": "Not listed in the native app" },
+    owner: { "hey-my-buddy-attempt": "Held by the Hey my buddy execution", "hey-my-buddy-micro-task": "Held by the Hey my buddy micro task", "harness-user-store": "Held by the harness user directory" },
+    visibility: { "not-listed-in-native-app": "Not listed in the native app", "listed-in-native-app": "Listed in the native app" },
+    resumable: "Resumable", notResumable: "Not resumable", bound: "Private binding present", unbound: "No private binding",
   },
   activity: {
     unknown: "Progress unknown", starting: "Starting", "waiting-model": "Waiting for the model", "streaming-model": "Model writing",
     "tool-running": "Running a tool", "waiting-external": "Waiting for an outside result", "waiting-host": "Waiting for Host", finishing: "Finishing",
     reported: "Reported {{when}}", notReported: "No report", modelTurns: "Model turns: {{n}}", toolCalls: "Tool calls: {{n}}",
+    basis: { tool: "Tool activity received", native: "Native activity received", phase: "Only the phase, no native activity", unknown: "Basis of the activity unknown" },
+    lastTool: "Last tool activity {{when}}", lastNative: "Last native activity {{when}}", event: "Event number {{n}}",
   },
   inquiry: {
     head: "Inquiry · {{who}}", queued: "Queued", claimed: "Being delivered", delivered: "Delivered, awaiting answer", answered: "Answered",
-    discarded: "Discarded", unavailable: "Could not be delivered", truncated: "The answer is cut short", more: "There are more inquiries than one read returns; earlier ones may not be listed.",
+    discarded: "Discarded", unavailable: "Could not be delivered", truncated: "The answer is cut short", more: "Earlier inquiries may not be listed.",
   },
-  ending: { cause: "Ended by: {{cause}}" },
+  ending: { cause: "Ended by: {{cause}}", unrecorded: "Cause not recorded" },
   termination: {
     "wrap-up": "Host wrap-up finished", "grace-expired": "Stopped when the wrap-up grace ran out", "forced-stop": "Forced stop", "console-stop": "Stopped in the console",
     "service-stop": "Service stopped", "unknown-stop": "Stopped (initiator unknown)", deadline: "Router budget used up", "harness-error": "Harness error",
-    "transport-error": "Transport failure", completed: "Completed normally",
+    "transport-error": "Transport failure", completed: "Completed normally", wrapUpLead: "Lead wrap-up finished",
   },
   stop: { host: "Stopped by Host", lead: "Stopped by Lead", console: "Stopped in the console", service: "Stopped by the service", unknown: "Stopped (initiator unknown)" },
   quota: { "quota-exceeded": "Quota used up", "rate-limited": "Rate limited by the native service" },
@@ -60,8 +64,12 @@ export default {
     patch: "Cumulative patch", base: "Base", output: "Output", path: "Path", paths: "Changed paths", host: "Changes added by Host",
     integration: { name: "Integration", verified: "Verified", notRequired: "Not required", none: "Not integrated" },
   },
+  basis: {
+    name: "Bounds at submission", constraints: "Hard constraints: {{buddy}}", capabilities: "Required capabilities: {{list}}", candidates: "Legal candidates when submitted: {{n}}",
+    excluded: "Excluded by the user: {{n}}; {{list}}", prefer: "Preferred {{buddy}}: {{reason}}", pin: "Pinned {{buddy}}: {{reason}}", exclude: "Excluded {{buddy}}: {{reason}}",
+  },
   routing: {
-    chosen: "Choice", abstained: "Abstained", elapsed: "Time: {{time}}", toolCalls: "Tool calls: {{n}}", source: "Source",
+    chosen: "Choice", abstained: "Abstained", notCalled: "No Router was called", elapsed: "Time: {{time}}", toolCalls: "Tool calls: {{n}}", source: "Source",
     mode: { fast: "Fast", review: "Review" },
     sources: {
       "single-candidate": "Chosen by the program: the only legal candidate; no Router was called",
@@ -72,7 +80,7 @@ export default {
     task: "Task", source: "Source", originalDelegator: "Originally delegated by", currentOwner: "Current owner", project: "Project", id: "Micro task ID",
     parent: "Parent micro task", cwd: "Working directory", authority: "Delegation authority", authorityYes: "Has delegation authority", helpers: "Helpers",
     calculation: "Route calculation", fixes: "Fixes", fixesTarget: "Micro task being fixed", fixedBy: "Fixed by: {{n}}",
-    helperState: { active: "Running", attention: "Waiting for Host", completed: "Done", failed: "Failed", cancelled: "Ended" },
+    inquiries: "Inquiries",
   },
   decision: {
     kind: {

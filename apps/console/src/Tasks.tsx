@@ -133,7 +133,7 @@ export function Tasks({ snapshot, api, active = true, onOpenMicroTask, listNavig
         aria-label={listCollapsed ? "展开全部执行记录列表" : "收起全部执行记录列表"} title={listCollapsed ? "展开全部执行记录列表" : "收起全部执行记录列表"}>{listCollapsed ? "展开列表" : "收起列表"}</button>
     </div>}
     {selected ? <TaskDetail key={selected} client={detailClient} runId={selected} timeline={null} timelineLoading={false}
-      nowMs={Date.now()} step={1} origin={null} active={active} backTo="records" onStep={() => undefined}
+      nowMs={null} step={1} origin={null} active={active} backTo="records" listed={history.runs.find(run => run.runId === selected)?.revision ?? null} onStep={() => undefined}
       onBack={() => setSelected(null)} onOpenRun={selectTask} /> :
       <div className="detail-placeholder"><h2>选择一项微任务</h2></div>}
   </aside>;

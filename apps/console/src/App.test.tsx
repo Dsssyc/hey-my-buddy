@@ -107,7 +107,9 @@ describe("console interactions", () => {
         owner: "fixture",
         cwd: "/fixture",
         revision: 3,
-        createdAt: "2026-09-22T00:00:00Z",
+        createdAt: "2026-09-22T00:00:00Z", updatedAt: "2026-09-22T00:01:00Z",
+        lineage: { kind: "execution", sourceHostId: "fixture", currentHostId: "fixture", parentRunId: null, rootRunId: "stop-evidence", rootLeadRunId: null,
+          project: { id: "fixture", label: "fixture", path: "/fixture" }, buddy: null },
         acceptedAt: null,
         acceptanceVerdict: null, reviewRejectedAt: null, reviewRejectionNote: null,
         activeAttemptId: "attempt",
@@ -123,6 +125,8 @@ describe("console interactions", () => {
       task: vi.fn(async () => ({
         ...records[0],
         selectedAttempt: {
+          attemptId: "attempt", startedAt: "2026-09-22T00:00:00Z", finishedAt: null, error: null, shutdownConfirmed: false, tokenUsage: null,
+          reminders: { overdue: false, possiblyStuck: false, lastNativeEventAt: null, toolInProgress: false },
           result: {
             status: "failed",
             result: { finalText: "真实回执中的产物说明" },

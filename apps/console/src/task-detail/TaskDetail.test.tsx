@@ -1,41 +1,12 @@
-import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { useState } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { TooltipProvider } from "@/components/ui/tooltip";
-import type { MacroTaskTimeline } from "../macro-task-types";
 import { ApiError } from "../api";
-import { TaskDetail } from "./TaskDetail";
-import type { TaskDetailClient } from "./client";
-import { CODEX, HOST, OPUS, at, audit, client, event, inquiry, row, routing, span, task, timeline, turn, workflow } from "./task-detail.fixtures";
-import type { Replies } from "./task-detail.fixtures";
+import { CODEX, HOST, OPUS, at, client, event, inquiry, row, routing, span, task, timeline, workflow } from "./task-detail.fixtures";
+import { open, pane, rail, ready, selected, step } from "./task-detail.testing";
 import type { Artifact, Integration } from "./types";
 
 afterEach(cleanup);
-
-type Options = { replies?: Replies; timeline?: MacroTaskTimeline | null; timelineLoading?: boolean; step?: number | null; origin?: string | null; active?: boolean; client?: TaskDetailClient };
-
-/** The page owns the step and the detail asks it to change: this holds the step as the address would. */
-function Harness({ options, onStep, onBack, onOpenRun }: { options: Options; onStep: (step: number) => void; onBack: () => void; onOpenRun: (runId: string) => void }) {
-  const [step, setStep] = useState<number | null>(options.step ?? null);
-  const reads = options.client ?? client(options.replies);
-  return <TooltipProvider><TaskDetail client={reads} runId="m1" timeline={options.timeline === undefined ? timeline() : options.timeline}
-    timelineLoading={options.timelineLoading ?? false} nowMs={Date.parse(at("11:30"))} step={step} origin={options.origin ?? null} active={options.active ?? true}
-    onStep={next => { onStep(next); setStep(next); }} onBack={onBack} onOpenRun={onOpenRun} /></TooltipProvider>;
-}
-
-function open(options: Options = {}) {
-  const calls = { onStep: vi.fn(), onBack: vi.fn(), onOpenRun: vi.fn() };
-  const reads = options.client ?? client(options.replies);
-  const view = render(<Harness options={{ ...options, client: reads }} {...calls} />);
-  return { ...calls, reads: reads as ReturnType<typeof client>, view, user: userEvent.setup() };
-}
-
-const rail = () => screen.getByRole("navigation", { name: "步骤" });
-const selected = () => within(rail()).getByRole("button", { current: "step" });
-const pane = () => document.querySelector("[data-slot=detail-pane]") as HTMLElement;
-const ready = () => screen.findByRole("navigation", { name: "步骤" });
-const step = (name: string | RegExp) => within(rail()).getByRole("button", { name });
 
 describe("opening the detail of a micro task", () => {
   it("reads the micro task, then chooses the step: the last turn of a delivered micro task, and says so to the address", async () => {
@@ -43,7 +14,7 @@ describe("opening the detail of a micro task", () => {
     await ready();
     expect(f.reads.task).toHaveBeenCalledWith("m1", expect.any(AbortSignal));
     expect(f.reads.workflow).toHaveBeenCalledWith("m1");
-    expect(f.reads.audit).toHaveBeenCalledWith("m1");
+    expect(f.reads.audit).toHaveBeenCalledWith("m1", ["decision-1"]);
     expect(f.reads.inquiries).toHaveBeenCalledWith("m1");
     expect(selected().textContent).toContain("回合 2");
     expect(f.onStep).toHaveBeenCalledExactlyOnceWith(7);
@@ -153,7 +124,7 @@ describe("the head of the detail", () => {
   it("writes a wait for a Lead's decision as a wait for the Lead, in the head and on the rail", async () => {
     const awaiting = workflow({ state: "awaiting-host", activeRequest: { requestId: "req-2", kind: "assistance", state: "open", createdAt: at("11:00"), decidedAt: null,
       childTaskId: null, routing: false, summary: "要不要改范围", attempted: null, neededWork: [], expectedArtifacts: [], acceptance: null, preparationError: null },
-    counts: { openRequests: 1 } });
+    counts: { turns: 2, openRequests: 1 } });
     const leadTimeline = timeline();
     leadTimeline.rows = [row({ state: "awaiting-host", rootLeadRunId: "lead-1" })];
     leadTimeline.spans = leadTimeline.spans.filter(item => item.spanId !== "e2" && item.spanId !== "q2");
@@ -222,7 +193,7 @@ describe("the head of the detail", () => {
 describe("the delegation", () => {
   it("is the task, where it came from and the micro tasks around it", async () => {
     const long = "第一段。".repeat(120);
-    const helper = workflow({ children: [{ taskId: "h1", role: "helper", state: "completed" }, { taskId: "d1", role: "router", state: "completed" }], delegationAuthority: true });
+    const helper = workflow({ children: [{ taskId: "h1", role: "helper", state: "succeeded" }, { taskId: "d1", role: "router", state: "succeeded" }], delegationAuthority: true });
     const withFixes = timeline();
     withFixes.rows = [row({ fixes: "m0", fixedBy: ["m2"] }), row({ runId: "m0", title: "被修正的微任务" }), row({ runId: "m2", title: "后来的修正" }), row({ runId: "h1", title: "协助查路径" })];
     const f = open({ step: 1, timeline: withFixes, replies: { task: task({ task: long, lineage: { ...task().lineage, parentRunId: "m0" } }), workflow: helper } });
@@ -292,15 +263,20 @@ describe("the route", () => {
     expect(pane().textContent).toContain("路由边界被拒绝");
   });
 
-  it("folds a long reason, unfolds it in one paragraph, and starts folded again on another route", async () => {
+  it("folds a long reason, unfolds it in the same paragraph, and starts folded again on another route", async () => {
     const reason = "具体的选择依据。".repeat(60);
     const two = timeline();
-    two.spans.push(span("r2", "routing", at("10:40"), at("10:41"), { attemptId: "att-r2", decisionId: "decision-2" }));
-    const f = open({ step: 2, timeline: two, replies: { routing: [routing({ reason }), routing({ decisionId: "decision-2", reason: reason + "二" })] } });
+    two.spans.find(item => item.spanId === "r1")!.routing!.reason = reason;
+    two.spans.push(span("r2", "routing", at("10:40"), at("10:41"), { attemptId: "att-r2", decisionId: "decision-2", routing: { routingMode: "fast", selectedBuddy: CODEX, reason: reason + "二" } }));
+    const f = open({ step: 2, timeline: two, replies: { routing: [routing(), routing({ decisionId: "decision-2" })] } });
     await ready();
+    const paragraphs = () => [...pane().querySelectorAll("p")].filter(node => node.textContent!.includes("具体的选择依据"));
+    expect(paragraphs()).toHaveLength(1);
+    expect(paragraphs()[0]!.textContent).not.toBe(reason);
     await f.user.click(within(pane()).getByRole("button", { name: "展开" }));
-    await waitFor(() => expect(pane().textContent).toContain(reason));
-    expect(within(pane()).getByRole("button", { name: "收起" })).toBeTruthy();
+    await waitFor(() => expect(paragraphs()[0]!.textContent).toBe(reason));
+    expect(paragraphs()).toHaveLength(1);
+    expect(within(pane()).getByRole("button", { name: "收起" }).getAttribute("aria-expanded")).toBe("true");
     await f.user.click(within(pane()).getByRole("button", { name: "收起" }));
     await waitFor(() => expect(within(pane()).getByRole("button", { name: "展开" })).toBeTruthy());
     await f.user.click(within(pane()).getByRole("button", { name: "展开" }));
@@ -311,8 +287,8 @@ describe("the route", () => {
 
 describe("a turn", () => {
   it("opens with the task, then what happened in it, then its result and what is left, then its seal", async () => {
-    const artifact: Artifact = { artifactId: "art-1", kind: "output", attemptId: "att-1", sourceTaskId: "m1", manifestSha256: "f".repeat(64), outputCommit: "3f9a2c1d00", diffPath: "/diffs/1.diff",
-      changedPaths: ["a.ts", "b.ts"], partial: false, cumulativePatch: { baseCommit: "d286db0aa", outputCommit: "3f9a2c1d00", path: "/p.patch", sha256: "a".repeat(64), changedPaths: ["a.ts"] } };
+    const artifact: Artifact = { artifactId: "art-1", kind: "output", attemptId: "att-1", manifestSha256: "f".repeat(64), outputCommit: "3f9a2c1d00", diffPath: "/diffs/1.diff",
+      changedPaths: ["a.ts", "b.ts"], partial: false, verified: null, final: null, cumulativePatch: { baseCommit: "d286db0aa", outputCommit: "3f9a2c1d00", path: "/p.patch", sha256: "a".repeat(64), changedPaths: ["a.ts"] } };
     const integration: Integration = { integrationId: "int-1", artifactId: "art-1", state: "not-required", strategy: "none", target: null, beforeCommit: null, afterCommit: null,
       verificationSummary: null, hostPaths: ["docs/console.md"], reason: "未整合", actor: HOST, createdAt: at("11:05") };
     const f = open({ step: 3, replies: { workflow: workflow({ artifacts: [artifact], integrations: [integration] }), inquiries: { items: [
@@ -426,7 +402,7 @@ describe("a turn", () => {
     const copy = within(band).getByRole("button", { name: /复制标识 01a2f7c4-2e31/ });
     expect(copy.textContent).toContain("…");
     await userEvent.setup().hover(copy);
-    expect((await screen.findAllByText(/Buddy 私有存储 · 原生应用里看不到/))[0]).toBeTruthy();
+    expect((await screen.findAllByText(/Buddy 私有存储 · 由 Hey my buddy 的执行持有 · 原生应用里看不到/))[0]).toBeTruthy();
     cleanup();
     open({ step: 3 });
     await ready();
@@ -520,7 +496,7 @@ describe("a Host's decision", () => {
     live.spans.push(span("h2", "host", at("11:00"), null, { state: "open", requestId: "req-2", requestKind: "assistance" }));
     live.events = live.events.filter(item => item.kind === "dispatch");
     live.rows = [row({ state: "awaiting-host", category: "host" })];
-    const f = open({ timeline: live, replies: { workflow: workflow({ state: "awaiting-host", activeRequest: open2 as never, counts: { openRequests: 3 } }) } });
+    const f = open({ timeline: live, replies: { workflow: workflow({ state: "awaiting-host", activeRequest: open2 as never, counts: { turns: 2, openRequests: 3 } }) } });
     await ready();
     expect(selected().textContent).toContain("等待 Host");
     const text = pane().textContent!;
@@ -542,7 +518,7 @@ describe("a Host's decision", () => {
     live.spans = live.spans.filter(item => !["e2", "q2"].includes(item.spanId));
     live.spans.push(span("h3", "host", at("11:00"), null, { state: "open", requestId: "req-3", requestKind: "assistance" }));
     live.events = live.events.filter(item => item.kind === "dispatch");
-    open({ timeline: live, replies: { workflow: workflow({ state: "awaiting-host", activeRequest: boundary as never, counts: { openRequests: 1 } }) } });
+    open({ timeline: live, replies: { workflow: workflow({ state: "awaiting-host", activeRequest: boundary as never, counts: { turns: 2, openRequests: 1 } }) } });
     await ready();
     expect(within(pane()).getByRole("heading", { name: "路由边界" })).toBeTruthy();
     expect(pane().textContent).toContain("路由需要 Host 指定 buddy");
@@ -561,7 +537,7 @@ describe("a Host's decision", () => {
   it("is told apart from a handoff, a takeover and a cancellation, which each have their own step", async () => {
     const changed = timeline();
     changed.events.push(event(4, "takeover", at("10:50")), event(5, "cancel", at("10:55"), { stopInitiator: "host" }));
-    open({ timeline: changed, replies: { task: task({ cancellation: { actor: HOST, reason: "不再需要" } }) } });
+    open({ timeline: changed, replies: { task: task({ status: "cancelled", cancellation: { actor: HOST, reason: "不再需要" }, selectedAttempt: { result: { terminationReason: "forced-stop" } } }) } });
     await ready();
     const names = within(rail()).getAllByRole("button").map(button => button.textContent);
     expect(names.some(name => name!.startsWith("接管"))).toBe(true);
@@ -583,8 +559,8 @@ describe("the acceptance", () => {
     found.rows = [row({ state: "accepted", acceptedAt: at("11:05"), acceptanceVerdict: "accepted" })];
     return found;
   };
-  const artifact: Artifact = { artifactId: "art-final", kind: "output", attemptId: "att-2", sourceTaskId: "m1", manifestSha256: "5f0c81d2" + "0".repeat(52) + "e2a1", outputCommit: "f6dfd59c11",
-    diffPath: null, changedPaths: Array.from({ length: 14 }, (_, index) => `f${index}.ts`), partial: false, cumulativePatch: null };
+  const artifact: Artifact = { artifactId: "art-final", kind: "output", attemptId: "att-2", manifestSha256: "5f0c81d2" + "0".repeat(52) + "e2a1", outputCommit: "f6dfd59c11",
+    diffPath: null, changedPaths: Array.from({ length: 14 }, (_, index) => `f${index}.ts`), partial: false, verified: null, final: null, cumulativePatch: null };
   const verified: Integration = { integrationId: "int-1", artifactId: "art-final", state: "verified", strategy: "merge", target: { path: "~/projects/hey-my-buddy", ref: "socu/console" },
     beforeCommit: "b7285470aa", afterCommit: "f6dfd59c11", verificationSummary: "前端全量通过；构建可复现。", hostPaths: ["apps/console/src/tokens.css", "apps/console/src/button.tsx"], reason: null, actor: HOST, createdAt: at("11:03") };
 
@@ -720,7 +696,7 @@ describe("the detail is only read", () => {
       await f.user.click(within(rail()).getAllByRole("button")[index - 1]!);
       expect(document.querySelectorAll("[data-slot=task-detail] input, [data-slot=task-detail] textarea, [data-slot=task-detail] select, [data-slot=task-detail] form")).toHaveLength(0);
     }
-    expect(Object.keys(f.reads).sort()).toEqual(["audit", "held", "inquiries", "task", "workflow"]);
+    expect(Object.keys(f.reads).sort()).toEqual(["audit", "basis", "held", "inquiries", "task", "workflow"]);
   });
 
   it("names a turn's buddy only as it was recorded for the turn, never as the micro task's current one", async () => {
@@ -728,7 +704,5 @@ describe("the detail is only read", () => {
     await ready();
     expect(pane().querySelector("[data-slot=detail-band]")!.textContent).toContain(CODEX.model);
     expect(pane().querySelector("[data-slot=detail-band]")!.textContent).not.toContain(OPUS.model);
-    expect(turn(1).buddy).toEqual(CODEX);
-    expect(audit().turns).toHaveLength(2);
   });
 });

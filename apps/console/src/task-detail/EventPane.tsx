@@ -16,15 +16,15 @@ export function EventPane({ step, ctx }: { step: Step; ctx: Context }) {
   const event = step.events[0] ?? null;
   const unrecorded = t("unrecorded");
   const stopped = event?.kind === "cancel" ? event.stopInitiator ?? event.actor?.role ?? null : null;
-  const reason = event?.kind === "cancel" ? ctx.task.cancellation?.reason ?? null : null;
+  const reason = event?.kind === "cancel" ? ctx.view.attempt?.ending?.reason ?? null : null;
   return <Pane>
-    <PaneTitle title={t(`step.${step.kind}`)}><Moment at={step.at} seconds /></PaneTitle>
+    <PaneTitle title={t(`step.${step.kind}`)}><Moment at={step.at} /></PaneTitle>
     <Section name={t("event.facts")} className="border-t">
       {step.kind === "handoff"
         ? <Facts items={[[t("event.from"), quad(step.from) ?? unrecorded, true], [t("event.to"), quad(step.to) ?? unrecorded, true]]} />
         : <Facts items={[
           [t("decision.who"), event?.actor ? actorText(event.actor) : unrecorded],
-          [t("decision.when"), <Moment key="when" at={step.at} seconds />],
+          [t("decision.when"), <Moment key="when" at={step.at} />],
           ...(stopped ? [[t("event.stoppedBy"), t(`stop.${stopped}`, { defaultValue: stopped })] as [string, string]] : []),
           ...(reason ? [[t("event.reason"), reason] as [string, string]] : []),
           ...(event?.summary ? [[t("event.summary"), event.summary] as [string, string]] : []),

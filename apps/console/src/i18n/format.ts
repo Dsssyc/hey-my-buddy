@@ -8,7 +8,6 @@ const list = new Intl.ListFormat(locale, { type: "conjunction" });
 const minuteClock = new Intl.DateTimeFormat(locale, { hour: "2-digit", minute: "2-digit", hourCycle: "h23" });
 const whole = new Intl.NumberFormat(locale);
 const tenth = new Intl.NumberFormat(locale, { minimumFractionDigits: 1, maximumFractionDigits: 1 });
-const relative = new Intl.RelativeTimeFormat(locale, { numeric: "always" });
 
 /** 18:06:41 */
 export function formatClock(ms: number): string {
@@ -61,11 +60,23 @@ export function formatDuration(ms: number, fine = false): string {
   return part("second", s);
 }
 
-/** 19 minutes ago, in the nearest unit; an instant that has not come yet reads as now. */
+/** 19 minutes ago, in the nearest unit, written like a duration; an instant that has not come yet reads as now. */
 export function formatRelative(ms: number, nowMs: number): string {
   const seconds = Math.max(0, Math.round((nowMs - ms) / 1000));
-  if (seconds < 60) return relative.format(-seconds, "second");
-  if (seconds < 3600) return relative.format(-Math.round(seconds / 60), "minute");
-  if (seconds < 86400) return relative.format(-Math.round(seconds / 3600), "hour");
-  return relative.format(-Math.round(seconds / 86400), "day");
+  const [unit, n] = seconds < 60 ? ["second", seconds] as const : seconds < 3600 ? ["minute", Math.round(seconds / 60)] as const
+    : seconds < 86400 ? ["hour", Math.round(seconds / 3600)] as const : ["day", Math.round(seconds / 86400)] as const;
+  return i18n.t(`shell:relative.${unit}`, { n: whole.format(n) });
+}
+
+/**
+ * An exact instant in local time, as short as it can be and still not mislead:
+ * today the clock, this year the date and the clock, another year the year too.
+ */
+export function formatMoment(ms: number, nowMs: number): string {
+  const [date, now] = [new Date(ms), new Date(nowMs)];
+  const pad = (part: number) => String(part).padStart(2, "0");
+  const clockText = `${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`;
+  if (date.toDateString() === now.toDateString()) return clockText;
+  const day = `${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
+  return `${date.getFullYear() === now.getFullYear() ? "" : `${date.getFullYear()}-`}${day} ${clockText}`;
 }

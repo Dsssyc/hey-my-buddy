@@ -24,7 +24,8 @@ export function DecisionPane({ step, ctx }: { step: Step; ctx: Context }) {
   const { t } = useTranslation("taskDetail");
   const { workflow, audit } = ctx;
   const event = step.events[0] ?? null;
-  const requestId = step.span?.requestId ?? event?.requestId ?? null;
+  // A continuation names no request: the wait it ended does.
+  const requestId = step.span?.requestId ?? event?.requestId ?? step.waits.find(wait => wait.requestId !== null)?.requestId ?? null;
   const compact = requestId ? workflow.requests.find(item => item.requestId === requestId) ?? null : null;
   const full: Known | null = requestId
     ? audit?.requests.find(item => item.requestId === requestId) ?? (workflow.activeRequest?.requestId === requestId ? workflow.activeRequest : null)
@@ -32,7 +33,7 @@ export function DecisionPane({ step, ctx }: { step: Step; ctx: Context }) {
   const request = full ?? compact;
   const continuation = step.kind === "continue" && event?.continuationId ? audit?.continuations.find(item => item.continuationId === event.continuationId) ?? null : null;
   const open = step.pending || request?.state === "open";
-  const wait = t(ctx.lead ? "wait.lead" : "wait.host");
+  const wait = t(ctx.view.lead ? "wait.lead" : "wait.host");
   const decided = request && request.state !== "open" ? request : null;
   const who: Actor | null = (full && "decision" in full ? full.decision?.actor : null) ?? event?.actor ?? null;
   const when = decided?.decidedAt ?? event?.at ?? null;
@@ -41,12 +42,12 @@ export function DecisionPane({ step, ctx }: { step: Step; ctx: Context }) {
   const title = step.kind === "continue" ? t("step.continue") : request ? t(`decision.kind.${kindKey(request)}`) : t("step.decision");
   return <Pane>
     <PaneTitle title={title} state={open ? wait : undefined} tone="hand">
-      {when && <Moment at={when} seconds />}
+      {when && <Moment at={when} />}
     </PaneTitle>
     {full && <>
       <Section name={t("decision.summary")} className="border-t">
         <Fold text={full.summary} />
-        {full.childTaskId && <p className="mt-2"><LinkButton title={full.childTaskId} onClick={() => ctx.open(full.childTaskId!)}>{t("decision.child")}</LinkButton></p>}
+        {full.childTaskId && <p className="mt-2"><LinkButton hint={full.childTaskId} onClick={() => ctx.open(full.childTaskId!)}>{t("decision.child")}</LinkButton></p>}
         {more > 0 && <p className="mt-2 text-xs text-ink3">{t("decision.more", { n: more })}</p>}
         {full.preparationError && <p className="mt-2 text-fail"><code className="font-mono text-xs">{full.preparationError.code}</code> · {full.preparationError.message}</p>}
       </Section>
@@ -67,7 +68,7 @@ export function DecisionPane({ step, ctx }: { step: Step; ctx: Context }) {
       {open ? <p className="text-hand">{wait}</p> : <Facts items={[
         [t("decision.what"), step.kind === "continue" ? t("step.continue") : decided ? t(`decision.state.${decided.state}`, { defaultValue: decided.state }) : t("unrecorded")],
         [t("decision.who"), who ? actorText(who) : t("unrecorded")],
-        [t("decision.when"), <Moment key="when" at={when} seconds />],
+        [t("decision.when"), <Moment key="when" at={when} />],
         ...(full && "decision" in full && full.decision?.reason ? [[t("decision.reason"), full.decision.reason] as [string, string]] : []),
       ]} />}
     </Section>

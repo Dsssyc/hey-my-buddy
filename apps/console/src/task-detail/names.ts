@@ -1,10 +1,8 @@
-import type { TimelineBuddy } from "../macro-task-types";
-import type { Buddy } from "./types";
-
-type Named = Buddy | TimelineBuddy;
+/** A buddy as far as it is recorded: any part may be missing. */
+type Named = { harness?: string | null; provider?: string | null; model?: string | null; effort?: string | null };
 
 /** Model and effort: the part of a buddy's name that a line can hold. */
-export function modelEffort(buddy: { model: string | null; effort: string | null } | null | undefined): string | null {
+export function modelEffort(buddy: Named | null | undefined): string | null {
   if (!buddy || (!buddy.model && !buddy.effort)) return null;
   return [buddy.model, buddy.effort].filter(Boolean).join(" / ");
 }

@@ -1,13 +1,14 @@
 import { act, cleanup, render } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ApiError } from "../api";
-import { client, inquiry, task, workflow } from "./task-detail.fixtures";
+import { parseTask } from "./parse";
+import { client, inquiry, routing, task, workflow } from "./task-detail.fixtures";
 import type { DetailRead } from "./use-task-detail";
 import { useTaskDetail } from "./use-task-detail";
 
 let latest!: DetailRead;
-function Probe({ reads, active = true, runId = "m1" }: { reads: ReturnType<typeof client>; active?: boolean; runId?: string }) {
-  latest = useTaskDetail(reads, runId, active);
+function Probe({ reads, active = true, runId = "m1", decisionIds = [], listed = null }: { reads: ReturnType<typeof client>; active?: boolean; runId?: string; decisionIds?: string[]; listed?: number | null }) {
+  latest = useTaskDetail(reads, runId, active, decisionIds, listed);
   return null;
 }
 const calls = (fn: unknown) => (fn as ReturnType<typeof vi.fn>).mock.calls.length;
@@ -26,7 +27,7 @@ describe("what the detail of a micro task reads", () => {
     const reads = client();
     render(<Probe reads={reads} />);
     await settle();
-    expect(latest.task?.runId).toBe("m1");
+    expect(latest.view?.task.runId).toBe("m1");
     expect(latest.workflow?.revision).toBe(9);
     expect(latest.audit?.turns).toHaveLength(2);
     expect(latest.routing).toHaveLength(1);
@@ -34,7 +35,7 @@ describe("what the detail of a micro task reads", () => {
     expect(latest.verifiedAtMs).not.toBeNull();
     expect(latest.error).toBe("");
     expect([calls(reads.task), calls(reads.audit), calls(reads.inquiries)]).toEqual([1, 1, 1]);
-    expect(Object.keys(reads).filter(key => key !== "held").sort()).toEqual(["audit", "inquiries", "task", "workflow"]);
+    expect(Object.keys(reads).filter(key => key !== "held").sort()).toEqual(["audit", "basis", "inquiries", "task", "workflow"]);
   });
 
   it("reads the record every three seconds, and the audit again only when the record's revision moves", async () => {
@@ -82,7 +83,7 @@ describe("what the detail of a micro task reads", () => {
     const reads = client({ task: task({ workflow: undefined, lineage: { ...task().lineage, kind: "execution" } }) });
     render(<Probe reads={reads} />);
     await settle(6000);
-    expect(latest.task?.runId).toBe("m1");
+    expect(latest.view?.task.runId).toBe("m1");
     expect([calls(reads.workflow), calls(reads.audit), calls(reads.inquiries)]).toEqual([0, 0, 0]);
   });
 
@@ -94,7 +95,7 @@ describe("what the detail of a micro task reads", () => {
     await settle(3000);
     expect(latest.error).toContain("无法连接本地黑板");
     expect(latest.workflow?.revision).toBe(9);
-    expect(latest.task?.runId).toBe("m1");
+    expect(latest.view?.task.runId).toBe("m1");
     await settle(3000);
     expect(latest.error).toBe("");
   });
@@ -142,5 +143,92 @@ describe("what the detail of a micro task reads", () => {
     await act(async () => { release(); });
     await settle();
     expect(latest.workflow?.revision).toBe(9);
+  });
+});
+
+describe("when the detail is left", () => {
+  it("aborts the read of the task that is under way, and ignores its late reply", async () => {
+    const reads = client();
+    let signal!: AbortSignal;
+    (reads.task as ReturnType<typeof vi.fn>).mockImplementationOnce((_runId: string, given: AbortSignal) => { signal = given; return new Promise(() => undefined); });
+    const view = render(<Probe reads={reads} />);
+    await settle();
+    expect(signal.aborted).toBe(false);
+    view.unmount();
+    expect(signal.aborted).toBe(true);
+  });
+});
+
+describe("what the head rests on", () => {
+  it("says when the server checked the read the head rests on, per read: a read that carries no time carries none", async () => {
+    const reads = client();
+    render(<Probe reads={reads} />);
+    await settle();
+    expect(latest.verifiedAtMs).not.toBeNull();
+    (reads.workflow as ReturnType<typeof vi.fn>).mockImplementation(async () => ({ value: workflow(), verifiedAtMs: null }));
+    await settle(3000);
+    expect(latest.verifiedAtMs).toBeNull();
+    // The time of another read is not lent to it.
+    expect(calls(reads.task)).toBeGreaterThan(0);
+  });
+
+  it("is the time of the task read for a run that has no collaboration record", async () => {
+    const reads = client({ task: task({ workflow: undefined, lineage: { ...task().lineage, kind: "execution" } }) });
+    render(<Probe reads={reads} />);
+    await settle();
+    expect(latest.verifiedAtMs).not.toBeNull();
+  });
+});
+
+describe("what moves the reads", () => {
+  it("reads the task again when the list it was opened from reads a new revision, and by no timer of its own", async () => {
+    const reads = client({ task: task({ workflow: undefined, lineage: { ...task().lineage, kind: "execution" } }) });
+    const view = render(<Probe reads={reads} listed={5} />);
+    await settle();
+    await settle(9000);
+    expect(calls(reads.task)).toBe(1);
+    view.rerender(<Probe reads={reads} listed={6} />);
+    await settle();
+    expect(calls(reads.task)).toBe(2);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("asks the audit for the routing decisions of the timeline, and reads it again when they change", async () => {
+    const reads = client();
+    const view = render(<Probe reads={reads} decisionIds={["d1"]} />);
+    await settle();
+    expect(reads.audit).toHaveBeenLastCalledWith("m1", ["d1"]);
+    view.rerender(<Probe reads={reads} decisionIds={["d1", "d2"]} />);
+    await settle();
+    expect(reads.audit).toHaveBeenLastCalledWith("m1", ["d1", "d2"]);
+    expect(calls(reads.audit)).toBe(2);
+  });
+
+  it("reads the bounds of each decision the program made, once, and none of a Router's", async () => {
+    const bases = { "decision-1": { constraints: {}, requiredCapabilities: [], candidateCount: 1, excluded: [], preferences: [] } };
+    const reads = client({ routing: [routing({ source: "single-candidate" }), routing({ decisionId: "d2", source: "model-selection" })], bases });
+    render(<Probe reads={reads} />);
+    await settle();
+    await settle(6000);
+    expect(reads.basis).toHaveBeenCalledExactlyOnceWith("decision-1");
+    expect(latest.bases).toEqual(bases);
+  });
+
+  it("shows a read under way, and starts no second while it lasts", async () => {
+    const reads = client();
+    render(<Probe reads={reads} />);
+    await settle();
+    expect(latest.busy).toBe(false);
+    let release!: () => void;
+    (reads.task as ReturnType<typeof vi.fn>).mockImplementationOnce(() => new Promise(resolve => { release = () => resolve({ value: parseTask(task(), "m1"), verifiedAtMs: 1 }); }));
+    const before = calls(reads.workflow);
+    await act(async () => { latest.refresh(); });
+    expect(latest.busy).toBe(true);
+    await act(async () => { latest.refresh(); });
+    await settle();
+    expect(calls(reads.workflow)).toBe(before + 1);
+    await act(async () => { release(); });
+    await settle();
+    expect(latest.busy).toBe(false);
   });
 });

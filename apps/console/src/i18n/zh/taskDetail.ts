@@ -11,7 +11,7 @@ export default {
   title: { fromTask: "{{title}}（取自任务首行）" },
   refresh: { label: "重新读取", verified: "核对时间 {{time}}", unverified: "核对时间未记录" },
   header: { started: "开始", elapsed: "历时", turns: "回合" },
-  state: { running: "进行中", queued: "排队", host: "等待 Host", lead: "等待 Lead", review: "等待验收", accepted: "已验收", done: "已完成", ended: "已结束", failed: "失败" },
+  state: { running: "进行中", unknown: "结束未确认", queued: "排队", host: "等待 Host", lead: "等待 Lead", review: "等待验收", accepted: "已验收", done: "已完成", ended: "已结束", failed: "失败" },
   wait: { queue: "排队", host: "等待 Host", lead: "等待 Lead", acceptance: "等待验收" },
   rail: { label: "步骤", truncated: "时间轴的读取不完整，没有这个微任务的一行；这里只列出委派。" },
   step: {
@@ -26,7 +26,7 @@ export default {
     inputShort: "输入", outputShort: "输出", cacheShort: "缓存",
     input: "输入 {{n}}", inputWithCache: "输入 {{n}}（含缓存 {{cached}}）", output: "输出 {{n}}", source: "来源 {{source}}",
     partial: "只含已报告的部分", unrecorded: "用量未记录",
-    scope: "单次执行；缓存已计入输入",
+    scope: "单次执行；缓存已计入输入", inputBesideCache: "输入 {{n}}（缓存 {{cached}} 另计）", scopeApart: "单次执行；缓存不在输入之内",
   },
   session: {
     name: "会话", unrecorded: "未记录", resumed: "恢复", fresh: "新会话",
@@ -34,22 +34,26 @@ export default {
     storage: {
       "task-private": "Buddy 私有存储", "task-private-sessions": "Buddy 私有会话目录", "harness-user-store": "Harness 用户存储",
     },
-    visibility: { "not-listed-in-native-app": "原生应用里看不到" },
+    owner: { "hey-my-buddy-attempt": "由 Hey my buddy 的执行持有", "hey-my-buddy-micro-task": "由 Hey my buddy 的微任务持有", "harness-user-store": "由 Harness 的用户目录持有" },
+    visibility: { "not-listed-in-native-app": "原生应用里看不到", "listed-in-native-app": "原生应用里列出" },
+    resumable: "可恢复", notResumable: "不可恢复", bound: "私有绑定存在", unbound: "私有绑定不存在",
   },
   activity: {
     unknown: "进展未知", starting: "正在启动", "waiting-model": "等待模型", "streaming-model": "模型输出中",
     "tool-running": "工具执行中", "waiting-external": "等待外部结果", "waiting-host": "等待 Host", finishing: "正在收尾",
     reported: "上报 {{when}}", notReported: "没有上报", modelTurns: "模型回合 {{n}}", toolCalls: "工具调用 {{n}}",
+    basis: { tool: "收到工具活动", native: "收到原生活动", phase: "仅有阶段，没有原生活动", unknown: "活动依据未知" },
+    lastTool: "最近工具活动 {{when}}", lastNative: "最近原生活动 {{when}}", event: "事件序号 {{n}}",
   },
   inquiry: {
     head: "问询 · {{who}}", queued: "排队", claimed: "正在送达", delivered: "已送达，等待答复", answered: "已答复",
-    discarded: "已丢弃", unavailable: "无法送达", truncated: "答复已截断", more: "问询多于一次读取的上限，更早的可能没有列出。",
+    discarded: "已丢弃", unavailable: "无法送达", truncated: "答复已截断", more: "更早的问询可能没有列出。",
   },
-  ending: { cause: "终止原因：{{cause}}" },
+  ending: { cause: "终止原因：{{cause}}", unrecorded: "终止原因未记录" },
   termination: {
     "wrap-up": "Host 收尾完成", "grace-expired": "收尾宽限到期后停止", "forced-stop": "强制停止", "console-stop": "在控制台停止",
     "service-stop": "服务停止", "unknown-stop": "停止（发起者未知）", deadline: "Router 预算用完", "harness-error": "Harness 错误",
-    "transport-error": "传输故障", completed: "正常完成",
+    "transport-error": "传输故障", completed: "正常完成", wrapUpLead: "Lead 收尾完成",
   },
   stop: { host: "Host 停止", lead: "Lead 停止", console: "在控制台停止", service: "服务停止", unknown: "停止（发起者未知）" },
   quota: { "quota-exceeded": "额度耗尽", "rate-limited": "原生服务限流" },
@@ -59,8 +63,12 @@ export default {
     patch: "累计补丁", base: "起点", output: "终点", path: "路径", paths: "改动的路径", host: "Host 补充的改动",
     integration: { name: "整合", verified: "已验证", notRequired: "无需整合", none: "未整合" },
   },
+  basis: {
+    name: "提交时的约束", constraints: "硬约束：{{buddy}}", capabilities: "所需能力：{{list}}", candidates: "提交时冻结候选 {{n}} 个",
+    excluded: "用户排除 {{n}} 个：{{list}}", prefer: "优先考虑 {{buddy}}：{{reason}}", pin: "固定选择 {{buddy}}：{{reason}}", exclude: "排除 {{buddy}}：{{reason}}",
+  },
   routing: {
-    chosen: "选择", abstained: "放弃选择", elapsed: "耗时 {{time}}", toolCalls: "工具调用 {{n}}", source: "来源",
+    chosen: "选择", abstained: "放弃选择", notCalled: "未调用 Router", elapsed: "耗时 {{time}}", toolCalls: "工具调用 {{n}}", source: "来源",
     mode: { fast: "快速", review: "审阅" },
     sources: {
       "single-candidate": "程序直选，唯一的合法候选，没有调用 Router",
@@ -71,7 +79,7 @@ export default {
     task: "任务", source: "来源", originalDelegator: "原始委派方", currentOwner: "当前负责方", project: "项目", id: "微任务 ID",
     parent: "上级微任务", cwd: "执行位置", authority: "委派权", authorityYes: "带委派权", helpers: "协助任务",
     calculation: "路由计算", fixes: "修正", fixesTarget: "被修正的微任务", fixedBy: "被修正 {{n}} 次",
-    helperState: { active: "进行中", attention: "等待 Host", completed: "已完成", failed: "失败", cancelled: "已结束" },
+    inquiries: "问询",
   },
   decision: {
     kind: {

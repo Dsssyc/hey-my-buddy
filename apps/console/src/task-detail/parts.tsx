@@ -2,19 +2,17 @@ import { cn } from "cn";
 import { useState } from "react";
 import type { ReactNode } from "react";
 import { useTranslation } from "react-i18next";
-import { Collapsible, CollapsibleContent, CollapsibleTrigger, Disclosure } from "@/components/ui/collapsible";
+import { Collapsible, CollapsibleTrigger, Disclosure } from "@/components/ui/collapsible";
 import { ScrollArea } from "@/components/ui/scroll-area";
-import { formatClock, formatShortDateTime } from "../i18n/format";
+import { Hint } from "@/components/hint";
+import { formatMoment } from "../i18n/format";
 
 /** A recorded instant in the reader's clock; one that was not recorded is said so. */
-export function Moment({ at, seconds = false, className }: { at: string | number | null | undefined; seconds?: boolean; className?: string }) {
+export function Moment({ at, className }: { at: string | number | null | undefined; className?: string }) {
   const { t } = useTranslation("taskDetail");
   const ms = typeof at === "number" ? at : at ? Date.parse(at) : NaN;
   if (!Number.isFinite(ms)) return <span className={cn("text-ink3", className)}>{t("unrecorded")}</span>;
-  const today = new Date(ms).toDateString() === new Date().toDateString();
-  return <time dateTime={new Date(ms).toISOString()} className={cn("tabular-nums", className)}>
-    {seconds && today ? formatClock(ms) : formatShortDateTime(ms)}
-  </time>;
+  return <time dateTime={new Date(ms).toISOString()} className={cn("tabular-nums", className)}>{formatMoment(ms, Date.now())}</time>;
 }
 
 /** The name of a pane, its state in words, and its moment on the right. */
@@ -63,23 +61,22 @@ export function Facts({ items }: { items: [name: string, value: ReactNode, mono?
   </dl>;
 }
 
-/** Splits a long text where a line or a word ends, so that the head reads as a whole. */
-function split(text: string, limit: number): [string, string] {
-  if (text.length <= limit) return [text, ""];
+/** The head of a long text, cut where a line or a word ends so that it reads as a whole; null when the text is short. */
+function head(text: string, limit: number): string | null {
+  if (text.length <= limit) return null;
   const cut = text.lastIndexOf("\n", limit) > limit / 2 ? text.lastIndexOf("\n", limit) : text.lastIndexOf(" ", limit) > limit / 2 ? text.lastIndexOf(" ", limit) : limit;
-  return [text.slice(0, cut).trimEnd(), text.slice(cut).trimStart()];
+  return text.slice(0, cut).trimEnd();
 }
 
-/** A text that is long is folded after its head, and unfolds on a click. */
+/** A text that is long is folded after its head, and unfolds on a click, in the same paragraph. */
 export function Fold({ text, limit = 280, className }: { text: string; limit?: number; className?: string }) {
   const { t } = useTranslation("taskDetail");
   const [open, setOpen] = useState(false);
-  const [head, tail] = split(text, limit);
+  const first = head(text, limit);
   const paragraph = cn("whitespace-pre-wrap wrap-anywhere", className);
-  if (!tail) return <p className={paragraph}>{text}</p>;
+  if (first === null) return <p className={paragraph}>{text}</p>;
   return <Collapsible open={open} onOpenChange={setOpen}>
-    <p className={paragraph}>{head}{!open && "…"}</p>
-    <CollapsibleContent><p className={paragraph}>{tail}</p></CollapsibleContent>
+    <p className={paragraph}>{open ? text : `${first}…`}</p>
     <CollapsibleTrigger className="mt-1 inline-flex items-center gap-1 rounded-sm text-xs text-ink2 outline-none transition-colors duration-150 hover:text-foreground focus-visible:ring-[3px] focus-visible:ring-ring/50 motion-reduce:transition-none">
       <Disclosure open={open} />{open ? t("fold.less") : t("fold.more")}
     </CollapsibleTrigger>
@@ -92,9 +89,11 @@ export function Lines({ items, className }: { items: string[]; className?: strin
 }
 
 /** A name that goes to the thing it names: another micro task's detail. */
-export function LinkButton({ children, title, onClick }: { children: ReactNode; title?: string; onClick: () => void }) {
-  return <button type="button" title={title} onClick={onClick}
-    className="min-w-0 rounded-sm text-left underline decoration-line2 underline-offset-2 outline-none transition-colors duration-150 hover:decoration-foreground focus-visible:ring-[3px] focus-visible:ring-ring/50 motion-reduce:transition-none">
-    {children}
-  </button>;
+export function LinkButton({ children, hint, onClick }: { children: ReactNode; hint?: string; onClick: () => void }) {
+  return <Hint text={hint}>
+    <button type="button" onClick={onClick}
+      className="min-w-0 rounded-sm text-left underline decoration-line2 underline-offset-2 outline-none transition-colors duration-150 hover:decoration-foreground focus-visible:ring-[3px] focus-visible:ring-ring/50 motion-reduce:transition-none">
+      {children}
+    </button>
+  </Hint>;
 }

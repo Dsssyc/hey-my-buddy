@@ -55,7 +55,7 @@ describe("the steps of a micro task", () => {
     const result = buildSteps(open, "m1", NOW);
     const last = result.steps.at(-1)!;
     expect(last).toMatchObject({ kind: "decision", pending: true });
-    expect(last.waits).toEqual([{ kind: "host", ms: NOW - Date.parse(at("10:30")), open: true, spanId: "h1" }]);
+    expect(last.waits).toEqual([{ kind: "host", ms: NOW - Date.parse(at("10:30")), open: true, spanId: "h1", requestId: "req-1" }]);
     expect(defaultStep(result)).toBe(result.steps.length - 1);
   });
 
@@ -135,5 +135,56 @@ describe("which step opens", () => {
     routed.rows = [row({ state: "executing", status: "running" })];
     expect(defaultStep(buildSteps(routed, "m1", NOW))).toBe(1);
     expect(defaultStep(buildSteps(null, "m1", NOW))).toBe(0);
+  });
+});
+
+describe("what the steps do not make up", () => {
+  it("keeps a stop that is not confirmed as it is on the timeline, neither ended nor failed", () => {
+    const unsure = timeline();
+    Object.assign(unsure.spans.find(item => item.spanId === "e2")!, { uncertain: true, shutdownConfirmed: false });
+    const turns = buildSteps(unsure, "m1", NOW).steps.filter(step => step.kind === "turn");
+    expect(turns.map(step => step.outcome)).toEqual(["finished", "unknown"]);
+    const route = timeline();
+    Object.assign(route.spans.find(item => item.spanId === "r1")!, { uncertain: true });
+    expect(buildSteps(route, "m1", NOW).steps.find(step => step.kind === "routing")!.outcome).toBe("unknown");
+  });
+
+  it("does not take the registering of an integration for the acceptance: the Host is waited for until it accepts, sends back or concludes", () => {
+    const integrated = timeline();
+    integrated.events.push(event(4, "integrate", at("11:03")));
+    const waiting = buildSteps(integrated, "m1", NOW).steps.at(-1)!;
+    expect(waiting).toMatchObject({ kind: "acceptance", pending: true });
+    expect(waiting.events.map(item => item.kind)).toEqual(["integrate"]);
+    expect(waiting.waits.map(wait => [wait.kind, wait.open])).toEqual([["acceptance", true]]);
+    for (const verdict of ["accept", "reject", "conclude"]) {
+      const settled = timeline();
+      settled.events.push(event(4, "integrate", at("11:03")), event(5, verdict, at("11:05")));
+      settled.rows = [row({ state: "accepted", acceptedAt: at("11:05") })];
+      const step = buildSteps(settled, "m1", NOW).steps.at(-1)!;
+      expect(step, verdict).toMatchObject({ kind: "acceptance", pending: false });
+      expect(step.events.map(item => item.kind), verdict).toEqual(["integrate", verdict]);
+    }
+  });
+
+  it("gives a Host wait the request it is for, and the step that ends it, whether a decision or a continuation names that request or not", () => {
+    const result = buildSteps(timeline(), "m1", NOW);
+    expect(result.steps[3]!.waits[0]).toMatchObject({ kind: "host", requestId: "req-1" });
+    expect(result.steps.flatMap(step => step.waits).filter(wait => wait.kind !== "host").every(wait => wait.requestId === null)).toBe(true);
+    // Two requests answered at the same instant, by continuations that name no request: each wait ends in its own.
+    const twins = timeline();
+    twins.spans = [twins.spans[0]!, twins.spans[1]!, twins.spans[2]!,
+      span("hA", "host", at("10:30"), at("10:40"), { state: "approved", requestId: "req-A" }),
+      span("hB", "host", at("10:31"), at("10:40"), { state: "approved", requestId: "req-B" }),
+      twins.spans[5]!];
+    twins.events = [event(1, "dispatch", at("10:00")), event(2, "continue", at("10:40"), { continuationId: "c-A" }), event(3, "continue", at("10:40"), { continuationId: "c-B" })];
+    const continued = buildSteps(twins, "m1", NOW).steps.filter(step => step.kind === "continue");
+    expect(continued.map(step => step.waits.map(wait => wait.requestId))).toEqual([["req-A"], ["req-B"]]);
+  });
+
+  it("keeps spans that start at the same instant, or have no start, in the order the timeline gave them", () => {
+    const tied = timeline();
+    tied.spans.push(span("q9", "queue", at("10:00"), at("10:01")), span("q8", "queue", null, null));
+    expect(() => buildSteps(tied, "m1", NOW)).not.toThrow();
+    expect(buildSteps(tied, "m1", NOW).steps.map(step => step.kind)).toEqual(kinds(buildSteps(timeline(), "m1", NOW)));
   });
 });

@@ -9,6 +9,7 @@ import { afterAll, describe, expect, it } from "vitest";
 import { ApiError, createApi, snapshotHarnesses } from "./api";
 import { quotaView } from "./quota";
 import { createTaskDetailClient } from "./task-detail/client";
+import { parseTask } from "./task-detail/parse";
 import { usageLabel } from "./task-detail/usage";
 import type { Snapshot } from "./types";
 
@@ -139,6 +140,8 @@ async function parseEntry(entry: ManifestEntry): Promise<Outcome> {
       };
     } else if (entry.kind === "task-page") {
       const page = await api.tasks({});
+      // Every run the page lists is also a task view the detail reads.
+      for (const run of page.runs) parseTask(run, run.runId);
       outcome.facts = { total: page.total, runs: page.runs.length, nextCursor: page.nextCursor };
     } else if (entry.kind === "runtime-version") {
       const version = await api.runtimeVersion();
@@ -159,7 +162,7 @@ async function parseEntry(entry: ManifestEntry): Promise<Outcome> {
         filtered: timeline.filtered,
       };
     } else if (entry.kind === "workflow-audit") {
-      const { audit, routing } = (await createTaskDetailClient(api, "fixture-csrf").audit(entry.request?.runId ?? "")).value;
+      const { audit, routing } = (await createTaskDetailClient(api, "fixture-csrf").audit(entry.request?.runId ?? "", [])).value;
       outcome.facts = {
         turns: audit.turns.map(turn => ({ turnId: turn.turnId, summary: turn.summary })),
         continuations: audit.continuations.map(item => ({ turnId: item.turnId, input: item.input })),
@@ -171,7 +174,6 @@ async function parseEntry(entry: ManifestEntry): Promise<Outcome> {
       outcome.facts = { more, inquiries: items.map(item => ({ messageId: item.messageId, attemptId: item.attemptId, state: item.state, answered: item.answer !== null })) };
     } else {
       const runId = entry.request?.runId ?? "";
-      const raw = bodyFor(entry) as { result: { artifacts: { artifactId: string; verified?: boolean; final?: boolean }[] } };
       const { value: workflow } = await createTaskDetailClient(api, "fixture-csrf").workflow(runId);
       expect(workflow.hostId === null || typeof workflow.hostId === "string").toBe(true);
       if (workflow.hostConclusion?.actor) expect(parseActor(workflow.hostConclusion.actor)).toEqual(workflow.hostConclusion.actor);
@@ -197,17 +199,12 @@ async function parseEntry(entry: ManifestEntry): Promise<Outcome> {
           source: turn.tokenUsage?.source ?? null,
         })),
         currentTurnUsage: workflow.currentTurn ? usageLabel(t, workflow.currentTurn.tokenUsage) : null,
-        artifacts: workflow.artifacts.map(item => {
-          const flags = raw.result.artifacts.find(candidate => candidate.artifactId === item.artifactId);
-          return {
-            artifactId: item.artifactId,
-            kind: item.kind,
-            state: { partial: item.partial, verified: flags?.verified === true, final: flags?.final === true },
-            cumulativePatch: item.cumulativePatch && {
-              complete: !!(item.cumulativePatch.baseCommit && item.cumulativePatch.outputCommit && item.cumulativePatch.path && item.cumulativePatch.sha256),
-            },
-          };
-        }),
+        artifacts: workflow.artifacts.map(item => ({
+          artifactId: item.artifactId,
+          kind: item.kind,
+          state: { partial: item.partial, verified: item.verified === true, final: item.final === true },
+          cumulativePatch: item.cumulativePatch && { complete: Object.values({ ...item.cumulativePatch, changedPaths: true }).every(Boolean) },
+        })),
         finalArtifactId: workflow.finalArtifactId,
         hostPaths: workflow.integrations.map(record => record.hostPaths),
       };
@@ -215,6 +212,7 @@ async function parseEntry(entry: ManifestEntry): Promise<Outcome> {
     outcome.accepted = true;
   } catch (error) {
     outcome.code = error instanceof ApiError ? error.code : error instanceof Error ? "ERROR" : "UNKNOWN";
+    outcome.facts = { refusal: error instanceof Error ? error.message : String(error) };
   }
   return outcome;
 }
@@ -240,7 +238,7 @@ describe("synthetic preview fixtures through the real console parsers", () => {
         ? !outcome.accepted
         : outcome.accepted || outcome.code !== entry.expectedCode;
     });
-    expect(failed, JSON.stringify(failed.map(item => `${item.path}: accepted=${item.accepted} code=${item.code}`))).toEqual([]);
+    expect(failed, JSON.stringify(failed.map(item => `${item.path}: accepted=${item.accepted} code=${item.code} ${String(item.facts.refusal ?? "")}`))).toEqual([]);
 
     // The four preview scenarios stay covered, and the error scenario stays visibly broken.
     const byScenario = new Map<string, Outcome[]>();
@@ -331,9 +329,11 @@ describe("synthetic preview fixtures through the real console parsers", () => {
     expect(audits.flatMap(audit => audit.facts.turns as { summary: string }[]).every(turn => turn.summary !== "")).toBe(true);
     expect(audits.flatMap(audit => audit.facts.routing as { routerBuddy: unknown }[]).every(entry => entry.routerBuddy !== null)).toBe(true);
     const inquiries = outcomes.filter(outcome => outcome.kind === "message-list")
-      .flatMap(list => list.facts.inquiries as { state: string; answered: boolean }[]);
-    expect(new Set(inquiries.map(item => item.state))).toEqual(new Set(["answered", "unavailable", "delivered"]));
+      .flatMap(list => list.facts.inquiries as { state: string; answered: boolean; attemptId: string | null }[]);
+    expect(new Set(inquiries.map(item => item.state))).toEqual(new Set(["answered", "unavailable", "delivered", "discarded"]));
     expect(inquiries.filter(item => item.answered)).toHaveLength(1);
+    // One inquiry names no attempt: the detail still has to show it.
+    expect(inquiries.filter(item => item.attemptId === null)).toHaveLength(1);
 
     const hostPaths = workflows.flatMap(workflow => workflow.facts.hostPaths as string[][]);
     expect(hostPaths.some(list => list.length > 0)).toBe(true);

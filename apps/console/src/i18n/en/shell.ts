@@ -21,6 +21,7 @@ export default {
     stop: { host: "Stopped by Host", lead: "Stopped by Lead", console: "Stopped in console", service: "Service stopped", unknown: "Stopped (initiator unknown)" },
   },
   duration: { hour: "{{n}} h", minute: "{{n}} min", second: "{{n}} s" },
+  relative: { second: "{{n}} s ago", minute: "{{n}} min ago", hour: "{{n}} h ago", day: "{{n}} d ago" },
   /** What the data layer says when a read or a command fails. */
   error: {
     codes: {

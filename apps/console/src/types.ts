@@ -70,6 +70,8 @@ export type TokenUsage = {
   outputTokens: number | null;
   source: string;
   scope: "attempt";
+  /** Whether `inputTokens` already holds the cached tokens; the board writes the first form. */
+  inputBasis?: "includes-cached" | "excludes-cached";
   completeness?: "complete" | "partial" | "unknown";
   coverage?: "native-root-session" | "native-root-thread" | "native-attempt";
 };

@@ -27,7 +27,7 @@ function catalog(): Buddy[] {
 }
 function microTask(runId: string, sourceHostId = "codex-source", projectId = "source-project"): Task {
   return { runId, task: `目标 ${runId}`, status: "queued", owner: "worker:unrelated-label", cwd: `/runtime/worktrees/${runId}`,
-    revision: 1, createdAt: "2026-09-24T10:00:00Z", acceptedAt: null, acceptanceVerdict: null, reviewRejectedAt: null, reviewRejectionNote: null,
+    revision: 1, createdAt: "2026-09-24T10:00:00Z", updatedAt: "2026-09-24T10:00:00Z", acceptedAt: null, acceptanceVerdict: null, reviewRejectedAt: null, reviewRejectionNote: null,
     workflow: { state: "executing", awaitingHost: false, hostId: "current-host", ownerGeneration: 2, revision: 1 },
     lineage: { kind: "micro-task", sourceHostId, currentHostId: "current-host", parentRunId: null, rootRunId: runId, rootLeadRunId: null,
       project: { id: projectId, label: projectId, path: `/source/${projectId}` },
@@ -37,7 +37,7 @@ function microTask(runId: string, sourceHostId = "codex-source", projectId = "so
 type Workflow = Record<string, unknown>;
 function workflow(task: Task): Workflow {
   return { runId: task.runId, hostId: "current-host", revision: 1, state: "awaiting-host", buddy: null, buddyLocked: false, delegationAuthority: false,
-    routing: null, turns: [], currentTurn: null, requests: [], counts: { openRequests: 1 }, children: [], artifacts: [], integrations: [],
+    routing: null, turns: [], currentTurn: null, requests: [], counts: { turns: 0, openRequests: 1 }, children: [], artifacts: [], integrations: [],
     finalArtifactId: null, hostConclusion: null, shutdown: null, workspace: { path: task.cwd },
     activeRequest: { requestId: `request-${task.runId}`, kind: "assistance", state: "open", createdAt: "2026-09-24T10:00:00Z", decidedAt: null, childTaskId: null, routing: false,
       summary: `协助 ${task.runId}`, attempted: "已有检查", neededWork: ["补充测试"], expectedArtifacts: [], acceptance: "检查通过" },
@@ -224,8 +224,8 @@ describe("desktop console", () => {
     const detail = await screen.findByRole("region", { name: "微任务详情" });
     expect(window.location.hash).toMatch(/^#tasks\/run%3Aalpha\/helper(\/\d+)?$/);
     await within(detail).findByRole("navigation", { name: "步骤" });
-    expect(within(detail).getByText("source-project").getAttribute("title")).toBe("/source/source-project");
-    expect(within(detail).getByTitle("alpha").tagName).toBe("BUTTON");
+    expect(within(detail).getByText("source-project").getAttribute("aria-description")).toBe("/source/source-project");
+    expect(detail.querySelector("button[aria-description=alpha]")).toBeTruthy();
   });
 
   it("labels each project group count explicitly for micro tasks and internal records", async () => {
@@ -354,7 +354,7 @@ describe("desktop console", () => {
       total: query.query ? 0 : 1, nextCursor: null }));
     const value = workflow(record);
     const returned = { ...detailTurn(1, { attemptId: "att-older", turnId: "turn-older" }), summary: "历史记录的最新结论结果", summaryTruncated: false, remaining: [] };
-    Object.assign(value, { revision: 7, state: "delivered", activeRequest: null, counts: { openRequests: 0 }, turns: [returned], currentTurn: returned });
+    Object.assign(value, { revision: 7, state: "delivered", activeRequest: null, counts: { turns: 0, openRequests: 0 }, turns: [returned], currentTurn: returned });
     value.task = { runId: record.runId, revision: 7, status: "completed", shutdownConfirmed: true, lineage: record.lineage,
       task: record.task,
       workflow: { state: "delivered", awaitingHost: false, hostId: "current-host", ownerGeneration: 2, revision: 7,

@@ -7,8 +7,8 @@ import type { ReactNode } from "react";
  * Host's input; hollow for an inquiry), a dot is a message, a square is the
  * result.
  */
-export function Thread({ children }: { children: ReactNode }) {
-  return <div data-slot="detail-thread" className="relative px-6 py-2.5 before:absolute before:top-[30px] before:bottom-[22px] before:left-[33.25px] before:border-l-[1.5px] before:border-line2">{children}</div>;
+export function Thread({ children, className }: { children: ReactNode; className?: string }) {
+  return <div data-slot="detail-thread" className={cn("relative px-6 py-2.5 before:absolute before:top-[30px] before:bottom-[22px] before:left-[33.25px] before:border-l-[1.5px] before:border-line2", className)}>{children}</div>;
 }
 
 const marks = {

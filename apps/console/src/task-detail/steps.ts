@@ -10,7 +10,7 @@ import type { MacroTaskTimeline, TimelineBuddy, TimelineEvent, TimelineSpan } fr
  * between steps are the waits. Built from the spans and events the page has
  * already read, so what the rail says is what the timeline says.
  */
-export type WaitKind = "queue" | "host" | "lead" | "acceptance";
+type WaitKind = "queue" | "host" | "lead" | "acceptance";
 
 export type Wait = {
   kind: WaitKind;
@@ -20,9 +20,11 @@ export type Wait = {
   open: boolean;
   /** The timeline span the line is drawn from; the acceptance wait has none. */
   spanId: string | null;
+  /** The Host request a Host wait is for. */
+  requestId: string | null;
 };
 
-export type StepKind = "delegation" | "routing" | "turn" | "handoff" | "decision" | "continue" | "cancel" | "takeover" | "acceptance"
+type StepKind = "delegation" | "routing" | "turn" | "handoff" | "decision" | "continue" | "cancel" | "takeover" | "acceptance"
   /** A run with no collaboration record has one step: a command's execution, or a Router's calculation. */
   | "record" | "calculation";
 
@@ -56,7 +58,9 @@ export type Steps = {
   complete: boolean;
 };
 
+/** What the acceptance step lists, and of those what settles it: an integration alone leaves the micro task waiting. */
 const ACCEPTANCE_EVENTS = ["integrate", "accept", "reject", "conclude"];
+const SETTLING_EVENTS = ["accept", "reject", "conclude"];
 const AFTER_DELIVERY = ["delivered", "accepted", "concluded"];
 /** Order of steps that start at the same instant. */
 const RANK: Record<StepKind, number> = {
@@ -84,7 +88,7 @@ export function buildSteps(timeline: MacroTaskTimeline | null, runId: string, no
   const row = timeline?.rows.find(candidate => candidate.runId === runId) ?? null;
   if (!timeline || !row) return { steps: [{ ...blank("delegation", "delegation", null) }], tail: [], complete: false };
   const spans = timeline.spans.filter(span => span.runId === runId)
-    .sort((left, right) => (ms(left.startAt) ?? Number.POSITIVE_INFINITY) < (ms(right.startAt) ?? Number.POSITIVE_INFINITY) ? -1 : 1);
+    .sort((left, right) => (ms(left.startAt) ?? Number.POSITIVE_INFINITY) - (ms(right.startAt) ?? Number.POSITIVE_INFINITY) || 0);
   const events = timeline.events.filter(event => event.runId === runId).sort((left, right) => left.seq - right.seq);
   const lead = row.rootLeadRunId !== null;
 
@@ -130,13 +134,15 @@ export function buildSteps(timeline: MacroTaskTimeline | null, runId: string, no
     }
   }
 
-  const settled = events.filter(event => ACCEPTANCE_EVENTS.includes(event.kind));
-  const awaiting = row.state === "delivered" && !row.acceptedAt && !row.reviewRejectedAt;
-  if (settled.length > 0 || awaiting || AFTER_DELIVERY.includes(row.state)) {
-    steps.push({ ...blank("acceptance", "acceptance", ms(settled[0]?.at)), events: settled, pending: awaiting && settled.length === 0 });
+  const listed = events.filter(event => ACCEPTANCE_EVENTS.includes(event.kind));
+  const settled = listed.some(event => SETTLING_EVENTS.includes(event.kind));
+  const awaiting = row.state === "delivered" && !row.acceptedAt && !row.reviewRejectedAt && !settled;
+  if (listed.length > 0 || awaiting || AFTER_DELIVERY.includes(row.state)) {
+    steps.push({ ...blank("acceptance", "acceptance", ms(listed[0]?.at)), events: listed, pending: awaiting });
   }
 
-  // The lines between the steps: a wait leads to the first step that starts once it has ended.
+  // The lines between the steps: a wait leads to the step that ends it. A Host wait ends in the decision made on its own
+  // request, or in the continuation that came at its end; any other wait in the first step that starts once it has ended.
   const lines: { wait: Wait; start: number; end: number | null }[] = [];
   for (const span of spans) {
     const start = ms(span.startAt);
@@ -144,13 +150,20 @@ export function buildSteps(timeline: MacroTaskTimeline | null, runId: string, no
     const open = spanOutcome(span) === "open";
     const end = open ? null : ms(span.endAt);
     lines.push({ start, end, wait: { kind: span.kind === "queue" ? "queue" : lead ? "lead" : "host",
-      ms: open ? Math.max(0, nowMs - start) : end === null ? null : end - start, open, spanId: span.spanId } });
+      ms: open ? Math.max(0, nowMs - start) : end === null ? null : end - start, open, spanId: span.spanId,
+      requestId: span.kind === "host" ? span.requestId : null } });
   }
   const tail: Wait[] = [];
+  const taken = new Set<Step>();
   for (const { wait, start, end } of lines.sort((left, right) => left.start - right.start)) {
+    const byRequest = wait.requestId === null ? undefined
+      : steps.find(step => step.kind === "decision" && step.events[0]?.requestId === wait.requestId);
+    const byContinue = end === null || wait.requestId === null ? undefined
+      : steps.find(step => step.kind === "continue" && !taken.has(step) && step.at === end);
     const target = wait.open
       ? (wait.kind === "queue" ? undefined : steps.find(step => step.pending && step.kind === "decision"))
-      : steps.find(step => step.at !== null && (end !== null ? step.at >= end : step.at > start));
+      : byRequest ?? byContinue ?? steps.find(step => step.at !== null && (end !== null ? step.at >= end : step.at > start));
+    if (target && target === byContinue) taken.add(target);
     (target ? target.waits : tail).push(wait);
   }
   // From delivery to the acceptance: still waiting, or the wait that ended in a verdict.
@@ -158,8 +171,8 @@ export function buildSteps(timeline: MacroTaskTimeline | null, runId: string, no
   if (finish.kind === "acceptance") {
     const executionEnd = Math.max(0, ...executions.map(span => ms(span.endAt) ?? 0));
     const settledWait = acceptanceWaitMs(row, spans);
-    if (finish.pending) finish.waits.push({ kind: "acceptance", ms: executionEnd > 0 ? Math.max(0, nowMs - executionEnd) : null, open: true, spanId: null });
-    else if (settledWait !== null) finish.waits.push({ kind: "acceptance", ms: settledWait, open: false, spanId: null });
+    if (finish.pending) finish.waits.push({ kind: "acceptance", ms: executionEnd > 0 ? Math.max(0, nowMs - executionEnd) : null, open: true, spanId: null, requestId: null });
+    else if (settledWait !== null) finish.waits.push({ kind: "acceptance", ms: settledWait, open: false, spanId: null, requestId: null });
   }
   return { steps, tail, complete: true };
 }

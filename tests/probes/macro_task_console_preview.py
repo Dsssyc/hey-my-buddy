@@ -69,6 +69,7 @@ import re
 import signal
 import sys
 import threading
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -276,7 +277,8 @@ def attempt(attempt_id: str, turn_index: int, state: str, confirmed: bool, start
     # `usage` is the ADR-018 per-attempt token usage: null when the record is
     # unknown, never a synthetic zero.
     receipt = None if result is None else {"status": "failed" if error else "ok",
-                                           "result": {"finalText": result}, "shutdownConfirmed": confirmed}
+                                           "result": {"finalText": result}, "shutdownConfirmed": confirmed,
+                                           "terminationReason": "harness-error" if error else "completed"}
     return {"attemptId": attempt_id, "turnId": f"turn-{attempt_id}", "turnIndex": turn_index,
             "generation": turn_index, "state": state, "shutdownConfirmed": confirmed,
             "startedAt": started, "finishedAt": finished, "buddy": buddy,
@@ -451,6 +453,28 @@ def artifact(artifact_id: str, attempt_id: str, commit: str, diff_path: str,
     return view
 
 
+def artifact_views(entry: dict) -> list[dict]:
+    """Every seal of a run as the compact record lists it. The outputs carry the flags of a partial output only;
+    the seal of what the micro task was delegated with has no attempt and no source task, and each turn is
+    sealed with its input and its shared refs, none of which has an output."""
+    base = digest(f"{entry['runId']}-input")[:40]
+    seal = {"path": entry["cwd"], "baseCommit": base, "inputCommit": base}
+    seals = [{"artifactId": f"seal-{entry['runId']}-input", "kind": "input", "attemptId": None, "turnId": None,
+              "sourceTaskId": None, "manifestSha256": digest(f"{entry['runId']}-input-seal"),
+              "createdAt": entry["createdAt"], **seal}]
+    for item in entry["attempts"]:
+        for kind in ("turn-input", "shared-refs"):
+            view = {"artifactId": f"seal-{item['attemptId']}-{kind}", "kind": kind, "attemptId": item["attemptId"],
+                    "turnId": item["turnId"], "sourceTaskId": entry["runId"],
+                    "manifestSha256": digest(f"{item['attemptId']}-{kind}"), "createdAt": item["startedAt"]}
+            seals.append({**view, **seal} if kind == "turn-input" else
+                         {**view, "sharedStash": {"state": "observed", "entryCount": 0}})
+    outputs = [item if item["kind"] == "partial-output"
+               else {key: value for key, value in item.items() if key not in ("partial", "verified", "final")}
+               for item in entry["artifacts"]]
+    return [*outputs, *seals]
+
+
 def integration(integration_id: str, artifact_id: str, attempt_id: str, host: str, *,
                 host_paths: list[str] | None = None) -> dict:
     return {"integrationId": integration_id, "artifactId": artifact_id, "attemptId": attempt_id,
@@ -468,7 +492,7 @@ def integration(integration_id: str, artifact_id: str, attempt_id: str, host: st
             "createdAt": None}
 
 
-def message(message_id: str, attempt_id: str, question: str, *, author: str, created: str, state: str,
+def message(message_id: str, attempt_id: str | None, question: str, *, author: str, created: str, state: str,
             reason: str | None = None, delivered: str | None = None, answer: str | None = None,
             answered: str | None = None) -> dict:
     """One inquiry as ``message_list`` returns it; ``taskId`` is set when the run is assembled."""
@@ -550,6 +574,9 @@ def build_runs() -> dict[str, dict]:
                         answer="正在核对 tests/probes/macro_task_console_preview.py 的夹具；还剩路径与合成数据两处。"),
                 message("inq-a1-2", "att-a1-1", "收到请回复。", author=HOST_A, created=instant(6, 41),
                         state="unavailable", reason="no live agent to receive this question"),
+                # Put while no turn was executing, and naming no attempt: it belongs to the turn that came next.
+                message("inq-a1-3", None, "上一轮停下了吗？", author=HOST_A, created=instant(6, 42),
+                        state="discarded", reason="the turn it was put to had ended"),
             ],
             continuations=[continuation("cont-a1-1", "att-a1-2", "继续。读取合成样例目录已获批准；把路径边界也核对一遍。",
                                         request_id="req-a1-1", created=instant(6, 45), reason="批准读取后继续")]),
@@ -988,9 +1015,9 @@ def attempt_view(entry: dict, item: dict) -> dict:
         "startedAt": item["startedAt"], "finishedAt": item["finishedAt"], "createdAt": item["startedAt"],
         "updatedAt": item["finishedAt"] or item["startedAt"], "revision": 1,
         "tokenUsage": item["usage"],
-        **({"reminders": {"overdue": True, "possiblyStuck": True,
-                           "lastNativeEventAt": instant(9, 40), "toolInProgress": False}}
-           if entry["runId"] == "preview-run-a3" else {}),
+        "reminders": ({"overdue": True, "possiblyStuck": True, "lastNativeEventAt": instant(9, 40), "toolInProgress": False}
+                      if entry["runId"] == "preview-run-a3"
+                      else {"overdue": False, "possiblyStuck": False, "lastNativeEventAt": None, "toolInProgress": False}),
         **({"result": item["result"]} if item["result"] is not None else {}),
     }
 
@@ -1078,26 +1105,28 @@ def wait_reason(entry: dict) -> str:
     return "a turn is executing" if entry["status"] == "running" else "the run is queued for its next turn"
 
 
+def turn_view(entry: dict, item: dict) -> dict:
+    """One turn as the board lists it: no turn carries its result here."""
+    return {
+        "turnId": item["turnId"], "turnIndex": item["turnIndex"], "attemptId": item["attemptId"],
+        "expectedSeconds": entry["expectedSeconds"],
+        "generation": item["generation"], "resumeMode": "reconstructed-new-session",
+        "sessionId": None, "state": "returned" if item["state"] == "finished" else "open",
+        "disposition": item["disposition"], "createdAt": item["startedAt"],
+        "updatedAt": item["finishedAt"] or item["startedAt"],
+        "buddy": item["buddy"],
+        "routing": ({"decisionId": entry["routing"]["decisionId"], "buddyRevision": 2}
+                    if entry["routing"] and entry["routing"]["decisionId"] and item["turnIndex"] == 1
+                    else None),
+        # Each turn keeps its own per-attempt usage record; never a
+        # session-cumulative number.
+        "tokenUsage": item["usage"],
+    }
+
+
 def turn_views(entry: dict) -> list[dict]:
-    """Turn index, newest first, like ``workflow.compact``: no turn carries its result here."""
-    views = []
-    for item in reversed(entry["attempts"]):
-        views.append({
-            "turnId": item["turnId"], "turnIndex": item["turnIndex"], "attemptId": item["attemptId"],
-            "expectedSeconds": entry["expectedSeconds"],
-            "generation": item["generation"], "resumeMode": "reconstructed-new-session",
-            "sessionId": None, "state": "returned" if item["state"] == "finished" else "open",
-            "disposition": item["disposition"], "createdAt": item["startedAt"],
-            "updatedAt": item["finishedAt"] or item["startedAt"],
-            "buddy": item["buddy"],
-            "routing": ({"decisionId": entry["routing"]["decisionId"], "buddyRevision": 2}
-                        if entry["routing"] and entry["routing"]["decisionId"] and item["turnIndex"] == 1
-                        else None),
-            # Each turn keeps its own per-attempt usage record; never a
-            # session-cumulative number.
-            "tokenUsage": item["usage"],
-        })
-    return views
+    """Turn index, newest first, like ``workflow.compact``."""
+    return [turn_view(entry, item) for item in reversed(entry["attempts"])]
 
 
 def turn_summary(item: dict) -> str:
@@ -1120,10 +1149,15 @@ def request_records(entry: dict) -> list[dict]:
     return records
 
 
+#: The state the board keeps of a helper, by the state of its micro task.
+CHILD_STATE = {"executing": "active", "waiting-helpers": "active", "waiting-owned": "active", "awaiting-host": "attention",
+               "delivered": "succeeded", "accepted": "succeeded", "concluded": "failed", "failed": "failed", "cancelled": "cancelled"}
+
+
 def workflow_view(entry: dict) -> dict:
     """The micro task view consumed by ``TaskDetails``/``WorkflowPanel``."""
     turns = turn_views(entry)
-    children = [{"taskId": child["runId"], "role": "helper", "state": child["state"],
+    children = [{"taskId": child["runId"], "role": "helper", "state": CHILD_STATE[child["state"]],
                  "integrator": False, "autoContinue": True, "requestId": child["requestId"]}
                 for child in FIXTURES["runs"].values()
                 if child["kind"] in ("micro-task", "helper") and child["parentRunId"] == entry["runId"]]
@@ -1160,7 +1194,7 @@ def workflow_view(entry: dict) -> dict:
                                                             "openRequests": 1 if entry["activeRequest"] else 0,
                                                             "children": len(children),
                                                             "artifacts": len(entry["artifacts"])},
-        "children": children, "artifacts": entry["artifacts"], "integrations": entry["integrations"],
+        "children": children, "artifacts": artifact_views(entry), "integrations": entry["integrations"],
         "shutdown": shutdown_view(entry),
         "truncated": {"turns": 0, "requests": 0, "children": 0, "artifacts": 0, "pendingRequests": 0},
         "workspace": {"workspaceId": f"ws-{entry['runId']}", "path": entry["cwd"], "kind": "worktree",
@@ -1616,6 +1650,8 @@ def decision_view(router: dict) -> dict:
             "buddyId": None, "selectedBuddy": routing["selectedBuddy"],
             "decisionModel": {"requested": None, "resolved": None, "observed": None},
             "reason": routing["reason"], "evidence": [],
+            "constraints": routing["constraints"], "requiredCapabilities": [], "routingBasis": routing.get("routingBasis"),
+            "routerCalled": None, "output": None,
             "routingMode": routing["routingMode"], "requestedRoutingMode": routing["requestedRoutingMode"],
             "fallback": routing["fallback"], "policyCheck": routing["policyCheck"],
             "budget": routing["budget"], "usage": routing["usage"],
@@ -1652,8 +1688,8 @@ def audit_view(entry: dict) -> dict:
     return {
         "hostConclusions": [entry["hostConclusion"]] if entry["hostConclusion"] else [],
         "hostConclusionsTruncated": False,
-        "turns": [{"turnId": item["turnId"], "turnIndex": item["turnIndex"], "summary": turn_summary(item),
-                   "remaining": []} for item in entry["attempts"]],
+        "turns": [{**turn_view(entry, item), "summary": turn_summary(item), "remaining": []}
+                  for item in entry["attempts"]],
         "requests": [{**record, "attempted": record.get("attempted"), "turnId": None, "attemptId": None,
                       "decision": ({"decision": {"approved": "approve", "declined": "decline"}.get(record["state"]),
                                     "reason": "合成预览：Host 的决定理由", "actor": host_actor(entry["currentHostId"] or HOST_A)}
@@ -1810,6 +1846,7 @@ class PreviewHTTPServer(ThreadingHTTPServer):
 
     def __init__(self, address, *, assets: Path, scenario: str, verbose: bool):
         self.assets = assets
+        self.started = time.monotonic()
         self.scenario = scenario
         self.verbose = verbose
         super().__init__(address, PreviewHandler)
@@ -1820,9 +1857,11 @@ class PreviewHandler(BaseHTTPRequestHandler):
     timeout = 30
 
     def date_time_string(self, timestamp=None):  # noqa: D401 - BaseHTTPRequestHandler API
-        """The ``Date`` of every response is the instant the fixtures were observed, so that what waits is
-        measured against the fixture clock and the preview reads the same on any day."""
-        return format_datetime(datetime.fromisoformat(OBSERVED_AT.replace("Z", "+00:00")), usegmt=True)
+        """The ``Date`` of every response runs on from the instant the fixtures were observed, by the time the
+        service has been up, so that what waits is measured against the fixture clock, reads the same on any
+        day, and the time of a check moves on."""
+        observed = datetime.fromisoformat(OBSERVED_AT.replace("Z", "+00:00"))
+        return format_datetime(observed + timedelta(seconds=int(time.monotonic() - self.server.started)), usegmt=True)
 
     def log_message(self, format, *args):  # noqa: A002 - BaseHTTPRequestHandler API
         if self.server.verbose:
@@ -2350,6 +2389,8 @@ def validate_fixtures() -> list[str]:
         if turns and selected.get("tokenUsage") != view["currentTurn"].get("tokenUsage"):
             problems.append(f"{entry['runId']}: selectedAttempt usage differs from currentTurn")
         for item in view["artifacts"]:
+            if item["kind"] not in ("output", "resolved-output", "partial-output"):
+                continue
             if item["kind"] == "partial-output":
                 partials += 1
                 if (item["partial"], item["verified"], item["final"]) != (True, False, False):
@@ -2366,7 +2407,7 @@ def validate_fixtures() -> list[str]:
                 problems.append(f"{entry['runId']}: {item['artifactId']} patch base is not the workspace input")
             elif patch["changedPaths"] != item["changedPaths"] or not patch["path"] or not patch["sha256"]:
                 problems.append(f"{entry['runId']}: {item['artifactId']} patch disagrees with the artifact")
-            elif item["final"]:
+            elif item["kind"] != "partial-output":
                 patched = True
         for item in view["integrations"]:
             paths = item["verification"].get("hostPaths")

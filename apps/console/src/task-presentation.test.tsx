@@ -18,7 +18,7 @@ const runId = "79771ce9-890b-4cab-867b-4e05c68791da";
 const snapshot = { csrfToken: "fixture", eventCursor: 0, buddies: [] } as unknown as Snapshot;
 function commandTask(): Task {
   return { runId, task: "Run checks", status: "cancelled", owner: null, cwd: "~/project", revision: 1,
-    createdAt: "2026-10-15T00:00:00Z", acceptedAt: null, acceptanceVerdict: null, reviewRejectedAt: null, reviewRejectionNote: null,
+    createdAt: "2026-10-15T00:00:00Z", updatedAt: "2026-10-15T00:00:00Z", acceptedAt: null, acceptanceVerdict: null, reviewRejectedAt: null, reviewRejectionNote: null,
     spec: { adapter: "command", argv: ["npm", "test"] },
     activity: { phase: "waiting-host", waitingReason: "the run was cancelled" },
     lineage: { kind: "execution", sourceHostId: null, currentHostId: null, rootRunId: null, rootLeadRunId: null, parentRunId: null,

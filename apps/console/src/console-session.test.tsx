@@ -31,7 +31,7 @@ const FLASH = "dsh / deepseek-official / deepseek-flash";
 
 function microTask(runId: string, task: string, extra: Partial<Task> = {}): Task {
   return { runId, task, status: "queued", owner: "worker:fixture", cwd: `/worktrees/${runId}`,
-    revision: 1, createdAt: "2026-09-24T10:00:00Z", acceptedAt: null, acceptanceVerdict: null, reviewRejectedAt: null, reviewRejectionNote: null,
+    revision: 1, createdAt: "2026-09-24T10:00:00Z", updatedAt: "2026-09-24T10:00:00Z", acceptedAt: null, acceptanceVerdict: null, reviewRejectedAt: null, reviewRejectionNote: null,
     workflow: { state: "executing", awaitingHost: false, hostId: "current-host", ownerGeneration: 2, revision: 1 },
     lineage: { kind: "micro-task", sourceHostId: "codex-source", currentHostId: "current-host", parentRunId: null, rootRunId: runId, rootLeadRunId: null,
       project: { id: "fixture-project", label: "fixture-project", path: "/source/fixture-project" },
@@ -49,7 +49,7 @@ function retryable(runId: string, task: string): Task {
 type Workflow = Record<string, unknown>;
 function workflow(task: Task, overrides: Workflow = {}): Workflow {
   return { runId: task.runId, hostId: "current-host", revision: 1, state: "awaiting-host", buddy: null, buddyLocked: false, delegationAuthority: false,
-    routing: null, turns: [], currentTurn: null, requests: [], counts: { openRequests: 1 }, children: [], artifacts: [], integrations: [],
+    routing: null, turns: [], currentTurn: null, requests: [], counts: { turns: 0, openRequests: 1 }, children: [], artifacts: [], integrations: [],
     finalArtifactId: null, hostConclusion: null, shutdown: null, workspace: { path: task.cwd },
     activeRequest: { requestId: `request-${task.runId}`, kind: "assistance", state: "open", createdAt: "2026-09-25T10:00:00Z", decidedAt: null, childTaskId: null, routing: false,
       summary: `协助 ${task.runId}`, attempted: "已有检查", neededWork: ["补充测试"], expectedArtifacts: [], acceptance: "检查通过" },
@@ -474,7 +474,7 @@ describe("invalid login session (0.16 multi-window: no handoff UX)", () => {
       workflowShutdown: { selfConfirmed: true, descendantsConfirmed: true, unconfirmedRunIds: [], unconfirmedCount: 0, truncated: false } });
     const workflows = new Map<string, Workflow>([
       ["micro-task-awaiting", workflow(awaiting)],
-      ["delivered-task", workflow(delivered, { state: "delivered", activeRequest: null, counts: { openRequests: 0 }, revision: 3,
+      ["delivered-task", workflow(delivered, { state: "delivered", activeRequest: null, counts: { turns: 0, openRequests: 0 }, revision: 3,
         finalArtifactId: "artifact-1",
         artifacts: [{ artifactId: "artifact-1", attemptId: "attempt-1", sourceTaskId: "delivered-task", kind: "output",
           manifestSha256: "manifest", outputCommit: "commit" }],

@@ -1,66 +1,30 @@
 import { cn } from "cn";
 import { useState } from "react";
 import type { ReactNode } from "react";
-import type { TFunction } from "i18next";
 import { useTranslation } from "react-i18next";
 import { Hint } from "@/components/hint";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger, Disclosure } from "@/components/ui/collapsible";
 import { StateMark } from "@/components/ui/state-mark";
 import { CopyableIdentifier } from "../components/CopyableIdentifier";
 import { formatDuration, formatRelative } from "../i18n/format";
-import { actorRoleText } from "../actor";
-import { activityOf, endingOf, remindersOf, sessionStorageOf } from "./evidence";
-import type { Activity, Ending } from "./evidence";
+import { Ask } from "./ask";
+import { endingText, Origin, sessionHint } from "./facts";
 import { Band, Facts, Fold, Lines, Moment, Pane, PaneTitle } from "./parts";
 import { quad } from "./names";
 import type { Step } from "./steps";
 import { Node, Quote, Thread } from "./thread";
-import type { Artifact, Context, Inquiry } from "./types";
+import type { Activity, Artifact, Basis, Context } from "./types";
 import { Usage } from "./usage";
 
-/** What the Worker's band says, at its right end, of how the buddy came to be the one. */
-function Origin({ ctx, decisionId, recorded }: { ctx: Context; decisionId: string | null; recorded: boolean }) {
-  const { t } = useTranslation("taskDetail");
-  if (!recorded) return <span className="text-ink3">{t("origin.unrecorded")}</span>;
-  if (decisionId === null) return <>{ctx.workflow.buddyLocked ? t("origin.locked") : t("origin.host")}</>;
-  return ctx.routing.find(entry => entry.decisionId === decisionId)?.source === "single-candidate" ? <>{t("origin.single")}</> : null;
+/** The turn the span stands for: the compact record holds the newest, the audit all of them. */
+function turnOf(ctx: Context, attemptId: string) {
+  return ctx.workflow.turns.find(item => item.attemptId === attemptId) ?? ctx.audit?.turns.find(item => item.attemptId === attemptId) ?? null;
 }
 
-/** Why an execution did not end as it should: the cause, who stopped it and why, a native limit. */
-function endingText(ending: Ending, t: TFunction<"taskDetail">): string {
-  return [
-    ending.cause ? t("ending.cause", { cause: t(`termination.${ending.cause}`, { defaultValue: ending.cause }) }) : null,
-    ending.stoppedBy ? t(`stop.${ending.stoppedBy}`) : null,
-    ending.actor ? `${actorRoleText(ending.actor.role)} · ${ending.actor.id}` : null,
-    ending.reason,
-    ending.quota ? t(`quota.${ending.quota}`) : null,
-  ].filter(Boolean).join(" · ");
-}
-
-/** One inquiry put to the running execution, and the answer it got. */
-function Ask({ inquiry }: { inquiry: Inquiry }) {
-  const { t } = useTranslation("taskDetail");
-  const word = <span className="whitespace-nowrap">{t(`inquiry.${inquiry.state}`)}</span>;
-  return <>
-    <Node mark="ask">
-      <Quote>
-        <div className="flex items-baseline gap-2 text-xs text-ink3">
-          <span className="min-w-0">{t("inquiry.head", { who: inquiry.author })} · <Moment at={inquiry.createdAt} seconds /></span>
-          <span className="ml-auto">{inquiry.reason && (inquiry.state === "discarded" || inquiry.state === "unavailable")
-            ? <Hint text={inquiry.reason}><span tabIndex={0} className="rounded-sm underline decoration-dotted underline-offset-2 outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50">{word}</span></Hint>
-            : word}</span>
-        </div>
-        <Fold text={inquiry.question} />
-      </Quote>
-    </Node>
-    {inquiry.answer && <Node mark="message">
-      <div className="min-w-0 flex-1">
-        <Fold text={inquiry.answer.text} className="text-foreground" />
-        {inquiry.answer.truncated && <p className="text-xs text-ink3">{t("inquiry.truncated")}</p>}
-      </div>
-      <Moment at={inquiry.answer.at} seconds className="text-xs text-ink3" />
-    </Node>}
-  </>;
+/** The bounds the turn's buddy was chosen within, where they are recorded. */
+function basisOf(ctx: Context, attemptId: string, decisionId: string | null): Basis | null {
+  if (decisionId !== null) return ctx.bases[decisionId] ?? null;
+  return ctx.workflow.currentTurn?.attemptId === attemptId && ctx.workflow.routing?.decisionId === null ? ctx.workflow.routing.basis : null;
 }
 
 /** The turn's sealed output: a band; opened, the evidence it is sealed by. */
@@ -108,16 +72,24 @@ function Seal({ artifact, ctx }: { artifact: Artifact; ctx: Context }) {
   </Collapsible>;
 }
 
-/** The row that stays under a running turn: what it is doing, and when it last said so. */
+/** The row that stays under a running turn: what it is doing and on what ground that is known, and when it last said so. */
 function Live({ activity, stuck, nowMs }: { activity: Activity | null; stuck: boolean; nowMs: number }) {
   const { t } = useTranslation("taskDetail");
-  const phase = !activity || activity.heartbeat ? t("activity.unknown") : t(`activity.${activity.phase}`);
-  const doing = activity !== null && !activity.heartbeat && ["starting", "waiting-model", "streaming-model", "tool-running", "finishing"].includes(activity.phase);
+  const heartbeat = !activity || activity.basis === "phase" || activity.basis === "unknown";
+  const phase = heartbeat ? t("activity.unknown") : t(`activity.${activity.phase}`);
+  const doing = !heartbeat && ["starting", "waiting-model", "streaming-model", "tool-running", "finishing"].includes(activity.phase);
   const at = activity?.observedAt ? Date.parse(activity.observedAt) : NaN;
+  const ground = activity ? [
+    t(`activity.basis.${activity.basis}`),
+    activity.phase !== "unknown" && heartbeat ? t(`activity.${activity.phase}`) : null,
+    activity.lastToolAt ? t("activity.lastTool", { when: formatRelative(Date.parse(activity.lastToolAt), nowMs) }) : null,
+    activity.lastNativeAt ? t("activity.lastNative", { when: formatRelative(Date.parse(activity.lastNativeAt), nowMs) }) : null,
+    activity.eventSeq !== null ? t("activity.event", { n: activity.eventSeq }) : null,
+  ].filter(Boolean).join(" · ") : t("activity.basis.unknown");
   return <div data-slot="detail-live" className="flex flex-wrap items-center gap-x-2 gap-y-1 border-t px-6 py-2.5 text-xs">
     <StateMark kind={doing ? "live" : "idle"} />
-    <span className={doing ? "text-live" : "text-ink3"}>{phase}</span>
-    {activity?.toolName && !activity.heartbeat && <span className="min-w-0 font-mono text-ink2 wrap-anywhere">{activity.toolName}</span>}
+    <Hint text={ground}><span tabIndex={0} className={cn("rounded-sm outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50", doing ? "text-live" : "text-ink3")}>{phase}</span></Hint>
+    {activity?.toolName && !heartbeat && <span className="min-w-0 font-mono text-ink2 wrap-anywhere">{activity.toolName}</span>}
     <span className={cn("ml-auto whitespace-nowrap tabular-nums", stuck ? "text-hand" : "text-ink3")}>
       {Number.isFinite(at) ? t("activity.reported", { when: formatRelative(at, nowMs) }) : t("activity.notReported")}
     </span>
@@ -135,68 +107,67 @@ export function TurnPane({ step, ctx }: { step: Step; ctx: Context }) {
   const shell = useTranslation("shell").t;
   const span = step.span!;
   const attemptId = span.attemptId ?? "";
-  const turn = ctx.workflow.turns.find(item => item.attemptId === attemptId) ?? null;
-  const current = ctx.workflow.currentTurn?.attemptId === attemptId ? ctx.workflow.currentTurn : null;
-  const audited = ctx.audit?.turns.find(item => item.turnId === (turn?.turnId ?? span.turnId)) ?? null;
-  const first = (turn?.turnIndex ?? step.turnIndex) === 1 || step.turnIndex === 1;
-  const continuation = first ? null : ctx.audit?.continuations.find(item => item.turnId === (turn?.turnId ?? span.turnId)) ?? null;
-  const asked = (ctx.inquiries?.items ?? []).filter(item => item.attemptId === attemptId);
-  const sealed = ctx.workflow.artifacts.filter(item => item.attemptId === attemptId && ["output", "resolved-output", "partial-output"].includes(item.kind));
+  const turn = turnOf(ctx, attemptId);
+  const attempt = ctx.view.attempt?.attemptId === attemptId ? ctx.view.attempt : null;
+  const result = ctx.audit?.turns.find(item => item.attemptId === attemptId) ?? (ctx.workflow.currentTurn?.attemptId === attemptId ? ctx.workflow.currentTurn : null);
+  const index = turn?.turnIndex ?? step.turnIndex;
+  const continuation = index === 1 ? null : ctx.audit?.continuations.find(item => item.turnId === turn?.turnId) ?? null;
+  const asked = ctx.asked[step.key] ?? [];
+  const sealed = ctx.workflow.artifacts.filter(item => item.attemptId === attemptId);
   const running = step.outcome === "running";
-  const reminders = remindersOf(ctx.task, attemptId);
-  const activity = activityOf(ctx.task, attemptId);
-  const ending = endingOf(ctx.task, attemptId);
-  const storage = sessionStorageOf(ctx.task, attemptId);
-  const summary = audited?.summary ?? current?.summary ?? null;
-  const remaining = audited?.remaining ?? current?.remaining ?? [];
-  const buddy = turn?.buddy ?? span.buddy;
-  const sessionId = turn?.sessionId ?? null;
   const failed = step.outcome === "failed";
-  const start = step.at;
-  const hint = [
-    storage?.scope ? t(`session.storage.${storage.scope}`, { defaultValue: storage.scope }) : t("session.storageUnknown"),
-    storage?.visibility ? t(`session.visibility.${storage.visibility}`, { defaultValue: storage.visibility }) : t("session.visibilityUnknown"),
-  ].join(" · ");
+  const unknown = step.outcome === "unknown";
+  const reminders = { overdue: attempt?.overdue === true, possiblyStuck: attempt?.possiblyStuck === true };
   const expected = turn?.expectedSeconds ?? null;
-  const resume = turn ? (turn.resumeMode === "native-session" ? t("session.resumed") : t("session.fresh")) : null;
-  return <Pane footer={running ? <Live activity={activity} stuck={reminders.possiblyStuck} nowMs={ctx.nowMs} /> : undefined}>
-    <PaneTitle title={t("step.turn", { n: step.turnIndex })} state={running ? t("state.running") : failed ? t("state.failed") : t("state.ended")}
-      tone={running ? "live" : failed ? "fail" : "past"}
+  const buddy = turn?.buddy ?? span.buddy;
+  const earliest = ctx.inquiries?.items[0] ? Date.parse(ctx.inquiries.items[0].createdAt) : null;
+  const cut = ctx.inquiries?.more === true && earliest !== null && step.at !== null && step.at < earliest;
+  const second = running && attempt?.activity
+    ? <span className="inline-flex gap-x-3.5">
+      <span>{t("activity.modelTurns", { n: attempt.activity.modelTurns ?? t("unknown") })}</span>
+      <span>{t("activity.toolCalls", { n: attempt.activity.toolCalls ?? t("unknown") })}</span>
+    </span>
+    : <Usage usage={turn?.tokenUsage ?? null} />;
+  const note = [attempt?.ending ? endingText(attempt.ending, t) : null, failed && span.error ? span.error : null].filter(Boolean).join(" · ");
+  return <Pane footer={running ? <Live activity={attempt?.activity ?? null} stuck={reminders.possiblyStuck} nowMs={ctx.nowMs} /> : undefined}>
+    <PaneTitle title={t("step.turn", { n: index })}
+      state={running ? t("state.running") : failed ? t("state.failed") : unknown ? t("state.unknown") : t("state.ended")}
+      tone={running ? "live" : failed ? "fail" : unknown ? "hand" : "past"}
       warnings={[...(reminders.overdue ? [shell("reminders.overdue")] : []), ...(reminders.possiblyStuck ? [shell("reminders.possiblyStuck")] : [])]}
-      note={ending ? endingText(ending, t) : failed && span.error ? span.error : undefined}>
+      note={note || undefined}>
       <span className="font-mono tabular-nums">
-        {start !== null ? <Moment at={start} seconds /> : t("unrecorded")} – {span.endAt ? <Moment at={span.endAt} seconds /> : null}
+        {step.at !== null ? <Moment at={step.at} /> : t("unrecorded")} – {span.endAt ? <Moment at={span.endAt} /> : null}
       </span>
-      {running && expected !== null && <span className="tabular-nums text-ink3">{t("turn.expected", { time: formatDuration(expected * 1000) })}</span>}
+      {expected !== null && <span className="tabular-nums text-ink3">{t("turn.expected", { time: formatDuration(expected * 1000) })}</span>}
       {step.ms !== null && <b className="text-sm font-normal text-foreground tabular-nums">{formatDuration(step.ms, true)}</b>}
     </PaneTitle>
     <Band role="Worker" identity={quad(buddy) ?? <span className="font-sans text-ink3">{t("unrecorded")}</span>}
-      end={<Origin ctx={ctx} decisionId={turn?.routing?.decisionId ?? null} recorded={turn?.routing != null} />}
-      second={running && activity
-        ? <span className="inline-flex gap-x-3.5">
-          <span>{t("activity.modelTurns", { n: activity.modelTurns ?? t("unknown") })}</span>
-          <span>{t("activity.toolCalls", { n: activity.toolCalls ?? t("unknown") })}</span>
-        </span>
-        : <Usage usage={turn?.tokenUsage ?? null} />}
+      end={!turn?.routing ? <span className="text-ink3">{t("origin.unrecorded")}</span>
+        : <Origin basis={basisOf(ctx, attemptId, turn.routing.decisionId)}>{
+          turn.routing.decisionId === null ? (ctx.workflow.buddyLocked ? t("origin.locked") : t("origin.host"))
+            : ctx.routing.find(entry => entry.decisionId === turn.routing!.decisionId)?.source === "single-candidate" ? t("origin.single") : null}</Origin>}
+      second={second}
       secondEnd={<span className="inline-flex flex-wrap items-baseline gap-x-1.5">
         <span>{t("session.name")}</span>
-        {sessionId ? <CopyableIdentifier value={sessionId} hint={hint} /> : <span>{t("session.unrecorded")}</span>}
-        {resume && <span>· {resume}</span>}
+        {turn?.sessionId ? <CopyableIdentifier value={turn.sessionId} hint={sessionHint(attempt?.session ?? null, t)} /> : <span>{t("session.unrecorded")}</span>}
+        {turn && <span>· {turn.resumeMode === "native-session" ? t("session.resumed") : t("session.fresh")}</span>}
       </span>} />
     <Thread>
-      {first
-        ? <Node mark="input"><Quote><Fold text={ctx.task.task} /></Quote></Node>
+      {index === 1
+        ? <Node mark="input"><Quote><Fold text={ctx.view.task.task} /></Quote></Node>
         : continuation && <Node mark="input"><Quote><Fold text={continuation.input} /></Quote></Node>}
+      {cut && <p className="py-1.5 pl-8 text-xs text-ink3">{t("inquiry.more")}</p>}
       {asked.map(inquiry => <Ask key={inquiry.messageId} inquiry={inquiry} />)}
       {!running && <Node mark="result">
         <div className="min-w-0 flex-1">
           <p className="text-xs text-ink3">{t("result.name")}</p>
-          {summary === null ? <p className="text-ink3">{ctx.audit ? t("unrecorded") : t("loading")}</p> : <Fold text={summary || t("unrecorded")} className="text-foreground" />}
-          {remaining.length > 0 && <Lines items={remaining} className="mt-2 text-ink2" />}
+          {result === null || result.summary === null
+            ? <p className="text-ink3">{ctx.audit ? t("unrecorded") : t("loading")}</p>
+            : <Fold text={result.summary || t("unrecorded")} className="text-foreground" />}
+          {result && result.remaining.length > 0 && <Lines items={result.remaining} className="mt-2 text-ink2" />}
         </div>
       </Node>}
     </Thread>
-    {ctx.inquiries?.more && asked.length > 0 && <p className="px-6 text-xs text-ink3">{t("inquiry.more")}</p>}
     {sealed.map(artifact => <Seal key={artifact.artifactId} artifact={artifact} ctx={ctx} />)}
   </Pane>;
 }

@@ -21,6 +21,7 @@ export default {
   },
   /** A length of time: the number comes first, then the unit. */
   duration: { hour: "{{n}} 时", minute: "{{n}} 分", second: "{{n}} 秒" },
+  relative: { second: "{{n}} 秒前", minute: "{{n}} 分钟前", hour: "{{n}} 小时前", day: "{{n}} 天前" },
   /** What the data layer says when a read or a command fails. */
   error: {
     codes: {

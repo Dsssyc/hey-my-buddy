@@ -3,7 +3,7 @@ import userEvent from "@testing-library/user-event";
 import i18n from "i18next";
 import { afterEach, describe, expect, it } from "vitest";
 import { TaskDetail } from "./task-detail/TaskDetail";
-import { at, audit, client, task, timeline, workflow } from "./task-detail/task-detail.fixtures";
+import { at, audit, client, result, task, timeline, workflow } from "./task-detail/task-detail.fixtures";
 import type { Replies } from "./task-detail/task-detail.fixtures";
 
 afterEach(cleanup);
@@ -78,7 +78,7 @@ describe("the micro task title rule in the detail (0.16 T1)", () => {
     expect(heading().textContent).toBe("微任务详情");
     await waitFor(() => expect(document.querySelector("[data-slot=detail-pane]")!.textContent).toContain("第二轮：详情页已经按回合重做。"));
     reads.held.workflow = workflow({ revision: 10, currentTurn: { ...workflow().currentTurn!, summary: "历史记录刷新后的最新结论" } });
-    reads.held.audit = audit({ revision: 10, turns: [{ turnId: "turn-1", summary: "第一轮", remaining: [] }, { turnId: "turn-2", summary: "历史记录刷新后的最新结论", remaining: [] }] });
+    reads.held.audit = audit({ revision: 10, turns: [result(1, "第一轮"), result(2, "历史记录刷新后的最新结论")] });
     await act(async () => { await new Promise(resolve => setTimeout(resolve, 3100)); });
     await waitFor(() => expect(document.querySelector("[data-slot=detail-pane]")!.textContent).toContain("历史记录刷新后的最新结论"));
     expect(heading().textContent).toBe("微任务详情");
