@@ -3,8 +3,10 @@ from __future__ import annotations
 
 import dataclasses
 import json
+import math
 from collections.abc import Sequence
 from pathlib import PurePosixPath
+from statistics import NormalDist
 
 from ..store.db import canonical_json
 from ...protocol.structured_schema import schema_errors
@@ -147,11 +149,46 @@ def validate_answer(answer: object, buddy_ids: list[str], routing_mode: str = "r
     return {key: answer[key] for key in schema["properties"]}
 
 
+def _rate_interval(count: int, samples: int) -> dict | None:
+    """Two-sided 95% Wilson score interval, including all/none outcomes."""
+    if samples == 0:
+        return None
+    z = NormalDist().inv_cdf(0.975)
+    rate = count / samples
+    denominator = 1 + z * z / samples
+    center = (rate + z * z / (2 * samples)) / denominator
+    radius = z * math.sqrt(rate * (1 - rate) / samples + z * z / (4 * samples * samples)) / denominator
+    return {"method": "wilson", "confidence": 0.95,
+            "lower": max(0.0, center - radius), "upper": min(1.0, center + radius)}
+
+
+def _statistics_for_prompt(statistics: dict, wait: dict) -> dict:
+    median = statistics["medianDeliverySeconds"]
+    return {**statistics,
+            "firstPassRateInterval": _rate_interval(statistics["firstPasses"], statistics["samples"]),
+            "failureRateInterval": _rate_interval(statistics["failures"], statistics["samples"]),
+            "resultTime": {"seconds": wait["seconds"] + median if median is not None else None,
+                           "atLeast": wait["atLeast"], "missingMedianDelivery": median is None}}
+
+
+def _candidate_for_prompt(candidate: dict) -> dict:
+    statistics, wait = candidate["statistics"], candidate["load"]["wait"]
+    return {**candidate, "statistics": {
+        "overall": _statistics_for_prompt(statistics["overall"], wait),
+        "byDomain": {node_id: _statistics_for_prompt(stats, wait)
+                     for node_id, stats in statistics["byDomain"].items()},
+        "byDomainTaskType": {
+            node_id: {task_type: _statistics_for_prompt(stats, wait) for task_type, stats in types.items()}
+            for node_id, types in statistics["byDomainTaskType"].items()},
+    }}
+
+
 def render_prompt(document: dict) -> str:
     """Stable instructions, bounded table, then request-specific context."""
     fast = document.get("routingMode") == "fast"
     keys = ("buddies", "preferences", "annotations", "taskTypes")
     table = {key: document.get(key, []) for key in keys}
+    table["buddies"] = [_candidate_for_prompt(candidate) for candidate in table["buddies"]]
     variable = {key: document.get(key) for key in
                 ("policyFacts", "task", "project", "expectedSeconds", "requestId", "budget")}
     domains = "Domain tree (one node per line; id and name):\n" + "\n".join(

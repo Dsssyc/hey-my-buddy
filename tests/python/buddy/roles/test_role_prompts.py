@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+import hashlib
 import tempfile
 from types import SimpleNamespace
 import unittest
@@ -14,6 +15,7 @@ from hey_my_buddy.buddy.roles import prompts, router, run_execution, turn_io
 from hey_my_buddy.buddy.roles.worker_services import ATTENTION_REFUSAL, FINISH_DESCRIPTION
 from hey_my_buddy.install.runtime import resource_path
 from hey_my_buddy.json_codec import canonical_json
+from hey_my_buddy.blackboard.routing.router import render_prompt
 
 ROOT = Path(__file__).resolve().parents[4]
 
@@ -52,6 +54,9 @@ class RolePromptTests(unittest.TestCase):
                 "Use only the tools this call provides and change nothing",
                 "Do not ask questions", "Answer only in the form the call requires",
                 "when you cannot answer, say so in that form",
+                "Sample size measures certainty, not quality",
+                "If two rate intervals overlap, do not call either buddy worse on that rate",
+                "Compare resultTime estimates (queue wait plus median delivery) alongside reliability",
             ),
             "lead": (
                 "You are a Worker whose micro task carries delegation authority",
@@ -144,6 +149,16 @@ class RolePromptTests(unittest.TestCase):
                                            prompt.index(restriction))
                     else:
                         self.assertNotIn(lead, prompt)
+
+    def test_router_role_and_full_prompt_hashes_are_fixed(self):
+        self.assertEqual(hashlib.sha256(resource_path("roles.router").read_bytes()).hexdigest(),
+                         "756fb4ad06c92d18c7ed79b3b2adca455f79b791e7816b4501cc8d8f2312edcf")
+        hashes = {"fast": "0a888d256ee818b0c642d88845f1b507588870f56f0fb3c31fc12ebedf34643f",
+                  "review": "13866361ed5ecf1a985ad388a9a65899fd1516fabc36e2446f70dcf6e002a129"}
+        for mode, expected in hashes.items():
+            with self.subTest(mode=mode):
+                prompt = prompts.router_prompt(render_prompt({"routingMode": mode, "task": "choose", "buddies": []}))
+                self.assertEqual(hashlib.sha256(prompt.encode()).hexdigest(), expected)
 
     def test_fast_and_review_router_requests_keep_the_role_before_host_input_for_every_harness(self):
         role = resource_path("roles.router").read_text(encoding="utf-8")

@@ -207,9 +207,12 @@ class DecisionCapabilityTests(unittest.TestCase):
             frozen.mkdir()
             manifest = {"inputTree": "frozen-tree", "manifestSha256": "manifest"}
             budget = router.budget("brief")
+            stats = {"samples": 0, "firstPasses": 0, "failures": 0, "medianDeliverySeconds": None}
             document = {"domainNodes": [], "buddy": {"harness": "codex", "provider": "openai", "model": "fixture-model", "effort": "low"},
                         "executionWorkspace": manifest, "budget": budget, "outputSchema": router.answer_schema([BUDDY_ID]),
-                        "buddies": [{"buddyId": BUDDY_ID}], "task": "bounded read"}
+                        "buddies": [{"buddyId": BUDDY_ID, "load": {"wait": {"seconds": 0, "atLeast": False}},
+                                     "statistics": {"overall": stats, "byDomain": {}, "byDomainTaskType": {}}}],
+                        "task": "bounded read"}
             context = ExecutionContext(task_id="microTask", attempt_id="attempt", generation=1,
                                        spec={"cwd": root, "routerBudgetSeconds": 60}, directory=directory,
                                        runtime={}, environment={"HMB_STATE_DIR": str(Path(root) / "state"),
