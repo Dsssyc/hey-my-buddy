@@ -1,6 +1,7 @@
 """Private upgrade refusal, admission fence and backup restoration."""
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import closing
+import errno
 import json
 import os
 import stat
@@ -73,17 +74,20 @@ class UpgradeTests(BoardTestCase):
 
         def spawn_records_the_daemons_error(*_args, **_kwargs):
             # A rollback starts an older daemon that still records its own pid,
-            # which differs from the Popen handle this start reaps.
-            launcher.write_private(state / 'startup-error.json',
-                                   {'pid': 9999, 'code': 'INVALID_ARGUMENT', 'message': 'replacement daemon refused'})
+            # which differs from the Popen handle this start reaps; its structured
+            # cause travels with the code and message.
+            launcher.write_private(state / 'startup-error.json', {
+                'pid': 9999, 'code': 'LAUNCH_IO_ERROR', 'message': 'replacement daemon failed to bind',
+                'details': {'io_operation': 'bind', 'raw_os_error': errno.EADDRINUSE}})
             return child
 
         with mock.patch.object(upgrade.subprocess, 'Popen', side_effect=spawn_records_the_daemons_error), \
              mock.patch.object(upgrade, 'probe', return_value=None):
             with self.assertRaises(BoardError) as caught:
                 upgrade.start(state, target)
-        self.assertEqual(caught.exception.code, 'INVALID_ARGUMENT')
-        self.assertIn('replacement daemon refused', caught.exception.message)
+        self.assertEqual(caught.exception.payload(), {
+            'code': 'LAUNCH_IO_ERROR', 'message': 'replacement daemon failed to bind',
+            'details': {'io_operation': 'bind', 'raw_os_error': errno.EADDRINUSE}})
 
     def test_runtime_preparation_excludes_the_previous_services_reclaimer(self):
         board = self.board()

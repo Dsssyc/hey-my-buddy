@@ -220,7 +220,9 @@ def start(state: Path, target: Path) -> dict:
             from .launcher import read_private
             failure = read_private(state / 'startup-error.json') or {}
             if isinstance(failure.get('code'), str):
-                raise BoardError(failure['code'], str(failure.get('message') or 'Replacement daemon failed'))
+                details = failure.get('details')
+                raise BoardError(failure['code'], str(failure.get('message') or 'Replacement daemon failed'),
+                                 **(details if isinstance(details, dict) else {}))
             raise BoardError('UPGRADE_START_FAILED', 'Replacement daemon exited; see private upgrade-start.log')
         health = probe(state, target)
         if health is not None:
