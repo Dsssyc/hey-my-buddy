@@ -22,6 +22,8 @@ from .db import SCHEMA_VERSION
 
 
 BASE_SCHEMA_VERSION = 25
+
+
 def _digest(value: object) -> str:
     # Workspace snapshot digests use ASCII escaping, unlike board JSON columns.
     raw = json.dumps(value, ensure_ascii=True, sort_keys=True, separators=(",", ":")).encode()
@@ -165,6 +167,28 @@ def _convert_row(state: Path, row: sqlite3.Row, repository: Path | None) -> tupl
     return canonical_json(artifact), artifact["snapshotSha256"], physical_updates
 
 
+def preserved_data(state: Path) -> dict:
+    """Project every stored value in the converted tables except the converted fields."""
+    with closing(sqlite3.connect((state / 'board.sqlite3').as_uri() + '?mode=ro', uri=True)) as connection:
+        connection.row_factory = sqlite3.Row
+        artifacts = []
+        for row in connection.execute('SELECT * FROM workflow_artifacts ORDER BY artifact_id'):
+            record = dict(row)
+            if row['kind'] in ('output', 'resolved-output', 'partial-output', 'abandoned-site'):
+                manifest = decode_strict_json(record['manifest_json'])
+                del manifest['snapshot']['changedEntries']
+                manifest['snapshot'].pop('changedEntriesTruncated', None)
+                del manifest['snapshotSha256']
+                record['manifest_json'] = canonical_json(manifest)
+                del record['manifest_sha256']
+            artifacts.append(record)
+        return {
+            'meta': [tuple(row) for row in connection.execute(
+                "SELECT key,value FROM meta WHERE key!='schema_version' ORDER BY key")],
+            'workflow_artifacts': artifacts,
+        }
+
+
 def upgrade_schema_25_to_26(state: Path) -> dict:
     """Convert one stopped schema-25 board; refuse before writes on bad evidence.
 
@@ -221,6 +245,8 @@ def _replace_record(path: Path, data: bytes) -> None:
             stream.flush()
             os.fsync(stream.fileno())
         os.replace(temporary, path)
+        from .backup import sync_dir
+        sync_dir(path.parent)
     finally:
         if os.path.exists(temporary):
             os.unlink(temporary)
@@ -229,7 +255,7 @@ def _replace_record(path: Path, data: bytes) -> None:
 def restore_schema_25_physical_records(state: Path) -> int:
     """Rebind existing physical records to a restored schema-25 backup board.
 
-    Call after backup.restore, under the installer's owner lock, before starting
+    Call after restoring the database, under the installer's owner lock, before starting
     the old runtime. This restores only records the conversion had changed.
     """
     state = Path(state).resolve(strict=True)

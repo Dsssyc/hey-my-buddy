@@ -13,7 +13,7 @@ import subprocess
 import time
 import uuid
 
-from ..blackboard.store import backup
+from ..blackboard.store import backup, upgrade as schema_upgrade
 from .. import private_dirs
 from . import runtime
 from .launcher import write_active_runtime
@@ -61,9 +61,9 @@ def idle_snapshot(state: Path, *, event_head: int | None = None, exact: bool = F
     with closing(sqlite3.connect((state / 'board.sqlite3').as_uri() + '?mode=ro', uri=True)) as connection:
         connection.execute('BEGIN')
         schema = connection.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone()
-        if schema is None or schema[0] != str(SCHEMA_VERSION):
+        if schema is None or schema[0] not in (str(schema_upgrade.BASE_SCHEMA_VERSION), str(SCHEMA_VERSION)):
             raise BoardError('UNSUPPORTED_SCHEMA',
-                             f'Upgrade accepts schema {SCHEMA_VERSION} only')
+                             f'Upgrade accepts schemas {schema_upgrade.BASE_SCHEMA_VERSION} and {SCHEMA_VERSION} only')
         # A micro-task Host boundary has no autonomous next turn. A recorded or
         # queued continuation still has work to prepare/claim, even if the run
         # currently reports a Host boundary. Routing and helper tasks are checked
@@ -85,6 +85,21 @@ def idle_snapshot(state: Path, *, event_head: int | None = None, exact: bool = F
         snapshot = {**backup.database_snapshot(connection, event_head=event_head, exact=exact),
                     'schema': int(schema[0])}
         return snapshot
+
+
+def _convert_board(state: Path, before: dict) -> tuple[dict, dict]:
+    preserved = schema_upgrade.preserved_data(state)
+    converted = schema_upgrade.upgrade_schema_25_to_26(state)
+    expected = idle_snapshot(state, event_head=before['eventHead'], exact=True)
+    changed = {name for name in before['tables'].keys() | expected['tables'].keys()
+               if before['tables'].get(name) != expected['tables'].get(name)}
+    changed.update(name for name, digest in before['fingerprints'].items()
+                   if name not in preserved and expected['fingerprints'].get(name) != digest)
+    changed.update(name for name, values in schema_upgrade.preserved_data(state).items() if values != preserved[name])
+    if changed:
+        raise BoardError('UPGRADE_VERIFY_FAILED', 'The schema conversion changed unrelated stored data',
+                         tables=sorted(changed))
+    return {**expected, 'runtimeSettings': before['runtimeSettings']}, converted
 
 
 def preflight(state: Path, *, contract_changed: bool) -> dict:
@@ -245,7 +260,7 @@ def restore(state: Path, current: Path) -> None:
     for path in (snapshot, board, *sidecars, compressed):
         _restore_guard(path, regular=True)
     backup.recover(state)
-    backup.verify(current)
+    saved = backup.verify(current)
     sources = list(backup._regular_files(current / 'state'))
     destinations = [(source, state / source.relative_to(current / 'state')) for source in sources]
     for source, destination in destinations:
@@ -293,6 +308,8 @@ def restore(state: Path, current: Path) -> None:
             if private_dirs.linked_component(temporary) is None:
                 temporary.unlink(missing_ok=True)
     backup.sync_dir(state)
+    if saved['schema'] == schema_upgrade.BASE_SCHEMA_VERSION:
+        schema_upgrade.restore_schema_25_physical_records(state)
 
 
 def verify_started(state: Path, target: Path, health: dict, before: dict, *, contract_changed: bool = True) -> dict:
@@ -508,6 +525,14 @@ def upgrade(params: dict, *, skill_source: Path | None = None, skill_target: Pat
                     journal.update(phase='backed-up', backup=backed_up)
                     write_journal(marker, journal)
                 expected = before
+                if before['schema'] == schema_upgrade.BASE_SCHEMA_VERSION:
+                    # The old owner is gone and its backup is verified. A crash
+                    # from this point through preparation restores both the DB
+                    # and the physical records before any old runtime is started.
+                    journal.update(phase='converting')
+                    write_journal(marker, journal)
+                    expected, converted = _convert_board(state, before)
+                    journal['conversion'] = converted
                 journal.update(phase='prepared', expected=expected)
                 write_journal(marker, journal)
             active = target
@@ -637,9 +662,7 @@ def recover(state: Path, root: Path) -> dict:
                 if Path(saved['path']) != current:
                     raise BoardError('UPGRADE_RECOVERY_REQUIRED', 'Journal backup path does not match this installation')
                 restore(state, current)
-            before = idle_snapshot(state)
-        else:
-            before = journal['before']
+        before = journal['before']
     health = start(state, previous)
     evidence = verify_started(state, previous, health, before, contract_changed=contract_changed)
     write_active_runtime(state, previous, journal.get('environment'))
