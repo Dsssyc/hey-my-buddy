@@ -294,7 +294,7 @@ class ConsoleSecurityTests(ConsoleTestCase):
         _stated, browser = self.open_console(board)
         snapshot = browser.bootstrap()
         csrf = snapshot["csrfToken"]
-        for operation in ("dispatch", "store.task_cancel", "_receipt", "console_snapshot", "unknown_operation", "task_cancel", "task_retry", "task_acknowledge",
+        for operation in ("dispatch", "store.task_cancel", "_receipt", "console_snapshot", "unknown_operation", "task_retry", "task_acknowledge",
                           "workflow_submit", "workflow_decide", "workflow_continue", "workflow_takeover",
                           "workflow_cancel", "workflow_accept", "workflow_conclude", "workflow_reclaim",
                           "workflow_acknowledge", "workflow_scope_amend",
@@ -350,8 +350,8 @@ class ConsoleSecurityTests(ConsoleTestCase):
         buddy = next(p for p in board.call("console_snapshot", {})["buddies"] if p["buddyId"] == BUDDY_ID)
         model_service = {key: buddy[key] for key in ("harness", "provider", "model")}
         status, _h, data = browser.command("task_cancel", {"runId": run_id, 'note': "console operator"}, csrf=csrf)
-        self.assertEqual(status, 404, data)
-        self.assertEqual(board.call("task_get", {"runId": run_id})["task"]["state"], "queued")
+        self.assertEqual(status, 200, data)
+        self.assertEqual(board.call("task_get", {"runId": run_id})["task"]["state"], "cancelled")
         # A publish through the browser is the same operation the CLI uses: it is
         # validated and persisted exactly once.
         status, _h, data = browser.command(

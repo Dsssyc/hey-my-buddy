@@ -2,6 +2,8 @@ import { cleanup, screen, within, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { snapshotReadSchema } from "../types";
+import type { Maintenance } from "../types";
+import { formatDateTime } from "../i18n/format";
 import { fixture, snapshot, openRoles, MEDIUM_ID, FLASH_ID } from "./roles.testing";
 
 function state() {
@@ -17,7 +19,55 @@ function state() {
 }
 afterEach(() => { cleanup(); window.location.hash = ""; window.localStorage.clear(); });
 
+function maintenanceRun(state: "running" | "failed"): Maintenance["runs"][number] {
+  return { maintenanceRunId: "m1", taskId: "maintain-1", triggerType: "manual", buddyId: MEDIUM_ID,
+    buddy: { harness: "claude", provider: "anthropic", model: "claude-sonnet-5", effort: "medium" }, state,
+    startedAt: "2026-10-28T00:00:00Z", finishedAt: state === "failed" ? "2026-10-28T00:05:01Z" : null,
+    reason: state === "failed" ? { code: "router-budget-exhausted", params: {} } : null,
+    usage: { attempts: [{ attemptId: "a1", elapsedMs: null, toolCalls: null,
+      tokenUsage: state === "failed" ? { inputTokens: 120, cachedInputTokens: null, outputTokens: 7, source: "native", scope: "attempt" } : null }] } };
+}
+
 describe("maintenance controls", () => {
+  it("reads recorded native activity and stops the execution through the existing cancel operation", async () => {
+    const data = state(); data.maintenance!.runs = [maintenanceRun("running")];
+    const f = fixture(data, { task_cancel: () => ({ alreadyTerminal: false }) });
+    vi.mocked(f.api.task).mockResolvedValue({ runId: "maintain-1", activity: {
+      phase: "streaming-model", observedAt: new Date().toISOString(), lastNativeActivityAt: new Date().toISOString(), eventSeq: 12,
+    } });
+    await openRoles(f);
+    expect(await screen.findByText("模型输出中")).toBeTruthy();
+    expect(f.api.task).toHaveBeenCalledWith("maintain-1", expect.any(AbortSignal));
+    await userEvent.click(screen.getByRole("button", { name: "停止" }));
+    await waitFor(() => expect(f.command).toHaveBeenCalledWith("task_cancel", { runId: "maintain-1" }, "csrf"));
+    expect((screen.getByRole("button", { name: "正在停止" }) as HTMLButtonElement).disabled).toBe(true);
+    expect(screen.getByText("已请求停止")).toBeTruthy();
+    const signal = vi.mocked(f.api.task).mock.calls[0][1]!;
+    cleanup(); expect(signal.aborted).toBe(true);
+  });
+  it("shows the interval after the recorded finish beside an immediate retry, keeping partial usage", async () => {
+    const data = state(); data.maintenance!.runs = [maintenanceRun("failed")];
+    const f = fixture(data, { maintenance_start: () => ({ status: "running", runId: "maintain-2" }) });
+    await openRoles(f);
+    const row = document.querySelector('[data-slot="maintenance-record"]') as HTMLElement;
+    const retry = within(row).getByText(`下次自动运行 ${formatDateTime(Date.parse("2026-10-28T01:05:01Z"))}`);
+    expect(retry.parentElement?.querySelector("button")?.textContent).toBe("立即运行");
+    expect(within(row).getByText("120")).toBeTruthy();
+    expect(within(row).getByText("7")).toBeTruthy();
+    expect(within(row).getByText("未记录")).toBeTruthy();
+    expect(within(row).getByText("Router 超出了这次调用的时限或工具调用上限。")).toBeTruthy();
+    await userEvent.click(within(row).getByRole("button", { name: "立即运行" }));
+    expect(f.command).toHaveBeenCalledWith("maintenance_start", {}, "csrf");
+  });
+  it("keeps progress unknown when only the phase has been reported", async () => {
+    const data = state(); data.maintenance!.runs = [maintenanceRun("running")];
+    const f = fixture(data);
+    vi.mocked(f.api.task).mockResolvedValue({ runId: "maintain-1", activity: { phase: "waiting-model", observedAt: new Date().toISOString() } });
+    await openRoles(f);
+    await waitFor(() => expect(f.api.task).toHaveBeenCalled());
+    expect(screen.getByText("进展未知")).toBeTruthy();
+    expect(f.operations).toEqual([]);
+  });
   it("rejects malformed native usage at the console read boundary", () => {
     const data = state();
     const tokenUsage = { inputTokens: 100, cachedInputTokens: 20, outputTokens: 10, source: "native", scope: "attempt" };

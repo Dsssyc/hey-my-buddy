@@ -81,7 +81,7 @@ export default {
     consecutiveFailures: "Failed in a row",
     abstention: "Abstained",
     cancelled: "Cancelled",
-    budgetExhausted: "Out of budget",
+    budgetExhausted: "Time or tool-call limit exceeded",
     boundsRejected: "Out of bounds",
     inputChanged: "Input changed",
     lastSuccess: "Last success",

@@ -669,7 +669,7 @@ describe("the records of routing", () => {
     expect(fact("越界")).toBe("越界2");
     expect(fact("最近成功")).toBe(`最近成功${time("2026-09-25T08:02:00.000Z")}`);
     // A zero, and a count the service does not carry, are not written; nor is a success rate.
-    expect(records().queryByText("预算耗尽")).toBeNull();
+    expect(records().queryByText("超出时限或工具调用上限")).toBeNull();
     expect(records().queryByText("输入变化")).toBeNull();
     expect(records().queryByText(/成功 \d/)).toBeNull();
     // Abstentions and cancellations are not failures; this is the hint of the word.
@@ -682,7 +682,7 @@ describe("the records of routing", () => {
     }) }));
     await openRoles(f);
     expect(fact("失败")).toBe("失败2 / 12");
-    expect(fact("预算耗尽")).toBe("预算耗尽3");
+    expect(fact("超出时限或工具调用上限")).toBe("超出时限或工具调用上限3");
     expect(fact("越界")).toBe("越界2");
     expect(fact("输入变化")).toBe("输入变化1");
     expect(fact("最近成功")).toBe("最近成功无");

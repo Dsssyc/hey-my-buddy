@@ -421,7 +421,7 @@ describe("the turn that ended otherwise than it should", () => {
   const ended = (record: Record<string, unknown>) => open({ step: 7, replies: { task: task(record), workflow: workflow({ state: "cancelled" }) } });
 
   it("names each cause in words, and a wrap-up that a Lead asked for as the Lead's", async () => {
-    for (const [cause, words] of [["deadline", "Router 预算用完"], ["forced-stop", "强制停止"], ["console-stop", "控制台停止"], ["service-stop", "服务停止"],
+    for (const [cause, words] of [["deadline", "Router 超出时限"], ["forced-stop", "强制停止"], ["console-stop", "控制台停止"], ["service-stop", "服务停止"],
       ["unknown-stop", "停止（发起者未知）"], ["harness-error", "Harness 错误"], ["transport-error", "传输故障"], ["grace-expired", "有序收尾的宽限期到期后停止"]] as const) {
       cleanup();
       ended({ state: "failed", selectedAttempt: { result: { terminationReason: cause } } });
