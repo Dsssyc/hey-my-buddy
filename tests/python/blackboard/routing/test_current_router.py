@@ -53,11 +53,11 @@ class CurrentRouterTestCase(BoardTestCase):
                 merged["routerRetryIntervalSeconds"] = interval
             router._write_settings(db, merged)
 
-    def record(self, buddy_id, *, outcome="no_answer", plane="routing", request="route-1", phase="preflight",
+    def record(self, buddy_id, *, outcome="no_answer", request="route-1", phase="preflight",
                code="timeout", index=0, task=None, attempt=None, now=T0, facts=None):
         with self.board_.store.db.write() as db:
             return router_history.record_outcome(
-                db, buddy_id=buddy_id, plane=plane, request_id=request, task_id=task, attempt_id=attempt,
+                db, buddy_id=buddy_id, request_id=request, task_id=task, attempt_id=attempt,
                 outcome=outcome, code=code, phase=phase,
                 facts={"routerIndex": index} if facts is None else facts, now=now)
 
@@ -92,21 +92,22 @@ class CurrentRouterTestCase(BoardTestCase):
             requested["routerCalled"] = called
         with self.board_.store.db.write() as db:
             db.execute(
-                "INSERT INTO evaluation_decisions(decision_id,status,task,buddy_id,"
-                "created_at) VALUES(?,?,?,?,?)",
-                (decision, "failed", "task", buddy_id, at))
+                "INSERT INTO evaluation_decisions(decision_id,status,buddy_id,"
+                "created_at) VALUES(?,?,?,?)",
+                (decision, "failed", buddy_id, at))
             db.execute(
                 "INSERT INTO decision_requests(decision_id,request_id,input_fingerprint,task_id,attempt_id,"
                 "generation,requested_json,output_json,updated_at)"
                 " VALUES(?,?,'digest',?,?,?,?,?,?)",
                 (decision, request, task_id, attempt_id, 0,
                  canonical_json(requested), canonical_json(output or {}), at))
+            router_sequence.freeze_request(db, decision, snapshot={"facts": requested,
+                "baseInput": {"task": "task"}, "inspections": []}, now=at)
             if attempt_id is not None and buddy_id is not None:
-                router_sequence.freeze_request(db, decision, snapshot=requested, now=at)
                 router_sequence.reserve_dispatch(
                     db, decision_id=decision, task_id=task_id, router_index=0,
                     buddy={"buddyId": buddy_id, "harness": "dsh", "provider": "fixture",
-                           "model": buddy_id, "effort": "max"}, document=requested, now=at)
+                           "model": buddy_id, "effort": "max"}, now=at)
                 router_sequence.record_claim(db, task_id=task_id, attempt_id=attempt_id,
                                              generation=1, now=at)
             self.board_.store._append_event(db, kind, task_id=task_id, attempt_id=attempt_id,
@@ -251,17 +252,6 @@ class ResolutionTests(CurrentRouterTestCase):
         self.assertIsNotNone(self.state(A)["skipUntil"])
         self.assertEqual(self.state(B)["consecutiveNoAnswers"], 0)
 
-    def test_planes_share_one_recording_entry_and_one_current_router(self):
-        self.add_buddy(A)
-        self.add_buddy(B)
-        self.set_settings(ids=[A, B])
-        self.record(A, plane="maintenance", request="maintain-1", now=T0)
-        self.record(A, plane="portrait", request="portrait-1", now=T0)
-        with self.board_.store.db.read() as db:
-            resolution = router.current_router(db, now=T0)
-        self.assertEqual(resolution.buddy_id, B)
-        self.assertEqual(self.state(A)["noAnswerCount"], 2)
-
     def test_consecutive_counts_are_not_cut_by_a_display_window(self):
         self.add_buddy(A)
         self.add_buddy(B)
@@ -376,7 +366,7 @@ class OutcomeFactTests(CurrentRouterTestCase):
     def test_receipt_and_event_commit_in_one_transaction(self):
         with self.assertRaises(AssertionError):
             with self.board_.store.db.write() as db:
-                router_history.record_outcome(db, buddy_id=A, plane="routing", request_id="route-1", task_id=None,
+                router_history.record_outcome(db, buddy_id=A, request_id="route-1", task_id=None,
                                               attempt_id=None, outcome="no_answer", code="timeout",
                                               phase="preflight", facts={"routerIndex": 0}, now=T0)
                 raise AssertionError("rollback")

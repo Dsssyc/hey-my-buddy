@@ -637,6 +637,8 @@ class BoardService(_BaseResource):
                     cached = catalog_store.current(db)
                 discovered = cached.payload if cached else {'source': 'harness-health', 'providers': [], 'discoveries': [
                     {'harness': row['harness'], 'status': 'unknown', 'reason': row.get('reason')} for row in self.harnesses.all()]}
+                if cached is None:
+                    discovered = catalog.canonical_payload(discovered)
             else:
                 from ...buddy.harnesses.runtime_selection import bound
                 with bound(observation['harnesses']):

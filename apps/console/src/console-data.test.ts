@@ -94,11 +94,13 @@ describe("console grouping and recorded attribution", () => {
 });
 
 describe("shared model concurrency", () => {
-  it("accepts only integer limits within 1–32 and defaults to 2", () => {
+  it("accepts positive safe integer limits and defaults to 2", () => {
     expect(MODEL_SERVICE_CONCURRENCY_DEFAULT).toBe(2);
     expect(concurrencyLimit(1)).toBe(1);
     expect(concurrencyLimit(32)).toBe(32);
-    for (const invalid of [0, 33, -2, 2.5, "4", null, undefined]) {
+    expect(concurrencyLimit(33)).toBe(33);
+    expect(concurrencyLimit(Number.MAX_SAFE_INTEGER)).toBe(Number.MAX_SAFE_INTEGER);
+    for (const invalid of [0, Number.MAX_SAFE_INTEGER + 1, -2, 2.5, "4", null, undefined]) {
       expect(concurrencyLimit(invalid)).toBeNull();
     }
   });

@@ -157,12 +157,12 @@ class MacroTaskDeletionTests(WorkflowTestCase):
         decision_id = "decision-delete-history"
         with board.store.db.write() as db:
             original = dict(db.execute("SELECT * FROM tasks WHERE task_id=?", (owner["runId"],)).fetchone())
-            db.execute("INSERT INTO evaluation_decisions(decision_id,status,task,created_at) VALUES(?,?,?,?)",
-                       (decision_id, "completed", "Router private text", now))
+            db.execute("INSERT INTO evaluation_decisions(decision_id,status,created_at) VALUES(?,?,?)",
+                       (decision_id, "completed", now))
             db.execute("INSERT INTO decision_requests(decision_id,request_id,input_fingerprint,task_id,updated_at)"
                        " VALUES(?,?,?,?,?)", (decision_id, "route-history", "hash", "route-latest", now))
-            db.execute("INSERT INTO router_requests(decision_id,snapshot_json,frozen_at) VALUES(?,?,?)",
-                       (decision_id, "{}", now))
+            db.execute("INSERT INTO router_requests(decision_id,round,snapshot_json,frozen_at) VALUES(?,1,?,?)",
+                       (decision_id, json.dumps({"baseInput": {"task": "Router private text"}}), now))
             db.execute("INSERT INTO workflow_routes(decision_id,run_id,owner_generation,state,created_at)"
                        " VALUES(?,?,?,?,?)", (decision_id, owner["runId"], 1, "resolved", now))
             for index, task_id in enumerate(("route-earlier", "route-latest")):
@@ -176,17 +176,17 @@ class MacroTaskDeletionTests(WorkflowTestCase):
                 db.execute("INSERT INTO attempts(attempt_id,task_id,generation,nonce_verifier,execution_state,"
                            "adapter,shutdown_confirmed,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?)",
                            (attempt_id, task_id, 1, "fixture", "finished", "decision", 1, now, now))
-                db.execute("INSERT INTO router_dispatches(task_id,decision_id,router_index,buddy_id,harness,provider,"
-                           "model,effort,document_json,input_sha256,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?)",
+                db.execute("INSERT INTO router_dispatches(task_id,decision_id,round,router_index,buddy_id,harness,provider,"
+                           "model,effort,created_at) VALUES(?,?,1,?,?,?,?,?,?,?)",
                            (task_id, decision_id, index, "fixture", "dsh", "deepseek-official",
-                            "deepseek-flash", "off", "{}", "hash", now))
+                            "deepseek-flash", "off", now))
                 db.execute("INSERT INTO router_claims(attempt_id,task_id,generation) VALUES(?,?,?)",
                            (attempt_id, task_id, 1))
             event = db.execute("INSERT INTO events(kind,payload_json,created_at) VALUES(?,?,?)",
                                ("router.answered", json.dumps({"decisionId": decision_id}), now))
-            db.execute("INSERT INTO router_outcomes(receipt_id,plane,request_id,router_index,buddy_id,phase,"
-                       "task_id,attempt_id,outcome,event_seq) VALUES(?,?,?,?,?,?,?,?,?,?)",
-                       ("route-outcome", "routing", "route-history", 0, "fixture", "review",
+            db.execute("INSERT INTO router_outcomes(receipt_id,request_id,router_index,buddy_id,phase,"
+                       "task_id,attempt_id,outcome,event_seq) VALUES(?,?,?,?,?,?,?,?,?)",
+                       ("route-outcome", "route-history", 0, "fixture", "review",
                         "route-earlier", "route-attempt-0", "answered", event.lastrowid))
             db.execute("INSERT INTO commands(command_id,task_id,kind,request_hash,response_json,subject)"
                        " VALUES(?,?,?,?,?,?)", ("route-command", "route-earlier", "fixture", "hash",
@@ -353,15 +353,15 @@ class MacroTaskDeletionTests(WorkflowTestCase):
                        " VALUES(?,?,?,?,2,'decision',?,30,'cancelled',1,?,?)",
                        (router_id, 'tree-router-request', spec, 'router-fixture',
                         str(self.workdir('tree-router')), now, now))
-            db.execute("INSERT INTO evaluation_decisions(decision_id,status,task,created_at)"
-                       " VALUES('tree-decision','completed','route',?)", (now,))
+            db.execute("INSERT INTO evaluation_decisions(decision_id,status,created_at)"
+                       " VALUES('tree-decision','completed',?)", (now,))
             db.execute("INSERT INTO decision_requests(decision_id,request_id,input_fingerprint,task_id,updated_at)"
                        " VALUES('tree-decision','tree-routing','router-fixture',?,?)", (router_id, now))
             router_sequence.freeze_request(db, 'tree-decision',
-                                           snapshot={'facts': {}, 'baseInput': {}, 'inspections': []}, now=now)
+                                           snapshot={'facts': {}, 'baseInput': {'task': 'route'}, 'inspections': []}, now=now)
             router_sequence.reserve_dispatch(db, decision_id='tree-decision', task_id=router_id, router_index=0,
                                              buddy={'buddyId': 'fixture', 'harness': 'dsh', 'provider': 'fixture',
-                                                    'model': 'router', 'effort': 'max'}, document={}, now=now)
+                                                    'model': 'router', 'effort': 'max'}, now=now)
             db.execute("INSERT INTO workflow_routes(decision_id,run_id,owner_generation,state,created_at)"
                        " VALUES('tree-decision',?,1,'resolved',?)", (lead_owned['runId'], now))
         target = "run:" + root["runId"]
@@ -543,10 +543,12 @@ class MacroTaskDeletionTests(WorkflowTestCase):
         self.assertIn("macro-task-deletion.queued", {b["reason"]["code"] for b in macro_task_deletion.preview(board.store, target)["blockers"]})
         with board.store.db.write() as db:
             db.execute("UPDATE workflow_continuations SET state='cancelled' WHERE continuation_id='pending-continuation'")
-            db.execute("INSERT INTO evaluation_decisions(decision_id,status,task,created_at) VALUES(?,?,?,?)",
-                       ("pending-decision", "pending", "private", now))
+            db.execute("INSERT INTO evaluation_decisions(decision_id,status,created_at) VALUES(?,?,?)",
+                       ("pending-decision", "pending", now))
             db.execute("INSERT INTO decision_requests(decision_id,request_id,input_fingerprint,"
                        "updated_at) VALUES(?,?,?,?)", ("pending-decision", "pending-route", "hash", now))
+            from hey_my_buddy.blackboard.routing import router_sequence
+            router_sequence.freeze_request(db, "pending-decision", snapshot={"baseInput": {"task": "private"}}, now=now)
             db.execute("INSERT INTO workflow_routes(decision_id,run_id,owner_generation,state,created_at)"
                        " VALUES(?,?,?,?,?)", ("pending-decision", run["runId"], 1, "pending", now))
         self.assertIn("macro-task-deletion.routing", {b["reason"]["code"] for b in macro_task_deletion.preview(board.store, target)["blockers"]})
@@ -698,11 +700,13 @@ class MacroTaskDeletionTests(WorkflowTestCase):
             db.execute("INSERT INTO agent_credentials(credential_id,run_id,attempt_id,token_verifier,state)"
                        " VALUES(?,?,?,?,?)",
                        ("owned-credential", run["runId"], "owned-attempt", "private", "revoked"))
-            db.execute("INSERT INTO evaluation_decisions(decision_id,status,task,created_at) VALUES(?,?,?,?)",
-                       ("owned-decision", "completed", "private", now))
+            db.execute("INSERT INTO evaluation_decisions(decision_id,status,created_at) VALUES(?,?,?)",
+                       ("owned-decision", "completed", now))
             db.execute("INSERT INTO decision_requests(decision_id,request_id,input_fingerprint,"
                        "updated_at) VALUES(?,?,?,?)",
                        ("owned-decision", "owned-decision-request", "hash", now))
+            from hey_my_buddy.blackboard.routing import router_sequence
+            router_sequence.freeze_request(db, "owned-decision", snapshot={"baseInput": {"task": "private"}}, now=now)
             db.execute("INSERT INTO workflow_routes(decision_id,run_id,owner_generation,state,created_at)"
                        " VALUES(?,?,?,?,?)",
                        ("owned-decision", run["runId"], 1, "resolved", now))

@@ -1,12 +1,4 @@
-"""Immutable Router request, dispatch and claim facts in their owned relational tables.
-
-One request freezes its complete snapshot body, including ordered Router facts,
-the actor-free base input and admission inspections; each dispatched item owns one
-immutable document under its internal task; one claim binds an attempt to that
-dispatch and appends the ``router.claimed`` fact in the same transaction. An
-existing identity is rejected by the relational keys; nothing here starts a
-process, and no recorded document, hash or receipt is ever rewritten.
-"""
+"""Immutable Router round snapshots, dispatch identities and claim facts."""
 from __future__ import annotations
 
 import json
@@ -29,14 +21,19 @@ def _request(row: dict) -> dict:
     return {**json.loads(row["snapshot_json"]), "frozenAt": row["frozen_at"]}
 
 
-def _dispatch(row: dict) -> dict:
+def _dispatch(connection, row: dict) -> dict:
+    snapshot = request_snapshot(connection, row["decision_id"], row["round"])
+    buddy = {key: row[key] for key in _IDENTITY_FIELDS}
+    document = {**snapshot["baseInput"], "buddy": buddy,
+                "routerBuddyId": row["buddy_id"], "routerBuddy": buddy,
+                "routerIndex": row["router_index"]}
     return {"decisionId": row["decision_id"], "taskId": row["task_id"], "routerIndex": row["router_index"],
-            "buddyId": row["buddy_id"], "buddy": {key: row[key] for key in _IDENTITY_FIELDS},
-            "document": json.loads(row["document_json"]), "inputSha256": row["input_sha256"],
+            "round": row["round"], "buddyId": row["buddy_id"], "buddy": buddy,
+            "document": document, "inputSha256": sha256_text(canonical_json(document)),
             "createdAt": row["created_at"]}
 
 
-def freeze_request(connection, decision_id: str, *, snapshot: dict, now: str) -> dict:
+def freeze_request(connection, decision_id: str, *, snapshot: dict, now: str, round: int = 1) -> dict:
     """Freeze one request's Router facts, shared base input and admission inspections.
 
     The stored document is the request's own evidence: the settings snapshot the
@@ -45,46 +42,52 @@ def freeze_request(connection, decision_id: str, *, snapshot: dict, now: str) ->
     Every admitted snapshot field is retained.
     """
     row = _store(connection, "router_requests", {
-        "decision_id": decision_id, "snapshot_json": canonical_json(snapshot), "frozen_at": now,
+        "decision_id": decision_id, "round": round,
+        "snapshot_json": canonical_json(snapshot), "frozen_at": now,
     })
     return _request(row)
 
 
-def request_snapshot(connection, decision_id: str) -> dict | None:
-    """The frozen request snapshot of one decision, as a fresh copy, or None."""
-    row = connection.execute("SELECT * FROM router_requests WHERE decision_id=?", (decision_id,)).fetchone()
-    return _request(dict(row)) if row is not None else None
+def request_snapshot(connection, decision_id: str, round: int | None = None) -> dict:
+    """A required frozen round snapshot; omitted round selects the latest."""
+    if round is None:
+        row = connection.execute("SELECT * FROM router_requests WHERE decision_id=? ORDER BY round DESC LIMIT 1",
+                                 (decision_id,)).fetchone()
+    else:
+        row = connection.execute("SELECT * FROM router_requests WHERE decision_id=? AND round=?",
+                                 (decision_id, round)).fetchone()
+    if row is None:
+        raise KeyError((decision_id, round))
+    return _request(dict(row))
 
 
 def dispatch(connection, task_id: str) -> dict | None:
     """The immutable dispatch document of one internal Router task, or None."""
     row = connection.execute("SELECT * FROM router_dispatches WHERE task_id=?", (task_id,)).fetchone()
-    return _dispatch(dict(row)) if row is not None else None
+    return _dispatch(connection, dict(row)) if row is not None else None
 
 
 def dispatches(connection, decision_id: str) -> tuple[dict, ...]:
     """Fresh dispatch copies in indexed Router order, each retaining its own input."""
     rows = connection.execute("SELECT * FROM router_dispatches WHERE decision_id=? ORDER BY router_index,task_id",
                               (decision_id,))
-    return tuple(_dispatch(dict(row)) for row in rows)
+    return tuple(_dispatch(connection, dict(row)) for row in rows)
 
 
 def reserve_dispatch(connection, *, decision_id: str, task_id: str, router_index: int,
-                     buddy: dict, document: dict, now: str) -> dict:
+                     buddy: dict, now: str, round: int = 1) -> dict:
     """Record one dispatch under its internal task; the caller owns the transaction.
 
     ``buddy`` is the complete buddy identity — ``buddyId`` plus the four-part
-    tuple — exactly as resolution selected it. ``document`` is the exact input that
-    item will consume: the frozen base input plus this actor. Recording never
-    starts a process and never rewrites another dispatch's document or hash.
+    tuple — exactly as resolution selected it. The document is reconstructed
+    from the referenced round snapshot and this immutable actor identity.
     """
-    encoded = canonical_json(document)
     row = _store(connection, "router_dispatches", {
-        "task_id": task_id, "decision_id": decision_id, "router_index": router_index,
+        "task_id": task_id, "decision_id": decision_id, "round": round, "router_index": router_index,
         "buddy_id": buddy["buddyId"], **{key: buddy[key] for key in _IDENTITY_FIELDS},
-        "document_json": encoded, "input_sha256": sha256_text(encoded), "created_at": now,
+        "created_at": now,
     })
-    return _dispatch(row)
+    return _dispatch(connection, row)
 
 
 def claim(connection, attempt_id: str) -> dict | None:

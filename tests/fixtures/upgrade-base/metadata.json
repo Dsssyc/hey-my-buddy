@@ -1,99 +1,99 @@
 {
-  "boundary": "Base BoardService operations, message writers and InquiryBridge journal writers in process; synthetic native discovery, execution results and absent-process evidence; no daemon/IPC/model/account read. Every stored row comes from a base writer; no SQL seed remains. Text templates retain source digests. load_fixture binds private paths, stable path/inode identities and dependent hashes before acceptance; this preparation is not migration or new native execution.",
-  "catalogSha256": "a8c23bc839691370939c3e35b3f91b4b7845f1460d93c5d618a05a521ef5fcfe",
-  "dependencyMode": "prepared-read-only-interpreter",
+  "boundary": "Base BoardService operations, message writers and InquiryBridge journal writers in process; synthetic native discovery, execution results and absent-process evidence; no daemon/IPC/model/account read. Stored rows come from base writers; one completed retry dispatch and its dependent current-input and event digests are patched to represent the pre-0.46 excludedBuddies reason-empty form that fd9f04e8 cannot emit. No SQL seed creates a row. Text templates retain source digests. load_fixture binds private paths, stable path/inode identities and dependent hashes before acceptance; this preparation is not migration or new native execution.",
+  "catalogSha256": "4a60053082f545089f75271d7f0039aa9612ae06b5f328bfab7947521a22b19b",
+  "dependencyMode": "base-frozen-uv-environment",
   "dependencyVersions": {
-    "c-two": "0.8.2",
+    "c-two": "0.8.1",
     "portalocker": "3.2.0",
     "pydantic": "2.13.5",
     "zstandard": "0.25.0"
   },
   "fixedTimestamp": "2026-01-01T00:00:00.000Z",
   "format": 2,
-  "generationCommand": "python packaging/generate-upgrade-fixture.py --python <prepared-python> --work-dir tmp/s2-fixture-generation-2 --output-dir tests/fixtures/upgrade-base",
-  "generatorSha256": "bbfb9eb4db36a765fc06c83d33d669a31298a1e3e92a71913ba6f51ad4ae53c6",
+  "generationCommand": "python packaging/generate-upgrade-fixture.py --work-dir tmp/s3-task-only-generation-2 --output-dir tests/fixtures/upgrade-base",
+  "generatorSha256": "f4dd20c4c13a5a19bdf690000986eb7cb3ace70d656baf201952f2a3d450334b",
   "inquiryStock": {
     "dbDeliveredNoEntry": {
-      "attemptId": "00000000-0000-0000-0000-0000000000a6",
+      "attemptId": "00000000-0000-0000-0000-0000000000bb",
       "inquiryId": "fixture-dbDeliveredNoEntry",
-      "journal": "attempts/00000000-0000-0000-0000-0000000000a3/00000000-0000-0000-0000-0000000000a6/inquiry.results.jsonl",
-      "messageId": "00000000-0000-0000-0000-0000000000ae",
-      "taskId": "00000000-0000-0000-0000-0000000000a3"
+      "journal": "attempts/00000000-0000-0000-0000-0000000000b8/00000000-0000-0000-0000-0000000000bb/inquiry.results.jsonl",
+      "messageId": "00000000-0000-0000-0000-0000000000c3",
+      "taskId": "00000000-0000-0000-0000-0000000000b8"
     },
     "existingUnavailable": {
-      "attemptId": "00000000-0000-0000-0000-000000000013",
+      "attemptId": "00000000-0000-0000-0000-000000000028",
       "inquiryId": "fixture-inquiry",
-      "messageId": "00000000-0000-0000-0000-00000000005a",
-      "taskId": "00000000-0000-0000-0000-00000000000f"
+      "messageId": "00000000-0000-0000-0000-00000000006f",
+      "taskId": "00000000-0000-0000-0000-000000000024"
     },
     "journalAnsweredClaimed": {
-      "attemptId": "00000000-0000-0000-0000-0000000000a6",
+      "attemptId": "00000000-0000-0000-0000-0000000000bb",
       "inquiryId": "fixture-journalAnsweredClaimed",
-      "journal": "attempts/00000000-0000-0000-0000-0000000000a3/00000000-0000-0000-0000-0000000000a6/inquiry.results.jsonl",
-      "messageId": "00000000-0000-0000-0000-0000000000b0",
-      "taskId": "00000000-0000-0000-0000-0000000000a3"
+      "journal": "attempts/00000000-0000-0000-0000-0000000000b8/00000000-0000-0000-0000-0000000000bb/inquiry.results.jsonl",
+      "messageId": "00000000-0000-0000-0000-0000000000c5",
+      "taskId": "00000000-0000-0000-0000-0000000000b8"
     },
     "journalAnsweredDelivered": {
-      "attemptId": "00000000-0000-0000-0000-0000000000a6",
+      "attemptId": "00000000-0000-0000-0000-0000000000bb",
       "inquiryId": "fixture-journalAnsweredDelivered",
-      "journal": "attempts/00000000-0000-0000-0000-0000000000a3/00000000-0000-0000-0000-0000000000a6/inquiry.results.jsonl",
-      "messageId": "00000000-0000-0000-0000-0000000000ab",
-      "taskId": "00000000-0000-0000-0000-0000000000a3"
+      "journal": "attempts/00000000-0000-0000-0000-0000000000b8/00000000-0000-0000-0000-0000000000bb/inquiry.results.jsonl",
+      "messageId": "00000000-0000-0000-0000-0000000000c0",
+      "taskId": "00000000-0000-0000-0000-0000000000b8"
     },
     "journalAnsweredEarlier": {
-      "attemptId": "00000000-0000-0000-0000-0000000000a6",
+      "attemptId": "00000000-0000-0000-0000-0000000000bb",
       "inquiryId": "fixture-journalAnsweredEarlier",
-      "journal": "attempts/00000000-0000-0000-0000-0000000000a3/00000000-0000-0000-0000-0000000000a6/inquiry.results.jsonl",
-      "messageId": "00000000-0000-0000-0000-0000000000a9",
-      "taskId": "00000000-0000-0000-0000-0000000000a3"
+      "journal": "attempts/00000000-0000-0000-0000-0000000000b8/00000000-0000-0000-0000-0000000000bb/inquiry.results.jsonl",
+      "messageId": "00000000-0000-0000-0000-0000000000be",
+      "taskId": "00000000-0000-0000-0000-0000000000b8"
     },
     "journalAnsweredQueued": {
-      "attemptId": "00000000-0000-0000-0000-0000000000a6",
+      "attemptId": "00000000-0000-0000-0000-0000000000bb",
       "inquiryId": "fixture-journalAnsweredQueued",
-      "journal": "attempts/00000000-0000-0000-0000-0000000000a3/00000000-0000-0000-0000-0000000000a6/inquiry.results.jsonl",
-      "messageId": "00000000-0000-0000-0000-0000000000aa",
-      "taskId": "00000000-0000-0000-0000-0000000000a3"
+      "journal": "attempts/00000000-0000-0000-0000-0000000000b8/00000000-0000-0000-0000-0000000000bb/inquiry.results.jsonl",
+      "messageId": "00000000-0000-0000-0000-0000000000bf",
+      "taskId": "00000000-0000-0000-0000-0000000000b8"
     },
     "journalBindingMismatch": {
-      "attemptId": "00000000-0000-0000-0000-0000000000a6",
+      "attemptId": "00000000-0000-0000-0000-0000000000bb",
       "inquiryId": "fixture-journalBindingMismatch",
-      "journal": "attempts/00000000-0000-0000-0000-0000000000a3/00000000-0000-0000-0000-0000000000a6/inquiry.results.jsonl",
-      "messageId": "00000000-0000-0000-0000-0000000000af",
-      "taskId": "00000000-0000-0000-0000-0000000000a3"
+      "journal": "attempts/00000000-0000-0000-0000-0000000000b8/00000000-0000-0000-0000-0000000000bb/inquiry.results.jsonl",
+      "messageId": "00000000-0000-0000-0000-0000000000c4",
+      "taskId": "00000000-0000-0000-0000-0000000000b8"
     },
     "journalDeliveredOnly": {
-      "attemptId": "00000000-0000-0000-0000-0000000000a6",
+      "attemptId": "00000000-0000-0000-0000-0000000000bb",
       "inquiryId": "fixture-journalDeliveredOnly",
-      "journal": "attempts/00000000-0000-0000-0000-0000000000a3/00000000-0000-0000-0000-0000000000a6/inquiry.results.jsonl",
-      "messageId": "00000000-0000-0000-0000-0000000000ac",
-      "taskId": "00000000-0000-0000-0000-0000000000a3"
+      "journal": "attempts/00000000-0000-0000-0000-0000000000b8/00000000-0000-0000-0000-0000000000bb/inquiry.results.jsonl",
+      "messageId": "00000000-0000-0000-0000-0000000000c1",
+      "taskId": "00000000-0000-0000-0000-0000000000b8"
     },
     "journalNoEntry": {
-      "attemptId": "00000000-0000-0000-0000-0000000000a6",
+      "attemptId": "00000000-0000-0000-0000-0000000000bb",
       "inquiryId": "fixture-journalNoEntry",
-      "journal": "attempts/00000000-0000-0000-0000-0000000000a3/00000000-0000-0000-0000-0000000000a6/inquiry.results.jsonl",
-      "messageId": "00000000-0000-0000-0000-0000000000ad",
-      "taskId": "00000000-0000-0000-0000-0000000000a3"
+      "journal": "attempts/00000000-0000-0000-0000-0000000000b8/00000000-0000-0000-0000-0000000000bb/inquiry.results.jsonl",
+      "messageId": "00000000-0000-0000-0000-0000000000c2",
+      "taskId": "00000000-0000-0000-0000-0000000000b8"
     },
     "leadAuthored": {
-      "attemptId": "00000000-0000-0000-0000-000000000061",
+      "attemptId": "00000000-0000-0000-0000-000000000076",
       "inquiryId": "fixture-lead-inquiry",
-      "messageId": "00000000-0000-0000-0000-00000000006d",
-      "taskId": "00000000-0000-0000-0000-00000000005e"
+      "messageId": "00000000-0000-0000-0000-000000000082",
+      "taskId": "00000000-0000-0000-0000-000000000073"
     },
     "missingJournal": {
-      "attemptId": "00000000-0000-0000-0000-0000000000c1",
+      "attemptId": "00000000-0000-0000-0000-0000000000d6",
       "inquiryId": "fixture-missing-journal",
-      "journal": "attempts/00000000-0000-0000-0000-0000000000be/00000000-0000-0000-0000-0000000000c1/inquiry.results.jsonl",
-      "messageId": "00000000-0000-0000-0000-0000000000c4",
-      "taskId": "00000000-0000-0000-0000-0000000000be"
+      "journal": "attempts/00000000-0000-0000-0000-0000000000d3/00000000-0000-0000-0000-0000000000d6/inquiry.results.jsonl",
+      "messageId": "00000000-0000-0000-0000-0000000000d9",
+      "taskId": "00000000-0000-0000-0000-0000000000d3"
     },
     "unavailableOtherReason": {
-      "attemptId": "00000000-0000-0000-0000-0000000000a6",
+      "attemptId": "00000000-0000-0000-0000-0000000000bb",
       "inquiryId": "fixture-unavailableOtherReason",
-      "journal": "attempts/00000000-0000-0000-0000-0000000000a3/00000000-0000-0000-0000-0000000000a6/inquiry.results.jsonl",
-      "messageId": "00000000-0000-0000-0000-0000000000b1",
-      "taskId": "00000000-0000-0000-0000-0000000000a3"
+      "journal": "attempts/00000000-0000-0000-0000-0000000000b8/00000000-0000-0000-0000-0000000000bb/inquiry.results.jsonl",
+      "messageId": "00000000-0000-0000-0000-0000000000c6",
+      "taskId": "00000000-0000-0000-0000-0000000000b8"
     }
   },
   "loadedSourceModules": [
@@ -245,10 +245,10 @@
     "src/hey_my_buddy/protocol/windows_process.py",
     "src/hey_my_buddy/windows_files.py"
   ],
-  "operationsSha256": "688007fb651785553a7288257ff78a6c4382b86d54ce343d5d6864a3ad01f5eb",
-  "pythonInterpreter": "<prepared-python>",
-  "pythonVersion": "3.12.10",
-  "resourcesSha256": "98aa2c6e54dc1635312e6e4a7af0f19a8b4f8dcf1d9962aa6b4b072a19fae20b",
+  "operationsSha256": "e60eb33d010012ef61e1bda2027483a7aafe0ba3a8a2fdf30584067c4c5f229b",
+  "pythonInterpreter": "<fixture-root>/base/.venv/bin/python",
+  "pythonVersion": "3.12.12",
+  "resourcesSha256": "8834423fa73dd802f0bbb104bd1f92ac159c66a7c37faaac93ae2409e6d27d8f",
   "restoreInterface": "load_fixture(state: Path) -> dict; empty private state directory; returns source metadata plus state, fixtureRoot, operations and bindings; schema stays 28; baseline only after return",
   "routerBuddyIds": [
     "codex:openai:fixture-alpha:high",
@@ -452,20 +452,20 @@
   },
   "sourceTree": "507fd2b6b2fbda0b1953781419358fecc43e9236",
   "sourceVersion": "0.51.0",
-  "sqlSha256": "3bc2012a2ff245be64b404c00bb9edd44bcb719101d5630bd6de99cdf7e91b62",
+  "sqlSha256": "0bb75e173f1ee0fd7d985cda4147807030fef3a071cf4b3c929f6751ff187bd6",
   "stableIds": {
-    "accepted": "00000000-0000-0000-0000-000000000029",
-    "cancelled": "00000000-0000-0000-0000-000000000057",
-    "delivered": "00000000-0000-0000-0000-00000000000f",
-    "failed": "00000000-0000-0000-0000-00000000003b"
+    "accepted": "00000000-0000-0000-0000-00000000003e",
+    "cancelled": "00000000-0000-0000-0000-00000000006c",
+    "delivered": "00000000-0000-0000-0000-000000000024",
+    "failed": "00000000-0000-0000-0000-000000000050"
   },
   "stockIds": {
-    "adopted": "00000000-0000-0000-0000-00000000007a",
-    "helper": "00000000-0000-0000-0000-0000000000be",
-    "helperParent": "00000000-0000-0000-0000-0000000000a3",
-    "lead": "00000000-0000-0000-0000-00000000005e",
-    "leadOwned": "00000000-0000-0000-0000-000000000067",
-    "verified": "00000000-0000-0000-0000-000000000090"
+    "adopted": "00000000-0000-0000-0000-00000000008f",
+    "helper": "00000000-0000-0000-0000-0000000000d3",
+    "helperParent": "00000000-0000-0000-0000-0000000000b8",
+    "lead": "00000000-0000-0000-0000-000000000073",
+    "leadOwned": "00000000-0000-0000-0000-00000000007c",
+    "verified": "00000000-0000-0000-0000-0000000000a5"
   },
   "tableRowCounts": {
     "agent_credentials": 9,
@@ -475,17 +475,17 @@
     "attempt_process_identities": 1,
     "attempt_reminders": 2,
     "attempt_shutdown_evidence": 1,
-    "attempts": 12,
-    "buddies": 2,
+    "attempts": 16,
+    "buddies": 3,
     "catalog_current": 1,
     "catalog_observations": 4,
-    "catalog_pending": 1,
-    "commands": 33,
-    "decision_requests": 3,
+    "catalog_pending": 2,
+    "commands": 41,
+    "decision_requests": 8,
     "evaluation_catalog": 3,
-    "evaluation_decisions": 3,
+    "evaluation_decisions": 8,
     "evaluation_preferences": 2,
-    "events": 171,
+    "events": 213,
     "execution_issues": 0,
     "harness_account_reads": 1,
     "harness_health": 4,
@@ -497,15 +497,15 @@
     "model_service_notes": 1,
     "provider_cooling": 1,
     "reminder_settings": 1,
-    "resource_claims": 11,
+    "resource_claims": 15,
     "router_buddies": 2,
-    "router_claims": 3,
-    "router_dispatches": 3,
-    "router_outcomes": 3,
-    "router_requests": 3,
+    "router_claims": 7,
+    "router_dispatches": 7,
+    "router_outcomes": 4,
+    "router_requests": 6,
     "router_settings": 1,
     "service_issues": 0,
-    "tasks": 13,
+    "tasks": 17,
     "workflow_artifacts": 36,
     "workflow_children": 1,
     "workflow_continuations": 1,
@@ -522,6 +522,12 @@
     "workflow_workspace_conflicts": 2,
     "workspace_cleanup_plans": 6,
     "workspace_reservations": 10
+  },
+  "taskOnlyStock": {
+    "initialSole": "dec-00000000-0000-0000-0000-000000000016",
+    "initialZero": "dec-00000000-0000-0000-0000-000000000015",
+    "retrySole": "dec-00000000-0000-0000-0000-00000000001c",
+    "retryZero": "dec-00000000-0000-0000-0000-000000000017"
   },
   "workspaceInputCommit": "122ec20edcdeb97cc655ae3993c402c2c9c966a3"
 }

@@ -127,12 +127,21 @@ class UserPolicyTests(BoardTestCase):
         self.assertEqual([row['concurrency_limit'] for row in stored], [3])
         self.assert_denied('user_policy_publish', self.payload(self.publication_params(), 'forged-limits', modelServiceConcurrency=patch))
 
+    def test_model_service_concurrency_accepts_positive_limits_above_32(self):
+        grant = self.publication_params()
+        patch = [{**LIVE_MODEL_SERVICE, 'limit': 33}]
+        self.user('user_policy_publish', self.payload(grant, 'raised-limit', modelServiceConcurrency=patch))
+        with self.board_.store.db.read() as db:
+            stored = db.execute('SELECT concurrency_limit FROM model_service_concurrency').fetchone()
+        self.assertEqual(stored['concurrency_limit'], 33)
+
     def test_model_service_concurrency_rejects_derived_fields_and_bad_limits(self):
         grant = self.publication_params()
         for patch in (
             [{'harness': 'dsh', 'provider': 'fixture', 'model': 'live', 'limit': 3, 'active': 1}],
             [{'harness': 'dsh', 'provider': 'fixture', 'model': 'live', 'limit': 0}],
-            [{'harness': 'dsh', 'provider': 'fixture', 'model': 'live', 'limit': 33}],
+            [{'harness': 'dsh', 'provider': 'fixture', 'model': 'live', 'limit': 1.5}],
+            [{'harness': 'dsh', 'provider': 'fixture', 'model': 'live', 'limit': True}],
             [{'harness': 'dsh', 'provider': 'fixture', 'model': 'live', 'effort': 'max', 'limit': 3}],
             [{'harness': 'dsh', 'provider': 'fixture', 'model': 'live', 'limit': 3},
              {'harness': 'dsh', 'provider': 'fixture', 'model': 'live', 'limit': 4}],

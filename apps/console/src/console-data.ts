@@ -1,4 +1,4 @@
-import type { ModelService, Preference, Buddy, Task } from "./types";
+import type { ModelService, ModelServiceConcurrencyEntry, Preference, Buddy, Task } from "./types";
 import { catalogPending, buddyName } from "./buddy-name";
 import i18n from "i18next";
 import { actorText } from "./actor";
@@ -23,11 +23,11 @@ export function modelServicePending(buddies: Buddy[]): { pending: boolean; since
  * ADR-011 shared model service concurrency: one user-owned concurrent-task
  * limit per exact harness/provider/model tuple. All effort variants, routing
  * decisions and execution attempts of the model service share the count; the default is 2 and
- * the accepted range is the integers 1–32.
+ * the accepted range is positive JavaScript safe integers.
  */
 export const MODEL_SERVICE_CONCURRENCY_DEFAULT = 2;
 export const MODEL_SERVICE_CONCURRENCY_MIN = 1;
-export const MODEL_SERVICE_CONCURRENCY_MAX = 32;
+export const MODEL_SERVICE_CONCURRENCY_MAX = Number.MAX_SAFE_INTEGER;
 
 /** The model service's entry in a snapshot/page or draft list, or null when absent. */
 export function concurrencyEntryFor<E extends ModelService>(
@@ -37,12 +37,21 @@ export function concurrencyEntryFor<E extends ModelService>(
   return entries?.find((entry) => modelServiceKey(entry) === modelServiceKey(modelService)) ?? null;
 }
 
-/** Only an integer within 1–32 is a limit setting; anything else is not one. */
+/** Only a positive safe integer is a limit setting; anything else is not one. */
 export function concurrencyLimit(value: unknown): number | null {
-  return typeof value === "number" && Number.isInteger(value)
+  return typeof value === "number" && Number.isSafeInteger(value)
     && value >= MODEL_SERVICE_CONCURRENCY_MIN && value <= MODEL_SERVICE_CONCURRENCY_MAX
     ? value
     : null;
+}
+
+/** The read boundary checks a limit and its observed occupancy before display. */
+export function isModelServiceConcurrencyEntry(value: unknown): value is ModelServiceConcurrencyEntry {
+  if (typeof value !== "object" || value === null) return false;
+  const entry = value as Record<string, unknown>;
+  return ["harness", "provider", "model"].every(key => typeof entry[key] === "string" && entry[key] !== "")
+    && concurrencyLimit(entry.limit) !== null
+    && typeof entry.active === "number" && Number.isSafeInteger(entry.active) && entry.active >= 0;
 }
 /**
  * The Router retry interval in seconds: a plain number input, so there are no

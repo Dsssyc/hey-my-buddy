@@ -126,6 +126,17 @@ describe("bounded retained model history", () => {
     expect(command).toHaveBeenCalledTimes(1);
   });
 
+  it("rejects a retained page with an unsafe model service limit", async () => {
+    const { api } = fakeApi(() => ({ ...page(["retired"]), modelServiceConcurrency: [
+      { harness: "dsh", provider: "deepseek-official", model: "retired", limit: Number.MAX_SAFE_INTEGER + 1, active: 0 },
+    ] }));
+    const { result } = renderHook(() => useBuddyHistory(api, "csrf", "stable",
+      { query: "", harness: "", enabled: true }));
+    act(() => result.current.open());
+    await waitFor(() => expect(result.current.error).not.toBe(""));
+    expect(result.current.page).toBeNull();
+  });
+
   it("restarts at the first page when the filter changes", async () => {
     const { api, command } = fakeApi(params => page([String(params.query)]));
     const { result, rerender } = renderHook(({ query }) => useBuddyHistory(api, "csrf", "stable",

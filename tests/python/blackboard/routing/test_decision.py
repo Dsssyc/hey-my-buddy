@@ -184,9 +184,6 @@ class SelectionRequestTests(DecisionTestCase):
         no_candidate = board.call("selection_request", {"requestId":"no-candidates", "task":"task",
                                                         "requiredCapabilities":["missing:capability"]})
         self.assertEqual(no_candidate["status"], "needs-host")
-        with patch("hey_my_buddy.blackboard.routing.decision.MAX_DECISION_INPUT_BYTES", 1):
-            oversized = self.request(board, request_id="oversized-admission")
-        self.assertEqual(oversized["status"], "needs-host")
         health = board.store.decisions.health_summary()
         self.assertEqual((health["sampleCount"], health["failureCount"], health["consecutiveFailures"]), (0, 0, 0))
 
@@ -249,7 +246,7 @@ class SelectionRequestTests(DecisionTestCase):
         rendered = json.dumps(document)
         self.assertNotIn("token", rendered.lower())
         self.assertNotIn(str(self.directory), rendered)
-        self.assertEqual(decision["inputSha256"], decision["inputSha256"].lower())
+        self.assertNotIn("inputSha256", decision)
         # The decision task completed as ordinary work with a durable receipt.
         task = board.call("task_get", {"runId": request["runId"]})["task"]
         self.assertEqual(task["status"], "completed")
@@ -338,13 +335,19 @@ class SelectionRequestTests(DecisionTestCase):
                 self.use_helper(buddy_id=chosen)
                 request = self.request(board, request_id=f"freeze-{mode}")
                 frozen = self.decision(board, request["decisionId"])["input"]
+                from hey_my_buddy.blackboard.routing import router_sequence
+                with board.store.db.read() as connection:
+                    first_round = router_sequence.request_snapshot(connection, request["decisionId"], 1)
                 self.assertEqual([p["buddyId"] for p in frozen["buddies"]], [BUDDY_ID, SECOND_BUDDY_ID])
                 self.publish_user_patch(board, request_id=f"policy-{mode}", command_id=f"policy-{mode}",
                                         preferenceChanges=[{"buddyId": bounded, "mode": mode, "note": "new hard bound"}])
                 self.run_worker(board, worker_id=f"w-freeze-{mode}")
                 decision = self.decision(board, request["decisionId"])
                 with board.store.db.read() as connection:
-                    retained = json.loads(connection.execute("SELECT document_json FROM router_dispatches WHERE task_id=?", (request["runId"],)).fetchone()[0])
+                    retained = router_sequence.dispatch(connection, request["runId"])["document"]
+                    self.assertEqual(router_sequence.request_snapshot(connection, request["decisionId"], 1), first_round)
+                    self.assertEqual(router_sequence.request_snapshot(connection, request["decisionId"], 2)
+                                     ["baseInput"]["task"], first_round["baseInput"]["task"])
                 self.assertEqual(retained, frozen)
                 self.assertEqual(decision["status"], "completed")
                 self.assertEqual(decision["buddyId"], BUDDY_ID if mode == "pin" else SECOND_BUDDY_ID)

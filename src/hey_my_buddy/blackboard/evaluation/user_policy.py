@@ -32,8 +32,8 @@ def _model_service_concurrency_changes(params: dict) -> list[dict]:
             raise BoardError('INVALID_ARGUMENT', 'modelServiceConcurrency repeats a model service')
         seen.add(model_service)
         limit = value.get('limit')
-        if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= 32:
-            raise BoardError('INVALID_ARGUMENT', 'limit must be an integer between 1 and 32')
+        if isinstance(limit, bool) or not isinstance(limit, int) or limit < 1:
+            raise BoardError('INVALID_ARGUMENT', 'limit must be a positive integer')
     return values
 
 

@@ -11,6 +11,7 @@ import {
   MODEL_SERVICE_CONCURRENCY_MAX,
   MODEL_SERVICE_CONCURRENCY_MIN,
   concurrencyEntryFor,
+  concurrencyLimit,
 } from "../console-data";
 import { modelServiceNoteText, setConcurrencyLimit, setModelServiceNote, setPreference } from "../draft";
 import { formatDateTime } from "../i18n/format";
@@ -116,7 +117,7 @@ export function ModelDrawer({ row, harnessState, data, recorded, editor, selecte
   const selected = row.chips.find(chip => chip.buddy.buddyId === selectedBuddyId)!;
   const note = modelServiceNoteText(data, member);
   const publishedLimit = concurrencyEntryFor(recorded.modelServiceConcurrency, member)?.limit ?? MODEL_SERVICE_CONCURRENCY_DEFAULT;
-  const limitInvalid = !Number.isInteger(row.limit) || row.limit < MODEL_SERVICE_CONCURRENCY_MIN || row.limit > MODEL_SERVICE_CONCURRENCY_MAX;
+  const limitInvalid = concurrencyLimit(row.limit) === null;
   const buddyIds = new Set(modelService.buddies.map(buddy => buddy.buddyId));
   const mine = (issue: { modelService?: string; buddyId: string }) => issue.modelService === key || (!issue.modelService && buddyIds.has(issue.buddyId));
   const blocking = editor.blocking.filter(mine);
@@ -145,7 +146,7 @@ export function ModelDrawer({ row, harnessState, data, recorded, editor, selecte
         <div className="grid flex-1 grid-cols-[max-content_minmax(0,1fr)] grid-rows-[auto_auto_minmax(64px,1fr)] items-center gap-x-3 gap-y-2.5">
           {name(t("pane.concurrency"), !Object.is(row.limit, publishedLimit), { htmlFor: `${id}-limit` })}
           <div className="flex min-w-0 flex-wrap items-center gap-2.5">
-            <Hint text={editingLock}><Input id={`${id}-limit`} type="number" inputMode="numeric" className="h-8 w-16 bg-card px-2.5 text-sm tabular-nums shadow-none"
+            <Hint text={editingLock}><Input id={`${id}-limit`} type="number" inputMode="numeric" className="h-8 w-48 max-w-full bg-card px-2.5 text-sm tabular-nums shadow-none"
               min={MODEL_SERVICE_CONCURRENCY_MIN} max={MODEL_SERVICE_CONCURRENCY_MAX} step={1} value={Number.isNaN(row.limit) ? "" : row.limit}
               readOnly={!editing} aria-disabled={!editing || undefined} aria-label={t("pane.concurrencyLimit")}
               aria-invalid={limitInvalid || undefined} aria-describedby={`${id}-occupancy ${id}-concurrency-notice`} onChange={event => {

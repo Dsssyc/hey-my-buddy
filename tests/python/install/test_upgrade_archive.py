@@ -134,12 +134,12 @@ class UpgradeCutoverTests(BoardTestCase):
             self.state, column_projections=self.before['columnProjections'] if migrated else None)
         if migrated:
             self.assertEqual(actual['schema'], SCHEMA_VERSION)
-            self.assertEqual(actual['tables'], self.before['tables'])
+            self.assertEqual(actual['tables'], {**self.before['tables'], **self.before['expectedTableCounts']})
             self.assertEqual(actual['retainedMetaSha256'], self.before['retainedMetaSha256'])
             for table, fingerprint in self.before['fingerprints'].items():
                 if table != 'meta':
                     self.assertEqual(actual['fingerprints'][table],
-                                     self.before['expectedEventsSha256'] if table == 'events' else fingerprint,
+                                     self.before['expectedFingerprints'].get(table, fingerprint),
                                      table)
         else:
             self.assertEqual(actual, self.before)

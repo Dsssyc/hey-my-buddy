@@ -57,7 +57,7 @@ class RouterListHealthTestCase(BoardTestCase):
         self.sequence += 1
         with self.db.write() as db:
             return router_history.record_outcome(
-                db, buddy_id=buddy_id, plane="routing", request_id=request or f"route-{self.sequence}",
+                db, buddy_id=buddy_id, request_id=request or f"route-{self.sequence}",
                 task_id=task, attempt_id=attempt,
                 outcome=outcome, code=code, phase=phase,
                 facts={"routerIndex": index}, now=now or self.clock.value)
@@ -94,24 +94,24 @@ class RouterListHealthTestCase(BoardTestCase):
                      "routingBasis": {"candidateCount": candidates}}
         with self.db.write() as db:
             db.execute(
-                "INSERT INTO evaluation_decisions(decision_id,status,task,buddy_id,"
-                "created_at) VALUES(?,?,?,?,?)",
-                (decision, "failed", "task", buddy_id, at))
+                "INSERT INTO evaluation_decisions(decision_id,status,buddy_id,"
+                "created_at) VALUES(?,?,?,?)",
+                (decision, "failed", buddy_id, at))
             db.execute(
                 "INSERT INTO decision_requests(decision_id,request_id,input_fingerprint,task_id,attempt_id,"
                 "generation,requested_json,output_json,updated_at)"
                 " VALUES(?,?,'digest',?,?,0,?,?,?)",
                 (decision, f"legacy-request-{decision}", task_id, attempt_id,
                  canonical_json(requested), canonical_json(output or {}), at))
+            router_sequence.freeze_request(db, decision, snapshot={
+                "facts": {"routerBuddyIds": [buddy_id]}, "baseInput": {"task": "task"}, "inspections": []}, now=at)
             if dispatched:
-                router_sequence.freeze_request(db, decision, snapshot={
-                    "facts": {"routerBuddyIds": [buddy_id]}, "baseInput": {}, "inspections": []}, now=at)
                 buddy = db.execute("SELECT buddy_id,harness,provider,model,effort FROM buddies WHERE buddy_id=?",
                                    (buddy_id,)).fetchone()
                 router_sequence.reserve_dispatch(db, decision_id=decision, task_id=task_id,
                                                  router_index=0, buddy={"buddyId": buddy["buddy_id"],
                                                  **{key: buddy[key] for key in ("harness", "provider", "model", "effort")}},
-                                                 document={}, now=at)
+                                                 now=at)
             self.board_.store._append_event(db, kind, task_id=task_id, attempt_id=attempt_id,
                                             payload={"decisionId": decision,
                                                      **({"errorCode": code} if code else {})})
@@ -295,13 +295,13 @@ class CurrentRoleTests(RouterListHealthTestCase):
                 " VALUES('task-live','req-live','host','{}','digest',1,'decision','<private>',60,"
                 "'running',1,?,?)", (T0, T0))
             db.execute("INSERT INTO attempts(attempt_id,task_id,generation,nonce_verifier,execution_state,adapter,result_json,shutdown_confirmed,created_at,updated_at) VALUES('attempt-live','task-live',1,'nonce','executing','decision',NULL,0,?,?)", (T0, T0))
-            db.execute("INSERT INTO evaluation_decisions(decision_id,status,task,created_at) VALUES('dec-live','running','live',?)", (T0,))
+            db.execute("INSERT INTO evaluation_decisions(decision_id,status,created_at) VALUES('dec-live','running',?)", (T0,))
             db.execute("INSERT INTO decision_requests(decision_id,request_id,input_fingerprint,requested_json,updated_at) VALUES('dec-live','req-live','live','{}',?)", (T0,))
-            router_sequence.freeze_request(db, 'dec-live', snapshot={}, now=T0)
+            router_sequence.freeze_request(db, 'dec-live', snapshot={"baseInput": {"task": "live"}}, now=T0)
             buddy = db.execute("SELECT * FROM buddies WHERE buddy_id=?", (A,)).fetchone()
             router_sequence.reserve_dispatch(db, decision_id='dec-live', task_id='task-live', router_index=0,
                 buddy={"buddyId": A, **{key: buddy[key] for key in ("harness", "provider", "model", "effort")}},
-                document={}, now=T0)
+                now=T0)
             router_sequence.record_claim(db, task_id='task-live', attempt_id='attempt-live', generation=1, now=T0)
         self.record(A, code="router-budget-exhausted", index=0, now=T0, task="task-live", attempt="attempt-live")
         summary = self.state()

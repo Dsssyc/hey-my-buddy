@@ -44,8 +44,8 @@ class RoutingHealthTests(BoardTestCase):
                    "completedAt": now}
         with self.db.write() as connection:
             connection.execute(
-                "INSERT INTO evaluation_decisions(decision_id,status,task,created_at)"
-                " VALUES(?,'running','fixture selection',?)", (decision_id, now))
+                "INSERT INTO evaluation_decisions(decision_id,status,created_at)"
+                " VALUES(?,'running',?)", (decision_id, now))
             if invoked:
                 spec = {"adapter": "decision", "task": "fixture selection",
                         "decision": {"decisionId": decision_id, "kind": "select", "routerBudgetSeconds": 60}}
@@ -62,12 +62,12 @@ class RoutingHealthTests(BoardTestCase):
                 " task_id,attempt_id,generation,updated_at) VALUES(?,?,?,?,?,?,?)",
                 (decision_id, decision_id, sha256_text(decision_id), task_id, attempt_id,
                  1 if invoked else None, now))
+            router_sequence.freeze_request(connection, decision_id,
+                snapshot={"facts": {}, "baseInput": {"task": "fixture selection"}, "inspections": []}, now=now)
             if invoked:
-                router_sequence.freeze_request(connection, decision_id,
-                    snapshot={"facts": {}, "baseInput": {}, "inspections": []}, now=now)
                 router_sequence.reserve_dispatch(connection, decision_id=decision_id, task_id=task_id,
                     router_index=0, buddy={"buddyId":"fixture-router", "harness":"dsh", "provider":"fixture",
-                                           "model":"fixture", "effort":"max"}, document={}, now=now)
+                                           "model":"fixture", "effort":"max"}, now=now)
             self.coordinator._finish(connection, self.coordinator._row(connection, decision_id),
                                      status=status, now=now, output=output,
                                      reason=({"code": code or output.get("code") or "router-no-answer", "params": {}}
@@ -76,7 +76,7 @@ class RoutingHealthTests(BoardTestCase):
                                      note=(output.get("decision") or {}).get("note"),
                                      buddy_id="worker-fixture" if status == "completed" else None)
             if invoked and status == "completed":
-                record_outcome(connection, buddy_id="fixture-router", plane="routing", request_id=decision_id,
+                record_outcome(connection, buddy_id="fixture-router", request_id=decision_id,
                                task_id=task_id, attempt_id=attempt_id, outcome="answered", code=None,
                                phase="publication", facts={"routerIndex":0}, now=now)
             self.assertEqual(connection.execute("PRAGMA foreign_key_check").fetchall(), [])
@@ -213,15 +213,6 @@ class RoutingHealthTests(BoardTestCase):
         self.assertEqual(len(health["recentFailures"]), 5)
         self.assertEqual(health["lastSuccessAt"], success_at)
         self.assertEqual(health["lastSuccessDecisionId"], success_id)
-
-    def test_other_plane_answer_cannot_turn_program_selection_into_router_recovery(self):
-        decision_id, now = self.settle("completed", invoked=False,
-                                       output={"programSelection": {"code": "single-candidate"}})
-        with self.db.write() as connection:
-            record_outcome(connection, buddy_id="fixture-router", plane="portrait", request_id=decision_id,
-                           task_id=None, attempt_id=None, outcome="answered", code=None,
-                           phase="publication", facts={"routerIndex": 0}, now=now)
-        self.assertIsNone(self.coordinator.health_summary()["lastSuccessDecisionId"])
 
     def test_reads_are_diagnostic_and_do_not_write(self):
         self.settle("failed", code="timeout")

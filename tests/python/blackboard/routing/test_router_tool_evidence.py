@@ -68,14 +68,15 @@ class RouterToolEvidenceTests(DecisionTestCase):
         self.assertEqual(self.decision(board, requested['decisionId'])['reason']['code'], 'router-tool-evidence-unverified')
 
     def test_frozen_routing_mode_defines_the_permission_without_repeated_storage(self):
-        import hashlib
         board = self.board()
         self.seed(board)
         requested, claim = self.request_route(board, 'frozen-mode')
         row, document = self.frozen(board, requested['decisionId'])
         with board.store.db.read() as db:
-            original = db.execute('SELECT input_json,input_sha256 FROM decision_requests WHERE decision_id=?', (requested['decisionId'],)).fetchone()
-            self.assertEqual(hashlib.sha256(original['input_json'].encode()).hexdigest(), original['input_sha256'])
+            from hey_my_buddy.blackboard.routing import router_sequence
+            original = router_sequence.dispatch(db, requested['runId'])
+            self.assertEqual(original['document'], claim['decisionInput'])
+            self.assertEqual(original['document'], document)
             self.assertEqual(set(db.execute('SELECT * FROM router_claims WHERE attempt_id=?', (claim['attempt']['attemptId'],)).fetchone().keys()), {'attempt_id', 'task_id', 'generation'})
         self.assertEqual(document['routingMode'], 'review')
         package = self.package_for(board, claim, requested, settled('execute', 'read-command'))
@@ -98,7 +99,9 @@ class RouterToolEvidenceTests(DecisionTestCase):
     def frozen(self, board, decision_id):
         with board.store.db.read() as connection:
             row = board.store.decisions._row(connection, decision_id)
-            return row, json.loads(row["input_json"])
+            from hey_my_buddy.blackboard.routing import router_sequence
+            task_id = row["decision_task_id"]
+            return row, router_sequence.dispatch(connection, task_id)["document"]
 
     def problem(self, board, decision_id, output):
         row, document = self.frozen(board, decision_id)

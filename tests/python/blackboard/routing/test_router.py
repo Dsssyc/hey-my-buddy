@@ -138,15 +138,25 @@ class RouterPublicationTests(WorkflowTestCase):
         board = self.board()
         self.seed(board, decision_buddy=None)
         submitted = board.call('workflow_submit', {
-            'requestId': 'frozen-reroute', 'hostId': 'host', 'task': 'Original task',
+            'requestId': 'frozen-reroute', 'hostId': 'host', 'task': 'Original task ' + 'T' * 130000,
             'cwd': str(self.workdir()), 'executionWorkspace': {'kind': 'existing', 'access': 'write'}})
         self.controls[submitted['runId']] = submitted['control']
-        continued = self.continue_run(board, submitted, reroute=True, input='Changed continuation task')
+        continuation_text = 'Changed continuation task ' + 'C' * 50000
+        continued = self.continue_run(board, submitted, reroute=True, input=continuation_text)
         self.assertEqual(continued['routing']['status'], 'queued')
         self.assertIsNone(continued['routing']['source'])
+        helper_text = 'H' * 12000
+        with board.store.db.write() as connection:
+            connection.execute("UPDATE workflow_continuations SET helper_outcomes_json=?"
+                               " WHERE run_id=? AND state='queued'",
+                               (json.dumps([{"result": helper_text}]), submitted['runId']))
         with board.store.db.read() as connection:
             self.assertEqual(connection.execute('SELECT COUNT(*) FROM workflow_routes').fetchone()[0], 1)
             self.assertIsNone(connection.execute('SELECT workspace_manifest_json FROM workflow_continuations').fetchone()[0])
+        board.console_call('user_policy_publish', {
+            'commandId': 'enable-router-for-continuation',
+            'configuration': {'routerBuddyIds': [BUDDY_ID]},
+        })
         board.store.workflow.prepare_continuation_workspace({'runId': submitted['runId']})
         with board.store.db.read() as connection:
             self.assertEqual(connection.execute('SELECT COUNT(*) FROM workflow_routes').fetchone()[0], 2)
@@ -154,7 +164,13 @@ class RouterPublicationTests(WorkflowTestCase):
             self.assertIsNotNone(continuation)
             frozen = json.loads(connection.execute('SELECT requested_json FROM decision_requests ORDER BY rowid DESC LIMIT 1').fetchone()[0])
             self.assertEqual(frozen['executionWorkspace'], json.loads(continuation))
-            self.assertIn('Changed continuation task', frozen['task'])
+            self.assertIn(continuation_text, frozen['task'])
+            self.assertIn(helper_text, frozen['task'])
+            self.assertGreater(len(frozen['task'].encode()), 128 * 1024)
+        routed = board.call('workflow_get', {'runId': submitted['runId']})
+        claimed = self.claim(board, 'router', run_id=routed['routing']['taskId'])['claim']
+        self.assertIsNotNone(claimed)
+        self.assertEqual(claimed['decisionInput']['task'], frozen['task'])
 
     def test_budget_publication_preserves_model_and_schema(self):
         from hey_my_buddy.blackboard.store.db import SCHEMA_VERSION

@@ -165,6 +165,18 @@ describe("a model's concurrency", () => {
     expect(within(pane()).queryByRole("img", { name: "未保存" })).toBeNull();
   });
 
+  it("publishes a limit above the former cap", async () => {
+    const f = fixture();
+    const user = userEvent.setup();
+    await openFlashCard(f, user);
+    const input = concurrencyInput();
+    await user.clear(input);
+    await user.type(input, "33");
+    await user.click(screen.getByRole("button", { name: "保存" }));
+    await screen.findByText("设置已保存");
+    expect(f.published[0].modelServiceConcurrency[0].limit).toBe(33);
+  });
+
   it("edits one setting shared by all the model's reasoning efforts", async () => {
     const f = fixture();
     const user = userEvent.setup();
@@ -185,13 +197,13 @@ describe("a model's concurrency", () => {
     await openFlashCard(f, user);
     const input = concurrencyInput();
     await user.clear(input);
-    await user.type(input, "33");
-    expect(input).toHaveProperty("value", "33");
+    await user.type(input, "9007199254740992");
+    expect(input).toHaveProperty("value", "9007199254740992");
     expect(input.getAttribute("aria-invalid")).toBe("true");
-    expect(within(pane()).getByText("需要 1–32 的整数")).toBeTruthy();
+    expect(within(pane()).getByText(`需要 1–${Number.MAX_SAFE_INTEGER} 的整数`)).toBeTruthy();
     // Blurring must not silently publish the intermediate valid prefix (3).
     await user.tab();
-    expect(input).toHaveProperty("value", "33");
+    expect(input).toHaveProperty("value", "9007199254740992");
     await user.click(screen.getByRole("button", { name: "保存" }));
     expect(f.published).toHaveLength(0);
     await user.clear(input);

@@ -143,6 +143,8 @@ class DecisionAdapter(Adapter):
             "harnessVersion": native_result.get("harnessVersion"),
             "nativeEvidence": native_result.get("nativeEvidence"),
             "nativeFailure": native_result.get("nativeFailure"),
+            **({"nativeError": native_result["error"]} if outcome.status != "ok"
+               and isinstance(native_result.get("error"), str) else {}),
             "correctionCount": native_result.get("correctionCount"),
             "budget": document["budget"], "inputVerification": verification,
             **router.routing_facts(document),

@@ -149,7 +149,7 @@ class AdmissionTests(RouterDispatchTestCase):
         decision = self.decision_row(result["decisionId"])
         self.assertEqual(decision["buddyId"], A)
         self.assertFalse(decision["routerCalled"])
-        self.assertIsNone(self.snapshot_of(result["decisionId"]))
+        self.assertEqual(self.snapshot_of(result["decisionId"])["baseInput"]["task"], "fix the parser")
         self.assertEqual(self.tasks(), [])
         self.assertEqual(self.attempts(), [])
         self.assertEqual(self.router_events("router.no_answer", "router.claimed"), [])
@@ -159,7 +159,7 @@ class AdmissionTests(RouterDispatchTestCase):
         # A third candidate keeps the Router path alive even when A drops out.
         self.add_buddy(C, model="charlie")
         with self.board_.store.db.write() as db:
-            router_history.record_outcome(db, buddy_id=A, plane="routing", request_id="route-earlier",
+            router_history.record_outcome(db, buddy_id=A, request_id="route-earlier",
                                           task_id=None, attempt_id=None, outcome="no_answer",
                                           code="timeout", phase="runtime", facts={"routerIndex": 0}, now=T0)
         skipped = self.request(request_id="pick-skip")
@@ -228,12 +228,11 @@ class PreclaimAdvanceTests(RouterDispatchTestCase):
             return {key: value for key, value in document.items() if key not in actor_keys}
 
         self.assertEqual(without_actor(first["document"]), without_actor(second["document"]))
-        # The request points at the current dispatch input and keeps its original ask.
+        # The request points at the current dispatch and keeps its original ask.
         with self.board_.store.db.read() as db:
-            row = db.execute("SELECT task_id,input_json,input_sha256,requested_json FROM decision_requests"
+            row = db.execute("SELECT task_id,requested_json FROM decision_requests"
                              " WHERE decision_id=?", (result["decisionId"],)).fetchone()
         self.assertEqual(row["task_id"], second_task)
-        self.assertEqual(row["input_sha256"], second["inputSha256"])
         self.assertEqual(json.loads(row["requested_json"])["task"], "fix the parser")
         self.assertEqual(len(self.tasks(state="queued")), 1)
 
@@ -285,7 +284,7 @@ class PreclaimAdvanceTests(RouterDispatchTestCase):
         # The dispatched item owes an answer and one retry execution is active
         # elsewhere: this request queues without switching or recording anything.
         with self.board_.store.db.write() as db:
-            router_history.record_outcome(db, buddy_id=A, plane="routing", request_id="route-elsewhere",
+            router_history.record_outcome(db, buddy_id=A, request_id="route-elsewhere",
                                           task_id=None, attempt_id=None, outcome="no_answer",
                                           code="timeout", phase="runtime", facts={"routerIndex": 0}, now=T0)
             db.execute(
@@ -294,16 +293,16 @@ class PreclaimAdvanceTests(RouterDispatchTestCase):
                 " VALUES('retry-1','retry','host','{}','digest',1,'dsh','/work',60,'running',1,?,?)",
                 (T0, T0))
             db.execute("INSERT INTO attempts(attempt_id,task_id,generation,nonce_verifier,execution_state,adapter,model_harness,model_provider,model_model,started_at,created_at,updated_at) VALUES('att-retry','retry-1',1,'nonce','executing','dsh','dsh','fixture','alpha',?,?,?)", (T0, T0, T0))
-            db.execute("INSERT INTO evaluation_decisions(decision_id,status,task,created_at)"
-                       " VALUES('dec-retry','queued','task',?)", (T0,))
+            db.execute("INSERT INTO evaluation_decisions(decision_id,status,created_at)"
+                       " VALUES('dec-retry','queued',?)", (T0,))
             db.execute("INSERT INTO decision_requests(decision_id,request_id,input_fingerprint,requested_json,updated_at)"
                        " VALUES('dec-retry','route-retry','digest','{}',?)", (T0,))
-            router_sequence.freeze_request(db, "dec-retry", snapshot={"facts": {}, "baseInput": {}, "inspections": []}, now=T0)
+            router_sequence.freeze_request(db, "dec-retry", snapshot={"facts": {}, "baseInput": {"task": "task"}, "inspections": []}, now=T0)
             buddy = db.execute("SELECT * FROM buddies WHERE buddy_id=?", (A,)).fetchone()
             router_sequence.reserve_dispatch(db, decision_id="dec-retry", task_id="retry-1", router_index=0,
                                              buddy={"buddyId": A, **{key: buddy[key] for key in
                                                    ("harness", "provider", "model", "effort")}},
-                                             document={}, now=T0)
+                                             now=T0)
             router_sequence.record_claim(db, task_id="retry-1", attempt_id="att-retry", generation=1, now=T0)
         blocked = self.claim("retry")
         self.assertIsNone(blocked["claim"])
@@ -367,9 +366,8 @@ class ClaimTests(RouterDispatchTestCase):
         # The decision is running and its current input is the dispatch document.
         self.assertEqual(self.decision_row(result["decisionId"])["status"], "running")
         with self.board_.store.db.read() as db:
-            row = db.execute("SELECT input_sha256 FROM decision_requests WHERE decision_id=?",
-                             (result["decisionId"],)).fetchone()
-        self.assertEqual(row["input_sha256"], self.dispatch_of(result["runId"])["inputSha256"])
+            self.assertEqual(router_sequence.dispatch(db, result["runId"])["inputSha256"],
+                             self.dispatch_of(result["runId"])["inputSha256"])
 
     def test_selector_model_service_reads_the_current_dispatch(self):
         result = self.request()
@@ -474,9 +472,7 @@ class HostReviewRegressionTests(RouterDispatchTestCase):
     def test_new_catalog_reason_does_not_rewrite_sent_dispatch_bytes(self):
         frozen = self.request()
         with self.board_.store.db.read() as db:
-            before = db.execute('SELECT document_json,input_sha256 FROM router_dispatches WHERE task_id=?',
-                                (frozen['runId'],)).fetchone()
-            original = tuple(before)
+            original = router_sequence.dispatch(db, frozen['runId'])
         with self.board_.store.db.write() as db:
             db.execute('UPDATE buddies SET available=0,unavailable_code=?,unavailable_params_json=?,unavailable_content=? WHERE buddy_id=?',
                        ('catalog.native-unavailable', '{}', '  native text\n', B))
@@ -486,9 +482,8 @@ class HostReviewRegressionTests(RouterDispatchTestCase):
                          {'code': 'catalog.native-unavailable', 'params': {}})
         self.assertEqual(current_input['unavailableContent'], '  native text\n')
         with self.board_.store.db.read() as db:
-            after = db.execute('SELECT document_json,input_sha256 FROM router_dispatches WHERE task_id=?',
-                               (frozen['runId'],)).fetchone()
-        self.assertEqual(tuple(after), original)
+            after = router_sequence.dispatch(db, frozen['runId'])
+        self.assertEqual(after, original)
 
     def catalog_read(self, *, changed=False):
         return self.board_.evaluation.record_catalog(catalog.canonical_payload({
@@ -518,38 +513,26 @@ class HostReviewRegressionTests(RouterDispatchTestCase):
         self.assertEqual(committed['claim']['decisionInput'], original['document'])
         self.assertEqual(self.router_events('router.no_answer'), [])
 
-    def test_actor_graft_is_included_in_admission_byte_ceiling(self):
+    def test_actor_graft_is_reconstructed_without_a_packet_ceiling(self):
         first = self.request(request_id="pick-1")
-        bound = len(canonical_json(self.snapshot_of(first["decisionId"])["baseInput"]).encode("utf-8"))
-        with patch("hey_my_buddy.blackboard.routing.decision.MAX_DECISION_INPUT_BYTES", bound):
-            refused = self.request(request_id="pick-2")
-        self.assertEqual(refused["status"], "needs-host")
-        self.assertIsNone(refused["runId"])
-        self.assertEqual(len(self.tasks()), 1)
-        self.assertIsNotNone(self.snapshot_of(refused["decisionId"]))
-        oversized = self.decision_row(refused["decisionId"])["reason"]
-        self.assertEqual(oversized["code"], "router-input-too-large")
-        self.assertEqual(oversized["params"]["limit"], bound)
-        self.assertGreater(oversized["params"]["bytes"], bound)
+        second = self.request(request_id="pick-2")
+        self.assertEqual(second["status"], "queued")
+        self.assertEqual(len(self.tasks()), 2)
+        self.assertEqual(self.dispatch_of(second["runId"])["document"]["task"],
+                         self.snapshot_of(second["decisionId"])["baseInput"]["task"])
 
-    def test_next_actor_byte_ceiling_keeps_the_original_task_and_input(self):
+    def test_next_actor_keeps_the_original_task_and_input(self):
         with self.board_.store.db.write() as db:
             db.execute("UPDATE buddies SET model=? WHERE buddy_id=?", ("b" * 40, B))
         first = self.request()
         original = self.dispatch_of(first["runId"])
-        bound = len(canonical_json(original["document"]).encode("utf-8"))
         with self.board_.store.db.write() as db:
             db.execute("UPDATE buddies SET enabled=0 WHERE buddy_id=?", (A,))
-        with patch("hey_my_buddy.blackboard.routing.decision.MAX_DECISION_INPUT_BYTES", bound):
-            response = self.claim("oversize")
+        response = self.claim("next-actor")
         self.assertIsNone(response["claim"])
-        self.assertEqual(self.decision_row(first["decisionId"])["status"], "needs-host")
-        oversized = self.decision_row(first["decisionId"])["reason"]
-        self.assertEqual(oversized["code"], "router-input-too-large")
-        self.assertEqual(oversized["params"]["limit"], bound)
-        self.assertGreater(oversized["params"]["bytes"], bound)
+        self.assertEqual(self.decision_row(first["decisionId"])["status"], "queued")
         self.assertEqual(self.dispatch_of(first["runId"]), original)
-        self.assertEqual(len(self.tasks()), 1)
+        self.assertEqual(len(self.tasks()), 2)
         self.assertEqual([event[1]["buddyId"] for event in self.router_events("router.no_answer")], [A])
 
     def test_unhealthy_router_records_preflight_failure_without_an_attempt(self):

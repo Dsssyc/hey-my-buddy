@@ -41,22 +41,20 @@ MAX_LIST_LIMIT = 100
 #: The shared row projection for one decision. The paginated list reader adds
 #: ``decision_requests.rowid`` as its stable keyset; nothing here persists anything.
 _ROW_COLUMNS = (
-    "d.decision_id, d.status, d.task, d.buddy_id, d.reason_code, d.reason_params_json, d.note,"
+    "d.decision_id, d.status, d.buddy_id, d.reason_code, d.reason_params_json, d.note,"
     " d.created_at, r.request_id, r.input_fingerprint,"
     " r.task_id AS decision_task_id, r.attempt_id AS decision_attempt_id,"
     " r.generation AS decision_generation,"
-    " r.selected_json, r.input_json, r.input_sha256, r.output_json,"
+    " r.selected_json, r.output_json,"
     " r.requested_json,"
     " r.updated_at AS request_updated_at"
 )
 _ROW_FROM = " FROM decision_requests r JOIN evaluation_decisions d ON d.decision_id = r.decision_id"
 
-MAX_DECISION_TASK_BYTES = 8192
 ANSWER_VALIDATION_CODES = frozenset({
     "answer-empty", "answer-not-json", "answer-invalid-json", "answer-shape",
     "answer-unexpected-field",
 })
-MAX_DECISION_INPUT_BYTES = 128 * 1024
 #: Extra room after the helper's own bound: the worker deadline must not fire while
 #: the helper is still shutting its detached child down.
 TIMEOUT_GRACE_SECONDS = 10
@@ -256,7 +254,7 @@ class DecisionCoordinator:
         request_id = schemas.required_string(
             params, "requestId", max_length=128, pattern=schemas.IDENTIFIER_PATTERN
         )
-        task_text, _size = schemas.bounded_text(params, "task", max_bytes=MAX_DECISION_TASK_BYTES)
+        task_text, _size = schemas.bounded_text(params, "task", max_bytes=schemas.MAX_TASK_BYTES)
         capabilities = schemas.string_list(params, "requiredCapabilities", limit=schemas.MAX_CAPABILITIES)
         request = {
             "kind": "select",
@@ -265,7 +263,7 @@ class DecisionCoordinator:
         }
         return self._create(request_id, request)
 
-    def _create(self, request_id: str, request: dict, *, connection=None, needs_host_reason: dict | None = None) -> dict:
+    def _create(self, request_id: str, request: dict, *, connection=None) -> dict:
         # Keep the caller's admission input independent of the persisted snapshot,
         # including when an internal caller reuses the same dictionary on replay.
         request = dict(request)
@@ -302,8 +300,8 @@ class DecisionCoordinator:
             task_text = request.get("task") or ""
             sole_candidate: sqlite3.Row | None = None
             resolution = None
-            snapshot: dict | None = None
             facts = {"routerBuddyId": None, "routingMode": None, "budget": None}
+            snapshot: dict = {"facts": facts, "baseInput": {"task": task_text}, "inspections": []}
             if len(candidates) == 1:
                 # One frozen legal candidate leaves the Router nothing to compare,
                 # so the program selects it directly: no Router task is created and
@@ -347,18 +345,15 @@ class DecisionCoordinator:
                         [item["buddyId"] for item in base_input["buddies"]], facts["routingMode"])
                 snapshot = {"facts": facts, "baseInput": base_input,
                             "inspections": [dict(entry) for entry in resolution.inspections]}
-                if needs_host_reason is not None:
-                    status, reason = "needs-host", needs_host_reason
-                elif facts["routingMode"] is None or resolution.buddy is None:
+                if facts["routingMode"] is None or resolution.buddy is None:
                     status, reason = "needs-host", resolution.problem
             task_id = None
             connection.execute(
-                "INSERT INTO evaluation_decisions(decision_id, status, task, buddy_id, reason_code,"
-                " reason_params_json, created_at) VALUES(?,?,?,?,?,?,?)",
+                "INSERT INTO evaluation_decisions(decision_id, status, buddy_id, reason_code,"
+                " reason_params_json, created_at) VALUES(?,?,?,?,?,?)",
                 (
                     decision_id,
                     status,
-                    task_text,
                     None,
                     reason["code"] if reason else None,
                     canonical_json(reason["params"]) if reason else None,
@@ -377,11 +372,10 @@ class DecisionCoordinator:
                     now,
                 ),
             )
-            if snapshot is not None:
-                # The request row exists before its first dispatch is queued; the
-                # frozen snapshot and any admission preflight facts settle in this
-                # same transaction.
-                router_sequence.freeze_request(connection, decision_id, snapshot=snapshot, now=now)
+            # Every decision has a round-one snapshot, even when program selection
+            # needs no Router dispatch. Its task is the single stored task source.
+            router_sequence.freeze_request(connection, decision_id, snapshot=snapshot, now=now)
+            if resolution is not None:
                 self._record_preflight_walk(connection, request_id, resolution.inspections, now=now)
             if status == "queued" and resolution is not None and resolution.buddy is not None:
                 task_id, problem = self._queue_router_dispatch(
@@ -428,7 +422,6 @@ class DecisionCoordinator:
         if continuation:
             task_text += "\n\nContinuation:\n" + continuation["input_text"]
             task_text += "\nHelper outcomes:\n" + continuation["helper_outcomes_json"]
-        task_bytes = len(task_text.encode("utf-8"))
         access = manifest.get("access", "write") if manifest is not None else "write"
         required_capabilities = list(spec.get("requiredCapabilities", []))
         if f"permission:{access}" not in required_capabilities:
@@ -440,15 +433,7 @@ class DecisionCoordinator:
             "constraints": schemas.buddy_constraints(spec),
             "workflowRouting": True,
         }
-        needs_host_reason = None
-        if task_bytes > MAX_DECISION_TASK_BYTES:
-            # The immutable Micro task owns the full text. A selector cannot choose from
-            # an incomplete task, and its bounded audit stores only a reference.
-            request["task"] = f"Micro task {run_id} (full task retained in workflow)"
-            request["taskReference"] = {"runId": run_id, "bytes": task_bytes, "sha256": sha256_text(task_text)}
-            needs_host_reason = make_reason("router-input-too-large", bytes=task_bytes, limit=MAX_DECISION_TASK_BYTES)
-        return self._create(f"workflow:{run_id}:{sequence}", request, connection=connection,
-                            needs_host_reason=needs_host_reason)
+        return self._create(f"workflow:{run_id}:{sequence}", request, connection=connection)
 
     def _create_task(self, connection: sqlite3.Connection, *, decision_id: str, request_id: str, router_budget_seconds: int, now: str, request_key: str | None = None) -> str:
         """Admit one ordinary selection task, using the real queue and capacity.
@@ -528,7 +513,6 @@ class DecisionCoordinator:
             record_outcome(
                 connection,
                 buddy_id=entry["buddyId"],
-                plane="routing",
                 request_id=request_id,
                 task_id=None,
                 attempt_id=None,
@@ -551,18 +535,9 @@ class DecisionCoordinator:
         micro task keeps waiting for routing; no business Worker turn opens.
         """
         decision_id = row["decision_id"]
-        snapshot = router_sequence.request_snapshot(connection, decision_id)
+        round = connection.execute("SELECT MAX(round) FROM router_requests WHERE decision_id=?",
+                                   (decision_id,)).fetchone()[0]
         identity_map = {key: resolution.buddy[key] for key in schemas.BUDDY_FIELDS}
-        document = {
-            **(json.loads(row["input_json"]) if row["input_json"] else snapshot["baseInput"]),
-            "buddy": identity_map,
-            "routerBuddyId": resolution.buddy_id,
-            "routerBuddy": identity_map,
-            "routerIndex": resolution.router_index,
-        }
-        input_bytes = len(canonical_json(document).encode("utf-8"))
-        if input_bytes > MAX_DECISION_INPUT_BYTES:
-            return None, make_reason("router-input-too-large", bytes=input_bytes, limit=MAX_DECISION_INPUT_BYTES)
         request = json.loads(row["requested_json"])
         router_budget_seconds = int(request["routerBudgetSeconds"])
         task_id = self._create_task(
@@ -579,14 +554,13 @@ class DecisionCoordinator:
             task_id=task_id,
             router_index=resolution.router_index,
             buddy={"buddyId": resolution.buddy_id, **identity_map},
-            document=document,
+            round=round,
             now=now,
         )
-        digest = sha256_text(canonical_json(document))
         connection.execute(
             "UPDATE decision_requests SET task_id=?, attempt_id=NULL, generation=NULL,"
-            " output_json=NULL, input_json=?, input_sha256=?, updated_at=? WHERE decision_id=?",
-            (task_id, canonical_json(document), digest, now, decision_id),
+            " output_json=NULL, updated_at=? WHERE decision_id=?",
+            (task_id, now, decision_id),
         )
         connection.execute("UPDATE evaluation_decisions SET status='queued',buddy_id=NULL,reason_code=NULL,reason_params_json=NULL,note=NULL WHERE decision_id=?",
                            (decision_id,))
@@ -613,6 +587,11 @@ class DecisionCoordinator:
             self._cancel_queued_task(connection, task, now)
             return "decision-dispatch-superseded"
         dispatch = router_sequence.dispatch(connection, task["task_id"])
+        current_round = connection.execute("SELECT MAX(round) FROM router_requests WHERE decision_id=?",
+                                           (row["decision_id"],)).fetchone()[0]
+        if dispatch["round"] != current_round:
+            self._cancel_queued_task(connection, task, now)
+            return "decision-dispatch-superseded"
         facts = json.loads(row["requested_json"])
         from .router_history import router_state
         state = router_state(connection, buddy_id=dispatch["buddyId"],
@@ -677,8 +656,8 @@ class DecisionCoordinator:
     def _mark_running(self, connection: sqlite3.Connection, row: sqlite3.Row, *, attempt_id: str, generation: int, document: dict, now: str) -> None:
         digest = sha256_text(canonical_json(document))
         connection.execute(
-            "UPDATE decision_requests SET attempt_id=?, generation=?, input_json=?, input_sha256=?, updated_at=? WHERE decision_id=?",
-            (attempt_id, generation, canonical_json(document), digest, now, row["decision_id"]),
+            "UPDATE decision_requests SET attempt_id=?, generation=?, updated_at=? WHERE decision_id=?",
+            (attempt_id, generation, now, row["decision_id"]),
         )
         connection.execute("UPDATE evaluation_decisions SET status='running', reason_code=NULL,reason_params_json=NULL WHERE decision_id=?",
                            (row["decision_id"],))
@@ -810,6 +789,10 @@ class DecisionCoordinator:
                    "code": output["code"] if released else "router-no-answer",
                    "params": {}, "note": None,
                    "output": output, "buddy_id": None, "selected": None, "evidence": []}
+        current_round = connection.execute("SELECT MAX(round) FROM router_requests WHERE decision_id=?",
+                                           (row["decision_id"],)).fetchone()[0]
+        if dispatch["round"] != current_round:
+            checked.update(changed=True, code="router-input-changed")
         completion_event = connection.execute(
             "SELECT payload_json FROM events WHERE task_id=? AND attempt_id=? AND kind='task.completed'"
             " ORDER BY seq DESC LIMIT 1", (task["task_id"], attempt["attempt_id"])).fetchone()
@@ -826,9 +809,6 @@ class DecisionCoordinator:
                     or route["current_routing_id"] != row["decision_id"] or route["run_state"] != "executing"
                     or ancestor is not None):
                 checked.update(changed=True, code="workflow-routing-fenced")
-        if (row["input_sha256"] != dispatch["inputSha256"]
-                or row["input_json"] != canonical_json(dispatch["document"])):
-            checked.update(changed=True, code="router-input-changed")
         if not cancelled and not checked["changed"] and not released:
             checked = self._publish_select(connection, row, output=output or {}, now=now)
 
@@ -849,7 +829,7 @@ class DecisionCoordinator:
         from .router_history import record_outcome
 
         def record(value):
-            record_outcome(connection, buddy_id=dispatch["buddyId"], plane="routing", request_id=row["request_id"],
+            record_outcome(connection, buddy_id=dispatch["buddyId"], request_id=row["request_id"],
                            task_id=task["task_id"], attempt_id=attempt["attempt_id"], outcome=value,
                            code=checked["code"] if value == "no_answer" else None, phase=stage,
                            facts={"routerIndex": dispatch["routerIndex"], "selectionRetry": bool(json.loads(row["requested_json"]).get("selectionRetry"))}, now=now)
@@ -911,13 +891,19 @@ class DecisionCoordinator:
             constraints=request.get("constraints"), cooling_buddies=cooling_buddies)
         self._append_event(connection, "decision.selection_rerouted", row["decision_id"], {})
         if len(candidates) <= 1:
+            next_round = connection.execute("SELECT MAX(round)+1 FROM router_requests WHERE decision_id=?",
+                                            (row["decision_id"],)).fetchone()[0]
+            router_sequence.freeze_request(connection, row["decision_id"],
+                                           snapshot={"facts": {"routerCalled": False},
+                                                     "baseInput": {"task": request["task"]}, "inspections": []},
+                                           now=now, round=next_round)
             connection.execute("UPDATE decision_requests SET requested_json=? WHERE decision_id=?",
                                (canonical_json(request), row["decision_id"]))
             if candidates:
                 request["routerCalled"] = False
                 connection.execute(
-                    "UPDATE decision_requests SET task_id=NULL,attempt_id=NULL,generation=NULL,input_json=NULL,"
-                    " input_sha256=NULL,output_json=NULL,selected_json=NULL,requested_json=? WHERE decision_id=?",
+                    "UPDATE decision_requests SET task_id=NULL,attempt_id=NULL,generation=NULL,"
+                    " output_json=NULL,selected_json=NULL,requested_json=? WHERE decision_id=?",
                     (canonical_json(request), row["decision_id"]),
                 )
                 self._adopt_sole_candidate(connection, self._row(connection, row["decision_id"]),
@@ -949,8 +935,14 @@ class DecisionCoordinator:
         if resolution.facts["routingMode"] is not None:
             document["outputSchema"] = router.answer_schema(
                 [item["buddyId"] for item in document["buddies"]], resolution.facts["routingMode"])
-        connection.execute("UPDATE decision_requests SET requested_json=?, input_json=? WHERE decision_id=?",
-                           (canonical_json(request), canonical_json(document), row["decision_id"]))
+        next_round = connection.execute("SELECT COALESCE(MAX(round),0)+1 FROM router_requests WHERE decision_id=?",
+                                        (row["decision_id"],)).fetchone()[0]
+        router_sequence.freeze_request(connection, row["decision_id"],
+                                       snapshot={"facts": resolution.facts, "baseInput": document,
+                                                 "inspections": [dict(entry) for entry in resolution.inspections]},
+                                       now=now, round=next_round)
+        connection.execute("UPDATE decision_requests SET requested_json=? WHERE decision_id=?",
+                           (canonical_json(request), row["decision_id"]))
         if resolution.buddy is None:
             problem = resolution.problem
             self._finish(connection, self._row(connection, row["decision_id"]), status="needs-host", now=now,
@@ -996,7 +988,9 @@ class DecisionCoordinator:
 
     def _publish_select(self, connection: sqlite3.Connection, row: sqlite3.Row, *, output: dict, now: str) -> dict:
         """Check program facts without settling the request or judging the choice."""
-        document = json.loads(row["input_json"]) if row["input_json"] else {}
+        dispatch = (router_sequence.dispatch(connection, row["decision_task_id"])
+                    if row["decision_task_id"] else None)
+        document = dispatch["document"] if dispatch else {}
         request = json.loads(row["requested_json"])
         checked = {"answer_valid": False, "abstained": False, "changed": False,
                    "code": None, "params": {}, "note": None, "output": output, "buddy_id": None,
@@ -1192,7 +1186,7 @@ class DecisionCoordinator:
         )
         router_success = (
             "d.status='completed' AND EXISTS(SELECT 1 FROM router_outcomes o"
-            " WHERE o.plane='routing' AND o.request_id=r.request_id AND o.outcome='answered'"
+            " WHERE o.request_id=r.request_id AND o.outcome='answered'"
             " AND o.task_id=r.task_id AND o.attempt_id=r.attempt_id)"
         )
         with self.db.read() as connection:
@@ -1377,7 +1371,7 @@ class DecisionCoordinator:
             "decisionId": row["decision_id"],
             "requestId": row["request_id"],
             "status": row["status"],
-            "task": row["task"],
+            "task": router_sequence.request_snapshot(connection, row["decision_id"])["baseInput"]["task"],
             "runId": row["decision_task_id"],
             "buddyId": row["buddy_id"],
             # The frozen execution identity the Host can delegate with directly,
@@ -1415,10 +1409,8 @@ class DecisionCoordinator:
         boundary = routing_boundary(connection, row, now=projection_now)
         if boundary is not None:
             view["routingBoundary"] = boundary
-        if "taskReference" in request:
-            view["taskReference"] = request["taskReference"]
         if include_audit:
-            input_document = json.loads(row["input_json"]) if row["input_json"] else None
+            input_document = actor["document"] if actor else None
             view.update(
                 {
                     "attemptId": row["decision_attempt_id"],
@@ -1426,7 +1418,6 @@ class DecisionCoordinator:
                     "requested": request,
                     # The exact bounded fields sent to the model, retained for audit.
                     "input": input_document,
-                    "inputSha256": row["input_sha256"],
                     "output": output,
                     # The decision call's own buddy, kept separate from the
                     # selected worker buddy above.

@@ -52,14 +52,20 @@ class SelectionPublicationTests(RouterDispatchTestCase):
                 db.execute("UPDATE buddies SET provider='fixture-b' WHERE buddy_id=?", (B,))
         request, first = self.start(three=True, micro_task=True, required_capabilities=("fixture:required",) if kind == "capability" else ())
         old_dispatch = self.dispatch_of(first["task"]["taskId"])
-        original_snapshot = self.snapshot_of(request["decisionId"])
+        with self.board_.store.db.read() as db:
+            from hey_my_buddy.blackboard.routing import router_sequence
+            original_snapshot = router_sequence.request_snapshot(db, request["decisionId"], 1)
         self.invalidate(B, kind)
         response = self.report(first, self.answer(first, buddy_id=B))
         self.assertIn("outcome", response["decision"], response["decision"])
         self.assertEqual(response["decision"]["outcome"], "rerouted", response)
         self.assertEqual(response["decision"]["status"], "queued")
         self.assertEqual(self.dispatch_of(first["task"]["taskId"]), old_dispatch)
-        self.assertEqual(self.snapshot_of(request["decisionId"]), original_snapshot)
+        with self.board_.store.db.read() as db:
+            self.assertEqual(router_sequence.request_snapshot(db, request["decisionId"], 1), original_snapshot)
+            self.assertEqual(router_sequence.dispatch(db, first["task"]["taskId"])["round"], 1)
+            self.assertEqual(router_sequence.request_snapshot(db, request["decisionId"], 2)["baseInput"]["task"],
+                             original_snapshot["baseInput"]["task"])
         second = self.next_claim(request)
         self.assertEqual([p["buddyId"] for p in second["decisionInput"]["buddies"]], [A, C])
         self.assertNotEqual(second["task"]["taskId"], first["task"]["taskId"])
@@ -100,18 +106,6 @@ class SelectionPublicationTests(RouterDispatchTestCase):
             self.assertEqual(db.execute("SELECT COUNT(*) FROM events WHERE kind='decision.selection_rerouted'").fetchone()[0], 0)
             self.assertEqual(db.execute("SELECT shutdown_confirmed FROM attempts WHERE attempt_id=?",
                                         (first["attempt"]["attemptId"],)).fetchone()[0], 0)
-
-    def test_selection_retry_dispatch_limit_retains_its_size_facts(self):
-        request, first = self.start(three=True, micro_task=True)
-        self.invalidate(B, "disabled")
-        coordinator = self.board_.store.decisions
-        with patch.object(coordinator, "_queue_router_dispatch", return_value=(
-                None, {"code": "router-input-too-large", "params": {"bytes": 200, "limit": 100}})):
-            response = self.report(first, self.answer(first, buddy_id=B))
-        self.assertTrue(response["committed"])
-        view = self.decision_row(request["decisionId"])
-        self.assertEqual(view["reason"], {"code": "router-input-too-large", "params": {"bytes": 200, "limit": 100}})
-        self.assertIsNone(view["note"])
 
     def test_second_invalid_selection_reaches_host_with_reason(self):
         request, first = self.start(three=True, micro_task=True)

@@ -6,7 +6,7 @@ import {
   preferenceChanges,
   buddySettings,
 } from "./draft";
-import { concurrencyLimit, modelServiceKey, retryIntervalSeconds } from "./console-data";
+import { MODEL_SERVICE_CONCURRENCY_MAX, concurrencyLimit, modelServiceKey, retryIntervalSeconds } from "./console-data";
 import { buddyName, buddyTitle } from "./buddy-name";
 
 /** The two capabilities have distinct authority and cannot stand in for each other. */
@@ -119,7 +119,7 @@ function pinRefusal(buddy: Buddy | undefined): string | null {
  * Router needs a currently legal model; changing the note of an existing pin,
  * a disable and every other edit stay independent of current availability. A
  * model service's concurrency limit is equally independent of availability — it only
- * has to be an integer in 1–32.
+ * has to be a positive safe integer.
  */
 export function blockingIssues(baseline: Draft, draft: Draft): PolicyIssue[] {
   const buddies = new Map(draft.buddies.map((p) => [p.buddyId, p]));
@@ -135,7 +135,7 @@ export function blockingIssues(baseline: Draft, draft: Draft): PolicyIssue[] {
       buddyId: member?.buddyId ?? `${entry.harness}/${entry.provider}/${entry.model}`,
       modelService: modelServiceKey(entry),
       label: subject,
-      message: i18n.t("console:concurrencyLimitMustBeAnIntegerFrom", { v0: subject }),
+      message: i18n.t("console:concurrencyLimitMustBeAnIntegerFrom", { v0: subject, max: MODEL_SERVICE_CONCURRENCY_MAX }),
     });
   }
   for (const setting of buddySettings(baseline, draft)) {
