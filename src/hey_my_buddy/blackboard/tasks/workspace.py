@@ -1682,12 +1682,33 @@ _RECORD_BINDINGS = ("workspaceId", "taskId", "attemptId", "manifestSha256", "bas
                     "commit", "tree", "changedPaths", "includedUntracked", "diffSha256")
 
 
+def _validate_resolution_record_schema(record):
+    """Keep the field meaning of each immutable resolution format distinct."""
+    if not isinstance(record, dict) or type(record.get("version")) is not int or record["version"] not in (1, 2, 3):
+        raise BoardError("WORKSPACE_CONFLICT", "Unsupported workspace resolution record version")
+    kind, action = record.get("kind"), record.get("action")
+    if not ((kind == "resolution" and action in ("restore", "adopt"))
+            or (kind == "abandoned-site" and action == "abandon")):
+        raise BoardError("WORKSPACE_CONFLICT", "Invalid workspace resolution record kind or action")
+    explanation = "note" if record["version"] == 3 else "reason"
+    other = "reason" if explanation == "note" else "note"
+    if (explanation not in record or other in record
+            or record[explanation] is not None and not isinstance(record[explanation], str)):
+        raise BoardError("WORKSPACE_CONFLICT", "Invalid workspace resolution record explanation")
+    if record["version"] == 1:
+        if not isinstance(record.get("actor"), str) or not record["actor"].strip():
+            raise BoardError("WORKSPACE_CONFLICT", "Invalid historical workspace resolution actor")
+    else:
+        _actor_identity(record.get("actor"), "Workspace resolution actor")
+
+
 def _replay_record(directory, names, *, task_id, attempt_id, manifest):
     """An already published record of the same identity, or None."""
     for name in names:
         record = _record(directory / name)
         if record is None:
             continue
+        _validate_resolution_record_schema(record)
         if (record.get("taskId") != task_id or record.get("attemptId") != attempt_id
                 or record.get("manifestSha256") != manifest["manifestSha256"]
                 or record.get("workspaceId") != manifest["workspaceId"]):
@@ -1714,7 +1735,7 @@ def _resolution_record(root, manifest, repository, directory, observation, *, ta
     patch_data = _diff(repository, manifest["inputCommit"], commit)
     snapshot = _snapshot_record(manifest, observation, tree, entries, changed, excluded_changes, task_id, attempt_id, commit, patch_data)
     snapshot["adoptedPaths"] = adopted
-    record = {"version": 2, "kind": "resolution", "action": action, "actor": actor, "note": note,
+    record = {"version": 3, "kind": "resolution", "action": action, "actor": actor, "note": note,
               "conflictFingerprint": conflict_fingerprint, "workspaceId": workspace_id, "taskId": task_id,
               "attemptId": attempt_id, "manifestSha256": manifest["manifestSha256"],
               "baseCommit": manifest["baseCommit"], "inputCommit": manifest["inputCommit"], "commit": commit,
@@ -1755,7 +1776,7 @@ def _abandoned_record(root, manifest, repository, directory, observation, *, tas
     commit = _commit_tree(root, tree, manifest["inputCommit"], workspace_id + " abandoned " + output_id)
     patch_data = _diff(repository, manifest["inputCommit"], commit)
     snapshot = _snapshot_record(manifest, observation, tree, entries, changed, [], task_id, attempt_id, commit, patch_data)
-    record = {"version": 2, "kind": "abandoned-site", "action": "abandon", "actor": actor, "note": note,
+    record = {"version": 3, "kind": "abandoned-site", "action": "abandon", "actor": actor, "note": note,
               "conflictFingerprint": conflict_fingerprint, "workspaceId": workspace_id, "taskId": task_id,
               "attemptId": attempt_id, "manifestSha256": manifest["manifestSha256"],
               "baseCommit": manifest["baseCommit"], "inputCommit": manifest["inputCommit"], "commit": commit,
@@ -1938,10 +1959,8 @@ def _validate_output_record(final_input, artifact):
     commit = artifact.get("commit")
     ref = artifact.get("ref")
     output_id = _sha(_json([artifact.get("taskId"), artifact.get("attemptId")]))
-    if (artifact.get("kind") == "resolution" and artifact.get("version") in (1, 2)
-            and artifact.get("action") in ("restore", "adopt")):
-        if artifact["version"] == 2:
-            _actor_identity(artifact.get("actor"), "Workspace resolution actor")
+    if artifact.get("kind") == "resolution":
+        _validate_resolution_record_schema(artifact)
         expected_ref = (f"refs/hey-my-buddy/workspaces/{final_input['workspaceId']}/resolutions/"
                         f"{output_id}-{artifact['action']}")
     elif artifact.get("kind") == "host-output":

@@ -63,6 +63,11 @@ class ScopeRecoveryTestCase(RealWorkspaceTestCase):
             ).fetchone()
         return json.loads(row["manifest_json"])
 
+    def historical_record_paths(self, manifest, task_id, attempt_id, basename):
+        output_id = workspace_module._sha(workspace_module._json([task_id, attempt_id]))
+        directory = self.directory / "workspaces" / manifest["workspaceId"] / "outputs" / output_id
+        return directory, (directory / f"{basename}.json", directory / f"{basename}-pending.json")
+
     def claim(self, board, run_id, *, request_id="claim-1", nonce="n" * 16, worker_id=None):
         return admit_board(board, {'workerId': worker_id or self.worker, 'claimRequestId': request_id, 'nonce': nonce, 'runId': run_id})
 
@@ -442,6 +447,63 @@ class ScopeRecoveryTestCase(RealWorkspaceTestCase):
         self.assertEqual(execution["manifestSha256"], manifest["manifestSha256"])
         self.assertEqual((checkout / "src" / "feature.py").read_text(), "value = 1\n")
 
+    def test_historical_resolution_replays_without_rewriting_sealed_bytes(self):
+        board, submitted, claimed, manifest, checkout = self.scoped_failure(request_id="historical-adopt")
+        run_id = submitted["runId"]
+        view = self.view(board, run_id)
+        conflict = view["workspaceConflicts"][0]
+        adopted = self.resolve(board, view, conflict, "adopt", note="reviewed failed site")
+        current = self.resolution_record(board, adopted)
+        attempt_id = claimed["claim"]["attempt"]["attemptId"]
+        directory, paths = self.historical_record_paths(manifest, run_id, attempt_id, "resolve-adopt")
+        repository = Path(manifest["snapshot"]["repositoryPath"])
+        with self.assertRaises(BoardError) as mislabeled:
+            workspace_module.verify_sealed_output(manifest, manifest, dict(current, version=2))
+        self.assertEqual(mislabeled.exception.code, "WORKSPACE_CONFLICT")
+        for version in (1, 2):
+            with self.subTest(version=version):
+                historical = dict(current, version=version, reason=current["note"])
+                del historical["note"]
+                if version == 1:
+                    historical["actor"] = "host:host-1"
+                original = workspace_module._json(historical)
+                for path in paths:
+                    path.write_bytes(original)
+                replay = workspace_module._resolution_record(
+                    checkout, manifest, repository, directory, None, task_id=run_id, attempt_id=attempt_id,
+                    action="adopt", actor={"role": "host", "id": "host-1"}, note="later call",
+                    conflict_fingerprint=conflict["observedFingerprint"])
+                self.assertEqual(replay, historical)
+                self.assertEqual([path.read_bytes() for path in paths], [original, original])
+                self.assertIn("outside.txt", workspace_module.verify_sealed_output(
+                    manifest, manifest, replay)["changedPaths"])
+
+    def test_historical_abandoned_site_replays_without_rewriting_sealed_bytes(self):
+        board, submitted, claimed, manifest, checkout = self.scoped_failure(request_id="historical-abandon")
+        run_id = submitted["runId"]
+        view = self.view(board, run_id)
+        conflict = view["workspaceConflicts"][0]
+        abandoned = self.resolve(board, view, conflict, "abandon", note="preserve failed site")
+        current = self.resolution_record(board, abandoned)
+        attempt_id = claimed["claim"]["attempt"]["attemptId"]
+        directory, paths = self.historical_record_paths(manifest, run_id, attempt_id, "abandoned")
+        repository = Path(manifest["snapshot"]["repositoryPath"])
+        for version in (1, 2):
+            with self.subTest(version=version):
+                historical = dict(current, version=version, reason=current["note"])
+                del historical["note"]
+                if version == 1:
+                    historical["actor"] = "host:host-1"
+                original = workspace_module._json(historical)
+                for path in paths:
+                    path.write_bytes(original)
+                replay = workspace_module._abandoned_record(
+                    checkout, manifest, repository, directory, None, task_id=run_id, attempt_id=attempt_id,
+                    actor={"role": "host", "id": "host-1"}, note="later call",
+                    conflict_fingerprint=conflict["observedFingerprint"])
+                self.assertEqual(replay, historical)
+                self.assertEqual([path.read_bytes() for path in paths], [original, original])
+
     def test_scope_amendment_is_versioned_and_fenced_by_an_active_attempt(self):
         board = self.board()
         self.register(board)
@@ -520,8 +582,10 @@ class ScopeRecoveryTestCase(RealWorkspaceTestCase):
         self.assertEqual(resolved["delivery"]["action"], "restore")
         self.assertEqual(resolved["delivery"]["turnId"], turn_id)
         record = self.resolution_record(board, resolved)
-        self.assertEqual(record["version"], 2)
+        self.assertEqual(record["version"], 3)
         self.assertEqual(record["actor"], {"role": "host", "id": "host-1"})
+        self.assertEqual(record["note"], "only the refused seal failed")
+        self.assertNotIn("reason", record)
         cumulative = resolved["artifact"]["cumulativePatch"]
         self.assertEqual(cumulative["baseCommit"], submitted["workspace"]["inputCommit"])
         self.assertEqual(cumulative["outputCommit"], resolved["outputCommit"])
@@ -581,8 +645,10 @@ class ScopeRecoveryTestCase(RealWorkspaceTestCase):
         self.assertEqual(adopted["delivery"]["action"], "adopt")
         self.assertEqual(adopted["artifact"]["action"], "adopt")
         record = self.resolution_record(board, adopted)
-        self.assertEqual(record["version"], 2)
+        self.assertEqual(record["version"], 3)
         self.assertEqual(record["actor"], {"role": "host", "id": "host-1"})
+        self.assertEqual(record["note"], "the Host accepts this exact site")
+        self.assertNotIn("reason", record)
         cumulative = adopted["artifact"]["cumulativePatch"]
         self.assertEqual(cumulative["baseCommit"], submitted["workspace"]["inputCommit"])
         self.assertIn("outside.txt", cumulative["changedPaths"])
@@ -608,8 +674,10 @@ class ScopeRecoveryTestCase(RealWorkspaceTestCase):
         self.assertFalse(abandoned["delivered"])
         self.assertEqual(abandoned["resolutionState"], "abandoned")
         record = self.resolution_record(board, abandoned)
-        self.assertEqual(record["version"], 2)
+        self.assertEqual(record["version"], 3)
         self.assertEqual(record["actor"], {"role": "host", "id": "host-1"})
+        self.assertEqual(record["note"], "discard this failed round")
+        self.assertNotIn("reason", record)
         self.assertEqual(abandoned["state"], "awaiting-host")
         self.assertIsNone(abandoned["delivery"])
         self.assertEqual((checkout / "src" / "feature.py").read_text(), "value = 1\n")

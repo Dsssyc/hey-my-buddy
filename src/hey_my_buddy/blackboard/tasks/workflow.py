@@ -108,7 +108,7 @@ LEAD_OWNED_OPERATIONS = LEAD_OPERATIONS - {"workflow_submit"} | (
     AGENT_RUN_BOUND_OPERATIONS - {"workflow_suggest", "message_update"}
 )
 
-TURN_INPUT_VERSION = 1
+TURN_INPUT_VERSION = 2
 TURN_OUTPUT_VERSION = 1
 TURN_DISPOSITIONS = ("completed", "assistance", "attention", "waiting")
 MAX_ACTIVE_TURNS_VIEW = 10
@@ -201,6 +201,9 @@ def _turn_input_context(input_json: Any) -> dict:
         document = json.loads(input_json) if input_json else None
     except (TypeError, ValueError):
         return {}
+    if isinstance(document, dict) and (type(document.get("version")) is not int
+                                      or document["version"] not in (1, TURN_INPUT_VERSION)):
+        raise BoardError("TURN_INVALID", "The frozen turn input version is not supported")
     context = document.get("context") if isinstance(document, dict) else None
     return context if isinstance(context, dict) else {}
 
@@ -6415,8 +6418,8 @@ class WorkflowCoordinator:
                 "manifestSha256": execution_workspace.get("manifestSha256"),
                 "start": collected,
             }
-        # Exactly the version-1 turn-input document: the runner validates these ten
-        # fields, and the resolved execution manifest is already service-owned.
+        # The versioned turn-input document keeps its frozen field names; the
+        # resolved execution manifest is already service-owned.
         turn_input = {
             "version": TURN_INPUT_VERSION,
             "taskId": task["task_id"],

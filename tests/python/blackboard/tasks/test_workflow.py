@@ -231,6 +231,33 @@ class LifecycleTests(WorkflowTestCase):
                     self.assertEqual(connection.execute('SELECT input_json FROM workflow_turns WHERE turn_id=?',
                                                         (turn_id,)).fetchone()[0], raw)
 
+    def test_turn_input_versions_keep_their_frozen_annotation_keys(self):
+        board = self.board()
+        self.register(board)
+        submitted = self.submit(board)
+        claimed = self.claim(board)['claim']
+        original = claimed['turn']['input']
+        self.assertEqual(original['version'], 2)
+        turn_id = claimed['turn']['turnId']
+        for version, key in ((1, 'reason'), (2, 'note')):
+            with self.subTest(version=version):
+                payload = {**original, 'version': version,
+                           'context': {**original['context'], 'hostDecision': {key: 'Host text'}}}
+                raw = json.dumps(payload)
+                with board.store.db.write() as connection:
+                    connection.execute('UPDATE workflow_turns SET input_json=? WHERE turn_id=?', (raw, turn_id))
+                view = board.call('workflow_get', {'runId': submitted['runId'], 'includeAudit': True})
+                self.assertEqual(view['audit']['turns'][0]['input'], payload)
+                with board.store.db.read() as connection:
+                    self.assertEqual(connection.execute('SELECT input_json FROM workflow_turns WHERE turn_id=?',
+                                                        (turn_id,)).fetchone()[0], raw)
+        with board.store.db.write() as connection:
+            connection.execute('UPDATE workflow_turns SET input_json=? WHERE turn_id=?',
+                               (json.dumps({**original, 'version': 3}), turn_id))
+        with self.assertRaises(BoardError) as unknown:
+            board.call('workflow_get', {'runId': submitted['runId']})
+        self.assertEqual(unknown.exception.code, 'TURN_INVALID')
+
     def test_execution_record_fields_are_rejected_before_preparation(self):
         board = self.board()
         for fields in ({'adapter': 'command', 'argv': ['true']}, {'adapter': 'external'},

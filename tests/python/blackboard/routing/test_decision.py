@@ -154,6 +154,14 @@ class SelectionRequestTests(DecisionTestCase):
         self.assertEqual(replayed["status"], "cancelled")
         self.assertTrue(replayed["duplicate"])
 
+    def test_cancel_without_note_does_not_append_an_empty_explanation(self):
+        board = self.board()
+        self.seed(board)
+        selected = self.request(board)
+        board.call("task_cancel", {"runId": selected["runId"]})
+        self.assertEqual(self.decision(board, selected["decisionId"])["reason"],
+                         "the decision run was cancelled")
+
     def test_recommendation_never_creates_or_authorizes_a_business_task(self):
         board = self.board()
         self.seed(board)
