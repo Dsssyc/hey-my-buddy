@@ -1,12 +1,7 @@
-/* The old stylesheet sits between Tailwind's reset and its utilities until every
-   page has moved (ADR-029): it keeps its look against the reset, and utilities on
-   new components win over its element rules. */
-@layer theme, base, legacy, components, utilities;
+@layer theme, base, components, utilities;
 @import "tailwindcss";
 @import "tw-animate-css";
 @import "./tokens.css";
-@import "./legacy-tokens.css" layer(legacy);
-@import "./styles.css" layer(legacy);
 
 @custom-variant dark (&:where([data-theme="dark"], [data-theme="dark"] *));
 
@@ -34,6 +29,7 @@
   --color-input: var(--line2);
   --color-ring: var(--live);
 
+  --color-overlay: var(--overlay);
   --color-sunk: var(--sunk);
   --color-ink2: var(--ink2);
   --color-ink3: var(--ink3);

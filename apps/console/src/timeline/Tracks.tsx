@@ -1,12 +1,12 @@
 import i18n from "i18next";
 import { cn } from "cn";
 import { useTranslation } from "react-i18next";
-import { clockTime, durationText, spanOutcome, outcomeLabel, buddyLabel } from "../macro-task-display";
+import { clockTime, spanOutcome, outcomeLabel, buddyLabel } from "../macro-task-display";
 import type { TimelineEvent, TimelineRow, TimelineSpan } from "../macro-task-types";
 import type { FriendlyBuddy } from "../macro-task-display";
 import type { TimelineScale } from "./scale";
 import { parseTimelineInstant as instant } from "./instant";
-import { formatDurationMinutes } from "../i18n/format";
+import { formatDuration } from "../i18n/format";
 import { acceptanceInterval } from "./acceptance";
 import { fitLabel, useTextMeasure } from "./labels";
 import type { Interval, Label } from "./labels";
@@ -28,9 +28,9 @@ export function spanReadout(span: TimelineSpan, nowMs: number, buddies?: readonl
       : span.kind === "host" ? i18n.t(row?.rootLeadRunId ? "console:waitingForLead" : "console:waitingForHost") : i18n.t(`tasks:kind.${span.kind}`);
   const reminders = span.reminders;
   return [head, start === null ? null : clockTime(start), end === null ? null : clockTime(end),
-    start !== null && end !== null ? durationText(end - start) : null, buddyLabel(span.buddy, buddies), outcome === "unknown" ? i18n.t("tasks:drawing.stopUnconfirmed") : outcomeLabel(span, outcome),
-    span.expectedSeconds === null ? null : i18n.t("tasks:drawing.expected", { duration: durationText(span.expectedSeconds * 1000) }),
-    reminders?.possiblyStuck ? i18n.t("tasks:drawing.silent", { duration: durationText(nowMs - instant(reminders.lastNativeEventAt ?? span.startAt)!) }) : null,
+    start !== null && end !== null && end >= start ? formatDuration(end - start) : null, buddyLabel(span.buddy, buddies), outcome === "unknown" ? i18n.t("tasks:drawing.stopUnconfirmed") : outcomeLabel(span, outcome),
+    span.expectedSeconds === null ? null : i18n.t("tasks:drawing.expected", { duration: formatDuration(span.expectedSeconds * 1000) }),
+    reminders?.possiblyStuck ? i18n.t("tasks:drawing.silent", { duration: formatDuration(nowMs - instant(reminders.lastNativeEventAt ?? span.startAt)!) }) : null,
     ...(span.inquiries ?? []).map(inquiry => i18n.t("tasks:drawing.inquiryReadout", { author: inquiry.author, at: clockTime(inquiry.createdAt), state: i18n.t(`taskDetail:inquiry.${inquiry.state}`) })),
   ].filter(Boolean).join(" · ");
 }
@@ -41,7 +41,7 @@ export function Axis({ scale, ongoing, nowMs }: { scale: TimelineScale; ongoing:
   const width = scale.widthPx;
   const nowX = scale.toX(nowMs)!;
   const now = `${t("now")} ${clockTime(nowMs)}`;
-  const gapLabels = scale.breaks.map(gap => formatDurationMinutes(gap.endMs - gap.startMs));
+  const gapLabels = scale.breaks.map(gap => formatDuration(gap.endMs - gap.startMs, "minutes"));
   const { measure, ruler } = useTextMeasure([now, ...gapLabels, ...scale.ticks.filter(tick => tick.labeled).map(tick => clockTime(tick.atMs))]);
   const nowLeft = Math.max(0, Math.min(width - measure(now), nowX - measure(now)));
   const occupied: Interval[] = [];
@@ -98,7 +98,7 @@ export function Track({ row, spans, events, scale, nowMs, ongoing, buddies, onOp
   }
   const wait = acceptanceInterval(row, spans, nowMs);
   const acceptanceOpen = wait?.open ?? false;
-  const acceptance = wait ? { start: scale.toX(wait.startMs)!, end: scale.toX(wait.endMs)!, duration: formatDurationMinutes(wait.endMs - wait.startMs) } : null;
+  const acceptance = wait ? { start: scale.toX(wait.startMs)!, end: scale.toX(wait.endMs)!, duration: formatDuration(wait.endMs - wait.startMs, "minutes") } : null;
   const markers = events.filter(event => event.kind !== "dispatch" && event.kind !== "integrate").map(event => ({ event, x: scale.toX(instant(event.at)!)! }));
   const inquiries = positioned.flatMap(({ span }) => (span.inquiries ?? []).map(inquiry => ({ inquiry, span, x: scale.toX(instant(inquiry.createdAt)!)! })));
   const allMarkers: TimelineMarker[] = [
@@ -120,16 +120,16 @@ export function Track({ row, spans, events, scale, nowMs, ongoing, buddies, onOp
   const markerName = (marker: TimelineMarker) => marker.kind === "event" ? eventName(marker.event) : t("drawing.inquiry");
   const markerReadout = (marker: TimelineMarker) => marker.kind === "event" ? eventReadout(marker.event) :
     t("drawing.inquiryReadout", { author: marker.inquiry.author, at: clockTime(marker.inquiry.createdAt), state: i18n.t(`taskDetail:inquiry.${marker.inquiry.state}`) });
-  const duration = (item: PositionedSpan) => formatDurationMinutes((instant(item.span.endAt) ?? nowMs) - instant(item.span.startAt)!);
+  const duration = (item: PositionedSpan) => formatDuration((instant(item.span.endAt) ?? nowMs) - instant(item.span.startAt)!, "minutes");
   const waitingKind = (span: TimelineSpan) => span.kind === "queue" ? t("kind.queue") : i18n.t(row.rootLeadRunId ? "console:waitingForLead" : "console:waitingForHost");
   const fullLabel = (item: PositionedSpan) => item.execution ? item.outcome === "running" ? t("drawing.running", { duration: duration(item) }) : item.outcome === "failed" ? t("drawing.failed", { duration: duration(item) }) : duration(item)!
     : t(item.span.kind === "queue" ? "drawing.queue" : "drawing.waiting", { kind: waitingKind(item.span), duration: duration(item) });
   const tails = positioned.filter(item => item.outcome === "running" && item.span.reminders?.possiblyStuck)
-    .map(item => ({ item, x: scale.toX(instant(item.span.reminders!.lastNativeEventAt ?? item.span.startAt)!)!, duration: formatDurationMinutes(nowMs - instant(item.span.reminders!.lastNativeEventAt ?? item.span.startAt)!) }));
+    .map(item => ({ item, x: scale.toX(instant(item.span.reminders!.lastNativeEventAt ?? item.span.startAt)!)!, duration: formatDuration(nowMs - instant(item.span.reminders!.lastNativeEventAt ?? item.span.startAt)!, "minutes") }));
   const expected = positioned.filter(item => item.outcome === "running" && item.span.expectedSeconds !== null)
     .map(item => ({ item, at: instant(item.span.startAt)! + item.span.expectedSeconds! * 1000 }))
     .filter(entry => entry.at < nowMs)
-    .map(entry => ({ ...entry, x: scale.toX(entry.at)!, text: t("drawing.expected", { duration: formatDurationMinutes(entry.item.span.expectedSeconds! * 1000) }) }));
+    .map(entry => ({ ...entry, x: scale.toX(entry.at)!, text: t("drawing.expected", { duration: formatDuration(entry.item.span.expectedSeconds! * 1000, "minutes") }) }));
   const acceptanceLabel = acceptance ? t("drawing.waiting", { kind: t("review"), duration: acceptance.duration }) : "";
   const candidates = [t("drawing.inquiry"), t("review"), ...positioned.flatMap(item => [fullLabel(item), duration(item)!, waitingKind(item.span)]),
     ...tails.flatMap(tail => [t("drawing.silent", { duration: tail.duration }), t("drawing.silence", { duration: tail.duration })]),

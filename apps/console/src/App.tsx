@@ -3,7 +3,6 @@ import { cn } from "cn";
 import { useEffect, useState } from "react";
 import type { ReactNode } from "react";
 import { useTranslation } from "react-i18next";
-import { Hint } from "@/components/hint";
 import { Button } from "@/components/ui/button";
 import { StateMark } from "@/components/ui/state-mark";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";

@@ -249,7 +249,7 @@ describe("the detail of a micro task in its macro task", () => {
   it("says a micro task whose read fails so, with the way back, and lists the delegation alone for a row the timeline lacks", async () => {
     stubViewport(false);
     window.history.replaceState(null, "", "#tasks/macro-1/r-gone");
-    const f = harness();
+    harness();
     expect((await screen.findByRole("alert")).textContent).toContain("Unknown run: r-gone");
     fireEvent.keyDown(document.body, { key: "Escape" });
     expect(hashNow()).toBe("#tasks/macro-1");

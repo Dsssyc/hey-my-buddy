@@ -5,7 +5,6 @@
  */
 
 import type {
-  MacroTaskPage,
   MacroTaskSummary,
   MacroTaskTimeline,
   TimelineBuddy,
@@ -14,10 +13,10 @@ import type {
   TimelineSpan,
 } from "./macro-task-types";
 
-export const OPUS: TimelineBuddy = { harness: "claude", provider: "anthropic", model: "claude-opus-5-5", effort: "high" };
-export const CODEX: TimelineBuddy = { harness: "codex", provider: "openai", model: "gpt-5-codex", effort: "max" };
-export const GLM: TimelineBuddy = { harness: "zcode", provider: "bigmodel-api", model: "glm-5", effort: "high" };
-export const SONNET: TimelineBuddy = { harness: "claude", provider: "anthropic", model: "claude-sonnet-5", effort: "low" };
+const OPUS: TimelineBuddy = { harness: "claude", provider: "anthropic", model: "claude-opus-5-5", effort: "high" };
+const CODEX: TimelineBuddy = { harness: "codex", provider: "openai", model: "gpt-5-codex", effort: "max" };
+const GLM: TimelineBuddy = { harness: "zcode", provider: "bigmodel-api", model: "glm-5", effort: "high" };
+const SONNET: TimelineBuddy = { harness: "claude", provider: "anthropic", model: "claude-sonnet-5", effort: "low" };
 
 export const OBSERVED_AT = "2026-09-26T08:12:00Z";
 
@@ -163,10 +162,6 @@ export function macroTaskTimelineFixture(overrides: Partial<MacroTaskTimeline> =
   };
 }
 
-export function macroTaskPageFixture(macroTasks: MacroTaskSummary[] = [macroTaskSummary()]): MacroTaskPage {
-  return { macroTasks, totals: { all: macroTasks.length, active: macroTasks.length, host: 0, review: 0 }, nextCursor: null, cursor: 41, changed: false };
-}
-
 /** The standalone-root and second-project rows used by the list tests. */
 export function listFixture(): MacroTaskSummary[] {
   return [
@@ -187,7 +182,3 @@ export function listFixture(): MacroTaskSummary[] {
         stoppableRoots: 1, stoppableHelpers: 0, delivered: 0, awaitingHost: 1 } }),
   ];
 }
-
-/** A task-first-line title long enough to exercise the ~40-character one-line clamp. */
-export const LONG_TASK_LINE =
-  "修复标题回退在 CRLF 输入下的显示，补充回归测试并核对两处相关调用的输出稳定性与提示文案是否一致";

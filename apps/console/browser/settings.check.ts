@@ -126,7 +126,8 @@ for (const reduce of [false, true]) test.describe(`settings motion ${reduce ? "r
       await settle(page);
     }
     const dark = page.getByRole("radiogroup", { name: "主题", exact: true }).getByRole("radio", { name: "深色", exact: true });
-    expect(await dark.evaluate(node => getComputedStyle(node).transitionDuration)).toBe(reduce ? "0s" : "0.15s");
+    if (reduce) expect(await dark.evaluate(node => getComputedStyle(node).transitionProperty)).toBe("none");
+    else expect(await dark.evaluate(node => getComputedStyle(node).transitionDuration)).toBe("0.15s");
     await dark.click();
     await expect(dark).toHaveAttribute("aria-checked", "true");
   });

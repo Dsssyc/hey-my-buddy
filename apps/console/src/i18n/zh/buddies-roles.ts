@@ -59,12 +59,11 @@ export default {
   },
   budget: {
     name: "审阅预算",
-    nameHint: "审阅预算只用于之后的路由，快速路由固定 60 秒",
+    nameHint: "审阅预算只用于之后的路由，快速路由固定 {{duration}}",
     label: "审阅预算",
     brief: "简要",
     standard: "标准",
     deep: "深入",
-    seconds: "{{n}} 秒",
     toolCalls: "{{n}} 次工具调用",
     bytes: "{{n}} 字节",
   },

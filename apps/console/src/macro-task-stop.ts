@@ -19,7 +19,7 @@ import { LOGIN_EXPIRED_ACTION_REFUSAL } from "./console-session";
  * complete reads decide 正在停止 / 停止未确认 / 已停止 — and no navigation is
  * ever locked.
  */
-export type MacroTaskStopPhase = "stopping" | "unknown" | "acknowledged" | "refused";
+type MacroTaskStopPhase = "stopping" | "unknown" | "acknowledged" | "refused";
 
 export type MacroTaskStopEntry = {
   commandId: string;
@@ -29,7 +29,7 @@ export type MacroTaskStopEntry = {
   error: string | (() => string);
 };
 
-export type MacroTaskStopStatus = {
+type MacroTaskStopStatus = {
   phase: MacroTaskStopPhase | "in-progress" | "unconfirmed-stop" | "stopped";
   label: string;
   detail: string;

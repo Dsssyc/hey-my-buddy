@@ -9,9 +9,9 @@ function row(page: Page, runId: string) {
   return page.locator(`[data-slot=timeline-row-name][data-key="row:${runId}"]`);
 }
 
-for (const { locale, language, fixes } of [
-  { locale: "zh-CN", language: "zh-CN", fixes: "修正" },
-  { locale: "en-US", language: "en", fixes: "Fixes" },
+for (const { locale, language } of [
+  { locale: "zh-CN", language: "zh-CN" },
+  { locale: "en-US", language: "en" },
 ]) for (const width of [1440, 1024, 390]) {
   test.describe(`corrections in ${locale} at ${width}px`, () => {
     test.use({ locale, viewport: { width, height: 1000 } });

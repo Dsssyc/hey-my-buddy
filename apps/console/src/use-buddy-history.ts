@@ -20,7 +20,7 @@ export const MAX_QUERY_TERMS = 8;
 export const FILTER_DEBOUNCE_MS = 300;
 
 /** Rejects an incomplete envelope instead of rendering invented buddy facts. */
-export function parseBuddyPage(value: unknown): BuddyPage {
+function parseBuddyPage(value: unknown): BuddyPage {
   const page = value as BuddyPage | null;
   // Model service notes are optional on a page, but a present value must be a list.
   const optionalList = (value: unknown) => value === undefined || Array.isArray(value);
@@ -82,7 +82,7 @@ export function mergePage(previous: BuddyPage | null, next: BuddyPage): BuddyPag
   };
 }
 
-export type BuddyHistoryFilters = {
+type BuddyHistoryFilters = {
   /** Local search text; it is bounded before it becomes a server query. */
   query: string;
   /** Harness (harness) filter, applied by the server before pagination. */

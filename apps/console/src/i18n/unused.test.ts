@@ -4,6 +4,8 @@ import zhSettings from "./zh/settings";
 import enSettings from "./en/settings";
 import zhStorage from "./zh/settings-storage";
 import zhTaskDetail from "./zh/taskDetail";
+import zhCommon from "./zh/common";
+import zhConsole from "./zh/console";
 
 /**
  * A word that no view says is dead text in two languages: the copy of a page holds
@@ -14,8 +16,9 @@ const pages = {
   settings: import.meta.glob<string>(["../Settings.tsx", "../settings/*.{ts,tsx}"], { query: "?raw", import: "default", eager: true }),
   buddies: import.meta.glob<string>(["../App.tsx", "../BuddyConfig.tsx", "../buddies/*.{ts,tsx}", "../components/**/*.{ts,tsx}"], { query: "?raw", import: "default", eager: true }),
   taskDetail: import.meta.glob<string>(["../task-detail/*.{ts,tsx}", "../components/**/*.{ts,tsx}"], { query: "?raw", import: "default", eager: true }),
+  shared: import.meta.glob<string>(["../**/*.{ts,tsx}", "!../i18n/**/*.{ts,tsx}"], { query: "?raw", import: "default", eager: true }),
 };
-const support = /\.(test|testing|fixtures)\.tsx?$/;
+const support = /(?:\.(?:test|testing|fixtures)|-fixtures)\.tsx?$/;
 const sourceOf = (sources: Record<string, string>) => Object.entries(sources).filter(([path]) => !support.test(path)).map(([, source]) => source).join("\n");
 
 function leaves(node: unknown, path: string[] = []): string[] {
@@ -24,16 +27,22 @@ function leaves(node: unknown, path: string[] = []): string[] {
     : [path.join(".")];
 }
 
-function unused(copy: unknown, text: string): string[] {
+function unused(copy: unknown, text: string, namespace = ""): string[] {
   return leaves(copy).filter(key => {
     const parts = key.split(".");
+    const qualified = `${namespace}${key}`;
     // A key is used whole, or by a prefix that a state completes: `harness.status.${key}`.
-    const prefixes = parts.map((_, index) => `${parts.slice(0, index + 1).join(".")}${index + 1 < parts.length ? "." : ""}`);
-    return !text.includes(`"${key}"`) && !text.includes(`'${key}'`) && !prefixes.slice(0, -1).some(prefix => text.includes(`\`${prefix}\${`) || text.includes(`"${prefix}" +`));
+    const prefixes = parts.map((_, index) => `${namespace}${parts.slice(0, index + 1).join(".")}${index + 1 < parts.length ? "." : ""}`);
+    return !text.includes(`"${qualified}"`) && !text.includes(`'${qualified}'`) && !prefixes.slice(0, -1).some(prefix => text.includes(`\`${prefix}\${`) || text.includes(`"${prefix}" +`));
   });
 }
 
 describe("the copy of the pages", () => {
+  it("has no retired shared or console helper copy", () => {
+    const source = sourceOf(pages.shared);
+    expect(unused(zhCommon, source, "common:")).toEqual([]);
+    expect(unused(zhConsole, source, "console:")).toEqual([]);
+  });
   it("has no retired settings copy", () => {
     const source = sourceOf(pages.settings).replaceAll("settingsStorage:", "");
     expect(unused(zhSettings, source)).toEqual([]);

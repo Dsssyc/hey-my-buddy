@@ -426,14 +426,14 @@ for (const width of [1280, 390]) for (const theme of ["light", "dark"]) {
         };
         return { content: edge.content, width: edge.width, colour: edge.backgroundColor,
           background: style.backgroundColor, border: style.borderLeftWidth,
-          hand: token("--hand-mark"), live: token("--live"), wash: token("--live-wash"), transition: style.transitionDuration };
+          hand: token("--hand-mark"), live: token("--live"), wash: token("--live-wash"), transition: style.transitionProperty };
       }));
       let measured = await styles();
       expect(measured[0]).toMatchObject({ width: "3px", colour: measured[0].hand });
       expect(measured[1]).toMatchObject({ width: "3px", colour: measured[1].live });
       for (const index of [2, 3]) expect(measured[index].content).toBe("none");
       expect(measured[3].background).toBe(measured[3].wash);
-      expect(measured.every(row => row.border === "0px" && row.transition === "0s")).toBe(true);
+      expect(measured.every(row => row.border === "0px" && row.transition === "none")).toBe(true);
       await assertListGeometry(page, width);
       await photograph(page, "edges-list", "zh-CN", width, theme);
       await rows.nth(1).click();

@@ -2,7 +2,7 @@ import i18n from "i18next";
 import { act, cleanup, render, renderHook, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, expect, it, vi } from "vitest";
-import { ApiError, createApi, errorText, parseReminderSettings, parseRuntimeVersion, type ConsoleApi } from "../api";
+import { ApiError, createApi, errorText, parseRuntimeVersion, type ConsoleApi } from "../api";
 import { useHarnessActions } from "../buddies/use-harness-actions";
 import { TooltipProvider } from "../components/ui/tooltip";
 import { ReminderSection } from "../settings/ReminderSection";

@@ -4,7 +4,6 @@ import { macroTaskTimelineFixture, macroTaskSummary } from "./macro-task-fixture
 import type { MacroTaskTimeline, TimelineSpan } from "./macro-task-types";
 
 const minutes = (count: number) => count * 60000;
-const at = (base: string, offsetMs: number) => new Date(new Date(base).getTime() + offsetMs).toISOString();
 
 function withSpans(spans: TimelineSpan[], overrides: Partial<MacroTaskTimeline> = {}): MacroTaskTimeline {
   const timeline = macroTaskTimelineFixture(overrides);

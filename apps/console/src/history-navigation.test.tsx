@@ -54,7 +54,6 @@ afterEach(() => { cleanup(); localStorage.clear(); vi.restoreAllMocks(); vi.unst
 
 
 const preference = VIEW_PREFERENCE_PREFIX + "macro-task-list-collapsed";
-const macroTaskRow = () => screen.getByRole("button", { name: /宏任务时间轴：设计、接口与实现/ });
 function narrow(matches: boolean) {
   vi.stubGlobal("matchMedia", vi.fn(() => ({ matches, addEventListener: vi.fn(), removeEventListener: vi.fn() })));
 }

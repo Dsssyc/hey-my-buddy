@@ -1,5 +1,5 @@
 import type { ModelService, Preference, Buddy, Task } from "./types";
-import { catalogPending, effortText, buddyName } from "./buddy-name";
+import { catalogPending, buddyName } from "./buddy-name";
 import i18n from "i18next";
 import { actorText } from "./actor";
 

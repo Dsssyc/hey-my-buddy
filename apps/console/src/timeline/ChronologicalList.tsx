@@ -2,10 +2,10 @@ import { useRef } from "react";
 import type { KeyboardEvent, ReactNode } from "react";
 import i18n from "i18next";
 import { useTranslation } from "react-i18next";
-import { clockTime, durationText, spanOutcome } from "../macro-task-display";
+import { clockTime, spanOutcome } from "../macro-task-display";
 import type { MacroTaskTimeline, TimelineEvent, TimelineRow, TimelineSpan } from "../macro-task-types";
 import { locale } from "../i18n";
-import { formatDurationMinutes } from "../i18n/format";
+import { formatDuration } from "../i18n/format";
 import { parseTimelineInstant as instant } from "./instant";
 import type { TimelineBreak, TimelineScale } from "./scale";
 import { eventName, eventReadout, spanReadout } from "./Tracks";
@@ -71,21 +71,21 @@ export function ChronologicalList({ timeline, scale, nowMs, onOpen }: {
     lastDay = currentDay;
     if (entry.kind === "break") return [...heading, <div key={`break:${entry.gap.startMs}:${index}`} data-slot="chronological-break" data-start={entry.gap.startMs} data-end={entry.gap.endMs}
       className="grid grid-cols-[4.5rem_1rem_minmax(0,1fr)] items-center gap-3 border-b border-line2 bg-sunk px-4 py-2 text-xs text-ink3">
-      <time dateTime={new Date(entry.atMs).toISOString()}>{clockTime(entry.atMs)}</time>{marker(entry)}<span>{t("idle", { duration: formatDurationMinutes(entry.gap.endMs - entry.gap.startMs) })}</span>
+      <time dateTime={new Date(entry.atMs).toISOString()}>{clockTime(entry.atMs)}</time>{marker(entry)}<span>{t("idle", { duration: formatDuration(entry.gap.endMs - entry.gap.startMs, "minutes") })}</span>
     </div>];
     const runId = entry.kind === "acceptance" ? entry.row.runId : entry.kind === "event" ? entry.event.runId : entry.span.runId;
     const key = entry.kind === "acceptance" ? `settle:${entry.row.runId}` : entry.kind === "event" ? `event:${entry.event.seq}` : entry.kind === "inquiry" ? `inquiry:${entry.inquiry.inquiryId}` : `span:${entry.span.spanId}`;
     const openKey = entry.kind === "inquiry" ? `span:${entry.span.spanId}` : key;
     const taskName = entry.row?.title ?? runId;
     let description: string;
-    if (entry.kind === "acceptance") description = `${t("review")} · ${durationText(entry.endMs - entry.atMs)}`;
+    if (entry.kind === "acceptance") description = `${t("review")} · ${formatDuration(entry.endMs - entry.atMs)}`;
     else if (entry.kind === "event") description = eventName(entry.event);
     else if (entry.kind === "inquiry") description = [t("drawing.inquiry"), entry.inquiry.author, i18n.t(`taskDetail:inquiry.${entry.inquiry.state}`)].filter(Boolean).join(" · ");
     else {
       const span = entry.span;
       const outcome = spanOutcome(span);
       const endMs = instant(span.endAt) ?? (["open", "running", "unknown"].includes(outcome) ? nowMs : null);
-      const duration = endMs === null ? null : durationText(endMs - entry.atMs);
+      const duration = endMs === null || endMs < entry.atMs ? null : formatDuration(endMs - entry.atMs);
       const name = span.kind === "execution" && span.turnIndex !== null ? t("turn", { n: span.turnIndex })
         : span.kind === "host" ? i18n.t(entry.row?.rootLeadRunId ? "console:waitingForLead" : "console:waitingForHost")
           : t(`kind.${span.kind}`);

@@ -8,7 +8,7 @@ import { Button } from "./components/ui/button";
 import { Hint } from "./components/hint";
 import { displayTitle } from "./macro-task-display";
 import { macroTaskMetrics } from "./macro-task-metrics";
-import { formatDuration, formatDurationMinutes, formatList, formatMoment, formatMomentMinutes, formatNumber } from "./i18n/format";
+import { formatDuration, formatList, formatMoment, formatMomentMinutes, formatNumber } from "./i18n/format";
 import { StateMark } from "./components/ui/state-mark";
 import { CopyableIdentifier } from "./components/CopyableIdentifier";
 
@@ -42,7 +42,7 @@ export function MacroTaskOverview({ summary, timeline, loading, stale, active = 
   const lastActivity = shown.lastActivityAt === null ? null : Date.parse(shown.lastActivityAt);
   const clock = observed;
   const end = shown.counts.active || shown.counts.host || shown.counts.review ? clock : lastActivity;
-  const elapsed = created === null || end === null ? t("unrecorded") : formatDurationMinutes(end - created);
+  const elapsed = created === null || end === null ? t("unrecorded") : formatDuration(end - created, "minutes");
   const cumulative = metrics && metrics.sumMs !== null && metrics.unionMs !== null && metrics.sumMs !== metrics.unionMs
     ? metrics.sumMs : null;
   const counts: Count[] = [

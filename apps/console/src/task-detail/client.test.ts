@@ -1,7 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import type { ConsoleApi } from "../api";
 import { createTaskDetailClient } from "./client";
-import { task } from "./task-detail.fixtures";
 
 const entry = (id: string) => ({ decisionId: id, status: "completed", source: "model-selection", selectedBuddy: null, routerBuddy: null, routingMode: "fast", reason: null });
 const reply = (entries: string[], nextCursor: number | null, audit = true) => ({

@@ -65,7 +65,7 @@ describe("ChronologicalList", () => {
     const view = render(<ChronologicalList timeline={data} scale={{ ...scale, breaks: [] }} nowMs={ms(30)} onOpen={onOpen}/>);
     const waiting = items().find(item => item.dataset.key === "settle:r1")!;
     expect(waiting.textContent).toContain("等待验收");
-    expect(waiting.textContent).toContain("20 分钟");
+    expect(waiting.textContent).toContain("20 分");
     fireEvent.click(waiting);
     expect(onOpen).toHaveBeenCalledWith("r1", "settle:r1");
     view.rerender(<ChronologicalList timeline={{ ...data, spans: [{ ...execution, shutdownConfirmed: false, uncertain: true }] }} scale={scale} nowMs={ms(30)} onOpen={onOpen}/>);

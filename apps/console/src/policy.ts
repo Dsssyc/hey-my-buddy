@@ -57,7 +57,7 @@ export function hasExecutionCapability(buddy: Buddy | undefined): boolean {
 }
 
 /** Enabled, currently available and able to execute a delegated helper task. */
-export function isExecutionCandidate(buddy: Buddy | undefined): boolean {
+function isExecutionCandidate(buddy: Buddy | undefined): boolean {
   return !!buddy && buddy.enabled && buddy.available && hasExecutionCapability(buddy);
 }
 
@@ -81,7 +81,7 @@ export function routerRefusal(buddy: Buddy, mode: "fast" | "review" = "review"):
 }
 
 /** One actionable message about a user-owned setting. */
-export type PolicyIssue = {
+type PolicyIssue = {
   buddyId: string;
   label: string;
   message: string;

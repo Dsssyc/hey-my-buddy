@@ -19,7 +19,7 @@ const liveT = i18n.getFixedT(null, "buddies");
  * entry never runs. Only a newer usable native observation clears the
  * exhaustion itself.
  */
-export type RetryOutcome = "duplicate" | "opened" | "already" | "none";
+type RetryOutcome = "duplicate" | "opened" | "already" | "none";
 
 type Reply = { duplicate?: boolean; quota?: { opened?: (string | null)[]; alreadyOpen?: (string | null)[] } };
 

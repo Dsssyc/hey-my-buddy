@@ -177,7 +177,7 @@ test.describe("unreached expected duration", () => {
     const frame = await track.getAttribute("viewBox");
     expect(Number(frame!.split(" ")[2]) - 16).toBeCloseTo(nowX);
     await track.locator('[data-key="span:execution:att-a3-1"]').hover();
-    await expect(page.locator('[data-slot="timeline-status"]')).toContainText("Expected 4 hr");
+    await expect(page.locator('[data-slot="timeline-status"]')).toContainText("Expected 4 h");
     await expectDrawingGeometry(page);
   });
 });
