@@ -179,6 +179,14 @@ describe("governed workflow console (0.15.1 read-only)", () => {
     expect(screen.getByText(/目标范围内共 1 项执行尚未核实/)).toBeTruthy();
     expect(screen.getByText("已验收")).toBeTruthy();
   });
+
+  it("shows a recorded review rejection without an acceptance verdict", async () => {
+    const f = fixture();
+    f.props.task.reviewRejectedAt = "2026-09-26T07:25:00Z";
+    f.props.task.reviewRejectionNote = "需要补充验证";
+    render(<WorkflowPanel {...f.props} initialSection="overview" />);
+    expect(await screen.findByText("验收问题")).toBeTruthy();
+  });
 });
 
  it("switches the recorded turn summary in place and resets for a different turn", async () => {

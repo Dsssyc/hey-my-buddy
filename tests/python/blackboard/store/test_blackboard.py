@@ -276,6 +276,47 @@ class TestConcurrency(BoardTestCase):
             )
         self.assertEqual(caught.exception.code, "STALE_GENERATION")
 
+    def test_rejected_execution_review_is_archived_before_retry_and_new_acceptance(self):
+        board = self.board()
+        client = board.client()
+        task = client.submit(requestId="review-retry", task="do", cwd=str(self.workdir()),
+                             adapter="command", argv=["/bin/true"])["task"]
+        client.register_worker("w-review", adapter="command", capabilities=["command"])
+        first = client.claim("w-review", "claim-review-1", "a" * 32)["claim"]["attempt"]
+        client.submit_result("w-review", first["attemptId"], first["generation"], "a" * 32,
+                             {"status": "failed", "result": {"status": "nonzero"},
+                              "shutdownConfirmed": True, "error": "needs revision"})
+
+        params = {"runId": task["runId"], "note": "output needs revision", "verdict": "rejected"}
+        rejected = board.call("task_acknowledge", params)
+        self.assertFalse(rejected["duplicate"])
+        self.assertIsNone(rejected["task"]["acceptedAt"])
+        self.assertIsNone(rejected["task"]["acceptanceVerdict"])
+        self.assertIsNotNone(rejected["task"]["reviewRejectedAt"])
+        self.assertEqual(rejected["task"]["reviewRejectionNote"], "output needs revision")
+        self.assertTrue(board.call("task_acknowledge", params)["duplicate"])
+        with self.assertRaises(BoardError) as caught:
+            board.call("task_acknowledge", {"runId": task["runId"], "note": "now accepted"})
+        self.assertEqual(caught.exception.code, "CONFLICT")
+
+        retried = client.retry(runId=task["runId"], reason="revise output")
+        self.assertIsNone(retried["reviewRejectedAt"])
+        self.assertIsNone(retried["reviewRejectionNote"])
+        events = board.call("events_read", {"runId": task["runId"], "after": 0})["events"]
+        archived = [event for event in events if event["kind"] == "task.review_archived"]
+        self.assertEqual(len(archived), 1)
+        self.assertEqual(archived[0]["payload"]["verdict"], "rejected")
+        self.assertEqual(archived[0]["payload"]["reviewRejectedAt"], rejected["task"]["reviewRejectedAt"])
+        self.assertEqual(archived[0]["payload"]["note"], "output needs revision")
+
+        second = client.claim("w-review", "claim-review-2", "b" * 32)["claim"]["attempt"]
+        client.submit_result("w-review", second["attemptId"], second["generation"], "b" * 32,
+                             {"status": "ok", "result": {"status": "ok"}, "shutdownConfirmed": True})
+        accepted = board.call("task_acknowledge", {"runId": task["runId"], "note": "revised output"})["task"]
+        self.assertEqual(accepted["acceptanceVerdict"], "accepted")
+        self.assertIsNotNone(accepted["acceptedAt"])
+        self.assertIsNone(accepted["reviewRejectedAt"])
+
 
 class TestCrashWindows(BoardTestCase):
     """Group 3: no duplicate execution and no silently lost committed result."""

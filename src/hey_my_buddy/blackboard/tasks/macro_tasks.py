@@ -556,6 +556,8 @@ def _timeline_row(connection, row, depth: int) -> dict:
         "buddy": _full_buddy(metadata["buddy"]),
         "acceptedAt": row["accepted_at"],
         "acceptanceVerdict": row["acceptance_verdict"],
+        "reviewRejectedAt": row["review_rejected_at"],
+        "reviewRejectionNote": row["review_rejection_note"],
     }
 
 

@@ -35,11 +35,12 @@ TASK_STATES = (
     "running",
     "cancelling",
     "completed",
+    "concluded",
     "failed",
     "cancelled",
     "reconciliation-needed",
 )
-TERMINAL_TASK_STATES = frozenset({"completed", "failed", "cancelled"})
+TERMINAL_TASK_STATES = frozenset({"completed", "concluded", "failed", "cancelled"})
 
 ATTEMPT_STATES = ("starting", "executing", "finalizing", "uncertain", "finished")
 ACTIVE_ATTEMPT_STATES = frozenset({"starting", "executing", "finalizing", "uncertain"})
@@ -74,7 +75,7 @@ CREATE TABLE IF NOT EXISTS tasks (
     exclusive_resources     TEXT NOT NULL DEFAULT '[]',
     timeout_seconds         INTEGER NOT NULL,
     state                   TEXT NOT NULL
-        CHECK (state IN ('queued','running','cancelling','completed','failed','cancelled','reconciliation-needed')),
+        CHECK (state IN ('queued','running','cancelling','completed','concluded','failed','cancelled','reconciliation-needed')),
     queue_reason            TEXT,
     revision                INTEGER NOT NULL,
     selected_attempt_id     TEXT,
@@ -83,7 +84,9 @@ CREATE TABLE IF NOT EXISTS tasks (
     updated_at              TEXT NOT NULL,
     accepted_at             TEXT,
     acceptance_note         TEXT,
-    acceptance_verdict      TEXT,
+    acceptance_verdict      TEXT CHECK (acceptance_verdict = 'accepted'),
+    review_rejected_at      TEXT,
+    review_rejection_note   TEXT,
     queue_position          INTEGER
 );
 CREATE INDEX IF NOT EXISTS tasks_state_idx ON tasks(state, created_at);
@@ -456,6 +459,7 @@ CREATE TABLE IF NOT EXISTS workflow_turns (
     state               TEXT NOT NULL CHECK (state IN ('prepared','running','concluded','failed')),
     disposition         TEXT CHECK (disposition IN ('completed','assistance','attention')),
     outcome_json        TEXT,
+    outcome_truncated_json TEXT,
     provenance_json     TEXT,
     turn_result_path    TEXT,
     sealed_artifacts_json TEXT NOT NULL DEFAULT '[]',
@@ -511,7 +515,7 @@ CREATE TABLE IF NOT EXISTS workflow_runs (
     workspace_id            TEXT,
     workspace_manifest_sha256 TEXT,
     state                   TEXT NOT NULL
-        CHECK (state IN ('executing','awaiting-host','waiting-helpers','delivered','accepted','cancelled','failed')),
+        CHECK (state IN ('executing','awaiting-host','waiting-helpers','delivered','accepted','concluded','cancelled','failed')),
     active_request_id       TEXT,
     current_turn_id         TEXT,
     current_attempt_id      TEXT,
@@ -901,7 +905,7 @@ CREATE TABLE IF NOT EXISTS workflow_host_conclusions (
     owner_generation INTEGER NOT NULL,
     execution_status TEXT NOT NULL CHECK (execution_status IN ('failed','cancelled','delivered')),
     note             TEXT NOT NULL,
-    evidence_json    TEXT NOT NULL DEFAULT '[]',
+    evidence_json    TEXT NOT NULL DEFAULT '{"references":[]}',
     artifact_id      TEXT REFERENCES workflow_artifacts(artifact_id) ON DELETE RESTRICT,
     integration_id   TEXT REFERENCES workflow_integrations(integration_id) ON DELETE RESTRICT,
     actor            TEXT NOT NULL,
@@ -909,7 +913,7 @@ CREATE TABLE IF NOT EXISTS workflow_host_conclusions (
     created_at       TEXT NOT NULL
 );
 """
-HOST_CONCLUSION_INDEX = "CREATE INDEX IF NOT EXISTS workflow_host_conclusions_run_idx ON workflow_host_conclusions(run_id, run_revision)"
+HOST_CONCLUSION_INDEX = "CREATE UNIQUE INDEX IF NOT EXISTS workflow_host_conclusions_run_idx ON workflow_host_conclusions(run_id)"
 ROUTER_SCHEMA = """
 CREATE TABLE IF NOT EXISTS router_settings (
     id INTEGER PRIMARY KEY CHECK (id = 1),

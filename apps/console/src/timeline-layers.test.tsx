@@ -589,7 +589,7 @@ describe("U6.5: opening glyphs retain room beside sticky labels", () => {
         resultStatus: outcome === "unknown" ? undefined : outcome, uncertain: outcome === "unknown",
         shutdownConfirmed: outcome !== "unknown", turnIndex: 1 })))];
     data.rows = [row({ acceptedAt: geometryAt(0), acceptanceVerdict: "accepted" }),
-      row({ runId: "r2", rootRunId: "r2", acceptedAt: geometryAt(0), acceptanceVerdict: "rejected" })];
+      row({ runId: "r2", rootRunId: "r2", reviewRejectedAt: geometryAt(0) })];
     const event = macroTaskTimelineFixture().events[0]!;
     data.events = [{ ...event, seq: 1, at: geometryAt(0) }, { ...event, seq: 2, at: geometryAt(1) }];
     render(<MacroTaskTimeline {...props(data, { selection: { type: "run", runId: "r1" } })} />);

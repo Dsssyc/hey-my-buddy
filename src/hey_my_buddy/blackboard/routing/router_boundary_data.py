@@ -275,8 +275,8 @@ def _continuation_context(connection, row, run_id, owner_run_id):
     ancestors = connection.execute(
         "WITH RECURSIVE ancestors(id) AS (SELECT ? UNION SELECT c.parent_run_id FROM workflow_children c JOIN ancestors a ON c.child_task_id=a.id) SELECT w.* FROM workflow_runs w JOIN ancestors a ON w.run_id=a.id",
         (run_id,)).fetchall()
-    if any(item["state"] in ("accepted", "cancelled") for item in ancestors):
-        return own_stopped, "The goal or an owning ancestor is accepted or cancelled", None, run
+    if any(item["state"] in ("accepted", "concluded", "cancelled") for item in ancestors):
+        return own_stopped, "The goal or an owning ancestor is closed or cancelled", None, run
     if connection.execute("SELECT 1 FROM workspace_cleanup_plans WHERE run_id=? AND state IN ('applying','applied')", (run_id,)).fetchone():
         return own_stopped, "The goal checkout is being cleaned or was removed", None, run
     if not own_stopped:

@@ -196,6 +196,8 @@ export type Task = {
   createdAt: string;
   acceptedAt: string | null;
   acceptanceVerdict: string | null;
+  reviewRejectedAt?: string | null;
+  reviewRejectionNote?: string | null;
   queueReason?: string | null;
   delegation?: Delegation;
   spec?: Record<string, unknown>;

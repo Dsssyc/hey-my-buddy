@@ -1,11 +1,27 @@
 import { describe, expect, it } from "vitest";
 import type { Task } from "./types";
-import { excerpt, taskTitle, titleTooltip } from "./task-state";
+import { excerpt, needsReview, taskTitle, titleTooltip } from "./task-state";
 
 const task = (overrides: Partial<Task> = {}): Task => ({
   runId: "run-1", task: "第一行标题\n第二行", status: "queued", owner: "host", cwd: "/repo",
   revision: 1, createdAt: "2026-09-26T00:00:00Z", acceptedAt: null, acceptanceVerdict: null,
   ...overrides,
+});
+
+describe("awaiting review", () => {
+  it("includes only delivered workflows with the required result and stop evidence", () => {
+    const delivered = task({
+      status: "completed", resultAvailable: true, shutdownConfirmed: true,
+      workflowShutdown: { selfConfirmed: true, descendantsConfirmed: true, unconfirmedRunIds: [], unconfirmedCount: 0, truncated: false },
+      workflow: { state: "delivered", awaitingHost: false, hostId: "host", ownerGeneration: 1, revision: 1 },
+    });
+    expect(needsReview(delivered)).toBe(true);
+    expect(needsReview({ ...delivered, workflow: undefined, workflowShutdown: undefined })).toBe(true);
+    expect(needsReview({ ...delivered, workflow: { ...delivered.workflow!, state: "concluded" } })).toBe(false);
+    expect(needsReview({ ...delivered, status: "concluded" })).toBe(false);
+    expect(needsReview({ ...delivered, workflowShutdown: undefined })).toBe(false);
+    expect(needsReview({ ...delivered, resultAvailable: false })).toBe(false);
+  });
 });
 
 describe("delegation title rule (0.16 T1)", () => {

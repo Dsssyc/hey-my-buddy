@@ -61,7 +61,7 @@ SUMMARIES: dict[str, str] = {
     "takeover": "Rotate the Host control capability and owner generation without restarting work.",
     "cancel": "Fence a governed goal and complete its owned descendant graph.",
     "accept": "Accept one delivered artifact: verify its integration, record acceptance and reclaim the checkout.",
-    "conclude": "End a failed, cancelled or delivered-unaccepted goal with an independent conclusion, then reclaim.",
+    "conclude": "End a failed, cancelled or delivered-unaccepted goal with an independent conclusion and terminal concluded state, then reclaim.",
     "reclaim": "Reclaim this goal's own registered managed checkout after a blocked or kept removal.",
     "scope-amend": "Append one authorized write-scope version for the next stage.",
     "workspace-resolve": "Settle one recorded out-of-scope failure site by restore, adopt or abandon.",

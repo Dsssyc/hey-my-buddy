@@ -43,7 +43,7 @@ MAX_RECONNECTS = 3
 
 # ``reconciliation-needed`` is terminal for a wait: the task will not move again
 # without an explicit retry, and no wait may relaunch it.
-TERMINAL_STATUSES = frozenset({"completed", "failed", "cancelled", "reconciliation-needed"})
+TERMINAL_STATUSES = frozenset({"completed", "concluded", "failed", "cancelled", "reconciliation-needed"})
 
 # Reported when a run reached ``completed`` but this call cannot deliver the
 # promised result payload. The execution status stays visible in ``status``;
@@ -496,7 +496,7 @@ def _wait_until_terminal(
         if workflow_state is None:
             if run.get("resultAvailable"):
                 break
-        elif workflow_state in ("delivered", "accepted", "cancelled", "failed"):
+        elif workflow_state in ("delivered", "accepted", "concluded", "cancelled", "failed"):
             shutdown = run.get("workflowShutdown")
             if not isinstance(shutdown, dict) or (
                 shutdown.get("selfConfirmed") is True and shutdown.get("descendantsConfirmed") is True

@@ -165,7 +165,7 @@ def observe(store: BoardStore, params: dict) -> dict:
         recorded = posted["message"]
         duplicate = bool(posted.get("duplicate"))
 
-    terminal = view["state"] in ("completed", "failed", "cancelled")
+    terminal = view["state"] in ("completed", "concluded", "failed", "cancelled")
     can_ask = inquiry_capable(adapter)
     can_observe = observe_capable(adapter)
     from ...buddy.harnesses.registry import live_binding

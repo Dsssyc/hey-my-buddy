@@ -591,13 +591,15 @@ class GovernedBoundaryTests(WorkflowTestCase):
                        "'attention','{}',?,?)", (leaf["runId"], root["runId"], T0, T0))
         before = self.board_.call("workflow_get", {"runId": leaf["runId"]})
         chosen = before["routing"]["routingBoundary"]["commands"]["continue"]["choices"][0]["params"]
-        with self.board_.store.db.write() as db:
-            db.execute("UPDATE workflow_runs SET state='cancelled' WHERE run_id=?", (root["runId"],))
-        after = self.board_.call("workflow_get", {"runId": leaf["runId"]})
-        self.assertTrue(after["routing"]["routingBoundary"]["commands"]["continue"]["blocked"])
-        with self.assertRaises(BoardError) as raised:
-            self.board_.call("workflow_continue", self.template_params(root, chosen))
-        self.assertEqual(raised.exception.code, "ANCESTOR_TERMINAL")
+        for terminal in ("cancelled", "concluded", "accepted"):
+            with self.subTest(terminal=terminal):
+                with self.board_.store.db.write() as db:
+                    db.execute("UPDATE workflow_runs SET state=? WHERE run_id=?", (terminal, root["runId"]))
+                after = self.board_.call("workflow_get", {"runId": leaf["runId"]})
+                self.assertTrue(after["routing"]["routingBoundary"]["commands"]["continue"]["blocked"])
+                with self.assertRaises(BoardError) as raised:
+                    self.board_.call("workflow_continue", self.template_params(root, chosen))
+                self.assertEqual(raised.exception.code, "ANCESTOR_TERMINAL")
 
     def test_cli_brief_get_and_await_retain_only_existing_boundary_data(self):
         from hey_my_buddy.cli import main as cli, cli_views

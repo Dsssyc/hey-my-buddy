@@ -267,6 +267,7 @@ class TestInquiry(BoardTestCase):
             executionWorkspace={"kind": "existing", "access": "read"},
         )
         self.assertTrue(submitted["governed"])
+        self._submission_control = submitted["control"]
         return client.get(runId=submitted["runId"])
 
     def _submit_dsh(self, client, cwd, *, request_id):
@@ -667,6 +668,12 @@ class TestInquiry(BoardTestCase):
         self.assertFalse(oversized["execution"]["shutdownConfirmed"])
 
     def test_terminal_history_reads_only_this_attempt_without_a_live_call_or_new_turn(self):
+        self._assert_terminal_history(concluded=False)
+
+    def test_concluded_history_reads_saved_answers_without_a_live_call(self):
+        self._assert_terminal_history(concluded=True)
+
+    def _assert_terminal_history(self, *, concluded):
         board = self.board()
         client = board.client()
         task, attempt, owner = self._attempt_directory(board, client)
@@ -682,6 +689,10 @@ class TestInquiry(BoardTestCase):
         client.submit_result(frame["workerId"], attempt["attemptId"], attempt["generation"], frame["nonce"],
                              {"status": "ok", "result": {"finalText": "fixture owner stopped"},
                               "shutdownConfirmed": True, "exitCode": 0})
+        if concluded:
+            closed = board.call("workflow_conclude", {"runId": task["runId"],
+                "note": "Stopped inquiry fixture", **self._submission_control})
+            self.assertEqual(closed["state"], "concluded")
         before = len(owner.requests)
         result = board.call("inquiry_observe", {"runId": task["runId"], "inquiryId": "q-terminal",
                             "question": "what was the last answer?", "waitMs": 100})

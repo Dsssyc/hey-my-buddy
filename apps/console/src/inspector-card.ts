@@ -255,7 +255,7 @@ export function buildInspectorCard(
     const runId = selection.key.slice(7);
     const row = rowsById.get(runId);
     if (!row) return null;
-    const rejected = row.acceptanceVerdict === "rejected";
+    const rejected = !row.acceptedAt && !!row.reviewRejectedAt;
     const fields: CardField[] = [
       { label: "类型", value: rejected ? "验收问题" : "验收" },
       delegationField(row),
@@ -263,7 +263,7 @@ export function buildInspectorCard(
     const wait = acceptanceWaitText(row, spansByRun.get(runId) ?? []);
     fields.push({
       label: "时间",
-      value: wait ? `${clockTime(row.acceptedAt)}${wait ? ` · ${wait}` : ""}` : clockTime(row.acceptedAt),
+      value: wait ? `${clockTime(row.acceptedAt ?? row.reviewRejectedAt)} · ${wait}` : clockTime(row.acceptedAt ?? row.reviewRejectedAt),
       title: wait ?? undefined,
     });
     fields.push({ label: "结果", value: rejected ? "验收问题" : "已验收" });

@@ -43,9 +43,10 @@ TASK_TRANSITIONS: dict[str, frozenset[str]] = {
     ),
     "cancelling": frozenset({"cancelling", "completed", "failed", "cancelled", "reconciliation-needed"}),
     "reconciliation-needed": frozenset({"reconciliation-needed", "queued", "cancelling", "cancelled", "failed"}),
-    "completed": frozenset({"completed"}),
-    "failed": frozenset({"failed", "queued"}),
-    "cancelled": frozenset({"cancelled", "queued"}),
+    "completed": frozenset({"completed", "concluded"}),
+    "failed": frozenset({"failed", "queued", "concluded"}),
+    "cancelled": frozenset({"cancelled", "queued", "concluded"}),
+    "concluded": frozenset({"concluded"}),
 }
 
 #: Documented attempt transition table.
@@ -356,6 +357,8 @@ class BoardStore:
             "acceptedAt": row["accepted_at"],
             "acceptanceNote": row["acceptance_note"],
             "acceptanceVerdict": row["acceptance_verdict"],
+            "reviewRejectedAt": row["review_rejected_at"],
+            "reviewRejectionNote": row["review_rejection_note"],
             "resultAvailable": False,
             "shutdownConfirmed": False,
             # The bounded latest native activity of the selected attempt, or null.
@@ -527,7 +530,8 @@ class BoardStore:
             view["workflow"] = workflow
             view["workflowState"] = workflow["state"]
             view["awaitingHost"] = workflow["awaitingHost"]
-            if workflow["state"] == "cancelled" and "cancellation" not in view:
+            if (workflow["state"] == "cancelled" or
+                    (workflow["hostConclusion"] is not None and workflow["hostConclusion"]["executionStatus"] == "cancelled")) and "cancellation" not in view:
                 from ..tasks.cancellation import for_run
                 view["cancellation"] = for_run(connection, task["task_id"])
         return view
@@ -1225,23 +1229,26 @@ class BoardStore:
             self._transition_task(connection, task, "queued")
             connection.execute(
                 "UPDATE tasks SET queue_reason=?, active_attempt_id=NULL, selected_attempt_id=NULL,"
-                " accepted_at=NULL, acceptance_note=NULL, acceptance_verdict=NULL WHERE task_id = ?",
+                " accepted_at=NULL, acceptance_note=NULL, acceptance_verdict=NULL,"
+                " review_rejected_at=NULL, review_rejection_note=NULL WHERE task_id = ?",
                 (blocker or "awaiting-worker", task["task_id"]),
             )
-            if task["accepted_at"]:
+            if task["accepted_at"] or task["review_rejected_at"]:
                 # The review belongs to the attempt that was reviewed; it is kept as
                 # history in the event stream, never inherited by the new attempt.
+                review = (
+                    {"acceptedAt": task["accepted_at"], "verdict": "accepted", "note": task["acceptance_note"]}
+                    if task["accepted_at"] else
+                    {"reviewRejectedAt": task["review_rejected_at"], "verdict": "rejected",
+                     "note": task["review_rejection_note"]}
+                )
                 self._append_event(
                     connection,
                     "task.review_archived",
                     task_id=task["task_id"],
                     attempt_id=attempt["attempt_id"] if attempt else None,
                     revision=task["revision"] + 1,
-                    payload={
-                        "acceptedAt": task["accepted_at"],
-                        "verdict": task["acceptance_verdict"],
-                        "note": task["acceptance_note"],
-                    },
+                    payload=review,
                 )
             self._append_event(
                 connection,
@@ -1314,22 +1321,32 @@ class BoardStore:
                     "Runner shutdown must be confirmed before acknowledgement; surviving processes are unknown",
                     attemptId=attempt["attempt_id"],
                 )
-            if task["accepted_at"]:
-                if task["acceptance_note"] != note or task["acceptance_verdict"] != verdict:
+            if task["accepted_at"] or task["review_rejected_at"]:
+                recorded_verdict = "accepted" if task["accepted_at"] else "rejected"
+                recorded_note = task["acceptance_note"] if task["accepted_at"] else task["review_rejection_note"]
+                if recorded_note != note or recorded_verdict != verdict:
                     raise BoardError(
                         "CONFLICT",
-                        "This run already has a different recorded acceptance; a reviewed outcome is not relabelled",
+                        "This run already has a different recorded review; a reviewed outcome is not relabelled",
                         acceptedAt=task["accepted_at"],
-                        verdict=task["acceptance_verdict"],
+                        reviewRejectedAt=task["review_rejected_at"],
+                        verdict=recorded_verdict,
                     )
                 response = {"task": self._decorate(connection, task), "duplicate": True}
             else:
                 now = self.now()
-                connection.execute(
-                    "UPDATE tasks SET accepted_at=?, acceptance_note=?, acceptance_verdict=?, updated_at=?, revision=revision+1"
-                    " WHERE task_id = ?",
-                    (now, note, verdict, now, task["task_id"]),
-                )
+                if verdict == "accepted":
+                    connection.execute(
+                        "UPDATE tasks SET accepted_at=?, acceptance_note=?, acceptance_verdict='accepted',"
+                        " updated_at=?, revision=revision+1 WHERE task_id = ?",
+                        (now, note, now, task["task_id"]),
+                    )
+                else:
+                    connection.execute(
+                        "UPDATE tasks SET review_rejected_at=?, review_rejection_note=?,"
+                        " updated_at=?, revision=revision+1 WHERE task_id = ?",
+                        (now, note, now, task["task_id"]),
+                    )
                 self._append_event(
                     connection,
                     "task.accepted" if verdict == "accepted" else "task.rejected",
@@ -2542,6 +2559,7 @@ class BoardStore:
             )
             head = self._head_of(connection)
         self._notify(head)
+        self.workflow.finalize_macro_stops(attempt["task_id"])
         return response
 
     def worker_release(self, params: dict) -> dict:
@@ -2624,6 +2642,7 @@ class BoardStore:
             )
             head = self._head_of(connection)
         self._notify(head)
+        self.workflow.finalize_macro_stops(attempt["task_id"])
         return {"task": self._decorate(connection, task_row) if False else self._task_view(task_row), "released": True}
 
     def worker_list(self, params: dict) -> dict:

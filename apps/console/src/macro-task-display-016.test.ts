@@ -161,7 +161,7 @@ describe("0.16 acceptance wait (P1.8)", () => {
   });
 
   it("words a rejected verdict as a pending conclusion", () => {
-    expect(acceptanceWaitText({ ...row, acceptanceVerdict: "rejected" }, [execution("2026-09-26T05:20:00Z", "2026-09-26T05:25:00Z")]))
+    expect(acceptanceWaitText({ ...row, acceptedAt: null, reviewRejectedAt: "2026-09-26T07:25:00Z" }, [execution("2026-09-26T05:20:00Z", "2026-09-26T05:25:00Z")]))
       .toContain("等待验收结论");
   });
 });

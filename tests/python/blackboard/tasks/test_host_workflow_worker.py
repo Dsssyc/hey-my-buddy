@@ -110,7 +110,7 @@ class HostQuotaRecoveryTests(GovernedWorkerTestCase):
                 **common,
                 "note": "Incomplete work is retained in the partial artifact; no further execution.",
             }), env=self.env())[1]
-            self.assertEqual(concluded["status"], "failed")
+            self.assertEqual(concluded["status"], "concluded")
             self.assertEqual(concluded["verdict"], "concluded")
             self.assertIsNotNone(concluded["hostConclusion"])
             self.assertTrue(concluded["reclaim"]["removed"], concluded["reclaim"])

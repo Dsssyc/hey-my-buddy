@@ -196,6 +196,28 @@ class WorkflowTestCase(BoardTestCase):
 
 
 class LifecycleTests(WorkflowTestCase):
+    def test_outcome_truncation_is_stored_and_returned_with_the_turn(self):
+        board = self.board()
+        self.register(board)
+        submitted = self.submit(board)
+        claim = self.claim(board)
+        truncated = {"remaining": {"droppedItems": 5, "shortenedItems": 1}}
+        record = self.turn_record(claim, outcomeTruncated=truncated)
+
+        self.finish_turn(board, claim, record=record)
+
+        with board.store.db.read() as connection:
+            stored = connection.execute(
+                "SELECT outcome_truncated_json FROM workflow_turns WHERE turn_id=?",
+                (claim["claim"]["turn"]["turnId"],),
+            ).fetchone()
+        self.assertEqual(json.loads(stored["outcome_truncated_json"]), truncated)
+        view = board.call("workflow_get", {"runId": submitted["runId"], "includeAudit": True})
+        self.assertEqual(view["currentTurn"]["outcomeTruncated"], truncated)
+        self.assertEqual(view["turns"][0]["outcomeTruncated"], truncated)
+        self.assertEqual(view["audit"]["turns"][0]["outcomeTruncated"], truncated)
+        self.assertNotIn("outcomeTruncated", view["audit"]["turns"][0]["outcome"])
+
     def test_host_command_execution_reads_have_no_native_quota_projection(self):
         board = self.board()
         self.register(board)
@@ -210,6 +232,7 @@ class LifecycleTests(WorkflowTestCase):
             self.assertNotIn('account', claim['claim'])
             self.finish_turn(board, claim)
             view = board.call('workflow_get', {'runId': run_id})
+            self.assertIsNone(view['currentTurn']['outcomeTruncated'])
             self.assertEqual(view['buddy'], {'adapter': 'command'})
             self.assertEqual(view['quotaWarnings'], [])
             self.assertEqual(view['task']['adapter'], 'command')
@@ -286,6 +309,8 @@ class LifecycleTests(WorkflowTestCase):
         accepted = self.accept_run(board, delivered)
         self.assertEqual(accepted["state"], "accepted")
         self.assertEqual(accepted["task"]["acceptanceVerdict"], "accepted")
+        self.assertIsNone(accepted["task"]["reviewRejectedAt"])
+        self.assertIsNone(accepted["task"]["reviewRejectionNote"])
         self.assertIsNotNone(accepted["finalArtifactId"])
 
     def test_one_slot_progress_serializes_turns(self):
@@ -1458,7 +1483,11 @@ class AcknowledgementBoundaryTests(WorkflowTestCase):
         archived = board.call("workflow_get", {"runId": submitted["runId"], "includeAudit": True})
         # The delivered outcome is recorded as rejected, never silently carried
         # into the continuation as an acceptance.
-        self.assertEqual(archived["task"]["acceptanceVerdict"], "rejected")
+        self.assertIsNone(archived["task"]["acceptanceVerdict"])
+        self.assertIsNone(archived["task"]["acceptedAt"])
+        self.assertIsNone(archived["task"]["acceptanceNote"])
+        self.assertIsNotNone(archived["task"]["reviewRejectedAt"])
+        self.assertEqual(archived["task"]["reviewRejectionNote"], "not good enough")
         events = board.call(
             "events_read", {"runId": submitted["runId"], "after": 0, "limit": 200}
         )["events"]
@@ -1469,11 +1498,25 @@ class AcknowledgementBoundaryTests(WorkflowTestCase):
         self.finish_turn(board, second, session_id="sess-2")
         delivered = board.call("workflow_get", {"runId": submitted["runId"]})
         self.assertEqual(delivered["state"], "delivered")
+        continued_again = self.continue_run(board, delivered, command_id="continue-2",
+                                            input="Fix the remaining defect", reason="second review")
+        self.assertEqual(continued_again["task"]["reviewRejectionNote"], "second review")
+        self.assertIsNotNone(continued_again["task"]["reviewRejectedAt"])
+        self.assertIsNone(continued_again["task"]["acceptedAt"])
+        events = board.call("events_read", {"runId": submitted["runId"], "after": 0, "limit": 200})["events"]
+        archived_reviews = [event["payload"] for event in events if event["kind"] == "task.review_archived"]
+        self.assertEqual(archived_reviews[-1]["note"], "not good enough")
+        self.assertEqual(archived_reviews[-1]["verdict"], "rejected")
+        third = self.claim(board, claim_request_id="c3")
+        self.finish_turn(board, third, session_id="sess-3")
+        delivered = board.call("workflow_get", {"runId": submitted["runId"]})
         new_output = [row for row in delivered["artifacts"] if row["kind"] == "output"][0]
         accepted = self.accept_run(board, delivered, note="now it is good")
         self.assertEqual(accepted["state"], "accepted")
         self.assertEqual(accepted["finalArtifactId"], new_output["artifactId"])
         self.assertEqual(accepted["task"]["acceptanceVerdict"], "accepted")
+        self.assertIsNone(accepted["task"]["reviewRejectedAt"])
+        self.assertIsNone(accepted["task"]["reviewRejectionNote"])
 
     def test_late_result_never_reopens_a_cancelled_goal(self):
         board = self.board()
@@ -1484,11 +1527,13 @@ class AcknowledgementBoundaryTests(WorkflowTestCase):
             "workflow_cancel", {"runId": submitted["runId"], "reason": "stop", **self.control(submitted)}
         )
         self.assertEqual(cancelled["state"], "cancelled")
-        late = self.finish_turn(board, claim)
+        truncated = {"decisions": {"droppedItems": 2, "shortenedItems": 0}}
+        late = self.finish_turn(board, claim, record=self.turn_record(claim, outcomeTruncated=truncated))
         self.assertEqual(late["workflow"]["state"], "cancelled")
         self.assertTrue(late["workflow"]["late"])
         parent = board.call("workflow_get", {"runId": submitted["runId"]})
         self.assertEqual(parent["state"], "cancelled")
+        self.assertEqual(parent["currentTurn"]["outcomeTruncated"], truncated)
 
 
 class NativeRequestShapeTests(WorkflowTestCase):

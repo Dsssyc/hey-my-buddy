@@ -928,10 +928,10 @@ export function MacroTaskTimeline(props: MacroTaskTimelineProps) {
                 const ownSpans = spansByRun.get(row.runId) ?? [];
                 const waitMs = settle ? acceptanceWaitMs(row, ownSpans) : null;
                 const waitText = settle ? acceptanceWaitText(row, ownSpans) : null;
-                const acceptedMs = toMs(row.acceptedAt);
+                const settledMs = settle?.atMs ?? null;
                 let waitLine: { from: number; to: number } | null = null;
-                if (settleLeft !== null && waitMs !== null && waitText !== null && acceptedMs !== null) {
-                  const from = scaled.position(acceptedMs - waitMs);
+                if (settleLeft !== null && waitMs !== null && waitText !== null && settledMs !== null) {
+                  const from = scaled.position(settledMs - waitMs);
                   if (from !== null && settleLeft >= from) waitLine = { from, to: settleLeft };
                 }
                 return <div key={row.runId} className={"tl-row" + (runSelected ? " run-selected" : "")} data-nav="">
@@ -958,10 +958,10 @@ export function MacroTaskTimeline(props: MacroTaskTimelineProps) {
                       aria-hidden="true" title={waitText ?? undefined} />}
                     {(spansByRun.get(row.runId) ?? []).map(span => renderSpan(row, span))}
                     {settle && settleLeft !== null && <button type="button"
-                      className={"tl-item flag " + (row.acceptanceVerdict === "rejected" ? "reject" : "accept") + (settleSelected ? " selected" : "") + (runSelected ? " run-member" : "")}
+                      className={"tl-item flag " + (!row.acceptedAt && row.reviewRejectedAt ? "reject" : "accept") + (settleSelected ? " selected" : "") + (runSelected ? " run-member" : "")}
                       style={{ left: `${settleLeft}%` }} data-x={settleLeft}
                       tabIndex={focusKey === settle.key ? 0 : -1} aria-label={itemAria(settle)} title={itemAria(settle)}
-                      {...itemHandlers(settle.key)}><span className="tl-mark-text" aria-hidden="true">{row.acceptanceVerdict === "rejected" ? "!" : "✓"}</span></button>}
+                      {...itemHandlers(settle.key)}><span className="tl-mark-text" aria-hidden="true">{!row.acceptedAt && row.reviewRejectedAt ? "!" : "✓"}</span></button>}
                   </div>
                 </div>;
               })}

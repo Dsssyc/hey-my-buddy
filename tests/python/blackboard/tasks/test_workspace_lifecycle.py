@@ -1408,7 +1408,7 @@ class LifecycleTestCase(RealWorkspaceTestCase):
             connection.execute("DELETE FROM workflow_artifacts WHERE artifact_id='art-forged'")
         (checkout / "smuggled.txt").unlink()
         concluded = board.call("workflow_conclude", params)
-        self.assertEqual(concluded["state"], "delivered")
+        self.assertEqual(concluded["state"], "concluded")
         self.assertTrue(concluded["reclaim"]["removed"], concluded["reclaim"])
         self.assertFalse(checkout.exists())
 

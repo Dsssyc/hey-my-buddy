@@ -68,6 +68,8 @@ export type TimelineRow = {
   buddy: TimelineBuddy | null;
   acceptedAt: string | null;
   acceptanceVerdict: string | null;
+  reviewRejectedAt?: string | null;
+  reviewRejectionNote?: string | null;
 };
 export type TimelineSpan = {
   spanId: string; runId: string; kind: "queue" | "routing" | "execution" | "host";

@@ -123,6 +123,16 @@ class CliViewTests(RealWorkspaceTestCase):
         self.assertEqual(fetched["macroTaskId"], submitted["macroTaskId"])
         self.assertEqual(fetched["title"], submitted["title"])
 
+    def test_get_brief_preserves_turn_outcome_truncation(self):
+        submitted, service_view = self.delivered()
+        truncated = {"decisions": {"droppedItems": 7, "shortenedItems": 0}}
+        with self.board_instance.store.db.write() as connection:
+            connection.execute("UPDATE workflow_turns SET outcome_truncated_json=? WHERE run_id=?",
+                               (json.dumps(truncated), submitted["runId"]))
+        code, brief, _ = self.cli("get", {"runId": submitted["runId"]})
+        self.assertEqual(code, 0, brief)
+        self.assertEqual(brief["currentTurn"]["outcomeTruncated"], truncated)
+
     def test_get_brief_keeps_next_command_identifiers_and_full_is_unchanged(self):
         submitted, service_view = self.delivered()
         run_id = submitted["runId"]

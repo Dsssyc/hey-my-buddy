@@ -57,7 +57,7 @@ MAX_LIVE_BINDINGS = 64
 #: answerable: every other state is finished, uncertain or unknown.
 LIVE_ATTEMPT_STATES = frozenset({"starting", "executing", "finalizing"})
 
-TERMINAL_TASK_STATES = frozenset({"completed", "failed", "cancelled"})
+TERMINAL_TASK_STATES = frozenset({"completed", "concluded", "failed", "cancelled"})
 
 
 class _LiveBinding:

@@ -313,6 +313,15 @@ class ReconnectTests(unittest.TestCase):
         self.assertEqual(service.calls.count("status"), 4)
         self.assertEqual(service.calls[0], "status")
 
+    def test_concluded_without_an_attempt_result_finishes_the_wait(self):
+        clock = VirtualClock()
+        service = FakeService(clock, listed=True, terminal_without_result="concluded")
+        envelope = await_run({"requestId": "fixture", "waitSeconds": 60},
+                             state_dir=Path(os.environ["BUDDY_STATE_DIR"]), service=service, clock=clock)
+        self.assertEqual(envelope["status"], "concluded")
+        self.assertFalse(envelope["resultAvailable"])
+        self.assertEqual(service.calls.count("wait"), 1)
+
     def test_terminal_without_persisted_result_is_reported(self):
         clock = VirtualClock()
         service = FakeService(clock, complete_after_waits=None, fail_waits=0, terminal_without_result=True)
