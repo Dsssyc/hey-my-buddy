@@ -19,6 +19,7 @@ import subprocess
 import sys
 import threading
 import time
+import unittest
 from pathlib import Path
 
 from support import BoardTestCase, wait_for
@@ -33,6 +34,7 @@ from hey_my_buddy.buddy.runtime.worker import (
     TERMINATION_COMPLETED,
     TERMINATION_DEADLINE,
     TERMINATION_HARNESS_ERROR,
+    TERMINATION_INTERRUPTED,
     TERMINATION_TRANSPORT_ERROR,
     TERMINATION_UNKNOWN_STOP,
     TERMINATION_WRAP_UP,
@@ -44,6 +46,7 @@ from hey_my_buddy.buddy.runtime.worker import (
     _Renewal,
     classify_termination,
 )
+from hey_my_buddy.protocol.process_identity import inspect_process_identity, stop_orphan_process
 
 SOURCE_ROOT = Path(__file__).resolve().parents[4] / "src"
 TEST_ROOT = Path(__file__).resolve().parent
@@ -60,7 +63,7 @@ def private_environment(directory: Path, **extra: str) -> dict:
         "HMB_RUNTIME_ROOT": str(directory / "runtime-root"),
         "HMB_DEV_SOURCE": "1",
         "VIRTUAL_ENV": "",
-        "PYTHONPATH": os.pathsep.join([str(SOURCE_ROOT), str(TEST_ROOT)]),
+        "PYTHONPATH": os.pathsep.join([str(SOURCE_ROOT), str(TEST_ROOT.parent.parent), str(TEST_ROOT)]),
         **extra,
     }
 
@@ -304,7 +307,7 @@ class RenewalAndRefusal(RecoveryBase):
         live.board.store.reconcile_startup()
         self.assertFalse(live.renewal()._renew(), "delivering the receipt ends this renewal thread")
         result = live.client.result(runId=live.task["runId"])
-        self.assertEqual(result["status"], "completed")
+        self.assertEqual(result["status"], "completed", result)
         self.assertEqual(result["resultMeta"]["terminationReason"], "completed")
         self.assertEqual(result["attemptId"], attempt["attemptId"])
         self.assertEqual(
@@ -352,7 +355,7 @@ class CompletionDuringOutage(RecoveryBase):
         self.assertEqual(worker.run_once(), "replayed")
         self.assertEqual(len(log.read_text().splitlines()), 1, "a durable receipt must never execute twice")
         result = client.result(runId=task["runId"])
-        self.assertEqual(result["status"], "completed")
+        self.assertEqual(result["status"], "completed", result)
         self.assertEqual(result["resultMeta"]["terminationReason"], "completed")
         self.assertEqual(result["attemptId"], attempt_id)
         self.assertIsNone(worker.spool.read(attempt_id), "the receipt is cleared only after the commit")
@@ -425,7 +428,8 @@ class TerminationTruth(RecoveryBase):
         self.assertEqual(
             {TERMINATION_COMPLETED, TERMINATION_UNKNOWN_STOP, TERMINATION_DEADLINE, TERMINATION_HARNESS_ERROR,
              TERMINATION_TRANSPORT_ERROR, TERMINATION_WRAP_UP, TERMINATION_GRACE_EXPIRED,
-             TERMINATION_FORCED_STOP, TERMINATION_CONSOLE_STOP, TERMINATION_SERVICE_STOP},
+             TERMINATION_FORCED_STOP, TERMINATION_CONSOLE_STOP, TERMINATION_SERVICE_STOP,
+             TERMINATION_INTERRUPTED},
             set(TERMINATION_REASONS),
         )
 
@@ -460,6 +464,161 @@ class TerminationTruth(RecoveryBase):
 class RealDaemonRestart(RecoveryBase):
     """The same regression over the real daemon and a real detached supervisor."""
 
+    @unittest.skipUnless(os.name == "posix", "real Worker crash injection uses POSIX processes")
+    def test_killed_worker_with_surviving_child_is_stopped_and_interrupted(self):
+        self._crash_worker_with_child(kill_child=False)
+
+    @unittest.skipUnless(os.name == "posix", "real Worker crash injection uses POSIX processes")
+    def test_killed_worker_and_child_are_recorded_as_identity_absent(self):
+        self._crash_worker_with_child(kill_child=True)
+
+    def _crash_worker_with_child(self, *, kill_child: bool) -> None:
+        import psutil
+
+        suffix = "both" if kill_child else "worker"
+        environment = private_environment(self.directory, HMB_LEASE_SECONDS="2", HMB_MAX_CONCURRENT="1")
+        child_environment = self.child_environment(environment)
+        supervisor = None
+        replacement = None
+        identity = None
+        try:
+            with self.daemon(env=environment):
+                supervisor = subprocess.Popen(
+                    [sys.executable, "-m", "hey_my_buddy.buddy.runtime.supervisor",
+                     "--worker-id", f"crash-{suffix}", "--state-dir", str(self.directory),
+                     "--capabilities", f"crash-{suffix}", "--lease-seconds", "2"],
+                    env=child_environment, stdin=subprocess.DEVNULL,
+                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True,
+                )
+                self.children = getattr(self, "children", [])
+                self.children.append(supervisor)
+                starts = self.directory / f"crash-{suffix}-starts.txt"
+                code, task = self.cli("execution-submit", json.dumps({
+                    "requestId": f"crash-{suffix}-1", "task": "recover a crashed Worker",
+                    "cwd": str(self.workdir()), "adapter": "command",
+                    "argv": ["/bin/sh", "-c", f"echo start >> {starts}; sleep 60"],
+                    "expectedSeconds": 120, "requiredCapabilities": [f"crash-{suffix}"],
+                }), env=environment)
+                self.assertEqual(code, 0, task)
+                run_id = task["runId"]
+                self.assertTrue(wait_for(lambda: self._status(run_id, environment)["status"] == "running", 30))
+                attempt_id = self._status(run_id, environment)["selectedAttemptId"]
+                marker = self.directory / "attempts" / run_id / attempt_id / "spawn.marker"
+                self.assertTrue(wait_for(marker.exists, 20))
+                identity = json.loads(marker.read_text())["processIdentity"]
+                self.assertEqual(inspect_process_identity(identity), "alive")
+                self.assertTrue(wait_for(starts.exists, 5))
+                worker = psutil.Process(identity["worker"]["pid"])
+                self.assertEqual(worker.create_time(), identity["worker"]["startedAt"])
+                self.assertEqual(worker.pid, supervisor.pid)
+                if kill_child:
+                    worker.suspend()
+                    child = psutil.Process(identity["pid"])
+                    self.assertEqual(child.create_time(), identity["startedAt"])
+                    descendants = child.children(recursive=True)
+                    for process in descendants:
+                        process.kill()
+                    child.kill()
+                worker.kill()
+                supervisor.wait(timeout=10)
+                replacement = subprocess.Popen(
+                    [sys.executable, "-m", "hey_my_buddy.buddy.runtime.supervisor",
+                     "--worker-id", f"crash-{suffix}", "--state-dir", str(self.directory),
+                     "--capabilities", f"crash-{suffix}", "--lease-seconds", "2"],
+                    env=child_environment, stdin=subprocess.DEVNULL,
+                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True,
+                )
+                self.children.append(replacement)
+                self.assertTrue(wait_for(lambda: self._status(run_id, environment)["attemptState"] == "finished", 40),
+                                "the private supervisor's replacement Worker and service sweep must settle the attempt")
+                self.assertEqual(starts.read_text().splitlines(), ["start"])
+                result = self.cli("result", json.dumps({"runId": run_id}), env=environment)[1]
+                self.assertEqual(result["attemptId"], attempt_id)
+                self.assertEqual(result["resultMeta"]["terminationReason"], "interrupted")
+                kind = result["result"]["interruptionEvidence"]["kind"]
+                self.assertEqual(kind, "identity-absent" if kill_child else "worker-stopped")
+        finally:
+            if replacement is not None and replacement.poll() is None:
+                replacement.terminate()
+                try:
+                    replacement.wait(timeout=20)
+                except subprocess.TimeoutExpired:
+                    replacement.kill()
+                    replacement.wait(timeout=10)
+            if supervisor is not None and supervisor.poll() is None:
+                supervisor.terminate()
+                try:
+                    supervisor.wait(timeout=20)
+                except subprocess.TimeoutExpired:
+                    supervisor.kill()
+                    supervisor.wait(timeout=10)
+            if identity is not None and inspect_process_identity(identity) == "alive":
+                stop_orphan_process(identity)
+
+    @unittest.skipUnless(os.name == "posix", "pausing a real Worker uses POSIX signals")
+    def test_a_paused_worker_outlives_its_lease_then_reattaches_and_completes(self):
+        import psutil
+
+        environment = private_environment(self.directory, HMB_LEASE_SECONDS="2", HMB_MAX_CONCURRENT="1")
+        child_environment = self.child_environment(environment)
+        supervisor = None
+        worker_process = None
+        paused = False
+        try:
+            with self.daemon(env=environment):
+                supervisor = subprocess.Popen(
+                    [sys.executable, "-m", "hey_my_buddy.buddy.runtime.supervisor",
+                     "--worker-id", "sleep-recover", "--state-dir", str(self.directory),
+                     "--capabilities", "sleep-recover", "--lease-seconds", "2"],
+                    env=child_environment, stdin=subprocess.DEVNULL,
+                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True,
+                )
+                self.children = getattr(self, "children", [])
+                self.children.append(supervisor)
+                starts = self.directory / "sleep-starts.txt"
+                code, task = self.cli("execution-submit", json.dumps({
+                    "requestId": "sleep-recover-1", "task": "complete after Worker suspension",
+                    "cwd": str(self.workdir()), "adapter": "command",
+                    "argv": ["/bin/sh", "-c", f"echo start >> {starts}; sleep 50"],
+                    "expectedSeconds": 120, "requiredCapabilities": ["sleep-recover"],
+                }), env=environment)
+                self.assertEqual(code, 0, task)
+                run_id = task["runId"]
+                self.assertTrue(wait_for(lambda: self._status(run_id, environment)["status"] == "running", 30))
+                attempt_id = self._status(run_id, environment)["selectedAttemptId"]
+                marker = self.directory / "attempts" / run_id / attempt_id / "spawn.marker"
+                self.assertTrue(wait_for(marker.exists, 20))
+                identity = json.loads(marker.read_text())["processIdentity"]
+                worker_identity = identity["worker"]
+                worker_process = psutil.Process(worker_identity["pid"])
+                self.assertEqual(worker_process.create_time(), worker_identity["startedAt"])
+                self.assertEqual(worker_process.pid, supervisor.pid)
+                worker_process.suspend()
+                paused = True
+                self.assertTrue(wait_for(lambda: self._status(run_id, environment)["attemptState"] == "uncertain", 35),
+                                "the lease sweep must mark the paused attempt unknown")
+                self.assertEqual(self._status(run_id, environment)["status"], "running")
+                self.assertEqual(worker_process.create_time(), worker_identity["startedAt"])
+                worker_process.resume()
+                paused = False
+                self.assertTrue(wait_for(lambda: self._status(run_id, environment)["attemptState"] == "executing", 12),
+                                "the original Worker must reattach after its pause")
+                self.assertTrue(wait_for(lambda: self._status(run_id, environment)["status"] == "completed", 35))
+                self.assertEqual(starts.read_text().splitlines(), ["start"])
+                result = self.cli("result", json.dumps({"runId": run_id}), env=environment)[1]
+                self.assertEqual(result["attemptId"], attempt_id)
+                self.assertEqual(result["resultMeta"]["terminationReason"], "completed")
+        finally:
+            if paused and worker_process is not None and worker_process.is_running():
+                worker_process.resume()
+            if supervisor is not None and supervisor.poll() is None:
+                supervisor.terminate()
+                try:
+                    supervisor.wait(timeout=20)
+                except subprocess.TimeoutExpired:
+                    supervisor.kill()
+                    supervisor.wait(timeout=10)
+
     def test_a_real_supervisor_keeps_its_child_and_reattaches_after_a_restart(self):
         environment = private_environment(
             self.directory,
@@ -471,7 +630,7 @@ class RealDaemonRestart(RecoveryBase):
         self.assertEqual(Path(child_environment["HOME"]).resolve(), self.directory / "home")
         self.assertEqual(child_environment["PYTHONPATH"], environment["PYTHONPATH"])
         supervisor = None
-        pgid = None
+        process_identity = None
         try:
             with self.daemon(env=environment) as first:
                 supervisor = subprocess.Popen(
@@ -521,8 +680,8 @@ class RealDaemonRestart(RecoveryBase):
                 attempt_id = self._status(run_id, environment)["selectedAttemptId"]
                 marker = self.directory / "attempts" / run_id / attempt_id / "spawn.marker"
                 self.assertTrue(wait_for(lambda: marker.exists(), 20), "the worker must record its real spawn")
-                pgid = json.loads(marker.read_text())["pgid"]
-                self.assertTrue(self._group_alive(pgid))
+                process_identity = json.loads(marker.read_text())["processIdentity"]
+                self.assertEqual(inspect_process_identity(process_identity), "alive")
                 code, restarted = self.cli("restart", env=environment)
                 self.assertEqual(code, 0, restarted)
                 self.assertTrue(restarted["workersPreserved"])
@@ -544,7 +703,8 @@ class RealDaemonRestart(RecoveryBase):
                 )
                 self.assertEqual(view["attemptGeneration"], 1, "no replacement generation may exist")
                 self.assertEqual(view["status"], "running")
-                self.assertTrue(self._group_alive(pgid), "the owned child survived the restart")
+                self.assertEqual(inspect_process_identity(process_identity), "alive",
+                                 "the owned child survived the restart")
                 events = self.cli("events", json.dumps({"after": 0, "limit": 200}), env=environment)[1]["events"]
                 kinds = [event["kind"] for event in events]
                 self.assertIn("attempt.uncertain", kinds)
@@ -569,12 +729,8 @@ class RealDaemonRestart(RecoveryBase):
                 except subprocess.TimeoutExpired:  # pragma: no cover - test watchdog
                     supervisor.kill()
                     supervisor.wait(timeout=10)
-            if pgid is not None and self._group_alive(pgid):
-                try:
-                    os.killpg(pgid, signal.SIGKILL)
-                except OSError:
-                    pass
-                wait_for(lambda: not self._group_alive(pgid), 20)
+            if process_identity is not None and inspect_process_identity(process_identity) == "alive":
+                stop_orphan_process(process_identity)
 
     def _status(self, run_id: str, environment: dict) -> dict:
         code, view = self.cli("status", json.dumps({"runId": run_id}), env=environment)

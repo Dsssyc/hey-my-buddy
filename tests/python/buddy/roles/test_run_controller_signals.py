@@ -16,7 +16,6 @@ from hey_my_buddy.buddy.roles import run_execution
 from hey_my_buddy.buddy.roles.controller import worker_executor
 
 CONTROLLER = "hey_my_buddy.buddy.roles.run_controller"
-SOURCE = Path(__file__).resolve().parents[4] / "src"
 NATIVE_FIXTURE = Path(__file__).resolve().parents[1] / "harnesses/codex/fixtures/mock_codex.py"
 
 # The import boundary is synchronous: this signal lands before the controller's
@@ -81,7 +80,7 @@ class ControllerSignalTests(unittest.TestCase):
                                HMB_RUNTIME_ROOT=str(root / "runtime"),
                                HMB_CODEX_CLI=str(native), HMB_CODEX_FIXTURE_CASE="ok",
                                HMB_CODEX_FIXTURE_STATE=str(root / "fixture.json"),
-                               PYTHONPATH=str(SOURCE))
+                               PYTHONPATH=os.environ["PYTHONPATH"])
             turn_input = {"version": 1, "taskId": "micro-task-1", "attemptId": "attempt-1",
                           "generation": 1, "turnId": "turn-1", "resumeMode": "initial",
                           "previousSessionId": None, "context": {}, "executionWorkspace": {}}

@@ -426,6 +426,8 @@ def _launch(control: dict, context: ExecutionContext, *, environment: dict,
     root = ensure_private_dir(Path(control["privateRoot"]))
     control.update(invocationId=identity.invocation_id, requestFile=str(root / _REQUEST),
                    verdictFile=str(root / _VERDICT),
+                   taskId=identity.task_id, attemptId=identity.attempt_id,
+                   generation=identity.generation,
                    live={"instanceId": uuid.uuid4().hex + uuid.uuid4().hex,
                          "token": secrets.token_hex(32), "readyFile": str(root / "live-ready.json")})
     path = root / _CONTROL

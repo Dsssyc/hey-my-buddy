@@ -237,6 +237,16 @@ def migrate(state: Path) -> None:
             _rebuild(connection, 'tasks', _task)
             _rebuild(connection, 'workflow_turns', lambda row: _turn(connection, row))
             _rebuild(connection, 'attempts', lambda row: _attempt(row, stops))
+            for name in ('attempt_process_identities', 'attempt_legacy_starts',
+                         'attempt_native_process_identities', 'attempt_interruptions'):
+                ddl, indexes = _fresh_ddl(name)
+                connection.execute(ddl)
+                for index in indexes:
+                    connection.execute(index)
+            connection.execute(
+                "INSERT INTO attempt_legacy_starts(attempt_id,started_at)"
+                " SELECT attempt_id,COALESCE(started_at,created_at) FROM attempts"
+                " WHERE execution_state='uncertain'")
             _rebuild(connection, 'workflow_runs', _run)
             _rebuild(connection, 'workflow_continuations', _continuation)
             _rebuild(connection, 'agent_credentials', lambda row: row)
@@ -279,3 +289,12 @@ def migrate(state: Path) -> None:
         except BaseException:
             connection.execute('ROLLBACK')
             raise
+    # The schema is current before process proof and Git sealing run. No SQLite
+    # transaction spans either boundary, and only explicitly tagged stock without
+    # complete identity is eligible for the before-this-boot evidence rule.
+    from .store import BoardStore
+    board = BoardStore(state)
+    try:
+        board.recover_interrupted_attempts(legacy_only=True)
+    finally:
+        board.db.close()

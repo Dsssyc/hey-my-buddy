@@ -467,13 +467,30 @@ def probe(command: list[str], environment: dict, *, deadline: float | None = Non
     start = time.monotonic()
     if deadline is not None and start >= deadline:
         return "scan-timeout", b""
+    from ...protocol.process_identity import native_process_journal_active
+
+    journalled = native_process_journal_active()
     try:
-        process = subprocess.Popen(command, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
-                                   stderr=subprocess.STDOUT, env=environment, cwd=cwd,
-                                   start_new_session=os.name != "nt",
-                                   creationflags=subprocess.CREATE_NEW_PROCESS_GROUP if os.name == "nt" else 0)
+        if journalled:
+            from ..runtime.windows_process import owned_popen
+            process = owned_popen(command, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+                                  stderr=subprocess.STDOUT, env=environment, cwd=cwd,
+                                  start_new_session=os.name != "nt")
+        else:
+            process = subprocess.Popen(command, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+                                       stderr=subprocess.STDOUT, env=environment, cwd=cwd,
+                                       start_new_session=os.name != "nt",
+                                       creationflags=subprocess.CREATE_NEW_PROCESS_GROUP if os.name == "nt" else 0)
     except (OSError, ValueError):
         return "launch-failed", b""
+    if journalled:
+        from .base import ProcessHandle
+        try:
+            ProcessHandle(process, own_group=True, log_paths={})
+        except Exception:
+            # Its durable intent remains unresolved until the held probe
+            # confirms shutdown. A crash before that proof stays unknown.
+            pass
     receipt.update(created=True, shutdown=False)
     stop_at = min(start + _TIMEOUT, deadline) if deadline is not None else start + _TIMEOUT
     try:
@@ -482,8 +499,14 @@ def probe(command: list[str], environment: dict, *, deadline: float | None = Non
     except Exception as error:
         receipt.update(shutdown=getattr(error, "discovery_shutdown_confirmed", False) is True,
                        exit_code=process.returncode)
+        if journalled and receipt["shutdown"]:
+            from ...protocol.process_identity import discard_confirmed_native_spawn
+            discard_confirmed_native_spawn(process._buddy_native_intent)
         raise
     receipt.update(shutdown=stopped, exit_code=process.returncode)
+    if journalled and stopped:
+        from ...protocol.process_identity import discard_confirmed_native_spawn
+        discard_confirmed_native_spawn(process._buddy_native_intent)
     return (code, output) if stopped else ("shutdown-unverified", b"")
 
 

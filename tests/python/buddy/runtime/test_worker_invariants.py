@@ -1,11 +1,10 @@
 """Worker invariants that must survive the role seam (ADR-025 step 1-C).
 
 The seam routes the runtime's prepare/start/collect/cancel through
-``hey_my_buddy.buddy.roles.controller``; these tests pin the protections the
-micro-task names explicitly: a spawn-marker write failure after start must
-never drop the live handle or the attempt, and preparation results keep their
-exact receipt mapping. Real private state, real ``command`` children, no board
-daemon, no harness and no model.
+``hey_my_buddy.buddy.roles.controller``. A spawn-marker write failure after
+start must stop the live child and produce an honest failed receipt; preparation
+results keep their exact receipt mapping. Real private state, real ``command``
+children, no board daemon, no harness and no model.
 """
 from __future__ import annotations
 
@@ -40,7 +39,7 @@ def silent(_message: str) -> None:
 
 
 class MarkerWriteFailureTests(unittest.TestCase):
-    """A marker write that fails after the spawn keeps the live handle supervising."""
+    """A marker write failure cannot leave an unrecorded child running."""
 
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory(prefix="hey-my-buddy-worker-marker-",
@@ -74,13 +73,12 @@ class MarkerWriteFailureTests(unittest.TestCase):
         with mock.patch("hey_my_buddy.buddy.runtime.worker.fsync_json", side_effect=failing):
             receipt = self.worker.execute(self.claim(attempt_id, task_id))
         report = receipt["report"]
-        # The durable intent exists, the marker write failed, and the attempt
-        # still ran to a completed receipt: the live handle supervised it.
+        # The durable intent exists, but failure to record a complete identity
+        # must stop the child before any completion claim is made.
         self.assertTrue((directory / "spawn.intent").is_file())
         self.assertFalse((directory / "spawn.marker").exists())
-        self.assertEqual(report["status"], "ok")
-        self.assertEqual(report["terminationReason"], TERMINATION_COMPLETED)
-        self.assertEqual(report["result"]["finalText"], "marker-ok")
+        self.assertEqual(report["status"], "failed")
+        self.assertEqual(report["terminationReason"], TERMINATION_HARNESS_ERROR)
         self.assertIs(report["shutdownConfirmed"], True)
 
     def test_a_clean_attempt_still_writes_both_marker_files(self):
@@ -89,8 +87,19 @@ class MarkerWriteFailureTests(unittest.TestCase):
         report = receipt["report"]
         self.assertTrue((directory / "spawn.intent").is_file())
         self.assertTrue((directory / "spawn.marker").is_file())
+        identity = json.loads((directory / "spawn.marker").read_text())["processIdentity"]
+        self.assertEqual(identity["processGroupId"], identity["pid"])
+        self.assertEqual(identity["worker"]["pid"], os.getpid())
         self.assertEqual(report["status"], "ok")
         self.assertEqual(report["terminationReason"], TERMINATION_COMPLETED)
+
+    def test_fast_shell_command_records_identity_and_completes(self):
+        claim = self.claim("attempt-fast", "task-fast")
+        claim["task"]["spec"]["argv"] = ["/bin/sh", "-c", "echo fast"]
+        receipt = self.worker.execute(claim)
+        marker = self.state / "attempts" / "task-fast" / "attempt-fast" / "spawn.marker"
+        self.assertTrue(marker.is_file(), receipt["report"])
+        self.assertEqual(receipt["report"]["status"], "ok", receipt["report"])
 
     def test_preparation_refusals_keep_their_exact_receipts(self):
         unavailable = self.claim("attempt-unavailable", "task-unavailable")
@@ -105,11 +114,143 @@ class MarkerWriteFailureTests(unittest.TestCase):
         self.assertTrue((directory / "spawn.intent").is_file())
         self.assertFalse((directory / "spawn.marker").exists())
 
+    def test_replacement_worker_stops_only_after_full_owner_identity_is_absent(self):
+        from hey_my_buddy.protocol import process_identity
+
+        identity = {"bootId": "boot", "pid": 42, "startedAt": 10.0,
+                    "processGroupId": 42, "jobName": None,
+                    "worker": {"bootId": "boot", "pid": 41, "startedAt": 9.0}}
+
+        class Client:
+            def __init__(self):
+                self.calls = []
+
+            def call(self, operation, params):
+                self.calls.append((operation, params))
+                if "attemptId" not in params:
+                    return {"candidates": [{"attemptId": "attempt-orphan", "processIdentity": identity}]}
+                return {"settled": True}
+
+        client = Client()
+        worker = Worker("w-orphan", self.state, client=client, log=silent)
+        with mock.patch.object(process_identity, "worker_identity_alive", return_value=True), \
+                mock.patch.object(process_identity, "stop_orphan_process") as stop:
+            worker.recover_orphans()
+            stop.assert_not_called()
+        with mock.patch.object(process_identity, "worker_identity_alive", return_value=None), \
+                mock.patch.object(process_identity, "stop_orphan_process") as stop:
+            worker.recover_orphans()
+            stop.assert_not_called()
+        with mock.patch.object(process_identity, "worker_identity_alive", return_value=False), \
+                mock.patch.object(process_identity, "stop_orphan_process", return_value="worker-stopped") as stop:
+            worker.recover_orphans()
+            stop.assert_called_once_with(identity)
+        self.assertEqual(client.calls[-1], ("worker_recover", {
+            "workerId": "w-orphan", "attemptId": "attempt-orphan", "evidence": "worker-stopped"}))
+
+    def test_replacement_worker_publishes_durable_identity_from_orphan_marker(self):
+        from hey_my_buddy.protocol import process_identity
+
+        identity = {"bootId": "boot", "pid": 42, "startedAt": 10.0,
+                    "processGroupId": 42, "jobName": None,
+                    "worker": {"bootId": "boot", "pid": 41, "startedAt": 9.0}}
+        intent = {"workerId": "w-orphan", "instanceId": "old-instance", "attemptId": "attempt-orphan",
+                  "taskId": "task-orphan", "generation": 1, "nonce": "n" * 32,
+                  "claimRequestId": "claim-orphan"}
+
+        class Client:
+            def __init__(self):
+                self.calls = []
+
+            def call(self, operation, params):
+                self.calls.append((operation, params))
+                if operation == "worker_recover":
+                    return {"candidates": []}
+                return {}
+
+        client = Client()
+        worker = Worker("w-orphan", self.state, client=client, log=silent)
+        worker.spool.ensure()
+        worker.spool.write_startup(intent)
+        marker = worker.spawn_marker(intent)
+        fsync = worker_module.fsync_json
+        fsync(marker, {"processIdentity": identity})
+        worker.reattach()
+        self.assertIsNone(worker.spool.read_startup())
+        with mock.patch.object(process_identity, "worker_identity_alive", return_value=False):
+            worker.recover_orphans()
+            worker.recover_orphans()
+        self.assertEqual(client.calls[0], ("worker_progress", {
+            "workerId": "w-orphan", "attemptId": "attempt-orphan", "generation": 1,
+            "nonce": "n" * 32, "processIdentity": identity, "previousProcessStopped": False}))
+        self.assertEqual([operation for operation, _ in client.calls].count("worker_progress"), 1,
+                         "orphan identity replay must not keep extending the old lease")
+
+    def test_retirement_waits_for_an_unresolved_orphan(self):
+        worker = Worker("w-orphan", self.state, client=mock.Mock(), log=silent)
+        worker.spool.ensure()
+        worker_module.fsync_json(worker.spool.directory / "orphaned.json", {"attemptId": "attempt-orphan"})
+        with mock.patch.object(worker, "recover_orphans") as recover:
+            self.assertEqual(worker.settle_retirement(), ["orphaned-attempt:attempt-orphan"])
+        recover.assert_called_once_with()
+
+    def test_native_journal_must_prove_every_child_stopped_before_settlement(self):
+        from hey_my_buddy.protocol import process_identity
+
+        outer = {"bootId": "boot", "pid": 42, "startedAt": 10.0,
+                 "processGroupId": 42, "jobName": None,
+                 "worker": {"bootId": "boot", "pid": 41, "startedAt": 9.0}}
+        native = {"bootId": "boot", "pid": 52, "startedAt": 11.0,
+                  "processGroupId": 52, "jobName": None,
+                  "worker": {"bootId": "boot", "pid": 42, "startedAt": 10.0}}
+        binding = {"taskId": "task-orphan", "attemptId": "attempt-orphan", "generation": 1}
+
+        class Client:
+            def __init__(self):
+                self.calls = []
+
+            def call(self, operation, params):
+                self.calls.append((operation, params))
+                if "attemptId" not in params:
+                    return {"candidates": [{"attemptId": "attempt-orphan", "processIdentity": outer,
+                                            "nativeJournal": {"path": "/private-fixture/journal", "binding": binding}}]}
+                return {"settled": True}
+
+        client = Client()
+        worker = Worker("w-orphan", self.state, client=client, log=silent)
+        with mock.patch.object(process_identity, "worker_identity_alive", return_value=False), \
+                mock.patch.object(process_identity, "stop_orphan_process", return_value="identity-absent"), \
+                mock.patch.object(process_identity, "read_native_process_journal", return_value=None):
+            worker.recover_orphans()
+        self.assertEqual([params for _, params in client.calls if "evidence" in params], [])
+        with mock.patch.object(process_identity, "worker_identity_alive", return_value=False), \
+                mock.patch.object(process_identity, "stop_orphan_process", side_effect=["identity-absent", "worker-stopped"]), \
+                mock.patch.object(process_identity, "read_native_process_journal",
+                                  return_value={"identities": [native], "pending": 0}):
+            worker.recover_orphans()
+        self.assertEqual(client.calls[-1], ("worker_recover", {
+            "workerId": "w-orphan", "attemptId": "attempt-orphan", "evidence": "worker-stopped"}))
+
+    def test_service_settled_orphan_does_not_block_worker_retirement(self):
+        worker = Worker('w-settled-orphan', self.state, client=SimpleNamespace(call=lambda *args: {
+            'candidates': [], 'observedAttempt': {'attemptId': 'settled-attempt',
+                                                'executionState': 'finished', 'shutdownConfirmed': True}}))
+        worker.spool.ensure()
+        orphan_path = worker.spool.directory / 'orphaned.json'
+        worker_module.fsync_json(orphan_path, {'workerId': worker.worker_id, 'attemptId': 'settled-attempt',
+                                               'identityPublished': True})
+        worker.recover_orphans()
+        self.assertFalse(orphan_path.exists())
+        self.assertEqual(worker.recovery_pending(), [])
+
     def test_host_grace_deadline_forces_stop_and_cannot_be_reported_as_a_summary(self):
         from hey_my_buddy.buddy.harnesses.base import AdapterOutcome
         from hey_my_buddy.buddy.runtime.worker import TERMINATION_GRACE_EXPIRED
 
         handle = ProcessHandle(mock.Mock(pid=None), own_group=False, log_paths={})
+        handle.identity = lambda: {"bootId": "test-boot", "pid": 1, "startedAt": 1.0,
+                                   "processGroupId": 1, "jobName": None,
+                                   "worker": {"bootId": "test-boot", "pid": 2, "startedAt": 2.0}}
         handle.cancel_requested, handle.stop_initiator = True, "host"
         handle.wrap_up_started, handle.grace_deadline = True, 0.0
         handle.wait = mock.Mock(side_effect=[None, 0])
@@ -130,6 +271,9 @@ class MarkerWriteFailureTests(unittest.TestCase):
     def test_timely_wrap_up_keeps_its_reason_and_partial_reason_when_collected_late(self):
         from hey_my_buddy.buddy.harnesses.base import AdapterOutcome
         handle = ProcessHandle(mock.Mock(pid=None), own_group=False, log_paths={})
+        handle.identity = lambda: {"bootId": "test-boot", "pid": 1, "startedAt": 1.0,
+                                   "processGroupId": 1, "jobName": None,
+                                   "worker": {"bootId": "test-boot", "pid": 2, "startedAt": 2.0}}
         handle.cancel_requested, handle.stop_initiator = True, "console"
         handle.grace_deadline, handle.grace_expired = 0.0, True
         handle.wait = lambda timeout: 0
@@ -254,6 +398,22 @@ class PreparationBoardErrorTests(unittest.TestCase):
                               "expectedSeconds": 30}},
         }
 
+    def test_native_journals_are_distinct_for_two_controller_roots(self):
+        from hey_my_buddy.protocol.process_identity import (
+            NativeProcessJournal, _creation_time, native_process_journal_path,
+        )
+
+        binding = {"taskId": "task-prep", "attemptId": "attempt-prep", "generation": 1}
+        self.assertEqual(native_process_journal_path(self.root), native_process_journal_path(
+            self.root, {"pid": os.getpid(), "startedAt": _creation_time(os.getpid())}))
+        first = native_process_journal_path(self.root, {"pid": 101, "startedAt": 1.5})
+        second = native_process_journal_path(self.root, {"pid": 102, "startedAt": 2.5})
+        self.assertNotEqual(first, second)
+        NativeProcessJournal(first, binding)
+        NativeProcessJournal(second, binding)
+        self.assertTrue(first.is_file())
+        self.assertTrue(second.is_file())
+
     class FailingExecutor:
         name = "fake"
 
@@ -323,6 +483,11 @@ class PreparationBoardErrorTests(unittest.TestCase):
             def __init__(self):
                 super().__init__(mock.Mock(pid=None), own_group=False, log_paths={})
 
+            def identity(self):
+                return {"bootId": "test-boot", "pid": 1, "startedAt": 1.0,
+                        "processGroupId": 1, "jobName": None,
+                        "worker": {"bootId": "test-boot", "pid": 2, "startedAt": 2.0}}
+
             def wait(self, timeout=None):
                 return 0
 
@@ -371,6 +536,94 @@ class PreparationBoardErrorTests(unittest.TestCase):
         self.assertEqual(report["status"], "ok")
         self.assertEqual(report["terminationReason"], TERMINATION_COMPLETED)
         self.assertEqual(len(report["result"]["harnessAttempts"]), 2)
+
+    def test_confirmed_premodel_retry_publishes_distinct_roots_in_one_attempt(self):
+        from hey_my_buddy.buddy.harnesses.base import AdapterOutcome
+
+        record = {"harness": "dsh", "available": True, "revision": 7, "status": "ready"}
+
+        class Client:
+            def __init__(self):
+                self.calls = []
+                self.first_progress_unavailable = True
+
+            def call(self, method, params):
+                self.calls.append((method, params))
+                if method == "harness_prepare":
+                    return {"harness": record}
+                if method == "worker_progress" and self.first_progress_unavailable:
+                    self.first_progress_unavailable = False
+                    raise BoardError("SERVICE_UNAVAILABLE", "injected first root publication gap")
+                return {"task": {}}
+
+            def renew(self, *args, **kwargs):
+                return {}
+
+        class Handle(ProcessHandle):
+            def __init__(self, pid):
+                super().__init__(mock.Mock(pid=None), own_group=False, log_paths={})
+                self.root_pid = pid
+
+            def identity(self):
+                return {"bootId": "test-boot", "pid": self.root_pid, "startedAt": float(self.root_pid),
+                        "processGroupId": self.root_pid, "jobName": None,
+                        "worker": {"bootId": "test-boot", "pid": 2, "startedAt": 2.0}}
+
+            def wait(self, timeout=None):
+                return 0
+
+            def shutdown_confirmed(self):
+                return True
+
+        class Executor:
+            name = "fake"
+
+            def __init__(self):
+                self.starts = 0
+
+            def available(self):
+                return True, None
+
+            def prepare(self, context):
+                return None
+
+            def start(self, context):
+                self.starts += 1
+                return Handle(10 + self.starts)
+
+            def collect(self, handle, context):
+                if handle.root_pid == 11:
+                    return AdapterOutcome("failed", {"modelStarted": False, "code": "invalid-native-result"},
+                                          shutdown_confirmed=True)
+                return AdapterOutcome("ok", {"modelStarted": True}, shutdown_confirmed=True)
+
+        client = Client()
+        executor = Executor()
+        worker = self.worker(client)
+        with mock.patch.object(worker_module.role_seam, "worker_executor", return_value=executor):
+            receipt = worker.execute(self.claim("task-two-roots"))
+        roots = [params for method, params in client.calls
+                 if method == "worker_progress" and "processIdentity" in params]
+        self.assertEqual([entry["processIdentity"]["pid"] for entry in roots], [11, 12])
+        self.assertEqual([entry["previousProcessStopped"] for entry in roots], [False, True])
+        marker = (self.state / "attempts" / "task-two-roots" / "attempt-prep" / "spawn.marker")
+        self.assertEqual(json.loads(marker.read_text())["previousProcessStopped"], True)
+        retired = marker.with_name("harness-prestart-failure.json")
+        self.assertEqual(json.loads(retired.read_text())["processIdentity"]["pid"], 11)
+        orphan_path = worker.spool.directory / "orphaned.json"
+        worker_module.fsync_json(orphan_path, {"workerId": worker.worker_id,
+            "attemptId": "attempt-prep", "taskId": "task-two-roots", "generation": 1,
+            "nonce": "n" * 32, "identityPublished": False})
+        from hey_my_buddy.protocol import process_identity
+        with mock.patch.object(process_identity, "worker_identity_alive", return_value=False):
+            worker._publish_orphan_identity()
+        replay = [params for method, params in client.calls
+                  if method == "worker_progress" and "processIdentity" in params][2:]
+        self.assertEqual([entry["processIdentity"]["pid"] for entry in replay], [11, 12])
+        self.assertEqual([entry["previousProcessStopped"] for entry in replay], [False, True])
+        self.assertTrue(json.loads(orphan_path.read_text())["identityPublished"])
+        self.assertEqual(executor.starts, 2)
+        self.assertEqual(receipt["report"]["status"], "ok")
 
 
 class LiveActivityForwardTests(unittest.TestCase):

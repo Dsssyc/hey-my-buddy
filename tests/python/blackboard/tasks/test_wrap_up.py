@@ -193,7 +193,7 @@ class WrapUpStopTests(WorkflowTestCase):
     def test_stop_reasons_require_confirmed_shutdown_and_durable_matching_facts(self):
         self.assertEqual(set(TERMINATION_REASONS), {
             "completed", "wrap-up", "grace-expired", "forced-stop", "console-stop",
-            "service-stop", "unknown-stop", "deadline", "harness-error", "transport-error",
+            "service-stop", "unknown-stop", "deadline", "harness-error", "transport-error", "interrupted",
         })
         board = self.board()
         self.register(board)

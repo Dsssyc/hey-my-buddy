@@ -32,6 +32,7 @@ from pathlib import Path
 
 from ...errors import BoardError
 from ...protocol.contracts import HarnessRunLive
+from ...protocol.process_identity import install_native_process_journal, native_process_journal_path
 from ..harnesses.c_two_live import CTwoLiveEndpoint, write_ready_material
 from ..harnesses.live import EXISTING_CAPABILITIES, LiveCapabilities
 from ...json_codec import canonical_json, decode_strict_json
@@ -283,6 +284,11 @@ def main() -> int:
     state_dir = Path(selected)
     try:
         control = decode_strict_json(guard_private_path(Path(args.control)).read_bytes())
+        if control["operation"] != "discover":
+            from ...private_dirs import attempt_root
+            binding = {key: control[key] for key in ("taskId", "attemptId", "generation")}
+            journal_root = attempt_root(state_dir, control['harness'], control['taskId'], control['attemptId'])
+            install_native_process_journal(native_process_journal_path(journal_root), binding)
         frame, code = execute(control, _cancelled, state_dir)
     except Exception:
         # No native receipt can be inferred from a controller failure. The

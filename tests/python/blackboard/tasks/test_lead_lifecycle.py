@@ -129,6 +129,26 @@ class LeadLifecycleTests(WorkflowTestCase):
                     self.assertEqual(event["task_id"], child["runId"])
                     self.assertEqual(event["revision"], self.current(board, child)["revision"])
 
+    def test_proven_interruption_wakes_lead_once_with_partial_output(self):
+        from blackboard.store.test_interruption_recovery import IDENTITY
+        board = self.board()
+        lead, claim = self.lead(board)
+        child = self.owned(board, claim)
+        self.wait(board, claim)
+        self.register(board, 'w2')
+        owned = self.claim(board, 'w2', claim_request_id='claim-interrupted-owned', run_id=child['runId'])['claim']
+        board.call('worker_progress', {'workerId': 'w2', 'attemptId': owned['attempt']['attemptId'],
+                                     'generation': owned['attempt']['generation'], 'nonce': 'n' * 16,
+                                     'processIdentity': IDENTITY})
+        with patch('hey_my_buddy.protocol.process_identity.inspect_process_identity', return_value='boot-changed'):
+            board.store.reconcile_startup()
+            board.store.recover_interrupted_attempts()
+        view = self.current(board, child)
+        self.assertEqual(view['currentTurn']['state'], 'interrupted')
+        self.assertEqual(view['task']['interruptionEvidence']['kind'], 'boot-changed')
+        self.assertEqual(self.current(board, lead)['state'], 'executing')
+        self.assertEqual(len(self.wakeups(board, lead)), 1)
+
     def test_routing_attention_wakes_the_lead(self):
         board = self.board()
         lead, claim = self.lead(board)

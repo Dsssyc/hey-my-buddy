@@ -67,7 +67,7 @@ class ClaudeFixtureCase(unittest.TestCase):
                                 HMB_DEV_SOURCE="1")
         # Controllers change cwd to the fixture checkout; a relative
         # PYTHONPATH would import the interpreter's installed source instead.
-        self.environment["PYTHONPATH"] = str(Path(__file__).resolve().parents[5] / "src")
+        self.environment["PYTHONPATH"] = os.pathsep.join((str(Path(__file__).resolve().parents[5] / "src"), os.environ.get('PYTHONPATH', '')))
         claude_module._reset_metadata_cache()
         self.addCleanup(claude_module._reset_metadata_cache)
         self.adapter = ClaudeAdapter()

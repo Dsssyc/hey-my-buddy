@@ -47,6 +47,7 @@ def supervisor_start_stop_path(directory: Path) -> Path | None:
     TERMINATION_DEADLINE,
     TERMINATION_HARNESS_ERROR,
     TERMINATION_TRANSPORT_ERROR,
+    TERMINATION_INTERRUPTED,
 ) = TERMINATION_REASONS
 
 #: Durable scale-down intent, observed by the owning Worker between attempts only.
@@ -241,10 +242,10 @@ class Worker:
         """Durable evidence this worker still owes the service.
 
         A scale-down may complete only when this is empty. A pending completion
-        receipt and a startup intent that still names an attempt are exactly the
-        evidence a restarted surplus owner must replay or reconcile first; a missing
-        process never proves an attempt stopped, so neither is dropped to let a
-        retire intent win.
+        receipt, a startup intent and a preserved orphan that still name an
+        attempt are evidence a restarted surplus owner must settle first; a
+        missing process never proves an attempt stopped, so none is dropped to
+        let a retire intent win.
         """
         pending: list[str] = []
         if self.spool.pending():
@@ -252,22 +253,26 @@ class Worker:
         intent = self.spool.read_startup()
         if isinstance(intent, dict) and intent.get("attemptId"):
             pending.append(f"startup-intent:{intent['attemptId']}")
+        orphan_path = self.spool.directory / "orphaned.json"
+        if orphan_path.exists():
+            orphan = json.loads(orphan_path.read_text())
+            pending.append(f"orphaned-attempt:{orphan['attemptId']}")
         return pending
 
     def preserve_orphan_startup(self, intent: dict) -> None:
         """Record a previous process's intent as orphaned evidence and clear it.
 
-        The nonce is not this process's to present and its child handle is gone, so
-        the attempt stays explicitly uncertain instead of being adopted or silently
-        released. The orphan record is durable before the intent is cleared.
+        The orphan record is durable before the intent is cleared. Its nonce can
+        publish the already recorded process identity, but cannot reattach a child.
         """
         fsync_json(
             self.spool.directory / "orphaned.json",
-            {**intent, "orphanedAt": _now(), "orphanedReason": "the worker process that owned this intent exited"},
+            {**intent, "orphanedAt": _now(), "orphanedReason": "the worker process that owned this intent exited",
+             "identityPublished": False},
         )
         self.log(
-            f"found an orphaned startup intent for attempt {intent.get('attemptId')}; it stays uncertain and is "
-            "not adopted by this process"
+            f"found an orphaned startup intent for attempt {intent.get('attemptId')}; "
+            "the previous worker's process identity must be checked"
         )
         self.spool.clear_startup()
 
@@ -275,10 +280,12 @@ class Worker:
         self.spool.ensure()
         intent = self.spool.read_startup()
         if intent is not None and intent.get("instanceId") not in (None, self.instance_id):
-            # A leftover intent from a previous worker process. Its nonce is not
-            # ours to present and its child handle is gone, so it is preserved as
-            # orphaned evidence instead of being adopted or silently released.
-            self.preserve_orphan_startup(intent)
+            # An unclaimed startup has no child. A claimed startup retains its
+            # recovery identity until the replacement verifies the old owner.
+            if intent.get("attemptId"):
+                self.preserve_orphan_startup(intent)
+            else:
+                self.spool.clear_startup()
             intent = None
         if intent is None or not intent.get("nonce") or not intent.get("claimRequestId"):
             intent = {
@@ -378,6 +385,7 @@ class Worker:
                 self.preserve_orphan_startup(intent)
             else:
                 self.reconcile_startup_intent(intent)
+        self.recover_orphans()
         return self.recovery_pending()
 
     def reattach(self) -> None:
@@ -389,12 +397,130 @@ class Worker:
         if not intent or not intent.get("attemptId"):
             return
         if intent.get("instanceId") not in (None, self.instance_id):
-            self.log(
-                f"attempt {intent['attemptId']} belongs to a different worker process instance; this process holds "
-                "no handle for it, so it stays explicitly uncertain with its resource claims retained"
-            )
+            self.preserve_orphan_startup(intent)
             return
         self.reconcile_startup_intent(intent)
+
+    def _record_process_identity(self, attempt: dict, identity: dict, *,
+                                 previous_process_stopped: bool = False) -> None:
+        """Publish the durable local observation to the authoritative board."""
+        self.client.call("worker_progress", {
+            "workerId": self.worker_id,
+            "attemptId": attempt["attemptId"],
+            "generation": attempt["generation"],
+            "nonce": self._nonce(),
+            "processIdentity": identity,
+            "previousProcessStopped": previous_process_stopped,
+            "phase": "executing",
+        })
+
+    def _publish_orphan_identity(self) -> None:
+        """Close the local-marker / service-write gap after the old Worker died."""
+        from ...protocol.process_identity import worker_identity_alive
+
+        orphan_path = self.spool.directory / "orphaned.json"
+        try:
+            intent = json.loads(orphan_path.read_text())
+        except FileNotFoundError:
+            return
+        if intent.get("identityPublished") is True:
+            return
+        marker_path = self.spawn_marker(intent)
+        try:
+            marker = json.loads(marker_path.read_text())
+        except FileNotFoundError:
+            return
+        records = []
+        previous_failure = marker_path.with_name('harness-prestart-failure.json')
+        if previous_failure.exists():
+            retired = json.loads(previous_failure.read_text())
+            if retired.get('processIdentity') is not None:
+                records.append(retired)
+        records.append(marker)
+        try:
+            for record in records:
+                identity = record.get("processIdentity")
+                if identity is None or worker_identity_alive(identity) is not False:
+                    return
+                self.client.call("worker_progress", {
+                    "workerId": intent["workerId"],
+                    "attemptId": intent["attemptId"],
+                    "generation": intent["generation"],
+                    "nonce": intent["nonce"],
+                    "processIdentity": identity,
+                    "previousProcessStopped": record.get("previousProcessStopped") is True,
+                })
+            fsync_json(orphan_path, {**intent, "identityPublished": True})
+        except BoardError as error:
+            if error.code == "ATTEMPT_FINISHED":
+                orphan_path.unlink()
+                return
+            self.log(f"orphan identity publication unavailable ({error.code})")
+
+    def recover_orphans(self) -> None:
+        """Stop only a still verified orphan group and ask the board to settle it."""
+        from ...protocol.process_identity import (
+            read_native_process_journal, stop_orphan_process, worker_identity_alive,
+        )
+
+        self._publish_orphan_identity()
+        orphan_path = self.spool.directory / 'orphaned.json'
+        orphan = json.loads(orphan_path.read_text()) if orphan_path.exists() else None
+        try:
+            response = self.client.call("worker_recover", {
+                "workerId": self.worker_id,
+                **({'observeAttemptId': orphan['attemptId']} if orphan is not None else {}),
+            })
+            candidates = response['candidates']
+        except BoardError as error:
+            self.log(f"orphan recovery unavailable ({error.code})")
+            return
+        observed = response.get('observedAttempt')
+        if (observed is not None and observed['executionState'] == 'finished'
+                and observed['shutdownConfirmed']):
+            orphan_path.unlink()
+        for candidate in candidates:
+            identity = candidate["processIdentity"]
+            # The process-identity boundary checks the complete boot/PID/start
+            # tuple again immediately before it sends any group or Job signal.
+            if worker_identity_alive(identity) is not False:
+                continue
+            evidence = stop_orphan_process(identity)
+            if evidence == "unknown":
+                continue
+            journal_spec = candidate.get("nativeJournal")
+            if journal_spec is not None and evidence != "boot-changed":
+                # The controller is now absent. Its journal is stable; a pending
+                # spawn or unreadable record leaves the complete tree unknown.
+                journal = read_native_process_journal(
+                    Path(journal_spec["path"]), journal_spec["binding"])
+                if journal is None or journal["pending"]:
+                    continue
+                native_stopped = False
+                native_unknown = False
+                for native in journal["identities"]:
+                    native_evidence = stop_orphan_process(native)
+                    if native_evidence == "unknown":
+                        native_unknown = True
+                        break
+                    native_stopped |= native_evidence == "worker-stopped"
+                if native_unknown:
+                    continue
+                if native_stopped:
+                    evidence = "worker-stopped"
+            try:
+                response = self.client.call("worker_recover", {
+                    "workerId": self.worker_id,
+                    "attemptId": candidate["attemptId"],
+                    "evidence": evidence,
+                })
+                orphan_path = self.spool.directory / "orphaned.json"
+                if response["settled"] and orphan_path.exists():
+                    orphan = json.loads(orphan_path.read_text())
+                    if orphan.get("attemptId") == candidate["attemptId"]:
+                        orphan_path.unlink()
+            except BoardError as error:
+                self.log(f"orphan settlement unavailable ({error.code})")
 
     def attempt_directory(self, task_id: str | None, attempt_id: str) -> Path:
         return self.state_dir / "attempts" / (task_id or "unknown") / attempt_id
@@ -421,6 +547,7 @@ class Worker:
         try:
             self.register()
             self.reattach()
+            self.recover_orphans()
             iterations = 0
             while not self.stop_requested():
                 if self.retire_requested():
@@ -457,6 +584,10 @@ class Worker:
                     if page["events"]:
                         self._idle_cursor = page["head"]
                         return
+                    # A previous Worker may have died while its lease was still
+                    # valid. Once the service's sweep marks that attempt unknown,
+                    # this idle replacement must check the new recovery candidate.
+                    self.recover_orphans()
         except BoardError as error:
             self.log(f"event wait failed: {error.code}")
             if not self.stop_requested() and not self.retire_requested():
@@ -747,6 +878,7 @@ class Worker:
         holder["adapter"] = implementation
         # A previous pre-model retry may have proved its own child stopped. That
         # proof cannot cover this start(): it might spawn before raising a handle.
+        previous_process_stopped = holder.get("confirmed_stopped") is True
         holder.pop("confirmed_stopped", None)
         holder.pop("live_release_attempted", None)
         holder.pop("handle", None)
@@ -754,36 +886,29 @@ class Worker:
         handle = role_seam.worker_start(implementation, context)
         holder["handle"] = handle
         holder["started"] = True
-        # A durable marker for the recovery path, written while the handle is alive.
-        # A failure here is logged and does not change supervision: the handle in
-        # this process is the authority for stopping what it started.
+        # Capture while the owned handle is live. The marker is committed before
+        # its board write, so a replacement Worker can replay the exact identity
+        # if this process dies between those two durable boundaries.
+        process_identity = handle.identity()
+        fsync_json(directory / "spawn.marker", {
+            "attemptId": attempt["attemptId"],
+            "taskId": task["taskId"],
+            "generation": attempt["generation"],
+            "adapter": spec["adapter"],
+            "processIdentity": process_identity,
+            "previousProcessStopped": previous_process_stopped,
+            "at": _now(),
+        })
+        identity_published = False
         try:
-            fsync_json(
-                directory / "spawn.marker",
-                {
-                    "attemptId": attempt["attemptId"],
-                    "taskId": task["taskId"],
-                    "generation": attempt["generation"],
-                    "adapter": spec["adapter"],
-                    "pid": handle.pid,
-                    "pgid": handle.pgid,
-                    "at": _now(),
-                },
-            )
-        except OSError as marker_error:
-            self.log(f"could not persist the spawn marker ({marker_error!r}); the live handle still supervises")
-        try:
-            self.client.progress(
-                self.worker_id,
-                attempt["attemptId"],
-                attempt["generation"],
-                self._nonce(),
-                "the worker spawned the adapter process",
-                phase="executing",
-            )
+            self._record_process_identity(attempt, process_identity,
+                                          previous_process_stopped=previous_process_stopped)
+            identity_published = True
         except Exception as error:  # a progress hint is never worth losing the child
-            self.log(f"progress not recorded ({error!r}); the owned child keeps running")
-        renewal = _Renewal(self, claim, handle, implementation)
+            self.log(f"process identity not yet published ({error!r}); the durable marker can be replayed")
+        renewal = _Renewal(self, claim, handle, implementation,
+                           process_identity=process_identity, identity_published=identity_published,
+                           previous_process_stopped=previous_process_stopped)
         renewal.start()
         try:
             timeout_seconds = context.timeout_seconds
@@ -823,7 +948,13 @@ class Worker:
                 and not handle.cancel_requested and outcome.shutdown_confirmed and outcome.status == 'failed'
                 and isinstance(outcome.result, dict) and outcome.result.get('modelStarted') is False
                 and outcome.result.get('code') in {'harness-unavailable', 'invalid-native-result', 'invalid-protocol', 'transport-error', 'native-rpc-error', 'protocol-error', 'native-exit', 'connection-closed'}):
-            fsync_json(directory / 'harness-prestart-failure.json', {'code': outcome.result['code'], 'shutdownConfirmed': True})
+            failure_path = directory / 'harness-prestart-failure.json'
+            if not failure_path.exists():
+                # A retry can replace spawn.marker. Preserve the stopped
+                # previous root for historical replay if its board write missed.
+                fsync_json(failure_path, {'code': outcome.result['code'], 'shutdownConfirmed': True,
+                                          'processIdentity': process_identity,
+                                          'previousProcessStopped': previous_process_stopped})
             holder['started'] = False
             holder['confirmed_stopped'] = True
             holder.pop('handle', None)
@@ -930,7 +1061,9 @@ class Worker:
 class _Renewal(threading.Thread):
     """Lease renewal and durable cancel-intent observation, independent of the daemon."""
 
-    def __init__(self, worker: Worker, claim: dict, handle, implementation):
+    def __init__(self, worker: Worker, claim: dict, handle, implementation, *,
+                 process_identity: dict | None = None, identity_published: bool = True,
+                 previous_process_stopped: bool = False):
         super().__init__(name="hey-my-buddy-worker-renewal", daemon=True)
         self.worker = worker
         self.claim = claim
@@ -939,6 +1072,9 @@ class _Renewal(threading.Thread):
         self._done = threading.Event()
         self.attempt = claim["attempt"]
         self.nonce = worker._nonce()
+        self.process_identity = process_identity
+        self.identity_published = identity_published
+        self.previous_process_stopped = previous_process_stopped
         #: The last actual activity forwarded; repeated observations are coalesced.
         self._activity: dict | None = None
         #: The held controller's channel, retried until its actual readiness
@@ -1011,6 +1147,14 @@ class _Renewal(threading.Thread):
             # The daemon may be down: the worker keeps its child and deadline and
             # reattaches later with the same attempt identity.
             return True
+        if self.process_identity is not None and not self.identity_published:
+            try:
+                self.worker._record_process_identity(
+                    self.attempt, self.process_identity,
+                    previous_process_stopped=self.previous_process_stopped)
+                self.identity_published = True
+            except Exception as error:
+                self.worker.log(f"process identity publication still unavailable ({error!r})")
         if response.get("cancelRequested") and self._request_cancel(response):
             return False
         if response.get("finished"):

@@ -59,6 +59,7 @@ CONTROL_OPERATIONS = (
     "worker_register",
     "worker_claim",
     "worker_reconcile",
+    "worker_recover",
     "worker_renew",
     "worker_progress",
     "worker_live_attach",
@@ -899,6 +900,9 @@ class BoardService(_BaseResource):
 
     def worker_reconcile(self, request_json: str) -> str:
         return self._guard("worker.reconcile", request_json, self.store.worker_reconcile)
+
+    def worker_recover(self, request_json: str) -> str:
+        return self._guard("worker.recover", request_json, self.store.worker_recover)
 
     def worker_renew(self, request_json: str) -> str:
         return self._guard("worker.renew", request_json, self.store.worker_renew)
