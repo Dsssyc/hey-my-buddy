@@ -123,12 +123,17 @@ class DshAdapter(Adapter):
             f"--inquiry-results={inquiry['resultsPath']}",
         ]
         if not spec.get("workspace", True):
-            # Task-owned native storage is only safe without workspace grouping:
-            # the installed workspace bridge proves a completed session from the
-            # *owning host's* session store, so a relocated child home would make
-            # that verification fail (UNKNOWN_SESSION) and the run would exit 1.
+            # The session rollout becomes attempt-private through the runner's
+            # supported per-run patch overlay on the JSONL session backend root.
+            # This is only safe without workspace grouping: the installed
+            # workspace bridge proves a completed session from the *owning
+            # host's* session store, so a private root would make that
+            # verification fail (UNKNOWN_SESSION) and the run would exit 1.
+            # DSH_HOME, the credentials store and the settings document are
+            # never relocated, so native model auth keeps resolving in the
+            # owning harness.
             args.append("--no-workspace")
-            args.append(f"--dsh-home={context.directory / 'dsh-home'}")
+            args.append(f"--session-root={context.directory / 'sessions'}")
         for key in ("model", "provider", "effort"):
             if spec.get(key):
                 args.append(f"--{key}={spec[key]}")
@@ -198,7 +203,6 @@ class DshAdapter(Adapter):
                 shutdown_confirmed=handle.shutdown_confirmed(),
             )
         payload = {**payload, "inquiryBridge": {k: inquiry.get(k) for k in ("socketPath", "resultsPath", "errorPath")}}
-        payload["nativeSession"] = _native_session(payload)
         native_activity = payload.get("nativeActivity") if isinstance(payload.get("nativeActivity"), dict) else {}
         payload["nativeActivity"] = {**native_activity, "sidecarWritten": activity_sidecar_path(context).is_file()}
         shutdown_confirmed = bool(payload.get("processState", {}).get("shutdownConfirmed")) or _preflight_failed(
@@ -212,6 +216,11 @@ class DshAdapter(Adapter):
         else:
             final = "failed"
         turn_record, turn_error = self._import_turn(context, shutdown_confirmed, exit_code)
+        # An ungrouped governed run has no workspace/capture observer, so the
+        # validated turn record is the only proven session identity. Bind it
+        # AFTER import: a rejected or missing turn never contributes an id, and
+        # a failed attempt stays honestly uncaptured instead of inventing one.
+        payload["nativeSession"] = _native_session(payload, turn_record if turn_error is None else None)
         if context.turn_input is not None:
             payload["turnResultPath"] = str(context.turn_output_file())
             effective = getattr(context, "effective_workspace", None)
@@ -275,14 +284,19 @@ class DshAdapter(Adapter):
         return turn_io.seal_workspace(context)
 
 
-def _native_session(payload: dict) -> dict:
+def _native_session(payload: dict, turn_record: dict | None = None) -> dict:
     """Truthful native-session facts for one dsh attempt.
 
     Git isolation and native session storage are separate dimensions. A grouped run
-    keeps the owning harness store so the workspace bridge can verify session
-    membership; an ungrouped run may relocate the child home to the attempt, which
-    makes the rollout task-owned and therefore invisible to the installed app. The
-    id is reported only when the run's own session-capture observer wrote it.
+    keeps the owning harness session store so the workspace bridge can verify
+    membership. An ungrouped run moves only the session rollout root into the
+    attempt (the runner's per-run patch overlay on the JSONL session backend); the
+    DSH home, credentials store and settings document keep their owning-harness
+    values, so native model auth is never relocated or simulated.
+
+    The session id comes from the validated turn record the adapter imported, then
+    from the run's own capture/workspace observer, and is never invented: a
+    rejected turn, a missing capture and an ambiguous grouping all report no id.
     """
     workspace = payload.get("workspace") if isinstance(payload.get("workspace"), dict) else {}
     capture_path = (payload.get("logPaths") or {}).get("capture")
@@ -295,17 +309,26 @@ def _native_session(payload: dict) -> dict:
                 captured = value if isinstance(value, dict) else {}
         except (OSError, ValueError, RecursionError):
             captured = {}
-    session_id = workspace.get("sessionId") or captured.get("sessionId")
-    if not isinstance(session_id, str) or not session_id:
-        session_id = None
+    observed = workspace.get("sessionId") or captured.get("sessionId")
+    if not isinstance(observed, str) or not observed:
+        observed = None
+    turn_session = turn_record.get("sessionId") if isinstance(turn_record, dict) else None
+    if not isinstance(turn_session, str) or not turn_session:
+        turn_session = None
+    session_id = turn_session or observed
+    session_id_source = "validated-turn" if turn_session else ("native-session-observer" if observed else "none")
     native_storage = payload.get("nativeStorage") if isinstance(payload.get("nativeStorage"), dict) else {}
+    session_root_private = native_storage.get("sessionRootPrivate") is True or native_storage.get("relocated") is True
     return {
         "adapter": "dsh",
         "sessionId": session_id,
         "captured": session_id is not None,
+        "sessionIdSource": session_id_source,
+        "sessionIdConflict": bool(turn_session and observed and turn_session != observed),
         "ambiguous": captured.get("ambiguous") is True,
         "storageScope": native_storage.get("scope") or "unknown",
-        "storageOwner": "buddy-attempt" if native_storage.get("relocated") else "harness-user-store",
+        "storageOwner": "buddy-attempt" if session_root_private else "harness-user-store",
+        "credentialsStore": native_storage.get("credentialsStore") or "harness-user-store",
         "nativeAppVisibility": native_storage.get("nativeAppVisibility") or "unknown",
         "resumeMode": native_storage.get("resumeMode") or "reconstructed-new-session",
         "resumable": False,

@@ -134,6 +134,8 @@ class RealWorkerTurnTests(GovernedWorkerTestCase):
             self.assertTrue(native.get("captured"))
             self.assertFalse(native.get("resumable"))
             self.assertEqual(native.get("sessionId"), turn["sessionId"])
+            self.assertEqual(native.get("sessionIdSource"), "validated-turn")
+            self.assertFalse(native.get("sessionIdConflict"))
 
             # The DSH activity observer's bounded sidecar is attempt-bound and
             # readable by the real helper the owning Worker uses.
@@ -391,7 +393,7 @@ class SubmissionPreparationRaceTests(GovernedWorkerTestCase):
 
 
 class DshNativeStorageArgumentsTests(unittest.TestCase):
-    """The private DSH home is only used where it cannot break session grouping."""
+    """Only the ungrouped session rollout moves; the DSH home and its credentials never do."""
 
     def arguments(self, workspace: bool, *, governed: bool = False) -> list[str]:
         import tempfile
@@ -416,15 +418,21 @@ class DshNativeStorageArgumentsTests(unittest.TestCase):
             return DshAdapter().arguments(context, {"socketPath": "/tmp/inquiry.sock", "token": "a" * 64,
                                                     "resultsPath": "/tmp/inquiry.jsonl"})
 
-    def test_grouped_runs_keep_the_owning_harness_home(self):
+    def test_grouped_runs_keep_the_owning_harness_session_store(self):
         args = self.arguments(workspace=True)
         self.assertNotIn("--no-workspace", args)
+        self.assertFalse(any(arg.startswith("--session-root") for arg in args), args)
         self.assertFalse(any(arg.startswith("--dsh-home") for arg in args), args)
 
-    def test_ungrouped_runs_get_an_attempt_private_dsh_home(self):
+    def test_ungrouped_runs_move_only_the_attempt_private_session_root(self):
         args = self.arguments(workspace=False)
         self.assertIn("--no-workspace", args)
-        self.assertTrue(any(arg.startswith("--dsh-home=") and "dsh-home" in arg for arg in args), args)
+        session_root = next((arg for arg in args if arg.startswith("--session-root=")), None)
+        self.assertIsNotNone(session_root, args)
+        self.assertTrue(session_root.endswith("/sessions"), session_root)
+        # The relocated DSH home broke native credential resolution; the owning
+        # home must never be moved or simulated again.
+        self.assertFalse(any(arg.startswith("--dsh-home") for arg in args), args)
 
     def test_a_governed_turn_publishes_its_activity_sidecar_in_the_attempt_directory(self):
         plain = self.arguments(workspace=True)

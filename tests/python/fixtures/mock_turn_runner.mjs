@@ -105,11 +105,13 @@ process.stdout.write(
       note: "bounded metadata-only projection this run wrote for its owning Worker",
     },
     nativeStorage: {
-      // The governed default keeps the inherited harness home so the owning
-      // workspace host can verify and group the completed session.
+      // The governed default keeps the owning harness session store so the
+      // workspace host can verify and group the completed session; credentials
+      // always keep resolving from that same owning store.
       scope: "harness-user-store",
-      relocated: false,
-      sessionsSubdir: "sessions",
+      sessionRootPrivate: false,
+      sessionRootSource: "the owning harness session store",
+      credentialsStore: "harness-user-store",
       nativeAppVisibility: "user-store",
       resumeMode: "reconstructed-new-session",
     },

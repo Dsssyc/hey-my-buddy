@@ -99,13 +99,15 @@ const USAGE = [
   '  --settings-file <path>  settings document (default: DSH_SETTINGS_FILE,',
   '                          then $DSH_HOME/settings.yaml, then',
   '                          ~/.dsh/settings.yaml)',
-  '  --dsh-home <dir>        private DSH home for THIS child only: its sessions,',
-  '                          storages and profile copies stay under this attempt',
-  '                          directory instead of the user session store. Requires',
+  '  --session-root <dir>    private session root for THIS ungrouped child only:',
+  '                          a per-run patch overlay moves just the JSONL session',
+  '                          backend under this attempt directory, so its rollout',
+  '                          never joins the user session store. Requires',
   '                          --no-workspace, because the owning workspace bridge',
-  '                          verifies sessions in its own store. The settings',
-  '                          document is still read from the owning environment',
-  '                          first, so native model/auth settings are unchanged',
+  '                          verifies sessions in its own store. DSH_HOME, the',
+  '                          credentials store and the settings document are',
+  '                          never moved, so native auth keeps resolving from the',
+  '                          owning harness',
   '  --no-workspace          run without workspace grouping',
   '  --workspace-socket <p>  private host socket (default DSH_WORKSPACE_SOCKET,',
   '                          then $DSH_HOME/deepseek-delegate/workspace.sock)',
@@ -304,7 +306,7 @@ try {
       'log-dir': { type: 'string' },
       'dsh-bin': { type: 'string' },
       'settings-file': { type: 'string' },
-      'dsh-home': { type: 'string' },
+      'session-root': { type: 'string' },
       'no-workspace': { type: 'boolean', default: false },
       'workspace-socket': { type: 'string' },
       'workspace-timeout': { type: 'string', default: String(DEFAULT_WORKSPACE_TIMEOUT_SECONDS) },
@@ -367,22 +369,29 @@ if (inquiryRawResults !== undefined && inquiryRawResults === '') fail('--inquiry
 if (inquiryToken !== undefined && (inquiryToken.length > 256 || inquiryToken.includes('\0'))) {
   fail('--inquiry-token must be at most 256 characters and contain no NUL');
 }
-// The private DSH home relocates only this child's session/storage root. It must
-// be an absolute owner-private directory and it never applies to attach mode,
-// which runs no child at all.
-const dshHome = values['dsh-home'] === undefined ? undefined : values['dsh-home'].trim();
-if (dshHome !== undefined) {
-  if (dshHome === '') fail('--dsh-home must not be blank');
-  if (!isAbsolute(dshHome)) fail('--dsh-home must be an absolute path');
-  if (attachSession !== undefined) fail('--dsh-home does not apply to --attach-session: attach mode runs no child');
-  // A relocated child home is incompatible with workspace grouping: the owning
+// The private session root moves ONLY the JSONL session backend's root for this
+// ungrouped child, through the same per-run patch overlay this runner already
+// uses for its settings copy. The child's DSH home, credentials store and
+// settings document are never relocated, so native model auth keeps resolving
+// from the owning harness instead of a broken empty home. It requires an
+// absolute owner-private path and never applies to attach mode, which runs no
+// child at all.
+const rawSessionRoot = values['session-root'] === undefined ? undefined : values['session-root'].trim();
+if (rawSessionRoot !== undefined) {
+  if (rawSessionRoot === '') fail('--session-root must not be blank');
+  if (!isAbsolute(rawSessionRoot) || rawSessionRoot.includes('\0')) {
+    fail('--session-root must be an absolute path without NUL');
+  }
+  if (attachSession !== undefined) fail('--session-root does not apply to --attach-session: attach mode runs no child');
+  // A private session root is incompatible with workspace grouping: the owning
   // workspace bridge proves the completed session from ITS OWN session store
   // (`sessionPersistence.list()`), so the grouped run would fail as
   // unknown-session and exit 1. Require an explicit --no-workspace.
   if (workspaceEnabled) {
-    fail('--dsh-home requires --no-workspace: the workspace bridge verifies sessions in the owning host session store');
+    fail('--session-root requires --no-workspace: the workspace bridge verifies sessions in the owning host session store');
   }
 }
+const sessionRootDir = rawSessionRoot === undefined ? undefined : resolve(rawSessionRoot);
 if (attachSession !== undefined && inquiryRawSocket !== undefined) {
   fail('--attach-session does not mount an inquiry bridge: it runs no model task');
 }
@@ -607,6 +616,21 @@ const stdoutLog = join(logDir, 'stdout.log');
 const stderrLog = join(logDir, 'stderr.log');
 const capturePath = workspaceEnabled ? join(logDir, CAPTURE_FILENAME) : null;
 
+// The per-run session override must be usable before the child starts; an
+// unusable path is a usage error, never a paid run whose session cannot
+// persist. A symlinked root is refused so the private root stays the real
+// attempt directory this runner created.
+if (sessionRootDir !== undefined) {
+  try {
+    mkdirSync(sessionRootDir, { recursive: true, mode: 0o700 });
+    if (lstatSync(sessionRootDir).isSymbolicLink() || !isDirectory(sessionRootDir)) {
+      throw new Error('the session root is not a real directory');
+    }
+  } catch {
+    fail(`could not create the private session root: ${sessionRootDir}`);
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Private per-run inquiry bridge. A missing or unusable socket degrades this
 // run to "no inquiry" and is reported in the result; it never fails the run and
@@ -648,6 +672,14 @@ try {
   patchFile = join(tempDir, 'patch.json');
   writeFileSync(settingsCopy, JSON.stringify(runSettings), { mode: 0o600 });
   const patchRows = [{ id: 'settings', config: { path: settingsCopy, watch: false } }];
+  if (sessionRootDir !== undefined) {
+    // The shipped profiles compose the durable session store under this entry
+    // id; the overlay replaces only its `root`, so this child's session rollout
+    // lands in the attempt directory while the DSH home, credentials store and
+    // every other harness path keep the owning harness values. A profile that
+    // does not compose the entry only warns, never fails.
+    patchRows.push({ id: 'session-persistence-jsonl', config: { root: sessionRootDir } });
+  }
   if (workspaceEnabled) {
     // A temporary, self-contained observer plugin captures this run's exact root
     // session id from the live session event feed; nothing else changes.
@@ -891,19 +923,23 @@ function buildResult(status, exitCode, signal, error, workspace, shutdownConfirm
           note: 'the bounded metadata-only projection this run wrote for its owning Worker; the sidecar path stays private and only the Worker reads it' },
     workspace,
     nativeStorage: {
-      // Truthful session-storage facts. The default grouped path keeps the
-      // inherited harness home, so the rollout stays readable through that
-      // harness store and the owning workspace host can verify its membership.
-      // A private home (ungrouped runs only) is NOT listed by the installed app,
-      // and DSH continuations reconstruct a new session instead of resuming it.
-      scope: dshHome === undefined ? 'harness-user-store' : 'task-private',
-      relocated: dshHome !== undefined,
-      sessionsSubdir: 'sessions',
-      nativeAppVisibility: dshHome === undefined ? 'user-store' : 'not-listed-in-native-app',
+      // Truthful session-storage facts. Git isolation and native storage are
+      // separate dimensions. A grouped run keeps the owning harness session
+      // store so the workspace bridge can verify membership. An ungrouped run
+      // moves ONLY the JSONL session backend's root through the per-run patch
+      // overlay; the DSH home, credentials store and settings document keep
+      // their owning-harness values, so native auth is never moved or simulated.
+      scope: sessionRootDir === undefined ? 'harness-user-store' : 'task-private-sessions',
+      sessionRootPrivate: sessionRootDir !== undefined,
+      sessionRootSource: sessionRootDir === undefined
+        ? 'the owning harness session store'
+        : 'a per-run patch overlay on the shipped session-persistence-jsonl root; a profile without that entry warns and keeps its own store',
+      credentialsStore: 'harness-user-store',
+      nativeAppVisibility: sessionRootDir === undefined ? 'user-store' : 'not-listed-in-native-app',
       resumeMode: 'reconstructed-new-session',
-      note: dshHome === undefined
-        ? 'this child kept the inherited DSH home so the owning workspace host can verify and group the session; the rollout is readable through that harness store'
-        : 'this child wrote its sessions/storages under the attempt-private DSH home; it is not listed by the installed app and is not resumed by Buddy continuations',
+      note: sessionRootDir === undefined
+        ? 'this child kept the owning harness session store so the workspace host can verify and group the session; credentials resolve from that store too'
+        : 'this child wrote its session rollout under the attempt-private root through a supported per-run patch overlay; the DSH home, credentials store and other harness state stayed with the owning harness, and Buddy continuations reconstruct a new session instead of resuming it',
     },
     processState: { pid: child?.pid ?? null, shutdownConfirmed },
     ...(turnConfig === undefined ? {} : { turn, turnResultPath: turnConfig.outputFile, turnResultError: turnResultError ?? null }),
@@ -971,20 +1007,11 @@ for (const signal of ['SIGINT', 'SIGTERM']) {
 
 try {
   const childEnv = { ...process.env };
-  // Preserve the same home after changing the child's working directory.
+  // Preserve the same home after changing the child's working directory. The
+  // child keeps the owning DSH home: the private session root travels through
+  // the per-run patch overlay only, so native credentials and settings keep
+  // resolving exactly where the owning harness put them.
   if (childEnv.DSH_HOME?.trim()) childEnv.DSH_HOME = resolve(childEnv.DSH_HOME);
-  // Task-owned native storage: only the child's DSH home moves under this
-  // attempt, so its rollouts/storages never join the user's session store.
-  // The settings document was already resolved above from the owning
-  // environment, so native model/auth settings stay untouched.
-  if (dshHome !== undefined) {
-    try {
-      mkdirSync(dshHome, { recursive: true, mode: 0o700 });
-    } catch {
-      fail(`could not create the private DSH home: ${dshHome}`);
-    }
-    childEnv.DSH_HOME = dshHome;
-  }
   // Discard obsolete Web credentials if inherited from an older installation.
   delete childEnv.DSH_WEB_URL;
   delete childEnv.DSH_WEB_URL_FILE;
