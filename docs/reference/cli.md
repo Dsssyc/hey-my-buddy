@@ -98,7 +98,7 @@ Continuation reuses the currently allocated actual checkout, prepares a new fixe
 | `pendingRequests` | Bounded open-request queue including the current active request; at most 5 compact entries |
 | `counts.openRequests` | Complete open-request count, including the active request and entries omitted from the compact queue |
 | `truncated.pendingRequests` | Number of open-request entries omitted from `pendingRequests` |
-| `routing` | `status`, `decisionId`, `taskId`, `attemptId`, `generation`, `selectedProfile`, `tableRevision`, `configurationRevision`, `reason`, `constraints`, `routingPreferences`, `source`, `preferenceOutcome`, `routingMode` (actual), `requestedRoutingMode`, `fallback` |
+| `routing` | `status`, `decisionId`, `taskId`, `attemptId`, `generation`, `selectedProfile`, `tableRevision`, `configurationRevision`, `reason`, `constraints`, `routingPreferences`, `source` (`model-selection` for a Router choice, `single-candidate` for the program's sole-candidate direct selection, `no-candidate` for a zero-candidate Host boundary; each record keeps the source its own frozen basis supports), `preferenceOutcome`, `routingMode` (actual), `requestedRoutingMode`, `fallback` |
 | `proxy`, `origin` on a request | Immediate source `{runId, requestId}` and original requesting leaf `{runId, requestId}` for nested attention |
 | `shutdown` | `selfConfirmed`, `descendantsConfirmed`, full `unconfirmedCount`, up to 32 `unconfirmedRunIds`, and boolean `truncated` |
 

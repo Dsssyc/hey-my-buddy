@@ -14,6 +14,7 @@ export function fallbackDescription(fallback: RoutingFallback | null | undefined
 /** How one recorded route was selected; null keeps an unknown or unrecorded source blank. */
 export function selectionSourceText(source: string | null | undefined): string | null {
   if (source === "single-candidate") return "程序直选（唯一合法候选，未调用 Router）";
+  if (source === "no-candidate") return "无合法候选";
   if (source === "model-selection") return "模型选择";
   return null;
 }

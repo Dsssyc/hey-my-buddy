@@ -213,7 +213,15 @@ def selection_source(request: dict) -> str:
 
     ``model-selection`` is the Router path; ``single-candidate`` marks the
     program's direct selection of the sole frozen legal candidate, recorded as
-    ``routerCalled: false`` on that request. A record from before program
-    selection existed keeps the Router-path marker; this does not claim a model ran.
+    ``routerCalled: false`` on that request; ``no-candidate`` marks the Host
+    boundary a request stops at when its own frozen ``routingBasis`` records
+    zero legal candidates, so no Router task or model call exists. A record
+    from before program selection existed keeps the Router-path marker; this
+    does not claim a model ran, and a record without the frozen basis is never
+    relabeled from later state.
     """
-    return "single-candidate" if request.get("routerCalled") is False else "model-selection"
+    if request.get("routerCalled") is False:
+        return "single-candidate"
+    if (request.get("routingBasis") or {}).get("candidateCount") == 0:
+        return "no-candidate"
+    return "model-selection"

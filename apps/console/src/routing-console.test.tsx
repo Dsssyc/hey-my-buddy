@@ -124,6 +124,45 @@ describe("sole candidate routing basis", () => {
   });
 });
 
+describe("zero candidate routing source", () => {
+  const emptyBasis = { candidateCount: 0, excludedCount: 1, excludedProfiles: [
+    { ...worker, effort: "high", reason: "用户排除了最后一个候选", source: "override" },
+  ] };
+  it("shows the short no-candidate boundary source without claiming a model chose", async () => {
+    const value = workflow();
+    value.routing = { status: "needs-host", source: "no-candidate", decisionId: "decision-none",
+      routingBasis: emptyBasis, reason: "no enabled, available, capability-matching profile is a legal candidate",
+      routingMode: "review", requestedRoutingMode: "review" };
+    const command = vi.fn(async () => ({ ...value, routingHistory: { entries: [], total: 0, nextCursor: null } }));
+    render(<RoutingDetails value={value} api={apiFor(snapshot(), command)} csrfToken="csrf" active />);
+    expect(screen.getByText("无合法候选")).toBeTruthy();
+    expect(screen.queryByText("模型选择")).toBeNull();
+    expect(screen.getByText("实际模式").nextElementSibling?.textContent).toBe("未调用 Router");
+  });
+  it("keeps an unrecorded source blank", async () => {
+    const value = workflow();
+    value.routing = { ...value.routing!, source: null };
+    const command = vi.fn(async () => ({ ...value, routingHistory: { entries: [], total: 0, nextCursor: null } }));
+    render(<RoutingDetails value={value} api={apiFor(snapshot(), command)} csrfToken="csrf" active />);
+    expect(screen.queryByText("选择方式")).toBeNull();
+    expect(screen.queryByText("无合法候选")).toBeNull();
+    expect(screen.queryByText("模型选择")).toBeNull();
+  });
+  it("shows the boundary decision detail without an exercised mode or budget", async () => {
+    const audit = { ...decision("boundary"), status: "needs-host", input: null, runId: null,
+      profileId: null, selectedProfile: null, output: null, routerCalled: null,
+      routingBasis: emptyBasis, budget: { preset: "standard", timeoutSeconds: 300, toolCalls: 24, bytesRead: 524288 },
+      routingMode: "review", requestedRoutingMode: "review",
+      reason: "no enabled, available, capability-matching profile is a legal candidate" };
+    const command = vi.fn(async () => ({ decision: audit }));
+    render(<DecisionDetails decisionId="boundary" api={apiFor(snapshot(), command)} csrfToken="csrf" />);
+    const detail = await screen.findByRole("region", { name: "决策依据详情" });
+    expect(within(detail).getByText("实际模式").nextElementSibling!.textContent).toBe("未调用 Router");
+    expect(within(detail).getByText("预算配置").nextElementSibling!.textContent).toBe("未调用 Router");
+    expect(within(detail).queryByText(/本次由程序直接选定/)).toBeNull();
+  });
+});
+
 describe("routing configuration", () => {
   it("keeps a large decision history out of the Buddy config page and performs no decision request", async () => {
     const state = snapshot();

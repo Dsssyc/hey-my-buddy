@@ -40,7 +40,7 @@ export type RoutingRecord = {
   reason?: string | null;
   constraints?: Partial<ExecutionConfiguration>;
   requiredCapabilities?: string[];
-  /** `model-selection` for a Router choice, `single-candidate` for the program's direct selection. */
+  /** `model-selection` for a Router choice, `single-candidate` for the program's direct selection, `no-candidate` for a zero-candidate Host boundary. */
   source?: string | null;
   routingBasis?: RoutingBasis | null;
 };

@@ -382,7 +382,11 @@ class SelectionRequestTests(DecisionTestCase):
         )
         self.assertEqual(no_candidate["status"], "needs-host")
         self.assertIsNone(no_candidate["runId"])
-        self.assertIn("legal candidate", self.decision(board, no_candidate["decisionId"])["reason"])
+        decision = self.decision(board, no_candidate["decisionId"])
+        self.assertIn("legal candidate", decision["reason"])
+        # The frozen basis records the empty candidate set the Host boundary and
+        # the routing source derivation both read.
+        self.assertEqual(decision["routingBasis"]["candidateCount"], 0)
 
     def test_new_pin_and_exclusion_cannot_adopt_an_old_frozen_candidate(self):
         board = self.board()

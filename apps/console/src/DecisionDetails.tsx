@@ -48,6 +48,9 @@ export function DecisionDetails({ decisionId, api, csrfToken, active = true, ref
   const constraints = audit.constraints ?? audit.requested?.constraints ?? {};
   const requiredCapabilities = audit.requiredCapabilities ?? audit.requested?.requiredCapabilities ?? [];
   const basisLine = routingBasisSummary(audit.routingBasis);
+  // A zero-candidate Host boundary never reached a Router either, even though
+  // its request carries the frozen would-have-been mode and budget.
+  const noRouterCall = audit.routerCalled === false || audit.routingBasis?.candidateCount === 0;
   const programPreferences = audit.routerCalled === false
     ? (audit.output as { programSelection?: { preferences?: Preference[] } } | null)?.programSelection?.preferences
     : undefined;
@@ -81,7 +84,7 @@ export function DecisionDetails({ decisionId, api, csrfToken, active = true, ref
       {audit.kind !== "maintain" && <><dt>选中配置</dt><dd>{configurationText(audit.selectedProfile)}</dd></>}
       <dt>路由模型</dt><dd>{configurationText(model)}</dd>
       {audit.kind !== "maintain" && <><dt>请求模式</dt><dd>{recordedRoutingMode(audit.requestedRoutingMode)}</dd>
-        <dt>实际模式</dt><dd>{audit.routerCalled === false ? "未调用 Router" : recordedRoutingMode(audit.routingMode)}</dd>
+        <dt>实际模式</dt><dd>{noRouterCall ? "未调用 Router" : recordedRoutingMode(audit.routingMode)}</dd>
         <dt>模式降级</dt><dd>{fallbackDescription(audit.fallback)}</dd></>}
       <dt>评价表版本</dt><dd>V{audit.tableRevision}</dd>
       <dt>决策配置版本</dt><dd>{audit.configurationRevision == null ? "未记录" : `V${audit.configurationRevision}`}</dd>
@@ -92,7 +95,7 @@ export function DecisionDetails({ decisionId, api, csrfToken, active = true, ref
       <dl className="facts">
         <dt>程序任务偏好结果</dt><dd>{outcomeText(audit.policyCheck?.taskPreference?.outcome)}{audit.policyCheck?.taskPreference?.ruleIndex != null ? `（规则 ${audit.policyCheck.taskPreference.ruleIndex}）` : ""}</dd>
         <dt>程序用户偏好结果</dt><dd>{outcomeText(audit.policyCheck?.userPreference)}</dd>
-        <dt>预算配置</dt><dd>{audit.routerCalled === false ? "未调用 Router" : audit.routingMode === "fast" ? "快速路由固定 60 秒，无工具" : audit.budget?.preset ? ({ brief: "简要", quick: "简要（历史记录）", standard: "标准", deep: "深入" }[audit.budget.preset] ?? audit.budget.preset) : "未记录"}</dd>
+        <dt>预算配置</dt><dd>{noRouterCall ? "未调用 Router" : audit.routingMode === "fast" ? "快速路由固定 60 秒，无工具" : audit.budget?.preset ? ({ brief: "简要", quick: "简要（历史记录）", standard: "标准", deep: "深入" }[audit.budget.preset] ?? audit.budget.preset) : "未记录"}</dd>
         <dt>耗时 / 上限</dt><dd>{recorded(audit.usage?.elapsedMs)} 毫秒 / {recorded(audit.budget?.timeoutSeconds)} 秒</dd>
         <dt>{audit.routingMode === "fast" ? "工具调用" : "工具调用 / 上限"}</dt><dd>{recorded(audit.usage?.toolCalls)}{audit.routingMode !== "fast" && ` / ${recorded(audit.budget?.toolCalls)}`}</dd>
         <dt>读取字节</dt><dd>{recorded(audit.usage?.bytesRead)}</dd>

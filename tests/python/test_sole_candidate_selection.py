@@ -76,6 +76,18 @@ class SoleCandidateSelectionTests(DecisionTestCase):
         self.assertEqual(multi["status"], "needs-host")
         self.assertIn("Router is not configured", self.decision(board, multi["decisionId"])["reason"])
 
+    def test_selection_source_reads_only_recorded_frozen_facts(self):
+        from buddy.router import selection_source
+        # The program's direct selection keeps its recorded marker.
+        self.assertEqual(selection_source({"routerCalled": False}), "single-candidate")
+        # A frozen empty candidate set names the zero-candidate Host boundary.
+        self.assertEqual(selection_source({"routingBasis": {"candidateCount": 0}}), "no-candidate")
+        # Router-path records and records predating the frozen basis are never
+        # relabeled from later state.
+        self.assertEqual(selection_source({"routingBasis": {"candidateCount": 2}}), "model-selection")
+        self.assertEqual(selection_source({}), "model-selection")
+
+
     def test_sole_candidate_records_bounds_capabilities_and_preference_check(self):
         board = self.board()
         self.seed(board, preferences=[{"profileId": PROFILE_ID, "mode": "prefer", "reason": "prefer flash"}])
@@ -278,6 +290,9 @@ class SoleCandidateWorkflowTests(WorkflowTestCase):
         board.store.workflow.prepare_continuation_workspace({"runId": pending["runId"]})
         continued = board.call("workflow_get", {"runId": submitted["runId"]})
         self.assertEqual(continued["routing"]["status"], "needs-host")
+        # The reroute stopped at the Host boundary without a Router call, so its
+        # recorded source names the empty candidate set instead of a model choice.
+        self.assertEqual(continued["routing"]["source"], "no-candidate")
         self.assertIn("legal candidate", continued["routing"]["reason"])
         basis = continued["routing"]["routingBasis"]
         self.assertEqual(basis["candidateCount"], 0)
@@ -290,7 +305,7 @@ class SoleCandidateWorkflowTests(WorkflowTestCase):
         history = board.call("workflow_get", {
             "runId": submitted["runId"], "routingHistory": {"limit": 10}})["routingHistory"]
         self.assertEqual([entry["source"] for entry in history["entries"]],
-                         ["model-selection", "single-candidate"])
+                         ["no-candidate", "single-candidate"])
         self.assertEqual(history["entries"][1]["decisionId"], submitted["routing"]["decisionId"])
 
     def test_multi_candidate_route_keeps_the_router_attempt_path(self):

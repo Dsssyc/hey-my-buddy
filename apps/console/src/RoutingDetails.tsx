@@ -58,7 +58,7 @@ export function RoutingDetails({ value, api, csrfToken, active, initialDecisionI
         <dt>路由状态</dt><dd>{value.routing ? decisionStatus[value.routing.status] || value.routing.status : "未记录"}</dd>
         {sourceText && <><dt>选择方式</dt><dd>{sourceText}</dd></>}
         {value.routing && (value.routing.status !== "explicit" || value.routing.routingMode || value.routing.requestedRoutingMode) && <><dt>请求模式</dt><dd>{recordedRoutingMode(value.routing.requestedRoutingMode)}</dd>
-          <dt>实际模式</dt><dd>{value.routing.source === "single-candidate" ? "未调用 Router" : recordedRoutingMode(value.routing.routingMode)}</dd>
+          <dt>实际模式</dt><dd>{value.routing.source === "single-candidate" || value.routing.source === "no-candidate" ? "未调用 Router" : recordedRoutingMode(value.routing.routingMode)}</dd>
           <dt>模式降级</dt><dd>{fallbackDescription(value.routing.fallback)}</dd></>}</dl>
       {!currentId && <p className="read-text">{value.routing?.status === "explicit"
         ? "Host 指定" : value.routing?.reason || value.activeRequest?.summary || "路由决策未记录"}</p>}
