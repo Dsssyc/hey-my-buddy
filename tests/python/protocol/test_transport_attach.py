@@ -14,6 +14,7 @@ import tempfile
 import unittest
 from unittest.mock import Mock, call, patch
 from hey_my_buddy.errors import BoardError
+from hey_my_buddy.protocol import transport
 
 from hey_my_buddy.protocol.transport import (
     ServiceError,
@@ -87,6 +88,12 @@ class AttachFixture(unittest.TestCase):
 
 
 class ReadOnlyAttachTests(AttachFixture):
+    def test_healthy_service_still_attaches_during_upgrade(self):
+        (self.directory / "upgrade.json").write_text("{}")
+        with MutationRecorder() as recorder:
+            self.assertEqual(_attach_read_only(self.directory), ENDPOINT)
+        recorder.assert_no_mutation()
+
     def test_healthy_private_service_attaches_without_any_filesystem_mutation(self):
         before = snapshot(self.directory)
         with MutationRecorder() as recorder:
@@ -331,6 +338,47 @@ class ColdStartTests(unittest.TestCase):
         self.assertEqual((self.directory / "control-start.lock").stat().st_mode & 0o777, 0o600)
         self.assertEqual((self.directory / "control.log").stat().st_mode & 0o777, 0o600)
         self.assertEqual(Path(self.spawn.call_args.args[0][2]).name, "hey_my_buddy.blackboard.service.daemon")
+
+    def test_upgrade_journal_refuses_cold_start_under_startup_lock(self):
+        self.directory.mkdir(mode=0o700)
+        (self.directory / "upgrade.json").write_text("{}")
+        with patch("hey_my_buddy.protocol.transport._cold_start_preflight") as preflight:
+            with self.assertRaises(ServiceError) as refused:
+                ensure_service(self.directory)
+        self.assertEqual(refused.exception.code, "UPGRADE_IN_PROGRESS")
+        preflight.assert_called_once()
+        self.spawn.assert_not_called()
+        self.assertTrue((self.directory / "control-start.lock").exists())
+
+    def test_installer_finishes_before_an_existing_client_reattaches(self):
+        self.directory.mkdir(mode=0o700)
+        marker = self.directory / "upgrade.json"
+        marker.write_text("{}")
+
+        def installer_unlocks(_fd):
+            marker.unlink()
+
+        with patch.object(transport, '_attach_read_only', return_value=ENDPOINT) as attach, \
+             patch.object(transport, '_cold_start_preflight'), \
+             patch.object(transport.locking, 'lock', side_effect=installer_unlocks) as lock:
+            self.assertEqual(ensure_service(self.directory), ENDPOINT)
+        lock.assert_called_once()
+        self.assertEqual(attach.call_count, 2)
+        self.spawn.assert_not_called()
+
+    def test_upgrade_journal_created_during_preflight_refuses_spawn_under_lock(self):
+        original_preflight = transport._cold_start_preflight
+
+        def fence_after_preflight(directory):
+            original_preflight(directory)
+            (directory / "upgrade.json").write_text("{}")
+
+        with patch("hey_my_buddy.protocol.transport._cold_start_preflight", side_effect=fence_after_preflight):
+            with self.assertRaises(ServiceError) as refused:
+                ensure_service(self.directory)
+        self.assertEqual(refused.exception.code, "UPGRADE_IN_PROGRESS")
+        self.assertTrue((self.directory / "control-start.lock").exists())
+        self.spawn.assert_not_called()
 
     def test_existing_service_under_a_shared_sticky_parent_attaches_read_only(self):
         """Regression: a service under a root-owned sticky /tmp is reused, not re-spawned."""

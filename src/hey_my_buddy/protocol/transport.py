@@ -385,7 +385,7 @@ def ensure_service(state_dir: str | Path | None = None, *, resource: str = "cont
 
 def _ensure_service(directory: Path, *, resource: str = "control") -> dict:
     endpoint = _attach_read_only(directory)
-    if endpoint:
+    if endpoint and not (directory / 'upgrade.json').exists():
         return endpoint
     if resource == "wait":
         # A wait may never cold-start a service: waiting on nothing would be a lie.
@@ -397,6 +397,7 @@ def _ensure_service(directory: Path, *, resource: str = "control") -> dict:
         endpoint = _attach_read_only(directory)
         if endpoint:
             return endpoint
+        _refuse_upgrade_cold_start(directory)
         _retire_stale_endpoint(directory)
         from ..install import runtime
 
@@ -453,6 +454,14 @@ def _ensure_service(directory: Path, *, resource: str = "control") -> dict:
     finally:
         locking.unlock(lock_fd)
         os.close(lock_fd)
+
+
+def _refuse_upgrade_cold_start(directory: Path) -> None:
+    if (directory / "upgrade.json").exists():
+        raise ServiceError(
+            "UPGRADE_IN_PROGRESS",
+            "Upgrade verification or recovery is in progress; retry the same command and identity after it finishes",
+        )
 
 
 def call_service(method: str, params: dict | None = None, state_dir: str | Path | None = None) -> dict:

@@ -1,4 +1,4 @@
-"""Idle-only package launcher cutover with a verified backup and rollback."""
+"""Contract-aware runtime cutover, with offline backup only for upgrades."""
 from __future__ import annotations
 from contextlib import ExitStack, contextmanager, closing
 from .. import locking
@@ -20,6 +20,7 @@ from .. import private_dirs
 from . import runtime
 from .launcher import write_active_runtime
 from ..protocol import schemas
+from ..protocol.contracts import CONTRACT_VERSION
 from ..blackboard.store.db import SCHEMA_VERSION, utc_now
 from ..errors import BoardError
 from ..protocol.transport import get_state_dir
@@ -84,6 +85,35 @@ def idle_snapshot(state: Path, *, event_head: int | None = None, exact: bool = F
         snapshot = {**backup.database_snapshot(connection, event_head=event_head, exact=exact),
                     'schema': int(schema[0])}
         return snapshot
+
+
+def preflight(state: Path, contract_version: str) -> dict:
+    """The contract boundary decides whether the board must stop changing."""
+    if contract_version != CONTRACT_VERSION:
+        before = idle_snapshot(state)
+        backup_readiness(state)
+        return before
+    with closing(sqlite3.connect((state / 'board.sqlite3').as_uri() + '?mode=ro', uri=True)) as connection:
+        schema = connection.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone()
+    if schema is None or int(schema[0]) != SCHEMA_VERSION:
+        raise BoardError('UNSUPPORTED_SCHEMA', 'An unchanged contract requires the current board schema')
+    return {'schema': SCHEMA_VERSION}
+
+
+def install_preflight(state: Path) -> None:
+    """Inspect the installed generation before the installer changes any paths."""
+    from .launcher import read_private, selected_runtime
+    endpoint = read_private(state / 'control.json')
+    if endpoint is not None:
+        contract_version = endpoint['contractVersion']
+    elif (state / 'active-runtime.json').exists():
+        import re
+        previous = selected_runtime(state, allow_overrides=False)
+        contract_version = re.search(r'^CONTRACT_VERSION = "([^"]+)"',
+            (previous / 'src/hey_my_buddy/protocol/contracts.py').read_text(), re.MULTILINE).group(1)
+    else:
+        contract_version = ''
+    preflight(state, contract_version)
 
 
 def _environment(state: Path, target: Path) -> dict:
@@ -159,18 +189,22 @@ def retire_workers(state: Path, *, timeout: float = 35) -> None:
             stack.enter_context(file_lock(lock, timeout=max(0, deadline - time.monotonic())))
 
 
-def detach(state: Path, target: Path) -> None:
+def detach(state: Path, target: Path, *, contract_changed: bool = True) -> None:
     try:
-        command(state, target, 'restart', {'drainSeconds': 0, 'reason': 'coordinated idle upgrade'})
+        command(state, target, 'restart', {'drainSeconds': 0, 'reason': 'coordinated installation'})
     except (BoardError, subprocess.SubprocessError):
         # A lost restart reply is not a stop receipt. The ownership locks below
         # must still be acquired before inspecting or restoring any state.
         pass
-    with file_lock(state / 'control-daemon.lock', timeout=30), file_lock(state / 'board-owner.lock', timeout=30):
+    # Live observers can take 7 seconds to leave before C-Two's 30-second
+    # shutdown budget starts. Preserve ownership proof throughout that drain.
+    timeout = 30 if contract_changed else 60
+    with file_lock(state / 'control-daemon.lock', timeout=timeout), file_lock(state / 'board-owner.lock', timeout=timeout):
         # Reject work admitted in the small window before an old-version daemon
         # detached. The caller then restores that runtime without touching work.
-        idle_snapshot(state)
-        retire_workers(state)
+        if contract_changed:
+            idle_snapshot(state)
+            retire_workers(state)
 
 
 def remove_legacy_worker_state(state: Path) -> None:
@@ -319,24 +353,26 @@ def backup_readiness(state: Path) -> dict:
     return report
 
 
-def verify_started(state: Path, target: Path, health: dict, before: dict) -> dict:
+def verify_started(state: Path, target: Path, health: dict, before: dict, *, contract_changed: bool = True) -> dict:
     if health.get('runtimeContentId') != target.name or not health.get('runtimeStable') or health.get('schemaVersion') != before.get('schema', SCHEMA_VERSION):
         raise BoardError('UPGRADE_VERIFY_FAILED', 'Replacement runtime identity or schema did not match',
                          tables=['meta'] if health.get('schemaVersion') != before.get('schema', SCHEMA_VERSION) else [])
     settings = before.get('runtimeSettings', {})
     if any(health.get(key) != value for key, value in settings.items()):
         raise BoardError('UPGRADE_VERIFY_FAILED', 'Configured runtime capacity changed')
-    actual = idle_snapshot(state, event_head=before.get('eventHead'))
-    if set(actual['tables']) != set(before['tables']):
-        raise BoardError('UPGRADE_VERIFY_FAILED', 'Database table inventory changed',
-                         tables=sorted(set(actual['tables']) ^ set(before['tables'])))
-    changed = [name for name, value in before['fingerprints'].items() if actual['fingerprints'].get(name) != value]
-    if changed:
-        raise BoardError('UPGRADE_VERIFY_FAILED', 'Retained database values changed', tables=changed)
+    if contract_changed:
+        actual = idle_snapshot(state, event_head=before.get('eventHead'))
+        if set(actual['tables']) != set(before['tables']):
+            raise BoardError('UPGRADE_VERIFY_FAILED', 'Database table inventory changed',
+                             tables=sorted(set(actual['tables']) ^ set(before['tables'])))
+        changed = [name for name, value in before['fingerprints'].items() if actual['fingerprints'].get(name) != value]
+        if changed:
+            raise BoardError('UPGRADE_VERIFY_FAILED', 'Retained database values changed', tables=changed)
     inspected = command(state, target, 'runtime')
     if inspected.get('leaks'):
         raise BoardError('UPGRADE_VERIFY_FAILED', 'Runtime still depends on replaceable source paths')
-    return {'runtimeContentId': target.name, 'schemaVersion': before.get('schema', SCHEMA_VERSION), 'retainedDataFingerprints': True, 'sourceLeaks': []}
+    return {'runtimeContentId': target.name, 'schemaVersion': before.get('schema', SCHEMA_VERSION),
+            **({'retainedDataFingerprints': True} if contract_changed else {}), 'sourceLeaks': []}
 
 
 def _failure_reason(error: Exception) -> dict:
@@ -427,6 +463,17 @@ def _finish_skill(journal: dict) -> None:
             pass
 
 
+def retain_runtimes(state: Path, target: Path, previous: Path) -> dict:
+    from ..blackboard.store.store import BoardStore
+    from ..blackboard.tasks.storage import prune_old_runtimes
+    try:
+        write_journal(state / 'runtime-retention.json', {'current':target.name, 'previous':previous.name})
+        return prune_old_runtimes(BoardStore(state))
+    except Exception as cleanup_error:
+        return {'complete':False, 'error':getattr(cleanup_error, 'code', type(cleanup_error).__name__),
+                'note':'Upgrade verified; cleanup can be retried independently'}
+
+
 def upgrade(params: dict, *, skill_source: Path | None = None, skill_target: Path | None = None) -> dict:
     from ..blackboard.store.store import BoardStore
     schemas.reject_unknown(params, set(), 'upgrade')
@@ -437,7 +484,6 @@ def upgrade(params: dict, *, skill_source: Path | None = None, skill_target: Pat
     if (state / 'upgrade.json').exists():
         with file_lock(state / 'upgrade.lock'), file_lock(state / 'control-start.lock'):
             return recover(state, root)
-    legacy_cleanup_error = retry_legacy_worker_cleanup(state)
     if not (state / 'control.json').exists():
         raise BoardError('UPGRADE_NOT_RUNNING', 'Start the installed service before upgrading')
     endpoint = json.loads((state / 'control.json').read_text())
@@ -452,9 +498,10 @@ def upgrade(params: dict, *, skill_source: Path | None = None, skill_target: Pat
         raise BoardError('UPGRADE_IDENTITY_CHANGED', 'The live installed service does not match its recorded runtime identity')
     preserved = {'HMB_MAX_CONCURRENT':str(health_before['maxConcurrent']), 'HMB_WAIT_CAPACITY':str(health_before['waitCapacity'])}
     runtime_settings = {'maxConcurrent':health_before['maxConcurrent'], 'waitCapacity':health_before['waitCapacity']}
-    before = idle_snapshot(state)
+    contract_changed = health_before['contractVersion'] != CONTRACT_VERSION
+    before = preflight(state, health_before['contractVersion'])
     before['runtimeSettings'] = runtime_settings
-    backup_readiness(state)
+    legacy_cleanup_error = retry_legacy_worker_cleanup(state)
     # Dependency installation cannot disturb the old daemon; materialize before
     # taking the short ownership fence and preserve both generations on failure.
     materialized = runtime.materialize(root=skill_source / 'package') if skill_source is not None else runtime.materialize()
@@ -469,9 +516,8 @@ def upgrade(params: dict, *, skill_source: Path | None = None, skill_target: Pat
         attached = probe(state, previous)
         if attached is None or attached.get('serviceId') != endpoint.get('serviceId'):
             raise BoardError('UPGRADE_IDENTITY_CHANGED', 'The installed service changed during runtime preparation')
-        before = idle_snapshot(state)
+        before = preflight(state, attached['contractVersion'])
         before['runtimeSettings'] = runtime_settings
-        backup_readiness(state)
         skill_stage = None
         skill_previous = None
         if skill_source is not None:
@@ -486,8 +532,11 @@ def upgrade(params: dict, *, skill_source: Path | None = None, skill_target: Pat
             shutil.copytree(skill_source, skill_stage, symlinks=True)
             from .skill_install import write_runtime_hint
             write_runtime_hint(skill_stage, target)
-        backup_token = secrets.token_urlsafe(32)
-        journal = {'startedAt': utc_now(), 'previous': str(previous), 'target': str(target), 'phase': 'preflight', 'before':before, 'environment':preserved, 'backupTokenHash':hashlib.sha256(backup_token.encode()).hexdigest()}
+        journal = {'startedAt': utc_now(), 'previous': str(previous), 'target': str(target), 'phase': 'preflight',
+                   'contractChanged': contract_changed, 'before':before, 'environment':preserved}
+        if contract_changed:
+            backup_token = secrets.token_urlsafe(32)
+            journal['backupTokenHash'] = hashlib.sha256(backup_token.encode()).hexdigest()
         if skill_stage is not None:
             from .skill_install import claude_skills_home, SKILL
             claude_link = claude_skills_home() / SKILL
@@ -499,50 +548,48 @@ def upgrade(params: dict, *, skill_source: Path | None = None, skill_target: Pat
         active = previous
         detached = False
         try:
-            # A request may have entered the previous daemon before its entry
-            # fence became visible. Recheck after fencing, and take the backup
-            # only after detach proves there are no remaining database writers.
-            before = idle_snapshot(state)
+            # Recheck after fencing; an upgrade backs up only once the old
+            # service is gone. A same-contract installation preserves live work.
+            before = idle_snapshot(state) if contract_changed else preflight(state, health_before['contractVersion'])
             before['runtimeSettings'] = runtime_settings
             journal['before'] = before
             write_journal(marker, journal)
-            # The fence can expose a path changed after the earlier inventory.
-            # Refuse it while the previous service still owns its endpoint.
-            backup_readiness(state)
-            # The exclusive maintenance owner uses the same backup implementation
-            # after all previous daemon writers have stopped.
-            detach(state, previous)
+            if contract_changed:
+                backup_readiness(state)
+            detach(state, previous, contract_changed=contract_changed)
             detached = True
             with file_lock(state / 'control-daemon.lock'), file_lock(state / 'board-owner.lock'):
-                before = idle_snapshot(state, exact=True)
-                before['runtimeSettings'] = runtime_settings
-                backup_readiness(state)
-                journal['before'] = before
-                if backed_up is None:
-                    backed_up = backup.create(BoardStore(state), runtime_identity={'identity': identity}, plugin_commit=runtime.read_ready(previous).get('sourceCommit'), contract_version=endpoint['contractVersion'], offline=True)
-                stored = backup.verify(Path(backed_up['path']))
-                if stored.get('databaseSnapshot') is not None:
-                    before = {**before, **stored['databaseSnapshot'], 'schema': stored.get('schema'), 'runtimeSettings':runtime_settings}
+                if contract_changed:
+                    before = idle_snapshot(state, exact=True)
+                    before['runtimeSettings'] = runtime_settings
+                    backup_readiness(state)
                     journal['before'] = before
-                journal.update(phase='backed-up', backup=backed_up)
-                write_journal(marker, journal)
-                if before['schema'] == 22:
-                    from ..blackboard.store.upgrade import upgrade_database
-                    upgrade_database(state)
-                expected = idle_snapshot(state, event_head=before['eventHead'], schema_version=SCHEMA_VERSION)
+                    backed_up = backup.create(BoardStore(state), runtime_identity={'identity': identity}, plugin_commit=runtime.read_ready(previous).get('sourceCommit'), contract_version=endpoint['contractVersion'], offline=True)
+                    stored = backup.verify(Path(backed_up['path']))
+                    if stored.get('databaseSnapshot') is not None:
+                        before = {**before, **stored['databaseSnapshot'], 'schema': stored.get('schema'), 'runtimeSettings':runtime_settings}
+                        journal['before'] = before
+                    journal.update(phase='backed-up', backup=backed_up)
+                    write_journal(marker, journal)
+                    if before['schema'] == 22:
+                        from ..blackboard.store.upgrade import upgrade_database
+                        upgrade_database(state)
+                    expected = idle_snapshot(state, event_head=before['eventHead'], schema_version=SCHEMA_VERSION)
+                else:
+                    expected = preflight(state, health_before['contractVersion'])
                 expected['runtimeSettings'] = runtime_settings
                 journal.update(phase='migrated', expected=expected)
                 write_journal(marker, journal)
             active = target
             health = start(state, target)
-            evidence = verify_started(state, target, health, expected)
+            evidence = verify_started(state, target, health, expected, contract_changed=contract_changed)
             _verify_skill_generation(journal, target, health)
             journal.update(phase='skill-switching', expected=expected)
             write_journal(marker, journal)
             _publish_skill(journal)
             write_journal(marker, journal)
             write_active_runtime(state, target, preserved)
-            journal.update(phase='verified', verification=evidence, legacyWorkerCleanup=True)
+            journal.update(phase='verified', verification=evidence, legacyWorkerCleanup=contract_changed)
             write_journal(marker, journal)
             write_journal(state / 'upgrade-last.json', journal)
             _finish_skill(journal)
@@ -552,13 +599,8 @@ def upgrade(params: dict, *, skill_source: Path | None = None, skill_target: Pat
                 clear_journal(marker)
             except OSError as error:
                 journal_error = str(error)
-            try:
-                from ..blackboard.tasks.storage import prune_old_runtimes
-                write_journal(state / 'runtime-retention.json', {'current':target.name, 'previous':previous.name})
-                pruning = prune_old_runtimes(BoardStore(state))
-            except Exception as cleanup_error:
-                pruning = {'complete':False, 'error':getattr(cleanup_error, 'code', type(cleanup_error).__name__), 'note':'Upgrade verified; cleanup can be retried independently'}
-            return {'upgraded':True, 'backup':backed_up, 'verification':evidence, 'previousRuntime':previous.name,
+            pruning = retain_runtimes(state, target, previous)
+            return {'upgraded':True, **({'backup':backed_up} if backed_up is not None else {}), 'verification':evidence, 'previousRuntime':previous.name,
                     'rollback':None, 'runtimePruning':pruning,
                     **({'journalError':journal_error} if journal_error is not None else {}),
                     **({'legacyCleanupError':legacy_cleanup_error} if legacy_cleanup_error is not None else {})}
@@ -578,22 +620,23 @@ def upgrade(params: dict, *, skill_source: Path | None = None, skill_target: Pat
                         return {'upgraded':False, 'error':error}
                 endpoint_now = json.loads((state / 'control.json').read_text()) if (state / 'control.json').exists() else None
                 if detached and endpoint_now and endpoint_now.get('runtimeIdentity') == 'runtime:' + active.name:
-                    detach(state, active)
+                    detach(state, active, contract_changed=contract_changed)
                 if backed_up is not None and journal['phase'] != 'preflight':
                     with file_lock(state / 'control-daemon.lock', timeout=30), file_lock(state / 'board-owner.lock', timeout=30):
                         restore(state, Path(backed_up['path']))
                 # A race admitted work before the old daemon detached: preserve it
                 # and restart the previous runtime without restoring an older DB.
                 recovered = start(state, previous)
-                evidence = verify_started(state, previous, recovered, before) if backed_up else {'runtimeContentId':previous.name, 'workPreserved':True}
+                evidence = (verify_started(state, previous, recovered, before, contract_changed=contract_changed)
+                            if backed_up is not None or not contract_changed else {'runtimeContentId':previous.name, 'workPreserved':True})
                 write_active_runtime(state, previous, preserved)
                 journal.update(phase='rolled-back', rollback=evidence, failure=reason)
                 write_journal(state / 'upgrade-last.json', journal)
                 clear_journal(marker)
-                error = failure.payload() if backed_up is None and isinstance(failure, BoardError) and failure.code in ('UPGRADE_NOT_IDLE', 'BACKUP_PREFLIGHT_FAILED') else {'code':'UPGRADE_ROLLED_BACK','message':'Upgrade failed; the previous runtime and backup were restored'}
+                error = failure.payload() if backed_up is None and isinstance(failure, BoardError) and failure.code in ('UPGRADE_NOT_IDLE', 'BACKUP_PREFLIGHT_FAILED') else {'code':'UPGRADE_ROLLED_BACK','message':('Upgrade failed; the previous runtime and backup were restored' if contract_changed else 'Installation failed; the previous runtime was restored')}
                 error.setdefault('details', {})['reason'] = reason
                 return {'upgraded':False, 'error':error,
-                        'backup':backed_up, 'rollback':evidence}
+                        **({'backup':backed_up} if backed_up is not None else {}), 'rollback':evidence}
             except Exception as recovery:
                 journal.update(phase='recovery-required', failure=reason, recoveryFailure=_failure_reason(recovery))
                 write_journal(marker, journal)
@@ -606,6 +649,8 @@ def recover(state: Path, root: Path) -> dict:
     """Resume an interrupted journal under both launcher fences; never cancel work."""
     marker = state / 'upgrade.json'
     journal = json.loads(marker.read_text())
+    contract_changed = journal['contractChanged']
+    timeout = 30 if contract_changed else 60
     _skill_paths(journal)  # Validate destructive recovery paths before touching a service.
     previous, target = Path(journal['previous']), Path(journal['target'])
     for path in (previous, target):
@@ -614,10 +659,11 @@ def recover(state: Path, root: Path) -> dict:
     target_health = probe(state, target)
     previous_health = probe(state, previous)
     if journal.get('phase') == 'verified' and target_health is not None:
-        evidence = verify_started(state, target, target_health, journal.get('expected', journal['before']))
+        evidence = verify_started(state, target, target_health, journal.get('expected', journal['before']),
+                                  contract_changed=contract_changed)
         _verify_skill_generation(journal, target, target_health)
         write_active_runtime(state, target, journal.get('environment'))
-        journal.update(verification=evidence, legacyWorkerCleanup=evidence['schemaVersion'] == SCHEMA_VERSION)
+        journal.update(verification=evidence, legacyWorkerCleanup=contract_changed and evidence['schemaVersion'] == SCHEMA_VERSION)
         write_journal(state / 'upgrade-last.json', journal)
         _finish_skill(journal)
         legacy_cleanup_error = retry_legacy_worker_cleanup(state)
@@ -626,42 +672,52 @@ def recover(state: Path, root: Path) -> dict:
             clear_journal(marker)
         except OSError as error:
             journal_error = str(error)
-        return {'upgraded':True, 'recoveredJournal':True, 'verification':evidence,
+        pruning = retain_runtimes(state, target, previous)
+        return {'upgraded':True, 'recoveredJournal':True, 'verification':evidence, 'runtimePruning':pruning,
+                **({'backup':journal['backup']} if 'backup' in journal else {}),
                 **({'journalError':journal_error} if journal_error is not None else {}),
                 **({'legacyCleanupError':legacy_cleanup_error} if legacy_cleanup_error is not None else {})}
     if journal.get('phase') == 'preflight':
         if target_health is not None:
             raise BoardError('UPGRADE_RECOVERY_REQUIRED', 'Unexpected target owner during preflight recovery')
         if previous_health is None:
-            with file_lock(state / 'control-daemon.lock', timeout=30), file_lock(state / 'board-owner.lock', timeout=30):
+            with file_lock(state / 'control-daemon.lock', timeout=timeout), file_lock(state / 'board-owner.lock', timeout=timeout):
                 pass
             # No backup/cutover happened: preserve old workers and any work that
             # raced the old-version preflight rather than attempting to retire it.
             previous_health = start(state, previous)
+        if not contract_changed:
+            evidence = verify_started(state, previous, previous_health, journal['before'], contract_changed=False)
+        else:
+            evidence = {'runtimeContentId':previous.name,'workPreserved':True}
         write_active_runtime(state, previous, journal.get('environment'))
         _restore_skill(journal)
         clear_journal(marker)
-        return {'upgraded':False, 'recoveredJournal':True, 'rollback':{'runtimeContentId':previous.name,'workPreserved':True}}
-    if target_health is not None or previous_health is not None:
+        return {'upgraded':False, 'recoveredJournal':True, 'rollback':evidence}
+    if contract_changed and (target_health is not None or previous_health is not None):
         idle_snapshot(state)
     if target_health is not None:
-        detach(state, target)
+        detach(state, target, contract_changed=contract_changed)
     elif previous_health is not None:
-        detach(state, previous)
-    with file_lock(state / 'control-daemon.lock', timeout=30), file_lock(state / 'board-owner.lock', timeout=30):
-        retire_workers(state)
-        saved = journal.get('backup')
-        if saved is not None:
-            current = state / 'backups/current'
-            if Path(saved['path']) != current:
-                raise BoardError('UPGRADE_RECOVERY_REQUIRED', 'Journal backup path does not match this installation')
-            restore(state, current)
-        before = idle_snapshot(state, schema_version=journal['before']['schema'])
+        detach(state, previous, contract_changed=contract_changed)
+    with file_lock(state / 'control-daemon.lock', timeout=timeout), file_lock(state / 'board-owner.lock', timeout=timeout):
+        if contract_changed:
+            retire_workers(state)
+            saved = journal.get('backup')
+            if saved is not None:
+                current = state / 'backups/current'
+                if Path(saved['path']) != current:
+                    raise BoardError('UPGRADE_RECOVERY_REQUIRED', 'Journal backup path does not match this installation')
+                restore(state, current)
+            before = idle_snapshot(state, schema_version=journal['before']['schema'])
+        else:
+            before = journal['before']
     health = start(state, previous)
-    evidence = verify_started(state, previous, health, before)
+    evidence = verify_started(state, previous, health, before, contract_changed=contract_changed)
     write_active_runtime(state, previous, journal.get('environment'))
     _restore_skill(journal)
     journal.update(phase='rolled-back', rollback=evidence)
     write_journal(state / 'upgrade-last.json', journal)
     clear_journal(marker)
-    return {'upgraded':False, 'recoveredJournal':True, 'backup':journal.get('backup'), 'rollback':evidence}
+    return {'upgraded':False, 'recoveredJournal':True,
+            **({'backup':journal['backup']} if 'backup' in journal else {}), 'rollback':evidence}

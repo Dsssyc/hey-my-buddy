@@ -70,7 +70,7 @@ class SameSchemaCutoverTests(BoardTestCase):
                 ("runtime.read_ready", {"return_value": {"sourceCommit": "fixture-commit"}}),
                 ("runtime.materialize", {"return_value": {"runtimeDir": str(target)}}),
                 ("probe", {"return_value": health}),
-                ("detach", {"side_effect": lambda state, _target: upgrade.retire_workers(state)}),
+                ("detach", {"side_effect": lambda state, _target, **_options: upgrade.retire_workers(state)}),
                 ("start", {"side_effect": start}),
                 ("command", {"return_value": {"leaks": []}}),
             ):

@@ -175,14 +175,14 @@ class HostCutoverTests(WorkflowTestCase):
                         if path == self.directory / 'upgrade.json' and not saw_fence:
                             saw_fence.append(value['phase'])
                             release.set()
-                            waited = waiter.result(timeout=10)
-                            self.assertEqual(waited['outcome'], 'waiting-host')
-                            self.assertEqual(waited['error']['code'], 'UPGRADE_IN_PROGRESS')
-                            self.assertEqual(waited['request']['requestId'], before['activeRequest']['requestId'])
                     with mock.patch.object(upgrade, 'write_journal', side_effect=on_journal):
                         result = upgrade.upgrade({})
                     self.assertTrue(result['upgraded'], result)
                     self.assertEqual(saw_fence, ['preflight'])
+                    waited = waiter.result(timeout=20)
+                    self.assertEqual(waited['outcome'], 'waiting-host')
+                    self.assertIsNone(waited['error'])
+                    self.assertEqual(waited['request']['requestId'], before['activeRequest']['requestId'])
                 finally:
                     release.set()
             after = client.call('workflow_get', {'runId': submitted['runId']})
