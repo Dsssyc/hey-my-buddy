@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import hashlib
+import math
 import os
 import shutil
 import subprocess
@@ -75,7 +76,9 @@ class CodexAdapter(Adapter):
             os.close(stdout)
             os.close(stderr)
         handle = ProcessHandle(process, own_group=True, log_paths=paths)
-        handle.deadline = time.monotonic() + context.timeout_seconds
+        # timeout_seconds == 0 requests an unlimited execution; now + 0 must not
+        # become an immediate handle deadline, so the unlimited case is infinite.
+        handle.deadline = math.inf if context.timeout_seconds == 0 else time.monotonic() + context.timeout_seconds
         return handle
 
     def collect(self, handle: ProcessHandle, context: ExecutionContext) -> AdapterOutcome:

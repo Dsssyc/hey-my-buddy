@@ -4,6 +4,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import math
 import os
 import secrets
 import signal
@@ -463,8 +464,18 @@ def catalog(snapshot: dict, access: dict, version: str) -> dict:
             "discoveries": [{"adapter": "zcode", "status": "complete"}], "warnings": warnings}
 
 
+def execution_deadline(timeout_seconds) -> float:
+    """The one overall native execution deadline; an explicit 0 means unlimited.
+
+    Only this deadline becomes infinite. The version probe and the per-request,
+    cancel and shutdown waits keep their own finite bounds, and the ``cancelled``
+    event still ends an unlimited turn.
+    """
+    return math.inf if timeout_seconds == 0 else time.monotonic() + timeout_seconds
+
+
 def run(control: dict, cancelled: threading.Event) -> tuple[dict, int]:
-    deadline = time.monotonic() + control["timeoutSeconds"]
+    deadline = execution_deadline(control["timeoutSeconds"])
     directory = Path(control["directory"])
     root = Path(control["nativeRoot"])
     for path in (directory, root):

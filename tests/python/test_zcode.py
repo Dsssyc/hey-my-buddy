@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import math
 import os
 import tempfile
 import time
@@ -203,6 +204,33 @@ class ZcodeAdapterTests(ZcodeFixtureCase):
         self.assertEqual(outcome.status, "failed")
         self.assertEqual(outcome.result.get("code"), "timeout")
         self.assertTrue(outcome.shutdown_confirmed)
+
+    def test_zero_timeout_executes_unlimited_without_an_immediate_deadline(self):
+        context = self.context("ok", timeout=0)
+        handle, outcome = self.execute(context)
+        self.assertEqual(outcome.status, "ok", outcome.to_report())
+        self.assertTrue(outcome.shutdown_confirmed)
+        self.assertEqual(outcome.result["turn"]["outcome"]["summary"], "fixture work completed")
+        self.assertEqual(handle.deadline, math.inf)
+
+    def test_zero_timeout_still_honors_explicit_cancellation(self):
+        context = self.context("hang", timeout=0)
+        handle = self.adapter.start(context)
+        self.addCleanup(lambda: handle.terminate(grace_seconds=0.2) if handle.group_alive() else None)
+        self.assertEqual(handle.deadline, math.inf)
+        time.sleep(0.4)
+        self.adapter.cancel(handle)
+        outcome = self.adapter.collect(handle, context)
+        self.assertEqual(outcome.status, "cancelled", outcome.to_report())
+        self.assertTrue(outcome.shutdown_confirmed)
+        self.assertNotIn("turn", outcome.result)
+
+    def test_positive_timeout_keeps_a_finite_stamped_deadline(self):
+        context = self.context(timeout=10)
+        handle = self.adapter.start(context)
+        self.addCleanup(lambda: handle.terminate(grace_seconds=0.2) if handle.group_alive() else None)
+        self.assertGreater(handle.deadline, time.monotonic())
+        self.assertFalse(math.isinf(handle.deadline))
 
     def test_blocked_native_stdin_does_not_disable_the_deadline(self):
         context = self.context("blocked-input", timeout=1)

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import math
 import os
 import stat
 import tempfile
@@ -156,6 +157,37 @@ class CodexAdapterTests(unittest.TestCase):
         self.assertEqual(outcome.status, "failed", outcome.to_report())
         self.assertEqual(outcome.result["code"], "deadline")
         self.assertTrue(outcome.shutdown_confirmed)
+
+    def test_zero_timeout_executes_unlimited_without_an_immediate_deadline(self):
+        context = self.context("ok", timeout=0)
+        handle = self.adapter.start(context)
+        self.addCleanup(lambda: handle.terminate(grace_seconds=0.2) if handle.group_alive() else None)
+        self.assertEqual(handle.deadline, math.inf)
+        self.assertIsNotNone(handle.wait(15), "Codex fixture controller did not exit")
+        outcome = self.adapter.collect(handle, context)
+        self.assertEqual(outcome.status, "ok", outcome.to_report())
+        self.assertTrue(outcome.shutdown_confirmed)
+        self.assertEqual(outcome.result["turn"]["outcome"]["disposition"], "completed")
+
+    def test_zero_timeout_still_honors_explicit_user_cancellation(self):
+        context = self.context("hang", timeout=0)
+        handle = self.adapter.start(context)
+        self.addCleanup(lambda: handle.terminate(grace_seconds=0.2) if handle.group_alive() else None)
+        self.assertEqual(handle.deadline, math.inf)
+        time.sleep(0.3)
+        self.adapter.cancel(handle, grace_seconds=8)
+        self.assertIsNotNone(handle.wait(10))
+        outcome = self.adapter.collect(handle, context)
+        self.assertEqual(outcome.status, "cancelled", outcome.to_report())
+        self.assertTrue(outcome.shutdown_confirmed)
+        self.assertNotIn("turn", outcome.result)
+
+    def test_positive_timeout_keeps_a_finite_stamped_deadline(self):
+        context = self.context(timeout=8)
+        handle = self.adapter.start(context)
+        self.addCleanup(lambda: handle.terminate(grace_seconds=0.2) if handle.group_alive() else None)
+        self.assertGreater(handle.deadline, time.monotonic())
+        self.assertFalse(math.isinf(handle.deadline))
 
     def test_user_cancel_interrupts_the_owned_native_turn(self):
         context = self.context("hang", timeout=12)

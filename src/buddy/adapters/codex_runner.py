@@ -4,6 +4,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import math
 import os
 import signal
 import subprocess
@@ -113,12 +114,22 @@ def _attention_outcome(method: str) -> dict:
             "expectedArtifacts": [], "acceptance": "The Host resolves this boundary and starts an authorized continuation"}}
 
 
+def execution_deadline(timeout_seconds) -> float:
+    """The one overall native execution deadline; an explicit 0 means unlimited.
+
+    Only this deadline becomes infinite. The version probe and the per-request,
+    cancel and shutdown waits keep their own finite bounds, and the ``cancelled``
+    event still ends an unlimited turn.
+    """
+    return math.inf if timeout_seconds == 0 else time.monotonic() + timeout_seconds
+
+
 def _run(control: dict, cancelled: threading.Event) -> tuple[dict, int]:
     directory = Path(control["directory"])
     directory.mkdir(mode=0o700, parents=True, exist_ok=True)
     native_root = Path(control.get("nativeRoot") or directory)
     native_root.mkdir(mode=0o700, parents=True, exist_ok=True)
-    deadline = time.monotonic() + control["timeoutSeconds"]
+    deadline = execution_deadline(control["timeoutSeconds"])
     environment = native_environment(dict(os.environ))
     command = cli_command(environment)
     # Version is diagnostic only. Discovery never makes a paid model call.
