@@ -79,4 +79,48 @@ describe("buddy-kind evaluation", () => {
     expect(toggle.getAttribute("aria-expanded")).toBe("false");
     expect(within(table).queryByRole("rowheader", { name: /API/ })).toBeNull();
   });
+
+  it("lists only the sampled domains and the ancestors that place them", async () => {
+    const user = userEvent.setup();
+    const sparse: KindEvaluationData = {
+      ...evaluation,
+      statistics: {
+        overall: statistics,
+        byDomain: { leaf: domainCell },
+        byDomainTaskType: { leaf: { change: domainCell } },
+        infrastructureFailures: [],
+      },
+    };
+    const tree: DomainNode[] = [
+      { nodeId: "backend", name: "后端", definition: "", parentId: null, mergedIntoId: null },
+      { nodeId: "api", name: "API", definition: "", parentId: "backend", mergedIntoId: null },
+      { nodeId: "leaf", name: "解析", definition: "", parentId: "api", mergedIntoId: null },
+      { nodeId: "other", name: "别的分支", definition: "", parentId: null, mergedIntoId: null },
+    ];
+    show({ evaluation: sparse, domains: tree });
+    await user.click(screen.getByRole("button", { name: /评价与领域经验/ }));
+    const table = screen.getByRole("table");
+    const rows = within(table).getAllByRole("rowheader");
+    expect(rows).toHaveLength(3);
+    expect(within(table).getByRole("rowheader", { name: /后端/ })).toBeTruthy();
+    expect(within(table).getByRole("rowheader", { name: /API/ })).toBeTruthy();
+    expect(within(table).getByRole("rowheader", { name: /解析/ })).toBeTruthy();
+    expect(within(table).queryByText("别的分支")).toBeNull();
+    const emptyCells = within(table).getAllByLabelText("无样本");
+    expect(emptyCells).toHaveLength(20);
+    expect(emptyCells.every(cell => cell.textContent === "")).toBe(true);
+  });
+
+  it("says the kind has no domain samples without calling the domain tree empty", async () => {
+    const user = userEvent.setup();
+    const unclassified: KindEvaluationData = {
+      ...evaluation,
+      statistics: { overall: statistics, byDomain: {}, byDomainTaskType: {}, infrastructureFailures: [] },
+    };
+    show({ evaluation: unclassified, domains });
+    await user.click(screen.getByRole("button", { name: /评价与领域经验/ }));
+    expect(screen.getByText("无样本")).toBeTruthy();
+    expect(screen.queryByText("还没有领域节点。")).toBeNull();
+    expect(screen.queryByRole("table")).toBeNull();
+  });
 });
