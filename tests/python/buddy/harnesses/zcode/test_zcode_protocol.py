@@ -867,7 +867,8 @@ class OwnedProcessEvidenceTests(unittest.TestCase):
     def test_failed_group_observation_cannot_confirm_shutdown(self):
         process = mock.Mock(pid=12345)
         process.poll.return_value = 0
-        with mock.patch("hey_my_buddy.protocol.process_handle.os.getpgid", return_value=12345):
+        with mock.patch("hey_my_buddy.protocol.process_handle.os.getpgid", return_value=12345), \
+             mock.patch("hey_my_buddy.protocol.process_identity._creation_time", return_value=10):
             handle = ProcessHandle(process, own_group=True, log_paths={})
         for error in (OSError(errno.EIO, "process observation unavailable"), PermissionError()):
             with self.subTest(error=type(error).__name__), mock.patch("hey_my_buddy.protocol.process_handle.os.killpg", side_effect=error):

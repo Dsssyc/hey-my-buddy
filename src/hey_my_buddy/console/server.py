@@ -28,6 +28,7 @@ import time
 from datetime import datetime, timedelta, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from socketserver import TCPServer
 from typing import Any
 from urllib.parse import parse_qs, unquote, urlsplit
 
@@ -215,6 +216,10 @@ class _ConsoleHTTPServer(ThreadingHTTPServer):
     """A loopback server that never dumps a client-abort traceback into the log."""
 
     daemon_threads = True
+
+    def server_bind(self):
+        TCPServer.server_bind(self)
+        self.server_name, self.server_port = self.server_address
 
     def handle_error(self, request, client_address):  # pragma: no cover - connection hygiene
         import sys

@@ -20,6 +20,8 @@ import unittest
 from contextlib import closing, contextmanager
 from pathlib import Path
 
+from git_support import TEST_GIT_ENV
+
 PYTHON_ROOT = (Path(__file__).resolve().parents[2] / "src")
 DELEGATE_ROOT = PYTHON_ROOT.parent
 if str(PYTHON_ROOT) not in sys.path:
