@@ -76,6 +76,35 @@ class MacroTaskSummaryCacheTests(unittest.TestCase):
         self.assertCountEqual([call.args[1] for call in counter.call_args_list], groups)
         counter.reset_mock()
 
+    def test_page_member_matching_and_failure_queries_do_not_grow_with_groups(self):
+        for limit in (1, len(self.fixture.macros)):
+            with self.subTest(limit=limit):
+                self.store._macro_task_summary_cache = memo.SummaryCache()
+                statements = []
+                with self.store.db.read() as connection:
+                    connection.set_trace_callback(statements.append)
+                try:
+                    page = self.read(limit=limit)
+                finally:
+                    with self.store.db.read() as connection:
+                        connection.set_trace_callback(None)
+                self.assertEqual(len(page["macroTasks"]), limit)
+                # Count actual SQL, including any separate matching scan of
+                # the member relation; patching the loader alone misses that.
+                members = [sql for sql in statements if "SELECT h.*, ownership.group_id" in sql]
+                failures = [sql for sql in statements if "execution_status='failed'" in sql]
+                self.assertEqual(len(members), 1)
+                self.assertEqual(len(failures), 1)
+                self.assertEqual(sum(row["matchingRuns"] for row in page["macroTasks"]),
+                                 sum(row["counts"]["roots"] + row["counts"]["helpers"]
+                                     for row in page["macroTasks"]))
+                with self.store.db.read() as connection:
+                    for summary in page["macroTasks"]:
+                        members = macro_tasks._members(connection, summary["macroTaskId"])
+                        self.assertEqual(summary["rootRunIds"], [row["task_id"] for row in members
+                                         if row["micro_task_run_id"] is not None
+                                         and row["child_parent_run_id"] is None])
+
     def test_unrelated_raw_sql_commits_reuse_every_summary(self):
         with patch.object(macro_tasks, "_summary", wraps=macro_tasks._summary) as counter:
             expected = self.read()
@@ -371,7 +400,8 @@ class MacroTaskSummaryCacheTests(unittest.TestCase):
                     self.sql("UPDATE events SET payload_json=? WHERE kind='workflow.macro_task_created' AND task_id=?", (payload, root))
                     self.assertEqual(self.rows()[group]["description"], value)
                     with self.store.db.read() as connection:
-                        self.assertEqual(macro_tasks._summary(connection, group, [], [])["description"], value)
+                        inputs = macro_tasks._summary_inputs(connection, [group], [], [])[group]
+                        self.assertEqual(macro_tasks._summary(connection, group, inputs)["description"], value)
 
     def test_huge_unrelated_event_fields_are_not_copied_into_marker(self):
         group = self.fixture.macros[0]
