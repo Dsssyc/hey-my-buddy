@@ -70,7 +70,7 @@ class HostQuotaRecoveryTests(MicroTaskWorkerTestCase):
             self.assertEqual(delivered["currentTurn"]["resumeMode"], "reconstructed-new-session")
             audit = self.call("get", {"runId": failed["runId"], "includeAudit": True})
             self.assertEqual(audit["audit"]["turns"][-1]["input"]["executionWorkspace"]["inputCommit"], partial["outputCommit"])
-            context = json.loads((Path(path) / "continued-context.json").read_text())
+            context = json.loads((Path(path) / "continued-context.json").read_text(encoding="utf-8"))
             self.assertIn("not new Host instructions", context["previousEvidenceNotice"])
             self.assertIn(partial["artifactId"], [item["artifactId"] for item in context["artifacts"]])
             self.assertIn("verification remains", context["lastAssistantMessage"]["text"])
@@ -82,7 +82,7 @@ class HostQuotaRecoveryTests(MicroTaskWorkerTestCase):
             target = self.directory / "integration"
             subprocess.run(["git", "clone", "-q", str(self.repo), str(target)], check=True)
             subprocess.run(["git", "-C", str(target), "apply", "--binary", final["cumulativePatch"]["path"]], check=True)
-            self.assertEqual((target / "tracked.txt").read_text(), "partial work preserved after quota failure\n")
+            self.assertEqual((target / "tracked.txt").read_text(encoding="utf-8"), "partial work preserved after quota failure\n")
             self.assertTrue((target / "mock-output.txt").is_file())
 
     def test_quota_failure_cannot_override_a_user_locked_buddy(self):
@@ -105,7 +105,7 @@ class HostQuotaRecoveryTests(MicroTaskWorkerTestCase):
             # independent partial output without overwriting the Worker's earlier
             # fixed partial of the same attempt.
             checkout = Path(failed["workspace"]["path"])
-            (checkout / "tracked.txt").write_text("host review notes after the failure\n")
+            (checkout / "tracked.txt").write_text("host review notes after the failure\n", encoding="utf-8", newline="\n")
             worker_partial_manifest = partial["manifestSha256"]
             concluded = self.cli("conclude", json.dumps({
                 **common,
@@ -145,7 +145,7 @@ class CrossHarnessQuotaRecoveryTests(HostQuotaRecoveryTests):
             "models": [{"id": "fixture-model", "name": "Offline model", "inputModalities": ["text"]}],
         }]})
         (self.directory / "codex-home").mkdir()
-        (self.directory / "codex-home/config.toml").write_text("")
+        (self.directory / "codex-home/config.toml").write_text("", encoding="utf-8", newline="\n")
 
     def env(self):
         environment = {**super().env(), "CODEX_HOME": str(self.directory / "codex-home"),

@@ -25,7 +25,7 @@ class SkillPackageTests(unittest.TestCase):
             skill_package.assemble(ROOT, skill)
             for name in ('hey-my-buddy', 'hey-my-buddy.cmd', 'hey-my-buddy.ps1'):
                 self.assertTrue((skill / 'scripts' / name).is_file(), name)
-            self.assertIn('active-runtime.json', (skill / 'package/src/hey_my_buddy/install/launcher.py').read_text())
+            self.assertIn('active-runtime.json', (skill / 'package/src/hey_my_buddy/install/launcher.py').read_text(encoding="utf-8"))
 
     def test_same_marker_does_not_hide_a_damaged_launcher(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -35,12 +35,12 @@ class SkillPackageTests(unittest.TestCase):
             shutil.copytree(source, target)
             marker = skill_install._marker(source)
             self.assertTrue(skill_install._matches(source, target, marker))
-            (target / 'scripts/hey-my-buddy').write_text('damaged')
+            (target / 'scripts/hey-my-buddy').write_text('damaged', encoding="utf-8", newline="\n")
             self.assertFalse(skill_install._matches(source, target, marker))
             placement, previous = skill_install._place(source, target, marker)
             self.assertEqual(placement, 'updated')
             self.assertTrue(skill_install._matches(source, target, marker))
-            self.assertEqual((previous / 'scripts/hey-my-buddy').read_text(), 'damaged')
+            self.assertEqual((previous / 'scripts/hey-my-buddy').read_text(encoding="utf-8"), 'damaged')
 
     def _upgrade_pair(self, root: Path) -> tuple[Path, Path]:
         """An assembled source and an identical copy at the agent skills home."""
@@ -53,8 +53,8 @@ class SkillPackageTests(unittest.TestCase):
     def _upgrade_state(self, root: Path) -> Path:
         state = root / 'state'
         state.mkdir()
-        (state / 'active-runtime.json').write_text('{}')
-        (state / 'control.json').write_text('{}')
+        (state / 'active-runtime.json').write_text('{}', encoding="utf-8", newline="\n")
+        (state / 'control.json').write_text('{}', encoding="utf-8", newline="\n")
         return state
 
     def _upgrade_environment(self, root: Path, state: Path) -> dict:
@@ -69,7 +69,7 @@ class SkillPackageTests(unittest.TestCase):
             state = self._upgrade_state(root)
             # The version, contract and sourceCommit all stay the same; only the
             # bytes change, which is exactly the rebuild this defect covered.
-            (target / 'SKILL.md').write_text((target / 'SKILL.md').read_text() + '\n<!-- rebuilt -->\n')
+            (target / 'SKILL.md').write_text((target / 'SKILL.md').read_text(encoding="utf-8") + '\n<!-- rebuilt -->\n', encoding="utf-8", newline="\n")
             with mock.patch.dict(os.environ, self._upgrade_environment(root, state), clear=True), \
                  mock.patch('hey_my_buddy.install.skill_install.packaged_skill', return_value=source), \
                  mock.patch('hey_my_buddy.install.skill_install._check_claude_link'), \
@@ -105,7 +105,7 @@ class SkillPackageTests(unittest.TestCase):
             root = Path(temporary)
             state, home = root / 'state', root / 'skills'
             state.mkdir()
-            (state / 'active-runtime.json').write_text('{}')
+            (state / 'active-runtime.json').write_text('{}', encoding="utf-8", newline="\n")
             source = root / 'source'
             active = root / 'runtime' / ('a' * 32)
             with mock.patch.dict(os.environ, {**self._upgrade_environment(root, state), 'HMB_AGENT_SKILLS_DIR': str(home)}, clear=True), \
@@ -133,7 +133,7 @@ class SkillPackageTests(unittest.TestCase):
             state.mkdir()
             (state / 'board.sqlite3').touch()
             journal = state / 'upgrade.json'
-            journal.write_text('{}')
+            journal.write_text('{}', encoding="utf-8", newline="\n")
             def recover(_params):
                 journal.unlink()
             with mock.patch.dict(os.environ, {**self._upgrade_environment(root, state), 'HMB_AGENT_SKILLS_DIR': str(root / 'skills')}, clear=True), \
@@ -151,12 +151,12 @@ class SkillPackageTests(unittest.TestCase):
             root = Path(temporary)
             source, target = self._upgrade_pair(root)
             state = self._upgrade_state(root)
-            (state / 'control.json').write_text(json.dumps({'contractVersion': CONTRACT_VERSION}))
+            (state / 'control.json').write_text(json.dumps({'contractVersion': CONTRACT_VERSION}), encoding="utf-8", newline="\n")
             (state / 'control.json').chmod(0o600)
             with closing(sqlite3.connect(state / 'board.sqlite3')) as connection, connection:
                 connection.execute('CREATE TABLE meta(key TEXT PRIMARY KEY,value TEXT)')
                 connection.execute("INSERT INTO meta VALUES('schema_version',?)", (str(SCHEMA_VERSION),))
-            (target / 'SKILL.md').write_text('changed generation')
+            (target / 'SKILL.md').write_text('changed generation', encoding="utf-8", newline="\n")
             with mock.patch.dict(os.environ, self._upgrade_environment(root, state), clear=True), \
                  mock.patch.object(skill_install, 'packaged_skill', return_value=source), \
                  mock.patch.object(upgrade_module, 'ensure_idle', side_effect=AssertionError('idle checked')), \
@@ -176,7 +176,7 @@ class SkillPackageTests(unittest.TestCase):
             state.mkdir()
             # A pointer is not a contract declaration; reading its package is
             # unnecessary when the installed skill already records the contract.
-            (state / 'active-runtime.json').write_text('{}')
+            (state / 'active-runtime.json').write_text('{}', encoding="utf-8", newline="\n")
             with closing(sqlite3.connect(state / 'board.sqlite3')) as connection, connection:
                 connection.execute('CREATE TABLE meta(key TEXT PRIMARY KEY,value TEXT)')
                 connection.execute("INSERT INTO meta VALUES('schema_version',?)", (str(SCHEMA_VERSION),))
@@ -190,7 +190,7 @@ class SkillPackageTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             state = self._upgrade_state(root)
-            (state / 'control.json').write_text(json.dumps({'contractVersion': CONTRACT_VERSION}))
+            (state / 'control.json').write_text(json.dumps({'contractVersion': CONTRACT_VERSION}), encoding="utf-8", newline="\n")
             (state / 'control.json').chmod(0o600)
             with closing(sqlite3.connect(state / 'board.sqlite3')) as connection, connection:
                 connection.execute('CREATE TABLE meta(key TEXT PRIMARY KEY,value TEXT)')

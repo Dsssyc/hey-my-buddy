@@ -146,7 +146,7 @@ class ProjectorTests(unittest.TestCase):
         self.assertEqual(len(self.record.events), 2)
 
     def test_versioned_redacted_sample_proves_text_only_not_thinking_absence(self):
-        sample = json.loads((Path(__file__).with_name("fixtures") / "native-usage-claude.json").read_text())
+        sample = json.loads((Path(__file__).with_name("fixtures") / "native-usage-claude.json").read_text(encoding="utf-8"))
         self.assertEqual(sample["harnessVersion"], "2.1.284")
         self.projector.start_prompt("session-fixture-0001", "input")
         for frame in sample["assistantFrames"]:

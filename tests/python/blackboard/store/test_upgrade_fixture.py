@@ -356,7 +356,7 @@ class UpgradeFixtureTests(unittest.TestCase):
         sessions = list((fixture['state'] / 'sessions').rglob('*.jsonl'))
         self.assertEqual(len(sessions), 8)
         for path in sessions:
-            lines = path.read_text().splitlines()
+            lines = path.read_text(encoding="utf-8").splitlines()
             format = SessionFormat.model_validate_json(lines[0])
             self.assertEqual((format.protocol_version, format.projection_version), (1, 1))
             notification = SessionNotification.model_validate_json(lines[1])

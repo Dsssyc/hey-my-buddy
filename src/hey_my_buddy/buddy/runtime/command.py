@@ -35,7 +35,7 @@ class CommandAdapter(Adapter):
                 adapter=self.name,
             )
         context.directory.mkdir(mode=0o700, parents=True, exist_ok=True)
-        context.task_file().write_text(context.spec["task"])
+        context.task_file().write_bytes(context.spec["task"].encode("utf-8"))
         os.chmod(context.task_file(), 0o600)
 
     def start(self, context: ExecutionContext) -> ProcessHandle:

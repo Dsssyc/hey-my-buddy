@@ -56,15 +56,15 @@ class CTwoIntegrationTests(unittest.TestCase):
         self.addCleanup(self.stop_owned)
 
     def record(self, name, value):
-        (self.root / name).write_text(json.dumps(value, indent=2, sort_keys=True) + "\n")
+        (self.root / name).write_text(json.dumps(value, indent=2, sort_keys=True) + "\n", encoding="utf-8", newline="\n")
 
     def spawn(self, argv, label, *, pipes=False, cwd=None):
-        log = (self.root / f"{label}.stderr.log").open("x")
+        log = (self.root / f"{label}.stderr.log").open("x", encoding="utf-8", newline="\n")
         self.logs.append(log)
         process = subprocess.Popen(argv, env=self.env, cwd=cwd,
             stdin=subprocess.PIPE if pipes else subprocess.DEVNULL,
             stdout=subprocess.PIPE if pipes else log, stderr=log,
-            text=True, start_new_session=True)
+            text=True, start_new_session=True, encoding="utf-8")
         self.processes.append(process)
         return process
 
@@ -75,7 +75,7 @@ class CTwoIntegrationTests(unittest.TestCase):
             if result:
                 return result
             time.sleep(0.02)
-        logs = {str(path.relative_to(self.root)): path.read_text(errors='replace')[-6000:]
+        logs = {str(path.relative_to(self.root)): path.read_text(errors='replace', encoding="utf-8")[-6000:]
                 for path in self.root.rglob('*.stderr.log')}
         self.fail(message + '\n' + json.dumps(logs, ensure_ascii=False))
 
@@ -136,7 +136,7 @@ class CTwoIntegrationTests(unittest.TestCase):
         # The live descriptor is published by the real execution process.
         materials = list(self.state.glob("harnesses/dsh/micro-tasks/*/attempts/*/execution-live.json"))
         self.assertEqual(len(materials), 1)
-        material = json.loads(materials[0].read_text())
+        material = json.loads(materials[0].read_text(encoding="utf-8"))
         query = dict(identity=material["identity"], instanceId=self.execution_descriptor.instance_id,
                      token=material["token"])
         slow_frame = {**query, "afterSeq": 999, "limit": 1, "fields": None, "inquiryId": None}
@@ -168,7 +168,7 @@ class CTwoIntegrationTests(unittest.TestCase):
         self.assertEqual(observation["journal"]["entries"], 1)
         journals = list(self.state.glob("harnesses/dsh/micro-tasks/*/attempts/*/run-*/native-journal.jsonl"))
         self.assertEqual(len(journals), 1)
-        committed = json.loads(journals[0].read_text())
+        committed = json.loads(journals[0].read_text(encoding="utf-8"))
         self.assertEqual(committed["requestId"], "through-service")
         self.assertEqual(committed["identity"]["taskId"], self.run_id)
         exchange(self.service, {"op": "kill-execution" if kill else "finish"})
@@ -185,7 +185,7 @@ class CTwoIntegrationTests(unittest.TestCase):
         if not kill:
             self.assertEqual(len(value["reports"]), 1)
             self.assertTrue(value["reports"][0]["shutdownConfirmed"])
-        native_stop = json.loads(journals[0].with_name("native-stopped.json").read_text())
+        native_stop = json.loads(journals[0].with_name("native-stopped.json").read_text(encoding="utf-8"))
         self.assertTrue(native_stop["eofObserved"], "owned native child observes execution pipe EOF")
         self.assertEqual(self.endpoint_status(self.execution_descriptor.address)["status"], "absent")
         task = self.client.get(runId=self.run_id)

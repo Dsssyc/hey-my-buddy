@@ -17,7 +17,7 @@ def select_command(environment: dict[str, str], directory: Path, harness: str,
     environment.pop(f"HMB_{harness.upper()}_CLI", None)
     record = Path(environment["HMB_HARNESS_RECORD_FILE"]) if environment.get("HMB_HARNESS_RECORD_FILE") else \
         directory / "harness-record.json"
-    records = json.loads(record.read_text()) if record.exists() else {}
+    records = json.loads(record.read_text(encoding="utf-8")) if record.exists() else {}
     records[harness] = {"harness": harness, "status": "ready", "command": command}
-    record.write_text(json.dumps(records))
+    record.write_text(json.dumps(records), encoding="utf-8", newline="\n")
     environment["HMB_HARNESS_RECORD_FILE"] = str(record)

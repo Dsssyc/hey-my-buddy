@@ -51,7 +51,7 @@ class ControllerOperationTests(unittest.TestCase):
             completed = subprocess.run(
                 [sys.executable, '-m', 'hey_my_buddy.buddy.roles.run_controller', '--control', str(control)],
                 env={**os.environ, 'PATH': str(Path(directory) / 'no-executables')},
-                capture_output=True, text=True, timeout=10)
+                capture_output=True, text=True, timeout=10, encoding="utf-8")
         self.assertEqual(completed.returncode, 1, completed.stderr)
         payload = json.loads(completed.stdout)
         self.assertEqual(payload['code'], 'INVALID_ARGUMENT')
@@ -92,7 +92,7 @@ class DeletionReceiptBoundaryTests(unittest.TestCase):
 
         def launch(**kwargs):
             argv, _, _ = kwargs['prepare']()
-            control = json.loads(Path(argv[-1]).read_text())
+            control = json.loads(Path(argv[-1]).read_text(encoding="utf-8"))
             self.assertEqual(set(control), {'operation', 'arguments', 'harness', 'privateRoot',
                                              'nativeRoot', 'cwd', 'timeoutSeconds'})
             self.assertEqual(control['operation'], 'delete-sessions')

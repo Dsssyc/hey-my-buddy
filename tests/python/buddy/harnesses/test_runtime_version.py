@@ -77,8 +77,8 @@ class RuntimeVersionTests(unittest.TestCase):
             info = '"name": "fake-harness-acp"'
             if text is not None:
                 info += ', "version": ' + repr(text)
-            agent.write_text(dsh_cases.FAKE_AGENT.read_text().replace(
-                '"name": "fake-harness-acp", "version": "0.0.1"', info))
+            agent.write_text(dsh_cases.FAKE_AGENT.read_text(encoding="utf-8").replace(
+                '"name": "fake-harness-acp", "version": "0.0.1"', info), encoding="utf-8", newline="\n")
             with mock.patch.object(module, "command_for", return_value=[
                     sys.executable, str(agent), "--log", str(case.agent_log_path), *case.extra_agent_args]):
                 yield
@@ -89,7 +89,7 @@ class RuntimeVersionTests(unittest.TestCase):
         if name == "zcode":
             builtin = script.parent / "provider/zcode-builtin.json"
             builtin.parent.mkdir(exist_ok=True)
-            builtin.write_text('{"config":{"providerConfigRules":{"templateRules":[],"providerRules":[]}}}')
+            builtin.write_text('{"config":{"providerConfigRules":{"templateRules":[],"providerRules":[]}}}', encoding="utf-8", newline="\n")
         if action == "nonzero":
             body = "sys.exit(7)"
         elif action == "timeout":
@@ -98,7 +98,7 @@ class RuntimeVersionTests(unittest.TestCase):
             body = "print(" + repr(text or "") + ")"
         script.write_text("import os, sys, time\nif '--version' in sys.argv:\n    " + body +
                           "\n    sys.exit(0)\nos.execv(sys.executable, [sys.executable, " +
-                          repr(str(fixture)) + ", *sys.argv[1:]])\n")
+                          repr(str(fixture)) + ", *sys.argv[1:]])\n", encoding="utf-8", newline="\n")
         with mock.patch.object(module, "cli_command", return_value=[sys.executable, str(script)]):
             yield
 

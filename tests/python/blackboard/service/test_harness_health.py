@@ -125,8 +125,8 @@ class HarnessHealthTests(BoardTestCase):
         node_dir = self.directory / 'other-bin'
         cli_dir.mkdir()
         node_dir.mkdir()
-        (cli_dir / ('codex' + CLI_SUFFIX)).write_text('fixture')
-        (node_dir / ('node' + CLI_SUFFIX)).write_text('fixture')
+        (cli_dir / ('codex' + CLI_SUFFIX)).write_text('fixture', encoding="utf-8", newline="\n")
+        (node_dir / ('node' + CLI_SUFFIX)).write_text('fixture', encoding="utf-8", newline="\n")
         self.health.add_path_hint(os.pathsep.join([str(cli_dir), str(node_dir), 'relative']))
         self.health.refresh('codex', force=True)
         environment = self.native.call_args.args[2]
@@ -140,12 +140,12 @@ class HarnessHealthTests(BoardTestCase):
         for index in range(MAX_PATH_HINTS + 1):
             directory = self.directory / f'cli-{index}'
             directory.mkdir()
-            (directory / (('node' if index % 2 else 'codex') + CLI_SUFFIX)).write_text('fixture')
+            (directory / (('node' if index % 2 else 'codex') + CLI_SUFFIX)).write_text('fixture', encoding="utf-8", newline="\n")
             directories.append(str(directory))
         empty = [str(self.directory / f'empty-{index}') for index in range(100)]
         unrelated = self.directory / 'unrelated'
         unrelated.mkdir()
-        (unrelated / 'other-tool').write_text('fixture')
+        (unrelated / 'other-tool').write_text('fixture', encoding="utf-8", newline="\n")
         (unrelated / ('codex' + CLI_SUFFIX)).mkdir()
         self.health.add_path_hint(os.pathsep.join([*empty, str(unrelated), *directories]))
         self.assertEqual(self.health._path_hints, tuple(directories[:MAX_PATH_HINTS]))
@@ -158,12 +158,12 @@ class HarnessHealthTests(BoardTestCase):
             directory = self.directory / name
             directory.mkdir()
             if name != 'c':
-                (directory / ('codex' + CLI_SUFFIX)).write_text('fixture')
+                (directory / ('codex' + CLI_SUFFIX)).write_text('fixture', encoding="utf-8", newline="\n")
             directories.append(str(directory))
         self.health.add_path_hint(os.pathsep.join(directories[:2]))
         self.health.add_path_hint(os.pathsep.join([directories[2], directories[1], directories[0]]))
         self.assertEqual(self.health._path_hints, tuple(directories[:2]))
-        (self.directory / 'c' / ('codex' + CLI_SUFFIX)).write_text('appeared')
+        (self.directory / 'c' / ('codex' + CLI_SUFFIX)).write_text('appeared', encoding="utf-8", newline="\n")
         self.health.add_path_hint(os.pathsep.join([directories[2], directories[1], directories[0]]))
         self.assertEqual(self.health._path_hints, tuple(directories))
 
@@ -172,7 +172,7 @@ class HarnessHealthTests(BoardTestCase):
         self.scan.stop()
         cli = self.directory / 'bin' / ('codex' + CLI_SUFFIX)
         cli.parent.mkdir()
-        cli.write_text('fixture')
+        cli.write_text('fixture', encoding="utf-8", newline="\n")
         other = self.directory / 'empty'
         paths = [str(cli.parent), os.pathsep.join([str(other), str(cli.parent)]),
                  os.pathsep.join([*(str(self.directory / f'empty-{index}') for index in range(100)),
@@ -200,7 +200,7 @@ class HarnessHealthTests(BoardTestCase):
         directories = [self.directory / name for name in ('caller-a', 'caller-b')]
         for directory in directories:
             directory.mkdir()
-            (directory / ('codex' + CLI_SUFFIX)).write_text('fixture')
+            (directory / ('codex' + CLI_SUFFIX)).write_text('fixture', encoding="utf-8", newline="\n")
         with patch.object(discovery, '_home', return_value=self.directory), \
              patch.object(discovery, '_common_dirs', return_value=[]), \
              patch.object(discovery, '_app_paths', return_value=[]), \
@@ -229,7 +229,7 @@ class HarnessHealthTests(BoardTestCase):
             directory.mkdir()
         for directory in binaries:
             executable = directory / ('codex' + CLI_SUFFIX)
-            executable.write_text('fixture')
+            executable.write_text('fixture', encoding="utf-8", newline="\n")
         caller_paths = [
             [empty[0], binaries[0], missing[0], binaries[1]],
             [missing[1], binaries[0], empty[1], binaries[1], missing[0], empty[0]],
@@ -256,7 +256,7 @@ class HarnessHealthTests(BoardTestCase):
             added = self.directory / 'bin-c'
             added.mkdir()
             executable = added / ('codex' + CLI_SUFFIX)
-            executable.write_text('fixture')
+            executable.write_text('fixture', encoding="utf-8", newline="\n")
             environment.return_value = {'PATH': os.pathsep.join([str(added), environments[1]['PATH']])}
             third = self.health.refresh('codex', preflight=True)
             self.assertNotEqual(third['locationFingerprint'], first['locationFingerprint'])

@@ -22,7 +22,7 @@ from buddy.harnesses.dsh.test_dsh_role_wiring import DshRoleCase
 
 FIXTURES = Path(__file__).parent
 MOCK_CODEX = FIXTURES / "codex/fixtures/mock_codex.py"
-CODEX_NATIVE = json.loads((FIXTURES / "codex/fixtures/native-usage-codex.json").read_text())
+CODEX_NATIVE = json.loads((FIXTURES / "codex/fixtures/native-usage-codex.json").read_text(encoding="utf-8"))
 
 TURN_INPUT = {
     "version": 1,
@@ -139,7 +139,7 @@ class DshUsageContractTests(DshRoleCase):
 
     def micro_task_record(self, context, **kwargs):
         super().micro_task_record(context, **kwargs)
-        selection = json.loads(self.record.read_text())
+        selection = json.loads(self.record.read_text(encoding="utf-8"))
         command = selection["dsh"]["command"]
         if self.record_mode is not None:
             command += ["--session-record", self.record_mode]
@@ -169,9 +169,9 @@ class DshUsageContractTests(DshRoleCase):
                 "fake_agent.FakeAgent.write_session_record = record\n"
                 "raise SystemExit(fake_agent.main())\n"
             )
-            shim.write_text(source)
+            shim.write_text(source, encoding="utf-8", newline="\n")
             command[1] = str(shim)
-        self.record.write_text(json.dumps(selection))
+        self.record.write_text(json.dumps(selection), encoding="utf-8", newline="\n")
 
     def execute_record(self, mode="usage", *, variant=None):
         self.sequence += 1
@@ -184,7 +184,7 @@ class DshUsageContractTests(DshRoleCase):
 
     def test_the_run_reads_only_its_task_private_session_record(self):
         context, handle, _outcome = self.execute_record()
-        entries = [json.loads(line) for line in self.log.read_text().splitlines()]
+        entries = [json.loads(line) for line in self.log.read_text(encoding="utf-8").splitlines()]
         written = next(e for e in entries if e.get("event") == "session-record-written")
         record = Path(written["path"])
         self.assertFalse(record.is_relative_to(context_root(context, "dsh")))

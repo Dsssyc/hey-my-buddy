@@ -38,7 +38,7 @@ def state_path():
 
 def read_state():
     try:
-        return json.loads(state_path().read_text())
+        return json.loads(state_path().read_text(encoding="utf-8"))
     except (FileNotFoundError, ValueError):
         return {}
 
@@ -50,7 +50,8 @@ def write_state(update):
     path.parent.mkdir(parents=True, exist_ok=True)
     # Tests poll while the mock is running. Publish a complete old/new snapshot
     # instead of exposing the empty interval created by write_text truncation.
-    with tempfile.NamedTemporaryFile(mode="w", dir=path.parent, prefix=path.name+".", delete=False) as stream:
+    with tempfile.NamedTemporaryFile(mode="w", dir=path.parent, prefix=path.name+".", delete=False,
+                                     encoding="utf-8", newline="\n") as stream:
         json.dump(state, stream)
         temporary = stream.name
     os.replace(temporary, path)
@@ -314,15 +315,15 @@ def run_turn(case):
             sys.stdout.write("".join(json.dumps(item) + "\n" for item in frames))
             sys.stdout.flush()
             time.sleep(0.5)
-            Path("unadmitted-followup-write.txt").write_text("unadmitted native work")
+            Path("unadmitted-followup-write.txt").write_text("unadmitted native work", encoding="utf-8", newline="\n")
             write_state({"unadmittedFollowupRan": True})
             sys.exit(0)
         if case not in ("inquiry-text-only", "inquiry-unanswered"):
-            mounted = json.loads(Path(argv_value("--mcp-config")).read_text())["mcpServers"]
+            mounted = json.loads(Path(argv_value("--mcp-config")).read_text(encoding="utf-8"))["mcpServers"]
             server_name, server = next(iter(mounted.items()))
             config_path = server["args"][-1]
-            configuration = json.loads(Path(config_path).read_text())
-            journal = [json.loads(line) for line in Path(configuration["inquiryJournalPath"]).read_text().splitlines()]
+            configuration = json.loads(Path(config_path).read_text(encoding="utf-8"))
+            journal = [json.loads(line) for line in Path(configuration["inquiryJournalPath"]).read_text(encoding="utf-8").splitlines()]
             question = next(item for item in journal if item.get("state") == "queued")
             answer = {"inquiryId": question["inquiryId"], "answer": "42"}
             if case in ("inquiry-signed-refusal", "inquiry-forged-refusal"):
@@ -331,7 +332,7 @@ def run_turn(case):
                 "name": "hey_my_buddy_answer_inquiry", "arguments": answer}}
             completed = subprocess.run([server["command"], *server["args"]],
                                        input=json.dumps(call) + "\n", text=True, capture_output=True,
-                                       env={**os.environ, **server["env"]}, check=True)
+                                       env={**os.environ, **server["env"]}, check=True, encoding="utf-8")
             response = json.loads(completed.stdout)["result"]
             signed_response = response
             if case in ("inquiry-tool-error", "inquiry-tool-error-retry"):

@@ -36,7 +36,7 @@ class ExecutionDeliveryTests(unittest.TestCase):
             receipt = self.execution.receipt(CLAIM, report, self.execution.directory)
         self.assertEqual(set(receipt), {"attemptId", "taskId", "generation", "report", "createdAt"})
         self.assertEqual(read_execution_receipt(self.execution.directory), receipt)
-        raw = (self.execution.directory / "result-receipt.json").read_text()
+        raw = (self.execution.directory / "result-receipt.json").read_text(encoding="utf-8")
         self.assertNotIn("nonce", raw)
         self.assertNotIn("workerId", raw)
         if os.name != "nt":
@@ -118,7 +118,7 @@ class ExecutionDeliveryTests(unittest.TestCase):
                    "self_execution_process_identity; "
                    "print(json.dumps(self_execution_process_identity(None)))")
         child = subprocess.run([sys.executable, "-c", command], start_new_session=True,
-                               capture_output=True, text=True, timeout=10)
+                               capture_output=True, text=True, timeout=10, encoding="utf-8")
         self.assertEqual(child.returncode, 0, child.stderr)
         identity = json.loads(child.stdout)
         self.assertEqual(identity["pid"], identity["processGroupId"])

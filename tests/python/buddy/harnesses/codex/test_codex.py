@@ -84,7 +84,7 @@ class CodexAdapterTests(unittest.TestCase):
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
             try:
-                state = json.loads(path.read_text()) if path.is_file() else {}
+                state = json.loads(path.read_text(encoding="utf-8")) if path.is_file() else {}
             except ValueError:  # a state write in flight; retry within the bound
                 state = {}
             for thread in (state.get("threads") or {}).values():
@@ -170,7 +170,7 @@ class CodexAdapterTests(unittest.TestCase):
                 if parsable is None:
                     self.assertEqual(checkpoint["supersededFinalAnswers"], {"count": 0, "records": []})
                     continue
-                state = json.loads(Path(self.environment["HMB_CODEX_FIXTURE_STATE"]).read_text())
+                state = json.loads(Path(self.environment["HMB_CODEX_FIXTURE_STATE"]).read_text(encoding="utf-8"))
                 native_turn = state["threads"][outcome.result["sessionId"]]["turns"][-1]
                 raw = native_turn["items"][0]["text"].encode("utf-8")
                 self.assertEqual(checkpoint["supersededFinalAnswers"], {"count": 1, "records": [{
@@ -209,9 +209,9 @@ class CodexAdapterTests(unittest.TestCase):
 
     def test_known_native_launch_failure_leaves_user_auth_untouched(self):
         import stat as stat_module
-        (self.home / 'auth.json').write_text('source login')
+        (self.home / 'auth.json').write_text('source login', encoding="utf-8", newline="\n")
         broken = self.root / 'broken-codex'
-        broken.write_text('not an executable payload')
+        broken.write_text('not an executable payload', encoding="utf-8", newline="\n")
         broken.chmod(stat_module.S_IRUSR)
         context = self.context()
         select_command(context.environment, self.root, "codex", [str(broken)])
@@ -220,18 +220,18 @@ class CodexAdapterTests(unittest.TestCase):
         self.assertIs(outcome.result['modelStarted'], False)
         self.assertTrue(outcome.shutdown_confirmed)
         self.assertFalse(list(Path(context.environment['HMB_STATE_DIR']).rglob('codex-home')))
-        self.assertEqual((self.home / 'auth.json').read_text(), 'source login')
+        self.assertEqual((self.home / 'auth.json').read_text(encoding="utf-8"), 'source login')
 
     def test_worker_inherits_native_home_and_preserves_user_configuration(self):
         auth = self.home / 'auth.json'
-        auth.write_text('fixture login')
+        auth.write_text('fixture login', encoding="utf-8", newline="\n")
         config = self.home / 'config.toml'
-        config.write_text('model_provider = "fixture-provider"\n[features]\napps = true\n')
+        config.write_text('model_provider = "fixture-provider"\n[features]\napps = true\n', encoding="utf-8", newline="\n")
         context = self.context()
         context.spec['provider'] = 'fixture-provider'
         outcome = self.execute(context)
         self.assertEqual(outcome.status, 'ok', outcome.to_report())
-        state = json.loads(Path(self.environment['HMB_CODEX_FIXTURE_STATE']).read_text())
+        state = json.loads(Path(self.environment['HMB_CODEX_FIXTURE_STATE']).read_text(encoding="utf-8"))
         thread = state['threads'][outcome.result['sessionId']]
         self.assertEqual(thread['codexHome'], str(self.home))
         self.assertEqual(thread['home'], self.environment['HOME'])
@@ -239,9 +239,9 @@ class CodexAdapterTests(unittest.TestCase):
         self.assertEqual(thread['start']['modelProvider'], 'fixture-provider')
         self.assertNotIn('ephemeral', thread['start'])
         self.assertFalse(list(Path(self.environment['HMB_STATE_DIR']).rglob('codex-home')))
-        self.assertEqual(auth.read_text(), 'fixture login')
+        self.assertEqual(auth.read_text(encoding="utf-8"), 'fixture login')
         self.assertFalse(auth.is_symlink())
-        self.assertEqual(config.read_text(), 'model_provider = "fixture-provider"\n[features]\napps = true\n')
+        self.assertEqual(config.read_text(encoding="utf-8"), 'model_provider = "fixture-provider"\n[features]\napps = true\n')
 
     def test_native_binding_contains_only_current_task_and_session_facts(self):
         from hey_my_buddy.private_dirs import native_root
@@ -250,15 +250,15 @@ class CodexAdapterTests(unittest.TestCase):
         self.assertEqual(first.status, 'ok', first.to_report())
         path = _binding_path(native_root(Path(self.environment['HMB_STATE_DIR']), 'codex', 'micro-task-1'),
                              first.result['sessionId'])
-        binding = json.loads(path.read_text())
+        binding = json.loads(path.read_text(encoding="utf-8"))
         self.assertEqual(set(binding), {'taskId', 'threadId', 'cwd', 'buddy',
                                         'lastTurnId', 'lastAttemptId', 'lastInputSha256'})
         second = self.execute(self.context(index=2, previous=first.result['sessionId']))
         self.assertEqual(second.status, 'ok', second.to_report())
         self.assertEqual(second.result['sessionId'], first.result['sessionId'])
-        binding = json.loads(path.read_text())
+        binding = json.loads(path.read_text(encoding="utf-8"))
         binding.update(codexHome='retired-private-home', credentialSource={'source': 'native'})
-        path.write_text(json.dumps(binding))
+        path.write_text(json.dumps(binding), encoding="utf-8", newline="\n")
         refused = self.execute(self.context(index=3, previous=first.result['sessionId']))
         self.assertEqual(refused.result['code'], 'native-resume-unavailable')
         self.assertIs(refused.result['modelStarted'], False)
@@ -268,7 +268,7 @@ class CodexAdapterTests(unittest.TestCase):
         self.assertNotEqual(rebuilt.result['sessionId'], first.result['sessionId'])
 
     def test_discovery_reports_user_configured_provider(self):
-        (self.home / 'config.toml').write_text('model_provider = "fixture-provider"\n')
+        (self.home / 'config.toml').write_text('model_provider = "fixture-provider"\n', encoding="utf-8", newline="\n")
         with mock.patch.dict(os.environ, self.environment, clear=True):
             catalog = CodexAdapter().discover_models()
         self.assertEqual([provider['provider'] for provider in catalog['providers']], ['fixture-provider'])
@@ -326,9 +326,9 @@ class CodexAdapterTests(unittest.TestCase):
     def test_changed_native_history_is_not_resumed_after_invalid_result(self):
         first = self.execute(self.context("invalid-json"))
         state_path = Path(self.environment['HMB_CODEX_FIXTURE_STATE'])
-        state = json.loads(state_path.read_text())
+        state = json.loads(state_path.read_text(encoding="utf-8"))
         state["threads"][first.result["sessionId"]]["turns"].append({"id": "foreign-turn", "status": "completed"})
-        state_path.write_text(json.dumps(state))
+        state_path.write_text(json.dumps(state), encoding="utf-8", newline="\n")
         second = self.execute(self.context(index=2, previous=first.result["sessionId"]))
         self.assertEqual(second.status, "failed")
         self.assertEqual(second.result["code"], "native-resume-unavailable")
@@ -488,7 +488,7 @@ class CodexAdapterTests(unittest.TestCase):
         self.assertEqual(turn["outcome"]["summary"], "Stopped partial work summary")
         self.assertEqual(turn["sessionId"], started["threadId"])
         self.assertEqual(turn["provenance"]["nativeTurnId"], "native-turn-2")
-        state = json.loads(Path(self.environment["HMB_CODEX_FIXTURE_STATE"]).read_text())
+        state = json.loads(Path(self.environment["HMB_CODEX_FIXTURE_STATE"]).read_text(encoding="utf-8"))
         self.assertEqual(set(state["threads"]), {started["threadId"]})
         native_turns = state["threads"][started["threadId"]]["turns"]
         self.assertEqual([(item["id"], item["status"]) for item in native_turns],
@@ -538,7 +538,7 @@ class CodexAdapterTests(unittest.TestCase):
         account_home = self.root / 'account-home'
         account_home.mkdir()
         source_auth = account_home / 'auth.json'
-        source_auth.write_text('private fixture auth')
+        source_auth.write_text('private fixture auth', encoding="utf-8", newline="\n")
         context = self.context(index=44)
         context.turn = None
         context.environment['CODEX_HOME'] = str(account_home)
@@ -552,12 +552,12 @@ class CodexAdapterTests(unittest.TestCase):
         result = collect(handle)
         self.assertEqual(result.status, 'ok', result.result)
         self.assertTrue(result.shutdown_confirmed)
-        state = json.loads(Path(self.environment["HMB_CODEX_FIXTURE_STATE"]).read_text())
+        state = json.loads(Path(self.environment["HMB_CODEX_FIXTURE_STATE"]).read_text(encoding="utf-8"))
         thread = state["threads"][result.result["sessionId"]]
         self.assertEqual(thread["codexHome"], str(account_home))
         self.assertEqual(thread["home"], context.environment["HOME"])
         self.assertFalse(list(Path(context.environment["HMB_STATE_DIR"]).rglob("codex-home")))
-        self.assertEqual(source_auth.read_text(), 'private fixture auth')
+        self.assertEqual(source_auth.read_text(encoding="utf-8"), 'private fixture auth')
 
     def test_read_only_budget_interrupts_the_native_turn_and_keeps_unknown_read_bytes(self):
         result, _context = self.review('readonly-budget', index=45, budget_options={'toolCalls': 0})
@@ -584,7 +584,7 @@ class CodexAdapterTests(unittest.TestCase):
                 result, _context = self.review(case, index=index, capture=False)
                 self.assertEqual(result.status, 'ok', result.result)
                 self.assertEqual(result.result['correctionCount'], calls - 1)
-                state = json.loads((self.root / 'fixture.json').read_text())
+                state = json.loads((self.root / 'fixture.json').read_text(encoding="utf-8"))
                 self.assertEqual(len(state['threads'][result.result['sessionId']]['turns']), calls)
 
 

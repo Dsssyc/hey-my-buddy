@@ -27,7 +27,7 @@ def _software_version(root: Path) -> str | None:
 def _constant(path: Path, name: str) -> object:
     """Read one installed declaration without importing or executing that package."""
     try:
-        for statement in ast.parse(path.read_text()).body:
+        for statement in ast.parse(path.read_text(encoding="utf-8")).body:
             if isinstance(statement, ast.Assign) and any(
                 isinstance(target, ast.Name) and target.id == name for target in statement.targets
             ):
@@ -39,7 +39,7 @@ def _constant(path: Path, name: str) -> object:
 
 def _build_commit(root: Path) -> str | None:
     try:
-        return _text(json.loads((root / "src/hey_my_buddy/build-info.json").read_text()).get("sourceCommit"))
+        return _text(json.loads((root / "src/hey_my_buddy/build-info.json").read_text(encoding="utf-8")).get("sourceCommit"))
     except (OSError, ValueError, AttributeError):
         return None
 

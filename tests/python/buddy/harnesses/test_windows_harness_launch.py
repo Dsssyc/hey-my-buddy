@@ -40,7 +40,7 @@ def _source_for(fixture: Path, harness: str, log: Path) -> str:
             "    raise SystemExit(0)\n"
             "if sys.argv[1:2] == ['--capture-argv-stdin']:\n"
             f"    Path({str(log.parent / 'argv-capture.json')!r}).write_text("
-            "__import__('json').dumps(sys.argv[2:], ensure_ascii=False))\n"
+            "__import__('json').dumps(sys.argv[2:], ensure_ascii=False), encoding='utf-8', newline='\\n')\n"
             f"    Path({str(log.parent / 'stdin-capture.bin')!r}).write_bytes(sys.stdin.buffer.read())\n"
             "    raise SystemExit(0)\n"
             + ("class _TeeInput:\n"
@@ -135,7 +135,7 @@ class HarnessLaunchChainTests(unittest.TestCase):
             self.assertTrue(handle.shutdown_confirmed(settle_seconds=0.5))
         self.assertEqual(process.returncode, 0, errors.decode('utf-8', 'replace'))
         self.assertEqual(output, b'')
-        self.assertEqual(json.loads((case.base / 'argv-capture.json').read_text()), edge_args)
+        self.assertEqual(json.loads((case.base / 'argv-capture.json').read_text(encoding="utf-8")), edge_args)
         self.assertEqual((case.base / 'stdin-capture.bin').read_bytes(), payload)
         self.assertFalse(sentinel.exists())
 
@@ -169,7 +169,7 @@ class HarnessLaunchChainTests(unittest.TestCase):
                                      observer=FastCorrection(zcode_cases.SCHEMA, prompt).observer,
                                      services=None, cancelled=lambda: False)
         self.assertEqual(result.end.status, "ok", repr(result) + "\n" + "\n".join(
-            Path(ref.location).read_text() for ref in result.evidence_refs if ref.kind == "native-stderr"))
+            Path(ref.location).read_text(encoding="utf-8") for ref in result.evidence_refs if ref.kind == "native-stderr"))
         self.assertTrue(result.completion_evidence.stream_end)
         self.assertEqual(result.stop_evidence.native.group_state, "gone")
 

@@ -23,7 +23,7 @@ from hey_my_buddy.errors import BoardError
 from hey_my_buddy import paths as local_paths
 
 FIXTURES = Path(__file__).parent / "fixtures" / "run_contract"
-PAYLOADS = {"codex": json.loads((FIXTURES / "codex-payloads.json").read_text())}
+PAYLOADS = {"codex": json.loads((FIXTURES / "codex-payloads.json").read_text(encoding="utf-8"))}
 
 IDENTITY = {"taskId": "task-fixture", "attemptId": "attempt-fixture", "generation": 1,
             "invocationId": "invocation-fixture", "turnId": "turn-fixture", "inputSha256": "a" * 64}

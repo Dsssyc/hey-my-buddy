@@ -106,7 +106,7 @@ class ConsoleReadCacheTests(ConsoleTestCase, WorkflowTestCase):
         etag = changed("harness health")
         # Console asset availability is part of the marker.
         (board.console.assets_dir).mkdir(parents=True, exist_ok=True)
-        (board.console.assets_dir / "index.html").write_text("<!doctype html><div id=root></div>")
+        (board.console.assets_dir / "index.html").write_text("<!doctype html><div id=root></div>", encoding="utf-8", newline="\n")
         changed("assets")
         self.assertGreater(projections(), 1)
 

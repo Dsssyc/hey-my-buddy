@@ -31,7 +31,7 @@ class CustomBuildHook(BuildHookInterface):
         # assemble only needs the frozen contract string. Importing contracts
         # would initialize the native C-Two transport inside the build backend.
         contract = re.search(r'^CONTRACT_VERSION = "([^"]+)"',
-                             (root / "src/hey_my_buddy/protocol/contracts.py").read_text(), re.MULTILINE)
+                             (root / "src/hey_my_buddy/protocol/contracts.py").read_text(encoding="utf-8"), re.MULTILINE)
         if contract is None:
             raise ValueError("Missing frozen contract version")
         marker = types.ModuleType("hey_my_buddy.protocol.contracts")
@@ -73,12 +73,12 @@ class CustomBuildHook(BuildHookInterface):
         try:
             # Building again from an already-extracted sdist: its include list
             # already carries the identical file, so do not add a duplicate.
-            if json.loads(metadata.read_text()).get("sourceCommit") == commit:
+            if json.loads(metadata.read_text(encoding="utf-8")).get("sourceCommit") == commit:
                 return {}
         except (OSError, ValueError):
             pass
         path = staging / "build-info.json"
-        path.write_text(json.dumps({"sourceCommit": commit}) + "\n")
+        path.write_bytes((json.dumps({"sourceCommit": commit}) + "\n").encode("utf-8"))
         return {str(path): "src/hey_my_buddy/build-info.json"}
 
     def _staging(self) -> Path:

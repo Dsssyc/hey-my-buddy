@@ -26,7 +26,7 @@ class LocalLaunchTests(unittest.TestCase):
         from hey_my_buddy import locking
         with tempfile.TemporaryDirectory() as temporary:
             directory = Path(temporary)
-            (directory / 'control.json').write_text('{}')
+            (directory / 'control.json').write_text('{}', encoding="utf-8", newline="\n")
             owner = os.open(directory / 'board-owner.lock', os.O_CREAT | os.O_RDWR, 0o600)
             locking.lock(owner)
             try:
@@ -43,7 +43,7 @@ class LocalLaunchTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             directory = Path(temporary)
             endpoint = directory / 'control.json'
-            endpoint.write_text('{}')
+            endpoint.write_text('{}', encoding="utf-8", newline="\n")
             transport._retire_stale_endpoint(directory)
             self.assertFalse(endpoint.exists())
 

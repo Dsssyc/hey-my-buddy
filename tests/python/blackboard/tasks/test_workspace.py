@@ -51,8 +51,8 @@ class WorkspaceTests(unittest.TestCase):
         self.git("config", "user.email", "workspace@example.invalid")
         (self.repo / "src").mkdir()
         (self.repo / "docs").mkdir()
-        (self.repo / "src/file.txt").write_text("base\n")
-        (self.repo / "docs/readme.md").write_text("base docs\n")
+        (self.repo / "src/file.txt").write_text("base\n", encoding="utf-8", newline="\n")
+        (self.repo / "docs/readme.md").write_text("base docs\n", encoding="utf-8", newline="\n")
         self.git("add", ".")
         self.git("commit", "-qm", "base")
         self.base = self.git("rev-parse", "HEAD").decode().strip()
@@ -204,7 +204,7 @@ class WorkspaceTests(unittest.TestCase):
         non_git.mkdir()
         # TMPDIR may live inside a checkout. An invalid local Git pointer stops
         # discovery from borrowing that ancestor as this fixture's repository.
-        (non_git / ".git").write_text("gitdir: missing-private-repository\n")
+        (non_git / ".git").write_text("gitdir: missing-private-repository\n", encoding="utf-8", newline="\n")
         self.assert_error("WORKSPACE_UNSUPPORTED", workspace.inspect, str(non_git))
         unborn = self.root / "unborn"
         unborn.mkdir()
@@ -213,15 +213,15 @@ class WorkspaceTests(unittest.TestCase):
 
     def test_dirty_input_preserves_staging_binary_modes_symlinks_and_source(self):
         source = self.repo / "src/file.txt"
-        source.write_text("staged\n")
+        source.write_text("staged\n", encoding="utf-8", newline="\n")
         self.git("add", "src/file.txt")
         source.write_bytes(b"unstaged\x00binary\xff\n")
         source.chmod(0o755)
         selected = self.repo / "src/selected.bin"
         selected.write_bytes(b"selected\x00\xfe")
-        (self.repo / "src/excluded.txt").write_text("must not be copied")
+        (self.repo / "src/excluded.txt").write_text("must not be copied", encoding="utf-8", newline="\n")
         outside = self.root / "outside-secret"
-        outside.write_text("do not follow")
+        outside.write_text("do not follow", encoding="utf-8", newline="\n")
         (self.repo / "src/link").symlink_to(outside)
         original_index = (self.repo / ".git/index").read_bytes()
         original_status = self.git("status", "--porcelain=v1", "-z")
@@ -236,7 +236,7 @@ class WorkspaceTests(unittest.TestCase):
         self.assertEqual(original_index, (self.repo / ".git/index").read_bytes())
         self.assertEqual(original_status, self.git("status", "--porcelain=v1", "-z"))
         self.assertEqual(self.base, self.git("rev-parse", "HEAD").decode().strip())
-        self.assertEqual(outside.read_text(), "do not follow")
+        self.assertEqual(outside.read_text(encoding="utf-8"), "do not follow")
         self.assertEqual(manifest["snapshot"]["excludedUntracked"], ["src/excluded.txt"])
         self.assertNotIn("stagedSha256", manifest["snapshot"])
         self.assertNotIn("unstagedSha256", manifest["snapshot"])
@@ -245,18 +245,18 @@ class WorkspaceTests(unittest.TestCase):
     def test_prepare_replay_freezes_source_and_changed_intent_conflicts(self):
         intent = self.intent()
         first = workspace.prepare(self.state, "same", intent)
-        (self.repo / "src/file.txt").write_text("new input\n")
+        (self.repo / "src/file.txt").write_text("new input\n", encoding="utf-8", newline="\n")
         self.git("commit", "-qam", "source advanced")
         self.assertEqual(workspace.prepare(self.state, "same", intent), first)
         second = workspace.prepare(self.state, "new-request", intent)
         self.assertNotEqual(first["inputCommit"], second["inputCommit"])
-        self.assertEqual((Path(first["path"]) / "src/file.txt").read_text(), "base\n")
+        self.assertEqual((Path(first["path"]) / "src/file.txt").read_text(encoding="utf-8"), "base\n")
         self.assert_error("WORKSPACE_CONFLICT", workspace.prepare, self.state, "same", self.intent(writeScope=["docs"]))
 
     def test_existing_commit_requires_exact_checkout(self):
         manifest = self.prepare(kind="existing", base={"kind": "commit", "ref": self.base})
         self.assertEqual(manifest["inputCommit"], self.base)
-        (self.repo / "src/file.txt").write_text("dirty\n")
+        (self.repo / "src/file.txt").write_text("dirty\n", encoding="utf-8", newline="\n")
         self.assert_error("WORKSPACE_BASE_MISMATCH", self.prepare, "dirty", kind="existing", base={"kind": "commit", "ref": self.base})
         self.git("add", ".")
         self.git("commit", "-qm", "new head")
@@ -264,7 +264,7 @@ class WorkspaceTests(unittest.TestCase):
 
     def test_verify_detects_drift_and_read_cannot_opt_out(self):
         manifest = self.prepare(access="read", writeScope=[])
-        (Path(manifest["path"]) / "src/file.txt").write_text("changed\n")
+        (Path(manifest["path"]) / "src/file.txt").write_text("changed\n", encoding="utf-8", newline="\n")
         self.assert_error("WORKSPACE_CHANGED", workspace.verify, manifest)
         self.assert_error("WORKSPACE_CHANGED", workspace.verify, manifest, require_unchanged=False)
 
@@ -272,9 +272,9 @@ class WorkspaceTests(unittest.TestCase):
         _, directory = workspace._workspace_directory(self.state, "collision")
         target = directory / "checkout"
         target.mkdir()
-        (target / "precious.txt").write_text("preserve\n")
+        (target / "precious.txt").write_text("preserve\n", encoding="utf-8", newline="\n")
         self.assert_error("WORKSPACE_CONFLICT", self.prepare, "collision")
-        self.assertEqual((target / "precious.txt").read_text(), "preserve\n")
+        self.assertEqual((target / "precious.txt").read_text(encoding="utf-8"), "preserve\n")
 
     def test_completed_checkout_recovers_after_interrupted_manifest_write(self):
         original = workspace._write_once
@@ -284,9 +284,9 @@ class WorkspaceTests(unittest.TestCase):
             return original(path, data)
         with patch.object(workspace, "_write_once", side_effect=interrupt):
             self.assert_error("WORKSPACE_IO_ERROR", self.prepare)
-        (self.repo / "src/file.txt").write_text("source advanced after interruption")
+        (self.repo / "src/file.txt").write_text("source advanced after interruption", encoding="utf-8", newline="\n")
         recovered = self.prepare()
-        self.assertEqual((Path(recovered["path"]) / "src/file.txt").read_text(), "base\n")
+        self.assertEqual((Path(recovered["path"]) / "src/file.txt").read_text(encoding="utf-8"), "base\n")
         self.assertTrue(workspace.verify(recovered)["unchanged"])
 
     def test_changed_interrupted_checkout_is_not_overwritten(self):
@@ -305,15 +305,15 @@ class WorkspaceTests(unittest.TestCase):
         self.assertFalse(error.details["preparationCleanup"]["removed"])
         _, directory = workspace._workspace_directory(self.state, "request")
         changed = directory / "checkout/src/file.txt"
-        changed.write_text("valuable unfinished work")
+        changed.write_text("valuable unfinished work", encoding="utf-8", newline="\n")
         self.assert_error("WORKSPACE_CONFLICT", self.prepare)
-        self.assertEqual(changed.read_text(), "valuable unfinished work")
+        self.assertEqual(changed.read_text(encoding="utf-8"), "valuable unfinished work")
 
     def test_seal_pins_actual_output_binary_diff_and_replays_after_removal(self):
         manifest = self.prepare()
         target = Path(manifest["path"])
         (target / "src/file.txt").write_bytes(b"output\x00\xff\n")
-        (target / "src/new.txt").write_text("new output\n")
+        (target / "src/new.txt").write_text("new output\n", encoding="utf-8", newline="\n")
         (target / "src/link").symlink_to("../../external-missing")
         (target / "src/new.txt").chmod(0o755)
         output = workspace.seal(self.state, manifest, "task", "attempt")
@@ -339,20 +339,20 @@ class WorkspaceTests(unittest.TestCase):
     def test_outside_scope_edits_and_new_files_are_reported(self):
         manifest = self.prepare()
         target = Path(manifest["path"])
-        (target / "docs/readme.md").write_text("outside\n")
-        (target / "new.txt").write_text("outside new\n")
+        (target / "docs/readme.md").write_text("outside\n", encoding="utf-8", newline="\n")
+        (target / "new.txt").write_text("outside new\n", encoding="utf-8", newline="\n")
         error = self.assert_error("WORKSPACE_SCOPE_VIOLATION", workspace.seal, self.state, manifest, "task", "attempt")
         self.assertEqual(error.details["paths"], ["docs/readme.md", "new.txt"])
-        self.assertEqual((target / "docs/readme.md").read_text(), "outside\n")
+        self.assertEqual((target / "docs/readme.md").read_text(encoding="utf-8"), "outside\n")
 
     def test_existing_excluded_inputs_are_not_accidentally_sealed(self):
-        (self.repo / "outside.txt").write_text("unselected\n")
+        (self.repo / "outside.txt").write_text("unselected\n", encoding="utf-8", newline="\n")
         manifest = self.prepare(kind="existing")
-        (self.repo / "src/file.txt").write_text("changed\n")
+        (self.repo / "src/file.txt").write_text("changed\n", encoding="utf-8", newline="\n")
         output = workspace.seal(self.state, manifest, "task", "attempt")
         self.assertEqual(output["changedPaths"], ["src/file.txt"])
         self.assertNotIn(b"outside.txt", self.git("ls-tree", "-r", output["commit"]))
-        (self.repo / "outside.txt").write_text("changed excluded input\n")
+        (self.repo / "outside.txt").write_text("changed excluded input\n", encoding="utf-8", newline="\n")
         self.assert_error("WORKSPACE_SCOPE_VIOLATION", workspace.seal, self.state, manifest, "task", "new-attempt")
 
     def test_read_only_seal_rejects_index_only_and_untracked_drift(self):
@@ -364,13 +364,13 @@ class WorkspaceTests(unittest.TestCase):
         self.git("rm", "--cached", "src/file.txt", cwd=target)
         self.assert_error("WORKSPACE_CHANGED", workspace.seal, self.state, manifest, "task", "changed-index")
         self.git("add", "src/file.txt", cwd=target)
-        (target / "extra.txt").write_text("extra")
+        (target / "extra.txt").write_text("extra", encoding="utf-8", newline="\n")
         self.assert_error("WORKSPACE_CHANGED", workspace.seal, self.state, manifest, "task", "changed-file")
 
     def test_seal_recovers_original_output_after_interrupted_publication(self):
         manifest = self.prepare()
         target = Path(manifest["path"])
-        (target / "src/file.txt").write_text("first output\n")
+        (target / "src/file.txt").write_text("first output\n", encoding="utf-8", newline="\n")
         original = workspace._pin
         def interrupt(root, ref, commit):
             if "/outputs/" in ref:
@@ -378,16 +378,16 @@ class WorkspaceTests(unittest.TestCase):
             return original(root, ref, commit)
         with patch.object(workspace, "_pin", side_effect=interrupt):
             self.assert_error("WORKSPACE_IO_ERROR", workspace.seal, self.state, manifest, "task", "attempt")
-        (target / "src/file.txt").write_text("later edits\n")
+        (target / "src/file.txt").write_text("later edits\n", encoding="utf-8", newline="\n")
         self.git("gc", "--prune=now")
         recovered = workspace.seal(self.state, manifest, "task", "attempt")
         self.assertEqual(self.git("show", recovered["commit"] + ":src/file.txt"), b"first output\n")
-        self.assertEqual((target / "src/file.txt").read_text(), "later edits\n")
+        self.assertEqual((target / "src/file.txt").read_text(encoding="utf-8"), "later edits\n")
 
     def test_output_ref_collision_and_diff_corruption_are_honest_conflicts(self):
         manifest = self.prepare()
         target = Path(manifest["path"])
-        (target / "src/file.txt").write_text("output\n")
+        (target / "src/file.txt").write_text("output\n", encoding="utf-8", newline="\n")
         output = workspace.seal(self.state, manifest, "task", "attempt")
         self.git("update-ref", output["ref"], self.base)
         self.assert_error("WORKSPACE_CONFLICT", workspace.seal, self.state, manifest, "task", "attempt")
@@ -401,7 +401,7 @@ class WorkspaceTests(unittest.TestCase):
         target = Path(manifest["checkoutRoot"])
         self.git("update-ref", "-d", manifest["snapshot"]["inputRef"])
         self.git("update-ref", "-d", manifest["snapshot"]["stagedRef"])
-        (target / "src/file.txt").write_text("sealed output\n")
+        (target / "src/file.txt").write_text("sealed output\n", encoding="utf-8", newline="\n")
         output = workspace.seal(self.state, manifest, "task", "attempt")
         self.git("update-ref", "-d", output["ref"])
         self.assertEqual(workspace.verify_sealed_output(manifest, manifest, output)["changedPaths"], ["src/file.txt"])
@@ -417,7 +417,7 @@ class WorkspaceTests(unittest.TestCase):
 
     def test_matching_seal_cleanup_proof_does_not_write_git_objects(self):
         manifest = self.prepare()
-        (Path(manifest["checkoutRoot"]) / "src/file.txt").write_text("sealed output\n")
+        (Path(manifest["checkoutRoot"]) / "src/file.txt").write_text("sealed output\n", encoding="utf-8", newline="\n")
         output = workspace.seal(self.state, manifest, "task", "attempt")
         git = workspace._git
 
@@ -431,12 +431,12 @@ class WorkspaceTests(unittest.TestCase):
         self.assertTrue(cleanup["eligible"], cleanup["reasons"])
 
     def test_existing_checkout_continuation_uses_exact_sealed_baseline(self):
-        (self.repo / "src/file.txt").write_text("initial staged\n")
+        (self.repo / "src/file.txt").write_text("initial staged\n", encoding="utf-8", newline="\n")
         self.git("add", "src/file.txt")
         original_index = (self.repo / ".git/index").read_bytes()
         initial = self.prepare("turn-one", kind="existing")
-        (self.repo / "src/file.txt").write_text("first output\n")
-        (self.repo / "src/new.txt").write_text("new output\n")
+        (self.repo / "src/file.txt").write_text("first output\n", encoding="utf-8", newline="\n")
+        (self.repo / "src/new.txt").write_text("new output\n", encoding="utf-8", newline="\n")
         first = workspace.seal(self.state, initial, "task", "attempt-one")
         self.assertEqual(first["includedUntracked"], ["src/new.txt"])
         self.assertEqual(self.prepare("turn-one", kind="existing"), initial)
@@ -446,7 +446,7 @@ class WorkspaceTests(unittest.TestCase):
         self.assertEqual(continuation["inputCommit"], first["commit"])
         self.assertEqual(continuation["inputTree"], first["tree"])
         self.assertTrue(workspace.verify(continuation)["unchanged"])
-        (self.repo / "src/new.txt").write_text("second output\n")
+        (self.repo / "src/new.txt").write_text("second output\n", encoding="utf-8", newline="\n")
         second = workspace.seal(self.state, continuation, "task", "attempt-two")
         self.assertEqual(second["inputCommit"], first["commit"])
         self.assertEqual(second["changedPaths"], ["src/new.txt"])
@@ -471,12 +471,12 @@ class WorkspaceTests(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0)
 
     def test_explicit_ignored_untracked_input_and_unusual_filenames(self):
-        (self.repo / ".gitignore").write_text("*.secret\n")
+        (self.repo / ".gitignore").write_text("*.secret\n", encoding="utf-8", newline="\n")
         self.git("add", ".gitignore")
         self.git("commit", "-qm", "ignore secrets")
         name = "src/odd\nname\t.secret"
         (self.repo / name).write_bytes(b"\x00selected")
-        (self.repo / "src/unselected.secret").write_text("excluded")
+        (self.repo / "src/unselected.secret").write_text("excluded", encoding="utf-8", newline="\n")
         manifest = self.prepare(includeUntracked=[name])
         self.assertEqual((Path(manifest["path"]) / name).read_bytes(), b"\x00selected")
         self.assertFalse((Path(manifest["path"]) / "src/unselected.secret").exists())
@@ -487,46 +487,46 @@ class WorkspaceTests(unittest.TestCase):
         self.assert_error("WORKSPACE_CHANGED", workspace.verify, manifest)
 
     def test_ignored_caches_do_not_interfere_with_managed_input_or_output(self):
-        (self.repo / ".gitignore").write_text("*.ignored\n")
+        (self.repo / ".gitignore").write_text("*.ignored\n", encoding="utf-8", newline="\n")
         self.git("add", ".gitignore")
         self.git("commit", "-qm", "ignore generated files")
         reader = self.prepare("reader", access="read", writeScope=[])
-        (Path(reader["path"]) / "new.ignored").write_text("generated cache")
+        (Path(reader["path"]) / "new.ignored").write_text("generated cache", encoding="utf-8", newline="\n")
         self.assertTrue(workspace.verify(reader)["unchanged"])
         self.assertEqual(workspace.seal(self.state, reader, "reader", "attempt")["changedPaths"], [])
         writer = self.prepare("writer")
-        (Path(writer["path"]) / "docs/out.ignored").write_text("generated cache outside write scope")
-        (Path(writer["path"]) / "src/out.ignored").write_text("generated cache inside write scope")
-        (Path(writer["path"]) / "src/file.txt").write_text("managed output\n")
+        (Path(writer["path"]) / "docs/out.ignored").write_text("generated cache outside write scope", encoding="utf-8", newline="\n")
+        (Path(writer["path"]) / "src/out.ignored").write_text("generated cache inside write scope", encoding="utf-8", newline="\n")
+        (Path(writer["path"]) / "src/file.txt").write_text("managed output\n", encoding="utf-8", newline="\n")
         output = workspace.seal(self.state, writer, "writer", "attempt")
         self.assertEqual(output["changedPaths"], ["src/file.txt"])
         self.assertNotIn(b"out.ignored", self.git("ls-tree", "-r", output["commit"]))
         existing_file = self.repo / "docs/source.ignored"
-        existing_file.write_text("preexisting ignored cache")
+        existing_file.write_text("preexisting ignored cache", encoding="utf-8", newline="\n")
         existing = self.prepare("existing", kind="existing", access="read", writeScope=[])
         self.assertNotIn("docs/source.ignored", existing["snapshot"]["excludedUntracked"])
-        existing_file.write_text("updated ignored cache")
+        existing_file.write_text("updated ignored cache", encoding="utf-8", newline="\n")
         self.assertTrue(workspace.verify(existing)["unchanged"])
         self.assertEqual(workspace.seal(self.state, existing, "existing", "attempt")["changedPaths"], [])
 
     def test_ignored_dependencies_and_unreadable_environments_are_not_read(self):
-        (self.repo / ".gitignore").write_text("node_modules/\n.venv/\ntmp/\n")
+        (self.repo / ".gitignore").write_text("node_modules/\n.venv/\ntmp/\n", encoding="utf-8", newline="\n")
         self.git("add", ".gitignore")
         self.git("commit", "-qm", "exclude environments")
         dependency = self.repo / "node_modules/package"
         dependency.mkdir(parents=True)
         for number in range(1000):
-            (dependency / f"module-{number}.js").write_text("ignored dependency\n")
+            (dependency / f"module-{number}.js").write_text("ignored dependency\n", encoding="utf-8", newline="\n")
         environment = self.repo / ".venv"
         environment.mkdir()
-        (environment / "unreadable").write_text("private environment input")
+        (environment / "unreadable").write_text("private environment input", encoding="utf-8", newline="\n")
         environment.chmod(0)
         self.addCleanup(environment.chmod, 0o700)
         (self.repo / "tmp").mkdir()
-        (self.repo / "tmp/output.log").write_text("ignored runtime log")
-        (self.repo / ".git/info/exclude").write_text("local-environment/\n")
+        (self.repo / "tmp/output.log").write_text("ignored runtime log", encoding="utf-8", newline="\n")
+        (self.repo / ".git/info/exclude").write_text("local-environment/\n", encoding="utf-8", newline="\n")
         (self.repo / "local-environment").mkdir()
-        (self.repo / "local-environment/secret").write_text("ignored by repository exclude")
+        (self.repo / "local-environment/secret").write_text("ignored by repository exclude", encoding="utf-8", newline="\n")
         read = workspace._file
         def managed_read(root, path):
             self.assertFalse(path.startswith(("node_modules/", ".venv/", "tmp/", "local-environment/")), path)
@@ -540,16 +540,16 @@ class WorkspaceTests(unittest.TestCase):
                          "managedPaths": "tracked-and-nonignored-untracked", "selectedIgnored": "includeUntracked"})
 
     def test_explicit_ignored_directory_is_bounded_and_checked(self):
-        (self.repo / ".gitignore").write_text("fixtures/private/\nother-private/\n")
+        (self.repo / ".gitignore").write_text("fixtures/private/\nother-private/\n", encoding="utf-8", newline="\n")
         self.git("add", ".gitignore")
         self.git("commit", "-qm", "ignore private fixtures")
         fixtures = self.repo / "fixtures/private"
         fixtures.mkdir(parents=True)
-        (fixtures / "config.json").write_text('{"fixture": true}')
+        (fixtures / "config.json").write_text('{"fixture": true}', encoding="utf-8", newline="\n")
         (fixtures / "binary.dat").write_bytes(b"\x00selected binary\xff")
         ignored = self.repo / "other-private"
         ignored.mkdir()
-        (ignored / "secret").write_text("must not be read")
+        (ignored / "secret").write_text("must not be read", encoding="utf-8", newline="\n")
         ignored.chmod(0)
         self.addCleanup(ignored.chmod, 0o700)
         read = workspace._file
@@ -560,12 +560,12 @@ class WorkspaceTests(unittest.TestCase):
             manifest = self.prepare(kind="existing", access="read", writeScope=[], includeUntracked=["fixtures/private"])
             self.assertTrue(workspace.verify(manifest)["unchanged"])
         self.assertEqual(manifest["snapshot"]["includedUntracked"], ["fixtures/private/binary.dat", "fixtures/private/config.json"])
-        (fixtures / "config.json").write_text('{"fixture": "changed"}')
+        (fixtures / "config.json").write_text('{"fixture": "changed"}', encoding="utf-8", newline="\n")
         self.assert_error("WORKSPACE_CHANGED", workspace.verify, manifest)
         self.assert_error("WORKSPACE_CHANGED", workspace.seal, self.state, manifest, "task", "attempt")
 
     def test_frozen_input_survives_gc_before_public_input_ref_publication(self):
-        (self.repo / "src/file.txt").write_text("frozen uncommitted input\n")
+        (self.repo / "src/file.txt").write_text("frozen uncommitted input\n", encoding="utf-8", newline="\n")
         original = workspace._pin
         def interrupt(root, ref, commit):
             if ref.endswith("/input") and "/retained/" not in ref:
@@ -573,18 +573,18 @@ class WorkspaceTests(unittest.TestCase):
             return original(root, ref, commit)
         with patch.object(workspace, "_pin", side_effect=interrupt):
             self.assert_error("WORKSPACE_IO_ERROR", self.prepare)
-        (self.repo / "src/file.txt").write_text("later source edits\n")
+        (self.repo / "src/file.txt").write_text("later source edits\n", encoding="utf-8", newline="\n")
         self.git("gc", "--prune=now")
         manifest = self.prepare()
-        self.assertEqual((Path(manifest["path"]) / "src/file.txt").read_text(), "frozen uncommitted input\n")
+        self.assertEqual((Path(manifest["path"]) / "src/file.txt").read_text(encoding="utf-8"), "frozen uncommitted input\n")
 
     def test_replayed_output_rejects_inconsistent_top_level_fields(self):
         manifest = self.prepare()
-        (Path(manifest["path"]) / "src/file.txt").write_text("output\n")
+        (Path(manifest["path"]) / "src/file.txt").write_text("output\n", encoding="utf-8", newline="\n")
         output = workspace.seal(self.state, manifest, "task", "attempt")
         path = Path(output["diffPath"]).parent / "output.json"
         changed = {**output, "changedPaths": []}
-        path.write_text(json.dumps(changed))
+        path.write_text(json.dumps(changed), encoding="utf-8", newline="\n")
         self.assert_error("WORKSPACE_CONFLICT", workspace.seal, self.state, manifest, "task", "attempt")
 
     def test_malformed_manifest_and_input_fail_with_structured_errors(self):

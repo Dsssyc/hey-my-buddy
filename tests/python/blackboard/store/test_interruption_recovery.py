@@ -330,7 +330,7 @@ class InterruptionRecoveryTests(BoardTestCase):
                 path = interruption._directory(board.store, attempt) / RECEIPT
                 fsync_json(path, envelope)
                 if name == 'json':
-                    path.write_text(bad)
+                    path.write_text(bad, encoding="utf-8", newline="\n")
                 fsync_json(interruption._directory(board.store, later) / RECEIPT, {
                     'taskId': good_task['taskId'], 'attemptId': good_actor['attemptId'], 'generation': 1,
                     'createdAt': board.store.now(),

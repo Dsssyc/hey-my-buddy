@@ -34,7 +34,7 @@ from hey_my_buddy.buddy.harnesses.dsh.acp.launch import real_user_home
 
 def log(log_path: Path, event: dict) -> None:
     entry = {"ts": datetime.now(timezone.utc).isoformat(timespec="milliseconds"), **event}
-    with log_path.open("a") as handle:
+    with log_path.open("a", encoding="utf-8", newline="\n") as handle:
         handle.write(json.dumps(entry, default=str, sort_keys=True) + "\n")
 
 
@@ -53,12 +53,12 @@ def check_private_home(log_path: Path) -> bool:
         # this fake native program rather than by the production run module.
         settings = Path(native_home) / "settings.yaml"
         if settings.is_file():
-            entry["settings"] = json.loads(settings.read_text())
+            entry["settings"] = json.loads(settings.read_text(encoding="utf-8"))
         for field, relative in (("homePatch", "cordis.patch.yml"),
                                 ("profilePatch", "profiles/acp/cordis.patch.yml")):
             path = Path(native_home) / relative
             if path.is_file():
-                entry[field] = path.read_text()
+                entry[field] = path.read_text(encoding="utf-8")
     log(log_path, entry)
     return ok
 
@@ -239,7 +239,7 @@ class FakeAgent:
         """
         if self.patch_path:
             try:
-                for row in json.loads(Path(self.patch_path).read_text()):
+                for row in json.loads(Path(self.patch_path).read_text(encoding="utf-8")):
                     if (isinstance(row, dict) and row.get("id") == "session-persistence-jsonl"
                             and isinstance(row.get("config"), dict)
                             and isinstance(row["config"].get("root"), str)):
@@ -256,7 +256,7 @@ class FakeAgent:
         if new and any(directory.glob(f"{session_id}.v3.jsonl*")):
             return False
         try:
-            with marker.open("x" if new else "w") as handle:
+            with marker.open("x" if new else "w", encoding="utf-8", newline="\n") as handle:
                 json.dump({"cwd": session["cwd"], "model": session["model"],
                            "effort": session["effort"]}, handle)
         except FileExistsError:
@@ -265,19 +265,19 @@ class FakeAgent:
             raise
         storage = Path(os.environ.get("DSH_HOME") or Path(os.environ["HOME"]) / ".dsh") / "storages"
         if self.patch_path:
-            for row in json.loads(Path(self.patch_path).read_text()):
+            for row in json.loads(Path(self.patch_path).read_text(encoding="utf-8")):
                 if row.get("id") == "storage-json":
                     storage = Path(row["config"]["root"])
         index = storage / "session_projcache" / "sessions"
         index.mkdir(mode=0o700, parents=True, exist_ok=True)
-        (index / f"{session_id}.json").write_text(json.dumps({"sessionId": session_id, "cwd": session["cwd"]}))
+        (index / f"{session_id}.json").write_text(json.dumps({"sessionId": session_id, "cwd": session["cwd"]}), encoding="utf-8", newline="\n")
         return True
 
     def restore_session(self, session_id):
         """The persisted session state, or ``None`` when no store carries it."""
         marker = self.sessions_dir() / f"{session_id}.fake-session.json"
         try:
-            value = json.loads(marker.read_text())
+            value = json.loads(marker.read_text(encoding="utf-8"))
         except (OSError, ValueError):
             return None
         if not isinstance(value, dict):
@@ -542,7 +542,7 @@ class FakeAgent:
     def emit_session_fixture(self, session_id: str) -> None:
         """Explicit synthetic ACP display samples, separate from native rollouts."""
         if self.session_updates_fixture:
-            fixture = json.loads(Path(self.session_updates_fixture).read_text())
+            fixture = json.loads(Path(self.session_updates_fixture).read_text(encoding="utf-8"))
             for update in fixture["updates"]:
                 self.notify_client("session/update", {"sessionId": session_id, "update": update})
 
@@ -624,7 +624,7 @@ class FakeAgent:
             self.send({"jsonrpc": "2.0", "id": request_id, "result": {"stopReason": self.stop_reason}})
             return
         from hey_my_buddy.buddy.roles import worker_services
-        configuration = json.loads(Path(self.bridge_config).read_text())
+        configuration = json.loads(Path(self.bridge_config).read_text(encoding="utf-8"))
         if self.micro_task_permission:
             answer = self.request_client("session/request_permission", {
                 "sessionId": session_id,
@@ -826,7 +826,7 @@ class FakeAgent:
             path.write_bytes(b"this is not a zstd stream\n")
         elif mode == "plain":
             path = directory / f"{session_id}.v3.jsonl"
-            path.write_text(lines)
+            path.write_text(lines, encoding="utf-8", newline="\n")
         else:
             import zstandard
             path = directory / f"{session_id}.v3.jsonl.zstd"

@@ -213,7 +213,7 @@ def run_case(name: str, work: Path, *, substitutes_only: bool = False) -> None:
             kwargs = {"env": source_only}
             command = prepare_daemon_spawn([sys.executable, "-m", "hey_my_buddy.blackboard.service.daemon"], kwargs, state)
             command[-1] = "--import-check"
-            process = collect_spawn(command, env=source_only, text=True,
+            process = collect_spawn(command, env=source_only, text=True, encoding="utf-8",
                                     stdout=subprocess.PIPE, stderr=subprocess.PIPE)
             stdout, stderr = process.communicate(timeout=20)
             evidence["importCheck"] = {"exit": process.returncode, "stdout": stdout, "stderr": stderr}
@@ -241,16 +241,16 @@ def run_case(name: str, work: Path, *, substitutes_only: bool = False) -> None:
                         ready = request(endpoint, "health", {}, state_dir=state)
                         break
                     if process.poll() is not None:
-                        raise AssertionError("real daemon exited before readiness: " + (work / "daemon.log").read_text())
+                        raise AssertionError("real daemon exited before readiness: " + (work / "daemon.log").read_text(encoding="utf-8"))
                     if time.monotonic() >= deadline:
-                        raise AssertionError("real daemon readiness timed out: " + (work / "daemon.log").read_text())
+                        raise AssertionError("real daemon readiness timed out: " + (work / "daemon.log").read_text(encoding="utf-8"))
                     time.sleep(0.05)
                 evidence["ready"] = {"pid": endpoint["pid"], "serviceId": ready["serviceId"]}
 
                 if name in {"cli", "launcher"}:
                     command = ([sys.executable, "-m", "hey_my_buddy.cli.main"] if name == "cli" else
                                [sys.executable, str(ROOT / "src/hey_my_buddy/install/launcher.py")])
-                    cli = collect_spawn([*command, "health"], env=dict(os.environ), text=True,
+                    cli = collect_spawn([*command, "health"], env=dict(os.environ), text=True, encoding="utf-8",
                                         stdout=subprocess.PIPE, stderr=subprocess.PIPE)
                     stdout, stderr = cli.communicate(timeout=35)
                     evidence["cli"] = {"command": command, "pid": cli.pid, "exit": cli.returncode,
@@ -263,7 +263,7 @@ def run_case(name: str, work: Path, *, substitutes_only: bool = False) -> None:
                     assert process.wait(timeout=20) == 0
                     evidence["lifecycle"] = reply
                     if name == "restart":
-                        resume = json.loads((state / "restart.resume.json").read_text())
+                        resume = json.loads((state / "restart.resume.json").read_text(encoding="utf-8"))
                         assert resume["serviceId"] == ready["serviceId"]
                     return
                 elif name == "board" or name.endswith("board"):
@@ -317,7 +317,7 @@ def run_case(name: str, work: Path, *, substitutes_only: bool = False) -> None:
             failures.append({"stage": "close_log", "type": type(error).__name__, "message": str(error)})
         evidence["cleanupFailures"] = failures
         try:
-            (work / "evidence.json").write_text(json.dumps(evidence, indent=2))
+            (work / "evidence.json").write_text(json.dumps(evidence, indent=2), encoding="utf-8", newline="\n")
             print(json.dumps(evidence), flush=True)
         except Exception:
             if "failure" not in evidence:
@@ -331,7 +331,7 @@ class PublicStateTests(unittest.TestCase):
         work = Path(tempfile.mkdtemp(prefix="public-state-", dir=os.environ.get("HMB_CHECKS_TMPDIR"))).resolve()
         environment = _child_environment(work)
         sentinel = work / "native-forbidden"
-        sentinel.write_text("#!/bin/sh\nprintf 'unexpected native invocation' >> '" + str(work / "native-invoked") + "'\nexit 99\n")
+        sentinel.write_text("#!/bin/sh\nprintf 'unexpected native invocation' >> '" + str(work / "native-invoked") + "'\nexit 99\n", encoding="utf-8", newline="\n")
         sentinel.chmod(0o700)
         environment.update({"HMB_" + harness + "_CLI": str(sentinel) for harness in ("CLAUDE", "CODEX", "DSH", "ZCODE")})
         environment.pop("HMB_STATE_DIR")
@@ -339,12 +339,12 @@ class PublicStateTests(unittest.TestCase):
         environment["HMB_CHECKS_TMPDIR"] = os.environ.get("HMB_CHECKS_TMPDIR", str(work))
         command = [sys.executable, str(Path(__file__).resolve()), "--case", name, str(work)]
         process = subprocess.Popen(command, env=environment, text=True, stdout=subprocess.PIPE,
-                                   stderr=subprocess.PIPE)
+                                   stderr=subprocess.PIPE, encoding="utf-8")
         stdout, stderr = process.communicate(timeout=100)
-        (work / "stdout.log").write_text(stdout)
-        (work / "stderr.log").write_text(stderr)
+        (work / "stdout.log").write_text(stdout, encoding="utf-8", newline="\n")
+        (work / "stderr.log").write_text(stderr, encoding="utf-8", newline="\n")
         (work / "case-process.json").write_text(json.dumps({"pid": process.pid, "command": command,
-                                                           "waitExit": process.returncode}, indent=2))
+                                                           "waitExit": process.returncode}, indent=2), encoding="utf-8", newline="\n")
         self.assertEqual(process.returncode, 0, f"{name}: evidence {work}\n{stdout}\n{stderr}")
 
     def test_ps02_default_cli(self):
@@ -481,7 +481,7 @@ class FixtureRepairTests(unittest.TestCase):
                 self.assertIn("Owned fixture cleanup failed", str(caught.exception))
             process.wait.assert_called_once_with(timeout=20)
             shutdown.assert_called_once_with()
-        evidence = json.loads((work / "evidence.json").read_text())
+        evidence = json.loads((work / "evidence.json").read_text(encoding="utf-8"))
         self.assertEqual(evidence["processes"][0]["waitExit"], 0)
         self.assertEqual(stat.S_IMODE(state.stat().st_mode), 0o700)
         self.assertEqual([failure["stage"] for failure in evidence["cleanupFailures"]], ["stop_service"] if stop_fails else [])

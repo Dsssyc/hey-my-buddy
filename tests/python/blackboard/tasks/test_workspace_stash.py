@@ -26,7 +26,7 @@ class StashInventoryTestCase(RealWorkspaceTestCase):
         return str(self.repo / ".git")
 
     def stash(self, message: str) -> str:
-        (self.repo / "tracked.txt").write_text(f"change {message}\n")
+        (self.repo / "tracked.txt").write_text(f"change {message}\n", encoding="utf-8", newline="\n")
         self.git("add", "tracked.txt")
         self.git("stash", "push", "-q", "-m", message)
         return self.git("rev-parse", "stash@{0}").strip()
@@ -86,18 +86,18 @@ class SharedStashInventoryTests(StashInventoryTestCase):
         repository.mkdir()
         completed = subprocess.run(
             ["git", "init", "-q", "-b", "main", "--object-format=sha256"],
-            cwd=repository, env={**os.environ, **GIT_ENV}, capture_output=True, text=True,
+            cwd=repository, env={**os.environ, **GIT_ENV}, capture_output=True, text=True, encoding="utf-8",
         )
         self.assertEqual(completed.returncode, 0, completed.stderr)
-        (repository / "file.txt").write_text("base\n")
+        (repository / "file.txt").write_text("base\n", encoding="utf-8", newline="\n")
         for arguments in (("config", "user.email", "b@example.invalid"), ("config", "user.name", "Buddy Test"),
                          ("add", "."), ("commit", "-qm", "base")):
             subprocess.run(["git", *arguments], cwd=repository, env={**os.environ, **GIT_ENV},
-                           capture_output=True, text=True, check=True)
-        (repository / "file.txt").write_text("stashed\n")
+                           capture_output=True, text=True, check=True, encoding="utf-8")
+        (repository / "file.txt").write_text("stashed\n", encoding="utf-8", newline="\n")
         subprocess.run(["git", "add", "file.txt"], cwd=repository, env={**os.environ, **GIT_ENV}, check=True)
         subprocess.run(["git", "stash", "push", "-q", "-m", "sha256 stash"], cwd=repository,
-                       env={**os.environ, **GIT_ENV}, capture_output=True, text=True, check=True)
+                       env={**os.environ, **GIT_ENV}, capture_output=True, text=True, check=True, encoding="utf-8")
         inventory = workspace.shared_stash_inventory(str(repository / ".git"))
         self.assertEqual(inventory["state"], "observed")
         [entry] = inventory["entries"]
@@ -285,7 +285,7 @@ class StashChangesNeverGateWorkTests(StashInventoryTestCase):
         [lost] = comparison["lostEntries"]
         self.assertEqual(lost["commit"], commit)
         restored = subprocess.run(["sh", "-c", lost["recoverCommand"]], cwd=self.repo,
-                                  env={**os.environ, **GIT_ENV}, capture_output=True, text=True)
+                                  env={**os.environ, **GIT_ENV}, capture_output=True, text=True, encoding="utf-8")
         self.assertEqual(restored.returncode, 0, restored.stderr)
         listing = self.git("stash", "list")
         self.assertIn(commit, self.git("rev-parse", "stash@{0}"))

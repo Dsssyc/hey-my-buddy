@@ -96,7 +96,7 @@ class AcpTestCase(unittest.TestCase):
         path = self.logs / "fake-agent.log"
         if not path.is_file():
             return []
-        return [json.loads(line) for line in path.read_text().splitlines() if line.strip()]
+        return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
 
     def wait_for(self, predicate, timeout: float = 10.0):
         end = time.monotonic() + timeout

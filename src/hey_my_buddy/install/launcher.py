@@ -166,7 +166,7 @@ def write_private(path: Path, value: dict) -> None:
     temporary = path.with_name('.' + path.name + '.' + uuid.uuid4().hex)
     fd = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
     try:
-        with os.fdopen(fd, 'w') as stream:
+        with os.fdopen(fd, 'w', encoding="utf-8", newline="\n") as stream:
             json.dump(value, stream)
             stream.flush();os.fsync(stream.fileno())
         os.replace(temporary, path)
@@ -231,7 +231,7 @@ def _runtime_ready(target: Path) -> bool:
         try:
             if not stat.S_ISREG(os.lstat(target / 'READY.json').st_mode):
                 return False
-            marker = json.loads((target / 'READY.json').read_text())
+            marker = json.loads((target / 'READY.json').read_text(encoding="utf-8"))
         except (OSError, ValueError):
             return False
     return isinstance(marker, dict) and marker.get('state') == 'READY' and marker.get('contentId') == target.name and _runtime_python(target).is_file()
@@ -327,7 +327,7 @@ def runtime_environment(target: Path) -> dict[str, str]:
 def bootstrap_contract_version() -> str:
     # This bootstrap runs with the system Python before package dependencies exist.
     match = re.search(r'^CONTRACT_VERSION = "([^"]+)"',
-                      (Path(__file__).resolve().parents[1] / 'protocol' / 'contracts.py').read_text(), re.MULTILINE)
+                      (Path(__file__).resolve().parents[1] / 'protocol' / 'contracts.py').read_text(encoding="utf-8"), re.MULTILINE)
     return match.group(1) if match else 'unknown'
 
 

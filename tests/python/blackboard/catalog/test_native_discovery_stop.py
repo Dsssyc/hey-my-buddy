@@ -196,7 +196,7 @@ class CatalogNativeStopTests(NativeDiscoveryFixture, BoardTestCase):
         script.write_text("import os, sys\nif '--version' in sys.argv:\n"
                           "    print('fixture diagnostic refused')\n    sys.exit(7)\n"
                           "os.execv(sys.executable, [sys.executable, " + repr(str(fixture)) +
-                          ", *sys.argv[1:]])\n")
+                          ", *sys.argv[1:]])\n", encoding="utf-8", newline="\n")
         self.record.update(status='ready', command=[sys.executable, str(script)])
 
     def test_codex_version_failure_with_actual_stop_continues_catalog_and_preserves_stop_evidence(self):

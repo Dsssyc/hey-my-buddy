@@ -61,7 +61,7 @@ def wait_file(name, timeout=20.0):
 def record_commands():
     try:
         log_dir.mkdir(parents=True, exist_ok=True)
-        (log_dir / "commands.jsonl").write_text("".join(json.dumps(item) + "\n" for item in commands))
+        (log_dir / "commands.jsonl").write_text("".join(json.dumps(item) + "\n" for item in commands), encoding="utf-8", newline="\n")
     except OSError:
         pass
 
@@ -95,7 +95,7 @@ def mcp_call(tool, arguments):
     global child
     config = mcp[0]
     env = {**os.environ, **{x["name"]: x["value"] for x in config.get("env", [])}}
-    child = subprocess.Popen([config["command"], *config["args"]], env=env, stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True)
+    child = subprocess.Popen([config["command"], *config["args"]], env=env, stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True, encoding="utf-8")
     child.stdin.write(json.dumps({"jsonrpc": "2.0", "id": 1, "method": "tools/call",
                                   "params": {"name": tool, "arguments": arguments}}) + "\n")
     child.stdin.flush()
@@ -313,7 +313,7 @@ def inquiry_turn():
         # The root never checkpoints; the completed finish is refused with the
         # question, and the root honestly settles on assistance instead.
         first = native_tool_call("hey_my_buddy_finish_turn", outcome_for("completed"), call_id="call-finish-first")
-        (log_dir / "finish-refusal.json").write_text(first[1] or "")
+        (log_dir / "finish-refusal.json").write_text(first[1] or "", encoding="utf-8", newline="\n")
         native_tool_call("hey_my_buddy_finish_turn", outcome_for("assistance"), call_id="call-finish-final")
         settle_turn()
         return
@@ -438,7 +438,7 @@ def handle_message(message):
     methods.append(method)
     try:
         log_dir.mkdir(parents=True, exist_ok=True)
-        (log_dir / "methods.jsonl").write_text("".join(item + "\n" for item in methods))
+        (log_dir / "methods.jsonl").write_text("".join(item + "\n" for item in methods), encoding="utf-8", newline="\n")
     except OSError:
         pass
     if method == "runtime/capabilities":
@@ -453,7 +453,7 @@ def handle_message(message):
             if not state.exists() or case == "resume-missing":
                 send({"id": request_id, "error": {"code": -32004, "message": "Session not found"}})
                 return
-            stored = json.loads(state.read_text())
+            stored = json.loads(state.read_text(encoding="utf-8"))
             if stored["sessionId"] != params["sessionId"] or not mcp:
                 raise RuntimeError("native resume lost its exact identity or MCP reinjection")
             session_id, selection, permission_mode = stored["sessionId"], stored["selection"], stored["permissionMode"]
@@ -500,14 +500,14 @@ def handle_message(message):
         state.parent.mkdir(parents=True, exist_ok=True)
         if case == "mode-plan-required":
             assert plan_active, "resuming a plan session must reapply plan before input"
-        state.write_text(json.dumps({"sessionId": session_id, "selection": selection, "permissionMode": permission_mode}))
+        state.write_text(json.dumps({"sessionId": session_id, "selection": selection, "permissionMode": permission_mode}), encoding="utf-8", newline="\n")
         if case == "hang":
             time.sleep(120)
         event("turn.started", {"inputId": "wrong-input" if case == "wrong-input" else params["inputId"]})
         if case in ("session-content", "session-content-resume"):
             # Synthetic stream exercise, using the versioned 0.16.9 message
             # parts. This does not claim a captured native plan event.
-            sample = json.loads(Path(__file__).with_name("native-usage-zcode.json").read_text())
+            sample = json.loads(Path(__file__).with_name("native-usage-zcode.json").read_text(encoding="utf-8"))
             for item in sample["finalMessages"]["messages"]:
                 if item["info"]["role"] != "assistant":
                     continue
@@ -579,7 +579,7 @@ def handle_message(message):
             answers = interactive_attention()
             try:
                 log_dir.mkdir(parents=True, exist_ok=True)
-                (log_dir / "interaction-responses.json").write_text(json.dumps(answers))
+                (log_dir / "interaction-responses.json").write_text(json.dumps(answers), encoding="utf-8", newline="\n")
             except OSError:
                 pass
             if case == "attention-after-finish":

@@ -33,14 +33,14 @@ class WorkerPermissionTests(NativeRunCase):
                 self.assertEqual(native_run.native_evidence(result)["nativePolicy"], {"permissionMode": mode})
                 observed = [entry for entry in self.agent_log() if entry.get("event") == "home-check"][-1]
                 self.assertEqual(observed["permissionMode"], mode)
-                patch = json.loads((Path(request.private_state.invocation_root) / "dsh-launch-patch.json").read_text())
+                patch = json.loads((Path(request.private_state.invocation_root) / "dsh-launch-patch.json").read_text(encoding="utf-8"))
                 self.assertEqual([row["id"] for row in patch], ["session-persistence-jsonl", "storage-json"])
                 provenance = next(ref for ref in result.evidence_refs if ref.kind == "turn-provenance")
-                proof = json.loads(Path(provenance.location).read_text())
+                proof = json.loads(Path(provenance.location).read_text(encoding="utf-8"))
                 self.assertEqual(proof["nativeTool"], mount.finish_tool)
                 self.assertTrue(proof["receiptVerified"])
                 inquiry = next(ref for ref in result.evidence_refs if ref.kind == "inquiry-report")
-                self.assertEqual(json.loads(Path(inquiry.location).read_text())["deliveryMode"],
+                self.assertEqual(json.loads(Path(inquiry.location).read_text(encoding="utf-8"))["deliveryMode"],
                                  "cooperative-checkpoint")
 
     def test_presets_remain_requested_facts_when_initialize_fails_before_a_session_opens(self):
@@ -104,9 +104,9 @@ class WorkerPermissionTests(NativeRunCase):
                 outcome = result.value.parsed.value
                 self.assertEqual(outcome["disposition"], "attention")
                 self.assertEqual(outcome["request"]["attempted"], "the bounded fixture work")
-                attention = json.loads(Path(mount.bridge["attentionPath"]).read_text())["requests"][0]
+                attention = json.loads(Path(mount.bridge["attentionPath"]).read_text(encoding="utf-8"))["requests"][0]
                 ref = next(ref for ref in result.evidence_refs if ref.kind == "permission-decisions")
-                decision = json.loads(Path(ref.location).read_text())["records"][0]
+                decision = json.loads(Path(ref.location).read_text(encoding="utf-8"))["records"][0]
                 operation = attention["operation"]
                 self.assertEqual(operation, decision["operation"])
                 self.assertTrue(operation.startswith("escalate-write: path=/outside/"))

@@ -381,7 +381,7 @@ class RealCheckoutCancellationTests(RealWorkspaceTestCase, WorkflowTestCase):
         submitted = self.submit(board)
         self.controls[submitted["runId"]] = submitted["control"]
         first = self.claim(board)
-        (self.repo / "tracked.txt").write_text("meaningful uncommitted parent output\n")
+        (self.repo / "tracked.txt").write_text("meaningful uncommitted parent output\n", encoding="utf-8", newline="\n")
         self.finish_turn(board, first, disposition="assistance")
         view = board.call("workflow_get", {"runId": submitted["runId"]})
         approved = self.decide(board, view, view["activeRequest"]["requestId"], helpers=[{

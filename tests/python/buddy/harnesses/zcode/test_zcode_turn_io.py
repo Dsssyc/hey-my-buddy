@@ -31,10 +31,10 @@ class SharedTurnIOTests(ZcodeFixtureCase):
         context.agent_credential = "private-agent-token"
         turn_io.prepare_turn(context)
         self.assertEqual(hashlib.sha256(context.turn_input_file().read_bytes()).hexdigest(), turn_io.input_hash(context.turn_input))
-        self.assertNotIn(context.agent_credential, context.turn_input_file().read_text())
+        self.assertNotIn(context.agent_credential, context.turn_input_file().read_text(encoding="utf-8"))
         self.assertEqual(context.credential_file().stat().st_mode & 0o777, 0o600)
         self.assertNotIn("HMB_AGENT_CREDENTIAL_FILE", context.environment)
-        self.assertEqual(json.loads(context.credential_file().read_text())["stateDir"],
+        self.assertEqual(json.loads(context.credential_file().read_text(encoding="utf-8"))["stateDir"],
                          context.environment["HMB_STATE_DIR"])
         from hey_my_buddy.private_dirs import context_root
         self.assertEqual(context.credential_file().parent, context_root(context, "zcode"))
@@ -46,12 +46,12 @@ class SharedTurnIOTests(ZcodeFixtureCase):
         context.spec.update(adapter="dsh", harness="dsh")
         turn_io.prepare_turn(context)
         record = self.record(context)
-        context.turn_output_file().write_text(json.dumps(record))
+        context.turn_output_file().write_text(json.dumps(record), encoding="utf-8", newline="\n")
         self.assertIsNone(turn_io.read_turn(context, True, 0, DshAdapter.validate_turn_provenance)[1])
         self.assertIsNotNone(turn_io.read_turn(context, False, 0, DshAdapter.validate_turn_provenance)[1])
         for field, value in (("attemptId", "other"), ("inputSha256", "0" * 64), ("resumeMode", "native-session")):
             invalid = {**record, field: value}
-            context.turn_output_file().write_text(json.dumps(invalid))
+            context.turn_output_file().write_text(json.dumps(invalid), encoding="utf-8", newline="\n")
             self.assertIsNotNone(turn_io.read_turn(context, True, 0, DshAdapter.validate_turn_provenance)[1])
         # Adapter-specific evidence stays adapter-owned: each mutation changes
         # one real current field (verification, root session, order), and the
@@ -62,7 +62,7 @@ class SharedTurnIOTests(ZcodeFixtureCase):
             ({"settledOrdinal": 1}, "out of order"),
         ):
             invalid = {**record, "provenance": {**record["provenance"], **mutation}}
-            context.turn_output_file().write_text(json.dumps(invalid))
+            context.turn_output_file().write_text(json.dumps(invalid), encoding="utf-8", newline="\n")
             self.assertIn(expected, turn_io.read_turn(context, True, 0)[1] or "",
                           "the default path uses the real DSH validator")
             self.assertIn(expected, turn_io.read_turn(context, True, 0, DshAdapter.validate_turn_provenance)[1] or "")
@@ -70,11 +70,11 @@ class SharedTurnIOTests(ZcodeFixtureCase):
         zcode_context = self.context(index=2)
         zcode_context.spec.update(adapter="zcode", harness="zcode")
         turn_io.prepare_turn(zcode_context)
-        zcode_context.turn_output_file().write_text(json.dumps(self.record(zcode_context)))
+        zcode_context.turn_output_file().write_text(json.dumps(self.record(zcode_context)), encoding="utf-8", newline="\n")
         self.assertIn("ZCode", turn_io.read_turn(zcode_context, True, 0)[1])
         # The same common identity rules import the current zcode provenance.
         zcode_context.turn_output_file().write_text(
-            json.dumps(self.record(zcode_context, harness="zcode", session_id="zcode-session")))
+            json.dumps(self.record(zcode_context, harness="zcode", session_id="zcode-session")), encoding="utf-8", newline="\n")
         self.assertIsNone(turn_io.read_turn(zcode_context, True, 0)[1])
 
     def test_immutable_receipts_cannot_overwrite_previous_evidence(self):
@@ -82,7 +82,7 @@ class SharedTurnIOTests(ZcodeFixtureCase):
         turn_io.private_json(path, {"accepted": 1}, exclusive=True)
         with self.assertRaises(FileExistsError):
             turn_io.private_json(path, {"accepted": 2}, exclusive=True)
-        self.assertEqual(json.loads(path.read_text()), {"accepted": 1})
+        self.assertEqual(json.loads(path.read_text(encoding="utf-8")), {"accepted": 1})
 
     def test_request_suggestion_null_means_no_suggestion_and_other_values_stay_refused(self):
         # The incident's invalid argument is valid now: an explicit null

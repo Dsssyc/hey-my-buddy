@@ -71,7 +71,7 @@ class DeletionPreviewTests(workflow_fixtures.WorkflowTestCase):
         run = self.create(board)
         with board.store.db.read() as connection:
             manifest = deletion._collect(connection, 'run:' + run['runId']).manifests[0]
-        (Path(manifest['path']) / 'src/file.txt').write_text('sealed output\n')
+        (Path(manifest['path']) / 'src/file.txt').write_text('sealed output\n', encoding="utf-8", newline="\n")
         artifact = workspace.seal(board.directory, manifest, run['runId'], 'sealed-attempt')
         with board.store.db.write() as connection:
             for identifier in ('sealed-first-record', 'sealed-second-record'):

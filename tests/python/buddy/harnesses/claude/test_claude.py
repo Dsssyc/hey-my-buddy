@@ -137,7 +137,7 @@ class ClaudeAvailabilityTests(ClaudeFixtureCase):
 
 
     def fixture_state(self):
-        return json.loads((self.root / "fixture.json").read_text())
+        return json.loads((self.root / "fixture.json").read_text(encoding="utf-8"))
 
     def fixture_runs(self):
         return self.fixture_state()["runs"]
@@ -169,7 +169,7 @@ class ClaudeAdapterTests(ClaudeFixtureCase):
         return self.executor.collect(handle, context)
 
     def fixture_state(self):
-        return json.loads((self.root / "fixture.json").read_text())
+        return json.loads((self.root / "fixture.json").read_text(encoding="utf-8"))
 
     def control(self, context):
         """The role's private control binding of one attempt."""
@@ -437,7 +437,7 @@ class ClaudeAdapterTests(ClaudeFixtureCase):
 
     def test_a_completed_turn_does_not_publish_quota_failure(self):
         usage_fixture = FIXTURE.with_name("fake_claude_usage.py")
-        native = json.loads(FIXTURE.with_name("native-usage-claude.json").read_text())
+        native = json.loads(FIXTURE.with_name("native-usage-claude.json").read_text(encoding="utf-8"))
         context = self.context("usage-ok", model=native["modelId"])
         select_fixture(context.environment, self.root, "claude", usage_fixture)
         outcome = self.execute(context)
@@ -574,7 +574,7 @@ class ClaudeAdapterTests(ClaudeFixtureCase):
         self.assertIn("--no-session-persistence", argv)
         for flag in ("--safe-mode", "--strict-mcp-config", "--setting-sources"):
             self.assertNotIn(flag, argv)
-        mounted = json.loads(Path(flag_value(argv, "--mcp-config")).read_text())["mcpServers"]
+        mounted = json.loads(Path(flag_value(argv, "--mcp-config")).read_text(encoding="utf-8"))["mcpServers"]
         server_name, = mounted
         self.assertEqual(flag_value(argv, "--allowedTools").split(","),
                          [f"mcp__{server_name}__hey_my_buddy_checkpoint",
@@ -585,7 +585,7 @@ class ClaudeAdapterTests(ClaudeFixtureCase):
         self.assertEqual(flag_value(argv, "--json-schema"), turn_io.canonical_json(worker_format("claude").schema))
         control = self.control(context)
         settings_path = Path(control["nativeRoot"], "settings.json")
-        settings = json.loads(settings_path.read_text())
+        settings = json.loads(settings_path.read_text(encoding="utf-8"))
         self.assertEqual(set(settings), {"sandbox", "permissions"})
         self.assertEqual(settings["permissions"], {"allow": ["Bash"]})
         self.assertTrue(settings["sandbox"]["enabled"])

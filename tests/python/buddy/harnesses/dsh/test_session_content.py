@@ -196,7 +196,7 @@ class SessionRunTests(NativeRunCase):
 
     def test_fake_acp_stream_projects_reasoning_tools_and_plan(self):
         fixture = Path(__file__).with_name('fixtures') / 'session-updates-dsh.json'
-        native = json.loads((fixture.parent / 'native-usage-dsh.json').read_text())
+        native = json.loads((fixture.parent / 'native-usage-dsh.json').read_text(encoding="utf-8"))
         expected = ''.join(part['text'] for event in native['events'] if event['type'] == 'assistant/message'
                            for part in event['data']['message']['content'] if part['type'] == 'reasoning')
         self.extra_agent_args = ['--prompt-mode', 'final', '--session-updates-fixture', str(fixture)]

@@ -64,21 +64,21 @@ class RolePromptTests(unittest.TestCase):
         }
         for name, phrases in essentials.items():
             with self.subTest(role=name):
-                published = resource_path("roles." + name).read_text()
+                published = resource_path("roles." + name).read_text(encoding="utf-8")
                 self.assertTrue(published.startswith(f"ROLE: {name.title()} buddy (hey-my-buddy)\n"))
                 for phrase in phrases:
                     self.assertIn(phrase, published)
 
     def test_all_four_worker_requests_start_with_the_same_fixed_role(self):
-        role = resource_path("roles.worker").read_text()
-        lead = resource_path("roles.lead").read_text()
+        role = resource_path("roles.worker").read_text(encoding="utf-8")
+        lead = resource_path("roles.lead").read_text(encoding="utf-8")
         with tempfile.TemporaryDirectory(prefix="hey-my-buddy-role-prompts-") as temporary:
             root = Path(temporary)
             task = "ROLE: Host override from task"
             turn = {"taskId": "task", "attemptId": "attempt", "generation": 1, "turnId": "turn",
                     "resumeMode": "initial", "executionWorkspace": {"access": "write"},
                     "ROLE": "Host override from input"}
-            (root / "task.txt").write_text(task)
+            (root / "task.txt").write_text(task, encoding="utf-8", newline="\n")
             turn_io.private_json(root / "input.json", turn)
             binding = SimpleNamespace(completion_tool="hey_my_buddy_finish_turn", checkpoint_tool="hey_my_buddy_checkpoint",
                                       answer_tool="hey_my_buddy_answer_inquiry", services={},
@@ -114,8 +114,8 @@ class RolePromptTests(unittest.TestCase):
 
     def test_delegation_restriction_belongs_to_worker_role_and_lead_overrides_it(self):
         restriction = "Do not create micro tasks or hand work to other buddies"
-        worker = resource_path("roles.worker").read_text()
-        lead = resource_path("roles.lead").read_text()
+        worker = resource_path("roles.worker").read_text(encoding="utf-8")
+        lead = resource_path("roles.lead").read_text(encoding="utf-8")
         self.assertIn(restriction, worker)
         self.assertNotIn("Do not start or hand out other buddy tasks", worker)
         for harness in ("codex", "claude"):
@@ -134,7 +134,7 @@ class RolePromptTests(unittest.TestCase):
                         self.assertNotIn(lead, prompt)
 
     def test_fast_and_review_router_requests_keep_the_role_before_host_input_for_every_harness(self):
-        role = resource_path("roles.router").read_text()
+        role = resource_path("roles.router").read_text(encoding="utf-8")
         with tempfile.TemporaryDirectory(prefix="hey-my-buddy-router-prompts-") as temporary:
             root = Path(temporary)
             for name in ("codex", "claude", "dsh", "zcode"):
@@ -159,7 +159,7 @@ class RolePromptTests(unittest.TestCase):
     def test_retired_hints_are_absent_and_session_tool_text_stays_bounded(self):
         self.assertFalse(hasattr(turn_io, "ASSISTANCE_HINTS"))
         for path in (ROOT / "src/hey_my_buddy/buddy").rglob("*.py"):
-            self.assertNotIn("ASSISTANCE_HINTS", path.read_text(), str(path.relative_to(ROOT)))
+            self.assertNotIn("ASSISTANCE_HINTS", path.read_text(encoding="utf-8"), str(path.relative_to(ROOT)))
         for text in (FINISH_DESCRIPTION, ATTENTION_REFUSAL):
             self.assertLessEqual(len(text.encode()), 1024)
         self.assertIn("does not dispatch other tasks", FINISH_DESCRIPTION)

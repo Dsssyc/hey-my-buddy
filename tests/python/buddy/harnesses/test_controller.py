@@ -97,7 +97,7 @@ def controller_log_close_failure(*, log="stdout", receipt=None,
         ready = Path(state["paths"]["stdout"]).parent / ("fixture-ready-" + str(time.monotonic_ns()))
         source = ("import os,time\nfrom pathlib import Path\n"
                   + (f"os.write(1, {receipt!r})\n" if receipt is not None else "")
-                  + f"Path({str(ready)!r}).write_text('ready')\n"
+                  + f"Path({str(ready)!r}).write_text('ready', encoding='utf-8', newline='\\n')\n"
                   + ("" if exit_after_receipt else "time.sleep(60)\n"))
         state["process"] = original_spawn([sys.executable, "-c", source], *args[1:], **kwargs)
         deadline = time.monotonic() + 5
@@ -238,8 +238,8 @@ class LaunchControllerTests(unittest.TestCase):
                                    log_paths=self.log_paths, timeout_seconds=30)
         self.addCleanup(lambda: handle.terminate(grace_seconds=0.2) if handle.group_alive() else None)
         self.assertIsNotNone(handle.wait(10))
-        self.assertEqual(Path(self.log_paths["stdout"]).read_text().strip(), "controller-out")
-        self.assertEqual(Path(self.log_paths["stderr"]).read_text(), "")
+        self.assertEqual(Path(self.log_paths["stdout"]).read_text(encoding="utf-8").strip(), "controller-out")
+        self.assertEqual(Path(self.log_paths["stderr"]).read_text(encoding="utf-8"), "")
         self.assertGreater(handle.deadline, time.monotonic())
         self.assertFalse(math.isinf(handle.deadline))
         self.assertTrue(handle.shutdown_confirmed())
@@ -608,7 +608,7 @@ class CollectControllerTests(unittest.TestCase):
 
     def test_collection_carries_payload_exit_code_and_stop_together(self):
         stdout = self.root / "stdout"
-        stdout.write_text(json.dumps({"status": "cancelled", "processState": {"shutdownConfirmed": True}}))
+        stdout.write_text(json.dumps({"status": "cancelled", "processState": {"shutdownConfirmed": True}}), encoding="utf-8", newline="\n")
         handle = SimpleNamespace(log_paths={"stdout": str(stdout)}, process=FakeProcess(-15),
                                  shutdown_confirmed=lambda: True)
         collection = collect_controller(handle, read=read_strict_result, stop=lambda payload, owned: stop_confirmed(payload, owned.shutdown_confirmed))

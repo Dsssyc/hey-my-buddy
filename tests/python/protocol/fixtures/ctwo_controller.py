@@ -103,7 +103,7 @@ def exchange(process, value, *, timeout=5):
 
 def write_fact(path, value):
     fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-    with os.fdopen(fd, "w") as stream:
+    with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as stream:
         json.dump(value, stream, sort_keys=True)
         stream.flush()
         os.fsync(stream.fileno())
@@ -115,7 +115,7 @@ def native(root):
     try:
         for line in sys.stdin:
             request = json.loads(line)
-            with (root / "native-journal.jsonl").open("a") as stream:
+            with (root / "native-journal.jsonl").open("a", encoding="utf-8", newline="\n") as stream:
                 stream.write(canonical_json(request) + "\n")
                 stream.flush()
                 os.fsync(stream.fileno())
@@ -141,7 +141,7 @@ def simulated_run(module, request, *, services, **options):
     write_fact(root / "fixture-request.json", request.to_payload())
     endpoint = services.live
     process = owned_popen([sys.executable, str(SELF), "native", "--root", str(root)],
-        stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True, start_new_session=True)
+        stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True, encoding="utf-8", start_new_session=True)
     owned = ProcessHandle(process, own_group=True, log_paths={})
     try:
         endpoint.publish_observation(LiveObservation(ready=True, session_id="simulated-native",
@@ -180,7 +180,7 @@ class SimulatedExecutor(WorkerRunExecutor):
 
     def collect(self, handle, context):
         root = Path(handle.role_run_control["privateRoot"])
-        native_stop = json.loads((root / "native-stopped.json").read_text())
+        native_stop = json.loads((root / "native-stopped.json").read_text(encoding="utf-8"))
         stopped = native_stop["eofObserved"] is True and handle.shutdown_confirmed() is True
         report = AdapterOutcome(status="failed", result={"modelStarted": False,
             "simulatedNativeStop": native_stop,
@@ -226,7 +226,7 @@ def service(root):
             if command["op"] == "status":
                 handle = handles[0] if handles else None
                 materials = list((root / "state").glob("harnesses/dsh/micro-tasks/*/attempts/*/execution-live.json"))
-                material = json.loads(materials[0].read_text()) if materials else None
+                material = json.loads(materials[0].read_text(encoding="utf-8")) if materials else None
                 view = (daemon.store.task_get({"runId": handle.execution_binding["taskId"]})["task"]
                         if handle else None)
                 bound = bool(view and daemon.live_registry.channel_for(view))
@@ -236,7 +236,7 @@ def service(root):
                       "executionPid": handle.pid if handle else None,
                       "running": handle is not None and handle.process.poll() is None,
                       "bound": bound, "nativeReady": native_ready,
-                      "reports": [json.loads(path.read_text()) for path in
+                      "reports": [json.loads(path.read_text(encoding="utf-8")) for path in
                                   (root / "state").glob("attempts/*/*/fixture-report.json")],
                       "errors": []})
             elif command["op"] in ("finish", "kill-execution"):

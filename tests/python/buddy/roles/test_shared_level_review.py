@@ -143,7 +143,7 @@ class _ReviewCases:
             self.assertEqual(handle.request.permission, "read")
             self.assertTrue(handle.shutdown_confirmed())
             frozen = handle.router_input[1]
-            (frozen / "changed.txt").write_text("tampered after the native turn")
+            (frozen / "changed.txt").write_text("tampered after the native turn", encoding="utf-8", newline="\n")
             outcome = adapter.collect(handle, context)
         self.assertEqual(outcome.status, "failed")
         self.assertEqual(outcome.result["code"], "router-input-changed")
@@ -178,17 +178,17 @@ class ZcodeSharedLevelReviewTests(_ReviewCases, ZcodeNativeCase):
     def prepare_fixture(self, *, correction=False):
         # This copy of the offline fake app server gives the Router's own
         # schema-shaped answer while retaining its native plan-mode assertions.
-        source = self.fake.read_text()
+        source = self.fake.read_text(encoding="utf-8")
         source = source.replace('{"choice":"a"}', ANSWER)
         source = source.replace("elif case in ('write-final', 'write-post-close'):",
                                 "elif case in ('write-final', 'write-post-close', 'correct'):")
         source = source.replace("if method == 'session/send':\n        prompt_sent = True\n",
                                 "if method == 'session/send':\n"
-                                "        with Path(__file__).with_name('review-prompts.jsonl').open('a') as capture:\n"
+                                "        with Path(__file__).with_name('review-prompts.jsonl').open('a', encoding='utf-8', newline='\\n') as capture:\n"
                                 "            capture.write(json.dumps(p['content']) + '\\n')\n"
                                 "        prompt_sent = True\n")
-        self.fake.write_text(source)
+        self.fake.write_text(source, encoding="utf-8", newline="\n")
         os.environ["HMB_ZCODE_TEST_CASE"] = "correct" if correction else "write-final"
 
     def native_prompts(self):
-        return [json.loads(line) for line in self.fake.with_name("review-prompts.jsonl").read_text().splitlines()]
+        return [json.loads(line) for line in self.fake.with_name("review-prompts.jsonl").read_text(encoding="utf-8").splitlines()]

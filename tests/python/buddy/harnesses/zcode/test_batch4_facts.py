@@ -179,7 +179,7 @@ class BoundaryAndDrainTests(unittest.TestCase):
                                              stderr_path=invocation / "missing-stderr.log",
                                              state=native_run._RunState(), facts=facts, record=None)
             ref = next(item for item in refs if item.kind == "native-run-facts")
-            retained = json.loads(Path(ref.location).read_text())["unknownEvents"]
+            retained = json.loads(Path(ref.location).read_text(encoding="utf-8"))["unknownEvents"]
         shared = native_run._shared_unknown_events(facts)
         self.assertEqual(len(retained["countsByType"]), MAX_UNKNOWN_EVENT_TYPES)
         self.assertEqual(retained["countsByType"], dict(shared.unknown_events.counts_by_type))
@@ -238,7 +238,7 @@ class NativeShapeRoundTests(NativeRunCase):
                          {"code": "catalog.model-shape-unreadable", "params": {}})
 
     def execute_shape(self, rewrite):
-        self.fake.write_text(rewrite(self.fake.read_text()))
+        self.fake.write_text(rewrite(self.fake.read_text(encoding="utf-8")), encoding="utf-8", newline="\n")
         os.environ["HMB_ZCODE_TEST_CASE"] = "ok"
         seen = []
         def observer(facts):
@@ -248,7 +248,7 @@ class NativeShapeRoundTests(NativeRunCase):
                                 services=None, cancelled=lambda: False)
         self.assertEqual(result.end.status, "ok", result.end.message)
         ref = next(ref for ref in result.evidence_refs if ref.kind == "native-run-facts")
-        retained = json.loads(Path(ref.location).read_text())["unknownEvents"]["countsByType"]
+        retained = json.loads(Path(ref.location).read_text(encoding="utf-8"))["unknownEvents"]["countsByType"]
         self.assertTrue(any(f["unknownEvents"]["total"] for f in seen))
         # The shared outlet carries the same counts the evidence file retains.
         shared = result.native_evidence.unknown_events
@@ -280,9 +280,9 @@ class NativeShapeRoundTests(NativeRunCase):
         self.assertIn("event-payload-unrecognized", facts)
 
     def test_confirmed_readback_mismatch_is_rejected_before_model_start(self):
-        self.fake.write_text(self.fake.read_text().replace(
+        self.fake.write_text(self.fake.read_text(encoding="utf-8").replace(
             "'providerId':provider,'modelId':'fixture-model',\n          'options':{'reasoningLevel':'low'}",
-            "'providerId':provider,'modelId':'observed-model',\n          'options':{'reasoningLevel':'low'}"))
+            "'providerId':provider,'modelId':'observed-model',\n          'options':{'reasoningLevel':'low'}"), encoding="utf-8", newline="\n")
         os.environ["HMB_ZCODE_TEST_CASE"] = "ok"
         original = native_run.NativeConnection.call
         calls = []
@@ -305,11 +305,11 @@ class NativeShapeRoundTests(NativeRunCase):
         self.assertIn("final-answer-unrecognized", facts)
 
     def test_admission_session_mismatch_and_real_refusal_still_reject(self):
-        source = self.fake.read_text()
+        source = self.fake.read_text(encoding="utf-8")
         for result, code in (("{'accepted':True,'sessionId':'foreign'}", "wrong-native-session"),
                              ("{'accepted':False,'sessionId':f's-{session}'}", "native-admission-failed")):
             with self.subTest(code=code):
-                self.fake.write_text(source.replace("{'accepted':True,'sessionId':f's-{session}'}", result))
+                self.fake.write_text(source.replace("{'accepted':True,'sessionId':f's-{session}'}", result), encoding="utf-8", newline="\n")
                 os.environ["HMB_ZCODE_TEST_CASE"] = "ok"
                 outcome = native_run.run(self.fast_request("Return only one JSON value matching this schema: {}"),
                     observer=lambda _facts: RunFeedback(action="continue"), services=None, cancelled=lambda: False)

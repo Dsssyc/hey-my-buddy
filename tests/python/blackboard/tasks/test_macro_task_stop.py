@@ -92,7 +92,7 @@ class MacroTaskStopTests(WorkflowTestCase, ConsoleTestCase):
             dump='\n'.join(connection.iterdump())
         self.assertNotIn(bearer,dump)
         self.assertIn("'console','" + snapshot['consoleSession']['id'] + "'", dump)
-        self.assertNotIn(bearer,(board.directory/'console-sessions.json').read_text())
+        self.assertNotIn(bearer,(board.directory/'console-sessions.json').read_text(encoding="utf-8"))
 
     def test_standalone_stop_preserves_unknown_shutdown(self):
         board = self.board()

@@ -49,11 +49,11 @@ class StateBoundaryTests(unittest.TestCase):
         source = Path(transport.__file__).parents[1]
         for name in ("protocol/rpc_config.py", "buddy/runtime/execution.py",
                      "buddy/harnesses/c_two_live.py"):
-            tree = ast.parse((source / name).read_text())
+            tree = ast.parse((source / name).read_text(encoding="utf-8"))
             for node in ast.walk(tree):
                 if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute):
                     self.assertNotIn(node.func.attr, ("resolve", "absolute", "resolve_state_dir"), name)
-            self.assertNotIn("PRIVATE_STATE_REQUIRED", (source / name).read_text())
+            self.assertNotIn("PRIVATE_STATE_REQUIRED", (source / name).read_text(encoding="utf-8"))
 
     def test_internal_cli_defaults_share_selected_path_without_public_resolution(self):
         from hey_my_buddy.cli import blocking, console_cli
@@ -148,7 +148,7 @@ class StateBoundaryTests(unittest.TestCase):
                                   ("buddy.roles.run_controller", ["--control", str(self.root / "absent-control")])):
             with self.subTest(module=module):
                 child = subprocess.Popen([sys.executable, "-m", "hey_my_buddy." + module, *arguments],
-                                         env=environment, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+                                         env=environment, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, encoding="utf-8")
                 stdout, stderr = child.communicate(timeout=15)
                 self.assertEqual(child.returncode, 2, (stdout, stderr))
                 self.assertIn("the following arguments are required: --startup" if module == "buddy.runtime.execution"

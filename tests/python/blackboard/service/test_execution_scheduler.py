@@ -216,7 +216,7 @@ class ExecutionObservationTests(unittest.TestCase):
             handle.execution_binding = {"taskId": "task", "attemptId": "attempt", "generation": 1}
             handle.budget_path = Path(root) / "execution-budget.json"
             handle.budget_path.write_text(json.dumps({"binding": handle.execution_binding,
-                                                       "deadline": time.monotonic() - 1}))
+                                                       "deadline": time.monotonic() - 1}), encoding="utf-8", newline="\n")
             client = Mock()
             claim = {"attempt": {"attemptId": "attempt"}}
             service.store.record_execution_deadline.return_value = {
@@ -417,7 +417,7 @@ class ExecutionObservationTests(unittest.TestCase):
                 scheduler = ExecutionScheduler(Mock(store=store), live_registry=self.live_registry)
                 handle = Mock(execution_binding={"taskId": "task", "attemptId": "attempt", "generation": 1})
                 handle.budget_path = Path(root) / "budget.json"
-                handle.budget_path.write_text(material)
+                handle.budget_path.write_text(material, encoding="utf-8", newline="\n")
                 client = Mock()
                 sent, forced_at = scheduler._apply_stop({}, {"attempt": {"attemptId": "attempt"}},
                                                        handle, client, None, None)

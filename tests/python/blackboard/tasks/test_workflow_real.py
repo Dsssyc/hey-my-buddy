@@ -64,9 +64,9 @@ class RealWorkspaceTestCase(BoardTestCase):
         self.git("init", "-q", "-b", "main")
         self.git("config", "user.email", "buddy@example.invalid")
         self.git("config", "user.name", "Buddy Test")
-        (self.repo / "tracked.txt").write_text("base\n")
+        (self.repo / "tracked.txt").write_text("base\n", encoding="utf-8", newline="\n")
         (self.repo / "src").mkdir()
-        (self.repo / "src" / "feature.py").write_text("value = 1\n")
+        (self.repo / "src" / "feature.py").write_text("value = 1\n", encoding="utf-8", newline="\n")
         self.git("add", ".")
         self.git("commit", "-q", "-m", "base")
 
@@ -76,7 +76,7 @@ class RealWorkspaceTestCase(BoardTestCase):
             cwd=self.repo,
             env={**os.environ, **GIT_ENV},
             capture_output=True,
-            text=True,
+            text=True, encoding="utf-8",
         )
         if check and completed.returncode != 0:
             raise AssertionError(f"git {' '.join(arguments)} failed: {completed.stderr}")
@@ -123,10 +123,10 @@ class RealWorkspaceTestCase(BoardTestCase):
 
 class DirtyInputTests(RealWorkspaceTestCase):
     def test_submit_transports_dirty_input_without_changing_the_source_index(self):
-        (self.repo / "tracked.txt").write_text("staged change\n")
+        (self.repo / "tracked.txt").write_text("staged change\n", encoding="utf-8", newline="\n")
         self.git("add", "tracked.txt")
-        (self.repo / "src" / "feature.py").write_text("value = 2\n")
-        (self.repo / "untracked.txt").write_text("new file\n")
+        (self.repo / "src" / "feature.py").write_text("value = 2\n", encoding="utf-8", newline="\n")
+        (self.repo / "untracked.txt").write_text("new file\n", encoding="utf-8", newline="\n")
         before = self.state()
         board = self.board()
         submitted = self.submit(board)
@@ -248,7 +248,7 @@ class RealAdapterTests(RealWorkspaceTestCase):
         command = [sys.executable, str(FAKE_AGENT), "--log",
                    str(self.directory / f"fake-agent-{index}.log"), *extra]
         path = self.directory / f"harness-record-{index}.json"
-        path.write_text(json.dumps({"dsh": {"status": "ready", "command": command}}))
+        path.write_text(json.dumps({"dsh": {"status": "ready", "command": command}}), encoding="utf-8", newline="\n")
         return path
 
     def _micro_task_record(self, index: int, run_id: str, *extra: str) -> Path:
@@ -331,7 +331,7 @@ class RealAdapterTests(RealWorkspaceTestCase):
         finally:
             workspace.verify = real_verify
         self.assertEqual(verified, [False])
-        text = context.turn_input_file().read_text()
+        text = context.turn_input_file().read_text(encoding="utf-8")
         self.assertEqual(text, json.dumps(context.turn_input, ensure_ascii=False, sort_keys=True, separators=(",", ":")))
         self.assertEqual(
             hashlib.sha256(text.encode("utf-8")).hexdigest(),
@@ -351,7 +351,7 @@ class RealAdapterTests(RealWorkspaceTestCase):
         record, error = import_turn(True, 1)
         self.assertIsNone(record)
         self.assertIn("exit zero", error or "")
-        context.turn_output_file().write_text(json.dumps({"version": 1}))
+        context.turn_output_file().write_text(json.dumps({"version": 1}), encoding="utf-8", newline="\n")
         record, error = import_turn(True, 0)
         self.assertIsNone(record)
         self.assertIn("turn record", error or "")
@@ -367,7 +367,7 @@ class RealAdapterTests(RealWorkspaceTestCase):
                      "decisions": [], "artifacts": [], "request": None},
             session_id="sess-1", prompt_sha256=sha256_text("mock turn prompt"),
         )
-        context.turn_output_file().write_text(json.dumps(complete))
+        context.turn_output_file().write_text(json.dumps(complete), encoding="utf-8", newline="\n")
         record, error = import_turn(True, 0)
         self.assertIsNone(error)
         self.assertEqual(record["turnId"], "turn-1")
@@ -447,7 +447,7 @@ class TransferredCheckoutContinuationTests(RealWorkspaceTestCase):
     def test_parent_continuation_bases_on_the_helpers_sealed_commit(self):
         board = self.board()
         pass  # Admission is owned by the service.
-        (self.repo / "dirty.txt").write_text("parent dirty input\n")
+        (self.repo / "dirty.txt").write_text("parent dirty input\n", encoding="utf-8", newline="\n")
         submitted = self.submit(board)
         run_id = submitted["runId"]
 
@@ -489,7 +489,7 @@ class TransferredCheckoutContinuationTests(RealWorkspaceTestCase):
         helper_manifest = helper_claim["claim"]["turn"]["input"]["executionWorkspace"]
         self.assertEqual(helper_manifest["checkoutId"], parent_manifest["checkoutId"])
         # The helper writes a new file and seals its output on the shared checkout.
-        (self.repo / "helper-new.txt").write_text("helper output\n")
+        (self.repo / "helper-new.txt").write_text("helper output\n", encoding="utf-8", newline="\n")
         helper_seal = workspace.seal(
             self.directory, helper_manifest, child, helper_claim["claim"]["attempt"]["attemptId"]
         )
@@ -507,7 +507,7 @@ class TransferredCheckoutContinuationTests(RealWorkspaceTestCase):
         self.assertEqual(effective["inputTree"], helper_seal["tree"])
         verified = workspace.verify(effective, require_unchanged=True)
         self.assertTrue(verified["valid"])
-        (self.repo / "parent-integration.txt").write_text("integrated\n")
+        (self.repo / "parent-integration.txt").write_text("integrated\n", encoding="utf-8", newline="\n")
         final_seal = workspace.seal(
             self.directory, effective, run_id, parent_second["claim"]["attempt"]["attemptId"]
         )
@@ -555,7 +555,7 @@ class PinnedHelperHandoffTests(RealWorkspaceTestCase):
     def test_helper_refs_are_frozen_into_the_parent_continuation(self):
         board = self.board()
         pass  # Admission is owned by the service.
-        (self.repo / "dirty.txt").write_text("dirty parent input\n")
+        (self.repo / "dirty.txt").write_text("dirty parent input\n", encoding="utf-8", newline="\n")
         submitted = self.submit(board)
         run_id = submitted["runId"]
         parent_claim = admit_board(board, {'workerId': 'w1', 'claimRequestId': 'claim-1', 'nonce': 'n' * 16})
@@ -594,7 +594,7 @@ class PinnedHelperHandoffTests(RealWorkspaceTestCase):
             claim = admit_board(board, {'workerId': 'w1', 'claimRequestId': f'claim-h{index}', 'nonce': nonce, 'runId': child})
             manifest = claim["claim"]["turn"]["input"]["executionWorkspace"]
             manifests[child] = manifest
-            (Path(manifest["path"]) / f"helper-{index}.txt").write_text(f"helper {index} output\n")
+            (Path(manifest["path"]) / f"helper-{index}.txt").write_text(f"helper {index} output\n", encoding="utf-8", newline="\n")
             seal = workspace.seal(self.directory, manifest, child, claim["claim"]["attempt"]["attemptId"])
             seals[child] = seal
             self._finish(board, child, claim, "completed", seal, f"sess-h{index}", nonce)
@@ -623,7 +623,7 @@ class PinnedHelperHandoffTests(RealWorkspaceTestCase):
         self.assertEqual(frozen, {child: seal["commit"] for child, seal in seals.items()})
         # Editing a helper worktree afterwards cannot rewrite what the parent was given.
         for entry in outcomes.values():
-            Path(entry["workspace"]["path"], "later.txt").write_text("later edit\n")
+            Path(entry["workspace"]["path"], "later.txt").write_text("later edit\n", encoding="utf-8", newline="\n")
         again = board.call("workflow_get", {"runId": run_id, "includeAudit": True})
         frozen_again = {
             row["taskId"]: row["artifact"]["outputCommit"]
@@ -682,7 +682,7 @@ class ContinuationCheckoutReuseTests(TransferredCheckoutContinuationTests):
     def test_sequential_helper_and_parent_edit_keep_one_checkout_and_latest_baseline(self):
         board = self.board()
         pass  # Admission is owned by the service.
-        (self.repo / "dirty.txt").write_text("dirty parent input\n")
+        (self.repo / "dirty.txt").write_text("dirty parent input\n", encoding="utf-8", newline="\n")
         submitted = self.submit(board)
         run_id = submitted["runId"]
 
@@ -719,7 +719,7 @@ class ContinuationCheckoutReuseTests(TransferredCheckoutContinuationTests):
         helper = admit_board(board, {'workerId': 'w1', 'claimRequestId': 'r-c2', 'nonce': 'm' * 16, 'runId': child})
         helper_manifest = helper["claim"]["turn"]["input"]["executionWorkspace"]
         self.assertEqual(helper_manifest["path"], manifest_one["path"])
-        (self.repo / "helper-new.txt").write_text("helper output\n")
+        (self.repo / "helper-new.txt").write_text("helper output\n", encoding="utf-8", newline="\n")
         seal_two = workspace.seal(
             self.directory, helper_manifest, child, helper["claim"]["attempt"]["attemptId"]
         )
@@ -730,7 +730,7 @@ class ContinuationCheckoutReuseTests(TransferredCheckoutContinuationTests):
         manifest_two = second["claim"]["turn"]["input"]["executionWorkspace"]
         self.assertEqual(manifest_two["path"], manifest_one["path"])
         self.assertEqual(manifest_two["baseCommit"], seal_two["commit"])
-        (self.repo / "parent-turn2.txt").write_text("parent integration\n")
+        (self.repo / "parent-turn2.txt").write_text("parent integration\n", encoding="utf-8", newline="\n")
         seal_three = workspace.seal(
             self.directory, manifest_two, run_id, second["claim"]["attempt"]["attemptId"]
         )

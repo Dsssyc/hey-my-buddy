@@ -78,7 +78,7 @@ class InterruptedContinuationTests(WorkflowTestCase):
                       "nativeTurnStatus": "interrupted", "eventSeq": 3, "bindingSaved": True}
         root = attempt_root(self.directory, "codex", submitted["runId"], attempt_id)
         root.mkdir(parents=True)
-        (root / "native-checkpoint.json").write_text(json.dumps(checkpoint))
+        (root / "native-checkpoint.json").write_text(json.dumps(checkpoint), encoding="utf-8", newline="\n")
         binding_root = native_root(self.directory, "codex", submitted["runId"])
         binding_root.mkdir(parents=True)
         binding = {"taskId": submitted["runId"], "threadId": session_id,
@@ -87,7 +87,7 @@ class InterruptedContinuationTests(WorkflowTestCase):
                              for key in ("provider", "model", "effort")},
                    "lastTurnId": native_turn_id, "lastAttemptId": attempt_id,
                    "lastInputSha256": checkpoint["inputSha256"]}
-        (binding_root / (hashlib.sha256(session_id.encode()).hexdigest() + ".json")).write_text(json.dumps(binding))
+        (binding_root / (hashlib.sha256(session_id.encode()).hexdigest() + ".json")).write_text(json.dumps(binding), encoding="utf-8", newline="\n")
         native = board.store.workflow.interrupted_native_facts(attempt_id)
         self.assertEqual(native["nativeCheckpoint"], checkpoint)
         self.interrupted(board, first)
@@ -114,7 +114,7 @@ class InterruptedContinuationTests(WorkflowTestCase):
             "inputSha256": input_hash(document), "sessionId": "unfinished", "nativeTurnId": "turn",
             "nativeTurnStarted": True, "nativeTurnStatus": "incomplete", "eventSeq": 3,
             "bindingSaved": False,
-        }))
+        }), encoding="utf-8", newline="\n")
         self.assertEqual(board.store.workflow.interrupted_native_facts(document["attemptId"]), {})
         self.interrupted(board, first)
         failed = board.call("workflow_get", {"runId": submitted["runId"]})
@@ -139,17 +139,17 @@ class InterruptedContinuationTests(WorkflowTestCase):
             {"type": "turn/start", "seq": 1, "data": {"turn": 1}},
             {"type": "turn/end", "seq": 2, "data": {"turn": 1, "reason": {"kind": "error"}}},
         ]
-        record_path.write_text("".join(json.dumps(item) + "\n" for item in events))
+        record_path.write_text("".join(json.dumps(item) + "\n" for item in events), encoding="utf-8", newline="\n")
         record = session_record_facts(sessions, [session_id])
         self.assertTrue(record["turnEndSeen"])
         attempt_dir = attempt_root(self.directory, "dsh", submitted["runId"], document["attemptId"])
         attempt_dir.mkdir(parents=True)
-        (attempt_dir / "dsh-session-record.json").write_text(json.dumps(record))
+        (attempt_dir / "dsh-session-record.json").write_text(json.dumps(record), encoding="utf-8", newline="\n")
         binding = {"taskId": submitted["runId"], "sessionId": session_id,
                    "cwd": document["executionWorkspace"]["path"],
                    "buddy": {key: document["context"]["buddy"][key]
                              for key in ("provider", "model", "effort")}}
-        (root / (hashlib.sha256(session_id.encode()).hexdigest() + ".json")).write_text(json.dumps(binding))
+        (root / (hashlib.sha256(session_id.encode()).hexdigest() + ".json")).write_text(json.dumps(binding), encoding="utf-8", newline="\n")
         native = board.store.workflow.interrupted_native_facts(document["attemptId"])
         self.assertEqual(native["nativeSession"]["sessionId"], session_id)
         self.interrupted(board, first)
@@ -179,14 +179,14 @@ class InterruptedContinuationTests(WorkflowTestCase):
             {"type": "turn/end", "seq": 1, "data": {"turn": 1, "reason": {"kind": "completed"}}},
             {"type": "turn/start", "seq": 2, "data": {"turn": 2}},
         ]
-        record_path.write_text("".join(json.dumps(item) + "\n" for item in events))
+        record_path.write_text("".join(json.dumps(item) + "\n" for item in events), encoding="utf-8", newline="\n")
         record = session_record_facts(sessions, [session_id])
         self.assertIsNone(record)
         attempt_dir = attempt_root(self.directory, "dsh", submitted["runId"], document["attemptId"])
         attempt_dir.mkdir(parents=True)
         (attempt_dir / "dsh-session-record.json").write_text(json.dumps({
             "sessions": [session_id], "turnEndSeen": False, "truncated": False,
-        }))
+        }), encoding="utf-8", newline="\n")
         self.assertEqual(board.store.workflow.interrupted_native_facts(document["attemptId"]), {})
         self.interrupted(board, first)
         failed = board.call("workflow_get", {"runId": submitted["runId"]})

@@ -10,7 +10,7 @@ def send(message):
     params = message.get("params") or {}
     if message.get("method") == "turn/started":
         thread = mock_codex.read_state()["threads"][params["threadId"]]
-        (Path(thread["cwd"]) / "tracked.txt").write_text("Codex partial output before native quota failure\n")
+        (Path(thread["cwd"]) / "tracked.txt").write_text("Codex partial output before native quota failure\n", encoding="utf-8", newline="\n")
     if message.get("method") == "item/completed" and (params.get("item") or {}).get("type") == "agentMessage":
         params["item"]["text"] = "The Codex fixture saved the edit; quota stopped validation."
     original_send(message)

@@ -159,9 +159,9 @@ class ScopeRecoveryTestCase(RealWorkspaceTestCase):
         self.assertIsNotNone(claimed["claim"], claimed)
         manifest = claimed["claim"]["turn"]["input"]["executionWorkspace"]
         checkout = Path(manifest["path"])
-        (checkout / "src" / "feature.py").write_text("value = 2\n")
-        (checkout / "tracked.txt").write_text("outside the authorized scope\n")
-        (checkout / "outside.txt").write_text("untracked outside\n")
+        (checkout / "src" / "feature.py").write_text("value = 2\n", encoding="utf-8", newline="\n")
+        (checkout / "tracked.txt").write_text("outside the authorized scope\n", encoding="utf-8", newline="\n")
+        (checkout / "outside.txt").write_text("untracked outside\n", encoding="utf-8", newline="\n")
         error = None
         try:
             workspace_module.seal(self.directory, manifest, run_id, claimed["claim"]["attempt"]["attemptId"])
@@ -181,9 +181,9 @@ class ScopeRecoveryTestCase(RealWorkspaceTestCase):
         claimed = self.claim(board, run_id)
         manifest = claimed["claim"]["turn"]["input"]["executionWorkspace"]
         checkout = Path(manifest["path"])
-        (checkout / "src" / "feature.py").write_text("value = 2\n")
-        (checkout / "tracked.txt").write_text("outside the authorized scope\n")
-        (checkout / "outside.txt").write_text("untracked outside\n")
+        (checkout / "src" / "feature.py").write_text("value = 2\n", encoding="utf-8", newline="\n")
+        (checkout / "tracked.txt").write_text("outside the authorized scope\n", encoding="utf-8", newline="\n")
+        (checkout / "outside.txt").write_text("untracked outside\n", encoding="utf-8", newline="\n")
         with self.assertRaises(BoardError) as raised:
             workspace_module.seal(self.directory, manifest, run_id, claimed["claim"]["attempt"]["attemptId"])
         self.assertEqual(raised.exception.code, "WORKSPACE_SCOPE_VIOLATION")
@@ -215,7 +215,7 @@ class ScopeRecoveryTestCase(RealWorkspaceTestCase):
         subprocess.run(["git", "clone", "-q", str(self.repo), str(target)], env=environment, check=True)
         before = subprocess.run(
             ["git", "-C", str(target), "rev-parse", "HEAD"], env=environment, capture_output=True, text=True,
-            check=True,
+            check=True, encoding="utf-8",
         ).stdout.strip()
         subprocess.run(
             ["git", "-C", str(target), "apply", "--binary", artifact["diffPath"]], env=environment, check=True,
@@ -260,7 +260,7 @@ class ScopeRecoveryTestCase(RealWorkspaceTestCase):
             ).fetchone()[0]
         self.assertEqual(turn["state"], "failed")
         self.assertEqual(outputs, 0)
-        self.assertEqual((checkout / "outside.txt").read_text(), "untracked outside\n")
+        self.assertEqual((checkout / "outside.txt").read_text(encoding="utf-8"), "untracked outside\n")
 
     def test_continuation_never_absorbs_the_unauthorized_failed_site(self):
         board, submitted, claimed, manifest, checkout = self.scoped_failure()
@@ -281,9 +281,9 @@ class ScopeRecoveryTestCase(RealWorkspaceTestCase):
         self.assertEqual(continuation["state"], "invalidated")
         self.assertIsNone(continuation["workspace_manifest_json"])
         # The failure site is preserved exactly, not captured into a new baseline.
-        self.assertEqual((checkout / "outside.txt").read_text(), "untracked outside\n")
-        self.assertEqual((checkout / "tracked.txt").read_text(), "outside the authorized scope\n")
-        self.assertEqual((checkout / "src" / "feature.py").read_text(), "value = 2\n")
+        self.assertEqual((checkout / "outside.txt").read_text(encoding="utf-8"), "untracked outside\n")
+        self.assertEqual((checkout / "tracked.txt").read_text(encoding="utf-8"), "outside the authorized scope\n")
+        self.assertEqual((checkout / "src" / "feature.py").read_text(encoding="utf-8"), "value = 2\n")
 
     def test_restore_preserves_legal_changes_and_reseals_without_a_model_turn(self):
         board, submitted, claimed, manifest, checkout = self.scoped_failure()
@@ -297,8 +297,8 @@ class ScopeRecoveryTestCase(RealWorkspaceTestCase):
         self.assertEqual(resolved["resolvedPaths"], ["outside.txt", "tracked.txt"])
         self.assertIsNotNone(resolved["artifactId"])
         self.assertFalse((checkout / "outside.txt").exists())
-        self.assertEqual((checkout / "tracked.txt").read_text(), "base\n")
-        self.assertEqual((checkout / "src" / "feature.py").read_text(), "value = 2\n")
+        self.assertEqual((checkout / "tracked.txt").read_text(encoding="utf-8"), "base\n")
+        self.assertEqual((checkout / "src" / "feature.py").read_text(encoding="utf-8"), "value = 2\n")
 
         record = resolved
         self.assertEqual(record["artifact"]["action"], "restore")
@@ -315,14 +315,14 @@ class ScopeRecoveryTestCase(RealWorkspaceTestCase):
         self.assertEqual(execution["baseCommit"], record["outputCommit"])
         self.assertEqual(execution["inputCommit"], record["outputCommit"])
         self.assertEqual(resumed["claim"]["turn"]["turnIndex"], 2)
-        self.assertEqual((checkout / "src" / "feature.py").read_text(), "value = 2\n")
+        self.assertEqual((checkout / "src" / "feature.py").read_text(encoding="utf-8"), "value = 2\n")
 
     def test_thousand_scope_paths_are_stored_and_restored_through_the_board(self):
         docs = self.repo / "docs"
         docs.mkdir(exist_ok=True)
         paths = [f"docs/outside-{number:04d}.txt" for number in range(1000)]
         for path in paths:
-            (self.repo / path).write_text("authorized\n")
+            (self.repo / path).write_text("authorized\n", encoding="utf-8", newline="\n")
         self.git("add", ".")
         self.git("commit", "-qm", "large scope baseline")
         board = self.board()
@@ -331,7 +331,7 @@ class ScopeRecoveryTestCase(RealWorkspaceTestCase):
         manifest = claimed["claim"]["turn"]["input"]["executionWorkspace"]
         checkout = Path(manifest["path"])
         for path in paths:
-            (checkout / path).write_text("outside scope\n")
+            (checkout / path).write_text("outside scope\n", encoding="utf-8", newline="\n")
         with self.assertRaises(BoardError):
             workspace_module.seal(self.directory, manifest, submitted["runId"],
                                   claimed["claim"]["attempt"]["attemptId"])
@@ -348,7 +348,7 @@ class ScopeRecoveryTestCase(RealWorkspaceTestCase):
         self.assertEqual(restored["resolvedPathsCount"], len(paths))
         self.assertEqual(restored["resolvedPaths"], paths[:32])
         for path in paths:
-            self.assertEqual((checkout / path).read_text(), "authorized\n")
+            self.assertEqual((checkout / path).read_text(encoding="utf-8"), "authorized\n")
         with board.store.db.read() as connection:
             raw = connection.execute("SELECT resolved_paths_json FROM workflow_workspace_conflicts WHERE conflict_id=?",
                                      (conflict["conflictId"],)).fetchone()[0]
@@ -359,7 +359,7 @@ class ScopeRecoveryTestCase(RealWorkspaceTestCase):
         run_id = submitted["runId"]
         view = self.view(board, run_id)
         conflict = view["workspaceConflicts"][0]
-        (checkout / "tracked.txt").write_text("changed after the failure\n")
+        (checkout / "tracked.txt").write_text("changed after the failure\n", encoding="utf-8", newline="\n")
         before = self.state()
         # The Host re-observes the changed site; the compare-and-swap then refuses
         # only the path that moved and preserves everything else.
@@ -370,8 +370,8 @@ class ScopeRecoveryTestCase(RealWorkspaceTestCase):
         self.assertEqual(raised.exception.code, "WORKSPACE_CONFLICT")
         self.assertEqual(raised.exception.details["conflictingPaths"], ["tracked.txt"])
         # Nothing was partially applied: the later change and the whole site survive.
-        self.assertEqual((checkout / "tracked.txt").read_text(), "changed after the failure\n")
-        self.assertEqual((checkout / "outside.txt").read_text(), "untracked outside\n")
+        self.assertEqual((checkout / "tracked.txt").read_text(encoding="utf-8"), "changed after the failure\n")
+        self.assertEqual((checkout / "outside.txt").read_text(encoding="utf-8"), "untracked outside\n")
         self.assertEqual(self.state(), before)
         current = self.view(board, run_id)
         self.assertEqual(current["workspaceConflicts"][0]["conflictingPaths"], ["tracked.txt"])
@@ -425,7 +425,7 @@ class ScopeRecoveryTestCase(RealWorkspaceTestCase):
         self.assertEqual(partial["resolvedPaths"], ["outside.txt"])
         self.assertEqual(partial["remainingPaths"], ["tracked.txt"])
         self.assertFalse((checkout / "outside.txt").exists())
-        self.assertEqual((checkout / "tracked.txt").read_text(), "outside the authorized scope\n")
+        self.assertEqual((checkout / "tracked.txt").read_text(encoding="utf-8"), "outside the authorized scope\n")
         current = self.view(board, run_id)
         self.assertEqual(current["workspaceConflicts"][0]["state"], "open")
         self.assertEqual(current["workspaceConflicts"][0]["resolvedPaths"], ["outside.txt"])
@@ -434,8 +434,8 @@ class ScopeRecoveryTestCase(RealWorkspaceTestCase):
                                  command_id="resolve-2", note="restore the rest")
         self.assertTrue(completed["resolved"])
         self.assertEqual(completed["resolutionState"], "restored")
-        self.assertEqual((checkout / "tracked.txt").read_text(), "base\n")
-        self.assertEqual((checkout / "src" / "feature.py").read_text(), "value = 2\n")
+        self.assertEqual((checkout / "tracked.txt").read_text(encoding="utf-8"), "base\n")
+        self.assertEqual((checkout / "src" / "feature.py").read_text(encoding="utf-8"), "value = 2\n")
 
     def test_adopt_binds_the_exact_recorded_site(self):
         board, submitted, claimed, manifest, checkout = self.scoped_failure()
@@ -459,8 +459,8 @@ class ScopeRecoveryTestCase(RealWorkspaceTestCase):
         resumed = self.claim(board, run_id, request_id="claim-adopted", nonce="k" * 16)
         execution = resumed["claim"]["turn"]["input"]["executionWorkspace"]
         self.assertEqual(execution["baseCommit"], adopted["outputCommit"])
-        self.assertEqual((checkout / "outside.txt").read_text(), "untracked outside\n")
-        self.assertEqual((checkout / "tracked.txt").read_text(), "outside the authorized scope\n")
+        self.assertEqual((checkout / "outside.txt").read_text(encoding="utf-8"), "untracked outside\n")
+        self.assertEqual((checkout / "tracked.txt").read_text(encoding="utf-8"), "outside the authorized scope\n")
 
     def test_abandon_preserves_the_site_and_returns_the_authorized_input(self):
         board, submitted, claimed, manifest, checkout = self.scoped_failure()
@@ -472,9 +472,9 @@ class ScopeRecoveryTestCase(RealWorkspaceTestCase):
         self.assertEqual(abandoned["resolutionState"], "abandoned")
         self.assertEqual(abandoned["artifact"]["kind"], "abandoned-site")
         self.assertFalse((checkout / "outside.txt").exists())
-        self.assertEqual((checkout / "tracked.txt").read_text(), "base\n")
-        self.assertEqual((checkout / "src" / "feature.py").read_text(), "value = 1\n")
-        patch = Path(abandoned["diffPath"]).read_text()
+        self.assertEqual((checkout / "tracked.txt").read_text(encoding="utf-8"), "base\n")
+        self.assertEqual((checkout / "src" / "feature.py").read_text(encoding="utf-8"), "value = 1\n")
+        patch = Path(abandoned["diffPath"]).read_text(encoding="utf-8")
         self.assertIn("outside.txt", patch)
         self.assertIn("value = 2", patch)
         continued = self.continue_run(board, abandoned, command_id="continue-after-abandon")
@@ -483,7 +483,7 @@ class ScopeRecoveryTestCase(RealWorkspaceTestCase):
         self.assertIsNotNone(resumed["claim"], resumed)
         execution = resumed["claim"]["turn"]["input"]["executionWorkspace"]
         self.assertEqual(execution["manifestSha256"], manifest["manifestSha256"])
-        self.assertEqual((checkout / "src" / "feature.py").read_text(), "value = 1\n")
+        self.assertEqual((checkout / "src" / "feature.py").read_text(encoding="utf-8"), "value = 1\n")
 
     def test_historical_resolution_replays_without_rewriting_sealed_bytes(self):
         board, submitted, claimed, manifest, checkout = self.scoped_failure(request_id="historical-adopt")
@@ -582,7 +582,7 @@ class ScopeRecoveryTestCase(RealWorkspaceTestCase):
         manifest = first["claim"]["turn"]["input"]["executionWorkspace"]
         self.assertEqual(manifest["writeScope"], ["src"])
         checkout = Path(manifest["path"])
-        (checkout / "src" / "feature.py").write_text("value = 2\n")
+        (checkout / "src" / "feature.py").write_text("value = 2\n", encoding="utf-8", newline="\n")
         seal = workspace_module.seal(self.directory, manifest, run_id, first["claim"]["attempt"]["attemptId"])
         self.finish_turn(board, first, seal)
         view = self.view(board, run_id)
@@ -631,8 +631,8 @@ class ScopeRecoveryTestCase(RealWorkspaceTestCase):
         self.assertTrue(Path(cumulative["path"]).is_file())
         self.assertIsNone(resolved["nextBoundaryRequestId"])
         self.assertFalse((checkout / "outside.txt").exists())
-        self.assertEqual((checkout / "tracked.txt").read_text(), "base\n")
-        self.assertEqual((checkout / "src" / "feature.py").read_text(), "value = 2\n")
+        self.assertEqual((checkout / "tracked.txt").read_text(encoding="utf-8"), "base\n")
+        self.assertEqual((checkout / "src" / "feature.py").read_text(encoding="utf-8"), "value = 2\n")
         # The failed attempt, its failed turn and the original result receipt stay
         # exactly as they were: the delivery is recorded separately, not rewritten.
         self.assertEqual(self.ledger(board, run_id), before)
@@ -691,8 +691,8 @@ class ScopeRecoveryTestCase(RealWorkspaceTestCase):
         self.assertEqual(cumulative["baseCommit"], submitted["workspace"]["inputCommit"])
         self.assertIn("outside.txt", cumulative["changedPaths"])
         self.assertTrue(Path(cumulative["path"]).is_file())
-        self.assertEqual((checkout / "outside.txt").read_text(), "untracked outside\n")
-        self.assertEqual((checkout / "tracked.txt").read_text(), "outside the authorized scope\n")
+        self.assertEqual((checkout / "outside.txt").read_text(encoding="utf-8"), "untracked outside\n")
+        self.assertEqual((checkout / "tracked.txt").read_text(encoding="utf-8"), "outside the authorized scope\n")
 
     def test_partial_restore_and_abandon_never_deliver(self):
         board, submitted, claimed, manifest, checkout = self.native_scope_failure(request_id="native-partial")
@@ -718,7 +718,7 @@ class ScopeRecoveryTestCase(RealWorkspaceTestCase):
         self.assertNotIn("reason", record)
         self.assertEqual(abandoned["state"], "awaiting-host")
         self.assertIsNone(abandoned["delivery"])
-        self.assertEqual((checkout / "src" / "feature.py").read_text(), "value = 1\n")
+        self.assertEqual((checkout / "src" / "feature.py").read_text(encoding="utf-8"), "value = 1\n")
 
     def test_a_scope_failure_without_a_native_turn_is_never_delivered(self):
         board, submitted, claimed, manifest, checkout = self.scoped_failure(request_id="no-native")
@@ -810,7 +810,7 @@ class ScopeRecoveryTestCase(RealWorkspaceTestCase):
         run_id = submitted["runId"]
         claimed = self.claim(board, run_id, request_id="helper-scope-claim")
         manifest = claimed["claim"]["turn"]["input"]["executionWorkspace"]
-        (Path(manifest["path"]) / "src" / "feature.py").write_text("value = 2\n")
+        (Path(manifest["path"]) / "src" / "feature.py").write_text("value = 2\n", encoding="utf-8", newline="\n")
         seal = workspace_module.seal(self.directory, manifest, run_id, claimed["claim"]["attempt"]["attemptId"])
         self.finish_turn(board, claimed, seal, disposition="assistance")
         view = self.view(board, run_id)

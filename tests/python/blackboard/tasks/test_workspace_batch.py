@@ -92,7 +92,7 @@ class BatchedObjectTests(unittest.TestCase):
             self.git("config", "core.autocrlf", "true", cwd=repo)
         (repo / "src").mkdir()
         if autocrlf:
-            (repo / ".gitattributes").write_text("* text=auto\n")
+            (repo / ".gitattributes").write_text("* text=auto\n", encoding="utf-8", newline="\n")
             self.git("add", ".gitattributes", cwd=repo)
         tracked = {"src/kept.txt": b"kept\n", "src/crlf.txt": b"crlf\r\nlines\r\n",
                    "src/binary.bin": b"\x00\xff\x10\r\n\x00", "src/empty.dat": b""}
@@ -152,7 +152,7 @@ class BatchedObjectTests(unittest.TestCase):
 
     # -- filters and autocrlf --------------------------------------------------
     def test_filtered_path_hashing_never_decides_the_numbering(self):
-        (self.repo / ".gitattributes").write_text("* text=auto\n")
+        (self.repo / ".gitattributes").write_text("* text=auto\n", encoding="utf-8", newline="\n")
         self.git("add", ".gitattributes")
         self.git("commit", "-qm", "attributes")
         self.git("config", "core.autocrlf", "true")
@@ -265,7 +265,7 @@ class BatchedObjectTests(unittest.TestCase):
         log = self.root / f"git-count-{tag}.log"
         script = "#!/bin/sh\nprintf 'x\\n' >> %s\nexec %s \"$@\"\n" % (shlex.quote(str(log)), shlex.quote(real))
         wrapper = bin_dir / "git"
-        wrapper.write_text(script)
+        wrapper.write_text(script, encoding="utf-8", newline="\n")
         wrapper.chmod(0o755)
         return bin_dir, log
 
@@ -274,7 +274,7 @@ class BatchedObjectTests(unittest.TestCase):
         shadowed = {"PATH": str(bin_dir) + os.pathsep + os.environ.get("PATH", ""), "W1_GIT_LOG": str(log)}
         with patch.dict(os.environ, shadowed):
             result = operation(*args, **kwargs)
-        return len(log.read_text().splitlines()), result
+        return len(log.read_text(encoding="utf-8").splitlines()), result
 
     def build_scaling_checkout(self, name, tracked, modified, untracked):
         repo = self.root / name
@@ -318,7 +318,7 @@ class BatchedObjectTests(unittest.TestCase):
         with patch.dict(os.environ, {"PATH": str(probe_bin) + os.pathsep + os.environ["PATH"],
                                      "W1_GIT_LOG": str(probe_log)}):
             subprocess.run(["git", "--version"], capture_output=True, check=True)
-        self.assertEqual(probe_log.read_text().count("\n"), 1)
+        self.assertEqual(probe_log.read_text(encoding="utf-8").count("\n"), 1)
         self.assertGreaterEqual(small_count, 10)
         counts = {"prepare": (small_count, large_count), "verify": (verify_small, verify_large),
                   "seal": (seal_small, seal_large)}

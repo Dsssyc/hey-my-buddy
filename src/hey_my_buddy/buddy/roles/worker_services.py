@@ -162,7 +162,7 @@ def attention_requests(configuration: dict) -> int:
         path = Path(path_value)
         if path.stat().st_size > MAX_ATTENTION_BYTES:
             return 1  # an oversized record still means an unresolved request
-        value = json.loads(path.read_text())
+        value = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return 0
     requests = value.get("requests") if isinstance(value, dict) else None

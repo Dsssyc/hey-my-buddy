@@ -15,7 +15,7 @@ for name in ('apply_patch', 'applypatch', 'codex-execve-wrapper'):
         link.symlink_to(sys.executable)
 if 'login' in sys.argv:
     key = sys.stdin.read().strip()
-    with auth.open('w') as output:
+    with auth.open('w', encoding="utf-8", newline="\n") as output:
         json.dump({'type': 'apiKey', 'fixtureKey': key}, output)
     auth.chmod(0o600)
     raise SystemExit(0)
@@ -32,7 +32,7 @@ for line in sys.stdin:
         continue
     response = {}
     if method == 'account/read':
-        response = {'account': {'type': json.loads(auth.read_text())['type']} if auth.exists() else None}
+        response = {'account': {'type': json.loads(auth.read_text(encoding="utf-8"))['type']} if auth.exists() else None}
     elif method == 'account/login/start':
         response = {'type': 'chatgpt', 'loginId': 'native-fixture-id', 'authUrl': 'https://auth.openai.com/fixture-only'}
     elif method == 'account/login/cancel':
@@ -41,6 +41,6 @@ for line in sys.stdin:
         auth.unlink(missing_ok=True)
     emit({'id': request['id'], 'result': response})
     if method == 'account/login/start' and '--complete' in sys.argv:
-        auth.write_text(json.dumps({'type': 'chatgpt'}))
+        auth.write_text(json.dumps({'type': 'chatgpt'}), encoding="utf-8", newline="\n")
         auth.chmod(0o600)
         emit({'method': 'account/login/completed', 'params': {'loginId': 'native-fixture-id', 'success': True}})

@@ -29,7 +29,7 @@ def _json(value, *, ascii_json=False) -> str:
 def _git(root: Path, *args: str, data=None) -> str:
     env = {key: value for key, value in os.environ.items() if not key.startswith("GIT_")}
     return subprocess.run(["git", "-c", "core.hooksPath=/dev/null", "-C", str(root), *args],
-                          input=data, capture_output=True, check=True, env=env).stdout.decode().strip()
+                          input=data, capture_output=True, check=True, env=env).stdout.decode("utf-8").strip()
 
 
 def load_fixture(state: Path) -> dict:
@@ -40,14 +40,14 @@ def load_fixture(state: Path) -> dict:
     ones. Other keys are the fixed metadata (including stableIds/sourceCommit).
     Schema remains 27. Take the preservation baseline only after this returns.
     """
-    metadata = json.loads((FIXTURE / "metadata.json").read_text())
+    metadata = json.loads((FIXTURE / "metadata.json").read_text(encoding="utf-8"))
     stock = {}
     for name, key in (("board.sql", "sqlSha256"), ("operations.json", "operationsSha256"),
                       ("catalog.json", "catalogSha256"), ("workspace-resources.json", "resourcesSha256")):
         data = (FIXTURE / name).read_bytes()
         if _sha(data) != metadata[key]:
             raise ValueError(f"Fixed fixture digest changed: {name}")
-        stock[name] = data.decode()
+        stock[name] = data.decode("utf-8")
     resources = json.loads(stock["workspace-resources.json"])
     if metadata["format"] != 2 or resources["format"] != 1:
         raise ValueError("Unsupported fixture format")
@@ -65,7 +65,7 @@ def load_fixture(state: Path) -> dict:
         if actual != item["oid"]:
             raise ValueError(f"Fixed Git object changed: {item['oid']}")
     commit = resources["workspaceInputCommit"]
-    (repository / ".git/HEAD").write_text(commit + "\n")
+    (repository / ".git/HEAD").write_text(commit + "\n", encoding="utf-8", newline="\n")
     _git(repository, "read-tree", commit)
     _git(repository, "checkout-index", "--all")
     bindings = {}
@@ -111,7 +111,7 @@ def load_fixture(state: Path) -> dict:
             content = replace(text, json_payload=True)
         else:
             content = _json(bind(json.loads(text)), ascii_json=True) if target.suffix == ".json" else replace(text)
-        target.write_text(content)
+        target.write_bytes(content.encode("utf-8"))
         target.chmod(0o600)
     with closing(sqlite3.connect(state / "board.sqlite3")) as connection, connection:
         connection.executescript(stock["board.sql"])

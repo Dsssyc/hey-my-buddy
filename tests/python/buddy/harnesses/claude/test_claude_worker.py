@@ -82,7 +82,7 @@ class ClaudeWorkerTests(MicroTaskWorkerTestCase):
             self.assertFalse(native["resumable"])
             self.assertEqual(native["storageScope"], "none")
             self.assertEqual(receipt["result"]["turn"]["provenance"]["harness"], "claude")
-            self.assertEqual((self.repo / "tracked.txt").read_text(), "base\n")
+            self.assertEqual((self.repo / "tracked.txt").read_text(encoding="utf-8"), "base\n")
 
     def test_quota_failure_is_persisted_as_harness_error_without_retry(self):
         self.case = "quota-rejected"

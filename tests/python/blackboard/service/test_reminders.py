@@ -178,7 +178,7 @@ class ReminderPrivateServiceTests(BoardTestCase):
         subprocess.run(["git", "init", "-q", "-b", "main"], cwd=repo, check=True)
         subprocess.run(["git", "config", "user.email", "buddy@example.invalid"], cwd=repo, check=True)
         subprocess.run(["git", "config", "user.name", "Buddy Test"], cwd=repo, check=True)
-        (repo / "tracked.txt").write_text("base\n")
+        (repo / "tracked.txt").write_text("base\n", encoding="utf-8", newline="\n")
         subprocess.run(["git", "add", "."], cwd=repo, check=True)
         subprocess.run(["git", "commit", "-q", "-m", "base"], cwd=repo, check=True)
         wrapper = self.directory / "native-reminder-agent.py"
@@ -199,7 +199,7 @@ class ReminderPrivateServiceTests(BoardTestCase):
             "    while not release.exists(): time.sleep(.05)\n"
             "    return original(self, message)\n"
             "module.WorkflowAgent.run_micro_task_prompt = delayed\n"
-            "raise SystemExit(module.main())\n")
+            "raise SystemExit(module.main())\n", encoding="utf-8", newline="\n")
         private_home = self.directory / "native-home"
         private_home.mkdir()
         env = {"HOME": str(private_home), "HMB_DSH_CLI": str(wrapper)}

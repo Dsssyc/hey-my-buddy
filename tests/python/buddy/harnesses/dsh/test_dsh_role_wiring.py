@@ -75,7 +75,7 @@ class DshRoleCase(unittest.TestCase):
 
     def point_record(self, *extra: str) -> None:
         command = [sys.executable, str(FAKE_AGENT), "--log", str(self.log), *extra]
-        self.record.write_text(json.dumps({"dsh": {"status": "ready", "command": command}}))
+        self.record.write_text(json.dumps({"dsh": {"status": "ready", "command": command}}), encoding="utf-8", newline="\n")
 
     def context(self, *, attempt="attempt-1", index=1, mode="initial", previous=None, timeout=20):
         identity = {"version": 1, "taskId": "task", "attemptId": attempt, "generation": index,
@@ -188,9 +188,9 @@ class WorkerRegisteredRunTests(DshRoleCase):
             with self.subTest(reason=reason):
                 context = self.context(attempt="stop-" + reason)
                 self.micro_task_record(context)
-                record = json.loads(self.record.read_text())
+                record = json.loads(self.record.read_text(encoding="utf-8"))
                 record["dsh"]["command"] += ["--stop-reason", reason]
-                self.record.write_text(json.dumps(record))
+                self.record.write_text(json.dumps(record), encoding="utf-8", newline="\n")
                 executor = worker_executor("dsh")
                 handle = executor.start(context)
                 self.addCleanup(lambda h=handle: (h.terminate(grace_seconds=0.2), h.wait(15)) if not h.finished else None)
@@ -296,10 +296,10 @@ class WorkerRegisteredRunTests(DshRoleCase):
                          "the answered question no longer blocks the completed finish")
         result = handle.result
         reference = next(ref for ref in result.evidence_refs if ref.kind == "inquiry-report")
-        report = json.loads(Path(reference.location).read_text())
+        report = json.loads(Path(reference.location).read_text(encoding="utf-8"))
         self.assertEqual(report["answered"], 1)
         journal = Path(control["inquiry"]["resultsPath"])
-        states = [json.loads(line).get("state") for line in journal.read_text().splitlines()
+        states = [json.loads(line).get("state") for line in journal.read_text(encoding="utf-8").splitlines()
                   if line.strip() and json.loads(line).get("inquiryId")]
         self.assertIn("delivered", states)
         self.assertEqual(states[-1], "answered")
@@ -320,9 +320,9 @@ class WorkerRegisteredRunTests(DshRoleCase):
         self.assertEqual(original.status, "ok", original.to_report())
         result = handle.result
         reference = next(ref for ref in result.evidence_refs if ref.kind == "turn-provenance")
-        value = json.loads(Path(reference.location).read_text())
+        value = json.loads(Path(reference.location).read_text(encoding="utf-8"))
         value["receiptVerified"] = False
-        Path(reference.location).write_text(json.dumps(value))
+        Path(reference.location).write_text(json.dumps(value), encoding="utf-8", newline="\n")
         refused = worker_executor("dsh").collect(handle, context)
         self.assertEqual(refused.status, "failed")
         self.assertTrue(refused.shutdown_confirmed)
@@ -384,7 +384,7 @@ class DiscoverySeamTests(DshRoleCase):
     def test_discovery_routes_through_the_seam_without_a_prompt(self):
         from hey_my_buddy.buddy.harnesses.runtime_selection import bound, environment_for
         self.point_record("--prompt-mode", "final")
-        record = {"harness": "dsh", **json.loads(self.record.read_text())["dsh"]}
+        record = {"harness": "dsh", **json.loads(self.record.read_text(encoding="utf-8"))["dsh"]}
         with mock.patch.dict(os.environ, self.environment):
             with bound([record], environment={**self.environment}):
                 catalog = adapter("dsh").discover_models()
@@ -397,7 +397,7 @@ class DiscoverySeamTests(DshRoleCase):
         self.assertEqual(prompts, [], "discovery never sends a prompt")
 
     def agent_log(self) -> list[dict]:
-        return [json.loads(line) for line in self.log.read_text().splitlines() if line.strip()]
+        return [json.loads(line) for line in self.log.read_text(encoding="utf-8").splitlines() if line.strip()]
 
 
 if __name__ == "__main__":

@@ -22,7 +22,7 @@ class UpgradeCutoverTests(BoardTestCase):
         super().setUp()
         self.state = self.directory / "state"
         load_fixture(self.state)
-        (self.state / "console-settings.json").write_text('{"theme":"dark"}')
+        (self.state / "console-settings.json").write_text('{"theme":"dark"}', encoding="utf-8", newline="\n")
         store = BoardStore(self.state)
         store.db.close()
         old_backup = Path(backup.create(self.state, runtime_identity=None, plugin_commit=None, contract_version=CONTRACT_VERSION)["path"])
@@ -33,11 +33,11 @@ class UpgradeCutoverTests(BoardTestCase):
         self.assertEqual(backup.verify(self.retained_archive)["schema"], SCHEMA_VERSION)
         self.evidence = self.state / "attempts" / "fixture-run" / "fixture-attempt" / "result.json"
         self.evidence.parent.mkdir(parents=True, exist_ok=True)
-        self.evidence.write_text('{"retained":"evidence"}')
-        self.expected_evidence = self.evidence.read_text()
+        self.evidence.write_text('{"retained":"evidence"}', encoding="utf-8", newline="\n")
+        self.expected_evidence = self.evidence.read_text(encoding="utf-8")
         self.start_log = self.state / "upgrade-start.log"
-        self.start_log.write_text("retained startup log\n")
-        self.expected_start_log = self.start_log.read_text()
+        self.start_log.write_text("retained startup log\n", encoding="utf-8", newline="\n")
+        self.expected_start_log = self.start_log.read_text(encoding="utf-8")
         self.original_board = (self.state / "board.sqlite3").read_bytes()
         self.before = upgrade.idle_snapshot(self.state)
         self.history = {path.relative_to(self.state): path.read_bytes()
@@ -54,7 +54,7 @@ class UpgradeCutoverTests(BoardTestCase):
         target.mkdir(parents=True, exist_ok=True)
         endpoint = {"runtimeIdentity": "runtime:" + previous.name,
                     "serviceId": "private-old", "pid": 123, "contractVersion": "fixture-contract"}
-        (self.state / "control.json").write_text(json.dumps(endpoint))
+        (self.state / "control.json").write_text(json.dumps(endpoint), encoding="utf-8", newline="\n")
         health = {**endpoint, "runtimeContentId": previous.name, "runtimeStable": True,
                   "maxConcurrent": 2, "waitCapacity": 4}
 
@@ -65,14 +65,14 @@ class UpgradeCutoverTests(BoardTestCase):
                 # sealed: rollback replays board/settings, not these records.
                 with sqlite3.connect(self.state / "board.sqlite3") as connection:
                     connection.execute("INSERT INTO meta(key,value) VALUES('injected-after-backup','changed')")
-                (self.state / "console-settings.json").write_text('{"theme":"light"}')
+                (self.state / "console-settings.json").write_text('{"theme":"light"}', encoding="utf-8", newline="\n")
                 self.expected_evidence = '{"retained":"later evidence"}'
-                self.evidence.write_text(self.expected_evidence)
+                self.evidence.write_text(self.expected_evidence, encoding="utf-8", newline="\n")
                 relative = next(iter(self.history))
                 self.history[relative] = b"later checkout content"
                 (self.state / relative).write_bytes(self.history[relative])
                 self.expected_start_log += "replacement attempted\n"
-                self.start_log.write_text(self.expected_start_log)
+                self.start_log.write_text(self.expected_start_log, encoding="utf-8", newline="\n")
             if interrupt_target and path == target:
                 raise KeyboardInterrupt("interrupted after backup")
             if fail_target and path == target:
@@ -101,16 +101,16 @@ class UpgradeCutoverTests(BoardTestCase):
             if interrupt_target:
                 with self.assertRaises(KeyboardInterrupt):
                     upgrade.upgrade({})
-                journal = json.loads((self.state / "upgrade.json").read_text())
+                journal = json.loads((self.state / "upgrade.json").read_text(encoding="utf-8"))
                 self.assertEqual(journal["phase"], "prepared")
                 return upgrade.recover(self.state, self.runtime_root)
             return upgrade.upgrade({})
 
     def assert_history_preserved(self):
         self.assertEqual((self.state / "board.sqlite3").read_bytes(), self.original_board)
-        self.assertEqual((self.state / "console-settings.json").read_text(), '{"theme":"dark"}')
-        self.assertEqual(self.evidence.read_text(), self.expected_evidence)
-        self.assertEqual(self.start_log.read_text(), self.expected_start_log)
+        self.assertEqual((self.state / "console-settings.json").read_text(encoding="utf-8"), '{"theme":"dark"}')
+        self.assertEqual(self.evidence.read_text(encoding="utf-8"), self.expected_evidence)
+        self.assertEqual(self.start_log.read_text(encoding="utf-8"), self.expected_start_log)
         self.assertEqual({path: (self.state / path).read_bytes() for path in self.history}, self.history)
         if self.expected_evidence != '{"retained":"evidence"}':
             self.assertNotEqual(self.history, self.original_history)

@@ -24,7 +24,7 @@ class GitConfigurationTests(unittest.TestCase):
                 actual = subprocess.run(
                     ["git", "config", f"--type={kind}", "--get", key],
                     cwd=environment["HOME"], env=environment,
-                    capture_output=True, text=True,
+                    capture_output=True, text=True, encoding="utf-8",
                 )
                 self.assertEqual(actual.returncode, 0, actual.stderr)
                 self.assertEqual(actual.stdout.strip(), expected)

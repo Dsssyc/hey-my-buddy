@@ -39,7 +39,7 @@ class WorkerPermissionEvidenceTests(unittest.TestCase):
                    "timeoutSeconds": 5, "live": {"instanceId": "a" * 64, "token": "b" * 64}}
         (self.root / "input.json").write_text(canonical_json({
             "taskId": request.identity.task_id, "attemptId": request.identity.attempt_id,
-            "generation": request.identity.generation, "turnId": request.identity.turn_id}))
+            "generation": request.identity.generation, "turnId": request.identity.turn_id}), encoding="utf-8", newline="\n")
         result = rc.RunResult(identity=request.identity, harness=request.harness,
                               end=rc.RunEnd(status=status, reason_code="native-refused" if status != "ok" else None),
                               stop_evidence=rc.StopEvidence(native=rc.StopLayer(group_state="gone")))

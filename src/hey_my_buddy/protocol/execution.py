@@ -31,10 +31,11 @@ def fsync_json(path: Path, value: dict) -> None:
     """Publish private JSON only after the file and its directory are durable."""
     path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
     temporary = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")
+    raw = json.dumps(value, ensure_ascii=False, allow_nan=False).encode("utf-8")
     fd = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
     try:
-        with os.fdopen(fd, "w") as stream:
-            json.dump(value, stream, ensure_ascii=False, allow_nan=False)
+        with os.fdopen(fd, "wb") as stream:
+            stream.write(raw)
             stream.flush()
             os.fsync(stream.fileno())
     except BaseException:

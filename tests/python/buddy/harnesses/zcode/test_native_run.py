@@ -442,7 +442,7 @@ class FastSeamTests(NativeRunCase):
         self.assertEqual(result.end.status, "cancelled")
         self.assertEqual(result.end.reason_code, "observer-interrupt")
         self.assertEqual(correction.stop_reason, "no-tool-violation")
-        marker = json.loads((self.cwd / "refusal-reply.json").read_text())
+        marker = json.loads((self.cwd / "refusal-reply.json").read_text(encoding="utf-8"))
         self.assertEqual(marker, {"id": "srv-1", "refused": True},
                          "the native peer never received the same-id refusal")
         # The stop requested an interrupt, no signal was actually sent, and no
@@ -470,7 +470,7 @@ class FastSeamTests(NativeRunCase):
         records = json.loads(raw)["records"]
         self.assertEqual(len(records), 1)
         self.assertEqual(records[0]["method"], "interaction/requestPermission")
-        self.assertEqual(json.loads((self.cwd / "refusal-reply.json").read_text()),
+        self.assertEqual(json.loads((self.cwd / "refusal-reply.json").read_text(encoding="utf-8")),
                          {"id": "srv-before-reply", "refused": True})
         self.assertEqual(result.stop_evidence.native.group_state, "gone")
         self.assertTrue(result.stop_evidence.interrupt.requested)
@@ -658,7 +658,7 @@ class WorkerSeamTests(MockNativeCase):
     def test_usage_fixture_resumes_with_native_mode_readback_and_only_new_usage(self):
         from hey_my_buddy.protocol.usage import normalize_token_usage
         fixture = Path(__file__).parent / "fixtures/mock_zcode_usage.py"
-        expected = json.loads(fixture.with_name("native-usage-zcode.json").read_text())["expectedMessages"]
+        expected = json.loads(fixture.with_name("native-usage-zcode.json").read_text(encoding="utf-8"))["expectedMessages"]
         with mock.patch.dict(self.environment):
             select_fixture(self.environment, self.root, "zcode", fixture)
             for first_level, second_level, before, after in (
@@ -1189,7 +1189,7 @@ class ProducerContractTests(NativeRunCase):
         self.assertEqual(snapshot.inquiries[0].question_id, "i-1")
         self.assertEqual(snapshot.inquiries[0].status, "queued")
         # The durable journal is the same bound record the bridge wrote.
-        records = [json.loads(line) for line in journal.read_text().splitlines() if line.strip()]
+        records = [json.loads(line) for line in journal.read_text(encoding="utf-8").splitlines() if line.strip()]
         self.assertEqual(records[0]["inquiryId"], "i-1")
         self.assertEqual(records[0]["state"], "queued")
 
@@ -1236,7 +1236,7 @@ class ProducerContractTests(NativeRunCase):
         self.assertEqual(snapshot.inquiries[0].answer, "the verified answer")
         # The journal file itself keeps the structured answer with its source
         # metadata — the channel only derives the text from it.
-        raw = [json.loads(line) for line in journal.read_text().splitlines() if line.strip()]
+        raw = [json.loads(line) for line in journal.read_text(encoding="utf-8").splitlines() if line.strip()]
         answered = next(record for record in raw if record["state"] == "answered")
         self.assertEqual(answered["answer"]["text"], "the verified answer")
         self.assertEqual(answered["answer"]["toolCallId"], "call-answer")
@@ -1258,7 +1258,7 @@ class ProducerContractTests(NativeRunCase):
                    "turnId": "turn-live", "inquiryId": "i-foreign", "state": "queued",
                    "question": "not this attempt", "questionSha256": "b" * 64, "askedAt": "now"}
         torn = json.dumps({"version": 2, "inquiryId": "i-old", "state": "queued"})
-        journal.write_text(json.dumps(foreign) + "\n" + torn + "\n")
+        journal.write_text(json.dumps(foreign) + "\n" + torn + "\n", encoding="utf-8", newline="\n")
         channel = bind_live_channel(identity, credentials={"socketPath": "", "token": "a" * 64},
                                     journal_path=str(journal), activity_path=temp / "activity.json")
         snapshot = channel.observe(after_seq=None, limit=8, timeout_ms=100)
@@ -1326,7 +1326,7 @@ class ProducerContractTests(NativeRunCase):
                  "turnId": "turn-live", "inquiryId": "q-last", "state": "answered",
                  "answer": {"text": "owned answer", "bytes": 12,
                             "via": "tool:hey_my_buddy_answer_inquiry"}}
-        journal.write_text(json.dumps(foreign) + "\n" + json.dumps(valid) + "\n")
+        journal.write_text(json.dumps(foreign) + "\n" + json.dumps(valid) + "\n", encoding="utf-8", newline="\n")
         channel = bind_live_channel(identity, credentials={"socketPath": "", "token": "a" * 64},
                                     journal_path=str(journal), activity_path=temp / "activity.json")
         snapshot = channel.observe(after_seq=None, limit=8, timeout_ms=200, fields=("inquiries",))
@@ -1353,7 +1353,7 @@ class ProducerContractTests(NativeRunCase):
                    "generation": 0, "turnId": "other-turn", "inquiryId": "q-last",
                    "state": "answered", "answer": {"text": "foreign"}}
         journal.write_text("".join(json.dumps(record) + "\n" for record in
-                                   [valid, foreign, foreign, foreign]))
+                                   [valid, foreign, foreign, foreign]), encoding="utf-8", newline="\n")
         channel = bind_live_channel(identity, credentials={"socketPath": "", "token": "a" * 64},
                                     journal_path=str(journal), activity_path=temp / "activity.json")
         snapshot = channel.observe(after_seq=None, limit=8, timeout_ms=200, fields=("inquiries",))
@@ -1390,7 +1390,7 @@ class ProducerContractTests(NativeRunCase):
             rows.append({"version": 1, "taskId": "other-task", "attemptId": "other-attempt",
                          "generation": 1, "turnId": "other-turn", "inquiryId": f"q{index}",
                          "state": "queued"})
-        journal.write_text("".join(json.dumps(row) + "\n" for row in rows))
+        journal.write_text("".join(json.dumps(row) + "\n" for row in rows), encoding="utf-8", newline="\n")
         channel = bind_live_channel(identity, credentials={"socketPath": "", "token": "a" * 64},
                                     journal_path=str(journal), activity_path=temp / "activity.json")
         self.addCleanup(channel.close, reason="probe-finished")
@@ -1562,7 +1562,7 @@ class ProducerContractTests(NativeRunCase):
         stale.write_text(json.dumps({
             "version": 1, "taskId": "task", "attemptId": "attempt-live", "generation": 1,
             "turnId": "turn-live", "inquiryId": "i-1", "state": "queued", "question": question,
-            "questionSha256": digest, "askedAt": "now"}) + "\n")
+            "questionSha256": digest, "askedAt": "now"}) + "\n", encoding="utf-8", newline="\n")
         stale_bound = bind_live_channel(identity, credentials=credentials, journal_path=str(stale),
                                         activity_path=temp / "activity.json")
         view = stale_bound.observe(inquiry_id="i-1", timeout_ms=1000)
@@ -1632,8 +1632,8 @@ class DiscoveryStopTests(NativeRunCase):
                                        cancelled=lambda: False)
 
     def broken_snapshot(self):
-        self.fake.write_text(self.fake.read_text().replace("'sessionId':f's-{session}','sessionKind'",
-                                                         "'wrongSessionId':f's-{session}','sessionKind'"))
+        self.fake.write_text(self.fake.read_text(encoding="utf-8").replace("'sessionId':f's-{session}','sessionKind'",
+                                                         "'wrongSessionId':f's-{session}','sessionKind'"), encoding="utf-8", newline="\n")
 
     def discover_with_windows_boundary(self, api, *, process=None):
         """Real owned_popen; only the Win32 API and Popen creation are synthetic."""
@@ -1856,9 +1856,9 @@ class DiscoveryStopTests(NativeRunCase):
         self.assertIs(getattr(caught.exception, "discovery_shutdown_confirmed", None), False)
 
     def test_abnormal_exit_keeps_actual_confirmed_stop(self):
-        self.fake.write_text(self.fake.read_text().replace(
+        self.fake.write_text(self.fake.read_text(encoding="utf-8").replace(
             "send({'id':call['id'],'result':result})",
-            "send({'id':call['id'],'result':result})\n    if method == 'session/close': sys.exit(7)"))
+            "send({'id':call['id'],'result':result})\n    if method == 'session/close': sys.exit(7)"), encoding="utf-8", newline="\n")
         with self.assertRaises(native_run.NativeError) as caught:
             self.discover()
         self.assertEqual(caught.exception.code, 'native-process-failed')

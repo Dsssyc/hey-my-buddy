@@ -21,7 +21,7 @@ class WindowsBackupTests(BoardTestCase):
         board = self.board()
         board.store.db.close()
         marker = board.directory / 'console-settings.json'
-        marker.write_text(json.dumps({'generation': 'old'}))
+        marker.write_text(json.dumps({'generation': 'old'}), encoding="utf-8", newline="\n")
         marker.chmod(0o600)
         root = board.directory / 'backups'
         if root.exists():
@@ -30,7 +30,7 @@ class WindowsBackupTests(BoardTestCase):
 
     @staticmethod
     def _generation(root):
-        return json.loads((root / 'current/state/console-settings.json').read_text())['generation']
+        return json.loads((root / 'current/state/console-settings.json').read_text(encoding="utf-8"))['generation']
 
     def _assert_settled(self, root, expected):
         self.assertEqual(self._generation(root), expected)
@@ -41,7 +41,7 @@ class WindowsBackupTests(BoardTestCase):
         board, marker, root = self._board()
         backup.create(board.directory, runtime_identity=None, plugin_commit=None, contract_version=CONTRACT_VERSION)
         self._assert_settled(root, 'old')
-        marker.write_text(json.dumps({'generation': 'new'}))
+        marker.write_text(json.dumps({'generation': 'new'}), encoding="utf-8", newline="\n")
         backup.create(board.directory, runtime_identity=None, plugin_commit=None, contract_version=CONTRACT_VERSION)
         self._assert_settled(root, 'new')
 
@@ -58,7 +58,7 @@ class WindowsBackupTests(BoardTestCase):
                         board, marker, root = self._board()
                         if repeated:
                             backup.create(board.directory, runtime_identity=None, plugin_commit=None, contract_version=CONTRACT_VERSION)
-                            marker.write_text(json.dumps({'generation': 'new'}))
+                            marker.write_text(json.dumps({'generation': 'new'}), encoding="utf-8", newline="\n")
                         real_rename = backup._rename
                         fired = False
 
@@ -89,7 +89,7 @@ class WindowsBackupTests(BoardTestCase):
     def test_bad_candidate_and_interrupted_rollback_keep_old(self):
         board, marker, root = self._board()
         backup.create(board.directory, runtime_identity=None, plugin_commit=None, contract_version=CONTRACT_VERSION)
-        marker.write_text(json.dumps({'generation': 'new'}))
+        marker.write_text(json.dumps({'generation': 'new'}), encoding="utf-8", newline="\n")
         with mock.patch.object(backup, 'verify', side_effect=BoardError('BACKUP_INVALID', 'candidate rejected')):
             with self.assertRaises(BoardError):
                 backup.create(board.directory, runtime_identity=None, plugin_commit=None, contract_version=CONTRACT_VERSION)
@@ -100,8 +100,8 @@ class WindowsBackupTests(BoardTestCase):
                 with self.subTest(rename=(source, target), after=after):
                     previous = root / '.previous'
                     shutil.copytree(root / 'current', previous)
-                    (root / 'current/state/console-settings.json').write_text('corrupt')
-                    (root / '.publish.json').write_text(json.dumps({'format': 1, 'hadCurrent': True}))
+                    (root / 'current/state/console-settings.json').write_text('corrupt', encoding="utf-8", newline="\n")
+                    (root / '.publish.json').write_text(json.dumps({'format': 1, 'hadCurrent': True}), encoding="utf-8", newline="\n")
                     real_rename = backup._rename
                     fired = False
 
@@ -124,7 +124,7 @@ class WindowsBackupTests(BoardTestCase):
     def test_bad_candidate_after_old_rename_restores_old(self):
         board, marker, root = self._board()
         backup.create(board.directory, runtime_identity=None, plugin_commit=None, contract_version=CONTRACT_VERSION)
-        marker.write_text(json.dumps({'generation': 'new'}))
+        marker.write_text(json.dumps({'generation': 'new'}), encoding="utf-8", newline="\n")
         real_rename = backup._rename
 
         def stop_after_old(left, right):
@@ -135,14 +135,14 @@ class WindowsBackupTests(BoardTestCase):
         with mock.patch.object(backup, '_rename', side_effect=stop_after_old):
             with self.assertRaises(KeyboardInterrupt):
                 backup.create(board.directory, runtime_identity=None, plugin_commit=None, contract_version=CONTRACT_VERSION)
-        (root / '.incoming/state/console-settings.json').write_text('corrupt')
+        (root / '.incoming/state/console-settings.json').write_text('corrupt', encoding="utf-8", newline="\n")
         backup.verify(root / 'current')  # The read API must recover before use.
         self._assert_settled(root, 'old')
 
     def test_next_backup_recovers_before_building_its_candidate(self):
         board, marker, root = self._board()
         backup.create(board.directory, runtime_identity=None, plugin_commit=None, contract_version=CONTRACT_VERSION)
-        marker.write_text(json.dumps({'generation': 'new'}))
+        marker.write_text(json.dumps({'generation': 'new'}), encoding="utf-8", newline="\n")
         real_rename = backup._rename
 
         def stop_after_old(left, right):
@@ -161,7 +161,7 @@ class WindowsBackupTests(BoardTestCase):
             with self.subTest(after=after):
                 board, marker, root = self._board()
                 backup.create(board.directory, runtime_identity=None, plugin_commit=None, contract_version=CONTRACT_VERSION)
-                marker.write_text(json.dumps({'generation': 'new'}))
+                marker.write_text(json.dumps({'generation': 'new'}), encoding="utf-8", newline="\n")
                 real_remove = shutil.rmtree
                 fired = False
 
@@ -196,7 +196,7 @@ class WindowsBackupTests(BoardTestCase):
                 finally:
                     linked.unlink()
         journal = root / '.publish.json'
-        journal.write_text(json.dumps({'format': 1, 'hadCurrent': True, 'previous': str(outside)}))
+        journal.write_text(json.dumps({'format': 1, 'hadCurrent': True, 'previous': str(outside)}), encoding="utf-8", newline="\n")
         with self.assertRaises(BoardError) as raised:
             backup.recover(board.directory)
         self.assertEqual(raised.exception.code, 'BACKUP_RECOVERY_REQUIRED')

@@ -92,11 +92,11 @@ class LiveSeamCase(unittest.TestCase):
 
     def commit(self, record):
         """Only fixture persistence: a complete fsynced record before settlement."""
-        with self.journal.open("a", encoding="utf-8") as stream:
+        with self.journal.open("a", encoding="utf-8", newline="\n") as stream:
             stream.write(canonical_json(record) + "\n")
             stream.flush()
             os.fsync(stream.fileno())
-        records = [decode_strict_json(line) for line in self.journal.read_text().splitlines()]
+        records = [decode_strict_json(line) for line in self.journal.read_text(encoding="utf-8").splitlines()]
         for state in lv._journal_states(records):
             self.endpoint.publish_inquiry_state(state)
         self.endpoint.publish_journal(lv.LiveJournal(available=True, entries=len(
@@ -206,7 +206,7 @@ class RequestBindingTests(LiveSeamCase):
         wire = ctl.LiveWireRequest.from_payload(decode_strict_json(self.peer.calls[0][1]))
         self.assertEqual((wire.request_id, wire.payload.question_id, wire.timeout_ms),
                          ("request-1", "question-1", 1500))
-        self.assertEqual(self.journal.read_text().count("\n"), 1)
+        self.assertEqual(self.journal.read_text(encoding="utf-8").count("\n"), 1)
 
     def test_a_replayed_request_returns_its_recorded_reply_without_redelivery(self):
         first = self.handoff()
@@ -214,7 +214,7 @@ class RequestBindingTests(LiveSeamCase):
         self.assertEqual((first.status, replay.status), ("queued", "queued"))
         self.assertTrue(replay.native_correlation.value["duplicate"])
         self.assertIsNone(self.endpoint.consume_request(0))
-        self.assertEqual(self.journal.read_text().count("\n"), 1)
+        self.assertEqual(self.journal.read_text(encoding="utf-8").count("\n"), 1)
 
     def test_a_changed_payload_under_a_committed_request_id_conflicts_before_the_bridge(self):
         self.handoff()
@@ -225,14 +225,14 @@ class RequestBindingTests(LiveSeamCase):
                 self.assertEqual((reply.status, reply.reason_code),
                                  ("unavailable", "request-payload-conflict"))
                 self.assertIsNone(self.endpoint.consume_request(0))
-        self.assertEqual(self.journal.read_text().count("\n"), 1)
+        self.assertEqual(self.journal.read_text(encoding="utf-8").count("\n"), 1)
 
     def test_a_refused_ask_is_not_remembered_and_stays_retryable(self):
         refused = self.handoff(refusal=lv.LiveReply(status="unavailable", reason_code="not-ready"))
         self.assertEqual((refused.status, refused.reason_code), ("unavailable", "not-ready"))
         self.assertFalse(self.journal.exists())
         self.assertEqual(self.handoff().status, "queued")
-        self.assertEqual(self.journal.read_text().count("\n"), 1)
+        self.assertEqual(self.journal.read_text(encoding="utf-8").count("\n"), 1)
 
     def test_a_foreign_identity_is_refused_without_touching_the_bridge(self):
         foreign = inquiry_request().model_copy(update={"identity": identity().model_copy(

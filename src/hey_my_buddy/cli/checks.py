@@ -41,7 +41,6 @@ from .. import locking
 import argparse
 import concurrent.futures
 import json
-import locale
 import os
 from pathlib import Path
 import re
@@ -83,7 +82,8 @@ def test_environment(root: Path) -> dict:
     # Resolve uv's caller cache before child_environment replaces the native home.
     if "UV_CACHE_DIR" not in values:
         values["UV_CACHE_DIR"] = subprocess.run(
-            ["uv", "cache", "dir"], env=values, capture_output=True, text=True, check=True,
+            ["uv", "cache", "dir"], env=values, capture_output=True, text=True,
+            encoding="utf-8", check=True,
         ).stdout.strip()
     source = str(root / "src")
     tests = str(root / "tests" / "python")
@@ -104,7 +104,7 @@ def test_environment(root: Path) -> dict:
 def create_private_root(*, directory: Path | None = None) -> Path:
     """One private root this runner owns and can inspect after the suites exit."""
     root = Path(tempfile.mkdtemp(prefix="hey-my-buddy-checks-", dir=directory)).resolve()
-    (root / CREATOR_FILE_NAME).write_text(f"{os.getpid()}\n")
+    (root / CREATOR_FILE_NAME).write_text(f"{os.getpid()}\n", encoding="utf-8", newline="\n")
     (root / "tmp").mkdir(mode=0o700)
     return root
 
@@ -115,7 +115,8 @@ def prepare_test_home(home: Path) -> None:
     config = home / ".gitconfig"
     # A private service may already be reading this home; initialize it only once.
     if not config.exists():
-        config.write_text("[maintenance]\n\tauto = false\n[gc]\n\tauto = 0\n", encoding="utf-8")
+        config.write_text("[maintenance]\n\tauto = false\n[gc]\n\tauto = 0\n",
+                          encoding="utf-8", newline="\n")
 
 
 def child_environment(root: Path, private_root: Path, *, home_root: Path) -> dict:
@@ -325,8 +326,7 @@ def run_suite_child(root: Path, private_root: Path, directory_name: str, label: 
     deadline = time.monotonic() + OUTPUT_DRAIN_SECONDS
     for reader in readers:
         reader.join(timeout=max(0.0, deadline - time.monotonic()))
-    encoding = locale.getencoding()
-    stdout, stderr = (b"".join(list(chunks)).decode(encoding, errors="replace") for chunks in collected)
+    stdout, stderr = (b"".join(list(chunks)).decode("utf-8", errors="replace") for chunks in collected)
     return ChildOutcome(label, process.returncode, stdout, stderr, time.monotonic() - started)
 
 
@@ -346,7 +346,18 @@ def run_suites_parallel(root: Path, private_root: Path, jobs: int, modules: list
     first. A failing child's captured output is printed in full — unittest's verbose
     listing names the module, class and test — and the failure is summarized by file.
     """
-    tasks = [(f"p{index:03d}", module, [sys.executable, "-m", "unittest", "-v", module])
+    # -W escapes its module argument as an exact name. Use the public warning
+    # filter API to cover every hey_my_buddy submodule, while ignoring warnings
+    # from test fixtures and third-party packages. Python writes UTF-8 to our
+    # binary pipes regardless of the machine's locale.
+    bootstrap = ("import runpy, sys, warnings; "
+                 "sys.stdout.reconfigure(encoding='utf-8'); "
+                 "sys.stderr.reconfigure(encoding='utf-8'); "
+                 "warnings.filterwarnings('error', category=EncodingWarning, "
+                 "module=r'^hey_my_buddy(?:\\.|$)'); "
+                 "runpy.run_module('unittest', run_name='__main__')")
+    tasks = [(f"p{index:03d}", module, [sys.executable, "-X", "warn_default_encoding",
+              "-W", "ignore::EncodingWarning", "-c", bootstrap, "-v", module])
              for index, module in enumerate(_scheduled_test_modules(modules))]
     if not tasks:
         return "python suite has no test modules"
@@ -682,14 +693,15 @@ def _directory_names(directory: Path) -> list[str]:
 
 def _log_tail(path: Path, limit: int = 4000) -> str | None:
     try:
-        return path.read_text(errors="replace")[-limit:]
+        return path.read_text(encoding="utf-8", errors="replace")[-limit:]
     except OSError:
         return None
 
 
 def _write_evidence(root: Path, evidence: dict) -> Path:
     path = root / EVIDENCE_FILE_NAME
-    path.write_text(json.dumps(evidence, indent=2, default=str))
+    path.write_text(json.dumps(evidence, indent=2, default=str),
+                    encoding="utf-8", newline="\n")
     os.chmod(path, 0o600)
     return path
 
@@ -789,7 +801,7 @@ def sweep_private_roots(directory: Path) -> int:
         reason = None
         if creator.exists():
             try:
-                pid = int(creator.read_text())
+                pid = int(creator.read_text(encoding="utf-8"))
                 if pid < 1:
                     raise ValueError("creator pid must be positive")
             except (OSError, ValueError) as error:

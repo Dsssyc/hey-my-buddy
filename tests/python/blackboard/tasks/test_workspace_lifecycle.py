@@ -38,7 +38,7 @@ from hey_my_buddy.protocol import transport
 
 def git(path, *arguments: str) -> str:
     completed = subprocess.run(
-        ["git", "-C", str(path), *arguments], env={**os.environ, **GIT_ENV}, capture_output=True, text=True,
+        ["git", "-C", str(path), *arguments], env={**os.environ, **GIT_ENV}, capture_output=True, text=True, encoding="utf-8",
     )
     if completed.returncode != 0:
         raise AssertionError(f"git {' '.join(arguments)} failed: {completed.stderr}")
@@ -124,7 +124,7 @@ class LifecycleTestCase(RealWorkspaceTestCase):
         claimed = self.claim(board, submitted["runId"], request_id=f"{request_id}-claim")
         manifest = claimed["claim"]["turn"]["input"]["executionWorkspace"]
         checkout = Path(manifest["path"])
-        (checkout / "tracked.txt").write_text(output)
+        (checkout / "tracked.txt").write_text(output, encoding="utf-8", newline="\n")
         seal = workspace_module.seal(self.directory, manifest, submitted["runId"],
                                      claimed["claim"]["attempt"]["attemptId"])
         self.finish_turn(board, claimed, seal, disposition=disposition)
@@ -169,7 +169,7 @@ class LifecycleTestCase(RealWorkspaceTestCase):
         for item in (*previous, artifact):
             completed = subprocess.run(
                 ["git", "-C", str(target), "apply", "--binary", item["diffPath"]],
-                env={**os.environ, **GIT_ENV}, capture_output=True, text=True,
+                env={**os.environ, **GIT_ENV}, capture_output=True, text=True, encoding="utf-8",
             )
             self.assertEqual(completed.returncode, 0, completed.stderr)
         git(target, "add", ".")
@@ -240,7 +240,7 @@ class LifecycleTestCase(RealWorkspaceTestCase):
         second = self.claim(board, run_id, request_id="two-turns-claim-2", nonce="q" * 16)
         self.assertIsNotNone(second["claim"], second)
         second_manifest = second["claim"]["turn"]["input"]["executionWorkspace"]
-        (checkout / "tracked.txt").write_text("second output\n")
+        (checkout / "tracked.txt").write_text("second output\n", encoding="utf-8", newline="\n")
         second_seal = workspace_module.seal(self.directory, second_manifest, run_id,
                                             second["claim"]["attempt"]["attemptId"])
         self.finish_turn(board, second, second_seal, nonce="q" * 16)
@@ -326,7 +326,7 @@ class LifecycleTestCase(RealWorkspaceTestCase):
             return prefix / f"{kind}-{number:04d}.txt"
 
         for number in range(file_count):
-            (self.repo / name("old", number)).write_text(f"file {number}\n")
+            (self.repo / name("old", number)).write_text(f"file {number}\n", encoding="utf-8", newline="\n")
         self.git("add", ".")
         self.git("commit", "-qm", "rename input")
         original = self.git("rev-parse", "HEAD").strip()
@@ -417,13 +417,13 @@ class LifecycleTestCase(RealWorkspaceTestCase):
         self.assertNotIn("summary", verification)
         self.assertTrue(checkout.exists())
         for number in range(file_count):
-            (checkout / name("new", number)).write_text("unsealed\n")
+            (checkout / name("new", number)).write_text("unsealed\n", encoding="utf-8", newline="\n")
         cleanup = workspace_module.cleanup_inspect(self.directory, manifest, sealed=sealed)
         self.assertFalse(cleanup["eligible"])
         self.assertEqual(cleanup["unsealedPaths"], sorted(str(name("new", number)).replace(os.sep, "/")
                                                        for number in range(file_count)))
         for number in range(file_count):
-            (checkout / name("new", number)).write_text(f"file {number}\n")
+            (checkout / name("new", number)).write_text(f"file {number}\n", encoding="utf-8", newline="\n")
         self.assertTrue(self.reclaim(board, self.view(board, run_id))["removed"])
         self.assertFalse(checkout.exists())
         for path, original_bytes in historical_bytes.items():
@@ -475,7 +475,7 @@ class LifecycleTestCase(RealWorkspaceTestCase):
         )
         turn_io.verify_workspace(context)
         self.assertEqual(context.effective_workspace, second_manifest)
-        (checkout / "second.txt").write_text("second output\n")
+        (checkout / "second.txt").write_text("second output\n", encoding="utf-8", newline="\n")
         second_seal = workspace_module.seal(self.directory, second_manifest, run_id, attempt["attemptId"])
         self.finish_turn(board, second_claim, second_seal, nonce="q" * 16)
         clear_workspace_refs()
@@ -535,7 +535,7 @@ class LifecycleTestCase(RealWorkspaceTestCase):
         self.assertNotIn("unrecordedPaths", adjusted["integration"]["verification"])
 
     def test_deletion_and_mode_change_are_bound_to_final_tree(self):
-        (self.repo / "mode.txt").write_text("executable content\n")
+        (self.repo / "mode.txt").write_text("executable content\n", encoding="utf-8", newline="\n")
         git(self.repo, "add", "mode.txt")
         git(self.repo, "commit", "-qm", "add mode fixture")
         board = self.board()
@@ -624,7 +624,7 @@ class LifecycleTestCase(RealWorkspaceTestCase):
                     self.assertTrue(candidate['eligible'], candidate)
                     tracked = checkout / 'tracked.txt'
                     facts = tracked.stat()
-                    tracked.write_text('dirty! output\n')
+                    tracked.write_text('dirty! output\n', encoding="utf-8", newline="\n")
                     if preserve_stat:
                         os.utime(tracked, ns=(facts.st_atime_ns, facts.st_mtime_ns))
                     retained = {path.relative_to(checkout): path.read_bytes()
@@ -668,7 +668,7 @@ class LifecycleTestCase(RealWorkspaceTestCase):
         for field in ("checkoutRoot", "checkoutId", "repositoryId", "path"):
             self.assertEqual(second_manifest[field], first_manifest[field])
         # A new-file second stage keeps the sealed patch applicable to a fresh target.
-        (checkout / "second.txt").write_text("second turn output\n")
+        (checkout / "second.txt").write_text("second turn output\n", encoding="utf-8", newline="\n")
         second_seal = workspace_module.seal(self.directory, second_manifest, run_id,
                                             second["claim"]["attempt"]["attemptId"])
         self.finish_turn(board, second, second_seal, nonce="q" * 16)
@@ -685,7 +685,7 @@ class LifecycleTestCase(RealWorkspaceTestCase):
         board, submitted, manifest, checkout, artifact, view = self.accepted_worktree()
         run_id = submitted["runId"]
         private_micro_task = private_dirs.ensure_private_dir(private_dirs.native_root(board.directory, 'codex', run_id))
-        (private_micro_task / 'session.json').write_text('private native binding')
+        (private_micro_task / 'session.json').write_text('private native binding', encoding="utf-8", newline="\n")
         applied = self.reclaim(board, view)
         self.assertTrue(applied["removed"])
         self.assertEqual(applied["path"], manifest["checkoutRoot"])
@@ -726,9 +726,9 @@ class LifecycleTestCase(RealWorkspaceTestCase):
             private_dirs.attempt_root(board.directory, 'dsh', run_id, attempt['attemptId']))
         refs = [str(failed_root / name) for name in ('unknown-events.json', 'thread-notifications.json')]
         for ref in refs:
-            Path(ref).write_text('failure evidence')
+            Path(ref).write_text('failure evidence', encoding="utf-8", newline="\n")
         native = private_dirs.ensure_private_dir(private_dirs.native_root(board.directory, 'dsh', run_id))
-        (native / 'session.json').write_text('native continuation state')
+        (native / 'session.json').write_text('native continuation state', encoding="utf-8", newline="\n")
         seal = workspace_module.seal(self.directory, manifest, run_id, attempt['attemptId'])
         result = {'status': 'ok' if import_failure else 'invalid-result', 'evidenceRefs': refs,
                   'workspaceSeal': seal, 'processState': {'shutdownConfirmed': True}}
@@ -760,22 +760,22 @@ class LifecycleTestCase(RealWorkspaceTestCase):
         second_manifest = second['claim']['turn']['input']['executionWorkspace']
         successful_root = private_dirs.ensure_private_dir(
             private_dirs.attempt_root(board.directory, 'dsh', run_id, second_id))
-        (successful_root / 'thread-notifications.json').write_text('successful evidence')
-        (checkout / 'tracked.txt').write_text('completed after retry\n')
+        (successful_root / 'thread-notifications.json').write_text('successful evidence', encoding="utf-8", newline="\n")
+        (checkout / 'tracked.txt').write_text('completed after retry\n', encoding="utf-8", newline="\n")
         second_seal = workspace_module.seal(self.directory, second_manifest, run_id, second_id)
         self.finish_turn(board, second, second_seal, nonce='q' * 16)
         delivered = self.view(board, run_id)
         artifact = next(row for row in delivered['artifacts'] if row['kind'] == 'output')
         target = self.target_with_artifact(artifact)
         credential = failed_root / 'agent-credential.json'
-        credential.write_text('private credential fixture')
+        credential.write_text('private credential fixture', encoding="utf-8", newline="\n")
         accepted = self.accept(board, delivered, artifact, target=target)
         self.assertEqual(accepted['state'], 'accepted')
         self.assertFalse(checkout.exists())
         self.assertFalse(native.exists())
         self.assertFalse(successful_root.exists())
         self.assertFalse(credential.exists())
-        self.assertEqual([Path(ref).read_text() for ref in recorded['evidenceRefs']], ['failure evidence'] * 2)
+        self.assertEqual([Path(ref).read_text(encoding="utf-8") for ref in recorded['evidenceRefs']], ['failure evidence'] * 2)
         with board.store.db.write() as connection:
             stored = json.loads(connection.execute('SELECT result_json FROM attempts WHERE attempt_id=?',
                                                    (attempt['attemptId'],)).fetchone()['result_json'])
@@ -821,7 +821,7 @@ class LifecycleTestCase(RealWorkspaceTestCase):
         self.assertTrue(concluded['reclaim']['removed'], concluded['reclaim'])
         self.assertFalse(checkout.exists())
         self.assertFalse(native.exists())
-        self.assertEqual([Path(ref).read_text() for ref in refs], ['failure evidence'] * 2)
+        self.assertEqual([Path(ref).read_text(encoding="utf-8") for ref in refs], ['failure evidence'] * 2)
         root = failed_root.parent.parent
         with board.store.db.write() as connection:
             connection.execute("UPDATE tasks SET accepted_at='2000-01-01T00:00:00Z' WHERE task_id=?", (run_id,))
@@ -856,7 +856,7 @@ class LifecycleTestCase(RealWorkspaceTestCase):
         self.assertEqual(helper_manifest['checkoutRoot'], str(checkout))
         evidence = private_dirs.ensure_private_dir(private_dirs.attempt_root(
             board.directory, 'dsh', helper_id, attempt['attemptId'])) / 'unknown-events.json'
-        evidence.write_text('helper failure evidence')
+        evidence.write_text('helper failure evidence', encoding="utf-8", newline="\n")
         seal = workspace_module.seal(self.directory, helper_manifest, helper_id, attempt['attemptId'])
         board.call('execution_result', {'attemptId': attempt['attemptId'], 'generation': attempt['generation'], 'nonce': 'n' * 16, 'status': 'failed', 'terminationReason': 'harness-error', 'shutdownConfirmed': True, 'exitCode': 1, 'result': {'status': 'invalid-result', 'workspaceSeal': seal}})
         concluded = board.call('workflow_conclude', {
@@ -865,7 +865,7 @@ class LifecycleTestCase(RealWorkspaceTestCase):
         })
         self.assertEqual(concluded['state'], 'concluded')
         self.assertTrue(checkout.exists())
-        self.assertEqual(evidence.read_text(), 'helper failure evidence')
+        self.assertEqual(evidence.read_text(encoding="utf-8"), 'helper failure evidence')
         with board.store.db.write() as connection:
             connection.execute("UPDATE workflow_host_conclusions SET created_at='2000-01-01T00:00:00Z' WHERE run_id=?",
                                (helper_id,))
@@ -1002,8 +1002,8 @@ class LifecycleTestCase(RealWorkspaceTestCase):
         board, submitted, manifest, checkout, artifact, view = self.accepted_worktree(request_id="cleanup-dirty")
         native = private_dirs.ensure_private_dir(private_dirs.native_root(board.directory, 'dsh', submitted['runId']))
         session = native / 'session.json'
-        session.write_text('retain until reclaim is authorized')
-        (checkout / "tracked.txt").write_text("edited after the seal\n")
+        session.write_text('retain until reclaim is authorized', encoding="utf-8", newline="\n")
+        (checkout / "tracked.txt").write_text("edited after the seal\n", encoding="utf-8", newline="\n")
         with self.assertRaises(BoardError) as raised:
             self.reclaim(board, view)
         self.assertEqual(raised.exception.code, "NOT_READY")
@@ -1012,9 +1012,9 @@ class LifecycleTestCase(RealWorkspaceTestCase):
         self.assertEqual(blocked_view["cleanup"]["state"], "blocked")
         self.assertEqual(blocked_view["cleanup"]["evidence"]["workspace"]["unsealedPaths"], ["tracked.txt"])
         self.assertTrue(checkout.exists())
-        self.assertEqual(session.read_text(), 'retain until reclaim is authorized')
+        self.assertEqual(session.read_text(encoding="utf-8"), 'retain until reclaim is authorized')
         # Returning the site to the sealed state makes the same workspace eligible.
-        (checkout / "tracked.txt").write_text("sealed output\n")
+        (checkout / "tracked.txt").write_text("sealed output\n", encoding="utf-8", newline="\n")
         recovered = self.reclaim(board, blocked_view)
         self.assertTrue(recovered["removed"])
         self.assertFalse(checkout.exists())
@@ -1187,7 +1187,7 @@ class LifecycleTestCase(RealWorkspaceTestCase):
     def test_continuation_cleanup_blocks_a_change_after_the_latest_seal(self):
         board, submitted, first, second, final, view = self.two_turn_worktree(request_id="continuation-dirty")
         checkout = Path(second["checkoutRoot"])
-        (checkout / "tracked.txt").write_text("edited after the second seal\n")
+        (checkout / "tracked.txt").write_text("edited after the second seal\n", encoding="utf-8", newline="\n")
         with self.assertRaises(BoardError) as raised:
             self.reclaim(board, view)
         self.assertEqual(raised.exception.code, "NOT_READY")
@@ -1198,7 +1198,7 @@ class LifecycleTestCase(RealWorkspaceTestCase):
         self.assertEqual(blocked_view["cleanup"]["evidence"]["workspace"]["unsealedPaths"], ["tracked.txt"])
         self.assertTrue(checkout.exists())
         # Returning the site to the latest sealed state makes it eligible again.
-        (checkout / "tracked.txt").write_text("first turn output\n")
+        (checkout / "tracked.txt").write_text("first turn output\n", encoding="utf-8", newline="\n")
         recovered = self.reclaim(board, blocked_view)
         self.assertTrue(recovered["removed"], recovered)
 
@@ -1334,7 +1334,7 @@ class LifecycleTestCase(RealWorkspaceTestCase):
         self.assertIsNotNone(helper_claim["claim"], helper_claim)
         helper_turn_manifest = helper_claim["claim"]["turn"]["input"]["executionWorkspace"]
         helper_checkout = Path(helper_turn_manifest["path"])
-        (helper_checkout / "helper.txt").write_text("helper output\n")
+        (helper_checkout / "helper.txt").write_text("helper output\n", encoding="utf-8", newline="\n")
         helper_seal = workspace_module.seal(self.directory, helper_turn_manifest, helper_id,
                                             helper_claim["claim"]["attempt"]["attemptId"])
         self.finish_turn(board, helper_claim, helper_seal, nonce="h" * 16)
@@ -1435,7 +1435,7 @@ class LifecycleTestCase(RealWorkspaceTestCase):
         parent_claim = self.claim(board, run_id, request_id="parent-claim-2", nonce="p" * 16)
         self.assertIsNotNone(parent_claim["claim"], parent_claim)
         parent_manifest = parent_claim["claim"]["turn"]["input"]["executionWorkspace"]
-        (Path(parent_manifest["path"]) / "parent-second.txt").write_text("parent second stage\n")
+        (Path(parent_manifest["path"]) / "parent-second.txt").write_text("parent second stage\n", encoding="utf-8", newline="\n")
         parent_seal = workspace_module.seal(self.directory, parent_manifest, run_id,
                                             parent_claim["claim"]["attempt"]["attemptId"])
         self.finish_turn(board, parent_claim, parent_seal, nonce="p" * 16)
@@ -1567,9 +1567,9 @@ class LifecycleTestCase(RealWorkspaceTestCase):
         manifest = claimed["claim"]["turn"]["input"]["executionWorkspace"]
         checkout = Path(manifest["path"])
         (checkout / "src" / "feature.py").parent.mkdir(parents=True, exist_ok=True)
-        (checkout / "src" / "feature.py").write_text("value = 2\n")
-        (checkout / "tracked.txt").write_text("outside the authorized scope\n")
-        (checkout / "outside.txt").write_text("untracked outside\n")
+        (checkout / "src" / "feature.py").write_text("value = 2\n", encoding="utf-8", newline="\n")
+        (checkout / "tracked.txt").write_text("outside the authorized scope\n", encoding="utf-8", newline="\n")
+        (checkout / "outside.txt").write_text("untracked outside\n", encoding="utf-8", newline="\n")
         with self.assertRaises(BoardError) as raised:
             workspace_module.seal(self.directory, manifest, submitted["runId"],
                                   claimed["claim"]["attempt"]["attemptId"])
@@ -1622,8 +1622,8 @@ class LifecycleTestCase(RealWorkspaceTestCase):
         manifest = claimed["claim"]["turn"]["input"]["executionWorkspace"]
         checkout = Path(manifest["path"])
         (checkout / "src" / "feature.py").parent.mkdir(parents=True, exist_ok=True)
-        (checkout / "src" / "feature.py").write_text("value = 2\n")
-        (checkout / "tracked.txt").write_text("outside the authorized scope\n")
+        (checkout / "src" / "feature.py").write_text("value = 2\n", encoding="utf-8", newline="\n")
+        (checkout / "tracked.txt").write_text("outside the authorized scope\n", encoding="utf-8", newline="\n")
         with self.assertRaises(BoardError):
             workspace_module.seal(self.directory, manifest, submitted["runId"],
                                   claimed["claim"]["attempt"]["attemptId"])
@@ -1641,7 +1641,7 @@ class LifecycleTestCase(RealWorkspaceTestCase):
         self.assertTrue(adopted["delivered"])
         # A Host change beyond both the scope and the adopted site, plus a forged
         # adoption record that claims the Host already promoted exactly that path.
-        (checkout / "smuggled.txt").write_text("never authorized\n")
+        (checkout / "smuggled.txt").write_text("never authorized\n", encoding="utf-8", newline="\n")
         with board.store.db.write() as connection:
             connection.execute(
                 "INSERT INTO workflow_artifacts(artifact_id, run_id, turn_id, attempt_id, kind,"
@@ -1820,8 +1820,8 @@ class LifecycleTestCase(RealWorkspaceTestCase):
         self.assertEqual(resolved["targetRunId"], helper_id)
         self.assertEqual(resolved["resolutionState"], "restored")
         self.assertIn("tracked.txt", resolved["resolvedPaths"])
-        self.assertEqual((flow["helperCheckout"] / "tracked.txt").read_text(), "base\n")
-        self.assertEqual((flow["helperCheckout"] / "src" / "feature.py").read_text(), "value = 2\n")
+        self.assertEqual((flow["helperCheckout"] / "tracked.txt").read_text(encoding="utf-8"), "base\n")
+        self.assertEqual((flow["helperCheckout"] / "src" / "feature.py").read_text(encoding="utf-8"), "value = 2\n")
         with board.store.db.read() as connection:
             conflict_run = connection.execute(
                 "SELECT run_id FROM workflow_workspace_conflicts WHERE conflict_id=?",
@@ -1850,8 +1850,8 @@ class LifecycleTestCase(RealWorkspaceTestCase):
         self.assertIsNotNone(helper_claim["claim"], helper_claim)
         helper_manifest = helper_claim["claim"]["turn"]["input"]["executionWorkspace"]
         helper_checkout = Path(helper_manifest["path"])
-        (helper_checkout / "src" / "feature.py").write_text("value = 2\n")
-        (helper_checkout / "tracked.txt").write_text("outside the helper scope\n")
+        (helper_checkout / "src" / "feature.py").write_text("value = 2\n", encoding="utf-8", newline="\n")
+        (helper_checkout / "tracked.txt").write_text("outside the helper scope\n", encoding="utf-8", newline="\n")
         with self.assertRaises(BoardError) as raised:
             workspace_module.seal(self.directory, helper_manifest, helper_id,
                                   helper_claim["claim"]["attempt"]["attemptId"])
@@ -1875,7 +1875,7 @@ class LifecycleTestCase(RealWorkspaceTestCase):
                                keepCheckout=True)
         self.assertEqual(accepted["state"], "accepted")
         view = self.view(board, submitted["runId"])
-        (checkout / "tracked.txt").write_text("edited after the seal\n")
+        (checkout / "tracked.txt").write_text("edited after the seal\n", encoding="utf-8", newline="\n")
         with self.assertRaises(BoardError) as raised:
             self.reclaim(board, view)
         self.assertEqual(raised.exception.code, "NOT_READY")
@@ -1884,7 +1884,7 @@ class LifecycleTestCase(RealWorkspaceTestCase):
         self.assertTrue(checkout.exists())
         # Removing the blocker runs one fresh removal authorization for the same
         # exact registered path.
-        (checkout / "tracked.txt").write_text("sealed output\n")
+        (checkout / "tracked.txt").write_text("sealed output\n", encoding="utf-8", newline="\n")
         applied = self.reclaim(board, self.view(board, submitted["runId"]))
         self.assertTrue(applied["removed"])
         self.assertEqual(applied["path"], manifest["checkoutRoot"])
@@ -1995,7 +1995,7 @@ class LifecycleTestCase(RealWorkspaceTestCase):
         self.assertIsNone(workspace_module._worktree_record(self.repo, checkout))
 
     def test_refused_started_reclaim_preserves_every_plan_column_and_the_capture_fence(self):
-        (self.repo / "kept.txt").write_text("retained tracked file\n")
+        (self.repo / "kept.txt").write_text("retained tracked file\n", encoding="utf-8", newline="\n")
         git(self.repo, "add", "kept.txt")
         git(self.repo, "commit", "-qm", "another retained file")
         board, submitted, manifest, checkout, artifact = self.interrupted_reclaim(missing=("tracked.txt",))
@@ -2031,7 +2031,7 @@ class LifecycleTestCase(RealWorkspaceTestCase):
         self.assertEqual(workspace_module._worktree_record(self.repo, checkout)["locked"],
                          "hey-my-buddy:" + manifest["workspaceId"])
         self.assertEqual(git(self.repo, "for-each-ref", "--format=%(refname) %(objectname)", "refs/hey-my-buddy/"), refs)
-        (checkout / "kept.txt").write_text("retained tracked file\n")
+        (checkout / "kept.txt").write_text("retained tracked file\n", encoding="utf-8", newline="\n")
         recovered = self.reclaim(board, self.view(board, run_id))
         self.assertTrue(recovered["removed"])
         self.assertFalse(checkout.exists())
@@ -2090,7 +2090,7 @@ class LifecycleTestCase(RealWorkspaceTestCase):
         self.assertFalse(checkout.exists())
 
     def test_started_reclaim_removes_an_ignored_cache_present_before_the_first_delete(self):
-        (self.repo / ".gitignore").write_text("__pycache__/\n")
+        (self.repo / ".gitignore").write_text("__pycache__/\n", encoding="utf-8", newline="\n")
         git(self.repo, "add", ".gitignore")
         git(self.repo, "commit", "-qm", "ignored cache")
         board, submitted, manifest, checkout, artifact, view = self.accepted_worktree()
@@ -2159,7 +2159,7 @@ class LifecycleTestCase(RealWorkspaceTestCase):
             missing=("tracked.txt",), remove_git=True)
         git_dir = next(path for path in (self.repo / ".git" / "worktrees").iterdir()
                        if workspace_module._identity(path) == manifest["checkoutId"])
-        backlink = Path((git_dir / "gitdir").read_text().strip())
+        backlink = Path((git_dir / "gitdir").read_text(encoding="utf-8").strip())
         self.assertFalse(backlink.is_absolute())
         self.assertEqual((git_dir / backlink).resolve(), checkout / ".git")
         self.assertTrue(self.reclaim(board, self.view(board, submitted["runId"]))["removed"])
@@ -2280,7 +2280,7 @@ class LifecycleTestCase(RealWorkspaceTestCase):
         self.assertIn("attached-branch", blocked.exception.details["reasons"])
         command = blocked.exception.details["reclaim"]["attachedBranch"]["detachCommand"]
         completed = subprocess.run(["sh", "-c", command], cwd=self.repo,
-                                   env={**os.environ, **GIT_ENV}, capture_output=True, text=True)
+                                   env={**os.environ, **GIT_ENV}, capture_output=True, text=True, encoding="utf-8")
         self.assertEqual(completed.returncode, 0, completed.stderr)
         self.assertEqual(git(checkout, "rev-parse", "HEAD").strip(),
                          blocked.exception.details["reclaim"]["attachedBranch"]["headCommit"])
@@ -2380,7 +2380,7 @@ class LifecycleTestCase(RealWorkspaceTestCase):
         router_directory = self.directory / "router-seam"
         router_directory.mkdir()
         frozen, digest = router_input.prepare(original, router_directory)
-        self.assertEqual((frozen / "tracked.txt").read_text(), "base\n")
+        self.assertEqual((frozen / "tracked.txt").read_text(encoding="utf-8"), "base\n")
         self.assertTrue(router_input.verify(original, frozen, digest)["unchanged"])
         self.assertEqual(self.fixed_files(), initial_files)
         run_id = submitted["runId"]
@@ -2397,7 +2397,7 @@ class LifecycleTestCase(RealWorkspaceTestCase):
         self.assertEqual(current["checkoutId"], actual["checkoutId"])
         self.assertEqual(current["checkoutId"], original["checkoutId"])
         self.assertEqual(current["baseCommit"], first_seal["commit"])
-        (checkout / "tracked.txt").write_text("output after reboot\n")
+        (checkout / "tracked.txt").write_text("output after reboot\n", encoding="utf-8", newline="\n")
         sealed = workspace_module.seal(self.directory, current, run_id, resumed["claim"]["attempt"]["attemptId"])
         self.finish_turn(board, resumed, sealed, nonce="q" * 16)
         delivered = self.view(board, run_id)
@@ -2501,8 +2501,8 @@ class LifecycleTestCase(RealWorkspaceTestCase):
             'note': "restore the authorized helper input", **self.control(root),
         })
         self.assertEqual(resolved["resolutionState"], "restored")
-        self.assertEqual((flow["helperCheckout"] / "tracked.txt").read_text(), "base\n")
-        self.assertEqual((flow["helperCheckout"] / "src" / "feature.py").read_text(), "value = 2\n")
+        self.assertEqual((flow["helperCheckout"] / "tracked.txt").read_text(encoding="utf-8"), "base\n")
+        self.assertEqual((flow["helperCheckout"] / "src" / "feature.py").read_text(encoding="utf-8"), "value = 2\n")
         root = self.view(board, root_id)
         board.call("workflow_continue", {
             "runId": root_id, "targetRunId": helper_id, "commandId": "restart-restored-helper-continue",
@@ -2531,8 +2531,8 @@ class LifecycleTestCase(RealWorkspaceTestCase):
         })
         self.assertEqual(abandoned["resolutionState"], "abandoned")
         self.assertEqual(abandoned["artifact"]["kind"], "abandoned-site")
-        self.assertIn("outside the helper scope", Path(abandoned["diffPath"]).read_text())
-        self.assertEqual((flow["helperCheckout"] / "src" / "feature.py").read_text(), "value = 1\n")
+        self.assertIn("outside the helper scope", Path(abandoned["diffPath"]).read_text(encoding="utf-8"))
+        self.assertEqual((flow["helperCheckout"] / "src" / "feature.py").read_text(encoding="utf-8"), "value = 1\n")
         root = self.view(board, root_id)
         board.call("workflow_continue", {
             "runId": root_id, "targetRunId": helper_id, "commandId": "restart-abandoned-helper-continue",

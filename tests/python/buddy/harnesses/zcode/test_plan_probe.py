@@ -111,7 +111,7 @@ class PlanProbeModelTests(unittest.TestCase):
         probe.write_target = probe.cwd / "written.txt"
         probe.command_target = probe.cwd / "command.txt"
         probe.read_target = probe.cwd / "read.txt"
-        probe.read_target.write_text(self.module.MARKERS["read"])
+        probe.read_target.write_text(self.module.MARKERS["read"], encoding="utf-8", newline="\n")
         return probe
 
     def offline_run(self, request, **kwargs):

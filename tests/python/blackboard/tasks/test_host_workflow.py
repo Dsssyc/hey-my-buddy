@@ -81,7 +81,7 @@ class HostCompletionTests(WorkflowTestCase):
         # A target that does not carry the artifact is refused with the differing
         # paths first; there is no separate rejection record to archive.
         blank = self.workdir("blank-target")
-        (blank / "keep.txt").write_text("untouched\n")
+        (blank / "keep.txt").write_text("untouched\n", encoding="utf-8", newline="\n")
         import subprocess as sp
         sp.run(["git", "-C", str(blank), "init", "-q"], check=True)
         sp.run(["git", "-C", str(blank), "add", "keep.txt"], check=True)
@@ -388,7 +388,7 @@ class HostConclusionCleanupTests(LifecycleTestCase):
         self.register(board)
         _submitted, _claim, _manifest, _checkout, _seal, current, artifact = self.run_worktree(board)
         target = self.target_with_artifact(artifact)
-        (target["path"] / "host-note.txt").write_text("Host verification\n")
+        (target["path"] / "host-note.txt").write_text("Host verification\n", encoding="utf-8", newline="\n")
         git(target["path"], "add", "host-note.txt")
         git(target["path"], "commit", "-qm", "Host supplement")
         for paths in (["tracked.txt"], ["absent.txt"], ["../outside"]):

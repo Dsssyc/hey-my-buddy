@@ -76,7 +76,7 @@ FIXTURE_CATALOG = {
 
 def write_catalog_fixture(directory: Path, payload: dict | None = None) -> Path:
     path = Path(directory) / "model-catalog.json"
-    path.write_text(json.dumps(payload or FIXTURE_CATALOG))
+    path.write_text(json.dumps(payload or FIXTURE_CATALOG), encoding="utf-8", newline="\n")
     os.chmod(path, 0o600)
     return path
 
@@ -202,7 +202,7 @@ def _child_environment(directory: Path, overrides: dict | None = None) -> dict:
     )
     environment.update(overrides or {})
     if environment.get("HMB_HARNESS_RECORD_FILE"):
-        selected = json.loads(Path(environment["HMB_HARNESS_RECORD_FILE"]).read_text())
+        selected = json.loads(Path(environment["HMB_HARNESS_RECORD_FILE"]).read_text(encoding="utf-8"))
         for harness in selected:
             environment.pop(f"HMB_{harness.upper()}_CLI", None)
     # Test-supplied paths may vary within the fixture, but must not redirect its
@@ -522,12 +522,12 @@ class BoardTestCase(unittest.TestCase):
                         pass
                 if process.poll() is not None:
                     raise AssertionError(
-                        f"daemon exited early: {(self.directory / 'test-daemon.log').read_text()[-2000:]}"
+                        f"daemon exited early: {(self.directory / 'test-daemon.log').read_text(encoding="utf-8")[-2000:]}"
                     )
                 time.sleep(0.05)
             else:
                 raise AssertionError(
-                    f"daemon did not become healthy: {(self.directory / 'test-daemon.log').read_text()[-2000:]}"
+                    f"daemon did not become healthy: {(self.directory / 'test-daemon.log').read_text(encoding="utf-8")[-2000:]}"
                 )
             yield process
         finally:
@@ -547,7 +547,7 @@ class BoardTestCase(unittest.TestCase):
             env=environment,
             capture_output=True,
             text=True,
-            timeout=timeout,
+            timeout=timeout, encoding="utf-8",
         )
         text = completed.stdout.strip()
         try:

@@ -251,7 +251,7 @@ class CredentialTests(ConsoleCliTestCase):
     def test_credential_file_is_refused_before_anything_happens(self):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "credential.json"
-            path.write_text(json.dumps({"token": "file-token", "stateDir": directory}))
+            path.write_text(json.dumps({"token": "file-token", "stateDir": directory}), encoding="utf-8", newline="\n")
             os.chmod(path, 0o600)
             rpc = FakeRpc()
             with mock.patch.dict(os.environ, {"HMB_AGENT_CREDENTIAL_FILE": str(path)}):

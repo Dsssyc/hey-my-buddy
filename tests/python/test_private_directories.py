@@ -26,7 +26,7 @@ class PrivateDirectoryTests(BoardTestCase):
     def test_remove_tree_deletes_links_even_when_the_exact_link_is_kept(self):
         outside = private_dirs.ensure_private_dir(self.directory / 'outside-kept-links')
         sentinel = outside / 'sentinel'
-        sentinel.write_text('retained outside target')
+        sentinel.write_text('retained outside target', encoding="utf-8", newline="\n")
         targets = (('file', sentinel, False), ('directory', outside, True),
                    ('dangling', outside / 'missing', False))
         for kind, target, directory_link in targets:
@@ -37,18 +37,18 @@ class PrivateDirectoryTests(BoardTestCase):
                 self.assertTrue(private_dirs.remove_tree(root, keep=frozenset({link})))
                 self.assertFalse(root.exists())
                 self.assertFalse(link.is_symlink())
-                self.assertEqual(sentinel.read_text(), 'retained outside target')
+                self.assertEqual(sentinel.read_text(encoding="utf-8"), 'retained outside target')
 
     def test_remove_tree_keeps_the_exact_file_without_retaining_same_named_directories(self):
         root = private_dirs.ensure_private_dir(self.directory / 'private-records')
         recorded = private_dirs.ensure_private_dir(root / 'attempts' / 'recorded')
         session = recorded / 'evidence.json'
-        session.write_text('retained evidence\n')
-        (recorded / 'settings.json').write_text('remove configuration')
+        session.write_text('retained evidence\n', encoding="utf-8", newline="\n")
+        (recorded / 'settings.json').write_text('remove configuration', encoding="utf-8", newline="\n")
         same_name = private_dirs.ensure_private_dir(root / 'attempts' / 'directory' / 'evidence.json')
-        (same_name / 'unrelated.txt').write_text('a directory is not an evidence file')
+        (same_name / 'unrelated.txt').write_text('a directory is not an evidence file', encoding="utf-8", newline="\n")
         self.assertFalse(private_dirs.remove_tree(root, keep=frozenset({session})))
-        self.assertEqual(session.read_text(), 'retained evidence\n')
+        self.assertEqual(session.read_text(encoding="utf-8"), 'retained evidence\n')
         self.assertEqual(list(recorded.iterdir()), [session])
         self.assertEqual(list((root / 'attempts').iterdir()), [recorded])
         self.assertFalse(same_name.exists())
@@ -56,19 +56,19 @@ class PrivateDirectoryTests(BoardTestCase):
     def test_remove_tree_retains_exact_evidence_subtree_and_existing_link_guards(self):
         root = private_dirs.ensure_private_dir(self.directory / 'private')
         failed = private_dirs.ensure_private_dir(root / 'attempts' / 'failed')
-        (failed / 'unknown-events.json').write_text('failure evidence')
+        (failed / 'unknown-events.json').write_text('failure evidence', encoding="utf-8", newline="\n")
         native = private_dirs.ensure_private_dir(root / 'native')
-        (native / 'session.json').write_text('native state')
+        (native / 'session.json').write_text('native state', encoding="utf-8", newline="\n")
         successful = private_dirs.ensure_private_dir(root / 'attempts' / 'completed')
-        (successful / 'result.json').write_text('success evidence')
+        (successful / 'result.json').write_text('success evidence', encoding="utf-8", newline="\n")
         outside = private_dirs.ensure_private_dir(self.directory / 'outside')
-        (outside / 'sentinel').write_text('safe')
+        (outside / 'sentinel').write_text('safe', encoding="utf-8", newline="\n")
         (root / 'linked').symlink_to(outside, target_is_directory=True)
         self.assertFalse(private_dirs.remove_tree(root, keep=frozenset({failed})))
-        self.assertEqual((failed / 'unknown-events.json').read_text(), 'failure evidence')
+        self.assertEqual((failed / 'unknown-events.json').read_text(encoding="utf-8"), 'failure evidence')
         self.assertEqual(list(root.iterdir()), [root / 'attempts'])
         self.assertEqual(list((root / 'attempts').iterdir()), [failed])
-        self.assertEqual((outside / 'sentinel').read_text(), 'safe')
+        self.assertEqual((outside / 'sentinel').read_text(encoding="utf-8"), 'safe')
         alias = self.directory / 'alias'
         alias.symlink_to(root, target_is_directory=True)
         with self.assertRaises(BoardError):
@@ -78,14 +78,14 @@ class PrivateDirectoryTests(BoardTestCase):
     def test_execution_start_cleanup_matches_exact_private_filename(self):
         state = self.directory.resolve()
         root = private_dirs.ensure_private_dir(private_dirs.attempt_root(state, 'zcode', 'microTask', 'attempt'))
-        (root / 'execution-start.json').write_text('private')
-        (root / 'execution-live.json').write_text('private endpoint token')
-        (root / 'execution-started.json').write_text('retain unknown filename')
+        (root / 'execution-start.json').write_text('private', encoding="utf-8", newline="\n")
+        (root / 'execution-live.json').write_text('private endpoint token', encoding="utf-8", newline="\n")
+        (root / 'execution-started.json').write_text('retain unknown filename', encoding="utf-8", newline="\n")
         removed = private_dirs.cleanup_attempt_credentials(state, 'zcode', 'microTask', 'attempt')
         self.assertEqual(removed['count'], 1)
         self.assertFalse((root / 'execution-start.json').exists())
         self.assertTrue((root / 'execution-live.json').exists())
-        self.assertEqual((root / 'execution-started.json').read_text(), 'retain unknown filename')
+        self.assertEqual((root / 'execution-started.json').read_text(encoding="utf-8"), 'retain unknown filename')
 
     def test_explicit_state_and_reparse_guard(self):
         context = SimpleNamespace(environment={'HMB_STATE_DIR': str(self.directory.resolve())},
@@ -100,18 +100,18 @@ class PrivateDirectoryTests(BoardTestCase):
         outside = self.directory.resolve() / 'outside'
         outside.mkdir()
         sentinel = outside / 'keep'
-        sentinel.write_text('safe')
+        sentinel.write_text('safe', encoding="utf-8", newline="\n")
         target = self.directory.resolve() / 'private'
         target.mkdir()
         (target / 'linked').symlink_to(outside, target_is_directory=True)
-        (target / 'regular').write_text('remove')
+        (target / 'regular').write_text('remove', encoding="utf-8", newline="\n")
         self.assertTrue(private_dirs.remove_tree(target))
-        self.assertEqual(sentinel.read_text(), 'safe')
+        self.assertEqual(sentinel.read_text(encoding="utf-8"), 'safe')
 
     def test_parent_guard_stops_before_inspecting_an_entry_under_a_link(self):
         outside = self.directory.resolve() / 'external-parent'
         outside.mkdir()
-        (outside / 'secret').write_text('retained')
+        (outside / 'secret').write_text('retained', encoding="utf-8", newline="\n")
         alias = self.directory.resolve() / 'alias'
         alias.symlink_to(outside, target_is_directory=True)
         original = Path.lstat
@@ -144,26 +144,26 @@ class PrivateDirectoryTests(BoardTestCase):
         state = self.directory.resolve()
         root = private_dirs.ensure_private_dir(private_dirs.attempt_root(state, 'dsh', 'microTask', 'fixture-attempt'))
         outside = state / 'outside-auth'
-        outside.write_text('secret')
+        outside.write_text('secret', encoding="utf-8", newline="\n")
         home = private_dirs.ensure_private_dir(root / 'native/codex-home')
         (home / 'auth.json').symlink_to(outside)
-        (root / 'agent-credential.json').write_text('secret')
-        (root / 'execution-start.json').write_text('private startup claim and nonce')
-        (root / 'diagnostic.json').write_text('retained')
+        (root / 'agent-credential.json').write_text('secret', encoding="utf-8", newline="\n")
+        (root / 'execution-start.json').write_text('private startup claim and nonce', encoding="utf-8", newline="\n")
+        (root / 'diagnostic.json').write_text('retained', encoding="utf-8", newline="\n")
         fallback = Path(tempfile.gettempdir()).resolve() / 'hey-my-buddy-inquiry' / 'fixture-attempt'
         fallback.mkdir(parents=True, exist_ok=True)
-        (fallback / 'inquiry.sock').write_text('socket')
-        (root / 'inquiry.json').write_text(json.dumps({'socketPath': str(fallback / 'inquiry.sock'), 'token': 'secret'}))
+        (fallback / 'inquiry.sock').write_text('socket', encoding="utf-8", newline="\n")
+        (root / 'inquiry.json').write_text(json.dumps({'socketPath': str(fallback / 'inquiry.sock'), 'token': 'secret'}), encoding="utf-8", newline="\n")
         result = private_dirs.cleanup_attempt_credentials(state, 'dsh', 'microTask', 'fixture-attempt')
         self.assertGreaterEqual(result['count'], 4)
         self.assertFalse(fallback.exists())
         self.assertFalse((home / 'auth.json').is_symlink())
         self.assertFalse((root / 'execution-start.json').exists())
-        self.assertEqual(outside.read_text(), 'secret')
-        self.assertEqual((root / 'diagnostic.json').read_text(), 'retained')
+        self.assertEqual(outside.read_text(encoding="utf-8"), 'secret')
+        self.assertEqual((root / 'diagnostic.json').read_text(encoding="utf-8"), 'retained')
         unrelated = state / 'unrelated' / 'fixture-attempt'
         unrelated.mkdir(parents=True)
-        (unrelated / 'inquiry.sock').write_text('outside')
-        (root / 'inquiry.json').write_text(json.dumps({'socketPath':str(unrelated / 'inquiry.sock')}))
+        (unrelated / 'inquiry.sock').write_text('outside', encoding="utf-8", newline="\n")
+        (root / 'inquiry.json').write_text(json.dumps({'socketPath':str(unrelated / 'inquiry.sock')}), encoding="utf-8", newline="\n")
         private_dirs.cleanup_attempt_credentials(state, 'dsh', 'microTask', 'fixture-attempt')
-        self.assertEqual((unrelated / 'inquiry.sock').read_text(), 'outside')
+        self.assertEqual((unrelated / 'inquiry.sock').read_text(encoding="utf-8"), 'outside')

@@ -32,7 +32,7 @@ def selected(harness, environment=None):
     records = _records.get()
     if records is None and env.get(RECORD_FILE):
         try:
-            records = json.loads(Path(env[RECORD_FILE]).read_text())
+            records = json.loads(Path(env[RECORD_FILE]).read_text(encoding="utf-8"))
         except (OSError, ValueError):
             raise BoardError('HARNESS_RECORD_INVALID', 'The attempt has no readable selected harness record') from None
     return records.get(harness) if records is not None else None

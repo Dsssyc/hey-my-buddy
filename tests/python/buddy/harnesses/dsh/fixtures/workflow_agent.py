@@ -134,8 +134,8 @@ class WorkflowAgent(fake_agent.FakeAgent):
         index = (turn_input.get("context") or {}).get("turnIndex")
         if type(index) is int and index >= 2:
             # The continuation captures exactly the context the service rebuilt.
-            (root / CONTEXT_FILE).write_text(json.dumps(turn_input.get("context") or {}))
-        (root / OUTPUT_FILE).write_text(f"output for turn {turn_input.get('turnId')}\n")
+            (root / CONTEXT_FILE).write_text(json.dumps(turn_input.get("context") or {}), encoding="utf-8", newline="\n")
+        (root / OUTPUT_FILE).write_text(f"output for turn {turn_input.get('turnId')}\n", encoding="utf-8", newline="\n")
 
     def run_quota_turn(self, message: dict, turn_input: dict, *, code: str | None = None,
                        edit: str = QUOTA_EDIT, message_text: str = QUOTA_MESSAGE) -> None:
@@ -151,7 +151,7 @@ class WorkflowAgent(fake_agent.FakeAgent):
         self.last_session_id = session_id
         cwd = self.session_cwd.get(session_id)
         if cwd:
-            (Path(cwd) / "tracked.txt").write_text(edit)
+            (Path(cwd) / "tracked.txt").write_text(edit, encoding="utf-8", newline="\n")
         self.notify_client("session/update", {"sessionId": session_id, "update": {
             "sessionUpdate": "agent_message_chunk",
             "content": {"type": "text", "text": message_text}}})

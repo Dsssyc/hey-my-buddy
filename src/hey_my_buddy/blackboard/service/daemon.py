@@ -35,7 +35,7 @@ def atomic_json(path: Path, value: dict) -> None:
     temporary = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")
     try:
         fd = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-        with os.fdopen(fd, "w") as stream:
+        with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as stream:
             json.dump(value, stream, ensure_ascii=False, allow_nan=False)
             stream.flush()
             os.fsync(stream.fileno())
@@ -276,7 +276,7 @@ class Daemon:
             self.console.close()
         self.store.db.close()
         try:
-            value = json.loads(self.endpoint_path.read_text())
+            value = json.loads(self.endpoint_path.read_text(encoding="utf-8"))
             if hmac.compare_digest(value.get("serviceId", ""), self.service_id):
                 self.endpoint_path.unlink()
         except (OSError, ValueError):

@@ -14,7 +14,7 @@ original = Daemon.service
 def service(daemon):
     result = original(daemon)
     result.automatic_discovery = False
-    selected = json.loads(Path(os.environ['HMB_HARNESS_RECORD_FILE']).read_text()) if os.environ.get('HMB_HARNESS_RECORD_FILE') else {}
+    selected = json.loads(Path(os.environ['HMB_HARNESS_RECORD_FILE']).read_text(encoding="utf-8")) if os.environ.get('HMB_HARNESS_RECORD_FILE') else {}
     # Native discovery is the fixture boundary, just like MODEL_CATALOG_FILE.
     # No private service integration test inspects the user's native login.
     with daemon.store.db.write() as db:

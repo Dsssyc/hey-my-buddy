@@ -295,7 +295,7 @@ def scan(source: str, codes: dict[str, list[str]] = REGISTERED) -> list[str]:
     with tempfile.TemporaryDirectory(prefix="reason-codes-") as directory:
         root = Path(directory)
         (root / "package").mkdir()
-        (root / "package" / "sample.py").write_text(source, encoding="utf-8")
+        (root / "package" / "sample.py").write_text(source, encoding="utf-8", newline="\n")
         return reason_violations(root, codes)
 
 

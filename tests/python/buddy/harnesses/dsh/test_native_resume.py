@@ -36,12 +36,12 @@ from buddy.harnesses.dsh.test_native_run import NativeRunCase
 
 def _record_facts(result) -> dict:
     reference = next(ref for ref in result.evidence_refs if ref.kind == "dsh-session-record")
-    return json.loads(Path(reference.location).read_text())
+    return json.loads(Path(reference.location).read_text(encoding="utf-8"))
 
 
 def _provenance(result) -> dict:
     reference = next(ref for ref in result.evidence_refs if ref.kind == "turn-provenance")
-    return json.loads(Path(reference.location).read_text())
+    return json.loads(Path(reference.location).read_text(encoding="utf-8"))
 
 
 class NativeResumeCase(NativeRunCase):
@@ -119,7 +119,7 @@ class ResumeTurnTests(NativeResumeCase):
         self.assertIs(first.continuation.resumable, True)
         previous = first.native_identity.session_id
         binding = self.root / (hashlib.sha256(previous.encode()).hexdigest() + ".json")
-        self.assertEqual(set(json.loads(binding.read_text())), {"taskId", "sessionId", "cwd", "buddy"})
+        self.assertEqual(set(json.loads(binding.read_text(encoding="utf-8"))), {"taskId", "sessionId", "cwd", "buddy"})
         original = binding.read_bytes()
         _, _, _, second = self.resumed_turn(previous)
         self.assertEqual(second.end.status, "ok", second.end.message)
@@ -178,7 +178,7 @@ class ResumeTurnTests(NativeResumeCase):
         # binding unchanged under the native root.
         self.assertTrue(result2.continuation.resumable)
         binding = self.root / (hashlib.sha256(previous.encode()).hexdigest() + ".json")
-        self.assertEqual(json.loads(binding.read_text())["sessionId"], previous)
+        self.assertEqual(json.loads(binding.read_text(encoding="utf-8"))["sessionId"], previous)
         provenance = _provenance(result2)
         self.assertEqual(provenance["nativeSessionId"], previous)
         self.assertTrue(provenance["receiptVerified"])
@@ -245,7 +245,7 @@ class ResumeTurnTests(NativeResumeCase):
         # shared sessions directory the rollout was pinned to lives under the
         # task's native root and the record is really there.
         launches = [json.loads(line) for line
-                    in (invocation / "logs" / "launches.jsonl").read_text().splitlines() if line]
+                    in (invocation / "logs" / "launches.jsonl").read_text(encoding="utf-8").splitlines() if line]
         record2 = launches[-1]
         self.assertFalse((invocation / "dsh-home").exists())
         inherited = [entry for entry in self.agent_log() if entry.get("event") == "home-check"][-1]
@@ -254,7 +254,7 @@ class ResumeTurnTests(NativeResumeCase):
         self.assertTrue((invocation / "logs" / "frames.jsonl").is_file())
         patch_path = Path(record2["argv"][record2["argv"].index("--patch") + 1])
         self.assertTrue(str(patch_path).startswith(str(invocation)))
-        rows = json.loads(patch_path.read_text())
+        rows = json.loads(patch_path.read_text(encoding="utf-8"))
         self.assertEqual(rows[0]["id"], "session-persistence-jsonl")
         self.assertEqual(rows[0]["config"]["root"], str(self.root / "sessions"))
         self.assertEqual(rows[1], {"id": "storage-json", "config": {"root": str(self.root / "storages")}})
@@ -303,7 +303,7 @@ class ResumeFailureTests(NativeResumeCase):
         binding.write_text(json.dumps({"taskId": "another-task", "sessionId": "foreign-micro-task-session",
                                        "cwd": request.cwd,
                                        "buddy": {"provider": "fake", "model": "m1",
-                                                         "effort": "high"}}))
+                                                         "effort": "high"}}), encoding="utf-8", newline="\n")
         result = run(request, observer=worker_observer, services=bound.services,
                      cancelled=lambda: False)
         self.assertEqual(result.end.status, "error")
@@ -321,7 +321,7 @@ class ResumeFailureTests(NativeResumeCase):
                                        "sessionId": "ghost-session",
                                        "cwd": request.cwd,
                                        "buddy": {"provider": "fake", "model": "m1",
-                                                         "effort": "high"}}))
+                                                         "effort": "high"}}), encoding="utf-8", newline="\n")
         result = run(request, observer=worker_observer, services=bound.services,
                      cancelled=lambda: False)
         self.assertEqual(result.end.status, "error")
@@ -336,9 +336,9 @@ class ResumeFailureTests(NativeResumeCase):
         self.assertEqual(first.end.status, "ok")
         previous = first.native_identity.session_id
         binding_path = self.root / (hashlib.sha256(previous.encode()).hexdigest() + ".json")
-        binding = json.loads(binding_path.read_text())
+        binding = json.loads(binding_path.read_text(encoding="utf-8"))
         binding["lastTurnStatus"] = "completed"
-        binding_path.write_text(json.dumps(binding))
+        binding_path.write_text(json.dumps(binding), encoding="utf-8", newline="\n")
         _, _, _, refused = self.resumed_turn(previous)
         self.assertEqual(refused.end.reason_code, "native-resume-unavailable")
         self.assertIsNone(refused.model_started)
@@ -477,7 +477,7 @@ class ResumeInquiryTests(NativeResumeCase):
         # The journal carries only this attempt's delivered and answered
         # question; the replayed history delivered nothing.
         records = [json.loads(line) for line
-                   in Path(credentials["resultsPath"]).read_text().splitlines() if line]
+                   in Path(credentials["resultsPath"]).read_text(encoding="utf-8").splitlines() if line]
         self.assertEqual([record.get("inquiryId") for record in records],
                          ["inq-2", "inq-2", "inq-2"])
         self.assertEqual([record.get("state") for record in records],
@@ -485,7 +485,7 @@ class ResumeInquiryTests(NativeResumeCase):
         self.assertEqual([record.get("attemptId") for record in records],
                          [request2.identity.attempt_id] * 3)
         report = json.loads(Path(next(ref for ref in result2.evidence_refs
-                                      if ref.kind == "inquiry-report").location).read_text())
+                                      if ref.kind == "inquiry-report").location).read_text(encoding="utf-8"))
         self.assertEqual(report["answered"], 1)
         self.assertEqual(_record_facts(result2)["bootstrapUpdates"], 4)
         self.assertEqual(result2.native_identity.session_id, previous)

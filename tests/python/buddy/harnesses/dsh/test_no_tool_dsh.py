@@ -69,7 +69,7 @@ class DshNoToolTests(unittest.TestCase):
         """Point the harness record at the fake agent with these final answers."""
         command = [sys.executable, str(FAKE_AGENT), "--log", str(self.log), "--prompt-mode", "final"]
         command += [name for answer in answers for name in ("--final-answer", answer)]
-        self.record.write_text(json.dumps({"dsh": {"status": "ready", "command": command}}))
+        self.record.write_text(json.dumps({"dsh": {"status": "ready", "command": command}}), encoding="utf-8", newline="\n")
 
 
 class FastRegisteredSeamTests(DshNoToolTests):

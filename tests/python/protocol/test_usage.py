@@ -19,8 +19,8 @@ from pathlib import Path
 from hey_my_buddy.protocol import usage
 
 FIXTURES = Path(__file__).resolve().parents[1] / "buddy" / "harnesses"
-DSH_NATIVE = json.loads((FIXTURES / "dsh/fixtures/native-usage-dsh.json").read_text())
-CODEX_NATIVE = json.loads((FIXTURES / "codex/fixtures/native-usage-codex.json").read_text())
+DSH_NATIVE = json.loads((FIXTURES / "dsh/fixtures/native-usage-dsh.json").read_text(encoding="utf-8"))
+CODEX_NATIVE = json.loads((FIXTURES / "codex/fixtures/native-usage-codex.json").read_text(encoding="utf-8"))
 
 
 def dsh_usage_record() -> dict:

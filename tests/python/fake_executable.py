@@ -25,7 +25,7 @@ def make_fake_executable(directory: Path, name: str, *, source: str | Path) -> P
                 f"runpy.run_path({str(fixture)!r}, run_name='__main__')\n")
     else:
         body = source
-    (source_dir / name).write_text("#!python\n" + body, encoding="utf-8")
+    (source_dir / name).write_text("#!python\n" + body, encoding="utf-8", newline="\n")
     maker = ScriptMaker(str(source_dir), str(directory))
     maker.executable = sys.executable
     maker.variants = {""}

@@ -68,8 +68,8 @@ class InterruptedSealTests(RealWorkspaceTestCase):
 
     def test_outside_scope_opens_host_resolution_after_confirmed_stop(self):
         board, submitted, claim, checkout = self.claimed(scope=["src"])
-        (checkout / "src" / "feature.py").write_text("value = 2\n")
-        (checkout / "tracked.txt").write_text("outside scope\n")
+        (checkout / "src" / "feature.py").write_text("value = 2\n", encoding="utf-8", newline="\n")
+        (checkout / "tracked.txt").write_text("outside scope\n", encoding="utf-8", newline="\n")
         self.assertEqual(self.recover(board)["interrupted"], 1)
         attempt_id = claim["attempt"]["attemptId"]
         self.assert_stopped_receipt(board, attempt_id, "WORKSPACE_SCOPE_VIOLATION")
@@ -86,18 +86,18 @@ class InterruptedSealTests(RealWorkspaceTestCase):
         })
         self.assertTrue(resolved["resolved"])
         self.assertEqual(resolved["resolutionState"], "restored")
-        self.assertEqual((checkout / "tracked.txt").read_text(), "base\n")
-        self.assertEqual((checkout / "src" / "feature.py").read_text(), "value = 2\n")
+        self.assertEqual((checkout / "tracked.txt").read_text(encoding="utf-8"), "base\n")
+        self.assertEqual((checkout / "src" / "feature.py").read_text(encoding="utf-8"), "value = 2\n")
 
     def test_changed_readonly_checkout_finishes_as_failed(self):
         board, submitted, claim, checkout = self.claimed(access="read")
-        (checkout / "tracked.txt").write_text("changed during turn\n")
+        (checkout / "tracked.txt").write_text("changed during turn\n", encoding="utf-8", newline="\n")
         self.assertEqual(self.recover(board)["interrupted"], 1)
         self.assert_stopped_receipt(board, claim["attempt"]["attemptId"], "WORKSPACE_CHANGED")
         view = board.call("workflow_get", {"runId": submitted["runId"]})
         self.assertEqual(view["state"], "failed")
         self.assertEqual(view["workspaceConflicts"], [])
-        self.assertEqual((checkout / "tracked.txt").read_text(), "changed during turn\n")
+        self.assertEqual((checkout / "tracked.txt").read_text(encoding="utf-8"), "changed during turn\n")
 
     def test_transient_git_failure_keeps_stop_pending_for_retry(self):
         board, _submitted, claim, _checkout = self.claimed()
@@ -124,7 +124,7 @@ class InterruptedSealTests(RealWorkspaceTestCase):
     def test_late_native_stop_preserves_the_first_result_and_pins_partial_output(self):
         board, submitted, claim, checkout = self.claimed()
         attempt_id = claim['attempt']['attemptId']
-        (checkout / 'tracked.txt').write_text('preserved after the late stop proof\n')
+        (checkout / 'tracked.txt').write_text('preserved after the late stop proof\n', encoding="utf-8", newline="\n")
         with board.store.db.read() as db:
             attempt = dict(board.store._attempt_row(db, attempt_id))
         journal = processes.native_process_journal_path(
@@ -162,7 +162,7 @@ class CommandJournalTests(BoardTestCase):
             attempt_root(self.directory, "command", attempt["task_id"], attempt["attempt_id"]), IDENTITY)
         path.parent.mkdir(parents=True)
         path.write_text(json.dumps({"binding": binding, "pending": [],
-                                    "identities": [native]}))
+                                    "identities": [native]}), encoding="utf-8", newline="\n")
         with patch.object(processes, "stop_orphan_process", return_value="unknown"):
             self.assertEqual(interruption._stop_native(board, attempt, IDENTITY, "identity-absent"),
                              (False, None))

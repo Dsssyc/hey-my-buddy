@@ -125,7 +125,7 @@ class WorkspaceApiTests(RealWorkspaceTestCase):
         self.assertEqual(code, 0, resolved)
         self.assertTrue(resolved["resolved"])
         self.assertFalse((checkout / "outside.txt").exists())
-        self.assertEqual((checkout / "src" / "feature.py").read_text(), "value = 2\n")
+        self.assertEqual((checkout / "src" / "feature.py").read_text(encoding="utf-8"), "value = 2\n")
         self.assertNotIn("controlToken", json.dumps(resolved))
 
         scope = {"runId": resolved["runId"], "commandId": "http-amend",

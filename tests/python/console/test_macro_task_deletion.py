@@ -293,7 +293,7 @@ class ConsoleMacroTaskDeletionTests(workflow_fixtures.WorkflowTestCase, ConsoleT
             manifest = json.loads(connection.execute('SELECT workspace_manifest_json FROM workflow_runs WHERE run_id=?',
                                                      (run['runId'],)).fetchone()[0])
         checkout = Path(manifest['path'])
-        (checkout / 'user-change.txt').write_text('Keep this file')
+        (checkout / 'user-change.txt').write_text('Keep this file', encoding="utf-8", newline="\n")
         _, browser = self.open_console(board)
         result = self.command(browser, DELETE, {'macroTaskId': run['macroTaskId'], 'microTaskCount': 1, 'confirm': True})
         self.assertEqual(result['state'], 'deleted')

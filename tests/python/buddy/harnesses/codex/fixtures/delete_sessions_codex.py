@@ -12,7 +12,7 @@ if "--version" in sys.argv:
 trace = Path(os.environ["HMB_CODEX_FIXTURE_STATE"])
 for raw in sys.stdin:
     request = json.loads(raw)
-    with trace.open("a") as stream:
+    with trace.open("a", encoding="utf-8", newline="\n") as stream:
         stream.write(json.dumps(request) + "\n")
     method = request["method"]
     if method == "initialized":

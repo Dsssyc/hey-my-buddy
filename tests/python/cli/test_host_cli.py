@@ -114,7 +114,7 @@ class PrivateCliTestCase(BoardTestCase):
 
     def write_params(self, payload: dict, name: str = "params.json") -> Path:
         path = self.directory / name
-        path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+        path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8", newline="\n")
         return path
 
 
@@ -175,7 +175,7 @@ class ParameterDocumentTests(PrivateCliTestCase, WorkflowTestCase):
         self.use_capture_transport(captured)
         payload = {"requestId": "host-cli-4"}
         credential_file = self.directory / "agent-credential.json"
-        credential_file.write_text(json.dumps({"token": "scoped-token", "stateDir": str(self.directory)}))
+        credential_file.write_text(json.dumps({"token": "scoped-token", "stateDir": str(self.directory)}), encoding="utf-8", newline="\n")
         credential_file.chmod(0o600)
         with mock.patch.dict(os.environ, {"HMB_AGENT_CREDENTIAL_FILE": str(credential_file)}):
             code, _, _ = self.run_cli("status", "--params-file", str(self.write_params(payload)))
@@ -229,7 +229,7 @@ class ParameterDocumentTests(PrivateCliTestCase, WorkflowTestCase):
     def test_malformed_json_and_a_non_object_document_are_structured_errors(self):
         self.use_board_transport(self.board())
         path = self.directory / "malformed.json"
-        path.write_text("{not json", encoding="utf-8")
+        path.write_text("{not json", encoding="utf-8", newline="\n")
         code, refused, _ = self.run_cli("status", "--params-file", str(path))
         self.assertEqual(code, 1)
         self.assertEqual(refused["error"]["code"], "INVALID_ARGUMENT")
@@ -618,7 +618,7 @@ class HelpSourceFreshnessTests(unittest.TestCase):
             text = schemas.read_text(encoding="utf-8")
             text = text.replace("MAX_WORKFLOW_INPUT_BYTES = 64 * 1024", "MAX_WORKFLOW_INPUT_BYTES = 48 * 1024")
             text = text.replace("MAX_TASK_BYTES = 1024 * 1024", "MAX_TASK_BYTES = 3 * 512 * 1024")
-            schemas.write_text(text, encoding="utf-8")
+            schemas.write_text(text, encoding="utf-8", newline="\n")
 
             previous = cli_help.PACKAGE_ROOT
             cli_help.PACKAGE_ROOT = copy

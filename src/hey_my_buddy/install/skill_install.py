@@ -36,7 +36,7 @@ def claude_skills_home() -> Path:
 
 def _marker(skill: Path) -> dict | None:
     try:
-        value = json.loads((skill / "skill.json").read_text())
+        value = json.loads((skill / "skill.json").read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return None
     return value if isinstance(value, dict) and value.get("name") == SKILL else None
@@ -48,7 +48,7 @@ def write_runtime_hint(skill: Path, target: Path) -> None:
     temporary = skill / ('.runtime-python-' + uuid.uuid4().hex)
     fd = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
     try:
-        with os.fdopen(fd, 'w') as stream:
+        with os.fdopen(fd, 'w', encoding="utf-8", newline="\n") as stream:
             stream.write(str(runtime_python(target)) + '\n')
             stream.flush()
             os.fsync(stream.fileno())
@@ -59,7 +59,7 @@ def write_runtime_hint(skill: Path, target: Path) -> None:
 
 def _is_product_skill(path: Path) -> bool:
     try:
-        head = (path / "SKILL.md").read_text().split("\n---\n", 1)[0]
+        head = (path / "SKILL.md").read_text(encoding="utf-8").split("\n---\n", 1)[0]
     except OSError:
         return False
     return any(line.strip() == f"name: {SKILL}" for line in head.splitlines())
@@ -299,7 +299,7 @@ def paths(params: dict) -> dict:
     state = get_state_dir()
     pointer = None
     try:
-        pointer = json.loads((state / "active-runtime.json").read_text()).get("runtimeDir")
+        pointer = json.loads((state / "active-runtime.json").read_text(encoding="utf-8")).get("runtimeDir")
     except (OSError, ValueError, AttributeError):
         pass
     return {

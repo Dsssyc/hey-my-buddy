@@ -34,7 +34,7 @@ _LINK = re.compile(r"\[([^\]]+)\]\(([^)\s]+)\)")
 
 
 def project_version(source: Path) -> str:
-    return tomllib.loads((source / "pyproject.toml").read_text())["project"]["version"]
+    return tomllib.loads((source / "pyproject.toml").read_text(encoding="utf-8"))["project"]["version"]
 
 
 def source_commit(source: Path) -> str | None:
@@ -42,16 +42,19 @@ def source_commit(source: Path) -> str | None:
     # different Git checkout or rebuilt after that enclosing checkout advances.
     metadata = source / "src/hey_my_buddy/build-info.json"
     if metadata.is_file():
-        value = json.loads(metadata.read_text()).get("sourceCommit")
+        value = json.loads(metadata.read_text(encoding="utf-8")).get("sourceCommit")
         if value is not None and (not isinstance(value, str) or not re.fullmatch(r"[0-9a-f]{40}|[0-9a-f]{64}", value)):
             raise BoardError("BUILD_IDENTITY_INVALID", "Source commit metadata is invalid")
         return value
     try:
+        # Git emits UTF-8 for path output; rev-parse HEAD below is ASCII hex.
         top = subprocess.check_output(["git", "-C", str(source), "rev-parse", "--show-toplevel"], text=True,
+                                      encoding="utf-8",
                                       stderr=subprocess.DEVNULL).strip()
         if Path(top).resolve() != source.resolve():
             return None
         return subprocess.check_output(["git", "-C", str(source), "rev-parse", "HEAD"], text=True,
+                                       encoding="utf-8",
                                        stderr=subprocess.DEVNULL).strip()
     except (OSError, subprocess.CalledProcessError):
         return None
@@ -102,8 +105,8 @@ def assemble(source: Path, skill: Path) -> dict:
     source = Path(source).resolve()
     version = project_version(source)
     skill.mkdir(parents=True, exist_ok=True)
-    text = (source / "skills/hey-my-buddy/SKILL.md").read_text()
-    (skill / "SKILL.md").write_text(_with_version(_rewrite(text, _skill_link), version))
+    text = (source / "skills/hey-my-buddy/SKILL.md").read_text(encoding="utf-8")
+    (skill / "SKILL.md").write_text(_with_version(_rewrite(text, _skill_link), version), encoding="utf-8", newline="\n")
     (skill / "scripts").mkdir()
     shutil.copy2(source / "skills/hey-my-buddy/scripts/hey-my-buddy", skill / "scripts/hey-my-buddy")
     (skill / "scripts/hey-my-buddy").chmod(0o755)
@@ -111,7 +114,7 @@ def assemble(source: Path, skill: Path) -> dict:
         shutil.copy2(source / "skills/hey-my-buddy/scripts" / name, skill / "scripts" / name)
     (skill / "references").mkdir()
     for reference in sorted((source / "docs/reference").glob("*.md")):
-        (skill / "references" / reference.name).write_text(_rewrite(reference.read_text(), _reference_link))
+        (skill / "references" / reference.name).write_text(_rewrite(reference.read_text(encoding="utf-8"), _reference_link), encoding="utf-8", newline="\n")
     package = skill / "package"
     for relative, origin in iter_assets(source):
         target = package / relative
@@ -119,9 +122,9 @@ def assemble(source: Path, skill: Path) -> dict:
         shutil.copy2(origin, target)
     shutil.copy2(source / "LICENSE", package / "LICENSE")
     commit = source_commit(source)
-    (package / "src/hey_my_buddy/build-info.json").write_text(json.dumps({"sourceCommit": commit}) + "\n")
+    (package / "src/hey_my_buddy/build-info.json").write_bytes((json.dumps({"sourceCommit": commit}) + "\n").encode("utf-8"))
     marker = {"name": SKILL_NAME, "version": version, "contract": CONTRACT_VERSION, "sourceCommit": commit}
-    (skill / "skill.json").write_text(json.dumps(marker, indent=2) + "\n")
+    (skill / "skill.json").write_text(json.dumps(marker, indent=2) + "\n", encoding="utf-8", newline="\n")
     assert_supported_inventory(skill)
     return marker
 

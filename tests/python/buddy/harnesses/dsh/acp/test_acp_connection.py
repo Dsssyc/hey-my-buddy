@@ -321,7 +321,7 @@ class PermissionAnswerTest(AcpTestCase):
         self.assertNotIn("FULL-ARGS", blob)
         frames_path = self.logs / "frames.jsonl"
         self.assertTrue(frames_path.is_file())
-        for line in frames_path.read_text().splitlines():
+        for line in frames_path.read_text(encoding="utf-8").splitlines():
             entry = json.loads(line)
             self.assertIn("bytes", entry)
             self.assertIn("digest", entry)
@@ -419,7 +419,7 @@ class WriterBoundTest(AcpTestCase):
     def wait_parked(self) -> None:
         self.assertTrue(
             self.wait_for(
-                lambda: "parked-frozen" in (self.logs / "fake-agent.log").read_text()),
+                lambda: "parked-frozen" in (self.logs / "fake-agent.log").read_text(encoding="utf-8")),
             "the agent must be parked before the stalled writes")
 
     def test_stalled_writes_never_accumulate_threads_or_send_expired_frames(self):
@@ -444,7 +444,7 @@ class WriterBoundTest(AcpTestCase):
         frames_path = self.logs / "frames.jsonl"
 
         def out_count():
-            return sum(1 for line in frames_path.read_text().splitlines()
+            return sum(1 for line in frames_path.read_text(encoding="utf-8").splitlines()
                        if json.loads(line).get("dir") == "out")
 
         before = out_count()

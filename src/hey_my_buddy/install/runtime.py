@@ -281,7 +281,7 @@ def is_ready(directory: Path) -> bool:
     """True only for a complete runtime whose assets and resources stay inside it."""
     directory = Path(directory)
     try:
-        value = json.loads((directory / READY_FILE).read_text())
+        value = json.loads((directory / READY_FILE).read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return False
     if not isinstance(value, dict) or value.get("format") != RUNTIME_FORMAT:
@@ -358,7 +358,7 @@ def _materialize_locked(root: Path, target: Path, uv_bin: str | None,
                 resources=absent,
             )
         record = manifest(root)
-        (working / "manifest.json").write_text(json.dumps(record, indent=2, sort_keys=True) + "\n")
+        (working / "manifest.json").write_text(json.dumps(record, indent=2, sort_keys=True) + "\n", encoding="utf-8", newline="\n")
         # Publish the complete source tree under the FINAL content-addressed name
         # before any environment is created inside it.
         if target.exists():
@@ -422,7 +422,7 @@ def _materialize_locked(root: Path, target: Path, uv_bin: str | None,
             "resources": {name: str(path) for name, path in resource_paths(target).items()},
         }
         _rewrite_environment_paths(environment, target)
-        (target / READY_FILE).write_text(json.dumps(ready, indent=2, sort_keys=True) + "\n")
+        (target / READY_FILE).write_text(json.dumps(ready, indent=2, sort_keys=True) + "\n", encoding="utf-8", newline="\n")
         result = {"runtime": read_ready(target), "installed": True, "runtimeDir": str(target)}
         return result
     finally:
@@ -440,9 +440,9 @@ def _rewrite_environment_paths(environment: Path, target: Path) -> None:
     for configuration in (environment / "pyvenv.cfg",):
         if not configuration.is_file():
             continue
-        text = configuration.read_text(errors="replace")
+        text = configuration.read_text(errors="replace", encoding="utf-8")
         if "build-" in text:
-            configuration.write_text(text.replace(str(environment.parent), str(target)))
+            configuration.write_text(text.replace(str(environment.parent), str(target)), encoding="utf-8", newline="\n")
 
 
 def _copy_assets(root: Path, destination: Path) -> None:
@@ -453,7 +453,7 @@ def _copy_assets(root: Path, destination: Path) -> None:
 
 
 def read_ready(directory: Path) -> dict:
-    value = json.loads((directory / READY_FILE).read_text())
+    value = json.loads((directory / READY_FILE).read_text(encoding="utf-8"))
     value["runtimeDir"] = str(directory)
     return value
 
@@ -634,7 +634,7 @@ def source_leaks(runtime: dict | None = None) -> list[str]:
     root = Path(runtime.get("runtimeDir") or runtime.get("source") or "").resolve()
     for pth in sorted(environment.glob("lib/python*/site-packages/*.pth")):
         try:
-            text = pth.read_text(errors="replace")
+            text = pth.read_text(errors="replace", encoding="utf-8")
         except OSError:
             continue
         for line in text.splitlines():
@@ -664,7 +664,7 @@ def source_leaks(runtime: dict | None = None) -> list[str]:
         elif root and not _inside(root, value):
             leaks.append(f"{name} resolves outside the runtime: {value}")
     pyvenv = environment / "pyvenv.cfg"
-    if pyvenv.is_file() and str(project_root()) in pyvenv.read_text(errors="replace"):
+    if pyvenv.is_file() and str(project_root()) in pyvenv.read_text(errors="replace", encoding="utf-8"):
         leaks.append(f"{pyvenv}: references the project source tree")
     return leaks
 
@@ -693,8 +693,10 @@ def _now() -> str:
 def _source_commit(root: Path) -> str | None:
     metadata = root / "src/hey_my_buddy/build-info.json"
     if metadata.exists():
-        return json.loads(metadata.read_text()).get("sourceCommit")
+        return json.loads(metadata.read_text(encoding="utf-8")).get("sourceCommit")
     try:
-        return subprocess.check_output(["git", "-C", str(root), "rev-parse", "HEAD"], text=True, stderr=subprocess.DEVNULL).strip()
+        # rev-parse HEAD is ASCII hex, a subset of UTF-8.
+        return subprocess.check_output(["git", "-C", str(root), "rev-parse", "HEAD"], text=True,
+                                       encoding="utf-8", stderr=subprocess.DEVNULL).strip()
     except (OSError, subprocess.CalledProcessError):
         return None

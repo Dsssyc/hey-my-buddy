@@ -36,7 +36,7 @@ def await_file(name):
             raise RuntimeError('fixture gate expired: ' + name)
         time.sleep(0.002)
 def record(name, value):
-    (root / name).write_text(str(value))
+    (root / name).write_text(str(value), encoding='utf-8', newline='\\n')
 guardian = os.fork()
 if guardian:
     await_file('ready')
@@ -122,7 +122,7 @@ class DiscoveryStopTimingTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory).resolve()
             script = root / 'group.py'
-            script.write_text(_GROUP_FIXTURE)
+            script.write_text(_GROUP_FIXTURE, encoding="utf-8", newline="\n")
             processes = []
             popen = subprocess.Popen
 
@@ -139,8 +139,8 @@ class DiscoveryStopTimingTests(unittest.TestCase):
                 process = processes[0]
                 # Missing registration is a fixture failure, never stop evidence.
                 self.wait_for(lambda: (root / 'ready').exists(), 'fixture registration missing')
-                guardian = int((root / 'guardian.pid').read_text())
-                member = int((root / 'member.pid').read_text())
+                guardian = int((root / 'guardian.pid').read_text(encoding="utf-8"))
+                member = int((root / 'member.pid').read_text(encoding="utf-8"))
                 if mode == 'fork':
                     if not (root / 'forked').exists():
                         os.kill(guardian, signal.SIGTERM)
@@ -150,7 +150,7 @@ class DiscoveryStopTimingTests(unittest.TestCase):
                 (root / 'reap').touch()
                 children = [member]
                 if mode == 'fork':
-                    children.append(int((root / 'newborn.pid').read_text()))
+                    children.append(int((root / 'newborn.pid').read_text(encoding="utf-8")))
                 for child in children:
                     try:
                         os.kill(child, signal.SIGKILL)
@@ -161,7 +161,7 @@ class DiscoveryStopTimingTests(unittest.TestCase):
                 self.clean_group(process)
                 self.assertTrue(self.pid_gone(member), 'registered member still exists')
                 if mode == 'fork':
-                    newborn = int((root / 'newborn.pid').read_text())
+                    newborn = int((root / 'newborn.pid').read_text(encoding="utf-8"))
                     self.assertTrue(self.pid_gone(newborn), 'registered TERM child still exists')
 
     def start_group(self, root, command):
@@ -249,7 +249,7 @@ class DiscoveryStopTimingTests(unittest.TestCase):
                     if kills == 1:
                         (root / 'join').touch()
                         self.wait_for(lambda: (root / 'joined').exists(), 'new child did not join')
-                        newborn = int((root / 'newborn.pid').read_text())
+                        newborn = int((root / 'newborn.pid').read_text(encoding="utf-8"))
                         self.assertEqual(os.getpgid(newborn), process.pid)
                         os.kill(newborn, signal.SIGTERM)
                         self.assertFalse(self.pid_gone(newborn), 'new child must ignore TERM')
@@ -260,7 +260,7 @@ class DiscoveryStopTimingTests(unittest.TestCase):
                 self.assertTrue(discovery._terminate_group(process))
             self.assertGreaterEqual(kills, 2)
             self.assertTrue(self.group_gone(process.pid))
-            newborn = int((root / 'newborn.pid').read_text())
+            newborn = int((root / 'newborn.pid').read_text(encoding="utf-8"))
             self.assertTrue(self.pid_gone(newborn))
 
     def test_unreaped_real_group_exhausts_stop_budget_without_confirmation(self):

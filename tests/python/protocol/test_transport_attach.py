@@ -84,7 +84,7 @@ class AttachFixture(unittest.TestCase):
         self.addCleanup(patch.stopall)
 
     def write_endpoint(self, value, mode):
-        self.endpoint_file.write_text(json.dumps(value))
+        self.endpoint_file.write_text(json.dumps(value), encoding="utf-8", newline="\n")
         self.endpoint_file.chmod(mode)
 
 
@@ -145,7 +145,7 @@ class AncestorGroupTrustTests(unittest.TestCase):
 
 class ReadOnlyAttachTests(AttachFixture):
     def test_healthy_service_still_attaches_during_upgrade(self):
-        (self.directory / "upgrade.json").write_text("{}")
+        (self.directory / "upgrade.json").write_text("{}", encoding="utf-8", newline="\n")
         with MutationRecorder() as recorder:
             self.assertEqual(_attach_read_only(self.directory), ENDPOINT)
         recorder.assert_no_mutation()
@@ -282,7 +282,7 @@ class TrustBoundaryTests(AttachFixture):
         nested = shared / "state"
         nested.mkdir(mode=0o700)
         nested.chmod(0o700)
-        (nested / "control.json").write_text(json.dumps(ENDPOINT))
+        (nested / "control.json").write_text(json.dumps(ENDPOINT), encoding="utf-8", newline="\n")
         (nested / "control.json").chmod(0o600)
         self.assertTrue(shared.stat().st_mode & stat.S_ISVTX, "fixture must be a sticky shared directory")
         self.assertTrue(nested.parent.parent.samefile(shared.parent), "fixture must sit under the real shared /tmp")
@@ -297,7 +297,7 @@ class TrustBoundaryTests(AttachFixture):
         nested = shared / "state"
         nested.mkdir(mode=0o700)
         nested.chmod(0o700)
-        (nested / "control.json").write_text(json.dumps(ENDPOINT))
+        (nested / "control.json").write_text(json.dumps(ENDPOINT), encoding="utf-8", newline="\n")
         (nested / "control.json").chmod(0o600)
         self.assertFalse(shared.stat().st_mode & stat.S_ISVTX, "fixture must be non-sticky")
         self.assertFalse(_trusted_directory(nested))
@@ -327,7 +327,7 @@ class TrustBoundaryTests(AttachFixture):
 
     def test_symlinked_endpoint_file_is_not_trusted(self):
         real = self.directory / "real-control.json"
-        real.write_text(json.dumps(ENDPOINT))
+        real.write_text(json.dumps(ENDPOINT), encoding="utf-8", newline="\n")
         real.chmod(0o600)
         self.endpoint_file.unlink()
         self.endpoint_file.symlink_to(real)
@@ -377,7 +377,7 @@ class TrustBoundaryTests(AttachFixture):
     def test_malformed_endpoint_contents_are_never_trusted(self):
         for contents in ("not json", json.dumps([1, 2]), json.dumps({"address": "tcp://elsewhere", "token": "x"}), json.dumps({"address": "ipc://x", "token": ""})):
             with self.subTest(contents=contents):
-                self.endpoint_file.write_text(contents)
+                self.endpoint_file.write_text(contents, encoding="utf-8", newline="\n")
                 self.endpoint_file.chmod(0o600)
                 self.assertIsNone(_read_endpoint(self.directory))
                 self.assertIsNone(_attach_read_only(self.directory))
@@ -417,7 +417,7 @@ class ColdStartTests(unittest.TestCase):
 
     def test_orphan_upgrade_journal_without_startup_lock_refuses_without_preflight(self):
         self.directory.mkdir(mode=0o700)
-        (self.directory / "upgrade.json").write_text("{}")
+        (self.directory / "upgrade.json").write_text("{}", encoding="utf-8", newline="\n")
         with patch("hey_my_buddy.protocol.transport._cold_start_preflight") as preflight:
             with self.assertRaises(ServiceError) as refused:
                 ensure_service(self.directory)
@@ -429,7 +429,7 @@ class ColdStartTests(unittest.TestCase):
 
     def test_upgrade_journal_with_orphan_lock_refuses_control_and_wait_without_preflight(self):
         self.directory.mkdir(mode=0o700)
-        (self.directory / "upgrade.json").write_text("{}")
+        (self.directory / "upgrade.json").write_text("{}", encoding="utf-8", newline="\n")
         (self.directory / "control-start.lock").touch(mode=0o600)
         with patch.object(transport, '_attach_read_only') as attach, \
              patch.object(transport, '_cold_start_preflight') as preflight:
@@ -444,7 +444,7 @@ class ColdStartTests(unittest.TestCase):
     def test_installer_finishes_before_an_existing_client_reattaches(self):
         self.directory.mkdir(mode=0o700)
         marker = self.directory / "upgrade.json"
-        marker.write_text("{}")
+        marker.write_text("{}", encoding="utf-8", newline="\n")
 
         def installer_unlocks(_fd):
             marker.unlink()
@@ -462,7 +462,7 @@ class ColdStartTests(unittest.TestCase):
     def test_installer_finishes_before_wait_client_reattaches(self):
         self.directory.mkdir(mode=0o700)
         marker = self.directory / "upgrade.json"
-        marker.write_text("{}")
+        marker.write_text("{}", encoding="utf-8", newline="\n")
         (self.directory / "control-start.lock").touch(mode=0o600)
 
         def installer_unlocks(_fd):
@@ -481,7 +481,7 @@ class ColdStartTests(unittest.TestCase):
 
         def fence_after_preflight(directory):
             original_preflight(directory)
-            (directory / "upgrade.json").write_text("{}")
+            (directory / "upgrade.json").write_text("{}", encoding="utf-8", newline="\n")
 
         with patch("hey_my_buddy.protocol.transport._cold_start_preflight", side_effect=fence_after_preflight):
             with self.assertRaises(ServiceError) as refused:
@@ -498,7 +498,7 @@ class ColdStartTests(unittest.TestCase):
         directory = shared / "state"
         directory.mkdir(mode=0o700)
         endpoint_file = directory / "control.json"
-        endpoint_file.write_text(json.dumps(ENDPOINT))
+        endpoint_file.write_text(json.dumps(ENDPOINT), encoding="utf-8", newline="\n")
         endpoint_file.chmod(0o600)
         with patch("hey_my_buddy.protocol.transport._request", return_value={"status": "ready"}) as request:
             self.assertEqual(ensure_service(directory), ENDPOINT)
@@ -508,14 +508,14 @@ class ColdStartTests(unittest.TestCase):
     def test_cold_start_fails_honestly_when_the_state_directory_cannot_be_written(self):
         # A path that already exists as a file cannot become the state directory.
         blocked = Path(self.temp.name) / "state"
-        blocked.write_text("not a directory")
+        blocked.write_text("not a directory", encoding="utf-8", newline="\n")
         with self.assertRaises(BoardError) as refused:
             ensure_service(blocked)
         self.assertEqual(refused.exception.code, 'PRIVATE_PATH_UNSAFE')
         self.assertEqual(refused.exception.message, 'IPC path is not a directory')
         self.assertEqual(refused.exception.details['path'], str(blocked.resolve()))
         self.spawn.assert_not_called()
-        self.assertEqual(blocked.read_text(), "not a directory")
+        self.assertEqual(blocked.read_text(encoding="utf-8"), "not a directory")
 
     def test_cold_start_reports_a_daemon_that_exits_immediately(self):
         self.spawn.return_value.poll.return_value = 1
@@ -534,7 +534,7 @@ class ColdStartTests(unittest.TestCase):
         directory.mkdir(mode=0o700)
         (directory / "ipc").mkdir(mode=0o700)
         endpoint_file = directory / "control.json"
-        endpoint_file.write_text(json.dumps(ENDPOINT))
+        endpoint_file.write_text(json.dumps(ENDPOINT), encoding="utf-8", newline="\n")
         endpoint_file.chmod(0o600)
         self.assertEqual(_read_endpoint(directory), ENDPOINT, "cold start must trust the endpoint it just wrote")
         with patch("hey_my_buddy.protocol.transport._request", return_value={"status": "ready"}) as request:
@@ -554,7 +554,7 @@ class RpcReadOnlySetupTests(unittest.TestCase):
         self.addCleanup(self.temp.cleanup)
         self.directory = Path(self.temp.name).resolve()
         self.endpoint_file = self.directory / "control.json"
-        self.endpoint_file.write_text(json.dumps(ENDPOINT))
+        self.endpoint_file.write_text(json.dumps(ENDPOINT), encoding="utf-8", newline="\n")
         self.endpoint_file.chmod(0o600)
 
     def test_missing_ipc_does_not_create_on_transport_or_board_client_attach(self):
@@ -638,7 +638,7 @@ class RpcReadOnlySetupTests(unittest.TestCase):
             def sleep_ms(self, payload: str) -> str: ...
 
         received = self.directory / "received.jsonl"
-        received.write_text("")
+        received.write_text("", encoding="utf-8", newline="\n")
         script = probe_fixture.PROBE_SERVER.replace(
             "    def sleep_ms(self, payload: str) -> str:",
             "    def ping(self, payload: str) -> str:\n"
@@ -646,7 +646,7 @@ class RpcReadOnlySetupTests(unittest.TestCase):
             "    def sleep_ms(self, payload: str) -> str:",
         ).replace(
             "        return payload",
-            "        with (state / 'received.jsonl').open('a') as stream:\n"
+            "        with (state / 'received.jsonl').open('a', encoding='utf-8', newline='\\n') as stream:\n"
             "            stream.write(payload + '\\n')\n"
             "        return payload",
         )
@@ -670,12 +670,12 @@ class RpcReadOnlySetupTests(unittest.TestCase):
         self.addCleanup(stop)
         with patch.object(probe_fixture, "PROBE_SERVER", script):
             probe_fixture.ProbeServer.__init__(peer, self.directory)
-        self.assertEqual(Path(json.loads(peer.endpoint_path.read_text())["root"]), self.directory / "ipc")
+        self.assertEqual(Path(json.loads(peer.endpoint_path.read_text(encoding="utf-8"))["root"]), self.directory / "ipc")
         self.assertEqual(cc.__version__, "0.7.6")
         self.enterContext(patch.object(transport, "BuddyControl", ProbeContract))
         self.enterContext(patch.object(transport, "CONTROL_NAME", "hey-my-buddy-probe"))
         endpoint = {**ENDPOINT, "address": peer.address, "pid": peer.pid}
-        self.endpoint_file.write_text(json.dumps(endpoint))
+        self.endpoint_file.write_text(json.dumps(endpoint), encoding="utf-8", newline="\n")
         return endpoint, received
 
     def test_group_readable_ipc_reaches_native_rpc_without_chmod(self):
@@ -686,7 +686,7 @@ class RpcReadOnlySetupTests(unittest.TestCase):
             self.assertEqual(_attach_read_only(self.directory), endpoint,
                              "0750 must reach the actual SDK peer")
         recorder.assert_no_mutation()
-        self.assertEqual([json.loads(line) for line in received.read_text().splitlines()],
+        self.assertEqual([json.loads(line) for line in received.read_text(encoding="utf-8").splitlines()],
                          [{"token": ENDPOINT["token"]}])
         self.assertEqual(stat.S_IMODE(ipc.stat().st_mode), 0o750)
 
@@ -710,7 +710,7 @@ class RpcReadOnlySetupTests(unittest.TestCase):
                 self.assertRegex(str(refused.exception.__cause__).lower(),
                                  r"(group|world|other).*(writ|permission)|(writ|permission).*(group|world|other)",
                                  "the SDK must reject writable access, not an arbitrary transport error")
-                self.assertEqual(received.read_text(), "", "the unsafe SDK client must never reach the peer")
+                self.assertEqual(received.read_text(encoding="utf-8"), "", "the unsafe SDK client must never reach the peer")
                 self.assertEqual(stat.S_IMODE(ipc.stat().st_mode), mode)
 
     def test_explicit_state_reaches_rpc_setup(self):

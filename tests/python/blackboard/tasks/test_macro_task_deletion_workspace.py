@@ -26,7 +26,7 @@ class DeletionWorkspaceTests(unittest.TestCase):
         manifest = self.prepare()
         directory = self.state / "workspaces" / manifest["workspaceId"]
         checkout = Path(manifest["checkoutRoot"])
-        (checkout / "src/file.txt").write_text("result\n")
+        (checkout / "src/file.txt").write_text("result\n", encoding="utf-8", newline="\n")
         output = workspace.seal(self.state, manifest, "task-1", "attempt-1")
         self.assertEqual(self.delete(manifest, [output]), [])
         self.assertFalse(directory.exists())
@@ -38,7 +38,7 @@ class DeletionWorkspaceTests(unittest.TestCase):
     def test_changed_lock_and_unsealed_file_preserve_checkout_and_refs(self):
         manifest = self.prepare()
         checkout = Path(manifest["checkoutRoot"])
-        (checkout / "src/new.txt").write_text("unsealed\n")
+        (checkout / "src/new.txt").write_text("unsealed\n", encoding="utf-8", newline="\n")
         skipped = self.delete(manifest)
         self.assertIn("macro-task-deletion.unsealed-changes", [item["reason"]["code"] for item in skipped])
         self.assertTrue(checkout.exists())
@@ -53,7 +53,7 @@ class DeletionWorkspaceTests(unittest.TestCase):
     def test_enumerates_more_than_sixty_four_fixed_refs(self):
         manifest = self.prepare()
         checkout = Path(manifest["checkoutRoot"])
-        (checkout / "src/file.txt").write_text("sealed\n")
+        (checkout / "src/file.txt").write_text("sealed\n", encoding="utf-8", newline="\n")
         outputs = [workspace.seal(self.state, manifest, "task-1", f"attempt-{number}")
                    for number in range(34)]
         # Each output has one fixed and one retained ref, in addition to the
@@ -159,7 +159,7 @@ class DeletionWorkspaceTests(unittest.TestCase):
         allocation = self.prepare(request="allocation")
         later = self.prepare(request="later-turn", kind="existing", cwd=allocation["path"])
         checkout = Path(allocation["checkoutRoot"])
-        (checkout / "src/file.txt").write_text("later result\n")
+        (checkout / "src/file.txt").write_text("later result\n", encoding="utf-8", newline="\n")
         output = workspace.seal(self.state, later, "task-1", "attempt-1")
         skipped = delete_workspaces(SimpleNamespace(directory=self.state),
                                     [later, allocation, later], [output])
@@ -182,9 +182,9 @@ class DeletionWorkspaceTests(unittest.TestCase):
         manifest = self.prepare()
         directory = self.state / "workspaces" / manifest["workspaceId"]
         record = directory / "request.json"
-        request = json.loads(record.read_text())
+        request = json.loads(record.read_text(encoding="utf-8"))
         request["requestId"] = "not-the-allocation-request"
-        record.write_text(json.dumps(request))
+        record.write_text(json.dumps(request), encoding="utf-8", newline="\n")
         before = set(directory.parent.iterdir())
         skipped = self.delete(manifest)
         self.assertIn("macro-task-deletion.owner-unproven", [item["reason"]["code"] for item in skipped])
@@ -196,11 +196,11 @@ class DeletionWorkspaceTests(unittest.TestCase):
         lock = directory / ".lock"
         lock.unlink()
         outside = self.root / "foreign-lock"
-        outside.write_text("owned elsewhere")
+        outside.write_text("owned elsewhere", encoding="utf-8", newline="\n")
         lock.symlink_to(outside)
         skipped = self.delete(manifest)
         self.assertIn("macro-task-deletion.owner-unproven", [item["reason"]["code"] for item in skipped])
-        self.assertEqual(outside.read_text(), "owned elsewhere")
+        self.assertEqual(outside.read_text(encoding="utf-8"), "owned elsewhere")
         self.assertTrue(self.git("show-ref", "--verify", manifest["snapshot"]["inputRef"]))
 
     def test_linked_allocation_directory_is_preserved(self):
@@ -239,7 +239,7 @@ class DeletionWorkspaceTests(unittest.TestCase):
         ref = manifest["snapshot"]["inputRef"]
         replacement = self.git("rev-parse", "HEAD").decode().strip()
         if replacement == manifest["inputCommit"]:
-            (self.repo / "docs/readme.md").write_text("changed\n")
+            (self.repo / "docs/readme.md").write_text("changed\n", encoding="utf-8", newline="\n")
             self.git("add", ".")
             self.git("commit", "-qm", "replacement")
             replacement = self.git("rev-parse", "HEAD").decode().strip()
@@ -259,7 +259,7 @@ class DeletionWorkspaceTests(unittest.TestCase):
                 ref = manifest['snapshot']['inputRef']
                 replacement = self.git('rev-parse','HEAD').decode().strip()
                 if replacement == manifest['inputCommit']:
-                    (self.repo / 'docs/readme.md').write_text('competing update ' + str(changed))
+                    (self.repo / 'docs/readme.md').write_text('competing update ' + str(changed), encoding="utf-8", newline="\n")
                     self.git('add','.')
                     self.git('commit','-qm','competing ref update')
                     replacement = self.git('rev-parse','HEAD').decode().strip()

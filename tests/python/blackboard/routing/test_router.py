@@ -219,29 +219,29 @@ class RouterInputTests(unittest.TestCase):
 
     def test_existing_input_is_materialized_without_live_or_ignored_files(self):
         from hey_my_buddy.buddy.roles import router_input
-        (self.repo / 'src/file.txt').write_text('dirty frozen input')
-        (self.repo / '.gitattributes').write_text('src/file.txt export-ignore\n')
+        (self.repo / 'src/file.txt').write_text('dirty frozen input', encoding="utf-8", newline="\n")
+        (self.repo / '.gitattributes').write_text('src/file.txt export-ignore\n', encoding="utf-8", newline="\n")
         self.git('add', '.gitattributes')
-        (self.repo / '.gitignore').write_text('secret-cache\n')
-        (self.repo / 'secret-cache').write_text('not frozen')
+        (self.repo / '.gitignore').write_text('secret-cache\n', encoding="utf-8", newline="\n")
+        (self.repo / 'secret-cache').write_text('not frozen', encoding="utf-8", newline="\n")
         manifest = self.prepare(kind='existing')
         attempt = self.root / 'attempt'
         attempt.mkdir()
         mirror, fingerprint = router_input.prepare(manifest, attempt)
         self.assertNotEqual(mirror, self.repo)
-        self.assertEqual((mirror / 'src/file.txt').read_text(), 'dirty frozen input')
+        self.assertEqual((mirror / 'src/file.txt').read_text(encoding="utf-8"), 'dirty frozen input')
         self.assertFalse((mirror / 'secret-cache').exists())
         self.assertFalse((mirror / '.git').exists())
         self.assertTrue(router_input.verify(manifest, mirror, fingerprint)['unchanged'])
-        (self.repo / 'src/file.txt').write_text('Host changed after Router start')
-        self.assertEqual((mirror / 'src/file.txt').read_text(), 'dirty frozen input')
+        (self.repo / 'src/file.txt').write_text('Host changed after Router start', encoding="utf-8", newline="\n")
+        self.assertEqual((mirror / 'src/file.txt').read_text(encoding="utf-8"), 'dirty frozen input')
         self.assertEqual(router_input.verify(manifest, mirror, fingerprint)['code'], 'router-input-changed')
 
     def test_many_files_are_read_through_one_batch_process_and_failures_leave_no_copy(self):
         from unittest import mock
         from hey_my_buddy.buddy.roles import router_input
         for index in range(40):
-            (self.repo / f'src/many-{index}.txt').write_text(f'file {index}\n')
+            (self.repo / f'src/many-{index}.txt').write_text(f'file {index}\n', encoding="utf-8", newline="\n")
         self.git('add', 'src')
         manifest = self.prepare(kind='existing')
         attempt = self.root / 'batch-attempt'
@@ -254,7 +254,7 @@ class RouterInputTests(unittest.TestCase):
         readers = [call for call in popen.call_args_list if 'cat-file' in call.args[0]]
         self.assertEqual(len(readers), 1)
         self.assertFalse([call for call in run.call_args_list if 'cat-file' in call.args[0]])
-        self.assertEqual((mirror / 'src/many-39.txt').read_text(), 'file 39\n')
+        self.assertEqual((mirror / 'src/many-39.txt').read_text(encoding="utf-8"), 'file 39\n')
         router_input.discard(mirror)
         self.assertFalse(mirror.exists())
         broken = dict(manifest, inputTree='0' * 40)
@@ -294,7 +294,7 @@ class RouterInputTests(unittest.TestCase):
         attempt.mkdir()
         mirror, fingerprint = router_input.prepare(manifest, attempt)
         (mirror / 'src/file.txt').chmod(0o644)
-        (mirror / 'src/file.txt').write_text('unexpected native write')
+        (mirror / 'src/file.txt').write_text('unexpected native write', encoding="utf-8", newline="\n")
         self.assertFalse(router_input.verify(manifest, mirror, fingerprint)['unchanged'])
         (self.repo / 'src/escape').symlink_to(self.root / 'outside')
         self.git('add', 'src/escape')

@@ -67,7 +67,7 @@ class ExecutionInstallFenceTests(BoardTestCase):
                     held.append(value["phase"])
                     release.touch()
                     self.assertTrue(wait_for(lambda: log.exists() and
-                        "result delivery pending: UPGRADE_IN_PROGRESS" in log.read_text(), timeout=20),
+                        "result delivery pending: UPGRADE_IN_PROGRESS" in log.read_text(encoding="utf-8"), timeout=20),
                         "the real execution did not attempt result delivery through the fence")
                     self.assertTrue((directory / "result-receipt.json").exists())
                     self.assertFalse((directory / "result-delivery.json").exists())
@@ -83,7 +83,7 @@ class ExecutionInstallFenceTests(BoardTestCase):
             finished = wait_for(lambda: self.finished(run_id), timeout=35)
             self.assertIsNotNone(finished, client.get(runId=run_id))
             self.assertEqual(finished["selectedAttempt"]["result"]["status"], "ok")
-            self.assertEqual(json.loads((directory / "result-delivery.json").read_text()),
+            self.assertEqual(json.loads((directory / "result-delivery.json").read_text(encoding="utf-8")),
                              {"attemptId": attempt["attemptId"], "accepted": True})
             self.assertFalse((directory / "result-receipt.json").exists())
 
@@ -98,7 +98,7 @@ class ExecutionInstallFenceTests(BoardTestCase):
         def copy_with_gate(source, destination):
             original_copy(source, destination)
             execution = destination / "src/hey_my_buddy/buddy/runtime/execution.py"
-            text = execution.read_text()
+            text = execution.read_text(encoding="utf-8")
             if activity_refusal:
                 error = "            except BoardError as error:\n                if error.code in RETRYABLE:\n"
                 self.assertEqual(text.count(error), 1)
@@ -118,7 +118,7 @@ class ExecutionInstallFenceTests(BoardTestCase):
                                f"                        if error.code == 'UPGRADE_IN_PROGRESS': Path({str(refused)!r}).touch()\n")
                 text = text.replace(error, observation, 1)
                 text = text.replace("PREFLIGHT_RETRY_SECONDS = 15.0", "PREFLIGHT_RETRY_SECONDS = 0.2", 1)
-            execution.write_text(text)
+            execution.write_text(text, encoding="utf-8", newline="\n")
 
         with mock.patch.object(runtime, "_copy_assets", side_effect=copy_with_gate):
             target = self.private_runtime("activity-baseline" if activity_refusal else "preflight-baseline", 1)
@@ -155,7 +155,7 @@ class ExecutionInstallFenceTests(BoardTestCase):
         started = self.directory / "worker.started"
         release = self.directory / "worker.release"
         self.addCleanup(release.touch)
-        script_text = script.read_text()
+        script_text = script.read_text(encoding="utf-8")
         point = "            (root/'worker.started').touch()\n"
         self.assertEqual(script_text.count(point), 1)
         emission = ("            (root/'worker.started').touch()\n"
@@ -165,13 +165,13 @@ class ExecutionInstallFenceTests(BoardTestCase):
                     "{'sessionUpdate':'agent_message_chunk','content':"
                     "{'type':'text','text':'offline fixture activity'}}})\n"
                     "            (root/'activity.sent').touch()\n")
-        script.write_text(script_text.replace(point, emission, 1))
+        script.write_text(script_text.replace(point, emission, 1), encoding="utf-8", newline="\n")
         repo = self.workdir("worker-repo")
         for command in (("init", "-q", "-b", "main"),
                         ("config", "user.email", "buddy@example.invalid"),
                         ("config", "user.name", "Buddy Test")):
             subprocess.run(["git", *command], cwd=repo, check=True, capture_output=True)
-        (repo / "tracked.txt").write_text("private fixture\n")
+        (repo / "tracked.txt").write_text("private fixture\n", encoding="utf-8", newline="\n")
         subprocess.run(["git", "add", "."], cwd=repo, check=True, capture_output=True)
         subprocess.run(["git", "commit", "-q", "-m", "fixture"], cwd=repo,
                        check=True, capture_output=True)
