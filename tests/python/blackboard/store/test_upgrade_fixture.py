@@ -16,6 +16,7 @@ from hey_my_buddy.blackboard.store.db import Corruption, Database, SCHEMA_VERSIO
 from hey_my_buddy.blackboard.tasks import workspace
 from hey_my_buddy.blackboard.tasks.workflow import WorkflowCoordinator
 from hey_my_buddy.errors import BoardError
+from hey_my_buddy.blackboard.store import upgrade as schema_upgrade
 from hey_my_buddy.install import upgrade
 
 
@@ -84,7 +85,7 @@ class UpgradeFixtureTests(unittest.TestCase):
                                    (raw, hashlib.sha256(raw.encode()).hexdigest(), row['turn_id']))
         self.assertTrue(turns)
         connection.commit()
-        upgrade.migrate_schema(fixture['state'])
+        schema_upgrade.migrate_schema(fixture['state'])
         store = BoardStore(fixture['state'])
         store.initialize()
         self.addCleanup(store.db.close)
@@ -202,7 +203,7 @@ class UpgradeFixtureTests(unittest.TestCase):
         self.assertIn('recipient', old_columns)
         self.assertIn('attempts_count', old_columns)
         retained = [tuple(row) for row in connection.execute(
-            'SELECT ' + ','.join(upgrade.RETAINED_MESSAGE_COLUMNS) + ' FROM messages')]
+            'SELECT ' + ','.join(schema_upgrade.RETAINED_MESSAGE_COLUMNS) + ' FROM messages')]
         event_stock = [tuple(row) for row in connection.execute('SELECT * FROM events ORDER BY seq')]
         before = upgrade.idle_snapshot(state)
         files = {p.relative_to(state): p.read_bytes() for p in state.rglob('*')
@@ -214,8 +215,8 @@ class UpgradeFixtureTests(unittest.TestCase):
         with self.assertRaises(BoardError) as caught:
             upgrade.preflight(state, contract_changed=False)
         self.assertEqual(caught.exception.code, 'UNSUPPORTED_SCHEMA')
-        upgrade.migrate_schema(state)
-        upgrade.migrate_schema(state)
+        schema_upgrade.migrate_schema(state)
+        schema_upgrade.migrate_schema(state)
         fresh = Database(self.root / 'fresh')
         fresh.initialize()
         self.addCleanup(fresh.close)
@@ -230,12 +231,12 @@ class UpgradeFixtureTests(unittest.TestCase):
         for changed in (False, True):
             self.assertEqual(upgrade.preflight(state, contract_changed=changed)['schema'], SCHEMA_VERSION)
         self.assertEqual([tuple(row) for row in connection.execute(
-            'SELECT ' + ','.join(upgrade.RETAINED_MESSAGE_COLUMNS) + ' FROM messages')], retained)
+            'SELECT ' + ','.join(schema_upgrade.RETAINED_MESSAGE_COLUMNS) + ' FROM messages')], retained)
         self.assertEqual([tuple(row) for row in connection.execute(
             'SELECT author_role,author_id FROM messages')], [(None, None)])
         self.assertEqual([tuple(row) for row in connection.execute('SELECT * FROM events ORDER BY seq')], event_stock)
         self.assertEqual(upgrade.idle_snapshot(state)['tables'], before['tables'])
-        self.assertEqual(upgrade.idle_snapshot(state, message_columns=upgrade.RETAINED_MESSAGE_COLUMNS)
+        self.assertEqual(upgrade.idle_snapshot(state, message_columns=schema_upgrade.RETAINED_MESSAGE_COLUMNS)
                          ['fingerprints']['messages'], before['fingerprints']['messages'])
         self.assertEqual({p.relative_to(state): p.read_bytes() for p in state.rglob('*')
                           if p.is_file() and not p.name.startswith('board.sqlite3')}, files)
@@ -244,7 +245,7 @@ class UpgradeFixtureTests(unittest.TestCase):
         from hey_my_buddy.blackboard.tasks import macro_task_deletion
 
         fixture, connection = self.restored()
-        upgrade.migrate_schema(fixture['state'])
+        schema_upgrade.migrate_schema(fixture['state'])
         store = BoardStore(fixture['state'])
         store.initialize()
         self.addCleanup(store.db.close)
@@ -433,7 +434,7 @@ class UpgradeFixtureTests(unittest.TestCase):
     def test_started_verification_rejects_rewritten_command_receipts(self):
         fixture, connection = self.restored()
         before = upgrade.idle_snapshot(fixture['state'])
-        upgrade.migrate_schema(fixture['state'])
+        schema_upgrade.migrate_schema(fixture['state'])
         target = self.root / 'runtimes' / ('b' * 32)
         health = {'runtimeContentId': target.name, 'runtimeStable': True, 'schemaVersion': SCHEMA_VERSION}
         with mock.patch.object(upgrade, 'command', return_value={'leaks': []}):

@@ -9,6 +9,7 @@ from hey_my_buddy.blackboard.store.db import Database, SCHEMA_VERSION
 from hey_my_buddy.blackboard.routing import router
 from hey_my_buddy.buddy.harnesses.codex.adapter import CodexAdapter
 from hey_my_buddy.protocol.transport import _read_endpoint, _request
+from hey_my_buddy.blackboard.store import upgrade as schema_upgrade
 from hey_my_buddy.install import upgrade
 
 
@@ -18,7 +19,7 @@ class UpgradeServiceTests(BoardTestCase):
         fixture = load_fixture(state)
         archived = backup.create(state, runtime_identity=None, plugin_commit=None, contract_version=CONTRACT_VERSION)
         self.assertEqual(backup.verify(archived["path"])["schema"], fixture["schemaVersion"])
-        upgrade.migrate_schema(state)
+        schema_upgrade.migrate_schema(state)
         Database(state).initialize()
         with Database(state).read() as connection:
             skipped = router.current_router(connection, now="2026-01-01T00:00:00.000Z")

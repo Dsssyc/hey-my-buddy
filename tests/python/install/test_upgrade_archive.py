@@ -14,6 +14,7 @@ from hey_my_buddy.blackboard.store import backup
 from hey_my_buddy.blackboard.store.db import SCHEMA_VERSION
 from hey_my_buddy.blackboard.store.store import BoardStore
 from hey_my_buddy.errors import BoardError
+from hey_my_buddy.blackboard.store import upgrade as schema_upgrade
 from hey_my_buddy.install import upgrade
 
 
@@ -31,7 +32,7 @@ class UpgradeCutoverTests(BoardTestCase):
         self.archive_bytes = {path.relative_to(self.retained_archive): path.read_bytes()
                               for path in self.retained_archive.rglob("*") if path.is_file()}
         self.assertEqual(backup.verify(self.retained_archive)["schema"], upgrade.UPGRADE_BASE_SCHEMA)
-        upgrade.migrate_schema(self.state)
+        schema_upgrade.migrate_schema(self.state)
         self.evidence = self.state / "attempts" / "fixture-run" / "fixture-attempt" / "result.json"
         self.evidence.parent.mkdir(parents=True, exist_ok=True)
         self.evidence.write_text('{"retained":"evidence"}', encoding="utf-8", newline="\n")

@@ -16,24 +16,19 @@ import subprocess
 import time
 import uuid
 
-from ..blackboard.store import backup
+from ..blackboard.store import backup, upgrade as schema_upgrade
 from .. import private_dirs, private_files
 from . import runtime
 from .launcher import write_active_runtime
 from ..protocol import schemas
 from ..protocol.contracts import CONTRACT_VERSION
-from ..blackboard.store.db import MESSAGES_DDL, SCHEMA_VERSION, UPGRADE_BASE_SCHEMA, utc_now
+from ..blackboard.store.db import SCHEMA_VERSION, UPGRADE_BASE_SCHEMA, utc_now
 from ..errors import BoardError
 from ..protocol.transport import get_state_dir
 
 # A private C-Two 0.7.5 restart with one frozen execution released ownership
 # in 5.5 seconds. Allow the seven-second observer join plus bounded client close.
 OWNER_LOCK_TIMEOUT_SECONDS = 15
-RETAINED_MESSAGE_COLUMNS = (
-    'message_id', 'task_id', 'attempt_id', 'inquiry_id', 'direction', 'body',
-    'payload_hash', 'state', 'reason_code', 'reason_params_json',
-    'delivery_json', 'answer_json', 'created_at', 'updated_at', 'revision',
-)
 
 
 def write_journal(path: Path, value: dict) -> None:
@@ -102,7 +97,7 @@ def idle_snapshot(state: Path, *, event_head: int | None = None,
         schema = _idle_board(connection)
         if connection.execute('PRAGMA integrity_check').fetchall() != [('ok',)] or connection.execute('PRAGMA foreign_key_check').fetchall():
             raise BoardError('UPGRADE_INVALID_BOARD', 'Board integrity or foreign key checks failed')
-        projection = {'messages': message_columns or RETAINED_MESSAGE_COLUMNS} if schema == UPGRADE_BASE_SCHEMA or message_columns else None
+        projection = {'messages': message_columns or schema_upgrade.RETAINED_MESSAGE_COLUMNS} if schema == UPGRADE_BASE_SCHEMA or message_columns else None
         retained_meta = [list(row) for row in connection.execute(
             "SELECT key,value FROM meta WHERE key!='schema_version' ORDER BY key")]
         retained_meta_hash = hashlib.sha256(json.dumps(
@@ -110,34 +105,6 @@ def idle_snapshot(state: Path, *, event_head: int | None = None,
         return {**backup.database_snapshot(connection, event_head=event_head,
                                            column_projections=projection),
                 'schema': schema, 'retainedMetaSha256': retained_meta_hash}
-
-
-def migrate_schema(state: Path) -> None:
-    """Consume the single pending schema-27 upgrade after the rollback backup exists."""
-    with closing(sqlite3.connect(state / 'board.sqlite3')) as connection:
-        connection.execute('PRAGMA foreign_keys=ON')
-        connection.execute('BEGIN IMMEDIATE')
-        try:
-            version = connection.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone()
-            if version is None or version[0] not in (str(UPGRADE_BASE_SCHEMA), str(SCHEMA_VERSION)):
-                raise BoardError('UNSUPPORTED_SCHEMA', 'Board schema cannot be upgraded')
-            if version[0] == str(UPGRADE_BASE_SCHEMA):
-                connection.execute('DROP INDEX messages_task_idx')
-                connection.execute('DROP INDEX messages_state_idx')
-                connection.execute('ALTER TABLE messages RENAME TO messages_schema27')
-                for statement in MESSAGES_DDL.split(';'):
-                    if statement.strip():
-                        connection.execute(statement)
-                columns = ','.join(RETAINED_MESSAGE_COLUMNS)
-                connection.execute(f'INSERT INTO messages({columns}) SELECT {columns} FROM messages_schema27')
-                connection.execute('DROP TABLE messages_schema27')
-                connection.execute("UPDATE meta SET value=? WHERE key='schema_version'", (str(SCHEMA_VERSION),))
-                if connection.execute('PRAGMA integrity_check').fetchall() != [('ok',)] or connection.execute('PRAGMA foreign_key_check').fetchall():
-                    raise BoardError('UPGRADE_INVALID_BOARD', 'Migrated board integrity or foreign key checks failed')
-            connection.execute('COMMIT')
-        except BaseException:
-            connection.rollback()
-            raise
 
 
 def preflight(state: Path, *, contract_changed: bool) -> dict:
@@ -358,7 +325,7 @@ def verify_started(state: Path, target: Path, health: dict, before: dict, *, con
     if any(health.get(key) != value for key, value in settings.items()):
         raise BoardError('UPGRADE_VERIFY_FAILED', 'Configured runtime capacity changed')
     if contract_changed:
-        projected = RETAINED_MESSAGE_COLUMNS if before['schema'] == UPGRADE_BASE_SCHEMA and expected_schema == SCHEMA_VERSION else None
+        projected = schema_upgrade.RETAINED_MESSAGE_COLUMNS if before['schema'] == UPGRADE_BASE_SCHEMA and expected_schema == SCHEMA_VERSION else None
         actual = idle_snapshot(state, event_head=before.get('eventHead'), message_columns=projected)
         if actual['schema'] != expected_schema:
             raise BoardError('UPGRADE_VERIFY_FAILED', 'Database schema did not match', tables=['meta'])
@@ -592,7 +559,7 @@ def upgrade(params: dict, *, skill_source: Path | None = None, skill_target: Pat
                     journal.update(phase='prepared', expected=before)
                     write_journal(marker, journal)
                     if contract_changed:
-                        migrate_schema(state)
+                        schema_upgrade.migrate_schema(state)
                 active = target
                 health = start(state, target)
                 evidence = verify_started(state, target, health, before, contract_changed=contract_changed)

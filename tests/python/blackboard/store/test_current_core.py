@@ -79,7 +79,7 @@ class CurrentCoreTests(BoardTestCase):
         self.assertEqual(sorted(writes), sorted([
             ("blackboard/store/db.py", "INSERT INTO meta(key, value) VALUES('schema_version', ?)"),
             ("blackboard/store/db.py", "INSERT INTO meta(key, value) VALUES(?, ?)"),
-            ("install/upgrade.py", "UPDATE meta SET value=? WHERE key='schema_version'"),
+            ("blackboard/store/upgrade.py", "UPDATE meta SET value=? WHERE key='schema_version'"),
         ]))
         board = self.board()
         with board.store.db.read() as connection:
