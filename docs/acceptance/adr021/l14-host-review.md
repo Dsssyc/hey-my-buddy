@@ -307,7 +307,7 @@ Host 的核对：
 - **回合的状态。** 开发者定：回合交回了有效结果时的状态由 `concluded` 改称 `returned`，`concluded` 只指 Host 的结论；回合的 `failed` 不动。微任务「回合的状态改称 returned」（codex / openai / gpt-6.1-sol / high）分三个回合交付，合并为 `e4f09a2a` 与 `c2f6dcd9`：存储的取值与读它的十几处；事件 `workflow.turn_concluded` 改为 `workflow.turn_returned`，处理回合结束的方法改名；CLI 里同一个操作的两个命令名只留 `harnesses`（开发者定）。后两处是 Host 的提示词第一回合漏掉的。
 - **界面文字与源码里的旧词。** 微任务「改名的尾巴：界面文字与源码里的旧词」（同上）分三个回合交付，合并为 `6448823d`：控制台上“工作目标”与单独的“目标”改为宏任务或微任务，名词的“委派”改为微任务，指一个 buddy 的“配置”改为 buddy，“家族”改为模型服务，共 171 处；给 Host 与 Worker 的几句文字里的旧词；文档微任务列出的 11 处源码问题。后两类旧词是 Host 看像素时发现的，第一回合的提示词只列了两个词。只改文字，不改布局与样式。
 - **版本号。** 微任务「版本号定为 0.35.0」（经路由，由 dsh / deepseek-official / deepseek-flash / max 执行）合并为 `c3fa8960`：五个文件各一处，指升级基点的 0.34.1 没有动。
-- **工作区的四处修正**记在[完整检查提速的记录](../check-speed-host-review.md)里。
+- **工作区的四处修正**记在[完整检查提速的记录](../check-runner/check-speed-host-review.md)里。
 
 最终的树上的核对（源码、前端、打包与 skill 与整合分支 `c2f6dcd9` 相同）：
 

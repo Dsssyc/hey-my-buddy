@@ -1,6 +1,6 @@
 """Conditional console reads over real HTTP: 304 and gzip.
 
-R01–R03 of docs/acceptance/console-reads-and-checkouts.md: an unchanged board
+R01–R03 of docs/acceptance/console-reads-and-checkouts/console-reads-and-checkouts.md: an unchanged board
 answers 304 with an empty body and without re-running the projection, the
 serialization or the macro-task summary; every injected change source returns
 new content; authentication always precedes the 304 decision; the periodic

@@ -141,7 +141,7 @@ def child_environment(root: Path, private_root: Path, *, home_root: Path) -> dic
 MAX_DEFAULT_JOBS = 4
 
 #: The test files measured slowest by the recorded full-suite baseline
-#: (docs/acceptance/checks-speedup.md), slowest first. Parallel runs schedule them
+#: (docs/acceptance/check-runner/checks-speedup.md), slowest first. Parallel runs schedule them
 #: before the alphabetical remainder so the long tail never queues behind a busy
 #: worker. The order is a scheduling hint only: it never changes which tests run.
 SLOWEST_FILES_FIRST: tuple[str, ...] = (

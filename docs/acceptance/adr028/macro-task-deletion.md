@@ -1,6 +1,6 @@
 # 删除宏任务（ADR-028）：验收记录
 
-第 4 步批次二的一部分，见[第 4 步的执行计划](../../design/step4-remaining-plan.md)与[删除的执行计划](../../design/adr028/macro-task-deletion-plan.md)。各微任务都在宏任务“第 4 步：控制台余下的事”里。
+第 4 步批次二的一部分，见[第 4 步的执行计划](../../design/adr029/step4-remaining-plan.md)与[删除的执行计划](../../design/adr028/macro-task-deletion-plan.md)。各微任务都在宏任务“第 4 步：控制台余下的事”里。
 
 ## 执行计划（2026-10-17）
 

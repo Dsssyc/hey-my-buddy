@@ -239,7 +239,7 @@
 | `apps/console/design/work-macro-task-timeline.html:387:36` | `objectives` | 界面展示的原始任务示例或其文字断言；开发者要求显示文字一字不改。 |
 | `apps/console/design/work-macro-task-timeline.html:387:49` | `objective_list` | 界面展示的原始任务示例或其文字断言；开发者要求显示文字一字不改。 |
 | `apps/console/design/work-macro-task-timeline.html:393:40` | `ObjectiveTimeline` | 界面展示的原始任务示例或其文字断言；开发者要求显示文字一字不改。 |
-| `apps/console/src/MacroTasks.tsx:24:36` | `docs/design/objective-browser-0.15.1.md` | 现有文档文件名，由 Host 后续同步；保留当前有效的引用。 |
+| `apps/console/src/MacroTasks.tsx:24:36` | `docs/design/objective-browser/0.15.1.md` | 现有文档文件名，由 Host 后续同步；保留当前有效的引用。 |
 | `apps/console/src/macro-task-fixtures.ts:3:57` | `docs/reference/objectives.md` | 现有文档文件名，由 Host 后续同步；保留当前有效的引用。 |
 | `apps/console/src/macro-task-fixtures.ts:92:28` | `objectives` | 界面展示的原始任务示例或其文字断言；开发者要求显示文字一字不改。 |
 | `apps/console/src/macro-task-fixtures.ts:92:41` | `objective_list` | 界面展示的原始任务示例或其文字断言；开发者要求显示文字一字不改。 |

@@ -37,7 +37,7 @@
 
 ## 第 1 步：接口、存储与角色层
 
-2026-10-12。一个微任务，四个回合，Codex 的 Worker（gpt-6.1-sol / high）；最后一个回合的封存是 `bdde80a9`，合入整合分支的提交是 `66fb1dbd`。实现方的说明在 [worker-permission-levels-step1-notes.md](../../design/worker-permission-levels-step1-notes.md)。
+2026-10-12。一个微任务，四个回合，Codex 的 Worker（gpt-6.1-sol / high）；最后一个回合的封存是 `bdde80a9`，合入整合分支的提交是 `66fb1dbd`。实现方的说明在 [worker-permission-levels-step1-notes.md](../../design/adr023/worker-permission-levels-step1-notes.md)。
 
 做了什么：`executionWorkspace.access` 取 `read`、`write`、`full`，省略是 `write`，取 `full` 必须带一行 `accessReason`；`continue` 可以带这两个字段，从下一个回合起生效。每个回合用的是哪一档记在回合自己的两列上，换档记一条事件。资格沿用已有的能力字符串：每个 harness 声明自己给得出哪几档、是强制还是约定，这一步里四家都按今天的实际声明只读与写检出，放开还没有哪一家声明，选它被如实拒绝。强制还是约定只记在回合的原生证据里。
 
@@ -54,7 +54,7 @@
 
 ## 第 2 步：Codex 把三档落到原生策略上
 
-2026-10-12。一个微任务，两个回合，Codex 的 Worker（gpt-6.1-sol / high）；第一个回合的封存是 `b7bcec38`，合入整合分支的提交是 `bb8fb53a`；第二个回合只改了一条测试断言，见下面的打回。实现方的说明在 [worker-permission-levels-step2-notes.md](../../design/worker-permission-levels-step2-notes.md)。
+2026-10-12。一个微任务，两个回合，Codex 的 Worker（gpt-6.1-sol / high）；第一个回合的封存是 `b7bcec38`，合入整合分支的提交是 `bb8fb53a`；第二个回合只改了一条测试断言，见下面的打回。实现方的说明在 [worker-permission-levels-step2-notes.md](../../design/adr023/worker-permission-levels-step2-notes.md)。
 
 做了什么：Worker 的回合不论哪一档都走 Worker 的载体，载体由“这是不是一个带档位的 Worker 回合”决定，不再由工具范围决定，所以只读档位的 Worker 回合不会被当成 Router 的审阅。档位只决定交给 Codex 的沙盒：只读是只读沙盒，写检出是可写范围为检出的沙盒，放开是完全访问；三档都放开网络，都不询问。策略在线程开始或续接时给一次，每个回合再给一次，所以续接时换了档位，从下一个回合起生效。Codex 的三档都声明为强制，放开一档不再被拒绝；另外三个 harness 不变。档位的声明并成了一处，能力字符串由它得出。
 
@@ -81,7 +81,7 @@
 
 ## 第 4 步：Claude Code 把三档落到权限模式与沙盒上
 
-2026-10-13。一个微任务，两个回合，Codex 的 Worker（gpt-6.1-sol / high）；封存是 `01164d05`，合入整合分支的提交是 `f199cd03`。实现方的说明在 [worker-permission-levels-step4-notes.md](../../design/worker-permission-levels-step4-notes.md)。第一个回合停下来要范围：请 Host 注意的那一项由角色层的 `schema_worker.py` 生成，不在写入范围里；Host 修订了范围，第二个回合做完。
+2026-10-13。一个微任务，两个回合，Codex 的 Worker（gpt-6.1-sol / high）；封存是 `01164d05`，合入整合分支的提交是 `f199cd03`。实现方的说明在 [worker-permission-levels-step4-notes.md](../../design/adr023/worker-permission-levels-step4-notes.md)。第一个回合停下来要范围：请 Host 注意的那一项由角色层的 `schema_worker.py` 生成，不在写入范围里；Host 修订了范围，第二个回合做完。
 
 做了什么：写检出仍是自动接受编辑加沙盒、不许退到沙盒外，网络改成放行全部域名，不再用严格清单与包仓库的名单，并允许绑定本机端口；放开是跳过权限并且明确不启用沙盒；只读不变。会话开始时原生报告的权限模式读得出来并且不是请求的那一个，回合不继续，报这个 harness 现在给不出这一档；读不出来的记成事实。被回绝的权限请求在请 Host 注意的那一项里写明被回绝的是什么：工具，加上命令或路径，512 字节以内。Claude Code 的三档都声明为强制。Unix 套接字没有放开：原生的设置只能逐个列出套接字的路径，或者把本机上所有的套接字一起放开；开发者于 2026-10-13 同意不放开，需要套接字的微任务用放开一档。
 
@@ -101,7 +101,7 @@
 
 ## 第 5 步：DSH 把三档落到原生预设上
 
-2026-10-13。一个微任务，两个回合，Codex 的 Worker（gpt-6.1-sol / high）；封存是 `ed0390a5`，合入整合分支的提交是 `49a644db`。说明在 [worker-permission-levels-step5-notes.md](../../design/worker-permission-levels-step5-notes.md)。
+2026-10-13。一个微任务，两个回合，Codex 的 Worker（gpt-6.1-sol / high）；封存是 `ed0390a5`，合入整合分支的提交是 `49a644db`。说明在 [worker-permission-levels-step5-notes.md](../../design/adr023/worker-permission-levels-step5-notes.md)。
 
 做了什么：Worker 的回合不论哪一档都走 Worker 的载体，每次启动按这一回合的档位设 `DSH_PERMISSION_MODE`：只读 `read-only`，写检出 `workspace-write`（明确写出，不再依赖默认值），放开 `danger-full-access`。三档都声明为强制，只读一档的工具范围如实改成只读。被回绝的提权请求留下的记录与权限决定的证据带上被回绝的是什么：工具，加上命令或路径，512 字节以内。
 
@@ -121,7 +121,7 @@
 
 ## 第 6 步：ZCode 的三档，只读用 `plan`
 
-2026-10-13。一个微任务，三个回合，Codex 的 Worker（gpt-6.1-sol / high）；三个回合的封存是 `17ab0b0e`、`053bdef8`、`113ec391`，合入整合分支的提交是 `4cf89414`。说明在 [worker-permission-levels-step6-notes.md](../../design/worker-permission-levels-step6-notes.md)。
+2026-10-13。一个微任务，三个回合，Codex 的 Worker（gpt-6.1-sol / high）；三个回合的封存是 `17ab0b0e`、`053bdef8`、`113ec391`，合入整合分支的提交是 `4cf89414`。说明在 [worker-permission-levels-step6-notes.md](../../design/adr023/worker-permission-levels-step6-notes.md)。
 
 第一个回合做放开一档（`yolo`，强制），并写出量 `plan` 的探针 `tests/probes/zcode_plan_mode.py`：装着的 ZCode，本机回环上的假模型，私有的主目录，不发起付费调用。Host 在本机跑了它，又在一份临时副本里加了几种情形。量到的：`plan` 之下写入工具与试过的每一种会写入的命令（重定向、`python3 -c`、`tee`、`touch`、`cp`）都被原生拒绝，工具结果里写明原因，`ls`、读取与结束工具放行，回合正常结束；`yolo` 之下都放行。会话读回的模式从不说 `plan`，只说底层的权限模式。续接的会话不保留 `plan`，落回 `build`，连结束工具都要询问；`session/setMode` 在两个方向上都生效。
 
@@ -132,7 +132,7 @@
 
 ## 续接时换档：原会话里换不了的 harness 重建会话
 
-2026-10-13。一个微任务，两个回合，Codex 的 Worker（gpt-6.1-sol / high）；两个回合的封存是 `8149c7ec`、`97e0deb2`，合入整合分支的提交是 `0b300817`。说明在 [worker-permission-levels-resume-notes.md](../../design/worker-permission-levels-resume-notes.md)。
+2026-10-13。一个微任务，两个回合，Codex 的 Worker（gpt-6.1-sol / high）；两个回合的封存是 `8149c7ec`、`97e0deb2`，合入整合分支的提交是 `0b300817`。说明在 [worker-permission-levels-resume-notes.md](../../design/adr023/worker-permission-levels-resume-notes.md)。
 
 做了什么：每个适配器在原生续接的声明旁边另声明“续接的会话能不能换档”，Codex 与 ZCode 能，DSH 不能，默认不能。服务决定续接方式时多一个条件：这一回合的档位与上一回合的相同，或者这个 harness 声明了能换；否则重建会话，原因记为 `permission-level-changed`。规则里没有 harness 的名字，存储的形式没有变。顺带做了三步并行之后留下的五处：三条测试里“没有声明的那一档被拒绝”的反例用临时改掉的声明补了回来；目录的两条测试改成现在的声明；ZCode 对不带档位而工具范围是放开的请求改成与另外三家一样，在启动原生进程之前当作调用方的错误拒绝；声明表上面过时的注释改了；Claude Code 读不出会话开始时的权限模式时，这件事另记进结果里共用的没有确认的清单。
 

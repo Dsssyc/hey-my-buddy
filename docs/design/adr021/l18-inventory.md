@@ -1,6 +1,6 @@
 # ADR-021 L18：升级基点存储清点与夹具
 
-本记录只交付微任务 1，未实现升级、未改产品代码、未安装、未读取日常看板、未运行模型或完整检查；Worker 的验证事实不是 Host 的验收结论。冻结基点 B 为 `e4fbc91696f354991252ea2abddc73d45f286aa5`（0.27.0），冻结输入 C 为 `df9318f38b732681e1004cf190e71bb4bc25fe17`（0.29.0）。依据是 [执行计划](l18-upgrade.md)、[失败演练](../../acceptance/c-two-074-host-review.md#从已安装的版本升级)、AGENTS.md、CONTEXT.md、[architecture](../../reference/architecture.md) 与 ADR-007；以这两个固定提交的源码取证，不以运行中的安装推断。
+本记录只交付微任务 1，未实现升级、未改产品代码、未安装、未读取日常看板、未运行模型或完整检查；Worker 的验证事实不是 Host 的验收结论。冻结基点 B 为 `e4fbc91696f354991252ea2abddc73d45f286aa5`（0.27.0），冻结输入 C 为 `df9318f38b732681e1004cf190e71bb4bc25fe17`（0.29.0）。依据是 [执行计划](l18-upgrade.md)、[失败演练](../../acceptance/c-two/074-host-review.md#从已安装的版本升级)、AGENTS.md、CONTEXT.md、[architecture](../../reference/architecture.md) 与 ADR-007；以这两个固定提交的源码取证，不以运行中的安装推断。
 
 本记录引用的 storage inventory 与 verification 是原固定交付的历史材料，现归档于 `docs/acceptance/`；其中固定提交路径、旧命令和摘要仍按历史来源解释，不作为当前夹具输入。下文 `B:path:line`、`C:path:line` 指相应固定提交的文件位置，可以用 `git show <完整提交>:<path>` 读取。SQL 附表中 `B:D` 是 B 的 `src/buddy/db.py`，`C:D` 是 C 的 `src/hey_my_buddy/blackboard/store/db.py`。新增对象在 B 不存在时，给出其所在旧分区或旧写入点，明确标记“无”，不伪造旧定义。机器可读的完整定义、列类型/默认值/非空/主键/隐藏标记、外键删除动作、显式与自动索引的列/表达式/排序/部分条件和视图在 [storage-inventory.json](../../acceptance/adr021/l18-storage-inventory.json)；所有对象都保留两个提交的来源。
 
