@@ -7,7 +7,6 @@ import {
   CATEGORY_LABEL, TASK_SOURCE_NOTE, categoryTone, clockTime, displayTitle, durationText,
   relativeTime, rowStateInfo,
 } from "./objective-display";
-import { buildInspectorCard } from "./inspector-card";
 import { objectiveMetrics, rootRollups, type RunRollup } from "./objective-metrics";
 
 /** One labeled single-line row of an overview card (0.15.1 U2). */
@@ -60,29 +59,25 @@ function DelegationCard({ rollup, index, selected, tabbable, onSelect, onOpen }:
   </button>;
 }
 
-function SingleDelegationCard({ rollup, timeline, onOpen }: {
-  rollup: RunRollup; timeline: ObjectiveTimelineData; onOpen: (runId: string) => void;
+/**
+ * The single-root objective keeps one compact card: its status, the explicit
+ * open action and the fixed three-row overview. The full fact set lives in
+ * the delegation detail and the pinned inspector, not here (Host review 4).
+ */
+function SingleDelegationCard({ rollup, onOpen }: {
+  rollup: RunRollup; onOpen: (runId: string) => void;
 }) {
-  const card = useMemo(() => buildInspectorCard({ type: "run", runId: rollup.row.runId }, timeline, new Map()), [rollup.row.runId, timeline]);
   const state = rowStateInfo(rollup.row);
-  if (!card) return null;
   return <div className="delegation-card single expanded">
     <div className="inspector-card-head">
-      <strong>{excerpt(displayTitle(rollup.row.titleSource, rollup.row.title).text, 100)}</strong>
       <span className="chip-row">
         <span className={"st " + state.glyphClass} aria-hidden="true">{state.glyph}</span>
-        <button type="button" className="button small-button" onClick={() => onOpen(rollup.row.runId)}>打开详情</button>
+        <span className="delegation-state muted">{state.label}</span>
       </span>
+      <button type="button" className="button small-button" onClick={() => onOpen(rollup.row.runId)}>打开详情</button>
     </div>
     <DelegationThreeRows title={rollup.row.title} titleSource={rollup.row.titleSource}
       taskSummary={rollup.row.taskSummary} resultSummary={rollup.row.summary} />
-    {card.groups.map(group => <div key={group.label} className="inspector-group">
-      <span className="inspector-group-label">{group.label}</span>
-      <span className="inspector-group-lines">
-        {group.lines.map((line, index) => <span key={index} className={line.tone ? `tone-${line.tone}` : undefined}>{line.text}</span>)}
-        {group.link && group.link.kind === "run" && <span className="muted">{group.link.label}</span>}
-      </span>
-    </div>)}
   </div>;
 }
 
@@ -187,6 +182,6 @@ export function ObjectiveOverview({ summary, timeline, loading, stale, selectedR
         显示 {timeline.rows.filter(row => row.parentRunId === null).length} / {timeline.totals.rows} 个委派{timeline.truncated.rows ? " · 已截断" : ""}
       </span>}
     </div>}
-    {timeline && roots.length === 1 && <SingleDelegationCard rollup={roots[0]!} timeline={timeline} onOpen={onOpenRun} />}
+    {timeline && roots.length === 1 && <SingleDelegationCard rollup={roots[0]!} onOpen={onOpenRun} />}
   </header>;
 }

@@ -256,14 +256,14 @@ describe("objective timeline rendering", () => {
     expect(container.querySelector(".delegation-strip")).toBeNull();
     const single = container.querySelector(".delegation-card.single") as HTMLElement;
     expect(single).toBeTruthy();
-    expect(single.textContent).toContain("任务");
-    expect(single.textContent).toContain("轮次");
-    expect(single.textContent).toContain("第 1 轮");
-    expect(single.textContent).toContain("结果");
-    expect(single.textContent).toContain("已验收 · 10:20");
-    expect(single.textContent).toContain("待决");
-    expect(single.textContent).toContain("协助任务 1 个");
+    // Host review 4: the single card carries only the status, the open action
+    // and the fixed three rows; the full fact set lives in detail/inspector.
+    expect(single.querySelectorAll(".card-row")).toHaveLength(3);
+    expect(single.textContent).toContain("已验收");
     expect(within(single).getByRole("button", { name: "打开详情" })).toBeTruthy();
+    expect(single.textContent).not.toContain("第 1 轮");
+    expect(single.textContent).not.toContain("待决");
+    expect(single.textContent).not.toContain("协助任务 1 个");
   });
 
   it("shows skeleton, error and stale states without inventing data", async () => {

@@ -33,7 +33,7 @@ describe("objective stop status (0.15.1 U4, Host-reviewed)", () => {
     const status = stopStatus(entry({ phase: "unknown" }), read());
     expect(status?.label).toBe("停止未确认");
     expect(status?.detail).toContain("结果未知");
-    expect(status?.detail).toContain("重试同一命令");
+    expect(status?.detail).toContain("重试同一停止请求");
   });
 
   it("a definite refusal reports itself without touching the stop scope", () => {
@@ -105,7 +105,30 @@ describe("objective stop status (0.15.1 U4, Host-reviewed)", () => {
     });
     const status = stopStatus(entry(), timeline);
     expect(status?.label).toBe("已停止");
-    expect(status?.detail).toContain("2 项（含协助任务）均已确认停止");
+    // runIds mixes roots and helpers; the copy names the root count only.
+    expect(status?.detail).toBe("这 2 个委派及其协助任务均已确认停止。");
+  });
+
+  it("the stopped copy counts roots only, even when helpers share the reply scope", () => {
+    const timeline = read({
+      r4: { state: "cancelled", status: "cancelled", shutdownConfirmed: true },
+      r6: { state: "cancelled", status: "cancelled", shutdownConfirmed: true },
+    });
+    timeline.rows.push({
+      ...timeline.rows[0]!, runId: "r4-h1", parentRunId: "r4", rootRunId: "r4", depth: 1, kind: "helper",
+      title: "已停的协助任务", state: "cancelled", status: "cancelled", shutdownConfirmed: true,
+    });
+    const withHelper: ObjectiveStopEntry = { ...entry(), result: {
+      objectiveId: "obj-1", runIds: ["r4", "r4-h1", "r6"], acceptedRunIds: [],
+      results: [
+        { runId: "r4", result: "cancel-requested" },
+        { runId: "r4-h1", result: "cancel-requested" },
+        { runId: "r6", result: "cancel-requested" },
+      ],
+    } };
+    const status = stopStatus(withHelper, timeline);
+    expect(status?.label).toBe("已停止");
+    expect(status?.detail).toBe("这 2 个委派及其协助任务均已确认停止。");
   });
 
   it("a malformed reply is an unknown outcome, never a confirmed stop", () => {
@@ -115,8 +138,22 @@ describe("objective stop status (0.15.1 U4, Host-reviewed)", () => {
       { ...good, objectiveId: "obj-other" }, { ...good, runIds: "r4" },
       { ...good, acceptedRunIds: [7] }, { ...good, results: [{ runId: "", result: "x" }] },
       null,
+      // Duplicate identifiers inside one list.
+      { ...good, runIds: ["r4", "r4"] },
+      { ...good, acceptedRunIds: ["r1", "r1"] },
+      { ...good, results: [{ runId: "r4", result: "x" }, { runId: "r4", result: "y" }] },
+      // The cancelled and retained scopes must stay disjoint.
+      { ...good, runIds: ["r4", "r1"], acceptedRunIds: ["r1"] },
+      // The per-root results must cover the cancellation scope exactly.
+      { ...good, results: [] },
+      { ...good, results: [{ runId: "r-other", result: "x" }] },
+      { ...good, runIds: ["r4", "r5"], results: [{ runId: "r4", result: "x" }] },
     ]) {
       expect(() => errorOfStopReply("obj-1", malformed)).toThrowError(/不完整|响应/);
     }
+    // Helper ids in runIds stay valid when the results cover them exactly.
+    const helperReply = { objectiveId: "obj-1", runIds: ["r4", "r4-h1"], acceptedRunIds: [],
+      results: [{ runId: "r4", result: "cancel-requested" }, { runId: "r4-h1", result: "cancel-requested" }] };
+    expect(errorOfStopReply("obj-1", helperReply)).toEqual(helperReply);
   });
 });

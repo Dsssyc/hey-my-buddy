@@ -345,7 +345,7 @@ function ObjectivesWorkspace({ snapshot, api, refresh, active, authority, writes
         title={stopState.detail}>{stopState.label}</span>}
       {stopState?.phase === "unknown" && stop.writable && !stopping
         && <button type="button" className="button small-button"
-          title="按原命令 ID 重试；服务会去重，不会扩大取消范围。"
+          title="重试同一停止请求；不会重复取消，也不会扩大取消范围。"
           onClick={() => stop.retryStop(selectedSummary)}>重试停止</button>}
       {stopState?.phase === "refused"
         && <button type="button" className="button small-button" onClick={() => stop.dismissStop(selectedSummary.objectiveId)}>知道了</button>}

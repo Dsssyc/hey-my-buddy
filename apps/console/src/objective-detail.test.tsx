@@ -44,12 +44,23 @@ function workflowFixture(task: Task): Workflow {
     artifacts: [], integrations: [], finalArtifactId: null, finalAttemptId: null, task };
 }
 
-type StopOptions = { writesAvailable?: boolean; stopError?: Error; secondObjective?: boolean; stoppedTimeline?: ObjectiveTimeline };
+type Pending = { promise: Promise<unknown>; resolve: (value: unknown) => void };
+function deferred(): Pending {
+  let resolve!: (value: unknown) => void;
+  const promise = new Promise<unknown>(done => { resolve = done; });
+  return { promise, resolve };
+}
+
+type StopOptions = { writesAvailable?: boolean; stopError?: Error; secondObjective?: boolean; secondStoppable?: boolean; stoppedTimeline?: ObjectiveTimeline };
 
 function harness(options: StopOptions = {}) {
   const snapshot = snapshotFixture();
   const timeline = objectiveTimelineFixture();
-  const listed = options.secondObjective
+  const listed = options.secondStoppable
+    ? [timeline.objective, objectiveSummary({ objectiveId: "obj-2", title: "另一个进行中的目标",
+        lastActivitySeq: 30, lastActivityAt: "2026-09-26T07:40:00Z", state: "active",
+        counts: { roots: 2, helpers: 0, accepted: 0, active: 1, host: 0, review: 1, ended: 0 } })]
+    : options.secondObjective
     ? [timeline.objective, objectiveSummary({ objectiveId: "run:3f0e", kind: "standalone",
         title: "修复标题回退在 CRLF 输入下的显示", titleSource: "task", description: null, lastActivitySeq: 20,
         lastActivityAt: "2026-09-25T10:22:00Z", state: "ended",
@@ -87,8 +98,12 @@ function harness(options: StopOptions = {}) {
   const user = userEvent.setup();
   const view = render(<Objectives snapshot={snapshot} api={api} refresh={refresh}
     active writesAvailable={options.writesAvailable ?? true} />);
-  return { ...view, api, refresh, tasks, timeline, user, stopAttempts: () => stopAttempts };
+  return { ...view, api, refresh, tasks, timeline, user, listed, stopAttempts: () => stopAttempts };
 }
+
+const stopCalls = (f: ReturnType<typeof harness>) =>
+  (f.api.command as unknown as ReturnType<typeof vi.fn>).mock.calls
+    .filter(([operation]) => operation === "objective_stop") as [string, Record<string, unknown>][];
 
 const openObjective = async (f: ReturnType<typeof harness>) => {
   await f.user.click(await screen.findByRole("button", { name: /工作目标时间轴：设计、接口与实现/ }));
@@ -370,6 +385,131 @@ describe("objective-level stop (0.15.1 U4)", () => {
     await waitFor(() => expect(screen.getByText("正在停止")).toBeTruthy());
   });
 });
+
+  it("regression: two objectives stop concurrently — neither is skipped nor stuck", async () => {
+    stubViewport(true);
+    const f = harness({ secondStoppable: true });
+    const summaries = new Map(f.listed.map(summary => [summary.objectiveId, summary]));
+    // Each objective's stop reply is deferred independently.
+    const pending = new Map<string, Pending>();
+    (f.api.command as unknown as ReturnType<typeof vi.fn>).mockImplementation(async (operation: string, params: Record<string, unknown>) => {
+      if (operation === "workflow_get") return workflowFixture(f.tasks.get(String(params.runId)) ?? taskFixture(String(params.runId)));
+      if (operation === "objective_stop") {
+        const deferredReply = deferred();
+        pending.set(String(params.commandId), deferredReply);
+        return deferredReply.promise;
+      }
+      throw new Error(`Unexpected command: ${operation}`);
+    });
+    (f.api.objectiveTimeline as unknown as ReturnType<typeof vi.fn>).mockImplementation(async (objectiveId: string) =>
+      ({ ...f.timeline, objective: summaries.get(objectiveId) ?? f.timeline.objective }));
+    await openObjective(f);
+    // Confirm the first objective's stop; its reply stays pending.
+    await f.user.click(screen.getByRole("button", { name: "停止目标" }));
+    await f.user.click(within(await screen.findByRole("dialog", { name: "停止工作目标" })).getByRole("button", { name: "确认停止目标" }));
+    await waitFor(() => expect(stopCalls(f).length).toBe(1));
+    expect((await screen.findByText("正在停止")).textContent).toBe("正在停止");
+    // Navigate to the second objective and stop it while the first is pending.
+    await f.user.click(screen.getByRole("button", { name: "‹ 工作目标列表" }));
+    await f.user.click(screen.getByRole("button", { name: /另一个进行中的目标/ }));
+    await screen.findByText("0 / 2 个委派已验收");
+    await f.user.click(screen.getByRole("button", { name: "停止目标" }));
+    await f.user.click(within(await screen.findByRole("dialog", { name: "停止工作目标" })).getByRole("button", { name: "确认停止目标" }));
+    await waitFor(() => expect(stopCalls(f).length).toBe(2));
+    // Both dispatches carry their own objective and a distinct command identity.
+    const [first, second] = stopCalls(f);
+    expect((first![1] as { objectiveId: string }).objectiveId).toBe("obj-1");
+    expect((second![1] as { objectiveId: string }).objectiveId).toBe("obj-2");
+    expect((first![1] as { commandId: string }).commandId).not.toBe((second![1] as { commandId: string }).commandId);
+    expect((await screen.findByText("正在停止")).textContent).toBe("正在停止");
+    // Resolving both replies settles each objective without a stuck phase.
+    pending.get(String((first![1] as { commandId: string }).commandId))!.resolve({
+      objectiveId: "obj-1", runIds: ["r4"], acceptedRunIds: ["r1", "r2"], results: [{ runId: "r4", result: "cancel-requested" }],
+    });
+    pending.get(String((second![1] as { commandId: string }).commandId))!.resolve({
+      objectiveId: "obj-2", runIds: ["r4"], acceptedRunIds: [], results: [{ runId: "r4", result: "cancel-requested" }],
+    });
+    await waitFor(() => expect(screen.queryByText("停止请求未提交")).toBeNull(), { timeout: 3000 });
+    expect(stopCalls(f).length).toBe(2);
+    expect(screen.getByText("正在停止")).toBeTruthy();
+  });
+
+  it("regression: losing the writer at confirmation keeps an unknown's identity; fresh refusals never reuse it", async () => {
+    stubViewport(true);
+    const f = harness();
+    (f.api.command as unknown as ReturnType<typeof vi.fn>).mockImplementation(async (operation: string, params: Record<string, unknown>) => {
+      if (operation === "workflow_get") return workflowFixture(f.tasks.get(String(params.runId)) ?? taskFixture(String(params.runId)));
+      if (operation === "objective_stop") throw new ApiError("NETWORK", "lost reply");
+      throw new Error(`Unexpected command: ${operation}`);
+    });
+    await openObjective(f);
+    // A brand-new request whose writer vanishes between dialog and confirm
+    // becomes a plain refusal that was never dispatched.
+    await f.user.click(screen.getByRole("button", { name: "停止目标" }));
+    const dialog = await screen.findByRole("dialog", { name: "停止工作目标" });
+    const snapshot = snapshotFixture();
+    f.rerender(<Objectives snapshot={{ ...snapshot, consoleSession: { id: "session-a", canWrite: false, reason: "superseded" } }}
+      api={f.api} refresh={f.refresh} active writesAvailable={false} />);
+    await f.user.click(within(dialog).getByRole("button", { name: "确认停止目标" }));
+    expect(await screen.findByText("停止请求未提交")).toBeTruthy();
+    expect(stopCalls(f).length).toBe(0);
+    // Writer back: confirming mints a FRESH identity (the refusal's empty one
+    // is never reused) and the lost reply keeps the entry unknown.
+    f.rerender(<Objectives snapshot={snapshot} api={f.api} refresh={f.refresh} active writesAvailable />);
+    await f.user.click(await screen.findByRole("button", { name: "停止目标" }));
+    await f.user.click(within(await screen.findByRole("dialog", { name: "停止工作目标" })).getByRole("button", { name: "确认停止目标" }));
+    await waitFor(() => expect(stopCalls(f).length).toBe(1));
+    expect(typeof (stopCalls(f)[0]![1] as { commandId: string }).commandId).toBe("string");
+    expect(((stopCalls(f)[0]![1] as { commandId: string }).commandId).length).toBeGreaterThan(0);
+    expect(await screen.findByText("停止未确认")).toBeTruthy();
+    // Losing the writer again with the dialog open must NOT overwrite the
+    // unknown entry: its identity survives for the same-objective replay.
+    await f.user.click(screen.getByRole("button", { name: "停止目标" }));
+    const secondDialog = await screen.findByRole("dialog", { name: "停止工作目标" });
+    f.rerender(<Objectives snapshot={{ ...snapshot, consoleSession: { id: "session-a", canWrite: false, reason: "superseded" } }}
+      api={f.api} refresh={f.refresh} active writesAvailable={false} />);
+    await f.user.click(within(secondDialog).getByRole("button", { name: "确认停止目标" }));
+    expect(screen.getByText("停止未确认")).toBeTruthy();
+    expect(screen.queryByText("停止请求未提交")).toBeNull();
+    expect(stopCalls(f).length).toBe(1);
+    // Writer back once more: the retry replays the EXACT retained identity.
+    f.rerender(<Objectives snapshot={snapshot} api={f.api} refresh={f.refresh} active writesAvailable />);
+    await f.user.click(screen.getByRole("button", { name: "重试停止" }));
+    await waitFor(() => expect(stopCalls(f).length).toBe(2));
+    expect(stopCalls(f)[1]![1]).toEqual(stopCalls(f)[0]![1]);
+  });
+
+  it("regression: a scope-incoherent reply stays an unknown outcome and replays safely", async () => {
+    stubViewport(true);
+    const f = harness();
+    let attempts = 0;
+    (f.api.command as unknown as ReturnType<typeof vi.fn>).mockImplementation(async (operation: string, params: Record<string, unknown>) => {
+      if (operation === "workflow_get") return workflowFixture(f.tasks.get(String(params.runId)) ?? taskFixture(String(params.runId)));
+      if (operation === "objective_stop") {
+        attempts += 1;
+        if (attempts === 1) {
+          // results do not cover runIds: the scope is incoherent.
+          return { objectiveId: "obj-1", runIds: ["r4", "r6"], acceptedRunIds: ["r1"], results: [{ runId: "r4", result: "cancel-requested" }] };
+        }
+        return { objectiveId: "obj-1", runIds: ["r4", "r6"], acceptedRunIds: ["r1", "r2"],
+          results: [{ runId: "r4", result: "cancel-requested" }, { runId: "r6", result: "cancel-requested" }] };
+      }
+      throw new Error(`Unexpected command: ${operation}`);
+    });
+    await openObjective(f);
+    await f.user.click(screen.getByRole("button", { name: "停止目标" }));
+    await f.user.click(within(await screen.findByRole("dialog", { name: "停止工作目标" })).getByRole("button", { name: "确认停止目标" }));
+    // The malformed reply is refused client-side as an unknown outcome.
+    await waitFor(() => expect(attempts).toBe(1));
+    expect(await screen.findByText("停止未确认")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "重试停止" })).toBeTruthy();
+    expect(screen.queryByText("停止请求未提交")).toBeNull();
+    // The replay keeps the identity; the coherent reply settles it.
+    await f.user.click(screen.getByRole("button", { name: "重试停止" }));
+    await waitFor(() => expect(attempts).toBe(2));
+    expect(stopCalls(f)[1]![1]).toEqual(stopCalls(f)[0]![1]);
+    expect(await screen.findByText("正在停止")).toBeTruthy();
+  });
 
 describe("objective detail docking (0.15.1 U1)", () => {
   it("docks the detail beside a visible timeline and collapses the list to the rail", async () => {

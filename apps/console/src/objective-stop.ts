@@ -58,7 +58,7 @@ export function stopStatus(entry: ObjectiveStopEntry | undefined, timeline: Obje
     return {
       phase: "unknown",
       label: "停止未确认",
-      detail: "停止请求的回复丢失，结果未知：请求可能已生效。可重试同一命令（服务按原命令 ID 去重），或稍后按刷新的记录核对；导航不受影响。",
+      detail: "停止请求的回复丢失，结果未知：请求可能已生效。可重试同一停止请求，不会重复取消；也可稍后按刷新的记录核对。导航不受影响。",
     };
   }
   if (entry.phase === "stopping") {
@@ -111,13 +111,17 @@ export function stopStatus(entry: ObjectiveStopEntry | undefined, timeline: Obje
       detail: "当前时间轴读取不完整（筛选或截断），不能凭局部记录断定整组已停止。",
     };
   }
-  return { phase: "stopped", label: "已停止", detail: `取消范围内的 ${runIds.length} 项（含协助任务）均已确认停止。` };
+  // runIds mixes roots and helpers; only the root count names 委派.
+  return { phase: "stopped", label: "已停止", detail: `这 ${affectedRoots.size} 个委派及其协助任务均已确认停止。` };
 }
 
 export function useObjectiveStop(api: ConsoleApi, snapshot: Snapshot, writesAvailable: boolean, authority: AuthorityLatch | undefined, refresh: () => Promise<unknown>) {
   const [entries, setEntries] = useState<Map<string, ObjectiveStopEntry>>(() => new Map());
   const [confirming, setConfirming] = useState<ObjectiveSummary | null>(null);
-  const inFlight = useRef(false);
+  // One in-flight stop per objective: a second confirmation of the SAME
+  // objective is ignored while its reply is pending, but different objectives
+  // navigate and stop independently.
+  const inFlight = useRef<Set<string>>(new Set());
 
   const writable = writesAvailable && (authority ? authority.writable(snapshot) : snapshot.consoleSession?.canWrite === true);
 
@@ -131,8 +135,9 @@ export function useObjectiveStop(api: ConsoleApi, snapshot: Snapshot, writesAvai
   }, []);
 
   const dispatch = useCallback(async (summary: ObjectiveSummary, entry: ObjectiveStopEntry, replay: boolean) => {
-    if (inFlight.current) return;
-    inFlight.current = true;
+    const objectiveId = summary.objectiveId;
+    if (inFlight.current.has(objectiveId)) return;
+    inFlight.current.add(objectiveId);
     patch(summary.objectiveId, { phase: "stopping", error: "" });
     try {
       const result = await api.command<ObjectiveStopResult>("objective_stop", {
@@ -154,15 +159,15 @@ export function useObjectiveStop(api: ConsoleApi, snapshot: Snapshot, writesAvai
       } else if (isReadOnlyRefusal(reason) && replay) {
         // A replay that is definitely refused proves only that THIS request
         // was denied; the earlier unknown attempt stays unknown.
-        patch(summary.objectiveId, {
+        patch(objectiveId, {
           phase: "unknown",
-          error: `${errorText(reason)} 此前那次重试的结果仍未知，命令 ID 保留。`,
+          error: `${errorText(reason)} 此前那次停止请求的结果仍未知，保留原请求身份，可再次重试。`,
         });
       } else {
         patch(summary.objectiveId, { phase: "refused", error: errorText(reason) });
       }
     } finally {
-      inFlight.current = false;
+      inFlight.current.delete(objectiveId);
     }
   }, [api, patch, refresh, snapshot.csrfToken]);
 
@@ -177,25 +182,40 @@ export function useObjectiveStop(api: ConsoleApi, snapshot: Snapshot, writesAvai
   /** Step two: mint the command identity and dispatch; a replay keeps it. */
   const confirmStop = useCallback((summary: ObjectiveSummary) => {
     setConfirming(null);
+    const objectiveId = summary.objectiveId;
+    // A dispatch for this objective is already pending: ignore the duplicate
+    // before touching any entry, so the retained identity and status survive.
+    if (inFlight.current.has(objectiveId)) return;
+    const existing = entries.get(objectiveId);
     if (!writable) {
-      setEntries(previous => new Map(previous).set(summary.objectiveId, {
-        commandId: "", phase: "refused", result: null, error: READ_ONLY_ACTION_REFUSAL,
+      // Losing the writer proves nothing about an earlier attempt: a retained
+      // unknown (or still-pending/acknowledged) entry keeps its identity and
+      // stays replayable. Only a request that never reached the board becomes
+      // a plain refusal.
+      if (existing && existing.phase !== "refused") return;
+      setEntries(previous => new Map(previous).set(objectiveId, {
+        // Empty on purpose: this request was never dispatched, and the empty
+        // identity is never reused once the writer returns.
+        commandId: "", phase: "refused", result: existing?.result ?? null, error: READ_ONLY_ACTION_REFUSAL,
       }));
       return;
     }
-    const existing = entries.get(summary.objectiveId);
-    const entry: ObjectiveStopEntry = existing && (existing.phase === "unknown" || existing.phase === "refused")
-      ? { ...existing, phase: "stopping", error: "" }
+    // Reuse only a dispatched (nonempty) identity; anything else mints fresh.
+    const reusable = existing && existing.commandId !== ""
+      && (existing.phase === "unknown" || existing.phase === "refused");
+    const entry: ObjectiveStopEntry = reusable
+      ? { ...existing!, phase: "stopping", error: "" }
       : { commandId: crypto.randomUUID(), phase: "stopping", result: existing?.result ?? null, error: "" };
-    setEntries(previous => new Map(previous).set(summary.objectiveId, entry));
+    setEntries(previous => new Map(previous).set(objectiveId, entry));
     void dispatch(summary, entry, existing?.phase === "unknown");
   }, [dispatch, entries, writable]);
 
-  /** Replay the retained command identity: the server deduplicates by commandId. */
+  /** Replay the retained dispatched identity: never an empty or pending one. */
   const retryStop = useCallback((summary: ObjectiveSummary) => {
     if (!writable) return;
+    if (inFlight.current.has(summary.objectiveId)) return;
     const entry = entries.get(summary.objectiveId);
-    if (!entry || entry.phase === "acknowledged" || entry.phase === "stopping") return;
+    if (!entry || entry.commandId === "" || entry.phase === "acknowledged" || entry.phase === "stopping") return;
     void dispatch(summary, entry, entry.phase === "unknown");
   }, [dispatch, entries, writable]);
 
