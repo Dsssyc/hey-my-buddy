@@ -60,6 +60,15 @@ for (const scene of [
   expect(reads).toBe(0);
   await mkdir(captures, { recursive: true });
   await page.screenshot({ path: `${captures}/${name}-closed.png` });
+  const elapsedTrigger = facts.getByRole("button", { name: scene.language === "zh" ? "时间统计" : "Time statistics", exact: true });
+  await elapsedTrigger.click();
+  const elapsedCard = page.locator('[data-slot="popover-content"]:has([data-slot="time-stats-body"])');
+  await expect(elapsedCard).toBeVisible();
+  await elapsedCard.evaluate(element => { for (const animation of element.getAnimations()) animation.finish(); });
+  const elapsedBox = (await elapsedTrigger.boundingBox())!;
+  const elapsedGap = (await elapsedCard.boundingBox())!.y - elapsedBox.y - elapsedBox.height;
+  await page.keyboard.press("Escape");
+  await expect(elapsedCard).toBeHidden();
   const before = await header.boundingBox();
   await trigger.click();
   const card = page.locator('[data-slot="macro-goal-card"]');
@@ -116,6 +125,8 @@ for (const scene of [
   await page.screenshot({ path: `${captures}/${name}-open.png` });
   expect(await header.boundingBox()).toEqual(before);
   const box = (await card.boundingBox())!;
+  const anchor = (await trigger.boundingBox())!;
+  expect(Math.abs(box.y - anchor.y - anchor.height - elapsedGap), "the goal and elapsed popovers share the same trigger gap").toBeLessThanOrEqual(1);
   expect(box.x).toBeGreaterThanOrEqual(0); expect(box.x + box.width).toBeLessThanOrEqual(scene.width);
   expect(box.y + box.height).toBeLessThanOrEqual(850);
   expect(await card.evaluate(element => getComputedStyle(element).borderRadius)).toBe("6px");

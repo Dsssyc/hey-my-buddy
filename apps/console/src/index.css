@@ -168,7 +168,6 @@
   transition: --goal-progress 200ms ease-out;
   position: absolute;
   z-index: 45;
-  top: calc(100% - 4px);
   left: 24px;
   right: 24px;
   min-width: 0;
