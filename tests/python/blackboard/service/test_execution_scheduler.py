@@ -1215,7 +1215,7 @@ class RootCreationTeardownTests(BoardTestCase):
                 # The suspended root is stopped on the service-held Job handle
                 # and observed empty; no resume or duplication ever happens.
                 self.assertEqual(api.events, ["create", ("assign", 77, 42), ("terminate", 77),
-                                              ("active", 77), ("close", 77)])
+                                              ("active", 77), ("active", 77), ("close", 77)])
                 self.assertEqual(process.returncode, 1)
                 self.assertFalse((board.directory / "attempts" / task["runId"] / attempt_id
                                   / "spawn.marker").exists())
@@ -1230,7 +1230,7 @@ class RootCreationTeardownTests(BoardTestCase):
         self.assertEqual(scheduler._handles, {})
         self.assertEqual(api.events, ["create", ("assign", 77, 42), ("resume", 42),
                                       ("duplicate", 321, 77), ("terminate", 77),
-                                      ("active", 77), ("close", 77)])
+                                      ("active", 77), ("active", 77), ("close", 77)])
         self.assertEqual(process.returncode, 1)
         self.assertTrue((board.directory / "attempts" / task["runId"] / attempt_id
                          / "spawn.marker").is_file())

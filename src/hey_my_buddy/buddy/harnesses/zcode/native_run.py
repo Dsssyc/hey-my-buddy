@@ -737,7 +737,7 @@ def _spawn_app_server(*, cwd: str, invocation_root: Path, native_root: Path, dea
         # actual handle registered, never the initial no-child receipt.
         if process is not None:
             try:
-                shutdown, _escalated = halt_owned_group(process, handle, time.monotonic() + 5.0)
+                shutdown, _escalated = halt_owned_group(handle, time.monotonic() + 5.0)
                 if owned is not None:
                     owned[:] = [{"created": True, "shutdown": shutdown,
                                  "exit_code": process.returncode}]
@@ -749,7 +749,7 @@ def _spawn_app_server(*, cwd: str, invocation_root: Path, native_root: Path, dea
 
 def _stop_native(spawn: _Spawn, deadline: float) -> tuple[bool, bool]:
     """Stop the run's owned app-server through the shared halt primitive."""
-    return halt_owned_group(spawn.process, spawn.handle, deadline)
+    return halt_owned_group(spawn.handle, deadline)
 
 
 def _project_session(session: ZcodeSessionProjector | None, state: _RunState, message: dict) -> None:

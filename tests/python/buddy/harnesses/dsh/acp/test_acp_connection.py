@@ -256,13 +256,14 @@ class WriterTest(AcpTestCase):
             {"jsonrpc": "2.0", "method": "session/list", "params": {}},
             deadline=time.monotonic() + 30)
         try:
-            connection.shutdown(drain_seconds=0.1)
+            connection.shutdown(drain_seconds=0.1,
+                                stop=lambda: client.handle.terminate(grace_seconds=0.1))
             self.assertTrue(queued.done.is_set())
             self.assertEqual("failed", queued.outcome[0])
             self.assertIsInstance(queued.outcome[1], AcpConnectionClosed)
         finally:
-            client.handle.terminate(grace_seconds=3)
-            client.handle.wait(10)
+            self.assertTrue(client.handle.shutdown_confirmed(),
+                            "the connection must invoke its required owned stop")
 
     def test_shutdown_evidence_excludes_writer_state(self):
         client = self.start_client()

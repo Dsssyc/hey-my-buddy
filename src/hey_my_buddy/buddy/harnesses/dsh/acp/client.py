@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+import threading
 
 from .connection import AcpConnection, stop_evidence
 from .launch import launch, stop_after_spawn_failure
@@ -53,9 +54,6 @@ class AcpClient:
         self.process = process
         self.handle = handle
         self.connection = connection
-        # The ACP writer can still own stdin after a timed-out write. Its
-        # bounded close is the same input channel without blocking behind it.
-        handle.close_input = connection.close_stdin
 
     @classmethod
     def start(cls, argv: list[str], *, private_root: Path, extra_env: dict | None = None,
@@ -63,11 +61,13 @@ class AcpClient:
               permission_policy: PermissionPolicy | None = None) -> "AcpClient":
         """Launch the process and start its connection; a fake agent under test
         launches through the same wrapper with inherited native configuration."""
+        stdin_lock = threading.Lock()
         process, handle = launch(argv, private_root=private_root, extra_env=extra_env, cwd=cwd,
-                                 launch_environment=launch_environment)
+                                 launch_environment=launch_environment, stdin_lock=stdin_lock)
         try:
             policy = permission_policy if permission_policy is not None else PermissionPolicy()
-            connection = AcpConnection(process, handle, facts_path=Path(private_root) / "logs" / "acp-facts.jsonl",
+            connection = AcpConnection(process, stdin_lock=stdin_lock,
+                                       facts_path=Path(private_root) / "logs" / "acp-facts.jsonl",
                                        permission_handler=policy.decide)
             connection.start()
             return cls(process, handle, connection)

@@ -198,6 +198,7 @@ def _catalog(initialize: dict | None, version: str) -> dict:
 def _interrupt(connection: Connection | None, *, strict: bool = False) -> bool:
     if connection is None:
         return False
+    deadline, cancelled = connection.deadline, connection.cancelled
     try:
         # A fresh short control budget permits a native interrupt after the main deadline.
         connection.cancelled = threading.Event()
@@ -210,6 +211,8 @@ def _interrupt(connection: Connection | None, *, strict: bool = False) -> bool:
         # A late quota frame while awaiting interrupt acknowledgement must not
         # escape the cleanup path and suppress the controller's stop receipt.
         return False
+    finally:
+        connection.deadline, connection.cancelled = deadline, cancelled
 
 
 @dataclasses.dataclass
@@ -345,7 +348,7 @@ def _spawn_native(*, command: list[str], args: list[str], cwd: str, environment:
         # only its actual stop can replace the earlier diagnostic receipt.
         if process is not None:
             try:
-                shutdown, _signalled = _halt_owned_group(process, handle, time.monotonic() + 5.0)
+                shutdown, _signalled = _halt_owned_group(handle, time.monotonic() + 5.0)
                 if owned is not None:
                     owned[:] = [{"created": True, "shutdown": shutdown, "exit_code": process.returncode}]
             finally:
@@ -767,7 +770,7 @@ def _check_terminal(evidence: TurnEvidence, session_id: str) -> bool:
 
 def _stop_native(spawn: _Spawn, deadline: float) -> tuple[bool, int | None]:
     """Close, wait, then terminate; report only what the owned group confirmed."""
-    shutdown, _signalled = _halt_owned_group(spawn.process, spawn.handle, deadline)
+    shutdown, _signalled = _halt_owned_group(spawn.handle, deadline)
     try:
         spawn.process.stdout.close()
     except OSError:

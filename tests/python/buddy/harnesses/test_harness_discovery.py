@@ -1181,16 +1181,30 @@ class ProbeStopEvidenceTests(unittest.TestCase):
                     private = root / ('probe-' + str(stopped))
                     private.mkdir()
                     observe = ProcessHandle.shutdown_confirmed
+                    terminate = ProcessHandle.terminate
+                    reader = discovery._probe_windows if os.name == 'nt' else discovery._probe_posix
+                    stops = []
+
                     def actual_stop(handle, **kwargs):
                         actual = observe(handle, **kwargs)
                         return actual and stopped
+
+                    def stop_once(handle, **kwargs):
+                        stops.append(handle)
+                        return terminate(handle, **kwargs)
+
+                    def failed_after_stop(*args):
+                        reader(*args)
+                        raise ValueError('fixture reader failed after owned stop')
+
                     with patch.object(discovery.private_dirs, 'make_temporary_dir', return_value=private), \
-                         patch.object(discovery, '_probe_windows' if os.name == 'nt' else '_probe_posix',
-                                      side_effect=ValueError('fixture reader failed')), \
+                         patch.object(discovery, reader.__name__, side_effect=failed_after_stop), \
+                         patch.object(ProcessHandle, 'terminate', stop_once), \
                          patch.object(ProcessHandle, 'shutdown_confirmed', actual_stop):
                         with self.assertRaises(ValueError) as caught:
                             discovery._probe_dsh_version([sys.executable, str(cli)], {'PATH': ''}, time.monotonic() + 1, state_dir=Path(os.environ["HMB_STATE_DIR"]))
                     self.assertIs(getattr(caught.exception, 'discovery_shutdown_confirmed', None), stopped)
+                    self.assertEqual(len(stops), 1, 'the DSH probe must not start a second stop sequence')
 
     @unittest.skipIf(os.name == 'nt', 'POSIX private probe')
     def test_probe_exception_without_eof_keeps_unconfirmed_stop(self):

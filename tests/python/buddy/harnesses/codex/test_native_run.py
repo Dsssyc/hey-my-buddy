@@ -132,8 +132,8 @@ class SeamCase(unittest.TestCase):
         """
         real = native_run._halt_owned_group
 
-        def halt_then_unconfirmed(process, handle, deadline):
-            shutdown, signalled = real(process, handle, deadline)
+        def halt_then_unconfirmed(handle, deadline):
+            shutdown, signalled = real(handle, deadline)
             return False, signalled
 
         return mock.patch.object(native_run, "_halt_owned_group", halt_then_unconfirmed)
@@ -1818,7 +1818,7 @@ class DiscoveryBoundaryTests(unittest.TestCase):
             handle = ProcessHandle(child, own_group=True, log_paths={}, stop_channel="signal")
 
             def reap():
-                native_run._halt_owned_group(child, handle, time.monotonic() + 5)
+                native_run._halt_owned_group(handle, time.monotonic() + 5)
                 child.stdout.close()
             self.addCleanup(reap)
             return child
@@ -1935,8 +1935,8 @@ class DiscoveryBoundaryTests(unittest.TestCase):
     def test_connection_failure_with_unknown_halt_keeps_unknown_stop(self):
         halt = native_run._halt_owned_group
 
-        def halt_without_evidence(process, handle, deadline):
-            halt(process, handle, deadline)
+        def halt_without_evidence(handle, deadline):
+            halt(handle, deadline)
             raise ValueError('fixture stop observation failed')
 
         with self.keep_child_for_teardown(), \
@@ -2045,8 +2045,8 @@ class DiscoverySeamTests(SeamCase):
     def test_discovery_stop_observation_failure_keeps_unknown_stop(self):
         halt = native_run._halt_owned_group
 
-        def halt_without_evidence(process, handle, deadline):
-            halt(process, handle, deadline)
+        def halt_without_evidence(handle, deadline):
+            halt(handle, deadline)
             raise ValueError('fixture stop observation failed')
 
         with mock.patch.object(native_run, '_halt_owned_group', side_effect=halt_without_evidence):

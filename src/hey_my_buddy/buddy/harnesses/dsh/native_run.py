@@ -1364,9 +1364,8 @@ def _collect(*, client: AcpClient | None, pump: _Pump | None, state: _RunState,
 
     The EOF drain keeps every stopped-stream frame: each late fact reaches the
     role observer, and only the observer's stop — never the driver's scope
-    reading — marks the stream incomplete. An unconfirmed stop escalates once to
-    a group termination and reports what was actually observed; it never reads
-    as gone.
+    reading — marks the stream incomplete. The owned handle supplies the stop
+    sequence; an unconfirmed stop retains the actual group observation.
     """
     if client is None:
         return None
@@ -1725,7 +1724,7 @@ def run_discovery(*, cwd: str, invocation_root: Path, native_root: Path,
 
 
 def _stop(client: AcpClient) -> dict:
-    """The discovery stop: escalate once on an unconfirmed group, never claim gone."""
+    """Use the owned stop sequence and retain the observed discovery stop facts."""
     shutdown = client.shutdown(drain_seconds=_DRAIN_SECONDS, settle_seconds=_SETTLE_SECONDS)
     try:
         client.process.stdout.close()

@@ -19,7 +19,6 @@ harness.
 from __future__ import annotations
 
 import math
-import subprocess
 import threading
 import time
 from typing import Any, Callable
@@ -113,7 +112,7 @@ def shape_guard(shape: Any) -> Callable[[Any], Any]:
     return check
 
 
-def halt_owned_group(process: subprocess.Popen, handle: ProcessHandle, deadline: float) -> tuple[bool, bool]:
+def halt_owned_group(handle: ProcessHandle, deadline: float) -> tuple[bool, bool]:
     """Apply the owned handle's stop sequence after the native interrupt."""
     return handle.terminate(grace_seconds=min(3.0, max(0.0, deadline - time.monotonic())))
 

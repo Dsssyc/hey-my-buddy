@@ -207,7 +207,10 @@ class StopStateTest(AcpTestCase):
         before = stop_evidence(client.handle)
         self.assertEqual("alive", before["groupObserved"])
         self.assertFalse(before["shutdownConfirmed"])
+        started = time.monotonic()
         evidence = client.shutdown(drain_seconds=10.0, settle_seconds=2.0)
+        elapsed = time.monotonic() - started
+        self.assertLess(elapsed, 5.0, "a reaped root must not consume the 12 second EOF grace")
         self.assertTrue(evidence["leaderExited"])
         self.assertEqual(0, evidence["leaderExitCode"])
         self.assertEqual("gone", evidence["groupObserved"],

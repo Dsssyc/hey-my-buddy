@@ -340,9 +340,9 @@ class RuntimeVersionTests(unittest.TestCase):
                         raise fault
                     return close(fd)
 
-                def halt_observed(process, handle, deadline):
+                def halt_observed(handle, deadline):
                     self.assertIs(shared.call_args.kwargs["owned"][0], handle)
-                    actual, signalled = halt(process, handle, deadline)
+                    actual, signalled = halt(handle, deadline)
                     self.assertTrue(actual, "the real private fixture must be reaped first")
                     if stop_error:
                         raise halt_fault
@@ -384,7 +384,7 @@ class RuntimeVersionTests(unittest.TestCase):
                     # drops registration or skips the production stop entirely.
                     for child, handle in children:
                         try:
-                            confirmed, _signalled = halt(child, handle, time.monotonic() + 5)
+                            confirmed, _signalled = halt(handle, time.monotonic() + 5)
                             self.assertTrue(confirmed)
                         finally:
                             for stream in (child.stdin, child.stdout):

@@ -599,9 +599,6 @@ def _probe_dsh_version(command: list[str], environment: dict, deadline: float, *
     finally:
         if handle is not None:
             stopped = handle.shutdown_confirmed(settle_seconds=0.2)
-            if not stopped:
-                handle.terminate(grace_seconds=1)
-                stopped = handle.shutdown_confirmed(settle_seconds=0.2)
             for stream in (process.stdin, process.stdout, process.stderr):
                 if stream is not None:
                     stream.close()

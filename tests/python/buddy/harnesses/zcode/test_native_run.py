@@ -453,10 +453,14 @@ class FastSeamTests(NativeRunCase):
         marker = json.loads((self.cwd / "refusal-reply.json").read_text(encoding="utf-8"))
         self.assertEqual(marker, {"id": "srv-1", "refused": True},
                          "the native peer never received the same-id refusal")
-        # The stop requested an interrupt, no signal was actually sent, and no
-        # native acknowledgement exists — the basis names the requester.
+        # A Windows root can exit before its conhost: the remaining Job then
+        # reaches force immediately. Either path still needs the whole group gone.
         self.assertTrue(result.stop_evidence.interrupt.requested)
-        self.assertEqual(result.stop_evidence.interrupt.basis, "observer-request")
+        self.assertEqual(result.stop_evidence.native.group_state, "gone")
+        if os.name == "nt":
+            self.assertIn(result.stop_evidence.interrupt.basis, ("observer-request", "owned-group-stop"))
+        else:
+            self.assertEqual(result.stop_evidence.interrupt.basis, "observer-request")
 
     def test_a_reverse_request_before_the_rpc_reply_stops_after_the_refusal(self):
         os.environ["HMB_ZCODE_TEST_CASE"] = "reverse-before-send-reply"
@@ -1673,7 +1677,7 @@ class DiscoveryStopTests(NativeRunCase):
 
             def reap():
                 try:
-                    native_run.halt_owned_group(child, owner, time.monotonic() + 5)
+                    native_run.halt_owned_group(owner, time.monotonic() + 5)
                 finally:
                     child.stdout.close()
             self.addCleanup(reap)
@@ -1925,8 +1929,8 @@ class DiscoveryStopTests(NativeRunCase):
 
     def test_connection_construction_failure_keeps_unconfirmed_stop(self):
         halt = native_run.halt_owned_group
-        def unobserved(process, handle, deadline):
-            halt(process, handle, deadline)
+        def unobserved(handle, deadline):
+            halt(handle, deadline)
             return False, True
         with mock.patch.object(native_run, 'NativeConnection', side_effect=ValueError('fixture connection failed')), \
              mock.patch.object(native_run, 'halt_owned_group', side_effect=unobserved):
@@ -1955,8 +1959,8 @@ class DiscoveryStopTests(NativeRunCase):
 
     def test_unknown_connection_stop_keeps_owned_child_uncertain(self):
         halt = native_run.halt_owned_group
-        def stopped_without_receipt(process, handle, deadline):
-            halt(process, handle, deadline)
+        def stopped_without_receipt(handle, deadline):
+            halt(handle, deadline)
             raise ValueError('fixture stop observation failed')
         with mock.patch.object(native_run, 'NativeConnection', side_effect=ValueError('fixture connection failed')), \
              mock.patch.object(native_run, 'halt_owned_group', side_effect=stopped_without_receipt):

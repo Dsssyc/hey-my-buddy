@@ -182,7 +182,14 @@ def handle_control(frame, case):
         if case == "interrupt-quota":
             send({"type": "rate_limit_event", "rate_limit_info": {
                 "status": "rejected", "rateLimitType": "five_hour", "resetsAt": 1790467200}})
+        if case == "inquiry-slow-interrupt":
+            time.sleep(1.2)
         send({"type": "control_response", "response": {"subtype": "success", "request_id": rid, "response": {}}})
+        if case == "inquiry-slow-interrupt":
+            for _ in sys.stdin:
+                pass
+            time.sleep(0.9)
+            write_state({"cleanupCompleted": True})
         sys.exit(0)
     else:
         send({"type": "control_response", "response": {"subtype": "error", "request_id": rid, "error": "unknown"}})
@@ -298,7 +305,7 @@ def run_turn(case):
     if case in ("inquiry-answer", "inquiry-wrong-call", "inquiry-child", "inquiry-text-only",
                 "inquiry-unanswered", "inquiry-tool-error", "inquiry-tool-error-retry",
                 "inquiry-forged-refusal", "inquiry-signed-refusal", "inquiry-late-input",
-                "inquiry-answered-duplicate-init"):
+                "inquiry-answered-duplicate-init", "inquiry-slow-interrupt"):
         while True:
             frame = json.loads(sys.stdin.readline())
             if frame.get("type") == "user":
@@ -329,7 +336,7 @@ def run_turn(case):
             Path("unadmitted-followup-write.txt").write_text("unadmitted native work", encoding="utf-8", newline="\n")
             write_state({"unadmittedFollowupRan": True})
             sys.exit(0)
-        if case not in ("inquiry-text-only", "inquiry-unanswered"):
+        if case not in ("inquiry-text-only", "inquiry-unanswered", "inquiry-slow-interrupt"):
             mounted = json.loads(Path(argv_value("--mcp-config")).read_text(encoding="utf-8"))["mcpServers"]
             server_name, server = next(iter(mounted.items()))
             config_path = server["args"][-1]
@@ -392,6 +399,8 @@ def run_turn(case):
     if case == "result-quota-bad-tail":
         sys.stdout.write('{"type":"assistant",invalid}\n')
         sys.stdout.flush()
+    if case == "inquiry-slow-interrupt":
+        wait_for_interrupt()
     # A -p CLI exits after its final result; the controller drains to this EOF.
     sys.exit(0)
 

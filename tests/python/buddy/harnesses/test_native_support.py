@@ -98,7 +98,7 @@ class HaltOwnedGroupTests(unittest.TestCase):
         handle.terminate.return_value = (False, True)
         with patch("hey_my_buddy.buddy.harnesses.native_support.time.monotonic", return_value=10):
             for deadline, grace in ((40, 3.0), (11.5, 1.5), (9, 0.0)):
-                self.assertEqual(halt_owned_group(object(), handle, deadline), (False, True))
+                self.assertEqual(halt_owned_group(handle, deadline), (False, True))
                 handle.terminate.assert_called_with(grace_seconds=grace)
 
 

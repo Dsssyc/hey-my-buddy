@@ -17,7 +17,7 @@ from hey_my_buddy.protocol.process_handle import ProcessHandle
 
 
 class StopSequenceTests(unittest.TestCase):
-    def stop(self, channel, *, windows=False, eof_exits=False, unknown=False):
+    def stop(self, channel, *, windows=False, eof_exits=False, root_exits=False, unknown=False):
         events = []
         clock = [0.0]
         state = {"alive": True, "exit": None}
@@ -29,6 +29,14 @@ class StopSequenceTests(unittest.TestCase):
             note("eof")
             if eof_exits:
                 state.update(alive=False, exit=0)
+            elif root_exits:
+                state["exit"] = 0
+
+        def wait(timeout):
+            if state["exit"] is None:
+                clock[0] += timeout
+                raise subprocess.TimeoutExpired("fixture", timeout)
+            return state["exit"]
 
         def send(sig):
             note(signal.Signals(sig).name)
@@ -46,6 +54,7 @@ class StopSequenceTests(unittest.TestCase):
 
         process = Mock(pid=123, returncode=None)
         process.poll.side_effect = lambda: state["exit"]
+        process.wait.side_effect = wait
         process.stdin.close.side_effect = eof
         if windows:
             process._buddy_job = SimpleNamespace(terminate=force, active=active,
@@ -90,6 +99,17 @@ class StopSequenceTests(unittest.TestCase):
         self.assertEqual(result, (True, False))
         self.assertEqual(events, [("eof", 0), ("job.close", 0)])
 
+    @unittest.skipIf(os.name == "nt", "POSIX signal escalation")
+    def test_root_exit_ends_grace_and_terms_surviving_group_immediately(self):
+        result, events = self.stop("stdin", root_exits=True)
+        self.assertEqual(result, (True, True))
+        self.assertEqual(events, [("eof", 0), ("SIGTERM", 0), ("SIGKILL", 1)])
+
+    def test_windows_root_exit_ends_grace_and_terminates_surviving_job_immediately(self):
+        result, events = self.stop("stdin", windows=True, root_exits=True)
+        self.assertEqual(result, (True, True))
+        self.assertEqual(events, [("eof", 0), ("job.terminate", 0), ("job.close", 0)])
+
     def test_unknown_job_after_force_never_confirms_or_closes_it(self):
         result, events = self.stop("signal", windows=True, unknown=True)
         self.assertEqual(result, (False, True))
@@ -97,6 +117,19 @@ class StopSequenceTests(unittest.TestCase):
 
 
 class RealStdioStopTests(unittest.TestCase):
+    def test_stdin_channel_without_pipe_stops_child_before_rejecting_ownership(self):
+        child = owned_popen([sys.executable, "-c", "import time; time.sleep(30)"],
+                            stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                            stderr=subprocess.DEVNULL, start_new_session=True)
+        try:
+            with self.assertRaisesRegex(ValueError, "stdin stop channel requires a pipe") as caught:
+                ProcessHandle(child, own_group=True, log_paths={}, stop_channel="stdin")
+            self.assertTrue(caught.exception.owned_popen_evidence.shutdown_confirmed)
+            self.assertTrue(caught.exception.execution_handle.shutdown_confirmed(settle_seconds=0))
+        finally:
+            if child.poll() is None:
+                ProcessHandle(child, own_group=True, log_paths={}, stop_channel="signal").terminate(grace_seconds=0)
+
     def test_owned_windowless_child_exits_on_input_eof(self):
         with tempfile.TemporaryDirectory() as name:
             ready = Path(name) / "ready"

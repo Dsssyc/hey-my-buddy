@@ -241,6 +241,14 @@ class NativeInquiryTests(NativeRunCase):
         self.assertEqual(report["answered"], 1)
         self.assertEqual(result.end.reason_code, "invalid-protocol")
 
+    def test_slow_interrupt_ack_and_eof_cleanup_keep_successful_inquiry_turn(self):
+        result, report = self.execute_inquiry("inquiry-slow-interrupt")
+        self.assertEqual(result.end.status, "ok", result.end.message)
+        self.assertEqual(result.stop_evidence.native.group_state, "gone")
+        self.assertEqual(report["unansweredDelivered"], 1)
+        self.assertTrue(self.fixture_state()["interrupted"])
+        self.assertTrue(self.fixture_state()["cleanupCompleted"])
+
     def test_failure_evidence_is_bounded(self):
         collector = native_run._TurnCollector(self.request(), native_run.ActivityPublisher(None),
                                                lambda _facts: FEEDBACK_CONTINUE)
@@ -397,6 +405,33 @@ class Batch4FactsTests(NativeRunCase):
         connection = mock.Mock()
         connection.call.return_value = None
         self.assertFalse(native_run._interrupt(connection))
+
+    def test_interrupt_restores_deadline_and_original_cancellation_even_on_error(self):
+        import threading
+        import time
+        for error in (None, native_run.ClaudeProtocolError("invalid-protocol", "fixture refusal")):
+            with self.subTest(error=error):
+                cancelled = threading.Event()
+                deadline = time.monotonic() + 20
+                connection = mock.Mock(deadline=deadline, cancelled=cancelled)
+
+                def acknowledge(_request):
+                    self.assertIsNot(connection.cancelled, cancelled)
+                    self.assertLess(connection.deadline, deadline)
+                    cancelled.set()  # Cancellation arriving during this control call.
+                    if error is not None:
+                        raise error
+                    return {}
+
+                connection.call.side_effect = acknowledge
+                if error is None:
+                    self.assertTrue(native_run._interrupt(connection, strict=True))
+                else:
+                    with self.assertRaises(native_run.ClaudeProtocolError):
+                        native_run._interrupt(connection, strict=True)
+                self.assertEqual(connection.deadline, deadline)
+                self.assertIs(connection.cancelled, cancelled)
+                self.assertTrue(connection.cancelled.is_set())
 
     def test_terminal_checks_separate_success_errors_and_unread_shapes(self):
         from hey_my_buddy.buddy.harnesses.claude.protocol import TurnEvidence

@@ -7,7 +7,7 @@ import subprocess
 import threading
 import time
 from pathlib import Path
-from typing import Literal
+from typing import Callable, Literal
 
 from ..private_dirs import ensure_private_dir, open_regular_fd
 from .process_identity import COMMAND_STOP_GRACE_SECONDS
@@ -20,12 +20,13 @@ class ProcessHandle:
     """
 
     def __init__(self, process: subprocess.Popen, *, own_group: bool, log_paths: dict,
-                 stop_channel: Literal["stdin", "protocol", "signal"]):
+                 stop_channel: Literal["stdin", "protocol", "signal"],
+                 close_input: Callable[[], None] | None = None):
         self.process = process
         self.own_group = own_group
         self.log_paths = log_paths
         self.stop_channel = stop_channel
-        self.close_input = process.stdin.close if stop_channel == "stdin" else None
+        self.close_input = close_input
         self.cancel_requested = False
         self.signalled_at: float | None = None
         self.stop_lock = threading.RLock()
@@ -45,6 +46,11 @@ class ProcessHandle:
         if own_group and self.job is None and os.name != "nt" and process.pid is not None:
             self.pgid = process.pid
         try:
+            if stop_channel == "stdin":
+                if process.stdin is None:
+                    raise ValueError("stdin stop channel requires a pipe")
+                if close_input is None:
+                    self.close_input = process.stdin.close
             # Capture this before an adapter can poll and reap a fast child.
             from .process_identity import _creation_time, record_native_process_spawn
 
@@ -147,7 +153,9 @@ class ProcessHandle:
             self.cancel_requested = True
             self.signalled_at = time.monotonic()
             windows = self.job is not None or os.name == "nt"
-            if self.stop_channel == "stdin":
+            # Input setup can fail during construction; the owned child still
+            # reaches this primitive's force and observation phases.
+            if self.stop_channel == "stdin" and self.close_input is not None:
                 try:
                     self.close_input()
                 except OSError:
@@ -155,9 +163,10 @@ class ProcessHandle:
             elif self.stop_channel == "signal" and not windows:
                 self._signal_group(signal.SIGTERM)
             if self.stop_channel != "signal" or not windows:
-                if self._wait_for_group(grace_seconds):
-                    return self.shutdown_confirmed(settle_seconds=0), False
-            elif self._wait_for_group(0):
+                # The request belongs to the root. Once it exits, surviving
+                # tools immediately reach TERM (POSIX) or Job termination.
+                self.wait(grace_seconds)
+            if self._wait_for_group(0):
                 return self.shutdown_confirmed(settle_seconds=0), False
             if not windows and self.stop_channel != "signal":
                 self._signal_group(signal.SIGTERM)
