@@ -764,5 +764,14 @@ class ReminderReturnTests(unittest.TestCase):
         self.assertEqual(service.calls, ["status", "wait"])
 
 
+class ResultPathCountTests(unittest.TestCase):
+    def test_await_preserves_service_path_totals(self):
+        patch = {"path": "/private/cumulative.patch", "changedPaths": [f"file-{index}" for index in range(32)],
+                 "changedPathsCount": 2000, "changedPathsTruncated": True}
+        full = {"workflowState": "delivered", "result": {"workspaceSeal": {"cumulativePatch": patch}}}
+        view = blocking._micro_task_result_view(full, "run")
+        self.assertEqual(view["artifacts"][0]["cumulativePatch"], patch)
+
+
 if __name__ == "__main__":
     unittest.main()

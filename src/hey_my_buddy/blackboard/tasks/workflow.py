@@ -124,6 +124,11 @@ WRAP_UP_SECONDS = 300
 MAX_CONFLICT_VIEW = 8
 MAX_INTEGRATION_VIEW = 8
 MAX_CONFLICT_PATH_VIEW = 32
+MAX_OUTPUT_PATH_VIEW = 32
+MAX_OUTPUT_PATH_SAMPLE_BYTES = 500
+INTEGRATION_PATH_FIELDS = (
+    "matchingPaths", "differingPaths", "missingPaths", "adjustments", "hostPaths", "unrecordedPaths",
+)
 #: A cleanup plan is a short-lived authorization, not a permanent permission.
 CLEANUP_PLAN_TTL_SECONDS = 900
 SCOPE_ACTIONS = ("restore", "adopt", "abandon")
@@ -362,7 +367,10 @@ class WorkflowCoordinator:
             view["outcome"] = outcome
             view["provenance"] = json.loads(row["provenance_json"]) if row["provenance_json"] else None
             view["turnResultPath"] = row["turn_result_path"]
-            view["sealedArtifacts"] = json.loads(row["sealed_artifacts_json"])
+            view["sealedArtifacts"] = [
+                WorkflowCoordinator._bounded_path_fields(item, ("changedPaths", "outsideScope"))
+                for item in json.loads(row["sealed_artifacts_json"])
+            ]
         return view
 
     def _request_view(self, row, *, include_audit: bool = False, compact: bool = False, connection=None, now=None) -> dict:
@@ -450,6 +458,38 @@ class WorkflowCoordinator:
         }
 
     @staticmethod
+    def _bounded_path_fields(source: dict, fields: tuple[str, ...]) -> dict:
+        """Project stored path evidence without changing the authoritative record."""
+        def sample_path(path: str) -> str:
+            raw = path.encode("utf-8")
+            return path if len(raw) <= MAX_OUTPUT_PATH_SAMPLE_BYTES else raw[:MAX_OUTPUT_PATH_SAMPLE_BYTES].decode(
+                "utf-8", errors="ignore")
+
+        view = dict(source)
+        for key in fields:
+            values = source.get(key)
+            if isinstance(values, list):
+                samples = []
+                shortened = False
+                for value in values[:MAX_OUTPUT_PATH_VIEW]:
+                    if isinstance(value, str):
+                        sample = sample_path(value)
+                        shortened |= len(sample) < len(value)
+                    elif isinstance(value, dict) and isinstance(value.get("path"), str):
+                        path = value["path"]
+                        sample = {**value, "path": sample_path(path)}
+                        shortened |= len(sample["path"]) < len(path)
+                    else:
+                        sample = value
+                    samples.append(sample)
+                view[key] = samples
+                view[key + "Count"] = len(values)
+                view[key + "Truncated"] = len(values) > MAX_OUTPUT_PATH_VIEW
+                if shortened:
+                    view[key + "SamplesShortened"] = True
+        return view
+
+    @staticmethod
     def _artifact_view(row) -> dict:
         view = {
             "artifactId": row["artifact_id"],
@@ -473,14 +513,14 @@ class WorkflowCoordinator:
                 view.update(partial=True, verified=False, final=False)
             cumulative = manifest.get("cumulativePatch")
             if isinstance(cumulative, dict):
-                paths = cumulative.get("changedPaths") or []
-                view["cumulativePatch"] = {**cumulative, "changedPaths": paths[:32], "changedPathsTruncated": len(paths) > 32}
+                view["cumulativePatch"] = WorkflowCoordinator._bounded_path_fields(cumulative, ("changedPaths",))
             view["outputCommit"] = manifest.get("commit")
             view["diffPath"] = manifest.get("diffPath")
             view["diffSha256"] = manifest.get("diffSha256")
             changed = manifest.get("changedPaths")
             if isinstance(changed, list):
-                view["changedPaths"] = changed[:32]
+                view.update(WorkflowCoordinator._bounded_path_fields(
+                    {"changedPaths": changed}, ("changedPaths",)))
             if row["kind"] == "resolved-output":
                 view["action"] = manifest.get("action")
         elif row["kind"] == WorkflowCoordinator.SHARED_REFS_KIND:
@@ -562,6 +602,11 @@ class WorkflowCoordinator:
             delivery = candidate if isinstance(candidate, dict) else None
         except (TypeError, ValueError):
             delivery = None
+        paths = WorkflowCoordinator._bounded_path_fields({
+            "blockingPaths": json.loads(row["blocking_paths_json"]),
+            "resolvedPaths": json.loads(row["resolved_paths_json"]),
+            "conflictingPaths": json.loads(row["conflicting_paths_json"]),
+        }, ("blockingPaths", "resolvedPaths", "conflictingPaths"))
         return {
             "conflictId": row["conflict_id"],
             "runId": row["run_id"],
@@ -569,13 +614,10 @@ class WorkflowCoordinator:
             "turnId": row["turn_id"],
             "manifestSha256": row["manifest_sha256"],
             "observedFingerprint": row["observed_fingerprint"],
-            "blockingPaths": json.loads(row["blocking_paths_json"]),
-            "paths": entries[:MAX_CONFLICT_PATH_VIEW],
-            "pathsTruncated": len(entries) > MAX_CONFLICT_PATH_VIEW,
+            **paths,
+            **WorkflowCoordinator._bounded_path_fields({"paths": entries}, ("paths",)),
             "state": row["state"],
             "action": row["action"],
-            "resolvedPaths": json.loads(row["resolved_paths_json"]),
-            "conflictingPaths": json.loads(row["conflicting_paths_json"]),
             "artifactId": row["artifact_id"],
             "outputCommit": row["output_commit"],
             "outputTree": row["output_tree"],
@@ -610,7 +652,7 @@ class WorkflowCoordinator:
             "afterCommit": row["after_commit"],
             "beforeTree": row["before_tree"],
             "afterTree": row["after_tree"],
-            "verification": verification,
+            "verification": WorkflowCoordinator._bounded_path_fields(verification, INTEGRATION_PATH_FIELDS),
             "notRequired": row["state"] == "not-required",
             "note": row["note"],
             "actor": {"role": row["actor_role"], "id": row["actor_id"]} if row["actor_role"] else None,
@@ -621,6 +663,10 @@ class WorkflowCoordinator:
     def _plan_view(row) -> dict:
         if row is None:
             return None
+        evidence = json.loads(row["evidence_json"])
+        if isinstance(evidence.get("workspace"), dict):
+            evidence["workspace"] = WorkflowCoordinator._bounded_path_fields(
+                evidence["workspace"], ("unsealedPaths",))
         return {
             "planId": row["plan_id"],
             "runId": row["run_id"],
@@ -632,7 +678,7 @@ class WorkflowCoordinator:
             "state": row["state"],
             "eligible": row["state"] == "planned",
             "reasons": json.loads(row["reasons_json"]),
-            "evidence": json.loads(row["evidence_json"]),
+            "evidence": evidence,
             "retention": json.loads(row["retention_json"]),
             "result": json.loads(row["result_json"]) if row["result_json"] else None,
             "revision": row["revision"],
@@ -3199,7 +3245,8 @@ class WorkflowCoordinator:
                     "snapshotSha256": artifact["manifest_sha256"],
                     "diffPath": seal.get("diffPath"),
                     "diffSha256": seal.get("diffSha256"),
-                    "changedPaths": [str(item)[:500] for item in changed[:32]] if isinstance(changed, list) else [],
+                    **(self._bounded_path_fields({"changedPaths": changed}, ("changedPaths",))
+                       if isinstance(changed, list) else {"changedPaths": []}),
                 }
                 if artifact["kind"] == "partial-output":
                     entry["artifact"].update(kind="partial-output", partial=True, verified=False, final=False)
@@ -4113,7 +4160,7 @@ class WorkflowCoordinator:
                 "The target comparison does not hold; the artifact content matched but the named commit interval "
                 "does not, so no integration was recorded",
                 paths=[],
-                verification=verification,
+                verification=self._bounded_path_fields(verification, INTEGRATION_PATH_FIELDS),
             )
         if not unrecorded:
             verification["strategy"] = "merge" if verification.get("artifactAncestor") else "patch"
@@ -4124,16 +4171,18 @@ class WorkflowCoordinator:
                 "INTEGRATION_UNVERIFIED",
                 "The target does not contain the artifact as delivered; confirm these are your own adjustments "
                 "with adjusted:true instead of listing paths",
-                paths=unrecorded,
-                verification=verification,
+                paths=unrecorded[:MAX_OUTPUT_PATH_VIEW], pathsCount=len(unrecorded),
+                pathsTruncated=len(unrecorded) > MAX_OUTPUT_PATH_VIEW,
+                verification=self._bounded_path_fields(verification, INTEGRATION_PATH_FIELDS),
             )
         if not verification.get("verified"):
             raise BoardError(
                 "INTEGRATION_UNVERIFIED",
                 "Even with the Host's confirmed adjustments the target comparison does not hold; no integration "
                 "was recorded",
-                paths=unrecorded,
-                verification=verification,
+                paths=unrecorded[:MAX_OUTPUT_PATH_VIEW], pathsCount=len(unrecorded),
+                pathsTruncated=len(unrecorded) > MAX_OUTPUT_PATH_VIEW,
+                verification=self._bounded_path_fields(verification, INTEGRATION_PATH_FIELDS),
             )
         verification["strategy"] = "merge" if verification.get("artifactAncestor") else "patch"
         verification["summary"] = ""
@@ -4833,7 +4882,8 @@ class WorkflowCoordinator:
                 if error.details.get("attachedBranch") is not None:
                     blocked["attachedBranch"] = error.details["attachedBranch"]
                 if error.details.get("unsealedPaths"):
-                    blocked["unsealedPaths"] = error.details["unsealedPaths"]
+                    blocked.update({key: value for key, value in error.details.items()
+                                    if key.startswith("unsealedPaths")})
                 return blocked
             return {"removed": False, "reasons": [error.code], "detail": error.message,
                     "planId": plan["planId"], "path": plan["path"]}
@@ -5328,9 +5378,9 @@ class WorkflowCoordinator:
                 "action": action,
                 "resolved": result["state"] in ("restored", "adopted", "abandoned"),
                 "resolutionState": result["state"],
-                "resolvedPaths": result["resolvedPaths"],
-                "preservedPaths": result["preservedPaths"],
-                "remainingPaths": result["remainingPaths"],
+                **self._bounded_path_fields({key: result[key] for key in
+                                             ("resolvedPaths", "preservedPaths", "remainingPaths")},
+                                            ("resolvedPaths", "preservedPaths", "remainingPaths")),
                 "observedFingerprint": result["observedFingerprint"],
                 "resolvedFingerprint": result["resolvedFingerprint"],
                 "artifactId": artifact_id,
@@ -5343,15 +5393,19 @@ class WorkflowCoordinator:
                 "manifestSha256": (record or {}).get("manifestSha256"),
                 "baseCommit": (record or {}).get("baseCommit"),
                 "inputCommit": (record or {}).get("inputCommit"),
-                "changedPaths": (record or {}).get("changedPaths") or [],
-                "adoptedPaths": (record or {}).get("adoptedPaths") or [],
+                **self._bounded_path_fields({
+                    "changedPaths": (record or {}).get("changedPaths") or [],
+                    "adoptedPaths": (record or {}).get("adoptedPaths") or [],
+                }, ("changedPaths", "adoptedPaths")),
                 "delivered": delivery is not None,
                 "delivery": delivery,
                 "nextBoundaryRequestId": boundary_request_id,
                 "targetRunId": run_id,
                 "targetRevision": run_row["revision"],
             }
-            self.board._store_receipt(connection, command_id, "workflow.workspace_resolve", request_key, response,
+            receipt = {**response, **{key: result[key] for key in
+                                      ("resolvedPaths", "preservedPaths", "remainingPaths")}}
+            self.board._store_receipt(connection, command_id, "workflow.workspace_resolve", request_key, receipt,
                                       task_id=run_id, attempt_id=current["attempt_id"])
             head = self.board._head_of(connection)
         self.board._notify(head)
@@ -5373,9 +5427,11 @@ class WorkflowCoordinator:
             "action": conflict["action"],
             "resolved": conflict["state"] in ("restored", "adopted", "abandoned"),
             "resolutionState": conflict["state"],
-            "resolvedPaths": json.loads(conflict["resolved_paths_json"]),
-            "preservedPaths": [],
-            "remainingPaths": json.loads(conflict["conflicting_paths_json"]),
+            **self._bounded_path_fields({
+                "resolvedPaths": json.loads(conflict["resolved_paths_json"]),
+                "preservedPaths": [],
+                "remainingPaths": json.loads(conflict["conflicting_paths_json"]),
+            }, ("resolvedPaths", "preservedPaths", "remainingPaths")),
             "observedFingerprint": conflict["observed_fingerprint"],
             "resolvedFingerprint": None,
             "artifactId": conflict["artifact_id"],
@@ -5388,8 +5444,8 @@ class WorkflowCoordinator:
             "manifestSha256": conflict["manifest_sha256"],
             "baseCommit": None,
             "inputCommit": None,
-            "changedPaths": [],
-            "adoptedPaths": [],
+            **self._bounded_path_fields({"changedPaths": [], "adoptedPaths": []},
+                                        ("changedPaths", "adoptedPaths")),
             "delivered": delivery is not None,
             "delivery": delivery,
             "nextBoundaryRequestId": None,
@@ -5745,7 +5801,9 @@ class WorkflowCoordinator:
                 # planned path keeps every NOT_READY reason.
             blocked = inspection is not None and bool(inspection["reasons"]) and (path.exists() or path.is_symlink())
             if blocked:
-                details = {"reasons": inspection["reasons"], "unsealedPaths": inspection["unsealedPaths"]}
+                details = self._bounded_path_fields(
+                    {"reasons": inspection["reasons"], "unsealedPaths": inspection["unsealedPaths"]},
+                    ("unsealedPaths",))
                 if inspection.get("attachedBranch") is not None:
                     details["attachedBranch"] = inspection["attachedBranch"]
                 refusal = BoardError("NOT_READY", "This checkout is not eligible for cleanup", **details)

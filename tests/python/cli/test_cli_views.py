@@ -144,8 +144,8 @@ class CliViewTests(RealWorkspaceTestCase):
         self.assertEqual(brief["finalArtifactId"], service_view["finalArtifactId"])
         output = next(row for row in service_view["artifacts"] if row["kind"] == "output")
         self.assertEqual(brief["artifacts"], [{key: output[key] for key in (
-            "artifactId", "kind", "turnId", "manifestSha256", "outputCommit", "diffPath", "diffSha256", "changedPaths")
-            if output.get(key)}])
+            "artifactId", "kind", "turnId", "manifestSha256", "outputCommit", "diffPath", "diffSha256",
+            "changedPaths", "changedPathsCount", "changedPathsTruncated") if key in output}])
         self.assertEqual(brief["otherArtifacts"], len(service_view["artifacts"]) - 1)
         self.assertEqual(brief["currentTurn"]["summary"], service_view["currentTurn"]["summary"])
         self.assertEqual(brief["workspace"]["path"], service_view["workspace"]["path"])

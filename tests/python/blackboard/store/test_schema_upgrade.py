@@ -1,181 +1,253 @@
-"""Schema-25 output records convert from their durable evidence only."""
+"""The schema cutover removes obsolete seal fields from every durable copy."""
 from __future__ import annotations
 
-import hashlib
 import json
-import os
 from pathlib import Path
 import shutil
 import sqlite3
-import subprocess
 import tempfile
 import unittest
 
 from blackboard.store.upgrade_fixture import load_fixture
+from hey_my_buddy.blackboard.store import backup, upgrade
 from hey_my_buddy.blackboard.store.db import SCHEMA_VERSION
-from hey_my_buddy.blackboard.store.upgrade import (
-    BASE_SCHEMA_VERSION, restore_schema_25_physical_records, upgrade_schema_25_to_26,
-)
+from hey_my_buddy.blackboard.tasks import workspace
+from hey_my_buddy.blackboard.tasks.workflow import WorkflowCoordinator
+from hey_my_buddy.buddy.roles.turn_io import input_hash, validated_checkpoint
 from hey_my_buddy.errors import BoardError
-
-
-def _digest(value):
-    return hashlib.sha256(json.dumps(value, sort_keys=True, separators=(",", ":"),
-                                     ensure_ascii=True).encode()).hexdigest()
-
-
-def _git(root, *args):
-    env = {**os.environ, "GIT_AUTHOR_NAME": "fixture", "GIT_AUTHOR_EMAIL": "fixture@example.invalid",
-           "GIT_COMMITTER_NAME": "fixture", "GIT_COMMITTER_EMAIL": "fixture@example.invalid"}
-    return subprocess.run(["git", "-C", str(root), *args], check=True, capture_output=True, env=env).stdout.decode().strip()
+from hey_my_buddy.json_codec import canonical_json
+from hey_my_buddy.install import upgrade as installer
 
 
 class SchemaUpgradeTests(unittest.TestCase):
     def setUp(self):
         self.root = Path(tempfile.mkdtemp(prefix="schema-25-upgrade-"))
         self.addCleanup(shutil.rmtree, self.root)
+        self.state = load_fixture(self.root / "state")["state"]
 
-    def test_fixed_base_converts_without_rewriting_historical_attempt_evidence(self):
-        fixture = load_fixture(self.root / "state")
-        state = fixture["state"]
-        with sqlite3.connect(state / "board.sqlite3") as connection:
-            old_attempts = connection.execute("SELECT result_json FROM attempts ORDER BY attempt_id").fetchall()
-        result = upgrade_schema_25_to_26(state)
-        self.assertEqual((result["fromSchema"], result["schema"]), (BASE_SCHEMA_VERSION, SCHEMA_VERSION))
-        self.assertGreater(result["convertedArtifacts"], 0)
-        with sqlite3.connect(state / "board.sqlite3") as connection:
+    def _backup_and_apply(self):
+        plan = upgrade.plan_schema_25_to_26(self.state)
+        archive = Path(backup.create(self.state, physical_files={
+            path: original for path, (original, _) in plan["physical"].items()})["path"])
+        result = upgrade.upgrade_schema_25_to_26(self.state, plan=plan)
+        return plan, archive, result
+
+    def test_all_saved_copies_and_real_artifact_kinds(self):
+        with sqlite3.connect(self.state / "board.sqlite3") as connection:
+            kinds = {row[0] for row in connection.execute("SELECT kind FROM workflow_artifacts")}
+            self.assertTrue({"shared-refs", "input", "output", "partial-output"}.issubset(kinds))
+            row = connection.execute("SELECT run_id,turn_id,source_task_id,manifest_json,manifest_sha256,created_at "
+                                     "FROM workflow_artifacts WHERE kind='output' LIMIT 1").fetchone()
+            connection.execute("INSERT INTO workflow_artifacts(artifact_id,run_id,turn_id,attempt_id,source_task_id,kind,"
+                               "manifest_json,manifest_sha256,created_at) VALUES(?,?,?,?,?,?,?,?,?)",
+                               ("resolution-fixture", row[0], row[1], "resolution-fixture", row[2],
+                                "resolved-output", row[3], row[4], row[5]))
+            connection.execute("INSERT INTO workflow_artifacts(artifact_id,run_id,turn_id,attempt_id,source_task_id,kind,"
+                               "manifest_json,manifest_sha256,created_at) VALUES(?,?,?,?,?,?,?,?,?)",
+                               ("turn-input-fixture", row[0], row[1], "turn-input-fixture", row[2],
+                                "turn-input", json.dumps({"manifestSha256": "input-identity"}),
+                                "input-identity", row[5]))
+            connection.execute("INSERT INTO workflow_artifacts(artifact_id,run_id,turn_id,attempt_id,source_task_id,kind,"
+                               "manifest_json,manifest_sha256,created_at) VALUES(?,?,?,?,?,?,?,?,?)",
+                               ("custom-seal-fixture", row[0], row[1], "custom-seal-fixture", row[2],
+                                "future-seal-kind", row[3], row[4], row[5]))
+        plan, _, result = self._backup_and_apply()
+        self.assertEqual(result["schema"], SCHEMA_VERSION)
+        self.assertGreaterEqual(result["convertedArtifacts"], 5)
+        self.assertGreater(len(plan["physical"]), 0)
+        with sqlite3.connect(self.state / "board.sqlite3") as connection:
             self.assertEqual(connection.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone()[0],
                              str(SCHEMA_VERSION))
-            self.assertEqual(connection.execute("SELECT result_json FROM attempts ORDER BY attempt_id").fetchall(),
-                             old_attempts)
-            for raw, digest in connection.execute("SELECT manifest_json,manifest_sha256 FROM workflow_artifacts "
-                                                  "WHERE kind IN ('output','resolved-output','partial-output','abandoned-site')"):
-                record = json.loads(raw)
-                self.assertNotIn("changedEntriesTruncated", record["snapshot"])
-                self.assertEqual(record["snapshotSha256"], _digest(record["snapshot"]))
-                self.assertEqual(digest, record["snapshotSha256"])
-                path = Path(record["diffPath"]).with_name("output.json")
-                if path.exists():
-                    self.assertEqual(json.loads(path.read_text())["snapshotSha256"], digest)
+            for raw, digest in connection.execute("SELECT manifest_json,manifest_sha256 FROM workflow_artifacts"):
+                artifact = json.loads(raw)
+                snapshot = artifact.get("snapshot")
+                if isinstance(snapshot, dict) and "snapshotSha256" in artifact:
+                    self.assertNotIn("changedEntries", snapshot)
+                    self.assertNotIn("changedEntriesTruncated", snapshot)
+                    self.assertEqual(artifact["snapshotSha256"], workspace._sha(workspace._json(snapshot)))
+                    self.assertEqual(digest, artifact["snapshotSha256"])
+            result_rows = [json.loads(row[0]) for row in connection.execute(
+                "SELECT result_json FROM attempts WHERE result_json IS NOT NULL")]
+            self.assertTrue(any("workspaceSeal" in result.get("result", {}) for result in result_rows))
+            for result in result_rows:
+                seal = result.get("result", {}).get("workspaceSeal")
+                if seal:
+                    self.assertNotIn("changedEntries", seal["snapshot"])
+                    self.assertNotIn("changedEntriesTruncated", seal["snapshot"])
+            turn_refs = [json.loads(row[0]) for row in connection.execute(
+                "SELECT sealed_artifacts_json FROM workflow_turns")]
+            turn_input = connection.execute("SELECT manifest_json,manifest_sha256 FROM workflow_artifacts "
+                                            "WHERE artifact_id='turn-input-fixture'").fetchone()
+            self.assertEqual(json.loads(turn_input[0]), {"manifestSha256": "input-identity"})
+            self.assertEqual(turn_input[1], "input-identity")
+            self.assertTrue(any(refs for refs in turn_refs))
+            for refs in turn_refs:
+                for ref in refs:
+                    self.assertIn(ref["snapshotSha256"], plan["identities"].values())
+        for path in plan["physical"]:
+            record = json.loads(path.read_bytes())
+            self.assertNotIn("changedEntries", record["snapshot"])
+            self.assertNotIn("changedEntriesTruncated", record["snapshot"])
+
+    def test_partial_attempt_and_pending_file_without_pinned_artifact(self):
+        with sqlite3.connect(self.state / "board.sqlite3") as connection:
+            connection.row_factory = sqlite3.Row
+            artifact = json.loads(connection.execute("SELECT manifest_json FROM workflow_artifacts "
+                                                     "WHERE kind='output' LIMIT 1").fetchone()[0])
+            attempt = connection.execute("SELECT attempt_id,result_json FROM attempts "
+                                         "WHERE result_json IS NOT NULL LIMIT 1").fetchone()
+            receipt = json.loads(attempt["result_json"])
+            pending = json.loads(json.dumps(artifact))
+            pending["snapshot"]["commit"] = "pre-pin-partial"
+            pending["commit"] = "pre-pin-partial"
+            pending["snapshotSha256"] = workspace._sha(workspace._json(pending["snapshot"]))
+            directory = Path(artifact["diffPath"]).parent.parent / "orphan-partial"
+            directory.mkdir()
+            path = directory / "pending.json"
+            path.write_bytes(b" \n" + workspace._json(pending) + b"\n")
+            receipt_path = (self.state / "harnesses" / "command" / "micro-tasks" / "orphan-task"
+                            / "attempts" / "orphan-attempt" / "result-receipt.json")
+            receipt_path.parent.mkdir(parents=True)
+            receipt_path.write_bytes(b"\n" + workspace._json({"result": {"partialWorkspaceSeal": pending}}) + b"\n")
+            receipt.setdefault("result", {})["partialWorkspaceSeal"] = pending
+            connection.execute("UPDATE attempts SET result_json=? WHERE attempt_id=?",
+                               (json.dumps(receipt), attempt["attempt_id"]))
+        old = path.read_bytes()
+        old_receipt = receipt_path.read_bytes()
+        plan, archive, _ = self._backup_and_apply()
+        self.assertIn(path, plan["physical"])
+        self.assertIn(receipt_path, plan["physical"])
+        self.assertNotIn("changedEntries", json.loads(path.read_bytes())["snapshot"])
+        self.assertNotIn("changedEntries", json.loads(receipt_path.read_bytes())["result"]["partialWorkspaceSeal"]["snapshot"])
+        with sqlite3.connect(self.state / "board.sqlite3") as connection:
+            receipt = json.loads(connection.execute("SELECT result_json FROM attempts WHERE attempt_id=?",
+                                                    (attempt["attempt_id"],)).fetchone()[0])
+        self.assertEqual(receipt["result"]["partialWorkspaceSeal"]["snapshotSha256"],
+                         json.loads(path.read_bytes())["snapshotSha256"])
+        installer.restore(self.state, archive)
+        self.assertEqual(path.read_bytes(), old)
+        self.assertEqual(receipt_path.read_bytes(), old_receipt)
+
+    def test_nested_turn_event_and_command_copies_rebind_without_touching_opaque_text(self):
+        with sqlite3.connect(self.state / "board.sqlite3") as connection:
+            connection.row_factory = sqlite3.Row
+            artifact = json.loads(connection.execute("SELECT manifest_json FROM workflow_artifacts "
+                                                     "WHERE kind='output' LIMIT 1").fetchone()[0])
+            old = artifact["snapshotSha256"]
+            copy = {"workspaceSeal": artifact, "snapshotSha256": old,
+                    "manifestSha256": old, "note": old}
+            turn = connection.execute("SELECT turn_id,input_json,outcome_json,provenance_json,prompt_sha256 "
+                                      "FROM workflow_turns LIMIT 1").fetchone()
+            prompt = turn["prompt_sha256"]
+            for column in ("input_json", "outcome_json", "provenance_json"):
+                value = json.loads(turn[column]) if turn[column] else {}
+                value["upgradeCopy"] = copy
+                connection.execute(f"UPDATE workflow_turns SET {column}=? WHERE turn_id=?",
+                                   (json.dumps(value), turn["turn_id"]))
+            input_raw = connection.execute("SELECT input_json FROM workflow_turns WHERE turn_id=?",
+                                           (turn["turn_id"],)).fetchone()[0]
+            connection.execute("UPDATE workflow_turns SET input_sha256=? WHERE turn_id=?",
+                               (workspace._sha(input_raw.encode()), turn["turn_id"]))
+            event = connection.execute("SELECT seq,payload_json FROM events LIMIT 1").fetchone()
+            payload = json.loads(event["payload_json"])
+            payload["upgradeCopy"] = copy
+            connection.execute("UPDATE events SET payload_json=? WHERE seq=?", (json.dumps(payload), event["seq"]))
+            command = connection.execute("SELECT command_id,response_json FROM commands LIMIT 1").fetchone()
+            response = json.loads(command["response_json"])
+            response["upgradeCopy"] = copy
+            connection.execute("UPDATE commands SET response_json=? WHERE command_id=?",
+                               (json.dumps(response), command["command_id"]))
+        plan, _, _ = self._backup_and_apply()
+        new = plan["identities"][old]
+        with sqlite3.connect(self.state / "board.sqlite3") as connection:
+            connection.row_factory = sqlite3.Row
+            turn_after = connection.execute("SELECT * FROM workflow_turns WHERE turn_id=?", (turn["turn_id"],)).fetchone()
+            self.assertEqual(turn_after["prompt_sha256"], prompt)
+            self.assertEqual(turn_after["input_sha256"], workspace._sha(turn_after["input_json"].encode()))
+            raws = [turn_after[column] for column in ("input_json", "outcome_json", "provenance_json")]
+            raws += [connection.execute("SELECT payload_json FROM events WHERE seq=?", (event["seq"],)).fetchone()[0],
+                     connection.execute("SELECT response_json FROM commands WHERE command_id=?",
+                                        (command["command_id"],)).fetchone()[0]]
+        for raw in raws:
+            nested = json.loads(raw)["upgradeCopy"]
+            self.assertEqual(nested["snapshotSha256"], new)
+            self.assertEqual(nested["manifestSha256"], new)
+            self.assertEqual(nested["workspaceSeal"]["snapshotSha256"], new)
+            self.assertNotIn("changedEntries", nested["workspaceSeal"]["snapshot"])
+            self.assertNotIn("changedEntriesTruncated", nested["workspaceSeal"]["snapshot"])
+            self.assertEqual(nested["note"], old)
+
+    def test_rebound_turn_input_preserves_checkpoint_and_shared_refs_binding(self):
+        with sqlite3.connect(self.state / "board.sqlite3") as connection:
+            connection.row_factory = sqlite3.Row
+            output = json.loads(connection.execute("SELECT manifest_json FROM workflow_artifacts "
+                                                   "WHERE kind='output' LIMIT 1").fetchone()[0])
+            row = connection.execute("SELECT artifact_id,turn_id,manifest_json FROM workflow_artifacts "
+                                     "WHERE kind='shared-refs' LIMIT 1").fetchone()
+            turn = connection.execute("SELECT input_json FROM workflow_turns WHERE turn_id=?",
+                                      (row["turn_id"],)).fetchone()
+            document = json.loads(turn["input_json"])
+            document["context"]["artifacts"] = [{"manifestSha256": output["snapshotSha256"]}]
+            old_input_sha = input_hash(document)
+            connection.execute("UPDATE workflow_turns SET input_json=?,input_sha256=? WHERE turn_id=?",
+                               (canonical_json(document), old_input_sha, row["turn_id"]))
+            shared = json.loads(row["manifest_json"])
+            shared["turnInputSha256"] = old_input_sha
+            shared["manifestSha256"] = WorkflowCoordinator.shared_refs_record_digest(shared)
+            connection.execute("UPDATE workflow_artifacts SET manifest_json=?,manifest_sha256=? WHERE artifact_id=?",
+                               (json.dumps(shared), shared["manifestSha256"], row["artifact_id"]))
+        checkpoint = {"version": 1, **{key: document[key] for key in
+                      ("taskId", "attemptId", "generation", "turnId")},
+                      "inputSha256": old_input_sha, "sessionId": "native-session", "nativeTurnId": "native-turn",
+                      "nativeTurnStarted": True, "nativeTurnStatus": "completed", "bindingSaved": True, "eventSeq": 2}
+        payload = {"nativeCheckpoint": checkpoint, "sessionId": "native-session", "nativeTurnId": "native-turn",
+                   "processState": {"shutdownConfirmed": True}}
+        self.assertIsNotNone(validated_checkpoint(payload, document))
+        self._backup_and_apply()
+        with sqlite3.connect(self.state / "board.sqlite3") as connection:
+            after = json.loads(connection.execute("SELECT input_json FROM workflow_turns WHERE turn_id=?",
+                                                  (row["turn_id"],)).fetchone()[0])
+            shared_after = json.loads(connection.execute("SELECT manifest_json FROM workflow_artifacts WHERE artifact_id=?",
+                                                         (row["artifact_id"],)).fetchone()[0])
+        with self.subTest(binding="native checkpoint"):
+            self.assertIsNotNone(validated_checkpoint(payload, after))
+        with self.subTest(binding="shared refs"):
+            self.assertEqual(shared_after["turnInputSha256"], input_hash(after))
+
+    def test_rollback_restores_exact_physical_bytes(self):
+        candidate = upgrade.plan_schema_25_to_26(self.state)
+        path = next(iter(candidate["physical"]))
+        old = path.read_bytes()
+        path.write_bytes(b" \n" + old + b"\n")
+        plan, archive, _ = self._backup_and_apply()
+        self.assertNotEqual(path.read_bytes(), b" \n" + old + b"\n")
+        installer.restore(self.state, archive)
+        self.assertEqual(path.read_bytes(), b" \n" + old + b"\n")
+        with sqlite3.connect(self.state / "board.sqlite3") as connection:
+            self.assertEqual(connection.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone()[0], "25")
+
+    def test_rejected_digest_leaves_every_physical_file_untouched(self):
+        plan = upgrade.plan_schema_25_to_26(self.state)
+        originals = {path: original for path, (original, _) in plan["physical"].items()}
+        with sqlite3.connect(self.state / "board.sqlite3") as connection:
+            connection.execute("UPDATE workflow_artifacts SET manifest_sha256='wrong' "
+                               "WHERE artifact_id=(SELECT artifact_id FROM workflow_artifacts WHERE kind='output' LIMIT 1)")
         with self.assertRaises(BoardError) as caught:
-            upgrade_schema_25_to_26(state)
-        self.assertEqual(caught.exception.code, "UNSUPPORTED_SCHEMA")
+            upgrade.plan_schema_25_to_26(self.state)
+        self.assertEqual(caught.exception.code, "UPGRADE_INVALID_SEAL")
+        self.assertEqual({path: path.read_bytes() for path in originals}, originals)
 
-    def test_complete_legacy_entries_convert_without_repository_or_physical_output(self):
-        fixture = load_fixture(self.root / "state")
-        state = fixture["state"]
-        shutil.rmtree(fixture["fixtureRoot"] / "repository")
-        shutil.rmtree(state / "workspaces")
-        result = upgrade_schema_25_to_26(state)
-        self.assertGreater(result["convertedArtifacts"], 0)
-
-    def _truncated_board(self, *, object_format="sha1"):
-        state = self.root / "state"
-        state.mkdir()
-        repository = self.root / "repository"
-        repository.mkdir()
-        _git(repository, "init", "--quiet", "--object-format=" + object_format)
-        (repository / "a.txt").write_text("old")
-        (repository / "c.txt").write_text("remove")
-        _git(repository, "add", ".")
-        _git(repository, "commit", "--quiet", "-m", "input")
-        input_commit = _git(repository, "rev-parse", "HEAD")
-        (repository / "a.txt").write_text("new")
-        (repository / "b.txt").write_text("added")
-        (repository / "c.txt").unlink()
-        _git(repository, "add", "-A")
-        _git(repository, "commit", "--quiet", "-m", "output")
-        output_commit = _git(repository, "rev-parse", "HEAD")
-        directory = state / "workspaces" / "ws-test" / "outputs" / "test"
-        directory.mkdir(parents=True)
-        snapshot = {"inputCommit": input_commit, "commit": output_commit,
-                    "tree": _git(repository, "rev-parse", "HEAD^{tree}"),
-                    "changedPaths": ["a.txt", "b.txt", "c.txt"],
-                    "changedEntries": {"a.txt": ["100644", _git(repository, "rev-parse", "HEAD:a.txt")]},
-                    "changedEntriesTruncated": True}
-        manifest = {"workspaceId": "ws-test", "taskId": "task", "attemptId": "attempt",
-                    "manifestSha256": "input-digest", "inputCommit": input_commit, "commit": output_commit,
-                    "changedPaths": snapshot["changedPaths"], "snapshot": snapshot,
-                    "snapshotSha256": _digest(snapshot), "diffPath": str(directory / "output.patch"),
-                    "tree": _git(repository, "rev-parse", "HEAD^{tree}"), "ref": "ref", "diffSha256": "patch"}
-        physical = json.loads(json.dumps(manifest))
-        (directory / "output.json").write_text(json.dumps(physical))
-        manifest["cumulativePatch"] = {"path": str(directory / "cumulative.patch"), "sha256": "retained"}
-        with sqlite3.connect(state / "board.sqlite3") as connection:
-            connection.execute("CREATE TABLE meta(key TEXT PRIMARY KEY,value TEXT)")
-            connection.execute("INSERT INTO meta VALUES('schema_version','25')")
-            connection.execute("CREATE TABLE workflow_artifacts(artifact_id TEXT,run_id TEXT,kind TEXT,"
-                               "manifest_json TEXT,manifest_sha256 TEXT)")
-            connection.execute("INSERT INTO workflow_artifacts VALUES(?,?,?,?,?)",
-                               ("input", "run", "input", json.dumps({"manifestSha256": "input-digest",
-                                "snapshot": {"repositoryPath": str(repository / ".git")}}), "input-digest"))
-            connection.execute("INSERT INTO workflow_artifacts VALUES(?,?,?,?,?)",
-                               ("output", "run", "output", json.dumps(manifest), manifest["snapshotSha256"]))
-        return state, repository, directory, manifest, physical
-
-    def test_truncated_entries_recompute_add_change_and_delete_then_rollback(self):
-        state, _repository, directory, old, physical = self._truncated_board()
-        upgrade_schema_25_to_26(state)
-        with sqlite3.connect(state / "board.sqlite3") as connection:
-            record = json.loads(connection.execute("SELECT manifest_json FROM workflow_artifacts "
-                                                   "WHERE artifact_id='output'").fetchone()[0])
-        entries = record["snapshot"]["changedEntries"]
-        self.assertEqual(sorted(entries), ["a.txt", "b.txt", "c.txt"])
-        self.assertIsNone(entries["c.txt"])
-        self.assertNotIn("changedEntriesTruncated", record["snapshot"])
-        self.assertEqual(record["cumulativePatch"], old["cumulativePatch"])
-        self.assertEqual(json.loads((directory / "output.json").read_text())["snapshotSha256"],
-                         record["snapshotSha256"])
-        with sqlite3.connect(state / "board.sqlite3") as connection:
-            connection.execute("UPDATE meta SET value='25' WHERE key='schema_version'")
-            connection.execute("UPDATE workflow_artifacts SET manifest_json=?,manifest_sha256=? "
-                               "WHERE artifact_id='output'", (json.dumps(old), old["snapshotSha256"]))
-        self.assertEqual(restore_schema_25_physical_records(state), 1)
-        self.assertEqual(json.loads((directory / "output.json").read_text()), physical)
-
-    def test_linked_record_parent_refuses_without_overwriting_the_target(self):
-        state, _repository, directory, _old, _physical = self._truncated_board()
-        outside = self.root / "outside-records"
+    def test_linked_record_parent_rejected_before_writes(self):
+        plan = upgrade.plan_schema_25_to_26(self.state)
+        path = next(iter(plan["physical"]))
+        directory = path.parent
+        outside = self.root / "outside"
         directory.rename(outside)
         try:
             directory.symlink_to(outside, target_is_directory=True)
         except OSError as error:
-            self.skipTest(f"Directory symlinks unavailable: {error}")
-        before = (outside / "output.json").read_bytes()
-        with self.assertRaises(BoardError) as caught:
-            upgrade_schema_25_to_26(state)
-        self.assertEqual(caught.exception.code, "UPGRADE_ARTIFACT_UNRECOVERABLE")
-        self.assertEqual(caught.exception.details["reason"], "record-outside-state")
-        self.assertEqual((outside / "output.json").read_bytes(), before)
-        with sqlite3.connect(state / "board.sqlite3") as connection:
-            self.assertEqual(connection.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone()[0],
-                             "25")
-
-    def test_missing_git_object_refuses_with_artifact_identity_before_writes(self):
-        state, repository, directory, old, physical = self._truncated_board()
-        shutil.rmtree(repository / ".git" / "objects")
-        with self.assertRaises(BoardError) as caught:
-            upgrade_schema_25_to_26(state)
-        self.assertEqual(caught.exception.code, "UPGRADE_ARTIFACT_UNRECOVERABLE")
-        self.assertEqual(caught.exception.details["artifactId"], "output")
-        self.assertEqual(caught.exception.details["artifactKind"], "output")
-        self.assertEqual(caught.exception.details["reason"], "git-object-unavailable")
-        self.assertEqual(json.loads((directory / "output.json").read_text()), physical)
-        with sqlite3.connect(state / "board.sqlite3") as connection:
-            self.assertEqual(connection.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone()[0],
-                             "25")
-
-    def test_sha256_truncated_entries_use_full_commit_ids(self):
-        probe = self.root / "probe"
-        probe.mkdir()
-        result = subprocess.run(["git", "-C", str(probe), "init", "--quiet", "--object-format=sha256"],
-                                capture_output=True)
-        if result.returncode or _git(probe, "rev-parse", "--show-object-format") != "sha256":
-            self.skipTest("this Git does not support SHA-256 object format")
-        state, _repository, _directory, _old, _physical = self._truncated_board(object_format="sha256")
-        self.assertEqual(upgrade_schema_25_to_26(state)["schema"], SCHEMA_VERSION)
-        with sqlite3.connect(state / "board.sqlite3") as connection:
-            record = json.loads(connection.execute("SELECT manifest_json FROM workflow_artifacts "
-                                                   "WHERE artifact_id='output'").fetchone()[0])
-        self.assertEqual(len(record["commit"]), 64)
-        self.assertEqual(len(record["snapshot"]["changedEntries"]["b.txt"][1]), 64)
+            self.skipTest(f"Directory links unavailable: {error}")
+        originals = {file: file.read_bytes() for file in outside.iterdir() if file.is_file()}
+        with self.assertRaises(BoardError):
+            upgrade.plan_schema_25_to_26(self.state)
+        self.assertEqual({file: file.read_bytes() for file in originals}, originals)

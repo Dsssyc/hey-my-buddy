@@ -232,6 +232,29 @@ class BatchedObjectTests(unittest.TestCase):
         for path, oid in expected.items():
             self.assertEqual(self.git("cat-file", "blob", oid), contents[path])
 
+    def test_raw_tree_delta_reads_only_changes_for_sha1_and_sha256(self):
+        for object_format in self.supported_formats():
+            with self.subTest(object_format=object_format):
+                repo, _tracked = self.mixed_checkout("raw-" + object_format, object_format=object_format)
+                before = self.git("rev-parse", "HEAD", cwd=repo).decode().strip()
+                (repo / "src/empty.dat").unlink()
+                (repo / "src/kept.txt").write_bytes(b"modified\n")
+                name = "src/unicode-\N{CHECK MARK}.txt"
+                (repo / name).write_bytes(b"added\n")
+                self.git("add", "-A", cwd=repo)
+                self.git("commit", "-qm", "raw delta", cwd=repo)
+                after = self.git("rev-parse", "HEAD", cwd=repo).decode().strip()
+                expected = self.tree_entries(repo, after)
+                with patch.object(workspace, "_git", wraps=workspace._git) as observed:
+                    delta = workspace._tree_changes(repo, before, after)
+                self.assertEqual(observed.call_count, 1)
+                self.assertEqual(observed.call_args.args[1], "diff-tree")
+                self.assertIn("--raw", observed.call_args.args)
+                self.assertIsNone(delta["src/empty.dat"])
+                for path in ("src/kept.txt", name, "src/selected.bin"):
+                    self.assertEqual(delta[path], {"mode": expected[path][0], "oid": expected[path][1]})
+                self.assertEqual(set(delta), {"src/empty.dat", "src/kept.txt", name, "src/selected.bin"})
+
     # -- structural process-count regression -----------------------------------
     def git_process_counter(self, tag):
         """A PATH shim that logs every Git execution and forwards to the real Git."""

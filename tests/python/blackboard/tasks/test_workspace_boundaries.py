@@ -28,6 +28,34 @@ class WorkspaceBoundaryTests(unittest.TestCase):
     def seal(self, manifest):
         return workspace.seal(self.state, manifest, "micro-task", "attempt")
 
+    def test_thousand_scope_violations_keep_complete_evidence_and_restore(self):
+        paths = [f"docs/blocked-{number:04d}.txt" for number in range(1000)]
+        for name in paths:
+            (self.repo / name).write_text("authorized\n")
+        self.git("add", ".")
+        self.git("commit", "-qm", "many scoped inputs")
+        manifest = self.prepare()
+        checkout = Path(manifest["path"])
+        for name in paths:
+            (checkout / name).write_text("outside declared scope\n")
+        self.git("add", "docs", cwd=checkout)
+        error = self.assert_error("WORKSPACE_SCOPE_VIOLATION", self.seal, manifest)
+        evidence = error.details["evidence"]
+        self.assertEqual(evidence["blockingPaths"], paths)
+        self.assertEqual([entry["path"] for entry in evidence["entries"]], paths)
+        resolved = workspace.resolve(
+            self.state, manifest, task_id="micro-task", attempt_id="attempt", action="restore", paths=None,
+            observed_fingerprint=evidence["observedFingerprint"], note="restore all paths",
+            actor={"role": "host", "id": "host-1"},
+        )
+        self.assertEqual(resolved["state"], "restored")
+        self.assertEqual(resolved["resolvedPaths"], paths)
+        self.assertEqual(resolved["remainingPaths"], [])
+        for name in paths:
+            self.assertEqual((checkout / name).read_text(), "authorized\n")
+        self.assertEqual(self.git("diff", "--cached", "--name-only", cwd=checkout), b"")
+        self.assertNotIn("changedEntries", resolved["artifact"]["snapshot"])
+
     def test_first_turn_cumulative_patch_uses_sealed_diff_without_git(self):
         manifest = self.prepare()
         (Path(manifest["path"]) / "src/file.txt").write_text("output\n")

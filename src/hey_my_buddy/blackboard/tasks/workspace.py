@@ -1053,10 +1053,6 @@ def _prepare_locked(directory, workspace_id, request_id, intent, preparation=Non
         raise
 
 
-#: Bounded per-path evidence for one scope violation. A failed seal keeps this
-#: record so a Host can restore, adopt or abandon the exact observed site later
-#: without turning the failed working tree into an authorized baseline.
-SCOPE_EVIDENCE_LIMIT = 256
 #: Bounded per-entry observation of one repository's shared stash list. The
 #: bound keeps a flooded stash reflog from inflating a frozen turn input; the
 #: ``truncated`` flag keeps the cut honest instead of silent.
@@ -1085,13 +1081,11 @@ def _observed_file(root, path, *, mode_hint=None):
     return {"mode": mode, "sha256": _sha(data)}
 
 
-def _scope_evidence(root, manifest, observation, violations, changed, index_changes, excluded_changes):
-    """Bounded, content-addressed evidence for one out-of-scope failure site."""
-    initial = _entries(root, manifest["inputCommit"])
-    initial_index = _entries(root, manifest["snapshot"]["stagedTree"] if manifest["kind"] == "existing" else manifest["inputTree"])
+def _scope_evidence(root, manifest, observation, violations, changed, index_changes, excluded_changes, initial, initial_index):
+    """Complete, content-addressed evidence for one out-of-scope failure site."""
     ordered = sorted(violations)
     entries = []
-    for path in ordered[:SCOPE_EVIDENCE_LIMIT]:
+    for path in ordered:
         entries.append({
             "path": path,
             "authorized": _entry_state(initial, path),
@@ -1110,7 +1104,6 @@ def _scope_evidence(root, manifest, observation, violations, changed, index_chan
         "writeScope": list(manifest["writeScope"]),
         "blockingPaths": ordered,
         "changedPaths": list(changed),
-        "truncated": len(ordered) > SCOPE_EVIDENCE_LIMIT,
         "entries": entries,
     }
 
@@ -1163,15 +1156,11 @@ def _output_entries(root, manifest, observation, *, allow_outside_scope=False, a
     else:
         violations |= outside
     if violations:
-        evidence = _scope_evidence(root, manifest, observation, violations, changed, index_changes, excluded_changes)
+        evidence = _scope_evidence(root, manifest, observation, violations, changed, index_changes, excluded_changes,
+                                   initial, initial_index)
         raise BoardError("WORKSPACE_SCOPE_VIOLATION", "Managed workspace paths contain changes outside the declared write scope",
                          paths=sorted(violations), changedPaths=changed, evidence=evidence)
     return entries, changed, sorted(excluded_changes), sorted(adopted)
-
-
-def _changed_entries(entries, changed):
-    """Bind every changed path to its output entry, including deletions."""
-    return {path: entries.get(path) for path in changed}
 
 
 def _finish_output(repository, output, directory, *, fresh=False):
@@ -1256,21 +1245,20 @@ def _seal_output(state_dir: Path, manifest: dict, task_id: str, attempt_id: str,
                     entries, changed, excluded_changes, _adopted = _output_entries(
                         root, manifest, observation, allowed_paths=allowed_paths)
                 except BoardError as error:
-                    # The failed site keeps a durable, bounded record of exactly
+                    # The failed site keeps a durable record of exactly
                     # which managed paths diverged and from which authorized state.
                     # It is evidence for a Host decision, never a new baseline.
                     if error.code == "WORKSPACE_SCOPE_VIOLATION" and isinstance(error.details.get("evidence"), dict):
                         _record_scope_evidence(directory, error.details["evidence"], task_id, attempt_id)
                     raise
-            changed_entries = _changed_entries(entries, changed)
             tree = _tree(root, entries)
+            changed = sorted(_tree_changes(root, manifest["inputTree"], tree))
             if observation != _observe(root, manifest["snapshot"]["executionSelectors"]):
                 raise BoardError("WORKSPACE_CHANGED", "The workspace changed during output sealing")
             commit = manifest["inputCommit"] if tree == manifest["inputTree"] else _commit_tree(root, tree, manifest["inputCommit"], workspace_id + " output " + directory.name)
             patch_data = _diff(repository, manifest["inputCommit"], commit)
             snapshot = {"headCommit": observation["head"], "indexSha256": _sha(_json(observation["index"])),
                         "observationSha256": observation["fingerprint"], "tree": tree, "changedPaths": changed,
-                        "changedEntries": changed_entries,
                         "excludedChangedPaths": excluded_changes, "manifestSha256": manifest["manifestSha256"],
                         "includedUntracked": sorted(entries.keys() & observation["untracked"].keys()),
                         "workspaceId": workspace_id, "taskId": task_id, "attemptId": attempt_id,
@@ -1323,7 +1311,7 @@ def cumulative_patch(manifest: dict, artifact: dict, original_commit: str) -> di
 
 # -- scope failure evidence and Host-directed recovery ------------------------
 def _record_scope_evidence(directory, evidence, task_id, attempt_id):
-    """Keep one bounded failure-site record per observed workspace fingerprint."""
+    """Keep one failure-site record per observed workspace fingerprint."""
     record = dict(evidence, taskId=task_id, attemptId=attempt_id)
     folder = directory / "scope-conflicts"
     _mkdir(folder)
@@ -1591,12 +1579,9 @@ def _write_path(root, path, entry, data=None):
 
 def _restore_index(root, entries):
     """Set exact index entries in one plumbing call; never refresh the worktree."""
-    payload = b""
-    for path, entry in sorted(entries.items()):
-        if entry is None:
-            payload += b"0 " + b"0" * 40 + b"\t" + os.fsencode(path) + b"\0"
-        else:
-            payload += entry["mode"].encode() + b" " + entry["oid"].encode() + b"\t" + os.fsencode(path) + b"\0"
+    payload = b''.join(
+        (b"0 " + b"0" * 40 if entry is None else entry["mode"].encode() + b" " + entry["oid"].encode())
+        + b"\t" + os.fsencode(path) + b"\0" for path, entry in sorted(entries.items()))
     if payload:
         _git(root, "update-index", "-z", "--index-info", data=payload)
 
@@ -1639,10 +1624,8 @@ def _reset_site(root, manifest, observation):
 
 
 def _snapshot_record(manifest, observation, tree, entries, changed, excluded_changes, task_id, attempt_id, commit, patch_data):
-    changed_entries = _changed_entries(entries, changed)
     return {"headCommit": observation["head"], "indexSha256": _sha(_json(observation["index"])),
             "observationSha256": observation["fingerprint"], "tree": tree, "changedPaths": changed,
-            "changedEntries": changed_entries,
             "excludedChangedPaths": excluded_changes, "manifestSha256": manifest["manifestSha256"],
             "includedUntracked": sorted(entries.keys() & observation["untracked"].keys()),
             "workspaceId": manifest["workspaceId"], "taskId": task_id, "attemptId": attempt_id,
@@ -1720,6 +1703,7 @@ def _resolution_record(root, manifest, repository, directory, observation, *, ta
     entries, changed, excluded_changes, adopted = _output_entries(root, manifest, observation,
                                                                   allow_outside_scope=(action == "adopt"))
     tree = _tree(root, entries)
+    changed = sorted(_tree_changes(root, manifest["inputTree"], tree))
     if observation != _observe(root, manifest["snapshot"]["executionSelectors"]):
         raise BoardError("WORKSPACE_CHANGED", "The workspace changed during resolution sealing")
     commit = manifest["inputCommit"] if tree == manifest["inputTree"] else _commit_tree(root, tree, manifest["inputCommit"], workspace_id + " resolution " + output_id)
@@ -1761,9 +1745,8 @@ def _abandoned_record(root, manifest, repository, directory, observation, *, tas
         pending.append((path, item))
     for (path, item), oid in zip(pending, _batch_blobs(root, [item[1] for _path, item in pending], write=True)):
         entries[path] = [item[0], oid]
-    initial = _entries(root, manifest["inputCommit"])
-    changed = sorted(path for path in set(initial) | set(entries) if initial.get(path) != entries.get(path))
     tree = _tree(root, entries)
+    changed = sorted(_tree_changes(root, manifest["inputTree"], tree))
     commit = _commit_tree(root, tree, manifest["inputCommit"], workspace_id + " abandoned " + output_id)
     patch_data = _diff(repository, manifest["inputCommit"], commit)
     snapshot = _snapshot_record(manifest, observation, tree, entries, changed, [], task_id, attempt_id, commit, patch_data)
@@ -1787,9 +1770,9 @@ def _resolution_result(action, state, artifact, resolved, preserved, remaining, 
         "action": action,
         "state": state,
         "artifact": artifact,
-        "resolvedPaths": sorted(resolved)[:SCOPE_EVIDENCE_LIMIT],
-        "preservedPaths": sorted(preserved)[:SCOPE_EVIDENCE_LIMIT],
-        "remainingPaths": sorted(remaining)[:SCOPE_EVIDENCE_LIMIT],
+        "resolvedPaths": sorted(resolved),
+        "preservedPaths": sorted(preserved),
+        "remainingPaths": sorted(remaining),
         "observedFingerprint": observed_fingerprint,
         "resolvedFingerprint": resolved_fingerprint,
     }
@@ -1900,17 +1883,6 @@ def resolve(state_dir, manifest: dict, *, task_id: str, attempt_id: str, action:
 
 
 # -- integration verification -------------------------------------------------
-def _tree_entries(root, commit):
-    entries = {}
-    for record in _git(root, "ls-tree", "-rz", commit).split(b"\0"):
-        if not record:
-            continue
-        metadata, _, name = record.partition(b"\t")
-        mode, _kind, oid = metadata.decode().split()
-        entries[_relative(os.fsdecode(name))] = {"mode": mode, "oid": oid}
-    return entries
-
-
 def _is_ancestor(root, ancestor, descendant):
     try:
         _git(root, "merge-base", "--is-ancestor", ancestor, descendant)
@@ -1921,13 +1893,15 @@ def _is_ancestor(root, ancestor, descendant):
     return True
 
 
-def _tree_changes(root, before_tree, after_tree):
-    """Derive every changed path binding from two proven immutable Git trees."""
-    names = [_relative(os.fsdecode(name)) for name in _git(
-        root, "diff-tree", "-r", "--no-renames", "--name-only", "-z", before_tree, after_tree, "--"
-    ).split(b"\0") if name]
-    entries = _tree_entries(root, after_tree)
-    return {name: entries.get(name) for name in names}
+def _tree_changes(root, before_tree, after_tree, *, env=None):
+    """Read just the changed paths and their output modes/objects in one Git call."""
+    records = _git(root, "diff-tree", "-r", "-z", "--raw", "--no-renames", "--no-abbrev",
+                   before_tree, after_tree, "--", env=env).split(b"\0")
+    changes = {}
+    for metadata, name in zip(records[::2], records[1::2]):
+        _before_mode, mode, _before_oid, oid, _status = metadata[1:].decode().split()
+        changes[_relative(os.fsdecode(name))] = None if mode == "000000" else {"mode": mode, "oid": oid}
+    return changes
 
 
 def _validate_output_record(final_input, artifact):
@@ -2057,19 +2031,24 @@ def integration_verify(artifact: dict, *, original_input: dict, final_input: dic
         before_tree = _line(root, "rev-parse", before + "^{tree}") if before else None
         after = _commit(root, ref)
         after_tree = _line(root, "rev-parse", after + "^{tree}")
-        target_changes = _tree_changes(root, before_tree, after_tree) if before else {}
+        target_changes = _tree_changes(root, before_tree, after_tree) if host_paths else {}
         missing_host = sorted(set(host_paths) - set(target_changes))
         if missing_host:
             raise BoardError("INVALID_WORKSPACE", "Host paths must be actual changes in the target commit interval", paths=missing_host[:32])
         source = artifact.get("commit")
         artifact_ancestor = _is_ancestor(root, source, after) if isinstance(source, str) and source else False
         matching, differing, missing = [], [], []
-        target_entries = _tree_entries(root, after)
+        # Read the target delta against the artifact tree. The source object
+        # directory makes that immutable tree readable in an independent target
+        # repository without copying objects or listing either complete tree.
+        target_changes = _tree_changes(root, artifact["tree"], after_tree, env={
+            "GIT_ALTERNATE_OBJECT_DIRECTORIES": json.dumps(str(_repository / "objects"), ensure_ascii=False),
+        })
         for name in sorted(changed):
             expected = changed[name]
             if expected is not None:
                 expected = [expected["mode"], expected["oid"]]
-            actual = target_entries.get(name)
+            actual = target_changes.get(name, changed[name])
             if expected is None:
                 if actual is None:
                     matching.append(name)

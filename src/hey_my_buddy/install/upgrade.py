@@ -87,21 +87,6 @@ def idle_snapshot(state: Path, *, event_head: int | None = None, exact: bool = F
         return snapshot
 
 
-def _convert_board(state: Path, before: dict) -> tuple[dict, dict]:
-    preserved = schema_upgrade.preserved_data(state)
-    converted = schema_upgrade.upgrade_schema_25_to_26(state)
-    expected = idle_snapshot(state, event_head=before['eventHead'], exact=True)
-    changed = {name for name in before['tables'].keys() | expected['tables'].keys()
-               if before['tables'].get(name) != expected['tables'].get(name)}
-    changed.update(name for name, digest in before['fingerprints'].items()
-                   if name not in preserved and expected['fingerprints'].get(name) != digest)
-    changed.update(name for name, values in schema_upgrade.preserved_data(state).items() if values != preserved[name])
-    if changed:
-        raise BoardError('UPGRADE_VERIFY_FAILED', 'The schema conversion changed unrelated stored data',
-                         tables=sorted(changed))
-    return {**expected, 'runtimeSettings': before['runtimeSettings']}, converted
-
-
 def preflight(state: Path, *, contract_changed: bool) -> dict:
     """The contract boundary decides whether the board must stop changing."""
     if contract_changed:
@@ -260,7 +245,7 @@ def restore(state: Path, current: Path) -> None:
     for path in (snapshot, board, *sidecars, compressed):
         _restore_guard(path, regular=True)
     backup.recover(state)
-    saved = backup.verify(current)
+    backup.verify(current)
     sources = list(backup._regular_files(current / 'state'))
     destinations = [(source, state / source.relative_to(current / 'state')) for source in sources]
     for source, destination in destinations:
@@ -304,12 +289,11 @@ def restore(state: Path, current: Path) -> None:
             _restore_guard(temporary, regular=True)
             _restore_guard(destination, regular=True)
             os.replace(temporary, destination)
+            backup.sync_dir(destination.parent)
         finally:
             if private_dirs.linked_component(temporary) is None:
                 temporary.unlink(missing_ok=True)
     backup.sync_dir(state)
-    if saved['schema'] == schema_upgrade.BASE_SCHEMA_VERSION:
-        schema_upgrade.restore_schema_25_physical_records(state)
 
 
 def verify_started(state: Path, target: Path, health: dict, before: dict, *, contract_changed: bool = True) -> dict:
@@ -517,7 +501,12 @@ def upgrade(params: dict, *, skill_source: Path | None = None, skill_target: Pat
                     before = idle_snapshot(state, exact=True)
                     before['runtimeSettings'] = runtime_settings
                     journal['before'] = before
-                    backed_up = backup.create(state, runtime_identity={'identity': identity}, plugin_commit=runtime.read_ready(previous).get('sourceCommit'), contract_version=contract_version)
+                    conversion_plan = (schema_upgrade.plan_schema_25_to_26(state)
+                                       if before['schema'] == schema_upgrade.BASE_SCHEMA_VERSION else None)
+                    physical_files = ({path: original for path, (original, _) in conversion_plan['physical'].items()}
+                                      if conversion_plan is not None else None)
+                    backed_up = backup.create(state, runtime_identity={'identity': identity}, plugin_commit=runtime.read_ready(previous).get('sourceCommit'), contract_version=contract_version,
+                                              physical_files=physical_files)
                     stored = backup.verify(Path(backed_up['path']))
                     if stored.get('databaseSnapshot') is not None:
                         before = {**before, **stored['databaseSnapshot'], 'schema': stored.get('schema'), 'runtimeSettings':runtime_settings}
@@ -531,7 +520,9 @@ def upgrade(params: dict, *, skill_source: Path | None = None, skill_target: Pat
                     # and the physical records before any old runtime is started.
                     journal.update(phase='converting')
                     write_journal(marker, journal)
-                    expected, converted = _convert_board(state, before)
+                    converted = schema_upgrade.upgrade_schema_25_to_26(state, plan=conversion_plan)
+                    expected = {**idle_snapshot(state, event_head=before['eventHead'], exact=True),
+                                'runtimeSettings': before['runtimeSettings']}
                     journal['conversion'] = converted
                 journal.update(phase='prepared', expected=expected)
                 write_journal(marker, journal)

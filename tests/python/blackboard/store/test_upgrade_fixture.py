@@ -13,7 +13,8 @@ from blackboard.store.upgrade_fixture import load_fixture, _git, _sha, _json
 from hey_my_buddy.blackboard.store.store import BoardStore
 from hey_my_buddy.blackboard.routing import router
 from hey_my_buddy.blackboard.store.db import Corruption, Database, SCHEMA_VERSION
-from hey_my_buddy.blackboard.store.upgrade import BASE_SCHEMA_VERSION, upgrade_schema_25_to_26
+from hey_my_buddy.blackboard.store.upgrade import BASE_SCHEMA_VERSION, plan_schema_25_to_26, upgrade_schema_25_to_26
+from hey_my_buddy.blackboard.store import backup
 from hey_my_buddy.blackboard.tasks import workspace
 from hey_my_buddy.blackboard.tasks.workflow import WorkflowCoordinator
 from hey_my_buddy.errors import BoardError
@@ -28,7 +29,9 @@ class UpgradeFixtureTests(unittest.TestCase):
     def restored(self, name='state', *, current=True):
         fixture = load_fixture(self.root / name)
         if current:
-            upgrade_schema_25_to_26(fixture['state'])
+            plan = plan_schema_25_to_26(fixture['state'])
+            backup.create(fixture['state'], physical_files={path: original for path, (original, _) in plan['physical'].items()})
+            upgrade_schema_25_to_26(fixture['state'], plan=plan)
         connection = sqlite3.connect(fixture['state'] / 'board.sqlite3')
         connection.row_factory = sqlite3.Row
         self.addCleanup(connection.close)

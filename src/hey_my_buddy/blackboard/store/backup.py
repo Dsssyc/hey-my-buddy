@@ -19,6 +19,7 @@ import time
 from .db import SCHEMA_VERSION, Database, utc_now
 from .upgrade import BASE_SCHEMA_VERSION
 from ...protocol.contracts import CONTRACT_VERSION
+from ...protocol.execution import RECEIPT
 from ...errors import BoardError
 from ... import private_dirs
 from ...private_dirs import linked as _linked
@@ -146,6 +147,15 @@ STATE_FILES = ('console-settings.json', 'runtime-retention.json',
                'active-runtime.json', 'launch-settings.json')
 
 
+def _upgrade_physical_file(relative: Path) -> bool:
+    parts = relative.parts
+    return ('..' not in parts and (
+        (len(parts) == 5 and parts[0] == 'workspaces' and parts[2] == 'outputs'
+         and parts[4].endswith('.json'))
+        or (len(parts) == 7 and parts[0] == 'harnesses' and parts[2] == 'micro-tasks'
+            and parts[4] == 'attempts' and parts[6] == RECEIPT)))
+
+
 def _private_copy(source: Path, target: Path) -> None:
     if _linked_component(source) or not stat.S_ISREG(source.lstat().st_mode):
         raise BoardError('BACKUP_UNSAFE_PATH', 'Backup source changed to a linked or special file', path=str(source))
@@ -238,7 +248,10 @@ def _verify(directory: Path) -> dict:
         manifest = json.load(stream)
     if manifest.get('format') != 1 or manifest.get('schema') not in (BASE_SCHEMA_VERSION, SCHEMA_VERSION):
         raise BoardError('BACKUP_INVALID', 'Unsupported backup format or schema')
-    allowed = {'board.sqlite3.gz', *(str(Path('state') / name) for name in STATE_FILES)}
+    physical = {name for name in manifest['files'] if Path(name).is_relative_to('state')
+                and _upgrade_physical_file(Path(name).relative_to('state'))}
+    allowed = {'board.sqlite3.gz', *(str(Path('state') / name) for name in STATE_FILES),
+               *physical}
     if 'board.sqlite3.gz' not in manifest['files'] or set(manifest['files']) - allowed:
         raise BoardError('BACKUP_INVALID', 'Backup contains files outside the rollback inventory')
     actual = {str(p.relative_to(directory)) for p in _regular_files(directory) if p != directory / 'manifest.json'}
@@ -406,7 +419,8 @@ def recover(state: Path) -> Path:
         os.close(lock)
 
 
-def create(state: Path, *, runtime_identity: dict | None = None, plugin_commit: str | None = None, contract_version: str = CONTRACT_VERSION) -> dict:
+def create(state: Path, *, runtime_identity: dict | None = None, plugin_commit: str | None = None,
+           contract_version: str = CONTRACT_VERSION, physical_files: dict[Path, bytes] | None = None) -> dict:
     started = time.monotonic()
     if _linked_component(state):
         raise BoardError('BACKUP_UNSAFE_PATH', 'Backup state path cannot contain links', path='.')
@@ -454,6 +468,14 @@ def create(state: Path, *, runtime_identity: dict | None = None, plugin_commit: 
             path = state / name
             if path.exists() or _linked(path):
                 _private_copy(path, incoming / 'state' / name)
+        for path, original in sorted((physical_files or {}).items()):
+            relative = path.relative_to(state)
+            if (not _upgrade_physical_file(relative) or _linked_component(path) is not None
+                    or path.read_bytes() != original):
+                raise BoardError('BACKUP_INVALID', 'Planned physical record changed before backup', path=str(path))
+            _private_copy(path, incoming / 'state' / relative)
+            if digest(incoming / 'state' / relative) != hashlib.sha256(original).hexdigest():
+                raise BoardError('BACKUP_INVALID', 'Physical record changed during backup', path=str(path))
         files = {str(path.relative_to(incoming)): {'bytes': path.lstat().st_size, 'sha256': digest(path)} for path in _regular_files(incoming)}
         manifest = {'format': 1, 'createdAt': utc_now(), 'schema': schema, 'contract': contract_version, 'backupToolContract': CONTRACT_VERSION,
                     'databaseSnapshot':snapshot_metadata, 'runtime': runtime_identity, 'pluginCommit': plugin_commit, 'pluginCommitStatus': 'recorded' if plugin_commit else 'unavailable-in-source-metadata',

@@ -331,9 +331,8 @@ class LifecycleTestCase(RealWorkspaceTestCase):
                                        claimed["claim"]["attempt"]["attemptId"])
         expected = sorted([f"{prefix}-{number:04d}.txt" for prefix in ("new", "old") for number in range(1000)])
         self.assertEqual(sealed["changedPaths"], expected)
-        self.assertEqual(sorted(sealed["snapshot"]["changedEntries"]), expected)
-        self.assertTrue(all(sealed["snapshot"]["changedEntries"][name] is None
-                            for name in expected if name.startswith("old")))
+        self.assertNotIn("changedEntries", sealed["snapshot"])
+        self.assertNotIn("changedEntriesTruncated", sealed["snapshot"])
         # Exercise both the sealed first-turn patch and the whole-task Git diff.
         for base in (manifest["inputCommit"], original):
             cumulative = workspace_module.cumulative_patch(manifest, sealed, base)
@@ -353,7 +352,17 @@ class LifecycleTestCase(RealWorkspaceTestCase):
         target = self.target_with_artifact(artifact)
         accepted = self.accept(board, view, artifact, target=target, keepCheckout=True)
         self.assertEqual(accepted["state"], "accepted")
-        self.assertEqual(accepted["integration"]["verification"]["matchingPaths"], expected)
+        verification = accepted["integration"]["verification"]
+        self.assertEqual(verification["matchingPaths"], expected[:32])
+        self.assertEqual(verification["matchingPathsCount"], len(expected))
+        self.assertTrue(verification["matchingPathsTruncated"])
+        self.assertEqual(artifact["changedPathsCount"], len(expected))
+        self.assertEqual(artifact["changedPaths"], expected[:32])
+        self.assertLess(len(canonical_json(accepted).encode()), 8 * 1024 * 1024)
+        with board.store.db.read() as connection:
+            stored = connection.execute("SELECT verification_json FROM workflow_integrations WHERE integration_id=?",
+                                        (accepted["integration"]["integrationId"],)).fetchone()[0]
+        self.assertEqual(json.loads(stored)["matchingPaths"], expected)
         self.assertTrue(checkout.exists())
         for number in range(1000):
             (checkout / f"new-{number:04d}.txt").write_text("unsealed\n")
@@ -677,6 +686,9 @@ class LifecycleTestCase(RealWorkspaceTestCase):
         if import_failure:
             self.assertEqual(receipt['resultMeta']['terminationReason'], 'completed')
             self.assertIn('microTaskError', recorded)
+        with board.store.db.read() as connection:
+            recorded = json.loads(connection.execute('SELECT result_json FROM attempts WHERE attempt_id=?',
+                                   (attempt['attemptId'],)).fetchone()['result_json'])['result']
         return board, run_id, attempt, checkout, failed_root, refs, native, recorded
 
     def assert_failed_evidence_survives_continuation(self, *, import_failure=False):

@@ -76,6 +76,63 @@ def _overlaps(left: str, right: str) -> bool:
     return left.startswith(right_prefix) or right.startswith(left_prefix)
 
 
+def _public_result_payload(payload: dict) -> dict:
+    """Bound service-owned workspace facts in a reply, leaving the receipt intact."""
+    result = payload.get("result")
+    if not isinstance(result, dict):
+        return payload
+    from ..tasks.workflow import WorkflowCoordinator
+
+    bound = WorkflowCoordinator._bounded_path_fields
+    projected = dict(result)
+    for key in ("workspaceSeal", "partialWorkspaceSeal"):
+        seal = result.get(key)
+        if not isinstance(seal, dict):
+            continue
+        seal_view = bound(seal, ("changedPaths", "includedUntracked", "adoptedPaths", "outsideScope"))
+        snapshot = seal.get("snapshot")
+        if isinstance(snapshot, dict):
+            seal_view["snapshot"] = bound(snapshot, (
+                "changedPaths", "excludedChangedPaths", "includedUntracked", "adoptedPaths",
+            ))
+        cumulative = seal.get("cumulativePatch")
+        if isinstance(cumulative, dict):
+            seal_view["cumulativePatch"] = bound(cumulative, ("changedPaths",))
+        projected[key] = seal_view
+
+    for key in ("workspaceSealError", "partialSealError", "cumulativePatchError"):
+        error = result.get(key)
+        if not isinstance(error, dict) or not isinstance(error.get("details"), dict):
+            continue
+        details = bound(error["details"], ("paths", "changedPaths", "blockingPaths", "excludedChangedPaths"))
+        evidence = details.get("evidence")
+        if isinstance(evidence, dict):
+            details["evidence"] = bound(evidence, ("blockingPaths", "changedPaths", "entries"))
+        projected[key] = {**error, "details": details}
+
+    # A stopped partial result retains its exact input manifest in the receipt.
+    # Its public copy can be as large as the output seal on a busy checkout.
+    manifest = result.get("workspaceManifest")
+    if isinstance(manifest, dict):
+        manifest_view = bound(manifest, ("writeScope",))
+        snapshot = manifest.get("snapshot")
+        if isinstance(snapshot, dict):
+            snapshot_view = bound(snapshot, (
+                "includeSelectors", "executionSelectors", "includedUntracked", "excludedUntracked",
+            ))
+            excluded = snapshot.get("excludedEntries")
+            if isinstance(excluded, dict):
+                paths = bound({"excludedEntries": list(excluded)}, ("excludedEntries",))
+                snapshot_view["excludedEntries"] = paths["excludedEntries"]
+                snapshot_view["excludedEntriesCount"] = paths["excludedEntriesCount"]
+                snapshot_view["excludedEntriesTruncated"] = paths["excludedEntriesTruncated"]
+                if paths.get("excludedEntriesSamplesShortened"):
+                    snapshot_view["excludedEntriesSamplesShortened"] = True
+            manifest_view["snapshot"] = snapshot_view
+        projected["workspaceManifest"] = manifest_view
+    return {**payload, "result": projected}
+
+
 class BoardStore:
     """Durable facts plus their in-process change notification.
 
@@ -478,7 +535,7 @@ class BoardStore:
             "revision": row["revision"],
         }
         if include_result and row["result_json"] is not None:
-            view["result"] = json.loads(row["result_json"])
+            view["result"] = _public_result_payload(json.loads(row["result_json"]))
         return view
 
     @staticmethod
@@ -1153,7 +1210,7 @@ class BoardStore:
                 )
             # Only the current execution receipt is unpacked. Its adapter result is
             # opaque data, even when it contains fields named result or turn.
-            view["result"] = payload["result"]
+            view["result"] = _public_result_payload(payload)["result"]
             view["resultMeta"] = {key: value for key, value in payload.items() if key != "result"}
             view["attemptId"] = attempt["attempt_id"]
             view["resultDelivered"] = view["result"] is not None
