@@ -1,5 +1,15 @@
 """Run the Python integration tests in isolated processes.
 
+``python -m hey_my_buddy.cli.checks [--jobs N]`` runs all Python test files.
+``python -m hey_my_buddy.cli.checks [--jobs N] PATH...`` runs only the given
+``tests/python/test_*.py`` files or package directories, relative to the checkout
+or absolute. ``python -m hey_my_buddy.cli.checks --sweep`` retires abandoned
+private roots without running tests.
+
+Exit codes are 0 for passing tests and complete teardown (or no retained sweep
+roots), 1 for failed tests regardless of teardown, 2 for usage errors, and 3 for
+passing tests with incomplete teardown (or retained sweep roots).
+
 The tests exercise *this checkout*: ``src`` and ``tests/python`` go first on
 ``PYTHONPATH``, and inherited runtime, worker and agent-credential variables are
 removed before each child starts.
@@ -11,7 +21,7 @@ the state and runtime roots each suite creates — including its ``TMPDIR`` fixt
 never leave it. With the default worker count the Python suite runs one subprocess per
 test file — each with its own private state, runtime and temp directories below the
 checks root; ``--jobs 1`` (or
-``BUDDY_CHECKS_JOBS=1``) restores the original single-process serial run. After the
+``BUDDY_CHECKS_JOBS=1``) runs those file subprocesses serially. After the
 suites finish, passing or failing, the runner asks any
 surviving Buddy daemon or supervisor below the private root to stop through its
 cooperative surfaces, then waits until every observed survivor has been confirmed to
@@ -28,6 +38,7 @@ teardown's to observe.
 from __future__ import annotations
 
 from .. import locking
+import argparse
 import concurrent.futures
 import json
 import locale
@@ -35,6 +46,7 @@ import os
 from pathlib import Path
 import re
 import shutil
+import stat
 import subprocess
 import sys
 import tempfile
@@ -64,6 +76,7 @@ SANITIZED_VARIABLES = (
 DAEMON_LOCK_NAMES = ("control-start.lock", "control-daemon.lock", "board-owner.lock")
 SUPERVISOR_LOCK_NAME = "supervisor.lock"
 EVIDENCE_FILE_NAME = "teardown-evidence.json"
+CREATOR_FILE_NAME = "creator.pid"
 
 
 def test_environment(root: Path) -> dict:
@@ -90,6 +103,7 @@ def test_environment(root: Path) -> dict:
 def create_private_root(*, directory: Path | None = None) -> Path:
     """One private root this runner owns and can inspect after the suites exit."""
     root = Path(tempfile.mkdtemp(prefix="buddy-checks-", dir=directory)).resolve()
+    (root / CREATOR_FILE_NAME).write_text(f"{os.getpid()}\n")
     (root / "tmp").mkdir(mode=0o700)
     return root
 
@@ -158,20 +172,8 @@ def default_jobs() -> int:
     return max(1, min(MAX_DEFAULT_JOBS, (os.cpu_count() or 2) - 1))
 
 
-def resolve_jobs(arguments: list[str]) -> int:
+def resolve_jobs(value: str | None) -> int:
     """The worker count: ``--jobs`` wins over ``BUDDY_CHECKS_JOBS`` over the default."""
-    value: str | None = None
-    rest = list(arguments)
-    while rest:
-        token = rest.pop(0)
-        if token == "--jobs":
-            if not rest:
-                raise SystemExit("hey_my_buddy.cli.checks: --jobs requires a value")
-            value = rest.pop(0)
-        elif token.startswith("--jobs="):
-            value = token.split("=", 1)[1]
-        else:
-            raise SystemExit(f"hey_my_buddy.cli.checks: unknown argument {token!r}")
     if value is None:
         value = os.environ.get("BUDDY_CHECKS_JOBS")
     if value is None:
@@ -179,9 +181,9 @@ def resolve_jobs(arguments: list[str]) -> int:
     try:
         jobs = int(value)
     except ValueError:
-        raise SystemExit(f"hey_my_buddy.cli.checks: invalid jobs value {value!r}") from None
+        raise ValueError(f"invalid jobs value {value!r}") from None
     if jobs < 1:
-        raise SystemExit(f"hey_my_buddy.cli.checks: jobs must be at least 1, got {jobs}")
+        raise ValueError(f"jobs must be at least 1, got {jobs}")
     return jobs
 
 
@@ -217,6 +219,30 @@ def python_test_modules(root: Path) -> list[str]:
             elif path.is_file() and path.name.startswith("test") and path.suffix == ".py":
                 modules.append(f"{prefix}.{path.stem}" if prefix else path.stem)
     return sorted(modules)
+
+
+def selected_test_modules(root: Path, arguments: list[str]) -> list[str]:
+    """Select paths from the same package discovery used for a full run."""
+    modules = python_test_modules(root)
+    if not arguments:
+        return modules
+    top = (root / "tests" / "python").resolve()
+    files = {top.joinpath(*module.split(".")).with_suffix(".py"): module
+             for module in modules}
+    selected: set[str] = set()
+    for argument in arguments:
+        path = (root / argument).resolve()
+        if not path.is_relative_to(top):
+            raise ValueError(f"{argument!r}: path must be below tests/python")
+        if not path.exists():
+            raise ValueError(f"{argument!r}: path does not exist")
+        matches = {module for file, module in files.items()
+                   if file.match("test_*.py")
+                   and (file == path or (path.is_dir() and file.is_relative_to(path)))}
+        if not matches:
+            raise ValueError(f"{argument!r}: path contains no discoverable test_*.py files")
+        selected.update(matches)
+    return sorted(selected)
 
 
 def _scheduled_test_modules(modules: list[str]) -> list[str]:
@@ -305,7 +331,7 @@ def _report_child_output(outcome: ChildOutcome) -> None:
             print(text, end="" if text.endswith("\n") else "\n")
 
 
-def run_suites_parallel(root: Path, private_root: Path, jobs: int) -> str | None:
+def run_suites_parallel(root: Path, private_root: Path, jobs: int, modules: list[str]) -> str | None:
     """One private subprocess per Python test file.
 
     Every child gets its own private sub-root below the checks root, so no state,
@@ -315,7 +341,7 @@ def run_suites_parallel(root: Path, private_root: Path, jobs: int) -> str | None
     listing names the module, class and test — and the failure is summarized by file.
     """
     tasks = [(f"p{index:03d}", module, [sys.executable, "-m", "unittest", "-v", module])
-             for index, module in enumerate(_scheduled_test_modules(python_test_modules(root)))]
+             for index, module in enumerate(_scheduled_test_modules(modules))]
     if not tasks:
         return "python suite has no test modules"
     print(f"hey_my_buddy.cli.checks: {len(tasks)} python test files across {jobs} workers")
@@ -398,19 +424,6 @@ def run_suites_parallel(root: Path, private_root: Path, jobs: int) -> str | None
     if uncounted:
         failures.append(f"python suite reported no test count in {len(uncounted)} file(s): {', '.join(sorted(uncounted))}")
     return "; ".join(failures) or None
-
-
-def run_suites_serially(root: Path, private_root: Path) -> str | None:
-    """One Python discovery process using the same private environment."""
-    env = child_environment(root, private_root, home_root=private_root / "home")
-    python = subprocess.run(
-        [sys.executable, "-m", "unittest", "discover", "-s", str(root / "tests" / "python"), "-v"],
-        cwd=str(root),
-        env=env,
-    )
-    if python.returncode != 0:
-        return f"python suite exited with {python.returncode}"
-    return None
 
 
 def lock_is_held(path: Path) -> bool:
@@ -767,34 +780,97 @@ def _safe_teardown(private_root: Path) -> dict | None:
     except Exception as error:  # noqa: BLE001 - teardown must never mask the suite result
         print(f"hey_my_buddy.cli.checks: teardown itself failed ({type(error).__name__}: {error}); "
               f"preserved {private_root}", file=sys.stderr)
-        return {"root": str(private_root), "teardownError": f"{type(error).__name__}: {error}"}
+        evidence = {"root": str(private_root), "teardownError": f"{type(error).__name__}: {error}"}
+        _write_evidence(private_root, evidence)
+        return evidence
 
 
-def main(argv: list[str] | None = None) -> None:
-    root = Path(__file__).resolve().parents[3]
-    jobs = resolve_jobs(sys.argv[1:] if argv is None else argv)
+def private_root_directory() -> Path:
+    """The shared location for new roots and abandoned-root sweeps."""
     # macOS's per-user temporary path leaves too little room for nested native
     # AF_UNIX sockets (sun_path is only 104 bytes). Keep the suite's one owned
     # root short; all child TMPDIRs still stay inside it and share its teardown.
     temporary = os.environ.get("BUDDY_CHECKS_TMPDIR")
-    private_root = create_private_root(directory=Path(temporary) if temporary else (Path("/tmp") if sys.platform == "darwin" else None))
+    return Path(temporary) if temporary else (Path("/tmp") if sys.platform == "darwin" else Path(tempfile.gettempdir()))
+
+
+def sweep_private_roots(directory: Path) -> int:
+    """Retire only this user's abandoned checks directories, never active runs."""
+    deleted = skipped = retained = 0
+    table = _ps_argv_table()
+    pids = {pid for pid, _ in table} if table is not None else None
+    for root in sorted(directory.glob("buddy-checks-*")):
+        metadata = root.lstat()
+        if not stat.S_ISDIR(metadata.st_mode) or metadata.st_uid != os.getuid():
+            continue
+        creator = root / CREATOR_FILE_NAME
+        reason = None
+        if creator.exists():
+            try:
+                pid = int(creator.read_text())
+                if pid < 1:
+                    raise ValueError("creator pid must be positive")
+            except (OSError, ValueError) as error:
+                reason = f"creator record unreadable: {error}"
+            else:
+                if pids is None:
+                    reason = "creator status unknown: ps process enumeration failed"
+                elif pid in pids:
+                    skipped += 1
+                    print(f"hey_my_buddy.cli.checks: skipped {root}: creator {pid} is alive")
+                    continue
+        if reason:
+            evidence = {"root": str(root), "observation": {"problems": [reason], "notes": []}}
+            _write_evidence(root, evidence)
+        else:
+            evidence = _safe_teardown(root)
+        if evidence is None:
+            deleted += 1
+            print(f"hey_my_buddy.cli.checks: deleted {root}: teardown complete")
+        else:
+            retained += 1
+            detail = (reason or evidence.get("teardownError") or evidence.get("cleanupError")
+                      or "; ".join(evidence.get("observation", {}).get("problems", []))
+                      or "live process or held lifetime lock")
+            print(f"hey_my_buddy.cli.checks: retained {root}: {detail}")
+    print(f"hey_my_buddy.cli.checks: sweep deleted {deleted}, skipped {skipped}, retained {retained}")
+    return 3 if retained else 0
+
+
+def main(argv: list[str] | None = None) -> None:
+    root = Path(__file__).resolve().parents[3]
+    parser = argparse.ArgumentParser(prog="hey_my_buddy.cli.checks", add_help=False, allow_abbrev=False)
+    parser.add_argument("--jobs")
+    parser.add_argument("--sweep", action="store_true")
+    parser.add_argument("paths", nargs="*")
+    options = parser.parse_args(sys.argv[1:] if argv is None else argv)
+    if options.sweep:
+        if options.paths or options.jobs is not None:
+            parser.error("--sweep cannot be combined with paths or --jobs")
+        raise SystemExit(sweep_private_roots(private_root_directory()))
+    try:
+        jobs = resolve_jobs(options.jobs)
+        modules = selected_test_modules(root, options.paths)
+    except ValueError as error:
+        parser.error(str(error))
+    private_root = create_private_root(directory=private_root_directory())
     print(f"hey_my_buddy.cli.checks: private test root {private_root}", file=sys.stderr)
     failure: str | None = None
     evidence: dict | None = None
     try:
-        if jobs > 1:
-            failure = run_suites_parallel(root, private_root, jobs)
-        else:
-            failure = run_suites_serially(root, private_root)
+        failure = run_suites_parallel(root, private_root, jobs, modules)
     finally:
         # The residue assertion runs after a failing suite too; a failure here is
         # reported alongside the suite result instead of replacing it.
         evidence = _safe_teardown(private_root)
-    if failure or evidence is not None:
-        details = [failure] if failure else []
-        if evidence is not None:
-            details.append("private-root teardown incomplete; evidence preserved (see stderr)")
-        raise SystemExit("hey_my_buddy.cli.checks failed: " + "; ".join(details))
+    cleanup = f"teardown incomplete; preserved {private_root}" if evidence is not None else "private root removed"
+    if failure:
+        print(f"hey_my_buddy.cli.checks: tests failed: {failure}; {cleanup}; exit 1")
+        raise SystemExit(1)
+    if evidence is not None:
+        print(f"hey_my_buddy.cli.checks: tests passed; {cleanup}; exit 3")
+        raise SystemExit(3)
+    print("hey_my_buddy.cli.checks: tests passed; private root removed; exit 0")
 
 
 if __name__ == "__main__":
