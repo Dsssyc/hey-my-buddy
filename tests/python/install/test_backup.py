@@ -1,4 +1,5 @@
 """Private backup publication, inventory, and recovery tests."""
+from contextlib import closing
 import hashlib
 import gzip
 import json
@@ -10,7 +11,7 @@ import unittest
 from unittest import mock
 
 from hey_my_buddy.blackboard.store import backup
-from hey_my_buddy.blackboard.store.db import SCHEMA_VERSION
+from hey_my_buddy.blackboard.store.db import UPGRADE_BASE_SCHEMA
 from blackboard.store.upgrade_fixture import load_fixture
 from hey_my_buddy.protocol.contracts import CONTRACT_VERSION
 from hey_my_buddy.errors import BoardError
@@ -40,12 +41,12 @@ class BackupTests(BoardTestCase):
         self.assertIn((current / 'board.sqlite3.gz').stat().st_ino, regular_flushed)
         backup.verify(current)
 
-    def test_fixture_backup_retains_current_schema_and_exact_bytes(self):
+    def test_fixture_backup_retains_base_schema_and_exact_bytes(self):
         fixture = load_fixture(self.directory)
         before = (self.directory / 'board.sqlite3').read_bytes()
         current = Path(backup.create(self.directory, runtime_identity=None, plugin_commit=None, contract_version=CONTRACT_VERSION)['path'])
         self.assertEqual(backup.verify(current)['schema'], fixture['schemaVersion'])
-        self.assertEqual(fixture['schemaVersion'], SCHEMA_VERSION)
+        self.assertEqual(fixture['schemaVersion'], UPGRADE_BASE_SCHEMA)
         self.assertEqual(gzip.decompress((current / 'board.sqlite3.gz').read_bytes()), before)
         self.assertEqual((self.directory / 'board.sqlite3').read_bytes(), before)
 
@@ -130,7 +131,7 @@ class BackupTests(BoardTestCase):
         original_manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
         original_payload = payload_path.read_bytes()
         empty_sqlite = self.directory / 'empty.sqlite3'
-        with sqlite3.connect(empty_sqlite):
+        with closing(sqlite3.connect(empty_sqlite)):
             pass
         cases = ('missing_files', 'missing_hash', 'missing_meta', 'not_sqlite')
         for case in cases:
@@ -159,7 +160,7 @@ class BackupTests(BoardTestCase):
         current = Path(backup.create(board.directory, runtime_identity=None, plugin_commit=None, contract_version=CONTRACT_VERSION)['path'])
         path = current / 'manifest.json'
         manifest = json.loads(path.read_text(encoding="utf-8"))
-        for version in (21, 23, 24, 25, 26, 27, 29):
+        for version in (21, 23, 24, 25, 26, 27, 30):
             with self.subTest(schema=version):
                 manifest['schema'] = version
                 path.write_text(json.dumps(manifest), encoding="utf-8", newline="\n")

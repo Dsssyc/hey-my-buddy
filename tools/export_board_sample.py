@@ -25,9 +25,8 @@ import tempfile
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from hey_my_buddy import private_dirs
-from hey_my_buddy.blackboard.store.db import DB_FILE, SCHEMA_VERSION, SECRET_KEY, utc_now
+from hey_my_buddy.blackboard.store.db import DB_FILE, SCHEMA_VERSION, UPGRADE_BASE_SCHEMA, SECRET_KEY, initialize_defaults
 from hey_my_buddy.blackboard.tasks.macro_tasks import MEMBERS_SQL, RUN_GROUPS_SQL
-from hey_my_buddy.blackboard.routing.router import initialize_configuration
 from hey_my_buddy.state_root import get_state_dir
 
 MAX_TASKS = 100
@@ -102,8 +101,8 @@ def _select(connection) -> tuple[dict[str, list[dict]], list[tuple[str, str, str
 
 def _source_schema(connection) -> tuple[str, list[tuple[str, str]]]:
     version = connection.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone()
-    if version is None or version[0] != str(SCHEMA_VERSION):
-        raise ValueError(f"Source must use schema {SCHEMA_VERSION}")
+    if version is None or version[0] not in (str(UPGRADE_BASE_SCHEMA), str(SCHEMA_VERSION)):
+        raise ValueError(f"Source must use schema {UPGRADE_BASE_SCHEMA} or {SCHEMA_VERSION}")
     definitions = [(row['type'], row['sql']) for row in connection.execute(
         "SELECT type,sql FROM sqlite_master WHERE type IN ('table','index') "
         "AND sql IS NOT NULL AND name NOT LIKE 'sqlite_%' "
@@ -116,10 +115,7 @@ def _create_schema(connection, version: str, definitions: list[tuple[str, str]])
         connection.execute(ddl)
     connection.execute("INSERT INTO meta(key,value) VALUES('schema_version',?)", (version,))
     connection.execute("INSERT INTO meta(key,value) VALUES(?,?)", (SECRET_KEY, secrets.token_hex(32)))
-    initialize_configuration(connection)
-    connection.execute(
-        'INSERT INTO reminder_settings(id,silence_seconds,updated_at,revision) VALUES(1,900,?,1)',
-        (utc_now(),))
+    initialize_defaults(connection)
 
 
 _PRIVATE_ID = re.compile(r'[A-Za-z0-9][A-Za-z0-9._-]{0,127}\Z')
