@@ -871,7 +871,7 @@ class BuddyTests(unittest.TestCase):
         self.assertEqual(len(result["providers"]), 2)
         provider = result["providers"][0]
         self.assertEqual(provider["harness"], "zcode")
-        self.assertEqual(provider["packageVersion"], "native-test-version")
+        self.assertEqual(result["harnessVersion"], "native-test-version")
         models = {entry["id"]: entry for entry in provider["models"]}
         self.assertEqual(set(models), {"vision", "fast"})
         self.assertEqual(models["vision"]["efforts"], ["high", "max"])

@@ -27,7 +27,6 @@ class ClaudeWorkerTests(MicroTaskWorkerTestCase):
         super().setUp()
         self.catalog_fixture({"source": "file:claude-worker-fixture", "providers": [{
             "harness": "claude", "provider": "anthropic", "displayName": "Anthropic",
-            "packageName": "claude-code", "packageVersion": "fixture",
             "models": [{"id": BUDDY["model"], "name": "Opus fixture",
                         "efforts": ["high"], "inputModalities": ["text"]}]}], "warnings": []})
 

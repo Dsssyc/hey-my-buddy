@@ -146,7 +146,7 @@ class CrossHarnessProviderRejectionRecoveryTests(HostQuotaRecoveryTests):
         from support import FIXTURE_CATALOG
         self.catalog_fixture({**FIXTURE_CATALOG, "providers": [*FIXTURE_CATALOG["providers"], {
             "harness": "codex", "provider": "openai", "displayName": "Offline Codex",
-            "packageName": "fixture", "packageVersion": "fixture", "efforts": ["low", "high"],
+            "efforts": ["low", "high"],
             "models": [{"id": "fixture-model", "name": "Offline model", "inputModalities": ["text"]}],
         }]})
         (self.directory / "codex-home").mkdir()
@@ -225,7 +225,7 @@ class NativeContextFailureTests(MicroTaskWorkerTestCase):
 
         self.catalog_fixture({**FIXTURE_CATALOG, "providers": [*FIXTURE_CATALOG["providers"], {
             "harness": "codex", "provider": "openai", "displayName": "Offline Codex",
-            "packageName": "fixture", "packageVersion": "fixture", "efforts": ["low"],
+            "efforts": ["low"],
             "models": [{"id": "fixture-model", "name": "Offline model", "inputModalities": ["text"]}],
         }]})
         store = BoardStore(self.directory)

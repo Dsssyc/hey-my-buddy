@@ -48,7 +48,7 @@ def current(db):
     if not results:
         return None
     return CatalogView({'source': 'current-native-observations', 'harnessVersion': None,
-                        'providerVersion': None, 'discoveredAt': None,
+                        'discoveredAt': None,
                         'providers': providers, 'discoveries': results, 'warnings': []})
 
 

@@ -232,7 +232,7 @@ def catalog(snapshot: dict, access: dict, version: str) -> dict:
             missing_effort = True
             continue
         entry = providers.setdefault(provider, {"provider": provider, "displayName": model.get("providerLabel") or provider,
-                                                 "harness": "zcode", "packageVersion": version, "accessType": access.get(provider, "unknown"), "models": []})
+                                                 "harness": "zcode", "accessType": access.get(provider, "unknown"), "models": []})
         properties = model.get("properties")
         formats = properties.get("inputFormat") if isinstance(properties, dict) else None
         formats = formats if isinstance(formats, dict) else {}

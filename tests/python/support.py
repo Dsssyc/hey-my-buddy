@@ -43,7 +43,6 @@ from hey_my_buddy.blackboard.store.store import BoardStore  # noqa: E402
 FIXTURE_CATALOG = {
     "source": "file:test-fixture",
     "harnessVersion": "test-harness-1",
-    "providerVersion": "@deepseek-ai/dsh-llm-deepseek@test",
     "discoveredAt": "2026-01-01T00:00:00.000Z",
     "providers": [
         {

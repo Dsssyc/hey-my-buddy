@@ -211,7 +211,6 @@ class InstalledZcodeTests(ZcodeFixtureCase):
         self.assertIn("text", model["inputModalities"])
         self.assertTrue(model["available"])
         self.assertEqual(provider["harness"], "zcode")
-        self.assertEqual(provider["packageVersion"], discovered["harnessVersion"])
         self.assertEqual(self.requests, [])
 
     def test_native_all_provider_disabled_catalog_is_a_complete_empty_observation(self):

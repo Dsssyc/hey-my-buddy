@@ -1,8 +1,10 @@
-"""Schema 31 → 32: remove derived task and execution facts.
+"""Schema 31 → 32: remove derived task/execution facts and unused catalog metadata.
 
 No sealed content or spec is rewritten. Rebuild in SQLite's documented order;
 the caller holds the transaction with foreign keys disabled until its check.
 """
+
+import json
 
 TASKS_DDL = """
 CREATE TABLE tasks_next (
@@ -92,4 +94,13 @@ def upgrade(connection):
                        "'$.usage.bytesRead','$.budget.bytesRead')"
                        " WHERE json_type(output_json,'$.usage.bytesRead') IS NOT NULL"
                        " OR json_type(output_json,'$.budget.bytesRead') IS NOT NULL")
+    for observation_id, raw in connection.execute(
+            "SELECT observation_id,response_json FROM catalog_observations WHERE response_json IS NOT NULL").fetchall():
+        response = json.loads(raw)
+        catalog = response['catalog']
+        del catalog['providerVersion']
+        for provider in catalog['providers']:
+            del provider['packageName'], provider['packageVersion']
+        connection.execute("UPDATE catalog_observations SET response_json=? WHERE observation_id=?",
+                           (json.dumps(response, ensure_ascii=False, sort_keys=True, separators=(',', ':')), observation_id))
     connection.execute("UPDATE meta SET value='32' WHERE key='schema_version'")

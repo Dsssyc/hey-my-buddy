@@ -482,7 +482,7 @@ class ZcodeAdapterTests(ZcodeFixtureCase):
             result = self.description.discover_models(state_dir=Path(os.environ["HMB_STATE_DIR"]))
         self.assertEqual(result["providers"][0]["models"][0]["efforts"], ["low", "high"])
         self.assertEqual(result["providers"][0]["harness"], "zcode")
-        self.assertEqual(result["providers"][0]["packageVersion"], "fixture-0.16.9")
+        self.assertEqual(result["harnessVersion"], "fixture-0.16.9")
         self.assertEqual(result["providers"][0]["models"][0]["contextWindow"], 200000)
         self.assertEqual(result["providers"][0]["models"][0]["inputModalities"], ["text"])
         self.assertTrue(result["providers"][0]["models"][0]["available"])

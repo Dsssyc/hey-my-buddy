@@ -372,8 +372,6 @@ def canonical_payload(value: dict) -> dict:
         providers.append({
             "harness": harness, "provider": provider,
             "displayName": _text(entry.get("displayName"), 200) or provider,
-            "packageName": _text(entry.get("packageName"), 200),
-            "packageVersion": _text(entry.get("packageVersion"), 64),
             **({"accessType": entry["accessType"]} if harness == "zcode" and
                entry.get("accessType") in ("api-key", "zhipu-coding-plan-api-key") else {}),
             "efforts": list(dict.fromkeys(effort for model in models for effort in model["efforts"])),
@@ -406,7 +404,6 @@ def canonical_payload(value: dict) -> dict:
     return {
         "source": source,
         "harnessVersion": _text(value.get("harnessVersion"), 256) or None,
-        "providerVersion": _text(value.get("providerVersion"), 512) or None,
         "discoveredAt": _text(value.get("discoveredAt"), 64) or None,
         "providers": providers,
         "discoveries": discoveries,

@@ -257,6 +257,18 @@ class UpgradeFixtureTests(unittest.TestCase):
             elif name == 'attempt_process_identities':
                 keep = [i for i, column in enumerate(identity_columns) if column != 'process_group_id']
                 self.assertEqual(actual, [tuple(row[i] for i in keep) for row in original])
+            elif name == 'catalog_observations':
+                self.assertEqual(len(actual), len(original))
+                for old, new in zip(original, actual):
+                    self.assertEqual(new[:3] + new[4:], old[:3] + old[4:])
+                    if old[3] is None:
+                        self.assertIsNone(new[3])
+                        continue
+                    expected = json.loads(old[3])
+                    del expected['catalog']['providerVersion']
+                    for provider in expected['catalog']['providers']:
+                        del provider['packageName'], provider['packageVersion']
+                    self.assertEqual(json.loads(new[3]), expected)
             elif name == 'router_settings':
                 self.assertEqual([row[:len(original[0])] for row in actual], original)
                 self.assertEqual(actual[0][-2:], (None, 3600))

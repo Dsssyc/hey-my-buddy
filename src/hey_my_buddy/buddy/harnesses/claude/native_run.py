@@ -187,8 +187,7 @@ def _catalog(initialize: dict | None, version: str) -> dict:
     catalog = {"source": "claude-code-initialize", "harness": "claude", "harnessVersion": version,
                "discoveredAt": datetime.now(timezone.utc).isoformat(),
                "providers": [{"harness": "claude", "provider": provider,
-                              "displayName": provider, "packageName": "claude-code",
-                              "packageVersion": version, "models": models}],
+                              "displayName": provider, "models": models}],
                "discoveries": [{"harness": "claude", "status": status,
                                 "accountStatus": account_status}],
                "warnings": list({canonical_json(item): item for item in warnings}.values())}
