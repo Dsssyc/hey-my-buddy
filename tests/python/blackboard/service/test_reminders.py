@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 import os
 import subprocess
+import sys
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
@@ -124,40 +125,50 @@ class ReminderPrivateServiceTests(BoardTestCase):
 
     def test_command_worker_reminder_returns_from_cli_await_without_a_model(self):
         # A command execution is a real process, and this daemon/CLI path has no
-        # native harness or model credentials. The duration is short enough to
-        # prove await wakes before the command's own completion.
+        # native harness or model credentials. The release gate proves await
+        # wakes while the command is still running, even under heavy test load.
         self.private_silence_threshold(1)
+        started = self.directory / "reminder-command.started"
+        release = self.directory / "reminder-command.release"
+        script = ("import pathlib,time\n"
+                  f"pathlib.Path({str(started)!r}).touch()\n"
+                  f"release=pathlib.Path({str(release)!r})\n"
+                  "while not release.exists(): time.sleep(.05)\n")
         with self.daemon(env={"HMB_MAX_CONCURRENT": "1"}):
             code, submitted = self.cli("execution-submit", json.dumps({
-                "requestId": "private-reminder-command", "task": "Sleep in a private execution",
-                "cwd": str(self.workdir()), "adapter": "command", "argv": ["/bin/sleep", "12"],
+                "requestId": "private-reminder-command", "task": "Wait in a private execution",
+                "cwd": str(self.workdir()), "adapter": "command", "argv": [sys.executable, "-c", script],
                 "expectedSeconds": 1,
             }))
             self.assertEqual(code, 0, submitted)
             run_id = submitted["runId"]
-            code, first = self.cli("await", json.dumps({"runId": run_id, "waitSeconds": 6}), timeout=20)
-            self.assertEqual(code, 0, first)
-            self.assertEqual(first["outcome"], "expected-duration")
-            self.assertEqual(first["reminder"]["expectedMultiple"], 1)
-            self.assertFalse(first["ok"])
-            self.assertFalse(first["shutdownConfirmed"])
-            code, second = self.cli("await", json.dumps({"runId": run_id, "waitSeconds": 6}), timeout=20)
-            self.assertEqual(code, 0, second)
-            self.assertEqual(second["outcome"], "expected-duration")
-            self.assertEqual(second["reminder"]["expectedMultiple"], 2)
-            self.assertNotEqual(first["reminder"]["reminderId"], second["reminder"]["reminderId"])
-            code, status = self.cli("status", json.dumps({"runId": run_id}))
-            self.assertEqual(code, 0, status)
-            self.assertEqual(status["status"], "running")
-            attempt = BoardClient(self.directory).get(runId=run_id)["selectedAttempt"]
-            self.assertFalse(attempt["reminders"]["possiblyStuck"])
-            store = BoardStore(self.directory)
-            with store.db.read() as connection:
-                kinds = [row[0] for row in connection.execute(
-                    "SELECT kind FROM attempt_reminders WHERE attempt_id=?", (attempt["attemptId"],))]
-            store.db.close()
-            self.assertGreaterEqual(len(kinds), 2)
-            self.assertEqual(set(kinds), {"expected-duration"})
+            try:
+                self.assertTrue(wait_for(started.exists, timeout=60))
+                code, first = self.cli("await", json.dumps({"runId": run_id, "waitSeconds": 30}), timeout=60)
+                self.assertEqual(code, 0, first)
+                self.assertEqual(first["outcome"], "expected-duration")
+                self.assertEqual(first["reminder"]["expectedMultiple"], 1)
+                self.assertFalse(first["ok"])
+                self.assertFalse(first["shutdownConfirmed"])
+                code, second = self.cli("await", json.dumps({"runId": run_id, "waitSeconds": 30}), timeout=60)
+                self.assertEqual(code, 0, second)
+                self.assertEqual(second["outcome"], "expected-duration")
+                self.assertEqual(second["reminder"]["expectedMultiple"], 2)
+                self.assertNotEqual(first["reminder"]["reminderId"], second["reminder"]["reminderId"])
+                code, status = self.cli("status", json.dumps({"runId": run_id}))
+                self.assertEqual(code, 0, status)
+                self.assertEqual(status["status"], "running")
+                attempt = BoardClient(self.directory).get(runId=run_id)["selectedAttempt"]
+                self.assertFalse(attempt["reminders"]["possiblyStuck"])
+                store = BoardStore(self.directory)
+                with store.db.read() as connection:
+                    kinds = [row[0] for row in connection.execute(
+                        "SELECT kind FROM attempt_reminders WHERE attempt_id=?", (attempt["attemptId"],))]
+                store.db.close()
+                self.assertGreaterEqual(len(kinds), 2)
+                self.assertEqual(set(kinds), {"expected-duration"})
+            finally:
+                release.touch()
 
     def test_native_tool_silence_reaches_private_await(self):
         self.catalog_fixture()
@@ -171,8 +182,9 @@ class ReminderPrivateServiceTests(BoardTestCase):
         subprocess.run(["git", "add", "."], cwd=repo, check=True)
         subprocess.run(["git", "commit", "-q", "-m", "base"], cwd=repo, check=True)
         wrapper = self.directory / "native-reminder-agent.py"
+        release = self.directory / "native-reminder.release"
         wrapper.write_text(
-            "import importlib.util, sys, time\n"
+            "import importlib.util, pathlib, sys, time\n"
             f"spec = importlib.util.spec_from_file_location('fixture', {str(DSH_FIXTURE)!r})\n"
             "module = importlib.util.module_from_spec(spec)\n"
             "spec.loader.exec_module(module)\n"
@@ -183,7 +195,8 @@ class ReminderPrivateServiceTests(BoardTestCase):
             "    self.notify_client('session/update', {'sessionId': frame_id, 'update': "
             "{'sessionUpdate': 'tool_call', 'toolCallId': 'reminder-tool', "
             "'kind': 'other', 'title': 'run-command', 'status': 'in_progress'}})\n"
-            "    time.sleep(6)\n"
+            f"    release = pathlib.Path({str(release)!r})\n"
+            "    while not release.exists(): time.sleep(.05)\n"
             "    return original(self, message)\n"
             "module.WorkflowAgent.run_micro_task_prompt = delayed\n"
             "raise SystemExit(module.main())\n")
@@ -198,12 +211,15 @@ class ReminderPrivateServiceTests(BoardTestCase):
             }), env=env)
             self.assertEqual(code, 0, submitted)
             run_id = submitted["runId"]
-            self.assertTrue(wait_for(lambda: (BoardClient(self.directory).get(runId=run_id).get("activity") or {}).get(
-                "phase") == "tool-running", timeout=35))
-            code, result = self.cli("await", json.dumps({"runId": run_id, "waitSeconds": 12}),
-                                    env=env, timeout=25)
-            self.assertEqual(code, 0, result)
-            self.assertEqual(result["outcome"], "native-silence")
-            self.assertTrue(result["reminder"]["toolInProgress"])
-            self.assertIsNotNone(result["reminder"]["lastNativeEventAt"])
+            try:
+                self.assertTrue(wait_for(lambda: (BoardClient(self.directory).get(runId=run_id).get("activity") or {}).get(
+                    "phase") == "tool-running", timeout=60))
+                code, result = self.cli("await", json.dumps({"runId": run_id, "waitSeconds": 30}),
+                                        env=env, timeout=60)
+                self.assertEqual(code, 0, result)
+                self.assertEqual(result["outcome"], "native-silence")
+                self.assertTrue(result["reminder"]["toolInProgress"])
+                self.assertIsNotNone(result["reminder"]["lastNativeEventAt"])
+            finally:
+                release.touch()
 

@@ -184,6 +184,29 @@ def remove_legacy_worker_state(state: Path) -> None:
     backup.sync_dir(state)
 
 
+def retry_legacy_worker_cleanup(state: Path) -> str | None:
+    """Retry post-verification cleanup without keeping the upgrade entry fence."""
+    record = state / 'upgrade-last.json'
+    try:
+        if not record.exists():
+            return None
+        with file_lock(state / 'legacy-worker-cleanup.lock'):
+            journal = schemas.decode_request(record.read_text(), 'verified upgrade record')
+            if journal.get('phase') != 'verified' or journal.get('legacyWorkerCleanup') is not True:
+                return None
+            verification = journal.get('verification')
+            if not isinstance(verification, dict) or verification.get('schemaVersion') != SCHEMA_VERSION:
+                return None
+            remove_legacy_worker_state(state)
+            journal['legacyWorkerCleanup'] = False
+            write_journal(record, journal)
+    except (BoardError, OSError, ValueError) as error:
+        return (f'Retired Worker state cleanup failed: {error}. '
+                'Fix access to workers/ and worker-pool.json in the state directory; '
+                'service startup and installation retry this cleanup.')
+    return None
+
+
 def start(state: Path, target: Path) -> dict:
     from .launcher import entry_modules
     log = os.open(state / 'upgrade-start.log', os.O_CREAT | os.O_APPEND | os.O_WRONLY, 0o600)
@@ -414,6 +437,7 @@ def upgrade(params: dict, *, skill_source: Path | None = None, skill_target: Pat
     if (state / 'upgrade.json').exists():
         with file_lock(state / 'upgrade.lock'), file_lock(state / 'control-start.lock'):
             return recover(state, root)
+    legacy_cleanup_error = retry_legacy_worker_cleanup(state)
     if not (state / 'control.json').exists():
         raise BoardError('UPGRADE_NOT_RUNNING', 'Start the installed service before upgrading')
     endpoint = json.loads((state / 'control.json').read_text())
@@ -436,7 +460,8 @@ def upgrade(params: dict, *, skill_source: Path | None = None, skill_target: Pat
     materialized = runtime.materialize(root=skill_source / 'package') if skill_source is not None else runtime.materialize()
     target = Path(materialized['runtimeDir'])
     if previous == target and skill_source is None:
-        return {'upgraded': False, 'reason': 'already-current', 'runtimeContentId': target.name}
+        return {'upgraded': False, 'reason': 'already-current', 'runtimeContentId': target.name,
+                **({'legacyCleanupError': legacy_cleanup_error} if legacy_cleanup_error is not None else {})}
     marker = state / 'upgrade.json'
     with file_lock(state / 'upgrade.lock'), file_lock(state / 'control-start.lock'):
         if marker.exists():
@@ -517,22 +542,16 @@ def upgrade(params: dict, *, skill_source: Path | None = None, skill_target: Pat
             _publish_skill(journal)
             write_journal(marker, journal)
             write_active_runtime(state, target, preserved)
-            journal.update(phase='verified', verification=evidence)
+            journal.update(phase='verified', verification=evidence, legacyWorkerCleanup=True)
             write_journal(marker, journal)
             write_journal(state / 'upgrade-last.json', journal)
             _finish_skill(journal)
-            legacy_cleanup_error = None
-            try:
-                remove_legacy_worker_state(state)
-            except (BoardError, OSError) as error:
-                # Keep the verified journal so install or startup can retry.
-                legacy_cleanup_error = str(error)
+            legacy_cleanup_error = retry_legacy_worker_cleanup(state)
             journal_error = None
-            if legacy_cleanup_error is None:
-                try:
-                    clear_journal(marker)
-                except OSError as error:
-                    journal_error = str(error)
+            try:
+                clear_journal(marker)
+            except OSError as error:
+                journal_error = str(error)
             try:
                 from ..blackboard.tasks.storage import prune_old_runtimes
                 write_journal(state / 'runtime-retention.json', {'current':target.name, 'previous':previous.name})
@@ -598,19 +617,15 @@ def recover(state: Path, root: Path) -> dict:
         evidence = verify_started(state, target, target_health, journal.get('expected', journal['before']))
         _verify_skill_generation(journal, target, target_health)
         write_active_runtime(state, target, journal.get('environment'))
+        journal.update(verification=evidence, legacyWorkerCleanup=evidence['schemaVersion'] == SCHEMA_VERSION)
         write_journal(state / 'upgrade-last.json', journal)
         _finish_skill(journal)
-        legacy_cleanup_error = None
-        try:
-            remove_legacy_worker_state(state)
-        except (BoardError, OSError) as error:
-            legacy_cleanup_error = str(error)
+        legacy_cleanup_error = retry_legacy_worker_cleanup(state)
         journal_error = None
-        if legacy_cleanup_error is None:
-            try:
-                clear_journal(marker)
-            except OSError as error:
-                journal_error = str(error)
+        try:
+            clear_journal(marker)
+        except OSError as error:
+            journal_error = str(error)
         return {'upgraded':True, 'recoveredJournal':True, 'verification':evidence,
                 **({'journalError':journal_error} if journal_error is not None else {}),
                 **({'legacyCleanupError':legacy_cleanup_error} if legacy_cleanup_error is not None else {})}

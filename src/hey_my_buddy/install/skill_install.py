@@ -177,6 +177,8 @@ def install(params: dict) -> dict:
         if (state / 'upgrade.json').exists():
             from .upgrade import upgrade
             upgrade({})  # Recover the recorded generation before starting another install.
+        from .upgrade import retry_legacy_worker_cleanup
+        legacy_cleanup_error = retry_legacy_worker_cleanup(state)
         if (state / 'board.sqlite3').exists():
             from .upgrade import idle_snapshot, backup_readiness
             idle_snapshot(state)
@@ -203,6 +205,7 @@ def install(params: dict) -> dict:
                 write_runtime_hint(target, active)
                 return {'skill': {'path': str(target), 'version': marker['version'], 'contract': marker['contract'], 'placement': 'already-current'},
                         'claude': claude, 'service': {'action': 'none', 'reason': 'same complete generation'}, 'writePaths': planned_paths,
+                        **({'legacyCleanupError': legacy_cleanup_error} if legacy_cleanup_error is not None else {}),
                         'diagnostics': {'skillInstalled': True, 'claudeLink': claude['status'], 'runtimeMaterialized': True,
                                         'launcher': str(target / 'scripts/hey-my-buddy')}}
         if pointer.exists() and not (state / "control.json").exists():

@@ -105,6 +105,23 @@ class SameSchemaCutoverTests(BoardTestCase):
         self.assert_history_preserved()
         self.assertEqual(self.started_runtimes, [first, second])
 
+    def test_retired_worker_cleanup_failure_keeps_the_verified_runtime_available(self):
+        target = self.runtime_root / ('b' * 32)
+        with mock.patch.object(upgrade, 'remove_legacy_worker_state', side_effect=OSError('denied')):
+            result = self.cutover(self.previous, target)
+        self.assertTrue(result['upgraded'], result)
+        self.assertIsNone(result['rollback'])
+        self.assertIn('denied', result['legacyCleanupError'])
+        self.assertFalse((self.state / 'upgrade.json').exists())
+        record = json.loads((self.state / 'upgrade-last.json').read_text())
+        self.assertEqual(record['phase'], 'verified')
+        self.assertTrue(record['legacyWorkerCleanup'])
+        self.assertEqual(self.started_runtimes, [target])
+        self.assert_history_preserved()
+        self.assertIsNone(upgrade.retry_legacy_worker_cleanup(self.state))
+        self.assertFalse((self.state / 'workers').exists())
+        self.assertFalse((self.state / 'worker-pool.json').exists())
+
     def test_failed_new_runtime_returns_to_previous_runtime_with_history(self):
         target = self.runtime_root / ("b" * 32)
         result = self.cutover(self.previous, target, fail_target=True)

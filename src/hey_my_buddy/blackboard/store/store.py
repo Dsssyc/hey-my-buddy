@@ -2318,6 +2318,18 @@ class BoardStore:
     def record_scheduler_issue(self, stage: str, error) -> None:
         self._record_runtime_issue(stage, error)
 
+    def record_service_issue(self, stage: str, error) -> None:
+        self._record_runtime_issue(stage, error, event_kind="service.issue")
+
+    def clear_service_issue(self, stage: str) -> None:
+        with self.db.write() as connection:
+            removed = connection.execute("DELETE FROM service_issues WHERE stage=?", (stage,)).rowcount
+            if not removed:
+                return
+            self._append_event(connection, "service.issue_resolved", payload={"stage": stage})
+            head = self._head_of(connection)
+        self._notify(head)
+
     def clear_execution_issue(self, attempt_id: str, stage: str) -> None:
         with self.db.write() as connection:
             removed = connection.execute("DELETE FROM execution_issues WHERE attempt_id=? AND stage=?",
@@ -2330,7 +2342,8 @@ class BoardStore:
             head = self._head_of(connection)
         self._notify(head)
 
-    def _record_runtime_issue(self, stage: str, error, *, attempt_id: str | None = None) -> None:
+    def _record_runtime_issue(self, stage: str, error, *, attempt_id: str | None = None,
+                              event_kind: str | None = None) -> None:
         code = error.code if isinstance(error, BoardError) else type(error).__name__
         message = (error.message if isinstance(error, BoardError) else str(error))[:4000]
         table = "execution_issues" if attempt_id is not None else "service_issues"
@@ -2350,7 +2363,7 @@ class BoardStore:
                 connection.execute("INSERT INTO service_issues VALUES(?,?,?,?) ON CONFLICT(stage)"
                     " DO UPDATE SET code=excluded.code,message=excluded.message,observed_at=excluded.observed_at",
                     (stage, code, message, now))
-            self._append_event(connection, "execution.issue" if attempt_id is not None else "service.scheduling_issue",
+            self._append_event(connection, event_kind or ("execution.issue" if attempt_id is not None else "service.scheduling_issue"),
                 task_id=task_id, attempt_id=attempt_id, payload={"stage": stage, "code": code, "message": message})
             head = self._head_of(connection)
         self._notify(head)
