@@ -8,9 +8,7 @@ the caller already supplied (its own packet and workspace intent), duplicates
 ``plan`` and ``cleanup``) and history that is not needed for the next decision.
 Identifiers the next command needs, open boundaries, conflicts, errors,
 unconfirmed shutdown and truncation are always kept, and a value the service did
-not report is never replaced by a default. A ``get`` still keeps the opening of
-the task text: a later read may follow context compaction, so the packet is the
-one supplied field whose head survives.
+not report is never replaced by a default.
 
 RPC clients, the console and ``BoardClient`` receive the complete views. The CLI-local option
 ``"output": "full"`` prints them unmodified. ``includeAudit`` and
@@ -43,9 +41,6 @@ MICRO_TASK_RECEIPTS = frozenset(
 TASK_VIEWS = frozenset({"status", "execution-cancel", "execution-retry", "execution-acknowledge"})
 
 _TITLE_LIMIT = 120
-#: The brief ``get`` view carries the opening of the task text; the service view
-#: holds the whole text and never cuts it.
-_TASK_HEAD_LIMIT = 2000
 
 
 def pop_output_mode(params: dict) -> str:
@@ -85,17 +80,10 @@ def _pick(source: dict, keys: tuple[str, ...]) -> dict:
     return {key: source[key] for key in keys if key in source and _present(source[key])}
 
 
-def _head(value: Any, limit: int) -> Any:
-    if isinstance(value, str) and len(value) > limit:
-        return value[:limit]
-    return value
-
-
-def _title(task_text: Any, summary: Any) -> str | None:
-    for candidate in (summary, task_text):
-        if isinstance(candidate, str) and candidate.strip():
-            line = " ".join(candidate.strip().splitlines()[0].split())
-            return line[:_TITLE_LIMIT]
+def _title(task_text: Any) -> str | None:
+    if isinstance(task_text, str) and task_text.strip():
+        line = " ".join(task_text.strip().splitlines()[0].split())
+        return line[:_TITLE_LIMIT]
     return None
 
 
@@ -127,7 +115,7 @@ _ROUTING_DISPATCH = (
 _ROUTING_BRIEF = ("status", "source", "reason", "selectedBuddy", "decisionId",
                   "routingMode", "requestedRoutingMode", "fallback", "constraints", "requiredCapabilities", "routingBasis",
                   *_ROUTING_DISPATCH)
-_WORKSPACE_BRIEF = ("path", "kind", "access", "inputCommit")
+_WORKSPACE_BRIEF = ("path", "kind", "access", "inputCommit", "manifestFile")
 _OUTPUT_ARTIFACT = (
     "artifactId",
     "kind",
@@ -187,7 +175,7 @@ def _request_brief(request: Any) -> Any:
 
 
 def micro_task_brief(view: dict, *, turn_summary: bool = True) -> dict:
-    """Brief projection of the compact micro-task view."""
+    """Brief micro-task view, omitting the caller's task packet and workspace intent."""
     if view["task"]["lineage"]["kind"] not in ("micro-task", "helper"):
         brief = {"runId": view.get("runId")}
         if view.get("task") is not None:
@@ -246,7 +234,7 @@ def micro_task_brief(view: dict, *, turn_summary: bool = True) -> dict:
     if turn is not None:
         current = _pick(turn, _TURN_BRIEF)
         if turn_summary:
-            current.update(_pick(turn, ("summary", "summaryTruncated", "remaining")))
+            current.update(_pick(turn, ("summary", "remaining")))
         current["tokenUsage"] = turn.get("tokenUsage")
         brief["currentTurn"] = current
     if view.get("activeRequest") is not None:
@@ -293,20 +281,6 @@ def micro_task_brief(view: dict, *, turn_summary: bool = True) -> dict:
     for key in ("audit", "routingHistory"):
         if key in view:
             brief[key] = view[key]
-    return brief
-
-
-def get_brief(view: dict) -> dict:
-    """The brief ``get`` view: the micro-task projection plus the task text's head."""
-    brief = micro_task_brief(view)
-    micro_task = view.get("microTask")
-    if micro_task is not None:
-        task = micro_task["task"]
-        brief["microTask"] = {
-            "task": task[:_TASK_HEAD_LIMIT],
-            "taskTruncated": len(task) > _TASK_HEAD_LIMIT,
-            "taskBytes": micro_task["taskBytes"],
-        }
     return brief
 
 
@@ -471,7 +445,7 @@ def task_brief(view: dict) -> dict:
     inquiries = view.get("inquiries")
     if inquiries:
         brief["inquiries"] = inquiries
-    title = _title(view.get("task") or (view.get("spec") or {}).get("task"), None)
+    title = _title(view.get("task") or (view.get("spec") or {}).get("task"))
     if title:
         brief["title"] = title
     brief["view"] = OUTPUT_BRIEF
@@ -491,7 +465,7 @@ def list_brief(response: dict) -> dict:
                 entry["model"] = buddy["model"]
             entry.update(_pick(lineage, ("kind", "parentRunId", "currentHostId", "leadOwnership")))
         workflow = row.get("workflow") or {}
-        title = _title(row.get("task") or (row.get("spec") or {}).get("task"), workflow.get("resultSummary"))
+        title = _title(row.get("task") or (row.get("spec") or {}).get("task"))
         explicit = workflow.get("title")
         if explicit is not None and explicit.strip():
             title = explicit.strip()[:_TITLE_LIMIT]
@@ -542,11 +516,6 @@ def _await_result(result: Any) -> Any:
     turn = brief.get("turn")
     if turn is not None:
         brief["turn"] = {key: value for key, value in turn.items() if value is not None and value != []}
-        if turn.get("summary"):
-            # The structured turn summary is the execution's report; the runner's stdout
-            # head repeats it and stays readable through the result command.
-            brief.pop("finalText", None)
-            brief.pop("finalTextTruncated", None)
     if brief.get("finalTextTruncated") is False:
         brief.pop("finalTextTruncated")
     if brief.get("artifacts") == []:
@@ -591,7 +560,7 @@ def _task_response(response: dict) -> dict:
 
 
 _PROJECTORS: dict[str, Callable[[dict], Any]] = {
-    "get": get_brief,
+    "get": micro_task_brief,
     "submit": submit_receipt,
     **{method: micro_task_receipt for method in MICRO_TASK_RECEIPTS},
     **{method: _task_response for method in TASK_VIEWS},

@@ -671,7 +671,7 @@ class MacroTaskDeletionTests(WorkflowTestCase):
         board = self.board()
         first = self.closed(board, "large-set-0", macro_task="Large settled set")
         members = [first]
-        count = max(macro_tasks.LIST_MAX_LIMIT,macro_tasks.TIMELINE_MAX_LIMIT,macro_tasks.SUMMARY_LIMIT) + 1
+        count = max(macro_tasks.LIST_MAX_LIMIT, macro_tasks.TIMELINE_MAX_LIMIT) + 1
         for index in range(1, count):
             members.append(self.closed(board, f"large-set-{index}", macro_task_id=first["macroTaskId"]))
         other = self.closed(board, "large-set-other", macro_task="Retained large-set neighbor",

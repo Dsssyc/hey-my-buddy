@@ -22,8 +22,8 @@ from functools import partial
 from pathlib import Path
 from unittest import mock
 
-from support import BoardTestCase
-from blackboard.tasks.test_workflow import WorkflowTestCase
+from support import BoardTestCase, enable_fixture_buddy
+from blackboard.tasks.test_workflow import BUDDY, WorkflowTestCase
 
 import hey_my_buddy.cli.main as cli
 import hey_my_buddy.cli.cli_help as cli_help
@@ -72,6 +72,7 @@ class PrivateCliTestCase(BoardTestCase):
 
     def use_board_transport(self, board, capture: list | None = None) -> None:
         """Substitute only the C-Two socket; the whole service path stays real."""
+        enable_fixture_buddy(board.store, BUDDY)
         self.bind_cli_state()
         endpoint = {"address": "ipc://in-process-test", "token": "test-token"}
         def ensure_service(state_dir, resource="control"):

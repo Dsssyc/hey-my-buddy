@@ -11,7 +11,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from fake_executable import make_fake_executable
-from support import BoardTestCase, FakeClock, wait_for
+from support import BoardTestCase, FakeClock, wait_for, enable_fixture_buddy
 from hey_my_buddy.blackboard.tasks import reminders
 from hey_my_buddy.blackboard.store.store import BoardStore
 from hey_my_buddy.protocol.client import BoardClient
@@ -42,6 +42,7 @@ class ReminderBoardTests(BoardTestCase):
 
     def claim_native(self, *, expected_seconds=100):
         self.catalog_fixture()
+        enable_fixture_buddy(self.board_instance.store, DSH_BUDDY)
         with patch.object(workflow, "_workspace_module", MockWorkspace(self.directory)):
             submitted = self.client.workflow_submit(
                 requestId="reminder-native", hostId="reminder-host", task="Observe native activity",
@@ -178,6 +179,11 @@ class ReminderPrivateServiceTests(BoardTestCase):
     def test_native_tool_silence_reaches_private_await(self):
         self.catalog_fixture()
         self.private_silence_threshold(1)
+        store = BoardStore(self.directory)
+        try:
+            enable_fixture_buddy(store, DSH_BUDDY)
+        finally:
+            store.db.close()
         repo = self.directory / "native-repo"
         repo.mkdir()
         subprocess.run(["git", "init", "-q", "-b", "main"], cwd=repo, check=True)

@@ -494,6 +494,24 @@ class MacroTaskReadTests(WorkflowTestCase):
         self.assertEqual(timeline['rows'][0]['title'], group['title'])
         self.assertEqual(timeline['rows'][0]['summary'], group['summary'])
 
+    def test_worker_summary_and_request_are_whole_in_macro_views(self):
+        board = self.board()
+        submitted = self.submit(board, kind="worktree")
+        claimed = self.claim(board, run_id=submitted["runId"])
+        summary = "  " + "报告" * 1500 + "\n最后一段  "
+        request_summary = "请求" * 400 + "\n最后的条件"
+        outcome = self.turn_record(claimed, disposition="assistance")["outcome"]
+        outcome.update(summary=summary)
+        outcome["request"]["summary"] = request_summary
+        self.finish_turn(board, claimed, outcome=outcome)
+        group = macro_summaries(self.list_(board))[0]
+        self.assertEqual(group["summary"], summary)
+        timeline = board.call("macro_task_timeline", {"macroTaskId": group["macroTaskId"]})
+        self.assertEqual(timeline["macroTask"]["summary"], summary)
+        self.assertEqual(timeline["rows"][0]["summary"], summary)
+        host_span = next(span for span in timeline["spans"] if span["kind"] == "host")
+        self.assertEqual(host_span["summary"], request_summary)
+
     def test_execution_spans_use_their_own_receipt_status_not_turn_disposition(self):
         board = self.board()
         self.register(board)

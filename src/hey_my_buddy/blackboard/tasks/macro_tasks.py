@@ -34,7 +34,7 @@ TIMELINE_DEFAULT_LIMIT = 100
 TIMELINE_MAX_LIMIT = 200
 MAX_SPANS = 800
 MAX_MARKERS = 800
-SUMMARY_LIMIT = 300
+ERROR_LIMIT = 300
 TITLE_LIMIT = 200
 CURSOR_VERSION = 3
 LIST_SORTS = frozenset({"activity-desc", "activity-asc", "created-desc", "created-asc"})
@@ -319,7 +319,7 @@ def _run_presentation(connection, run_id: str) -> tuple[str | None, str, str | N
     ).fetchone()
     if row is None:
         return None, "none", None
-    summary = _first_line(row["summary"])
+    summary = row["summary"]
     if isinstance(row["title"], str) and row["title"].strip():
         return row["title"].strip()[:TITLE_LIMIT], "title", summary
     task = _first_line(row["task"])
@@ -891,7 +891,7 @@ def _run_spans(store, connection, row) -> list[dict]:
             generation=attempt["generation"], disposition=attempt["disposition"],
             resultStatus=attempt["result_status"],
             tokenUsage=(receipt.get("result") or {}).get("tokenUsage"),
-            error=(str(error)[:SUMMARY_LIMIT] if error else None),
+            error=(str(error)[:ERROR_LIMIT] if error else None),
         ))
         queued_from = attempt["finished_at"] or attempt["created_at"]
     if row["state"] == "queued" and row["run_state"] != "awaiting-host":
@@ -925,7 +925,7 @@ def _run_spans(store, connection, row) -> list[dict]:
             "host", f"host:{request['request_id']}", run_id, request["created_at"],
             None if open_request else (closed_at or None), request["state"],
             request_id=request["request_id"], requestKind=request["kind"], decisionId=request["decision_id"],
-            summary=(request["summary"][:SUMMARY_LIMIT] if request["summary"] is not None else None),
+            summary=request["summary"],
             reason=request_reason(connection, request),
         ))
     return spans
@@ -984,7 +984,7 @@ def _routing_spans(connection, decision_task_id: str, owner_run_id: str) -> list
             disposition=("abstention" if abstention and attempt["result_status"] != "cancelled"
                          else "routing-failed" if record and record["status"] in ("failed", "needs-host") and output.get("code")
                          else None),
-            error=(str(error)[:SUMMARY_LIMIT] if error else None),
+            error=(str(error)[:ERROR_LIMIT] if error else None),
         ))
         spans[-1]["decisionId"] = record["decision_id"] if record else None
     return spans

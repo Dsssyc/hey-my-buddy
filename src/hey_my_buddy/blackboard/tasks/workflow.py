@@ -50,6 +50,7 @@ from ...errors import BoardError
 from ... import private_dirs
 
 from . import workspace as _workspace_module
+from .workspace import manifest_file_reference
 
 # Errors from _requeue and its automatic-path callees: lineage, admission and
 # task/run transitions. Manual workspace reclamation is not on either path.
@@ -113,9 +114,6 @@ MAX_ACTIVE_TURNS_VIEW = 10
 MAX_CHILD_VIEW = 32
 MAX_ARTIFACT_VIEW = 32
 MAX_REQUEST_VIEW = 5
-#: The micro-task task-title fallback is bounded like the turn-view summary it
-#: projects; the stored outcome itself may be longer and stays intact in audit.
-MAX_RESULT_SUMMARY = 2000
 WRAP_UP_SECONDS = 300
 
 #: Bounded views of the lifecycle records added by the workspace-lifecycle slice.
@@ -399,9 +397,7 @@ class WorkflowCoordinator:
             return view
         if outcome is not None:
             summary = outcome.get("summary") or ""
-            view["summary"] = summary if include_audit else summary[:MAX_RESULT_SUMMARY]
-            if not include_audit:
-                view["summaryTruncated"] = len(summary) > MAX_RESULT_SUMMARY
+            view["summary"] = summary
             view["remaining"] = outcome.get("remaining", [])
             if include_audit:
                 view["request"] = outcome.get("request")
@@ -588,6 +584,7 @@ class WorkflowCoordinator:
             "baseCommit": manifest.get("baseCommit"),
             "inputCommit": manifest.get("inputCommit"),
             "manifestSha256": manifest.get("manifestSha256"),
+            "manifestFile": manifest_file_reference(self.board.directory, manifest),
         }
         return view
 
@@ -882,10 +879,6 @@ class WorkflowCoordinator:
         task = micro_task.get("task") if isinstance(micro_task.get("task"), str) else ""
         return {
             "task": task,
-            # The service view never cuts the task text; only the CLI's brief
-            # projection does, and it reports that cut itself.
-            "taskTruncated": False,
-            "taskBytes": len(task.encode("utf-8")),
             "harness": micro_task.get("harness"),
             "cwd": micro_task.get("cwd"),
             "fingerprint": fingerprint,
@@ -1321,7 +1314,10 @@ class WorkflowCoordinator:
             return None
         from ..catalog.catalog import validate_buddy
 
-        return validate_buddy(schemas.normalize_buddy(constraints), directory=self.board.directory)
+        buddy = validate_buddy(schemas.normalize_buddy(constraints), directory=self.board.directory)
+        with self.db.read() as connection:
+            self._require_enabled_buddy(connection, buddy)
+        return buddy
 
     @staticmethod
     def _require_permission(buddy: dict | None, access: str) -> None:
@@ -1589,8 +1585,6 @@ class WorkflowCoordinator:
         access = "read" if executionWorkspace["access"] == "read" else "write"
         from .macro_tasks import attach_macro_task
         presentation = presentation or {}
-        if delegationAuthority:
-            self._require_enabled_buddy(connection, buddy)
         if lead is not None:
             self._active_credential(connection, lead)
         fixed_run = self._run_row(connection, fixes) if fixes is not None else None
@@ -2423,12 +2417,14 @@ class WorkflowCoordinator:
 
     @contextmanager
     def _helper_preparations(self, helpers, *, transfer_from=None):
+        validated = []
+        for helper in helpers:
+            self._require_permission(schemas.buddy_constraints(helper["spec"]) or None, helper["executionWorkspace"]["access"])
+            validated.append((helper, self._validated_buddy(helper["spec"])))
         prepared = []
         with ExitStack() as locks, ExitStack() as preparations:
             shared_locks = (locks, set())
-            for helper in helpers:
-                self._require_permission(schemas.buddy_constraints(helper["spec"]) or None, helper["executionWorkspace"]["access"])
-                buddy = self._validated_buddy(helper["spec"])
+            for helper, buddy in validated:
                 if helper["executionWorkspace"]["kind"] == "worktree":
                     self._cleanup_fence(helper["executionWorkspace"].get("cwd") or helper["spec"].get("cwd"))
                 allocation = preparations.enter_context(self._submission_preparation(
@@ -2843,29 +2839,16 @@ class WorkflowCoordinator:
 
     @staticmethod
     def _require_enabled_buddy(connection, buddy):
-        """Recheck current availability and the user's independent enabled gate.
-
-        ADR-027: catalog facts — including the one bounded re-read — were already
-        applied by ``_validated_buddy`` outside the write transaction.
-        A concurrent confirmed absence must still fence the write, without any
-        native call here. Neither a refresh nor the override flips enablement.
-        """
-        if buddy is None:
-            return
+        """Require the user's enabled choice after the catalog admits the tuple."""
         row = connection.execute(
-            "SELECT enabled,available FROM buddies WHERE harness=? AND provider=? AND model=? AND effort=?",
+            "SELECT enabled FROM buddies WHERE harness=? AND provider=? AND model=? AND effort=?",
             tuple(buddy[key] for key in schemas.BUDDY_FIELDS),
         ).fetchone()
         from ..catalog.catalog import catalog_read_at
 
-        read_at = catalog_read_at(connection, buddy["harness"])
-        if row is not None and not row["available"]:
-            details = {"buddy": buddy, "reason": make_reason("catalog-unavailable")}
-            if read_at:
-                details["catalogReadAt"] = read_at
-            raise BoardError("BUDDY_UNAVAILABLE", "The requested native model route is no longer available", **details)
         if row is not None and row["enabled"]:
             return
+        read_at = catalog_read_at(connection, buddy["harness"])
         details = {
             "buddy": buddy,
             "enabled": False,
@@ -2955,8 +2938,7 @@ class WorkflowCoordinator:
                              and project_id(item) == project_id(original_manifest)), original_manifest)
         # ADR-027 rule 3: an explicit override meets the same catalog facts as a
         # submission — one bounded re-read of its harness before any catalog
-        # rejection — and only afterwards the user's independent enabled gate,
-        # which is re-checked inside the write transaction below.
+        # rejection — and only afterwards the user's independent enabled gate.
         buddy = self._validated_buddy(supplied_buddy) if supplied_buddy is not None else None
         request_cwd = schemas.canonical_cwd(params["cwd"]) if "cwd" in params else None
         with self._cleanup_allocation_lock(self.board.directory, physical if physical["kind"] == "worktree" else None):
@@ -2981,7 +2963,6 @@ class WorkflowCoordinator:
             run_row = self._target_run(connection, owner, target_id)
             self._expect_revision(run_row, target_snapshot["revision"])
             self._buddy_matches_micro_task(connection, run_row, buddy)
-            self._require_enabled_buddy(connection, buddy)
             current_workspace = json.loads(run_row["execution_workspace_json"])
             next_access, next_note = access_selection or (current_workspace["access"], current_workspace.get("accessNote"))
             run_id = run_row["run_id"]
@@ -5733,7 +5714,7 @@ class WorkflowCoordinator:
         if run_row is None:
             return None
         summary = run_row["result_summary"]
-        summary = summary.strip()[:MAX_RESULT_SUMMARY] if isinstance(summary, str) else ""
+        summary = summary if isinstance(summary, str) and summary.strip() else ""
         extension = {
             "state": run_row["state"],
             "awaitingHost": run_row["state"] == "awaiting-host",

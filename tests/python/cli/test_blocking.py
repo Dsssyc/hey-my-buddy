@@ -568,10 +568,11 @@ class MicroTaskBoundaryTests(unittest.TestCase):
 
 
 class CompactMicroTaskEnvelopeTests(unittest.TestCase):
-    def test_micro_task_final_envelope_is_compact_and_points_at_the_full_result(self):
+    def test_structured_micro_task_report_is_whole_and_omits_native_duplicate(self):
         clock = VirtualClock()
         service = FakeService(clock, complete_after_waits=1)
         huge = "x" * 200_000
+        report = "report " * 500
         service.run = {
             **service.run,
             "state": "queued",
@@ -591,7 +592,7 @@ class CompactMicroTaskEnvelopeTests(unittest.TestCase):
                     "turnId": "turn-1",
                     "resumeMode": "initial",
                     "sessionId": "sess-1",
-                    "outcome": {"disposition": "completed", "summary": "done", "remaining": []},
+                    "outcome": {"disposition": "completed", "summary": report, "remaining": []},
                     "provenance": {"tool": "hey_my_buddy_finish_turn"},
                 },
                 "workspaceSeal": {
@@ -607,11 +608,12 @@ class CompactMicroTaskEnvelopeTests(unittest.TestCase):
         self.assertEqual(envelope["outcome"], "completed")
         self.assertTrue(envelope["ok"])
         self.assertTrue(envelope["resultCompact"])
-        self.assertLess(len(json.dumps(envelope)), 8000, "the micro-task envelope must stay bounded")
         self.assertEqual(envelope["turn"]["turnId"], "turn-1")
         self.assertEqual(envelope["artifacts"][0]["commit"], "c" * 40)
         self.assertIn("hey-my-buddy result", envelope["resultCommand"])
-        self.assertTrue(envelope["result"]["finalTextTruncated"])
+        self.assertEqual(envelope["turn"]["summary"], report)
+        self.assertNotIn("finalText", envelope["result"])
+        self.assertNotIn("finalTextTruncated", envelope["result"])
 
     def test_preparation_failure_with_a_null_runner_result_stays_failed(self):
         from hey_my_buddy.cli import cli_views

@@ -213,10 +213,9 @@ class TitleFallbackTests(WorkflowTestCase):
         long_summary = "长" * 2500 + "tail"
         run_id = self.two_turn_run(board, second_summary=long_summary)
         projected = workflow_summary(micro_task_view(board, run_id))
-        self.assertEqual(len(projected), 2000)
-        self.assertEqual(projected, long_summary[:2000])
+        self.assertEqual(projected, long_summary)
         listed = [row for row in board.call("task_list", {"limit": 10})["runs"] if row["runId"] == run_id][0]
-        self.assertEqual(listed["workflow"]["resultSummary"], long_summary[:2000])
+        self.assertEqual(listed["workflow"]["resultSummary"], long_summary)
 
     def test_projection_reads_are_stable_and_read_only(self):
         board = self.board(max_concurrent=1)

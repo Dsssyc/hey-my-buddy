@@ -20,7 +20,7 @@ class ResultViewTests(BoardTestCase):
                             "changedPaths": ["src/file.py"],
                             "cumulativePatch": {"path": path, "sha256": "digest", "changedPaths": ["src/file.py"]}}
                     payload = {"status": "ok", "result": {key: seal}}
-                    view = _public_result_payload(payload)["result"][key]
+                    view = _public_result_payload(payload, self.directory)["result"][key]
                     self.assertEqual(view["diffPath"], seal["diffPath"])
                     self.assertEqual(view["diffSha256"], seal["diffSha256"])
                     self.assertEqual(view["cumulativePatch"]["path"], path)
@@ -84,7 +84,7 @@ class ResultViewTests(BoardTestCase):
         from hey_my_buddy.blackboard.store.store import _public_result_payload
 
         paths = ["目录/" + "界" * 1500] * 40
-        manifest = {"writeScope": paths, "snapshot": {
+        manifest = {"workspaceId": "ws-fixture", "writeScope": paths, "snapshot": {
             "includeSelectors": paths, "executionSelectors": paths,
             "includedUntracked": paths, "excludedUntracked": paths,
             "excludedEntries": {f"src/{index:04d}-" + "a" * 800: "digest" for index in range(40)},
@@ -93,7 +93,7 @@ class ResultViewTests(BoardTestCase):
             "changedPaths": paths, "snapshot": {"includedUntracked": paths},
             "diffPath": "/private/partial.patch",
         }, "workspaceManifest": manifest}}
-        view = _public_result_payload(envelope)["result"]
+        view = _public_result_payload(envelope, self.directory)["result"]
         self.assertEqual(envelope["result"]["workspaceManifest"], manifest)
         self.assertEqual(view["partialWorkspaceSeal"]["changedPathsCount"], 40)
         self.assertEqual(view["workspaceManifest"]["writeScopeCount"], 40)
@@ -111,7 +111,7 @@ class ResultViewTests(BoardTestCase):
         error = {"code": "WORKSPACE_SCOPE_VIOLATION", "message": "outside scope",
                  "details": {"paths": paths, "changedPaths": paths, "evidence": evidence}}
         payload = {"status": "failed", "result": {"partialSealError": error}}
-        view = _public_result_payload(payload)
+        view = _public_result_payload(payload, self.directory)
         self.assertEqual(payload["result"]["partialSealError"]["details"]["evidence"], evidence)
         details = view["result"]["partialSealError"]["details"]
         self.assertEqual(details["pathsCount"], len(paths))

@@ -15,7 +15,7 @@ import unittest
 from unittest import mock
 
 from mock_workspace import MockWorkspace
-from support import BoardTestCase
+from support import BoardTestCase, enable_fixture_buddy
 
 from hey_my_buddy.blackboard.tasks import workflow as workflow_module
 from hey_my_buddy.errors import BoardError
@@ -48,6 +48,7 @@ class ClaimStashTestCase(BoardTestCase):
         workflow_module._workspace_module = self._previous_workspace
 
     def submit(self, board, *, request_id, cwd, **extra):
+        enable_fixture_buddy(board.store, {**BUDDY, **extra})
         return board.call("workflow_submit", {
             **BUDDY, "requestId": request_id, "hostId": "host-1", "task": "claim stash task",
             "cwd": str(cwd), "submissionToken": "t" * 32,

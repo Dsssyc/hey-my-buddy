@@ -48,15 +48,15 @@ class ReceiptStopTests(WorkflowTestCase):
         self.assertEqual(view["state"], "completed")
         self.assertNotIn("workflow", view)
 
-    def test_current_summary_is_bounded_and_full_audit_preserved(self):
+    def test_current_summary_and_audit_preserve_full_report(self):
         board = self.board()
         self.register(board)
         run = self.submit(board)
         outcome = {"disposition": "completed", "summary": "s" * 6000, "remaining": [], "decisions": [], "artifacts": [], "request": None}
         self.finish_turn(board, self.claim(board), outcome=outcome)
         view = board.call("workflow_get", {"runId": run["runId"], "includeAudit": True})
-        self.assertEqual(len(view["currentTurn"]["summary"]), 2000)
-        self.assertTrue(view["currentTurn"]["summaryTruncated"])
+        self.assertEqual(view["currentTurn"]["summary"], outcome["summary"])
+        self.assertNotIn("summaryTruncated", view["currentTurn"])
         self.assertEqual(view["audit"]["turns"][0]["outcome"]["summary"], "s" * 6000)
 
 

@@ -5,6 +5,7 @@ from unittest.mock import Mock, patch
 from blackboard.tasks.test_workflow import BUDDY, WorkflowTestCase
 from hey_my_buddy.blackboard.service.service import BoardService
 from hey_my_buddy.protocol import schemas
+from support import enable_fixture_buddy
 
 
 class WorkflowValidationTests(WorkflowTestCase):
@@ -65,6 +66,7 @@ class WorkflowValidationTests(WorkflowTestCase):
 
     def test_normalized_submission_is_passed_down_without_revalidation(self):
         board = self.board()
+        enable_fixture_buddy(board.store, BUDDY)
         service = self.service(board)
         params = {**BUDDY, 'requestId': 'normalize-once', 'hostId': 'host-1', 'task': 'fixture',
                   'cwd': str(self.workdir()), 'executionWorkspace': {'kind': 'existing', 'access': 'read'}}

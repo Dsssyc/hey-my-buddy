@@ -481,10 +481,10 @@ class MacroTaskSummaryCacheTests(unittest.TestCase):
                 " ORDER BY turn_index DESC LIMIT 1)",
                 ("  Fictional  corrected summary\nsecond line", root),
             )
-            self.assertEqual(self.rows()[group]["summary"], "Fictional corrected summary")
+            self.assertEqual(self.rows()[group]["summary"], "  Fictional  corrected summary\nsecond line")
             self.assert_recomputed(counter, [group])
             self.sql("INSERT INTO workflow_turns(turn_id,run_id,turn_index,resume_mode,input_json,access,expected_seconds,state,created_at,updated_at) VALUES('fictional-turn-2',?,2,'reconstructed-new-session','{}','write',1800,'prepared','2026-01-01','2026-01-01')", (root,))
-            self.assertEqual(self.rows()[group]["summary"], "Fictional corrected summary")
+            self.assertEqual(self.rows()[group]["summary"], "  Fictional  corrected summary\nsecond line")
             self.assert_recomputed(counter, [group])
             second_attempt = "fictional-attempt-" + root
             with self.store.db.write() as connection:
@@ -733,9 +733,9 @@ class MacroTaskSummaryCacheTests(unittest.TestCase):
             " AND state='returned' ORDER BY turn_index DESC LIMIT 1)",
             (" "*5000+"fictional-visible",root),
         )
-        self.assertEqual(self.rows()["run:"+root]["summary"],"fictional-visible")
+        self.assertEqual(self.rows()["run:"+root]["summary"]," "*5000+"fictional-visible")
         with patch.object(macro_tasks,"_summary",wraps=macro_tasks._summary) as counter:
-            self.assertEqual(self.rows()["run:"+root]["summary"],"fictional-visible")
+            self.assertEqual(self.rows()["run:"+root]["summary"]," "*5000+"fictional-visible")
             self.assert_recomputed(counter,["run:"+root])
 
 

@@ -18,7 +18,7 @@ from unittest import mock
 
 from support import BoardTestCase, InProcessBoard
 from private_acl import assert_private_path
-from blackboard.tasks.test_workflow import WorkflowTestCase
+from blackboard.tasks.test_workflow import BUDDY, WorkflowTestCase
 
 import hey_my_buddy.cli.main as cli
 import hey_my_buddy.cli.cli_help as cli_help
@@ -428,6 +428,12 @@ class ControlFileTests(PrivateStateTestCase):
 
 class MicroTaskCliTests(PrivateStateTestCase, WorkflowTestCase):
     """End-to-end micro-task CLI commands through the real service path."""
+
+    def board(self, **kwargs):
+        from support import enable_fixture_buddy
+        board = super().board(**kwargs)
+        enable_fixture_buddy(board.store, BUDDY)
+        return board
 
     def submit_payload(self, request_id: str = "cli-req-1", **extra) -> str:
         return json.dumps(

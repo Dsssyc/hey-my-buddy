@@ -41,6 +41,14 @@ def _json(value):
     return json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=True).encode()
 
 
+def manifest_file_reference(state_dir, manifest: dict) -> dict:
+    """Locate the complete frozen input and hash the bytes written by its writer."""
+    return {
+        "path": str(Path(state_dir) / "workspaces" / manifest["workspaceId"] / "manifest.json"),
+        "sha256": _sha(_json(manifest)),
+    }
+
+
 def _sha(value):
     return hashlib.sha256(value).hexdigest()
 

@@ -20,7 +20,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from support import BoardTestCase
+from support import BoardTestCase, enable_fixture_buddy
 from private_acl import assert_private_path
 from hey_my_buddy.cli.checks import prepare_test_home
 from protocol.fixtures import native_turn
@@ -74,6 +74,11 @@ class RealWorkspaceTestCase(BoardTestCase):
         (self.repo / "src" / "feature.py").write_text("value = 1\n", encoding="utf-8", newline="\n")
         self.git("add", ".")
         self.git("commit", "-q", "-m", "base")
+
+    def board(self, **kwargs):
+        board = super().board(**kwargs)
+        enable_fixture_buddy(board.store, BUDDY)
+        return board
 
     def git(self, *arguments: str, check: bool = True) -> str:
         completed = subprocess.run(

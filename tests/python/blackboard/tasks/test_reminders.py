@@ -1,7 +1,7 @@
 """Expected-duration facts for every execution and native-silence facts for harnesses."""
 from admission import admit_execution
 from contextlib import contextmanager
-from support import BoardTestCase, FakeClock
+from support import BoardTestCase, FakeClock, enable_fixture_buddy
 import uuid
 from unittest.mock import patch
 from hey_my_buddy.blackboard.tasks import reminders
@@ -27,6 +27,7 @@ class ReminderFacts(BoardTestCase):
         from mock_workspace import MockWorkspace
 
         self.catalog_fixture()
+        enable_fixture_buddy(self.store, {"harness": "dsh", "provider": "deepseek-official", "model": "deepseek-flash", "effort": "off"})
         self.enterContext(patch.object(workflow, '_workspace_module', MockWorkspace(self.directory)))
         submitted = self.client.workflow_submit(
             requestId='reminder', hostId='reminder-host', task='observe', cwd=str(self.workdir()),

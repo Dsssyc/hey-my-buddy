@@ -11,7 +11,8 @@ from buddy.harnesses.fixture_selection import select_fixture
 from hey_my_buddy.buddy.harnesses.claude.native_run import _catalog
 from hey_my_buddy.buddy.harnesses.registry import adapter
 from hey_my_buddy.protocol import schemas
-from support import wait_for
+from support import wait_for, enable_fixture_buddy
+from hey_my_buddy.blackboard.store.store import BoardStore
 from blackboard.tasks.test_workflow_worker import MicroTaskWorkerTestCase
 
 
@@ -29,6 +30,12 @@ class ClaudeWorkerTests(MicroTaskWorkerTestCase):
             "harness": "claude", "provider": "anthropic", "displayName": "Anthropic",
             "models": [{"id": BUDDY["model"], "name": "Opus fixture",
                         "efforts": ["high"], "inputModalities": ["text"]}]}], "warnings": []})
+
+        store = BoardStore(self.directory)
+        try:
+            enable_fixture_buddy(store, BUDDY)
+        finally:
+            store.db.close()
 
     def env(self):
         environment = {"HMB_CLAUDE_FIXTURE_STATE": str(self.directory / "native-fixture.json"),

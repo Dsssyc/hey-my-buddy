@@ -75,7 +75,7 @@ def _overlaps(left: str, right: str) -> bool:
     return left_path.is_relative_to(right_path) or right_path.is_relative_to(left_path)
 
 
-def _public_result_payload(payload: dict) -> dict:
+def _public_result_payload(payload: dict, directory: Path) -> dict:
     """Bound service-owned workspace facts in a reply, leaving the receipt intact."""
     result = payload.get("result")
     if not isinstance(result, dict):
@@ -128,7 +128,10 @@ def _public_result_payload(payload: dict) -> dict:
                 if paths.get("excludedEntriesSamplesShortened"):
                     snapshot_view["excludedEntriesSamplesShortened"] = True
             manifest_view["snapshot"] = snapshot_view
+        from ..tasks.workspace import manifest_file_reference
+
         projected["workspaceManifest"] = manifest_view
+        projected["workspaceManifestFile"] = manifest_file_reference(directory, manifest)
     return {**payload, "result": projected}
 
 
@@ -500,8 +503,7 @@ class BoardStore:
         }
         return view
 
-    @staticmethod
-    def _attempt_view(row: sqlite3.Row, *, include_result: bool = True) -> dict:
+    def _attempt_view(self, row: sqlite3.Row, *, include_result: bool = True) -> dict:
         """Public attempt record. The claim capability and nonce verifier never appear."""
         recorded = json.loads(row["result_json"]) if row["result_json"] else {}
         view = {
@@ -532,7 +534,7 @@ class BoardStore:
             "revision": row["revision"],
         }
         if include_result and row["result_json"] is not None:
-            view["result"] = _public_result_payload(recorded)
+            view["result"] = _public_result_payload(recorded, self.directory)
         return view
 
     @staticmethod
@@ -1188,7 +1190,7 @@ class BoardStore:
             payload = json.loads(attempt["result_json"])
             # Only the current execution receipt is unpacked. Its adapter result is
             # opaque data, even when it contains fields named result or turn.
-            view["result"] = _public_result_payload(payload)["result"]
+            view["result"] = _public_result_payload(payload, self.directory)["result"]
             view["resultMeta"] = {key: value for key, value in payload.items() if key != "result"}
             view["attemptId"] = attempt["attempt_id"]
             view["resultDelivered"] = view["result"] is not None

@@ -23,6 +23,7 @@ from support import BoardTestCase, enable_fixture_buddy, wait_for
 from private_acl import assert_private_path
 from fake_executable import make_fake_executable
 from hey_my_buddy.cli.checks import prepare_test_home
+from hey_my_buddy.blackboard.store.store import BoardStore
 from console.test_console import Browser
 
 GIT_ENV = {
@@ -53,6 +54,12 @@ class MicroTaskWorkerTestCase(BoardTestCase):
     def setUp(self) -> None:
         super().setUp()
         self.catalog_fixture()
+        store = BoardStore(self.directory)
+        try:
+            store.initialize()
+            enable_fixture_buddy(store, BUDDY)
+        finally:
+            store.db.close()
         source = ("import runpy, sys\n"
                   f"sys.argv[1:1] = ['--fixture-root', {str(self.directory)!r}]\n"
                   f"runpy.run_path({str(FIXTURE)!r}, run_name='__main__')\n")
