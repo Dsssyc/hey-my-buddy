@@ -1381,6 +1381,16 @@ class _Extractor:
                     self._add_inline(facts, name, kind, None, source, conditional, required)
                     decoded.add(name)
             return decoded
+        if isinstance(part, ast.Call) and isinstance(part.func, ast.Name) and part.func.id == "is_absolute_path" and part.args:
+            reference = self._reference(part.args[0], tracked)
+            if reference is not None and reference[1] is None:
+                field, _unit, local = reference
+                required = (local in no_default and local not in optional and not conditional) or (not conditional and facts.required(field))
+                text = "must be an absolute path on this machine" if negated else "must not be an absolute path on this machine"
+                for name in _expand_fields(field, tracked):
+                    self._add_inline(facts, name, "string", text, source, conditional, required)
+                    decoded.add(name)
+            return decoded
         if isinstance(part, ast.Call) and isinstance(part.func, ast.Attribute):
             reference = self._reference(part.func.value, tracked)
             if reference is not None and reference[1] is None:
