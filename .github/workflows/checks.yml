@@ -14,15 +14,153 @@ concurrency:
   group: checks-${{ github.ref }}
   cancel-in-progress: true
 
+defaults:
+  run:
+    shell: bash
+
 jobs:
-  checks:
-    name: Checks (${{ matrix.os }})
+  frontend:
+    name: Frontend (ubuntu-latest)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Prepare evidence directory
+        run: |
+          mkdir -p "$RUNNER_TEMP/logs"
+          date +%s > "$RUNNER_TEMP/logs/started-at.txt"
+          echo "PLAYWRIGHT_BROWSERS_PATH=$RUNNER_TEMP/playwright-browsers" >> "$GITHUB_ENV"
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: apps/console/package-lock.json
+      - uses: astral-sh/setup-uv@v6
+        with:
+          version: '0.12.19'
+          python-version: '3.12'
+          enable-cache: true
+          cache-dependency-glob: uv.lock
+      - name: Install console dependencies
+        run: |
+          npm --prefix apps/console ci 2>&1 | tee "$RUNNER_TEMP/logs/npm-ci.log"
+      - name: Read locked Playwright version
+        id: playwright
+        run: |
+          node -p '"version=" + require("./apps/console/package-lock.json").packages["node_modules/playwright-core"].version' >> "$GITHUB_OUTPUT"
+      - name: Cache Playwright browsers
+        uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}/playwright-browsers
+          key: ${{ runner.os }}-playwright-${{ steps.playwright.outputs.version }}
+      - name: Install headless Chromium for the browser checks
+        env:
+          PLAYWRIGHT_SKIP_BROWSER_GC: '1'
+        run: |
+          npm --prefix apps/console exec -- playwright install --with-deps --only-shell chromium 2>&1 | tee "$RUNNER_TEMP/logs/playwright-install.log"
+      - name: Console typecheck
+        id: typecheck
+        if: ${{ !cancelled() }}
+        run: |
+          npm --prefix apps/console run typecheck 2>&1 | tee "$RUNNER_TEMP/logs/console-typecheck.log"
+      - name: Console unit tests
+        id: console-tests
+        if: ${{ !cancelled() }}
+        run: |
+          npm --prefix apps/console test -- --reporter=default --reporter=json --outputFile="$RUNNER_TEMP/logs/console-tests.json" 2>&1 | tee "$RUNNER_TEMP/logs/console-tests.log"
+      - name: Console browser checks
+        id: browser-checks
+        if: ${{ !cancelled() }}
+        timeout-minutes: 25
+        env:
+          PLAYWRIGHT_JSON_OUTPUT_NAME: ${{ runner.temp }}/logs/console-browser-checks.json
+        run: |
+          npm --prefix apps/console run test:browser -- --reporter=list,json 2>&1 | tee "$RUNNER_TEMP/logs/console-browser-checks.log"
+      - name: Result overview
+        if: ${{ always() }}
+        shell: python {0}
+        env:
+          TYPECHECK_RESULT: ${{ steps.typecheck.outcome }}
+          UNIT_RESULT: ${{ steps.console-tests.outcome }}
+          BROWSER_RESULT: ${{ steps.browser-checks.outcome }}
+        run: |
+          import json
+          import os
+          import time
+          from pathlib import Path
+
+          logs = Path(os.environ["RUNNER_TEMP"]) / "logs"
+          elapsed = time.time() - float((logs / "started-at.txt").read_text())
+          files = {}
+          unit_report = logs / "console-tests.json"
+          if unit_report.exists():
+              for result in json.loads(unit_report.read_text(encoding="utf-8"))["testResults"]:
+                  name = Path(result["name"]).relative_to(Path.cwd()).as_posix()
+                  files[name] = result["status"]
+
+          browser_report = logs / "console-browser-checks.json"
+          if browser_report.exists():
+              report = json.loads(browser_report.read_text(encoding="utf-8"))
+              statuses = {}
+
+              def collect(suites):
+                  for suite in suites:
+                      for spec in suite.get("specs", []):
+                          name = (Path(report["config"]["rootDir"]) / spec["file"]).relative_to(Path.cwd()).as_posix()
+                          statuses.setdefault(name, set()).update(test["status"] for test in spec["tests"])
+                      collect(suite.get("suites", []))
+
+              collect(report["suites"])
+              for name, states in statuses.items():
+                  files[name] = ("failed" if states & {"unexpected", "flaky"} else
+                                 "passed" if "expected" in states else "skipped")
+
+          passed = sum(status == "passed" for status in files.values())
+          failed = sum(status == "failed" for status in files.values())
+          lines = [
+              "## ubuntu-latest / frontend", "",
+              f"Elapsed: {elapsed:.1f}s. Files reported: {len(files)}; passed: {passed}; failed: {failed}; other: {len(files) - passed - failed}.",
+              "File counts cover the JSON reports written by the test tools; a missing report supplies no file results.", "",
+              "| Step | Result |", "| --- | --- |",
+              f"| Typecheck | {os.environ['TYPECHECK_RESULT']} |",
+              f"| Unit tests | {os.environ['UNIT_RESULT']} |",
+              f"| Browser checks | {os.environ['BROWSER_RESULT']} |", "",
+              "| File | Result |", "| --- | --- |",
+          ]
+          lines.extend(f"| `{name}` | {status} |" for name, status in sorted(files.items()))
+          lines.extend(["", "Artifact: check-logs-ubuntu-latest-frontend.", ""])
+          summary = "\n".join(lines)
+          (logs / "overview.md").write_text(summary, encoding="utf-8")
+          with open(os.environ["GITHUB_STEP_SUMMARY"], "a", encoding="utf-8") as output:
+              output.write(summary)
+      - name: Upload step logs
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: check-logs-ubuntu-latest-frontend
+          path: ${{ runner.temp }}/logs
+          if-no-files-found: error
+
+  python:
+    name: Python (${{ matrix.os }}, shard ${{ matrix.shard }}/3)
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, windows-latest, macos-latest]
+        shard: [1, 2, 3]
+    env:
+      CHECK_OS: ${{ matrix.os }}
+      CHECK_SHARD: ${{ matrix.shard }}
+      CHECK_SHARDS: '3'
+      # Flush each completed file even if another file hangs until the timeout.
+      PYTHONUNBUFFERED: '1'
     steps:
+      - name: Prepare evidence directory
+        run: |
+          mkdir -p "$RUNNER_TEMP/logs"
+          date +%s > "$RUNNER_TEMP/logs/started-at.txt"
       - name: Disable Git line-ending conversion
         # Run before checkout so the working tree is byte-identical on every system.
         run: git config --global core.autocrlf false
@@ -36,88 +174,123 @@ jobs:
         with:
           version: '0.12.19'
           python-version: '3.12'
-      - name: Prepare log directory and console dependencies
-        shell: bash
+          enable-cache: true
+          cache-dependency-glob: uv.lock
+      - name: Install console parsers for preview regressions
         run: |
-          mkdir -p "$RUNNER_TEMP/logs"
-          npm --prefix apps/console ci
-      - name: Install headless Chromium for the browser checks
-        shell: bash
+          npm --prefix apps/console ci 2>&1 | tee "$RUNNER_TEMP/logs/npm-ci.log"
+      - name: Select Python test shard
+        id: shard
+        shell: python {0}
         run: |
-          if [ "$RUNNER_OS" = "Linux" ]; then
-            PLAYWRIGHT_SKIP_BROWSER_GC=1 npm --prefix apps/console exec -- playwright install --with-deps --only-shell chromium
-          else
-            PLAYWRIGHT_SKIP_BROWSER_GC=1 npm --prefix apps/console exec -- playwright install --only-shell chromium
-          fi
-      - name: Console typecheck
-        id: typecheck
-        if: ${{ !cancelled() }}
-        shell: bash
-        run: |
-          set -o pipefail
-          npm --prefix apps/console run typecheck 2>&1 | tee "$RUNNER_TEMP/logs/console-typecheck.log"
-      - name: Console unit tests
-        id: console-tests
-        if: ${{ !cancelled() }}
-        shell: bash
-        run: |
-          set -o pipefail
-          npm --prefix apps/console test 2>&1 | tee "$RUNNER_TEMP/logs/console-tests.log"
-      - name: Console browser checks
-        id: browser-checks
-        if: ${{ !cancelled() }}
-        shell: bash
-        run: |
-          set -o pipefail
-          npm --prefix apps/console run test:browser 2>&1 | tee "$RUNNER_TEMP/logs/console-browser-checks.log"
-      - name: Full check suite
-        id: full-check
-        if: ${{ !cancelled() }}
-        shell: bash
+          import json
+          import os
+          from pathlib import Path
+
+          shard = int(os.environ["CHECK_SHARD"])
+          shard_count = int(os.environ["CHECK_SHARDS"])
+          files = sorted(path.as_posix() for path in Path("tests/python").rglob("test_*.py") if path.is_file())
+          selected = [path for index, path in enumerate(files) if index % shard_count == shard - 1]
+          if not selected:
+              raise SystemExit("The shard has no test files; refusing to run the whole suite.")
+          manifest = {"system": os.environ["CHECK_OS"], "shard": shard,
+                      "shards": shard_count, "total": len(files), "files": selected}
+          logs = Path(os.environ["RUNNER_TEMP"]) / "logs"
+          (logs / "python-shard.json").write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
+          with open(os.environ["GITHUB_ENV"], "a", encoding="utf-8") as output:
+              output.write(f"HMB_CHECKS_JOBS={os.cpu_count()}\n")
+          print(f"{manifest['system']}: shard {shard}/{shard_count}, {len(selected)}/{len(files)} files, {os.cpu_count()} workers")
+      - name: Python check shard
+        id: python-check
+        # Leave time to publish partial results and logs when a file hangs.
+        timeout-minutes: 25
+        shell: python {0}
         env:
-          # Keeps the runner's private root (and any retained evidence) under a
-          # known location the artifact upload below can read.
           HMB_CHECKS_TMPDIR: ${{ runner.temp }}
         run: |
-          set -o pipefail
-          uv run --frozen python -m hey_my_buddy.cli.checks 2>&1 | tee "$RUNNER_TEMP/logs/full-check.log"
-          code=$?
-          echo "exit-code=$code" >> "$GITHUB_OUTPUT"
-          exit "$code"
+          import json
+          import os
+          import subprocess
+          import sys
+          import time
+          from pathlib import Path
+
+          logs = Path(os.environ["RUNNER_TEMP"]) / "logs"
+          manifest = json.loads((logs / "python-shard.json").read_text(encoding="utf-8"))
+          command = ["uv", "run", "--frozen", "python", "-m", "hey_my_buddy.cli.checks", *manifest["files"]]
+          started = time.monotonic()
+          with (logs / "python-check.log").open("wb") as log:
+              with subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.STDOUT) as process:
+                  for line in process.stdout:
+                      log.write(line)
+                      log.flush()
+                      sys.stdout.buffer.write(line)
+                      sys.stdout.buffer.flush()
+                  code = process.wait()
+          result = {"exit-code": code, "seconds": time.monotonic() - started}
+          (logs / "python-result.json").write_text(json.dumps(result, indent=2) + "\n", encoding="utf-8")
+          # Record the real check exit before failing the step, including exit 3.
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
+              output.write(f"exit-code={code}\n")
+          raise SystemExit(code)
+      - name: Result overview
+        if: ${{ always() }}
+        shell: python {0}
+        env:
+          CHECK_RESULT: ${{ steps.python-check.outcome }}
+          CHECK_EXIT: ${{ steps.python-check.outputs.exit-code }}
+        run: |
+          import json
+          import os
+          import re
+          import time
+          from pathlib import Path
+
+          logs = Path(os.environ["RUNNER_TEMP"]) / "logs"
+          elapsed = time.time() - float((logs / "started-at.txt").read_text())
+          shard_file = logs / "python-shard.json"
+          manifest = json.loads(shard_file.read_text(encoding="utf-8")) if shard_file.exists() else {"files": []}
+          check_log = logs / "python-check.log"
+          text = check_log.read_text(encoding="utf-8", errors="replace") if check_log.exists() else ""
+          text = re.sub(r"\x1b\[[0-9;]*m", "", text)
+          results = {match[1]: (match[2], match[3]) for match in re.finditer(
+              r"^\[\d+/\d+\] ([\w.]+) (ok|FAILED \(exit -?\d+\)) ([\d.]+)s$", text, re.MULTILINE)}
+          rows = []
+          for name in manifest["files"]:
+              module = ".".join(Path(name).relative_to("tests/python").with_suffix("").parts)
+              status, seconds = results.get(module, ("not completed", ""))
+              rows.append((name, status, seconds))
+          passed = sum(status == "ok" for _, status, _ in rows)
+          failed = sum(status.startswith("FAILED") for _, status, _ in rows)
+          system, shard = os.environ["CHECK_OS"], os.environ["CHECK_SHARD"]
+          code = os.environ["CHECK_EXIT"] or "unavailable (check did not finish)"
+          lines = [
+              f"## {system} / shard {shard}/{os.environ['CHECK_SHARDS']}", "",
+              f"Result: {os.environ['CHECK_RESULT']}; exit: {code}; elapsed: {elapsed:.1f}s.",
+              f"Files selected: {len(rows)}; passed: {passed}; failed: {failed}; not completed: {len(rows) - passed - failed}.", "",
+              "| File | Result | Seconds |", "| --- | --- | ---: |",
+          ]
+          lines.extend(f"| `{name}` | {status} | {seconds} |" for name, status, seconds in rows)
+          lines.extend(["", f"Artifact: check-logs-{system}-shard-{shard}; retained-root-logs-{system}-shard-{shard} on exit 3.", ""])
+          summary = "\n".join(lines)
+          (logs / "overview.md").write_text(summary, encoding="utf-8")
+          with open(os.environ["GITHUB_STEP_SUMMARY"], "a", encoding="utf-8") as output:
+              output.write(summary)
       - name: Upload step logs
-        if: ${{ !cancelled() }}
+        if: ${{ always() }}
         uses: actions/upload-artifact@v4
         with:
-          name: check-logs-${{ matrix.os }}
+          name: check-logs-${{ matrix.os }}-shard-${{ matrix.shard }}
           path: ${{ runner.temp }}/logs
           if-no-files-found: error
       - name: Upload logs from the retained private root
         # Exit 3 means the suite passed but the runner kept its private root.
-        if: ${{ !cancelled() && steps.full-check.outputs.exit-code == '3' }}
+        if: ${{ always() && steps.python-check.outputs.exit-code == '3' }}
         uses: actions/upload-artifact@v4
         with:
-          name: retained-root-logs-${{ matrix.os }}
+          name: retained-root-logs-${{ matrix.os }}-shard-${{ matrix.shard }}
           path: |
             ${{ runner.temp }}/hey-my-buddy-checks-*/teardown-evidence.json
             ${{ runner.temp }}/hey-my-buddy-checks-*/**/*.log
+          include-hidden-files: true
           if-no-files-found: error
-      - name: Result overview
-        if: ${{ !cancelled() }}
-        shell: bash
-        run: |
-          full_check="${{ steps.full-check.outcome }}"
-          if [ -n "${{ steps.full-check.outputs.exit-code }}" ]; then
-            full_check="$full_check (exit ${{ steps.full-check.outputs.exit-code }})"
-          fi
-          {
-            echo "## Checks on ${{ matrix.os }}"
-            echo ""
-            echo "| Step | Result |"
-            echo "| --- | --- |"
-            echo "| Console typecheck | ${{ steps.typecheck.outcome }} |"
-            echo "| Console unit tests | ${{ steps.console-tests.outcome }} |"
-            echo "| Console browser checks | ${{ steps.browser-checks.outcome }} |"
-            echo "| Full check suite | $full_check |"
-            echo ""
-            echo "Artifacts: check-logs-${{ matrix.os }}; retained-root-logs-${{ matrix.os }} only when the full check exits 3."
-          } >> "$GITHUB_STEP_SUMMARY"
