@@ -58,8 +58,8 @@ class BoardClient:
     def cancel(self, **selector: Any) -> dict:
         return self.call("task_cancel", selector)["task"]
 
-    def retry(self, *, reason: str | None = None, **selector: Any) -> dict:
-        return self.call("task_retry", {**selector, "reason": reason})["task"]
+    def retry(self, *, note: str | None = None, **selector: Any) -> dict:
+        return self.call("task_retry", {**selector, "note": note})["task"]
 
     def acknowledge(self, note: str, verdict: str = "accepted", **selector: Any) -> dict:
         return self.call("task_acknowledge", {**selector, "note": note, "verdict": verdict})["task"]

@@ -625,8 +625,7 @@ def _request_daemon_stop(state_dir: Path) -> None:
     if endpoint is None:
         return
     try:
-        _request(endpoint, "service_control", {"action": "stop", "drainSeconds": 10,
-                                               "reason": "hey_my_buddy.cli.checks private teardown"}, state_dir=state_dir)
+        _request(endpoint, "service_control", {"action": "stop", "drainSeconds": 10}, state_dir=state_dir)
     except ServiceError:
         # The endpoint may already be disappearing; the lifetime locks decide.
         pass

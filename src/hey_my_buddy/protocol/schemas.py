@@ -335,7 +335,7 @@ def normalize_access(intent: dict) -> tuple[str, str | None]:
         raise BoardError("INVALID_ARGUMENT", "executionWorkspace.access must be 'read', 'write' or 'full'",
                          field="executionWorkspace.access")
     if access == "full":
-        note = required_string(intent, "accessNote", max_length=1000)
+        note, _ = bounded_text(intent, "accessNote", max_bytes=MAX_NOTE_BYTES)
         raw_note = intent["accessNote"]
         if raw_note.splitlines() != [raw_note]:
             raise BoardError("INVALID_ARGUMENT", "executionWorkspace.accessNote must be a single line",

@@ -109,7 +109,7 @@ class WaitingHostUpgradeTests(WorkflowTestCase):
             ("workflow_takeover", {**command, "expectedOwnerGeneration": 1, "newHostId": "host-2"}),
             ("workflow_cancel", command),
             ("workflow_scope_amend", {**command, "expectedRevision": view["revision"],
-                                      "expectedScopeVersion": 1, "writeScope": ["src"], "reason": "reviewed"}),
+                                      "expectedScopeVersion": 1, "writeScope": ["src"], "note": "reviewed"}),
             ("inquiry_observe", {"runId": run["runId"], "inquiryId": "same-inquiry", "question": "status?"}),
             ("workflow_submit", {**BUDDY, "requestId": "same-submission", "submissionToken": "t" * 32,
                                   "hostId": "host-1", "task": "fixture", "cwd": str(self.workdir()),

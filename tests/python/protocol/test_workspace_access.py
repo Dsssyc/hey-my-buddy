@@ -12,7 +12,7 @@ class WorkspaceAccessTests(unittest.TestCase):
         self.assertEqual(normalize_access({}), ("write", None))
         self.assertEqual(normalize_access({"access": "read"}), ("read", None))
         self.assertEqual(normalize_access({"access": "full", "accessNote": "  Need system writes  "}),
-                         ("full", "Need system writes"))
+                         ("full", "  Need system writes  "))
         self.assertEqual(normalize_execution_workspace({"executionWorkspace": {
             "kind": "worktree", "access": "full", "accessNote": " Need system writes "}})["writeScope"], ["."])
 
@@ -20,7 +20,7 @@ class WorkspaceAccessTests(unittest.TestCase):
         invalid = (
             {"access": None}, {"access": ""}, {"access": "unknown"}, {"access": 123},
             {"access": "full"}, {"access": "full", "accessNote": "  "},
-            {"access": "full", "accessNote": "a" * 1001},
+            {"access": "full", "accessNote": "a" * 10001},
             {"access": "full", "accessNote": "first\nsecond"},
             {"access": "full", "accessNote": "first\rsecond"},
             {"access": "full", "accessNote": "first\n"},

@@ -210,7 +210,7 @@ class HelpTests(unittest.TestCase):
             "let the Router choose",
             "wait-timeout",
             "Accept one delivered artifact",
-            'adjusted":true (the note is the reason)',
+            'adjusted":true and a note',
             "conclude ends a failed, cancelled or delivered-but-unaccepted micro task",
             "conclude ends a failed, cancelled or delivered-but-unaccepted micro task",
             "hey-my-buddy get",

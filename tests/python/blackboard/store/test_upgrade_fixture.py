@@ -6,6 +6,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import re
 import sqlite3
 import tempfile
 import unittest
@@ -15,7 +16,7 @@ from blackboard.store.upgrade_fixture import load_fixture, _git, _sha, _json
 from hey_my_buddy.blackboard.store import backup
 from hey_my_buddy.blackboard.store.store import BoardStore
 from hey_my_buddy.blackboard.routing import router
-from hey_my_buddy.blackboard.store.db import Corruption, Database, SCHEMA_VERSION
+from hey_my_buddy.blackboard.store.db import Corruption, Database, SCHEMA_VERSION, canonical_json
 from hey_my_buddy.blackboard.store.upgrade import UPGRADE_BASE_SCHEMA, upgrade_schema_24_to_25
 from hey_my_buddy.blackboard.tasks import workspace
 from hey_my_buddy.blackboard.tasks.workflow import WorkflowCoordinator
@@ -168,6 +169,192 @@ class UpgradeFixtureTests(unittest.TestCase):
         self.assertEqual(workspace.host_seal(fixture['state'], manifest, run_id, attempt), sealed)
         self.assertEqual(worker_file.read_bytes(), before)
 
+    def test_note_upgrade_strips_defaults_and_preserves_authored_bytes_and_digests(self):
+        fixture, connection = self.restored('note-ownership')
+        run_id = fixture['stableIds']['delivered']
+        authored = 'Host note: 原样保留  A  '
+        integration_id = connection.execute('SELECT integration_id FROM workflow_integrations LIMIT 1').fetchone()[0]
+        connection.execute('UPDATE workflow_integrations SET reason=? WHERE integration_id=?',
+                           (authored, integration_id))
+        verification = json.loads(connection.execute(
+            'SELECT verification_json FROM workflow_integrations WHERE integration_id=?',
+            (integration_id,)).fetchone()[0])
+        verification['reason'] = authored
+        connection.execute('UPDATE workflow_integrations SET verification_json=? WHERE integration_id=?',
+                           (json.dumps(verification), integration_id))
+        connection.execute("UPDATE workflow_scope_versions SET reason='original submission' WHERE scope_version=1")
+        connection.execute("UPDATE workflow_continuations SET reason='Host continuation' WHERE kind='manual'")
+        workspace = json.loads(connection.execute(
+            'SELECT execution_workspace_json FROM workflow_runs WHERE run_id=?', (run_id,)).fetchone()[0])
+        workspace['accessReason'] = authored
+        connection.execute('UPDATE workflow_runs SET execution_workspace_json=? WHERE run_id=?',
+                           (json.dumps(workspace), run_id))
+        request = connection.execute('SELECT request_id,decision_json FROM workflow_requests LIMIT 1').fetchone()
+        if request is not None:
+            decision = json.loads(request['decision_json'] or '{}')
+            decision['reason'] = authored
+            connection.execute('UPDATE workflow_requests SET decision_json=? WHERE request_id=?',
+                               (json.dumps(decision), request['request_id']))
+        event = connection.execute('SELECT seq FROM events ORDER BY seq LIMIT 1').fetchone()[0]
+        connection.execute("UPDATE events SET kind='task.retried',payload_json=? WHERE seq=?",
+                           (json.dumps({'reason': 'explicit retry', 'previousAttemptId': 'old'}), event))
+        event2 = connection.execute('SELECT seq FROM events WHERE seq!=? ORDER BY seq LIMIT 1', (event,)).fetchone()[0]
+        connection.execute("UPDATE events SET kind='workflow.cancelled',payload_json=? WHERE seq=?",
+                           (json.dumps({'reason': 'service stop: ' + authored,
+                                        'actor': {'role': 'service', 'id': 'stop'}}), event2))
+        event3 = connection.execute('SELECT seq FROM events WHERE seq NOT IN (?,?) ORDER BY seq LIMIT 1',
+                                    (event, event2)).fetchone()[0]
+        route_cancel = {'reason': 'Owning Micro task cancelled', 'owningRunId': run_id}
+        connection.execute("UPDATE events SET kind='task.cancelled',payload_json=? WHERE seq=?",
+                           (json.dumps(route_cancel), event3))
+        event4 = connection.execute('SELECT seq FROM events WHERE seq NOT IN (?,?,?) ORDER BY seq LIMIT 1',
+                                    (event, event2, event3)).fetchone()[0]
+        connection.execute("UPDATE events SET kind='workflow.cancelled',payload_json=? WHERE seq=?",
+                           (json.dumps({'reason': 'signal', 'actor': {'role': 'host', 'id': 'fixture'}}), event4))
+        connection.commit()
+        commands = [tuple(row) for row in connection.execute(
+            'SELECT command_id,kind,request_hash FROM commands ORDER BY command_id')]
+        turns = [tuple(row) for row in connection.execute(
+            'SELECT turn_id,input_json,input_sha256,outcome_json FROM workflow_turns ORDER BY turn_id')]
+        artifacts = [tuple(row) for row in connection.execute(
+            "SELECT artifact_id,manifest_json FROM workflow_artifacts WHERE kind='shared-refs' ORDER BY artifact_id")]
+        bindings = [tuple(row) for row in connection.execute(
+            'SELECT integration_id,binding_sha256 FROM workflow_integrations ORDER BY integration_id')]
+        upgrade_schema_24_to_25(fixture['state'])
+        self.assertEqual([tuple(row) for row in connection.execute(
+            'SELECT command_id,kind,request_hash FROM commands ORDER BY command_id')], commands)
+        self.assertEqual([tuple(row) for row in connection.execute(
+            'SELECT turn_id,input_json,input_sha256,outcome_json FROM workflow_turns ORDER BY turn_id')], turns)
+        self.assertEqual([tuple(row) for row in connection.execute(
+            "SELECT artifact_id,manifest_json FROM workflow_artifacts WHERE kind='shared-refs' ORDER BY artifact_id")], artifacts)
+        self.assertEqual([tuple(row) for row in connection.execute(
+            'SELECT integration_id,binding_sha256 FROM workflow_integrations ORDER BY integration_id')], bindings)
+        self.assertEqual(connection.execute('SELECT note FROM workflow_integrations WHERE integration_id=?',
+                                            (integration_id,)).fetchone()[0], authored)
+        verification = json.loads(connection.execute(
+            'SELECT verification_json FROM workflow_integrations WHERE integration_id=?',
+            (integration_id,)).fetchone()[0])
+        self.assertEqual(verification['note'], authored)
+        self.assertNotIn('reason', verification)
+        self.assertEqual(connection.execute('SELECT COUNT(*) FROM workflow_scope_versions WHERE note IS NOT NULL'
+                                            " AND scope_version=1").fetchone()[0], 0)
+        self.assertEqual(connection.execute("SELECT COUNT(*) FROM workflow_continuations WHERE kind='manual'"
+                                            " AND note='Host continuation'").fetchone()[0], 0)
+        self.assertEqual(json.loads(connection.execute(
+            'SELECT execution_workspace_json FROM workflow_runs WHERE run_id=?', (run_id,)).fetchone()[0])['accessNote'],
+                         authored)
+        if request is not None:
+            self.assertEqual(json.loads(connection.execute('SELECT decision_json FROM workflow_requests WHERE request_id=?',
+                                                            (request['request_id'],)).fetchone()[0])['note'], authored)
+        self.assertNotIn('note', json.loads(connection.execute('SELECT payload_json FROM events WHERE seq=?',
+                                                               (event,)).fetchone()[0]))
+        self.assertEqual(json.loads(connection.execute('SELECT payload_json FROM events WHERE seq=?',
+                                                       (event2,)).fetchone()[0])['note'], authored)
+        self.assertEqual(json.loads(connection.execute('SELECT payload_json FROM events WHERE seq=?',
+                                                       (event3,)).fetchone()[0]), route_cancel)
+        self.assertEqual(json.loads(connection.execute('SELECT payload_json FROM events WHERE seq=?',
+                                                       (event4,)).fetchone()[0])['note'], 'signal')
+
+    def prepare_generated_conclusion(self, fixture, connection, *, complete: bool, nested: bool = False):
+        conclusions = [dict(row) for row in connection.execute(
+            "SELECT c.*,e.seq FROM workflow_host_conclusions c JOIN events e"
+            " ON json_extract(e.payload_json,'$.conclusionId')=c.conclusion_id"
+            " WHERE e.kind='workflow.host_concluded' ORDER BY e.seq")]
+        self.assertEqual(len(conclusions), 2)
+        child, parent = conclusions
+        self.assertLess(child['seq'], parent['seq'])
+        turn_id = connection.execute('SELECT turn_id FROM workflow_turns WHERE run_id=? LIMIT 1',
+                                     (parent['run_id'],)).fetchone()
+        if turn_id is None:
+            turn_id = connection.execute('SELECT turn_id FROM workflow_turns LIMIT 1').fetchone()
+        self.assertIsNotNone(turn_id)
+        immediate_lead = parent['run_id']
+        if nested:
+            immediate_lead = next(run_id for (run_id,) in connection.execute('SELECT run_id FROM workflow_runs')
+                                  if run_id not in {child['run_id'], parent['run_id']})
+            connection.execute('INSERT OR REPLACE INTO workflow_lead_tasks'
+                               '(owned_run_id,lead_run_id,lead_turn_id,created_at) VALUES(?,?,?,?)',
+                               (immediate_lead, parent['run_id'], turn_id[0], parent['created_at']))
+        connection.execute('INSERT OR REPLACE INTO workflow_lead_tasks'
+                           '(owned_run_id,lead_run_id,lead_turn_id,created_at) VALUES(?,?,?,?)',
+                           (child['run_id'], immediate_lead, turn_id[0], parent['created_at']))
+        note = f"Concluded because Lead micro task {parent['run_id']} received a Host conclusion"
+        connection.execute('UPDATE workflow_host_conclusions SET note=?,created_at=?,actor_role=?,actor_id=?'
+                           ' WHERE conclusion_id=?',
+                           (note, parent['created_at'], parent['actor_role'], parent['actor_id'],
+                            child['conclusion_id']))
+        if complete:
+            owners = []
+            for (owner,) in connection.execute('SELECT run_id FROM workflow_runs'):
+                key = {'runId': owner, 'targetRunId': parent['run_id'], 'note': parent['note'],
+                       'attemptId': parent['attempt_id']}
+                if parent['command_id'] == 'conclude-' + hashlib.sha256(canonical_json(key).encode()).hexdigest()[:32]:
+                    owners.append(owner)
+            self.assertEqual(len(owners), 1)
+            key = {'runId': owners[0], 'targetRunId': child['run_id'], 'note': note,
+                   'attemptId': child['attempt_id']}
+            digest = hashlib.sha256(canonical_json(key).encode()).hexdigest()
+            generated_command = 'conclude-' + digest[:32]
+            connection.execute('UPDATE commands SET command_id=?,request_hash=? WHERE command_id=?',
+                               (generated_command, digest, child['command_id']))
+            connection.execute('UPDATE workflow_host_conclusions SET command_id=? WHERE conclusion_id=?',
+                               (generated_command, child['conclusion_id']))
+        connection.commit()
+        return child, parent, note
+
+    def test_generated_conclusion_uses_lead_relationship_and_preserves_command_identity(self):
+        fixture, connection = self.restored('generated-conclusion')
+        child, parent, _note = self.prepare_generated_conclusion(fixture, connection, complete=True, nested=True)
+        commands = [tuple(row) for row in connection.execute(
+            'SELECT command_id,request_hash FROM commands ORDER BY command_id')]
+        upgrade_schema_24_to_25(fixture['state'])
+        converted = connection.execute('SELECT note,reason_code,reason_params_json FROM workflow_host_conclusions'
+                                       ' WHERE conclusion_id=?', (child['conclusion_id'],)).fetchone()
+        self.assertIsNone(converted['note'])
+        self.assertEqual(converted['reason_code'], 'lead.owned-concluded')
+        self.assertEqual(json.loads(converted['reason_params_json']), {'leadRunId': parent['run_id']})
+        self.assertEqual([tuple(row) for row in connection.execute(
+            'SELECT command_id,request_hash FROM commands ORDER BY command_id')], commands)
+
+    def test_generated_looking_conclusion_with_incomplete_relation_rolls_back(self):
+        fixture, connection = self.restored('ambiguous-conclusion')
+        self.prepare_generated_conclusion(fixture, connection, complete=False)
+        before = backup.database_snapshot(connection, exact=True)
+        with self.assertRaises(BoardError) as caught:
+            upgrade_schema_24_to_25(fixture['state'])
+        self.assertEqual(caught.exception.code, 'UPGRADE_INVALID_BOARD')
+        self.assertEqual(backup.database_snapshot(connection, exact=True), before)
+
+    def test_host_conclusion_sentence_without_lead_cascade_remains_content(self):
+        fixture, connection = self.restored('host-conclusion-content')
+        conclusion = connection.execute('SELECT conclusion_id FROM workflow_host_conclusions LIMIT 1').fetchone()[0]
+        authored = 'Concluded because Lead micro task unrelated received a Host conclusion'
+        connection.execute('UPDATE workflow_host_conclusions SET note=? WHERE conclusion_id=?',
+                           (authored, conclusion))
+        connection.commit()
+        upgrade_schema_24_to_25(fixture['state'])
+        row = connection.execute('SELECT note,reason_code FROM workflow_host_conclusions WHERE conclusion_id=?',
+                                 (conclusion,)).fetchone()
+        self.assertEqual(row['note'], authored)
+        self.assertIsNone(row['reason_code'])
+
+    def test_old_full_access_manifest_is_rejected_and_field_rename_changes_digest(self):
+        fixture, connection = self.restored('sealed-full-access-limit')
+        _run_id, manifest, _attempt = self.sample(fixture, connection)
+        old = dict(manifest)
+        old['access'] = 'full'
+        old.pop('accessNote', None)
+        old['accessReason'] = 'Host granted full access'
+        old['manifestSha256'] = _sha(_json({key: value for key, value in old.items()
+                                             if key != 'manifestSha256'}).encode())
+        renamed = dict(old)
+        renamed['accessNote'] = renamed.pop('accessReason')
+        renamed['manifestSha256'] = _sha(_json({key: value for key, value in renamed.items()
+                                                 if key != 'manifestSha256'}).encode())
+        self.assertNotEqual(old['manifestSha256'], renamed['manifestSha256'])
+        with self.assertRaises(BoardError):
+            workspace.verify(old)
+
     def test_portable_roots_rebind_stable_identities_without_changing_native_history(self):
         first, c1 = self.restored('first state')
         second, c2 = self.restored('第二个 "私有" <fixture-root> state')
@@ -251,7 +438,11 @@ class UpgradeFixtureTests(unittest.TestCase):
             # Reason-bearing rows change form; all other stock stays exact.
             for table, rows in stock.items():
                 if table in {'buddies', 'catalog_observations', 'evaluation_catalog',
-                             'catalog_current', 'harness_health'}:
+                             'catalog_current', 'harness_health', 'events',
+                             'workflow_host_conclusions', 'workflow_integrations',
+                             'workflow_scope_versions', 'workflow_turns',
+                             'workflow_continuations', 'workflow_workspace_conflicts',
+                             'workflow_runs', 'workflow_requests'}:
                     continue
                 with self.subTest(retained_table=table):
                     self.assertEqual([dict(item) for item in upgraded.execute(f'SELECT * FROM {table} ORDER BY rowid')], rows)
@@ -261,18 +452,19 @@ class UpgradeFixtureTests(unittest.TestCase):
                 'SELECT type,name,tbl_name,sql FROM sqlite_master ORDER BY type,name')]
             fresh_schema = [tuple(row) for row in baseline.execute(
                 'SELECT type,name,tbl_name,sql FROM sqlite_master ORDER BY type,name')]
-            # SQLite ADD COLUMN retains the old whitespace around the final
-            # comma; compare the command DDL without that formatting difference.
+            # SQLite rewrites renamed column/table SQL with different spacing and
+            # quotes. Compare the actual declarations, constraints and indexes.
             def structure(rows):
                 return [(kind, name, table,
-                         ''.join(sql.replace('"buddies"', 'buddies').replace('"workflow_requests"', 'workflow_requests').split())
-                         if name in {'commands', 'buddies', 'workflow_requests'} else sql)
+                         ''.join(re.sub(r'--[^\n]*', '', sql).replace('"', '').split()) if sql is not None else None)
                         for kind, name, table, sql in rows]
             self.assertEqual(structure(source_schema), structure(fresh_schema))
-            self.assertEqual([tuple(row) for row in upgraded.execute('PRAGMA table_info(commands)')],
-                             [tuple(row) for row in baseline.execute('PRAGMA table_info(commands)')])
-            self.assertEqual([tuple(row) for row in upgraded.execute('PRAGMA foreign_key_list(commands)')],
-                             [tuple(row) for row in baseline.execute('PRAGMA foreign_key_list(commands)')])
+            for table in stock:
+                with self.subTest(structure=table):
+                    self.assertEqual([tuple(row) for row in upgraded.execute(f'PRAGMA table_info({table})')],
+                                     [tuple(row) for row in baseline.execute(f'PRAGMA table_info({table})')])
+                    self.assertEqual([tuple(row) for row in upgraded.execute(f'PRAGMA foreign_key_list({table})')],
+                                     [tuple(row) for row in baseline.execute(f'PRAGMA foreign_key_list({table})')])
             self.assertEqual(upgraded.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone()[0],
                              str(SCHEMA_VERSION))
             self.assertEqual(dict(upgraded.execute("SELECT key,value FROM meta WHERE key!='schema_version'")),

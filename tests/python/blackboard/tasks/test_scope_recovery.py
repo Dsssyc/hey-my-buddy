@@ -139,7 +139,7 @@ class ScopeRecoveryTestCase(RealWorkspaceTestCase):
               note="the next stage may touch docs"):
         return board.store.workflow.scope_amend({
             "runId": view["runId"], "commandId": command_id, "expectedRevision": view["revision"],
-            "expectedScopeVersion": expected_scope, "writeScope": list(write_scope), 'note': reason,
+            "expectedScopeVersion": expected_scope, "writeScope": list(write_scope), 'note': note,
             **self.control(view),
         })
 

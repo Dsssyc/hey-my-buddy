@@ -1000,7 +1000,7 @@ class _Extractor:
         condition_field = reference[0].rpartition(".")[2]
         for statement in node.body:
             value = statement.value if isinstance(statement, (ast.Assign, ast.Expr)) else None
-            if not isinstance(value, ast.Call) or (_attribute_parts(value.func) or [])[-1:] != ["required_string"]:
+            if not isinstance(value, ast.Call) or (_attribute_parts(value.func) or [])[-1:] not in (["required_string"], ["bounded_text"]):
                 continue
             if not value.args or not isinstance(value.args[0], ast.Name) or value.args[0].id != params_var:
                 continue

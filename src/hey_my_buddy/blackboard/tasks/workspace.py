@@ -1783,7 +1783,7 @@ def _resolution_result(action, state, artifact, resolved, preserved, remaining, 
     }
 
 
-def resolve(state_dir, manifest: dict, *, task_id: str, attempt_id: str, action: str, paths, observed_fingerprint: str, note: str = "", actor: dict | None = None):
+def resolve(state_dir, manifest: dict, *, task_id: str, attempt_id: str, action: str, paths, observed_fingerprint: str, note: str | None = None, actor: dict | None = None):
     """Mechanically settle one recorded out-of-scope failure site.
 
     ``restore`` returns the selected paths to their authorized content while

@@ -357,7 +357,7 @@ class InstallWithoutUpgradeTests(BoardTestCase):
                 self.assertEqual(inspect_process_identity(identity), "alive")
                 self.assertTrue(first.exists())
                 code, response = self.cli("execution-cancel", json.dumps({
-                    "runId": run_id, "reason": "frozen private install"}))
+                    "runId": run_id, "note": "frozen private install"}))
                 self.assertEqual(code, 0, response)
                 forced = wait_for(lambda: self.client().get(runId=run_id)["selectedAttempt"].get("forceRequestedAt"),
                                   timeout=35)

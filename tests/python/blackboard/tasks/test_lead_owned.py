@@ -413,7 +413,7 @@ class LeadOwnedTests(WorkflowTestCase):
         leaked = {"hostId": None, "ownerGeneration": 1,
                   "controlToken": board.store.db.control_token(run_id, 1)}
         operations = (
-            ("workflow_cancel", {"reason": "uncredentialed stop"}),
+            ("workflow_cancel", {"note": "uncredentialed stop"}),
             ("workflow_continue", {"commandId": "uncredentialed-continue", "input": "continue", "expectedRevision": child["revision"]}),
             ("workflow_accept", {"artifactId": "unreviewed-artifact", "note": "uncredentialed accept", "notRequired": "fixture"}),
             ("workflow_takeover", {"commandId": "uncredentialed-takeover", "newHostId": "forged-host", "expectedOwnerGeneration": 1}),

@@ -107,7 +107,7 @@ class PermissionLevelsTests(WorkflowTestCase):
         self.assertEqual([(turn['access'], turn['accessNote']) for turn in turns], expected)
         self.assertEqual(micro_task_brief(full)['access'], 'full')
         with board.store.db.read() as connection:
-            stored = connection.execute('SELECT access,access_reason FROM workflow_turns ORDER BY turn_index').fetchall()
+            stored = connection.execute('SELECT access,access_note FROM workflow_turns ORDER BY turn_index').fetchall()
             self.assertEqual([tuple(row) for row in stored], expected)
             changes = connection.execute("SELECT payload_json FROM events WHERE kind='workflow.access_changed' ORDER BY seq").fetchall()
             self.assertEqual([json.loads(row[0])['access'] for row in changes], ['write', 'full'])
@@ -128,7 +128,7 @@ class PermissionLevelsTests(WorkflowTestCase):
         board = self.board()
         view = self.submit(board)
         for kwargs in ({'access': 'unknown'}, {'access': 'full'}, {'access': 'read', 'accessNote': 'Reason'},
-                       {'accessNote': 'Reason'}, {'access': 'full', 'accessNote': 'x' * 1001}):
+                       {'accessNote': 'Reason'}, {'access': 'full', 'accessNote': 'x' * 10001}):
             with self.subTest(kwargs=kwargs), self.assertRaises(BoardError) as rejected:
                 self.continue_run(board, view, **kwargs)
             self.assertEqual(rejected.exception.code, 'INVALID_ARGUMENT')
@@ -180,7 +180,7 @@ class GitPermissionLevelsTests(RealWorkspaceTestCase):
             seal = git_workspace.seal(self.directory, manifest, run_id, attempt_id)
             self.finish_turn(board, claim, seal)
         with board.store.db.read() as connection:
-            turns = connection.execute('SELECT input_json,access,access_reason FROM workflow_turns ORDER BY turn_index').fetchall()
+            turns = connection.execute('SELECT input_json,access,access_note FROM workflow_turns ORDER BY turn_index').fetchall()
             self.assertEqual([json.loads(row[0])['executionWorkspace'] for row in turns], saved)
             self.assertEqual([row[1] for row in turns], ['write', 'read', 'full', 'write'])
             self.assertEqual([row[2] for row in turns], [None, None, 'Need system writes', None])

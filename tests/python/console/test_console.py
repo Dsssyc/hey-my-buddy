@@ -337,7 +337,7 @@ class ConsoleSecurityTests(ConsoleTestCase):
         board.call("model_catalog_refresh", {"requestId": "cat"})
         buddy = next(p for p in board.call("console_snapshot", {})["buddies"] if p["buddyId"] == BUDDY_ID)
         model_service = {key: buddy[key] for key in ("harness", "provider", "model")}
-        status, _h, data = browser.command("task_cancel", {"runId": run_id, "reason": "console operator"}, csrf=csrf)
+        status, _h, data = browser.command("task_cancel", {"runId": run_id, 'note': "console operator"}, csrf=csrf)
         self.assertEqual(status, 404, data)
         self.assertEqual(board.call("task_get", {"runId": run_id})["task"]["status"], "queued")
         # A publish through the browser is the same operation the CLI uses: it is

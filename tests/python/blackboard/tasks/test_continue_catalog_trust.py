@@ -189,7 +189,7 @@ class ContinueCatalogTrustTests(WorkflowTestCase):
         self.assertEqual(error.code, "BUDDY_UNAVAILABLE")
         self.assertEqual(error.details.get("reason"), {"code": "catalog-unavailable", "params": {}})
         self.assertEqual(error.details.get("catalogReadAt"), self.clock.value)
-        self.assertEqual(error.details.get("remedy"), catalog.CATALOG_REMEDY)
+        self.assertNotIn("remedy", error.details)
         self.assertNotIn("enabled", error.details, "User enablement is not the cause")
         self.assertEqual(calls, [], "The write fence must not start a native re-read")
         self.assertTrue(self.buddy_enabled("dsh:fixture:alpha:max"))
@@ -222,7 +222,7 @@ class ContinueCatalogTrustTests(WorkflowTestCase):
         self.assertEqual(error.details.get("reason"), {"code": "catalog-unavailable", "params": {}},
                          "The catalog cause leads when both causes hold")
         self.assertEqual(error.details.get("catalogReadAt"), self.clock.value)
-        self.assertEqual(error.details.get("remedy"), catalog.CATALOG_REMEDY)
+        self.assertNotIn("remedy", error.details)
         self.assertNotIn("enabled", error.details, "The not-enabled shape is a different refusal")
         self.assertEqual(calls, [], "The write fence starts no native re-read")
         self.assertEqual(self.buddy_enabled("dsh:fixture:alpha:max"), False)
@@ -264,8 +264,7 @@ class ContinueCatalogTrustTests(WorkflowTestCase):
         self.assertIn("enabled", gate.details, "The user-gate refusal states the enablement fact itself")
         self.assertIs(gate.details["enabled"], False)
         self.assertEqual(gate.details.get("catalogReadAt"), read_at, "The refusal still names the catalog read time")
-        self.assertNotEqual(gate.details.get("remedy"), catalog.CATALOG_REMEDY)
-        self.assertIn("Enable", gate.details["remedy"])
+        self.assertNotIn("remedy", gate.details)
         self.assertEqual(calls, [], "An admitted route is not re-read for the user gate")
         # A route missing from the catalog whose buddy row the user enabled.
         override = {**IDENTITY, "model": "beta"}

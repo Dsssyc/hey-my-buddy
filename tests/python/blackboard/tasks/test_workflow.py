@@ -165,7 +165,7 @@ class WorkflowTestCase(BoardTestCase):
         if extra.get("buddy") is not None:
             from support import enable_fixture_buddy
             enable_fixture_buddy(board.store, extra["buddy"])
-            extra.setdefault("reason", "Use the explicit fixture buddy for this continuation")
+            extra.setdefault("note", "Use the explicit fixture buddy for this continuation")
         params = {
             "runId": view["runId"],
             "commandId": command_id,
@@ -463,7 +463,7 @@ class LifecycleTests(WorkflowTestCase):
         self.assertIsNone(declined["activeRequest"])
         second = self.claim(board, claim_request_id="c2")
         context = second["claim"]["turn"]["input"]["context"]
-        self.assertEqual(context["continuation"]["reason"], "the plan is not acceptable; use the existing schema")
+        self.assertEqual(context["continuation"]["note"], "the plan is not acceptable; use the existing schema")
         self.assertEqual(context["continuation"]["kind"], "helper")
 
     def test_decline_without_auto_continue_waits_for_host(self):
@@ -1594,7 +1594,7 @@ class AcknowledgementBoundaryTests(WorkflowTestCase):
         )["events"]
         rejection = next(event for event in events if event["kind"] == "workflow.review_rejected")
         self.assertEqual(rejection["payload"]["artifactId"], output["artifactId"])
-        self.assertEqual(rejection["payload"]["reason"], "not good enough")
+        self.assertEqual(rejection["payload"]["note"], "not good enough")
         second = self.claim(board, claim_request_id="c2")
         self.finish_turn(board, second, session_id="sess-2")
         delivered = board.call("workflow_get", {"runId": submitted["runId"]})

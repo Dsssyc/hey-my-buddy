@@ -152,7 +152,7 @@ def _integration_brief(row: Any) -> dict:
     if isinstance(verification, dict) and verification:
         # The verification record can be large; its outcome fields are enough to act on.
         brief["verification"] = _pick(
-            verification, ("state", "status", "verified", "ok", "method", "reason", "errors", "mismatches", "hostPaths")
+            verification, ("state", "status", "verified", "ok", "method", "note", "errors", "mismatches", "hostPaths")
         ) or {"recorded": True}
     return brief
 

@@ -445,7 +445,7 @@ class RetiredRoutingInputWorkflowTests(WorkflowTestCase):
             row = connection.execute("SELECT payload_json FROM events WHERE task_id=? AND kind='workflow.buddy_overridden'",
                                      (view["runId"],)).fetchone()
             payload = json.loads(row["payload_json"])
-        self.assertEqual(payload["reason"], "Host selected the installed buddy")
+        self.assertEqual(payload["note"], "Host selected the installed buddy")
         self.assertNotIn("routingPreferences", payload)
 
 

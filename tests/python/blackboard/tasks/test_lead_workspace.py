@@ -170,7 +170,8 @@ class LeadWorkspaceTests(RealWorkspaceTestCase):
         self.assertEqual(concluded["state"], "concluded")
         current = board.call("workflow_get", {"runId": child["runId"]})
         self.assertEqual(current["state"], "concluded")
-        self.assertIn(lead["runId"], current["hostConclusion"]["note"])
+        self.assertIsNone(current["hostConclusion"]["note"])
+        self.assertEqual(current["hostConclusion"]["reason"], {"code": "lead.owned-concluded", "params": {"leadRunId": lead["runId"]}})
         self.assertFalse(checkout.exists())
 
     def test_console_conclusion_reclaims_owned_checkout_without_host_control(self):

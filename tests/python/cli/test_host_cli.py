@@ -372,7 +372,7 @@ class HelpTests(unittest.TestCase):
         for text in (submit, continuation):
             note = next(line.strip() for line in text.splitlines() if line.strip().startswith("accessNote "))
             self.assertIn("required when access is full", note)
-            self.assertIn("≤1000 characters", note)
+            self.assertIn("≤10000 UTF-8 bytes", note)
             self.assertIn("single line", note)
             self.assertNotIn("splitlines()", note)
             self.assertNotIn("any((", text)

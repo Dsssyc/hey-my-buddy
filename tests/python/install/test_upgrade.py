@@ -16,6 +16,15 @@ from hey_my_buddy.errors import BoardError
 from support import BoardTestCase
 
 class UpgradeTests(BoardTestCase):
+    def test_detach_uses_only_the_old_services_restart_fields(self):
+        state = self.directory / 'state'
+        state.mkdir()
+        target = self.directory / 'runtimes' / ('a' * 32)
+        with mock.patch.object(upgrade, 'command', return_value={}) as command, \
+             mock.patch.object(upgrade, 'idle_snapshot'):
+            upgrade.detach(state, target)
+        command.assert_called_once_with(state, target, 'restart', {'drainSeconds': 0})
+
     def test_runtime_environment_uses_pinned_runtime_and_excludes_dev_source(self):
         state = self.directory / 'state'
         target = self.directory / 'runtimes' / ('a' * 32)

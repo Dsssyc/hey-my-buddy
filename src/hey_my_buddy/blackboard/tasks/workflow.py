@@ -39,7 +39,6 @@ from ...protocol.stop import WRAP_UP_INITIATORS
 from . import fixes as task_fixes
 from . import host_conclusions
 from . import micro_task
-from .command_receipts import CANCELLATION_NOTE
 from .macro_task_deletion_guard import reject_deleting_run, reject_macro_task
 from ..store.db import canonical_json, sha256_text
 from ...errors import BoardError
@@ -2184,7 +2183,8 @@ class WorkflowCoordinator:
         decision = schemas.required_string(params, "decision", max_length=16)
         if decision not in ("approve", "decline"):
             raise BoardError("INVALID_ARGUMENT", "decision must be 'approve' or 'decline'")
-        note = schemas.optional_string(params, "note", max_length=schemas.MAX_NOTE_BYTES) or ""
+        note = (schemas.bounded_text(params, "note", max_bytes=schemas.MAX_NOTE_BYTES)[0]
+                if params.get("note") is not None else None)
         auto_continue = schemas.optional_bool(params, "autoContinue", True)
         with self.db.read() as connection:
             receipt_entry = self.board._receipt_entry(connection, command_id, "workflow.decide", None, deleted_only=True)
@@ -2342,7 +2342,7 @@ class WorkflowCoordinator:
                             connection,
                             task,
                             self._run_row(connection, run_id),
-                            
+
                             actor=actor,
                             now=now,
                             continuation_id=approve_continuation,
@@ -2394,7 +2394,7 @@ class WorkflowCoordinator:
                             connection,
                             task,
                             run_row,
-                            
+
                             actor=actor,
                             now=now,
                             continuation_id=decline_continuation,
@@ -2615,7 +2615,7 @@ class WorkflowCoordinator:
 
     def _resolve_helper_attention(
         self, connection, parent_run, request_row, prepared: list[dict], *,
-        decision: str, note: str, actor: dict, command_id: str, now: str,
+        decision: str, note: str | None, actor: dict, command_id: str, now: str,
     ) -> None:
         """Answer one exact proxy chain and resume its requesting leaf only."""
         chain = self._attention_chain(connection, parent_run, request_row)
@@ -2942,7 +2942,8 @@ class WorkflowCoordinator:
         policy = schemas.optional_string(params, "helperPolicy")
         if policy is not None and policy not in ("cancel", "keep"):
             raise BoardError("INVALID_ARGUMENT", "helperPolicy must be 'cancel' or 'keep'")
-        note = schemas.optional_string(params, "note", max_length=schemas.MAX_NOTE_BYTES) or ""
+        note = (schemas.bounded_text(params, "note", max_bytes=schemas.MAX_NOTE_BYTES)[0]
+                if params.get("note") is not None else None)
         reroute = schemas.optional_bool(params, "reroute", False)
         access_selection = schemas.normalize_access(params) if "access" in params or "accessNote" in params else None
         supplied_buddy = schemas.normalize_buddy(params["buddy"]) if "buddy" in params else None
@@ -3089,7 +3090,7 @@ class WorkflowCoordinator:
                 # Ending a delivered outcome without acceptance records the negative
                 # review and the Host's opinion next to the immutable artifact; the
                 # artifact itself and every earlier review stay in history.
-                rejection_note = note or _head(input_text, 512)
+                rejection_note = note
                 connection.execute(
                     "UPDATE tasks SET review_rejected_at=?, review_rejection_note=?,"
                     " updated_at=? WHERE task_id=?",
@@ -3470,7 +3471,8 @@ class WorkflowCoordinator:
         schemas.reject_untrusted_override(params)
         run_id = schemas.required_string(params, "runId", max_length=128)
         command_id = schemas.optional_string(params, "commandId", max_length=128)
-        note = schemas.optional_string(params, "note", max_length=schemas.MAX_NOTE_BYTES) or None
+        note = (schemas.bounded_text(params, "note", max_bytes=schemas.MAX_NOTE_BYTES)[0]
+                if params.get("note") is not None else None)
         request_key = {"runId": run_id, "note": note}
         now = self.now()
         with self.db.write() as connection:
@@ -3503,7 +3505,8 @@ class WorkflowCoordinator:
             raise BoardError("UNAUTHORIZED", "Stopping a macro task requires an authenticated console writer")
         identifier = schemas.required_string(params, "macroTaskId", max_length=134)
         command_id = schemas.required_string(params, "commandId", max_length=128)
-        note = schemas.optional_string(params, "note", max_length=schemas.MAX_NOTE_BYTES) or None
+        note = (schemas.bounded_text(params, "note", max_bytes=schemas.MAX_NOTE_BYTES)[0]
+                if params.get("note") is not None else None)
         request = {"macroTaskId": identifier, "note": note}
         now = self.now()
         with self.db.write() as connection:
@@ -3557,7 +3560,7 @@ class WorkflowCoordinator:
         self.board._notify(head)
         return response
 
-    def cancel_for_service_stop(self, note: str) -> tuple[dict[str, int], set[str]]:
+    def cancel_for_service_stop(self, note: str | None) -> tuple[dict[str, int], set[str]]:
         """Internal daemon shutdown path; no request fields or caller authority enter here."""
         with self.db.write() as connection:
             unresolved = self.board.UNRESOLVED_SQL.replace("execution_state", "a.execution_state").replace(
@@ -3613,7 +3616,7 @@ class WorkflowCoordinator:
             self.board._notify(head)
         return counts, set(candidates)
 
-    def _cancel_in_transaction(self, connection, run_row, task, note: str, actor: dict, initiator: str, now: str, *,
+    def _cancel_in_transaction(self, connection, run_row, task, note: str | None, actor: dict, initiator: str, now: str, *,
                                active_only: bool = False, stop_facts: dict | None = None) -> dict:
         run_id = run_row["run_id"]
         # Fence the root before descendants settle: a transferred checkout must
@@ -3635,10 +3638,9 @@ class WorkflowCoordinator:
         run_row = self._run_row(connection, run_id)
         return {
             **self.compact(connection, run_row, task), "cancelled": True, "duplicate": False,
-            "note": CANCELLATION_NOTE,
         }
 
-    def _cancel_children(self, connection, run_id: str, note: str, now: str, *,
+    def _cancel_children(self, connection, run_id: str, note: str | None, now: str, *,
                          actor: dict | None = None, initiator: str = "unknown", include_lead: bool = False,
                          active_only: bool = False, stop_facts: dict | None = None) -> list[str]:
         """Fence the whole owned graph, including work behind settled helpers."""
@@ -3942,8 +3944,9 @@ class WorkflowCoordinator:
         note, _ = schemas.bounded_text(params, "note", max_bytes=schemas.MAX_NOTE_BYTES)
         not_required = params.get("notRequired")
         if not_required is not None and (not isinstance(not_required, str) or not not_required.strip()):
-            raise BoardError("INVALID_ARGUMENT", "notRequired must be a nonempty reason string")
-        not_required = not_required.strip() if isinstance(not_required, str) else None
+            raise BoardError("INVALID_ARGUMENT", "notRequired must be a nonempty note string")
+        not_required = (schemas.bounded_text(params, "notRequired", max_bytes=schemas.MAX_NOTE_BYTES)[0]
+                        if not_required is not None else None)
         adjusted = schemas.optional_bool(params, "adjusted", False)
         host_paths = schemas.string_list(params, "hostPaths", limit=256)
         before_commit = schemas.optional_string(params, "beforeCommit", max_length=128)
@@ -4366,7 +4369,7 @@ class WorkflowCoordinator:
                     None if not_required is not None else verification.get("afterCommit"),
                     None if not_required is not None else verification.get("beforeTree"),
                     None if not_required is not None else verification.get("afterTree"),
-                    canonical_json(verification), not_required or "", command_id, actor["role"], actor["id"], now,
+                    canonical_json(verification), not_required, command_id, actor["role"], actor["id"], now,
                 ),
             )
             self.board._append_event(
@@ -5194,7 +5197,8 @@ class WorkflowCoordinator:
         observed = schemas.required_string(params, "observedFingerprint", max_length=64)
         if schemas.SHA256_PATTERN.fullmatch(observed) is None:
             raise BoardError("INVALID_ARGUMENT", "observedFingerprint must be a lowercase sha256 hex digest")
-        note = schemas.optional_string(params, "note", max_length=schemas.MAX_NOTE_BYTES) or ""
+        note = (schemas.bounded_text(params, "note", max_bytes=schemas.MAX_NOTE_BYTES)[0]
+                if params.get("note") is not None else None)
         if action in ("adopt", "abandon"):
             if paths:
                 raise BoardError("INVALID_ARGUMENT", f"{action} binds the whole recorded site and takes no path selection")
@@ -7145,7 +7149,7 @@ class WorkflowCoordinator:
                     "SELECT * FROM workflow_continuations WHERE turn_id=? AND state='consumed'",
                     (turn_row["turn_id"],),
                 ).fetchone()
-                self._requeue(connection, task, run_row, 
+                self._requeue(connection, task, run_row,
                               actor={"role": "workflow", "id": "auto"}, now=now,
                               continuation_id=continuation["continuation_id"])
                 facts = {"turnId": turn_row["turn_id"], "continuationId": continuation["continuation_id"],
@@ -7781,7 +7785,7 @@ class WorkflowCoordinator:
                     connection,
                     parent_task,
                     parent,
-                    
+
                     actor={"role": "workflow", "id": "auto"},
                     now=now,
                 )

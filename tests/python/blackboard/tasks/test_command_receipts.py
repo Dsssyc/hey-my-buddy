@@ -117,7 +117,7 @@ class WorkflowReceiptTests(WorkflowTestCase):
             ("workflow.decide", decided, ("requestId", "decision")),
             ("workflow.continue", continued, ("continuationId", "inputSha256", "helperPolicy", "targetRunId")),
             ("workflow.takeover", taken, ("previousOwnerGeneration",)),
-            ("workflow.cancel", cancelled, ("cancelled", "note")),
+            ("workflow.cancel", cancelled, ("cancelled",)),
         ):
             with self.subTest(kind=kind):
                 stored, rebuilt, current = replay(board, kind, original)

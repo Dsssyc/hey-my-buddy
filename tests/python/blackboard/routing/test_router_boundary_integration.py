@@ -466,7 +466,7 @@ class MicroTaskBoundaryTests(WorkflowTestCase):
             self.assertEqual(params["runId"], view["runId"])
             self.assertEqual(params["expectedRevision"], view["revision"])
             self.assertTrue(params["input"])
-            self.assertTrue(params["reason"])
+            self.assertTrue(params["note"])
             self.assertLessEqual(len(params["commandId"]), 128)
         chosen = choices[1]["params"]
         continued = self.board_.call("workflow_continue", self.template_params(view, chosen))
