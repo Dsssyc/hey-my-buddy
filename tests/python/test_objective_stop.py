@@ -89,13 +89,9 @@ class ObjectiveStopTests(WorkflowTestCase, ConsoleTestCase):
         accepted = self.submit(board, kind='worktree', objective={'title': 'Group'})
         self.finish_turn(board, self.claim(board))
         view = board.call('workflow_get', {'runId': accepted['runId']})
-        integration = board.call('workflow_integration_record', {
-            'runId': view['runId'], 'commandId': 'integrated', 'expectedRevision': view['revision'],
-            'artifactId': view['finalArtifactId'], 'notRequired': True, 'reason': 'Fixture has no changes', **self.control(view),
-        })
-        board.call('workflow_acknowledge', {
-            'runId': view['runId'], 'commandId': 'accepted', 'artifactId': view['finalArtifactId'],
-            'integrationId': integration['integrationId'], 'verdict': 'accepted', 'note': 'Checked fixed fixture artifact', **self.control(view),
+        board.call('workflow_accept', {
+            'runId': view['runId'], 'artifactId': view['finalArtifactId'],
+            'note': 'Checked fixed fixture artifact', 'notRequired': 'Fixture has no changes', **self.control(view),
         })
         pending = self.submit(board, kind='worktree', request_id='pending', objectiveId=accepted['objectiveId'])
         self.finish_turn(board, self.claim(board, claim_request_id='parent-claim'), disposition='assistance')

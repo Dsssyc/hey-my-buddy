@@ -569,7 +569,7 @@ CREATE INDEX IF NOT EXISTS evaluation_decisions_created_idx
     # that records the batch's facts, so a failed preparation consumes no progress.
     """
 CREATE INDEX IF NOT EXISTS events_review_seq_idx
-    ON events(seq) WHERE kind IN ('task.accepted','task.rejected','workflow.acknowledged');
+    ON events(seq) WHERE kind IN ('task.accepted','task.rejected','workflow.acknowledged','workflow.review_rejected');
 """,
     """
 CREATE TABLE IF NOT EXISTS evaluation_maintenance_checkpoints (
@@ -1057,7 +1057,7 @@ CREATE TABLE IF NOT EXISTS workflow_host_conclusions (
     attempt_id       TEXT REFERENCES attempts(attempt_id) ON DELETE RESTRICT,
     run_revision     INTEGER NOT NULL,
     owner_generation INTEGER NOT NULL,
-    execution_status TEXT NOT NULL CHECK (execution_status IN ('failed','cancelled')),
+    execution_status TEXT NOT NULL CHECK (execution_status IN ('failed','cancelled','delivered')),
     note             TEXT NOT NULL,
     evidence_json    TEXT NOT NULL DEFAULT '[]',
     artifact_id      TEXT REFERENCES workflow_artifacts(artifact_id) ON DELETE RESTRICT,

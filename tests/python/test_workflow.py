@@ -194,17 +194,17 @@ class WorkflowTestCase(BoardTestCase):
         params.update(self.control(view))
         return board.call("workflow_continue", params)
 
-    def record_integration(self, board, view, *, artifact_id=None, command_id="integration-1", reason=None):
-        """Explicit not-required integration: this fixture has no separate Git target."""
-        return board.store.workflow.integration_record({
+    def accept_run(self, board, view, *, artifact_id=None, note="inspected the sealed diff", **extra):
+        """One-step acceptance with an explicit not-required integration: this fixture has no separate Git target."""
+        params = {
             "runId": view["runId"],
-            "commandId": command_id,
-            "expectedRevision": view["revision"],
             "artifactId": artifact_id or view["finalArtifactId"],
-            "notRequired": True,
-            "reason": reason or "this fixture is reviewed without a separate repository target",
+            "note": note,
+            "notRequired": "this fixture is reviewed without a separate repository target",
             **self.control(view),
-        })
+        }
+        params.update(extra)
+        return board.call("workflow_accept", params)
 
 
 class LifecycleTests(WorkflowTestCase):
@@ -272,19 +272,10 @@ class LifecycleTests(WorkflowTestCase):
         self.assertEqual(kinds[0], "output")
         self.assertIn("input", kinds)
 
-        self.record_integration(board, delivered)
-        acknowledged = board.call(
-            "workflow_acknowledge",
-            {
-                "runId": run_id,
-                "note": "inspected the sealed diff",
-                "verdict": "accepted",
-                **self.control(delivered),
-            },
-        )
-        self.assertEqual(acknowledged["state"], "accepted")
-        self.assertEqual(acknowledged["task"]["acceptanceVerdict"], "accepted")
-        self.assertIsNotNone(acknowledged["finalArtifactId"])
+        accepted = self.accept_run(board, delivered)
+        self.assertEqual(accepted["state"], "accepted")
+        self.assertEqual(accepted["task"]["acceptanceVerdict"], "accepted")
+        self.assertIsNotNone(accepted["finalArtifactId"])
 
     def test_one_slot_progress_serializes_turns(self):
         board = self.board(max_concurrent=1)
@@ -658,7 +649,7 @@ class LifecycleTests(WorkflowTestCase):
         submitted = self.submit(board)
         run_id = submitted["runId"]
         for operation, command in (("task_cancel", "workflow_cancel"), ("task_retry", "workflow_continue"),
-                                   ("task_acknowledge", "workflow_acknowledge")):
+                                   ("task_acknowledge", "workflow_accept")):
             with self.subTest(operation=operation):
                 parameters = {"runId": run_id, **({"note": "review"} if operation == "task_acknowledge" else {})}
                 with self.assertRaises(BoardError) as raised:
@@ -748,11 +739,7 @@ class WorkspaceTests(WorkflowTestCase):
         audit = board.call("workflow_get", {"runId": run_id, "includeAudit": True})
         reservation = audit["audit"]["reservations"][0]
         self.assertEqual(reservation["state"], "held")
-        self.record_integration(board, delivered)
-        board.call(
-            "workflow_acknowledge",
-            {"runId": run_id, "note": "ok", "verdict": "accepted", **self.control(delivered)},
-        )
+        self.accept_run(board, delivered, note="ok")
         released = board.call("workflow_get", {"runId": run_id, "includeAudit": True})
         self.assertEqual(released["audit"]["reservations"][0]["state"], "released")
 
@@ -1332,20 +1319,25 @@ class AcknowledgementBoundaryTests(WorkflowTestCase):
         view = board.call("workflow_get", {"runId": submitted["runId"]})
         self.assertEqual(view["state"], "delivered")
         output = [row for row in view["artifacts"] if row["kind"] == "output"][0]
-        self.record_integration(board, view)
         return submitted, view, output
 
     def test_premature_acknowledgement_at_a_host_boundary_is_refused(self):
         board = self.board()
         self.register(board)
         submitted = self.submit(board)
-        self.finish_turn(board, self.claim(board), disposition="assistance")
+        # An assistance boundary whose turn never sealed an output is not a final
+        # artifact, so the Host cannot finish the goal from it.
+        self.finish_turn(board, self.claim(board), disposition="assistance", seal=False)
         view = board.call("workflow_get", {"runId": submitted["runId"]})
+        output = next((row for row in view["artifacts"] if row["kind"] == "output"), None)
+        params = {"runId": submitted["runId"], "note": "looks done",
+                  "notRequired": "no separate target", **self.control(submitted)}
+        if output is not None:
+            params["artifactId"] = output["artifactId"]
+        else:
+            params["artifactId"] = "art-no-sealed-output"
         with self.assertRaises(BoardError) as raised:
-            board.call(
-                "workflow_acknowledge",
-                {"runId": submitted["runId"], "note": "looks done", **self.control(submitted)},
-            )
+            board.call("workflow_accept", params)
         self.assertEqual(raised.exception.code, "NOT_READY")
         audit = board.call("workflow_get", {"runId": submitted["runId"], "includeAudit": True})
         self.assertEqual(audit["state"], "awaiting-host")
@@ -1372,8 +1364,10 @@ class AcknowledgementBoundaryTests(WorkflowTestCase):
         )
         with self.assertRaises(BoardError) as raised:
             board.call(
-                "workflow_acknowledge",
-                {"runId": submitted["runId"], "note": "accepted early", **self.control(approved)},
+                "workflow_accept",
+                {"runId": submitted["runId"], "note": "accepted early",
+                 "artifactId": "art-unknown", "notRequired": "no separate target",
+                 **self.control(approved)},
             )
         self.assertEqual(raised.exception.code, "NOT_READY")
 
@@ -1387,27 +1381,30 @@ class AcknowledgementBoundaryTests(WorkflowTestCase):
         self.assertEqual(raised.exception.code, "GOVERNED_REQUIRED")
         with self.assertRaises(BoardError) as raised:
             board.call(
-                "workflow_acknowledge",
+                "workflow_accept",
                 {
                     "runId": submitted["runId"],
                     "artifactId": input_artifact["artifactId"],
                     "note": "wrong artifact",
+                    "notRequired": "no separate target",
                     **self.control(submitted),
                 },
             )
         self.assertEqual(raised.exception.code, "CONFLICT")
         with self.assertRaises(BoardError) as raised:
             board.call(
-                "workflow_acknowledge",
-                {"runId": submitted["runId"], "artifactId": "art-does-not-exist", "note": "x", **self.control(submitted)},
+                "workflow_accept",
+                {"runId": submitted["runId"], "artifactId": "art-does-not-exist", "note": "x",
+                 "notRequired": "no separate target", **self.control(submitted)},
             )
         self.assertEqual(raised.exception.code, "NOT_FOUND")
         accepted = board.call(
-            "workflow_acknowledge",
+            "workflow_accept",
             {
                 "runId": submitted["runId"],
                 "artifactId": output["artifactId"],
                 "note": "the exact sealed output",
+                "notRequired": "no separate target",
                 **self.control(submitted),
             },
         )
@@ -1415,57 +1412,50 @@ class AcknowledgementBoundaryTests(WorkflowTestCase):
         self.assertEqual(accepted["finalArtifactId"], output["artifactId"])
         # A genuine exact replay is idempotent; a different review is not a relabel.
         replay = board.call(
-            "workflow_acknowledge",
+            "workflow_accept",
             {
                 "runId": submitted["runId"],
                 "artifactId": output["artifactId"],
                 "note": "the exact sealed output",
+                "notRequired": "no separate target",
                 **self.control(submitted),
             },
         )
         self.assertTrue(replay["duplicate"])
         with self.assertRaises(BoardError) as raised:
             board.call(
-                "workflow_acknowledge",
-                {"runId": submitted["runId"], "note": "different note", **self.control(submitted)},
+                "workflow_accept",
+                {"runId": submitted["runId"], "note": "different note",
+                 "artifactId": output["artifactId"], "notRequired": "no separate target",
+                 **self.control(submitted)},
             )
         self.assertEqual(raised.exception.code, "CONFLICT")
 
     def test_rejected_review_then_continuation_then_new_acceptance(self):
         board = self.board()
         submitted, view, output = self._delivered(board)
-        rejected = board.call(
-            "workflow_acknowledge",
-            {
-                "runId": submitted["runId"],
-                "artifactId": output["artifactId"],
-                "note": "not good enough",
-                "verdict": "rejected",
-                **self.control(submitted),
-            },
-        )
-        self.assertEqual(rejected["state"], "awaiting-host")
-        self.assertEqual(rejected["task"]["acceptanceVerdict"], "rejected")
+        # Rejecting a delivered outcome is a continuation: the negative review and
+        # the Host's opinion are recorded next to the immutable artifact.
         turned = board.call("workflow_get", {"runId": submitted["runId"]})
-        continued = self.continue_run(board, turned, command_id="continue-1", input="address the review")
+        continued = self.continue_run(board, turned, command_id="continue-1", input="address the review",
+                                      reason="not good enough")
         self.assertEqual(continued["state"], "executing")
-        # The prior review is archived, not silently inherited by the new attempt.
         archived = board.call("workflow_get", {"runId": submitted["runId"], "includeAudit": True})
-        self.assertIsNone(archived["task"]["acceptedAt"])
+        # The delivered outcome is recorded as rejected, never silently carried
+        # into the continuation as an acceptance.
+        self.assertEqual(archived["task"]["acceptanceVerdict"], "rejected")
         events = board.call(
             "events_read", {"runId": submitted["runId"], "after": 0, "limit": 200}
         )["events"]
-        self.assertIn("task.review_archived", [event["kind"] for event in events])
+        rejection = next(event for event in events if event["kind"] == "workflow.review_rejected")
+        self.assertEqual(rejection["payload"]["artifactId"], output["artifactId"])
+        self.assertEqual(rejection["payload"]["reason"], "not good enough")
         second = self.claim(board, claim_request_id="c2")
         self.finish_turn(board, second, session_id="sess-2")
         delivered = board.call("workflow_get", {"runId": submitted["runId"]})
         self.assertEqual(delivered["state"], "delivered")
         new_output = [row for row in delivered["artifacts"] if row["kind"] == "output"][0]
-        self.record_integration(board, delivered, command_id="integration-2")
-        accepted = board.call(
-            "workflow_acknowledge",
-            {"runId": submitted["runId"], "note": "now it is good", **self.control(submitted)},
-        )
+        accepted = self.accept_run(board, delivered, note="now it is good")
         self.assertEqual(accepted["state"], "accepted")
         self.assertEqual(accepted["finalArtifactId"], new_output["artifactId"])
         self.assertEqual(accepted["task"]["acceptanceVerdict"], "accepted")

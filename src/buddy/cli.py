@@ -3,7 +3,7 @@
 Everything the plugin offers is one ``buddy`` command: one method name, one JSON
 object argument, one JSON object on stdout. The single governed goal lifecycle owns
 the bare names (``submit``, ``get``, ``decide``, ``continue``, ``takeover``,
-``cancel``, ``acknowledge``, ``await``, ``suggest``); ``execution-*`` names reach the
+``cancel``, ``accept``, ``conclude``, ``reclaim``, ``await``, ``suggest``); ``execution-*`` names reach the
 ordinary task records that the command/external adapters and internal decision
 infrastructure own. The current command surface is documented in
 ``docs/reference/cli.md``.
@@ -64,12 +64,11 @@ METHODS = [
     "continue",
     "takeover",
     "cancel",
-    "acknowledge",
+    "accept",
+    "conclude",
+    "reclaim",
     "scope-amend",
     "workspace-resolve",
-    "integration-record",
-    "workspace-cleanup-plan",
-    "workspace-cleanup-apply",
     "await",
     "suggest",
     # -- work objectives: read-only browsing of grouped delegations ----------
@@ -159,21 +158,22 @@ examples:
   buddy takeover '{"runId":"<runId>","commandId":"cmd-3","expectedOwnerGeneration":1,"newHostId":"host-2","controlFile":"..."}'
   buddy cancel '{"runId":"<runId>","commandId":"cmd-4","reason":"...","controlFile":"..."}'
   buddy scope-amend '{"runId":"<runId>","commandId":"cmd-5","expectedRevision":3,"expectedScopeVersion":1,"writeScope":["src"],"reason":"...","controlFile":"..."}'
+  buddy conclude '{"runId":"<runId>","note":"failed after the schema change; partial work retained","controlFile":"..."}'   buddy reclaim '{"runId":"<runId>","controlFile":"..."}'
+      conclude ends a failed, cancelled or delivered-but-unaccepted goal: unsealed
+      managed changes are sealed as an independent Host partial output, the
+      conclusion is recorded and the checkout reclaimed. reclaim retries the
+      removal after a blocked reclaim or a keepCheckout acceptance. All three take
+      targetRunId for an owned helper and no command number: the same request
+      replays, a changed payload conflicts. controlFile injects the control triple;
+      no implicit latest-generation lookup.
   buddy workspace-resolve '{"runId":"<runId>","commandId":"cmd-6","expectedRevision":4,"conflictId":"...","action":"restore","paths":["file"],"observedFingerprint":"...","controlFile":"..."}'
-  buddy integration-record '{"runId":"<runId>","commandId":"cmd-7","expectedRevision":5,"artifactId":"...","notRequired":true,"reason":"...","controlFile":"..."}'
-  buddy workspace-cleanup-plan '{"runId":"<runId>","commandId":"cmd-8","expectedRevision":6,"controlFile":"..."}'
-  buddy workspace-cleanup-apply '{"runId":"<runId>","planId":"...","commandId":"cmd-9","expectedRevision":7,"confirmPath":"...","controlFile":"..."}'
-      Continuation and lifecycle controls accept targetRunId for an owned helper.
-      controlFile injects the hostId/ownerGeneration/controlToken triple locally, so the
-      token never appears on the command line or in the output. There is no implicit
-      latest-generation lookup: pass the exact controlFile you were given, or the
-      complete explicit triple. A stale generation is fenced, never adopted.
-      `takeover` saves the new generation's capability and prints only its controlFile.
-
-  buddy acknowledge '{"runId":"<runId>","artifactId":"...","integrationId":"...","note":"inspected the diff and ran the checks","verdict":"accepted","controlFile":"..."}'
-      Inspect the selected final artifact first, then record review as the current
-      owner. Acceptance requires verified integration or an explicit not-required
-      record for that artifact.
+  buddy accept '{"runId":"<runId>","artifactId":"...","note":"inspected the diff and ran the checks","target":{"path":"/abs/target","ref":"main"},"controlFile":"..."}'
+  buddy accept '{"runId":"<runId>","artifactId":"...","note":"no repository target needed","notRequired":"the artifact needs no repository target","controlFile":"..."}'
+      Accept one delivered artifact. The service compares the artifact with the
+      target itself; differing paths are refused with their names first, and your
+      own adjustments are confirmed with "adjusted":true (the note is the reason).
+      Optional hostPaths with beforeCommit verify real Host additions; the checkout
+      is reclaimed afterwards unless "keepCheckout":true.
 
   buddy await '{"runId":"<runId>"}'      buddy await '{"requestId":"fix-123","waitSeconds":3600}'
       Wait without starting, resuming or cancelling work. waitSeconds is at most
@@ -336,7 +336,7 @@ def _worker_command_unlocked(action: str, params: dict) -> dict:
 #: Bound on a control file this CLI is willing to read.
 MAX_CONTROL_FILE_BYTES = 64 * 1024
 #: Governed mutations whose Host control triple is required by the service.
-CONTROL_METHODS = frozenset({"decide", "continue", "takeover", "cancel", "acknowledge", "scope-amend", "workspace-resolve", "integration-record", "workspace-cleanup-plan", "workspace-cleanup-apply"})
+CONTROL_METHODS = frozenset({"decide", "continue", "takeover", "cancel", "accept", "conclude", "reclaim", "scope-amend", "workspace-resolve"})
 _CONTROL_TRIPLE = ("hostId", "ownerGeneration", "controlToken")
 _CONTROL_FILE_FIELDS = frozenset({*_CONTROL_TRIPLE, "runId", "savedAt"})
 _RUN_ID_PATTERN = re.compile(r"^[A-Za-z0-9._:-]{1,128}$")

@@ -88,29 +88,39 @@ class HostQuotaRecoveryTests(GovernedWorkerTestCase):
         with self.daemon(env=self.env()):
             submitted, failed, partial = self.quota_failure()
             common = {"runId": failed["runId"], "controlFile": submitted["controlFile"]}
-            concluded = self.call("acknowledge", {**common, "commandId": "record-failed",
-                "expectedRevision": failed["revision"], "verdict": "recorded", "artifactId": partial["artifactId"],
-                "note": "Incomplete work is retained in the partial artifact; no further execution."})
-            self.assertEqual(concluded["status"], "failed")
-            planned = self.call("workspace-cleanup-plan", {**common, "commandId": "plan-failed",
-                "expectedRevision": concluded["revision"]})
-            self.assertTrue(planned["plan"]["eligible"], planned["plan"])
+            # The Host edits the failed checkout inside the authorized scope before
+            # concluding: the conclusion must seal these changes as its own
+            # independent partial output without overwriting the Worker's earlier
+            # fixed partial of the same attempt.
             checkout = Path(failed["workspace"]["path"])
-            original = (checkout / "tracked.txt").read_text()
-            (checkout / "tracked.txt").write_text("unreviewed extra change\n")
-            params = {**common, "commandId": "apply-failed", "expectedRevision": planned["revision"],
-                      "planId": planned["plan"]["planId"], "confirmPath": planned["plan"]["path"]}
-            code, refused = self.cli("workspace-cleanup-apply", json.dumps(params), env=self.env())
-            self.assertEqual(code, 1)
-            self.assertEqual(refused["error"]["code"], "NOT_READY")
-            self.assertTrue(checkout.exists())
-            (checkout / "tracked.txt").write_text(original)
-            cleaned = self.call("workspace-cleanup-apply", params)
-            self.assertTrue(cleaned["removed"])
+            (checkout / "tracked.txt").write_text("host review notes after the failure\n")
+            worker_partial_manifest = partial["manifestSha256"]
+            concluded = self.cli("conclude", json.dumps({
+                **common,
+                "note": "Incomplete work is retained in the partial artifact; no further execution.",
+            }), env=self.env())[1]
+            self.assertEqual(concluded["status"], "failed")
+            self.assertEqual(concluded["verdict"], "concluded")
+            self.assertIsNotNone(concluded["hostConclusion"])
+            self.assertTrue(concluded["reclaim"]["removed"], concluded["reclaim"])
             self.assertFalse(checkout.exists())
+            # The Host seal is a new artifact with its own binding; the Worker's
+            # partial artifact, ref and manifest stay exactly as they were.
+            self.assertNotEqual(concluded["partialArtifactId"], partial["artifactId"])
             self.assertTrue(Path(partial["diffPath"]).is_file())
             self.assertTrue(Path(partial["cumulativePatch"]["path"]).is_file())
-            self.assertEqual(cleaned["state"], "failed")
+            sealed = self.call("get", {"runId": failed["runId"], "includeAudit": True})
+            artifacts = {row["artifactId"]: row for row in sealed["artifacts"]}
+            self.assertIn(partial["artifactId"], artifacts)
+            self.assertEqual(artifacts[partial["artifactId"]]["manifestSha256"], worker_partial_manifest)
+            host_artifact = artifacts[concluded["partialArtifactId"]]
+            self.assertEqual(host_artifact["kind"], "partial-output")
+            self.assertNotEqual(host_artifact["outputCommit"], partial["outputCommit"])
+            replay = self.cli("conclude", json.dumps({**common, "note": "Incomplete work is retained in the "
+                "partial artifact; no further execution."}), env=self.env())[1]
+            self.assertTrue(replay["duplicate"])
+            # Both partial outputs stay readable after the reclaim.
+            self.assertTrue(Path(host_artifact["diffPath"]).is_file())
 
 
 class CrossHarnessQuotaRecoveryTests(HostQuotaRecoveryTests):

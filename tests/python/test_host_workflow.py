@@ -71,24 +71,38 @@ class HostAdmissionTests(WorkflowTestCase):
 
 
 class HostCompletionTests(WorkflowTestCase):
-    def test_host_rereview_retains_the_rejected_verdict_without_an_empty_turn(self):
+    def test_host_correction_is_recorded_by_one_adjusted_acceptance(self):
         board = self.board()
         parent = self.submit(board)
         self.register(board)
         self.finish_turn(board, self.claim(board))
         delivered = board.call("workflow_get", {"runId": parent["runId"]})
-        rejected = board.call("workflow_acknowledge", {"runId": parent["runId"], "commandId": "first-review",
-            "artifactId": delivered["finalArtifactId"], "verdict": "rejected", "note": "Host found a required adjustment",
-            **self.control(parent)})
-        integrated = self.record_integration(board, rejected)
-        accepted = board.call("workflow_acknowledge", {"runId": parent["runId"], "commandId": "review-after-host-adjustment",
-            "expectedRevision": integrated["revision"], "artifactId": delivered["finalArtifactId"], "verdict": "accepted",
-            "note": "Host reviewed the adjusted integration", **self.control(parent)})
+        # A target that does not carry the artifact is refused with the differing
+        # paths first; there is no separate rejection record to archive.
+        blank = self.workdir("blank-target")
+        (blank / "keep.txt").write_text("untouched\n")
+        import subprocess as sp
+        sp.run(["git", "-C", str(blank), "init", "-q"], check=True)
+        sp.run(["git", "-C", str(blank), "add", "keep.txt"], check=True)
+        sp.run(["git", "-C", str(blank), "-c", "user.email=t@t", "-c", "user.name=t",
+                "commit", "-qm", "blank"], check=True)
+        with self.assertRaises(BoardError) as raised:
+            board.call("workflow_accept", {"runId": parent["runId"], "artifactId": delivered["finalArtifactId"],
+                "note": "Host found a required adjustment", "target": {"path": str(blank), "ref": "HEAD"},
+                **self.control(parent)})
+        self.assertEqual(raised.exception.code, "INTEGRATION_UNVERIFIED")
+        self.assertTrue(raised.exception.details["paths"])
+        accepted = board.call("workflow_accept", {"runId": parent["runId"], "artifactId": delivered["finalArtifactId"],
+            "note": "Host applied its own adjustment to the sealed output", "adjusted": True,
+            "target": {"path": str(blank), "ref": "HEAD"}, **self.control(parent)})
         self.assertEqual(accepted["state"], "accepted")
         self.assertEqual(accepted["counts"]["turns"], 1)
-        with board.store.db.read() as db:
-            archived = db.execute("SELECT payload_json FROM events WHERE kind='task.review_archived'").fetchone()
-            self.assertEqual(json.loads(archived[0])["verdict"], "rejected")
+        self.assertEqual(accepted["integration"]["verification"]["adjustments"],
+                         raised.exception.details["paths"])
+        replay = board.call("workflow_accept", {"runId": parent["runId"], "artifactId": delivered["finalArtifactId"],
+            "note": "Host applied its own adjustment to the sealed output", "adjusted": True,
+            "target": {"path": str(blank), "ref": "HEAD"}, **self.control(parent)})
+        self.assertTrue(replay["duplicate"])
 
     def test_continue_clears_the_current_final_binding_but_retains_the_old_artifact(self):
         board = self.board()
@@ -115,20 +129,18 @@ class HostCompletionTests(WorkflowTestCase):
         parent = board.call("workflow_get", {"runId": parent["runId"]})
         child = board.call("workflow_get", {"runId": child_id})
         artifact = next(item for item in child["artifacts"] if item["kind"] == "output")
-        integrated = board.store.workflow.integration_record({"runId": parent["runId"], "targetRunId": child_id,
-            "commandId": "helper-integration", "expectedRevision": parent["revision"], "artifactId": artifact["artifactId"],
-            "notRequired": True, "reason": "Fixture evidence checked without a separate target", **self.control(parent)})
-        board.call("workflow_acknowledge", {"runId": parent["runId"], "targetRunId": child_id,
-            "commandId": "helper-host-completion", "artifactId": artifact["artifactId"], "integrationId": integrated["integrationId"],
-            "verdict": "accepted", "note": "Host completed the current sealed helper turn", **self.control(parent)})
+        board.call("workflow_accept", {"runId": parent["runId"], "targetRunId": child_id,
+            "artifactId": artifact["artifactId"],
+            "note": "Host completed the current sealed helper turn",
+            "notRequired": "Fixture evidence checked without a separate target", **self.control(parent)})
         parent = board.call("workflow_get", {"runId": parent["runId"]})
         self.assertEqual(parent["children"][0]["state"], "succeeded")
         self.assertEqual(parent["state"], "awaiting-host")
         self.assertEqual(parent["counts"]["turns"], 1)
         artifact = next(item for item in parent["artifacts"] if item["kind"] == "output")
-        self.record_integration(board, parent, artifact_id=artifact["artifactId"])
-        finished = board.call("workflow_acknowledge", {"runId": parent["runId"], "commandId": "parent-host-completion",
-            "artifactId": artifact["artifactId"], "verdict": "accepted", "note": "Host checked the whole goal", **self.control(parent)})
+        finished = board.call("workflow_accept", {"runId": parent["runId"],
+            "artifactId": artifact["artifactId"], "note": "Host checked the whole goal",
+            "notRequired": "Fixture evidence checked without a separate target", **self.control(parent)})
         self.assertEqual(finished["state"], "accepted")
         self.assertEqual(finished["counts"]["turns"], 1)
 
@@ -141,19 +153,22 @@ class HostCompletionTests(WorkflowTestCase):
         current = board.call("workflow_get", {"runId": submitted["runId"]})
         artifact = next(item for item in current["artifacts"] if item["kind"] == "output")
         params = {"runId": current["runId"], "artifactId": artifact["artifactId"],
-                  "commandId": "host-completion", "note": "Host checked and integrated the sealed output",
-                  "verdict": "accepted", **self.control(current)}
+                  "note": "Host checked and integrated the sealed output",
+                  "notRequired": "the fixture output needs no repository target", **self.control(current)}
+        # Acceptance always carries an integration decision: neither a target nor a
+        # reasoned notRequired decision is no acceptance at all.
         with self.assertRaises(BoardError) as caught:
-            board.call("workflow_acknowledge", params)
-        self.assertEqual(caught.exception.code, "INTEGRATION_REQUIRED")
-        self.record_integration(board, current, artifact_id=artifact["artifactId"])
-        completed = board.call("workflow_acknowledge", params)
+            board.call("workflow_accept", {**params, "notRequired": None})
+        self.assertEqual(caught.exception.code, "INVALID_ARGUMENT")
+        completed = board.call("workflow_accept", params)
         self.assertEqual((completed["state"], completed["status"]), ("accepted", "completed"))
         self.assertEqual(completed["counts"]["turns"], 1)
         self.assertEqual(completed["counts"]["openRequests"], 0)
         self.assertEqual(completed["currentTurn"]["disposition"], "attention")
-        self.assertTrue(board.call("workflow_acknowledge", params)["duplicate"])
-        self.assertTrue(board.call("workflow_acknowledge", {**params, "commandId": "repeat"})["duplicate"])
+        self.assertTrue(board.call("workflow_accept", params)["duplicate"])
+        with self.assertRaises(BoardError) as caught:
+            board.call("workflow_accept", {**params, "note": "a different review"})
+        self.assertEqual(caught.exception.code, "CONFLICT")
 
     def test_failure_conclusion_preserves_failure_and_never_becomes_an_acceptance(self):
         board = self.board()
@@ -162,26 +177,42 @@ class HostCompletionTests(WorkflowTestCase):
         claim = self.claim(board)
         self.finish_turn(board, claim, runner_status="failed", exit_code=1, seal=False)
         current = board.call("workflow_get", {"runId": submitted["runId"]})
-        params = {"runId": current["runId"], "expectedRevision": current["revision"],
-                  "commandId": "conclusion", "note": "Partial work retained; unfinished", "verdict": "recorded",
-                  **self.control(current)}
-        concluded = board.call("workflow_acknowledge", params)
+        params = {"runId": current["runId"], "note": "Partial work retained; unfinished", **self.control(current)}
+        concluded = board.call("workflow_conclude", params)
         self.assertEqual((concluded["state"], concluded["status"]), ("failed", "failed"))
         self.assertIsNotNone(concluded["hostConclusion"])
-        self.assertTrue(board.call("workflow_acknowledge", params)["duplicate"])
+        self.assertEqual(concluded["verdict"], "concluded")
+        self.assertTrue(board.call("workflow_conclude", params)["duplicate"])
+        with self.assertRaises(BoardError) as raised:
+            board.call("workflow_conclude", {**params, "note": "a different conclusion"})
+        self.assertEqual(raised.exception.code, "CONFLICT")
         with board.store.db.read() as db:
             self.assertIsNone(db.execute("SELECT accepted_at FROM tasks").fetchone()[0])
         continued = self.continue_run(board, concluded)
         self.assertIsNone(continued["hostConclusion"])
         with board.store.db.read() as db:
             self.assertEqual(db.execute("SELECT COUNT(*) FROM workflow_host_conclusions").fetchone()[0], 1)
+        # A later execution of the same goal fails again: the same note records a
+        # new conclusion for the new attempt instead of replaying the old one.
+        second = self.claim(board, claim_request_id="c2")
+        self.finish_turn(board, second, runner_status="failed", exit_code=1, seal=False, session_id="sess-2")
+        params_again = {"runId": concluded["runId"], "note": "Partial work retained; unfinished",
+                        **self.control(board.call("workflow_get", {"runId": concluded["runId"]}))}
+        reconcluded = board.call("workflow_conclude", params_again)
+        self.assertEqual(reconcluded["state"], "failed")
+        self.assertFalse(reconcluded["duplicate"])
+        self.assertNotEqual(reconcluded["conclusion"]["conclusionId"],
+                            concluded["conclusion"]["conclusionId"])
+        with board.store.db.read() as db:
+            self.assertEqual(db.execute("SELECT COUNT(*) FROM workflow_host_conclusions").fetchone()[0], 2)
+        self.assertTrue(board.call("workflow_conclude", params_again)["duplicate"])
 
 
 from test_workspace_lifecycle import LifecycleTestCase
 
 
 class HostConclusionCleanupTests(LifecycleTestCase):
-    def test_integration_records_only_real_separate_host_paths(self):
+    def test_acceptance_records_only_real_separate_host_paths(self):
         from test_workspace_lifecycle import git
         board = self.board()
         self.register(board)
@@ -192,9 +223,12 @@ class HostConclusionCleanupTests(LifecycleTestCase):
         git(target["path"], "commit", "-qm", "Host supplement")
         for paths in (["tracked.txt"], ["absent.txt"], ["../outside"]):
             with self.assertRaises(BoardError):
-                self.integrate(board, current, artifact, target=target, hostPaths=paths, command_id="invalid-" + str(paths))
-        integrated = self.integrate(board, current, artifact, target=target, hostPaths=["host-note.txt"])
-        proof = integrated["integration"]["verification"]
+                self.accept(board, current, artifact, target=target, hostPaths=paths,
+                            beforeCommit=target["before"])
+        accepted = self.accept(board, self.view(board, current["runId"]), artifact, target=target,
+                               hostPaths=["host-note.txt"], beforeCommit=target["before"])
+        self.assertEqual(accepted["state"], "accepted")
+        proof = accepted["integration"]["verification"]
         self.assertEqual(proof["hostPaths"], ["host-note.txt"])
         self.assertNotIn("host-note.txt", proof["matchingPaths"])
 
@@ -207,21 +241,24 @@ class HostConclusionCleanupTests(LifecycleTestCase):
         })
         self.controls[submitted["runId"]] = submitted["control"]
         cancelled = board.call("workflow_cancel", {"runId": submitted["runId"], **self.control(submitted)})
-        blocked = self.plan(board, cancelled)
-        self.assertIn("not-accepted", blocked["plan"]["reasons"])
-        concluded = board.call("workflow_acknowledge", {
-            "runId": cancelled["runId"], "commandId": "conclude-cancel", "expectedRevision": blocked["revision"],
-            "verdict": "recorded", "note": "Cancelled before any model work; pinned input retained",
+        with self.assertRaises(BoardError) as raised:
+            self.reclaim(board, cancelled)
+        self.assertEqual(raised.exception.code, "NOT_READY")
+        self.assertIn("not-accepted", raised.exception.details["reasons"])
+        concluded = board.call("workflow_conclude", {
+            "runId": cancelled["runId"],
+            "note": "Cancelled before any model work; pinned input retained",
             **self.control(cancelled),
         })
-        planned = self.plan(board, concluded, command_id="after-conclusion")
-        self.assertEqual(planned["plan"]["reasons"], [])
-        cleaned = board.store.workflow.cleanup_apply({
-            "runId": planned["runId"], "expectedRevision": planned["revision"], "commandId": "remove-cancelled",
-            "planId": planned["plan"]["planId"], "confirmPath": planned["plan"]["path"], **self.control(planned),
-        })
-        self.assertTrue(cleaned["removed"])
-        self.assertEqual(cleaned["state"], "cancelled")
+        self.assertEqual(concluded["state"], "cancelled")
+        self.assertIsNotNone(concluded["hostConclusion"])
+        # No execution attempt ever ran on this checkout, so the conclusion seals
+        # no partial output and still reclaims the prepared worktree.
+        self.assertIsNone(concluded["partialArtifactId"])
+        # The conclusion reclaims the registered checkout; a blocked attempt would
+        # have kept the conclusion and reported its reasons instead.
+        self.assertTrue(concluded["reclaim"]["removed"])
+        self.assertEqual(self.view(board, cancelled["runId"])["cleanup"]["state"], "applied")
 
 
 def load_tests(loader, _tests, _pattern):

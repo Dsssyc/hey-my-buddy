@@ -177,7 +177,8 @@ def stop_private_service(directory: Path, timeout: float = 35.0) -> None:
 _INHERITED_CHILD_KEYS = {
     "BUDDY_STATE_DIR", "BUDDY_RUNTIME_ROOT", "BUDDY_RUNTIME", "BUDDY_RUNTIME_IDENTITY",
     "BUDDY_WORKER_STATE", "BUDDY_WORKER_ID", "BUDDY_AGENT_CREDENTIAL",
-    "BUDDY_AGENT_CREDENTIAL_FILE", "BUDDY_DEV_SOURCE", "VIRTUAL_ENV", "UV_PROJECT_ENVIRONMENT",
+    "BUDDY_AGENT_CREDENTIAL_FILE", "BUDDY_ACCOUNT_SELECTION", "BUDDY_SUPERVISOR_START_ID",
+    "BUDDY_DEV_SOURCE", "VIRTUAL_ENV", "UV_PROJECT_ENVIRONMENT",
 }
 
 
@@ -203,7 +204,10 @@ def _child_environment(directory: Path, overrides: dict | None = None) -> dict:
 
 @contextmanager
 def private_state_dir(prefix: str = "buddy-test-"):
-    directory = Path(tempfile.mkdtemp(prefix=prefix))
+    # The resolved form keeps one path identity for the whole board: macOS's
+    # per-user /var/folders alias and its /private/var target must never be two
+    # different roots inside one test (storage boundaries and Git both resolve).
+    directory = Path(tempfile.mkdtemp(prefix=prefix)).resolve()
     os.chmod(directory, 0o700)
     try:
         yield directory
@@ -303,7 +307,7 @@ class InProcessBoard:
 class BoardTestCase(unittest.TestCase):
     def setUp(self) -> None:
         self._stack = []
-        self.directory = Path(tempfile.mkdtemp(prefix="buddy-test-"))
+        self.directory = Path(tempfile.mkdtemp(prefix="buddy-test-")).resolve()
         os.chmod(self.directory, 0o700)
         self.addCleanup(self._cleanup)
 

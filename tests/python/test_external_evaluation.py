@@ -132,30 +132,35 @@ class ExternalEvaluationTestCase(EvaluationTestCase):
                 "exitCode": 1 if failed else 0,
             },
         )
-        if verdict is not None and not failed:
+        if not failed and verdict is not None:
             view = board.call("workflow_get", {"runId": run_id})
             if verdict == "accepted":
-                # An accepted goal must hold a verified integration record or an
-                # explicit not-required decision bound to its final artifact.
-                board.store.workflow.integration_record({
-                    "runId": run_id,
-                    "commandId": f"integration-{request_id}",
-                    "expectedRevision": view["revision"],
-                    "artifactId": view["finalArtifactId"],
-                    "notRequired": True,
-                    "reason": "external maintenance fixture output has no separate repository target",
-                    **self.model_controls[run_id],
-                })
-            board.call(
-                "workflow_acknowledge",
-                {
-                    "runId": run_id,
-                    "artifactId": view["finalArtifactId"],
-                    "note": "reviewed the sealed result",
-                    "verdict": verdict,
-                    **self.model_controls[run_id],
-                },
-            )
+                # Acceptance carries its own explicit not-required integration decision
+                # bound to the exact final artifact.
+                board.call(
+                    "workflow_accept",
+                    {
+                        "runId": run_id,
+                        "artifactId": view["finalArtifactId"],
+                        "note": "reviewed the sealed result",
+                        "notRequired": "external maintenance fixture output has no separate repository target",
+                        **self.model_controls[run_id],
+                    },
+                )
+            elif verdict == "rejected":
+                # A rejected delivered outcome is a continuation whose negative
+                # review carries the Host's opinion.
+                board.call(
+                    "workflow_continue",
+                    {
+                        "runId": run_id,
+                        "commandId": f"reject-{request_id}",
+                        "expectedRevision": view["revision"],
+                        "input": "address the review",
+                        "reason": "reviewed the sealed result",
+                        **self.model_controls[run_id],
+                    },
+                )
         return claim
 
     def model_task(

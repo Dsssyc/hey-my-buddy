@@ -249,7 +249,8 @@ class ConsoleSecurityTests(ConsoleTestCase):
         csrf = snapshot["csrfToken"]
         for operation in ("dispatch", "store.task_cancel", "_receipt", "console_snapshot", "unknown_operation", "task_cancel", "task_retry", "task_acknowledge",
                           "workflow_submit", "workflow_decide", "workflow_continue", "workflow_takeover",
-                          "workflow_cancel", "workflow_acknowledge", "workflow_scope_amend",
+                          "workflow_cancel", "workflow_accept", "workflow_conclude", "workflow_reclaim",
+                          "workflow_acknowledge", "workflow_scope_amend",
                           "workflow_workspace_resolve", "workflow_integration_record", "workspace_cleanup_plan",
                           "workspace_cleanup_apply", "workflow_suggest"):
             status, _h, data = browser.command(operation, {}, csrf=csrf)
