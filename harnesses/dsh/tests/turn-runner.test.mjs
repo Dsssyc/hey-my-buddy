@@ -19,13 +19,13 @@ function scenario(t, { input = {}, task = 'Complete the bounded change.\n' } = {
   const outputFile = join(attempt, 'turn-output.json');
   const data = { version: 1, taskId: 'task-one', attemptId: 'attempt-one', generation: 1, turnId: 'turn-one', resumeMode: 'initial', previousSessionId: null, context: { objective: task, nextActions: ['Consume pinned input.'] }, executionWorkspace: { path: cwd }, ...input };
   writeFileSync(inputFile, `${JSON.stringify(data, null, 2)}\n`, { mode: 0o600 });
-  const base = ['--cwd', cwd, '--task-file', taskFile, '--settings-file', settings, '--dsh-bin', mock, '--no-workspace'];
+  const base = ['--cwd', cwd, '--task-file', taskFile, '--settings-file', settings, '--dsh-bin', mock];
   const flags = ['--turn-input-file', inputFile, '--turn-output-file', outputFile];
   const env = (extra = {}) => testEnv({ MOCK_ARTIFACT_DIR: artifacts, MOCK_TURN_MODE: 'valid', MOCK_TURN_OUTCOME: '', ...extra });
   return { dir, cwd, artifacts, inputFile, outputFile, data, base, flags, args: [...base, ...flags], env };
 }
 
-test('governed runner returns the root record, raw input hash and scoped context without workspace grouping', (t) => {
+test('governed runner returns the root record, raw input hash and scoped context with a private session root', (t) => {
   const s = scenario(t);
   const result = runCli(s.args, { env: s.env() });
   assert.equal(result.status, 0, result.stderr);
@@ -38,12 +38,23 @@ test('governed runner returns the root record, raw input hash and scoped context
   assert.equal(payload.turn.promptSha256, sha256(delivered));
   assert.equal(payload.turn.provenance.rootSessionMatched, true);
   assert.equal(payload.processState.shutdownConfirmed, true);
-  assert.equal(payload.workspace.enabled, false);
+  assert.equal(payload.nativeStorage.scope, 'run-private-sessions');
+  assert.equal(payload.nativeStorage.sessionRootPrivate, true);
   assert.deepEqual(payload.turn, JSON.parse(readFileSync(s.outputFile)));
   const patch = readArtifactJson(s.artifacts, 'patch.json');
   const row = patch.flatMap((item) => item.insert || []).find((item) => item.id === 'deepseek-delegate-turn-result');
   assert.deepEqual(row.config.input, s.data);
   assert.match(readFileSync(join(s.artifacts, 'turn-context.txt'), 'utf8'), /Consume pinned input/);
+});
+
+test('the removed workspace grouping flags are usage errors that start no child', (t) => {
+  const s = scenario(t);
+  for (const flags of [['--workspace'], ['--no-workspace'], ['--workspace-socket', '/tmp/none.sock'], ['--workspace-timeout', '5'], ['--attach-session', 'session-1']]) {
+    const result = runCli([...s.base, ...flags], { env: s.env() });
+    assert.equal(result.status, 2, result.stderr);
+    assert.equal(result.stdout, '');
+  }
+  assert.equal(existsSync(join(s.artifacts, 'pid.txt')), false, 'no grouping flag ever started DSH');
 });
 
 test('reconstruction starts a distinct session and PTC completion remains structured for a file-backed prompt', (t) => {

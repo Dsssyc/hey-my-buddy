@@ -1,19 +1,20 @@
-"""DSH native session storage: only the ungrouped session root is attempt-private.
+"""DSH native session storage: the session root is execution-private.
 
-The runner used to relocate the whole child ``DSH_HOME`` for ungrouped runs,
+The runner used to relocate the whole child ``DSH_HOME`` for private runs,
 which also moved the file-backed credentials store and made every real run fail
 as MISSING_CREDENTIAL before any model work. The repair moves ONLY the JSONL
 session backend's ``root`` through the supported per-run patch overlay, so the
 DSH home, credentials store and settings document keep resolving in the owning
-harness.
+harness. ADR-021 decision 18 removed the DSH workspace grouping feature, so
+every run now uses this private root and the grouping flags are gone.
 
 These tests drive the real ``harnesses/dsh/scripts/run.mjs`` with a stub ``dsh``
 launcher: no installed harness, no credentials, no model call. The stub records
 the exact argv, the child ``DSH_HOME`` and the per-run patch document.
 
 A second class binds the reported session identity to the adapter's validated
-turn import: an ungrouped governed run has no capture observer, so the turn
-record is the only proven id, and a rejected turn must stay uncaptured.
+turn import: without the removed grouping capture observer, the turn record is
+the only proven id, and a rejected turn must stay uncaptured.
 
 A third class covers the normalized no-deadline sentinel: ``timeoutSeconds=0``
 must reach the runner as ``--timeout 0``, must not stamp an already-expired
@@ -49,7 +50,7 @@ CLEARED_ENV = (
     "BUDDY_WORKER_STATE", "BUDDY_WORKER_ID", "BUDDY_AGENT_CREDENTIAL",
     "BUDDY_AGENT_CREDENTIAL_FILE", "VIRTUAL_ENV", "UV_PROJECT_ENVIRONMENT",
     "DSH_SETTINGS_FILE", "DSH_BIN", "DSH_DELEGATE_MODEL", "DSH_DELEGATE_PROVIDER",
-    "DSH_DELEGATE_EFFORT", "DSH_WORKSPACE_SOCKET",
+    "DSH_DELEGATE_EFFORT",
 )
 
 STUB = textwrap.dedent(
@@ -72,13 +73,21 @@ STUB = textwrap.dedent(
 
 
 class DshWorkspaceDefaultTests(unittest.TestCase):
-    def test_grouping_requires_explicit_opt_in_even_when_adapter_changes(self):
+    def test_the_removed_workspace_switch_is_rejected_on_submission(self):
+        from buddy.errors import BoardError
         with tempfile.TemporaryDirectory(prefix="buddy-dsh-spec-") as root:
             common = {"requestId": "dsh-default", "task": "bounded task", "cwd": root}
-            self.assertFalse(normalize_spec(common)["workspace"])
-            self.assertFalse(normalize_spec({**common, "adapter": "dsh"})["workspace"])
-            self.assertTrue(normalize_spec({**common, "workspace": True})["workspace"])
-            self.assertFalse(normalize_spec({**common, "adapter": "codex"})["workspace"])
+            # Every DSH run is execution-private now: the grouping switch is an
+            # unknown submit field whatever adapter or value carries it.
+            for params in ({**common, "workspace": True}, {**common, "workspace": False},
+                           {**common, "adapter": "codex", "workspace": False}):
+                with self.subTest(params=params):
+                    with self.assertRaises(BoardError) as raised:
+                        normalize_spec(params)
+                    self.assertEqual(raised.exception.code, "INVALID_ARGUMENT")
+                    self.assertEqual(raised.exception.details.get("field"), "workspace")
+            spec = normalize_spec({**common, "adapter": "dsh"})
+            self.assertNotIn("workspace", spec)
 
 
 @unittest.skipUnless(shutil.which("node") and RUNNER.is_file(), "Node.js and the dsh runner are required")
@@ -106,7 +115,7 @@ class DshSessionRootTests(unittest.TestCase):
         env["MOCK_ARTIFACT_DIR"] = str(self.artifacts)
         return env
 
-    def invoke(self, *flags: str, workspace: bool = False) -> subprocess.CompletedProcess:
+    def invoke(self, *flags: str) -> subprocess.CompletedProcess:
         base = [
             shutil.which("node"), str(RUNNER),
             "--cwd", str(self.checkout),
@@ -114,12 +123,10 @@ class DshSessionRootTests(unittest.TestCase):
             "--dsh-bin", str(self.stub),
             "--log-dir", str(self.root / "logs"),
         ]
-        if workspace:
-            base.append("--workspace")
         return subprocess.run([*base, *flags], capture_output=True, text=True, timeout=60,
                               env=self.environment())
 
-    def test_ungrouped_run_moves_only_the_session_root_and_keeps_the_owning_home(self):
+    def test_an_explicit_session_root_moves_only_the_session_root_and_keeps_the_owning_home(self):
         completed = self.invoke(f"--session-root={self.session_root}")
         self.assertEqual(completed.returncode, 0, completed.stderr or completed.stdout)
         result = json.loads(completed.stdout.strip().splitlines()[-1])
@@ -151,23 +158,30 @@ class DshSessionRootTests(unittest.TestCase):
         self.assertTrue(self.session_root.is_dir())
         self.assertEqual(stat.S_IMODE(self.session_root.stat().st_mode), 0o700)
 
-    def test_default_run_uses_a_private_session_root_without_grouping(self):
+    def test_default_run_uses_a_private_session_root(self):
         completed = self.invoke()
         self.assertEqual(completed.returncode, 0, completed.stderr or completed.stdout)
         result = json.loads(completed.stdout.strip().splitlines()[-1])
-        self.assertEqual(result["workspace"]["enabled"], False)
+        self.assertNotIn("workspace", result)
         self.assertEqual(result["nativeStorage"]["scope"], "run-private-sessions")
+        self.assertTrue(result["nativeStorage"]["sessionRootPrivate"])
         log_dir = Path(result["logPaths"]["stdout"]).parent
         self.assertTrue((log_dir / "sessions").is_dir())
         rows = json.loads((self.artifacts / "patch.json").read_text())
         session_row = next(row for row in rows if row.get("id") == "session-persistence-jsonl")
         self.assertEqual(session_row["config"], {"root": str(log_dir / "sessions")})
 
-    def test_a_grouped_run_never_gets_a_private_session_root(self):
-        completed = self.invoke(f"--session-root={self.session_root}", workspace=True)
-        self.assertEqual(completed.returncode, 2, completed.stdout)
-        self.assertIn("cannot be combined with --workspace", completed.stderr)
-        self.assertFalse((self.artifacts / "argv.txt").exists(), "the stub dsh must never start")
+    def test_the_removed_grouping_flags_are_usage_errors(self):
+        # The product grouping feature is gone: its runner flags are rejected
+        # before any spawn, whatever they would have combined with.
+        for flags in (["--workspace"], ["--no-workspace"],
+                      ["--workspace", "--session-root=" + str(self.session_root)],
+                      ["--attach-session", "session-1"],
+                      ["--workspace-socket", "/tmp/absent.sock"]):
+            with self.subTest(flags=flags):
+                completed = self.invoke(*flags)
+                self.assertEqual(completed.returncode, 2, completed.stdout)
+                self.assertFalse((self.artifacts / "argv.txt").exists(), "the stub dsh must never start")
 
     def test_the_session_root_must_be_an_absolute_path(self):
         completed = self.invoke("--session-root", "relative-sessions")
@@ -228,7 +242,7 @@ class NativeSessionBindingTests(unittest.TestCase):
     def collect(self, record: dict | None, *, payload: dict | None = None):
         context = ExecutionContext(
             task_id="task", attempt_id="attempt", generation=1,
-            spec={"cwd": str(self.checkout), "task": "x", "timeoutSeconds": 30, "workspace": False},
+            spec={"cwd": str(self.checkout), "task": "x", "timeoutSeconds": 30},
             directory=self.attempt, runtime={},
             environment={"BUDDY_STATE_DIR": str(self.root / "state")},
             turn={"turnId": "turn-1", "input": dict(TURN_INPUT)},
@@ -239,7 +253,7 @@ class NativeSessionBindingTests(unittest.TestCase):
         stdout.write_text(json.dumps(payload if payload is not None else {
             "status": "ok",
             "processState": {"shutdownConfirmed": True},
-            "logPaths": {"stdout": str(stdout), "capture": None},
+            "logPaths": {"stdout": str(stdout)},
             "nativeStorage": {
                 "scope": "task-private-sessions", "sessionRootPrivate": True, "credentialsStore": "harness-user-store",
                 "nativeAppVisibility": "not-listed-in-native-app", "resumeMode": "reconstructed-new-session",
@@ -266,14 +280,14 @@ class NativeSessionBindingTests(unittest.TestCase):
             value["sessionId"] = session_id
         return value
 
-    def test_a_validated_ungrouped_turn_binds_the_session_id(self):
+    def test_a_validated_turn_binds_the_session_id(self):
         outcome = self.collect(self.record())
         self.assertEqual(outcome.status, "ok")
         native = outcome.result["nativeSession"]
         self.assertEqual(native["sessionId"], "native-session-1")
         self.assertTrue(native["captured"])
         self.assertEqual(native["sessionIdSource"], "validated-turn")
-        self.assertFalse(native["sessionIdConflict"])
+        self.assertNotIn("sessionIdConflict", native)
         self.assertEqual(native["storageScope"], "task-private-sessions")
         self.assertEqual(native["storageOwner"], "buddy-attempt")
         self.assertEqual(native["credentialsStore"], "harness-user-store")
@@ -290,26 +304,28 @@ class NativeSessionBindingTests(unittest.TestCase):
                 self.assertFalse(native["captured"])
                 self.assertEqual(native["sessionIdSource"], "none")
 
-    def test_the_ungoverned_observer_capture_is_still_reported(self):
+    def test_an_ungoverned_run_reports_no_session_id(self):
+        # With the grouping capture observer gone, a run without a governed
+        # turn record has no proven session identity and reports none.
         context = ExecutionContext(
             task_id="task", attempt_id="attempt", generation=1,
-            spec={"cwd": str(self.checkout), "task": "x", "timeoutSeconds": 30, "workspace": True},
+            spec={"cwd": str(self.checkout), "task": "x", "timeoutSeconds": 30},
             directory=self.attempt, runtime={}, environment={}, turn=None,
         )
         stdout = self.attempt / "stdout.log"
         stdout.write_text(json.dumps({
             "status": "ok", "processState": {"shutdownConfirmed": True},
-            "logPaths": {"stdout": str(stdout), "capture": None},
-            "workspace": {"enabled": True, "bound": True, "sessionId": "grouped-session-9"},
-            "nativeStorage": {"scope": "harness-user-store", "sessionRootPrivate": False},
+            "logPaths": {"stdout": str(stdout)},
+            "nativeStorage": {"scope": "task-private-sessions", "sessionRootPrivate": True},
         }) + "\n")
         process = subprocess.Popen([sys.executable, "-c", ""])
         process.wait()
         outcome = DshAdapter().collect(ProcessHandle(process, own_group=False, log_paths={"stdout": str(stdout)}), context)
         native = outcome.result["nativeSession"]
-        self.assertEqual(native["sessionId"], "grouped-session-9")
-        self.assertEqual(native["sessionIdSource"], "native-session-observer")
-        self.assertEqual(native["storageOwner"], "harness-user-store")
+        self.assertIsNone(native["sessionId"])
+        self.assertFalse(native["captured"])
+        self.assertEqual(native["sessionIdSource"], "none")
+        self.assertEqual(native["storageOwner"], "buddy-attempt")
 
 
 #: Stub dsh that outlives a real delay, then finishes normally. If the adapter or
@@ -401,10 +417,10 @@ class DshNoDeadlineSentinelTests(unittest.TestCase):
         })
         return env
 
-    def context(self, *, timeout_seconds: int, stub: Path, workspace: bool = False) -> ExecutionContext:
+    def context(self, *, timeout_seconds: int, stub: Path) -> ExecutionContext:
         return ExecutionContext(
             task_id="task", attempt_id="attempt", generation=1,
-            spec={"cwd": str(self.checkout), "task": TASK, "timeoutSeconds": timeout_seconds, "workspace": workspace},
+            spec={"cwd": str(self.checkout), "task": TASK, "timeoutSeconds": timeout_seconds},
             directory=self.attempt, runtime={}, environment={**self.environment(), "DSH_BIN": str(stub)}, turn=None,
         )
 

@@ -13,8 +13,8 @@
  * zero. Prompts, tool arguments, tool output, credentials and hidden reasoning
  * never reach the file; usage is an observation, never an estimate.
  *
- * The plugin binds the root session exactly like the session-capture and
- * activity observers: root lineage, canonical cwd and the SHA-256 of this run's
+ * The plugin binds the root session exactly like the activity observer:
+ * root lineage, canonical cwd and the SHA-256 of this run's
  * first user message. Until that binding exists nothing is written.
  *
  * @module harnesses/dsh/plugins/usage

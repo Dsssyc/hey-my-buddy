@@ -12,8 +12,8 @@
  * non-negative counts. Prompts, tool arguments, tool output, credentials and
  * hidden reasoning never reach the file.
  *
- * The plugin binds the root session exactly like the session-capture observer:
- * root lineage, canonical cwd and the SHA-256 of this run's first user message.
+ * The plugin binds the root session through root lineage, canonical cwd and
+ * the SHA-256 of this run's first user message.
  * Until that binding exists nothing is written; the sidecar is an observation,
  * never a guess or a fabricated heartbeat.
  *

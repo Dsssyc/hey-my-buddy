@@ -26,11 +26,11 @@ BUDDY="$HOME/.agents/skills/buddy/scripts/buddy"
 
 The first command that needs the service installs a content-addressed stable runtime under `~/.local/share/hey-my-buddy/runtime`, so replacing the skill later does not disturb running work. A fresh board lives under `~/.local/share/hey-my-buddy/state`. An older board directory at the previous default location is retained as an archive: this release does not read, convert or import it, and it refuses any schema other than the current one. See [operations.md](operations.md#runtime-lifecycle).
 
-### 2. Choose grouping and the execution workspace
+### 2. Choose the execution workspace
 
-`workspace` is a boolean and only controls DSH session grouping; it defaults to `false`, which keeps the session in the attempt-private area. Pass `"workspace": true` only to group the run through the installed DSH workspace bridge ([operations.md](operations.md#workspace-bridge)); a grouped run fails honestly when the bridge is missing.
+DSH session grouping was removed ([ADR-021](../decisions/021-router-buddy-planes-and-routing-evidence.md)): every DSH execution writes its session rollout in the execution-private area, and a `workspace` field on a submission is rejected as unknown.
 
-Independent of grouping, governed coding work names its Git isolation contract in a separate `executionWorkspace` object: `kind` (`existing` or `worktree`), source `cwd`, `access` (`read` or `write`), `base` (`commit` with `ref`, or `working-tree`), `includeUntracked`, `writeScope` and `integrator`. It is an ownership and artifact-verification contract, not session grouping and not an OS sandbox: concurrent writers use independent worktrees, a read workspace must keep its input unchanged, and declared paths are checkout-root-relative. The fixed-input matrix and reservation rules are in [workflow.md#workspace-and-artifact-rules](workflow.md#workspace-and-artifact-rules).
+Governed coding work names its Git isolation contract in a separate `executionWorkspace` object: `kind` (`existing` or `worktree`), source `cwd`, `access` (`read` or `write`), `base` (`commit` with `ref`, or `working-tree`), `includeUntracked`, `writeScope` and `integrator`. It is an ownership and artifact-verification contract, not session grouping and not an OS sandbox: concurrent writers use independent worktrees, a read workspace must keep its input unchanged, and declared paths are checkout-root-relative. The fixed-input matrix and reservation rules are in [workflow.md#workspace-and-artifact-rules](workflow.md#workspace-and-artifact-rules).
 
 ### 3. Write a bounded packet
 
@@ -64,7 +64,7 @@ New objectives may carry an optional `description` of at most 300 characters: on
 ### 4. Submit the governed goal once
 
 ```sh
-"$BUDDY" submit '{"requestId":"state-kernel-1","hostId":"codex-state-kernel","objective":{"title":"State kernel reliability"},"title":"Implement the agreed state transition","task":"Implement the agreed state transition in src/state.ts, add regression tests in tests/state.test.ts and run the package tests. Preserve unrelated files. Report completed only after checks.","cwd":"/abs/repo","timeoutSeconds":28800,"workspace":false,"executionWorkspace":{"kind":"worktree","cwd":"/abs/repo","access":"write","base":{"kind":"working-tree"},"includeUntracked":[],"writeScope":["src/state.ts","tests/state.test.ts"],"integrator":"codex-state-kernel"}}'
+"$BUDDY" submit '{"requestId":"state-kernel-1","hostId":"codex-state-kernel","objective":{"title":"State kernel reliability"},"title":"Implement the agreed state transition","task":"Implement the agreed state transition in src/state.ts, add regression tests in tests/state.test.ts and run the package tests. Preserve unrelated files. Report completed only after checks.","cwd":"/abs/repo","timeoutSeconds":28800,"executionWorkspace":{"kind":"worktree","cwd":"/abs/repo","access":"write","base":{"kind":"working-tree"},"includeUntracked":[],"writeScope":["src/state.ts","tests/state.test.ts"],"integrator":"codex-state-kernel"}}'
 "$BUDDY" get '{"runId":"<runId>"}'
 ```
 

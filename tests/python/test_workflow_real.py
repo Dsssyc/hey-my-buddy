@@ -259,7 +259,7 @@ class RealAdapterTests(RealWorkspaceTestCase):
             task_id=run_id,
             attempt_id="attempt-1",
             generation=1,
-            spec={**CONFIGURATION, "task": "do work", "cwd": manifest["path"], "timeoutSeconds": 60, "workspace": True},
+            spec={**CONFIGURATION, "task": "do work", "cwd": manifest["path"], "timeoutSeconds": 60},
             directory=attempt,
             runtime={"identity": "test"},
             environment={"BUDDY_STATE_DIR": str(self.directory)},

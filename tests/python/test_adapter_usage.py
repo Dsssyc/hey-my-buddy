@@ -199,10 +199,10 @@ class DshUsageContractTests(unittest.TestCase):
         self.checkout = self.root / "checkout"
         self.checkout.mkdir()
 
-    def context(self, *, workspace: bool = False) -> ExecutionContext:
+    def context(self) -> ExecutionContext:
         return ExecutionContext(
             task_id="task", attempt_id="attempt", generation=1,
-            spec={"cwd": str(self.checkout), "task": "x", "timeoutSeconds": 30, "workspace": workspace},
+            spec={"cwd": str(self.checkout), "task": "x", "timeoutSeconds": 30},
             directory=self.attempt, runtime={}, environment={"BUDDY_STATE_DIR": str(self.root / "state")},
             turn={"turnId": "turn-1", "input": dict(TURN_INPUT)},
         )
@@ -213,7 +213,7 @@ class DshUsageContractTests(unittest.TestCase):
         stdout.write_text(json.dumps({
             "status": "ok",
             "processState": {"shutdownConfirmed": True},
-            "logPaths": {"stdout": str(stdout), "capture": None},
+            "logPaths": {"stdout": str(stdout)},
             "nativeStorage": {"scope": "task-private-sessions", "sessionRootPrivate": True,
                               "credentialsStore": "harness-user-store",
                               "nativeAppVisibility": "not-listed-in-native-app",

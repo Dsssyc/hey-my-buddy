@@ -838,7 +838,6 @@ class DecisionCoordinator:
             "cwd": str(self.board.directory / "decisions" / decision_id),
             "task": "Bounded selection decision over the current evaluation table.",
             "timeoutSeconds": timeout_seconds + TIMEOUT_GRACE_SECONDS,
-            "workspace": False,
             "requiredCapabilities": [DECISION_ADAPTER],
             "decision": {"decisionId": decision_id, "kind": kind, "timeoutSeconds": timeout_seconds},
         }

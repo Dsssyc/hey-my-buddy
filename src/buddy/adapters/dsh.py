@@ -117,20 +117,11 @@ class DshAdapter(Adapter):
             f"--inquiry-results={inquiry['resultsPath']}",
             f"--inquiry-error={inquiry['errorPath']}",
         ]
-        if not spec.get("workspace", False):
-            # The session rollout becomes attempt-private through the runner's
-            # supported per-run patch overlay on the JSONL session backend root.
-            # This is only safe without workspace grouping: the installed
-            # workspace bridge proves a completed session from the *owning
-            # host's* session store, so a private root would make that
-            # verification fail (UNKNOWN_SESSION) and the run would exit 1.
-            # DSH_HOME, the credentials store and the settings document are
-            # never relocated, so native model auth keeps resolving in the
-            # owning harness.
-            args.append("--no-workspace")
-            args.append(f"--session-root={ensure_private_dir(context_root(context, self.name) / 'sessions')}")
-        else:
-            args.append("--workspace")
+        # Every run's session rollout is attempt-private through the runner's
+        # supported per-run patch overlay on the JSONL session backend root.
+        # DSH_HOME, the credentials store and the settings document are never
+        # relocated, so native model auth keeps resolving in the owning harness.
+        args.append(f"--session-root={ensure_private_dir(context_root(context, self.name) / 'sessions')}")
         from ..harness_runtime import selected
         selected_harness = selected('dsh', context.environment)
         if selected_harness and selected_harness.get('executable'):
@@ -250,8 +241,7 @@ class DshAdapter(Adapter):
         else:
             final = "failed"
         turn_record, turn_error = self._import_turn(context, shutdown_confirmed, exit_code)
-        # An ungrouped governed run has no workspace/capture observer, so the
-        # validated turn record is the only proven session identity. Bind it
+        # The validated turn record is the only proven session identity. Bind it
         # AFTER import: a rejected or missing turn never contributes an id, and
         # a failed attempt stays honestly uncaptured instead of inventing one.
         payload["nativeSession"] = _native_session(payload, turn_record if turn_error is None else None)
@@ -321,36 +311,20 @@ class DshAdapter(Adapter):
 def _native_session(payload: dict, turn_record: dict | None = None) -> dict:
     """Truthful native-session facts for one dsh attempt.
 
-    Git isolation and native session storage are separate dimensions. A grouped run
-    keeps the owning harness session store so the workspace bridge can verify
-    membership. An ungrouped run moves only the session rollout root into the
-    attempt (the runner's per-run patch overlay on the JSONL session backend); the
-    DSH home, credentials store and settings document keep their owning-harness
-    values, so native model auth is never relocated or simulated.
+    Git isolation and native session storage are separate dimensions. Every run
+    moves only the session rollout root into the attempt (the runner's per-run
+    patch overlay on the JSONL session backend); the DSH home, credentials store
+    and settings document keep their owning-harness values, so native model auth
+    is never relocated or simulated.
 
-    The session id comes from the validated turn record the adapter imported, then
-    from the run's own capture/workspace observer, and is never invented: a
-    rejected turn, a missing capture and an ambiguous grouping all report no id.
+    The session id comes from the validated turn record the adapter imported and
+    is never invented: a rejected or missing turn reports no id.
     """
-    workspace = payload.get("workspace") if isinstance(payload.get("workspace"), dict) else {}
-    capture_path = (payload.get("logPaths") or {}).get("capture")
-    captured: dict = {}
-    if isinstance(capture_path, str):
-        try:
-            raw = Path(capture_path).read_bytes()
-            if len(raw) <= 64 * 1024:
-                value = json.loads(raw)
-                captured = value if isinstance(value, dict) else {}
-        except (OSError, ValueError, RecursionError):
-            captured = {}
-    observed = workspace.get("sessionId") or captured.get("sessionId")
-    if not isinstance(observed, str) or not observed:
-        observed = None
     turn_session = turn_record.get("sessionId") if isinstance(turn_record, dict) else None
     if not isinstance(turn_session, str) or not turn_session:
         turn_session = None
-    session_id = turn_session or observed
-    session_id_source = "validated-turn" if turn_session else ("native-session-observer" if observed else "none")
+    session_id = turn_session
+    session_id_source = "validated-turn" if turn_session else "none"
     native_storage = payload.get("nativeStorage") if isinstance(payload.get("nativeStorage"), dict) else {}
     session_root_private = native_storage.get("sessionRootPrivate") is True
     return {
@@ -358,8 +332,6 @@ def _native_session(payload: dict, turn_record: dict | None = None) -> dict:
         "sessionId": session_id,
         "captured": session_id is not None,
         "sessionIdSource": session_id_source,
-        "sessionIdConflict": bool(turn_session and observed and turn_session != observed),
-        "ambiguous": captured.get("ambiguous") is True,
         "storageScope": native_storage.get("scope") or "unknown",
         "storageOwner": "buddy-attempt" if session_root_private else "harness-user-store",
         "credentialsStore": native_storage.get("credentialsStore") or "harness-user-store",
@@ -443,13 +415,10 @@ def _signal_name(process: subprocess.Popen) -> str | None:
 def _discovered_artifacts(handle: ProcessHandle, payload: dict) -> list[dict]:
     """Artifacts this run genuinely produced, validated by size and hash.
 
-    Only files the runner itself names are offered: the capture path and the two
-    runner logs. Nothing else is guessed from the working tree.
+    Only files the runner itself names are offered: the two runner logs.
+    Nothing else is guessed from the working tree.
     """
     candidates: list[tuple[str, Path]] = []
-    capture = (payload.get("logPaths") or {}).get("capture")
-    if isinstance(capture, str):
-        candidates.append(("capture", Path(capture)))
     for role in ("stdout", "stderr"):
         value = handle.log_paths.get(role)
         if isinstance(value, str):

@@ -5,9 +5,8 @@
  * mock dsh in a temporary workspace. No test imports the CLI internals, reads
  * real user settings, uses HOME/CODEX_HOME, or starts a paid model run.
  *
- * These are the original CLI behavior tests: every run passes the explicit
- * `--no-workspace` offline opt-out so no web host, token file, or network is
- * needed here. Workspace grouping has its own suite in `workspace.test.mjs`.
+ * Every run writes its session rollout into a private run-local root; the
+ * removed DSH workspace grouping flags are usage errors now.
  */
 import assert from 'node:assert/strict';
 import { chmodSync, existsSync, mkdtempSync, readdirSync, realpathSync, rmSync, statSync } from 'node:fs';
@@ -39,7 +38,7 @@ function scenario(name, { task = 'Do the bounded thing.\n', settings = '' } = {}
   const mock = writeMockDsh(makeDir(dir, 'bin'));
   const settingsFile = writeFile(dir, 'settings.yaml', settings);
   const taskFile = writeFile(dir, 'task.md', task);
-  const baseArgs = ['--cwd', cwd, '--task-file', taskFile, '--settings-file', settingsFile, '--no-workspace'];
+  const baseArgs = ['--cwd', cwd, '--task-file', taskFile, '--settings-file', settingsFile];
   return {
     dir,
     cwd,
@@ -164,7 +163,7 @@ describe('dsh launcher resolution', () => {
 
     // Relative --dsh-bin and a cwd that differs from --cwd.
     const result = runCli(
-      ['--cwd', cwd, '--task-file', taskFile, '--settings-file', settingsFile, '--no-workspace', '--dsh-bin', './mock a/dsh'],
+      ['--cwd', cwd, '--task-file', taskFile, '--settings-file', settingsFile, '--dsh-bin', './mock a/dsh'],
       { cwd: dir, env },
     );
     assert.equal(result.status, 0, result.stderr);
@@ -172,7 +171,7 @@ describe('dsh launcher resolution', () => {
 
     // DSH_BIN is honored when the flag is absent.
     const artifacts2 = makeDir(dir, 'artifacts-dsh-bin');
-    const result2 = runCli(['--cwd', cwd, '--task-file', taskFile, '--settings-file', settingsFile, '--no-workspace'], {
+    const result2 = runCli(['--cwd', cwd, '--task-file', taskFile, '--settings-file', settingsFile], {
       cwd: dir,
       env: testEnv({ MOCK_ARTIFACT_DIR: artifacts2, DSH_BIN: mockB }),
     });
@@ -204,7 +203,7 @@ describe('dsh launcher resolution', () => {
     const privateTmp = makeDir(s.dir, 'private-tmp');
     const before = countSettingsTempDirs(privateTmp);
     const result = runCli(
-      ['--cwd', s.cwd, '--task-file', s.taskFile, '--settings-file', s.settings, '--no-workspace', '--dsh-bin', broken],
+      ['--cwd', s.cwd, '--task-file', s.taskFile, '--settings-file', s.settings, '--dsh-bin', broken],
       { env: { ...s.env, TMPDIR: privateTmp } },
     );
     assert.equal(result.status, 1);
@@ -236,7 +235,7 @@ describe('task delivery', () => {
     const largeTask = writeFile(s.dir, 'large.md', 'B'.repeat(32001));
 
     const small = runCli(
-      ['--cwd', s.cwd, '--task-file', inlineTask, '--settings-file', s.settings, '--no-workspace', '--dsh-bin', s.mock],
+      ['--cwd', s.cwd, '--task-file', inlineTask, '--settings-file', s.settings, '--dsh-bin', s.mock],
       { env: s.env },
     );
     assert.equal(small.status, 0, small.stderr);
@@ -245,7 +244,7 @@ describe('task delivery', () => {
 
     const artifacts2 = makeDir(s.dir, 'artifacts-large');
     const large = runCli(
-      ['--cwd', s.cwd, '--task-file', largeTask, '--settings-file', s.settings, '--no-workspace', '--dsh-bin', s.mock],
+      ['--cwd', s.cwd, '--task-file', largeTask, '--settings-file', s.settings, '--dsh-bin', s.mock],
       { env: testEnv({ MOCK_ARTIFACT_DIR: artifacts2 }) },
     );
     assert.equal(large.status, 0, large.stderr);
@@ -310,7 +309,7 @@ describe('settings handling', () => {
   test('explicit settings files must exist; a missing default is an empty mapping', () => {
     const s = scenario('settings-missing');
     const missing = join(s.dir, 'nope.yaml');
-    const argsWithoutSettings = ['--cwd', s.cwd, '--task-file', s.taskFile, '--dsh-bin', s.mock, '--no-workspace'];
+    const argsWithoutSettings = ['--cwd', s.cwd, '--task-file', s.taskFile, '--dsh-bin', s.mock];
 
     let result = runCli([...argsWithoutSettings, '--settings-file', missing], { env: s.env });
     assert.equal(result.status, 2);
@@ -356,7 +355,7 @@ describe('settings handling', () => {
       '  mode: ask',
       '',
     ].join('\n'));
-    const args = ['--cwd', cwd, '--task-file', taskFile, '--dsh-bin', mock, '--settings-file', flagSettings, '--no-workspace'];
+    const args = ['--cwd', cwd, '--task-file', taskFile, '--dsh-bin', mock, '--settings-file', flagSettings];
     const hashes = [sha256(homeSettings), sha256(envSettings), sha256(flagSettings)];
 
     const result = runCli(args, {
@@ -385,7 +384,7 @@ describe('settings handling', () => {
 
     // Environment file wins once the flag is absent.
     const artifacts2 = makeDir(dir, 'artifacts-env');
-    const result2 = runCli(['--cwd', cwd, '--task-file', taskFile, '--dsh-bin', mock, '--no-workspace'], {
+    const result2 = runCli(['--cwd', cwd, '--task-file', taskFile, '--dsh-bin', mock], {
       env: testEnv({ MOCK_ARTIFACT_DIR: artifacts2, DSH_HOME: home, DSH_SETTINGS_FILE: envSettings }),
     });
     assert.equal(result2.status, 0, result2.stderr);
@@ -393,7 +392,7 @@ describe('settings handling', () => {
 
     // $DSH_HOME/settings.yaml is the last default.
     const artifacts3 = makeDir(dir, 'artifacts-home');
-    const result3 = runCli(['--cwd', cwd, '--task-file', taskFile, '--dsh-bin', mock, '--no-workspace'], {
+    const result3 = runCli(['--cwd', cwd, '--task-file', taskFile, '--dsh-bin', mock], {
       env: testEnv({ MOCK_ARTIFACT_DIR: artifacts3, DSH_HOME: home }),
     });
     assert.equal(result3.status, 0, result3.stderr);
@@ -445,7 +444,7 @@ describe('settings handling', () => {
     const s = scenario('relative-dsh-home');
     const configHome = makeDir(s.dir, 'dsh-home');
     writeFile(configHome, 'settings.yaml', 'agent-default-model:\n  model: configured-model\n');
-    const result = runCli(['--cwd', s.cwd, '--task-file', s.taskFile, '--dsh-bin', s.mock, '--no-workspace'], {
+    const result = runCli(['--cwd', s.cwd, '--task-file', s.taskFile, '--dsh-bin', s.mock], {
       cwd: s.dir,
       env: testEnv({ MOCK_ARTIFACT_DIR: s.artifacts, DSH_HOME: 'dsh-home' }),
     });
@@ -462,7 +461,7 @@ describe('settings handling', () => {
     }));
     const artifacts = makeDir(s.dir, 'artifacts-json');
     const result = runCli(
-      ['--cwd', s.cwd, '--task-file', s.taskFile, '--dsh-bin', s.mock, '--settings-file', jsonSettings, '--no-workspace'],
+      ['--cwd', s.cwd, '--task-file', s.taskFile, '--dsh-bin', s.mock, '--settings-file', jsonSettings],
       { env: testEnv({ MOCK_ARTIFACT_DIR: artifacts }) },
     );
     assert.equal(result.status, 0, result.stderr);

@@ -16,8 +16,8 @@
  * - it never writes to stdout/stderr, so the run's single JSON result and its
  *   final text are unaffected.
  *
- * Identity contract (same rule as `session-capture.mjs`, verified against the
- * installed dsh sources):
+ * Identity contract (root lineage, canonical cwd and the delivered prompt
+ * hash, verified against the installed dsh sources):
  * a root session (no fork parent, no `subagent` origin, no positive delegation
  * depth) whose `header.cwd` equals this run's canonical cwd and whose FIRST
  * ordinary user message hashes to this run's delivered prompt is this run's own

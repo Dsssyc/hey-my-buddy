@@ -18,6 +18,8 @@ FILES = frozenset({
     # Retained historical routing evidence, not produced by the current runner.
     'decision-input.json', 'decision-output.json',
 })
+# session-capture/capture names are retained historical grouped-run evidence; the
+# runner stopped writing them when ADR-021 decision 18 removed DSH grouping.
 DSH_FILES = frozenset({'stdout.log', 'stderr.log', 'session-capture.json', 'capture.json'})
 CALL_FILES = frozenset({'request.json', 'result.json', 'stdout.log', 'stderr.log'})
 NO_TOOL = re.compile(r'no-tool-[0-9a-f]{32}\Z')

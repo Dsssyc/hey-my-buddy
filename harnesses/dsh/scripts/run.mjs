@@ -14,9 +14,9 @@
  *   carries a bounded prefix of the final text and the log paths.
  * - Timeout and cancellation signal only the owned POSIX process group, and
  *   every terminal path (including spawn failure) cleans up the settings copy.
- * - Workspace grouping uses a private Unix socket to the owning DSH host.
- *   Its plugin calls the official workspaceRegistry API, with no Web URL,
- *   browser token, or cross-process workspace storage writes.
+ * - Every run writes its session rollout to an execution-private session root
+ *   through the same per-run patch overlay; the owning harness session store,
+ *   credentials and settings are never touched.
  */
 import { spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
@@ -31,10 +31,6 @@ import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
 import { loadYaml } from './lib/yaml.mjs';
 import { readTurnInput, readTurnRecord, turnOutputPath } from './lib/turn-contract.mjs';
-import {
-  DEFAULT_WORKSPACE_TIMEOUT_SECONDS, MAX_WORKSPACE_TIMEOUT_SECONDS, MIN_WORKSPACE_TIMEOUT_SECONDS,
-  WorkspaceError, adoptSession, connectWorkspaceHost, resolveWorkspaceTarget, resolveWorkspace,
-} from './lib/workspace-host.mjs';
 
 const DSH_PROFILE = 'headless';
 const DEFAULTS = Object.freeze({
@@ -60,13 +56,9 @@ const SIGKILL_GRACE_MS = 3000;
 const FAILSAFE_MS = 2000;
 const EXIT_USAGE = 2;
 const EXIT_RUN_FAILED = 1;
-/** Private capture file written by the observer plugin inside this run's log dir. */
-const CAPTURE_FILENAME = 'capture.json';
-/** The observer plugin shipped beside this script; mounted only for grouped runs. */
-const CAPTURE_PLUGIN_PATH = fileURLToPath(new URL('../plugins/session-capture.mjs', import.meta.url));
 /** Private per-run inquiry bridge; mounted only when the service supplies a socket. */
 const INQUIRY_PLUGIN_PATH = fileURLToPath(new URL('../plugins/inquiry-bridge.mjs', import.meta.url));
-/** Required only for governed turns; independent of optional session grouping. */
+/** Required only for governed turns; independent of the private session root. */
 const TURN_PLUGIN_PATH = fileURLToPath(new URL('../plugins/turn-result.mjs', import.meta.url));
 /** Bounded activity observer; mounted for governed turns when a sidecar path is supplied. */
 const ACTIVITY_PLUGIN_PATH = fileURLToPath(new URL('../plugins/activity.mjs', import.meta.url));
@@ -83,16 +75,15 @@ const UNIX_SOCKET_PATH_BUDGET = process.platform === 'linux' ? 105 : 101;
 
 const USAGE = [
   'Usage: node scripts/run.mjs --cwd <dir> --task-file <file> [options]',
-  '       node scripts/run.mjs --cwd <dir> --attach-session <id> [options]',
   '',
   'Run one bounded task through the installed dsh headless profile and print',
-  'one compact JSON result on stdout.',
+  'one compact JSON result on stdout. The session rollout always lands in an',
+  'execution-private session root; it never joins the user session store.',
   '',
   'Required:',
   '  --cwd <dir>             working directory dsh runs in (canonicalized with',
   '                          realpath before the run)',
-  '  --task-file <file>      file holding the task text; omit it only with',
-  '                          --attach-session',
+  '  --task-file <file>      file holding the task text',
   '',
   'Options:',
   '  --model <id>            model id (default: DSH_DELEGATE_MODEL, then the',
@@ -109,22 +100,14 @@ const USAGE = [
   '  --settings-file <path>  settings document (default: DSH_SETTINGS_FILE,',
   '                          then $DSH_HOME/settings.yaml, then',
   '                          ~/.dsh/settings.yaml)',
-  '  --session-root <dir>    private session root for THIS ungrouped child only:',
-  '                          a per-run patch overlay moves just the JSONL session',
-  '                          backend under this attempt directory, so its rollout',
-  '                          never joins the user session store. Incompatible',
-  '                          with --workspace, because the owning workspace bridge',
-  '                          verifies sessions in its own store. DSH_HOME, the',
-  '                          credentials store and the settings document are',
-  '                          never moved, so native auth keeps resolving from the',
-  '                          owning harness',
-  '  --workspace             explicitly group this run in the DSH sidebar',
-  '  --no-workspace          run without workspace grouping (the default)',
-  '  --workspace-socket <p>  private host socket (default DSH_WORKSPACE_SOCKET,',
-  '                          then $DSH_HOME/deepseek-delegate/workspace.sock)',
-  '  --workspace-timeout <s> bound per socket request, 1-120 (default 15)',
-  '  --attach-session <id>   group an EXISTING completed ordinary session;',
-  '                          calls workspaceRegistry without a model task',
+  '  --session-root <dir>    private session root for THIS child only: a',
+  '                          per-run patch overlay moves just the JSONL session',
+  '                          backend under this attempt directory, so its',
+  '                          rollout never joins the user session store.',
+  '                          DSH_HOME, the credentials store and the settings',
+  '                          document are never moved, so native auth keeps',
+  '                          resolving from the owning harness. Defaults to a',
+  '                          private "sessions" directory beside this run\'s logs',
   '  --inquiry-socket <path> private socket for this run\'s inquiry bridge, an',
   '                          absolute owner-private path supplied by the owning',
   '                          service; combined with --inquiry-token it mounts a',
@@ -147,12 +130,8 @@ const USAGE = [
   '                          adapter to normalize; requires a governed turn',
   '  -h, --help              print this help and exit',
   '',
-  'Install the workspace bridge in the owning host profile with',
-  'scripts/install-workspace-bridge.mjs. No Web URL or browser token is used.',
-  '',
   'A run prints exactly one JSON object on stdout. Configuration and usage',
-  'errors go to stderr with exit code 2; a run that is not ok, or a grouped',
-  'run whose session could not be verified as a workspace member, exits 1.',
+  'errors go to stderr with exit code 2; a run that is not ok exits 1.',
 ].join('\n');
 
 function fail(message) {
@@ -325,11 +304,6 @@ try {
       'dsh-bin': { type: 'string' },
       'settings-file': { type: 'string' },
       'session-root': { type: 'string' },
-      workspace: { type: 'boolean', default: false },
-      'no-workspace': { type: 'boolean', default: false },
-      'workspace-socket': { type: 'string' },
-      'workspace-timeout': { type: 'string', default: String(DEFAULT_WORKSPACE_TIMEOUT_SECONDS) },
-      'attach-session': { type: 'string' },
       'inquiry-socket': { type: 'string' },
       'inquiry-token': { type: 'string' },
       'inquiry-results': { type: 'string' },
@@ -352,25 +326,9 @@ if (process.platform === 'win32') {
   fail('Windows is not supported; this launcher manages POSIX process groups (macOS/Linux only)');
 }
 
-const attachSession = values['attach-session'] === undefined ? undefined : values['attach-session'].trim();
-if (values.workspace && values['no-workspace']) fail('--workspace and --no-workspace cannot be combined');
-const workspaceEnabled = values.workspace || (attachSession !== undefined && !values['no-workspace']);
-
 if (values.cwd === undefined) fail(`--cwd is required\n\n${USAGE}`);
 if (values.cwd.trim() === '') fail('--cwd must not be blank');
-if (!workspaceEnabled && values['workspace-socket'] !== undefined) {
-  fail('--no-workspace cannot be combined with --workspace-socket');
-}
-if (values['attach-session'] !== undefined) {
-  if (attachSession === '') fail('--attach-session must not be blank');
-  if (!/^[A-Za-z0-9._:-]+$/.test(attachSession)) {
-    fail('--attach-session must be a plain session id (letters, digits, dot, underscore, colon, dash)');
-  }
-  if (values['task-file'] !== undefined) {
-    fail('--attach-session does not take --task-file: it attaches an existing session without a model run');
-  }
-  if (!workspaceEnabled) fail('--attach-session requires workspace grouping; remove --no-workspace');
-} else if (values['task-file'] === undefined) {
+if (values['task-file'] === undefined) {
   fail(`--task-file is required\n\n${USAGE}`);
 }
 if (values['task-file'] !== undefined && values['task-file'].trim() === '') {
@@ -394,41 +352,28 @@ if (inquiryToken !== undefined && (inquiryToken.length > 256 || inquiryToken.inc
   fail('--inquiry-token must be at most 256 characters and contain no NUL');
 }
 // The private session root moves ONLY the JSONL session backend's root for this
-// ungrouped child, through the same per-run patch overlay this runner already
-// uses for its settings copy. The child's DSH home, credentials store and
-// settings document are never relocated, so native model auth keeps resolving
-// from the owning harness instead of a broken empty home. It requires an
-// absolute owner-private path and never applies to attach mode, which runs no
-// child at all.
+// child, through the same per-run patch overlay this runner already uses for
+// its settings copy. The child's DSH home, credentials store and settings
+// document are never relocated, so native model auth keeps resolving from the
+// owning harness instead of a broken empty home. It requires an absolute
+// owner-private path.
 const rawSessionRoot = values['session-root'] === undefined ? undefined : values['session-root'].trim();
 if (rawSessionRoot !== undefined) {
   if (rawSessionRoot === '') fail('--session-root must not be blank');
   if (!isAbsolute(rawSessionRoot) || rawSessionRoot.includes('\0')) {
     fail('--session-root must be an absolute path without NUL');
   }
-  if (attachSession !== undefined) fail('--session-root does not apply to --attach-session: attach mode runs no child');
-  // A private session root is incompatible with workspace grouping: the owning
-  // workspace bridge proves the completed session from ITS OWN session store
-  // (`sessionPersistence.list()`), so the grouped run would fail as
-  // unknown-session and exit 1. Require an ungrouped run.
-  if (workspaceEnabled) {
-    fail('--session-root cannot be combined with --workspace: the workspace bridge verifies sessions in the owning host session store');
-  }
 }
 let sessionRootDir = rawSessionRoot === undefined ? undefined : resolve(rawSessionRoot);
 const attemptSessionRoot = sessionRootDir !== undefined;
-if (attachSession !== undefined && inquiryRawSocket !== undefined) {
-  fail('--attach-session does not mount an inquiry bridge: it runs no model task');
-}
-// Validate the complete governed protocol before settings, grouping or a paid
-// spawn. The input is snapshotted once; the private patch carries these exact
-// values and the SHA-256 of the original input file's bytes into the plugin.
+// Validate the complete governed protocol before settings or a paid spawn. The
+// input is snapshotted once; the private patch carries these exact values and
+// the SHA-256 of the original input file's bytes into the plugin.
 let turnConfig;
 const turnInputFlag = values['turn-input-file'];
 const turnOutputFlag = values['turn-output-file'];
 if ((turnInputFlag === undefined) !== (turnOutputFlag === undefined)) fail('--turn-input-file and --turn-output-file must be supplied together');
 if (turnInputFlag !== undefined) {
-  if (attachSession !== undefined) fail('--attach-session cannot run a governed turn');
   try {
     const loaded = readTurnInput(turnInputFlag);
     turnConfig = { ...loaded, outputFile: turnOutputPath(turnOutputFlag) };
@@ -469,14 +414,6 @@ const timeoutSeconds = Number(values.timeout);
 if (timeoutSeconds !== NO_TIMEOUT_SECONDS && (timeoutSeconds < MIN_TIMEOUT_SECONDS || timeoutSeconds > MAX_TIMEOUT_SECONDS)) {
   fail(`--timeout must be an integer: 0 disables the deadline, or ${MIN_TIMEOUT_SECONDS}-${MAX_TIMEOUT_SECONDS} seconds`);
 }
-if (!/^\d+$/.test(values['workspace-timeout'])) {
-  fail(`--workspace-timeout must be an integer between ${MIN_WORKSPACE_TIMEOUT_SECONDS} and ${MAX_WORKSPACE_TIMEOUT_SECONDS} seconds`);
-}
-const workspaceTimeoutSeconds = Number(values['workspace-timeout']);
-if (workspaceTimeoutSeconds < MIN_WORKSPACE_TIMEOUT_SECONDS || workspaceTimeoutSeconds > MAX_WORKSPACE_TIMEOUT_SECONDS) {
-  fail(`--workspace-timeout must be an integer between ${MIN_WORKSPACE_TIMEOUT_SECONDS} and ${MAX_WORKSPACE_TIMEOUT_SECONDS} seconds`);
-}
-const workspaceTimeoutMs = workspaceTimeoutSeconds * 1000;
 
 const startedAt = performance.now();
 
@@ -488,72 +425,6 @@ try {
   cwd = realpathSync(cwdInput);
 } catch {
   fail(`--cwd could not be canonicalized: ${cwdInput}`);
-}
-
-// ---------------------------------------------------------------------------
-// --attach-session: group one existing completed session, no model run.
-// ---------------------------------------------------------------------------
-if (attachSession !== undefined) {
-  let host;
-  let workspace;
-  try {
-    const target = resolveWorkspaceTarget(values, process.env);
-    host = await connectWorkspaceHost(target, { timeoutMs: workspaceTimeoutMs });
-    const resolvedWorkspace = await resolveWorkspace(host, cwd, { timeoutMs: workspaceTimeoutMs });
-    const adopted = await adoptSession(host, {
-      sessionId: attachSession,
-      workspaceId: resolvedWorkspace.id,
-      cwd,
-    }, { timeoutMs: workspaceTimeoutMs });
-    workspace = { enabled: true, bound: true, id: adopted.id, path: adopted.path, sessionId: adopted.sessionId };
-  } catch (error) {
-    const message = error instanceof WorkspaceError
-      ? error.message
-      : 'unexpected attach failure';
-    if (host === undefined) fail(message);
-    workspace = { enabled: true, bound: false, id: null, path: cwd, sessionId: attachSession, error: message };
-  }
-  emitAttach(workspace, workspace.bound ? null : workspace.error);
-  // Never fall through into run setup: the pending stdout write keeps the loop
-  // alive until emitPayload's flush callback (or the fallback) exits with the
-  // matching code, and an empty loop exits with that same process.exitCode.
-  await new Promise(() => {});
-}
-
-/** Print the single attach-mode JSON result and exit. */
-function emitAttach(workspace, error) {
-  const payload = {
-    status: error === null ? 'ok' : 'attach-error',
-    mode: 'attach',
-    exitCode: error === null ? 0 : null,
-    signal: null,
-    error,
-    elapsedSeconds: Math.round((performance.now() - startedAt) / 100) / 10,
-    timeoutSeconds: null,
-    requested: null,
-    cwd,
-    taskFile: null,
-    dshBin: null,
-    inputDelivery: null,
-    logPaths: null,
-    finalText: '',
-    finalTextTruncated: false,
-    workspace,
-    inquiry: {
-      enabled: false,
-      socketPath: null,
-      resultsPath: null,
-      errorPath: null,
-      error: null,
-      note: 'attach mode runs no model task, so it mounts no inquiry bridge.',
-    },
-    note: 'attach mode only groups an existing completed session into its workspace through the owning dsh workspace host; it runs no model task.',
-  };
-  // Attach mode never initializes run-only child/timer/temporary-file state.
-  const code = error === null ? 0 : EXIT_RUN_FAILED;
-  process.exitCode = code;
-  process.stdout.write(`${JSON.stringify(payload)}\n`, () => process.exit(code));
-  setTimeout(() => process.exit(code), 1000).unref();
 }
 
 // ---------------------------------------------------------------------------
@@ -612,33 +483,8 @@ const prompt = fileBackedTask
 const promptSha256 = sha256Hex(prompt);
 
 // ---------------------------------------------------------------------------
-// Workspace preflight: resolve/connect to the host and register the
-// canonical cwd BEFORE the paid headless run starts. An unavailable bridge
-// fails here, so no orphan run is ever created. Adoption itself happens only
-// after the owned process has fully stopped.
+// Private per-run log directory and execution-private session root.
 // ---------------------------------------------------------------------------
-let workspaceHost;
-let workspaceInfo;
-if (workspaceEnabled) {
-  if (!isFile(CAPTURE_PLUGIN_PATH)) fail(`session capture plugin is missing: ${CAPTURE_PLUGIN_PATH}`);
-  let target;
-  try {
-    target = resolveWorkspaceTarget(values, process.env);
-  } catch (error) {
-    fail(error instanceof WorkspaceError ? error.message : 'could not resolve the workspace socket');
-  }
-  try {
-    workspaceHost = await connectWorkspaceHost(target, { timeoutMs: workspaceTimeoutMs });
-  } catch (error) {
-    fail(error instanceof WorkspaceError ? error.message : 'could not connect to the workspace bridge');
-  }
-  try {
-    workspaceInfo = await resolveWorkspace(workspaceHost, cwd, { timeoutMs: workspaceTimeoutMs });
-  } catch (error) {
-    fail(error instanceof WorkspaceError ? error.message : 'could not register the workspace on its owning host');
-  }
-}
-
 function createLogDir() {
   try {
     if (logParent !== undefined) {
@@ -658,24 +504,21 @@ function createLogDir() {
 const logDir = createLogDir();
 const stdoutLog = join(logDir, 'stdout.log');
 const stderrLog = join(logDir, 'stderr.log');
-const capturePath = workspaceEnabled ? join(logDir, CAPTURE_FILENAME) : null;
 // Standalone runs without an attempt root still keep sessions in this run's
 // private log directory. The Buddy adapter supplies its unified attempt root.
-if (!workspaceEnabled && sessionRootDir === undefined) sessionRootDir = join(logDir, 'sessions');
+if (sessionRootDir === undefined) sessionRootDir = join(logDir, 'sessions');
 
-// The per-run session override must be usable before the child starts; an
+// The per-run session root must be usable before the child starts; an
 // unusable path is a usage error, never a paid run whose session cannot
-// persist. A symlinked root is refused so the private root stays the real
-// attempt directory this runner created.
-if (sessionRootDir !== undefined) {
-  try {
-    mkdirSync(sessionRootDir, { recursive: true, mode: 0o700 });
-    if (lstatSync(sessionRootDir).isSymbolicLink() || !isDirectory(sessionRootDir)) {
-      throw new Error('the session root is not a real directory');
-    }
-  } catch {
-    fail(`could not create the private session root: ${sessionRootDir}`);
+// persist. A symlinked root is refused so the private root stays a real
+// directory this runner created or was explicitly given.
+try {
+  mkdirSync(sessionRootDir, { recursive: true, mode: 0o700 });
+  if (lstatSync(sessionRootDir).isSymbolicLink() || !isDirectory(sessionRootDir)) {
+    throw new Error('the session root is not a real directory');
   }
+} catch {
+  fail(`could not create the private session root: ${sessionRootDir}`);
 }
 
 // ---------------------------------------------------------------------------
@@ -721,25 +564,12 @@ try {
   patchFile = join(tempDir, 'patch.json');
   writeFileSync(settingsCopy, JSON.stringify(runSettings), { mode: 0o600 });
   const patchRows = [{ id: 'settings', config: { path: settingsCopy, watch: false } }];
-  if (sessionRootDir !== undefined) {
-    // The shipped profiles compose the durable session store under this entry
-    // id; the overlay replaces only its `root`, so this child's session rollout
-    // lands in the attempt directory while the DSH home, credentials store and
-    // every other harness path keep the owning harness values. A profile that
-    // does not compose the entry only warns, never fails.
-    patchRows.push({ id: 'session-persistence-jsonl', config: { root: sessionRootDir } });
-  }
-  if (workspaceEnabled) {
-    // A temporary, self-contained observer plugin captures this run's exact root
-    // session id from the live session event feed; nothing else changes.
-    patchRows.push({
-      insert: [{
-        id: 'deepseek-delegate-session-capture',
-        name: CAPTURE_PLUGIN_PATH,
-        config: { capturePath, promptSha256, cwd },
-      }],
-    });
-  }
+  // The shipped profiles compose the durable session store under this entry
+  // id; the overlay replaces only its `root`, so this child's session rollout
+  // lands in the execution-private directory while the DSH home, credentials
+  // store and every other harness path keep the owning harness values. A
+  // profile that does not compose the entry only warns, never fails.
+  patchRows.push({ id: 'session-persistence-jsonl', config: { root: sessionRootDir } });
   if (inquirySocketPath !== null) {
     // The per-run inquiry bridge is reachable only through a token-authenticated
     // owner-private Unix socket created for this exact run.
@@ -860,85 +690,7 @@ function beginTermination(reason, signal) {
   }, SIGKILL_GRACE_MS);
 }
 
-/**
- * Read and validate the observer's private capture metadata. The prompt hash
- * and canonical cwd must match this run exactly; a missing or mismatching
- * capture is a hard grouping failure, never a silently ungrouped run.
- */
-function readCapture() {
-  if (capturePath === null || !existsSync(capturePath)) {
-    throw new Error('the dsh observer did not write capture metadata, so this run\'s session id is unknown');
-  }
-  let record;
-  try {
-    record = JSON.parse(readFileSync(capturePath, 'utf8'));
-  } catch {
-    throw new Error('the dsh observer capture metadata is not valid JSON');
-  }
-  if (record === null || typeof record !== 'object') throw new Error('the dsh observer capture metadata is malformed');
-  if (record.ambiguous === true) throw new Error('multiple root sessions matched this run; refusing an ambiguous binding');
-  if (typeof record.sessionId !== 'string' || record.sessionId === '') {
-    throw new Error('the dsh observer capture metadata carries no session id');
-  }
-  if (record.promptSha256 !== promptSha256) {
-    throw new Error('the dsh observer capture metadata does not match this run\'s prompt');
-  }
-  if (record.cwd !== cwd) {
-    throw new Error('the dsh observer capture metadata cwd does not match the canonical --cwd');
-  }
-  return record.sessionId;
-}
-
-function baseWorkspace(bound = false) {
-  return {
-    enabled: workspaceEnabled,
-    bound,
-    id: workspaceInfo === undefined ? null : workspaceInfo.id,
-    path: cwd,
-    sessionId: null,
-    ...(typeof workspaceInfo?.created === 'boolean' ? { created: workspaceInfo.created } : {}),
-  };
-}
-
-/**
- * Post-run grouping. Runs only after the owned child process has fully exited
- * and persisted; adoption before that would be unsafe. On any failure the
- * workspace metadata stays visible with `bound: false` and an error, while the
- * original child status, exit code, and log paths are preserved.
- */
-async function finalizeGrouping(status, shutdownConfirmed) {
-  const workspace = baseWorkspace();
-  if (status === 'spawn-error') {
-    workspace.error = 'the run never started, so there was no session to group';
-    return workspace;
-  }
-  let sessionId;
-  try {
-    sessionId = readCapture();
-  } catch (error) {
-    workspace.error = `could not capture this run's session id: ${error.message}`;
-    return workspace;
-  }
-  workspace.sessionId = sessionId;
-  if (!shutdownConfirmed) {
-    workspace.error = 'the owned headless process group is not confirmed stopped; grouping is deferred';
-    return workspace;
-  }
-  try {
-    const adopted = await adoptSession(workspaceHost, {
-      sessionId,
-      workspaceId: workspaceInfo.id,
-      cwd,
-    }, { timeoutMs: workspaceTimeoutMs });
-    return { enabled: true, bound: true, id: adopted.id, path: adopted.path, sessionId: adopted.sessionId,
-      ...(typeof workspaceInfo?.created === 'boolean' ? { created: workspaceInfo.created } : {}) };
-  } catch (error) {
-    workspace.error = `grouping failed: ${error instanceof WorkspaceError ? error.message : 'unexpected grouping failure'}`;
-    return workspace;
-  }
-}
-
-function buildResult(status, exitCode, signal, error, workspace, shutdownConfirmed) {
+function buildResult(status, exitCode, signal, error, shutdownConfirmed) {
   const { text, truncated } = readTextPrefix(stdoutLog, FINAL_TEXT_LIMIT);
   let turn;
   let turnResultError;
@@ -971,7 +723,7 @@ function buildResult(status, exitCode, signal, error, workspace, shutdownConfirm
     taskFile,
     dshBin,
     inputDelivery: fileBackedTask ? 'file-reference' : 'inline',
-    logPaths: { stdout: stdoutLog, stderr: stderrLog, capture: capturePath },
+    logPaths: { stdout: stdoutLog, stderr: stderrLog },
     inquiry: {
       enabled: inquirySocketPath !== null,
       socketPath: inquirySocketPath,
@@ -991,26 +743,19 @@ function buildResult(status, exitCode, signal, error, workspace, shutdownConfirm
       : { enabled: true, sidecar: 'native-usage.json',
           source: 'dsh/session-assistant-usage',
           note: 'the bounded native token-usage observation, the provider quota when the harness exposes one, and the retained root assistant text; the adapter validates the attempt binding and normalizes the counters' },
-    workspace,
     nativeStorage: {
       // Truthful session-storage facts. Git isolation and native storage are
-      // separate dimensions. A grouped run keeps the owning harness session
-      // store so the workspace bridge can verify membership. An ungrouped run
-      // moves ONLY the JSONL session backend's root through the per-run patch
-      // overlay; the DSH home, credentials store and settings document keep
+      // separate dimensions. Every run moves ONLY the JSONL session backend's
+      // root through the per-run patch overlay into an execution-private
+      // directory; the DSH home, credentials store and settings document keep
       // their owning-harness values, so native auth is never moved or simulated.
-      scope: sessionRootDir === undefined ? 'harness-user-store'
-        : attemptSessionRoot ? 'task-private-sessions' : 'run-private-sessions',
-      sessionRootPrivate: sessionRootDir !== undefined,
-      sessionRootSource: sessionRootDir === undefined
-        ? 'the owning harness session store'
-        : 'a per-run patch overlay on the shipped session-persistence-jsonl root; a profile without that entry warns and keeps its own store',
+      scope: attemptSessionRoot ? 'task-private-sessions' : 'run-private-sessions',
+      sessionRootPrivate: true,
+      sessionRootSource: 'a per-run patch overlay on the shipped session-persistence-jsonl root; a profile without that entry warns and keeps its own store',
       credentialsStore: 'harness-user-store',
-      nativeAppVisibility: sessionRootDir === undefined ? 'user-store' : 'not-listed-in-native-app',
+      nativeAppVisibility: 'not-listed-in-native-app',
       resumeMode: 'reconstructed-new-session',
-      note: sessionRootDir === undefined
-        ? 'this child kept the owning harness session store so the workspace host can verify and group the session; credentials resolve from that store too'
-        : 'this child wrote its session rollout under the attempt-private root through a supported per-run patch overlay; the DSH home, credentials store and other harness state stayed with the owning harness, and Buddy continuations reconstruct a new session instead of resuming it',
+      note: 'this child wrote its session rollout under the execution-private root through a supported per-run patch overlay; the DSH home, credentials store and other harness state stayed with the owning harness, and Buddy continuations reconstruct a new session instead of resuming it',
     },
     processState: { pid: child?.pid ?? null, shutdownConfirmed },
     ...(turnConfig === undefined ? {} : { turn, turnResultPath: turnConfig.outputFile, turnResultError: turnResultError ?? null }),
@@ -1028,9 +773,7 @@ function emitPayload(payload) {
   try {
     if (tempDir !== undefined && payload.processState?.shutdownConfirmed === true) rmSync(tempDir, { recursive: true, force: true });
   } catch { /* best effort: never skip the result because cleanup failed */ }
-  // A grouped run is only a success when the host verified the membership.
-  const grouped = payload.workspace === undefined || payload.workspace.enabled !== true || payload.workspace.bound === true;
-  const code = payload.status === 'ok' && grouped ? 0 : EXIT_RUN_FAILED;
+  const code = payload.status === 'ok' ? 0 : EXIT_RUN_FAILED;
   process.exitCode = code;
   process.stdout.write(`${JSON.stringify(payload)}\n`, () => process.exit(code));
   // If stdout never flushes (e.g. a broken pipe), do not hang.
@@ -1038,9 +781,8 @@ function emitPayload(payload) {
 }
 
 /**
- * Settle one run exactly once. Cleanup and grouping are awaited before the
- * synchronous JSON emit, so the async grouping path can never race the
- * process exit.
+ * Settle one run exactly once. Cleanup is awaited before the synchronous JSON
+ * emit, so no asynchronous path can race the process exit.
  */
 async function settle(status, exitCode, signal, error) {
   if (settled || settling) return;
@@ -1060,9 +802,8 @@ async function settle(status, exitCode, signal, error) {
   try {
     if (tempDir !== undefined && shutdownConfirmed) rmSync(tempDir, { recursive: true, force: true });
   } catch { /* best effort */ }
-  const workspace = workspaceEnabled ? await finalizeGrouping(status, shutdownConfirmed) : baseWorkspace();
   settling = false;
-  emitPayload(buildResult(status, exitCode, signal, error, workspace, shutdownConfirmed));
+  emitPayload(buildResult(status, exitCode, signal, error, shutdownConfirmed));
 }
 
 // Installed before spawning: a signal during setup exits immediately; later
