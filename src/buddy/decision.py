@@ -73,8 +73,8 @@ DEFAULT_TIMEOUT_SECONDS = 300
 TIMEOUT_GRACE_SECONDS = 10
 
 NEEDS_HOST_NO_PROFILE = (
-    "no compatible Router is configured; select an available, enabled profile in the appropriate "
-    "fast or review Router slot. The service never guesses one and never selects a selector."
+    "Router 不可用：尚未设置可用的 Router buddy；请指定完整合法 buddy，"
+    "或由用户更新 Router 设置后显式 reroute。"
 )
 NEEDS_HOST_NO_CANDIDATE = (
     "no enabled, available, capability-matching profile is a legal candidate under the published pins and "
@@ -165,8 +165,8 @@ class DecisionCoordinator:
 
     # -- request-time policy -------------------------------------------------
     def _decision_profile(self, connection: sqlite3.Connection) -> tuple[sqlite3.Row | None, str | None]:
-        profile, _facts, reason = router.resolve(connection, None)
-        return profile, reason
+        profile, _facts, problem = router.resolve(connection)
+        return profile, problem["reason"] if problem else None
 
     def _refresh_route(self, connection, row):
         """Recheck cached eligibility before quota admission, preserving frozen candidates."""
@@ -631,6 +631,9 @@ class DecisionCoordinator:
         return self._create(request_id, request)
 
     def _create(self, request_id: str, request: dict, *, connection=None, needs_host_reason: str | None = None) -> dict:
+        # Keep the caller's admission input independent of the persisted snapshot,
+        # including when an internal caller reuses the same dictionary on replay.
+        request = dict(request)
         fingerprint = sha256_text(canonical_json(request))
         kind = request["kind"]
         owns_transaction = connection is None
@@ -668,30 +671,41 @@ class DecisionCoordinator:
             task_text = request.get("task") or ""
             expected_revision = int(state["table_revision"])
             sole_candidate: sqlite3.Row | None = None
+            facts = {"routerProfileId": None, "routingMode": None, "budget": None,
+                     "configurationRevision": int(state["configuration_revision"])}
             if len(candidates) == 1:
                 # One frozen legal candidate leaves the Router nothing to compare,
                 # so the program selects it directly: no Router task is created and
                 # no Router configuration or model-input byte budget is needed.
                 sole_candidate = candidates[0]
-                requested_mode = router.configuration(connection)["defaultRoutingMode"]
-                facts = {"requestedRoutingMode": requested_mode, "routingMode": requested_mode,
-                         "fallback": None, "routerCalled": False}
+                facts["routerCalled"] = False
                 request.update(facts)
                 status, reason = "completed", SOLE_CANDIDATE_REASON
+            elif not candidates:
+                request.update(facts)
+                status, reason = "needs-host", NEEDS_HOST_NO_CANDIDATE
             else:
-                profile_row, facts, profile_reason = router.resolve(connection, None)
-                request = {**request, **facts, "budget": (dict(router.FAST_BUDGET) if facts["routingMode"] == "fast" else router.configured_budget(connection))}
-                request["timeoutSeconds"] = 60 if facts["routingMode"] == "fast" else request.get("timeoutSeconds") or request["budget"]["timeoutSeconds"]
-                request["budget"]["timeoutSeconds"] = request["timeoutSeconds"]
+                profile_row, facts, problem = router.resolve(connection)
+                request.update(facts)
+                # Even an unavailable published Router has a fixed identity. It
+                # must not be replaced by another buddy when this request replays.
+                published = connection.execute("SELECT * FROM evaluation_profiles WHERE profile_id=?",
+                                               (facts["routerProfileId"],)).fetchone()
+                request["routerProfile"] = ({key: published[key] for key in schemas.CONFIGURATION_FIELDS}
+                                            if published is not None else None)
+                request["routerProblem"] = problem
+                if request["budget"] is not None:
+                    request["budget"] = dict(request["budget"])
+                    request["timeoutSeconds"] = (60 if facts["routingMode"] == "fast" else
+                                                 request.get("timeoutSeconds") or request["budget"]["timeoutSeconds"])
+                    request["budget"]["timeoutSeconds"] = request["timeoutSeconds"]
+                    facts["budget"] = request["budget"]
                 if needs_host_reason is not None:
                     status = "needs-host"
                     reason = needs_host_reason
                 elif profile_row is None:
                     status = "needs-host"
-                    reason = profile_reason or NEEDS_HOST_NO_PROFILE
-                elif not candidates:
-                    status = "needs-host"
-                    reason = NEEDS_HOST_NO_CANDIDATE
+                    reason = problem["reason"] if problem else NEEDS_HOST_NO_PROFILE
             frozen_input = None
             if status == "queued":
                 frozen_input, problem = self._select_input(
@@ -703,20 +717,26 @@ class DecisionCoordinator:
                 else:
                     frozen_input["budget"] = request["budget"]
                     frozen_input.update(facts)
+                    frozen_input["routerProfile"] = request["routerProfile"]
                     if facts["routingMode"] == "review":
                         frozen_input["executionWorkspace"] = request.get("executionWorkspace")
                     else:
                         frozen_input.pop("evidence", None)
                     frozen_input["outputSchema"] = router.answer_schema([item["profileId"] for item in frozen_input["profiles"]], facts["routingMode"])
-            create_task = status == "queued"
             if frozen_input is not None:
                 from .accounts import identity, selection
                 names = {item['adapter'] for item in frozen_input.get('profiles', [])}
                 if frozen_input.get('profile', {}).get('adapter'):
                     names.add(frozen_input['profile']['adapter'])
                 frozen_input['accounts'] = {name: identity(selection(connection, name)) for name in names}
+                input_bytes = len(canonical_json(frozen_input).encode("utf-8"))
+                if input_bytes > MAX_DECISION_INPUT_BYTES:
+                    status, reason = "needs-host", (
+                        f"The complete frozen routing input contains {input_bytes} UTF-8 bytes, above the "
+                        f"{MAX_DECISION_INPUT_BYTES}-byte decision input ceiling; nothing was truncated or sent to a model.")
+                    frozen_input = None
             task_id = None
-            if create_task:
+            if status == "queued":
                 task_id = self._create_task(
                     connection,
                     decision_id=decision_id,
@@ -773,7 +793,8 @@ class DecisionCoordinator:
                     "tableRevision": expected_revision,
                     "reason": reason,
                     "error": error,
-                    **facts,
+                    **router.routing_facts(request),
+                    **({"routerCalled": False} if sole_candidate is not None else {}),
                 },
                 revision=expected_revision,
             )
@@ -1677,9 +1698,8 @@ class DecisionCoordinator:
             # False only for a recorded program selection; a record predating that
             # path stays null rather than claiming a Router ran.
             "routerCalled": request.get("routerCalled"),
-            "routingMode": request.get("routingMode", "review"),
-            "requestedRoutingMode": request.get("requestedRoutingMode", "review"),
-            "fallback": request.get("fallback"),
+            **router.routing_facts(request),
+            "configurationRevision": int(row["configuration_revision"]),
             "usage": (output or {}).get("usage"),
             "nativeIdentity": (output or {}).get("nativeIdentity"),
             "stopEvidence": (output or {}).get("stopEvidence"),

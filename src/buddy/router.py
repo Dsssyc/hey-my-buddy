@@ -134,29 +134,47 @@ def profile_problem(connection, profile_id: str | None, routing_mode: str) -> tu
     from .adapters import adapter
     from .harness_health import read_health
     from .harness_runtime import bound
+    def unavailable(code, reason):
+        return None, code, f"Router 不可用：{reason}"
+
+    try:
+        configuration(connection)
+    except BoardError as error:
+        return unavailable(error.code, error.message)
     if not profile_id:
-        return None, "router-not-configured", f"The {routing_mode} Router is not configured"
+        return unavailable("router-not-configured", "尚未设置 Router buddy")
     row = connection.execute("SELECT * FROM evaluation_profiles WHERE profile_id=?", (profile_id,)).fetchone()
     if row is None:
-        return None, "router-not-published", f"The {routing_mode} Router is no longer published"
+        return unavailable("router-not-published", f"buddy {profile_id} 未发布或已被移除")
+    if any(not row[key] for key in ("adapter", "provider", "model", "effort")):
+        return unavailable("router-incomplete", f"buddy {profile_id} 的 harness/provider/model/effort 身份不完整")
+    if not row["enabled"]:
+        return unavailable("router-unavailable", f"buddy {profile_id} 已禁用")
+    if not row["available"]:
+        detail = row["unavailable_reason"] or "目录未声明可用"
+        return unavailable("router-unavailable", f"buddy {profile_id} 在已发布目录中不可用（{detail}）")
     health = read_health(connection, row["adapter"])
-    if not row["enabled"] or not row["available"] or not health["available"]:
-        return None, "router-unavailable", f"The {routing_mode} Router is disabled or unavailable ({health.get('reasonCode') or health.get('status')})"
-    if any(not row[key] for key in ("provider", "model", "effort")):
-        return None, "router-incomplete", f"The {routing_mode} Router has an incomplete model identity"
+    if not health["available"]:
+        detail = health.get("reason") or health.get("remedy") or health.get("status")
+        return unavailable("router-unavailable", f"harness {row['adapter']} 不可用（{health.get('reasonCode')}: {detail}）")
     from .native_observations import exhausted
     if exhausted(connection, row) is not None:
-        return None, "router-quota-exhausted", f"The {routing_mode} Router has a recent native quota exhaustion observation"
+        return unavailable("router-quota-exhausted", f"buddy {profile_id} 有仍然生效的原生额度耗尽记录")
     try:
         with bound([health]):
             native = adapter(row["adapter"])
-            eligible = (getattr(native, "no_tool_structured", False) if routing_mode == "fast" else
-                        native.local_read_only_check()["eligible"])
-    except BoardError:
-        eligible = False
+            if routing_mode == "fast":
+                eligible = getattr(native, "no_tool_structured", False)
+                detail = "harness 未实现无工具结构化入口"
+            else:
+                check = native.local_read_only_check()
+                eligible = check["eligible"]
+                detail = f"{check['reasonCode']}: {check['reason']}"
+    except BoardError as error:
+        eligible, detail = False, f"{error.code}: {error.message}"
     if not eligible:
         code = "router-no-tool-unsupported" if routing_mode == "fast" else "router-review-unsupported"
-        return None, code, f"The {routing_mode} Router lacks {'a no-tool structured capability' if routing_mode == 'fast' else 'an implemented local read-only mechanism'}"
+        return unavailable(code, f"harness {row['adapter']} 不满足 {routing_mode} 模式资格（{detail}）")
     return row, None, None
 
 
@@ -185,23 +203,43 @@ def initialize_configuration(connection) -> dict:
     return settings
 
 
-def resolve(connection, requested_mode: str | None, allow_fallback: bool = True) -> tuple[object | None, dict, str | None]:
-    settings = configuration(connection)
-    requested = requested_mode or settings["defaultRoutingMode"]
-    key = "fastRouterProfileId" if requested == "fast" else "reviewRouterProfileId"
-    profile, code, reason = profile_problem(connection, settings[key], requested)
-    facts = {"requestedRoutingMode": requested, "routingMode": requested, "fallback": None}
-    if profile is None and requested == "review" and allow_fallback:
-        facts.update(routingMode="fast", fallback={"from": "review", "to": "fast", "code": code, "reason": reason})
-        profile, _fast_code, fast_reason = profile_problem(connection, settings["fastRouterProfileId"], "fast")
-        reason = f"{reason}; fast fallback unavailable: {fast_reason}" if profile is None else None
-    return profile, facts, reason
+def resolve(connection, *, frozen: dict | None = None) -> tuple[object | None, dict, dict | None]:
+    """Resolve one user-appointed Router, or recheck an admission snapshot.
+
+    Frozen requests carry ``routerProfile`` alongside these four facts. Rechecks
+    return the original facts even on failure; they never refresh the identity,
+    mode, budget or candidates. Table/reader fencing belongs to the coordinator.
+    """
+    revision = int(connection.execute("SELECT configuration_revision FROM evaluation_state WHERE id=1").fetchone()[0])
+    facts = ({key: frozen[key] for key in
+              ("routerProfileId", "routingMode", "configurationRevision", "budget")} if frozen is not None else
+             {"routerProfileId": None, "routingMode": None, "configurationRevision": revision, "budget": None})
+    try:
+        settings = configuration(connection)
+    except BoardError as error:
+        return None, facts, {"code": error.code, "reason": f"Router 不可用：{error.message}"}
+    if frozen is None:
+        facts.update(routerProfileId=settings["routerProfileId"], routingMode=settings["defaultRoutingMode"],
+                     budget=dict(FAST_BUDGET) if settings["defaultRoutingMode"] == "fast" else budget(settings["routingBudget"]))
+    elif (revision != facts["configurationRevision"] or settings["routerProfileId"] != facts["routerProfileId"]
+          or settings["defaultRoutingMode"] != facts["routingMode"]):
+        return None, facts, {"code": "router-configuration-changed", "reason": "Router 不可用：admission 后共享设置已变化；请由 Host 指定完整 buddy 或显式 reroute"}
+    profile, code, reason = profile_problem(connection, facts["routerProfileId"], facts["routingMode"])
+    if profile is not None and frozen is not None:
+        from .schemas import CONFIGURATION_FIELDS
+        if {key: profile[key] for key in CONFIGURATION_FIELDS} != frozen.get("routerProfile"):
+            return None, facts, {"code": "router-profile-changed", "reason": "Router 不可用：已发布 buddy 的完整身份与 admission 冻结值不一致"}
+    return profile, facts, {"code": code, "reason": reason} if code else None
 
 
 def routing_facts(request: dict) -> dict:
-    return {"routingMode": request.get("routingMode", "review"),
-            "requestedRoutingMode": request.get("requestedRoutingMode", "review"),
-            "fallback": request.get("fallback")}
+    facts = {key: request.get(key) for key in
+             ("routerProfileId", "routerProfile", "routingMode", "budget", "routerProblem")}
+    # Historical JSON has no revision field; callers already have the immutable
+    # request column and must not overwrite that evidence with a guessed value.
+    if "configurationRevision" in request:
+        facts["configurationRevision"] = request["configurationRevision"]
+    return facts
 
 
 def selection_source(request: dict) -> str:

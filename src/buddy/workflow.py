@@ -1195,9 +1195,15 @@ class WorkflowCoordinator:
                                (reason, now, run["current_routing_id"]))
         request_id = f"routing-{uuid.uuid4()}"
         payload = {"source": "routing", "decisionId": run["current_routing_id"], "summary": reason,
-                   "neededWork": ["Continue with a complete configuration, or fix the selector/catalog and continue with reroute=true."],
+                   "neededWork": ["指定完整合法 buddy 继续同一委派，或由用户更新 Router/目录后显式 reroute=true；Host 不修改共享设置。"],
                    "attempted": "Bounded model routing and native configuration validation",
                    "acceptance": "A legal adapter/provider/model/effort tuple is ready for execution"}
+        if run["current_routing_id"]:
+            from .router import routing_facts
+            decision = self.board.decisions._row(connection, run["current_routing_id"])
+            payload.update(routing_facts(json.loads(decision["requested_json"])))
+            if decision["decision_attempt_id"] is None:
+                payload["attempted"] = "已冻结合法候选并检查请求边界；未调用 Router，未创建 Worker 业务回合。"
         connection.execute(
             "INSERT INTO workflow_requests(request_id,run_id,kind,summary,payload_json,state,expected_revision,created_at,updated_at)"
             " VALUES(?,?,'attention',?,?,'open',?,?,?)",

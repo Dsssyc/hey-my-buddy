@@ -97,7 +97,7 @@ class DecisionTestCase(BoardTestCase):
                 "expectedRevision": grant["tableRevision"],
                 "profileSettings": [{"profileId": item["profileId"], "enabled": True} for item in profiles],
                 "preferenceChanges": preferences or [],
-                "configuration": {"defaultRoutingMode": "review", "reviewRouterProfileId": decision_profile},
+                "configuration": {"defaultRoutingMode": "review", "routerProfileId": decision_profile},
             },
         )
         if cards:
@@ -450,7 +450,9 @@ class SelectionRequestTests(DecisionTestCase):
         request = self.request(board)
         self.assertEqual(request["status"], "needs-host")
         self.assertIsNone(request["runId"])
-        self.assertIn("Router is not configured", self.decision(board, request["decisionId"])["reason"])
+        decision = self.decision(board, request["decisionId"])
+        self.assertEqual(decision["routerProblem"]["code"], "router-not-configured")
+        self.assertTrue(decision["reason"].startswith("Router 不可用："))
         self.assertEqual(board.call("task_list", {"limit": 10})["runs"], [])
 
     def test_native_fixture_absence_is_an_honest_adapter_unavailable_outcome(self):
@@ -466,7 +468,12 @@ class SelectionRequestTests(DecisionTestCase):
         request = self.request(board)
         self.assertEqual(request["status"], "needs-host")
         self.assertIsNone(request["runId"])
-        self.assertIn("available", self.decision(board, request["decisionId"])["reason"])
+        # This harness outage removes every business candidate. The empty bounds
+        # have their own reason, independently of the Router's availability.
+        decision = self.decision(board, request["decisionId"])
+        self.assertEqual(decision["routingBasis"]["candidateCount"], 0)
+        self.assertIsNone(decision["routerProblem"])
+        self.assertIn("legal candidate", decision["reason"])
         # Maintenance is not a blackboard model call at all any more, so an absent
         # helper cannot report it as an adapter-unavailable maintenance failure.
         self.assertFalse(capabilities["maintenance"])
@@ -1039,7 +1046,7 @@ class DecisionSurfaceTests(DecisionTestCase):
                 "routingBasis",
                 "constraints", "requiredCapabilities",
                 "routerCalled",
-                "routingMode", "requestedRoutingMode", "fallback",
+                "routingMode", "routerProfileId", "routerProfile", "routerProblem", "configurationRevision",
                 "usage",
                 "nativeIdentity",
                 "stopEvidence",
@@ -1054,7 +1061,7 @@ class DecisionSurfaceTests(DecisionTestCase):
         self.assertEqual(compact["selectedProfile"]["effort"], SECOND_PROFILE["effort"])
         self.assertEqual(compact["selectedProfile"]["adapter"], "dsh")
         self.assertEqual(compact["decisionModel"]["requested"]["model"], PROFILE["model"])
-        self.assertLess(len(json.dumps(compact)), 2200, "the default read includes mode and fallback facts but stays small")
+        self.assertLess(len(json.dumps(compact)), 2200, "the default read includes the frozen Router identity but stays small")
         audit = self.decision(board, request["decisionId"])
         self.assertEqual(audit["input"]["operation"], "select")
         self.assertEqual(audit["requested"]["task"], "fix the failing parser test")

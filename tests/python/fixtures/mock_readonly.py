@@ -54,6 +54,11 @@ def install(testcase, *, path=None, **options):
     ))
     for flag in ("read_only_structured", "read_only_structured_verified"):
         testcase.enterContext(patch.object(DshAdapter, flag, True))
+    testcase.enterContext(patch.object(DshAdapter, "local_read_only_check", return_value={
+        "eligible": True, "reasonCode": None, "reason": None,
+        "systemSandbox": False,
+        "sameAttemptContinuation": False,
+    }))
     testcase.enterContext(patch.object(DshAdapter, "available", side_effect=lambda: (testcase._readonly_fixture.is_file(), "mock fixture missing")))
     testcase.input_prepare = testcase.enterContext(patch("buddy.router_input.prepare", side_effect=prepare_input))
     testcase.input_verify = testcase.enterContext(patch("buddy.router_input.verify", side_effect=verify_input))
