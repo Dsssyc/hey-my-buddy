@@ -1,4 +1,4 @@
-"""Schema 11 store facts: frozen attempt families, shared admission, capacity.
+"""Current store facts: frozen attempt families, shared admission, capacity.
 
 Every test uses the production store and resource implementations against a private
 state directory. Governed tasks use the deterministic workspace double, so real

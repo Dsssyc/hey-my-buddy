@@ -11,7 +11,7 @@ from blackboard.store.test_migrations import rows, schema_shape, DELIVERED
 from blackboard.store.upgrade_fixture import load_fixture
 from blackboard.tasks import test_workspace_identity as identity_fixtures
 from hey_my_buddy.blackboard.store import backup, migrations
-from hey_my_buddy.blackboard.store.db import Database, canonical_json
+from hey_my_buddy.blackboard.store.db import Database, SCHEMA_VERSION, canonical_json
 from hey_my_buddy.blackboard.store.store import BoardStore
 from hey_my_buddy.blackboard.store.workspace_identity_migration import migrate_workspace_identity
 from hey_my_buddy.errors import BoardError
@@ -255,7 +255,7 @@ class UpgradeMigrationTests(BoardTestCase):
                     'pid':123, 'contractVersion':'private-fixture'}
         (self.state / 'control.json').write_text(json.dumps(endpoint))
         health = {**endpoint, 'maxConcurrent':2, 'waitCapacity':4}
-        started = {'runtimeStable':True, 'schemaVersion':16, 'maxConcurrent':2, 'waitCapacity':4}
+        started = {'runtimeStable':True, 'maxConcurrent':2, 'waitCapacity':4}
         with ExitStack() as stack:
             stack.enter_context(mock.patch.dict(os.environ, {'BUDDY_RUNTIME_ROOT':str(root)}))
             for name, options in (
@@ -264,7 +264,9 @@ class UpgradeMigrationTests(BoardTestCase):
                 ('runtime.read_ready', {'return_value':{'sourceCommit':'fixture'}}),
                 ('runtime.materialize', {'return_value':{'runtimeDir':str(target)}}),
                 ('probe', {'return_value':health}), ('detach', {}),
-                ('start', {'side_effect':lambda state, path: {**started, 'runtimeContentId':path.name}}),
+                ('start', {'side_effect':lambda state, path: {
+                    **started, 'runtimeContentId':path.name,
+                    'schemaVersion': SCHEMA_VERSION if path == target else self.fixture['schemaVersion']}}),
                 ('verify_started', {'side_effect':verification}),
             ):
                 stack.enter_context(mock.patch('hey_my_buddy.install.upgrade.' + name, **options))
@@ -310,6 +312,7 @@ class UpgradeMigrationTests(BoardTestCase):
         def fail_target_verification(state, runtime_path, observed, expected):
             # The real backup and migration have finished before a plain Python
             # exception reaches the coordinator's rollback/error boundary.
+            self.assertEqual(observed['schemaVersion'], upgrade.idle_snapshot(state)['schema'])
             if runtime_path.name == 'b' * 32:
                 self.assertEqual(upgrade.idle_snapshot(state)['schema'], 17)
                 raise RuntimeError('private target verification failure')

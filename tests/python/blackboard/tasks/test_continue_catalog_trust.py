@@ -73,7 +73,7 @@ class ContinueCatalogTrustTests(WorkflowTestCase):
         submitted = self.seed()
         calls = []
 
-        def reread(name, binding):
+        def reread(name):
             calls.append(name)
             self.evaluation.record_catalog(reading(models=('alpha', 'beta')))
 
@@ -90,7 +90,7 @@ class ContinueCatalogTrustTests(WorkflowTestCase):
         read_at = self.clock.value
         calls = []
 
-        def reread(name, binding):
+        def reread(name):
             calls.append(name)  # The bounded refresh runs and brings nothing new.
 
         catalog.register_catalog_reread(self.directory, reread)
@@ -115,7 +115,7 @@ class ContinueCatalogTrustTests(WorkflowTestCase):
         confirmed_at = self.clock.value
         calls = []
 
-        def reread(name, binding):
+        def reread(name):
             calls.append(name)
             self.evaluation.record_catalog(reading(models=()))  # The refresh still reports absence.
 
@@ -137,7 +137,7 @@ class ContinueCatalogTrustTests(WorkflowTestCase):
         self.evaluation.record_catalog(reading(models=()))
         calls = []
 
-        def reread(name, binding):
+        def reread(name):
             calls.append(name)
             self.evaluation.record_catalog(reading(models=('alpha',)))
 
@@ -153,7 +153,7 @@ class ContinueCatalogTrustTests(WorkflowTestCase):
         self.evaluation.record_catalog(reading(models=()))
         self.clock.advance(3601)
         calls = []
-        catalog.register_catalog_reread(self.directory, lambda name, binding: calls.append(name))
+        catalog.register_catalog_reread(self.directory, lambda name: calls.append(name))
         workflow = self.board.store.workflow
         validate = workflow._validated_configuration
 
@@ -203,7 +203,7 @@ class ContinueCatalogTrustTests(WorkflowTestCase):
         submitted = self.seed()
         self.evaluation.record_catalog(reading(models=()))  # alpha pending inside the window
         calls = []
-        catalog.register_catalog_reread(self.directory, lambda name, binding: calls.append(name))
+        catalog.register_catalog_reread(self.directory, lambda name: calls.append(name))
         workflow = self.board.store.workflow
         validate = workflow._validated_configuration
 
@@ -239,7 +239,7 @@ class ContinueCatalogTrustTests(WorkflowTestCase):
                 "SELECT 1 FROM evaluation_profiles WHERE profile_id='dsh:fixture:alpha:max'").fetchone(),
                 "A file-validated route has no profile row until a catalog is recorded")
         calls = []
-        catalog.register_catalog_reread(self.directory, lambda name, binding: calls.append(name))
+        catalog.register_catalog_reread(self.directory, lambda name: calls.append(name))
         with self.assertRaises(BoardError) as rejected:
             self.continue_with(submitted, IDENTITY)
         gate = rejected.exception
@@ -254,7 +254,7 @@ class ContinueCatalogTrustTests(WorkflowTestCase):
         submitted = self.seed()
         read_at = self.clock.value
         calls = []
-        catalog.register_catalog_reread(self.directory, lambda name, binding: calls.append(name))
+        catalog.register_catalog_reread(self.directory, lambda name: calls.append(name))
         # An admitted catalog route whose profile the user never enabled.
         with self.assertRaises(BoardError) as disabled:
             self.continue_with(submitted, IDENTITY)
@@ -285,7 +285,7 @@ class ContinueCatalogTrustTests(WorkflowTestCase):
         submitted = self.seed()  # alpha is listed; both profiles start disabled.
         calls = []
 
-        def reread(name, binding):
+        def reread(name):
             calls.append(name)
             self.clock.advance(60)
             self.evaluation.record_catalog(reading(models=('alpha', 'beta')))

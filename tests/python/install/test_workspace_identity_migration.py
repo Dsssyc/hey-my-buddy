@@ -12,6 +12,7 @@ from unittest.mock import patch
 
 from blackboard.tasks import test_workspace_identity as identity_fixtures
 from hey_my_buddy.blackboard.store import workspace_identity_migration as migration
+from hey_my_buddy.blackboard.store.db import SCHEMA_VERSION
 from hey_my_buddy.blackboard.store.workspace_identity_migration import migrate_workspace_identity
 from hey_my_buddy.blackboard.tasks import workspace, workspace_identity
 from hey_my_buddy.errors import BoardError
@@ -77,7 +78,7 @@ class WorkspaceIdentityMigrationTests(identity_fixtures.WorkspaceIdentityFixture
         self.assertEqual(self.fixed_files(), old_files)
         self.assertEqual(self.snapshot(board), expected)
         self.assertEqual(expected["eventHead"], before["eventHead"])
-        self.assertEqual(expected["schema"], 16)
+        self.assertEqual(expected["schema"], SCHEMA_VERSION)
         for table, fingerprint in before["fingerprints"].items():
             if table not in {"meta", "objectives", "workspace_reservations"}:
                 self.assertEqual(expected["fingerprints"][table], fingerprint, table)
@@ -107,17 +108,17 @@ class WorkspaceIdentityMigrationTests(identity_fixtures.WorkspaceIdentityFixture
         self.assertEqual(added["objectiveId"], run["objectiveId"])
 
     def first_identity_report(self, board, manifest, reason):
-        # Exact first-migration report shape on an already upgraded schema-16
+        # Exact first-migration report shape on an already upgraded current-schema
         # board, with untouched legacy indexes and immutable manifest bindings.
         report = {"version": 1, "mapped": [], "kept": {
             old: reason for old in {manifest["checkoutId"], manifest["repositoryId"],
                                     manifest["snapshot"]["sourceCheckoutId"]}}, "entries": {}}
         with board.store.db.write() as connection:
-            self.assertEqual(connection.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone()[0], "16")
+            self.assertEqual(connection.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone()[0], str(SCHEMA_VERSION))
             connection.execute("INSERT INTO meta(key,value) VALUES(?,?)",
                                (workspace_identity.MIGRATION_META_KEY, migration._json(report)))
 
-    def test_schema16_with_first_path_missing_report_is_repaired_on_explicit_reupgrade(self):
+    def test_current_schema_with_first_path_missing_report_is_repaired_on_explicit_reupgrade(self):
         board, run, manifest = self.legacy_run(device_delta=0)
         root = Path(manifest["checkoutRoot"])
         root.rename(root.parent / "retained-first-migration-checkout")
@@ -128,7 +129,7 @@ class WorkspaceIdentityMigrationTests(identity_fixtures.WorkspaceIdentityFixture
         self.assertEqual(self.historical(board), history)
         self.assertEqual(self.fixed_files(), files)
         self.assertEqual(self.snapshot(board), expected)
-        self.assertEqual(expected["schema"], 16)
+        self.assertEqual(expected["schema"], SCHEMA_VERSION)
         added = self.submit(board, request_id="same-macro-after-second-upgrade", cwd=str(self.repo),
                             objectiveId=run["objectiveId"],
                             executionWorkspace={"kind": "worktree", "access": "write"})

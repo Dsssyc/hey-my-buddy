@@ -374,7 +374,7 @@ Host command 读取缺陷修在 native_observations.warnings 的原生事实边�
 完整检查、浏览器检查、控制台构建、空HOME演练、真实看板副本与故障注入仍由 Host 执行；本回合没有运行或宣称通过它们。
 
 
-## 11. 第三回合的实际产物与验证
+## 11. 第三回合的实际产物与验证（后续结论见第12节）
 
 本回合按 Host 新授权，用检出外的只读冻结解释器直接执行；当前检出的 src:tests/python 排在 PYTHONPATH 前面，每个 subprocess 清掉 AGENTS.md 所列十个运行时／Worker／代理与环境绑定，设置 PYTHONDONTWRITEBYTECODE=1。没有用 uv 启动测试、没有向该只读环境安装或写文件；既有安装／launcher 测试内部的 uv 子进程未能通过缓存／依赖准备，详见下面的阻塞记录；前端 typecheck／test 由 Host 在整合时执行。
 
@@ -427,3 +427,19 @@ Host command 读取缺陷修在 native_observations.warnings 的原生事实边�
 本回合覆盖上面55个受影响的Python文件，没有尚未启动的指定模块：43个文件整文件通过，共805项；另外12个文件只有部分或没有通过证据，按去重的方法名统计98项受到上述边界限制（其中 cli.test_host_preview 的一项是 Host 已接管的真实前端解析）。合计988项尝试中890项通过；这些数字不包括任何完整check、浏览器或付费／真实harness检查。最终 git diff --check 通过，新夹具与本清单不含机器绝对主目录；未修改分支、标签或stash，未提交。
 
 实现与新夹具的剩余工作已做完；请求 Host 在能使用私有IPC／监听、安装依赖与进程枚举的环境补跑本节12个未完整通过的Python模块，并按已有安排跑前端typecheck／test；实际发现的范围内失败仍交回本Worker修。新夹具的五个固定文件、16→17迁移与command回归均已可供整合审查，不再需要把依赖写入临时检出。
+
+
+## 12. Host机械检查后的第四回合修正
+
+Host报告在封存候选 fc516168 上前端类型检查通过，78个前端文件／1119项通过；完整Python检查3579项、216个文件中211个通过，基点已知的 cli.test_host_preview 由整合分支修正，其余四个文件交回本Worker。本节接续第11节的历史状态；Host已补验的其他模块不再列为待办，没有重跑完整检查或前端检查。
+
+四个文件的原因分别为旧测试期望或旧fixture接线，没有据此修改产品代码：test_current_core 的当前schema应为17，前一版本的显式升级提示应为16，并补入schema16启动拒绝的存档检查；test_console_objective_fixture 的新建看板事实跟随SCHEMA_VERSION；test_workspace_identity_migration 测的是当前看板上的身份迁移，版本断言与命名改为当前schema，保留封存历史、固定文件和指纹的全部断言；test_continue_catalog_trust 的五个重读函数和四个lambda仍要求已删除的账户binding，当前契约只传harness名称，故旧fixture触发TypeError并被服务边界报告为INTERNAL_ERROR。修正fixture签名后，原来的九项有界重读、目录拒绝与用户enabled守门断言全部保留且通过。
+
+重新搜索 tests/python 中全部schema读写／断言、升级函数名与夹具路径，另修了 test_upgrade_migration 的回滚mock：新目标启动报告当前schema17，旧运行时恢复报告真实基点schema16，并核对报告与当时实际数据库schema相同；test_store 的旧“Schema 11”说明改为当前存储说明；test_upgrade_service 的临时日志名改为中性的 upgrade-base-service.log。搜索后没有 migrate_15_to_16／migrate_15_to_17、adr021-l18 或旧基点提交的引用；旧夹具路径没有其他遗漏。
+
+保留的数字有明确事实身份：test_upgrade_fixture／test_migrations／test_upgrade_migration 中的16是固定0.29.0升级输入、备份或回滚结果，17是目标形式；test_console_version_info 的14由测试主动写入假安装包，专门核对安装版本与源码版本不同；test_store 的10与test_current_core中的旧版本是拒绝存档输入；ZCode的schemaVersion=1是其原生配置格式。这些不是当前看板的旧期望，不把它们改成17。
+
+本回合继续使用Host授权的只读解释器、src:tests/python优先与清除十个继承绑定，每个模块独立subprocess执行：blackboard.store.test_current_core 6项通过；blackboard.tasks.test_continue_catalog_trust 9项通过；install.test_workspace_identity_migration 46项通过（102.828秒）。blackboard.tasks.test_console_objective_fixture 的3项结构／隔离检查通过，唯一 test_smoke_response_is_readable_over_real_console_http 在 socket.bind 得到 PermissionError／Operation not permitted，映射为 CONSOLE_PORT_IN_USE，无法进入真实HTTP断言；没有通过mock、跳过或修改监听规则来规避它。
+
+
+额外改动的 install.test_upgrade_migration 全文件16项通过（33.942秒）；本回合共81项尝试，80项通过，只有上述真实HTTP用例受环境限制。最终 git diff --check 通过；当前剩余请求仅为Host补跑 blackboard.tasks.test_console_objective_fixture，确认四项整文件通过，无需再次补跑第11节的其他模块。

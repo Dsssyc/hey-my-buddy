@@ -99,5 +99,5 @@ class UpgradeServiceTests(BoardTestCase):
             # teardown removes the private test state.
             log = self.directory / 'test-daemon.log'
             if log.exists():
-                retained = Path(os.environ['TMPDIR']) / 'adr021-l18-service.log'
+                retained = Path(os.environ['TMPDIR']) / 'upgrade-base-service.log'
                 retained.write_bytes(log.read_bytes())
