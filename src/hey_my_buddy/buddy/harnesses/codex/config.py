@@ -8,8 +8,16 @@ import shutil
 from pathlib import Path
 
 
+DEFAULT_MODEL_PROVIDER = "openai"
+
+
 class CodexUnavailable(Exception):
     pass
+
+
+def native_provider(configured: dict) -> str:
+    provider = configured.get("model_provider")
+    return provider if isinstance(provider, str) and provider else DEFAULT_MODEL_PROVIDER
 
 
 def cli_command(environment: dict | None = None) -> list[str]:
