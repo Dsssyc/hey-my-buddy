@@ -176,7 +176,7 @@ class WorkerPermission(InternalModel):
 
     level: Literal["read", "write", "full"]
     tool_scope: ToolScope
-    enforcement: Literal["enforced", "agreed"]
+    enforcement: Literal["enforced", "convention"]
 
 
 class RunRequest(InternalModel):

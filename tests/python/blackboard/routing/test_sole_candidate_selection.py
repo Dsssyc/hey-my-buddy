@@ -248,7 +248,7 @@ class SoleCandidateWorkflowTests(WorkflowTestCase):
         task = "完整工作说明" * 3000
         submitted = self.routed(board, task=task, requiredCapabilities=["effort:high"])
         self.assertEqual(submitted["routing"]["status"], "completed")
-        self.assertEqual(submitted["routing"]["requiredCapabilities"], ["effort:high"])
+        self.assertEqual(submitted["routing"]["requiredCapabilities"], ["effort:high", "permission:write"])
         self.assertEqual(submitted["routing"]["constraints"], {})
         decision = board.call("selection_get", {"decisionId": submitted["routing"]["decisionId"]})["decision"]
         self.assertIsNone(decision["runId"])

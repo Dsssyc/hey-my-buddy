@@ -15,6 +15,7 @@ import unittest
 from unittest.mock import patch
 
 from support import BoardTestCase, FakeClock
+from hey_my_buddy.blackboard.catalog.catalog import permission_capabilities
 from hey_my_buddy.blackboard.routing import router, router_history, router_sequence
 from hey_my_buddy.blackboard.store.db import canonical_json
 
@@ -42,8 +43,9 @@ class RouterDispatchTestCase(BoardTestCase):
         with self.board_.store.db.write() as db:
             db.execute("INSERT INTO evaluation_profiles(profile_id,label,adapter,provider,model,effort,"
                        "available,enabled,capabilities_json,created_revision,updated_revision)"
-                       " VALUES(?,?,?,?,?,?,?,?,'[]',0,0)",
-                       (profile_id, profile_id, "dsh", "fixture", model or profile_id, "max", available, enabled))
+                       " VALUES(?,?,?,?,?,?,?,?,?,0,0)",
+                       (profile_id, profile_id, "dsh", "fixture", model or profile_id, "max", available, enabled,
+                        canonical_json(permission_capabilities("dsh"))))
 
     def set_settings(self, *, ids=None, mode=None, budget=None, interval=None):
         with self.board_.store.db.write() as db:

@@ -32,10 +32,10 @@ class CodexSchemaTests(unittest.TestCase):
 
     def test_worker_levels_declare_native_scope_and_enforcement(self):
         expected = {
-            "codex": {"read": ("write", "agreed"), "write": ("write", "enforced")},
+            "codex": {"read": ("write", "convention"), "write": ("write", "enforced")},
             "claude": {"read": ("read", "enforced"), "write": ("write", "enforced")},
-            "dsh": {"read": ("write", "agreed"), "write": ("write", "enforced")},
-            "zcode": {"read": ("write", "agreed"), "write": ("write", "agreed")},
+            "dsh": {"read": ("write", "convention"), "write": ("write", "enforced")},
+            "zcode": {"read": ("write", "convention"), "write": ("write", "convention")},
         }
         for harness, levels in expected.items():
             for level, (scope, strength) in levels.items():

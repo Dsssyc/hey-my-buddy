@@ -138,10 +138,10 @@ EXTERNAL_CAPABILITIES = ("external", "artifacts", "task-text")
 # separate harness fact: three current Worker paths require their existing
 # write execution path even for a read reservation, which the board seals.
 _WORKER_PERMISSIONS = {
-    "codex": {"read": ("write", "agreed"), "write": ("write", "enforced")},
+    "codex": {"read": ("write", "convention"), "write": ("write", "enforced")},
     "claude": {"read": ("read", "enforced"), "write": ("write", "enforced")},
-    "dsh": {"read": ("write", "agreed"), "write": ("write", "enforced")},
-    "zcode": {"read": ("write", "agreed"), "write": ("write", "agreed")},
+    "dsh": {"read": ("write", "convention"), "write": ("write", "enforced")},
+    "zcode": {"read": ("write", "convention"), "write": ("write", "convention")},
 }
 
 

@@ -329,13 +329,17 @@ def reject_untrusted_override(params: dict) -> None:
 
 def normalize_access(intent: dict) -> tuple[str, str | None]:
     """Validate the Worker access choice and its optional full-access reason."""
-    access = required_string(intent, "access") if "access" in intent else "write"
+    access = optional_string(intent, "access") or "write"
+    if "access" in intent and intent["access"] is None:
+        raise BoardError("INVALID_ARGUMENT", "executionWorkspace.access cannot be null",
+                         field="executionWorkspace.access")
     if access not in ("read", "write", "full"):
         raise BoardError("INVALID_ARGUMENT", "executionWorkspace.access must be 'read', 'write' or 'full'",
                          field="executionWorkspace.access")
     if access == "full":
         reason = required_string(intent, "accessReason", max_length=1000)
-        if any(char in intent["accessReason"] for char in "\n\r\v\f\x1c\x1d\x1e\x85\u2028\u2029"):
+        raw_reason = intent["accessReason"]
+        if raw_reason.splitlines() != [raw_reason]:
             raise BoardError("INVALID_ARGUMENT", "executionWorkspace.accessReason must be a single line",
                              field="executionWorkspace.accessReason")
         return access, reason

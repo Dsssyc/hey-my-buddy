@@ -31,7 +31,7 @@ class WorkerPermissionEvidenceTests(unittest.TestCase):
         fields["privateState"]["invocationRoot"] = str(self.root)
         if permission:
             fields["workerPermission"] = {"level": "read", "toolScope": "write",
-                                          "enforcement": "agreed"}
+                                          "enforcement": "convention"}
         return rc.decode_run_request(fields)
 
     def execute(self, request, *, status="ok", operation="worker"):

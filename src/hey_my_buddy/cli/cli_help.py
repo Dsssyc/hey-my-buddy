@@ -971,6 +971,7 @@ class _Extractor:
             self._walk_body(nested_body, module, function, nested_params, owner, conditional, facts, nested_tracked, nested_sets, nested_no_default, visited)
             return
         if isinstance(node, ast.If):
+            self._conditional_requirement(node, module, function, params_var, owner, facts, tracked)
             self._walk_body(node.body, module, function, params_var, owner, True, facts, tracked, local_sets, no_default, visited)
             self._walk_body(node.orelse, module, function, params_var, owner, True, facts, tracked, local_sets, no_default, visited)
             return
@@ -1000,6 +1001,28 @@ class _Extractor:
             elif isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda)):
                 self._walk_statement(child, module, function, params_var, owner, conditional, facts, tracked, local_sets, no_default, visited)
 
+    def _conditional_requirement(self, node, module, function, params_var, owner, facts, tracked) -> None:
+        """Name the condition when a branch requires another request string."""
+        test = node.test
+        if not (isinstance(test, ast.Compare) and len(test.ops) == 1 and isinstance(test.ops[0], ast.Eq)
+                and isinstance(test.comparators[0], ast.Constant) and isinstance(test.comparators[0].value, str)):
+            return
+        reference = self._reference(test.left, tracked)
+        if reference is None or reference[1] is not None:
+            return
+        condition_field = reference[0].rpartition(".")[2]
+        for statement in node.body:
+            value = statement.value if isinstance(statement, (ast.Assign, ast.Expr)) else None
+            if not isinstance(value, ast.Call) or (_attribute_parts(value.func) or [])[-1:] != ["required_string"]:
+                continue
+            if not value.args or not isinstance(value.args[0], ast.Name) or value.args[0].id != params_var:
+                continue
+            name = _string_argument(value, 1)
+            if name is not None:
+                self._add_inline(facts, _scoped_field(owner, name), "string",
+                                 f"required when {condition_field} is {test.comparators[0].value}",
+                                 self.index.location(module, function), True)
+
     def _walk_loop(self, node, module, function, params_var, owner, conditional, facts, tracked, local_sets, no_default, visited) -> None:
         """One loop, expanded once per literal element of a field-name tuple."""
         literals = self._literal_names(node.iter, module, local_sets)
@@ -1027,6 +1050,22 @@ class _Extractor:
     def _walk_expression(self, node, module, function, params_var, owner, conditional, facts, tracked, local_sets, no_default, visited) -> None:
         if params_var is None:
             return
+        if (
+            not conditional
+            and isinstance(node, ast.BoolOp)
+            and isinstance(node.op, ast.Or)
+            and len(node.values) == 2
+            and isinstance(node.values[0], ast.Call)
+            and (_attribute_parts(node.values[0].func) or [])[-1:] == ["optional_string"]
+            and isinstance(node.values[1], ast.Constant)
+            and isinstance(node.values[1].value, str)
+        ):
+            field = self._validated_field(node.values[0], params_var, tracked, owner)
+            if field is not None:
+                parent, _, name = field.rpartition(".")
+                parameters = facts.children.setdefault(parent, []) if parent else facts.parameters
+                facts.merge(parameters, Parameter(name, "string", default=node.values[1].value,
+                                                  source=self.index.location(module, function)))
         if isinstance(node, ast.IfExp):
             # Both arms of a conditional expression are branch-specific.
             self._walk_expression(node.test, module, function, params_var, owner, conditional, facts, tracked, local_sets, no_default, visited)
@@ -1177,9 +1216,12 @@ class _Extractor:
             bounds = f"≤{self._render(maximum, module)} UTF-8 bytes" if maximum is not None else None
             if _keyword_value(node, "allow_empty") is True:
                 bounds = f"{bounds}; may be empty" if bounds else "may be empty"
-        if required and conditional and owner is None:
+        if required and conditional and (
+            owner is None or any(item.name == name and item.bounds and "required when " in item.bounds for item in parameters)
+        ):
             # ``if "title" in params: required_string(params, "title")`` means required
-            # when supplied, not that the whole request must carry it.
+            # when supplied, not that the whole request must carry it. A named
+            # branch condition likewise describes the requirement more precisely.
             required = False
         facts.merge(parameters, Parameter(name, kind, required, default, bounds, conditional, [], source))
 
@@ -1308,6 +1350,27 @@ class _Extractor:
     def _part_facts(self, part, module, tracked, facts, source, negated, conditional, optional, no_default, standalone: bool = True) -> set[str]:
         """The facts one rejection-condition part implies for accepted input."""
         decoded: set[str] = set()
+        if (
+            not negated
+            and isinstance(part, ast.Compare)
+            and len(part.ops) == 1
+            and isinstance(part.ops[0], ast.NotEq)
+            and isinstance(part.left, ast.Call)
+            and isinstance(part.left.func, ast.Attribute)
+            and part.left.func.attr == "splitlines"
+            and not part.left.args
+            and isinstance(part.left.func.value, ast.Name)
+            and isinstance(part.comparators[0], ast.List)
+            and len(part.comparators[0].elts) == 1
+            and isinstance(part.comparators[0].elts[0], ast.Name)
+            and part.left.func.value.id == part.comparators[0].elts[0].id
+            and part.left.func.value.id in tracked
+        ):
+            field = tracked[part.left.func.value.id].field
+            for name in _expand_fields(field, tracked):
+                self._add_inline(facts, name, "string", "single line", source, conditional, False)
+                decoded.add(name)
+            return decoded
         if isinstance(part, ast.Compare):
             for field, kind, bounds, local in self._compare_facts(part, module, tracked, rejected=not negated):
                 required = local in no_default and local not in optional and not conditional
