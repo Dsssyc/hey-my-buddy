@@ -1,7 +1,7 @@
 """Real cross-process CLI/C-Two integration for execution records and the read-only wait.
 
 Everything runs against an isolated ``HMB_STATE_DIR`` with the real daemon, the
-real local worker supervisor and the real ``command`` adapter; no model is called.
+real execution processes and the real ``command`` adapter; no model is called.
 The CLI is invoked exactly as a user invokes it from an unrelated working directory.
 
 ``execution-*`` is the advanced surface the command/external adapters and internal

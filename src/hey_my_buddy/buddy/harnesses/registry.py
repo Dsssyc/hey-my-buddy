@@ -157,7 +157,7 @@ def adapter(name: str) -> Adapter | ZcodeAdapter:
     if name not in registry:
         raise BoardError(
             "UNSUPPORTED_ADAPTER",
-            f"Adapter {name!r} is not executable by a built-in worker; this build runs "
+            f"Adapter {name!r} is not executable by an execution process; this build runs "
             f"{', '.join(sorted(registry))} locally",
             adapter=name,
         )
@@ -173,7 +173,6 @@ def capability_report() -> dict:
             "available": usable,
             "reason": reason,
             "capabilities": list(instance.capabilities),
-            "executedBy": "built-in-worker",
             "readOnlyStructured": {
                 "implemented": instance.read_only_structured,
                 **instance.local_read_only_check(),

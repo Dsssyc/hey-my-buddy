@@ -30,7 +30,11 @@ class DaemonAdmissionTests(BoardTestCase):
             self.assertEqual(issue['stage'], 'legacy-worker-cleanup')
             self.assertEqual(issue['code'], 'LEGACY_WORKER_CLEANUP_FAILED')
             self.assertIn('denied', issue['message'])
-            self.assertEqual(board.call('health', {})['status'], 'ok')
+            health = board.call('health', {})
+            self.assertEqual(health['status'], 'ok')
+            self.assertEqual(health['serviceIssues'], [{
+                'stage': issue['stage'], 'code': issue['code'], 'message': issue['message'],
+                'observedAt': issue['observed_at']}])
             self.assertEqual(board.call('task_list', {})['tasks'], [])
             daemon.queue_workspace_cleanup('accepted-run')
             with patch('hey_my_buddy.blackboard.tasks.storage.cleanup_accepted_workspace') as cleanup:
@@ -48,6 +52,20 @@ class DaemonAdmissionTests(BoardTestCase):
             events = [(row['kind'], json.loads(row['payload_json'])) for row in connection.execute(
                 "SELECT kind,payload_json FROM events WHERE kind IN ('service.issue','service.issue_resolved')")]
         self.assertEqual([kind for kind, _ in events], ['service.issue', 'service.issue_resolved'])
+        self.assertEqual(board.call('health', {})['serviceIssues'], [])
+
+    def test_scheduling_issues_share_the_service_issue_event_and_health_view(self):
+        board = self.board()
+        from hey_my_buddy.blackboard.service.execution_scheduler import ExecutionScheduler
+        scheduler = ExecutionScheduler(Mock(store=board.store))
+        scheduler._scheduler_issue('admission', OSError('temporarily unavailable'))
+        head = board.store.head()
+        scheduler._scheduler_issue('admission', OSError('temporarily unavailable'))
+        self.assertEqual(board.store.head(), head)
+        self.assertEqual(board.call('health', {})['serviceIssues'][0]['stage'], 'admission')
+        with board.store.db.read() as connection:
+            self.assertEqual(connection.execute('SELECT kind FROM events ORDER BY seq DESC LIMIT 1').fetchone()[0],
+                             'service.issue')
 
     def test_machine_ceiling_is_store_admission_only(self):
         with patch.dict(os.environ, {"HMB_MAX_CONCURRENT": "3"}):

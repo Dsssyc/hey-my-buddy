@@ -984,11 +984,7 @@ class DecisionCoordinator:
         return {"decisionId": row["decision_id"], "status": self._status(connection, row["decision_id"])}
 
     def fence_attempt(self, connection: sqlite3.Connection, *, attempt: sqlite3.Row, reason: str, now: str) -> None:
-        """Fence a decision whose attempt became uncertain (restart or lease expiry).
-
-        The result of a process this service no longer supervises may never become a
-        current recommendation; it is recorded as failed with the unknown stop fact.
-        """
+        """Fence a decision when its execution is settled as interrupted."""
         task = connection.execute("SELECT * FROM tasks WHERE task_id=?", (attempt["task_id"],)).fetchone()
         if task is None:
             return
@@ -1004,8 +1000,7 @@ class DecisionCoordinator:
                 row,
                 status="failed",
                 reason=(
-                    f"{reason}; the helper's outcome is unknown to this service, so it cannot become a current "
-                    "recommendation and no process is reported as stopped"
+                    f"{reason}; no delivered answer can become a current recommendation"
                 ),
                 now=now,
             )

@@ -82,6 +82,29 @@ class InterruptionRecoveryTests(BoardTestCase):
                                        'shutdownConfirmed': True})
         self.assertEqual(client.get(runId=task['taskId'])['state'], 'completed')
 
+    def test_authenticated_reconnection_restores_ownership_claims_and_waiting_reason_once(self):
+        board, client, task, _, actor = self.claimed()
+        with patch.object(processes, 'inspect_process_identity', return_value='alive'):
+            board.store.reconcile_startup()
+        self.assertEqual(board.store.resource_claims()[0]['state'], 'retained')
+        board.store.execution_connection(actor['attemptId'], connected=True)
+        view = client.get(runId=task['taskId'])
+        self.assertEqual(view['attemptState'], 'executing')
+        self.assertEqual(view['selectedAttempt']['ownership'], 'owned')
+        self.assertIsNone(view['queueReason'])
+        self.assertEqual(board.store.resource_claims()[0]['state'], 'held')
+        head = board.store.head()
+        board.store.execution_connection(actor['attemptId'], connected=True)
+        self.assertEqual(board.store.head(), head)
+        board.store.execution_connection(actor['attemptId'], connected=False)
+        view = client.get(runId=task['taskId'])
+        self.assertEqual(view['attemptState'], 'uncertain')
+        self.assertEqual(view['selectedAttempt']['ownership'], 'uncertain')
+        self.assertEqual(board.store.resource_claims()[0]['state'], 'retained')
+        board.call('execution_progress', {**actor, 'data': {'waitingReason': 'native tool in progress'}})
+        board.store.execution_connection(actor['attemptId'], connected=True)
+        self.assertEqual(client.get(runId=task['taskId'])['queueReason'], 'native tool in progress')
+
     def test_receipt_is_used_before_native_journal_and_commits_through_result(self):
         board, client, task, claim, actor = self.claimed()
         with board.store.db.read() as connection:
@@ -299,6 +322,30 @@ class InterruptionRecoveryTests(BoardTestCase):
             inspect.assert_not_called()
         self.assertTrue(client.get(runId=task['taskId'])['shutdownConfirmed'])
         self.assertEqual(board.store.capacity_report()['totalActive'], 0)
+
+    def test_live_spawn_marker_without_identity_ack_enters_the_shared_observer(self):
+        from hey_my_buddy.blackboard.service.execution_scheduler import ExecutionScheduler
+        board, client, task, _, actor = self.claimed(identity=False)
+        evidence = board.directory / 'attempts' / task['taskId'] / actor['attemptId']
+        fsync_json(evidence / 'spawn.marker', {'taskId': task['taskId'], 'attemptId': actor['attemptId'],
+                                             'generation': 1, 'processIdentity': IDENTITY})
+        with patch.object(processes, 'inspect_process_identity', return_value='alive'):
+            board.store.reconcile_startup()
+        scheduler = ExecutionScheduler(board.service)
+        with patch.object(scheduler, '_start_observer') as observe:
+            scheduler._resume_executions()
+            scheduler._resume_executions()
+        observe.assert_called_once()
+        recovered, location, identity = observe.call_args.args
+        self.assertEqual(identity, IDENTITY)
+        self.assertEqual(recovered['attempt']['attemptId'], actor['attemptId'])
+        self.assertIsNone(location.process)
+        with board.store.db.read() as connection:
+            attempt = board.store._attempt_row(connection, actor['attemptId'])
+            self.assertIsNone(attempt['identity_confirmed_at'])
+            self.assertEqual(location.execution_directory, interruption._directory(board.store, attempt))
+        self.assertEqual(client.get(runId=task['taskId'])['attemptState'], 'uncertain')
+        self.assertEqual(board.store.resource_claims()[0]['state'], 'retained')
 
     def test_marker_without_identity_ack_confirms_no_native_creation_after_exit(self):
         board, client, task, _, actor = self.claimed(identity=False)

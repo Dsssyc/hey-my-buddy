@@ -344,6 +344,7 @@ class BoardService(_BaseResource):
                 "waitCapacity": self.control.get("wait_capacity"),
                 "rpcProfile": self.control.get("rpc_profile"),
                 "persistenceError": self.store.persistence_error,
+                "serviceIssues": self.store.service_issues(),
                 "integrity": self.store.integrity(),
                 "activeWork": len(self.store.active_work()["attempts"]),
             }

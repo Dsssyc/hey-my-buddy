@@ -191,7 +191,7 @@ def _recover_one(board, attempt, identity, stopped_evidence):
             if observed not in ('boot-changed', 'identity-absent'):
                 return None
     if stopped_evidence is not None:
-        # Only the service's owned observer calls this internal path. It has
+            # Only the service's execution observer calls this internal path. It has
         # already inspected this identity or reaped its own pre-identity child.
         observed = stopped_evidence['kind']
     try:
