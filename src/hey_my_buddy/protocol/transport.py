@@ -417,15 +417,15 @@ def _ensure_service(directory: Path, *, resource: str = "control") -> dict:
             threading.Thread(target=child.wait, name="hey-my-buddy-daemon-reaper", daemon=True).start()
         finally:
             os.close(log_fd)
-        # Readiness is an observation; a slow live child remains unknown.
-        deadline = time.monotonic() + 20
+        # A first cold start may install a runtime before the daemon exists.
+        deadline = time.monotonic() + (300 if target.get("installed") else 20)
         while time.monotonic() < deadline:
             endpoint = _healthy(directory)
             if endpoint:
                 if target["stable"]:
                     write_active_runtime(directory, Path(target["runtime"]["runtimeDir"]))
                 return endpoint
-            if child.poll() is not None:
+            if child.poll() not in (None, 0):
                 from ..install.launcher import read_private
                 failure = read_private(directory / "startup-error.json") or {}
                 if failure.get("pid") == child.pid and isinstance(failure.get("code"), str) and isinstance(failure.get("message"), str):
@@ -433,8 +433,7 @@ def _ensure_service(directory: Path, *, resource: str = "control") -> dict:
                     raise ServiceError(failure["code"], failure["message"], **(details if isinstance(details, dict) else {}))
                 raise ServiceError("SERVICE_START_FAILED", "The board daemon failed to start; inspect control.log")
             time.sleep(0.05)
-        raise ServiceError("SERVICE_START_PENDING", "The board daemon is still starting; retry the command",
-                           pid=child.pid, log=str(directory / "control.log"))
+        raise ServiceError("SERVICE_START_TIMEOUT", "The board daemon did not become ready; inspect control.log")
     finally:
         locking.unlock(lock_fd)
         os.close(lock_fd)

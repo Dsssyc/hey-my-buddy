@@ -1,6 +1,6 @@
 # 控制面的时限——慢不等于坏
 
-基点为 `cbb5ffc6`，本文件记录源码候选和检查结果；上一版曾报告完成，本回合按 Host 验收意见修正，并明确记录尚未解决的 Windows 安装监督阻塞。本候选尚不能验收。
+基点为 `cbb5ffc6`，本文件记录源码候选和检查结果；第 6 回合按 Host 收窄范围，安装、升级、服务冷启动及其专用测试全部恢复基点，移除新造的待定机制。当前行为以本段、清点表和最后一节为准，前面回合的过程与测试结果仅作历史记录；源码收窄已完成，完整检查仍因本检出缺少前端开发依赖未通过，需要 Host 准备依赖并补验一个文件。
 
 固定窗口只结束一次观察，不能凭经过时间判 harness CLI 不可用、模型目录消失或微任务失败。发现的 5 秒单次探测与 20 秒总扫描到点为 unknown，健康扫描保留原状态和已知事实；Codex CLI 的 8 秒账户窗口到点记录未知且保留尚未被新事实替换的计费；四个 harness CLI 的 25 秒目录窗口和 30 秒外层窗口到点返回未知目录，外层超时后读到的错误按自己的终止处理。停止未确认、真实拒绝、进程退出和输入不安全各按实际事实处理。
 
@@ -8,7 +8,7 @@
 
 Router 的镜像准备移到 DecisionAdapter.prepare，原生调用拿完整原预算；准备与执行后的核验分别有独立的 120 秒观察窗口，不消耗原生预算。输入观察超时为 router-input-unknown，Worker 以可见原因退避重试；核验未知时保留原生 outcome 和镜像，之后只重试核验，不重复原生调用或换 Router。已经完成的核验事实照记，elapsedMs 使用原生自报值；跨层绝对期限、剩余整数秒和 Router 专用无子进程证明已删除。通用 prepare 错误回执保留启动前已确认没有 child 的既有事实。
 
-普通工作区 Git 的等待恢复为 60 秒，到点为 WORKSPACE_GIT_UNKNOWN；续接准备保持排队，既不记关注也不作废续接，之后可以重试。Git 环境禁止 lazy fetch。服务冷启动观察为 20 秒，升级 command/start 为 45 秒，安装为 900 秒；到点分别返回新的 pending 码、PID 和日志位置，释放调用方锁，不发送停止信号。POSIX 安装重试与清理检查仍在运行的 wrapper/uv 所持生命周期锁；Windows 的锁交接尚有缺陷，详见本回合阻塞。
+普通工作区 Git 的等待为 60 秒，到点为 WORKSPACE_GIT_UNKNOWN；续接准备保持排队，既不记关注也不作废续接，之后可以重试。Git 环境禁止 lazy fetch。安装、升级、服务冷启动按 Host 明确排除的范围恢复基点：安装 900 秒与 RUNTIME_INSTALL_TIMEOUT，升级 command/start 各 45 秒及原错误、日志语义，服务冷启动首次安装后 300 秒、其余 20 秒与 SERVICE_START_TIMEOUT，本机 IPC 自检 1 秒；用户可重试，这几处在忙机器上的时长由 Host 另记待办。
 
 预期时长、Router 原生预算值、收尾宽限、各执行器回收窗口、删除授权有效期、所有权 lease 和安全凭证有效期保持原值。清点覆盖源码 Python 的固定等待、TTL、expiry、monotonic、SQLite busy 与秒数常量；打包前端的产品计时以原始 TSX 文件标明，依赖内部调度另列。定义与同一等待的消费点合并，独立等待分别列行；位置以函数/调用点为准，旧行号用于定位基点。“等待”与“等待/未知”为只结束观察的一类，“判结论”为原先到点影响结论的一类，保留项说明预算或安全依据。
 
@@ -98,7 +98,7 @@ Router 的镜像准备移到 DecisionAdapter.prepare，原生调用拿完整原�
 | 等待 | `protocol/activity.py:53,199-213` | 活动发布最小间隔默认 2 秒 | 同 phase 事件节流 | 同 phase 事件节流 | 不改任务状态 |
 | 判结论 | `protocol/transport.py:296,314` | loopback listener 1 秒 | 单次身份握手超时，服务调用失败 | 回环和 UNIX 自检恢复 1 秒 connect/accept 限制，失败拒绝 launch，未创建 child | 本机 IPC 自检是启动安全前提，不是 harness 健康结论 |
 | 判结论 | `protocol/transport.py:297,315` | loopback connector 1 秒 | 同上 | 回环和 UNIX 自检恢复 1 秒 connect/accept 限制，失败拒绝 launch，未创建 child | 本机 IPC 自检是启动安全前提，不是 harness 健康结论 |
-| 判结论改未知 | `protocol/transport.py:_ensure_service` | 20 秒就绪观察 | 原到点 SERVICE_START_TIMEOUT；上一版无上限 | 到点 SERVICE_START_PENDING，给 PID/log，释放 control-start.lock，不杀 child | 用户命令应有界返回未知；真实进程退出仍报告实际错误 |
+| 判结论，Host 排除 | `protocol/transport.py:_ensure_service` | 首次安装后 300 秒，其余 20 秒 | 到点 SERVICE_START_TIMEOUT，释放启动锁，不发停止信号 | 恢复基点，同左 | Host 收窄范围，用户冷启动命令的期限另记待办 |
 | 等待 | `protocol/transport.py:435` | 启动 poll 0.05 秒 | 检查 ready/child exit | 检查 ready/child exit | 节拍 |
 | 等待/未知 | `protocol/transport.py:478` | stop drain 默认 10 秒 | 传给服务 stop | 传给服务 stop | 仅默认参数 |
 | 等待 | `cli/blocking.py:38-41,477-543` | await 默认 86400 秒，合法 1–86400 秒 | 到点 `wait-timeout`，原 run 继续 | 到点 `wait-timeout`，原 run 继续 | Host 可重复 await 同一 run |
@@ -128,14 +128,14 @@ Router 的镜像准备移到 DecisionAdapter.prepare，原生调用拿完整原�
 | 判结论改未知 | `blackboard/tasks/workspace.py:_git / _git_in` | 60 秒 | 到点判 Git 失败 | 到点 WORKSPACE_GIT_UNKNOWN，调用方不判仓库坏；续接可重试 | 保证服务请求线程和检出锁有界；禁止 lazy fetch |
 | 判结论改未知 | `blackboard/tasks/workspace.py:_write_objects` | stdin 写入与等待合计 60 秒 | 到点记操作失败 | communicate 有界，回收自身 Git 后记 WORKSPACE_GIT_UNKNOWN；真实退出/拒绝保留诊断 | 无法确认写入结果不作废续接 |
 | 判结论（条件式） | `blackboard/tasks/workflow.py:919,6328-6346` | 凭证 `expires_at` 校验；当前创建语句未给固定 TTL | 非空且过期会 `UNAUTHORIZED`；当前插入通常为 NULL | 非空且过期会 `UNAUTHORIZED`；当前插入通常为 NULL | 安全过期校验保留；不可误报成当前固定 TTL |
-| 判结论改未知；Windows 阻塞 | `install/runtime.py:materialize / _materialize_locked` | 900 秒 | 原到点杀 uv 并 RUNTIME_INSTALL_TIMEOUT；上一版无上限 | 到点 RUNTIME_INSTALL_PENDING，保留进程、日志与完成记录；POSIX lifetime 锁避免活动目标被清理；Windows 未安全交接 | 有界观察与安装进程退出分开；Windows 不能据此验收 |
+| 判结论，Host 排除 | `install/runtime.py:materialize` | 900 秒 | 到点杀自己的 uv 并报 RUNTIME_INSTALL_TIMEOUT | 恢复基点，同左 | Host 收窄范围；安装命令可重试，删除新增待定与锁交接机制 |
 | 判结论 | `install/upgrade.py:41-52` | `file_lock` 默认 0 秒 | 无锁即 `TimeoutError` | 无锁即 `TimeoutError` | 升级锁防并发；调用方通常覆盖 |
 | 等待 | `install/upgrade.py:52` | lock retry sleep 0.1 秒 | 再查锁 | 再查锁 | 节拍 |
-| 判结论改未知 | `install/upgrade.py:command / probe` | 45 秒 | 原到点升级失败；上一版无上限 | 到点 UPGRADE_COMMAND_PENDING，给 PID/output/log；journal 保留实际步骤，之后按完成和 owner 锁证据续接 | pending 不触发回滚或再猜启动状态 |
+| 判结论，Host 排除 | `install/upgrade.py:command / probe` | 45 秒 | command 的 subprocess 超时按原异常传播，probe 返回未确认 | 恢复基点，同左 | Host 收窄范围，删除新增待定和 journal 续接 |
 | 判结论/未知 | `install/upgrade.py:142-156` | retire workers 默认 35 秒 | 取锁/停 Worker 逾期，升级未完成 | 取锁/停 Worker 逾期，升级未完成 | 不能猜测旧进程已停 |
 | 判结论 | `install/upgrade.py:166,546,596,611` | daemon lock 30 秒 | 逾期升级失败 | 逾期升级失败 | 安装与运行互斥 |
 | 判结论 | `install/upgrade.py:166,546,596,611` | board-owner lock 30 秒 | 逾期升级失败 | 逾期升级失败 | 独立 owner 锁等待 |
-| 判结论改未知 | `install/upgrade.py:start / recover` | 45 秒 | 原到点升级失败；上一版无上限 | 到点 UPGRADE_START_PENDING，不杀 child；健康后验证，实际进程组退出后继续恢复 | 超时与实际退出分别判断；回收窗口不变 |
+| 判结论，Host 排除 | `install/upgrade.py:start / recover` | 45 秒 | 到点 UPGRADE_SHUTDOWN_UNCONFIRMED，保留原 journal，不发停止信号 | 恢复基点，同左 | Host 收窄范围，原错误与日志语义保留 |
 | 等待 | `install/upgrade.py:197` | 启动 poll 0.2 秒 | 重查状态 | 重查状态 | 节拍 |
 | 等待/未知 | `cli/checks.py:198,324-326` | 测试子进程 stdout/stderr drain 2 秒 | 收集已到达输出；不能保证输出完整 | 收集已到达输出；不能保证输出完整 | 检查日志回收 |
 | 等待/未知 | `cli/checks.py:202,384-389` | interrupt 后 grace 10 秒 | 未退出 suite 会 kill | 未退出 suite 会 kill | 中断回收 |
@@ -276,7 +276,7 @@ Router 的镜像准备移到 DecisionAdapter.prepare，原生调用拿完整原�
 
 最后的静态复核发现 Router 执行后核验没有绑定期限，已修复并复核通过；这里只记录源码审查，不将其当作测试或 Host 验收。`git diff --check` 通过。运行器对上述成功与失败运行均完成私有根清理，没有留下 exit 3 的未证明清理。
 
-## 本回合验收修订（第 5 回合）
+## 第 5 回合验收修订（历史记录；安装相关机制已在第 6 回合删除）
 
 Host 收回上一版共享 Router 准备/原生预算的方向，本回合按满额原生预算实现；移除 deadlineMonotonic、absolute_execution_deadline、剩余整数秒、started=None 与仅给 Router 的创建证据。镜像准备在 start 前，准备和核验未知时保留当前尝试并退避；核验重试缓存已取得的原生 outcome，进度写入的暂态错误不会丢答案。原生自报 elapsedMs 的相等断言已恢复，原“准备用完预算就切下一 Router”的测试被新“准备未知重试同一 Router”测试替代。
 
@@ -351,9 +351,31 @@ Windows 安装生命周期锁交接仍没有安全实现：当前 caller 取得�
 
 升级的 pending 命令若在 Windows 异常退出而未形成 JSON 回答，当前 _pending_child_gone 也缺少 Windows 的进程结束证明，可能一直保留未知；POSIX 已覆盖命令迟到完成、目标实际退出和回滚续接。Host 需协调这些 Windows 证明及原生验证，并补验已修 cwd 的 router_failover 单文件；本回合没有绕过验证次数限制，亦没有以 PID 单独猜测子树停止。
 
-## 当前要求边界
+## 第 5 回合要求边界（历史记录）
 
 本回合没有整目录或完整检查，每个命令只指定一个测试文件，使用默认进程数；没有 --jobs、HMB_CHECKS_JOBS 或偶发测试三轮复跑，也没有修改解释器环境。冷启动测试已删除 UV_OFFLINE=1，恢复锁定依赖缓存备齐前可使用网络的前提。日常安装、真实 harness CLI 或 app 原生检查、tests/probes、付费模型调用与日常服务/Worker 启停均未进行。
 
 本回合尚未完成：Windows 安装生命周期锁的归属与进程子树停止证明仍不安全；另一个 Router failover 测试在唯一单独复跑中暴露新夹具 cwd 未创建，已修但按本回合复跑次数限制没有再跑。该候选需要 Host 协调后继续，不能将 macOS 合成测试当作跨平台或安装态验收。
 
+
+## 第 6 回合：范围收窄
+
+本回合将 install/runtime.py、install/upgrade.py、protocol/transport.py、blackboard/tasks/storage.py，以及 tests/python 下的 install/test_runtime.py、install/test_upgrade.py、protocol/test_transport_attach.py、blackboard/tasks/test_storage.py 共八个文件逐字恢复到 cbb5ffc6；删除只为安装/升级/冷启动新增的 pending 错误、生命周期锁、锁交接、结果记录、journal 续接与相应测试。Worker 的三个服务错误分支和 control_waits 的暂态进度夹具恢复使用 SERVICE_START_TIMEOUT；基点已有的安装锁和服务所有权锁保留。
+
+留下发现、账户与目录未知的分类，健康未知缓存及 get 可见的预检退避，同一续租线程的 handle 交接与取消，Router 满额原生预算及已完成核验事实，服务 Git 的有界未知与续接重试，以及 schema 19→20 的健康存量转换；没有新增两侧引用，冷启动测试没有设置 UV_OFFLINE。第 5 回合的 Windows 安装监督与升级待定退出问题随新增机制删除，不再是当前候选的阻塞，也没有继续扩展监督机制。
+
+Router failover 单文件补验首次失败：新夹具继承 CommandAdapter.start 又调用自定义 prepare，导致准备计数从预期两次变成三次；start 改为交给独立 CommandAdapter 启动测试命令，保留两次准备均拿满额预算、只启动一次、同一 Router 与停止事实的断言。修正后该文件在完整检查中通过；日志保存在忽略目录 tmp/control-deadlines/。
+
+完整检查还发现原有 digest(root) 调用方不能使用上一回合新加的必填期限参数；保持原有 public 参数形态，将实际散列计算收进必填 deadline 的内部 _digest，独立调用自己取 120 秒观察窗口，材料化与核验传内部窗口，没有可选参数、None 分支或两套算法。protocol/fixtures/mock_readonly.py 恢复直接调用 digest(root)，test_router_input.py 的超时测试观察实际内部计算是否尚未开始；完整检查中的该文件通过。目录停止测试把 HARNESS_UNAVAILABLE 旧断言更新为 HARNESS_DISCOVERY_STOP_UNCONFIRMED，仍核对 unknown 与真实 controller 退出，不把未知停止当作 CLI 不可用。没有修改 tests/probes 的文件或启动真实 harness CLI 或 app。
+
+本回合仅运行指定的 Router failover 单文件、一次无文件参数的完整 Python 检查，以及两个失败文件各一次单独复跑；全部使用 Host 指定解释器、PYTHONPATH=src 和默认 4 个进程，没有 --jobs、HMB_CHECKS_JOBS 或三轮复跑。完整检查第一次为 238/241 文件通过、4008 个通过文件中的测试、0 skipped，3 个文件失败，exit 1；这不是完整检查通过。两个修复文件复跑都为 exit 0，私有根全部清理；当前累计 240/241 文件取得通过证据，尚缺 cli/test_host_preview.py 的依赖补齐与通过结果。
+
+| 本回合检查 | 结果 | 证据（相对 tmp/control-deadlines/） |
+| --- | --- | --- |
+| blackboard/routing/test_router_failover_integration.py 单文件补验 | 79 tests，1 失败，exit 1；夹具修正后完整检查通过 | scope-router-failover.log；scope-full-check.log 的第 54 个文件 |
+| 完整 Python 检查，无文件参数 | 238/241 文件通过，3 文件失败，exit 1，私有根清理完成 | scope-full-check.log |
+| blackboard/catalog/test_native_discovery_stop.py 修复后单独复跑 | 14 tests，通过，exit 0，私有根清理完成 | scope-native-discovery-retry.log |
+| blackboard/routing/test_readonly_tools_probe.py 修复后单独复跑 | 8 tests，通过，exit 0，私有根清理完成 | scope-readonly-tools-retry.log |
+| cli/test_host_preview.py | 完整检查失败：apps/console/node_modules/vitest/vitest.mjs 不存在；没有在原因未变化时重复运行 | scope-full-check.log 的第 200 个文件 |
+
+完整检查的剩余失败是环境依赖阻塞：该合成预览测试需要真实前端 parser，未放宽或删除断言。准备 apps/console/node_modules 需要写入本微任务列明范围之外的目录，所以在此停止并交给 Host；需要 Host 在本受管检出用受支持 Node 运行 npm --prefix apps/console ci，再按指定 Python 检查命令只补验 tests/python/cli/test_host_preview.py，退出 0 且私有根清理即可闭合，无须再次完整检查。前端依赖安装和剩余文件补验尚未进行，其他与本回合要求不一致的情形没有。

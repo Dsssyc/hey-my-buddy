@@ -182,7 +182,7 @@ class FailoverTests(RouterDispatchTestCase):
                 from pathlib import Path
                 Path(context.cwd).mkdir(parents=True, exist_ok=True)
             def start(self, context):
-                return super().start(replace(context, spec={**context.spec, 'argv': [sys.executable, '-c', 'print("done")']}))
+                return CommandAdapter().start(replace(context, spec={**context.spec, 'argv': [sys.executable, '-c', 'print("done")']}))
         request, first = self.start(review=True)
         worker = Worker('w-route', self.directory, client=self.client, log=lambda _message: None)
         worker.spool.write_startup({'nonce': first['nonce'], 'attemptId': first['attempt']['attemptId']})

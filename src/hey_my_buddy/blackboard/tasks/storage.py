@@ -133,11 +133,7 @@ def _runtime_lock_paths(path: Path) -> list[Path]:
         return sorted(set([path.parent / '.install.lock', path.parent / 'install.lock',
                            *path.parent.glob('.*.install.lock')]))
     identity = build[1] if build else path.name
-    locks = [path.parent / f'.{identity}.install.lock']
-    lifetime = path / '.uv-sync-lifetime.lock'
-    if lifetime.exists() or lifetime.is_symlink():
-        locks.append(lifetime)
-    return locks
+    return [path.parent / f'.{identity}.install.lock']
 
 
 @contextmanager

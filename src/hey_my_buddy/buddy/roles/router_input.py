@@ -24,7 +24,11 @@ def _remaining(deadline: float) -> float:
     return remaining
 
 
-def digest(root: Path, *, deadline: float) -> str:
+def digest(root: Path) -> str:
+    return _digest(root, time.monotonic() + MATERIALIZE_SECONDS)
+
+
+def _digest(root: Path, deadline: float) -> str:
     value = hashlib.sha256()
     for directory, names, files in os.walk(root, followlinks=False):
         _remaining(deadline)
@@ -54,7 +58,7 @@ def prepare(manifest: dict | None, directory: Path) -> tuple[Path, str]:
         root = directory / "frozen-input"
         root.mkdir(mode=0o700)
         try:
-            return root, digest(root, deadline=deadline)
+            return root, _digest(root, deadline)
         except BoardError:
             discard(root)
             raise
@@ -145,7 +149,7 @@ def prepare(manifest: dict | None, directory: Path) -> tuple[Path, str]:
                 resolved = link.resolve(strict=False)
             if not resolved.is_relative_to(root.resolve()):
                 raise BoardError("router-input-unavailable", "A frozen symlink escapes the Router checkout")
-        result = root, digest(root, deadline=deadline)
+        result = root, _digest(root, deadline)
         _remaining(deadline)
         return result
     except BoardError:
@@ -183,7 +187,7 @@ def verify(manifest: dict, root: Path, expected: str) -> dict:
         if manifest is not None:
             workspace.verify(manifest, require_unchanged=True)
         _remaining(deadline)
-        if digest(root, deadline=deadline) != expected:
+        if _digest(root, deadline) != expected:
             raise BoardError("router-input-changed", "Router snapshot changed")
         _remaining(deadline)
     except BoardError as error:

@@ -127,7 +127,7 @@ class FrozenTreeEntryTests(unittest.TestCase):
 
     def test_expired_local_verification_stays_unknown(self):
         with mock.patch.object(router_input.time, "monotonic", side_effect=[100, 221]), \
-             mock.patch.object(router_input, "digest") as digest:
+             mock.patch.object(router_input, "_digest") as digest:
             result = router_input.verify(None, self.checkout, "expected")
         self.assertIsNone(result["unchanged"])
         self.assertEqual(result["code"], "router-input-unknown")

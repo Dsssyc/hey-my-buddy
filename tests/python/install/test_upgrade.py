@@ -1,7 +1,6 @@
 """Private upgrade refusal, admission fence and backup restoration."""
 import json
 import os
-import subprocess
 from pathlib import Path
 from unittest import mock
 from hey_my_buddy.blackboard.store import backup
@@ -64,123 +63,6 @@ class UpgradeTests(BoardTestCase):
         self.assertEqual(result['journalError'], 'denied')
         self.assertTrue(marker.exists())
         self.assertEqual(json.loads(marker.read_text())['phase'], 'verified')
-
-    def test_pending_target_recovery_waits_and_then_verifies_without_rollback(self):
-        state = self.directory / 'state'
-        state.mkdir()
-        root = self.directory / 'runtimes'
-        previous, target = root / ('a' * 32), root / ('b' * 32)
-        pending = {'code': 'UPGRADE_START_PENDING', 'message': 'still starting',
-                   'details': {'pid': 2468, 'log': str(state / 'upgrade-start.log')}}
-        marker = state / 'upgrade.json'
-        upgrade.write_journal(marker, {'phase': 'migrated', 'previous': str(previous), 'target': str(target),
-                                       'before': {}, 'pending': pending})
-        with mock.patch.object(upgrade.runtime, 'is_ready', return_value=True), \
-             mock.patch.object(upgrade, 'probe', return_value=None), \
-             mock.patch.object(upgrade, '_pending_child_gone', return_value=False), \
-             mock.patch.object(upgrade, 'detach') as detach, \
-             mock.patch.object(upgrade, 'start') as start:
-            with self.assertRaises(BoardError) as caught:
-                upgrade.recover(state, root)
-        self.assertEqual(caught.exception.code, 'UPGRADE_START_PENDING')
-        detach.assert_not_called()
-        start.assert_not_called()
-        self.assertTrue(marker.exists())
-        health = {'runtimeContentId': target.name}
-        with mock.patch.object(upgrade.runtime, 'is_ready', return_value=True), \
-             mock.patch.object(upgrade, 'probe', side_effect=[health, None]), \
-             mock.patch.object(upgrade, 'verify_started', return_value={'runtimeContentId': target.name}), \
-             mock.patch.object(upgrade, 'detach') as detach, \
-             mock.patch.object(upgrade, 'start') as start:
-            result = upgrade.recover(state, root)
-        self.assertTrue(result['upgraded'])
-        self.assertTrue(result['recoveredJournal'])
-        self.assertFalse(marker.exists())
-        detach.assert_not_called()
-        start.assert_not_called()
-
-    def test_pending_target_that_exited_resumes_backup_restore_and_previous_start(self):
-        board = self.board()
-        state = board.directory
-        root = self.directory / 'runtimes'
-        previous, target = root / ('a' * 32), root / ('b' * 32)
-        saved = {'path': str(state / 'backups/current')}
-        upgrade.write_journal(state / 'upgrade.json', {'phase': 'backed-up', 'previous': str(previous),
-            'target': str(target), 'before': upgrade.idle_snapshot(state), 'backup': saved,
-            'pending': {'code': 'UPGRADE_START_PENDING', 'message': 'still starting',
-                        'details': {'pid': 2468, 'log': str(state / 'upgrade-start.log')}}})
-        health = {'runtimeContentId': previous.name}
-        with mock.patch.object(upgrade.runtime, 'is_ready', return_value=True), \
-             mock.patch.object(upgrade, 'probe', return_value=None), \
-             mock.patch.object(upgrade, '_pending_child_gone', return_value=True), \
-             mock.patch.object(upgrade, 'retire_workers'), \
-             mock.patch.object(upgrade, 'restore') as restore, \
-             mock.patch.object(upgrade, 'start', return_value=health) as start, \
-             mock.patch.object(upgrade, 'verify_started', return_value={'runtimeContentId': previous.name}):
-            result = upgrade.recover(state, root)
-        self.assertFalse(result['upgraded'])
-        self.assertTrue(result['recoveredJournal'])
-        restore.assert_called_once_with(state, state / 'backups/current')
-        start.assert_called_once_with(state, previous)
-        self.assertFalse((state / 'upgrade.json').exists())
-
-    def test_pending_restart_reply_blocks_preflight_recovery_until_it_exists(self):
-        state = self.directory / 'state'
-        state.mkdir()
-        root = self.directory / 'runtimes'
-        previous, target = root / ('a' * 32), root / ('b' * 32)
-        output = state / 'upgrade-command-pending.out'
-        upgrade.write_journal(state / 'upgrade.json', {'phase': 'preflight', 'previous': str(previous),
-            'target': str(target), 'before': {}, 'pending': {'code': 'UPGRADE_COMMAND_PENDING',
-            'message': 'still running', 'details': {'method': 'restart', 'pid': 2468,
-            'log': str(state / 'upgrade-command.log'), 'output': str(output)}}})
-        with mock.patch.object(upgrade.runtime, 'is_ready', return_value=True), \
-             mock.patch.object(upgrade, 'probe', side_effect=[None, {'runtimeContentId': previous.name}]), \
-             mock.patch.object(upgrade, '_pending_child_gone', return_value=False), \
-             mock.patch.object(upgrade, 'start') as start:
-            with self.assertRaises(BoardError) as caught:
-                upgrade.recover(state, root)
-        self.assertEqual(caught.exception.code, 'UPGRADE_COMMAND_PENDING')
-        start.assert_not_called()
-        self.assertTrue((state / 'upgrade.json').exists())
-
-    def test_pending_rollback_detach_continues_after_child_and_owner_are_gone(self):
-        board = self.board()
-        state = board.directory
-        root = self.directory / 'runtimes'
-        previous, target = root / ('a' * 32), root / ('b' * 32)
-        pending = {'code': 'UPGRADE_COMMAND_PENDING', 'message': 'restart still running',
-                   'details': {'method': 'restart', 'pid': 2468, 'log': str(state / 'upgrade-command.log'),
-                               'output': str(state / 'upgrade-command-pending.out')}}
-        marker = state / 'upgrade.json'
-        saved = {'path': str(state / 'backups/current')}
-        upgrade.write_journal(marker, {'phase': 'backed-up', 'previous': str(previous), 'target': str(target),
-                                       'before': upgrade.idle_snapshot(state), 'backup': saved,
-                                       'pending': pending, 'pendingRole': 'rollback', 'rollbackStep': 'detach'})
-        with mock.patch.object(upgrade.runtime, 'is_ready', return_value=True), \
-             mock.patch.object(upgrade, 'probe', return_value=None), \
-             mock.patch.object(upgrade, '_pending_child_gone', return_value=False), \
-             mock.patch.object(upgrade, 'restore') as restore, \
-             mock.patch.object(upgrade, 'start') as start:
-            with self.assertRaises(BoardError) as waiting:
-                upgrade.recover(state, root)
-        self.assertEqual(waiting.exception.code, 'UPGRADE_COMMAND_PENDING')
-        restore.assert_not_called()
-        start.assert_not_called()
-        health = {'runtimeContentId': previous.name}
-        with mock.patch.object(upgrade.runtime, 'is_ready', return_value=True), \
-             mock.patch.object(upgrade, 'probe', return_value=None), \
-             mock.patch.object(upgrade, '_pending_child_gone', return_value=True), \
-             mock.patch.object(upgrade, 'retire_workers'), \
-             mock.patch.object(upgrade, 'restore') as restore, \
-             mock.patch.object(upgrade, 'start', return_value=health) as start, \
-             mock.patch.object(upgrade, 'verify_started', return_value={'runtimeContentId': previous.name}):
-            result = upgrade.recover(state, root)
-        self.assertFalse(result['upgraded'])
-        self.assertTrue(result['recoveredJournal'])
-        restore.assert_called_once_with(state, state / 'backups/current')
-        start.assert_called_once_with(state, previous)
-        self.assertFalse(marker.exists())
 
     def test_busy_upgrade_leaves_skill_launcher_runtime_and_service_unchanged(self):
         board = self.board()
@@ -467,51 +349,16 @@ class UpgradeTests(BoardTestCase):
         self.assertEqual(sentinel.read_bytes(), b'keep outside')
         self.assertTrue(control.is_symlink())
 
-    def test_startup_waits_for_readiness_without_signalling_a_live_daemon(self):
+    def test_startup_timeout_never_signals_a_daemon_or_cancels_work(self):
         board=self.board()
         child=mock.Mock()
         child.poll.return_value=None
-        child.pid=123
         (self.directory/'runtime-target'/'src'/'hey_my_buddy').mkdir(parents=True)
         with mock.patch('hey_my_buddy.install.upgrade.subprocess.Popen',return_value=child), \
-             mock.patch('hey_my_buddy.install.upgrade.time.sleep', side_effect=lambda seconds: (board.directory/'control.json').write_text('{"pid":123}')), \
-             mock.patch('hey_my_buddy.install.upgrade.command', return_value={'status': 'ready'}) as health:
-            result = upgrade.start(board.directory, self.directory/'runtime-target')
-        self.assertEqual(result, {'status': 'ready'})
-        health.assert_called_once()
-        child.terminate.assert_not_called()
-        child.kill.assert_not_called()
-
-    def test_startup_deadline_returns_pending_without_signalling_child(self):
-        board = self.board()
-        child = mock.Mock(pid=2468)
-        child.poll.return_value = None
-        target = self.directory / 'runtime-target'
-        (target / 'src' / 'hey_my_buddy').mkdir(parents=True)
-        with mock.patch('hey_my_buddy.install.upgrade.subprocess.Popen', return_value=child), \
-             mock.patch('hey_my_buddy.install.upgrade.time.monotonic', side_effect=[0, 46]):
+             mock.patch('hey_my_buddy.install.upgrade.time.monotonic',side_effect=[0,46]):
             with self.assertRaises(BoardError) as caught:
-                upgrade.start(board.directory, target)
-        self.assertEqual(caught.exception.code, 'UPGRADE_START_PENDING')
-        self.assertEqual(caught.exception.details, {'pid': 2468, 'log': str(board.directory / 'upgrade-start.log')})
-        child.terminate.assert_not_called()
-        child.kill.assert_not_called()
-
-    def test_runtime_command_deadline_is_pending_and_probe_preserves_it(self):
-        board = self.board()
-        child = mock.Mock(pid=2468)
-        child.wait.side_effect = subprocess.TimeoutExpired('runtime-client', 45)
-        child.poll.return_value = None
-        target = self.directory / 'runtime-target'
-        (target / 'src' / 'hey_my_buddy').mkdir(parents=True)
-        with mock.patch('hey_my_buddy.install.upgrade.subprocess.Popen', return_value=child):
-            with self.assertRaises(BoardError) as caught:
-                upgrade.probe(board.directory, target)
-        self.assertEqual(caught.exception.code, 'UPGRADE_COMMAND_PENDING')
-        self.assertEqual(caught.exception.details['pid'], 2468)
-        self.assertEqual(caught.exception.details['method'], 'health')
-        self.assertEqual(caught.exception.details['log'], str(board.directory / 'upgrade-command.log'))
-        self.assertTrue(Path(caught.exception.details['output']).is_file())
+                upgrade.start(board.directory, self.directory/'runtime-target')
+        self.assertEqual(caught.exception.code,'UPGRADE_SHUTDOWN_UNCONFIRMED')
         child.terminate.assert_not_called()
         child.kill.assert_not_called()
 

@@ -227,7 +227,7 @@ class ControlWaitTests(unittest.TestCase):
         self.assertFalse(renewal.is_alive())
 
     def test_pending_input_does_not_lose_answer_when_progress_transport_is_unavailable(self):
-        self.worker.client.progress.side_effect = BoardError('SERVICE_START_PENDING', 'service still starting')
+        self.worker.client.progress.side_effect = BoardError('SERVICE_START_TIMEOUT', 'service still starting')
         renewal = _Renewal(self.worker, self.claim, None, None)
         self.worker._wait_control_observation(self.claim, renewal, 'router-input-unknown', 0)
         self.backoff.assert_called_once_with(renewal, 15)

@@ -334,7 +334,7 @@ class Worker:
                 self.spool.clear_startup()
                 return True
             except BoardError as error:
-                if error.code in ("SERVICE_UNAVAILABLE", "SERVICE_START_PENDING", "SERVICE_START_FAILED", "INVALID_RESPONSE"):
+                if error.code in ("SERVICE_UNAVAILABLE", "SERVICE_START_TIMEOUT", "SERVICE_START_FAILED", "INVALID_RESPONSE"):
                     self.log(f"release of {attempt_id} unavailable ({error.code}); keeping the intent")
                     return False
                 self.log(f"evidence-based release refused ({error.code}); falling back to reconcile")
@@ -347,7 +347,7 @@ class Worker:
                 worker_instance=self.instance_id,
             )
         except BoardError as error:
-            if error.code in ("SERVICE_UNAVAILABLE", "SERVICE_START_PENDING", "SERVICE_START_FAILED", "INVALID_RESPONSE"):
+            if error.code in ("SERVICE_UNAVAILABLE", "SERVICE_START_TIMEOUT", "SERVICE_START_FAILED", "INVALID_RESPONSE"):
                 # A transport failure says nothing about ownership: keep the recovery
                 # identity and try again later instead of discarding it.
                 self.log(f"reconcile of {attempt_id} unavailable ({error.code}); keeping the intent")
@@ -658,7 +658,7 @@ class Worker:
                                     raise error
                             if view.get('cancelRequested'):
                                 return cancelled(view)
-                        if error.code not in ('SERVICE_UNAVAILABLE', 'SERVICE_START_PENDING'):
+                        if error.code not in ('SERVICE_UNAVAILABLE', 'SERVICE_START_TIMEOUT'):
                             raise
                         # The request may already be committed: replay its exact identity.
                         renewal.wait(min(PREFLIGHT_MAX_RETRY_SECONDS,

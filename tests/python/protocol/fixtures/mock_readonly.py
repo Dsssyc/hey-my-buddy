@@ -44,12 +44,12 @@ from hey_my_buddy.buddy.roles.router_input import verify as verify_frozen_input
 
 
 def prepare_input(manifest, directory):
-    from hey_my_buddy.buddy.roles.router_input import digest, MATERIALIZE_SECONDS
+    from hey_my_buddy.buddy.roles.router_input import digest
 
     root = directory / "mock-frozen-input"
     root.mkdir(mode=0o700, parents=True)
     (root / "input.txt").write_text("private service-protocol fixture\n")
-    return root, digest(root, deadline=time.monotonic() + MATERIALIZE_SECONDS)
+    return root, digest(root)
 
 
 def verify_input(manifest, root, expected):
