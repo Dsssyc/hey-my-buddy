@@ -1,12 +1,12 @@
 """Deterministic in-process workspace double for micro-task workflow tests.
 
 It implements exactly the ``hey_my_buddy.blackboard.tasks.workspace`` interface from the productivity
-contract (``inspect``/``prepare``/``verify``/``seal``) with observable calls and
-injectable failures, so the workflow coordinator's transaction, idempotency and
-exclusion logic can be tested before the real Git-backed module is integrated.
+contract with observable calls and injectable failures, so the workflow
+coordinator's transaction, idempotency and exclusion logic can run without Git.
 """
 from __future__ import annotations
 
+from contextlib import contextmanager
 import json
 import os
 import re
@@ -83,7 +83,8 @@ class MockWorkspace:
             # source repository names the same shared repository path: the stash
             # facts of a run key on it across turns and allocations.
             "snapshot": {"repositoryPath": "mock+repo:" + self._repository_root(intent.get("cwd") or path),
-                         "included": list(intent.get("includeUntracked", [])), "excluded": [], "staged": {}, "unstaged": {}},
+                         "includedUntracked": list(intent.get("includeUntracked", [])),
+                         "executionSelectors": list(intent.get("includeUntracked", [])), "excluded": [], "staged": {}, "unstaged": {}},
         }
         manifest["manifestSha256"] = sha256_text(canonical_json(manifest))
         return manifest
@@ -133,6 +134,13 @@ class MockWorkspace:
             "clean": not self.dirty,
         }
 
+    @contextmanager
+    def submission_preparation(self, state_dir, request_id, intent, *, shared_locks=None):
+        yield {"manifest": self.prepare(state_dir, request_id, intent), "newAllocation": False}
+
+    def scope_conflicts(self, state_dir, manifest, task_id, attempt_id):
+        return []
+
     def prepare(self, state_dir: Path, request_id: str, intent: dict, *, _preparation=None) -> dict:
         self.prepare_calls.append((request_id, dict(intent)))
         if request_id in self.fail_prepare:
@@ -176,7 +184,6 @@ class MockWorkspace:
             "kind": manifest.get("kind"),
             "path": manifest.get("path"),
             "checkoutRoot": manifest.get("checkoutRoot"),
-            "checkoutId": manifest.get("checkoutId"),
             "repositoryId": manifest.get("repositoryId"),
             "taskId": task_id,
             "attemptId": attempt_id,
@@ -191,7 +198,7 @@ class MockWorkspace:
             "diffPath": str(diff),
             "diffSha256": sha256_text(diff.read_text(encoding="utf-8")),
             "sealedAfterShutdown": True,
-            "includedUntracked": (manifest.get("snapshot") or {}).get("included", []),
+            "includedUntracked": manifest["snapshot"]["includedUntracked"],
         }
         # Like the real module: manifestSha256 is the input digest the turn executed
         # on, snapshotSha256 is the output identity derived from the snapshot record.
@@ -205,7 +212,7 @@ class MockWorkspace:
 
     # -- Host lifecycle surface: this double owns no disposable checkout -----
     def integration_verify(self, artifact, *, original_input=None, final_input=None, path=None, ref=None,
-                           strategy="patch", before_commit=None, repository_id=None, checkout_id=None,
+                           before_commit=None, repository_id=None, checkout_id=None,
                            adjusted_paths=None, host_paths=None, note=None, _confirm_adjustments=False):
         """The mock target carries the artifact only once its marker exists, or an
         explicit adjustment names the differing paths."""
@@ -215,7 +222,7 @@ class MockWorkspace:
         if _confirm_adjustments and not carried:
             adjusted_paths = changed
         return {
-            "verified": bool(carried or adjusted_paths), "strategy": strategy,
+            "verified": bool(carried or adjusted_paths), "strategy": "patch",
             "target": {"kind": "checkout", "path": str(target.resolve()), "checkoutId": f"checkout:{target}",
                        "repositoryId": f"repo:{target}", "ref": ref},
             "beforeCommit": before_commit, "afterCommit": ref, "beforeTree": None, "afterTree": None,

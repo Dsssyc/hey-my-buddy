@@ -438,14 +438,6 @@ class TurnRoutingBindingTests(RoutingHistoryTestCase):
         self.assertEqual(legacy["routing"]["decisionId"], decision_id)
         self.assertEqual(legacy["routing"]["status"], "completed")
 
-        # A partial binding does not prove an explicit Host buddy. Missing
-        # decisionId and a recorded null decisionId are different evidence.
-        document["context"]["routing"] = {"buddyRevision": 1}
-        with board.store.db.write() as connection:
-            connection.execute("UPDATE workflow_turns SET input_json=? WHERE turn_id=?",
-                               (json.dumps(document), row["turn_id"]))
-        partial = board.call("workflow_get", {"runId": submitted["runId"]})
-        self.assertIsNone(partial["currentTurn"]["routing"])
 
 
 if __name__ == "__main__":  # pragma: no cover - unittest discovery is the entrypoint

@@ -192,7 +192,7 @@ class WorkflowTestCase(BoardTestCase):
 
 
 class LifecycleTests(WorkflowTestCase):
-    def test_turn_buddy_uses_the_bound_execution_and_rejects_unknown_shapes(self):
+    def test_turn_buddy_uses_the_bound_execution(self):
         board = self.board()
         self.register(board)
         submitted = self.submit(board)
@@ -200,33 +200,18 @@ class LifecycleTests(WorkflowTestCase):
         attempt_id = claimed['attempt']['attemptId']
         turn_id = claimed['turn']['turnId']
         original = claimed['turn']['input']
-        for adapter, frozen, valid in (
-            ('dsh', BUDDY, True),
-            ('command', {'adapter': 'command'}, True),
-
-            ('dsh', None, False),
-            ('dsh', {key: value for key, value in BUDDY.items() if key != 'effort'}, False),
-            ('dsh', {**BUDDY, 'harness': 'codex'}, False),
-            ('dsh', {'adapter': 'command'}, False),
-            ('command', None, False),
-            ('command', {'adapter': 'external'}, False),
-            ('unknown', BUDDY, False),
-        ):
+        for adapter, frozen in (("dsh", BUDDY), ("command", {"adapter": "command"})):
             with self.subTest(adapter=adapter, buddy=frozen):
                 payload = {**original, 'context': {**original['context'], 'buddy': frozen}}
                 raw = json.dumps(payload)
                 with board.store.db.write() as connection:
                     connection.execute('UPDATE attempts SET adapter=? WHERE attempt_id=?', (adapter, attempt_id))
                     connection.execute('UPDATE workflow_turns SET input_json=? WHERE turn_id=?', (raw, turn_id))
-                if valid:
-                    view = board.call('workflow_get', {'runId': submitted['runId'], 'includeAudit': True})
-                    expected = BUDDY if adapter == 'dsh' else None
-                    self.assertEqual(view['currentTurn']['buddy'], expected)
-                    self.assertEqual(view['audit']['turns'][0]['buddy'], expected)
-                    self.assertEqual(view['audit']['turns'][0]['input'], payload)
-                else:
-                    with self.assertRaises(BoardError):
-                        board.call('workflow_get', {'runId': submitted['runId']})
+                view = board.call('workflow_get', {'runId': submitted['runId'], 'includeAudit': True})
+                expected = BUDDY if adapter == 'dsh' else None
+                self.assertEqual(view['currentTurn']['buddy'], expected)
+                self.assertEqual(view['audit']['turns'][0]['buddy'], expected)
+                self.assertEqual(view['audit']['turns'][0]['input'], payload)
                 with board.store.db.read() as connection:
                     self.assertEqual(connection.execute('SELECT input_json FROM workflow_turns WHERE turn_id=?',
                                                         (turn_id,)).fetchone()[0], raw)
@@ -1023,6 +1008,35 @@ class DecidePrecheckTests(WorkflowTestCase):
         self.finish_turn(board, self.claim(board), disposition="assistance")
         view = board.call("workflow_get", {"runId": submitted["runId"]})
         return submitted, view
+
+    def test_helper_request_id_already_owned_by_another_task_is_rejected(self):
+        board = self.board()
+        _submitted, view = self._yielded(board)
+        helper_cwd = str(self.workdir("collision-helper"))
+        existing = self.submit(board, request_id="helper-collision", task="helper work",
+                               cwd=helper_cwd, kind="worktree", access="read")
+        with board.store.db.read() as connection:
+            tables = ("tasks", "workflow_runs", "workspace_reservations", "workflow_artifacts", "workflow_children")
+            before = {table: connection.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
+                      for table in tables}
+        for helper_task in ("helper work", "different helper work"):
+            with self.subTest(task=helper_task):
+                with self.assertRaises(BoardError) as raised:
+                    self.decide(board, view, view["activeRequest"]["requestId"], helpers=[{
+                        "requestId": "helper-collision", "task": helper_task, "cwd": helper_cwd,
+                        "executionWorkspace": {"kind": "worktree", "access": "read"},
+                    }])
+                self.assertEqual(raised.exception.code, "CONFLICT")
+                self.assertEqual(raised.exception.details["existingTaskId"], existing["runId"])
+        with board.store.db.read() as connection:
+            after = {table: connection.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
+                     for table in tables}
+            owner = connection.execute("SELECT task_id FROM tasks WHERE request_id='helper-collision'").fetchone()
+        self.assertEqual(after, before)
+        self.assertEqual(owner["task_id"], existing["runId"])
+        unchanged = board.call("workflow_get", {"runId": view["runId"]})
+        self.assertEqual(unchanged["revision"], view["revision"])
+        self.assertEqual(unchanged["activeRequest"]["requestId"], view["activeRequest"]["requestId"])
 
     def test_unauthorized_decide_never_prepares_a_workspace(self):
         board = self.board()

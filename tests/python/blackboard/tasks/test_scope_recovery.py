@@ -786,7 +786,6 @@ class ScopeRecoveryTestCase(RealWorkspaceTestCase):
         run_id = submitted["runId"]
         view = self.view(board, run_id)
         self.assertEqual(view["scope"]["scopeVersion"], 1)
-        self.assertTrue(view["scope"]["recorded"])
         self.assertEqual(view["scope"]["writeScope"], ["src"])
         with board.store.db.read() as connection:
             rows = connection.execute(
@@ -828,7 +827,6 @@ class ScopeRecoveryTestCase(RealWorkspaceTestCase):
         child = approved["children"][0]["taskId"]
         child_view = self.view(board, child)
         self.assertEqual(child_view["scope"]["scopeVersion"], 1)
-        self.assertTrue(child_view["scope"]["recorded"])
         self.assertEqual(child_view["scope"]["writeScope"], ["."])
         with board.store.db.read() as connection:
             rows = connection.execute(

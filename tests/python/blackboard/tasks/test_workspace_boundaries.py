@@ -137,7 +137,7 @@ class WorkspaceBoundaryTests(unittest.TestCase):
         self.assertEqual(self.git("rev-parse", "HEAD^{tree}").decode().strip(), sealed["tree"])
         self.clear_refs_and_prune(sealed["commit"])
         self.assert_error("WORKSPACE_GIT_ERROR", workspace.integration_verify, sealed,
-                          original_input=manifest, final_input=manifest, path=str(self.repo), ref="HEAD", strategy="patch")
+                          original_input=manifest, final_input=manifest, path=str(self.repo), ref="HEAD")
 
     def check_each_cleanup_ref(self, *, sealed_output):
         manifest = self.prepare()

@@ -1041,7 +1041,6 @@ STASH_ENTRY_LIMIT = 64
 #: Bounded per-side entries carried by one frozen stash comparison record.
 STASH_COMPARISON_LIMIT = 16
 RESOLUTION_ACTIONS = ("restore", "adopt", "abandon")
-INTEGRATION_STRATEGIES = ("patch", "cherry-pick", "merge", "not-required")
 
 
 def _entry_state(entries, path):
@@ -1967,7 +1966,7 @@ def verify_sealed_output(original_input: dict, final_input: dict, artifact: dict
 
 
 def integration_verify(artifact: dict, *, original_input: dict, final_input: dict,
-                       path: str, ref: str, strategy: str, before_commit: str | None = None,
+                       path: str, ref: str, before_commit: str | None = None,
                        repository_id: str | None = None, checkout_id: str | None = None,
                        host_paths=None, note: str | None = None,
                        _confirm_adjustments: bool = False) -> dict:
@@ -1982,8 +1981,6 @@ def integration_verify(artifact: dict, *, original_input: dict, final_input: dic
     the pure content comparison of the artifact against the target tree.
     """
     with _errors():
-        if strategy not in ("patch", "cherry-pick", "merge"):
-            raise BoardError("INVALID_WORKSPACE", "A verified integration uses patch, cherry-pick or merge")
         if not isinstance(artifact, dict):
             raise BoardError("INVALID_WORKSPACE", "The integration source artifact is missing")
         if bool(host_paths) and not before_commit:
@@ -2047,7 +2044,7 @@ def integration_verify(artifact: dict, *, original_input: dict, final_input: dic
         unrecorded = sorted({item["path"] for item in differing} - set(adjustments)) + sorted(set(missing) - set(adjustments))
         verification = {
             "verified": bool((before is None or _is_ancestor(root, before, after)) and not unrecorded),
-            "strategy": strategy,
+            "strategy": "patch",
             "target": {"kind": "checkout", "path": identity["checkoutRoot"], "checkoutId": identity["checkoutId"],
                        "repositoryId": identity["repositoryId"], "ref": ref},
             "beforeCommit": before, "beforeTree": before_tree, "afterCommit": after, "afterTree": after_tree,
