@@ -121,7 +121,7 @@ class UpgradeMigrationTests(BoardTestCase):
         board.service.automatic_discovery = False
         snapshot = board.call('console_snapshot', {})
         self.assertEqual(snapshot['configuration']['routerProfileIds'], self.fixture['routerProfileIds'])
-        models = board.call('model_profiles', {})['profiles']
+        models = board.call('model_profiles', {'includeUnavailable': True})['profiles']
         self.assertTrue(models)
         self.assertTrue(all(model['catalogState'] == 'unknown' for model in models))
         self.assertTrue(all(model['catalogReason'] == 'ACCOUNT_STATUS_UNKNOWN' for model in models))

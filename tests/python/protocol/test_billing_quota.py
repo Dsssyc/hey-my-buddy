@@ -165,16 +165,18 @@ class BillingQuotaTests(BoardTestCase):
         with board.store.db.read() as db:
             self.assertEqual(exhausted(db, {"adapter": "dsh", "provider": "deepseek-official"})["code"], "HARNESS_BALANCE_ZERO")
         with board.store.db.write() as db:
+            observed_at = stamp()
             db.execute("UPDATE harness_health SET record_json=? WHERE adapter='codex'",
                        (json.dumps({"billingByProvider": {"openai": codex_account({"type": "chatgpt", "planType": "pro"}, stamp())}}),))
-            record_quota(db, "codex", {"source": "codex/app-server-rate-limits", "observedAt": stamp(),
-                                      "provider": "openai", "balanceZero": True, "windows": []})
+            record_quota(db, "codex", {"source": "codex/app-server-rate-limits", "observedAt": observed_at,
+                                      "provider": "openai", "balanceZero": True, "windows": []}, now=observed_at)
         with board.store.db.read() as db:
             self.assertEqual(exhausted(db, {"adapter": "codex", "provider": "openai"})['code'], 'HARNESS_BALANCE_ZERO')
         with board.store.db.write() as db:
-            record_quota(db, "codex", {"source": "codex/app-server-rate-limits", "observedAt": stamp(),
+            observed_at = stamp()
+            record_quota(db, "codex", {"source": "codex/app-server-rate-limits", "observedAt": observed_at,
                                       "provider": "openai", "balanceZero": True,
-                                      "ordinaryUsageAllowed": False, "windows": []})
+                                      "ordinaryUsageAllowed": False, "windows": []}, now=observed_at)
         with board.store.db.read() as db:
             self.assertEqual(exhausted(db, {"adapter": "codex", "provider": "openai"})["code"], "HARNESS_BALANCE_ZERO")
 

@@ -162,6 +162,7 @@ def record(connection, adapter, quota, *, now=None):
 def blocking_records(connection, configuration, *, now=None):
     """Current native exhaustions blocking this harness/provider/model."""
     from ..evaluation.native_observations import _time
+    configuration = dict(configuration) if configuration is not None else {}
     if not configuration or not configuration.get('adapter') or not configuration.get('provider'):
         return []
     adapter, provider, model = (configuration.get(key) for key in ('adapter', 'provider', 'model'))

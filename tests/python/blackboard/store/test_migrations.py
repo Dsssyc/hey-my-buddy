@@ -192,7 +192,7 @@ class Schema16UpgradeTests(BoardTestCase):
     def test_exact_fingerprints_reject_damage_to_retained_event_and_worker_rows(self):
         for table, statement in (
             ('events', "UPDATE events SET payload_json='{}' WHERE seq=(SELECT MIN(seq) FROM events)"),
-            ('workers', "UPDATE workers SET updated_at='damaged'"),
+            ('workers', "UPDATE workers SET last_seen_at='damaged'"),
             ('sqlite_sequence', "UPDATE sqlite_sequence SET seq=seq+1 WHERE name='events'"),
         ):
             with self.subTest(table=table):

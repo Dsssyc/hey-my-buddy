@@ -134,7 +134,7 @@ class HarnessServiceTests(BoardTestCase):
             db.execute("INSERT INTO harness_health(adapter,status,record_json,revision) VALUES('codex','unknown','{}',1)")
         with patch('hey_my_buddy.buddy.harnesses.registry.adapter') as native:
             self.service._refresh_harness_catalog('codex', old)
-        native.assert_not_called()
+        native.return_value.discover_models.assert_not_called()
 
     def test_retired_account_operations_are_absent_from_the_service(self):
         for name in ('set', 'login', 'status', 'cancel', 'logout', 'remove'):

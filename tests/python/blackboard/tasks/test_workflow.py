@@ -212,7 +212,7 @@ class LifecycleTests(WorkflowTestCase):
             view = board.call('workflow_get', {'runId': run_id})
             self.assertEqual(view['executionConfiguration'], {'adapter': 'command'})
             self.assertEqual(view['quotaWarnings'], [])
-            self.assertEqual(view['task']['spec']['adapter'], 'command')
+            self.assertEqual(view['task']['adapter'], 'command')
             self.assertTrue(board.call('task_result', {'runId': run_id})['resultDelivered'])
             self.assertEqual(board.call('task_get', {'runId': run_id})['task']['adapter'], 'command')
             rows = board.call('task_list', {})['tasks']

@@ -14,6 +14,11 @@ from support import FIXTURE_CATALOG
 
 
 class CatalogTests(unittest.TestCase):
+    def setUp(self):
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        self.directory = Path(temporary.name)
+
     def test_missing_harness_is_not_started_by_explicit_discovery(self):
         from hey_my_buddy.buddy.harnesses.base import Adapter
 
@@ -28,7 +33,7 @@ class CatalogTests(unittest.TestCase):
 
         with patch("hey_my_buddy.buddy.harnesses.registry.adapters", return_value={"missing": MissingHarness()}), \
              patch.object(catalog, "_override", return_value=None):
-            result = catalog.discover(directory=Path(os.environ["BUDDY_STATE_DIR"]))
+            result = catalog.discover(directory=self.directory)
         self.assertEqual(result["discoveries"], [{"adapter": "missing", "status": "unknown", "accountStatus": "unknown",
                                                   "reason": "fixture executable missing"}])
 
@@ -49,7 +54,7 @@ class CatalogTests(unittest.TestCase):
             self.assertFalse(instance.available()[0])
             self.assertFalse(instance.available()[0])
             self.assertEqual(probe.call_count, 1)
-            refreshed = catalog.discover(directory=Path(os.environ["BUDDY_STATE_DIR"]))
+            refreshed = catalog.discover(directory=self.directory)
             self.assertEqual(refreshed["discoveries"], [{"adapter": "claude", "status": "complete",
                                                          "accountStatus": "not-applicable", "reason": None}])
             self.assertEqual(probe.call_count, 2, "Explicit discovery must bypass the old auth failure")

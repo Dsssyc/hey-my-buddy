@@ -6,6 +6,7 @@ identities and digests. This module performs fixture preparation, not migration.
 """
 from __future__ import annotations
 
+from contextlib import closing
 import hashlib
 import json
 import os
@@ -106,7 +107,7 @@ def load_fixture(state: Path) -> dict:
         target.parent.mkdir(parents=True, exist_ok=True)
         content = _json(bind(json.loads(text)), ascii_json=True) if target.suffix == ".json" else replace(text)
         target.write_text(content)
-    with sqlite3.connect(state / "board.sqlite3") as connection:
+    with closing(sqlite3.connect(state / "board.sqlite3")) as connection, connection:
         connection.executescript(stock["board.sql"])
         # Change values only. Never initialize with the current schema, insert a
         # conclusion, add a migration alias, or rewrite native provenance.

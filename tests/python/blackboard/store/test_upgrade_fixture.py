@@ -10,6 +10,7 @@ import unittest
 
 from blackboard.store.upgrade_fixture import FIXTURE, load_fixture
 from hey_my_buddy.blackboard.tasks import workspace
+from hey_my_buddy.blackboard.tasks.workflow import WorkflowCoordinator
 
 
 class UpgradeFixtureTests(unittest.TestCase):
@@ -48,8 +49,10 @@ class UpgradeFixtureTests(unittest.TestCase):
             manifest = json.loads(row[0])
             workspace.verify(manifest)
             for artifact in connection.execute('SELECT * FROM workflow_artifacts WHERE run_id=?', (run_id,)):
-                if artifact['kind'] != 'input':
+                if artifact['kind'] == 'output':
                     workspace.verify_sealed_output(manifest, manifest, json.loads(artifact['manifest_json']))
+                elif artifact['kind'] == 'shared-refs':
+                    WorkflowCoordinator.verify_shared_refs_record(json.loads(artifact['manifest_json']))
         self.assertEqual(connection.execute('SELECT COUNT(*) FROM workflow_host_conclusions').fetchone()[0], 0)
 
     def test_delivered_stock_can_get_a_real_independent_host_seal(self):

@@ -1,0 +1,1 @@
+{"discoveredAt":"2026-01-01T00:00:00.000Z","discoveries":[{"accountStatus":"confirmed","adapter":"codex","status":"complete"}],"harnessVersion":"fixture-only","providers":[{"adapter":"codex","efforts":["high"],"models":[{"efforts":["high"],"id":"fixture-alpha"},{"efforts":["high"],"id":"fixture-beta"}],"provider":"openai"}],"source":"fixture:upgrade-base"}

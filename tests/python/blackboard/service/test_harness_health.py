@@ -478,7 +478,7 @@ class CatalogHealthOwnershipTests(BoardTestCase):
         return {'source': 'fixture-native', 'providers': [{'adapter': 'dsh', 'provider': 'fixture', 'models': models}],
                 'discoveries': [{'adapter': 'dsh', 'status': 'complete', 'accountStatus': 'confirmed'}]}
 
-    def unknown_read(self, *args):
+    def unknown_read(self, *args, catalog_scan_claimed=False):
         self.evaluation.record_catalog({'source': 'fixture-native', 'providers': [],
             'discoveries': [{'adapter': 'dsh', 'status': 'complete', 'accountStatus': 'unknown'}]})
 
