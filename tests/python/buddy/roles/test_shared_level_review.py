@@ -148,7 +148,7 @@ class _ReviewCases:
             (frozen / "changed.txt").write_text("tampered after the native turn", encoding="utf-8", newline="\n")
             outcome = adapter.collect(handle, context)
         self.assertEqual(outcome.status, "failed")
-        self.assertEqual(outcome.result["code"], "router-out-of-bounds")
+        self.assertEqual(outcome.result["code"], "router-input-changed")
         self.assertEqual(outcome.result["inputVerification"]["unchanged"], False)
         self.assertEqual(outcome.result["stopEvidence"]["native"]["shutdownConfirmed"], True)
         self.assertTrue(frozen.exists(), "a changed copy stays available for inspection")

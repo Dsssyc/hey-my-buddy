@@ -181,8 +181,9 @@ class SingleRouterClaimTests(DecisionTestCase):
                 ('usage', {'elapsedMs': 1, 'toolCalls': -1}, 'router-tool-evidence-unverified'),
                 ('usage', {'elapsedMs': 300001, 'toolCalls': 0}, 'router-budget-exhausted'),
                 ('usage', {'elapsedMs': 1, 'toolCalls': 25}, 'router-budget-exhausted'),
-                ('inputVerification', None, 'answer-shape'),
-                ('inputVerification', {'unchanged': True, 'manifestSha256': None}, 'answer-shape')):
+                ('inputVerification', None, 'router-input-changed'),
+                ('inputVerification', {'unchanged': True, 'manifestSha256': None}, 'router-input-changed'),
+                ('inputVerification', {'unchanged': False, 'snapshotSha256': 'changed'}, 'router-input-changed')):
             with self.subTest(field=field, replacement=replacement):
                 board = self.case_board()
                 self.seed(board)

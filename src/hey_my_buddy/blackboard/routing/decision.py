@@ -993,7 +993,7 @@ class DecisionCoordinator:
         if review and isinstance(verification, dict) and (
                 verification.get("unchanged") is False
                 or ("manifestSha256" in verification and verification["manifestSha256"] != manifest.get("manifestSha256"))):
-            return refuse("router-out-of-bounds", changed=True, bound="input-changed")
+            return refuse("router-input-changed", changed=True)
         stop = output.get("stopEvidence")
         if (not isinstance(stop, dict) or stop.get("shutdownConfirmed") is not True
                 or not isinstance(stop.get("native"), dict) or stop["native"].get("shutdownConfirmed") is not True):
@@ -1008,7 +1008,7 @@ class DecisionCoordinator:
                        or "manifestSha256" not in verification):
             # Missing/malformed proof invalidates an answer; it does not prove
             # that the input changed. Failed calls need no successful answer proof.
-            return refuse("answer-shape")
+            return refuse("router-input-changed")
         if output.get("operation") != "select":
             return refuse("answer-shape")
         usage = output.get("usage")

@@ -254,7 +254,13 @@ class RouterInputTests(unittest.TestCase):
         self.assertTrue(router_input.verify(manifest, mirror, fingerprint, deadline=time.monotonic() + 120)['unchanged'])
         (self.repo / 'src/file.txt').write_text('Host changed after Router start', encoding="utf-8", newline="\n")
         self.assertEqual((mirror / 'src/file.txt').read_text(encoding="utf-8"), 'dirty frozen input')
-        self.assertEqual(router_input.verify(manifest, mirror, fingerprint, deadline=time.monotonic() + 120)['code'], 'router-out-of-bounds')
+        self.assertEqual(router_input.verify(manifest, mirror, fingerprint, deadline=time.monotonic() + 120)['code'], 'router-input-changed')
+        next_attempt = self.root / 'next-attempt'
+        next_attempt.mkdir()
+        with self.assertRaises(BoardError) as changed:
+            router_input.prepare(manifest, next_attempt, deadline=time.monotonic() + 120)
+        self.assertEqual(changed.exception.code, 'router-input-changed')
+        self.assertFalse((next_attempt / 'frozen-input').exists())
 
     def test_many_files_are_read_through_one_batch_process_and_failures_leave_no_copy(self):
         from unittest import mock

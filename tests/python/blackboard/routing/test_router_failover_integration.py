@@ -311,9 +311,7 @@ class FailoverTests(RouterDispatchTestCase):
         request, first = self.start(review=True)
         output = self.failure(first, "provider-error")
         output["inputVerification"]["unchanged"] = False
-        response = self.report(first, output, status="failed")
-        self.assertEqual(response["decision"]["outcome"], "rerouted")
-        self.assertNotEqual(self.current_task(request["decisionId"]), request["runId"])
+        self.assert_boundary(request, first, output, status="failed")
 
     def test_current_dispatch_identity_survives_a_later_snapshot(self):
         request, first = self.start()
@@ -700,7 +698,7 @@ install_no_answer_case("outer_failed_native_stopped", lambda self, claim, o: o, 
 install_no_answer_case("review_failed_missing_verification", lambda self, claim, o: {**self.failure(claim, "provider-error"), "inputVerification": None},
                       "provider-error", review=True, outer="failed")
 install_no_answer_case("review_answer_missing_verification", lambda self, claim, o: {**o, "inputVerification": None},
-                      "answer-shape", review=True)
+                      "router-input-changed", review=True)
 
 for stream in ("child", "late", "reversed", "unfinished", "unclosed"):
     install_no_answer_case("stream_" + stream, lambda self, claim, output, stream=stream: self.bad_native_stream(claim, stream),
@@ -720,13 +718,7 @@ def install_change_case(name, mutate, *, review=False, micro_task=False, outcome
         request, first = self.start(review=review, micro_task=micro_task)
         output = self.failure(first)
         mutate(self, request, first, output)
-        if outcome == "rerouted":
-            response = self.report(first, output)
-            self.assertEqual(response["decision"]["outcome"], "rerouted")
-            self.assertEqual(response["decision"]["status"], "queued")
-            self.assertEqual(self.outcomes(), [])
-        else:
-            self.assert_boundary(request, first, output, outcome=outcome)
+        self.assert_boundary(request, first, output, outcome=outcome)
     setattr(FailoverTests, "test_boundary_" + name, test)
 
 
@@ -756,8 +748,8 @@ install_change_case("route", execute_change("UPDATE workflow_routes SET state='f
 install_change_case("parent_cancel", execute_change("UPDATE workflow_runs SET state='cancelled'"), micro_task=True, outcome="cancelled")
 install_change_case("task_cancel_race", execute_change("UPDATE tasks SET state='cancelling' WHERE owner='decision'"), outcome="cancelled")
 install_change_case("attempt_cancel_race", execute_change("UPDATE attempts SET cancel_requested_at=?", (T0,)), outcome="cancelled")
-install_change_case("copy", lambda self, request, claim, output: output["inputVerification"].update(unchanged=False), review=True, outcome="rerouted")
-install_change_case("manifest", lambda self, request, claim, output: output["inputVerification"].update(manifestSha256="changed"), review=True, outcome="rerouted")
+install_change_case("copy", lambda self, request, claim, output: output["inputVerification"].update(unchanged=False), review=True)
+install_change_case("manifest", lambda self, request, claim, output: output["inputVerification"].update(manifestSha256="changed"), review=True)
 
 
 for layer in ("controller", "native"):

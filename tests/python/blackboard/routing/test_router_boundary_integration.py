@@ -165,18 +165,20 @@ class BoundaryReadingTests(RouterDispatchTestCase):
                                                (claim["attempt"]["attemptId"],)).fetchone()[0])
                 self.assertEqual(receipt["result"], original)
 
-    def test_rerouted_round_does_not_project_an_old_attempt(self):
+    def test_old_attempt_does_not_borrow_a_new_attempts_decision_code(self):
         request, first = self.start(review=True)
         output = self.answer(first)
         output["inputVerification"]["unchanged"] = False
         self.report(first, output)
         with self.board_.store.db.read() as db:
             row = dict(self.board_.store.decisions._row(db, request["decisionId"]))
-            trials = router_trials(db, row, now=self.clock.value)
-            self.assertTrue(all(trial["attemptId"] != first["attempt"]["attemptId"] for trial in trials))
-            row.update(decision_attempt_id="newer-attempt", decision_generation=1,
+            self.assertEqual(router_trials(db, row, now=self.clock.value)[0]["code"], "router-input-changed")
+            row.update(decision_attempt_id="newer-attempt", decision_generation=row["decision_generation"] + 1,
                        reason_code="router-out-of-bounds")
-            self.assertEqual(router_trials(db, row, now=self.clock.value), trials)
+            trial = router_trials(db, row, now=self.clock.value)[0]
+        self.assertEqual(trial["attemptId"], first["attempt"]["attemptId"])
+        self.assertEqual(trial["outcome"], "unknown")
+        self.assertIsNone(trial["code"])
 
     def test_invalid_null_is_no_answer_and_never_model_reason_abstention(self):
         request, first = self.start()
