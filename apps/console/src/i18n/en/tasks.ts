@@ -9,7 +9,7 @@ export const tasks = {
     events: { decide: "Decision", continue: "Continuation", integrate: "Integration", accept: "Accepted", reject: "Rejected", conclude: "Conclusion", cancel: "Cancelled", takeover: "Takeover" },
   },
 
-  waiting: "Waiting for a hand", failed: "Failed",
+  waiting: "Waiting on someone", failed: "Failed",
   unknownProject: "Unrecorded project", macro: "Macro tasks", list: "Macro task list", entries: "Macro task entries", collapse: "Collapse macro task list", expand: "Expand macro task list",
   search: "Search title, project, Host or ID", all: "All", active: "Running", host: "Waiting for Host", review: "Awaiting acceptance", accepted: "Accepted", ended: "Ended",
   filterHost: "Host", filterReview: "Acceptance", standalone: "Standalone micro tasks", source: "From the first line", unnamed: "Unnamed", update: "New activity, sort by latest activity", earlier: "Earlier", loading: "Reading", retry: "Reconnect",

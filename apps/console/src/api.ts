@@ -306,7 +306,10 @@ function validTimelineRows(rows: unknown): boolean {
     const entry = row as TimelineRow | null;
     return !!entry && typeof entry === "object"
       && (entry.taskSummary === null || typeof entry.taskSummary === "string")
-      && (!Object.hasOwn(entry, "fixes") || (typeof entry.fixes === "string" && entry.fixes.length > 0))
+      && (Object.hasOwn(entry, "fixes")
+        ? typeof entry.fixes === "string" && entry.fixes.length > 0 && typeof entry.fixesTitle === "string"
+          && ["title", "task", "none"].includes(entry.fixesTitleSource!)
+        : !Object.hasOwn(entry, "fixesTitle") && !Object.hasOwn(entry, "fixesTitleSource"))
       && (!Object.hasOwn(entry, "fixedBy") || (Array.isArray(entry.fixedBy) && entry.fixedBy.length > 0
         && entry.fixedBy.every(runId => typeof runId === "string" && runId.length > 0)));
   });

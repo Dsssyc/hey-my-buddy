@@ -87,19 +87,23 @@ export function TaskDetail({ client, runId, timeline, timelineLoading, railTarge
     if (steps !== null && chosen !== null && step !== chosen + 1) onStep(chosen + 1);
   }, [steps === null, chosen, step]);
 
-  // Esc goes back, unless something above the detail has taken the key or a field is being written in.
+  // Detail keys leave fields and dialogs to their own controls.
   useEffect(() => {
     if (!active) return;
     const onKey = (event: KeyboardEvent) => {
-      if (event.key !== "Escape" || event.defaultPrevented) return;
+      if (!["Escape", "ArrowLeft", "ArrowRight"].includes(event.key) || event.defaultPrevented) return;
       const target = event.target as HTMLElement | null;
       if (target?.closest("input, textarea, select, [role=dialog]")) return;
+      if (event.key === "Escape") { event.preventDefault(); onBack(); return; }
+      if (steps === null || chosen === null) return;
       event.preventDefault();
-      onBack();
+      const next = Math.max(0, Math.min(steps.steps.length - 1, chosen + (event.key === "ArrowRight" ? 1 : -1)));
+      if (next !== chosen) onStep(next + 1);
+      railTarget?.querySelector<HTMLButtonElement>(`[data-step="${next + 1}"]`)?.focus();
     };
     document.addEventListener("keydown", onKey);
     return () => document.removeEventListener("keydown", onKey);
-  }, [active, onBack]);
+  }, [active, onBack, steps, chosen, onStep, railTarget]);
 
   // The view brings its own hints, so that it stands in any page.
   const bare = (body: ReactNode) => <TooltipProvider delayDuration={300}>

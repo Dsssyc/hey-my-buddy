@@ -153,8 +153,8 @@ HOST_CONCLUSION_KEYS = {"conclusionId", "attemptId", "executionStatus", "note", 
                         "runRevision"}
 TOKEN_USAGE_KEYS = {"inputTokens", "cachedInputTokens", "outputTokens", "source", "scope"}
 
-#: ``--emit-fixtures`` tree: the scenario order and the exact file set beneath
-#: each scenario directory (manifest entries are sorted by scenario, then path).
+#: ``--emit-fixtures`` manifest: the scenario order and exact fixture files
+#: (entries are sorted by scenario, then path).
 EMIT_SOURCE = "tests/probes/macro_task_console_preview.py"
 EMIT_SCENARIOS = ("normal", "readonly", "truncated", "error")
 EMIT_LAYOUT = {
@@ -1294,7 +1294,10 @@ def timeline_row(entry: dict, depth: int) -> dict:
         "reviewRejectedAt": None, "reviewRejectionNote": None,
     }
     if entry["runId"] in PREVIEW_FIXES:
-        row["fixes"] = PREVIEW_FIXES[entry["runId"]]
+        target = FIXTURES["runs"][PREVIEW_FIXES[entry["runId"]]]
+        row["fixes"] = target["runId"]
+        row["fixesTitle"] = target["title"] or UNTITLED
+        row["fixesTitleSource"] = target["titleSource"]
     fixed_by = [run_id for run_id, target in PREVIEW_FIXES.items() if target == entry["runId"]]
     if fixed_by:
         row["fixedBy"] = fixed_by
@@ -1512,24 +1515,6 @@ def macro_task_timeline(params: dict, scenario: str) -> dict:
         "scopeComplete": not applied and not any(truncated.values()),
     }
 
-
-def task_page(params: dict) -> dict:
-    if params.get("before"):
-        raise PreviewError("UNSUPPORTED", "The synthetic preview serves one task page; omit before")
-    limit = parse_limit(params, 20, 100)
-    applied = applied_filters(params)
-    entries = [entry for entry in FIXTURES["runs"].values() if matches(entry, applied)]
-    if params.get("state"):
-        entries = [entry for entry in entries if entry["status"] == params["state"]]
-    if params.get("adapter"):
-        entries = [entry for entry in entries
-                   if (entry["adapter"] or (entry["buddy"] or {}).get("harness")) == params["adapter"]]
-    if (params.get("rootsOnly") or "false").lower() in ("true", "1"):
-        entries = [entry for entry in entries if entry["parentRunId"] is None]
-    entries.sort(key=lambda entry: (entry["createdAt"], entry["runId"]), reverse=True)
-    views = [task_view(entry) for entry in entries[:limit]]
-    return {"runs": views, "total": len(entries), "cursor": FIXTURES["head"],
-            "nextCursor": None}
 
 
 def buddy_views() -> list[dict]:
@@ -1908,7 +1893,6 @@ def endpoint_lines(port: int) -> tuple[str, ...]:
         f"GET  {base}/api/macro-tasks",
         f"GET  {base}/api/macro-tasks/{MACRO_A}/timeline",
         f"GET  {base}/api/macro-tasks/{urllib.parse.quote(STANDALONE_GROUP, safe='')}/timeline",
-        f"GET  {base}/api/tasks",
         f"GET  {base}/api/tasks/preview-run-a1",
         f"GET  {base}/api/runtime-version",
         f"POST {base}/api/command  workflow_get · message_list · selection_get · selection_list · "
@@ -2013,10 +1997,6 @@ class PreviewHandler(BaseHTTPRequestHandler):
             if path == "/api/macro-tasks":
                 params = parse_query(query, frozenset({"limit", "projectId", "hostId", "query", "filter"}))
                 return self._json(200, macro_task_page(params))
-            if path == "/api/tasks":
-                params = parse_query(query, frozenset({"limit", "state", "adapter", "before", "rootsOnly",
-                                                       "query", "projectId", "hostId", "filter"}))
-                return self._json(200, task_page(params))
             if path == "/api/runtime-version":
                 return self._json(200, runtime_version_report())
             if path.startswith("/api/macro-tasks/") and path.endswith("/timeline"):
@@ -2302,6 +2282,8 @@ def validate_fixtures() -> list[str]:
     fixes = {row["runId"]: row for row in timeline["rows"]}
     if (fixes["preview-run-a2"].get("fixes") != "preview-run-a1"
             or fixes["preview-run-a3"].get("fixes") != "preview-run-a1"
+            or fixes["preview-run-a2"].get("fixesTitle") != FIXTURES["runs"]["preview-run-a1"]["title"]
+            or fixes["preview-run-a2"].get("fixesTitleSource") != "title"
             or fixes["preview-run-a1"].get("fixedBy") != ["preview-run-a2", "preview-run-a3"]):
         problems.append("preview must show two fixes of the same accepted micro task")
     for run_id, fixed_run_id in PREVIEW_FIXES.items():
@@ -2696,12 +2678,15 @@ def emit_fixture_files() -> list[dict]:
             add(scenario, "console.json", "console-snapshot", "GET /api/console", 200, "accepted",
                 console_snapshot(scenario, assets_ready=False), request={})
         if scenario == "normal":
-            # The records view's paginated read and the settings page's version
-            # facts are read separately from the slim snapshot.
-            add(scenario, "tasks.json", "task-page", "GET /api/tasks", 200, "accepted",
-                task_page({}), request={})
+            # Settings reads version facts separately from the slim snapshot.
             add(scenario, "runtime-version.json", "runtime-version", "GET /api/runtime-version",
                 200, "accepted", runtime_version_report(), request={})
+            # Task views let the parser check that timeline lineage matches its
+            # full task records. This is internal evidence, not an HTTP route.
+            records = [task_view(entry) for entry in FIXTURES["runs"].values()]
+            add(scenario, "tasks.json", "lineage-records", "fixture:lineage-records",
+                200, "accepted", {"runs": records, "total": len(records),
+                                   "cursor": FIXTURES["head"], "nextCursor": None}, request={})
         add(scenario, "macro-tasks.json", "macro-tasks-page", "GET /api/macro-tasks", 200, "accepted",
             macro_task_page({}), request={})
         if scenario == "error":
@@ -2888,10 +2873,8 @@ def smoke(assets: Path, scenario: str) -> int:
         check("slim snapshot carries the board-wide pending count",
               snapshot.get("tasks") == {"pendingCount": pending_root_count()},
               str(snapshot.get("tasks")))
-        status, records, _headers = call("GET", "/api/tasks?rootsOnly=true&limit=50")
-        check("GET /api/tasks serves the paginated records page", status == 200
-              and isinstance(records.get("runs"), list) and isinstance(records.get("total"), int)
-              and records.get("nextCursor") is None, f"status={status}")
+        status, _records, _headers = call("GET", "/api/tasks")
+        check("removed GET /api/tasks returns 404", status == 404, f"status={status}")
         status, version, _headers = call("GET", "/api/runtime-version")
         check("GET /api/runtime-version serves the version facts", status == 200
               and version.get("running", {}).get("mode") == "runtime"

@@ -44,8 +44,8 @@ describe("macro task list", () => {
     fireEvent.change(screen.getByRole("textbox"), { target: { value: "原文" } }); expect(p.onQueryChange).toHaveBeenCalledWith("原文");
     const row = screen.getByRole("button", { name: /宏任务时间轴：设计、接口与实现/ });
     expect(row.querySelector("time")?.getAttribute("datetime")).toBe(p.rows[0].lastActivityAt);
-    expect(within(row).getByLabelText("进行中 1")).toBeTruthy();
-    expect(within(row).getByLabelText("已验收 2")).toBeTruthy();
+    expect(within(row).getByText("进行中 1", { selector: ".sr-only" })).toBeTruthy();
+    expect(within(row).getByText("已验收 2", { selector: ".sr-only" })).toBeTruthy();
     await userEvent.click(row); expect(p.onSelect).toHaveBeenCalledWith(p.rows[0].macroTaskId);
   });
   it("draws only actionable state edges, names the state and keeps the count marks", () => {
@@ -65,12 +65,16 @@ describe("macro task list", () => {
     expect(rows.map(row => row.classList.contains("before:w-[3px]"))).toEqual([true, true, false, false, false]);
     expect(rows.every(row => !row.querySelector(":scope > [data-slot=state-mark]"))).toBe(true);
     for (const [index, status] of ["等人接手", "进行中", "失败", "已验收", "已结束"].entries()) {
-      expect(screen.getByRole("button", { name: `标题 ${index} · ${status}` })).toBe(rows[index]);
+      const row = rows[index] as HTMLButtonElement;
+      expect(row.hasAttribute("aria-label")).toBe(false);
+      const time = row.querySelector("time")!.textContent!;
+      expect(screen.getByRole("button", { name: new RegExp(`标题 ${index}.*${time}.*${status}`) })).toBe(row);
+      if (index === 0) expect(screen.getByRole("button", { name: /标题 0.*等人接手.*等人接手 3/ })).toBe(row);
     }
     expect(rows[2].querySelector('[data-slot="macro-entry-counts"] [data-kind="fail"] path')).toBeTruthy();
-    expect(within(rows[0] as HTMLElement).getByLabelText("等人接手 3")).toBeTruthy();
+    expect(within(rows[0] as HTMLElement).getByText("等人接手 3", { selector: ".sr-only" })).toBeTruthy();
     expect(rows[0].querySelectorAll('[data-slot="macro-entry-counts"] [data-kind="hand"]')).toHaveLength(1);
-    expect(within(rows[2] as HTMLElement).getByLabelText("失败 1")).toBeTruthy();
+    expect(within(rows[2] as HTMLElement).getByText("失败 1", { selector: ".sr-only" })).toBeTruthy();
     expect(rows[0].hasAttribute("aria-description")).toBe(false);
     expect(screen.getByRole("tab", { name: "等待 Host 1" }).hasAttribute("aria-description")).toBe(false);
     expect(screen.getByRole("textbox").getAttribute("data-slot")).toBe("macro-search");

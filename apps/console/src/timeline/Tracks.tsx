@@ -60,7 +60,7 @@ export function Axis({ scale, ongoing, nowMs }: { scale: TimelineScale; ongoing:
     // A clock stays with its tick, even if no room is left for its text.
     if (label && Math.abs((label.left + label.right) / 2 - x) <= measure(text) / 2 + 4) { labels.push({ ...label, y: 16, className: "fill-ink3" }); occupied.push(label); }
   }
-  return <svg data-slot="timeline-axis" viewBox={`-8 0 ${width + 16} 36`} width={width + 16} height="36" className="block max-w-none overflow-hidden text-xs" aria-label={t("timeline")}>
+  return <svg data-slot="timeline-axis" viewBox={`-8 0 ${width + 16} 36`} width={width + 16} height="36" className="block max-w-none overflow-hidden text-xs" aria-hidden="true">
     {ruler}<line x1={0} x2={width} y1={30} y2={30} className="stroke-line2"/>
     {scale.breaks.map((gap, index) => { const center = (gap.startX + gap.endX) / 2; return <g key={gap.startMs}>
       <rect x={gap.startX} width={gap.endX - gap.startX} height={36} className="fill-sunk"/>
@@ -76,9 +76,9 @@ export function Axis({ scale, ongoing, nowMs }: { scale: TimelineScale; ongoing:
 type PositionedSpan = { span: TimelineSpan; start: number; end: number; execution: boolean; outcome: ReturnType<typeof spanOutcome> };
 const diamond = (x: number, y: number) => `M${x} ${y - 5.5}l5.5 5.5-5.5 5.5-5.5-5.5Z`;
 
-export function Track({ row, spans, events, scale, nowMs, ongoing, buddies, onOpen, onHover, onFocusSpan, onEvent, selected }: {
+export function Track({ row, spans, events, scale, nowMs, ongoing, buddies, onOpen, onHover, onFocusSpan, onEvent, selected, tabKey }: {
   row: TimelineRow; spans: TimelineSpan[]; events: TimelineEvent[]; scale: TimelineScale; nowMs: number; ongoing: boolean;
-  buddies?: readonly FriendlyBuddy[] | null; selected: boolean;
+  buddies?: readonly FriendlyBuddy[] | null; selected: boolean; tabKey?: string;
   onOpen: (runId: string, key: string) => void; onHover: (span: TimelineSpan | null) => void; onFocusSpan: (span: TimelineSpan | null) => void;
   onEvent: (event: TimelineEvent | null) => void;
 }) {
@@ -100,7 +100,7 @@ export function Track({ row, spans, events, scale, nowMs, ongoing, buddies, onOp
   const waitStart = latest ? instant(latest.endAt) : null;
   const waitEnd = acceptanceOpen ? nowMs : settledWait !== null ? instant(row.acceptedAt ?? row.reviewRejectedAt) : null;
   const acceptance = waitStart !== null && waitEnd !== null ? { start: scale.toX(waitStart)!, end: scale.toX(waitEnd)!, duration: formatDurationMinutes(waitEnd - waitStart) } : null;
-  const markers = events.filter(event => event.kind !== "dispatch").map(event => ({ event, x: scale.toX(instant(event.at)!)! }));
+  const markers = events.filter(event => event.kind !== "dispatch" && event.kind !== "integrate").map(event => ({ event, x: scale.toX(instant(event.at)!)! }));
   const inquiries = positioned.flatMap(({ span }) => (span.inquiries ?? []).map(inquiry => ({ inquiry, x: scale.toX(instant(inquiry.createdAt)!)! })));
   const duration = (item: PositionedSpan) => formatDurationMinutes((instant(item.span.endAt) ?? nowMs) - instant(item.span.startAt)!);
   const waitingKind = (span: TimelineSpan) => span.kind === "queue" ? t("kind.queue") : i18n.t(row.rootLeadRunId ? "console:waitingForLead" : "console:waitingForHost");
@@ -128,7 +128,12 @@ export function Track({ row, spans, events, scale, nowMs, ongoing, buddies, onOp
     add([t("drawing.inquiry")], x - labelWidth / 2, x + labelWidth / 2, 12, "fill-ink2");
   }
   for (const entry of expected) add([entry.text], entry.item.start, entry.item.end, 58, "fill-hand", entry.x - measure(entry.text) - 4);
-  for (const marker of markers) add([eventName(marker.event)], marker.x + 10, scale.widthPx, 35, "fill-ink2", marker.x + 10, positioned.filter(item => item.execution).map(item => ({ left: item.start - 4, right: item.end + 4 })));
+  for (const marker of markers) {
+    const text = eventName(marker.event), room = measure(text) + 20;
+    if (markers.some(other => other !== marker && Math.abs(other.x - marker.x) < room)) continue;
+    const next = Math.min(scale.widthPx, ...markers.filter(other => other.x > marker.x).map(other => other.x - 10));
+    add([text], marker.x + 10, next, 35, "fill-ink2", marker.x + 10, positioned.filter(item => item.execution).map(item => ({ left: item.start - 4, right: item.end + 4 })));
+  }
   if (acceptance && acceptanceOpen) add([acceptanceLabel, t("review"), acceptance.duration!], acceptance.start + 10, acceptance.end, 12, "fill-hand");
   for (const item of positioned) {
     if (item.execution) {
@@ -138,12 +143,12 @@ export function Track({ row, spans, events, scale, nowMs, ongoing, buddies, onOp
     } else add([fullLabel(item), duration(item)!], item.start + (item.outcome === "open" && item.span.kind === "host" ? 10 : 0), item.end, 12, item.outcome === "open" && item.span.kind === "host" ? "fill-hand" : "fill-ink3");
   }
   return <svg data-slot="timeline-track" viewBox={`-8 0 ${scale.widthPx + 16} ${height}`} width={scale.widthPx + 16} height={height} preserveAspectRatio="none" className="block max-w-none overflow-hidden border-t text-xs" aria-label={t("track", { title: row.title })}>
-    {ruler}{scale.breaks.map(gap => <rect data-slot="timeline-break" key={gap.startMs} x={gap.startX} width={gap.endX - gap.startX} height={height} className="fill-sunk"/>)}
-    {ongoing && <line data-slot="timeline-now" x1={scale.toX(nowMs)!} x2={scale.toX(nowMs)!} y2={height} className="stroke-live opacity-60"/>}
+    {ruler}{scale.breaks.map(gap => <rect aria-hidden="true" data-slot="timeline-break" key={gap.startMs} x={gap.startX} width={gap.endX - gap.startX} height={height} className="fill-sunk"/>)}
+    {ongoing && <line aria-hidden="true" data-slot="timeline-now" x1={scale.toX(nowMs)!} x2={scale.toX(nowMs)!} y2={height} className="stroke-live opacity-60"/>}
     {acceptance && <g><line data-slot="acceptance-wait" x1={acceptance.start} x2={acceptance.end} y1={middle} y2={middle} strokeWidth={acceptanceOpen ? 2 : 1.5} strokeDasharray={acceptanceOpen ? "5 4" : undefined} className={acceptanceOpen ? "stroke-hand-mark" : "stroke-ink3"}/>{acceptanceOpen && <path data-slot="waiting-diamond" d={diamond(acceptance.start, middle)} className="fill-hand-mark"/>}</g>}
-    {positioned.map(({ span, start, end, execution, outcome }) => <g key={span.spanId} role="button" tabIndex={-1} data-key={`span:${span.spanId}`} aria-label={t("segment", { label: spanReadout(span, nowMs, buddies, row) })}
+    {positioned.map(({ span, start, end, execution, outcome }) => <g key={span.spanId} role="button" tabIndex={tabKey === `span:${span.spanId}` ? 0 : -1} data-at={instant(span.startAt)!} data-key={`span:${span.spanId}`} aria-label={t("segment", { label: spanReadout(span, nowMs, buddies, row) })}
       onKeyDown={event => { if (event.key === "Enter") { event.preventDefault(); onOpen(row.runId, `span:${span.spanId}`); } }}
-      onFocus={() => onFocusSpan(span)} onBlur={() => onFocusSpan(null)} onClick={() => onOpen(row.runId, `span:${span.spanId}`)} onPointerEnter={() => onHover(span)} onPointerLeave={() => onHover(null)} className="cursor-pointer outline-none">
+      onFocus={() => onFocusSpan(span)} onBlur={() => onFocusSpan(null)} onClick={() => onOpen(row.runId, `span:${span.spanId}`)} onPointerEnter={() => onHover(span)} onPointerLeave={() => onHover(null)} className="group/fragment cursor-pointer outline-none">
       {selected && <rect data-slot="selected-span" x={Math.max(-6, start - 2)} y={execution ? middle - 13 : middle - 3} width={Math.max(5, end - start + 4)} height={execution ? 26 : 6} fill="none" className="stroke-live"/>}
       <rect x={start - 3} y={middle - 14} width={Math.max(6, end - start + 6)} height={28} fill="transparent"/>
       {execution ? <rect data-slot={span.kind === "routing" ? "routing-bar" : "execution-bar"} data-outcome={outcome} x={start} y={middle - 11} width={Math.max(1, end - start)} height={22}
@@ -152,14 +157,16 @@ export function Track({ row, spans, events, scale, nowMs, ongoing, buddies, onOp
         : <line data-slot={`${span.kind}-wait`} x1={start} x2={end} y1={middle} y2={middle} strokeWidth={outcome === "open" && span.kind === "host" ? 2 : 1.5} strokeDasharray={outcome === "open" && span.kind === "host" ? "5 4" : undefined} className={outcome === "open" && span.kind === "host" ? "stroke-hand-mark" : "stroke-ink3"}/>}
       {span.kind === "host" && outcome === "open" && <path data-slot="waiting-diamond" d={diamond(start, middle)} className="fill-hand-mark"/>}
       {outcome === "unknown" && <path data-slot="unconfirmed-end" d={`M${end - 4} ${middle - 11}l4 6-4 5 4 5-4 6`} className="fill-none stroke-hand-mark" strokeWidth={2}/>}
+      <rect aria-hidden="true" data-slot="fragment-focus" x={Math.max(-6, start - 5)} y={middle - 17} width={Math.max(12, end - start + 10)} height={34} fill="none" strokeWidth={2} className="pointer-events-none stroke-ink opacity-0 group-focus/fragment:opacity-100"/>
     </g>)}
     {tails.map(tail => <rect pointerEvents="none" data-slot="silent-tail" key={tail.item.span.spanId} x={tail.x} y={middle - 10.25} width={Math.max(0, tail.item.end - tail.x)} height={20.5} strokeWidth={1.5} className="fill-hand-wash stroke-hand-mark"/>)}
     {expected.map(entry => <line pointerEvents="none" data-slot="expected-mark" key={entry.item.span.spanId} x1={entry.x} x2={entry.x} y1={middle - 16} y2={middle + 16} strokeWidth={2} className="stroke-hand-mark"/>)}
     {inquiries.map(({ inquiry, x }) => <path pointerEvents="none" data-slot="inquiry-mark" key={inquiry.inquiryId} d={diamond(x, middle)} className="fill-card stroke-ink2" strokeWidth={1.3}/>)}
-    {markers.map(({ event, x }) => <g key={event.seq} role="button" tabIndex={-1} data-key={`event:${event.seq}`} aria-label={eventReadout(event)} onPointerEnter={() => onEvent(event)} onPointerLeave={() => onEvent(null)} onFocus={() => onEvent(event)} onBlur={() => onEvent(null)}
-      onClick={() => onOpen(row.runId, `event:${event.seq}`)} onKeyDown={key => { if (key.key === "Enter") onOpen(row.runId, `event:${event.seq}`); }} className="cursor-pointer outline-none">
+    {markers.map(({ event, x }) => <g key={event.seq} role="button" tabIndex={tabKey === `event:${event.seq}` ? 0 : -1} data-at={instant(event.at)!} data-key={`event:${event.seq}`} aria-label={eventReadout(event)} onPointerEnter={() => onEvent(event)} onPointerLeave={() => onEvent(null)} onFocus={() => onEvent(event)} onBlur={() => onEvent(null)}
+      onClick={() => onOpen(row.runId, `event:${event.seq}`)} onKeyDown={key => { if (key.key === "Enter") onOpen(row.runId, `event:${event.seq}`); }} className="group/fragment cursor-pointer outline-none">
       {event.kind === "accept" ? <path data-slot="accept-mark" d={`M${x - 5} ${middle}l3 3 7-8`} fill="none" className="stroke-past" strokeWidth={1.8}/> : <circle data-slot="event-mark" cx={x} cy={middle} r={2.5} className="fill-past"/>}
+      <rect aria-hidden="true" data-slot="fragment-focus" x={x - 8} y={middle - 10} width={16} height={20} fill="none" strokeWidth={2} className="pointer-events-none stroke-ink opacity-0 group-focus/fragment:opacity-100"/>
     </g>)}
-    {labels.map((label, index) => <text pointerEvents="none" data-slot="track-label" key={index} x={label.left} y={label.y} className={label.className}>{label.text}</text>)}
+    {labels.map((label, index) => <text aria-hidden="true" pointerEvents="none" data-slot="track-label" key={index} x={label.left} y={label.y} className={label.className}>{label.text}</text>)}
   </svg>;
 }

@@ -123,3 +123,61 @@ for (const width of [1440, 390]) test.describe(`many breaks at ${width}px`, () =
     await expectNoSidewaysScroll(page);
   });
 });
+
+
+for (const locale of ["zh-CN", "en-US"]) for (const width of [1440, 390]) test.describe(`timeline keyboard ${locale} ${width}`, () => {
+  test.use({ locale, viewport: { width, height: 1000 }, reducedMotion: "reduce" });
+  test("uses one Tab stop, reads each focused fragment, and navigates open tasks and steps", async ({ page }, testInfo) => {
+    await open(page, `#tasks/${macro}`);
+    const allRows = page.locator('[data-slot=timeline-row-name]:visible');
+    const first = allRows.first();
+    await expect(first).toHaveAttribute("tabindex", "0");
+    await first.focus();
+    await page.keyboard.press("Shift+Tab");
+    await page.keyboard.press("Tab");
+    await expect(first).toBeFocused();
+    await page.keyboard.press("ArrowDown");
+    await expect(allRows.nth(1)).toBeFocused();
+    await page.keyboard.press("ArrowUp");
+    await expect(first).toBeFocused();
+    const keyboardRun = "preview-run-a1";
+    const selected = row(page, keyboardRun);
+    await selected.focus();
+    const keys = await page.locator(`[data-slot=timeline-row][data-run-id="${keyboardRun}"] [data-slot=timeline-track] [data-key]`).evaluateAll(elements => elements
+      .sort((left, right) => Number(left.getAttribute("data-at")) - Number(right.getAttribute("data-at")))
+      .map(element => element.getAttribute("data-key")!));
+    const fragment = (key: string) => page.locator(`[data-slot=timeline-track] [data-key="${key}"]`);
+    await page.keyboard.press("ArrowRight");
+    await expect(fragment(keys[0])).toBeFocused();
+    const readout = await page.locator('[data-slot=timeline-status]').innerText();
+    await expect(page.getByRole("button", { name: readout, exact: true })).toBeFocused();
+    await expect(fragment(keys[0]).locator('[data-slot=fragment-focus]')).toHaveCSS("opacity", "1");
+    await page.screenshot({ path: testInfo.outputPath("fragment-focus.png") });
+    await page.keyboard.press("ArrowLeft");
+    await expect(selected).toBeFocused();
+    await page.keyboard.press("End"); await expect(fragment(keys.at(-1)!)).toBeFocused();
+    await page.keyboard.press("Home"); await expect(fragment(keys[0])).toBeFocused();
+    const execution = "span:execution:att-a1-2";
+    for (let index = 0; index < keys.indexOf(execution); index++) await page.keyboard.press("ArrowRight");
+    await expect(fragment(execution)).toBeFocused();
+    await page.keyboard.press("Enter");
+    await expect(selected).toHaveAttribute("aria-expanded", "true");
+    const chosen = page.locator('[data-slot=detail-rail] [aria-current=step]');
+    await expect(chosen).toContainText(locale === "zh-CN" ? "回合 2" : "Turn 2");
+    const current = Number(await chosen.getAttribute("data-step"));
+    await page.keyboard.press("ArrowLeft"); await expect(chosen).toHaveAttribute("data-step", String(current - 1));
+    await expect(chosen).toBeFocused();
+    await page.keyboard.press("ArrowRight"); await expect(chosen).toHaveAttribute("data-step", String(current));
+    await page.keyboard.press("ArrowDown");
+    await expect(page.locator(`[data-slot=timeline-row-name][data-run-id="${keyboardRun}"]`)).toHaveAttribute("aria-expanded", "false");
+    const adjacent = page.locator('[data-slot=timeline-row-name][aria-expanded=true]');
+    await expect(adjacent).toBeFocused();
+    await page.keyboard.press("ArrowUp"); await expect(selected).toHaveAttribute("aria-expanded", "true");
+    await page.keyboard.press("Escape");
+    await expect(selected).toBeFocused(); await expect(selected).toHaveAttribute("aria-expanded", "false");
+    await page.keyboard.press("Tab");
+    await expect(page.locator('[data-slot=task-work] [data-key]:focus')).toHaveCount(0);
+    await page.keyboard.press("Shift+Tab"); await expect(selected).toBeFocused();
+    await expectNoSidewaysScroll(page);
+  });
+});

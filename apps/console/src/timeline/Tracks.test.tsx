@@ -86,13 +86,24 @@ describe("timeline drawings follow recorded facts", () => {
     expect(slot("queue-wait")?.hasAttribute("stroke-dasharray")).toBe(false);
     expect(document.querySelector('[data-slot=track-label]')?.textContent).toContain("排队");
   });
-  it("draws hollow inquiries, acceptance checks and dots for every other Host event, excluding dispatch", () => {
+  it("draws hollow inquiries, acceptance checks and dots for every other Host event, excluding dispatch and integration", () => {
     const events = ["dispatch", "accept", "decide", "continue", "integrate", "reject", "conclude", "cancel", "takeover"].map((kind, seq) => ({ ...base.events[0]!, seq, kind, at: at(16 + seq * 2), summary: "Explanation" }));
     track([execution({ inquiries: [{ inquiryId: "q", createdAt: at(10), author: "host-1", state: "answered" }] })], { events });
     expect(slot("inquiry-mark")?.getAttribute("class")).toContain("fill-card");
     expect(document.querySelectorAll('[data-slot=accept-mark]')).toHaveLength(1);
-    expect(document.querySelectorAll('[data-slot=event-mark]')).toHaveLength(7);
+    expect(document.querySelectorAll('[data-slot=event-mark]')).toHaveLength(6);
     expect(spanReadout(execution({ inquiries: [{ inquiryId: "q", createdAt: at(10), author: "host-1", state: "answered" }] }), Date.parse(at(40)))).toContain("已答复");
+  });
+  it("keeps crowded event names in the accessible readout and omits integration", () => {
+    const events = ["reject", "continue", "integrate", "accept"].map((kind, seq) => ({ ...base.events[0]!, seq, kind, at: at(20), summary: "Explanation" }));
+    track([], { events });
+    expect(document.querySelector('[data-key="event:2"]')).toBeNull();
+    expect(document.querySelectorAll('[data-slot=track-label]')).toHaveLength(0);
+    expect(document.querySelector('[data-key="event:0"]')?.getAttribute("aria-label")).toContain("Explanation");
+  });
+  it("hides ticks and breaks from screen readers", () => {
+    render(<Axis scale={scale} ongoing nowMs={Date.parse(at(40))}/>);
+    expect(slot("timeline-axis")?.getAttribute("aria-hidden")).toBe("true");
   });
   it("draws a centered duration and fracture on the axis", () => {
     const folded = createTimelineScale({ domain: { startMs: Date.parse(at(0)), endMs: Date.parse(at(40)) }, busy: [{ startMs: Date.parse(at(0)), endMs: Date.parse(at(2)) }, { startMs: Date.parse(at(38)), endMs: Date.parse(at(40)) }], instants: [Date.parse(at(2)), Date.parse(at(38))], canFold: true, nowAtEnd: true }, 800);
