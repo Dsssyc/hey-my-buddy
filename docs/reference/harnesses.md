@@ -52,7 +52,7 @@ Native exhaustion is separate from display freshness: only explicit native quota
 
 ## Harness private paths (0.24.0)
 
-Service-selected command metadata remains nonsecret attempt evidence. Buddy-owned native bindings/sessions are under `harnesses/<adapter>/goals/<taskHash>/native/`; per-attempt credentials, settings, provider snapshots and Router roots are under that goal’s `attempts/<attemptId>/`. These areas never enter backup inventory. Confirmed stop removes attempt credentials/snapshots; unknown stop is retained and visible in storage plan. [Operations](operations.md#backup-upgrade-and-storage-contract) and [the classification](../design/private-directories.md) own details.
+Service-selected command metadata remains nonsecret attempt evidence. Buddy-owned native bindings/sessions are under `harnesses/<adapter>/goals/<taskHash>/native/`; per-attempt credentials, settings and Router roots are under that goal’s `attempts/<attemptId>/`. These areas never enter backup inventory. Confirmed stop removes attempt credentials; unknown stop is retained and visible in storage plan. [Operations](operations.md#backup-upgrade-and-storage-contract) and [the classification](../design/private-directories.md) own details.
 
 Router attempts retain their native identity, cumulative usage and actual stop evidence in their ordinary private controller result. No paid verifier evidence resource is published. A successful effective-policy readback cannot replace the frozen-input digest check or actual native/controller shutdown evidence.
 

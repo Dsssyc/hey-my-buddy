@@ -83,7 +83,7 @@ from ..run_contract import (
     StopEvidence,
     StopLayer,
 )
-from .config import SUPPORTED_ACCESS, cli_command, provider_access_types, provider_paths, snapshot_provider_files
+from .config import cli_command, provider_access_types, provider_paths
 from ..inquiry_bridge import InquiryBridge
 from ..c_two_live import CTwoLiveEndpoint
 from ....protocol.activity import ActivityPublisher
@@ -94,7 +94,9 @@ from .protocol import (
     NativeError,
     RootTurnEvidence,
     ZcodeAttemptUsage,
+    combined_usage,
     quota_failure,
+    native_turn_failure,
 )
 from .tool_evidence import ZcodeToolFacts
 
@@ -110,13 +112,11 @@ def selected(snapshot: dict) -> dict:
             "effort": value.get("options", {}).get("reasoningLevel")}
 
 
-def configure_session(connection: NativeConnection, snapshot: dict, spec: dict, access: dict) -> dict:
+def configure_session(connection: NativeConnection, snapshot: dict, spec: dict) -> dict:
     session_id = snapshot["session"]["sessionId"]
     if any(not isinstance(spec.get(k), str) or not spec[k].strip() for k in ("provider", "model", "effort")):
         raise NativeError("invalid-configuration", "ZCode coding requires a complete provider, model and effort after routing")
     provider, model, effort = spec["provider"], spec["model"], spec["effort"]
-    if access.get(provider) not in SUPPORTED_ACCESS:
-        raise NativeError("unsupported-provider", "this ZCode adapter supports API-key providers; OAuth account providers require a native authentication host")
     choices = snapshot.get("settings", {}).get("model", {}).get("available", [])
     choice = next((x for x in choices if x.get("ref") == {"providerId": provider, "modelId": model}), None)
     if choice is None:
@@ -141,7 +141,7 @@ def catalog(snapshot: dict, access: dict, version: str) -> dict:
     for model in snapshot.get("settings", {}).get("model", {}).get("available", []):
         ref = model.get("ref") or {}
         provider = ref.get("providerId")
-        if access.get(provider) not in SUPPORTED_ACCESS or not ref.get("modelId"):
+        if not provider or not ref.get("modelId"):
             continue
         efforts = [x["value"] for x in model.get("reasoning", {}).get("levels", [])
                    if isinstance(x, dict) and isinstance(x.get("value"), str) and x["value"].strip()]
@@ -149,24 +149,19 @@ def catalog(snapshot: dict, access: dict, version: str) -> dict:
             missing_effort = True
             continue
         entry = providers.setdefault(provider, {"provider": provider, "displayName": model.get("providerLabel") or provider,
-                                                 "adapter": "zcode", "packageVersion": version, "accessType": access[provider], "models": []})
+                                                 "adapter": "zcode", "packageVersion": version, "accessType": access.get(provider, "unknown"), "models": []})
         entry["models"].append({"id": ref["modelId"], "name": model.get("label") or ref["modelId"],
                                 "efforts": efforts,
                                 "contextWindow": model.get("contextWindow"), "available": True,
                                 "inputModalities": [name for name in ("text", "image", "audio", "video", "pdf")
                                                     if model.get("properties", {}).get("inputFormat", {}).get("supports" + name.capitalize()) is True]})
-    warnings = ["OAuth account providers are unavailable through this adapter"] if any(t == "zhipu-account" for t in access.values()) else []
+    warnings = []
     if missing_effort:
         warnings.append("Models exposing no configurable native reasoning efforts were omitted")
     if not providers:
-        # A successful native snapshot with no usable API-key provider is a
-        # complete observation, not a discovery failure: the service can retire
-        # profiles that are missing from it instead of leaving them unknown
-        # forever. The explicit ``discoveries`` status states that boundary.
-        warnings.append("The native app server returned no API-key provider; this complete empty observation retires missing ZCode profiles")
-    warnings.append("The account status is not applicable to this reading: this adapter reads only "
-                    "API-key providers out of the user's own configured native snapshot, and the "
-                    "no-prompt read carries no separate account check")
+        warnings.append("The native app server returned no models with configurable reasoning efforts; this complete empty observation retires missing ZCode profiles")
+    warnings.append("The account status is not applicable to this reading: the no-prompt native "
+                    "model snapshot carries no separate account check")
     return {"source": "zcode-native-app-server", "adapter": "zcode", "harnessVersion": version,
             "discoveredAt": datetime.now(timezone.utc).isoformat(), "providers": list(providers.values()),
             "discoveries": [{"adapter": "zcode", "status": "complete", "accountStatus": "not-applicable"}],
@@ -300,14 +295,11 @@ def make_inquiry_bridge(*, identity: dict, journal_path: str,
 
 
 def check_preparation(spec: dict, environment: dict) -> None:
-    """Confirm native capability and the selected provider without spawning."""
+    """Confirm the native command without inspecting provider configuration."""
     try:
         cli_command(environment)
-        access = provider_access_types(*provider_paths(environment))
     except NativeError as error:
         raise BoardError("ADAPTER_UNAVAILABLE", str(error), adapter="zcode") from None
-    if access.get(spec["provider"]) not in SUPPORTED_ACCESS:
-        raise BoardError("ADAPTER_UNAVAILABLE", "the requested ZCode provider is not a supported API-key provider", adapter="zcode")
 
 
 def prepare_services(*, invocation_root: Path, identity: dict, input_sha256: str,
@@ -513,8 +505,8 @@ class NoToolProtocol:
                 or self.metadata_turn is not None and turn != self.metadata_turn):
             raise NativeError("wrong-native-turn", "no-tool lifecycle metadata differs from the admitted turn")
         self.metadata_turn = turn
-        if params["kind"] == "turn-failed":
-            raise NativeError("native-turn-failed", "no-tool native turn failed")
+        # Lifecycle projections precede the canonical turn.failed payload.
+        # Wait for that event to retain the same structured failure as the tool carrier.
 
     def observe(self, message: dict, _ordinal: int) -> None:
         method, params = message.get("method"), message.get("params")
@@ -552,7 +544,7 @@ class NoToolProtocol:
             elif not self.turn_id or params.get("turnId") != self.turn_id:
                 raise NativeError("wrong-native-turn", "no-tool event differs from the admitted turn")
             elif kind == "turn.failed":
-                raise NativeError("native-turn-failed", "no-tool native turn failed")
+                raise native_turn_failure(data)
             elif kind == "turn.completed":
                 if self.completed or data.get("inputId") != self.input_id or data.get("resultType") != "success":
                     raise NativeError("native-turn-failed", "no-tool native turn did not complete successfully")
@@ -620,7 +612,7 @@ class _Spawn:
     process: subprocess.Popen
     handle: ProcessHandle
     connection: NativeConnection
-    access: dict
+    command: list[str]
     version: str | None
 
 
@@ -642,12 +634,8 @@ def _spawn_app_server(*, cwd: str, invocation_root: Path, native_root: Path, dea
     root = ensure_private_dir(native_root)
     incoming = dict(os.environ)
     command = cli_command(incoming)
-    clean = native_environment(incoming, command=command)
+    environment = native_environment(incoming, command=command)
     private = ensure_private_dir(invocation_root)
-    environment, access = snapshot_provider_files(private, {**incoming, **clean})
-    # These paths were generated by the driver above, not inherited model endpoints.
-    clean.update({key: environment[key] for key in ('ZCODE_BUILTIN_PROVIDER_CONFIG_FILE', 'ZCODE_PERSONAL_PROVIDER_CONFIG_FILE')})
-    environment = clean
     if incoming.get("BUDDY_DEV_SOURCE") == "1" and "BUDDY_ZCODE_TEST_CASE" in incoming:
         environment["BUDDY_ZCODE_TEST_CASE"] = incoming["BUDDY_ZCODE_TEST_CASE"]
     # ZCODE_MODEL_TELEMETRY_ENABLED=0 short-circuits the single telemetry gate in
@@ -695,7 +683,7 @@ def _spawn_app_server(*, cwd: str, invocation_root: Path, native_root: Path, dea
             finally:
                 process.stdout.close()
         raise
-    return _Spawn(process=process, handle=handle, connection=connection, access=access, version=version)
+    return _Spawn(process=process, handle=handle, connection=connection, command=command, version=version)
 
 
 def _stop_native(spawn: _Spawn, deadline: float) -> tuple[bool, bool]:
@@ -810,7 +798,7 @@ def _open_root(connection: NativeConnection, workspace: dict, *, create_params: 
 
 
 def _admit_root_input(connection: NativeConnection, *, snapshot: dict, request: RunRequest,
-                      spec: dict, access: dict, input_id: str, input_text: str,
+                      spec: dict, input_id: str, input_text: str,
                       previous: str | None, mode: str, require_interactive: bool,
                       settled: Callable[[], bool], classifier: "_Classifier",
                       state: _RunState, on_configured: Callable[[str, dict], None] | None = None,
@@ -828,7 +816,7 @@ def _admit_root_input(connection: NativeConnection, *, snapshot: dict, request: 
     """
     session_id = _checked_root_session(snapshot, request.cwd, previous=previous, mode=mode,
                                        require_interactive=require_interactive)
-    resolved = configure_session(connection, snapshot, spec, access)
+    resolved = configure_session(connection, snapshot, spec)
     if on_configured is not None:
         # The run keeps its configuration facts the moment the native readback
         # confirmed them, so a later failure still reports what was resolved.
@@ -917,6 +905,7 @@ class _CarrierOutcome:
     evidence: RootTurnEvidence | None = None
     projection: ActivityProjection | None = None
     attempt_usage: ZcodeAttemptUsage | None = None
+    usage_rounds: list[ZcodeAttemptUsage] = dataclasses.field(default_factory=list)
     inquiry_bridge: InquiryBridge | None = None
     binding_path: Path | None = None
     record: dict | None = None
@@ -1106,6 +1095,7 @@ def _final_message_rounds(*, connection: NativeConnection, request: RunRequest, 
                 notify()
             if holder:
                 holder[0].observe(message, ordinal)
+                outcome.attempt_usage.observe(message, holder[0].turn_id)
         return observe
 
     protocol_holder: list = []
@@ -1116,8 +1106,11 @@ def _final_message_rounds(*, connection: NativeConnection, request: RunRequest, 
 
     def bind_protocol(opened_session: str) -> None:
         outcome.last_protocol = NoToolProtocol(opened_session, input_id, tools)
+        outcome.attempt_usage = ZcodeAttemptUsage(opened_session, resumed=False)
+        outcome.usage_rounds.append(outcome.attempt_usage)
         protocol_holder[:] = [outcome.last_protocol]
         connection.observe = final_chain(protocol_holder)
+        outcome.attempt_usage.capture_baseline(connection)
 
     input_text = request.input_text
     if no_tool:
@@ -1139,12 +1132,13 @@ def _final_message_rounds(*, connection: NativeConnection, request: RunRequest, 
         input_id = "buddy-no-tool-" + secrets.token_hex(16)
         outcome.session_id, outcome.resolved = _admit_root_input(
             connection, snapshot=snapshot, request=request, spec=configuration_spec(request),
-            access=spawn.access, input_id=input_id, input_text=input_text,
+            input_id=input_id, input_text=input_text,
             previous=None, mode="initial", require_interactive=False,
             settled=lambda: bool(outcome.last_protocol is not None and outcome.last_protocol.settled),
             classifier=classifier, state=state,
             on_configured=note_configured,
             before_send=lambda opened: bind_protocol(opened))
+        outcome.attempt_usage.capture_final(connection)
         protocol = outcome.last_protocol
         state.completion_ordinal = connection.ordinal
         final_message_completed = bool(protocol and protocol.completed)
@@ -1197,6 +1191,7 @@ def _governed_turn(*, connection: NativeConnection, request: RunRequest, service
     # identity is bound onto them the moment the root is opened.
     outcome.projection = ActivityProjection(None)
     outcome.attempt_usage = ZcodeAttemptUsage(None, resumed=mode == "native-session")
+    outcome.usage_rounds.append(outcome.attempt_usage)
     # Reuse the shared normalizer, monotone ordering and throttle for the
     # whole native turn. Final facts stay in the native projection even when
     # the controller has no live endpoint or refuses a publication.
@@ -1281,7 +1276,7 @@ def _governed_turn(*, connection: NativeConnection, request: RunRequest, service
 
     outcome.session_id, outcome.resolved = _admit_root_input(
         connection, snapshot=snapshot, request=request, spec=configuration_spec(request),
-        access=spawn.access, input_id=mount.input_id, input_text=request.input_text,
+        input_id=mount.input_id, input_text=request.input_text,
         previous=previous, mode=mode, require_interactive=True,
         settled=lambda: bool(outcome.evidence is not None and outcome.evidence.settled_ordinal),
         classifier=classifier, state=state, on_configured=note_configured,
@@ -1326,7 +1321,7 @@ def _stop_collection(*, spawn: _Spawn | None, deadline: float, cancel: CancelFla
         # ADR-018 items 22/23 and the retained root assistant text: raw native
         # observations for every path, including a quota or process failure. A
         # value the native records never proved stays null.
-        state.token_usage = outcome.attempt_usage.raw_usage()
+        state.token_usage = combined_usage(outcome.usage_rounds)
         state.last_assistant_message = outcome.attempt_usage.last_assistant_message
     if outcome.inquiry_bridge is not None:
         # Closing before the process disappears keeps an after-end question
@@ -1584,10 +1579,6 @@ def run_discovery(*, cwd: str, invocation_root: Path, native_root: Path, timeout
         cancel = CancelFlag(cancelled)
         invocation_root = ensure_private_dir(Path(invocation_root))
         native_root = ensure_private_dir(Path(native_root))
-        ensure_private_dir(Path(cwd) / ".zcode")
-        private_json(Path(cwd) / ".zcode/config.json", {
-            "plugins": {"enabled": False},
-            "features": {"mcp": False, "memory": False, "skill": False, "subagent": False}})
         stderr_path = invocation_root / _NATIVE_STDERR_FILE
         try:
             spawn = _spawn_app_server(cwd=cwd, invocation_root=invocation_root, native_root=native_root,
@@ -1607,7 +1598,12 @@ def run_discovery(*, cwd: str, invocation_root: Path, native_root: Path, timeout
                                                                 "toolAllowlist": []})
             session_id = snapshot["session"]["sessionId"]
             version = spawn.version if spawn.version is not None else "unknown"
-            catalog_value = catalog(snapshot, spawn.access, version)
+            # Only discovery reads billing metadata, using the same allowed
+            # configuration locations as the native process, never shell pins.
+            from ..discovery import native_environment
+            environment = native_environment(dict(os.environ))
+            access = provider_access_types(*provider_paths(environment, spawn.command))
+            catalog_value = catalog(snapshot, access, version)
             spawn.connection.call("session/close", {"sessionId": session_id})
         finally:
             try:

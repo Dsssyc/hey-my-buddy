@@ -28,7 +28,7 @@ in the minified file are recorded in the acceptance document):
 
 No production adapter file is modified. The probe keeps every artifact inside one
 private root (default: the git-ignored ``tmp`` area), clears inherited
-Buddy runtime/worker variables, snapshots provider files read-only, and closes the
+Buddy runtime/worker variables, uses the native provider configuration, and closes the
 owned child process group before exiting.
 """
 from __future__ import annotations
@@ -51,14 +51,13 @@ REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 sys.path.insert(0, str(REPO_ROOT / "src"))
 
 from hey_my_buddy.buddy.roles.turn_io import canonical_json  # noqa: E402
-from hey_my_buddy.buddy.harnesses.zcode.config import cli_command, snapshot_provider_files  # noqa: E402
+from hey_my_buddy.buddy.harnesses.zcode.config import cli_command  # noqa: E402
 from hey_my_buddy.buddy.harnesses.zcode.protocol import NativeConnection, NativeError  # noqa: E402
 
 #: Inherited runtime/worker/agent variables that must never reach a probe child,
 #: matching the AGENTS.md test-subprocess rule (plus every other BUDDY_* pin).
-CLEAR_ENV_PREFIXES = ("BUDDY_", "ZCODE_")
+CLEAR_ENV_PREFIXES = ("BUDDY_", "ZCODE_", "ZAI_", "ZHIPU_", "GLM_")
 CLEAR_ENV_VARS = ("VIRTUAL_ENV", "UV_PROJECT_ENVIRONMENT")
-API_KEY_ACCESS = {"api-key", "zhipu-coding-plan-api-key"}
 
 MAX_EVENT_DUMP_BYTES = 32768
 MAX_CAPTURED_EVENTS = 400
@@ -259,15 +258,13 @@ class EventLog:
         return False
 
 
-def isolated_environment(root: Path, *, zcode_cli: str | None = None, node: str | None = None,
-                          builtin_provider: str | None = None, personal_provider: str | None = None) -> tuple[dict, dict]:
+def isolated_environment(root: Path, *, zcode_cli: str | None = None, node: str | None = None) -> dict:
     """One private environment; inherited Buddy and native pins never reach the child.
 
     Inherited ``ZCODE_*`` variables are stripped too: this probe may itself run
     inside a Buddy harness whose variables point at that attempt's private native
     root, and the probe must resolve the real user provider files instead. The
-    explicit arguments are the only deliberate re-pins: a test fake CLI, a node
-    interpreter or fixture provider files must survive the strip to be usable.
+    explicit arguments pin only a test fake CLI or a node interpreter.
     """
     environment = {k: v for k, v in os.environ.items()
                    if not k.startswith(CLEAR_ENV_PREFIXES) and k not in CLEAR_ENV_VARS}
@@ -275,19 +272,14 @@ def isolated_environment(root: Path, *, zcode_cli: str | None = None, node: str 
         environment["BUDDY_ZCODE_CLI"] = zcode_cli
     if node:
         environment["BUDDY_NODE"] = node
-    if builtin_provider:
-        environment["ZCODE_BUILTIN_PROVIDER_CONFIG_FILE"] = builtin_provider
-    if personal_provider:
-        environment["ZCODE_PERSONAL_PROVIDER_CONFIG_FILE"] = personal_provider
     native_root = root / "native"
     (native_root / "storage").mkdir(parents=True, exist_ok=True)
     (root / "native-logs").mkdir(parents=True, exist_ok=True)
-    environment, access = snapshot_provider_files(root, environment)
     environment.update({"ZCODE_STORAGE_DIR": str(native_root / "storage"),
                         "ZCODE_SESSION_DB_PATH": str(native_root / "sessions.sqlite"),
                         "ZCODE_LOG_DIR": str(root / "native-logs"),
                         "ZCODE_LOG_CONSOLE": "0", "ZCODE_MODEL_TELEMETRY_ENABLED": "0"})
-    return environment, access
+    return environment
 
 
 def native_version(command: list[str], environment: dict, cwd: str) -> str:
@@ -321,13 +313,10 @@ def stop_process(process: subprocess.Popen) -> None:
 
 def run_probe(root: Path, *, cwd: Path, provider: str | None, model: str | None, effort: str | None,
               nonce: str, wall_seconds: float, zcode_cli: str | None = None,
-              node: str | None = None, builtin_provider: str | None = None,
-              personal_provider: str | None = None) -> dict:
+              node: str | None = None) -> dict:
     root.mkdir(parents=True, exist_ok=True)
     cwd.mkdir(parents=True, exist_ok=True)
-    environment, access = isolated_environment(root, zcode_cli=zcode_cli, node=node,
-                                                builtin_provider=builtin_provider,
-                                                personal_provider=personal_provider)
+    environment = isolated_environment(root, zcode_cli=zcode_cli, node=node)
     command = cli_command(environment)
     version = native_version(command, environment, str(cwd))
     report: dict = {"version": 1, "at": _now(), "nonce": nonce, "harnessVersion": version,
@@ -397,9 +386,6 @@ def run_probe(root: Path, *, cwd: Path, provider: str | None, model: str | None,
                   "effort": effort or (current.get("options") or {}).get("reasoningLevel")}
         if any(not isinstance(value, str) or not value.strip() for value in chosen.values()):
             raise NativeError("no-model", f"no complete provider/model/effort available (current={current})")
-        if access.get(chosen["provider"]) not in API_KEY_ACCESS:
-            raise NativeError("unsupported-provider",
-                              f"provider access for {chosen['provider']!r} is not API-key based")
         available = (snapshot.get("settings") or {}).get("model", {}).get("available", [])
         choice = next((x for x in available if (x.get("ref") or {}) ==
                        {"providerId": chosen["provider"], "modelId": chosen["model"]}), None)

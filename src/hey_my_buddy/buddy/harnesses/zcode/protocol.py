@@ -309,6 +309,13 @@ def decode_native_failure(payload: object) -> dict | None:
     return failure
 
 
+def native_turn_failure(payload: object) -> NativeError:
+    """The canonical failure event, decoded identically for both carriers."""
+    failure = decode_native_failure(payload)
+    detail = f" ({failure['summary']})" if failure is not None else ""
+    return NativeError("native-turn-failed", f"the native root turn failed{detail}", failure=failure)
+
+
 def quota_failure(failure: dict) -> dict | None:
     """Classify native rate-limit attribution before code-only quota errors.
 
@@ -599,6 +606,23 @@ class ZcodeAttemptUsage:
         return self.message_usage() or self.delta_usage()
 
 
+def combined_usage(rounds: list[ZcodeAttemptUsage]) -> dict | None:
+    """Sum the observed root usage across this run's correction sessions."""
+    readings = [round.raw_usage() for round in rounds]
+    known = [reading for reading in readings if reading is not None]
+    if not known:
+        return None
+    if len(readings) == 1:
+        return known[0]
+    result = {"source": "zcode/root-session-rounds", "scope": "attempt",
+              "coverage": "native-root-session", "inputBasis": "includes-cached",
+              "completeness": "complete" if len(known) == len(readings)
+              and all(reading["completeness"] == "complete" for reading in known) else "partial"}
+    for key in ("inputTokens", "outputTokens", "cachedInputTokens", "reasoningOutputTokens", "nativeRecords"):
+        result[key] = sum(reading[key] for reading in known)
+    return result
+
+
 class NativeConnection:
     """Responses and reverse requests are pumped together; no request holds a reader."""
 
@@ -690,17 +714,10 @@ class NativeConnection:
                 # included — is answered with the documented refusal and
                 # recorded as a denied interaction. Whether it ends the run is
                 # the role observer's immediate decision over the retained
-                # fact, never this pump's; the fast rule keeps its own legacy
-                # stop reason instead of unsupported-provider.
+                # fact, never this pump's.
                 self.attention_request(message, outcome="refused-with-jsonrpc-error")
                 self.send({"id": message["id"], "error": {"code": -32601, "message": "No interactions are allowed in a no-tool call"}})
                 return
-            if message["method"] == "interaction/requestProviderRuntimeHeaders":
-                # OAuth account providers need a native authentication host that this
-                # adapter deliberately cannot impersonate. It stays a hard error.
-                self.attention_request(message, outcome="refused-with-jsonrpc-error")
-                self.send({"id": message["id"], "error": {"code": -32601, "message": "This Buddy execution requires a structured attention outcome"}})
-                raise NativeError("unsupported-provider", "OAuth account providers require a native ZCode authentication host")
             # Interactive host capabilities this execution cannot grant. Answer the
             # two known schemas with their documented refusal body so the owned turn
             # continues and reports attention, instead of crashing the controller.
@@ -836,11 +853,7 @@ class RootTurnEvidence:
         if not self.turn_id or p.get("turnId") != self.turn_id:
             return
         if p.get("type") == "turn.failed":
-            # Only the exported turn.failed event carries structured failure
-            # attribution; the summary is composed of whitelisted values only.
-            failure = decode_native_failure(data)
-            detail = f" ({failure['summary']})" if failure is not None else ""
-            raise NativeError("native-turn-failed", f"the native root turn failed{detail}", failure=failure)
+            raise native_turn_failure(data)
         if p.get("type") == "turn.completed":
             if self.completed_ordinal or data.get("resultType") != "success" or data.get("inputId") != self.input_id:
                 raise NativeError("native-turn-failed", "the native root turn did not complete successfully")

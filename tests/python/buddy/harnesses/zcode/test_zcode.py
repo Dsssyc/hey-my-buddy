@@ -33,8 +33,11 @@ class ZcodeFixtureCase(unittest.TestCase):
         self.personal.write_text(json.dumps({"config": {"providerConfigRules": {"providerRules": [
             {"providerId": "fixture-api", "config": {"access": {"type": "api-key", "apiKey": "fixture-secret-never-public"}}}]}}}))
         FIXTURE.chmod(0o755)
-        self.environment = {k: v for k, v in os.environ.items() if not k.startswith(("BUDDY_", "ANTHROPIC_", "C2_")) and k not in ("VIRTUAL_ENV", "UV_PROJECT_ENVIRONMENT")}
-        self.environment.update(BUDDY_CONSOLE_PORT="0", BUDDY_ZCODE_CLI=str(FIXTURE.resolve()), BUDDY_STATE_DIR=str(self.root / "state"),
+        self.environment = {k: v for k, v in os.environ.items() if not k.startswith(("BUDDY_", "ANTHROPIC_", "C2_", "ZCODE_", "ZAI_", "ZHIPU_", "GLM_")) and k not in ("VIRTUAL_ENV", "UV_PROJECT_ENVIRONMENT")}
+        native_home = self.root / "native-user-home"
+        native_home.mkdir(mode=0o700)
+        self.environment.update(HOME=str(native_home), USERPROFILE=str(native_home),
+                                ZCODE_DATA_BASE_DIR=str(native_home), BUDDY_CONSOLE_PORT="0", BUDDY_ZCODE_CLI=str(FIXTURE.resolve()), BUDDY_STATE_DIR=str(self.root / "state"),
                                 BUDDY_RUNTIME_ROOT=str(self.root / "runtime"), BUDDY_DEV_SOURCE="1",
                                 ZCODE_BUILTIN_PROVIDER_CONFIG_FILE=str(self.builtin), ZCODE_PERSONAL_PROVIDER_CONFIG_FILE=str(self.personal))
         from hey_my_buddy.protocol.rpc_config import configure_client
@@ -423,16 +426,12 @@ class ZcodeAdapterTests(ZcodeFixtureCase):
         self.assertFalse(uncertain.shutdown_confirmed)
         self.assertEqual(uncertain.artifacts, [])
 
-    def test_oauth_provider_is_rejected_before_any_native_execution(self):
-        from hey_my_buddy.errors import BoardError
+    def test_oauth_provider_is_not_rejected_during_preparation(self):
         value = json.loads(self.personal.read_text())
         value["config"]["providerConfigRules"]["providerRules"][0]["config"]["access"] = {"type": "zhipu-account"}
         self.personal.write_text(json.dumps(value))
-        context = self.context()
-        with self.assertRaises(BoardError) as error:
-            self.adapter.prepare(context)
-        self.assertEqual(error.exception.code, "ADAPTER_UNAVAILABLE")
-        self.assertFalse(context.directory.exists())
+        prepared = self.adapter.prepare(self.context())
+        self.assertIsNotNone(prepared)
 
     def test_coding_never_falls_back_to_native_defaults(self):
         from hey_my_buddy.errors import BoardError

@@ -87,7 +87,11 @@ class InstalledZcodeTests(ZcodeFixtureCase):
                    '(allow network-outbound (remote ip "localhost:*")) '
                    f'(deny file-write* {shared_paths})')
         command = [shutil.which("sandbox-exec"), "-p", profile, shutil.which("node"), str(CLI)]
-        wrapper.write_text("#!/bin/sh\nexec " + shlex.join(command) + ' "$@"\n')
+        wrapper.write_text("#!/bin/sh\nexport " + shlex.join([
+            "ZCODE_BUILTIN_PROVIDER_CONFIG_FILE=" + str(self.builtin),
+            "ZCODE_PERSONAL_PROVIDER_CONFIG_FILE=" + str(self.personal),
+            "ZCODE_BUILTIN_PROVIDER_BUNDLED_CONFIG_FILE=" + str(BUILTIN),
+        ]) + "\nexec " + shlex.join(command) + ' "$@"\n')
         wrapper.chmod(0o700)
         self.environment["BUDDY_ZCODE_CLI"] = str(wrapper)
 
@@ -164,21 +168,15 @@ class InstalledZcodeTests(ZcodeFixtureCase):
         self.assertEqual(self.requests, [])
 
     def test_native_all_provider_disabled_catalog_is_a_complete_empty_observation(self):
-        # The single configured provider becomes an OAuth account provider, which
-        # this adapter deliberately cannot use. The real native session/create still
-        # succeeds, so the correct result is a COMPLETE empty catalog (which retires
-        # missing profiles) instead of an unknown discovery that preserves them.
         value = json.loads(self.personal.read_text())
-        value["config"]["providerConfigRules"]["providerRules"][0]["config"]["access"] = {"type": "zhipu-account"}
+        value["config"]["providerConfigRules"]["providerRules"][0]["enabled"] = False
         self.personal.write_text(json.dumps(value))
         with mock.patch.dict(os.environ, self.environment, clear=True):
             discovered = self.description.discover_models()
         self.assertEqual(discovered["providers"], [])
         self.assertEqual(discovered["discoveries"],
                          [{"adapter": "zcode", "status": "complete", "accountStatus": "not-applicable"}])
-        self.assertTrue(any("empty" in warning for warning in discovered["warnings"]), discovered["warnings"])
-        self.assertTrue(any("account status is not applicable" in warning for warning in discovered["warnings"]),
-                        discovered["warnings"])
+        self.assertTrue(any("empty" in warning for warning in discovered["warnings"]))
         self.assertEqual(self.requests, [], "discovery must never call the model")
 
 

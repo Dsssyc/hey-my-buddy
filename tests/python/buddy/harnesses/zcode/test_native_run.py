@@ -16,6 +16,7 @@ import io
 import json
 import os
 import subprocess
+import sys
 import tempfile
 import threading
 import time
@@ -147,7 +148,7 @@ class NativeRunCase(FakeAppServerTests):
                                                  dir=os.environ.get("BUDDY_CHECKS_TMPDIR", "/tmp"))
         self.addCleanup(self.temp.cleanup)
         self.base = Path(self.temp.name)
-        os.environ.update(self.environment)
+        self.enterContext(mock.patch.dict(os.environ, self.environment, clear=True))
 
     def fast_request(self, prompt: str, *, timeout: int = 5) -> RunRequest:
         return RunRequest(
@@ -494,11 +495,11 @@ class FastSeamTests(NativeRunCase):
         prompt = no_tool_prompt("Choose a profile", SCHEMA)
         correction = FastCorrection(SCHEMA, prompt)
         with _mock.patch("hey_my_buddy.buddy.harnesses.zcode.native_run._spawn_app_server",
-                         side_effect=_NativeError("unsupported-provider", "no native start")):
+                         side_effect=_NativeError("adapter-unavailable", "no native start")):
             result = run(self.fast_request(prompt), observer=correction.observer,
                          services=None, cancelled=lambda: False)
         self.assertEqual(result.end.status, "error")
-        self.assertEqual(result.end.reason_code, "unsupported-provider")
+        self.assertEqual(result.end.reason_code, "adapter-unavailable")
         # Nothing is claimed that the run never reached: no session opened, no
         # effective policy, no configuration check, no completion, no model,
         # and no native exit code — the holding side's own never-spawned fact.
@@ -863,6 +864,29 @@ class NoToolReverseRequestTests(unittest.TestCase):
             self.fail(f"a no-tool reverse request raised out of the pump: {error!r}")
         self.assertEqual(recorded[0]["method"], "interaction/requestPermission")
         self.assertEqual(recorded[0]["outcome"], "refused-with-jsonrpc-error")
+
+    def test_provider_headers_are_an_unsupported_host_capability_not_a_provider_ban(self):
+        process = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(30)"],
+                                   stdin=subprocess.PIPE, stdout=subprocess.PIPE)
+        def reap():
+            process.kill()
+            process.wait(timeout=5)
+            process.stdin.close()
+            process.stdout.close()
+        self.addCleanup(reap)
+        connection = native_run.NativeConnection(process, time.monotonic() + 10, threading.Event())
+        for no_tools in (False, True):
+            with self.subTest(no_tools=no_tools):
+                recorded = []
+                connection.no_tools = no_tools
+                connection.attention = recorded.append
+                connection.send = mock.Mock()
+                connection.messages.put({"id": 7, "method": "interaction/requestProviderRuntimeHeaders",
+                                         "params": {"sessionId": "s", "providerId": "fixture-account"}})
+                connection.pump()
+                self.assertEqual(recorded[0]["method"], "interaction/requestProviderRuntimeHeaders")
+                self.assertEqual(recorded[0]["outcome"], "refused-with-jsonrpc-error")
+                self.assertEqual(connection.send.call_args.args[0]["error"]["code"], -32601)
 
 
 class ProducerContractTests(NativeRunCase):
@@ -1630,7 +1654,7 @@ class DiscoveryStopTests(NativeRunCase):
         self.assertIs(getattr(caught.exception, "discovery_shutdown_confirmed", None), False)
 
     def test_preparation_failure_proves_no_child_created(self):
-        with mock.patch.object(native_run, 'private_json', side_effect=OSError('fixture write refused')), \
+        with mock.patch.object(native_run, 'ensure_private_dir', side_effect=OSError('fixture directory refused')), \
              mock.patch.object(native_run, '_spawn_app_server') as spawn:
             with self.assertRaises(OSError) as caught:
                 self.discover()

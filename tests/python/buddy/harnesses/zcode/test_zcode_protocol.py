@@ -625,7 +625,7 @@ class ConfigurationTests(unittest.TestCase):
                         requested.pop(key)
                     connection = mock.Mock()
                     with self.assertRaises(NativeError) as error:
-                        configure_session(connection, snapshot, requested, {"fixture-api": "api-key"})
+                        configure_session(connection, snapshot, requested)
                     self.assertEqual(error.exception.code, "invalid-configuration")
                     connection.call.assert_not_called()
 
@@ -639,7 +639,7 @@ class ConfigurationTests(unittest.TestCase):
             model("invalid-efforts", ["", " \t", None]), model("account-only", ["high"], "oauth"),
         ]}}}
         result = catalog(snapshot, {"api": "api-key", "oauth": "zhipu-account"}, "native-test-version")
-        self.assertEqual(len(result["providers"]), 1)
+        self.assertEqual(len(result["providers"]), 2)
         provider = result["providers"][0]
         self.assertEqual(provider["adapter"], "zcode")
         self.assertEqual(provider["packageVersion"], "native-test-version")
@@ -650,7 +650,8 @@ class ConfigurationTests(unittest.TestCase):
         self.assertEqual(models["vision"]["inputModalities"], ["text", "image"])
         self.assertTrue(all(entry["available"] for entry in models.values()))
         self.assertTrue(any("effort" in warning for warning in result["warnings"]))
-        self.assertTrue(any("OAuth" in warning for warning in result["warnings"]))
+        self.assertEqual(result["providers"][1]["provider"], "oauth")
+        self.assertEqual(result["providers"][1]["models"][0]["id"], "account-only")
 
 
 class UnlimitedDeadlineTests(unittest.TestCase):
