@@ -18,7 +18,7 @@ import sys
 import threading
 import time
 import uuid
-from typing import Any
+from typing import Any, NoReturn
 
 import c_two as cc
 from c_two.error import CCError, CoreError
@@ -32,6 +32,16 @@ from ..install.entrypoints import ENTRY_MODULES
 
 MAX_MESSAGE_BYTES = 8 * 1024 * 1024
 PROTOCOL_VERSION = 2
+
+#: The two locks a board owner holds from admission until its process exits.
+LIFETIME_LOCKS = ("control-daemon.lock", "board-owner.lock")
+
+
+def owner_held_message() -> str:
+    """The one owner-busy explanation shared by every lifetime-lock refusal."""
+    hint = (" The service may be running in another Windows login of the same user."
+            if os.name == "nt" else "")
+    return "A board owner still holds this state directory's lifetime locks." + hint
 
 #: CLI method -> (resource, C-Two operation). The CLI names are the only public
 #: surface; the C-Two operation names never change here. ``await`` is a CLI-level
@@ -201,12 +211,67 @@ def _request(endpoint: dict, operation: str, params: dict, resource: str = "cont
         return _invoke(service, endpoint, operation, params)
 
 
+def _unheld(path: Path) -> bool:
+    """True when no owner holds this lock; a missing file cannot be held."""
+    try:
+        fd = private_dirs.open_regular_fd(path, os.O_RDONLY)
+    except FileNotFoundError:
+        return True
+    except (OSError, BoardError):
+        return False
+    try:
+        locking.lock(fd, shared=True, blocking=False)
+        locking.unlock(fd)
+        return True
+    except BlockingIOError:
+        return False
+    finally:
+        os.close(fd)
+
+
+def _owner_absent(directory: Path, *, fenced: bool = True) -> bool:
+    """Observe the owner's lifetime locks; True only when both prove absence.
+
+    This is read-only observation: existing files are opened without O_CREAT and
+    nothing is created, deleted or spawned. A held lock, a busy start fence or an
+    unreadable file never proves absence, because a connection failure is not
+    stop evidence. ``fenced`` is False only for a caller already holding the
+    start lock, which the same process cannot take twice.
+    """
+    fence = -1
+    try:
+        if fenced:
+            try:
+                fence = private_dirs.open_regular_fd(directory / "control-start.lock", os.O_RDONLY)
+            except FileNotFoundError:
+                pass
+            except (OSError, BoardError):
+                return False
+            else:
+                try:
+                    locking.lock(fence, shared=True, blocking=False)
+                except BlockingIOError:
+                    return False
+        return all(_unheld(directory / name) for name in LIFETIME_LOCKS)
+    finally:
+        if fence >= 0:
+            locking.unlock(fence)
+            os.close(fence)
+
+
+def _refuse_without_service(directory: Path, *, under_start_lock: bool = False) -> NoReturn:
+    """Every endpoint-less read-only or wait path refuses through one observation."""
+    if not _owner_absent(directory, fenced=not under_start_lock):
+        raise ServiceError("SERVICE_UNAVAILABLE", owner_held_message())
+    raise ServiceError("SERVICE_UNAVAILABLE", "No board service is running in this state directory")
+
+
 @contextmanager
 def _event_waiter(directory: Path):
     """Keep the named wait resource attached across bounded caller timeouts."""
     endpoint = _attach_read_only(directory)
     if endpoint is None:
-        raise ServiceError("SERVICE_UNAVAILABLE", "No board service is running in this state directory")
+        _refuse_without_service(directory)
     with _connection(endpoint, "wait", directory) as service:
         yield lambda params: _invoke(service, endpoint, "events_wait", params)
 
@@ -226,7 +291,7 @@ def _call_board_read_only(operation: str, params: dict | None, directory: Path, 
     """Call through an existing service using the already selected state root."""
     endpoint = _attach_read_only(directory)
     if endpoint is None:
-        raise ServiceError("SERVICE_UNAVAILABLE", "No board service is running in this state directory")
+        _refuse_without_service(directory)
     return _request(endpoint, operation, params or {}, resource=resource, state_dir=directory)
 
 
@@ -330,14 +395,13 @@ def _retire_stale_endpoint(directory: Path) -> None:
         return
     locks = []
     try:
-        for name in ('control-daemon.lock', 'board-owner.lock'):
+        for name in LIFETIME_LOCKS:
             fd = private_dirs.open_regular_fd(directory / name, os.O_CREAT | os.O_RDWR, 0o600)
             locks.append(fd)
             try:
                 locking.lock(fd, blocking=False)
             except BlockingIOError:
-                raise ServiceError('SERVICE_UNAVAILABLE',
-                    'The recorded owner did not answer while its lifetime lock is held') from None
+                raise ServiceError('SERVICE_UNAVAILABLE', owner_held_message()) from None
         (directory / 'control.json').unlink(missing_ok=True)
     finally:
         for fd in reversed(locks):
@@ -365,7 +429,7 @@ def _ensure_service(directory: Path, *, resource: str = "control") -> dict:
             return endpoint
         if resource == "wait":
             # A wait may never cold-start a service: waiting on nothing would be a lie.
-            raise ServiceError("SERVICE_UNAVAILABLE", "No board service is running in this state directory")
+            _refuse_without_service(directory)
         _cold_start_preflight(directory)
         lock_fd = private_dirs.open_regular_fd(directory / "control-start.lock", os.O_CREAT | os.O_RDWR, 0o600)
     try:
@@ -375,7 +439,7 @@ def _ensure_service(directory: Path, *, resource: str = "control") -> dict:
         if endpoint:
             return endpoint
         if resource == "wait":
-            raise ServiceError("SERVICE_UNAVAILABLE", "No board service is running in this state directory")
+            _refuse_without_service(directory, under_start_lock=True)
         if upgrading:
             _cold_start_preflight(directory)
         _retire_stale_endpoint(directory)
@@ -400,6 +464,9 @@ def _ensure_service(directory: Path, *, resource: str = "control") -> dict:
             env.pop("PYTHONPATH", None)
         if target["stable"]:
             env["HMB_RUNTIME"] = target["runtime"]["runtimeDir"]
+        # The start lock is held: a record cleared here makes every startup error
+        # that appears afterwards attributable to this spawn alone.
+        (directory / "startup-error.json").unlink(missing_ok=True)
         log_fd = private_dirs.open_regular_fd(directory / "control.log", os.O_CREAT | os.O_APPEND | os.O_WRONLY, 0o600)
         try:
             child = independent_service_popen(
@@ -424,7 +491,7 @@ def _ensure_service(directory: Path, *, resource: str = "control") -> dict:
             if child.poll() not in (None, 0):
                 from ..install.launcher import read_private
                 failure = read_private(directory / "startup-error.json") or {}
-                if failure.get("pid") == child.pid and isinstance(failure.get("code"), str) and isinstance(failure.get("message"), str):
+                if isinstance(failure.get("code"), str) and isinstance(failure.get("message"), str):
                     details = failure.get("details")
                     raise ServiceError(failure["code"], failure["message"], **(details if isinstance(details, dict) else {}))
                 raise ServiceError("SERVICE_START_FAILED", "The board daemon failed to start; inspect control.log")
@@ -463,6 +530,10 @@ def _call_service(method: str, params: dict | None, directory: Path) -> dict:
     if method in ("stop", "restart"):
         endpoint = _attach_read_only(directory)
         if endpoint is None:
+            # A connection failure is not stop evidence: only both lifetime locks
+            # proving the owner absent may report the service as stopped.
+            if not _owner_absent(directory):
+                raise ServiceError("SERVICE_UNAVAILABLE", owner_held_message())
             return {"status": "stopped", "alreadyStopped": True, "stopped": True}
     else:
         endpoint = _ensure_service(directory, resource=resource)

@@ -36,6 +36,7 @@ class LocalLaunchTests(unittest.TestCase):
             finally:
                 os.close(owner)
             self.assertEqual(caught.exception.code, 'SERVICE_UNAVAILABLE')
+            self.assertIn('lifetime locks', caught.exception.message)
             spawn.assert_not_called()
 
     def test_stale_endpoint_is_reclaimed_only_when_owner_locks_are_free(self):

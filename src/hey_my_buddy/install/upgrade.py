@@ -203,6 +203,9 @@ def detach(state: Path, target: Path, *, require_idle: bool) -> None:
 
 def start(state: Path, target: Path) -> dict:
     from .launcher import entry_modules
+    # Callers hold control-start.lock: the record is cleared before the spawn, so
+    # every startup error that appears afterwards belongs to this start alone.
+    (state / 'startup-error.json').unlink(missing_ok=True)
     log = private_dirs.open_regular_fd(state / 'upgrade-start.log', os.O_CREAT | os.O_APPEND | os.O_WRONLY, 0o600)
     try:
         # A rollback starts the previous runtime's installed daemon.
@@ -216,15 +219,12 @@ def start(state: Path, target: Path) -> dict:
         if child.poll() is not None:
             from .launcher import read_private
             failure = read_private(state / 'startup-error.json') or {}
-            if failure.get('pid') == child.pid and isinstance(failure.get('code'), str):
+            if isinstance(failure.get('code'), str):
                 raise BoardError(failure['code'], str(failure.get('message') or 'Replacement daemon failed'))
             raise BoardError('UPGRADE_START_FAILED', 'Replacement daemon exited; see private upgrade-start.log')
-        try:
-            endpoint = _read_json(state / 'control.json')
-            if endpoint.get('pid') == child.pid:
-                return command(state, target, 'health')
-        except (OSError, ValueError, BoardError):
-            pass
+        health = probe(state, target)
+        if health is not None:
+            return health
         time.sleep(.2)
     # SIGTERM runs the daemon's task-cancelling stop handler. Even a rollback
     # startup may be preserving work admitted before a legacy detach, so an

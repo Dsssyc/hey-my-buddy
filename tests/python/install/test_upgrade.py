@@ -31,17 +31,59 @@ class UpgradeTests(BoardTestCase):
                 (target / 'src' / 'hey_my_buddy').mkdir(parents=True)
                 child = mock.Mock(pid=4321)
                 child.poll.return_value = None
+                health = {'status': 'ok', 'runtimeContentId': target.name, 'runtimeStable': True}
                 with mock.patch.object(service_process, 'os', SimpleNamespace(name='nt')), \
                      mock.patch.object(service_process.subprocess, 'Popen', return_value=child) as popen, \
                      mock.patch.object(upgrade, '_environment', return_value={}), \
-                     mock.patch.object(upgrade, '_read_json', return_value={'pid': child.pid}), \
-                     mock.patch.object(upgrade, 'command', return_value={'status': 'ok'}) as command:
-                    self.assertEqual(upgrade.start(state, target), {'status': 'ok'})
+                     mock.patch.object(upgrade, 'command', return_value=health) as command:
+                    self.assertEqual(upgrade.start(state, target), health)
                 popen.assert_called_once()
                 self.assertEqual(popen.call_args.kwargs['creationflags'], 0x01000208)
                 self.assertNotIn('start_new_session', popen.call_args.kwargs)
                 self.assertEqual(popen.call_args.kwargs['cwd'], target)
+                # Readiness is the probe's own health request, not a second one.
                 command.assert_called_once_with(state, target, 'health')
+
+    def test_start_clears_the_previous_startup_error_before_spawning(self):
+        state = self.directory / 'state'
+        state.mkdir()
+        target = self.directory / 'runtime-target'
+        (target / 'src' / 'hey_my_buddy').mkdir(parents=True)
+        child = mock.Mock(pid=4321)
+        child.poll.return_value = 2
+        # The record even carries the spawned child's pid: only the pre-spawn
+        # clear, not a pid comparison, keeps it from impersonating this start.
+        launcher.write_private(state / 'startup-error.json',
+                               {'pid': 4321, 'code': 'UPGRADE_SHUTDOWN_UNCONFIRMED', 'message': 'earlier start'})
+        with mock.patch.object(upgrade.subprocess, 'Popen', return_value=child), \
+             mock.patch.object(upgrade, 'probe', return_value=None):
+            with self.assertRaises(BoardError) as caught:
+                upgrade.start(state, target)
+        self.assertEqual(caught.exception.code, 'UPGRADE_START_FAILED')
+        self.assertFalse((state / 'startup-error.json').exists(),
+                         'the previous start\'s record must be cleared before the spawn')
+
+    def test_start_claims_a_startup_error_written_after_the_spawn(self):
+        state = self.directory / 'state'
+        state.mkdir()
+        target = self.directory / 'runtime-target'
+        (target / 'src' / 'hey_my_buddy').mkdir(parents=True)
+        child = mock.Mock(pid=4321)
+        child.poll.return_value = 2
+
+        def spawn_records_the_daemons_error(*_args, **_kwargs):
+            # A rollback starts an older daemon that still records its own pid,
+            # which differs from the Popen handle this start reaps.
+            launcher.write_private(state / 'startup-error.json',
+                                   {'pid': 9999, 'code': 'INVALID_ARGUMENT', 'message': 'replacement daemon refused'})
+            return child
+
+        with mock.patch.object(upgrade.subprocess, 'Popen', side_effect=spawn_records_the_daemons_error), \
+             mock.patch.object(upgrade, 'probe', return_value=None):
+            with self.assertRaises(BoardError) as caught:
+                upgrade.start(state, target)
+        self.assertEqual(caught.exception.code, 'INVALID_ARGUMENT')
+        self.assertIn('replacement daemon refused', caught.exception.message)
 
     def test_runtime_preparation_excludes_the_previous_services_reclaimer(self):
         board = self.board()
@@ -662,6 +704,7 @@ class UpgradeTests(BoardTestCase):
         child.poll.return_value=None
         (self.directory/'runtime-target'/'src'/'hey_my_buddy').mkdir(parents=True)
         with mock.patch('hey_my_buddy.install.upgrade.subprocess.Popen',return_value=child), \
+             mock.patch.object(upgrade, 'probe', return_value=None), \
              mock.patch('hey_my_buddy.install.upgrade.time.monotonic',side_effect=[0,46]):
             with self.assertRaises(BoardError) as caught:
                 upgrade.start(board.directory, self.directory/'runtime-target')
