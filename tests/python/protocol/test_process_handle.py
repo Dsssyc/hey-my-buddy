@@ -43,7 +43,7 @@ class StopSequenceTests(unittest.TestCase):
             if sig == signal.SIGKILL:
                 state.update(alive=False, exit=-sig)
 
-        def force():
+        def force(*, timeout):
             note("job.terminate")
             state.update(alive=False, exit=1)
 
@@ -58,6 +58,7 @@ class StopSequenceTests(unittest.TestCase):
         process.stdin.close.side_effect = eof
         if windows:
             process._buddy_job = SimpleNamespace(terminate=force, active=active,
+                                                wait=lambda timeout: active() == 0,
                                                 close=lambda **kw: note("job.close"))
         with patch("hey_my_buddy.protocol.process_identity._creation_time", return_value=10):
             handle = ProcessHandle(process, own_group=True, log_paths={}, stop_channel=channel)
@@ -117,6 +118,32 @@ class StopSequenceTests(unittest.TestCase):
 
 
 class RealStdioStopTests(unittest.TestCase):
+    @unittest.skipUnless(os.name == "nt", "Windows Job termination and directory sharing")
+    def test_exited_leader_and_forced_descendant_release_their_working_directory(self):
+        from hey_my_buddy.paths import native_path
+        with tempfile.TemporaryDirectory() as name:
+            directory = Path(name) / "native-root"
+            directory.mkdir()
+            script = (
+                "import subprocess,sys; "
+                "child=subprocess.Popen([sys.executable,'-c','import time; time.sleep(60)'],"
+                " stdin=subprocess.DEVNULL,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL); "
+                "print('ready',flush=True)"
+            )
+            child = owned_popen([sys.executable, "-c", script], cwd=directory,
+                                stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+            handle = ProcessHandle(child, own_group=True, log_paths={}, stop_channel="stdin")
+            try:
+                self.assertEqual(child.stdout.readline().strip(), b"ready")
+                child.wait()
+                stopped, escalated = handle.terminate(grace_seconds=10)
+                self.assertTrue(stopped)
+                self.assertTrue(escalated)
+                native_path(directory).rmdir()
+            finally:
+                handle.terminate(grace_seconds=0)
+                child.stdout.close()
+
     def test_stdin_channel_without_pipe_stops_child_before_rejecting_ownership(self):
         child = owned_popen([sys.executable, "-c", "import time; time.sleep(30)"],
                             stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,

@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import ctypes
 from ctypes import wintypes
+import math
 
 from .process_start import windows_handle_start
 
@@ -11,6 +12,7 @@ THREAD_SUSPEND_RESUME = 0x0002
 THREAD_QUERY_LIMITED_INFORMATION = 0x0800
 PROCESS_DUP_HANDLE = 0x0040
 PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+SYNCHRONIZE = 0x00100000
 ERROR_FILE_NOT_FOUND = 2
 ERROR_ALREADY_EXISTS = 183
 
@@ -41,6 +43,7 @@ class WindowsAPI:
             "Thread32First": (wintypes.BOOL, [wintypes.HANDLE, ctypes.POINTER(_ThreadEntry)]),
             "Thread32Next": (wintypes.BOOL, [wintypes.HANDLE, ctypes.POINTER(_ThreadEntry)]),
             "GetProcessIdOfThread": (wintypes.DWORD, [wintypes.HANDLE]),
+            "WaitForSingleObject": (wintypes.DWORD, [wintypes.HANDLE, wintypes.DWORD]),
         }
         for name, (result, arguments) in signatures.items():
             method = getattr(kernel, name)
@@ -81,7 +84,7 @@ class WindowsAPI:
 
     def open_job(self, name):
         try:
-            return self.job.OpenJobObject(self.job.JOB_OBJECT_QUERY | self.job.JOB_OBJECT_TERMINATE, False, name)
+            return self.job.OpenJobObject(self.job.JOB_OBJECT_QUERY | self.job.JOB_OBJECT_TERMINATE | SYNCHRONIZE, False, name)
         except self.error as error:
             if error.winerror == ERROR_FILE_NOT_FOUND:
                 return None
@@ -162,6 +165,16 @@ class WindowsAPI:
     def active(self, job):
         return self._call(self.job.QueryInformationJobObject, job,
                           self.job.JobObjectBasicAccountingInformation)["ActiveProcesses"]
+
+    def wait_job(self, job, timeout):
+        """Wait for the Job's termination signal, after member resource rundown."""
+        milliseconds = min(0xfffffffe, max(0, math.ceil(timeout * 1000)))
+        result = self.kernel.WaitForSingleObject(int(job), milliseconds)
+        if result == 0:
+            return True
+        if result == 0x102:
+            return False
+        self._error()
 
     def terminate(self, job):
         self._call(self.job.TerminateJobObject, job, 1)

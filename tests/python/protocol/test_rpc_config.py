@@ -55,6 +55,7 @@ class ProbeImpl:
         return json.dumps({"slept": int(payload)})
 
 from hey_my_buddy.protocol import rpc_config
+from hey_my_buddy.private_files import publish_bytes
 state = Path(os.environ["HMB_STATE_DIR"])
 if os.environ.get("PROBE_SERVER_MODE") == "raw":
     rpc_config.configure_local_endpoint(state)
@@ -65,7 +66,7 @@ else:
 cc.register(ProbeContract, ProbeImpl(), name="hey-my-buddy-probe",
             concurrency=cc.ConcurrencyConfig(mode=cc.ConcurrencyMode.PARALLEL))
 context = cc.local_endpoint_context()
-Path(sys.argv[1]).write_text(json.dumps({"address": cc.server_address(), "pid": os.getpid(), "root": context.root, "platform": context.platform, "namespace": context.namespace_id}), encoding="utf-8", newline="\\n")
+publish_bytes(Path(sys.argv[1]), json.dumps({"address": cc.server_address(), "pid": os.getpid(), "root": context.root, "platform": context.platform, "namespace": context.namespace_id}).encode("utf-8"))
 stop = sys.argv[2]
 while not os.path.exists(stop):
     time.sleep(0.05)
@@ -152,7 +153,11 @@ class ProbeServer:
             stderr=self.log,
             start_new_session=True,
         )
-        self.address = self._await_endpoint()
+        try:
+            self.address = self._await_endpoint()
+        except BaseException:
+            self.close()
+            raise
 
     def _await_endpoint(self) -> str:
         deadline = time.monotonic() + 30
@@ -442,6 +447,14 @@ class IsolatedTransportTests(unittest.TestCase):
         server = ProbeServer(self.work, **kwargs)
         self.probes.append(server)
         return server
+
+    def test_probe_startup_failure_reaps_server(self):
+        server = ProbeServer.__new__(ProbeServer)
+        with mock.patch.object(ProbeServer, "_await_endpoint", side_effect=AssertionError("startup failed")):
+            with self.assertRaisesRegex(AssertionError, "startup failed"):
+                server.__init__(self.work, name="failed")
+        self.assertIsNotNone(server.process.poll())
+        self.assertTrue(server.log.closed)
 
     @unittest.skipIf(os.name == "nt", "Unix IPC directory modes; Windows has a user-scoped pipe domain")
     def test_0755_state_creates_0700_ipc_and_round_trips(self):

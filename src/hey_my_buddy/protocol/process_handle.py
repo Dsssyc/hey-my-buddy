@@ -107,7 +107,7 @@ class ProcessHandle:
         """Remain live unless the owned group is observed gone, including descendants."""
         if self.job is not None:
             try:
-                return self.job.active() != 0
+                return not self.job.wait(0)
             except OSError:
                 return True
         if self.own_group and os.name == 'nt':
@@ -172,11 +172,11 @@ class ProcessHandle:
                 self._signal_group(signal.SIGTERM)
                 if self._wait_for_group(1.0):
                     return self.shutdown_confirmed(settle_seconds=0), True
+            deadline = time.monotonic() + settle_seconds
             if self.job is not None:
-                self.job.terminate()
+                self.job.terminate(timeout=max(0.0, deadline - time.monotonic()))
             elif windows:
                 self.process.kill()
-            deadline = time.monotonic() + settle_seconds
             while True:
                 if not windows:
                     # A child can join the group while the first KILL is in

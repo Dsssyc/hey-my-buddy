@@ -60,6 +60,7 @@ class FakeAPI:
         self.count = 1
         self.fail_at = None
         self.job_gone = False
+        self.job_signalled = None
 
     def create_job(self, name):
         self.name = name
@@ -97,6 +98,9 @@ class FakeAPI:
         self.events.append(("terminate", job))
         self.process.returncode = 1
         self.count = 0
+
+    def wait_job(self, job, timeout):
+        return self.active(job) == 0 if self.job_signalled is None else self.job_signalled
 
     def close(self, job):
         self.events.append(("close", job))
@@ -309,6 +313,11 @@ class WindowsProcessTests(unittest.TestCase):
         self.assertFalse(handle.shutdown_confirmed(settle_seconds=0))
         api.fail_at = None
         api.count = 0
+        api.job_signalled = False
+        self.assertFalse(handle.job.terminate(timeout=0))
+        self.assertFalse(handle.shutdown_confirmed(settle_seconds=0))
+        self.assertIsNotNone(handle.job.handle)
+        api.job_signalled = True
         self.assertTrue(handle.shutdown_confirmed(settle_seconds=0))
         self.assertEqual(api.events[-1], ("close", 77))
 

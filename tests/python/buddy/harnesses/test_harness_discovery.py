@@ -93,7 +93,7 @@ class HarnessDiscoveryTests(unittest.TestCase):
                                                         environment={"PATH": str(bin_dir), "OPENAI_API_KEY": "secret"})
             self.assertEqual(snapshot["candidates"][0]["source"], "manual")
             self.assertEqual(snapshot["candidates"][0]["fingerprint"], discovery.file_fingerprint(cli))
-            self.assertEqual(snapshot["managerRecords"][0]["fingerprint"], discovery.file_fingerprint(record))
+            self.assertEqual(snapshot["managerRecords"][0]["fingerprint"], discovery.file_fingerprint(record, record=True))
             self.assertNotIn("secret", str(snapshot))
             self.assertNotIn("OPENAI_API_KEY", str(snapshot))
 
@@ -189,13 +189,13 @@ class HarnessDiscoveryTests(unittest.TestCase):
 
             def withheld_stop_evidence(*, windows):
                 if windows:
-                    active = OwnedJob.active
+                    wait = OwnedJob.wait
 
-                    def unobserved_job(job):
-                        active(job)
+                    def unobserved_job(job, timeout):
+                        wait(job, timeout)
                         raise OSError("fixture Job emptiness observation unavailable")
 
-                    return patch.object(OwnedJob, "active", autospec=True, side_effect=unobserved_job)
+                    return patch.object(OwnedJob, "wait", autospec=True, side_effect=unobserved_job)
                 return patch.object(ProcessHandle, "shutdown_confirmed", return_value=False)
 
             with patch.object(discovery, "_home", return_value=home), patch.object(
@@ -249,11 +249,15 @@ class HarnessDiscoveryTests(unittest.TestCase):
             record = home / ".nvm/alias/default"
             record.parent.mkdir(parents=True)
             record.write_text("v22.0.0", encoding="utf-8", newline="\n")
+            initial = record.stat()
             with patch.object(discovery, "_home", return_value=home), patch.object(
                 discovery, "_common_dirs", return_value=[]
             ), patch.object(discovery, "_app_paths", return_value=[]):
                 first = discovery.candidate_snapshot("node", environment={"PATH": ""})
                 record.write_text("v24.0.0", encoding="utf-8", newline="\n")
+                os.utime(record, ns=(initial.st_atime_ns, initial.st_mtime_ns))
+                self.assertEqual((record.stat().st_size, record.stat().st_mtime_ns),
+                                 (initial.st_size, initial.st_mtime_ns))
                 second = discovery.candidate_snapshot("node", environment={"PATH": ""})
             self.assertNotEqual(discovery._scan_hash(first), discovery._scan_hash(second))
             self.assertNotEqual(discovery.location_fingerprint(first), discovery.location_fingerprint(second))
@@ -522,9 +526,9 @@ class HarnessDiscoveryTests(unittest.TestCase):
                 terminated = []
                 original_terminate = OwnedJob.terminate
 
-                def observe_job_stop(job):
+                def observe_job_stop(job, *, timeout):
                     terminated.append(job)
-                    return original_terminate(job)
+                    return original_terminate(job, timeout=timeout)
 
                 stop_observation = patch.object(OwnedJob, "terminate", observe_job_stop)
             else:

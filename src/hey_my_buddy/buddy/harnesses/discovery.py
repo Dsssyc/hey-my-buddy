@@ -46,14 +46,22 @@ def _home() -> Path:
     return Path(pwd.getpwuid(os.getuid()).pw_dir)
 
 
-def file_fingerprint(path: str | os.PathLike[str]) -> dict | None:
-    """Return the identity used to invalidate a cached executable or record."""
+def file_fingerprint(path: str | os.PathLike[str], *, record: bool = False) -> dict | None:
+    """Return a cheap executable identity or a content-backed manager record identity."""
     try:
         target = Path(path)
         if not target.is_file():
             return None
         stat = target.stat()
-        return {"realPath": str(target.resolve()), "size": stat.st_size, "mtimeNs": stat.st_mtime_ns}
+        fingerprint = {"realPath": str(target.resolve()), "size": stat.st_size,
+                       "mtimeNs": stat.st_mtime_ns}
+        if record and stat.st_size <= 4096:
+            with target.open("rb") as stream:
+                content = stream.read(4097)
+            if len(content) != stat.st_size:
+                return None
+            fingerprint["sha256"] = hashlib.sha256(content).hexdigest()
+        return fingerprint
     except (OSError, ValueError, RuntimeError, TypeError):
         return None
 
@@ -108,7 +116,7 @@ def _manager_records(home: Path) -> tuple[list[dict], list[tuple[str, Path]]]:
     records: list[dict] = []
     roots: list[tuple[str, Path]] = []
     for manager, record, root in specs:
-        fingerprint = file_fingerprint(record)
+        fingerprint = file_fingerprint(record, record=True)
         if fingerprint is None and record.is_symlink():
             try:
                 stat = record.lstat()
@@ -139,7 +147,7 @@ def _manager_records(home: Path) -> tuple[list[dict], list[tuple[str, Path]]]:
                     if not alias.is_file():
                         break
                     records.append({"manager": "nvm", "path": str(alias),
-                                    "fingerprint": file_fingerprint(alias)})
+                                    "fingerprint": file_fingerprint(alias, record=True)})
                     value = (_record_text(alias) or "").strip().splitlines()
                     version = value[0] if value else None
         elif manager == "asdf":

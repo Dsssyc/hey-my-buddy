@@ -35,7 +35,7 @@ class WindowsAPITests(unittest.TestCase):
         self.api.GetLastError.return_value = 0
         self.kernel = mock.Mock(spec=["CreateToolhelp32Snapshot", "Thread32First",
                                       "Thread32Next", "GetProcessIdOfThread",
-                                      "GetCurrentProcess", "DuplicateHandle", "GetProcessTimes"])
+                                      "GetCurrentProcess", "DuplicateHandle", "GetProcessTimes", "WaitForSingleObject"])
         self.addCleanup(mock.patch.stopall)
         mock.patch.dict(sys.modules, {
             "pywintypes": SimpleNamespace(error=Win32Error), "win32job": self.job,
@@ -94,7 +94,7 @@ class WindowsAPITests(unittest.TestCase):
     def test_named_job_absence_is_distinct_from_denied_or_failed_observation(self):
         self.job.OpenJobObject.return_value = self.job_handle
         self.assertIs(self.boundary.open_job("fixture"), self.job_handle)
-        self.job.OpenJobObject.assert_called_once_with(12, False, "fixture")
+        self.job.OpenJobObject.assert_called_once_with(0x10000c, False, "fixture")
         for code in (2, 5, 6):
             with self.subTest(code=code):
                 failure = Win32Error(code)
@@ -114,6 +114,16 @@ class WindowsAPITests(unittest.TestCase):
             self.boundary.active(self.job_handle)
         self.assertEqual(self.job.QueryInformationJobObject.call_args_list,
                          [mock.call(self.job_handle, 3), mock.call(self.job_handle, 1), mock.call(self.job_handle, 1)])
+
+    def test_job_wait_distinguishes_termination_from_a_live_or_unobservable_job(self):
+        self.kernel.WaitForSingleObject.side_effect = [0x102, 0, 0xffffffff]
+        self.assertFalse(self.boundary.wait_job(self.job_handle, 0))
+        self.assertTrue(self.boundary.wait_job(self.job_handle, .125))
+        with mock.patch.object(self.boundary, "_error", side_effect=OSError("Job wait failed")):
+            with self.assertRaisesRegex(OSError, "Job wait failed"):
+                self.boundary.wait_job(self.job_handle, 0)
+        self.assertEqual(self.kernel.WaitForSingleObject.call_args_list,
+                         [mock.call(77, 0), mock.call(77, 125), mock.call(77, 0)])
 
     def test_assignment_borrows_the_popen_handle_without_reopening_or_closing_it(self):
         self.boundary.assign(self.job_handle, self.child)

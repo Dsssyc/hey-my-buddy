@@ -20,6 +20,8 @@ from unittest.mock import MagicMock, patch
 from fake_executable import make_fake_executable
 from support import (
     _child_environment,
+    remove_private_test_root,
+    request_private_service_stop,
     shutdown_private_rpc,
     stop_private_service,
     write_catalog_fixture,
@@ -117,6 +119,8 @@ def cleanup_owned_case(state, modes, handles, evidence):
         if not attempt("wait:" + str(process.pid), wait):
             receipt["shutdownUnconfirmed"] = receipt["waitExit"] is None
     evidence["shutdownCompleted"] = attempt("shutdown_rpc", shutdown_private_rpc)
+    if handles and not failures and "failure" not in evidence:
+        evidence["stateRemoved"] = attempt("remove_state", lambda: remove_private_test_root(state))
     return failures
 
 
@@ -300,13 +304,23 @@ def run_case(name: str, work: Path, *, substitutes_only: bool = False) -> None:
                     assert cli.returncode == 0, evidence["cli"]
                     reply = json.loads(stdout)
                 elif name in {"stop", "restart"}:
-                    reply = transport.call_service(name, {"drainSeconds": 0})
+                    if name == "stop":
+                        reply = request_private_service_stop(
+                            state,
+                            lambda _operation, params: transport.call_service("stop", {"drainSeconds": params["drainSeconds"]}),
+                            drainSeconds=0,
+                        )
+                    else:
+                        reply = transport.call_service("restart", {"drainSeconds": 0})
                     assert reply.get("stopped") if name == "stop" else reply.get("restarting"), reply
                     assert process.wait(timeout=20) == 0
                     evidence["lifecycle"] = reply
                     if name == "restart":
                         resume = json.loads((state / "restart.resume.json").read_text(encoding="utf-8"))
                         assert resume["serviceId"] == ready["serviceId"]
+                        with patch.object(transport.subprocess, "Popen", side_effect=collect_spawn):
+                            successor = transport.call_service("health")
+                        assert successor["serviceId"] != ready["serviceId"]
                     return
                 elif name == "board" or name.endswith("board"):
                     reply = transport.call_board("health", state_dir=state if name.startswith("explicit") else None)

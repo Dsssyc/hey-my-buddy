@@ -32,6 +32,7 @@ class Source:
         self.start = started_at
         self.group = True
         self.job = [301]
+        self.job_signalled = True
         self.signals = []
 
     def boot_id(self):
@@ -52,13 +53,15 @@ class Source:
         self.group = False
 
     def open_job(self, name):
-        def terminate():
+        def terminate(*, timeout):
             self.signals.append(("job", name))
             self.job = []
             self.start = None
+            return self.job_signalled
 
         return nullcontext(None if self.job is None else SimpleNamespace(
-            members=lambda: self.job, active=lambda: len(self.job), terminate=terminate))
+            members=lambda: self.job, active=lambda: len(self.job), wait=lambda timeout: not self.job and self.job_signalled,
+            terminate=terminate))
 
 
 class ProcessIdentityTests(unittest.TestCase):
@@ -153,6 +156,13 @@ class ProcessIdentityTests(unittest.TestCase):
         source.start = 220
         self.assertEqual(identity.inspect_process_identity(WINDOWS_RECORD, source=source), "identity-absent")
 
+    def test_windows_job_stop_without_termination_signal_stays_unknown(self):
+        source = Source(started_at=WINDOWS_RECORD["startedAt"])
+        source.job_signalled = False
+        self.assertEqual(identity._stop_windows_job(WINDOWS_RECORD, source, settle_seconds=0), "unknown")
+        source.job_signalled = True
+        self.assertEqual(identity.inspect_process_identity(WINDOWS_RECORD, source=source), "identity-absent")
+
     def test_windows_stop_keeps_one_handle_for_verification_termination_and_empty_observation(self):
         from hey_my_buddy.protocol import windows_process
 
@@ -161,7 +171,8 @@ class ProcessIdentityTests(unittest.TestCase):
                 api = mock.Mock()
                 api.open_job.side_effect = [77, 99]  # Reopening could select a different named object.
                 api.process_ids.return_value = [301, 302]
-                api.active.side_effect = [1, 0]
+                api.active.return_value = 0
+                api.wait_job.return_value = True
                 with mock.patch.object(windows_process, "WindowsAPI", return_value=api), \
                      mock.patch.object(identity._SystemSource, "started_at",
                                        side_effect=[WINDOWS_RECORD["startedAt"], None]):
@@ -170,7 +181,7 @@ class ProcessIdentityTests(unittest.TestCase):
                     else:
                         self.assertEqual(identity.stop_orphan_process(WINDOWS_RECORD), "orphan-stopped")
                 self.assertEqual(api.mock_calls, [mock.call.open_job(WINDOWS_RECORD["jobName"]),
-                    mock.call.process_ids(77), mock.call.terminate(77), mock.call.active(77),
+                    mock.call.process_ids(77), mock.call.terminate(77), mock.call.wait_job(77, 2.0),
                     mock.call.active(77), mock.call.close(77)])
 
     def test_windows_unreadable_mismatched_or_absent_job_never_authorizes_termination(self):
