@@ -22,7 +22,7 @@ The shared `buddy` skill is the only distribution ([ADR-015](docs/decisions/015-
 
 ## Verification
 
-Use uv from the repository root. Prepare the console development dependencies with `npm --prefix apps/console ci` using the Node version supported in `apps/console/package.json`; the preview regression runs the real frontend parsers. The complete check is `uv run --frozen python -m buddy.checks`; focused tests cover a bounded change. The check suite makes no model calls.
+Use uv from the repository root. Prepare the console development dependencies with `npm --prefix apps/console ci` using the Node version supported in `apps/console/package.json`; the preview regression runs the real frontend parsers. The complete check is `uv run --frozen python -m buddy.checks`; focused tests cover a bounded change. The check suite makes no model calls. The Python suite runs one private subprocess per test file with a conservative CPU-based worker count; `--jobs N` or `BUDDY_CHECKS_JOBS` sets it, and `1` restores the original serial single-process run.
 
 Tests use private state and runtime roots created by the test harness, never the daily board. When tests run inside a hey-my-buddy process, clear the inherited runtime, Worker and agent credentials for each test subprocess: `BUDDY_STATE_DIR`, `BUDDY_RUNTIME_ROOT`, `BUDDY_RUNTIME`, `BUDDY_RUNTIME_IDENTITY`, `BUDDY_WORKER_STATE`, `BUDDY_WORKER_ID`, `BUDDY_AGENT_CREDENTIAL`, `BUDDY_AGENT_CREDENTIAL_FILE`, `VIRTUAL_ENV`, `UV_PROJECT_ENVIRONMENT`. `BUDDY_DEV_SOURCE=1` alone cannot override a pinned runtime. A private cold-start test verifies stable interpreter, package and resource paths, including after the source directory is replaced.
 

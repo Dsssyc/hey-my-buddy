@@ -420,6 +420,7 @@ class TestCrashWindows(BoardTestCase):
                 self.assertEqual(status["selectedAttemptId"], attempt_id, "no replacement generation may exist")
                 # A replacement worker with the same identity must not release it either:
                 # it no longer holds the handle, so it has no evidence of termination.
+                replacement_started = time.time()
                 replacement = subprocess.Popen(
                     [
                         sys.executable,
@@ -444,7 +445,22 @@ class TestCrashWindows(BoardTestCase):
                     start_new_session=True,
                 )
                 self.children.append(replacement)
-                time.sleep(3)
+                # Wait for boot evidence, not elapsed time: the replacement owns the
+                # supervisor lifetime lock (freed when its predecessor was killed) and
+                # has written a heartbeat newer than its own launch, so a resume-or-
+                # release decision has already had its chance.
+                from buddy.checks import lock_is_held
+
+                replacement_dir = self.directory / "workers" / "fault"
+                self.assertTrue(
+                    wait_for(
+                        lambda: lock_is_held(replacement_dir / "supervisor.lock")
+                        and (replacement_dir / "heartbeat.json").exists()
+                        and (replacement_dir / "heartbeat.json").stat().st_mtime >= replacement_started,
+                        20,
+                    ),
+                    "the replacement worker never booted",
+                )
                 after = self.cli("status", json.dumps({"runId": run_id}))[1]
                 self.assertEqual(
                     after["attemptState"],
@@ -904,7 +920,20 @@ class TestLifecycle(BoardTestCase):
                 text=True,
             )
             self.children.append(waiting)
-            time.sleep(1)
+            # Wait until the daemon has actually admitted the client's wait; that is
+            # stronger evidence than elapsed time that it is genuinely waiting.
+            from buddy.transport import ServiceError, _read_endpoint, _request
+
+            def wait_admitted() -> bool:
+                endpoint = _read_endpoint(self.directory)
+                if endpoint is None:
+                    return False
+                try:
+                    return _request(endpoint, "wait_capacity", {}, resource="wait").get("admitted", 0) >= 1
+                except ServiceError:
+                    return False
+
+            self.assertTrue(wait_for(wait_admitted, 20), "the client was never admitted before it was interrupted")
             self.assertIsNone(waiting.poll(), "the client must be waiting before it is interrupted")
             waiting.send_signal(signal.SIGINT)
             abandoned_stdout, abandoned_stderr = waiting.communicate(timeout=20)

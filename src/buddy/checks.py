@@ -8,7 +8,11 @@ A Worker-pinned production runtime must never leak into a test subprocess, and
 
 Every child runs inside one private checks root: ``TMPDIR`` points into that root, so
 the state and runtime roots each suite creates — including its ``TMPDIR`` fixtures —
-never leave it. After the suites finish, passing or failing, the runner asks any
+never leave it. With the default worker count the Python suite runs one subprocess per
+test file — each with its own private state, runtime and temp directories below the
+checks root — and the Node suite runs alongside it; ``--jobs 1`` (or
+``BUDDY_CHECKS_JOBS=1``) restores the original single-process serial run. After the
+suites finish, passing or failing, the runner asks any
 surviving Buddy daemon or supervisor below the private root to stop through its
 cooperative surfaces, then waits until every observed survivor has been confirmed to
 exit and asserts a clean root: no held Buddy lifetime lock, no live process tied to
@@ -22,6 +26,7 @@ prints environment content.
 from __future__ import annotations
 
 from . import locking
+import concurrent.futures
 import json
 import os
 from pathlib import Path
@@ -29,6 +34,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 
 #: Inherited variables that would otherwise point a test subprocess at a production
@@ -95,6 +101,207 @@ def child_environment(root: Path, private_root: Path) -> dict:
     values['BUDDY_STATE_DIR'] = str(private_root / 'state')
     values['BUDDY_RUNTIME_ROOT'] = str(private_root / 'runtime')
     return values
+
+
+#: Upper bound for the derived worker count: every parallel child spawns real
+#: daemons, CLIs and harness fixtures of its own, so a conservative cap keeps
+#: timing-sensitive tests away from an oversubscribed CPU.
+MAX_DEFAULT_JOBS = 4
+
+#: The test files measured slowest by the recorded full-suite baseline
+#: (docs/acceptance/checks-speedup.md), slowest first. Parallel runs schedule them
+#: before the alphabetical remainder so the long tail never queues behind a busy
+#: worker. The order is a scheduling hint only: it never changes which tests run.
+SLOWEST_FILES_FIRST: tuple[str, ...] = (
+    "test_workspace_lifecycle",
+    "test_workflow_preparation",
+    "test_parallel_dispatch",
+    "test_blackboard",
+    "test_workflow_real",
+    "test_workspace",
+    "test_scope_recovery",
+    "test_run",
+    "test_host_workflow_worker",
+    "test_repair_recovery",
+    "test_decision",
+    "test_zcode",
+    "test_claude",
+    "test_codex",
+    "test_console",
+    "test_rpc_config",
+    "test_first_install",
+    "test_ctwo_service",
+    "test_router",
+    "test_zcode_native",
+)
+
+
+def default_jobs() -> int:
+    """A conservative parallel worker count derived from the CPU count."""
+    return max(1, min(MAX_DEFAULT_JOBS, (os.cpu_count() or 2) - 1))
+
+
+def resolve_jobs(arguments: list[str]) -> int:
+    """The worker count: ``--jobs`` wins over ``BUDDY_CHECKS_JOBS`` over the default."""
+    value: str | None = None
+    rest = list(arguments)
+    while rest:
+        token = rest.pop(0)
+        if token == "--jobs":
+            if not rest:
+                raise SystemExit("buddy.checks: --jobs requires a value")
+            value = rest.pop(0)
+        elif token.startswith("--jobs="):
+            value = token.split("=", 1)[1]
+        else:
+            raise SystemExit(f"buddy.checks: unknown argument {token!r}")
+    if value is None:
+        value = os.environ.get("BUDDY_CHECKS_JOBS")
+    if value is None:
+        return default_jobs()
+    try:
+        jobs = int(value)
+    except ValueError:
+        raise SystemExit(f"buddy.checks: invalid jobs value {value!r}") from None
+    if jobs < 1:
+        raise SystemExit(f"buddy.checks: jobs must be at least 1, got {jobs}")
+    return jobs
+
+
+def python_test_modules(root: Path) -> list[str]:
+    """Every Python test module ``unittest discover`` would run, as module names."""
+    directory = root / "tests" / "python"
+    return sorted(path.stem for path in directory.glob("test*.py"))
+
+
+def _scheduled_test_modules(modules: list[str]) -> list[str]:
+    """The baseline-slowest modules first, then the alphabetical remainder."""
+    rank = {name: index for index, name in enumerate(SLOWEST_FILES_FIRST)}
+    return sorted(modules, key=lambda name: (rank.get(name, len(rank)), name))
+
+
+class ChildOutcome:
+    """One suite child's result: its label, exit code, captured output and time."""
+
+    def __init__(self, label: str, returncode: int, stdout: str, stderr: str, seconds: float):
+        self.label = label
+        self.returncode = returncode
+        self.stdout = stdout
+        self.stderr = stderr
+        self.seconds = seconds
+
+
+def run_suite_child(root: Path, private_root: Path, directory_name: str, label: str,
+                    command: list[str], live: set, guard: threading.Lock) -> ChildOutcome:
+    """Run one suite child inside its own private state, runtime and temp root."""
+    child_root = private_root / directory_name
+    (child_root / "tmp").mkdir(mode=0o700, parents=True)
+    environment = child_environment(root, child_root)
+    started = time.monotonic()
+    process = subprocess.Popen(
+        command,
+        cwd=str(root),
+        env=environment,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    with guard:
+        live.add(process)
+    try:
+        stdout, stderr = process.communicate()
+    finally:
+        with guard:
+            live.discard(process)
+    return ChildOutcome(label, process.returncode, stdout or "", stderr or "", time.monotonic() - started)
+
+
+def _report_child_output(outcome: ChildOutcome) -> None:
+    for stream, text in (("stdout", outcome.stdout), ("stderr", outcome.stderr)):
+        if text.strip():
+            print(f"----- {outcome.label} {stream} -----")
+            print(text, end="" if text.endswith("\n") else "\n")
+
+
+def run_suites_parallel(root: Path, private_root: Path, jobs: int) -> str | None:
+    """One private subprocess per Python test file, with the Node suite alongside.
+
+    Every child gets its own private sub-root below the checks root, so no state,
+    runtime or temp directory is shared while the suites run; the whole-root teardown
+    afterwards still covers them all. The baseline-slowest Python files are submitted
+    first. A failing child's captured output is printed in full — unittest's verbose
+    listing names the module, class and test — and the failure is summarized by file.
+    """
+    node = os.environ.get("BUDDY_NODE") or shutil.which("node")
+    if not node:
+        raise SystemExit("Node.js is required for the dsh process runner")
+    node_tests = sorted(str(path) for path in (root / "harnesses" / "dsh" / "tests").glob("*.test.mjs"))
+    tasks: list[tuple[str, str, list[str]]] = [
+        *[(f"p{index:03d}", module, [sys.executable, "-m", "unittest", "-v", module])
+          for index, module in enumerate(_scheduled_test_modules(python_test_modules(root)))],
+        ("node", "node suite", [node, "--test", *node_tests]),
+    ]
+    print(f"buddy.checks: {len(tasks) - 1} python test files across {jobs} workers, node suite in parallel")
+    live: set = set()
+    guard = threading.Lock()
+    outcomes: list[ChildOutcome] = []
+    pool = concurrent.futures.ThreadPoolExecutor(max_workers=min(jobs, len(tasks)))
+    try:
+        futures = [
+            pool.submit(run_suite_child, root, private_root, directory_name, label, command, live, guard)
+            for directory_name, label, command in tasks
+        ]
+        for done, future in enumerate(concurrent.futures.as_completed(futures), start=1):
+            outcome = future.result()
+            outcomes.append(outcome)
+            state = "ok" if outcome.returncode == 0 else f"FAILED (exit {outcome.returncode})"
+            print(f"[{done}/{len(tasks)}] {outcome.label} {state} {outcome.seconds:.1f}s")
+            if outcome.returncode != 0:
+                _report_child_output(outcome)
+    except BaseException:
+        # An interrupted run must not leave suite children behind the teardown.
+        with guard:
+            running = list(live)
+        for process in running:
+            process.terminate()
+        raise
+    finally:
+        pool.shutdown(wait=True)
+    python_failed = sorted(
+        outcome.label for outcome in outcomes
+        if outcome.label != "node suite" and outcome.returncode != 0
+    )
+    node_outcome = next((outcome for outcome in outcomes if outcome.label == "node suite"), None)
+    failures = []
+    if python_failed:
+        print("buddy.checks: python suite failed in "
+              f"{len(python_failed)} file(s): {', '.join(python_failed)}")
+        failures.append(f"python suite failed in {len(python_failed)} file(s): {', '.join(python_failed)}")
+    if node_outcome is not None and node_outcome.returncode != 0:
+        failures.append(f"node suite exited with {node_outcome.returncode}")
+    return "; ".join(failures) or None
+
+
+def run_suites_serially(root: Path, private_root: Path) -> str | None:
+    """The original serial run: one Python discovery process, then the Node suite."""
+    env = child_environment(root, private_root)
+    python = subprocess.run(
+        [sys.executable, "-m", "unittest", "discover", "-s", str(root / "tests" / "python"), "-v"],
+        cwd=str(root),
+        env=env,
+    )
+    if python.returncode != 0:
+        return f"python suite exited with {python.returncode}"
+    node = env.get("BUDDY_NODE") or shutil.which("node")
+    if not node:
+        raise SystemExit("Node.js is required for the dsh process runner")
+    # Browser tests belong to Vitest; only the DSH Node suites under harnesses/dsh are
+    # run here, and their support fixtures are not discovered as tests.
+    node_tests = sorted(str(path) for path in (root / "harnesses" / "dsh" / "tests").glob("*.test.mjs"))
+    result = subprocess.run([node, "--test", *node_tests], cwd=str(root), env=env)
+    if result.returncode != 0:
+        return f"node suite exited with {result.returncode}"
+    return None
 
 
 def lock_is_held(path: Path) -> bool:
@@ -447,8 +654,9 @@ def _safe_teardown(private_root: Path) -> dict | None:
         return {"root": str(private_root), "teardownError": f"{type(error).__name__}: {error}"}
 
 
-def main() -> None:
+def main(argv: list[str] | None = None) -> None:
     root = Path(__file__).resolve().parents[2]
+    jobs = resolve_jobs(sys.argv[1:] if argv is None else argv)
     # macOS's per-user temporary path leaves too little room for nested native
     # AF_UNIX sockets (sun_path is only 104 bytes). Keep the suite's one owned
     # root short; all child TMPDIRs still stay inside it and share its teardown.
@@ -457,24 +665,10 @@ def main() -> None:
     failure: str | None = None
     evidence: dict | None = None
     try:
-        env = child_environment(root, private_root)
-        python = subprocess.run(
-            [sys.executable, "-m", "unittest", "discover", "-s", str(root / "tests" / "python"), "-v"],
-            cwd=str(root),
-            env=env,
-        )
-        if python.returncode != 0:
-            failure = f"python suite exited with {python.returncode}"
+        if jobs > 1:
+            failure = run_suites_parallel(root, private_root, jobs)
         else:
-            node = env.get("BUDDY_NODE") or shutil.which("node")
-            if not node:
-                raise SystemExit("Node.js is required for the dsh process runner")
-            # Browser tests belong to Vitest; only the DSH Node suites under harnesses/dsh are
-            # run here, and their support fixtures are not discovered as tests.
-            node_tests = sorted(str(path) for path in (root / "harnesses" / "dsh" / "tests").glob("*.test.mjs"))
-            result = subprocess.run([node, "--test", *node_tests], cwd=str(root), env=env)
-            if result.returncode != 0:
-                failure = f"node suite exited with {result.returncode}"
+            failure = run_suites_serially(root, private_root)
     finally:
         # The residue assertion runs after a failing suite too; a failure here is
         # reported alongside the suite result instead of replacing it.

@@ -42,6 +42,7 @@ from buddy import daemon as daemon_module
 from buddy.client import BoardClient
 from buddy.store import BoardStore
 from buddy.worker import supervisor as supervisor_module
+from buddy.worker import worker as worker_module
 from buddy.worker.worker import ReceiptSpool, Worker
 
 
@@ -350,11 +351,18 @@ class RetireStartupTests(CapacityTestCase):
         thread = threading.Thread(target=worker.run, daemon=True)
         thread.start()
         try:
-            time.sleep(2.5)
+            # Wait until the loop has actually reconciled the startup intent; a fixed
+            # sleep could only hope the reconciliation happened within it.
+            self.assertTrue(
+                wait_for(
+                    lambda: worker.recovery_pending() == [f"startup-intent:{attempt['attemptId']}"],
+                    timeout=30,
+                ),
+                "the worker never reconciled the ambiguous startup intent",
+            )
             self.assertTrue(
                 thread.is_alive(), "a retire intent must not retire past an unreconciled startup intent"
             )
-            self.assertEqual(worker.recovery_pending(), [f"startup-intent:{attempt['attemptId']}"])
             # Settling the ambiguous attempt elsewhere lets the next reconciliation
             # clear the intent and only then may the worker retire.
             board.client().release(
@@ -611,14 +619,19 @@ class RetireRaceTests(CapacityTestCase):
         def run() -> None:
             outcome["result"] = worker.run()
 
+        # The only in-process observer that could translate a retire intent into a
+        # cancel while an attempt executes is the renewal thread's cancel poll. A
+        # shorter test-only poll keeps more observation cycles inside a shorter
+        # window; the production default is untouched.
         thread = threading.Thread(target=run, daemon=True)
-        thread.start()
-        self.assertTrue(wait_for(lambda: self.status(board, task) == "running", timeout=40), "the attempt never ran")
+        with patch.object(worker_module._Renewal, "CANCEL_POLL_SECONDS", 0.25):
+            thread.start()
+            self.assertTrue(wait_for(lambda: self.status(board, task) == "running", timeout=40), "the attempt never ran")
 
-        # Exactly what a bounded reconcile can produce when its idle check races the
-        # claim: the retire intent appears while the child is already executing.
-        worker.retire_request_path.write_text(json.dumps({"workerId": "w-race", "requestedBy": "test-race"}))
-        time.sleep(2.5)
+            # Exactly what a bounded reconcile can produce when its idle check races the
+            # claim: the retire intent appears while the child is already executing.
+            worker.retire_request_path.write_text(json.dumps({"workerId": "w-race", "requestedBy": "test-race"}))
+            time.sleep(0.75)
         view = board.call("task_get", {"runId": task})["task"]
         self.assertEqual(view["status"], "running", "a retire intent must never cancel an owned child")
         self.assertFalse(view["cancelRequested"])
