@@ -111,7 +111,7 @@ class RoutingOwnershipTests(RouterDispatchTestCase, ConsoleTestCase):
             self.assertNotIn("owner-unproven", rows[str(path)]["reasons"])
 
     def test_console_timeline_retains_both_router_execution_spans(self):
-        _request, first, second = self.replaced_router()
+        request, first, second = self.replaced_router()
         _server, browser = self.open_console(self.board_)
         status, _headers, raw = browser.get("/api/macro-tasks/run%3Arun-1/timeline")
         self.assertEqual(status, 200, raw)
@@ -120,3 +120,13 @@ class RoutingOwnershipTests(RouterDispatchTestCase, ConsoleTestCase):
         self.assertEqual({(span["decisionTaskId"], span["attemptId"]) for span in spans}, {
             (claim["task"]["taskId"], claim["attempt"]["attemptId"]) for claim in (first, second)})
         self.assertTrue(all(span["runId"] == "run-1" and span["shutdownConfirmed"] for span in spans))
+        for span in spans:
+            with self.subTest(task_id=span["decisionTaskId"]):
+                self.assertEqual(span["decisionId"], request["decisionId"])
+                selected = span["routing"]["selectedBuddy"]
+                self.assertEqual(selected["buddyId"], B)
+                self.assertEqual({key: selected[key] for key in ("harness", "provider", "model", "effort")}, {
+                    "harness": "dsh", "provider": "fixture", "model": "bravo", "effort": "max"})
+                self.assertEqual(span["routing"]["reason"], "The frozen legal choice")
+                self.assertEqual(span["routing"]["usage"], {
+                    "elapsedMs": 100, "toolCalls": 0, "bytesRead": None})
