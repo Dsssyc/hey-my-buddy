@@ -15,8 +15,40 @@ import uuid
 from ... import private_dirs
 from ...errors import BoardError
 from ...home import control_file_path, submission_file_path
+from ...protocol import schemas
+from ...protocol.reasons import reason
 from . import micro_task, storage, worker_sessions
 from ..store.db import canonical_json
+
+
+_TARGET_PATTERN = re.compile(r'(?:macro-[A-Za-z0-9-]{1,120}|run:[A-Za-z0-9._:-]{1,128})\Z')
+_BLOCKER_CODES = {
+    'queued': 'macro-task-deletion.queued',
+    'routing': 'macro-task-deletion.routing',
+    'running': 'macro-task-deletion.running',
+    'awaiting-host': 'macro-task-deletion.awaiting-host',
+    'review': 'macro-task-deletion.review',
+    'stop-unconfirmed': 'macro-task-deletion.stop-unconfirmed',
+}
+
+
+def _request_target(params, fields, operation, console_authority):
+    if console_authority is None:
+        raise BoardError('UNAUTHORIZED', 'Macro task deletion requires an authenticated console writer')
+    schemas.reject_unknown(params, {'macroTaskId'} | fields, operation)
+    return schemas.required_string(params, 'macroTaskId', max_length=134, pattern=_TARGET_PATTERN)
+
+
+def preview_request(store, params: dict, *, console_authority: dict | None = None) -> dict:
+    target = _request_target(params, set(), 'macro_task.deletion_preview', console_authority)
+    return preview(store, target)
+
+
+def delete_request(store, params: dict, *, console_authority: dict | None = None) -> dict:
+    target = _request_target(params, {'microTaskCount', 'confirm'}, 'macro_task.delete', console_authority)
+    if params.get('confirm') is not True:
+        raise BoardError('INVALID_ARGUMENT', 'confirm must be true')
+    return delete(store, target, params.get('microTaskCount'))
 
 
 @dataclass
@@ -49,11 +81,7 @@ def _rows(connection, table, column, values):
 
 
 def _target(target):
-    if not isinstance(target, str) or not re.fullmatch(r'[A-Za-z0-9._:-]{1,256}', target):
-        raise BoardError('INVALID_ARGUMENT', 'Expected a macro task or run group identifier')
     if target.startswith('run:'):
-        if not target[4:]:
-            raise BoardError('INVALID_ARGUMENT', 'Expected a run group identifier')
         return 'micro-task-tree', target
     return 'macro-task', target
 
@@ -138,36 +166,36 @@ def _blockers(store, connection, scope):
     runs = {row['run_id']: row for row in scope.run_rows}
     tasks = {row['task_id']:row for row in scope.task_rows}
     reasons = {}
-    def block(task_id, reason, resolution, attempt_ids=()):
+    def block(task_id, code, attempt_ids=()):
         task = tasks[task_id]
         run = runs.get(task_id)
-        key = (task_id, reason)
+        key = (task_id, code)
         reasons[key] = {'runId': task_id if run else None, 'taskId': task_id,
                         'state': task['state'], 'runState': run['state'] if run else None,
-                        'reasonCode': reason, 'resolution': resolution,
+                        'reason': reason(_BLOCKER_CODES[code]),
                         'attemptIds': sorted(attempt_ids)}
     for task in scope.task_rows:
         identifier = task['task_id']
         run = runs.get(identifier)
         if not store.workflow._stop_proven(connection, task):
-            block(identifier, 'stop-unconfirmed', 'resolve-stop',
+            block(identifier, 'stop-unconfirmed',
                   [a['attempt_id'] for a in scope.attempt_rows if a['task_id'] == identifier
                    and (a['execution_state'] != 'finished' or not a['shutdown_confirmed'])])
         if task['state'] in ('queued', 'running', 'cancelling', 'reconciliation-needed'):
-            block(identifier, 'queued' if task['state'] == 'queued' else 'running', 'wait-or-stop')
+            block(identifier, 'queued' if task['state'] == 'queued' else 'running')
         if run and run['state'] not in ('accepted', 'concluded', 'cancelled', 'failed'):
-            reason = {'delivered': 'review', 'awaiting-host': 'awaiting-host'}.get(run['state'], 'running')
-            block(identifier, reason, 'host-decide-or-review' if reason in ('review','awaiting-host') else 'wait-or-stop')
+            code = {'delivered': 'review', 'awaiting-host': 'awaiting-host'}.get(run['state'], 'running')
+            block(identifier, code)
     for row in _rows(connection, 'workflow_requests', 'run_id', scope.runs):
         if row['state'] == 'open':
-            block(row['run_id'], 'awaiting-host', 'host-decide-or-review')
+            block(row['run_id'], 'awaiting-host')
     for row in _rows(connection, 'workflow_continuations', 'run_id', scope.runs):
         if row['state'] in ('recorded', 'queued'):
-            block(row['run_id'], 'queued', 'wait-or-stop')
+            block(row['run_id'], 'queued')
     for row in _rows(connection, 'workflow_routes', 'run_id', scope.runs):
         if row['state'] == 'pending':
-            block(row['run_id'], 'routing', 'wait-or-stop')
-    return sorted(reasons.values(), key=lambda row: (row['taskId'], row['reasonCode']))
+            block(row['run_id'], 'routing')
+    return sorted(reasons.values(), key=lambda row: (row['taskId'], row['reason']['code']))
 
 
 def _storage_in_use(store, connection, scope):
@@ -264,7 +292,7 @@ def _delete_workspaces(store, scope):
 def _remove_owned_tree(path):
     if (private_dirs.linked_component(path) is not None
             or path.exists() and not path.is_dir()):
-        return [{'objectKind':'private-root', 'path':str(path), 'reasonCode':'owner-unproven'}]
+        return [{'objectKind':'private-root', 'path':str(path), 'reason':reason('macro-task-deletion.owner-unproven')}]
     private_dirs.remove_tree(path)
     return []
 
@@ -309,7 +337,7 @@ def _delete_cli_files(store, scope):
 
     def remove(path):
         if not safe_file(path):
-            skipped.append({'objectKind':'cli-file','path':str(path),'reasonCode':'owner-unproven'})
+            skipped.append({'objectKind':'cli-file','path':str(path),'reason':reason('macro-task-deletion.owner-unproven')})
         else:
             path.unlink(missing_ok=True)
 
@@ -485,7 +513,9 @@ def delete(store, target: str, micro_task_count: int) -> dict:
             try:
                 skipped.extend(operation(store,scope))
             except (BoardError,OSError) as error:
-                return {**_summary(deletion,duplicate=duplicate),'reasonCode':error.code if isinstance(error,BoardError) else 'IO_ERROR',
+                return {**_summary(deletion,duplicate=duplicate),
+                        'reason':reason('macro-task-deletion.physical-failed',
+                                        errorCode=error.code if isinstance(error,BoardError) else 'IO_ERROR'),
                         'objectKind':phase}
         with store.db.write() as connection:
             current = _record(connection,target)

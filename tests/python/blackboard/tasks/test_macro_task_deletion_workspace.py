@@ -40,14 +40,14 @@ class DeletionWorkspaceTests(unittest.TestCase):
         checkout = Path(manifest["checkoutRoot"])
         (checkout / "src/new.txt").write_text("unsealed\n")
         skipped = self.delete(manifest)
-        self.assertIn("unsealed-changes", [item["reasonCode"] for item in skipped])
+        self.assertIn("macro-task-deletion.unsealed-changes", [item["reason"]["code"] for item in skipped])
         self.assertTrue(checkout.exists())
         self.assertTrue(self.git("show-ref", "--verify", manifest["snapshot"]["inputRef"]))
         (checkout / "src/new.txt").unlink()
         self.git("worktree", "unlock", str(checkout))
         self.git("worktree", "lock", "--reason", "someone-else", str(checkout))
         skipped = self.delete(manifest)
-        self.assertIn("lock-mismatch", [item["reasonCode"] for item in skipped])
+        self.assertIn("macro-task-deletion.lock-mismatch", [item["reason"]["code"] for item in skipped])
         self.assertTrue(checkout.exists())
 
     def test_enumerates_more_than_sixty_four_fixed_refs(self):
@@ -67,7 +67,7 @@ class DeletionWorkspaceTests(unittest.TestCase):
         unknown = f"refs/hey-my-buddy/workspaces/{identifier}/unknown"
         self.git("update-ref", unknown, manifest["inputCommit"])
         skipped = self.delete(manifest)
-        self.assertIn("REF_UNPROVEN", [item["reasonCode"] for item in skipped])
+        self.assertIn("macro-task-deletion.ref-unproven", [item["reason"]["code"] for item in skipped])
         self.assertTrue((self.state / "workspaces" / identifier).exists())
         self.assertTrue(self.git("show-ref", "--verify", unknown))
 
@@ -187,7 +187,7 @@ class DeletionWorkspaceTests(unittest.TestCase):
         record.write_text(json.dumps(request))
         before = set(directory.parent.iterdir())
         skipped = self.delete(manifest)
-        self.assertIn("OWNER_UNPROVEN", [item["reasonCode"] for item in skipped])
+        self.assertIn("macro-task-deletion.owner-unproven", [item["reason"]["code"] for item in skipped])
         self.assertEqual(set(directory.parent.iterdir()), before)
 
     def test_linked_allocation_lock_is_left_in_place(self):
@@ -199,7 +199,7 @@ class DeletionWorkspaceTests(unittest.TestCase):
         outside.write_text("owned elsewhere")
         lock.symlink_to(outside)
         skipped = self.delete(manifest)
-        self.assertIn("OWNER_UNPROVEN", [item["reasonCode"] for item in skipped])
+        self.assertIn("macro-task-deletion.owner-unproven", [item["reason"]["code"] for item in skipped])
         self.assertEqual(outside.read_text(), "owned elsewhere")
         self.assertTrue(self.git("show-ref", "--verify", manifest["snapshot"]["inputRef"]))
 
@@ -210,7 +210,7 @@ class DeletionWorkspaceTests(unittest.TestCase):
         directory.rename(outside)
         directory.symlink_to(outside, target_is_directory=True)
         skipped = self.delete(manifest)
-        self.assertIn("OWNER_UNPROVEN", [item["reasonCode"] for item in skipped])
+        self.assertIn("macro-task-deletion.owner-unproven", [item["reason"]["code"] for item in skipped])
         self.assertTrue(outside.is_dir())
         self.assertTrue(self.git("show-ref", "--verify", manifest["snapshot"]["inputRef"]))
 
@@ -245,7 +245,7 @@ class DeletionWorkspaceTests(unittest.TestCase):
             replacement = self.git("rev-parse", "HEAD").decode().strip()
         self.git("update-ref", ref, replacement)
         skipped = self.delete(manifest)
-        self.assertIn("REF_CHANGED", [item["reasonCode"] for item in skipped])
+        self.assertIn("macro-task-deletion.ref-changed", [item["reason"]["code"] for item in skipped])
         self.assertTrue((self.state / "workspaces" / manifest["workspaceId"]).exists())
         self.assertEqual(self.git("rev-parse", ref).decode().strip(), replacement)
 
@@ -275,7 +275,7 @@ class DeletionWorkspaceTests(unittest.TestCase):
                 with patch.object(workspace,'_git',side_effect=race):
                     skipped = self.delete(manifest)
                 if changed:
-                    self.assertIn('REF_CHANGED',[item['reasonCode'] for item in skipped])
+                    self.assertIn('macro-task-deletion.ref-changed',[item['reason']['code'] for item in skipped])
                     self.assertEqual(self.git('rev-parse',ref).decode().strip(),replacement)
                 else:
                     self.assertEqual(skipped,[])

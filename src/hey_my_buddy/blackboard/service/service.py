@@ -85,6 +85,8 @@ CONTROL_OPERATIONS = (
     "macro_task_list",
     "macro_task_timeline",
     "macro_task_stop",
+    "macro_task_deletion_preview",
+    "macro_task_delete",
 )
 WAIT_OPERATIONS = ("events_wait", "task_wait", "message_wait", "wait_capacity")
 
@@ -808,6 +810,26 @@ class BoardService(_BaseResource):
             "macro_task.stop", request_json,
             lambda params: self.store.workflow.stop_macro_task(
                 params, console_authority=workflow_module.console_authority_from_scope()
+            ),
+        )
+
+    def macro_task_deletion_preview(self, request_json: str) -> str:
+        from ..tasks import macro_task_deletion
+
+        return self._guard(
+            "macro_task.deletion_preview", request_json,
+            lambda params: macro_task_deletion.preview_request(
+                self.store, params, console_authority=workflow_module.console_authority_from_scope()
+            ),
+        )
+
+    def macro_task_delete(self, request_json: str) -> str:
+        from ..tasks import macro_task_deletion
+
+        return self._guard(
+            "macro_task.delete", request_json,
+            lambda params: macro_task_deletion.delete_request(
+                self.store, params, console_authority=workflow_module.console_authority_from_scope()
             ),
         )
 
