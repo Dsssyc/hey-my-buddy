@@ -40,8 +40,7 @@ SUMMARIES: dict[str, str] = {
     "help": "Show every method, or one method's validated parameters, defaults and bounds.",
     "ping": "Authenticated process liveness; no storage or runtime scan.",
     "health": "Service, runtime, capacity and integrity report; read it before relying on routing.",
-    "capabilities": "Harness report with availability, capabilities, named operations and the honest limitations map.",
-    "harnesses": "Harness report; the same operation as capabilities.",
+    "harnesses": "Harness report with availability, capabilities, named operations and limitations.",
     "harness-set": "Choose the harness executable or restore automatic detection.",
     "quota-redetect": "Open the one-shot routing retry window of a provider's no-reset quota exhaustion; no model or balance query.",
     "accounts": "Read cached native login status and billing type without a native refresh.",
@@ -131,7 +130,6 @@ MISSING_SUMMARY = "(no one-sentence summary yet; add one to cli_help.SUMMARIES)"
 METHOD_NOTES: dict[str, tuple[str, ...]] = {
     "stop": ("the CLI name fixes action to 'stop'; restart and status are separate CLI names",),
     "restart": ("the CLI name fixes action to 'restart'; stop and status are separate CLI names",),
-    "harnesses": ("the same C-Two operation as capabilities",),
     "upgrade": ("runs the same installer as install with the upgrade coordinator",),
     "quota-redetect": ("reuse requestId after a lost reply, even if the chance was consumed; changed inputs conflict; no model/balance query or recovery claim",),
     "accept": ("keyed by run and artifact: the same payload replays its recorded response and any changed payload conflicts",),

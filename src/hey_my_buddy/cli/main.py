@@ -39,7 +39,6 @@ from ..buddy.runtime.worker import RETIRE_REQUEST_NAME
 METHODS = [
     "ping",
     "health",
-    "capabilities",
     "harnesses",
     "accounts",
     "harness-set",
@@ -195,7 +194,7 @@ examples:
       Board operations for external workers and operators. The local worker commands
       start or cooperatively stop one independent Python worker supervisor.
 
-  hey-my-buddy health   hey-my-buddy capabilities   hey-my-buddy runtime   hey-my-buddy console   hey-my-buddy restart   hey-my-buddy stop
+  hey-my-buddy health   hey-my-buddy harnesses   hey-my-buddy runtime   hey-my-buddy console   hey-my-buddy restart   hey-my-buddy stop
       Service control. `hey-my-buddy stop` cancels queued work, durably requests cancellation
       for active attempts, drains for a bounded interval and lists unresolved attempts.
       `hey-my-buddy restart` detaches the daemon while preserving every independent worker.

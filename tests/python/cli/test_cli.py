@@ -21,6 +21,7 @@ from support import BoardTestCase
 from blackboard.tasks.test_workflow import WorkflowTestCase
 
 import hey_my_buddy.cli.main as cli
+import hey_my_buddy.cli.cli_help as cli_help
 import hey_my_buddy.protocol.transport as transport
 from hey_my_buddy.errors import BoardError
 from hey_my_buddy.blackboard.service.service import BoardService, CONTROL_OPERATIONS
@@ -64,6 +65,7 @@ RETIRED_METHODS = (
 class MethodSurfaceTests(unittest.TestCase):
     def test_cli_names_map_onto_the_unchanged_c_two_operations(self):
         expected = {
+            "harnesses": ("control", "capabilities"),
             "submit": ("control", "workflow_submit"),
             "get": ("control", "workflow_get"),
             "decide": ("control", "workflow_decide"),
@@ -94,6 +96,24 @@ class MethodSurfaceTests(unittest.TestCase):
         # Await, the new-package upgrade coordinator and skill install are CLI-level helpers.
         self.assertEqual(set(cli.METHODS), set(transport.METHOD_MAP) | set(cli.LOCAL_METHODS) | {"await", "upgrade", "install", "paths", "backup-preflight"})
         self.assertEqual(cli.LOCAL_METHODS, ("worker-start", "worker-stop"))
+
+    def test_capabilities_is_only_a_c_two_operation_not_a_cli_command(self):
+        self.assertNotIn("capabilities", cli.METHODS)
+        self.assertNotIn("capabilities", transport.METHOD_MAP)
+        self.assertNotIn("capabilities", cli_help.SUMMARIES)
+        self.assertIn("capabilities", CONTROL_OPERATIONS)
+        self.assertTrue(hasattr(BuddyControl, "capabilities"))
+        self.assertTrue(hasattr(BoardService, "capabilities"))
+        self.assertTrue(hasattr(BoardClient, "capabilities"))
+        output = io.StringIO()
+        with contextlib.redirect_stdout(output), mock.patch.object(
+            cli, "_call_service", side_effect=AssertionError("unknown commands must not call the service")
+        ), self.assertRaises(SystemExit) as caught:
+            cli.main(["capabilities", "{}"])
+        self.assertEqual(caught.exception.code, 2)
+        error = json.loads(output.getvalue())["error"]
+        self.assertEqual(error["code"], "UNKNOWN_METHOD")
+        self.assertEqual(error["didYouMean"], cli_help.nearest_methods("capabilities", cli.METHODS))
 
     def test_execution_results_unwrap_the_task_view_and_micro_task_results_do_not(self):
         self.assertEqual(

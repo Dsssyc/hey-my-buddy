@@ -31,8 +31,8 @@
 | `src/hey_my_buddy/blackboard/tasks/macro_tasks.py` | 1 | 69；Host 结论事件 |
 | `src/hey_my_buddy/blackboard/tasks/workflow.py` | 35 | 111, 792, 793, 2274, 2284, 2318, 2341, 2770, 3236, 3277, 3282, 3283, 3290（2 处）, 3337, 3496, 3508, 3531, 3880, 4279, 4281, 4286, 4361, 4366, 4368, 4374, 4530, 5064, 5573, 5574, 6419, 6422, 6948, 6994, 7092；workflow_runs、tasks、祖先与根微任务、Host 结论及其返回字段 |
 | `src/hey_my_buddy/cli/blocking.py` | 2 | 46, 499；任务与微任务终态 |
-| `src/hey_my_buddy/cli/cli_help.py` | 1 | 64；conclude 帮助中的微任务终态 |
-| `src/hey_my_buddy/cli/main.py` | 2 | 152, 156；微任务结论与终态帮助 |
+| `src/hey_my_buddy/cli/cli_help.py` | 1 | 63；conclude 帮助中的微任务终态 |
+| `src/hey_my_buddy/cli/main.py` | 2 | 151, 155；微任务结论与终态帮助 |
 | `src/hey_my_buddy/install/upgrade.py` | 3 | 323, 357, 372；归档基点微任务的 Host 结论判断与升级空闲条件 |
 | `src/hey_my_buddy/protocol/schemas.py` | 1 | 98；任务终态 |
 
@@ -42,7 +42,7 @@
 
 控制台没有读取回合 `state` 的逻辑：`apps/console/src/workflow-types.ts:48` 的 `TurnRouting` 不包含状态，`WorkflowPanel.tsx` 使用回合配置、摘要、会话和用量；`ui.tsx:204` 与 `macro-task-display.ts:201` 的 `concluded` 标签读取微任务状态，`macro-task-stop-reply.ts` 与 `macro-task-types.ts` 的 `concludedRunIds` 表示保留 Host 结论的根微任务，因此均不改。本次没有修改前端或重建资产，也没有执行前端全量或浏览器检查。
 
-除上述 Python 清点外，仍有 3 处前端文字使用 concluded 描述旧回合结果摘要，逐条列出如下；它们不读取回合状态，按“前端没有这样的地方就不动前端”的限定保留，归属明确，不属于存疑项。
+除上述 Python 清点外，仍有 3 处前端文字使用 concluded 描述旧回合结果摘要，逐条列出如下；它们不读取回合状态，按“前端没有这样的地方就不动前端”的限定保留，归属明确，不属于存疑项。Host 在第三回合续接指令中已将这三处交给修改界面文字的另一个微任务，本回合不处理。
 
 - `apps/console/src/types.ts:224`：`workflow.resultSummary` 的注释把最新回合结果称为 concluded。
 - `apps/console/src/desktop-console.test.tsx:327`：已有测试名中的 newest concluded result。
@@ -50,7 +50,7 @@
 
 ## 顺带修改的帮助文字
 
-共 3 句：`src/hey_my_buddy/cli/cli_help.py:43` 的 `capabilities` 改为 “Harness report with availability, capabilities, named operations and the honest limitations map.”；`:44` 的 `harnesses` 改为 “Harness report; the same operation as capabilities.”；`:70` 的 `macro-task-list` 改为 “Bounded summaries of macro tasks and standalone micro tasks by latest activity.”。其他帮助中的 adapter 指执行连接件，保留；现有帮助测试没有固定上述旧句子的断言。
+首回合按当时的树共改 3 句（第三回合的最终文字见后节）：`src/hey_my_buddy/cli/cli_help.py:43` 的 `capabilities` 改为 “Harness report with availability, capabilities, named operations and the honest limitations map.”；`:44` 的 `harnesses` 改为 “Harness report; the same operation as capabilities.”；`:70` 的 `macro-task-list` 改为 “Bounded summaries of macro tasks and standalone micro tasks by latest activity.”。其他帮助中的 adapter 指执行连接件，保留；现有帮助测试没有固定上述旧句子的断言。
 
 ## 验证记录
 
@@ -136,5 +136,33 @@
 单文件重跑日志分别保存在忽略的 `tmp/turn-returned-event-retry-test_workflow_preparation.log`、`tmp/turn-returned-event-retry-test_workspace_lifecycle.log`、`tmp/turn-returned-event-retry-test_blackboard.log` 与 `tmp/turn-returned-event-retry-test_parallel_dispatch.log`。
 
 本回合选择的 50 个受影响文件最终全部有通过结果：46 个文件在更正后启动的主批次中通过，另外 4 个文件单独重跑各一次全部通过，4 次单文件检查均退出 0、无跳过且私有根均已删除。该结论不把中断的主批次描述为整批退出 0，也不把首回合的验证代替本回合验证；预览回归仅引用前述 Host 的合并后树验证，本 Worker 没有复跑。
+
+## 第三回合：CLI 只保留 harnesses
+
+开发者于 2026-10-14 决定，CLI 对这个操作只保留 `harnesses`，删除别名 `capabilities`。`src/hey_my_buddy/cli/main.py:39` 的命令清单删掉旧名，命令数量从 68 项变为 67 项，`:197` 的服务控制示例改用 `harnesses`；`src/hey_my_buddy/protocol/transport.py:43` 只保留 `harnesses -> (control, capabilities)`，删除旧 CLI 键的那一行。没有增加特殊报错、重定向或旧名兼容；输入旧名继续走原有的未知命令及相近候选流程。
+
+`src/hey_my_buddy/cli/cli_help.py:43` 的 `harnesses` 说明改为 “Harness report with availability, capabilities, named operations and limitations.”，删除 `capabilities` 的独立帮助条目，以及原 `METHOD_NOTES` 中“与 capabilities 相同”的别名说明。参数帮助由保留命令的 C-Two 映射生成，旧命令已无映射，因此不再产生其参数帮助。最终累计帮助文字为改写 2 句独立说明（`:43` 的 `harnesses` 与 `:69` 的 `macro-task-list`）、更新 1 处服务控制示例，并删除 2 条旧说明；首回合已被替换的帮助记录保留为历史。
+
+`tests/python/console/test_console.py:709`、`:769` 两处 CLI 调用改用 `harnesses`；`tests/python/cli/test_cli.py:68` 在现有映射测试中明确 `harnesses` 仍调用 C-Two `capabilities`，`:100` 新增一条要求的退役命令测试：旧名不在 CLI 命令、传输映射或帮助摘要中，输入旧名返回 `UNKNOWN_METHOD` 与原有候选，且不调用服务；同时确认服务、C-Two 合约和 `BoardClient` 上的操作仍存在。没有发现固定旧命令数量的测试，原有命令清单测试直接依据当前集合核对。
+
+逐处扫描后保留的 `capabilities` 属于其他对象：`src/hey_my_buddy/protocol/client.py:70` 的 `BoardClient.capabilities()` 直接经 `_call_board` 调 C-Two 操作，不经过 CLI 命令映射；`protocol/contracts.py`、`blackboard/service/service.py`、`console/server.py` 中的是合约、服务或浏览器操作，`console/reads.py` 与合成预览中的操作名、回应字段仍属于服务协议；`protocol/transport.py:209` 的判断检查实际 C-Two 操作，以附带 harness 路径提示。其余是 Worker、harness、模型与实时通道的能力字段、声明或数据；新增测试中使用旧 CLI 名称只为验证拒绝行为。这些均未更名。文档与共享 skill 中的旧 CLI 示例交由 Host 修改，本回合未改前端、升级基点、版本或 schema。
+
+本回合按原指定解释器与检查运行器运行以下 13 个文件，默认 4 个并发进程，不传 `--jobs` 或设置并发覆盖值；不运行 `tests/python/cli/test_host_preview.py`，也不安装前端依赖。189 项测试全部通过，无跳过，检查运行器退出 0 且私有根已删除，没有失败文件需要重跑；原始输出保存在忽略的 `tmp/turn-returned-cli-harnesses-checks.log`。
+
+| 第三回合测试文件 | 结果 |
+| --- | --- |
+| `tests/python/cli/test_blocking.py` | 通过 |
+| `tests/python/cli/test_checks_focused.py` | 通过 |
+| `tests/python/cli/test_checks_uv_cache.py` | 通过 |
+| `tests/python/cli/test_cli.py` | 通过 |
+| `tests/python/cli/test_checks_parallel.py` | 通过 |
+| `tests/python/cli/test_checks_cleanup.py` | 通过 |
+| `tests/python/cli/test_harness_test_safety.py` | 通过 |
+| `tests/python/cli/test_repository_hygiene.py` | 通过 |
+| `tests/python/cli/test_skill_workflow.py` | 通过 |
+| `tests/python/cli/test_host_cli.py` | 通过 |
+| `tests/python/cli/test_support_cleanup.py` | 通过 |
+| `tests/python/cli/test_cli_views.py` | 通过 |
+| `tests/python/console/test_console.py` | 通过 |
 
 `git diff --check` 通过。以上为 Worker 的修改与检查记录，最终验收由 Host 负责。
