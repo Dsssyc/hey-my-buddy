@@ -269,8 +269,8 @@ class ProfileTests(unittest.TestCase):
         self.assertEqual(rpc_config.configure_local_endpoint(self.state, create=False), root)
         self.assertEqual(root.stat().st_mode & 0o777, 0o755)
 
-    def test_bad_state_or_ipc_is_refused_without_repair(self):
-        """R-03: structural guards and real SDK access refusal at registration."""
+    def test_endpoint_registration_refuses_unsafe_ipc_without_repair(self):
+        """R-03: real SDK access refusal is an endpoint start failure."""
         from hey_my_buddy.errors import BoardError
         from hey_my_buddy.buddy.harnesses.c_two_live import CTwoLiveEndpoint
         from hey_my_buddy.buddy.harnesses.live import LiveCapabilities
@@ -297,25 +297,35 @@ class ProfileTests(unittest.TestCase):
                 except Exception as caught:
                     error = caught
                 self.assertIsInstance(error, BoardError)
-                self.assertEqual(error.code, "PRIVATE_PATH_UNSAFE")
+                self.assertEqual(error.code, "LIVE_ENDPOINT_START_FAILED")
                 self.assertIsInstance(error.__cause__, RuntimeError)
                 self.assertIn(reason, str(error.__cause__))
+                self.assertEqual(error.message, str(error.__cause__))
                 self.assertEqual(ipc.stat().st_mode & 0o777, mode)
                 self.assertTrue(cc.shutdown()["completed"])
         ipc.chmod(0o700)
+
+    def test_bad_state_or_ipc_is_refused_without_repair(self):
+        """R-03: structural path guards keep their private-path refusal."""
+        from hey_my_buddy.errors import BoardError
+        ipc = self.state / "ipc"
+        ipc.mkdir(mode=0o700)
         file_state = self.state / "file-state"
         file_state.write_text("ordinary file")
-        with self.assertRaises(BoardError):
+        with self.assertRaises(BoardError) as refused:
             rpc_config.configure_client(file_state)
+        self.assertEqual(refused.exception.code, "PRIVATE_PATH_UNSAFE")
         file_ipc = self.state / "file-ipc"
         file_ipc.mkdir()
         (file_ipc / "ipc").write_text("ordinary file")
-        with self.assertRaises(BoardError):
+        with self.assertRaises(BoardError) as refused:
             rpc_config.configure_client(file_ipc)
+        self.assertEqual(refused.exception.code, "PRIVATE_PATH_UNSAFE")
         link = self.state / "link"
         link.symlink_to(ipc, target_is_directory=True)
-        with self.assertRaises(BoardError):
+        with self.assertRaises(BoardError) as refused:
             rpc_config._validate_path(link / "child", boundary=self.state)
+        self.assertEqual(refused.exception.code, "PRIVATE_PATH_UNSAFE")
         # A chosen public root may pass through a link. Preserve the nested
         # private-link assertion within its explicit state boundary instead.
         with self.assertRaises(BoardError) as refused:
