@@ -428,7 +428,38 @@ class UpgradeFixtureTests(unittest.TestCase):
         self.assertEqual(backup.database_snapshot(connection, exact=True), before)
         self.assertEqual(list(connection.execute('SELECT * FROM sqlite_master ORDER BY type,name')), schema)
 
-    def test_native_description_equal_to_catalog_fact_stays_content(self):
+    def test_blackboard_constants_without_retained_discovery_still_convert(self):
+        fixture, connection = self.restored('known-reason-without-discovery')
+        cases = (
+            ('not present in the latest confirmed native discovery', 'catalog.model-absent', {}),
+            ('not present in the latest complete native discovery', 'catalog.effort-retired', {}),
+            ('HARNESS_NOT_CHECKED', 'harness.not-checked', {'operation': 'probe'}),
+            ('HARNESS_START_FAILED', 'harness.launch-failed', {'operation': 'probe'}),
+            ('timeout', 'harness.timeout', {'operation': 'probe'}),
+            ('HARNESS_ACCOUNT_STOP_UNCONFIRMED', 'harness.shutdown-unverified', {'operation': 'account-read'}),
+            ('ACCOUNT_BINDING_CHANGED', 'catalog.account-binding-changed', {}),
+        )
+        expected = {}
+        for source in ('catalog:expired-discovery', 'outside'):
+            self.assertIsNone(connection.execute('SELECT 1 FROM evaluation_catalog WHERE discovery_id=?',
+                                                  (source.removeprefix('catalog:'),)).fetchone())
+            for index, (old, code, params) in enumerate(cases):
+                buddy_id = f'{source}-{index}'
+                connection.execute('INSERT INTO buddies(buddy_id,label,harness,provider,model,effort,available,source,unavailable_reason) '
+                                   'VALUES(?,?,?,?,?,?,0,?,?)',
+                                   (buddy_id, buddy_id, 'codex', 'fixture', buddy_id, 'low', source, old))
+                expected[buddy_id] = (code, params)
+        connection.commit()
+        upgrade_schema_24_to_25(fixture['state'])
+        for buddy_id, (code, params) in expected.items():
+            with self.subTest(buddy=buddy_id):
+                row = connection.execute('SELECT unavailable_code,unavailable_params_json,unavailable_content '
+                                         'FROM buddies WHERE buddy_id=?', (buddy_id,)).fetchone()
+                self.assertEqual(row['unavailable_code'], code)
+                self.assertEqual(json.loads(row['unavailable_params_json']), params)
+                self.assertIsNone(row['unavailable_content'])
+
+    def test_blackboard_constant_wins_over_identical_native_description(self):
         fixture, connection = self.restored('catalog-fact-collision')
         native = 'not present in the latest confirmed native discovery'
         connection.execute('UPDATE buddies SET available=0,unavailable_reason=? WHERE model=?',
@@ -444,7 +475,13 @@ class UpgradeFixtureTests(unittest.TestCase):
         connection.commit()
         upgrade_schema_24_to_25(fixture['state'])
         row = connection.execute("SELECT unavailable_code,unavailable_content FROM buddies WHERE model='fixture-beta'").fetchone()
-        self.assertEqual(tuple(row), ('catalog.native-unavailable', native))
+        self.assertEqual(tuple(row), ('catalog.model-absent', None))
+        contents = [model['unavailableContent']
+                    for (payload_json,) in connection.execute('SELECT payload_json FROM evaluation_catalog')
+                    for provider in json.loads(payload_json)['providers'] for model in provider['models']
+                    if model['id'] == 'fixture-beta']
+        self.assertTrue(contents)
+        self.assertEqual(contents, [native] * len(contents))
 
     def test_unrelated_historical_native_text_does_not_override_catalog_fact(self):
         fixture, connection = self.restored('catalog-fact-source-binding')
@@ -468,7 +505,7 @@ class UpgradeFixtureTests(unittest.TestCase):
     def test_unresolved_catalog_source_rolls_back(self):
         fixture, connection = self.restored('catalog-source-unresolved')
         connection.execute("UPDATE buddies SET source='catalog:truncated',available=0,"
-                           "unavailable_reason='not present in the latest confirmed native discovery' "
+                           "unavailable_reason='native description without retained evidence' "
                            "WHERE model='fixture-beta'")
         connection.commit()
         before = backup.database_snapshot(connection, exact=True)

@@ -326,22 +326,23 @@ def _upgrade_catalog_and_health(connection: sqlite3.Connection) -> None:
     for row in rows:
         old = row[-1]
         discovery_id = row[11][len('catalog:'):] if row[11].startswith('catalog:') else None
-        if old is not None and discovery_id is not None and discovery_id not in discovery_ids:
-            raise BoardError('UPGRADE_INVALID_BOARD', 'Buddy unavailable reason lacks catalog provenance')
+        # Known board values remain identifiable after their discovery is retired.
         if old is None:
             code, params, content = None, None, None
+        elif old in _CATALOG_FACTS:
+            reason = make_reason(_CATALOG_FACTS[old])
+            code, params, content = reason['code'], canonical_json(reason['params']), None
+        elif old in _PROBE_CODES:
+            reason = _harness_reason(old)
+            code, params, content = reason['code'], canonical_json(reason['params']), None
+        elif old == 'ACCOUNT_BINDING_CHANGED':
+            reason = make_reason('catalog.account-binding-changed')
+            code, params, content = reason['code'], canonical_json(reason['params']), None
         elif (discovery_id, row[2], row[3], row[4], old) in native_reasons:
             reason = make_reason('catalog.native-unavailable')
             code, params, content = reason['code'], canonical_json(reason['params']), old
-        elif old in _CATALOG_FACTS and row[11].startswith('catalog:'):
-            reason = make_reason(_CATALOG_FACTS[old])
-            code, params, content = reason['code'], canonical_json(reason['params']), None
-        elif old in _PROBE_CODES and row[11].startswith('catalog:'):
-            reason = _harness_reason(old)
-            code, params, content = reason['code'], canonical_json(reason['params']), None
-        elif old == 'ACCOUNT_BINDING_CHANGED' and row[11].startswith('catalog:'):
-            reason = make_reason('catalog.account-binding-changed')
-            code, params, content = reason['code'], canonical_json(reason['params']), None
+        elif discovery_id is not None and discovery_id not in discovery_ids:
+            raise BoardError('UPGRADE_INVALID_BOARD', 'Buddy unavailable reason lacks catalog provenance')
         elif row[11].startswith('catalog:'):
             code, params, content = 'history.reason-unavailable', canonical_json({'recordId': row[0]}), None
         else:
