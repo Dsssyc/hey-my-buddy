@@ -29,7 +29,7 @@ class RolePromptTests(unittest.TestCase):
     def test_resources_define_each_roles_authority_and_boundaries(self):
         essentials = {
             "worker": (
-                "You are working for a Host agent, not for a person",
+                "You are working for a Host buddy, not for a person",
                 "Rules about the code itself still apply",
                 "Do not ask questions, offer choices or wait for input",
                 "Do not create micro tasks or hand work to other buddies",
