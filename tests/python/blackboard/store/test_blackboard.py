@@ -556,8 +556,11 @@ class TestCrashWindows(BoardTestCase):
             "status": "ok",
             "result": {"status": "ok"},
             "shutdownConfirmed": True,
-            "commandId": f"result:{attempt['attemptId']}",
         }
+        with self.assertRaises(BoardError) as caught:
+            client.submit_result(attempt["attemptId"], attempt["generation"], "a" * 32,
+                                 {**report, "commandId": "retired-result-command"})
+        self.assertEqual(caught.exception.code, "INVALID_ARGUMENT")
         first = client.submit_result(attempt["attemptId"], attempt["generation"], "a" * 32, dict(report))
         second = client.submit_result(attempt["attemptId"], attempt["generation"], "a" * 32, dict(report))
         self.assertTrue(second.get("duplicate") or second.get("replayed"))

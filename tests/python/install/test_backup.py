@@ -28,14 +28,14 @@ class BackupTests(BoardTestCase):
             path = board.directory / name
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text('retained evidence')
-        first = backup.create(board.store)
+        first = backup.create(board.directory)
         current = Path(first['path'])
         manifest = backup.verify(current)
         self.assertTrue(first['verified'])
         self.assertEqual(set(manifest['files']), {'board.sqlite3.gz', *(str(Path('state') / name) for name in STATE_FILES)})
         self.assertEqual((current / 'state/console-settings.json').stat().st_mode & 0o777, 0o600)
         (board.directory / 'console-settings.json').write_text('{"generation":2}')
-        second = backup.create(board.store)
+        second = backup.create(board.directory)
         self.assertEqual(first['path'], second['path'])
         self.assertEqual(json.loads((current / 'state/console-settings.json').read_text()), {'generation': 2})
         self.assertEqual([path.name for path in current.parent.iterdir() if path.is_dir()], ['current'])
@@ -43,13 +43,13 @@ class BackupTests(BoardTestCase):
     def test_missing_state_files_are_optional(self):
         board = self.board()
         board.store.db.close()
-        manifest = backup.verify(Path(backup.create(board.store)['path']))
+        manifest = backup.verify(Path(backup.create(board.directory)['path']))
         self.assertEqual(set(manifest['files']), {'board.sqlite3.gz'})
 
     def test_verify_rejects_out_of_scope_manifest_entry_with_valid_hash(self):
         board = self.board()
         board.store.db.close()
-        current = Path(backup.create(board.store)['path'])
+        current = Path(backup.create(board.directory)['path'])
         outside = current / 'state/attempts/run/result.json'
         outside.parent.mkdir(parents=True)
         outside.write_bytes(b'outside backup scope')
@@ -65,7 +65,7 @@ class BackupTests(BoardTestCase):
     def test_verify_refuses_consumed_upgrade_schema(self):
         board = self.board()
         board.store.db.close()
-        current = Path(backup.create(board.store)['path'])
+        current = Path(backup.create(board.directory)['path'])
         path = current / 'manifest.json'
         manifest = json.loads(path.read_text())
         manifest['schema'] = 21
@@ -82,7 +82,7 @@ class BackupTests(BoardTestCase):
             before = (board.directory / 'board.sqlite3').read_bytes()
             wal = (board.directory / 'board.sqlite3-wal').read_bytes()
             with self.assertRaises(BoardError) as caught:
-                backup.create(board.store)
+                backup.create(board.directory)
             self.assertEqual(caught.exception.code, 'BACKUP_INVALID')
             self.assertEqual((board.directory / 'board.sqlite3').read_bytes(), before)
             self.assertEqual((board.directory / 'board.sqlite3-wal').read_bytes(), wal)
@@ -91,20 +91,20 @@ class BackupTests(BoardTestCase):
     def test_failed_validation_keeps_old_backup_and_retries_incoming(self):
         board = self.board()
         board.store.db.close()
-        current = Path(backup.create(board.store)['path'])
+        current = Path(backup.create(board.directory)['path'])
         original = (current / 'manifest.json').read_bytes()
         with mock.patch.object(backup, 'verify', side_effect=BoardError('BACKUP_INVALID', 'injected')):
             with self.assertRaises(BoardError):
-                backup.create(board.store)
+                backup.create(board.directory)
         self.assertEqual((current / 'manifest.json').read_bytes(), original)
-        backup.create(board.store)
+        backup.create(board.directory)
         backup.verify(current)
         self.assertFalse((current.parent / '.incoming').exists())
 
     def test_tamper_is_detected_and_linked_retained_evidence_is_untouched(self):
         board = self.board()
         board.store.db.close()
-        current = Path(backup.create(board.store)['path'])
+        current = Path(backup.create(board.directory)['path'])
         with (current / 'board.sqlite3.gz').open('ab') as stream:
             stream.write(b'tamper')
         with self.assertRaises(BoardError):
@@ -114,7 +114,7 @@ class BackupTests(BoardTestCase):
         evidence = board.directory / 'attempts/run/attempt/result.json'
         evidence.parent.mkdir(parents=True)
         evidence.symlink_to(sentinel)
-        backup.create(board.store)
+        backup.create(board.directory)
         self.assertEqual(sentinel.read_text(), 'retained evidence')
         self.assertTrue(evidence.is_symlink())
 
@@ -126,7 +126,7 @@ class BackupTests(BoardTestCase):
         state_file = board.directory / 'console-settings.json'
         state_file.symlink_to(sentinel)
         with self.assertRaises(BoardError) as caught:
-            backup.create(board.store)
+            backup.create(board.directory)
         self.assertEqual(caught.exception.code, 'BACKUP_UNSAFE_PATH')
         self.assertEqual(caught.exception.details['path'], str(state_file))
         self.assertEqual(sentinel.read_text(), 'keep outside')
@@ -143,7 +143,7 @@ class BackupTests(BoardTestCase):
         checkout = board.directory / 'workspaces/large'
         checkout.parent.mkdir()
         checkout.write_text('unchanged checkout')
-        current = Path(backup.create(board.store)['path'])
+        current = Path(backup.create(board.directory)['path'])
         self.assertEqual(set(backup.verify(current)['files']), {'board.sqlite3.gz'})
         self.assertTrue((native / 'auth.json').is_symlink())
         self.assertEqual(secret.read_text(), 'private credential')
@@ -153,7 +153,7 @@ class BackupTests(BoardTestCase):
     def test_special_rollback_source_refuses_publication_and_keeps_previous_generation(self):
         board = self.board()
         board.store.db.close()
-        current = Path(backup.create(board.store)['path'])
+        current = Path(backup.create(board.directory)['path'])
         before = (current / 'manifest.json').read_bytes()
         source = board.directory / 'console-settings.json'
         for kind in ('directory', 'fifo'):
@@ -164,7 +164,7 @@ class BackupTests(BoardTestCase):
                     os.mkfifo(source)
                 try:
                     with self.assertRaises(BoardError) as caught:
-                        backup.create(board.store)
+                        backup.create(board.directory)
                     self.assertEqual(caught.exception.code, 'BACKUP_UNSAFE_PATH')
                     self.assertEqual((current / 'manifest.json').read_bytes(), before)
                     self.assertEqual(stat.S_ISDIR(source.lstat().st_mode), kind == 'directory')

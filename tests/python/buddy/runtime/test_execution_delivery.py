@@ -34,7 +34,7 @@ class ExecutionDeliveryTests(unittest.TestCase):
                   "terminationReason": "harness-error"}
         with mock.patch.object(self.execution, "_cleanup_attempt_credentials"):
             receipt = self.execution.receipt(CLAIM, report, self.execution.directory)
-        self.assertEqual(receipt["commandId"], "result:attempt-1")
+        self.assertEqual(set(receipt), {"attemptId", "taskId", "generation", "report", "createdAt"})
         self.assertEqual(read_execution_receipt(self.execution.directory), receipt)
         raw = (self.execution.directory / "result-receipt.json").read_text()
         self.assertNotIn("nonce", raw)
@@ -45,22 +45,22 @@ class ExecutionDeliveryTests(unittest.TestCase):
     def test_receipt_reader_refuses_foreign_binding_and_malformed_envelope(self):
         from hey_my_buddy.protocol.execution import fsync_json, RECEIPT
         binding = {"taskId": "task-1", "attemptId": "attempt-1", "generation": 1}
-        receipt = {**binding, "commandId": "result:attempt-1", "report": {},
+        receipt = {**binding, "report": {},
                    "createdAt": "2026-10-16T00:00:00+00:00"}
         fsync_json(self.execution.directory / RECEIPT, receipt)
         self.assertEqual(read_execution_receipt(self.execution.directory, binding=binding), receipt)
         with self.assertRaises(BoardError):
             read_execution_receipt(self.execution.directory,
                                    binding={**binding, "generation": 2})
-        for changed in ({"commandId": ""}, {"report": []}, {"extra": True}):
+        for changed in ({"taskId": ""}, {"report": []}, {"extra": True}):
             with self.subTest(changed=changed):
                 fsync_json(self.execution.directory / RECEIPT, {**receipt, **changed})
                 with self.assertRaises(BoardError):
                     read_execution_receipt(self.execution.directory, binding=binding)
 
-    def test_offline_delivery_retries_same_command_after_flushing_hint(self):
+    def test_offline_delivery_retries_same_attempt_result_after_flushing_hint(self):
         receipt = {"attemptId": "attempt-1", "taskId": "task-1", "generation": 1,
-                   "commandId": "result:attempt-1", "report": {"status": "ok"},
+                   "report": {"status": "ok"},
                    "createdAt": "2026-10-16T00:00:00+00:00"}
         from hey_my_buddy.buddy.runtime.receipts import write_receipt
         write_receipt(self.execution.directory, receipt)
@@ -78,6 +78,7 @@ class ExecutionDeliveryTests(unittest.TestCase):
         self.assertTrue(accepted)
         self.assertEqual([name for name, _ in calls], ["hint", "result", "hint", "result"])
         self.assertEqual(calls[1][1], calls[3][1])
+        self.assertEqual(calls[1][1], ("attempt-1", 1, "n" * 64, receipt["report"]))
         self.assertFalse((self.execution.directory / "result-receipt.json").exists())
         self.assertTrue((self.execution.directory / "result-delivery.json").exists())
 
@@ -229,7 +230,7 @@ class ExecutionDeliveryTests(unittest.TestCase):
 
     def test_fatal_hint_refusal_ends_receipt_delivery_with_durable_receipt(self):
         receipt = {"attemptId": "attempt-1", "taskId": "task-1", "generation": 1,
-                   "commandId": "result:attempt-1", "report": {"status": "ok"},
+                   "report": {"status": "ok"},
                    "createdAt": "2026-10-16T00:00:00+00:00"}
         from hey_my_buddy.buddy.runtime.receipts import write_receipt
         write_receipt(self.execution.directory, receipt)

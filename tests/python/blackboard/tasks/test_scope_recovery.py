@@ -193,7 +193,7 @@ class ScopeRecoveryTestCase(RealWorkspaceTestCase):
                 (run_id,),
             ).fetchone()["attempt_id"]
             receipt = connection.execute(
-                "SELECT * FROM commands WHERE command_id=?", (f"result:{attempt_id}",)
+                "SELECT * FROM commands WHERE kind='execution.result' AND attempt_id=?", (attempt_id,)
             ).fetchone()
             return {
                 "attempts": connection.execute(

@@ -404,12 +404,11 @@ def recover(state: Path) -> Path:
         os.close(lock)
 
 
-def create(store, *, runtime_identity: dict | None = None, plugin_commit: str | None = None, contract_version: str = CONTRACT_VERSION) -> dict:
+def create(state: Path, *, runtime_identity: dict | None = None, plugin_commit: str | None = None, contract_version: str = CONTRACT_VERSION) -> dict:
     started = time.monotonic()
-    directory = store if isinstance(store, Path) else store.directory
-    if _linked_component(directory):
+    if _linked_component(state):
         raise BoardError('BACKUP_UNSAFE_PATH', 'Backup state path cannot contain links', path='.')
-    state = directory.resolve()
+    state = state.resolve()
     wal = state / 'board.sqlite3-wal'
     if wal.exists() and wal.stat().st_size:
         raise BoardError('BACKUP_INVALID', 'Exact stopped-board archive requires a checkpointed WAL')

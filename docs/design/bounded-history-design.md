@@ -1,6 +1,6 @@
 # 命令提交身份与周期状态的保存
 
-开发者于 2026-10-16 定下：命令身份与回答长期保留，收据只保存不能从权威表重新读取的提交身份，重放时重建当前视图；周期性的状态随写入替换上一条。本文记录这个最终做法。调查与实现基点为 `c605b127`，schema 从 23 显式升级到 24，契约目标为 0.42.0；实际验证与当前交付边界见 [实现记录](bounded-history-notes.md)。Host 提供的数据库体积来自日常看板的只读测量，本实现未访问日常状态或原生账户。
+开发者于 2026-10-16 定下：命令身份与回答长期保留，收据只保存不能从权威表重新读取的提交身份，重放时重建当前视图；周期性的状态随写入替换上一条。本文记录这个最终做法。调查与实现基点为 `c605b127`，schema 从 23 显式升级到 24，软件与契约版本均为 0.42.0；实际验证与当前交付边界见 [实现记录](bounded-history-notes.md)。Host 提供的数据库体积来自日常看板的只读测量，本实现未访问日常状态或原生账户。
 
 ## 命令的身份与回答
 
@@ -19,7 +19,7 @@
 | message.post | Host 问询的 store 可选编号保护消息身份，另有 task/inquiryId 去重；已回答的消息仍能读回，named API 未传编号（`S:2457-2485,2535-2538`，`V:941-942`）。 | 原样保存，不能重发同一问题。 |
 | workflow.decide | Host 或获准的 Lead 决定一个帮助请求；授权后、revision 和请求关闭检查前查收据（`W:2202-2234,2390-2401,2440-2455`）。 | runId、requestId；decision 从该 workflow_requests.decision_json 读取，其余为当前 run 视图。 |
 | workflow.continue | Host/获准的 Lead 为本微任务或受控后代续接；授权后、expectedRevision 检查前重放，保护唯一 continuation（`W:2921-2942,3115-3130`）。 | runId、continuationId；目标 run、输入哈希、helperPolicy 从该 workflow_continuations 行读取；当前视图仍属于原控制微任务。 |
-| workflow.takeover | Host 或控制台换手，原 Host 丢回复后仍需取回新一代凭据；重放专门验证原 capability，当前 generation 必须仍等于此命令颁发的 generation，否则 STALE_GENERATION（`W:3312-3324,3362-3375,3380-3419`）。 | runId、颁发的 ownerGeneration、previousOwnerGeneration、control.hostId/control.ownerGeneration；controlToken 仍由 db.control_token(runId,generation) 推导；保留 issued generation 供原重放授权，当前视图不能覆盖它。 |
+| workflow.takeover | Host 或控制台换手，原 Host 丢回复后仍需取回新一代凭据；重放专门验证原 capability，当前 generation 必须仍等于此命令颁发的 generation，否则 STALE_GENERATION（`W:3312-3324,3362-3375,3380-3419`）。 | runId、颁发的 ownerGeneration、previousOwnerGeneration、control.hostId；controlToken 仍由 db.control_token(runId,generation) 推导；保留 issued generation 供原重放授权，当前视图不能覆盖它。 |
 | workflow.cancel | Host/获准的 Lead 或控制台取消受控工作，编号可选；授权后先查已有收据，accepted/concluded 只拒绝新的取消（`W:3434-3448,3567-3593`）。 | runId；固定的 cancelled=true 与说明由操作定义重建，当前停止状态照读当前视图。 |
 | macro_task.stop | 已认证控制台停止当时的宏任务工作集合；原编号重放必须保留当时范围，不能扩大到后来新增的微任务（`W:3453-3466,3499-3506`；`apps/console/src/macro-task-stop.ts:176-213`）。 | 小回答原样保存，包括当次的范围与数量；不改控制台。 |
 | workflow.accept | Host/获准的 Lead 验收固定交付物，命令号由规范化请求派生；授权后先查收据，回收后仍可重放，原接口已经用当前视图覆盖旧快照（`W:3924-3944,3974-4006,4392-4404`）。 | runId、integrationId，以及有解决冲突交付时的 resolutionConflictId；integration 与 resolutionDelivery 从固定整合行和冲突交付记录重建。verdict 为 accepted；原重放不再次回收，丢失回收结果走 reclaim。 |
@@ -28,7 +28,7 @@
 | workflow.workspace_resolve | Host/获准的 Lead 对固定冲突点 restore/adopt/abandon，授权后先查收据；一个局部恢复后同一冲突行仍可被下一次解决更新（`W:5139-5155,5290-5319`）。 | runId、targetRunId、conflictId、action、resolutionState、resolvedPaths、preservedPaths、remainingPaths、observedFingerprint、resolvedFingerprint、artifactId、nextBoundaryRequestId、delivered；这些保留首命令的提交结果，不能被后一次局部恢复覆盖。artifact/manifest 和已交付的 delivery 从固定交付物与冲突行读取；当前工作视图重建。 |
 | workflow.cleanup_plan | accept/conclude/reclaim 内部回收及 storage.apply 生成命令号，保护固定 allocation 的计划；收据先于 revision 检查。计划到期限制首次删除授权，不限制已有回答；applying 必须能跨期限续做（`W:4773-4802,5504-5530,5563-5598,5794-5799`；`blackboard/tasks/storage.py:851-854,936-941`）。 | runId、targetRunId、planId；计划、path、retention、evidence、当前 state/result 全从 workspace_cleanup_plans 读取，可以从原来的 planned 前进到 applied。 |
 | workflow.cleanup_apply | 同一内部调用完成计划，成功后才记录收据；中断恢复依据 applying 日志，成功后的旧编号仍可重放（`W:5642-5664,5754-5784`）。 | runId、targetRunId、planId；计划已成功提交这一事实不变，removed=true，retention 从该计划 result_json 读取，不重复删除后来在同一路径出现的目录。 |
-| execution.result | 执行进程 durable 投递或服务恢复导入；result_json 存在时先校验同值并确认 committed，不读取 commands（`S:2029-2091,2279-2283`）；磁盘确认前可无限重投（`buddy/runtime/receipts.py:25-57`）。 | 不再写或读 commands；attempts.result_json/result_command_id、代次/nonce 校验、补充停止证据、交付物与资源结算仍在原事务中。同执行异值为 CONFLICT，旧代为 STALE_GENERATION。 |
+| execution.result | 执行进程 durable 投递或服务恢复导入；result_json 存在时先校验同值并确认 committed，不读取 commands（`S:2029-2091,2279-2283`）；磁盘确认前可无限重投（`buddy/runtime/receipts.py:25-57`）。 | 不再写或读 commands，参数、持久回执和 attempts 表也不再带结果命令编号；attempts.result_json、代次/nonce 校验、补充停止证据、交付物与资源结算仍在原事务中。同执行异值为 CONFLICT，旧代为 STALE_GENERATION。 |
 | harness.prepare | 执行进程在启动原生 CLI 前做准备或一次失败重试；finished/cancel_requested 的检查在初次收据读取之前（`V:563-588,598-600`；`buddy/runtime/execution.py:409-417,499-501`）。 | 健康记录的小回答不变；升级时所有执行已停止，无须从 subject 解析旧 attempt_id。 |
 | quota.redetect | CLI/控制台显式重探测，以 quota-redetect:requestId 固定这一次准入事实（`V:610-627`）。 | 小回答原样保存，不能用当前额度替换当时的提交事实。 |
 | user_policy.publish | 已认证控制台一次设置 patch；收据先于设置写入，避免丢回复后重复覆盖新设置（`blackboard/evaluation/evaluation.py:202-217`）。 | published/counts 等小回答不变；不修改控制台保存流程。 |
@@ -39,7 +39,7 @@
 
 attempt.activity 的唯一入库点是 execution_progress，只有合法的新原生活动收据才更新 attempt_activity 最新投影并写事件；倒退和相同收据不写，空心跳不伪造原生活动（基点 `S:1821-1890`）。四家原生 CLI 的来源是 DSH native fold/finishing（`buddy/harnesses/dsh/native_run.py:1411-1419,1448-1452`）、ZCode native message/阶段状态（`zcode/native_run.py:1324-1369`）、Codex 观察（`codex/native_run.py:378-412,1170-1173,1270`）与 Claude Code 流帧（`claude/native_run.py:500-532,973`）。共享 ActivityPublisher 同阶段默认至少隔 2 秒，阶段变化立即发布，不是无消息时每 2 秒写一次；执行控制每 0.25 秒读取 live endpoint 的最新值、判断 newer、合并断联 hint 后转发（`protocol/activity.py:53,195-219`；`buddy/runtime/execution.py:256-285,759-785`）。这些是源码路径调查，不是某个已安装 CLI 版本的运行验证。
 
-写入一条新的 attempt.activity 时，先得到新的 AUTOINCREMENT events.seq，再在同一个写事务中删除该 attempt 的较早同 kind 行。对外只能看到旧的一条或新的一条，序号不回退、不复用；不改旧事件的含义。attempt_activity 的最新投影和事件替换原子提交，事务失败时两者及删除一起回滚。不同 attempt 各留一条，微任务是否验收、执行是否结束都不影响这个状态保存规则。
+写入一条新的 attempt.activity 时，先得到新的 AUTOINCREMENT events.seq，再在同一个写事务中删除该 attempt 的较早同 kind 行。删除活动时同时按已知的 task_id 筛选，三类 harness 状态按 task_id IS NULL 筛选，均使用已有 events_task_idx，不加新索引。对外只能看到旧的一条或新的一条，序号不回退、不复用；不改旧事件的含义。attempt_activity 的最新投影和事件替换原子提交，事务失败时两者及删除一起回滚。不同 attempt 各留一条，微任务是否验收、执行是否结束都不影响这个状态保存规则。
 
 | 读者 | 实际依赖与替换后的表现 |
 | --- | --- |
@@ -84,11 +84,11 @@ attempt.activity 的唯一入库点是 execution_progress，只有合法的新�
 
 schema 24 的唯一形式在新库直接创建；正常启动仍只接受当前 schema。新建 `blackboard/store/upgrade.py` 承接唯一 pending 23→24 升级，从 0.40.0、`9baa0524` 的 schema 23 样板出发；不重写基点夹具，不恢复更早历史转换。安装接受基点 23 与当前 24；改契约时原执行必须 finished 且 shutdown_confirmed=1，保留 Unknown 不等于 stopped 的前置条件。
 
-安装先使旧服务退出、取得独占锁并用旧库的原字节建立且验证离线备份，再执行一个 SQLite 写事务：十种 workflow 的 response_json 剥为提交身份，execution.result 的旧收据删除，harness.prepare 和其他小回答不动；attempt.activity 按 attempt_id 保留最大 seq，三类 harness 状态按 kind/harness 保留最大 seq；最后更新 schema marker。迁移不解析 prepare 的 subject，不修改保留事件的序号/内容/时间，不改变其他业务表。失败回滚整个转换，安装原备份仍为 23，可用原运行时恢复。
+backup.create 只接收状态目录 Path。安装先使旧服务退出、取得独占锁并用旧库的原字节建立且验证离线备份，再执行一个 SQLite 写事务：十种 workflow 的 response_json 剥为提交身份，execution.result 的旧收据删除，harness.prepare 和其他小回答不动；attempt.activity 按 attempt_id 保留最大 seq，三类 harness 状态按 kind/harness 保留最大 seq；同时删除 attempts.result_command_id 列，最后更新 schema marker。commands 的候选行先 fetchall，再逐行调用 stored_response 与共享 json_codec.canonical_json，种类规则只定义一处。迁移不解析 prepare 的 subject，不修改保留事件的序号/内容/时间，其他业务事实不变。失败回滚整个转换，安装原备份仍为 23，可用原运行时恢复。
 
-安装 expected 是转换后的完整快照；新服务启动后按全部表与既定 eventHead 做指纹比对。状态规则只在真实新写入时生效，没有启动收简造成指纹漂移，也没有对 commands/events 放宽任意变化。相同契约安装仍要求当前 schema 并保留在途执行。
+安装 expected 是转换后的完整快照；新服务启动后按全部表与既定 eventHead 做指纹比对。状态规则只在真实新写入时生效，没有启动收简造成指纹漂移，也没有对 commands/events 放宽任意变化。相同契约安装仍要求当前 schema 并保留在途执行。这里还依赖既有安装屏障：三类 harness 观察的生产入口在 upgrade.json 存在时不写，改契约安装要求没有在途执行，所以校验期间没有新状态写入去替换 eventHead 以内的旧事件；新增生产入口必须遵守同一个屏障，不额外增加第二道删除守卫。
 
-验证覆盖每种收据的提交身份/当前视图、不同请求冲突与原有授权拒绝；takeover 用原控制取回本代凭据及更晚一代拒绝；result 丢确认重投及补充停止证据；局部冲突连续解决后的首命令重放；计划从 planned 变 applied 后按同身份读取；活动每 attempt 一条、跨代隔离、单调游标、失败回滚、提醒/时间轴/Lead 的读路径；样板库升级后与新建当前库比较结构和规范化业务行、转换失败回滚与私有服务安装校验。全部通过检查运行器，只跑受影响文件，Host 合并后运行完整检查；本回合不安装产品、不操作日常服务、不做原生模型调用。
+验证覆盖每种收据的提交身份/当前视图、不同请求冲突与原有授权拒绝；takeover 用原控制取回本代凭据及更晚一代拒绝；result 丢确认重投及补充停止证据；局部冲突连续解决后的首命令重放；计划从 planned 变 applied 后按同身份读取；活动每 attempt 一条、跨代隔离、单调游标、失败回滚、提醒/时间轴/Lead 的读路径；样板库升级后与新建当前库比较结构和规范化业务行、转换失败回滚与私有服务安装校验。全部通过检查运行器，只跑受影响文件，Host 合并后运行完整检查；本回合不安装到日常环境、不操作日常服务、不做原生模型调用。
 
 ## 估算
 

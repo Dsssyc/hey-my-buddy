@@ -18,7 +18,7 @@ _CURRENT_VIEW_KINDS = frozenset({
     "workflow.workspace_resolve", "workflow.cleanup_plan", "workflow.cleanup_apply",
 })
 
-_CANCEL_NOTE = (
+CANCELLATION_NOTE = (
     "Cancellation is durable. An active execution becomes cancelling and its worker stops the owned "
     "process group; this response never claims that a surviving process is already stopped."
 )
@@ -40,8 +40,7 @@ def stored_response(kind: str, response: dict) -> dict:
     elif kind == "workflow.takeover":
         stored.update(ownerGeneration=response["ownerGeneration"],
                       previousOwnerGeneration=response["previousOwnerGeneration"],
-                      control={"hostId": response["control"]["hostId"],
-                               "ownerGeneration": response["control"]["ownerGeneration"]})
+                      control={"hostId": response["control"]["hostId"]})
     elif kind == "workflow.accept":
         stored["integrationId"] = response["integrationId"]
         if "resolutionDelivery" in response:
@@ -98,7 +97,7 @@ def replay_response(coordinator, connection, kind: str, stored: dict) -> dict:
                       control={"hostId": control["hostId"], "ownerGeneration": generation,
                                "controlToken": coordinator.db.control_token(stored["runId"], generation)})
     elif kind == "workflow.cancel":
-        result.update(cancelled=True, note=_CANCEL_NOTE)
+        result.update(cancelled=True, note=CANCELLATION_NOTE)
     elif kind == "workflow.accept":
         integration = connection.execute(
             "SELECT * FROM workflow_integrations WHERE integration_id=?",

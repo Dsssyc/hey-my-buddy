@@ -1,39 +1,37 @@
 # 命令身份与周期状态替换的实现记录
 
-2026-10-16，基于 `c605b127`，按开发者本日定下的两条规则实现；本记录是 Worker 的实现与验证证据，待 Host 验收。只修改分配检出内授权的源码、测试和两份设计记录；未操作日常状态/服务/Worker、账户、原生会话或用户 harness 配置，未安装到日常环境，未调用付费模型。方案已重写为 [最终做法](bounded-history-design.md)，原方案中的期限及附加响应层已经移除。
+2026-10-16，基于 `c605b127`，在上一轮输出 `9749b60b` 上按 Host 本轮核对的返修项完成收尾；本记录是 Worker 的源码与验证证据，待 Host 验收。最终设计见 [方案](bounded-history-design.md)。修改限于分配检出内授权的源码、测试、版本元数据和两份设计记录；未读写日常状态、服务、Worker、账户、原生会话或用户 harness 配置，未安装到日常环境，未做付费模型调用，未提交、改分支/标签或操作 stash。
 
-## 实现
+## 最终实现
 
-新增 `src/hey_my_buddy/blackboard/tasks/command_receipts.py`。十种 workflow 命令的写入只保存固定的提交身份，重放从对应版本/计划/整合/结论/交付物与当前微任务表重建回答；普通小回答保持原样。`BoardStore._receipt` 继续先比 kind/request_hash/subject，再调用重建；原 workflow 各入口的控制权、代次、revision 和目标检查未替换。takeover 的颁发代次保留，控制 token 仍从该代次推导，并经过原控制能力的专门重放授权。局部 workspace resolution 的旧结果不能从可更新的 conflict 行重建，保留该次 action/state/paths/fingerprint/交付身份，避免下一次恢复改写第一次提交的事实。
+新增 `blackboard/tasks/command_receipts.py`，十种 workflow 命令只保存固定的提交身份，重放从对应版本、计划、整合、结论、交付物与当前微任务表重建回答；九种小回答保持原样。统一收据读取继续先比 kind/request_hash/subject，各入口的控制权、代次和目标授权继续生效。takeover 的颁发代次只存顶层一份，control 只保留 hostId，重放从该代次推导 token 并经过原控制能力验证。取消说明由提交和重放共用一个常量。局部 workspace resolution 保留不能从可更新 conflict 行重建的首操作事实，避免第二次恢复改写第一次提交的结果。
 
-`execution.result` 删除统一命令收据的查写路径，attempts 的 result_json/result_command_id、同值重投、代次与 nonce、停止证据补充和事务式结算继续保留。已提交结果丢了磁盘确认后重投仍得到 committed 确认；异值与旧代由原权威结果规则拒绝。相关恢复测试改为核对 attempt 中的命令身份及没有多余 commands 行。
+execution.result 以 attempt 为唯一提交身份，不再查写 commands，也不再接受 commandId 参数。先对生产源码做过读者核对：result_command_id 唯一显式读取只是 confirm_execution_shutdown 再写回，没有控制台、视图或其他业务读者；因此一并移除 attempts 的该列、_commit_execution_result 的参数、执行进程生成的 result 编号、磁盘回执的 commandId 字段及投递/恢复传递编号的代码。权威 result_json、代次与 nonce 校验、结果同值重投、停止证据补充和事务式结算保留；旧编号参数由当前输入边界拒绝，不兼容旧回执形式。
 
-事件写入口在追加新行后、同一事务中替换旧状态：attempt.activity 按 attempt_id，harness.checked/harness.probe_unknown/harness.account_observed 按 kind 与 harness，只留最新。新事件继续使用 AUTOINCREMENT，activity_seq/at、head 和原唤醒路径照常前进。attempt_activity 的最新投影不变；重复或倒退活动不产生事件。提醒及领取记录、目录变化、连接/故障/恢复/停止事实、业务阶段和等待转移继续累计，没有新增维护线程或启动维护。
+周期状态在同一写事务中替换：attempt.activity 每 attempt 一条，三类 harness 健康/未知探测/账户观察按 kind 与 harness 各一条。新 seq 使用 AUTOINCREMENT，最新投影、activity_seq/at 与 head 同时前进，失败事务一起回滚。活动删除附带已知 task_id，harness 删除附带 task_id IS NULL；生产 SQL 的 EXPLAIN QUERY PLAN 回归检查要求四条删除都使用已有 events_task_idx，没有新索引。提醒与领取、目录变化、业务阶段/等待转移及故障/恢复/停止事实继续累计，不引入维护线程或启动维护。
 
-新增 `blackboard/store/upgrade.py` 的唯一 23→24 离线事务。安装器接受基点 23 与当前 24，在旧服务停止和独占锁之后先按 Path 备份原库，再转换 workflow 收据、删除 execution.result 旧收据并折叠周期状态，最后提升 schema；harness.prepare 不变，不解析 subject。转换后的完整快照作为新服务启动后的 expected，未放宽对 commands/events 指纹的校验。备份验证明确支持这一个基点和当前 schema，回滚保留原 23 库。基点夹具仍是 0.40.0/`9baa0524`，未重新生成或改标。
+23→24 的唯一待定升级先离线备份原库，再在一个事务里转换 workflow 回答、删除 execution.result 旧收据及 attempts.result_command_id 列、折叠周期事件，最后改 schema marker。commands 候选先 fetchall，再更新；编码使用共享 json_codec.canonical_json，哪些种类原样保留只由 stored_response 决定，不再预过滤或检查代码常量。backup.create 只收 Path，生产与测试调用统一。基点样板仍为 0.40.0/9baa0524/schema 23，没有重生成或改标。转换后的全表快照参与安装校验，失败事务回滚，原 23 备份可供原运行时恢复。
 
-源码契约与协议签名 fixture 已改到 0.42.0，SCHEMA_VERSION 为 24。C-Two 方法签名没有变化，所以重算签名摘要仍为 `f4ae9329eb636fd604a14051963b575f42d325c0de408108dcd57639932740a5`，只更新其绑定的 contractVersion。软件发行版本来自 `pyproject.toml`，该文件与 `uv.lock` 不在本回合冻结的 writeScope 中，均未修改，现仍是 0.41.0；因此本次交付尚未完成软件版本一致性，不能视作可安装的完整 0.42.0 候选。需要 Host 补这两份元数据或扩大文件范围后继续。
+安装校验继续依赖原有 upgrade.json 屏障：harness 状态生产入口在标记存在时不写，改契约安装要求没有在途执行，因此校验期间不会用新状态替换 eventHead 以内的旧行。没有启动时清理，也没有对 commands/events 指纹设置豁免。方案已记录这个生产入口约束。
 
-## 路径引用与独立复核
+本轮 scopeVersion 2 已授权 pyproject.toml 与 uv.lock。软件版本、CONTRACT_VERSION 和签名 fixture 现均为 0.42.0，SCHEMA_VERSION 为 24；按要求运行 uv lock，锁文件只改本项目一项版本，依赖集合不变。C-Two 方法签名未变化，签名摘要仍为 f4ae9329eb636fd604a14051963b575f42d325c0de408108dcd57639932740a5。test_current_core 的契约断言已更新，新 schema 无旧列；meta 写入清单加入唯一升级中合法的 schema marker 写入，仍守住只有三个单值。
 
-按当前源码逐项核对视图中路径的权威来源：微任务与旧回合的 manifest 在 workflow_runs、workflow_continuations、workflow_children、workflow_artifacts，物理路径和 checkout 身份还在 workspace_reservations；执行结果/日志在 attempts/artifacts；整合目标与比较证据在 workflow_integrations；计划中的 path/evidence/retention/result 在 workspace_cleanup_plans；冲突与授权记录在 workflow_workspace_conflicts/workflow_scope_versions。完整字段表见方案。存储清理的引用扫描与删除守卫没有改动。
+## 路径引用与审查边界
 
-另由一个只读原生子代理独立复核当前源码，未发现剥离快照后丢失真实 allocation 的结构性引用，也未发现提交身份或权限回归。其核对覆盖 helper 目标、continuation/旧输入 manifest、局部恢复后再次解决、takeover 原代授权及计划应用后的重放；没有把旧审查记录当作当前实现证据，未运行服务或测试。主代理另补升级回归测试，直接通过删除路径所用的 allocation_references 比较转换前后权威引用保护，去掉 commands/events 的重复引用后保护集合仍相同。Host 最终复核仍未进行。
+逐项核对的结构性路径来源仍在 workflow_runs、workflow_continuations、workflow_children、workflow_artifacts、workspace_reservations、attempts/artifacts、workflow_integrations、workspace_cleanup_plans 与冲突/授权记录中，完整映射见方案。存储清理的引用扫描及删除守卫未改。上一轮只读原生子代理对当前源码独立复核，未发现剥离视图导致真实 allocation 引用保护丢失；升级回归测试直接使用删除路径的 allocation_references 核对权威保护集合。
 
-## 检查
+本轮读取 `0fc3f2a2` 的独立实现审查作为线索，并逐项按代码确认 Host 列出的返修范围。每种 workflow 共用同一个回答构造器及 artifact 复用下的字段同源问题由 Host 记为后续，本轮没有扩大成全面重构；取消说明的单定义按本轮要求完成。两份 README、参考文档和 AGENTS 的升级状态更新由 Host 负责，本轮未修改这些文件。
 
-以下均从仓库根经 `uv run --frozen python -m hey_my_buddy.cli.checks` 运行，只指定受影响文件，默认 4 并行。每次启动前用 env -u 清除 HMB_STATE_DIR、HMB_RUNTIME_ROOT、HMB_RUNTIME、HMB_RUNTIME_IDENTITY、HMB_AGENT_CREDENTIAL_FILE、HMB_AGENT_CREDENTIAL_FD、VIRTUAL_ENV、UV_PROJECT_ENVIRONMENT；运行器继续为每个测试文件分配私有根。没有直接启动测试子进程，没有运行完整检查。原始输出仅在忽略的 tmp/ 下，公开记录不包含机器主目录或私有测试根的绝对路径。
+## 验证
 
-| 检查组 | 实际结果 | 本地证据 |
+所有行为检查从仓库根经 `uv run --frozen python -m hey_my_buddy.cli.checks` 指定受影响文件运行，默认 4 并行；启动前 env -u 清除 HMB_STATE_DIR、HMB_RUNTIME_ROOT、HMB_RUNTIME、HMB_RUNTIME_IDENTITY、HMB_AGENT_CREDENTIAL_FILE、HMB_AGENT_CREDENTIAL_FD、VIRTUAL_ENV、UV_PROJECT_ENVIRONMENT，测试子进程及服务由运行器分配私有根和回收。没有手动起测试进程，没有运行完整检查，没有前端改动或 npm/浏览器检查。原始输出放在忽略的 tmp/，记录不包含机器主目录或私有根的绝对位置。
+
+上一轮已记录的 21 文件 343 项，以及最终收据 6 项、升级样板 9 项局部检查均通过；那一轮的软件版本范围缺口已在本轮补齐。Host 在上一轮输出补版本后跑完整检查，指出 current_core 的两个断言、README 版本和未安装控制台依赖导致的失败；本轮只处理授权的 current_core，README 和控制台依赖仍按 Host 的安排处理，不把旧完整检查描述为通过。
+
+| 本轮检查 | 实际结果 | 本地证据 |
 | --- | --- | --- |
-| protocol/test_activity、store/test_interruption_recovery、service/test_reminders、service/test_harness_health、store/test_store，另含 protocol/test_contract_version | 前五个文件的 110 项通过；契约签名 fixture 校验通过，但软件版本与契约版本一致性一项失败，0.42.0 与未获范围的 0.41.0 不一致；运行器退出 1，私有根已清理 | tmp/bounded-history-core-check.log |
-| 21 个工作流、工作区、Lead、store、service、protocol 与安装升级文件 | 343 项通过、退出 0、私有根已清理 | tmp/bounded-history-integration-check.log |
-| 新命令收据测试及新 allocation 引用测试的局部复跑 | 命令收据 6 项通过；新引用测试最初遗漏私有辅助函数必填 request_id 参数，补为 None 后只重跑该升级文件，未改产品守卫 | tmp/bounded-history-final-check.log |
-| 最终 upgrade fixture 文件 | 9 项通过、退出 0、私有根已清理；含全表规范化存量/新库结构比较、周期事件折叠、事务异常回滚、命令指纹篡改拒绝及权威 allocation 引用保护 | tmp/bounded-history-reference-check.log |
-| 最终命令收据文件 | 6 项通过、退出 0、私有根已清理；小回答测试使用真实 task.submit 收据，在取消后重放并拒绝不同请求 | tmp/bounded-history-receipt-check.log |
+| 22 个受影响文件 | 270 项通过、退出 0，运行器确认私有根已清理；四条生产删除语句的 EXPLAIN 检查均使用 events_task_idx | tmp/bounded-history-revision-check.log |
 
-21 文件组包括 blackboard/tasks 的 test_command_receipts、test_workflow、test_workspace_lifecycle、test_scope_recovery、test_storage、test_host_workflow、test_lead_lifecycle、test_lead_review_boundaries、test_workflow_boundaries、test_workflow_cancellation；blackboard/store 的 test_upgrade_fixture、test_result_shutdown_proof；install 的 test_upgrade、test_upgrade_archive、test_upgrade_service、test_upgrade_host_cutover、test_upgrade_waiting_host、test_install_without_upgrade；blackboard/service 的 test_harness_startup、test_service；protocol 的 test_ctwo_service。包含真实私有服务与安装切换的测试，全部由运行器管理，最终源码没有前端改动，因此没有运行 npm 或浏览器测试。
+22 文件为 blackboard/store 的 test_current_core、test_interruption_recovery、test_result_shutdown_proof、test_blackboard、test_store、test_upgrade_fixture；protocol 的 test_contract_version、test_activity、test_ctwo_service；install 的 test_backup、test_backup_windows、test_upgrade、test_upgrade_archive、test_upgrade_service、test_execution_install_fence；buddy/runtime 的 test_execution_delivery、test_execution_process；blackboard/tasks 的 test_command_receipts、test_scope_recovery；blackboard/service 的 test_execution_recovery、test_execution_scheduler、test_service。
 
-新增行为验证包括：收据来自真实生产写入、当前视图已前进时仍对应同一个提交身份；计划从 planned 到 applied 后读取同一计划的当前事实；局部冲突的第一次恢复在第二次恢复后仍重放自己的剩余路径/指纹；活动替换和投影在失败事务中一起回滚、旧游标从删掉的位置继续、不同执行代次互不替换；健康/账户状态按 harness 隔离且序号前进。原有工作流测试继续覆盖冲突、无权与失效代次拒绝；提醒测试覆盖累计整数倍和不同静默起点的持久单次领取。
-
-收尾还核对 git diff --check、20 个调查 kind 的对应处理、设计记录每段一行以及没有机器绝对主目录。实际阻塞只有发行版本元数据的冻结范围缺口；没有产品取舍待开发者决定。需要 Host 补齐 pyproject.toml/uv.lock 的 0.42.0 一致性并通过 test_contract_version，更新两份 README 和参考文档，再按既定流程合并后跑完整检查与最终验收。
+新增/调整的检查覆盖：当前 schema 无结果命令列、23 样板删列后与 fresh schema 及规范化业务行一致、升级失败回滚；结果无编号仍能在离线/丢确认后重投和补充停止证据，旧参数被拒绝；四条生产删除语句的查询计划走 events_task_idx；带解决冲突交付的 accept 同请求重放，resolutionDelivery 与首次回答一致；takeover 代次与原能力不变、取消说明不漂移；备份 Path 接口及版本/签名一致性。最终源码和记录完成后只交 Host 验收，完整检查留待 Host 合并后运行。

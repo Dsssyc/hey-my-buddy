@@ -7,7 +7,7 @@ from pathlib import Path
 import sqlite3
 
 from ...errors import BoardError
-from .db import SCHEMA_VERSION
+from ...json_codec import canonical_json
 
 
 UPGRADE_BASE_SCHEMA = 23
@@ -22,18 +22,19 @@ def upgrade_schema_23_to_24(state: Path) -> None:
         connection.execute('BEGIN IMMEDIATE')
         try:
             row = connection.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone()
-            if row is None or row[0] != str(UPGRADE_BASE_SCHEMA) or SCHEMA_VERSION != 24:
+            if row is None or row[0] != str(UPGRADE_BASE_SCHEMA):
                 raise BoardError('UNSUPPORTED_SCHEMA', 'The pending upgrade accepts schema 23 and writes schema 24')
-            for command_id, kind, raw in connection.execute(
-                "SELECT command_id,kind,response_json FROM commands"
-                " WHERE kind NOT IN ('execution.result','harness.prepare')"
-            ):
+            connection.execute("DELETE FROM commands WHERE kind='execution.result'")
+            commands = connection.execute(
+                'SELECT command_id,kind,response_json FROM commands'
+            ).fetchall()
+            for command_id, kind, raw in commands:
                 original = json.loads(raw)
                 response = stored_response(kind, original)
                 if response != original:
-                    updated = json.dumps(response, ensure_ascii=False, sort_keys=True, separators=(',', ':'))
-                    connection.execute('UPDATE commands SET response_json=? WHERE command_id=?', (updated, command_id))
-            connection.execute("DELETE FROM commands WHERE kind='execution.result'")
+                    connection.execute('UPDATE commands SET response_json=? WHERE command_id=?',
+                                       (canonical_json(response), command_id))
+            connection.execute('ALTER TABLE attempts DROP COLUMN result_command_id')
             connection.execute(
                 "DELETE FROM events WHERE kind='attempt.activity' AND seq NOT IN ("
                 "SELECT MAX(seq) FROM events WHERE kind='attempt.activity' GROUP BY attempt_id)"

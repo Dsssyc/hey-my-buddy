@@ -699,7 +699,6 @@ class Execution:
             "attemptId": attempt["attemptId"],
             "taskId": attempt["taskId"],
             "generation": attempt["generation"],
-            "commandId": f"result:{attempt['attemptId']}",
             "report": report,
             "createdAt": _now(),
         }

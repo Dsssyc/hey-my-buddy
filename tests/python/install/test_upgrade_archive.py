@@ -26,7 +26,7 @@ class SameSchemaCutoverTests(BoardTestCase):
         (self.state / "console-settings.json").write_text('{"theme":"dark"}')
         store = BoardStore(self.state)
         store.db.close()
-        old_backup = Path(backup.create(store)["path"])
+        old_backup = Path(backup.create(self.state)["path"])
         self.retained_archive = self.state / "archives" / "previous"
         shutil.copytree(old_backup, self.retained_archive)
         self.archive_bytes = {path.relative_to(self.retained_archive): path.read_bytes()

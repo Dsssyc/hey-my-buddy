@@ -240,6 +240,30 @@ class ActivityProjection(BoardTestCase):
         self.assertNotIn(old_cursor, [event["seq"] for event in all_events])
         self.assertEqual(client.get(runId=task["runId"])["activity"], second)
 
+    def test_replacement_deletes_use_the_existing_task_index(self):
+        board = self.board()
+        client, task, claim, nonce = self.claimed_attempt(board)
+        attempt = claim["attempt"]
+        statements = []
+        with board.store.db.read() as connection:
+            connection.set_trace_callback(statements.append)
+        try:
+            client.progress(attempt["attemptId"], attempt["generation"], nonce,
+                            data={"activity": {"phase": "waiting-model", "eventSeq": 1}})
+            with board.store.db.write() as connection:
+                for kind in ("harness.checked", "harness.probe_unknown", "harness.account_observed"):
+                    board.store._append_event(connection, kind, payload={"harness": "codex"})
+        finally:
+            with board.store.db.read() as connection:
+                connection.set_trace_callback(None)
+        deletes = [statement for statement in statements if statement.startswith("DELETE FROM events")]
+        self.assertEqual(len(deletes), 4)
+        with board.store.db.read() as connection:
+            for statement in deletes:
+                with self.subTest(sql=statement):
+                    plan = [row[3] for row in connection.execute("EXPLAIN QUERY PLAN " + statement)]
+                    self.assertTrue(any("USING INDEX events_task_idx" in detail for detail in plan), plan)
+
     def test_invalid_or_tampered_activity_is_rejected(self):
         board = self.board()
         client, task, claim, nonce = self.claimed_attempt(board, request_id="activity-2")

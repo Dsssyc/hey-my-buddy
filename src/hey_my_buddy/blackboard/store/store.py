@@ -168,12 +168,12 @@ class BoardStore:
         seq = int(cursor.lastrowid)
         if kind == "attempt.activity":
             connection.execute(
-                "DELETE FROM events WHERE kind=? AND attempt_id=? AND seq<?",
-                (kind, attempt_id, seq),
+                "DELETE FROM events WHERE task_id=? AND kind=? AND attempt_id=? AND seq<?",
+                (task_id, kind, attempt_id, seq),
             )
         elif kind in ("harness.checked", "harness.probe_unknown", "harness.account_observed"):
             connection.execute(
-                "DELETE FROM events WHERE kind=? AND json_extract(payload_json,'$.harness')=? AND seq<?",
+                "DELETE FROM events WHERE task_id IS NULL AND kind=? AND json_extract(payload_json,'$.harness')=? AND seq<?",
                 (kind, event_payload["harness"], seq),
             )
         from ..tasks.macro_tasks import record_activity
@@ -1916,7 +1916,6 @@ class BoardStore:
                 "attemptId",
                 "generation",
                 "nonce",
-                "commandId",
                 "status",
                 "result",
                 "error",
@@ -1965,7 +1964,6 @@ class BoardStore:
             raise BoardError("INVALID_ARGUMENT", "wrap-up requires a cancelled result",
                              field="terminationReason")
         error_text = schemas.optional_string(params, "error", max_length=4000)
-        command_id = schemas.optional_string(params, "commandId", max_length=128) or f"result:{params.get('attemptId')}"
         attempt_id_param = schemas.required_string(params, "attemptId", max_length=128)
         log_paths = params.get("logPaths")
         if log_paths is not None and not isinstance(log_paths, dict):
@@ -2011,7 +2009,7 @@ class BoardStore:
             "terminationReason": termination_reason,
         }
         return self._commit_execution_result(
-            params, request=request, command_id=command_id, recovered=recovered, seal_stash=seal_stash,
+            params, request=request, recovered=recovered, seal_stash=seal_stash,
             completion_evidence=stop_evidence)
 
     def confirm_execution_shutdown(self, attempt_id: str, evidence: dict) -> dict:
@@ -2028,10 +2026,10 @@ class BoardStore:
             "attemptId", "status", "result", "artifacts", "shutdownConfirmed", "exitCode", "signal",
             "error", "logPaths", "runtimeIdentity", "terminationReason")}
         return self._commit_execution_result(
-            params, request=request, command_id=attempt["result_command_id"], recovered=True,
+            params, request=request, recovered=True,
             seal_stash=self.workflow.collect_result_stash_facts(params), shutdown_evidence=evidence)
 
-    def _commit_execution_result(self, params: dict, *, request: dict, command_id: str,
+    def _commit_execution_result(self, params: dict, *, request: dict,
                                  recovered: bool, seal_stash, shutdown_evidence: dict | None = None,
                                  completion_evidence: dict | None = None) -> dict:
         status, result = request["status"], request["result"]
@@ -2171,12 +2169,11 @@ class BoardStore:
             else:
                 task_state = "failed"
             connection.execute(
-                "UPDATE attempts SET result_json=?, result_command_id=?, error=?, exit_code=?, signal=?,"
+                "UPDATE attempts SET result_json=?, error=?, exit_code=?, signal=?,"
                 " shutdown_confirmed=?, runtime_identity=COALESCE(?, runtime_identity), log_paths=COALESCE(?, log_paths),"
                 " stop_initiator=COALESCE(stop_initiator,?),finished_at=?, updated_at=?, revision=revision+1 WHERE attempt_id=?",
                 (
                     canonical_json(payload),
-                    command_id,
                     error_text,
                     exit_code,
                     signal_name,

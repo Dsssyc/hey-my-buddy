@@ -252,12 +252,13 @@ class UpgradeFixtureTests(unittest.TestCase):
                                  for row in stock['events']), 1)
         stock['commands'] = [row for row in stock['commands'] if row['kind'] != 'execution.result']
         for row in stock['commands']:
-            if row['kind'] == 'harness.prepare':
-                continue
             original = json.loads(row['response_json'])
             response = stored_response(row['kind'], original)
             if response != original:
                 row['response_json'] = _json(response)
+        self.assertIn('result_command_id', stock['attempts'][0])
+        for row in stock['attempts']:
+            del row['result_command_id']
         for row in stock['meta']:
             if row['key'] == 'schema_version':
                 row['value'] = str(SCHEMA_VERSION)
@@ -304,8 +305,8 @@ class UpgradeFixtureTests(unittest.TestCase):
         fresh.initialize()
         with sqlite3.connect(state / 'board.sqlite3') as upgraded, fresh.read() as baseline:
             upgraded.row_factory = sqlite3.Row
-            # Only the explicit command, event and schema-version conversions
-            # differ from the released base's stored rows.
+            # Only the explicit command, event, attempt-column and schema-version
+            # conversions differ from the released base's stored rows.
             for table, rows in stock.items():
                 with self.subTest(retained_table=table):
                     self.assertEqual([dict(item) for item in upgraded.execute(f'SELECT * FROM {table} ORDER BY rowid')], rows)
@@ -316,6 +317,9 @@ class UpgradeFixtureTests(unittest.TestCase):
             fresh_schema = [tuple(row) for row in baseline.execute(
                 'SELECT type,name,tbl_name,sql FROM sqlite_master ORDER BY type,name')]
             self.assertEqual(source_schema, fresh_schema)
+            for connection in (upgraded, baseline):
+                self.assertNotIn('result_command_id',
+                                 {row['name'] for row in connection.execute('PRAGMA table_info(attempts)')})
             self.assertEqual(upgraded.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone()[0],
                              str(SCHEMA_VERSION))
             self.assertEqual(dict(upgraded.execute("SELECT key,value FROM meta WHERE key!='schema_version'")),

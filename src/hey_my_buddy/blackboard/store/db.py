@@ -107,7 +107,6 @@ CREATE TABLE IF NOT EXISTS attempts (
     model_model         TEXT,
     log_paths           TEXT NOT NULL DEFAULT '{}',
     result_json         TEXT,
-    result_command_id   TEXT,
     error               TEXT,
     shutdown_confirmed  INTEGER NOT NULL DEFAULT 0,
     cancel_requested_at TEXT,

@@ -65,6 +65,8 @@ class WorkflowReceiptTests(WorkflowTestCase):
         _, takeover_replay, _ = replay(board, "workflow.takeover", taken)
         self.assertEqual(takeover_replay["control"], taken["control"])
         self.assertEqual(takeover_replay["ownerGeneration"], taken["ownerGeneration"])
+        takeover_stored = stored_response("workflow.takeover", taken)
+        self.assertEqual(takeover_stored["control"], {"hostId": taken["control"]["hostId"]})
 
     def test_review_and_scope_replay_authoritative_records(self):
         board = self.board()
@@ -135,6 +137,8 @@ class ResolutionReceiptTests(RealWorkspaceTestCase):
     view = scope_fixtures.ScopeRecoveryTestCase.view
     resolve = scope_fixtures.ScopeRecoveryTestCase.resolve
     scoped_failure = scope_fixtures.ScopeRecoveryTestCase.scoped_failure
+    native_scope_failure = scope_fixtures.ScopeRecoveryTestCase.native_scope_failure
+    verified_target = scope_fixtures.ScopeRecoveryTestCase.verified_target
 
     def setUp(self):
         super().setUp()
@@ -165,6 +169,36 @@ class ResolutionReceiptTests(RealWorkspaceTestCase):
         self.assertEqual(completed_replay["artifactId"], completed["artifactId"])
         self.assertEqual(completed_replay["changedPaths"], completed["changedPaths"])
         self.assertEqual(completed_replay["revision"], latest["revision"])
+
+    def test_acceptance_replay_preserves_host_resolution_delivery(self):
+        board, submitted, _claimed, _manifest, _checkout = self.native_scope_failure(
+            request_id="receipt-native-resolution")
+        view = self.view(board, submitted["runId"])
+        conflict = view["workspaceConflicts"][0]
+        resolved = self.resolve(board, view, conflict, "restore", paths=["outside.txt", "tracked.txt"],
+                                command_id="receipt-native-restore", reason="restore refused paths")
+        self.assertTrue(resolved["delivered"])
+        target = self.verified_target(resolved["artifact"])
+        request = {
+            "runId": submitted["runId"], "artifactId": resolved["artifactId"],
+            "note": "reviewed the Host-resolved delivery",
+            "target": {"path": str(target["path"]), "ref": "HEAD"},
+            "beforeCommit": target["before"], "keepCheckout": True,
+            **self.control(resolved),
+        }
+        first = board.call("workflow_accept", request)
+        self.assertEqual(first["state"], "accepted")
+        self.assertEqual(first["resolutionDelivery"]["conflictId"], conflict["conflictId"])
+        self.assertEqual(first["resolutionDelivery"]["artifactId"], resolved["artifactId"])
+        stored, rebuilt, _current = replay(board, "workflow.accept", first)
+        self.assertEqual(stored["resolutionConflictId"], conflict["conflictId"])
+        self.assertEqual(rebuilt["resolutionDelivery"], first["resolutionDelivery"])
+
+        # Treat the committed first response as lost and retry the identical request.
+        replayed = board.call("workflow_accept", request)
+        self.assertTrue(replayed["duplicate"])
+        self.assertEqual(replayed["integrationId"], first["integrationId"])
+        self.assertEqual(replayed["resolutionDelivery"], first["resolutionDelivery"])
 
     def test_cleanup_plan_replay_reads_the_applied_journal(self):
         board = self.board()

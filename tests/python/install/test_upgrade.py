@@ -271,7 +271,7 @@ class UpgradeTests(BoardTestCase):
         (home/'auth.json').symlink_to(secret)
         (home.parent.parent/'personal-provider.json').write_text('private provider key')
         board.store.db.close()
-        current=Path(backup.create(board.store)['path'])
+        current=Path(backup.create(board.directory)['path'])
         settings.write_text('{"changed":true}')
         missing.write_text('{"createdAfterBackup":true}')
         evidence=board.directory/'attempts/run/attempt/result.json'
@@ -301,7 +301,7 @@ class UpgradeTests(BoardTestCase):
         board = self.board()
         state = board.directory
         board.store.db.close()
-        current = Path(backup.create(board.store)['path'])
+        current = Path(backup.create(board.directory)['path'])
         sentinel = self.directory / 'outside-sentinel'
         sentinel.write_bytes(b'keep outside')
         (state / '.restore.sqlite3').symlink_to(sentinel)
@@ -315,7 +315,7 @@ class UpgradeTests(BoardTestCase):
         board = self.board()
         state = board.directory.resolve()
         board.store.db.close()
-        current = Path(backup.create(board.store)['path'])
+        current = Path(backup.create(board.directory)['path'])
         snapshot = state / '.restore.sqlite3'
         snapshot.write_bytes(b'keep reparse sentinel')
         original_linked = private_dirs.linked
@@ -329,7 +329,7 @@ class UpgradeTests(BoardTestCase):
         board = self.board()
         state = board.directory
         board.store.db.close()
-        current = Path(backup.create(board.store)['path'])
+        current = Path(backup.create(board.directory)['path'])
         alias = self.directory / 'linked-state-parent'
         alias.symlink_to(state, target_is_directory=True)
         with mock.patch('hey_my_buddy.install.upgrade.backup.recover') as recover:
@@ -341,7 +341,7 @@ class UpgradeTests(BoardTestCase):
     def test_restore_rejects_linked_backup_parent_before_verification(self):
         board = self.board()
         board.store.db.close()
-        current = Path(backup.create(board.store)['path'])
+        current = Path(backup.create(board.directory)['path'])
         alias = self.directory / 'linked-backup-parent'
         alias.symlink_to(current.parent, target_is_directory=True)
         with mock.patch('hey_my_buddy.install.upgrade.backup.recover') as recover:
@@ -356,7 +356,7 @@ class UpgradeTests(BoardTestCase):
         control = state / 'console-settings.json'
         control.write_text('{"backedUp":true}')
         board.store.db.close()
-        current = Path(backup.create(board.store)['path'])
+        current = Path(backup.create(board.directory)['path'])
         sentinel = self.directory / 'outside-sentinel'
         sentinel.write_bytes(b'keep outside')
         control.unlink()
@@ -374,7 +374,7 @@ class UpgradeTests(BoardTestCase):
         settings = state / 'console-settings.json'
         settings.write_text('{"backedUp":true}')
         board.store.db.close()
-        current = Path(backup.create(board.store)['path'])
+        current = Path(backup.create(board.directory)['path'])
         board_bytes = (state / 'board.sqlite3').read_bytes()
         evidence = state / 'attempts/run/attempt/result.json'
         evidence.parent.mkdir(parents=True)

@@ -33,7 +33,7 @@ def deliver_receipt(client, receipt: dict, directory: Path, *, nonce: str, log=l
             flush_hints()
         try:
             client.submit_result(receipt["attemptId"], receipt["generation"],
-                                 nonce, {**receipt["report"], "commandId": receipt["commandId"]})
+                                 nonce, receipt["report"])
         except BoardError as error:
             if error.code not in RETRYABLE:
                 accepted = False
@@ -51,7 +51,7 @@ def deliver_receipt(client, receipt: dict, directory: Path, *, nonce: str, log=l
         else:
             accepted = True
         # The acknowledgement is durable before removing the pending receipt.
-        # A crash before it is written replays the same idempotent command.
+        # A crash before it is written replays the same attempt result.
         fsync_json(directory / DELIVERY, {"attemptId": receipt["attemptId"], "accepted": accepted})
         (directory / RECEIPT).unlink(missing_ok=True)
         return accepted
