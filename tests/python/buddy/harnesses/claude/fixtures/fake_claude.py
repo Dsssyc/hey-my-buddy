@@ -127,11 +127,16 @@ def result_frame(case, session_id):
                                                    "summary": "x" * (600 * 1024)}}
     if case == "failed":
         result.update(is_error=True, subtype="error_during_execution")
+    if case == "error-subtype-without-flag":
+        result["subtype"] = "error_during_execution"
+        result.pop("is_error")
+    if case == "error-flag-with-unknown-subtype":
+        result.update(is_error=True, subtype="future")
     if case == "result-quota":
         result.update(is_error=True, subtype="error_quota_during_execution")
     if case == "api-429":
         result.update(is_error=True, api_error_status=429)
-    if case == "bad-subtype":
+    if case in ("bad-subtype", "unknown-initialize-with-unread-terminal"):
         result["subtype"] = "completed"
     if case == "missing-is-error":
         result.pop("is_error")
@@ -155,10 +160,12 @@ def handle_control(frame, case):
                                                    "content": [{"type": "text", "text": "premature"}]}})
             send({"type": "result", "subtype": "success", "session_id": "whatever",
                   "structured_output": {"outcome": outcome("ok")}})
-        if case == "missing-event-type":
+        if case in ("missing-event-type", "unknown-initialize-with-untyped-event",
+                    "unknown-initialize-with-unread-terminal"):
             send({"payload": "credential-fragment"})
         send({"type": "control_response", "response": {
-            "subtype": "future" if case == "unknown-initialize" else
+            "subtype": "future" if case in ("unknown-initialize", "unknown-initialize-with-untyped-event",
+                                             "unknown-initialize-with-unread-terminal") else
                        "error" if case == "initialize-error" else "success",
             "request_id": rid, "response": initialize_response(case)}})
         if case == "early-result":
