@@ -6,7 +6,7 @@
 
 比较基线为 `cda461533eca0d9e824fd79c747008ef38d2ae5c`；本次接续系统提供的部分产物 `5e44cbf6b201df2bb7cb86a64f820150f548554f`，没有把它视作已接受成果。唯一写入的 checkout 文件为 `tests/python/blackboard/tasks/test_inquiry.py`、本报告与 [编号对照](step5-board-inquiry-test-ids.tsv)。未改生产/public/角色/registry/worker.py 或其他微任务文件，未改 ADR/CONTEXT/AGENTS/README/reference/SKILL/Host 指南，未切换或创建分支，未执行 Git commit。由系统封存固定输出。
 
-`<materials2>` 表示 Host 指定私有根中的 `m/c4-codex-20261007-02`；`<materials1>` 为保留的前轮 `m/c4-codex-20261007-01`。所有续 run 实验使用新目录、新脚本、新日志，未删除或覆盖前轮对象或公共 workingtree。原 fixture 正常收尾保留，窄 owner 线程正常 join、Endpoint close，并检查线程存活与消费错误；材料由 Host 验收后按确切根回收。
+`<materials2>` 表示 Host 指定私有根中的 `m/c4-codex-20261007-02`；`<materials1>` 为保留的前轮 `m/c4-codex-20261007-01`。所有续 run 实验使用新目录、新脚本、新日志，未删除或覆盖前轮对象或公共 workingtree。原 fixture 正常清场保留，窄 owner 线程正常 join、Endpoint close，并检查线程存活与消费错误；材料由 Host 验收后按确切根回收。
 
 0 安装版 harness、0 真实模型检查、0 完整检查。未安装或升级日常运行时，未改用户配置、登录、凭据或日常数据，未读取凭据文件内容，未派发其他 Buddy 微任务或使用内部 subagent。依赖缓存从前轮私有缓存复制到新根；以新私有 env 使用 `uv run --frozen --offline`。测试进程清除 `BUDDY_STATE_DIR`、`BUDDY_RUNTIME_ROOT`、`BUDDY_RUNTIME`、`BUDDY_RUNTIME_IDENTITY`、`BUDDY_WORKER_STATE`、`BUDDY_WORKER_ID`、`BUDDY_AGENT_CREDENTIAL`、`BUDDY_AGENT_CREDENTIAL_FILE`、`VIRTUAL_ENV`、`UV_PROJECT_ENVIRONMENT`，再设置 Host 指定的 `TMPDIR`/`BUDDY_CHECKS_TMPDIR` 私有 `t` 和新 uv env/cache；准确 argv、环境键在各 command JSON 中。
 

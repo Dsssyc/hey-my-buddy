@@ -31,7 +31,7 @@ Host 的真实结果否定了 `set_server(server_id=旧地址后缀)` 能构造�
 | 恢复三处旧夹具写法的独立副本 | 每处退出 1 | `regression-results.json`；未规范化 context 与省略 channel 根触发断言失败，raw connect 默认根触发 FileNotFoundError；SDK/进程模拟边界同上 |
 | 指定 Python 文件语法、补丁空白及写入范围 | 通过 | `final-checks.json`；DSH 探针未执行，完整检查和模型未运行 |
 
-测试子进程清理继承的 BUDDY_*、ANTHROPIC_*、C2_*、VIRTUAL_ENV 和 UV_PROJECT_ENVIRONMENT，再指定自有私有 state/runtime/ipc、TMPDIR 与 BUDDY_CHECKS_TMPDIR。临时材料全部位于 `<TASK_TMP>`；Worker 未删除任何文件/目录，只有测试自身的 TemporaryDirectory/fixture 收尾执行了删除。没有出现 Too many open files；未触及默认公共 IPC 域或日常进程。
+测试子进程清理继承的 BUDDY_*、ANTHROPIC_*、C2_*、VIRTUAL_ENV 和 UV_PROJECT_ENVIRONMENT，再指定自有私有 state/runtime/ipc、TMPDIR 与 BUDDY_CHECKS_TMPDIR。临时材料全部位于 `<TASK_TMP>`；Worker 未删除任何文件/目录，只有测试自身的 TemporaryDirectory/fixture 清场执行了删除。没有出现 Too many open files；未触及默认公共 IPC 域或日常进程。
 
 ## Host 待补核
 

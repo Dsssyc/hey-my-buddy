@@ -34,7 +34,7 @@ Host 在第五步清理中删除 `structured_call.collect` 的旧结果 else 与
 
 内层两支由迁移后的模式承担并已在绿色运行中通过：`no_shutdown` 让帧如实报 `group_state: unknown`，`string_shutdown` 交付一个被严格编解码整帧拒绝的字符串停止事实；`test_unconfirmed_shutdown_never_verifies_input_or_releases_capacity` 对两个子例程都断言决策失败、task `shutdownConfirmed` 为假、attempt 停在 uncertain、不改输入、不验证镜像——严格报文错误没有被报成有效帧，未知继续占用。
 
-外层注入在 `<task-root>/m/stop_guard_wrapper.py` 与 `<task-root>/m/stop_guard_probe.py` 完成：替身子进程被包一层包装器，真实子进程写完报 `gone` 的合法帧后，包装器在同一自有进程组留下一个仍在睡眠的后代并退出。收集器读到的帧内层事实为 `True`，而外层组观察非 gone，两层规则必须拒绝：探针输出（`<task-root>/m/evidence/stop-guard-fault.raw`，SHA-256 `348ceeb2b4e044bf78303786f3d7adaf6b9451d0287ab4dd3359a67b5e41ace7`）显示决策失败、码 `router-stop-unconfirmed`、task `shutdownConfirmed: false`、attempt `uncertain`、输入未验证、读者槽位归零。注入的后代进程由探针收尾，无残留。
+外层注入在 `<task-root>/m/stop_guard_wrapper.py` 与 `<task-root>/m/stop_guard_probe.py` 完成：替身子进程被包一层包装器，真实子进程写完报 `gone` 的合法帧后，包装器在同一自有进程组留下一个仍在睡眠的后代并退出。收集器读到的帧内层事实为 `True`，而外层组观察非 gone，两层规则必须拒绝：探针输出（`<task-root>/m/evidence/stop-guard-fault.raw`，SHA-256 `348ceeb2b4e044bf78303786f3d7adaf6b9451d0287ab4dd3359a67b5e41ace7`）显示决策失败、码 `router-stop-unconfirmed`、task `shutdownConfirmed: false`、attempt `uncertain`、输入未验证、读者槽位归零。注入的后代进程由探针清场，无残留。
 
 ## 提给 Host 的接口缺口
 
@@ -48,4 +48,4 @@ Host 在第五步清理中删除 `structured_call.collect` 的旧结果 else 与
 
 ## 材料与清理
 
-一次性材料全部在 `<task-root>/m/`：`evidence/` 内为红绿原始输出、编号清单、迁移前后夹具副本及本记录引用的全部 SHA；`run-focused.sh`/`run-probe.sh` 是复刻检查套件私有环境的聚焦运行器，`probe_decision.py`/`stop_guard_wrapper.py`/`stop_guard_probe.py` 是一次性探针；各次运行的私有 state/runtime 根在 `<task-root>/m/<run-name>/`，`TMPDIR` 与 `BUDDY_CHECKS_TMPDIR` 指向 `<task-root>/t`。Worker 未删除任何对象；夹具与检查运行器自身的正常收尾照常。受管检出内只有夹具一个文件被修改，没有提交、没有切换或新建分支；日常黑板、其他会话对象、安装运行时与凭据均未触碰，也未读取任何凭据文件内容。
+一次性材料全部在 `<task-root>/m/`：`evidence/` 内为红绿原始输出、编号清单、迁移前后夹具副本及本记录引用的全部 SHA；`run-focused.sh`/`run-probe.sh` 是复刻检查套件私有环境的聚焦运行器，`probe_decision.py`/`stop_guard_wrapper.py`/`stop_guard_probe.py` 是一次性探针；各次运行的私有 state/runtime 根在 `<task-root>/m/<run-name>/`，`TMPDIR` 与 `BUDDY_CHECKS_TMPDIR` 指向 `<task-root>/t`。Worker 未删除任何对象；夹具与检查运行器自身的正常清场照常。受管检出内只有夹具一个文件被修改，没有提交、没有切换或新建分支；日常黑板、其他会话对象、安装运行时与凭据均未触碰，也未读取任何凭据文件内容。

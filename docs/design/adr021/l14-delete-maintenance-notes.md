@@ -98,7 +98,7 @@ Host 另需同步的范围外现行文档：`README.md` 与 `README.zh-CN.md` �
 
 ## 执行偏差
 
-以下两项来自上一个留下 `63306ec5` 的执行回合，保留供 Host 追踪。该回合一个内部代理误按仓库通用命令跑了 `uv run --frozen python -m hey_my_buddy.cli.checks tests/python/console`，覆盖 8 个文件、61 项测试，退出 1；私有测试根已收尾。发现后停止使用 uv，后续使用任务指定解释器并清空继承的运行时/凭据环境。检出中存在 `.venv`，没有运行前的存在性记录，不能确认这一次 uv 是否创建或改动了它。没有向任务给定解释器环境安装包。
+以下两项来自上一个留下 `63306ec5` 的执行回合，保留供 Host 追踪。该回合一个内部代理误按仓库通用命令跑了 `uv run --frozen python -m hey_my_buddy.cli.checks tests/python/console`，覆盖 8 个文件、61 项测试，退出 1；私有测试根已清场。发现后停止使用 uv，后续使用任务指定解释器并清空继承的运行时/凭据环境。检出中存在 `.venv`，没有运行前的存在性记录，不能确认这一次 uv 是否创建或改动了它。没有向任务给定解释器环境安装包。
 
 同一代理最初未设置浏览器下载目录，Chromium 下载向默认的 `~/Library/Caches/ms-playwright` 缓存写入，在约 50% 时中断；没有检查或删除该外部缓存。随后改用检出内 `apps/console/node_modules/.cache/ms-playwright` 安装并运行浏览器回归。这两项偏差不计为源码验证的通过证据；前端与 Python 的最终结果以规定命令的最后一次输出为准。
 

@@ -1,6 +1,6 @@
 # ADR-025 第零步整体验收记录（0-D）
 
-本记录是 ADR-025 第零步（只搬动、目录重构）的整步收尾交付：在固定基线 `dfb8159ac4ad3be6dec56bd9508b6a154f84224c`（输入树 `9646e68e5cc0c49788546c85b20f1d61ce6590c9`）上重列全部测试编号、按 TSV 验证模块改名双射、登记跨边界 import、核对冻结文件表与受保护文件、重跑最终完整检查与构建，并汇总各微任务固定结果；本微任务未改任何源码、测试、既有记录或 ADR，新增 tracked 文件仅本记录与 [step-0-cross-imports.tsv](step-0-cross-imports.tsv)，[模块改名表](step-0-module-map.tsv) 经逐项与再生产物核对后保持原样未动。本记录当前版本是同一 run（`dc5dfbbf-d961-4b13-b98b-8dabf3643ab8`）的更正交付：Host 拒绝了首次固定交付（artifact `0439ced0-bc64-4fb1-ae81-943712f83b8c`，output `7691e348d54a438d626ffbaa7892c765fef6a60e`）并授权 continue，更正仅限记录文字（清理计数与归属、临时文件位置偏离的登记、调用与代码树证明的口径、本微任务登记行），全部核对与检查结果沿用已通过证据，该更正回合没有重跑任何测试、构建、服务启动，也没有删除任何对象；拒绝/continue 登记与最终 artifact 由 Host 随后登记。第零步尚未整体验收，须由 Claude Code Host 经开发者转达后验收；第一步与独立 ACP 客户端均未开始。
+本记录是 ADR-025 第零步（只搬动、目录重构）的整步最终核对与交付：在固定基线 `dfb8159ac4ad3be6dec56bd9508b6a154f84224c`（输入树 `9646e68e5cc0c49788546c85b20f1d61ce6590c9`）上重列全部测试编号、按 TSV 验证模块改名双射、登记跨边界 import、核对冻结文件表与受保护文件、重跑最终完整检查与构建，并汇总各微任务固定结果；本微任务未改任何源码、测试、既有记录或 ADR，新增 tracked 文件仅本记录与 [step-0-cross-imports.tsv](step-0-cross-imports.tsv)，[模块改名表](step-0-module-map.tsv) 经逐项与再生产物核对后保持原样未动。本记录当前版本是同一 run（`dc5dfbbf-d961-4b13-b98b-8dabf3643ab8`）的更正交付：Host 拒绝了首次固定交付（artifact `0439ced0-bc64-4fb1-ae81-943712f83b8c`，output `7691e348d54a438d626ffbaa7892c765fef6a60e`）并授权 continue，更正仅限记录文字（清理计数与归属、临时文件位置偏离的登记、调用与代码树证明的口径、本微任务登记行），全部核对与检查结果沿用已通过证据，该更正回合没有重跑任何测试、构建、服务启动，也没有删除任何对象；拒绝/continue 登记与最终 artifact 由 Host 随后登记。第零步尚未整体验收，须由 Claude Code Host 经开发者转达后验收；第一步与独立 ACP 客户端均未开始。
 
 ## 基线、微任务固定结果与整合
 
@@ -26,7 +26,7 @@ Node（DSH，`harnesses/dsh/` 原位）按检查套件同一文件清单逐文�
 
 ## 最终完整检查与 Console
 
-`uv run --frozen python -m hey_my_buddy.cli.checks` 在本步重跑一次：退出码 0，运行器输出 `python tests run: 2320 (skipped 1) in 158 of 158 files` 与 `node tests run: 110`；4 个 Python worker 并行，node 套件并行完成（28.1 秒）。唯一运行期 skip 仍是 `blackboard.evaluation.test_evaluation.InstalledHarnessDiscoveryTests.test_installed_harness_discovery_is_truthful_and_credential_free`，原因串 `the installed harness did not advertise an available model profile`（净化私有环境读到的机器目录状态，非代码行为，与 0-A 定位一致）。运行器自建私有根 `/private/tmp/buddy-checks-7c3yr49u` 在收尾自动整根删除，事后复核该路径不存在。日志完整保存在 `<repo>/tmp/adr025-step0/0d/checks-full-0d.log`（含逐文件完成行、用时与 `EXIT=0`）。
+`uv run --frozen python -m hey_my_buddy.cli.checks` 在本步重跑一次：退出码 0，运行器输出 `python tests run: 2320 (skipped 1) in 158 of 158 files` 与 `node tests run: 110`；4 个 Python worker 并行，node 套件并行完成（28.1 秒）。唯一运行期 skip 仍是 `blackboard.evaluation.test_evaluation.InstalledHarnessDiscoveryTests.test_installed_harness_discovery_is_truthful_and_credential_free`，原因串 `the installed harness did not advertise an available model profile`（净化私有环境读到的机器目录状态，非代码行为，与 0-A 定位一致）。运行器自建私有根 `/private/tmp/buddy-checks-7c3yr49u` 在清场自动整根删除，事后复核该路径不存在。日志完整保存在 `<repo>/tmp/adr025-step0/0d/checks-full-0d.log`（含逐文件完成行、用时与 `EXIT=0`）。
 
 Console 代码树自 0-B1 重建资产后零变化：`git diff 2b08c945..HEAD` 限定在 `apps/console` 与生产/打包/测试路径（`src/`、`harnesses/`、`packaging/`、`tests/`、`pyproject.toml`、`uv.lock`、`skills/`、`install.sh`、`install.ps1`）为空；整个 `git diff 2b08c945..HEAD` 并不为空——两提交间的全部差异就是 `docs/acceptance/adr025/step0-upgrade.md` 与 `host-integration.md` 两份记录文件。本步 `vite build` 不再重跑以避免对 tracked 资产的非必要重建，0-B1 的构建产物证据（重建 bundle 含正确 `hey-my-buddy.console.theme`、无损坏签名，资产已入库 `src/hey_my_buddy/console/assets/`）经上述限定路径的树相等证明对本树继续有效，vitest/tsc 由本步以当前代码树实际重跑通过。
 
@@ -56,14 +56,14 @@ Console 代码树自 0-B1 重建资产后零变化：`git diff 2b08c945..HEAD` �
 
 无模型运行计数：0 这个断言只适用于 0-D 自身的检查、编号收集与最小冒烟——本 run 的完整检查套件、Console 检查、构建与最小启动均无原生 harness/模型调用、无 command 微任务；它不概括其他核对线（已验收的 F-D1/F-D2 含真实 prompt 共 5 次，属各自固定记录的口径，本步未重跑也未扩大）；黑板对本微任务的路由与执行 buddy 自身的模型运行是另一口径，不计入原生冒烟。
 
-## 私有根收尾与删除登记
+## 私有根清场与删除登记
 
-创建与归属依据：本执行在开始任何核对前创建任务专用系统临时根（`mkdir -p /tmp/adr025-0d-204844/tmp`）并当场把路径写入 `<repo>/tmp/adr025-step0/0d/task-root.txt`（原始材料），此后全部系统临时材料只放该根内；该根内对象（含完整检查子进程留下的残留）的归属据此成立——来自这个先创建并记录的专用容器，不以时间戳、内容抽查或无进程引用作为归属依据。完整检查运行器私有根 `/private/tmp/buddy-checks-7c3yr49u` 由运行器创建时打印、本执行当场登记进同一 `task-root.txt`（原始材料），由运行器既有收尾自动整根删除，事后按打印的确切路径复核不存在。
+创建与归属依据：本执行在开始任何核对前创建任务专用系统临时根（`mkdir -p /tmp/adr025-0d-204844/tmp`）并当场把路径写入 `<repo>/tmp/adr025-step0/0d/task-root.txt`（原始材料），此后全部系统临时材料只放该根内；该根内对象（含完整检查子进程留下的残留）的归属据此成立——来自这个先创建并记录的专用容器，不以时间戳、内容抽查或无进程引用作为归属依据。完整检查运行器私有根 `/private/tmp/buddy-checks-7c3yr49u` 由运行器创建时打印、本执行当场登记进同一 `task-root.txt`（原始材料），由运行器既有清场自动整根删除，事后按打印的确切路径复核不存在。
 
-删除序列与结果（除注明原始材料外均为会话回写事实，已按回写整理追加到 `<repo>/tmp/adr025-step0/0d/deletion-transcript.md` 并明确标注为回写，不充当原始凭证）：第一次收尾对任务根的 `rmdir /tmp/adr025-0d-204844/tmp` **失败**（`Directory not empty`，失败退出码 1 当场记录），同一批次中 `<repo>/tmp/adr025-step0/0d/private-root-0d/`（编号收集的私有 state/runtime/tmp）、`<repo>/tmp/adr025-step0/0d/startup/`（最小启动的私有 state/runtime）、`apps/tmp_vitest_0d.json`、`apps/console/.vitest/` 四处按确切路径删除成功；第二次先按确切路径删除内层锁文件 `/tmp/adr025-0d-204844/tmp/uv-3c03a1d4fcbd6bd9.lock`（成功，与下述清单区分：锁不在清单内），随后的 `rmdir` **再次失败**（同样 `Directory not empty`）；第三次先把删除前的完整 `ls -la` 枚举原样落盘为 `<repo>/tmp/adr025-step0/0d/task-root-residue-manifest.txt`（原始材料，**45 项**：42 个 `deepseek-delegate-logs-*`、1 个 `deepseek-delegate-settings-*`、2 个客户端临时目录 `_UneY-LsXvL5wXE0OEGpO` 与 `v-3QoIvaLvBUtQkBBMuye`），再对清单内每个名字逐项执行删除（循环逐项取名，无通配符，逐项无报错为回写事实），随后两次 `rmdir` 成功、按确切路径复核不存在。两次 `rmdir` 失败按原样保留于本登记与回写整理，不写作"删除命令全部成功无报错"。
+删除序列与结果（除注明原始材料外均为会话回写事实，已按回写整理追加到 `<repo>/tmp/adr025-step0/0d/deletion-transcript.md` 并明确标注为回写，不充当原始凭证）：第一次清场对任务根的 `rmdir /tmp/adr025-0d-204844/tmp` **失败**（`Directory not empty`，失败退出码 1 当场记录），同一批次中 `<repo>/tmp/adr025-step0/0d/private-root-0d/`（编号收集的私有 state/runtime/tmp）、`<repo>/tmp/adr025-step0/0d/startup/`（最小启动的私有 state/runtime）、`apps/tmp_vitest_0d.json`、`apps/console/.vitest/` 四处按确切路径删除成功；第二次先按确切路径删除内层锁文件 `/tmp/adr025-0d-204844/tmp/uv-3c03a1d4fcbd6bd9.lock`（成功，与下述清单区分：锁不在清单内），随后的 `rmdir` **再次失败**（同样 `Directory not empty`）；第三次先把删除前的完整 `ls -la` 枚举原样落盘为 `<repo>/tmp/adr025-step0/0d/task-root-residue-manifest.txt`（原始材料，**45 项**：42 个 `deepseek-delegate-logs-*`、1 个 `deepseek-delegate-settings-*`、2 个客户端临时目录 `_UneY-LsXvL5wXE0OEGpO` 与 `v-3QoIvaLvBUtQkBBMuye`），再对清单内每个名字逐项执行删除（循环逐项取名，无通配符，逐项无报错为回写事实），随后两次 `rmdir` 成功、按确切路径复核不存在。两次 `rmdir` 失败按原样保留于本登记与回写整理，不写作"删除命令全部成功无报错"。
 
 位置规则偏离登记：本执行首次 Console 运行把 JSON 输出重定向写到 `apps/tmp_vitest_0d.json`、vitest 运行在 `apps/console/.vitest/` 建立未跟踪缓存——两处均为本执行创建的一次性材料，落在"一切一次性材料放 ignored `tmp/`"规则之外，属位置规则偏离；上段第一批删除已按确切路径删去这两处本执行对象，`apps/` 下其他文件未触碰，此后未再产生新的偏离。保留为原始材料与回写整理（ignored 的 `<repo>/tmp/adr025-step0/0d/`）：收集脚本与逐模块载荷、三套编号清单与 SHA、双射核对脚本与结果、跨边界扫描脚本与 TSV 正文、完整检查/构建/启动日志、残留枚举清单、删除回写整理、构建制品与逐文件哈希。0-B1/0-B2/0-C 在 `tmp/` 下的既有留存材料与 0-C 两条私有链按原登记保留、未扫描未触碰；本次执行未发现其他会话遗留对象（未做扫描），也未清理任何同名前缀的兄弟目录。
 
 ## 边界
 
-本记录全部数字来自固定基线 `dfb8159` 上的本机实际执行（macOS arm64，Node `~/.nvm/versions/node/v24.21.0`，CPython 3.13.3）；Linux 与 Windows 未验证。第零步到此收尾，等待 Claude Code Host 经开发者转达验收；第一步、DSH ACP 客户端与 C-Two 后端均未开始。
+本记录全部数字来自固定基线 `dfb8159` 上的本机实际执行（macOS arm64，Node `~/.nvm/versions/node/v24.21.0`，CPython 3.13.3）；Linux 与 Windows 未验证。第零步到此完成，等待 Claude Code Host 经开发者转达验收；第一步、DSH ACP 客户端与 C-Two 后端均未开始。

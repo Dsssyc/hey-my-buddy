@@ -166,7 +166,7 @@ export function macroTaskTimelineFixture(overrides: Partial<MacroTaskTimeline> =
 export function listFixture(): MacroTaskSummary[] {
   return [
     macroTaskSummary({ macroTaskId: "macro-1", lastActivitySeq: 41, lastActivityAt: "2026-09-26T08:12:00Z", state: "active" }),
-    macroTaskSummary({ macroTaskId: "macro-2", title: "0.13 控制台入口候选版收尾与文档", description: null, lastActivitySeq: 30,
+    macroTaskSummary({ macroTaskId: "macro-2", title: "0.13 控制台入口候选版最后整理与文档", description: null, lastActivitySeq: 30,
       lastActivityAt: "2026-09-26T04:40:00Z", state: "review",
       counts: { roots: 6, helpers: 0, accepted: 5, failed: 0, active: 0, host: 0, review: 1, ended: 5,
         stoppableRoots: 0, stoppableHelpers: 0, delivered: 1, awaitingHost: 0 } }),

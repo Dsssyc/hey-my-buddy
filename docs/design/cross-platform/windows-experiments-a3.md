@@ -67,11 +67,11 @@ Python 显式安装为 `uv python install 3.12 --no-bin --no-registry`，安装�
 
 结论：本轮支持执行自行长期持有根句柄、服务在确认后关闭创建句柄的次序；另一个进程随后能按原名接回且成员原身份不变。正常退出和强杀后，取得了原名错误 2 加全部登记身份缺席的组合证据；服务持临时句柄时另取得了显式终止后的全空计数。没有模拟实际服务重启、同契约安装、真实 RPC、SQLite marker 写入或全部崩溃顺序，不将替身握手称为产品恢复验收，也不把一次本机测量当作普遍时限。
 
-## NO_WINDOW、cmd/pwsh 与根/native 两层收尾
+## NO_WINDOW、cmd/pwsh 与根/native 两层清场
 
 执行和 native 替身均以 `NO_WINDOW | NEW_PROCESS_GROUP` 创建，先 suspended、分配对应 Job 后恢复；native Job 由执行持有，kill-on-close 且禁止脱离。native 再分别经 `cmd /d /s /c` 与 `pwsh -NoProfile -NonInteractive -Command` 起控制台 Python 叶子，不为 shell 派生额外添加 NO_WINDOW。根和 native 的完整成员来自两次独立 Job 查询；成员计数和列表不是原子快照，保留原始采样差异。
 
-| 主轮入口 | 起齐后的根 / native 成员数 | conhost 的两层归属 | 协议后 native | 收尾后根 |
+| 主轮入口 | 起齐后的根 / native 成员数 | conhost 的两层归属 | 协议后 native | 清场后根 |
 | --- | --- | --- | --- | --- |
 | venv | 12 / 9 | 根含两个，native 含其中一个 | 主 Popen 退出 0；仍有 1 个登记成员，终止后 0 | native 空后仍为 3，执行退出后原名错误 2、12 个原身份缺席 |
 | 基础解释器 | 8 / 6 | 根含两个，native 含其中一个 | 主进程退出 0；已为 0，无须终止 | native 空后仍为 2，执行退出后原名错误 2、8 个原身份缺席 |
@@ -107,6 +107,6 @@ venv 主轮的残留身份为 PID 38188、FILETIME 134370574531894472，先前�
 
 证据取回并核对摘要、CRC 后，远端按本轮可执行文件路径或命令行与实验根的关系枚举，输出 `RELATED PROCESSES BEFORE CLEANUP 0`；随后只对本轮工作根执行递归删除，返回 `WORK ROOT EXISTS False`，退出 0。新开独立 SSH 再核对工作根不存在且相关进程为 0。命令、退出码及 stdout/stderr 在 `13-cleanup.*`、`14-cleanup-verify.*`。没有启动或重启日常服务，没有接触日常看板、harness 配置和登录状态，没有更改系统设置、PATH、注册表、计划任务、Defender 或防火墙。
 
-桌面普通/管理员 PowerShell 交替、从 PowerShell/VS Code/Host shell 启动与关窗口、可见窗口、跨 Windows 会话、Defender 开启条件及新的 ACL bootstrap 均未观察，也不在本轮范围。后续由开发者在普通与管理员桌面分别运行同一探针，登记令牌与 sessionId，观察窗口与启动方退出后原身份/Job；若桌面和 SSH sessionId 不同，再相互按原 Local 名打开并回原会话核对成员。Defender 应在本来满足实时扫描条件的环境首尾读回状态，再执行另行安排的热路径，不用本轮结果代替。上述操作应各用新私有根、取回原始输出并收尾；本轮没有通过重启、注销或改变安全设置取得这些条件。
+桌面普通/管理员 PowerShell 交替、从 PowerShell/VS Code/Host shell 启动与关窗口、可见窗口、跨 Windows 会话、Defender 开启条件及新的 ACL bootstrap 均未观察，也不在本轮范围。后续由开发者在普通与管理员桌面分别运行同一探针，登记令牌与 sessionId，观察窗口与启动方退出后原身份/Job；若桌面和 SSH sessionId 不同，再相互按原 Local 名打开并回原会话核对成员。Defender 应在本来满足实时扫描条件的环境首尾读回状态，再执行另行安排的热路径，不用本轮结果代替。上述操作应各用新私有根、取回原始输出并清场；本轮没有通过重启、注销或改变安全设置取得这些条件。
 
 本次未运行仓库完整检查套件；变更仅为本实验记录和忽略的 tmp 证据。交付核对覆盖两端摘要、压缩包 CRC、12 组进程停止证据、32 次派生矩阵、18 例完整目录矩阵、远端独立清理确认及 Git 写入范围，不将它们称为产品测试、安装或 Host 验收。

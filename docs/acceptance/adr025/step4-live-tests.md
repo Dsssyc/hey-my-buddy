@@ -1,6 +1,6 @@
 # ADR-025 第四步 4E2：黑板问询与 live 接缝测试的 DSH 注册迁移
 
-本记录是 ADR-025 第四步收尾微任务 4E2 的交付材料（基线 `60682b0`，独立受管 worktree，唯一可写为三个测试文件与两份记录）。Host 完整检查（其台账 `step4-full-check1.log`，本轮只读）暴露三个模块仍把 DSH 当作未抽取项：`blackboard.tasks.test_inquiry` 的 `TestInquiry` 仍以旧 Node 桥协议与无绑定凭证夹具直接驱动（9 项失败），`buddy.harnesses.test_live_channel` 仍期待 dsh 宣布 `realtime`（1 项），`buddy.roles.test_role_live_seam` 仍把 dsh 的未登记状态当作 live 通道三态的自然事实（1 项）。本轮把三者迁到当前共同接口：DSH 已通过注册模块与 ExistingLiveChannel 提供合作检查点问询；不恢复旧 Node 通道、不新造角色通道、第五步 C-Two 切换不做。全程零模型调用、零安装版 harness、零公共文件改动。
+本记录是 ADR-025 第四步最终核对微任务 4E2 的交付材料（基线 `60682b0`，独立受管 worktree，唯一可写为三个测试文件与两份记录）。Host 完整检查（其台账 `step4-full-check1.log`，本轮只读）暴露三个模块仍把 DSH 当作未抽取项：`blackboard.tasks.test_inquiry` 的 `TestInquiry` 仍以旧 Node 桥协议与无绑定凭证夹具直接驱动（9 项失败），`buddy.harnesses.test_live_channel` 仍期待 dsh 宣布 `realtime`（1 项），`buddy.roles.test_role_live_seam` 仍把 dsh 的未登记状态当作 live 通道三态的自然事实（1 项）。本轮把三者迁到当前共同接口：DSH 已通过注册模块与 ExistingLiveChannel 提供合作检查点问询；不恢复旧 Node 通道、不新造角色通道、第五步 C-Two 切换不做。全程零模型调用、零安装版 harness、零公共文件改动。
 
 ## 迁移方式
 
@@ -26,7 +26,7 @@
 
 ## 验证证据
 
-- 任务根以下记作 `<task-root>`（确切路径只在交付摘要与任务 tmp 台账）；全部命令的 `TMPDIR` 与 `BUDDY_CHECKS_TMPDIR` 指 `<task-root>/t/`，并按检查运行器口径清除继承 runtime/Worker/agent 变量、置 `BUDDY_DEV_SOURCE=1` 与私有 claude/codex CLI 哨兵、`BUDDY_CONSOLE_PORT=0`；一次性材料全部在 `<task-root>/m/4e2-*` 新子目录，未覆盖旧实验、未触碰其他会话对象；普通测试夹具自建的临时目录照常自收尾。
+- 任务根以下记作 `<task-root>`（确切路径只在交付摘要与任务 tmp 台账）；全部命令的 `TMPDIR` 与 `BUDDY_CHECKS_TMPDIR` 指 `<task-root>/t/`，并按检查运行器口径清除继承 runtime/Worker/agent 变量、置 `BUDDY_DEV_SOURCE=1` 与私有 claude/codex CLI 哨兵、`BUDDY_CONSOLE_PORT=0`；一次性材料全部在 `<task-root>/m/4e2-*` 新子目录，未覆盖旧实验、未触碰其他会话对象；普通测试夹具自建的临时目录照常自清场。
 - 基线复现（改动前，`m/4e2-baseline/baseline-run.log`）：三模块 83 项，11 项失败——TestInquiry 9、live_channel 1、role_live_seam 1，与 Host 完整检查台账中的失败同名同断言。
 - 迁移后（`m/4e2-baseline/migrated-run2.log`）：同三模块 83 项全绿（约 29 秒），无跳过。
 - 编号对账（`m/4e2-ids/`）：以基线 `60682b0` 的三文件原副本与迁移后副本分别经 TestLoader 加载真实 unittest ID，29+44+10=83 对 83 逐项相等，diff 为空。

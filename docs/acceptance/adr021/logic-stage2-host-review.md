@@ -1,10 +1,10 @@
 # ADR-021 逻辑第二阶段：Host 验收
 
-2026-10-03，Claude Code Host。实现由 Codex 作为 Host 完成，它的收尾记录是 [logic-stage2.md](logic-stage2.md)，模块记录是 [L4](l4.md)、[L5](l5.md) 与[移出的 L6](l6.md)。本文只记录本 Host 合入后亲自做的核对，不重复转述实现方的结论。
+2026-10-03，Claude Code Host。实现由 Codex 作为 Host 完成，它的实施记录是 [logic-stage2.md](logic-stage2.md)，模块记录是 [L4](l4.md)、[L5](l5.md) 与[移出的 L6](l6.md)。本文只记录本 Host 合入后亲自做的核对，不重复转述实现方的结论。
 
 ## 合入
 
-`socu/adr021-logic-stage2` 在 `0e6d11f` 收尾，以合并提交 `4dcfa9e` 合入集成分支，没有冲突。DSH 与 ZCode 的专用只读通道和对 ZCode 安装包的静态证明已从阶段分支移除，原样保存在 `socu/adr021-review-carrier-reference`（固定在 `15be750`）备查。合入后的源码里，DSH 与 ZCode 的审阅资格如实返回 `readonly-worker-carrier-unimplemented`，`src` 中不再有 `harness-verify` 或 `review-check` 的引用。
+`socu/adr021-logic-stage2` 在 `0e6d11f` 完成，以合并提交 `4dcfa9e` 合入集成分支，没有冲突。DSH 与 ZCode 的专用只读通道和对 ZCode 安装包的静态证明已从阶段分支移除，原样保存在 `socu/adr021-review-carrier-reference`（固定在 `15be750`）备查。合入后的源码里，DSH 与 ZCode 的审阅资格如实返回 `readonly-worker-carrier-unimplemented`，`src` 中不再有 `harness-verify` 或 `review-check` 的引用。
 
 ## 测试覆盖的比对
 
@@ -35,13 +35,13 @@
 
 `uv run --frozen python -m buddy.checks` 通过：2,316 个 Python 测试（跳过 1 个），158 个文件全部运行；Node 测试 110 个；用时 408 秒。日志在被忽略的 `tmp/stage2-acceptance-full-check.log`。
 
-## 黑板上的收尾
+## 黑板上的最终处理
 
 第二阶段的宏任务共 26 个微任务，全部已经结束并有结论：19 个验收，4 个被拒绝，2 个因 Router 故障取消，1 个失败。本项目没有遗留受管检出；另一个 Host 的 7 个 `c-two` 检出与本阶段无关，仍待开发者处理。
 
 ## 带到后面的问题
 
-- **Claude Code 的审阅运行有缺陷。** 实现方的真实检查里，Claude Code 完成了读取与结构化回合，但它用来交付结构化结果的原生 `StructuredOutput` 被工具事件投影归为 `other`，答案因此作废，随机标记也没有回传。这属于 L5 中 Claude 投影的范围；本阶段已收尾，改在 [ADR-025](../../decisions/025-harness-run-module.md) 的 Claude Code 一步中修正：交付最终值的机制不算工具调用。
+- **Claude Code 的审阅运行有缺陷。** 实现方的真实检查里，Claude Code 完成了读取与结构化回合，但它用来交付结构化结果的原生 `StructuredOutput` 被工具事件投影归为 `other`，答案因此作废，随机标记也没有回传。这属于 L5 中 Claude 投影的范围；本阶段已结束，改在 [ADR-025](../../decisions/025-harness-run-module.md) 的 Claude Code 一步中修正：交付最终值的机制不算工具调用。
 - **原生证据仍很少。** 本阶段只有 Codex 的审阅运行在真实检查中通过一次（16.3 秒）。DSH 与 ZCode 的审阅按开发者决定改走 Worker 载体，排在 ADR-025 之后。
 - **Host 代改。** 本阶段有多个交付是 Host 自行修正后验收的，修正写在整合登记的理由里。"范围内的缺陷打回"的规则是阶段中途才定的，后续阶段的提示词会写明。
 - **安装。** 源码为 0.28.0，日常安装仍是 0.27.0；schema 的升级与存量清理在 L15，在那之前不安装。第一阶段遗留的 `model_facts` 隐式建表同样留给 L15。

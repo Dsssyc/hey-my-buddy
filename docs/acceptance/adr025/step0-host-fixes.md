@@ -32,7 +32,7 @@ Host 已逐项审阅三个固定代码 diff、原始变异失败与恢复日志�
 
 ## 材料与偏差登记
 
-原始材料在各修正 worktree 的 ignored tmp 中，接受前另存至 `<evidence-worktree>/tmp/adr025-evidence-retained/step0-host-fixes/`：进程识别 13 文件、资源邻居 21 文件、漏测防护 13 文件，逐文件 SHA-256 相等。Host 完整检查的日志、退出码、运行脚本和创建登记保留在 `<implementation-worktree>/tmp/adr025-step0-hostfix-8sd9wjly/`；检查器创建并打印的 `/private/tmp/buddy-checks-t_2p126u` 经既有收尾删除，按确切路径确认不存在。Host 没有删除任何其他对象，自己的验证容器仍保留。
+原始材料在各修正 worktree 的 ignored tmp 中，接受前另存至 `<evidence-worktree>/tmp/adr025-evidence-retained/step0-host-fixes/`：进程识别 13 文件、资源邻居 21 文件、漏测防护 13 文件，逐文件 SHA-256 相等。Host 完整检查的日志、退出码、运行脚本和创建登记保留在 `<implementation-worktree>/tmp/adr025-step0-hostfix-8sd9wjly/`；检查器创建并打印的 `/private/tmp/buddy-checks-t_2p126u` 经既有清场删除，按确切路径确认不存在。Host 没有删除任何其他对象，自己的验证容器仍保留。
 
 进程识别微任务曾在自己原子新建的任务容器内执行 `rm -rf <task-container>/roots/buddy-checks-*`，违反“不用通配符”规则；创建登记可辨的一个半初始化根与通配实际展开范围的原始凭证缺口均在该记录保留，不能把未知展开数量写成已核实。另有失败日志/基线日志同名覆写后缺失、旧实现失败重采、临时换回源码时命令中断后恢复，以及一个子根个体路径未在创建时独立登记的缺口。Host 拒绝首份记录并通过原 run 的 continue 要求据已有工具记录准确披露，未扩大清理、扫描其他会话或尝试恢复。原 0-B2 的越界登记与撤回不动、不追查；这次披露也不抹去此前登记。
 

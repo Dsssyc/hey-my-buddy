@@ -26,7 +26,7 @@ Buddy 配置默认进入“模型”，左侧以图标与标签导航“模型 /
 
 分区自身也无横向溢出。浏览器额外核对了 Harness／模型深链刷新后的焦点、键盘 Enter、前进／返回、旧书签；390 px 下的模型深链刷新仍为 390 / 390。原始记录在忽略的 `tmp/config-sections/`，截图在忽略的 `output/playwright/config-sections/`；合成预览与本次独立浏览器会话已关闭。
 
-收尾先执行 `npm --prefix apps/console ci`，再执行 `uv run --frozen python -m buddy.checks`。首轮 1,724 项 Python 检查只有旧契约版本断言与共享 skill 4 KB 上限两项失败；契约断言同步至 0.25.0，共享 skill 入口精简为 4,086 字节。相关 6 项 current-core 与 10 项 skill 检查均通过，首轮私有测试根已由检查器清理。第二轮 1,724 项仅 ZCode 的最终回执后询问测试失败。两个独立私有夹具均使用 `attempt-1`，短路径 socket 回退到同一位置；同时启动两个真实 fixture runner 可稳定复现认证拒绝。测试夹具的 attempt 身份改为带各自临时根名称的稳定身份，相关断言随 context 绑定；适配器实现未修改。97 项相关检查与新增双实例回归通过，恢复原固定身份时新增回归稳定失败，隔离后通过。最终 `uv run --frozen python -m buddy.checks` 退出码 0：1,725 项 Python 检查通过（1,266.053 秒），161 项 DSH 检查通过（27.965 秒）；最终私有根目录经检查器清理并核对不存在。打包资产在最终检查后再次构建，构建结果与指纹见下文。
+最终验证阶段先执行 `npm --prefix apps/console ci`，再执行 `uv run --frozen python -m buddy.checks`。首轮 1,724 项 Python 检查只有旧契约版本断言与共享 skill 4 KB 上限两项失败；契约断言同步至 0.25.0，共享 skill 入口精简为 4,086 字节。相关 6 项 current-core 与 10 项 skill 检查均通过，首轮私有测试根已由检查器清理。第二轮 1,724 项仅 ZCode 的最终回执后询问测试失败。两个独立私有夹具均使用 `attempt-1`，短路径 socket 回退到同一位置；同时启动两个真实 fixture runner 可稳定复现认证拒绝。测试夹具的 attempt 身份改为带各自临时根名称的稳定身份，相关断言随 context 绑定；适配器实现未修改。97 项相关检查与新增双实例回归通过，恢复原固定身份时新增回归稳定失败，隔离后通过。最终 `uv run --frozen python -m buddy.checks` 退出码 0：1,725 项 Python 检查通过（1,266.053 秒），161 项 DSH 检查通过（27.965 秒）；最终私有根目录经检查器清理并核对不存在。打包资产在最终检查后再次构建，构建结果与指纹见下文。
 
 最终 `npm --prefix apps/console run build` 退出码 0；`src/buddy/console_assets` 中的 `index-JiH63Qwo.js`、`index-Djtx77yz.css`、入口 HTML 和图标均与真实浏览器验证资产的 SHA-256 完全一致。Vite 仍提示主 JS chunk 超过 500 kB（当前约 514 kB），属于现有打包体积提示，构建成功。
 

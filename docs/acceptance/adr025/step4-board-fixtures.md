@@ -1,6 +1,6 @@
 # ADR-025 第四步 4-E1：黑板机械规则测试的合成原生事实迁移
 
-本记录是 ADR-025 第四步收尾微任务 4-E1 的交付材料（基线 `60682b0`，独立受管 worktree）。完整检查（Host 日志 `<Host实施检出>/tmp/adr025-host/step34-20261006-105245/step4-full-check1.log`，只读）的主要根因是：黑板机械规则测试自行合成的 Worker 回执仍携带旧 DSH Node provenance `{tool,turnEnd,flush,rootSessionMatched}`，已被当前 ACP validator 正确拒绝，因此 workspace_lifecycle/evaluation/external_evaluation 与连带消费者 decision/host_workflow/workspace_api/cli_views 丢失 `finalArtifactId`；`test_workflow_real` 的 RealAdapterTests 另外直接调用已删除的 `DshAdapter.prepare/_import_turn/_seal_workspace/collect/workspace_cwd`。本轮把七个写范围模块的合成回合记录迁到当前格式，并把 RealAdapterTests 迁到已存在的共享角色与 turn_io 接缝；不启动安装版 harness、不调用模型（原生链路只用本项目假程序）、不安装/升级日常运行时、不改用户配置与凭据、不改公共源码。
+本记录是 ADR-025 第四步最终核对微任务 4-E1 的交付材料（基线 `60682b0`，独立受管 worktree）。完整检查（Host 日志 `<Host实施检出>/tmp/adr025-host/step34-20261006-105245/step4-full-check1.log`，只读）的主要根因是：黑板机械规则测试自行合成的 Worker 回执仍携带旧 DSH Node provenance `{tool,turnEnd,flush,rootSessionMatched}`，已被当前 ACP validator 正确拒绝，因此 workspace_lifecycle/evaluation/external_evaluation 与连带消费者 decision/host_workflow/workspace_api/cli_views 丢失 `finalArtifactId`；`test_workflow_real` 的 RealAdapterTests 另外直接调用已删除的 `DshAdapter.prepare/_import_turn/_seal_workspace/collect/workspace_cwd`。本轮把七个写范围模块的合成回合记录迁到当前格式，并把 RealAdapterTests 迁到已存在的共享角色与 turn_io 接缝；不启动安装版 harness、不调用模型（原生链路只用本项目假程序）、不安装/升级日常运行时、不改用户配置与凭据、不改公共源码。
 
 ## 迁移方式
 
@@ -17,7 +17,7 @@
 
 ## 验证证据
 
-- 任务根以下记作 `<task-root>`（确切路径只在交付摘要与任务 tmp 台账）；全部命令 `TMPDIR` 与 `BUDDY_CHECKS_TMPDIR` 指 `<task-root>/t/`，材料在 `m/4e1-baseline/`、`m/4e1-faults/`，均为全新子目录；未触碰旧实验或他人会话对象；普通测试夹具与检查运行器自有收尾照常。运行方式与检查运行器一致（`python -m unittest -v <module>`，`PYTHONPATH` 为检出 `src`+`tests/python`，清除继承的 runtime/worker 环境变量）。
+- 任务根以下记作 `<task-root>`（确切路径只在交付摘要与任务 tmp 台账）；全部命令 `TMPDIR` 与 `BUDDY_CHECKS_TMPDIR` 指 `<task-root>/t/`，材料在 `m/4e1-baseline/`、`m/4e1-faults/`，均为全新子目录；未触碰旧实验或他人会话对象；普通测试夹具与检查运行器自有清场照常。运行方式与检查运行器一致（`python -m unittest -v <module>`，`PYTHONPATH` 为检出 `src`+`tests/python`，清除继承的 runtime/worker 环境变量）。
 - 基线（改动前，本检出复现）：`buddy.harnesses.zcode.test_zcode_turn_io` → FAILED failures=1（`'the dsh turn lacks its completed finish-tool evidence' is not None`）；`blackboard.evaluation.test_evaluation` → FAILED failures=2 errors=3 skipped=1（`artifactId is required` 等）。其余五个模块的失败形态以 Host 完整检查日志定位（39 项 ERROR、9 项 ERROR、6 项 FAIL 等，均为 finalArtifactId/activeRequest 丢失或 `DshAdapter` 无 `prepare` 属性）。
 - 迁移后（逐模块一次）：test_workflow_real 11 项 OK（约 57 秒）、test_workflow 54 项 OK（约 6 秒）、test_scope_recovery 18 项 OK（约 54 秒）、test_workspace_lifecycle 40 项 OK（约 207 秒）、test_evaluation 36 项 OK（skipped=1，约 18 秒）、test_external_evaluation 22 项 OK（约 4 秒）、test_zcode_turn_io 4 项 OK（约 0.01 秒）。
 - 连带消费者复核（模块全量，非完整检查）：`blackboard.routing.test_decision` 40 项 OK（约 36 秒）、`blackboard.tasks.test_host_workflow` 12 项 OK（约 10 秒）、`blackboard.tasks.test_workspace_api` 4 项 OK（约 15 秒）、`cli.test_cli_views` 11 项 OK（约 12 秒）；另跑四个行为不变的导入方 `test_workflow_routing/boundaries/cancellation/stop_surface` 共 59 项 OK（约 12 秒）。

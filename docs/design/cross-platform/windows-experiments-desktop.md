@@ -1,6 +1,6 @@
 # Windows 阶段 A：桌面令牌、窗口、文件换代与跨会话 Job
 
-2026-10-22，源码基线 `bfd61bb6b1761b5aa4b516427d38449cf21eb111`，对应 [windows-ownership.md](windows-ownership.md) 第 7 节补项 1、补项 2、补项 4 的桌面部分、补项 5 及补项 6 的跨会话部分。第一轮准备探针并在 SSH 中预检，第二轮由开发者在桌面运行，Worker 取回输出、核对并收尾；没有修改产品代码或测试，没有启动产品日常服务、调用模型或查询 harness 登录状态。本文记录替身和系统 API 的观察，不是阶段 B/C/D/E 的产品验收。
+2026-10-22，源码基线 `bfd61bb6b1761b5aa4b516427d38449cf21eb111`，对应 [windows-ownership.md](windows-ownership.md) 第 7 节补项 1、补项 2、补项 4 的桌面部分、补项 5 及补项 6 的跨会话部分。第一轮准备探针并在 SSH 中预检，第二轮由开发者在桌面运行，Worker 取回输出、核对并清场；没有修改产品代码或测试，没有启动产品日常服务、调用模型或查询 harness 登录状态。本文记录替身和系统 API 的观察，不是阶段 B/C/D/E 的产品验收。
 
 本次同账户普通与提权桌面令牌之间，提权探针先将本进程 TokenOwner 设为当前用户后，新目录、凭据、SQLite 及其 WAL/SHM 可双向访问和重建；未设置时，普通令牌打不开管理员属主的目录和重建 sidecar。文件换代实验最终选择 `SetFileInformationByHandle(FileRenameInfoEx, POSIX_SEMANTICS | REPLACE_IF_EXISTS)`，普通令牌下连续发布 1000 次、无受控读者、无重试，错误为 0。Defender 实时保护没有开启条件，本次 Defender 实时扫描未测；开发者报告实际开启的实时扫描由联想预装杀毒软件提供。
 
@@ -69,7 +69,7 @@ normal2 对上述 baseline 目录/凭据/数据库的访问被拒，句柄 ACL �
 
 两组起齐时根 Job 均为 12 个成员，native 均为 10 个成员；根含两个 conhost，native 含其中一个。cmd/pwsh/git 及叶子的 PID、FILETIME、两层成员关系保存在 handoff 快照中，两个快照里所有成员的 EnumWindows 列表均为空。NEW_CONSOLE 参照的 Python PID 32328、FILETIME 134371332794800797、HWND 1639664 则为 visible=true，约 4 秒后自行停止。开发者事后回报：这一段似乎没有弹窗，但当时在看 Host 给的步骤，可能有一闪而过的没看到；参照窗口也没有留意到。空列表只覆盖采样时刻，不替代完整时段的肉眼观察。（Host 于合入时补记）
 
-| 桌面组 | native 收尾 | native 最终计数 | execution 退出后根名首次错误 2 | 全部登记身份缺席的最后采样 |
+| 桌面组 | native 清场 | native 最终计数 | execution 退出后根名首次错误 2 | 全部登记身份缺席的最后采样 |
 | --- | --- | --- | --- | --- |
 | 协议停止 | 停止文件协议后主进程退出 0；无需终止 Job | active=0，members=[] | 0.0814 ms | 1.5381 ms |
 | 直接强停替身 | execution 直接调用 TerminateJobObject；native 主进程退出 1 | active=0，members=[] | 0.0593 ms | 4.0492 ms |
@@ -102,7 +102,7 @@ Host 另转交开发者的一次普通令牌观察：直接运行 Codex app（MS
 
 第二次回执中的 originalChild 却是第一次的 Python PID 35540、FILETIME 134371336905539650；将它与第二个 Job 比较得到 inRoot=false，是重复运行读入旧回执的结果，不能解释为第二个 Job 的后代逃逸。第二个 Job 的有效比较使用上段初始/重查快照中一致的 PID 31912 和 7464。第一次 Job 的原名、持有者完整身份和独立重查输出被覆盖，未取得，故第一次跨会话过程不验收；没有为补齐它重建同名 Job 或假造身份。
 
-原始依据为 `40-cross-session.*`、`41-live-after-peer.*` 以及 `phase2/raw/evidence/cross-session/`、cross-session-holder 原始文件。Worker 取证后的实时命令行扫描未发现仍运行的 session-holder/timedleaf；后续完整身份核对覆盖两个已知 child（35540、31912）和第二个 holder，均已缺席。两次重复启动造成的缺口保留，收尾另按整个私有根引用及全部可恢复的完整身份核对，不能凭被覆盖的第一份回执声称第一次协议成功。
+原始依据为 `40-cross-session.*`、`41-live-after-peer.*` 以及 `phase2/raw/evidence/cross-session/`、cross-session-holder 原始文件。Worker 取证后的实时命令行扫描未发现仍运行的 session-holder/timedleaf；后续完整身份核对覆盖两个已知 child（35540、31912）和第二个 holder，均已缺席。两次重复启动造成的缺口保留，清场另按整个私有根引用及全部可恢复的完整身份核对，不能凭被覆盖的第一份回执声称第一次协议成功。
 
 ## 尚未取得的证据
 
@@ -110,7 +110,7 @@ Host 另转交开发者的一次普通令牌观察：直接运行 Codex app（MS
 
 这些缺口不以 SSH 预检、命令退出 0、开发者 READY 或 Worker 完成消息替代；后续实施及 Host 验收应使用本文逐项边界。没有安排重启、注销、睡眠、休眠、系统设置或关闭杀毒软件的动作。
 
-## 收尾与最终核对
+## 清场与最终核对
 
 第二轮完整原始包下载后，按可恢复的 PID、原始创建 FILETIME 和会话登记了 168 条非交互启动 shell 的进程身份，逐一查询均为 absent，remaining=[]；另将八条启动 shell 身份单列为观察对象，没有把人工作业窗口当作可终止的探针后代。见 `tmp/windows-desktop/44-phase2-owned-verification.*`、`phase2/owned-identities.json`、`phase2/observed-launch-shells.json` 和 `phase2/owned-verification.json`。这个计数包括两轮保留的完整探针身份，不能用它补回被覆盖的第一次 holder 身份。
 

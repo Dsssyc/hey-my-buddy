@@ -77,7 +77,7 @@
 | `status()` | `BoardService.account_status()` | 删除 loginId 查询与 uncertain 操作后续结清 |
 | `cancel()` | `BoardService.account_cancel()`、close | 删除登录取消 |
 | `logout()` | `BoardService.account_logout/account_remove()`，remove=True 是同一路径 | 删除原生 account/logout、keychain delete、独立账户根移除；升级 cleanup 是另一个安装职责 |
-| `close()` | `daemon.py:Daemon.cleanup()` | 删除 daemon 收尾的账户取消与二十秒 inflight 等待，不动 Worker／控制器的收尾 |
+| `close()` | `daemon.py:Daemon.cleanup()` | 删除 daemon 关闭时的账户取消与二十秒 inflight 等待，不动 Worker／控制器的结束流程 |
 
 ## 3. 删除后怎样归属
 

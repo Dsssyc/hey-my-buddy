@@ -26,7 +26,7 @@ Python 的 2,316 条编号里没有同 id 重复，也没有 `FunctionTestCase` 
 
 ## 旧布局完整检查
 
-先做完全部收集，再跑一次完整检查：`uv run --frozen python -m buddy.checks`（默认并行度 4），退出码 0，实际用时 411.1 秒。运行器输出 `python tests run: 2316 (skipped 1) in 158 of 158 files` 与 `node tests run: 110`，与加载清单（2,316）和 DSH 逐文件清单（110）一一相等；没有文件未运行，没有失败的文件。唯一的运行期 skip 已定位到 `test_evaluation.InstalledHarnessDiscoveryTests.test_installed_harness_discovery_is_truthful_and_credential_free`，原因串为 `the installed harness did not advertise an available model profile`——净化私有环境读到的已安装 harness 目录没有可用模型画像，属机器目录状态而非代码行为，用聚焦重跑复现确认（加载期 skip 为 0，故编号集合仍与运行计数完全相等）。收尾的私有根回收干净：`/private/tmp/buddy-checks-szotkm37` 整根删除，无存活的锁、无可观察的残留进程、无观察错误，也没有保留 teardown 证据文件。
+先做完全部收集，再跑一次完整检查：`uv run --frozen python -m buddy.checks`（默认并行度 4），退出码 0，实际用时 411.1 秒。运行器输出 `python tests run: 2316 (skipped 1) in 158 of 158 files` 与 `node tests run: 110`，与加载清单（2,316）和 DSH 逐文件清单（110）一一相等；没有文件未运行，没有失败的文件。唯一的运行期 skip 已定位到 `test_evaluation.InstalledHarnessDiscoveryTests.test_installed_harness_discovery_is_truthful_and_credential_free`，原因串为 `the installed harness did not advertise an available model profile`——净化私有环境读到的已安装 harness 目录没有可用模型画像，属机器目录状态而非代码行为，用聚焦重跑复现确认（加载期 skip 为 0，故编号集合仍与运行计数完全相等）。私有根经清场已回收干净：`/private/tmp/buddy-checks-szotkm37` 整根删除，无存活的锁、无可观察的残留进程、无观察错误，也没有保留 teardown 证据文件。
 
 Console 侧的补充核对：vitest 659 个测试全部通过（`success: true`，无 skip、无失败、无重复），`tsc --noEmit` 退出 0（`<worktree>/tmp/adr025-step0/tsc-typecheck.log` 为空）。`vite build` 本次没有运行——它的输出目录是 tracked 的 `src/buddy/console_assets`，写它超出本微任务的可写范围；构建验证由第零步后续微任务承担。全部收集、探测与检查都没有调用模型，也没有触碰日常黑板、运行时、凭据或用户设置。
 

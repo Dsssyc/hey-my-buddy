@@ -28,7 +28,7 @@
 
 ## 与工作流的连接
 
-第 15 条沿用 `integration-record` 和 `acknowledge`：等待 Host 的目标必须有当前轮封存成果、整合证据、本人及所有后代的确认停止证据，且无未处理的工作区冲突，才能由 Host 直接选定并验收成果。保存 Host 收尾事件，关闭对应等待边界；不会制造一次 Worker completed 回合。
+第 15 条沿用 `integration-record` 和 `acknowledge`：等待 Host 的目标必须有当前轮封存成果、整合证据、本人及所有后代的确认停止证据，且无未处理的工作区冲突，才能由 Host 直接选定并验收成果。保存 Host 验收事件，关闭对应等待边界；不会制造一次 Worker completed 回合。
 
 第 16 条拟为 `acknowledge` 增加 `verdict: "recorded"`，用于 failed/cancelled 目标的结论。执行状态维持 failed/cancelled，结论从独立记录返回；它不进入成功验收样本。清理计划绑定当前结论、当前执行代次、固定成果、检出身份和停止证据；continue、新的成果或相关所有权变化使旧计划失效。没有执行过的取消目标可记录结论，清理仍需证明检出内容已保留；未封存的改动不能仅凭结论删除。
 
@@ -46,6 +46,6 @@
 
 迁移测试覆盖全新 schema 15 与 14 → 15 形状一致、旧目标解锁后的显式授权边界、原始请求与回执不变、未知用量与额度、外键和完整性、事务中断回滚、备份恢复、启动拒绝直接迁移。本页保留批准时的设计边界；实际测试结果与未验证项由本次验收记录维护。
 
-实现后的逐项验证包括：第 11 条约 4 KB 的 skill 与参考链接；第 12 条三种输入方式等价；第 13 条帮助与实际校验同源及拼写候选；第 14 条 objectiveOf 的归属、Host 权限与幂等；第 15、16 条直接收尾、结论和清理的权限／停止／旧计划拒绝；第 17、18 条模拟 harness 额度失败、部分成果、同检出换配置续做的跨进程集成；第 19 条 hostPaths 核验；第 20 条多轮累计补丁可独立应用；第 21 条服务环境白名单与 Worker 身份保留；第 22、23 条 DSH/Codex 原生记录夹具和 CLI/控制台投影；四个独立缺陷各自回归。测试均使用私有 state/runtime 根，不进行付费复跑。
+实现后的逐项验证包括：第 11 条约 4 KB 的 skill 与参考链接；第 12 条三种输入方式等价；第 13 条帮助与实际校验同源及拼写候选；第 14 条 objectiveOf 的归属、Host 权限与幂等；第 15、16 条直接完成、结论和清理的权限／停止／旧计划拒绝；第 17、18 条模拟 harness 额度失败、部分成果、同检出换配置续做的跨进程集成；第 19 条 hostPaths 核验；第 20 条多轮累计补丁可独立应用；第 21 条服务环境白名单与 Worker 身份保留；第 22、23 条 DSH/Codex 原生记录夹具和 CLI/控制台投影；四个独立缺陷各自回归。测试均使用私有 state/runtime 根，不进行付费复跑。
 
-收尾在冻结候选上运行 `uv run --frozen python -m buddy.checks`，把实际结果和未验证项逐行对应 ADR 的观察表写入 `docs/acceptance/`。候选 wheel 用 `uv build --wheel` 构建，同时验证 sdist → wheel 的 sourceCommit 保留。委派走 Buddy 并由显式轻量监控子代理等待，不派 Claude Worker。合并、安装和用户配置修改均保留给开发者后续授权。
+最后在冻结候选上运行 `uv run --frozen python -m buddy.checks`，把实际结果和未验证项逐行对应 ADR 的观察表写入 `docs/acceptance/`。候选 wheel 用 `uv build --wheel` 构建，同时验证 sdist → wheel 的 sourceCommit 保留。委派走 Buddy 并由显式轻量监控子代理等待，不派 Claude Worker。合并、安装和用户配置修改均保留给开发者后续授权。

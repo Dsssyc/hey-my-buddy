@@ -13,7 +13,7 @@
 
 controller的登记socket确切路径、device/inode与hostPid在原始ready/摘要中留存，运行后该文件消失。Worker同一进程的端点路径曾在driver内存观察到，但探针在最终保存前超时，保留证据无法恢复该确切路径，所以不把这一项写成“已经逐文件证明删除”。另行不调用模型的实际WorkerLiveRuntime register/stop检查留存其地址、文件身份及存在→消失；两个真实fixture controller也保存相同生命周期证明，这些不能代替本次DSH Worker文件的缺失观察。
 
-原始request在正常回合收尾后未保留；真实RunResult、turn输出、问询journal、controller ready、原生provenance、会话用量元数据与启动日志已逐文件SHA留存于<checkout>/tmp/adr025-host/<phase>/retained-dsh-native/。私有fixture clone中的Git输入/输出快照对象另以bundle保留；没有把这些快照记录称作源码提交或业务交付文件。原生controller运行源码为ca839f40后的Host公共接线，具体源码现已提交为5776a9b及后续退休整合；两次Claude冒烟基线更早，另文明确未覆盖切换后的实时通道。
+原始request在正常回合结束后未保留；真实RunResult、turn输出、问询journal、controller ready、原生provenance、会话用量元数据与启动日志已逐文件SHA留存于<checkout>/tmp/adr025-host/<phase>/retained-dsh-native/。私有fixture clone中的Git输入/输出快照对象另以bundle保留；没有把这些快照记录称作源码提交或业务交付文件。原生controller运行源码为ca839f40后的Host公共接线，具体源码现已提交为5776a9b及后续退休整合；两次Claude冒烟基线更早，另文明确未覆盖切换后的实时通道。
 
 本次继续已接受的DSH行为差异：问询可能只在checkpoint送达；快速路由带DSH系统提示；原生续接目前仍不接入；所有hey-my-buddy启动的DSH运行关闭session-title-llm与session-telemetry-otel。没有发现新的行为差异。只读命令强制范围及工具名归类、未知新工具行和可选用量来源沿用第三四步已验收的规则，本次write范围read工具不能当作只读沙盒证据。
 

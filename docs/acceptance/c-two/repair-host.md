@@ -98,7 +98,7 @@ Host 在原 2-B run 发出不指定配置的 continue，黑板拒绝 `CONFLICT: 
 
 R-05 真实 catalog-loss 变异退出 1，一项目标 failure、errors=0，5.105 / 5.780 秒。HTTP 500 仍先出现，随后 finally 中明确断言 `R-05: attempted native discovery/start; rejecting decoy calls:` 失败，附三条自建拒绝脚本的 `["dsh"]` 记录，进入真实发现或程序启动之前即阻断，没有模型调用。此前撤回的旧结论不恢复为旧产物的证据；这一份是新 2-E 的实际目标证明，保存在 `host-r05-catalog-loss-red.log`、`host-r05-target-proof.json`。正常文件与变异均使用 Host 自己创建的私有域，没有访问日常状态或默认公共端点目录。
 
-两份补丁在 `688f0938` 整合，原所有路径的目标 blob 与固定输出逐字节相等。2-C 的 `int-b9bd3d7c-7dcf-4903-897b-eb82c4fb7d3a`、2-E 的 `int-9d5d5531-e0a0-4587-803f-82edfce4f687` 均 verified 后 accepted/completed。黑板回收计划 `cln-bdee4e11-2351-4bf6-b527-fcdb8a65ae0b`、`cln-fd8d3013-6476-4291-a503-d98db3ce4731` 回读均 applied、removed=true，没有重复 apply 或手工删受管检出。Host 保留两项原始日志、脚本与结果材料后，按固定交付报告的确切任务根整体回收；169 与 13 份保留文件的清单、哈希、删除结果在 `repair-ce-retained-evidence.json`、`repair-ce-task-root-cleanup.json`。argv 观察只作补充，实际收尾依据已保存直接子进程的 wait 与签收停止证据，不把缺少 PID 当作停止。
+两份补丁在 `688f0938` 整合，原所有路径的目标 blob 与固定输出逐字节相等。2-C 的 `int-b9bd3d7c-7dcf-4903-897b-eb82c4fb7d3a`、2-E 的 `int-9d5d5531-e0a0-4587-803f-82edfce4f687` 均 verified 后 accepted/completed。黑板回收计划 `cln-bdee4e11-2351-4bf6-b527-fcdb8a65ae0b`、`cln-fd8d3013-6476-4291-a503-d98db3ce4731` 回读均 applied、removed=true，没有重复 apply 或手工删受管检出。Host 保留两项原始日志、脚本与结果材料后，按固定交付报告的确切任务根整体回收；169 与 13 份保留文件的清单、哈希、删除结果在 `repair-ce-retained-evidence.json`、`repair-ce-task-root-cleanup.json`。argv 观察只作补充，实际停止依据已保存直接子进程的 wait 与签收停止证据，不把缺少 PID 当作停止。
 
 ## 2-D 首份退回及 Host 共享夹具接线
 
@@ -201,7 +201,7 @@ Host 在现有 localhost 响应夹具中只给测试自有 native wrapper 附加
 
 最终代码提交 `e0ce3d2be333b1655397920d59a8014162730849`，core 绑定 `40d82d937caa03a058b484ff0f660657cd595945`，开发者指定 `1f7e8b60577cc0b8883aa5dca9e9a1bc392f6ad0` 的祖先关系通过。命令为 `uv run --frozen python -m hey_my_buddy.cli.checks`，未带 jobs，使用默认并行数；退出码 0，用时 690.917 秒，213/213 个文件通过，实际执行清单 3,474 项（其中跳过 1 项）。完整检查已涵盖本批五份夹具、真实 C-Two 私有注册/回收/期限、四个 harness 的 localhost 或模拟路径、打包与运行时检查。安装版 ZCode 文件在完整检查中通过，22.2 秒；本次没有对其降低断言、超时或检查范围。
 
-本次运行使用创建时登记确切路径的短私有系统任务根；检查运行器自行创建并收尾自己的 `buddy-checks-<nonce>` 根，Host 外层材料留待验收。开始与结束负载分别约 20.81 / 83.46，仅为运行条件观察，不用作通过或失败解释。原始证据为 `tmp/c073-host/final-short-check-{started,process,result,summary,owned-root}.json` 与 `final-short-check.log`。前三次完整失败全部保留，没有用最终 green 覆盖原结果。记录后的产品、测试、锁文件与控制台差集核对为空；只补记录时不重跑完整检查，仍重跑 `cli.test_repository_hygiene`。
+本次运行使用创建时登记确切路径的短私有系统任务根；检查运行器自行创建并清场自己的 `buddy-checks-<nonce>` 根，Host 外层材料留待验收。开始与结束负载分别约 20.81 / 83.46，仅为运行条件观察，不用作通过或失败解释。原始证据为 `tmp/c073-host/final-short-check-{started,process,result,summary,owned-root}.json` 与 `final-short-check.log`。前三次完整失败全部保留，没有用最终 green 覆盖原结果。记录后的产品、测试、锁文件与控制台差集核对为空；只补记录时不重跑完整检查，仍重跑 `cli.test_repository_hygiene`。
 
 四个最短真实 Worker 回合的脚本与独立批准门已准备，仍未执行（真实付费冒烟 0 次；各微任务委派的模型使用另按各 run 登记）。准备从一次 Codex Worker 回合开始，证明真实 CLI 经私有服务、Worker 主循环、角色、运行模块与 C-Two 通道完成最小交付，留存签收、工具事实与两层停止；其余 ZCode、Claude Code、DSH 及任何重跑都继续逐次请求开发者批准。沿用已有登录，不设置 CODEX_HOME 或 CLAUDE_CONFIG_DIR，不读凭据文件，不安装、升级或重启日常运行时。真实冒烟与 Claude Code Host 的最终验收仍是后续关口，不把完整检查退出 0 写成整批已验收。
 

@@ -20,7 +20,7 @@ CLI 和已认证 Harness 分区实现账户查看、source CAS、登录、状态
 
 后端经本次开发者批准的运行中 Buddy 自动路由委派，routingPreferences 偏好 Codex，实际选择 codex/openai/gpt-6.1-sol/high。固定成果 b76fec830ecf8bcd5bd3b55dd69318df6a7f2327、artifact 486ff64f-0d14-4c93-ac9c-9f546f918164，在确认停止后由 Host 以 b6fbacc 保存，随后接入已核实原生路径并修改集成边界。服务只通过正常委派接口使用运行中的 Buddy；测试不访问日常看板。Host 已独立运行 114 项受影响测试、34 项账户基础测试、8 项服务边界测试及 44 项前端测试；服务边界覆盖 DEBUG 错误回显、SQLite/回放/事件/备份排除、同步写入期间取消及共享来源拒绝。协议与系统库测试使用私有 fixtures，不调用真实 CLI 或模型。
 
-收尾验证正在执行：使用捆绑 Node 24.19.0，先 npm --prefix apps/console ci，再 uv run --frozen python -m buddy.checks。完整结果、源码与资产标识以及 Host integration/acknowledge 将在实际完成后补入本记录；本段不声称完整验收已通过。
+最终验证正在执行：使用捆绑 Node 24.19.0，先 npm --prefix apps/console ci，再 uv run --frozen python -m buddy.checks。完整结果、源码与资产标识以及 Host integration/acknowledge 将在实际完成后补入本记录；本段不声称完整验收已通过。
 
 真实合成浏览器检查已看到 Harness 的账户／额度入口、独立账户表单与禁用能力；390 宽度布局可读并可滚动，临时视口已恢复。预览不读取看板、凭据或真实服务，且拒绝写操作。Raw 本地检查脚本与脱敏报告留在忽略的 tmp/worker-accounts/，不进入分发。
 
@@ -28,7 +28,7 @@ CLI 和已认证 Harness 分区实现账户查看、source CAS、登录、状态
 
 额外取得修正后联通检查授权后，0.26.0 真实服务 account-login 入口已通过：新的私有状态／空 runtime，无效密钥只经原生 stdin，返回 Worker 来源、ready、metered、credentialRevision=1；回复、meta/commands/events/attempts/artifacts 和备份清单均未检出密钥，pending owner=0，全部原生操作已确认停止，零模型回合。链接修正同时由包含三个原生工具链接的 mock CLI 覆盖。
 
-2026-10-01 收尾第一次完整检查实际运行 1,816 项 Python 测试（1 skipped），发现两处阻塞：目录刷新测试替身不接收新增的 directory/database 参数，导致把预期 CATALOG_UNAVAILABLE 换成 INTERNAL_ERROR；共享 Skill 超出 4 KB 上限。已修正替身签名而保留失败安全断言，并将 Skill 压到 4,094 字节，4 项受影响检查通过。随后再次先 npm ci（零漏洞），再运行完整 buddy.checks；最终结果以接下来的实际输出为准。
+2026-10-01 最后阶段的第一次完整检查实际运行 1,816 项 Python 测试（1 skipped），发现两处阻塞：目录刷新测试替身不接收新增的 directory/database 参数，导致把预期 CATALOG_UNAVAILABLE 换成 INTERNAL_ERROR；共享 Skill 超出 4 KB 上限。已修正替身签名而保留失败安全断言，并将 Skill 压到 4,094 字节，4 项受影响检查通过。随后再次先 npm ci（零漏洞），再运行完整 buddy.checks；最终结果以接下来的实际输出为准。
 
 第二轮完整 Python 检查仅剩共享 Skill 原句断言，未出现账户代码失败；已恢复 acceptance and authorization 原句，并压到 4,092 字节，17 项 Skill／安装／目录失败安全检查通过。安装测试 clear=True 的私有环境补齐 runtime/HOME 路径，避免测试计划引用日常默认路径。前端完整测试实际通过 54 个文件、630 项。再次按 npm ci → buddy.checks 执行最终组合树检查，尚未记录通过前不作完整验收结论。
 

@@ -80,7 +80,7 @@ loader 命令为 `run.py loader-original /tmp/c2ff-0B4h55/baseline helper:load_i
 
 首次 HOME 变异 `red-home-0` 也保留（1 项、退出 1、failure=1、errors=0，0.003 / 0.670 秒）。随后把 HOME 断言改为同义布尔形式以避免失败时打印整个环境，最终证明使用 `red-home-final-0`；没有删掉首次日志。两份最终红灯原始输出与 argv 都在各自目录和 results JSON。
 
-## Host 补核与进程收尾
+## Host 补核与进程停止
 
 固定助手为 `/tmp/c2ff-0B4h55/host_verify.py`，入口 `python3 /tmp/c2ff-0B4h55/host_verify.py <固定交付源码根>`；默认固定源码根为任务根 `fixed/`。助手先核对 `fixed-fixtures-sha256.json` 中五份测试逐字节哈希，再为五文件各开私有解释器，执行完整聚焦 green（预期 10、12、47、12、28 项，共 109 项），随后逐个执行六份单点副本。每份红灯必须退出 1、恰好 failure=1、errors=0、命中指定具体断言，权限阻断和 Too many open files 均拒绝作为目标证明。它没有删除、安装、改 refs、运行全套检查或模型的逻辑；未由 Worker 执行这个原生补核入口，也未声称 Host/reviewer 已运行。
 

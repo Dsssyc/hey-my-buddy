@@ -55,7 +55,7 @@
 
 | 测试文件与原名称 | 处理 | 原保护点与本次调整 |
 | --- | --- | --- |
-| `blackboard/store/test_blackboard.py::test_the_default_cold_start_installs_and_reports_the_stable_runtime` | 改写 | 真实冷启动必须安装并报告稳定运行时；失败断言附上安装日志末尾，防止私有根收尾后丢掉 uv 的失败原因，成功断言不变。 |
+| `blackboard/store/test_blackboard.py::test_the_default_cold_start_installs_and_reports_the_stable_runtime` | 改写 | 真实冷启动必须安装并报告稳定运行时；失败断言附上安装日志末尾，防止私有根清场后丢掉 uv 的失败原因，成功断言不变。 |
 | `blackboard/catalog/test_catalog_observations.py::test_identical_read_records_observation_and_confirmed_time_without_event` | 改写 | 相同目录读取推进观察与可信时间，不制造业务事件；改断言为当前目录列。 |
 | `blackboard/catalog/test_catalog_observations.py::test_unknown_reading_keeps_profiles_unless_it_restores_retained_availability` | 改写 | 未知读取保留 profile 与上次可信事实；从当前目录行核对可信时间和账户状态。 |
 | `blackboard/routing/test_router.py::test_budget_publication_preserves_model_and_schema` | 改写 | 真实预算发布保留 Router 选择和 schema；schema 用显式只读查询。 |
@@ -120,7 +120,7 @@ Python 检查只使用 Host 指定的现成解释器，以 `PYTHONPATH=src <指�
 
 定向检查包括设置和认领的真实路径、基点升级、目录可信事实、观察冻结、扫描窗口、身份删除后的工作区与缓存、停止门槛及升级最早拒绝。窗口审查发现健康扫描不能冒充目录读取，修复后 5 个定向文件、97 项通过。归档预检最初扩大到同 schema 升级路径，完整检查及该文件单独复跑均暴露了这一问题；限定为 schema 18 的归档前提后，升级与归档的 2 个文件、25 项通过。同 schema 升级继续在原来的备份阶段读取提交元数据。
 
-首轮完整检查有 `blackboard.store.test_blackboard` 与 `install.test_upgrade` 两个文件失败。冷启动在首轮报告 `runtimeStable=false`，同文件独立重跑 57 项全部通过，未单独证明首轮不稳定身份的原因；源码收尾后重新执行完整检查。最终轮冷启动转为运行时依赖下载失败，补上安装日志诊断后再次单独复跑，该文件 57 项中的 56 项通过、1 项因同一下载超时失败，检查器退出 1，私有根已清理。
+首轮完整检查有 `blackboard.store.test_blackboard` 与 `install.test_upgrade` 两个文件失败。冷启动在首轮报告 `runtimeStable=false`，同文件独立重跑 57 项全部通过，未单独证明首轮不稳定身份的原因；源码整理后重新执行完整检查。最终轮冷启动转为运行时依赖下载失败，补上安装日志诊断后再次单独复跑，该文件 57 项中的 56 项通过、1 项因同一下载超时失败，检查器退出 1，私有根已清理。
 
 冷启动安装失败输出（私有路径替换为占位符）：
 

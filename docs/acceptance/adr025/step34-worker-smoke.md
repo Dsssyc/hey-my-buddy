@@ -10,4 +10,4 @@
 
 两层停止证据分别成立：运行结果上报 native `groupState=gone`、`started=true`、`leaderExited=true`、`exitCode=0`、`observationBasis=owned-process-group`；外层实际 ProcessHandle 的 `shutdown_confirmed()` 返回 true；共享 collect 的合并结果 `shutdown_confirmed=true`。本次正常结束，没有发出中断。原生用量报告是 partial/attempt：inputTokens 79,620（含缓存 60,672），outputTokens 712，nativeRecords 4，来源 `zcode/v4-telemetry-usage-delta`；不把 partial 改写为完整账单。
 
-运行使用 Host 即时登记的 `<host-task-root>/m/worker-smoke/`，私有 state、runtime、cwd 与日志均位于其中，TMPDIR 与 BUDDY_CHECKS_TMPDIR 指向 `<host-task-root>/t/`。原生设置只使用项目既有私有快照机制，Host 没有读取凭据文件内容或改动登录与日常配置。现有 inquiry_paths 的短套接字回退目录由 Host 事先以本次唯一 attemptId 创建并登记，收尾只回收这一确切目录。脱敏请求、结果、摘要与探针源留在本检出被忽略的 `tmp/adr025-host/step34-20261006-105245/`；包含私有凭据的原生目录不作为证据归档。
+运行使用 Host 即时登记的 `<host-task-root>/m/worker-smoke/`，私有 state、runtime、cwd 与日志均位于其中，TMPDIR 与 BUDDY_CHECKS_TMPDIR 指向 `<host-task-root>/t/`。原生设置只使用项目既有私有快照机制，Host 没有读取凭据文件内容或改动登录与日常配置。现有 inquiry_paths 的短套接字回退目录由 Host 事先以本次唯一 attemptId 创建并登记，清场只回收这一确切目录。脱敏请求、结果、摘要与探针源留在本检出被忽略的 `tmp/adr025-host/step34-20261006-105245/`；包含私有凭据的原生目录不作为证据归档。

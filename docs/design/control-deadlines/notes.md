@@ -10,7 +10,7 @@ Router 的镜像准备移到 DecisionAdapter.prepare，原生调用拿完整原�
 
 普通工作区 Git 的等待为 60 秒，到点为 WORKSPACE_GIT_UNKNOWN；续接准备保持排队，既不记关注也不作废续接，之后可以重试。Git 环境禁止 lazy fetch。安装、升级、服务冷启动按 Host 明确排除的范围恢复基点：安装 900 秒与 RUNTIME_INSTALL_TIMEOUT，升级 command/start 各 45 秒及原错误、日志语义，服务冷启动首次安装后 300 秒、其余 20 秒与 SERVICE_START_TIMEOUT，本机 IPC 自检 1 秒；用户可重试，这几处在忙机器上的时长由 Host 另记待办。
 
-预期时长、Router 原生预算值、收尾宽限、各执行器回收窗口、删除授权有效期、所有权 lease 和安全凭证有效期保持原值。清点覆盖源码 Python 的固定等待、TTL、expiry、monotonic、SQLite busy 与秒数常量；打包前端的产品计时以原始 TSX 文件标明，依赖内部调度另列。定义与同一等待的消费点合并，独立等待分别列行；位置以函数/调用点为准，旧行号用于定位基点。“等待”与“等待/未知”为只结束观察的一类，“判结论”为原先到点影响结论的一类，保留项说明预算或安全依据。
+预期时长、Router 原生预算值、有序收尾的宽限期、各执行器回收窗口、删除授权有效期、所有权 lease 和安全凭证有效期保持原值。清点覆盖源码 Python 的固定等待、TTL、expiry、monotonic、SQLite busy 与秒数常量；打包前端的产品计时以原始 TSX 文件标明，依赖内部调度另列。定义与同一等待的消费点合并，独立等待分别列行；位置以函数/调用点为准，旧行号用于定位基点。“等待”与“等待/未知”为只结束观察的一类，“判结论”为原先到点影响结论的一类，保留项说明预算或安全依据。
 
 | 类别 | 位置（相对 `src/hey_my_buddy/`，前端另注明） | 时长 | 原来 | 现在 | 为什么 |
 | --- | --- | --- | --- | --- | --- |
@@ -18,13 +18,13 @@ Router 的镜像准备移到 DecisionAdapter.prepare，原生调用拿完整原�
 | 判结论 | `blackboard/routing/router.py:17` | standard 300 秒，默认 preset | 同上 | 同上 | 同上 |
 | 判结论 | `blackboard/routing/router.py:18` | deep 600 秒 | 同上 | 同上 | 同上 |
 | 判结论 | `blackboard/routing/router.py:22` | fast 60 秒 | fast Router 输入的预算 | fast Router 输入的预算 | 同上 |
-| 判结论 | `blackboard/routing/decision.py:66,678` | Router 预算外加 10 秒 | 给执行收尾；发布端仍检查冻结预算 | 给执行收尾；发布端仍检查冻结预算 | 保留停止证据，不能扩大可接受答案窗口 |
+| 判结论 | `blackboard/routing/decision.py:66,678` | Router 预算外加 10 秒 | 给执行结束；发布端仍检查冻结预算 | 给执行结束；发布端仍检查冻结预算 | 保留停止证据，不能扩大可接受答案窗口 |
 | 判结论 | `buddy/roles/router.py:40` | Router 原生调用 60 秒 | 原生超时后无有效回答 | 原生超时后无有效回答 | Router 快速调用硬界限 |
 | 判结论，保留原生预算 | `buddy/roles/router.py:prepare_router_review / DecisionAdapter.prepare / start` | 原生 preset 的 60/300/600 秒 | 原生调用拿完整预算 | 同左；镜像准备在 start 之前，准备与核验不扣预算 | 恢复 ADR-022 的 Router 自身预算含义 |
 | 等待/未知 | `buddy/roles/router.py:23,166` | 取消 grace 12 秒 | 超过进入强制停机，记录停机事实 | 超过进入强制停机，记录停机事实 | 回收期不证明任务完成 |
 | 判结论改未知 | `buddy/roles/router_input.py:_remaining / prepare / digest / verify` | Git 30 秒、材料化和核验各 120 秒 | 到点 router-input-unavailable | 到点 router-input-unknown；Worker 可见退避重试，保留已回答结果 | 等待耗尽不能证明输入坏，也不消费原生 Router 预算 |
 | 等待/未知 | `buddy/roles/router.py:DecisionAdapter.collect`、`buddy/roles/router_input.py:verify` | 核验独立 120 秒，Git 单次 60 秒 | 上一版绑原生期限并丢弃已回答结果 | 核验 unknown 保留 native outcome；只重试核验，已完成事实不因 native deadline 失效 | 输入证明与 Router 自身速度是不同事实 |
-| 等待/未知 | `buddy/roles/router_input.py:158` | `cat-file` 收尾等 5 秒 | 之后 kill 再 wait | 之后 kill 再 wait | 子进程回收，不证明材料化成功 |
+| 等待/未知 | `buddy/roles/router_input.py:158` | 等待 `cat-file` 结束，最多 5 秒 | 之后 kill 再 wait | 之后 kill 再 wait | 子进程回收，不证明材料化成功 |
 | 等待 | `blackboard/routing/router_settings.py:13-20` | retry interval 默认 600 秒，用户配置范围 1–2,147,483,647 秒 | 候选跳过到 `skipUntil` 后重试 | 候选跳过到 `skipUntil` 后重试 | 用户参数非执行失败时限 |
 | 等待 | `blackboard/routing/quota_routing.py:22` | quota retry 3600 秒 | 到 `eligibleAt` 再考虑候选 | 到 `eligibleAt` 再考虑候选 | 配额避让窗口 |
 | 判结论 | `blackboard/catalog/catalog.py:37` | 缺席二次确认 3600 秒 | 连续缺席才使 catalog 判不可用 | 连续缺席才使 catalog 判不可用 | 降低瞬时缺席误判；不能把单次超时当缺席 |
@@ -56,14 +56,14 @@ Router 的镜像准备移到 DecisionAdapter.prepare，原生调用拿完整原�
 | 等待/未知 | `buddy/harnesses/native_support.py:131` | 停机前 wait 最多 3 秒 | 检查进程是否自然退出 | 检查进程是否自然退出 | 仍需实际停机证据 |
 | 等待/未知 | `buddy/harnesses/base.py:21,329-333` | command stop grace 3 秒 | 超过进入强制停机 | 超过进入强制停机 | 回收，不等于已停 |
 | 等待/未知 | `buddy/harnesses/base.py:340-344` | 进程输出排空最多 2 秒 | 结束输出观察 | 结束输出观察 | 后续仍查进程结果 |
-| 等待/未知 | `buddy/harnesses/base.py:356-365` | settle_seconds 由调用方给出，轮询 0.025 秒 | 观察退出 | 观察退出 | 动态收尾窗口 |
+| 等待/未知 | `buddy/harnesses/base.py:356-365` | settle_seconds 由调用方给出，轮询 0.025 秒 | 观察退出 | 观察退出 | 动态退出观察窗口 |
 | 等待/未知 | `buddy/runtime/command.py:16` | terminate grace 3 秒 | 命令任务停止宽限 | 命令任务停止宽限 | 子进程回收 |
 | 判结论 | `buddy/runtime/command.py:69-70` | `context.timeout_seconds`，来源 `routerBudgetSeconds` 或 None | 有预算才设置 handle deadline | 有预算才设置 handle deadline | 普通 Worker 期望时长不等于截止时间 |
 | 等待 | `buddy/runtime/worker.py:27,894` | retry 默认 120 秒 | 服务错误后退避重试 | 服务错误后退避重试 | 避免快速重试 |
 | 等待 | `buddy/runtime/worker.py:28,442,449` | 空 claim 2 秒 | 再查任务 | 再查任务 | 轮询节拍 |
 | 等待/未知 | `buddy/runtime/worker.py:554` | 退出后 handle wait 15 秒 | 后续记录运行/停止事实 | 后续记录运行/停止事实 | 不能由 wait 结束推断子进程已停 |
 | 等待 | `buddy/runtime/worker.py:794` | 执行监视每 0.25 秒 | 查 controller 完成/取消/预算 | 查 controller 完成/取消/预算 | 观察节拍 |
-| 等待/未知 | `buddy/runtime/worker.py:805` | 预算或取消后 wait 10 秒 | 给 controller 收尾 | 给 controller 收尾 | 停机仍取实际证据 |
+| 等待/未知 | `buddy/runtime/worker.py:805` | 预算或取消后 wait 10 秒 | 供 controller 完成停止 | 供 controller 完成停止 | 停机仍取实际证据 |
 | 等待/未知 | `buddy/runtime/worker.py:809` | lease renewal thread join 2 秒 | 回收线程 | 回收线程 | 不证明线程已停止 |
 | 等待 | `buddy/runtime/worker.py:925` | 错误重试 sleep 1 秒 | 退避过程检查 | 退避过程检查 | 节拍 |
 | 等待 | `buddy/runtime/worker.py:950,956` | 取消轮询 2 秒 | 检查 stop 并续 lease | 检查 stop 并续 lease | 观察节拍 |
@@ -94,7 +94,7 @@ Router 的镜像准备移到 DecisionAdapter.prepare，原生调用拿完整原�
 | 等待/未知 | `buddy/harnesses/c_two_live.py:514,521` | 队列等待从请求 timeout 参数继承 | 到点留下传输不可用事实 | 到点留下传输不可用事实 | 与 request deadline 同源 |
 | 等待/未知 | `buddy/harnesses/c_two_live.py:789` | slot done 等剩余 deadline | 超时形成 transport failure/unknown | 超时形成 transport failure/unknown | 不推断 native 执行结束 |
 | 等待/未知 | `buddy/harnesses/c_two_live.py:1052,1110-1116` | native connect/call 同一 100–5000 毫秒窗口 | 连接或调用超时，报告对应 transport 错误 | 连接或调用超时，报告对应 transport 错误 | 不把单次观察当任务终局 |
-| 等待/未知 | `buddy/harnesses/inquiry_bridge.py:154` | bridge thread join 1 秒 | 到点线程仍可能存活 | 到点线程仍可能存活 | 收尾证据 |
+| 等待/未知 | `buddy/harnesses/inquiry_bridge.py:154` | bridge thread join 1 秒 | 到点线程仍可能存活 | 到点线程仍可能存活 | 退出证据 |
 | 等待 | `protocol/activity.py:53,199-213` | 活动发布最小间隔默认 2 秒 | 同 phase 事件节流 | 同 phase 事件节流 | 不改任务状态 |
 | 判结论 | `protocol/transport.py:296,314` | loopback listener 1 秒 | 单次身份握手超时，服务调用失败 | 回环和 UNIX 自检恢复 1 秒 connect/accept 限制，失败拒绝 launch，未创建 child | 本机 IPC 自检是启动安全前提，不是 harness 健康结论 |
 | 判结论 | `protocol/transport.py:297,315` | loopback connector 1 秒 | 同上 | 回环和 UNIX 自检恢复 1 秒 connect/accept 限制，失败拒绝 launch，未创建 child | 本机 IPC 自检是启动安全前提，不是 harness 健康结论 |
@@ -117,7 +117,7 @@ Router 的镜像准备移到 DecisionAdapter.prepare，原生调用拿完整原�
 | 判结论 | `blackboard/store/db.py:1039` | SQLite `busy_timeout` 10000 毫秒 | 争用超时报数据库错误 | 争用超时报数据库错误 | SQLite 明确报告锁争用或错误时不提交事务；它是资源拒绝事实，不改变 harness/任务为坏状态 |
 | 判结论 | `blackboard/store/db.py:1045` | SQLite read/write connect timeout 10 秒 | 连接仍忙时报错误 | 连接仍忙时报错误 | Python sqlite 默认 busy 界限的显式设置 |
 | 判结论 | `blackboard/store/db.py:1084` | SQLite read-only connect timeout 10 秒 | 同上 | 同上 | 同上，独立连接路径 |
-| 判结论 | `blackboard/tasks/workflow.py:106,3610-3619` | Host wrap-up 300 秒 | `graceDeadline` 到点可成 `grace-expired` | `graceDeadline` 到点可成 `grace-expired` | 主动停止后的有界收尾，保留 |
+| 判结论 | `blackboard/tasks/workflow.py:106,3610-3619` | Host wrap-up 300 秒 | `graceDeadline` 到点可成 `grace-expired` | `graceDeadline` 到点可成 `grace-expired` | 主动停止后的有序收尾的宽限期，保留 |
 | 等待/未知 | `buddy/roles/run_controller.py:114-160` | 单次 wrap-up 等待最多 86400 秒且受剩余 grace 限制 | 到点只检查是否已写摘要 | 到点只检查是否已写摘要 | 不能把超时视作摘要交付 |
 | 判结论 | `blackboard/tasks/workflow.py:113,5332` | cleanup plan TTL 900 秒 | 到点 `PLAN_EXPIRED` | 到点 `PLAN_EXPIRED` | 删除前的授权新鲜度，保留 |
 | 判结论 | `blackboard/tasks/storage.py:739` | storage cleanup plan TTL 15 分钟 | 到点计划失效 | 到点计划失效 | 独立存储清理计划 |
@@ -157,14 +157,14 @@ Router 的镜像准备移到 DecisionAdapter.prepare，原生调用拿完整原�
 | 判结论 | `buddy/harnesses/dsh/native_run.py:139` | config 覆盖 30 秒 | 慢配置转原生失败 | 初始化、开/续会话、模型和强度配置共用执行期限；Worker 无硬预算时持续等同一次请求 | DSH CLI 慢协议请求不判 buddy/harness 不可用；Router 及目录读取用各自既有预算 |
 | 等待/未知 | `buddy/harnesses/dsh/native_run.py:140` | close 覆盖 30 秒 | 关闭未确认 | 正常逻辑会话 close 共用执行期限；显式中断后的 close 仍保留 30 秒回收窗口 | 正常完成要等 close 事实；目录 close 预算耗尽记 deadline/unknown，真实拒绝与断连仍保留 |
 | 等待/未知 | `buddy/harnesses/dsh/native_run.py:141` | settle 5 秒 | 原生处理/进程停止观察 | 原生处理/进程停止观察 | 超时不证明已停 |
-| 等待/未知 | `buddy/harnesses/dsh/native_run.py:142` | drain 10 秒 | 收尾排空 | 收尾排空 | 同上 |
+| 等待/未知 | `buddy/harnesses/dsh/native_run.py:142` | drain 10 秒 | 结束时排空 | 结束时排空 | 同上 |
 | 等待/未知 | `buddy/harnesses/dsh/native_run.py:147` | abandon 5 秒 | 放弃前观察 | 放弃前观察 | 同上 |
 | 等待/未知 | `buddy/harnesses/dsh/native_run.py:1019` | cancel RPC 10 秒 | 超时取消送达不确定 | 超时取消送达不确定 | 回收边界 |
 | 等待 | `buddy/harnesses/dsh/native_run.py:1233` | prompt update poll 0.05 秒 | 重读流更新/取消 | 重读流更新/取消 | 节拍 |
 | 等待/未知 | `buddy/harnesses/dsh/native_run.py:1239` | prompt thread join 5 秒 | 到点线程仍可能活 | 到点线程仍可能活 | 不能宣布完整停止 |
 | 等待/未知 | `buddy/harnesses/dsh/acp/connection.py:77,555` | reply write 3 秒 | 未开始写的 queued reply 到点记 expired-queued；开始后仍等实际写结果 | 同左；不把排队耗尽记原生故障或执行失败 | 记录的是确定未发送或未知送达；writeFailureCount 只依据实际写错误、队列满或 connection shutdown |
 | 等待/未知 | `buddy/harnesses/dsh/acp/connection.py:78,543` | notify write 默认 10 秒 | 到点 AcpTimeout，未发则取消排队、已开始则 writeUncertain | 同左；生产调用用于 cancel 通知，后续走实际中断/停机证明 | 回收窗口内未知送达不能当作已取消，必须等停止证据 |
-| 等待/未知 | `buddy/harnesses/dsh/acp/connection.py:79,867` | writer join 5 秒 | writer 未退出仍未知 | writer 未退出仍未知 | 收尾证据 |
+| 等待/未知 | `buddy/harnesses/dsh/acp/connection.py:79,867` | writer join 5 秒 | writer 未退出仍未知 | writer 未退出仍未知 | 退出证据 |
 | 等待 | `buddy/harnesses/dsh/acp/connection.py:372` | writer wake 0.05 秒 | 再查写队列 | 再查写队列 | 节拍 |
 | 等待/未知 | `buddy/harnesses/dsh/acp/connection.py:841` | shutdown 的 stdin lock 5 秒 | 未取锁则记 stdinBusy，交给组停止释放 pipe | 同左；不把锁等待到点记协议写失败 | 回收观察，不能通过抢关仍被 writer 使用的 pipe 假报停止 |
 | 等待/未知 | `buddy/harnesses/dsh/acp/connection.py:877` | stderr join 1 秒 | 日志线程仍可能活 | 日志线程仍可能活 | 输出回收 |
@@ -175,7 +175,7 @@ Router 的镜像准备移到 DecisionAdapter.prepare，原生调用拿完整原�
 | 等待/未知 | `buddy/harnesses/codex/native_run.py:985` | 已结算 metadata 读取 2 秒 | 同上 | 同上 | 同上 |
 | 等待/未知 | `buddy/harnesses/codex/native_run.py:1377` | 另一次原生读取 2 秒 | 到点本次资料缺席 | 到点本次资料缺席 | 不把辅助资料当执行结论 |
 | 等待/未知 | `buddy/harnesses/zcode/protocol.py:33,381-398` | metadata 读取默认 2 秒 | 同上 | 同上 | 同上 |
-| 等待/未知 | `buddy/harnesses/claude/native_run.py:630` | 进程等待最多 3 秒且受总 deadline 限制 | 到点进入下一步观察/回收 | 到点进入下一步观察/回收 | 总预算内的收尾 |
+| 等待/未知 | `buddy/harnesses/claude/native_run.py:630` | 进程等待最多 3 秒且受总 deadline 限制 | 到点进入下一步观察/回收 | 到点进入下一步观察/回收 | 总预算内的停止处理 |
 | 等待 | `buddy/harnesses/claude/protocol.py:167-174` | message read 由调用方 seconds 决定；poll 最多 0.2 秒 | 等待一条原生消息 | 等待一条原生消息 | 动态窗口 |
 | 等待 | `buddy/harnesses/codex/protocol.py:90` | cancel poll 0.05 秒 | 重查取消 | 重查取消 | 不自行定性结果 |
 | 等待 | `buddy/harnesses/codex/protocol.py:106` | message queue poll 0.2 秒 | 重查原生回复 | 重查原生回复 | 同上 |
@@ -195,7 +195,7 @@ Router 的镜像准备移到 DecisionAdapter.prepare，原生调用拿完整原�
 | 等待 | `apps/console/src/use-macro-task-list.ts:198` | 防抖 180 毫秒 | 同上 | 同上 | 同上 |
 | 等待 | `apps/console/src/use-buddy-history.ts:18,185` | 防抖 300 毫秒 | 同上 | 同上 | 同上 |
 | 等待 | `apps/console/src/use-macro-task-timeline.ts:127` | tick 3 秒 | 更新 timeline | 更新 timeline | 同上 |
-| 等待/未知 | `buddy/runtime/worker.py:_execute_guarded / _wait_control_observation / _Renewal.attach` | 未知观察退避 15→30→60→120→180 秒；取消 poll 2 秒，lease/3 最低 5 秒 | 上一版未知每 2 秒重扫并重启续租线程 | 间隔内复用未知；get 显示等待原因，同一续租线程跨 handle；进度不可达不丢答案 | 未知不消费失败重试；收尾和租约语义保持 |
+| 等待/未知 | `buddy/runtime/worker.py:_execute_guarded / _wait_control_observation / _Renewal.attach` | 未知观察退避 15→30→60→120→180 秒；取消 poll 2 秒，lease/3 最低 5 秒 | 上一版未知每 2 秒重扫并重启续租线程 | 间隔内复用未知；get 显示等待原因，同一续租线程跨 handle；进度不可达不丢答案 | 未知不消费失败重试；有序收尾和租约语义保持 |
 | 判结论，保留原生预算 | `buddy/harnesses/native_support.py:execution_deadline / roles.run_controller.execute / roles.run_execution._launch` | 原生调用原相对预算 | 上一版跨层 deadlineMonotonic 接线 | 已删除该接线，原生仍拿满额相对预算 | 输入准备与核验不属于 Router 自身预算 |
 | 等待/未知 | console/assets/assets/index-CRjilw0Y.js（Scheduler immediate priority） | -1 毫秒 | 调度、加载或显示回调 | 未修改；只结束显示或加载等待，不写 authoritative board 状态 | 打包依赖的内部计时；按语义调用点列出，同一生成表达式的重复代码不重复列 |
 | 等待/未知 | console/assets/assets/index-CRjilw0Y.js（Scheduler user-blocking priority / React lanes） | 250 毫秒 | 调度、加载或显示回调 | 未修改；只结束显示或加载等待，不写 authoritative board 状态 | 打包依赖的内部计时；按语义调用点列出，同一生成表达式的重复代码不重复列 |
