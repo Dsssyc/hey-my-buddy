@@ -42,7 +42,12 @@ class SubmissionCleanupTests(workflow_tests.WorkflowTestCase):
             'executionWorkspace': {'kind': 'worktree', 'access': 'write'}, **options})
 
     def allocation(self, request='rejected'):
-        return workspace._workspace_directory(self.directory, request)[1]
+        workspace_id = 'ws-' + workspace._sha(workspace._json([str(self.directory.resolve()), request]))[:32]
+        return self.directory / 'workspaces' / workspace_id
+
+    def assert_no_snapshot(self, request='rejected'):
+        self.assertFalse(self.allocation(request).exists())
+        self.assertEqual(self.git(self.repo, 'for-each-ref', 'refs/hey-my-buddy/workspaces/' + self.allocation(request).name), '')
 
     def assert_no_registration(self, board, request='rejected'):
         with board.store.db.read() as connection:
@@ -179,7 +184,7 @@ class SubmissionCleanupTests(workflow_tests.WorkflowTestCase):
         self.assertTrue((self.allocation() / 'checkout').is_dir())
         self.assert_no_registration(board)
 
-    def test_real_project_admission_rejection_removes_only_new_checkout(self):
+    def test_admission_rejection_preserves_everything_when_additional_evidence_exists(self):
         board = self.board()
         foreign = self.submit(board, request_id='foreign', cwd=str(self.repository('foreign')),
                               macroTask={'title': 'other repository'}, executionWorkspace={'kind': 'existing', 'access': 'read'})
@@ -197,9 +202,10 @@ class SubmissionCleanupTests(workflow_tests.WorkflowTestCase):
             with self.assertRaises(BoardError) as caught:
                 self.rejected(board, macroTaskId=foreign['macroTaskId'])
         self.assertEqual(caught.exception.code, 'CONFLICT')
-        self.assertTrue(caught.exception.details['submissionCleanup']['removed'])
+        self.assertFalse(caught.exception.details['submissionCleanup']['removed'])
+        self.assertIn('additional-evidence', caught.exception.details['submissionCleanup']['reasons'])
         directory = self.allocation()
-        self.assertFalse((directory / 'checkout').exists())
+        self.assertTrue((directory / 'checkout').exists())
         self.assertEqual((directory / 'outputs/evidence.txt').read_text(encoding="utf-8"), 'retained output')
         self.assertTrue((directory / 'manifest.json').exists())
         self.assertEqual(source_index, (self.repo / '.git/index').read_bytes())
@@ -215,36 +221,101 @@ class SubmissionCleanupTests(workflow_tests.WorkflowTestCase):
         self.assertIs(caught.exception, error)
         self.assertFalse((self.allocation() / 'checkout').exists())
         self.assert_no_registration(board)
-        self.assertTrue(list(self.allocation().glob('submission-cleanup-*.json')))
+        self.assert_no_snapshot()
 
-    def test_error_before_transaction_revokes_checkout(self):
+    def test_unknown_reference_keeps_everything_for_both_kinds(self):
         board = self.board()
-        error = BoardError('ADMISSION_FAILED', 'controlled pretransaction failure')
-        with patch.object(board.store, 'task_submit', side_effect=error):
-            with self.assertRaises(BoardError) as caught:
-                self.rejected(board)
-        self.assertIs(caught.exception, error)
-        self.assertTrue(error.details['submissionCleanup']['removed'])
-        self.assertFalse((self.allocation() / 'checkout').exists())
-        self.assert_no_registration(board)
+        for kind in ('existing', 'worktree'):
+            with self.subTest(kind=kind):
+                request = 'unknown-ref-' + kind
+                error = BoardError('ADMISSION_FAILED', 'rejected with additional reference')
+                def reject(*args, **kwargs):
+                    manifest = kwargs['micro_task']['manifest']
+                    ref = 'refs/hey-my-buddy/workspaces/' + manifest['workspaceId'] + '/unknown'
+                    self.git(self.repo, 'update-ref', ref, manifest['inputCommit'])
+                    raise error
+                with patch.object(board.store, 'task_submit', side_effect=reject):
+                    with self.assertRaises(BoardError) as caught:
+                        self.rejected(board, request=request, executionWorkspace={'kind': kind, 'access': 'write'})
+                self.assertIs(caught.exception, error)
+                facts = error.details['submissionCleanup']
+                self.assertFalse(facts['removed'])
+                self.assertIn('fixed-reference-set-changed', facts['reasons'])
+                self.assertTrue((self.allocation(request) / 'manifest.json').exists())
+                self.assertEqual(len(self.git(self.repo, 'for-each-ref', 'refs/hey-my-buddy/workspaces/' + self.allocation(request).name).splitlines()), 5)
+
+    def test_non_reservation_admission_error_revokes_both_kinds_and_keeps_source(self):
+        board = self.board()
+        for kind in ('existing', 'worktree'):
+            with self.subTest(kind=kind):
+                request = 'non-reservation-' + kind
+                error = BoardError('ADMISSION_FAILED', 'controlled pretransaction failure')
+                original_revoke = workspace.revoke_submission
+                def revoke_with_original_lock(plan):
+                    with self.assertRaises(BoardError) as busy:
+                        with workspace._lock(plan['directory'], create=False):
+                            self.fail('preparation lock was released before revocation')
+                    self.assertEqual(busy.exception.code, 'WORKSPACE_BUSY')
+                    return original_revoke(plan)
+                with patch.object(board.store, 'task_submit', side_effect=error), \
+                        patch.object(workspace, 'revoke_submission', side_effect=revoke_with_original_lock):
+                    with self.assertRaises(BoardError) as caught:
+                        self.rejected(board, request=request, executionWorkspace={'kind': kind, 'access': 'write'})
+                self.assertIs(caught.exception, error)
+                self.assertTrue(error.details['submissionCleanup']['removed'])
+                self.assert_no_snapshot(request)
+                self.assert_no_registration(board, request)
+                self.assertEqual((self.repo / 'tracked.txt').read_text(encoding='utf-8'), 'base\n')
 
     def test_cleanup_failure_preserves_original_error_and_recovery_manifest(self):
         board = self.board()
-        error = BoardError('ADMISSION_FAILED', 'original admission failure', originalFact='kept')
-        with patch.object(board.store, 'task_submit', side_effect=error), patch.object(workspace, 'cleanup_remove', side_effect=BoardError('WORKSPACE_GIT_ERROR', 'controlled cleanup failure', argv=['git', 'worktree', 'remove'])):
-            with self.assertRaises(BoardError) as caught:
-                self.rejected(board)
-        self.assertIs(caught.exception, error)
-        self.assertEqual(error.details['originalFact'], 'kept')
-        facts = error.details['submissionCleanup']
-        self.assertFalse(facts['removed'])
-        self.assertEqual(facts['cleanupError']['code'], 'WORKSPACE_GIT_ERROR')
-        directory = self.allocation()
-        self.assertTrue((directory / 'checkout').is_dir())
-        manifest = json.loads((directory / 'manifest.json').read_text(encoding="utf-8"))
-        self.assertTrue(workspace.cleanup_inspect(self.directory, manifest)['eligible'])
-        self.assertEqual(json.loads(next(directory.glob('submission-cleanup-*.json')).read_text(encoding="utf-8")), facts)
-        self.assert_no_registration(board)
+        for kind in ('existing', 'worktree'):
+            with self.subTest(kind=kind):
+                request = 'cleanup-error-' + kind
+                error = BoardError('ADMISSION_FAILED', 'original admission failure', originalFact='kept')
+                failure = BoardError('WORKSPACE_GIT_ERROR', 'controlled cleanup failure')
+                with patch.object(board.store, 'task_submit', side_effect=error), \
+                        patch.object(workspace, 'revoke_submission', side_effect=failure):
+                    with self.assertRaises(BoardError) as caught:
+                        self.rejected(board, request=request, executionWorkspace={'kind': kind, 'access': 'write'})
+                self.assertIs(caught.exception, error)
+                self.assertEqual(error.details['originalFact'], 'kept')
+                facts = error.details['submissionCleanup']
+                self.assertFalse(facts['removed'])
+                self.assertEqual(facts['cleanupError']['code'], 'WORKSPACE_GIT_ERROR')
+                directory = self.allocation(request)
+                self.assertEqual((directory / 'checkout').is_dir(), kind == 'worktree')
+                manifest = json.loads((directory / 'manifest.json').read_text(encoding='utf-8'))
+                self.assertEqual(manifest['kind'], kind)
+                self.assertEqual(json.loads(next(directory.glob('submission-cleanup-*.json')).read_text(encoding='utf-8')), facts)
+                self.assert_no_registration(board, request)
+
+    def test_unconfirmed_helper_transfer_revokes_both_kinds_in_the_same_batch(self):
+        board = self.board()
+        parent = self.submit(board, cwd=str(self.repo))
+        self.finish_turn(board, self.claim(board, run_id=parent['runId']), disposition='assistance')
+        other = self.repository('other-source')
+        for kind in ('existing', 'worktree'):
+            with self.subTest(kind=kind):
+                view = board.call('workflow_get', {'runId': parent['runId']})
+                before_refs = self.git(self.repo, 'for-each-ref')
+                before_other_refs = self.git(other, 'for-each-ref')
+                before_allocations = sorted((self.directory / 'workspaces').iterdir())
+                with patch.object(board.store.workflow, '_stopped_parent', return_value=False):
+                    with self.assertRaises(BoardError) as caught:
+                        self.decide(board, view, view['activeRequest']['requestId'], command_id='stop-proof-' + kind, helpers=[
+                            {'requestId': 'new-' + kind, 'task': 'new allocation', 'cwd': str(other),
+                             'executionWorkspace': {'kind': kind, 'access': 'write'}},
+                            {'requestId': 'transfer-' + kind, 'task': 'take parent checkout', 'cwd': str(self.repo),
+                             'executionWorkspace': {'kind': 'existing', 'access': 'write'}},
+                        ])
+                self.assertEqual(caught.exception.code, 'SHUTDOWN_UNCONFIRMED')
+                self.assertEqual(len(caught.exception.details['helperPreparationCleanup']), 2)
+                self.assertTrue(all(item['removed'] for item in caught.exception.details['helperPreparationCleanup']))
+                self.assertEqual(sorted((self.directory / 'workspaces').iterdir()), before_allocations)
+                self.assertEqual(self.git(self.repo, 'for-each-ref'), before_refs)
+                self.assertEqual(self.git(other, 'for-each-ref'), before_other_refs)
+                self.assertTrue((self.repo / 'tracked.txt').exists())
 
     def test_preexisting_prepared_worktree_is_preserved_on_rejection(self):
         board = self.board()
@@ -373,15 +444,25 @@ class SubmissionCleanupTests(workflow_tests.WorkflowTestCase):
                 raise BoardError('WORKSPACE_GIT_ERROR', 'controlled removal failure', argv=['git', *args])
             return original_git(root, *args, **kwargs)
         error = BoardError('ADMISSION_FAILED', 'original rejection')
-        with patch.object(board.store, 'task_submit', side_effect=error), patch.object(workspace, '_git', side_effect=removal_failure):
+        captured = {}
+        def reject(*args, **kwargs):
+            captured['manifest'] = kwargs['micro_task']['manifest']
+            raise error
+        with patch.object(board.store, 'task_submit', side_effect=reject), patch.object(workspace, '_git', side_effect=removal_failure):
             with self.assertRaises(BoardError) as caught:
                 self.rejected(board)
         self.assertIs(caught.exception, error)
         directory = self.allocation()
-        manifest = json.loads((directory / 'manifest.json').read_text(encoding="utf-8"))
+        manifest = captured['manifest']
         self.assertTrue((directory / 'checkout').exists())
+        self.assertFalse((directory / 'manifest.json').exists())
+        self.assertTrue((directory / 'input.json').exists())
+        self.assertTrue((directory / 'request.json').exists())
         self.assertEqual(error.details['submissionCleanup']['cleanupError']['code'], 'WORKSPACE_GIT_ERROR')
-        self.assertTrue(workspace.cleanup_inspect(self.directory, manifest)['eligible'])
+        record = workspace._worktree_record(self.repo, directory / 'checkout')
+        self.assertEqual(record['locked'], 'hey-my-buddy:' + manifest['workspaceId'])
+        self.assertEqual(record['HEAD'], manifest['inputCommit'])
+        self.assertEqual(workspace.inspect(str(directory / 'checkout'))['checkoutId'], manifest['checkoutId'])
         self.assert_no_registration(board)
 
     def test_changed_new_checkout_is_retained_after_admission_rejection(self):

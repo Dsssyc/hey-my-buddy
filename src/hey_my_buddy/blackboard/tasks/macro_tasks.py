@@ -133,8 +133,10 @@ def pending_root_count(store) -> int:
         return int(connection.execute(PENDING_ROOTS_SQL).fetchone()["pending"])
 
 
-def macro_task_target(connection, presentation: dict, *, project_id: str, host_id: str, fixed_run=None) -> str | None:
-    """Resolve an existing macro task without creating admission records."""
+def attach_macro_task(connection, presentation: dict, *, spec: dict, host_id: str, manifest: dict, now: str,
+                      fixed_run=None) -> str | None:
+    """Run within the task's admission transaction; failed admission creates nothing."""
+    project_id = manifest.get("repositoryId") or spec["cwd"]
     identifier = presentation.get("macroTaskId")
     if fixed_run is not None and not any(key in presentation for key in ("macroTask", "macroTaskId", "macroTaskOf")):
         identifier = fixed_run["macro_task_id"]
@@ -156,17 +158,8 @@ def macro_task_target(connection, presentation: dict, *, project_id: str, host_i
         if row["project_id"] != project_id or (fixed_run is None and row["source_host_id"] != host_id):
             raise BoardError("CONFLICT", "The macro task belongs to another source project or submitting Host")
         return identifier
-    return None
-
-
-def attach_macro_task(connection, presentation: dict, *, spec: dict, host_id: str, manifest: dict, now: str,
-                      fixed_run=None) -> str | None:
-    """Run within the task's admission transaction; failed admission creates nothing."""
-    project_id = manifest.get("repositoryId") or spec["cwd"]
-    identifier = macro_task_target(connection, presentation, project_id=project_id, host_id=host_id,
-                                   fixed_run=fixed_run)
-    if identifier is not None or "macroTask" not in presentation:
-        return identifier
+    if "macroTask" not in presentation:
+        return None
     identifier = f"macro-{uuid.uuid4()}"
     connection.execute(
         "INSERT INTO macro_tasks(macro_task_id,title,project_id,project_path,source_host_id,created_at,activity_at)"

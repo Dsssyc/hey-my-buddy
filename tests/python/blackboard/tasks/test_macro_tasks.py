@@ -122,7 +122,7 @@ class MacroTaskAdmissionTests(WorkflowTestCase):
         for presentation in ({"macroTaskId": identifier}, {"macroTaskOf": first["runId"]}):
             with self.subTest(presentation=presentation), self.assertRaises(BoardError) as caught:
                 self.submit(board, request_id=f"blocked-{len(presentation)}-{next(iter(presentation))}",
-                            **presentation)
+                            kind="worktree", **presentation)
             self.assertEqual(caught.exception.code, "MACRO_TASK_DELETING")
             self.assertNotIn("state", caught.exception.details)
             self.assertNotIn("deletedAt", caught.exception.details)
@@ -226,7 +226,7 @@ class MacroTaskAdmissionTests(WorkflowTestCase):
             ('unknown','host-1','macro-unknown','NOT_FOUND'),
         ):
             with self.assertRaises(BoardError) as error:
-                self.submit(board, request_id=request_id, host_id=host_id, macroTaskId=identifier)
+                self.submit(board, request_id=request_id, host_id=host_id, macroTaskId=identifier, kind="worktree")
             self.assertEqual(error.exception.code, code)
         self.assertEqual(board.store.count_tasks(), 1)
 

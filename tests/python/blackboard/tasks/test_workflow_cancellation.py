@@ -34,6 +34,21 @@ class WorkflowCancellationTests(WorkflowTestCase):
     def cancel(self, board, view):
         return board.call("workflow_cancel", {"runId": view["runId"], 'note': "Host stopped this micro task", **self.control(view)})
 
+    def test_root_proxy_can_transfer_child_checkout_to_grandchild(self):
+        board, root, parent, child = self.parent_and_child()
+        self.finish_turn(board, self.claim(board, run_id=child), disposition="attention")
+        view = board.call("workflow_get", {"runId": parent["runId"]})
+        self.decide(board, view, view["activeRequest"]["requestId"], command_id="approve-proxied-grandchild", helpers=[{
+            **BUDDY, "requestId": "proxied-grandchild", "task": "finish child work", "cwd": str(root),
+            "executionWorkspace": {"kind": "existing", "access": "write"},
+        }])
+        with board.store.db.read() as connection:
+            grandchild = connection.execute("SELECT child_task_id FROM workflow_children WHERE parent_run_id=?", (child,)).fetchone()[0]
+            held = connection.execute("SELECT holder_task_id FROM workspace_reservations WHERE state='held'").fetchall()
+            transferred = connection.execute("SELECT state FROM workspace_reservations WHERE holder_task_id=?", (child,)).fetchone()[0]
+        self.assertEqual([row[0] for row in held], [grandchild])
+        self.assertEqual(transferred, "transferred")
+
     def reservations(self, board):
         with board.store.db.read() as connection:
             return {(row["holder_task_id"], row["state"]) for row in connection.execute("SELECT * FROM workspace_reservations")}

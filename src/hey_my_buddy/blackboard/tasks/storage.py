@@ -218,11 +218,22 @@ def allocation_references(connection, manifest: dict, request_id: str | None = N
     return _allocation_reference_reasons(_workspace_reference_rows(connection), manifest, request_id)
 
 
+def submission_references(connection, manifest: dict, request_id: str, directory: Path) -> list[str]:
+    """Prove the new logical allocation is unregistered, including retained uses.
+
+    Existing workspaces borrow their checkout, so its other readers do not own
+    this request's records or refs. Both kinds use the same private directory,
+    workspace/input identities and request identity for this proof.
+    """
+    return _allocation_reference_sets(_workspace_reference_rows(connection), [(manifest, request_id)],
+                                      directories=[str(directory)], include_checkout_ids=False)[0]
+
+
 def _allocation_reference_reasons(rows, manifest, request_id):
     return _allocation_reference_sets(rows, [(manifest, request_id)])[0]
 
 
-def _allocation_reference_sets(rows, allocations):
+def _allocation_reference_sets(rows, allocations, *, directories=None, include_checkout_ids=True):
     """One streaming pass, one parse per structured field, bounded by a row.
 
     Exact tokens and normalized ancestor paths match every candidate together.
@@ -234,11 +245,14 @@ def _allocation_reference_sets(rows, allocations):
     reasons = [set() for _ in allocations]
     tokens, paths = {}, {}
     for index, (manifest, request_id) in enumerate(allocations):
-        for token in (manifest['workspaceId'], request_id, manifest.get('manifestSha256'),
-                      manifest['checkoutId']):
+        identities = [manifest['workspaceId'], request_id, manifest.get('manifestSha256')]
+        if include_checkout_ids:
+            identities.append(manifest['checkoutId'])
+        for token in identities:
             if isinstance(token, str):
                 tokens.setdefault(token, set()).add(index)
-        paths.setdefault(str(Path(manifest['checkoutRoot']).parent), set()).add(index)
+        directory = directories[index] if directories is not None else str(Path(manifest['checkoutRoot']).parent)
+        paths.setdefault(directory, set()).add(index)
 
     def matches(value):
         if isinstance(value, dict):

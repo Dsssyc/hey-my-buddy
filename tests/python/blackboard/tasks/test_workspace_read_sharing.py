@@ -62,6 +62,23 @@ class ReadSharingTests(WorkflowTestCase):
             holders = connection.execute("SELECT holder_task_id, access FROM workspace_reservations WHERE state='held'").fetchall()
         self.assertEqual({tuple(row) for row in holders}, {(first["runId"], "read"), (second["runId"], "read")})
 
+    def test_held_reader_is_verified_once_outside_every_sqlite_transaction(self):
+        board = self.board()
+        self.reader(board, "held-reader")
+        held = self.manifests(board)[0]
+        verify = workspace.verify
+        calls = []
+
+        def verify_without_transaction(manifest, **kwargs):
+            self.assertFalse(any(connection.in_transaction for connection in board.store.db._connections.values()))
+            self.assertEqual(manifest["workspaceId"], held["workspaceId"])
+            calls.append(manifest["workspaceId"])
+            return verify(manifest, **kwargs)
+
+        with patch.object(workspace, "verify", side_effect=verify_without_transaction):
+            self.reader(board, "sharing-reader")
+        self.assertEqual(calls, [held["workspaceId"]])
+
     def test_changed_worktree_index_head_and_untracked_are_rejected_before_pinning(self):
         board = self.board()
         self.reader(board, "frozen-reader")
@@ -140,7 +157,7 @@ class ReadSharingTests(WorkflowTestCase):
     def test_reader_cannot_share_a_writers_checkout(self):
         board = self.board()
         self.submit(board, request_id="writer", cwd=str(self.repo))
-        self.assert_rejected_without_allocation(board, "reader")
+        self.assert_rejected_without_allocation(board, "reader", code="PREPARATION_CONFLICT")
 
     def test_competing_writer_admitted_after_precheck_leaves_no_rejected_snapshot(self):
         board = self.board()
@@ -156,14 +173,14 @@ class ReadSharingTests(WorkflowTestCase):
         with patch.object(board.store, "task_submit", side_effect=competing_writer):
             with self.assertRaises(BoardError) as caught:
                 self.reader(board, "racing-reader")
-        self.assertEqual(caught.exception.code, "SNAPSHOT_CHANGED")
+        self.assertEqual(caught.exception.code, "PREPARATION_CONFLICT")
         manifest = captured["manifest"]
         self.assertEqual(self.git(self.repo, "for-each-ref", "refs/hey-my-buddy/workspaces/" + manifest["workspaceId"]), "")
         self.assertFalse((self.directory / "workspaces" / manifest["workspaceId"]).exists())
         with board.store.db.read() as connection:
             self.assertIsNone(connection.execute("SELECT 1 FROM tasks WHERE request_id='racing-reader'").fetchone())
 
-    def test_conflicting_helper_batch_discards_snapshots_after_releasing_shared_locks(self):
+    def test_conflicting_helper_batch_revokes_snapshots_under_shared_locks(self):
         board = self.board()
         parent = self.submit(board, cwd=str(self.repo), kind="worktree")
         self.finish_turn(board, self.claim(board, run_id=parent["runId"]), disposition="assistance")
@@ -185,25 +202,3 @@ class ReadSharingTests(WorkflowTestCase):
         with board.store.db.read() as connection:
             self.assertEqual(connection.execute("SELECT COUNT(*) FROM workflow_children").fetchone()[0], 0)
 
-    def test_new_readers_selected_ignored_input_changed_after_capture_discards_snapshot(self):
-        (self.repo / ".gitignore").write_text("*.ignored\n", encoding="utf-8", newline="\n")
-        self.git(self.repo, "add", ".gitignore")
-        self.git(self.repo, "commit", "-qm", "ignore caches")
-        selected = self.repo / "new.ignored"
-        selected.write_text("captured input\n", encoding="utf-8", newline="\n")
-        board = self.board()
-        self.reader(board, "old-reader")
-        original_submit = board.store.task_submit
-        before_refs = self.git(self.repo, "for-each-ref")
-        before_allocations = sorted((self.directory / "workspaces").iterdir())
-
-        def change_new_input(*args, **kwargs):
-            selected.write_text("changed after capture\n", encoding="utf-8", newline="\n")
-            return original_submit(*args, **kwargs)
-
-        with patch.object(board.store, "task_submit", side_effect=change_new_input):
-            with self.assertRaises(BoardError) as caught:
-                self.reader(board, "new-reader", ["new.ignored"])
-        self.assertEqual(caught.exception.code, "SNAPSHOT_CHANGED")
-        self.assertEqual(self.git(self.repo, "for-each-ref"), before_refs)
-        self.assertEqual(sorted((self.directory / "workspaces").iterdir()), before_allocations)
