@@ -10,6 +10,7 @@ from admission import admit_execution
 import json
 import os
 import time
+import threading
 from pathlib import Path
 from unittest import mock
 
@@ -368,19 +369,40 @@ class ExecutionActivityForwarding(BoardTestCase):
             [event for event in client.read_events(after=0)["events"] if event["kind"] == "attempt.progress"], [])
         self.assertIsNone(control.handle.process.poll(), "unknown availability does not mean stopped")
 
-    def test_rejected_progress_remains_pending_until_delivery_succeeds(self):
+    def test_offline_progress_remains_pending_until_delivery_succeeds(self):
+        board, client, execution, attempt, directory, control = self.live_attempt()
+        endpoint = self.local_endpoint(attempt, control)
+        payload = {"phase": "tool-running", "eventSeq": 1}
+        endpoint.publish_activity(payload)
+        original = client.progress
+        online = threading.Event()
+
+        def progress(*args, **kwargs):
+            if not online.is_set():
+                raise BoardError("SERVICE_UNAVAILABLE", "private service is offline")
+            return original(*args, **kwargs)
+
+        with mock.patch.object(client, "progress", side_effect=progress):
+            control.start()
+            self.assertTrue(wait_for(lambda: execution._hints.get("activity") == payload, 3))
+            self.assertEqual(self.activity_events(client), [])
+            self.assertIsNone(control.handle.process.poll())
+            online.set()
+            self.assertTrue(wait_for(lambda: client.get(runId=attempt["taskId"])["activity"] == payload, 3))
+            self.assertEqual(len(self.activity_events(client)), 1)
+
+    def test_invalid_nonce_is_an_explicit_fatal_control_failure(self):
         board, client, execution, attempt, directory, control = self.live_attempt()
         endpoint = self.local_endpoint(attempt, control)
         payload = {"phase": "tool-running", "eventSeq": 1}
         endpoint.publish_activity(payload)
         execution.nonce = "d" * 32
         control.start()
-        self.assertTrue(wait_for(lambda: execution._hints.get("activity") == payload, 3))
+        self.assertTrue(wait_for(lambda: control.fatal is not None, 3))
+        with self.assertRaises(BoardError) as refused:
+            control.raise_fatal()
+        self.assertEqual(refused.exception.code, "UNAUTHORIZED")
         self.assertEqual(self.activity_events(client), [])
-        self.assertIsNone(control.handle.process.poll())
-        execution.nonce = "c" * 32
-        self.assertTrue(wait_for(lambda: client.get(runId=attempt["taskId"])["activity"] == payload, 3))
-        self.assertEqual(len(self.activity_events(client)), 1)
 
     def test_replaced_generation_rejects_an_old_executions_live_receipt(self):
         board, client, execution, attempt, directory, control = self.live_attempt()

@@ -8,7 +8,7 @@ import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 
-from support import BoardTestCase, FakeClock
+from support import BoardTestCase, FakeClock, wait_for
 from hey_my_buddy.blackboard.tasks import reminders
 from hey_my_buddy.blackboard.store.store import BoardStore
 from hey_my_buddy.protocol.client import BoardClient
@@ -158,4 +158,52 @@ class ReminderPrivateServiceTests(BoardTestCase):
             store.db.close()
             self.assertGreaterEqual(len(kinds), 2)
             self.assertEqual(set(kinds), {"expected-duration"})
+
+    def test_native_tool_silence_reaches_private_await(self):
+        self.catalog_fixture()
+        self.private_silence_threshold(1)
+        repo = self.directory / "native-repo"
+        repo.mkdir()
+        subprocess.run(["git", "init", "-q", "-b", "main"], cwd=repo, check=True)
+        subprocess.run(["git", "config", "user.email", "buddy@example.invalid"], cwd=repo, check=True)
+        subprocess.run(["git", "config", "user.name", "Buddy Test"], cwd=repo, check=True)
+        (repo / "tracked.txt").write_text("base\n")
+        subprocess.run(["git", "add", "."], cwd=repo, check=True)
+        subprocess.run(["git", "commit", "-q", "-m", "base"], cwd=repo, check=True)
+        wrapper = self.directory / "native-reminder-agent.py"
+        wrapper.write_text(
+            "import importlib.util, sys, time\n"
+            f"spec = importlib.util.spec_from_file_location('fixture', {str(DSH_FIXTURE)!r})\n"
+            "module = importlib.util.module_from_spec(spec)\n"
+            "spec.loader.exec_module(module)\n"
+            "original = module.WorkflowAgent.run_micro_task_prompt\n"
+            "def delayed(self, message):\n"
+            "    session_id = (message.get('params') or {}).get('sessionId')\n"
+            "    frame_id = self.framed_session(session_id)\n"
+            "    self.notify_client('session/update', {'sessionId': frame_id, 'update': "
+            "{'sessionUpdate': 'tool_call', 'toolCallId': 'reminder-tool', "
+            "'kind': 'other', 'title': 'run-command', 'status': 'in_progress'}})\n"
+            "    time.sleep(6)\n"
+            "    return original(self, message)\n"
+            "module.WorkflowAgent.run_micro_task_prompt = delayed\n"
+            "raise SystemExit(module.main())\n")
+        private_home = self.directory / "native-home"
+        private_home.mkdir()
+        env = {"HOME": str(private_home), "HMB_DSH_CLI": str(wrapper)}
+        with self.daemon(env=env):
+            code, submitted = self.cli("submit", json.dumps({
+                "requestId": "native-reminder-live", "hostId": "reminder-host", "task": "Observe native activity",
+                "cwd": str(repo), "executionWorkspace": {"kind": "existing", "access": "read"},
+                "expectedSeconds": 120, **DSH_BUDDY,
+            }), env=env)
+            self.assertEqual(code, 0, submitted)
+            run_id = submitted["runId"]
+            self.assertTrue(wait_for(lambda: (BoardClient(self.directory).get(runId=run_id).get("activity") or {}).get(
+                "phase") == "tool-running", timeout=35))
+            code, result = self.cli("await", json.dumps({"runId": run_id, "waitSeconds": 12}),
+                                    env=env, timeout=25)
+            self.assertEqual(code, 0, result)
+            self.assertEqual(result["outcome"], "native-silence")
+            self.assertTrue(result["reminder"]["toolInProgress"])
+            self.assertIsNotNone(result["reminder"]["lastNativeEventAt"])
 

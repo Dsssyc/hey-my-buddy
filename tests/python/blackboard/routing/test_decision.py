@@ -690,6 +690,9 @@ class DecisionFailureTests(DecisionTestCase):
         pass  # Admission is owned by the service.
         claim = admit_execution(client, "n" * 32, task_id=first["runId"])["claim"]
         self.assertIsNotNone(claim)
+        from hey_my_buddy.protocol.execution import fsync_json
+        fsync_json(board.directory / 'attempts' / first['runId'] / claim['attempt']['attemptId'] / 'spawn.intent',
+                   {'taskId': first['runId'], 'attemptId': claim['attempt']['attemptId'], 'generation': 1})
 
         # A fresh store over the same state directory is exactly what a daemon restart
         # does: in-flight attempts become uncertain and the decision is fenced.

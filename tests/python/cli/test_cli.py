@@ -167,8 +167,6 @@ class MethodSurfaceTests(unittest.TestCase):
         # The micro task lifecycle never absorbs execution reporting,
         # configuration or selection surfaces.
         for method, operation in (
-            ("execution-progress", "execution_progress"),
-            ("execution-result", "execution_result"),
             ("scope-amend", "workflow_scope_amend"),
             ("workspace-resolve", "workflow_workspace_resolve"),
             ("accept", "workflow_accept"),
@@ -182,7 +180,7 @@ class MethodSurfaceTests(unittest.TestCase):
             with self.subTest(method=method):
                 self.assertIn(method, cli.METHODS)
                 self.assertEqual(transport.METHOD_MAP[method], ("control", operation))
-        for retired in ("workers", "worker-register", "worker-claim", "worker-reconcile", "worker-renew", "worker-release", "worker-start", "worker-stop", "worker-progress", "worker-result"):
+        for retired in ("workers", "worker-register", "worker-claim", "worker-reconcile", "worker-renew", "worker-release", "worker-start", "worker-stop", "worker-progress", "worker-result", "execution-progress", "execution-result"):
             self.assertNotIn(retired, cli.METHODS)
             self.assertNotIn(retired, transport.METHOD_MAP)
 

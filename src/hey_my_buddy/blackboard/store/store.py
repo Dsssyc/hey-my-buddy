@@ -42,7 +42,7 @@ TASK_TRANSITIONS: dict[str, frozenset[str]] = {
         {"running", "queued", "cancelling", "completed", "failed", "cancelled", "reconciliation-needed"}
     ),
     "cancelling": frozenset({"cancelling", "completed", "failed", "cancelled", "reconciliation-needed"}),
-    "reconciliation-needed": frozenset({"reconciliation-needed", "queued", "cancelling", "cancelled", "failed"}),
+    "reconciliation-needed": frozenset({"reconciliation-needed", "queued", "cancelling", "cancelled", "failed", "completed"}),
     "completed": frozenset({"completed", "concluded"}),
     "failed": frozenset({"failed", "queued", "concluded"}),
     "cancelled": frozenset({"cancelled", "queued", "concluded"}),
@@ -202,7 +202,7 @@ class BoardStore:
         """Bounded event wait with a check/subscribe/recheck sequence.
 
         No database transaction and no exclusive resource lock is held while
-        waiting, so unlimited concurrent waiters cannot block cancel, renew or
+        waiting, so unlimited concurrent waiters cannot block cancellation or
         result commits.
         """
         schemas.reject_unknown(params, {"after", "timeoutMs", "limit", "taskId", "runId"}, "events.wait")
@@ -383,6 +383,8 @@ class BoardStore:
             "cancelRequestedAt": row["cancel_requested_at"],
             "stopInitiator": row["stop_initiator"],
             "graceDeadline": row["grace_deadline"],
+            "forceReason": row["force_reason"],
+            "forceRequestedAt": row["force_requested_at"],
             "exitCode": row["exit_code"],
             "signal": row["signal"],
             "error": row["error"],
@@ -482,6 +484,18 @@ class BoardStore:
             view["terminationReason"] = recorded.get("terminationReason")
             view["interruptionEvidence"] = (recorded.get("result") or {}).get("interruptionEvidence")
             view["selectedAttempt"]["processIdentity"] = self._process_identity(connection, attempt["attempt_id"])
+            evidence = connection.execute("SELECT * FROM attempt_shutdown_evidence WHERE attempt_id=?",
+                                          (attempt["attempt_id"],)).fetchone()
+            view["selectedAttempt"]["shutdownEvidence"] = ({"kind": evidence["evidence_kind"],
+                "detail": json.loads(evidence["detail_json"]), "observedAt": evidence["observed_at"]}
+                if evidence is not None else None)
+            if evidence is not None and view["terminationReason"] is None:
+                view["terminationReason"] = view["selectedAttempt"]["shutdownEvidence"]["detail"].get("terminationReason")
+            view["selectedAttempt"]["issues"] = [
+                {"stage": row["stage"], "code": row["code"], "message": row["message"],
+                 "observedAt": row["observed_at"]}
+                for row in connection.execute("SELECT * FROM execution_issues WHERE attempt_id=? ORDER BY stage",
+                                              (attempt["attempt_id"],))]
             view["attemptGeneration"] = attempt["generation"]
             view["attemptState"] = attempt["execution_state"]
             view["logPaths"] = json.loads(attempt["log_paths"])
@@ -704,7 +718,7 @@ class BoardStore:
         return None
 
     def _claim_candidates(
-        self, connection: sqlite3.Connection, *, after: dict | None = None
+        self, connection: sqlite3.Connection, *, after: dict | None = None, through_rowid: int | None = None
     ) -> tuple[list[sqlite3.Row], set[tuple[str, str, str]]]:
         """Bounded queued candidates in arrival order, skipping full model services.
 
@@ -723,7 +737,7 @@ class BoardStore:
         model_service_values: list[object] = []
         for harness, provider, model in sorted(full):
             # Null-safe on purpose: a task without a complete model service triple
-            # (command/external work, an unresolved run, a routing task) is never
+            # (command work, an unresolved run, a routing task) is never
             # excluded — SQL's NOT over a NULL conjunction would otherwise drop it.
             model_service_clauses.append(
                 f"({self._QUEUED_MODEL_SERVICE_PROVIDER} IS NULL OR {self._QUEUED_MODEL_SERVICE_MODEL} IS NULL"
@@ -738,16 +752,18 @@ class BoardStore:
                     "SELECT t.* FROM tasks t LEFT JOIN workflow_runs r ON r.run_id=t.task_id"
                     f" WHERE t.state='queued' AND {class_predicate}"
                     + ((" AND " + " AND ".join(model_service_clauses)) if model_service_clauses else "")
+                    + (" AND t.rowid<=?" if through_rowid is not None else "")
                     + (" AND (t.created_at,t.task_id)>(?,?)" if cursor is not None else "")
                     + " ORDER BY t.created_at, t.task_id LIMIT ?",
                     (scheduling.DECISION_ADAPTER, *model_service_values,
+                     *((through_rowid,) if through_rowid is not None else ()),
                      *(cursor if cursor is not None else ()), self.CLAIM_CANDIDATE_LIMIT),
                 ).fetchall()
             )
         rows.sort(key=lambda row: (row["created_at"], row["task_id"]))
         return rows, full
 
-    def _remaining_candidates(self, connection, first):
+    def _remaining_candidates(self, connection, first, through_rowid):
         """Scan later windows when early queued work is blocked on resources."""
         rows = first
         cursors = {}
@@ -756,7 +772,7 @@ class BoardStore:
                 key = "t.adapter IS ?" if task["adapter"] == scheduling.DECISION_ADAPTER else "t.adapter IS NOT ?"
                 cursors[key] = (task["created_at"], task["task_id"])
                 yield task
-            rows, _full = self._claim_candidates(connection, after=cursors)
+            rows, _full = self._claim_candidates(connection, after=cursors, through_rowid=through_rowid)
 
     def _retain_claims(self, connection: sqlite3.Connection, attempt_id: str) -> None:
         connection.execute(
@@ -1047,7 +1063,7 @@ class BoardStore:
                     "UNSUPPORTED_RESULT_FORMAT",
                     "The stored result does not use the current receipt format; use a clean state directory",
                 )
-            # Only the current worker receipt is unpacked. Its adapter result is
+            # Only the current execution receipt is unpacked. Its adapter result is
             # opaque data, even when it contains fields named result or turn.
             view["result"] = payload["result"]
             view["resultMeta"] = {key: value for key, value in payload.items() if key != "result"}
@@ -1055,7 +1071,7 @@ class BoardStore:
             view["resultDelivered"] = view["result"] is not None
         return view
 
-    def task_cancel(self, params: dict, *, command_id: str | None = None) -> dict:
+    def task_cancel(self, params: dict, *, command_id: str | None = None, initiator: str = "unknown") -> dict:
         schemas.reject_unknown(
             params,
             {
@@ -1071,7 +1087,8 @@ class BoardStore:
         )
         schemas.reject_untrusted_override(params)
         reason = schemas.optional_string(params, "reason") or "operator request"
-        actor = {"role": "host", "id": schemas.optional_string(params, "requestedBy") or "cli"}
+        actor = {"role": "service" if initiator == "service" else "host",
+                 "id": schemas.optional_string(params, "requestedBy") or "cli"}
         request = {"selector": {k: params[k] for k in ("runId", "taskId", "requestId") if k in params}, "reason": reason}
         with self.db.write() as connection:
             if command_id:
@@ -1100,7 +1117,7 @@ class BoardStore:
                     if task["state"] not in ("cancelling",):
                         self._transition_task(connection, task, "cancelling")
                     if attempt is not None and attempt["cancel_requested_at"] is None:
-                        self.workflow._request_attempt_stop(connection, task["task_id"], now, initiator="unknown",
+                        self.workflow._request_attempt_stop(connection, task["task_id"], now, initiator=initiator,
                                                             wrap_up=False)
                     self._append_event(
                         connection,
@@ -1128,15 +1145,12 @@ class BoardStore:
         """Explicitly create a new attempt generation for a non-running task.
 
         Retrying unknown or failed work is never automatic: a lost RPC or a lost
-        worker does not start anything by itself.
+        execution does not start anything by itself.
 
         An attempt whose shutdown is unconfirmed keeps its resource claims and
         refuses to be retried. There is deliberately **no operator override**: a
-        written reason is not evidence of termination. The only way such an attempt
-        is released is verifiable evidence from the worker that owned the process
-        handle — it reattaches with its own nonce and later commits a result whose
-        ``shutdownConfirmed`` comes from observing that owned process group, or it
-        releases an attempt that never crossed the durable spawn intent.
+        written reason is not evidence of termination. Recovery releases the claim
+        only after verified process shutdown, or proof that no process was created.
         """
         schemas.reject_unknown(
             params,
@@ -1404,6 +1418,11 @@ class BoardStore:
                 retry_selector = retry.task_id
         raise BoardError("CONFLICT", "Admission could not collect its chosen workspace's shared-stash observation")
 
+    def _set_queue_reason(self, connection, task, reason: str) -> None:
+        if task["queue_reason"] != reason:
+            connection.execute("UPDATE tasks SET queue_reason=?,updated_at=? WHERE task_id=?",
+                               (reason, self.now(), task["task_id"]))
+
     def _admit_in_transaction(
         self, *, nonce: str, explicit_task: str | None, stash_facts: dict,
         restrict_to: str | None = None,
@@ -1419,7 +1438,7 @@ class BoardStore:
         targeted pass found it held and observed nothing.
         """
         from ..tasks.workflow import ClaimStashCoverageRetry
-        from ...protocol.execution import EXECUTION_CAPABILITIES
+        from ...protocol.capabilities import adapter_capabilities
 
         with self.db.write() as connection:
             if self._total_active(connection) >= self.max_concurrent:
@@ -1440,13 +1459,14 @@ class BoardStore:
                     connection.execute("SELECT * FROM tasks WHERE task_id=?", (restrict_to,)).fetchone()
                 ]
             else:
-                candidates, full_model_services = self._claim_candidates(connection)
+                # Router preparation may enqueue a new dispatch in this same
+                # transaction. Only work present at this scan's start belongs to
+                # its candidate windows; the next admission sees the new dispatch.
+                through_rowid = connection.execute("SELECT COALESCE(MAX(rowid),0) FROM tasks").fetchone()[0]
+                candidates, full_model_services = self._claim_candidates(connection, through_rowid=through_rowid)
             had_candidates = bool(candidates)
             if not explicit_task and restrict_to is None:
-                candidates = self._remaining_candidates(connection, candidates)
-            capabilities = set(EXECUTION_CAPABILITIES)
-            for model in connection.execute("SELECT capabilities_json FROM buddies"):
-                capabilities.update(json.loads(model["capabilities_json"]))
+                candidates = self._remaining_candidates(connection, candidates, through_rowid)
             chosen: sqlite3.Row | None = None
             chosen_generation = 0
             chosen_attempt_id: str | None = None
@@ -1463,16 +1483,14 @@ class BoardStore:
                 workflow_reason = self.workflow.claim_blocker(connection, task)
                 if workflow_reason is not None:
                     blocker = workflow_reason
-                    connection.execute("UPDATE tasks SET queue_reason=?,updated_at=? WHERE task_id=?",
-                                       (workflow_reason, self.now(), task["task_id"]))
+                    self._set_queue_reason(connection, task, workflow_reason)
                     continue
-                supported = capabilities
+                supported = set(adapter_capabilities(task["adapter"]))
                 if task["adapter"] in schemas.CODING_HARNESSES:
-                    supported = capabilities | {f"execution:{task['adapter']}", f"effort:{spec['effort']}"}
+                    supported.update((f"execution:{task['adapter']}", f"effort:{spec['effort']}"))
                 if not set(json.loads(task["required_capabilities"])).issubset(supported):
                     blocker = "capability-mismatch"
-                    connection.execute("UPDATE tasks SET queue_reason=?,updated_at=? WHERE task_id=?",
-                                       (blocker, self.now(), task["task_id"]))
+                    self._set_queue_reason(connection, task, blocker)
                     continue
                 # A micro-task worktree runs in its allocated checkout, so its admission
                 # and claims use tasks.cwd (the effective path), never the source cwd
@@ -1481,10 +1499,7 @@ class BoardStore:
                 reason = self._admission_blocker(connection, effective_spec, exclude_task=task["task_id"])
                 if reason is not None:
                     blocker = reason
-                    connection.execute(
-                        "UPDATE tasks SET queue_reason=?, updated_at=? WHERE task_id=?",
-                        (reason, self.now(), task["task_id"]),
-                    )
+                    self._set_queue_reason(connection, task, reason)
                     continue
                 generation_row = connection.execute(
                     "SELECT COALESCE(MAX(generation), 0) AS generation FROM attempts WHERE task_id=?",
@@ -1506,10 +1521,7 @@ class BoardStore:
                             "SELECT state FROM tasks WHERE task_id=?", (task["task_id"],)
                         ).fetchone()["state"] == "queued"
                         if still_queued and preclaim != "decision-closed":
-                            connection.execute(
-                                "UPDATE tasks SET queue_reason=?, updated_at=? WHERE task_id=?",
-                                (preclaim, self.now(), task["task_id"]),
-                            )
+                            self._set_queue_reason(connection, task, preclaim)
                         continue
                 # The model service this attempt is frozen to. A routing task has no
                 # model service of its own in its specification: the current dispatch's
@@ -1524,10 +1536,7 @@ class BoardStore:
                         model_service_reason = self._model_service_admission_blocker(connection, model_service)
                         if model_service_reason is not None:
                             blocker = model_service_reason
-                            connection.execute(
-                                "UPDATE tasks SET queue_reason=?, updated_at=? WHERE task_id=?",
-                                (model_service_reason, self.now(), task["task_id"]),
-                            )
+                            self._set_queue_reason(connection, task, model_service_reason)
                             continue
                 # A decision task is admitted *here*, inside the same transaction that
                 # claims it: the selection reader is
@@ -1547,10 +1556,7 @@ class BoardStore:
                     if blocked:
                         blocker = blocked
                         if blocked != "decision-closed":
-                            connection.execute(
-                                "UPDATE tasks SET queue_reason=?, updated_at=? WHERE task_id=?",
-                                (blocked, self.now(), task["task_id"]),
-                            )
+                            self._set_queue_reason(connection, task, blocked)
                         continue
                 chosen = task
                 chosen_generation = generation
@@ -1615,6 +1621,7 @@ class BoardStore:
                     now,
                 ),
             )
+            connection.execute("UPDATE attempts SET cleanup_pending=1 WHERE attempt_id=?", (attempt_id,))
             effective_cwd = chosen["cwd"] or spec["cwd"]
             for kind, values in (("cwd", [effective_cwd]), ("exclusive", spec.get("exclusiveResources", []))):
                 for resource in values:
@@ -1667,7 +1674,7 @@ class BoardStore:
             )
             if turn_claim is not None:
                 # The service-owned turn identity and bounded context travel to the
-                # worker, which writes them into the private attempt directory. The
+                # execution process, which receives them in its private startup material. The
                 # attempt-scoped credential is handed over next to it and is stored
                 # only as a verifier.
                 response["claim"]["turn"] = {
@@ -1824,7 +1831,7 @@ class BoardStore:
         # ``data`` carries bounded native activity and the control waiting reason;
         # unknown keys cannot smuggle tool arguments into either projection.
         # Activity is stored only when
-        # a caller actually publishes one - a routine renewal or heartbeat is never
+        # a caller actually publishes one - a routine heartbeat is never
         # turned into fake native progress.
         activity = None
         data = params.get("data")
@@ -1842,6 +1849,8 @@ class BoardStore:
                 if verify_identity is not None and not verify_identity(attempt["attempt_id"], process_identity):
                     raise BoardError("UNAUTHORIZED", "Execution identity differs from the service-owned process")
                 self._record_process_identity(connection, attempt["attempt_id"], process_identity)
+                connection.execute("UPDATE attempts SET identity_confirmed_at=COALESCE(identity_confirmed_at,?)"
+                                   " WHERE attempt_id=?", (self.now(), attempt["attempt_id"]))
             if phase in ("starting", "executing", "finalizing") and attempt["execution_state"] != "uncertain":
                 self._transition_attempt(connection, attempt, phase)
             now = self.now()
@@ -1880,7 +1889,7 @@ class BoardStore:
         self._notify(head)
         return {"recorded": True, "head": head, "activity": activity_state}
 
-    def execution_result(self, params: dict, *, recovered: bool = False) -> dict:
+    def execution_result(self, params: dict, *, recovered: bool = False, stop_evidence: dict | None = None) -> dict:
         """Commit result, artifacts, task/attempt state and the completion event together.
 
         Artifact registration validates the claimed file before any completed result
@@ -1949,7 +1958,7 @@ class BoardStore:
         elapsed = params.get("elapsedSeconds")
         if elapsed is not None and (isinstance(elapsed, bool) or not isinstance(elapsed, (int, float))):
             raise BoardError("INVALID_ARGUMENT", "elapsedSeconds must be a number when provided")
-        # Hashing a large artifact inside BEGIN IMMEDIATE would block renew, cancel
+        # Hashing a large artifact inside BEGIN IMMEDIATE would block progress, cancel
         # and other result writers for its whole duration, so the files are
         # validated and hashed first, outside any transaction.
         verified_artifacts = self._verify_artifacts(artifacts)
@@ -1986,6 +1995,37 @@ class BoardStore:
             "runtimeIdentity": params.get("runtimeIdentity"),
             "terminationReason": termination_reason,
         }
+        return self._commit_execution_result(
+            params, request=request, command_id=command_id, recovered=recovered, seal_stash=seal_stash,
+            completion_evidence=stop_evidence)
+
+    def confirm_execution_shutdown(self, attempt_id: str, evidence: dict) -> dict:
+        """Supplement a committed result with stop proof; its outcome stays immutable."""
+        with self.db.read() as connection:
+            attempt = self._attempt_row(connection, attempt_id)
+            payload = json.loads(attempt["result_json"])
+        # The report was validated on arrival. Only the newly effective stop proof
+        # can make a deferred successful turn importable now.
+        params = {**payload, "shutdownConfirmed": True, "attemptId": attempt_id}
+        stop_output = {key: evidence[key] for key in ("partialWorkspaceSeal", "workspaceSealError") if key in evidence}
+        self.workflow.precheck_result({**params, "result": {**(payload["result"] or {}), **stop_output}})
+        request = {key: params[key] for key in (
+            "attemptId", "status", "result", "artifacts", "shutdownConfirmed", "exitCode", "signal",
+            "error", "logPaths", "runtimeIdentity", "terminationReason")}
+        return self._commit_execution_result(
+            params, request=request, command_id=attempt["result_command_id"], recovered=True,
+            seal_stash=self.workflow.collect_result_stash_facts(params), shutdown_evidence=evidence)
+
+    def _commit_execution_result(self, params: dict, *, request: dict, command_id: str,
+                                 recovered: bool, seal_stash, shutdown_evidence: dict | None = None,
+                                 completion_evidence: dict | None = None) -> dict:
+        status, result = request["status"], request["result"]
+        verified_artifacts = request["artifacts"]
+        shutdown_confirmed = request["shutdownConfirmed"]
+        exit_code, signal_name = request["exitCode"], request["signal"]
+        error_text, log_paths = request["error"], request["logPaths"]
+        termination_reason = request["terminationReason"]
+        attempt_id_param = request["attemptId"]
         with self.db.write() as connection:
             if recovered:
                 attempt = self._attempt_row(connection, attempt_id_param)
@@ -1994,6 +2034,8 @@ class BoardStore:
                 attempt = self._verify_attempt_actor(connection, params)
             if attempt["attempt_id"] != attempt_id_param:
                 raise BoardError("INVALID_ARGUMENT", "attemptId does not match the request")
+            if attempt["execution_state"] == "finished" and attempt["result_json"] is None:
+                raise BoardError("ATTEMPT_FINISHED", "This execution was released before process creation")
             if termination_reason == "deadline" and attempt["adapter"] != "decision":
                 raise BoardError("INVALID_ARGUMENT", "deadline is reserved for an exhausted Router budget", field="terminationReason")
             if termination_reason in ("wrap-up", "grace-expired") and attempt["grace_deadline"] is None:
@@ -2009,11 +2051,17 @@ class BoardStore:
                     raise BoardError("INVALID_ARGUMENT", "console-stop requires a durable console stop",
                                      field="terminationReason")
             subject = ("recovery:" + attempt_id_param) if recovered else self._subject(params["nonce"], attempt_id_param)
-            improving_stop = (recovered and shutdown_confirmed
-                              and attempt["execution_state"] == "uncertain" and not attempt["shutdown_confirmed"])
-            if attempt["result_json"] is not None and not improving_stop:
+            if attempt["result_json"] is not None and shutdown_evidence is None:
                 previous = json.loads(attempt["result_json"])
-                if self._same_result(previous, request):
+                # A later service proof changes only shutdownConfirmed. An exact
+                # replay of the execution's original unconfirmed report remains
+                # idempotent after that proof has released its resources.
+                evidence_row = connection.execute(
+                    "SELECT detail_json FROM attempt_shutdown_evidence WHERE attempt_id=?", (attempt_id_param,)).fetchone()
+                supplemented = (evidence_row is not None
+                                and json.loads(evidence_row["detail_json"])["receiptShutdownConfirmed"] is False)
+                original = {**previous, "shutdownConfirmed": False} if supplemented else previous
+                if self._same_result(previous, request) or self._same_result(original, request):
                     task = connection.execute("SELECT * FROM tasks WHERE task_id=?", (attempt["task_id"],)).fetchone()
                     return {
                         "attempt": self._attempt_view(attempt),
@@ -2027,9 +2075,20 @@ class BoardStore:
                     "must repeat the identical status, result, artifacts, shutdown evidence, exit code and error.",
                     attemptId=attempt["attempt_id"],
                 )
-            receipt = self._receipt(connection, command_id, "execution.result", request, subject)
-            if receipt is not None:
-                return receipt
+            if shutdown_evidence is not None:
+                if attempt["shutdown_confirmed"]:
+                    task = connection.execute("SELECT * FROM tasks WHERE task_id=?", (attempt["task_id"],)).fetchone()
+                    return {"attempt": self._attempt_view(attempt), "task": self._decorate(connection, task),
+                            "duplicate": True, "committed": True}
+                # Neither a new command nor a new result is submitted here. This
+                # transaction supplements the original committed receipt only.
+                previous = json.loads(attempt["result_json"])
+                if not self._same_result(previous, {**request, "shutdownConfirmed": False}):
+                    raise BoardError("CONFLICT", "Shutdown proof may not change the committed result")
+            else:
+                receipt = self._receipt(connection, command_id, "execution.result", request, subject)
+                if receipt is not None:
+                    return receipt
             now = self.now()
             for artifact in verified_artifacts:
                 connection.execute(
@@ -2059,6 +2118,16 @@ class BoardStore:
                 "artifacts": verified_artifacts,
                 "completedAt": now,
             }
+            if shutdown_evidence is not None:
+                payload = {**previous, "shutdownConfirmed": True}
+            proof = shutdown_evidence or completion_evidence
+            if proof is not None and shutdown_confirmed:
+                proof = {**proof, "receiptShutdownConfirmed": (previous["shutdownConfirmed"]
+                         if shutdown_evidence is not None else request["shutdownConfirmed"])}
+                connection.execute("INSERT INTO attempt_shutdown_evidence VALUES(?,?,?,?)",
+                    (attempt_id_param, proof["kind"], canonical_json(proof), now))
+                self._append_event(connection, "execution.shutdown_confirmed", task_id=attempt["task_id"],
+                    attempt_id=attempt_id_param, payload={"evidence": proof})
             if attempt["execution_state"] in ("starting", "executing", "uncertain"):
                 self._transition_attempt(connection, attempt, "finalizing")
                 attempt = connection.execute(
@@ -2104,7 +2173,8 @@ class BoardStore:
                     1 if shutdown_confirmed else 0,
                     schemas.optional_string(params, "runtimeIdentity"),
                     canonical_json(log_paths) if log_paths else None,
-                    "unknown" if termination_reason == "unknown-stop" else None,
+                    "unknown" if (termination_reason == "unknown-stop"
+                                  or (shutdown_evidence or {}).get("terminationReason") == "unknown-stop") else None,
                     now,
                     now,
                     attempt["attempt_id"],
@@ -2169,11 +2239,17 @@ class BoardStore:
             # Micro-task import and helper fan-in commit with the result: the validated
             # turn outcome, the assistance request and the workspace seal are one
             # durable fact with the attempt that produced them.
+            settlement_payload = payload
+            if shutdown_evidence is not None:
+                stop_output = {key: shutdown_evidence[key] for key in ("partialWorkspaceSeal", "workspaceSealError")
+                               if key in shutdown_evidence}
+                if stop_output:
+                    settlement_payload = {**payload, "result": {**(payload["result"] or {}), **stop_output}}
             micro_task = self.workflow.settle_turn(
                 connection,
                 task=task_row,
                 attempt=attempt_row,
-                payload=payload,
+                payload=settlement_payload,
                 task_state=task_state,
                 now=now,
                 seal_stash=seal_stash,
@@ -2188,57 +2264,109 @@ class BoardStore:
                     connection,
                     task=task_row,
                     attempt=attempt_row,
-                    payload=payload,
+                    payload=settlement_payload,
                     task_state=task_state,
                     now=now,
                 )
-            if recovered:
+            if recovered and shutdown_confirmed:
                 connection.execute("UPDATE attempt_interruptions SET state='settled',seal_error=NULL WHERE attempt_id=?",
                                    (attempt_id_param,))
-            self._store_receipt(
-                connection,
-                command_id,
-                "execution.result",
-                request,
-                response,
-                task_id=attempt["task_id"],
-                attempt_id=attempt["attempt_id"],
-                subject=subject,
-            )
+            if shutdown_evidence is None:
+                self._store_receipt(
+                    connection, command_id, "execution.result", request, response,
+                    task_id=attempt["task_id"], attempt_id=attempt["attempt_id"], subject=subject)
+
             head = self._head_of(connection)
         self._notify(head)
         return response
 
-    def record_execution_deadline(self, attempt_id: str, reason: str) -> None:
-        """Persist the service's external deadline before sending a forced stop."""
+    def record_execution_deadline(self, attempt_id: str, reason: str) -> dict:
+        """Persist the external force deadline independently of endpoint delivery."""
         with self.db.write() as connection:
             attempt = self._attempt_row(connection, attempt_id)
-            if attempt["execution_state"] == "finished":
-                return
-            if connection.execute("SELECT 1 FROM events WHERE attempt_id=? AND kind='execution.deadline'",
-                                  (attempt_id,)).fetchone() is not None:
-                return
+            if attempt["force_requested_at"] is not None or attempt["execution_state"] == "finished":
+                return {"forceRequestedAt": attempt["force_requested_at"], "forceReason": attempt["force_reason"]}
             now = self.now()
             connection.execute("UPDATE attempts SET cancel_requested_at=COALESCE(cancel_requested_at,?),"
-                               "stop_initiator=COALESCE(stop_initiator,'unknown'),updated_at=?,revision=revision+1"
-                               " WHERE attempt_id=?", (now, now, attempt_id))
+                               "force_requested_at=?,force_reason=?,stop_initiator=COALESCE(stop_initiator,'service'),"
+                               "updated_at=?,revision=revision+1 WHERE attempt_id=?", (now, now, reason, now, attempt_id))
             self._append_event(connection, "execution.deadline", task_id=attempt["task_id"],
                                attempt_id=attempt_id, payload={"reason": reason})
             head = self._head_of(connection)
         self._notify(head)
+        return {"forceRequestedAt": now, "forceReason": reason}
 
-    def release_execution(self, attempt_id: str, *, spawn_intent_written: bool = False,
-                          reason: str | None = None) -> dict:
-        """Release only a dispatch whose process creation did not succeed."""
-        if spawn_intent_written:
-            raise BoardError("CONFLICT", "A spawned execution must be settled from process evidence")
+    def record_execution_issue(self, attempt_id: str, stage: str, error) -> None:
+        """Retain a visible failure on one execution, deduplicated by stage and cause."""
+        self._record_runtime_issue(stage, error, attempt_id=attempt_id)
+
+    def execution_finished(self, attempt_id: str) -> bool:
+        with self.db.read() as connection:
+            return self._attempt_row(connection, attempt_id)["execution_state"] == "finished"
+
+    def complete_execution_cleanup(self, attempt_id: str) -> None:
+        with self.db.write() as connection:
+            attempt = self._attempt_row(connection, attempt_id)
+            if not attempt["cleanup_pending"]:
+                return
+            connection.execute("UPDATE attempts SET cleanup_pending=0 WHERE attempt_id=?", (attempt_id,))
+            self._append_event(connection, "execution.materials_cleaned", task_id=attempt["task_id"],
+                               attempt_id=attempt_id, payload={})
+            head = self._head_of(connection)
+        self._notify(head)
+
+    def record_scheduler_issue(self, stage: str, error) -> None:
+        self._record_runtime_issue(stage, error)
+
+    def clear_execution_issue(self, attempt_id: str, stage: str) -> None:
+        with self.db.write() as connection:
+            removed = connection.execute("DELETE FROM execution_issues WHERE attempt_id=? AND stage=?",
+                                         (attempt_id, stage)).rowcount
+            if not removed:
+                return
+            task_id = self._attempt_row(connection, attempt_id)["task_id"]
+            self._append_event(connection, "execution.issue_resolved", task_id=task_id, attempt_id=attempt_id,
+                               payload={"stage": stage})
+            head = self._head_of(connection)
+        self._notify(head)
+
+    def _record_runtime_issue(self, stage: str, error, *, attempt_id: str | None = None) -> None:
+        code = error.code if isinstance(error, BoardError) else type(error).__name__
+        message = (error.message if isinstance(error, BoardError) else str(error))[:4000]
+        table = "execution_issues" if attempt_id is not None else "service_issues"
+        selector = "attempt_id=? AND stage=?" if attempt_id is not None else "stage=?"
+        keys = (attempt_id, stage) if attempt_id is not None else (stage,)
+        with self.db.write() as connection:
+            previous = connection.execute(f"SELECT code,message FROM {table} WHERE {selector}", keys).fetchone()
+            if previous is not None and (previous["code"], previous["message"]) == (code, message):
+                return
+            now = self.now()
+            task_id = self._attempt_row(connection, attempt_id)["task_id"] if attempt_id is not None else None
+            if attempt_id is not None:
+                connection.execute("INSERT INTO execution_issues VALUES(?,?,?,?,?) ON CONFLICT(attempt_id,stage)"
+                    " DO UPDATE SET code=excluded.code,message=excluded.message,observed_at=excluded.observed_at",
+                    (attempt_id, stage, code, message, now))
+            else:
+                connection.execute("INSERT INTO service_issues VALUES(?,?,?,?) ON CONFLICT(stage)"
+                    " DO UPDATE SET code=excluded.code,message=excluded.message,observed_at=excluded.observed_at",
+                    (stage, code, message, now))
+            self._append_event(connection, "execution.issue" if attempt_id is not None else "service.scheduling_issue",
+                task_id=task_id, attempt_id=attempt_id, payload={"stage": stage, "code": code, "message": message})
+            head = self._head_of(connection)
+        self._notify(head)
+
+    def release_execution(self, attempt_id: str, *, reason: str | None = None) -> dict:
+        """Release a dispatch when its creator proves no execution process was created."""
         reason = reason or "Execution process could not be started"
         seal_stash = self.workflow.collect_result_stash_facts({"attemptId": attempt_id})
         with self.db.write() as connection:
             attempt = self._attempt_row(connection, attempt_id)
             self._require_effective_attempt(connection, attempt)
-            if attempt["execution_state"] != "starting":
-                raise BoardError("CONFLICT", "Only an execution before process creation can be released")
+            if attempt["execution_state"] == "finished":
+                task = connection.execute("SELECT * FROM tasks WHERE task_id=?", (attempt["task_id"],)).fetchone()
+                return {"task": self._task_view(task), "released": True}
+            if attempt["identity_confirmed_at"] is not None:
+                raise BoardError("CONFLICT", "An acknowledged execution must be settled from process evidence")
             now = self.now()
             self._transition_attempt(connection, attempt, "finished")
             connection.execute(
@@ -2246,10 +2374,14 @@ class BoardStore:
                 " revision=revision+1 WHERE attempt_id=?",
                 (now, now, reason, attempt["attempt_id"]),
             )
+            connection.execute("INSERT INTO attempt_shutdown_evidence VALUES(?,?,?,?)",
+                (attempt_id, "process-not-created", canonical_json({"kind": "process-not-created",
+                 "receiptShutdownConfirmed": None}), now))
             task = connection.execute("SELECT * FROM tasks WHERE task_id=?", (attempt["task_id"],)).fetchone()
             micro_task = self.workflow._run_optional(connection, task["task_id"])
-            cancelled_micro_task = micro_task is not None and (micro_task["state"] == "cancelled" or task["state"] == "cancelling")
-            self._transition_task(connection, task, "cancelled" if cancelled_micro_task else "failed")
+            cancelled = (task["state"] == "cancelling" or attempt["cancel_requested_at"] is not None
+                         or micro_task is not None and micro_task["state"] == "cancelled")
+            self._transition_task(connection, task, "cancelled" if cancelled else "failed")
             connection.execute(
                 "UPDATE tasks SET active_attempt_id=NULL, queue_reason=NULL, updated_at=? WHERE task_id=?",
                 (now, attempt["task_id"]),
@@ -2263,7 +2395,7 @@ class BoardStore:
                 revision=task["revision"] + 1,
                 payload={
                     "reason": reason,
-                    "releaseEvidence": "spawnIntentWritten=false",
+                    "releaseEvidence": "processCreated=false",
                     "previousState": attempt["execution_state"],
                 },
             )
@@ -2280,6 +2412,8 @@ class BoardStore:
             )
             head = self._head_of(connection)
         self._notify(head)
+        from ..tasks.interruption import _cleanup_dead_material
+        _cleanup_dead_material(self, dict(attempt), None, "process-not-created")
         return {"task": self._task_view(task_row), "released": True}
 
     # -- messages ------------------------------------------------------------
@@ -2583,17 +2717,14 @@ class BoardStore:
         from ..tasks.interruption import record_identity
         record_identity(connection, attempt_id, record)
 
-    def recover_executions(self, attempt_id: str | None = None, *, process_identity: dict | None = None) -> list[dict]:
+    def recover_executions(self, attempt_id: str | None = None, *, process_identity: dict | None = None,
+                           stopped_evidence: dict | None = None) -> list[dict]:
         from ..tasks.interruption import recover, record_identity
-        from ...protocol.process_identity import validate_process_identity, inspect_process_identity
         with self._recovery_lock:
             if process_identity is not None:
-                validate_process_identity(process_identity)
-                if inspect_process_identity(process_identity) not in ("identity-absent", "boot-changed"):
-                    return []
                 with self.db.write() as connection:
                     record_identity(connection, attempt_id, process_identity)
-            return recover(self, attempt_id=attempt_id)
+            return recover(self, attempt_id=attempt_id, stopped_evidence=stopped_evidence)
 
     def reconcile_startup(self) -> dict:
         """Make pre-restart in-flight attempts uncertain.

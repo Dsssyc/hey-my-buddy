@@ -9,7 +9,8 @@ import unittest
 from unittest.mock import patch
 
 from hey_my_buddy.blackboard.catalog import catalog
-from hey_my_buddy.buddy.harnesses.registry import _WORKER_PERMISSIONS, require_permission
+from hey_my_buddy.buddy.harnesses.registry import require_permission
+from hey_my_buddy.protocol.capabilities import WORKER_PERMISSIONS
 from hey_my_buddy.protocol import schemas
 from hey_my_buddy.errors import BoardError
 from support import FIXTURE_CATALOG
@@ -149,8 +150,8 @@ class CatalogTests(unittest.TestCase):
             "dsh": {"permission:read", "permission:write", "permission:full"},
             "zcode": {"permission:read", "permission:write", "permission:full"},
         })
-        with patch.dict(_WORKER_PERMISSIONS, {"claude": {
-                level: declaration for level, declaration in _WORKER_PERMISSIONS["claude"].items()
+        with patch.dict(WORKER_PERMISSIONS, {"claude": {
+                level: declaration for level, declaration in WORKER_PERMISSIONS["claude"].items()
                 if level != "full"}}):
             restricted = catalog.CatalogView.from_payload(payload).proposed_buddies()
         claude = next(buddy for buddy in restricted if buddy["harness"] == "claude")
@@ -167,8 +168,8 @@ class CatalogTests(unittest.TestCase):
         require_permission({"harness": "claude"}, "full")
         require_permission({"harness": "dsh"}, "full")
         require_permission({"harness": "zcode"}, "full")
-        with patch.dict(_WORKER_PERMISSIONS, {"claude": {
-                level: declaration for level, declaration in _WORKER_PERMISSIONS["claude"].items()
+        with patch.dict(WORKER_PERMISSIONS, {"claude": {
+                level: declaration for level, declaration in WORKER_PERMISSIONS["claude"].items()
                 if level != "full"}}):
             with self.assertRaises(BoardError) as caught:
                 require_permission({"harness": "claude"}, "full")

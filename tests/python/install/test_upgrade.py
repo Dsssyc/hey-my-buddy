@@ -64,6 +64,49 @@ class UpgradeTests(BoardTestCase):
         self.assertTrue(marker.exists())
         self.assertEqual(json.loads(marker.read_text())['phase'], 'verified')
 
+    def test_verified_cleanup_failure_keeps_retryable_journal_until_next_recovery(self):
+        state = self.directory / 'state'
+        state.mkdir()
+        workers = state / 'workers'
+        workers.mkdir()
+        (workers / 'legacy.json').write_text('old')
+        root = self.directory / 'runtimes'
+        previous, target = root / ('a' * 32), root / ('b' * 32)
+        marker = state / 'upgrade.json'
+        upgrade.write_journal(marker, {'phase': 'verified', 'previous': str(previous),
+                                       'target': str(target), 'before': {}})
+        real_cleanup = upgrade.remove_legacy_worker_state
+        with mock.patch.object(upgrade.runtime, 'is_ready', return_value=True), \
+             mock.patch.object(upgrade, 'probe', return_value={'runtimeContentId': target.name}), \
+             mock.patch.object(upgrade, 'verify_started', return_value={'runtimeContentId': target.name}), \
+             mock.patch.object(upgrade, 'write_active_runtime'), \
+             mock.patch.object(upgrade, 'remove_legacy_worker_state', side_effect=[OSError('denied'), None]) as cleanup:
+            first = upgrade.recover(state, root)
+            self.assertEqual(first['legacyCleanupError'], 'denied')
+            self.assertTrue(marker.exists())
+            self.assertTrue(workers.exists())
+            cleanup.side_effect = real_cleanup
+            second = upgrade.recover(state, root)
+        self.assertTrue(second['upgraded'])
+        self.assertFalse(marker.exists())
+        self.assertFalse(workers.exists())
+
+    def test_startup_retries_verified_cleanup_before_dispatching_command(self):
+        state = self.directory / 'state'
+        state.mkdir()
+        marker = state / 'upgrade.json'
+        upgrade.write_journal(marker, {'phase': 'verified'})
+        def recovered(_params):
+            marker.unlink()
+            return {'upgraded': True, 'recoveredJournal': True}
+        with mock.patch.dict(os.environ, {'HMB_STATE_DIR': str(state)}), \
+             mock.patch.object(upgrade, 'upgrade', side_effect=recovered) as retry, \
+             mock.patch.object(launcher, 'selected_runtime', return_value=None), \
+             mock.patch('hey_my_buddy.cli.main.main', return_value=0) as command:
+            self.assertEqual(launcher.main(['status', '{}']), 0)
+        retry.assert_called_once_with({})
+        command.assert_called_once()
+
     def test_busy_upgrade_leaves_skill_launcher_runtime_and_service_unchanged(self):
         board = self.board()
         state = board.directory

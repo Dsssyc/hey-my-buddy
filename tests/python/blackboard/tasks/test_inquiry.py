@@ -37,13 +37,7 @@ from hey_my_buddy.buddy.harnesses.live import (
 )
 from hey_my_buddy.buddy.roles.turn_io import input_hash
 from hey_my_buddy.protocol.run_identity import RunIdentity
-
-
-class FixtureLiveContract:
-    """Named methods used by the fixture's in-process C-Two peer."""
-    def capabilities(self): ...
-    def request(self): ...
-    def observe(self): ...
+from buddy.harnesses.live_contract import HarnessRunLive
 
 
 class ExecutionChannel:
@@ -114,7 +108,8 @@ class JournalOwner:
             "activity": [{"at": "2026-10-07T00:00:00.000Z", "kind": "tool_call", "toolName": "bash"}],
         }
         capabilities = LiveCapabilities(inquiry_delivery="cooperative-checkpoint")
-        self.endpoint = CTwoLiveEndpoint(identity, capabilities, None, token=self.token, state_dir=Path(os.environ["HMB_STATE_DIR"]))
+        self.endpoint = CTwoLiveEndpoint(identity, capabilities, HarnessRunLive,
+                                         token=self.token, state_dir=Path(os.environ["HMB_STATE_DIR"]))
         self.lock = threading.RLock()
         self.stopping = threading.Event()
         self.errors = []
@@ -255,7 +250,7 @@ def attach_owner(case, board, client, task, adapter):
     case.assertIsInstance(getattr(board.store, "live_registry", None), LiveRegistry)
     board.store.live_registry = LiveRegistry()
     channel = ExecutionChannel(CTwoLiveChannel(
-        identity, FixtureLiveContract, name='inquiry fixture', address='fixture://execution-live',
+        identity, HarnessRunLive, name='inquiry fixture', address='fixture://execution-live',
         instance_id=owner.endpoint.instance_id, token=owner.token, state_dir=Path(os.environ["HMB_STATE_DIR"])))
     board.store.live_registry.bind(attempt['attemptId'], channel)
     case._turn_id = identity.turn_id

@@ -679,14 +679,19 @@ class TestLifecycle(BoardTestCase):
             )
             self.assertTrue(result["result"]["processState"]["shutdownConfirmed"])
 
-    def test_restart_keeps_worker_receipts_and_claims(self):
+    def test_restart_retains_a_started_execution_and_its_claims(self):
         board = self.board()
         client = board.client()
         cwd = self.workdir()
         client.submit(requestId="life-2", task="do", cwd=str(cwd), adapter="command", argv=["/bin/true"])
         pass  # Admission is owned by the service.
         claim = admit_execution(client, "a" * 32)
-        summary = board.store.reconcile_startup()
+        attempt = claim['claim']['attempt']
+        identity = {'bootId': 'macos:00000000-0000-0000-0000-000000000001', 'pid': 123,
+                    'startedAt': 123250000, 'processGroupId': 123, 'jobName': None}
+        client.progress(attempt['attemptId'], attempt['generation'], 'a' * 32, process_identity=identity)
+        with mock.patch('hey_my_buddy.protocol.process_identity.inspect_process_identity', return_value='alive'):
+            summary = board.store.reconcile_startup()
         self.assertEqual(summary["uncertain"], 1)
         self.assertEqual(summary["retained"], 1)
         self.assertEqual(client.get(runId=claim["claim"]["task"]["runId"])["attemptState"], "uncertain")

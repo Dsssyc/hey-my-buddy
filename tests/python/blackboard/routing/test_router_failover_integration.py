@@ -165,7 +165,7 @@ class FailoverTests(RouterDispatchTestCase):
             execution = Execution(first, self.directory, first["nonce"], client=self.client)
             directory = execution.directory
             directory.mkdir(parents=True)
-            holder = {'preflightRenewal': execution.control}
+            holder = {'preflightControl': execution.control}
             execution.control.start()
             self.addCleanup(execution.control.join, 5)
             self.addCleanup(execution.control.stop)
@@ -213,7 +213,7 @@ class FailoverTests(RouterDispatchTestCase):
         with patch('hey_my_buddy.buddy.roles.controller.worker_executor', return_value=executor), \
              patch.object(execution.control, 'wait') as wait:
             receipt = execution._execute_selected(first, first['task'], first['task']['spec'], first['attempt'],
-                                                  execution.directory, {'preflightRenewal': execution.control})
+                                                  execution.directory, {'preflightControl': execution.control})
         wait.assert_called_once_with(15)
         self.assertEqual(executor.budgets, [first['task']['spec']['routerBudgetSeconds']] * 2)
         self.assertEqual(receipt['report']['status'], 'ok')
@@ -420,8 +420,13 @@ class FailoverTests(RouterDispatchTestCase):
 
     def test_release_without_never_spawned_proof_cannot_advance(self):
         request, first = self.start()
+        # Identity acknowledgement is beyond the service's no-process-created
+        # release boundary; only actual process evidence may settle it now.
+        with self.board_.store.db.write() as db:
+            db.execute("UPDATE attempts SET identity_confirmed_at=? WHERE attempt_id=?",
+                       (self.board_.store.now(), first['attempt']['attemptId']))
         with self.assertRaises(BoardError):
-            self.board_.store.release_execution(first['attempt']['attemptId'], spawn_intent_written=True)
+            self.board_.store.release_execution(first['attempt']['attemptId'])
         self.assertEqual(len(self.tasks()), 1)
         self.assertEqual(self.outcomes(), [])
 

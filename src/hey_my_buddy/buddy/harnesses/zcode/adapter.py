@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import os
 
+from ....protocol.capabilities import adapter_capabilities
 from . import native_run
 from .config import cli_command, provider_paths
 from .protocol import NativeError
@@ -12,7 +13,6 @@ class ZcodeAdapter:
     """Native availability and facts, with no inherited execution entries."""
 
     name = "zcode"
-    capabilities = ("zcode", "observe", "inquiry", "workspace", "cancel", "artifacts", "deadline", "native-session")
     native_resume = True
     interrupted_resume = False
     native_resume_permission_change = True
@@ -21,9 +21,9 @@ class ZcodeAdapter:
     read_only_structured = False
     read_only_structured_resume = False
 
-    def __init__(self):
-        from ..registry import worker_permission_capabilities
-        self.capabilities = (*type(self).capabilities, *worker_permission_capabilities(self.name))
+    @property
+    def capabilities(self):
+        return adapter_capabilities(self.name)
 
     def local_read_only_check(self) -> dict:
         return {"eligible": False, "reasonCode": "readonly-worker-carrier-unimplemented",

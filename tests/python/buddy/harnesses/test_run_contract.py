@@ -191,9 +191,10 @@ class CodecRoundtripTests(unittest.TestCase):
         require_permission({"harness": "claude"}, "full")
 
     def test_undeclared_full_worker_permission_is_refused(self):
-        from hey_my_buddy.buddy.harnesses.registry import _WORKER_PERMISSIONS, require_permission, worker_permission
-        with mock.patch.dict(_WORKER_PERMISSIONS, {"claude": {
-                level: declaration for level, declaration in _WORKER_PERMISSIONS["claude"].items()
+        from hey_my_buddy.buddy.harnesses.registry import require_permission, worker_permission
+        from hey_my_buddy.protocol.capabilities import WORKER_PERMISSIONS
+        with mock.patch.dict(WORKER_PERMISSIONS, {"claude": {
+                level: declaration for level, declaration in WORKER_PERMISSIONS["claude"].items()
                 if level != "full"}}):
             for check in (lambda: require_permission({"harness": "claude"}, "full"),
                           lambda: worker_permission("claude", "full")):

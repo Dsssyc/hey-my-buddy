@@ -10,6 +10,7 @@ import time
 from pathlib import Path
 
 from ...errors import BoardError
+from ...protocol.capabilities import adapter_capabilities
 from ..harnesses.base import Adapter, AdapterOutcome, ExecutionContext, ProcessHandle, open_logs
 from ...protocol.owned_process import owned_popen
 
@@ -18,7 +19,7 @@ TERMINATE_GRACE_SECONDS = 3.0
 
 class CommandAdapter(Adapter):
     name = "command"
-    capabilities = ("command", "cancel", "artifacts", "deadline", "argv")
+    capabilities = adapter_capabilities("command")
 
     def prepare(self, context: ExecutionContext) -> None:
         argv = context.spec.get("argv")

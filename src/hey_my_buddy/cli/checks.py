@@ -57,7 +57,6 @@ import time
 #: runtime or an agent credential instead of its own private roots.
 SANITIZED_VARIABLES = (
     "HMB_CHECKS_TMPDIR",
-    "HMB_SUPERVISOR_START_ID",
     "HMB_STATE_DIR",
     "HMB_RUNTIME_ROOT",
     "HMB_RUNTIME",

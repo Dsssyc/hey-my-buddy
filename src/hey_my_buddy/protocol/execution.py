@@ -24,11 +24,6 @@ STARTUP = "execution-start.json"
 LIVE = "execution-live.json"
 RECEIPT = "result-receipt.json"
 BUDGET = "execution-budget.json"
-EXECUTION_CAPABILITIES = tuple(sorted({
-    "blackboard", "worker", "command", "decision", "dsh", "zcode", "codex", "claude",
-    "cancel", "artifacts", "deadline", "argv", "inquiry", "observe", "workspace",
-    "native-session", "permission:read", "permission:write", "permission:full",
-}))
 
 
 def fsync_json(path: Path, value: dict) -> None:
@@ -71,13 +66,11 @@ def launch_execution(claim: dict, state_dir: Path, nonce: str):
     directory = execution_directory(claim, state_dir)
     evidence = state_dir / "attempts" / binding["taskId"] / binding["attemptId"]
     job_name = f"Local\\HeyMyBuddy-{uuid.uuid4()}" if os.name == "nt" else None
-    intent_written = False
     handle = None
     try:
         ensure_private_dir(directory)
         evidence.mkdir(mode=0o700, parents=True, exist_ok=True)
         fsync_json(evidence / "spawn.intent", binding)
-        intent_written = True
         startup = directory / STARTUP
         fsync_json(startup, {"claim": claim, "stateDir": str(state_dir), "nonce": nonce,
                              "jobName": job_name})
@@ -102,10 +95,20 @@ def launch_execution(claim: dict, state_dir: Path, nonce: str):
         fsync_json(evidence / "spawn.marker", {**binding, "processIdentity": handle.process_identity})
         return handle
     except BaseException as error:
-        error.spawn_intent_written = intent_written
-        error.spawn_created = handle is not None or bool(
+        surviving_handle = handle if handle is not None else getattr(error, "execution_handle", None)
+        if surviving_handle is not None:
+            surviving_handle.execution_directory = directory
+            surviving_handle.execution_live_file = directory / LIVE
+            surviving_handle.execution_binding = binding
+            surviving_handle.budget_path = directory / BUDGET
+            surviving_handle.role_run_identity = RunIdentity(task_id=binding["taskId"],
+                attempt_id=binding["attemptId"], generation=binding["generation"],
+                invocation_id="execution", turn_id=(claim.get("turn") or {}).get("turnId"))
+            if not hasattr(surviving_handle, "process_identity"):
+                surviving_handle.process_identity = None
+        error.spawn_created = surviving_handle is not None or bool(
             getattr(getattr(error, "owned_popen_evidence", None), "created", False))
-        error.execution_handle = handle
+        error.execution_handle = surviving_handle
         raise
 
 
@@ -144,13 +147,23 @@ def _private_json(path: Path, maximum: int = 32768) -> dict:
     return value
 
 
-def read_execution_receipt(directory: Path) -> dict | None:
+def read_execution_receipt(directory: Path, *, binding: dict | None = None) -> dict | None:
     try:
         value = _private_json(Path(directory) / RECEIPT, 1024 * 1024)
     except FileNotFoundError:
         return None
     if set(value) != {"commandId", "attemptId", "generation", "taskId", "report", "createdAt"}:
         raise BoardError("INVALID_ARGUMENT", "Execution receipt has an invalid shape")
+    if (not isinstance(value["commandId"], str) or not 0 < len(value["commandId"]) <= 128
+            or not isinstance(value["taskId"], str) or not value["taskId"]
+            or not isinstance(value["attemptId"], str) or not value["attemptId"]
+            or type(value["generation"]) is not int or value["generation"] <= 0
+            or not isinstance(value["report"], dict)
+            or not isinstance(value["createdAt"], str) or not value["createdAt"]):
+        raise BoardError("INVALID_ARGUMENT", "Execution receipt has invalid fields")
+    if binding is not None and any(value[key] != binding[key] for key in
+                                   ("taskId", "attemptId", "generation")):
+        raise BoardError("INVALID_ARGUMENT", "Execution receipt binding differs")
     return value
 
 
@@ -196,7 +209,7 @@ class ExecutionLiveClient:
 
     def stop(self, initiator: str = "unknown", grace_deadline: float | None = None,
              force: bool = False) -> dict:
-        response = self._call("stop", 5.0, initiator=initiator,
+        response = self._call("stop", 1.0, initiator=initiator,
                               graceDeadline=grace_deadline, force=force)
         if response != {"accepted": True}:
             raise BoardError("LIVE_UNAVAILABLE", "The execution stop reply is invalid")
@@ -207,8 +220,6 @@ class ExecutionLiveClient:
         return self._call("send", timeout_ms / 1000 + 1,
                           request=request_payload, timeoutMs=timeout_ms,
                           deadlineMonotonic=time.monotonic() + timeout_ms / 1000)
-
-    send = request
 
     def observe(self, *, after_seq=None, limit=None, timeout_ms=3000,
                 fields=None, inquiry_id=None) -> dict:
@@ -268,11 +279,11 @@ def read_execution_endpoint(directory: Path, identity: RunIdentity, *, state_dir
                                instance_id=descriptor["instanceId"], token=token, state_dir=state_dir)
 
 
-def cleanup_execution_endpoint(directory: Path, process_identity: dict, *, state_dir: Path) -> dict:
-    """Reap a stale C-Two endpoint only after the complete execution is gone."""
+def cleanup_execution_endpoint(directory: Path, process_identity: dict, *, state_dir: Path,
+                               stopped_evidence: str) -> dict:
+    """Reap an endpoint after the caller has verified the execution is gone."""
     expected = validate_process_identity(process_identity)
-    observation = inspect_process_identity(expected)
-    if observation not in ("boot-changed", "identity-absent"):
+    if stopped_evidence not in ("boot-changed", "identity-absent", "creator-reaped"):
         return {"status": "unverified", "reason": "execution-still-present-or-unknown"}
     path = Path(directory) / LIVE
     try:

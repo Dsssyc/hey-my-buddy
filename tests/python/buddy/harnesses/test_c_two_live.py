@@ -239,6 +239,16 @@ class WireFrameTests(unittest.TestCase):
 class EndpointAdmissionTests(unittest.TestCase):
     """The request handler over the wire, without any C-Two server."""
 
+    def test_in_process_endpoint_does_not_create_wire_credentials(self):
+        with mock.patch.object(ctl.secrets, "token_hex", side_effect=AssertionError("wire token minted")), \
+             mock.patch.object(ctl, "random_person_name", side_effect=AssertionError("wire name minted")):
+            local = ctl.CTwoLiveEndpoint(identity(), lv.LiveCapabilities(
+                inquiry_delivery="unsupported"), None, state_dir=Path(tempfile.gettempdir()))
+        self.assertIsNone(local.instance_id)
+        self.assertIsNone(local._token)
+        self.assertIsNone(local._name)
+        self.assertEqual(json.loads(local.capabilities_local())["inquiryDelivery"], "unsupported")
+
     def setUp(self):
         self.endpoint = endpoint(instance_id="c" * 64, token="d" * 64)
         self.run = self.endpoint.identity

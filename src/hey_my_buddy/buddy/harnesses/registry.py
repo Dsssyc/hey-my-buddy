@@ -6,6 +6,7 @@ an unavailable adapter reports an honest capability error instead of failing lat
 from __future__ import annotations
 
 from ...errors import BoardError
+from ...protocol.capabilities import WORKER_PERMISSIONS
 from .base import Adapter, AdapterOutcome, ExecutionContext, NoToolStructuredRequest, ProcessHandle
 from .run_contract import HARNESS_NAMES, HarnessRun, WorkerPermission
 from ..runtime.command import CommandAdapter
@@ -129,23 +130,14 @@ register_run_seam("dsh", dsh_run)
 
 # Worker levels name the Host's chosen boundary; each harness declares the
 # native tool scope and enforcement it provides for that level.
-_WORKER_PERMISSIONS = {
-    "codex": {"read": ("read", "enforced"), "write": ("write", "enforced"),
-              "full": ("full", "enforced")},
-    "claude": {"read": ("read", "enforced"), "write": ("write", "enforced"), "full": ("full", "enforced")},
-    "dsh": {"read": ("read", "enforced"), "write": ("write", "enforced"), "full": ("full", "enforced")},
-    "zcode": {"read": ("read", "enforced"), "write": ("write", "convention"), "full": ("full", "enforced")},
-}
-
-
 def worker_permission_capabilities(harness: str) -> tuple[str, ...]:
     """Derive advertised levels from the same declaration used by each turn."""
-    return tuple(f"permission:{level}" for level in _WORKER_PERMISSIONS.get(harness, {}))
+    return tuple(f"permission:{level}" for level in WORKER_PERMISSIONS.get(harness, {}))
 
 
 def worker_permission(harness: str, level: str) -> WorkerPermission:
     """Resolve a declared Worker level to its native scope and strength."""
-    declaration = _WORKER_PERMISSIONS.get(harness, {}).get(level)
+    declaration = WORKER_PERMISSIONS.get(harness, {}).get(level)
     if declaration is None:
         raise BoardError("UNSUPPORTED_CAPABILITY", "This harness does not declare the Worker permission",
                          harness=harness, access=level,
@@ -209,27 +201,13 @@ def require_permission(buddy: dict | None, access: str) -> None:
 
 
 def local_capabilities() -> list[str]:
-    """The capabilities a *built-in* worker host can honestly advertise.
-
-    ``external`` is deliberately absent: a built-in worker cannot execute a
-    caller-owned agent's task, and advertising it would let the local worker claim
-    work it must then fail.
-    """
-    values = {"blackboard", "worker"}
+    """Capabilities declared by the available execution adapters."""
+    values = set()
     for name, instance in adapters().items():
         usable, _reason = instance.available()
         if usable:
             values.update(instance.capabilities)
     return sorted(values)
-
-
-def supported_capabilities() -> list[str]:
-    """Executor code capabilities; native readiness is owned by the blackboard.
-
-    Supervisor registration never probes a user's harnesses or account. Claims
-    and the pre-start service check decide whether an installed route can run.
-    """
-    return sorted({'blackboard', 'worker', *(value for item in adapters().values() for value in item.capabilities)})
 
 
 __all__ = [
@@ -253,7 +231,6 @@ __all__ = [
     "register_run_seam",
     "require_permission",
     "run_seam",
-    "supported_capabilities",
     "worker_permission",
     "worker_permission_capabilities",
 ]

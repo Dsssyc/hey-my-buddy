@@ -1,7 +1,8 @@
 """Durable Router attempts with Python-owned frozen inputs and boundary checks.
 
-The blackboard owns publication and atomic terminal events. The
-Worker runtime owns native handles, budgets, input verification and stop receipts.
+The blackboard owns publication and atomic terminal events.
+The execution process owns native handles, input verification and stop receipts;
+the service enforces external deadlines.
 Router answers choose a legal buddy or abstain; preference judgments are
 recorded, never used as an additional veto.
 """
@@ -700,7 +701,7 @@ class DecisionCoordinator:
                 canonical_json([]),
                 spec["routerBudgetSeconds"],
                 "queued",
-                blocker or "awaiting-worker",
+                blocker or "awaiting-execution",
                 1,
                 now,
                 now,
@@ -715,7 +716,7 @@ class DecisionCoordinator:
                 "requestId": request_key,
                 "adapter": DECISION_ADAPTER,
                 "cwd": spec["cwd"],
-                "queueReason": blocker or "awaiting-worker",
+                "queueReason": blocker or "awaiting-execution",
                 "inputFingerprint": fingerprint,
                 "decisionId": decision_id,
             },
@@ -960,7 +961,7 @@ class DecisionCoordinator:
         proof = json.loads(event[0]) if event else {}
         # Only the service's explicit pre-spawn release evidence authorizes the
         # next Router; a generic shutdown flag alone does not.
-        stopped = (proof.get("releaseEvidence") == "spawnIntentWritten=false"
+        stopped = (proof.get("releaseEvidence") == "processCreated=false"
                    and attempt["shutdown_confirmed"] == 1 and attempt["execution_state"] == "finished")
         return self._complete(connection, row=row, task=task, attempt=attempt, status="failed",
                               result={"status": "error", "code": "router-unavailable", "reason": reason},

@@ -18,13 +18,41 @@ class ProcessHandle:
     """
 
     def __init__(self, process: subprocess.Popen, *, own_group: bool, log_paths: dict):
-        self.process = process
-        # Capture this before an adapter can poll and reap a fast child. A
-        # missing creation time remains unknown even if its PID is later reused.
-        from .process_identity import _creation_time
+        self._initialize_owned(process, own_group=own_group, log_paths=log_paths)
+        try:
+            # Capture this before an adapter can poll and reap a fast child.
+            from .process_identity import _creation_time, record_native_process_spawn
 
-        self.process_started_at = (_creation_time(process.pid)
-                                   if type(process.pid) is int and process.pid > 0 else None)
+            self.process_started_at = (_creation_time(process.pid)
+                                       if type(process.pid) is int and process.pid > 0 else None)
+            intent = vars(process).get("_buddy_native_intent")
+            if intent is not None:
+                record_native_process_spawn(intent, self)
+        except BaseException as error:
+            # Popen has returned: this object still owns the child even when
+            # identity capture or durable journaling fails before __init__ returns.
+            from .owned_process import ProcessCreationEvidence
+
+            try:
+                self.terminate(grace_seconds=0)
+                process.wait(timeout=2)
+                stopped = self.shutdown_confirmed(settle_seconds=0)
+            except BaseException:
+                stopped = False
+            evidence = ProcessCreationEvidence(created=True, shutdown_confirmed=stopped,
+                                               exit_code=process.returncode)
+            error.execution_handle = self
+            if not stopped:
+                failure = RuntimeError("owned child shutdown is unconfirmed after handle construction failure")
+                failure.owned_popen_evidence = evidence
+                failure.execution_handle = self
+                raise failure from error
+            error.owned_popen_evidence = evidence
+            raise
+
+    def _initialize_owned(self, process: subprocess.Popen, *, own_group: bool,
+                          log_paths: dict) -> None:
+        self.process = process
         self.own_group = own_group
         self.log_paths = log_paths
         self.cancel_requested = False
@@ -50,11 +78,15 @@ class ProcessHandle:
                 self.pgid = os.getpgid(process.pid)
             except OSError:
                 self.pgid = process.pid
-        intent = vars(process).get("_buddy_native_intent")
-        if intent is not None:
-            from .process_identity import record_native_process_spawn
 
-            record_native_process_spawn(intent, self)
+    @classmethod
+    def adopt_unregistered(cls, process: subprocess.Popen, *, own_group: bool,
+                           log_paths: dict) -> "ProcessHandle":
+        """Keep a Popen reachable when constructing its normal handle failed."""
+        handle = cls.__new__(cls)
+        handle._initialize_owned(process, own_group=own_group, log_paths=log_paths)
+        handle.process_started_at = None
+        return handle
 
     @property
     def pid(self) -> int | None:

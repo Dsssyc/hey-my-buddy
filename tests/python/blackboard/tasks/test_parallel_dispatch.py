@@ -5,11 +5,13 @@ import sys
 import time
 import os
 import signal
+from datetime import datetime, timezone
 import psutil
 from pathlib import Path
 
 from support import BoardTestCase, wait_for
 from hey_my_buddy.protocol.client import BoardClient
+from hey_my_buddy.protocol.process_identity import inspect_process_identity
 
 
 class DirectAdmissionTests(BoardTestCase):
@@ -33,7 +35,7 @@ class DirectAdmissionTests(BoardTestCase):
         refused = board.store.admit_execution("o" * 32, task_id=third["runId"])
         self.assertIsNone(refused["claim"])
         self.assertEqual(refused["reason"], "capacity")
-        board.store.release_execution(one["attempt"]["attemptId"], spawn_intent_written=False)
+        board.store.release_execution(one["attempt"]["attemptId"])
         self.assertEqual(board.store.admit_execution("p" * 32, task_id=third["runId"])["claim"]["task"]["runId"],
                          third["runId"])
 
@@ -78,6 +80,45 @@ class ModelServiceAdmissionTests(BoardTestCase):
         })["task"]
         claim = board.store.admit_execution("p" * 32)["claim"]
         self.assertEqual(claim["task"]["runId"], command["runId"])
+
+    def test_uncertain_deep_model_attempt_holds_model_and_machine_capacity(self):
+        board = self.board(max_concurrent=2)
+        board.call("model_catalog_refresh", {"requestId": "catalog-deep"})
+        deep = {"harness": "dsh", "provider": "deepseek-official", "model": "deepseek-v4-pro"}
+        board.console_call("user_policy_publish", {
+            "commandId": "deep-limit",
+            "buddySettings": [
+                {"buddyId": "dsh:deepseek-official:deepseek-v4-pro:off", "enabled": True},
+                {"buddyId": "dsh:deepseek-official:deepseek-flash:off", "enabled": True},
+            ],
+            "configuration": {"defaultRoutingMode": "review", "routerBuddyIds": [
+                "dsh:deepseek-official:deepseek-v4-pro:off"]},
+            "modelServiceConcurrency": [{**deep, "limit": 1}],
+        })
+        first = board.call("selection_request", {"requestId": "deep-first", "task": "choose"})
+        claimed = board.store.admit_execution("a" * 32, task_id=first["runId"])["claim"]
+        attempt_id = claimed["attempt"]["attemptId"]
+        with board.store.db.write() as connection:
+            connection.execute("UPDATE attempts SET execution_state='uncertain', ownership='uncertain' "
+                               "WHERE attempt_id=?", (attempt_id,))
+            connection.execute("UPDATE resource_claims SET state='retained' WHERE attempt_id=?", (attempt_id,))
+        second = board.call("selection_request", {"requestId": "deep-second", "task": "choose again"})
+        blocked = board.store.admit_execution("b" * 32, task_id=second["runId"])
+        self.assertIsNone(blocked["claim"])
+        self.assertEqual(blocked["reason"], "model-capacity")
+        self.assertEqual(board.call("task_get", {"runId": second["runId"]})["task"]["queueReason"],
+                         "model-capacity")
+        command = board.call("task_submit", {"requestId": "deep-other", "task": "offline", "adapter": "command",
+                                                  "argv": ["/bin/true"], "cwd": str(self.workdir("deep-other"))})["task"]
+        self.assertIsNotNone(board.store.admit_execution("c" * 32, task_id=command["runId"])["claim"])
+        third = board.call("task_submit", {"requestId": "deep-third", "task": "offline", "adapter": "command",
+                                                "argv": ["/bin/true"], "cwd": str(self.workdir("deep-third"))})["task"]
+        blocked_total = board.store.admit_execution("d" * 32, task_id=third["runId"])
+        self.assertEqual(blocked_total["reason"], "capacity")
+        capacity = board.store.capacity_report()
+        self.assertEqual(capacity["totalActive"], 2)
+        self.assertEqual(next(row for row in capacity["models"] if all(row[key] == value
+                         for key, value in deep.items()))["active"], 1)
 
 
 class PrivateDaemonDispatchTests(BoardTestCase):
@@ -131,6 +172,32 @@ class PrivateDaemonDispatchTests(BoardTestCase):
             self.assertTrue(wait_for(lambda: client.get(runId=run_id)["status"] == "cancelled",
                                      timeout=35), client.get(runId=run_id))
             self.assertTrue(client.get(runId=run_id)["shutdownConfirmed"])
+
+    def test_zero_drain_service_stop_reaches_connected_execution(self):
+        with self.daemon(env={"HMB_MAX_CONCURRENT": "1"}) as first:
+            client = BoardClient(self.directory, autostart=False)
+            run_id, started, release = self.gated(client, "zero-drain")
+            self.assertTrue(wait_for(started.exists, timeout=45))
+            self.assertIsNotNone(wait_for(lambda: (client.get(runId=run_id).get("selectedAttempt") or {}).get(
+                "processIdentity"), timeout=20))
+            attempt_id = client.get(runId=run_id)["selectedAttemptId"]
+            try:
+                reply = client.call("service_control", {"action": "stop", "drainSeconds": 0})
+                self.assertEqual(reply["cancelRequested"], 1)
+                first.wait(timeout=20)
+                self.assertTrue(wait_for(lambda: self.native_stopped(int((self.directory / "zero-drain.pid").read_text())),
+                                         timeout=12), "zero-drain stop never reached the running command")
+            finally:
+                release.touch()
+        with self.daemon(env={"HMB_MAX_CONCURRENT": "1"}):
+            client = BoardClient(self.directory, autostart=False)
+            self.assertTrue(wait_for(lambda: client.get(runId=run_id)["attemptState"] == "finished",
+                                     timeout=35), client.get(runId=run_id))
+            view = client.get(runId=run_id)
+            self.assertEqual(view["selectedAttemptId"], attempt_id)
+            self.assertEqual(view["status"], "cancelled")
+            self.assertTrue(view["shutdownConfirmed"])
+            self.assertEqual(view["stopInitiator"], "service")
 
     def test_restart_retains_execution_receipt_delivery(self):
         with self.daemon(env={"HMB_MAX_CONCURRENT": "1"}) as first:
@@ -188,3 +255,37 @@ class PrivateDaemonDispatchTests(BoardTestCase):
             self.assertTrue(view["shutdownConfirmed"])
             self.assertTrue(wait_for(lambda: self.native_stopped(int(pid_path.read_text())), timeout=10))
             self.assertTrue(wait_for(lambda: self.native_stopped(execution_pid), timeout=10))
+
+    def test_stopped_execution_is_killed_from_the_recorded_force_time(self):
+        if not hasattr(signal, "SIGSTOP"):
+            self.skipTest("SIGSTOP is unavailable")
+        with self.daemon(env={"HMB_MAX_CONCURRENT": "1"}):
+            client = BoardClient(self.directory, autostart=False)
+            run_id, started, release = self.gated(client, "freeze-execution")
+            self.assertTrue(wait_for(started.exists, timeout=45))
+            identity = wait_for(lambda: (client.get(runId=run_id).get("selectedAttempt") or {}).get(
+                "processIdentity"), timeout=20)
+            self.assertIsNotNone(identity)
+            try:
+                os.kill(identity["pid"], signal.SIGSTOP)
+                client.cancel(runId=run_id)
+                force_at = wait_for(lambda: (client.get(runId=run_id).get("selectedAttempt") or {}).get(
+                    "forceRequestedAt"), timeout=15)
+                self.assertIsNotNone(force_at)
+                recorded = datetime.fromisoformat(force_at.replace("Z", "+00:00"))
+                self.assertLess((datetime.now(timezone.utc) - recorded).total_seconds(), 5)
+                self.assertNotEqual(client.get(runId=run_id)["attemptState"], "finished")
+                self.assertTrue(wait_for(lambda: client.get(runId=run_id)["attemptState"] == "finished",
+                                         timeout=20), client.get(runId=run_id))
+                view = client.get(runId=run_id)
+                self.assertEqual(view["status"], "cancelled")
+                self.assertTrue(view["shutdownConfirmed"])
+                elapsed = (datetime.now(timezone.utc) - recorded).total_seconds()
+                self.assertGreaterEqual(elapsed, 7)
+                self.assertLess(elapsed, 12, 'forced execution outlived its persisted external grace')
+                native_pid = int((self.directory / 'freeze-execution.pid').read_text())
+                self.assertTrue(wait_for(lambda: self.native_stopped(native_pid), timeout=3))
+            finally:
+                release.touch()
+                if inspect_process_identity(identity) == "alive":
+                    os.kill(identity["pid"], signal.SIGCONT)

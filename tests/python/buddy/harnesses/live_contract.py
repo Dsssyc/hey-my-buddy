@@ -18,5 +18,10 @@ class HarnessRunLive:
 
 def register_test_endpoint(endpoint):
     """Expose an otherwise in-process channel for a standalone transport test."""
+    import secrets
+    from hey_my_buddy.buddy.harnesses.c_two_live import random_person_name
     endpoint._contract = HarnessRunLive
+    endpoint._name = random_person_name()
+    endpoint._instance_id = secrets.token_hex(32)
+    endpoint._token = secrets.token_hex(32)
     return endpoint.start()

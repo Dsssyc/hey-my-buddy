@@ -284,7 +284,7 @@ class RealWorkerTurnTests(MicroTaskWorkerTestCase):
         from hey_my_buddy.buddy.harnesses.runtime_selection import controller_environment
         from hey_my_buddy.buddy.harnesses.dsh.acp.launch import child_environment
         from hey_my_buddy.buddy.roles.prompts import worker_prompt
-        from hey_my_buddy.protocol import execution as execution_protocol
+        from hey_my_buddy.protocol import capabilities as execution_capabilities
         board = self.board()
         enable_fixture_buddy(board.store, BUDDY)
         with self.daemon(env=self.env()):
@@ -297,8 +297,8 @@ class RealWorkerTurnTests(MicroTaskWorkerTestCase):
                 "executionWorkspace": {"kind": "existing", "access": "full", "accessReason": "Lead tasks"},
             }), env=self.env())
             self.assertEqual(code, 0, submitted)
-            with mock.patch.object(execution_protocol, "EXECUTION_CAPABILITIES",
-                                   (*execution_protocol.EXECUTION_CAPABILITIES, "launcher-private")):
+            with mock.patch.dict(execution_capabilities.ADAPTER_CAPABILITIES,
+                                 dsh=(*execution_capabilities.ADAPTER_CAPABILITIES["dsh"], "launcher-private")):
                 response = admit_board(board, {'runId': submitted['runId'], 'nonce': 'n' * 16})
             self.assertIsNotNone(response["claim"], response)
             credential = self.directory / "launcher-credential.json"

@@ -521,17 +521,18 @@ def upgrade(params: dict, *, skill_source: Path | None = None, skill_target: Pat
             write_journal(marker, journal)
             write_journal(state / 'upgrade-last.json', journal)
             _finish_skill(journal)
-            journal_error = None
-            try:
-                clear_journal(marker)
-            except OSError as error:
-                journal_error = str(error)
             legacy_cleanup_error = None
-            if journal_error is None:
+            try:
+                remove_legacy_worker_state(state)
+            except (BoardError, OSError) as error:
+                # Keep the verified journal so install or startup can retry.
+                legacy_cleanup_error = str(error)
+            journal_error = None
+            if legacy_cleanup_error is None:
                 try:
-                    remove_legacy_worker_state(state)
-                except (BoardError, OSError) as error:
-                    legacy_cleanup_error = str(error)
+                    clear_journal(marker)
+                except OSError as error:
+                    journal_error = str(error)
             try:
                 from ..blackboard.tasks.storage import prune_old_runtimes
                 write_journal(state / 'runtime-retention.json', {'current':target.name, 'previous':previous.name})
@@ -599,17 +600,17 @@ def recover(state: Path, root: Path) -> dict:
         write_active_runtime(state, target, journal.get('environment'))
         write_journal(state / 'upgrade-last.json', journal)
         _finish_skill(journal)
-        journal_error = None
-        try:
-            clear_journal(marker)
-        except OSError as error:
-            journal_error = str(error)
         legacy_cleanup_error = None
-        if journal_error is None:
+        try:
+            remove_legacy_worker_state(state)
+        except (BoardError, OSError) as error:
+            legacy_cleanup_error = str(error)
+        journal_error = None
+        if legacy_cleanup_error is None:
             try:
-                remove_legacy_worker_state(state)
-            except (BoardError, OSError) as error:
-                legacy_cleanup_error = str(error)
+                clear_journal(marker)
+            except OSError as error:
+                journal_error = str(error)
         return {'upgraded':True, 'recoveredJournal':True, 'verification':evidence,
                 **({'journalError':journal_error} if journal_error is not None else {}),
                 **({'legacyCleanupError':legacy_cleanup_error} if legacy_cleanup_error is not None else {})}

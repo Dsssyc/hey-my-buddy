@@ -36,7 +36,7 @@ __all__ = [
 ]
 
 
-# -- the Worker runtime's execution seam -------------------------------------
+# -- the execution process's execution seam -------------------------------------
 
 
 @dataclass(frozen=True)
@@ -56,11 +56,11 @@ class WorkerPreparation:
 
 
 def worker_executor(name: str) -> Adapter | WorkerRunExecutor:
-    """The Worker runtime's one executor selection point (ADR-025 decision 10).
+    """The execution process's one executor selection point (ADR-025 decision 10).
 
     An extracted harness uses the generic role executor and its registered
     native run; it never falls through to a deleted legacy carrier entry.
-    ``command`` and ``external`` keep the registry carrier for good, and the
+    ``command`` keeps the registry carrier, and the
     registry stays the only place any executor is selected.
     """
     from ..harnesses.registry import adapter, run_seam

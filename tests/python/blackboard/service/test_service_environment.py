@@ -37,7 +37,6 @@ HOST_SESSION_VARIABLES = {
     "HMB_TASK_ID": "run:host-session",
     "HMB_ATTEMPT_ID": "attempt:host-session",
     "HMB_HARNESS_RECORD_FILE": "/private/harness-selection.json",
-    "HMB_SUPERVISOR_START_ID": "host-session-start",
 }
 
 #: Values a service must keep: process basics, native account directories and the

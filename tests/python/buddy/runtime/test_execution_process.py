@@ -5,6 +5,7 @@ import os
 import json
 import tempfile
 import threading
+import time
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
@@ -12,9 +13,11 @@ from unittest import mock
 
 from hey_my_buddy.buddy.runtime.execution import Execution
 from hey_my_buddy.errors import BoardError
+from hey_my_buddy.json_codec import canonical_json
 from hey_my_buddy.protocol import execution as launch_protocol
 from hey_my_buddy.protocol.execution import read_execution_endpoint
 from hey_my_buddy.protocol.process_identity import boot_id, _creation_time
+from hey_my_buddy.buddy.harnesses.live import LiveRequest, InquiryPayload
 
 
 class ExecutionEndpointTests(unittest.TestCase):
@@ -89,7 +92,7 @@ class ExecutionEndpointTests(unittest.TestCase):
                     launch_protocol.launch_execution(claim, state, "n" * 64)
             spawn.assert_not_called()
             self.assertFalse(caught.exception.spawn_created)
-            self.assertTrue(caught.exception.spawn_intent_written)
+            self.assertTrue((state / "attempts/task-5/attempt-5/spawn.intent").is_file())
 
     def test_capture_failure_retains_the_unidentified_owned_handle(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -117,29 +120,63 @@ class ExecutionEndpointTests(unittest.TestCase):
                 "startedAt": _creation_time(os.getpid()), "processGroupId": os.getpid(), "jobName": None}
             execution.live.start(process_identity)
             try:
+                endpoint_file = execution.directory / "execution-live.json"
+                material = json.loads(endpoint_file.read_text())
+                if os.name != "nt":
+                    self.assertEqual(endpoint_file.stat().st_mode & 0o777, 0o600)
                 client = read_execution_endpoint(execution.directory, execution.live.identity,
                     state_dir=state, process_identity=process_identity)
                 self.assertIsNotNone(client)
                 self.assertTrue(client.wait())
                 response = client.stop("console", force=True)
                 self.assertEqual(response, {"accepted": True})
+                self.assertNotIn(material["token"], json.dumps(response))
                 self.assertTrue(execution.stop_requested())
                 self.assertEqual(client.observe(limit=1)["unavailable"], "source-unavailable")
+                native = mock.Mock()
+                native.capabilities_local.return_value = canonical_json({"inquiryDelivery": "unsupported"})
+                native.observe_local.return_value = canonical_json({"observed": True})
+                native.request_local.return_value = canonical_json({"status": "unavailable"})
+                execution.live.bind_native(native)
+                self.assertEqual(client.capabilities(), {"inquiryDelivery": "unsupported"})
+                self.assertEqual(client.observe(limit=1), {"observed": True})
+                request = LiveRequest(identity=execution.live.identity, request_id="request-1",
+                    kind="inquiry", payload=InquiryPayload(question_id="question-1", question="Ready?"))
+                reply = execution.live.send(client._frame(request=request.to_payload(), timeoutMs=3000,
+                    deadlineMonotonic=time.monotonic() + 3))
+                self.assertEqual(json.loads(reply), {"status": "unavailable"})
+                native.request_local.assert_called_once()
+                native.request.assert_not_called()
+                native.capabilities.assert_not_called()
+                native.observe.assert_not_called()
+                execution.live.unbind_native(native)
+                rejected = {**client.identity.to_payload()}
+                with self.assertRaises(BoardError) as refused:
+                    execution.live.stop(canonical_json({"identity": rejected,
+                        "instanceId": client.instance_id, "token": "0" * 64,
+                        "initiator": "console", "graceDeadline": None, "force": False}))
+                self.assertNotIn(material["token"], str(refused.exception))
+                if os.name != "nt":
+                    os.chmod(endpoint_file, 0o644)
+                    with self.assertRaises(BoardError) as unsafe:
+                        read_execution_endpoint(execution.directory, execution.live.identity,
+                            state_dir=state, process_identity=process_identity)
+                    self.assertEqual(unsafe.exception.code, "PRIVATE_PATH_UNSAFE")
+                    os.chmod(endpoint_file, 0o600)
                 with self.assertRaises(BoardError):
                     read_execution_endpoint(execution.directory, execution.live.identity,
                         state_dir=state, process_identity={**process_identity, "pid": 1})
-                with mock.patch.object(launch_protocol, "inspect_process_identity", return_value="alive"), \
-                     mock.patch.object(launch_protocol.cc, "reap_endpoint") as reap:
+                with mock.patch.object(launch_protocol.cc, "reap_endpoint") as reap:
                     self.assertEqual(launch_protocol.cleanup_execution_endpoint(
-                        execution.directory, process_identity, state_dir=state)["status"], "unverified")
+                        execution.directory, process_identity, state_dir=state,
+                        stopped_evidence="alive")["status"], "unverified")
                     reap.assert_not_called()
                     self.assertTrue((execution.directory / "execution-live.json").exists())
-                with mock.patch.object(launch_protocol, "inspect_process_identity",
-                                       return_value="identity-absent"), \
-                     mock.patch.object(launch_protocol.cc, "reap_endpoint",
+                with mock.patch.object(launch_protocol.cc, "reap_endpoint",
                                        return_value={"status": "reaped"}) as reap:
                     self.assertEqual(launch_protocol.cleanup_execution_endpoint(
-                        execution.directory, process_identity, state_dir=state)["status"], "reaped")
+                        execution.directory, process_identity, state_dir=state,
+                        stopped_evidence="identity-absent")["status"], "reaped")
                     reap.assert_called_once()
                     self.assertFalse((execution.directory / "execution-live.json").exists())
             finally:
@@ -164,6 +201,7 @@ class ExecutionEndpointTests(unittest.TestCase):
             process_identity = {"bootId": boot_id(), "pid": os.getpid(),
                 "startedAt": _creation_time(os.getpid()), "processGroupId": os.getpid(), "jobName": None}
             execution.live.start(process_identity)
+            self.assertTrue((execution.directory / "execution-live.json").exists())
             receipt = execution.receipt(claim, {"status": "ok", "shutdownConfirmed": True},
                                         execution.directory)
             with mock.patch.object(execution, "execute", return_value=receipt):
@@ -171,6 +209,7 @@ class ExecutionEndpointTests(unittest.TestCase):
                 thread.start()
                 try:
                     self.assertTrue(offline.wait(5))
+                    self.assertTrue((execution.directory / "execution-live.json").exists())
                     self.assertTrue((execution.directory / "result-receipt.json").exists())
                     client = read_execution_endpoint(execution.directory, execution.live.identity,
                         state_dir=state, process_identity=process_identity)

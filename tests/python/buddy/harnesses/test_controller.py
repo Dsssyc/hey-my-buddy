@@ -417,6 +417,7 @@ class LaunchFailureEvidenceTests(unittest.TestCase):
             with self.assertRaises(OSError) as caught:
                 self.launch()
             self.assertIs(caught.exception, state["error"])
+            self.assertIs(caught.exception.execution_handle.process, state["process"])
             evidence = caught.exception.owned_popen_evidence
             self.assertTrue(evidence.created)
             self.assertIs(evidence.shutdown_confirmed, False)
@@ -431,15 +432,17 @@ class LaunchFailureEvidenceTests(unittest.TestCase):
             self.assertEqual(caught.exception.owned_popen_evidence,
                              ProcessCreationEvidence(True, False, state["process"].returncode))
 
-    def test_handle_registration_failure_retains_actual_creation_fact(self):
+    def test_handle_registration_failure_stops_and_hands_out_the_created_child(self):
         error = ValueError("fixture handle registration failed")
         with controller_log_close_failure(log=None) as state, \
              mock.patch.object(process_controller, "ProcessHandle", side_effect=error):
             with self.assertRaises(ValueError) as caught:
                 self.launch()
             self.assertIs(caught.exception, error)
-            self.assertEqual(error.owned_popen_evidence, ProcessCreationEvidence(True, False, None))
-            self.assertIsNone(state["process"].poll())
+            self.assertEqual(error.owned_popen_evidence,
+                             ProcessCreationEvidence(True, True, state["process"].returncode))
+            self.assertIsNotNone(state["process"].poll())
+            self.assertIs(error.execution_handle.process, state["process"])
 
 
 class StrictReadTests(unittest.TestCase):

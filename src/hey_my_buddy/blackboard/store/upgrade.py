@@ -24,7 +24,9 @@ def _load(raw: str):
 def _interruption_result(value):
     # Native/model results are opaque. Only this service-owned recovery payload
     # could carry the old interruption evidence; no other result is traversed.
-    if isinstance(value, dict) and value.get('terminationReason') == 'interrupted':
+    if (isinstance(value, dict) and value.get('status') == 'failed'
+            and value.get('terminationReason') == 'interrupted'
+            and 'shutdownConfirmed' in value):
         value = dict(value)
         result = value.get('result')
         if isinstance(result, dict) and isinstance(result.get('interruptionEvidence'), dict):
@@ -47,14 +49,22 @@ def _view(value):
             converted['processIdentity'] = {key: item for key, item in identity.items() if key != 'worker'}
         if 'result' in value:
             converted['result'] = _interruption_result(value['result'])
-    if {'taskId', 'requestId', 'spec', 'state'} <= value.keys():
+    if (({'taskId', 'requestId'} <= value.keys() or {'runId', 'requestId'} <= value.keys())
+            and {'state', 'queueReason', 'interruptionEvidence'} & value.keys()):
         converted.pop('workerId', None)
         if value.get('queueReason') == 'awaiting-worker':
             converted['queueReason'] = 'awaiting-execution'
-    for key in ('task', 'attempt', 'selectedAttempt'):
+        evidence = value.get('interruptionEvidence')
+        if isinstance(evidence, dict) and evidence.get('kind') == 'worker-stopped':
+            converted['interruptionEvidence'] = {**evidence, 'kind': 'orphan-stopped'}
+        # task_result unwraps the service recovery result onto a flat task view.
+        # Its stopped/interrupted envelope still identifies the owned result;
+        # arbitrary model and command output remains opaque.
+        converted = _interruption_result(converted)
+    for key in ('task', 'attempt', 'selectedAttempt', 'workflow'):
         if isinstance(value.get(key), dict):
             converted[key] = _view(value[key])
-    for key in ('tasks', 'attempts', 'queuedTasks'):
+    for key in ('tasks', 'attempts', 'queuedTasks', 'runs', 'children', 'results', 'ownedMicroTasks'):
         if isinstance(value.get(key), list):
             converted[key] = [_view(item) for item in value[key]]
     return converted
@@ -63,6 +73,8 @@ def _view(value):
 def _event(kind: str, value):
     if not isinstance(value, dict):
         return value
+    if kind.startswith(('task.', 'attempt.', 'workflow.', 'macro_task.')):
+        value = _view(value)
     if kind in ('task.submitted', 'task.retried') and value.get('queueReason') == 'awaiting-worker':
         value = {**value, 'queueReason': 'awaiting-execution'}
     if kind == 'task.failed' and isinstance(value.get('interruptionEvidence'), dict):
@@ -71,6 +83,8 @@ def _event(kind: str, value):
             value = {**value, 'interruptionEvidence': {**evidence, 'kind': 'orphan-stopped'}}
     if kind == 'attempt.interruption_seal_pending' and value.get('evidence') == 'worker-stopped':
         value = {**value, 'evidence': 'orphan-stopped'}
+    if kind == 'attempt.released' and value.get('releaseEvidence') == 'spawnIntentWritten=false':
+        value = {**value, 'releaseEvidence': 'processCreated=false'}
     return value
 
 
@@ -96,7 +110,8 @@ def upgrade_database(directory: Path) -> None:
             for statement in SCHEMA.split(';'):
                 sql = statement.strip()
                 if any(f'CREATE TABLE IF NOT EXISTS {table} (' in sql for table in
-                       ('attempts', 'attempt_process_identities', 'attempt_interruptions')) or (
+                       ('attempts', 'attempt_process_identities', 'attempt_interruptions',
+                        'attempt_shutdown_evidence', 'execution_issues', 'service_issues')) or (
                         'CREATE ' in sql and 'INDEX IF NOT EXISTS attempts_' in sql):
                     connection.execute(sql)
             for table, rows in (('attempts', attempts), ('attempt_process_identities', identities.values()),
@@ -106,7 +121,9 @@ def upgrade_database(directory: Path) -> None:
                 for row in rows:
                     values = []
                     for column in columns:
-                        value = row[column]
+                        value = row.get(column)
+                        if column == 'cleanup_pending':
+                            value = 0  # The idle schema-22 board has no execution material to reap.
                         if column == 'evidence_kind' and value == 'worker-stopped':
                             value = 'orphan-stopped'
                         if column == 'result_json' and value is not None:
@@ -116,6 +133,8 @@ def upgrade_database(directory: Path) -> None:
                         values.append(value)
                     connection.execute(f"INSERT INTO {table}({','.join(columns)}) VALUES({placeholders})", values)
             # These receipts authorize retired calls or contain their old subject.
+            connection.execute("UPDATE attempts SET result_command_id=NULL WHERE result_command_id IN "
+                               "(SELECT command_id FROM commands WHERE kind LIKE 'worker.%' OR kind='harness.prepare')")
             connection.execute("DELETE FROM commands WHERE kind LIKE 'worker.%' OR kind='harness.prepare'")
             for row in connection.execute('SELECT command_id,response_json FROM commands').fetchall():
                 value = _load(row['response_json'])

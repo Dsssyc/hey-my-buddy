@@ -2764,7 +2764,7 @@ class WorkflowCoordinator:
                 canonical_json(spec.get("exclusiveResources", [])),
                 spec["expectedSeconds"],
                 "queued",
-                blocker or "awaiting-worker",
+                blocker or "awaiting-execution",
                 now,
                 now,
             ),
@@ -3269,7 +3269,7 @@ class WorkflowCoordinator:
             self.board._transition_task(connection, task, "queued")
         connection.execute(
             "UPDATE tasks SET queue_reason=?, active_attempt_id=NULL, updated_at=? WHERE task_id=?",
-            (blocker or "awaiting-worker", now, task["task_id"]),
+            (blocker or "awaiting-execution", now, task["task_id"]),
         )
         updated = connection.execute(
             "UPDATE workflow_runs SET state='executing', active_request_id=NULL, final_artifact_id=NULL, final_attempt_id=NULL,"

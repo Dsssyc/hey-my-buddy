@@ -45,13 +45,7 @@ ACTIVE_ATTEMPT_STATES = frozenset({"starting", "executing", "finalizing", "uncer
 MESSAGE_STATES = ("queued", "claimed", "delivered", "answered", "discarded", "unavailable")
 TERMINAL_MESSAGE_STATES = frozenset({"answered", "discarded", "unavailable"})
 
-#: The observed outcome of one attempt. The stop initiator is recorded separately.
-TERMINATION_REASONS = (
-    "completed", "wrap-up", "grace-expired", "forced-stop", "console-stop",
-    "service-stop", "unknown-stop", "deadline", "harness-error", "transport-error", "interrupted",
-)
-
-WORKER_STATES = ("starting", "idle", "busy", "stopping", "lost")
+from ...protocol.stop import TERMINATION_REASONS  # noqa: F401 - shared receipt vocabulary
 
 CORE_SCHEMA = """
 CREATE TABLE IF NOT EXISTS meta (
@@ -119,6 +113,10 @@ CREATE TABLE IF NOT EXISTS attempts (
     cancel_requested_at TEXT,
     stop_initiator      TEXT CHECK (stop_initiator IN ('host','lead','console','service','unknown')),
     grace_deadline      TEXT,
+    force_reason        TEXT,
+    force_requested_at  TEXT,
+    identity_confirmed_at TEXT,
+    cleanup_pending     INTEGER NOT NULL DEFAULT 0 CHECK (cleanup_pending IN (0,1)),
     exit_code           INTEGER,
     signal              TEXT,
     started_at          TEXT,
@@ -156,6 +154,29 @@ CREATE TABLE IF NOT EXISTS attempt_interruptions (
     observed_at         TEXT NOT NULL,
     state               TEXT NOT NULL CHECK (state IN ('sealing','settled')),
     seal_error          TEXT
+);
+
+CREATE TABLE IF NOT EXISTS attempt_shutdown_evidence (
+    attempt_id          TEXT PRIMARY KEY REFERENCES attempts(attempt_id) ON DELETE RESTRICT,
+    evidence_kind       TEXT NOT NULL,
+    detail_json         TEXT NOT NULL,
+    observed_at         TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS execution_issues (
+    attempt_id          TEXT NOT NULL REFERENCES attempts(attempt_id) ON DELETE RESTRICT,
+    stage               TEXT NOT NULL,
+    code                TEXT NOT NULL,
+    message             TEXT NOT NULL,
+    observed_at         TEXT NOT NULL,
+    PRIMARY KEY (attempt_id, stage)
+);
+
+CREATE TABLE IF NOT EXISTS service_issues (
+    stage               TEXT PRIMARY KEY,
+    code                TEXT NOT NULL,
+    message             TEXT NOT NULL,
+    observed_at         TEXT NOT NULL
 );
 
 CREATE TABLE IF NOT EXISTS messages (

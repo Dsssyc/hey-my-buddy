@@ -50,11 +50,12 @@ class CodexSchemaTests(unittest.TestCase):
                 self.assertEqual(adapter(harness).capabilities, capabilities)
 
     def test_capabilities_are_derived_from_the_turn_declaration(self):
-        from hey_my_buddy.buddy.harnesses.registry import _WORKER_PERMISSIONS
+        from hey_my_buddy.protocol.capabilities import WORKER_PERMISSIONS, adapter_capabilities
         for harness in ("codex", "claude", "dsh", "zcode"):
-            with self.subTest(harness=harness), mock.patch.dict(_WORKER_PERMISSIONS, {
+            self.assertEqual(adapter(harness).capabilities, adapter_capabilities(harness))
+            with self.subTest(harness=harness), mock.patch.dict(WORKER_PERMISSIONS, {
                     harness: {"read": ("read", "enforced")}}):
-                capabilities = adapter(harness).capabilities
+                capabilities = adapter_capabilities(harness)
                 self.assertEqual([value for value in capabilities if value.startswith("permission:")],
                                  ["permission:read"])
 
@@ -99,7 +100,7 @@ class CodexSchemaTests(unittest.TestCase):
                     self.assertEqual(request.worker_permission, declaration)
 
     def test_worker_rejects_an_undeclared_full_permission(self):
-        from hey_my_buddy.buddy.harnesses.registry import _WORKER_PERMISSIONS
+        from hey_my_buddy.protocol.capabilities import WORKER_PERMISSIONS
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             (root / "input.json").write_text(canonical_json({
@@ -108,8 +109,8 @@ class CodexSchemaTests(unittest.TestCase):
             (root / "task.txt").write_text("Task")
             control = {"harness": "zcode", "privateRoot": str(root), "directory": str(root),
                        "inputFile": str(root / "input.json"), "taskFile": str(root / "task.txt")}
-            with mock.patch.dict(_WORKER_PERMISSIONS, {"zcode": {
-                    level: declaration for level, declaration in _WORKER_PERMISSIONS["zcode"].items()
+            with mock.patch.dict(WORKER_PERMISSIONS, {"zcode": {
+                    level: declaration for level, declaration in WORKER_PERMISSIONS["zcode"].items()
                     if level != "full"}}), self.assertRaises(BoardError) as caught:
                 run_execution.worker_request(control, SimpleNamespace())
             self.assertEqual(caught.exception.code, "UNSUPPORTED_CAPABILITY")

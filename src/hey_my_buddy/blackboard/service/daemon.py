@@ -155,7 +155,7 @@ class Daemon:
             self._maintenance = threading.Thread(target=self._maintain, name="workspace-maintenance", daemon=True)
             self._maintenance.start()
             self.stopping.wait()
-            return self.finish()
+            return 0
         finally:
             self.cleanup()
 
@@ -179,6 +179,8 @@ class Daemon:
         micro_task, micro_task_task_ids = self.store.workflow.cancel_for_service_stop(f"service stop: {reason}")
         queued = micro_task["queued"] + self.cancel_queued(reason, exclude=micro_task_task_ids)
         active = micro_task["active"] + self.cancel_active(reason, exclude=micro_task_task_ids)
+        if self.scheduler is not None:
+            self.scheduler.send_pending_stops()
         unresolved = self.drain(drain)
         self.stopping.set()
         self.store.stop_waiters()
@@ -212,7 +214,8 @@ class Daemon:
             if exclude and task["taskId"] in exclude:
                 continue
             try:
-                self.store.task_cancel({"runId": task["taskId"], "reason": f"service stop: {reason}"})
+                self.store.task_cancel({"runId": task["taskId"], "reason": f"service stop: {reason}"},
+                                       initiator="service")
                 count += 1
             except BoardError:
                 continue
@@ -224,7 +227,8 @@ class Daemon:
             if exclude and attempt["taskId"] in exclude:
                 continue
             try:
-                self.store.task_cancel({"runId": attempt["taskId"], "reason": f"service stop: {reason}"})
+                self.store.task_cancel({"runId": attempt["taskId"], "reason": f"service stop: {reason}"},
+                                       initiator="service")
                 count += 1
             except BoardError:
                 continue
@@ -249,9 +253,6 @@ class Daemon:
             }
             for attempt in self.store.active_work()["attempts"]
         ]
-
-    def finish(self) -> int:
-        return 0
 
     def cleanup(self) -> None:
         self.stopping.set()

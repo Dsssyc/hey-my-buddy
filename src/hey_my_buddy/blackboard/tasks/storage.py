@@ -82,7 +82,7 @@ def process_inventory(state: Path) -> tuple[list[dict], list[str], bool]:
         match = re.search(r'--state-dir\s+(\S+)', command)
         observed_state = match.group(1) if match else None
         if kind == 'execution':
-            startup = re.search(r'--startup\s+(\S+)', command)
+            startup = re.search(r'--startup\s+(.+execution-start\.json)$', command)
             if startup:
                 path = Path(startup.group(1))
                 observed_state = next((str(parent.parent) for parent in path.parents

@@ -42,6 +42,22 @@ class ExecutionDeliveryTests(unittest.TestCase):
         if os.name != "nt":
             self.assertEqual((self.execution.directory / "result-receipt.json").stat().st_mode & 0o777, 0o600)
 
+    def test_receipt_reader_refuses_foreign_binding_and_malformed_envelope(self):
+        from hey_my_buddy.protocol.execution import fsync_json, RECEIPT
+        binding = {"taskId": "task-1", "attemptId": "attempt-1", "generation": 1}
+        receipt = {**binding, "commandId": "result:attempt-1", "report": {},
+                   "createdAt": "2026-10-16T00:00:00+00:00"}
+        fsync_json(self.execution.directory / RECEIPT, receipt)
+        self.assertEqual(read_execution_receipt(self.execution.directory, binding=binding), receipt)
+        with self.assertRaises(BoardError):
+            read_execution_receipt(self.execution.directory,
+                                   binding={**binding, "generation": 2})
+        for changed in ({"commandId": ""}, {"report": []}, {"extra": True}):
+            with self.subTest(changed=changed):
+                fsync_json(self.execution.directory / RECEIPT, {**receipt, **changed})
+                with self.assertRaises(BoardError):
+                    read_execution_receipt(self.execution.directory, binding=binding)
+
     def test_offline_delivery_retries_same_command_after_flushing_hint(self):
         receipt = {"attemptId": "attempt-1", "taskId": "task-1", "generation": 1,
                    "commandId": "result:attempt-1", "report": {"status": "ok"},
@@ -132,11 +148,17 @@ class ExecutionDeliveryTests(unittest.TestCase):
              mock.patch("hey_my_buddy.protocol.process_identity.install_native_process_journal"):
             self.assertEqual(entry.main(), 0)
         client.progress.assert_called_once_with(
-            "attempt-1", 1, "n" * 64, process_identity=identity, phase="running", data=None)
+            "attempt-1", 1, "n" * 64, process_identity=identity, phase="executing", data=None)
 
     def test_native_work_waits_for_initial_identity_acknowledgement(self):
         client = mock.Mock()
-        client.progress.side_effect = [BoardError("SERVICE_UNAVAILABLE", "offline"), {}]
+        journal_installed = []
+        def progress(*_args, **_kwargs):
+            self.assertEqual(journal_installed, [True])
+            if client.progress.call_count == 1:
+                raise BoardError("SERVICE_UNAVAILABLE", "offline")
+            return {}
+        client.progress.side_effect = progress
         execution = entry.Execution(CLAIM, self.state, "n" * 64, client=client)
         execution._identity_pending = {"pid": 301}
 
@@ -144,8 +166,120 @@ class ExecutionDeliveryTests(unittest.TestCase):
             self.assertEqual(client.progress.call_count, 2)
             return {"report": {"status": "ok"}}
 
+        def install(*_args):
+            self.assertEqual(client.progress.call_count, 0)
+            journal_installed.append(True)
+
+        clock = [0.0]
+        def advance(seconds):
+            clock[0] += seconds
         with mock.patch.object(execution, "execute", side_effect=execute), \
              mock.patch.object(entry, "deliver_receipt", return_value=True), \
-             mock.patch.object(entry.time, "sleep") as pause:
+             mock.patch("hey_my_buddy.protocol.process_identity.install_native_process_journal",
+                        side_effect=install) as journal, \
+             mock.patch.object(entry.time, "monotonic", side_effect=lambda: clock[0]), \
+             mock.patch.object(entry.time, "sleep", side_effect=advance) as pause:
             execution.run()
+        journal.assert_called_once()
         pause.assert_called_once_with(0.25)
+
+    def test_identity_refusal_prevents_native_work_after_empty_journal(self):
+        for code in ("INVALID_ARGUMENT", "CONFLICT"):
+            with self.subTest(code=code):
+                client = mock.Mock()
+                client.progress.side_effect = BoardError(code, "identity refused")
+                execution = entry.Execution(CLAIM, self.state, "n" * 64, client=client)
+                execution._identity_pending = {"pid": 301}
+                with mock.patch.object(execution, "execute") as native, \
+                     mock.patch("hey_my_buddy.protocol.process_identity.install_native_process_journal") as journal:
+                    with self.assertRaises(BoardError) as caught:
+                        execution.run()
+                self.assertEqual(caught.exception.code, code)
+                native.assert_not_called()
+                journal.assert_called_once()
+
+    def test_journal_failure_prevents_identity_acknowledgement_and_native_work(self):
+        client = mock.Mock()
+        execution = entry.Execution(CLAIM, self.state, "n" * 64, client=client)
+        execution._identity_pending = {"pid": 301}
+        with mock.patch.object(execution, "execute") as native, \
+             mock.patch("hey_my_buddy.protocol.process_identity.install_native_process_journal",
+                        side_effect=OSError("journal is unavailable")):
+            with self.assertRaises(OSError):
+                execution.run()
+        client.progress.assert_not_called()
+        native.assert_not_called()
+
+    def test_identity_acknowledgement_uses_bounded_backoff_while_service_is_offline(self):
+        client = mock.Mock()
+        client.progress.side_effect = [BoardError("SERVICE_UNAVAILABLE", "offline"),
+                                       BoardError("SERVICE_UNAVAILABLE", "offline"), {}]
+        execution = entry.Execution(CLAIM, self.state, "n" * 64, client=client)
+        execution._identity_pending = {"pid": 301}
+        clock = [0.0]
+        def advance(seconds):
+            clock[0] += seconds
+        with mock.patch.object(execution, "execute", return_value={"report": {}}), \
+             mock.patch.object(entry, "deliver_receipt", return_value=True), \
+             mock.patch("hey_my_buddy.protocol.process_identity.install_native_process_journal"), \
+             mock.patch.object(entry.time, "monotonic", side_effect=lambda: clock[0]), \
+             mock.patch.object(entry.time, "sleep", side_effect=advance) as pause:
+            execution.run()
+        self.assertEqual([call.args[0] for call in pause.call_args_list], [0.25, 0.5])
+
+    def test_fatal_hint_refusal_ends_receipt_delivery_with_durable_receipt(self):
+        receipt = {"attemptId": "attempt-1", "taskId": "task-1", "generation": 1,
+                   "commandId": "result:attempt-1", "report": {"status": "ok"},
+                   "createdAt": "2026-10-16T00:00:00+00:00"}
+        from hey_my_buddy.buddy.runtime.receipts import write_receipt
+        write_receipt(self.execution.directory, receipt)
+        with self.assertRaises(BoardError) as caught:
+            deliver_receipt(mock.Mock(), receipt, self.execution.directory, nonce="n" * 64,
+                            flush_hints=lambda: (_ for _ in ()).throw(BoardError("CONFLICT", "wrong attempt")))
+        self.assertEqual(caught.exception.code, "CONFLICT")
+        self.assertEqual(read_execution_receipt(self.execution.directory), receipt)
+
+    def test_actual_codex_native_session_survives_execution_receipt(self):
+        # The retired worker_sessions test exercised this real native fixture;
+        # the execution receipt is now the boundary that must retain its facts.
+        from buddy.harnesses.codex.test_codex import CodexAdapterTests
+        fixture = CodexAdapterTests(
+            "test_completed_native_turn_has_structured_provenance_and_preserved_final_activity")
+        fixture.setUp()
+        try:
+            with mock.patch.dict(os.environ, fixture.environment):
+                outcome = fixture.execute(fixture.context())
+            self.assertTrue(outcome.shutdown_confirmed)
+            claim = {"task": {"taskId": "micro-task-1", "spec": {"adapter": "codex"}},
+                     "attempt": {"taskId": "micro-task-1", "attemptId": "attempt-1", "generation": 1}}
+            execution = entry.Execution(claim, self.state, "n" * 64, client=mock.Mock())
+            execution.directory.mkdir(parents=True, mode=0o700)
+            receipt = execution.receipt(claim, {"status": outcome.status,
+                "result": outcome.result, "shutdownConfirmed": outcome.shutdown_confirmed},
+                execution.directory)
+            saved = read_execution_receipt(execution.directory, binding={
+                "taskId": "micro-task-1", "attemptId": "attempt-1", "generation": 1})
+            self.assertEqual(saved, receipt)
+            session = saved["report"]["result"]["nativeSession"]
+            self.assertEqual(session["storageScope"], "harness-user-store")
+            self.assertEqual(session["storageOwner"], "harness-user-store")
+            self.assertEqual(saved["report"]["result"]["nativeCheckpoint"]["attemptId"], "attempt-1")
+            self.assertEqual(saved["report"]["result"]["turn"]["taskId"], "micro-task-1")
+        finally:
+            fixture.doCleanups()
+
+    def test_offline_hints_back_off_and_keep_only_the_latest_value(self):
+        client = self.execution.client
+        client.progress.side_effect = [BoardError('SERVICE_UNAVAILABLE', 'offline'), None]
+        self.execution.hint(waitingReason='first')
+        with mock.patch.object(entry.time, 'monotonic', return_value=10.0):
+            self.assertFalse(self.execution.flush_hints())
+        self.execution.hint(waitingReason='latest')
+        with mock.patch.object(entry.time, 'monotonic', return_value=10.1):
+            self.assertFalse(self.execution.flush_hints())
+            self.assertEqual(client.progress.call_count, 1)
+        with mock.patch.object(entry.time, 'monotonic', return_value=10.25):
+            self.assertTrue(self.execution.flush_hints())
+        self.assertEqual(client.progress.call_count, 2)
+        self.assertEqual(client.progress.call_args.kwargs['data'], {'waitingReason': 'latest'})
+        self.assertEqual(self.execution._hints, {})

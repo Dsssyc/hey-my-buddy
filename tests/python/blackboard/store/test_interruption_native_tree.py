@@ -3,19 +3,19 @@ from pathlib import Path
 from support import BoardTestCase
 from unittest.mock import patch
 
-from blackboard.store.test_interruption_recovery import InterruptionRecoveryTests, IDENTITY
+from blackboard.store import test_interruption_recovery as recovery_fixture
 from hey_my_buddy.protocol import process_identity as processes
 from hey_my_buddy.protocol.execution import fsync_json
 
 
 class NativeTreeTests(BoardTestCase):
-    claimed = InterruptionRecoveryTests.claimed
-    journal = staticmethod(InterruptionRecoveryTests.journal)
+    claimed = recovery_fixture.InterruptionRecoveryTests.claimed
+    journal = staticmethod(recovery_fixture.InterruptionRecoveryTests.journal)
     def test_pending_spawn_stays_unconfirmed_but_recorded_native_processes_are_stopped(self):
         board, client, task, _, actor = self.claimed()
         journal = self.journal(board, actor['attemptId'])
         fsync_json(Path(journal['path']), {'binding': journal['binding'], 'pending': ['a' * 32],
-                                          'identities': [{**IDENTITY, 'pid': 456, 'processGroupId': 456}]})
+                                          'identities': [{**recovery_fixture.IDENTITY, 'pid': 456, 'processGroupId': 456}]})
         with patch.object(processes, 'inspect_process_identity', return_value='identity-absent'), \
                 patch.object(processes, 'stop_orphan_process', return_value='orphan-stopped') as stop:
             board.store.recover_executions()
@@ -26,7 +26,7 @@ class NativeTreeTests(BoardTestCase):
         board, client, task, _, actor = self.claimed()
         journal = self.journal(board, actor['attemptId'])
         fsync_json(Path(journal['path']), {'binding': journal['binding'], 'pending': [],
-                                          'identities': [{**IDENTITY, 'pid': 456, 'processGroupId': 456}]})
+                                          'identities': [{**recovery_fixture.IDENTITY, 'pid': 456, 'processGroupId': 456}]})
         with patch.object(processes, 'inspect_process_identity', return_value='identity-absent'), \
                 patch.object(processes, 'stop_orphan_process', return_value='orphan-stopped'):
             board.store.recover_executions()

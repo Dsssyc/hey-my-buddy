@@ -200,7 +200,7 @@ class SweepTests(unittest.TestCase):
         (outsider / "keep").write_text("untouched")
         symlink = self.directory / "hey-my-buddy-checks-link"
         symlink.symlink_to(outsider, target_is_directory=True)
-        lock = dirty / "supervisor.lock"
+        lock = dirty / "control-daemon.lock"
         lock.write_text("")
         # The drain keeps its existing behavior; a surviving owner is still residue.
         with (patch.object(checks, "request_cooperative_stop", return_value=[]),

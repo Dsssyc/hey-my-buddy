@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import os
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 from support import BoardTestCase
 from hey_my_buddy.blackboard.service.daemon import Daemon
@@ -21,3 +21,19 @@ class DaemonAdmissionTests(BoardTestCase):
             daemon = Daemon(self.directory / "state")
         launch.assert_not_called()
         self.assertFalse(hasattr(daemon, "_sweeper"))
+
+    def test_zero_drain_delivers_connected_stops_before_observers_exit(self):
+        daemon = Daemon(self.directory / "state")
+        daemon.directory.mkdir(parents=True)
+        order = []
+        daemon.scheduler = Mock()
+        daemon.scheduler.send_pending_stops.side_effect = lambda: order.append("sent")
+        daemon.store.workflow.cancel_for_service_stop = Mock(return_value=(
+            {"queued": 0, "active": 0}, set()))
+        with patch.object(daemon, "cancel_queued", return_value=0), patch.object(
+            daemon, "cancel_active", return_value=0), patch.object(
+            daemon, "drain", side_effect=lambda _seconds: order.append("drain") or []):
+            reply = daemon.on_stop({"drainSeconds": 0})
+        self.assertEqual(order, ["sent", "drain"])
+        self.assertTrue(reply["stopped"])
+        self.assertTrue(daemon.stopping.is_set())

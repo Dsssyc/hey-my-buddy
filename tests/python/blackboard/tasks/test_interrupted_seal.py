@@ -121,13 +121,40 @@ class InterruptedSealTests(RealWorkspaceTestCase):
         self.assertEqual(tuple(attempt), ("finished", 1))
         self.assertEqual(board.store.resource_claims(), [])
 
+    def test_late_native_stop_preserves_the_first_result_and_pins_partial_output(self):
+        board, submitted, claim, checkout = self.claimed()
+        attempt_id = claim['attempt']['attemptId']
+        (checkout / 'tracked.txt').write_text('preserved after the late stop proof\n')
+        with board.store.db.read() as db:
+            attempt = dict(board.store._attempt_row(db, attempt_id))
+        journal = processes.native_process_journal_path(
+            attempt_root(board.directory, attempt['adapter'], attempt['task_id'], attempt_id), IDENTITY)
+        journal.unlink()
+        self.assertEqual(self.recover(board)['interrupted'], 1)
+        with board.store.db.read() as db:
+            original = json.loads(board.store._attempt_row(db, attempt_id)['result_json'])
+        self.assertFalse(original['shutdownConfirmed'])
+        processes.NativeProcessJournal(journal, {'taskId': attempt['task_id'], 'attemptId': attempt_id,
+                                                  'generation': attempt['generation']})
+        self.assertEqual(self.recover(board)['interrupted'], 1)
+        with board.store.db.read() as db:
+            final = json.loads(board.store._attempt_row(db, attempt_id)['result_json'])
+            partial = db.execute("SELECT manifest_json FROM workflow_artifacts WHERE attempt_id=? AND kind='partial-output'",
+                                 (attempt_id,)).fetchall()
+        self.assertEqual(final, {**original, 'shutdownConfirmed': True})
+        self.assertEqual(len(partial), 1)
+        self.assertEqual(json.loads(partial[0][0])['attemptId'], attempt_id)
+        self.assertEqual(board.store.resource_claims(), [])
+        with patch.object(interruption.processes, 'inspect_process_identity', return_value='identity-absent'):
+            self.assertEqual(board.store.recover_executions(), [])
+
 
 class CommandJournalTests(BoardTestCase):
     def test_stopped_command_controller_waits_for_its_recorded_child(self):
         native = {**IDENTITY, "pid": 124, "startedAt": 123260000,
                   "processGroupId": 124}
         attempt = {"adapter": "command", "model_harness": None, "task_id": "task-command",
-                   "attempt_id": "attempt-command", "generation": 1}
+                   "attempt_id": "attempt-command", "generation": 1, "identity_confirmed_at": "acknowledged"}
         board = SimpleNamespace(directory=self.directory)
         binding = {"taskId": attempt["task_id"], "attemptId": attempt["attempt_id"],
                    "generation": attempt["generation"]}

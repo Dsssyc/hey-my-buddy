@@ -665,3 +665,17 @@ class ProcessInventoryServiceTests(BoardTestCase):
         # Every simulated process stays observable, including the near misses.
         self.assertEqual(len(commands), 10)
         self.assertIn(f'/usr/bin/python3 -m buddy.daemonization --state-dir {foreign}', commands)
+
+    def test_execution_startup_path_with_spaces_identifies_its_board(self):
+        state = self.directory / 'observed board'
+        state.mkdir()
+        foreign = self.directory / 'another execution-start.json board'
+        foreign.mkdir()
+        listing = (f' 104 /usr/bin/python3 -m hey_my_buddy.buddy.runtime.execution '
+                   f'--startup {foreign}/harnesses/dsh/micro-tasks/t/attempts/a/execution-start.json')
+        with mock.patch('hey_my_buddy.blackboard.tasks.storage.subprocess.check_output', return_value=listing), \
+                mock.patch('hey_my_buddy.blackboard.tasks.storage.subprocess.run',
+                           side_effect=AssertionError('open-file inspection was reached')):
+            orphans, _, known = storage.process_inventory(state)
+        self.assertTrue(known)
+        self.assertEqual(orphans[0]['stateDir'], str(foreign))

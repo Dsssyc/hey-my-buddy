@@ -419,11 +419,14 @@ class CTwoLiveEndpoint:
         self._identity = identity
         self._capabilities = capabilities
         self._contract = contract
-        self._name = check_text(name if name is not None else random_person_name(),
-                                "name", maximum=128)
-        self._instance_id = _secret(instance_id if instance_id is not None else secrets.token_hex(32),
-                                    "instanceId")
-        self._token = _secret(token if token is not None else secrets.token_hex(32), "token")
+        if contract is None:
+            self._name = self._instance_id = self._token = None
+        else:
+            self._name = check_text(name if name is not None else random_person_name(),
+                                    "name", maximum=128)
+            self._instance_id = _secret(instance_id if instance_id is not None else secrets.token_hex(32),
+                                        "instanceId")
+            self._token = _secret(token if token is not None else secrets.token_hex(32), "token")
         self._lock = threading.RLock()
         self._queue: queue.Queue[tuple[LiveRequest, _PendingRequest]] = \
             queue.Queue(maxsize=MAX_PENDING_LIVE_REQUESTS)
@@ -461,7 +464,7 @@ class CTwoLiveEndpoint:
         return self._identity
 
     @property
-    def instance_id(self) -> str:
+    def instance_id(self) -> str | None:
         """The endpoint's instance id; a display-safe fact, never the token."""
         return self._instance_id
 
@@ -685,8 +688,9 @@ class CTwoLiveEndpoint:
         if self._stopped:
             return
         self.close(reason="endpoint-stopped")
-        cc.unregister(self._name)
-        cc.shutdown()
+        if self._contract is not None:
+            cc.unregister(self._name)
+            cc.shutdown()
         self._stopped = True
 
     # -- the three named CRM operations --------------------------------------
@@ -696,6 +700,10 @@ class CTwoLiveEndpoint:
         frame, refusal = self._authenticate_frame(request_json, LiveWireQuery)
         if refusal is not None:
             raise fail("the live capabilities call was refused", reason=refusal)
+        return self.capabilities_local()
+
+    def capabilities_local(self) -> str:
+        """Read the already selected adapter's declaration inside this process."""
         return canonical_json(self._capabilities.to_payload())
 
     def request(self, request_json: str) -> str:
@@ -714,13 +722,23 @@ class CTwoLiveEndpoint:
         frame, refusal = self._authenticate_frame(request_json, LiveWireRequest)
         if refusal is not None or frame is None:
             return self._refusal_reply(refusal or "frame-invalid")
-        deadline = min(started + frame.timeout_ms / 1000.0, frame.deadline_monotonic)
-        question_id = frame.payload.question_id
-        digest = _request_digest(frame)
+        request = LiveRequest(identity=frame.identity, request_id=frame.request_id,
+                              kind=frame.kind, payload=frame.payload)
+        return self.request_local(request, timeout_ms=frame.timeout_ms,
+                                  deadline_monotonic=frame.deadline_monotonic,
+                                  started=started)
+
+    def request_local(self, request: LiveRequest, *, timeout_ms: int,
+                      deadline_monotonic: float, started: float | None = None) -> str:
+        """Admit a request after its only wire authentication at ExecutionLive."""
+        deadline = min((started if started is not None else time.monotonic()) + timeout_ms / 1000.0,
+                       deadline_monotonic)
+        question_id = request.payload.question_id
+        digest = _request_digest(request)
         with self._lock:
             if self._closed_reason is not None:
                 return self._refusal_reply("channel-closed")
-            pending = self._pending.get(frame.request_id)
+            pending = self._pending.get(request.request_id)
             if pending is not None:
                 # The same request id is already in flight: a changed payload
                 # conflicts now, an identical one joins the same delivery.
@@ -728,7 +746,7 @@ class CTwoLiveEndpoint:
                     return self._refusal_reply("request-payload-conflict")
                 slot = pending
             else:
-                bound_question = self._requests.get(frame.request_id)
+                bound_question = self._requests.get(request.request_id)
                 if bound_question is not None:
                     # A committed request id is bound over its whole payload: an
                     # identical replay answers from the bound question's own
@@ -752,7 +770,7 @@ class CTwoLiveEndpoint:
                         if len(self._requests) + len(self._pending) >= MAX_INQUIRIES_PER_RUN:
                             return self._refusal_reply("request-limit")
                         slot = other
-                        self._pending[frame.request_id] = slot
+                        self._pending[request.request_id] = slot
                         break
                 if slot is None:
                     admitted_digest = self._admitted.get(question_id)
@@ -765,7 +783,7 @@ class CTwoLiveEndpoint:
                             return self._refusal_reply("question-payload-conflict")
                         if len(self._requests) + len(self._pending) >= MAX_INQUIRIES_PER_RUN:
                             return self._refusal_reply("request-limit")
-                        self._requests[frame.request_id] = question_id
+                        self._requests[request.request_id] = question_id
                         entry = self._question_entry(question_id)
                         if entry is None:  # pragma: no cover - a settled commit publishes first
                             return self._refusal_reply("question-state-unknown")
@@ -785,11 +803,10 @@ class CTwoLiveEndpoint:
                         # envelope beside its slot: the owner loop never holds
                         # the token this frame authenticated with.
                         self._queue.put_nowait(
-                            (LiveRequest(identity=frame.identity, request_id=frame.request_id,
-                                         kind=frame.kind, payload=frame.payload), slot))
+                            (request, slot))
                     except queue.Full:
                         return self._refusal_reply("queue-full")
-                    self._pending[frame.request_id] = slot
+                    self._pending[request.request_id] = slot
         if not slot.done.wait(timeout=max(0.0, deadline - time.monotonic())):
             with self._lock:
                 if slot.reply is None:
@@ -810,12 +827,18 @@ class CTwoLiveEndpoint:
             return canonical_json(LiveSnapshot(unavailable=refusal or "frame-invalid",
                                                observed=False,
                                                reason=refusal or "frame-invalid").to_payload())
+        return self.observe_local(after_seq=frame.after_seq, limit=frame.limit,
+                                  fields=frame.fields, inquiry_id=frame.inquiry_id)
+
+    def observe_local(self, *, after_seq=None, limit=None, fields=None,
+                      inquiry_id=None) -> str:
+        """Read local published facts after the outer endpoint authenticated once."""
         with self._lock:
             unavailable: list[str] = []
             if self._closed_reason is not None:
                 unavailable.append("channel-closed")
-            if frame.inquiry_id is not None:
-                entry = self._question_entry(frame.inquiry_id)
+            if inquiry_id is not None:
+                entry = self._question_entry(inquiry_id)
                 if entry is None:
                     return canonical_json(LiveSnapshot(
                         unavailable="+".join(unavailable) or None, observed=True).to_payload())
@@ -824,11 +847,11 @@ class CTwoLiveEndpoint:
                 if _frame_fits(snapshot):
                     return canonical_json(snapshot.to_payload())
                 return _oversized_snapshot_reply()
-            if frame.limit is None:
+            if limit is None:
                 return canonical_json(LiveSnapshot(
                     unavailable="frame-invalid", observed=False,
                     reason="frame-invalid").to_payload())
-            selected = frozenset(frame.fields) if frame.fields else frozenset(LIVE_FIELDS)
+            selected = frozenset(fields) if fields else frozenset(LIVE_FIELDS)
             activity = self._activity if "activity" in selected else None
             journal = self._journal if "inquiries" in selected else None
             if "observation" in selected:
@@ -849,9 +872,9 @@ class CTwoLiveEndpoint:
             overflow = False
             if "inquiries" in selected:
                 matching = [entry for entry in self._entries
-                            if frame.after_seq is None or entry.seq > frame.after_seq]
+                            if after_seq is None or entry.seq > after_seq]
                 for entry in matching:
-                    if len(page) >= frame.limit:
+                    if len(page) >= limit:
                         break
                     if not _frame_fits(LiveSnapshot(
                             activity=activity, inquiries=tuple(page + [entry]),
@@ -881,6 +904,8 @@ class CTwoLiveEndpoint:
         reason code the caller reports — the narrow token itself never appears
         in any refusal.
         """
+        if self._contract is None:
+            return None, "endpoint-not-registered"
         return authenticate_live_frame(request_json, model, identity=self._identity,
                                        instance_id=self._instance_id, token=self._token)
 

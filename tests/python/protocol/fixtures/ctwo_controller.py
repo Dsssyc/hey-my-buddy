@@ -128,10 +128,10 @@ def native(root):
 class OneSlowCallEndpoint(CTwoLiveEndpoint):
     """Exercise native SDK per-call expiry without a second transport."""
 
-    def observe(self, request_json):
-        if json.loads(request_json).get("afterSeq") == 999:
+    def observe_local(self, **arguments):
+        if arguments.get("after_seq") == 999:
             time.sleep(0.2)
-        return super().observe(request_json)
+        return super().observe_local(**arguments)
 
 
 def simulated_run(module, request, *, services, **options):

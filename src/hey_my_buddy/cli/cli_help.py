@@ -84,8 +84,6 @@ SUMMARIES: dict[str, str] = {
     "messages": "List retained messages for one task, or across tasks.",
     "message-get": "Read one inquiry and its recorded answer without resubmitting the question.",
     "message-update": "Record caller-provided delivery or answer evidence for an inquiry.",
-    "execution-progress": "Append one bounded progress event to an active execution.",
-    "execution-result": "Commit an execution result, artifacts, state and completion event in one transaction.",
     "wait-capacity": "Wait admission counters.",
     "console": "Open, observe or close the private console; browser and wait are CLI-local.",
     "console-snapshot": "Read the bounded routing and configuration snapshot without a browser session.",

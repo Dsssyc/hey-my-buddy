@@ -19,8 +19,13 @@ def admit_board(board, params):
 
 def run_next(client, nonce='test-execution-nonce-000000000000'):
     from hey_my_buddy.buddy.runtime.execution import Execution
+    from hey_my_buddy.protocol import process_identity
+    from unittest.mock import patch
     claim = admit_execution(client, nonce)['claim']
     if claim is None:
         return 'idle'
-    Execution(claim, client.state_dir, nonce, client=client).run()
+    # Production has one journal per execution process. This in-process fixture
+    # gives each simulated process that same isolated module lifetime.
+    with patch.object(process_identity, '_active_native_journal', None):
+        Execution(claim, client.state_dir, nonce, client=client).run()
     return 'ran'

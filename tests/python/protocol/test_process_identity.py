@@ -16,6 +16,9 @@ from hey_my_buddy.protocol import process_identity as identity
 
 RECORD = {"bootId": "linux:00000000-0000-4000-8000-000000000001", "pid": 301,
           "startedAt": 105, "processGroupId": 301, "jobName": None}
+WINDOWS_RECORD = {**RECORD, "bootId": "windows:00000000-0000-4000-8000-000000000001",
+                  "processGroupId": None,
+                  "jobName": "Local\\HeyMyBuddy-00000000-0000-4000-8000-000000000003"}
 
 
 class Source:
@@ -23,6 +26,7 @@ class Source:
         self.boot = RECORD["bootId"]
         self.start = 105
         self.group = True
+        self.job = [301]
         self.signals = []
 
     def boot_id(self):
@@ -41,6 +45,14 @@ class Source:
         self.signals.append((pgid, sig))
         self.start = None
         self.group = False
+
+    def job_members(self, name):
+        return self.job
+
+    def stop_job(self, name):
+        self.signals.append(("job", name))
+        self.job = []
+        self.start = None
 
 
 class ProcessIdentityTests(unittest.TestCase):
@@ -78,6 +90,37 @@ class ProcessIdentityTests(unittest.TestCase):
         with mock.patch.object(source, "group_alive", side_effect=PermissionError):
             self.assertEqual(identity.stop_orphan_process(RECORD, source=source), "unknown")
         self.assertEqual(source.signals, [])
+
+    def test_windows_job_presence_absence_and_reverified_stop(self):
+        source = Source()
+        source.boot = WINDOWS_RECORD["bootId"]
+        self.assertEqual(identity.stop_orphan_process(WINDOWS_RECORD, source=source), "orphan-stopped")
+        self.assertEqual(source.signals, [("job", WINDOWS_RECORD["jobName"])])
+        source.job = None
+        self.assertEqual(identity.inspect_process_identity(WINDOWS_RECORD, source=source), "identity-absent")
+
+    def test_empty_windows_job_waits_for_original_root_exit(self):
+        source = Source()
+        source.boot = WINDOWS_RECORD["bootId"]
+        source.job = []
+        self.assertEqual(identity.inspect_process_identity(WINDOWS_RECORD, source=source), "unknown")
+        source.start = None
+        self.assertEqual(identity.inspect_process_identity(WINDOWS_RECORD, source=source), "identity-absent")
+        source.start = 220
+        self.assertEqual(identity.inspect_process_identity(WINDOWS_RECORD, source=source), "identity-absent")
+
+    def test_windows_system_source_reopens_named_job_for_query_and_stop(self):
+        from hey_my_buddy.protocol import windows_process
+
+        api = mock.Mock()
+        api.open_job.return_value = 77
+        api.process_ids.return_value = [301, 302]
+        with mock.patch.object(windows_process, "WindowsAPI", return_value=api):
+            source = identity._SystemSource()
+            self.assertEqual(source.job_members(WINDOWS_RECORD["jobName"]), [301, 302])
+            source.stop_job(WINDOWS_RECORD["jobName"])
+        self.assertEqual(api.terminate.call_args.args, (77,))
+        self.assertEqual(api.close.call_count, 2)
 
     @unittest.skipIf(os.name == "nt", "POSIX process group test")
     def test_real_owned_process_identity_and_orphan_stop(self):

@@ -18,7 +18,7 @@ import uuid
 LAUNCH_KEYS = {'HMB_MAX_CONCURRENT': (1, 32), 'HMB_WAIT_CAPACITY': (1, 1024)}
 HOST_INTERNAL_KEYS = frozenset({
     'HMB_RUNTIME', 'HMB_RUNTIME_IDENTITY',
-    'HMB_SUPERVISOR_START_ID', 'HMB_TASK_ID', 'HMB_ATTEMPT_ID', 'HMB_HARNESS_RECORD_FILE',
+    'HMB_TASK_ID', 'HMB_ATTEMPT_ID', 'HMB_HARNESS_RECORD_FILE',
 })
 
 #: The environment a long-lived hey-my-buddy service process may inherit. The daemon, an
@@ -340,7 +340,11 @@ def main(argv: list[str] | None = None) -> int:
         if scoped_state is not None:
             os.environ['HMB_STATE_DIR'] = str(scoped_state)
         if args and args[0] not in {'upgrade','install','backup-preflight','--help','-h'}:
-            if (state / 'upgrade.json').exists():
+            marker = state / 'upgrade.json'
+            if marker.exists() and json.loads(marker.read_text()).get('phase') == 'verified':
+                from .upgrade import upgrade
+                upgrade({})
+            if marker.exists():
                 from hey_my_buddy.errors import BoardError
                 raise BoardError('UPGRADE_IN_PROGRESS', 'Upgrade verification or recovery is in progress; retry the same command and identity after it finishes')
             target = selected_runtime(state)

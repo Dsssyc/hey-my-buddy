@@ -84,8 +84,6 @@ METHODS = [
     "messages",
     "message-get",
     "message-update",
-    "execution-progress",
-    "execution-result",
     "wait-capacity",
     "console",
     "console-snapshot",

@@ -34,14 +34,13 @@ from ...protocol import execution as execution_protocol
 from ...protocol.contracts import ExecutionLive
 from ...protocol.run_identity import RunIdentity
 from ...json_codec import canonical_json, decode_strict_json
-from ...protocol.stop import WRAP_UP_INITIATORS
-from ...blackboard.store.db import TERMINATION_REASONS
+from ...protocol.stop import WRAP_UP_INITIATORS, TERMINATION_REASONS
 from ..harnesses.registry import ExecutionContext
 from ..harnesses.c_two_live import (CTwoLiveEndpoint, LiveEndpointDescriptor,
-    LiveWireQuery, random_person_name)
+    _observe_arguments, _timeout_ms, random_person_name)
 from ..harnesses.live import LiveReply, LiveRequest, LiveSnapshot
 from ..roles import controller as role_seam
-from .receipts import read_receipt, write_receipt, deliver_receipt, receipt_directory
+from .receipts import read_receipt, write_receipt, deliver_receipt, receipt_directory, RETRYABLE
 
 fsync_json = execution_protocol.fsync_json
 BUDGET = execution_protocol.BUDGET
@@ -164,31 +163,34 @@ class _ExecutionLive:
 
     def send(self, request_json: str) -> str:
         value = self._auth(request_json, {"request", "timeoutMs", "deadlineMonotonic"})
-        with self._lock:
-            native = self._native
-        if native is None:
-            return canonical_json(LiveReply(status="unavailable", reason_code="source-unavailable").to_payload())
         request = LiveRequest.from_payload(value["request"])
         if request.identity != self.identity:
             return canonical_json(LiveReply(status="unavailable",
                                             reason_code="identity-mismatch").to_payload())
-        request = {**request.to_payload(), "identity": native.identity.to_payload(),
-                   "instanceId": native.instance_id, "token": native._token,
-                   "timeoutMs": value["timeoutMs"],
-                   "deadlineMonotonic": value["deadlineMonotonic"]}
-        return native.request(canonical_json(request))
+        timeout_ms = _timeout_ms(value["timeoutMs"], "timeoutMs")
+        deadline = value["deadlineMonotonic"]
+        if type(deadline) not in (int, float) or not math.isfinite(deadline) or deadline < 0:
+            raise BoardError("INVALID_ARGUMENT", "Invalid live request deadline")
+        with self._lock:
+            native = self._native
+        if native is None:
+            return canonical_json(LiveReply(status="unavailable", reason_code="source-unavailable").to_payload())
+        # The wire names the execution; the current run owns its own invocation
+        # identity. Select it locally after the one outer authentication.
+        local_request = request.model_copy(update={"identity": native.identity})
+        return native.request_local(local_request, timeout_ms=timeout_ms,
+                                    deadline_monotonic=deadline)
 
     def observe(self, request_json: str) -> str:
         value = self._auth(request_json, {"afterSeq", "limit", "fields", "inquiryId"})
+        arguments = _observe_arguments(value["afterSeq"], value["limit"],
+                                       value["fields"], value["inquiryId"])
         with self._lock:
             native = self._native
         if native is None:
             return canonical_json(LiveSnapshot(unavailable="source-unavailable", observed=False,
                                                reason="source-unavailable").to_payload())
-        frame = {"identity": native.identity.to_payload(),
-                 "instanceId": native.instance_id, "token": native._token,
-                 **{key: value[key] for key in ("afterSeq", "limit", "fields", "inquiryId")}}
-        return native.observe(canonical_json(frame))
+        return native.observe_local(**arguments)
 
     def capabilities(self, request_json: str) -> str:
         self._auth(request_json, set())
@@ -196,9 +198,7 @@ class _ExecutionLive:
             native = self._native
         if native is None:
             raise BoardError("LIVE_UNAVAILABLE", "No active native run")
-        frame = LiveWireQuery(identity=native.identity, instance_id=native.instance_id,
-                              token=native._token)
-        return native.capabilities(canonical_json(frame.to_payload()))
+        return native.capabilities_local()
 
     def close(self, request_json: str) -> str:
         self._auth(request_json, {"reason"})
@@ -236,6 +236,8 @@ class Execution:
         self._hint_lock = threading.Lock()
         self._flush_lock = threading.Lock()
         self._identity_pending: dict | None = None
+        self._next_hint_at = 0.0
+        self._hint_delay = 0.25
         self.directory = receipt_directory(self.state_dir, private_adapter(claim),
                                            claim["task"]["taskId"], claim["attempt"]["attemptId"])
         self.evidence_directory = (self.state_dir / "attempts" / claim["task"]["taskId"] /
@@ -255,37 +257,61 @@ class Execution:
         with self._hint_lock:
             self._hints.update(data)
 
-    def flush_hints(self):
+    def flush_hints(self) -> bool:
         with self._flush_lock:
             with self._hint_lock:
                 pending = dict(self._hints)
             if not pending and self._identity_pending is None:
-                return
+                return True
+            if time.monotonic() < self._next_hint_at:
+                return False
             attempt = self.claim["attempt"]
             try:
                 self.client.progress(attempt["attemptId"], attempt["generation"],
                                      self.nonce, process_identity=self._identity_pending,
-                                     phase="running" if self._identity_pending else None,
+                                     phase="executing" if self._identity_pending else None,
                                      data=pending or None)
-            except Exception:
-                return
+            except BoardError as error:
+                if error.code in RETRYABLE:
+                    self._next_hint_at = time.monotonic() + self._hint_delay
+                    self._hint_delay = min(10.0, self._hint_delay * 2)
+                    return False
+                raise
+            self._next_hint_at = 0.0
+            self._hint_delay = 0.25
             with self._hint_lock:
                 self._identity_pending = None
                 for key, value in pending.items():
                     if self._hints.get(key) == value:
                         self._hints.pop(key)
+            return True
 
     def run(self):
-        # The first progress binds this process to the attempt before it may
-        # create a separately owned native child. An offline service can accept
-        # that identity after restart; an unverified launch never starts work.
+        # The durable empty journal precedes the identity acknowledgement:
+        # any acknowledged execution therefore has a native-spawn record to
+        # inspect after a crash. Native work still waits for the acknowledgement.
+        from ...protocol.process_identity import install_native_process_journal, native_process_journal_path
+        from ...private_dirs import ensure_private_dir
+        ensure_private_dir(self.directory)
+        binding = {"taskId": self.claim["task"]["taskId"],
+                   "attemptId": self.claim["attempt"]["attemptId"],
+                   "generation": self.claim["attempt"]["generation"]}
+        install_native_process_journal(native_process_journal_path(self.directory), binding)
+        delay = 0.25
         while self._identity_pending is not None:
-            self.flush_hints()
+            delivered = self.flush_hints()
             if self._identity_pending is not None:
-                time.sleep(0.25)
+                time.sleep(delay)
+                if not delivered:
+                    delay = min(10.0, delay * 2)
         receipt = self.execute()
+        self.control.raise_fatal()
         return deliver_receipt(self.client, receipt, self.directory, nonce=self.nonce, log=self.log,
-                               flush_hints=self.flush_hints)
+                               flush_hints=self._flush_delivery_hints)
+
+    def _flush_delivery_hints(self):
+        self.control.raise_fatal()
+        return self.flush_hints()
 
     def execute(self) -> dict:
         """Run one attempt and always return a durable receipt.
@@ -312,9 +338,11 @@ class Execution:
         try:
             return self._execute_guarded(claim, task, spec, attempt, directory, holder)
         except BaseException as error:  # noqa: BLE001 - every failure becomes a receipt
-            handle = holder.get("handle")
+            handle = holder.get("handle") or getattr(error, "execution_handle", None)
             implementation = holder.get("adapter")
-            shutdown_confirmed = holder.get("confirmed_stopped") is True
+            spawn_evidence = getattr(error, "owned_popen_evidence", None)
+            shutdown_confirmed = (holder.get("confirmed_stopped") is True or
+                                  getattr(spawn_evidence, "shutdown_confirmed", False) is True)
             if not shutdown_confirmed and handle is not None and implementation is not None:
                 try:
                     role_seam.worker_cancel(implementation, handle)
@@ -362,9 +390,9 @@ class Execution:
         review = name == 'decision' and (claim.get('decisionInput') or {}).get('routingMode', 'review') == 'review'
         if name == 'decision':
             name = (claim.get('decisionInput') or {}).get('buddy', {}).get('harness')
-        renewal = self.control
-        holder['preflightRenewal'] = renewal
-        renewal.start()
+        control = self.control
+        holder['preflightControl'] = control
+        control.start()
         try:
             if name not in HARNESSES:
                 return self._execute_selected(claim, task, spec, attempt, directory, holder)
@@ -375,8 +403,9 @@ class Execution:
                 def cancelled(view):
                     return self._preflight_cancelled(claim, directory, record, view)
                 while True:
-                    if renewal.cancel_view is not None or self.stop_requested():
-                        return cancelled(renewal.cancel_view)
+                    control.raise_fatal()
+                    if control.cancel_view is not None or self.stop_requested():
+                        return cancelled(control.cancel_view)
                     command_id = f"harness-{attempt['attemptId']}-{int(retry)}"
                     if unknown_reads:
                         command_id += f"-unknown-{unknown_reads}"
@@ -388,7 +417,7 @@ class Execution:
                         })
                     except BoardError as error:
                         if error.code == 'ATTEMPT_FINISHED':
-                            view = renewal.cancel_view
+                            view = control.cancel_view
                             if view is None:
                                 try:
                                     view = self.client.call('task_get', {'runId': attempt['taskId']})['task']
@@ -399,7 +428,7 @@ class Execution:
                         if error.code not in ('SERVICE_UNAVAILABLE', 'SERVICE_START_TIMEOUT'):
                             raise
                         # The request may already be committed: replay its exact identity.
-                        renewal.wait(min(PREFLIGHT_MAX_RETRY_SECONDS,
+                        control.wait(min(PREFLIGHT_MAX_RETRY_SECONDS,
                                          PREFLIGHT_RETRY_SECONDS * 2 ** min(unknown_reads, 4)))
                         continue
                     record = response['harness']
@@ -407,10 +436,10 @@ class Execution:
                                           and (record.get('lastProbe') or {}).get('status') != 'unknown'):
                         break
                     unknown_reads += 1
-                    renewal.wait(min(PREFLIGHT_MAX_RETRY_SECONDS,
+                    control.wait(min(PREFLIGHT_MAX_RETRY_SECONDS,
                                      PREFLIGHT_RETRY_SECONDS * 2 ** min(unknown_reads - 1, 4)))
-                if renewal.cancel_view is not None or self.stop_requested():
-                    return cancelled(renewal.cancel_view)
+                if control.cancel_view is not None or self.stop_requested():
+                    return cancelled(control.cancel_view)
                 history.append({'retry': retry, 'harness': record})
                 if record is None or not record.get('available'):
                     if not retry:
@@ -428,8 +457,8 @@ class Execution:
                         return self._execute_selected(claim, task, spec, attempt, directory, holder)
                 except (OSError, BoardError) as error:
                     if (isinstance(error, BoardError) and error.code == 'ATTEMPT_FINISHED'
-                            and (renewal.cancel_view is not None or self.stop_requested())):
-                        return cancelled(renewal.cancel_view)
+                            and (control.cancel_view is not None or self.stop_requested())):
+                        return cancelled(control.cancel_view)
                     # A start() error with no returned handle may still follow spawn.
                     # Retry only if start was never called or the previous child has
                     # independently produced complete stop proof.
@@ -445,9 +474,9 @@ class Execution:
                         raise
             raise AssertionError('unreachable harness retry')
         finally:
-            renewal.stop()
-            renewal.join()
-            holder.pop('preflightRenewal', None)
+            control.stop()
+            control.join()
+            holder.pop('preflightControl', None)
 
     def _preflight_cancelled(self, claim, directory, record, view):
         return self.receipt(claim, {'status': 'cancelled', 'result': {'harness': record} if record else None,
@@ -492,11 +521,12 @@ class Execution:
             agent_credential=claim.get("agentCredential") or None,
         )
         implementation = role_seam.worker_executor(spec["adapter"])
-        renewal = holder['preflightRenewal']
+        control = holder['preflightControl']
         preparation = role_seam.prepare_worker_run(implementation, context)
         unknown_reads = 0
         while preparation.error is not None and preparation.error.code == 'router-input-unknown':
-            self._wait_control_observation(claim, renewal, preparation.error.code, unknown_reads)
+            control.raise_fatal()
+            self._wait_control_observation(claim, control, preparation.error.code, unknown_reads)
             unknown_reads += 1
             preparation = role_seam.prepare_worker_run(implementation, context)
         if not preparation.available:
@@ -550,14 +580,16 @@ class Execution:
         # proof cannot cover this start(): it might spawn before raising a handle.
         holder.pop("confirmed_stopped", None)
         holder.pop("handle", None)
+        control.raise_fatal()
         holder["start_invoked"] = True
         handle = role_seam.worker_start(implementation, context)
         holder["handle"] = handle
         holder["started"] = True
-        renewal.attach(handle, implementation)
+        control.attach(handle, implementation)
         self.hint(waitingReason=None)
         timed_out = False
         while True:
+            control.raise_fatal()
             if handle.wait(timeout=0.25) is not None:
                 break
             if (handle.grace_deadline is not None and time.monotonic() >= handle.grace_deadline
@@ -580,7 +612,7 @@ class Execution:
                 if error.code != 'router-input-unknown':
                     raise
                 holder['confirmed_stopped'] = True
-                self._wait_control_observation(claim, renewal, error.code, unknown_reads)
+                self._wait_control_observation(claim, control, error.code, unknown_reads)
                 unknown_reads += 1
         holder["confirmed_stopped"] = outcome.shutdown_confirmed is True
         result = getattr(handle, "result", None)
@@ -632,11 +664,13 @@ class Execution:
         report["runtimeIdentity"] = context.runtime.get("identity")
         return self.receipt(claim, report, directory)
 
-    def _wait_control_observation(self, claim, renewal, reason, retry):
+    def _wait_control_observation(self, claim, control, reason, retry):
+        control.raise_fatal()
         attempt = claim['attempt']
         self.hint(waitingReason=reason)
-        renewal.wait(min(PREFLIGHT_MAX_RETRY_SECONDS, PREFLIGHT_RETRY_SECONDS * 2 ** min(retry, 4)))
-        if renewal.cancel_view is not None or self.stop_requested():
+        control.wait(min(PREFLIGHT_MAX_RETRY_SECONDS, PREFLIGHT_RETRY_SECONDS * 2 ** min(retry, 4)))
+        control.raise_fatal()
+        if control.cancel_view is not None or self.stop_requested():
             raise BoardError('ATTEMPT_FINISHED', 'Stop requested while waiting for a control observation')
 
     def _cleanup_attempt_credentials(self, claim: dict, spec: dict, task: dict, attempt: dict) -> None:
@@ -688,6 +722,11 @@ class _ExecutionControl(threading.Thread):
         self.requests = 0
         self.applied = 0
         self._activity = None
+        self.fatal: BaseException | None = None
+
+    def raise_fatal(self):
+        if self.fatal is not None:
+            raise self.fatal
 
     def request_stop(self, initiator, deadline, *, force=False):
         # Signal handlers only update local facts; native cancellation runs on
@@ -711,6 +750,13 @@ class _ExecutionControl(threading.Thread):
         self._wake.wait(seconds)
 
     def run(self):
+        try:
+            self._run_control()
+        except BaseException as error:
+            self.fatal = error
+            self._wake.set()
+
+    def _run_control(self):
         while not self._done.is_set():
             with self._lock:
                 handle, implementation = self.handle, self.implementation
@@ -759,12 +805,7 @@ def main():
         interrupted(pending, None)
     _early_signals.clear()
     from ...private_dirs import ensure_private_dir
-    from ...protocol.process_identity import install_native_process_journal, native_process_journal_path
     root = ensure_private_dir(execution.directory)
-    binding = {"taskId": execution.claim["task"]["taskId"],
-               "attemptId": execution.claim["attempt"]["attemptId"],
-               "generation": execution.claim["attempt"]["generation"]}
-    install_native_process_journal(native_process_journal_path(root), binding)
     identity = execution_protocol.self_execution_process_identity(material.get("jobName"))
     from ..roles.run_execution import set_execution_live_server
     set_execution_live_server(execution.live)

@@ -204,16 +204,16 @@ class PrivateControllerDiscoveryTests(unittest.TestCase):
 
     def test_unregistered_controller_with_native_true_and_outer_unknown_keeps_role_unknown(self):
         error = ValueError('fixture handle registration failed')
-        with controller_log_close_failure(log=None, receipt=NATIVE_STOPPED) as state, \
+        with controller_log_close_failure(log=None, receipt=NATIVE_STOPPED, observation_blocked=True) as state, \
              patch.object(process_controller, 'ProcessHandle', side_effect=error):
-            with self.assertRaises(ValueError) as caught:
+            with self.assertRaises(RuntimeError) as caught:
                 self.discover()
-            self.assertIs(caught.exception, error)
-            self.assertTrue(error.owned_popen_evidence.created)
-            self.assertIs(error.owned_popen_evidence.shutdown_confirmed, False)
-            self.assertIs(error.discovery_shutdown_confirmed, False)
-            self.assertIsNone(state['process'].poll())
-            self.assertEqual(state['observations'], 0)
+            self.assertIs(caught.exception.__cause__, error)
+            self.assertTrue(caught.exception.owned_popen_evidence.created)
+            self.assertIs(caught.exception.owned_popen_evidence.shutdown_confirmed, False)
+            self.assertIs(caught.exception.discovery_shutdown_confirmed, False)
+            self.assertIsNotNone(state['process'].poll())
+            self.assertEqual(state['observations'], 1)
             self.assertEqual(len(list(self.root.glob('hey-my-buddy-codex-catalog-*'))), 1)
 
     def test_simulated_windows_creation_receipt_alone_never_confirms_native_stop(self):

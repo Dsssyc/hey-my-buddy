@@ -1,14 +1,24 @@
-"""Private installed daemon startup keeps the selected runtime environment."""
+"""Private daemon cutover preserves Host receipts and retriable waits."""
+from concurrent.futures import ThreadPoolExecutor
+from contextlib import closing
+import copy
 import importlib
 from importlib import metadata
 import json
 import os
 from pathlib import Path
 import shutil
+import sqlite3
 import subprocess
 import sys
+import threading
 import venv
-from support import BoardTestCase
+from unittest import mock
+from blackboard.tasks.test_workflow import WorkflowTestCase
+from hey_my_buddy.cli.blocking import await_run
+from hey_my_buddy.cli.main import _read_control, _scrub_and_save
+from hey_my_buddy.protocol.client import BoardClient
+from hey_my_buddy.protocol.transport import _call_service
 from hey_my_buddy.install import launcher, runtime, upgrade
 
 
@@ -16,7 +26,7 @@ ROOT = Path(__file__).resolve().parents[3]
 DAEMON_FIXTURE = ROOT / "tests/python/blackboard/service/fixtures/daemon_with_catalog.py"
 
 
-class HostCutoverTests(BoardTestCase):
+class HostCutoverTests(WorkflowTestCase):
     def private_runtime(self, generation, *, record_environment=False):
         root = self.directory / "runtime"
         source = root / ("fixture-" + generation)
@@ -109,3 +119,84 @@ class HostCutoverTests(BoardTestCase):
         self.assertNotIn(installer_bin, service_entries)
         self.assertEqual(service_entries,
                          [entry for entry in inherited_entries if entry != installer_bin])
+
+    def test_host_receipt_and_wait_can_retry_across_real_private_cutover(self):
+        board = self.board()
+        submitted = self.submit(board)
+        claimed = self.claim(board)
+        self.finish_turn(board, claimed, disposition='assistance')
+        boundary = board.call('workflow_get', {'runId': submitted['runId']})
+        self.assertEqual(boundary['state'], 'awaiting-host')
+        control = self.controls[submitted['runId']]
+        saved = copy.deepcopy(submitted)
+        _scrub_and_save(saved, self.directory)
+        control_file = Path(saved['controlFile'])
+        control_bytes = control_file.read_bytes()
+        request = {'runId': submitted['runId'], 'commandId': 'cutover-scope',
+                   'expectedRevision': boundary['revision'], 'expectedScopeVersion': 1,
+                   'writeScope': ['src'], 'reason': 'Host reviewed', **control}
+        receipt = board.call('workflow_scope_amend', request)
+        before = board.call('workflow_get', {'runId': submitted['runId']})
+        board.store.db.close()
+        previous = self.private_runtime('previous')
+        target = self.private_runtime('target')
+        self.catalog_fixture()
+        environment = self.child_environment({'HMB_RUNTIME_ROOT': str(previous.parent),
+                                              'HMB_MAX_CONCURRENT': '1', 'HMB_WAIT_CAPACITY': '4'})
+        environment.pop('PYTHONPATH', None)
+        environment.pop('HMB_DEV_SOURCE', None)
+        original_modules = launcher.entry_modules
+        fixture_modules = lambda path: {**original_modules(path), 'daemon': 'hey_my_buddy._upgrade_fixture_daemon'}
+        entered = threading.Event()
+        release = threading.Event()
+
+        def delayed_wait(method, params, state_dir):
+            if method == 'result':
+                entered.set()
+                self.assertTrue(release.wait(20))
+            return _call_service(method, params, state_dir)
+
+        with mock.patch.dict(os.environ, environment, clear=True), \
+             mock.patch.object(launcher, 'entry_modules', side_effect=fixture_modules), \
+             mock.patch.object(upgrade.runtime, 'materialize', return_value={'runtimeDir': str(target)}):
+            started = upgrade.start(self.directory, previous)
+            self.assertEqual(started['runtimeContentId'], previous.name)
+            launcher.write_active_runtime(self.directory, previous)
+            client = BoardClient(self.directory, autostart=False)
+            with ThreadPoolExecutor(max_workers=1) as pool:
+                waiter = pool.submit(await_run, {'runId': submitted['runId'], 'waitSeconds': 30},
+                                     self.directory, service=delayed_wait)
+                try:
+                    self.assertTrue(entered.wait(10))
+                    original_journal = upgrade.write_journal
+                    saw_fence = []
+                    def on_journal(path, value):
+                        original_journal(path, value)
+                        if path == self.directory / 'upgrade.json' and not saw_fence:
+                            saw_fence.append(value['phase'])
+                            release.set()
+                            waited = waiter.result(timeout=10)
+                            self.assertEqual(waited['outcome'], 'waiting-host')
+                            self.assertEqual(waited['error']['code'], 'UPGRADE_IN_PROGRESS')
+                            self.assertEqual(waited['request']['requestId'], before['activeRequest']['requestId'])
+                    with mock.patch.object(upgrade, 'write_journal', side_effect=on_journal):
+                        result = upgrade.upgrade({})
+                    self.assertTrue(result['upgraded'], result)
+                    self.assertEqual(saw_fence, ['preflight'])
+                finally:
+                    release.set()
+            after = client.call('workflow_get', {'runId': submitted['runId']})
+            self.assertEqual(after['activeRequest'], before['activeRequest'])
+            self.assertEqual(after['ownerGeneration'], before['ownerGeneration'])
+            self.assertEqual(after['revision'], before['revision'])
+            self.assertEqual(control_file.read_bytes(), control_bytes)
+            self.assertEqual(control_file.stat().st_mode & 0o777, 0o600)
+            self.assertEqual(_read_control(str(control_file)), control)
+            self.assertEqual(client.call('workflow_scope_amend', request), {**receipt, 'duplicate': True})
+            with closing(sqlite3.connect(self.directory / 'board.sqlite3')) as connection:
+                self.assertEqual(connection.execute("SELECT COUNT(*) FROM commands WHERE command_id='cutover-scope'").fetchone()[0], 1)
+            decided = client.call('workflow_decide', {'runId': submitted['runId'],
+                'requestId': after['activeRequest']['requestId'], 'commandId': 'post-cutover-decision',
+                'expectedRevision': after['revision'], 'decision': 'approve',
+                'autoContinue': False, **_read_control(str(control_file))})
+            self.assertEqual(decided['runId'], submitted['runId'])

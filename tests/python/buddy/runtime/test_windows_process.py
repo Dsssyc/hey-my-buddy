@@ -5,9 +5,11 @@ import os
 import signal
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 import unittest
+from pathlib import Path
 from unittest import mock
 
 from hey_my_buddy.buddy.harnesses.base import ProcessHandle
@@ -18,6 +20,7 @@ from hey_my_buddy.protocol.owned_process import (
     ProcessCreationEvidence,
     owned_popen,
 )
+from hey_my_buddy.protocol import process_controller
 
 
 class FakeProcess:
@@ -83,6 +86,67 @@ class FakeAPI:
 
 
 class WindowsProcessTests(unittest.TestCase):
+    def test_unconfirmed_handle_construction_failure_returns_held_handle(self):
+        process = FakeProcess()
+        with mock.patch("hey_my_buddy.protocol.process_identity._creation_time",
+                        side_effect=OSError("identity unavailable")), \
+             mock.patch.object(ProcessHandle, "terminate", side_effect=OSError("stop unknown")):
+            with self.assertRaises(RuntimeError) as caught:
+                ProcessHandle(process, own_group=True, log_paths={})
+        self.assertTrue(caught.exception.owned_popen_evidence.created)
+        self.assertFalse(caught.exception.owned_popen_evidence.shutdown_confirmed)
+        self.assertIs(caught.exception.execution_handle.process, process)
+
+    @unittest.skipIf(os.name == "nt", "POSIX process-group observation")
+    def test_handle_construction_failure_stops_spawned_group(self):
+        children = []
+        original = process_controller.owned_popen
+
+        def spawn(*args, **kwargs):
+            child = original(*args, **kwargs)
+            children.append(child)
+            return child
+
+        with tempfile.TemporaryDirectory() as directory:
+            logs = {"stdout": str(Path(directory) / "stdout.log"),
+                    "stderr": str(Path(directory) / "stderr.log")}
+            with mock.patch.object(process_controller, "owned_popen", side_effect=spawn), \
+                 mock.patch("hey_my_buddy.protocol.process_identity._creation_time",
+                            side_effect=OSError("identity unavailable")):
+                with self.assertRaises(OSError) as caught:
+                    process_controller.launch_controller(
+                        prepare=lambda: ([sys.executable, "-c", "import time; time.sleep(30)"],
+                                         directory, dict(os.environ)), log_paths=logs)
+        self.assertEqual(len(children), 1)
+        self.assertTrue(caught.exception.owned_popen_evidence.created)
+        self.assertTrue(caught.exception.owned_popen_evidence.shutdown_confirmed)
+        self.assertIsNotNone(children[0].poll())
+
+    @unittest.skipIf(os.name == "nt", "POSIX process-group observation")
+    def test_controller_guards_popen_when_handle_constructor_itself_raises(self):
+        children = []
+        original = process_controller.owned_popen
+
+        def spawn(*args, **kwargs):
+            child = original(*args, **kwargs)
+            children.append(child)
+            return child
+
+        with tempfile.TemporaryDirectory() as directory:
+            logs = {"stdout": str(Path(directory) / "stdout.log"),
+                    "stderr": str(Path(directory) / "stderr.log")}
+            with mock.patch.object(process_controller, "owned_popen", side_effect=spawn), \
+                 mock.patch.object(process_controller, "ProcessHandle",
+                                   side_effect=ValueError("constructor refused")):
+                with self.assertRaises(ValueError) as caught:
+                    process_controller.launch_controller(
+                        prepare=lambda: ([sys.executable, "-c", "import time; time.sleep(30)"],
+                                         directory, dict(os.environ)), log_paths=logs)
+        self.assertEqual(len(children), 1)
+        self.assertTrue(caught.exception.owned_popen_evidence.created)
+        self.assertTrue(caught.exception.owned_popen_evidence.shutdown_confirmed)
+        self.assertIsNotNone(children[0].poll())
+
     def launch(self, api, process):
         with mock.patch("hey_my_buddy.protocol.owned_process.subprocess.Popen", return_value=process) as popen:
             child = owned_popen(["child"], windows_api=api, start_new_session=True)
