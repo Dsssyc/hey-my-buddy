@@ -232,7 +232,7 @@ def main() -> int:
         args.log = str(Path(args.patch).parent / "fixture-agent.log")
     log_path = Path(args.log)
     log_path.parent.mkdir(parents=True, exist_ok=True)
-    if not fake_agent.check_private_home(log_path):
+    if not fake_agent.check_private_home(log_path, Path(args.fixture_root)):
         return 3
     fake_agent.log(log_path, {"event": "launch-face", "profile": args.profile,
                               "patch": args.patch, "workflowMode": args.workflow_mode})

@@ -22,6 +22,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import queue
 import subprocess
 import sys
 import threading
@@ -30,26 +31,20 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 
-def real_user_home() -> Path:
-    if os.name == "nt":
-        return Path.home()
-    import pwd
-    return Path(pwd.getpwuid(os.getuid()).pw_dir)
-
-
 def log(log_path: Path, event: dict) -> None:
     entry = {"ts": datetime.now(timezone.utc).isoformat(timespec="milliseconds"), **event}
     with log_path.open("a", encoding="utf-8", newline="\n") as handle:
         handle.write(json.dumps(entry, default=str, sort_keys=True) + "\n")
 
 
-def check_private_home(log_path: Path) -> bool:
-    """Keep the simulated native program away from the person's real homes."""
-    real_home = real_user_home()
+def check_private_home(log_path: Path, fixture_root: Path) -> bool:
+    """Require the fake's homes to stay inside its test's private directory."""
+    boundary = fixture_root.resolve()
     home = os.environ.get("HOME")
     native_home = os.environ.get("DSH_HOME") or str(Path(home or "/") / ".dsh")
-    ok = bool(home and Path(home).resolve() != real_home.resolve()
-              and Path(native_home).resolve() != (real_home / ".dsh").resolve())
+    ok = bool(home and Path(home).resolve().is_relative_to(boundary)
+              and Path(native_home).resolve().is_relative_to(boundary)
+              and log_path.resolve().is_relative_to(boundary))
     entry = {"event": "home-check", "ok": ok, "home": home, "dshHome": native_home,
              "homeSet": home is not None, "dshHomeSet": "DSH_HOME" in os.environ,
              "permissionMode": os.environ.get("DSH_PERMISSION_MODE")}
@@ -193,19 +188,45 @@ class FakeAgent:
                                 "envShape": type(env).__name__})
             return {"name": name, "mounted": False, "envShape": type(env).__name__}
         argv = [entry["command"], *entry.get("args", [])]
+        environment = dict(os.environ)
+        environment.update({item["name"]: item["value"] for item in env or []})
         try:
             process = subprocess.Popen(argv, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                                        stderr=subprocess.DEVNULL, start_new_session=False,
-                                       env={"PATH": os.environ.get("PATH", os.defpath),
-                                            "HOME": os.environ["HOME"]})
+                                       env=environment)
         except (OSError, KeyError) as error:
             return {"name": name, "mounted": False, "error": str(error)}
         self.stubs.append(process)
 
         def stub_round(payload: dict) -> dict:
-            process.stdin.write((json.dumps(payload) + "\n").encode())
-            process.stdin.flush()
-            return json.loads(process.stdout.readline())
+            replies = queue.Queue(maxsize=1)
+
+            def read_reply():
+                try:
+                    replies.put(process.stdout.readline())
+                except OSError as error:
+                    replies.put(error)
+
+            reader = threading.Thread(target=read_reply, daemon=True)
+            reader.start()
+            try:
+                process.stdin.write((json.dumps(payload) + "\n").encode())
+                process.stdin.flush()
+                try:
+                    reply = replies.get(timeout=5)
+                except queue.Empty as error:
+                    raise TimeoutError("fake agent MCP handshake did not answer") from error
+                if isinstance(reply, OSError):
+                    raise reply
+                return json.loads(reply)
+            finally:
+                reader.join(1)
+                if reader.is_alive():
+                    process.kill()
+                    process.wait(timeout=5)
+                    reader.join(5)
+                if reader.is_alive():
+                    raise RuntimeError("fake agent MCP reader remained after child exit")
 
         try:
             init = stub_round({"jsonrpc": "2.0", "id": 1, "method": "initialize",
@@ -231,6 +252,8 @@ class FakeAgent:
                 process.wait(timeout=5)
             except subprocess.TimeoutExpired:
                 process.kill()
+                process.wait(timeout=5)
+            process.stdout.close()
         self.stubs = []
 
     # -- the persistent session store ------------------------------------------
@@ -948,8 +971,6 @@ class FakeAgent:
                        if isinstance(block, dict) and isinstance(block.get("text"), str))
 
     def serve(self) -> None:
-        import select
-
         log(self.log_path, {"event": "startup"})
         if self.stderr_note:
             sys.stderr.write(self.stderr_note + "\n")
@@ -957,12 +978,33 @@ class FakeAgent:
         if self.spam_notifications:
             for index in range(self.spam_notifications):
                 self.notify_client(f"session/spam-{index}", {"index": index})
-        # Read the descriptor directly and parse lines from our own buffer: a
-        # buffered readline would prefetch coalesced frames that select on the
-        # fd can no longer see, starving them until new data arrives.
-        pending = b""
-        while not self._stop_reading.is_set():
+        # Windows select does not accept an anonymous stdin pipe. The reader
+        # takes one chunk at a time and waits for the main loop to process it
+        # before reading again, so a frozen agent does not drain later frames.
+        chunks: queue.Queue[bytes | OSError] = queue.Queue(maxsize=1)
+        read_next = threading.Event()
+
+        def read_stdin() -> None:
             while True:
+                read_next.wait()
+                read_next.clear()
+                try:
+                    chunk = os.read(0, 65536)
+                except OSError as error:
+                    chunks.put(error)
+                    return
+                chunks.put(chunk)
+                if not chunk:
+                    return
+
+        reader = threading.Thread(target=read_stdin, name="fake-agent-stdin", daemon=True)
+        reader.start()
+        # Parse lines from our own buffer; one read may contain several frames.
+        pending = b""
+        request_next = True
+        reached_eof = False
+        while not self._stop_reading.is_set():
+            while not self._stop_reading.is_set():
                 index = pending.find(b"\n")
                 if index < 0:
                     break
@@ -971,15 +1013,27 @@ class FakeAgent:
                 self.handle_client_line(line)
             if self._stop_reading.is_set():
                 break
-            ready, _, _ = select.select([0], [], [], 0.05)
-            if not ready:
+            if request_next:
+                read_next.set()
+                request_next = False
+            try:
+                chunk = chunks.get(timeout=0.05)
+            except queue.Empty:
                 continue
             if self._stop_reading.is_set():
                 break  # re-check after the wake: never consume a post-freeze frame
-            chunk = os.read(0, 65536)
+            if isinstance(chunk, OSError):
+                reader.join(timeout=5)
+                raise chunk
             if not chunk:
+                reached_eof = True
                 break
             pending += chunk
+            request_next = True
+        if reached_eof:
+            reader.join(timeout=5)
+            if reader.is_alive():
+                raise RuntimeError("fake agent stdin reader did not stop after EOF")
         if self._stop_reading.is_set():
             # A frozen agent stays alive holding its unread stdin: the test's
             # group termination is the only way out, never a silent exit.
@@ -1024,6 +1078,11 @@ class FakeAgent:
                     pending[1] = message
                     pending[0].set()
             return
+        method = message.get("method")
+        if method in self.freeze_on or (self.freeze_mid_prompt and method == "session/prompt"):
+            # Set this before starting the handler, so the main loop cannot
+            # permit another pipe read while that thread reaches its freeze.
+            self._stop_reading.set()
         threading.Thread(target=self.handle, args=(message,), daemon=True).start()
 
 
@@ -1038,6 +1097,8 @@ def build_parser(*, log_required: bool = True) -> argparse.ArgumentParser:
     """
     parser = argparse.ArgumentParser()
     parser.add_argument("--log", required=log_required)
+    parser.add_argument("--fixture-root", required=True,
+                        help="private directory created by the test that launched this agent")
     parser.add_argument("--capture-method", default=None,
                         help="method whose complete incoming frame is saved privately")
     parser.add_argument("--capture-path", default=None,
@@ -1144,7 +1205,7 @@ def main() -> int:
     args = build_parser().parse_args()
     log_path = Path(args.log)
     log_path.parent.mkdir(parents=True, exist_ok=True)
-    if not check_private_home(log_path):
+    if not check_private_home(log_path, Path(args.fixture_root)):
         return 3
     log(log_path, {"event": "launch-face", "profile": args.profile, "patch": args.patch})
     FakeAgent(args).serve()

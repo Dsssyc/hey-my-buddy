@@ -8,11 +8,11 @@ from __future__ import annotations
 import json
 import os
 from pathlib import Path
-import select
+import queue
 import subprocess
 import sys
 import tempfile
-import time
+import threading
 import traceback
 
 
@@ -57,6 +57,7 @@ class CheckpointDomain:
                 evidence.update(reply)
                 if not reply.get("cleanupConfirmed"):
                     raise AssertionError(f"checkpoint child shutdown unconfirmed: {reply}")
+            self.process.stdin.close()  # EOF lets the child's reader stop and join.
             code = self.process.wait(timeout=10)
             evidence["ownerExitCode"] = code
             if code != 0:
@@ -70,35 +71,42 @@ class CheckpointDomain:
                 self.process.wait(timeout=10)
             raise
         finally:
+            from protocol.fixtures.ctwo_controller import join_exchanges
+
+            join_exchanges(self.process)
             # Keep stop facts outside the normal TemporaryDirectory cleanup.
             # A missing native receipt stays unknown even when the owner exits.
             audit = Path(os.environ["TMPDIR"]) / "checkpoint-domain-processes.jsonl"
             with audit.open("a", encoding="utf-8", newline="\n") as stream:
                 stream.write(json.dumps(evidence) + "\n")
-            self.process.stdin.close()
+            if not self.process.stdin.closed:
+                self.process.stdin.close()
             self.process.stdout.close()
             self.log.close()
 
 
-def read_command(timeout=60):
-    """Bound the child side too, including partial input and a vanished parent."""
-    deadline = time.monotonic() + timeout
-    raw = bytearray()
-    while True:
-        remaining = deadline - time.monotonic()
-        if remaining <= 0 or not select.select([sys.stdin], [], [], remaining)[0]:
-            raise TimeoutError("checkpoint owner command deadline expired")
-        chunk = os.read(sys.stdin.fileno(), 4096)
-        if not chunk:
-            return None
-        raw.extend(chunk)
-        if len(raw) > 64 * 1024:
-            raise ValueError("checkpoint command exceeds its bound")
-        if b"\n" in raw:
-            line, _, extra = raw.partition(b"\n")
-            if extra.strip():
-                raise ValueError("checkpoint commands must be exchanged one at a time")
-            return json.loads(line)
+def read_commands(commands):
+    """Read the parent's pipe in one thread, preserving later commands."""
+    try:
+        while raw := sys.stdin.buffer.readline(64 * 1024 + 2):
+            if len(raw) > 64 * 1024 or not raw.endswith(b"\n"):
+                raise ValueError("checkpoint command exceeds its bound or is incomplete")
+            commands.put(json.loads(raw))
+    except Exception as error:
+        commands.put(error)
+    finally:
+        commands.put(None)
+
+
+def read_command(commands, timeout=60):
+    """Bound the child side, including partial input and a vanished parent."""
+    try:
+        command = commands.get(timeout=timeout)
+    except queue.Empty as error:
+        raise TimeoutError("checkpoint owner command deadline expired") from error
+    if isinstance(command, Exception):
+        raise command
+    return command
 
 
 def serve():
@@ -157,8 +165,11 @@ def serve():
         return {"cleanupConfirmed": True, "controllerStopped": handle is None or handle.shutdown_confirmed(),
                 "nativeStopped": native_stopped, "rpcShutdownConfirmed": True, "root": str(root)}
 
+    commands = queue.Queue(maxsize=2)
+    reader = threading.Thread(target=read_commands, args=(commands,), daemon=True)
+    reader.start()
     try:
-        while command := read_command():
+        while command := read_command(commands):
             try:
                 operation = command["op"]
                 facts = {}
@@ -214,6 +225,9 @@ def serve():
                                   "controllerLogs": logs}), flush=True)
     finally:
         cleanup()
+        reader.join(5)
+        if reader.is_alive():
+            raise TimeoutError("checkpoint command reader did not stop after parent EOF")
 
 
 if __name__ == "__main__":

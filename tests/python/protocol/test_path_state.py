@@ -17,7 +17,7 @@ import unittest
 from unittest.mock import Mock, patch
 
 from support import _child_environment, write_catalog_fixture, shutdown_private_rpc
-from protocol.test_public_state import DAEMON_COMMAND, prepare_daemon_spawn, cleanup_owned_case
+from protocol.test_public_state import DAEMON_COMMAND, prepare_daemon_spawn, cleanup_owned_case, native_forbidden_executable
 from protocol import test_transport_attach as attach_fixture
 from protocol.test_transport_attach import MutationRecorder, snapshot
 from hey_my_buddy.errors import BoardError
@@ -256,9 +256,7 @@ class RealPathStateTests(unittest.TestCase):
     def case(self, name):
         work = Path(tempfile.mkdtemp(prefix='path-real-')).resolve()
         environment = _child_environment(work)
-        sentinel = work / 'native-forbidden'
-        sentinel.write_text("#!/bin/sh\nprintf unexpected >> '" + str(work / 'native-invoked') + "'\nexit 99\n", encoding="utf-8", newline="\n")
-        sentinel.chmod(0o700)
+        sentinel = native_forbidden_executable(work, work / 'native-invoked')
         environment.update({'HMB_' + name + '_CLI': str(sentinel) for name in ('CLAUDE', 'CODEX', 'DSH', 'ZCODE')})
         environment.update(HMB_MAX_CONCURRENT='1', HMB_CHECKS_TMPDIR=os.environ['HMB_CHECKS_TMPDIR'])
         command = [sys.executable, str(Path(__file__).resolve()), '--case', name, str(work)]
@@ -288,10 +286,8 @@ class ReadonlyPathStateTests(unittest.TestCase):
         try:
             from protocol import test_rpc_config as probe_fixture
             catalog = write_catalog_fixture(fixture.directory)
-            sentinel = fixture.directory / 'native-forbidden'
             invoked = fixture.directory / 'native-invoked'
-            sentinel.write_text("#!/bin/sh\nprintf unexpected >> '" + str(invoked) + "'\nexit 99\n", encoding="utf-8", newline="\n")
-            sentinel.chmod(0o700)
+            sentinel = native_forbidden_executable(fixture.directory, invoked)
             original_environment = probe_fixture.private_environment
 
             def offline_environment(root, **overrides):

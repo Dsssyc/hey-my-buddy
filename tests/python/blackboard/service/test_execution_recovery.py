@@ -287,7 +287,7 @@ class PrivateExecutionRecoveryTests(BoardTestCase):
         candidate = "dsh:deepseek-official:deepseek-v4-pro:max"
         script = self.directory / "fixture-router.py"
         script.write_text(
-            "import importlib.util,json,os,time\n"
+            "import importlib.util,json,os,sys,time\n"
             "from pathlib import Path\n"
             f"spec=importlib.util.spec_from_file_location('fixture_agent', {str(fixture)!r})\n"
             "module=importlib.util.module_from_spec(spec)\n"
@@ -305,6 +305,7 @@ class PrivateExecutionRecoveryTests(BoardTestCase):
             f"        self.final_answers=[json.dumps({{'buddyId':{candidate!r},'note':'offline fixture choice','evidence':[]}})]\n"
             "        return module.fake_agent.FakeAgent.run_final_prompt(self,message)\n"
             "module.WorkflowAgent=GatedAgent\n"
+            f"sys.argv[1:1] = ['--fixture-root', {str(self.directory)!r}]\n"
             "raise SystemExit(module.main())\n", encoding="utf-8", newline="\n"
         )
         entry = make_fake_executable(self.directory / "harness-bin", "dsh", source=script)

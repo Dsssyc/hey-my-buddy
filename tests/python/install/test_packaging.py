@@ -22,6 +22,13 @@ LAUNCHER = ROOT / "skills" / "hey-my-buddy" / "scripts" / "hey-my-buddy"
 REQUIRED_RESOURCES = {"console.assets", "reasons.codes", "roles.worker", "roles.router", "roles.lead", "roles.wrap_up"}
 
 
+def launcher_argv(*arguments: str, launcher: Path = LAUNCHER) -> list[str]:
+    """Exercise the shipped entry for this platform."""
+    if os.name == "nt":
+        return [str(launcher.with_suffix(".cmd")), *arguments]
+    return ["/bin/sh", str(launcher), *arguments]
+
+
 def load_build_skill():
     spec = importlib.util.spec_from_file_location("hey_my_buddy_build_skill", ROOT / "packaging" / "build-skill.py")
     module = importlib.util.module_from_spec(spec)
@@ -107,7 +114,7 @@ class CwdIndependentCliTests(unittest.TestCase):
 
     def launch(self, command: str, cwd: Path, timeout: int = 240) -> dict:
         completed = subprocess.run(
-            ["/bin/sh", str(LAUNCHER), command],
+            launcher_argv(command),
             env=self.environment(),
             cwd=str(cwd),
             capture_output=True,

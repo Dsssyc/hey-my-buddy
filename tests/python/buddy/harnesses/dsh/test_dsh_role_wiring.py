@@ -71,12 +71,18 @@ class DshRoleCase(unittest.TestCase):
         # tripwire holds off the invoking shell.
         (self.root / "home").mkdir(mode=0o700)
         self.environment.update(HOME=str(self.root / "home"),
+                                DSH_HOME=str(self.root / "home" / ".dsh"),
                                 HMB_STATE_DIR=str(self.root / "state"),
                                 HMB_RUNTIME_ROOT=str(self.root / "runtime"),
                                 HMB_DEV_SOURCE="1", HMB_HARNESS_RECORD_FILE=str(self.record))
+        # The inline role inherits the test process's native homes.
+        self.enterContext(mock.patch.dict(os.environ, {
+            "HOME": self.environment["HOME"], "USERPROFILE": self.environment["HOME"],
+            "DSH_HOME": self.environment["DSH_HOME"]}))
 
     def point_record(self, *extra: str) -> None:
-        command = [sys.executable, str(FAKE_AGENT), "--log", str(self.log), *extra]
+        command = [sys.executable, str(FAKE_AGENT), "--log", str(self.log),
+                   "--fixture-root", str(self.root), *extra]
         self.record.write_text(json.dumps({"dsh": {"status": "ready", "command": command}}), encoding="utf-8", newline="\n")
 
     def context(self, *, attempt="attempt-1", index=1, mode="initial", previous=None, timeout=20):

@@ -43,6 +43,8 @@ class LaunchTest(AcpTestCase):
             self.assertEqual(0, process.returncode)
         finally:
             handle.wait(5)
+            # A reaped Windows venv launcher can precede its Job becoming empty.
+            self.assertTrue(handle.shutdown_confirmed(), stop_evidence(handle))
         child = json.loads(out.decode())
         self.assertEqual(str(self.home), child["HOME"])
         self.assertEqual(str(self.dsh_home), child["DSH_HOME"])

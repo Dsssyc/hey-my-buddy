@@ -80,7 +80,8 @@ class RuntimeVersionTests(unittest.TestCase):
             agent.write_text(dsh_cases.FAKE_AGENT.read_text(encoding="utf-8").replace(
                 '"name": "fake-harness-acp", "version": "0.0.1"', info), encoding="utf-8", newline="\n")
             with mock.patch.object(module, "launch_for", return_value=([
-                    sys.executable, str(agent), "--log", str(case.agent_log_path), *case.extra_agent_args], {})):
+                    sys.executable, str(agent), "--log", str(case.agent_log_path),
+                    "--fixture-root", str(case.base), *case.extra_agent_args], {})):
                 yield
             return
         fixture = {"claude": claude_cases.FIXTURE, "codex": codex_cases.FAST_FIXTURE,
