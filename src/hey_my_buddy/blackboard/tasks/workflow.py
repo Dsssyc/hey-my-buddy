@@ -810,12 +810,13 @@ class WorkflowCoordinator:
 
     @staticmethod
     def _micro_task_view(micro_task: dict, fingerprint: str) -> dict:
-        """The bounded micro task summary; the immutable original spec is in audit."""
+        """The micro task view with the whole task text; the immutable original spec is in audit."""
         task = micro_task.get("task") if isinstance(micro_task.get("task"), str) else ""
-        limit = MAX_RESULT_SUMMARY
         return {
-            "task": task if len(task) <= limit else task[:limit],
-            "taskTruncated": len(task) > limit,
+            "task": task,
+            # The service view never cuts the task text; only the CLI's brief
+            # projection does, and it reports that cut itself.
+            "taskTruncated": False,
             "taskBytes": len(task.encode("utf-8")),
             "harness": micro_task.get("harness"),
             "cwd": micro_task.get("cwd"),

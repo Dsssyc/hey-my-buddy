@@ -8,7 +8,9 @@ the caller already supplied (its own packet and workspace intent), duplicates
 ``plan`` and ``cleanup``) and history that is not needed for the next decision.
 Identifiers the next command needs, open boundaries, conflicts, errors,
 unconfirmed shutdown and truncation are always kept, and a value the service did
-not report is never replaced by a default.
+not report is never replaced by a default. A ``get`` still keeps the opening of
+the task text: a later read may follow context compaction, so the packet is the
+one supplied field whose head survives.
 
 RPC clients, the console and ``BoardClient`` receive the complete views. The CLI-local option
 ``"output": "full"`` prints them unmodified. ``includeAudit`` and
@@ -40,6 +42,9 @@ MICRO_TASK_RECEIPTS = frozenset(
 TASK_VIEWS = frozenset({"status", "execution-cancel", "execution-retry", "execution-acknowledge"})
 
 _TITLE_LIMIT = 120
+#: The brief ``get`` view carries the opening of the task text; the service view
+#: holds the whole text and never cuts it.
+_TASK_HEAD_LIMIT = 2000
 
 
 def pop_output_mode(params: dict) -> str:
@@ -286,6 +291,20 @@ def micro_task_brief(view: dict, *, turn_summary: bool = True) -> dict:
     for key in ("audit", "routingHistory"):
         if key in view:
             brief[key] = view[key]
+    return brief
+
+
+def get_brief(view: dict) -> dict:
+    """The brief ``get`` view: the micro-task projection plus the task text's head."""
+    brief = micro_task_brief(view)
+    micro_task = view.get("microTask")
+    if micro_task is not None:
+        task = micro_task["task"]
+        brief["microTask"] = {
+            "task": task[:_TASK_HEAD_LIMIT],
+            "taskTruncated": len(task) > _TASK_HEAD_LIMIT,
+            "taskBytes": micro_task["taskBytes"],
+        }
     return brief
 
 
@@ -569,7 +588,7 @@ def _task_response(response: dict) -> dict:
 
 
 _PROJECTORS: dict[str, Callable[[dict], Any]] = {
-    "get": micro_task_brief,
+    "get": get_brief,
     "submit": submit_receipt,
     **{method: micro_task_receipt for method in MICRO_TASK_RECEIPTS},
     **{method: _task_response for method in TASK_VIEWS},

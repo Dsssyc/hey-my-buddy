@@ -1955,24 +1955,25 @@ class TakeoverReplayTests(WorkflowTestCase):
 
 
 class CompactReadBoundTests(WorkflowTestCase):
-    def test_large_task_and_result_keep_normal_reads_bounded_and_audit_full(self):
+    def test_large_task_reads_whole_in_view_and_original_in_audit(self):
         board = self.board()
         self.register(board)
         big_task = "deliver the specification " * 4000  # ~100 KB task
         submitted = self.submit(board, task=big_task)
         self.finish_turn(board, self.claim(board))
         view = board.call("workflow_get", {"runId": submitted["runId"]})
-        serialized = json.dumps(view)
-        self.assertLess(len(serialized), 20000, "the compact view must stay bounded")
-        self.assertTrue(view["microTask"]["taskTruncated"])
+        self.assertEqual(view["microTask"]["task"], big_task)
+        self.assertFalse(view["microTask"]["taskTruncated"])
+        self.assertEqual(view["microTask"]["taskBytes"], len(big_task.encode("utf-8")))
         self.assertNotIn("spec", view["task"])
-        self.assertNotIn(big_task, serialized)
+        serialized = json.dumps(view)
+        # Everything outside the whole task text stays bounded.
+        self.assertLess(len(serialized), len(big_task) + 20000)
         audit = board.call("workflow_get", {"runId": submitted["runId"], "includeAudit": True})
         self.assertNotIn("spec", audit["audit"])
         self.assertEqual(audit["audit"]["microTask"]["task"], big_task)
         self.assertNotIn("task", audit["audit"]["turns"][0]["input"]["context"])
         self.assertNotIn("taskTruncated", audit["audit"]["turns"][0]["input"]["context"])
-        self.assertGreater(len(json.dumps(audit["audit"])), len(serialized))
 
 
 class CompleteTurnInputTests(WorkflowTestCase):
