@@ -212,6 +212,8 @@ class WorkspaceTests(unittest.TestCase):
         self.assert_error("WORKSPACE_REF_INVALID", workspace.inspect, str(unborn))
 
     def test_dirty_input_preserves_staging_binary_modes_symlinks_and_source(self):
+        # Exercise native link checkout even where Git defaults to placeholders.
+        self.git("config", "core.symlinks", "true")
         source = self.repo / "src/file.txt"
         source.write_text("staged\n", encoding="utf-8", newline="\n")
         self.git("add", "src/file.txt")
@@ -231,13 +233,8 @@ class WorkspaceTests(unittest.TestCase):
         input_mode = self.git("ls-tree", manifest["inputCommit"], "--", "src/file.txt").split()[0]
         self.assertEqual(self.git("ls-files", "-s", "--", "src/file.txt", cwd=target).split()[0], input_mode)
         self.assertEqual((target / "src/selected.bin").read_bytes(), selected.read_bytes())
-        link_blob = self.git("show", manifest["inputCommit"] + ":src/link")
-        symlinks = self.git("config", "--type=bool", "--default=true", "core.symlinks").strip() == b"true"
-        if symlinks:
-            self.assertEqual(os.fsencode(os.readlink(target / "src/link")), link_blob)
-        else:
-            self.assertFalse((target / "src/link").is_symlink())
-            self.assertEqual((target / "src/link").read_bytes(), link_blob)
+        self.assertEqual(workspace._observe(target, [], state_dir=self.state)["tracked"]["src/link"],
+                         workspace._entries(self.repo, manifest["inputCommit"])["src/link"])
         self.assertFalse((target / "src/excluded.txt").exists())
         self.assertEqual(self.git("show", manifest["snapshot"]["stagedCommit"] + ":src/file.txt"), b"staged\n")
         self.assertEqual(original_index, (self.repo / ".git/index").read_bytes())
@@ -336,7 +333,8 @@ class WorkspaceTests(unittest.TestCase):
         self.git("worktree", "add", "--detach", str(integration), manifest["inputCommit"])
         self.git("-c", "core.symlinks=true", "apply", "--binary", output["diffPath"], cwd=integration)
         self.assertEqual((integration / "src/file.txt").read_bytes(), b"output\x00\xff\n")
-        self.assertEqual(Path(os.readlink(integration / "src/link")).as_posix(), "../../external-missing")
+        self.assertEqual(workspace._observe(integration, ["src/link"], state_dir=self.state)["included"]["src/link"],
+                         workspace._entries(self.repo, output["commit"])["src/link"])
         self.assertEqual(bool((integration / "src/new.txt").stat().st_mode & 0o111), os.name != "nt")
         self.git("worktree", "unlock", str(target))
         self.git("worktree", "remove", "--force", str(target))

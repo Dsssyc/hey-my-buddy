@@ -354,9 +354,9 @@ class WorkspaceBoundaryTests(unittest.TestCase):
         self.assertTrue(proof["eligible"], proof)
         self.assertEqual((checkout / "src/deep/payload.bin").read_bytes(), b"retained executable\x00\xff")
         symlinks = self.git("config", "--type=bool", "--default=true", "core.symlinks").strip() == b"true"
-        if symlinks:
-            self.assertEqual((checkout / "src/deep/link").readlink(), Path("payload.bin"))
-        else:
+        self.assertEqual(workspace._observe(checkout, [], state_dir=self.state)["tracked"]["src/deep/link"],
+                         workspace._entries(self.repo, sealed["tree"])["src/deep/link"])
+        if not symlinks:
             self.assertEqual((checkout / "src/deep/link").read_bytes(), b"payload.bin")
         self.assertEqual(self.git("ls-files", "-s", "--", "src/deep/link", cwd=checkout).split()[0], b"120000")
         if not workspace._WINDOWS:
