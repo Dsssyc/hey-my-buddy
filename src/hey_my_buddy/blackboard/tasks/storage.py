@@ -418,20 +418,11 @@ def inspect(store, *, git_proof: bool = True) -> dict:
             for micro_task_id in micro_task_ids:
                 digest = hashlib.sha256(micro_task_id.encode()).hexdigest()
                 native_owners[digest] = (run['run_id'], reasons)
-            manifest = json.loads(run['workspace_manifest_json'] or '{}')
-            if not manifest:
-                continue
+            manifest = json.loads(run['workspace_manifest_json'])
             retained = store.workflow._allocation_provenance(connection, run)
             reasons, _, _ = store.workflow._cleanup_reasons(connection, run, task, manifest)
             sealed = store.workflow._latest_handoff(connection, run, manifest) if not reasons else None
             workspace_inputs.append((run['run_id'], run['revision'], manifest, retained, reasons, sealed))
-    home_root = state / 'harnesses/zcode'
-    if home_root.exists():
-        for path in sorted(home_root.iterdir()):
-            if path.name == 'micro-tasks':
-                continue
-            run_id, reasons = native_owners.get(path.name, (None, ['owner-unproven']))
-            add('zcode', path, reasons, runId=run_id)
     harnesses = state / 'harnesses'
     if harnesses.exists():
         for adapter in sorted(private_dirs.ADAPTERS):
@@ -443,10 +434,6 @@ def inspect(store, *, git_proof: bool = True) -> dict:
                 for path in sorted(micro_tasks.iterdir()):
                     run_id, reasons = native_owners.get(path.name, (None, ['owner-unproven']))
                     add('harnesses', path, reasons, runId=run_id, adapter=adapter)
-            if adapter != 'zcode':
-                for path in sorted(adapter_root.iterdir()):
-                    if path.name != 'micro-tasks':
-                        add('harnesses', path, ['legacy-layout-unmigrated'], adapter=adapter)
     sessions = state / 'sessions'
     if sessions.exists():
         for category in ('macro-tasks', 'micro-tasks'):
@@ -598,7 +585,7 @@ def inspect(store, *, git_proof: bool = True) -> dict:
                 add('durable', path, ['durable-record'])
                 continue
     categories = []
-    for key in ('harnesses', 'session-records', 'zcode', 'workspaces', 'runtimes', 'backup', 'durable'):
+    for key in ('harnesses', 'session-records', 'workspaces', 'runtimes', 'backup', 'durable'):
         members = [r for r in rows if r['category'] == key]
         total_bytes = tree_info(state / 'workspaces')[0] if key == 'workspaces' else sum(r['bytes'] for r in members)
         categories.append({'id': key, 'bytes': total_bytes,
@@ -647,7 +634,7 @@ def _validate_pending(result: dict, planned: dict, state: Path) -> None:
         raise BoardError('STORAGE_UNSAFE', 'Pending removal is absent from its original plan')
     candidate = matches[0]
     category = candidate.get('category')
-    if (candidate.get('eligible') is not True or category not in ('harnesses', 'zcode', 'runtimes') or
+    if (candidate.get('eligible') is not True or category not in ('harnesses', 'runtimes') or
             any(pending.get(key) != candidate.get(key) for key in ('id', 'path', 'fingerprint', 'bytes')) or
             not isinstance(pending.get('path'), str) or not is_absolute_path(pending['path']) or
             pending['id'] != hashlib.sha256(pending['path'].encode()).hexdigest()[:24]):
@@ -659,8 +646,6 @@ def _validate_pending(result: dict, planned: dict, state: Path) -> None:
     if category == 'runtimes':
         allowed_parent = runtime_root().absolute()
         allowed = original.parent == allowed_parent
-    elif category == 'zcode':
-        allowed = original.parent == root / 'harnesses' / 'zcode'
     else:
         allowed = any(original.parent == root / 'harnesses' / adapter / 'micro-tasks'
                       for adapter in private_dirs.ADAPTERS)
@@ -790,7 +775,7 @@ def apply(store, params: dict) -> dict:
                     planned_workspace = store.workflow.cleanup_plan(request, console_authority=authority)
                     wp = planned_workspace['plan']
                     store.workflow.cleanup_apply({**request, 'commandId': request['commandId'] + ':apply', 'expectedRevision': planned_workspace['targetRevision'], 'planId': wp['planId'], 'confirmPath': fresh['path']}, console_authority=authority)
-                elif candidate['category'] in ('harnesses', 'zcode', 'runtimes'):
+                elif candidate['category'] in ('harnesses', 'runtimes'):
                     # Recheck immediately before atomic removal from the live name.
                     original = Path(fresh['path'])
                     with ExitStack() as removal:

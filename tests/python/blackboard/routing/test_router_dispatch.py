@@ -399,11 +399,11 @@ class WorkflowWiringTests(RouterDispatchTestCase):
                 "'awaiting-model-selection',1,?,?)",
                 (run_id, run_id, canonical_json({"task": "do the thing"}), T0, T0))
             db.execute(
-                "INSERT INTO workflow_runs(run_id,host_id,control_verifier,"
-                " request_fingerprint,execution_workspace_json,state,created_at,updated_at)"
-                " VALUES(?,?,?,?,?,?,?,?)",
-                (run_id, "host-1", "verifier", "request-digest",
-                 canonical_json({"kind": "existing"}), "executing", T0, T0))
+                "INSERT INTO workflow_runs(run_id,host_id,source_host_id,control_verifier,"
+                " request_fingerprint,execution_workspace_json,workspace_manifest_json,state,created_at,updated_at)"
+                " VALUES(?,?,?,?,?,?,?,?,?,?)",
+                (run_id, "host-1", "host-1", "verifier", "request-digest",
+                 canonical_json({"kind": "existing"}), canonical_json({"kind": "existing"}), "executing", T0, T0))
             response = self.board_.store.decisions.route_workflow(
                 db, run_id=run_id, sequence=1, spec={"task": "do the thing", "requiredCapabilities": list(required_capabilities)}, manifest=None)
         return response

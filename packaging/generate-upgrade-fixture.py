@@ -34,6 +34,13 @@ BASE_SCHEMA = 28
 WORKSPACE_INPUT = "122ec20edcdeb97cc655ae3993c402c2c9c966a3"
 AT = "2026-01-01T00:00:00.000Z"
 PROFILES = ["codex:openai:fixture-alpha:high", "codex:openai:fixture-beta:high"]
+LEGACY_PRIVATE_FILES = {
+    **{f"harnesses/{harness}/goals/fixture-retired/native-history.jsonl":
+       '{"retired":"private native history"}\n' for harness in ("codex", "claude", "zcode", "dsh")},
+    "decisions/fixture-retired/request.json": '{"retired":"decision"}\n',
+    "legacy-worker-cleanup.lock": "retired cleanup lock\n",
+    "worker.log": "retired worker log\n",
+}
 
 
 def json_text(value):
@@ -366,6 +373,17 @@ def populate(args):
             "delegationAuthority": True, "macroTaskOf": ids["delivered"]})
         stock_ids["lead"] = lead["runId"]
         lead_claim = admit(nonce, lead["runId"])
+        owned = call("workflow_submit", {"requestId": "fixture-lead-owned",
+            "submissionToken": "fixture-submission-token-owned", "task": "fixture Lead-admitted work",
+            "harness": "codex", "provider": "openai", "model": "fixture-alpha", "effort": "high",
+            "cwd": str(work / "workspaces" / "accepted"),
+            "executionWorkspace": {"kind": "existing", "access": "read"},
+            "credential": lead_claim["agentCredential"]})
+        stock_ids["leadOwned"] = owned["runId"]
+        call("workflow_cancel", {"runId": owned["runId"], "note": "Settle the Lead-admitted stock",
+             "credential": lead_claim["agentCredential"]})
+        call("workflow_conclude", {"runId": owned["runId"], "note": "Lead concludes cancelled fixture work",
+             "credential": lead_claim["agentCredential"]})
         call("inquiry_observe", {"runId": lead["runId"], "inquiryId": "fixture-lead-inquiry",
              "question": "fixture lead question", "credential": lead_claim["agentCredential"]})
         with store.db.read() as connection:
@@ -675,7 +693,7 @@ def populate(args):
         with patch.object(macro_task_deletion, "_delete_sessions",
                           side_effect=BoardError("FIXTURE_STOP", "Retain in-progress deletion stock")):
             pending = call("macro_task_delete", {"macroTaskId": pending_target,
-                           "confirm": True, "microTaskCount": 9}, human=True)
+                           "confirm": True, "microTaskCount": 10}, human=True)
         assert pending["state"] == "deleting"
         # Cover default reason-only health and a native result whose JSON status
         # becomes stale after the base writer invalidates it. Codex stays ready
@@ -719,6 +737,10 @@ def populate(args):
         (output / "catalog.json").write_bytes((json_text(catalog) + "\n").encode("utf-8"))
         operations_text = json_text(operations).replace(str(work), "<fixture-root>")
         (output / "operations.json").write_bytes((operations_text + "\n").encode("utf-8"))
+        for relative, content in LEGACY_PRIVATE_FILES.items():
+            path = work / "state" / relative
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(content, encoding="utf-8", newline="\n")
         resources = export_resources(work, workspace, preimages)
         (output / "workspace-resources.json").write_bytes(
             (json.dumps(resources, ensure_ascii=False, indent=2, sort_keys=True) + "\n").encode("utf-8"))
@@ -792,6 +814,8 @@ def export_resources(work, workspace, preimages):
              for folder in ("workspaces", "harnesses", "sessions", "attempts")
              for path in sorted((work / "state" / folder).rglob("*"))
              if path.is_file() and path.suffix in {".json", ".jsonl", ".patch"}}
+    for relative in LEGACY_PRIVATE_FILES:
+        files[relative] = (work / "state" / relative).read_text(encoding="utf-8")
     # Emit only path/identity-dependent hashes, in dependency order. Immutable
     # Git and path-free native/history facts need no rebinding.
     selected = dict.fromkeys(identities)
@@ -884,7 +908,8 @@ def verify(output, restored):
         assert states == {**{metadata["stableIds"][key]: value for key, value in
                             (("delivered", "concluded"), ("accepted", "accepted"), ("failed", "concluded"), ("cancelled", "cancelled"))},
                           **{metadata["stockIds"][key]: "accepted" for key in ("adopted", "verified", "helper", "lead")},
-                          metadata["stockIds"]["helperParent"]: "concluded"}
+                          metadata["stockIds"]["helperParent"]: "concluded",
+                          metadata["stockIds"]["leadOwned"]: "concluded"}
         schema = [list(row) for row in connection.execute("SELECT type,name,tbl_name,sql FROM sqlite_master ORDER BY type,name")]
         assert digest(json_text(schema).encode("utf-8")) == metadata["schemaSha256"]
         assert "<fixture-root>" in (output / "board.sql").read_text(encoding="utf-8")

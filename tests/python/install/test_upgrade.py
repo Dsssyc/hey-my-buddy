@@ -20,6 +20,33 @@ from hey_my_buddy.errors import BoardError
 from support import BoardTestCase
 
 class UpgradeTests(BoardTestCase):
+    def test_legacy_cleanup_keeps_link_targets_and_current_private_files(self):
+        state = self.directory / 'state'
+        state.mkdir()
+        outside = self.directory / 'outside'
+        (outside / 'goals').mkdir(parents=True)
+        survivor = outside / 'goals/native.jsonl'
+        survivor.write_bytes(b'outside history')
+        harnesses = state / 'harnesses'
+        harnesses.mkdir()
+        (harnesses / 'codex').symlink_to(outside, target_is_directory=True)
+        (state / 'decisions').symlink_to(outside, target_is_directory=True)
+        retired = harnesses / 'claude/goals'
+        retired.mkdir(parents=True)
+        (retired / 'external').symlink_to(outside, target_is_directory=True)
+        current = harnesses / 'claude/micro-tasks/current/native.jsonl'
+        current.parent.mkdir(parents=True)
+        current.write_bytes(b'current private native history')
+        (state / 'worker.log').write_bytes(b'retired log')
+        result = upgrade.cleanup_legacy_layout(state)
+        self.assertFalse(result['complete'])
+        self.assertEqual({item['path'] for item in result['failures']}, {'harnesses/codex/goals', 'decisions'})
+        self.assertEqual({item['code'] for item in result['failures']}, {'UPGRADE_UNSAFE'})
+        self.assertEqual(survivor.read_bytes(), b'outside history')
+        self.assertEqual(current.read_bytes(), b'current private native history')
+        self.assertFalse(retired.exists())
+        self.assertFalse((state / 'worker.log').exists())
+
     def test_runtime_preparation_excludes_the_previous_services_reclaimer(self):
         board = self.board()
         state = board.directory
@@ -162,6 +189,10 @@ class UpgradeTests(BoardTestCase):
     def test_verified_recovery_reports_skill_cleanup_failure_without_rollback(self):
         state, root = self.directory / 'state', self.directory / 'runtimes'
         state.mkdir()
+        goals = state / 'harnesses/codex/goals'
+        goals.mkdir(parents=True)
+        (goals / 'retired.jsonl').write_bytes(b'retired native history')
+        (state / 'worker.log').write_bytes(b'retired worker log')
         previous, target = root / ('a' * 32), root / ('b' * 32)
         skill = self.directory / 'skills/hey-my-buddy'
         staged = skill.with_name('.hey-my-buddy-upgrade-stage-' + 'c' * 32)
@@ -181,6 +212,10 @@ class UpgradeTests(BoardTestCase):
             result = upgrade.recover(state, root)
         self.assertTrue(result['upgraded'])
         self.assertIn('cleanup denied', result['skillCleanupError'])
+        self.assertTrue(result['legacyLayoutCleanup']['complete'])
+        self.assertEqual(set(result['legacyLayoutCleanup']['removed']), {'harnesses/codex/goals', 'worker.log'})
+        self.assertFalse(goals.exists())
+        self.assertFalse((state / 'worker.log').exists())
         self.assertTrue(old_skill.exists())
         self.assertFalse((state / 'upgrade.json').exists())
 

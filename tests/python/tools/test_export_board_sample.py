@@ -137,8 +137,8 @@ class ExportBoardSampleTests(WorkflowTestCase):
                     'VALUES(?,?,\'{}\',\'hash\',1,\'dsh\',\'fixture\',10,\'completed\',1,?,?,?)',
                     (identifier, identifier, time, time, time))
                 connection.execute(
-                    'INSERT INTO workflow_runs(run_id,control_verifier,execution_workspace_json,state,created_at,updated_at) '
-                    'VALUES(?,\'source-verifier\',\'{}\',\'accepted\',?,?)', (identifier, time, time))
+                    'INSERT INTO workflow_runs(run_id,control_verifier,execution_workspace_json,workspace_manifest_json,state,created_at,updated_at) '
+                    'VALUES(?,\'source-verifier\',\'{}\',\'{}\',\'accepted\',?,?)', (identifier, time, time))
         database.close()
         before = files(source)
         result = subprocess.run([sys.executable, str(TOOL), str(self.directory / 'sample'), '--source', str(source)],

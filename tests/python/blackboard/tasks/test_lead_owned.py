@@ -98,13 +98,15 @@ class LeadOwnedTests(WorkflowTestCase):
         listed = board.call("task_list", {})
         row = next(row for row in listed["runs"] if row["runId"] == child["runId"])
         self.assertEqual(row["lineage"]["leadOwnership"], ownership)
-        self.assertEqual(row["lineage"]["sourceHostId"], child["hostId"])
+        self.assertIsNone(row["lineage"]["sourceHostId"])
         self.assertEqual(task_brief(row)["leadOwnership"], ownership)
         self.assertEqual(next(row for row in list_brief(listed)["runs"] if row["runId"] == child["runId"])["leadOwnership"], ownership)
         lead_view = board.call("workflow_get", {"runId": lead["runId"]})
         self.assertEqual(lead_view["ownedMicroTasks"], [{"runId": child["runId"], "leadTurnId": claim["turn"]["turnId"],
                                                        "createdAt": child["createdAt"], "state": "executing"}])
         with board.store.db.read() as db:
+            self.assertIsNone(db.execute("SELECT source_host_id FROM workflow_runs WHERE run_id=?",
+                                         (child["runId"],)).fetchone()[0])
             groups = dict(db.execute("SELECT run_id,macro_task_id FROM workflow_runs"))
             self.assertIsNotNone(groups[lead["runId"]])
             self.assertEqual(groups[lead["runId"]], groups[child["runId"]])

@@ -9,7 +9,7 @@ from unittest import mock
 
 from hey_my_buddy.protocol.contracts import CONTRACT_VERSION
 from support import BoardTestCase
-from blackboard.store.upgrade_fixture import load_fixture
+from blackboard.store.upgrade_fixture import FIXTURE, load_fixture
 from hey_my_buddy.blackboard.store import backup, upgrade as schema_upgrade
 from hey_my_buddy.blackboard.store.db import SCHEMA_VERSION, UPGRADE_BASE_SCHEMA
 from hey_my_buddy.blackboard.store.store import BoardStore
@@ -22,6 +22,12 @@ class UpgradeCutoverTests(BoardTestCase):
         super().setUp()
         self.state = self.directory / "state"
         load_fixture(self.state)
+        resources = json.loads((FIXTURE / 'workspace-resources.json').read_text(encoding='utf-8'))
+        self.private_files = {relative: (self.state / relative).read_bytes() for relative in resources['files']}
+        self.legacy_files = {relative for relative in self.private_files
+                             if '/goals/' in relative or relative.startswith('decisions/')
+                             or relative in ('legacy-worker-cleanup.lock', 'worker.log')}
+        self.assertEqual(len(self.legacy_files), 7)
         (self.state / "console-settings.json").write_text('{"theme":"dark"}', encoding="utf-8", newline="\n")
         store = BoardStore(self.state)
         store.db.close()
@@ -117,7 +123,15 @@ class UpgradeCutoverTests(BoardTestCase):
             self.assertNotEqual(self.history, self.original_history)
         self.assertEqual({path.relative_to(self.retained_archive): path.read_bytes()
                           for path in self.retained_archive.rglob("*") if path.is_file()}, self.archive_bytes)
-        actual = upgrade.idle_snapshot(self.state)
+        for relative, content in self.private_files.items():
+            path = self.state / relative
+            if migrated and relative in self.legacy_files:
+                self.assertFalse(path.exists(), relative)
+            else:
+                expected = self.history.get(Path(relative), content)
+                self.assertEqual(path.read_bytes(), expected, relative)
+        actual = upgrade.idle_snapshot(
+            self.state, column_projections=self.before['columnProjections'] if migrated else None)
         if migrated:
             self.assertEqual(actual['schema'], SCHEMA_VERSION)
             self.assertEqual(actual['tables'], self.before['tables'])
@@ -134,6 +148,10 @@ class UpgradeCutoverTests(BoardTestCase):
         first = self.runtime_root / ("b" * 32)
         result = self.cutover(self.previous, first)
         self.assertTrue(result["upgraded"], result)
+        self.assertTrue(result['legacyLayoutCleanup']['complete'])
+        self.assertEqual(set(result['legacyLayoutCleanup']['removed']),
+                         {'harnesses/' + harness + '/goals' for harness in ('codex', 'claude', 'zcode', 'dsh')}
+                         | {'decisions', 'legacy-worker-cleanup.lock', 'worker.log'})
         self.assertEqual(upgrade.idle_snapshot(self.state)['schema'], SCHEMA_VERSION)
         self.assertNotIn("archive", result)
         self.assertEqual(backup.verify(Path(result["backup"]["path"]))["schema"], UPGRADE_BASE_SCHEMA)
@@ -148,6 +166,28 @@ class UpgradeCutoverTests(BoardTestCase):
         self.assert_history_preserved(migrated=True)
         self.assertEqual((self.state / 'board.sqlite3').read_bytes(), migrated_board)
         self.assertEqual(self.started_runtimes, [first, second])
+
+    def test_legacy_cleanup_failure_is_reported_after_verified_cutover(self):
+        target = self.runtime_root / ('b' * 32)
+        remove = upgrade.private_dirs.remove_tree
+
+        def refuse_goals(path, **options):
+            if path == self.state / 'harnesses/codex/goals':
+                raise PermissionError('retired native directory is busy')
+            return remove(path, **options)
+
+        with mock.patch.object(upgrade.private_dirs, 'remove_tree', side_effect=refuse_goals):
+            result = self.cutover(self.previous, target)
+        self.assertTrue(result['upgraded'], result)
+        self.assertFalse(result['legacyLayoutCleanup']['complete'])
+        self.assertEqual(result['legacyLayoutCleanup']['failures'], [
+            {'path': 'harnesses/codex/goals', 'code': 'PermissionError',
+             'message': 'retired native directory is busy'}])
+        self.assertEqual(self.started_runtimes, [target])
+        self.assertTrue((self.state / 'harnesses/codex/goals').is_dir())
+        self.assertFalse((self.state / 'harnesses/claude/goals').exists())
+        self.assertFalse((self.state / 'worker.log').exists())
+        self.assertFalse((self.state / 'upgrade.json').exists())
 
     def test_failed_new_runtime_returns_to_previous_runtime_with_history(self):
         target = self.runtime_root / ("b" * 32)

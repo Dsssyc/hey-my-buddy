@@ -146,7 +146,7 @@ class UpgradeFixtureTests(unittest.TestCase):
                 elif artifact['kind'] == 'shared-refs':
                     record = json.loads(artifact['manifest_json'])
                     self.assertEqual(record['manifestSha256'], WorkflowCoordinator.shared_refs_record_digest(record))
-        self.assertEqual(connection.execute('SELECT COUNT(*) FROM workflow_host_conclusions').fetchone()[0], 3)
+        self.assertEqual(connection.execute('SELECT COUNT(*) FROM workflow_host_conclusions').fetchone()[0], 4)
         self.assertEqual({row[0] for row in connection.execute('SELECT enabled FROM buddies')}, {0, 1})
         self.assertEqual({row[0] for row in connection.execute(
             'SELECT mode FROM evaluation_preferences')}, {'pin', 'exclude'})
@@ -155,7 +155,8 @@ class UpgradeFixtureTests(unittest.TestCase):
                           (('delivered', 'concluded'), ('accepted', 'accepted'),
                            ('failed', 'concluded'), ('cancelled', 'cancelled'))},
                           **{fixture['stockIds'][key]: 'accepted' for key in ('adopted', 'verified', 'helper', 'lead')},
-                          fixture['stockIds']['helperParent']: 'concluded'})
+                          fixture['stockIds']['helperParent']: 'concluded',
+                          fixture['stockIds']['leadOwned']: 'concluded'})
         self.assertEqual(connection.execute("SELECT COUNT(*) FROM tasks WHERE state IN ('queued','running')").fetchone()[0], 0)
         self.assertEqual({row[0] for row in connection.execute(
             "SELECT json_extract(execution_workspace_json,'$.kind') FROM workflow_runs")}, {'existing', 'worktree'})
@@ -214,6 +215,23 @@ class UpgradeFixtureTests(unittest.TestCase):
             upgrade.preflight(state, contract_changed=False)
         self.assertEqual(caught.exception.code, 'UNSUPPORTED_SCHEMA')
         events = [dict(row) for row in connection.execute('SELECT rowid AS event_rowid,* FROM events ORDER BY seq')]
+        # These values come from the base admission writers, independent of the
+        # migration SQL: ordinary and helper admissions name their approving
+        # Host, while Lead admission carries no source Host.
+        expected_hosts = {}
+        for event in events:
+            payload = json.loads(event['payload_json'])
+            if event['kind'] == 'task.submitted' and 'microTask' in payload:
+                expected_hosts.setdefault(event['task_id'], payload['microTask'].get('sourceHostId'))
+            elif event['kind'] == 'workflow.helper_admitted':
+                expected_hosts.setdefault(event['task_id'], payload['sourceHostId'])
+        runs = {row[0] for row in connection.execute('SELECT run_id FROM workflow_runs')}
+        self.assertEqual(set(expected_hosts), runs)
+        self.assertIsNone(expected_hosts[fixture['stockIds']['leadOwned']])
+        self.assertEqual(expected_hosts[fixture['stockIds']['helper']], 'fixture-host')
+        self.assertGreater(connection.execute('SELECT COUNT(*) FROM workflow_children').fetchone()[0], 0)
+        children = [tuple(row) for row in connection.execute('SELECT role,integrator FROM workflow_children')]
+        self.assertTrue(all(bool(integrator) == (role == 'integrator') for role, integrator in children))
         activities = dict(connection.execute('SELECT attempt_id,activity_json FROM attempt_activity'))
         activity_events = [event for event in events if event['kind'] == 'attempt.activity']
         self.assertTrue(activity_events)
@@ -241,7 +259,7 @@ class UpgradeFixtureTests(unittest.TestCase):
             query = 'SELECT type,name,tbl_name,sql FROM sqlite_master ORDER BY type,name'
             self.assertEqual([tuple(row) for row in connection.execute(query)],
                              [tuple(row) for row in baseline.execute(query)])
-        after = upgrade.idle_snapshot(state)
+        after = upgrade.idle_snapshot(state, column_projections=before['columnProjections'])
         self.assertEqual(after['schema'], SCHEMA_VERSION)
         self.assertEqual(after['tables'], before['tables'])
         for name, fingerprint in before['fingerprints'].items():
@@ -249,6 +267,10 @@ class UpgradeFixtureTests(unittest.TestCase):
                 self.assertEqual(after['fingerprints'][name], fingerprint, name)
         self.assertEqual(after['fingerprints']['events'], before['expectedEventsSha256'])
         self.assertEqual(after['retainedMetaSha256'], before['retainedMetaSha256'])
+        self.assertEqual(dict(connection.execute('SELECT run_id,source_host_id FROM workflow_runs')), expected_hosts)
+        self.assertEqual({row[1]: row[3] for row in connection.execute('PRAGMA table_info(workflow_runs)')}
+                         ['workspace_manifest_json'], 1)
+        self.assertNotIn('integrator', {row[1] for row in connection.execute('PRAGMA table_info(workflow_children)')})
         expected = [{**event, 'payload_json': '{}'} if event['kind'] == 'attempt.activity' else event
                     for event in events]
         self.assertEqual([dict(row) for row in connection.execute('SELECT rowid AS event_rowid,* FROM events ORDER BY seq')],
@@ -261,6 +283,54 @@ class UpgradeFixtureTests(unittest.TestCase):
         self.assertEqual((state / 'board.sqlite3').read_bytes(), board)
         self.assertEqual({p.relative_to(state): p.read_bytes() for p in state.rglob('*')
                           if p.is_file() and not p.name.startswith('board.sqlite3')}, files)
+
+    def test_missing_manifest_rolls_back_the_whole_upgrade(self):
+        fixture, connection = self.restored('missing-manifest')
+        connection.execute('UPDATE workflow_runs SET workspace_manifest_json=NULL WHERE run_id=?',
+                           (fixture['stableIds']['failed'],))
+        connection.commit()
+        before = (fixture['state'] / 'board.sqlite3').read_bytes()
+        with self.assertRaisesRegex(sqlite3.IntegrityError, 'NOT NULL constraint failed'):
+            schema_upgrade.migrate_schema(fixture['state'])
+        self.assertEqual((fixture['state'] / 'board.sqlite3').read_bytes(), before)
+
+    def test_source_host_backfill_uses_admission_before_first_takeover(self):
+        fixture, connection = self.restored('source-host-takeover')
+        with_source = fixture['stableIds']['delivered']
+        without_source = fixture['stableIds']['failed']
+        connection.execute("UPDATE events SET payload_json=json_remove(payload_json,'$.microTask.sourceHostId')"
+                           " WHERE task_id=? AND kind='task.submitted'", (without_source,))
+        for run_id in (with_source, without_source):
+            connection.execute("UPDATE workflow_runs SET host_id='current-host',owner_generation=3 WHERE run_id=?", (run_id,))
+            for generation, previous in ((1, 'first-host'), (2, 'later-host')):
+                connection.execute("INSERT INTO events(task_id,revision,kind,payload_json,created_at)"
+                                   " VALUES(?,1,'workflow.takeover',?,'2026-01-01T00:00:00.000Z')",
+                                   (run_id, json.dumps({'previousOwnerGeneration': generation, 'previousHostId': previous})))
+        connection.commit()
+        schema_upgrade.migrate_schema(fixture['state'])
+        actual = dict(connection.execute('SELECT run_id,source_host_id FROM workflow_runs'))
+        self.assertEqual(actual[with_source], 'fixture-host')
+        self.assertEqual(actual[without_source], 'first-host')
+        self.assertIsNone(actual[fixture['stockIds']['leadOwned']])
+
+    def test_started_verification_checks_retained_workflow_columns(self):
+        fixture, connection = self.restored('projected-columns')
+        before = upgrade.idle_snapshot(fixture['state'])
+        schema_upgrade.migrate_schema(fixture['state'])
+        target = self.root / 'runtimes' / ('b' * 32)
+        health = {'runtimeContentId': target.name, 'runtimeStable': True, 'schemaVersion': SCHEMA_VERSION}
+        self.assertTrue(upgrade.verify_started(fixture['state'], target, health, before)['retainedDataFingerprints'])
+        for table, column in (('workflow_runs', 'title'), ('workflow_children', 'role')):
+            with self.subTest(table=table):
+                original = [tuple(row) for row in connection.execute(f'SELECT rowid,{column} FROM {table}')]
+                connection.execute(f"UPDATE {table} SET {column}='changed'")
+                connection.commit()
+                with self.assertRaises(BoardError) as caught:
+                    upgrade.verify_started(fixture['state'], target, health, before)
+                self.assertEqual(caught.exception.details['tables'], [table])
+                connection.executemany(f'UPDATE {table} SET {column}=? WHERE rowid=?',
+                                       [(value, rowid) for rowid, value in original])
+                connection.commit()
 
     def test_invalid_router_json_rolls_back_activity_and_index_changes(self):
         fixture, connection = self.restored()

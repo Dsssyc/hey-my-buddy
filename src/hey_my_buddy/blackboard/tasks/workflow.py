@@ -421,7 +421,7 @@ class WorkflowCoordinator:
             "taskId": row["child_task_id"],
             "role": row["role"],
             "state": row["state"],
-            "integrator": bool(row["integrator"]),
+            "integrator": row["role"] == "integrator",
             "requestId": row["request_id"],
             "workspaceManifestSha256": (json.loads(row["workspace_manifest_json"]).get("manifestSha256")
                                         if row["workspace_manifest_json"] else None),
@@ -502,9 +502,7 @@ class WorkflowCoordinator:
             view["inputCommit"] = manifest.get("inputCommit")
         return view
 
-    def _workspace_view(self, run_row, *, connection=None) -> dict | None:
-        if not run_row["workspace_manifest_json"]:
-            return None
+    def _workspace_view(self, run_row, *, connection=None) -> dict:
         manifest = json.loads(run_row["workspace_manifest_json"])
         view = {
             "workspaceId": manifest.get("workspaceId"),
@@ -1188,9 +1186,7 @@ class WorkflowCoordinator:
 
     def _reclaim_manual_workspace(self, connection, task, run_row, now: str) -> None:
         """Reacquire released ownership under the same explicit continuation transaction."""
-        manifest = json.loads(run_row["workspace_manifest_json"] or "{}")
-        if not manifest:
-            return
+        manifest = json.loads(run_row["workspace_manifest_json"])
         reservations = connection.execute(
             "SELECT * FROM workspace_reservations WHERE holder_task_id=? ORDER BY rowid DESC", (task["task_id"],),
         ).fetchall()
@@ -1565,8 +1561,8 @@ class WorkflowCoordinator:
         connection.execute(
             "INSERT INTO workflow_runs(run_id, host_id, owner_generation, control_verifier,"
             " request_fingerprint, submission_verifier, execution_workspace_json,"
-            " workspace_manifest_json, state, revision, created_at,"
-            " updated_at) VALUES(?,?,1,?,?,?,?,?,'executing',1,?,?)",
+            " workspace_manifest_json, source_host_id, state, revision, created_at,"
+            " updated_at) VALUES(?,?,1,?,?,?,?,?,?,'executing',1,?,?)",
             (
                 run_id,
                 hostId,
@@ -1574,7 +1570,8 @@ class WorkflowCoordinator:
                 requestFingerprint,
                 self.db.agent_token_verifier(submissionToken) if submissionToken else None,
                 canonical_json(executionWorkspace),
-                canonical_json(manifest) if manifest else None,
+                canonical_json(manifest),
+                hostId if lead is None else None,
                 now,
                 now,
             ),
@@ -1604,41 +1601,40 @@ class WorkflowCoordinator:
                 payload={"macroTaskId": macro_task_id,
                          "description": presentation["macroTask"].get("description")},
             )
-        if manifest:
-            # The column tracks the effective execution checkout (a prepared worktree
-            # path), while spec_json/input_fingerprint keep the immutable original
-            # spec. Admission and resource claims use the column.
-            if manifest.get("path"):
-                connection.execute(
-                    "UPDATE tasks SET cwd=?, updated_at=? WHERE task_id=?",
-                    (manifest["path"], now, run_id),
-                )
-            # The original authorization is recorded once as scope version 1; every
-            # later amendment appends a new version instead of editing this one.
+        # The column tracks the effective execution checkout (a prepared worktree
+        # path), while spec_json/input_fingerprint keep the immutable original
+        # spec. Admission and resource claims use the column.
+        if manifest.get("path"):
             connection.execute(
-                "INSERT INTO workflow_scope_versions(run_id, scope_version, actor_role, actor_id, note, write_scope_json,"
-                " manifest_sha256, stopped_evidence_json, created_at) VALUES(?,1,?,?,?,?,?,?,?)",
-                (run_id, "lead" if lead else "host", lead["runId"] if lead else hostId, None, canonical_json(list(manifest.get("writeScope") or [])),
-                 manifest.get("manifestSha256"), canonical_json({"kind": "initial"}), now),
+                "UPDATE tasks SET cwd=?, updated_at=? WHERE task_id=?",
+                (manifest["path"], now, run_id),
             )
-            self._reserve(
-                connection,
-                manifest=manifest,
-                holder_task_id=run_id,
-                holder_kind="parent",
-                parent_run_id=run_id,
-                access=access,
-                now=now,
-            )
-            self._pin_artifact(
-                connection,
-                run_id=run_id,
-                kind="input",
-                manifest=manifest,
-                attempt_id=None,
-                turn_id=None,
-                now=now,
-            )
+        # The original authorization is recorded once as scope version 1; every
+        # later amendment appends a new version instead of editing this one.
+        connection.execute(
+            "INSERT INTO workflow_scope_versions(run_id, scope_version, actor_role, actor_id, note, write_scope_json,"
+            " manifest_sha256, stopped_evidence_json, created_at) VALUES(?,1,?,?,?,?,?,?,?)",
+            (run_id, "lead" if lead else "host", lead["runId"] if lead else hostId, None, canonical_json(list(manifest.get("writeScope") or [])),
+             manifest.get("manifestSha256"), canonical_json({"kind": "initial"}), now),
+        )
+        self._reserve(
+            connection,
+            manifest=manifest,
+            holder_task_id=run_id,
+            holder_kind="parent",
+            parent_run_id=run_id,
+            access=access,
+            now=now,
+        )
+        self._pin_artifact(
+            connection,
+            run_id=run_id,
+            kind="input",
+            manifest=manifest,
+            attempt_id=None,
+            turn_id=None,
+            now=now,
+        )
         if buddy is None:
             self._start_routing(connection, run_id, now)
         else:
@@ -2614,7 +2610,7 @@ class WorkflowCoordinator:
             access = "read" if item["executionWorkspace"]["access"] == "read" else "write"
             transfer_from = None
             if access == "write" and manifest.get("checkoutId") == json.loads(
-                    run_row["workspace_manifest_json"] or "{}").get("checkoutId"):
+                    run_row["workspace_manifest_json"]).get("checkoutId"):
                 # Sequential reuse of the parent's checkout requires stopped-parent proof
                 # and an explicit Host transfer.
                 if not self._stopped_parent(connection, run_row["run_id"]):
@@ -2658,15 +2654,14 @@ class WorkflowCoordinator:
             )
             connection.execute(
                 "INSERT INTO workflow_children(child_task_id, parent_run_id, request_id, decision_command_id, role,"
-                " integrator, state, workspace_manifest_json,"
-                " created_at, updated_at) VALUES(?,?,?,?,?,?,'active',?,?,?)",
+                " state, workspace_manifest_json,"
+                " created_at, updated_at) VALUES(?,?,?,?,?,'active',?,?,?)",
                 (
                     helper_task_id,
                     run_row["run_id"],
                     request_row["request_id"],
                     command_id,
                     item["role"],
-                    1 if item["integrator"] else 0,
                     canonical_json(manifest),
                     now,
                     now,
@@ -2735,9 +2730,9 @@ class WorkflowCoordinator:
         # capability of its own (only the parent run is addressed by workflow ops).
         connection.execute(
             "INSERT INTO workflow_runs(run_id, host_id, owner_generation, control_verifier,"
-            " request_fingerprint, execution_workspace_json, workspace_manifest_json,"
+            " request_fingerprint, execution_workspace_json, workspace_manifest_json, source_host_id,"
             " state, revision, created_at, updated_at)"
-            " VALUES(?,?,1,?,?,?,?,'executing',1,?,?)",
+            " VALUES(?,?,1,?,?,?,?,?,'executing',1,?,?)",
             (
                 helper_task_id,
                 run_row["host_id"],
@@ -2745,6 +2740,7 @@ class WorkflowCoordinator:
                 schemas.workflow_request_fingerprint(spec, item["executionWorkspace"], run_row["host_id"]),
                 canonical_json(item["executionWorkspace"]),
                 canonical_json(manifest),
+                source_host_id,
                 now,
                 now,
             ),
@@ -3117,7 +3113,7 @@ class WorkflowCoordinator:
                 "role": row["role"],
                 "state": row["state"],
                 "taskState": row["task_state"],
-                "integrator": bool(row["integrator"]),
+                "integrator": row["role"] == "integrator",
                 "disposition": turn["disposition"] if turn is not None else None,
                 "summary": _head(outcome.get("summary") if outcome else None, 2000),
                 "remaining": [str(item)[:500] for item in (outcome or {}).get("remaining", [])[:8]]
@@ -3129,7 +3125,7 @@ class WorkflowCoordinator:
                                             if row["workspace_manifest_json"] else None),
             }
             manifest = json.loads(turn["input_json"]).get("executionWorkspace") if turn is not None else None
-            if manifest is None and child_run is not None and child_run["workspace_manifest_json"]:
+            if manifest is None and child_run is not None:
                 manifest = json.loads(child_run["workspace_manifest_json"])
             if manifest:
                 entry["workspaceManifestSha256"] = manifest.get("manifestSha256")
@@ -4558,15 +4554,8 @@ class WorkflowCoordinator:
         return task
 
     def _conclude_seal_work(self, connection, run_row, task):
-        """The manifest, allowed paths and attempt of one Host partial seal, or None.
-
-        ``None`` means there is no prepared workspace whose managed changes could
-        be unsealed; a cancelled-before-preparation micro task concludes without a seal.
-        """
-        manifest_value = run_row["workspace_manifest_json"]
-        if not manifest_value:
-            return None
-        manifest = json.loads(manifest_value)
+        """The manifest, allowed paths and attempt of one Host partial seal, or None."""
+        manifest = json.loads(run_row["workspace_manifest_json"])
         if not manifest.get("manifestSha256"):
             return None
         if not task["selected_attempt_id"]:
@@ -4686,7 +4675,7 @@ class WorkflowCoordinator:
         """
         with self.db.read() as connection:
             run_row = self._run_optional(connection, run_id)
-            if run_row is None or not run_row["workspace_manifest_json"]:
+            if run_row is None:
                 return {"removed": False, "reasons": ["workspace-not-prepared"]}
             revision = self._run_row(connection, owner_run_id)["revision"]
         command = f"reclaim-{purpose}-" + uuid.uuid4().hex
@@ -4901,7 +4890,7 @@ class WorkflowCoordinator:
                 execution = json.loads(turn["input_json"])["executionWorkspace"]
         manifest_sha = json.loads(conflict["evidence_json"])["manifestSha256"]
         if execution.get("manifestSha256") != manifest_sha:
-            execution = json.loads(run_row["workspace_manifest_json"] or "{}")
+            execution = json.loads(run_row["workspace_manifest_json"])
         if execution.get("manifestSha256") != manifest_sha:
             raise BoardError("WORKSPACE_CONFLICT",
                              "The recorded conflict does not match the run's execution manifest",
@@ -5402,9 +5391,7 @@ class WorkflowCoordinator:
             run_id = target_id
             target_snapshot = run_row
             task = connection.execute("SELECT * FROM tasks WHERE task_id=?", (run_id,)).fetchone()
-            manifest = json.loads(run_row["workspace_manifest_json"] or "{}")
-            if not manifest:
-                raise BoardError("NOT_READY", "This run has no prepared workspace to clean up", runId=run_id)
+            manifest = json.loads(run_row["workspace_manifest_json"])
             retained = self._allocation_provenance(connection, run_row)
             reasons, evidence, retention = self._cleanup_reasons(connection, run_row, task, manifest)
         module = workspace_module()
@@ -5552,7 +5539,7 @@ class WorkflowCoordinator:
                                  plannedPath=plan["path"])
             resume = self._cleanup_apply_precheck(connection, run_row, plan)
             task = connection.execute("SELECT * FROM tasks WHERE task_id=?", (run_id,)).fetchone()
-            manifest = json.loads(run_row["workspace_manifest_json"] or "{}")
+            manifest = json.loads(run_row["workspace_manifest_json"])
             retained = self._allocation_provenance(connection, run_row)
             allocation = workspace_module().resolve_allocation(self.board.directory, manifest, retained)
             sealed = self._latest_handoff(connection, run_row, manifest)
@@ -5564,7 +5551,7 @@ class WorkflowCoordinator:
                 child_run = connection.execute("SELECT workspace_manifest_json FROM workflow_runs WHERE run_id=?",
                                                (child['child_task_id'],)).fetchone()
                 if child_run is not None:
-                    child_manifest = json.loads(child_run['workspace_manifest_json'] or '{}')
+                    child_manifest = json.loads(child_run['workspace_manifest_json'])
                     if child_manifest.get('checkoutRoot') == plan['path']:
                         private_micro_tasks.append(child['child_task_id'])
             for micro_task_id in list(private_micro_tasks):
@@ -5692,7 +5679,7 @@ class WorkflowCoordinator:
             raise BoardError("PLAN_EXPIRED", "This cleanup plan expired; plan again before deleting anything",
                              planId=plan["plan_id"], expiresAt=plan["expires_at"])
         task = connection.execute("SELECT * FROM tasks WHERE task_id=?", (run_row["run_id"],)).fetchone()
-        manifest = json.loads(run_row["workspace_manifest_json"] or "{}")
+        manifest = json.loads(run_row["workspace_manifest_json"])
         # The plan is bound to the physical allocation, not to whatever logical
         # turn/input snapshot currently runs on it; both must still agree here.
         retained = self._allocation_provenance(connection, run_row)
@@ -5871,7 +5858,7 @@ class WorkflowCoordinator:
             if target is not None:
                 rows = connection.execute(
                     "SELECT r.workspace_manifest_json FROM workflow_runs r JOIN tasks t ON t.task_id=r.run_id"
-                    " WHERE t.state='queued' AND r.workspace_manifest_json IS NOT NULL AND r.run_id=?",
+                    " WHERE t.state='queued' AND r.run_id=?",
                     (target,),
                 ).fetchall()
             else:
@@ -5881,7 +5868,7 @@ class WorkflowCoordinator:
                     rows.extend(connection.execute(
                         "SELECT r.workspace_manifest_json, t.created_at, t.task_id"
                         " FROM workflow_runs r JOIN tasks t ON t.task_id=r.run_id"
-                        f" WHERE t.state='queued' AND r.workspace_manifest_json IS NOT NULL AND {class_predicate}"
+                        f" WHERE t.state='queued' AND {class_predicate}"
                         " ORDER BY t.created_at, t.task_id LIMIT ?",
                         (DECISION_ADAPTER, self.board.CLAIM_CANDIDATE_LIMIT),
                     ).fetchall())
@@ -5912,7 +5899,7 @@ class WorkflowCoordinator:
         row = connection.execute(
             "SELECT workspace_manifest_json FROM workflow_runs WHERE run_id=?", (task_id,)
         ).fetchone()
-        if row is None or not row["workspace_manifest_json"]:
+        if row is None:
             return None
         return json.loads(row["workspace_manifest_json"])["snapshot"]["repositoryPath"]
 
@@ -5928,7 +5915,7 @@ class WorkflowCoordinator:
                 " WHERE a.attempt_id=?",
                 (params["attemptId"],),
             ).fetchone()
-        if row is None or not row["workspace_manifest_json"]:
+        if row is None:
             return None
         manifest = json.loads(row["workspace_manifest_json"])
         path = manifest["snapshot"]["repositoryPath"]
@@ -6070,7 +6057,7 @@ class WorkflowCoordinator:
             "SELECT COALESCE(MAX(turn_index),0)+1 FROM workflow_turns WHERE run_id=?", (run_row["run_id"],)
         ).fetchone()[0]
         resume_mode = "initial" if turn_count == 0 else "reconstructed-new-session"
-        manifest = json.loads(run_row["workspace_manifest_json"]) if run_row["workspace_manifest_json"] else {}
+        manifest = json.loads(run_row["workspace_manifest_json"])
         execution_workspace = self._turn_workspace(connection, run_row, manifest, continuation, turn_count)
         buddy = self._buddy(run_row)
         native = self._previous_codex_checkpoint(connection, previous)
@@ -6325,9 +6312,7 @@ class WorkflowCoordinator:
         resolution, or a helper's transferred output, whichever came last), and the
         current authorized scope version supplies the write scope of the new stage.
         """
-        manifest = json.loads(run_row["workspace_manifest_json"]) if run_row["workspace_manifest_json"] else {}
-        if not manifest or not manifest.get("path"):
-            return None
+        manifest = json.loads(run_row["workspace_manifest_json"])
         scope = self._current_scope(connection, run_row)
         if recovered_attempt is not None:
             conflict = self._open_conflict(connection, run_row["run_id"])
@@ -6386,7 +6371,7 @@ class WorkflowCoordinator:
             attempt = self.board._selected_attempt(connection, task)
             if attempt is not None and (attempt["execution_state"] != "finished" or not attempt["shutdown_confirmed"]):
                 return None
-            previous = json.loads(run["workspace_manifest_json"] or "{}")
+            previous = json.loads(run["workspace_manifest_json"])
             checkout_id = previous.get("checkoutId")
             reservations = connection.execute(
                 "SELECT * FROM workspace_reservations WHERE checkout_id=? AND state='held' ORDER BY reservation_id",
@@ -7153,7 +7138,7 @@ class WorkflowCoordinator:
         document = json.loads(turn_row["input_json"])
         manifest = document["executionWorkspace"]
         if not manifest.get("manifestSha256"):
-            manifest = json.loads(run_row["workspace_manifest_json"] or "{}")
+            manifest = json.loads(run_row["workspace_manifest_json"])
         if not manifest.get("manifestSha256"):
             return []
         try:
@@ -7337,7 +7322,7 @@ class WorkflowCoordinator:
             "turnId": turn_row["turn_id"],
             "turnInputSha256": sha256_text(turn_row["input_json"]),
             "workspaceManifestSha256": frozen.get("manifestSha256"),
-            "workspaceId": (json.loads(run_row["workspace_manifest_json"] or "{}") or {}).get("workspaceId"),
+            "workspaceId": json.loads(run_row["workspace_manifest_json"]).get("workspaceId"),
             "repositoryPath": repository_path,
             "startStash": start,
             "sealStash": seal,

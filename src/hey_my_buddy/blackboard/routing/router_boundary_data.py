@@ -248,25 +248,24 @@ def _continuation_context(connection, row, run_id, owner_run_id):
         f"SELECT r.task_id FROM decision_requests r JOIN workflow_routes w ON w.decision_id=r.decision_id WHERE w.run_id IN ({markers}) AND r.task_id IS NOT NULL", ids)
     if any(not _stopped(connection, item[0]) for item in routing_tasks):
         return False, None, helper_policy, run
-    manifest = _json(run["workspace_manifest_json"], {})
-    if manifest.get("checkoutId"):
-        reservations = connection.execute("SELECT * FROM workspace_reservations WHERE holder_task_id=? ORDER BY rowid DESC", (run_id,)).fetchall()
-        current = next((item for item in reservations if item["state"] in ("held", "transferred")), None)
-        current = current or next((item for item in reservations if item["checkout_id"] == manifest["checkoutId"]), None)
-        task = connection.execute("SELECT cwd FROM tasks WHERE task_id=?", (run_id,)).fetchone()
-        reservation_access = "read" if manifest["access"] == "read" else "write"
-        if current is None or task is None or current["access"] != reservation_access or task["cwd"] != manifest.get("path") or any(
-                current[key] != manifest.get(field)
-                for key, field in (
-                ("checkout_id", "checkoutId"), ("repository_id", "repositoryId"), ("path", "path"))):
-            return True, "workspace-ownership-lost", helper_policy, run
-        conflicts = connection.execute(
-            "SELECT holder_task_id FROM workspace_reservations WHERE checkout_id=?"
-            " AND holder_task_id!=? AND state='held' AND (access='write' OR ?='write')",
-            (manifest["checkoutId"], run_id, reservation_access)).fetchall()
-        if conflicts and (current["state"] != "transferred" or any(
-                item["holder_task_id"] not in ids for item in conflicts)):
-            return True, "workspace-ownership-lost", helper_policy, run
+    manifest = json.loads(run["workspace_manifest_json"])
+    reservations = connection.execute("SELECT * FROM workspace_reservations WHERE holder_task_id=? ORDER BY rowid DESC", (run_id,)).fetchall()
+    current = next((item for item in reservations if item["state"] in ("held", "transferred")), None)
+    current = current or next((item for item in reservations if item["checkout_id"] == manifest["checkoutId"]), None)
+    task = connection.execute("SELECT cwd FROM tasks WHERE task_id=?", (run_id,)).fetchone()
+    reservation_access = "read" if manifest["access"] == "read" else "write"
+    if current is None or task is None or current["access"] != reservation_access or task["cwd"] != manifest.get("path") or any(
+            current[key] != manifest.get(field)
+            for key, field in (
+            ("checkout_id", "checkoutId"), ("repository_id", "repositoryId"), ("path", "path"))):
+        return True, "workspace-ownership-lost", helper_policy, run
+    conflicts = connection.execute(
+        "SELECT holder_task_id FROM workspace_reservations WHERE checkout_id=?"
+        " AND holder_task_id!=? AND state='held' AND (access='write' OR ?='write')",
+        (manifest["checkoutId"], run_id, reservation_access)).fetchall()
+    if conflicts and (current["state"] != "transferred" or any(
+            item["holder_task_id"] not in ids for item in conflicts)):
+        return True, "workspace-ownership-lost", helper_policy, run
     return True, None, helper_policy, run
 
 

@@ -7,7 +7,6 @@ from __future__ import annotations
 
 from contextlib import ExitStack
 from dataclasses import dataclass, field
-import hashlib
 import json
 import re
 import uuid
@@ -139,8 +138,7 @@ def _collect(connection, target):
         if row['workspace_manifest_json']:
             add(json.loads(row['workspace_manifest_json']))
     for row in run_rows:
-        if row['workspace_manifest_json']:
-            add(json.loads(row['workspace_manifest_json']))
+        add(json.loads(row['workspace_manifest_json']))
     for row in turns:
         add(json.loads(row['input_json']))
     for row in _rows(connection, 'workflow_continuations', 'run_id', runs):
@@ -365,7 +363,6 @@ def _delete_private_roots(store, scope):
         for harness in harnesses:
             root = private_dirs.micro_task_root(store.directory, harness, task_id)
             skipped.extend(_remove_owned_tree(root))
-            skipped.extend(_remove_owned_tree(store.directory / 'harnesses' / harness / hashlib.sha256(task_id.encode()).hexdigest()))
         skipped.extend(_remove_owned_tree(store.directory / 'attempts' / task_id))
     return skipped
 

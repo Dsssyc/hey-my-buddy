@@ -9,16 +9,14 @@ Everything here is grounded in durable rows:
 
 * kind and lineage come from ``workflow_runs`` plus ``workflow_children`` (helpers)
   and ``router_dispatches``/``workflow_routes`` (internal routing decisions);
-* the original delegating Host comes from that run's first explicit admission
-  source, its generation-1 takeover evidence, or its still-current generation-1
-  row. Helpers use their own creation evidence, and routing decisions use their
-  owning run's evidence. Missing historical evidence stays ``null``; owner/actor
-  labels and a helper's root Host are never substitutes for its original source;
+* the original delegating Host comes from the source frozen on that run at
+  admission. Helpers use their own admission source, and routing decisions use
+  their owning run's source. Lead admissions carry ``null``;
 * the current Host is the root of the task's micro task tree, because a takeover
   fences the whole owned graph rather than one row;
-* the project is the source Micro task's immutable original ``cwd`` and the saved
-  repository identity (pinned input manifest, then the run's manifest, then the
-  checkout reservation); a temporary execution worktree is never the project.
+* the project is the root Micro task's immutable original ``cwd`` and the
+  repository identity in its pinned input manifest; a temporary execution
+  worktree is never the project.
 
 ``t.*`` is carried through the relation, so a resolved row is also a valid task row
 for :meth:`hey_my_buddy.blackboard.store.store.BoardStore._decorate`.
@@ -126,33 +124,6 @@ roots AS (
          SELECT 1 FROM workflow_children parent WHERE parent.child_task_id = lineage.root_run_id
      )
 ),
-source_hosts AS (
-    SELECT source.run_id,
-           COALESCE(
-               (SELECT CASE event.kind
-                           WHEN 'task.submitted' THEN json_extract(event.payload_json, '$.microTask.sourceHostId')
-                           ELSE json_extract(event.payload_json, '$.sourceHostId')
-                       END
-                  FROM events event
-                 WHERE event.task_id = source.run_id AND (
-                     (event.kind = 'task.submitted'
-                      AND json_type(event.payload_json, '$.microTask.sourceHostId') = 'text'
-                      AND length(json_extract(event.payload_json, '$.microTask.sourceHostId')) > 0)
-                     OR (event.kind = 'workflow.helper_admitted'
-                         AND json_type(event.payload_json, '$.sourceHostId') = 'text'
-                         AND length(json_extract(event.payload_json, '$.sourceHostId')) > 0)
-                 ) ORDER BY event.seq LIMIT 1),
-               (SELECT json_extract(event.payload_json, '$.previousHostId') FROM events event
-                 WHERE event.task_id = source.run_id AND event.kind = 'workflow.takeover'
-                   AND json_type(event.payload_json, '$.previousOwnerGeneration') = 'integer'
-                   AND json_extract(event.payload_json, '$.previousOwnerGeneration') = 1
-                   AND json_type(event.payload_json, '$.previousHostId') = 'text'
-                   AND length(json_extract(event.payload_json, '$.previousHostId')) > 0
-                 ORDER BY event.seq LIMIT 1),
-               CASE WHEN source.owner_generation = 1 THEN source.host_id END
-           ) AS source_host_id
-      FROM workflow_runs source
-),
 owned_runs(owner_run_id, run_id) AS (
     SELECT run_id, run_id FROM workflow_runs
     UNION
@@ -208,31 +179,19 @@ SELECT
     root_run.owner_generation AS root_owner_generation,
     source_run.source_host_id AS source_host_id,
     root_run.host_id AS current_host_id,
-    CASE WHEN (dr.decision_id IS NOT NULL OR t.adapter = 'decision') AND root_run.run_id IS NULL
-         THEN NULL
-         ELSE COALESCE(json_extract(root_task.spec_json, '$.cwd'), json_extract(t.spec_json, '$.cwd')) END AS project_path,
-    CASE WHEN (dr.decision_id IS NOT NULL OR t.adapter = 'decision') AND root_run.run_id IS NULL
-         THEN NULL
-         ELSE COALESCE(
+    CASE WHEN root_run.run_id IS NOT NULL THEN json_extract(root_task.spec_json, '$.cwd')
+         WHEN dr.decision_id IS NOT NULL OR t.adapter = 'decision' THEN NULL
+         ELSE json_extract(t.spec_json, '$.cwd') END AS project_path,
+    CASE WHEN root_run.run_id IS NOT NULL THEN
         (SELECT json_extract(artifact.manifest_json, '$.repositoryId') FROM workflow_artifacts artifact
           WHERE artifact.run_id = root_run.run_id AND artifact.kind = 'input'
-            AND json_extract(artifact.manifest_json, '$.repositoryId') IS NOT NULL
-          ORDER BY artifact.rowid LIMIT 1),
-        json_extract(root_run.workspace_manifest_json, '$.repositoryId'),
-        (SELECT reservation.repository_id FROM workspace_reservations reservation
-          WHERE reservation.holder_task_id = root_run.run_id
-            AND reservation.repository_id IS NOT NULL
-          ORDER BY reservation.rowid LIMIT 1),
-        json_extract(root_task.spec_json, '$.cwd'),
-        json_extract(t.spec_json, '$.cwd')
-    ) END AS project_id,
-    COALESCE(
-        (SELECT json_extract(artifact.manifest_json, '$.snapshot.repositoryPath') FROM workflow_artifacts artifact
-          WHERE artifact.run_id = root_run.run_id AND artifact.kind = 'input'
-            AND json_extract(artifact.manifest_json, '$.snapshot.repositoryPath') IS NOT NULL
-          ORDER BY artifact.rowid LIMIT 1),
-        json_extract(root_run.workspace_manifest_json, '$.snapshot.repositoryPath')
-    ) AS project_repository_path,
+          ORDER BY artifact.rowid LIMIT 1)
+         WHEN dr.decision_id IS NOT NULL OR t.adapter = 'decision' THEN NULL
+         ELSE json_extract(t.spec_json, '$.cwd') END AS project_id,
+    (SELECT json_extract(artifact.manifest_json, '$.snapshot.repositoryPath')
+       FROM workflow_artifacts artifact
+      WHERE artifact.run_id = root_run.run_id AND artifact.kind = 'input'
+      ORDER BY artifact.rowid LIMIT 1) AS project_repository_path,
     json_extract(t.spec_json, '$.task') AS task,
     t.adapter AS effective_adapter,
     COALESCE(json_extract(r.buddy_json, '$.model'), json_extract(t.spec_json, '$.model'))
@@ -259,7 +218,7 @@ LEFT JOIN workflow_runs routed_run ON routed_run.run_id = dr.run_id
 LEFT JOIN tasks routed_task ON routed_task.task_id = routed_run.run_id
 LEFT JOIN macro_tasks routed_macro ON routed_macro.macro_task_id = routed_run.macro_task_id
 LEFT JOIN roots wr_roots ON wr_roots.task_id = dr.run_id
-LEFT JOIN source_hosts source_run ON source_run.run_id = COALESCE(r.run_id, dr.run_id)
+LEFT JOIN workflow_runs source_run ON source_run.run_id = COALESCE(r.run_id, dr.run_id)
 LEFT JOIN tasks root_task ON root_task.task_id = COALESCE(rt.root_run_id, r.run_id, wr_roots.root_run_id, dr.run_id)
 LEFT JOIN workflow_runs root_run ON root_run.run_id = COALESCE(rt.root_run_id, r.run_id, wr_roots.root_run_id, dr.run_id)
 LEFT JOIN workflow_lead_tasks root_lead
