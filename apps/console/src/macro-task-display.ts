@@ -283,7 +283,7 @@ export function buddyNamer(buddies?: readonly FriendlyBuddy[] | null): (buddy: T
     if (!byTuple.has(key)) byTuple.set(key, buddy);
   }
   return (buddy) => {
-    if (!buddy) return { text: "配置未记录", title: "配置未记录" };
+    if (!buddy) return { text: "buddy 未记录", title: "buddy 未记录" };
     const raw = [buddy.harness, buddy.provider, buddy.model, buddy.effort]
       .map(part => (part ?? "").trim()).filter(Boolean).join(" / ");
     const matched = byTuple.get(JSON.stringify([buddy.harness ?? "", buddy.provider ?? "", buddy.model ?? ""]));
@@ -291,7 +291,7 @@ export function buddyNamer(buddies?: readonly FriendlyBuddy[] | null): (buddy: T
       ? buddyDisplayName(matched)
       : KNOWN_MODEL_NAMES[(buddy.model ?? "").trim()] ?? (buddy.model ?? "").trim();
     const effort = effortDisplay(buddy.effort);
-    const text = name && effort ? `${name} · ${effort}` : name || effort || "配置未记录";
+    const text = name && effort ? `${name} · ${effort}` : name || effort || "buddy 未记录";
     return { text, title: raw || text };
   };
 }

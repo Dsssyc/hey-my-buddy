@@ -128,9 +128,9 @@ export function WorkflowPanel({ task, snapshot, api, refresh, selectTask, active
               <dt>已记录回合</dt><dd>{value.counts?.turns == null ? "未记录" : `共 ${value.counts.turns} 个回合`}</dd>
               <dt>接续方式</dt><dd>{value.currentTurn?.resumeMode === "native-session" ? "恢复原生会话" : value.currentTurn?.resumeMode === "reconstructed-new-session" ? "新会话，从持久上下文重建" : "首次执行"}</dd>
               {value.buddy && <Fragment>
-                <dt>执行配置</dt><dd>{
+                <dt>执行 buddy</dt><dd>{
                   `${value.buddy.harness} · ${value.buddy.model} / ${value.buddy.effort}`
-                  + (lockText ? `｜${lockText}` : "｜配置来源未记录")
+                  + (lockText ? `｜${lockText}` : "｜buddy 来源未记录")
                 }</dd></Fragment>}
               <dt>输入提交</dt><dd className="mono wrap">{value.workspace?.inputCommit || "未记录"}</dd>
               <dt>等待原因</dt><dd className="wrap">{value.waitReason}</dd>
@@ -235,7 +235,7 @@ export function WorkflowPanel({ task, snapshot, api, refresh, selectTask, active
             const buddy = turn.buddy;
             return <li key={turn.turnId}>
               <span className="turn-label">第 {turn.turnIndex} 回合</span>
-              <span className="small muted">{buddy ? `${buddy.harness} · ${buddy.model} / ${buddy.effort}` : "配置未记录"}</span>
+              <span className="small muted">{buddy ? `${buddy.harness} · ${buddy.model} / ${buddy.effort}` : "buddy 未记录"}</span>
               <span className="turn-usage" title={usage.title}>{usage.text}</span>
               <span className="small muted">来源 {turn.tokenUsage?.source || "未记录"}</span>
             </li>;

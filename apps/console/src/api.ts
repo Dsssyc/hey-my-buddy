@@ -285,7 +285,7 @@ export type { HarnessStatus, HarnessCandidate, HarnessHealth } from "./types";
 import type { HarnessHealth, QuotaRetryWindow, QuotaRoutingRecord } from "./types";
 import { parseQuota } from "./host-workflow";
 
-/** The supported harnesses, in the Buddy 配置 page's fixed display order. */
+/** The supported harnesses, in the Buddy page's fixed display order. */
 export const HARNESS_ORDER = ["dsh", "zcode", "codex", "claude"] as const;
 
 /** Strict parse of one retry window (ADR-019): every fact is named or the value is null. */

@@ -139,3 +139,45 @@ WorkflowPanel 的“整合目标”显示 integration.target.path/ref，“目�
 第二回合打包 JS 为 `index-YXKcBnJj.js`，assets/index.html 已引用该资产，CSS 与图标无变化；缓存与浏览器目录仍全部在检出内。
 
 第二回合对最终资产运行 `PYTHONPATH=src <Host 指定解释器> -m hey_my_buddy.cli.checks tests/python/console/ tests/python/cli/test_host_preview.py`，8 个文件、127 项测试全部通过，跳过 0，退出 0，私有根已移除；未修改 Python 源码，因此没有重跑第一回合的其他定向文件或完整 Python 检查。
+
+## 第三回合：把 buddy 称为“配置”
+
+根据 Host 补充的范围，逐处核对非测试控制台源码的 38 处“配置”；33 处指一个 buddy，改为 buddy；api.ts 的“Buddy 配置 page”改为“Buddy page”，另计 1 处；保留 4 处设置含义的“配置”。draft.ts 的“家族备注”“模型家族”分别改为“模型服务备注”“模型服务”，共 2 处。本轮合计 36 处，累计界面文字、注释与样例数据的改名为 171 处；保留的“委派”仍为 8 处，指整合去向的“目标”仍为 2 处。
+
+执行、当前选择、候选、路由历史与回合里的旧称均来自 buddy、selectedBuddy、buddyRevision、row.buddy、span.buddy 或 buddies 数组，这些值表示 harness/provider/model/effort 的一组身份；据此分别改为“执行 buddy”“当前执行 buddy”“选中的 buddy”“buddy 版本”“N 个 buddy”“尚未确定执行 buddy”“未选定 buddy”“buddy 未记录”“补齐 buddy”“补充 buddy”“更换 buddy”“buddy 来源未记录”“执行回合与 buddy 对应”“buddy 历史响应不完整”，图例改为“执行 buddy 图例”，检查器卡片的字段名称和注释使用 buddy。draft.ts 的非模型服务冲突主体携带 buddyId，改为“buddy <id> 的…”；模型服务备注与并发主体用“模型服务 <id> 的…”。
+
+保留 DecisionDetails.tsx 的“预算配置”，因为它显示 Router 的 budget.preset；保留 buddies-harness.ts 的“已配置”，因为它表示 harness 的原生路径与账户就绪事实。DecisionDetails.tsx 与 RoutingDetails.tsx 各有一处“冻结记录，不随当前配置变化”，显示的是 routingBasisSummary 对已冻结 candidateCount、excludedBuddies 与 excludedCount 的说明，指当前候选和用户排除等路由设置，不称呼某个 buddy，故按 Host 要求保留。没有拿不准的条目，没有需要修改接口才能解决而未做的条目。
+
+第三回合各文件的改名次数：
+
+`apps/console/src/DecisionDetails.tsx`：4 处（配置 4，家族 0）。
+
+`apps/console/src/MacroTaskTimeline.tsx`：2 处（配置 2，家族 0）。
+
+`apps/console/src/RoutingDetails.tsx`：9 处（配置 9，家族 0）。
+
+`apps/console/src/RoutingPanel.tsx`：3 处（配置 3，家族 0）。
+
+`apps/console/src/WorkflowPanel.tsx`：3 处（配置 3，家族 0）。
+
+`apps/console/src/api.ts`：1 处（配置 1，家族 0）。
+
+`apps/console/src/console-data.ts`：1 处（配置 1，家族 0）。
+
+`apps/console/src/draft.ts`：3 处（配置 1，家族 2）。
+
+`apps/console/src/host-workflow.ts`：1 处（配置 1，家族 0）。
+
+`apps/console/src/inspector-card.ts`：5 处（配置 5，家族 0）。
+
+`apps/console/src/macro-task-display.ts`：3 处（配置 3，家族 0）。
+
+`apps/console/src/use-buddy-history.ts`：1 处（配置 1，家族 0）。
+
+本轮同步更新 App.test.tsx、WorkflowPanel.test.tsx、buddy-name.test.tsx、macro-task-detail.test.tsx、macro-task-display-016.test.ts、macro-task-timeline.test.tsx、routing-console.test.tsx、routing-timeline.test.tsx、timeline-layers.test.tsx 与 buddies/roles-view.test.tsx 的文字断言、注释和 buddy 样例名称；保留 harness“已配置”和 Router 预算、审阅设置的样例。没有修改布局、样式、标签宽度阈值、接口、测试超时或测试结构。
+
+第三回合使用检出内的 Node 24.15.0 重跑 `npm --prefix apps/console ci`，退出 0，缓存仍在 `tmp/npm-cache`；`npm --prefix apps/console test -- --maxWorkers=2` 通过 78 个文件、1,091 项测试，退出 0，耗时 91.91 秒，没有失败或单独重跑。
+
+第三回合 `npm --prefix apps/console run test:browser` 先完成 TypeScript 检查与 Vite 生产构建，再通过 96 项 Playwright 检查，退出 0，浏览器检查耗时 17.2 秒，没有失败、标签超长或单独重跑。打包 JS 为 `index-AshVBtk4.js`，assets/index.html 已引用该资产，CSS 与图标未变；未改变布局、样式或标签宽度阈值。
+
+第三回合使用 Host 指定解释器执行 `PYTHONPATH=src <Host 指定解释器> -m hey_my_buddy.cli.checks tests/python/console/ tests/python/cli/test_host_preview.py`，8 个文件、127 项测试全部通过，跳过 0，退出 0，私有根已移除；没有失败文件需要重跑。未修改 Python 源码，未重跑其他定向文件或完整 Python 检查；未安装产品或运行真实 harness、日常服务、Worker 与模型调用。第三回合原始日志保留在忽略的 tmp/turn3-*.log。

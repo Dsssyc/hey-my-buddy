@@ -75,11 +75,11 @@ describe("buddy display", () => {
   it("keeps a custom label and appends the effort exactly once", () => {
     expect(
       buddyTitle({
-        label: "我的稳定配置",
+        label: "我的稳定 buddy",
         model: "deepseek-flash",
         effort: "off",
       }),
-    ).toBe("我的稳定配置 · off");
+    ).toBe("我的稳定 buddy · off");
   });
 
   it("preserves native and unknown efforts instead of translating them", () => {
@@ -92,11 +92,11 @@ describe("buddy display", () => {
     expect(buddyTitle(proMax)).toBe("DeepSeek-V4-Pro · max");
     expect(
       buddyTitle({
-        label: "实验配置",
+        label: "实验 buddy",
         model: "deepseek-flash",
         effort: "turbo",
       }),
-    ).toBe("实验配置 · turbo");
+    ).toBe("实验 buddy · turbo");
   });
 
   it("keeps off inside a name and a tail that does not match the effort", () => {
@@ -181,7 +181,7 @@ describe("read-only routing panel (0.15.1 U4)", () => {
         model: "deepseek-flash",
         effort: "off",
       },
-      routing: { status: "needs-host", reason: "缺少执行配置" },
+      routing: { status: "needs-host", reason: "缺少执行 buddy" },
       shutdown: {
         selfConfirmed: true,
         descendantsConfirmed: true,
@@ -221,10 +221,10 @@ describe("read-only routing panel (0.15.1 U4)", () => {
     ).toBeTruthy();
     expect(screen.getByText("needs-host")).toBeTruthy();
     expect(
-      screen.getByText(/路由需要 Host 补充配置/),
+      screen.getByText(/路由需要 Host 补充 buddy/),
     ).toBeTruthy();
-    expect(screen.queryByLabelText("填入已启用配置")).toBeNull();
-    expect(screen.queryByRole("button", { name: "使用此配置接续" })).toBeNull();
+    expect(screen.queryByLabelText("填入已启用 buddy")).toBeNull();
+    expect(screen.queryByRole("button", { name: "使用此 buddy 接续" })).toBeNull();
     expect(screen.queryByRole("button", { name: "重试同一目标的路由" })).toBeNull();
   });
 });

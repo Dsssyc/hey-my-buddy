@@ -994,8 +994,8 @@ export function MacroTaskTimeline(props: MacroTaskTimelineProps) {
         aria-controls="timeline-legend-popover" title="图例" onClick={() => setLegendOpen(current => !current)}>图例</button>
       {legendOpen && !hidden && active && <Popover anchor={legendButtonRef.current} id="timeline-legend-popover"
         label="时间轴图例" className="timeline-legend-popover" onClose={() => setLegendOpen(false)}>
-      <div className="legend" aria-label="执行配置图例">
-        <span className="legend-title">执行配置</span>
+      <div className="legend" aria-label="执行 buddy 图例">
+        <span className="legend-title">执行 buddy</span>
         {palette.length ? palette.map(entry => <span key={entry.key} className="legend-item" title={entry.rawTitle ?? entry.label}>
           <span className={"swatch" + (entry.striped ? " striped" : "")} style={{ "--c": `var(--cfg-${entry.color})` } as CSSProperties} />{entry.label}
         </span>) : <span className="legend-item">—</span>}

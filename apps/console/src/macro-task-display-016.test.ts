@@ -45,7 +45,7 @@ describe("0.16 friendly buddy names (0.3)", () => {
     expect(buddyLabel(config("claude-sonnet-5"))).toBe("Claude Sonnet 5 · high");
     expect(buddyLabel(config("glm-5.3", "max"))).toBe("GLM-5.3 · max");
     expect(buddyLabel(config("my-own-model"))).toBe("my-own-model · high");
-    expect(buddyLabel(null)).toBe("配置未记录");
+    expect(buddyLabel(null)).toBe("buddy 未记录");
   });
 
   it("omits the effort half when it is empty, and keeps every native name including off", () => {

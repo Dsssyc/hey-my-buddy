@@ -367,7 +367,7 @@ export type RebaseOutcome = {
 const FIELD_NAMES: Record<RebaseConflict["field"], string> = {
   enabled: "启用状态",
   preference: "推理强度偏好",
-  modelServiceNote: "家族备注",
+  modelServiceNote: "模型服务备注",
   configuration: "Router 列表",
   defaultRoutingMode: "默认路由模式",
   routingBudget: "路由预算",
@@ -383,9 +383,9 @@ function conflictSubject(field: RebaseConflict["field"], buddyId: string): strin
   if (field === "routingBudget") return "路由预算";
   if (field === "routerRetryIntervalSeconds") return "重试间隔";
   if (field === "modelServiceNote" || field === "modelServiceConcurrency") {
-    return `模型家族 ${buddyId} 的${FIELD_NAMES[field]}`;
+    return `模型服务 ${buddyId} 的${FIELD_NAMES[field]}`;
   }
-  return `配置 ${buddyId} 的${FIELD_NAMES[field]}`;
+  return `buddy ${buddyId} 的${FIELD_NAMES[field]}`;
 }
 
 /** Replay a local edit on the latest content; policy patches are last-write-wins. */

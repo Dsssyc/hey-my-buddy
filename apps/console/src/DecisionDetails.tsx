@@ -64,7 +64,7 @@ export function DecisionDetails({ decisionId, api, csrfToken, active = true, ref
   const model = audit.decisionModel?.resolved || audit.decisionModel?.requested || audit.input?.buddy;
   const reason = audit.reason || audit.error || "未记录";
   const recorded = (value: unknown) => value == null ? "未记录" : typeof value === "object" ? JSON.stringify(value, null, 2) : String(value);
-  const outcomeText = (value: string | null | undefined) => value == null ? "未记录" : ({ matched: "符合", alternative: "选择其他配置", absent: "无偏好", none: "无偏好", fallback: "采用回退候选", "not-applicable": "不适用" }[value] ?? value);
+  const outcomeText = (value: string | null | undefined) => value == null ? "未记录" : ({ matched: "符合", alternative: "选择其他 buddy", absent: "无偏好", none: "无偏好", fallback: "采用回退候选", "not-applicable": "不适用" }[value] ?? value);
   const output = audit.output as { status?: string; decision?: { buddyId?: string | null; reason?: string; evidence?: unknown } } | null;
   const abstention = audit.status === "needs-host" && audit.buddyId == null
     && output?.status === "ok" && output.decision?.buddyId === null
@@ -81,7 +81,7 @@ export function DecisionDetails({ decisionId, api, csrfToken, active = true, ref
     <InlineText key={audit.decisionId} recordId={audit.decisionId} text={reason} className="read-text decision-reason" />
     {audit.error && audit.error !== audit.reason && <p className="error-message">{audit.error}</p>}
     <dl className="facts">
-      <dt>选中配置</dt><dd>{buddyText(audit.selectedBuddy)}</dd>
+      <dt>选中的 buddy</dt><dd>{buddyText(audit.selectedBuddy)}</dd>
       <dt>路由模型</dt><dd>{buddyText(model)}</dd>
       <dt>实际模式</dt><dd>{noRouterCall ? "未调用 Router" : recordedRoutingMode(audit.routingMode)}</dd>
       <dt>记录时间</dt><dd>{formatDate(audit.createdAt)}</dd>
@@ -102,7 +102,7 @@ export function DecisionDetails({ decisionId, api, csrfToken, active = true, ref
           <dt>输入核验</dt><dd><pre className="result-text">{recorded(audit.inputVerification)}</pre></dd></dl>
       </details>
       <h3>当时的约束与偏好</h3>
-      <p className="small muted">{Object.keys(constraints).length ? `硬约束：${buddyText(constraints)}` : "未记录指定配置的硬约束。"}</p>
+      <p className="small muted">{Object.keys(constraints).length ? `硬约束：${buddyText(constraints)}` : "未记录指定 buddy的硬约束。"}</p>
       {!!requiredCapabilities.length && <p className="small wrap">所需能力：{requiredCapabilities.join("、")}</p>}
       {audit.routerCalled === false &&
         <p className="small muted">本次由程序直接选定：唯一合法候选，未调用 Router。</p>}
@@ -113,7 +113,7 @@ export function DecisionDetails({ decisionId, api, csrfToken, active = true, ref
           <ul className="reason-list">{otherPreferences.map(preferenceItem)}</ul></details>}
       </> : <p className="small muted">候选快照无用户偏好</p> : <p className="small muted">输入快照未记录</p>}
     </>
-    {table && <details className="detail-section"><summary>候选与偏好（{buddies.length} 个配置）</summary>
+    {table && <details className="detail-section"><summary>候选与偏好（{buddies.length} 个 buddy）</summary>
       <pre className="result-text">{JSON.stringify({ buddies, preferences: table.preferences }, null, 2)}</pre></details>}
     <details className="detail-section"><summary>记录标识与原始快照</summary>
       <dl className="facts"><dt>决策 ID</dt><dd>{audit.decisionId}</dd><dt>计算任务</dt><dd>{audit.runId || "未启动计算任务"}</dd>

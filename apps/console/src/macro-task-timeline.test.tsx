@@ -173,7 +173,7 @@ describe("macroTask timeline rendering", () => {
     const timeline = macroTaskTimelineFixture();
     render(<MacroTaskTimeline {...baseProps(timeline)} />);
     openLegend();
-    const legend = screen.getByLabelText("执行配置图例");
+    const legend = screen.getByLabelText("执行 buddy 图例");
     const items = [...legend.querySelectorAll(".legend-item")].map(node => node.textContent);
     // 0.16 0.3: friendly names; unknown ids stay raw.
     expect(items).toEqual(["Claude Opus 5.5 · high", "gpt-5-codex · max", "glm-5 · high", "Claude Sonnet 5 · low"]);
@@ -570,7 +570,7 @@ describe("timeline selection, inspector and popover (C1–C3)", () => {
     expect(inspector.textContent).toContain("微任务");
     expect(inspector.textContent).toContain("回合");
     expect(inspector.textContent).toContain("共 2 轮");
-    expect(inspector.textContent).toContain("配置");
+    expect(inspector.textContent).toContain("buddy");
     expect(inspector.textContent).toContain("时间");
     expect(inspector.textContent).toContain("结果");
     expect(inspector.textContent).toContain("已验收");
@@ -816,7 +816,7 @@ describe("timeline selection, inspector and popover (C1–C3)", () => {
     const first = macroTaskTimelineFixture();
     const view = render(<MacroTaskTimeline {...baseProps(first)} />);
     openLegend();
-    const legendColors = () => [...screen.getByLabelText("执行配置图例").querySelectorAll(".legend-item .swatch")]
+    const legendColors = () => [...screen.getByLabelText("执行 buddy 图例").querySelectorAll(".legend-item .swatch")]
       .map(node => (node as HTMLElement).style.getPropertyValue("--c"));
     expect(legendColors()).toEqual(["var(--cfg-1)", "var(--cfg-2)", "var(--cfg-3)", "var(--cfg-4)"]);
     const second = macroTaskTimelineFixture();
@@ -846,7 +846,7 @@ describe("timeline selection, inspector and popover (C1–C3)", () => {
     const overflow = render(<MacroTaskTimeline {...baseProps(many)} />);
     expect([...document.querySelectorAll(".sp.exec.striped")].length).toBe(1);
     openLegend();
-    expect(screen.getByLabelText("执行配置图例").querySelectorAll(".legend-item .swatch.striped").length).toBe(1);
+    expect(screen.getByLabelText("执行 buddy 图例").querySelectorAll(".legend-item .swatch.striped").length).toBe(1);
     overflow.unmount();
   });
 });

@@ -171,7 +171,7 @@ describe("console interactions", () => {
     await user.type(note(), "本地草稿");
     expect(await screen.findByRole("region", { name: "未保存的修改" })).toBeTruthy();
     await user.click(screen.getByRole("link", { name: "设置" }));
-    // The save bar belongs to Buddy 配置 alone; the draft is kept without any
+    // The save bar belongs to Buddy alone; the draft is kept without any
     // leave confirmation and no save happens by navigating away.
     expect(screen.queryByRole("region", { name: "未保存的修改" })).toBeNull();
     await user.click(screen.getByRole("link", { name: /Buddy/ }));

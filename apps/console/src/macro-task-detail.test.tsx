@@ -250,7 +250,7 @@ describe("macroTask detail navigation (layer mode, ≤760px viewport)", () => {
     await openMacroTask(f);
     await openSpan(f, "s-r2-r");
     await screen.findByText("第一轮的路由依据");
-    await f.user.click(screen.getByRole("button", { name: "返回当前配置" }));
+    await f.user.click(screen.getByRole("button", { name: "返回当前 buddy" }));
     expect(screen.queryByRole("region", { name: "所选路由决定" })).toBeNull();
     await f.user.click(screen.getByRole("tab", { name: "概览" }));
     await openSpan(f, "s-r2-r");

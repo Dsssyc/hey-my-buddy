@@ -90,5 +90,5 @@ export function taskHost(task: Task) {
 }
 export function taskExecutor(task: Task) {
   const buddy = task.lineage?.buddy;
-  return buddy ? `${buddy.harness} · ${buddy.model} / ${effortText(buddy.effort)}` : "执行配置待确定";
+  return buddy ? `${buddy.harness} · ${buddy.model} / ${effortText(buddy.effort)}` : "执行 buddy 待确定";
 }
