@@ -32,4 +32,8 @@ Lead 在 A 的检出使用 Node.js 24.21.0 重跑 `npm --prefix apps/console tes
 
 A 固定差异通过 `git diff --binary <原始输入提交> <固定输出提交> -- apps/console/src` 和 `git apply --index` 整合，在 Lead 的独立检出生成提交 `5a873a48`，未碰分支、标签或 stash。验收调用为 `HMB_AGENT_CREDENTIAL_FILE=<第二回合执行凭据> <启动器> accept '{"runId":"79771ce9-890b-4cab-867b-4e05c68791da","artifactId":"e52a083f-e826-4d95-98e5-1b77ca4bb8d5","note":"<差异审查与 71 项检查记录>","target":{"path":"<Lead 自己的受管检出>","ref":"5a873a48"}}'`，退出码 0，返回 `state: accepted`、`integration.state: verified`、`strategy: patch`、`reclaim.removed: true`，整合标识为 `int-b5214ce3-185e-49ab-8463-6bc54ba03543`；实际提交目标可用，没有要求调整验收条件。
 
-B 尚在执行，未交回；目前没有产品流程拒绝，等待第二份交付后继续。
+B 首回合未形成可验收的交付。第三回合由 `workflow.turn_failed` 自动叫醒；`get` 显示 B 为 `failed`、`terminationReason: harness-error`、`shutdownConfirmed: true`，`result` 的已选尝试退出码为 1，错误为 `multiple native final messages completed`，并含 `turnError: the runner did not exit zero`。执行从 05:26:53 UTC 到 06:06:25 UTC，原生回合没有完成可用结果；目前这是 Lead 试跑最不顺的一处，失败回执不能直接当作模型交付。
+
+黑板保留了 B 的固定部分产物 `ce2fd2ae-fef8-488f-8ffe-5dfd829158d7`，输出提交 `29ffedbd`，仅修改 `apps/console/browser/lead.check.ts`、预览脚本和 `test_host_preview.py`；状态明确为 `partial: true`、`verified: false`、`final: false`，未整合、未验收。Lead 读取固定差异和该微任务检出内保存的 Playwright 失败上下文，发现四种语言 / 宽度组合均在检查器标题断言失败：`Expected: 等待 Lead`、`Received: 等待 Host`；检查器类型栏与时间轴已显示 Lead，但 `inspector-card.ts` 的 `head` 仍直接调用 `spanHead(host)`。
+
+该新场景暴露的根因位于本 Lead 的总写入范围 `apps/console` 内，A 已验收，不存在并行写入。Lead 用 `scope-amend`（`commandId: preview-inspector-scope-1`、`expectedRevision: 4`、`expectedScopeVersion: 1`）在 B 原范围上增加 `apps/console/src/inspector-card.ts` 与已有 `apps/console/src/macro-task-timeline.test.tsx`，理由为修复等待 Lead 检查器标题，返回退出码 0、revision 5、scopeVersion 2；没有扩展本 Lead 的 Host 授权范围。随后经 `continue --params-file tmp/preview-continue.json`（`commandId: preview-inspector-rework-1`、`expectedRevision: 5`）要求 B 从固定部分产物继续、修复头部根因、不放松浏览器断言，只新增运行检查器定向 Vitest，其他环境规则与限定检查维持，返回退出码 0。B 累计返修 1 次，尚待下一次交付；本 Lead 未代改子任务代码，也未通过其他工具重试失败操作。
