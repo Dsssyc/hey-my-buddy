@@ -12,6 +12,8 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest import mock
 
+from process_observation import wait_for_unreaped_child
+
 from hey_my_buddy.buddy.runtime.execution import Execution
 from hey_my_buddy.errors import BoardError
 from hey_my_buddy.json_codec import canonical_json
@@ -42,7 +44,7 @@ class ExecutionEndpointTests(unittest.TestCase):
             def exited_before_handle(*args, **kwargs):
                 child = spawn(*args, **kwargs)
                 children.append(child)
-                os.waitid(os.P_PID, child.pid, os.WEXITED | os.WNOWAIT)
+                wait_for_unreaped_child(child.pid)
                 return child
 
             try:

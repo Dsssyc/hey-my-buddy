@@ -9,6 +9,8 @@ import threading
 import unittest
 from unittest import mock
 
+from process_observation import wait_for_unreaped_child
+
 from hey_my_buddy.buddy.harnesses.base import ProcessHandle
 from hey_my_buddy.errors import BoardError
 from hey_my_buddy.protocol import process_identity as identity
@@ -166,9 +168,7 @@ class ProcessIdentityTests(unittest.TestCase):
     def test_identity_of_child_that_exited_before_handle_construction(self):
         process = subprocess.Popen([sys.executable, "-c", "pass"], start_new_session=True)
         try:
-            exited = os.waitid(os.P_PID, process.pid, os.WEXITED | os.WNOWAIT)
-            self.assertEqual(exited.si_pid, process.pid)
-            self.assertEqual(exited.si_status, 0)
+            wait_for_unreaped_child(process.pid)
             handle = ProcessHandle(process, own_group=True, log_paths={})
             record = identity.capture_process_identity(handle)
             self.assertIs(identity.validate_process_identity(record), record)
@@ -182,6 +182,7 @@ class ProcessIdentityTests(unittest.TestCase):
             self.assertIsNone(identity.process_start(process.pid, include_exited=False))
         finally:
             process.wait(timeout=5)
+        self.assertEqual(process.returncode, 0)
         for include_exited in (False, True):
             with self.subTest(include_exited=include_exited):
                 self.assertIsNone(identity.process_start(process.pid, include_exited=include_exited))
