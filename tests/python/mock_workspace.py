@@ -237,7 +237,7 @@ class MockWorkspace:
     def resolve_allocation(self, state_dir, manifest, retained=None):
         return None
 
-    def cleanup_inspect(self, state_dir, manifest, sealed=None, retained=None, allowed=None):
+    def cleanup_inspect(self, state_dir, manifest, sealed=None, retained=None, allowed=None, *, resume=False):
         return {
             "eligible": False, "reasons": ["not-a-managed-worktree"],
             "workspaceId": manifest.get("workspaceId"), "manifestWorkspaceId": manifest.get("workspaceId"),
@@ -247,5 +247,5 @@ class MockWorkspace:
             "unsealedPaths": [], "refs": [], "sealedObservation": None, "attachedBranch": None,
         }
 
-    def cleanup_remove(self, state_dir, manifest, *, retained=None):
+    def cleanup_remove(self, state_dir, manifest, *, retained=None, resume=False):
         raise BoardError("WORKSPACE_UNSAFE", "the mock double owns no disposable checkout")

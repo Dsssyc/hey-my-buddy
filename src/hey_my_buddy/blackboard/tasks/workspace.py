@@ -2261,12 +2261,24 @@ def _cleanup_resume_registration(repository, checkout_root, allocation, manifest
     if "locked" not in record:
         _git(repository, "worktree", "lock", "--reason", reason, str(checkout_root))
         record["locked"] = reason
-    return record
+    return record, git_dir
 
 
-def _cleanup_remaining_changes(repository, checkout_root, entries):
+def _cleanup_remaining_changes(repository, checkout_root, entries, registration, *, index_sha, head):
     """Only absent sealed files are permitted; every surviving byte is proved."""
-    paths, items = [], []
+    paths, items, unsealed = [], [], []
+    record, git_dir = registration
+    if record["HEAD"] != head:
+        unsealed.append(".git/HEAD")
+    try:
+        index = _entries(git_dir)
+    except BoardError as error:
+        if error.code not in ("WORKSPACE_UNMERGED", "WORKSPACE_UNSUPPORTED"):
+            raise
+        unsealed.append(".git/index")
+    else:
+        if _sha(_json(index)) != index_sha:
+            unsealed.append(".git/index")
     def walk_error(error):
         raise error
     for directory, directories, files in os.walk(checkout_root, followlinks=False, onerror=walk_error):
@@ -2280,14 +2292,23 @@ def _cleanup_remaining_changes(repository, checkout_root, entries):
             path = (Path(directory) / name).relative_to(checkout_root).as_posix()
             if path == ".git":
                 continue  # The allocation proof checked this exact pointer.
-            _relative(path)
-            item = _file(checkout_root, path, mode_hint=(entries.get(path) or [None])[0])
+            if path not in entries:
+                unsealed.append(path)
+                continue
+            try:
+                item = _file(checkout_root, path, mode_hint=entries[path][0])
+            except BoardError as error:
+                if error.code != "WORKSPACE_UNSUPPORTED":
+                    raise
+                unsealed.append(path)
+                continue
             if item is not None:
                 paths.append(path)
                 items.append(item)
     oids = _batch_blobs(repository, [data for _mode, data in items], write=False)
-    return sorted(path for path, (mode, _data), oid in zip(paths, items, oids)
-                  if entries.get(path) != [mode, oid])
+    unsealed.extend(path for path, (mode, _data), oid in zip(paths, items, oids)
+                    if entries[path] != [mode, oid])
+    return sorted(unsealed)
 
 
 def cleanup_inspect(state_dir, manifest: dict, sealed: dict | None = None, retained=None,
@@ -2340,7 +2361,7 @@ def cleanup_inspect(state_dir, manifest: dict, sealed: dict | None = None, retai
                 result["reasons"].extend(error.details["reasons"])
                 return result
             _cleanup_proof(repository, checkout_root, allocation, manifest, retained, sealed,
-                           result, allowed=tuple(allowed or ()), registration=registration, resume=True)
+                           result, allowed=tuple(allowed or ()), registration=registration)
             result["eligible"] = not result["reasons"]
             return result
         try:
@@ -2371,14 +2392,15 @@ def cleanup_inspect(state_dir, manifest: dict, sealed: dict | None = None, retai
 
 
 def _cleanup_proof(repository, checkout_root, allocation, manifest, retained, sealed, result, *, allowed=(),
-                   registration=None, resume=False) -> None:
+                   registration=None) -> None:
     """Fill one cleanup view with the worktree, seal and unsealed-change proof.
 
     ``allowed`` carries the exact paths earlier Host decisions already promoted on
     this manifest; they stay authorized for the comparison while anything newly
     outside the write scope still reports ``unsealed-changes``.
     """
-    record = registration if resume else _worktree_record(repository, checkout_root)
+    resume = registration is not None
+    record = registration[0] if resume else _worktree_record(repository, checkout_root)
     if record is None:
         # Registration itself is missing: its own reason, never a claim about
         # locks or branches that were not read.
@@ -2413,7 +2435,11 @@ def _cleanup_proof(repository, checkout_root, allocation, manifest, retained, se
             if not fixed_refs_match(False):
                 result["reasons"].append("unsealed-changes")
                 return
-            unsealed = _cleanup_remaining_changes(repository, checkout_root, _entries(repository, manifest["inputTree"]))
+            entries = _entries(repository, manifest["inputTree"])
+            index = entries if manifest["kind"] == "worktree" else _entries(repository, manifest["snapshot"]["stagedTree"])
+            head = manifest["inputCommit"] if manifest["kind"] == "worktree" else manifest["baseCommit"]
+            unsealed = _cleanup_remaining_changes(repository, checkout_root, entries, registration,
+                                                  index_sha=_sha(_json(index)), head=head)
             if unsealed:
                 result["reasons"].append("unsealed-changes")
                 result["unsealedPaths"] = unsealed[:32]
@@ -2443,7 +2469,8 @@ def _cleanup_proof(repository, checkout_root, allocation, manifest, retained, se
         result["reasons"].append("sealed-output-invalid")
         return
     if resume:
-        unsealed = _cleanup_remaining_changes(repository, checkout_root, _entries(repository, sealed["tree"]))
+        unsealed = _cleanup_remaining_changes(repository, checkout_root, _entries(repository, sealed["tree"]),
+                                              registration, index_sha=snapshot["indexSha256"], head=snapshot["headCommit"])
         if unsealed:
             result["reasons"].append("unsealed-changes")
             result["unsealedPaths"] = unsealed[:32]
@@ -2505,7 +2532,12 @@ def cleanup_remove(state_dir, manifest: dict, *, retained=None, resume=False) ->
             return removal
         if resume:
             repository = Path(manifest["snapshot"]["repositoryPath"])
-            record = _cleanup_resume_registration(repository, checkout_root, allocation, manifest)
+            record, git_dir = _cleanup_resume_registration(repository, checkout_root, allocation, manifest)
+            # Git requires the reciprocal pointer even to remove a registered
+            # worktree. Recreate only this proved allocation's missing gitfile,
+            # after the caller has proved all surviving content is retained.
+            if not _path_present(checkout_root / ".git"):
+                _write_once(checkout_root / ".git", os.fsencode(f"gitdir: {git_dir}\n"))
         else:
             actual = inspect(str(checkout_root))
             if actual["checkoutRoot"] != manifest["checkoutRoot"]:
@@ -2543,13 +2575,7 @@ def cleanup_remove(state_dir, manifest: dict, *, retained=None, resume=False) ->
             # original lock. Only relock this same physical registration.
             if _path_present(checkout_root):
                 try:
-                    current = inspect(str(checkout_root))
-                    registration = _worktree_record(repository, checkout_root)
-                    if (all((manifest[field] == current[field])
-                            for field in ("checkoutId", "repositoryId"))
-                            and registration is not None and "detached" in registration
-                            and not registration.get("locked")):
-                        _git(repository, "worktree", "lock", "--reason", "hey-my-buddy:" + allocation["workspaceId"], str(checkout_root))
+                    _cleanup_resume_registration(repository, checkout_root, allocation, manifest)
                 except BoardError as relock_error:
                     error.details["relockError"] = relock_error.payload()
             # A concurrent owner of this same allocation completed the removal in
