@@ -78,6 +78,34 @@ class StructuredRpcFailureTests(unittest.TestCase):
                         transport._ensure_service(directory)
                     preflight.assert_called_once_with(directory)
 
+    def test_identity_refusal_without_os_error_never_starts_or_reports_stopped(self):
+        # C-Two 0.9.0 rejects a Windows peer's identity before sending bytes.
+        # That permission denial has no OS errno and is not an absent listener.
+        failure = core_failure('permission_denied')
+        failure.transport_phase = 'pre_dispatch'
+        failure.raw_os_error = None
+        endpoint = {'address': 'ipc://fixture', 'token': 'fixture'}
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary)
+            for method in ('health', 'stop', 'restart'):
+                with self.subTest(method=method), \
+                     patch.object(transport, '_read_endpoint', return_value=endpoint), \
+                     patch.object(transport.private_dirs, 'linked', return_value=True), \
+                     patch.object(transport.rpc_config, 'configure_client'), \
+                     patch.object(transport.cc, 'connect', side_effect=failure), \
+                     patch.object(transport, '_cold_start_preflight') as preflight, \
+                     patch.object(transport.subprocess, 'Popen') as spawn:
+                    with self.assertRaises(transport.ServiceError) as caught:
+                        transport._call_service(method, {}, directory)
+                    self.assertEqual(caught.exception.code, 'LAUNCH_ACCESS_DENIED')
+                    self.assertEqual(caught.exception.details, {
+                        'category': 'transport', 'transport_kind': 'ipc',
+                        'transport_phase': 'pre_dispatch', 'io_kind': 'permission_denied',
+                        'io_operation': 'connect',
+                    })
+                    preflight.assert_not_called()
+                    spawn.assert_not_called()
+
     def test_non_c_two_errors_propagate_from_both_boundaries(self):
         endpoint = {'address': 'ipc://fixture', 'token': 'fixture'}
         failure = ValueError('programming failure')

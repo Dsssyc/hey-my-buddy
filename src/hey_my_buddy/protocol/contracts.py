@@ -2,7 +2,7 @@
 
 Every operation is a named method with a validated request schema — there is no
 public ``dispatch(method, JSON)`` facade and no Python-to-Node engine relay. Complex
-payloads travel as bounded JSON strings over C-Two 0.6.0. This DTO is a
+payloads travel as bounded JSON strings over C-Two 0.9.0. This DTO is a
 **same-user Python API only**: it is not claimed to be cross-language portable,
 no FastDB DTO is used here, and a non-Python client must define its own contract.
 
