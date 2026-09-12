@@ -1,0 +1,16 @@
+# 本地 dsh 委派过程产物：任务规格、stdout/stderr 日志，可能含机器路径
+/.dsh-skill-build/
+
+# macOS
+.DS_Store
+
+# Node
+node_modules/
+
+# 凭据；保留可选的 .env.example 模板
+.env
+.env.*
+!.env.example
+
+# 日志
+*.log

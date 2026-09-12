@@ -1,0 +1,6 @@
+interface:
+  display_name: "DeepSeek Delegate"
+  short_description: "Hand bounded coding tasks to local dsh runs"
+  default_prompt: "Use $deepseek-delegate to hand this bounded task to a local dsh run, then review the actual diff and checks yourself."
+policy:
+  allow_implicit_invocation: true
