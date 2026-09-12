@@ -154,6 +154,9 @@ describe('session adoption guard', () => {
       const adoptions = fixture.rpcRequests('session/create');
       assert.equal(adoptions.length, 1);
       assert.deepEqual(adoptions[0].payload, { sessionId, workspaceId: workspace.id });
+      assert.deepEqual(adoptions[0].wirePayload, {
+        args: { request: { sessionId, workspaceId: workspace.id } },
+      }, 'the live Typert gateway requires args.request, not flat payload fields');
       assert.equal(adoptions[0].created, false, 'a persisted id is adopted, not created');
 
       const readBack = fixture.rpcRequests('workspace/create')[1];

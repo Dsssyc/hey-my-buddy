@@ -9,7 +9,7 @@
  *   the signed browser cookie; the token never travels in a query to an RPC
  *   endpoint, an Authorization header, or any log line.
  * - `POST /api/<namespace>/<method>` carries one
- *   `{ type: 'client-request', rpcId, method, payload }` envelope and expects
+ *   `{ type: 'client-request', rpcId, method, payload: { args: { request } } }` envelope and expects
  *   `{ type: 'server-response', rpcId, result }` back.
  * - `workspace/create` registers or idempotently resolves the canonical `--cwd`
  *   and returns the workspace view (including current `sessionIds`), so it also
@@ -313,7 +313,15 @@ export async function connectWebHost(target, { timeoutMs = DEFAULT_WEB_TIMEOUT_S
  */
 export async function webRpc(host, method, payload, { timeoutMs = DEFAULT_WEB_TIMEOUT_SECONDS * 1000 } = {}) {
   const rpcId = randomUUID();
-  const body = JSON.stringify({ type: 'client-request', rpcId, method, payload });
+  // Typert names method parameters on the wire, not the request's own fields.
+  const parameter = {
+    'workspace/create': 'request',
+    'session/create': 'request',
+    'session/page': 'request',
+    'session/list': '_request',
+  }[method];
+  if (!parameter) throw new WebRpcError('unsupported dsh Remote method', 'unsupported-method');
+  const body = JSON.stringify({ type: 'client-request', rpcId, method, payload: { args: { [parameter]: payload } } });
   const response = await fetchBounded(`${host.origin}/api/${method}`, {
     method: 'POST',
     headers: { 'content-type': 'application/json', cookie: host.cookie },

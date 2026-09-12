@@ -6,7 +6,7 @@
  * - `GET /?token=...` performs the ordinary root-token exchange and answers a
  *   same-origin 303 with a signed-cookie stand-in.
  * - `POST /api/<namespace>/<method>` accepts the
- *   `{ type: 'client-request', rpcId, method, payload }` envelope and answers
+ *   `{ type: 'client-request', rpcId, method, payload: { args: { request } } }` envelope and answers
  *   `{ type: 'server-response', rpcId, result }`.
  * - `workspace/create` registers or resolves one canonical directory and returns
  *   the workspace view (with `sessionIds`), which is also the membership read.
@@ -181,7 +181,8 @@ export async function startMockWeb(options = {}) {
         method,
         authenticated,
         rpcId: body?.rpcId ?? null,
-        payload: body?.payload ?? null,
+        payload: body?.payload?.args?.request ?? null,
+        wirePayload: body?.payload ?? null,
         childExited: hasChildExited(options.childPidFile),
         rpcMethodMatches: body?.method === method,
         envelope: body?.type === 'client-request',
@@ -192,10 +193,21 @@ export async function startMockWeb(options = {}) {
         res.end('unauthorized');
         return;
       }
+      const wirePayload = body?.payload;
+      if (!wirePayload || Object.keys(wirePayload).length !== 1 || !wirePayload.args
+          || typeof wirePayload.args !== 'object' || Array.isArray(wirePayload.args)) {
+        errorResponse(res, body?.rpcId, 'gateway/internal', 'Remote payload must contain exactly one plain-object args field');
+        return;
+      }
+      if (Object.keys(wirePayload.args).length !== 1 || !wirePayload.args.request
+          || typeof wirePayload.args.request !== 'object' || Array.isArray(wirePayload.args.request)) {
+        errorResponse(res, body?.rpcId, 'gateway/arguments-invalid', 'args must contain the named request parameter');
+        return;
+      }
       if (state.responseDelayMs > 0) await sleep(state.responseDelayMs);
 
       if (method === 'workspace/create') {
-        const path = body?.payload?.path;
+        const path = body.payload.args.request.path;
         let workspace = state.workspaces.get(path);
         let created = false;
         if (workspace === undefined) {
@@ -216,7 +228,7 @@ export async function startMockWeb(options = {}) {
 
       if (method === 'session/page') {
         state.sessionPageCalls += 1;
-        const payload = body?.payload ?? {};
+        const payload = body.payload.args.request;
         const address = payload.address;
         const requestedId = address !== null && typeof address === 'object' ? address.sessionId : undefined;
         const pageRequestValid = address !== null && typeof address === 'object' && address.kind === 'session'
@@ -246,7 +258,7 @@ export async function startMockWeb(options = {}) {
 
       if (method === 'session/create') {
         state.sessionCreateCalls += 1;
-        const requestedId = body?.payload?.sessionId;
+        const requestedId = body.payload.args.request.sessionId;
         record.sessionId = typeof requestedId === 'string' ? requestedId : null;
         record.persistedBefore = state.persistedSessions.has(requestedId);
         record.created = false;
@@ -274,7 +286,7 @@ export async function startMockWeb(options = {}) {
         state.persistedSessions.add(requestedId);
         record.created = !record.persistedBefore;
         state.sessionCreates.push({ sessionId, requestedSessionId: requestedId, created: record.created });
-        const workspace = [...state.workspaces.values()].find((entry) => entry.workspaceId === body?.payload?.workspaceId);
+        const workspace = [...state.workspaces.values()].find((entry) => entry.workspaceId === body.payload.args.request.workspaceId);
         if (workspace !== undefined && state.attachMembership && !workspace.sessionIds.includes(sessionId)) {
           workspace.sessionIds.unshift(sessionId);
         }
