@@ -15,11 +15,16 @@
  *   hang           stay alive until signalled (default SIGTERM handling)
  *   ignore         ignore SIGTERM/SIGINT, with a grandchild that also ignores them
  *   exit0-on-term  exit 0 on SIGTERM, with a grandchild that ignores SIGTERM
- * Every mode records argv and the settings/patch files under MOCK_ARTIFACT_DIR.
+ * Every mode records argv, cwd, the settings/patch files, and (when the CLI
+ * mounted the observer) an emulated capture file with the same shape the real
+ * observer plugin writes, so grouping can be exercised end to end. A
+ * MOCK_EXIT_MARKER file is written on process exit so tests can prove adoption
+ * happened only after the child stopped.
  */
 (async () => {
   const fs = await import('node:fs');
   const path = await import('node:path');
+  const crypto = await import('node:crypto');
   const childProcess = await import('node:child_process');
 
   const artifactDir = process.env.MOCK_ARTIFACT_DIR;
@@ -30,7 +35,17 @@
   };
 
   record('self.txt', fs.realpathSync(process.argv[1]));
+  record('pid.txt', String(process.pid));
   record('dsh-home.txt', process.env.DSH_HOME || '');
+  record('cwd.txt', process.cwd());
+  record('web-env.txt', process.env.DSH_WEB_URL === undefined ? 'unset' : 'set');
+  if (process.env.MOCK_EXIT_MARKER) {
+    process.on('exit', () => {
+      try {
+        fs.writeFileSync(process.env.MOCK_EXIT_MARKER, `${process.pid}\n`);
+      } catch { /* marker is best effort */ }
+    });
+  }
   const argv = process.argv.slice(2);
   record('argv.json', JSON.stringify(argv));
 
@@ -43,6 +58,25 @@
       const entries = JSON.parse(patchText);
       const settingsPath = entries[0].config.path;
       record('settings-copy.json', fs.readFileSync(settingsPath, 'utf8'));
+      // Emulate the real observer plugin result: capture the exact session id
+      // for this run's prompt, using the capture path from the CLI's patch row.
+      const captureConfig = (Array.isArray(entries) ? entries : [])
+        .flatMap((entry) => (Array.isArray(entry.insert) ? entry.insert : []))
+        .map((entry) => entry?.config)
+        .find((config) => config && typeof config.capturePath === 'string');
+      if (captureConfig !== undefined && process.env.MOCK_CAPTURE !== 'off') {
+        const prompt = argv[argv.length - 1] ?? '';
+        const promptSha256 = process.env.MOCK_CAPTURE_PROMPT_SHA256
+          || crypto.createHash('sha256').update(prompt, 'utf8').digest('hex');
+        fs.writeFileSync(captureConfig.capturePath, `${JSON.stringify({
+          version: 1,
+          sessionId: process.env.MOCK_SESSION_ID || 'session-mock-0001',
+          cwd: process.cwd(),
+          promptSha256,
+          seq: 4,
+          capturedAt: new Date().toISOString(),
+        }, null, 2)}\n`, { mode: 0o600 });
+      }
       record('settings-copy-dir.txt', path.dirname(settingsPath));
     } catch (error) {
       record('patch-error.txt', String((error && error.message) || error));
@@ -58,7 +92,7 @@
     process.stderr.write(process.env.MOCK_STDERR || 'mock dsh failed\n');
     process.exit(Number(process.env.MOCK_EXIT_CODE || 3));
   }
-  if (mode === 'hang' || mode === 'ignore' || mode === 'exit0-on-term') {
+  if (mode === 'hang' || mode === 'ignore' || mode === 'exit0-on-term' || mode === 'orphan') {
     // Install handlers before recording pids so a test that reacts to the
     // recorded file never races an unarmed mock.
     if (mode === 'ignore') {
@@ -87,6 +121,7 @@
       });
     }
     record('pids.json', JSON.stringify({ self: process.pid, grandchild: grandchild === null ? null : grandchild.pid }));
+    if (mode === 'orphan') process.exit(0);
     setInterval(() => {}, 1000);
     return;
   }

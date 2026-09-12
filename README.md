@@ -2,7 +2,7 @@
 
 [中文文档](README.zh-CN.md)
 
-A small Codex skill plus a single-file CLI that hands **clear, bounded** tasks to a local
+A small Codex skill plus a CLI that hands **clear, bounded** tasks to a local
 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) (`dsh`) run, then returns one
 compact JSON result. Codex keeps framing, route choice, and final acceptance; dsh does the bulk
 work. This is a focused skill and CLI, not a framework or agent platform.
@@ -26,7 +26,7 @@ work. This is a focused skill and CLI, not a framework or agent platform.
 - Node.js 20 or newer (uses `node:test` and `node:util.parseArgs`).
 - A working `dsh` installation with credentials you configured yourself. See
   <https://github.com/deepseek-ai/deepseek-harness> for setup. This project does not install dsh,
-  log in, or change global dsh/Codex settings.
+  configure provider credentials, or change global dsh/Codex settings.
 - Codex with skills support.
 
 ## Install
@@ -61,9 +61,43 @@ For a copy instead of a symlink, replace the `ln -s` line with
 If an older version is already installed, remove or rename it yourself first; nothing here
 overwrites it.
 
+## Connect workspace grouping
+
+Grouping is enabled by default. Keep your local `dsh web` service running and save the **full
+startup URL**, including `?token=...`, as one line in
+`${XDG_CONFIG_HOME:-$HOME/.config}/deepseek-delegate/web-url`. Use a private file (mode `0600`).
+This is the **Web launch token**, not your DeepSeek API key (`sk-...`). Do not commit this file or
+paste its contents into a task packet. After restarting the service, save its new startup URL.
+
+The CLI exchanges that token at the same loopback origin for a cookie held only in memory. It
+checks authentication and registers/reuses the workspace **before** starting the model task.
+A missing or rejected credential fails before a headless run is created.
+
+`--cwd` is canonicalized with `realpath`. An observer records the exact matching root session,
+then, **after the headless process group has stopped**, the CLI asks the running Web host to attach
+that persisted session. The host verifies its cwd and membership. Consequently grouping appears
+when the run finishes, not while headless is still writing. The Web host and headless process must
+use the same DSH session storage/home. No second process edits workspace storage JSON.
+
+For a standalone run without Web authentication or sidebar grouping, explicitly use
+`--no-workspace`. There is no silent ungrouped fallback.
+
+### Recover grouping without repeating a task
+
+Use the `workspace.sessionId` returned by a failed binding (or a known completed ordinary session):
+
+```sh
+node "$SKILL_DIR/scripts/run.mjs" --cwd /path/to/project --attach-session SESSION_ID
+```
+
+This verifies that the session exists before adoption. It runs no model and does not change the
+shared default model. It does not scan or bulk-reassign history. The stored session cwd must equal
+the canonical workspace path; mismatched/removed historical directories require separate handling.
+
 ## Quick start
 
-Write a task packet, then run the CLI:
+This disposable example opts out of sidebar grouping. For real project tasks, complete the Web
+setup above and omit `--no-workspace`. Write a task packet, then run the CLI:
 
 ```sh
 SKILL_DIR="$PWD/deepseek-delegate"
@@ -75,14 +109,14 @@ Do not modify input.json or use the network. Verify result.json by reading it.
 Acceptance: result.json equals {"sum":21,"count":3}.
 EOF
 
-node "$SKILL_DIR/scripts/run.mjs" \
+node "$SKILL_DIR/scripts/run.mjs" --no-workspace \
   --cwd "$DELEGATE_DEMO_DIR" \
   --task-file "$DELEGATE_DEMO_DIR/task.md" \
   --timeout 1800
 cat "$DELEGATE_DEMO_DIR/result.json"
 ```
 
-`--cwd` and `--task-file` are required. `node "$SKILL_DIR/scripts/run.mjs" --help` lists every
+`--cwd` is required; `--task-file` is required for runs and omitted in attach mode. `node "$SKILL_DIR/scripts/run.mjs" --help` lists every
 option and works without dsh or credentials.
 
 ## Result, exit codes, and logs
@@ -90,18 +124,23 @@ option and works without dsh or credentials.
 stdout carries exactly one JSON object, for example:
 
 ```json
-{"status":"ok","exitCode":0,"signal":null,"error":null,"elapsedSeconds":42.1,"timeoutSeconds":1800,
+{"status":"ok","mode":"run","exitCode":0,"signal":null,"error":null,"elapsedSeconds":42.1,"timeoutSeconds":1800,
  "requested":{"provider":"deepseek-official","model":"deepseek-flash","reasoningEffort":"max"},
  "cwd":"/path/to/project","taskFile":"/path/to/task.md","dshBin":"/path/to/dsh",
  "inputDelivery":"inline",
  "logPaths":{"stdout":"/tmp/deepseek-delegate-logs-XXXX/stdout.log","stderr":"/tmp/deepseek-delegate-logs-XXXX/stderr.log"},
+ "workspace":{"enabled":true,"bound":true,"id":"workspace-example","path":"/path/to/project","sessionId":"session-example"},
  "finalText":"...","finalTextTruncated":false,
  "note":"exit 0 only means the dsh agent finished, not that the task is correct: inspect the real diff/artifacts and run the relevant checks yourself."}
 ```
 
 - `status`: `ok`, `nonzero`, `timeout`, `cancelled`, or `spawn-error`.
-- Wrapper exit code: `0` only for `ok`, `1` for any failed or terminated run, `2` for usage and
+- Wrapper exit code: `0` only when the task is `ok` and any requested grouping is verified; `1`
+  for a task, termination, or grouping failure; `2` for usage and
   configuration errors (which are reported on stderr without a JSON object).
+- `workspace` reports `enabled`, `bound`, `id`, `path`, `sessionId`, and any binding `error`.
+  Task `status`/`exitCode` and log paths survive grouping failure; check the process exit and
+  `workspace.bound`, not task status alone. `mode` is `run` or `attach` (`attach-error` on failure).
 - `requested` is the route and effort actually written into the settings copy.
 - `finalText` is at most 6000 characters of the head of the dsh stdout log,
   with `finalTextTruncated` telling you whether more existed. stderr and reasoning are never copied
@@ -115,14 +154,19 @@ stdout carries exactly one JSON object, for example:
 | Option | Default | Meaning |
 | --- | --- | --- |
 | `--cwd <dir>` | required | working directory dsh runs in |
-| `--task-file <file>` | required | file holding the task text |
+| `--task-file <file>` | required for runs | file holding the task text |
 | `--model <id>` | see precedence | model id for this run |
 | `--provider <id>` | see precedence | provider id for this run |
 | `--effort <name>` | `max` | reasoning effort for this run |
-| `--timeout <seconds>` | `1800` | wall-clock limit, integer 10–86400 |
+| `--timeout <seconds>` | `1800` | headless execution limit, integer 10–86400; Web requests have separate bounds |
 | `--log-dir <dir>` | OS temp dir | parent directory for this run's private log directory |
 | `--dsh-bin <path>` | see precedence | dsh launcher to execute |
 | `--settings-file <path>` | see precedence | settings document to copy and override |
+| `--no-workspace` | disabled | explicitly skip Web grouping |
+| `--attach-session <id>` | | group an existing completed session; no task file/model run |
+| `--dsh-web-url <url>` | see precedence | local Web startup URL; prefer a credential file |
+| `--dsh-web-url-file <file>` | see precedence | file containing that URL |
+| `--web-timeout <seconds>` | `15` | per-request network bound, integer 1–120 |
 | `-h`, `--help` | | print help and exit (needs no dsh) |
 
 ## Precedence
@@ -133,6 +177,7 @@ stdout carries exactly one JSON object, for example:
 | settings document | `--settings-file` → `DSH_SETTINGS_FILE` → `$DSH_HOME/settings.yaml` → `~/.dsh/settings.yaml` |
 | model | `--model` → `DSH_DELEGATE_MODEL` → settings `agent-default-model.model` → `deepseek-flash` |
 | provider | `--provider` → `DSH_DELEGATE_PROVIDER` → settings `agent-default-model.provider` → `deepseek-official` |
+| Web URL | `--dsh-web-url` → `--dsh-web-url-file` → `DSH_WEB_URL` → `DSH_WEB_URL_FILE` → default private URL file |
 | effort | `--effort` → `DSH_DELEGATE_EFFORT` → `max` (never inherited from settings) |
 
 Notes:
@@ -195,7 +240,9 @@ The suite drives the real CLI against a mock `dsh` executable in temporary direc
 model calls, does not read your real settings, does not use your `HOME` or `CODEX_HOME`, and covers
 launcher resolution, settings precedence and preservation, literal task delivery, the 32 KB
 reference switch, the 6000-character stdout cap, unique private logs, spawn failures, timeouts, and
-cancellation cleanup. Nothing in this repository is published to npm.
+cancellation cleanup. Additional tests cover root-session capture, authentication, existence checks, verified workspace
+binding, and recovery using a local HTTP fixture. No production Web service is contacted.
+Nothing in this repository is published to npm.
 
 ## License
 

@@ -47,7 +47,8 @@ finishes.
 ```sh
 node <skill-dir>/scripts/run.mjs --cwd <dir> --task-file <file> \
   [--model <id>] [--provider <id>] [--effort <name>] [--timeout <seconds>] \
-  [--log-dir <parent>] [--dsh-bin <path>] [--settings-file <path>]
+  [--log-dir <parent>] [--dsh-bin <path>] [--settings-file <path>] \
+  [--dsh-web-url-file <file>] [--web-timeout <seconds>] [--no-workspace]
 ```
 
 - `<skill-dir>` is wherever this skill is installed (for example
@@ -60,6 +61,23 @@ node <skill-dir>/scripts/run.mjs --cwd <dir> --task-file <file> \
   logs or reasoning back into the conversation.
 - Each run copies the settings document to a private temporary file, overrides only
   `agent-default-model`, and cleans it up. Original settings and credentials are untouched.
+
+## Workspace grouping
+
+Grouping is enabled by default. The local DSH Web service must be running and share the headless
+session storage. Its full startup URL (with the **Web token**, not the model API key) belongs in a
+private `${XDG_CONFIG_HOME:-~/.config}/deepseek-delegate/web-url` file, or an explicit
+`--dsh-web-url-file`. Never put credentials in a task packet or print them.
+
+Authentication is checked before the model run. The canonical cwd determines the workspace. A
+read-only observer captures the exact root session; after headless fully stops, the running host
+binds it and returns verified membership. Do not write DSH workspace storage directly from another
+process. Grouping is visible after completion. Inspect `workspace.bound` as well as the child result:
+a grouping failure preserves the task output but makes the CLI exit nonzero.
+
+Use `--attach-session <id> --cwd <dir>` to retry binding an existing completed session without
+rerunning the task. This probes existence first. For disposable tests or intentionally standalone
+work, explicitly use `--no-workspace`; never silently downgrade a requested grouped run.
 
 ## Scope and isolation
 
