@@ -1,0 +1,17 @@
+{
+  "name": "deepseek-delegate",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Run one bounded task through a local DeepSeek Harness (dsh) headless profile with a real per-run model/effort override, and print one compact JSON result.",
+  "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "test": "node --test"
+  },
+  "dependencies": {
+    "js-yaml": "^4.1.0"
+  },
+  "license": "MIT"
+}

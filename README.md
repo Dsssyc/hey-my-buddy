@@ -1,80 +1,202 @@
 # hey-my-buddy
 
-一个个人用的 Codex 技能：把**目标清晰、边界明确**的实现、调查、批量文件改写、补测试或写文档任务尽早交给本地 DeepSeek Harness（dsh）执行，只把紧凑结果带回 GPT，降低 GPT 上下文消耗。
+[中文文档](README.zh-CN.md)
 
-## 架构与责任划分
+A small Codex skill plus a single-file CLI that hands **clear, bounded** tasks to a local
+[DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) (`dsh`) run, then returns one
+compact JSON result. Codex keeps framing, route choice, and final acceptance; dsh does the bulk
+work. This is a focused skill and CLI, not a framework or agent platform.
 
-Codex 负责判断是否委派、写任务包与验收标准、按任务难度选择模型，effort 默认 max（除非用户另行指定），并在事后独立复核真实产物；dsh 只负责执行这一次有界任务。默认值取自实际脚本与目录：`provider=deepseek-official`、`model=deepseek-flash`（本机目录标注为 DeepSeek-V41-Flash）、`effort=max`、默认 `contextWindow=1,000,000`；不按 Pro/Flash 名字推断强弱，模型目录变化时按实际 dsh 目录核对 ID，出错如实上报、不静默降级。脚本只回传紧凑 JSON：status、退出码、耗时、请求的 model/effort、日志路径，以及最多 6000 字符的 `finalText` 和截断标志；冗长输出留在本地日志中。
+## What it does
 
-## 目录结构
+- Runs one bounded task through `dsh --profile headless` with a real per-run model/effort override.
+- Copies your settings document to a private temporary JSON file, replaces only the
+  `agent-default-model` route/effort, and points dsh at that copy through a temporary `--patch`
+  overlay. Your original settings and credentials are never modified.
+- Keeps stdout/stderr in a unique owner-private log directory and prints exactly one JSON object on
+  stdout.
+- Never uses a shell: the launcher and the task text are passed as an argument vector, so paths with
+  spaces, leading dashes, newlines, and shell metacharacters stay literal.
+- Only starts the one dsh run you asked for: it never retries, downgrades, or substitutes a route
+  silently.
 
-```
-hey-my-buddy/
-├── README.md
-├── .gitignore
-└── deepseek-delegate/          # 技能本体，安装到 ~/.codex/skills/
-    ├── SKILL.md                # 委派时机、任务包、模型/effort、边界与复核要求
-    ├── agents/openai.yaml      # Codex 技能接口元数据
-    └── scripts/run.mjs         # 单次委派包装：覆盖 model/effort、隔离日志、超时
-```
+## Requirements
 
-`.dsh-skill-build/` 是本机临时目录（任务规格、stdout/stderr、机器路径），不入库。
+- macOS or Linux (POSIX). Windows is not implemented or tested; the CLI exits with a clear error.
+- Node.js 20 or newer (uses `node:test` and `node:util.parseArgs`).
+- A working `dsh` installation with credentials you configured yourself. See
+  <https://github.com/deepseek-ai/deepseek-harness> for setup. This project does not install dsh,
+  log in, or change global dsh/Codex settings.
+- Codex with skills support.
 
-## 前置条件
-
-- Node.js 需支持 `node:util.parseArgs` 及选项默认值。
-- 本机已安装并配置好 dsh，凭据可用；本仓库不安装依赖、不登录、不改全局 dsh 或 Codex 设置，`js-yaml` 从 dsh 安装目录解析。
-- 已有 `~/.codex/skills/` 技能目录。
-
-## 安装（符号链接，不覆盖）
-
-在克隆根目录执行：
+## Install
 
 ```sh
-mkdir -p "$HOME/.codex/skills"
-if [ -e "$HOME/.codex/skills/deepseek-delegate" ] || [ -L "$HOME/.codex/skills/deepseek-delegate" ]; then
-  echo "已存在同名技能，未做任何修改：$HOME/.codex/skills/deepseek-delegate" >&2
+git clone https://github.com/Dsssyc/hey-my-buddy.git
+cd hey-my-buddy
+npm --prefix deepseek-delegate ci
+```
+
+The skill is self-contained in `deepseek-delegate/`. Copying just that directory somewhere and
+running `npm ci` inside it is enough; there is no root package, nothing is published to npm, and the
+only runtime dependency is the maintained `js-yaml` parser.
+
+### Add it to Codex without overwriting anything
+
+`CODEX_HOME` is read if you set it; otherwise `~/.codex` is used. The snippet never sets or exports
+`CODEX_HOME`, and it leaves an existing skill directory alone.
+
+```sh
+CODEX_SKILLS="${CODEX_HOME:-$HOME/.codex}/skills"
+mkdir -p "$CODEX_SKILLS"
+if [ -e "$CODEX_SKILLS/deepseek-delegate" ] || [ -L "$CODEX_SKILLS/deepseek-delegate" ]; then
+  echo "already exists, left untouched: $CODEX_SKILLS/deepseek-delegate" >&2
 else
-  ln -s "$PWD/deepseek-delegate" "$HOME/.codex/skills/deepseek-delegate"
+  ln -s "$PWD/deepseek-delegate" "$CODEX_SKILLS/deepseek-delegate"
 fi
 ```
 
-**不要覆盖已存在的 `~/.codex/skills/deepseek-delegate`**：先确认它是否为旧版本或别的技能，需要替换时自己手动删除或改名。链接指向克隆目录，更新代码后无需重新链接。
+For a copy instead of a symlink, replace the `ln -s` line with
+`cp -R "$PWD/deepseek-delegate" "$CODEX_SKILLS/deepseek-delegate"` and run `npm ci` inside the copy.
+If an older version is already installed, remove or rename it yourself first; nothing here
+overwrites it.
 
-## 使用
+## Quick start
 
-在 Codex 中直接委派：
-
-```
-$deepseek-delegate 重构 src/parser 的错误处理并补齐单元测试；完成后我会自己核对 diff 和测试结果。
-```
-
-也可以手动调用脚本（路径为基于 `$PWD` 的绝对路径）：
+Write a task packet, then run the CLI:
 
 ```sh
-node "$PWD/deepseek-delegate/scripts/run.mjs" \
-  --cwd "$PWD" \
-  --task-file "$PWD/.dsh-skill-build/task.md" \
-  --model deepseek-flash --effort max --timeout 1800
+SKILL_DIR="$PWD/deepseek-delegate"
+DELEGATE_DEMO_DIR="$(mktemp -d)"
+printf '%s\n' '{"numbers":[3,7,11]}' > "$DELEGATE_DEMO_DIR/input.json"
+cat > "$DELEGATE_DEMO_DIR/task.md" <<'EOF'
+Read input.json and write only result.json containing the sum and count of numbers.
+Do not modify input.json or use the network. Verify result.json by reading it.
+Acceptance: result.json equals {"sum":21,"count":3}.
+EOF
+
+node "$SKILL_DIR/scripts/run.mjs" \
+  --cwd "$DELEGATE_DEMO_DIR" \
+  --task-file "$DELEGATE_DEMO_DIR/task.md" \
+  --timeout 1800
+cat "$DELEGATE_DEMO_DIR/result.json"
 ```
 
-`--cwd`、`--task-file` 必填；`--model`、`--effort`、`--timeout`（秒，10–86400，默认 1800）可选。
+`--cwd` and `--task-file` are required. `node "$SKILL_DIR/scripts/run.mjs" --help` lists every
+option and works without dsh or credentials.
 
-## 边界与注意事项
+## Result, exit codes, and logs
 
-- `--cwd` 只是 dsh 的工作目录，**不是安全沙箱**：允许改动的范围必须写进任务包；需要更强隔离时给 dsh 独立工作区（如 git worktree）。
-- 每次运行会复制当前 settings 文档、只替换 `agent-default-model`（model/effort），再通过临时 `--patch` 覆盖传入；其余设置原样保留，全局设置不被修改。
-- 超过 32KB 的任务文件不随命令行传入，而是把文件路径交给 dsh 自行读取；该文件在任务结束前必须保持可用。
-- stdout/stderr 只写入本地私有日志，日志不上传，需要时再自行查看。
-- 委派失败最多带新信息重试一到两次；不自动发布、发消息或提权。
-- 真实验收仍是 Codex 的责任：自己查看 diff、新增/删除的文件与命令输出，并运行测试、构建或 lint；退出码 0 不代表任务正确。
+stdout carries exactly one JSON object, for example:
 
-## 当前机器的安装假设（非通用保证）
+```json
+{"status":"ok","exitCode":0,"signal":null,"error":null,"elapsedSeconds":42.1,"timeoutSeconds":1800,
+ "requested":{"provider":"deepseek-official","model":"deepseek-flash","reasoningEffort":"max"},
+ "cwd":"/path/to/project","taskFile":"/path/to/task.md","dshBin":"/path/to/dsh",
+ "inputDelivery":"inline",
+ "logPaths":{"stdout":"/tmp/deepseek-delegate-logs-XXXX/stdout.log","stderr":"/tmp/deepseek-delegate-logs-XXXX/stderr.log"},
+ "finalText":"...","finalTextTruncated":false,
+ "note":"exit 0 only means the dsh agent finished, not that the task is correct: inspect the real diff/artifacts and run the relevant checks yourself."}
+```
 
-这是个人集成，`scripts/run.mjs` 按固定位置解析，不保证在其它机器上可用：
+- `status`: `ok`, `nonzero`, `timeout`, `cancelled`, or `spawn-error`.
+- Wrapper exit code: `0` only for `ok`, `1` for any failed or terminated run, `2` for usage and
+  configuration errors (which are reported on stderr without a JSON object).
+- `requested` is the route and effort actually written into the settings copy.
+- `finalText` is at most 6000 characters of the head of the dsh stdout log,
+  with `finalTextTruncated` telling you whether more existed. stderr and reasoning are never copied
+  into the JSON.
+- Logs go to a unique owner-private directory (directory mode `0700`, file mode `0600`): under
+  `--log-dir` when given, otherwise under the OS temp directory. Pre-existing files are never
+  truncated or reused.
 
-- 启动器：`~/.local/bin/dsh`
-- 依赖解析：`~/.local/share/dsh/lib/node_modules/@deepseek-ai/dsh/package.json`（`createRequire` 从这里加载 `js-yaml`）
-- 设置文档：`$DSH_HOME/settings.yaml`；未设置 `DSH_HOME` 时为 `~/.dsh/settings.yaml`
+## Options
 
-位置不同就需要修改 `scripts/run.mjs`。仓库内不包含凭据，路径均以 `~` 或 `$HOME`、`$PWD` 表示。
+| Option | Default | Meaning |
+| --- | --- | --- |
+| `--cwd <dir>` | required | working directory dsh runs in |
+| `--task-file <file>` | required | file holding the task text |
+| `--model <id>` | see precedence | model id for this run |
+| `--provider <id>` | see precedence | provider id for this run |
+| `--effort <name>` | `max` | reasoning effort for this run |
+| `--timeout <seconds>` | `1800` | wall-clock limit, integer 10–86400 |
+| `--log-dir <dir>` | OS temp dir | parent directory for this run's private log directory |
+| `--dsh-bin <path>` | see precedence | dsh launcher to execute |
+| `--settings-file <path>` | see precedence | settings document to copy and override |
+| `-h`, `--help` | | print help and exit (needs no dsh) |
+
+## Precedence
+
+| Item | Order (first match wins) |
+| --- | --- |
+| dsh launcher | `--dsh-bin` → `DSH_BIN` → `dsh` on `PATH` → `~/.local/bin/dsh` |
+| settings document | `--settings-file` → `DSH_SETTINGS_FILE` → `$DSH_HOME/settings.yaml` → `~/.dsh/settings.yaml` |
+| model | `--model` → `DSH_DELEGATE_MODEL` → settings `agent-default-model.model` → `deepseek-flash` |
+| provider | `--provider` → `DSH_DELEGATE_PROVIDER` → settings `agent-default-model.provider` → `deepseek-official` |
+| effort | `--effort` → `DSH_DELEGATE_EFFORT` → `max` (never inherited from settings) |
+
+Notes:
+
+- An explicitly named settings file (`--settings-file` or `DSH_SETTINGS_FILE`) must exist; a missing
+  default file is treated as an empty mapping.
+- Blank model/provider/effort values are rejected instead of silently clearing a default. Effort is
+  never lowered implicitly.
+- The run settings copy keeps every other section structurally identical, including `agent-presets`
+  and any other section. Inside `agent-default-model`, only `provider`, `model`, and
+  `reasoningEffort` are written; other keys there (for example an extension field) are
+  carried through.
+- Context window and output limits are owned by your dsh model catalog and presets. This wrapper
+  never sets them and never shrinks context to a fixed number. A 1M-token context window is a
+  model-specific configuration example, not a cross-provider promise.
+
+## Minimal task packet
+
+A good packet lets dsh finish without guessing:
+
+- Goal and why; expected inputs and outputs.
+- The working directory and the commands needed to check the work.
+- Allowed files/areas, plus explicit non-goals.
+- Acceptance criteria: the observable result and the checks to run.
+- Key references: file paths, functions, known facts, pitfalls.
+- As much relevant context as the task needs. Context capacity is configured per model/provider, so
+  do not artificially shrink the packet. Task content over 32,000 bytes is passed to dsh as a file
+  reference, and that file must remain in place until the run finishes.
+
+## After the run: review the artifacts yourself
+
+A finished dsh process is **not** proof that the task is correct. Codex must inspect the real diff,
+added/removed files, and command output, then run the relevant checks (tests, build, lint, targeted
+reproduction) and match them against the acceptance criteria. The `note` field in the JSON says the
+same thing on purpose.
+
+## Platform and support bounds
+
+- **POSIX only.** macOS and Linux are the supported platforms; there is no Windows code path.
+- `--cwd` is a working directory, not a sandbox. State the allowed scope in the task packet, or give
+  dsh its own workspace (for example a git worktree) when you need stronger isolation.
+- The settings override assumes the booted profile mounts the dsh settings provider under the entry
+  id `settings`, as the shipped profiles do. Custom plugins or profiles that read settings another
+  way, or keep configuration in profile patch files outside `settings.yaml`, are not covered by the
+  copy and stay in effect.
+- Model and provider IDs are not validated against your provider's catalog; the wrapper does not
+  downgrade, substitute, or retry them. Choose an ID your provider supports.
+- On timeout or cancellation the wrapper stops only the dsh process group it started, then reports
+  `timeout`/`cancelled` with a nonzero exit — never `ok`, even if the child exits 0 afterwards.
+- Nothing here publishes, pushes, or messages anyone; that scope comes from you, and the skill
+  inherits whatever you authorized for the session.
+
+## Tests
+
+```sh
+npm --prefix deepseek-delegate test
+```
+
+The suite drives the real CLI against a mock `dsh` executable in temporary directories. It makes no
+model calls, does not read your real settings, does not use your `HOME` or `CODEX_HOME`, and covers
+launcher resolution, settings precedence and preservation, literal task delivery, the 32 KB
+reference switch, the 6000-character stdout cap, unique private logs, spawn failures, timeouts, and
+cancellation cleanup. Nothing in this repository is published to npm.
+
+## License
+
+[MIT](LICENSE). The standalone skill directory includes its own copy of the license.

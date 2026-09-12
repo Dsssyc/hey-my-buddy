@@ -1,16 +1,18 @@
-# 本地 dsh 委派过程产物：任务规格、stdout/stderr 日志，可能含机器路径
+# Local dsh delegation scratch: task specs, stdout/stderr logs, machine paths
 /.dsh-skill-build/
 
 # macOS
 .DS_Store
 
-# Node
+# Node dependencies (package.json and package-lock.json are tracked on purpose)
 node_modules/
 
-# 凭据；保留可选的 .env.example 模板
+# Credentials and local npm config
 .env
 .env.*
 !.env.example
+.npmrc
 
-# 日志
+# Run logs
 *.log
+*.pid

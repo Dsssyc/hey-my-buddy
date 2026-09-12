@@ -1,45 +1,78 @@
 ---
 name: deepseek-delegate
-description: Delegate clear, bounded implementation, investigation, file transformation, testing, or documentation tasks to DeepSeek Harness (dsh) early to save GPT tokens. Select a model for the task, default to max reasoning, and independently verify its work. Skip trivial one-step tasks.
+license: MIT
+description: Delegate clear, bounded implementation, investigation, file-transformation, testing, or documentation work to a local DeepSeek Harness (dsh) run early, then verify the real artifacts. Use when a task is well scoped and clearly bigger than a one-line edit; skip trivial one-step tasks and work whose requirements are still moving.
 ---
 
-# deepseek-delegate：尽早把有界任务交给本地 dsh
+# deepseek-delegate
 
-## 何时委派（尽早路由）
-- 在 GPT 动手前判断：目标清晰、边界明确、工作量明显超过一次简单编辑的任务（实现、重构、有界调查、批量转换、补测试、写文档），先委派给 dsh，不要等自己做完再"转交"。
-- 留在本地：一两行的改动、已知答案的查询、需要反复追问才能定框的工作，以及需求定框、模型选择、最终验收这类只能由 Codex 负责的判断。
-- 委派不是放弃责任：Codex 仍负责定框、给出验收标准，并在事后独立审查真实产物。
+Hand **one bounded task** to a local `dsh` headless run and get back **one compact JSON result**.
+Codex keeps framing, route choice, and final acceptance; dsh does the bulk work.
 
-## 任务包（先写进 task 文件）
-- 目标与背景：要解决什么、为什么、输入输出是什么。
-- 工作目录：dsh 的 cwd，以及可用的运行/检查命令。
-- 允许范围：可修改的文件或目录；明确列出非目标（不要做什么）。
-- 验收标准：完成的可观察判据，以及需要运行的检查。
-- 相关引用：关键文件路径、函数名、已知事实与坑。
-- 给足上下文：不要塞无关对话历史或任何凭据；预期 1M 输入窗口，任务相关背景尽量给全，并允许 dsh 自行读取工作区文件。不要人为压缩输入；maxTokens 限制的是输出，别拿它省输入。
+## Route early
 
-## 模型与 effort
-- 按任务难度、所需能力选择模型，不从 Pro/Flash 名字推断强弱；用户指定当前最强为 v4.1 Flash，而非 v4 Pro，需要最强能力时优先选择它。
-- 当前默认 provider=deepseek-official、model=deepseek-flash、reasoningEffort=max。本机 2026-09-12 目录将 deepseek-flash 标为 DeepSeek-V41-Flash，默认 contextWindow=1,000,000。版本变化时核对实际目录，不臆造模型 ID。
-- 每次委派默认 max effort，除非用户另行指定；出错时如实上报，禁止静默降级模型或 effort。
+Delegate before doing the work yourself when the task is clear, bounded, and bigger than a
+one-line edit: implementation, refactor, bounded investigation, batch file transformation, test
+writing, documentation.
 
-## 调用方式
+Keep it local when the change is a line or two, the answer is already known, requirements still need
+discovery, or the call is Codex-only (framing, route choice, accepting the result).
+
+## Write the task packet first
+
+Put the packet in a file and include: goal and why; inputs/outputs; the working directory and
+available check commands; the files/areas that may change and explicit non-goals; acceptance
+criteria; and key references, known facts, and pitfalls.
+
+Give the context the work needs. Context capacity is configured per model and provider — some models
+in a dsh catalog are configured around 1M tokens, which is an example, not a promise across
+providers. Do not shrink the packet artificially. Keep large background in files: task content over
+32,000 bytes is delivered to dsh as a file reference, and that file must stay in place until the run
+finishes.
+
+## Pick the model and effort
+
+- Choose a model for the task's difficulty and needs; never rank by Pro/Flash in the name.
+- Defaults are provider `deepseek-official`, model `deepseek-flash`, effort `max`. They are
+  configurable defaults, not a capability ranking.
+- Effort defaults to `max` and is never silently inherited from a lower value in settings.
+- A model ID must be supported by the selected provider. The CLI does not validate, downgrade, or
+  retry it; report failures honestly.
+- Precedence: `--model` > `DSH_DELEGATE_MODEL` > settings `agent-default-model.model` >
+  `deepseek-flash`; `--provider` > `DSH_DELEGATE_PROVIDER` > settings > `deepseek-official`;
+  `--effort` > `DSH_DELEGATE_EFFORT` > `max`.
+
+## Run it
+
+```sh
+node <skill-dir>/scripts/run.mjs --cwd <dir> --task-file <file> \
+  [--model <id>] [--provider <id>] [--effort <name>] [--timeout <seconds>] \
+  [--log-dir <parent>] [--dsh-bin <path>] [--settings-file <path>]
 ```
-cd <本技能目录>   # 安装后为 ~/.codex/skills/deepseek-delegate
-node scripts/run.mjs --cwd <工作目录> --task-file <任务文件> \
-  [--model <id>] [--provider <id>] [--effort <name>] [--timeout <秒>] [--log-dir <目录>]
-```
-- 小任务文件原文通过 argv 传入；超过 32KB 时传文件路径让 dsh 读取，避开系统命令行长度限制，任务结束前保留文件。大量背景也通过文件引用提供。
-- 脚本不经 shell，stdout/stderr 写私有日志，只回传紧凑 JSON：status、exitCode、耗时、请求的 model/effort、日志路径、最多 6000 字符的 finalText 与截断标志；status 不是 ok 时脚本也返回非零退出码。配置覆盖不修改全局设置；自定义 settings 路径的部署须先适配脚本读取路径。
-- 冗长输出留在日志里，不要把 stderr 或推理过程整段带回 GPT；需要时再读日志文件。
 
-## 边界、重试与隔离
-- 工作目录不是沙箱：必须在任务包里写清允许范围；需要更强隔离时给 dsh 独立工作区（如 git worktree）。
-- Codex 与 dsh 不要同时编辑同一批文件；委派进行中本地只读或改其他部分。
-- 失败时最多再委派一到两次，且必须带上新信息（错误原文、缺失上下文、更窄范围）；不要原样重复提交。
-- 不自动对外发消息、不发布、不提权、不改全局 dsh 或 Codex 设置。
+- `<skill-dir>` is wherever this skill is installed (for example
+  `$CODEX_HOME/skills/deepseek-delegate`); run `npm ci` there once. `--help` needs no dsh.
+- stdout is exactly one JSON object: status, exit code, elapsed time, requested route and effort,
+  inputDelivery, log paths, and `finalText` (at most 6000 characters) with a truncation flag.
+  Nonzero/timeout/cancellation/spawn failure exits 1; usage and configuration errors exit 2.
+- Retry only with new evidence and a narrower or corrected packet; normally stop after one or two failed attempts. Do not repeat identical requests.
+- Long output stays in the private per-run logs. Read the log file when needed; do not paste whole
+  logs or reasoning back into the conversation.
+- Each run copies the settings document to a private temporary file, overrides only
+  `agent-default-model`, and cleans it up. Original settings and credentials are untouched.
 
-## Codex 必须做的独立审查（不可跳过）
-- dsh 退出码 0 只说明代理跑完了，不代表任务正确。
-- 查看真实产物：git diff、新增/删除的文件、命令输出；自己运行相关检查（测试、构建、lint 或针对性复现），不要只信它的自述。
-- 逐条核对验收标准，说明支撑证据与实际限制；证据不足时不得宣称完成。
+## Scope and isolation
+
+- `--cwd` is a working directory, not a sandbox: state the allowed files and limits in the packet.
+- Delegation inherits the scope the user granted this session. When the user authorized publishing,
+  pushing, or sending messages, pass that authorization explicitly in the packet; do not invent
+  blanket bans the user never asked for.
+- Do not let Codex and dsh edit the same files at the same time; work on something else while the
+  run is in flight.
+
+## Verify independently — never skip
+
+- Exit 0 only means the dsh agent finished. It is not proof that the task is correct.
+- Inspect the real diff, added/removed files, and command output; run the relevant checks (tests,
+  build, lint, targeted reproduction) yourself.
+- Check every acceptance criterion and state the evidence. Without evidence, the task is not done.
