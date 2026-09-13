@@ -44,6 +44,14 @@ finishes.
 
 ## Run it
 
+Before launching work that may outlive the current turn, choose and establish an
+owner-resumption route. Read [handoff.md](references/handoff.md): App/ChatGPT App
+uses a verified heartbeat on the original task; CLI uses a completion callback
+only after an actual same-thread wakeup test. Use `scripts/handoff.mjs` for these
+routes; it wraps the runner below and persists results independently of notification.
+If neither route is available, keep waiting in the current turn with `run.mjs`.
+Do not end with only “delegated” while an unmonitored run is still active.
+
 ```sh
 node <skill-dir>/scripts/run.mjs --cwd <dir> --task-file <file> \
   [--model <id>] [--provider <id>] [--effort <name>] [--timeout <seconds>] \
@@ -94,3 +102,7 @@ work, explicitly use `--no-workspace`; never silently downgrade a requested grou
 - Inspect the real diff, added/removed files, and command output; run the relevant checks (tests,
   build, lint, targeted reproduction) yourself.
 - Check every acceptance criterion and state the evidence. Without evidence, the task is not done.
+- On resumption, deduplicate by the persisted run ID and inspect the existing run;
+  never start it again because a notification or result is delayed. After handling
+  and verification, record acceptance with `handoff.mjs --run-dir <dir> --accept`
+  and close the App heartbeat when applicable. Queue acceptance is not task acceptance.

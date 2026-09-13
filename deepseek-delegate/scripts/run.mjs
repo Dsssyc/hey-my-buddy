@@ -667,7 +667,7 @@ async function finalizeGrouping(status, shutdownConfirmed) {
   }
 }
 
-function buildResult(status, exitCode, signal, error, workspace) {
+function buildResult(status, exitCode, signal, error, workspace, shutdownConfirmed) {
   const { text, truncated } = readTextPrefix(stdoutLog, FINAL_TEXT_LIMIT);
   return {
     status,
@@ -686,6 +686,7 @@ function buildResult(status, exitCode, signal, error, workspace) {
     finalText: text.trim().slice(0, FINAL_TEXT_LIMIT),
     finalTextTruncated: truncated,
     workspace,
+    processState: { pid: child?.pid ?? null, shutdownConfirmed },
     note: 'exit 0 only means the dsh agent finished, not that the task is correct: inspect the real diff/artifacts and run the relevant checks yourself.',
   };
 }
@@ -722,7 +723,7 @@ async function settle(status, exitCode, signal, error) {
   clearTimeout(killTimer);
   clearTimeout(failsafeTimer);
   let shutdownConfirmed = childExited;
-  if (workspaceEnabled && shutdownConfirmed) {
+  if (shutdownConfirmed) {
     const deadline = Date.now() + FAILSAFE_MS;
     while (processGroupAlive() && Date.now() < deadline) {
       await new Promise((resolveWait) => setTimeout(resolveWait, 25));
@@ -734,7 +735,7 @@ async function settle(status, exitCode, signal, error) {
   } catch { /* best effort */ }
   const workspace = workspaceEnabled ? await finalizeGrouping(status, shutdownConfirmed) : baseWorkspace();
   settling = false;
-  emitPayload(buildResult(status, exitCode, signal, error, workspace));
+  emitPayload(buildResult(status, exitCode, signal, error, workspace, shutdownConfirmed));
 }
 
 // Installed before spawning: a signal during setup exits immediately; later
