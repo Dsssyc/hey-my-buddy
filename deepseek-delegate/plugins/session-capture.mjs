@@ -4,13 +4,13 @@
  * A tiny, self-contained Cordis plugin that the delegation CLI mounts into a
  * headless dsh run through a temporary `--patch` overlay. Its only job is to
  * write down the EXACT session id of this run's root session, privately, so the
- * CLI can group that session in the already-running authenticated web host
+ * CLI can group that session in the owning workspace host
  * after the headless process has stopped.
  *
  * Why an observer instead of reading storage: `dsh-storage-json` documents that
  * its registry/cache/feed files are host-local with no cross-process locking,
- * so a second process must never write them. The supported path is the running
- * host's own RPC, and this plugin only supplies the identity the host needs.
+ * so a second process must never write them. This adapter uses the owning
+ * host's official workspace API through its private socket, and this plugin only supplies the identity the host needs.
  *
  * Correlation contract (verified against the installed dsh sources):
  * - `session/event` is emitted as `(session, event)`; for a `user/message`

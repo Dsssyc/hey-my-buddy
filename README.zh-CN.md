@@ -21,7 +21,7 @@ CLI，不是框架，也不是 agent 平台。
 - macOS 或 Linux（POSIX）。Windows 未实现也未测试；CLI 会直接报错退出。
 - Node.js 20 或更高版本（使用 `node:test` 和 `node:util.parseArgs`）。
 - 已自行安装并配置好凭据的 `dsh`。安装方法见
-  <https://github.com/deepseek-ai/deepseek-harness>。本项目不安装 dsh、不配置模型凭据，也不修改 dsh/Codex 的全局设置。
+  <https://github.com/deepseek-ai/deepseek-harness>。本项目不安装 dsh、不配置模型凭据，也不修改全局模型设置。显式运行桥接安装器会备份并追加目标 profile 的一个插件项。
 - 支持技能的 Codex。
 
 ## 安装
@@ -56,19 +56,31 @@ fi
 
 ## 配置工作区分组
 
-默认开启分组。保持本地 `dsh web` 服务运行，把启动输出中的**完整地址**（含 `?token=...`）作为一行文本
-保存到 `${XDG_CONFIG_HOME:-$HOME/.config}/deepseek-delegate/web-url`，文件权限建议设为 `0600`。
-这里需要 **Web 启动 token**，不是 DeepSeek API Key（`sk-...`）。不要把文件提交到仓库或放进任务包。
-重启 Web 服务后，需要保存新的启动地址。
+默认开启分组。先把本项目提供的宿主插件安装到已有 `web` profile：
 
-CLI 通过同一回环地址的正常登录流程获得仅保存在内存中的 cookie，并在模型任务启动前验证认证、注册或复用工作区。
-缺失或失效的凭据会提前报错，不会继续生成未分组任务。
+```sh
+node deepseek-delegate/scripts/install-workspace-bridge.mjs
+```
 
-执行目录通过 `realpath` 规范化。观察插件准确记录本次根会话 ID，待 **headless 进程组停止后**，再通过正在运行的
-Web 服务绑定已持久化的会话并回读成员关系。因此侧边栏会在任务结束后归组；不会在 headless 仍写入时接管会话。
-Web 与 headless 必须使用同一套 DSH 会话存储/home。脚本不会从第二个进程直接修改工作区存储 JSON。
+安装器备份并追加该 profile 的 `cordis.patch.yml`，保留既有配置。长期运行的 profile 会热加载用户 patch；
+否则正常启动 `dsh web`。插件使用官方进程内 `ctx.workspaceRegistry.create(cwd)` 和
+`workspace.attachSession(sessionId)` 完成分组，通过私有 Unix socket 接收 CLI 请求。
+默认地址为 `$DSH_HOME/deepseek-delegate/workspace.sock`，home 默认 `~/.dsh`。
+不再需要 Web URL、浏览器 token、cookie 或 HTTP；正常重启后沿用相同 socket 路径。
+异常退出若留下旧 socket，先确认原宿主已经停止，再只移除该 socket；插件不会自动删除被占用的端点。
 
-独立运行或临时测试可以明确加 `--no-workspace`，跳过 Web 认证和分组；默认不会静默退回未分组模式。
+CLI 在任务前检查桥接插件是否可用。观察插件记录本次根会话；headless 进程组完全停止后，宿主检查已持久化的
+根会话 header 与规范 cwd，通过官方 API 绑定并回读成员关系。分组不会创建或激活 Agent。
+任务结果与分组结果分别保留，失败时可只重试绑定。
+
+宿主与 headless 必须使用相同的会话存储，workspace 存储只由宿主写入，避免 JSON 后端的跨进程写入冲突。
+这是本项目基于[官方 workspace API](https://github.com/deepseek-ai/deepseek-harness/blob/master/docs/subsystems/workspace.md)
+提供的适配层，不是上游自带的 CLI 命令。可用 `--profile` 指定其他已加载 workspace/persistence 的长期运行 profile。
+不要启动第二个 workspace 写入进程去共享正在使用的存储。
+
+独立执行可明确加 `--no-workspace`；分组运行需要宿主插件在线，不会静默降级。
+迁移后删除旧 `~/.config/deepseek-delegate/web-url` 文件即可；程序已不再读取它。
+旧 `--dsh-web-url*` 和 `--web-timeout` 参数会被拒绝。模型 API 凭据不受影响。
 
 ### 只修复分组，不重跑任务
 
@@ -83,7 +95,7 @@ node "$SKILL_DIR/scripts/run.mjs" --cwd /path/to/project --attach-session SESSIO
 
 ## 快速开始
 
-下面的临时示例明确跳过侧边栏分组。真实项目任务先完成上面的 Web 配置，再省略 `--no-workspace`。
+下面的临时示例明确跳过侧边栏分组。真实项目任务先安装上面的宿主插件，再省略 `--no-workspace`。
 
 ```sh
 SKILL_DIR="$PWD/deepseek-delegate"
@@ -147,9 +159,8 @@ stdout 只有一个 JSON 对象，例如：
 | `--settings-file <path>` | 见优先级 | 要复制并覆盖的设置文档 |
 | `--no-workspace` | 默认关闭 | 明确跳过 Web 分组 |
 | `--attach-session <id>` | | 绑定已有已完成会话，不传任务文件、不运行模型 |
-| `--dsh-web-url <url>` | 见优先级 | 本地 Web 启动地址，推荐使用凭据文件 |
-| `--dsh-web-url-file <file>` | 见优先级 | 保存启动地址的文件 |
-| `--web-timeout <seconds>` | `15` | 每个网络请求的超时，整数 1–120 |
+| `--workspace-socket <path>` | 见优先级 | 宿主插件的私有 socket 路径 |
+| `--workspace-timeout <seconds>` | `15` | 每个请求的超时，整数 1–120 |
 | `-h`、`--help` | | 打印帮助并退出（不需要 dsh） |
 
 ## 优先级
@@ -160,7 +171,7 @@ stdout 只有一个 JSON 对象，例如：
 | 设置文档 | `--settings-file` → `DSH_SETTINGS_FILE` → `$DSH_HOME/settings.yaml` → `~/.dsh/settings.yaml` |
 | model | `--model` → `DSH_DELEGATE_MODEL` → 设置中的 `agent-default-model.model` → `deepseek-flash` |
 | provider | `--provider` → `DSH_DELEGATE_PROVIDER` → 设置中的 `agent-default-model.provider`→ `deepseek-official` |
-| Web 地址 | `--dsh-web-url` → `--dsh-web-url-file` → `DSH_WEB_URL` → `DSH_WEB_URL_FILE` → 默认私有地址文件 |
+| 分组 socket | `--workspace-socket` → `DSH_WORKSPACE_SOCKET` → `$DSH_HOME/deepseek-delegate/workspace.sock`（home 默认 `~/.dsh`） |
 | effort | `--effort` → `DSH_DELEGATE_EFFORT` → `max`（不会从设置里继承） |
 
 说明：
@@ -214,7 +225,15 @@ npm --prefix deepseek-delegate test
 `CODEX_HOME`。覆盖启动器解析、设置优先级与保留、任务原文传递、32KB 文件引用切换、6000 字符 stdout 上限、
 独有私有日志、spawn 失败、超时与取消清理。本仓库不会发布到 npm。
 
-新增测试使用本地 HTTP 模拟服务，覆盖根会话捕获、认证、存在性检查、分组回读和恢复；不会访问真实 Web 服务。
+新增测试使用本地 socket 模拟服务，覆盖根会话捕获、私有端点权限、存在性检查、分组回读和恢复；不会访问真实宿主。
+
+可选的真实官方包验证（无模型调用，使用隔离临时存储）：
+
+```sh
+node deepseek-delegate/tests/manual/real-workspace.mjs --dsh-lib /path/to/node_modules/@deepseek-ai
+```
+
+验证绑定、未知会话拒绝、Cordis 插件卸载与同路径重启重连，不修改实际会话或工作区。
 
 ## 许可证
 

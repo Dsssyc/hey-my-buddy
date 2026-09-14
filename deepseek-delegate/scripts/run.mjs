@@ -14,13 +14,9 @@
  *   carries a bounded prefix of the final text and the log paths.
  * - Timeout and cancellation signal only the owned POSIX process group, and
  *   every terminal path (including spawn failure) cleans up the settings copy.
- * - Workspace grouping (on by default) never writes dsh storage directly:
- *   the CLI canonicalizes --cwd, mounts a temporary observer plugin that
- *   captures this run's exact root session id, and after the owned process has
- *   fully stopped, groups that session through the running web host's
- *   authenticated RPC (`workspace/create` + idempotent `session/create`), then
- *   verifies membership through the host's own read-back. `--no-workspace`
- *   keeps the fully offline standalone behavior.
+ * - Workspace grouping uses a private Unix socket to the owning DSH host.
+ *   Its plugin calls the official workspaceRegistry API, with no Web URL,
+ *   browser token, or cross-process workspace storage writes.
  */
 import { spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
@@ -34,9 +30,9 @@ import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
 import yaml from 'js-yaml';
 import {
-  DEFAULT_WEB_TIMEOUT_SECONDS, MAX_WEB_TIMEOUT_SECONDS, MIN_WEB_TIMEOUT_SECONDS,
-  WebRpcError, WebSetupError, adoptSession, connectWebHost, resolveWebTarget, resolveWorkspace,
-} from './lib/web-host.mjs';
+  DEFAULT_WORKSPACE_TIMEOUT_SECONDS, MAX_WORKSPACE_TIMEOUT_SECONDS, MIN_WORKSPACE_TIMEOUT_SECONDS,
+  WorkspaceError, adoptSession, connectWorkspaceHost, resolveWorkspaceTarget, resolveWorkspace,
+} from './lib/workspace-host.mjs';
 
 const DSH_PROFILE = 'headless';
 const DEFAULTS = Object.freeze({
@@ -87,22 +83,16 @@ const USAGE = [
   '  --settings-file <path>  settings document (default: DSH_SETTINGS_FILE,',
   '                          then $DSH_HOME/settings.yaml, then',
   '                          ~/.dsh/settings.yaml)',
-  '  --no-workspace          do not group this run in a dsh web workspace;',
-  '                          keeps standalone/offline headless behavior',
-  '  --dsh-web-url <url>     launch URL printed by `dsh web` (contains ?token=);',
-  '                          prefer --dsh-web-url-file to keep it out of argv',
-  '  --dsh-web-url-file <f>  file holding that launch URL (default:',
-  '                          DSH_WEB_URL_FILE, then',
-  '                          ${XDG_CONFIG_HOME:-~/.config}/deepseek-delegate/web-url)',
-  '  --web-timeout <seconds> bound for each web-host request, 1-120 (default 15)',
-  '  --attach-session <id>   group an EXISTING completed ordinary session via',
-  '                          the running web host; runs no model task',
+  '  --no-workspace          run without workspace grouping',
+  '  --workspace-socket <p>  private host socket (default DSH_WORKSPACE_SOCKET,',
+  '                          then $DSH_HOME/deepseek-delegate/workspace.sock)',
+  '  --workspace-timeout <s> bound per socket request, 1-120 (default 15)',
+  '  --attach-session <id>   group an EXISTING completed ordinary session;',
+  '                          calls workspaceRegistry without a model task',
   '  -h, --help              print this help and exit',
   '',
-  'Web URL precedence (grouped runs): --dsh-web-url > --dsh-web-url-file >',
-  'DSH_WEB_URL > DSH_WEB_URL_FILE > the default credential file. Only',
-  'loopback http(s) origins are accepted; non-root paths, embedded',
-  'credentials, cross-origin redirects, and non-loopback hosts are rejected.',
+  'Install the workspace bridge in the owning host profile with',
+  'scripts/install-workspace-bridge.mjs. No Web URL or browser token is used.',
   '',
   'A run prints exactly one JSON object on stdout. Configuration and usage',
   'errors go to stderr with exit code 2; a run that is not ok, or a grouped',
@@ -277,9 +267,8 @@ try {
       'dsh-bin': { type: 'string' },
       'settings-file': { type: 'string' },
       'no-workspace': { type: 'boolean', default: false },
-      'dsh-web-url': { type: 'string' },
-      'dsh-web-url-file': { type: 'string' },
-      'web-timeout': { type: 'string', default: String(DEFAULT_WEB_TIMEOUT_SECONDS) },
+      'workspace-socket': { type: 'string' },
+      'workspace-timeout': { type: 'string', default: String(DEFAULT_WORKSPACE_TIMEOUT_SECONDS) },
       'attach-session': { type: 'string' },
     },
     allowPositionals: false,
@@ -300,8 +289,8 @@ const attachSession = values['attach-session'] === undefined ? undefined : value
 
 if (values.cwd === undefined) fail(`--cwd is required\n\n${USAGE}`);
 if (values.cwd.trim() === '') fail('--cwd must not be blank');
-if (!workspaceEnabled && (values['dsh-web-url'] !== undefined || values['dsh-web-url-file'] !== undefined)) {
-  fail('--no-workspace cannot be combined with --dsh-web-url or --dsh-web-url-file');
+if (!workspaceEnabled && values['workspace-socket'] !== undefined) {
+  fail('--no-workspace cannot be combined with --workspace-socket');
 }
 if (values['attach-session'] !== undefined) {
   if (attachSession === '') fail('--attach-session must not be blank');
@@ -325,14 +314,14 @@ const timeoutSeconds = Number(values.timeout);
 if (timeoutSeconds < MIN_TIMEOUT_SECONDS || timeoutSeconds > MAX_TIMEOUT_SECONDS) {
   fail(`--timeout must be an integer between ${MIN_TIMEOUT_SECONDS} and ${MAX_TIMEOUT_SECONDS} seconds`);
 }
-if (!/^\d+$/.test(values['web-timeout'])) {
-  fail(`--web-timeout must be an integer between ${MIN_WEB_TIMEOUT_SECONDS} and ${MAX_WEB_TIMEOUT_SECONDS} seconds`);
+if (!/^\d+$/.test(values['workspace-timeout'])) {
+  fail(`--workspace-timeout must be an integer between ${MIN_WORKSPACE_TIMEOUT_SECONDS} and ${MAX_WORKSPACE_TIMEOUT_SECONDS} seconds`);
 }
-const webTimeoutSeconds = Number(values['web-timeout']);
-if (webTimeoutSeconds < MIN_WEB_TIMEOUT_SECONDS || webTimeoutSeconds > MAX_WEB_TIMEOUT_SECONDS) {
-  fail(`--web-timeout must be an integer between ${MIN_WEB_TIMEOUT_SECONDS} and ${MAX_WEB_TIMEOUT_SECONDS} seconds`);
+const workspaceTimeoutSeconds = Number(values['workspace-timeout']);
+if (workspaceTimeoutSeconds < MIN_WORKSPACE_TIMEOUT_SECONDS || workspaceTimeoutSeconds > MAX_WORKSPACE_TIMEOUT_SECONDS) {
+  fail(`--workspace-timeout must be an integer between ${MIN_WORKSPACE_TIMEOUT_SECONDS} and ${MAX_WORKSPACE_TIMEOUT_SECONDS} seconds`);
 }
-const webTimeoutMs = webTimeoutSeconds * 1000;
+const workspaceTimeoutMs = workspaceTimeoutSeconds * 1000;
 
 const startedAt = Date.now();
 
@@ -353,17 +342,17 @@ if (attachSession !== undefined) {
   let host;
   let workspace;
   try {
-    const target = resolveWebTarget(values, process.env);
-    host = await connectWebHost(target, { timeoutMs: webTimeoutMs });
-    const resolvedWorkspace = await resolveWorkspace(host, cwd, { timeoutMs: webTimeoutMs });
+    const target = resolveWorkspaceTarget(values, process.env);
+    host = await connectWorkspaceHost(target, { timeoutMs: workspaceTimeoutMs });
+    const resolvedWorkspace = await resolveWorkspace(host, cwd, { timeoutMs: workspaceTimeoutMs });
     const adopted = await adoptSession(host, {
       sessionId: attachSession,
       workspaceId: resolvedWorkspace.id,
       cwd,
-    }, { timeoutMs: webTimeoutMs });
+    }, { timeoutMs: workspaceTimeoutMs });
     workspace = { enabled: true, bound: true, id: adopted.id, path: adopted.path, sessionId: adopted.sessionId };
   } catch (error) {
-    const message = error instanceof WebSetupError || error instanceof WebRpcError
+    const message = error instanceof WorkspaceError
       ? error.message
       : 'unexpected attach failure';
     if (host === undefined) fail(message);
@@ -395,7 +384,7 @@ function emitAttach(workspace, error) {
     finalText: '',
     finalTextTruncated: false,
     workspace,
-    note: 'attach mode only groups an existing completed session into its workspace through the running dsh web host; it runs no model task.',
+    note: 'attach mode only groups an existing completed session into its workspace through the owning dsh workspace host; it runs no model task.',
   };
   // Attach mode never initializes run-only child/timer/temporary-file state.
   const code = error === null ? 0 : EXIT_RUN_FAILED;
@@ -460,30 +449,30 @@ const prompt = fileBackedTask
 const promptSha256 = sha256Hex(prompt);
 
 // ---------------------------------------------------------------------------
-// Workspace preflight: resolve/authenticate the host and register the
-// canonical cwd BEFORE the paid headless run starts. Missing or expired auth
+// Workspace preflight: resolve/connect to the host and register the
+// canonical cwd BEFORE the paid headless run starts. An unavailable bridge
 // fails here, so no orphan run is ever created. Adoption itself happens only
 // after the owned process has fully stopped.
 // ---------------------------------------------------------------------------
-let webHost;
+let workspaceHost;
 let workspaceInfo;
 if (workspaceEnabled) {
   if (!isFile(CAPTURE_PLUGIN_PATH)) fail(`session capture plugin is missing: ${CAPTURE_PLUGIN_PATH}`);
   let target;
   try {
-    target = resolveWebTarget(values, process.env);
+    target = resolveWorkspaceTarget(values, process.env);
   } catch (error) {
-    fail(error instanceof WebSetupError ? error.message : 'could not resolve the dsh web URL');
+    fail(error instanceof WorkspaceError ? error.message : 'could not resolve the workspace socket');
   }
   try {
-    webHost = await connectWebHost(target, { timeoutMs: webTimeoutMs });
+    workspaceHost = await connectWorkspaceHost(target, { timeoutMs: workspaceTimeoutMs });
   } catch (error) {
-    fail(error instanceof WebSetupError || error instanceof WebRpcError ? error.message : 'could not authenticate to the dsh web host');
+    fail(error instanceof WorkspaceError ? error.message : 'could not connect to the workspace bridge');
   }
   try {
-    workspaceInfo = await resolveWorkspace(webHost, cwd, { timeoutMs: webTimeoutMs });
+    workspaceInfo = await resolveWorkspace(workspaceHost, cwd, { timeoutMs: workspaceTimeoutMs });
   } catch (error) {
-    fail(error instanceof WebRpcError ? error.message : 'could not register the workspace on the dsh web host');
+    fail(error instanceof WorkspaceError ? error.message : 'could not register the workspace on its owning host');
   }
 }
 
@@ -655,14 +644,14 @@ async function finalizeGrouping(status, shutdownConfirmed) {
     return workspace;
   }
   try {
-    const adopted = await adoptSession(webHost, {
+    const adopted = await adoptSession(workspaceHost, {
       sessionId,
       workspaceId: workspaceInfo.id,
       cwd,
-    }, { timeoutMs: webTimeoutMs });
+    }, { timeoutMs: workspaceTimeoutMs });
     return { enabled: true, bound: true, id: adopted.id, path: adopted.path, sessionId: adopted.sessionId };
   } catch (error) {
-    workspace.error = `grouping failed: ${error instanceof WebSetupError || error instanceof WebRpcError ? error.message : 'unexpected grouping failure'}`;
+    workspace.error = `grouping failed: ${error instanceof WorkspaceError ? error.message : 'unexpected grouping failure'}`;
     return workspace;
   }
 }
@@ -753,7 +742,7 @@ try {
   const childEnv = { ...process.env };
   // Preserve the same home after changing the child's working directory.
   if (childEnv.DSH_HOME?.trim()) childEnv.DSH_HOME = resolve(childEnv.DSH_HOME);
-  // The launch token never enters the headless child or its logs.
+  // Discard obsolete Web credentials if inherited from an older installation.
   delete childEnv.DSH_WEB_URL;
   delete childEnv.DSH_WEB_URL_FILE;
   child = spawn(dshBin, argv, {

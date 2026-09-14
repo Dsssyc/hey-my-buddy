@@ -26,7 +26,8 @@ work. This is a focused skill and CLI, not a framework or agent platform.
 - Node.js 20 or newer (uses `node:test` and `node:util.parseArgs`).
 - A working `dsh` installation with credentials you configured yourself. See
   <https://github.com/deepseek-ai/deepseek-harness> for setup. This project does not install dsh,
-  configure provider credentials, or change global dsh/Codex settings.
+  configure provider credentials, or change global model settings. The explicit bridge installer
+  adds one plugin entry to the selected dsh profile with a private backup.
 - Codex with skills support.
 
 ## Install
@@ -63,24 +64,37 @@ overwrites it.
 
 ## Connect workspace grouping
 
-Grouping is enabled by default. Keep your local `dsh web` service running and save the **full
-startup URL**, including `?token=...`, as one line in
-`${XDG_CONFIG_HOME:-$HOME/.config}/deepseek-delegate/web-url`. Use a private file (mode `0600`).
-This is the **Web launch token**, not your DeepSeek API key (`sk-...`). Do not commit this file or
-paste its contents into a task packet. After restarting the service, save its new startup URL.
+Grouping uses the official in-process workspace API through a bundled local host plugin.
+Install it once into your existing `web` profile:
 
-The CLI exchanges that token at the same loopback origin for a cookie held only in memory. It
-checks authentication and registers/reuses the workspace **before** starting the model task.
-A missing or rejected credential fails before a headless run is created.
+```sh
+node deepseek-delegate/scripts/install-workspace-bridge.mjs
+```
 
-`--cwd` is canonicalized with `realpath`. An observer records the exact matching root session,
-then, **after the headless process group has stopped**, the CLI asks the running Web host to attach
-that persisted session. The host verifies its cwd and membership. Consequently grouping appears
-when the run finishes, not while headless is still writing. The Web host and headless process must
-use the same DSH session storage/home. No second process edits workspace storage JSON.
+The installer backs up and appends to that profile's `cordis.patch.yml`; it preserves existing
+settings. Long-lived profiles hot-reload the user patch; otherwise start `dsh web` normally.
+The host plugin serves an owner-private Unix socket at
+`$DSH_HOME/deepseek-delegate/workspace.sock` (default home `~/.dsh`). There is no Web launch URL,
+browser token, cookie exchange, or HTTP dependency. The same socket path works after clean restarts.
+An unclean exit may leave a stale socket: verify the owning process has stopped before removing
+that socket. The plugin never unlinks an occupied endpoint automatically.
 
-For a standalone run without Web authentication or sidebar grouping, explicitly use
-`--no-workspace`. There is no silent ungrouped fallback.
+The CLI checks the bridge before starting a model task. After the headless process group stops,
+it sends the captured root session identity to the host. The plugin validates the persisted
+header and canonical cwd, calls `ctx.workspaceRegistry.create(cwd)` and
+`workspace.attachSession(sessionId)`, then verifies membership. It never creates or activates an
+Agent for grouping. Task and grouping outcomes remain separately visible; attachment can be retried.
+
+This socket transport is our adapter over the [official workspace API](https://github.com/deepseek-ai/deepseek-harness/blob/master/docs/subsystems/workspace.md).
+The host must mount workspace/persistence and share the headless session storage. Keeping the
+workspace writes inside its owning host avoids the [JSON backend's cross-process limitation](https://github.com/deepseek-ai/deepseek-harness/blob/master/packages/storage/storage-json/README.md).
+The installer defaults to `--profile web`; another existing long-lived profile with these services
+can be selected. Do not start another workspace writer over storage already owned by a host.
+
+Use `--no-workspace` for standalone execution. Grouped runs require the host plugin to be running;
+there is no silent fallback. Remove the obsolete private `~/.config/deepseek-delegate/web-url`
+file when migrating; the runner no longer reads it. Old `--dsh-web-url*` and `--web-timeout` flags
+are rejected. Model API credentials remain unchanged.
 
 ### Recover grouping without repeating a task
 
@@ -96,8 +110,8 @@ the canonical workspace path; mismatched/removed historical directories require 
 
 ## Quick start
 
-This disposable example opts out of sidebar grouping. For real project tasks, complete the Web
-setup above and omit `--no-workspace`. Write a task packet, then run the CLI:
+This disposable example opts out of sidebar grouping. For real project tasks, install the host plugin
+above and omit `--no-workspace`. Write a task packet, then run the CLI:
 
 ```sh
 SKILL_DIR="$PWD/deepseek-delegate"
@@ -164,9 +178,8 @@ stdout carries exactly one JSON object, for example:
 | `--settings-file <path>` | see precedence | settings document to copy and override |
 | `--no-workspace` | disabled | explicitly skip Web grouping |
 | `--attach-session <id>` | | group an existing completed session; no task file/model run |
-| `--dsh-web-url <url>` | see precedence | local Web startup URL; prefer a credential file |
-| `--dsh-web-url-file <file>` | see precedence | file containing that URL |
-| `--web-timeout <seconds>` | `15` | per-request network bound, integer 1–120 |
+| `--workspace-socket <path>` | see precedence | private socket served by the owning host plugin |
+| `--workspace-timeout <seconds>` | `15` | per-request bound, integer 1–120 |
 | `-h`, `--help` | | print help and exit (needs no dsh) |
 
 ## Precedence
@@ -177,7 +190,7 @@ stdout carries exactly one JSON object, for example:
 | settings document | `--settings-file` → `DSH_SETTINGS_FILE` → `$DSH_HOME/settings.yaml` → `~/.dsh/settings.yaml` |
 | model | `--model` → `DSH_DELEGATE_MODEL` → settings `agent-default-model.model` → `deepseek-flash` |
 | provider | `--provider` → `DSH_DELEGATE_PROVIDER` → settings `agent-default-model.provider` → `deepseek-official` |
-| Web URL | `--dsh-web-url` → `--dsh-web-url-file` → `DSH_WEB_URL` → `DSH_WEB_URL_FILE` → default private URL file |
+| Workspace socket | `--workspace-socket` → `DSH_WORKSPACE_SOCKET` → `$DSH_HOME/deepseek-delegate/workspace.sock` (home defaults to `~/.dsh`) |
 | effort | `--effort` → `DSH_DELEGATE_EFFORT` → `max` (never inherited from settings) |
 
 Notes:
@@ -240,8 +253,17 @@ The suite drives the real CLI against a mock `dsh` executable in temporary direc
 model calls, does not read your real settings, does not use your `HOME` or `CODEX_HOME`, and covers
 launcher resolution, settings precedence and preservation, literal task delivery, the 32 KB
 reference switch, the 6000-character stdout cap, unique private logs, spawn failures, timeouts, and
-cancellation cleanup. Additional tests cover root-session capture, authentication, existence checks, verified workspace
-binding, and recovery using a local HTTP fixture. No production Web service is contacted.
+cancellation cleanup. Additional tests cover root-session capture, private socket permissions, existence checks, verified workspace
+binding, and recovery using a local socket fixture. No production host is contacted.
+An opt-in no-model check uses your installed official packages with isolated temporary storage:
+
+```sh
+node deepseek-delegate/tests/manual/real-workspace.mjs --dsh-lib /path/to/node_modules/@deepseek-ai
+```
+
+It verifies binding, rejection of unknown sessions, actual Cordis plugin disposal, and reconnection
+after restarting at the same socket path. It does not touch your real sessions or workspaces.
+
 Nothing in this repository is published to npm.
 
 ## License

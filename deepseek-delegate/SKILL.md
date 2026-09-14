@@ -56,7 +56,7 @@ Do not end with only “delegated” while an unmonitored run is still active.
 node <skill-dir>/scripts/run.mjs --cwd <dir> --task-file <file> \
   [--model <id>] [--provider <id>] [--effort <name>] [--timeout <seconds>] \
   [--log-dir <parent>] [--dsh-bin <path>] [--settings-file <path>] \
-  [--dsh-web-url-file <file>] [--web-timeout <seconds>] [--no-workspace]
+  [--workspace-socket <path>] [--workspace-timeout <seconds>] [--no-workspace]
 ```
 
 - `<skill-dir>` is wherever this skill is installed (for example
@@ -72,20 +72,34 @@ node <skill-dir>/scripts/run.mjs --cwd <dir> --task-file <file> \
 
 ## Workspace grouping
 
-Grouping is enabled by default. The local DSH Web service must be running and share the headless
-session storage. Its full startup URL (with the **Web token**, not the model API key) belongs in a
-private `${XDG_CONFIG_HOME:-~/.config}/deepseek-delegate/web-url` file, or an explicit
-`--dsh-web-url-file`. Never put credentials in a task packet or print them.
+Grouping is enabled by default. Install the bundled host plugin once:
 
-Authentication is checked before the model run. The canonical cwd determines the workspace. A
-read-only observer captures the exact root session; after headless fully stops, the running host
-binds it and returns verified membership. Do not write DSH workspace storage directly from another
-process. Grouping is visible after completion. Inspect `workspace.bound` as well as the child result:
-a grouping failure preserves the task output but makes the CLI exit nonzero.
+```sh
+node <skill-dir>/scripts/install-workspace-bridge.mjs
+```
 
-Use `--attach-session <id> --cwd <dir>` to retry binding an existing completed session without
-rerunning the task. This probes existence first. For disposable tests or intentionally standalone
-work, explicitly use `--no-workspace`; never silently downgrade a requested grouped run.
+This adds a backed-up entry to the existing `web` profile's `cordis.patch.yml`.
+Long-lived profiles hot-reload their user patch; otherwise start that profile normally.
+The plugin calls the official `ctx.workspaceRegistry.create(cwd)` and
+`workspace.attachSession(sessionId)` APIs inside the owning host. The CLI connects
+through an owner-private Unix socket at `$DSH_HOME/deepseek-delegate/workspace.sock`
+(default home `~/.dsh`). No Web URL, token, cookie, or HTTP endpoint is used.
+Use `--workspace-socket` or `DSH_WORKSPACE_SOCKET` only for a custom host endpoint.
+The host must mount workspace and persistence and share the headless session storage.
+Do not mount a second workspace writer over storage already owned by another host.
+
+The bridge is checked before a model run. A read-only observer captures the exact root
+session; after headless fully stops, the host validates the persisted root header and cwd,
+attaches it through the official API, and verifies membership. No Agent is activated for
+binding. A binding failure preserves task output and makes the CLI exit nonzero.
+Use `--attach-session <id> --cwd <dir>` to retry only binding of a completed session.
+For intentionally standalone work, explicitly use `--no-workspace`; never silently downgrade.
+Socket restarts use the same path without credential updates. An unclean host exit can leave
+a stale socket; verify its owner process has stopped before removing that socket only.
+
+Official contracts: [workspace](https://github.com/deepseek-ai/deepseek-harness/blob/master/docs/subsystems/workspace.md),
+[storage limits](https://github.com/deepseek-ai/deepseek-harness/blob/master/packages/storage/storage-json/README.md).
+The socket bridge is this skill's adapter, not an upstream DSH CLI command.
 
 ## Scope and isolation
 
