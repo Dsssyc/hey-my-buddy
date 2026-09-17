@@ -1,11 +1,21 @@
 # hey-my-buddy
 
+
 [English](README.md)
 
-一个体积很小的 Codex 技能，外加一个 CLI：把**目标清晰、边界明确**的任务交给本地
-[DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness)（`dsh`）执行一次，然后只回传一个紧凑的
-JSON 结果。定框、选路和最终验收仍由 Codex 负责，dsh 只承担这次有界任务的主体工作。这是一个专注的技能和
-CLI，不是框架，也不是 agent 平台。
+通过 Codex 插件把边界明确的任务交给本地 dsh。插件内的本地服务负责启动、状态与结果持久化，Codex 负责明确任务和最终验收。原来的独立 skill / CLI 仍可单独使用。
+
+## Codex app 插件
+
+```sh
+uv sync --project deepseek-delegate --python 3.12
+```
+
+在 Codex 中安装本仓库的 `hey-my-buddy` 插件后，新任务可以直接调用 `buddy_start`、`buddy_wait`、`buddy_result` 等工具，无需手写任务文件、维护 PID 或创建 hourly。`buddy_dashboard` 返回可在浏览器面板打开的本地任务页，页面刷新不调用模型。
+
+服务默认只运行一个委派；多个 Codex 连接共享同一个服务。它只取消自己启动的进程，不停止现有 dsh 宿主或交互会话。分组沿用下方的工作区桥接安装；模型设置仍使用每次运行的私有副本。
+
+`notify` 默认关闭。当前回合用 `buddy_wait` 等待；需要结束回合后自动继续时，Buddy skill 创建绑定原任务的官方 App heartbeat，定期通过 C-Two 读取既有任务、验收结果并删除 heartbeat。正常约每分钟检查一次，App 可用性、调度和模型处理会影响实际延迟。直接原生通知仍是受进程身份校验阻止的实验路径。持久工具授权和恢复说明见 [插件服务说明](deepseek-delegate/references/plugin-service.md)。
 
 ## 它做什么
 
@@ -18,6 +28,8 @@ CLI，不是框架，也不是 agent 平台。
 
 ## 环境要求
 
+- uv 和 Python 3.12（启动器可通过 uv 选择该解释器）。
+
 - macOS 或 Linux（POSIX）。Windows 未实现也未测试；CLI 会直接报错退出。
 - Node.js 20 或更高版本（使用 `node:test` 和 `node:util.parseArgs`）。
 - 已自行安装并配置好凭据的 `dsh`。安装方法见
@@ -29,11 +41,11 @@ CLI，不是框架，也不是 agent 平台。
 ```sh
 git clone https://github.com/Dsssyc/hey-my-buddy.git
 cd hey-my-buddy
-npm --prefix deepseek-delegate ci
+uv sync --project deepseek-delegate --python 3.12
 ```
 
-技能自带依赖，全部内容都在 `deepseek-delegate/` 里。只复制这个目录并在其中运行 `npm ci` 也够用；仓库根目录
-没有 package，也不会发布到 npm，唯一的运行时依赖是持续维护的 `js-yaml` 解析器。
+技能自带依赖，全部内容都在 `deepseek-delegate/` 里。只复制这个目录并在其中运行 `uv sync` 也够用；仓库根目录
+没有 package，也不会发布到 npm。全部第三方库由 uv 管理并锁定，包括 PyPI `c-two==0.5.1`、Python MCP SDK 和 PyYAML。Node 文件仅使用内置模块。
 
 ### 安装到 Codex，且不覆盖已有内容
 
@@ -51,7 +63,7 @@ fi
 ```
 
 想用复制而不是符号链接，就把 `ln -s` 那行换成
-`cp -R "$PWD/deepseek-delegate" "$CODEX_SKILLS/deepseek-delegate"`，并在副本里重新运行 `npm ci`。如果已经装了
+`cp -R "$PWD/deepseek-delegate" "$CODEX_SKILLS/deepseek-delegate"`，并在副本里重新运行 `uv sync`。如果已经装了
 旧版本，请自己先删除或改名；这里不会覆盖它。
 
 ## 配置工作区分组
@@ -218,7 +230,7 @@ dsh 进程结束**不等于**任务正确。Codex 必须查看真实 diff、新�
 ## 测试
 
 ```sh
-npm --prefix deepseek-delegate test
+uv run --frozen --project deepseek-delegate python -m buddy.checks
 ```
 
 测试在临时目录里用 mock `dsh` 可执行文件驱动真实 CLI，不调用模型、不读取你的真实设置、不使用你的 `HOME` 或

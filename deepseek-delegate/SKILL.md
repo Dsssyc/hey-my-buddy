@@ -9,6 +9,19 @@ description: Delegate clear, bounded implementation, investigation, file-transfo
 Hand **one bounded task** to a local `dsh` headless run and get back **one compact JSON result**.
 Codex keeps framing, route choice, and final acceptance; dsh does the bulk work.
 
+## Codex plugin route
+
+When `buddy_start` and `buddy_wait` are available, use the Buddy plugin tools.
+Pass task text directly; the service manages files, lifetime and durable results.
+Use `notify:false` (the default). For current-turn work, wait with `buddy_wait`,
+verify artifacts and call `buddy_acknowledge`. For work that must resume after the
+turn ends, follow the plugin's Buddy skill to register an official App heartbeat
+for the exact run before ending the turn. The heartbeat reads the result through
+C-Two, verifies and acknowledges it, then removes itself. Scheduling is periodic;
+it is not immediate dsh push. The experimental direct native notification route
+is blocked by App process identity checks. Recover existing runs by ID; never
+relaunch because a result or follow-up is delayed.
+
 ## Route early
 
 Delegate before doing the work yourself when the task is clear, bounded, and bigger than a
@@ -60,7 +73,7 @@ node <skill-dir>/scripts/run.mjs --cwd <dir> --task-file <file> \
 ```
 
 - `<skill-dir>` is wherever this skill is installed (for example
-  `$CODEX_HOME/skills/deepseek-delegate`); run `npm ci` there once. `--help` needs no dsh.
+  `$CODEX_HOME/skills/deepseek-delegate`); run `uv sync` there once. `--help` needs no dsh.
 - stdout is exactly one JSON object: status, exit code, elapsed time, requested route and effort,
   inputDelivery, log paths, and `finalText` (at most 6000 characters) with a truncation flag.
   Nonzero/timeout/cancellation/spawn failure exits 1; usage and configuration errors exit 2.

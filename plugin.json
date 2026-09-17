@@ -1,0 +1,10 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+  "name": "hey-my-buddy",
+  "version": "0.3.0+codex.20260917115844",
+  "description": "Local dsh delegation over C-Two with official App heartbeat follow-up.",
+  "author": {
+    "name": "Dsssyc"
+  },
+  "license": "MIT"
+}

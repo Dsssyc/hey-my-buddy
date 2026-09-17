@@ -16,3 +16,12 @@ node_modules/
 # Run logs
 *.log
 *.pid
+
+# Browser verification artifacts
+.playwright-cli/
+output/playwright/
+
+# uv-managed environments and Python caches
+.venv/
+__pycache__/
+*.pyc

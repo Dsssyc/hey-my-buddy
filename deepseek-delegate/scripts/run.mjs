@@ -28,7 +28,7 @@ import { homedir, tmpdir } from 'node:os';
 import { delimiter, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
-import yaml from 'js-yaml';
+import { loadYaml } from './lib/yaml.mjs';
 import {
   DEFAULT_WORKSPACE_TIMEOUT_SECONDS, MAX_WORKSPACE_TIMEOUT_SECONDS, MIN_WORKSPACE_TIMEOUT_SECONDS,
   WorkspaceError, adoptSession, connectWorkspaceHost, resolveWorkspaceTarget, resolveWorkspace,
@@ -211,7 +211,7 @@ function loadSettings(settingsPath, explicit) {
   }
   let document;
   try {
-    document = yaml.load(text, { schema: yaml.JSON_SCHEMA });
+    document = loadYaml(text);
   } catch {
     fail(`settings file is not valid YAML or JSON: ${settingsPath}`);
   }

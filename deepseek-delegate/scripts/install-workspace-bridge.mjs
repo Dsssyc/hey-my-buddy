@@ -5,10 +5,9 @@ import { homedir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { parseArgs } from 'node:util';
-import yaml from 'js-yaml';
+import { loadYaml } from './lib/yaml.mjs';
 
 const pluginPath = fileURLToPath(new URL('../plugins/workspace-bridge.mjs', import.meta.url));
-const schema = yaml.DEFAULT_SCHEMA.extend(new yaml.Type('tag:yaml.org,2002:js', { kind: 'scalar', construct: text => text }));
 
 export function installBridge({ home = process.env.DSH_HOME || join(homedir(), '.dsh'), profile = 'web', socketPath } = {}) {
   if (!/^[a-zA-Z0-9_-]+$/.test(profile)) throw new Error('profile must be a simple profile name');
@@ -18,7 +17,7 @@ export function installBridge({ home = process.env.DSH_HOME || join(homedir(), '
   if (!existsSync(pluginPath)) throw new Error('workspace bridge plugin is missing');
   const path = join(dir, 'cordis.patch.yml');
   const original = existsSync(path) ? readFileSync(path, 'utf8') : '';
-  const rows = yaml.load(original, { schema }) ?? [];
+  const rows = loadYaml(original, { mode: 'patch' }) ?? [];
   if (!Array.isArray(rows)) throw new Error('profile patch must be a YAML list');
   const endpoint = resolve(socketPath || join(home, 'deepseek-delegate', 'workspace.sock'));
   const entry = { id: 'deepseek-delegate-workspace-bridge', name: pluginPath, config: { socketPath: endpoint } };
@@ -33,7 +32,7 @@ export function installBridge({ home = process.env.DSH_HOME || join(homedir(), '
   if (/^\.\.\.\s*$/m.test(original)) throw new Error('remove the YAML document end marker before installation');
   const prefix = rows.length ? original.trimEnd() + '\n' : '';
   const next = prefix + '- ' + JSON.stringify({ insert: [entry] }) + '\n';
-  yaml.load(next, { schema });
+  loadYaml(next, { mode: 'patch' });
   let backup = null;
   if (existsSync(path)) {
     backup = `${path}.before-workspace-bridge-${Date.now()}`;

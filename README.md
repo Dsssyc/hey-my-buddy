@@ -1,11 +1,31 @@
 # hey-my-buddy
 
+
 [中文文档](README.zh-CN.md)
 
-A small Codex skill plus a CLI that hands **clear, bounded** tasks to a local
+A Codex plugin, standalone skill and CLI that hand **clear, bounded** tasks to a local
 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) (`dsh`) run, then returns one
 compact JSON result. Codex keeps framing, route choice, and final acceptance; dsh does the bulk
-work. This is a focused skill and CLI, not a framework or agent platform.
+work. The plugin manages delegation through a shared local job service.
+
+## Codex app plugin
+
+The repository now includes a `hey-my-buddy` plugin: a short skill, MCP tools and a
+shared local job service. Install dependencies with `uv sync --project deepseek-delegate --python 3.12`,
+then install the plugin in Codex and use a new task. `buddy_start`, `buddy_wait` and
+`buddy_result` replace manual task-file and process management. `buddy_dashboard`
+opens a private read-only local task panel with no model calls for refresh.
+
+The service defaults to one delegation at a time and only controls its own runner
+processes. Existing dsh host/session lifetimes and original settings stay separately
+owned. Workspace grouping still uses the existing host bridge described below.
+`notify` defaults to false. Use `buddy_wait` in the current turn. To resume background
+work after the turn ends, the Buddy skill registers an official App heartbeat that
+checks the existing run through C-Two, verifies its artifacts, acknowledges it and
+removes the heartbeat. Checks run roughly every minute while the App is available;
+scheduling and model time add latency. Direct native notifications remain an
+unsupported experiment because the App rejects the Python process ancestry.
+See [service contracts and recovery](deepseek-delegate/references/plugin-service.md).
 
 ## What it does
 
@@ -22,6 +42,8 @@ work. This is a focused skill and CLI, not a framework or agent platform.
 
 ## Requirements
 
+- uv and Python 3.12 (the launcher selects this interpreter through uv).
+
 - macOS or Linux (POSIX). Windows is not implemented or tested; the CLI exits with a clear error.
 - Node.js 20 or newer (uses `node:test` and `node:util.parseArgs`).
 - A working `dsh` installation with credentials you configured yourself. See
@@ -35,12 +57,12 @@ work. This is a focused skill and CLI, not a framework or agent platform.
 ```sh
 git clone https://github.com/Dsssyc/hey-my-buddy.git
 cd hey-my-buddy
-npm --prefix deepseek-delegate ci
+uv sync --project deepseek-delegate --python 3.12
 ```
 
 The skill is self-contained in `deepseek-delegate/`. Copying just that directory somewhere and
-running `npm ci` inside it is enough; there is no root package, nothing is published to npm, and the
-only runtime dependency is the maintained `js-yaml` parser.
+running `uv sync` inside it is enough; there is no root package, nothing is published to npm, and the
+third-party dependencies are uv-managed: PyPI C-Two 0.5.1, Python MCP and PyYAML. Node files use built-in modules only.
 
 ### Add it to Codex without overwriting anything
 
@@ -58,7 +80,7 @@ fi
 ```
 
 For a copy instead of a symlink, replace the `ln -s` line with
-`cp -R "$PWD/deepseek-delegate" "$CODEX_SKILLS/deepseek-delegate"` and run `npm ci` inside the copy.
+`cp -R "$PWD/deepseek-delegate" "$CODEX_SKILLS/deepseek-delegate"` and run `uv sync` inside the copy.
 If an older version is already installed, remove or rename it yourself first; nothing here
 overwrites it.
 
@@ -246,7 +268,7 @@ same thing on purpose.
 ## Tests
 
 ```sh
-npm --prefix deepseek-delegate test
+uv run --frozen --project deepseek-delegate python -m buddy.checks
 ```
 
 The suite drives the real CLI against a mock `dsh` executable in temporary directories. It makes no
