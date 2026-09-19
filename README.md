@@ -3,12 +3,17 @@
 
 [中文文档](README.zh-CN.md)
 
+[Architecture decision](docs/decisions/001-python-transactional-blackboard.md) ·
+[0.4.0 acceptance evidence](docs/acceptance/python-blackboard-0.4.0.md)
+
 A Codex plugin, standalone skill and CLI that hand **clear, bounded** tasks to a local
 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) (`dsh`) run, then returns one
 compact JSON result. Codex keeps framing, route choice, and final acceptance; dsh does the bulk
-work. The plugin manages delegation through a shared local job service, the same service and
-durable runs are available from the CLI, and the original standalone Node runner still ships for
-direct, service-less use.
+work. A **Python transactional blackboard service over C-Two** owns every task record; independent
+Python workers claim queued tasks and execute them through adapters (`dsh` by default, plus
+`command` and caller-owned `external`). The same service and durable tasks are available from the
+CLI, and the original standalone Node runner still ships for direct, service-less use — it is also
+the runner the `dsh` adapter spawns.
 
 ## Codex app plugin
 
@@ -16,7 +21,7 @@ The repository includes a `hey-my-buddy` plugin: a short skill plus the uv-manag
 CLI. Install dependencies with `uv sync --project deepseek-delegate --python 3.12`, then
 install the plugin in Codex and use a new task. **There is no MCP server and no MCP
 registration**: the plugin is skills + CLI, and every operation goes through the
-`buddy` command talking to the shared local C-Two service.
+`buddy` command talking to the transactional Python blackboard over C-Two.
 
 ```sh
 BUDDY=deepseek-delegate/scripts/launch-buddy.sh     # or: node deepseek-delegate/scripts/buddy.mjs
@@ -34,14 +39,23 @@ convenience: it starts (or recovers) the durable dsh job and stays connected, wi
 maximum. The turn stays active while it waits; there is no heartbeat, cron or model
 polling. `buddy result` reads an existing run again, and `buddy dashboard` returns a
 private read-only local task panel with no model calls for refresh. The full surface is
-`run`, `await`, `start`, `status`, `wait`, `result`, `list`, `cancel`, `acknowledge`,
-`inquire`, `dashboard`, `health`, `stop`.
+`run`, `await`, `start`, `submit`, `status`, `wait`, `watch`, `events`, `result`, `list`,
+`cancel`, `retry`, `acknowledge`, `inquire`, `message`, `messages`, `message-get`,
+`message-update`, `artifacts`, `workers`, `worker-register`, `worker-claim`,
+`worker-reconcile`, `worker-renew`, `worker-progress`, `worker-result`,
+`worker-release`, `worker-start`, `worker-stop`, `wait-capacity`, `capabilities`,
+`adapters`, `runtime`, `dashboard`, `legacy-import`, `restart`, `health`, `stop`.
 
-The service defaults to one delegation at a time and only controls its own runner
-processes. Existing dsh host/session lifetimes and original settings stay separately
-owned. Workspace grouping defaults on (`workspace: true`) and still uses the existing host
-bridge described below; `workspace: false` opts out. A `cwd` is a working directory, not a
-sandbox, and independent user dsh processes are not coordinated by Buddy.
+A submitted task is admitted as `queued` and starts when a worker claims it;
+`queueReason` says why it is waiting (`awaiting-worker`, `capacity`, `cwd-overlap`,
+`exclusive-resource`). This is deliberate: capacity and resource conflicts queue the
+work instead of returning BUSY, and the task keeps its place until a matching worker is
+free. The service defaults to one concurrent attempt (`BUDDY_MAX_CONCURRENT`, 1–8) and
+only controls its own worker processes. Existing dsh host/session lifetimes and original
+settings stay separately owned. Workspace grouping defaults on (`workspace: true`) and
+still uses the existing host bridge described below; `workspace: false` opts out. A
+`cwd` is a working directory, not a sandbox, and independent user dsh processes are not
+coordinated by Buddy.
 
 The wait window is owned by the CLI: it defaults to `timeoutSeconds + 60 s` shutdown
 grace, capped at the 24 h CLI maximum (86400 s), so one command normally covers the whole
@@ -55,17 +69,20 @@ wait window stays allowed: the job keeps running, the envelope reports
 `waitCoversRunnerDeadline: false`, and `buddy await` waits on the same durable runId.
 
 Killing the waiting CLI process (Ctrl-C, closed terminal, `waitSeconds` expiry) cancels
-only the wait: while the owner service is alive, the owned job keeps running and is
-recovered by requestId/runId. The job can still end on its own runner execution deadline,
-and `buddy stop` (or service shutdown) also terminates Buddy-owned work by signaling the
-owned process group; those endings are terminal and are never replayed automatically. After
-an owner service restart, active jobs are marked `interrupted` with shutdown unconfirmed:
-there is no automatic takeover, resume or relaunch, and durable records/results plus
-same-requestId recovery are not crash-proof recovery of a still-running process.
+only the wait: the durable task keeps running while a worker owns it and is recovered by
+requestId/runId. The task can still end on its own execution deadline, and `buddy cancel`
+(or `buddy stop`) ends Buddy-owned work through durable cancel intent that the owning
+worker observes; those endings are terminal and are never replayed automatically. After a
+daemon restart, in-flight attempts are marked `uncertain` with their resource claims
+retained: the independent worker keeps its child process and deadline, reattaches by
+attempt identity and capability, and `buddy restart` never cancels work. The worker
+resubmits a persisted completion receipt until acknowledged without executing the
+task again. A new execution requires an explicit `buddy retry` that creates a new attempt.
 
 A finished runner is not acceptance. `buddy acknowledge` records that you reviewed the real
 outcome — including a reviewed failure — once the persisted result exists and shutdown is
-confirmed; it never turns a failed execution into a success. Exit 0 is not job success
+confirmed; it never turns a failed execution into a success, and repeating it with a
+different note or `verdict` is a `CONFLICT`. Exit 0 is not job success
 either: read `status`, `outcome`, `resultDelivered` and `shutdownConfirmed`, then inspect
 the actual artifacts.
 
@@ -100,20 +117,24 @@ deepseek-delegate/scripts/launch-buddy.sh stop    # or the previous version's la
 # then install/refresh the plugin version
 ```
 
-A live daemon keeps using the code path it loaded at start, so replacing the cache
-directory under it can leave the service running from a deleted path (and its next run
-would reference a missing runner). The service refuses to start any new run whose runner
-entrypoint is missing or unusable, so a stale install fails loudly instead of leaving a
-poisoned record — but stopping first is still the supported order. Details and the exact
-failure mode: [service contracts and recovery](deepseek-delegate/references/plugin-service.md#cli-wait-window-and-upgrade-ordering).
+`buddy stop` cancels queued tasks, writes a durable cancel request for each active
+attempt, drains for a bounded interval and reports anything unresolved, so it is the
+supported pre-upgrade action. `buddy restart` detaches the daemon without cancelling
+work and independent workers survive it, but a live daemon still keeps using the code
+path it loaded at start: replacing the cache directory under it can leave the service
+running from a deleted path (and its next `dsh` task would fail with an unavailable
+runner). For an install that survives cache replacement, materialize the
+content-addressed stable runtime outside the plugin cache (see
+[runtime packaging](deepseek-delegate/references/plugin-service.md#packaging-migration-and-unrelated-app-tools));
+a cold start then launches the service from it. Details: [service contracts and recovery](deepseek-delegate/references/plugin-service.md#cli-wait-window-and-upgrade-ordering).
 
 ## Service CLI
 
-The same service and the same durable runs are available from the CLI:
+The same service and the same durable tasks are available from the CLI:
 
 ```sh
 uv run --frozen --project deepseek-delegate buddy health
-# Default: start once, keep the runId, then await that same durable run. await has
+# Default: start once, keep the runId, then await that same durable task. await has
 # its own bounded window (waitSeconds 1..86400, default 86400) and never starts work.
 uv run --frozen --project deepseek-delegate buddy start '{"requestId":"x","task":"...","cwd":"/abs/path","timeoutSeconds":28800}'
 uv run --frozen --project deepseek-delegate buddy await '{"runId":"<runId>","waitSeconds":28800}'
@@ -122,22 +143,30 @@ uv run --frozen --project deepseek-delegate buddy run '{"requestId":"x","task":"
 uv run --frozen --project deepseek-delegate buddy status '{"runId":"<runId>"}'
 uv run --frozen --project deepseek-delegate buddy result '{"runId":"<runId>"}'
 uv run --frozen --project deepseek-delegate buddy inquire '{"runId":"<runId>"}'
+uv run --frozen --project deepseek-delegate buddy events '{"after":0}'
+uv run --frozen --project deepseek-delegate buddy workers
 uv run --frozen --project deepseek-delegate buddy cancel '{"runId":"<runId>"}'
-uv run --frozen --project deepseek-delegate buddy acknowledge '{"runId":"<runId>","note":"reviewed the diff and ran the tests"}'
+uv run --frozen --project deepseek-delegate buddy acknowledge '{"runId":"<runId>","note":"reviewed the diff and ran the tests","verdict":"accepted"}'
+uv run --frozen --project deepseek-delegate buddy restart
 uv run --frozen --project deepseek-delegate buddy stop
+# Explicit board submission for another adapter (one argv process, never a shell):
+uv run --frozen --project deepseek-delegate buddy submit '{"requestId":"y","task":"...","cwd":"/abs/path","adapter":"command","argv":["/bin/echo","hi"]}'
+# Offline, transactional import of the removed Node records (dry run by default):
+uv run --frozen --project deepseek-delegate buddy legacy-import '{"sourceDir":"/old/state","dryRun":true}'
 ```
 
 Only `run` and `await` have a long wait contract: `run` blocks up to its wait window and
 `await` waits up to its own `waitSeconds`. The other subcommands have bounded waits or
-none: `wait` returns after at most 30 s, `inquire` returns immediately unless `waitMs` asks
-for a bounded answer window (max 30 s), and `stop` returns after the service has finished
-shutting down. `await` waits on an existing `requestId` or `runId` and never starts work.
+none: `wait` and `watch` return after at most 30 s, `inquire` returns immediately unless
+`waitMs` asks for a bounded answer window (max 30 s), and `stop` returns after the
+service has finished draining. A `wait` or `watch` never cold-starts a service. `await`
+waits on an existing `requestId` or `runId` and never starts work.
 The CLI prints one JSON object (pretty-printed), and exit 0 only means the call returned:
 read `status`/`outcome`/`resultDelivered`/`shutdownConfirmed` and verify the real
 artifacts. A low-level failure is printed as an `error` object with exit 1. Every recovery
 envelope names real commands (`buddy status|await|result|cancel`) and the existing run ID.
 See [service contracts and recovery](deepseek-delegate/references/plugin-service.md) for
-the wait, inquiry and recovery contract.
+the wait, worker, adapter, inquiry and recovery contract.
 
 `buddy inquire` without a question is read-only: it reports the observed execution state,
 an explicitly estimated deadline and recent tool activity — not a percentage or a
@@ -146,13 +175,16 @@ agent one correlated question, pass `inquiryId` and `question` together; to read
 same question back, repeat both the same text and the same id (an id alone is not a
 valid lookup). The same id with different text is a `CONFLICT`, in both active and
 terminal runs, and `waitMs` (max 30000) only bounds this call's wait for an answer — it
-never extends or cancels the job. No automatic timer- or model-triggered inquiry exists;
-an agent whose task allows shell commands can still call the CLI explicitly when needed.
+never extends or cancels the task. Questions and answers are each bounded at 4000 UTF-8
+bytes, at most 32 inquiries are retained per task, and an adapter without an inquiry
+capability answers with an explicit reason instead of faking progress. No automatic
+timer- or model-triggered inquiry exists; an agent whose task allows shell commands can
+still call the CLI explicitly when needed.
 
 ## What it does
 
-The plugin service, the CLI and the standalone runner all execute through the same Node
-runner, which:
+The plugin service executes tasks through adapters. The `dsh` adapter (default) spawns
+the existing Node runner for each task; the runner:
 
 - Runs one bounded task through `dsh --profile headless` with a real per-run model/effort override.
 - Copies your settings document to a private temporary JSON file, replaces only the
@@ -165,12 +197,20 @@ runner, which:
 - Only starts the one dsh run you asked for: it never retries, downgrades, or substitutes a route
   silently.
 
+The `command` adapter runs exactly one explicit `argv` process with no implicit shell. The
+`external` adapter has no local process at all: the caller's own agent claims the task
+through the public C-Two contract (`deepseek-delegate/python/buddy/client.py`) and reports
+the result itself. `buddy capabilities` reports each adapter with `executedBy` and the
+service's honest limitations (no steer/resume, no native App wakeup, no PostgreSQL/HA,
+no remote tenancy).
+
 ## Requirements
 
 - uv and Python 3.12 or newer below 3.15 (`requires-python = ">=3.12,<3.15"`; the launcher selects Python 3.12 through uv).
 
 - macOS or Linux (POSIX). Windows is not implemented or tested; the CLI exits with a clear error.
-- Node.js 20 or newer, the external runtime dsh needs. Node files here use built-in modules only, so
+- Node.js 20 or newer, required by the `dsh` adapter and the dsh runtime it drives; the
+  `command` and `external` adapters need no Node. Node files here use built-in modules only, so
   there is no npm dependency installation.
 - A working `dsh` installation with credentials you configured yourself. See
   <https://github.com/deepseek-ai/deepseek-harness> for setup. This project does not install dsh,
@@ -188,7 +228,19 @@ uv sync --project deepseek-delegate --python 3.12
 
 The skill is self-contained in `deepseek-delegate/`. Copying just that directory somewhere and
 running `uv sync` inside it is enough; there is no root package, nothing is published to npm, and the
-third-party dependencies are uv-managed and locked: PyPI `c-two==0.5.1` and PyYAML. Node files use built-in modules only, and the `mcp` Python SDK is no longer a dependency of anything here.
+third-party dependencies are uv-managed and locked: PyPI `c-two==0.5.1` and PyYAML. Node files use built-in modules only, and the `mcp` Python SDK is no longer a dependency of anything here. To run independently of the Codex plugin cache, materialize the content-addressed stable runtime outside it:
+
+```sh
+uv run --frozen --project deepseek-delegate python -c "from buddy import runtime; runtime.materialize()"
+uv run --frozen --project deepseek-delegate buddy runtime
+```
+
+`materialize()` copies the complete runtime assets into the final content-addressed directory
+first, runs `uv sync --frozen` there, and writes `READY.json` last; credentials, user data,
+tests and any existing virtual environment are never copied. Once a READY runtime exists, a
+cold start launches the service and its worker supervisor from that runtime's own interpreter,
+and `buddy runtime` / `buddy health` report whether the process actually runs from it. See
+[runtime packaging](deepseek-delegate/references/plugin-service.md#packaging-migration-and-unrelated-app-tools).
 
 ### Add it to Codex without overwriting anything
 
@@ -227,7 +279,7 @@ browser token, cookie exchange, or HTTP dependency. The same socket path works a
 An unclean exit may leave a stale socket: verify the owning process has stopped before removing
 that socket. The plugin never unlinks an occupied endpoint automatically.
 
-The CLI checks the bridge before starting a model task. After the headless process group stops,
+The `dsh` adapter's runner checks the bridge before starting a model task. After the headless process group stops,
 it sends the captured root session identity to the host. The plugin validates the persisted
 header and canonical cwd, calls `ctx.workspaceRegistry.create(cwd)` and
 `workspace.attachSession(sessionId)`, then verifies membership. It never creates or activates an
@@ -259,9 +311,10 @@ the canonical workspace path; mismatched/removed historical directories require 
 
 ## Standalone runner quick start
 
-`scripts/run.mjs` is the low-level runner that the service spawns for every run. It is
+`scripts/run.mjs` is the low-level runner the `dsh` adapter spawns for every dsh task. It is
 still shipped, tested and usable on its own when you want the raw runner contract with
-no durable service records, `buddy_*` tools or inquiry channel. The disposable example
+no durable blackboard records or inquiry channel (a standalone invocation reports
+`inquiry.enabled: false`). The disposable example
 below opts out of sidebar grouping. For real project tasks, install the host plugin
 above and omit `--no-workspace`. Write a task packet, then run the CLI:
 
@@ -398,6 +451,12 @@ same thing on purpose.
   standalone runner's `--no-workspace`) to opt out.
 - Only Buddy-owned runs are controlled. Independent user dsh processes and sessions are separate and
   are not coordinated, grouped or cancelled by Buddy.
+- All authoritative state is local SQLite under `BUDDY_STATE_DIR` (default
+  `~/.local/share/hey-my-buddy`). PostgreSQL/HA, remote multi-tenant operation and native App
+  wakeup are not implemented and are not claimed.
+- Capacity and cwd/exclusive-resource conflicts queue work with a `queueReason` instead of
+  rejecting it; `BUDDY_MAX_CONCURRENT` (1–8, default 1) bounds active attempts, and one worker
+  runs one attempt at a time.
 - CLI commands run with the permissions of the Codex task's shell; Buddy never grants extra
   privilege and its service is a same-user local process. The removed MCP server's plugin-scoped
   `approval_mode` is gone with it, so the shell's own sandbox is the only boundary.
@@ -407,8 +466,8 @@ same thing on purpose.
   copy and stay in effect.
 - Model and provider IDs are not validated against your provider's catalog; the wrapper does not
   downgrade, substitute, or retry them. Choose an ID your provider supports.
-- On timeout or cancellation the wrapper stops only the dsh process group it started, then reports
-  `timeout`/`cancelled` with a nonzero exit — never `ok`, even if the child exits 0 afterwards.
+- On timeout or cancellation only the process group Buddy started is stopped, and the outcome is
+  reported as `timeout`/`cancelled`/`failed` — never `ok`, even if a child exits 0 afterwards.
 - Nothing here publishes, pushes, or messages anyone; that scope comes from you, and the skill
   inherits whatever you authorized for the session.
 
@@ -422,10 +481,16 @@ The suite drives the real CLI against a mock `dsh` executable in temporary direc
 model calls, does not read your real settings, does not use your `HOME` or `CODEX_HOME`, and covers
 launcher resolution, settings precedence and preservation, literal task delivery, the 32 KB
 reference switch, the 6000-character stdout cap, unique private logs, spawn failures, timeouts, and
-cancellation cleanup. Additional tests cover the C-Two service and the blocking delegation path
-(wait-timeout and disconnect recovery), the per-run inquiry bridge and the inquiry state machine,
-root-session capture, private socket permissions, existence checks, verified workspace
-binding, and recovery using local socket fixtures. No production host is contacted.
+cancellation cleanup. Additional tests drive the real daemon in private state directories and cover
+the transactional blackboard (rollback and SQLite integrity, duplicate submission and claim replay,
+queued capacity admission, overlapping cwd and exclusive-resource reservation, the crash windows,
+a real daemon restart that keeps the same attempt/worker/deadline/result, stale-generation and
+capability rejection, lease uncertainty, `WAIT_OVERLOAD` under concurrent waiters, and the
+cancellation race), the blocking delegation path (wait-timeout and disconnect recovery), the
+inquiry state machine and its bounds, the `dsh`/`command`/`external` adapters including an external
+worker over the public client, runtime materialization that never copies credentials or
+environments, and the offline legacy import (dry-run, idempotency, rollback and fingerprint
+validation). No production host is contacted.
 An opt-in no-model check uses your installed official packages with isolated temporary storage:
 
 ```sh

@@ -1,7 +1,7 @@
 [project]
 name = "hey-my-buddy"
-version = "0.3.0"
-description = "Local dsh delegation over a uv-managed C-Two CLI service"
+version = "0.4.0"
+description = "A durable agent blackboard with independent workers and C-Two RPC"
 requires-python = ">=3.12,<3.15"
 dependencies = ["c-two==0.5.1", "pyyaml>=6,<7"]
 

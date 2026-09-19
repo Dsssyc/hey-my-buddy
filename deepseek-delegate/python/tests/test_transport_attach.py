@@ -105,7 +105,8 @@ class ReadOnlyAttachTests(AttachFixture):
         with MutationRecorder() as recorder:
             self.assertEqual(call_service("stop", state_dir=self.directory), {"status": "stopping"})
         recorder.assert_no_mutation()
-        self.assertEqual(self.request.call_args_list[1].args[1], "stop")
+        # The CLI method maps onto one named board operation.
+        self.assertEqual(self.request.call_args_list[1].args[1], "service_control")
 
 
 class TrustBoundaryTests(AttachFixture):

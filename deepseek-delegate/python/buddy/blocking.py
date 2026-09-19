@@ -51,9 +51,24 @@ DEFAULT_AWAIT_SECONDS = 86400
 WAIT_SLICE_MS = 30000
 MAX_RECONNECTS = 3
 
-# Only these fields are forwarded to the durable engine's idempotent start.
-START_FIELDS = ("requestId", "task", "cwd", "model", "provider", "effort", "timeoutSeconds", "workspace")
-TERMINAL_STATUSES = frozenset({"completed", "failed", "cancelled", "interrupted"})
+# Only these fields are forwarded to the board's idempotent submit.
+START_FIELDS = (
+    "requestId",
+    "task",
+    "cwd",
+    "adapter",
+    "argv",
+    "model",
+    "provider",
+    "effort",
+    "timeoutSeconds",
+    "workspace",
+    "requiredCapabilities",
+    "exclusiveResources",
+)
+# ``reconciliation-needed`` is terminal for a wait: the task will not move again
+# without an explicit retry, and no wait may relaunch it.
+TERMINAL_STATUSES = frozenset({"completed", "failed", "cancelled", "reconciliation-needed"})
 
 # Reported when a run reached ``completed`` but this call cannot deliver the
 # promised result payload. The execution status stays visible in ``status``;

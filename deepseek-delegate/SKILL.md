@@ -70,11 +70,12 @@ relaunch. Recover with the identical requestId, or wait on that same durable run
 ```
 
 Killing the waiting CLI process (Ctrl-C, closed terminal, `waitSeconds` expiry) cancels
-only the wait; while the owner service is alive, the owned job keeps running. `buddy
-cancel '{"runId":"…"}'` stops the named owned run, and the runner's own execution deadline
-or a service stop (`buddy stop` / owner shutdown) also terminate Buddy-owned work; after
-an owner restart, active jobs are `interrupted` with shutdown unconfirmed and nothing is
-resumed automatically. If a wait ends with a `wait-timeout` or unavailable envelope, keep
+only the wait; the independent worker keeps the owned job running across daemon
+restarts. `buddy cancel '{"runId":"…"}'` requests cancellation of that run; its execution
+deadline and an explicit `buddy stop` also end owned work. `buddy restart` preserves
+workers. In-flight attempts become `uncertain` until the same worker reattaches with
+its identity; its persisted completion receipt is retried without executing the task
+again. If a wait ends with a `wait-timeout` or unavailable envelope, keep
 monitoring or report the runId explicitly; do not end the turn with an unmonitored running
 job, and never restart work the user stopped.
 

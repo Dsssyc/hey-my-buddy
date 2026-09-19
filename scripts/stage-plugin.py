@@ -9,6 +9,19 @@ import tempfile
 
 # CLI-only plugin: an MCP companion is not part of this design. These paths are the
 # removed MCP server, its launcher facades and the native App notification client.
+# The retired Node global job manager and its tests must never be redistributed.
+FORBIDDEN_ENGINE_PATHS = [
+    'deepseek-delegate/service/engine.mjs',
+    'deepseek-delegate/service/jobs.mjs',
+    'deepseek-delegate/service/wait.mjs',
+    'deepseek-delegate/service/dashboard.mjs',
+    'deepseek-delegate/service/inquiry.mjs',
+    'deepseek-delegate/tests/jobs.test.mjs',
+    'deepseek-delegate/tests/dashboard.test.mjs',
+    'deepseek-delegate/tests/wait.test.mjs',
+    'deepseek-delegate/tests/inquiry-service.test.mjs',
+]
+
 FORBIDDEN_MCP_PATHS = [
     'mcp.json',
     'deepseek-delegate/python/buddy/mcp_server.py',
@@ -24,6 +37,17 @@ def mcp_companion_conflicts(source):
     return [rel for rel in FORBIDDEN_MCP_PATHS if (source / rel).exists()]
 
 
+def retired_engine_conflicts(source):
+    """Return any retired Node engine path a tree is about to redistribute."""
+    return [rel for rel in FORBIDDEN_ENGINE_PATHS if (source / rel).exists()]
+
+
+def assert_no_retired_engine(source):
+    conflicts = retired_engine_conflicts(source)
+    if conflicts:
+        raise SystemExit('The Node engine/job manager is retired: remove ' + ', '.join(conflicts))
+
+
 def assert_no_mcp_companion(source):
     conflicts = mcp_companion_conflicts(source)
     if conflicts:
@@ -32,6 +56,7 @@ def assert_no_mcp_companion(source):
 
 def stage(source, destination):
     assert_no_mcp_companion(source)
+    assert_no_retired_engine(source)
     identity = json.loads((source / '.codex-plugin/plugin.json').read_text())
     portable = json.loads((source / 'plugin.json').read_text())
     portable.update({key: identity[key] for key in ['name', 'version', 'description', 'author', 'license']})
@@ -42,9 +67,12 @@ def stage(source, destination):
     dest.parent.mkdir(parents=True, exist_ok=True)
     staged = Path(tempfile.mkdtemp(prefix='.buddy-stage-', dir=dest.parent))
     try:
-        for rel in ['.codex-plugin', 'plugin.json', 'skills', 'LICENSE', 'README.md', 'README.zh-CN.md',
+        # The removed Node service (engine/job manager/dashboard/inquiry) is not part
+        # of the active distribution; the Python runtime package, the dsh runner
+        # scripts and the upstream dsh plugins are.
+        for rel in ['.codex-plugin', 'plugin.json', 'skills', 'docs', 'LICENSE', 'README.md', 'README.zh-CN.md',
                     'deepseek-delegate/LICENSE', 'deepseek-delegate/pyproject.toml', 'deepseek-delegate/uv.lock',
-                    'deepseek-delegate/python/buddy', 'deepseek-delegate/scripts', 'deepseek-delegate/service',
+                    'deepseek-delegate/package.json', 'deepseek-delegate/python/buddy', 'deepseek-delegate/scripts',
                     'deepseek-delegate/plugins', 'deepseek-delegate/references']:
             src = source / rel
             target = staged / rel

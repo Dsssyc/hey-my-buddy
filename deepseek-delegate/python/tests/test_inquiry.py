@@ -1,300 +1,306 @@
-"""End-to-end `buddy inquire` tests over the real service with a mock dsh.
+"""Inquiry behaviour over the real service: bridge client, journal import and bounds.
 
-The whole production chain runs here except the model: the Python CLI/transport,
-the C-Two control service, the Node execution engine, `JobManager`, the real
-`scripts/run.mjs` overlay, and the REAL per-run inquiry bridge plugin inside a
-mock `dsh` process. No model is called and no installed dsh is touched.
+The previous version of this file ran the Node job manager and a mock dsh. That
+manager is gone; the bridge socket still belongs to the Node dsh plugin, so this
+file tests the Python side of it directly: the wire protocol client, the JSONL
+journal importer, the recorded message facts and the honest answers for adapters
+that have no inquiry capability at all.
 """
+from __future__ import annotations
+
 import json
 import os
-import shutil
-import subprocess
-import sys
-import tempfile
+import socket
 import threading
-import time
 import unittest
 from pathlib import Path
-from unittest.mock import patch
 
-from buddy.blocking import await_run
-from buddy.transport import ServiceError, call_service
+from support import BoardTestCase
 
-SUPPORT = Path(__file__).resolve().parents[2] / "tests" / "support"
-MOCK_DSH = SUPPORT / "mock-dsh-inquiry.mjs"
-FAKE_RUN = SUPPORT / "fake-headless-run.mjs"
-
-
-def eventually(check, description, timeout=20.0):
-    deadline = time.monotonic() + timeout
-    while time.monotonic() < deadline:
-        value = check()
-        if value:
-            return value
-        time.sleep(0.05)
-    raise AssertionError(f"Timed out waiting for {description}")
+from buddy.errors import BoardError
+from buddy.inquiry import (
+    MAX_JOURNAL_BYTES,
+    bridge_request,
+    observe,
+    read_journal,
+)
 
 
-class InquiryTests(unittest.TestCase):
-    def setUp(self):
-        self.temp = tempfile.TemporaryDirectory(prefix="buddy-inquiry-")
-        self.directory = Path(self.temp.name)
-        self.state = self.directory / "state"
-        self.state.mkdir(mode=0o700)
-        self.cwd = self.directory / "cwd"
-        self.cwd.mkdir()
-        self.bin = self.directory / "bin"
-        self.bin.mkdir()
-        self.dsh = self.bin / "dsh"
-        shutil.copy(MOCK_DSH, self.dsh)
-        self.dsh.chmod(0o755)
-        self.environment = patch.dict(os.environ, {
-            "BUDDY_STATE_DIR": str(self.state),
-            "DSH_BIN": str(self.dsh),
-            "MOCK_INQUIRY_SUPPORT": str(FAKE_RUN),
-            "MOCK_INQUIRY_HOLD_MS": "6000",
-            "MOCK_INQUIRY_ANSWER_MS": "900",
-            "MOCK_INQUIRY_ANSWER": "the answer to the operator question",
-            "C2_ENV_FILE": "",
-            "C2_RELAY_ANCHOR_ADDRESS": "",
-        })
-        self.environment.start()
+class FakeBridge:
+    """A minimal stand-in for the Node plugin's Unix-socket protocol."""
 
-    def tearDown(self):
-        endpoint = self.state / "control.json"
-        if endpoint.exists():
+    def __init__(self, directory: Path, *, token: str = "a" * 64):
+        # The real adapter picks a short socket path for the same platform reason:
+        # a long sun_path overflows the macOS/Linux Unix-socket limit.
+        import tempfile
+        import uuid
+
+        self.directory = Path(directory)
+        self.directory.mkdir(parents=True, exist_ok=True)
+        os.chmod(self.directory, 0o700)
+        short = Path(tempfile.gettempdir()) / f"hbi-{uuid.uuid4().hex[:8]}"
+        short.mkdir(mode=0o700, exist_ok=True)
+        self.path = short / "inquiry.sock"
+        self.token = token
+        self.requests: list[dict] = []
+        self.answer: dict | None = None
+        self.listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        self.listener.bind(str(self.path))
+        self.listener.listen(4)
+        self.listener.settimeout(0.2)
+        self.stopping = threading.Event()
+        self.thread = threading.Thread(target=self._serve, daemon=True)
+        self.thread.start()
+
+    def _serve(self):
+        while not self.stopping.is_set():
             try:
-                call_service("stop", state_dir=self.state)
-            except ServiceError:
-                pass
-            eventually(lambda: not endpoint.exists(), "the isolated service to stop")
-        self.environment.stop()
-        self.temp.cleanup()
+                connection, _ = self.listener.accept()
+            except socket.timeout:
+                continue
+            except OSError:
+                break
+            with connection:
+                connection.settimeout(2)
+                try:
+                    raw = connection.recv(64 * 1024)
+                    request = json.loads(raw.split(b"\n", 1)[0])
+                    self.requests.append(request)
+                    if request.get("token") != self.token:
+                        reply = {"version": 1, "id": request.get("id"), "ok": False, "error": "unauthorized"}
+                    elif request.get("method") == "observe":
+                        reply = {
+                            "version": 1,
+                            "id": request["id"],
+                            "ok": True,
+                            "value": {"ready": True, "sessionId": "s-1", "agentStatus": "running", "activity": []},
+                        }
+                    elif request.get("method") == "ask":
+                        reply = {"version": 1, "id": request["id"], "ok": True, "value": {"state": "delivered"}}
+                    else:
+                        reply = {
+                            "version": 1,
+                            "id": request["id"],
+                            "ok": True,
+                            "value": {"answer": self.answer} if self.answer else {},
+                        }
+                except (OSError, ValueError):
+                    reply = {"version": 1, "id": None, "ok": False, "error": "bad-request"}
+                try:
+                    connection.sendall((json.dumps(reply) + "\n").encode())
+                except OSError:
+                    pass
 
-    def start(self, request_id, **extra):
-        params = {"requestId": request_id, "task": "mock delegated task", "cwd": str(self.cwd),
-                  "timeoutSeconds": 600, "workspace": False, **extra}
-        return call_service("start", params, self.state)
+    def close(self):
+        self.stopping.set()
+        self.listener.close()
+        self.thread.join(timeout=2)
+        self.path.unlink(missing_ok=True)
+        try:
+            self.path.parent.rmdir()
+        except OSError:
+            pass
 
-    def test_progress_question_answer_and_original_task_completion(self):
-        run = self.start("inquiry-e2e")
-        run_id = run["runId"]
 
-        progress = eventually(
-            lambda: (value if (value := call_service("inquire", {"runId": run_id}, self.state))["live"]["available"] else None),
-            "the per-run bridge to bind the live agent",
+class TestInquiry(BoardTestCase):
+    def _attempt_directory(self, board, client, task, cwd, argv=None):
+        """Submit, claim and publish bridge credentials the way the dsh adapter does."""
+        # Inquiry is the dsh adapter's capability; this fixture publishes the same
+        # credentials the dsh adapter writes without spawning a runner.
+        task = client.submit(requestId="inq-task", task="do", cwd=str(cwd), adapter="dsh")["task"]
+        client.register_worker("w-inq", adapter="dsh", capabilities=["dsh", "inquiry"])
+        claim = client.claim("w-inq", "claim-inq-1", "a" * 32)
+        attempt = claim["claim"]["attempt"]
+        from buddy.worker.worker import fsync_json
+
+        directory = self.directory / "attempts" / task["runId"] / attempt["attemptId"]
+        directory.mkdir(parents=True, exist_ok=True)
+        bridge = FakeBridge(directory)
+        fsync_json(
+            directory / "inquiry.json",
+            {
+                "socketPath": str(bridge.path),
+                "resultsPath": str(directory / "inquiry.results.jsonl"),
+                "errorPath": str(directory / "inquiry.sock.error.json"),
+                "token": bridge.token,
+            },
         )
-        self.assertEqual(progress["runId"], run_id)
-        self.assertEqual(progress["status"], "running")
-        self.assertEqual(progress["phase"], "active")
-        self.assertEqual(progress["deadline"]["timeoutSeconds"], 600)
-        self.assertFalse(progress["deadline"]["expired"])
-        self.assertGreater(progress["deadline"]["remainingSeconds"], 500)
-        self.assertEqual(progress["deadline"]["kind"], "estimated-runner-deadline-from-record-createdAt")
-        self.assertTrue(progress["deadline"]["estimated"])
-        self.assertFalse(progress["deadline"]["exact"])
-        self.assertIn("record createdAt", progress["deadline"]["clockOrigin"])
-        self.assertEqual(progress["deadline"]["deadlineBasis"], "createdAt + timeoutSeconds")
-        self.assertEqual(progress["live"]["agentStatus"], "running")
-        self.assertEqual(progress["live"]["activity"][-1]["tool"], "bash")
-        self.assertIn("sleep 600", progress["live"]["activity"][-1]["argumentPreview"])
-        self.assertFalse(progress["live"]["limits"]["exposesModelReasoning"])
-        self.assertIsNone(progress["inquiry"])
-        self.assertNotIn("token", json.dumps(progress))
+        return task, attempt, bridge
 
-        question = "what is the current blocker?"
-        asked = call_service("inquire", {"runId": run_id, "inquiryId": "q-1", "question": question}, self.state)
-        self.assertEqual(asked["inquiry"]["inquiryId"], "q-1")
-        self.assertTrue(asked["inquiry"]["recorded"])
-        self.assertFalse(asked["inquiry"]["duplicate"])
-        self.assertIn(asked["inquiry"]["state"], ("queued", "claimed"))
-        self.assertFalse(asked["inquiry"]["answer"]["available"])
-        self.assertEqual(asked["inquiry"]["correlation"], "inquiryId")
-        self.assertEqual(asked["inquiry"]["questionBytes"], len(question.encode("utf-8")))
+    def test_observation_uses_the_real_bridge_protocol(self):
+        board = self.board()
+        client = board.client()
+        task, _attempt, bridge = self._attempt_directory(board, client, None, self.workdir())
+        try:
+            result = board.call("inquiry_observe", {"runId": task["runId"]})
+            self.assertTrue(result["bridge"]["observed"])
+            self.assertTrue(result["live"]["available"])
+            self.assertEqual(result["live"]["sessionId"], "s-1")
+            self.assertEqual(result["phase"], "active")
+            self.assertEqual(result["inflight"] if "inflight" in result else result["execution"]["attemptState"], "starting")
+            self.assertEqual(bridge.requests[-1]["method"], "observe")
+        finally:
+            bridge.close()
 
-        repeated = call_service("inquire", {"runId": run_id, "inquiryId": "q-1", "question": question}, self.state)
-        self.assertTrue(repeated["inquiry"]["duplicate"])
+    def test_a_question_is_correlated_and_a_wrong_token_is_refused(self):
+        board = self.board()
+        client = board.client()
+        task, _attempt, bridge = self._attempt_directory(board, client, None, self.workdir())
+        try:
+            result = board.call(
+                "inquiry_observe",
+                {"runId": task["runId"], "inquiryId": "q-live", "question": "what is blocking you?"},
+            )
+            self.assertEqual(result["inquiry"]["state"], "delivered")
+            self.assertEqual(result["inquiry"]["correlation"], "inquiryId")
+            self.assertEqual(bridge.requests[-1]["method"], "ask")
+            self.assertEqual(bridge.requests[-1]["inquiryId"], "q-live")
+            # A bridge that rejects the token is reported, never silently treated as an answer.
+            bridge.token = "b" * 64
+            second = board.call(
+                "inquiry_observe",
+                {"runId": task["runId"], "inquiryId": "q-two", "question": "and now?"},
+            )
+            self.assertEqual(second["bridge"]["error"], "unauthorized")
+        finally:
+            bridge.close()
 
-        with self.assertRaises(ServiceError) as conflict:
-            call_service("inquire", {"runId": run_id, "inquiryId": "q-1", "question": "a different question"}, self.state)
-        self.assertEqual(conflict.exception.code, "CONFLICT")
-
-        answered = eventually(
-            lambda: (value if (value := call_service("inquire", {"runId": run_id, "inquiryId": "q-1", "question": question}, self.state))["inquiry"]["state"] == "answered" else None),
-            "the correlated answer",
+    def test_the_real_bridge_journal_shape_is_imported_with_reply_tool_evidence(self):
+        """The Node bridge writes a string answer with sibling evidence fields."""
+        board = self.board()
+        client = board.client()
+        task, _attempt, bridge = self._attempt_directory(board, client, None, self.workdir())
+        journal = Path(bridge.directory) / "inquiry.results.jsonl"
+        journal.write_text(
+            json.dumps(
+                {
+                    "inquiryId": "q-real",
+                    "state": "delivered",
+                    "messageId": "m-1",
+                    "deliveredAt": "2026-09-19T05:00:00.000Z",
+                }
+            )
+            + "\n"
+            + json.dumps(
+                {
+                    "inquiryId": "q-real",
+                    "state": "answered",
+                    "answeredAt": "2026-09-19T05:00:04.000Z",
+                    "via": "tool:buddy_inquiry_reply",
+                    "toolCallId": "call-42",
+                    "messageId": "m-1",
+                    "answer": "the tests are still running",
+                    "answerBytes": 27,
+                    "truncated": False,
+                }
+            )
+            + "\n"
         )
-        self.assertEqual(answered["inquiry"]["answer"]["text"], "the answer to the operator question")
-        self.assertEqual(answered["inquiry"]["answer"]["via"], "tool:buddy_inquiry_reply")
-        self.assertTrue(answered["inquiry"]["claimedAt"], "the claim boundary is recorded separately")
-        self.assertTrue(answered["inquiry"]["deliveredAt"], "delivery is the durable commit")
-        self.assertEqual(answered["inquiry"]["answer"]["bytes"], len("the answer to the operator question".encode("utf-8")))
-        self.assertFalse(answered["inquiry"]["answer"]["truncated"])
-        self.assertTrue(answered["inquiry"]["answer"]["at"])
+        try:
+            board.call("inquiry_observe", {"runId": task["runId"], "inquiryId": "q-real", "question": "status?"})
+            message = client.get_message("q-real", runId=task["runId"])
+            self.assertEqual(message["state"], "answered")
+            self.assertEqual(message["answer"]["text"], "the tests are still running")
+            self.assertEqual(message["answer"]["via"], "tool:buddy_inquiry_reply")
+            self.assertEqual(message["answer"]["toolCallId"], "call-42")
+            self.assertEqual(message["answer"]["at"], "2026-09-19T05:00:04.000Z")
+            self.assertEqual(message["answer"]["source"], "bridge-journal")
+            self.assertEqual(message["delivery"]["messageId"], "m-1")
+            # Re-importing the same journal is idempotent.
+            board.call("inquiry_observe", {"runId": task["runId"], "inquiryId": "q-real", "question": "status?"})
+            self.assertEqual(client.get_message("q-real", runId=task["runId"])["answer"]["text"], "the tests are still running")
+        finally:
+            bridge.close()
 
-        # The original owned task finishes normally, with the same runId.
-        envelope = await_run({"runId": run_id, "waitSeconds": 60}, state_dir=self.state)
-        self.assertEqual(envelope["runId"], run_id)
-        self.assertEqual(envelope["status"], "completed")
-        self.assertTrue(envelope["ok"])
-        self.assertTrue(envelope["resultDelivered"])
-
-        # After the run ends the bridge is gone; inquiry degrades honestly and
-        # still reports the durable inquiry this run already carries.
-        after = call_service("inquire", {"runId": run_id, "inquiryId": "q-1", "question": question}, self.state)
-        self.assertEqual(after["phase"], "terminal")
-        self.assertFalse(after["live"]["available"])
-        self.assertEqual(after["inquiry"]["state"], "answered")
-        self.assertEqual(after["inquiry"]["answer"]["text"], "the answer to the operator question")
-        self.assertEqual(after["inquiry"]["answer"]["source"], "live-bridge")
-
-        late = call_service("inquire", {"runId": run_id, "inquiryId": "q-late", "question": "too late?"}, self.state)
-        self.assertEqual(late["inquiry"]["state"], "unavailable")
-        self.assertFalse(late["inquiry"]["recorded"])
-
-    def test_answer_survives_the_end_of_the_run_through_the_bridge_journal(self):
-        # The operator asks and never polls while the run is alive; the answer is
-        # produced at the next boundary and must still be readable afterwards.
-        os.environ["MOCK_INQUIRY_HOLD_MS"] = "3000"
-        os.environ["MOCK_INQUIRY_ANSWER_MS"] = "600"
-        run = self.start("inquiry-journal")
-        run_id = run["runId"]
-        eventually(
-            lambda: call_service("inquire", {"runId": run_id}, self.state)["live"]["available"],
-            "the per-run bridge to bind",
+    def test_an_answered_journal_entry_without_text_never_becomes_answered(self):
+        board = self.board()
+        client = board.client()
+        task, _attempt, bridge = self._attempt_directory(board, client, None, self.workdir())
+        journal = Path(bridge.directory) / "inquiry.results.jsonl"
+        journal.write_text(
+            json.dumps({"inquiryId": "q-empty", "state": "delivered"})
+            + "\n"
+            + json.dumps({"inquiryId": "q-empty", "state": "answered", "via": "tool:buddy_inquiry_reply"})
+            + "\n"
         )
-        asked = call_service("inquire", {"runId": run_id, "inquiryId": "q-journal", "question": "answer before you finish"}, self.state)
-        self.assertTrue(asked["inquiry"]["recorded"])
+        try:
+            board.call("inquiry_observe", {"runId": task["runId"], "inquiryId": "q-empty", "question": "status?"})
+            message = client.get_message("q-empty", runId=task["runId"])
+            self.assertEqual(message["state"], "delivered", "answered without usable text must not be recorded")
+            self.assertIsNone(message["answer"])
+            self.assertIn("without usable answer text", message["reason"])
+        finally:
+            bridge.close()
 
-        envelope = await_run({"runId": run_id, "waitSeconds": 60}, state_dir=self.state)
-        self.assertEqual(envelope["status"], "completed")
-
-        recovered = call_service("inquire", {"runId": run_id, "inquiryId": "q-journal", "question": "answer before you finish"}, self.state)
-        self.assertEqual(recovered["inquiry"]["state"], "answered")
-        self.assertEqual(recovered["inquiry"]["answer"]["text"], "the answer to the operator question")
-        self.assertEqual(recovered["inquiry"]["answer"]["source"], "bridge-journal")
-        self.assertEqual(recovered["inquiry"]["answer"]["via"], "tool:buddy_inquiry_reply")
-        self.assertEqual(recovered["journal"]["available"], True)
-
-    def test_a_claimed_question_that_is_never_committed_is_terminal(self):
-        # The mock claims the question for a proposed step but never commits it,
-        # exactly like a rejected pre-step. It must never be reported delivered,
-        # and the finished run must not keep reporting it as queued.
-        os.environ["MOCK_INQUIRY_HOLD_MS"] = "2500"
-        os.environ["MOCK_INQUIRY_ANSWER_MS"] = "1200"
-        os.environ["MOCK_INQUIRY_DELIVER"] = "0"
-        run = self.start("inquiry-claim-only")
-        run_id = run["runId"]
-        eventually(
-            lambda: call_service("inquire", {"runId": run_id}, self.state)["live"]["available"],
-            "the per-run bridge to bind",
+    def test_the_journal_is_idempotent_transport_evidence(self):
+        board = self.board()
+        client = board.client()
+        task, _attempt, bridge = self._attempt_directory(board, client, None, self.workdir())
+        journal = Path(bridge.directory) / "inquiry.results.jsonl"
+        journal.write_text(
+            json.dumps({"inquiryId": "q-journal", "state": "delivered"})
+            + "\n"
+            + json.dumps({"inquiryId": "q-journal", "state": "answered", "answer": {"text": "from the journal"}})
+            + "\n"
+            + "{torn line\n"
         )
-        asked = call_service("inquire", {"runId": run_id, "inquiryId": "q-claim", "question": "delivered?"}, self.state)
-        self.assertTrue(asked["inquiry"]["recorded"])
+        try:
+            board.call("inquiry_observe", {"runId": task["runId"], "inquiryId": "q-journal", "question": "hello?"})
+            message = client.get_message("q-journal", runId=task["runId"])
+            self.assertEqual(message["answer"]["text"], "from the journal")
+            self.assertEqual(message["answer"]["source"], "bridge-journal")
+            second = board.call(
+                "inquiry_observe", {"runId": task["runId"], "inquiryId": "q-journal", "question": "hello?"}
+            )
+            self.assertTrue(second["inquiry"]["duplicate"])
+            self.assertEqual(second["journal"]["entries"], 1)
+        finally:
+            bridge.close()
 
-        def claimed():
-            value = call_service("inquire", {"runId": run_id, "inquiryId": "q-claim", "question": "delivered?"}, self.state)
-            return value if value["inquiry"]["state"] == "claimed" else None
+    def test_journal_reading_is_bounded_and_never_throws(self):
+        directory = self.workdir("journal")
+        self.assertEqual(read_journal(None)["reason"], "no-journal-path")
+        self.assertEqual(read_journal(str(directory / "absent.jsonl"))["reason"], "journal-not-written")
+        big = directory / "big.jsonl"
+        big.write_bytes(b"x" * (MAX_JOURNAL_BYTES + 1))
+        self.assertEqual(read_journal(str(big))["reason"], "journal-exceeds-limit")
 
-        merged = eventually(claimed, "the claim to be journaled and merged")
-        self.assertTrue(merged["inquiry"]["claimedAt"])
-        self.assertIsNone(merged["inquiry"]["deliveredAt"], "a claim is never delivery")
+    def test_an_attempt_without_a_bridge_reports_the_reason(self):
+        board = self.board()
+        client = board.client()
+        dsh_task = client.submit(requestId="no-bridge", task="do", cwd=str(self.workdir()))["task"]
+        result = board.call("inquiry_observe", {"runId": dsh_task["runId"]})
+        self.assertFalse(result["bridge"]["enabled"])
+        self.assertIn("no inquiry bridge credentials", result["bridge"]["reason"])
+        command_task = client.submit(
+            requestId="no-bridge-command",
+            task="do",
+            cwd=str(self.workdir("other")),
+            adapter="command",
+            argv=["/bin/true"],
+        )["task"]
+        command_result = board.call("inquiry_observe", {"runId": command_task["runId"]})
+        self.assertIn("no inquiry capability", command_result["bridge"]["reason"])
+        self.assertIn("agentStatus", result["live"]["unavailable"])
+        self.assertEqual(result["limits"]["maxQuestionBytes"], 4000)
+        self.assertEqual(result["limits"]["maxInquiriesPerRun"], 32)
+        self.assertEqual(result["deadline"]["estimated"], True)
+        self.assertEqual(result["deadline"]["exact"], False)
 
-        envelope = await_run({"runId": run_id, "waitSeconds": 60}, state_dir=self.state)
-        self.assertEqual(envelope["status"], "completed")
-        after = call_service("inquire", {"runId": run_id, "inquiryId": "q-claim", "question": "delivered?"}, self.state)
-        self.assertEqual(after["inquiry"]["state"], "unavailable", "a finished run must not keep a pending question")
-        self.assertFalse(after["inquiry"]["answer"]["available"])
+    def test_bridge_request_reports_unreachable_sockets(self):
+        result = bridge_request({"socketPath": str(self.workdir() / "missing.sock"), "token": "x"}, "observe", {})
+        self.assertFalse(result["ok"])
+        self.assertEqual(result["reason"], "bridge-unreachable")
 
-    def test_inquiry_never_mutates_the_execution_deadline_or_restarts_the_run(self):
-        run = self.start("inquiry-deadline")
-        run_id = run["runId"]
-        before = eventually(
-            lambda: (value if (value := call_service("inquire", {"runId": run_id}, self.state))["live"]["available"] else None),
-            "the per-run bridge to bind",
-        )
-        call_service("inquire", {"runId": run_id, "inquiryId": "q-deadline", "question": "progress?"}, self.state)
-        after = call_service("status", {"runId": run_id}, self.state)
-        self.assertEqual(after["timeoutSeconds"], before["deadline"]["timeoutSeconds"])
-        self.assertEqual(after["createdAt"], before["execution"]["createdAt"])
-        self.assertNotIn("cancelRequestedAt", after)
-        self.assertEqual(after["status"], "running")
-        self.assertNotIn("inputHash", after, "the public view never leaks the input hash")
-
-        completed = eventually(
-            lambda: (value if (value := call_service("status", {"runId": run_id}, self.state))["status"] == "completed" else None),
-            "the untouched run to complete",
-            timeout=30,
-        )
-        self.assertEqual(completed["runId"], run_id)
-        self.assertEqual(completed["resultAvailable"], True)
-
-    def test_malformed_inquire_inputs_are_rejected_without_touching_the_run(self):
-        run = self.start("inquiry-malformed")
-        run_id = run["runId"]
-        cases = [
-            ({"runId": run_id, "question": "no id"}, "INVALID_ARGUMENT"),
-            ({"runId": run_id, "inquiryId": "q"}, "INVALID_ARGUMENT"),
-            ({"runId": run_id, "inquiryId": "bad id!", "question": "x"}, "INVALID_ARGUMENT"),
-            ({"runId": run_id, "inquiryId": "q", "question": "  "}, "INVALID_ARGUMENT"),
-            ({"runId": run_id, "timeoutMs": 99999}, "INVALID_ARGUMENT"),
-            ({"runId": run_id, "waitMs": 99999}, "INVALID_ARGUMENT"),
-            ({"runId": run_id, "unknown": 1}, "INVALID_ARGUMENT"),
-            ({"runId": "00000000-0000-4000-8000-000000000000"}, "NOT_FOUND"),
-        ]
-        for params, code in cases:
-            with self.assertRaises(ServiceError) as failure:
-                call_service("inquire", params, self.state)
-            self.assertEqual(failure.exception.code, code, params)
-        still = call_service("status", {"runId": run_id}, self.state)
-        self.assertEqual(still["status"], "running")
-        self.assertEqual(still["inquiries"], {})
-
-    def test_await_keeps_waiting_while_inquiries_run_in_parallel(self):
-        run = self.start("inquiry-parallel")
-        run_id = run["runId"]
-        eventually(
-            lambda: call_service("inquire", {"runId": run_id}, self.state)["live"]["available"],
-            "the per-run bridge to bind",
-        )
-        results = {}
-
-        def waiter():
-            results["await"] = await_run({"runId": run_id, "waitSeconds": 60}, state_dir=self.state)
-
-        thread = threading.Thread(target=waiter, name="buddy-await")
-        thread.start()
-        asked = call_service("inquire", {"runId": run_id, "inquiryId": "q-parallel", "question": "still there?"}, self.state)
-        self.assertTrue(asked["inquiry"]["recorded"])
-        self.assertEqual(call_service("status", {"runId": run_id}, self.state)["status"], "running")
-        thread.join(timeout=60)
-        self.assertFalse(thread.is_alive(), "await must finish once the run completes")
-        self.assertEqual(results["await"]["runId"], run_id)
-        self.assertEqual(results["await"]["status"], "completed")
-        self.assertTrue(results["await"]["ok"])
-
-    def test_cli_returns_the_same_envelope_and_fails_on_bad_input(self):
-        run = self.start("inquiry-cli")
-        run_id = run["runId"]
-        eventually(
-            lambda: call_service("inquire", {"runId": run_id}, self.state)["live"]["available"],
-            "the per-run bridge to bind",
-        )
-        env = {**os.environ}
-        child = subprocess.run(
-            [sys.executable, "-m", "buddy.cli", "inquire", json.dumps({"runId": run_id})],
-            env=env, capture_output=True, text=True, timeout=60,
-        )
-        self.assertEqual(child.returncode, 0, child.stderr)
-        payload = json.loads(child.stdout)
-        self.assertEqual(payload["runId"], run_id)
-        self.assertEqual(payload["live"]["available"], True)
-
-        bad = subprocess.run(
-            [sys.executable, "-m", "buddy.cli", "inquire", json.dumps({"runId": run_id, "inquiryId": "x"})],
-            env=env, capture_output=True, text=True, timeout=60,
-        )
-        self.assertEqual(bad.returncode, 1)
-        self.assertEqual(json.loads(bad.stdout)["error"]["code"], "INVALID_ARGUMENT")
+    def test_an_unsupported_adapter_answers_with_a_capability_error(self):
+        board = self.board()
+        client = board.client()
+        task = client.submit(
+            requestId="ext-inq", task="do", cwd=str(self.workdir()), adapter="external"
+        )["task"]
+        result = board.call("inquiry_observe", {"runId": task["runId"]})
+        self.assertFalse(result["bridge"]["enabled"])
+        self.assertIn("no inquiry capability", result["bridge"]["reason"])
 
 
 if __name__ == "__main__":

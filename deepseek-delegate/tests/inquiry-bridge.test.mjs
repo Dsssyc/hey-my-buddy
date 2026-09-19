@@ -18,7 +18,9 @@ import {
   ERROR_CODES, MAX_ACTIVITY_ENTRIES, MAX_ANSWER_BYTES, MAX_QUESTION_BYTES, PROTOCOL_VERSION, REPLY_TOOL_NAME,
   apply, inject, startInquiryBridge,
 } from '../plugins/inquiry-bridge.mjs';
-import { INQUIRY_LIMITS } from '../service/jobs.mjs';
+// The Node job manager was removed with the ADR-001 implementation; the bridge's
+// own published bounds are the source of truth for its plugin tests.
+import { INQUIRY_LIMITS } from '../plugins/inquiry-bridge.mjs';
 
 const CWD = '/tmp';
 const TOKEN = 'test-token-0123456789';

@@ -43,7 +43,7 @@ class FakeService:
         self.complete_after_waits = complete_after_waits
         self.fail_waits = fail_waits
         self.stop_event = stop_event
-        # True -> "interrupted"; a status string -> that terminal status, no persisted result.
+        # True -> "reconciliation-needed"; a status string -> that terminal status, no persisted result.
         self.terminal_without_result = terminal_without_result
         self.recover_to = recover_to
         self.listed = listed
@@ -79,7 +79,7 @@ class FakeService:
                 self.run = {**self.run, "status": "completed", "resultAvailable": True,
                             "shutdownConfirmed": True, "revision": self.run["revision"] + 1}
             elif self.terminal_without_result:
-                status = self.terminal_without_result if isinstance(self.terminal_without_result, str) else "interrupted"
+                status = self.terminal_without_result if isinstance(self.terminal_without_result, str) else "reconciliation-needed"
                 self.run = {**self.run, "status": status, "revision": self.run["revision"] + 1}
             if self.stop_event is not None:
                 self.stop_event.set()
@@ -313,7 +313,7 @@ class BlockingLoopTests(unittest.TestCase):
         clock = VirtualClock()
         service = FakeService(clock, terminal_without_result=True)
         envelope = run_blocking(BASE, service=service, clock=clock)
-        self.assertEqual(envelope["outcome"], "interrupted")
+        self.assertEqual(envelope["outcome"], "reconciliation-needed")
         self.assertFalse(envelope["resultAvailable"])
         self.assertIsNone(envelope["result"])
         self.assertIn("buddy result", envelope["recovery"]["reason"])

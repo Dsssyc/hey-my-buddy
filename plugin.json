@@ -1,8 +1,8 @@
 {
   "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
   "name": "hey-my-buddy",
-  "version": "0.3.0+codex.20260918135050",
-  "description": "Local dsh delegation through the uv-managed Buddy CLI and its C-Two service: one blocking `buddy run`, durable results and a live per-run inquiry bridge. No MCP server.",
+  "version": "0.4.0+codex.20260919060734",
+  "description": "Local dsh delegation through the uv-managed Buddy CLI: a transactional Python blackboard over C-Two owns tasks, results and events, independent workers execute through dsh/command/external adapters, and there is no MCP server.",
   "author": {
     "name": "Dsssyc"
   },

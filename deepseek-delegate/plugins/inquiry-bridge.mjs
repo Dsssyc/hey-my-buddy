@@ -102,6 +102,14 @@ export const MAX_INQUIRIES = 32;
  */
 export const MAX_JOURNAL_BYTES = 1024 * 1024;
 
+/** The inquiry bounds this plugin enforces, published for its tests and clients. */
+export const INQUIRY_LIMITS = Object.freeze({
+  maxQuestionBytes: MAX_QUESTION_BYTES,
+  maxAnswerBytes: MAX_ANSWER_BYTES,
+  maxInquiriesPerRun: MAX_INQUIRIES,
+  maxInquiryId: 128,
+});
+
 /** Conservative usable length of a Unix socket path in bytes. */
 export const UNIX_SOCKET_PATH_BUDGET = process.platform === 'linux' ? 105 : 101;
 
