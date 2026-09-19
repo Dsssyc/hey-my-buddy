@@ -130,6 +130,10 @@ Claim atomically checks eligibility/resources, creates the attempt, assigns its
 generation and capability, and appends the event. Worker startup is authorized by
 that attempt. A durable start intent, exclusive per-attempt worker ownership and
 an idempotent startup handshake prevent two workers from spawning the same attempt.
+The worker persists its startup nonce/secret and claim request ID before claiming,
+or uses an equivalently replayable authenticated handshake. A committed claim with
+a lost reply must recover the same attempt and capability; it cannot mint another
+generation or leave the only capability stranded in that lost reply.
 If an ambiguous crash leaves possible external work, record uncertainty and retain
 its resource claims. Never infer stopped from an expired lease or nonexistent PID.
 
@@ -157,6 +161,10 @@ the service, confirming what stopped. Add `restart`/detach lifecycle for a servi
 restart that preserves workers. Unexpected daemon exit also preserves independent
 workers. Do not clear worker receipts or resource ownership merely to let an
 upgrade proceed. Unrelated dsh sessions/processes must remain untouched.
+Stop rejects new claims, cancels queued tasks, persists cancellation of active
+attempts and drains for a bounded interval. Its response lists any unresolved
+attempts before daemon exit; their receipts and resource claims remain. External
+caller-owned workers receive a cooperative cancel request, not arbitrary OS signals.
 
 Commit result, artifact references, task/attempt state and completion event in one
 transaction. Failed commits publish no success event. Result replay is idempotent;
@@ -197,6 +205,10 @@ service and its workers must execute from a versioned, content-identified stable
 runtime outside the Codex plugin cache, including Python environment and required
 dsh scripts/plugins. The cache may disappear on upgrade. Materialize only runtime
 assets; never copy credentials, user data, tests or an existing virtual environment.
+Put complete assets in the final content-addressed runtime directory before running
+uv frozen installation there, then mark that runtime READY. Do not move a venv or
+leave editable-import, interpreter, yaml bridge or dsh-plugin paths pointing into
+the disposable plugin source. Verify all these paths in the packaging acceptance.
 Retain a referenced runtime while any live/uncertain attempt needs it. New installs
 cannot silently replace the runtime of an already executing attempt.
 
