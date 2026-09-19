@@ -3,7 +3,7 @@
 
 [English](README.md)
 
-通过 Codex 插件把边界明确的任务交给本地 dsh。插件内的本地服务负责启动、状态与结果持久化，Codex 负责明确任务和最终验收。原来的独立 skill / CLI 仍可单独使用。
+通过 Codex 插件把边界明确的任务交给本地 dsh。插件内的本地服务负责启动、状态与结果持久化，Codex 负责明确任务和最终验收。同一服务和持久任务也可直接从 CLI 使用；原来的独立 Node runner 仍可单独运行。
 
 ## Codex app 插件
 
@@ -11,13 +11,74 @@
 uv sync --project deepseek-delegate --python 3.12
 ```
 
-在 Codex 中安装本仓库的 `hey-my-buddy` 插件后，新任务可以直接调用 `buddy_start`、`buddy_wait`、`buddy_result` 等工具，无需手写任务文件、维护 PID 或创建 hourly。`buddy_dashboard` 返回可在浏览器面板打开的本地任务页，页面刷新不调用模型。
+仓库包含 `hey-my-buddy` 插件：一个精简 skill 加上由 uv 管理的 Buddy CLI。**这里没有 MCP 服务器，也不需要任何 MCP 注册**：插件只有 skill + CLI，所有操作都通过 `buddy` 命令访问同一个本地 C-Two 服务。
 
-服务默认只运行一个委派；多个 Codex 连接共享同一个服务。它只取消自己启动的进程，不停止现有 dsh 宿主或交互会话。分组沿用下方的工作区桥接安装；模型设置仍使用每次运行的私有副本。
+```sh
+BUDDY=deepseek-delegate/scripts/launch-buddy.sh     # 或：node deepseek-delegate/scripts/buddy.mjs
+"$BUDDY" start '{"requestId":"fix-123","task":"...","cwd":"/abs/path","timeoutSeconds":28800}'
+"$BUDDY" await '{"runId":"<runId>","waitSeconds":28800}'
+```
 
-`notify` 默认关闭。当前回合用 `buddy_wait` 等待；需要结束回合后自动继续时，Buddy skill 创建绑定原任务的官方 App heartbeat，定期通过 C-Two 读取既有任务、验收结果并删除 heartbeat。正常约每分钟检查一次，App 可用性、调度和模型处理会影响实际延迟。直接原生通知仍是受进程身份校验阻止的实验路径。持久工具授权和恢复说明见 [插件服务说明](deepseek-delegate/references/plugin-service.md)。
+默认工作流是"启动一次、记下 `runId`、在本回合内 await 同一个任务"：`buddy start` 立即返回，`buddy await` 保持连接到任务结束并打印最终信封（runId、执行状态、进程关闭确认、runner 结果与日志路径）。等待前就知道 runId，正是 `buddy inquire` 能在任务仍在执行时观察它或向它提问的原因。`buddy run` 仍是可选的一次性便捷命令：它启动（或恢复）持久任务并保持连接，`waitSeconds` 默认为 `timeoutSeconds + 60 秒`关闭宽限、上限 24 小时。等待期间本回合保持活动，不使用 heartbeat、cron 或模型轮询。带相同 `requestId` 重跑同一条 `start`（或 `run`）命令会恢复同一个任务，绝不会再次启动 dsh。`buddy result` 可再次读取既有任务，`buddy dashboard` 返回私有的只读本地任务页，页面刷新不调用模型。完整子命令：`run`、`await`、`start`、`status`、`wait`、`result`、`list`、`cancel`、`acknowledge`、`inquire`、`dashboard`、`health`、`stop`。
+
+服务默认只运行一个委派，并且只控制自己启动的 runner 进程；现有 dsh 宿主/会话的生命周期和原始设置仍各自独立。分组默认开启（`workspace: true`），沿用下方的工作区宿主桥接，传 `workspace: false` 可显式退出分组。`cwd` 只是工作目录，不是沙箱；独立的用户 dsh 进程不受 Buddy 协调。
+
+等待窗口现在由 CLI 自己决定：默认是 `timeoutSeconds + 60 秒`关闭宽限，上限为 CLI 既有的 24 小时最大值（86400 秒），因此一次调用通常就能覆盖整个任务；需要更短、可恢复的等待时显式传 `waitSeconds`。不再有宿主工具超时，也不再有 `BUDDY_TOOL_WAIT_BUDGET_SECONDS`。执行期限独立且未变：`timeoutSeconds` 是 Buddy 对整个 dsh 进程组的**执行**超时（`timeoutSeconds`，默认 1800 秒、整数 10–86400）：从进程启动开始计时，覆盖所有模型与工具步骤，不是模型回合或会话限制；长任务请显式传入，例如 `"timeoutSeconds": 28800` 表示 8 小时。runner 期限长于一次等待窗口是允许的：任务继续运行，信封给出 `waitCoversRunnerDeadline: false`，用 `buddy await` 继续等待同一个 runId 即可。
+
+杀掉正在等待的 CLI 进程（Ctrl-C、终端关闭、`waitSeconds` 到期）只会取消等待：只要拥有该任务的服务仍在运行，任务会继续执行并可凭 requestId/runId 恢复。任务也可能因自身的 runner 执行期限到期而结束；`buddy stop`（或服务关闭）同样会终止 Buddy 自己的任务（向所属进程组发信号）。这些结束都是终态，不会被自动重放。拥有服务重启后，活动任务会被标记为 `interrupted` 且进程关闭未确认：没有自动接管、恢复或重新启动，持久记录/结果和同 requestId 恢复也不等于对仍在运行的进程做了崩溃恢复。
+
+runner 结束不等于验收通过。`buddy acknowledge` 在结果已持久化且进程关闭已确认后，记录你真实复核过的结果（包括已复核的失败），不会把失败执行变成成功。退出码 0 也不代表任务成功：要读取 `status`、`outcome`、`resultDelivered`、`shutdownConfirmed`，并检查真实产物。
+
+`buddy start` 立即返回 `runId`，它既是默认前台工作流的第一步，也是显式后台场景的入口：需要结束回合后自动继续时，Buddy skill 会创建官方 App heartbeat，其提示词调用同一个 CLI 读取既有任务、验收结果并删除 heartbeat。该 heartbeat 是周期性后台跟进，不是完成即推送；Buddy 并未解决原生的回合结束后 App 唤醒问题。详见[插件服务说明](deepseek-delegate/references/plugin-service.md)。
+
+### 从已移除的 MCP 路径迁移
+
+不再需要为 MCP 安装任何东西。如果你以前注册过本插件的 MCP 服务器，请自行清理残留条目（Buddy 不会自动改你的配置）：
+
+- `~/.codex/config.toml` 中的 `[mcp_servers.buddy_ctwo]`（以及任何 `plugins.*.mcp_servers.*` 里的 Buddy 条目，包括其 `tool_timeout_sec` / `approval_mode` 字段）；
+- App 记住的 Buddy 插件级工具授权；
+- 旧插件缓存副本里已经无用的 `mcp.json`。
+
+请保留所有其它 Codex/App 工具与设置，尤其是官方的 App heartbeat 自动化——它不属于 Buddy。
+
+### 安全升级插件
+
+在替换插件缓存版本之前，先让服务静默并**停掉它**——纯文档的 cachebuster 更新也一样：
+
+```sh
+deepseek-delegate/scripts/launch-buddy.sh stop    # 或用旧版本的启动脚本
+# 然后再安装/刷新插件版本
+```
+
+运行中的守护进程会继续使用启动时加载的代码路径，因此在其脚下替换缓存目录可能让服务继续运行在已被删除的路径上（下一次运行就会引用缺失的 runner）。服务现在会拒绝启动任何 runner 入口缺失或不可用的新任务，所以陈旧安装会明确报错而不会留下污染记录；但支持的顺序仍然是先停止服务。失败模式与细节见[插件服务说明](deepseek-delegate/references/plugin-service.md#cli-wait-window-and-upgrade-ordering)。
+
+## 服务 CLI
+
+同一个服务和同一批持久任务也可以直接从 CLI 使用：
+
+```sh
+uv run --frozen --project deepseek-delegate buddy health
+# 默认：先 start 一次并记下 runId，再 await 同一个持久任务；await 有自己的有界窗口
+# （waitSeconds 1..86400，默认 86400），且绝不启动任务。
+uv run --frozen --project deepseek-delegate buddy start '{"requestId":"x","task":"...","cwd":"/abs/path","timeoutSeconds":28800}'
+uv run --frozen --project deepseek-delegate buddy await '{"runId":"<runId>","waitSeconds":28800}'
+# 一次性便捷命令：阻塞式运行的等待窗口 = timeoutSeconds + 60 秒宽限，上限 24 小时。
+uv run --frozen --project deepseek-delegate buddy run '{"requestId":"x","task":"...","cwd":"/abs/path","timeoutSeconds":28800}'
+uv run --frozen --project deepseek-delegate buddy status '{"runId":"<runId>"}'
+uv run --frozen --project deepseek-delegate buddy result '{"runId":"<runId>"}'
+uv run --frozen --project deepseek-delegate buddy inquire '{"runId":"<runId>"}'
+uv run --frozen --project deepseek-delegate buddy cancel '{"runId":"<runId>"}'
+uv run --frozen --project deepseek-delegate buddy acknowledge '{"runId":"<runId>","note":"reviewed the diff and ran the tests"}'
+uv run --frozen --project deepseek-delegate buddy stop
+```
+
+只有 `run` 和 `await` 属于长等待契约：`run` 在自己的等待窗口内阻塞，`await` 等待到自己的 `waitSeconds`。其他子命令只有有限等待或立即返回：`wait` 最多等 30 秒；`inquire` 除非用 `waitMs` 请求一个有界答复窗口（上限 30 秒），否则立即返回；`stop` 等服务关闭完成后返回。`await` 只等待既有的 `requestId` 或 `runId`，绝不启动任务。CLI 打印一个 JSON 对象（带缩进），退出码 0 只说明调用返回：要读取 `status`/`outcome`/`resultDelivered`/`shutdownConfirmed` 并检查真实产物。底层错误会打印 `error` 对象并以 1 退出。所有恢复信封都会给出真实命令（`buddy status|await|result|cancel`）和既有 run ID。完整的等待、问询与恢复契约见[插件服务说明](deepseek-delegate/references/plugin-service.md)。
+
+`buddy inquire` 不带问题时是只读的：它报告观测到的执行状态、明确标注为估算的期限和最近的工具活动，不承诺百分比或准确 ETA，并列出所有无法观测的字段。要向该任务自己的在线 agent 提一个可关联的问题，必须同时传 `inquiryId` 和 `question`；要再次读取同一个问题，必须同时重复相同文本和相同 ID（只给 ID 不是有效查询）。相同 ID 配不同文本会返回 `CONFLICT`，运行中和终态任务都是如此；`waitMs`（上限 30000）只限制这次调用等待答复的时间，绝不延长或取消任务。没有自动定时器或模型触发的问询功能；任务允许执行 shell 命令时，agent 仍可在需要时显式调用该 CLI。
 
 ## 它做什么
+
+插件服务、CLI 和独立 runner 都通过同一个 Node runner 执行，它会：
 
 - 通过 `dsh --profile headless` 执行一次有界任务，并真正覆盖本次运行的 model/effort。
 - 把设置文档复制到私有临时 JSON，只替换 `agent-default-model` 里的路由和 effort，再用临时 `--patch`
@@ -28,10 +89,10 @@ uv sync --project deepseek-delegate --python 3.12
 
 ## 环境要求
 
-- uv 和 Python 3.12（启动器可通过 uv 选择该解释器）。
+- uv 和 Python 3.12 以上、3.15 以下（`requires-python = ">=3.12,<3.15"`；启动器通过 uv 选择 Python 3.12）。
 
 - macOS 或 Linux（POSIX）。Windows 未实现也未测试；CLI 会直接报错退出。
-- Node.js 20 或更高版本（使用 `node:test` 和 `node:util.parseArgs`）。
+- Node.js 20 或更高版本，这是 dsh 需要的外部运行时；本项目只使用 Node 内置模块，不需要 npm 安装依赖。
 - 已自行安装并配置好凭据的 `dsh`。安装方法见
   <https://github.com/deepseek-ai/deepseek-harness>。本项目不安装 dsh、不配置模型凭据，也不修改全局模型设置。显式运行桥接安装器会备份并追加目标 profile 的一个插件项。
 - 支持技能的 Codex。
@@ -45,7 +106,7 @@ uv sync --project deepseek-delegate --python 3.12
 ```
 
 技能自带依赖，全部内容都在 `deepseek-delegate/` 里。只复制这个目录并在其中运行 `uv sync` 也够用；仓库根目录
-没有 package，也不会发布到 npm。全部第三方库由 uv 管理并锁定，包括 PyPI `c-two==0.5.1`、Python MCP SDK 和 PyYAML。Node 文件仅使用内置模块。
+没有 package，也不会发布到 npm。全部第三方库由 uv 管理并锁定：PyPI `c-two==0.5.1` 与 PyYAML。Node 文件仅使用内置模块，`mcp` Python SDK 已不再是任何组件的依赖。
 
 ### 安装到 Codex，且不覆盖已有内容
 
@@ -90,7 +151,7 @@ CLI 在任务前检查桥接插件是否可用。观察插件记录本次根会�
 提供的适配层，不是上游自带的 CLI 命令。可用 `--profile` 指定其他已加载 workspace/persistence 的长期运行 profile。
 不要启动第二个 workspace 写入进程去共享正在使用的存储。
 
-独立执行可明确加 `--no-workspace`；分组运行需要宿主插件在线，不会静默降级。
+独立执行可明确加 `--no-workspace`；分组运行需要宿主插件在线，不会静默降级。服务运行默认 `workspace: true`，同样需要该桥接；`workspace: false` 等同于 runner 的 `--no-workspace`。
 迁移后删除旧 `~/.config/deepseek-delegate/web-url` 文件即可；程序已不再读取它。
 旧 `--dsh-web-url*` 和 `--web-timeout` 参数会被拒绝。模型 API 凭据不受影响。
 
@@ -105,9 +166,9 @@ node "$SKILL_DIR/scripts/run.mjs" --cwd /path/to/project --attach-session SESSIO
 此命令先确认会话存在，再请求绑定；不会运行模型，也不会改全局默认模型，不会扫描或批量重分配历史会话。
 会话中记录的 cwd 必须与工作区的规范路径相等；历史目录失效或路径不一致时需要单独处理。
 
-## 快速开始
+## 独立 runner 快速开始
 
-下面的临时示例明确跳过侧边栏分组。真实项目任务先安装上面的宿主插件，再省略 `--no-workspace`。
+`scripts/run.mjs` 是服务每次运行都会启动的底层 runner。它仍然随仓库提供并经过测试，也可以在没有任务服务、没有 `buddy_*` 工具和问询通道时单独使用，直接得到原始 runner 契约。下面的临时示例明确跳过侧边栏分组。真实项目任务先安装上面的宿主插件，再省略 `--no-workspace`。
 
 ```sh
 SKILL_DIR="$PWD/deepseek-delegate"
@@ -128,7 +189,7 @@ cat "$DELEGATE_DEMO_DIR/result.json"
 
 `--cwd` 必填；普通运行需要 `--task-file`，恢复绑定模式不传任务文件。`node "$SKILL_DIR/scripts/run.mjs" --help` 会列出全部选项，且不需要 dsh 或凭据。
 
-## 结果、退出码与日志
+## 独立 runner 结果、退出码与日志
 
 stdout 只有一个 JSON 对象，例如：
 
@@ -137,9 +198,11 @@ stdout 只有一个 JSON 对象，例如：
  "requested":{"provider":"deepseek-official","model":"deepseek-flash","reasoningEffort":"max"},
  "cwd":"/path/to/project","taskFile":"/path/to/task.md","dshBin":"/path/to/dsh",
  "inputDelivery":"inline",
- "logPaths":{"stdout":"/tmp/deepseek-delegate-logs-XXXX/stdout.log","stderr":"/tmp/deepseek-delegate-logs-XXXX/stderr.log"},
- "workspace":{"enabled":true,"bound":true,"id":"workspace-example","path":"/path/to/project","sessionId":"session-example"},
+ "logPaths":{"stdout":"/tmp/deepseek-delegate-logs-XXXX/stdout.log","stderr":"/tmp/deepseek-delegate-logs-XXXX/stderr.log","capture":"/tmp/deepseek-delegate-logs-XXXX/capture.json"},
+ "inquiry":{"enabled":false,"socketPath":null,"resultsPath":null,"errorPath":null,"error":null},
  "finalText":"...","finalTextTruncated":false,
+ "workspace":{"enabled":true,"bound":true,"id":"workspace-example","path":"/path/to/project","sessionId":"session-example"},
+ "processState":{"shutdownConfirmed":true},
  "note":"exit 0 only means the dsh agent finished, not that the task is correct: inspect the real diff/artifacts and run the relevant checks yourself."}
 ```
 
@@ -149,6 +212,9 @@ stdout 只有一个 JSON 对象，例如：
 - `requested` 是实际写入设置副本的路由与 effort。
 - `finalText` 最多 6000 个字符，取自 dsh stdout 日志开头，`finalTextTruncated` 表示是否还有更多内容；
   stderr 和推理过程不会进入 JSON。
+- `inquiry` 表示所属 Buddy 服务是否为本任务挂载了私有问询桥接（`enabled`、路径及启动 `error`）。桥接启动失败
+  不会让任务失败；不带服务的独立 `run.mjs` 调用报告 `enabled: false`。
+- `processState.shutdownConfirmed` 只有在确认所属进程组已停止时才为 true；分组和 `buddy acknowledge` 都需要它。
 - 日志写在每次运行独有的私有目录（目录权限 `0700`，文件权限 `0600`）：给了 `--log-dir` 就放在其下，否则放在
   系统临时目录。已存在的文件不会被截断或复用。
 
@@ -156,7 +222,7 @@ stdout 只有一个 JSON 对象，例如：
 任务的 `status`、`exitCode` 和日志在绑定失败时仍会保留；请同时检查 CLI 进程退出码和 `workspace.bound`。
 只有任务成功且请求的分组已验证，CLI 才返回 0；绑定失败返回非零。`mode` 区分 `run` 与 `attach`。
 
-## 选项
+## 独立 runner 选项
 
 | 选项 | 默认值 | 说明 |
 | --- | --- | --- |
@@ -165,14 +231,15 @@ stdout 只有一个 JSON 对象，例如：
 | `--model <id>` | 见优先级 | 本次运行的模型 ID |
 | `--provider <id>` | 见优先级 | 本次运行的 provider ID |
 | `--effort <name>` | `max` | 本次运行的 reasoning effort |
-| `--timeout <seconds>` | `1800` | headless 执行超时，整数 10–86400；网络请求单独计时 |
+| `--timeout <seconds>` | `1800` | 整个进程组的执行超时，整数 10–86400；workspace socket 请求另用 `--workspace-timeout` |
 | `--log-dir <dir>` | 系统临时目录 | 本次运行私有日志目录的父目录 |
 | `--dsh-bin <path>` | 见优先级 | 要执行的 dsh 启动器 |
 | `--settings-file <path>` | 见优先级 | 要复制并覆盖的设置文档 |
-| `--no-workspace` | 默认关闭 | 明确跳过 Web 分组 |
+| `--no-workspace` | 默认关闭 | 明确跳过工作区分组 |
 | `--attach-session <id>` | | 绑定已有已完成会话，不传任务文件、不运行模型 |
 | `--workspace-socket <path>` | 见优先级 | 宿主插件的私有 socket 路径 |
 | `--workspace-timeout <seconds>` | `15` | 每个请求的超时，整数 1–120 |
+| `--inquiry-socket <path>`、`--inquiry-token <token>`、`--inquiry-results <path>` | | 每次运行的私有问询通道，由所属 Buddy 服务成组提供；不要手工传入 |
 | `-h`、`--help` | | 打印帮助并退出（不需要 dsh） |
 
 ## 优先级
@@ -218,6 +285,11 @@ dsh 进程结束**不等于**任务正确。Codex 必须查看真实 diff、新�
 - **仅支持 POSIX。** 实际支持 macOS 和 Linux；没有 Windows 代码路径。
 - `--cwd` 只是工作目录，不是沙箱。请在任务包里写清允许范围；需要更强隔离时给 dsh 独立工作区（例如 git
   worktree）。
+- 服务运行默认 `workspace: true`，要求工作区宿主桥接已安装且在线；不会静默降级为不分组。用 `workspace: false`
+  （或独立 runner 的 `--no-workspace`）显式退出分组。
+- 只控制 Buddy 自己的任务；独立的用户 dsh 进程和会话是分开的，不受 Buddy 协调、分组或取消。
+- CLI 命令使用当前 Codex 任务 shell 的权限；Buddy 不会授予额外权限，其服务只是同用户的本地进程。已移除的 MCP 服务器其插件级 `approval_mode` 也随之消失，shell 自身的沙箱是唯一边界，不会
+  扩大另一个任务的沙箱。
 - 设置覆盖假设启动的 profile 以 `settings` 为 entry id 挂载 dsh settings provider（官方自带 profile 就是
   这样）。自定义插件或 profile 若用其他方式读取设置，或把配置放在 `settings.yaml` 之外的 profile patch
   文件里，不在复制范围内，会继续生效。
@@ -235,9 +307,9 @@ uv run --frozen --project deepseek-delegate python -m buddy.checks
 
 测试在临时目录里用 mock `dsh` 可执行文件驱动真实 CLI，不调用模型、不读取你的真实设置、不使用你的 `HOME` 或
 `CODEX_HOME`。覆盖启动器解析、设置优先级与保留、任务原文传递、32KB 文件引用切换、6000 字符 stdout 上限、
-独有私有日志、spawn 失败、超时与取消清理。本仓库不会发布到 npm。
-
-新增测试使用本地 socket 模拟服务，覆盖根会话捕获、私有端点权限、存在性检查、分组回读和恢复；不会访问真实宿主。
+独有私有日志、spawn 失败、超时与取消清理。其他测试覆盖 C-Two 服务与阻塞委派路径（等待超时与断线恢复）、
+每次运行的问询桥接与问询状态机、根会话捕获、私有端点权限、存在性检查、分组回读和恢复；不会访问真实宿主。
+本仓库不会发布到 npm。
 
 可选的真实官方包验证（无模型调用，使用隔离临时存储）：
 

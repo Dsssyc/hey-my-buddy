@@ -3,7 +3,6 @@ from __future__ import annotations
 
 from concurrent.futures import Future
 import fcntl
-import hashlib
 import hmac
 import json
 import os
@@ -19,8 +18,8 @@ import uuid
 
 import c_two as cc
 
-from .contracts import BuddyControl, CompletionInbox
-from .transport import CONTROL_NAME, INBOX_NAME, MAX_MESSAGE_BYTES, ServiceError, encode_message, get_state_dir
+from .contracts import BuddyControl
+from .transport import CONTROL_NAME, MAX_MESSAGE_BYTES, ServiceError, encode_message, get_state_dir
 
 
 def atomic_json(path: Path, value: dict) -> None:
@@ -102,7 +101,16 @@ class LegacySocketGuard:
 
 
 class Engine:
-    def __init__(self, directory: Path, on_completed, on_closed):
+    """Owned Node execution engine.
+
+    The engine's stdout carries request/response lines keyed by ``id``. Any line
+    with an ``event`` field is an unsolicited engine notification; since the
+    MCP-only completion delivery was removed there is no consumer, so such lines
+    are ignored rather than mistaken for a response. Runs are read through
+    ``wait``/``status``/``result`` on the same endpoint.
+    """
+
+    def __init__(self, directory: Path, on_closed):
         node = os.environ.get("BUDDY_NODE") or shutil.which("node")
         if not node:
             raise ServiceError("NODE_NOT_FOUND", "Set BUDDY_NODE to a Node.js executable")
@@ -110,7 +118,6 @@ class Engine:
         self.lock = threading.Lock()
         self.pending: dict[str, Future] = {}
         self.closed = False
-        self.on_completed = on_completed
         self.on_closed = on_closed
         env = {**os.environ, "BUDDY_STATE_DIR": str(directory), "BUDDY_PYTHON": sys.executable}
         self.process = subprocess.Popen([node, path], env=env, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=None, text=True, bufsize=1)
@@ -126,8 +133,7 @@ class Engine:
                 if len(line.encode()) > MAX_MESSAGE_BYTES or not line.endswith("\n"):
                     raise ServiceError("ENGINE_PROTOCOL", "Oversized engine response")
                 message = json.loads(line)
-                if message.get("event") == "run_completed":
-                    self.on_completed(message["run"])
+                if "event" in message:
                     continue
                 with self.lock:
                     future = self.pending.pop(str(message.get("id")), None)
@@ -172,91 +178,18 @@ class Engine:
 
 
 class Control:
+    """Serialized, token-authenticated facade over the owned Node execution engine.
+
+    Every run/result fact lives in the engine's durable records; this class holds no
+    completion or notification state. The previous MCP-only completion inbox,
+    notification binding and ``notification_ack`` machinery were removed with the
+    MCP server, so historical ``notifications/*.json`` files are never read,
+    mutated or replayed by this service.
+    """
+
     def __init__(self, directory: Path, token: str, stopping: threading.Event):
         self.directory, self.token, self.stopping = directory, token, stopping
-        self.lock = threading.RLock()
-        self.notifications_dir = directory / "notifications"
-        self.notifications_dir.mkdir(mode=0o700, exist_ok=True)
-        self.notifications: dict[str, dict] = {}
-        for path in self.notifications_dir.glob("*.json"):
-            record = json.loads(path.read_text())
-            if record.get("status") == "dispatching":
-                record["status"] = "unknown"
-                record["detail"] = "Service restarted during delivery; not retried"
-                atomic_json(path, record)
-            self.notifications[record["requestId"]] = record
-        self.engine = Engine(directory, self.completed, stopping.set)
-        offset = 0
-        while True:
-            page = self.engine.request("list", {"limit": 100, "offset": offset})
-            runs = page.get("runs", [])
-            for run in runs:
-                if run.get("resultAvailable"):
-                    self.completed(run)
-            offset += len(runs)
-            if not runs or offset >= page.get("total", offset):
-                break
-
-    def _save(self, record):
-        name = hashlib.sha256(record["requestId"].encode()).hexdigest() + ".json"
-        atomic_json(self.notifications_dir / name, record)
-
-    def _bind(self, params: dict):
-        notify = params.pop("_notify", None)
-        if notify is None:
-            return
-        if not isinstance(notify, dict) or any(not isinstance(notify.get(key), str) or not notify[key] or len(notify[key]) > 512 for key in ("address", "token", "threadId")) or not notify["address"].startswith("ipc://"):
-            raise ServiceError("INVALID_ARGUMENT", "Invalid completion notification binding")
-        request_id = params.get("requestId")
-        if not isinstance(request_id, str) or not request_id.strip() or len(request_id) > 128:
-            raise ServiceError("INVALID_ARGUMENT", "A requestId is required for notifications")
-        binding = {key: notify[key] for key in ("address", "token", "threadId")}
-        with self.lock:
-            prior = self.notifications.get(request_id)
-            if prior:
-                if prior["threadId"] != binding["threadId"]:
-                    raise ServiceError("CONFLICT", "requestId already has a different completion target")
-                if prior["status"] == "registered" and any(prior[key] != binding[key] for key in binding):
-                    updated = {**prior, **binding}
-                    self._save(updated)
-                    prior.update(updated)
-                # Once dispatch begins its outcome may be unknown. Preserve that
-                # binding, while allowing idempotent start recovery in the same task.
-                return
-            record = {"requestId": request_id, **binding, "status": "registered"}
-            self._save(record)
-            self.notifications[request_id] = record
-
-    def _decorate(self, result: dict) -> dict:
-        with self.lock:
-            result = dict(result)
-            if isinstance(result.get("runs"), list):
-                result["runs"] = [self._decorate(run) for run in result["runs"]]
-            record = self.notifications.get(result.get("requestId"))
-            if record:
-                result["notification"] = {key: value for key, value in record.items() if key not in ("token", "address", "requestId")}
-            return result
-
-    def _ack(self, params: dict):
-        if params.get("status") not in ("submitted", "failed", "unknown") or not isinstance(params.get("token"), str) or not isinstance(params.get("runId"), str) or not params["runId"]:
-            raise ServiceError("INVALID_ARGUMENT", "Invalid notification acknowledgement")
-        detail = params.get("detail")
-        if detail is not None and (not isinstance(detail, str) or len(detail) > 2000):
-            raise ServiceError("INVALID_ARGUMENT", "Invalid acknowledgement detail")
-        with self.lock:
-            record = next((r for r in self.notifications.values() if r.get("runId") == params.get("runId")), None)
-            if not record or not hmac.compare_digest(record["token"], params["token"]):
-                raise ServiceError("UNAUTHORIZED", "Invalid notification acknowledgement token")
-            if record["status"] in ("submitted", "failed", "unknown"):
-                if record["status"] != params["status"]:
-                    raise ServiceError("CONFLICT", "Notification acknowledgement is already terminal")
-            else:
-                updated = {**record, "status": params["status"]}
-                if detail is not None:
-                    updated["detail"] = detail
-                self._save(updated)
-                record.update(updated)
-            return {"runId": params["runId"], "notification": {key: value for key, value in record.items() if key not in ("token", "address", "requestId")}}
+        self.engine = Engine(directory, stopping.set)
 
     def dispatch(self, request_json: str) -> str:
         try:
@@ -266,20 +199,11 @@ class Control:
             if not isinstance(request, dict) or not isinstance(request.get("token"), str) or not hmac.compare_digest(request["token"], self.token):
                 raise ServiceError("UNAUTHORIZED", "Invalid service token")
             method, params = request.get("method"), request.get("params", {})
-            if not isinstance(params, dict) or method not in ("start", "status", "wait", "result", "list", "cancel", "acknowledge", "dashboard", "health", "stop", "notification_ack"):
+            if not isinstance(params, dict) or method not in ("start", "status", "wait", "result", "list", "cancel", "acknowledge", "dashboard", "health", "stop", "inquire"):
                 raise ServiceError("INVALID_ARGUMENT", "Invalid control request")
-            params = dict(params)
-            if method == "notification_ack":
-                result = self._ack(params)
-            else:
-                if method == "start":
-                    self._bind(params)
-                result = self.engine.request(method, params)
-                if method == "start" and result.get("resultAvailable"):
-                    self.completed(result)
-                result = self._decorate(result)
-                if method == "stop":
-                    self.stopping.set()
+            result = self.engine.request(method, dict(params))
+            if method == "stop":
+                self.stopping.set()
             return encode_message({"result": result})
         except ServiceError as exc:
             return json.dumps({"error": {"code": exc.code, "message": str(exc)}})
@@ -287,43 +211,6 @@ class Control:
             return json.dumps({"error": {"code": "INVALID_ARGUMENT", "message": str(exc)}})
         except Exception:
             return json.dumps({"error": {"code": "INTERNAL_ERROR", "message": "Service operation failed"}})
-
-    def completed(self, run: dict):
-        with self.lock:
-            record = self.notifications.get(run.get("requestId"))
-            if not record or record["status"] != "registered":
-                return
-            record.update(runId=run["runId"], status="dispatching")
-            try:
-                self._save(record)
-            except OSError:
-                record.update(status="unknown", detail="Could not persist delivery attempt; notification not sent")
-                return
-            threading.Thread(target=self._deliver, args=(dict(record),), name="buddy-completion-delivery", daemon=True).start()
-
-    def _deliver(self, target: dict):
-        event = {key: target[key] for key in ("token", "runId", "requestId")}
-        event["eventId"] = target["runId"]
-        try:
-            with cc.connect(CompletionInbox, name=INBOX_NAME, address=target["address"]) as inbox:
-                reply = inbox.submit(encode_message(event))
-            if not isinstance(reply, str) or len(reply.encode()) > MAX_MESSAGE_BYTES:
-                raise ValueError("Invalid inbox receipt")
-            receipt = json.loads(reply)
-            if not isinstance(receipt, dict) or receipt.get("status") not in ("received", "accepted", "duplicate"):
-                raise ValueError("Inbox did not acknowledge receipt")
-            status, detail = "received", "Completion inbox received the event"
-        except Exception:
-            status, detail = "unknown", "Inbox delivery outcome is unknown; not retried"
-        with self.lock:
-            record = self.notifications[target["requestId"]]
-            # The inbox may call notification_ack before submit returns.
-            if record["status"] == "dispatching":
-                record.update(status=status, detail=detail)
-                try:
-                    self._save(record)
-                except OSError:
-                    record.update(status="unknown", detail="Could not persist notification delivery outcome")
 
 
 def main():

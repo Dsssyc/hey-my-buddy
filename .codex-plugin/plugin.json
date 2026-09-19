@@ -1,15 +1,15 @@
 {
   "name": "hey-my-buddy",
-  "version": "0.3.0+codex.20260917115844",
-  "description": "Local dsh delegation over C-Two with official App heartbeat follow-up.",
+  "version": "0.3.0+codex.20260918135050",
+  "description": "Local dsh delegation through the uv-managed Buddy CLI and its C-Two service: one blocking `buddy run`, durable results and a live per-run inquiry bridge. No MCP server.",
   "author": {
     "name": "Dsssyc"
   },
   "skills": "./skills/",
   "interface": {
     "displayName": "Hey My Buddy",
-    "shortDescription": "Delegate work to local dsh.",
-    "longDescription": "Delegate bounded dsh tasks through a uv-managed C-Two service, persist results, and resume background work with an official App heartbeat.",
+    "shortDescription": "Delegate work to local dsh via the Buddy CLI.",
+    "longDescription": "Delegate bounded dsh tasks through a uv-managed Buddy CLI backed by a C-Two service. One `buddy run` stays connected until the run finishes, `buddy await` keeps waiting on the same run, `buddy inquire` asks the live agent a correlated question, and results stay durable and inspectable. Background follow-up uses an explicit official App heartbeat that calls the same CLI - there is no MCP server.",
     "developerName": "Dsssyc",
     "category": "Productivity",
     "capabilities": [

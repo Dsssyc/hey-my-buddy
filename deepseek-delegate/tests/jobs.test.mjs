@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, statSync, rmSync, readdirSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, statSync, rmSync, readdirSync, chmodSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { spawn } from 'node:child_process';
@@ -199,4 +199,62 @@ test('distinct directories may run concurrently and service shutdown cancels bot
   await assert.rejects(manager.dispatch('start', { requestId: 'third', cwd: third, task: 'ok' }), { code: 'BUSY' });
   await manager.shutdown();
   for (const run of runs) assert.equal((await manager.dispatch('status', { runId: run.runId })).status, 'cancelled');
+});
+
+test('missing runner entrypoint fails before any run record or process and cannot poison the gate', async t => {
+  const { manager, cwd, root, config } = await fixture(t);
+  const run = await manager.dispatch('start', { requestId: 'recoverable', cwd, task: 'ok' });
+  assert.equal((await completed(manager, run.runId)).status, 'completed');
+
+  // The installed entrypoint disappears (for example a plugin cache version is
+  // replaced while the service keeps running).
+  const gone = join(root, 'vanished', 'run.mjs');
+  manager.runnerPath = gone;
+  const before = readdirSync(config.stateDir).sort();
+
+  // Recovery of an existing durable run still answers without a new process.
+  const recovered = await manager.dispatch('start', { requestId: 'recoverable', cwd, task: 'ok' });
+  assert.equal(recovered.runId, run.runId);
+
+  // A NEW run must fail before the staging directory, the record and the child exist.
+  await assert.rejects(manager.dispatch('start', { requestId: 'after-break', cwd, task: 'ok' }), { code: 'RUNNER_UNAVAILABLE' });
+  assert.deepEqual(readdirSync(config.stateDir).sort(), before, 'no run directory or staging directory may be created');
+  assert.equal(manager.children.size, 0);
+  assert.equal(manager.persistenceFailure, null);
+  const listed = await manager.dispatch('list');
+  assert.equal(listed.total, 1, 'the failed start must not appear as a run');
+  assert.equal(listed.runs[0].runId, run.runId);
+
+  // Because no failed record was written, the concurrency gate stays usable once
+  // the entrypoint is repaired - this is exactly what a poisoned SHUTDOWN_UNCONFIRMED
+  // record used to prevent.
+  manager.runnerPath = config.runnerPath;
+  const repaired = await manager.dispatch('start', { requestId: 'after-repair', cwd, task: 'ok' });
+  assert.equal((await completed(manager, repaired.runId)).status, 'completed');
+});
+
+test('unusable runner entrypoint variants are rejected without side effects', async t => {
+  const { manager, cwd, root, config } = await fixture(t);
+  const directory = join(root, 'runner-dir');
+  mkdirSync(directory);
+  const empty = join(root, 'empty-runner.mjs');
+  writeFileSync(empty, '');
+  const unreadable = join(root, 'unreadable-runner.mjs');
+  writeFileSync(unreadable, 'process.exit(0);');
+  chmodSync(unreadable, 0o000);
+
+  const variants = [['directory', directory], ['empty', empty], ['unreadable', unreadable]];
+  for (const [name, runnerPath] of variants) {
+    await t.test(name, async () => {
+      if (process.getuid?.() === 0 && name === 'unreadable') return; // root bypasses mode bits
+      manager.runnerPath = runnerPath;
+      const before = readdirSync(config.stateDir).sort();
+      await assert.rejects(manager.dispatch('start', { requestId: `bad-${name}`, cwd, task: 'ok' }), { code: 'RUNNER_UNAVAILABLE' });
+      assert.deepEqual(readdirSync(config.stateDir).sort(), before);
+      assert.equal(manager.children.size, 0);
+    });
+  }
+  manager.runnerPath = config.runnerPath;
+  const run = await manager.dispatch('start', { requestId: 'healthy-again', cwd, task: 'ok' });
+  assert.equal((await completed(manager, run.runId)).status, 'completed');
 });

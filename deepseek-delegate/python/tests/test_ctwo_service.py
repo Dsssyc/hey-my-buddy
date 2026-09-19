@@ -1,6 +1,5 @@
 """Real cross-process C-Two calls with an owned mock execution engine; no model."""
 import concurrent.futures
-import hashlib
 import json
 import os
 from pathlib import Path
@@ -8,15 +7,14 @@ import socket
 import subprocess
 import sys
 import tempfile
-import threading
 import time
 import unittest
 from unittest.mock import patch
 
 import c_two as cc
 
-from buddy.contracts import BuddyControl, CompletionInbox
-from buddy.transport import CONTROL_NAME, INBOX_NAME, ServiceError, call_service
+from buddy.contracts import BuddyControl
+from buddy.transport import CONTROL_NAME, ServiceError, call_service
 
 
 FAKE_ENGINE = r"""
@@ -27,6 +25,10 @@ const file = path.join(process.env.BUDDY_STATE_DIR, 'fake-runs.json');
 let runs = fs.existsSync(file) ? JSON.parse(fs.readFileSync(file,'utf8')) : [];
 const save = () => fs.writeFileSync(file, JSON.stringify(runs));
 const send = value => process.stdout.write(JSON.stringify(value)+'\n');
+// Same start contract as the real engine: unknown parameters are rejected and the
+// requestId is an idempotency key bound to one input.
+const ALLOWED = new Set(['requestId','task','cwd','model','provider','effort','timeoutSeconds','workspace']);
+const inputKey = p => JSON.stringify({cwd:p.cwd,task:p.task,timeoutSeconds:p.timeoutSeconds??1800,workspace:p.workspace??true});
 const input = readline.createInterface({input:process.stdin});
 input.on('line', line => {
   const {id,method,params:p} = JSON.parse(line);
@@ -36,12 +38,15 @@ input.on('line', line => {
     else if(method==='wait') {setTimeout(()=>send({id,result:{status:'wait-finished'}}),p.timeoutMs||0);return;}
     else if(method==='list') result={runs:runs.slice(p.offset||0,(p.offset||0)+(p.limit||20)),total:runs.length};
     else if(method==='start') {
+      if(Object.keys(p).some(key=>!ALLOWED.has(key))) throw Object.assign(new Error('Unknown start parameter'),{code:'INVALID_ARGUMENT'});
+      const key=inputKey(p);
       result=runs.find(r=>r.requestId===p.requestId);
+      if(result && result.inputKey!==key) throw Object.assign(new Error('requestId already belongs to a different input'),{code:'CONFLICT'});
       if(!result) {
-        result={runId:'run-'+p.requestId,requestId:p.requestId,status:'running',resultAvailable:false,revision:1};
+        result={runId:'run-'+p.requestId,requestId:p.requestId,status:'running',resultAvailable:false,revision:1,inputKey:key};
         runs.push(result);save();
         const run=result;
-        setTimeout(()=>{run.status='completed';run.resultAvailable=true;run.revision++;save();send({event:'run_completed',run});send({event:'run_completed',run});},250);
+        setTimeout(()=>{run.status='completed';run.resultAvailable=true;run.revision++;save();},250);
       }
     } else if(method==='stop') {send({id,result:{status:'stopped'}});setTimeout(()=>process.exit(0),30);return;}
     else {result=runs.find(r=>r.runId===p.runId);if(!result) throw Object.assign(new Error('not found'),{code:'NOT_FOUND'});}
@@ -60,21 +65,6 @@ def eventually(check):
             return value
         time.sleep(0.04)
     raise AssertionError("Timed out waiting for condition")
-
-
-class Inbox:
-    def __init__(self, acknowledge=None):
-        self.events = []
-        self.lock = threading.Lock()
-        self.acknowledge = acknowledge
-
-    def submit(self, event_json: str) -> str:
-        with self.lock:
-            event = json.loads(event_json)
-            self.events.append(event)
-        if self.acknowledge:
-            self.acknowledge(event)
-        return json.dumps({"status": "received"})
 
 
 class CTwoServiceTests(unittest.TestCase):
@@ -98,10 +88,7 @@ class CTwoServiceTests(unittest.TestCase):
         self.environment.stop()
         self.temp.cleanup()
 
-    def test_cross_process_concurrent_clients_idempotency_notification_and_auth(self):
-        inbox = Inbox()
-        cc.register(CompletionInbox, inbox, name=INBOX_NAME, concurrency=cc.ConcurrencyConfig(mode=cc.ConcurrencyMode.PARALLEL))
-        binding = {"address": cc.server_address(), "token": "notification-secret", "threadId": "isolated-test-thread"}
+    def test_cross_process_concurrent_clients_idempotency_and_auth(self):
         with concurrent.futures.ThreadPoolExecutor(max_workers=3) as pool:
             health = list(pool.map(lambda _: call_service("health", state_dir=self.directory), range(3)))
         self.assertEqual(len({item["pid"] for item in health}), 1)
@@ -111,24 +98,52 @@ class CTwoServiceTests(unittest.TestCase):
         with cc.connect(BuddyControl, name=CONTROL_NAME, address=endpoint["address"]) as service:
             denied = json.loads(service.dispatch(json.dumps({"method": "health", "params": {}})))
         self.assertEqual(denied["error"]["code"], "UNAUTHORIZED")
-        params = {"requestId": "one", "cwd": str(self.directory), "task": "mock", "_notify": binding}
+        params = {"requestId": "one", "cwd": str(self.directory), "task": "mock"}
         first = call_service("start", params, self.directory)
         repeated = call_service("start", params, self.directory)
         self.assertEqual(first["runId"], repeated["runId"])
         with self.assertRaises(ServiceError) as conflict:
-            call_service("start", {**params, "_notify": {**binding, "threadId": "another-thread"}}, self.directory)
+            call_service("start", {**params, "task": "a different task"}, self.directory)
         self.assertEqual(conflict.exception.code, "CONFLICT")
-        eventually(lambda: len(inbox.events) == 1)
-        status = eventually(lambda: (s if (s := call_service("status", {"runId": first["runId"]}, self.directory))["notification"]["status"] == "received" else None))
-        self.assertNotIn("token", status["notification"])
-        self.assertNotIn("address", status["notification"])
-        self.assertEqual(inbox.events[0]["eventId"], first["runId"])
-        with self.assertRaises(ServiceError) as denied:
-            call_service("notification_ack", {"runId": first["runId"], "token": "wrong", "status": "submitted"}, self.directory)
-        self.assertEqual(denied.exception.code, "UNAUTHORIZED")
-        accepted = call_service("notification_ack", {"runId": first["runId"], "token": binding["token"], "status": "submitted"}, self.directory)
-        self.assertEqual(accepted["notification"]["status"], "submitted")
-        self.assertEqual(len(inbox.events), 1)
+        # Idempotent recovery of an existing run never launches a second run.
+        self.assertEqual(len(json.loads((self.directory / "fake-runs.json").read_text())), 1)
+
+    def test_removed_mcp_notification_path_has_no_hidden_adapter(self):
+        # The MCP completion binding, its inbox and notification_ack were removed with
+        # the MCP server. Nothing may silently accept them again.
+        params = {"requestId": "no-notify", "cwd": str(self.directory), "task": "mock",
+                  "_notify": {"address": "ipc://retired-receiver", "token": "old-token", "threadId": "t"}}
+        with self.assertRaises(ServiceError) as rejected:
+            call_service("start", params, self.directory)
+        self.assertEqual(rejected.exception.code, "INVALID_ARGUMENT")
+        with self.assertRaises(ServiceError) as unknown_method:
+            call_service("notification_ack", {"runId": "run-x", "token": "t", "status": "submitted"}, self.directory)
+        self.assertEqual(unknown_method.exception.code, "INVALID_ARGUMENT")
+        self.assertFalse((self.directory / "fake-runs.json").exists(), "a rejected start must not reach the engine")
+
+    def test_historical_notification_files_are_never_replayed_or_mutated(self):
+        # Historical notification bookkeeping from the removed MCP path must stay on
+        # disk exactly as it is: never read, never replayed, never rewritten.
+        notifications = self.directory / "notifications"
+        notifications.mkdir(mode=0o700)
+        record = {"requestId": "historical", "runId": "run-historical", "status": "dispatching",
+                  "address": "ipc://long-gone-receiver", "token": "secret", "threadId": "test-thread"}
+        path = notifications / "historical.json"
+        path.write_text(json.dumps(record))
+        path.chmod(0o600)
+        before = path.read_bytes()
+        runs = [{"runId": "run-historical", "requestId": "historical", "status": "completed", "resultAvailable": True, "revision": 4}]
+        (self.directory / "fake-runs.json").write_text(json.dumps(runs))
+        call_service("health", state_dir=self.directory)
+        status = call_service("status", {"runId": "run-historical"}, self.directory)
+        self.assertNotIn("notification", status)
+        self.assertEqual(path.read_bytes(), before, "a historical notification file must not be touched")
+        self.assertEqual(json.loads(path.read_text())["status"], "dispatching")
+        # A restart must not replay it either.
+        call_service("stop", state_dir=self.directory)
+        eventually(lambda: not (self.directory / "control.json").exists())
+        call_service("health", state_dir=self.directory)
+        self.assertEqual(path.read_bytes(), before)
 
     def test_client_exit_does_not_stop_run_and_service_restart_preserves_it(self):
         code = "from buddy.transport import call_service; import json; print(json.dumps(call_service('start', {'requestId':'detached','task':'mock','cwd':'.'})))"
@@ -179,55 +194,6 @@ class CTwoServiceTests(unittest.TestCase):
             call_service("health", state_dir=self.directory)
         self.assertEqual(address.stat().st_ino, identity)
         self.assertFalse((self.directory / "fake-runs.json").exists())
-
-    def test_notification_rebind_only_before_first_delivery(self):
-        inbox = Inbox()
-        cc.register(CompletionInbox, inbox, name=INBOX_NAME)
-        params = {"requestId": "rebind", "cwd": str(self.directory), "task": "mock", "_notify": {"address": "ipc://retired-receiver", "token": "old-token", "threadId": "same-thread"}}
-        run = call_service("start", params, self.directory)
-        params["_notify"] = {"address": cc.server_address(), "token": "new-token", "threadId": "same-thread"}
-        self.assertEqual(call_service("start", params, self.directory)["runId"], run["runId"])
-        eventually(lambda: len(inbox.events) == 1)
-        self.assertEqual(inbox.events[0]["token"], "new-token")
-        eventually(lambda: call_service("status", {"runId": run["runId"]}, self.directory)["notification"]["status"] == "received")
-        params["_notify"] = {"address": "ipc://another-receiver", "token": "third-token", "threadId": "same-thread"}
-        recovered = call_service("start", params, self.directory)
-        self.assertEqual(recovered["runId"], run["runId"])
-        self.assertEqual(recovered["notification"]["status"], "received")
-        self.assertEqual(len(inbox.events), 1)
-
-    def test_recovery_delivers_registered_terminal_run_once_and_never_replays_uncertain(self):
-        inbox = Inbox()
-        cc.register(CompletionInbox, inbox, name=INBOX_NAME)
-        notifications = self.directory / "notifications"
-        notifications.mkdir(mode=0o700)
-        runs = []
-        for request_id, status in [("registered", "registered"), ("uncertain", "dispatching")]:
-            run_id = "run-" + request_id
-            runs.append({"runId": run_id, "requestId": request_id, "status": "completed", "resultAvailable": True})
-            record = {"requestId": request_id, "runId": run_id, "status": status, "address": cc.server_address(), "token": "secret", "threadId": "test-thread"}
-            path = notifications / (hashlib.sha256(request_id.encode()).hexdigest() + ".json")
-            path.write_text(json.dumps(record))
-        (self.directory / "fake-runs.json").write_text(json.dumps(runs))
-        call_service("health", state_dir=self.directory)
-        eventually(lambda: len(inbox.events) == 1)
-        self.assertEqual(inbox.events[0]["requestId"], "registered")
-        uncertain = call_service("status", {"runId": "run-uncertain"}, self.directory)
-        self.assertEqual(uncertain["notification"]["status"], "unknown")
-        endpoint = self.directory / "control.json"
-        call_service("stop", state_dir=self.directory)
-        eventually(lambda: not endpoint.exists())
-        call_service("health", state_dir=self.directory)
-        self.assertEqual(len(inbox.events), 1)
-
-    def test_submitted_acknowledgement_before_receipt_is_not_overwritten(self):
-        def acknowledge(event):
-            call_service("notification_ack", {"runId": event["runId"], "token": event["token"], "status": "submitted"}, self.directory)
-        inbox = Inbox(acknowledge)
-        cc.register(CompletionInbox, inbox, name=INBOX_NAME, concurrency=cc.ConcurrencyConfig(mode=cc.ConcurrencyMode.PARALLEL))
-        run = call_service("start", {"requestId": "ack-race", "task": "mock", "cwd": str(self.directory), "_notify": {"address": cc.server_address(), "token": "race-secret", "threadId": "test-thread"}}, self.directory)
-        eventually(lambda: (s := call_service("status", {"runId": run["runId"]}, self.directory))["notification"]["status"] == "submitted")
-        self.assertEqual(len(inbox.events), 1)
 
 
 if __name__ == "__main__":

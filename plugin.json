@@ -1,8 +1,8 @@
 {
   "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
   "name": "hey-my-buddy",
-  "version": "0.3.0+codex.20260917115844",
-  "description": "Local dsh delegation over C-Two with official App heartbeat follow-up.",
+  "version": "0.3.0+codex.20260918135050",
+  "description": "Local dsh delegation through the uv-managed Buddy CLI and its C-Two service: one blocking `buddy run`, durable results and a live per-run inquiry bridge. No MCP server.",
   "author": {
     "name": "Dsssyc"
   },

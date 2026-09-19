@@ -11,16 +11,107 @@ Codex keeps framing, route choice, and final acceptance; dsh does the bulk work.
 
 ## Codex plugin route
 
-When `buddy_start` and `buddy_wait` are available, use the Buddy plugin tools.
-Pass task text directly; the service manages files, lifetime and durable results.
-Use `notify:false` (the default). For current-turn work, wait with `buddy_wait`,
-verify artifacts and call `buddy_acknowledge`. For work that must resume after the
-turn ends, follow the plugin's Buddy skill to register an official App heartbeat
-for the exact run before ending the turn. The heartbeat reads the result through
-C-Two, verifies and acknowledges it, then removes itself. Scheduling is periodic;
-it is not immediate dsh push. The experimental direct native notification route
-is blocked by App process identity checks. Recover existing runs by ID; never
-relaunch because a result or follow-up is delayed.
+The plugin exposes a **CLI**, not MCP tools. Resolve the launcher from this loaded skill's
+actual location: the removed MCP path used to supply a `PLUGIN_ROOT` environment variable,
+and nothing supplies it any more. This skill's own directory holds the launcher:
+
+```sh
+SKILL_DIR='/abs/path/to/installed/deepseek-delegate'   # directory of this loaded SKILL.md
+BUDDY="$SKILL_DIR/scripts/launch-buddy.sh"             # or: node "$SKILL_DIR/scripts/buddy.mjs"
+```
+
+The default workflow is **start once, capture the runId, then await that same run in the
+current turn**. Use one JSON argument per command and quote `"$BUDDY"` so install paths
+with spaces work:
+
+```sh
+"$BUDDY" start '{"requestId":"<stable-id>","task":"...","cwd":"/abs/path","timeoutSeconds":28800}'
+# -> prints the new (or recovered) runId immediately; keep it
+"$BUDDY" await '{"runId":"<runId>","waitSeconds":28800}'
+```
+
+`buddy await` never starts work, and because the runId is captured before waiting,
+`buddy inquire` can observe or ask that same run while the await is still in flight. Keep
+the turn waiting — there is no heartbeat, no cron and no polling. Then inspect the real
+artifacts, run the relevant checks and record acceptance with
+`"$BUDDY" acknowledge '{"runId":"…","note":"…"}'`. Re-running the identical `start` (or the
+identical `buddy run`) recovers the same run and never launches dsh twice.
+
+`buddy run` remains an optional one-call convenience: it starts (or recovers) one durable
+job by `requestId` and stays connected until the run finishes, with `waitSeconds`
+defaulting to `timeoutSeconds + 60 s` shutdown grace capped at the 24 h CLI maximum
+(86400 s):
+
+```sh
+"$BUDDY" run '{"requestId":"<stable-id>","task":"...","cwd":"/abs/path","timeoutSeconds":28800}'
+```
+
+Wait windows are now CLI-owned. `buddy run` covers the runner deadline plus the shutdown
+grace by default, so one invocation normally covers the whole job; `buddy start` →
+`buddy await` splits the same durable run into an immediate runId plus an explicit
+`waitSeconds` window (1–86400, default 86400). There is no MCP host timeout to work around
+any more. The DSH execution deadline (`timeoutSeconds`) stays a **Buddy execution
+timeout**, not a harness model-turn limit: it is the wall clock on the whole spawned dsh
+process group, armed from spawn and covering every model and tool step. It defaults to
+1800 s (integer 10–86400) and must be set explicitly for longer work (for example
+`"timeoutSeconds": 28800` for 8 hours, maximum 86400). `buddy inquire` never extends it.
+See
+[plugin-service.md](references/plugin-service.md#cli-wait-window-and-upgrade-ordering).
+
+A runner deadline longer than the wait window is allowed: the envelope reports
+`waitCoversRunnerDeadline: false` and returns `outcome: "wait-timeout"` while the run stays
+active — that is a wait/connection limit, never an execution failure and never a reason to
+relaunch. Recover with the identical requestId, or wait on that same durable run:
+
+```sh
+"$BUDDY" await '{"runId":"<runId>","waitSeconds":28800}'   # never starts work
+"$BUDDY" status '{"runId":"<runId>"}'                      # authoritative state
+"$BUDDY" result '{"runId":"<runId>"}'                      # persisted runner result
+```
+
+Killing the waiting CLI process (Ctrl-C, closed terminal, `waitSeconds` expiry) cancels
+only the wait; while the owner service is alive, the owned job keeps running. `buddy
+cancel '{"runId":"…"}'` stops the named owned run, and the runner's own execution deadline
+or a service stop (`buddy stop` / owner shutdown) also terminate Buddy-owned work; after
+an owner restart, active jobs are `interrupted` with shutdown unconfirmed and nothing is
+resumed automatically. If a wait ends with a `wait-timeout` or unavailable envelope, keep
+monitoring or report the runId explicitly; do not end the turn with an unmonitored running
+job, and never restart work the user stopped.
+
+When a run has been quiet for a long time, `buddy inquire` reads bounded progress and can
+ask the run's own live agent one correlated question without cancelling, restarting or
+extending it:
+
+```sh
+"$BUDDY" inquire '{"runId":"<runId>"}'
+"$BUDDY" inquire '{"runId":"<runId>","inquiryId":"q-1","question":"What are you waiting on right now?","waitMs":20000}'
+```
+
+States never overstate progress: `queued` (durably pending at the next step boundary),
+`claimed` (the inbox message was consumed for a proposed step — a rejected pre-step is
+never delivery), `delivered` (durably committed to this run's own session as the
+model-visible `user/message` for the correlated message id), `answered` (the correlated
+reply tool recorded it), `discarded` (dropped before a boundary), or `unavailable`
+(delivery or an answer is unavailable: a late question may be refused, or a previously
+delivered question may end without an answer). An inquiry never wakes a finished task.
+Repeating an `inquiryId` never injects twice; the same id with
+different text is a `CONFLICT` in active and terminal runs, and reading a specific
+question back requires both the same text and the same id (an id alone is not a lookup).
+Deadline values are estimates from `record.createdAt + timeoutSeconds`, not the exact
+spawn, and a no-question inquiry is bounded observation rather than a percentage or ETA.
+`waitMs` (max 30000) only bounds that call's wait and never extends or cancels the run.
+It is manual on purpose: no automatic timer- or model-triggered inquiry exists, so ask
+explicitly when the user asks or when you need the information to report honestly.
+Size limits, retention and the full bridge protocol:
+[plugin-service.md](references/plugin-service.md#inquiry-bounded-progress-and-correlated-questions).
+
+`buddy start` returns a `runId` immediately and is the first step of the default
+start → await flow above; it is also the background route when work must outlive the turn.
+For that, follow the plugin's Buddy skill and register an official App heartbeat for the
+exact run before ending the turn; the heartbeat's prompt calls this same CLI, then reads
+the result, verifies and acknowledges it. Scheduling is periodic; it is not immediate dsh
+push, and native post-turn App wakeup is not solved by Buddy. Recover existing runs by ID;
+never relaunch because a result or follow-up is delayed.
 
 ## Route early
 
@@ -69,14 +160,21 @@ Do not end with only “delegated” while an unmonitored run is still active.
 node <skill-dir>/scripts/run.mjs --cwd <dir> --task-file <file> \
   [--model <id>] [--provider <id>] [--effort <name>] [--timeout <seconds>] \
   [--log-dir <parent>] [--dsh-bin <path>] [--settings-file <path>] \
-  [--workspace-socket <path>] [--workspace-timeout <seconds>] [--no-workspace]
+  [--workspace-socket <path>] [--workspace-timeout <seconds>] [--no-workspace] \
+  [--inquiry-socket <path> --inquiry-token <token> --inquiry-results <path>]
 ```
+
+The `--inquiry-*` triple is supplied by the owning Buddy service, never by hand: it
+mounts the per-run inquiry bridge (token-authenticated private socket, plus an
+append-only answer journal) so `buddy inquire` can observe this run and ask its live
+agent a correlated question. Omitting it only means this run has no inquiry channel.
 
 - `<skill-dir>` is wherever this skill is installed (for example
   `$CODEX_HOME/skills/deepseek-delegate`); run `uv sync` there once. `--help` needs no dsh.
 - stdout is exactly one JSON object: status, exit code, elapsed time, requested route and effort,
   inputDelivery, log paths, and `finalText` (at most 6000 characters) with a truncation flag.
-  Nonzero/timeout/cancellation/spawn failure exits 1; usage and configuration errors exit 2.
+  It exits 0 only when the task is `ok` and any requested grouping is verified; nonzero, timeout,
+  cancellation, spawn failure or unverified grouping exits 1; usage and configuration errors exit 2.
 - Retry only with new evidence and a narrower or corrected packet; normally stop after one or two failed attempts. Do not repeat identical requests.
 - Long output stays in the private per-run logs. Read the log file when needed; do not paste whole
   logs or reasoning back into the conversation.
@@ -117,6 +215,13 @@ The socket bridge is this skill's adapter, not an upstream DSH CLI command.
 ## Scope and isolation
 
 - `--cwd` is a working directory, not a sandbox: state the allowed files and limits in the packet.
+- Service-managed runs default to `workspace: true` and need the installed, running host bridge;
+  `workspace: false` (or the runner's `--no-workspace`) opts out, and only Buddy-owned runs are
+  controlled. Independent user dsh processes are separate.
+- CLI commands run with this task's shell permissions — Buddy never grants extra privilege,
+  and the local Buddy service is a same-user process. The removed MCP server used to carry
+  its own plugin-scoped tool approval; that is gone, so the operating system sandbox of the
+  shell that runs `buddy` is the only boundary.
 - Delegation inherits the scope the user granted this session. When the user authorized publishing,
   pushing, or sending messages, pass that authorization explicitly in the packet; do not invent
   blanket bans the user never asked for.
@@ -132,4 +237,7 @@ The socket bridge is this skill's adapter, not an upstream DSH CLI command.
 - On resumption, deduplicate by the persisted run ID and inspect the existing run;
   never start it again because a notification or result is delayed. After handling
   and verification, record acceptance with `handoff.mjs --run-dir <dir> --accept`
-  and close the App heartbeat when applicable. Queue acceptance is not task acceptance.
+  and close the App heartbeat when applicable. Queue acceptance is not task acceptance;
+  with the plugin service, `buddy acknowledge '{"runId":"…","note":"…"}'` records review of
+  the real outcome (including a reviewed failure) once the result is persisted and shutdown
+  is confirmed, and never turns a failed execution into a success.

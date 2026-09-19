@@ -1,5 +1,13 @@
 # Resume the owner after delegation
 
+This reference documents the standalone `scripts/run.mjs` runner and the
+`scripts/handoff.mjs` supervisor helper. That is a separate, still-supported path from
+the C-Two job service described in [plugin-service.md](plugin-service.md): the helper
+persists its own run directory and notification files and has no durable service
+records or inquiry channel. Its `notification.json` / `--retry-notification` bookkeeping
+belongs to this standalone supervisor; it is unrelated to the removed MCP server and its
+deleted native App completion receiver.
+
 Choose by available capabilities, not the executable's location or the app name.
 `codex` bundled inside ChatGPT.app does not establish connectivity to its tasks.
 These routes implement transport and durable results; neither asserts task correctness.
