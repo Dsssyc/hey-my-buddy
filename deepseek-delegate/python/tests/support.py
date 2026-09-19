@@ -6,6 +6,7 @@ create, and every child handle is retained so cleanup only stops test-owned work
 """
 from __future__ import annotations
 
+import fcntl
 import json
 import os
 import shutil
@@ -26,6 +27,42 @@ from buddy.client import BoardClient  # noqa: E402
 from buddy.legacy import LegacyImporter  # noqa: E402
 from buddy.service import BoardService, WaitAdmission, WaitService, dispatch_local  # noqa: E402
 from buddy.store import BoardStore  # noqa: E402
+
+
+def stop_private_workers(directory: Path, timeout: float = 35.0) -> None:
+    """Keep this test's state until its detached supervisors release ownership.
+
+    Deleting the stop file with TemporaryDirectory while a worker is still exiting
+    can make it miss the request and recreate the directory in its retry loop.
+    The supervisor's lifetime lock is the completion boundary; no stored PID is
+    used to signal or adopt a process.
+    """
+    locks = list((Path(directory) / "workers").glob("*/supervisor.lock"))
+    for lock in locks:
+        (lock.parent / "stop.request").touch(mode=0o600, exist_ok=True)
+    deadline = time.monotonic() + timeout
+    while locks:
+        pending = []
+        for path in locks:
+            try:
+                fd = os.open(path, os.O_RDWR)
+            except FileNotFoundError:
+                continue
+            try:
+                try:
+                    fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                except BlockingIOError:
+                    pending.append(path)
+                else:
+                    fcntl.flock(fd, fcntl.LOCK_UN)
+            finally:
+                os.close(fd)
+        if not pending:
+            return
+        if time.monotonic() >= deadline:
+            raise AssertionError(f"Test supervisors still own state; preserved {directory}")
+        locks = pending
+        time.sleep(0.05)
 
 
 @contextmanager
@@ -88,10 +125,14 @@ class BoardTestCase(unittest.TestCase):
 
     def _cleanup(self) -> None:
         for handle in getattr(self, "children", []):
-            try:
+            if handle.poll() is None:
                 handle.terminate()
-            except Exception:  # noqa: BLE001 - cleanup is best effort and test-owned
-                pass
+                try:
+                    handle.wait(timeout=15)
+                except subprocess.TimeoutExpired:
+                    handle.kill()
+                    handle.wait(timeout=5)
+        stop_private_workers(self.directory)
         shutil.rmtree(self.directory, ignore_errors=True)
 
     def board(self, **options) -> InProcessBoard:

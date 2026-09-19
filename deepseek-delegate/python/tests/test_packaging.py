@@ -32,18 +32,22 @@ class LauncherPortabilityTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory(prefix="buddy-launch-", dir="/tmp")
         self.state = Path(self.temp.name) / "state"
+        self.runtime_root = Path(self.temp.name) / "runtime"
         self.unrelated_cwd = Path(self.temp.name) / "elsewhere"
         self.unrelated_cwd.mkdir()
 
     def tearDown(self):
+        from support import stop_private_workers
+
         code = subprocess.run([sys.executable, "-m", "buddy.cli", "stop"], capture_output=True, text=True,
-                              env={**os.environ, "BUDDY_STATE_DIR": str(self.state)},
+                              env={**os.environ, "BUDDY_STATE_DIR": str(self.state), "BUDDY_RUNTIME_ROOT": str(self.runtime_root)},
                               cwd=str(self.unrelated_cwd), timeout=60)
         self.assertIn(code.returncode, (0, 1), code.stderr)
+        stop_private_workers(self.state)
         self.temp.cleanup()
 
     def test_shell_launcher_starts_from_unrelated_cwd_and_minimal_path(self):
-        env = {"HOME": os.environ["HOME"], "PATH": "/usr/bin:/bin", "BUDDY_STATE_DIR": str(self.state)}
+        env = {"HOME": os.environ["HOME"], "PATH": "/usr/bin:/bin", "BUDDY_STATE_DIR": str(self.state), "BUDDY_RUNTIME_ROOT": str(self.runtime_root)}
         process = subprocess.run(["/bin/sh", str(PROJECT / "scripts/launch-buddy.sh"), "health"],
                                  capture_output=True, text=True, env=env, cwd=str(self.unrelated_cwd), timeout=180)
         self.assertEqual(process.returncode, 0, process.stderr)
@@ -59,7 +63,7 @@ class LauncherPortabilityTests(unittest.TestCase):
         node = shutil.which("node")
         uv = shutil.which("uv")
         self.assertTrue(node and uv, "node and uv are required for the Node launcher")
-        env = {**os.environ, "PATH": f"{Path(uv).parent}:{os.environ.get('PATH', '')}", "BUDDY_STATE_DIR": str(self.state)}
+        env = {**os.environ, "PATH": f"{Path(uv).parent}:{os.environ.get('PATH', '')}", "BUDDY_STATE_DIR": str(self.state), "BUDDY_RUNTIME_ROOT": str(self.runtime_root)}
         process = subprocess.run([node, str(PROJECT / "scripts/buddy.mjs"), "health"],
                                  capture_output=True, text=True, env=env, cwd=str(self.unrelated_cwd), timeout=180)
         self.assertEqual(process.returncode, 0, process.stderr)
