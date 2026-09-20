@@ -10,10 +10,12 @@
  * needed here. Workspace grouping has its own suite in `workspace.test.mjs`.
  */
 import assert from 'node:assert/strict';
-import { chmodSync, existsSync, readdirSync, realpathSync, rmSync, statSync } from 'node:fs';
+import { chmodSync, existsSync, mkdtempSync, readdirSync, realpathSync, rmSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { basename, dirname, join, sep } from 'node:path';
+import { performance } from 'node:perf_hooks';
 import { after, before, describe, test } from 'node:test';
+import { pathToFileURL } from 'node:url';
 import {
   isAlive, makeDir, makeWorkspace, modeOf, parsePayload, readArtifact, readArtifactJson,
   readText, runCli, sha256, startCli, testEnv, waitFor, waitForProcessExit, writeFile, writeMockDsh,
@@ -488,6 +490,22 @@ describe('settings handling', () => {
 });
 
 describe('outcomes and process lifecycle', () => {
+  test('elapsed time stays monotonic when the system clock moves backwards', () => {
+    const s = scenario('clock-backwards');
+    const preload = writeFile(s.dir, 'clock.mjs', [
+      'const wallNow = Date.now;',
+      'let reads = 0;',
+      'Date.now = () => wallNow() - (++reads * 60000);',
+    ].join('\n'));
+    const result = runCli(s.args, {
+      env: testEnv({ MOCK_ARTIFACT_DIR: s.artifacts, NODE_OPTIONS: `--import=${pathToFileURL(preload).href}` }),
+    });
+    assert.equal(result.status, 0, result.stderr);
+    const payload = parsePayload(result);
+    assert.equal(payload.status, 'ok');
+    assert.ok(payload.elapsedSeconds >= 0, `elapsed ${payload.elapsedSeconds}s after a wall-clock rollback`);
+  });
+
   test('a nonzero dsh exit is reported as nonzero and stderr stays in the log', () => {
     const s = scenario('nonzero');
     const result = runCli(s.args, {
@@ -542,7 +560,7 @@ describe('outcomes and process lifecycle', () => {
 
   test('a child that ignores SIGTERM is escalated to SIGKILL within the grace period', { timeout: 30000 }, async () => {
     const s = scenario('cancel-ignore');
-    const started = Date.now();
+    const started = performance.now();
     const { child, done } = startCli(s.args, { env: testEnv({ MOCK_ARTIFACT_DIR: s.artifacts, MOCK_MODE: 'ignore' }) });
     await waitFor(() => existsSync(join(s.artifacts, 'pids.json')), 'mock dsh to record its pids');
     child.kill('SIGTERM');
@@ -551,12 +569,128 @@ describe('outcomes and process lifecycle', () => {
     assert.equal(result.code, 1);
     const payload = parsePayload(result);
     assert.equal(payload.status, 'cancelled');
-    assert.ok(Date.now() - started >= 3000, 'SIGKILL escalation waited for the grace period');
+    assert.ok(performance.now() - started >= 3000, 'SIGKILL escalation waited for the grace period');
     const pids = readArtifactJson(s.artifacts, 'pids.json');
     assert.ok(pids.grandchild !== null);
     await waitForProcessExit(pids.self, 5000);
     await waitForProcessExit(pids.grandchild, 5000);
     assert.equal(isAlive(pids.self), false);
     assert.equal(existsSync(readArtifact(s.artifacts, 'settings-copy-dir.txt')), false);
+  });
+});
+
+describe('private per-run inquiry bridge mount', () => {
+  test('the bridge is mounted only when the service supplies all three parts', () => {
+    const s = scenario('inquiry-mount');
+    // A Unix socket path is length-bounded, so this test uses a short one; the
+    // owned service picks the real location in production.
+    const socketDir = mkdtempSync('/tmp/dd-inquiry-mount-');
+    const socketPath = join(socketDir, 'inquiry.sock');
+    const resultsPath = join(socketDir, 'inquiry.results.jsonl');
+    const result = runCli([
+      ...s.args,
+      '--inquiry-socket', socketPath,
+      '--inquiry-token', 'unit-test-token',
+      '--inquiry-results', resultsPath,
+    ], { env: s.env });
+
+    assert.equal(result.status, 0, result.stderr);
+    const payload = parsePayload(result);
+    assert.equal(payload.status, 'ok');
+    assert.equal(payload.inquiry.enabled, true);
+    assert.equal(payload.inquiry.socketPath, socketPath);
+    assert.equal(payload.inquiry.resultsPath, resultsPath);
+    assert.equal(payload.inquiry.error, null);
+    assert.equal(JSON.stringify(payload).includes('unit-test-token'), false, 'the token is never echoed');
+
+    const patch = readArtifactJson(s.artifacts, 'patch.json');
+    assert.equal(patch.length, 2, 'settings plus the per-run bridge');
+    const bridge = patch[1].insert[0];
+    assert.equal(bridge.id, 'deepseek-delegate-inquiry-bridge');
+    assert.ok(bridge.name.endsWith('plugins/inquiry-bridge.mjs'));
+    assert.equal(bridge.config.socketPath, socketPath);
+    assert.equal(bridge.config.token, 'unit-test-token');
+    assert.equal(bridge.config.resultsPath, resultsPath);
+    assert.equal(bridge.config.cwd, realpathSync(s.cwd));
+    assert.equal(bridge.config.promptSha256.length, 64);
+    assert.equal(bridge.config.errorPath, `${socketPath}.error.json`);
+
+    // The socket's parent directory is created owner-private by the CLI.
+    assert.equal(modeOf(socketDir), '700');
+    // The bridge changes nothing the dsh process sees on argv.
+    const argv = readArtifactJson(s.artifacts, 'argv.json');
+    assert.equal(argv.length, 7);
+    rmSync(socketDir, { recursive: true, force: true });
+  });
+
+  test('a partial inquiry triple, a relative socket and a blank token are usage errors', () => {
+    const s = scenario('inquiry-usage');
+    const socketPath = join(s.dir, 'inquiry', 'inquiry.sock');
+    const cases = [
+      [['--inquiry-socket', socketPath], /must be supplied together/],
+      [['--inquiry-token', 'secret'], /must be supplied together/],
+      [['--inquiry-socket', socketPath, '--inquiry-token', 'secret'], /must be supplied together/],
+      [['--inquiry-socket', 'relative.sock', '--inquiry-token', 'secret', '--inquiry-results', join(s.dir, 'r.jsonl')], /must be an absolute path/],
+      [['--inquiry-socket', socketPath, '--inquiry-token', '   ', '--inquiry-results', join(s.dir, 'r.jsonl')], /must not be blank/],
+    ];
+    for (const [extra, pattern] of cases) {
+      const result = runCli([...s.args, ...extra], { env: s.env });
+      assert.equal(result.status, 2, `expected usage failure for ${extra.join(' ')}`);
+      assert.match(result.stderr, pattern);
+      assert.equal(result.stdout, '');
+    }
+  });
+
+  test('the =value form keeps a dash-leading inquiry value out of argument parsing', () => {
+    const s = scenario('inquiry-equals');
+    const socketDir = mkdtempSync('/tmp/dd-inquiry-equals-');
+    const socketPath = join(socketDir, 'inquiry.sock');
+    const resultsPath = join(socketDir, 'results.jsonl');
+    // Separate-value form: `parseArgs` treats a `-`-leading value as an option
+    // and refuses it, which used to abort a whole run before it started.
+    const separate = runCli([
+      ...s.args,
+      '--inquiry-socket', socketPath,
+      '--inquiry-token', '-leading-dash-token',
+      '--inquiry-results', resultsPath,
+    ], { env: s.env });
+    assert.equal(separate.status, 2, 'the separate form cannot carry a dash-leading value');
+    assert.match(separate.stderr, /inquiry-token/);
+
+    // `=value` form: the same value is delivered opaquely and the run succeeds.
+    const equals = runCli([
+      ...s.args,
+      `--inquiry-socket=${socketPath}`,
+      '--inquiry-token=-leading-dash-token',
+      `--inquiry-results=${resultsPath}`,
+    ], { env: s.env });
+    assert.equal(equals.status, 0, equals.stderr);
+    const payload = parsePayload(equals);
+    assert.equal(payload.status, 'ok');
+    assert.equal(payload.inquiry.enabled, true);
+    assert.equal(payload.inquiry.socketPath, socketPath);
+    const bridge = readArtifactJson(s.artifacts, 'patch.json')[1].insert[0];
+    assert.equal(bridge.config.token, '-leading-dash-token');
+    rmSync(socketDir, { recursive: true, force: true });
+  });
+
+  test('an unusable socket path degrades to no inquiry without failing the run', () => {
+    const s = scenario('inquiry-degraded');
+    const longSocket = join(s.dir, 'x'.repeat(120), 'inquiry.sock');
+    const result = runCli([
+      ...s.args,
+      '--inquiry-socket', longSocket,
+      '--inquiry-token', 'secret',
+      '--inquiry-results', join(s.dir, 'results.jsonl'),
+    ], { env: s.env });
+
+    assert.equal(result.status, 0, result.stderr);
+    const payload = parsePayload(result);
+    assert.equal(payload.status, 'ok', 'the delegated run still succeeds without a bridge');
+    assert.equal(payload.inquiry.enabled, false);
+    assert.equal(payload.inquiry.socketPath, null);
+    assert.match(payload.inquiry.error, /Unix socket limit/);
+    const patch = readArtifactJson(s.artifacts, 'patch.json');
+    assert.equal(patch.length, 1, 'no bridge row is mounted');
   });
 });

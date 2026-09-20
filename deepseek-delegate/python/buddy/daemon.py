@@ -1,26 +1,41 @@
-"""Owned Node execution engine behind private C-Two RPC resources."""
+"""Service lifecycle: exclusive ownership, controlled detach, bounded drain.
+
+The daemon is the only writer of authoritative state, but it never owns worker
+processes: it may *request* that a worker stops, and only the worker holding a child
+handle sends OS signals. A restarted daemon reconciles workers by attempt identity
+and capability, never by PID.
+"""
 from __future__ import annotations
 
-from concurrent.futures import Future
+import errno
 import fcntl
-import hashlib
 import hmac
 import json
 import os
 from pathlib import Path
 import secrets
-import shutil
 import signal
 import socket
 import subprocess
 import sys
 import threading
+import time
 import uuid
 
 import c_two as cc
 
-from .contracts import BuddyControl, CompletionInbox
-from .transport import CONTROL_NAME, INBOX_NAME, MAX_MESSAGE_BYTES, ServiceError, encode_message, get_state_dir
+from . import runtime
+from .contracts import CONTROL_NAME, CONTRACT_VERSION, WAIT_NAME, BuddyControl, BuddyWait
+from .dashboard import Dashboard
+from .db import SCHEMA_VERSION, utc_now
+from .errors import BoardError
+from .legacy import LegacyImporter
+from .service import BoardService, WaitAdmission, WaitService
+from .store import BoardStore
+from .transport import ServiceError, get_state_dir
+
+DRAIN_SECONDS_DEFAULT = 10
+LEASE_SWEEP_SECONDS = 15
 
 
 def atomic_json(path: Path, value: dict) -> None:
@@ -36,31 +51,98 @@ def atomic_json(path: Path, value: dict) -> None:
         temporary.unlink(missing_ok=True)
 
 
+def _unix_address_unrepresentable(error: OSError) -> bool:
+    """True only when the real ``bind`` failure proves AF_UNIX cannot name the address.
+
+    CPython refuses an address longer than the platform's ``sun_path`` before the
+    kernel ever sees it and raises a bare ``OSError("AF_UNIX path too long")``; a
+    kernel that enforces the limit itself reports ``ENAMETOOLONG``. Both verdicts
+    come from the actual bind call, never from a guessed path-length limit.
+    """
+    if error.errno == errno.ENAMETOOLONG:
+        return True
+    return error.errno is None and "AF_UNIX path too long" in str(error)
+
+
 class LegacySocketGuard:
-    """Occupy the previous endpoint so an old binary cannot own the same jobs."""
+    """Occupy the previous Node endpoint so an old service cannot own the same jobs.
+
+    The new service may not start alongside the legacy owner of the same state
+    directory. This guard is an exclusion check only: it never dispatches work and
+    never touches anything the old implementation wrote.
+
+    A legitimate state directory can be longer than the platform's AF_UNIX address
+    capacity. Such an address cannot name a socket at all, so the retired listener is
+    omitted there -- but only once the real ``bind`` failure proves it and only when
+    nothing exists at the path. An existing socket or file is never bypassed: it may
+    belong to a live legacy service reached through a shorter path alias, and an
+    unrepresentable address cannot be probed from here.
+    """
+
     def __init__(self, directory: Path):
         self.path = directory / "service.sock"
+        self.stopping = threading.Event()
+        self.identity: tuple[int, int] | None = None
+        self.thread: threading.Thread | None = None
+        #: True when AF_UNIX cannot address this path and no entry existed there.
+        self.omitted = False
+        self.note: str | None = None
+        # A socket object is kept even when it is closed early, so `close` is always
+        # safe: an omitted guard has no thread, no listener, no path entry and no id.
         self.listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
         try:
             self.listener.bind(str(self.path))
         except OSError as cause:
             self.listener.close()
-            with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as probe:
-                probe.settimeout(1)
-                try:
-                    probe.connect(str(self.path))
-                except (ConnectionRefusedError, FileNotFoundError):
-                    raise ServiceError("STALE_LEGACY_SOCKET", "Existing service.sock was not removed; inspect the prior service before cleanup") from cause
-                else:
-                    raise ServiceError("LEGACY_SERVICE_RUNNING", "Stop the existing Node service before starting the C-Two control service") from cause
+            if _unix_address_unrepresentable(cause):
+                self._omit_unrepresentable(cause)
+                return
+            raise self._existing_legacy_endpoint() from cause
         self.path.chmod(0o600)
         stat = self.path.stat()
         self.identity = (stat.st_dev, stat.st_ino)
         self.listener.listen(16)
         self.listener.settimeout(0.2)
-        self.stopping = threading.Event()
-        self.thread = threading.Thread(target=self._serve, name="buddy-legacy-migration-guard", daemon=True)
+        self.thread = threading.Thread(target=self._serve, name="buddy-legacy-guard", daemon=True)
         self.thread.start()
+
+    def _omit_unrepresentable(self, cause: OSError) -> None:
+        """Omit the obsolete listener only where no socket could exist and none does."""
+        try:
+            os.lstat(self.path)
+        except FileNotFoundError:
+            self.omitted = True
+            self.note = (
+                f"AF_UNIX cannot represent {self.path}; the retired legacy listener was omitted "
+                "and no service.sock exists"
+            )
+            return
+        except OSError as error:
+            raise ServiceError(
+                "STALE_LEGACY_SOCKET",
+                f"Cannot verify the retired legacy endpoint at {self.path}: {error}",
+            ) from cause
+        raise ServiceError(
+            "STALE_LEGACY_SOCKET",
+            "A service.sock exists at a state directory path this platform cannot address with "
+            "AF_UNIX; inspect the prior service before cleanup",
+        ) from cause
+
+    def _existing_legacy_endpoint(self) -> ServiceError:
+        """Classify a failed bind at a representable address exactly as before."""
+        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as probe:
+            probe.settimeout(1)
+            try:
+                probe.connect(str(self.path))
+            except (ConnectionRefusedError, FileNotFoundError):
+                return ServiceError(
+                    "STALE_LEGACY_SOCKET",
+                    "Existing service.sock was not removed; inspect the prior service before cleanup",
+                )
+            return ServiceError(
+                "LEGACY_SERVICE_RUNNING",
+                "A legacy service still owns this state directory; stop it before starting this version",
+            )
 
     def _serve(self):
         while not self.stopping.is_set():
@@ -72,9 +154,13 @@ class LegacySocketGuard:
                 break
             with connection:
                 connection.settimeout(0.2)
-                reply = {"error": {"code": "MIGRATED", "message": "Use uv-managed Buddy"}}
+                reply = {
+                    "error": {
+                        "code": "MIGRATED",
+                        "message": "This state directory is owned by the Python blackboard service; use the buddy CLI",
+                    }
+                }
                 try:
-                    # This endpoint only rejects old clients; it never dispatches work.
                     raw = connection.recv(8192)
                     try:
                         request = json.loads(raw.split(b"\n", 1)[0])
@@ -92,7 +178,11 @@ class LegacySocketGuard:
     def close(self):
         self.stopping.set()
         self.listener.close()
-        self.thread.join(timeout=1)
+        if self.thread is not None:
+            self.thread.join(timeout=1)
+        if self.identity is None:
+            # An omitted guard never created a path entry, so it owns nothing to remove.
+            return
         try:
             stat = self.path.stat()
             if (stat.st_dev, stat.st_ino) == self.identity:
@@ -101,268 +191,337 @@ class LegacySocketGuard:
             pass
 
 
-class Engine:
-    def __init__(self, directory: Path, on_completed, on_closed):
-        node = os.environ.get("BUDDY_NODE") or shutil.which("node")
-        if not node:
-            raise ServiceError("NODE_NOT_FOUND", "Set BUDDY_NODE to a Node.js executable")
-        path = os.environ.get("BUDDY_ENGINE_PATH") or str(Path(__file__).resolve().parents[2] / "service/engine.mjs")
-        self.lock = threading.Lock()
-        self.pending: dict[str, Future] = {}
-        self.closed = False
-        self.on_completed = on_completed
-        self.on_closed = on_closed
-        env = {**os.environ, "BUDDY_STATE_DIR": str(directory), "BUDDY_PYTHON": sys.executable}
-        self.process = subprocess.Popen([node, path], env=env, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=None, text=True, bufsize=1)
-        self.reader = threading.Thread(target=self._read, name="buddy-engine-reader", daemon=True)
-        self.reader.start()
+class SupervisorHandle:
+    """A supervisor process this daemon created, plus a durable cooperative stop."""
 
-    def _read(self):
+    def __init__(self, directory: Path, worker_id: str):
+        self.directory = directory / "workers" / worker_id
+        self.worker_id = worker_id
+        self.lock_path = self.directory / "supervisor.lock"
+        self.stop_request = self.directory / "stop.request"
+        self.process: subprocess.Popen | None = None
+        self.lock_fd: int | None = None
+
+    def running(self) -> bool:
+        """Liveness by lock ownership, never by a stored PID."""
+        self.directory.mkdir(mode=0o700, parents=True, exist_ok=True)
+        fd = os.open(self.lock_path, os.O_CREAT | os.O_RDWR, 0o600)
         try:
-            while True:
-                line = self.process.stdout.readline(MAX_MESSAGE_BYTES + 1)
-                if not line:
-                    break
-                if len(line.encode()) > MAX_MESSAGE_BYTES or not line.endswith("\n"):
-                    raise ServiceError("ENGINE_PROTOCOL", "Oversized engine response")
-                message = json.loads(line)
-                if message.get("event") == "run_completed":
-                    self.on_completed(message["run"])
-                    continue
-                with self.lock:
-                    future = self.pending.pop(str(message.get("id")), None)
-                if future:
-                    if "error" in message:
-                        future.set_exception(ServiceError(message["error"]["code"], message["error"]["message"]))
-                    else:
-                        future.set_result(message["result"])
-        except Exception as exc:
-            self.failure = str(exc)
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            return True
         finally:
-            with self.lock:
-                self.closed = True
-                pending, self.pending = self.pending, {}
-            for future in pending.values():
-                future.set_exception(ServiceError("ENGINE_CLOSED", "Execution engine disconnected; request was not replayed"))
-            self.on_closed()
-
-    def request(self, method: str, params: dict) -> dict:
-        request_id = uuid.uuid4().hex
-        future = Future()
-        line = encode_message({"id": request_id, "method": method, "params": params}) + "\n"
-        with self.lock:
-            if self.closed:
-                raise ServiceError("ENGINE_CLOSED", "Execution engine is unavailable")
-            self.pending[request_id] = future
             try:
-                self.process.stdin.write(line)
-                self.process.stdin.flush()
-            except (OSError, ValueError) as exc:
-                self.pending.pop(request_id, None)
-                raise ServiceError("ENGINE_CLOSED", "Execution engine disconnected") from exc
-        return future.result()
-
-    def shutdown(self):
-        with self.lock:
-            if self.process.stdin and not self.process.stdin.closed:
-                self.process.stdin.close()
-        # The owned engine gracefully stops only its owned jobs before exiting.
-        self.process.wait()
-        self.reader.join()
-
-
-class Control:
-    def __init__(self, directory: Path, token: str, stopping: threading.Event):
-        self.directory, self.token, self.stopping = directory, token, stopping
-        self.lock = threading.RLock()
-        self.notifications_dir = directory / "notifications"
-        self.notifications_dir.mkdir(mode=0o700, exist_ok=True)
-        self.notifications: dict[str, dict] = {}
-        for path in self.notifications_dir.glob("*.json"):
-            record = json.loads(path.read_text())
-            if record.get("status") == "dispatching":
-                record["status"] = "unknown"
-                record["detail"] = "Service restarted during delivery; not retried"
-                atomic_json(path, record)
-            self.notifications[record["requestId"]] = record
-        self.engine = Engine(directory, self.completed, stopping.set)
-        offset = 0
-        while True:
-            page = self.engine.request("list", {"limit": 100, "offset": offset})
-            runs = page.get("runs", [])
-            for run in runs:
-                if run.get("resultAvailable"):
-                    self.completed(run)
-            offset += len(runs)
-            if not runs or offset >= page.get("total", offset):
-                break
-
-    def _save(self, record):
-        name = hashlib.sha256(record["requestId"].encode()).hexdigest() + ".json"
-        atomic_json(self.notifications_dir / name, record)
-
-    def _bind(self, params: dict):
-        notify = params.pop("_notify", None)
-        if notify is None:
-            return
-        if not isinstance(notify, dict) or any(not isinstance(notify.get(key), str) or not notify[key] or len(notify[key]) > 512 for key in ("address", "token", "threadId")) or not notify["address"].startswith("ipc://"):
-            raise ServiceError("INVALID_ARGUMENT", "Invalid completion notification binding")
-        request_id = params.get("requestId")
-        if not isinstance(request_id, str) or not request_id.strip() or len(request_id) > 128:
-            raise ServiceError("INVALID_ARGUMENT", "A requestId is required for notifications")
-        binding = {key: notify[key] for key in ("address", "token", "threadId")}
-        with self.lock:
-            prior = self.notifications.get(request_id)
-            if prior:
-                if prior["threadId"] != binding["threadId"]:
-                    raise ServiceError("CONFLICT", "requestId already has a different completion target")
-                if prior["status"] == "registered" and any(prior[key] != binding[key] for key in binding):
-                    updated = {**prior, **binding}
-                    self._save(updated)
-                    prior.update(updated)
-                # Once dispatch begins its outcome may be unknown. Preserve that
-                # binding, while allowing idempotent start recovery in the same task.
-                return
-            record = {"requestId": request_id, **binding, "status": "registered"}
-            self._save(record)
-            self.notifications[request_id] = record
-
-    def _decorate(self, result: dict) -> dict:
-        with self.lock:
-            result = dict(result)
-            if isinstance(result.get("runs"), list):
-                result["runs"] = [self._decorate(run) for run in result["runs"]]
-            record = self.notifications.get(result.get("requestId"))
-            if record:
-                result["notification"] = {key: value for key, value in record.items() if key not in ("token", "address", "requestId")}
-            return result
-
-    def _ack(self, params: dict):
-        if params.get("status") not in ("submitted", "failed", "unknown") or not isinstance(params.get("token"), str) or not isinstance(params.get("runId"), str) or not params["runId"]:
-            raise ServiceError("INVALID_ARGUMENT", "Invalid notification acknowledgement")
-        detail = params.get("detail")
-        if detail is not None and (not isinstance(detail, str) or len(detail) > 2000):
-            raise ServiceError("INVALID_ARGUMENT", "Invalid acknowledgement detail")
-        with self.lock:
-            record = next((r for r in self.notifications.values() if r.get("runId") == params.get("runId")), None)
-            if not record or not hmac.compare_digest(record["token"], params["token"]):
-                raise ServiceError("UNAUTHORIZED", "Invalid notification acknowledgement token")
-            if record["status"] in ("submitted", "failed", "unknown"):
-                if record["status"] != params["status"]:
-                    raise ServiceError("CONFLICT", "Notification acknowledgement is already terminal")
-            else:
-                updated = {**record, "status": params["status"]}
-                if detail is not None:
-                    updated["detail"] = detail
-                self._save(updated)
-                record.update(updated)
-            return {"runId": params["runId"], "notification": {key: value for key, value in record.items() if key not in ("token", "address", "requestId")}}
-
-    def dispatch(self, request_json: str) -> str:
-        try:
-            if not isinstance(request_json, str) or len(request_json.encode()) > MAX_MESSAGE_BYTES:
-                raise ServiceError("MESSAGE_TOO_LARGE", "Invalid or oversized request")
-            request = json.loads(request_json)
-            if not isinstance(request, dict) or not isinstance(request.get("token"), str) or not hmac.compare_digest(request["token"], self.token):
-                raise ServiceError("UNAUTHORIZED", "Invalid service token")
-            method, params = request.get("method"), request.get("params", {})
-            if not isinstance(params, dict) or method not in ("start", "status", "wait", "result", "list", "cancel", "acknowledge", "dashboard", "health", "stop", "notification_ack"):
-                raise ServiceError("INVALID_ARGUMENT", "Invalid control request")
-            params = dict(params)
-            if method == "notification_ack":
-                result = self._ack(params)
-            else:
-                if method == "start":
-                    self._bind(params)
-                result = self.engine.request(method, params)
-                if method == "start" and result.get("resultAvailable"):
-                    self.completed(result)
-                result = self._decorate(result)
-                if method == "stop":
-                    self.stopping.set()
-            return encode_message({"result": result})
-        except ServiceError as exc:
-            return json.dumps({"error": {"code": exc.code, "message": str(exc)}})
-        except (ValueError, TypeError) as exc:
-            return json.dumps({"error": {"code": "INVALID_ARGUMENT", "message": str(exc)}})
-        except Exception:
-            return json.dumps({"error": {"code": "INTERNAL_ERROR", "message": "Service operation failed"}})
-
-    def completed(self, run: dict):
-        with self.lock:
-            record = self.notifications.get(run.get("requestId"))
-            if not record or record["status"] != "registered":
-                return
-            record.update(runId=run["runId"], status="dispatching")
-            try:
-                self._save(record)
+                fcntl.flock(fd, fcntl.LOCK_UN)
             except OSError:
-                record.update(status="unknown", detail="Could not persist delivery attempt; notification not sent")
-                return
-            threading.Thread(target=self._deliver, args=(dict(record),), name="buddy-completion-delivery", daemon=True).start()
+                pass
+            os.close(fd)
+        return False
 
-    def _deliver(self, target: dict):
-        event = {key: target[key] for key in ("token", "runId", "requestId")}
-        event["eventId"] = target["runId"]
+    def start(self, state_dir: Path, log_path: Path) -> bool:
+        if self.running():
+            return False
+        self.stop_request.unlink(missing_ok=True)
+        target = runtime.launch_target()
+        environment = {
+            **os.environ,
+            "BUDDY_STATE_DIR": str(state_dir),
+            "BUDDY_WORKER_ID": self.worker_id,
+        }
+        if target["pythonPath"]:
+            environment["PYTHONPATH"] = target["pythonPath"]
+        else:
+            environment.pop("PYTHONPATH", None)
+        log_fd = os.open(log_path, os.O_CREAT | os.O_APPEND | os.O_WRONLY, 0o600)
         try:
-            with cc.connect(CompletionInbox, name=INBOX_NAME, address=target["address"]) as inbox:
-                reply = inbox.submit(encode_message(event))
-            if not isinstance(reply, str) or len(reply.encode()) > MAX_MESSAGE_BYTES:
-                raise ValueError("Invalid inbox receipt")
-            receipt = json.loads(reply)
-            if not isinstance(receipt, dict) or receipt.get("status") not in ("received", "accepted", "duplicate"):
-                raise ValueError("Inbox did not acknowledge receipt")
-            status, detail = "received", "Completion inbox received the event"
-        except Exception:
-            status, detail = "unknown", "Inbox delivery outcome is unknown; not retried"
-        with self.lock:
-            record = self.notifications[target["requestId"]]
-            # The inbox may call notification_ack before submit returns.
-            if record["status"] == "dispatching":
-                record.update(status=status, detail=detail)
-                try:
-                    self._save(record)
-                except OSError:
-                    record.update(status="unknown", detail="Could not persist notification delivery outcome")
+            self.process = subprocess.Popen(
+                [
+                    target["python"],
+                    "-m",
+                    "buddy.worker.supervisor",
+                    "--worker-id",
+                    self.worker_id,
+                    "--state-dir",
+                    str(state_dir),
+                ],
+                env=environment,
+                stdin=subprocess.DEVNULL,
+                stdout=log_fd,
+                stderr=log_fd,
+                start_new_session=True,
+                close_fds=True,
+            )
+            threading.Thread(target=self.process.wait, name="buddy-supervisor-reaper", daemon=True).start()
+        finally:
+            os.close(log_fd)
+        return True
+
+    def request_stop(self) -> bool:
+        atomic_json(self.stop_request, {"workerId": self.worker_id, "requestedAt": utc_now(), "requestedBy": "daemon"})
+        return True
 
 
-def main():
-    directory = get_state_dir()
-    directory.mkdir(mode=0o700, parents=True, exist_ok=True)
-    directory.chmod(0o700)
-    lock_fd = os.open(directory / "control-daemon.lock", os.O_CREAT | os.O_RDWR, 0o600)
-    try:
-        fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-    except BlockingIOError:
-        os.close(lock_fd)
-        return
-    stopping = threading.Event()
-    for signum in (signal.SIGTERM, signal.SIGINT):
-        signal.signal(signum, lambda *_args: stopping.set())
-    token = secrets.token_urlsafe(32)
-    control = None
-    legacy_guard = None
-    endpoint_path = directory / "control.json"
-    try:
-        legacy_guard = LegacySocketGuard(directory)
-        control = Control(directory, token, stopping)
-        cc.register(BuddyControl, control, name=CONTROL_NAME, concurrency=cc.ConcurrencyConfig(mode=cc.ConcurrencyMode.PARALLEL))
-        atomic_json(endpoint_path, {"address": cc.server_address(), "token": token, "pid": os.getpid()})
-        stopping.wait()
-    finally:
-        if control:
-            control.engine.shutdown()
-        cc.shutdown()
-        if legacy_guard:
-            legacy_guard.close()
+class Daemon:
+    def __init__(self, directory: Path):
+        self.directory = Path(directory)
+        self.stopping = threading.Event()
+        self.started_at = utc_now()
+        self.service_id = str(uuid.uuid4())
+        self.token = secrets.token_urlsafe(32)
+        self.wait_admission = WaitAdmission(_env_int("BUDDY_WAIT_CAPACITY", 32))
+        self.store = BoardStore(
+            self.directory,
+            max_concurrent=_env_int("BUDDY_MAX_CONCURRENT", 1),
+            lease_seconds=_env_int("BUDDY_LEASE_SECONDS", 120),
+        )
+        self.control = {
+            "service_id": self.service_id,
+            "contract_version": CONTRACT_VERSION,
+            "protocol": 2,
+            "schema_version": SCHEMA_VERSION,
+            "wait_capacity": self.wait_admission.capacity,
+            "wait_admission": self.wait_admission,
+            "stopping": False,
+            "restart_requested": False,
+            "runtime": runtime.runtime_identity(),
+        }
+        self.dashboard = Dashboard(self.store)
+        self.legacy_guard: LegacySocketGuard | None = None
+        self.supervisor: SupervisorHandle | None = None
+        self.lock_fds: list[int] = []
+        self.endpoint_path = self.directory / "control.json"
+        self.resume_path = self.directory / "restart.resume.json"
+        self.stop_path = self.directory / "stop.request.json"
+
+    # -- lifecycle -----------------------------------------------------------
+    def acquire_exclusive(self) -> None:
+        """Refuse to start alongside any other owner of this state directory."""
+        for name in ("control-daemon.lock", "board-owner.lock"):
+            fd = os.open(self.directory / name, os.O_CREAT | os.O_RDWR, 0o600)
+            try:
+                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except BlockingIOError:
+                os.close(fd)
+                raise ServiceError(
+                    "ALREADY_RUNNING",
+                    "Another owner is already running for this state directory",
+                    lock=name,
+                )
+            self.lock_fds.append(fd)
+
+    def service(self) -> BoardService:
+        return BoardService(
+            self.store,
+            token=self.token,
+            control=self.control,
+            on_stop=self.on_stop,
+            on_restart=self.on_restart,
+            dashboard_factory=self.on_dashboard,
+            legacy_importer=LegacyImporter(self.store).run,
+        )
+
+    def run(self) -> int:
+        self.directory.mkdir(mode=0o700, parents=True, exist_ok=True)
+        os.chmod(self.directory, 0o700)
+        self.acquire_exclusive()
         try:
-            if json.loads(endpoint_path.read_text()).get("token") == token:
-                endpoint_path.unlink()
+            self.store.initialize()
+            self.legacy_guard = LegacySocketGuard(self.directory)
+            if self.legacy_guard.omitted:
+                # Visible in control.log: the obsolete exclusion listener is absent for
+                # a reason that is not a missing legacy service.
+                sys.stderr.write(f"buddy: legacy socket guard omitted: {self.legacy_guard.note}\n")
+            service = self.service()
+            wait_service = WaitService(self.store, self.wait_admission, token=self.token)
+            cc.register(
+                BuddyControl,
+                service,
+                name=CONTROL_NAME,
+                concurrency=cc.ConcurrencyConfig(mode=cc.ConcurrencyMode.PARALLEL),
+            )
+            cc.register(
+                BuddyWait,
+                wait_service,
+                name=WAIT_NAME,
+                concurrency=cc.ConcurrencyConfig(mode=cc.ConcurrencyMode.PARALLEL),
+            )
+            atomic_json(
+                self.endpoint_path,
+                {
+                    "address": cc.server_address(),
+                    "token": self.token,
+                    "pid": os.getpid(),
+                    "protocol": 2,
+                    "contractVersion": CONTRACT_VERSION,
+                    "schemaVersion": SCHEMA_VERSION,
+                    "serviceId": self.service_id,
+                    "startedAt": self.started_at,
+                    "runtimeIdentity": self.control["runtime"],
+                },
+            )
+            self.resume_path.unlink(missing_ok=True)
+            self.stop_path.unlink(missing_ok=True)
+            self.supervisor = SupervisorHandle(self.directory, os.environ.get("BUDDY_WORKER_ID", "local"))
+            self.supervisor.start(self.directory, self.directory / "worker.log")
+            sweeper = threading.Thread(target=self._sweep, name="buddy-lease-sweeper", daemon=True)
+            sweeper.start()
+            self.stopping.wait()
+            return self.finish()
+        finally:
+            self.cleanup()
+
+    def _sweep(self) -> None:
+        while not self.stopping.wait(LEASE_SWEEP_SECONDS):
+            try:
+                self.store.mark_expired_leases()
+            except Exception:  # pragma: no cover - a sweep must never kill the daemon
+                pass
+
+    # -- control actions -----------------------------------------------------
+    def on_stop(self, params: dict) -> dict:
+        drain = int(params.get("drainSeconds", DRAIN_SECONDS_DEFAULT))
+        reason = params.get("reason", "service stop requested")
+        self.control["stopping"] = True
+        atomic_json(self.stop_path, {"requestedAt": utc_now(), "reason": reason, "drainSeconds": drain})
+        queued = self.cancel_queued(reason)
+        active = self.cancel_active(reason)
+        unresolved = self.drain(drain)
+        if self.supervisor is not None:
+            self.supervisor.request_stop()
+        self.stopping.set()
+        return {
+            "action": "stop",
+            "stopped": not unresolved,
+            "cancelledQueued": queued,
+            "cancelRequested": active,
+            "unresolvedAttempts": unresolved,
+            "drainSeconds": drain,
+            "note": (
+                "Buddy-owned work was asked to stop and the service drained for a bounded interval. Unresolved "
+                "attempts keep their receipts and resource claims; their shutdown is explicitly unconfirmed and no "
+                "surviving process is assumed stopped. Unrelated dsh sessions were never touched."
+            ),
+        }
+
+    def on_restart(self, params: dict) -> dict:
+        """Detach and let a fresh daemon take over, preserving every worker."""
+        drain = int(params.get("drainSeconds", DRAIN_SECONDS_DEFAULT))
+        reason = params.get("reason", "service restart requested")
+        self.control["restart_requested"] = True
+        # Deliberately no cancel and no worker stop: workers survive the daemon.
+        atomic_json(
+            self.resume_path,
+            {"requestedAt": utc_now(), "reason": reason, "serviceId": self.service_id, "drainSeconds": drain},
+        )
+        self.stopping.set()
+        return {
+            "action": "restart",
+            "restarting": True,
+            "workersPreserved": True,
+            "resumeFile": str(self.resume_path),
+            "note": (
+                "The daemon detaches without cancelling owned work. Independent workers keep their child handles "
+                "and deadlines while it is down, then reattach by attempt identity and capability."
+            ),
+        }
+
+    def on_dashboard(self, action: str) -> dict:
+        if action == "close":
+            return self.dashboard.close()
+        if action == "status":
+            return self.dashboard.status()
+        return self.dashboard.start()
+
+    # -- drain ---------------------------------------------------------------
+    def cancel_queued(self, reason: str) -> int:
+        count = 0
+        for task in self.store.active_work()["queuedTasks"]:
+            try:
+                self.store.task_cancel({"runId": task["taskId"], "reason": f"service stop: {reason}"})
+                count += 1
+            except BoardError:
+                continue
+        return count
+
+    def cancel_active(self, reason: str) -> int:
+        count = 0
+        for attempt in self.store.active_work()["attempts"]:
+            try:
+                self.store.task_cancel({"runId": attempt["taskId"], "reason": f"service stop: {reason}"})
+                count += 1
+            except BoardError:
+                continue
+        return count
+
+    def drain(self, seconds: int) -> list[dict]:
+        """Wait a bounded interval and report exactly what is still unresolved."""
+        deadline = time.monotonic() + max(0, seconds)
+        while time.monotonic() < deadline:
+            work = self.store.active_work()
+            if not work["attempts"]:
+                return []
+            time.sleep(0.25)
+        return [
+            {
+                "attemptId": attempt["attemptId"],
+                "taskId": attempt["taskId"],
+                "generation": attempt["generation"],
+                "executionState": attempt["executionState"],
+                "ownership": attempt["ownership"],
+                "workerId": attempt["workerId"],
+                "shutdownConfirmed": attempt["shutdownConfirmed"],
+            }
+            for attempt in self.store.active_work()["attempts"]
+        ]
+
+    # -- teardown ------------------------------------------------------------
+    def finish(self) -> int:
+        return 0
+
+    def cleanup(self) -> None:
+        try:
+            cc.shutdown()
+        except Exception:  # pragma: no cover - teardown best effort
+            pass
+        if self.legacy_guard is not None:
+            self.legacy_guard.close()
+        if self.dashboard is not None:
+            self.dashboard.close()
+        try:
+            value = json.loads(self.endpoint_path.read_text())
+            if hmac.compare_digest(value.get("serviceId", ""), self.service_id):
+                self.endpoint_path.unlink()
         except (OSError, ValueError):
             pass
-        fcntl.flock(lock_fd, fcntl.LOCK_UN)
-        os.close(lock_fd)
+        for fd in self.lock_fds:
+            try:
+                fcntl.flock(fd, fcntl.LOCK_UN)
+                os.close(fd)
+            except OSError:
+                continue
+        self.lock_fds = []
+
+
+def _env_int(name: str, default: int) -> int:
+    try:
+        return int(os.environ.get(name, default))
+    except (TypeError, ValueError):
+        return default
+
+
+def main() -> int:
+    directory = get_state_dir()
+    daemon = Daemon(directory)
+    for signum in (signal.SIGTERM, signal.SIGINT):
+        signal.signal(signum, lambda *_args: daemon.on_stop({"drainSeconds": DRAIN_SECONDS_DEFAULT, "reason": "signal"}))
+    try:
+        return daemon.run()
+    except ServiceError as error:
+        # An actionable, non-destructive failure: never fall back to an old
+        # implementation and never rewrite records.
+        sys.stderr.write(f"buddy: {error.code}: {error}\n")
+        return 2
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

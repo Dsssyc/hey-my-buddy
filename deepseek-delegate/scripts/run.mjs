@@ -21,11 +21,12 @@
 import { spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import {
-  accessSync, closeSync, constants, existsSync, mkdirSync, mkdtempSync,
+  accessSync, closeSync, constants, existsSync, lstatSync, mkdirSync, mkdtempSync,
   openSync, readFileSync, readSync, realpathSync, rmSync, statSync, writeFileSync,
 } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
-import { delimiter, join, resolve } from 'node:path';
+import { delimiter, dirname, isAbsolute, join, resolve } from 'node:path';
+import { performance } from 'node:perf_hooks';
 import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
 import { loadYaml } from './lib/yaml.mjs';
@@ -55,6 +56,16 @@ const EXIT_RUN_FAILED = 1;
 const CAPTURE_FILENAME = 'capture.json';
 /** The observer plugin shipped beside this script; mounted only for grouped runs. */
 const CAPTURE_PLUGIN_PATH = fileURLToPath(new URL('../plugins/session-capture.mjs', import.meta.url));
+/** Private per-run inquiry bridge; mounted only when the service supplies a socket. */
+const INQUIRY_PLUGIN_PATH = fileURLToPath(new URL('../plugins/inquiry-bridge.mjs', import.meta.url));
+/** Prefix of the private bridge failure report written next to the socket. */
+const INQUIRY_ERROR_SUFFIX = '.error.json';
+/**
+ * Conservative usable length of a Unix socket path in bytes. `sun_path` is 104
+ * bytes on macOS/BSD and 108 on Linux; an over-long path can make `listen()`
+ * report success without creating the socket file, so it is rejected up front.
+ */
+const UNIX_SOCKET_PATH_BUDGET = process.platform === 'linux' ? 105 : 101;
 
 const USAGE = [
   'Usage: node scripts/run.mjs --cwd <dir> --task-file <file> [options]',
@@ -89,6 +100,13 @@ const USAGE = [
   '  --workspace-timeout <s> bound per socket request, 1-120 (default 15)',
   '  --attach-session <id>   group an EXISTING completed ordinary session;',
   '                          calls workspaceRegistry without a model task',
+  '  --inquiry-socket <path> private socket for this run\'s inquiry bridge, an',
+  '                          absolute owner-private path supplied by the owning',
+  '                          service; combined with --inquiry-token it mounts a',
+  '                          per-run status/question channel for this run only',
+  '  --inquiry-token <token>  per-run shared secret every bridge frame must carry',
+  '  --inquiry-results <path> private append-only journal the bridge writes so a',
+  '                          correlated answer stays readable after this run ends',
   '  -h, --help              print this help and exit',
   '',
   'Install the workspace bridge in the owning host profile with',
@@ -270,6 +288,9 @@ try {
       'workspace-socket': { type: 'string' },
       'workspace-timeout': { type: 'string', default: String(DEFAULT_WORKSPACE_TIMEOUT_SECONDS) },
       'attach-session': { type: 'string' },
+      'inquiry-socket': { type: 'string' },
+      'inquiry-token': { type: 'string' },
+      'inquiry-results': { type: 'string' },
     },
     allowPositionals: false,
   }));
@@ -307,6 +328,24 @@ if (values['attach-session'] !== undefined) {
 if (values['task-file'] !== undefined && values['task-file'].trim() === '') {
   fail('--task-file must not be blank');
 }
+// The inquiry bridge is optional and private to one run: both halves must be
+// supplied together, and a malformed pair is a usage error before any spawn.
+const inquiryRawSocket = values['inquiry-socket'] === undefined ? undefined : values['inquiry-socket'].trim();
+const inquiryToken = values['inquiry-token'] === undefined ? undefined : values['inquiry-token'].trim();
+const inquiryRawResults = values['inquiry-results'] === undefined ? undefined : values['inquiry-results'].trim();
+const inquiryParts = [inquiryRawSocket, inquiryToken, inquiryRawResults].filter(part => part !== undefined).length;
+if (inquiryParts !== 0 && inquiryParts !== 3) {
+  fail('--inquiry-socket, --inquiry-token and --inquiry-results must be supplied together');
+}
+if (inquiryRawSocket !== undefined && inquiryRawSocket === '') fail('--inquiry-socket must not be blank');
+if (inquiryToken !== undefined && inquiryToken === '') fail('--inquiry-token must not be blank');
+if (inquiryRawResults !== undefined && inquiryRawResults === '') fail('--inquiry-results must not be blank');
+if (inquiryToken !== undefined && (inquiryToken.length > 256 || inquiryToken.includes('\0'))) {
+  fail('--inquiry-token must be at most 256 characters and contain no NUL');
+}
+if (attachSession !== undefined && inquiryRawSocket !== undefined) {
+  fail('--attach-session does not mount an inquiry bridge: it runs no model task');
+}
 if (!/^\d+$/.test(values.timeout)) {
   fail(`--timeout must be an integer between ${MIN_TIMEOUT_SECONDS} and ${MAX_TIMEOUT_SECONDS} seconds`);
 }
@@ -323,7 +362,7 @@ if (workspaceTimeoutSeconds < MIN_WORKSPACE_TIMEOUT_SECONDS || workspaceTimeoutS
 }
 const workspaceTimeoutMs = workspaceTimeoutSeconds * 1000;
 
-const startedAt = Date.now();
+const startedAt = performance.now();
 
 // All paths are resolved against the invoking cwd, before dsh runs in --cwd.
 const cwdInput = resolve(values.cwd);
@@ -373,7 +412,7 @@ function emitAttach(workspace, error) {
     exitCode: error === null ? 0 : null,
     signal: null,
     error,
-    elapsedSeconds: Math.round((Date.now() - startedAt) / 100) / 10,
+    elapsedSeconds: Math.round((performance.now() - startedAt) / 100) / 10,
     timeoutSeconds: null,
     requested: null,
     cwd,
@@ -384,6 +423,14 @@ function emitAttach(workspace, error) {
     finalText: '',
     finalTextTruncated: false,
     workspace,
+    inquiry: {
+      enabled: false,
+      socketPath: null,
+      resultsPath: null,
+      errorPath: null,
+      error: null,
+      note: 'attach mode runs no model task, so it mounts no inquiry bridge.',
+    },
     note: 'attach mode only groups an existing completed session into its workspace through the owning dsh workspace host; it runs no model task.',
   };
   // Attach mode never initializes run-only child/timer/temporary-file state.
@@ -493,6 +540,38 @@ const stdoutLog = join(logDir, 'stdout.log');
 const stderrLog = join(logDir, 'stderr.log');
 const capturePath = workspaceEnabled ? join(logDir, CAPTURE_FILENAME) : null;
 
+// ---------------------------------------------------------------------------
+// Private per-run inquiry bridge. A missing or unusable socket degrades this
+// run to "no inquiry" and is reported in the result; it never fails the run and
+// never changes its deadline.
+// ---------------------------------------------------------------------------
+let inquirySocketPath = null;
+let inquiryResultsPath = null;
+let inquiryErrorPath = null;
+let inquiryMountError = null;
+if (inquiryRawSocket !== undefined) {
+  if (!isAbsolute(inquiryRawSocket)) fail('--inquiry-socket must be an absolute path');
+  const resolvedSocket = resolve(inquiryRawSocket);
+  if (Buffer.byteLength(resolvedSocket) > UNIX_SOCKET_PATH_BUDGET) {
+    inquiryMountError = `inquiry socket path exceeds this platform's Unix socket limit (${UNIX_SOCKET_PATH_BUDGET} bytes)`;
+  } else if (!isFile(INQUIRY_PLUGIN_PATH)) {
+    inquiryMountError = `inquiry bridge plugin is missing: ${INQUIRY_PLUGIN_PATH}`;
+  } else {
+    try {
+      mkdirSync(dirname(resolvedSocket), { recursive: true, mode: 0o700 });
+      const parent = lstatSync(dirname(resolvedSocket));
+      if (parent.isSymbolicLink() || !parent.isDirectory()) throw new Error('its parent is not a real directory');
+      if (parent.uid !== process.getuid()) throw new Error('its parent is not owned by the current user');
+      if ((parent.mode & 0o077) !== 0) throw new Error('its parent is not owner-private (0700)');
+      inquirySocketPath = resolvedSocket;
+      inquiryResultsPath = resolve(inquiryRawResults);
+      inquiryErrorPath = `${resolvedSocket}${INQUIRY_ERROR_SUFFIX}`;
+    } catch (error) {
+      inquiryMountError = `inquiry socket directory is unusable: ${error.message}`;
+    }
+  }
+}
+
 let tempDir;
 let settingsCopy;
 let patchFile;
@@ -510,6 +589,24 @@ try {
         id: 'deepseek-delegate-session-capture',
         name: CAPTURE_PLUGIN_PATH,
         config: { capturePath, promptSha256, cwd },
+      }],
+    });
+  }
+  if (inquirySocketPath !== null) {
+    // The per-run inquiry bridge is reachable only through a token-authenticated
+    // owner-private Unix socket created for this exact run.
+    patchRows.push({
+      insert: [{
+        id: 'deepseek-delegate-inquiry-bridge',
+        name: INQUIRY_PLUGIN_PATH,
+        config: {
+          socketPath: inquirySocketPath,
+          token: inquiryToken,
+          promptSha256,
+          cwd,
+          errorPath: inquiryErrorPath,
+          resultsPath: inquiryResultsPath,
+        },
       }],
     });
   }
@@ -664,7 +761,7 @@ function buildResult(status, exitCode, signal, error, workspace, shutdownConfirm
     exitCode,
     signal: signal ?? null,
     error: error ?? null,
-    elapsedSeconds: Math.round((Date.now() - startedAt) / 100) / 10,
+    elapsedSeconds: Math.round((performance.now() - startedAt) / 100) / 10,
     timeoutSeconds,
     requested: { provider, model, reasoningEffort: effort },
     cwd,
@@ -672,6 +769,14 @@ function buildResult(status, exitCode, signal, error, workspace, shutdownConfirm
     dshBin,
     inputDelivery: fileBackedTask ? 'file-reference' : 'inline',
     logPaths: { stdout: stdoutLog, stderr: stderrLog, capture: capturePath },
+    inquiry: {
+      enabled: inquirySocketPath !== null,
+      socketPath: inquirySocketPath,
+      resultsPath: inquiryResultsPath,
+      errorPath: inquiryErrorPath,
+      error: inquiryMountError,
+      note: 'a private per-run bridge that answers bounded progress queries and delivers correlated operator questions to this run only; it never extends or shortens timeoutSeconds.',
+    },
     finalText: text.trim().slice(0, FINAL_TEXT_LIMIT),
     finalTextTruncated: truncated,
     workspace,
@@ -713,8 +818,8 @@ async function settle(status, exitCode, signal, error) {
   clearTimeout(failsafeTimer);
   let shutdownConfirmed = childExited;
   if (shutdownConfirmed) {
-    const deadline = Date.now() + FAILSAFE_MS;
-    while (processGroupAlive() && Date.now() < deadline) {
+    const deadline = performance.now() + FAILSAFE_MS;
+    while (processGroupAlive() && performance.now() < deadline) {
       await new Promise((resolveWait) => setTimeout(resolveWait, 25));
     }
     shutdownConfirmed = !processGroupAlive();

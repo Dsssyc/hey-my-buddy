@@ -6,130 +6,88 @@ description: Delegate clear, bounded implementation, investigation, file-transfo
 
 # deepseek-delegate
 
-Hand **one bounded task** to a local `dsh` headless run and get back **one compact JSON result**.
-Codex keeps framing, route choice, and final acceptance; dsh does the bulk work.
+Hand **one bounded task** to a local `dsh` run through the `buddy` CLI, keep this turn waiting on that durable run, then verify the real artifacts yourself. Codex keeps framing, route choice and final acceptance.
 
-## Codex plugin route
+This directory is a complete, self-contained skill: `SKILL.md`, `references/`, `scripts/`, `plugins/`, the Python package and the uv lock file. Copy all of it when installing elsewhere.
 
-When `buddy_start` and `buddy_wait` are available, use the Buddy plugin tools.
-Pass task text directly; the service manages files, lifetime and durable results.
-Use `notify:false` (the default). For current-turn work, wait with `buddy_wait`,
-verify artifacts and call `buddy_acknowledge`. For work that must resume after the
-turn ends, follow the plugin's Buddy skill to register an official App heartbeat
-for the exact run before ending the turn. The heartbeat reads the result through
-C-Two, verifies and acknowledges it, then removes itself. Scheduling is periodic;
-it is not immediate dsh push. The experimental direct native notification route
-is blocked by App process identity checks. Recover existing runs by ID; never
-relaunch because a result or follow-up is delayed.
+## Resolve the launcher
+
+Resolve the launcher from this loaded skill's actual location; nothing supplies a `PLUGIN_ROOT` environment variable any more.
+
+```sh
+SKILL_DIR='/abs/path/to/installed/deepseek-delegate'   # directory of this loaded SKILL.md
+BUDDY="$SKILL_DIR/scripts/launch-buddy.sh"             # or: node "$SKILL_DIR/scripts/buddy.mjs"
+```
+
+Quote `"$BUDDY"`, and pass one JSON object per command.
 
 ## Route early
 
-Delegate before doing the work yourself when the task is clear, bounded, and bigger than a
-one-line edit: implementation, refactor, bounded investigation, batch file transformation, test
-writing, documentation.
+Delegate when the task is clear, bounded and bigger than a one-line edit: implementation, refactor, bounded investigation, batch file transformation, test writing, documentation. Keep it local when the change is a line or two, the answer is already known, requirements still need discovery, or the call is Codex-only.
 
-Keep it local when the change is a line or two, the answer is already known, requirements still need
-discovery, or the call is Codex-only (framing, route choice, accepting the result).
+## Default workflow
 
-## Write the task packet first
-
-Put the packet in a file and include: goal and why; inputs/outputs; the working directory and
-available check commands; the files/areas that may change and explicit non-goals; acceptance
-criteria; and key references, known facts, and pitfalls.
-
-Give the context the work needs. Context capacity is configured per model and provider — some models
-in a dsh catalog are configured around 1M tokens, which is an example, not a promise across
-providers. Do not shrink the packet artificially. Keep large background in files: task content over
-32,000 bytes is delivered to dsh as a file reference, and that file must stay in place until the run
-finishes.
-
-## Pick the model and effort
-
-- Choose a model for the task's difficulty and needs; never rank by Pro/Flash in the name.
-- Defaults are provider `deepseek-official`, model `deepseek-flash`, effort `max`. They are
-  configurable defaults, not a capability ranking.
-- Effort defaults to `max` and is never silently inherited from a lower value in settings.
-- A model ID must be supported by the selected provider. The CLI does not validate, downgrade, or
-  retry it; report failures honestly.
-- Precedence: `--model` > `DSH_DELEGATE_MODEL` > settings `agent-default-model.model` >
-  `deepseek-flash`; `--provider` > `DSH_DELEGATE_PROVIDER` > settings > `deepseek-official`;
-  `--effort` > `DSH_DELEGATE_EFFORT` > `max`.
-
-## Run it
-
-Before launching work that may outlive the current turn, choose and establish an
-owner-resumption route. Read [handoff.md](references/handoff.md): App/ChatGPT App
-uses a verified heartbeat on the original task; CLI uses a completion callback
-only after an actual same-thread wakeup test. Use `scripts/handoff.mjs` for these
-routes; it wraps the runner below and persists results independently of notification.
-If neither route is available, keep waiting in the current turn with `run.mjs`.
-Do not end with only “delegated” while an unmonitored run is still active.
+1. Write the packet before launching: goal and why; inputs and outputs; the working directory and check commands; allowed files/areas and non-goals; acceptance criteria; references, known facts and pitfalls. Give the context the work needs. Task text over 32,000 bytes is delivered to dsh as a file reference, and that file must stay in place until the run finishes.
+2. Start once with a stable `requestId` and keep the returned `runId`.
+3. Await that same run in the current turn. Do not start a second run and do not work on the same files meanwhile.
+4. When it returns, inspect the real diff, files, hashes and logs and run the relevant checks yourself. Exit 0 only means the call returned; it is not acceptance.
+5. Once the result is persisted and shutdown is confirmed, record the review with `acknowledge` and the evidence you actually gathered.
 
 ```sh
-node <skill-dir>/scripts/run.mjs --cwd <dir> --task-file <file> \
-  [--model <id>] [--provider <id>] [--effort <name>] [--timeout <seconds>] \
-  [--log-dir <parent>] [--dsh-bin <path>] [--settings-file <path>] \
-  [--workspace-socket <path>] [--workspace-timeout <seconds>] [--no-workspace]
+"$BUDDY" start '{"requestId":"<stable-id>","task":"...","cwd":"/abs/path","timeoutSeconds":28800}'
+"$BUDDY" await '{"runId":"<runId>","waitSeconds":28800}'
+# After independent verification:
+"$BUDDY" acknowledge '{"runId":"<runId>","note":"<actual checks and findings>","verdict":"accepted"}'
 ```
 
-- `<skill-dir>` is wherever this skill is installed (for example
-  `$CODEX_HOME/skills/deepseek-delegate`); run `uv sync` there once. `--help` needs no dsh.
-- stdout is exactly one JSON object: status, exit code, elapsed time, requested route and effort,
-  inputDelivery, log paths, and `finalText` (at most 6000 characters) with a truncation flag.
-  Nonzero/timeout/cancellation/spawn failure exits 1; usage and configuration errors exit 2.
-- Retry only with new evidence and a narrower or corrected packet; normally stop after one or two failed attempts. Do not repeat identical requests.
-- Long output stays in the private per-run logs. Read the log file when needed; do not paste whole
-  logs or reasoning back into the conversation.
-- Each run copies the settings document to a private temporary file, overrides only
-  `agent-default-model`, and cleans it up. Original settings and credentials are untouched.
+`requestId` is the idempotency key: an identical request recovers the same task and never launches dsh twice, while changed input for the same id is a `CONFLICT`. A task is admitted as `queued` and starts when a worker claims it; `queueReason` explains any wait (`awaiting-worker`, `capacity`, `cwd-overlap`, `exclusive-resource`). Capacity and resource conflicts queue instead of failing, so there is no BUSY error to retry around.
 
-## Workspace grouping
+`buddy run` is the optional one-call alternative: it starts (or recovers) and stays connected, with `waitSeconds` defaulting to `timeoutSeconds + 60 s` shutdown grace capped at 86400 s.
 
-Grouping is enabled by default. Install the bundled host plugin once:
+## Lifetimes and cancellation
+
+- `timeoutSeconds` is the execution deadline: integer 10–86400, default 1800. It bounds the whole spawned dsh process group from spawn and covers every model and tool step — not a model-turn limit and not the time a task spends queued. Pass it explicitly for long work (for example `28800` for 8 hours). Nothing extends it.
+- `run`/`await` carry the long waits; `await` accepts `waitSeconds` 1–86400 (default 86400) and never starts work. Ending a wait — Ctrl-C, a closed terminal, `waitSeconds` expiry — cancels only the wait: the durable task keeps running and is recovered by the same `runId`/`requestId`.
+- A wait that ends first returns `outcome: "wait-timeout"` with the run still active. That is a wait/connection limit, never an execution failure: do not relaunch it.
+- `cancel` cancels queued work immediately and writes durable cancel intent for an active attempt, which the owning worker applies to its own process group. The task's own deadline and `buddy stop` also end owned work; those endings are terminal and are never replayed automatically.
+- After a daemon restart, in-flight attempts become `uncertain` with resource claims retained; the independent worker keeps its child and deadline and reattaches by attempt identity and nonce. Unknown never means stopped, and a new execution requires an explicit `retry`.
+- `wait` and `watch` are bounded at 30 s and never cold-start a service. If a call returns `wait-timeout` or an unavailable envelope, keep monitoring the same run or report its `runId` explicitly; never end the turn with an unmonitored running job and never restart work the user stopped.
+
+## Model and effort
+
+Choose a model for the task's needs, never by Pro/Flash in the name. Set `model`, `provider` and `effort` in the start JSON when overriding the route. The [runner precedence](references/runner.md#precedence) resolves omitted values; the fallbacks are `deepseek-official`, `deepseek-flash` and effort `max`. Effort is never inherited from settings. Unsupported model IDs are reported without silent downgrades or retries.
+
+## Progress and questions
+
+When a run has been quiet and you need to report honestly:
 
 ```sh
-node <skill-dir>/scripts/install-workspace-bridge.mjs
+"$BUDDY" inquire '{"runId":"<runId>"}'
+"$BUDDY" inquire '{"runId":"<runId>","inquiryId":"q-1","question":"What are you waiting on?","waitMs":20000}'
 ```
 
-This adds a backed-up entry to the existing `web` profile's `cordis.patch.yml`.
-Long-lived profiles hot-reload their user patch; otherwise start that profile normally.
-The plugin calls the official `ctx.workspaceRegistry.create(cwd)` and
-`workspace.attachSession(sessionId)` APIs inside the owning host. The CLI connects
-through an owner-private Unix socket at `$DSH_HOME/deepseek-delegate/workspace.sock`
-(default home `~/.dsh`). No Web URL, token, cookie, or HTTP endpoint is used.
-Use `--workspace-socket` or `DSH_WORKSPACE_SOCKET` only for a custom host endpoint.
-The host must mount workspace and persistence and share the headless session storage.
-Do not mount a second workspace writer over storage already owned by another host.
+The no-question form is bounded observation, not a percentage or guaranteed ETA, and names unobservable fields in `live.unavailable`. A question goes to the run's own live agent; it never starts a second agent and never extends or cancels the task. Answers require the correlated reply tool, so assistant prose is never an answer; a bounded question can return `delivered` before an answer exists — check `answer.available`. Re-read a question through `inquire` with the same id and question text. Changed text for the same id is a `CONFLICT`; ask explicitly instead of building a polling loop.
 
-The bridge is checked before a model run. A read-only observer captures the exact root
-session; after headless fully stops, the host validates the persisted root header and cwd,
-attaches it through the official API, and verifies membership. No Agent is activated for
-binding. A binding failure preserves task output and makes the CLI exit nonzero.
-Use `--attach-session <id> --cwd <dir>` to retry only binding of a completed session.
-For intentionally standalone work, explicitly use `--no-workspace`; never silently downgrade.
-Socket restarts use the same path without credential updates. An unclean host exit can leave
-a stale socket; verify its owner process has stopped before removing that socket only.
+## Background route
 
-Official contracts: [workspace](https://github.com/deepseek-ai/deepseek-harness/blob/master/docs/subsystems/workspace.md),
-[storage limits](https://github.com/deepseek-ai/deepseek-harness/blob/master/packages/storage/storage-json/README.md).
-The socket bridge is this skill's adapter, not an upstream DSH CLI command.
+Only when the user explicitly wants work to outlive the turn, register an official App heartbeat on the original task before ending the turn; its prompt calls this same CLI to read the result, verify it and acknowledge. The heartbeat is a periodic follow-up, not an immediate completion push, and native post-turn App wakeup is not solved by Buddy. Without such a route, keep waiting in the current turn instead of ending with an unmonitored run. Read the [background workflow](references/usage.md#background-work-that-outlives-the-turn) for monitor reuse and cleanup.
 
-## Scope and isolation
+## Boundaries
 
-- `--cwd` is a working directory, not a sandbox: state the allowed files and limits in the packet.
-- Delegation inherits the scope the user granted this session. When the user authorized publishing,
-  pushing, or sending messages, pass that authorization explicitly in the packet; do not invent
-  blanket bans the user never asked for.
-- Do not let Codex and dsh edit the same files at the same time; work on something else while the
-  run is in flight.
+- `workspace: true` (the default) requires the installed, running workspace host bridge; `workspace: false` opts out and is never applied silently.
+- `cwd` is a working directory, not a sandbox; state the allowed scope in the packet.
+- Only Buddy-owned runs are controlled; independent dsh processes are separate.
+- CLI commands run with this task's shell permissions, but an already-running daemon or worker keeps the permissions it was started with. Delegation inherits the scope the user granted this session; pass any publishing/pushing authorization explicitly in the packet rather than inventing blanket bans.
+- Never let Codex and dsh edit the same files at once.
 
-## Verify independently — never skip
+## References
 
-- Exit 0 only means the dsh agent finished. It is not proof that the task is correct.
-- Inspect the real diff, added/removed files, and command output; run the relevant checks (tests,
-  build, lint, targeted reproduction) yourself.
-- Check every acceptance criterion and state the evidence. Without evidence, the task is not done.
-- On resumption, deduplicate by the persisted run ID and inspect the existing run;
-  never start it again because a notification or result is delayed. After handling
-  and verification, record acceptance with `handoff.mjs --run-dir <dir> --accept`
-  and close the App heartbeat when applicable. Queue acceptance is not task acceptance.
+| Need | Read |
+| --- | --- |
+| Install/use paths, examples, foreground/background flows | [usage.md](references/usage.md) |
+| Every command, field, default, bound, error and envelope | [cli.md](references/cli.md) |
+| Runtime install/upgrade, bridge, state, env vars, legacy import | [operations.md](references/operations.md) |
+| Adapters, external worker example, worker receipts | [workers.md](references/workers.md) |
+| Standalone `run.mjs` runner and its contract | [runner.md](references/runner.md) |
+| Owner resumption without the service | [handoff.md](references/handoff.md) |
+| Implemented architecture and limits | [architecture.md](references/architecture.md) |

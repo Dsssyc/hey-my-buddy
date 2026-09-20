@@ -1,233 +1,145 @@
-"""Real cross-process C-Two calls with an owned mock execution engine; no model."""
-import concurrent.futures
-import hashlib
+"""Real cross-process C-Two board calls over the named contract.
+
+The previous version of this file drove an owned mock Node engine. The engine is
+gone: this file now exercises the actual Python blackboard service over the actual
+C-Two transport, including its token check, its named operations and its dedicated
+bounded wait route.
+"""
+from __future__ import annotations
+
 import json
 import os
-from pathlib import Path
-import socket
 import subprocess
 import sys
-import tempfile
-import threading
 import time
 import unittest
-from unittest.mock import patch
+from concurrent.futures import ThreadPoolExecutor
 
 import c_two as cc
 
-from buddy.contracts import BuddyControl, CompletionInbox
-from buddy.transport import CONTROL_NAME, INBOX_NAME, ServiceError, call_service
+from support import PYTHON_ROOT, BoardTestCase
+
+from buddy.contracts import CONTROL_NAME, CONTRACT_VERSION, WAIT_NAME, BuddyControl, BuddyWait
+from buddy.transport import _read_endpoint
+
+SCHEMA_VERSION = 5
 
 
-FAKE_ENGINE = r"""
-import readline from 'node:readline';
-import fs from 'node:fs';
-import path from 'node:path';
-const file = path.join(process.env.BUDDY_STATE_DIR, 'fake-runs.json');
-let runs = fs.existsSync(file) ? JSON.parse(fs.readFileSync(file,'utf8')) : [];
-const save = () => fs.writeFileSync(file, JSON.stringify(runs));
-const send = value => process.stdout.write(JSON.stringify(value)+'\n');
-const input = readline.createInterface({input:process.stdin});
-input.on('line', line => {
-  const {id,method,params:p} = JSON.parse(line);
-  try {
-    let result;
-    if(method==='health') result={status:'ready',pid:process.pid};
-    else if(method==='wait') {setTimeout(()=>send({id,result:{status:'wait-finished'}}),p.timeoutMs||0);return;}
-    else if(method==='list') result={runs:runs.slice(p.offset||0,(p.offset||0)+(p.limit||20)),total:runs.length};
-    else if(method==='start') {
-      result=runs.find(r=>r.requestId===p.requestId);
-      if(!result) {
-        result={runId:'run-'+p.requestId,requestId:p.requestId,status:'running',resultAvailable:false,revision:1};
-        runs.push(result);save();
-        const run=result;
-        setTimeout(()=>{run.status='completed';run.resultAvailable=true;run.revision++;save();send({event:'run_completed',run});send({event:'run_completed',run});},250);
-      }
-    } else if(method==='stop') {send({id,result:{status:'stopped'}});setTimeout(()=>process.exit(0),30);return;}
-    else {result=runs.find(r=>r.runId===p.runId);if(!result) throw Object.assign(new Error('not found'),{code:'NOT_FOUND'});}
-    send({id,result});
-  } catch(e) {send({id,error:{code:e.code||'ERROR',message:e.message}});}
-});
-input.on('close',()=>process.exit(0));
-"""
+class TestNamedContract(BoardTestCase):
+    def _endpoint(self):
+        endpoint = _read_endpoint(self.directory)
+        self.assertIsNotNone(endpoint, "the daemon must publish a private endpoint")
+        return endpoint
 
+    def _wait_call(self, endpoint, operation: str, params: dict) -> dict:
+        with cc.connect(BuddyWait, name=WAIT_NAME, address=endpoint["address"]) as wait:
+            return json.loads(getattr(wait, operation)(json.dumps({"token": endpoint["token"], **params})))
 
-def eventually(check):
-    deadline = time.monotonic() + 10
-    while time.monotonic() < deadline:
-        value = check()
-        if value:
-            return value
-        time.sleep(0.04)
-    raise AssertionError("Timed out waiting for condition")
+    def test_every_operation_is_named_and_authenticated(self):
+        with self.daemon():
+            endpoint = self._endpoint()
+            with cc.connect(BuddyControl, name=CONTROL_NAME, address=endpoint["address"]) as board:
+                health = json.loads(board.health(json.dumps({"token": endpoint["token"]})))
+                self.assertEqual(health["status"], "ok")
+                self.assertEqual(health["contractVersion"], CONTRACT_VERSION)
+                self.assertEqual(health["schemaVersion"], SCHEMA_VERSION)
+                self.assertIn("runtimeIdentity", health)
+                self.assertTrue(hasattr(board, "worker_claim"))
+                self.assertTrue(hasattr(board, "events_read"))
+                self.assertFalse(hasattr(board, "dispatch"), "no generic dispatch facade may exist")
+                denied = json.loads(board.task_list(json.dumps({"token": "wrong"})))
+                self.assertEqual(denied["error"]["code"], "UNAUTHORIZED")
+                rejected = json.loads(
+                    board.task_list(json.dumps({"token": endpoint["token"], "nonsense": 1}))
+                )
+                self.assertEqual(rejected["error"]["code"], "INVALID_ARGUMENT")
 
+    def test_the_wait_route_is_a_separate_resource_with_its_own_capacity(self):
+        with self.daemon(env={"BUDDY_WAIT_CAPACITY": "1"}):
+            endpoint = self._endpoint()
+            capacity = self._wait_call(endpoint, "wait_capacity", {})
+            self.assertEqual(capacity["capacity"], 1)
+            with cc.connect(BuddyControl, name=CONTROL_NAME, address=endpoint["address"]) as board:
+                reply = json.loads(
+                    board.task_submit(
+                        json.dumps(
+                            {
+                                "token": endpoint["token"],
+                                "requestId": "wait-route",
+                                "task": "do",
+                                "cwd": str(self.workdir()),
+                                "adapter": "external",
+                            }
+                        )
+                    )
+                )
+                self.assertEqual(reply["task"]["status"], "queued")
+                task_id = reply["task"]["runId"]
+                cursor = json.loads(board.events_read(json.dumps({"token": endpoint["token"]})))["cursor"]
+                # Startup can still register a worker after the cursor read. Scope
+                # this wait to an external task that only this test can change.
+                params = {"after": cursor, "taskId": task_id, "timeoutMs": 10000}
+                with ThreadPoolExecutor(max_workers=1) as pool:
+                    holder = pool.submit(self._wait_call, endpoint, "events_wait", params)
+                    deadline = time.monotonic() + 5
+                    while self._wait_call(endpoint, "wait_capacity", {})["admitted"] != 1:
+                        if holder.done():
+                            self.fail(f"The holder returned before admission was observed: {holder.result()}")
+                        if time.monotonic() >= deadline:
+                            self.fail("The holder did not acquire the wait slot")
+                        time.sleep(0.02)
 
-class Inbox:
-    def __init__(self, acknowledge=None):
-        self.events = []
-        self.lock = threading.Lock()
-        self.acknowledge = acknowledge
+                    # An unrelated event must not release the scoped wait slot.
+                    registration = json.loads(board.worker_register(json.dumps({
+                        "token": endpoint["token"], "workerId": "unrelated", "adapter": "external",
+                    })))
+                    self.assertNotIn("error", registration)
+                    overloaded = self._wait_call(endpoint, "events_wait", {**params, "timeoutMs": 100})
+                    self.assertIn("error", overloaded, overloaded)
+                    self.assertEqual(overloaded["error"]["code"], "WAIT_OVERLOAD")
+                    self.assertEqual(overloaded["error"]["details"]["retryAfterMs"], 250)
+                    self.assertIn("cursor", overloaded["error"]["details"])
+                    # Control capacity remains available; this mutation also wakes
+                    # the holder through the event it was actually waiting for.
+                    started = time.monotonic()
+                    cancelled = json.loads(board.task_cancel(json.dumps({
+                        "token": endpoint["token"], "runId": task_id,
+                    })))
+                    self.assertEqual(cancelled["task"]["status"], "cancelled")
+                    self.assertLess(time.monotonic() - started, 5, "a mutation must not wait for the wait route")
+                    held = holder.result(timeout=5)
+                    self.assertFalse(held["timedOut"])
+                    self.assertEqual([event["kind"] for event in held["events"]], ["task.cancelled"])
+                    self.assertEqual(held["events"][0]["taskId"], task_id)
 
-    def submit(self, event_json: str) -> str:
-        with self.lock:
-            event = json.loads(event_json)
-            self.events.append(event)
-        if self.acknowledge:
-            self.acknowledge(event)
-        return json.dumps({"status": "received"})
+    def test_multiple_clients_share_one_authoritative_task(self):
+        with self.daemon():
+            endpoint = self._endpoint()
+            payload = json.dumps(
+                {"token": endpoint["token"], "requestId": "shared", "task": "do", "cwd": str(self.workdir())}
+            )
+            with cc.connect(BuddyControl, name=CONTROL_NAME, address=endpoint["address"]) as first:
+                with cc.connect(BuddyControl, name=CONTROL_NAME, address=endpoint["address"]) as second:
+                    one = json.loads(first.task_submit(payload))
+                    two = json.loads(second.task_submit(payload))
+                    self.assertEqual(one["task"]["runId"], two["task"]["runId"])
+                    self.assertTrue(two["duplicate"])
 
-
-class CTwoServiceTests(unittest.TestCase):
-    def setUp(self):
-        self.temp = tempfile.TemporaryDirectory(prefix="buddy-ctwo-")
-        self.directory = Path(self.temp.name)
-        self.engine = self.directory / "fake-engine.mjs"
-        self.engine.write_text(FAKE_ENGINE)
-        self.environment = patch.dict(os.environ, {"BUDDY_STATE_DIR": str(self.directory), "BUDDY_ENGINE_PATH": str(self.engine), "C2_ENV_FILE": "", "C2_RELAY_ANCHOR_ADDRESS": ""})
-        self.environment.start()
-
-    def tearDown(self):
-        endpoint_file = self.directory / "control.json"
-        if endpoint_file.exists():
-            try:
-                call_service("stop", state_dir=self.directory)
-            except ServiceError:
-                pass
-            eventually(lambda: not endpoint_file.exists())
-        cc.shutdown()
-        self.environment.stop()
-        self.temp.cleanup()
-
-    def test_cross_process_concurrent_clients_idempotency_notification_and_auth(self):
-        inbox = Inbox()
-        cc.register(CompletionInbox, inbox, name=INBOX_NAME, concurrency=cc.ConcurrencyConfig(mode=cc.ConcurrencyMode.PARALLEL))
-        binding = {"address": cc.server_address(), "token": "notification-secret", "threadId": "isolated-test-thread"}
-        with concurrent.futures.ThreadPoolExecutor(max_workers=3) as pool:
-            health = list(pool.map(lambda _: call_service("health", state_dir=self.directory), range(3)))
-        self.assertEqual(len({item["pid"] for item in health}), 1)
-        endpoint = json.loads((self.directory / "control.json").read_text())
-        self.assertNotEqual(endpoint["pid"], os.getpid())
-        self.assertEqual((self.directory / "control.json").stat().st_mode & 0o777, 0o600)
-        with cc.connect(BuddyControl, name=CONTROL_NAME, address=endpoint["address"]) as service:
-            denied = json.loads(service.dispatch(json.dumps({"method": "health", "params": {}})))
-        self.assertEqual(denied["error"]["code"], "UNAUTHORIZED")
-        params = {"requestId": "one", "cwd": str(self.directory), "task": "mock", "_notify": binding}
-        first = call_service("start", params, self.directory)
-        repeated = call_service("start", params, self.directory)
-        self.assertEqual(first["runId"], repeated["runId"])
-        with self.assertRaises(ServiceError) as conflict:
-            call_service("start", {**params, "_notify": {**binding, "threadId": "another-thread"}}, self.directory)
-        self.assertEqual(conflict.exception.code, "CONFLICT")
-        eventually(lambda: len(inbox.events) == 1)
-        status = eventually(lambda: (s if (s := call_service("status", {"runId": first["runId"]}, self.directory))["notification"]["status"] == "received" else None))
-        self.assertNotIn("token", status["notification"])
-        self.assertNotIn("address", status["notification"])
-        self.assertEqual(inbox.events[0]["eventId"], first["runId"])
-        with self.assertRaises(ServiceError) as denied:
-            call_service("notification_ack", {"runId": first["runId"], "token": "wrong", "status": "submitted"}, self.directory)
-        self.assertEqual(denied.exception.code, "UNAUTHORIZED")
-        accepted = call_service("notification_ack", {"runId": first["runId"], "token": binding["token"], "status": "submitted"}, self.directory)
-        self.assertEqual(accepted["notification"]["status"], "submitted")
-        self.assertEqual(len(inbox.events), 1)
-
-    def test_client_exit_does_not_stop_run_and_service_restart_preserves_it(self):
-        code = "from buddy.transport import call_service; import json; print(json.dumps(call_service('start', {'requestId':'detached','task':'mock','cwd':'.'})))"
-        child = subprocess.run([sys.executable, "-c", code], env=dict(os.environ), capture_output=True, text=True, timeout=25)
-        self.assertEqual(child.returncode, 0, child.stderr)
-        run = json.loads(child.stdout)
-        completed = eventually(lambda: (s if (s := call_service("status", {"runId": run["runId"]}, self.directory))["resultAvailable"] else None))
-        self.assertEqual(completed["status"], "completed")
-        endpoint = self.directory / "control.json"
-        call_service("stop", state_dir=self.directory)
-        eventually(lambda: not endpoint.exists())
-        self.assertEqual(call_service("result", {"runId": run["runId"]}, self.directory)["status"], "completed")
-
-    def test_live_legacy_service_prevents_second_engine(self):
-        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as legacy:
-            legacy.bind(str(self.directory / "service.sock"))
-            legacy.listen()
-            with self.assertRaises(ServiceError) as failure:
-                call_service("health", state_dir=self.directory)
-            self.assertEqual(failure.exception.code, "SERVICE_START_FAILED")
-            self.assertFalse((self.directory / "fake-runs.json").exists())
-
-    def test_stop_missing_service_does_not_spawn(self):
-        self.assertTrue(call_service("stop", state_dir=self.directory)["alreadyStopped"])
-        self.assertFalse((self.directory / "control.json").exists())
-        self.assertFalse((self.directory / "control.log").exists())
-
-    def test_new_service_rejects_old_client_and_legacy_bind(self):
-        call_service("health", state_dir=self.directory)
-        address = str(self.directory / "service.sock")
-        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as old_client:
-            old_client.settimeout(2)
-            old_client.connect(address)
-            old_client.sendall(b'{"id":"old","method":"health","params":{}}\n')
-            reply = json.loads(old_client.recv(8192))
-        self.assertEqual(reply["error"]["code"], "MIGRATED")
-        self.assertEqual(reply["id"], "old")
-        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as old_daemon:
-            with self.assertRaises(OSError):
-                old_daemon.bind(address)
-
-    def test_stale_legacy_socket_is_preserved_and_blocks_start(self):
-        address = self.directory / "service.sock"
-        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as stale:
-            stale.bind(str(address))
-        identity = address.stat().st_ino
-        with self.assertRaises(ServiceError):
-            call_service("health", state_dir=self.directory)
-        self.assertEqual(address.stat().st_ino, identity)
-        self.assertFalse((self.directory / "fake-runs.json").exists())
-
-    def test_notification_rebind_only_before_first_delivery(self):
-        inbox = Inbox()
-        cc.register(CompletionInbox, inbox, name=INBOX_NAME)
-        params = {"requestId": "rebind", "cwd": str(self.directory), "task": "mock", "_notify": {"address": "ipc://retired-receiver", "token": "old-token", "threadId": "same-thread"}}
-        run = call_service("start", params, self.directory)
-        params["_notify"] = {"address": cc.server_address(), "token": "new-token", "threadId": "same-thread"}
-        self.assertEqual(call_service("start", params, self.directory)["runId"], run["runId"])
-        eventually(lambda: len(inbox.events) == 1)
-        self.assertEqual(inbox.events[0]["token"], "new-token")
-        eventually(lambda: call_service("status", {"runId": run["runId"]}, self.directory)["notification"]["status"] == "received")
-        params["_notify"] = {"address": "ipc://another-receiver", "token": "third-token", "threadId": "same-thread"}
-        recovered = call_service("start", params, self.directory)
-        self.assertEqual(recovered["runId"], run["runId"])
-        self.assertEqual(recovered["notification"]["status"], "received")
-        self.assertEqual(len(inbox.events), 1)
-
-    def test_recovery_delivers_registered_terminal_run_once_and_never_replays_uncertain(self):
-        inbox = Inbox()
-        cc.register(CompletionInbox, inbox, name=INBOX_NAME)
-        notifications = self.directory / "notifications"
-        notifications.mkdir(mode=0o700)
-        runs = []
-        for request_id, status in [("registered", "registered"), ("uncertain", "dispatching")]:
-            run_id = "run-" + request_id
-            runs.append({"runId": run_id, "requestId": request_id, "status": "completed", "resultAvailable": True})
-            record = {"requestId": request_id, "runId": run_id, "status": status, "address": cc.server_address(), "token": "secret", "threadId": "test-thread"}
-            path = notifications / (hashlib.sha256(request_id.encode()).hexdigest() + ".json")
-            path.write_text(json.dumps(record))
-        (self.directory / "fake-runs.json").write_text(json.dumps(runs))
-        call_service("health", state_dir=self.directory)
-        eventually(lambda: len(inbox.events) == 1)
-        self.assertEqual(inbox.events[0]["requestId"], "registered")
-        uncertain = call_service("status", {"runId": "run-uncertain"}, self.directory)
-        self.assertEqual(uncertain["notification"]["status"], "unknown")
-        endpoint = self.directory / "control.json"
-        call_service("stop", state_dir=self.directory)
-        eventually(lambda: not endpoint.exists())
-        call_service("health", state_dir=self.directory)
-        self.assertEqual(len(inbox.events), 1)
-
-    def test_submitted_acknowledgement_before_receipt_is_not_overwritten(self):
-        def acknowledge(event):
-            call_service("notification_ack", {"runId": event["runId"], "token": event["token"], "status": "submitted"}, self.directory)
-        inbox = Inbox(acknowledge)
-        cc.register(CompletionInbox, inbox, name=INBOX_NAME, concurrency=cc.ConcurrencyConfig(mode=cc.ConcurrencyMode.PARALLEL))
-        run = call_service("start", {"requestId": "ack-race", "task": "mock", "cwd": str(self.directory), "_notify": {"address": cc.server_address(), "token": "race-secret", "threadId": "test-thread"}}, self.directory)
-        eventually(lambda: (s := call_service("status", {"runId": run["runId"]}, self.directory))["notification"]["status"] == "submitted")
-        self.assertEqual(len(inbox.events), 1)
+    def test_a_second_daemon_refuses_to_share_the_state_directory(self):
+        with self.daemon():
+            code, health = self.cli("health")
+            self.assertEqual(code, 0, health)
+            environment = {
+                **os.environ,
+                "BUDDY_STATE_DIR": str(self.directory),
+                "PYTHONPATH": str(PYTHON_ROOT),
+                "VIRTUAL_ENV": "",
+            }
+            second = subprocess.run(
+                [sys.executable, "-m", "buddy.daemon"], env=environment, capture_output=True, text=True, timeout=60
+            )
+            self.assertEqual(second.returncode, 2)
+            self.assertIn("ALREADY_RUNNING", second.stderr)
 
 
 if __name__ == "__main__":
