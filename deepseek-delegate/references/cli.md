@@ -1,9 +1,6 @@
 # Buddy CLI reference
 
-`buddy` is the supported entrypoint: one command per operation, one JSON object
-argument, one JSON object on stdout. This page is the complete command surface and its
-defaults, bounds, envelopes and error codes. Usage flows are in [usage.md](usage.md);
-runtime lifecycle is in [operations.md](operations.md).
+`buddy` is the supported entrypoint: one command per operation, one JSON object argument, one JSON object on stdout. This page is the complete command surface and its defaults, bounds, envelopes and error codes. Usage flows are in [usage.md](usage.md); runtime lifecycle is in [operations.md](operations.md).
 
 ## Invocation
 
@@ -12,30 +9,15 @@ BUDDY='/abs/path/to/deepseek-delegate/scripts/launch-buddy.sh'
 "$BUDDY" status '{"runId":"<runId>"}'
 ```
 
-From the project directory the same CLI is `uv run --frozen --project deepseek-delegate
-buddy <command> '<json>'`. The launcher resolves the project from its own location,
-selects Python 3.12 through uv, and forwards arguments verbatim. An unknown command or
-missing command is an argparse usage error; the JSON argument defaults to `{}`.
-Service request schemas reject unknown JSON parameters with `INVALID_ARGUMENT`. The
-local `worker-start`/`worker-stop` commands currently ignore extra fields; use only their
-documented parameters.
+From the project directory the same CLI is `uv run --frozen --project deepseek-delegate buddy <command> '<json>'`. The launcher resolves the project from its own location, selects Python 3.12 through uv, and forwards arguments verbatim. An unknown command or missing command is an argparse usage error; the JSON argument defaults to `{}`. Service request schemas reject unknown JSON parameters with `INVALID_ARGUMENT`. The local `worker-start`/`worker-stop` commands currently ignore extra fields; use only their documented parameters.
 
 ## Envelope and exit status
 
 - Success prints one pretty-printed JSON object and exits 0.
-- A failure prints `{"error":{"code":"...","message":"..."}}` and exits 1. The service
-  can attach an `error.details` object (a revision, a resumable cursor, conflicting
-  fingerprints), but the transport wrapper used by the CLI and `BoardClient` rebuilds
-  errors from `code` and `message`. Those details remain in the raw C-Two response.
-  Command-line usage errors are argparse errors and exit 2.
-- A transport error or invalid response can leave the submission outcome unknown:
-  the task may have committed before the reply was lost. Query the original
-  `requestId`, or replay the identical start request to recover it. A different
-  request ID can duplicate work. A `WAIT_ABANDONED` envelope ends only the wait.
-- Exit 0 only means the call returned. It is **not** task success: read `status`,
-  `outcome`, `resultDelivered` and `shutdownConfirmed`, then inspect the artifacts.
-- `run`/`await` may print a `WAIT_ABANDONED` envelope when the wait is interrupted; the
-  durable task keeps running and the envelope names the real recovery commands.
+- A failure prints `{"error":{"code":"...","message":"..."}}` and exits 1. The service can attach an `error.details` object (a revision, a resumable cursor, conflicting fingerprints), but the transport wrapper used by the CLI and `BoardClient` rebuilds errors from `code` and `message`. Those details remain in the raw C-Two response. Command-line usage errors are argparse errors and exit 2.
+- A transport error or invalid response can leave the submission outcome unknown: the task may have committed before the reply was lost. Query the original `requestId`, or replay the identical start request to recover it. A different request ID can duplicate work. A `WAIT_ABANDONED` envelope ends only the wait.
+- Exit 0 only means the call returned. It is **not** task success: read `status`, `outcome`, `resultDelivered` and `shutdownConfirmed`, then inspect the artifacts.
+- `run`/`await` may print a `WAIT_ABANDONED` envelope when the wait is interrupted; the durable task keeps running and the envelope names the real recovery commands.
 
 ## Commands
 
@@ -48,12 +30,7 @@ documented parameters.
 | `start` | submit fields | Starts or recovers one task and returns the task view immediately; `status: "queued"` with `queueReason` |
 | `submit` | submit fields | Same board operation as `start`, for multi-agent callers |
 
-Submit fields: `requestId` (1–128 chars, required), `task` (required, ≤1 MiB),
-`cwd` (required absolute existing directory), `adapter` (`dsh` default, `command`,
-`external`), `argv` (only for `command`; 1–256 entries, each ≤32768 bytes),
-`model`, `provider`, `effort`, `timeoutSeconds` (10–86400, default 1800),
-`workspace` (default `true`), `owner`, `requiredCapabilities` (≤32),
-`exclusiveResources` (≤32). Any other field is rejected.
+Submit fields: `requestId` (1–128 chars, required), `task` (required, ≤1 MiB), `cwd` (required absolute existing directory), `adapter` (`dsh` default, `command`, `external`), `argv` (only for `command`; 1–256 entries, each ≤32768 bytes), `model`, `provider`, `effort`, `timeoutSeconds` (10–86400, default 1800), `workspace` (default `true`), `owner`, `requiredCapabilities` (≤32), `exclusiveResources` (≤32). Any other field is rejected.
 
 ### Tasks
 
@@ -76,19 +53,9 @@ Submit fields: `requestId` (1–128 chars, required), `task` (required, ≤1 MiB
 | `wait` | `runId`/`taskId`, optional `afterRevision`, `timeoutMs` 0–30000 (default 30000) | Bounded wait for one task to change or finish; returns the task view |
 | `wait-capacity` | none | Wait admission counters `capacity`, `admitted`, `rejected`, `available` |
 
-`wait` and `watch` never cold-start a service: with no running daemon they return
-`SERVICE_UNAVAILABLE`. When every admitted wait slot is busy the service returns a
-resumable `WAIT_OVERLOAD` whose `details` carry `cursor`, `retryAfterMs` and `capacity`;
-the message says no task state changed and the caller should retry from the same cursor.
-(As noted above, the CLI prints the code and message without `details`.) Event-producing
-business operations commit the state change and event together. Lease renewal and
-liveness updates do not each emit an event; the event stream is a replayable outbox.
+`wait` and `watch` never cold-start a service: with no running daemon they return `SERVICE_UNAVAILABLE`. When every admitted wait slot is busy the service returns a resumable `WAIT_OVERLOAD` whose `details` carry `cursor`, `retryAfterMs` and `capacity`; the message says no task state changed and the caller should retry from the same cursor. (As noted above, the CLI prints the code and message without `details`.) Event-producing business operations commit the state change and event together. Lease renewal and liveness updates do not each emit an event; the event stream is a replayable outbox.
 
-Event kinds include `task.submitted`, `task.cancel_requested`, `task.cancelled`,
-`task.completed`, `task.failed`, `task.retried`, `task.review_archived`,
-`task.accepted`, `task.rejected`, `task.imported`, `attempt.claimed`,
-`attempt.progress`, `attempt.reconciled`, `attempt.released`, `attempt.uncertain`,
-`attempt.lease_expired`, `worker.registered`, `message.posted` and `message.updated`.
+Event kinds include `task.submitted`, `task.cancel_requested`, `task.cancelled`, `task.completed`, `task.failed`, `task.retried`, `task.review_archived`, `task.accepted`, `task.rejected`, `task.imported`, `attempt.claimed`, `attempt.progress`, `attempt.reconciled`, `attempt.released`, `attempt.uncertain`, `attempt.lease_expired`, `worker.registered`, `message.posted` and `message.updated`.
 
 ### Messages and inquiry
 
@@ -102,37 +69,13 @@ Event kinds include `task.submitted`, `task.cancel_requested`, `task.cancelled`,
 
 Inquiry rules:
 
-- `inquiryId` matches `[A-Za-z0-9._:-]{1,128}`. Repeating an id with different text is a
-  `CONFLICT` for active and terminal tasks. Re-reading through `inquire` requires both
-  the same text and the same id; `message-get` reads it by identity alone.
-- Message states are `queued` (recorded, waiting for a delivery boundary), `claimed`
-  (consumed for a proposed step, not delivery), `delivered` (the run's durable commit),
-  `answered` (a correlated reply was recorded), `discarded` (dropped before a boundary)
-  and `unavailable` (no bridge, a terminal task, or a question that can no longer be
-  claimed or answered).
-- The dsh inquiry bridge requires the run's correlated reply tool and does not parse
-  assistant prose as an answer. The public `message-update` operation can separately
-  record caller-provided answer evidence; check its attribution.
-  Questions and answers are each bounded at 4000 UTF-8 bytes and at most 32 inquiries
-  are retained per task (`TOO_MANY_INQUIRIES` beyond that).
-- `waitMs`/`timeoutMs` only bound this call's wait. An inquiry never extends, pauses or
-  cancels the execution deadline, and it never wakes a terminal agent.
-- A bounded question can return in state `delivered` before any answer exists; check
-  `inquiry.answer.available` (and `message.state`) before reporting an answer. An
-  `answered` journal record without usable text is downgraded to `delivered` with a
-  reason rather than reported as answered.
-- The no-question form reports durable state plus a bounded `live` observation
-  (`agentStatus`, inbox depth, `lastEvent` and up to 20 activity entries); fields it
-  cannot observe are named in `live.unavailable` instead of being reported as zero.
-  `deadline` is explicitly an estimate: `estimated: true`,
-  `kind: "estimated-runner-deadline-from-record-createdAt"`,
-  `deadlineBasis: "createdAt + timeoutSeconds"`, plus `clockOrigin`, `startedAt`,
-  `deadlineAt`, `remainingSeconds` and `exactTimingAvailable: false`.
-- `live.agentStatus: "running"` means an agent driver is active, not that it is making
-  progress; raw model reasoning is never exposed. Bridge transport failures report
-  `bridge-unreachable`, `bridge-timeout`, `bridge-refused`, `bridge-invalid-response` or
-  `bridge-mismatched-response`, and a recorded answer carries its provenance
-  (`live-bridge` or `bridge-journal`).
+- `inquiryId` matches `[A-Za-z0-9._:-]{1,128}`. Repeating an id with different text is a `CONFLICT` for active and terminal tasks. Re-reading through `inquire` requires both the same text and the same id; `message-get` reads it by identity alone.
+- Message states are `queued` (recorded, waiting for a delivery boundary), `claimed` (consumed for a proposed step, not delivery), `delivered` (the run's durable commit), `answered` (a correlated reply was recorded), `discarded` (dropped before a boundary) and `unavailable` (no bridge, a terminal task, or a question that can no longer be claimed or answered).
+- The dsh inquiry bridge requires the run's correlated reply tool and does not parse assistant prose as an answer. The public `message-update` operation can separately record caller-provided answer evidence; check its attribution. Questions and answers are each bounded at 4000 UTF-8 bytes and at most 32 inquiries are retained per task (`TOO_MANY_INQUIRIES` beyond that).
+- `waitMs`/`timeoutMs` only bound this call's wait. An inquiry never extends, pauses or cancels the execution deadline, and it never wakes a terminal agent.
+- A bounded question can return in state `delivered` before any answer exists; check `inquiry.answer.available` (and `message.state`) before reporting an answer. An `answered` journal record without usable text is downgraded to `delivered` with a reason rather than reported as answered.
+- The no-question form reports durable state plus a bounded `live` observation (`agentStatus`, inbox depth, `lastEvent` and up to 20 activity entries); fields it cannot observe are named in `live.unavailable` instead of being reported as zero. `deadline` is explicitly an estimate: `estimated: true`, `kind: "estimated-runner-deadline-from-record-createdAt"`, `deadlineBasis: "createdAt + timeoutSeconds"`, plus `clockOrigin`, `startedAt`, `deadlineAt`, `remainingSeconds` and `exactTimingAvailable: false`.
+- `live.agentStatus: "running"` means an agent driver is active, not that it is making progress; raw model reasoning is never exposed. Bridge transport failures report `bridge-unreachable`, `bridge-timeout`, `bridge-refused`, `bridge-invalid-response` or `bridge-mismatched-response`, and a recorded answer carries its provenance (`live-bridge` or `bridge-journal`).
 
 ### Workers
 
@@ -148,8 +91,7 @@ Inquiry rules:
 | `worker-release` | actor fields; optional `reason`, `workerInstance`, `evidence: {"spawnIntentWritten": false}` | Releases an attempt that never started; explicit evidence must come from the claiming instance |
 | `worker-start` / `worker-stop` | `workerId` (default `local`), optional `stateDir` | Starts one detached supervisor in its own session, or writes a cooperative durable stop request (never a signal) |
 
-Actor fields are `workerId`, `attemptId`, `generation` and `nonce`. Normally these
-operations are used through `BoardClient`; see [workers.md](workers.md).
+Actor fields are `workerId`, `attemptId`, `generation` and `nonce`. Normally these operations are used through `BoardClient`; see [workers.md](workers.md).
 
 ### Service, runtime and legacy
 
@@ -163,8 +105,7 @@ operations are used through `BoardClient`; see [workers.md](workers.md).
 | `stop` | optional `reason`, `drainSeconds` 0–120 (default 10) | Cancels queued tasks, writes durable cancel intent for active attempts, drains, returns `unresolvedAttempts` |
 | `legacy-import` | `sourceDir` plus optional `dryRun` (default `true`), `strict` (default `true`), `requestIds`, `snapshot` (default `false`) | Offline transactional import of removed Node records; see [operations.md](operations.md#legacy-import) |
 
-`stop` and `restart` with no running daemon return an `alreadyStopped` envelope and
-start nothing.
+`stop` and `restart` with no running daemon return an `alreadyStopped` envelope and start nothing.
 
 ## Defaults and bounds
 
@@ -218,18 +159,6 @@ start nothing.
 
 ## `run`/`await` envelope
 
-`run` and `await` print the same envelope shape: `runId`, `requestId`, `status`,
-`outcome`, `ok`, `resultAvailable`, `resultDelivered`, `shutdownConfirmed`, `acceptedAt`,
-`revision`, `createdAt`, `updatedAt`, `cwd`, `logPaths`, `waitedSeconds`, `waitSeconds`,
-`maxWaitSeconds`, `runnerDeadlineSeconds`, `waitCoversRunnerDeadline`, `timedOut`,
-`reconnects`, `result`, `recovery`, `limitation`, `error` and a `note`.
+`run` and `await` print the same envelope shape: `runId`, `requestId`, `status`, `outcome`, `ok`, `resultAvailable`, `resultDelivered`, `shutdownConfirmed`, `acceptedAt`, `revision`, `createdAt`, `updatedAt`, `cwd`, `logPaths`, `waitedSeconds`, `waitSeconds`, `maxWaitSeconds`, `runnerDeadlineSeconds`, `waitCoversRunnerDeadline`, `timedOut`, `reconnects`, `result`, `recovery`, `limitation`, `error` and a `note`.
 
-`outcome` is the terminal task status (`completed`, `failed`, `cancelled`,
-`reconciliation-needed`), `wait-timeout` when this call's window ended first, or
-`unavailable` when the service could not be reached while waiting. A task that reaches
-its own execution deadline ends as a terminal `failed` with the adapter
-`status: "timeout"`. The `recovery` block names real commands with the existing run ID
-(`buddy status`, `buddy await`, `buddy result`, `buddy cancel`). `ok` is true only when
-the outcome is `completed` **and** this envelope carries the result payload **and** no
-error was recorded; a completed run whose result could not be delivered is reported as
-`completed-no-result` with `ok: false`, never as success.
+`outcome` is the terminal task status (`completed`, `failed`, `cancelled`, `reconciliation-needed`), `wait-timeout` when this call's window ended first, or `unavailable` when the service could not be reached while waiting. A task that reaches its own execution deadline ends as a terminal `failed` with the adapter `status: "timeout"`. The `recovery` block names real commands with the existing run ID (`buddy status`, `buddy await`, `buddy result`, `buddy cancel`). `ok` is true only when the outcome is `completed` **and** this envelope carries the result payload **and** no error was recorded; a completed run whose result could not be delivered is reported as `completed-no-result` with `ok: false`, never as success.

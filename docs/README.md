@@ -1,8 +1,6 @@
 # Documentation index
 
-This page names every document in the repository and what it owns. It is for readers who
-want the detail behind the [README](../README.md), and for maintainers deciding where a
-change belongs.
+This page names every document in the repository and what it owns. It is for readers who want the detail behind the [README](../README.md), and for maintainers deciding where a change belongs.
 
 ## Human entry points
 
@@ -11,8 +9,7 @@ change belongs.
 | [README.md](../README.md) | English entry point: why Buddy is useful, what to delegate, requirements, the one install path, a first natural-language request, boundaries and support links |
 | [README.zh-CN.md](../README.zh-CN.md) | Chinese entry point with the same structure and content (language parity) |
 
-Both READMEs stay concise and avoid internal terminology; details belong in the
-references below.
+Both READMEs stay concise and avoid internal terminology; details belong in the references below.
 
 ## Operating the skill
 
@@ -26,17 +23,11 @@ references below.
 | [deepseek-delegate/references/handoff.md](../deepseek-delegate/references/handoff.md) | Standalone owner-resumption helper (`scripts/handoff.mjs`) for work that outlives the turn; App heartbeat and verified CLI callback routes |
 | [deepseek-delegate/references/plugin-service.md](../deepseek-delegate/references/plugin-service.md) | Compatibility index: keeps the old service-manual headings as forwarding sections and links the focused pages |
 
-The whole `deepseek-delegate/` directory can be copied and installed on its own, so every
-link inside it is relative to that directory. The two skill entrypoints are
-[deepseek-delegate/SKILL.md](../deepseek-delegate/SKILL.md) (standalone `$deepseek-delegate`)
-and [skills/buddy/SKILL.md](../skills/buddy/SKILL.md) (plugin `$buddy`); each is a compact
-operational entrypoint that links to the packaged references above.
+The whole `deepseek-delegate/` directory can be copied and installed on its own, so every link inside it is relative to that directory. The two skill entrypoints are [deepseek-delegate/SKILL.md](../deepseek-delegate/SKILL.md) (standalone `$deepseek-delegate`) and [skills/buddy/SKILL.md](../skills/buddy/SKILL.md) (plugin `$buddy`); each is a compact operational entrypoint that links to the packaged references above.
 
 ## Current architecture
 
-[architecture.md](../deepseek-delegate/references/architecture.md) describes the
-implemented process topology, state ownership, transactions, identities, recovery and
-limits. Start here when modifying the service or integrating another agent.
+[architecture.md](../deepseek-delegate/references/architecture.md) describes the implemented process topology, state ownership, transactions, identities, recovery and limits. Start here when modifying the service or integrating another agent.
 
 ## History and evidence
 
@@ -51,7 +42,4 @@ limits. Start here when modifying the service or integrating another agent.
 | --- | --- |
 | [AGENTS.md](../AGENTS.md) | Repository development invariants, verification commands and topic-based routing: which document to update for which kind of change |
 
-When behavior changes, update the owning reference first, then the READMEs and both
-skills if the user-visible entry path changed, and record acceptance evidence under
-`docs/acceptance/`. Keep architecture statements verified against source; the historical
-ADR is not updated to match new behavior.
+When behavior changes, update the owning reference first, then the READMEs and both skills if the user-visible entry path changed, and record acceptance evidence under `docs/acceptance/`. Keep architecture statements verified against source; the historical ADR is not updated to match new behavior.
