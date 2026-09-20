@@ -1,16 +1,19 @@
 # Resume the owner after delegation
 
-This reference documents the standalone `scripts/run.mjs` runner and the
-`scripts/handoff.mjs` supervisor helper. That is a separate, still-supported path from
-the C-Two job service described in [plugin-service.md](plugin-service.md): the helper
-persists its own run directory and notification files and has no durable service
-records or inquiry channel. Its `notification.json` / `--retry-notification` bookkeeping
-belongs to this standalone supervisor; it is unrelated to the removed MCP server and its
-deleted native App completion receiver.
+This reference documents the standalone `scripts/run.mjs` runner
+([runner.md](runner.md)) and the `scripts/handoff.mjs` supervisor helper. That is a
+separate, still-supported path from the C-Two job service indexed by
+[plugin-service.md](plugin-service.md): the helper persists its own run directory and
+notification files and has no durable service records or inquiry channel. Its
+`notification.json` / `--retry-notification` bookkeeping belongs to this standalone
+supervisor; it is unrelated to the removed MCP server and its deleted native App
+completion receiver.
 
 Choose by available capabilities, not the executable's location or the app name.
 `codex` bundled inside ChatGPT.app does not establish connectivity to its tasks.
 These routes implement transport and durable results; neither asserts task correctness.
+
+Replace the quoted `<...>` placeholders in the commands below with verified values.
 
 ## App / ChatGPT App
 
@@ -49,10 +52,10 @@ Use the App's heartbeat automation tool when available. Shell scripts cannot cal
 4. Start the wrapper, passing the verified automation ID:
 
    ```sh
-   node <skill-dir>/scripts/handoff.mjs --background \
-     --run-dir <absolute-new-run-dir> --thread <original-thread-id> \
-     --mode app --heartbeat-id <verified-automation-id> -- \
-     --cwd <workspace> --task-file <packet-file>
+   node '<skill-dir>/scripts/handoff.mjs' --background \
+     --run-dir '<absolute-new-run-dir>' --thread '<original-thread-id>' \
+     --mode app --heartbeat-id '<verified-automation-id>' -- \
+     --cwd '<workspace>' --task-file '<packet-file>'
    ```
 
 5. Confirm startup output and inspect `run.json` (or `result.json` for fast runs).
@@ -76,11 +79,11 @@ If this cannot be verified, use the App route if available; otherwise keep the
 current turn waiting on `run.mjs`. Do not silently start a background CLI handoff.
 
 ```sh
-node <skill-dir>/scripts/handoff.mjs --background \
-  --run-dir <absolute-new-run-dir> --thread <original-thread-id> \
-  --mode cli --codex-bin <verified-absolute-codex-path> \
-  --cli-wakeup-verified --remote <verified-endpoint> -- \
-  --cwd <workspace> --task-file <packet-file>
+node '<skill-dir>/scripts/handoff.mjs' --background \
+  --run-dir '<absolute-new-run-dir>' --thread '<original-thread-id>' \
+  --mode cli --codex-bin '<verified-absolute-codex-path>' \
+  --cli-wakeup-verified --remote '<verified-endpoint>' -- \
+  --cwd '<workspace>' --task-file '<packet-file>'
 ```
 
 Omit `--remote` only if the default endpoint was verified. The flag
@@ -100,7 +103,7 @@ the receiving agent must deduplicate by run ID before handling any repeated mess
 Retry delivery without rerunning dsh:
 
 ```sh
-node <skill-dir>/scripts/handoff.mjs --run-dir <existing-run-dir> --retry-notification
+node '<skill-dir>/scripts/handoff.mjs' --run-dir '<existing-run-dir>' --retry-notification
 ```
 
 A retry performs at most one queue attempt. A queued or accepted run is not sent
@@ -112,7 +115,7 @@ that a missing acknowledgement means the original message was not delivered.
 After independent verification and handling, acknowledge the run:
 
 ```sh
-node <skill-dir>/scripts/handoff.mjs --run-dir <existing-run-dir> --accept
+node '<skill-dir>/scripts/handoff.mjs' --run-dir '<existing-run-dir>' --accept
 ```
 
 This records consumption, not a test verdict. Preserve the actual failure/success

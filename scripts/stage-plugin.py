@@ -70,8 +70,8 @@ def stage(source, destination):
         # The removed Node service (engine/job manager/dashboard/inquiry) is not part
         # of the active distribution; the Python runtime package, the dsh runner
         # scripts and the upstream dsh plugins are.
-        for rel in ['.codex-plugin', 'plugin.json', 'skills', 'docs', 'LICENSE', 'README.md', 'README.zh-CN.md',
-                    'deepseek-delegate/LICENSE', 'deepseek-delegate/pyproject.toml', 'deepseek-delegate/uv.lock',
+        for rel in ['.codex-plugin', 'plugin.json', 'skills', 'docs', 'AGENTS.md', 'LICENSE', 'README.md', 'README.zh-CN.md',
+                    'deepseek-delegate/SKILL.md', 'deepseek-delegate/LICENSE', 'deepseek-delegate/pyproject.toml', 'deepseek-delegate/uv.lock',
                     'deepseek-delegate/package.json', 'deepseek-delegate/python/buddy', 'deepseek-delegate/scripts',
                     'deepseek-delegate/plugins', 'deepseek-delegate/references']:
             src = source / rel

@@ -3,6 +3,13 @@
 Status: Accepted for implementation; acceptance evidence is required before release.
 Date: 2026-09-19
 
+> **Historical record.** This ADR preserves the design requirements that led to the 0.4.0
+> implementation. It is not a description of current behavior, and its implementation and
+> migration instructions are historical — do not repeat the migration. Implemented
+> behavior is documented in
+> [architecture.md](../../deepseek-delegate/references/architecture.md); the acceptance
+> evidence is [python-blackboard-0.4.0.md](../acceptance/python-blackboard-0.4.0.md).
+
 ## Purpose
 
 Buddy becomes a durable collaboration resource shared by clients and agent workers.
@@ -11,10 +18,10 @@ Independent workers execute through adapters; dsh is one adapter, not the data m
 The implementation replaces the Node global job manager and Python-to-Node engine
 relay. Node remains necessary only inside the dsh adapter and its upstream plugins.
 
-This design is authorized by the architecture discussion. Implement on
-`socu/python-blackboard`, preserving the existing CLI-only implementation as a
-baseline. Use the installed 0.3.0 Buddy skill to delegate implementation. Acceptance
-must subsequently dispatch real work through the new blackboard itself.
+This design was authorized by the architecture discussion. Implementation was carried
+out on `socu/python-blackboard`, preserving the existing CLI-only implementation as a
+baseline. The then-installed 0.3.0 Buddy skill was used to delegate implementation, and
+acceptance subsequently dispatched real work through the new blackboard itself.
 
 ## Ownership and process topology
 
