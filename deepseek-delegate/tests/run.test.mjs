@@ -13,7 +13,9 @@ import assert from 'node:assert/strict';
 import { chmodSync, existsSync, mkdtempSync, readdirSync, realpathSync, rmSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { basename, dirname, join, sep } from 'node:path';
+import { performance } from 'node:perf_hooks';
 import { after, before, describe, test } from 'node:test';
+import { pathToFileURL } from 'node:url';
 import {
   isAlive, makeDir, makeWorkspace, modeOf, parsePayload, readArtifact, readArtifactJson,
   readText, runCli, sha256, startCli, testEnv, waitFor, waitForProcessExit, writeFile, writeMockDsh,
@@ -488,6 +490,22 @@ describe('settings handling', () => {
 });
 
 describe('outcomes and process lifecycle', () => {
+  test('elapsed time stays monotonic when the system clock moves backwards', () => {
+    const s = scenario('clock-backwards');
+    const preload = writeFile(s.dir, 'clock.mjs', [
+      'const wallNow = Date.now;',
+      'let reads = 0;',
+      'Date.now = () => wallNow() - (++reads * 60000);',
+    ].join('\n'));
+    const result = runCli(s.args, {
+      env: testEnv({ MOCK_ARTIFACT_DIR: s.artifacts, NODE_OPTIONS: `--import=${pathToFileURL(preload).href}` }),
+    });
+    assert.equal(result.status, 0, result.stderr);
+    const payload = parsePayload(result);
+    assert.equal(payload.status, 'ok');
+    assert.ok(payload.elapsedSeconds >= 0, `elapsed ${payload.elapsedSeconds}s after a wall-clock rollback`);
+  });
+
   test('a nonzero dsh exit is reported as nonzero and stderr stays in the log', () => {
     const s = scenario('nonzero');
     const result = runCli(s.args, {
@@ -542,7 +560,7 @@ describe('outcomes and process lifecycle', () => {
 
   test('a child that ignores SIGTERM is escalated to SIGKILL within the grace period', { timeout: 30000 }, async () => {
     const s = scenario('cancel-ignore');
-    const started = Date.now();
+    const started = performance.now();
     const { child, done } = startCli(s.args, { env: testEnv({ MOCK_ARTIFACT_DIR: s.artifacts, MOCK_MODE: 'ignore' }) });
     await waitFor(() => existsSync(join(s.artifacts, 'pids.json')), 'mock dsh to record its pids');
     child.kill('SIGTERM');
@@ -551,7 +569,7 @@ describe('outcomes and process lifecycle', () => {
     assert.equal(result.code, 1);
     const payload = parsePayload(result);
     assert.equal(payload.status, 'cancelled');
-    assert.ok(Date.now() - started >= 3000, 'SIGKILL escalation waited for the grace period');
+    assert.ok(performance.now() - started >= 3000, 'SIGKILL escalation waited for the grace period');
     const pids = readArtifactJson(s.artifacts, 'pids.json');
     assert.ok(pids.grandchild !== null);
     await waitForProcessExit(pids.self, 5000);

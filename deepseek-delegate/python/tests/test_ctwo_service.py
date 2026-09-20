@@ -11,9 +11,9 @@ import json
 import os
 import subprocess
 import sys
-import threading
 import time
 import unittest
+from concurrent.futures import ThreadPoolExecutor
 
 import c_two as cc
 
@@ -59,28 +59,6 @@ class TestNamedContract(BoardTestCase):
             endpoint = self._endpoint()
             capacity = self._wait_call(endpoint, "wait_capacity", {})
             self.assertEqual(capacity["capacity"], 1)
-            held: list[dict] = []
-            ready = threading.Event()
-            # Wait at the CURRENT cursor so the holder really blocks and keeps its slot.
-            cursor = self._wait_call(endpoint, "events_wait", {"after": 0, "timeoutMs": 100})["cursor"]
-
-            def hold():
-                ready.set()
-                held.append(self._wait_call(endpoint, "events_wait", {"after": cursor, "timeoutMs": 10000}))
-
-            holder = threading.Thread(target=hold)
-            holder.start()
-            ready.wait(timeout=10)
-            # The holder keeps its admitted slot for 10 s; this probe runs strictly
-            # inside that window, so saturation is observable rather than racy.
-            time.sleep(1.0)
-            overloaded = self._wait_call(endpoint, "events_wait", {"after": cursor, "timeoutMs": 100})
-            self.assertIn("error", overloaded, overloaded)
-            self.assertEqual(overloaded["error"]["code"], "WAIT_OVERLOAD")
-            self.assertEqual(overloaded["error"]["details"]["retryAfterMs"], 250)
-            self.assertIn("cursor", overloaded["error"]["details"])
-            # Control capacity is untouched: a mutation still commits immediately.
-            started = time.monotonic()
             with cc.connect(BuddyControl, name=CONTROL_NAME, address=endpoint["address"]) as board:
                 reply = json.loads(
                     board.task_submit(
@@ -90,14 +68,49 @@ class TestNamedContract(BoardTestCase):
                                 "requestId": "wait-route",
                                 "task": "do",
                                 "cwd": str(self.workdir()),
+                                "adapter": "external",
                             }
                         )
                     )
                 )
                 self.assertEqual(reply["task"]["status"], "queued")
-            self.assertLess(time.monotonic() - started, 5, "a mutation must not wait for the wait route")
-            holder.join(timeout=30)
-            self.assertEqual(len(held), 1)
+                task_id = reply["task"]["runId"]
+                cursor = json.loads(board.events_read(json.dumps({"token": endpoint["token"]})))["cursor"]
+                # Startup can still register a worker after the cursor read. Scope
+                # this wait to an external task that only this test can change.
+                params = {"after": cursor, "taskId": task_id, "timeoutMs": 10000}
+                with ThreadPoolExecutor(max_workers=1) as pool:
+                    holder = pool.submit(self._wait_call, endpoint, "events_wait", params)
+                    deadline = time.monotonic() + 5
+                    while self._wait_call(endpoint, "wait_capacity", {})["admitted"] != 1:
+                        if holder.done():
+                            self.fail(f"The holder returned before admission was observed: {holder.result()}")
+                        if time.monotonic() >= deadline:
+                            self.fail("The holder did not acquire the wait slot")
+                        time.sleep(0.02)
+
+                    # An unrelated event must not release the scoped wait slot.
+                    registration = json.loads(board.worker_register(json.dumps({
+                        "token": endpoint["token"], "workerId": "unrelated", "adapter": "external",
+                    })))
+                    self.assertNotIn("error", registration)
+                    overloaded = self._wait_call(endpoint, "events_wait", {**params, "timeoutMs": 100})
+                    self.assertIn("error", overloaded, overloaded)
+                    self.assertEqual(overloaded["error"]["code"], "WAIT_OVERLOAD")
+                    self.assertEqual(overloaded["error"]["details"]["retryAfterMs"], 250)
+                    self.assertIn("cursor", overloaded["error"]["details"])
+                    # Control capacity remains available; this mutation also wakes
+                    # the holder through the event it was actually waiting for.
+                    started = time.monotonic()
+                    cancelled = json.loads(board.task_cancel(json.dumps({
+                        "token": endpoint["token"], "runId": task_id,
+                    })))
+                    self.assertEqual(cancelled["task"]["status"], "cancelled")
+                    self.assertLess(time.monotonic() - started, 5, "a mutation must not wait for the wait route")
+                    held = holder.result(timeout=5)
+                    self.assertFalse(held["timedOut"])
+                    self.assertEqual([event["kind"] for event in held["events"]], ["task.cancelled"])
+                    self.assertEqual(held["events"][0]["taskId"], task_id)
 
     def test_multiple_clients_share_one_authoritative_task(self):
         with self.daemon():

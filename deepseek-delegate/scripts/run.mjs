@@ -26,6 +26,7 @@ import {
 } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
 import { delimiter, dirname, isAbsolute, join, resolve } from 'node:path';
+import { performance } from 'node:perf_hooks';
 import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
 import { loadYaml } from './lib/yaml.mjs';
@@ -361,7 +362,7 @@ if (workspaceTimeoutSeconds < MIN_WORKSPACE_TIMEOUT_SECONDS || workspaceTimeoutS
 }
 const workspaceTimeoutMs = workspaceTimeoutSeconds * 1000;
 
-const startedAt = Date.now();
+const startedAt = performance.now();
 
 // All paths are resolved against the invoking cwd, before dsh runs in --cwd.
 const cwdInput = resolve(values.cwd);
@@ -411,7 +412,7 @@ function emitAttach(workspace, error) {
     exitCode: error === null ? 0 : null,
     signal: null,
     error,
-    elapsedSeconds: Math.round((Date.now() - startedAt) / 100) / 10,
+    elapsedSeconds: Math.round((performance.now() - startedAt) / 100) / 10,
     timeoutSeconds: null,
     requested: null,
     cwd,
@@ -760,7 +761,7 @@ function buildResult(status, exitCode, signal, error, workspace, shutdownConfirm
     exitCode,
     signal: signal ?? null,
     error: error ?? null,
-    elapsedSeconds: Math.round((Date.now() - startedAt) / 100) / 10,
+    elapsedSeconds: Math.round((performance.now() - startedAt) / 100) / 10,
     timeoutSeconds,
     requested: { provider, model, reasoningEffort: effort },
     cwd,
@@ -817,8 +818,8 @@ async function settle(status, exitCode, signal, error) {
   clearTimeout(failsafeTimer);
   let shutdownConfirmed = childExited;
   if (shutdownConfirmed) {
-    const deadline = Date.now() + FAILSAFE_MS;
-    while (processGroupAlive() && Date.now() < deadline) {
+    const deadline = performance.now() + FAILSAFE_MS;
+    while (processGroupAlive() && performance.now() < deadline) {
       await new Promise((resolveWait) => setTimeout(resolveWait, 25));
     }
     shutdownConfirmed = !processGroupAlive();

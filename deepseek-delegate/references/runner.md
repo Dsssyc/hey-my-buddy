@@ -86,6 +86,7 @@ stdout carries exactly one JSON object:
 ```
 
 - `status`: `ok`, `nonzero`, `timeout`, `cancelled` or `spawn-error`; attach mode reports `ok` or `attach-error`.
+- `elapsedSeconds` is the CLI duration measured with a monotonic clock, rounded to 0.1 s.
 - Wrapper exit code: `0` only when the task is `ok` and any requested grouping is verified; `1` for a task, termination or grouping failure; `2` for usage and configuration errors, which are reported on stderr without a JSON object; a signal received before the child spawns exits `130`.
 - `requested` is the route and effort actually written into the settings copy.
 - `finalText` is at most 6000 characters of the head of the dsh stdout log, with `finalTextTruncated` (byte-based) telling you whether more existed. stderr and reasoning are never copied into the JSON.
