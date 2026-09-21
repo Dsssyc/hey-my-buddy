@@ -15,7 +15,7 @@
  */
 
 /** Bumped whenever the instruction prefix or payload shape changes meaning. */
-export const PROMPT_VERSION = 1;
+export const PROMPT_VERSION = 2;
 
 /** Hard cap on the rendered payload JSON, in UTF-8 bytes. */
 export const MAX_PAYLOAD_BYTES = 262_144;
@@ -71,7 +71,6 @@ export function instructionsFor(operation) {
   throw new TypeError(`unknown decision operation: ${String(operation)}`);
 }
 
-/** Stable key order for the payload so serialization is deterministic. */
 /**
  * Stable key order for the payload so serialization is deterministic.
  *
@@ -81,9 +80,11 @@ export function instructionsFor(operation) {
  * renders the same leading bytes, and only the small varying tail is new.
  * `requestId` is deliberately last — it is unique per request and must never
  * sit in front of content that can be reused.
+ * Revision metadata follows the table too, so a no-content publication keeps
+ * the reusable bytes intact and a card edit can still reuse preceding profiles.
  */
-const SELECT_KEYS = ['operation', 'profile', 'tableRevision', 'profiles', 'cards', 'preferences', 'evidence', 'task', 'requestId'];
-const MAINTAIN_KEYS = ['operation', 'profile', 'tableRevision', 'profiles', 'cards', 'preferences', 'evidence', 'requestId'];
+const SELECT_KEYS = ['operation', 'profile', 'profiles', 'cards', 'preferences', 'evidence', 'tableRevision', 'task', 'requestId'];
+const MAINTAIN_KEYS = ['operation', 'profile', 'profiles', 'cards', 'preferences', 'evidence', 'tableRevision', 'requestId'];
 
 /**
  * Build the deterministic payload object for one request.

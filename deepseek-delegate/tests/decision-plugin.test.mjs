@@ -77,7 +77,7 @@ const TEXT_ANSWER = '{"profileId":"p1","reason":"grounded","evidenceIds":["e1"]}
 
 describe('prompt assembly', () => {
   test('the instruction prefix is versioned, operation-specific and request-free', () => {
-    assert.equal(PROMPT_VERSION, 1);
+    assert.equal(PROMPT_VERSION, 2);
     const select = instructionsFor('select');
     const maintain = instructionsFor('maintain');
     assert.notEqual(select, maintain);
@@ -92,9 +92,9 @@ describe('prompt assembly', () => {
 
   test('the shared table precedes per-request data and requestId comes last', () => {
     const request = { tableRevision: 1, task: 't', operation: 'select', requestId: 'r', profile: {}, profiles: [], cards: [], preferences: [], evidence: [] };
-    assert.deepEqual(Object.keys(buildPayload('select', request)), ['operation', 'profile', 'tableRevision', 'profiles', 'cards', 'preferences', 'evidence', 'task', 'requestId']);
+    assert.deepEqual(Object.keys(buildPayload('select', request)), ['operation', 'profile', 'profiles', 'cards', 'preferences', 'evidence', 'tableRevision', 'task', 'requestId']);
     // Maintain carries the same table too: its instructions refer to profiles.
-    assert.deepEqual(Object.keys(buildPayload('maintain', { ...request, operation: 'maintain' })), ['operation', 'profile', 'tableRevision', 'profiles', 'cards', 'preferences', 'evidence', 'requestId']);
+    assert.deepEqual(Object.keys(buildPayload('maintain', { ...request, operation: 'maintain' })), ['operation', 'profile', 'profiles', 'cards', 'preferences', 'evidence', 'tableRevision', 'requestId']);
   });
 
   test('two requests against one table revision share the whole table prefix', () => {
@@ -113,6 +113,10 @@ describe('prompt assembly', () => {
     const revisionPrefix = JSON.stringify(buildPayload('select', { operation: 'select', ...table })).slice(0, -1);
     assert.ok(first.startsWith(revisionPrefix), first);
     assert.ok(second.startsWith(revisionPrefix), second);
+    // A new revision with unchanged table contents must not invalidate the
+    // expensive table prefix merely because its metadata counter advanced.
+    const republished = renderUserTurn('select', { operation: 'select', ...table, tableRevision: 6, task: 'third task', requestId: 'req-3' });
+    assert.equal(first.split(',"tableRevision":')[0], republished.split(',"tableRevision":')[0]);
     assert.ok(revisionPrefix.includes('"evidence":[{"evidenceId":"e1","profileId":"p1"}]'), revisionPrefix);
     // Everything that varies per request lives after the shared prefix.
     for (const [text, task, requestId] of [[first, 'first task', 'req-1'], [second, 'second task', 'req-2']]) {

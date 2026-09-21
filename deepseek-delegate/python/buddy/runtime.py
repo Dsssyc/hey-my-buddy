@@ -40,6 +40,8 @@ ASSET_FILES = (
     "scripts/run.mjs",
     "scripts/handoff.mjs",
     "scripts/model-catalog.mjs",
+    "scripts/decision.mjs",
+    "scripts/decision-prompt.mjs",
 )
 ASSET_DIRECTORIES = (
     "python/buddy",
