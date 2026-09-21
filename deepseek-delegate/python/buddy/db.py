@@ -18,10 +18,14 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Iterator
 
-SCHEMA_VERSION = 5
+SCHEMA_VERSION = 6
+#: The last schema version that had no evaluation table. A v5 database is migrated
+#: only by the explicit offline ``buddy migrate`` command, never by a cold start.
+V5_SCHEMA_VERSION = 5
 DB_FILE = "board.sqlite3"
 SECRET_KEY = "capability_secret"
 CAPABILITY_VERSION = 1
+WRITER_TOKEN_VERSION = 1
 
 #: Every task state the durable model may hold. See ``docs/board.md`` for the
 #: documented transition table; ``store.py`` enforces it.
@@ -44,7 +48,7 @@ TERMINAL_MESSAGE_STATES = frozenset({"answered", "discarded", "unavailable"})
 
 WORKER_STATES = ("starting", "idle", "busy", "stopping", "lost")
 
-SCHEMA = """
+SCHEMA_V5 = """
 CREATE TABLE IF NOT EXISTS meta (
     key   TEXT PRIMARY KEY,
     value TEXT NOT NULL
@@ -220,6 +224,157 @@ CREATE TABLE IF NOT EXISTS cursors (
 );
 """
 
+#: Schema additions for version 6: the shared bounded evaluation table, its fair
+#: reader/writer gate and the recorded discovery/decision history. Each statement is
+#: separate so the offline migration can apply them inside one transaction (SQLite
+#: DDL is transactional, but ``executescript`` would commit first).
+EVALUATION_TABLES = (
+    """
+CREATE TABLE IF NOT EXISTS evaluation_state (
+    id                      INTEGER PRIMARY KEY CHECK (id = 1),
+    table_revision          INTEGER NOT NULL DEFAULT 0,
+    configuration_revision  INTEGER NOT NULL DEFAULT 0,
+    decision_profile_id     TEXT,
+    auto_maintain           INTEGER NOT NULL DEFAULT 0,
+    writer_sequence         INTEGER NOT NULL DEFAULT 0,
+    created_at              TEXT NOT NULL,
+    updated_at              TEXT NOT NULL
+);
+""",
+    """
+CREATE TABLE IF NOT EXISTS evaluation_revisions (
+    revision     INTEGER PRIMARY KEY,
+    kind         TEXT NOT NULL,
+    writer_id    TEXT,
+    actor        TEXT,
+    counts_json  TEXT NOT NULL DEFAULT '{}',
+    created_at   TEXT NOT NULL
+);
+""",
+    """
+CREATE TABLE IF NOT EXISTS evaluation_profiles (
+    profile_id          TEXT PRIMARY KEY,
+    label               TEXT NOT NULL,
+    adapter             TEXT NOT NULL,
+    provider            TEXT NOT NULL,
+    model               TEXT NOT NULL,
+    effort              TEXT NOT NULL,
+    available           INTEGER NOT NULL DEFAULT 0,
+    enabled             INTEGER NOT NULL DEFAULT 1,
+    capabilities_json   TEXT NOT NULL DEFAULT '[]',
+    context_window      INTEGER,
+    description         TEXT NOT NULL DEFAULT '',
+    source              TEXT NOT NULL DEFAULT '',
+    unavailable_reason  TEXT,
+    created_revision    INTEGER NOT NULL,
+    updated_revision    INTEGER NOT NULL
+);
+""",
+    """
+CREATE TABLE IF NOT EXISTS evaluation_cards (
+    profile_id        TEXT PRIMARY KEY REFERENCES evaluation_profiles(profile_id) ON DELETE RESTRICT,
+    revision          INTEGER NOT NULL,
+    summary           TEXT NOT NULL DEFAULT '',
+    strengths_json    TEXT NOT NULL DEFAULT '[]',
+    limitations_json  TEXT NOT NULL DEFAULT '[]',
+    risks_json        TEXT NOT NULL DEFAULT '[]',
+    evidence_ids_json TEXT NOT NULL DEFAULT '[]',
+    sample_count      INTEGER NOT NULL DEFAULT 0,
+    updated_at        TEXT NOT NULL
+);
+""",
+    """
+CREATE TABLE IF NOT EXISTS evaluation_preferences (
+    profile_id        TEXT PRIMARY KEY REFERENCES evaluation_profiles(profile_id) ON DELETE RESTRICT,
+    mode              TEXT NOT NULL CHECK (mode IN ('prefer','pin','exclude')),
+    reason            TEXT NOT NULL DEFAULT '',
+    updated_revision  INTEGER NOT NULL
+);
+""",
+    """
+CREATE TABLE IF NOT EXISTS evaluation_evidence (
+    evidence_id       TEXT PRIMARY KEY,
+    profile_id        TEXT NOT NULL REFERENCES evaluation_profiles(profile_id) ON DELETE RESTRICT,
+    kind              TEXT NOT NULL,
+    summary           TEXT NOT NULL,
+    project           TEXT,
+    conditions_json   TEXT NOT NULL DEFAULT '[]',
+    source            TEXT NOT NULL,
+    run_id            TEXT,
+    verified          INTEGER NOT NULL DEFAULT 0,
+    counted           INTEGER NOT NULL DEFAULT 0,
+    identity_json     TEXT NOT NULL DEFAULT '{}',
+    recorded_revision INTEGER NOT NULL,
+    created_at        TEXT NOT NULL
+);
+""",
+    """
+CREATE INDEX IF NOT EXISTS evaluation_evidence_profile_idx
+    ON evaluation_evidence(profile_id, created_at);
+""",
+    """
+CREATE TABLE IF NOT EXISTS evaluation_decisions (
+    decision_id       TEXT PRIMARY KEY,
+    status            TEXT NOT NULL,
+    task              TEXT NOT NULL,
+    profile_id        TEXT,
+    table_revision    INTEGER NOT NULL,
+    reason            TEXT NOT NULL DEFAULT '',
+    evidence_ids_json TEXT NOT NULL DEFAULT '[]',
+    created_at        TEXT NOT NULL,
+    error             TEXT
+);
+""",
+    """
+CREATE TABLE IF NOT EXISTS evaluation_catalog (
+    discovery_id      TEXT PRIMARY KEY,
+    discovered_at     TEXT NOT NULL,
+    source            TEXT NOT NULL,
+    harness_version   TEXT,
+    provider_version  TEXT,
+    payload_json      TEXT NOT NULL,
+    created_at        TEXT NOT NULL
+);
+""",
+    """
+CREATE TABLE IF NOT EXISTS evaluation_readers (
+    reader_id     TEXT PRIMARY KEY,
+    kind          TEXT NOT NULL,
+    admitted_at   TEXT NOT NULL,
+    expires_at    TEXT NOT NULL,
+    released_at   TEXT,
+    expired       INTEGER NOT NULL DEFAULT 0
+);
+""",
+    """
+CREATE INDEX IF NOT EXISTS evaluation_readers_open_idx ON evaluation_readers(released_at, expires_at);
+""",
+    """
+CREATE TABLE IF NOT EXISTS evaluation_writers (
+    writer_id          TEXT PRIMARY KEY,
+    request_id         TEXT NOT NULL UNIQUE,
+    kind               TEXT NOT NULL CHECK (kind IN ('human','maintenance')),
+    state              TEXT NOT NULL CHECK (state IN ('waiting','active','published','aborted','expired')),
+    generation         INTEGER NOT NULL,
+    expected_revision  INTEGER NOT NULL,
+    token_verifier     TEXT NOT NULL,
+    requested_at       TEXT NOT NULL,
+    granted_at         TEXT,
+    expires_at         TEXT,
+    released_at        TEXT
+);
+""",
+    """
+CREATE INDEX IF NOT EXISTS evaluation_writers_queue_idx ON evaluation_writers(state, generation);
+""",
+)
+
+EVALUATION_SCHEMA = "\n".join(EVALUATION_TABLES)
+
+#: The complete current schema. A fresh database is created from this text; a v5
+#: database is upgraded only by ``buddy migrate`` using ``EVALUATION_TABLES``.
+SCHEMA = SCHEMA_V5 + "\n" + EVALUATION_SCHEMA
+
 
 def utc_now() -> str:
     """Canonical timestamp used for every durable row."""
@@ -327,7 +482,8 @@ class Database:
                         if found != SCHEMA_VERSION:
                             raise Corruption(
                                 f"Board database schema version {found} does not match this Buddy build "
-                                f"({SCHEMA_VERSION}); activate a matching version instead of rewriting records"
+                                f"({SCHEMA_VERSION}); stop the service and run `buddy migrate` for an explicit "
+                                "backed-up upgrade instead of rewriting records"
                             )
                 connection.executescript(SCHEMA)
                 version = connection.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone()
@@ -344,6 +500,10 @@ class Database:
                     except BaseException:
                         connection.execute("ROLLBACK")
                         raise
+                connection.execute(
+                    "INSERT OR IGNORE INTO evaluation_state(id, created_at, updated_at) VALUES(1, ?, ?)",
+                    (utc_now(), utc_now()),
+                )
                 if fresh:
                     os.chmod(self.path, 0o600)
                 integrity = connection.execute("PRAGMA integrity_check").fetchone()[0]
@@ -387,6 +547,19 @@ class Database:
 
     def nonce_verifier(self, nonce: str) -> str:
         return hmac.new(self.secret, f"nonce:{nonce}".encode("utf-8"), hashlib.sha256).hexdigest()
+
+    def writer_token(self, writer_id: str, generation: int) -> str:
+        """Derive one evaluation writer capability.
+
+        The token is deterministic in (service secret, writer, generation), so an
+        idempotent ``evaluation_write_begin`` replay returns the same secret to the
+        caller that created the intent, while only a verifier is persisted.
+        """
+        message = f"{WRITER_TOKEN_VERSION}:writer:{writer_id}:{generation}".encode("utf-8")
+        return hmac.new(self.secret, message, hashlib.sha256).hexdigest()
+
+    def writer_token_verifier(self, token: str) -> str:
+        return hmac.new(self.secret, f"writer-token:{token}".encode("utf-8"), hashlib.sha256).hexdigest()
 
     def verify_capability(self, attempt: sqlite3.Row | dict, capability: str, nonce: str | None = None) -> bool:
         candidate = nonce if nonce is not None else ""

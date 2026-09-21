@@ -36,6 +36,12 @@ class BuddyControl:
     def dashboard(self, request_json: str) -> str:
         ...
 
+    def console(self, request_json: str) -> str:
+        ...
+
+    def console_snapshot(self, request_json: str) -> str:
+        ...
+
     def legacy_import(self, request_json: str) -> str:
         ...
 
@@ -113,6 +119,31 @@ class BuddyControl:
 
     # -- events -------------------------------------------------------------
     def events_read(self, request_json: str) -> str:
+        ...
+
+    # -- evaluation table ---------------------------------------------------
+    def evaluation_write_begin(self, request_json: str) -> str:
+        ...
+
+    def evaluation_write_renew(self, request_json: str) -> str:
+        ...
+
+    def evaluation_write_publish(self, request_json: str) -> str:
+        ...
+
+    def evaluation_write_abort(self, request_json: str) -> str:
+        ...
+
+    def evaluation_reader_begin(self, request_json: str) -> str:
+        ...
+
+    def evaluation_reader_release(self, request_json: str) -> str:
+        ...
+
+    def evaluation_evidence_record(self, request_json: str) -> str:
+        ...
+
+    def model_catalog_refresh(self, request_json: str) -> str:
         ...
 
 

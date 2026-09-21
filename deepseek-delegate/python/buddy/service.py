@@ -18,6 +18,7 @@ from . import runtime, schemas
 from .adapters import capability_report
 from .db import SCHEMA_VERSION, utc_now
 from .errors import BoardError
+from .evaluation import EvaluationStore
 from .store import BoardStore
 
 PROTOCOL_VERSION = 2
@@ -30,6 +31,8 @@ CONTROL_OPERATIONS = (
     "capabilities",
     "service_control",
     "dashboard",
+    "console",
+    "console_snapshot",
     "legacy_import",
     "runtime_info",
     "task_submit",
@@ -55,6 +58,14 @@ CONTROL_OPERATIONS = (
     "inquiry_observe",
     "artifact_list",
     "events_read",
+    "evaluation_write_begin",
+    "evaluation_write_renew",
+    "evaluation_write_publish",
+    "evaluation_write_abort",
+    "evaluation_reader_begin",
+    "evaluation_reader_release",
+    "evaluation_evidence_record",
+    "model_catalog_refresh",
 )
 WAIT_OPERATIONS = ("events_wait", "task_wait", "message_wait", "wait_capacity")
 
@@ -143,8 +154,10 @@ class BoardService(_BaseResource):
         on_stop: Callable[[dict], dict],
         on_restart: Callable[[dict], dict],
         dashboard_factory: Callable[[], dict] | None = None,
+        console_factory: Callable[[str], dict] | None = None,
         legacy_importer: Callable[[dict], dict] | None = None,
         runtime_directory: Path | None = None,
+        evaluation: EvaluationStore | None = None,
     ):
         super().__init__(store)
         self.token = token
@@ -152,8 +165,12 @@ class BoardService(_BaseResource):
         self.on_stop = on_stop
         self.on_restart = on_restart
         self.dashboard_factory = dashboard_factory
+        self.console_factory = console_factory
         self.legacy_importer = legacy_importer
         self.runtime_directory = runtime_directory
+        # All evaluation state is durable; a lazily composed store keeps every
+        # existing in-process harness working without a second authority.
+        self.evaluation = evaluation or EvaluationStore(store)
         self.started_at = utc_now()
 
     # -- service ------------------------------------------------------------
@@ -200,6 +217,18 @@ class BoardService(_BaseResource):
                     "nativeAppWakeup": "not provided: notifications are post-commit hints for clients",
                     "postgres": "not provided: SQLite is the deliberate local database",
                     "remoteTenancy": "not provided: same-user local service only",
+                    "selection": (
+                        "not implemented: the durable evaluation table, its writer gate and reader admission exist, "
+                        "but no selector model execution is delivered"
+                    ),
+                    "maintenance": (
+                        "not implemented: evidence is recorded and published through the gate, but no automatic "
+                        "maintenance model call runs"
+                    ),
+                    "osIsolation": (
+                        "not claimed: the console token and session separate browser origins, not a same-user "
+                        "process with full shell and credential access"
+                    ),
                 },
             }
 
@@ -252,6 +281,67 @@ class BoardService(_BaseResource):
             return self.legacy_importer(params)
 
         return self._guard("legacy.import", request_json, handler)
+
+    # -- console and evaluation ---------------------------------------------
+    def console(self, request_json: str) -> str:
+        def handler(params: dict) -> dict:
+            schemas.reject_unknown(params, {"action"}, "console")
+            action = schemas.optional_string(params, "action") or "open"
+            if action not in ("open", "close", "status"):
+                raise BoardError("INVALID_ARGUMENT", "action must be 'open', 'close' or 'status'")
+            if self.console_factory is None:
+                raise BoardError("UNSUPPORTED", "This service build has no console")
+            return self.console_factory(action)
+
+        return self._guard("console", request_json, handler)
+
+    def console_snapshot(self, request_json: str) -> str:
+        def handler(params: dict) -> dict:
+            snapshot = self.evaluation.snapshot(params)
+            # The JSON route is a read: it never admits a selection reader and never
+            # calls a model. The browser layer injects its own CSRF token into this
+            # object; a C-Two/CLI caller gets an empty token because it has no session.
+            from .console import assets_ready
+
+            snapshot["capabilities"]["consoleAssets"] = assets_ready()
+            return snapshot
+
+        return self._guard("console.snapshot", request_json, handler)
+
+    def evaluation_write_begin(self, request_json: str) -> str:
+        return self._guard("evaluation.write.begin", request_json, self.evaluation.write_begin)
+
+    def evaluation_write_renew(self, request_json: str) -> str:
+        return self._guard("evaluation.write.renew", request_json, self.evaluation.write_renew)
+
+    def evaluation_write_publish(self, request_json: str) -> str:
+        return self._guard("evaluation.write.publish", request_json, self.evaluation.write_publish)
+
+    def evaluation_write_abort(self, request_json: str) -> str:
+        return self._guard("evaluation.write.abort", request_json, self.evaluation.write_abort)
+
+    def evaluation_reader_begin(self, request_json: str) -> str:
+        return self._guard("evaluation.reader.begin", request_json, self.evaluation.reader_begin)
+
+    def evaluation_reader_release(self, request_json: str) -> str:
+        return self._guard("evaluation.reader.release", request_json, self.evaluation.reader_release)
+
+    def evaluation_evidence_record(self, request_json: str) -> str:
+        return self._guard("evaluation.evidence.record", request_json, self.evaluation.evidence_record)
+
+    def model_catalog_refresh(self, request_json: str) -> str:
+        def handler(params: dict) -> dict:
+            from . import catalog
+
+            schemas.reject_unknown(params, {"requestId"}, "model.catalog.refresh")
+            request_id = schemas.optional_string(params, "requestId", max_length=128)
+            # Discovery reads the installed harness outside any transaction; only the
+            # resulting proposal is persisted, and a failure writes nothing.
+            discovered = catalog.discover()
+            recorded = self.evaluation.record_catalog(discovered)
+            return {**recorded, "requestId": request_id}
+
+        return self._guard("model.catalog.refresh", request_json, handler)
 
     # -- tasks --------------------------------------------------------------
     def task_submit(self, request_json: str) -> str:
@@ -425,13 +515,15 @@ class WaitService(_BaseResource):
         return self._guard("wait.capacity", request_json, lambda params: self.admission.stats())
 
 
-def dispatch_local(service: Any, operation: str, params: dict) -> dict:
-    """Call one named operation in-process (used by tests and the local worker).
+def call_operation(service: Any, operation: str, params: dict) -> dict:
+    """Call one named operation in-process and raise :class:`BoardError` on failure.
 
-    This is not an RPC surface: the operation name is resolved against the CRM
-    class, so an unknown name fails exactly like it would over C-Two.
+    The console HTTP surface and the in-process test harness both call this, so a
+    browser command reaches exactly the same validated operation, token check and
+    transaction as the C-Two/CLI route. There is no second SQL path and no
+    ``dispatch(method, JSON)`` facade: the name is resolved against the resource.
     """
-    if not hasattr(service, operation):
+    if not isinstance(operation, str) or operation.startswith("_") or not hasattr(service, operation):
         raise BoardError("METHOD_NOT_FOUND", f"Unknown operation {operation!r}")
     # The same private token the transport carries is presented here, so an
     # in-process call exercises exactly the same authentication path.
@@ -440,5 +532,11 @@ def dispatch_local(service: Any, operation: str, params: dict) -> dict:
     value = json.loads(raw)
     if isinstance(value, dict) and "error" in value:
         error = value["error"]
-        raise BoardError(error.get("code", "SERVICE_ERROR"), error.get("message", "operation failed"))
+        details = error.get("details") if isinstance(error.get("details"), dict) else {}
+        raise BoardError(error.get("code", "SERVICE_ERROR"), error.get("message", "operation failed"), **details)
     return value
+
+
+def dispatch_local(service: Any, operation: str, params: dict) -> dict:
+    """Backward-compatible alias used by tests and the local worker."""
+    return call_operation(service, operation, params)

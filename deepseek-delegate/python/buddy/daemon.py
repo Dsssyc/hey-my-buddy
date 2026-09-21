@@ -25,6 +25,7 @@ import uuid
 import c_two as cc
 
 from . import runtime
+from .console import Console
 from .contracts import CONTROL_NAME, CONTRACT_VERSION, WAIT_NAME, BuddyControl, BuddyWait
 from .dashboard import Dashboard
 from .db import SCHEMA_VERSION, utc_now
@@ -286,6 +287,8 @@ class Daemon:
             "runtime": runtime.runtime_identity(),
         }
         self.dashboard = Dashboard(self.store)
+        #: Created in ``run`` once the control resource exists; started lazily.
+        self.console: Console | None = None
         self.legacy_guard: LegacySocketGuard | None = None
         self.supervisor: SupervisorHandle | None = None
         self.lock_fds: list[int] = []
@@ -317,6 +320,7 @@ class Daemon:
             on_stop=self.on_stop,
             on_restart=self.on_restart,
             dashboard_factory=self.on_dashboard,
+            console_factory=self.on_console,
             legacy_importer=LegacyImporter(self.store).run,
         )
 
@@ -332,6 +336,7 @@ class Daemon:
                 # a reason that is not a missing legacy service.
                 sys.stderr.write(f"buddy: legacy socket guard omitted: {self.legacy_guard.note}\n")
             service = self.service()
+            self.console = Console(self.store, service)
             wait_service = WaitService(self.store, self.wait_admission, token=self.token)
             cc.register(
                 BuddyControl,
@@ -432,6 +437,15 @@ class Daemon:
             return self.dashboard.status()
         return self.dashboard.start()
 
+    def on_console(self, action: str) -> dict:
+        if self.console is None:  # pragma: no cover - the console exists once run() registered the resource
+            raise ServiceError("SERVICE_UNAVAILABLE", "The console is not available in this service state")
+        if action == "close":
+            return self.console.close()
+        if action == "status":
+            return self.console.status()
+        return self.console.start()
+
     # -- drain ---------------------------------------------------------------
     def cancel_queued(self, reason: str) -> int:
         count = 0
@@ -487,6 +501,8 @@ class Daemon:
             self.legacy_guard.close()
         if self.dashboard is not None:
             self.dashboard.close()
+        if self.console is not None:
+            self.console.close()
         try:
             value = json.loads(self.endpoint_path.read_text())
             if hmac.compare_digest(value.get("serviceId", ""), self.service_id):

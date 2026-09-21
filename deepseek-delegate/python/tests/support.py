@@ -24,9 +24,71 @@ if str(PYTHON_ROOT) not in sys.path:
     sys.path.insert(0, str(PYTHON_ROOT))
 
 from buddy.client import BoardClient  # noqa: E402
+from buddy.console import Console  # noqa: E402
+from buddy.evaluation import EvaluationStore  # noqa: E402
 from buddy.legacy import LegacyImporter  # noqa: E402
 from buddy.service import BoardService, WaitAdmission, WaitService, dispatch_local  # noqa: E402
 from buddy.store import BoardStore  # noqa: E402
+
+#: A discovery document with the same shape the installed-harness helper emits. Tests
+#: point ``BUDDY_MODEL_CATALOG_FILE`` at this fixture instead of invoking Node.
+FIXTURE_CATALOG = {
+    "source": "file:test-fixture",
+    "harnessVersion": "test-harness-1",
+    "providerVersion": "@deepseek-ai/dsh-llm-deepseek@test",
+    "discoveredAt": "2026-01-01T00:00:00.000Z",
+    "providers": [
+        {
+            "provider": "deepseek-official",
+            "displayName": "DeepSeek",
+            "packageName": "@deepseek-ai/dsh-llm-deepseek",
+            "packageVersion": "test",
+            "adapter": "dsh",
+            "efforts": ["off", "low", "high", "max"],
+            "models": [
+                {
+                    "id": "deepseek-flash",
+                    "name": "DeepSeek-V41-Flash",
+                    "description": "fixture fast model",
+                    "contextWindow": 1000000,
+                    "inputModalities": ["text", "image"],
+                },
+                {
+                    "id": "deepseek-v4-pro",
+                    "name": "DeepSeek-V4-Pro",
+                    "description": "fixture strong model",
+                    "contextWindow": 1000000,
+                    "inputModalities": ["text"],
+                },
+            ],
+        }
+    ],
+    "warnings": [],
+}
+
+
+def write_catalog_fixture(directory: Path, payload: dict | None = None) -> Path:
+    path = Path(directory) / "model-catalog.json"
+    path.write_text(json.dumps(payload or FIXTURE_CATALOG))
+    os.chmod(path, 0o600)
+    return path
+
+
+class FakeClock:
+    """Deterministic wall clock so lease and expiry fences are exercisable."""
+
+    def __init__(self, start: str = "2026-01-01T00:00:00.000Z"):
+        self.value = start
+
+    def __call__(self) -> str:
+        return self.value
+
+    def advance(self, seconds: float) -> str:
+        from datetime import datetime, timedelta
+
+        moment = datetime.fromisoformat(self.value.replace("Z", "+00:00")) + timedelta(seconds=seconds)
+        self.value = moment.isoformat(timespec="milliseconds").replace("+00:00", "Z")
+        return self.value
 
 
 def stop_private_workers(directory: Path, timeout: float = 35.0) -> None:
@@ -84,17 +146,27 @@ class InProcessBoard:
 
     def __init__(self, directory: Path, **options):
         self.directory = Path(directory)
+        clock = options.get("clock")
         self.store = BoardStore(
             self.directory,
             max_concurrent=options.get("max_concurrent", 2),
             lease_seconds=options.get("lease_seconds", 60),
             wait_capacity=options.get("wait_capacity", 4),
+            **({"clock": clock} if clock is not None else {}),
         )
         self.store.initialize()
         self.admission = WaitAdmission(options.get("wait_capacity", 4))
         self.control: dict = {"wait_admission": self.admission}
         self.stopped: list[dict] = []
         self.restarted: list[dict] = []
+        self.evaluation = EvaluationStore(
+            self.store,
+            clock=clock,
+            writer_lease_seconds=options.get("writer_lease_seconds", 60),
+            writer_queue_seconds=options.get("writer_queue_seconds", 120),
+            reader_lease_seconds=options.get("reader_lease_seconds", 300),
+        )
+        self.console: Console | None = None
         self.service = BoardService(
             self.store,
             token="test-token",
@@ -102,8 +174,24 @@ class InProcessBoard:
             on_stop=lambda params: self.stopped.append(params) or {"action": "stop", "stopped": True},
             on_restart=lambda params: self.restarted.append(params) or {"action": "restart", "restarting": True},
             legacy_importer=LegacyImporter(self.store).run,
+            evaluation=self.evaluation,
+            console_factory=self.console_action,
         )
         self.wait_service = WaitService(self.store, self.admission, token="test-token")
+        self.console = Console(
+            self.store,
+            self.service,
+            assets_dir=options.get("console_assets", self.directory / "console-assets"),
+        )
+
+    def console_action(self, action: str) -> dict:
+        if self.console is None:  # pragma: no cover - only during construction
+            return {"url": None, "running": False, "readOnly": False}
+        if action == "close":
+            return self.console.close()
+        if action == "status":
+            return self.console.status()
+        return self.console.start()
 
     def call(self, operation: str, params: dict) -> dict:
         service = self.wait_service if operation.startswith("events_wait") or operation == "message_wait" or operation == "wait_capacity" else self.service
@@ -113,6 +201,8 @@ class InProcessBoard:
         return BoardClient(self.directory, call=self.call, **kwargs)
 
     def close(self) -> None:
+        if self.console is not None:
+            self.console.close()
         self.store.db.path.unlink(missing_ok=True)
 
 
@@ -124,6 +214,11 @@ class BoardTestCase(unittest.TestCase):
         self.addCleanup(self._cleanup)
 
     def _cleanup(self) -> None:
+        for board in getattr(self, "_stack", []):
+            try:
+                board.close()
+            except Exception:  # noqa: BLE001 - cleanup must never mask the test result
+                pass
         for handle in getattr(self, "children", []):
             if handle.poll() is None:
                 handle.terminate()
@@ -143,6 +238,21 @@ class BoardTestCase(unittest.TestCase):
     def workdir(self, name: str = "work") -> Path:
         path = self.directory / name
         path.mkdir(parents=True, exist_ok=True)
+        return path
+
+    def catalog_fixture(self, payload: dict | None = None) -> Path:
+        """Point discovery at a private fixture instead of the installed harness."""
+        path = write_catalog_fixture(self.directory, payload)
+        previous = os.environ.get("BUDDY_MODEL_CATALOG_FILE")
+        os.environ["BUDDY_MODEL_CATALOG_FILE"] = str(path)
+
+        def restore() -> None:
+            if previous is None:
+                os.environ.pop("BUDDY_MODEL_CATALOG_FILE", None)
+            else:
+                os.environ["BUDDY_MODEL_CATALOG_FILE"] = previous
+
+        self.addCleanup(restore)
         return path
 
     # -- real daemon helpers -------------------------------------------------
