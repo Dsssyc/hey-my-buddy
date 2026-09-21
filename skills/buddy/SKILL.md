@@ -7,6 +7,8 @@ description: Delegate bounded work to local dsh through the uv-managed buddy CLI
 
 Hand **one bounded task** to a local `dsh` run through the `buddy` CLI, keep this turn waiting on that durable run, then verify the real artifacts yourself. Codex keeps framing, route choice and final acceptance.
 
+The Host may implement work itself and delegate another part for comparative advantage. Choose the execution workspace explicitly: a sequential sole writer can use the original checkout; concurrent writers use separate worktrees with a fixed input revision, named integrator and combined acceptance checks. Workers manage their own internal subagents.
+
 ## Resolve the launcher
 
 This file is `<plugin-root>/skills/buddy/SKILL.md`, so the plugin root is two directories up. Nothing supplies a `PLUGIN_ROOT` environment variable any more.
@@ -47,6 +49,10 @@ Quote `"$BUDDY"`, and pass one JSON object per command.
 - After a daemon restart, in-flight attempts become `uncertain` with resource claims retained; the independent worker keeps its child and deadline and reattaches by attempt identity and nonce. Unknown never means stopped, and a new execution requires an explicit `retry`.
 - `wait` and `watch` are bounded at 30 s and never cold-start a service. If a call returns `wait-timeout` or an unavailable envelope, keep monitoring the same run or report its `runId` explicitly; never end the turn with an unmonitored running job and never restart work the user stopped.
 
+## Shared evaluations and console
+
+`buddy console` opens the private React/Vite workspace for tasks, model profiles, evidence and preferences. Ordinary page refresh and `console-snapshot` are read-only and invoke no model. Explicit catalog discovery proposes installed configurations; it does not prove their real-world quality or enable them automatically. Use [evaluation.md](../../deepseek-delegate/references/evaluation.md) for table editing and evidence, and inspect reported capabilities before invoking decision operations. A running business task keeps its accepted configuration when the current evaluation table changes.
+
 ## Progress and questions
 
 When a run has been quiet and you need to report honestly:
@@ -82,3 +88,4 @@ Read the [background workflow](../../deepseek-delegate/references/usage.md#backg
 | Standalone `run.mjs` runner and its contract | [runner.md](../../deepseek-delegate/references/runner.md) |
 | Owner resumption without the service | [handoff.md](../../deepseek-delegate/references/handoff.md) |
 | Implemented architecture and limits | [architecture.md](../../deepseek-delegate/references/architecture.md) |
+| Shared evaluations, preferences, evidence and local console | [evaluation.md](../../deepseek-delegate/references/evaluation.md) |

@@ -32,6 +32,7 @@ Use the [documentation index](docs/README.md) to find each page. Keep detailed c
 | Implemented architecture, data model, identity, wait separation, recovery, limits | `deepseek-delegate/references/architecture.md` |
 | Complete CLI surface, defaults/bounds, envelopes, errors, inquiry contract | `deepseek-delegate/references/cli.md` |
 | Runtime lifecycle/upgrade, bridge, state and env vars, legacy import, MCP cleanup | `deepseek-delegate/references/operations.md` |
+| Shared evaluation table, preferences/evidence, table admission and writable React/Vite console | `deepseek-delegate/references/evaluation.md` |
 | Adapters, public client, worker identity/receipts, supervisors | `deepseek-delegate/references/workers.md` |
 | Standalone Node runner and its contract | `deepseek-delegate/references/runner.md` |
 | Standalone owner-resumption helper | `deepseek-delegate/references/handoff.md` |

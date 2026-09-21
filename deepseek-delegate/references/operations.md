@@ -24,6 +24,19 @@ Buddy installs Python dependencies with uv from a frozen lock (PyPI `c-two==0.5.
 
 For a source installation (`runtimeStable: false`), keep its checkout available while work is active. Complete that work before replacing the source, or deliberately cancel it and inspect the shutdown result. Review version-specific migration requirements before switching code that changes the database or RPC contract.
 
+## Database upgrade
+
+Schema 6 adds the shared evaluation table. Startup refuses an older v5 database and points to the explicit offline migration. Inspect and complete existing owned work before switching database versions; neither a missing PID nor lease expiry proves the old worker stopped. Stop the old service only when its cancellation behavior is appropriate for those tasks. The migration itself never stops services or workers.
+
+```sh
+"$BUDDY" migrate '{"dryRun":true}'
+"$BUDDY" migrate '{"confirm":true}'
+```
+
+`stateDir` optionally selects an explicit existing private directory; otherwise the configured Buddy state directory is used. Dry run validates version, integrity, ownership and the plan without writing a backup or changing the schema. Execution requires `confirm:true`, acquires the daemon/board ownership locks, refuses a live daemon, writes and verifies a SQLite backup beside the database, and applies additive tables plus the version change in one transaction. Task, attempt, event, receipt and claim identities are retained. A failed transaction rolls back; the verified backup remains available. An already upgraded database returns an idempotent no-op. Unknown schema versions are refused.
+
+Do not replace an active database with its backup. Recovery requires the same offline ownership discipline and inspection of surviving workers and receipts. Tests and development previews use separate private state/runtime roots, never the production directory.
+
 ## Workspace bridge
 
 `workspace: true` (the default) groups the dsh session through a bundled host plugin. Grouped runs require that bridge to be installed and its dsh profile running; there is no silent fallback to an ungrouped run.

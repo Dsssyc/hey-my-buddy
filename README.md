@@ -61,6 +61,8 @@ If the wait ends first, the task continues under its execution deadline. Codex c
 
 ## Good to know
 
+Open `buddy console` to see tasks, discover installed model configurations, edit preferences and keep shared evaluation cards. The local React/Vite console uses the same blackboard as the CLI; viewing and refreshing it make no model calls. See [shared evaluations and the console](deepseek-delegate/references/evaluation.md). Existing schema-v5 installations need the [explicit database upgrade](deepseek-delegate/references/operations.md#database-upgrade).
+
 - Workspace grouping is on by default and needs a small one-time host bridge; the first example uses `workspace: false` so it runs without that setup. The default never changes by itself — see [operations](deepseek-delegate/references/operations.md).
 - Tasks default to a 30-minute execution deadline. Specify a longer limit in your request for long jobs; the maximum is 24 hours.
 - State which files may change. A working directory does not restrict file access; separate worktrees help keep concurrent edits apart.

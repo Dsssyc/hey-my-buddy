@@ -25,6 +25,8 @@ Quote `"$BUDDY"`, and pass one JSON object per command.
 
 Delegate when the task is clear, bounded and bigger than a one-line edit: implementation, refactor, bounded investigation, batch file transformation, test writing, documentation. Keep it local when the change is a line or two, the answer is already known, requirements still need discovery, or the call is Codex-only.
 
+The Host may implement part of the work itself and delegate another part for comparative advantage. Choose the execution workspace explicitly in the packet: a sequential sole writer can use the original checkout; concurrent writers use separate worktrees with a fixed input revision, named integrator and combined acceptance checks. Workers manage their own internal subagents.
+
 ## Default workflow
 
 1. Write the packet before launching: goal and why; inputs and outputs; the working directory and check commands; allowed files/areas and non-goals; acceptance criteria; references, known facts and pitfalls. Give the context the work needs. Task text over 32,000 bytes is delivered to dsh as a file reference, and that file must stay in place until the run finishes.
@@ -56,6 +58,10 @@ Delegate when the task is clear, bounded and bigger than a one-line edit: implem
 ## Model and effort
 
 Choose a model for the task's needs, never by Pro/Flash in the name. Set `model`, `provider` and `effort` in the start JSON when overriding the route. The [runner precedence](references/runner.md#precedence) resolves omitted values; the fallbacks are `deepseek-official`, `deepseek-flash` and effort `max`. Effort is never inherited from settings. Unsupported model IDs are reported without silent downgrades or retries.
+
+## Shared evaluations and console
+
+`buddy console` opens the private React/Vite workspace for tasks, model profiles, evidence and preferences. Ordinary page refresh and `console-snapshot` are read-only and invoke no model. Explicit catalog discovery proposes installed configurations; it does not prove their real-world quality or enable them automatically. Use [evaluation.md](references/evaluation.md) for table editing and evidence, and inspect reported capabilities before invoking decision operations. A running business task keeps its accepted configuration when the current evaluation table changes.
 
 ## Progress and questions
 
@@ -91,3 +97,4 @@ Only when the user explicitly wants work to outlive the turn, register an offici
 | Standalone `run.mjs` runner and its contract | [runner.md](references/runner.md) |
 | Owner resumption without the service | [handoff.md](references/handoff.md) |
 | Implemented architecture and limits | [architecture.md](references/architecture.md) |
+| Shared evaluations, preferences, evidence and local console | [evaluation.md](references/evaluation.md) |

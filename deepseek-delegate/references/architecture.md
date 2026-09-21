@@ -1,6 +1,6 @@
 # Architecture
 
-This page describes the **implemented 0.4.0 architecture** and is verified against the source under `python/buddy/`, `scripts/run.mjs` and `plugins/`. The repository's `docs/decisions/001-python-transactional-blackboard.md` (ADR-001) is the historical design record from which this implementation was built; where its wording describes a requirement rather than the shipped behavior, this page states what the code actually does today.
+This page describes the implemented architecture in this checkout and is verified against the source under `python/buddy/`, `scripts/run.mjs` and `plugins/`. It extends the 0.4.0 transactional blackboard with the shared evaluation table and React/Vite console. The repository's `docs/decisions/001-python-transactional-blackboard.md` (ADR-001) is the historical design record from which the blackboard was built; design proposals do not by themselves establish runtime behavior.
 
 ## Process topology
 
@@ -35,7 +35,7 @@ The transport DTO in the released C-Two 0.5.1 uses the Python pickle protocol fo
 
 ## Data model
 
-One schema-versioned SQLite database (`board.sqlite3`, schema version 5) owns every authoritative fact:
+One schema-versioned SQLite database (`board.sqlite3`, schema version 6) owns every authoritative fact:
 
 | Table | Contents |
 | --- | --- |
@@ -48,6 +48,10 @@ One schema-versioned SQLite database (`board.sqlite3`, schema version 5) owns ev
 | `commands` | idempotent command receipts: kind, request hash, response, subject (worker identity + nonce verifier) |
 | `resource_claims` | held cwd/exclusive resources per task, with release timestamps |
 | `cursors` | optional persisted consumer cursors |
+| `evaluation_state`, `evaluation_revisions` | current table/configuration revisions and immutable publication snapshots |
+| `evaluation_profiles`, `evaluation_cards`, `evaluation_preferences` | bounded current model configurations, evidence-backed summaries and explicit user preferences |
+| `evaluation_evidence`, `evaluation_catalog`, `evaluation_decisions` | attributed observations, explicit installed-harness discovery and decision records |
+| `evaluation_readers`, `evaluation_writers` | table-level admission, fair writer intent, generations and expiring grants |
 
 Connections are opened per operation with `foreign_keys=ON`, `journal_mode=WAL`, `synchronous=FULL`, `busy_timeout=10000` and `trusted_schema=OFF`; writes use `BEGIN IMMEDIATE`. Transactions are short, and no transaction spans RPC, a subprocess, an LLM call or an event wait. Startup refuses a database whose schema version differs or whose integrity/foreign-key checks fail, rather than rewriting records.
 
@@ -84,6 +88,10 @@ The service has no automatic inquiry scheduler; clients request it as needed. Th
 - A daemon restart preserves task and attempt identity. Every in-flight attempt becomes `uncertain` with its resource claims retained, and busy workers are marked `lost`. The legitimate worker keeps its child handle, deadline and receipt, and reattaches through `worker_renew`/`worker_reconcile` using the same attempt id, generation and nonce. Nothing is reattached by PID.
 - Lease expiry marks an attempt `uncertain`, never `stopped`. A surviving process is never inferred dead from a missing PID or an expired lease, and uncertainty is never converted into a retry: `retry` requires confirmed shutdown (`SHUTDOWN_UNCONFIRMED`) or the worker that owns the process handle reporting an observed outcome.
 - Workers keep an immutable local completion receipt and replay it until the service confirms the result transaction; a durable receipt is never executed twice. Spawn intent/marker files make the crash window explicit, and an intent owned by a previous process is preserved as orphaned evidence.
+
+## Evaluation and console
+
+The optional writable console serves a built React/Vite bundle over private loopback HTTP. Its session, exact-origin and CSRF checks are separate from the older read-only dashboard. HTTP mutations and agent-side C-Two operations reach the same Python business operations. The table-level reader/writer gate excludes selection readers from edits, not existing business execution; ordinary snapshot reads never take a lease or invoke models. See [evaluation.md](evaluation.md) for this boundary and [operations.md](operations.md#database-upgrade) for the explicit v5 upgrade.
 
 ## Runtime packaging
 

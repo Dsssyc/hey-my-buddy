@@ -44,6 +44,29 @@ Submit fields: `requestId` (1–128 chars, required), `task` (required, ≤1 MiB
 | `acknowledge` | selector plus `note` (required, ≤10000 bytes), `verdict` `accepted`/`rejected` (default `accepted`), `evidence` (≤32), `acknowledgedBy` | Records review of a persisted result with confirmed shutdown. Never changes execution status; a different repeated note or verdict is `CONFLICT` |
 | `artifacts` | `runId`, `taskId` or `attemptId` | Verified artifact records (kind, location, content hash, size) |
 
+### Evaluation and console
+
+`console` opens a separate writable private loopback surface; `console-snapshot` reads its authoritative data without a browser session and without invoking a model. The browser supplies its session-specific CSRF token separately. See [evaluation.md](evaluation.md) for editing, preferences and evidence semantics.
+
+| Command | Parameters | Behavior |
+| --- | --- | --- |
+| `console` | `action`: `open` (default), `status`, `close` | Private writable console lifecycle; reports URL, running/read-only flags and whether the built assets exist |
+| `console-snapshot` | none | Current revision, gate, configuration, profiles/cards/preferences, latest 200 evidence records, latest 50 decisions, pending count and latest 100 tasks with total |
+| `model-catalog-refresh` | optional `requestId` | Explicit installed-harness metadata discovery; returns attributed catalog and proposed disabled profiles, never auto-publishes or calls a model |
+| `evaluation-write-begin` | `requestId`, `expectedRevision`, optional `kind`: `human` (default) or `maintenance` | Fair writer intent; returns `writerId`, `generation`, `writerToken`, phase/state, expiry, revision and queue position |
+| `evaluation-write-renew` | writer fields | Renews an owned intent or active lease, reports state; caller retains the original token |
+| `evaluation-write-publish` | writer fields, `commandId`, `expectedRevision`, optional `profiles`, `cards`, `preferences`, `configuration` | Validates and atomically replaces provided collections, preserves omitted ones, publishes a new revision and releases the writer |
+| `evaluation-write-abort` | writer fields, `commandId` | Fences and releases this writer, leaving the last complete publication unchanged |
+| `evaluation-reader-begin` | optional `kind`: `selection`, `revision` | Admits one bounded selection reader if no writer intent is present; returns `readerId` and identified revision |
+| `evaluation-reader-release` | `readerId` | Idempotently releases that reader and promotes a waiting writer when possible |
+| `evaluation-evidence-record` | `profileId`, `kind`, `summary`, `source`; optional `commandId`, `project`, `conditions`, `runId` | Appends attributed, deduplicated evidence, including during an exclusive edit |
+
+Writer fields are `writerId`, integer `generation` and secret `writerToken`. Default leases are 60 seconds for active writers, 120 seconds for waiting intents and 300 seconds for selection readers. An expired or aborted writer cannot publish. `TABLE_BUSY`, `WRITER_NOT_ACTIVE`, `REVISION_CONFLICT`, `STALE_GENERATION` and `UNAUTHORIZED` distinguish admission, liveness, revision and authority failures. Request IDs identify writer intents; command IDs identify publication/abort receipts. Explicit null and omission are different inputs.
+
+Profile fields are `profileId`, `label`, `adapter`, `provider`, `model`, `effort`, `available`, `enabled`, `capabilities`, `contextWindow`, `description`, `source` and optional `unavailableReason`. Identity fields cannot be changed under the same profile ID, and availability must be backed by recorded discovery. Card input is only `profileId`, `summary`, `strengths`, `limitations`, `risks` and `evidenceIds`; derived counters, revision and timestamps are rejected. Preferences contain `profileId`, `mode` (`prefer`, `pin`, `exclude`) and `reason`. Configuration contains `decisionProfileId` and `autoMaintain`; unsupported enabled functionality is rejected by the service.
+
+Evidence kinds are `task-success`, `task-failure`, `task-cancelled`, `observation`, `incident`, `correction`, `manual`. Task kinds require `runId`. A summary is at most 2,000 characters, source at most 256, project at most 200, and conditions at most 8 entries. Evidence references in a card must belong to that profile. Discovery failure leaves both the publication and prior catalog intact.
+
 ### Events and bounded waits
 
 | Command | Parameters | Behavior |
@@ -104,6 +127,7 @@ Actor fields are `workerId`, `attemptId`, `generation` and `nonce`. Normally the
 | `restart` | optional `reason`, `drainSeconds` 0–120 (default 10) | Detaches the daemon without cancelling owned work; independent workers survive |
 | `stop` | optional `reason`, `drainSeconds` 0–120 (default 10) | Cancels queued tasks, writes durable cancel intent for active attempts, drains, returns `unresolvedAttempts` |
 | `legacy-import` | `sourceDir` plus optional `dryRun` (default `true`), `strict` (default `true`), `requestIds`, `snapshot` (default `false`) | Offline transactional import of removed Node records; see [operations.md](operations.md#legacy-import) |
+| `migrate` | optional `stateDir`, `dryRun` (default `false`), `confirm` (default `false`) | Explicit offline v5 → v6 upgrade, verified backup and atomic additive transaction; execution requires confirmation and a stopped service |
 
 `stop` and `restart` with no running daemon return an `alreadyStopped` envelope and start nothing.
 
