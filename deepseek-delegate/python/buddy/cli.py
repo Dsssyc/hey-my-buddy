@@ -49,6 +49,16 @@ METHODS = [
     "worker-stop",
     "wait-capacity",
     "dashboard",
+    "console",
+    "console-snapshot",
+    "evaluation-write-begin",
+    "evaluation-write-renew",
+    "evaluation-write-publish",
+    "evaluation-write-abort",
+    "evaluation-reader-begin",
+    "evaluation-reader-release",
+    "evaluation-evidence-record",
+    "model-catalog-refresh",
     "legacy-import",
     "restart",
     "stop",
@@ -106,6 +116,21 @@ examples:
       cancelled, active attempts get a durable cancel request, the service drains for
       a bounded interval and its response lists unresolved attempts. `buddy restart`
       detaches the daemon while preserving every independent worker.
+
+  buddy console '{"action":"open"}'
+      Open the separate writable local console on a private loopback URL. It is a
+      second, session- and CSRF-protected browser surface over the same validated
+      Python operations; the read-only `buddy dashboard` URL can never write.
+
+  buddy console-snapshot '{}'
+  buddy model-catalog-refresh '{"requestId":"first"}'
+      Read the bounded evaluation snapshot, or explicitly discover the installed DSH
+      harness model catalog. Neither runs a model; discovery never exposes credentials.
+
+  buddy evaluation-write-begin '{"requestId":"edit-1","expectedRevision":0,"kind":"human"}'
+  buddy evaluation-write-publish '{"commandId":"cmd-1","writerId":"...","generation":1,...}'
+      The durable table gate: one writer at a time, fenced by generation, lease and a
+      per-intent token. Omitted collections keep their published values.
 
   buddy legacy-import '{"sourceDir":"/old/state","dryRun":true}'
       Offline, idempotent, transactional import of the removed Node records. The

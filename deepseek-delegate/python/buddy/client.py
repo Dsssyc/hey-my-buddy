@@ -270,5 +270,93 @@ class BoardClient:
     def artifacts(self, **selector: Any) -> dict:
         return self.call("artifact_list", selector)
 
+    # -- console and the evaluation table -----------------------------------
+    def console_snapshot(self) -> dict:
+        return self.call("console_snapshot")
+
+    def console(self, action: str = "open") -> dict:
+        return self.call("console", {"action": action})
+
+    def evaluation_write_begin(self, request_id: str, expected_revision: int, *, kind: str = "human") -> dict:
+        return self.call(
+            "evaluation_write_begin",
+            {"requestId": request_id, "expectedRevision": expected_revision, "kind": kind},
+        )
+
+    def evaluation_write_renew(self, writer_id: str, generation: int, writer_token: str) -> dict:
+        return self.call(
+            "evaluation_write_renew",
+            {"writerId": writer_id, "generation": generation, "writerToken": writer_token},
+        )
+
+    def evaluation_write_publish(
+        self,
+        command_id: str,
+        writer_id: str,
+        generation: int,
+        writer_token: str,
+        expected_revision: int,
+        **collections: Any,
+    ) -> dict:
+        return self.call(
+            "evaluation_write_publish",
+            {
+                "commandId": command_id,
+                "writerId": writer_id,
+                "generation": generation,
+                "writerToken": writer_token,
+                "expectedRevision": expected_revision,
+                **collections,
+            },
+        )
+
+    def evaluation_write_abort(self, command_id: str, writer_id: str, generation: int, writer_token: str) -> dict:
+        return self.call(
+            "evaluation_write_abort",
+            {
+                "commandId": command_id,
+                "writerId": writer_id,
+                "generation": generation,
+                "writerToken": writer_token,
+            },
+        )
+
+    def evaluation_reader_begin(self, *, kind: str = "selection", revision: int | None = None) -> dict:
+        return self.call(
+            "evaluation_reader_begin", {"kind": kind, **({"revision": revision} if revision is not None else {})}
+        )
+
+    def evaluation_reader_release(self, reader_id: str) -> dict:
+        return self.call("evaluation_reader_release", {"readerId": reader_id})
+
+    def evaluation_evidence_record(
+        self,
+        profile_id: str,
+        kind: str,
+        summary: str,
+        source: str,
+        *,
+        project: str | None = None,
+        conditions: list[str] | None = None,
+        run_id: str | None = None,
+        command_id: str | None = None,
+    ) -> dict:
+        return self.call(
+            "evaluation_evidence_record",
+            {
+                "commandId": command_id,
+                "profileId": profile_id,
+                "kind": kind,
+                "summary": summary,
+                "project": project,
+                "conditions": conditions or [],
+                "source": source,
+                "runId": run_id,
+            },
+        )
+
+    def model_catalog_refresh(self, request_id: str | None = None) -> dict:
+        return self.call("model_catalog_refresh", {"requestId": request_id})
+
 
 __all__ = ["BoardClient", "BoardError", "new_command_id", "new_nonce", "DEFAULT_LEASE_SECONDS"]
