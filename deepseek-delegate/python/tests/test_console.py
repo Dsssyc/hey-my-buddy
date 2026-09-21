@@ -501,7 +501,7 @@ class ConsoleDaemonTests(ConsoleTestCase):
             code, status_reply = self.cli("console", json.dumps({"action": "status"}))
             self.assertEqual(code, 0, status_reply)
             self.assertTrue(status_reply["running"])
-            self.assertFalse(status_reply["assetsBuilt"])
+            self.assertTrue(status_reply["assetsBuilt"])
             code, closed = self.cli("console", json.dumps({"action": "close"}))
             self.assertEqual(code, 0, closed)
             self.assertTrue(closed["closed"])

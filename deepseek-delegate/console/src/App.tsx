@@ -7,6 +7,7 @@ import { useEditor } from "./use-editor";
 import { Tasks } from "./Tasks";
 import { Models } from "./Models";
 import { Settings } from "./Settings";
+import { needsReview } from "./task-state";
 import { Badge, Icon } from "./ui";
 import "./styles.css";
 
@@ -71,10 +72,7 @@ function Connected({
   const running = snapshot.tasks.runs.filter(
     (t) => t.status === "running",
   ).length;
-  const review = snapshot.tasks.runs.filter(
-    (t) =>
-      !t.acceptedAt && ["completed", "failed", "cancelled"].includes(t.status),
-  ).length;
+  const review = snapshot.tasks.runs.filter(needsReview).length;
   const gateLabel =
     snapshot.gate.phase === "open"
       ? "评价表可读"

@@ -3,16 +3,7 @@ import type { ConsoleApi } from "./api";
 import { errorText } from "./api";
 import type { Snapshot, Task } from "./types";
 import { Badge, display, Empty, formatDate, Icon, Status } from "./ui";
-
-function resultText(value: unknown): string {
-  const view = value as Record<string, any> | null;
-  const result = view?.selectedAttempt?.result || view?.result;
-  return (
-    result?.finalText ||
-    result?.runner?.finalText ||
-    "尚无持久交付结果。执行结束和验收会分别记录。"
-  );
-}
+import { canRetry, needsReview, resultText } from "./task-state";
 
 export function Tasks({
   snapshot,
@@ -55,8 +46,7 @@ export function Tasks({
       (filter === "all" ||
         (filter === "active"
           ? ["queued", "running", "cancelling"].includes(t.status)
-          : !t.acceptedAt &&
-            ["completed", "failed", "cancelled"].includes(t.status))) &&
+          : needsReview(t))) &&
       `${t.task} ${t.cwd} ${t.runId}`
         .toLowerCase()
         .includes(query.toLowerCase()),
@@ -214,7 +204,7 @@ export function Tasks({
               {["failed", "cancelled"].includes(task.status) && (
                 <button
                   className="button"
-                  disabled={busy || task.shutdownConfirmed !== true}
+                  disabled={busy || !canRetry(task)}
                   onClick={() =>
                     void command("task_retry", { runId: task.runId })
                   }
@@ -223,8 +213,7 @@ export function Tasks({
                 </button>
               )}
             </div>
-            {!task.acceptedAt &&
-              ["completed", "failed", "cancelled"].includes(task.status) && (
+            {needsReview(task) && (
                 <section className="detail-section">
                   <h3>记录验收</h3>
                   <label className="field">

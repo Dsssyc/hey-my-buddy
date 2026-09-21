@@ -29,7 +29,10 @@ def main():
     node = env.get("BUDDY_NODE") or shutil.which("node")
     if not node:
         raise SystemExit("Node.js is required for the dsh process runner")
-    subprocess.run([node, "--test"], cwd=root, env=env, check=True)
+    # Browser tests belong to Vitest; Node's recursive discovery also picks up
+    # console/**/*.test.ts, which cannot run without that DOM/TypeScript setup.
+    node_tests = sorted(str(path) for path in (root / "tests").glob("*.test.mjs"))
+    subprocess.run([node, "--test", *node_tests], cwd=root, env=env, check=True)
 
 
 if __name__ == "__main__":

@@ -57,6 +57,49 @@ afterEach(() => {
 });
 
 describe("console interactions", () => {
+  it("retries a never-claimed cancellation without asking to accept nonexistent output", async () => {
+    const state = initial();
+    state.tasks = { total: 1, runs: [{
+      runId: "cancelled-before-claim", task: "未执行的测试任务", status: "cancelled",
+      owner: "fixture", cwd: "/fixture", revision: 2, createdAt: "2026-09-22T00:00:00Z",
+      acceptedAt: null, acceptanceVerdict: null, activeAttemptId: null, selectedAttemptId: null,
+      shutdownConfirmed: false, resultAvailable: false,
+    }] };
+    const api = { snapshot: vi.fn(async () => state), command: vi.fn(async () => ({})),
+      task: vi.fn(async () => state.tasks.runs[0]) } as unknown as ConsoleApi;
+    const user = userEvent.setup();
+    render(<App suppliedApi={api} />);
+    await user.click(await screen.findByRole("button", { name: /未执行的测试任务/ }));
+    const retry = await screen.findByRole("button", { name: "重新尝试" });
+    expect(retry).toHaveProperty("disabled", false);
+    expect(screen.queryByRole("heading", { name: "记录验收" })).toBeNull();
+    await user.click(retry);
+    expect(api.command).toHaveBeenCalledWith("task_retry", { runId: "cancelled-before-claim" }, "fixture-csrf");
+    await user.click(screen.getByRole("button", { name: "待验收" }));
+    expect(await screen.findByRole("heading", { name: "没有匹配的任务" })).toBeTruthy();
+  });
+
+  it("renders the persisted worker receipt and refuses retry when a process may survive", async () => {
+    const state = initial();
+    state.tasks = { total: 1, runs: [{
+      runId: "unconfirmed-run", task: "停止证据测试", status: "failed",
+      owner: "fixture", cwd: "/fixture", revision: 3, createdAt: "2026-09-22T00:00:00Z",
+      acceptedAt: null, acceptanceVerdict: null, activeAttemptId: "attempt", selectedAttemptId: "attempt",
+      shutdownConfirmed: false, resultAvailable: true,
+    }] };
+    const api = { snapshot: vi.fn(async () => state), command: vi.fn(),
+      task: vi.fn(async () => ({ ...state.tasks.runs[0], selectedAttempt: { result: {
+        status: "failed", result: { finalText: "真实回执中的产物说明" }, shutdownConfirmed: false,
+      } } })) } as unknown as ConsoleApi;
+    const user = userEvent.setup();
+    render(<App suppliedApi={api} />);
+    await user.click(await screen.findByRole("button", { name: /停止证据测试/ }));
+    expect(await screen.findByText("真实回执中的产物说明")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "重新尝试" })).toHaveProperty("disabled", true);
+    expect(screen.queryByRole("heading", { name: "记录验收" })).toBeNull();
+    expect(api.command).not.toHaveBeenCalled();
+  });
+
   it("viewing and switching pages never sends a write or model request", async () => {
     const api = {
       snapshot: vi.fn(async () => initial()),
