@@ -87,6 +87,14 @@ class BoardStore:
         self._condition = threading.Condition()
         self._head = 0
         self.persistence_error: str | None = None
+        # The board is the single composition root for durable evaluation and
+        # decision state: both wrap this same store (one SQLite file, one event
+        # stream) and neither opens a transaction of its own.
+        from .decision import DecisionCoordinator
+        from .evaluation import EvaluationStore
+
+        self.evaluation = EvaluationStore(self, clock=self._clock)
+        self.decisions = DecisionCoordinator(self, self.evaluation)
 
     # -- lifecycle -----------------------------------------------------------
     def initialize(self) -> None:
@@ -94,6 +102,10 @@ class BoardStore:
         with self.db.read() as connection:
             row = connection.execute("SELECT COALESCE(MAX(seq), 0) AS head FROM events").fetchone()
             self._head = int(row["head"])
+        # One-time ordered backfill for boards written before the pending/sample
+        # index tables existed. It never runs on a request path and never rewrites a
+        # report or a published card.
+        self.evaluation.backfill_indexes()
         self.reconcile_startup()
 
     def now(self) -> str:
@@ -696,6 +708,10 @@ class BoardStore:
                         payload={"reason": reason, "actor": actor},
                     )
                 task = connection.execute("SELECT * FROM tasks WHERE task_id = ?", (task["task_id"],)).fetchone()
+                # A decision run is an ordinary cancellable task. Cancelling it marks
+                # the decision terminal in the same transaction, so a queued selection
+                # that is cancelled can never become a current recommendation.
+                self.decisions.cancelled(connection, task=task, reason=reason, now=now)
             response = {"task": self._decorate(connection, task), "alreadyTerminal": already}
             if command_id:
                 self._store_receipt(
@@ -731,6 +747,16 @@ class BoardStore:
                 if receipt is not None:
                     return receipt
             task = self._task_row(connection, params)
+            spec = json.loads(task["spec_json"])
+            if spec.get("decision"):
+                # A paid decision call is never replayed implicitly. A decision result
+                # is retained and inspected; a new request is an explicit Host choice.
+                raise BoardError(
+                    "UNSUPPORTED",
+                    "A decision run is not retried; submit a new selection_request or evaluation_maintain request "
+                    "with a new requestId. Nothing was re-executed.",
+                    taskId=task["task_id"],
+                )
             attempt = self._selected_attempt(connection, task)
             uncertain = attempt is not None and (
                 attempt["execution_state"] in ACTIVE_ATTEMPT_STATES or not attempt["shutdown_confirmed"]
@@ -823,6 +849,15 @@ class BoardStore:
                 if receipt is not None:
                     return receipt
             task = self._task_row(connection, params)
+            if json.loads(task["spec_json"]).get("decision"):
+                # A model recommendation is not business work and never becomes
+                # acceptance or performance evidence.
+                raise BoardError(
+                    "UNSUPPORTED",
+                    "A decision run is not acknowledged as business work; its recommendation is recorded separately "
+                    "and never counts as task acceptance or model-performance evidence.",
+                    taskId=task["task_id"],
+                )
             attempt = self._selected_attempt(connection, task)
             if attempt is None or attempt["result_json"] is None:
                 raise BoardError("NOT_READY", "Inspect a persisted result before acknowledging")
@@ -858,6 +893,10 @@ class BoardStore:
                 )
                 task = connection.execute("SELECT * FROM tasks WHERE task_id = ?", (task["task_id"],)).fetchone()
                 response = {"task": self._decorate(connection, task), "duplicate": False}
+            # The verdict can arrive after reports about this attempt were recorded:
+            # re-derive their verification now, so an accepted attempt counts as one
+            # sample and an unreviewed one still does not.
+            self.evaluation.refresh_task_evidence(connection, task, self.now())
             if command_id:
                 self._store_receipt(
                     connection, command_id, "task.acknowledge", request, response, task_id=task["task_id"]
@@ -1039,6 +1078,9 @@ class BoardStore:
                     "SELECT * FROM tasks WHERE state='queued' ORDER BY created_at, task_id LIMIT 50"
                 ).fetchall()
             chosen: sqlite3.Row | None = None
+            chosen_generation = 0
+            chosen_attempt_id: str | None = None
+            chosen_input: dict | None = None
             blocker = "no-queued-work"
             for task in candidates:
                 if task is None:
@@ -1067,7 +1109,39 @@ class BoardStore:
                         (reason, self.now(), task["task_id"]),
                     )
                     continue
+                generation_row = connection.execute(
+                    "SELECT COALESCE(MAX(generation), 0) AS generation FROM attempts WHERE task_id=?",
+                    (task["task_id"],),
+                ).fetchone()
+                attempt_id = str(uuid.uuid4())
+                generation = int(generation_row["generation"]) + 1
+                # A decision task is admitted *here*, inside the same transaction that
+                # claims it: the selection reader or the maintenance writer grant is
+                # bound to this attempt and the exact bounded model input is persisted
+                # before any process exists. A blocked decision stays queued, holds no
+                # execution slot and is skipped for the next candidate.
+                claim_input: dict | None = None
+                if task["adapter"] == "decision":
+                    blocked, claim_input = self.decisions.claim(
+                        connection,
+                        task=task,
+                        spec=spec,
+                        attempt_id=attempt_id,
+                        generation=generation,
+                        now=self.now(),
+                    )
+                    if blocked:
+                        blocker = blocked
+                        if blocked != "decision-closed":
+                            connection.execute(
+                                "UPDATE tasks SET queue_reason=?, updated_at=? WHERE task_id=?",
+                                (blocked, self.now(), task["task_id"]),
+                            )
+                        continue
                 chosen = task
+                chosen_generation = generation
+                chosen_attempt_id = attempt_id
+                chosen_input = claim_input
                 break
             if chosen is None:
                 head = self._head_of(connection)
@@ -1083,12 +1157,8 @@ class BoardStore:
                 self._notify(head)
                 return response
             spec = json.loads(chosen["spec_json"])
-            generation_row = connection.execute(
-                "SELECT COALESCE(MAX(generation), 0) AS generation FROM attempts WHERE task_id=?",
-                (chosen["task_id"],),
-            ).fetchone()
-            generation = int(generation_row["generation"]) + 1
-            attempt_id = str(uuid.uuid4())
+            generation = chosen_generation
+            attempt_id = chosen_attempt_id or str(uuid.uuid4())
             now = self.now()
             capability = self.db.capability(attempt_id, generation, nonce)
             lease_expires_at = self._lease_deadline()
@@ -1158,6 +1228,12 @@ class BoardStore:
                 },
                 "reason": None,
             }
+            if chosen_input is not None:
+                # The bounded decision payload the service persisted for this attempt.
+                # It travels only to the claiming worker and is written to the private
+                # attempt directory by the decision adapter; adapters never see the
+                # database, and no credential is part of this document.
+                response["claim"]["decisionInput"] = chosen_input
             # ``capability`` is deliberately absent from the stored receipt: it is
             # derived again for the authenticated caller on replay.
             self._store_receipt(
@@ -1434,6 +1510,12 @@ class BoardStore:
                     " WHERE worker_id=?",
                     (now, attempt["attempt_id"], attempt["worker_id"]),
                 )
+            # Keep this decision's fenced reader/writer lease alive for the length of
+            # one bounded model call; renewal never resurrects a terminal decision.
+            renew_task = connection.execute(
+                "SELECT * FROM tasks WHERE task_id=?", (attempt["task_id"],)
+            ).fetchone()
+            self.decisions.renew(connection, task=renew_task, now=now)
             task = connection.execute("SELECT * FROM tasks WHERE task_id=?", (attempt["task_id"],)).fetchone()
             attempt_row = connection.execute("SELECT * FROM attempts WHERE attempt_id=?", (attempt["attempt_id"],)).fetchone()
             response = {
@@ -1696,6 +1778,21 @@ class BoardStore:
                 "committed": True,
                 "taskState": task_state,
             }
+            # Completion-to-decision publication happens *inside this transaction*: a
+            # recommendation, its retained proposal and the evaluation revision it may
+            # publish commit with the attempt result, never as a side effect of a read.
+            decision = self.decisions.complete(
+                connection,
+                task=task_row,
+                attempt=attempt_row,
+                status=status,
+                result=result,
+                shutdown_confirmed=shutdown_confirmed,
+                error=error_text,
+                now=now,
+            )
+            if decision is not None:
+                response["decision"] = decision
             self._store_receipt(
                 connection,
                 command_id,
@@ -1773,6 +1870,9 @@ class BoardStore:
                 },
             )
             task_row = connection.execute("SELECT * FROM tasks WHERE task_id=?", (attempt["task_id"],)).fetchone()
+            # An attempt released before its adapter ran means the decision never
+            # reached a model: it fails honestly and releases its reader or writer.
+            self.decisions.released(connection, task=task_row, reason=reason, now=now)
             head = self._head_of(connection)
         self._notify(head)
         return {"task": self._decorate(connection, task_row) if False else self._task_view(task_row), "released": True}
@@ -2128,6 +2228,15 @@ class BoardStore:
                         "its resource claims are retained until the worker reattaches or an operator retries"
                     },
                 )
+                # A decision whose helper this service no longer supervises may not
+                # become a current recommendation: it is fenced as stale and its
+                # admission or writer grant is released.
+                self.decisions.fence_attempt(
+                    connection,
+                    attempt=attempt,
+                    reason="the service restarted while this decision was running",
+                    now=now,
+                )
             summary["retained"] = int(
                 connection.execute(
                     "SELECT COUNT(*) AS count FROM resource_claims WHERE state='retained'"
@@ -2170,6 +2279,15 @@ class BoardStore:
                     attempt_id=attempt["attempt_id"],
                     revision=task["revision"] if task else None,
                     payload={"leaseExpiresAt": attempt["lease_expires_at"], "ownership": "uncertain"},
+                )
+                # Lease expiry is never evidence that a process stopped, so the
+                # decision it belonged to is stale — its result is retained but can
+                # no longer become a current recommendation.
+                self.decisions.fence_attempt(
+                    connection,
+                    attempt=attempt,
+                    reason="the attempt lease expired while this decision was running",
+                    now=self.now(),
                 )
                 marked += 1
             head = self._head_of(connection) if marked else 0

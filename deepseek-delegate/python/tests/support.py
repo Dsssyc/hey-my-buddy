@@ -25,6 +25,7 @@ if str(PYTHON_ROOT) not in sys.path:
 
 from buddy.client import BoardClient  # noqa: E402
 from buddy.console import Console  # noqa: E402
+from buddy.decision import DecisionCoordinator  # noqa: E402
 from buddy.evaluation import EvaluationStore  # noqa: E402
 from buddy.legacy import LegacyImporter  # noqa: E402
 from buddy.service import BoardService, WaitAdmission, WaitService, dispatch_local  # noqa: E402
@@ -154,18 +155,22 @@ class InProcessBoard:
             wait_capacity=options.get("wait_capacity", 4),
             **({"clock": clock} if clock is not None else {}),
         )
-        self.store.initialize()
-        self.admission = WaitAdmission(options.get("wait_capacity", 4))
-        self.control: dict = {"wait_admission": self.admission}
-        self.stopped: list[dict] = []
-        self.restarted: list[dict] = []
-        self.evaluation = EvaluationStore(
+        # One evaluation store and one decision coordinator for the whole harness:
+        # the store hooks and the resource implementations must fence the same gate.
+        self.store.evaluation = EvaluationStore(
             self.store,
             clock=clock,
             writer_lease_seconds=options.get("writer_lease_seconds", 60),
             writer_queue_seconds=options.get("writer_queue_seconds", 120),
             reader_lease_seconds=options.get("reader_lease_seconds", 300),
         )
+        self.store.decisions = DecisionCoordinator(self.store, self.store.evaluation)
+        self.store.initialize()
+        self.admission = WaitAdmission(options.get("wait_capacity", 4))
+        self.control: dict = {"wait_admission": self.admission}
+        self.stopped: list[dict] = []
+        self.restarted: list[dict] = []
+        self.evaluation = self.store.evaluation
         self.console: Console | None = None
         self.service = BoardService(
             self.store,

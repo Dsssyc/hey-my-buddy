@@ -16,6 +16,7 @@ export function canRetry(task: Task): boolean {
   const neverClaimed =
     task.selectedAttemptId === null && task.activeAttemptId === null;
   return (
+    task.spec?.adapter !== "decision" &&
     ["failed", "cancelled"].includes(task.status) &&
     (neverClaimed || task.shutdownConfirmed === true)
   );

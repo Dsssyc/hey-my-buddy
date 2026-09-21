@@ -29,6 +29,10 @@ class ExecutionContext:
     runtime: dict
     environment: dict
     lease_seconds: int = 120
+    #: Bounded decision payload the service persisted for this attempt, handed to the
+    #: worker in its claim and written to disk by the decision adapter. It is the only
+    #: way decision input reaches a model; adapters still never see the database.
+    decision_input: dict | None = None
 
     @property
     def cwd(self) -> str:

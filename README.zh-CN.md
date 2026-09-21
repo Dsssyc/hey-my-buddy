@@ -63,6 +63,8 @@ Codex 只启动一次任务，并在同一回合里等待它运行。你可以�
 
 通过 `buddy console` 可以查看任务、发现已安装的模型配置、编辑偏好和维护共享评价卡片。这个 React/Vite 本地控制台与 CLI 使用同一块黑板；查看和刷新页面不会调用模型。详见[共享评价与控制台](deepseek-delegate/references/evaluation.md)。使用 schema v5 的现有安装需要先执行[显式数据库升级](deepseek-delegate/references/operations.md#database-upgrade)。
 
+配置固定的决策 Buddy 后，可以显式请求它推荐执行配置或整理有界的评价更新。Host 只需读取小摘要，再决定业务任务；推荐不会自行启动任务。评价维护占用真实 Worker 容量；货币预算和自动后台维护调度尚未实现。
+
 - 工作区分组默认开启，需要一次性安装一个宿主桥接；上面的第一个示例用 `workspace: false`，因此无需该配置即可运行。不要假设默认值被改动过，详见[运维说明](deepseek-delegate/references/operations.md)。
 - 执行期限默认 30 分钟。长任务请在请求中明确更长的时限，最多 24 小时。
 - 请写清允许修改的文件。工作目录不会限制文件访问权限；独立 worktree 可避免并行修改相互干扰。

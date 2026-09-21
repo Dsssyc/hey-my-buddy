@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { ConsoleApi } from "./api";
-import { ApiError, errorText } from "./api";
+import { ApiError, errorText, uncertainResponse } from "./api";
 import { makeDraft, publication } from "./draft";
 import type { Draft, Snapshot, WriterGrant } from "./types";
 
@@ -20,6 +20,7 @@ export function useEditor(
   const csrf = useRef(snapshot.csrfToken);
   csrf.current = snapshot.csrfToken;
   const pendingSave = useRef<ReturnType<typeof publication> | null>(null);
+  const pendingBegin = useRef<{requestId: string; expectedRevision: number; kind: "human"} | null>(null);
   const setGrant = useCallback((value: WriterGrant | null) => {
     current.current = value;
     setGrantState(value);
@@ -89,19 +90,19 @@ export function useEditor(
     setBusy(true);
     setError("");
     setNotice("");
+    const request = pendingBegin.current || { requestId: crypto.randomUUID(), expectedRevision: snapshot.tableRevision, kind: "human" as const };
+    pendingBegin.current = request;
     try {
       const next = await api.command<WriterGrant>(
         "evaluation_write_begin",
-        {
-          requestId: crypto.randomUUID(),
-          expectedRevision: snapshot.tableRevision,
-          kind: "human",
-        },
+        request,
         snapshot.csrfToken,
       );
+      pendingBegin.current = null;
       setGrant(next);
       await refresh();
     } catch (failure) {
+      if (!uncertainResponse(failure)) pendingBegin.current = null;
       setError(errorText(failure));
     } finally {
       setBusy(false);
@@ -129,9 +130,7 @@ export function useEditor(
       setNotice("已发布新版本。正在执行的任务继续使用原配置。");
       await refresh();
     } catch (failure) {
-      const ambiguous =
-        failure instanceof ApiError &&
-        (failure.code === "NETWORK" || failure.code.startsWith("HTTP_5"));
+      const ambiguous = uncertainResponse(failure);
       setUncertain(ambiguous);
       if (!ambiguous) pendingSave.current = null;
       setError(

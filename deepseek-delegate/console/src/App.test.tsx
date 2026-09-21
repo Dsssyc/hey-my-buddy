@@ -58,6 +58,26 @@ afterEach(() => {
 });
 
 describe("console interactions", () => {
+  it("recovers the same editor intent when the committed grant response was lost", async () => {
+    const state = initial();
+    const grant: WriterGrant = { writerId: "writer", generation: 1, writerToken: "private", phase: "writing", tableRevision: 2, expiresAt: new Date(Date.now() + 120000).toISOString() };
+    let calls = 0;
+    const command = vi.fn(async () => {
+      state.gate = { phase: "writing", readers: 0, waitingWriters: 0, writer: { ...grant, kind: "human" } };
+      if (++calls === 1) throw new ApiError("INVALID_RESPONSE", "lost grant");
+      return grant;
+    });
+    const api = { snapshot: vi.fn(async () => structuredClone(state)), command, task: vi.fn() } as unknown as ConsoleApi;
+    const user = userEvent.setup();
+    render(<App suppliedApi={api} />);
+    await user.click(await screen.findByRole("button", { name: "编辑评价表" }));
+    await screen.findByText("lost grant");
+    await user.click(screen.getByRole("button", { name: "编辑评价表" }));
+    await screen.findByRole("button", { name: "发布新版本" });
+    expect(command).toHaveBeenCalledTimes(2);
+    expect(command.mock.calls[1]).toEqual(command.mock.calls[0]);
+  });
+
   it("reuses the original decision request after an ambiguous network response", async () => {
     const state = initial();
     state.capabilities.selection = true;

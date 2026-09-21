@@ -381,6 +381,14 @@ class Daemon:
                 self.store.mark_expired_leases()
             except Exception:  # pragma: no cover - a sweep must never kill the daemon
                 pass
+            try:
+                # A queued or active maintenance grant is renewed by the only writer
+                # that owns the table, so a long model call inside one bounded window
+                # neither starves nor is starved. A dead attempt's grant is left to
+                # expire, which reopens selection admission.
+                self.store.decisions.renew_open_writers(self.store.now())
+            except Exception:  # pragma: no cover - a sweep must never kill the daemon
+                pass
 
     # -- control actions -----------------------------------------------------
     def on_stop(self, params: dict) -> dict:

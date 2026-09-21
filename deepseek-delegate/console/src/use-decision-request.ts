@@ -1,6 +1,6 @@
 import { useRef, useState } from "react";
 import type { ConsoleApi } from "./api";
-import { ApiError, errorText } from "./api";
+import { errorText, uncertainResponse } from "./api";
 import type { Snapshot } from "./types";
 
 export function useDecisionRequest(
@@ -37,12 +37,7 @@ export function useDecisionRequest(
       setMessage("请求已记录，可在最近决策和工作队列中查看进度。");
       await refresh();
     } catch (error) {
-      const uncertain =
-        !(error instanceof ApiError) ||
-        ["NETWORK", "INVALID_RESPONSE", "INTERNAL_ERROR"].includes(
-          error.code,
-        ) ||
-        /^HTTP_5/.test(error.code);
+      const uncertain = uncertainResponse(error);
       if (uncertain) {
         setRetryId(String(request.params.requestId));
         setMessage(

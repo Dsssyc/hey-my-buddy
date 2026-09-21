@@ -64,7 +64,7 @@ type ConsoleSnapshot = {
 - `evaluation_evidence_record`: `{commandId,profileId,kind,summary,project?,conditions?,source,runId?}`. Bounded source-attributed evidence; receipts can be added during a writer interval. De-duplicate by identity; unverified manual/worker reports must not count as accepted task successes. Existing evidence is not silently rewritten.
 - `task_cancel`, `task_retry`, `task_acknowledge`: existing semantics and input shapes; the UI forwards a selected task identity and the backend validates current state. These controls stay usable while the evaluation gate is closed. Retry never bypasses shutdown evidence.
 
-The next slice adds `selection_request` and `evaluation_maintain` using the fixed decision profile, plus Host-directed yield/assistance/continuation and takeover. They must not be falsely advertised before implementation. Keep snapshot fields present as empty collections until real persisted data exists; no simulated progress or invented ratings.
+The decision slice now implements `selection_request`, `selection_get` and `evaluation_maintain` through the fixed decision profile on the real Worker queue. `selection_get` defaults to a small summary with frozen `selectedProfile`; `includeAudit:true` adds input/output/proposal. Automatic reference compaction retains immutable card history without requeueing processed sources, while unresolved risk/limitation text and applicability conditions remain protected. Host-directed yield/assistance/continuation and takeover remain pending. Supported behavior and bounds are owned by [the evaluation reference](../../deepseek-delegate/references/evaluation.md) and [CLI reference](../../deepseek-delegate/references/cli.md).
 
 ## Implementation ownership
 

@@ -438,6 +438,7 @@ class Worker:
             runtime=runtime.resolve_runtime(),
             environment={**os.environ, "BUDDY_STATE_DIR": str(self.state_dir)},
             lease_seconds=self.lease_seconds,
+            decision_input=claim.get("decisionInput"),
         )
         implementation = get_adapter(spec["adapter"])
         usable, reason = implementation.available()

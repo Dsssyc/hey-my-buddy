@@ -63,6 +63,10 @@ Choose a model for the task's needs, never by Pro/Flash in the name. Set `model`
 
 `buddy console` opens the private React/Vite workspace for tasks, model profiles, evidence and preferences. Ordinary page refresh and `console-snapshot` are read-only and invoke no model. Explicit catalog discovery proposes installed configurations; it does not prove their real-world quality or enable them automatically. Use [evaluation.md](references/evaluation.md) for table editing and evidence, and inspect reported capabilities before invoking decision operations. A running business task keeps its accepted configuration when the current evaluation table changes.
 
+When a route is already explicit, use it. When model comparison is needed and a decision profile is configured, submit `selection-request` once with a stable request ID, await its returned run ID if present, then read `selection-get` by decision ID. Its default small summary carries `selectedProfile` execution parameters; do not load the complete evaluation table into the Host context. `includeAudit:true` is for investigating a decision. This result proposes a route; the Host still authorizes the separate business task. A `needs-host` or failed decision does not fail the business goal: use an already authorized fixed route or do the work as Host when appropriate.
+
+Internal decision runs are not business deliverables and cannot be acknowledged or retried with task operations. For a new deliberate attempt, submit a new decision request; for an uncertain submission, recover the same request ID. `evaluation-maintain` explicitly requests a bounded batch; `autoMaintain` controls whether safe results can publish without another review, and never schedules calls from page refresh. Record scoped experience against a known profile and actual run after Host verification; ordinary observations and model-generated recommendations are not verified performance samples.
+
 ## Progress and questions
 
 When a run has been quiet and you need to report honestly:

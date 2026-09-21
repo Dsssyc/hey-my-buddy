@@ -52,6 +52,9 @@ One schema-versioned SQLite database (`board.sqlite3`, schema version 6) owns ev
 | `evaluation_profiles`, `evaluation_cards`, `evaluation_preferences` | bounded current model configurations, evidence-backed summaries and explicit user preferences |
 | `evaluation_evidence`, `evaluation_catalog`, `evaluation_decisions` | attributed observations, explicit installed-harness discovery and decision records |
 | `evaluation_readers`, `evaluation_writers` | table-level admission, fair writer intent, generations and expiring grants |
+| `decision_requests` | idempotent decision identity, frozen input/output, attempt binding, gate authority and publication evidence |
+| `evaluation_evidence_pending`, `evaluation_samples`, `evaluation_aggregates` | pending work and distinct reviewed attempt samples, with transactional constant-size counters |
+| `evaluation_card_history` | per-publication card snapshots and provenance retained when current references are compacted |
 
 Connections are opened per operation with `foreign_keys=ON`, `journal_mode=WAL`, `synchronous=FULL`, `busy_timeout=10000` and `trusted_schema=OFF`; writes use `BEGIN IMMEDIATE`. Transactions are short, and no transaction spans RPC, a subprocess, an LLM call or an event wait. Startup refuses a database whose schema version differs or whose integrity/foreign-key checks fail, rather than rewriting records.
 
@@ -92,6 +95,8 @@ The service has no automatic inquiry scheduler; clients request it as needed. Th
 ## Evaluation and console
 
 The optional writable console serves a built React/Vite bundle over private loopback HTTP. Its session, exact-origin and CSRF checks are separate from the older read-only dashboard. HTTP mutations and agent-side C-Two operations reach the same Python business operations. The table-level reader/writer gate excludes selection readers from edits, not existing business execution; ordinary snapshot reads never take a lease or invoke models. See [evaluation.md](evaluation.md) for this boundary and [operations.md](operations.md#database-upgrade) for the explicit v5 upgrade.
+
+`selection_request`, `selection_get` and `evaluation_maintain` are named C-Two operations. Decisions use the internal `decision` adapter on the existing Worker queue, not a daemon-owned process runner. Input is frozen in the claim, and decision completion, reader/writer release and any publication share the Worker result transaction. Proposal validation uses a savepoint so an invalid patch can settle without poisoning the completion receipt. The [native helper](decision.md) has no coding tools. Host-directed assistance, continuation, workspace transfer and takeover from ADR-002 remain unimplemented.
 
 ## Runtime packaging
 

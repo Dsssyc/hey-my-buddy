@@ -104,7 +104,12 @@ class EvaluationTestCase(BoardTestCase):
         return error
 
     def completed_task(self, board, request_id: str = "task-1", *, ok: bool = True) -> str:
-        """Run one real command-adapter task to a committed, shutdown-confirmed result."""
+        """Run one real command-adapter task to a committed, shutdown-confirmed result.
+
+        A command task records no model identity, so it is real work but never a
+        verified model-performance sample. The identity-bearing fixture is
+        :meth:`modelled_task`.
+        """
         submitted = board.call(
             "task_submit",
             {
@@ -133,12 +138,67 @@ class EvaluationTestCase(BoardTestCase):
         )
         return run_id
 
+    def modelled_task(
+        self,
+        board,
+        request_id: str = "task-m1",
+        *,
+        verdict: str | None = "accepted",
+        failed: bool = False,
+        profile: dict | None = None,
+    ) -> str:
+        """One dsh-identity task whose reported request matches the fixture profile.
+
+        The test acts as the worker and reports exactly what a real dsh run reports,
+        including its requested configuration. ``verdict=None`` leaves the work
+        unreviewed; a verdict records the Host's acceptance or rejection.
+        """
+        identity = profile or PROFILE
+        client = board.client()
+        submitted = client.submit(
+            requestId=request_id,
+            task="produce a model result",
+            cwd=str(self.workdir()),
+            model=identity["model"],
+            provider=identity["provider"],
+            effort=identity["effort"],
+        )
+        run_id = submitted["task"]["runId"]
+        worker_id = f"worker-{request_id}"
+        client.register_worker(worker_id, adapter="dsh", capabilities=["dsh"])
+        claim = client.claim(worker_id, f"claim-{request_id}", "n" * 32, task_id=run_id)["claim"]
+        client.submit_result(
+            worker_id,
+            claim["attempt"]["attemptId"],
+            claim["attempt"]["generation"],
+            "n" * 32,
+            {
+                "status": "failed" if failed else "ok",
+                "result": {
+                    "status": "failed" if failed else "ok",
+                    "mode": "run",
+                    "requested": {
+                        "provider": identity["provider"],
+                        "model": identity["model"],
+                        "reasoningEffort": identity["effort"],
+                    },
+                    "error": "the model produced unusable output" if failed else None,
+                    "finalText": "" if failed else "done",
+                },
+                "shutdownConfirmed": True,
+                "exitCode": 1 if failed else 0,
+            },
+        )
+        if verdict is not None:
+            client.acknowledge(note="reviewed the real result", verdict=verdict, runId=run_id)
+        return run_id
+
 
 # ---------------------------------------------------------------------------
 # Published revisions and validation
 # ---------------------------------------------------------------------------
 class EvaluationPublishTests(EvaluationTestCase):
-    def test_fresh_snapshot_is_unconfigured_and_claims_nothing_unimplemented(self):
+    def test_fresh_snapshot_is_unconfigured_with_available_decision_operations(self):
         board = self.board()
         snapshot = self.snapshot(board)
         self.assertEqual(snapshot["tableRevision"], 0)
@@ -150,8 +210,8 @@ class EvaluationPublishTests(EvaluationTestCase):
         self.assertEqual(snapshot["decisions"], [])
         self.assertEqual(snapshot["pendingEvidence"], 0)
         self.assertEqual(snapshot["gate"], {"phase": "open", "readers": 0, "writer": None, "waitingWriters": 0})
-        self.assertFalse(snapshot["capabilities"]["selection"])
-        self.assertFalse(snapshot["capabilities"]["maintenance"])
+        self.assertTrue(snapshot["capabilities"]["selection"])
+        self.assertTrue(snapshot["capabilities"]["maintenance"])
         self.assertTrue(snapshot["capabilities"]["evaluationWriteGate"])
         self.assertIn("runs", snapshot["tasks"])
 
@@ -264,17 +324,29 @@ class EvaluationPublishTests(EvaluationTestCase):
             configuration={"decisionProfileId": "dsh:nope:nope:off", "autoMaintain": False},
         )
 
-    def test_configuration_cannot_claim_unimplemented_maintenance(self):
+    def test_configuration_accepts_auto_maintain_as_bounded_preauthorization(self):
         board = self.board()
         self.seed_profiles(board)
-        self.refused_publish(
+        published = self.publish(
             board,
-            "UNSUPPORTED",
             request_id="w2",
             command_id="c2",
-            configuration={"decisionProfileId": None, "autoMaintain": True},
+            configuration={"decisionProfileId": PROFILE_ID, "autoMaintain": True},
         )
-        self.assertEqual(self.snapshot(board)["configuration"]["revision"], 0)
+        self.assertEqual(published["revision"], 2)
+        self.assertEqual(
+            self.snapshot(board)["configuration"],
+            {"revision": 1, "decisionProfileId": PROFILE_ID, "autoMaintain": True},
+        )
+        # The preauthorization is still bounded to the published table: an unknown
+        # decision profile is refused exactly as before.
+        self.refused_publish(
+            board,
+            "CONFLICT",
+            request_id="w3",
+            command_id="c3",
+            configuration={"decisionProfileId": "dsh:nope:nope:off", "autoMaintain": True},
+        )
 
     def test_availability_must_be_backed_by_the_discovered_catalog(self):
         board = self.board()
@@ -855,7 +927,7 @@ class EvaluationEvidenceTests(EvaluationTestCase):
     def test_verified_task_success_counts_and_manual_reports_do_not(self):
         board = self.board()
         self.seed(board)
-        run_id = self.completed_task(board)
+        run_id = self.modelled_task(board)
         verified = board.call(
             "evaluation_evidence_record",
             {
@@ -873,6 +945,9 @@ class EvaluationEvidenceTests(EvaluationTestCase):
         self.assertFalse(verified["duplicate"])
         self.assertEqual(verified["evidence"]["runId"], run_id)
         self.assertEqual(verified["evidence"]["project"], "fixture-project")
+        self.assertTrue(verified["evidence"]["identityBasis"]["profileMatch"])
+        self.assertEqual(verified["evidence"]["identityBasis"]["requested"]["model"], PROFILE["model"])
+        self.assertIsNone(verified["evidence"]["identityBasis"]["observed"])
         self.assertEqual(self.snapshot(board)["pendingEvidence"], 1)
 
         manual = board.call(
@@ -883,6 +958,169 @@ class EvaluationEvidenceTests(EvaluationTestCase):
         self.assertFalse(manual["counted"])
         self.assertIn("not counted", manual["unverifiedReason"])
         self.assertEqual(len(self.snapshot(board)["evidence"]), 2)
+
+    def test_unreviewed_success_is_corroborated_but_never_a_sample(self):
+        """Host review is the sample boundary: an unreviewed process proves nothing."""
+        board = self.board()
+        self.seed(board)
+        run_id = self.modelled_task(board, request_id="task-unreviewed", verdict=None)
+        report = board.call(
+            "evaluation_evidence_record",
+            {"profileId": PROFILE_ID, "kind": "task-success", "summary": "process exited 0", "source": "cli", "runId": run_id},
+        )
+        self.assertTrue(report["verified"], "the committed result corroborates the report")
+        self.assertFalse(report["counted"], "an unreviewed successful process is not task-success evidence")
+        self.assertIn("Host acceptance", report["unverifiedReason"])
+        self.assertEqual(self.snapshot(board)["cards"], [])
+        # The verdict can arrive afterwards; re-deriving inside the acknowledgement
+        # transaction turns exactly one attempt into exactly one sample.
+        board.client().acknowledge(runId=run_id, note="inspected the artifact and ran the checks", verdict="accepted")
+        refreshed = board.call(
+            "evaluation_evidence_record",
+            {"profileId": PROFILE_ID, "kind": "task-success", "summary": "process exited 0", "source": "cli", "runId": run_id},
+        )
+        self.assertTrue(refreshed["counted"])
+        self.assertTrue(refreshed["duplicate"])
+        card = self.publish(
+            board,
+            request_id="w-card",
+            command_id="c-card",
+            cards=[{"profileId": PROFILE_ID, "summary": "reviewed once", "strengths": [], "limitations": [], "risks": [], "evidenceIds": [report["evidence"]["evidenceId"]]}],
+        )
+        self.assertEqual(card["revision"], 2)
+        self.assertEqual(self.snapshot(board)["cards"][0]["sampleCount"], 1)
+
+    def cancelled_task(self, board, request_id: str = "task-cancelled") -> str:
+        """One real dsh-identity task whose run is durably cancelled."""
+        client = board.client()
+        run_id = client.submit(
+            requestId=request_id,
+            task="produce a model result",
+            cwd=str(self.workdir()),
+            model=PROFILE["model"],
+            provider=PROFILE["provider"],
+            effort=PROFILE["effort"],
+        )["task"]["runId"]
+        worker_id = f"worker-{request_id}"
+        client.register_worker(worker_id, adapter="dsh", capabilities=["dsh"])
+        claim = client.claim(worker_id, f"claim-{request_id}", "n" * 32, task_id=run_id)["claim"]
+        client.cancel(runId=run_id, reason="operator changed their mind")
+        client.submit_result(
+            worker_id,
+            claim["attempt"]["attemptId"],
+            claim["attempt"]["generation"],
+            "n" * 32,
+            {
+                "status": "cancelled",
+                "result": {
+                    "status": "cancelled",
+                    "mode": "run",
+                    "requested": {
+                        "provider": PROFILE["provider"],
+                        "model": PROFILE["model"],
+                        "reasoningEffort": PROFILE["effort"],
+                    },
+                },
+                "shutdownConfirmed": True,
+                "exitCode": None,
+            },
+        )
+        client.acknowledge(note="reviewed the cancellation", verdict="rejected", runId=run_id)
+        return run_id
+
+    def test_rejected_completed_result_is_a_capability_failure_and_counts_once(self):
+        """A rejected completed result may be a capability failure even when exit is ok."""
+        board = self.board()
+        self.seed(board)
+        run_id = self.modelled_task(board, request_id="task-rejected", verdict="rejected")
+        first = board.call(
+            "evaluation_evidence_record",
+            {"profileId": PROFILE_ID, "kind": "task-failure", "summary": "the answer was wrong", "source": "cli", "runId": run_id},
+        )
+        self.assertTrue(first["verified"])
+        self.assertTrue(first["counted"])
+        self.assertEqual(first["evidence"]["identityBasis"]["source"], "host-rejection")
+        # Repeated prose about the same attempt appends a report but not a sample.
+        second = board.call(
+            "evaluation_evidence_record",
+            {"profileId": PROFILE_ID, "kind": "task-failure", "summary": "same attempt, different words", "source": "cli", "runId": run_id},
+        )
+        self.assertNotEqual(second["evidence"]["evidenceId"], first["evidence"]["evidenceId"])
+        self.assertEqual(self.snapshot(board)["pendingEvidence"], 2)
+        with board.store.db.read() as connection:
+            self.assertEqual(board.evaluation._sample_count(connection, PROFILE_ID), 1)
+        # A genuinely failed attempt with a Host rejection is the same sample class.
+        failed_run = self.modelled_task(board, request_id="task-failed", verdict="rejected", failed=True)
+        failed = board.call(
+            "evaluation_evidence_record",
+            {"profileId": PROFILE_ID, "kind": "task-failure", "summary": "the model failed outright", "source": "cli", "runId": failed_run},
+        )
+        self.assertTrue(failed["counted"])
+        with board.store.db.read() as connection:
+            self.assertEqual(board.evaluation._sample_count(connection, PROFILE_ID), 2)
+
+    def test_cancelled_and_infrastructure_failures_are_not_capability_samples(self):
+        board = self.board()
+        self.seed(board)
+        # A cancelled run, even when the Host rejects it, is not a model failure.
+        cancelled = self.cancelled_task(board)
+        cancelled_report = board.call(
+            "evaluation_evidence_record",
+            {"profileId": PROFILE_ID, "kind": "task-failure", "summary": "cancelled", "source": "cli", "runId": cancelled},
+        )
+        self.assertFalse(cancelled_report["counted"])
+        self.assertIn("cancel", cancelled_report["unverifiedReason"])
+        # An adapter/environment failure is real evidence but not a capability sample.
+        client = board.client()
+        unavailable = client.submit(
+            requestId="task-unavailable",
+            task="run something absent",
+            cwd=str(self.workdir()),
+            adapter="command",
+            argv=["/nonexistent/binary-xyz"],
+        )["task"]["runId"]
+        client.register_worker("worker-unavailable", adapter="command", capabilities=["command"])
+        claim = client.claim("worker-unavailable", "claim-unavailable", "n" * 32, task_id=unavailable)["claim"]
+        client.submit_result(
+            "worker-unavailable",
+            claim["attempt"]["attemptId"],
+            claim["attempt"]["generation"],
+            "n" * 32,
+            {"status": "failed", "result": None, "error": "ADAPTER_UNAVAILABLE: argv[0] is not executable", "shutdownConfirmed": True},
+        )
+        client.acknowledge(runId=unavailable, note="the executable was missing", verdict="rejected")
+        infrastructure = board.call(
+            "evaluation_evidence_record",
+            {"profileId": PROFILE_ID, "kind": "task-failure", "summary": "missing executable", "source": "cli", "runId": unavailable},
+        )
+        self.assertTrue(infrastructure["verified"])
+        self.assertFalse(infrastructure["counted"])
+        self.assertIn("infrastructure", infrastructure["unverifiedReason"])
+
+    def test_unknown_identity_stays_unverified(self):
+        board = self.board()
+        self.seed_catalog(board)
+        self.publish(board, request_id="seed", command_id="seed-1", profiles=[PROFILE, SECOND_PROFILE])
+        # The same completed command task cannot be a sample of a dsh profile.
+        run_id = self.completed_task(board)
+        board.client().acknowledge(runId=run_id, note="reviewed", verdict="accepted")
+        unknown = board.call(
+            "evaluation_evidence_record",
+            {"profileId": PROFILE_ID, "kind": "task-success", "summary": "no model identity", "source": "cli", "runId": run_id},
+        )
+        self.assertTrue(unknown["verified"])
+        self.assertFalse(unknown["counted"])
+        self.assertIn("identity", unknown["unverifiedReason"])
+        # A run that requested another profile never becomes a sample of this one.
+        other = self.modelled_task(board, request_id="task-other", profile=SECOND_PROFILE)
+        mismatch = board.call(
+            "evaluation_evidence_record",
+            {"profileId": PROFILE_ID, "kind": "task-success", "summary": "labelled as another model", "source": "cli", "runId": other},
+        )
+        self.assertTrue(mismatch["verified"])
+        self.assertFalse(mismatch["counted"])
+        self.assertFalse(mismatch["evidence"]["identityBasis"]["profileMatch"])
+        self.assertIn(SECOND_PROFILE["model"], mismatch["unverifiedReason"])
 
     def test_claimed_success_without_a_real_result_is_stored_but_unverified(self):
         board = self.board()
@@ -1010,7 +1248,7 @@ class EvaluationEvidenceTests(EvaluationTestCase):
     def test_card_counters_are_derived_and_a_profile_with_evidence_cannot_vanish(self):
         board = self.board()
         self.seed(board)
-        run_id = self.completed_task(board)
+        run_id = self.modelled_task(board)
         evidence = board.call(
             "evaluation_evidence_record",
             {"profileId": PROFILE_ID, "kind": "task-success", "summary": "counted", "source": "cli", "runId": run_id},

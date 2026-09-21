@@ -201,7 +201,7 @@ export function Tasks({
                   取消任务
                 </button>
               )}
-              {["failed", "cancelled"].includes(task.status) && (
+              {task.spec?.adapter !== "decision" && ["failed", "cancelled"].includes(task.status) && (
                 <button
                   className="button"
                   disabled={busy || !canRetry(task)}
@@ -213,6 +213,7 @@ export function Tasks({
                 </button>
               )}
             </div>
+            {task.spec?.adapter === "decision" && <p className="small muted">这是一次决策计算。结论与依据请在“决策配置”查看，需要再尝试时明确提交新请求。</p>}
             {needsReview(task) && (
                 <section className="detail-section">
                   <h3>记录验收</h3>

@@ -58,6 +58,9 @@ METHODS = [
     "evaluation-reader-begin",
     "evaluation-reader-release",
     "evaluation-evidence-record",
+    "evaluation-maintain",
+    "selection-request",
+    "selection-get",
     "model-catalog-refresh",
     "migrate",
     "legacy-import",
@@ -132,6 +135,20 @@ examples:
   buddy evaluation-write-publish '{"commandId":"cmd-1","writerId":"...","generation":1,...}'
       The durable table gate: one writer at a time, fenced by generation, lease and a
       per-intent token. Omitted collections keep their published values.
+
+  buddy selection-request '{"requestId":"pick-1","task":"make the failing parser test pass","requiredCapabilities":["effort:high"]}'
+  buddy selection-get '{"decisionId":"dec-..."}'
+      One durable, bounded selection decision. The default read is a compact Host
+      summary carrying selectedProfile (the frozen execution identity to delegate
+      with); add "includeAudit":true for the persisted model input, envelope and
+      proposal. The recommendation is recorded history, never an execution permit.
+      A queued decision holds no execution slot and stays cancellable through
+      `buddy cancel` on its runId.
+
+  buddy evaluation-maintain '{"requestId":"tidy-1"}'
+      One bounded maintenance call over the pending evidence batch using the fixed
+      configured decision profile. With configuration.autoMaintain=false the validated
+      card-only proposal is retained as needs-host and nothing is published.
 
   buddy migrate '{"confirm":true}'
       Explicit offline upgrade of a stopped version-5 board (backup + identity

@@ -25,6 +25,10 @@ export function errorText(error: unknown): string {
   return error instanceof Error ? error.message : "请求失败，请稍后重试。";
 }
 
+export function uncertainResponse(error: unknown): boolean {
+  return !(error instanceof ApiError) || ["NETWORK", "INVALID_RESPONSE", "INTERNAL_ERROR"].includes(error.code) || /^HTTP_5/.test(error.code);
+}
+
 export function createApi(prefix: string, fetcher: typeof fetch = fetch) {
   const base = prefix.replace(/\/+$/, "");
   async function request(path: string, init: RequestInit = {}) {

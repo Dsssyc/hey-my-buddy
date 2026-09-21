@@ -143,6 +143,16 @@ class BuddyControl:
     def evaluation_evidence_record(self, request_json: str) -> str:
         ...
 
+    # -- bounded decisions --------------------------------------------------
+    def selection_request(self, request_json: str) -> str:
+        ...
+
+    def selection_get(self, request_json: str) -> str:
+        ...
+
+    def evaluation_maintain(self, request_json: str) -> str:
+        ...
+
     def model_catalog_refresh(self, request_json: str) -> str:
         ...
 
