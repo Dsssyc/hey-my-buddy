@@ -65,6 +65,9 @@ CONTROL_OPERATIONS = (
     "evaluation_reader_begin",
     "evaluation_reader_release",
     "evaluation_evidence_record",
+    "evaluation_maintain",
+    "selection_request",
+    "selection_get",
     "model_catalog_refresh",
 )
 WAIT_OPERATIONS = ("events_wait", "task_wait", "message_wait", "wait_capacity")
@@ -168,9 +171,14 @@ class BoardService(_BaseResource):
         self.console_factory = console_factory
         self.legacy_importer = legacy_importer
         self.runtime_directory = runtime_directory
-        # All evaluation state is durable; a lazily composed store keeps every
-        # existing in-process harness working without a second authority.
-        self.evaluation = evaluation or EvaluationStore(store)
+        # All evaluation and decision state is durable; a lazily composed store keeps
+        # every existing in-process harness working without a second authority.
+        self.evaluation = evaluation or store.evaluation
+        self.decisions = store.decisions
+        if evaluation is not None:
+            # One coordinator, one evaluation store: the store hooks (claim, result,
+            # cancel, recovery) and this resource must fence the same gate.
+            store.decisions.evaluation = evaluation
         self.started_at = utc_now()
 
     # -- service ------------------------------------------------------------
@@ -217,13 +225,18 @@ class BoardService(_BaseResource):
                     "nativeAppWakeup": "not provided: notifications are post-commit hints for clients",
                     "postgres": "not provided: SQLite is the deliberate local database",
                     "remoteTenancy": "not provided: same-user local service only",
-                    "selection": (
-                        "not implemented: the durable evaluation table, its writer gate and reader admission exist, "
-                        "but no selector model execution is delivered"
+                    "selectionFallback": (
+                        "not provided: with no configured decision profile or no legal candidate the decision is "
+                        "needs-host; the service never guesses a profile and never selects a selector"
                     ),
-                    "maintenance": (
-                        "not implemented: evidence is recorded and published through the gate, but no automatic "
-                        "maintenance model call runs"
+                    "maintenanceScope": (
+                        "bounded: automatic adoption may touch cards only (evidence-backed text and references) and "
+                        "requires configuration.autoMaintain=true; profiles, preferences, configuration, authority "
+                        "and code-owned counters are never changed by a model"
+                    ),
+                    "decisionModelIdentity": (
+                        "the bounded decision helper reports the requested and resolved configuration; the served "
+                        "identity is unknown and is never invented"
                     ),
                     "osIsolation": (
                         "not claimed: the console token and session separate browser origins, not a same-user "
@@ -328,6 +341,16 @@ class BoardService(_BaseResource):
 
     def evaluation_evidence_record(self, request_json: str) -> str:
         return self._guard("evaluation.evidence.record", request_json, self.evaluation.evidence_record)
+
+    # -- decisions ----------------------------------------------------------
+    def selection_request(self, request_json: str) -> str:
+        return self._guard("selection.request", request_json, self.decisions.request_select)
+
+    def selection_get(self, request_json: str) -> str:
+        return self._guard("selection.get", request_json, self.decisions.get)
+
+    def evaluation_maintain(self, request_json: str) -> str:
+        return self._guard("evaluation.maintain", request_json, self.decisions.request_maintain)
 
     def model_catalog_refresh(self, request_json: str) -> str:
         def handler(params: dict) -> dict:

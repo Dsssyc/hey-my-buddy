@@ -341,6 +341,61 @@ class ConsoleSecurityTests(ConsoleTestCase):
         # The read-only dashboard token is not a session: a write with it is refused.
         self.assertNotIn("token", json.dumps(snapshot_of(board)).lower().replace("csrftoken", ""))
 
+    def test_browser_decision_operations_are_the_same_bounded_operations(self):
+        """selection_request/selection_get/evaluation_maintain over HTTP and C-Two."""
+        import os
+        from pathlib import Path
+
+        helper = Path(__file__).resolve().parent / "fixtures" / "mock_decision_helper.py"
+        previous = os.environ.get("BUDDY_DECISION_HELPER")
+        os.environ["BUDDY_DECISION_HELPER"] = str(helper)
+
+        def restore() -> None:
+            if previous is None:
+                os.environ.pop("BUDDY_DECISION_HELPER", None)
+            else:
+                os.environ["BUDDY_DECISION_HELPER"] = previous
+
+        self.addCleanup(restore)
+        board = self.board()
+        _stated, browser = self.open_console(board)
+        csrf = browser.bootstrap()["csrfToken"]
+        board.call("model_catalog_refresh", {"requestId": "cat"})
+        begin = board.call("evaluation_write_begin", {"requestId": "seed", "expectedRevision": 0, "kind": "human"})
+        board.call(
+            "evaluation_write_publish",
+            {
+                "commandId": "seed",
+                "writerId": begin["writerId"],
+                "generation": begin["generation"],
+                "writerToken": begin["writerToken"],
+                "expectedRevision": 0,
+                "profiles": [PROFILE],
+                "configuration": {"decisionProfileId": PROFILE_ID, "autoMaintain": False},
+            },
+        )
+        # The browser write reaches the same durable decision the C-Two call reads.
+        status, _headers, data = browser.command(
+            "selection_request", {"requestId": "http-pick", "task": "over http"}, csrf=csrf
+        )
+        self.assertEqual(status, 200, data)
+        created = json.loads(data)["result"]
+        self.assertEqual(created["status"], "queued")
+        status, _headers, data = browser.command(
+            "selection_get", {"decisionId": created["decisionId"]}, csrf=csrf
+        )
+        self.assertEqual(status, 200, data)
+        over_http = json.loads(data)["result"]["decision"]
+        over_ctwo = board.call("selection_get", {"decisionId": created["decisionId"]})["decision"]
+        self.assertEqual(over_http, over_ctwo)
+        status, _headers, data = browser.command("evaluation_maintain", {"requestId": "http-tidy"}, csrf=csrf)
+        self.assertEqual(status, 200, data)
+        self.assertEqual(json.loads(data)["result"]["status"], "needs-host")
+        snapshot = browser.bootstrap()
+        self.assertEqual([item["kind"] for item in snapshot["decisions"]], ["maintain", "select"])
+        # A refresh never runs a model: the history is read, not recomputed.
+        self.assertEqual(board.store.count_tasks(), 1)
+
     def test_snapshot_get_does_not_run_model_discovery(self):
         board = self.board()
         _stated, browser = self.open_console(board)
@@ -501,7 +556,9 @@ class ConsoleDaemonTests(ConsoleTestCase):
             code, status_reply = self.cli("console", json.dumps({"action": "status"}))
             self.assertEqual(code, 0, status_reply)
             self.assertTrue(status_reply["running"])
-            self.assertFalse(status_reply["assetsBuilt"])
+            # The integrated console frontend ships built assets, so the daemon serves
+            # a real bundle instead of the "assets not built" setup page.
+            self.assertTrue(status_reply["assetsBuilt"])
             code, closed = self.cli("console", json.dumps({"action": "close"}))
             self.assertEqual(code, 0, closed)
             self.assertTrue(closed["closed"])
@@ -511,8 +568,13 @@ class ConsoleDaemonTests(ConsoleTestCase):
             code, caps = self.cli("capabilities", "{}")
             self.assertEqual(code, 0, caps)
             self.assertIn("console_snapshot", caps["operations"]["control"])
-            self.assertIn("not implemented", caps["limitations"]["selection"])
-            self.assertIn("not implemented", caps["limitations"]["maintenance"])
+            # Selection and maintenance are advertised, but only through their real
+            # bounded semantics: no silent fallback and a card-only adoption scope.
+            for operation in ("selection_request", "selection_get", "evaluation_maintain"):
+                self.assertIn(operation, caps["operations"]["control"])
+            self.assertIn("selectionFallback", caps["limitations"])
+            self.assertIn("maintenanceScope", caps["limitations"])
+            self.assertIn("cards only", caps["limitations"]["maintenanceScope"])
             self.assertIn("not claimed", caps["limitations"]["osIsolation"])
             code, snapshot = self.cli("console-snapshot", "{}")
             self.assertEqual(code, 0, snapshot)

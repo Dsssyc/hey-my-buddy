@@ -7,9 +7,10 @@ from __future__ import annotations
 
 from .base import Adapter, AdapterOutcome, ExecutionContext, ProcessHandle
 from .command import CommandAdapter
+from .decision import DecisionAdapter
 from .dsh import DshAdapter
 
-BUILT_IN = (DshAdapter, CommandAdapter)
+BUILT_IN = (DshAdapter, CommandAdapter, DecisionAdapter)
 
 #: ``external`` is a first-class adapter whose execution is owned by the caller's
 #: own agent, not by a built-in worker. That agent claims the task through the
@@ -92,6 +93,7 @@ __all__ = [
     "Adapter",
     "AdapterOutcome",
     "CommandAdapter",
+    "DecisionAdapter",
     "DshAdapter",
     "ExecutionContext",
     "EXTERNAL_CAPABILITIES",

@@ -367,6 +367,130 @@ CREATE TABLE IF NOT EXISTS evaluation_writers (
     """
 CREATE INDEX IF NOT EXISTS evaluation_writers_queue_idx ON evaluation_writers(state, generation);
 """,
+    # --- additive schema-6 tables added by the decision/evaluation slice ---
+    # ``evaluation_evidence_pending`` replaces the correlated-JSON subquery that
+    # used to rescan the whole evidence archive on every console refresh and every
+    # selection admission. It is maintained transactionally by evidence recording
+    # and card publication: evidence is pending while no currently published card
+    # references it, and losing a reference makes it pending again. A
+    # preferences-only or configuration-only publish never touches it, and
+    # evidence recorded while a writer is frozen is inserted here inside its own
+    # transaction.
+    """
+CREATE TABLE IF NOT EXISTS evaluation_evidence_pending (
+    evidence_id  TEXT PRIMARY KEY,
+    profile_id   TEXT NOT NULL,
+    created_at   TEXT NOT NULL
+);
+""",
+    """
+CREATE INDEX IF NOT EXISTS evaluation_evidence_pending_profile_idx
+    ON evaluation_evidence_pending(profile_id, created_at);
+""",
+    """
+CREATE INDEX IF NOT EXISTS evaluation_evidence_pending_created_idx
+    ON evaluation_evidence_pending(created_at, evidence_id);
+""",
+    """
+CREATE INDEX IF NOT EXISTS evaluation_evidence_created_idx
+    ON evaluation_evidence(created_at, evidence_id);
+""",
+    """
+CREATE INDEX IF NOT EXISTS evaluation_evidence_run_idx ON evaluation_evidence(run_id);
+""",
+    """
+CREATE INDEX IF NOT EXISTS evaluation_evidence_counted_idx ON evaluation_evidence(profile_id, counted);
+""",
+    # One performance sample per (profile, attempt). Repeated prose descriptions of
+    # the same accepted attempt are separate evidence reports but a single sample,
+    # and a counted sample always names the immutable attempt it came from.
+    """
+CREATE TABLE IF NOT EXISTS evaluation_samples (
+    profile_id   TEXT NOT NULL,
+    attempt_id   TEXT NOT NULL,
+    task_id      TEXT NOT NULL,
+    verdict      TEXT NOT NULL,
+    evidence_id  TEXT,
+    created_at   TEXT NOT NULL,
+    PRIMARY KEY (profile_id, attempt_id)
+);
+""",
+    """
+CREATE INDEX IF NOT EXISTS evaluation_samples_profile_idx ON evaluation_samples(profile_id, created_at);
+""",
+    # Every changed card is snapshotted per published revision, so bounded current
+    # references never lose provenance: after automatic compaction the pre-compaction
+    # card text, risks and full reference list stay recoverable from the archive even
+    # though the bounded current card no longer lists every reference.
+    """
+CREATE TABLE IF NOT EXISTS evaluation_card_history (
+    table_revision  INTEGER NOT NULL,
+    profile_id      TEXT NOT NULL,
+    card_revision   INTEGER NOT NULL,
+    summary         TEXT NOT NULL,
+    strengths_json  TEXT NOT NULL DEFAULT '[]',
+    limitations_json TEXT NOT NULL DEFAULT '[]',
+    risks_json      TEXT NOT NULL DEFAULT '[]',
+    evidence_ids_json TEXT NOT NULL DEFAULT '[]',
+    sample_count    INTEGER NOT NULL DEFAULT 0,
+    published_at    TEXT NOT NULL,
+    PRIMARY KEY (table_revision, profile_id)
+);
+""",
+    """
+CREATE INDEX IF NOT EXISTS evaluation_card_history_profile_idx
+    ON evaluation_card_history(profile_id, table_revision);
+""",
+    # Fixed-size transactional counters. The pending-evidence total and each
+    # per-profile sample count are adjusted by the checked rowcount of the insert or
+    # delete that changed the ledger, so an ordinary console refresh or route
+    # admission reads one primary-key row instead of recounting a growing archive.
+    """
+CREATE TABLE IF NOT EXISTS evaluation_aggregates (
+    name        TEXT PRIMARY KEY,
+    value       INTEGER NOT NULL,
+    updated_at  TEXT NOT NULL
+);
+""",
+    # Extended decision state. ``evaluation_decisions`` stays the bounded public
+    # history row the console reads; this table carries the audit material (the
+    # exact persisted model input, the helper envelope, the validated proposal and
+    # the lease/fence identities) that must not sit on every console refresh.
+    """
+CREATE TABLE IF NOT EXISTS decision_requests (
+    decision_id            TEXT PRIMARY KEY REFERENCES evaluation_decisions(decision_id) ON DELETE RESTRICT,
+    request_id             TEXT NOT NULL UNIQUE,
+    kind                   TEXT NOT NULL CHECK (kind IN ('select','maintain')),
+    input_fingerprint      TEXT NOT NULL,
+    configuration_revision INTEGER NOT NULL DEFAULT 0,
+    task_id                TEXT,
+    attempt_id             TEXT,
+    generation             INTEGER,
+    reader_id              TEXT,
+    writer_id              TEXT,
+    writer_generation      INTEGER,
+    expected_revision      INTEGER NOT NULL DEFAULT 0,
+    published_revision     INTEGER,
+    selected_json          TEXT,
+    input_json             TEXT,
+    input_sha256           TEXT,
+    output_json            TEXT,
+    proposal_json          TEXT,
+    considered_evidence    INTEGER NOT NULL DEFAULT 0,
+    pending_after          INTEGER,
+    auto_publish           INTEGER NOT NULL DEFAULT 0,
+    requested_json         TEXT NOT NULL DEFAULT '{}',
+    created_at             TEXT NOT NULL,
+    updated_at             TEXT NOT NULL
+);
+""",
+    """
+CREATE INDEX IF NOT EXISTS decision_requests_created_idx ON decision_requests(created_at, decision_id);
+""",
+    """
+CREATE INDEX IF NOT EXISTS evaluation_decisions_created_idx
+    ON evaluation_decisions(created_at, decision_id);
+""",
 )
 
 EVALUATION_SCHEMA = "\n".join(EVALUATION_TABLES)

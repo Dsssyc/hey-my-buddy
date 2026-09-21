@@ -65,6 +65,16 @@ EVIDENCE_KINDS = (
 )
 TASK_EVIDENCE_KINDS = frozenset({"task-success", "task-failure", "task-cancelled"})
 
+#: Failure text that names the harness, the adapter or the environment rather than
+#: the model's work. Such a failure is still real evidence (``verified``) but it is
+#: never counted as a model-capability sample.
+INFRASTRUCTURE_FAILURE_MARKERS = (
+    "ADAPTER_UNAVAILABLE",
+    "worker failure:",
+    "invalid-result",
+    "did not start",
+)
+
 PROFILE_FIELDS = frozenset(
     {
         "profileId",
@@ -496,14 +506,13 @@ class EvaluationStore:
             decision_profile = decision_profile.strip()
             if len(decision_profile) > 128 or not schemas.IDENTIFIER_PATTERN.match(decision_profile):
                 raise BoardError("INVALID_ARGUMENT", "configuration.decisionProfileId has an invalid format")
+        # ``autoMaintain`` is preauthorization for the bounded maintenance policy:
+        # it lets a maintenance run adopt a validated card-only proposal. It never
+        # authorizes profiles, preferences, configuration or execution authority,
+        # and it is not required to *ask* for maintenance — an explicit request
+        # still runs the model and retains its proposal for the Host.
         auto_maintain = schemas.optional_bool(entry, "autoMaintain", False)
-        if auto_maintain:
-            raise BoardError(
-                "UNSUPPORTED",
-                "Automatic maintenance requires the maintenance capability, which this build does not implement; "
-                "publish autoMaintain=false and record evidence explicitly.",
-            )
-        return {"decisionProfileId": decision_profile, "autoMaintain": False}
+        return {"decisionProfileId": decision_profile, "autoMaintain": auto_maintain}
 
     def _check_resulting_state(
         self,
@@ -590,7 +599,16 @@ class EvaluationStore:
         return profiles or {}, cards or {}, preferences or {}, configuration
 
     # -- publish -------------------------------------------------------------
-    def _publish_revision(self, connection: sqlite3.Connection, *, revision: int, writer, now: str, params: dict) -> dict:
+    def _publish_revision(
+        self,
+        connection: sqlite3.Connection,
+        *,
+        revision: int,
+        writer,
+        now: str,
+        params: dict,
+        keep_consumed: frozenset[str] = frozenset(),
+    ) -> dict:
         catalog = self._catalog(connection)
         provided = {key for key in ("profiles", "cards", "preferences", "configuration") if key in params}
         for key in provided:
@@ -607,6 +625,7 @@ class EvaluationStore:
         profiles, cards, preferences, configuration = self._check_resulting_state(
             connection, profiles=profiles, cards=cards, preferences=preferences, configuration=configuration
         )
+        previous_references = self._card_references(connection) if "cards" in provided else {}
 
         connection.execute(
             "INSERT INTO evaluation_revisions(revision, kind, writer_id, actor, counts_json, created_at)"
@@ -664,12 +683,9 @@ class EvaluationStore:
                 prior = connection.execute(
                     "SELECT * FROM evaluation_cards WHERE profile_id=?", (profile_id,)
                 ).fetchone()
-                sample = connection.execute(
-                    "SELECT COUNT(*) AS count FROM evaluation_evidence WHERE profile_id=? AND counted=1"
-                    " AND recorded_revision < ?",
-                    (profile_id, revision),
-                ).fetchone()
-                sample_count = int(sample["count"])
+                # Counters are code-owned: the number of distinct accepted attempts for
+                # this profile, never a model-supplied value and never a count of prose.
+                sample_count = self._sample_count(connection, profile_id)
                 content = (
                     entry["summary"],
                     entry["strengths"],
@@ -688,6 +704,31 @@ class EvaluationStore:
                 else:
                     card_revision = 1 if prior is None else int(prior["revision"]) + 1
                     updated_at = now
+                    # Archive the changed card under this revision before the bounded
+                    # current row moves on, so retiring a reference never loses the
+                    # publication's provenance.
+                    connection.execute(
+                        "INSERT INTO evaluation_card_history(table_revision, profile_id, card_revision, summary,"
+                        " strengths_json, limitations_json, risks_json, evidence_ids_json, sample_count, published_at)"
+                        " VALUES(?,?,?,?,?,?,?,?,?,?)"
+                        " ON CONFLICT(table_revision, profile_id) DO UPDATE SET card_revision=excluded.card_revision,"
+                        " summary=excluded.summary, strengths_json=excluded.strengths_json,"
+                        " limitations_json=excluded.limitations_json, risks_json=excluded.risks_json,"
+                        " evidence_ids_json=excluded.evidence_ids_json, sample_count=excluded.sample_count,"
+                        " published_at=excluded.published_at",
+                        (
+                            revision,
+                            profile_id,
+                            card_revision,
+                            entry["summary"],
+                            canonical_json(entry["strengths"]),
+                            canonical_json(entry["limitations"]),
+                            canonical_json(entry["risks"]),
+                            canonical_json(entry["evidenceIds"]),
+                            sample_count,
+                            now,
+                        ),
+                    )
                 connection.execute(
                     "INSERT INTO evaluation_cards(profile_id, revision, summary, strengths_json, limitations_json,"
                     " risks_json, evidence_ids_json, sample_count, updated_at) VALUES(?,?,?,?,?,?,?,?,?)"
@@ -710,6 +751,12 @@ class EvaluationStore:
             for row in connection.execute("SELECT profile_id FROM evaluation_cards").fetchall():
                 if row["profile_id"] not in keep:
                     connection.execute("DELETE FROM evaluation_cards WHERE profile_id=?", (row["profile_id"],))
+            self._sync_pending(
+                connection,
+                previous=previous_references,
+                resulting={profile_id: entry["evidenceIds"] for profile_id, entry in cards.items()},
+                keep_consumed=keep_consumed,
+            )
         if "preferences" in provided:
             for profile_id, entry in preferences.items():
                 connection.execute(
@@ -753,6 +800,235 @@ class EvaluationStore:
         }
 
     # -- operations ----------------------------------------------------------
+    #: Fixed-size counter names in ``evaluation_aggregates``. Every mutation below
+    #: adjusts the counter by the checked rowcount of the statement that changed the
+    #: ledger, so a read is one primary-key row and never a recount of history.
+    PENDING_COUNTER = "pending-evidence"
+
+    @staticmethod
+    def _sample_counter(profile_id: str) -> str:
+        return f"samples:{profile_id}"
+
+    @staticmethod
+    def _counter(connection: sqlite3.Connection, name: str) -> int:
+        row = connection.execute("SELECT value FROM evaluation_aggregates WHERE name=?", (name,)).fetchone()
+        return int(row["value"]) if row is not None else 0
+
+    def _bump(self, connection: sqlite3.Connection, name: str, delta: int, now: str) -> None:
+        if delta == 0:
+            return
+        connection.execute(
+            "INSERT INTO evaluation_aggregates(name, value, updated_at) VALUES(?,?,?)"
+            " ON CONFLICT(name) DO UPDATE SET value=MAX(0, value + ?), updated_at=excluded.updated_at",
+            (name, max(0, delta), now, delta),
+        )
+
+    def _set_counter(self, connection: sqlite3.Connection, name: str, value: int, now: str) -> None:
+        connection.execute(
+            "INSERT INTO evaluation_aggregates(name, value, updated_at) VALUES(?,?,?)"
+            " ON CONFLICT(name) DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at",
+            (name, max(0, int(value)), now),
+        )
+
+    def _mark_pending(self, connection: sqlite3.Connection, evidence_id: str) -> None:
+        row = connection.execute(
+            "SELECT profile_id, created_at FROM evaluation_evidence WHERE evidence_id=?", (evidence_id,)
+        ).fetchone()
+        now = self._now()
+        if row is None:
+            removed = connection.execute(
+                "DELETE FROM evaluation_evidence_pending WHERE evidence_id=?", (evidence_id,)
+            ).rowcount
+            self._bump(connection, self.PENDING_COUNTER, -int(removed), now)
+            return
+        added = connection.execute(
+            "INSERT OR IGNORE INTO evaluation_evidence_pending(evidence_id, profile_id, created_at) VALUES(?,?,?)",
+            (evidence_id, row["profile_id"], row["created_at"]),
+        ).rowcount
+        self._bump(connection, self.PENDING_COUNTER, int(added), now)
+
+    def _sync_pending(
+        self,
+        connection: sqlite3.Connection,
+        *,
+        previous: dict[str, list[str]],
+        resulting: dict[str, list[str]],
+        keep_consumed: frozenset[str] = frozenset(),
+    ) -> None:
+        """Apply one publish's card-reference delta to the pending ledger.
+
+        ``previous`` is the evidence-reference map of the cards that were published
+        before this revision, ``resulting`` the map after it. Only the difference is
+        touched: evidence that stays referenced stays consumed, evidence that gains a
+        reference stops being pending, and evidence whose reference disappears is
+        pending again — unless it was retired by a *safe automatic compaction*
+        (``keep_consumed``), which keeps it incorporated and archived without
+        pretending it was never processed. Evidence no card ever referenced is never
+        touched, so it stays pending across unrelated revisions.
+        """
+        was = {evidence for values in previous.values() for evidence in values}
+        now = {evidence for values in resulting.values() for evidence in values}
+        if now:
+            markers = ",".join("?" for _ in now)
+            removed = connection.execute(
+                f"DELETE FROM evaluation_evidence_pending WHERE evidence_id IN ({markers})", tuple(sorted(now))
+            ).rowcount
+            self._bump(connection, self.PENDING_COUNTER, -int(removed), self._now())
+        for evidence_id in sorted(was - now - set(keep_consumed)):
+            self._mark_pending(connection, evidence_id)
+
+    @staticmethod
+    def _card_references(connection: sqlite3.Connection) -> dict[str, list[str]]:
+        return {
+            row["profile_id"]: json.loads(row["evidence_ids_json"])
+            for row in connection.execute("SELECT profile_id, evidence_ids_json FROM evaluation_cards")
+        }
+
+    def backfill_indexes(self) -> dict:
+        """One-time startup backfill for boards created before the index tables.
+
+        Schema 6 is development-only and was not released, so an existing board may
+        hold evidence without pending/sample rows or counters. This runs once (guarded
+        by a ``meta`` key) and never on a request path. The counters are written from
+        this single authoritative recount; every later change is a rowcount delta.
+        """
+        with self.board.db.write() as connection:
+            marker = connection.execute(
+                "SELECT value FROM meta WHERE key='evaluation_index_backfill'"
+            ).fetchone()
+            if marker is not None:
+                return {"backfilled": False}
+            now = self._now()
+            connection.execute(
+                "INSERT OR IGNORE INTO evaluation_evidence_pending(evidence_id, profile_id, created_at)"
+                " SELECT e.evidence_id, e.profile_id, e.created_at FROM evaluation_evidence e WHERE NOT EXISTS ("
+                "  SELECT 1 FROM evaluation_cards c WHERE c.profile_id = e.profile_id"
+                "  AND EXISTS (SELECT 1 FROM json_each(c.evidence_ids_json) WHERE json_each.value = e.evidence_id)"
+                ")"
+            )
+            connection.execute(
+                "INSERT OR IGNORE INTO evaluation_samples(profile_id, attempt_id, task_id, verdict, evidence_id,"
+                " created_at) SELECT profile_id, json_extract(identity_json, '$.attemptId'),"
+                " COALESCE(json_extract(identity_json, '$.taskId'), ''),"
+                " COALESCE(json_extract(identity_json, '$.basis.source'), 'accepted'), evidence_id, created_at"
+                " FROM evaluation_evidence WHERE counted=1 AND json_extract(identity_json, '$.attemptId') IS NOT NULL"
+            )
+            pending = int(
+                connection.execute("SELECT COUNT(*) AS count FROM evaluation_evidence_pending").fetchone()["count"]
+            )
+            self._set_counter(connection, self.PENDING_COUNTER, pending, now)
+            counters = connection.execute(
+                "SELECT profile_id, COUNT(*) AS count FROM evaluation_samples GROUP BY profile_id"
+            ).fetchall()
+            for row in counters:
+                self._set_counter(connection, self._sample_counter(row["profile_id"]), int(row["count"]), now)
+            # A board written before the history table existed still gets a baseline
+            # snapshot: the currently published card, archived under the current
+            # revision, so compaction always has an earlier provenance to point at.
+            history_revision = int(self._state(connection)["table_revision"])
+            for row in connection.execute("SELECT * FROM evaluation_cards").fetchall():
+                connection.execute(
+                    "INSERT OR IGNORE INTO evaluation_card_history(table_revision, profile_id, card_revision,"
+                    " summary, strengths_json, limitations_json, risks_json, evidence_ids_json, sample_count,"
+                    " published_at) VALUES(?,?,?,?,?,?,?,?,?,?)",
+                    (
+                        history_revision,
+                        row["profile_id"],
+                        int(row["revision"]),
+                        row["summary"],
+                        row["strengths_json"],
+                        row["limitations_json"],
+                        row["risks_json"],
+                        row["evidence_ids_json"],
+                        int(row["sample_count"]),
+                        row["updated_at"],
+                    ),
+                )
+            connection.execute(
+                "INSERT INTO meta(key, value) VALUES('evaluation_index_backfill', ?)"
+                " ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+                (now,),
+            )
+            samples = int(
+                connection.execute("SELECT COUNT(*) AS count FROM evaluation_samples").fetchone()["count"]
+            )
+            return {"backfilled": True, "pending": pending, "samples": samples}
+
+    def refresh_task_evidence(self, connection: sqlite3.Connection, task: sqlite3.Row, now: str) -> int:
+        """Re-derive verification for every report frozen on one accepted attempt.
+
+        A report captures the immutable attempt reference when it is recorded; the
+        Host's acceptance/rejection verdict can arrive afterwards. Re-deriving the
+        flags here — inside the acknowledgement transaction — is what makes a
+        reviewed attempt count without rewriting any report, and what keeps an
+        unreviewed process out of the sample set.
+        """
+        rows = connection.execute("SELECT * FROM evaluation_evidence WHERE run_id=?", (task["task_id"],)).fetchall()
+        if not rows:
+            return 0
+        attempt = self.board._selected_attempt(connection, task)
+        refreshed = 0
+        for row in rows:
+            identity = json.loads(row["identity_json"]) if row["identity_json"] else {}
+            if identity.get("attemptId") != (attempt["attempt_id"] if attempt else None):
+                # A report frozen on another attempt generation keeps its verdict.
+                continue
+            profile = connection.execute(
+                "SELECT * FROM evaluation_profiles WHERE profile_id=?", (row["profile_id"],)
+            ).fetchone()
+            if profile is None:
+                continue
+            identity = self._attempt_identity(task, attempt)
+            verified, counted, reason, basis = self._classify_evidence(row["kind"], identity, profile)
+            frozen = canonical_json({**identity, "basis": basis})
+            connection.execute(
+                "UPDATE evaluation_evidence SET verified=?, counted=?, identity_json=? WHERE evidence_id=?",
+                (1 if verified else 0, 1 if counted else 0, frozen, row["evidence_id"]),
+            )
+            self._record_sample(connection, row["profile_id"], identity, counted, row["evidence_id"], now, basis)
+            refreshed += 1
+        return refreshed
+
+    def _record_sample(
+        self,
+        connection: sqlite3.Connection,
+        profile_id: str,
+        identity: dict,
+        counted: bool,
+        evidence_id: str,
+        now: str,
+        basis: dict,
+    ) -> None:
+        """Keep exactly one sample per (profile, attempt), keyed by attempt identity."""
+        attempt_id = identity.get("attemptId")
+        if not attempt_id:
+            return
+        counter = self._sample_counter(profile_id)
+        if counted:
+            added = connection.execute(
+                "INSERT OR IGNORE INTO evaluation_samples(profile_id, attempt_id, task_id, verdict, evidence_id,"
+                " created_at) VALUES(?,?,?,?,?,?)",
+                (
+                    profile_id,
+                    attempt_id,
+                    identity.get("taskId") or "",
+                    basis.get("source") or "accepted",
+                    evidence_id,
+                    now,
+                ),
+            ).rowcount
+            self._bump(connection, counter, int(added), now)
+            return
+        # Verification may regress (for example a verdict is not yet recorded); the
+        # sample disappears only when no counted report for that attempt remains.
+        removed = connection.execute(
+            "DELETE FROM evaluation_samples WHERE profile_id=? AND attempt_id=? AND NOT EXISTS ("
+            " SELECT 1 FROM evaluation_evidence e WHERE e.profile_id=? AND e.counted=1"
+            " AND json_extract(e.identity_json, '$.attemptId') = ?)",
+            (profile_id, attempt_id, profile_id, attempt_id),
+        ).rowcount
+        self._bump(connection, counter, -int(removed), now)
+
     @staticmethod
     def _pending_evidence(connection: sqlite3.Connection) -> int:
         """Evidence not yet incorporated into a currently published card.
@@ -763,14 +1039,24 @@ class EvaluationStore:
         maintenance. Evidence whose reference disappears when a card is replaced
         becomes visible as pending again, which is exactly what the operator must
         decide about.
+
+        The durable ``evaluation_evidence_pending`` ledger records *which* evidence is
+        pending; this counter is maintained transactionally by the same insert and
+        delete statements, so an ordinary console refresh or route admission reads one
+        fixed-size row instead of scanning the archive.
         """
         row = connection.execute(
-            "SELECT COUNT(*) AS count FROM evaluation_evidence e WHERE NOT EXISTS ("
-            "  SELECT 1 FROM evaluation_cards c WHERE c.profile_id = e.profile_id"
-            "  AND EXISTS (SELECT 1 FROM json_each(c.evidence_ids_json) WHERE json_each.value = e.evidence_id)"
-            ")"
+            "SELECT value FROM evaluation_aggregates WHERE name=?", (EvaluationStore.PENDING_COUNTER,)
         ).fetchone()
-        return int(row["count"])
+        return int(row["value"]) if row is not None else 0
+
+    @staticmethod
+    def _sample_count(connection: sqlite3.Connection, profile_id: str) -> int:
+        row = connection.execute(
+            "SELECT value FROM evaluation_aggregates WHERE name=?",
+            (EvaluationStore._sample_counter(profile_id),),
+        ).fetchone()
+        return int(row["value"]) if row is not None else 0
 
     def snapshot(self, params: dict) -> dict:
         schemas.reject_unknown(params, set(), "console.snapshot")
@@ -790,14 +1076,16 @@ class EvaluationStore:
             evidence = [
                 self._evidence_view(row)
                 for row in connection.execute(
-                    "SELECT * FROM evaluation_evidence ORDER BY created_at DESC, evidence_id LIMIT ?",
+                    "SELECT * FROM evaluation_evidence ORDER BY created_at DESC, evidence_id DESC LIMIT ?",
                     (MAX_EVIDENCE_PAGE,),
                 )
             ]
             decisions = [
                 self._decision_view(row)
                 for row in connection.execute(
-                    "SELECT * FROM evaluation_decisions ORDER BY created_at DESC, decision_id LIMIT ?",
+                    "SELECT d.*, r.kind AS kind, r.task_id AS run_id, r.updated_at AS updated_at"
+                    " FROM evaluation_decisions d LEFT JOIN decision_requests r ON r.decision_id = d.decision_id"
+                    " ORDER BY d.created_at DESC, d.decision_id DESC LIMIT ?",
                     (MAX_DECISION_PAGE,),
                 )
             ]
@@ -824,17 +1112,25 @@ class EvaluationStore:
         }
 
     def capabilities(self) -> dict:
-        """Real implemented availability only. Selection and maintenance are not.
+        """Real implemented availability only.
 
-        ``modelCatalogDiscovery`` reports that the installed-harness discovery helper
-        is present, not that a discovery succeeded; a successful discovery is visible
-        through ``model_catalog_refresh``.
+        ``selection`` and ``maintenance`` are true exactly while the bounded decision
+        adapter exists in this build (a helper entrypoint plus Node): when it is
+        absent, a decision request reports an honest adapter-unavailable outcome
+        instead of pretending a model ran. ``modelCatalogDiscovery`` reports that the
+        installed-harness discovery helper is present, not that a discovery
+        succeeded; a successful discovery is visible through ``model_catalog_refresh``.
         """
         from . import catalog
+        from .adapters.decision import DecisionAdapter
 
+        decision = DecisionAdapter()
+        adapter_available, adapter_reason = decision.available()
         return {
-            "selection": False,
-            "maintenance": False,
+            "selection": bool(adapter_available),
+            "maintenance": bool(adapter_available),
+            "decisionAdapter": bool(adapter_available),
+            "decisionAdapterReason": adapter_reason,
             "evaluationWriteGate": True,
             "readerAdmission": True,
             "evidenceRecord": True,
@@ -1254,56 +1550,267 @@ class EvaluationStore:
         return "ev-" + sha256_text(identity)[:32]
 
     def _task_identity(self, connection: sqlite3.Connection, run_id: str) -> dict:
+        """Freeze what the durable record says about one run *at recording time*.
+
+        The selected attempt is read once, here, and its identity is stored with the
+        report. A later retry creates a new generation and therefore a new attempt
+        reference; it can never relabel evidence about the attempt that actually ran.
+        """
         task = connection.execute("SELECT * FROM tasks WHERE task_id=?", (run_id,)).fetchone()
         if task is None:
             raise BoardError("NOT_FOUND", "Unknown runId for this evidence", runId=run_id)
         attempt = self.board._selected_attempt(connection, task)
+        return self._attempt_identity(task, attempt)
+
+    @staticmethod
+    def _attempt_identity(task: sqlite3.Row, attempt: sqlite3.Row | None) -> dict:
         result = json.loads(attempt["result_json"]) if attempt is not None and attempt["result_json"] else None
+        report = result.get("result") if isinstance(result, dict) and isinstance(result.get("result"), dict) else {}
         spec = json.loads(task["spec_json"])
+        adapter = task["adapter"]
         return {
             "taskId": task["task_id"],
+            "attemptId": attempt["attempt_id"] if attempt is not None else None,
+            "generation": int(attempt["generation"]) if attempt is not None else None,
             "taskState": task["state"],
-            "attemptId": attempt["attempt_id"] if attempt else None,
-            "generation": int(attempt["generation"]) if attempt else None,
-            "shutdownConfirmed": bool(attempt["shutdown_confirmed"]) if attempt else False,
             "resultStatus": (result or {}).get("status"),
-            "adapter": task["adapter"],
-            "provider": spec.get("provider"),
-            "model": spec.get("model"),
-            "effort": spec.get("effort"),
-            "runtimeIdentity": attempt["runtime_identity"] if attempt else None,
+            "shutdownConfirmed": bool(attempt["shutdown_confirmed"]) if attempt is not None else False,
+            "cancelRequested": bool(attempt["cancel_requested_at"]) if attempt is not None else False,
+            "error": (result or {}).get("error"),
+            "exitCode": (result or {}).get("exitCode"),
             "acceptedAt": task["accepted_at"],
+            "acceptanceNote": task["acceptance_note"],
             "acceptanceVerdict": task["acceptance_verdict"],
+            "runtimeIdentity": attempt["runtime_identity"] if attempt is not None else None,
+            "adapter": adapter,
+            "requested": EvaluationStore._requested_identity(adapter, spec, report),
+            "resolved": EvaluationStore._reported_identity(adapter, report.get("resolved")),
+            "observed": EvaluationStore._reported_identity(adapter, report.get("observed")),
         }
 
     @staticmethod
-    def _classify_evidence(kind: str, identity: dict | None) -> tuple[bool, bool, str | None]:
-        """Return ``(verified, counted, reason)`` from the durable board record.
+    def _identity_tuple(adapter: str, provider: Any, model: Any, effort: Any) -> dict | None:
+        """One known execution identity, or ``None`` when any part of it is unknown."""
+        if not isinstance(provider, str) or not provider.strip():
+            return None
+        if not isinstance(model, str) or not model.strip():
+            return None
+        return {
+            "adapter": adapter,
+            "provider": provider.strip(),
+            "model": model.strip(),
+            "effort": (effort.strip() if isinstance(effort, str) else ""),
+        }
 
-        Only a real committed result with confirmed shutdown can count as a sample;
-        a manual claim, an unconfirmed attempt or an arbitrary HTTP field never can.
+    @staticmethod
+    def _requested_identity(adapter: str, spec: dict, report: dict) -> dict | None:
+        """The identity this run actually asked for.
+
+        The stored specification is the request; when the adapter reports its own
+        requested configuration it must agree with the specification, otherwise the
+        run's real request is unknown and stays unknown instead of being guessed. A
+        reported configuration is still a *requested* identity: the served model is
+        never inferred from it.
         """
-        if kind == "task-success":
-            if (
-                identity
-                and identity["taskState"] == "completed"
-                and identity["resultStatus"] == "ok"
-                and identity["shutdownConfirmed"]
-            ):
-                return True, True, None
-            return False, False, (
-                "not counted: the linked task has no completed result with confirmed shutdown, so this claim is "
-                "stored as an unverified report"
+        stored = EvaluationStore._identity_tuple(
+            adapter, spec.get("provider"), spec.get("model"), spec.get("effort")
+        )
+        reported = report.get("requested") if isinstance(report, dict) else None
+        if isinstance(reported, dict):
+            live = EvaluationStore._identity_tuple(
+                adapter,
+                reported.get("provider"),
+                reported.get("model"),
+                reported.get("reasoningEffort", reported.get("effort")),
             )
-        if kind == "task-failure":
-            if identity and identity["resultStatus"] in ("failed", "cancelled") and identity["shutdownConfirmed"]:
-                return True, True, None
-            return False, False, (
-                "not counted: an unconfirmed or absent execution outcome is not evidence of model performance"
+            if stored is not None and live is not None and stored != live:
+                return None
+            return live or stored
+        return stored
+
+    @staticmethod
+    def _reported_identity(adapter: str, value: Any) -> dict | None:
+        if not isinstance(value, dict):
+            return None
+        return EvaluationStore._identity_tuple(
+            adapter, value.get("provider"), value.get("model"), value.get("reasoningEffort", value.get("effort"))
+        )
+
+    @staticmethod
+    def _matches_profile(identity: dict | None, profile: sqlite3.Row) -> bool:
+        if identity is None:
+            return False
+        return (
+            identity["adapter"] == profile["adapter"]
+            and identity["provider"] == profile["provider"]
+            and identity["model"] == profile["model"]
+            and identity["effort"] == (profile["effort"] or "")
+        )
+
+    @staticmethod
+    def _infrastructure_failure(identity: dict) -> bool:
+        """True when the failure names the harness, adapter or environment.
+
+        Cancelled work, an unusable adapter, a runner that produced no result and a
+        worker-level crash are not evidence about a model's capability, so they are
+        never counted as capability failures.
+        """
+        if identity.get("resultStatus") == "invalid-result":
+            return True
+        text = identity.get("error")
+        if not isinstance(text, str):
+            return False
+        return any(marker in text for marker in INFRASTRUCTURE_FAILURE_MARKERS)
+
+    def _sample_basis(self, identity: dict, profile: sqlite3.Row, *, source: str) -> tuple[bool, dict]:
+        """Whether one accepted/rejected attempt is a verified sample of this profile."""
+        basis: dict = {"source": source, "profileMatch": False}
+        if identity.get("taskState") == "reconciliation-needed" or not identity.get("shutdownConfirmed"):
+            basis["excluded"] = "shutdown-unconfirmed"
+            return (
+                False,
+                basis | {
+                    "reason": "not counted: the attempt's shutdown is unconfirmed, so nothing can be attributed "
+                    "to a model",
+                },
             )
+        if self._infrastructure_failure(identity):
+            basis["excluded"] = "infrastructure"
+            return (
+                False,
+                basis | {
+                    "reason": "not counted: an environment, adapter or infrastructure failure is not a "
+                    "model-capability result",
+                },
+            )
+        requested, resolved, observed = identity.get("requested"), identity.get("resolved"), identity.get("observed")
+        if requested is None:
+            basis["reason"] = "the run records no requested model identity"
+            return (
+                False,
+                basis | {
+                    "reason": "not counted: the run records no requested model/provider/effort identity, so the "
+                    "profile this result belongs to is unknown",
+                },
+            )
+        if not self._matches_profile(requested, profile):
+            basis["reason"] = "the requested identity does not match this profile"
+            return (
+                False,
+                basis | {
+                    "reason": "not counted: the run requested "
+                    f"{requested['adapter']}/{requested['provider']}/{requested['model']}/{requested['effort']}, "
+                    "which is not this profile",
+                },
+            )
+        for name, value in (("resolved", resolved), ("observed", observed)):
+            if value is not None and not self._matches_profile(value, profile):
+                basis["reason"] = f"the {name} identity does not match this profile"
+                return (
+                    False,
+                    basis | {
+                        "reason": f"not counted: the run's {name} identity "
+                        f"{value['adapter']}/{value['provider']}/{value['model']}/{value['effort']} is not this "
+                        "profile",
+                    },
+                )
+        basis.update({"profileMatch": True, "requested": requested, "resolved": resolved, "observed": observed})
+        return True, basis
+
+    def _classify_evidence(
+        self, kind: str, identity: dict, profile: sqlite3.Row
+    ) -> tuple[bool, bool, str | None, dict]:
+        """Return ``(verified, counted, reason, basis)`` from the durable board record.
+
+        ``verified`` means the durable record corroborates the claim. ``counted``
+        additionally requires an appropriate Host verdict, an exactly known profile
+        identity and an attributable (non-infrastructure, non-cancelled) outcome.
+        """
         if kind == "task-cancelled":
-            return False, False, "not counted: cancelled work is not evidence about model quality"
-        return False, False, "not counted: a manual or observational report is attributed but not a verified sample"
+            corroborated = bool(
+                identity.get("cancelRequested")
+                or identity.get("taskState") == "cancelled"
+                or identity.get("resultStatus") == "cancelled"
+            )
+            return (
+                corroborated,
+                False,
+                "not counted: cancelled work is not evidence about model quality",
+                {"source": None, "excluded": "cancelled", "profileMatch": False},
+            )
+        if identity.get("attemptId") is None or identity.get("resultStatus") is None:
+            return (
+                False,
+                False,
+                "not counted: the linked run has no committed attempt result, so this claim is stored as an "
+                "unverified report",
+                {"source": None, "profileMatch": False},
+            )
+        if kind == "task-success":
+            if identity.get("taskState") != "completed" or identity.get("resultStatus") != "ok":
+                return (
+                    False,
+                    False,
+                    "not counted: the linked run has no completed successful result, so this claim is stored as an "
+                    "unverified report",
+                    {"source": None, "profileMatch": False},
+                )
+            if not identity.get("acceptedAt") or identity.get("acceptanceVerdict") != "accepted":
+                return (
+                    True,
+                    False,
+                    "not counted: a Host acceptance verdict for this exact attempt is required; an unreviewed "
+                    "successful process is not task-success evidence",
+                    {"source": "host-acceptance", "profileMatch": False},
+                )
+            matched, basis = self._sample_basis(identity, profile, source="host-acceptance")
+            return True, matched, (None if matched else basis.get("reason")), basis
+        if kind == "task-failure":
+            # A rejected completed result may be a capability failure even when the
+            # exit status is ok: the Host reviewed the actual work and rejected it.
+            rejected_completion = (
+                identity.get("resultStatus") == "ok" and identity.get("acceptanceVerdict") == "rejected"
+            )
+            failed = (
+                identity.get("resultStatus") in ("failed", "cancelled")
+                or identity.get("taskState") in ("failed", "cancelled", "reconciliation-needed")
+                or rejected_completion
+            )
+            if not failed:
+                return (
+                    False,
+                    False,
+                    "not counted: the linked run has no failed result, so this claim is stored as an unverified "
+                    "report",
+                    {"source": None, "profileMatch": False},
+                )
+            if (
+                identity.get("cancelRequested")
+                or identity.get("resultStatus") == "cancelled"
+                or identity.get("taskState") == "cancelled"
+            ):
+                return (
+                    True,
+                    False,
+                    "not counted: a cancelled run is not a model-capability failure",
+                    {"source": None, "excluded": "cancelled", "profileMatch": False},
+                )
+            if not identity.get("acceptedAt") or identity.get("acceptanceVerdict") != "rejected":
+                return (
+                    True,
+                    False,
+                    "not counted: a Host rejection verdict for this exact attempt is required; an unreviewed "
+                    "failure is not attributed to the model",
+                    {"source": "host-rejection", "profileMatch": False},
+                )
+            matched, basis = self._sample_basis(identity, profile, source="host-rejection")
+            return True, matched, (None if matched else basis.get("reason")), basis
+        return (
+            False,
+            False,
+            "not counted: a manual or observational report is attributed but not a verified sample",
+            {"source": None, "profileMatch": False},
+        )
 
     def evidence_record(self, params: dict) -> dict:
         schemas.reject_unknown(
@@ -1340,7 +1847,7 @@ class EvaluationStore:
                 if receipt is not None:
                     return {**receipt, "duplicate": True}
             profile = connection.execute(
-                "SELECT profile_id FROM evaluation_profiles WHERE profile_id=?", (profile_id,)
+                "SELECT * FROM evaluation_profiles WHERE profile_id=?", (profile_id,)
             ).fetchone()
             if profile is None:
                 raise BoardError(
@@ -1349,21 +1856,16 @@ class EvaluationStore:
                     profileId=profile_id,
                 )
             identity = self._task_identity(connection, run_id) if run_id else None
-            verified, counted, reason = self._classify_evidence(kind, identity)
             evidence_id = self._evidence_id(profile_id, kind, summary, project, source, run_id, conditions)
             existing = connection.execute(
                 "SELECT * FROM evaluation_evidence WHERE evidence_id=?", (evidence_id,)
             ).fetchone()
             table_revision = int(self._state(connection)["table_revision"])
-            if existing is not None:
-                response = {
-                    "evidence": self._evidence_view(existing),
-                    "verified": bool(existing["verified"]),
-                    "counted": bool(existing["counted"]),
-                    "unverifiedReason": None if existing["counted"] else reason,
-                    "duplicate": True,
-                }
-            else:
+            insert = existing is None
+            if insert:
+                identity = identity or {}
+                verified, counted, reason, basis = self._classify_evidence(kind, identity, profile)
+                frozen = canonical_json({**identity, "basis": basis})
                 connection.execute(
                     "INSERT INTO evaluation_evidence(evidence_id, profile_id, kind, summary, project,"
                     " conditions_json, source, run_id, verified, counted, identity_json, recorded_revision, created_at)"
@@ -1379,11 +1881,13 @@ class EvaluationStore:
                         run_id,
                         1 if verified else 0,
                         1 if counted else 0,
-                        canonical_json(identity if verified else {}),
+                        frozen,
                         table_revision,
                         self._now(),
                     ),
                 )
+                self._mark_pending(connection, evidence_id)
+                self._record_sample(connection, profile_id, identity, counted, evidence_id, self._now(), basis)
                 self.board._append_event(
                     connection,
                     "evaluation.evidence_recorded",
@@ -1397,16 +1901,37 @@ class EvaluationStore:
                         "runId": run_id,
                     },
                 )
-                row = connection.execute(
+                existing = connection.execute(
                     "SELECT * FROM evaluation_evidence WHERE evidence_id=?", (evidence_id,)
                 ).fetchone()
-                response = {
-                    "evidence": self._evidence_view(row),
-                    "verified": verified,
-                    "counted": counted,
-                    "unverifiedReason": None if counted else reason,
-                    "duplicate": False,
-                }
+            else:
+                # The identical report is never duplicated. Its derived verification
+                # is re-evaluated so a Host verdict recorded after the report is
+                # reflected without rewriting the report itself.
+                verified, counted, reason, basis = self._classify_evidence(
+                    kind, json.loads(existing["identity_json"]) if existing["identity_json"] else {}, profile
+                )
+                if bool(existing["verified"]) != verified or bool(existing["counted"]) != counted:
+                    frozen = canonical_json(
+                        {**(json.loads(existing["identity_json"]) or {}), "basis": basis}
+                    )
+                    connection.execute(
+                        "UPDATE evaluation_evidence SET verified=?, counted=?, identity_json=? WHERE evidence_id=?",
+                        (1 if verified else 0, 1 if counted else 0, frozen, evidence_id),
+                    )
+                    self._record_sample(
+                        connection, profile_id, json.loads(frozen), counted, evidence_id, self._now(), basis
+                    )
+                    existing = connection.execute(
+                        "SELECT * FROM evaluation_evidence WHERE evidence_id=?", (evidence_id,)
+                    ).fetchone()
+            response = {
+                "evidence": self._evidence_view(existing),
+                "verified": bool(existing["verified"]),
+                "counted": bool(existing["counted"]),
+                "unverifiedReason": None if existing["counted"] else reason,
+                "duplicate": not insert,
+            }
             if command_id:
                 self.board._store_receipt(connection, command_id, "evaluation.evidence", request, response)
             head = self.board._head_of(connection)
@@ -1499,8 +2024,38 @@ class EvaluationStore:
         }
 
     @staticmethod
+    def card_history(connection: sqlite3.Connection, profile_id: str, limit: int = 50) -> list[dict]:
+        """Archived card snapshots, newest first, for one bounded profile.
+
+        Automatic compaction retires references from the bounded *current* card; the
+        publication snapshots keep the text, risks and full reference list of every
+        earlier revision, so provenance is archived rather than silently dropped.
+        """
+        rows = connection.execute(
+            "SELECT * FROM evaluation_card_history WHERE profile_id=? ORDER BY table_revision DESC LIMIT ?",
+            (profile_id, max(1, min(int(limit), 500))),
+        ).fetchall()
+        return [
+            {
+                "tableRevision": int(row["table_revision"]),
+                "profileId": row["profile_id"],
+                "cardRevision": int(row["card_revision"]),
+                "summary": row["summary"],
+                "strengths": json.loads(row["strengths_json"]),
+                "limitations": json.loads(row["limitations_json"]),
+                "risks": json.loads(row["risks_json"]),
+                "evidenceIds": json.loads(row["evidence_ids_json"]),
+                "sampleCount": int(row["sample_count"]),
+                "publishedAt": row["published_at"],
+            }
+            for row in rows
+        ]
+
+    @staticmethod
     def _evidence_view(row: sqlite3.Row) -> dict:
-        return {
+        identity = json.loads(row["identity_json"]) if row["identity_json"] else {}
+        basis = identity.get("basis") if isinstance(identity.get("basis"), dict) else {}
+        view = {
             "evidenceId": row["evidence_id"],
             "profileId": row["profile_id"],
             "kind": row["kind"],
@@ -1510,10 +2065,31 @@ class EvaluationStore:
             "source": row["source"],
             "runId": row["run_id"],
             "createdAt": row["created_at"],
+            # Derived from the immutable attempt reference frozen at recording time.
+            "verified": bool(row["verified"]),
+            "counted": bool(row["counted"]),
+            "attemptId": identity.get("attemptId"),
+            "generation": identity.get("generation"),
+            "identityBasis": {
+                "source": basis.get("source"),
+                "profileMatch": bool(basis.get("profileMatch")),
+                "requested": identity.get("requested"),
+                "resolved": identity.get("resolved"),
+                "observed": identity.get("observed"),
+                "excluded": basis.get("excluded"),
+                "note": (
+                    "requested is the configuration the run asked for; resolved/observed stay null when the "
+                    "provider did not report a served identity, and unknown is never filled in"
+                ),
+            },
         }
+        if not row["counted"] and basis.get("reason"):
+            view["unverifiedReason"] = basis["reason"]
+        return view
 
     @staticmethod
     def _decision_view(row: sqlite3.Row) -> dict:
+        keys = row.keys()
         view = {
             "decisionId": row["decision_id"],
             "status": row["status"],
@@ -1524,6 +2100,12 @@ class EvaluationStore:
             "evidenceIds": json.loads(row["evidence_ids_json"]),
             "createdAt": row["created_at"],
         }
+        if "kind" in keys and row["kind"] is not None:
+            view["kind"] = row["kind"]
+        if "run_id" in keys:
+            view["runId"] = row["run_id"]
+        if "updated_at" in keys and row["updated_at"] is not None:
+            view["updatedAt"] = row["updated_at"]
         if row["error"]:
             view["error"] = row["error"]
         return view

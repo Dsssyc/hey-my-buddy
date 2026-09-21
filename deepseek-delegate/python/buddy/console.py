@@ -45,6 +45,9 @@ CONSOLE_OPERATIONS = (
     "evaluation_reader_begin",
     "evaluation_reader_release",
     "evaluation_evidence_record",
+    "evaluation_maintain",
+    "selection_request",
+    "selection_get",
     "model_catalog_refresh",
     "task_cancel",
     "task_retry",
@@ -72,6 +75,7 @@ STATUS_BY_CODE = {
     "UNSUPPORTED_ADAPTER": 501,
     "CATALOG_UNAVAILABLE": 503,
     "CATALOG_INVALID": 502,
+    "ADAPTER_UNAVAILABLE": 503,
     "SERVICE_UNAVAILABLE": 503,
     "INTERNAL_ERROR": 500,
 }
