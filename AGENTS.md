@@ -39,6 +39,10 @@ Use the [documentation index](docs/README.md) to find each page. Keep detailed c
 | Skill entrypoints | `skills/buddy/SKILL.md`, `deepseek-delegate/SKILL.md` |
 | Development invariants and this routing table | `AGENTS.md` |
 | Historical design rationale | `docs/decisions/001-python-transactional-blackboard.md` |
+| Accepted direction: Host-directed assistance, turn continuation, workspace ownership and integration (implementation pending) | `docs/decisions/002-host-directed-assistance-and-workspaces.md` |
+| Accepted policy: shared bounded assessments, cross-project reuse, table-level exclusion, revision/generation fencing and React + Vite console frontend (implementation pending) | `docs/decisions/005-shared-assessments-and-table-exclusion.md` |
+| Current consolidated proposal: decision support, evaluation maintenance and the local console (section III governance choices resolved by ADR-005; remaining content is a discussion draft; runtime not implemented) | `docs/decisions/004-buddy-decision-support-and-console.md` |
+| Historical discussion: bounded assessments, typed model selection and the Jev backend (research record; ADR-004 is the current consolidated proposal) | `docs/decisions/003-harness-model-selection.md` |
 | Acceptance evidence | `docs/acceptance/` |
 
 Record acceptance changes in `docs/acceptance/` and keep raw local logs in the ignored `.dsh-skill-build/` directory. Update the READMEs, both `SKILL.md` files and the owning reference together when public behavior changes; `plugin-service.md` stays an index, not a second manual.
