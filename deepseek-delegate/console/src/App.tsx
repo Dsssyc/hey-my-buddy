@@ -85,7 +85,10 @@ function Connected({
     snapshot.gate.writer?.writerId === editor.grant?.writerId && !!editor.grant;
   return (
     <div className="app-shell">
-      <a className="skip-link" href="#main">
+      <a className="skip-link" href="#main" onClick={event => {
+        event.preventDefault();
+        document.getElementById("main")?.focus();
+      }}>
         跳至主要内容
       </a>
       <aside className="sidebar">
@@ -143,7 +146,7 @@ function Connected({
             </button>
           </div>
         </header>
-        <main id="main" className="main-content">
+        <main id="main" className="main-content" tabIndex={-1}>
           <div className="page-heading">
             <div>
               <span className="eyebrow">BUDDY / {tab.toUpperCase()}</span>

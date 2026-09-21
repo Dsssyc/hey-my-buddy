@@ -89,6 +89,9 @@ export function createApi(prefix: string, fetcher: typeof fetch = fetch) {
         },
         body: JSON.stringify({ operation, params }),
       })) as { ok: boolean; result: T };
+      if (!data || data.ok !== true || !Object.hasOwn(data, "result")) {
+        throw new ApiError("INVALID_RESPONSE", "操作响应不完整，提交结果尚未确认。");
+      }
       return data.result;
     },
     async task(runId: string) {

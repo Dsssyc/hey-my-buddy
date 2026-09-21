@@ -40,7 +40,7 @@ export function DecisionHistory({
     try {
       const value = await api.command<{ decision: Audit }>(
         "selection_get",
-        { decisionId },
+        { decisionId, includeAudit: true },
         snapshot.csrfToken,
       );
       setAudit(value.decision);
