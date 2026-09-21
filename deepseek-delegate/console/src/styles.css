@@ -632,6 +632,11 @@ nav a.active {
   text-align: left;
   color: var(--ink);
 }
+.profile-list {
+  max-height: min(65vh, 56rem);
+  overflow-y: auto;
+  scrollbar-gutter: stable;
+}
 .profile-list li:last-child .profile-row {
   border-bottom: 0;
 }

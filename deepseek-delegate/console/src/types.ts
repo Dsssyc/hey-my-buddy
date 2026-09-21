@@ -42,6 +42,9 @@ export type Evidence = {
 };
 export type Decision = {
   decisionId: string;
+  kind?: "select" | "maintain";
+  runId?: string | null;
+  requestId?: string;
   status: string;
   task: string;
   profileId: string | null;

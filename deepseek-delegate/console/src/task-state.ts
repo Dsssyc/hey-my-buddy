@@ -3,6 +3,7 @@ import type { Task } from "./types";
 export function needsReview(task: Task): boolean {
   return (
     !task.acceptedAt &&
+    task.spec?.adapter !== "decision" &&
     ["completed", "failed", "cancelled"].includes(task.status) &&
     task.resultAvailable === true &&
     task.shutdownConfirmed === true

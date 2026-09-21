@@ -78,7 +78,9 @@ function Connected({
       ? "评价表可读"
       : snapshot.gate.phase === "draining"
         ? "等待决策收束"
-        : "独占编辑中";
+        : snapshot.gate.writer?.kind === "maintenance"
+          ? "评价维护窗口"
+          : "独占编辑中";
   const editingMine =
     snapshot.gate.writer?.writerId === editor.grant?.writerId && !!editor.grant;
   return (

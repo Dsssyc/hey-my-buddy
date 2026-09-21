@@ -1,9 +1,10 @@
 import { useState } from "react";
 import type { ConsoleApi } from "./api";
-import { errorText } from "./api";
 import type { Snapshot } from "./types";
 import type { Editor } from "./use-editor";
-import { Badge, formatDate, Icon } from "./ui";
+import { Badge, Icon } from "./ui";
+import { useDecisionRequest } from "./use-decision-request";
+import { DecisionHistory } from "./DecisionHistory";
 
 export function Settings({
   snapshot,
@@ -21,27 +22,10 @@ export function Settings({
   const current = data.profiles.find(
     (p) => p.profileId === data.configuration.decisionProfileId,
   );
-  const [task, setTask] = useState(""),
-    [busy, setBusy] = useState(false),
-    [message, setMessage] = useState("");
+  const [task, setTask] = useState("");
+  const decision = useDecisionRequest(api, snapshot, refresh);
+  const maintenance = useDecisionRequest(api, snapshot, refresh);
   const canSelect = snapshot.capabilities.selection === true;
-  async function requestDecision() {
-    setBusy(true);
-    setMessage("");
-    try {
-      await api.command(
-        "selection_request",
-        { requestId: crypto.randomUUID(), task: task.trim() },
-        snapshot.csrfToken,
-      );
-      setMessage("推荐请求已记录，可在下方查看结果。");
-      await refresh();
-    } catch (failure) {
-      setMessage(errorText(failure));
-    } finally {
-      setBusy(false);
-    }
-  }
   return (
     <div className="settings-grid">
       <section className="panel settings-panel">
@@ -106,11 +90,13 @@ export function Settings({
         )}
         <div className="setting-row">
           <div>
-            <h3>自动整理验收经验</h3>
-            <p>在已授权范围内，整理新证据并保留每次修订。</p>
+            <h3>自动采纳常规整理结果</h3>
+            <p>
+              允许有依据、保留适用条件和未解决风险的结果发布；其余交回 Host。
+            </p>
           </div>
           <input
-            aria-label="自动整理验收经验"
+            aria-label="自动采纳常规整理结果"
             type="checkbox"
             disabled={!editing || snapshot.capabilities.maintenance !== true}
             checked={data.configuration.autoMaintain}
@@ -128,6 +114,38 @@ export function Settings({
               )
             }
           />
+        </div>
+        <div className="detail-section">
+          <h3>整理待处理证据</h3>
+          <p className="small muted">
+            当前有 {snapshot.pendingEvidence}{" "}
+            条待处理。点击后才提交一次整理任务；未启用自动采纳时，只保留建议。
+          </p>
+          <button
+            className="button"
+            disabled={
+              maintenance.busy ||
+              snapshot.capabilities.maintenance !== true ||
+              (!maintenance.retryId &&
+                (!snapshot.configuration.decisionProfileId ||
+                  snapshot.pendingEvidence === 0))
+            }
+            onClick={() => void maintenance.submit("evaluation_maintain")}
+          >
+            {maintenance.busy
+              ? "正在提交…"
+              : maintenance.retryId
+                ? "重试同一整理请求"
+                : "请求整理"}
+          </button>
+          {maintenance.message && (
+            <p className="inline-message" role="status">
+              {maintenance.message}
+            </p>
+          )}
+          {maintenance.retryId && (
+            <p className="mono small wrap">请求 ID：{maintenance.retryId}</p>
+          )}
         </div>
         <div className="policy-note">
           <h3>用户偏好与事实分别保存</h3>
@@ -148,6 +166,7 @@ export function Settings({
           <span>任务与约束</span>
           <textarea
             rows={6}
+            disabled={decision.busy || !!decision.retryId}
             value={task}
             onChange={(e) => setTask(e.target.value)}
             maxLength={16000}
@@ -157,71 +176,40 @@ export function Settings({
         <button
           className="button primary"
           disabled={
-            busy ||
+            decision.busy ||
             !canSelect ||
-            !data.configuration.decisionProfileId ||
-            !task.trim()
+            (!decision.retryId &&
+              (!snapshot.configuration.decisionProfileId || !task.trim()))
           }
-          onClick={() => void requestDecision()}
+          onClick={() =>
+            void decision.submit("selection_request", { task: task.trim() })
+          }
         >
-          {busy ? "正在提交…" : "请求推荐"}
+          {decision.busy
+            ? "正在提交…"
+            : decision.retryId
+              ? "重试同一推荐请求"
+              : "请求推荐"}
           <Icon name="arrow" size={16} />
         </button>
         {!canSelect && (
           <p className="small muted">当前服务尚未提供模型决策执行能力。</p>
         )}
-        {message && (
+        {decision.message && (
           <p className="inline-message" role="status">
-            {message}
+            {decision.message}
+          </p>
+        )}
+        {decision.retryId && (
+          <p className="mono small wrap">请求 ID：{decision.retryId}</p>
+        )}
+        {snapshot.gate.phase !== "open" && (
+          <p className="small muted">
+            评价表正在编辑，新请求会排队，随后读取完整发布版本。
           </p>
         )}
       </section>
-      <section className="panel settings-panel decision-history">
-        <div className="panel-toolbar">
-          <h2>最近决策</h2>
-          <span className="small muted">记录依据，不把推荐当作能力证明</span>
-        </div>
-        {snapshot.decisions.length ? (
-          <ul className="decision-list">
-            {snapshot.decisions.map((d) => (
-              <li key={d.decisionId}>
-                <div className="row-between">
-                  <strong>{d.task}</strong>
-                  <Badge
-                    tone={
-                      d.status === "failed" || d.status === "deferred"
-                        ? "amber"
-                        : "neutral"
-                    }
-                  >
-                    {(
-                      {
-                        queued: "等待中",
-                        running: "判断中",
-                        recommended: "已推荐",
-                        deferred: "交回 Host",
-                        failed: "未形成推荐",
-                      } as Record<string, string>
-                    )[d.status] || d.status}
-                  </Badge>
-                </div>
-                <p>{d.reason || d.error || "等待决策结果。"}</p>
-                <div className="small muted">
-                  {d.profileId
-                    ? data.profiles.find((p) => p.profileId === d.profileId)
-                        ?.label || d.profileId
-                    : "未选择配置"}{" "}
-                  · 评价版本 {d.tableRevision} · {formatDate(d.createdAt)}
-                </div>
-              </li>
-            ))}
-          </ul>
-        ) : (
-          <p className="padded muted">
-            还没有决策记录。这里不会自动生成演示结果。
-          </p>
-        )}
-      </section>
+      <DecisionHistory snapshot={snapshot} api={api} />
     </div>
   );
 }

@@ -3,6 +3,7 @@ import { cleanup, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { App } from "./App";
 import type { ConsoleApi } from "./api";
+import { ApiError } from "./api";
 import type { Snapshot, WriterGrant } from "./types";
 
 const initial = (): Snapshot => ({
@@ -57,67 +58,175 @@ afterEach(() => {
 });
 
 describe("console interactions", () => {
+  it("reuses the original decision request after an ambiguous network response", async () => {
+    const state = initial();
+    state.capabilities.selection = true;
+    const command = vi
+      .fn()
+      .mockRejectedValueOnce(new ApiError("NETWORK", "lost response"))
+      .mockResolvedValueOnce({ decisionId: "durable", runId: "run" });
+    const api = {
+      snapshot: vi.fn(async () => state),
+      command,
+      task: vi.fn(),
+    } as unknown as ConsoleApi;
+    window.location.hash = "#settings";
+    const user = userEvent.setup();
+    render(<App suppliedApi={api} />);
+    await user.type(
+      await screen.findByLabelText("任务与约束"),
+      "只读检查状态管理边界",
+    );
+    await user.click(screen.getByRole("button", { name: "请求推荐" }));
+    await user.click(
+      await screen.findByRole("button", { name: "重试同一推荐请求" }),
+    );
+    await screen.findByText("请求已记录，可在最近决策和工作队列中查看进度。");
+    expect(command).toHaveBeenCalledTimes(2);
+    expect(command.mock.calls[1]).toEqual(command.mock.calls[0]);
+    expect(command.mock.calls[0][1].task).toBe("只读检查状态管理边界");
+  });
+
   it("records a scoped observation using the real evidence command contract without taking a writer", async () => {
     const state = initial();
     const command = vi.fn(async (operation: string, params: any) => {
-      if (operation !== "evaluation_evidence_record" || params.kind !== "observation") throw new Error("unsupported evidence command");
+      if (
+        operation !== "evaluation_evidence_record" ||
+        params.kind !== "observation"
+      )
+        throw new Error("unsupported evidence command");
       state.pendingEvidence = 1;
       return { verified: false, counted: false };
     });
-    const api = { snapshot: vi.fn(async () => structuredClone(state)), command, task: vi.fn() } as unknown as ConsoleApi;
+    const api = {
+      snapshot: vi.fn(async () => structuredClone(state)),
+      command,
+      task: vi.fn(),
+    } as unknown as ConsoleApi;
     window.location.hash = "#models";
     const user = userEvent.setup();
     render(<App suppliedApi={api} />);
     await user.click(await screen.findByRole("button", { name: /Flash 决策/ }));
-    await user.type(screen.getByLabelText("补充观察"), "一次有边界的观察，不是验收成绩");
+    await user.type(
+      screen.getByLabelText("补充观察"),
+      "一次有边界的观察，不是验收成绩",
+    );
     await user.type(screen.getByLabelText("项目来源（可选）"), "示例项目");
-    await user.type(screen.getByLabelText("适用条件（每行一条）"), "React 状态管理{Enter}只读调查");
+    await user.type(
+      screen.getByLabelText("适用条件（每行一条）"),
+      "React 状态管理{Enter}只读调查",
+    );
     await user.click(screen.getByRole("button", { name: "记录待整理观察" }));
-    await waitFor(() => expect(screen.getByLabelText("补充观察")).toHaveProperty("value", ""));
-    expect(command).toHaveBeenCalledExactlyOnceWith("evaluation_evidence_record", expect.objectContaining({
-      profileId: "flash-off", kind: "observation", summary: "一次有边界的观察，不是验收成绩", source: "user", project: "示例项目", conditions: ["React 状态管理", "只读调查"],
-    }), "fixture-csrf");
+    await waitFor(() =>
+      expect(screen.getByLabelText("补充观察")).toHaveProperty("value", ""),
+    );
+    expect(command).toHaveBeenCalledExactlyOnceWith(
+      "evaluation_evidence_record",
+      expect.objectContaining({
+        profileId: "flash-off",
+        kind: "observation",
+        summary: "一次有边界的观察，不是验收成绩",
+        source: "user",
+        project: "示例项目",
+        conditions: ["React 状态管理", "只读调查"],
+      }),
+      "fixture-csrf",
+    );
   });
 
   it("retries a never-claimed cancellation without asking to accept nonexistent output", async () => {
     const state = initial();
-    state.tasks = { total: 1, runs: [{
-      runId: "cancelled-before-claim", task: "未执行的测试任务", status: "cancelled",
-      owner: "fixture", cwd: "/fixture", revision: 2, createdAt: "2026-09-22T00:00:00Z",
-      acceptedAt: null, acceptanceVerdict: null, activeAttemptId: null, selectedAttemptId: null,
-      shutdownConfirmed: false, resultAvailable: false,
-    }] };
-    const api = { snapshot: vi.fn(async () => state), command: vi.fn(async () => ({})),
-      task: vi.fn(async () => state.tasks.runs[0]) } as unknown as ConsoleApi;
+    state.tasks = {
+      total: 1,
+      runs: [
+        {
+          runId: "cancelled-before-claim",
+          task: "未执行的测试任务",
+          status: "cancelled",
+          owner: "fixture",
+          cwd: "/fixture",
+          revision: 2,
+          createdAt: "2026-09-22T00:00:00Z",
+          acceptedAt: null,
+          acceptanceVerdict: null,
+          activeAttemptId: null,
+          selectedAttemptId: null,
+          shutdownConfirmed: false,
+          resultAvailable: false,
+        },
+      ],
+    };
+    const api = {
+      snapshot: vi.fn(async () => state),
+      command: vi.fn(async () => ({})),
+      task: vi.fn(async () => state.tasks.runs[0]),
+    } as unknown as ConsoleApi;
     const user = userEvent.setup();
     render(<App suppliedApi={api} />);
-    await user.click(await screen.findByRole("button", { name: /未执行的测试任务/ }));
+    await user.click(
+      await screen.findByRole("button", { name: /未执行的测试任务/ }),
+    );
     const retry = await screen.findByRole("button", { name: "重新尝试" });
     expect(retry).toHaveProperty("disabled", false);
     expect(screen.queryByRole("heading", { name: "记录验收" })).toBeNull();
     await user.click(retry);
-    expect(api.command).toHaveBeenCalledWith("task_retry", { runId: "cancelled-before-claim" }, "fixture-csrf");
+    expect(api.command).toHaveBeenCalledWith(
+      "task_retry",
+      { runId: "cancelled-before-claim" },
+      "fixture-csrf",
+    );
     await user.click(screen.getByRole("button", { name: "待验收" }));
-    expect(await screen.findByRole("heading", { name: "没有匹配的任务" })).toBeTruthy();
+    expect(
+      await screen.findByRole("heading", { name: "没有匹配的任务" }),
+    ).toBeTruthy();
   });
 
   it("renders the persisted worker receipt and refuses retry when a process may survive", async () => {
     const state = initial();
-    state.tasks = { total: 1, runs: [{
-      runId: "unconfirmed-run", task: "停止证据测试", status: "failed",
-      owner: "fixture", cwd: "/fixture", revision: 3, createdAt: "2026-09-22T00:00:00Z",
-      acceptedAt: null, acceptanceVerdict: null, activeAttemptId: "attempt", selectedAttemptId: "attempt",
-      shutdownConfirmed: false, resultAvailable: true,
-    }] };
-    const api = { snapshot: vi.fn(async () => state), command: vi.fn(),
-      task: vi.fn(async () => ({ ...state.tasks.runs[0], selectedAttempt: { result: {
-        status: "failed", result: { finalText: "真实回执中的产物说明" }, shutdownConfirmed: false,
-      } } })) } as unknown as ConsoleApi;
+    state.tasks = {
+      total: 1,
+      runs: [
+        {
+          runId: "unconfirmed-run",
+          task: "停止证据测试",
+          status: "failed",
+          owner: "fixture",
+          cwd: "/fixture",
+          revision: 3,
+          createdAt: "2026-09-22T00:00:00Z",
+          acceptedAt: null,
+          acceptanceVerdict: null,
+          activeAttemptId: "attempt",
+          selectedAttemptId: "attempt",
+          shutdownConfirmed: false,
+          resultAvailable: true,
+        },
+      ],
+    };
+    const api = {
+      snapshot: vi.fn(async () => state),
+      command: vi.fn(),
+      task: vi.fn(async () => ({
+        ...state.tasks.runs[0],
+        selectedAttempt: {
+          result: {
+            status: "failed",
+            result: { finalText: "真实回执中的产物说明" },
+            shutdownConfirmed: false,
+          },
+        },
+      })),
+    } as unknown as ConsoleApi;
     const user = userEvent.setup();
     render(<App suppliedApi={api} />);
-    await user.click(await screen.findByRole("button", { name: /停止证据测试/ }));
+    await user.click(
+      await screen.findByRole("button", { name: /停止证据测试/ }),
+    );
     expect(await screen.findByText("真实回执中的产物说明")).toBeTruthy();
-    expect(screen.getByRole("button", { name: "重新尝试" })).toHaveProperty("disabled", true);
+    expect(screen.getByRole("button", { name: "重新尝试" })).toHaveProperty(
+      "disabled",
+      true,
+    );
     expect(screen.queryByRole("heading", { name: "记录验收" })).toBeNull();
     expect(api.command).not.toHaveBeenCalled();
   });
@@ -142,6 +251,19 @@ describe("console interactions", () => {
 
   it("keeps typed multiline text in the draft across refresh and publishes no fabricated counters", async () => {
     let state = initial();
+    state.evidence = [
+      {
+        evidenceId: "ev-fixture",
+        profileId: "flash-off",
+        kind: "observation",
+        summary: "单次 React 观察",
+        project: "fixture",
+        conditions: ["React"],
+        source: "user",
+        runId: null,
+        createdAt: "2026-09-22T00:00:00Z",
+      },
+    ];
     let published: Record<string, any> | null = null;
     const grant: WriterGrant = {
       writerId: "fixture-writer",
@@ -187,11 +309,13 @@ describe("console interactions", () => {
     const input = await screen.findByLabelText("适用工作");
     await waitFor(() => expect(input).toHaveProperty("readOnly", false));
     await user.type(input, "状态管理{Enter}并发测试");
+    await user.click(screen.getByLabelText("作为卡片依据"));
     await user.click(screen.getByRole("button", { name: "刷新工作台" }));
     expect((input as HTMLTextAreaElement).value).toBe("状态管理\n并发测试");
     await user.click(screen.getByRole("button", { name: "发布新版本" }));
     await screen.findByText("已发布新版本。正在执行的任务继续使用原配置。");
     expect(published!.cards[0].strengths).toEqual(["状态管理", "并发测试"]);
+    expect(published!.cards[0].evidenceIds).toEqual(["ev-fixture"]);
     expect(published!.cards[0]).not.toHaveProperty("sampleCount");
     expect(published!.expectedRevision).toBe(2);
   });

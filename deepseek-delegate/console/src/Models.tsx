@@ -358,8 +358,30 @@ export function Models({
                     {e.conditions.length > 0 && (
                       <p className="small">条件：{e.conditions.join("；")}</p>
                     )}
+                    <label className="checkbox-field">
+                      <input
+                        type="checkbox"
+                        disabled={!editing}
+                        checked={card.evidenceIds.includes(e.evidenceId)}
+                        onChange={(event) =>
+                          updateCard({
+                            evidenceIds: event.target.checked
+                              ? [...card.evidenceIds, e.evidenceId]
+                              : card.evidenceIds.filter(
+                                  (id) => id !== e.evidenceId,
+                                ),
+                          })
+                        }
+                      />
+                      作为卡片依据
+                    </label>
                   </div>
                 ))}
+              {editing && (
+                <p className="small muted">
+                  关联依据后，请在当前评价中填写保留适用条件的归纳，再发布新版本。
+                </p>
+              )}
               <label className="field">
                 <span>补充观察</span>
                 <textarea
