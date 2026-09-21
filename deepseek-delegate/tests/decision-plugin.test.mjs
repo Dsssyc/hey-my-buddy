@@ -77,7 +77,7 @@ const TEXT_ANSWER = '{"profileId":"p1","reason":"grounded","evidenceIds":["e1"]}
 
 describe('prompt assembly', () => {
   test('the instruction prefix is versioned, operation-specific and request-free', () => {
-    assert.equal(PROMPT_VERSION, 3);
+    assert.equal(PROMPT_VERSION, 4);
     const select = instructionsFor('select');
     const maintain = instructionsFor('maintain');
     assert.notEqual(select, maintain);
