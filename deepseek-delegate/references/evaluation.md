@@ -36,6 +36,8 @@ Card authors provide summaries, strengths, limitations, risks and evidence refer
 
 The current publication is bounded: at most 200 profiles, 500 cards/preferences, 16 items per card list, and 64 evidence references per card. Summaries are at most 4,000 characters and individual points at most 500. Historical evidence and revisions remain outside the current card collection. See [the CLI reference](cli.md#evaluation-and-console) for command fields and bounds, and [architecture](architecture.md) for persistence ownership.
 
+The native model call used for decision work has a separate [helper contract](decision.md). It does not receive coding tools or the ordinary agent prompt. Its requested/resolved identity and any reported token usage remain distinct from observed model identity and billing cost.
+
 ## Frontend build
 
 Source lives in `deepseek-delegate/console/`; a Vite relative-base build produces `python/buddy/console_assets/`. These checked-in assets are included in plugin staging and the content-addressed runtime. End users do not need npm. Contributors use a supported Node 24 LTS release and run `npm ci`, `npm run typecheck`, `npm test`, and `npm run build` from the console directory. Test the built console through a private source-backed Buddy state directory; Vite alone does not supply the authoritative API.
