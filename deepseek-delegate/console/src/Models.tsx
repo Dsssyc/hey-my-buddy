@@ -79,7 +79,7 @@ export function Models({
         {
           commandId: crypto.randomUUID(),
           profileId: profile.profileId,
-          kind: "user_observation",
+          kind: "observation",
           summary: observation.trim(),
           source: "user",
           project: project.trim() || null,
@@ -304,7 +304,7 @@ export function Models({
                     (p) => p.profileId === profile.profileId,
                   )?.reason || ""
                 }
-                maxLength={1000}
+                maxLength={500}
                 placeholder="说明目标或使用经验"
                 onChange={(e) =>
                   editor.setDraft((d) =>
@@ -375,7 +375,7 @@ export function Models({
                 <input
                   value={project}
                   onChange={(e) => setProject(e.target.value)}
-                  maxLength={500}
+                  maxLength={200}
                   placeholder="项目名称或来源标记"
                 />
               </label>

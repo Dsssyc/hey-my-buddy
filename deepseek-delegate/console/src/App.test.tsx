@@ -57,6 +57,28 @@ afterEach(() => {
 });
 
 describe("console interactions", () => {
+  it("records a scoped observation using the real evidence command contract without taking a writer", async () => {
+    const state = initial();
+    const command = vi.fn(async (operation: string, params: any) => {
+      if (operation !== "evaluation_evidence_record" || params.kind !== "observation") throw new Error("unsupported evidence command");
+      state.pendingEvidence = 1;
+      return { verified: false, counted: false };
+    });
+    const api = { snapshot: vi.fn(async () => structuredClone(state)), command, task: vi.fn() } as unknown as ConsoleApi;
+    window.location.hash = "#models";
+    const user = userEvent.setup();
+    render(<App suppliedApi={api} />);
+    await user.click(await screen.findByRole("button", { name: /Flash 决策/ }));
+    await user.type(screen.getByLabelText("补充观察"), "一次有边界的观察，不是验收成绩");
+    await user.type(screen.getByLabelText("项目来源（可选）"), "示例项目");
+    await user.type(screen.getByLabelText("适用条件（每行一条）"), "React 状态管理{Enter}只读调查");
+    await user.click(screen.getByRole("button", { name: "记录待整理观察" }));
+    await waitFor(() => expect(screen.getByLabelText("补充观察")).toHaveProperty("value", ""));
+    expect(command).toHaveBeenCalledExactlyOnceWith("evaluation_evidence_record", expect.objectContaining({
+      profileId: "flash-off", kind: "observation", summary: "一次有边界的观察，不是验收成绩", source: "user", project: "示例项目", conditions: ["React 状态管理", "只读调查"],
+    }), "fixture-csrf");
+  });
+
   it("retries a never-claimed cancellation without asking to accept nonexistent output", async () => {
     const state = initial();
     state.tasks = { total: 1, runs: [{
