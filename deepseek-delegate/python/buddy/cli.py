@@ -59,12 +59,13 @@ METHODS = [
     "evaluation-reader-release",
     "evaluation-evidence-record",
     "model-catalog-refresh",
+    "migrate",
     "legacy-import",
     "restart",
     "stop",
 ]
 
-LOCAL_METHODS = ("worker-start", "worker-stop")
+LOCAL_METHODS = ("worker-start", "worker-stop", "migrate")
 
 EPILOG = """\
 examples:
@@ -131,6 +132,10 @@ examples:
   buddy evaluation-write-publish '{"commandId":"cmd-1","writerId":"...","generation":1,...}'
       The durable table gate: one writer at a time, fenced by generation, lease and a
       per-intent token. Omitted collections keep their published values.
+
+  buddy migrate '{"confirm":true}'
+      Explicit offline upgrade of a stopped version-5 board (backup + identity
+      preservation). It is never part of a cold start and refuses a running service.
 
   buddy legacy-import '{"sourceDir":"/old/state","dryRun":true}'
       Offline, idempotent, transactional import of the removed Node records. The
@@ -203,6 +208,22 @@ def _worker_command(action: str, params: dict) -> dict:
     }
 
 
+def _migrate_command(params: dict) -> dict:
+    """Explicit offline schema upgrade; never invoked by a cold start."""
+    from .migrate import migrate
+
+    if not isinstance(params, dict):
+        raise ValueError("migrate params must be an object")
+    unknown = sorted(set(params) - {"stateDir", "confirm", "dryRun"})
+    if unknown:
+        raise ValueError(f"Unknown migrate parameter: {unknown[0]}")
+    return migrate(
+        get_state_dir(params.get("stateDir")),
+        confirm=params.get("confirm") is True,
+        dry_run=params.get("dryRun") is True,
+    )
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         description="Buddy service: transactional Python blackboard, independent workers, dsh and command adapters",
@@ -215,7 +236,7 @@ def main(argv: list[str] | None = None) -> int:
     try:
         params = json.loads(args.params)
         if args.method in LOCAL_METHODS:
-            result = _worker_command(args.method, params)
+            result = _worker_command(args.method, params) if args.method != "migrate" else _migrate_command(params)
         elif args.method in ("run", "await"):
             from .blocking import WaitAbandoned, await_run, recovery_commands, run_blocking
 
