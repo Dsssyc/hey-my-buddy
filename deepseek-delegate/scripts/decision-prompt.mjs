@@ -15,7 +15,7 @@
  */
 
 /** Bumped whenever the instruction prefix or payload shape changes meaning. */
-export const PROMPT_VERSION = 2;
+export const PROMPT_VERSION = 3;
 
 /** Hard cap on the rendered payload JSON, in UTF-8 bytes. */
 export const MAX_PAYLOAD_BYTES = 262_144;
@@ -56,9 +56,9 @@ Output schema:
 Rules:
 1. Every "profileId" MUST be the "profileId" of an entry of the supplied "profiles" array. Never invent a profile, model, provider, or effort. A profile that is disabled or unavailable in the current table may still receive a card: record why it is excluded rather than skipping it.
 2. A card is either an update of a profile already present in the supplied "cards" array or the first card for a supplied profile that has none yet. Both are legal. Creating a profile id that is not in "profiles" is not.
-3. Every id in every "evidenceIds" MUST be one of the supplied evidence ids for that same profile. Never invent evidence.
+3. Every id in every "evidenceIds" MUST be one of the supplied evidence ids for that same profile. Never invent evidence. Keep at most 50 current references per card, choosing relevant recent evidence and the sources of unresolved risks. The caller retains immutable publication history, so older references can remain in that history while the current card stays bounded.
 4. "summary" is at most 1000 characters; each list holds at most 10 short items of at most 300 characters.
-5. Keep every unresolved item that the supplied cards still report. Do not delete an unresolved limitation or risk because a later observation succeeded, and do not promote a single observation into a general conclusion.
+5. Keep every unresolved item and its applicability conditions that the supplied cards still report, including when current references are compacted. Do not delete an unresolved limitation or risk because a later observation succeeded, and do not promote a single observation into a general conclusion.
 6. State only what the supplied evidence supports. Unknown stays unknown; do not fill a gap with a guess or a neutral rating.
 7. You propose only, and only within the card fields above. Never change preferences, authorization, execution permission, task acceptance, or any other persisted field.
 8. Model prose never means the task succeeded or was accepted.
