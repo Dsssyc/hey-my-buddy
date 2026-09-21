@@ -100,6 +100,18 @@ PUBLISH_FIELDS = frozenset(
         "configuration",
     }
 )
+#: The publish request fingerprint. The first four are required; the rest keep the
+#: caller's provided-field set so omission and an explicit null never collapse.
+PUBLISH_REQUEST_FIELDS = (
+    "writerId",
+    "generation",
+    "writerToken",
+    "expectedRevision",
+    "profiles",
+    "cards",
+    "preferences",
+    "configuration",
+)
 
 
 def _timestamp(value: datetime) -> str:
@@ -741,6 +753,25 @@ class EvaluationStore:
         }
 
     # -- operations ----------------------------------------------------------
+    @staticmethod
+    def _pending_evidence(connection: sqlite3.Connection) -> int:
+        """Evidence not yet incorporated into a currently published card.
+
+        Pending is a property of actual consumption, not of the revision window: a
+        publish that only changes preferences or configuration never clears it, while
+        evidence referenced by any published card is no longer waiting for
+        maintenance. Evidence whose reference disappears when a card is replaced
+        becomes visible as pending again, which is exactly what the operator must
+        decide about.
+        """
+        row = connection.execute(
+            "SELECT COUNT(*) AS count FROM evaluation_evidence e WHERE NOT EXISTS ("
+            "  SELECT 1 FROM evaluation_cards c WHERE c.profile_id = e.profile_id"
+            "  AND EXISTS (SELECT 1 FROM json_each(c.evidence_ids_json) WHERE json_each.value = e.evidence_id)"
+            ")"
+        ).fetchone()
+        return int(row["count"])
+
     def snapshot(self, params: dict) -> dict:
         schemas.reject_unknown(params, set(), "console.snapshot")
         with self.board.db.read() as connection:
@@ -770,9 +801,7 @@ class EvaluationStore:
                     (MAX_DECISION_PAGE,),
                 )
             ]
-            pending = connection.execute(
-                "SELECT COUNT(*) AS count FROM evaluation_evidence WHERE recorded_revision >= ?", (table_revision,)
-            ).fetchone()
+            pending = self._pending_evidence(connection)
             gate = self._gate_view(connection, now)
         tasks = self.board.task_list({"limit": 100, "offset": 0})
         return {
@@ -789,7 +818,7 @@ class EvaluationStore:
             "cards": cards,
             "evidence": evidence,
             "decisions": decisions,
-            "pendingEvidence": int(pending["count"]),
+            "pendingEvidence": pending,
             "tasks": {"runs": tasks["runs"], "total": int(tasks["total"])},
             "capabilities": self.capabilities(),
         }
@@ -986,16 +1015,14 @@ class EvaluationStore:
     def write_publish(self, params: dict) -> dict:
         schemas.reject_unknown(params, PUBLISH_FIELDS, "evaluation.write.publish")
         command_id = schemas.required_string(params, "commandId", max_length=128)
-        request = {
-            "writerId": params.get("writerId"),
-            "generation": params.get("generation"),
-            "writerToken": params.get("writerToken"),
-            "expectedRevision": params.get("expectedRevision"),
-            "profiles": params.get("profiles"),
-            "cards": params.get("cards"),
-            "preferences": params.get("preferences"),
-            "configuration": params.get("configuration"),
-        }
+        # Required fields are checked *before* the idempotency lookup, and the request
+        # fingerprint is built from exactly the fields the caller provided: an omitted
+        # collection and an explicit null are different requests, so a stored receipt
+        # can never satisfy a changed or invalid command.
+        for name in PUBLISH_REQUEST_FIELDS[:4]:
+            if name not in params:
+                raise BoardError("INVALID_ARGUMENT", f"{name} is required")
+        request = {key: params[key] for key in PUBLISH_REQUEST_FIELDS if key in params}
         with self.board.db.write() as connection:
             receipt = self.board._receipt(connection, command_id, "evaluation.publish", request)
             if receipt is not None:
@@ -1064,7 +1091,10 @@ class EvaluationStore:
             params, {"commandId", "writerId", "generation", "writerToken"}, "evaluation.write.abort"
         )
         command_id = schemas.required_string(params, "commandId", max_length=128)
-        request = {key: params.get(key) for key in ("writerId", "generation", "writerToken")}
+        for name in ("writerId", "generation", "writerToken"):
+            if name not in params:
+                raise BoardError("INVALID_ARGUMENT", f"{name} is required")
+        request = {key: params[key] for key in ("writerId", "generation", "writerToken") if key in params}
         with self.board.db.write() as connection:
             receipt = self.board._receipt(connection, command_id, "evaluation.abort", request)
             if receipt is not None:

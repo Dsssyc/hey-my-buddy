@@ -344,6 +344,64 @@ class EvaluationPublishTests(EvaluationTestCase):
         )
         self.assertEqual(self.snapshot(board)["preferences"][0]["mode"], "exclude")
 
+
+    def test_omitted_collections_and_explicit_null_are_distinct_commands(self):
+        board = self.board()
+        self.seed_catalog(board)
+        grant = self.begin(board, request_id="w1")
+        base = {
+            "commandId": "same-command",
+            "writerId": grant["writerId"],
+            "generation": grant["generation"],
+            "writerToken": grant["writerToken"],
+            "expectedRevision": 0,
+        }
+        first = board.call("evaluation_write_publish", {**base, "profiles": [PROFILE]})
+        self.assertFalse(first["duplicate"])
+        # An identical replay is still a duplicate.
+        self.assertTrue(board.call("evaluation_write_publish", {**base, "profiles": [PROFILE]})["duplicate"])
+        # The same commandId with a different provided-field set is never a replay:
+        # an omitted collection and an explicit null are distinct requests.
+        self.assert_code("CONFLICT", board.call, "evaluation_write_publish", {**base, "profiles": None})
+        self.assert_code("CONFLICT", board.call, "evaluation_write_publish", {**base, "cards": None})
+        self.assert_code("CONFLICT", board.call, "evaluation_write_publish", {**base, "cards": []})
+        self.assertEqual(self.snapshot(board)["tableRevision"], 1)
+        # A fresh commandId with an explicit null collection is invalid input, not an
+        # omitted collection.
+        other = self.begin(board, request_id="w2", expected=1)
+        self.assert_code(
+            "INVALID_ARGUMENT",
+            board.call,
+            "evaluation_write_publish",
+            {
+                "commandId": "fresh-command",
+                "writerId": other["writerId"],
+                "generation": other["generation"],
+                "writerToken": other["writerToken"],
+                "expectedRevision": 1,
+                "profiles": None,
+            },
+        )
+        # A missing required field is rejected before any stored receipt could satisfy it.
+        self.assert_code(
+            "INVALID_ARGUMENT",
+            board.call,
+            "evaluation_write_publish",
+            {
+                "commandId": "same-command",
+                "writerId": other["writerId"],
+                "writerToken": other["writerToken"],
+                "expectedRevision": 1,
+            },
+        )
+        self.assert_code(
+            "INVALID_ARGUMENT",
+            board.call,
+            "evaluation_write_abort",
+            {"commandId": "abort-missing", "writerId": other["writerId"], "writerToken": other["writerToken"]},
+        )
+        self.assertEqual(self.snapshot(board)["tableRevision"], 1)
+
     def test_expired_or_unknown_writer_cannot_publish(self):
         board = self.board()
         grant = self.begin(board, request_id="w1")
@@ -899,6 +957,55 @@ class EvaluationEvidenceTests(EvaluationTestCase):
             {"profileId": PROFILE_ID, "kind": "observation", "summary": "recorded during maintenance", "source": "cli"},
         )
         self.assertEqual(self.snapshot(board)["gate"]["writer"]["writerId"], writer["writerId"])
+
+
+    def test_pending_evidence_tracks_incorporation_not_publication(self):
+        board = self.board()
+        self.seed(board)
+        run_id = self.completed_task(board)
+        evidence = board.call(
+            "evaluation_evidence_record",
+            {"profileId": PROFILE_ID, "kind": "task-success", "summary": "counted", "source": "cli", "runId": run_id},
+        )
+        self.assertEqual(self.snapshot(board)["pendingEvidence"], 1)
+        # A revision that only changes preferences never consumes unconsumed evidence.
+        self.publish(
+            board,
+            request_id="w2",
+            command_id="c2",
+            preferences=[{"profileId": PROFILE_ID, "mode": "prefer", "reason": "still preferred"}],
+        )
+        self.assertEqual(self.snapshot(board)["pendingEvidence"], 1)
+        # Only an actual card reference incorporates it.
+        self.publish(
+            board,
+            request_id="w3",
+            command_id="c3",
+            cards=[
+                {
+                    "profileId": PROFILE_ID,
+                    "summary": "稳定",
+                    "strengths": [],
+                    "limitations": [],
+                    "risks": [],
+                    "evidenceIds": [evidence["evidence"]["evidenceId"]],
+                }
+            ],
+        )
+        self.assertEqual(self.snapshot(board)["pendingEvidence"], 0)
+        # New evidence is pending again, and another non-card revision does not hide it.
+        second_run = self.completed_task(board, request_id="task-2")
+        board.call(
+            "evaluation_evidence_record",
+            {"profileId": PROFILE_ID, "kind": "task-success", "summary": "second sample", "source": "cli", "runId": second_run},
+        )
+        self.publish(
+            board,
+            request_id="w4",
+            command_id="c4",
+            configuration={"decisionProfileId": PROFILE_ID, "autoMaintain": False},
+        )
+        self.assertEqual(self.snapshot(board)["pendingEvidence"], 1)
 
     def test_card_counters_are_derived_and_a_profile_with_evidence_cannot_vanish(self):
         board = self.board()
