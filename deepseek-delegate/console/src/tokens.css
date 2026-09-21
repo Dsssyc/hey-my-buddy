@@ -1,0 +1,9 @@
+:root {
+  --canvas: #f5f5f0; --surface: #ffffff; --subtle: #f5f6f3;
+  --ink: #22342d; --muted: #607068; --faint: #738078;
+  --line: #e2e7e0; --line-strong: #cbd5cc;
+  --accent: #24654d; --accent-dark: #174d39; --accent-wash: #edf5ee; --accent-soft: #f4f8f3; --accent-line: #cee2d3;
+  --warning: #866022; --warning-wash: #fbf5e7; --warning-line: #ecdfbf;
+  --danger: #a03b35; --danger-wash: #fcf0ee; --danger-line: #edcfcb;
+  --focus: #81ad90; --radius: 8px;
+}
