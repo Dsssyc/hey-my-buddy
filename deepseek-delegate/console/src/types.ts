@@ -66,6 +66,14 @@ export type Task = {
   acceptanceVerdict: string | null;
   queueReason?: string | null;
   spec?: Record<string, unknown>;
+  workflow?: {
+    state: string;
+    awaitingHost: boolean;
+    hostId: string;
+    ownerGeneration: number;
+    revision: number;
+    requestSummary?: string;
+  };
   [key: string]: unknown;
 };
 export type Gate = {

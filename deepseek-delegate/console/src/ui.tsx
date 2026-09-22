@@ -96,6 +96,12 @@ export const statusLabels: Record<string, string> = {
   "reconciliation-needed": "等待核对",
   "waiting-assistance": "等待协助",
   "waiting-decision": "等待决定",
+  "waiting-host": "等待 Host",
+  "awaiting-host": "等待 Host",
+  "waiting-helpers": "协助执行中",
+  executing: "执行中",
+  delivered: "等待验收",
+  accepted: "已验收",
   yielded: "回合已结束",
 };
 export function Status({ status }: { status: string }) {

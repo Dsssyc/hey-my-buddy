@@ -11,12 +11,12 @@ export class ApiError extends Error {
 }
 
 const messages: Record<string, string> = {
-  REVISION_CONFLICT: "评价表已更新，请重新取得编辑权限后再保存。",
+  REVISION_CONFLICT: "记录已更新，此操作未提交。请刷新并核对最新版本后再操作。",
   CONFLICT: "此操作与现有记录冲突，未覆盖已有内容。",
   FORBIDDEN: "当前页面没有这项操作的权限，请从 Buddy 重新打开控制台。",
   WRITER_EXPIRED: "编辑权限已过期。你的草稿仍在，请重新取得权限。",
   WRITER_NOT_ACTIVE: "编辑权限已失效。草稿仍然保留，需要重新取得权限。",
-  STALE_GENERATION: "这份编辑资格已经失效，未提交任何变更。",
+  STALE_GENERATION: "操作资格已失效，未提交任何变更。请刷新并核对当前负责人。",
   SHUTDOWN_UNCONFIRMED: "尚未确认前一次执行已停止，暂时不能重试。",
 };
 

@@ -4,6 +4,7 @@ import { errorText } from "./api";
 import type { Snapshot, Task } from "./types";
 import { Badge, display, Empty, formatDate, Icon, Status } from "./ui";
 import { canRetry, needsReview, resultText } from "./task-state";
+import { WorkflowPanel } from "./WorkflowPanel";
 
 export function Tasks({
   snapshot,
@@ -45,7 +46,7 @@ export function Tasks({
     (t) =>
       (filter === "all" ||
         (filter === "active"
-          ? ["queued", "running", "cancelling"].includes(t.status)
+          ? ["queued", "running", "cancelling", "waiting-host", "waiting-assistance"].includes(t.status) || t.workflow?.awaitingHost
           : needsReview(t))) &&
       `${t.task} ${t.cwd} ${t.runId}`
         .toLowerCase()
@@ -110,7 +111,7 @@ export function Tasks({
                   aria-pressed={selected === t.runId}
                 >
                   <div className="row-between">
-                    <Status status={t.status} />
+                    <Status status={t.workflow?.state || t.status} />
                     <time className="muted small" dateTime={t.createdAt}>
                       {formatDate(t.createdAt)}
                     </time>
@@ -171,6 +172,7 @@ export function Tasks({
                     : "未验收"}
               </dd>
             </dl>
+            {task.workflow ? <WorkflowPanel key={task.runId} task={task} snapshot={snapshot} api={api} refresh={refresh} selectTask={setSelected} /> : <>
             <section className="detail-section">
               <h3>交付结果</h3>
               {detail ? (
@@ -261,6 +263,7 @@ export function Tasks({
                   </div>
                 </section>
               )}
+            </>}
           </>
         ) : (
           <div className="detail-placeholder">

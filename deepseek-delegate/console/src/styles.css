@@ -560,6 +560,26 @@ nav a.active {
 .detail-section {
   margin-top: 24px;
 }
+
+.workflow-controls, .helper-form {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  margin: 20px 0 0;
+  padding: 16px;
+  min-width: 0;
+}
+.workflow-controls legend, .helper-form legend { font-weight: 600; padding: 0 4px; }
+.workflow-controls > .button { margin-top: 12px; }
+.workflow-controls .check-field { display: flex; align-items: center; gap: 8px; margin: 16px 0; }
+.workflow-controls .check-field input { width: auto; }
+.workflow-children, .artifact-list { padding: 0; list-style: none; display: grid; gap: 12px; }
+.workflow-children li { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.workflow-children .button { max-width: 100%; overflow-wrap: anywhere; text-align: left; }
+.artifact-list li { display: grid; gap: 4px; }
+.artifact-list code { font-size: 11px; overflow-wrap: anywhere; }
+.workflow-panel .facts dd { white-space: pre-wrap; }
+.form-pair { display: flex; flex-wrap: wrap; gap: 12px; }
+.form-pair > * { flex: 1 1 180px; }
 .detail-section h3 {
   margin-bottom: 12px;
 }
