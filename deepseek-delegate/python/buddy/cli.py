@@ -482,27 +482,41 @@ def _submission_token(request_id: object, params: dict) -> str:
     directory.chmod(0o700)
     name = hashlib.sha256(request_id.encode("utf-8")).hexdigest()[:32]
     path = directory / f"{name}.json"
-    if path.is_file():
-        try:
-            saved = json.loads(path.read_text(encoding="utf-8"))
-        except (OSError, UnicodeDecodeError, ValueError) as exc:
-            raise BoardError("INVALID_ARGUMENT", "The saved submission token is unreadable") from exc
-        token = saved.get("submissionToken") if isinstance(saved, dict) else None
-        if isinstance(token, str) and token:
-            return token
     token = secrets.token_hex(32)
     payload = json.dumps({"requestId": request_id, "submissionToken": token}, sort_keys=True).encode("utf-8")
+    # Write the complete record first, then publish it atomically with a hard link:
+    # a concurrent identical submission either links first (the winner) or reads the
+    # winner's fully written record. A half-written file is never observable and a
+    # malformed existing record is never overwritten.
     fd, temporary = tempfile.mkstemp(dir=directory, prefix=f".{name}.", suffix=".tmp")
     try:
         with os.fdopen(fd, "wb") as handle:
             handle.write(payload)
             handle.flush()
             os.fsync(handle.fileno())
-        os.replace(temporary, path)
-        os.chmod(path, 0o600)
-    except OSError:
+        try:
+            os.link(temporary, path)
+        except FileExistsError:
+            return _read_submission_token(path, request_id)
+        except OSError as exc:
+            raise BoardError("INVALID_ARGUMENT", f"The submission token could not be published: {exc}") from exc
+    finally:
         Path(temporary).unlink(missing_ok=True)
-        raise
+    return token
+
+
+def _read_submission_token(path: Path, request_id: str) -> str:
+    try:
+        saved = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, ValueError) as exc:
+        raise BoardError(
+            "INVALID_ARGUMENT", "The saved submission token is unreadable; refusing to overwrite it"
+        ) from exc
+    if not isinstance(saved, dict) or saved.get("requestId") != request_id:
+        raise BoardError("CONFLICT", "The saved submission token belongs to a different request")
+    token = saved.get("submissionToken")
+    if not isinstance(token, str) or not token:
+        raise BoardError("INVALID_ARGUMENT", "The saved submission token is malformed; refusing to overwrite it")
     return token
 
 

@@ -161,7 +161,7 @@ class WorkflowCoordinator:
         return row
 
     @staticmethod
-    def _turn_view(row, *, include_audit: bool = False) -> dict:
+    def _turn_view(row, *, include_audit: bool = False, compact: bool = False) -> dict:
         outcome = json.loads(row["outcome_json"]) if row["outcome_json"] else None
         view = {
             "turnId": row["turn_id"],
@@ -176,11 +176,15 @@ class WorkflowCoordinator:
             "createdAt": row["created_at"],
             "updatedAt": row["updated_at"],
         }
+        if compact:
+            # The default view is an index: the full input/outcome/provenance is in audit.
+            return view
         if outcome is not None:
             view["summary"] = outcome.get("summary")
             view["remaining"] = outcome.get("remaining", [])
-            view["request"] = outcome.get("request")
-            view["artifactReferences"] = outcome.get("artifacts", [])
+            if include_audit:
+                view["request"] = outcome.get("request")
+                view["artifactReferences"] = outcome.get("artifacts", [])
         if include_audit:
             view["promptSha256"] = row["prompt_sha256"]
             view["inputSha256"] = row["input_sha256"]
@@ -192,8 +196,16 @@ class WorkflowCoordinator:
         return view
 
     @staticmethod
-    def _request_view(row, *, include_audit: bool = False) -> dict:
+    def _request_view(row, *, include_audit: bool = False, compact: bool = False) -> dict:
         payload = json.loads(row["payload_json"])
+        if compact:
+            return {
+                "requestId": row["request_id"],
+                "kind": row["kind"],
+                "state": row["state"],
+                "createdAt": row["created_at"],
+                "decidedAt": row["decided_at"],
+            }
         view = {
             "requestId": row["request_id"],
             "kind": row["kind"],
@@ -350,20 +362,15 @@ class WorkflowCoordinator:
             "queueReason": task_row["queue_reason"],
             "awaitingHost": state == "awaiting-host",
             "waitReason": self._wait_reason(state, task_row, active_request),
-            "goal": {
-                "task": goal.get("task"),
-                "adapter": goal.get("adapter"),
-                "cwd": goal.get("cwd"),
-                "fingerprint": run_row["goal_fingerprint"],
-            },
+            "goal": self._goal_view(goal, run_row["goal_fingerprint"]),
             "revision": run_row["revision"],
             "continuationCount": run_row["continuation_count"],
             "workspace": self._workspace_view(run_row),
             "executionWorkspace": json.loads(run_row["execution_workspace_json"]),
-            "currentTurn": self._turn_view(turns[0]) if turns else None,
-            "turns": [self._turn_view(row) for row in turns],
+            "currentTurn": self._turn_view(turns[0], compact=True) if turns else None,
+            "turns": [self._turn_view(row, compact=True) for row in turns],
             "activeRequest": active_request,
-            "requests": [self._request_view(row) for row in requests],
+            "requests": [self._request_view(row, compact=True) for row in requests],
             "children": [self._child_view(row) for row in children],
             "artifacts": [self._artifact_view(row) for row in artifacts],
             "counts": {
@@ -377,9 +384,61 @@ class WorkflowCoordinator:
             "finalAttemptId": run_row["final_attempt_id"],
             "createdAt": run_row["created_at"],
             "updatedAt": run_row["updated_at"],
-            "task": self.board._decorate(connection, task_row),
+            "auditAvailable": True,
+            "task": self._task_summary(connection, task_row),
         }
         return view
+
+    @staticmethod
+    def _goal_view(goal: dict, fingerprint: str) -> dict:
+        """The bounded goal summary; the immutable original spec is in audit."""
+        task = goal.get("task") if isinstance(goal.get("task"), str) else ""
+        limit = 2000
+        return {
+            "task": task if len(task) <= limit else task[:limit],
+            "taskTruncated": len(task) > limit,
+            "taskBytes": len(task.encode("utf-8")),
+            "adapter": goal.get("adapter"),
+            "cwd": goal.get("cwd"),
+            "fingerprint": fingerprint,
+        }
+
+    def _task_summary(self, connection, task_row) -> dict:
+        """The bounded task view: no raw spec/task duplication, full record in audit."""
+        decorated = self.board._decorate(connection, task_row)
+        summary = {
+            "runId": decorated["runId"],
+            "requestId": decorated["requestId"],
+            "owner": decorated["owner"],
+            "adapter": decorated["adapter"],
+            "cwd": decorated["cwd"],
+            "status": decorated["status"],
+            "state": decorated["state"],
+            "queueReason": decorated["queueReason"],
+            "revision": decorated["revision"],
+            "timeoutSeconds": decorated["timeoutSeconds"],
+            "selectedAttemptId": decorated["selectedAttemptId"],
+            "activeAttemptId": decorated["activeAttemptId"],
+            "resultAvailable": decorated["resultAvailable"],
+            "shutdownConfirmed": decorated["shutdownConfirmed"],
+            "acceptedAt": decorated["acceptedAt"],
+            "acceptanceVerdict": decorated["acceptanceVerdict"],
+            "acceptanceNote": decorated["acceptanceNote"],
+            "artifactCount": decorated["artifactCount"],
+            "inquiries": decorated["inquiries"],
+            "createdAt": decorated["createdAt"],
+            "updatedAt": decorated["updatedAt"],
+        }
+        if "attemptGeneration" in decorated:
+            summary["attemptGeneration"] = decorated["attemptGeneration"]
+            summary["attemptState"] = decorated["attemptState"]
+        if "workflow" in decorated:
+            summary["workflow"] = decorated["workflow"]
+        if "workflowState" in decorated:
+            # The governed marker the UI keys on, kept alongside the full record.
+            summary["workflowState"] = decorated["workflowState"]
+            summary["awaitingHost"] = decorated["awaitingHost"]
+        return summary
 
     @staticmethod
     def _wait_reason(state: str, task_row, active_request) -> str:
@@ -592,9 +651,11 @@ class WorkflowCoordinator:
         )
 
     def _release_reservations(self, connection, holder_task_id: str, now: str, *, state: str = "released") -> None:
+        # A transferred reservation is still this task's logical ownership: cancelling
+        # or accepting the goal releases it too, so no writer claim leaks forever.
         connection.execute(
             "UPDATE workspace_reservations SET state=?, updated_at=?, released_at=? WHERE holder_task_id=?"
-            " AND state='held'",
+            " AND state IN ('held','transferred')",
             (state, now, now if state == "released" else None, holder_task_id),
         )
 
@@ -948,6 +1009,8 @@ class WorkflowCoordinator:
             ],
             "ownerGeneration": run_row["owner_generation"],
             "goalFingerprint": run_row["goal_fingerprint"],
+            "goal": json.loads(run_row["goal_json"]),
+            "spec": _original_spec(connection, run_row["run_id"]),
         }
 
     # -- decide --------------------------------------------------------------
@@ -1258,7 +1321,6 @@ class WorkflowCoordinator:
             if decision == "approve"
             else "The Host declined the requested assistance; continue with what you have"
         )
-        continuation_id = str(uuid.uuid4())
         connection.execute(
             "UPDATE workflow_requests SET state=?, decision_json=?, decision_command_id=?, decided_at=?,"
             " updated_at=? WHERE run_id=? AND state='open'",
@@ -1271,6 +1333,7 @@ class WorkflowCoordinator:
                 child_task_id,
             ),
         )
+        continuation_id = str(uuid.uuid4())
         connection.execute(
             "INSERT INTO workflow_continuations(continuation_id, run_id, command_id, authorized_by, request_id,"
             " expected_revision, input_text, input_bytes, reason, helper_policy, helper_outcomes_json, state,"
@@ -1287,22 +1350,32 @@ class WorkflowCoordinator:
                 now,
             ),
         )
-        self._requeue(
-            connection,
-            child_task,
-            child_run,
-            reason=input_text,
-            actor=actor,
-            now=now,
-            continuation_id=continuation_id,
-        )
-        parent_task = connection.execute(
-            "SELECT * FROM tasks WHERE task_id=?", (parent_run["run_id"],)
-        ).fetchone()
-        extra = (
-            self._create_helpers(connection, parent_run, parent_task, request_row, prepared, command_id, now)
-            if decision == "approve" and prepared
-            else []
+        if decision == "approve" and prepared:
+            # The Host granted the helper's request by authorizing dependency helpers.
+            # They run under the requesting child's own run; the child waits for them
+            # and resumes through its one-use continuation, while the root parent keeps
+            # counting the child as active.
+            extra = self._create_helpers(connection, child_run, child_task, request_row, prepared, command_id, now)
+            connection.execute(
+                "UPDATE workflow_runs SET state='waiting-helpers', active_request_id=NULL, updated_at=?,"
+                " revision=revision+1 WHERE run_id=? AND revision=?",
+                (now, child_task_id, child_run["revision"]),
+            )
+        else:
+            extra = []
+            self._requeue(
+                connection,
+                child_task,
+                child_run,
+                reason=input_text,
+                actor=actor,
+                now=now,
+                continuation_id=continuation_id,
+            )
+        # The child is active again for the parent's fan-in until it truly settles.
+        connection.execute(
+            "UPDATE workflow_children SET state='active', updated_at=?, revision=revision+1 WHERE child_task_id=?",
+            (now, child_task_id),
         )
         connection.execute(
             "UPDATE workflow_runs SET state='waiting-helpers', active_request_id=NULL, updated_at=?,"
@@ -1318,7 +1391,7 @@ class WorkflowCoordinator:
                 "parentRunId": parent_run["run_id"],
                 "requestId": request_row["request_id"],
                 "decision": decision,
-                "extraHelpers": [child["taskId"] for child in extra],
+                "dependencyHelpers": [child["taskId"] for child in extra],
             },
         )
 
@@ -1600,8 +1673,14 @@ class WorkflowCoordinator:
         return response
 
     def _helper_outcomes(self, connection, run_id: str) -> list[dict]:
+        """The frozen handoff of every owned helper: identity, state and immutable refs.
+
+        The parent's continuation must be able to name exactly what each helper
+        produced without filesystem searching, so the child's selected attempt, its
+        input manifest identity and its sealed output reference are frozen here.
+        """
         rows = connection.execute(
-            "SELECT c.*, t.state AS task_state, t.accepted_at FROM workflow_children c"
+            "SELECT c.*, t.state AS task_state, t.active_attempt_id, t.selected_attempt_id FROM workflow_children c"
             " JOIN tasks t ON t.task_id=c.child_task_id WHERE c.parent_run_id=? ORDER BY c.created_at",
             (run_id,),
         ).fetchall()
@@ -1611,19 +1690,48 @@ class WorkflowCoordinator:
                 "SELECT * FROM workflow_turns WHERE run_id=? ORDER BY turn_index DESC LIMIT 1", (row["child_task_id"],)
             ).fetchone()
             outcome = json.loads(turn["outcome_json"]) if turn is not None and turn["outcome_json"] else None
-            outcomes.append(
-                {
-                    "taskId": row["child_task_id"],
-                    "role": row["role"],
-                    "state": row["state"],
-                    "taskState": row["task_state"],
-                    "integrator": bool(row["integrator"]),
-                    "disposition": turn["disposition"] if turn is not None else None,
-                    "summary": (outcome or {}).get("summary"),
-                    "remaining": (outcome or {}).get("remaining", []),
-                    "workspaceManifestSha256": row["workspace_manifest_sha256"],
+            attempt_id = row["active_attempt_id"] or row["selected_attempt_id"]
+            artifact = connection.execute(
+                "SELECT * FROM workflow_artifacts WHERE run_id=? AND kind='output' ORDER BY created_at DESC LIMIT 1",
+                (row["child_task_id"],),
+            ).fetchone()
+            child_run = self._run_optional(connection, row["child_task_id"])
+            entry = {
+                "taskId": row["child_task_id"],
+                "role": row["role"],
+                "state": row["state"],
+                "taskState": row["task_state"],
+                "integrator": bool(row["integrator"]),
+                "disposition": turn["disposition"] if turn is not None else None,
+                "summary": _head(outcome.get("summary") if outcome else None, 2000),
+                "remaining": [str(item)[:500] for item in (outcome or {}).get("remaining", [])[:8]]
+                if isinstance((outcome or {}).get("remaining"), list)
+                else [],
+                "attemptId": attempt_id,
+                "generation": turn["generation"] if turn is not None else None,
+                "workspaceManifestSha256": row["workspace_manifest_sha256"],
+            }
+            if child_run is not None and child_run["workspace_manifest_json"]:
+                manifest = json.loads(child_run["workspace_manifest_json"])
+                entry["workspace"] = {
+                    "workspaceId": manifest.get("workspaceId"),
+                    "path": manifest.get("path"),
+                    "checkoutId": manifest.get("checkoutId"),
+                    "manifestSha256": manifest.get("manifestSha256"),
                 }
-            )
+            if artifact is not None:
+                seal = json.loads(artifact["manifest_json"])
+                changed = seal.get("changedPaths")
+                entry["artifact"] = {
+                    "artifactId": artifact["artifact_id"],
+                    "inputCommit": seal.get("inputCommit"),
+                    "outputCommit": seal.get("commit"),
+                    "snapshotSha256": artifact["manifest_sha256"],
+                    "diffPath": seal.get("diffPath"),
+                    "diffSha256": seal.get("diffSha256"),
+                    "changedPaths": [str(item)[:500] for item in changed[:32]] if isinstance(changed, list) else [],
+                }
+            outcomes.append(entry)
         return outcomes
 
     def _requeue(
@@ -1656,7 +1764,45 @@ class WorkflowCoordinator:
                 attemptId=attempt["attempt_id"],
             )
         blocker = self.board._admission_blocker(connection, spec, exclude_task=task["task_id"])
-        self.board._transition_task(connection, task, "queued")
+        if task["accepted_at"]:
+            # The review belonged to the attempt that was reviewed; a continuation
+            # archives it exactly like an explicit retry, so a later turn can be
+            # accepted as a new final artifact.
+            self.board._append_event(
+                connection,
+                "task.review_archived",
+                task_id=task["task_id"],
+                attempt_id=attempt["attempt_id"] if attempt else None,
+                revision=task["revision"] + 1,
+                payload={
+                    "acceptedAt": task["accepted_at"],
+                    "verdict": task["acceptance_verdict"],
+                    "note": task["acceptance_note"],
+                },
+            )
+            connection.execute(
+                "UPDATE tasks SET accepted_at=NULL, acceptance_note=NULL, acceptance_verdict=NULL WHERE task_id=?",
+                (task["task_id"],),
+            )
+        if task["state"] == "completed":
+            # A rejected final review reopens the governed logical task for another
+            # turn. This is deliberately not a legacy `task_retry` of completed work
+            # (which stays refused); only a governed run at a Host boundary may do it.
+            if run_row["state"] not in ("awaiting-host", "delivered"):
+                raise BoardError(
+                    "CONFLICT",
+                    "A completed governed task can only be reopened from a Host boundary",
+                    state=task["state"],
+                    runState=run_row["state"],
+                )
+            cursor = connection.execute(
+                "UPDATE tasks SET state='queued', updated_at=?, revision=revision+1 WHERE task_id=? AND revision=?",
+                (now, task["task_id"], task["revision"]),
+            )
+            if cursor.rowcount != 1:
+                raise BoardError("REVISION_CONFLICT", "The task changed concurrently; re-read it and retry")
+        else:
+            self.board._transition_task(connection, task, "queued")
         connection.execute(
             "UPDATE tasks SET queue_reason=?, active_attempt_id=NULL, updated_at=? WHERE task_id=?",
             (blocker or "awaiting-worker", now, task["task_id"]),
@@ -1703,6 +1849,15 @@ class WorkflowCoordinator:
         now = self.now()
         with self.db.write() as connection:
             run_row = self._run_row(connection, run_id)
+            receipt = self.board._receipt(connection, command_id, "workflow.takeover", request_key)
+            if receipt is not None:
+                # A lost reply must be recoverable by the caller that authorized the
+                # original takeover: authenticate that receipt's original subject,
+                # never the current owner, and never issue a newer generation.
+                self._authorize_takeover_replay(
+                    connection, run_row, params, console_authority, expected_generation, receipt
+                )
+                return {**receipt, "duplicate": True}
             actor = self._authorize(connection, run_row, params, console_authority=console_authority, action="A takeover")
             self._expect_revision(run_row, expected)
             if run_row["owner_generation"] != expected_generation:
@@ -1712,11 +1867,6 @@ class WorkflowCoordinator:
                     ownerGeneration=expected_generation,
                     currentGeneration=run_row["owner_generation"],
                 )
-            receipt = self.board._receipt(connection, command_id, "workflow.takeover", request_key)
-            if receipt is not None:
-                # The caller proved current ownership above; a delayed old owner can
-                # never replay this commandId into the new generation's capability.
-                return {**receipt, "duplicate": True}
             generation = run_row["owner_generation"] + 1
             connection.execute(
                 "UPDATE workflow_runs SET host_id=?, owner_generation=?, control_verifier=?, updated_at=?,"
@@ -1754,6 +1904,45 @@ class WorkflowCoordinator:
             head = self.board._head_of(connection)
         self.board._notify(head)
         return response
+
+    def _authorize_takeover_replay(
+        self,
+        connection,
+        run_row,
+        params: dict,
+        console_authority: dict | None,
+        expected_generation: int,
+        receipt: dict,
+    ) -> None:
+        """Authenticate a replayed takeover by its original capability, not by current ownership."""
+        import hmac
+
+        issued = receipt.get("ownerGeneration")
+        current = run_row["owner_generation"]
+        if issued != expected_generation + 1 or current != issued:
+            raise BoardError(
+                "STALE_GENERATION",
+                "This takeover receipt belongs to an older generation; a replay never grants a newer one",
+                issuedGeneration=issued,
+                currentGeneration=current,
+            )
+        issued_control = receipt.get("control") if isinstance(receipt.get("control"), dict) else {}
+        if run_row["host_id"] != issued_control.get("hostId"):
+            raise BoardError("STALE_GENERATION", "The current Host no longer matches this takeover receipt")
+        if console_authority is not None:
+            return
+        control = schemas.normalize_control(params)
+        if control is None or control["ownerGeneration"] != expected_generation:
+            raise BoardError(
+                "UNAUTHORIZED",
+                "A takeover replay must present the original owner generation's control capability",
+                expectedOwnerGeneration=expected_generation,
+            )
+        original = self.db.control_token(run_row["run_id"], expected_generation)
+        if not hmac.compare_digest(
+            self.db.control_token_verifier(original), self.db.control_token_verifier(control["controlToken"])
+        ):
+            raise BoardError("UNAUTHORIZED", "Invalid control capability for the original takeover")
 
     # -- cancel --------------------------------------------------------------
     def cancel(self, params: dict, *, console_authority: dict | None = None) -> dict:
@@ -1819,6 +2008,8 @@ class WorkflowCoordinator:
                 (now, run_id, run_row["revision"]),
             )
             task = connection.execute("SELECT * FROM tasks WHERE task_id=?", (run_id,)).fetchone()
+            if self._stop_proven(connection, task):
+                self._release_reservations(connection, run_id, now)
             run_row = self._run_row(connection, run_id)
             response = {
                 **self.compact(connection, run_row, task),
@@ -1838,43 +2029,90 @@ class WorkflowCoordinator:
         return response
 
     def _cancel_children(self, connection, run_id: str, reason: str, now: str) -> list[str]:
+        """Cancel every owned nonterminal descendant, however deeply nested.
+
+        Each descendant's task, run, open requests, automatic continuations and
+        scoped credentials are settled in this same short transaction. A reservation
+        is released only when the attempt never crossed the spawn boundary or its stop
+        is proven; an active or uncertain descendant keeps it until its owner reports.
+        """
         cancelled: list[str] = []
-        rows = connection.execute(
-            "SELECT * FROM workflow_children WHERE parent_run_id=? AND state='active'", (run_id,)
-        ).fetchall()
-        for child in rows:
-            task = connection.execute("SELECT * FROM tasks WHERE task_id=?", (child["child_task_id"],)).fetchone()
+        seen: set[str] = set()
+
+        def cancel_task(task_id: str, parent_run_id: str) -> None:
+            if task_id in seen:
+                return
+            seen.add(task_id)
+            task = connection.execute("SELECT * FROM tasks WHERE task_id=?", (task_id,)).fetchone()
             if task is None:
-                continue
-            if task["state"] == "queued":
-                self.board._transition_task(connection, task, "cancelled")
-                connection.execute(
-                    "UPDATE tasks SET queue_reason=NULL, updated_at=? WHERE task_id=?", (now, task["task_id"])
-                )
-            elif task["state"] not in ("completed", "failed", "cancelled"):
-                if task["state"] != "cancelling":
-                    self.board._transition_task(connection, task, "cancelling")
-                attempt = self.board._selected_attempt(connection, task)
-                if attempt is not None and attempt["cancel_requested_at"] is None:
+                return
+            attempt = self.board._selected_attempt(connection, task)
+            if task["state"] not in ("completed", "failed", "cancelled"):
+                if task["state"] == "queued" and task["active_attempt_id"] is None:
+                    self.board._transition_task(connection, task, "cancelled")
                     connection.execute(
-                        "UPDATE attempts SET cancel_requested_at=?, updated_at=?, revision=revision+1"
-                        " WHERE attempt_id=?",
-                        (now, now, attempt["attempt_id"]),
+                        "UPDATE tasks SET queue_reason=NULL, updated_at=? WHERE task_id=?", (now, task_id)
                     )
+                else:
+                    if task["state"] != "cancelling":
+                        self.board._transition_task(connection, task, "cancelling")
+                    if attempt is not None and attempt["cancel_requested_at"] is None:
+                        connection.execute(
+                            "UPDATE attempts SET cancel_requested_at=?, updated_at=?, revision=revision+1"
+                            " WHERE attempt_id=?",
+                            (now, now, attempt["attempt_id"]),
+                        )
             connection.execute(
                 "UPDATE workflow_children SET state='cancelled', updated_at=?, revision=revision+1"
                 " WHERE child_task_id=?",
-                (now, task["task_id"]),
+                (now, task_id),
             )
+            connection.execute(
+                "UPDATE workflow_runs SET state='cancelled', active_request_id=NULL, updated_at=?,"
+                " revision=revision+1 WHERE run_id=? AND state NOT IN ('accepted')",
+                (now, task_id),
+            )
+            connection.execute(
+                "UPDATE workflow_requests SET state='cancelled', updated_at=? WHERE run_id=? AND state='open'",
+                (now, task_id),
+            )
+            connection.execute(
+                "UPDATE workflow_continuations SET state='cancelled' WHERE run_id=? AND state IN ('recorded','queued')",
+                (task_id,),
+            )
+            self._revoke_credentials(connection, task_id, now)
+            if self._stop_proven(connection, task):
+                self._release_reservations(connection, task_id, now)
             self.board._append_event(
                 connection,
                 "workflow.helper_cancelled",
-                task_id=task["task_id"],
+                task_id=task_id,
+                attempt_id=attempt["attempt_id"] if attempt is not None else None,
                 revision=task["revision"] + 1,
-                payload={"parentRunId": run_id, "reason": reason},
+                payload={
+                    "parentRunId": parent_run_id,
+                    "reason": reason,
+                    "reservationReleased": self._stop_proven(connection, task),
+                },
             )
-            cancelled.append(task["task_id"])
+            cancelled.append(task_id)
+            for nested in connection.execute(
+                "SELECT child_task_id FROM workflow_children WHERE parent_run_id=?", (task_id,)
+            ).fetchall():
+                cancel_task(nested["child_task_id"], task_id)
+
+        for child in connection.execute(
+            "SELECT child_task_id FROM workflow_children WHERE parent_run_id=?", (run_id,)
+        ).fetchall():
+            cancel_task(child["child_task_id"], run_id)
         return cancelled
+
+    def _stop_proven(self, connection, task) -> bool:
+        """True only when no process can still be writing this task's workspace."""
+        attempt = self.board._selected_attempt(connection, task)
+        if attempt is None:
+            return True
+        return attempt["execution_state"] == "finished" and bool(attempt["shutdown_confirmed"])
 
     def _revoke_credentials(self, connection, run_id: str, now: str) -> None:
         connection.execute(
@@ -1921,6 +2159,29 @@ class WorkflowCoordinator:
                 receipt = self.board._receipt(connection, command_id, "workflow.acknowledge", request_key)
                 if receipt is not None:
                     return {**receipt, "duplicate": True}
+            # Acceptance is bound to the current delivered goal, never to a Host
+            # decision boundary, an active helper, or an older attempt's output.
+            if run_row["state"] not in ("delivered", "accepted"):
+                raise BoardError(
+                    "NOT_READY",
+                    "Only a delivered goal can be acknowledged; a Host decision boundary or a running turn is "
+                    "not a final artifact",
+                    runId=run_id,
+                    state=run_row["state"],
+                )
+            active_helpers = int(
+                connection.execute(
+                    "SELECT COUNT(*) AS count FROM workflow_children WHERE parent_run_id=? AND state='active'",
+                    (run_id,),
+                ).fetchone()["count"]
+            )
+            if active_helpers:
+                raise BoardError(
+                    "CONFLICT",
+                    "Owned helpers are still running; settle or cancel them before final acknowledgement",
+                    runId=run_id,
+                    activeHelpers=active_helpers,
+                )
             attempt = self.board._selected_attempt(connection, task)
             if attempt is None or attempt["result_json"] is None:
                 raise BoardError("NOT_READY", "Inspect a persisted final result before acknowledging")
@@ -1930,8 +2191,54 @@ class WorkflowCoordinator:
                     "Execution shutdown must be confirmed before acknowledgement; a surviving process is unknown",
                     attemptId=attempt["attempt_id"],
                 )
+            if run_row["final_attempt_id"] != attempt["attempt_id"]:
+                raise BoardError(
+                    "CONFLICT",
+                    "The selected attempt is not the current final attempt of this goal",
+                    attemptId=attempt["attempt_id"],
+                    finalAttemptId=run_row["final_attempt_id"],
+                )
+            final_turn = connection.execute(
+                "SELECT * FROM workflow_turns WHERE attempt_id=? AND state='concluded' AND disposition='completed'",
+                (attempt["attempt_id"],),
+            ).fetchone()
+            if final_turn is None:
+                raise BoardError(
+                    "NOT_READY",
+                    "The current final attempt has no concluded completed turn to accept",
+                    attemptId=attempt["attempt_id"],
+                )
+            final_artifact = connection.execute(
+                "SELECT * FROM workflow_artifacts WHERE run_id=? AND kind='output' AND attempt_id=?"
+                " ORDER BY created_at DESC LIMIT 1",
+                (run_id, attempt["attempt_id"]),
+            ).fetchone()
+            if final_artifact is None:
+                raise BoardError(
+                    "NOT_READY",
+                    "The current final attempt produced no sealed output artifact to accept",
+                    attemptId=attempt["attempt_id"],
+                )
+            if artifact_id and artifact_id != final_artifact["artifact_id"]:
+                other = connection.execute(
+                    "SELECT * FROM workflow_artifacts WHERE artifact_id=? AND run_id=?", (artifact_id, run_id)
+                ).fetchone()
+                if other is None:
+                    raise BoardError("NOT_FOUND", "Unknown pinned artifact for this run", artifactId=artifact_id)
+                raise BoardError(
+                    "CONFLICT",
+                    "Acknowledgement must bind the current final output artifact, not another artifact of this run",
+                    artifactId=artifact_id,
+                    finalArtifactId=final_artifact["artifact_id"],
+                    artifactKind=other["kind"],
+                )
+            artifact = final_artifact
             if task["accepted_at"]:
-                if task["acceptance_note"] != note or task["acceptance_verdict"] != verdict:
+                if (
+                    task["acceptance_note"] != note
+                    or task["acceptance_verdict"] != verdict
+                    or run_row["final_artifact_id"] != artifact["artifact_id"]
+                ):
                     raise BoardError(
                         "CONFLICT",
                         "This run already has a different recorded acknowledgement; a reviewed outcome is not relabelled",
@@ -1939,18 +2246,6 @@ class WorkflowCoordinator:
                         verdict=task["acceptance_verdict"],
                     )
                 return {**self.compact(connection, run_row, task), "duplicate": True}
-            artifact = None
-            if artifact_id:
-                artifact = connection.execute(
-                    "SELECT * FROM workflow_artifacts WHERE artifact_id=? AND run_id=?", (artifact_id, run_id)
-                ).fetchone()
-                if artifact is None:
-                    raise BoardError("NOT_FOUND", "Unknown pinned artifact for this run", artifactId=artifact_id)
-            else:
-                artifact = connection.execute(
-                    "SELECT * FROM workflow_artifacts WHERE run_id=? AND kind='output' ORDER BY created_at DESC LIMIT 1",
-                    (run_id,),
-                ).fetchone()
             connection.execute(
                 "UPDATE tasks SET accepted_at=?, acceptance_note=?, acceptance_verdict=?, updated_at=?,"
                 " revision=revision+1 WHERE task_id=?",
@@ -1970,6 +2265,8 @@ class WorkflowCoordinator:
                 )
                 self._release_reservations(connection, run_id, now)
             else:
+                # A rejection is a reviewed outcome, not a terminal goal: the Host may
+                # continue, which archives this review before the next acceptance.
                 connection.execute(
                     "UPDATE workflow_runs SET state='awaiting-host', final_attempt_id=?, updated_at=?,"
                     " revision=revision+1 WHERE run_id=? AND revision=?",
@@ -2186,51 +2483,64 @@ class WorkflowCoordinator:
             return manifest
         return json.loads(continuation["workspace_manifest_json"])
 
-    def _continuation_intent(self, connection, run_row, continuation) -> dict | None:
-        """The workspace intent of one continuation, or None when no fresh prepare is needed."""
-        manifest = json.loads(run_row["workspace_manifest_json"]) if run_row["workspace_manifest_json"] else {}
-        if not manifest:
-            return None
+    def _latest_handoff(self, connection, run_row, manifest: dict) -> dict | None:
+        """The newest fixed output produced on this run's physical checkout.
+
+        Ordered durably by artifact creation, so the parent's own later turn wins over
+        an earlier helper seal on the same checkout instead of reverting the baseline.
+        """
         checkout_id = manifest.get("checkoutId")
-        sealed = None
-        if checkout_id:
-            # A helper that worked on the transferred checkout produced the newest
-            # output there; the parent continuation must base on that commit, not on
-            # its own older seal. The child's own manifest records the checkout it
-            # used (the output seal names only its workspace).
-            rows = connection.execute(
-                "SELECT c.workspace_manifest_json AS child_manifest, a.manifest_json AS sealed, a.created_at"
-                " AS sealed_at FROM workflow_children c"
-                " JOIN workflow_artifacts a ON a.run_id=c.child_task_id AND a.kind='output'"
-                " WHERE c.parent_run_id=? AND c.state IN ('succeeded','failed','cancelled')"
-                " AND c.workspace_manifest_json IS NOT NULL ORDER BY a.created_at DESC",
-                (run_row["run_id"],),
-            ).fetchall()
-            for row in rows:
-                child_manifest = json.loads(row["child_manifest"])
-                if child_manifest.get("checkoutId") == checkout_id:
-                    sealed = json.loads(row["sealed"])
-                    break
+        if not checkout_id:
+            return None
+        candidates: list[tuple[str, str, str]] = []
+        for row in connection.execute(
+            "SELECT artifact_id, manifest_json, created_at FROM workflow_artifacts"
+            " WHERE run_id=? AND kind='output'",
+            (run_row["run_id"],),
+        ).fetchall():
+            candidates.append((row["created_at"], row["artifact_id"], row["manifest_json"]))
+        for row in connection.execute(
+            "SELECT a.artifact_id, a.manifest_json, a.created_at, c.workspace_manifest_json AS child_manifest"
+            " FROM workflow_children c JOIN workflow_artifacts a"
+            " ON a.run_id=c.child_task_id AND a.kind='output'"
+            " WHERE c.parent_run_id=? AND c.workspace_manifest_json IS NOT NULL",
+            (run_row["run_id"],),
+        ).fetchall():
+            child_manifest = json.loads(row["child_manifest"])
+            if child_manifest.get("checkoutId") == checkout_id:
+                candidates.append((row["created_at"], row["artifact_id"], row["manifest_json"]))
+        if not candidates:
+            return None
+        candidates.sort()
+        return json.loads(candidates[-1][2])
+
+    def _continuation_intent(self, connection, run_row, continuation) -> dict | None:
+        """The workspace intent of one continuation, or None when no fresh prepare is needed.
+
+        A continuation keeps the *currently allocated physical checkout*: an isolated
+        worktree stays the same worktree, so tasks.cwd, the write reservation and the
+        adapter cwd never diverge. Only the logical baseline moves, to the newest fixed
+        handoff produced on that checkout (the parent's own later seal or a helper's
+        transferred output, whichever came last).
+        """
+        manifest = json.loads(run_row["workspace_manifest_json"]) if run_row["workspace_manifest_json"] else {}
+        if not manifest or not manifest.get("path"):
+            return None
+        sealed = self._latest_handoff(connection, run_row, manifest)
         if sealed is None:
-            output = connection.execute(
-                "SELECT * FROM workflow_artifacts WHERE run_id=? AND kind='output' ORDER BY created_at DESC LIMIT 1",
-                (run_row["run_id"],),
-            ).fetchone()
-            if output is None:
-                return None
-            sealed = json.loads(output["manifest_json"])
+            return None
         snapshot = sealed.get("snapshot") if isinstance(sealed.get("snapshot"), dict) else {}
         included = sealed.get("includedUntracked") or snapshot.get("included") or []
-        intent = {
-            "kind": manifest.get("kind", "existing"),
-            "cwd": manifest.get("path"),
+        return {
+            # Reuse the allocated checkout instead of minting a new worktree.
+            "kind": "existing",
+            "cwd": manifest["path"],
             "access": manifest.get("access", "write"),
             "base": {"kind": "working-tree", "ref": sealed.get("commit")},
             "includeUntracked": included,
             "integrator": manifest.get("integrator") or "host",
+            "writeScope": manifest.get("writeScope") or ["."],
         }
-        intent["writeScope"] = manifest.get("writeScope") or ["."]
-        return intent
 
     def prepare_continuation_workspace(self, params: dict) -> None:
         """Resolve a pending continuation's workspace outside every transaction.
@@ -2265,12 +2575,40 @@ class WorkflowCoordinator:
             manifest = workspace_module().prepare(
                 self.board.directory, f"{row['run_id']}:{row['continuation_id']}", intent
             )
+            previous = json.loads(row["workspace_manifest_json"]) if row["workspace_manifest_json"] else {}
+            if previous.get("checkoutId") and previous.get("checkoutId") != manifest.get("checkoutId"):
+                raise BoardError(
+                    "PREPARATION_CONFLICT",
+                    "A continuation must stay on the allocated checkout; an explicitly changed allocation needs "
+                    "its own reservation before it can be claimed",
+                    expectedCheckoutId=previous.get("checkoutId"),
+                    preparedCheckoutId=manifest.get("checkoutId"),
+                )
             with self.db.write() as connection:
-                connection.execute(
+                updated = connection.execute(
                     "UPDATE workflow_continuations SET workspace_manifest_json=?"
                     " WHERE continuation_id=? AND workspace_manifest_json IS NULL",
                     (canonical_json(manifest), row["continuation_id"]),
                 )
+                if updated.rowcount == 1:
+                    # The run's current allocation view follows the effective turn
+                    # manifest; the physical path and checkout identity do not change.
+                    connection.execute(
+                        "UPDATE workflow_runs SET workspace_manifest_json=?, workspace_id=?,"
+                        " workspace_manifest_sha256=?, updated_at=? WHERE run_id=?",
+                        (
+                            canonical_json(manifest),
+                            manifest.get("workspaceId"),
+                            manifest.get("manifestSha256"),
+                            self.now(),
+                            row["run_id"],
+                        ),
+                    )
+                    if manifest.get("path"):
+                        connection.execute(
+                            "UPDATE tasks SET cwd=?, updated_at=? WHERE task_id=? AND cwd != ?",
+                            (manifest["path"], self.now(), row["run_id"], manifest["path"]),
+                        )
 
     def _issue_credential(self, connection, run_row, attempt_id, generation, turn_id, now) -> str:
         token = self.db.agent_token(run_row["run_id"], attempt_id, generation)
@@ -2298,8 +2636,11 @@ class WorkflowCoordinator:
 
     def _turn_context(self, connection, run_row, task, spec, continuation, previous, turn_index) -> dict:
         goal = json.loads(run_row["goal_json"])
+        objective = goal.get("task") if isinstance(goal.get("task"), str) else ""
         context: dict[str, Any] = {
-            "objective": goal.get("task"),
+            # Bounded on purpose: the immutable full text stays in the task record.
+            "objective": objective if len(objective) <= 8000 else objective[:8000],
+            "objectiveTruncated": len(objective) > 8000,
             "taskId": run_row["run_id"],
             "turnIndex": turn_index,
         }
@@ -2334,7 +2675,14 @@ class WorkflowCoordinator:
                 "decision": decision.get("decision"),
                 "reason": decision.get("reason"),
             }
-        children = self._helper_outcomes(connection, run_row["run_id"])
+        frozen = continuation["helper_outcomes_json"] if continuation is not None else None
+        if frozen and frozen not in ("[]", ""):
+            # Consume the snapshot taken when the continuation was recorded; a later
+            # child mutation can never rewrite what this turn was authorized with.
+            children = json.loads(frozen)
+            context["helperOutcomesFrozen"] = True
+        else:
+            children = self._helper_outcomes(connection, run_row["run_id"])
         if children:
             context["helperOutcomes"] = children[:MAX_CONTEXT_HELPERS]
             context["helperOutcomeTotal"] = len(children)
@@ -2443,6 +2791,43 @@ class WorkflowCoordinator:
         turn = self.turn_outcome(payload)
         if turn_row is None:
             return None
+        if run_row["state"] in ("accepted", "cancelled"):
+            # A delayed callback for a goal that is already settled records its
+            # evidence but can never reopen the accepted or cancelled run.
+            disposition = None
+            if turn is not None and self._validate_turn(turn, turn_row, attempt) is None:
+                disposition = turn["outcome"]["disposition"]
+                connection.execute(
+                    "UPDATE workflow_turns SET state='concluded', disposition=?, outcome_json=?, provenance_json=?,"
+                    " session_id=?, prompt_sha256=?, input_sha256=?, turn_result_path=?, updated_at=? WHERE turn_id=?",
+                    (
+                        disposition,
+                        canonical_json(turn["outcome"]),
+                        canonical_json(turn.get("provenance")),
+                        turn.get("sessionId"),
+                        turn.get("promptSha256"),
+                        turn.get("inputSha256") or turn_row["input_sha256"],
+                        self.result_payload(payload).get("turnResultPath"),
+                        now,
+                        turn_row["turn_id"],
+                    ),
+                )
+                self._pin_result_artifacts(connection, run_row, attempt, payload, turn_row["turn_id"], now)
+            else:
+                connection.execute(
+                    "UPDATE workflow_turns SET state='failed', updated_at=? WHERE turn_id=?",
+                    (now, turn_row["turn_id"]),
+                )
+            self._revoke_credentials(connection, run_row["run_id"], now)
+            self.board._append_event(
+                connection,
+                "workflow.late_turn",
+                task_id=run_row["run_id"],
+                attempt_id=attempt["attempt_id"],
+                revision=run_row["revision"],
+                payload={"turnId": turn_row["turn_id"], "state": run_row["state"], "disposition": disposition},
+            )
+            return {"accepted": False, "disposition": disposition, "state": run_row["state"], "late": True}
         if task_state in ("cancelled", "failed") or (
             not attempt["shutdown_confirmed"] and task_state == "reconciliation-needed"
         ):
@@ -2706,6 +3091,10 @@ class WorkflowCoordinator:
             revision=task["revision"] + 1,
             payload={"parentRunId": parent["run_id"], "state": state, "disposition": disposition},
         )
+        if parent["state"] in ("accepted", "cancelled"):
+            # A delayed helper callback for a settled goal records its evidence and
+            # never requeues the parent or reopens its state.
+            return
         if state == "attention":
             # Helper attention is surfaced immediately, even while siblings run.
             turn_row = connection.execute(
@@ -2870,6 +3259,16 @@ class WorkflowCoordinator:
 
 
 # -- module helpers ----------------------------------------------------------
+def _original_spec(connection, run_id: str) -> dict | None:
+    row = connection.execute("SELECT spec_json FROM tasks WHERE task_id=?", (run_id,)).fetchone()
+    if row is None:
+        return None
+    try:
+        return json.loads(row["spec_json"])
+    except ValueError:  # pragma: no cover - a stored spec is always canonical JSON
+        return None
+
+
 def _bounded_input(params: dict) -> tuple[str, int]:
     value = params.get("input")
     if isinstance(value, str):
@@ -2888,7 +3287,21 @@ def _bounded_input(params: dict) -> tuple[str, int]:
     return text, size
 
 
+def _head(value, limit: int):
+    if not isinstance(value, str):
+        return value
+    return value if len(value) <= limit else value[:limit]
+
+
 def _string_list(value) -> list[str]:
+    """Normalize a bounded string list.
+
+    The native runner contract allows ``neededWork`` to be one nonempty string, so a
+    string is exposed as a one-item list; lists stay lists and anything else is
+    dropped rather than guessed.
+    """
+    if isinstance(value, str) and value.strip():
+        return [value.strip()[:500]]
     if not isinstance(value, list):
         return []
     out: list[str] = []
