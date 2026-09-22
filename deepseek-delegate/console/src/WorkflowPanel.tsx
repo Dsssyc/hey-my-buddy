@@ -5,6 +5,7 @@ import type { HelperDraft } from "./workflow-types";
 import { useWorkflow } from "./use-workflow";
 import { HelperForm } from "./HelperForm";
 import { Status } from "./ui";
+import { excerpt } from "./task-state";
 
 const lines = (text: string) => text.split("\n").map(s => s.trim()).filter(Boolean);
 
@@ -79,7 +80,8 @@ export function WorkflowPanel({ task, snapshot, api, refresh, selectTask }: {
           <dt>输入提交</dt><dd className="mono wrap">{value.workspace?.inputCommit || "未记录"}</dd>
           <dt>等待原因</dt><dd className="wrap">{value.waitReason}</dd>
         </dl>
-        <p className="task-description">{value.currentTurn?.summary || "本轮尚未提交结构化结果。"}</p>
+        <p className="task-description">{excerpt(value.currentTurn?.summary || "本轮尚未提交结构化结果。", 360)}</p>
+        {(value.currentTurn?.summary?.length || 0) > 360 && <details><summary>查看完整回合摘要</summary><p className="task-description">{value.currentTurn?.summary}</p></details>}
         {!!value.currentTurn?.remaining?.length && <ul>{value.currentTurn.remaining.map((item, i) => <li key={i}>{item}</li>)}</ul>}
       </section>
       {value.children.length > 0 && <section className="detail-section"><h3>协助任务</h3><ul className="workflow-children">
@@ -116,7 +118,7 @@ export function WorkflowPanel({ task, snapshot, api, refresh, selectTask }: {
         })}>提交接续输入</button>
       </fieldset>}
       {value.artifacts.length > 0 && <section className="detail-section"><h3>固定产物引用</h3><ul className="artifact-list">
-        {value.artifacts.map(a => <li key={a.artifactId}><span>{a.kind} · {!a.sourceTaskId || a.sourceTaskId === value.runId ? "本任务" : a.sourceTaskId}</span><code>{a.artifactId}</code>{a.commit && <code>commit {a.commit}</code>}<code>SHA-256 {a.snapshotSha256 || a.manifestSha256}</code>{a.diffPath && <code>{a.diffPath}</code>}</li>)}
+        {value.artifacts.map(a => <li key={a.artifactId}><span>{a.kind} · {!a.sourceTaskId || a.sourceTaskId === value.runId ? "本任务" : a.sourceTaskId}</span><code>{a.artifactId}</code>{(a.outputCommit || a.commit) && <code>commit {a.outputCommit || a.commit}</code>}<code>SHA-256 {a.snapshotSha256 || a.manifestSha256}</code>{a.diffPath && <code>{a.diffPath}</code>}</li>)}
       </ul><p className="small muted">这些引用固定在具体执行。验收前仍须检查实际 diff 和测试结果。</p></section>}
       {value.state === "delivered" && <fieldset className="workflow-controls" disabled={locked || value.task.shutdownConfirmed !== true}>
         <legend>最终验收</legend><label className="field"><span>实际检查依据</span><textarea rows={3} value={note} maxLength={2000} onChange={e => setNote(e.target.value)} /></label>

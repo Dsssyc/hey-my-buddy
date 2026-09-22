@@ -3,7 +3,7 @@ import type { ConsoleApi } from "./api";
 import { errorText } from "./api";
 import type { Snapshot, Task } from "./types";
 import { Badge, display, Empty, formatDate, Icon, Status } from "./ui";
-import { canRetry, needsReview, resultText } from "./task-state";
+import { canRetry, excerpt, needsReview, resultText } from "./task-state";
 import { WorkflowPanel } from "./WorkflowPanel";
 
 export function Tasks({
@@ -121,7 +121,7 @@ export function Tasks({
                       {formatDate(t.createdAt)}
                     </time>
                   </div>
-                  <h2>{t.task?.trim().split("\n")[0] || "未命名任务"}</h2>
+                  <h2>{excerpt(t.task?.trim().split("\n", 1)[0] || "未命名任务")}</h2>
                   <div className="row-between task-meta">
                     <span className="truncate" title={t.cwd}>
                       {t.cwd.split("/").filter(Boolean).slice(-2).join("/") ||
@@ -151,9 +151,10 @@ export function Tasks({
             <div className="panel-heading">
               <span className="eyebrow">TASK DETAIL</span>
               <h2>任务详情</h2>
-              <Status status={task.status} />
+              <Status status={task.workflow?.state || task.status} />
             </div>
-            <p className="task-description">{task.task}</p>
+            <p className="task-description">{excerpt(task.task, 240)}</p>
+            {task.task.length > 240 && <details className="detail-section"><summary>查看原始任务全文</summary><p className="task-description">{task.task}</p></details>}
             <dl className="facts">
               <dt>任务 ID</dt>
               <dd className="mono">{task.runId}</dd>

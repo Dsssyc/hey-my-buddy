@@ -53,6 +53,7 @@ export type Workflow = {
     manifestSha256: string;
     snapshotSha256?: string;
     commit?: string;
+    outputCommit?: string;
     diffPath?: string;
   }[];
   finalArtifactId: string | null;

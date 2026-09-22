@@ -1,5 +1,14 @@
 import type { Task } from "./types";
 
+export function excerpt(text: string, limit = 120): string {
+  let result = "", count = 0;
+  for (const character of text.trim()) {
+    if (count++ === limit) return result + "…";
+    result += character;
+  }
+  return result;
+}
+
 export function needsReview(task: Task): boolean {
   return (
     (!task.workflow || task.workflow.state === "delivered") &&
