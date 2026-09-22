@@ -445,6 +445,7 @@ def _host_boundary(
         }
     revision = workflow.get("revision")
     commands = []
+    control = '"controlFile":"<saved-controlFile>",'
     if request_view is not None and request_view.get("kind") in (
         "assistance",
         "attention",
@@ -452,17 +453,17 @@ def _host_boundary(
     ):
         commands.append(
             "buddy workflow-decide "
-            f"'{{\"runId\":\"{run_id}\",\"requestId\":\"{request_view['requestId']}\",\"commandId\":\"decide-1\","
-            f"\"expectedRevision\":{revision},\"decision\":\"approve\",\"helpers\":[]}}'"
+            f"'{{\"runId\":\"{run_id}\",\"requestId\":\"{request_view['requestId']}\",\"commandId\":\"{run_id}:approve:{request_view['requestId']}\","
+            f"{control}\"expectedRevision\":{revision},\"decision\":\"approve\",\"helpers\":[]}}'"
         )
         commands.append(
             "buddy workflow-decide "
-            f"'{{\"runId\":\"{run_id}\",\"requestId\":\"{request_view['requestId']}\",\"commandId\":\"decline-1\","
-            f"\"expectedRevision\":{revision},\"decision\":\"decline\",\"reason\":\"...\"}}'"
+            f"'{{\"runId\":\"{run_id}\",\"requestId\":\"{request_view['requestId']}\",\"commandId\":\"{run_id}:decline:{request_view['requestId']}\","
+            f"{control}\"expectedRevision\":{revision},\"decision\":\"decline\",\"reason\":\"...\"}}'"
         )
     commands.append(
         "buddy workflow-continue "
-        f"'{{\"runId\":\"{run_id}\",\"commandId\":\"continue-1\",\"expectedRevision\":{revision},"
+        f"'{{\"runId\":\"{run_id}\",\"commandId\":\"{run_id}:continue:{revision}\",{control}\"expectedRevision\":{revision},"
         "\"input\":\"...\",\"helperPolicy\":\"keep\"}'"
     )
     governed_view = _governed_result_view(full, run_id) if isinstance(full, dict) else None
