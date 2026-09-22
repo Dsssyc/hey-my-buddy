@@ -6,7 +6,7 @@ This page names every document in the repository and what it owns. It is for rea
 
 | Document | Role |
 | --- | --- |
-| [README.md](../README.md) | English entry point: why Buddy is useful, what to delegate, requirements, the one install path, a first natural-language request, boundaries and support links |
+| [README.md](../README.md) | English entry point: Host/Worker collaboration, workspaces and acceptance, installation and first request, console/model selection, recovery and current limits |
 | [README.zh-CN.md](../README.zh-CN.md) | Chinese entry point with the same structure and content (language parity) |
 
 Both READMEs stay concise and avoid internal terminology; details belong in the references below.
@@ -15,7 +15,7 @@ Both READMEs stay concise and avoid internal terminology; details belong in the 
 
 | Document | Role |
 | --- | --- |
-| [deepseek-delegate/references/usage.md](../deepseek-delegate/references/usage.md) | The practical path: install, workspace grouping, task packet, start → await → verify, progress questions, wait timeouts, cancellation, background work, optional adapters |
+| [deepseek-delegate/references/usage.md](../deepseek-delegate/references/usage.md) | Practical installation and task packets: repository workflow, explicitly scoped one-shot work, progress, recovery and background follow-up |
 | [deepseek-delegate/references/workflow.md](../deepseek-delegate/references/workflow.md) | Governed repository tasks: owner control, multiple Host requests and nested proxies, continuation on the allocated checkout, fixed helper artifacts, descendant cancellation and final acceptance |
 | [deepseek-delegate/references/cli.md](../deepseek-delegate/references/cli.md) | Complete `buddy` command reference: parameters, defaults, bounds, error codes, result/run envelopes, events and inquiry contract |
 | [deepseek-delegate/references/operations.md](../deepseek-delegate/references/operations.md) | Runtime lifecycle and upgrade, workspace-bridge install and recovery, private state and environment variables, cancellation/recovery, legacy import, old-MCP cleanup |

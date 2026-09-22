@@ -2,87 +2,75 @@
 
 [中文文档](README.zh-CN.md)
 
-Buddy lets Codex hand **one clear, bounded task** to a local [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) (`dsh`) run and get back real work you can inspect. Codex still frames the task, chooses the route and checks the result; dsh does the bulk execution.
+Buddy lets Codex delegate bounded work to a local coding agent while keeping responsibility for the overall task. The Host can implement one part itself and hand other parts to a Worker whose capabilities or cost fit the work. The current coding integration is [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) (`dsh`).
 
-## Why it is useful
+Work, decisions and results live in a local blackboard. Repository tasks have explicit workspaces and fixed input/output snapshots; a React/Vite console shows their progress alongside shared model profiles, preferences and evaluation cards.
 
-- **Work you can inspect.** Give it a working directory and a task with acceptance criteria; it edits files, runs commands and leaves the result on disk.
-- **Long tasks keep going.** Closing the terminal or a wait ending does not throw the work away: Codex can pick the same task up again and report its progress or result.
-- **You stay in charge.** The run uses your own credentials and permissions, and Codex inspects the actual files and checks before calling anything done.
+## Working with Buddy
 
-## What to delegate
+Use it for scoped implementation, testing, reproducible investigations, documentation or file transformations with a checkable result. Keep the task with the Host when the edit is trivial, the answer is already known or the requirements still need clarification. Delegation is useful when the execution savings justify the handoff, verification and possible rework.
 
-Good fits: investigate a failing test or a reproducible bug; implement a scoped feature or refactor; run a batch file transformation; update documentation for a set of files; produce a calculation or report with a verifiable output.
+1. The Host chooses the task, model configuration and workspace. Parallel writers get independent Git worktrees; a sequential sole writer can use an existing checkout. One named integrator owns the combined result.
+2. The Worker executes with its own tools and internal subagents. When it needs assistance, it ends its current turn and records a request. The Host can authorize helpers and one automatic continuation; the same logical goal then continues from fixed artifacts in a new session.
+3. The Host inspects the actual diff and runs relevant checks before accepting the final artifact. Helper completion, integration and final acceptance are recorded separately.
 
-Keep it in Codex: one-line edits, answers you already know, work whose requirements are still moving, or anything that needs your framing and final judgement.
+The [workflow guide](deepseek-delegate/references/workflow.md) explains assistance, continuation and ownership. Ordinary one-shot commands remain available for non-Git work.
 
-## Requirements
+## Install and try
 
-- macOS or Linux (POSIX).
-- [uv](https://docs.astral.sh/uv/) with Python 3.12–3.14, and Node.js 20+ for the default dsh route.
-- A working local `dsh` installation with credentials you configured yourself: <https://github.com/deepseek-ai/deepseek-harness>.
-- Codex with skills support.
+You need macOS or Linux, [uv](https://docs.astral.sh/uv/) with Python 3.12–3.14, Node.js 20+ for Buddy's runner, a working local dsh installation with your provider credentials, and Codex skill support. Buddy uses the configured harness credentials and leaves global model settings alone.
 
-Buddy does not install dsh, configure provider credentials or change global model settings.
-
-## Get started
+From a checkout, install the complete `deepseek-delegate/` directory as a standalone skill:
 
 ```sh
 git clone https://github.com/Dsssyc/hey-my-buddy.git
 cd hey-my-buddy
 uv sync --frozen --project deepseek-delegate --python 3.12
-```
 
-Install the whole `deepseek-delegate/` directory as a standalone Codex skill (copy all of it, not only `SKILL.md`):
-
-```sh
 BUDDY_SKILLS_DIR="${CODEX_HOME:-$HOME/.codex}/skills"
 mkdir -p "$BUDDY_SKILLS_DIR"
 if [ -e "$BUDDY_SKILLS_DIR/deepseek-delegate" ] || [ -L "$BUDDY_SKILLS_DIR/deepseek-delegate" ]; then
-  printf '%s\n' 'A skill already exists at this path; see the upgrade guide.'
+  printf '%s\n' 'A skill already exists here; follow the upgrade guide.'
 else
   ln -s "$PWD/deepseek-delegate" "$BUDDY_SKILLS_DIR/deepseek-delegate"
 fi
 ```
 
-For an existing installation, see the [upgrade guide](deepseek-delegate/references/operations.md#runtime-lifecycle-and-upgrade). The [usage guide](deepseek-delegate/references/usage.md) covers copies, plugin installation and workspace grouping.
+Keep the checkout available while using that link. For a copied installation, copy the whole directory, including its scripts, Python package, plugins, references and lock file. The [usage guide](deepseek-delegate/references/usage.md) also covers the Codex plugin, where the entrypoint is `$buddy`; the standalone entrypoint is `$deepseek-delegate`.
 
-In a new Codex task, ask:
+Existing installations should follow the [upgrade guide](deepseek-delegate/references/operations.md#database-upgrade) before using 0.5.0. Schema 5/6 requires an explicit offline migration with a verified backup. If both skill entrypoints are installed, keep them on the same release.
 
-> Use `$deepseek-delegate` to check the relative links in this repository's README and docs. Create only `buddy-doc-review.md`, listing any broken links and suggested fixes. Disable dsh workspace grouping for this run (`workspace: false`). Verify the report when the task finishes and show me the result.
+Start a new Codex task and ask:
 
-`$deepseek-delegate` is the standalone skill; `$buddy` is the same skill when the repository is installed as the Codex plugin (details in the usage guide).
+> Use $deepseek-delegate to check relative links in this repository's README and docs. Work in an isolated worktree, add only buddy-doc-review.md, and list broken links with suggested fixes. Set workspace: false to disable DSH session grouping for this run. Verify the report and give me the fixed artifact path.
 
-## What happens
+Session grouping is separate from execution-workspace isolation. It is on by default and needs the [DSH workspace bridge](deepseek-delegate/references/operations.md#workspace-bridge); this example explicitly opts out of grouping.
 
-Codex starts the task once and keeps it running while it waits in the same turn. You can ask what the run is doing; when it returns you get the outcome plus where the logs and artifacts are. Codex inspects the actual files, runs the relevant checks and reports what it verified.
+## Console and model selection
 
-For repository work, the skill explicitly allocates an existing checkout or an isolated worktree and records fixed input/output versions. A Buddy can end its turn to request help; Codex approves scoped assistance, receives the artifacts and continues the same goal. The Host can still implement other parts itself. See the [productivity workflow](deepseek-delegate/references/workflow.md) for examples and control ownership.
+From the checkout, open the private local console:
 
-If the wait ends first, the task continues under its execution deadline. Codex can reconnect using the saved run ID. For work that should outlive the current turn, the [background workflow](deepseek-delegate/references/usage.md#background-work-that-outlives-the-turn) uses periodic App follow-up; immediate continuation after the turn ends is unavailable.
+```sh
+BUDDY="$PWD/deepseek-delegate/scripts/launch-buddy.sh"
+"$BUDDY" console
+```
 
-## Good to know
+Open the returned URL to inspect tasks, handle assistance requests and review fixed artifacts. The same console lets you discover installed model configurations, enable profiles, set preferences and maintain evaluation cards shared across projects. Viewing or refreshing the page makes no model calls.
 
-Open `buddy console` to see tasks, decide assistance requests, discover installed model configurations, edit preferences and keep shared evaluation cards. The local React/Vite console uses the same blackboard as the CLI; viewing and refreshing it make no model calls. See [shared evaluations and the console](deepseek-delegate/references/evaluation.md). Existing schema-v5/v6 installations need the [explicit database upgrade](deepseek-delegate/references/operations.md#database-upgrade).
+You explicitly choose the initial decision profile. When comparison is useful, a decision Buddy can recommend a legal model/effort configuration from the bounded current table. The Host authorizes the actual task. Evaluation maintenance is explicitly requested; automatic adoption of valid card updates is opt-in. See [evaluations and configuration](deepseek-delegate/references/evaluation.md) for setup, evidence and editing rules.
 
-A configured decision Buddy can recommend a worker configuration and propose bounded evaluation updates through explicit requests. It returns a compact result to the Host and never starts a business task on its own. Evaluation maintenance shares real Worker capacity; monetary budgets and automatic background scheduling are not implemented.
+## Execution and recovery
 
-- Workspace grouping is on by default and needs a small one-time host bridge; the first example uses `workspace: false` so it runs without that setup. The default never changes by itself — see [operations](deepseek-delegate/references/operations.md).
-- Tasks default to a 30-minute execution deadline. Specify a longer limit in your request for long jobs; the maximum is 24 hours.
-- State which files may change. A working directory does not restrict file access; separate worktrees help keep concurrent edits apart.
-- Buddy manages only the runs it started; independent dsh sessions are untouched.
-- Task coordination and stored results are local. Model requests use the provider configured in dsh. Buddy needs no MCP registration.
-- The first run may take longer because it prepares a private runtime for the service.
+A wait ending or its terminal closing does not cancel the task. Reconnect using its saved run ID; execution remains bounded by its own deadline (30 minutes by default, up to 24 hours per attempt). A continuation receives a new attempt and fresh session. Work that outlives the Host turn needs the [background follow-up flow](deepseek-delegate/references/usage.md#background-work-that-outlives-the-turn); native immediate App wakeup is not provided.
 
-## Documentation and support
+The service and Workers run from a stable private runtime so plugin-cache replacement does not interrupt them. The first start prepares that runtime. A working directory and a Git worktree are not OS sandboxes: tasks retain the local user's access, and shared services or repository metadata still need coordination.
 
-- [docs/README.md](docs/README.md) — every document and the role it plays.
-- Detailed topics: [usage](deepseek-delegate/references/usage.md), [CLI](deepseek-delegate/references/cli.md), [operations](deepseek-delegate/references/operations.md), [workers](deepseek-delegate/references/workers.md), [runner](deepseek-delegate/references/runner.md) and [architecture](deepseek-delegate/references/architecture.md).
-- Bugs and support: [GitHub issues](https://github.com/Dsssyc/hey-my-buddy/issues).
-- Contributions are welcome; [AGENTS.md](AGENTS.md) lists the checks to run first.
-- [0.5.0 productivity acceptance](docs/acceptance/productivity-workflow-0.5.0.md) records the real packaged DSH, parallel-helper, continuation and console checks.
-- Design history: [ADR-001](docs/decisions/001-python-transactional-blackboard.md) and the [0.4.0 acceptance record](docs/acceptance/python-blackboard-0.4.0.md).
+Only DSH is integrated as a coding Buddy today. Additional harnesses, automatic community research, monetary budgets and periodic evaluation maintenance are not implemented. Task coordination stays local; model requests go to the configured provider.
+
+## Documentation and development
+
+Start with the [documentation index](docs/README.md) for commands, architecture, adapters and design history. The [0.5.0 acceptance record](docs/acceptance/productivity-workflow-0.5.0.md) separates real DSH/browser evidence from implementation claims. Contributors should follow [AGENTS.md](AGENTS.md); end users do not need npm or a frontend build. Report problems through [GitHub issues](https://github.com/Dsssyc/hey-my-buddy/issues).
 
 ## License
 
-[MIT](LICENSE). The standalone `deepseek-delegate/` directory carries its own copy.
+[MIT](LICENSE). The standalone `deepseek-delegate/` directory includes its own copy.

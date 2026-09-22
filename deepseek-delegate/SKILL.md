@@ -1,108 +1,70 @@
 ---
 name: deepseek-delegate
 license: MIT
-description: Delegate clear, bounded implementation, investigation, file-transformation, testing, or documentation work to a local DeepSeek Harness (dsh) run early, then verify the real artifacts. Use when a task is well scoped and clearly bigger than a one-line edit; skip trivial one-step tasks and work whose requirements are still moving.
+description: Delegate bounded coding, testing, investigation or documentation to local dsh with explicit workspaces, Host-directed assistance and verified artifacts. Use when scope and acceptance are clear; skip trivial edits and unresolved requirements.
 ---
 
 # deepseek-delegate
 
-Hand **one bounded task** to a local `dsh` run through the `buddy` CLI, keep this turn waiting on that durable run, then verify the real artifacts yourself. Codex keeps framing, route choice and final acceptance.
+Use a local DSH Worker for a bounded part of the user's task. The Host may implement other parts itself and retains route choice, authorization, integration responsibility and final acceptance. Workers keep their own internal tools and subagents; further Buddy work requires a Host decision.
 
-This directory is a complete, self-contained skill: `SKILL.md`, `references/`, `scripts/`, `plugins/`, the Python package and the uv lock file. Copy all of it when installing elsewhere.
+## Choose the work and configuration
 
-## Resolve the launcher
+Delegate a coherent unit whose execution benefit justifies handoff, verification and possible rework. Include the objective, permitted files, required inputs, expected artifacts and actual acceptance commands. Preserve the user's authorization scope. Keep reusable instructions stable and task-specific facts concise; a higher cache-hit percentage alone does not establish a lower total cost.
 
-Resolve the launcher from this loaded skill's actual location; nothing supplies a `PLUGIN_ROOT` environment variable any more.
+Use the user's explicit model/provider/effort or an authorized profile. When comparison is needed, the [evaluation workflow](references/evaluation.md) lets a configured decision Buddy recommend a legal profile through `selection-request` → `selection-get`. Read its compact result, then authorize the separate business task. Do not load the full table/history by default or create a selector recursively. Missing or failed recommendations return the choice to the Host; they do not fail the business goal.
+
+The runner fallbacks are `deepseek-official / deepseek-flash / max`; effort is not inherited from global settings. Check [route precedence](references/runner.md#precedence) when changing the route. Keep requested identity separate from evidence of the model actually served.
+
+## Resolve the CLI
+
+This directory is self-contained; install/copy all of it, including its scripts, Python package, plugins, references and uv lock. No `PLUGIN_ROOT` environment variable is supplied.
 
 ```sh
-SKILL_DIR='/abs/path/to/installed/deepseek-delegate'   # directory of this loaded SKILL.md
-BUDDY="$SKILL_DIR/scripts/launch-buddy.sh"             # or: node "$SKILL_DIR/scripts/buddy.mjs"
+SKILL_DIR='/abs/path/to/installed/deepseek-delegate'
+BUDDY="$SKILL_DIR/scripts/launch-buddy.sh"
 ```
 
-Quote `"$BUDDY"`, and pass one JSON object per command.
+Quote `"$BUDDY"` and pass one JSON argument per command. On installation or recovery, use `health` / `runtime` / `capabilities` to verify the actual service. A schema mismatch needs the [explicit offline upgrade](references/operations.md#database-upgrade), not a fallback to weaker task controls.
 
-## Route early
+## Repository task flow
 
-Delegate when the task is clear, bounded and bigger than a one-line edit: implementation, refactor, bounded investigation, batch file transformation, test writing, documentation. Keep it local when the change is a line or two, the answer is already known, requirements still need discovery, or the call is Codex-only.
-
-The Host may implement part of the work itself and delegate another part for comparative advantage. Choose the execution workspace explicitly in the packet: a sequential sole writer can use the original checkout; concurrent writers use separate worktrees with a fixed input revision, named integrator and combined acceptance checks. Workers manage their own internal subagents.
-
-## Default workflow
-
-1. Write a bounded packet: objective, inputs and outputs, permitted files, commands, acceptance conditions, references and known pitfalls. Explain why this Buddy configuration fits. Keep instructions stable and put changing task facts after reusable guidance. Do not add irrelevant context to chase cache hits.
-2. Choose `executionWorkspace` explicitly. Concurrent writers use independent `worktree` snapshots; a sole sequential writer can use `existing`. Name an integrator, declare `writeScope`, and list any untracked inputs. `workspace` only controls DSH session grouping.
-3. Submit once with a stable `requestId` and a Host identity. Save the returned `runId` and private `controlFile`. Await that same logical task while doing independent Host work. Never edit its held checkout.
-4. If `await` returns `waiting-host`, read `workflow-get`. The previous agent turn ended normally, but the goal is unfinished. Inspect the request and pinned artifacts; approve explicit helpers with workspace/model choices, decline with a reason, or supply continuation input. A helper can suggest further work; only the Host authorizes new Buddy tasks.
-5. After execution, inspect the actual output commit/diff and run the relevant checks. Record `workflow-acknowledge` against the final artifact. Helper success, parent completion and final acceptance are separate facts.
+1. Specify `executionWorkspace`: `worktree` for independent concurrent writers, or `existing` for a sequential sole writer. Pin the input, name an integrator, declare `writeScope`, and include required untracked files explicitly. The Host must not edit a checkout held by a Worker.
+2. Submit once with a stable `requestId` and a Host ID. Save the returned `runId` and private `controlFile`. Await that same logical task while doing independent Host work.
+3. If `await` returns `waiting-host`, read `workflow-get`. The Worker turn ended, but the goal is unfinished. Inspect the request and fixed artifacts; approve explicit helpers, decline with a reason, or provide continuation input. Approval can authorize one automatic continuation after helper results.
+4. The designated integrator applies the exact helper commits/patches and checks the combined result. Continuation reuses the allocated checkout with a fresh attempt and reconstructed DSH session; it is not native same-session resume.
+5. Inspect the final artifact's real diff and run the relevant checks. Record `workflow-acknowledge` against the final artifact ID and give the user the artifact location, revision and verified outcome. Helper completion is not final acceptance.
 
 ```sh
-"$BUDDY" workflow-submit '{"requestId":"<stable-id>","hostId":"<this-host>","task":"<packet>","cwd":"/abs/repo","provider":"deepseek-official","model":"deepseek-flash","effort":"max","timeoutSeconds":28800,"executionWorkspace":{"kind":"worktree","cwd":"/abs/repo","access":"write","base":{"kind":"working-tree"},"includeUntracked":[],"writeScope":["src/state.ts","tests/state.test.ts"],"integrator":"<this-host>"}}'
-"$BUDDY" await '{"runId":"<runId>","waitSeconds":28800}'
+"$BUDDY" workflow-submit '{"requestId":"<stable-id>","hostId":"<this-host>","task":"<bounded packet>","cwd":"/abs/repo","provider":"deepseek-official","model":"deepseek-flash","effort":"max","workspace":false,"timeoutSeconds":1800,"executionWorkspace":{"kind":"worktree","cwd":"/abs/repo","access":"write","base":{"kind":"working-tree"},"includeUntracked":[],"writeScope":["src/state.ts","tests/state.test.ts"],"integrator":"<this-host>"}}'
+"$BUDDY" await '{"runId":"<runId>","waitSeconds":3600}'
 "$BUDDY" workflow-get '{"runId":"<runId>"}'
-# After independent verification of the final artifact:
+# Only after independent verification:
 "$BUDDY" workflow-acknowledge '{"runId":"<runId>","commandId":"<stable-review-id>","controlFile":"<returned-path>","artifactId":"<final-artifact-id>","note":"<actual checks and findings>","verdict":"accepted"}'
 ```
 
-Use [workflow.md](references/workflow.md) for complete approval, continuation, takeover and workspace examples. The CLI persists private submission credentials before sending and uses explicit `controlFile` for later control. Never read or paste its token into task text, another Buddy or a public result; never adopt another Host's latest credentials. A stale generation/revision means re-read and reconsider, not retry with invented authority.
+The example deliberately disables DSH session grouping with `workspace:false`. Grouping defaults to true and requires the [running workspace bridge](references/operations.md#workspace-bridge); it is independent of `executionWorkspace`. Follow a requested grouping choice and never silently change it.
 
-An identical submission recovers the same logical task. Changed input under the same ID is a conflict. Reuse the same `commandId` and exact payload after an uncertain mutation response. A new continuation gets an independent attempt in a reconstructed new DSH session; it does not claim native session resume.
+Read [workflow.md](references/workflow.md) when approving helpers, continuing, taking over or cancelling a governed goal. It contains the complete packets and workspace contracts. Use `includeAudit:true` only when exact persisted inputs/results are needed.
 
-Legacy `start` / `run` and `acknowledge` remain for ordinary one-shot/non-Git tasks. They do not provide governed assistance or snapshot ownership. `run` starts or recovers once and waits; its default wait window is execution timeout plus 60 seconds, capped at 86400 seconds. Do not use legacy mutations to bypass a governed task's control.
+## Control and recovery
 
-## Lifetimes and cancellation
+Keep control-file contents out of prompts, helper tasks and reports. Later mutations require the explicit saved control file; a Host label is not authority. Use the current revision where required. After a lost response, replay the exact command ID and payload. A stale owner generation/revision requires re-reading and reconsidering, not adopting another Host's latest credentials.
 
-- `timeoutSeconds` is the execution deadline: integer 10–86400, default 1800. It bounds the whole spawned dsh process group from spawn and covers every model and tool step — not a model-turn limit and not the time a task spends queued. Pass it explicitly for long work (for example `28800` for 8 hours). Nothing extends it.
-- `run`/`await` carry the long waits; `await` accepts `waitSeconds` 1–86400 (default 86400) and never starts work. Ending a wait — Ctrl-C, a closed terminal, `waitSeconds` expiry — cancels only the wait: the durable task keeps running and is recovered by the same `runId`/`requestId`.
-- A wait that ends first returns `outcome: "wait-timeout"` with the run still active. That is a wait/connection limit, never an execution failure: do not relaunch it.
-- Use `workflow-cancel` with the saved control file for a governed goal and its helpers; use `cancel` for a legacy task. Active cancellation writes durable intent for the owning worker's process group. The execution deadline and `buddy stop` also end owned work; unknown shutdown remains unknown and cancelled goals never resume automatically.
-- Each authorized continuation has a fresh attempt with the configured execution timeout. Waiting for Host decisions or helpers does not consume a running process's deadline; it does not silently create a monetary or whole-goal budget.
-- After a daemon restart, in-flight attempts become `uncertain` with resource claims retained; the independent worker keeps its child and deadline and reattaches by attempt identity and nonce. Unknown never means stopped, and a new execution requires an explicit `retry`.
-- `wait` and `watch` are bounded at 30 s and never cold-start a service. If a call returns `wait-timeout` or an unavailable envelope, keep monitoring the same run or report its `runId` explicitly; never end the turn with an unmonitored running job and never restart work the user stopped.
+An identical submission recovers the same task; changed input under the same request ID conflicts. A wait timeout, closed waiting terminal or interrupted connection never authorizes a second submission. Reconnect using the same `runId`. When progress is unclear, `inquire '{"runId":"..."}'` gives bounded observations; read the [inquiry contract](references/cli.md#messages-and-inquiry) before sending a correlated question.
 
-## Model and effort
+`timeoutSeconds` bounds each spawned execution (10–86400 seconds, default 1800); queue/Host/helper waiting is separate. Each authorized continuation gets a fresh attempt deadline. `await` waits without starting work (1–86400 seconds); short `wait`/`watch` calls are bounded at 30 seconds. A wait ending does not end execution.
 
-Choose a model for the task's needs, never by Pro/Flash in the name. Set `model`, `provider` and `effort` in the start JSON when overriding the route. The [runner precedence](references/runner.md#precedence) resolves omitted values; the fallbacks are `deepseek-official`, `deepseek-flash` and effort `max`. Effort is never inherited from settings. Unsupported model IDs are reported without silent downgrades or retries.
+Cancel a governed goal with `workflow-cancel` and its control file; cancellation includes owned helpers and must await actual stop evidence. Lease expiry or a missing PID is never proof of shutdown. Restart preserves owned work and receipts; `stop` requests cancellation. Do not use a service-wide stop to resolve one task's wait timeout.
 
-## Shared evaluations and console
+Keep this turn active while delegated work remains running. Only for user-requested work beyond the turn, register an official App heartbeat on this task using the [background flow](references/usage.md#background-work-that-outlives-the-turn). It is periodic follow-up, not immediate native App wakeup. If unavailable, keep waiting; never end with an unmonitored job or restart work the user stopped.
 
-`buddy console` opens the private React/Vite workspace for tasks, model profiles, evidence and preferences. Ordinary page refresh and `console-snapshot` are read-only and invoke no model. Explicit catalog discovery proposes installed configurations; it does not prove their real-world quality or enable them automatically. Use [evaluation.md](references/evaluation.md) for table editing and evidence, and inspect reported capabilities before invoking decision operations. A running business task keeps its accepted configuration when the current evaluation table changes.
+## One-shot work, evaluations and boundaries
 
-When a route is already explicit, use it. When model comparison is needed and a decision profile is configured, submit `selection-request` once with a stable request ID, await its returned run ID if present, then read `selection-get` by decision ID. Its default small summary carries `selectedProfile` execution parameters; do not load the complete evaluation table into the Host context. `includeAudit:true` is for investigating a decision. This result proposes a route; the Host still authorizes the separate business task. A `needs-host` or failed decision does not fail the business goal: use an already authorized fixed route or do the work as Host when appropriate.
+Legacy `start` / `run` / `acknowledge` remain useful for ordinary non-Git or standalone one-shot tasks. They do not provide governed assistance or snapshot ownership. Read the [usage guide](references/usage.md) for those packets and monitoring. Legacy mutations cannot bypass governance.
 
-Internal decision runs are not business deliverables and cannot be acknowledged or retried with task operations. For a new deliberate attempt, submit a new decision request; for an uncertain submission, recover the same request ID. `evaluation-maintain` explicitly requests a bounded batch; `autoMaintain` controls whether safe results can publish without another review, and never schedules calls from page refresh. Record scoped experience against a known profile and actual run after Host verification; ordinary observations and model-generated recommendations are not verified performance samples.
+`console` opens the private React/Vite workspace for tasks, profiles, preferences and shared evaluation cards. Viewing and `console-snapshot` make no model calls. Discovery proposes installed configurations; enabling them and choosing the initial decision profile are explicit decisions. An admitted task keeps its route when the evaluation table changes.
 
-## Progress and questions
+Follow [evaluation.md](references/evaluation.md) to record scoped experience and request bounded `evaluation-maintain` work. Automatic card publication is opt-in, not a scheduler; observations are not verified performance samples. Internal decision jobs cannot be acknowledged or retried as business tasks. Recover an uncertain request with its original ID; use a new decision request for a deliberate new attempt.
 
-When a run has been quiet and you need to report honestly:
-
-```sh
-"$BUDDY" inquire '{"runId":"<runId>"}'
-"$BUDDY" inquire '{"runId":"<runId>","inquiryId":"q-1","question":"What are you waiting on?","waitMs":20000}'
-```
-
-The no-question form is bounded observation, not a percentage or guaranteed ETA, and names unobservable fields in `live.unavailable`. A question goes to the run's own live agent; it never starts a second agent and never extends or cancels the task. Answers require the correlated reply tool, so assistant prose is never an answer; a bounded question can return `delivered` before an answer exists — check `answer.available`. Re-read a question through `inquire` with the same id and question text. Changed text for the same id is a `CONFLICT`; ask explicitly instead of building a polling loop.
-
-## Background route
-
-Only when the user explicitly wants work to outlive the turn, register an official App heartbeat on the original task before ending the turn; its prompt calls this same CLI to read the result, verify it and acknowledge. The heartbeat is a periodic follow-up, not an immediate completion push, and native post-turn App wakeup is not solved by Buddy. Without such a route, keep waiting in the current turn instead of ending with an unmonitored run. Read the [background workflow](references/usage.md#background-work-that-outlives-the-turn) for monitor reuse and cleanup.
-
-## Boundaries
-
-- `workspace: true` (the default) requires the installed, running workspace host bridge; `workspace: false` opts out and is never applied silently.
-- `cwd` is a working directory, not a sandbox; state the allowed scope in the packet.
-- Only Buddy-owned runs are controlled; independent dsh processes are separate.
-- CLI commands run with this task's shell permissions, but an already-running daemon or worker keeps the permissions it was started with. Delegation inherits the scope the user granted this session; pass any publishing/pushing authorization explicitly in the packet rather than inventing blanket bans.
-- Never let Codex and dsh edit the same files at once.
-
-## References
-
-| Need | Read |
-| --- | --- |
-| Install/use paths, examples, foreground/background flows | [usage.md](references/usage.md) |
-| Every command, field, default, bound, error and envelope | [cli.md](references/cli.md) |
-| Runtime install/upgrade, bridge, state, env vars, legacy import | [operations.md](references/operations.md) |
-| Adapters, external worker example, worker receipts | [workers.md](references/workers.md) |
-| Standalone `run.mjs` runner and its contract | [runner.md](references/runner.md) |
-| Owner resumption without the service | [handoff.md](references/handoff.md) |
-| Implemented architecture and limits | [architecture.md](references/architecture.md) |
-| Shared evaluations, preferences, evidence and local console | [evaluation.md](references/evaluation.md) |
+A cwd/worktree is not an OS sandbox. Existing services keep their launch permissions; tasks run with the local user's access and only within the user's authorized scope. Independent DSH sessions are not managed by Buddy. See [operations](references/operations.md) for lifecycle/recovery, [CLI](references/cli.md) for exact fields and bounds, [workers](references/workers.md) for adapters, and [architecture](references/architecture.md) before changing service contracts.

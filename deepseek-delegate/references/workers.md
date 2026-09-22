@@ -35,7 +35,7 @@ The adapter and Worker use this order:
 
 Input writing, native result-file publication, output sealing, local receipt persistence, service commit and Host acceptance are distinct boundaries. A file appearing on disk, a terminal tool response or a queued follow-up does not establish the later boundaries. Workspace reservations also have a different lifetime from process capacity: yielding does not by itself transfer checkout write ownership.
 
-The initial DSH turn reports `resumeMode: "initial"`; subsequent turns report `reconstructed-new-session`, with previous/current session IDs when available. The next execution consumes the service's durable checkpoint, decisions, helper outcomes and pinned artifacts in a fresh headless session. Original-session resume is not implemented by this adapter. The native initial/completed and reconstructed/attention smoke checks cover the runner path; complete governed-workflow acceptance requires the separate scheduler, workspace, integration and recovery evidence in [docs/acceptance](../../docs/acceptance/).
+The initial DSH turn reports `resumeMode: "initial"`; subsequent turns report `reconstructed-new-session`, with previous/current session IDs when available. The next execution consumes the service's durable checkpoint, decisions, helper outcomes and pinned artifacts in a fresh headless session. Original-session resume is not implemented by this adapter. See the [workflow guide](workflow.md) for task control; complete runner, scheduler, workspace, integration and recovery evidence is recorded under `docs/acceptance/` in the full repository.
 
 ## The public worker contract
 

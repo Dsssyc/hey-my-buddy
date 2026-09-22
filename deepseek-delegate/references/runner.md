@@ -128,7 +128,7 @@ The plugin then requires the matching session `tool/result`, linked to the origi
 
 The first execution uses `resumeMode: "initial"` and `previousSessionId: null`. Later executions use `reconstructed-new-session` and preserve the previous session ID when known. Every headless invocation creates a fresh session; the runner rejects a reconstructed result that reuses the previous session ID. Continuation consumes the bounded durable context and pinned artifacts. The adapter does not resume the original DSH session or recover an omitted transcript implicitly.
 
-Native DSH 0.1.5-rc.1 smoke checks on 2026-09-22 exercised an initial completed turn with a verified file artifact and a subsequent reconstructed attention turn, each with normal terminal-tool, flush and shutdown evidence. Full workflow acceptance additionally requires evidence for scheduling, helper integration, workspace sealing, recovery and final Host acceptance; see [docs/acceptance](../../docs/acceptance/).
+The native adapter was exercised with DSH 0.1.5-rc.1 using real initial and reconstructed turns, fixed artifacts, an internal subagent, awaited flush and confirmed shutdown. The [workflow guide](workflow.md) covers the complete task path; versioned runner, scheduler, integration and recovery evidence is kept in `docs/acceptance/` in the full repository.
 
 ## Result, exit codes and logs
 
