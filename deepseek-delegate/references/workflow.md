@@ -71,7 +71,7 @@ Worktree isolation does not isolate shared repository metadata, external service
 
 The input manifest records exact input commit/tree, staged/unstaged hashes, included and excluded untracked paths and canonical checkout/repository identities. Output sealing preserves a fixed commit, tree, diff, changed paths and output snapshot hash. `manifestSha256` in the raw seal refers to its input manifest; `snapshotSha256` binds that output. New continuation preparation uses a fresh preparation identity and the prior sealed commit; it never rewrites the original submission snapshot. Post-seal drift is a conflict requiring explicit handling.
 
-New files outside declared write scope and unsupported non-Git snapshot cases are reported explicitly. Sealed Git refs keep artifacts available independently of live worktree paths. Preparation, verification and sealing do not merge, delete or force-clean user workspaces.
+Managed new files outside declared write scope and unsupported non-Git snapshot cases are reported explicitly. Git-ignored dependencies, environments and caches are excluded by the recorded `exclusionPolicy`; they are not read or hashed unless explicitly selected in `includeUntracked`. Stability and scope checks cover that managed set. Sealed Git refs keep artifacts available independently of live worktree paths. Preparation, verification and sealing do not merge, delete or force-clean user workspaces.
 
 ## Review, cancel and recover
 

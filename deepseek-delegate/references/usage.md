@@ -2,6 +2,8 @@
 
 This page is the practical path from install to reviewed result. Read [cli.md](cli.md) for every command and field, [operations.md](operations.md) for lifecycle and recovery, and [architecture.md](architecture.md) for how the service works internally.
 
+For repository work, the skill uses the [governed workflow](workflow.md): explicit checkout/worktree input, Host control, assistance, continuation and fixed-artifact review. Its `workflow-submit` → `await` → decision/continuation → `workflow-acknowledge` path keeps the same logical goal. The one-shot `start`/`run` examples below remain available for legacy and non-Git tasks and retain their original behavior.
+
 ## The common path
 
 ### 1. Install once

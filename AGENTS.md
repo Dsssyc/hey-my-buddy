@@ -42,7 +42,7 @@ Use the [documentation index](docs/README.md) to find each page. Keep detailed c
 | Skill entrypoints | `skills/buddy/SKILL.md`, `deepseek-delegate/SKILL.md` |
 | Development invariants and this routing table | `AGENTS.md` |
 | Historical design rationale | `docs/decisions/001-python-transactional-blackboard.md` |
-| Accepted direction: Host-directed assistance, turn continuation, workspace ownership and integration (implementation pending) | `docs/decisions/002-host-directed-assistance-and-workspaces.md` |
+| Accepted design rationale: Host-directed assistance, turn continuation, workspace ownership and integration | `docs/decisions/002-host-directed-assistance-and-workspaces.md` |
 | Accepted policy: shared bounded assessments, cross-project reuse, table-level exclusion, revision/generation fencing and React + Vite console frontend (implementation pending) | `docs/decisions/005-shared-assessments-and-table-exclusion.md` |
 | Current consolidated proposal: decision support, evaluation maintenance and the local console (section III governance choices resolved by ADR-005; remaining content is a discussion draft; runtime not implemented) | `docs/decisions/004-buddy-decision-support-and-console.md` |
 | Historical discussion: bounded assessments, typed model selection and the Jev backend (research record; ADR-004 is the current consolidated proposal) | `docs/decisions/003-harness-model-selection.md` |

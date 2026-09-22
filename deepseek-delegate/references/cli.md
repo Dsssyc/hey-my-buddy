@@ -21,6 +21,27 @@ From the project directory the same CLI is `uv run --frozen --project deepseek-d
 
 ## Commands
 
+### Governed repository work
+
+The [workflow guide](workflow.md) gives complete task packets and examples. These operations use the existing task/attempt queue; `runId` remains the logical goal across turns. Normal terminal-tool yield makes `await` return `outcome: "waiting-host"`, while an approved helper/continuation path can continue within the same wait.
+
+| Command | Parameters | Behavior |
+| --- | --- | --- |
+| `workflow-submit` | ordinary flat submit fields, `hostId`, `executionWorkspace`; private submission capability managed by CLI | Prepare a fixed workspace and admit a governed task; return `runId` and owner-private `controlFile` |
+| `workflow-get` | `runId`, optional `includeAudit` | Compact owner, revision, turn, request, helper and artifact view; no control tokens |
+| `workflow-decide` | `runId`, active `requestId`, stable `commandId`, `expectedRevision`, control, `decision: approve|decline`, `reason`, explicit `helpers`, `autoContinue` | Record Host authority; create approved helpers or decline without failing the goal |
+| `workflow-continue` | `runId`, `commandId`, `expectedRevision`, control, bounded `input`, explicit `helperPolicy: keep|cancel` when helpers are active | Record new input and invalidate older automatic triggers; schedule the same goal when ownership permits |
+| `workflow-takeover` | `runId`, `commandId`, `expectedOwnerGeneration`, `newHostId`, control, optional `expectedRevision` | Rotate control capability/generation; do not restart work |
+| `workflow-cancel` | `runId`, `commandId`, control, optional `reason` | Cancel the goal and owned helpers with durable intent and honest stop evidence |
+| `workflow-acknowledge` | `runId`, `commandId`, control, final `artifactId`, `note`, `verdict: accepted|rejected` | Record review of the fixed final artifact separately from execution |
+| `workflow-suggest` | `runId`, bounded `body` | Record a suggestion; an agent-scoped caller may suggest only on its own task |
+
+“Control” is either `controlFile` (CLI-local) or the complete `hostId`, `ownerGeneration`, `controlToken` triple. A file is private and bound to a run and generation; the CLI must not adopt another Host's latest file implicitly. Programmatic submission uses a caller-persisted `submissionToken` to recover its original control after a lost reply. Neither a matching Host label nor reading task state grants authority. A task-scoped child credential cannot invoke Host control, submit another task, edit evaluations or access another run. The private console attaches its authenticated user authority internally and refuses authority fields from browser JSON.
+
+`executionWorkspace` has explicit `kind: existing|worktree`, absolute source `cwd`, `access: read|write`, `base: {kind: commit|working-tree, ref?}`, `includeUntracked`, `writeScope`, `integrator`, and optional attribution-only `targetRef`. Include/write paths are checkout-root-relative; write access needs a nonempty scope. `workspace` still means optional DSH session grouping. Workspace preparation is idempotent by request ID and records exact input commits; no automatic branch merge or force-clean occurs. Git-ignored runtime data is excluded unless explicitly selected.
+
+At most eight helpers are authorized by one decision. Continuation input is bounded to 64 KiB. The runner's complete turn-input JSON is bounded to 256 KiB and structured outcome to 64 KiB, with at most 32 entries per outcome array. A new execution reports `reconstructed-new-session`; it does not claim original-session resume. Use the exact same command ID and payload to resolve an uncertain response. Re-read and reconsider after a revision/owner-generation conflict.
+
 ### Run and wait
 
 | Command | Parameters | Behavior |

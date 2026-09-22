@@ -26,7 +26,7 @@ For a source installation (`runtimeStable: false`), keep its checkout available 
 
 ## Database upgrade
 
-Schema 6 adds the shared evaluation table. Startup refuses an older v5 database and points to the explicit offline migration. Inspect and complete existing owned work before switching database versions; neither a missing PID nor lease expiry proves the old worker stopped. Stop the old service only when its cancellation behavior is appropriate for those tasks. The migration itself never stops services or workers.
+Schema 7 includes the shared evaluation table introduced in schema 6 and adds governed workflows, turns, requests, owner capabilities, continuation records and workspace reservations. Startup refuses older databases and points to the explicit offline migration from schema 5 or 6. Inspect and complete existing owned work before switching database versions; neither a missing PID nor lease expiry proves the old worker stopped. Stop the old service only when its cancellation behavior is appropriate for those tasks. The migration itself never stops services or workers.
 
 ```sh
 "$BUDDY" migrate '{"dryRun":true}'

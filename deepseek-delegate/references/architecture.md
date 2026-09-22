@@ -1,6 +1,6 @@
 # Architecture
 
-This page describes the implemented architecture in this checkout and is verified against the source under `python/buddy/`, `scripts/run.mjs` and `plugins/`. It extends the 0.4.0 transactional blackboard with the shared evaluation table and React/Vite console. The repository's `docs/decisions/001-python-transactional-blackboard.md` (ADR-001) is the historical design record from which the blackboard was built; design proposals do not by themselves establish runtime behavior.
+This page describes the implemented architecture in this checkout and is verified against the source under `python/buddy/`, `scripts/run.mjs` and `plugins/`. Version 0.5.0 extends the transactional blackboard with governed productivity workflows, the shared evaluation table and React/Vite console. The repository's `docs/decisions/001-python-transactional-blackboard.md` (ADR-001) is the historical design record from which the blackboard was built; design proposals do not by themselves establish runtime behavior.
 
 ## Process topology
 
@@ -35,7 +35,7 @@ The transport DTO in the released C-Two 0.5.1 uses the Python pickle protocol fo
 
 ## Data model
 
-One schema-versioned SQLite database (`board.sqlite3`, schema version 6) owns every authoritative fact:
+One schema-versioned SQLite database (`board.sqlite3`, schema version 7) owns every authoritative fact:
 
 | Table | Contents |
 | --- | --- |
@@ -55,6 +55,9 @@ One schema-versioned SQLite database (`board.sqlite3`, schema version 6) owns ev
 | `decision_requests` | idempotent decision identity, frozen input/output, attempt binding, gate authority and publication evidence |
 | `evaluation_evidence_pending`, `evaluation_samples`, `evaluation_aggregates` | pending work and distinct reviewed attempt samples, with transactional constant-size counters |
 | `evaluation_card_history` | per-publication card snapshots and provenance retained when current references are compacted |
+| `workflow_runs`, `workflow_turns` | immutable original goal, owner generation/capability verifier, effective execution inputs and structured results for each attempt |
+| `workflow_requests`, `workflow_children`, `workflow_continuations` | assistance/attention, Host decisions, helper relationships and one-use continuation authorization |
+| `workflow_artifacts`, `workspace_reservations`, `workflow_suggestions` | pinned input/output manifests, logical checkout ownership and bounded suggestions |
 
 Connections are opened per operation with `foreign_keys=ON`, `journal_mode=WAL`, `synchronous=FULL`, `busy_timeout=10000` and `trusted_schema=OFF`; writes use `BEGIN IMMEDIATE`. Transactions are short, and no transaction spans RPC, a subprocess, an LLM call or an event wait. Startup refuses a database whose schema version differs or whose integrity/foreign-key checks fail, rather than rewriting records.
 
@@ -96,7 +99,17 @@ The service has no automatic inquiry scheduler; clients request it as needed. Th
 
 The optional writable console serves a built React/Vite bundle over private loopback HTTP. Its session, exact-origin and CSRF checks are separate from the older read-only dashboard. HTTP mutations and agent-side C-Two operations reach the same Python business operations. The table-level reader/writer gate excludes selection readers from edits, not existing business execution; ordinary snapshot reads never take a lease or invoke models. See [evaluation.md](evaluation.md) for this boundary and [operations.md](operations.md#database-upgrade) for the explicit v5 upgrade.
 
-`selection_request`, `selection_get` and `evaluation_maintain` are named C-Two operations. Decisions use the internal `decision` adapter on the existing Worker queue, not a daemon-owned process runner. Input is frozen in the claim, and decision completion, reader/writer release and any publication share the Worker result transaction. Proposal validation uses a savepoint so an invalid patch can settle without poisoning the completion receipt. The [native helper](decision.md) has no coding tools. Host-directed assistance, continuation, workspace transfer and takeover from ADR-002 remain unimplemented.
+`selection_request`, `selection_get` and `evaluation_maintain` are named C-Two operations. Decisions use the internal `decision` adapter on the existing Worker queue, not a daemon-owned process runner. Input is frozen in the claim, and decision completion, reader/writer release and any publication share the Worker result transaction. Proposal validation uses a savepoint so an invalid patch can settle without poisoning the completion receipt. The [native helper](decision.md) has no coding tools.
+
+## Host-directed work
+
+The [governed workflow](workflow.md) preserves the logical task and original specification while each continued execution receives a new attempt, turn identity, effective workspace and frozen context. The root-scoped DSH terminal tool records completed, assistance or attention through native tool/turn/flush evidence. Worker shutdown and Git sealing precede authoritative result import. A yield returns control to the Host and releases execution capacity only after real stop evidence; the logical checkout reservation can remain held.
+
+The Host authorizes explicit helper tasks and one-use automatic continuation. Helpers reuse the normal queue, workers and receipt mechanism. A helper failure or attention produces a visible follow-up path. Manual continuation and cancellation fence older automatic triggers; cancellation cascades durable intents without inventing stopped evidence. There is no direct peer dispatch. Internal agent subagents remain available.
+
+Owner capabilities, owner generations, revisions and idempotent command receipts govern mutations. Private submission credentials recover original admission without turning an owner label into authority. The console's authenticated user authority is attached internally. DSH children receive attempt-scoped credentials; supported API calls cannot create helpers, impersonate a Host or control other runs. Full-shell processes of the same OS user are not sandboxed by this capability boundary.
+
+`workspace.py` resolves actual checkout/repository identities, captures dirty input with a private Git index, creates detached worktrees and seals fixed output commits/diffs. Git operations run outside SQLite transactions. Reservations use actual checkout identity independently of Worker capacity; sibling cwd paths cannot evade write exclusion. Ignored environments/caches are outside the manifest's managed set unless explicitly selected. The source HEAD, index and files are preserved. Integration is performed explicitly by the named Host/agent against pinned artifacts.
 
 ## Runtime packaging
 
@@ -107,6 +120,6 @@ Dependency management is uv-only with a frozen lock. On a cold start with no REA
 - POSIX only (macOS/Linux); Windows is not implemented.
 - One daemon owns a state directory (lifetime locks plus the legacy-socket guard); a schema or contract mismatch is refused instead of migrated silently.
 - SQLite is the deliberate local database. Remote untrusted tenancy, PostgreSQL/HA and exactly-once external side effects are not implemented and are not claimed.
-- No `steer` and no automatic `resume`: retry is an explicit new attempt, and notifications are post-commit hints for clients. `capabilities` reports these limits under `steer`, `resume`, `nativeAppWakeup`, `postgres` and `remoteTenancy`.
+- No original-session resume: continuation uses an explicitly reported reconstructed new DSH session. Legacy retry remains an explicit new attempt. Notifications are post-commit hints; inspect `capabilities` for the installed version's supported workflow operations and limits.
 - Native Codex App wakeup is not provided by the service; an explicit App heartbeat that calls the CLI is the background route.
 - The ADR asked for a separate documented transition table; the effective tables live in `store.py` (`TASK_TRANSITIONS`, `ATTEMPT_TRANSITIONS`) and are summarized here.
