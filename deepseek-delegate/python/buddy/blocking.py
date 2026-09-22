@@ -337,6 +337,69 @@ def _malformed_result_response(full: Any, run_id: str) -> dict | None:
     return None
 
 
+def _result_command(run_id: str) -> str:
+    return f"buddy result '{{\"runId\": \"{run_id}\"}}'"
+
+
+def _head_text(value, limit: int) -> str | None:
+    if not isinstance(value, str):
+        return None
+    return value if len(value) <= limit else value[:limit]
+
+
+def _governed_result_view(full: dict, run_id: str) -> dict | None:
+    """The bounded default view of one governed result.
+
+    The durable result keeps the whole runner payload, the effective manifest and the
+    sealed output; normal await/run callers get this compact view plus the exact
+    command that reads the full record back.
+    """
+    if not isinstance(full, dict) or full.get("workflowState") is None:
+        # Only a governed run gets the compact view; legacy output is unchanged.
+        return None
+    result = full.get("result")
+    if not isinstance(result, dict):
+        return None
+    turn = result.get("turn") if isinstance(result.get("turn"), dict) else None
+    outcome = turn.get("outcome") if isinstance(turn, dict) and isinstance(turn.get("outcome"), dict) else {}
+    seal = result.get("workspaceSeal") if isinstance(result.get("workspaceSeal"), dict) else None
+    artifacts = []
+    if seal is not None:
+        artifacts.append(
+            {
+                "kind": "workspace-seal",
+                "snapshotSha256": seal.get("snapshotSha256"),
+                "manifestSha256": seal.get("manifestSha256"),
+                "commit": seal.get("commit"),
+                "diffPath": seal.get("diffPath"),
+            }
+        )
+    final_text = result.get("finalText")
+    remaining = outcome.get("remaining")
+    disposition = outcome.get("disposition")
+    return {
+        "status": result.get("status"),
+        "turn": None
+        if turn is None
+        else {
+            "turnId": turn.get("turnId"),
+            "resumeMode": turn.get("resumeMode"),
+            "sessionId": turn.get("sessionId"),
+            "disposition": disposition,
+            "summary": _head_text(outcome.get("summary"), 2000),
+            "remaining": [str(item)[:500] for item in remaining[:8]] if isinstance(remaining, list) else [],
+        },
+        "request": outcome.get("request") if disposition in ("assistance", "attention") else None,
+        "artifacts": artifacts,
+        "finalText": _head_text(final_text, 2000),
+        "finalTextTruncated": isinstance(final_text, str) and len(final_text) > 2000,
+        "logPaths": result.get("logPaths"),
+        "processState": {"shutdownConfirmed": bool((result.get("processState") or {}).get("shutdownConfirmed"))},
+        "resultCommand": _result_command(run_id),
+        "note": "Compact governed result; the full payload, manifests and sealed output stay durable.",
+    }
+
+
 def _host_boundary(
     run: dict,
     *,
@@ -395,6 +458,7 @@ def _host_boundary(
         f"'{{\"runId\":\"{run_id}\",\"commandId\":\"continue-1\",\"expectedRevision\":{revision},"
         "\"input\":\"...\",\"helperPolicy\":\"keep\"}'"
     )
+    governed_view = _governed_result_view(full, run_id) if isinstance(full, dict) else None
     envelope = _envelope(
         run,
         request_id=request_id,
@@ -402,7 +466,7 @@ def _host_boundary(
         waited_seconds=waited_seconds,
         wait_seconds=wait_seconds,
         runner_deadline_seconds=runner_deadline_seconds,
-        result=result,
+        result=governed_view if governed_view is not None else result,
         error=error,
         reconnects=reconnects,
     )
@@ -410,9 +474,12 @@ def _host_boundary(
         {
             "ok": False,
             "goalComplete": False,
+            "resultCompact": governed_view is not None,
+            "resultCommand": _result_command(run_id),
             "workflowState": run.get("workflowState"),
             "workflow": workflow,
-            "turn": turn,
+            "turn": (governed_view or {}).get("turn") if governed_view is not None else turn,
+            "artifacts": (governed_view or {}).get("artifacts", []) if governed_view is not None else [],
             "request": request_view,
             "nextCommands": commands,
             "note": (
@@ -581,6 +648,31 @@ def _wait_until_terminal(
             error=malformed,
             reconnects=reconnects,
         )
+    governed_view = _governed_result_view(full, run_id) if isinstance(full, dict) else None
+    if governed_view is not None:
+        envelope = _envelope(
+            full,
+            request_id=request_id,
+            outcome=full.get("status", run.get("status", "unknown")),
+            waited_seconds=clock() - started,
+            wait_seconds=wait_seconds,
+            runner_deadline_seconds=runner_deadline_seconds,
+            result=governed_view,
+            reconnects=reconnects,
+        )
+        envelope.update(
+            {
+                "resultCompact": True,
+                "resultCommand": _result_command(run_id),
+                "turn": governed_view["turn"],
+                "artifacts": governed_view["artifacts"],
+                "note": (
+                    "The durable result keeps the full runner payload, manifests and sealed output; read it with "
+                    f"{_result_command(run_id)} or workflow-get includeAudit."
+                ),
+            }
+        )
+        return envelope
     return _envelope(
         full,
         request_id=request_id,

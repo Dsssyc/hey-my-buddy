@@ -544,3 +544,58 @@ class GovernedBoundaryTests(unittest.TestCase):
         self.assertTrue(envelope["ok"])
         self.assertTrue(envelope["resultDelivered"])
         self.assertGreaterEqual(service.calls.count("wait"), 1)
+
+
+class CompactGovernedEnvelopeTests(unittest.TestCase):
+    def test_governed_final_envelope_is_compact_and_points_at_the_full_result(self):
+        clock = VirtualClock()
+        service = FakeService(clock, complete_after_waits=1)
+        huge = "x" * 200_000
+        service.run = {
+            **service.run,
+            "status": "queued",
+            "resultAvailable": True,
+            "workflowState": "executing",
+            "awaitingHost": False,
+        }
+        service.result_response = lambda run: {
+            **run,
+            "status": "completed",
+            "result": {
+                "status": "ok",
+                "finalText": huge,
+                "logPaths": {"stdout": "/tmp/out", "stderr": "/tmp/err"},
+                "processState": {"shutdownConfirmed": True},
+                "turn": {
+                    "turnId": "turn-1",
+                    "resumeMode": "initial",
+                    "sessionId": "sess-1",
+                    "outcome": {"disposition": "completed", "summary": "done", "remaining": []},
+                    "provenance": {"tool": "buddy_finish_turn"},
+                },
+                "workspaceSeal": {
+                    "snapshotSha256": "a" * 64,
+                    "manifestSha256": "b" * 64,
+                    "commit": "c" * 40,
+                    "diffPath": "/tmp/output.patch",
+                },
+            },
+            "resultMeta": {"status": "ok", "shutdownConfirmed": True},
+        }
+        envelope = await_run({"runId": "run-fixture", "waitSeconds": 60}, service=service, clock=clock)
+        self.assertEqual(envelope["outcome"], "completed")
+        self.assertTrue(envelope["ok"])
+        self.assertTrue(envelope["resultCompact"])
+        self.assertLess(len(json.dumps(envelope)), 8000, "the governed envelope must stay bounded")
+        self.assertEqual(envelope["turn"]["turnId"], "turn-1")
+        self.assertEqual(envelope["artifacts"][0]["commit"], "c" * 40)
+        self.assertIn("buddy result", envelope["resultCommand"])
+        self.assertTrue(envelope["result"]["finalTextTruncated"])
+
+    def test_legacy_envelope_still_delivers_the_full_result(self):
+        clock = VirtualClock()
+        service = FakeService(clock, complete_after_waits=1)
+        envelope = await_run({"runId": "run-fixture", "waitSeconds": 60}, service=service, clock=clock)
+        self.assertEqual(envelope["outcome"], "completed")
+        self.assertNotIn("resultCompact", envelope)
+        self.assertEqual(envelope["result"]["finalText"], "fixture result")

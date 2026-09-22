@@ -336,20 +336,36 @@ class Console:
         directory.mkdir(mode=0o700, parents=True, exist_ok=True)
         os.chmod(directory, 0o700)
         path = directory / f"{sha256_text(request_id)[:32]}.json"
-        if path.is_file():
-            payload = json.loads(path.read_text())
-            token = payload.get("submissionToken")
-            if isinstance(token, str) and token:
-                return token
         token = secrets.token_hex(32)
-        temporary = path.with_suffix(".tmp")
-        fd = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        payload = json.dumps({"requestId": request_id, "submissionToken": token}, sort_keys=True).encode("utf-8")
+        temporary = path.with_name(f".{path.name}.{secrets.token_hex(8)}.tmp")
+        fd = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
         try:
-            os.write(fd, json.dumps({"requestId": request_id, "submissionToken": token}, sort_keys=True).encode("utf-8"))
+            os.write(fd, payload)
             os.fsync(fd)
         finally:
             os.close(fd)
-        os.replace(temporary, path)
+        try:
+            # Publish the fully written record atomically; a concurrent preparer
+            # either wins the link or reuses the winner's complete secret.
+            os.link(temporary, path)
+        except FileExistsError:
+            try:
+                saved = json.loads(path.read_text(encoding="utf-8"))
+            except (OSError, UnicodeDecodeError, ValueError) as exc:
+                raise BoardError(
+                    "INVALID_ARGUMENT", "The saved console submission token is unreadable; refusing to overwrite it"
+                ) from exc
+            if not isinstance(saved, dict) or saved.get("requestId") != request_id:
+                raise BoardError("CONFLICT", "The saved console submission token belongs to a different request")
+            stored = saved.get("submissionToken")
+            if not isinstance(stored, str) or not stored:
+                raise BoardError(
+                    "INVALID_ARGUMENT", "The saved console submission token is malformed; refusing to overwrite it"
+                )
+            return stored
+        finally:
+            Path(temporary).unlink(missing_ok=True)
         return token
 
     def snapshot(self) -> dict:
