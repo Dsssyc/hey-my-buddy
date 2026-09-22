@@ -5,11 +5,14 @@ The caller owns admission, reservations and process-stop evidence. In particular
 No operation here changes the source checkout's HEAD, index or working files.
 """
 from contextlib import contextmanager
+import fcntl
 import hashlib
 import json
 import os
 from pathlib import Path, PurePosixPath
+import stat
 import subprocess
+import tempfile
 
 from .errors import BoardError
 
@@ -106,3 +109,437 @@ def _relative(value, *, allow_root=False):
 
 def _in_scope(path, scope):
     return any(item == "." or path == item or path.startswith(item + "/") for item in scope)
+
+
+@contextmanager
+def _parent(root, relative, *, create=False):
+    """Open each parent by directory descriptor, never following symlinks."""
+    descriptor = os.open(root, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    try:
+        parts = PurePosixPath(relative).parts
+        for part in parts[:-1]:
+            if create:
+                try:
+                    os.mkdir(part, dir_fd=descriptor)
+                except FileExistsError:
+                    pass
+            next_descriptor = os.open(part, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=descriptor)
+            os.close(descriptor)
+            descriptor = next_descriptor
+        yield descriptor, parts[-1]
+    finally:
+        os.close(descriptor)
+
+
+def _file(root, relative):
+    # dir_fd and O_NOFOLLOW also cover races in intermediate path components.
+    # https://docs.python.org/3/library/os.html#files-and-directories
+    try:
+        with _parent(root, relative) as (parent, name):
+            before = os.stat(name, dir_fd=parent, follow_symlinks=False)
+            if stat.S_ISLNK(before.st_mode):
+                return "120000", os.fsencode(os.readlink(name, dir_fd=parent))
+            if not stat.S_ISREG(before.st_mode):
+                raise BoardError("WORKSPACE_UNSUPPORTED", "Only regular files and symlinks can be snapshotted", path=relative)
+            descriptor = os.open(name, os.O_RDONLY | os.O_NOFOLLOW, dir_fd=parent)
+            with os.fdopen(descriptor, "rb") as stream:
+                data = stream.read()
+                after = os.fstat(stream.fileno())
+            attributes = ("st_ino", "st_dev", "st_size", "st_mtime_ns", "st_ctime_ns", "st_mode")
+            if any(getattr(before, key) != getattr(after, key) for key in attributes):
+                raise BoardError("WORKSPACE_CHANGED", "A file changed during snapshot capture", path=relative)
+            return "100755" if before.st_mode & 0o111 else "100644", data
+    except FileNotFoundError:
+        return None
+
+
+def _blob(root, data, *, write=False):
+    args = ["hash-object", "--no-filters", "--stdin"]
+    if write:
+        args.append("-w")
+    return _line(root, *args, data=data)
+
+
+def _entries(root, revision=None):
+    args = ("ls-tree", "-rz", revision) if revision else ("ls-files", "--stage", "-z")
+    entries = {}
+    for entry in _git(root, *args).split(b"\0"):
+        if not entry:
+            continue
+        metadata, path = entry.split(b"\t", 1)
+        mode, middle, last = metadata.decode().split()
+        name = _relative(os.fsdecode(path))
+        if mode not in ("100644", "100755", "120000"):
+            raise BoardError("WORKSPACE_UNSUPPORTED", "Submodules and sparse index entries are not supported", path=name)
+        if revision:
+            oid = last
+        else:
+            oid = middle
+            if last != "0":
+                raise BoardError("WORKSPACE_UNMERGED", "Resolve the source index conflicts before preparing a workspace", path=name)
+        entries[name] = [mode, oid]
+    if not revision and any(entry.startswith(b"S ") for entry in _git(root, "ls-files", "-t", "-z").split(b"\0")):
+        raise BoardError("WORKSPACE_UNSUPPORTED", "Sparse checkouts require an explicit full checkout")
+    return entries
+
+
+def _untracked(root, selected):
+    paths = set(_git(root, "ls-files", "--others", "--exclude-standard", "-z").split(b"\0"))
+    if selected:
+        paths.update(_git(root, "ls-files", "--others", "--ignored", "--exclude-standard", "-z", "--", *selected).split(b"\0"))
+    return sorted(_relative(os.fsdecode(path)) for path in paths if path)
+
+
+def _observe(root, selected, *, write=False, require_selected=False):
+    head = _commit(root, "HEAD")
+    index = _entries(root)
+    tracked, untracked, included = {}, {}, {}
+    for path in index:
+        item = _file(root, path)
+        if item is not None:
+            mode, data = item
+            tracked[path] = [mode, _blob(root, data, write=write)]
+    for path in _untracked(root, selected):
+        item = _file(root, path)
+        if item is None:
+            raise BoardError("WORKSPACE_CHANGED", "An untracked file disappeared during capture", path=path)
+        mode, data = item
+        untracked[path] = [mode, _sha(data)]
+        if _in_scope(path, selected):
+            included[path] = [mode, _blob(root, data, write=write)]
+    if require_selected:
+        for path in selected:
+            if not any(_in_scope(candidate, [path]) for candidate in included):
+                raise BoardError("INVALID_WORKSPACE", "includeUntracked does not select an untracked file", path=path)
+    observation = {"head": head, "index": index, "tracked": tracked, "untracked": untracked, "included": included}
+    observation["fingerprint"] = _sha(_json(observation))
+    return observation
+
+
+def _stable_observation(root, selected, *, write=False, require_selected=False):
+    observation = _observe(root, selected, write=write, require_selected=require_selected)
+    if observation != _observe(root, selected):
+        raise BoardError("WORKSPACE_CHANGED", "The checkout changed during snapshot capture")
+    return observation
+
+
+def _tree(root, entries):
+    # A private index builds raw blob trees without filters or changes to the
+    # source index. https://git-scm.com/docs/git-update-index#_using_index_info
+    with tempfile.TemporaryDirectory(prefix="buddy-index-") as directory:
+        environment = {"GIT_INDEX_FILE": str(Path(directory) / "index")}
+        _git(root, "read-tree", "--empty", env=environment)
+        records = b"".join(mode.encode() + b" " + oid.encode() + b"\t" + os.fsencode(path) + b"\0"
+                           for path, (mode, oid) in sorted(entries.items()))
+        if records:
+            _git(root, "update-index", "-z", "--index-info", data=records, env=environment)
+        return _line(root, "write-tree", env=environment)
+
+
+def _commit_tree(root, tree, parent, message):
+    # Fixed metadata makes recovery after object creation deterministic; these
+    # are snapshot commits, not user-authored history or branch changes.
+    # https://git-scm.com/docs/git-commit-tree#_commit_information
+    environment = {"GIT_AUTHOR_NAME": "Buddy snapshot", "GIT_AUTHOR_EMAIL": "buddy@localhost",
+                   "GIT_COMMITTER_NAME": "Buddy snapshot", "GIT_COMMITTER_EMAIL": "buddy@localhost",
+                   "GIT_AUTHOR_DATE": "@946684800 +0000", "GIT_COMMITTER_DATE": "@946684800 +0000"}
+    return _line(root, "commit-tree", tree, "-p", parent, "--no-gpg-sign", data=(message + "\n").encode(), env=environment)
+
+
+def _diff(root, before, after):
+    return _git(root, "diff", "--binary", "--full-index", "--no-renames", "--no-ext-diff", "--no-textconv",
+                "--no-color", "--src-prefix=a/", "--dst-prefix=b/", before, after, "--")
+
+
+def _read(path):
+    try:
+        with os.fdopen(os.open(path, os.O_RDONLY | os.O_NOFOLLOW), "rb") as stream:
+            return stream.read()
+    except FileNotFoundError:
+        return None
+
+
+def _record(path):
+    data = _read(path)
+    if data is None:
+        return None
+    try:
+        return json.loads(data)
+    except (ValueError, UnicodeError) as error:
+        raise BoardError("WORKSPACE_CONFLICT", "A workspace recovery record is malformed", path=str(path)) from error
+
+
+def _write_once(path, data):
+    existing = _read(path)
+    if existing is not None:
+        if existing != data:
+            raise BoardError("WORKSPACE_CONFLICT", "An immutable workspace artifact already has different contents", path=str(path))
+        return
+    with tempfile.NamedTemporaryFile(prefix=".pending-", dir=path.parent, delete=False) as stream:
+        temporary = Path(stream.name)
+        try:
+            stream.write(data)
+            stream.flush()
+            os.fsync(stream.fileno())
+            try:
+                os.link(temporary, path)
+            except FileExistsError:
+                if _read(path) != data:
+                    raise BoardError("WORKSPACE_CONFLICT", "An immutable workspace artifact collided", path=str(path))
+            descriptor = os.open(path.parent, os.O_RDONLY | os.O_DIRECTORY)
+            try:
+                os.fsync(descriptor)
+            finally:
+                os.close(descriptor)
+        finally:
+            temporary.unlink()
+
+
+@contextmanager
+def _lock(directory):
+    descriptor = os.open(directory / ".lock", os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW, 0o600)
+    try:
+        try:
+            fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError as error:
+            raise BoardError("WORKSPACE_BUSY", "Another operation is preparing or sealing this workspace") from error
+        yield
+    finally:
+        os.close(descriptor)
+
+
+def _pin(root, ref, commit):
+    # Compare-and-create, never move an existing reference to new contents.
+    # https://git-scm.com/docs/git-update-ref#_description
+    current = _line(root, "rev-parse", "--verify", ref, allowed=(0, 128))
+    if current == commit:
+        return
+    if current:
+        raise BoardError("WORKSPACE_CONFLICT", "An immutable Git reference has different contents", ref=ref)
+    _git(root, "update-ref", ref, commit, "0" * len(commit))
+
+
+def _intent(intent):
+    allowed = {"kind", "cwd", "access", "base", "includeUntracked", "writeScope", "integrator", "targetRef"}
+    if not isinstance(intent, dict) or set(intent) - allowed:
+        raise BoardError("INVALID_WORKSPACE", "Unknown executionWorkspace fields")
+    if intent.get("kind") not in ("existing", "worktree") or intent.get("access") not in ("read", "write"):
+        raise BoardError("INVALID_WORKSPACE", "Workspace kind and access must be explicit")
+    base = intent.get("base")
+    if not isinstance(base, dict) or set(base) - {"kind", "ref"} or base.get("kind") not in ("commit", "working-tree"):
+        raise BoardError("INVALID_WORKSPACE", "Workspace base must select commit or working-tree")
+    if not isinstance(intent.get("integrator"), str) or not intent["integrator"].strip():
+        raise BoardError("INVALID_WORKSPACE", "Workspace integrator must be explicit")
+    if intent.get("targetRef") is not None and (not isinstance(intent["targetRef"], str) or not intent["targetRef"].strip()):
+        raise BoardError("INVALID_WORKSPACE", "targetRef must be an attribution string")
+    result = dict(intent, base=dict(base))
+    if not isinstance(intent.get("cwd"), str) or not intent["cwd"] or "\0" in intent["cwd"]:
+        raise BoardError("INVALID_WORKSPACE", "cwd must be a directory path")
+    # Resolving a ref belongs to first preparation, not replay normalization.
+    result["cwd"] = str(Path(intent["cwd"]).resolve())
+    for field in ("includeUntracked", "writeScope"):
+        values = intent.get(field, [])
+        if not isinstance(values, list):
+            raise BoardError("INVALID_WORKSPACE", field + " must be a list")
+        result[field] = sorted({_relative(value, allow_root=True) for value in values})
+    result.setdefault("targetRef", None)
+    if result["access"] == "write" and not result["writeScope"]:
+        raise BoardError("INVALID_WORKSPACE", "Write access requires an explicit writeScope")
+    if base["kind"] == "commit" and result["includeUntracked"]:
+        raise BoardError("INVALID_WORKSPACE", "Untracked input requires a working-tree base")
+    return result
+
+
+def _mkdir(path):
+    if path.is_symlink():
+        raise BoardError("WORKSPACE_CONFLICT", "A workspace state directory is a symlink", path=str(path))
+    path.mkdir(mode=0o700, exist_ok=True)
+
+
+def _workspace_directory(state_dir, request_id):
+    if not isinstance(request_id, str) or not request_id or "\0" in request_id:
+        raise BoardError("INVALID_WORKSPACE", "request_id must be a nonempty stable identity")
+    state_dir = Path(state_dir).resolve()
+    state_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
+    workspace_id = "ws-" + _sha(_json([str(state_dir), request_id]))[:32]
+    _mkdir(state_dir / "workspaces")
+    directory = state_dir / "workspaces" / workspace_id
+    _mkdir(directory)
+    return workspace_id, directory
+
+
+def _snapshot(source, intent, workspace_id):
+    root = Path(source["checkoutRoot"])
+    base = _commit(root, intent["base"].get("ref", "HEAD"))
+    base_entries = _entries(root, base)
+    base_tree = _line(root, "rev-parse", base + "^{tree}")
+    snapshot = {"repositoryPath": source["repositoryPath"], "sourceCheckoutId": source["checkoutId"],
+                "sourceHead": source["headCommit"], "includeSelectors": intent["includeUntracked"],
+                "inputRef": f"refs/buddy/workspaces/{workspace_id}/input",
+                "stagedRef": f"refs/buddy/workspaces/{workspace_id}/staged"}
+    if intent["base"]["kind"] == "working-tree":
+        if base != source["headCommit"]:
+            raise BoardError("WORKSPACE_BASE_MISMATCH", "A working-tree base must resolve to the source HEAD")
+        observed = _stable_observation(root, intent["includeUntracked"], write=True, require_selected=True)
+        if observed["head"] != base:
+            raise BoardError("WORKSPACE_CHANGED", "The source HEAD changed during preparation")
+        staged_tree = _tree(root, observed["index"])
+        tracked_tree = _tree(root, observed["tracked"])
+        input_tree = _tree(root, observed["tracked"] | observed["included"])
+        snapshot.update(includedUntracked=sorted(observed["included"]),
+                        excludedUntracked=sorted(set(observed["untracked"]) - set(observed["included"])),
+                        excludedEntries={path: value for path, value in observed["untracked"].items() if path not in observed["included"]},
+                        sourceFingerprint=observed["fingerprint"])
+    else:
+        staged_tree = tracked_tree = input_tree = base_tree
+        snapshot.update(includedUntracked=[], excludedUntracked=_untracked(root, []), excludedEntries={})
+        if intent["kind"] == "existing":
+            observed = _stable_observation(root, [])
+            if observed["head"] != base or observed["index"] != base_entries or observed["tracked"] != base_entries or observed["untracked"]:
+                raise BoardError("WORKSPACE_BASE_MISMATCH", "The existing checkout does not exactly match the selected commit")
+            snapshot["sourceFingerprint"] = observed["fingerprint"]
+    staged_commit = base if staged_tree == base_tree else _commit_tree(root, staged_tree, base, workspace_id + " staged input")
+    input_commit = base if input_tree == base_tree else _commit_tree(root, input_tree, base, workspace_id + " input")
+    snapshot.update(stagedTree=staged_tree, stagedCommit=staged_commit,
+                    stagedSha256=_sha(_diff(root, base, staged_tree)),
+                    unstagedSha256=_sha(_diff(root, staged_tree, tracked_tree)))
+    return {"baseCommit": base, "inputCommit": input_commit, "inputTree": input_tree, "snapshot": snapshot}
+
+
+def _worktree_record(root, target):
+    for record in _git(root, "worktree", "list", "--porcelain", "-z").split(b"\0\0"):
+        fields = {}
+        for line in record.split(b"\0"):
+            key, _, value = line.partition(b" ")
+            fields[os.fsdecode(key)] = os.fsdecode(value)
+        if fields.get("worktree") == str(target):
+            return fields
+    return None
+
+
+def _materialize(root, entries):
+    for path, (mode, oid) in entries.items():
+        data = _git(root, "cat-file", "blob", oid)
+        with _parent(root, path, create=True) as (parent, name):
+            if mode == "120000":
+                os.symlink(os.fsdecode(data), name, dir_fd=parent)
+            else:
+                descriptor = os.open(name, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
+                                     0o755 if mode == "100755" else 0o644, dir_fd=parent)
+                with os.fdopen(descriptor, "wb") as stream:
+                    stream.write(data)
+                    os.fchmod(stream.fileno(), 0o755 if mode == "100755" else 0o644)
+
+
+def _prepare_worktree(source, target, pinned, reason):
+    root = Path(source["checkoutRoot"])
+    entries = _entries(root, pinned["inputCommit"])
+    if target.exists() or target.is_symlink():
+        record = _worktree_record(root, target)
+        if target.is_symlink() or not record or record.get("locked") != reason or "detached" not in record:
+            raise BoardError("WORKSPACE_CONFLICT", "The worktree target is not owned by this preparation", path=str(target))
+        identity = inspect(str(target))
+        observed = _stable_observation(target, [])
+        if identity["repositoryId"] != source["repositoryId"] or observed["head"] != pinned["inputCommit"] or observed["index"] != entries or observed["tracked"] != entries or observed["untracked"]:
+            raise BoardError("WORKSPACE_CONFLICT", "The interrupted worktree is incomplete or changed; it was preserved", path=str(target))
+        return
+    # --lock records ownership atomically with Git registration. A partially
+    # populated checkout is preserved and reported as a conflict on recovery.
+    # https://git-scm.com/docs/git-worktree#_options
+    _git(root, "worktree", "add", "--detach", "--no-checkout", "--lock", "--reason", reason,
+         str(target), pinned["inputCommit"])
+    _materialize(target, entries)
+    _git(target, "read-tree", pinned["inputTree"])
+
+
+def _validate_manifest(manifest):
+    fields = {"version", "workspaceId", "kind", "path", "checkoutRoot", "checkoutId", "repositoryId", "access",
+              "baseCommit", "inputCommit", "inputTree", "writeScope", "integrator", "targetRef", "snapshot", "manifestSha256"}
+    if not isinstance(manifest, dict) or set(manifest) != fields or manifest.get("version") != 1:
+        raise BoardError("INVALID_WORKSPACE", "Invalid workspace manifest schema")
+    expected = _sha(_json({key: value for key, value in manifest.items() if key != "manifestSha256"}))
+    if expected != manifest["manifestSha256"]:
+        raise BoardError("WORKSPACE_MANIFEST_CHANGED", "The workspace manifest hash does not match its contents")
+    if not isinstance(manifest["snapshot"], dict):
+        raise BoardError("INVALID_WORKSPACE", "Invalid workspace snapshot")
+
+
+def verify(manifest: dict, *, require_unchanged: bool = True) -> dict:
+    """Validate fixed input references and actual execution checkout identity.
+
+    Read workspaces always require unchanged input. For a writable workspace,
+    ``require_unchanged=False`` validates identity and immutable objects without
+    comparing evolving files to the original execution fingerprint.
+    """
+    with _errors():
+        _validate_manifest(manifest)
+        actual = inspect(manifest["path"])
+        for field in ("checkoutRoot", "checkoutId", "repositoryId"):
+            if actual[field] != manifest[field]:
+                raise BoardError("WORKSPACE_CHANGED", "The execution checkout identity changed", field=field)
+        root = Path(actual["checkoutRoot"])
+        snapshot = manifest["snapshot"]
+        for field, commit in (("inputRef", manifest["inputCommit"]), ("stagedRef", snapshot["stagedCommit"])):
+            if _commit(root, snapshot[field]) != commit:
+                raise BoardError("WORKSPACE_CONFLICT", "An immutable input reference changed", ref=snapshot[field])
+        if _line(root, "rev-parse", manifest["inputCommit"] + "^{tree}") != manifest["inputTree"]:
+            raise BoardError("WORKSPACE_MANIFEST_CHANGED", "The pinned input tree is inconsistent")
+        unchanged = None
+        if require_unchanged or manifest["access"] == "read":
+            observation = _stable_observation(root, snapshot["executionSelectors"])
+            if observation["fingerprint"] != snapshot["executionFingerprint"]:
+                raise BoardError("WORKSPACE_CHANGED", "The execution workspace no longer matches its prepared input")
+            unchanged = True
+        return {"valid": True, "workspaceId": manifest["workspaceId"], "checkoutId": actual["checkoutId"],
+                "repositoryId": actual["repositoryId"], "unchanged": unchanged}
+
+
+def prepare(state_dir: Path, request_id: str, intent: dict) -> dict:
+    """Prepare once, then replay the same request's frozen input manifest.
+
+    A new request_id explicitly captures new source input. Recovery never resets
+    or removes a pre-existing target. Relative scopes address the checkout root.
+    """
+    with _errors():
+        intent = _intent(intent)
+        workspace_id, directory = _workspace_directory(state_dir, request_id)
+        with _lock(directory):
+            _write_once(directory / "request.json", _json({"version": 1, "requestId": request_id, "intent": intent}))
+            manifest = _record(directory / "manifest.json")
+            if manifest is not None:
+                verify(manifest, require_unchanged=False)
+                return manifest
+            pinned = _record(directory / "input.json")
+            if pinned is None:
+                source = inspect(intent["cwd"])
+                pinned = {"source": source, **_snapshot(source, intent, workspace_id)}
+                _write_once(directory / "input.json", _json(pinned))
+            source = pinned["source"]
+            repository = Path(pinned["snapshot"]["repositoryPath"])
+            _pin(repository, pinned["snapshot"]["inputRef"], pinned["inputCommit"])
+            _pin(repository, pinned["snapshot"]["stagedRef"], pinned["snapshot"]["stagedCommit"])
+            path = Path(intent["cwd"])
+            if intent["kind"] == "worktree":
+                target = directory / "checkout"
+                _prepare_worktree(source, target, pinned, "buddy:" + workspace_id)
+                relative = path.relative_to(source["checkoutRoot"])
+                path = target / relative
+                if relative.parts:
+                    with _parent(target, str(relative / ".cwd-placeholder"), create=True):
+                        pass
+            actual = inspect(str(path))
+            if actual["repositoryId"] != source["repositoryId"]:
+                raise BoardError("WORKSPACE_CHANGED", "The execution repository changed during preparation")
+            selectors = intent["includeUntracked"] if intent["kind"] == "existing" else []
+            observed = _stable_observation(Path(actual["checkoutRoot"]), selectors)
+            if intent["kind"] == "existing" and (actual["checkoutId"] != source["checkoutId"] or observed["fingerprint"] != pinned["snapshot"]["sourceFingerprint"]):
+                raise BoardError("WORKSPACE_CHANGED", "The existing checkout changed after its input was frozen")
+            snapshot = dict(pinned["snapshot"], executionSelectors=selectors, executionFingerprint=observed["fingerprint"])
+            manifest = {"version": 1, "workspaceId": workspace_id, "kind": intent["kind"], "path": str(path),
+                        "checkoutRoot": actual["checkoutRoot"], "checkoutId": actual["checkoutId"],
+                        "repositoryId": actual["repositoryId"], "access": intent["access"],
+                        "baseCommit": pinned["baseCommit"], "inputCommit": pinned["inputCommit"], "inputTree": pinned["inputTree"],
+                        "writeScope": intent["writeScope"], "integrator": intent["integrator"], "targetRef": intent["targetRef"], "snapshot": snapshot}
+            manifest["manifestSha256"] = _sha(_json(manifest))
+            _write_once(directory / "manifest.json", _json(manifest))
+            return manifest
