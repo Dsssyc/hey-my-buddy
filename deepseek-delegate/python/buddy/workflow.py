@@ -1585,11 +1585,11 @@ class WorkflowCoordinator:
             task = connection.execute("SELECT * FROM tasks WHERE task_id=?", (run_id,)).fetchone()
             actor = self._authorize(connection, run_row, params, console_authority=console_authority, action="A continuation")
             self._expect_revision(run_row, expected)
-            live_helpers = int(
-                connection.execute(
-                    "SELECT COUNT(*) AS count FROM workflow_children WHERE parent_run_id=? AND state='active'",
-                    (run_id,),
-                ).fetchone()["count"]
+            self._assert_lineage_open(connection, run_id)
+            live_helpers = sum(
+                child["state"] in ("active", "attention")
+                or not self._stop_proven(connection, connection.execute("SELECT * FROM tasks WHERE task_id=?", (child["child_task_id"],)).fetchone())
+                for child in self._owned_children(connection, run_id)
             )
             if live_helpers and policy is None:
                 raise BoardError(
@@ -1752,6 +1752,7 @@ class WorkflowCoordinator:
         now: str,
         continuation_id: str | None = None,
     ) -> None:
+        self._assert_lineage_open(connection, run_row["run_id"])
         spec = json.loads(task["spec_json"])
         attempt = self.board._selected_attempt(connection, task)
         if task["state"] in ("running", "cancelling"):
@@ -1974,48 +1975,20 @@ class WorkflowCoordinator:
                     return {**receipt, "duplicate": True}
             if run_row["state"] == "accepted":
                 raise BoardError("CONFLICT", "This run is already acknowledged; cancellation cannot undo acceptance")
-            # Revoke automatic continuation: cancellation is a Host decision that
-            # replaces it, and a delayed helper callback must not requeue the run.
-            connection.execute(
-                "UPDATE workflow_continuations SET state='cancelled' WHERE run_id=? AND state IN ('recorded','queued')",
-                (run_id,),
-            )
-            connection.execute(
-                "UPDATE workflow_requests SET state='cancelled', updated_at=? WHERE run_id=? AND state='open'",
-                (now, run_id),
-            )
+            # Fence the root before descendants settle: a transferred checkout
+            # must not be handed back to a goal cancelled in this transaction.
+            self._cancel_owned_run(connection, task, now, explicit=True)
             self._cancel_children(connection, run_id, reason, now)
-            self._revoke_credentials(connection, run_id, now)
-            if task["state"] not in ("completed", "failed", "cancelled"):
-                if task["state"] == "queued" and (
-                    task["active_attempt_id"] is None
-                ):
-                    self.board._transition_task(connection, task, "cancelled")
-                    connection.execute("UPDATE tasks SET queue_reason=NULL, updated_at=? WHERE task_id=?", (now, run_id))
-                else:
-                    if task["state"] != "cancelling":
-                        self.board._transition_task(connection, task, "cancelling")
-                    attempt = self.board._selected_attempt(connection, task)
-                    if attempt is not None and attempt["cancel_requested_at"] is None:
-                        connection.execute(
-                            "UPDATE attempts SET cancel_requested_at=?, updated_at=?, revision=revision+1"
-                            " WHERE attempt_id=?",
-                            (now, now, attempt["attempt_id"]),
-                        )
-                self.board._append_event(
-                    connection,
-                    "workflow.cancelled",
-                    task_id=run_id,
-                    revision=run_row["revision"] + 1,
-                    payload={"reason": reason, "actor": actor, "honestShutdown": True},
-                )
-            connection.execute(
-                "UPDATE workflow_runs SET state='cancelled', active_request_id=NULL, updated_at=?,"
-                " revision=revision+1 WHERE run_id=? AND revision=?",
-                (now, run_id, run_row["revision"]),
+            self.board._append_event(
+                connection, "workflow.cancelled", task_id=run_id, revision=run_row["revision"] + 1,
+                payload={"reason": reason, "actor": actor, "honestShutdown": True},
             )
             task = connection.execute("SELECT * FROM tasks WHERE task_id=?", (run_id,)).fetchone()
-            if self._stop_proven(connection, task):
+            child = connection.execute("SELECT * FROM workflow_children WHERE child_task_id=?", (run_id,)).fetchone()
+            if child is not None and self._stop_proven(connection, task):
+                self.child_settled(connection, task=task, attempt=self.board._selected_attempt(connection, task),
+                                   payload=None, task_state=task["state"], now=now)
+            elif self._stop_proven(connection, task):
                 self._release_reservations(connection, run_id, now)
             run_row = self._run_row(connection, run_id)
             response = {
@@ -2036,90 +2009,154 @@ class WorkflowCoordinator:
         return response
 
     def _cancel_children(self, connection, run_id: str, reason: str, now: str) -> list[str]:
-        """Cancel every owned nonterminal descendant, however deeply nested.
-
-        Each descendant's task, run, open requests, automatic continuations and
-        scoped credentials are settled in this same short transaction. A reservation
-        is released only when the attempt never crossed the spawn boundary or its stop
-        is proven; an active or uncertain descendant keeps it until its owner reports.
-        """
+        """Fence the whole owned graph, including work behind settled helpers."""
         cancelled: list[str] = []
-        seen: set[str] = set()
-
-        def cancel_task(task_id: str, parent_run_id: str) -> None:
-            if task_id in seen:
-                return
-            seen.add(task_id)
-            task = connection.execute("SELECT * FROM tasks WHERE task_id=?", (task_id,)).fetchone()
+        rows = self._owned_children(connection, run_id)
+        for child in rows:
+            task = connection.execute("SELECT * FROM tasks WHERE task_id=?", (child["child_task_id"],)).fetchone()
             if task is None:
-                return
-            attempt = self.board._selected_attempt(connection, task)
-            if task["state"] not in ("completed", "failed", "cancelled"):
-                if task["state"] == "queued" and task["active_attempt_id"] is None:
-                    self.board._transition_task(connection, task, "cancelled")
-                    connection.execute(
-                        "UPDATE tasks SET queue_reason=NULL, updated_at=? WHERE task_id=?", (now, task_id)
-                    )
-                else:
-                    if task["state"] != "cancelling":
-                        self.board._transition_task(connection, task, "cancelling")
-                    if attempt is not None and attempt["cancel_requested_at"] is None:
-                        connection.execute(
-                            "UPDATE attempts SET cancel_requested_at=?, updated_at=?, revision=revision+1"
-                            " WHERE attempt_id=?",
-                            (now, now, attempt["attempt_id"]),
-                        )
-            connection.execute(
-                "UPDATE workflow_children SET state='cancelled', updated_at=?, revision=revision+1"
-                " WHERE child_task_id=?",
-                (now, task_id),
-            )
-            connection.execute(
-                "UPDATE workflow_runs SET state='cancelled', active_request_id=NULL, updated_at=?,"
-                " revision=revision+1 WHERE run_id=? AND state NOT IN ('accepted')",
-                (now, task_id),
-            )
-            connection.execute(
-                "UPDATE workflow_requests SET state='cancelled', updated_at=? WHERE run_id=? AND state='open'",
-                (now, task_id),
-            )
-            connection.execute(
-                "UPDATE workflow_continuations SET state='cancelled' WHERE run_id=? AND state IN ('recorded','queued')",
-                (task_id,),
-            )
-            self._revoke_credentials(connection, task_id, now)
-            if self._stop_proven(connection, task):
-                self._release_reservations(connection, task_id, now)
-            self.board._append_event(
-                connection,
-                "workflow.helper_cancelled",
-                task_id=task_id,
-                attempt_id=attempt["attempt_id"] if attempt is not None else None,
-                revision=task["revision"] + 1,
-                payload={
-                    "parentRunId": parent_run_id,
-                    "reason": reason,
-                    "reservationReleased": self._stop_proven(connection, task),
-                },
-            )
-            cancelled.append(task_id)
-            for nested in connection.execute(
-                "SELECT child_task_id FROM workflow_children WHERE parent_run_id=?", (task_id,)
-            ).fetchall():
-                cancel_task(nested["child_task_id"], task_id)
-
-        for child in connection.execute(
-            "SELECT child_task_id FROM workflow_children WHERE parent_run_id=?", (run_id,)
-        ).fetchall():
-            cancel_task(child["child_task_id"], run_id)
+                continue
+            if self._cancel_owned_run(connection, task, now):
+                self.board._append_event(
+                    connection, "workflow.helper_cancelled", task_id=task["task_id"], revision=task["revision"] + 1,
+                    payload={"parentRunId": child["parent_run_id"], "cancelledByRunId": run_id, "reason": reason},
+                )
+                cancelled.append(task["task_id"])
+        # Every descendant is fenced before ownership can move upward. Settlement
+        # walks through cancelled intermediaries but never reactivates one.
+        for child in reversed(rows):
+            task = connection.execute("SELECT * FROM tasks WHERE task_id=?", (child["child_task_id"],)).fetchone()
+            self._settle_helper_reservation(connection, child, task, None, now)
         return cancelled
 
+    def _owned_children(self, connection, run_id: str) -> list:
+        return connection.execute(
+            "WITH RECURSIVE owned(run_id) AS (SELECT ? UNION SELECT c.child_task_id FROM workflow_children c"
+            " JOIN owned o ON c.parent_run_id=o.run_id) SELECT c.* FROM workflow_children c"
+            " JOIN owned o ON c.child_task_id=o.run_id WHERE c.child_task_id != ? ORDER BY c.created_at, c.child_task_id",
+            (run_id, run_id),
+        ).fetchall()
+
     def _stop_proven(self, connection, task) -> bool:
-        """True only when no process can still be writing this task's workspace."""
-        attempt = self.board._selected_attempt(connection, task)
-        if attempt is None:
-            return True
-        return attempt["execution_state"] == "finished" and bool(attempt["shutdown_confirmed"])
+        """Only unclaimed work or durable finished+confirmed attempts prove stop."""
+        if task is None:
+            return False
+        evidence = connection.execute(
+            "SELECT COUNT(*) AS total, SUM(CASE WHEN execution_state != 'finished' OR shutdown_confirmed != 1"
+            " THEN 1 ELSE 0 END) AS unconfirmed FROM attempts WHERE task_id=?", (task["task_id"],),
+        ).fetchone()
+        if evidence["unconfirmed"]:
+            return False
+        for attempt_id in {task["active_attempt_id"], task["selected_attempt_id"]}:
+            if attempt_id and connection.execute(
+                "SELECT 1 FROM attempts WHERE attempt_id=? AND task_id=?", (attempt_id, task["task_id"]),
+            ).fetchone() is None:
+                return False
+        return bool(evidence["total"]) or task["state"] not in ("running", "cancelling", "reconciliation-needed")
+
+    def shutdown_summary(self, connection, run_id: str) -> dict:
+        """Bounded aggregate evidence over the complete owned lineage, not PIDs."""
+        self._run_row(connection, run_id)
+        task = connection.execute("SELECT * FROM tasks WHERE task_id=?", (run_id,)).fetchone()
+        own_stop = self._stop_proven(connection, task)
+        unconfirmed = [] if own_stop else [run_id]
+        for child in self._owned_children(connection, run_id):
+            task = connection.execute("SELECT * FROM tasks WHERE task_id=?", (child["child_task_id"],)).fetchone()
+            if not self._stop_proven(connection, task):
+                unconfirmed.append(child["child_task_id"])
+        return {"selfConfirmed": own_stop, "descendantsConfirmed": len(unconfirmed) == (0 if own_stop else 1),
+                "unconfirmedRunIds": unconfirmed[:MAX_CHILD_VIEW], "unconfirmedCount": len(unconfirmed),
+                "truncated": len(unconfirmed) > MAX_CHILD_VIEW}
+
+    def _terminal_ancestor(self, connection, run_id: str):
+        return connection.execute(
+            "WITH RECURSIVE ancestors(run_id) AS (SELECT parent_run_id FROM workflow_children WHERE child_task_id=?"
+            " UNION SELECT c.parent_run_id FROM workflow_children c JOIN ancestors a ON c.child_task_id=a.run_id)"
+            " SELECT r.run_id, r.state FROM workflow_runs r JOIN ancestors a ON r.run_id=a.run_id"
+            " WHERE r.state IN ('cancelled','accepted') LIMIT 1", (run_id,),
+        ).fetchone()
+
+    def _assert_lineage_open(self, connection, run_id: str) -> None:
+        ancestor = self._terminal_ancestor(connection, run_id)
+        if ancestor is not None:
+            raise BoardError("ANCESTOR_TERMINAL", "An owned helper cannot continue beneath a cancelled or accepted ancestor",
+                             runId=run_id, ancestorRunId=ancestor["run_id"], ancestorState=ancestor["state"])
+
+    def _cancel_owned_run(self, connection, task, now: str, *, explicit: bool = False) -> bool:
+        run_id = task["task_id"]
+        run_row = self._run_row(connection, run_id)
+        cancel_goal = explicit or run_row["state"] not in ("delivered", "accepted", "failed")
+        connection.execute(
+            "UPDATE workflow_requests SET state='cancelled', updated_at=? WHERE run_id=? AND state='open'", (now, run_id),
+        )
+        connection.execute(
+            "UPDATE workflow_continuations SET state='cancelled' WHERE run_id=? AND state IN ('recorded','queued')", (run_id,),
+        )
+        self._revoke_credentials(connection, run_id, now)
+        if cancel_goal:
+            connection.execute(
+                "UPDATE workflow_runs SET state='cancelled', active_request_id=NULL, updated_at=?, revision=revision+1 WHERE run_id=?",
+                (now, run_id),
+            )
+            connection.execute(
+                "UPDATE workflow_children SET state='cancelled', updated_at=?, revision=revision+1"
+                " WHERE child_task_id=? AND state IN ('active','attention')", (now, run_id),
+            )
+        elif run_row["active_request_id"]:
+            connection.execute(
+                "UPDATE workflow_runs SET active_request_id=NULL, updated_at=?, revision=revision+1 WHERE run_id=?", (now, run_id),
+            )
+        stopped = self._stop_proven(connection, task)
+        if task["state"] not in ("completed", "failed", "cancelled"):
+            self.board._transition_task(connection, task, "cancelled" if stopped else "cancelling")
+            connection.execute("UPDATE tasks SET queue_reason=NULL, updated_at=? WHERE task_id=?", (now, run_id))
+        if not stopped:
+            connection.execute(
+                "UPDATE attempts SET cancel_requested_at=?, updated_at=?, revision=revision+1 WHERE task_id=?"
+                " AND (execution_state != 'finished' OR shutdown_confirmed != 1) AND cancel_requested_at IS NULL",
+                (now, now, run_id),
+            )
+        return cancel_goal
+
+    def _late_cancelled_turn(self, connection, run_row, turn_row, attempt, payload, now):
+        """Keep real receipt/artifact evidence without reopening a fenced goal."""
+        turn = self.turn_outcome(payload)
+        disposition = None
+        if attempt["shutdown_confirmed"] and turn is not None and self._validate_turn(turn, turn_row, attempt) is None:
+            disposition = turn["outcome"]["disposition"]
+            connection.execute(
+                "UPDATE workflow_turns SET state='concluded', disposition=?, outcome_json=?, provenance_json=?,"
+                " session_id=?, prompt_sha256=?, input_sha256=?, turn_result_path=?, sealed_artifacts_json=?,"
+                " updated_at=? WHERE turn_id=?",
+                (disposition, canonical_json(turn["outcome"]), canonical_json(turn.get("provenance")),
+                 turn.get("sessionId"), turn.get("promptSha256"), turn.get("inputSha256"),
+                 self.result_payload(payload).get("turnResultPath"), canonical_json(self._sealed_artifacts(payload)),
+                 now, turn_row["turn_id"]),
+            )
+            self._pin_result_artifacts(connection, run_row, attempt, payload, turn_row["turn_id"], now)
+        else:
+            connection.execute("UPDATE workflow_turns SET state='failed', updated_at=? WHERE turn_id=?", (now, turn_row["turn_id"]))
+        self._revoke_credentials(connection, run_row["run_id"], now)
+        self.board._append_event(
+            connection, "workflow.late_turn", task_id=run_row["run_id"], attempt_id=attempt["attempt_id"],
+            revision=run_row["revision"], payload={"turnId": turn_row["turn_id"], "state": run_row["state"], "disposition": disposition},
+        )
+        return {"accepted": False, "disposition": disposition, "state": run_row["state"], "late": True}
+
+    def attempt_released(self, connection, *, task, attempt, now: str, reason: str) -> None:
+        """Settle a Worker's durable never-spawned release inside its transaction."""
+        if self._run_optional(connection, task["task_id"]) is None:
+            return
+        if not self._stop_proven(connection, task):
+            raise BoardError("SHUTDOWN_UNCONFIRMED", "A workflow release requires durable finished and confirmed stop evidence")
+        self.turn_concluded(connection, task=task, attempt=attempt, payload=None, task_state=task["state"], now=now)
+        self.child_settled(connection, task=task, attempt=attempt, payload=None, task_state=task["state"], now=now)
+        self._release_reservations(connection, task["task_id"], now)
+        self._revoke_credentials(connection, task["task_id"], now)
+        self.board._append_event(
+            connection, "workflow.attempt_released", task_id=task["task_id"], attempt_id=attempt["attempt_id"],
+            payload={"reason": reason, "shutdownConfirmed": True},
+        )
 
     def _revoke_credentials(self, connection, run_id: str, now: str) -> None:
         connection.execute(
@@ -2365,6 +2402,9 @@ class WorkflowCoordinator:
         run_row = self._run_optional(connection, task_row["task_id"])
         if run_row is None:
             return None
+        ancestor = self._terminal_ancestor(connection, run_row["run_id"])
+        if ancestor is not None:
+            return f"workflow-ancestor-{ancestor['state']}"
         if run_row["state"] == "executing":
             continuation = connection.execute(
                 "SELECT continuation_id, workspace_manifest_json FROM workflow_continuations"
@@ -2856,43 +2896,12 @@ class WorkflowCoordinator:
         turn = self.turn_outcome(payload)
         if turn_row is None:
             return None
-        if run_row["state"] in ("accepted", "cancelled"):
-            # A delayed callback for a goal that is already settled records its
-            # evidence but can never reopen the accepted or cancelled run.
-            disposition = None
-            if turn is not None and self._validate_turn(turn, turn_row, attempt) is None:
-                disposition = turn["outcome"]["disposition"]
-                connection.execute(
-                    "UPDATE workflow_turns SET state='concluded', disposition=?, outcome_json=?, provenance_json=?,"
-                    " session_id=?, prompt_sha256=?, input_sha256=?, turn_result_path=?, updated_at=? WHERE turn_id=?",
-                    (
-                        disposition,
-                        canonical_json(turn["outcome"]),
-                        canonical_json(turn.get("provenance")),
-                        turn.get("sessionId"),
-                        turn.get("promptSha256"),
-                        turn.get("inputSha256") or turn_row["input_sha256"],
-                        self.result_payload(payload).get("turnResultPath"),
-                        now,
-                        turn_row["turn_id"],
-                    ),
-                )
-                self._pin_result_artifacts(connection, run_row, attempt, payload, turn_row["turn_id"], now)
-            else:
-                connection.execute(
-                    "UPDATE workflow_turns SET state='failed', updated_at=? WHERE turn_id=?",
-                    (now, turn_row["turn_id"]),
-                )
-            self._revoke_credentials(connection, run_row["run_id"], now)
-            self.board._append_event(
-                connection,
-                "workflow.late_turn",
-                task_id=run_row["run_id"],
-                attempt_id=attempt["attempt_id"],
-                revision=run_row["revision"],
-                payload={"turnId": turn_row["turn_id"], "state": run_row["state"], "disposition": disposition},
-            )
-            return {"accepted": False, "disposition": disposition, "state": run_row["state"], "late": True}
+        ancestor = self._terminal_ancestor(connection, run_row["run_id"])
+        if ancestor is not None and run_row["state"] not in ("accepted", "cancelled"):
+            self._cancel_owned_run(connection, task, now)
+            run_row = self._run_row(connection, run_row["run_id"])
+        if run_row["state"] in ("accepted", "cancelled") or ancestor is not None:
+            return self._late_cancelled_turn(connection, run_row, turn_row, attempt, payload, now)
         if task_state in ("cancelled", "failed") or (
             not attempt["shutdown_confirmed"] and task_state == "reconciliation-needed"
         ):
@@ -3125,13 +3134,21 @@ class WorkflowCoordinator:
     # -- helper settlement ---------------------------------------------------
     def child_settled(self, connection, *, task, attempt, payload: dict | None, task_state: str, now: str) -> None:
         """Fan a settled helper back into its parent run."""
+        run_row = self._run_optional(connection, task["task_id"])
+        fenced = run_row is not None and (
+            run_row["state"] in ("accepted", "cancelled") or self._terminal_ancestor(connection, task["task_id"]) is not None
+        )
         child = connection.execute(
             "SELECT * FROM workflow_children WHERE child_task_id=?", (task["task_id"],)
         ).fetchone()
         if child is None:
+            if fenced and self._stop_proven(connection, task):
+                self._release_reservations(connection, task["task_id"], now)
             return
         disposition = self.yield_disposition(payload)
-        if disposition in ("assistance", "attention"):
+        if fenced:
+            state = child["state"] if child["state"] in ("succeeded", "failed", "cancelled") else "cancelled"
+        elif disposition in ("assistance", "attention"):
             state = "attention"
         elif task_state == "completed":
             state = "succeeded"
@@ -3152,13 +3169,11 @@ class WorkflowCoordinator:
             connection,
             "workflow.helper_settled",
             task_id=task["task_id"],
-            attempt_id=attempt["attempt_id"],
+            attempt_id=attempt["attempt_id"] if attempt is not None else None,
             revision=task["revision"] + 1,
             payload={"parentRunId": parent["run_id"], "state": state, "disposition": disposition},
         )
-        if parent["state"] in ("accepted", "cancelled"):
-            # A delayed helper callback for a settled goal records its evidence and
-            # never requeues the parent or reopens its state.
+        if parent["state"] in ("accepted", "cancelled") or self._terminal_ancestor(connection, parent["run_id"]) is not None:
             return
         if state == "attention":
             # Helper attention is surfaced immediately, even while siblings run.
@@ -3274,32 +3289,42 @@ class WorkflowCoordinator:
         )
 
     def _settle_helper_reservation(self, connection, child, task, attempt, now: str) -> None:
-        if not attempt["shutdown_confirmed"]:
+        if not self._stop_proven(connection, task):
             return
-        reservation = connection.execute(
-            "SELECT * FROM workspace_reservations WHERE holder_task_id=? AND state='held'", (task["task_id"],)
-        ).fetchone()
-        if reservation is None:
-            return
-        parent = self._run_row(connection, child["parent_run_id"])
-        parent_reservation = connection.execute(
-            "SELECT * FROM workspace_reservations WHERE holder_task_id=? AND state='transferred'",
-            (parent["run_id"],),
-        ).fetchone()
-        # Release the helper's reservation first: the partial unique index allows one
-        # held writer per checkout, and the parent re-holds it in the same transaction.
-        connection.execute(
-            "UPDATE workspace_reservations SET state='released', updated_at=?, released_at=? WHERE reservation_id=?",
-            (now, now, reservation["reservation_id"]),
-        )
-        if parent_reservation is not None and parent_reservation["checkout_id"] == reservation["checkout_id"]:
-            # A sequentially transferred checkout returns to the parent only after the
-            # helper's stop is confirmed, so the parent can continue on it.
-            connection.execute(
-                "UPDATE workspace_reservations SET state='held', updated_at=?, released_at=NULL"
-                " WHERE reservation_id=?",
-                (now, parent_reservation["reservation_id"]),
-            )
+        reservations = connection.execute(
+            "SELECT * FROM workspace_reservations WHERE holder_task_id=? AND state IN ('held','transferred')",
+            (task["task_id"],),
+        ).fetchall()
+        self._release_reservations(connection, task["task_id"], now)
+        for reservation in reservations:
+            parent_id = child["parent_run_id"]
+            seen = {task["task_id"]}
+            while parent_id not in seen:
+                seen.add(parent_id)
+                parent = self._run_row(connection, parent_id)
+                parent_task = connection.execute("SELECT * FROM tasks WHERE task_id=?", (parent_id,)).fetchone()
+                closed = parent["state"] in ("accepted", "cancelled") or self._terminal_ancestor(connection, parent_id) is not None
+                if closed:
+                    if not self._stop_proven(connection, parent_task):
+                        break
+                    self._release_reservations(connection, parent_id, now)
+                    link = connection.execute("SELECT parent_run_id FROM workflow_children WHERE child_task_id=?", (parent_id,)).fetchone()
+                    if link is None:
+                        break
+                    parent_id = link["parent_run_id"]
+                    continue
+                parent_reservation = connection.execute(
+                    "SELECT * FROM workspace_reservations WHERE holder_task_id=? AND checkout_id=? AND state='transferred'"
+                    " ORDER BY created_at DESC LIMIT 1", (parent_id, reservation["checkout_id"]),
+                ).fetchone()
+                # A live descendant may still hold a checkout transferred through
+                # several generations. Never reclaim it before that owner stops.
+                if parent_reservation is not None and self._held_writer(connection, reservation["checkout_id"]) is None:
+                    connection.execute(
+                        "UPDATE workspace_reservations SET state='held', updated_at=?, released_at=NULL WHERE reservation_id=?",
+                        (now, parent_reservation["reservation_id"]),
+                    )
+                break
 
     # -- legacy-control guard ------------------------------------------------
     def guard_task_control(self, connection, task_row, params: dict, *, operation: str) -> None:
