@@ -3,6 +3,9 @@
 The caller owns admission, reservations and process-stop evidence. In particular,
 ``seal`` may only be called after the Worker has proved that its child stopped.
 No operation here changes the source checkout's HEAD, index or working files.
+Stability and scope checks cover Git-managed paths and explicit untracked inputs;
+ignored environments and caches are excluded unless selected. This is not an OS
+sandbox or a claim that every physical file remains unchanged.
 """
 from contextlib import contextmanager
 import fcntl
@@ -15,6 +18,10 @@ import subprocess
 import tempfile
 
 from .errors import BoardError
+
+
+_EXCLUSION_POLICY = {"version": 1, "kind": "git-standard",
+                     "managedPaths": "tracked-and-nonignored-untracked", "selectedIgnored": "includeUntracked"}
 
 
 def _json(value):
@@ -188,10 +195,12 @@ def _entries(root, revision=None):
 
 
 def _untracked(root, selected):
-    # Ignored files are still physical inputs. Track their fingerprints so a
-    # read-only run or an out-of-scope edit cannot disappear behind .gitignore;
-    # only explicit selections are copied into an input snapshot.
-    paths = set(_git(root, "ls-files", "--others", "-z").split(b"\0"))
+    # Git prunes ignored dependency/cache directories before listing files.
+    # Explicit selections may include ignored input, but only within their
+    # literal pathspecs. https://git-scm.com/docs/git-ls-files#_options
+    paths = set(_git(root, "ls-files", "--others", "--exclude-standard", "-z").split(b"\0"))
+    if selected:
+        paths.update(_git(root, "ls-files", "--others", "--ignored", "--exclude-standard", "-z", "--", *selected).split(b"\0"))
     return sorted(_relative(os.fsdecode(path)) for path in paths if path)
 
 
@@ -464,12 +473,14 @@ def _prepare_worktree(source, target, pinned, reason):
 
 def _validate_manifest(manifest):
     fields = {"version", "workspaceId", "kind", "path", "checkoutRoot", "checkoutId", "repositoryId", "access",
-              "baseCommit", "inputCommit", "inputTree", "writeScope", "integrator", "targetRef", "snapshot", "manifestSha256"}
+              "baseCommit", "inputCommit", "inputTree", "writeScope", "integrator", "targetRef", "exclusionPolicy", "snapshot", "manifestSha256"}
     if not isinstance(manifest, dict) or set(manifest) != fields or type(manifest.get("version")) is not int or manifest["version"] != 1:
         raise BoardError("INVALID_WORKSPACE", "Invalid workspace manifest schema")
     expected = _sha(_json({key: value for key, value in manifest.items() if key != "manifestSha256"}))
     if expected != manifest["manifestSha256"]:
         raise BoardError("WORKSPACE_MANIFEST_CHANGED", "The workspace manifest hash does not match its contents")
+    if manifest["exclusionPolicy"] != _EXCLUSION_POLICY:
+        raise BoardError("INVALID_WORKSPACE", "Unsupported workspace exclusion policy")
     snapshot_fields = {"repositoryPath", "stagedCommit", "stagedTree", "inputRef", "stagedRef", "executionSelectors",
                        "executionFingerprint", "excludedEntries"}
     if not isinstance(manifest["snapshot"], dict) or not snapshot_fields <= manifest["snapshot"].keys():
@@ -487,7 +498,8 @@ def _validate_manifest(manifest):
 def verify(manifest: dict, *, require_unchanged: bool = True) -> dict:
     """Validate fixed input references and actual execution checkout identity.
 
-    Read workspaces always require unchanged input. For a writable workspace,
+    Read workspaces always require unchanged managed input, as defined by the
+    manifest's exclusionPolicy. Ignored caches may change. For a writable workspace,
     ``require_unchanged=False`` validates identity and immutable objects without
     comparing evolving files to the original execution fingerprint.
     """
@@ -563,7 +575,8 @@ def prepare(state_dir: Path, request_id: str, intent: dict) -> dict:
                         "checkoutRoot": actual["checkoutRoot"], "checkoutId": actual["checkoutId"],
                         "repositoryId": actual["repositoryId"], "access": intent["access"],
                         "baseCommit": pinned["baseCommit"], "inputCommit": pinned["inputCommit"], "inputTree": pinned["inputTree"],
-                        "writeScope": intent["writeScope"], "integrator": intent["integrator"], "targetRef": intent["targetRef"], "snapshot": snapshot}
+                        "writeScope": intent["writeScope"], "integrator": intent["integrator"], "targetRef": intent["targetRef"],
+                        "exclusionPolicy": dict(_EXCLUSION_POLICY), "snapshot": snapshot}
             manifest["manifestSha256"] = _sha(_json(manifest))
             _write_once(directory / "manifest.json", _json(manifest))
             return manifest
@@ -597,7 +610,7 @@ def _output_entries(root, manifest, observation):
                      if initial_index.get(path) != observation["index"].get(path)}
     violations.update(path for path in set(changed) | index_changes | excluded_changes if not _in_scope(path, scope))
     if violations:
-        raise BoardError("WORKSPACE_SCOPE_VIOLATION", "The workspace contains changes outside its declared write scope",
+        raise BoardError("WORKSPACE_SCOPE_VIOLATION", "Managed workspace paths contain changes outside the declared write scope",
                          paths=sorted(violations), changedPaths=changed)
     return entries, changed, sorted(excluded_changes)
 
@@ -622,7 +635,7 @@ def _finish_output(repository, output, directory):
 
 
 def seal(state_dir: Path, manifest: dict, task_id: str, attempt_id: str) -> dict:
-    """Seal a stopped attempt's actual output, preserving its fixed Git ref/diff.
+    """Seal a stopped attempt's managed output, preserving its fixed Git ref/diff.
 
     PRECONDITION: the caller has proved process shutdown and still owns the
     workspace reservation. This function neither inspects processes nor proves

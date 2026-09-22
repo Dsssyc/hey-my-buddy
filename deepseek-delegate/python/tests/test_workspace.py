@@ -300,24 +300,89 @@ class WorkspaceTests(unittest.TestCase):
         manifest = self.prepare(includeUntracked=[name])
         self.assertEqual((Path(manifest["path"]) / name).read_bytes(), b"\x00selected")
         self.assertFalse((Path(manifest["path"]) / "src/unselected.secret").exists())
+        (self.repo / name).write_bytes(b"later source input")
+        self.assertEqual((Path(manifest["path"]) / name).read_bytes(), b"\x00selected")
         self.assertTrue(workspace.verify(manifest)["unchanged"])
+        (Path(manifest["path"]) / name).write_bytes(b"changed selected input")
+        self.assert_error("WORKSPACE_CHANGED", workspace.verify, manifest)
 
-    def test_ignored_paths_do_not_bypass_read_only_or_write_scope(self):
+    def test_ignored_caches_do_not_interfere_with_managed_input_or_output(self):
         (self.repo / ".gitignore").write_text("*.ignored\n")
         self.git("add", ".gitignore")
         self.git("commit", "-qm", "ignore generated files")
         reader = self.prepare("reader", access="read", writeScope=[])
-        (Path(reader["path"]) / "new.ignored").write_text("read-only violation")
-        self.assert_error("WORKSPACE_CHANGED", workspace.verify, reader)
+        (Path(reader["path"]) / "new.ignored").write_text("generated cache")
+        self.assertTrue(workspace.verify(reader)["unchanged"])
+        self.assertEqual(workspace.seal(self.state, reader, "reader", "attempt")["changedPaths"], [])
         writer = self.prepare("writer")
-        (Path(writer["path"]) / "docs/out.ignored").write_text("scope violation")
-        self.assert_error("WORKSPACE_SCOPE_VIOLATION", workspace.seal, self.state, writer, "task", "outside")
+        (Path(writer["path"]) / "docs/out.ignored").write_text("generated cache outside write scope")
+        (Path(writer["path"]) / "src/out.ignored").write_text("generated cache inside write scope")
+        (Path(writer["path"]) / "src/file.txt").write_text("managed output\n")
+        output = workspace.seal(self.state, writer, "writer", "attempt")
+        self.assertEqual(output["changedPaths"], ["src/file.txt"])
+        self.assertNotIn(b"out.ignored", self.git("ls-tree", "-r", output["commit"]))
         existing_file = self.repo / "docs/source.ignored"
-        existing_file.write_text("preexisting excluded input")
+        existing_file.write_text("preexisting ignored cache")
         existing = self.prepare("existing", kind="existing", access="read", writeScope=[])
-        self.assertIn("docs/source.ignored", existing["snapshot"]["excludedUntracked"])
-        existing_file.write_text("changed excluded input")
-        self.assert_error("WORKSPACE_CHANGED", workspace.seal, self.state, existing, "task", "changed")
+        self.assertNotIn("docs/source.ignored", existing["snapshot"]["excludedUntracked"])
+        existing_file.write_text("updated ignored cache")
+        self.assertTrue(workspace.verify(existing)["unchanged"])
+        self.assertEqual(workspace.seal(self.state, existing, "existing", "attempt")["changedPaths"], [])
+
+    def test_ignored_dependencies_and_unreadable_environments_are_not_read(self):
+        (self.repo / ".gitignore").write_text("node_modules/\n.venv/\n.dsh-skill-build/\n")
+        self.git("add", ".gitignore")
+        self.git("commit", "-qm", "exclude environments")
+        dependency = self.repo / "node_modules/package"
+        dependency.mkdir(parents=True)
+        for number in range(1000):
+            (dependency / f"module-{number}.js").write_text("ignored dependency\n")
+        environment = self.repo / ".venv"
+        environment.mkdir()
+        (environment / "unreadable").write_text("private environment input")
+        environment.chmod(0)
+        self.addCleanup(environment.chmod, 0o700)
+        (self.repo / ".dsh-skill-build").mkdir()
+        (self.repo / ".dsh-skill-build/output.log").write_text("ignored runtime log")
+        (self.repo / ".git/info/exclude").write_text("local-environment/\n")
+        (self.repo / "local-environment").mkdir()
+        (self.repo / "local-environment/secret").write_text("ignored by repository exclude")
+        read = workspace._file
+        def managed_read(root, path):
+            self.assertFalse(path.startswith(("node_modules/", ".venv/", ".dsh-skill-build/", "local-environment/")), path)
+            return read(root, path)
+        with patch.object(workspace, "_file", side_effect=managed_read):
+            manifest = self.prepare(kind="existing", access="read", writeScope=[], base={"kind": "commit", "ref": "HEAD"})
+            self.assertTrue(workspace.verify(manifest)["unchanged"])
+            self.assertEqual(workspace.seal(self.state, manifest, "task", "attempt")["changedPaths"], [])
+        self.assertEqual(manifest["snapshot"]["excludedUntracked"], [])
+        self.assertEqual(manifest["exclusionPolicy"], {"version": 1, "kind": "git-standard",
+                         "managedPaths": "tracked-and-nonignored-untracked", "selectedIgnored": "includeUntracked"})
+
+    def test_explicit_ignored_directory_is_bounded_and_checked(self):
+        (self.repo / ".gitignore").write_text("fixtures/private/\nother-private/\n")
+        self.git("add", ".gitignore")
+        self.git("commit", "-qm", "ignore private fixtures")
+        fixtures = self.repo / "fixtures/private"
+        fixtures.mkdir(parents=True)
+        (fixtures / "config.json").write_text('{"fixture": true}')
+        (fixtures / "binary.dat").write_bytes(b"\x00selected binary\xff")
+        ignored = self.repo / "other-private"
+        ignored.mkdir()
+        (ignored / "secret").write_text("must not be read")
+        ignored.chmod(0)
+        self.addCleanup(ignored.chmod, 0o700)
+        read = workspace._file
+        def selected_read(root, path):
+            self.assertFalse(path.startswith("other-private/"), path)
+            return read(root, path)
+        with patch.object(workspace, "_file", side_effect=selected_read):
+            manifest = self.prepare(kind="existing", access="read", writeScope=[], includeUntracked=["fixtures/private"])
+            self.assertTrue(workspace.verify(manifest)["unchanged"])
+        self.assertEqual(manifest["snapshot"]["includedUntracked"], ["fixtures/private/binary.dat", "fixtures/private/config.json"])
+        (fixtures / "config.json").write_text('{"fixture": "changed"}')
+        self.assert_error("WORKSPACE_CHANGED", workspace.verify, manifest)
+        self.assert_error("WORKSPACE_CHANGED", workspace.seal, self.state, manifest, "task", "attempt")
 
     def test_frozen_input_survives_gc_before_public_input_ref_publication(self):
         (self.repo / "src/file.txt").write_text("frozen uncommitted input\n")
