@@ -22,7 +22,7 @@ from support import PYTHON_ROOT, BoardTestCase
 from buddy.contracts import CONTROL_NAME, CONTRACT_VERSION, WAIT_NAME, BuddyControl, BuddyWait
 from buddy.transport import _read_endpoint
 
-SCHEMA_VERSION = 6
+SCHEMA_VERSION = 7
 
 
 class TestNamedContract(BoardTestCase):

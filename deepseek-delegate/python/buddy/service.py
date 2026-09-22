@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from . import runtime, schemas
+from . import workflow as workflow_module
 from .adapters import capability_report
 from .db import SCHEMA_VERSION, utc_now
 from .errors import BoardError
@@ -69,6 +70,14 @@ CONTROL_OPERATIONS = (
     "selection_request",
     "selection_get",
     "model_catalog_refresh",
+    "workflow_submit",
+    "workflow_get",
+    "workflow_decide",
+    "workflow_continue",
+    "workflow_takeover",
+    "workflow_cancel",
+    "workflow_acknowledge",
+    "workflow_suggest",
 )
 WAIT_OPERATIONS = ("events_wait", "task_wait", "message_wait", "wait_capacity")
 
@@ -120,8 +129,18 @@ class _BaseResource:
     def _guard(self, operation: str, request_json: Any, handler: Callable[[dict], dict]) -> str:
         try:
             params = schemas.decode_request(request_json, f"{operation} request")
-            self._authenticate(params)
-            result = handler(params)
+            scope = self._authenticate(params)
+            if scope.get("kind") == workflow_module.AGENT_KIND:
+                # A request that presents an attempt-scoped credential is confined to
+                # the permitted operations and to its own run, before any handler runs.
+                workflow_module.WorkflowCoordinator.authorize_agent_operation(
+                    self.store.workflow, operation.replace(".", "_"), params, scope
+                )
+            workflow_module.set_request_scope(scope)
+            try:
+                result = handler(params)
+            finally:
+                workflow_module.clear_request_scope()
             return schemas.encode(result)
         except BoardError as error:
             return schemas.encode({"error": error.payload()})
@@ -136,13 +155,38 @@ class _BaseResource:
                 {"error": {"code": "INTERNAL_ERROR", "message": f"{operation} failed inside the service{detail}"}}
             )
 
-    def _authenticate(self, params: dict) -> None:
-        """Every operation carries the private service token, verified here."""
+    def _authenticate(self, params: dict) -> dict:
+        """Every operation carries the private service token, verified here.
+
+        A caller may additionally present an attempt-scoped credential or an
+        authenticated console session. An invalid scoped credential is never quietly
+        replaced by the service token: presenting one is a claim of scoped authority,
+        and a false claim is rejected.
+        """
         import hmac as _hmac
 
         provided = params.pop("token", None)
         if not isinstance(provided, str) or not _hmac.compare_digest(provided, self.token or ""):
             raise BoardError("UNAUTHORIZED", "Invalid service token")
+        credential = params.pop("credential", None)
+        authority = params.pop(schemas.CONSOLE_AUTHORITY_FIELD, None)
+        scope: dict = {"kind": workflow_module.SERVICE_KIND}
+        if authority is not None:
+            session_id = authority if isinstance(authority, str) else (
+                authority.get("sessionId") if isinstance(authority, dict) else None
+            )
+            if not isinstance(session_id, str) or not self.console_session_valid(session_id):
+                raise BoardError(
+                    "UNAUTHORIZED",
+                    "The console authority is not a registered authenticated console session; a caller-controlled "
+                    "field can never substitute for Host control",
+                )
+            scope = {"kind": workflow_module.CONSOLE_KIND, "sessionId": session_id}
+        if credential is not None:
+            if scope["kind"] == workflow_module.CONSOLE_KIND:
+                raise BoardError("UNAUTHORIZED", "An attempt-scoped credential cannot claim console authority")
+            scope = self.store.workflow.resolve_credential(credential)
+        return scope
 
 
 class BoardService(_BaseResource):
@@ -175,6 +219,10 @@ class BoardService(_BaseResource):
         # every existing in-process harness working without a second authority.
         self.evaluation = evaluation or store.evaluation
         self.decisions = store.decisions
+        # Console-user authority: only a session the console itself registered can
+        # present it, so a caller-controlled JSON field can never bypass Host control.
+        self._console_sessions: dict[str, str] = {}
+        self._console_lock = threading.Lock()
         if evaluation is not None:
             # One coordinator, one evaluation store: the store hooks (claim, result,
             # cancel, recovery) and this resource must fence the same gate.
@@ -241,6 +289,16 @@ class BoardService(_BaseResource):
                     "osIsolation": (
                         "not claimed: the console token and session separate browser origins, not a same-user "
                         "process with full shell and credential access"
+                    ),
+                    "agentScope": (
+                        "enforced in the supported API: an attempt-scoped credential may observe its own run and "
+                        "record suggestions only; it cannot submit tasks, create helpers, approve, take over, "
+                        "cancel, write evaluations or address another run. This is capability enforcement, not OS "
+                        "isolation against a same-user process that steals the credential file"
+                    ),
+                    "hostAuthority": (
+                        "a Host decision requires the owner control capability (or an authenticated console "
+                        "session); a hostId label and a shared cache of the newest generation are never authority"
                     ),
                 },
             }
@@ -366,6 +424,80 @@ class BoardService(_BaseResource):
 
         return self._guard("model.catalog.refresh", request_json, handler)
 
+    # -- governed workflow --------------------------------------------------
+    def workflow_submit(self, request_json: str) -> str:
+        return self._guard("workflow.submit", request_json, self.store.workflow.submit)
+
+    def workflow_get(self, request_json: str) -> str:
+        return self._guard("workflow.get", request_json, self.store.workflow.get)
+
+    def workflow_decide(self, request_json: str) -> str:
+        def handler(params: dict) -> dict:
+            return self.store.workflow.decide(
+                params, console_authority=workflow_module.console_authority_from_scope()
+            )
+
+        return self._guard("workflow.decide", request_json, handler)
+
+    def workflow_continue(self, request_json: str) -> str:
+        def handler(params: dict) -> dict:
+            return self.store.workflow.continue_run(
+                params, console_authority=workflow_module.console_authority_from_scope()
+            )
+
+        return self._guard("workflow.continue", request_json, handler)
+
+    def workflow_takeover(self, request_json: str) -> str:
+        def handler(params: dict) -> dict:
+            return self.store.workflow.takeover(
+                params, console_authority=workflow_module.console_authority_from_scope()
+            )
+
+        return self._guard("workflow.takeover", request_json, handler)
+
+    def workflow_cancel(self, request_json: str) -> str:
+        def handler(params: dict) -> dict:
+            return self.store.workflow.cancel(
+                params, console_authority=workflow_module.console_authority_from_scope()
+            )
+
+        return self._guard("workflow.cancel", request_json, handler)
+
+    def workflow_acknowledge(self, request_json: str) -> str:
+        def handler(params: dict) -> dict:
+            return self.store.workflow.acknowledge(
+                params, console_authority=workflow_module.console_authority_from_scope()
+            )
+
+        return self._guard("workflow.acknowledge", request_json, handler)
+
+    def workflow_suggest(self, request_json: str) -> str:
+        def handler(params: dict) -> dict:
+            return self.store.workflow.suggest(params, scope=workflow_module.current_scope())
+
+        return self._guard("workflow.suggest", request_json, handler)
+
+    # -- console-user authority --------------------------------------------
+    def register_console_authority(self, session_id: str) -> None:
+        if not isinstance(session_id, str) or not session_id:
+            raise BoardError("INVALID_ARGUMENT", "A console session id is required")
+        with self._console_lock:
+            self._console_sessions[session_id] = utc_now()
+
+    def revoke_console_authority(self, session_id: str | None = None) -> None:
+        with self._console_lock:
+            if session_id is None:
+                self._console_sessions.clear()
+            else:
+                self._console_sessions.pop(session_id, None)
+
+    def console_session_valid(self, session_id: str) -> bool:
+        import hmac as _hmac
+
+        with self._console_lock:
+            sessions = tuple(self._console_sessions)
+        return any(_hmac.compare_digest(session_id, candidate) for candidate in sessions)
+
     # -- tasks --------------------------------------------------------------
     def task_submit(self, request_json: str) -> str:
         return self._guard("task.submit", request_json, self.store.task_submit)
@@ -427,7 +559,14 @@ class BoardService(_BaseResource):
         return self._guard("worker.register", request_json, self.store.worker_register)
 
     def worker_claim(self, request_json: str) -> str:
-        return self._guard("worker.claim", request_json, self.store.worker_claim)
+        def handler(params: dict) -> dict:
+            # A continuation's effective workspace is prepared here, outside the claim
+            # transaction, so the canonical turn input already carries the resolved
+            # manifest and its hash is exactly what the adapter writes to disk.
+            self.store.workflow.prepare_continuation_workspace(params)
+            return self.store.worker_claim(params)
+
+        return self._guard("worker.claim", request_json, handler)
 
     def worker_reconcile(self, request_json: str) -> str:
         return self._guard("worker.reconcile", request_json, self.store.worker_reconcile)

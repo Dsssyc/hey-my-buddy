@@ -156,6 +156,31 @@ class BuddyControl:
     def model_catalog_refresh(self, request_json: str) -> str:
         ...
 
+    # -- governed workflow --------------------------------------------------
+    def workflow_submit(self, request_json: str) -> str:
+        ...
+
+    def workflow_get(self, request_json: str) -> str:
+        ...
+
+    def workflow_decide(self, request_json: str) -> str:
+        ...
+
+    def workflow_continue(self, request_json: str) -> str:
+        ...
+
+    def workflow_takeover(self, request_json: str) -> str:
+        ...
+
+    def workflow_cancel(self, request_json: str) -> str:
+        ...
+
+    def workflow_acknowledge(self, request_json: str) -> str:
+        ...
+
+    def workflow_suggest(self, request_json: str) -> str:
+        ...
+
 
 @cc.crm(namespace="hey.my.buddy", version=CONTRACT_VERSION)
 class BuddyWait:

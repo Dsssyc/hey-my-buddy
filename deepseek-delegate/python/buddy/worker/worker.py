@@ -439,6 +439,11 @@ class Worker:
             environment={**os.environ, "BUDDY_STATE_DIR": str(self.state_dir)},
             lease_seconds=self.lease_seconds,
             decision_input=claim.get("decisionInput"),
+            # The service-owned turn identity and bounded context; the adapter stages
+            # them for the runner. The scoped credential is written to a private file
+            # and exported by path, never into the model-visible turn input.
+            turn=claim.get("turn") if isinstance(claim.get("turn"), dict) else None,
+            agent_credential=claim.get("agentCredential") or None,
         )
         implementation = get_adapter(spec["adapter"])
         usable, reason = implementation.available()

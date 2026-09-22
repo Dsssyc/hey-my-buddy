@@ -475,3 +475,72 @@ class AwaitTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class GovernedBoundaryTests(unittest.TestCase):
+    """A structured yield is a Host decision boundary, never a fake completion."""
+
+    def _boundary_service(self):
+        clock = VirtualClock()
+        service = FakeService(clock, complete_after_waits=99)
+        turn = {
+            "turnId": "turn-1",
+            "resumeMode": "initial",
+            "disposition": "assistance",
+            "summary": "need a Host decision",
+            "request": {"requestId": "req-1", "kind": "assistance", "summary": "review the approach"},
+        }
+        service.run = {
+            **service.run,
+            "status": "queued",
+            "revision": 7,
+            "resultAvailable": True,
+            "workflowState": "awaiting-host",
+            "awaitingHost": True,
+            "workflow": {
+                "state": "awaiting-host",
+                "awaitingHost": True,
+                "revision": 7,
+                "activeRequestId": "req-1",
+                "requestKind": "assistance",
+                "requestSummary": "review the approach",
+            },
+        }
+        service.result_response = lambda run: {
+            **run,
+            "result": {"status": "ok", "turn": turn},
+            "resultMeta": {"status": "ok", "shutdownConfirmed": True},
+        }
+        return service, clock
+
+    def test_await_returns_the_structured_boundary_immediately(self):
+        service, clock = self._boundary_service()
+        envelope = await_run({"runId": "run-fixture", "waitSeconds": 60}, service=service, clock=clock)
+        self.assertEqual(envelope["outcome"], "waiting-host")
+        self.assertFalse(envelope["ok"])
+        self.assertFalse(envelope["goalComplete"])
+        self.assertEqual(envelope["turn"]["turnId"], "turn-1")
+        self.assertEqual(envelope["request"]["requestId"], "req-1")
+        self.assertEqual(envelope["workflowState"], "awaiting-host")
+        self.assertIn("workflow-decide", " ".join(envelope["nextCommands"]))
+        self.assertIn("workflow-continue", " ".join(envelope["nextCommands"]))
+        self.assertEqual(service.calls.count("wait"), 0, "a Host boundary must not block the wait")
+
+    def test_waiting_follows_authorized_helpers_to_the_next_completion(self):
+        clock = VirtualClock()
+        service = FakeService(clock, complete_after_waits=1)
+        service.run = {
+            **service.run,
+            "status": "queued",
+            "revision": 3,
+            "resultAvailable": True,
+            "workflowState": "waiting-helpers",
+            "awaitingHost": False,
+        }
+        envelope = await_run({"runId": "run-fixture", "waitSeconds": 60}, service=service, clock=clock)
+        # The stale turn result of the previous attempt never becomes a fake success;
+        # the wait follows the same durable task until it really completes.
+        self.assertEqual(envelope["outcome"], "completed")
+        self.assertTrue(envelope["ok"])
+        self.assertTrue(envelope["resultDelivered"])
+        self.assertGreaterEqual(service.calls.count("wait"), 1)

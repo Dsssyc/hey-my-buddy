@@ -5,12 +5,20 @@ keep their names, JSON envelopes and meanings; the board/worker methods below ar
 additive and are documented in ``references/plugin-service.md``.
 """
 import argparse
+import hashlib
 import json
 import os
+import re
+import secrets
+import stat
 import subprocess
 import sys
+import tempfile
+import time
 from pathlib import Path
 
+from . import transport
+from .errors import BoardError
 from .transport import METHOD_MAP, call_service, get_state_dir
 
 METHODS = [
@@ -62,6 +70,14 @@ METHODS = [
     "selection-request",
     "selection-get",
     "model-catalog-refresh",
+    "workflow-submit",
+    "workflow-get",
+    "workflow-decide",
+    "workflow-continue",
+    "workflow-takeover",
+    "workflow-cancel",
+    "workflow-acknowledge",
+    "workflow-suggest",
     "migrate",
     "legacy-import",
     "restart",
@@ -113,7 +129,34 @@ examples:
   buddy acknowledge '{"runId":"<runId>","note":"inspected the diff and ran the checks","verdict":"accepted"}'
       inspect the real artifacts first; acknowledgement records that a human/agent
       reviewed the result. It never changes the execution status and never turns a
-      failure into a success.
+      failure into a success. A governed task additionally needs the Host control
+      triple: pass "controlFile":"<path>" (from workflow-submit) so it is injected
+      locally and the token is never printed.
+
+  buddy workflow-submit '{"requestId":"fix-125","hostId":"host-1","task":"...","cwd":"/abs/path"}'
+      Admit a governed task and print its compact view. The first response and a
+      same-host replay also carry the private Host control capability; it is saved to a
+      0600 file under the state directory and only its controlFile path is printed.
+
+  buddy workflow-get '{"runId":"<runId>"}'   buddy workflow-suggest '{"runId":"<runId>","body":"..."}'
+      Read the compact governed view (tokens are never exposed), or record one bounded
+      suggestion on the caller's own run.
+
+  buddy workflow-decide '{"runId":"<runId>","requestId":"req-1","commandId":"cmd-1","expectedRevision":1,"decision":"approve","controlFile":"/path/from/workflow-submit"}'
+  buddy workflow-continue '{"runId":"<runId>","commandId":"cmd-2","expectedRevision":2,"input":"...","helperPolicy":"keep","controlFile":"..."}'
+  buddy workflow-cancel '{"runId":"<runId>","commandId":"cmd-3","reason":"...","controlFile":"..."}'
+      Host decisions, continuations and governed cancellation. controlFile injects the
+      hostId/ownerGeneration/controlToken triple locally, so the token never appears in
+      the command line or the output; without it the latest saved generation for the
+      runId is used.
+
+  buddy workflow-takeover '{"runId":"<runId>","commandId":"cmd-4","expectedOwnerGeneration":1,"newHostId":"host-2","controlFile":"..."}'
+      Rotate the owner capability; a delayed capability from the old generation is
+      fenced. The new capability is saved and only its controlFile path is printed.
+
+  buddy workflow-acknowledge '{"runId":"<runId>","artifactId":"...","note":"reviewed the diff and ran the checks","verdict":"accepted","controlFile":"..."}'
+      Review the selected final artifact as the current owner. Acceptance stays
+      separate from execution and never turns a failure into a success.
 
   buddy health   buddy capabilities   buddy runtime   buddy dashboard   buddy restart   buddy stop
       service control. `buddy stop` asks the service to stop: queued work is
@@ -241,6 +284,245 @@ def _migrate_command(params: dict) -> dict:
     )
 
 
+#: Bound on a control file this CLI is willing to read.
+MAX_CONTROL_FILE_BYTES = 64 * 1024
+#: Governed mutations whose Host control triple is required by the service.
+CONTROL_METHODS = frozenset(
+    {
+        "workflow-decide",
+        "workflow-continue",
+        "workflow-takeover",
+        "workflow-cancel",
+        "workflow-acknowledge",
+    }
+)
+_CONTROL_TRIPLE = ("hostId", "ownerGeneration", "controlToken")
+_CONTROL_FILE_FIELDS = frozenset({*_CONTROL_TRIPLE, "runId", "savedAt"})
+_RUN_ID_PATTERN = re.compile(r"^[A-Za-z0-9._:-]{1,128}$")
+
+
+def _agent_credential() -> str | None:
+    """The attempt-scoped credential from the environment, never the administrator token."""
+    token = os.environ.get("BUDDY_AGENT_CREDENTIAL")
+    if token is not None:
+        if not token.strip():
+            raise BoardError(
+                "UNAUTHORIZED",
+                "BUDDY_AGENT_CREDENTIAL is empty; an attempt-scoped credential is never replaced by the "
+                "administrator token",
+            )
+        return token.strip()
+    path_value = os.environ.get("BUDDY_AGENT_CREDENTIAL_FILE")
+    if path_value is None:
+        return None
+    if not path_value.strip():
+        raise BoardError("UNAUTHORIZED", "BUDDY_AGENT_CREDENTIAL_FILE is empty")
+    try:
+        value = json.loads(Path(path_value).expanduser().read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, ValueError) as exc:
+        raise BoardError(
+            "UNAUTHORIZED", f"The attempt-scoped credential file {path_value!r} is missing or unreadable"
+        ) from exc
+    scoped = value.get("token") if isinstance(value, dict) else None
+    if not isinstance(scoped, str) or not scoped.strip():
+        raise BoardError("UNAUTHORIZED", f"The attempt-scoped credential file {path_value!r} has no token")
+    return scoped.strip()
+
+
+def _control_path(run_id: str, generation: int) -> Path:
+    """The private control path for one run and owner generation, with its 0700 directory."""
+    if not isinstance(run_id, str) or not _RUN_ID_PATTERN.match(run_id):
+        raise BoardError("INVALID_ARGUMENT", "runId must be a plain identifier to locate its control file")
+    if isinstance(generation, bool) or not isinstance(generation, int) or generation < 1:
+        raise BoardError("INVALID_ARGUMENT", "ownerGeneration must be a positive integer")
+    directory = transport.get_state_dir() / "controls"
+    directory.mkdir(mode=0o700, parents=True, exist_ok=True)
+    directory.chmod(0o700)
+    return directory / f"{run_id}.g{generation}.json"
+
+
+def _save_control(run_id: str, control: dict) -> str:
+    """Atomically save one Host control capability to its own 0600 file."""
+    control = control if isinstance(control, dict) else {}
+    host_id = control.get("hostId")
+    generation = control.get("ownerGeneration")
+    token = control.get("controlToken")
+    if not isinstance(host_id, str) or not host_id.strip():
+        raise BoardError("INVALID_ARGUMENT", "control.hostId must be a nonempty string")
+    if isinstance(generation, bool) or not isinstance(generation, int) or generation < 1:
+        raise BoardError("INVALID_ARGUMENT", "control.ownerGeneration must be a positive integer")
+    if not isinstance(token, str) or not token.strip():
+        raise BoardError("INVALID_ARGUMENT", "control.controlToken must be a nonempty string")
+    path = _control_path(run_id, generation)
+    payload = json.dumps(
+        {
+            "hostId": host_id.strip(),
+            "ownerGeneration": generation,
+            "controlToken": token.strip(),
+            "runId": run_id,
+            "savedAt": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        },
+        ensure_ascii=False,
+    ).encode("utf-8")
+    fd, temporary = tempfile.mkstemp(dir=path.parent, prefix=f".{path.name}.", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "wb") as handle:
+            handle.write(payload)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary, path)
+        os.chmod(path, 0o600)
+    except OSError:
+        Path(temporary).unlink(missing_ok=True)
+        raise
+    try:  # The directory entry itself is synced best-effort; the file is already durable.
+        directory_fd = os.open(path.parent, os.O_RDONLY)
+        try:
+            os.fsync(directory_fd)
+        finally:
+            os.close(directory_fd)
+    except OSError:
+        pass
+    return str(path)
+
+
+def _read_control(path_value: str) -> dict:
+    """Read one 0600 control file owned by this user and return its Host control triple."""
+    if not isinstance(path_value, str) or not path_value.strip():
+        raise BoardError("INVALID_ARGUMENT", "controlFile must be a nonempty path string")
+    path = Path(path_value).expanduser()
+    try:
+        info = os.lstat(path)
+    except FileNotFoundError as exc:
+        raise BoardError("INVALID_ARGUMENT", "controlFile does not exist") from exc
+    except OSError as exc:
+        raise BoardError("INSECURE_CONTROL_FILE", "The control file could not be inspected") from exc
+    if not stat.S_ISREG(info.st_mode) or stat.S_ISLNK(info.st_mode):
+        raise BoardError("INSECURE_CONTROL_FILE", "The control file must be a regular file, not a symlink")
+    if info.st_uid != os.geteuid():
+        raise BoardError("INSECURE_CONTROL_FILE", "The control file must be owned by the current user")
+    if stat.S_IMODE(info.st_mode) != 0o600:
+        raise BoardError("INSECURE_CONTROL_FILE", "The control file must have mode 0600")
+    try:
+        fd = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+    except OSError as exc:
+        raise BoardError("INSECURE_CONTROL_FILE", "The control file could not be opened safely") from exc
+    try:
+        opened = os.fstat(fd)
+        if (opened.st_dev, opened.st_ino) != (info.st_dev, info.st_ino) or opened.st_uid != os.geteuid():
+            raise BoardError("INSECURE_CONTROL_FILE", "The control file changed while it was being opened")
+        raw = b""
+        while len(raw) <= MAX_CONTROL_FILE_BYTES:
+            chunk = os.read(fd, 65536)
+            if not chunk:
+                break
+            raw += chunk
+    except OSError as exc:
+        raise BoardError("INSECURE_CONTROL_FILE", "The control file could not be read") from exc
+    finally:
+        os.close(fd)
+    if len(raw) > MAX_CONTROL_FILE_BYTES:
+        raise BoardError("INVALID_ARGUMENT", "The control file is too large")
+    try:
+        value = json.loads(raw.decode("utf-8"))
+    except (UnicodeDecodeError, ValueError) as exc:
+        raise BoardError("INVALID_ARGUMENT", "The control file is not valid JSON") from exc
+    if not isinstance(value, dict):
+        raise BoardError("INVALID_ARGUMENT", "The control file must contain a JSON object")
+    unknown = sorted(set(value) - _CONTROL_FILE_FIELDS)
+    if unknown:
+        raise BoardError("INVALID_ARGUMENT", f"Unknown control file field: {unknown[0]}")
+    host_id = value.get("hostId")
+    generation = value.get("ownerGeneration")
+    token = value.get("controlToken")
+    if not isinstance(host_id, str) or not host_id.strip():
+        raise BoardError("INVALID_ARGUMENT", "controlFile hostId must be a nonempty string")
+    if isinstance(generation, bool) or not isinstance(generation, int) or generation < 1:
+        raise BoardError("INVALID_ARGUMENT", "controlFile ownerGeneration must be a positive integer")
+    if not isinstance(token, str) or not token.strip():
+        raise BoardError("INVALID_ARGUMENT", "controlFile controlToken must be a nonempty string")
+    return {"hostId": host_id.strip(), "ownerGeneration": generation, "controlToken": token.strip()}
+
+
+def _apply_control(params: object, method: str) -> dict:
+    """Inject the Host control triple from an explicit controlFile or explicit fields.
+
+    There is deliberately no implicit "latest generation" lookup: adopting another
+    Host's newest saved capability from a shared cache is never authority. A caller
+    either presents the full triple, or names the exact controlFile it was given.
+    """
+    if not isinstance(params, dict):
+        raise BoardError("INVALID_ARGUMENT", "params must be a JSON object")
+    if _agent_credential() is not None:
+        if "controlFile" in params:
+            raise BoardError("FORBIDDEN", "an attempt-scoped credential cannot use a Host control file")
+        return params
+    prepared = dict(params)
+    path_value = prepared.pop("controlFile", None)
+    if path_value is None:
+        return prepared
+    control = _read_control(path_value)
+    for field in _CONTROL_TRIPLE:
+        if prepared.get(field) is None:
+            prepared[field] = control[field]
+    return prepared
+
+
+def _submission_token(request_id: object, params: dict) -> str:
+    """The private submission capability, created before the first submit RPC.
+
+    It is persisted under the state directory keyed by requestId, so a retried
+    submission recovers the original owner generation while a client that only
+    knows the run's public fields can never mint a control capability.
+    """
+    if not isinstance(request_id, str) or not request_id:
+        raise BoardError("INVALID_ARGUMENT", "workflow-submit requires requestId before a submission token")
+    directory = transport.get_state_dir() / "submissions"
+    directory.mkdir(mode=0o700, parents=True, exist_ok=True)
+    directory.chmod(0o700)
+    name = hashlib.sha256(request_id.encode("utf-8")).hexdigest()[:32]
+    path = directory / f"{name}.json"
+    if path.is_file():
+        try:
+            saved = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, UnicodeDecodeError, ValueError) as exc:
+            raise BoardError("INVALID_ARGUMENT", "The saved submission token is unreadable") from exc
+        token = saved.get("submissionToken") if isinstance(saved, dict) else None
+        if isinstance(token, str) and token:
+            return token
+    token = secrets.token_hex(32)
+    payload = json.dumps({"requestId": request_id, "submissionToken": token}, sort_keys=True).encode("utf-8")
+    fd, temporary = tempfile.mkstemp(dir=directory, prefix=f".{name}.", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "wb") as handle:
+            handle.write(payload)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary, path)
+        os.chmod(path, 0o600)
+    except OSError:
+        Path(temporary).unlink(missing_ok=True)
+        raise
+    return token
+
+
+def _scrub_and_save(result: dict) -> None:
+    """Save a returned Host control capability privately and replace its token with the file path."""
+    control = result.get("control")
+    if not isinstance(control, dict) or not isinstance(control.get("controlToken"), str) or not control["controlToken"]:
+        return
+    run_id = result.get("runId")
+    if not isinstance(run_id, str) or not run_id:
+        raise BoardError("INVALID_ARGUMENT", "A control result must carry its runId before its token can be saved")
+    path = _save_control(run_id, control)
+    result["control"] = {
+        "hostId": control.get("hostId"),
+        "ownerGeneration": control.get("ownerGeneration"),
+        "controlFile": path,
+    }
+    result["controlFile"] = path
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         description="Buddy service: transactional Python blackboard, independent workers, dsh and command adapters",
@@ -263,7 +545,19 @@ def main(argv: list[str] | None = None) -> int:
                 print(json.dumps(_abandoned(abandoned, recovery_commands(abandoned.request_id, abandoned.run_id)), ensure_ascii=False))
                 return 1
         else:
-            result = call_service(args.method, params)
+            credential = _agent_credential()
+            if credential is not None:
+                if not isinstance(params, dict):
+                    raise BoardError("INVALID_ARGUMENT", "params must be a JSON object")
+                params["credential"] = credential
+            prepared = _apply_control(params, args.method)
+            if args.method == "workflow-submit" and not prepared.get("submissionToken"):
+                # An agent-scoped caller must never mint Host authority.
+                if credential is None:
+                    prepared["submissionToken"] = _submission_token(prepared.get("requestId"), prepared)
+            result = call_service(args.method, prepared)
+            if isinstance(result, dict):
+                _scrub_and_save(result)
         print(json.dumps(result, ensure_ascii=False, indent=2))
         return 0
     except Exception as error:  # noqa: BLE001 - the CLI converts every failure into one envelope

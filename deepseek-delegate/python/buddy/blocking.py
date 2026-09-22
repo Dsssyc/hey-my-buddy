@@ -337,6 +337,94 @@ def _malformed_result_response(full: Any, run_id: str) -> dict | None:
     return None
 
 
+def _host_boundary(
+    run: dict,
+    *,
+    request_id: str | None,
+    run_id: str,
+    waited_seconds: float,
+    wait_seconds: int,
+    runner_deadline_seconds: int | None,
+    service: Callable[..., dict],
+    state_dir,
+    reconnects: int,
+) -> dict:
+    """Return one governed Host decision boundary as a structured checkpoint.
+
+    A normal structured yield is neither goal completion nor an execution failure:
+    the original task is unfinished and a Host decision (or continuation) is
+    required. The wait ends here instead of blocking forever on a success-only
+    event, and it reads the actual persisted turn result rather than inventing one.
+    """
+    full: Any = None
+    error: dict | None = None
+    try:
+        full = service("result", {"runId": run_id}, state_dir)
+    except ServiceError as failure:
+        error = {"code": getattr(failure, "code", "SERVICE_ERROR"), "message": str(failure)}
+    result = full.get("result") if isinstance(full, dict) else None
+    workflow = run.get("workflow") if isinstance(run.get("workflow"), dict) else {}
+    turn = result.get("turn") if isinstance(result, dict) else None
+    request_view = None
+    if workflow.get("activeRequestId"):
+        request_view = {
+            "requestId": workflow.get("activeRequestId"),
+            "kind": workflow.get("requestKind"),
+            "summary": workflow.get("requestSummary"),
+            "expectedRevision": workflow.get("revision"),
+        }
+    revision = workflow.get("revision")
+    commands = []
+    if request_view is not None and request_view.get("kind") in (
+        "assistance",
+        "attention",
+        "helper-attention",
+    ):
+        commands.append(
+            "buddy workflow-decide "
+            f"'{{\"runId\":\"{run_id}\",\"requestId\":\"{request_view['requestId']}\",\"commandId\":\"decide-1\","
+            f"\"expectedRevision\":{revision},\"decision\":\"approve\",\"helpers\":[]}}'"
+        )
+        commands.append(
+            "buddy workflow-decide "
+            f"'{{\"runId\":\"{run_id}\",\"requestId\":\"{request_view['requestId']}\",\"commandId\":\"decline-1\","
+            f"\"expectedRevision\":{revision},\"decision\":\"decline\",\"reason\":\"...\"}}'"
+        )
+    commands.append(
+        "buddy workflow-continue "
+        f"'{{\"runId\":\"{run_id}\",\"commandId\":\"continue-1\",\"expectedRevision\":{revision},"
+        "\"input\":\"...\",\"helperPolicy\":\"keep\"}'"
+    )
+    envelope = _envelope(
+        run,
+        request_id=request_id,
+        outcome="waiting-host",
+        waited_seconds=waited_seconds,
+        wait_seconds=wait_seconds,
+        runner_deadline_seconds=runner_deadline_seconds,
+        result=result,
+        error=error,
+        reconnects=reconnects,
+    )
+    envelope.update(
+        {
+            "ok": False,
+            "goalComplete": False,
+            "workflowState": run.get("workflowState"),
+            "workflow": workflow,
+            "turn": turn,
+            "request": request_view,
+            "nextCommands": commands,
+            "note": (
+                "The current turn concluded and returned Host control; the original task is unfinished. This is "
+                "not a completion and not an execution failure: decide the open request or continue the run, then "
+                "wait on the same runId again."
+            ),
+        }
+    )
+    return envelope
+
+
 def _wait_until_terminal(
     run: dict,
     *,
@@ -356,7 +444,23 @@ def _wait_until_terminal(
     while True:
         if stop is not None and stop.is_set():
             raise WaitAbandoned(request_id, run_id)
-        if run.get("resultAvailable"):
+        workflow_state = run.get("workflowState")
+        if workflow_state == "awaiting-host":
+            return _host_boundary(
+                run,
+                request_id=request_id,
+                run_id=run_id,
+                waited_seconds=clock() - started,
+                wait_seconds=wait_seconds,
+                runner_deadline_seconds=runner_deadline_seconds,
+                service=service,
+                state_dir=state_dir,
+                reconnects=reconnects,
+            )
+        if workflow_state is None:
+            if run.get("resultAvailable"):
+                break
+        elif workflow_state in ("delivered", "accepted", "cancelled", "failed"):
             break
         if run.get("status") in TERMINAL_STATUSES:
             break
