@@ -12,12 +12,19 @@ export function excerpt(text: string, limit = 120): string {
 export function needsReview(task: Task): boolean {
   return (
     (!task.workflow || task.workflow.state === "delivered") &&
+    (!task.workflow || task.workflowShutdown?.descendantsConfirmed === true) &&
     !task.acceptedAt &&
     task.spec?.adapter !== "decision" &&
     ["completed", "failed", "cancelled"].includes(task.status) &&
     task.resultAvailable === true &&
     task.shutdownConfirmed === true
   );
+}
+
+export function taskStatus(task: Task): string {
+  if (["cancelling", "reconciliation-needed"].includes(task.status)) return task.status;
+  if (task.workflow?.state === "cancelled" && task.workflowShutdown?.unconfirmedCount) return "cancelling";
+  return task.workflow?.state || task.status;
 }
 
 export function canRetry(task: Task): boolean {

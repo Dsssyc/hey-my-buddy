@@ -246,11 +246,18 @@ def _envelope(
         "runId": run.get("runId"),
         "requestId": run.get("requestId", request_id),
         "status": run.get("status"),
+        **({"workflowState": run["workflowState"]} if run.get("workflowState") is not None else {}),
         "outcome": outcome,
         "ok": success,
         "resultAvailable": bool(run.get("resultAvailable")),
         "resultDelivered": result_delivered,
-        "shutdownConfirmed": run.get("shutdownConfirmed") is True,
+        # For a governed goal, cancellation/completion never implies that a
+        # still-running descendant is stopped just because the parent is idle.
+        "shutdownConfirmed": (
+            run["workflowShutdown"].get("selfConfirmed") is True
+            and run["workflowShutdown"].get("descendantsConfirmed") is True
+        ) if isinstance(run.get("workflowShutdown"), dict) else run.get("shutdownConfirmed") is True,
+        **({"shutdown": run["workflowShutdown"]} if isinstance(run.get("workflowShutdown"), dict) else {}),
         "acceptedAt": run.get("acceptedAt"),
         "revision": run.get("revision"),
         "createdAt": run.get("createdAt"),
@@ -528,8 +535,12 @@ def _wait_until_terminal(
             if run.get("resultAvailable"):
                 break
         elif workflow_state in ("delivered", "accepted", "cancelled", "failed"):
-            break
-        if run.get("status") in TERMINAL_STATUSES:
+            shutdown = run.get("workflowShutdown")
+            if not isinstance(shutdown, dict) or (
+                shutdown.get("selfConfirmed") is True and shutdown.get("descendantsConfirmed") is True
+            ):
+                break
+        if workflow_state is None and run.get("status") in TERMINAL_STATUSES:
             break
         remaining = deadline - clock()
         if remaining <= 0:
@@ -550,7 +561,26 @@ def _wait_until_terminal(
             )
         timeout_ms = max(1, int(min(WAIT_SLICE_MS, remaining * 1000)))
         try:
-            run = service("wait", {"runId": run_id, "afterRevision": run.get("revision"), "timeoutMs": timeout_ms}, state_dir)
+            shutdown = run.get("workflowShutdown")
+            if isinstance(shutdown, dict) and shutdown.get("unconfirmedRunIds"):
+                # Parent revision need not change when an owned descendant stops.
+                # A terminal task with unconfirmed shutdown can make task_wait
+                # return immediately. Use the durable event cursor instead, with
+                # a recheck after reading it so a concurrent stop is not missed.
+                target = shutdown["unconfirmedRunIds"][0]
+                events = service("events", {"runId": target, "limit": 1}, state_dir)
+                head = events.get("head")
+                if isinstance(head, bool) or not isinstance(head, int):
+                    raise ServiceError("INVALID_RESPONSE", "The stopped-evidence wait requires an event cursor")
+                run = service("status", {"runId": run_id}, state_dir)
+                current = run.get("workflowShutdown")
+                if isinstance(current, dict) and (
+                    current.get("selfConfirmed") is not True or current.get("descendantsConfirmed") is not True
+                ):
+                    service("watch", {"runId": target, "after": head, "timeoutMs": timeout_ms}, state_dir)
+                    run = service("status", {"runId": run_id}, state_dir)
+            else:
+                run = service("wait", {"runId": run_id, "afterRevision": run.get("revision"), "timeoutMs": timeout_ms}, state_dir)
         except ServiceError as failure:
             if start_params is None or reconnects >= MAX_RECONNECTS:
                 return _envelope(
@@ -650,10 +680,13 @@ def _wait_until_terminal(
         )
     governed_view = _governed_result_view(full, run_id) if isinstance(full, dict) else None
     if governed_view is not None:
+        # A late execution completion does not undo the Host's goal cancellation.
+        goal_state = full.get("workflowState", run.get("workflowState"))
+        outcome = goal_state if goal_state in ("cancelled", "failed") else full.get("status", run.get("status", "unknown"))
         envelope = _envelope(
             full,
             request_id=request_id,
-            outcome=full.get("status", run.get("status", "unknown")),
+            outcome=outcome,
             waited_seconds=clock() - started,
             wait_seconds=wait_seconds,
             runner_deadline_seconds=runner_deadline_seconds,

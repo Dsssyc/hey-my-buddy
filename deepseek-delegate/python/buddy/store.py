@@ -498,6 +498,7 @@ class BoardStore:
         view["inquiries"] = {row["state"]: row["count"] for row in messages}
         workflow = self.workflow.task_extension(connection, task)
         if workflow is not None:
+            view["workflowShutdown"] = self.workflow.shutdown_summary(connection, task["task_id"])
             view["workflow"] = workflow
             view["workflowState"] = workflow["state"]
             view["awaitingHost"] = workflow["awaitingHost"]
@@ -1856,7 +1857,13 @@ class BoardStore:
                 # outcome; the race is recorded rather than re-labelled. A governed
                 # yield with a validated structured outcome requeues the same logical
                 # task instead of pretending the original goal completed.
-                task_state = "queued" if self.workflow.yield_disposition(result) is not None else "completed"
+                governed_yield = (
+                    self.workflow._run_optional(connection, task["task_id"]) is not None
+                    and self.workflow.yield_disposition(result) is not None
+                )
+                # A normal yielded turn is not a completed goal that can beat a
+                # cancellation. Preserve its raw receipt, but do not requeue it.
+                task_state = ("cancelled" if cancel_requested else "queued") if governed_yield else "completed"
             elif status == "ok" and not shutdown_confirmed:
                 task_state = "reconciliation-needed"
             else:
@@ -2018,7 +2025,9 @@ class BoardStore:
                 (now, now, reason, attempt["attempt_id"]),
             )
             task = connection.execute("SELECT * FROM tasks WHERE task_id=?", (attempt["task_id"],)).fetchone()
-            self._transition_task(connection, task, "failed")
+            governed = self.workflow._run_optional(connection, task["task_id"])
+            cancelled_goal = governed is not None and (governed["state"] == "cancelled" or task["state"] == "cancelling")
+            self._transition_task(connection, task, "cancelled" if cancelled_goal else "failed")
             connection.execute(
                 "UPDATE tasks SET active_attempt_id=NULL, queue_reason=NULL, updated_at=? WHERE task_id=?",
                 (now, attempt["task_id"]),
@@ -2040,6 +2049,12 @@ class BoardStore:
             # An attempt released before its adapter ran means the decision never
             # reached a model: it fails honestly and releases its reader or writer.
             self.decisions.released(connection, task=task_row, reason=reason, now=now)
+            released_attempt = connection.execute(
+                "SELECT * FROM attempts WHERE attempt_id=?", (attempt["attempt_id"],)
+            ).fetchone()
+            self.workflow.attempt_released(
+                connection, task=task_row, attempt=released_attempt, now=now, reason=reason
+            )
             head = self._head_of(connection)
         self._notify(head)
         return {"task": self._decorate(connection, task_row) if False else self._task_view(task_row), "released": True}

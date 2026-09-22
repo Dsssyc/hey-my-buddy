@@ -78,6 +78,8 @@ class FakeService:
             if self.complete_after_waits is not None and self.calls.count("wait") >= self.complete_after_waits:
                 self.run = {**self.run, "status": "completed", "resultAvailable": True,
                             "shutdownConfirmed": True, "revision": self.run["revision"] + 1}
+                if "workflowState" in self.run:
+                    self.run["workflowState"] = "delivered"
             elif self.terminal_without_result:
                 status = self.terminal_without_result if isinstance(self.terminal_without_result, str) else "reconciliation-needed"
                 self.run = {**self.run, "status": status, "revision": self.run["revision"] + 1}

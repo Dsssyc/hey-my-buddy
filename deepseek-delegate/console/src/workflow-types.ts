@@ -1,4 +1,4 @@
-import type { Task } from "./types";
+import type { Shutdown, Task } from "./types";
 
 export type WorkflowRequest = {
   requestId: string;
@@ -21,6 +21,7 @@ export type Workflow = {
   awaitingHost: boolean;
   waitReason: string;
   continuationCount: number;
+  shutdown?: Shutdown;
   workspace: null | {
     path: string;
     kind: string;
@@ -36,6 +37,7 @@ export type Workflow = {
     sessionId?: string;
     previousSessionId?: string;
     summary?: string;
+    summaryTruncated?: boolean;
     remaining?: string[];
   };
   activeRequest: WorkflowRequest | null;

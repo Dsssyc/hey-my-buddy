@@ -180,7 +180,10 @@ class WorkflowCoordinator:
             # The default view is an index: the full input/outcome/provenance is in audit.
             return view
         if outcome is not None:
-            view["summary"] = outcome.get("summary")
+            summary = outcome.get("summary") or ""
+            view["summary"] = summary if include_audit else summary[:2000]
+            if not include_audit:
+                view["summaryTruncated"] = len(summary) > 2000
             view["remaining"] = outcome.get("remaining", [])
             if include_audit:
                 view["request"] = outcome.get("request")
@@ -367,7 +370,7 @@ class WorkflowCoordinator:
             "continuationCount": run_row["continuation_count"],
             "workspace": self._workspace_view(run_row),
             "executionWorkspace": json.loads(run_row["execution_workspace_json"]),
-            "currentTurn": self._turn_view(turns[0], compact=True) if turns else None,
+            "currentTurn": self._turn_view(turns[0]) if turns else None,
             "turns": [self._turn_view(row, compact=True) for row in turns],
             "activeRequest": active_request,
             "requests": [self._request_view(row, compact=True) for row in requests],
@@ -385,6 +388,7 @@ class WorkflowCoordinator:
             "createdAt": run_row["created_at"],
             "updatedAt": run_row["updated_at"],
             "auditAvailable": True,
+            "shutdown": self.shutdown_summary(connection, run_row["run_id"]),
             "task": self._task_summary(connection, task_row),
         }
         return view
@@ -438,6 +442,7 @@ class WorkflowCoordinator:
             # The governed marker the UI keys on, kept alongside the full record.
             summary["workflowState"] = decorated["workflowState"]
             summary["awaitingHost"] = decorated["awaitingHost"]
+            summary["workflowShutdown"] = decorated["workflowShutdown"]
         return summary
 
     @staticmethod

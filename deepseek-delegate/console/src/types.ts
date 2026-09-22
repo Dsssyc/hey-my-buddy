@@ -74,7 +74,15 @@ export type Task = {
     revision: number;
     requestSummary?: string;
   };
+  workflowShutdown?: Shutdown;
   [key: string]: unknown;
+};
+export type Shutdown = {
+  selfConfirmed: boolean;
+  descendantsConfirmed: boolean;
+  unconfirmedRunIds: string[];
+  unconfirmedCount: number;
+  truncated: boolean;
 };
 export type Gate = {
   phase: "open" | "draining" | "writing";

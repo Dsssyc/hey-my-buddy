@@ -3,7 +3,7 @@ import type { ConsoleApi } from "./api";
 import { errorText } from "./api";
 import type { Snapshot, Task } from "./types";
 import { Badge, display, Empty, formatDate, Icon, Status } from "./ui";
-import { canRetry, excerpt, needsReview, resultText } from "./task-state";
+import { canRetry, excerpt, needsReview, resultText, taskStatus } from "./task-state";
 import { WorkflowPanel } from "./WorkflowPanel";
 
 export function Tasks({
@@ -27,7 +27,7 @@ export function Tasks({
   const tasks = snapshot.tasks.runs;
   const task = tasks.find((t) => t.runId === selected) || (remoteTask?.runId === selected ? remoteTask : undefined);
   useEffect(() => {
-    if (!selected) return;
+    if (!selected || task?.workflow) return;
     let active = true;
     setDetail(null);
     setDetailError("");
@@ -45,7 +45,7 @@ export function Tasks({
     return () => {
       active = false;
     };
-  }, [api, selected, task?.revision]);
+  }, [api, selected, task?.revision, !!task?.workflow]);
   const visible = tasks.filter(
     (t) =>
       (filter === "all" ||
@@ -116,7 +116,7 @@ export function Tasks({
                   aria-pressed={selected === t.runId}
                 >
                   <div className="row-between">
-                    <Status status={t.workflow?.state || t.status} />
+                    <Status status={taskStatus(t)} />
                     <time className="muted small" dateTime={t.createdAt}>
                       {formatDate(t.createdAt)}
                     </time>
@@ -151,7 +151,7 @@ export function Tasks({
             <div className="panel-heading">
               <span className="eyebrow">TASK DETAIL</span>
               <h2>任务详情</h2>
-              <Status status={task.workflow?.state || task.status} />
+              <Status status={taskStatus(task)} />
             </div>
             <p className="task-description">{excerpt(task.task, 240)}</p>
             {task.task.length > 240 && <details className="detail-section"><summary>查看原始任务全文</summary><p className="task-description">{task.task}</p></details>}

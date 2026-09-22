@@ -19,6 +19,7 @@ function fixture() {
   const workflow: Workflow = {
     governed: true, runId: task.runId, hostId: "host-a", ownerGeneration: 2, revision: 7,
     state: "awaiting-host", awaitingHost: true, waitReason: "assistance", continuationCount: 0,
+    shutdown: { selfConfirmed: true, descendantsConfirmed: true, unconfirmedRunIds: [], unconfirmedCount: 0, truncated: false },
     workspace: { path: "/repo", kind: "existing", access: "write", inputCommit: "commit-a", manifestSha256: "manifest-a" },
     currentTurn: { turnId: "turn-a", turnIndex: 1, attemptId: "attempt-a", resumeMode: "initial", summary: "需要补充测试" },
     activeRequest: { requestId: "request-a", kind: "assistance", state: "open", summary: "补充并发测试", attempted: "已跑基础测试", neededWork: ["并发测试"], expectedArtifacts: ["tests/concurrent.py"], acceptance: "测试覆盖竞争" },
@@ -99,5 +100,19 @@ describe("governed workflow console", () => {
     await user.type(await screen.findByLabelText("实际检查依据"), "检查 final diff 并运行并发测试通过");
     await user.click(screen.getByRole("button", { name: "接受最终交付" }));
     expect(f.mutation).toHaveBeenCalledWith("workflow_acknowledge", expect.objectContaining({ artifactId: "final", verdict: "accepted" }));
+  });
+
+  it("keeps final acceptance disabled while a descendant has no stop proof", async () => {
+    const f = fixture();
+    Object.assign(f.workflow, { state: "delivered", activeRequest: null, finalAttemptId: "attempt-final" });
+    f.workflow.shutdown = { selfConfirmed: true, descendantsConfirmed: false, unconfirmedRunIds: ["child"], unconfirmedCount: 1, truncated: false };
+    f.workflow.artifacts = [{ artifactId: "final", attemptId: "attempt-final", sourceTaskId: "parent", kind: "output", manifestSha256: "hash" }];
+    const user = userEvent.setup();
+    render(<WorkflowPanel {...f.props} />);
+    await screen.findByLabelText("实际检查依据");
+    expect(screen.getByRole("button", { name: "接受最终交付" }).closest("fieldset")).toHaveProperty("disabled", true);
+    await user.click(screen.getByRole("button", { name: "接受最终交付" }));
+    expect(f.mutation).not.toHaveBeenCalled();
+    expect(screen.getByText(/目标范围内共 1 项执行尚未核实/)).toBeTruthy();
   });
 });
