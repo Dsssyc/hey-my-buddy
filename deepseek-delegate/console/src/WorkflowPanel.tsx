@@ -59,6 +59,7 @@ export function WorkflowPanel({ task, snapshot, api, refresh, selectTask }: {
   return <div className="workflow-panel">
     {state.error && <p className="error-message" role="alert">{state.error}</p>}
     {state.notice && <p className="success-message" role="status">{state.notice}</p>}
+    {state.controlFile && <p className="small wrap">交给新 Host 的控制文件路径：<code>{state.controlFile}</code>。路径可用于 CLI 的 controlFile；不要复制文件中的凭据。</p>}
     {state.uncertain && <button className="button primary" disabled={state.busy} onClick={() => void command("")}>重试同一操作</button>}
     {!value ? <p role="status">正在读取协作记录…</p> : <>
       <section className="detail-section">

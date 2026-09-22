@@ -29,6 +29,7 @@ Use the [documentation index](docs/README.md) to find each page. Keep detailed c
 | Human entry points (install, first request, boundaries) | `README.md`, `README.zh-CN.md` (keep language parity) |
 | Document index and routing | `docs/README.md` |
 | Install/use paths, task examples, foreground/background flows | `deepseek-delegate/references/usage.md` |
+| Governed workflow, Host capabilities, assistance, continuation, workspace allocation and artifact integration | `deepseek-delegate/references/workflow.md` |
 | Implemented architecture, data model, identity, wait separation, recovery, limits | `deepseek-delegate/references/architecture.md` |
 | Complete CLI surface, defaults/bounds, envelopes, errors, inquiry contract | `deepseek-delegate/references/cli.md` |
 | Runtime lifecycle/upgrade, bridge, state and env vars, legacy import, MCP cleanup | `deepseek-delegate/references/operations.md` |

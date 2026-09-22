@@ -57,6 +57,8 @@ fi
 
 Codex 只启动一次任务，并在同一回合里等待它运行。你可以询问任务正在做什么；任务返回时会得到结果以及日志和产物的位置。随后 Codex 会检查真实文件，执行相关验证，并报告核实到的内容。
 
+仓库任务会明确使用现有 checkout 或独立 worktree，并记录固定的输入与产物版本。Buddy 可以结束当前回合请求协助，由 Codex 批准边界明确的辅助工作，再把产物交给同一目标的接续回合。Host 仍可亲自实现其他部分。示例与控制权规则见[生产力工作流](deepseek-delegate/references/workflow.md)。
+
 如果等待先结束，任务仍按自己的执行期限继续运行，Codex 可以凭保存的运行 ID 接回。需要跨回合运行时，[后台流程](deepseek-delegate/references/usage.md#background-work-that-outlives-the-turn)使用 App 周期性跟进；目前不支持回合结束后的即时自动接回。
 
 ## 需要知道

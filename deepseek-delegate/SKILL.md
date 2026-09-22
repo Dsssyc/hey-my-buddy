@@ -29,22 +29,25 @@ The Host may implement part of the work itself and delegate another part for com
 
 ## Default workflow
 
-1. Write the packet before launching: goal and why; inputs and outputs; the working directory and check commands; allowed files/areas and non-goals; acceptance criteria; references, known facts and pitfalls. Give the context the work needs. Task text over 32,000 bytes is delivered to dsh as a file reference, and that file must stay in place until the run finishes.
-2. Start once with a stable `requestId` and keep the returned `runId`.
-3. Await that same run in the current turn. Do not start a second run and do not work on the same files meanwhile.
-4. When it returns, inspect the real diff, files, hashes and logs and run the relevant checks yourself. Exit 0 only means the call returned; it is not acceptance.
-5. Once the result is persisted and shutdown is confirmed, record the review with `acknowledge` and the evidence you actually gathered.
+1. Write a bounded packet: objective, inputs and outputs, permitted files, commands, acceptance conditions, references and known pitfalls. Explain why this Buddy configuration fits. Keep instructions stable and put changing task facts after reusable guidance. Do not add irrelevant context to chase cache hits.
+2. Choose `executionWorkspace` explicitly. Concurrent writers use independent `worktree` snapshots; a sole sequential writer can use `existing`. Name an integrator, declare `writeScope`, and list any untracked inputs. `workspace` only controls DSH session grouping.
+3. Submit once with a stable `requestId` and a Host identity. Save the returned `runId` and private `controlFile`. Await that same logical task while doing independent Host work. Never edit its held checkout.
+4. If `await` returns `waiting-host`, read `workflow-get`. The previous agent turn ended normally, but the goal is unfinished. Inspect the request and pinned artifacts; approve explicit helpers with workspace/model choices, decline with a reason, or supply continuation input. A helper can suggest further work; only the Host authorizes new Buddy tasks.
+5. After execution, inspect the actual output commit/diff and run the relevant checks. Record `workflow-acknowledge` against the final artifact. Helper success, parent completion and final acceptance are separate facts.
 
 ```sh
-"$BUDDY" start '{"requestId":"<stable-id>","task":"...","cwd":"/abs/path","timeoutSeconds":28800}'
+"$BUDDY" workflow-submit '{"requestId":"<stable-id>","hostId":"<this-host>","task":"<packet>","cwd":"/abs/repo","provider":"deepseek-official","model":"deepseek-flash","effort":"max","timeoutSeconds":28800,"executionWorkspace":{"kind":"worktree","cwd":"/abs/repo","access":"write","base":{"kind":"working-tree"},"includeUntracked":[],"writeScope":["src/state.ts","tests/state.test.ts"],"integrator":"<this-host>"}}'
 "$BUDDY" await '{"runId":"<runId>","waitSeconds":28800}'
-# After independent verification:
-"$BUDDY" acknowledge '{"runId":"<runId>","note":"<actual checks and findings>","verdict":"accepted"}'
+"$BUDDY" workflow-get '{"runId":"<runId>"}'
+# After independent verification of the final artifact:
+"$BUDDY" workflow-acknowledge '{"runId":"<runId>","commandId":"<stable-review-id>","controlFile":"<returned-path>","artifactId":"<final-artifact-id>","note":"<actual checks and findings>","verdict":"accepted"}'
 ```
 
-`requestId` is the idempotency key: an identical request recovers the same task and never launches dsh twice, while changed input for the same id is a `CONFLICT`. A task is admitted as `queued` and starts when a worker claims it; `queueReason` explains any wait (`awaiting-worker`, `capacity`, `cwd-overlap`, `exclusive-resource`). Capacity and resource conflicts queue instead of failing, so there is no BUSY error to retry around.
+Use [workflow.md](references/workflow.md) for complete approval, continuation, takeover and workspace examples. The CLI persists private submission credentials before sending and uses explicit `controlFile` for later control. Never read or paste its token into task text, another Buddy or a public result; never adopt another Host's latest credentials. A stale generation/revision means re-read and reconsider, not retry with invented authority.
 
-`buddy run` is the optional one-call alternative: it starts (or recovers) and stays connected, with `waitSeconds` defaulting to `timeoutSeconds + 60 s` shutdown grace capped at 86400 s.
+An identical submission recovers the same logical task. Changed input under the same ID is a conflict. Reuse the same `commandId` and exact payload after an uncertain mutation response. A new continuation gets an independent attempt in a reconstructed new DSH session; it does not claim native session resume.
+
+Legacy `start` / `run` and `acknowledge` remain for ordinary one-shot/non-Git tasks. They do not provide governed assistance or snapshot ownership. `run` starts or recovers once and waits; its default wait window is execution timeout plus 60 seconds, capped at 86400 seconds. Do not use legacy mutations to bypass a governed task's control.
 
 ## Lifetimes and cancellation
 

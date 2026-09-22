@@ -16,6 +16,7 @@ Both READMEs stay concise and avoid internal terminology; details belong in the 
 | Document | Role |
 | --- | --- |
 | [deepseek-delegate/references/usage.md](../deepseek-delegate/references/usage.md) | The practical path: install, workspace grouping, task packet, start → await → verify, progress questions, wait timeouts, cancellation, background work, optional adapters |
+| [deepseek-delegate/references/workflow.md](../deepseek-delegate/references/workflow.md) | Governed repository tasks: owner control, explicit workspace snapshots, assistance decisions, continuation, integration and final acceptance |
 | [deepseek-delegate/references/cli.md](../deepseek-delegate/references/cli.md) | Complete `buddy` command reference: parameters, defaults, bounds, error codes, result/run envelopes, events and inquiry contract |
 | [deepseek-delegate/references/operations.md](../deepseek-delegate/references/operations.md) | Runtime lifecycle and upgrade, workspace-bridge install and recovery, private state and environment variables, cancellation/recovery, legacy import, old-MCP cleanup |
 | [deepseek-delegate/references/evaluation.md](../deepseek-delegate/references/evaluation.md) | Shared profiles/cards/evidence, preferences, table-level edit admission, private writable console and frontend build |

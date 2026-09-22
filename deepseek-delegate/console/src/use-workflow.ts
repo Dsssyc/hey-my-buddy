@@ -8,6 +8,7 @@ export function useWorkflow(api: ConsoleApi, task: Task, snapshot: Snapshot, ref
   const [value, setValue] = useState<Workflow | null>(null);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
+  const [controlFile, setControlFile] = useState("");
   const [busy, setBusy] = useState(false);
   const [uncertain, setUncertain] = useState(false);
   const [reload, setReload] = useState(0);
@@ -39,7 +40,8 @@ export function useWorkflow(api: ConsoleApi, task: Task, snapshot: Snapshot, ref
     setError("");
     setNotice("");
     try {
-      await api.command(request.operation, request.params, csrf);
+      const result = await api.command<{ controlFile?: string }>(request.operation, request.params, csrf);
+      if (typeof result?.controlFile === "string") setControlFile(result.controlFile);
       pending.current = null;
       setUncertain(false);
       setNotice("操作已记录，正在读取最新状态。");
@@ -56,5 +58,5 @@ export function useWorkflow(api: ConsoleApi, task: Task, snapshot: Snapshot, ref
       }
     } finally { active.current = false; setBusy(false); }
   }
-  return { value, error, notice, busy, uncertain, command, reload: () => setReload(n => n + 1) };
+  return { value, error, notice, controlFile, busy, uncertain, command, reload: () => setReload(n => n + 1) };
 }

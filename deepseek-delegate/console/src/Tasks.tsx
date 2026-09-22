@@ -20,11 +20,12 @@ export function Tasks({
   const [selected, setSelected] = useState<string | null>(null);
   const [detail, setDetail] = useState<unknown>(null),
     [detailError, setDetailError] = useState("");
+  const [remoteTask, setRemoteTask] = useState<Task | null>(null);
   const [note, setNote] = useState(""),
     [busy, setBusy] = useState(false),
     [notice, setNotice] = useState("");
   const tasks = snapshot.tasks.runs;
-  const task = tasks.find((t) => t.runId === selected);
+  const task = tasks.find((t) => t.runId === selected) || (remoteTask?.runId === selected ? remoteTask : undefined);
   useEffect(() => {
     if (!selected) return;
     let active = true;
@@ -33,7 +34,10 @@ export function Tasks({
     api
       .task(selected)
       .then((value) => {
-        if (active) setDetail(value);
+        if (active) {
+          setDetail(value);
+          if (value && typeof value === "object" && "runId" in value && value.runId === selected && "task" in value && typeof value.task === "string") setRemoteTask(value as Task);
+        }
       })
       .catch((error) => {
         if (active) setDetailError(errorText(error));
@@ -269,7 +273,7 @@ export function Tasks({
           <div className="detail-placeholder">
             <Icon name="tasks" size={28} />
             <h2>每项工作都有据可查</h2>
-            <p>选择左侧任务，查看它的执行配置、交付结果和验收状态。</p>
+            <p role={detailError ? "alert" : "status"}>{selected ? detailError || "正在读取所选任务…" : "选择左侧任务，查看它的执行配置、交付结果和验收状态。"}</p>
             <Badge>关闭页面不影响后台任务</Badge>
           </div>
         )}

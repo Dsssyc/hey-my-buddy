@@ -57,6 +57,8 @@ In a new Codex task, ask:
 
 Codex starts the task once and keeps it running while it waits in the same turn. You can ask what the run is doing; when it returns you get the outcome plus where the logs and artifacts are. Codex inspects the actual files, runs the relevant checks and reports what it verified.
 
+For repository work, the skill explicitly allocates an existing checkout or an isolated worktree and records fixed input/output versions. A Buddy can end its turn to request help; Codex approves scoped assistance, receives the artifacts and continues the same goal. The Host can still implement other parts itself. See the [productivity workflow](deepseek-delegate/references/workflow.md) for examples and control ownership.
+
 If the wait ends first, the task continues under its execution deadline. Codex can reconnect using the saved run ID. For work that should outlive the current turn, the [background workflow](deepseek-delegate/references/usage.md#background-work-that-outlives-the-turn) uses periodic App follow-up; immediate continuation after the turn ends is unavailable.
 
 ## Good to know
