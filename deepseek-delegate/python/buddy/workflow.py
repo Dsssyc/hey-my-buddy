@@ -208,6 +208,9 @@ class WorkflowCoordinator:
                 "state": row["state"],
                 "createdAt": row["created_at"],
                 "decidedAt": row["decided_at"],
+                "childTaskId": row["child_task_id"],
+                "proxy": payload.get("proxy"),
+                "origin": payload.get("origin"),
             }
         view = {
             "requestId": row["request_id"],
@@ -225,6 +228,8 @@ class WorkflowCoordinator:
             "expectedRevision": row["expected_revision"],
             "createdAt": row["created_at"],
             "decidedAt": row["decided_at"],
+            "proxy": payload.get("proxy"),
+            "origin": payload.get("origin"),
         }
         if include_audit:
             view["decision"] = json.loads(row["decision_json"]) if row["decision_json"] else None
@@ -325,6 +330,11 @@ class WorkflowCoordinator:
                 "SELECT COUNT(*) AS count FROM workflow_requests WHERE run_id=?", (run_row["run_id"],)
             ).fetchone()["count"]
         )
+        pending = connection.execute(
+            "SELECT * FROM workflow_requests WHERE run_id=? AND state='open' ORDER BY created_at, request_id LIMIT ?",
+            (run_row["run_id"], MAX_REQUEST_VIEW),
+        ).fetchall()
+        open_count = connection.execute("SELECT COUNT(*) FROM workflow_requests WHERE run_id=? AND state='open'", (run_row["run_id"],)).fetchone()[0]
         child_total = int(
             connection.execute(
                 "SELECT COUNT(*) AS count FROM workflow_children WHERE parent_run_id=?", (run_row["run_id"],)
@@ -340,17 +350,13 @@ class WorkflowCoordinator:
             "requests": max(0, request_total - MAX_REQUEST_VIEW),
             "children": max(0, child_total - MAX_CHILD_VIEW),
             "artifacts": max(0, artifact_total - MAX_ARTIFACT_VIEW),
+            "pendingRequests": max(0, open_count - MAX_REQUEST_VIEW),
         }
         requests = requests[:MAX_REQUEST_VIEW]
         children = children[:MAX_CHILD_VIEW]
         artifacts = artifacts[:MAX_ARTIFACT_VIEW]
-        active_request = None
-        if run_row["active_request_id"]:
-            row = connection.execute(
-                "SELECT * FROM workflow_requests WHERE request_id=?", (run_row["active_request_id"],)
-            ).fetchone()
-            if row is not None:
-                active_request = self._request_view(row)
+        active = self._open_boundary(connection, run_row)
+        active_request = self._request_view(active) if active is not None else None
         goal = json.loads(run_row["goal_json"])
         state = run_row["state"]
         view = {
@@ -374,11 +380,13 @@ class WorkflowCoordinator:
             "turns": [self._turn_view(row, compact=True) for row in turns],
             "activeRequest": active_request,
             "requests": [self._request_view(row, compact=True) for row in requests],
+            "pendingRequests": [self._request_view(row, compact=True) for row in pending[:MAX_REQUEST_VIEW]],
             "children": [self._child_view(row) for row in children],
             "artifacts": [self._artifact_view(row) for row in artifacts],
             "counts": {
                 "turns": turn_total,
                 "requests": request_total,
+                "openRequests": open_count,
                 "children": child_total,
                 "artifacts": artifact_total,
             },
@@ -1100,7 +1108,8 @@ class WorkflowCoordinator:
                     requestId=request_id,
                     requestState=request_row["state"],
                 )
-            if run_row["active_request_id"] != request_id:
+            active = self._open_boundary(connection, run_row)
+            if active is None or active["request_id"] != request_id:
                 # A request that is no longer the active Host boundary is closed.
                 raise BoardError(
                     "CONFLICT",
@@ -1247,6 +1256,8 @@ class WorkflowCoordinator:
                     revision=run_row["revision"] + 1,
                     payload={"requestId": request_id, "actor": actor, "autoContinue": auto_continue, "reason": reason},
                 )
+            self._close_proxy_ancestors(connection, self._request_row(connection, run_id, request_id), now)
+            self._sync_boundary(connection, run_id, now)
             run_row = self._run_row(connection, run_id)
             view = self.compact(connection, run_row)
             response = {
@@ -1285,7 +1296,8 @@ class WorkflowCoordinator:
                 return {**receipt, "duplicate": True}
             self._expect_revision(run_row, expected)
             request_row = self._request_row(connection, run_id, request_id)
-            if request_row["state"] != "open" or run_row["active_request_id"] != request_id:
+            active = self._open_boundary(connection, run_row)
+            if request_row["state"] != "open" or active is None or active["request_id"] != request_id:
                 raise BoardError(
                     "CONFLICT",
                     "This assistance request is not the open Host boundary of the run",
@@ -1293,111 +1305,174 @@ class WorkflowCoordinator:
                     requestState=request_row["state"],
                     activeRequestId=run_row["active_request_id"],
                 )
+            if request_row["child_task_id"]:
+                self._attention_chain(connection, run_row, request_row)
         return None
 
-    def _resolve_helper_attention(
-        self,
-        connection,
-        parent_run,
-        request_row,
-        prepared: list[dict],
-        *,
-        decision: str,
-        reason: str,
-        actor: str,
-        command_id: str,
-        now: str,
-    ) -> None:
-        """Resume the yielded helper named by a helper-attention request.
+    def _open_boundary(self, connection, run_row):
+        """Keep the selected open request stable, then choose a deterministic next."""
+        if run_row["state"] in ("cancelled", "accepted"):
+            return None
+        return connection.execute(
+            "SELECT * FROM workflow_requests WHERE run_id=? AND state='open'"
+            " ORDER BY CASE WHEN request_id=? THEN 0 ELSE 1 END, created_at, request_id LIMIT 1",
+            (run_row["run_id"], run_row["active_request_id"]),
+        ).fetchone()
 
-        The decision text becomes the child's bounded continuation input, the child's
-        own open request is closed in the same transaction, and any additional helper
-        requested by an approval is admitted as a normal child. The parent run stays
-        at ``waiting-helpers`` so its one-use automatic continuation still fires when
-        every child is terminal.
-        """
-        child_task_id = request_row["child_task_id"]
-        child_task = connection.execute("SELECT * FROM tasks WHERE task_id=?", (child_task_id,)).fetchone()
-        child_run = self._run_optional(connection, child_task_id)
-        if child_task is None or child_run is None:
-            raise BoardError("NOT_FOUND", "The helper named by this request no longer exists", childTaskId=child_task_id)
-        input_text = reason or (
-            "The Host approved the requested assistance; continue with this guidance"
-            if decision == "approve"
-            else "The Host declined the requested assistance; continue with what you have"
+    def _sync_boundary(self, connection, run_id, now, *, default_state=None):
+        run = self._run_row(connection, run_id)
+        if run["state"] in ("cancelled", "accepted") or self._terminal_ancestor(connection, run_id) is not None:
+            return None
+        boundary = self._open_boundary(connection, run)
+        if boundary is None and default_state is None:
+            return None
+        state = "awaiting-host" if boundary is not None else default_state
+        request_id = boundary["request_id"] if boundary is not None else None
+        connection.execute(
+            "UPDATE workflow_runs SET state=?, active_request_id=?, updated_at=?, revision=revision+1 WHERE run_id=?",
+            (state, request_id, now, run_id),
         )
         connection.execute(
-            "UPDATE workflow_requests SET state=?, decision_json=?, decision_command_id=?, decided_at=?,"
-            " updated_at=? WHERE run_id=? AND state='open'",
-            (
-                "approved" if decision == "approve" else "declined",
-                canonical_json({"decision": decision, "reason": reason, "actor": actor, "parentRunId": parent_run["run_id"]}),
-                command_id,
-                now,
-                now,
-                child_task_id,
-            ),
-        )
-        continuation_id = str(uuid.uuid4())
-        connection.execute(
-            "INSERT INTO workflow_continuations(continuation_id, run_id, command_id, authorized_by, request_id,"
-            " expected_revision, input_text, input_bytes, reason, helper_policy, helper_outcomes_json, state,"
-            " created_at) VALUES(?,?,?,'auto',?,?,?,?,?, 'keep','[]','recorded',?)",
-            (
-                continuation_id,
-                child_task_id,
-                command_id,
-                request_row["request_id"],
-                child_run["revision"],
-                input_text,
-                len(input_text.encode()),
-                reason or None,
-                now,
-            ),
-        )
-        if decision == "approve" and prepared:
-            # The Host granted the helper's request by authorizing dependency helpers.
-            # They run under the requesting child's own run; the child waits for them
-            # and resumes through its one-use continuation, while the root parent keeps
-            # counting the child as active.
-            extra = self._create_helpers(connection, child_run, child_task, request_row, prepared, command_id, now)
-            connection.execute(
-                "UPDATE workflow_runs SET state='waiting-helpers', active_request_id=NULL, updated_at=?,"
-                " revision=revision+1 WHERE run_id=? AND revision=?",
-                (now, child_task_id, child_run["revision"]),
-            )
-        else:
-            extra = []
-            self._requeue(
-                connection,
-                child_task,
-                child_run,
-                reason=input_text,
-                actor=actor,
-                now=now,
-                continuation_id=continuation_id,
-            )
-        # The child is active again for the parent's fan-in until it truly settles.
-        connection.execute(
-            "UPDATE workflow_children SET state='active', updated_at=?, revision=revision+1 WHERE child_task_id=?",
-            (now, child_task_id),
-        )
-        connection.execute(
-            "UPDATE workflow_runs SET state='waiting-helpers', active_request_id=NULL, updated_at=?,"
-            " revision=revision+1 WHERE run_id=?",
-            (now, parent_run["run_id"]),
+            "UPDATE tasks SET queue_reason=?, updated_at=? WHERE task_id=?",
+            ("helper-attention" if boundary is not None and boundary["child_task_id"] else "awaiting-host" if boundary is not None else "awaiting-helpers", now, run_id),
         )
         self.board._append_event(
-            connection,
-            "workflow.helper_resumed",
-            task_id=child_task_id,
-            revision=child_run["revision"] + 1,
-            payload={
-                "parentRunId": parent_run["run_id"],
-                "requestId": request_row["request_id"],
-                "decision": decision,
-                "dependencyHelpers": [child["taskId"] for child in extra],
-            },
+            connection, "workflow.boundary_updated", task_id=run_id, revision=run["revision"] + 1,
+            payload={"activeRequestId": request_id, "state": state},
+        )
+        return boundary
+
+    @staticmethod
+    def _proxy_id(parent_id, source_request_id):
+        return "req-proxy-" + sha256_text(canonical_json([parent_id, source_request_id]))
+
+    def _propagate_boundary(self, connection, source, now):
+        """Persist a correlated proxy at every owned ancestor in this transaction."""
+        seen = set()
+        while source["run_id"] not in seen:
+            seen.add(source["run_id"])
+            child = connection.execute("SELECT * FROM workflow_children WHERE child_task_id=?", (source["run_id"],)).fetchone()
+            if child is None:
+                return
+            parent = self._run_row(connection, child["parent_run_id"])
+            if parent["state"] in ("cancelled", "accepted") or self._terminal_ancestor(connection, parent["run_id"]) is not None:
+                return
+            payload = json.loads(source["payload_json"])
+            payload["origin"] = payload.get("origin") or {"runId": source["run_id"], "requestId": source["request_id"]}
+            payload["proxy"] = {"runId": source["run_id"], "requestId": source["request_id"]}
+            request_id = self._proxy_id(parent["run_id"], source["request_id"])
+            connection.execute(
+                "INSERT OR IGNORE INTO workflow_requests(request_id,run_id,turn_id,attempt_id,child_task_id,kind,summary,"
+                "payload_json,state,expected_revision,created_at,updated_at) VALUES(?,?,?,?,?,'helper-attention',?,?,'open',?,?,?)",
+                (request_id, parent["run_id"], source["turn_id"], source["attempt_id"], source["run_id"], source["summary"],
+                 canonical_json(payload), parent["revision"], now, now),
+            )
+            source = self._request_row(connection, parent["run_id"], request_id)
+            if source["state"] != "open":
+                return  # A superseded proxy is not reopened by a delayed callback.
+            connection.execute("UPDATE workflow_children SET state='attention', updated_at=?, revision=revision+1 WHERE child_task_id=?", (now, child["child_task_id"]))
+            self._sync_boundary(connection, parent["run_id"], now)
+
+    def _attention_chain(self, connection, run, request):
+        chain, seen = [], set()
+        while request["request_id"] not in seen:
+            seen.add(request["request_id"])
+            self._assert_lineage_open(connection, run["run_id"])
+            if request["state"] != "open" or run["state"] in ("cancelled", "accepted"):
+                raise BoardError("CONFLICT", "The proxied Host boundary is no longer open")
+            chain.append((run, request))
+            child_id = request["child_task_id"]
+            if not child_id:
+                return chain
+            link = connection.execute("SELECT 1 FROM workflow_children WHERE child_task_id=? AND parent_run_id=?", (child_id, run["run_id"])).fetchone()
+            if link is None:
+                raise BoardError("CONFLICT", "The proxy does not name an owned child")
+            run = self._run_row(connection, child_id)
+            proxy = json.loads(request["payload_json"]).get("proxy")
+            if proxy is not None and proxy.get("runId") != child_id:
+                raise BoardError("CONFLICT", "The proxy source does not match its owned child")
+            source_id = proxy.get("requestId") if proxy is not None else run["active_request_id"]
+            request = self._request_row(connection, child_id, source_id)
+        raise BoardError("CONFLICT", "The Host boundary proxy chain contains a cycle")
+
+    def _close_proxy_ancestors(self, connection, source, now):
+        """A local Host/console answer also closes its exact ancestor proxies."""
+        seen = set()
+        while source["state"] != "open" and source["run_id"] not in seen:
+            seen.add(source["run_id"])
+            link = connection.execute("SELECT parent_run_id FROM workflow_children WHERE child_task_id=?", (source["run_id"],)).fetchone()
+            if link is None:
+                return
+            proxy_id = self._proxy_id(link["parent_run_id"], source["request_id"])
+            proxy = connection.execute("SELECT * FROM workflow_requests WHERE request_id=? AND state='open'", (proxy_id,)).fetchone()
+            if proxy is None:
+                return
+            connection.execute(
+                "UPDATE workflow_requests SET state=?, decision_json=?, decision_command_id=?, decided_at=?, updated_at=? WHERE request_id=?",
+                (source["state"], source["decision_json"], source["decision_command_id"], source["decided_at"], now, proxy_id),
+            )
+            self._sync_boundary(connection, proxy["run_id"], now, default_state="waiting-helpers")
+            source = self._request_row(connection, proxy["run_id"], proxy_id)
+
+    def _unfinished_helpers(self, connection, run_id):
+        for child in self._owned_children(connection, run_id):
+            run = self._run_row(connection, child["child_task_id"])
+            task = connection.execute("SELECT * FROM tasks WHERE task_id=?", (child["child_task_id"],)).fetchone()
+            if child["state"] in ("active", "attention") or run["state"] in ("executing", "awaiting-host", "waiting-helpers") or not self._stop_proven(connection, task):
+                return True
+        return False
+
+    def _resolve_helper_attention(
+        self, connection, parent_run, request_row, prepared: list[dict], *,
+        decision: str, reason: str, actor: str, command_id: str, now: str,
+    ) -> None:
+        """Answer one exact proxy chain and resume its requesting leaf only."""
+        chain = self._attention_chain(connection, parent_run, request_row)
+        child_run, source_request = chain[-1]
+        child_task_id = child_run["run_id"]
+        child_task = connection.execute("SELECT * FROM tasks WHERE task_id=?", (child_task_id,)).fetchone()
+        input_text = reason or (
+            "The Host approved the requested assistance; continue with this guidance"
+            if decision == "approve" else "The Host declined the requested assistance; continue with what you have"
+        )
+        decision_record = canonical_json({"decision": decision, "reason": reason, "actor": actor,
+                                          "parentRunId": parent_run["run_id"], "targetRunId": child_task_id})
+        for _, boundary in chain:
+            connection.execute(
+                "UPDATE workflow_requests SET state=?, decision_json=?, decision_command_id=?, decided_at=?, updated_at=?"
+                " WHERE request_id=? AND state='open'",
+                ("approved" if decision == "approve" else "declined", decision_record, command_id, now, now, boundary["request_id"]),
+            )
+        continuation_id = str(uuid.uuid4())
+        connection.execute(
+            "INSERT INTO workflow_continuations(continuation_id,run_id,command_id,authorized_by,request_id,"
+            "expected_revision,input_text,input_bytes,reason,helper_policy,helper_outcomes_json,state,created_at)"
+            " VALUES(?,?,?,'auto',?,?,?,?,?,'keep','[]','recorded',?)",
+            (continuation_id, child_task_id, command_id, source_request["request_id"], child_run["revision"],
+             input_text, len(input_text.encode()), reason or None, now),
+        )
+        extra = self._create_helpers(connection, child_run, child_task, source_request, prepared, command_id, now) if decision == "approve" and prepared else []
+        pending = self._open_boundary(connection, child_run)
+        if extra or pending is not None or self._unfinished_helpers(connection, child_task_id):
+            self._sync_boundary(connection, child_task_id, now, default_state="waiting-helpers")
+        else:
+            self._requeue(connection, child_task, child_run, reason=input_text, actor=actor, now=now,
+                          continuation_id=continuation_id)
+        # Existing automatic authority on intermediate parents is untouched. Each
+        # still waits for its own dependency before it can consume that authority.
+        for owner, _ in reversed(chain):
+            if owner["run_id"] != child_task_id:
+                self._sync_boundary(connection, owner["run_id"], now, default_state="waiting-helpers")
+            current = self._run_row(connection, owner["run_id"])
+            connection.execute(
+                "UPDATE workflow_children SET state=?, updated_at=?, revision=revision+1 WHERE child_task_id=?",
+                ("attention" if self._open_boundary(connection, current) is not None else "active", now, owner["run_id"]),
+            )
+        self.board._append_event(
+            connection, "workflow.helper_resumed", task_id=child_task_id, revision=child_run["revision"] + 1,
+            payload={"parentRunId": parent_run["run_id"], "requestId": request_row["request_id"],
+                     "sourceRequestId": source_request["request_id"], "decision": decision,
+                     "dependencyHelpers": [child["taskId"] for child in extra]},
         )
 
     def _create_helpers(
@@ -3181,53 +3256,27 @@ class WorkflowCoordinator:
         if parent["state"] in ("accepted", "cancelled") or self._terminal_ancestor(connection, parent["run_id"]) is not None:
             return
         if state == "attention":
-            # Helper attention is surfaced immediately, even while siblings run.
-            turn_row = connection.execute(
-                "SELECT * FROM workflow_turns WHERE attempt_id=?", (attempt["attempt_id"],)
+            source = connection.execute(
+                "SELECT * FROM workflow_requests WHERE run_id=? AND attempt_id=? AND state='open'"
+                " AND kind IN ('assistance','attention') ORDER BY created_at, request_id LIMIT 1",
+                (task["task_id"], attempt["attempt_id"]),
             ).fetchone()
-            outcome = json.loads(turn_row["outcome_json"]) if turn_row is not None and turn_row["outcome_json"] else {}
-            request = outcome.get("request") or {}
-            request_id = f"req-{uuid.uuid4()}"
-            payload_view = {
-                "summary": request.get("summary") or outcome.get("summary") or "a helper needs Host attention",
-                "attempted": request.get("attempted"),
-                "neededWork": _string_list(request.get("neededWork")),
-                "expectedArtifacts": _string_list(request.get("expectedArtifacts")),
-                "acceptance": request.get("acceptance"),
-                "suggestedProfileId": request.get("suggestedProfileId"),
-            }
-            connection.execute(
-                "INSERT INTO workflow_requests(request_id, run_id, turn_id, attempt_id, child_task_id, kind,"
-                " summary, payload_json, state, expected_revision, created_at, updated_at)"
-                " VALUES(?,?,?,?,?,'helper-attention',?,?,'open',?,?,?)",
-                (
-                    request_id,
-                    parent["run_id"],
-                    turn_row["turn_id"] if turn_row is not None else None,
-                    attempt["attempt_id"],
-                    task["task_id"],
-                    payload_view["summary"],
-                    canonical_json(payload_view),
-                    parent["revision"],
-                    now,
-                    now,
-                ),
-            )
-            connection.execute(
-                "UPDATE workflow_runs SET state='awaiting-host', active_request_id=?, updated_at=?,"
-                " revision=revision+1 WHERE run_id=?",
-                (request_id, now, parent["run_id"]),
-            )
-            connection.execute(
-                "UPDATE tasks SET queue_reason='helper-attention', updated_at=? WHERE task_id=?",
-                (now, parent["run_id"]),
-            )
+            if source is not None:
+                self._propagate_boundary(connection, source, now)
             return
-        active = connection.execute(
-            "SELECT COUNT(*) AS count FROM workflow_children WHERE parent_run_id=? AND state='active'",
-            (parent["run_id"],),
-        ).fetchone()["count"]
-        if int(active) > 0:
+        # Cancelling an intermediate helper closes its local requests. Remove
+        # their still-open ancestor proxies before choosing the next boundary.
+        for proxy in connection.execute(
+            "SELECT * FROM workflow_requests WHERE run_id=? AND child_task_id=? AND state='open'",
+            (parent["run_id"], task["task_id"]),
+        ).fetchall():
+            source_id = (json.loads(proxy["payload_json"]).get("proxy") or {}).get("requestId")
+            if source_id:
+                self._close_proxy_ancestors(connection, self._request_row(connection, task["task_id"], source_id), now)
+        parent = self._run_row(connection, parent["run_id"])
+        if self._sync_boundary(connection, parent["run_id"], now) is not None:
+            return
+        if self._unfinished_helpers(connection, parent["run_id"]):
             return
         auto = connection.execute(
             "SELECT * FROM workflow_continuations WHERE run_id=? AND authorized_by='auto' AND state='recorded'"
@@ -3284,14 +3333,8 @@ class WorkflowCoordinator:
             " expected_revision, created_at, updated_at) VALUES(?,?,'helper-report',?,?,'open',?,?,?)",
             (request_id, parent["run_id"], reason, canonical_json(payload), parent["revision"] + 1, now, now),
         )
-        connection.execute(
-            "UPDATE workflow_runs SET state='awaiting-host', active_request_id=?, updated_at=?,"
-            " revision=revision+1 WHERE run_id=?",
-            (request_id, now, parent["run_id"]),
-        )
-        connection.execute(
-            "UPDATE tasks SET queue_reason='awaiting-host', updated_at=? WHERE task_id=?", (now, parent["run_id"])
-        )
+        self._sync_boundary(connection, parent["run_id"], now)
+        self._propagate_boundary(connection, self._request_row(connection, parent["run_id"], request_id), now)
 
     def _settle_helper_reservation(self, connection, child, task, attempt, now: str) -> None:
         if not self._stop_proven(connection, task):
