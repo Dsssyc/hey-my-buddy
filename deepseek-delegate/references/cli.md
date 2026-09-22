@@ -28,17 +28,34 @@ The [workflow guide](workflow.md) gives complete task packets and examples. Thes
 | Command | Parameters | Behavior |
 | --- | --- | --- |
 | `workflow-submit` | ordinary flat submit fields, `hostId`, `executionWorkspace`; private submission capability managed by CLI | Prepare a fixed workspace and admit a governed task; return `runId` and owner-private `controlFile` |
-| `workflow-get` | `runId`, optional `includeAudit` | Compact owner, revision, turn, request, helper and artifact view; no control tokens |
+| `workflow-get` | `runId`, optional `includeAudit` | Compact owner, revision, turn, active/pending requests, helpers, artifacts and shutdown evidence; no control tokens |
 | `workflow-decide` | `runId`, active `requestId`, stable `commandId`, `expectedRevision`, control, `decision: approve|decline`, `reason`, explicit `helpers`, `autoContinue` | Record Host authority; create approved helpers or decline without failing the goal |
 | `workflow-continue` | `runId`, `commandId`, `expectedRevision`, control, bounded `input`, explicit `helperPolicy: keep|cancel` when helpers are active | Record new input and invalidate older automatic triggers; schedule the same goal when ownership permits |
 | `workflow-takeover` | `runId`, `commandId`, `expectedOwnerGeneration`, `newHostId`, control, optional `expectedRevision` | Rotate control capability/generation; do not restart work |
-| `workflow-cancel` | `runId`, `commandId`, control, optional `reason` | Cancel the goal and owned helpers with durable intent and honest stop evidence |
+| `workflow-cancel` | `runId`, `commandId`, control, optional `reason` | Fence the goal and complete owned descendant graph; record cancellation separately from aggregate stop evidence |
 | `workflow-acknowledge` | `runId`, `commandId`, control, final `artifactId`, `note`, `verdict: accepted|rejected` | Record review of the fixed final artifact separately from execution |
 | `workflow-suggest` | `runId`, bounded `body` | Record a suggestion; an agent-scoped caller may suggest only on its own task |
 
 “Control” is either `controlFile` (CLI-local) or the complete `hostId`, `ownerGeneration`, `controlToken` triple. A file is private and bound to a run and generation; the CLI must not adopt another Host's latest file implicitly. Programmatic submission uses a caller-persisted `submissionToken` to recover its original control after a lost reply. Neither a matching Host label nor reading task state grants authority. A task-scoped child credential cannot invoke Host control, submit another task, edit evaluations or access another run. The private console attaches its authenticated user authority internally and refuses authority fields from browser JSON.
 
 `executionWorkspace` has explicit `kind: existing|worktree`, absolute source `cwd`, `access: read|write`, `base: {kind: commit|working-tree, ref?}`, `includeUntracked`, `writeScope`, `integrator`, and optional attribution-only `targetRef`. Include/write paths are checkout-root-relative; write access needs a nonempty scope. `workspace` still means optional DSH session grouping. Workspace preparation is idempotent by request ID and records exact input commits; no automatic branch merge or force-clean occurs. Git-ignored runtime data is excluded unless explicitly selected.
+
+Continuation reuses the currently allocated actual checkout, prepares a new fixed input there and preserves the original submission specification. The returned `workspace` describes the current effective allocation; `executionWorkspace` retains the original intent. Frozen helper outcomes identify the selected attempt/generation and include only that attempt's sealed output reference, with explicit artifact attempt/turn IDs. Use the output commit and snapshot/diff hashes for integration rather than a moving branch or working directory.
+
+`workflow-get` distinguishes the following request and shutdown fields:
+
+| Field | Meaning |
+| --- | --- |
+| `activeRequest` | Full current open boundary accepted by `workflow-decide`, or `null`; use the top-level current `revision` for the decision |
+| `pendingRequests` | Bounded open-request queue including the current active request; at most 5 compact entries |
+| `counts.openRequests` | Complete open-request count, including the active request and entries omitted from the compact queue |
+| `truncated.pendingRequests` | Number of open-request entries omitted from `pendingRequests` |
+| `proxy`, `origin` on a request | Immediate source `{runId, requestId}` and original requesting leaf `{runId, requestId}` for nested attention |
+| `shutdown` | `selfConfirmed`, `descendantsConfirmed`, full `unconfirmedCount`, up to 32 `unconfirmedRunIds`, and boolean `truncated` |
+
+Do not add `activeRequest` to `counts.openRequests`: it is already included. Compact responses also limit recent request summaries to 5, turns to 10, children to 32 and artifacts to 32; `counts` and `truncated` describe the complete collections and omitted entries. `includeAudit:true` adds full persisted request/turn/continuation records. After deciding the active request, use the returned or freshly read boundary and revision for the next decision. Another request can become active immediately, and sibling completion does not discard outstanding requests.
+
+For nested attention, submit `workflow-decide` against the root run and its active proxy request using that root's control. The service validates the owned chain to `origin` and resumes the requesting leaf; the root token cannot authorize a direct mutation of a different run ID. Intermediate runs wait for their dependencies. Cancellation closes pending boundaries and continuation authority throughout that lineage, and delayed decisions cannot reactivate it.
 
 At most eight helpers are authorized by one decision. Continuation input is bounded to 64 KiB. The runner's complete turn-input JSON is bounded to 256 KiB and structured outcome to 64 KiB, with at most 32 entries per outcome array. A new execution reports `reconstructed-new-session`; it does not claim original-session resume. Use the exact same command ID and payload to resolve an uncertain response. Re-read and reconsider after a revision/owner-generation conflict.
 
@@ -105,6 +122,8 @@ Decision execution timeout is 5–1800 seconds, default 300, with a separate 10-
 `wait` and `watch` never cold-start a service: with no running daemon they return `SERVICE_UNAVAILABLE`. When every admitted wait slot is busy the service returns a resumable `WAIT_OVERLOAD` whose `details` carry `cursor`, `retryAfterMs` and `capacity`; the message says no task state changed and the caller should retry from the same cursor. (As noted above, the CLI prints the code and message without `details`.) Event-producing business operations commit the state change and event together. Lease renewal and liveness updates do not each emit an event; the event stream is a replayable outbox.
 
 Event kinds include `task.submitted`, `task.cancel_requested`, `task.cancelled`, `task.completed`, `task.failed`, `task.retried`, `task.review_archived`, `task.accepted`, `task.rejected`, `task.imported`, `attempt.claimed`, `attempt.progress`, `attempt.reconciled`, `attempt.released`, `attempt.uncertain`, `attempt.lease_expired`, `worker.registered`, `message.posted` and `message.updated`.
+
+Governed events also include `workflow.boundary_updated`, `workflow.workspace_prepared` and `workflow.workspace_preparation_failed`. A preparation failure opens an attention request and invalidates that continuation while preserving the original goal and recovery files. Until a continuation has a prepared manifest, `worker-claim` skips it with `awaiting-workspace-preparation`; other claimable tasks remain eligible.
 
 ### Messages and inquiry
 
@@ -211,4 +230,6 @@ Actor fields are `workerId`, `attemptId`, `generation` and `nonce`. Normally the
 
 `run` and `await` print the same envelope shape: `runId`, `requestId`, `status`, `outcome`, `ok`, `resultAvailable`, `resultDelivered`, `shutdownConfirmed`, `acceptedAt`, `revision`, `createdAt`, `updatedAt`, `cwd`, `logPaths`, `waitedSeconds`, `waitSeconds`, `maxWaitSeconds`, `runnerDeadlineSeconds`, `waitCoversRunnerDeadline`, `timedOut`, `reconnects`, `result`, `recovery`, `limitation`, `error` and a `note`.
 
-`outcome` is the terminal task status (`completed`, `failed`, `cancelled`, `reconciliation-needed`), `wait-timeout` when this call's window ended first, or `unavailable` when the service could not be reached while waiting. A task that reaches its own execution deadline ends as a terminal `failed` with the adapter `status: "timeout"`. The `recovery` block names real commands with the existing run ID (`buddy status`, `buddy await`, `buddy result`, `buddy cancel`). `ok` is true only when the outcome is `completed` **and** this envelope carries the result payload **and** no error was recorded; a completed run whose result could not be delivered is reported as `completed-no-result` with `ok: false`, never as success.
+`outcome` is the terminal task status (`completed`, `failed`, `cancelled`, `reconciliation-needed`), governed `waiting-host` at a decision boundary, `wait-timeout` when this call's window ended first, or `unavailable` when the service could not be reached while waiting. A task that reaches its own execution deadline ends as a terminal `failed` with the adapter `status: "timeout"`. The `recovery` block names real commands with the existing run ID (`buddy status`, `buddy await`, `buddy result`, `buddy cancel`). `ok` is true only when the outcome is `completed` **and** this envelope carries the result payload **and** no error was recorded; a completed run whose result could not be delivered is reported as `completed-no-result` with `ok: false`, never as success.
+
+A governed Host boundary additionally reports `goalComplete: false`, the current `request`, compact turn/artifact context and `nextCommands`; use `workflow-get` to inspect all pending requests. Governed task views expose `workflowState` and `workflowShutdown`. The wait envelope carries that aggregate under `shutdown`, and its `shutdownConfirmed` requires both `selfConfirmed` and `descendantsConfirmed`. `unconfirmedCount` covers the complete owned lineage including the root when applicable; the ID list is bounded and may be truncated. Logical `workflowState: "cancelled"` does not assert that descendants stopped. The wait continues on committed stop evidence, even when the root task is already terminal, and returns `wait-timeout` with unconfirmed shutdown if its own window expires first. Missing PIDs and expired leases do not satisfy this evidence requirement.

@@ -16,7 +16,7 @@ Both READMEs stay concise and avoid internal terminology; details belong in the 
 | Document | Role |
 | --- | --- |
 | [deepseek-delegate/references/usage.md](../deepseek-delegate/references/usage.md) | The practical path: install, workspace grouping, task packet, start → await → verify, progress questions, wait timeouts, cancellation, background work, optional adapters |
-| [deepseek-delegate/references/workflow.md](../deepseek-delegate/references/workflow.md) | Governed repository tasks: owner control, explicit workspace snapshots, assistance decisions, continuation, integration and final acceptance |
+| [deepseek-delegate/references/workflow.md](../deepseek-delegate/references/workflow.md) | Governed repository tasks: owner control, multiple Host requests and nested proxies, continuation on the allocated checkout, fixed helper artifacts, descendant cancellation and final acceptance |
 | [deepseek-delegate/references/cli.md](../deepseek-delegate/references/cli.md) | Complete `buddy` command reference: parameters, defaults, bounds, error codes, result/run envelopes, events and inquiry contract |
 | [deepseek-delegate/references/operations.md](../deepseek-delegate/references/operations.md) | Runtime lifecycle and upgrade, workspace-bridge install and recovery, private state and environment variables, cancellation/recovery, legacy import, old-MCP cleanup |
 | [deepseek-delegate/references/evaluation.md](../deepseek-delegate/references/evaluation.md) | Shared profiles/cards/evidence, preferences, table-level edit admission, private writable console and frontend build |
@@ -30,7 +30,7 @@ The whole `deepseek-delegate/` directory can be copied and installed on its own,
 
 ## Current architecture
 
-[architecture.md](../deepseek-delegate/references/architecture.md) describes the implemented process topology, state ownership, transactions, identities, recovery and limits. Start here when modifying the service or integrating another agent.
+[architecture.md](../deepseek-delegate/references/architecture.md) describes the implemented process topology, state ownership, transactions, identities, recovery and limits, including request queues, immutable turn/artifact bindings and aggregate stop evidence over owned descendants. Start here when modifying the service or integrating another agent. The references describe this checkout's contracts; installed-runtime identity and final acceptance evidence must be checked separately.
 
 ## Accepted design direction
 
@@ -40,7 +40,7 @@ The whole `deepseek-delegate/` directory can be copied and installed on its own,
 
 ## Design proposals
 
-[ADR-004 proposal: decision support, evaluation maintenance and the local console](decisions/004-buddy-decision-support-and-console.md) is the current consolidated proposal. It restates the discussed direction — Host/Worker comparative advantage, the blackboard and C-Two boundaries, turn-end yield and continuation, explicit workspaces, bounded current assessment cards, the preferred non-thinking decision model, evaluation maintenance and a local console — and then separates the new boundary recommendations that still need Host and user review. Its section III governance choices are resolved by accepted ADR-005; the rest of the document keeps its proposal status. It is a discussion consolidation: the runtime is not implemented, and the filenames, role names and interface sketches it names are proposed contracts, not callable operations.
+[ADR-004 proposal: decision support, evaluation maintenance and the local console](decisions/004-buddy-decision-support-and-console.md) preserves the consolidated discussion of Host/Worker comparative advantage, blackboard and C-Two boundaries, turn-end yield and continuation, explicit workspaces, bounded assessment cards, evaluation maintenance and a local console. Its section III governance choices are resolved by accepted ADR-005; the remaining recommendations retain their proposal status. Its original interface sketches are historical design text. Supported runtime behavior and callable operations are maintained in the [workflow](../deepseek-delegate/references/workflow.md), [evaluation](../deepseek-delegate/references/evaluation.md), [architecture](../deepseek-delegate/references/architecture.md) and [CLI](../deepseek-delegate/references/cli.md) references.
 
 [ADR-003 draft](decisions/003-harness-model-selection.md) is retained as historical discussion; ADR-004 supersedes it as the current proposal for model selection and evaluation maintenance.
 

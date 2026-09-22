@@ -6,6 +6,8 @@ Read the current [architecture](deepseek-delegate/references/architecture.md) be
 
 The Python service owns authoritative SQLite state. Workers own their child process handles and submit durable receipts over named C-Two operations. Node code belongs to the dsh adapter and its upstream plugins. Preserve task/attempt identity, idempotency, transaction/event atomicity and honest shutdown evidence when changing these boundaries. Unknown is never reported as stopped; lease expiry and missing PIDs are not termination evidence.
 
+Governed continuation preserves the allocated actual checkout and immutable prior inputs; current manifest, execution cwd and reservation must agree. Bind helper output references to the named attempt and select fixed handoffs by durable publication order. Multiple Host requests and their nested proxy/origin links remain independently addressable; `pendingRequests` includes the active request and `counts.openRequests` counts the complete open set. Cancellation fences the whole owned descendant graph, while checkout release and aggregate shutdown still require real stop evidence. Detailed contracts belong in the workflow, architecture and CLI references below.
+
 ## Verification
 
 Manage Python dependencies and environments with uv. Run checks from a full repository checkout (the distributable plugin excludes test suites):
@@ -29,7 +31,7 @@ Use the [documentation index](docs/README.md) to find each page. Keep detailed c
 | Human entry points (install, first request, boundaries) | `README.md`, `README.zh-CN.md` (keep language parity) |
 | Document index and routing | `docs/README.md` |
 | Install/use paths, task examples, foreground/background flows | `deepseek-delegate/references/usage.md` |
-| Governed workflow, Host capabilities, assistance, continuation, workspace allocation and artifact integration | `deepseek-delegate/references/workflow.md` |
+| Governed workflow, Host request queues and nested proxies, continuation on allocated checkouts, fixed artifact integration and descendant cancellation | `deepseek-delegate/references/workflow.md` |
 | Implemented architecture, data model, identity, wait separation, recovery, limits | `deepseek-delegate/references/architecture.md` |
 | Complete CLI surface, defaults/bounds, envelopes, errors, inquiry contract | `deepseek-delegate/references/cli.md` |
 | Runtime lifecycle/upgrade, bridge, state and env vars, legacy import, MCP cleanup | `deepseek-delegate/references/operations.md` |
@@ -43,8 +45,8 @@ Use the [documentation index](docs/README.md) to find each page. Keep detailed c
 | Development invariants and this routing table | `AGENTS.md` |
 | Historical design rationale | `docs/decisions/001-python-transactional-blackboard.md` |
 | Accepted design rationale: Host-directed assistance, turn continuation, workspace ownership and integration | `docs/decisions/002-host-directed-assistance-and-workspaces.md` |
-| Accepted policy: shared bounded assessments, cross-project reuse, table-level exclusion, revision/generation fencing and React + Vite console frontend (implementation pending) | `docs/decisions/005-shared-assessments-and-table-exclusion.md` |
-| Current consolidated proposal: decision support, evaluation maintenance and the local console (section III governance choices resolved by ADR-005; remaining content is a discussion draft; runtime not implemented) | `docs/decisions/004-buddy-decision-support-and-console.md` |
+| Accepted design rationale: shared bounded assessments, cross-project reuse, table-level exclusion, revision/generation fencing and React + Vite console frontend; current behavior belongs in the references | `docs/decisions/005-shared-assessments-and-table-exclusion.md` |
+| Consolidated discussion proposal: decision support, evaluation maintenance and the local console; section III choices resolved by ADR-005, with historical proposal status preserved | `docs/decisions/004-buddy-decision-support-and-console.md` |
 | Historical discussion: bounded assessments, typed model selection and the Jev backend (research record; ADR-004 is the current consolidated proposal) | `docs/decisions/003-harness-model-selection.md` |
 | Acceptance evidence | `docs/acceptance/` |
 
