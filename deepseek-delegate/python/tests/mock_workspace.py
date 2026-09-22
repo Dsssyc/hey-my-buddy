@@ -35,6 +35,21 @@ class MockWorkspace:
                 return str(candidate)
         return str(path)
 
+    def _checkout_identity(self, cwd: str) -> dict:
+        """An allocated worktree keeps its identity when reopened as existing.
+
+        There is no real .git file in this double's worktrees; retain the identity
+        established by preparation instead of treating the path as a new repository.
+        """
+        path = Path(cwd).resolve()
+        known = [manifest for manifest in self.manifests.values()
+                 if path.is_relative_to(Path(manifest["checkoutRoot"]).resolve())]
+        if known:
+            manifest = max(known, key=lambda item: len(Path(item["checkoutRoot"]).parts))
+            return {key: manifest[key] for key in ("checkoutRoot", "checkoutId", "repositoryId")}
+        root = self._repository_root(cwd)
+        return {"checkoutRoot": root, "checkoutId": f"checkout:{root}", "repositoryId": f"repo:{root}"}
+
     def _manifest(self, *, request_id: str, intent: dict) -> dict:
         kind = intent.get("kind", "existing")
         cwd = intent.get("cwd")
@@ -43,7 +58,9 @@ class MockWorkspace:
             Path(path).mkdir(parents=True, exist_ok=True)
         else:
             path = str(cwd)
-        root = self._repository_root(intent.get("cwd") or path) if kind == "worktree" else self._repository_root(path)
+        identity = self._checkout_identity(intent.get("cwd") or path)
+        if kind == "worktree":
+            identity = {**identity, "checkoutRoot": path, "checkoutId": f"checkout:{identity['checkoutRoot']}:{request_id}"}
         base = intent.get("base") if isinstance(intent.get("base"), dict) else {}
         base_commit = base.get("ref") or "a" * 40
         manifest = {
@@ -51,9 +68,7 @@ class MockWorkspace:
             "workspaceId": f"ws-{request_id}",
             "kind": kind,
             "path": path,
-            "checkoutRoot": path if kind == "existing" else root,
-            "checkoutId": f"checkout:{root}" if kind == "existing" else f"checkout:{root}:{request_id}",
-            "repositoryId": f"repo:{root}",
+            **identity,
             "access": intent.get("access", "write"),
             "baseCommit": base_commit,
             "inputCommit": sha256_text(f"input:{request_id}"),
@@ -68,13 +83,10 @@ class MockWorkspace:
 
     # -- interface ----------------------------------------------------------
     def inspect(self, cwd: str) -> dict:
-        root = self._repository_root(cwd)
         return {
             "kind": "existing",
             "path": str(cwd),
-            "checkoutRoot": str(cwd),
-            "repositoryId": f"repo:{root}",
-            "checkoutId": f"checkout:{root}",
+            **self._checkout_identity(cwd),
             "baseCommit": "a" * 40,
             "clean": not self.dirty,
         }
