@@ -20,12 +20,17 @@ export function useWorkflow(api: ConsoleApi, task: Task, snapshot: Snapshot, ref
     // React 19 cleanup prevents an older request replacing a newer snapshot.
     // https://react.dev/reference/react/useEffect#fetching-data-with-effects
     let current = true;
-    setValue(null);
-    api.command<Workflow>("workflow_get", { runId }, csrf).then(result => {
-      if (!result.governed || result.runId !== runId || !Number.isInteger(result.revision)) throw new Error("协作记录不完整，请检查服务版本。");
-      if (current) { setValue(result); if (!pending.current) setError(""); }
-    }).catch(reason => { if (current) setError(errorText(reason)); });
-    return () => { current = false; };
+    let timer: ReturnType<typeof setTimeout>;
+    async function poll() {
+      try {
+        const result = await api.command<Workflow>("workflow_get", { runId }, csrf);
+        if (!result.governed || result.runId !== runId || !Number.isInteger(result.revision)) throw new Error("协作记录不完整，请检查服务版本。");
+        if (current) { setValue(result); if (!pending.current) setError(""); }
+      } catch (reason) { if (current) setError(errorText(reason)); }
+      if (current) timer = setTimeout(poll, 3000);
+    }
+    void poll();
+    return () => { current = false; clearTimeout(timer); };
   }, [api, runId, csrf, task.revision, task.workflow?.revision, reload]);
 
   async function command(operation: string, params: Record<string, unknown> = {}) {

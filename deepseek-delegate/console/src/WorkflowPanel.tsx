@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { ConsoleApi } from "./api";
 import type { Snapshot, Task } from "./types";
 import type { HelperDraft } from "./workflow-types";
@@ -24,6 +24,13 @@ export function WorkflowPanel({ task, snapshot, api, refresh, selectTask }: {
   const [helpers, setHelpers] = useState<HelperDraft[]>([]);
   const [autoContinue, setAutoContinue] = useState(true);
   const [helperPolicy, setHelperPolicy] = useState("");
+  const draftRequest = useRef<string | null>(null);
+  const requestId = value?.activeRequest?.requestId;
+  useEffect(() => {
+    if (!requestId || state.uncertain || draftRequest.current === requestId) return;
+    draftRequest.current = requestId;
+    setReason(""); setHelpers([]); setAutoContinue(true);
+  }, [requestId, state.uncertain]);
   const profiles = snapshot.profiles.filter(p => p.enabled && p.available && p.adapter === "dsh");
   const locked = state.busy || state.uncertain || !value;
   const activeHelpers = value?.children.some(c => c.state === "active");
@@ -31,7 +38,7 @@ export function WorkflowPanel({ task, snapshot, api, refresh, selectTask }: {
     profiles.some(p => p.profileId === h.profileId) && h.task.trim() && h.cwd.startsWith("/") && (h.access === "read" || lines(h.writeScope).length));
   function addHelper() {
     setHelpers(current => [...current, {
-      id: crypto.randomUUID(), profileId: "", task: "", cwd: value?.workspace?.path || task.cwd,
+      id: crypto.randomUUID(), profileId: "", task: "", cwd: value?.activeRequest?.childTaskId ? "" : value?.workspace?.path || task.cwd,
       kind: "worktree", access: "write", writeScope: "", includeUntracked: "",
     }]);
   }
