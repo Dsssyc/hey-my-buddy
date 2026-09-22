@@ -229,7 +229,12 @@ class WorkflowCancellationTests(WorkflowTestCase):
         self.register(board, "w2")
         root_claim = self.claim(board, "w2", claim_request_id="root-again", run_id=parent["runId"])
         self.finish_turn(board, root_claim, worker_id="w2")
-        board.call("workflow_acknowledge", {"runId": parent["runId"], "verdict": "accepted", "note": "done", **self.control(parent)})
+        # Current acknowledgement rejects live helpers. Recreate a legacy accepted
+        # ancestor to test the independent late-callback/lineage fence.
+        with board.store.db.write() as connection:
+            connection.execute("UPDATE workflow_runs SET state='accepted', active_request_id=NULL WHERE run_id=?", (parent["runId"],))
+            connection.execute("UPDATE tasks SET accepted_at=?, acceptance_verdict='accepted' WHERE task_id=?", (board.store.now(), parent["runId"]))
+            board.store.workflow._release_reservations(connection, parent["runId"], board.store.now())
         self.finish_turn(board, helper, disposition="attention")
         accepted = board.call("workflow_get", {"runId": parent["runId"]})
         self.assertEqual(accepted["state"], "accepted")

@@ -1110,8 +1110,11 @@ class LateCancellationTests(WorkflowTestCase):
         late = self.finish_turn(board, helper_claim)
         self.assertEqual(late["taskState"], "completed")
         child_view = board.call("workflow_get", {"runId": child})
-        self.assertEqual(child_view["state"], "delivered")
-        self.assertEqual([row["kind"] for row in child_view["artifacts"]], ["output", "input"])
+        # The helper's run was cancelled with the parent, so its late completion is
+        # recorded as evidence and can never revive the goal; the sealed output it
+        # produced stays pinned as an immutable reference.
+        self.assertEqual(child_view["state"], "cancelled")
+        self.assertIn("output", [row["kind"] for row in child_view["artifacts"]])
         parent = board.call("workflow_get", {"runId": submitted["runId"]})
         self.assertEqual(parent["state"], "cancelled")
 
@@ -1226,3 +1229,501 @@ class HelperAttentionResolutionTests(WorkflowTestCase):
         self.assertEqual(second["claim"]["turn"]["turnIndex"], 2)
         context = second["claim"]["turn"]["input"]["context"]
         self.assertEqual(context["hostDecision"]["decision"], "decline")
+
+
+class AcknowledgementBoundaryTests(WorkflowTestCase):
+    def _delivered(self, board, request_id="req-1"):
+        self.register(board)
+        submitted = self.submit(board, request_id=request_id)
+        claim = self.claim(board, claim_request_id=f"{request_id}-c1")
+        self.finish_turn(board, claim)
+        view = board.call("workflow_get", {"runId": submitted["runId"]})
+        self.assertEqual(view["state"], "delivered")
+        output = [row for row in view["artifacts"] if row["kind"] == "output"][0]
+        return submitted, view, output
+
+    def test_premature_acknowledgement_at_a_host_boundary_is_refused(self):
+        board = self.board()
+        self.register(board)
+        submitted = self.submit(board)
+        self.finish_turn(board, self.claim(board), disposition="assistance")
+        view = board.call("workflow_get", {"runId": submitted["runId"]})
+        with self.assertRaises(BoardError) as raised:
+            board.call(
+                "workflow_acknowledge",
+                {"runId": submitted["runId"], "note": "looks done", **self.control(submitted)},
+            )
+        self.assertEqual(raised.exception.code, "NOT_READY")
+        audit = board.call("workflow_get", {"runId": submitted["runId"], "includeAudit": True})
+        self.assertEqual(audit["state"], "awaiting-host")
+        self.assertEqual([row["state"] for row in audit["audit"]["reservations"]], ["held"])
+
+    def test_acknowledgement_while_helpers_are_live_is_refused(self):
+        board = self.board()
+        self.register(board)
+        submitted = self.submit(board)
+        self.finish_turn(board, self.claim(board), disposition="assistance")
+        view = board.call("workflow_get", {"runId": submitted["runId"]})
+        approved = self.decide(
+            board,
+            view,
+            view["activeRequest"]["requestId"],
+            helpers=[
+                {
+                    "requestId": "helper-1",
+                    "task": "work",
+                    "cwd": str(self.workdir("h")),
+                    "executionWorkspace": {"kind": "worktree", "access": "write"},
+                }
+            ],
+        )
+        with self.assertRaises(BoardError) as raised:
+            board.call(
+                "workflow_acknowledge",
+                {"runId": submitted["runId"], "note": "accepted early", **self.control(approved)},
+            )
+        self.assertEqual(raised.exception.code, "NOT_READY")
+
+    def test_only_the_exact_current_output_artifact_can_be_accepted(self):
+        board = self.board()
+        submitted, view, output = self._delivered(board)
+        input_artifact = [row for row in view["artifacts"] if row["kind"] == "input"][0]
+        with self.assertRaises(BoardError) as raised:
+            board.call(
+                "workflow_acknowledge",
+                {
+                    "runId": submitted["runId"],
+                    "artifactId": input_artifact["artifactId"],
+                    "note": "wrong artifact",
+                    **self.control(submitted),
+                },
+            )
+        self.assertEqual(raised.exception.code, "CONFLICT")
+        with self.assertRaises(BoardError) as raised:
+            board.call(
+                "workflow_acknowledge",
+                {"runId": submitted["runId"], "artifactId": "art-does-not-exist", "note": "x", **self.control(submitted)},
+            )
+        self.assertEqual(raised.exception.code, "NOT_FOUND")
+        accepted = board.call(
+            "workflow_acknowledge",
+            {
+                "runId": submitted["runId"],
+                "artifactId": output["artifactId"],
+                "note": "the exact sealed output",
+                **self.control(submitted),
+            },
+        )
+        self.assertEqual(accepted["state"], "accepted")
+        self.assertEqual(accepted["finalArtifactId"], output["artifactId"])
+        # A genuine exact replay is idempotent; a different review is not a relabel.
+        replay = board.call(
+            "workflow_acknowledge",
+            {
+                "runId": submitted["runId"],
+                "artifactId": output["artifactId"],
+                "note": "the exact sealed output",
+                **self.control(submitted),
+            },
+        )
+        self.assertTrue(replay["duplicate"])
+        with self.assertRaises(BoardError) as raised:
+            board.call(
+                "workflow_acknowledge",
+                {"runId": submitted["runId"], "note": "different note", **self.control(submitted)},
+            )
+        self.assertEqual(raised.exception.code, "CONFLICT")
+
+    def test_rejected_review_then_continuation_then_new_acceptance(self):
+        board = self.board()
+        submitted, view, output = self._delivered(board)
+        rejected = board.call(
+            "workflow_acknowledge",
+            {
+                "runId": submitted["runId"],
+                "artifactId": output["artifactId"],
+                "note": "not good enough",
+                "verdict": "rejected",
+                **self.control(submitted),
+            },
+        )
+        self.assertEqual(rejected["state"], "awaiting-host")
+        self.assertEqual(rejected["task"]["acceptanceVerdict"], "rejected")
+        turned = board.call("workflow_get", {"runId": submitted["runId"]})
+        continued = self.continue_run(board, turned, command_id="continue-1", input="address the review")
+        self.assertEqual(continued["state"], "executing")
+        # The prior review is archived, not silently inherited by the new attempt.
+        archived = board.call("workflow_get", {"runId": submitted["runId"], "includeAudit": True})
+        self.assertIsNone(archived["task"]["acceptedAt"])
+        events = board.call(
+            "events_read", {"runId": submitted["runId"], "after": 0, "limit": 200}
+        )["events"]
+        self.assertIn("task.review_archived", [event["kind"] for event in events])
+        second = self.claim(board, claim_request_id="c2")
+        self.finish_turn(board, second, session_id="sess-2")
+        delivered = board.call("workflow_get", {"runId": submitted["runId"]})
+        self.assertEqual(delivered["state"], "delivered")
+        new_output = [row for row in delivered["artifacts"] if row["kind"] == "output"][0]
+        accepted = board.call(
+            "workflow_acknowledge",
+            {"runId": submitted["runId"], "note": "now it is good", **self.control(submitted)},
+        )
+        self.assertEqual(accepted["state"], "accepted")
+        self.assertEqual(accepted["finalArtifactId"], new_output["artifactId"])
+        self.assertEqual(accepted["task"]["acceptanceVerdict"], "accepted")
+
+    def test_late_result_never_reopens_a_cancelled_goal(self):
+        board = self.board()
+        self.register(board)
+        submitted = self.submit(board)
+        claim = self.claim(board)
+        cancelled = board.call(
+            "workflow_cancel", {"runId": submitted["runId"], "reason": "stop", **self.control(submitted)}
+        )
+        self.assertEqual(cancelled["state"], "cancelled")
+        late = self.finish_turn(board, claim)
+        self.assertEqual(late["workflow"]["state"], "cancelled")
+        self.assertTrue(late["workflow"]["late"])
+        parent = board.call("workflow_get", {"runId": submitted["runId"]})
+        self.assertEqual(parent["state"], "cancelled")
+
+
+class NativeRequestShapeTests(WorkflowTestCase):
+    def _native_request_outcome(self):
+        return {
+            "disposition": "assistance",
+            "summary": "need the Host",
+            "remaining": ["finish"],
+            "decisions": [],
+            "artifacts": [],
+            "request": {
+                "summary": "please review",
+                "attempted": "tried the obvious fix",
+                "neededWork": "decide the schema",  # native single string
+                "expectedArtifacts": ["a reviewed design"],
+                "acceptance": "the design is approved",
+            },
+        }
+
+    def test_native_string_needed_work_surfaces_as_one_item(self):
+        board = self.board()
+        self.register(board)
+        submitted = self.submit(board)
+        self.finish_turn(
+            board,
+            self.claim(board),
+            disposition="assistance",
+            outcome=self._native_request_outcome(),
+        )
+        view = board.call("workflow_get", {"runId": submitted["runId"]})
+        self.assertEqual(view["activeRequest"]["neededWork"], ["decide the schema"])
+        self.assertEqual(view["activeRequest"]["attempted"], "tried the obvious fix")
+        self.assertEqual(view["activeRequest"]["acceptance"], "the design is approved")
+        self.assertEqual(view["activeRequest"]["expectedArtifacts"], ["a reviewed design"])
+
+    def test_helper_attention_proxies_the_native_needed_work(self):
+        board = self.board()
+        self.register(board)
+        submitted = self.submit(board)
+        self.finish_turn(board, self.claim(board), disposition="assistance")
+        view = board.call("workflow_get", {"runId": submitted["runId"]})
+        approved = self.decide(
+            board,
+            view,
+            view["activeRequest"]["requestId"],
+            helpers=[
+                {
+                    "requestId": "helper-1",
+                    "task": "helper work",
+                    "cwd": str(self.workdir("h")),
+                    "executionWorkspace": {"kind": "worktree", "access": "write"},
+                }
+            ],
+        )
+        child = approved["children"][0]["taskId"]
+        helper = self.claim(board, claim_request_id="c2", run_id=child)
+        self.finish_turn(
+            board,
+            helper,
+            disposition="attention",
+            outcome=self._native_request_outcome(),
+        )
+        parent = board.call("workflow_get", {"runId": submitted["runId"]})
+        self.assertEqual(parent["activeRequest"]["kind"], "helper-attention")
+        self.assertEqual(parent["activeRequest"]["neededWork"], ["decide the schema"])
+
+
+class HelperDependencyTests(WorkflowTestCase):
+    def test_helper_dependency_defers_resume_until_it_settles(self):
+        board = self.board()
+        for worker in ("w1", "w2", "w3"):
+            self.register(board, worker_id=worker)
+        submitted = self.submit(board)
+        run_id = submitted["runId"]
+        self.finish_turn(
+            board,
+            self.claim(board, worker_id="w1", claim_request_id="c1", nonce="a" * 16),
+            disposition="assistance",
+            worker_id="w1",
+            nonce="a" * 16,
+        )
+        view = board.call("workflow_get", {"runId": run_id})
+        approved = self.decide(
+            board,
+            view,
+            view["activeRequest"]["requestId"],
+            command_id="approve-2",
+            helpers=[
+                {
+                    "requestId": "helper-a",
+                    "task": "helper A",
+                    "cwd": str(self.workdir("ha")),
+                    "executionWorkspace": {"kind": "worktree", "access": "write"},
+                },
+                {
+                    "requestId": "helper-b",
+                    "task": "helper B",
+                    "cwd": str(self.workdir("hb")),
+                    "executionWorkspace": {"kind": "worktree", "access": "write"},
+                },
+            ],
+        )
+        helper_a, helper_b = [child["taskId"] for child in approved["children"]]
+        # Helper A yields attention while sibling B is still active.
+        a_claim = self.claim(board, worker_id="w1", claim_request_id="c2", nonce="b" * 16, run_id=helper_a)
+        self.finish_turn(board, a_claim, disposition="attention", worker_id="w1", nonce="b" * 16)
+        parent = board.call("workflow_get", {"runId": run_id})
+        self.assertEqual(parent["activeRequest"]["childTaskId"], helper_a)
+        # Sibling B finishes first; it must not resume the parent or helper A.
+        b_claim = self.claim(board, worker_id="w2", claim_request_id="c3", nonce="c" * 16, run_id=helper_b)
+        self.finish_turn(board, b_claim, worker_id="w2", nonce="c" * 16)
+        parent = board.call("workflow_get", {"runId": run_id})
+        self.assertEqual(parent["state"], "awaiting-host")
+        states = {child["taskId"]: child["state"] for child in parent["children"]}
+        self.assertEqual(states[helper_a], "attention")
+        self.assertEqual(states[helper_b], "succeeded")
+        # The Host grants the request with a dependency helper; A waits for it.
+        resolved = self.decide(
+            board,
+            parent,
+            parent["activeRequest"]["requestId"],
+            command_id="grant-a-1",
+            reason="use the dependency output",
+            helpers=[
+                {
+                    "requestId": "helper-c",
+                    "task": "dependency C",
+                    "cwd": str(self.workdir("hc")),
+                    "executionWorkspace": {"kind": "worktree", "access": "write"},
+                }
+            ],
+        )
+        self.assertEqual(resolved["state"], "waiting-helpers")
+        blocked = self.claim(board, worker_id="w1", claim_request_id="c4", nonce="d" * 16, run_id=helper_a)
+        self.assertIsNone(blocked["claim"], "the child must wait for its dependency")
+        a_view = board.call("workflow_get", {"runId": helper_a})
+        states = {child["taskId"]: child["state"] for child in a_view["children"]}
+        self.assertEqual(list(states.values()), ["active"])
+        dependency = next(iter(states))
+        # The dependency settles: now A auto-resumes, then the parent.
+        c_claim = self.claim(board, worker_id="w3", claim_request_id="c5", nonce="e" * 16, run_id=dependency)
+        self.finish_turn(board, c_claim, worker_id="w3", nonce="e" * 16, session_id="sess-c")
+        a_second = self.claim(board, worker_id="w1", claim_request_id="c6", nonce="f" * 16, run_id=helper_a)
+        self.assertEqual(a_second["claim"]["turn"]["turnIndex"], 2)
+        self.finish_turn(board, a_second, worker_id="w1", nonce="f" * 16)
+        parent = board.call("workflow_get", {"runId": run_id})
+        self.assertEqual(parent["state"], "executing")
+        self.assertEqual([child["state"] for child in parent["children"]], ["succeeded", "succeeded"])
+        final_turn = self.claim(board, worker_id="w1", claim_request_id="c7", nonce="g" * 16, run_id=run_id)
+        self.assertEqual(final_turn["claim"]["attempt"]["taskId"], run_id)
+
+
+class TakeoverReplayTests(WorkflowTestCase):
+    def test_lost_takeover_reply_replays_its_own_generation_only(self):
+        board = self.board()
+        submitted = self.submit(board)
+        run_id = submitted["runId"]
+        params = {
+            "runId": run_id,
+            "commandId": "takeover-1",
+            "expectedOwnerGeneration": 1,
+            "newHostId": "host-2",
+            **self.control(submitted),
+        }
+        taken = board.call("workflow_takeover", params)
+        replay = board.call("workflow_takeover", params)
+        self.assertTrue(replay["duplicate"])
+        self.assertEqual(replay["control"]["controlToken"], taken["control"]["controlToken"])
+        self.assertEqual(replay["ownerGeneration"], 2)
+        # A forged original capability is rejected, and a changed payload conflicts.
+        with self.assertRaises(BoardError) as raised:
+            board.call("workflow_takeover", {**params, "controlToken": "forged"})
+        self.assertEqual(raised.exception.code, "UNAUTHORIZED")
+        with self.assertRaises(BoardError) as raised:
+            board.call("workflow_takeover", {**params, "newHostId": "host-3"})
+        self.assertEqual(raised.exception.code, "CONFLICT")
+        # After a later takeover the old replay can never reissue a newer generation.
+        board.call(
+            "workflow_takeover",
+            {
+                "runId": run_id,
+                "commandId": "takeover-2",
+                "expectedOwnerGeneration": 2,
+                "newHostId": "host-4",
+                **taken["control"],
+            },
+        )
+        with self.assertRaises(BoardError) as raised:
+            board.call("workflow_takeover", params)
+        self.assertEqual(raised.exception.code, "STALE_GENERATION")
+
+
+class CompactReadBoundTests(WorkflowTestCase):
+    def test_large_task_and_result_keep_normal_reads_bounded_and_audit_full(self):
+        board = self.board()
+        self.register(board)
+        big_task = "deliver the specification " * 4000  # ~100 KB objective
+        submitted = self.submit(board, task=big_task)
+        self.finish_turn(board, self.claim(board))
+        view = board.call("workflow_get", {"runId": submitted["runId"]})
+        serialized = json.dumps(view)
+        self.assertLess(len(serialized), 20000, "the compact view must stay bounded")
+        self.assertTrue(view["goal"]["taskTruncated"])
+        self.assertNotIn("spec", view["task"])
+        self.assertNotIn(big_task, serialized)
+        audit = board.call("workflow_get", {"runId": submitted["runId"], "includeAudit": True})
+        self.assertEqual(audit["audit"]["spec"]["task"], big_task)
+        self.assertEqual(audit["audit"]["goal"]["task"], big_task)
+        self.assertIn(big_task[:8000], audit["audit"]["turns"][0]["input"]["context"]["objective"])
+        self.assertTrue(audit["audit"]["turns"][0]["input"]["context"]["objectiveTruncated"])
+        self.assertGreater(len(json.dumps(audit["audit"])), len(serialized))
+
+
+class CancellationCascadeTests(WorkflowTestCase):
+    def _yielded_parent(self, board, root):
+        self.register(board)
+        submitted = self.submit(board, cwd=str(root))
+        self.finish_turn(board, self.claim(board), disposition="assistance")
+        view = board.call("workflow_get", {"runId": submitted["runId"]})
+        return submitted, view
+
+    def _approve_helper(self, board, view, submitted, root, request_id="helper-1", command_id="approve-1"):
+        approved = self.decide(
+            board,
+            view,
+            view["activeRequest"]["requestId"],
+            command_id=command_id,
+            helpers=[
+                {
+                    "requestId": request_id,
+                    "task": "helper work",
+                    "cwd": str(root),
+                    "executionWorkspace": {"kind": "existing", "access": "write"},
+                }
+            ],
+        )
+        return approved["children"][0]["taskId"]
+
+    def test_queued_helper_on_a_transferred_checkout_is_cancelled_and_released(self):
+        board = self.board()
+        root = self.workdir("repo")
+        (root / ".git").mkdir()
+        submitted, view = self._yielded_parent(board, root)
+        child = self._approve_helper(board, view, submitted, root)
+        approved = board.call("workflow_get", {"runId": submitted["runId"]})
+        cancelled = board.call(
+            "workflow_cancel", {"runId": submitted["runId"], "reason": "stop", **self.control(approved)}
+        )
+        self.assertEqual(cancelled["state"], "cancelled")
+        child_view = board.call("workflow_get", {"runId": child})
+        self.assertEqual(child_view["state"], "cancelled")
+        self.assertEqual(child_view["status"], "cancelled")
+        audit = board.call("workflow_get", {"runId": submitted["runId"], "includeAudit": True})
+        states = {(row["holderTaskId"], row["state"]) for row in audit["audit"]["reservations"]}
+        self.assertIn((child, "released"), states)
+        self.assertIn((submitted["runId"], "released"), states)
+        # The checkout is reusable: a new run is admitted with no leaked writer.
+        again = self.submit(board, request_id="req-2", cwd=str(root))
+        self.assertEqual(again["workspace"]["checkoutId"], submitted["workspace"]["checkoutId"])
+
+    def test_yielded_helper_is_cancelled_after_proven_stop(self):
+        board = self.board()
+        root = self.workdir("repo")
+        (root / ".git").mkdir()
+        submitted, view = self._yielded_parent(board, root)
+        child = self._approve_helper(board, view, submitted, root)
+        helper = self.claim(board, claim_request_id="c2", run_id=child)
+        self.finish_turn(board, helper, disposition="attention")
+        parent = board.call("workflow_get", {"runId": submitted["runId"]})
+        self.assertEqual(parent["activeRequest"]["kind"], "helper-attention")
+        cancelled = board.call(
+            "workflow_cancel", {"runId": submitted["runId"], "reason": "stop", **self.control(parent)}
+        )
+        self.assertEqual(cancelled["state"], "cancelled")
+        child_view = board.call("workflow_get", {"runId": child, "includeAudit": True})
+        self.assertEqual(child_view["state"], "cancelled")
+        self.assertEqual([row["state"] for row in child_view["audit"]["reservations"]], ["released"])
+
+    def test_nested_dependency_is_cancelled_recursively(self):
+        board = self.board()
+        root = self.workdir("repo")
+        (root / ".git").mkdir()
+        submitted, view = self._yielded_parent(board, root)
+        child = self._approve_helper(board, view, submitted, root)
+        helper = self.claim(board, claim_request_id="c2", run_id=child)
+        self.finish_turn(board, helper, disposition="attention")
+        parent = board.call("workflow_get", {"runId": submitted["runId"]})
+        nested = self.decide(
+            board,
+            parent,
+            parent["activeRequest"]["requestId"],
+            command_id="approve-dependency",
+            helpers=[
+                {
+                    "requestId": "dependency-1",
+                    "task": "dependency work",
+                    "cwd": str(self.workdir("dep")),
+                    "executionWorkspace": {"kind": "worktree", "access": "write"},
+                }
+            ],
+        )
+        self.assertEqual(nested["state"], "waiting-helpers")
+        dependency = board.call("workflow_get", {"runId": child})["children"][0]["taskId"]
+        cancelled = board.call(
+            "workflow_cancel", {"runId": submitted["runId"], "reason": "stop", **self.control(nested)}
+        )
+        self.assertEqual(cancelled["state"], "cancelled")
+        for task_id in (child, dependency):
+            view = board.call("workflow_get", {"runId": task_id})
+            self.assertEqual(view["state"], "cancelled", task_id)
+        # The never-started dependency released its worktree reservation.
+        audit = board.call("workflow_get", {"runId": child, "includeAudit": True})
+        states = {(row["holderTaskId"], row["state"]) for row in audit["audit"]["reservations"]}
+        self.assertIn((dependency, "released"), states)
+
+    def test_active_child_with_unconfirmed_stop_retains_its_reservation(self):
+        board = self.board()
+        root = self.workdir("repo")
+        (root / ".git").mkdir()
+        submitted, view = self._yielded_parent(board, root)
+        child = self._approve_helper(board, view, submitted, root)
+        helper = self.claim(board, claim_request_id="c2", run_id=child)
+        approved = board.call("workflow_get", {"runId": submitted["runId"]})
+        cancelled = board.call(
+            "workflow_cancel", {"runId": submitted["runId"], "reason": "stop", **self.control(approved)}
+        )
+        self.assertEqual(cancelled["state"], "cancelled")
+        child_view = board.call("workflow_get", {"runId": child})
+        self.assertEqual(child_view["state"], "cancelled")
+        self.assertEqual(child_view["task"]["state"], "cancelling")
+        audit = board.call("workflow_get", {"runId": submitted["runId"], "includeAudit": True})
+        states = {(row["holderTaskId"], row["state"]) for row in audit["audit"]["reservations"]}
+        self.assertIn((child, "held"), states)
+        # A late result with unconfirmed shutdown never revives the ancestor.
+        self.finish_turn(board, helper, shutdown=False, seal=False)
+        parent = board.call("workflow_get", {"runId": submitted["runId"]})
+        self.assertEqual(parent["state"], "cancelled")
+        audit = board.call("workflow_get", {"runId": submitted["runId"], "includeAudit": True})
+        states = {(row["holderTaskId"], row["state"]) for row in audit["audit"]["reservations"]}
+        # No release happens without a proven stop, so the reservation stays held.
+        self.assertIn((child, "held"), states)

@@ -248,12 +248,67 @@ class CompactRouteTests(GovernedWorkerTestCase):
         self.assertNotIn("controlToken", json.dumps(view))
         self.assertEqual(view["task"]["workflowState"], "executing")
         self.assertTrue(view["task"]["awaitingHost"] is False)
-        self.assertEqual(
-            view["goal"]["fingerprint"],
-            submitted["task"]["inputFingerprint"],
-        )
+        self.assertEqual(view["goal"]["fingerprint"], submitted["goal"]["fingerprint"])
         self.assertTrue(all(isinstance(value, int) for value in view["truncated"].values()))
         self.assertTrue(all(isinstance(value, int) for value in view["counts"].values()))
+
+
+class SubmissionPreparationRaceTests(GovernedWorkerTestCase):
+    def _race(self, prepare, workers: int = 8):
+        import threading
+
+        tokens: list[str] = []
+        errors: list[BaseException] = []
+
+        def run() -> None:
+            try:
+                tokens.append(prepare())
+            except BaseException as error:  # noqa: BLE001 - reported by the test
+                errors.append(error)
+
+        threads = [threading.Thread(target=run) for _ in range(workers)]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join()
+        self.assertEqual(errors, [])
+        return tokens
+
+    def test_cli_submission_token_creation_is_immutable_and_shared(self):
+        from unittest import mock
+
+        from buddy import cli
+        from buddy.errors import BoardError
+
+        with mock.patch.dict(os.environ, {"BUDDY_STATE_DIR": str(self.directory)}):
+            tokens = self._race(lambda: cli._submission_token("req-race", {}))
+            self.assertEqual(len(set(tokens)), 1, tokens)
+            path = next((self.directory / "submissions").glob("*.json"))
+            original = path.read_text()
+            path.write_text("not-json")
+            with self.assertRaises(BoardError) as raised:
+                cli._submission_token("req-race", {})
+            self.assertEqual(raised.exception.code, "INVALID_ARGUMENT")
+            self.assertEqual(path.read_text(), "not-json", "a malformed record is never overwritten")
+            path.write_text(original)
+
+    def test_console_submission_token_creation_is_immutable_and_shared(self):
+        from buddy.errors import BoardError
+
+        board = self.board()
+        board.console.start()
+        try:
+            tokens = self._race(lambda: board.console._submission_token("console-race"))
+            self.assertEqual(len(set(tokens)), 1, tokens)
+            directory = board.store.directory / "submissions"
+            path = next(directory.glob("*.json"))
+            path.write_text("{")
+            with self.assertRaises(BoardError) as raised:
+                board.console._submission_token("console-race")
+            self.assertEqual(raised.exception.code, "INVALID_ARGUMENT")
+            self.assertEqual(path.read_text(), "{")
+        finally:
+            board.console.close()
 
 
 if __name__ == "__main__":  # pragma: no cover
