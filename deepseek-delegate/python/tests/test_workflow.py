@@ -1051,10 +1051,14 @@ class BoundedViewTests(WorkflowTestCase):
         submitted = self.submit(board)
         self.finish_turn(board, self.claim(board), disposition="assistance")
         view = board.call("workflow_get", {"runId": submitted["runId"]})
-        self.assertEqual(set(view["truncated"]), {"turns", "requests", "children", "artifacts"})
+        self.assertEqual(set(view["truncated"]), {"turns", "requests", "children", "artifacts", "pendingRequests"})
         self.assertEqual(view["counts"]["turns"], 1)
         self.assertEqual(view["counts"]["artifacts"], 2)
         self.assertEqual(view["truncated"]["turns"], 0)
+        self.assertEqual(view["counts"]["openRequests"], 1)
+        self.assertEqual(len(view["pendingRequests"]), 1)
+        self.assertEqual(view["pendingRequests"][0]["requestId"], view["activeRequest"]["requestId"])
+        self.assertEqual(view["truncated"]["pendingRequests"], 0)
 
 
 class NestedSpecTests(WorkflowTestCase):

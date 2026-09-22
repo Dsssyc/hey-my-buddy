@@ -93,10 +93,12 @@ export function WorkflowPanel({ task, snapshot, api, refresh, selectTask }: {
       </ul></section>}
       {value.activeRequest && <section className="detail-section">
         <h3>{value.activeRequest.kind === "assistance" ? "协助请求" : "需要决定"}</h3>
+        {(value.counts?.openRequests || 0) > 1 && <p className="small muted">共有 {value.counts?.openRequests} 项待决定；处理当前请求后会显示下一项。</p>}
         <p>{value.activeRequest.summary}</p>
+        {value.activeRequest.preparationError && <p role="alert"><code>{value.activeRequest.preparationError.code}</code> · {value.activeRequest.preparationError.message}</p>}
         <dl className="facts"><dt>已尝试</dt><dd>{value.activeRequest.attempted}</dd><dt>需要完成</dt><dd>{value.activeRequest.neededWork.join("\n")}</dd><dt>验收条件</dt><dd>{value.activeRequest.acceptance}</dd></dl>
         {!!value.activeRequest.expectedArtifacts.length && <p className="small">期望产物：{value.activeRequest.expectedArtifacts.join("、")}</p>}
-        {value.activeRequest.childTaskId && <button className="button" onClick={() => selectTask(value.activeRequest!.childTaskId!)}>打开需要协助的子任务</button>}
+        {value.activeRequest.childTaskId && <button className="button" onClick={() => selectTask(value.activeRequest!.origin?.runId || value.activeRequest!.childTaskId!)}>打开需要协助的子任务</button>}
         {value.activeRequest.state === "open" && <fieldset className="workflow-controls" disabled={locked}>
           <legend>用户决定</legend>
           <p className="small muted">此处使用当前私有控制台的用户权限。选择和理由会记录在黑板，跨 Buddy 调用仍需明确批准。</p>

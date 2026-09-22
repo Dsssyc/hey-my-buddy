@@ -38,6 +38,15 @@ function fixture() {
 }
 
 describe("governed workflow console", () => {
+  it("shows the actionable workspace conflict without a full audit fetch", async () => {
+    const f = fixture();
+    f.workflow.activeRequest = { ...f.workflow.activeRequest!, kind: "attention", preparationError: { code: "WORKSPACE_BASE_MISMATCH", message: "Checkout differs from the sealed output" } };
+    render(<WorkflowPanel {...f.props} />);
+    expect((await screen.findByRole("alert")).textContent).toContain("WORKSPACE_BASE_MISMATCH");
+    expect(screen.getByRole("alert").textContent).toContain("Checkout differs from the sealed output");
+    expect(f.mutation).not.toHaveBeenCalled();
+  });
+
   it("pins helper configuration and workspace in an explicit user decision", async () => {
     const f = fixture();
     const user = userEvent.setup();

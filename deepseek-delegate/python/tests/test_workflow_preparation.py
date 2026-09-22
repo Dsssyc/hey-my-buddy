@@ -88,6 +88,7 @@ class PreparationTests(WorkflowTestCase):
         view = board.call("workflow_get", {"runId": run_id, "includeAudit": True})
         self.assertEqual(view["state"], "awaiting-host")
         self.assertEqual(view["activeRequest"]["kind"], "attention")
+        self.assertEqual(view["activeRequest"]["preparationError"]["code"], "WORKSPACE_BASE_MISMATCH")
         self.assertEqual(self.rows(board, run_id, cont)[2]["state"], "invalidated")
         self.assertEqual(self.rows(board, run_id, cont)[1]["state"], "queued")
         self.assertEqual((self.repo / "tracked.txt").read_text(), "unreviewed post-seal drift\n")
@@ -104,6 +105,29 @@ class PreparationTests(WorkflowTestCase):
         self.assertIsNotNone(resumed["claim"], resumed)
         self.assertEqual(resumed["claim"]["turn"]["turnIndex"], 2)
         self.assertEqual(self.rows(board, run_id, cont)[2]["state"], "invalidated")
+
+    def test_concurrent_preparation_lock_retains_continuation_and_allows_recovery(self):
+        board, run_id, _, cont = self.pending(kind="worktree")
+        before = self.rows(board, run_id, cont)
+        _, directory = workspace._workspace_directory(self.directory, f"{run_id}:{cont}")
+        # The same real nonblocking flock used by competing worker RPCs. Its holder
+        # may publish a manifest or die before publishing; neither case is a Host
+        # decision, and no worker may claim the old input while it is held.
+        with workspace._lock(directory):
+            blocked = self.claim(board, claim_request_id="contending", run_id=run_id)
+            self.assertIsNone(blocked["claim"])
+            self.assertEqual(blocked["reason"], "awaiting-workspace-preparation")
+            during = self.rows(board, run_id, cont)
+            self.assertEqual(during[0]["state"], "executing")
+            self.assertEqual(during[0]["revision"], before[0]["revision"])
+            self.assertEqual(during[2]["state"], "queued")
+            self.assertIsNone(during[2]["workspace_manifest_json"])
+            self.assertIsNone(during[0]["active_request_id"])
+        resumed = self.claim(board, claim_request_id="recovered", run_id=run_id)
+        self.assertIsNotNone(resumed["claim"])
+        self.assertEqual(resumed["claim"]["turn"]["turnIndex"], 2)
+        self.assertEqual(resumed["claim"]["task"]["cwd"], before[1]["cwd"])
+        self.assertEqual((Path(before[1]["cwd"]) / "tracked.txt").read_text(), "sealed first output\n")
 
     def test_real_worktree_continuation_retains_checkout_and_source_files(self):
         board, run_id, first, cont = self.pending(kind="worktree")

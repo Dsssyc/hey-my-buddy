@@ -10,6 +10,8 @@ export type WorkflowRequest = {
   expectedArtifacts: string[];
   acceptance: string;
   childTaskId?: string | null;
+  origin?: { runId: string; requestId: string };
+  preparationError?: { code: string; message: string };
 };
 export type Workflow = {
   governed: true;
@@ -41,6 +43,7 @@ export type Workflow = {
     remaining?: string[];
   };
   activeRequest: WorkflowRequest | null;
+  counts?: { openRequests?: number };
   children: {
     taskId: string;
     state: string;

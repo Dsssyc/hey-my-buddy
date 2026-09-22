@@ -231,6 +231,11 @@ class WorkflowCoordinator:
             "proxy": payload.get("proxy"),
             "origin": payload.get("origin"),
         }
+        if isinstance(payload.get("preparationError"), dict):
+            view["preparationError"] = {
+                "code": _head(payload["preparationError"].get("code"), 100),
+                "message": _head(payload["preparationError"].get("message"), 2000),
+            }
         if include_audit:
             view["decision"] = json.loads(row["decision_json"]) if row["decision_json"] else None
             view["decisionCommandId"] = row["decision_command_id"]
@@ -2747,6 +2752,11 @@ class WorkflowCoordinator:
                 # Recheck ownership before scanning its execution fingerprint.
                 workspace_module().verify(manifest, require_unchanged=True)
             except Exception as error:
+                if isinstance(error, BoardError) and error.code == "WORKSPACE_BUSY":
+                    # Another worker is preparing the same continuation. Leave it
+                    # queued so that worker can publish, or a later claim can recover
+                    # its durable files. Contention is not a changed input or failure.
+                    continue
                 problem = {"code": getattr(error, "code", "WORKSPACE_PREPARE_FAILED"), "message": _head(str(error), 2000)}
             with self.db.write() as connection:
                 if snapshot(connection, row["continuation_id"]) != before:
