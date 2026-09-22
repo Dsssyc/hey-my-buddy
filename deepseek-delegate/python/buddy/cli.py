@@ -17,7 +17,7 @@ import tempfile
 import time
 from pathlib import Path
 
-from . import transport
+from . import runtime, transport
 from .errors import BoardError
 from .transport import METHOD_MAP, call_service, get_state_dir
 
@@ -237,19 +237,35 @@ def _worker_command(action: str, params: dict) -> dict:
         }
     log_path = state_dir / "worker.log"
     state_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
-    log_fd = os.open(log_path, os.O_CREAT | os.O_APPEND | os.O_WRONLY, 0o600)
+    # Explicit workers have the same lifetime as daemon-started workers: select
+    # their runtime before spawning instead of inheriting this replaceable CLI.
+    target = runtime.launch_target(log_path=state_dir / "runtime-install.log")
     environment = {
         **os.environ,
         "BUDDY_STATE_DIR": str(state_dir),
         "BUDDY_WORKER_ID": worker_id,
-        "PYTHONPATH": str(Path(__file__).resolve().parents[1])
-        + (os.pathsep + os.environ["PYTHONPATH"] if os.environ.get("PYTHONPATH") else ""),
+        "BUDDY_RUNTIME_IDENTITY": target["identity"],
     }
+    if target["pythonPath"]:
+        environment["PYTHONPATH"] = target["pythonPath"] + (
+            os.pathsep + environment["PYTHONPATH"] if environment.get("PYTHONPATH") else ""
+        )
+    else:
+        environment.pop("PYTHONPATH", None)
+    if target["stable"]:
+        environment["BUDDY_RUNTIME"] = target["runtime"]["runtimeDir"]
+        environment["BUDDY_PYTHON"] = target["python"]
+        # The explicit interpreter selects its own venv. Do not leave the CLI's
+        # uv project override active for tools that run in a delegated workspace.
+        environment.pop("VIRTUAL_ENV", None)
+        environment.pop("UV_PROJECT_ENVIRONMENT", None)
+        environment["PATH"] = str(Path(target["python"]).parent) + os.pathsep + environment.get("PATH", os.defpath)
     (directory).mkdir(mode=0o700, parents=True, exist_ok=True)
     (directory / "stop.request").unlink(missing_ok=True)
+    log_fd = os.open(log_path, os.O_CREAT | os.O_APPEND | os.O_WRONLY, 0o600)
     try:
         child = subprocess.Popen(
-            [sys.executable, "-m", "buddy.worker.supervisor", "--worker-id", worker_id, "--state-dir", str(state_dir)],
+            [target["python"], "-m", "buddy.worker.supervisor", "--worker-id", worker_id, "--state-dir", str(state_dir)],
             env=environment,
             stdin=subprocess.DEVNULL,
             stdout=log_fd,
