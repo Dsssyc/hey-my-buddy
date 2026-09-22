@@ -1,7 +1,7 @@
 {
   "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
   "name": "hey-my-buddy",
-  "version": "0.5.0+codex.20260922045602",
+  "version": "0.5.0+codex.20260922052648",
   "description": "Host-directed local dsh work with explicit Git workspaces, assistance and continuation, shared model evaluations and a private React/Vite console over the transactional Python/C-Two blackboard.",
   "author": {
     "name": "Dsssyc"
