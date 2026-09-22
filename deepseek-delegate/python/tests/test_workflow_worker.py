@@ -1,0 +1,260 @@
+"""Real cross-process governed workflow: daemon, worker, workspace and CLI routes.
+
+The DSH runner is a mock node script that implements the turn protocol; everything
+else is the real service: real daemon, real supervisor/worker, the merged Git-backed
+workspace module, the real C-Two/CLI path and the real console command route.
+"""
+from __future__ import annotations
+
+import json
+import os
+import stat
+import subprocess
+import unittest
+from pathlib import Path
+
+from support import BoardTestCase, wait_for
+from test_console import Browser
+
+GIT_ENV = {
+    "GIT_AUTHOR_NAME": "Buddy Test",
+    "GIT_AUTHOR_EMAIL": "buddy@example.invalid",
+    "GIT_COMMITTER_NAME": "Buddy Test",
+    "GIT_COMMITTER_EMAIL": "buddy@example.invalid",
+    "GIT_CONFIG_GLOBAL": "/dev/null",
+    "GIT_CONFIG_SYSTEM": "/dev/null",
+}
+RUNNER = Path(__file__).resolve().parent / "fixtures" / "mock_turn_runner.mjs"
+
+
+class GovernedWorkerTestCase(BoardTestCase):
+    def setUp(self) -> None:
+        super().setUp()
+        self.repo = self.directory / "repo"
+        self.repo.mkdir()
+        self.git("init", "-q", "-b", "main")
+        self.git("config", "user.email", "buddy@example.invalid")
+        self.git("config", "user.name", "Buddy Test")
+        (self.repo / "tracked.txt").write_text("base\n")
+        self.git("add", ".")
+        self.git("commit", "-q", "-m", "base")
+
+    def git(self, *arguments: str) -> str:
+        completed = subprocess.run(
+            ["git", *arguments], cwd=self.repo, env={**os.environ, **GIT_ENV}, capture_output=True, text=True
+        )
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        return completed.stdout
+
+    def env(self) -> dict:
+        return {"BUDDY_RUNNER_PATH": str(RUNNER)}
+
+    def submit(self, request_id: str = "worker-req-1") -> tuple[int, dict]:
+        return self.cli(
+            "workflow-submit",
+            json.dumps(
+                {
+                    "requestId": request_id,
+                    "hostId": "host-1",
+                    "task": "run the mock turn",
+                    "cwd": str(self.repo),
+                    "executionWorkspace": {"kind": "existing", "access": "write"},
+                }
+            ),
+            env=self.env(),
+        )
+
+
+class RealWorkerTurnTests(GovernedWorkerTestCase):
+    def test_real_worker_imports_a_turn_and_seals_the_output(self):
+        with self.daemon(env=self.env()):
+            code, submitted = self.submit()
+            self.assertEqual(code, 0, submitted)
+            run_id = submitted["runId"]
+            self.assertIn("controlFile", submitted)
+            self.assertNotIn("controlToken", json.dumps(submitted))
+            control_path = Path(submitted["controlFile"])
+            self.assertEqual(stat.S_IMODE(control_path.stat().st_mode), 0o600)
+
+            delivered = wait_for(
+                lambda: (
+                    lambda view: view if view.get("state") == "delivered" else None
+                )(self.cli("workflow-get", json.dumps({"runId": run_id}), env=self.env())[1]),
+                timeout=90,
+            )
+            self.assertIsNotNone(delivered, "the governed run never reached delivered")
+            outputs = [row for row in delivered["artifacts"] if row["kind"] == "output"]
+            self.assertEqual(len(outputs), 1)
+            self.assertTrue(outputs[0]["manifestSha256"])
+            self.assertTrue(outputs[0]["outputCommit"])
+            self.assertEqual(delivered["counts"]["turns"], 1)
+            turn = delivered["turns"][0]
+            self.assertEqual(turn["disposition"], "completed")
+            self.assertTrue(turn["sessionId"].startswith("mock-session-"))
+
+            # The final acknowledgement is separate from execution and bound to the
+            # actual sealed artifact.
+            code, acknowledged = self.cli(
+                "workflow-acknowledge",
+                json.dumps(
+                    {
+                        "runId": run_id,
+                        "artifactId": outputs[0]["artifactId"],
+                        "note": "inspected the sealed output",
+                        "controlFile": str(control_path),
+                    }
+                ),
+                env=self.env(),
+            )
+            self.assertEqual(code, 0, acknowledged)
+            self.assertEqual(acknowledged["state"], "accepted")
+            self.assertEqual(acknowledged["task"]["acceptanceVerdict"], "accepted")
+
+    def test_cli_fails_closed_for_an_agent_scoped_caller(self):
+        with self.daemon(env=self.env()):
+            code, submitted = self.submit("worker-req-2")
+            self.assertEqual(code, 0, submitted)
+            credential = self.directory / "agent-credential.json"
+            credential.write_text(json.dumps({"token": "not-a-real-credential"}))
+            os.chmod(credential, 0o600)
+            env = {**self.env(), "BUDDY_AGENT_CREDENTIAL_FILE": str(credential)}
+            code, refused = self.cli(
+                "submit",
+                json.dumps({"requestId": "forged", "task": "x", "cwd": str(self.repo)}),
+                env=env,
+            )
+            self.assertEqual(code, 1)
+            self.assertEqual(refused["error"]["code"], "UNAUTHORIZED")
+            # A scoped caller can never use a Host control file.
+            code, refused = self.cli(
+                "workflow-decide",
+                json.dumps(
+                    {
+                        "runId": submitted["runId"],
+                        "requestId": "req-x",
+                        "commandId": "forged",
+                        "expectedRevision": 1,
+                        "decision": "approve",
+                        "controlFile": submitted["controlFile"],
+                    }
+                ),
+                env=env,
+            )
+            self.assertEqual(code, 1)
+            self.assertEqual(refused["error"]["code"], "FORBIDDEN")
+
+
+class ConsoleWorkflowRouteTests(GovernedWorkerTestCase):
+    def test_console_command_route_strips_the_capability_and_refuses_override(self):
+        board = self.board()
+        board.console.start()
+        browser = Browser(board.console.url)
+        snapshot = browser.bootstrap()
+        csrf = snapshot["csrfToken"]
+        created = board.call(
+            "workflow_submit",
+            {
+                "requestId": "console-req-1",
+                "hostId": "host-1",
+                "task": "console governed task",
+                "cwd": str(self.repo),
+                "executionWorkspace": {"kind": "existing", "access": "write"},
+            },
+        )
+        status, _headers, body = browser.command(
+            "workflow_get", {"runId": created["runId"]}, csrf=csrf
+        )
+        self.assertEqual(status, 200, body)
+        payload = json.loads(body)
+        self.assertTrue(payload["ok"])
+        self.assertEqual(payload["result"]["runId"], created["runId"])
+        # A browser-supplied authority field is refused outright.
+        status, _headers, body = browser.command(
+            "workflow_get",
+            {"runId": created["runId"], "consoleAuthority": {"sessionId": "forged"}},
+            csrf=csrf,
+        )
+        self.assertEqual(status, 400, body)
+        self.assertEqual(json.loads(body)["error"]["code"], "INVALID_ARGUMENT")
+        # The console persists a newly issued capability to a private file and never
+        # returns the raw token.
+        status, _headers, body = browser.command(
+            "workflow_submit",
+            {
+                "requestId": "console-req-2",
+                "hostId": "host-1",
+                "task": "console submission",
+                "cwd": str(self.repo),
+                "executionWorkspace": {"kind": "worktree", "access": "write"},
+            },
+            csrf=csrf,
+        )
+        self.assertEqual(status, 200, body)
+        result = json.loads(body)["result"]
+        self.assertNotIn("controlToken", json.dumps(result))
+        self.assertNotIn("controlToken", json.dumps(result["control"]))
+        control_path = Path(result["controlFile"])
+        self.assertEqual(stat.S_IMODE(control_path.stat().st_mode), 0o600)
+        self.assertEqual(control_path.parent, board.store.directory / "controls")
+        board.console.close()
+
+
+class CompactRouteTests(GovernedWorkerTestCase):
+    def test_workflow_get_matches_the_reported_compact_shape(self):
+        board = self.board()
+        submitted = board.call(
+            "workflow_submit",
+            {
+                "requestId": "shape-req-1",
+                "hostId": "host-1",
+                "task": "shape",
+                "cwd": str(self.repo),
+                "executionWorkspace": {"kind": "existing", "access": "write"},
+            },
+        )
+        view = board.call("workflow_get", {"runId": submitted["runId"]})
+        expected = {
+            "governed",
+            "runId",
+            "taskId",
+            "requestId",
+            "hostId",
+            "ownerGeneration",
+            "state",
+            "status",
+            "queueReason",
+            "awaitingHost",
+            "waitReason",
+            "goal",
+            "revision",
+            "continuationCount",
+            "workspace",
+            "executionWorkspace",
+            "currentTurn",
+            "turns",
+            "activeRequest",
+            "requests",
+            "children",
+            "artifacts",
+            "counts",
+            "truncated",
+            "finalArtifactId",
+            "finalAttemptId",
+            "createdAt",
+            "updatedAt",
+            "task",
+        }
+        self.assertTrue(expected <= set(view), sorted(expected - set(view)))
+        self.assertNotIn("controlToken", json.dumps(view))
+        self.assertEqual(view["task"]["workflowState"], "executing")
+        self.assertTrue(view["task"]["awaitingHost"] is False)
+        self.assertEqual(
+            view["goal"]["fingerprint"],
+            submitted["task"]["inputFingerprint"],
+        )
+        self.assertTrue(all(isinstance(value, int) for value in view["truncated"].values()))
+        self.assertTrue(all(isinstance(value, int) for value in view["counts"].values()))
+
+
+if __name__ == "__main__":  # pragma: no cover
+    unittest.main()

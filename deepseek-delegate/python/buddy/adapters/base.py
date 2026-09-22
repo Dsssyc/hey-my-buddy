@@ -33,17 +33,53 @@ class ExecutionContext:
     #: worker in its claim and written to disk by the decision adapter. It is the only
     #: way decision input reaches a model; adapters still never see the database.
     decision_input: dict | None = None
+    #: Governed turn claim: the service-owned turn identity plus the bounded context.
+    #: The dsh adapter writes it to the private attempt directory and passes the
+    #: runner its absolute path; legacy runs have no turn and omit the flags.
+    turn: dict | None = None
+    #: Attempt-scoped credential handed to the DSH child. It is written to a private
+    #: file (never into the model-visible turn input) and exported by path.
+    agent_credential: str | None = None
 
     @property
     def cwd(self) -> str:
+        """The effective execution directory: the resolved workspace path when present."""
+        turn_input = self.turn_input
+        if isinstance(turn_input, dict):
+            manifest = turn_input.get("executionWorkspace")
+            if isinstance(manifest, dict) and manifest.get("path"):
+                return str(manifest["path"])
         return self.spec["cwd"]
 
     @property
     def timeout_seconds(self) -> int:
         return int(self.spec["timeoutSeconds"])
 
+    @property
+    def turn_input(self) -> dict | None:
+        if not isinstance(self.turn, dict):
+            return None
+        value = self.turn.get("input")
+        return value if isinstance(value, dict) else None
+
+    @property
+    def turn_id(self) -> str | None:
+        if not isinstance(self.turn, dict):
+            return None
+        value = self.turn.get("turnId")
+        return value if isinstance(value, str) and value else None
+
     def task_file(self) -> Path:
         return self.directory / "task.txt"
+
+    def turn_input_file(self) -> Path:
+        return self.directory / "turn-input.json"
+
+    def turn_output_file(self) -> Path:
+        return self.directory / "turn-output.json"
+
+    def credential_file(self) -> Path:
+        return self.directory / "agent-credential.json"
 
     def log_paths(self) -> dict:
         return {

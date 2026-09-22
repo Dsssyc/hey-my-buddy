@@ -18,14 +18,19 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Iterator
 
-SCHEMA_VERSION = 6
-#: The last schema version that had no evaluation table. A v5 database is migrated
-#: only by the explicit offline ``buddy migrate`` command, never by a cold start.
+SCHEMA_VERSION = 7
+#: Historical schemas with a supported explicit upgrade path. A database older than
+#: the current build is migrated only by the explicit offline ``buddy migrate``
+#: command, never by a cold start: v5 has no evaluation table, v6 has no governed
+#: workflow table.
 V5_SCHEMA_VERSION = 5
+V6_SCHEMA_VERSION = 6
 DB_FILE = "board.sqlite3"
 SECRET_KEY = "capability_secret"
 CAPABILITY_VERSION = 1
 WRITER_TOKEN_VERSION = 1
+CONTROL_TOKEN_VERSION = 1
+AGENT_TOKEN_VERSION = 1
 
 #: Every task state the durable model may hold. See ``docs/board.md`` for the
 #: documented transition table; ``store.py`` enforces it.
@@ -495,9 +500,257 @@ CREATE INDEX IF NOT EXISTS evaluation_decisions_created_idx
 
 EVALUATION_SCHEMA = "\n".join(EVALUATION_TABLES)
 
-#: The complete current schema. A fresh database is created from this text; a v5
-#: database is upgraded only by ``buddy migrate`` using ``EVALUATION_TABLES``.
-SCHEMA = SCHEMA_V5 + "\n" + EVALUATION_SCHEMA
+#: Schema additions for version 7: the governed productivity workflow from
+#: ``docs/implementation/productivity-contract.md``. A governed run is the existing
+#: logical task (``run_id`` = ``task_id``) plus durable turn, request, helper,
+#: continuation, workspace-reservation, pinned-artifact and attempt-scoped
+#: credential records. Every statement is separate so the offline migration can
+#: apply them inside one transaction.
+WORKFLOW_TABLES = (
+    # The logical goal plus its Host ownership generation and prepared workspace.
+    # ``goal_json``/``goal_fingerprint`` are immutable: continuations record their
+    # own effective input in ``workflow_continuations``.
+    """
+CREATE TABLE IF NOT EXISTS workflow_runs (
+    run_id                  TEXT PRIMARY KEY REFERENCES tasks(task_id) ON DELETE RESTRICT,
+    host_id                 TEXT NOT NULL,
+    owner_generation        INTEGER NOT NULL DEFAULT 1,
+    control_verifier        TEXT NOT NULL,
+    goal_json               TEXT NOT NULL,
+    goal_fingerprint        TEXT NOT NULL,
+    request_fingerprint     TEXT NOT NULL DEFAULT '',
+    submission_verifier     TEXT,
+    execution_workspace_json TEXT NOT NULL,
+    workspace_manifest_json TEXT,
+    workspace_id            TEXT,
+    workspace_manifest_sha256 TEXT,
+    state                   TEXT NOT NULL
+        CHECK (state IN ('executing','awaiting-host','waiting-helpers','delivered','accepted','cancelled','failed')),
+    active_request_id       TEXT,
+    current_turn_id         TEXT,
+    current_attempt_id      TEXT,
+    continuation_count      INTEGER NOT NULL DEFAULT 0,
+    final_artifact_id       TEXT,
+    final_attempt_id        TEXT,
+    revision                INTEGER NOT NULL DEFAULT 1,
+    created_at              TEXT NOT NULL,
+    updated_at              TEXT NOT NULL
+);
+""",
+    """
+CREATE INDEX IF NOT EXISTS workflow_runs_state_idx ON workflow_runs(state, updated_at);
+""",
+    # One row per actual execution turn. The turn input is written to disk by the
+    # adapter; this row pins the service-owned identity, the bounded context and the
+    # validated structured outcome.
+    """
+CREATE TABLE IF NOT EXISTS workflow_turns (
+    turn_id             TEXT PRIMARY KEY,
+    run_id              TEXT NOT NULL REFERENCES workflow_runs(run_id) ON DELETE RESTRICT,
+    attempt_id          TEXT REFERENCES attempts(attempt_id) ON DELETE RESTRICT,
+    generation          INTEGER,
+    turn_index          INTEGER NOT NULL,
+    resume_mode         TEXT NOT NULL
+        CHECK (resume_mode IN ('initial','reconstructed-new-session')),
+    previous_session_id TEXT,
+    session_id          TEXT,
+    prompt_sha256       TEXT,
+    input_sha256        TEXT,
+    input_json          TEXT NOT NULL,
+    state               TEXT NOT NULL CHECK (state IN ('prepared','running','concluded','failed')),
+    disposition         TEXT CHECK (disposition IN ('completed','assistance','attention')),
+    outcome_json        TEXT,
+    provenance_json     TEXT,
+    turn_result_path    TEXT,
+    sealed_artifacts_json TEXT NOT NULL DEFAULT '[]',
+    created_at          TEXT NOT NULL,
+    updated_at          TEXT NOT NULL,
+    UNIQUE(run_id, turn_index)
+);
+""",
+    """
+CREATE INDEX IF NOT EXISTS workflow_turns_run_idx ON workflow_turns(run_id, turn_index);
+""",
+    """
+CREATE INDEX IF NOT EXISTS workflow_turns_attempt_idx ON workflow_turns(attempt_id);
+""",
+    # Assistance/attention requests. Only a Host decision closes one, and only an
+    # approval creates helpers.
+    """
+CREATE TABLE IF NOT EXISTS workflow_requests (
+    request_id          TEXT PRIMARY KEY,
+    run_id              TEXT NOT NULL REFERENCES workflow_runs(run_id) ON DELETE RESTRICT,
+    turn_id             TEXT,
+    attempt_id          TEXT,
+    child_task_id       TEXT,
+    kind                TEXT NOT NULL CHECK (kind IN ('assistance','attention','helper-attention','helper-report')),
+    summary             TEXT NOT NULL,
+    payload_json        TEXT NOT NULL,
+    state               TEXT NOT NULL CHECK (state IN ('open','approved','declined','superseded','cancelled')),
+    decision_json       TEXT,
+    decision_command_id TEXT,
+    expected_revision   INTEGER NOT NULL,
+    created_at          TEXT NOT NULL,
+    updated_at          TEXT NOT NULL,
+    decided_at          TEXT
+);
+""",
+    """
+CREATE INDEX IF NOT EXISTS workflow_requests_run_idx ON workflow_requests(run_id, state);
+""",
+    # Explicitly scoped ordinary helper tasks created only by an approval.
+    """
+CREATE TABLE IF NOT EXISTS workflow_children (
+    child_task_id       TEXT PRIMARY KEY REFERENCES tasks(task_id) ON DELETE RESTRICT,
+    parent_run_id       TEXT NOT NULL REFERENCES workflow_runs(run_id) ON DELETE RESTRICT,
+    request_id          TEXT NOT NULL,
+    decision_command_id TEXT NOT NULL,
+    role                TEXT NOT NULL DEFAULT 'helper',
+    integrator          INTEGER NOT NULL DEFAULT 0,
+    state               TEXT NOT NULL CHECK (state IN ('active','succeeded','failed','cancelled','attention')),
+    auto_continue       INTEGER NOT NULL DEFAULT 0,
+    workspace_intent_json TEXT NOT NULL,
+    workspace_manifest_json TEXT,
+    workspace_manifest_sha256 TEXT,
+    created_at          TEXT NOT NULL,
+    updated_at          TEXT NOT NULL,
+    revision            INTEGER NOT NULL DEFAULT 1
+);
+""",
+    """
+CREATE INDEX IF NOT EXISTS workflow_children_parent_idx ON workflow_children(parent_run_id, state);
+""",
+    # Durable continuation inputs. An automatic continuation is one-use authority
+    # tied to the request and prepared workspace; a manual continuation invalidates
+    # every unconsumed automatic trigger in the same transaction.
+    """
+CREATE TABLE IF NOT EXISTS workflow_continuations (
+    continuation_id   TEXT PRIMARY KEY,
+    run_id            TEXT NOT NULL REFERENCES workflow_runs(run_id) ON DELETE RESTRICT,
+    command_id        TEXT,
+    authorized_by     TEXT NOT NULL CHECK (authorized_by IN ('manual','auto')),
+    request_id        TEXT,
+    expected_revision INTEGER NOT NULL,
+    input_text        TEXT NOT NULL,
+    input_bytes       INTEGER NOT NULL,
+    reason            TEXT,
+    helper_policy     TEXT NOT NULL DEFAULT 'keep' CHECK (helper_policy IN ('cancel','keep')),
+    helper_outcomes_json TEXT NOT NULL DEFAULT '[]',
+    workspace_manifest_json TEXT,
+    state             TEXT NOT NULL CHECK (state IN ('recorded','queued','consumed','cancelled','invalidated')),
+    attempt_id        TEXT,
+    turn_id           TEXT,
+    created_at        TEXT NOT NULL,
+    consumed_at       TEXT
+);
+""",
+    """
+CREATE INDEX IF NOT EXISTS workflow_continuations_run_idx ON workflow_continuations(run_id, state);
+""",
+    """
+CREATE UNIQUE INDEX IF NOT EXISTS workflow_continuations_auto_unique
+    ON workflow_continuations(run_id, request_id) WHERE authorized_by='auto';
+""",
+    # Durable workspace reservations independent of attempt capacity. The partial
+    # unique index is the relational guarantee that one checkout has at most one
+    # held writer, while readers share a concrete unchanged snapshot.
+    """
+CREATE TABLE IF NOT EXISTS workspace_reservations (
+    reservation_id  TEXT PRIMARY KEY,
+    workspace_id    TEXT NOT NULL,
+    checkout_id     TEXT NOT NULL,
+    repository_id   TEXT,
+    path            TEXT NOT NULL,
+    access          TEXT NOT NULL CHECK (access IN ('read','write')),
+    holder_task_id  TEXT NOT NULL REFERENCES tasks(task_id) ON DELETE RESTRICT,
+    holder_kind     TEXT NOT NULL CHECK (holder_kind IN ('parent','helper','reader')),
+    parent_run_id   TEXT REFERENCES workflow_runs(run_id) ON DELETE RESTRICT,
+    manifest_sha256 TEXT NOT NULL,
+    state           TEXT NOT NULL CHECK (state IN ('held','transferred','released')),
+    created_at      TEXT NOT NULL,
+    updated_at      TEXT NOT NULL,
+    released_at     TEXT
+);
+""",
+    """
+CREATE UNIQUE INDEX IF NOT EXISTS workspace_reservations_writer_unique
+    ON workspace_reservations(checkout_id) WHERE state='held' AND access='write';
+""",
+    """
+CREATE INDEX IF NOT EXISTS workspace_reservations_checkout_idx ON workspace_reservations(checkout_id, state);
+""",
+    """
+CREATE INDEX IF NOT EXISTS workspace_reservations_holder_idx ON workspace_reservations(holder_task_id, state);
+""",
+    # Attempt-scoped credentials handed to a DSH child. The token is derived from
+    # the service secret and never stored; only its verifier is persisted, and the
+    # service enforces the permitted operation set on every request that presents
+    # one. Revoked automatically when the attempt finishes.
+    """
+CREATE TABLE IF NOT EXISTS agent_credentials (
+    credential_id   TEXT PRIMARY KEY,
+    run_id          TEXT NOT NULL REFERENCES workflow_runs(run_id) ON DELETE RESTRICT,
+    task_id         TEXT NOT NULL,
+    attempt_id      TEXT,
+    generation      INTEGER,
+    turn_id         TEXT,
+    token_verifier  TEXT NOT NULL,
+    scopes_json     TEXT NOT NULL DEFAULT '[]',
+    state           TEXT NOT NULL CHECK (state IN ('active','revoked','expired')),
+    created_at      TEXT NOT NULL,
+    expires_at      TEXT,
+    revoked_at      TEXT,
+    revision        INTEGER NOT NULL DEFAULT 1
+);
+""",
+    """
+CREATE UNIQUE INDEX IF NOT EXISTS agent_credentials_attempt_unique
+    ON agent_credentials(attempt_id) WHERE state='active';
+""",
+    """
+CREATE INDEX IF NOT EXISTS agent_credentials_run_idx ON agent_credentials(run_id, state);
+""",
+    # Immutable pinned manifests (prepared inputs and sealed outputs). A worktree
+    # may be removed later; these references stay readable.
+    """
+CREATE TABLE IF NOT EXISTS workflow_artifacts (
+    artifact_id     TEXT PRIMARY KEY,
+    run_id          TEXT NOT NULL REFERENCES workflow_runs(run_id) ON DELETE RESTRICT,
+    turn_id         TEXT,
+    attempt_id      TEXT,
+    source_task_id  TEXT,
+    kind            TEXT NOT NULL,
+    manifest_json   TEXT NOT NULL,
+    manifest_sha256 TEXT NOT NULL,
+    created_at      TEXT NOT NULL,
+    UNIQUE(run_id, attempt_id, manifest_sha256)
+);
+""",
+    """
+CREATE INDEX IF NOT EXISTS workflow_artifacts_run_idx ON workflow_artifacts(run_id, created_at);
+""",
+    # Bounded suggestions an attempt-scoped credential may record on its own run.
+    """
+CREATE TABLE IF NOT EXISTS workflow_suggestions (
+    suggestion_id TEXT PRIMARY KEY,
+    run_id        TEXT NOT NULL REFERENCES workflow_runs(run_id) ON DELETE RESTRICT,
+    attempt_id    TEXT,
+    author        TEXT NOT NULL,
+    body          TEXT NOT NULL,
+    created_at    TEXT NOT NULL
+);
+""",
+    """
+CREATE INDEX IF NOT EXISTS workflow_suggestions_run_idx ON workflow_suggestions(run_id, created_at);
+""",
+)
+
+WORKFLOW_SCHEMA = "\n".join(WORKFLOW_TABLES)
+
+#: The complete current schema. A fresh database is created from this text; an
+#: older database is upgraded only by ``buddy migrate`` using ``EVALUATION_TABLES``
+#: and ``WORKFLOW_TABLES``.
+SCHEMA = SCHEMA_V5 + "\n" + EVALUATION_SCHEMA + "\n" + WORKFLOW_SCHEMA
 
 
 def utc_now() -> str:
@@ -684,6 +937,22 @@ class Database:
 
     def writer_token_verifier(self, token: str) -> str:
         return hmac.new(self.secret, f"writer-token:{token}".encode("utf-8"), hashlib.sha256).hexdigest()
+
+    def control_token(self, run_id: str, owner_generation: int) -> str:
+        """Derive the Host control capability of one owner generation."""
+        message = f"{CONTROL_TOKEN_VERSION}:control:{run_id}:{owner_generation}".encode("utf-8")
+        return hmac.new(self.secret, message, hashlib.sha256).hexdigest()
+
+    def control_token_verifier(self, token: str) -> str:
+        return hmac.new(self.secret, f"control-token:{token}".encode("utf-8"), hashlib.sha256).hexdigest()
+
+    def agent_token(self, run_id: str, attempt_id: str, generation: int) -> str:
+        """Derive the attempt-scoped credential handed to a DSH child."""
+        message = f"{AGENT_TOKEN_VERSION}:agent:{run_id}:{attempt_id}:{generation}".encode("utf-8")
+        return hmac.new(self.secret, message, hashlib.sha256).hexdigest()
+
+    def agent_token_verifier(self, token: str) -> str:
+        return hmac.new(self.secret, f"agent-token:{token}".encode("utf-8"), hashlib.sha256).hexdigest()
 
     def verify_capability(self, attempt: sqlite3.Row | dict, capability: str, nonce: str | None = None) -> bool:
         candidate = nonce if nonce is not None else ""

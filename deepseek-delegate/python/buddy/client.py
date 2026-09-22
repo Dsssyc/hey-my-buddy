@@ -358,5 +358,30 @@ class BoardClient:
     def model_catalog_refresh(self, request_id: str | None = None) -> dict:
         return self.call("model_catalog_refresh", {"requestId": request_id})
 
+    # -- governed workflow --------------------------------------------------
+    def workflow_submit(self, **params: Any) -> dict:
+        return self.call("workflow_submit", params)
+
+    def workflow_get(self, run_id: str, *, include_audit: bool = False) -> dict:
+        return self.call("workflow_get", {"runId": run_id, "includeAudit": include_audit})
+
+    def workflow_decide(self, **params: Any) -> dict:
+        return self.call("workflow_decide", params)
+
+    def workflow_continue(self, **params: Any) -> dict:
+        return self.call("workflow_continue", params)
+
+    def workflow_takeover(self, **params: Any) -> dict:
+        return self.call("workflow_takeover", params)
+
+    def workflow_cancel(self, **params: Any) -> dict:
+        return self.call("workflow_cancel", params)
+
+    def workflow_acknowledge(self, **params: Any) -> dict:
+        return self.call("workflow_acknowledge", params)
+
+    def workflow_suggest(self, run_id: str, body: str) -> dict:
+        return self.call("workflow_suggest", {"runId": run_id, "body": body})
+
 
 __all__ = ["BoardClient", "BoardError", "new_command_id", "new_nonce", "DEFAULT_LEASE_SECONDS"]

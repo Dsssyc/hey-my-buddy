@@ -31,7 +31,12 @@ from .errors import BoardError
 #: Documented task transition table. A transition outside this map is rejected.
 TASK_TRANSITIONS: dict[str, frozenset[str]] = {
     "queued": frozenset({"queued", "running", "cancelling", "cancelled", "reconciliation-needed"}),
-    "running": frozenset({"running", "cancelling", "completed", "failed", "cancelled", "reconciliation-needed"}),
+    # ``running -> queued`` is the governed yield: a turn concluded with a structured
+    # assistance/attention outcome, the attempt stopped with confirmed shutdown and
+    # the same logical task waits for the Host instead of pretending to be complete.
+    "running": frozenset(
+        {"running", "queued", "cancelling", "completed", "failed", "cancelled", "reconciliation-needed"}
+    ),
     "cancelling": frozenset({"cancelling", "completed", "failed", "cancelled", "reconciliation-needed"}),
     "reconciliation-needed": frozenset({"reconciliation-needed", "queued", "cancelling", "cancelled", "failed"}),
     "completed": frozenset({"completed"}),
@@ -92,9 +97,13 @@ class BoardStore:
         # stream) and neither opens a transaction of its own.
         from .decision import DecisionCoordinator
         from .evaluation import EvaluationStore
+        from .workflow import WorkflowCoordinator
 
         self.evaluation = EvaluationStore(self, clock=self._clock)
         self.decisions = DecisionCoordinator(self, self.evaluation)
+        # The governed workflow layer wraps this same store: it opens no second
+        # authority and every one of its mutations is one of these transactions.
+        self.workflow = WorkflowCoordinator(self, clock=self._clock)
 
     # -- lifecycle -----------------------------------------------------------
     def initialize(self) -> None:
@@ -231,6 +240,30 @@ class BoardStore:
         worker's claim (including its capability) by guessing a command id.
         """
         return f"{worker_id}:{self.db.nonce_verifier(nonce)}:{attempt_id or '-'}"
+
+    def _attach_agent_credential(self, connection: sqlite3.Connection, claim: dict) -> dict:
+        """Re-derive the attempt-scoped credential of a replayed governed claim.
+
+        The token is deterministic in (secret, run, attempt, generation) and stays
+        out of the stored receipt; it is returned only while the credential is still
+        active, so a replay after conclusion cannot hand out a revoked capability.
+        """
+        turn = claim.get("turn")
+        attempt = claim.get("attempt") or {}
+        if not isinstance(turn, dict) or not turn.get("turnId") or not attempt.get("attemptId"):
+            return claim
+        row = connection.execute(
+            "SELECT state FROM agent_credentials WHERE attempt_id=? AND state='active'",
+            (attempt["attemptId"],),
+        ).fetchone()
+        if row is None:
+            return claim
+        return {
+            **claim,
+            "agentCredential": self.db.agent_token(
+                attempt["taskId"], attempt["attemptId"], attempt["generation"]
+            ),
+        }
 
     def _receipt(
         self,
@@ -463,6 +496,11 @@ class BoardStore:
             "SELECT state, COUNT(*) AS count FROM messages WHERE task_id = ? GROUP BY state", (task["task_id"],)
         ).fetchall()
         view["inquiries"] = {row["state"]: row["count"] for row in messages}
+        workflow = self.workflow.task_extension(connection, task)
+        if workflow is not None:
+            view["workflow"] = workflow
+            view["workflowState"] = workflow["state"]
+            view["awaitingHost"] = workflow["awaitingHost"]
         return view
 
     # -- admission -----------------------------------------------------------
@@ -509,7 +547,20 @@ class BoardStore:
         )
 
     # -- tasks ---------------------------------------------------------------
-    def task_submit(self, params: dict, *, command_id: str | None = None) -> dict:
+    def task_submit(
+        self,
+        params: dict,
+        *,
+        command_id: str | None = None,
+        task_id: str | None = None,
+        governed: dict | None = None,
+    ) -> dict:
+        """Admit one ordinary task.
+
+        ``governed`` is the coordinator's hook: when present, the workflow run and its
+        workspace reservation commit in the same transaction as the task row, so a
+        governed task can never exist without its governance record.
+        """
         spec = schemas.normalize_spec(params)
         request_id = schemas.required_string(params, "requestId", max_length=schemas.MAX_REQUEST_ID)
         owner = schemas.optional_string(params, "owner") or "cli"
@@ -551,7 +602,7 @@ class BoardStore:
                     )
                 head = self._head_of(connection)
             else:
-                task_id = str(uuid.uuid4())
+                task_id = task_id or str(uuid.uuid4())
                 now = self.now()
                 blocker = self._admission_blocker(connection, spec)
                 connection.execute(
@@ -593,6 +644,9 @@ class BoardStore:
                     },
                 )
                 row = connection.execute("SELECT * FROM tasks WHERE task_id = ?", (task_id,)).fetchone()
+                if governed is not None:
+                    self.workflow.attach_governed_task(connection, row, now=now, **governed)
+                    row = connection.execute("SELECT * FROM tasks WHERE task_id = ?", (task_id,)).fetchone()
                 response = {"task": self._decorate(connection, row), "duplicate": False}
                 if command_id:
                     self._store_receipt(connection, command_id, "task.submit", request, response, task_id=task_id)
@@ -664,7 +718,20 @@ class BoardStore:
         return view
 
     def task_cancel(self, params: dict, *, command_id: str | None = None) -> dict:
-        schemas.reject_unknown(params, {"runId", "taskId", "requestId", "reason", "requestedBy"}, "task.cancel")
+        schemas.reject_unknown(
+            params,
+            {
+                "runId",
+                "taskId",
+                "requestId",
+                "reason",
+                "requestedBy",
+                *schemas.CONTROL_FIELDS,
+                schemas.CONSOLE_AUTHORITY_FIELD,
+            },
+            "task.cancel",
+        )
+        schemas.reject_untrusted_override(params)
         reason = schemas.optional_string(params, "reason") or "operator request"
         actor = schemas.optional_string(params, "requestedBy") or "cli"
         request = {"selector": {k: params[k] for k in ("runId", "taskId", "requestId") if k in params}, "reason": reason}
@@ -674,6 +741,7 @@ class BoardStore:
                 if receipt is not None:
                     return receipt
             task = self._task_row(connection, params)
+            self.workflow.guard_task_control(connection, task, params, operation="task_cancel")
             now = self.now()
             already = task["state"] in TERMINAL_TASK_STATES
             if not already:
@@ -735,7 +803,20 @@ class BoardStore:
         ``shutdownConfirmed`` comes from observing that owned process group, or it
         releases an attempt that never crossed the durable spawn intent.
         """
-        schemas.reject_unknown(params, {"runId", "taskId", "requestId", "reason", "requestedBy"}, "task.retry")
+        schemas.reject_unknown(
+            params,
+            {
+                "runId",
+                "taskId",
+                "requestId",
+                "reason",
+                "requestedBy",
+                *schemas.CONTROL_FIELDS,
+                schemas.CONSOLE_AUTHORITY_FIELD,
+            },
+            "task.retry",
+        )
+        schemas.reject_untrusted_override(params)
         reason = schemas.optional_string(params, "reason") or "explicit retry"
         request = {
             "selector": {k: params[k] for k in ("runId", "taskId", "requestId") if k in params},
@@ -747,6 +828,7 @@ class BoardStore:
                 if receipt is not None:
                     return receipt
             task = self._task_row(connection, params)
+            self.workflow.guard_task_control(connection, task, params, operation="task_retry")
             spec = json.loads(task["spec_json"])
             if spec.get("decision"):
                 # A paid decision call is never replayed implicitly. A decision result
@@ -833,9 +915,20 @@ class BoardStore:
         """
         schemas.reject_unknown(
             params,
-            {"runId", "taskId", "requestId", "note", "verdict", "evidence", "acknowledgedBy"},
+            {
+                "runId",
+                "taskId",
+                "requestId",
+                "note",
+                "verdict",
+                "evidence",
+                "acknowledgedBy",
+                *schemas.CONTROL_FIELDS,
+                schemas.CONSOLE_AUTHORITY_FIELD,
+            },
             "task.acknowledge",
         )
+        schemas.reject_untrusted_override(params)
         note, _ = schemas.bounded_text(params, "note", max_bytes=schemas.MAX_NOTE_BYTES)
         verdict = schemas.optional_string(params, "verdict") or "accepted"
         if verdict not in ("accepted", "rejected"):
@@ -849,6 +942,7 @@ class BoardStore:
                 if receipt is not None:
                     return receipt
             task = self._task_row(connection, params)
+            self.workflow.guard_task_control(connection, task, params, operation="task_acknowledge")
             if json.loads(task["spec_json"]).get("decision"):
                 # A model recommendation is not business work and never becomes
                 # acceptance or performance evidence.
@@ -1048,6 +1142,7 @@ class BoardStore:
                             nonce,
                         ),
                     }
+                    stored_claim = self._attach_agent_credential(connection, stored_claim)
                 return {**receipt, "claim": stored_claim, "replayed": True}
             worker = connection.execute("SELECT * FROM workers WHERE worker_id=?", (worker_id,)).fetchone()
             if worker is None:
@@ -1101,7 +1196,21 @@ class BoardStore:
                 if not set(json.loads(task["required_capabilities"])).issubset(capabilities):
                     blocker = "capability-mismatch"
                     continue
-                reason = self._admission_blocker(connection, spec, exclude_task=task["task_id"])
+                workflow_reason = self.workflow.claim_blocker(connection, task)
+                if workflow_reason is not None:
+                    # A governed run at a Host decision boundary is never claimed by
+                    # accident; the same logical task waits for its continuation.
+                    blocker = workflow_reason
+                    connection.execute(
+                        "UPDATE tasks SET queue_reason=?, updated_at=? WHERE task_id=?",
+                        (workflow_reason, self.now(), task["task_id"]),
+                    )
+                    continue
+                # A governed worktree runs in its allocated checkout, so its admission
+                # and claims use tasks.cwd (the effective path), never the source cwd
+                # recorded in the immutable spec_json.
+                effective_spec = {**spec, "cwd": task["cwd"]} if task["cwd"] != spec["cwd"] else spec
+                reason = self._admission_blocker(connection, effective_spec, exclude_task=task["task_id"])
                 if reason is not None:
                     blocker = reason
                     connection.execute(
@@ -1187,7 +1296,8 @@ class BoardStore:
                     now,
                 ),
             )
-            for kind, values in (("cwd", [spec["cwd"]]), ("exclusive", spec.get("exclusiveResources", []))):
+            effective_cwd = chosen["cwd"] or spec["cwd"]
+            for kind, values in (("cwd", [effective_cwd]), ("exclusive", spec.get("exclusiveResources", []))):
                 for resource in values:
                     # (task, resource) is unique, so a retried task re-holds its own
                     # previously released claim instead of leaving it released.
@@ -1234,8 +1344,25 @@ class BoardStore:
                 # attempt directory by the decision adapter; adapters never see the
                 # database, and no credential is part of this document.
                 response["claim"]["decisionInput"] = chosen_input
-            # ``capability`` is deliberately absent from the stored receipt: it is
-            # derived again for the authenticated caller on replay.
+            turn_claim = self.workflow.begin_turn(
+                connection, task=chosen, attempt_id=attempt_id, generation=generation, spec=spec, now=now
+            )
+            if turn_claim is not None:
+                # The service-owned turn identity and bounded context travel to the
+                # worker, which writes them into the private attempt directory. The
+                # attempt-scoped credential is handed over next to it and is stored
+                # only as a verifier.
+                response["claim"]["turn"] = {
+                    "turnId": turn_claim["turnId"],
+                    "turnIndex": turn_claim["turnIndex"],
+                    "resumeMode": turn_claim["resumeMode"],
+                    "inputSha256": turn_claim["inputSha256"],
+                    "input": turn_claim["input"],
+                }
+                response["claim"]["agentCredential"] = turn_claim["credential"]
+            # ``capability`` and ``agentCredential`` are deliberately absent from the
+            # stored receipt: they are derived again for the authenticated caller on
+            # replay, so the durable record stays verifier-only at rest.
             self._store_receipt(
                 connection,
                 claim_request_id,
@@ -1243,7 +1370,11 @@ class BoardStore:
                 request,
                 {
                     **response,
-                    "claim": {key: value for key, value in response["claim"].items() if key != "capability"},
+                    "claim": {
+                        key: value
+                        for key, value in response["claim"].items()
+                        if key not in ("capability", "agentCredential")
+                    },
                 },
                 task_id=chosen["task_id"],
                 attempt_id=attempt_id,
@@ -1611,6 +1742,18 @@ class BoardStore:
         # and other result writers for its whole duration, so the files are
         # validated and hashed first, outside any transaction.
         verified_artifacts = self._verify_artifacts(artifacts)
+        # A governed turn's sealed output manifest is verified outside the transaction
+        # too; a manifest that cannot be verified fails the attempt honestly instead
+        # of publishing an unverified success.
+        try:
+            self.workflow.precheck_result(params)
+        except BoardError as error:
+            status = "failed"
+            error_text = f"the governed result could not be imported: {error.message}"
+            result = {
+                **(result or {}),
+                "governedError": {"code": error.code, "message": error.message},
+            }
         request = {
             "attemptId": attempt_id_param,
             "status": status,
@@ -1659,6 +1802,7 @@ class BoardStore:
                             nonce,
                         ),
                     }
+                    stored_claim = self._attach_agent_credential(connection, stored_claim)
                 return {**receipt, "claim": stored_claim, "replayed": True}
             now = self.now()
             for artifact in verified_artifacts:
@@ -1709,8 +1853,10 @@ class BoardStore:
                 task_state = "reconciliation-needed"
             elif status == "ok" and shutdown_confirmed:
                 # A completion that beat a cancel request is the one legal durable
-                # outcome; the race is recorded rather than re-labelled.
-                task_state = "completed"
+                # outcome; the race is recorded rather than re-labelled. A governed
+                # yield with a validated structured outcome requeues the same logical
+                # task instead of pretending the original goal completed.
+                task_state = "queued" if self.workflow.yield_disposition(result) is not None else "completed"
             elif status == "ok" and not shutdown_confirmed:
                 task_state = "reconciliation-needed"
             else:
@@ -1793,6 +1939,27 @@ class BoardStore:
             )
             if decision is not None:
                 response["decision"] = decision
+            # Governed import and helper fan-in commit with the result: the validated
+            # turn outcome, the assistance request and the workspace seal are one
+            # durable fact with the attempt that produced them.
+            governed = self.workflow.turn_concluded(
+                connection,
+                task=task_row,
+                attempt=attempt_row,
+                payload=payload,
+                task_state=task_state,
+                now=now,
+            )
+            if governed is not None:
+                response["workflow"] = governed
+            self.workflow.child_settled(
+                connection,
+                task=task_row,
+                attempt=attempt_row,
+                payload=payload,
+                task_state=task_state,
+                now=now,
+            )
             self._store_receipt(
                 connection,
                 command_id,

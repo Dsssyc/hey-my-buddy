@@ -16,7 +16,14 @@ from pathlib import Path
 from support import BoardTestCase
 
 from buddy import migrate as migrate_module
-from buddy.db import DB_FILE, SCHEMA_V5, SCHEMA_VERSION, V5_SCHEMA_VERSION
+from buddy.db import (
+    DB_FILE,
+    EVALUATION_TABLES,
+    SCHEMA_V5,
+    SCHEMA_VERSION,
+    V5_SCHEMA_VERSION,
+    V6_SCHEMA_VERSION,
+)
 from buddy.errors import BoardError
 from buddy.store import BoardStore
 
@@ -302,6 +309,56 @@ class MigrationPlanTests(MigrationTestCase):
             self.assertEqual(caught.code, "CORRUPT")
         else:  # pragma: no cover - must not migrate
             self.fail("a corrupt board must not be migrated")
+
+
+class VersionSixMigrationTests(MigrationTestCase):
+    """A v6 console board upgrades to the governed workflow schema offline."""
+
+    def build_v6_board(self, directory: Path) -> None:
+        connection = sqlite3.connect(directory / DB_FILE, isolation_level=None, timeout=10)
+        try:
+            for statement in EVALUATION_TABLES:
+                connection.execute(statement)
+            connection.execute(
+                "INSERT OR IGNORE INTO evaluation_state(id, created_at, updated_at) VALUES(1, ?, ?)", (NOW, NOW)
+            )
+            connection.execute(
+                "INSERT INTO evaluation_profiles(profile_id, label, adapter, provider, model, effort, available,"
+                " enabled, created_revision, updated_revision) VALUES('profile-1','Fixture','dsh','deepseek-official',"
+                "'deepseek-flash','off',1,1,1,1)"
+            )
+            connection.execute("UPDATE meta SET value=? WHERE key='schema_version'", (str(V6_SCHEMA_VERSION),))
+        finally:
+            connection.close()
+
+    def test_v6_upgrades_to_the_workflow_schema_and_preserves_evaluation_records(self):
+        directory = self.fixture()
+        self.build_v6_board(directory)
+        self.assertEqual(schema_version(directory / DB_FILE), V6_SCHEMA_VERSION)
+        plan = migrate_module.migrate(directory, dry_run=True)
+        self.assertEqual(plan["fromVersion"], V6_SCHEMA_VERSION)
+        self.assertEqual(plan["toVersion"], SCHEMA_VERSION)
+        result = migrate_module.migrate(directory, confirm=True)
+        self.assertTrue(result["migrated"])
+        self.assertEqual(result["schemaVersion"], SCHEMA_VERSION)
+        self.assertEqual(result["counts"], result["countsAfter"])
+        self.assertEqual(result["counts"]["evaluation_profiles"], 1)
+        self.assertEqual(result["counts"]["tasks"], 4)
+        backup = Path(result["backup"])
+        self.assertTrue(backup.name.endswith(".json") is False)
+        self.assertIn(".v6-backup-", backup.name)
+        self.assertEqual(schema_version(backup), V6_SCHEMA_VERSION)
+        self.assertEqual(schema_version(directory / DB_FILE), SCHEMA_VERSION)
+        store = BoardStore(directory)
+        store.initialize()
+        self.assertEqual(store.task_get({"runId": "task-completed"})["task"]["acceptanceVerdict"], "accepted")
+        with store.db.read() as connection:
+            tables = {
+                row["name"]
+                for row in connection.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()
+            }
+        self.assertIn("workflow_runs", tables)
+        self.assertIn("workspace_reservations", tables)
 
 
 class MigrationExecutionTests(MigrationTestCase):

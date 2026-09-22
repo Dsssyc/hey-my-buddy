@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import json
 import mimetypes
+import os
 import re
 import secrets
 import threading
@@ -52,7 +53,20 @@ CONSOLE_OPERATIONS = (
     "task_cancel",
     "task_retry",
     "task_acknowledge",
+    "workflow_submit",
+    "workflow_get",
+    "workflow_decide",
+    "workflow_continue",
+    "workflow_takeover",
+    "workflow_cancel",
+    "workflow_acknowledge",
+    "workflow_suggest",
 )
+
+#: Fields the console server owns. A browser that supplies one is refused: console
+#: authority is the session this server registered with the service, never a JSON
+#: value a caller can choose.
+BROWSER_REFUSED_FIELDS = frozenset({"consoleAuthority", "userOverride", "consoleUser", "adminOverride"})
 
 STATUS_BY_CODE = {
     "INVALID_ARGUMENT": 400,
@@ -70,6 +84,11 @@ STATUS_BY_CODE = {
     "GATE_CLOSED": 409,
     "NOT_READY": 409,
     "SHUTDOWN_UNCONFIRMED": 409,
+    "PREPARATION_CONFLICT": 409,
+    "SNAPSHOT_CHANGED": 409,
+    "TURN_INPUT_MISMATCH": 409,
+    "WORKSPACE_INVALID": 409,
+    "WORKSPACE_CONFLICT": 409,
     "MESSAGE_TOO_LARGE": 413,
     "UNSUPPORTED": 501,
     "UNSUPPORTED_ADAPTER": 501,
@@ -183,6 +202,13 @@ class Console:
             self._server = server
             self.origin = f"http://{self.host}:{server.server_address[1]}"
             self.url = f"{self.origin}/{self.token}/"
+            # The service accepts console authority only for a session it registered.
+            # An older service object without that registry is left untouched, and the
+            # browser surface keeps working as a plain validated-operations client.
+            try:
+                self.service.register_console_authority(self.session)
+            except AttributeError:
+                pass
             self._thread = threading.Thread(target=server.serve_forever, name="buddy-console", daemon=True)
             self._thread.start()
             return {
@@ -203,6 +229,13 @@ class Console:
                 self._server.shutdown()
                 self._server.server_close()
                 self._server = None
+            # The registered console session dies with the console, so a stale URL can
+            # never present a live authority to the service.
+            if self.session:
+                try:
+                    self.service.revoke_console_authority(self.session)
+                except AttributeError:
+                    pass
             self.token = self.session = self.csrf = ""
             self.url = None
             return {"closed": True, "readOnly": False}
@@ -225,7 +258,99 @@ class Console:
             )
         if not isinstance(params, dict):
             raise BoardError("INVALID_ARGUMENT", "params must be an object")
-        return call_operation(self.service, operation, params)
+        params = dict(params)
+        refused = sorted(set(params) & BROWSER_REFUSED_FIELDS)
+        if refused:
+            raise BoardError(
+                "INVALID_ARGUMENT",
+                f"{refused[0]} is not accepted from the browser; console authority is attached by the console server",
+            )
+        if self.session:
+            params["consoleAuthority"] = {"sessionId": self.session}
+        if operation == "workflow_submit":
+            # The console is the trusted client for a browser submission: it chooses
+            # and persists the private submission capability BEFORE the RPC, so an
+            # idempotent retry recovers the original generation without the browser
+            # ever handling a token.
+            token = params.get("submissionToken")
+            request_id = params.get("requestId")
+            if not token and isinstance(request_id, str) and request_id:
+                params["submissionToken"] = self._submission_token(request_id)
+        result = call_operation(self.service, operation, params)
+        return self._scrub_control(result)
+
+    def _scrub_control(self, result: Any) -> Any:
+        """Persist a newly issued capability and return its owner-private file path.
+
+        The browser never reads or displays a token: React receives the same compact
+        payload with ``control.controlFile`` (and no ``controlToken``).
+        """
+        if not isinstance(result, dict):
+            return result
+        control = result.get("control")
+        if not isinstance(control, dict) or not control.get("controlToken"):
+            return result
+        run_id = result.get("runId")
+        if not isinstance(run_id, str) or not run_id:
+            raise BoardError("INVALID_ARGUMENT", "A control capability arrived without a runId")
+        path = self._save_control(run_id, control)
+        scrubbed = {
+            "hostId": control.get("hostId"),
+            "ownerGeneration": control.get("ownerGeneration"),
+            "controlFile": path,
+        }
+        return {**result, "control": scrubbed, "controlFile": path}
+
+    def _controls_dir(self) -> Path:
+        directory = Path(self.store.directory) / "controls"
+        directory.mkdir(mode=0o700, parents=True, exist_ok=True)
+        os.chmod(directory, 0o700)
+        return directory
+
+    def _save_control(self, run_id: str, control: dict) -> str:
+        from .db import utc_now
+
+        generation = int(control.get("ownerGeneration") or 1)
+        path = self._controls_dir() / f"{run_id}.g{generation}.json"
+        payload = {
+            "hostId": control.get("hostId"),
+            "ownerGeneration": generation,
+            "controlToken": control.get("controlToken"),
+            "runId": run_id,
+            "savedAt": utc_now(),
+        }
+        temporary = path.with_suffix(".tmp")
+        fd = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        try:
+            os.write(fd, json.dumps(payload, sort_keys=True).encode("utf-8"))
+            os.fsync(fd)
+        finally:
+            os.close(fd)
+        os.replace(temporary, path)
+        return str(path)
+
+    def _submission_token(self, request_id: str) -> str:
+        from .db import sha256_text
+
+        directory = Path(self.store.directory) / "submissions"
+        directory.mkdir(mode=0o700, parents=True, exist_ok=True)
+        os.chmod(directory, 0o700)
+        path = directory / f"{sha256_text(request_id)[:32]}.json"
+        if path.is_file():
+            payload = json.loads(path.read_text())
+            token = payload.get("submissionToken")
+            if isinstance(token, str) and token:
+                return token
+        token = secrets.token_hex(32)
+        temporary = path.with_suffix(".tmp")
+        fd = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        try:
+            os.write(fd, json.dumps({"requestId": request_id, "submissionToken": token}, sort_keys=True).encode("utf-8"))
+            os.fsync(fd)
+        finally:
+            os.close(fd)
+        os.replace(temporary, path)
+        return token
 
     def snapshot(self) -> dict:
         snapshot = call_operation(self.service, "console_snapshot", {})
