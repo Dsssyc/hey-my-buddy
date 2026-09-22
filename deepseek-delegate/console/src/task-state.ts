@@ -2,6 +2,7 @@ import type { Task } from "./types";
 
 export function needsReview(task: Task): boolean {
   return (
+    (!task.workflow || task.workflow.state === "delivered") &&
     !task.acceptedAt &&
     task.spec?.adapter !== "decision" &&
     ["completed", "failed", "cancelled"].includes(task.status) &&

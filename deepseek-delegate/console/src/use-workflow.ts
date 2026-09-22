@@ -23,7 +23,7 @@ export function useWorkflow(api: ConsoleApi, task: Task, snapshot: Snapshot, ref
     setValue(null);
     api.command<Workflow>("workflow_get", { runId }, csrf).then(result => {
       if (!result.governed || result.runId !== runId || !Number.isInteger(result.revision)) throw new Error("协作记录不完整，请检查服务版本。");
-      if (current) { setValue(result); setError(""); }
+      if (current) { setValue(result); if (!pending.current) setError(""); }
     }).catch(reason => { if (current) setError(errorText(reason)); });
     return () => { current = false; };
   }, [api, runId, csrf, task.revision, task.workflow?.revision, reload]);

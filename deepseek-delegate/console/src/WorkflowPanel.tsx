@@ -43,7 +43,7 @@ export function WorkflowPanel({ task, snapshot, api, refresh, selectTask }: {
       helpers: decision === "decline" ? [] : helpers.map(h => {
         const profile = profiles.find(p => p.profileId === h.profileId)!;
         return {
-          requestId: h.id, task: h.task.trim(), cwd: h.cwd, adapter: "dsh",
+          requestId: crypto.randomUUID(), task: h.task.trim(), cwd: h.cwd, adapter: "dsh",
           provider: profile.provider, model: profile.model, effort: profile.effort,
           timeoutSeconds: 28800, workspace: task.spec?.workspace !== false,
           executionWorkspace: {
@@ -109,7 +109,7 @@ export function WorkflowPanel({ task, snapshot, api, refresh, selectTask }: {
         })}>提交接续输入</button>
       </fieldset>}
       {value.artifacts.length > 0 && <section className="detail-section"><h3>固定产物引用</h3><ul className="artifact-list">
-        {value.artifacts.map(a => <li key={a.artifactId}><span>{a.kind} · {a.sourceTaskId === value.runId ? "本任务" : a.sourceTaskId}</span><code>{a.artifactId}</code><code>SHA-256 {a.manifestSha256}</code></li>)}
+        {value.artifacts.map(a => <li key={a.artifactId}><span>{a.kind} · {!a.sourceTaskId || a.sourceTaskId === value.runId ? "本任务" : a.sourceTaskId}</span><code>{a.artifactId}</code>{a.commit && <code>commit {a.commit}</code>}<code>SHA-256 {a.snapshotSha256 || a.manifestSha256}</code>{a.diffPath && <code>{a.diffPath}</code>}</li>)}
       </ul><p className="small muted">这些引用固定在具体执行。验收前仍须检查实际 diff 和测试结果。</p></section>}
       {value.state === "delivered" && <fieldset className="workflow-controls" disabled={locked || value.task.shutdownConfirmed !== true}>
         <legend>最终验收</legend><label className="field"><span>实际检查依据</span><textarea rows={3} value={note} maxLength={2000} onChange={e => setNote(e.target.value)} /></label>

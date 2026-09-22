@@ -51,6 +51,9 @@ export type Workflow = {
     sourceTaskId: string;
     kind: string;
     manifestSha256: string;
+    snapshotSha256?: string;
+    commit?: string;
+    diffPath?: string;
   }[];
   finalArtifactId: string | null;
   finalAttemptId: string | null;

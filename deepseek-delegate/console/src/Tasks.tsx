@@ -51,7 +51,7 @@ export function Tasks({
       (filter === "all" ||
         (filter === "active"
           ? ["queued", "running", "cancelling", "waiting-host", "waiting-assistance"].includes(t.status) || t.workflow?.awaitingHost
-          : needsReview(t))) &&
+          : filter === "host" ? t.workflow?.awaitingHost === true : needsReview(t))) &&
       `${t.task} ${t.cwd} ${t.runId}`
         .toLowerCase()
         .includes(query.toLowerCase()),
@@ -78,6 +78,7 @@ export function Tasks({
             {[
               ["all", "全部"],
               ["active", "进行中"],
+              ["host", "待决定"],
               ["review", "待验收"],
             ].map(([key, label]) => (
               <button
@@ -157,7 +158,7 @@ export function Tasks({
               <dt>任务 ID</dt>
               <dd className="mono">{task.runId}</dd>
               <dt>负责人</dt>
-              <dd>{task.owner}</dd>
+              <dd>{task.workflow?.hostId || task.owner}</dd>
               <dt>执行配置</dt>
               <dd>
                 {display(task.spec?.model)}{" "}
