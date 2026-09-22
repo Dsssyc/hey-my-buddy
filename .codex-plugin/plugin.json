@@ -1,7 +1,7 @@
 {
   "name": "hey-my-buddy",
-  "version": "0.4.0+codex.20260919060734",
-  "description": "Local dsh delegation through the uv-managed Buddy CLI: a transactional Python blackboard over C-Two owns tasks, results and events, independent workers execute through dsh/command/external adapters, and there is no MCP server.",
+  "version": "0.5.0+codex.20260922021326",
+  "description": "Host-directed local dsh work with explicit Git workspaces, assistance and continuation, shared model evaluations and a private React/Vite console over the transactional Python/C-Two blackboard.",
   "author": {
     "name": "Dsssyc"
   },
@@ -9,7 +9,7 @@
   "interface": {
     "displayName": "Hey My Buddy",
     "shortDescription": "Delegate work to local dsh via the Buddy CLI.",
-    "longDescription": "Delegate bounded dsh tasks through a uv-managed Buddy CLI backed by a transactional Python blackboard over C-Two. Independent workers claim queued tasks and execute them through dsh, command or caller-owned external adapters. One `buddy run` stays connected until the run finishes, `buddy await` keeps waiting on the same run, `buddy inquire` asks the live agent a correlated question, and results stay durable and inspectable. Background follow-up uses an explicit official App heartbeat that calls the same CLI - there is no MCP server.",
+    "longDescription": "Delegate scoped repository work through the uv-managed Buddy CLI. Explicit Git snapshots and Host capabilities govern assistance, continuation and final artifact acceptance. A private React/Vite console shows tasks and bounded shared model evaluations. Independent workers own execution and shutdown; Python and C-Two retain durable task state. Legacy one-shot adapters remain available. Background follow-up uses an explicit App heartbeat; no MCP server or peer delegation is required.",
     "developerName": "Dsssyc",
     "category": "Productivity",
     "capabilities": [
