@@ -30,6 +30,7 @@ import { performance } from 'node:perf_hooks';
 import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
 import { loadYaml } from './lib/yaml.mjs';
+import { readTurnInput, readTurnRecord, turnOutputPath } from './lib/turn-contract.mjs';
 import {
   DEFAULT_WORKSPACE_TIMEOUT_SECONDS, MAX_WORKSPACE_TIMEOUT_SECONDS, MIN_WORKSPACE_TIMEOUT_SECONDS,
   WorkspaceError, adoptSession, connectWorkspaceHost, resolveWorkspaceTarget, resolveWorkspace,
@@ -58,6 +59,8 @@ const CAPTURE_FILENAME = 'capture.json';
 const CAPTURE_PLUGIN_PATH = fileURLToPath(new URL('../plugins/session-capture.mjs', import.meta.url));
 /** Private per-run inquiry bridge; mounted only when the service supplies a socket. */
 const INQUIRY_PLUGIN_PATH = fileURLToPath(new URL('../plugins/inquiry-bridge.mjs', import.meta.url));
+/** Required only for governed turns; independent of optional session grouping. */
+const TURN_PLUGIN_PATH = fileURLToPath(new URL('../plugins/turn-result.mjs', import.meta.url));
 /** Prefix of the private bridge failure report written next to the socket. */
 const INQUIRY_ERROR_SUFFIX = '.error.json';
 /**
@@ -107,6 +110,10 @@ const USAGE = [
   '  --inquiry-token <token>  per-run shared secret every bridge frame must carry',
   '  --inquiry-results <path> private append-only journal the bridge writes so a',
   '                          correlated answer stays readable after this run ends',
+  '  --turn-input-file <path> private absolute JSON input for a governed turn;',
+  '                          must be paired with --turn-output-file',
+  '  --turn-output-file <path> absent private absolute path for the structured',
+  '                          root-agent result; ordinary prose is not a result',
   '  -h, --help              print this help and exit',
   '',
   'Install the workspace bridge in the owning host profile with',
@@ -291,6 +298,8 @@ try {
       'inquiry-socket': { type: 'string' },
       'inquiry-token': { type: 'string' },
       'inquiry-results': { type: 'string' },
+      'turn-input-file': { type: 'string' },
+      'turn-output-file': { type: 'string' },
     },
     allowPositionals: false,
   }));
@@ -345,6 +354,21 @@ if (inquiryToken !== undefined && (inquiryToken.length > 256 || inquiryToken.inc
 }
 if (attachSession !== undefined && inquiryRawSocket !== undefined) {
   fail('--attach-session does not mount an inquiry bridge: it runs no model task');
+}
+// Validate the complete governed protocol before settings, grouping or a paid
+// spawn. The input is snapshotted once; the private patch carries these exact
+// values and the SHA-256 of the original input file's bytes into the plugin.
+let turnConfig;
+const turnInputFlag = values['turn-input-file'];
+const turnOutputFlag = values['turn-output-file'];
+if ((turnInputFlag === undefined) !== (turnOutputFlag === undefined)) fail('--turn-input-file and --turn-output-file must be supplied together');
+if (turnInputFlag !== undefined) {
+  if (attachSession !== undefined) fail('--attach-session cannot run a governed turn');
+  try {
+    const loaded = readTurnInput(turnInputFlag);
+    turnConfig = { ...loaded, outputFile: turnOutputPath(turnOutputFlag) };
+    if (!isFile(TURN_PLUGIN_PATH)) throw new Error('Buddy turn-result plugin is missing');
+  } catch (error) { fail(`invalid turn protocol: ${error.message}`); }
 }
 if (!/^\d+$/.test(values.timeout)) {
   fail(`--timeout must be an integer between ${MIN_TIMEOUT_SECONDS} and ${MAX_TIMEOUT_SECONDS} seconds`);
@@ -610,6 +634,14 @@ try {
       }],
     });
   }
+  if (turnConfig !== undefined) {
+    patchRows.push({
+      insert: [{
+        id: 'deepseek-delegate-turn-result', name: TURN_PLUGIN_PATH,
+        config: { input: turnConfig.input, inputSha256: turnConfig.inputSha256, outputFile: turnConfig.outputFile, promptSha256, cwd },
+      }],
+    });
+  }
   writeFileSync(patchFile, JSON.stringify(patchRows), { mode: 0o600 });
 } catch {
   if (tempDir !== undefined) rmSync(tempDir, { recursive: true, force: true });
@@ -755,6 +787,24 @@ async function finalizeGrouping(status, shutdownConfirmed) {
 
 function buildResult(status, exitCode, signal, error, workspace, shutdownConfirmed) {
   const { text, truncated } = readTextPrefix(stdoutLog, FINAL_TEXT_LIMIT);
+  let turn;
+  let turnResultError;
+  if (turnConfig !== undefined) {
+    try {
+      turn = readTurnRecord(turnConfig.outputFile, { ...turnConfig, promptSha256 });
+    } catch (failure) {
+      turn = null;
+      turnResultError = `required Buddy turn result is unavailable or invalid: ${failure.message}`;
+    }
+    if (!shutdownConfirmed) turnResultError = 'Buddy turn process group is not confirmed stopped';
+    // Child status and exit code remain diagnostic facts. A well-formed file
+    // cannot turn cancellation/nonzero into success; a missing or unconfirmed
+    // governed result cannot inherit success from ordinary headless prose.
+    if (status === 'ok' && turnResultError !== undefined) {
+      status = 'turn-result-error';
+      error = turnResultError;
+    }
+  }
   return {
     status,
     mode: 'run',
@@ -781,6 +831,7 @@ function buildResult(status, exitCode, signal, error, workspace, shutdownConfirm
     finalTextTruncated: truncated,
     workspace,
     processState: { pid: child?.pid ?? null, shutdownConfirmed },
+    ...(turnConfig === undefined ? {} : { turn, turnResultPath: turnConfig.outputFile, turnResultError: turnResultError ?? null }),
     note: 'exit 0 only means the dsh agent finished, not that the task is correct: inspect the real diff/artifacts and run the relevant checks yourself.',
   };
 }

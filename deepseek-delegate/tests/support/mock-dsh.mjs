@@ -26,6 +26,7 @@
   const path = await import('node:path');
   const crypto = await import('node:crypto');
   const childProcess = await import('node:child_process');
+  const { pathToFileURL } = await import('node:url');
 
   const artifactDir = process.env.MOCK_ARTIFACT_DIR;
   const record = (name, text) => {
@@ -48,6 +49,61 @@
   }
   const argv = process.argv.slice(2);
   record('argv.json', JSON.stringify(argv));
+
+  /** Exercise the production turn plugin with the ordered native events, without a model. */
+  async function finishTurn(entry) {
+    const mode = process.env.MOCK_TURN_MODE || 'valid';
+    if (mode === 'missing') return;
+    if (mode === 'malformed') {
+      fs.writeFileSync(entry.config.outputFile, '{malformed', { mode: 0o600 });
+      return;
+    }
+    const { apply } = await import(pathToFileURL(entry.name).href);
+    const listeners = new Map();
+    const on = (name, fn) => { listeners.set(name, [...listeners.get(name) || [], fn]); return () => {}; };
+    const emit = (name, ...args) => { for (const fn of listeners.get(name) || []) fn(...args); };
+    const definitions = new Map();
+    const session = { id: process.env.MOCK_SESSION_ID || 'session-mock-0001', header: { cwd: process.cwd() }, seq: 0 };
+    const agent = { id: session.id, session, status: 'running', ctx: {
+      on,
+      tools: { register(definition) { definitions.set(definition.name, definition); return () => {}; }, guard() { return () => {}; } },
+      systemPrompt: { section(value) { record('turn-context.txt', value.text); }, getSectionOrder() { return 1000; } },
+    } };
+    const ctx = { on, agents: { get(id) { return id === agent.id ? agent : undefined; }, roots() { return [agent]; } } };
+    apply(ctx, entry.config);
+    const append = (type, data, extra = {}) => {
+      const event = { type, data, seq: session.seq++, time: 1, ...extra };
+      emit('session/event', session, event);
+      return event;
+    };
+    const message = { role: 'user', id: 'input-1', source: { kind: 'user' }, content: [{ type: 'text', text: argv.at(-1) }] };
+    emit('agent/inbox/inserted', { agent, message });
+    append('turn/start', { turn: 1 });
+    append('step/start', { turn: 1, step: 1 });
+    append('user/message', message);
+    const nested = mode === 'ptc';
+    const call = append('tool/call', { turn: 1, step: 1, callId: 'call-1', name: nested ? 'run_code' : 'buddy_finish_turn', arguments: '{}' });
+    const outerToken = Symbol();
+    const exec = { agent, callId: nested ? 'call-1:ptc:1' : 'call-1', rootCallId: 'call-1', name: 'buddy_finish_turn', token: Symbol(), signal: new AbortController().signal, concludeTurn() {}, ...(nested ? { parent: outerToken } : {}) };
+    const outcome = JSON.parse(process.env.MOCK_TURN_OUTCOME || '{"disposition":"completed","summary":"Mock structured turn completed.","remaining":[],"decisions":[],"artifacts":[],"request":null}');
+    const value = await definitions.get('buddy_finish_turn').execute(outcome, exec);
+    emit('tools/result', exec, { isError: false, value, concludesTurn: true });
+    if (nested) {
+      append('tool/ptc-dispatch', { rootCallId: 'call-1', parentCallId: 'call-1', subCallId: exec.callId, name: 'buddy_finish_turn', isError: false });
+      emit('tools/result', { agent, callId: 'call-1', rootCallId: 'call-1', name: 'run_code', token: outerToken, signal: exec.signal }, { isError: false, value: {}, concludesTurn: true });
+    }
+    append('tool/result', { turn: 1, step: 1, message: { source: { kind: 'tool', callId: 'call-1' }, content: [{ type: 'tool-result', toolCallId: 'call-1', isError: false }] } }, { sourceEventSeqs: [call.seq] });
+    append('step/end', { turn: 1, step: 1 });
+    append('turn/end', { turn: 1, reason: { kind: 'completed' } });
+    agent.status = 'idle';
+    await Promise.all((listeners.get('session/flush') || []).map((fn) => Promise.resolve().then(() => fn(session))));
+    if (mode === 'stale') {
+      const result = JSON.parse(fs.readFileSync(entry.config.outputFile, 'utf8'));
+      result.attemptId = 'another-attempt';
+      fs.writeFileSync(entry.config.outputFile, JSON.stringify(result));
+    }
+    if (mode === 'nonprivate') fs.chmodSync(entry.config.outputFile, 0o644);
+  }
 
   const patchIndex = argv.indexOf('--patch');
   if (patchIndex !== -1 && argv[patchIndex + 1] !== undefined) {
@@ -78,6 +134,8 @@
         }, null, 2)}\n`, { mode: 0o600 });
       }
       record('settings-copy-dir.txt', path.dirname(settingsPath));
+      const turnEntry = entries.flatMap((entry) => entry.insert || []).find((entry) => entry.id === 'deepseek-delegate-turn-result');
+      if (turnEntry) await finishTurn(turnEntry);
     } catch (error) {
       record('patch-error.txt', String((error && error.message) || error));
     }
