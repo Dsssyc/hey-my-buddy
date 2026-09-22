@@ -1686,14 +1686,16 @@ class WorkflowCoordinator:
         ).fetchall()
         outcomes: list[dict] = []
         for row in rows:
+            attempt_id = row["active_attempt_id"] or row["selected_attempt_id"]
             turn = connection.execute(
-                "SELECT * FROM workflow_turns WHERE run_id=? ORDER BY turn_index DESC LIMIT 1", (row["child_task_id"],)
+                "SELECT * FROM workflow_turns WHERE run_id=? AND attempt_id=? ORDER BY turn_index DESC LIMIT 1",
+                (row["child_task_id"], attempt_id),
             ).fetchone()
             outcome = json.loads(turn["outcome_json"]) if turn is not None and turn["outcome_json"] else None
-            attempt_id = row["active_attempt_id"] or row["selected_attempt_id"]
             artifact = connection.execute(
-                "SELECT * FROM workflow_artifacts WHERE run_id=? AND kind='output' ORDER BY created_at DESC LIMIT 1",
-                (row["child_task_id"],),
+                "SELECT * FROM workflow_artifacts WHERE run_id=? AND attempt_id=? AND kind='output'"
+                " ORDER BY rowid DESC LIMIT 1",
+                (row["child_task_id"], attempt_id),
             ).fetchone()
             child_run = self._run_optional(connection, row["child_task_id"])
             entry = {
@@ -1711,8 +1713,11 @@ class WorkflowCoordinator:
                 "generation": turn["generation"] if turn is not None else None,
                 "workspaceManifestSha256": row["workspace_manifest_sha256"],
             }
-            if child_run is not None and child_run["workspace_manifest_json"]:
+            manifest = json.loads(turn["input_json"]).get("executionWorkspace") if turn is not None else None
+            if manifest is None and child_run is not None and child_run["workspace_manifest_json"]:
                 manifest = json.loads(child_run["workspace_manifest_json"])
+            if manifest:
+                entry["workspaceManifestSha256"] = manifest.get("manifestSha256")
                 entry["workspace"] = {
                     "workspaceId": manifest.get("workspaceId"),
                     "path": manifest.get("path"),
@@ -1724,6 +1729,8 @@ class WorkflowCoordinator:
                 changed = seal.get("changedPaths")
                 entry["artifact"] = {
                     "artifactId": artifact["artifact_id"],
+                    "attemptId": artifact["attempt_id"],
+                    "turnId": artifact["turn_id"],
                     "inputCommit": seal.get("inputCommit"),
                     "outputCommit": seal.get("commit"),
                     "snapshotSha256": artifact["manifest_sha256"],
@@ -2360,7 +2367,8 @@ class WorkflowCoordinator:
             return None
         if run_row["state"] == "executing":
             continuation = connection.execute(
-                "SELECT continuation_id FROM workflow_continuations WHERE run_id=? AND state='queued' LIMIT 1",
+                "SELECT continuation_id, workspace_manifest_json FROM workflow_continuations"
+                " WHERE run_id=? AND state='queued' ORDER BY created_at LIMIT 1",
                 (run_row["run_id"],),
             ).fetchone()
             turn_count = connection.execute(
@@ -2368,6 +2376,8 @@ class WorkflowCoordinator:
             ).fetchone()["count"]
             if int(turn_count) > 0 and continuation is None:
                 return "awaiting-host"
+            if continuation is not None and not continuation["workspace_manifest_json"]:
+                return "awaiting-workspace-preparation"
             return None
         if run_row["state"] == "awaiting-host":
             return "awaiting-host"
@@ -2486,33 +2496,30 @@ class WorkflowCoordinator:
     def _latest_handoff(self, connection, run_row, manifest: dict) -> dict | None:
         """The newest fixed output produced on this run's physical checkout.
 
-        Ordered durably by artifact creation, so the parent's own later turn wins over
-        an earlier helper seal on the same checkout instead of reverting the baseline.
+        workflow_artifacts is append-only (no delete/replace path); its SQLite rowid
+        is publication order, independent of equal timestamps, wall-clock rollback
+        and random artifact IDs. Check the output's actual checkout, including the
+        parent's own older outputs after an allocation change.
         """
         checkout_id = manifest.get("checkoutId")
         if not checkout_id:
             return None
-        candidates: list[tuple[str, str, str]] = []
         for row in connection.execute(
-            "SELECT artifact_id, manifest_json, created_at FROM workflow_artifacts"
-            " WHERE run_id=? AND kind='output'",
-            (run_row["run_id"],),
-        ).fetchall():
-            candidates.append((row["created_at"], row["artifact_id"], row["manifest_json"]))
-        for row in connection.execute(
-            "SELECT a.artifact_id, a.manifest_json, a.created_at, c.workspace_manifest_json AS child_manifest"
-            " FROM workflow_children c JOIN workflow_artifacts a"
-            " ON a.run_id=c.child_task_id AND a.kind='output'"
-            " WHERE c.parent_run_id=? AND c.workspace_manifest_json IS NOT NULL",
-            (run_row["run_id"],),
-        ).fetchall():
-            child_manifest = json.loads(row["child_manifest"])
-            if child_manifest.get("checkoutId") == checkout_id:
-                candidates.append((row["created_at"], row["artifact_id"], row["manifest_json"]))
-        if not candidates:
-            return None
-        candidates.sort()
-        return json.loads(candidates[-1][2])
+            "SELECT a.manifest_json, t.input_json FROM workflow_artifacts a"
+            " JOIN workflow_turns t ON t.run_id=a.run_id AND t.attempt_id=a.attempt_id WHERE a.kind='output'"
+            " AND (a.run_id=? OR EXISTS (SELECT 1 FROM workflow_children c"
+            " WHERE c.parent_run_id=? AND c.child_task_id=a.run_id)) ORDER BY a.rowid DESC",
+            (run_row["run_id"], run_row["run_id"]),
+        ):
+            sealed = json.loads(row["manifest_json"])
+            # Real seals bind the immutable execution manifest by digest; unlike
+            # the early workspace double, they do not repeat checkoutId themselves.
+            execution = json.loads(row["input_json"]).get("executionWorkspace") or {}
+            if (execution.get("checkoutId") == checkout_id
+                    and execution.get("manifestSha256") == sealed.get("manifestSha256")
+                    and sealed.get("checkoutId", checkout_id) == checkout_id):
+                return sealed
+        return None
 
     def _continuation_intent(self, connection, run_row, continuation) -> dict | None:
         """The workspace intent of one continuation, or None when no fresh prepare is needed.
@@ -2549,66 +2556,124 @@ class WorkflowCoordinator:
         input already contains the resolved manifest; preparation is idempotent by
         the continuation identity, so concurrent workers cannot double-prepare.
         """
+        def snapshot(connection, continuation_id):
+            row = connection.execute(
+                "SELECT * FROM workflow_continuations WHERE continuation_id=? AND state='queued'"
+                " AND workspace_manifest_json IS NULL", (continuation_id,),
+            ).fetchone()
+            if row is None:
+                return None
+            run = self._run_optional(connection, row["run_id"])
+            task = connection.execute("SELECT * FROM tasks WHERE task_id=?", (row["run_id"],)).fetchone()
+            if run is None or run["state"] != "executing" or task["state"] != "queued" or task["active_attempt_id"]:
+                return None
+            attempt = self.board._selected_attempt(connection, task)
+            if attempt is not None and (attempt["execution_state"] != "finished" or not attempt["shutdown_confirmed"]):
+                return None
+            previous = json.loads(run["workspace_manifest_json"] or "{}")
+            reservations = connection.execute(
+                "SELECT * FROM workspace_reservations WHERE checkout_id=? AND state='held' ORDER BY reservation_id",
+                (previous.get("checkoutId"),),
+            ).fetchall()
+            own = [item for item in reservations if item["holder_task_id"] == row["run_id"]]
+            if len(own) != 1 or any(
+                item["holder_task_id"] != row["run_id"]
+                and (item["access"] == "write" or previous.get("access") == "write") for item in reservations
+            ):
+                # Transferred/occupied checkouts must not even be inspected by Git.
+                return None
+            reservation = own[0]
+            if any(reservation[key] != previous.get(field) for key, field in (
+                ("checkout_id", "checkoutId"), ("repository_id", "repositoryId"),
+                ("path", "path"), ("access", "access"),
+            )) or task["cwd"] != previous.get("path"):
+                return None
+            task_fence = tuple(task[key] for key in ("revision", "state", "active_attempt_id", "selected_attempt_id", "cwd", "spec_json"))
+            return dict(row), dict(run), task_fence, [dict(item) for item in reservations]
+
         selector = params.get("taskId") or params.get("runId")
         with self.db.read() as connection:
-            if isinstance(selector, str) and selector:
-                rows = connection.execute(
-                    "SELECT c.* FROM workflow_continuations c WHERE c.run_id=? AND c.state='queued'"
-                    " AND c.workspace_manifest_json IS NULL LIMIT 1",
-                    (selector,),
-                ).fetchall()
-            else:
-                rows = connection.execute(
-                    "SELECT c.* FROM workflow_continuations c JOIN tasks t ON t.task_id=c.run_id"
-                    " WHERE c.state='queued' AND c.workspace_manifest_json IS NULL AND t.state='queued'"
-                    " ORDER BY c.created_at LIMIT 1"
-                ).fetchall()
-            candidates = []
-            for row in rows:
-                run_row = self._run_optional(connection, row["run_id"])
-                if run_row is None:
+            rows = connection.execute(
+                "SELECT c.continuation_id FROM workflow_continuations c JOIN tasks t ON t.task_id=c.run_id"
+                " WHERE c.state='queued' AND c.workspace_manifest_json IS NULL AND t.state='queued'"
+                + (" AND c.run_id=?" if isinstance(selector, str) and selector else "")
+                + " ORDER BY c.rowid LIMIT 50",
+                (selector,) if isinstance(selector, str) and selector else (),
+            ).fetchall()
+        for selected in rows:
+            # Refresh immediately before each candidate, not once before a batch of
+            # potentially slow Git work. No read or write transaction spans Git.
+            with self.db.read() as connection:
+                before = snapshot(connection, selected["continuation_id"])
+                if before is None:
                     continue
-                intent = self._continuation_intent(connection, run_row, row)
-                if intent is not None:
-                    candidates.append((row, intent))
-        for row, intent in candidates:
-            manifest = workspace_module().prepare(
-                self.board.directory, f"{row['run_id']}:{row['continuation_id']}", intent
-            )
-            previous = json.loads(row["workspace_manifest_json"]) if row["workspace_manifest_json"] else {}
-            if previous.get("checkoutId") and previous.get("checkoutId") != manifest.get("checkoutId"):
-                raise BoardError(
-                    "PREPARATION_CONFLICT",
-                    "A continuation must stay on the allocated checkout; an explicitly changed allocation needs "
-                    "its own reservation before it can be claimed",
-                    expectedCheckoutId=previous.get("checkoutId"),
-                    preparedCheckoutId=manifest.get("checkoutId"),
-                )
-            with self.db.write() as connection:
-                updated = connection.execute(
-                    "UPDATE workflow_continuations SET workspace_manifest_json=?"
-                    " WHERE continuation_id=? AND workspace_manifest_json IS NULL",
-                    (canonical_json(manifest), row["continuation_id"]),
-                )
-                if updated.rowcount == 1:
-                    # The run's current allocation view follows the effective turn
-                    # manifest; the physical path and checkout identity do not change.
-                    connection.execute(
-                        "UPDATE workflow_runs SET workspace_manifest_json=?, workspace_id=?,"
-                        " workspace_manifest_sha256=?, updated_at=? WHERE run_id=?",
-                        (
-                            canonical_json(manifest),
-                            manifest.get("workspaceId"),
-                            manifest.get("manifestSha256"),
-                            self.now(),
-                            row["run_id"],
-                        ),
+                row, run, _, _ = before
+                previous = json.loads(run["workspace_manifest_json"])
+                intent = self._continuation_intent(connection, run, row)
+            problem = None
+            try:
+                if intent is None:
+                    manifest = previous
+                else:
+                    manifest = workspace_module().prepare(
+                        self.board.directory, f"{row['run_id']}:{row['continuation_id']}", intent
                     )
-                    if manifest.get("path"):
-                        connection.execute(
-                            "UPDATE tasks SET cwd=?, updated_at=? WHERE task_id=? AND cwd != ?",
-                            (manifest["path"], self.now(), row["run_id"], manifest["path"]),
-                        )
+                if any(manifest.get(field) != previous.get(field) for field in ("checkoutId", "checkoutRoot", "repositoryId", "path", "access")):
+                    raise BoardError("PREPARATION_CONFLICT", "The prepared continuation changed its allocated checkout")
+                with self.db.read() as connection:
+                    if snapshot(connection, row["continuation_id"]) != before:
+                        continue
+                # A recovered preparation may already have a manifest on disk.
+                # Recheck ownership before scanning its execution fingerprint.
+                workspace_module().verify(manifest, require_unchanged=True)
+            except Exception as error:
+                problem = {"code": getattr(error, "code", "WORKSPACE_PREPARE_FAILED"), "message": _head(str(error), 2000)}
+            with self.db.write() as connection:
+                if snapshot(connection, row["continuation_id"]) != before:
+                    # Cancellation, takeover, override, allocation or ownership drift
+                    # invalidates this activation. Keep all prepared recovery files.
+                    continue
+                now = self.now()
+                if problem is not None:
+                    request_id = f"prep-{row['continuation_id']}"
+                    payload = {
+                        "summary": "Continuation workspace preparation needs Host attention",
+                        "attempted": f"Prepare continuation {row['continuation_id']}",
+                        "neededWork": ["Resolve the workspace conflict and explicitly continue the goal"],
+                        "expectedArtifacts": [], "acceptance": "The allocated checkout has a verified fixed input",
+                        "continuationId": row["continuation_id"], "preparationError": problem,
+                    }
+                    connection.execute(
+                        "INSERT INTO workflow_requests(request_id, run_id, kind, summary, payload_json, state,"
+                        " expected_revision, created_at, updated_at) VALUES(?,?,'attention',?,?,'open',?,?,?)",
+                        (request_id, row["run_id"], payload["summary"], canonical_json(payload), run["revision"] + 1, now, now),
+                    )
+                    connection.execute("UPDATE workflow_continuations SET state='invalidated' WHERE continuation_id=?", (row["continuation_id"],))
+                    connection.execute(
+                        "UPDATE workflow_runs SET state='awaiting-host', active_request_id=?, updated_at=?, revision=revision+1 WHERE run_id=?",
+                        (request_id, now, row["run_id"]),
+                    )
+                    connection.execute("UPDATE tasks SET queue_reason='awaiting-host', updated_at=? WHERE task_id=?", (now, row["run_id"]),)
+                    kind = "workflow.workspace_preparation_failed"
+                    event = {"continuationId": row["continuation_id"], "requestId": request_id, "errorCode": problem["code"]}
+                else:
+                    frozen = canonical_json(manifest)
+                    connection.execute("UPDATE workflow_continuations SET workspace_manifest_json=? WHERE continuation_id=?", (frozen, row["continuation_id"]))
+                    connection.execute(
+                        "UPDATE workflow_runs SET workspace_manifest_json=?, workspace_id=?, workspace_manifest_sha256=?,"
+                        " updated_at=?, revision=revision+1 WHERE run_id=?",
+                        (frozen, manifest["workspaceId"], manifest["manifestSha256"], now, row["run_id"]),
+                    )
+                    connection.execute(
+                        "UPDATE workspace_reservations SET workspace_id=?, manifest_sha256=?, updated_at=?"
+                        " WHERE holder_task_id=? AND checkout_id=? AND state='held'",
+                        (manifest["workspaceId"], manifest["manifestSha256"], now, row["run_id"], manifest["checkoutId"]),
+                    )
+                    kind = "workflow.workspace_prepared"
+                    event = {"continuationId": row["continuation_id"], "manifestSha256": manifest["manifestSha256"], "checkoutId": manifest["checkoutId"]}
+                self.board._append_event(connection, kind, task_id=row["run_id"], revision=run["revision"] + 1, payload=event)
+                head = self.board._head_of(connection)
+            self.board._notify(head)
 
     def _issue_credential(self, connection, run_row, attempt_id, generation, turn_id, now) -> str:
         token = self.db.agent_token(run_row["run_id"], attempt_id, generation)
