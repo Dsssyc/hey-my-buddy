@@ -123,7 +123,7 @@ Decision execution timeout is 5–1800 seconds, default 300, with a separate 10-
 
 Event kinds include `task.submitted`, `task.cancel_requested`, `task.cancelled`, `task.completed`, `task.failed`, `task.retried`, `task.review_archived`, `task.accepted`, `task.rejected`, `task.imported`, `attempt.claimed`, `attempt.progress`, `attempt.reconciled`, `attempt.released`, `attempt.uncertain`, `attempt.lease_expired`, `worker.registered`, `message.posted` and `message.updated`.
 
-Governed events also include `workflow.boundary_updated`, `workflow.workspace_prepared` and `workflow.workspace_preparation_failed`. A preparation failure opens an attention request and invalidates that continuation while preserving the original goal and recovery files. Until a continuation has a prepared manifest, `worker-claim` skips it with `awaiting-workspace-preparation`; other claimable tasks remain eligible.
+Governed events also include `workflow.boundary_updated`, `workflow.workspace_prepared` and `workflow.workspace_preparation_failed`. A preparation failure opens an attention request and invalidates that continuation while preserving the original goal and recovery files; `activeRequest.preparationError` carries its code (up to 100 characters) and message (up to 2000). Transient `WORKSPACE_BUSY` lock contention instead leaves the continuation queued and emits no failure boundary. Until a continuation has a prepared manifest, `worker-claim` skips it with `awaiting-workspace-preparation`; other claimable tasks remain eligible.
 
 ### Messages and inquiry
 

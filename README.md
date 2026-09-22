@@ -80,6 +80,7 @@ A configured decision Buddy can recommend a worker configuration and propose bou
 - Detailed topics: [usage](deepseek-delegate/references/usage.md), [CLI](deepseek-delegate/references/cli.md), [operations](deepseek-delegate/references/operations.md), [workers](deepseek-delegate/references/workers.md), [runner](deepseek-delegate/references/runner.md) and [architecture](deepseek-delegate/references/architecture.md).
 - Bugs and support: [GitHub issues](https://github.com/Dsssyc/hey-my-buddy/issues).
 - Contributions are welcome; [AGENTS.md](AGENTS.md) lists the checks to run first.
+- [0.5.0 productivity acceptance](docs/acceptance/productivity-workflow-0.5.0.md) records the real packaged DSH, parallel-helper, continuation and console checks.
 - Design history: [ADR-001](docs/decisions/001-python-transactional-blackboard.md) and the [0.4.0 acceptance record](docs/acceptance/python-blackboard-0.4.0.md).
 
 ## License

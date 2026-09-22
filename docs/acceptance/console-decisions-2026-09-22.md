@@ -1,5 +1,7 @@
 # Console, bounded evaluations and decision jobs — 2026-09-22
 
+This is the earlier console/evaluation delivery record. The subsequent [0.5.0 productivity acceptance](productivity-workflow-0.5.0.md) adds assistance, continuation, workspace ownership and Host takeover; the original scope and check counts below remain historical evidence.
+
 This record covers the first implementation of the React/Vite console, shared bounded evaluation table, native DSH decision call and durable selection/maintenance workflow. Implementation is isolated on `socu/buddy-console`. The original checkout and installed production runtime were not replaced, and the production v5 database was not migrated. ADR-002 assistance, continuation, workspace transfer and Host takeover remain outside this delivery.
 
 ## Delegation and independent acceptance

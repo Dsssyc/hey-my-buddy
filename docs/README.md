@@ -52,6 +52,7 @@ The whole `deepseek-delegate/` directory can be copied and installed on its own,
 | [docs/decisions/003-harness-model-selection.md](decisions/003-harness-model-selection.md) | Historical ADR-003 discussion draft on bounded assessment cards, typed model selection and the Jev backend. Its findings and acceptance table remain research input; ADR-004 is the current consolidated proposal |
 | [docs/acceptance/python-blackboard-0.4.0.md](acceptance/python-blackboard-0.4.0.md) | Prior acceptance evidence for 0.4.0: what was actually run, observed and limited |
 | [docs/acceptance/console-decisions-2026-09-22.md](acceptance/console-decisions-2026-09-22.md) | Independent checks and live private-board acceptance for the React/Vite console, bounded evaluations and durable decision jobs |
+| [docs/acceptance/productivity-workflow-0.5.0.md](acceptance/productivity-workflow-0.5.0.md) | Packaged DSH assistance, parallel helpers, three-turn continuation, fixed-artifact acceptance and browser evidence |
 
 ## Maintainer rules
 

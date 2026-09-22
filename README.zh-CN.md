@@ -80,6 +80,7 @@ Codex 只启动一次任务，并在同一回合里等待它运行。你可以�
 - 详细主题：[使用说明](deepseek-delegate/references/usage.md)、[CLI](deepseek-delegate/references/cli.md)、[运维](deepseek-delegate/references/operations.md)、[worker](deepseek-delegate/references/workers.md)、[runner](deepseek-delegate/references/runner.md) 与 [架构](deepseek-delegate/references/architecture.md)。
 - 问题与支持：[GitHub Issues](https://github.com/Dsssyc/hey-my-buddy/issues)。
 - 欢迎贡献；提交前请先看 [AGENTS.md](AGENTS.md) 列出的检查命令。
+- [0.5.0 生产力验收](docs/acceptance/productivity-workflow-0.5.0.md) 记录了真实打包 DSH、并行协助、接续执行和控制台的检查证据。
 - 设计历史：[ADR-001](docs/decisions/001-python-transactional-blackboard.md) 与 [0.4.0 验收记录](docs/acceptance/python-blackboard-0.4.0.md)。
 
 ## 许可证
