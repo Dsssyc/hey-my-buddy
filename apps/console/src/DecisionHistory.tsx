@@ -3,6 +3,7 @@ import type { ConsoleApi } from "./api";
 import { errorText } from "./api";
 import type { Decision, Snapshot } from "./types";
 import { Badge, formatDate } from "./ui";
+import { profileTitleOr } from "./profile-display";
 
 type Audit = Decision & {
   input?: unknown;
@@ -79,8 +80,12 @@ export function DecisionHistory({
                 {d.kind === "maintain"
                   ? "评价整理"
                   : d.profileId
-                    ? snapshot.profiles.find((p) => p.profileId === d.profileId)
-                        ?.label || d.profileId
+                    ? profileTitleOr(
+                        snapshot.profiles.find(
+                          (p) => p.profileId === d.profileId,
+                        ),
+                        d.profileId,
+                      )
                     : "未选择配置"}
                 {" · "}评价版本 {d.tableRevision}
                 {" · "}

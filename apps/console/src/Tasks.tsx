@@ -3,6 +3,7 @@ import type { ConsoleApi } from "./api";
 import { errorText } from "./api";
 import type { Snapshot, Task } from "./types";
 import { Badge, display, Empty, formatDate, Icon, Status } from "./ui";
+import { effortText } from "./profile-display";
 import { canRetry, excerpt, needsReview, resultText, taskStatus } from "./task-state";
 import { WorkflowPanel } from "./WorkflowPanel";
 
@@ -163,7 +164,12 @@ export function Tasks({
               <dt>原始模型约束</dt>
               <dd>
                 {task.spec?.model ? display(task.spec.model) : "自动路由"}{" "}
-                <span className="muted">/ {display(task.spec?.effort)}</span>
+                <span className="muted">
+                  /{" "}
+                  {typeof task.spec?.effort === "string"
+                    ? effortText(task.spec.effort)
+                    : display(task.spec?.effort)}
+                </span>
               </dd>
               <dt>工作区</dt>
               <dd className="mono wrap">{task.cwd}</dd>

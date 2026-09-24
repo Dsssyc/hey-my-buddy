@@ -1,6 +1,7 @@
 import { useState } from "react";
 import type { Profile } from "./types";
 import type { ExecutionConfiguration, Workflow } from "./workflow-types";
+import { effortText, profileTitle } from "./profile-display";
 
 export function needsRouting(value: Workflow) {
   return value.routing?.status === "needs-host" || value.activeRequest?.kind === "routing" || value.activeRequest?.routing === true;
@@ -24,7 +25,9 @@ export function RoutingPanel({ value, profiles, locked, command }: {
   return <section className="detail-section">
     <h3>模型路由</h3>
     {value.executionConfiguration ? <p className="mono wrap">
-      {fields.map(([key]) => value.executionConfiguration![key]).join(" / ")}
+      {fields.map(([key]) => key === "effort"
+        ? effortText(value.executionConfiguration![key])
+        : value.executionConfiguration![key]).join(" / ")}
     </p> : <p className="muted">尚未确定执行配置。</p>}
     {value.routing && <dl className="facts">
       <dt>路由状态</dt><dd>{value.routing.status}</dd>
@@ -41,7 +44,7 @@ export function RoutingPanel({ value, profiles, locked, command }: {
         if (profile) setConfiguration({ adapter: profile.adapter, provider: profile.provider, model: profile.model, effort: profile.effort });
       }}>
         <option value="">手动填写完整配置</option>
-        {profiles.map(profile => <option key={profile.profileId} value={profile.profileId}>{profile.adapter} · {profile.label}</option>)}
+        {profiles.map(profile => <option key={profile.profileId} value={profile.profileId}>{profile.adapter} · {profileTitle(profile)}</option>)}
       </select></label>
       {fields.map(([key, label]) => <label className="field" key={key}><span>{label}</span>
         <input value={configuration[key]} maxLength={200} autoComplete="off"

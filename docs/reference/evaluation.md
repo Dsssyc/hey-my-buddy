@@ -30,6 +30,8 @@ The bootstrap snapshot carries `csrfToken` (nonempty only on the HTTP surface), 
 
 The UI currently renders Chinese and exposes three hash tabs: `工作队列` (tasks), `模型与经验` (models and evidence) and `决策配置` (decision configuration). It polls the snapshot every three seconds and that refresh is read-only. Page refresh reads the last complete publication: it neither invokes a model nor acquires a selection reader lease, and closing the page does not cancel a business task. Task cancellation and eligible retry remain available while somebody edits the evaluation table.
 
+Profile names display their effort once, including when the discovered label already ends with the same ` · <effort>` suffix. The display word for `off` is `非思考`; other native efforts retain their names. Custom labels are preserved, and the stored profile identity, effort value and command payload are unchanged.
+
 This boundary does not claim isolation from another process running as the same OS user. Do not publish or share the private URL.
 
 ## Fresh board and the initial decision profile

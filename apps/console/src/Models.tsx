@@ -5,6 +5,7 @@ import { addProfiles, emptyCard, setPreference, splitLines } from "./draft";
 import type { Editor } from "./use-editor";
 import type { Card, Profile, Snapshot } from "./types";
 import { Badge, Empty, formatDate } from "./ui";
+import { effortText, profileName } from "./profile-display";
 
 export function Models({
   snapshot,
@@ -150,8 +151,8 @@ export function Models({
                     </div>
                     <div className="profile-copy">
                       <div className="row-between">
-                        <h3>{p.label || p.model}</h3>
-                        <Badge>{p.effort}</Badge>
+                        <h3>{profileName(p)}</h3>
+                        <Badge>{effortText(p.effort)}</Badge>
                       </div>
                       <p className="small muted">
                         {p.adapter} / {p.provider}
@@ -201,9 +202,11 @@ export function Models({
           <>
             <div className="panel-heading">
               <span className="eyebrow">ASSESSMENT CARD</span>
-              <h2>{profile.label || profile.model}</h2>
+              <h2>{profileName(profile)}</h2>
               <p className="small muted">
-                {profile.model} · {profile.effort}
+                {[profile.model, effortText(profile.effort)]
+                  .filter(Boolean)
+                  .join(" · ")}
               </p>
             </div>
             <div className="tag-row">

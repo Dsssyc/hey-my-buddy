@@ -5,6 +5,7 @@ import type { Editor } from "./use-editor";
 import { Badge, Icon } from "./ui";
 import { useDecisionRequest } from "./use-decision-request";
 import { DecisionHistory } from "./DecisionHistory";
+import { effortText, profileTitle } from "./profile-display";
 
 export function Settings({
   snapshot,
@@ -60,7 +61,7 @@ export function Settings({
               .filter((p) => p.enabled)
               .map((p) => (
                 <option key={p.profileId} value={p.profileId}>
-                  {p.label || p.model} · {p.effort}
+                  {profileTitle(p)}
                 </option>
               ))}
           </select>
@@ -73,7 +74,9 @@ export function Settings({
             <div>
               <strong>{current.model}</strong>
               <p className="small muted">
-                {current.provider} / {current.effort}
+                {[current.provider, effortText(current.effort)]
+                  .filter(Boolean)
+                  .join(" / ")}
               </p>
             </div>
             <Badge tone={current.available ? "green" : "amber"}>

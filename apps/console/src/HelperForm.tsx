@@ -1,5 +1,6 @@
 import type { Profile } from "./types";
 import type { HelperDraft } from "./workflow-types";
+import { profileTitle } from "./profile-display";
 
 export function HelperForm({ helper, index, profiles, onChange, onRemove }: {
   helper: HelperDraft;
@@ -13,7 +14,7 @@ export function HelperForm({ helper, index, profiles, onChange, onRemove }: {
     <legend>协助任务 {index + 1}</legend>
     <label className="field"><span>执行配置</span><select value={helper.profileId} onChange={e => patch({ profileId: e.target.value })}>
       <option value="">自动路由：由固定决策 Buddy 选择</option>
-      {profiles.map(p => <option key={p.profileId} value={p.profileId}>{p.adapter} · {p.label} · {p.model} / {p.effort}</option>)}
+      {profiles.map(p => <option key={p.profileId} value={p.profileId}>{p.adapter} · {profileTitle(p)}</option>)}
     </select></label>
     <label className="field"><span>工作内容与验收条件</span><textarea rows={4} maxLength={16000} value={helper.task} onChange={e => patch({ task: e.target.value })} /></label>
     <label className="field"><span>输入 checkout 的绝对路径</span><input value={helper.cwd} onChange={e => patch({ cwd: e.target.value })} /></label>
