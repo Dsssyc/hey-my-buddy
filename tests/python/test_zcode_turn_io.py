@@ -1,0 +1,52 @@
+"""Common governed input/receipt boundaries remain independent of each harness."""
+import hashlib
+import json
+import unittest
+
+from test_zcode import ZcodeFixtureCase
+from buddy.adapters import turn_io
+from buddy.adapters.dsh import DshAdapter
+
+
+class SharedTurnIOTests(ZcodeFixtureCase):
+    def record(self, context):
+        return {**{k: v for k, v in context.turn_input.items() if k not in ("context", "executionWorkspace")},
+                "inputSha256": turn_io.input_hash(context.turn_input), "sessionId": "dsh-session",
+                "outcome": {"disposition": "completed", "summary": "finished", "remaining": [], "decisions": [], "artifacts": [], "request": None},
+                "provenance": {"tool": "buddy_finish_turn", "turnEnd": "completed", "rootSessionMatched": True, "flush": "awaited"}}
+
+    def test_canonical_input_and_scoped_credential_are_distinct_private_files(self):
+        context = self.context()
+        context.agent_credential = "private-agent-token"
+        turn_io.prepare_turn(context)
+        self.assertEqual(hashlib.sha256(context.turn_input_file().read_bytes()).hexdigest(), turn_io.input_hash(context.turn_input))
+        self.assertNotIn(context.agent_credential, context.turn_input_file().read_text())
+        self.assertEqual(context.credential_file().stat().st_mode & 0o777, 0o600)
+        self.assertEqual(context.environment["BUDDY_AGENT_CREDENTIAL_FILE"], str(context.credential_file()))
+
+    def test_adapter_specific_flush_does_not_bypass_common_identity_or_stop(self):
+        context = self.context()
+        turn_io.prepare_turn(context)
+        record = self.record(context)
+        context.turn_output_file().write_text(json.dumps(record))
+        self.assertIsNone(turn_io.read_turn(context, True, 0, DshAdapter.validate_turn_provenance)[1])
+        self.assertIsNotNone(turn_io.read_turn(context, False, 0, DshAdapter.validate_turn_provenance)[1])
+        for field, value in (("attemptId", "other"), ("inputSha256", "0" * 64), ("resumeMode", "native-session")):
+            invalid = {**record, field: value}
+            context.turn_output_file().write_text(json.dumps(invalid))
+            self.assertIsNotNone(turn_io.read_turn(context, True, 0, DshAdapter.validate_turn_provenance)[1])
+        record["provenance"].pop("flush")
+        context.turn_output_file().write_text(json.dumps(record))
+        self.assertIsNone(turn_io.read_turn(context, True, 0)[1], "common IO must not impose a DSH flush")
+        self.assertIn("flush", turn_io.read_turn(context, True, 0, DshAdapter.validate_turn_provenance)[1])
+
+    def test_immutable_receipts_cannot_overwrite_previous_evidence(self):
+        path = self.root / "immutable.json"
+        turn_io.private_json(path, {"accepted": 1}, exclusive=True)
+        with self.assertRaises(FileExistsError):
+            turn_io.private_json(path, {"accepted": 2}, exclusive=True)
+        self.assertEqual(json.loads(path.read_text()), {"accepted": 1})
+
+
+if __name__ == "__main__":
+    unittest.main()

@@ -1,5 +1,7 @@
 # Governed productivity workflow — 0.5.0
 
+Historical acceptance record for the named release. Its setup and upgrade steps are not current instructions; use [current operations](../reference/operations.md). Implementation links lead to the current successor paths; use Git history for the exact historical source.
+
 This record extends the [console and decision-job acceptance](console-decisions-2026-09-22.md) with Host-directed repository work, assistance, continuation, workspace ownership and fixed-artifact acceptance. Checks ran on 2026-09-22 in an isolated implementation checkout. The original development checkout and its uncommitted design documents were preserved. Production installation is a separate operation from this private-board acceptance.
 
 ## Implementation and independent checks
@@ -44,7 +46,7 @@ The supported coding adapter is DSH; additional harnesses, automatic community r
 
 Governed workspaces require Git. Legacy one-shot commands remain available for non-Git tasks. Capabilities protect the supported API boundaries but do not sandbox a same-user process with full shell access. Worktrees isolate checkout writes, not shared repository metadata or external services. Native App post-turn wakeup remains outside this implementation.
 
-Production replacement requires the [offline schema upgrade](../../deepseek-delegate/references/operations.md#database-upgrade) from version 5 or 6 to 7, with its verified backup, followed by plugin/runtime identity checks. The production installation and standalone skill link must refer to the same released code; a successful private test does not establish that the user's installed cache has already changed.
+Production replacement requires the `offline schema upgrade` from version 5 or 6 to 7, with its verified backup, followed by plugin/runtime identity checks. The production installation and standalone skill link must refer to the same released code; a successful private test does not establish that the user's installed cache has already changed.
 
 Release candidate `0.5.0+codex.20260922045602` includes the final runtime repair. The private productivity service was stopped with no queued cancellations, no active cancellation requests and no unresolved attempts. Production preflight found schema 5, 40 completed tasks, three failed tasks and zero unconfirmed attempts. At this record's creation, the daily installation remains 0.4.0 pending the requested user's installation confirmation; its original standalone skill link and database are unchanged.
 

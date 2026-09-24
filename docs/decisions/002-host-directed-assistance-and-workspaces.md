@@ -1,10 +1,12 @@
 # ADR-002: 按比较优势分派、回合接续与工作区所有权
 
+本页保留决策时的历史事实与方案；实现链接指向当前对应路径，旧实现请通过 Git 历史查看。现行行为以[当前架构](../reference/architecture.md)及 ADR-007 为准。
+
 ## 状态与适用范围
 
 状态：设计原则已确认，运行时改动尚未实现。日期：2026-09-21。
 
-本记录保存架构讨论确认的目标与边界，供后续实现使用。文中的合同名称表达领域概念，不代表已经发布的 CLI 参数、C-Two 方法或数据库字段。当前行为仍以 [architecture.md](../../deepseek-delegate/references/architecture.md)、[workers.md](../../deepseek-delegate/references/workers.md) 和对应源码为准。
+本记录保存架构讨论确认的目标与边界，供后续实现使用。文中的合同名称表达领域概念，不代表已经发布的 CLI 参数、C-Two 方法或数据库字段。当前行为仍以 [architecture.md](../reference/architecture.md)、[workers.md](../reference/workers.md) 和对应源码为准。
 
 本决定延续 [ADR-001](001-python-transactional-blackboard.md) 的 Python 黑板、C-Two 操作、Worker 进程所有权、事务事件与真实停止证据。它补充跨 Worker 协助、正常回合接续和工作区分配的目标语义。
 
@@ -114,13 +116,13 @@ Host 需要了解某个具体 Harness 实例可选择的模型、合法参数及
 
 | 范围 | 当前依据 | 目标所需能力 |
 | --- | --- | --- |
-| 回合结果与任务状态 | [store.py](../../deepseek-delegate/python/buddy/store.py) 的 `worker_result` 接受 `ok`、`failed`、`cancelled`；`ok` 且停止已确认会完成 Task | 正常 yield 结果、非终态等待、独立接续资格 |
-| DSH 接续 | [service.py](../../deepseek-delegate/python/buddy/service.py) 明确没有自动 resume；[run.mjs](../../deepseek-delegate/scripts/run.mjs) 使用一次性 headless | 能声明恢复方式、接收结构化输入并开始下一回合的 adapter |
-| Host 决定 | [workers.md](../../deepseek-delegate/references/workers.md) 的当前公共客户端包含任务提交等操作 | 将 Worker 的协助建议与 Host 的派发决定分开认证和记录 |
-| 工作区占用 | [store.py](../../deepseek-delegate/python/buddy/store.py) 按 canonical cwd 父子重叠和显式资源检查 | checkout 身份、明确分配、快照与写入权移交 |
-| 工作区参数 | [usage.md](../../deepseek-delegate/references/usage.md) 中 `workspace` 布尔值控制 DSH 会话分组 | 独立的执行工作区合同，保留现有字段含义 |
-| 模型与参数 | [schemas.py](../../deepseek-delegate/python/buddy/schemas.py) 接受 `model`、`provider`、`effort` 字符串；[run.mjs](../../deepseek-delegate/scripts/run.mjs) 返回 `requested` 配置 | 让 Host 获得可选择组合与参数依据，当前综合提案见 [ADR-004](004-buddy-decision-support-and-console.md)，历史研究见 ADR-003 |
-| 成本（延期、可选） | [schemas.py](../../deepseek-delegate/python/buddy/schemas.py) 的提交字段没有金额或 token 预算 | 不要求本轮实现；有可靠来源时才考虑观测与可执行政策 |
+| 回合结果与任务状态 | [store.py](../../src/buddy/store.py) 的 `worker_result` 接受 `ok`、`failed`、`cancelled`；`ok` 且停止已确认会完成 Task | 正常 yield 结果、非终态等待、独立接续资格 |
+| DSH 接续 | [service.py](../../src/buddy/service.py) 明确没有自动 resume；[run.mjs](../../harnesses/dsh/scripts/run.mjs) 使用一次性 headless | 能声明恢复方式、接收结构化输入并开始下一回合的 adapter |
+| Host 决定 | [workers.md](../reference/workers.md) 的当前公共客户端包含任务提交等操作 | 将 Worker 的协助建议与 Host 的派发决定分开认证和记录 |
+| 工作区占用 | [store.py](../../src/buddy/store.py) 按 canonical cwd 父子重叠和显式资源检查 | checkout 身份、明确分配、快照与写入权移交 |
+| 工作区参数 | [usage.md](../reference/usage.md) 中 `workspace` 布尔值控制 DSH 会话分组 | 独立的执行工作区合同，保留现有字段含义 |
+| 模型与参数 | [schemas.py](../../src/buddy/schemas.py) 接受 `model`、`provider`、`effort` 字符串；[run.mjs](../../harnesses/dsh/scripts/run.mjs) 返回 `requested` 配置 | 让 Host 获得可选择组合与参数依据，当前综合提案见 [ADR-004](004-buddy-decision-support-and-console.md)，历史研究见 ADR-003 |
+| 成本（延期、可选） | [schemas.py](../../src/buddy/schemas.py) 的提交字段没有金额或 token 预算 | 不要求本轮实现；有可靠来源时才考虑观测与可执行政策 |
 
 “Worker 只能建议、Host 才能派发”需要在实际调用能力上实现；提示词或 `owner` 标签不构成强制权限边界。同一用户下拥有完整 shell 与凭据访问权的进程也不能被宣称已经实现操作系统级隔离。具体权限机制、数据库迁移、C-Two 方法签名和 adapter 恢复实现仍需在开发设计中确定。
 

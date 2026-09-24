@@ -1,5 +1,7 @@
 # Python 黑板 0.4.0 验收
 
+Historical acceptance record for the named release. Its setup and upgrade steps are not current instructions; use [current operations](../reference/operations.md). Implementation links lead to the current successor paths; use Git history for the exact historical source.
+
 日期：2026-09-19。设计依据：[ADR-001](../decisions/001-python-transactional-blackboard.md)。
 
 实现先由现有 0.3.0 Buddy skill 委派给 dsh，Codex 负责设计、独立审查和验收。 随后通过新 Python 黑板派发真实 dsh 修复任务，并用新实现完成自身验收。
@@ -43,7 +45,7 @@ uv sync --project deepseek-delegate --frozen
 uv run --project deepseek-delegate --frozen python -m buddy.checks
 ```
 
-公共 CLI 与外部 Worker 的调用方式见 [服务参考](../../deepseek-delegate/references/plugin-service.md)。 脚本 `deepseek-delegate/scripts/acceptance-probe.sh` 分发本次实际通过的隔离验收驱动。 它要求显式提供四个互不包含的私有目录，默认服务目录会被拒绝：
+公共 CLI 与外部 Worker 的调用方式见 `服务参考`。 脚本 `deepseek-delegate/scripts/acceptance-probe.sh` 分发本次实际通过的隔离验收驱动。 它要求显式提供四个互不包含的私有目录，默认服务目录会被拒绝：
 
 ```sh
 sh deepseek-delegate/scripts/acceptance-probe.sh \

@@ -1,5 +1,7 @@
 # ADR-004 提案：决策支持、评估维护与本地控制台
 
+本页保留决策时的历史事实与方案；实现链接指向当前对应路径，旧实现请通过 Git 历史查看。现行行为以[当前架构](../reference/architecture.md)及 ADR-007 为准。
+
 ## 状态与阅读方式
 
 状态：讨论整理提案，运行时未实现。本文不构成已经接受的政策，也不表示任何可调用操作已经存在。日期：2026-09-21。
@@ -10,7 +12,7 @@
 
 本文明确区分两类内容。第一部分是此前已经讨论过的方向，整理后作为后续设计输入；第二部分是本次新提出的边界建议，仍待 Host 和用户评审。文件名、目录名、角色名、字段名和接口草图都只是提议合同，不是已发布的 CLI 参数、C-Two 方法、数据库字段或 UI 功能。
 
-当前可核对的行为仍以 [architecture.md](../../deepseek-delegate/references/architecture.md)、[workers.md](../../deepseek-delegate/references/workers.md)、[operations.md](../../deepseek-delegate/references/operations.md) 和对应源码为准。现有 dashboard 仍是只读任务查看器；写入权威与相应 UI 均未实现。
+当前可核对的行为仍以 [architecture.md](../reference/architecture.md)、[workers.md](../reference/workers.md)、[operations.md](../reference/operations.md) 和对应源码为准。现有 dashboard 仍是只读任务查看器；写入权威与相应 UI 均未实现。
 
 本次交付是设计整理；路由准确率、评价更新质量与运行开销仍需真实样例验证。设计确认和运行时验收是两个独立阶段。
 
@@ -177,11 +179,11 @@ Jev/Laya 是可选实验后端，不是默认依赖。Laya 的上下文切分管
 
 | 范围 | 当前依据 | 提案目标 |
 | --- | --- | --- |
-| 模型与参数选择 | [schemas.py](../../deepseek-delegate/python/buddy/schemas.py) 接受 `model`、`provider`、`effort` 字符串；[run.mjs](../../deepseek-delegate/scripts/run.mjs) 返回 requested 配置 | 有界评价卡、合法 profile、带校验的决策记录与 requested/resolved/observed 证据 |
-| 评估与验收 | [store.py](../../deepseek-delegate/python/buddy/store.py) 的 `task_acknowledge` 不改变执行结果；相同 note/verdict 可重放，改变已有验收会冲突；没有独立的评价更正操作 | 保留原验收，新增可追溯 assessment 与更正记录；引用准确 attempt/revision，重放不重复计样本 |
-| 本地控制台与身份 | [dashboard.py](../../deepseek-delegate/python/buddy/dashboard.py) 使用独立只读 token；C-Two 统一 service token 与 owner 归属字段尚不构成 Host/Worker 角色隔离 | 配置、模型卡片、任务与待处理视图，以及不复用只读授权的受控写入 |
-| 资源与辅助任务 | [store.py](../../deepseek-delegate/python/buddy/store.py) 在领取执行时占用 cwd；真实停止后释放 claim，不等待验收；取消只针对当前 task，无依赖级联 | 执行槽与工作区写权分别管理，增加依赖取消、移交和固定产物验收，保留真实停止证据 |
-| 跨回合接续 | [service.py](../../deepseek-delegate/python/buddy/service.py) 明确没有自动 resume | 结构化回合结论与 Host 批准的接续 |
+| 模型与参数选择 | [schemas.py](../../src/buddy/schemas.py) 接受 `model`、`provider`、`effort` 字符串；[run.mjs](../../harnesses/dsh/scripts/run.mjs) 返回 requested 配置 | 有界评价卡、合法 profile、带校验的决策记录与 requested/resolved/observed 证据 |
+| 评估与验收 | [store.py](../../src/buddy/store.py) 的 `task_acknowledge` 不改变执行结果；相同 note/verdict 可重放，改变已有验收会冲突；没有独立的评价更正操作 | 保留原验收，新增可追溯 assessment 与更正记录；引用准确 attempt/revision，重放不重复计样本 |
+| 本地控制台与身份 | `dashboard.py` 使用独立只读 token；C-Two 统一 service token 与 owner 归属字段尚不构成 Host/Worker 角色隔离 | 配置、模型卡片、任务与待处理视图，以及不复用只读授权的受控写入 |
+| 资源与辅助任务 | [store.py](../../src/buddy/store.py) 在领取执行时占用 cwd；真实停止后释放 claim，不等待验收；取消只针对当前 task，无依赖级联 | 执行槽与工作区写权分别管理，增加依赖取消、移交和固定产物验收，保留真实停止证据 |
+| 跨回合接续 | [service.py](../../src/buddy/service.py) 明确没有自动 resume | 结构化回合结论与 Host 批准的接续 |
 | 成本 | 提交字段没有预算 | 保持可选、延期 |
 
 验收要求以第二部分第 8 条的失效场景为集合，并补充以下底线：

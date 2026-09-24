@@ -1,15 +1,15 @@
 {
   "name": "hey-my-buddy",
-  "version": "0.5.0+codex.20260922052648",
-  "description": "Host-directed local dsh work with explicit Git workspaces, assistance and continuation, shared model evaluations and a private React/Vite console over the transactional Python/C-Two blackboard.",
+  "version": "0.6.0+codex.20260924090025",
+  "description": "Host-directed DSH and ZCode work with durable model routing, explicit Git workspaces, verified artifacts, shared evaluations and a private React/Vite console.",
   "author": {
     "name": "Dsssyc"
   },
   "skills": "./skills/",
   "interface": {
     "displayName": "Hey My Buddy",
-    "shortDescription": "Delegate work to local dsh via the Buddy CLI.",
-    "longDescription": "Delegate scoped repository work through the uv-managed Buddy CLI. Explicit Git snapshots and Host capabilities govern assistance, continuation and final artifact acceptance. A private React/Vite console shows tasks and bounded shared model evaluations. Independent workers own execution and shutdown; Python and C-Two retain durable task state. Legacy one-shot adapters remain available. Background follow-up uses an explicit App heartbeat; no MCP server or peer delegation is required.",
+    "shortDescription": "Delegate bounded work through local Buddy harnesses.",
+    "longDescription": "Delegate scoped work through one uv-managed Buddy CLI. Choose a complete model configuration or route under hard constraints using the bounded shared evaluation table. Explicit Git snapshots and Host capabilities govern assistance, continuation and final acceptance. Independent workers own DSH and ZCode processes; Python and C-Two retain durable state. A private React/Vite console shows tasks, evaluations and actionable Host decisions. Background follow-up uses an explicit App heartbeat.",
     "developerName": "Dsssyc",
     "category": "Productivity",
     "capabilities": [
@@ -17,7 +17,7 @@
       "Write"
     ],
     "defaultPrompt": [
-      "Delegate a bounded task to my local dsh."
+      "Delegate a bounded task with Buddy and verify its artifacts."
     ]
   },
   "license": "MIT",

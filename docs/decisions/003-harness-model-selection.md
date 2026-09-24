@@ -1,5 +1,7 @@
 # ADR-003 草案：有界动态评价表与 Jev 模型选择
 
+本页保留决策时的历史事实与方案；实现链接指向当前对应路径，旧实现请通过 Git 历史查看。现行行为以[当前架构](../reference/architecture.md)及 ADR-007 为准。
+
 ## 状态与修订
 
 状态：修订提案，供讨论；没有实现运行时，也没有调用 Jev 验证效果。日期：2026-09-21。
@@ -124,9 +126,9 @@ Jev 在当前拟用接入中是外部 API。启用此路线意味着普通候选
 
 所有外部推理在 SQLite 事务外进行。提交推荐或任务时核对版本，源记录与事件保持原子性。选择的 provider/model/effort 与旧参数同时提供时必须一致。实际配置无法确认的验收不能硬归给一个未被证实使用的精确模型。
 
-[现有 Adapter](../../deepseek-delegate/python/buddy/adapters/base.py) 需要目录发现和参数解析；[store.py](../../deepseek-delegate/python/buddy/store.py) 扩展评价与决策记录，[run.mjs](../../deepseek-delegate/scripts/run.mjs) 当前 requested 字段不能直接冒充实际配置。新增命名操作同时修改 [contracts.py](../../deepseek-delegate/python/buddy/contracts.py)、[service.py](../../deepseek-delegate/python/buddy/service.py)、[schemas.py](../../deepseek-delegate/python/buddy/schemas.py)、client、CLI 和 transport。
+[现有 Adapter](../../src/buddy/adapters/base.py) 需要目录发现和参数解析；[store.py](../../src/buddy/store.py) 扩展评价与决策记录，[run.mjs](../../harnesses/dsh/scripts/run.mjs) 当前 requested 字段不能直接冒充实际配置。新增命名操作同时修改 [contracts.py](../../src/buddy/contracts.py)、[service.py](../../src/buddy/service.py)、[schemas.py](../../src/buddy/schemas.py)、client、CLI 和 transport。
 
-[db.py](../../deepseek-delegate/python/buddy/db.py) 当前 schema 为 5。新增事实及投影需要在私有旧库副本上验证显式升级和恢复，取得维护所有权、确认旧进程不再写入、备份数据库与恢复状态后再事务升级。原有 same-user token 也不能被宣称提供了独立 Host/Worker 授权；按 ADR-002 设计写入边界，不能用 actor 字符串代替身份校验。
+[db.py](../../src/buddy/db.py) 当前 schema 为 5。新增事实及投影需要在私有旧库副本上验证显式升级和恢复，取得维护所有权、确认旧进程不再写入、备份数据库与恢复状态后再事务升级。原有 same-user token 也不能被宣称提供了独立 Host/Worker 授权；按 ADR-002 设计写入边界，不能用 actor 字符串代替身份校验。
 
 ## 8. 相关已有探索
 

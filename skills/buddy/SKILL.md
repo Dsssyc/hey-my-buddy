@@ -1,70 +1,53 @@
 ---
 name: buddy
-description: Delegate bounded coding, testing, investigation or documentation to local dsh with explicit workspaces, Host-directed assistance and verified artifacts. Use when scope and acceptance are clear; skip trivial edits and unresolved requirements.
+description: Delegate bounded coding, testing, investigation or documentation to local Buddy harnesses with model routing, explicit workspaces, Host-directed assistance and verified artifacts. Use when scope and acceptance are clear; skip trivial edits and unresolved requirements.
 ---
 
-# Buddy
+# Hey My Buddy
 
-Use a local DSH Worker for a bounded part of the user's task. The Host may implement other parts itself and retains route choice, authorization, integration responsibility and final acceptance. Workers keep their own internal tools and subagents; further Buddy work requires a Host decision.
+Use Buddy to assign coherent work to an appropriate local harness/model while the Host retains technical ownership and final acceptance. The Host may implement other parts itself. Worker-internal subagents remain available; a Worker may request Host-authorized help but may not create peer Buddy tasks on its own.
 
-## Choose the work and configuration
+## Start a bounded goal
 
-Delegate a coherent unit whose execution benefit justifies handoff, verification and possible rework. Include the objective, permitted files, required inputs, expected artifacts and actual acceptance commands. Preserve the user's authorization scope. Keep reusable instructions stable and task-specific facts concise; a higher cache-hit percentage alone does not establish a lower total cost.
+Read [usage](../../docs/reference/usage.md) for installation and task packets. The plugin root contains `bin/buddy`; resolve that path from this skill's location and invoke the launcher with one JSON argument. Check `health`, `runtime` and `capabilities` on setup or recovery. This release accepts only its current contract and schema. An older board must remain archived; use a clean state directory rather than a conversion or fallback.
 
-Use the user's explicit model/provider/effort or an authorized profile. When comparison is needed, the [evaluation workflow](../../deepseek-delegate/references/evaluation.md) lets a configured decision Buddy recommend a legal profile through `selection-request` → `selection-get`. Read its compact result, then authorize the separate business task. Do not load the full table/history by default or create a selector recursively. Missing or failed recommendations return the choice to the Host; they do not fail the business goal.
+Include the objective, permitted files, required inputs, expected artifacts and acceptance commands. Keep reusable instructions stable and task facts concise; a higher cache-hit percentage alone does not establish lower total cost.
 
-The runner fallbacks are `deepseek-official / deepseek-flash / max`; effort is not inherited from global settings. Check [route precedence](../../deepseek-delegate/references/runner.md#precedence) when changing the route. Keep requested identity separate from evidence of the model actually served.
+Choose `executionWorkspace` explicitly. Sequential ownership may use `existing`; parallel writers need separate `worktree` checkouts, an exact base/input snapshot, declared write scope and an integrator. Preserve the same boundary for Host edits. A checkout is not an OS sandbox.
 
-## Resolve the CLI
-
-This file is `<plugin-root>/skills/buddy/SKILL.md`; resolve the plugin root from this loaded file, not a cached path from an earlier task. No `PLUGIN_ROOT` environment variable is supplied.
+Honor explicit adapter/provider/model/effort constraints. A complete tuple is validated and dispatched without a selector call. Partial fields are hard filters; omitted fields use the configured decision Buddy and the bounded current table. `submit` records the goal before routing and returns its durable identity. Never substitute a DSH default, scan the entire history, or select the selector recursively. With no selector/legal candidate, the goal waits for Host input. The user chooses the initial fixed decision profile; see [evaluation](../../docs/reference/evaluation.md).
 
 ```sh
-SKILL_DIR='/abs/path/to/<plugin-root>/skills/buddy'
-PLUGIN_ROOT=$(cd "$SKILL_DIR/../.." && pwd)
-BUDDY="$PLUGIN_ROOT/deepseek-delegate/scripts/launch-buddy.sh"
+BUDDY="<absolute-plugin-root>/bin/buddy"
+"$BUDDY" submit '{"requestId":"<stable-id>","hostId":"<this-host>","task":"<bounded packet>","cwd":"/abs/repo","workspace":false,"timeoutSeconds":1800,"executionWorkspace":{"kind":"worktree","cwd":"/abs/repo","access":"write","base":{"kind":"working-tree"},"includeUntracked":[],"writeScope":["src/state.ts","tests/state.test.ts"],"integrator":"<this-host>"}}'
+"$BUDDY" await '{"runId":"<returned-run-id>","waitSeconds":1860}'
+"$BUDDY" get '{"runId":"<returned-run-id>"}'
 ```
 
-Quote `"$BUDDY"` and pass one JSON argument per command. On installation or recovery, use `health` / `runtime` / `capabilities` to verify the actual service. A schema mismatch needs the [explicit offline upgrade](../../deepseek-delegate/references/operations.md#database-upgrade), not a fallback to weaker task controls.
+The example leaves the model choice to routing and disables DSH session grouping with `workspace:false`. Grouping is a DSH option independent of execution-workspace isolation; an explicitly requested grouping choice must be preserved. For direct dispatch, add all four validated fields: `adapter`, `provider`, `model`, `effort`. Check native availability and legal efforts rather than assuming every harness exposes the same options.
 
-## Repository task flow
+## Supervise through acceptance
 
-1. Specify `executionWorkspace`: `worktree` for independent concurrent writers, or `existing` for a sequential sole writer. Pin the input, name an integrator, declare `writeScope`, and include required untracked files explicitly. The Host must not edit a checkout held by a Worker.
-2. Submit once with a stable `requestId` and a Host ID. Save the returned `runId` and private `controlFile`. Await that same logical task while doing independent Host work.
-3. If `await` returns `waiting-host`, read `workflow-get`. The Worker turn ended, but the goal is unfinished. Inspect the request and fixed artifacts; approve explicit helpers, decline with a reason, or provide continuation input. Approval can authorize one automatic continuation after helper results.
-4. The designated integrator applies the exact helper commits/patches and checks the combined result. Continuation reuses the allocated checkout with a fresh attempt and reconstructed DSH session; it is not native same-session resume.
-5. Inspect the final artifact's real diff and run the relevant checks. Record `workflow-acknowledge` against the final artifact ID and give the user the artifact location, revision and verified outcome. Helper completion is not final acceptance.
+Save the returned `runId` and `controlFile`. The CLI stores Host authority in a private file; never copy its token into task prompts, command arguments or public artifacts. Mutations require the exact saved control file or explicit current owner credentials. A replay cannot adopt another Host's newer generation.
+
+Use `await` to stay with the task. A wait timeout, a closed terminal or a lost connection does not cancel execution or authorize a second task. Recover the same request/run; changing input under the same request ID conflicts. `inquire` provides bounded observation. Correlated live questions are adapter capabilities, not universal model support.
+
+When the turn ends with an assistance request or attention boundary, read the compact `get` view and fixed artifacts. Use `decide` to approve explicit helpers or decline with a reason; approval can authorize one automatic continuation after their results. Use `continue` for Host input. A routing boundary accepts a complete `configuration` or `reroute:true` on the same goal; original hard constraints still apply. Consult [workflow](../../docs/reference/workflow.md) for nested requests, `targetRunId`, worktree integration, takeover and cancellation.
+
+Each continuation is a new owned attempt. DSH reconstructs a fresh session. ZCode resumes a proven native session only when its goal, checkout and configuration binding matches; without a proven previous session or after a configuration change, it reconstructs a new root session. A missing or mismatched binding on a native-session request fails explicitly. Keep requested configuration, native settings readback and actual served-model evidence distinct.
+
+Inspect the final artifact's real diff and run the relevant checks before `acknowledge`. Bind acceptance to the final artifact ID; a completed helper, RPC reply or process alone is not acceptance.
 
 ```sh
-"$BUDDY" workflow-submit '{"requestId":"<stable-id>","hostId":"<this-host>","task":"<bounded packet>","cwd":"/abs/repo","provider":"deepseek-official","model":"deepseek-flash","effort":"max","workspace":false,"timeoutSeconds":1800,"executionWorkspace":{"kind":"worktree","cwd":"/abs/repo","access":"write","base":{"kind":"working-tree"},"includeUntracked":[],"writeScope":["src/state.ts","tests/state.test.ts"],"integrator":"<this-host>"}}'
-"$BUDDY" await '{"runId":"<runId>","waitSeconds":3600}'
-"$BUDDY" workflow-get '{"runId":"<runId>"}'
-# Only after independent verification:
-"$BUDDY" workflow-acknowledge '{"runId":"<runId>","commandId":"<stable-review-id>","controlFile":"<returned-path>","artifactId":"<final-artifact-id>","note":"<actual checks and findings>","verdict":"accepted"}'
+"$BUDDY" acknowledge '{"runId":"<run-id>","commandId":"<stable-review-id>","controlFile":"<returned-path>","artifactId":"<final-artifact-id>","note":"<actual checks and findings>","verdict":"accepted"}'
 ```
 
-The example deliberately disables DSH session grouping with `workspace:false`. Grouping defaults to true and requires the [running workspace bridge](../../deepseek-delegate/references/operations.md#workspace-bridge); it is independent of `executionWorkspace`. Follow a requested grouping choice and never silently change it.
+Cancel the goal with `cancel` and its control file, then wait for actual shutdown evidence across its owned work. Lease expiry or a missing PID never proves shutdown. A service restart preserves owned work; a service stop requests cancellation. Do not stop the service to resolve one waiter timeout.
 
-Read [workflow.md](../../deepseek-delegate/references/workflow.md) when approving helpers, continuing, taking over or cancelling a governed goal. It contains the complete packets and workspace contracts. Use `includeAudit:true` only when exact persisted inputs/results are needed.
+Keep the Host turn active while delegated work is running. For user-requested work beyond the turn, register the product's official recurring follow-up on this task as described in [background work](../../docs/reference/usage.md#background-work-that-outlives-the-turn). It is periodic follow-up, not immediate native App wakeup. If unavailable, keep waiting. Never end with an unmonitored job or restart work the user stopped.
 
-## Control and recovery
+## Configuration and evidence
 
-Keep control-file contents out of prompts, helper tasks and reports. Later mutations require the explicit saved control file; a Host label is not authority. Use the current revision where required. After a lost response, replay the exact command ID and payload. A stale owner generation/revision requires re-reading and reconsidering, not adopting another Host's latest credentials.
+The private React/Vite console displays tasks, routing, model profiles, cards and preferences. Use the bounded [evaluation workflow](../../docs/reference/evaluation.md) to record scoped observations and request maintenance. Automatic card publication is opt-in; model-generated maintenance cannot change profiles, user preferences or authority. Cost accounting and economic budgets are not required for execution.
 
-An identical submission recovers the same task; changed input under the same request ID conflicts. A wait timeout, closed waiting terminal or interrupted connection never authorizes a second submission. Reconnect using the same `runId`. When progress is unclear, `inquire '{"runId":"..."}'` gives bounded observations; read the [inquiry contract](../../deepseek-delegate/references/cli.md#messages-and-inquiry) before sending a correlated question.
-
-`timeoutSeconds` bounds each spawned execution (10–86400 seconds, default 1800); queue/Host/helper waiting is separate. Each authorized continuation gets a fresh attempt deadline. `await` waits without starting work (1–86400 seconds); short `wait`/`watch` calls are bounded at 30 seconds. A wait ending does not end execution.
-
-Cancel a governed goal with `workflow-cancel` and its control file; cancellation includes owned helpers and must await actual stop evidence. Lease expiry or a missing PID is never proof of shutdown. Restart preserves owned work and receipts; `stop` requests cancellation. Do not use a service-wide stop to resolve one task's wait timeout.
-
-Keep this turn active while delegated work remains running. Only for user-requested work beyond the turn, register an official App heartbeat on this task using the [background flow](../../deepseek-delegate/references/usage.md#background-work-that-outlives-the-turn). It is periodic follow-up, not immediate native App wakeup. If unavailable, keep waiting; never end with an unmonitored job or restart work the user stopped.
-
-## One-shot work, evaluations and boundaries
-
-Legacy `start` / `run` / `acknowledge` remain useful for ordinary non-Git or standalone one-shot tasks. They do not provide governed assistance or snapshot ownership. Read the [usage guide](../../deepseek-delegate/references/usage.md) for those packets and monitoring. Legacy mutations cannot bypass governance.
-
-`console` opens the private React/Vite workspace for tasks, profiles, preferences and shared evaluation cards. Viewing and `console-snapshot` make no model calls. Discovery proposes installed configurations; enabling them and choosing the initial decision profile are explicit decisions. An admitted task keeps its route when the evaluation table changes.
-
-Follow [evaluation.md](../../deepseek-delegate/references/evaluation.md) to record scoped experience and request bounded `evaluation-maintain` work. Automatic card publication is opt-in, not a scheduler; observations are not verified performance samples. Internal decision jobs cannot be acknowledged or retried as business tasks. Recover an uncertain request with its original ID; use a new decision request for a deliberate new attempt.
-
-A cwd/worktree is not an OS sandbox. Existing services keep their launch permissions; tasks run with the local user's access and only within the user's authorized scope. Independent DSH sessions are not managed by Buddy. See [operations](../../deepseek-delegate/references/operations.md) for lifecycle/recovery, [CLI](../../deepseek-delegate/references/cli.md) for exact fields and bounds, [workers](../../deepseek-delegate/references/workers.md) for adapters, and [architecture](../../deepseek-delegate/references/architecture.md) before changing service contracts.
+Read [CLI](../../docs/reference/cli.md) for exact fields and bounds, [workers](../../docs/reference/workers.md) for harness/authentication capabilities, [operations](../../docs/reference/operations.md) for lifecycle and recovery, and [architecture](../../docs/reference/architecture.md) before changing service contracts. The advanced execution/worker primitives support command, external and internal decision processes; coding goals always use `submit`.

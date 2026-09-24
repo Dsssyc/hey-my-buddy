@@ -1,53 +1,33 @@
 # Repository maintenance
 
-## Invariants
+## Current design
 
-Read the current [architecture](deepseek-delegate/references/architecture.md) before changing the blackboard's ownership, persistence, worker or recovery contracts. The [historical ADR-001](docs/decisions/001-python-transactional-blackboard.md) records the design requirements this implementation was accepted against; it is not a description of current behavior.
+ADR-007 defines the accepted 0.6 clean-cut target. The source baseline is released 0.5.0 commit `0b674e9`. Only the plugin's `buddy` skill is distributed. Do not restore standalone skill paths, old CLI aliases, legacy Node records/fingerprints/socket guards, or historical schema conversion branches. Historical design documents are evidence, not current compatibility requirements.
 
-The Python service owns authoritative SQLite state. Workers own their child process handles and submit durable receipts over named C-Two operations. Node code belongs to the dsh adapter and its upstream plugins. Preserve task/attempt identity, idempotency, transaction/event atomicity and honest shutdown evidence when changing these boundaries. Unknown is never reported as stopped; lease expiry and missing PIDs are not termination evidence.
+Read [architecture](docs/reference/architecture.md) and [ADR-007](docs/decisions/007-neutral-core-and-single-current-contract.md) before changing ownership, persistence, worker, routing or recovery contracts. Current source and ADR-007 take precedence over older implementation documents.
 
-Governed continuation preserves the allocated actual checkout and immutable prior inputs; current manifest, execution cwd and reservation must agree. Bind helper output references to the named attempt and select fixed handoffs by durable publication order. Multiple Host requests and their nested proxy/origin links remain independently addressable; `pendingRequests` includes the active request and `counts.openRequests` counts the complete open set. Cancellation fences the whole owned descendant graph, while checkout release and aggregate shutdown still require real stop evidence. Detailed contracts belong in the workflow, architecture and CLI references below.
+The Python service owns authoritative SQLite state. Workers own child handles and durable receipts over named C-Two operations. Preserve task/attempt identity, idempotency, transaction/event atomicity, owner fencing, fixed artifact bindings and actual shutdown evidence. Unknown never means stopped. Host and Worker edits require explicit workspace ownership; independent writers use isolated worktrees.
+
+## Layout
+
+- `src/buddy/`: public CLI, common service, workflow, evaluation and worker machinery; Python harness adapters under `adapters/`.
+- `harnesses/dsh/`: DSH-specific Node scripts, plugins and tests.
+- `apps/console/`: React/Vite frontend; built assets are packaged for users without npm.
+- `tests/python/`: Python and cross-component verification.
+- `docs/reference/`: current operational contracts; `docs/decisions/` and `docs/acceptance/`: decisions and evidence.
+- `packaging/`: explicit runtime resource and plugin assembly; `bin/buddy`: the single bundled launcher.
+- `skills/buddy/SKILL.md`: the single agent entrypoint.
 
 ## Verification
 
-Manage Python dependencies and environments with uv. Run checks from a full repository checkout (the distributable plugin excludes test suites):
+Use uv from the repository root. The normal complete check is `uv run --frozen python -m buddy.checks`. Run focused affected tests for a bounded change; do not run paid models or broad suites for wording-only edits.
 
-```sh
-uv run --project deepseek-delegate --frozen python -m buddy.checks
-```
+Tests always use private state/runtime roots. When invoked inside a Buddy process, clear inherited runtime, Worker and agent credentials for each test subprocess: `BUDDY_STATE_DIR`, `BUDDY_RUNTIME_ROOT`, `BUDDY_RUNTIME`, `BUDDY_RUNTIME_IDENTITY`, `BUDDY_WORKER_STATE`, `BUDDY_WORKER_ID`, `BUDDY_AGENT_CREDENTIAL`, `BUDDY_AGENT_CREDENTIAL_FILE`, `VIRTUAL_ENV`, `UV_PROJECT_ENVIRONMENT`. `BUDDY_DEV_SOURCE=1` alone cannot override a pinned runtime. Use the test harness's private directories; never the daily board.
 
-Run focused affected tests for a bounded repair. Service tests use explicit private `BUDDY_STATE_DIR` and `BUDDY_RUNTIME_ROOT`. `BUDDY_DEV_SOURCE=1` suppresses automatic runtime installation; use an empty private runtime root to exercise source. Production cold starts automatically materialize and use a stable versioned runtime. Verify actual artifacts and task outcomes before recording acknowledgement: an RPC response, a queued task or a finished agent alone does not establish acceptance.
+Verify real diffs, artifacts and relevant checks before acceptance. Admission, process completion and Host acceptance are separate facts. A private cold-start and staged-plugin test must verify stable interpreter/package/resource paths, including after the source directory is replaced.
 
-Stage a distributable plugin with `uv run --project deepseek-delegate python scripts/stage-plugin.py --destination <separate hey-my-buddy directory>`. Staging refuses a tree that still contains the removed MCP facade or the retired Node engine/job-manager paths, and the destination must be a separate `hey-my-buddy` directory.
+Stage with `uv run --frozen python packaging/stage-plugin.py --destination <separate hey-my-buddy directory>`. No compatibility facades are shipped. Keep raw local logs and experiment scripts in ignored `.dsh-skill-build/`.
 
-## Documentation ownership
+## Documentation
 
-Write each Markdown prose paragraph on one source line and let readers wrap it to the window width. Preserve structural newlines for headings, separate list items, tables, code blocks and diagrams. Keep installation instructions independent of temporary development-branch names and merge-status notes.
-
-Use the [documentation index](docs/README.md) to find each page. Keep detailed contracts in their owning document and update it first; entrypoints retain only necessary summaries.
-
-| Topic | Owning document |
-| --- | --- |
-| Human entry points (install, first request, boundaries) | `README.md`, `README.zh-CN.md` (keep language parity) |
-| Document index and routing | `docs/README.md` |
-| Install/use paths, task examples, foreground/background flows | `deepseek-delegate/references/usage.md` |
-| Governed workflow, Host request queues and nested proxies, continuation on allocated checkouts, fixed artifact integration and descendant cancellation | `deepseek-delegate/references/workflow.md` |
-| Implemented architecture, data model, identity, wait separation, recovery, limits | `deepseek-delegate/references/architecture.md` |
-| Complete CLI surface, defaults/bounds, envelopes, errors, inquiry contract | `deepseek-delegate/references/cli.md` |
-| Runtime lifecycle/upgrade, bridge, state and env vars, legacy import, MCP cleanup | `deepseek-delegate/references/operations.md` |
-| Shared evaluation table, preferences/evidence, table admission and writable React/Vite console | `deepseek-delegate/references/evaluation.md` |
-| Tool-free native DSH decision helper, prompt/output bounds and subprocess evidence | `deepseek-delegate/references/decision.md` |
-| Adapters, public client, worker identity/receipts, supervisors | `deepseek-delegate/references/workers.md` |
-| Standalone Node runner and its contract | `deepseek-delegate/references/runner.md` |
-| Standalone owner-resumption helper | `deepseek-delegate/references/handoff.md` |
-| Old service-manual headings and compatibility links | `deepseek-delegate/references/plugin-service.md` |
-| Skill entrypoints | `skills/buddy/SKILL.md`, `deepseek-delegate/SKILL.md` |
-| Development invariants and this routing table | `AGENTS.md` |
-| Historical design rationale | `docs/decisions/001-python-transactional-blackboard.md` |
-| Accepted design rationale: Host-directed assistance, turn continuation, workspace ownership and integration | `docs/decisions/002-host-directed-assistance-and-workspaces.md` |
-| Accepted design rationale: shared bounded assessments, cross-project reuse, table-level exclusion, revision/generation fencing and React + Vite console frontend; current behavior belongs in the references | `docs/decisions/005-shared-assessments-and-table-exclusion.md` |
-| Consolidated discussion proposal: decision support, evaluation maintenance and the local console; section III choices resolved by ADR-005, with historical proposal status preserved | `docs/decisions/004-buddy-decision-support-and-console.md` |
-| Historical discussion: bounded assessments, typed model selection and the Jev backend (research record; ADR-004 is the current consolidated proposal) | `docs/decisions/003-harness-model-selection.md` |
-| Acceptance evidence | `docs/acceptance/` |
-
-Record acceptance changes in `docs/acceptance/` and keep raw local logs in the ignored `.dsh-skill-build/` directory. Update the READMEs, both `SKILL.md` files and the owning reference together when public behavior changes; `plugin-service.md` stays an index, not a second manual.
+Each Markdown prose paragraph occupies one source line; preserve structural newlines. Keep setup instructions independent of temporary branches. README and its Chinese counterpart describe purpose and use with language parity. Detailed commands belong in their owning reference, routed from `docs/README.md` and the skill. Update the owning page first and entrypoint summaries when behavior changes. Record actual verification in `docs/acceptance/`; never present a draft or a worker's success message as acceptance.

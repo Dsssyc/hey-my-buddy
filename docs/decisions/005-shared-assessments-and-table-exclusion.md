@@ -1,5 +1,7 @@
 # ADR-005：共享评价、表级互斥与控制台技术栈
 
+本页保留决策时的历史事实与方案；实现链接指向当前对应路径，旧实现请通过 Git 历史查看。现行行为以[当前架构](../reference/architecture.md)及 ADR-007 为准。
+
 ## 状态与阅读方式
 
 状态：设计已接受（用户于 2026-09-22 明确接受 Host 复核后的建议），运行时未实现。日期：2026-09-22。
@@ -8,7 +10,7 @@
 
 本文只取代 ADR-004 中与下列政策直接冲突的建议，不整体接受 ADR-004 的其他实现提案。ADR-004 第二部分余下各条、第四部分工程不变量与第五部分验收要求仍按提案或原有状态处理；[ADR-002](002-host-directed-assistance-and-workspaces.md) 已确认的原则与 [ADR-003 草案](003-harness-model-selection.md) 的历史研究不因本文改变。
 
-当前可核对的行为仍以 [architecture.md](../../deepseek-delegate/references/architecture.md)、[workers.md](../../deepseek-delegate/references/workers.md)、[operations.md](../../deepseek-delegate/references/operations.md) 和对应源码为准。本文中的闸门、读者、写者与状态名称表达领域概念，不是当前命令、参数或数据库 schema。
+当前可核对的行为仍以 [architecture.md](../reference/architecture.md)、[workers.md](../reference/workers.md)、[operations.md](../reference/operations.md) 和对应源码为准。本文中的闸门、读者、写者与状态名称表达领域概念，不是当前命令、参数或数据库 schema。
 
 本次裁决依据 ADR-004 第三部分、Host 复核记录（本地 `.dsh-skill-build/evaluation-gate-review-20260922/review.md`，属于支撑材料，其权威不超过本文接受的结论）以及用户 2026-09-22 的明确接受。
 
@@ -54,7 +56,7 @@ ADR-004 第三部分把三项默认值留给用户确认。本次分别解决经
 
 写入携带幂等 command ID 与期望修订，并以写者代际/租约界定有效性。重复保存、两个标签页、崩溃、取消/超时与迟到的旧输出都不能覆盖更新的修订；失败的未发布草稿保持旧表完整，不得部分写入。
 
-代际失效只说明某个写者的决定不再有效，不构成任何进程已经停止的证据；停止仍按 [ADR-002](002-host-directed-assistance-and-workspaces.md) 与 [architecture.md](../../deepseek-delegate/references/architecture.md) 的真实停止证据判断。
+代际失效只说明某个写者的决定不再有效，不构成任何进程已经停止的证据；停止仍按 [ADR-002](002-host-directed-assistance-and-workspaces.md) 与 [architecture.md](../reference/architecture.md) 的真实停止证据判断。
 
 ## 决策五：维护期间仍可写入与读取
 

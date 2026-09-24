@@ -2,75 +2,64 @@
 
 [English](README.md)
 
-Buddy 让 Codex 把边界明确的工作交给本地编码 agent，同时保留对整体任务的责任。Host 可以亲自实现一部分，再把其他部分交给能力或成本更适合的 Worker。目前接入的编码工具是 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness)（`dsh`）。
+Buddy 让 Host agent 把边界明确的工作交给本地编码 harness，同时保留对整体目标的责任。Host 可以亲自实现一部分，再把其他部分交给能力、成本或模型更适合的 Worker。目前接入的编码 harness 是 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness)（`dsh`）和 ZCode（`zcode`）。
 
-任务、决定与结果保存在本地黑板中。仓库任务有明确的工作区和固定输入、产物快照；React/Vite 控制台可以查看执行情况，以及跨项目共享的模型配置、用户偏好和评价卡片。
+目标、决定与结果保存在本地 SQLite 黑板中。编码任务有明确的 Git 工作区和固定输入、产物快照；私有 React/Vite 控制台可以查看任务、路由、共享模型配置、用户偏好和评价卡片。
 
 ## 如何协作
 
-适合委派的工作包括范围明确的实现、测试、可复现问题调查、文档整理，以及结果可检查的文件转换。改动很小、答案已知或需求尚未明确时，由 Host 直接处理。是否委派，要同时考虑执行收益、交接、验收和可能的返工。
+适合委派的工作包括范围明确的实现、测试、可复现问题调查、文档整理，以及结果可检查的文件转换。改动很小、答案已知或需求尚未明确时，由 Host 直接处理。
 
-1. Host 确定任务、模型参数和工作区。并行写入使用独立 Git worktree；顺序执行且只有一个写入者时，可以使用现有 checkout。整合后的结果由明确指定的整合者负责。
-2. Worker 使用自己的工具和内部 subagent 完成工作。需要协助时，它结束当前回合并记录请求；Host 可以批准辅助任务和一次自动接续，随后同一逻辑目标在新会话中根据固定产物继续执行。
-3. Host 检查实际 diff、运行相关验证后，验收最终产物。辅助任务完成、整合与最终验收分别记录。
-
-[工作流说明](deepseek-delegate/references/workflow.md)提供协助、接续和控制权的具体操作。非 Git 工作仍可使用普通一次性任务命令。
+1. Host 确定目标、模型参数和执行工作区。完整的 adapter/provider/model/effort 组合经过校验后直接派发；信息不完整时通过已配置的决策配置和有界评价表完成路由。并行写入使用独立 Git worktree，整合后的结果由明确指定的整合者负责。
+2. Worker 使用自己的工具和内部 subagent 完成工作。需要协助时，它以结构化结果结束当前回合；Host 可以批准明确的辅助任务、说明理由后拒绝、补充新的接续输入，或在路由边界给出完整配置。控制权由私有 control 凭据约束，Host 名称本身不是权限。
+3. Host 检查真实 diff、运行相关验证，然后验收固定产物。执行、辅助任务完成、整合与验收是彼此独立的事实。
 
 ## 安装并试用
 
-需要 macOS 或 Linux、[uv](https://docs.astral.sh/uv/) 与 Python 3.12–3.14、供 Buddy runner 使用的 Node.js 20+、已配置服务商凭据的本地 dsh，以及支持 skill 的 Codex。Buddy 使用 harness 已有凭据，不修改全局模型设置。
+需要 macOS 或 Linux、[uv](https://docs.astral.sh/uv/) 与 Python 3.12–3.14、DSH 所需的 Node.js 20+ 及所安装 ZCode CLI 要求的运行环境，以及已配置服务商凭据的本地 `dsh` 和/或 ZCode。Buddy 使用 harness 已配置的凭据，不修改全局模型设置。
 
-在仓库中，把完整的 `deepseek-delegate/` 目录安装为独立 skill：
+从带有 `hey-my-buddy` 的插件市场安装。下面的命令适用于已经配置好市场、且市场条目指向该打包目录的情况：
 
 ```sh
-git clone https://github.com/Dsssyc/hey-my-buddy.git
-cd hey-my-buddy
-uv sync --frozen --project deepseek-delegate --python 3.12
-
-BUDDY_SKILLS_DIR="${CODEX_HOME:-$HOME/.codex}/skills"
-mkdir -p "$BUDDY_SKILLS_DIR"
-if [ -e "$BUDDY_SKILLS_DIR/deepseek-delegate" ] || [ -L "$BUDDY_SKILLS_DIR/deepseek-delegate" ]; then
-  printf '%s\n' '此位置已有 skill，请按升级说明处理。'
-else
-  ln -s "$PWD/deepseek-delegate" "$BUDDY_SKILLS_DIR/deepseek-delegate"
-fi
+uv run --frozen python packaging/stage-plugin.py --destination /path/to/marketplace/plugins/hey-my-buddy
+codex plugin add hey-my-buddy@your-marketplace
 ```
 
-使用这个链接时，请保留对应仓库目录。若采用复制安装，需复制整个目录，包括脚本、Python 包、插件、参考文档和锁文件。[使用说明](deepseek-delegate/references/usage.md)也提供 Codex 插件的安装方式：插件入口是 `$buddy`，独立入口是 `$deepseek-delegate`。
+首次本地安装请先按[市场配置说明](docs/reference/operations.md#installation)设置。新建任务以加载 `$buddy` skill。skill 会从插件自身位置解析 `bin/buddy` 启动器；没有需要单独安装的 skill，也没有旧目录回退。首次需要服务的命令会在 `~/.local/share/hey-my-buddy/runtime` 安装稳定运行时，之后替换插件不会中断正在运行的工作。
 
-已有安装请先按[升级说明](deepseek-delegate/references/operations.md#database-upgrade)切换到 0.5.0。Schema 5/6 需要显式离线迁移，并生成经过验证的备份。如果同时安装了两个 skill 入口，应让它们使用同一发布版本。
-
-在新的 Codex 任务中试用：
-
-> 用 $deepseek-delegate 检查当前仓库 README 和 docs 中的相对链接。在独立 worktree 中只新增 buddy-doc-review.md，列出失效链接和修复建议。本次设置 workspace: false，关闭 DSH 会话分组。完成后请复核报告，并给出固定产物的路径。
-
-会话分组与执行工作区隔离是独立设置。分组默认开启，需要 [DSH 工作区桥接](deepseek-delegate/references/operations.md#workspace-bridge)；上面的示例显式关闭了分组。
-
-## 控制台与模型选择
-
-在仓库中打开私有本地控制台：
+先提交一个有界目标：
 
 ```sh
-BUDDY="$PWD/deepseek-delegate/scripts/launch-buddy.sh"
+BUDDY="<absolute-plugin-root>/bin/buddy"
+"$BUDDY" submit '{"requestId":"doc-links-1","hostId":"codex","task":"检查本仓库 README 中的相对链接，只新增 buddy-doc-review.md，并列出失效链接和修复建议。","cwd":"/abs/repo","timeoutSeconds":3600,"workspace":false,"executionWorkspace":{"kind":"worktree","cwd":"/abs/repo","access":"write","base":{"kind":"working-tree"},"includeUntracked":[],"writeScope":["buddy-doc-review.md"],"integrator":"codex"}}'
+"$BUDDY" get '{"runId":"<returned-runId>"}'
+"$BUDDY" await '{"runId":"<returned-runId>"}'
+```
+
+示例把模型选择交给路由，并用 `workspace:false` 关闭 DSH 会话分组。分组是独立于 Git 隔离的 DSH 选项；`executionWorkspace` 才是工作区所有权和产物校验契约。`submit` 会返回一个私有 `controlFile`，后续 Host 命令必须提供它。
+
+## 控制台、路由与模型
+
+打开私有本地控制台：
+
+```sh
 "$BUDDY" console
 ```
 
-打开命令返回的地址，即可查看任务、处理协助请求和核对固定产物。控制台也支持发现已安装的模型配置、启用配置、设置用户偏好和维护跨项目共享的评价卡片。查看或刷新页面不会调用模型。
-
-初始决策配置由你明确指定。需要比较模型时，决策 Buddy 可以读取有界的当前评价表，推荐可用的模型与 effort 组合，再由 Host 授权实际任务。评价维护需要显式发起；自动采纳有效卡片更新需要另行启用。配置、证据与编辑规则见[评价表与控制台说明](deepseek-delegate/references/evaluation.md)。
+打开命令返回的 loopback 地址，即可查看任务、路由状态和 Host 决策，并维护共享评价表。初始固定决策配置由你明确指定；模型发现只提出默认禁用的配置及其原生 effort，用户偏好用于排序或约束合法候选，查看或刷新页面不会调用模型。
 
 ## 执行与恢复
 
-等待结束或关闭等待终端不会取消任务，可以使用保存的运行 ID 接回。执行仍受自身期限约束：每次 attempt 默认 30 分钟，最多 24 小时。接续会创建新的 attempt 和会话。需要超出 Host 当前回合继续工作时，应使用[后台跟进流程](deepseek-delegate/references/usage.md#background-work-that-outlives-the-turn)；目前没有原生即时 App 唤醒。
+等待超时、关闭终端或连接中断都不会取消任务。可以用同一个 `runId` 通过 `await`、`get` 或 `status` 接回；只有显式 `cancel` 才会停止目标，并且只有拿到真实停止证据才报告已关闭。每次接续都会创建新的 attempt。DSH 重建新会话；ZCode 仅在目标、checkout 和配置绑定都匹配时恢复已有证据确认的原生会话。没有已确认的前一会话或配置发生变化时，ZCode 会重建新的根会话。请区分请求的、已解析的和实际观测到的模型身份。
 
-服务和 Worker 从稳定的私有运行时执行，替换插件缓存不会中断它们；首次启动会准备这个运行时。工作目录和 Git worktree 都不是操作系统沙箱，任务仍拥有本地用户的访问能力，共享服务和仓库元数据仍需协调。
+服务和 Worker 从上述稳定私有运行时执行。全新黑板位于 `~/.local/share/hey-my-buddy/state`；位于旧默认位置的旧黑板目录保留为归档，不会被读取、转换或导入。工作目录和 Git worktree 都不是操作系统沙箱。
 
-目前只有 DSH 编码 Buddy 已接入。其他 harness、自动收集社区评价、货币预算和定期评价维护尚未实现。任务协调保存在本地，模型请求发送至已配置的服务商。
+当前限制：仅支持 POSIX；本地单用户 SQLite 状态；ZCode 仅支持 API-key 提供方且没有 inquiry 桥；没有货币预算、自动社区评价或原生 App 回合结束后唤醒。[0.6 验收记录](docs/acceptance/neutral-core-0.6.0.md) 收录了回归检查、真实 DSH/ZCode 协作及安装态运行时的路由产物任务。每次升级后，用 `health` 和 `runtime` 核对实际运行的安装。
 
 ## 文档与开发
 
-[文档索引](docs/README.md)提供命令、架构、适配器和设计历史的入口。[0.5.0 验收记录](docs/acceptance/productivity-workflow-0.5.0.md)区分了真实 DSH、浏览器验证与实现声明。参与开发请遵循 [AGENTS.md](AGENTS.md)；日常使用不需要 npm 或自行构建前端。问题可提交至 [GitHub Issues](https://github.com/Dsssyc/hey-my-buddy/issues)。
+[文档索引](docs/README.md)提供命令、架构、harness 适配器和设计历史的入口。[AGENTS.md](AGENTS.md)说明仓库开发约束；日常使用不需要 npm 或自行构建前端。问题可提交至 [GitHub Issues](https://github.com/Dsssyc/hey-my-buddy/issues)。
 
 ## 许可证
 
-[MIT](LICENSE)。独立的 `deepseek-delegate/` 目录内也附有许可证。
+[MIT](LICENSE)。

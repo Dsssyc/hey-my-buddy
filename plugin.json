@@ -1,8 +1,8 @@
 {
   "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
   "name": "hey-my-buddy",
-  "version": "0.5.0+codex.20260922052648",
-  "description": "Host-directed local dsh work with explicit Git workspaces, assistance and continuation, shared model evaluations and a private React/Vite console over the transactional Python/C-Two blackboard.",
+  "version": "0.6.0+codex.20260924090025",
+  "description": "Host-directed DSH and ZCode work with durable model routing, explicit Git workspaces, verified artifacts, shared evaluations and a private React/Vite console.",
   "author": {
     "name": "Dsssyc"
   },
