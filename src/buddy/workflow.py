@@ -4567,7 +4567,7 @@ class WorkflowCoordinator:
                 context["artifactsTruncated"] = True
         context["nextActions"] = [
             "Continue the original objective from the recorded checkpoint.",
-            "Call buddy_finish_turn exactly once with the structured outcome; final prose is not parsed.",
+            "Report the structured outcome through this execution harness's supplied completion interface.",
         ]
         return _bound_context(context)
 

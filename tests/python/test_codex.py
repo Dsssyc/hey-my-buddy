@@ -69,6 +69,13 @@ class CodexAdapterTests(unittest.TestCase):
         self.assertEqual(outcome.status, "ok", outcome.to_report())
         self.assertEqual(outcome.result["turn"]["outcome"]["disposition"], "assistance")
 
+    def test_completed_result_cannot_also_request_assistance(self):
+        outcome = self.execute(self.context("completed-request"))
+        self.assertEqual(outcome.status, "failed")
+        self.assertEqual(outcome.result["code"], "invalid-result")
+        self.assertIn("sessionId", outcome.result)
+        self.assertNotIn("turn", outcome.result)
+
     def test_native_resume_requires_matching_private_binding_and_history(self):
         first = self.execute(self.context())
         self.assertEqual(first.status, "ok", first.to_report())

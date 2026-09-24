@@ -34,6 +34,9 @@ def outcome(case):
         disposition = "assistance"
         request = {"summary": "Need helper", "attempted": "Inspected source", "neededWork": "Check dependency",
                    "expectedArtifacts": [], "acceptance": "Dependency verified"}
+    if case == "completed-request":
+        request = {"summary": "Contradictory request", "attempted": "Finished", "neededWork": "None",
+                   "expectedArtifacts": [], "acceptance": "Already complete"}
     return {"disposition": disposition, "summary": "fixture work completed", "remaining": [],
             "decisions": [], "artifacts": [], "request": request}
 
@@ -95,7 +98,7 @@ def main():
                 if response.get("id") != 99 or "error" not in response:
                     raise RuntimeError("the controller unexpectedly approved the native request")
             item = {"type": "agentMessage", "id": "final-1", "phase": "final_answer",
-                    "text": json.dumps(outcome(case)) if case != "invalid-json" else "not json"}
+                    "text": json.dumps({"outcome": outcome(case)}) if case != "invalid-json" else "not json"}
             if case != "no-final":
                 send({"method": "item/completed", "params": {"threadId": thread_id, "turnId": turn_id,
                                                             "item": item, "completedAtMs": 1}})

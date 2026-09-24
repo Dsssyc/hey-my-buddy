@@ -115,26 +115,51 @@ class Connection:
         return result
 
 
-OUTCOME_SCHEMA = {
+_REQUEST_SCHEMA = {
     "type": "object", "additionalProperties": False,
-    "required": ["disposition", "summary", "remaining", "decisions", "artifacts", "request"],
-    "properties": {
-        "disposition": {"type": "string", "enum": ["completed", "assistance", "attention"]},
-        "summary": {"type": "string"},
-        "remaining": {"type": "array", "items": {"type": "string"}},
-        "decisions": {"type": "array", "items": {"type": "string"}},
-        "artifacts": {"type": "array", "items": {"type": "string"}},
-        "request": {"anyOf": [
-            {"type": "null"},
-            {"type": "object", "additionalProperties": False,
-             "required": ["summary", "attempted", "neededWork", "expectedArtifacts", "acceptance"],
-             "properties": {"summary": {"type": "string"}, "attempted": {"type": "string"},
-                            "neededWork": {"type": "string"}, "expectedArtifacts": {"type": "array", "items": {"type": "string"}},
-                            "acceptance": {"type": "string"}}},
-        ]},
-    },
+    "required": ["summary", "attempted", "neededWork", "expectedArtifacts", "acceptance"],
+    "properties": {"summary": {"type": "string"}, "attempted": {"type": "string"},
+                   "neededWork": {"type": "string"}, "expectedArtifacts": {"type": "array", "items": {"type": "string"}},
+                   "acceptance": {"type": "string"}},
 }
 
+
+def _outcome_branch(dispositions, request_schema):
+    return {
+        "type": "object", "additionalProperties": False,
+        "required": ["disposition", "summary", "remaining", "decisions", "artifacts", "request"],
+        "properties": {
+            "disposition": {"type": "string", "enum": dispositions},
+            "summary": {"type": "string"},
+            "remaining": {"type": "array", "items": {"type": "string"}},
+            "decisions": {"type": "array", "items": {"type": "string"}},
+            "artifacts": {"type": "array", "items": {"type": "string"}},
+            "request": request_schema,
+        },
+    }
+
+
+# Structured Outputs permits a nested union, not a root union. The tagged
+# branches prevent a "completed" result from carrying an unresolved request.
+OUTCOME_SCHEMA = {
+    "type": "object", "additionalProperties": False, "required": ["outcome"],
+    "properties": {"outcome": {"anyOf": [
+        _outcome_branch(["completed"], {"type": "null"}),
+        _outcome_branch(["assistance", "attention"], _REQUEST_SCHEMA),
+    ]}},
+}
+
+
+def parse_outcome(text: str) -> dict:
+    from .turn_io import validate_outcome
+    value = decode_json(text)
+    if not isinstance(value, dict) or set(value) != {"outcome"}:
+        raise ValueError("The native result must contain exactly the structured outcome")
+    outcome = value["outcome"]
+    error = validate_outcome(outcome)
+    if error:
+        raise ValueError(error)
+    return outcome
 
 class TurnEvidence:
     def __init__(self, thread_id: str, turn_id: str):

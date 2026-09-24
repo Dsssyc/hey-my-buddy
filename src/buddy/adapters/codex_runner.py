@@ -15,8 +15,8 @@ from pathlib import Path
 
 from .base import ProcessHandle
 from .codex_config import cli_command, native_environment
-from .codex_protocol import CodexProtocolError, Connection, OUTCOME_SCHEMA, TurnEvidence, decode_json
-from .turn_io import canonical_json, input_hash, private_json, validate_outcome
+from .codex_protocol import CodexProtocolError, Connection, OUTCOME_SCHEMA, TurnEvidence, decode_json, parse_outcome
+from .turn_io import canonical_json, input_hash, private_json
 
 
 def _catalog(connection: Connection, version: str) -> dict:
@@ -210,8 +210,9 @@ def _run(control: dict, cancelled: threading.Event) -> tuple[dict, int]:
             if thread.get("modelProvider") not in (None, "openai"):
                 raise CodexProtocolError("wrong-native-provider", "Codex thread selected a different provider")
             result["resolved"] = requested
+            result["sessionId"] = thread_id
             prompt = "\n\n".join([
-                "This is a governed Buddy root turn. Work only inside the allocated checkout and honor the frozen Host scope. Internal Codex subagents may assist. Complete your work, then emit exactly the JSON object required by outputSchema as the final answer. Use assistance for bounded help and attention when a Host decision is needed. Do not create another Buddy goal.",
+                "This is a governed Buddy root turn executed through Codex. Work only inside the allocated checkout and honor the frozen Host scope. Internal Codex subagents may assist. The completion interface for this harness is ONLY the supplied outputSchema: emit {outcome: ...} as the final answer. No buddy_finish_turn tool exists or is required here. A completed outcome must have request:null. Use assistance or attention, with a request object, only when actual work or a Host decision remains. Do not create another Buddy goal.",
                 Path(control["taskFile"]).read_text(), canonical_json(turn_input),
             ])
             response = connection.call("turn/start", {"threadId": thread_id, "input": [{"type": "text", "text": prompt}],
@@ -223,6 +224,7 @@ def _run(control: dict, cancelled: threading.Event) -> tuple[dict, int]:
             turn_id = turn.get("id") if isinstance(turn, dict) else None
             if not isinstance(turn_id, str) or not turn_id:
                 raise CodexProtocolError("wrong-native-turn", "Codex did not acknowledge a native turn")
+            result["nativeTurnId"] = turn_id
             evidence = TurnEvidence(thread_id, turn_id)
             _activity(control, evidence, "waiting-model")
             def on_notification(message):
@@ -250,9 +252,7 @@ def _run(control: dict, cancelled: threading.Event) -> tuple[dict, int]:
             outcome = None
             if isinstance(item, dict) and isinstance(item.get("text"), str):
                 try:
-                    candidate = decode_json(item["text"])
-                    if not validate_outcome(candidate):
-                        outcome = candidate
+                    outcome = parse_outcome(item["text"])
                 except (ValueError, RecursionError):
                     pass
             controller_attention = correlated is not None and (outcome is None or outcome["disposition"] == "completed")
