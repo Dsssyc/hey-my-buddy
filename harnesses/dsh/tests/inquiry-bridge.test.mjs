@@ -417,7 +417,8 @@ test('an unanswered delivered inquiry stays delivered with observed activity, ne
     assert.equal(observed.value.answer, null);
     assert.equal(observed.value.observation.agentStatus, 'running');
     assert.equal(observed.value.observation.activity.at(-1).tool, 'bash');
-    assert.match(observed.value.observation.activity.at(-1).argumentPreview, /sleep 60/);
+    assert.equal(JSON.stringify(observed).includes('sleep 60'), false);
+    assert.equal(observed.value.observation.limits.exposesToolArguments, false);
     assert.equal(observed.value.observation.limits.exposesModelReasoning, false);
   });
 });

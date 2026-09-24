@@ -492,6 +492,16 @@ def _apply_journal(store: BoardStore, task_id: str, inquiry_id: str, record: dic
             pass
 
 
+def _activity_metadata(value: Any) -> list[dict]:
+    """Publish only event metadata; native argument previews are never progress."""
+    if not isinstance(value, list):
+        return []
+    fields = {"phase", "kind", "tool", "toolName", "callId", "at", "seq", "durationMs", "isError"}
+    return [{key: item[key][:200] if isinstance(item[key], str) else item[key]
+             for key in fields & item.keys() if item[key] is None or isinstance(item[key], (str, int, bool))}
+            for item in value[-20:] if isinstance(item, dict)]
+
+
 def _live(value: Any) -> dict:
     if not isinstance(value, dict) or value.get("ready") is not True:
         return {
@@ -508,7 +518,7 @@ def _live(value: Any) -> dict:
         "agentStatus": value.get("agentStatus"),
         "inbox": value.get("inbox"),
         "lastEvent": value.get("lastEvent"),
-        "activity": (value.get("activity") or [])[:20],
+        "activity": _activity_metadata(value.get("activity")),
         "activityDropped": value.get("activityDropped"),
         "replyTool": value.get("replyTool"),
         "journal": value.get("journal"),

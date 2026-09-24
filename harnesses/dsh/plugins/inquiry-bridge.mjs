@@ -81,9 +81,6 @@ const SHUTDOWN_GRACE_MS = 2_000;
 /** Bound on the retained activity ring. */
 export const MAX_ACTIVITY_ENTRIES = 20;
 
-/** Bound on one tool-argument preview inside the activity ring. */
-export const MAX_ARGUMENT_PREVIEW_CHARS = 160;
-
 /**
  * Bound on an operator question and on a recorded answer, in UTF-8 BYTES. The
  * owning service enforces the same byte budget, so a multibyte answer that fits
@@ -190,14 +187,6 @@ function isRootSession(session) {
   if (header.origin === 'subagent') return false;
   if (typeof header.delegationDepth === 'number' && header.delegationDepth > 0) return false;
   return true;
-}
-
-/** One-line, length-bounded preview of a tool call's raw argument text. */
-function argumentPreview(raw) {
-  if (typeof raw !== 'string' || raw === '') return undefined;
-  const flat = raw.replace(/\s+/g, ' ').trim();
-  if (flat === '') return undefined;
-  return flat.length > MAX_ARGUMENT_PREVIEW_CHARS ? `${flat.slice(0, MAX_ARGUMENT_PREVIEW_CHARS)}…` : flat;
 }
 
 /**
@@ -396,9 +385,8 @@ function installIdentityObserver(ctx, state, { promptSha256, cwd }) {
     if (event.type === 'tool/call') {
       const id = isObject(event.data) ? String(event.data.callId) : undefined;
       const name = isObject(event.data) && isUsableString(event.data.name) ? event.data.name : 'unknown';
-      const preview = isObject(event.data) ? argumentPreview(event.data.arguments) : undefined;
       if (id !== undefined) state.toolCalls.set(id, { name, at: entry.at });
-      pushActivity(state, { phase: 'started', tool: name, callId: id ?? null, at: entry.at, seq: entry.seq, ...(preview === undefined ? {} : { argumentPreview: preview }) });
+      pushActivity(state, { phase: 'started', tool: name, callId: id ?? null, at: entry.at, seq: entry.seq });
       return;
     }
     if (event.type === 'tool/result') {
@@ -857,7 +845,7 @@ function boundObservation(state, agent) {
     unavailable,
     limits: {
       maxActivityEntries: MAX_ACTIVITY_ENTRIES,
-      maxArgumentPreviewChars: MAX_ARGUMENT_PREVIEW_CHARS,
+      exposesToolArguments: false,
       maxQuestionBytes: MAX_QUESTION_BYTES,
       maxAnswerBytes: MAX_ANSWER_BYTES,
       exposesModelReasoning: false,

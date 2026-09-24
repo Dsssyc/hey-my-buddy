@@ -46,6 +46,7 @@ class FakeBridge:
         self.requests: list[dict] = []
         self.answer: dict | None = None
         self.refusal: str | None = None
+        self.activity = []
         self.listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
         self.listener.bind(str(self.path))
         self.listener.listen(4)
@@ -75,7 +76,7 @@ class FakeBridge:
                             "version": 1,
                             "id": request["id"],
                             "ok": True,
-                            "value": {"ready": True, "sessionId": "s-1", "agentStatus": "running", "activity": []},
+                            "value": {"ready": True, "sessionId": "s-1", "agentStatus": "running", "activity": self.activity},
                         }
                     elif request.get("method") == "ask":
                         if self.refusal:
@@ -163,6 +164,19 @@ class TestInquiry(BoardTestCase):
             self.assertEqual(result["phase"], "active")
             self.assertEqual(result["inflight"] if "inflight" in result else result["execution"]["attemptState"], "starting")
             self.assertEqual(bridge.requests[-1]["method"], "observe")
+        finally:
+            bridge.close()
+
+    def test_observation_does_not_publish_native_tool_arguments(self):
+        board = self.board()
+        task, _attempt, bridge = self._attempt_directory(board, board.client(), None, self.workdir())
+        try:
+            bridge.activity = [{"phase": "started", "tool": "bash", "at": 100, "seq": 1,
+                                "argumentPreview": "private-provider-key", "nested": {"prompt": "private-prompt"}}]
+            result = board.call("inquiry_observe", {"runId": task["runId"]})
+            self.assertEqual(result["live"]["activity"][0]["tool"], "bash")
+            self.assertNotIn("private-provider-key", json.dumps(result))
+            self.assertNotIn("private-prompt", json.dumps(result))
         finally:
             bridge.close()
 
