@@ -165,7 +165,7 @@ examples:
       Execution observation stays distinct: status, result, list, artifacts and events
       read execution records, wait/watch use the dedicated bounded wait resource, and
       inquire is bounded read-only observation or one correlated question to a live
-      dsh agent.
+      agent whose adapter declares inquiry support.
 
   buddy workers   buddy wait-capacity   buddy message '{"runId":"<runId>","inquiryId":"q2","question":"status?"}'
   buddy message-get '{"runId":"<runId>","inquiryId":"q2"}'
@@ -182,10 +182,15 @@ examples:
       Read the bounded evaluation snapshot, or explicitly discover the installed
       harness model catalog. Neither runs a model; discovery never exposes credentials.
 
-  buddy evaluation-write-begin '{"requestId":"edit-1","expectedRevision":0,"kind":"human"}'
+  buddy evaluation-write-begin '{"requestId":"maint-1","expectedRevision":0,"kind":"maintenance"}'
   buddy assessment-publish '{"commandId":"cmd-1","writerId":"...","generation":1,...}'
-      The durable evaluation table gate: one writer at a time, fenced by generation,
-      lease and a per-intent token. Omitted collections keep their published values.
+      A maintenance grant publishes only changed assessment cards. Human grants and
+      user-policy publication belong to the authenticated console; an ordinary Host
+      cannot edit user annotations, preferences, enablement or configuration.
+
+  buddy model-profiles '{"includeUnavailable":true,"limit":100,"query":"GLM","adapter":"zcode"}'
+      Search retained configuration identities before pagination; query has at most
+      200 characters and 8 whitespace-separated terms. Read nextCursor for more.
 
   buddy selection-request '{"requestId":"pick-1","task":"make the failing parser test pass","requiredCapabilities":["effort:high"]}'
   buddy selection-get '{"decisionId":"dec-..."}'

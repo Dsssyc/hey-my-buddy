@@ -124,6 +124,7 @@ BROWSER_REFUSED_FIELDS = frozenset({"consoleAuthority", "userOverride", "console
 STATUS_BY_CODE = {
     "INVALID_ARGUMENT": 400,
     "INVALID_RESPONSE": 502,
+    "STATE_INTEGRITY": 500,
     "METHOD_NOT_FOUND": 404,
     "NOT_FOUND": 404,
     "UNAUTHORIZED": 401,
