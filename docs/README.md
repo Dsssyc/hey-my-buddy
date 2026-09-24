@@ -57,6 +57,8 @@ Detailed commands belong in their owning reference, routed from this page and fr
 
 ## Design proposals
 
+[ADR-010: Production workflow repair plan](decisions/010-production-workflow-repair-plan.md) proposes the follow-up to the 2026-09-25 audit: user-owned data and task-local routing, coherent catalog refresh, reconnect/observation, scope recovery, integration and checkout reclamation, ZCode inquiry, Codex parity, and lightweight RPC/distribution. It defines implementation units and end-to-end acceptance; it is not current runtime behavior. The existing 0.7 candidate's passing tests do not cover all newly identified gaps, and full installation remains deferred by the user.
+
 [ADR-004 proposal: decision support, evaluation maintenance and the local console](decisions/004-buddy-decision-support-and-console.md) preserves the consolidated discussion of Host/Worker comparative advantage, blackboard and C-Two boundaries, turn-end yield and continuation, explicit workspaces, bounded assessment cards, evaluation maintenance and a local console. Its section III governance choices were resolved by ADR-005; the remaining recommendations retain their proposal status. Its original interface sketches are historical design text. Supported runtime behavior and callable operations are maintained in the [workflow](reference/workflow.md), [evaluation](reference/evaluation.md), [architecture](reference/architecture.md) and [CLI](reference/cli.md) references.
 
 [ADR-003 draft](decisions/003-harness-model-selection.md) is retained as historical discussion; ADR-004 superseded it as the proposal for model selection, and implemented routing is owned by [workflow.md](reference/workflow.md).
