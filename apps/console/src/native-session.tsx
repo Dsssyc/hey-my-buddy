@@ -56,7 +56,7 @@ export function nativeSessionEvidence(task: Task): NativeSessionEvidence | null 
 }
 
 const storageLabels: Record<string, string> = {
-  "task-private": "本尝试私有存储",
+  "task-private": "Buddy 私有存储",
   "harness-user-store": "Harness 用户存储",
 };
 
@@ -67,7 +67,7 @@ const storageOwnerLabels: Record<string, string> = {
 
 const resumeLabels: Record<string, string> = {
   initial: "首次原生会话",
-  "native-session": "恢复原原生会话",
+  "native-session": "接续原生会话",
   "reconstructed-new-session": "新会话，从持久上下文重建",
 };
 
@@ -115,6 +115,6 @@ export function NativeSessionView({ task, turnSessionId }: { task: Task; turnSes
       <dt>会话 ID</dt><dd className="mono wrap">{sessionId || "未记录"}</dd>
       <dt>存储、可见性与恢复信息</dt><dd>未记录（未知）</dd>
     </dl>}
-    <p className="small muted">只显示执行收据中记录的字段，缺失的保持未知。私有原生库不能从本页面打开，也没有伪造的打开链接；请用本任务的活动、工具摘要与固定产物作为检查入口。</p>
+    <p className="small muted">信息来自执行收据。原生会话保存在私有库时，可通过本任务的活动、工具摘要与固定产物查看执行情况。</p>
   </section>;
 }

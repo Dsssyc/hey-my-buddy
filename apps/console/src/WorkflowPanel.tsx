@@ -181,7 +181,7 @@ export function WorkflowPanel({ task, snapshot, api, refresh, selectTask, active
         <h3>最终产物与整合证据</h3>
         <dl className="facts">
           <dt>最终产物</dt><dd className="mono wrap">{artifact.artifactId}</dd>
-          <dt>产物类型</dt><dd>{artifact.kind === "resolved-output" ? "Host 恢复交付的解析输出" : "执行输出"}</dd>
+          <dt>产物类型</dt><dd>{artifact.kind === "resolved-output" ? "经 Host 处理并重新封存的产物" : "执行输出"}</dd>
           {(artifact.outputCommit || artifact.commit) && <><dt>产物提交</dt><dd className="mono wrap">{artifact.outputCommit || artifact.commit}</dd></>}
           <dt>产物校验</dt><dd className="mono wrap">SHA-256 {artifact.snapshotSha256 || artifact.manifestSha256}</dd>
         </dl>
@@ -196,7 +196,7 @@ export function WorkflowPanel({ task, snapshot, api, refresh, selectTask, active
             && <><dt>验证摘要</dt><dd className="wrap">{integration.verification.summary.trim()}</dd></>}
           <dt>记录来源</dt><dd>{`${integration.actor} · ${formatDate(integration.createdAt)}`}</dd>
         </dl> : <p className="banner guard-banner" role="status">
-          尚未记录最终产物的整合证明。Host 需要先检查并完成实际整合，再用 <code>workflow_integration_record</code>（integration-record）记录目标提交、整合方式与验证证据；控制台不会自动登记“无需整合”来绕过验证。
+          尚未记录最终产物的整合证明。请让 Host 检查并整合产物，再通过 <code>integration-record</code> 记录验证结果。
         </p>}
       </section>}
       </div>

@@ -72,9 +72,9 @@ describe("native session evidence from the attempt receipt", () => {
     })} turnSessionId="turn-session" />);
     const view = screen.getByRole("region", { name: "原生会话（只读）" });
     expect(view.textContent).toContain("sess-z");
-    expect(view.textContent).toContain("本尝试私有存储");
+    expect(view.textContent).toContain("Buddy 私有存储");
     expect(view.textContent).toContain("未在原生 App 中列出");
-    expect(view.textContent).toContain("恢复原原生会话");
+    expect(view.textContent).toContain("接续原生会话");
     expect(view.textContent).toContain("已记录为可恢复");
     expect(view.textContent).toContain("私有绑定存在");
     expect(view.textContent).toContain("私有原生根");
@@ -94,7 +94,7 @@ describe("native session evidence from the attempt receipt", () => {
     const view = screen.getByRole("region", { name: "原生会话（只读）" });
     expect(view.textContent).toContain("thread-9");
     expect(view.textContent).toContain("Harness 用户存储");
-    expect(view.textContent).toContain("恢复原原生会话");
+    expect(view.textContent).toContain("接续原生会话");
     expect(view.textContent).toContain("已记录为可恢复");
     // `unknown` visibility and a missing binding stay unknown, never "visible".
     expect(view.textContent).toContain("未记录（未知）");
