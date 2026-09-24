@@ -95,7 +95,7 @@ class MethodSurfaceTests(unittest.TestCase):
                 self.assertEqual(caught.exception.code, 2)
 
     def test_control_methods_are_the_current_governed_mutations(self):
-        self.assertEqual(cli.CONTROL_METHODS, frozenset({"decide", "continue", "takeover", "cancel", "acknowledge"}))
+        self.assertEqual(cli.CONTROL_METHODS, frozenset({"decide", "continue", "takeover", "cancel", "acknowledge", "scope-amend", "workspace-resolve", "integration-record", "workspace-cleanup-plan", "workspace-cleanup-apply"}))
 
     def test_worker_evaluation_and_selection_operations_stay_distinct(self):
         # The governed goal lifecycle never absorbs the separate worker, evaluation
@@ -110,6 +110,11 @@ class MethodSurfaceTests(unittest.TestCase):
             ("worker-result", "worker_result"),
             ("worker-release", "worker_release"),
             ("evaluation-write-begin", "evaluation_write_begin"),
+            ("scope-amend", "workflow_scope_amend"),
+            ("workspace-resolve", "workflow_workspace_resolve"),
+            ("integration-record", "workflow_integration_record"),
+            ("workspace-cleanup-plan", "workspace_cleanup_plan"),
+            ("workspace-cleanup-apply", "workspace_cleanup_apply"),
             ("user-policy-publish", "user_policy_publish"),
             ("assessment-publish", "assessment_publish"),
             ("model-profiles", "model_profiles"),
@@ -151,7 +156,7 @@ class HelpTests(unittest.TestCase):
             "latest-generation lookup",
         ):
             self.assertIn(required, text)
-        self.assertLess(len(text.splitlines()), 112, "help must stay concise")
+        self.assertLess(len(text.splitlines()), 120, "help must stay concise")
 
     def test_help_never_names_a_retired_alias_or_implicit_control_lookup(self):
         text = self.help_text()

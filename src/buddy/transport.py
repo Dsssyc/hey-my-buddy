@@ -45,6 +45,11 @@ METHOD_MAP: dict[str, tuple[str, str]] = {
     "takeover": ("control", "workflow_takeover"),
     "cancel": ("control", "workflow_cancel"),
     "acknowledge": ("control", "workflow_acknowledge"),
+    "scope-amend": ("control", "workflow_scope_amend"),
+    "workspace-resolve": ("control", "workflow_workspace_resolve"),
+    "integration-record": ("control", "workflow_integration_record"),
+    "workspace-cleanup-plan": ("control", "workspace_cleanup_plan"),
+    "workspace-cleanup-apply": ("control", "workspace_cleanup_apply"),
     "suggest": ("control", "workflow_suggest"),
     # -- execution records for command/external/decision infrastructure -----
     "execution-submit": ("control", "task_submit"),

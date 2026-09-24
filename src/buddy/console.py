@@ -86,8 +86,8 @@ def parse_task_history_query(query: str) -> dict:
 #:
 #: Evaluation maintenance is Harness-owned: the console may read the publication log
 #: (``evaluation_history``) but never ``evaluation_prepare``, never a maintenance or
-#: selection model call, and no direct evidence entry. The ordinary writer gate stays
-#: so a human can still edit cards, preferences and configuration.
+#: selection model call, and no direct evidence entry. The ordinary writer gate
+#: permits authenticated user policy patches; assessment cards stay Harness-owned.
 CONSOLE_OPERATIONS = (
     "evaluation_write_begin",
     "evaluation_write_renew",
@@ -108,6 +108,11 @@ CONSOLE_OPERATIONS = (
     "workflow_takeover",
     "workflow_cancel",
     "workflow_acknowledge",
+    "workflow_scope_amend",
+    "workflow_workspace_resolve",
+    "workflow_integration_record",
+    "workspace_cleanup_plan",
+    "workspace_cleanup_apply",
     "workflow_suggest",
 )
 

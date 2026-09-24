@@ -79,6 +79,11 @@ CONTROL_OPERATIONS = (
     "workflow_takeover",
     "workflow_cancel",
     "workflow_acknowledge",
+    "workflow_scope_amend",
+    "workflow_workspace_resolve",
+    "workflow_integration_record",
+    "workspace_cleanup_plan",
+    "workspace_cleanup_apply",
     "workflow_suggest",
 )
 WAIT_OPERATIONS = ("events_wait", "task_wait", "message_wait", "wait_capacity")
@@ -479,6 +484,46 @@ class BoardService(_BaseResource):
             )
 
         return self._guard("workflow.acknowledge", request_json, handler)
+
+    def workflow_scope_amend(self, request_json: str) -> str:
+        def handler(params: dict) -> dict:
+            return self.store.workflow.scope_amend(
+                params, console_authority=workflow_module.console_authority_from_scope()
+            )
+
+        return self._guard("workflow.scope_amend", request_json, handler)
+
+    def workflow_workspace_resolve(self, request_json: str) -> str:
+        def handler(params: dict) -> dict:
+            return self.store.workflow.workspace_resolve(
+                params, console_authority=workflow_module.console_authority_from_scope()
+            )
+
+        return self._guard("workflow.workspace_resolve", request_json, handler)
+
+    def workflow_integration_record(self, request_json: str) -> str:
+        def handler(params: dict) -> dict:
+            return self.store.workflow.integration_record(
+                params, console_authority=workflow_module.console_authority_from_scope()
+            )
+
+        return self._guard("workflow.integration_record", request_json, handler)
+
+    def workspace_cleanup_plan(self, request_json: str) -> str:
+        def handler(params: dict) -> dict:
+            return self.store.workflow.cleanup_plan(
+                params, console_authority=workflow_module.console_authority_from_scope()
+            )
+
+        return self._guard("workspace.cleanup_plan", request_json, handler)
+
+    def workspace_cleanup_apply(self, request_json: str) -> str:
+        def handler(params: dict) -> dict:
+            return self.store.workflow.cleanup_apply(
+                params, console_authority=workflow_module.console_authority_from_scope()
+            )
+
+        return self._guard("workspace.cleanup_apply", request_json, handler)
 
     def workflow_suggest(self, request_json: str) -> str:
         def handler(params: dict) -> dict:

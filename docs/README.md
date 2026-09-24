@@ -32,6 +32,8 @@ These pages describe the implemented 0.7 source in this checkout. Installed runt
 | --- | --- |
 | [reference/usage.md](reference/usage.md) | Practical path from install to reviewed result: task packets, workspace choice, supervised goals, observation and background follow-up |
 | [reference/workflow.md](reference/workflow.md) | Governed goal lifecycle: routing boundaries, Host decisions, helpers, continuation and takeover, workspace/artifact rules and cancellation |
+| [reference/workspace-lifecycle.md](reference/workspace-lifecycle.md) | Host-owned scope changes, recorded conflict recovery, verified integration and exact-worktree cleanup |
+| [reference/codex.md](reference/codex.md) | Native Codex App Server execution, account-plan discovery, structured results and session bindings |
 | [reference/cli.md](reference/cli.md) | Complete `buddy` command reference: parameters, defaults, bounds, result envelopes, event kinds and error codes |
 | [reference/operations.md](reference/operations.md) | Installation, runtime lifecycle, private state and environment, the DSH workspace bridge, recovery and removal |
 | [reference/evaluation.md](reference/evaluation.md) | Shared profiles, cards, preferences, evidence, the reader/writer gate, the private console HTTP surface and the fixed decision profile |

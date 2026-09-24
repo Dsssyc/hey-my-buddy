@@ -39,6 +39,11 @@ METHODS = [
     "takeover",
     "cancel",
     "acknowledge",
+    "scope-amend",
+    "workspace-resolve",
+    "integration-record",
+    "workspace-cleanup-plan",
+    "workspace-cleanup-apply",
     "await",
     "suggest",
     # -- execution records for command/external/decision infrastructure -----
@@ -117,6 +122,11 @@ examples:
   buddy continue '{"runId":"<runId>","commandId":"cmd-2","expectedRevision":2,"input":"...","helperPolicy":"keep","controlFile":"..."}'
   buddy takeover '{"runId":"<runId>","commandId":"cmd-3","expectedOwnerGeneration":1,"newHostId":"host-2","controlFile":"..."}'
   buddy cancel '{"runId":"<runId>","commandId":"cmd-4","reason":"...","controlFile":"..."}'
+  buddy scope-amend '{"runId":"<runId>","commandId":"cmd-5","expectedRevision":3,"expectedScopeVersion":1,"writeScope":["src"],"reason":"...","controlFile":"..."}'
+  buddy workspace-resolve '{"runId":"<runId>","commandId":"cmd-6","expectedRevision":4,"conflictId":"...","action":"restore","paths":["file"],"observedFingerprint":"...","controlFile":"..."}'
+  buddy integration-record '{"runId":"<runId>","commandId":"cmd-7","expectedRevision":5,"artifactId":"...","notRequired":true,"reason":"...","controlFile":"..."}'
+  buddy workspace-cleanup-plan '{"runId":"<runId>","commandId":"cmd-8","expectedRevision":6,"controlFile":"..."}'
+  buddy workspace-cleanup-apply '{"runId":"<runId>","planId":"...","commandId":"cmd-9","expectedRevision":7,"confirmPath":"...","controlFile":"..."}'
       Host decisions, continuations, owner rotation and governed cancellation.
       controlFile injects the hostId/ownerGeneration/controlToken triple locally, so the
       token never appears on the command line or in the output. There is no implicit
@@ -124,10 +134,10 @@ examples:
       complete explicit triple. A stale generation is fenced, never adopted.
       `takeover` saves the new generation's capability and prints only its controlFile.
 
-  buddy acknowledge '{"runId":"<runId>","artifactId":"...","note":"inspected the diff and ran the checks","verdict":"accepted","controlFile":"..."}'
+  buddy acknowledge '{"runId":"<runId>","artifactId":"...","integrationId":"...","note":"inspected the diff and ran the checks","verdict":"accepted","controlFile":"..."}'
       Inspect the selected final artifact first, then record review as the current
-      owner. Acceptance stays separate from execution and never turns a failure into
-      a success.
+      owner. Acceptance requires verified integration or an explicit not-required
+      record for that artifact.
 
   buddy await '{"runId":"<runId>"}'      buddy await '{"requestId":"fix-123","waitSeconds":3600}'
       Wait on an existing run and never start, resume, retry or cancel anything -
@@ -279,7 +289,7 @@ def _worker_command(action: str, params: dict) -> dict:
 #: Bound on a control file this CLI is willing to read.
 MAX_CONTROL_FILE_BYTES = 64 * 1024
 #: Governed mutations whose Host control triple is required by the service.
-CONTROL_METHODS = frozenset({"decide", "continue", "takeover", "cancel", "acknowledge"})
+CONTROL_METHODS = frozenset({"decide", "continue", "takeover", "cancel", "acknowledge", "scope-amend", "workspace-resolve", "integration-record", "workspace-cleanup-plan", "workspace-cleanup-apply"})
 _CONTROL_TRIPLE = ("hostId", "ownerGeneration", "controlToken")
 _CONTROL_FILE_FIELDS = frozenset({*_CONTROL_TRIPLE, "runId", "savedAt"})
 _RUN_ID_PATTERN = re.compile(r"^[A-Za-z0-9._:-]{1,128}$")
