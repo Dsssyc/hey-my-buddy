@@ -53,6 +53,7 @@ export type Decision = {
   evidenceIds: string[];
   createdAt: string;
   error?: string | null;
+  updatedAt?: string;
 };
 export type Delegation = {
   kind: "goal" | "helper" | "decision" | "execution";

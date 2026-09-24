@@ -104,8 +104,8 @@ function Connected({ api, snapshot, refresh, connectionError }: {
           https://react.dev/learn/preserving-and-resetting-state */}
       {(Object.keys(tabs) as Tab[]).map(key => visited.has(key) && <section key={key} hidden={tab !== key} className="view-panel" aria-label={tabs[key]}>
         {key === "tasks" ? <Tasks snapshot={snapshot} api={api} refresh={refresh} active={tab === key} /> :
-          key === "models" ? <Models snapshot={snapshot} editor={editor} api={api} refresh={refresh} /> :
-            <Settings snapshot={snapshot} editor={editor} api={api} refresh={refresh} />}
+          key === "models" ? <Models snapshot={snapshot} editor={editor} api={api} refresh={refresh} active={tab === key} /> :
+            <Settings snapshot={snapshot} editor={editor} />}
       </section>)}
     </main>
   </div>;

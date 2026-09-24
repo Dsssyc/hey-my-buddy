@@ -67,6 +67,7 @@ CONTROL_OPERATIONS = (
     "evaluation_maintain",
     "selection_request",
     "selection_get",
+    "selection_list",
     "model_catalog_refresh",
     "workflow_submit",
     "workflow_get",
@@ -380,6 +381,9 @@ class BoardService(_BaseResource):
 
     def selection_get(self, request_json: str) -> str:
         return self._guard("selection.get", request_json, self.decisions.get)
+
+    def selection_list(self, request_json: str) -> str:
+        return self._guard("selection.list", request_json, self.decisions.list_decisions)
 
     def evaluation_maintain(self, request_json: str) -> str:
         return self._guard("evaluation.maintain", request_json, self.decisions.request_maintain)

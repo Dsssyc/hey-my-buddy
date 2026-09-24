@@ -14,7 +14,7 @@ control capacity that cancel, renew and result commits need.
 """
 import c_two as cc
 
-CONTRACT_VERSION = "0.6.0"
+CONTRACT_VERSION = "0.6.1"
 CONTROL_NAME = "buddy-control"
 WAIT_NAME = "buddy-wait"
 
@@ -142,6 +142,9 @@ class BuddyControl:
         ...
 
     def selection_get(self, request_json: str) -> str:
+        ...
+
+    def selection_list(self, request_json: str) -> str:
         ...
 
     def evaluation_maintain(self, request_json: str) -> str:

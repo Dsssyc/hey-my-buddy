@@ -81,6 +81,7 @@ METHODS = [
     "evaluation-maintain",
     "selection-request",
     "selection-get",
+    "selection-list",
     "model-catalog-refresh",
     "restart",
     "stop",

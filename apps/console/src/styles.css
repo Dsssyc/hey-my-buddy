@@ -61,7 +61,10 @@ input[type="checkbox"] { width: 16px; height: 16px; padding: 0; accent-color: va
 .detail-header h2 { overflow-wrap: anywhere; }
 .assignment-line { display: flex; flex-wrap: wrap; gap: 4px 12px; font-size: 12px; color: var(--muted); }
 .assignment-line span { overflow-wrap: anywhere; }
-.detail-tabs { display: flex; flex-shrink: 0; gap: 4px; border-bottom: 1px solid var(--line); padding: 0 16px; background: var(--surface); }
+.routing-link { border: 0; padding: 0; background: transparent; color: var(--accent); font-size: inherit; text-align: left; overflow-wrap: anywhere; }
+.routing-link span:last-child { margin-left: 8px; text-decoration: underline; text-underline-offset: 3px; }
+.detail-tabs { display: flex; flex-shrink: 0; gap: 4px; border-bottom: 1px solid var(--line); padding: 0 16px; background: var(--surface); overflow-x: auto; }
+.detail-tabs button { white-space: nowrap; }
 .detail-tabs button { border: 0; border-bottom: 2px solid transparent; background: transparent; color: var(--muted); padding: 10px 12px; font-size: 12px; }
 .detail-tabs button[aria-selected="true"] { color: var(--accent); border-color: var(--accent); font-weight: 600; }
 .detail-body { flex: 1; min-height: 0; overflow-y: auto; overflow-x: hidden; overscroll-behavior: contain; padding: 18px 20px; scrollbar-gutter: stable; }
@@ -122,8 +125,8 @@ details[open] > summary { color: var(--ink); font-weight: 600; }
 .profile-avatar { width: 30px; height: 30px; flex-shrink: 0; display: grid; place-items: center; background: var(--accent-wash); color: var(--accent); border-radius: 5px; }
 .evidence-item { padding: 14px 0; border-bottom: 1px solid var(--line); font-size: 13px; overflow-wrap: anywhere; }
 .evidence-item > span { display: block; margin-top: 6px; }
-.settings-grid { height: 100%; overflow-y: auto; display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); align-content: start; align-items: start; gap: 16px; }
-.settings-panel { padding: 20px; overflow: visible; }
+.settings-page { height: 100%; overflow-y: auto; scrollbar-gutter: stable; }
+.settings-panel { padding: 20px; max-width: 960px; margin-inline: auto; }
 .settings-panel .panel-heading p { color: var(--muted); margin-top: 8px; font-size: 13px; }
 .panel-heading { margin-bottom: 16px; }
 .configuration-summary { display: flex; align-items: center; gap: 12px; padding: 12px; background: var(--subtle); border-radius: 5px; margin: 16px 0; }
@@ -134,10 +137,15 @@ details[open] > summary { color: var(--ink); font-weight: 600; }
 .policy-note { margin-top: 18px; }
 .quiet-note { display: flex; gap: 10px; color: var(--muted); font-size: 12px; margin: 18px 0; }
 .quiet-note svg { flex-shrink: 0; }
-.decision-history { grid-column: 1 / -1; padding: 0; }
-.decision-list li { padding: 16px 20px; border-bottom: 1px solid var(--line); }
-.decision-list strong { display: block; font-size: 13px; overflow-wrap: anywhere; }
-.decision-list p { font-size: 12px; color: var(--muted); margin: 8px 0; overflow-wrap: anywhere; }
+.model-detail-content { display: flex; flex-direction: column; flex: 1; min-height: 0; overflow: hidden; }
+.maintenance-request, .history-pagination { margin-top: 12px; }
+.maintenance-list { margin-block: 12px; }
+.history-choice { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 6px 12px; width: 100%; padding: 10px 12px; border: 0; border-bottom: 1px solid var(--line); background: var(--surface); color: var(--ink); font-size: 12px; text-align: left; overflow-wrap: anywhere; }
+.history-choice:hover, .history-choice[aria-pressed="true"] { background: var(--accent-wash); color: var(--accent); }
+.decision-reason { margin-top: 8px; font-size: 13px; }
+.reason-list { list-style: disc; padding-left: 18px; font-size: 12px; overflow-wrap: anywhere; margin-block: 8px; }
+.reason-list li { margin-block: 6px; }
+.route-turns > li { padding-block: 10px; border-bottom: 1px solid var(--line); }
 .eyebrow { display: block; font-size: 10px; color: var(--muted); margin-bottom: 6px; letter-spacing: .08em; }
 .detail-placeholder, .empty-state { padding: 32px 24px; color: var(--muted); }
 .detail-placeholder { flex: 1; display: flex; flex-direction: column; justify-content: center; gap: 12px; }
@@ -191,7 +199,6 @@ details[open] > summary { color: var(--ink); font-weight: 600; }
   .editor-bar { flex-wrap: wrap; }
   .editor-bar > div:first-child { gap: 6px; font-size: 11px; }
   .editor-bar .actions { margin-left: auto; }
-  .settings-grid { grid-template-columns: 1fr; }
   .settings-panel { padding: 16px; }
   .acceptance-controls { padding-inline: 14px; }
   .attention-bar { padding: 8px 14px; }

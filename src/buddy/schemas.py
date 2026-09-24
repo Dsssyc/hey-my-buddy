@@ -141,6 +141,16 @@ def optional_int(params: dict, name: str, default: int, minimum: int, maximum: i
     return value
 
 
+def optional_positive_int(params: dict, name: str) -> int | None:
+    """An optional positive integer cursor (or row key); absent means not provided."""
+    value = params.get(name)
+    if value is None:
+        return None
+    if isinstance(value, bool) or not isinstance(value, int) or not 1 <= value <= 2**63 - 1:
+        raise BoardError("INVALID_ARGUMENT", f"{name} must be a positive SQLite integer (at most 2^63-1)", field=name)
+    return value
+
+
 def optional_sha256(params: dict, name: str) -> str | None:
     value = params.get(name)
     if value is None:

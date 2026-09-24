@@ -7,6 +7,27 @@ export type ExecutionConfiguration = {
   effort: string;
 };
 
+export type RoutingRecord = {
+  status: string;
+  decisionId?: string | null;
+  taskId?: string | null;
+  tableRevision?: number | null;
+  configurationRevision?: number | null;
+  selectedProfile?: ExecutionConfiguration | null;
+  reason?: string | null;
+  constraints?: Partial<ExecutionConfiguration>;
+};
+export type RoutingHistory = {
+  entries: (RoutingRecord & { decisionId: string; createdAt: string; ownerGeneration: number; current: boolean })[];
+  nextCursor: number | null;
+  total: number;
+};
+export type TurnRouting = {
+  turnId: string; turnIndex: number; attemptId: string;
+  executionConfiguration?: ExecutionConfiguration | null;
+  routing?: { decisionId: string | null; executionConfigurationRevision: number } | null;
+};
+
 export type WorkflowRequest = {
   requestId: string;
   kind: string;
@@ -32,14 +53,10 @@ export type Workflow = {
   waitReason: string;
   continuationCount: number;
   executionConfiguration?: ExecutionConfiguration | null;
-  routing?: {
-    status: string;
-    decisionId?: string | null;
-    taskId?: string | null;
-    tableRevision?: number | null;
-    configurationRevision?: number | null;
-    reason?: string | null;
-  } | null;
+  executionConfigurationRevision?: number;
+  routing?: RoutingRecord | null;
+  turns?: TurnRouting[];
+  truncated?: { turns?: number };
   shutdown?: Shutdown;
   workspace: null | {
     path: string;

@@ -737,5 +737,63 @@ class ConsoleDaemonTests(ConsoleTestCase):
             self.assertEqual(len(final["evidence"]), 1)
 
 
+class ConsoleDecisionBrowseTests(ConsoleTestCase):
+    """The bounded decision/routing reads are reachable over the real console HTTP path."""
+
+    def test_selection_list_is_reachable_over_the_console_boundary(self):
+        board = self.board()
+        board.call("selection_request", {"requestId": "http-select", "task": "browse over http"})
+        maintain = board.call("evaluation_maintain", {"requestId": "http-maintain"})
+        _stated, browser = self.open_console(board)
+        csrf = browser.bootstrap()["csrfToken"]
+
+        status, _headers, data = browser.command("selection_list", {"kind": "maintain", "limit": 5}, csrf=csrf)
+        self.assertEqual(status, 200, data)
+        listed = json.loads(data)["result"]
+        self.assertEqual(listed["total"], 1)
+        self.assertEqual([item["decisionId"] for item in listed["decisions"]], [maintain["decisionId"]])
+        self.assertEqual(listed["decisions"][0]["kind"], "maintain")
+        self.assertIsNone(listed["nextCursor"])
+
+        status, _headers, data = browser.command("selection_list", {"limit": 0}, csrf=csrf)
+        self.assertEqual(status, 400, data)
+        self.assertEqual(json.loads(data)["error"]["code"], "INVALID_ARGUMENT")
+        # The CLI spelling is a client alias, never an operation name on the boundary.
+        status, _headers, data = browser.command("selection-list", {}, csrf=csrf)
+        self.assertEqual(status, 404, data)
+        self.assertEqual(json.loads(data)["error"]["code"], "METHOD_NOT_FOUND")
+
+    def test_workflow_get_routing_history_is_reachable_over_the_console_boundary(self):
+        board = self.board()
+        plain = board.call(
+            "task_submit",
+            {
+                "requestId": "console-plain",
+                "task": "ordinary",
+                "cwd": str(self.workdir()),
+                "adapter": "command",
+                "argv": ["true"],
+            },
+        )
+        _stated, browser = self.open_console(board)
+        csrf = browser.bootstrap()["csrfToken"]
+        status, _headers, data = browser.command(
+            "workflow_get",
+            {"runId": plain["task"]["runId"], "routingHistory": {"limit": 5}},
+            csrf=csrf,
+        )
+        self.assertEqual(status, 200, data)
+        result = json.loads(data)["result"]
+        self.assertFalse(result["governed"])
+        self.assertEqual(result["routingHistory"], {"entries": [], "nextCursor": None, "total": 0})
+        status, _headers, data = browser.command(
+            "workflow_get",
+            {"runId": plain["task"]["runId"], "routingHistory": {"before": 0}},
+            csrf=csrf,
+        )
+        self.assertEqual(status, 400, data)
+        self.assertEqual(json.loads(data)["error"]["code"], "INVALID_ARGUMENT")
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -1,6 +1,6 @@
 {
   "name": "hey-my-buddy",
-  "version": "0.6.0+codex.20260924113343",
+  "version": "0.6.1+codex.20260924125851",
   "description": "Host-directed DSH and ZCode work with durable model routing, explicit Git workspaces, verified artifacts, shared evaluations and a private React/Vite console.",
   "author": {
     "name": "Dsssyc"

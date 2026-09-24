@@ -34,8 +34,9 @@ export function useDecisionRequest(
       await api.command(request.operation, request.params, snapshot.csrfToken);
       pending.current = null;
       setRetryId("");
-      setMessage("请求已记录，可在本页的最近决策中查看进度。");
-      await refresh();
+      setMessage("请求已记录，可在评价维护中查看进度与建议。");
+      try { await refresh(); }
+      catch { setMessage("请求已记录；页面刷新失败，可在评价维护中刷新记录。"); }
     } catch (error) {
       const uncertain = uncertainResponse(error);
       if (uncertain) {

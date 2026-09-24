@@ -83,6 +83,7 @@ METHOD_MAP: dict[str, tuple[str, str]] = {
     "evaluation-maintain": ("control", "evaluation_maintain"),
     "selection-request": ("control", "selection_request"),
     "selection-get": ("control", "selection_get"),
+    "selection-list": ("control", "selection_list"),
     "model-catalog-refresh": ("control", "model_catalog_refresh"),
     "stop": ("control", "service_control"),
     "restart": ("control", "service_control"),

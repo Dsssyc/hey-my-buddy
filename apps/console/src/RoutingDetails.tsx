@@ -1,0 +1,91 @@
+import { useEffect, useRef, useState } from "react";
+import type { ConsoleApi } from "./api";
+import { errorText } from "./api";
+import type { RoutingHistory, Workflow } from "./workflow-types";
+import { configurationText, DecisionDetails } from "./DecisionDetails";
+import { decisionStatus } from "./decision-types";
+import { formatDate } from "./ui";
+
+export function RoutingDetails({ value, api, csrfToken, active }: {
+  value: Workflow; api: ConsoleApi; csrfToken: string; active: boolean;
+}) {
+  const [selected, setSelected] = useState<string | null>(null);
+  const [historyOpen, setHistoryOpen] = useState(false);
+  const [page, setPage] = useState<RoutingHistory | null>(null);
+  const [before, setBefore] = useState<number | undefined>();
+  const [cursors, setCursors] = useState<(number | undefined)[]>([]);
+  const [error, setError] = useState(""), [busy, setBusy] = useState(false), [retry, setRetry] = useState(0);
+  const currentId = value.routing?.decisionId || null;
+  const chosenId = selected || currentId;
+  const chosen = page?.entries.find(d => d.decisionId === chosenId);
+  const rationale = useRef<HTMLElement>(null);
+  const [focusRequest, setFocusRequest] = useState(0);
+  function inspect(decisionId: string | null) {
+    setSelected(decisionId); setHistoryOpen(false); setFocusRequest(n => n + 1);
+  }
+  useEffect(() => {
+    if (focusRequest > 0) rationale.current?.focus();
+  }, [focusRequest]);
+  useEffect(() => {
+    if (!active || !historyOpen) return;
+    let current = true;
+    setBusy(true); setError("");
+    api.command<{ routingHistory: RoutingHistory }>("workflow_get", {
+      runId: value.runId, routingHistory: { limit: 20, ...(before === undefined ? {} : { before }) },
+    }, csrfToken).then(result => {
+      if (!result?.routingHistory || !Array.isArray(result.routingHistory.entries)) throw new Error("路由历史响应不完整。");
+      if (current) setPage(result.routingHistory);
+    }).catch(reason => { if (current) setError(errorText(reason)); })
+      .finally(() => { if (current) setBusy(false); });
+    return () => { current = false; };
+  }, [api, csrfToken, value.runId, currentId, value.routing?.status, active, historyOpen, before, retry]);
+  return <>
+    <section aria-label="当前执行配置"><h3>当前执行配置</h3>
+      <p className="read-text">{value.executionConfiguration ? configurationText(value.executionConfiguration) : "尚未确定执行配置。"}</p>
+      <dl className="facts"><dt>配置版本</dt><dd>{value.executionConfigurationRevision == null ? "未记录" : `V${value.executionConfigurationRevision}`}</dd>
+        <dt>路由状态</dt><dd>{value.routing ? decisionStatus[value.routing.status] || value.routing.status : "未记录"}</dd></dl>
+      {!currentId && <p className="read-text">{value.routing?.status === "explicit"
+        ? "Host 指定，未调用智能路由。" : value.routing?.reason || value.activeRequest?.summary || "本次没有可读取的路由决策记录。"}</p>}
+      {currentId && value.routing?.reason && ["needs-host", "fenced", "failed"].includes(value.routing.status) &&
+        <p className="error-message" role="status">本次路由未能用于执行：{value.routing.reason}</p>}
+      {!!Object.keys(value.routing?.constraints || {}).length && <p className="small muted wrap">原始硬约束：{configurationText(value.routing?.constraints)}</p>}
+    </section>
+    {chosenId && <section className="detail-section" ref={rationale} tabIndex={-1} aria-label="所选路由决定">
+      {chosenId !== currentId && <div className="row-between"><h3>此前的路由依据</h3>
+        <button className="button small-button" onClick={() => inspect(null)}>返回当前配置</button></div>}
+      <DecisionDetails key={chosenId} decisionId={chosenId} api={api} csrfToken={csrfToken} active={active}
+        refreshKey={chosenId === currentId ? value.routing?.status || "" : chosen?.status || ""} />
+    </section>}
+    <details className="detail-section" open={historyOpen} onToggle={event => setHistoryOpen(event.currentTarget.open)}>
+      <summary>此前的路由决定</summary>
+      <p className="small muted">只读取本次委派的路由记录，保留失败、取消与重新选择的历史。</p>
+      {error && <p className="error-message" role="alert">{error}</p>}
+      {busy && <p role="status" className="small muted">正在读取路由历史…</p>}
+      {!busy && page?.entries.length === 0 && <p className="muted">没有智能路由历史。</p>}
+      <ul className="maintenance-list" aria-busy={busy}>{page?.entries.map(d => <li key={d.decisionId}>
+        <button className="history-choice" aria-pressed={d.decisionId === chosenId} disabled={busy} onClick={() => inspect(d.decisionId)}>
+          <span>{formatDate(d.createdAt)} · {d.selectedProfile ? configurationText(d.selectedProfile) : "未选定配置"}</span>
+          <span>{decisionStatus[d.status] || d.status}{d.current ? " · 当前" : ""}</span>
+        </button></li>)}</ul>
+      <div className="actions history-pagination">
+        {error && <button className="button small-button" disabled={busy} onClick={() => setRetry(n => n + 1)}>重试读取历史</button>}
+        {cursors.length > 0 && <button className="button small-button" disabled={busy} onClick={() => {
+          setBefore(cursors[cursors.length - 1]); setCursors(all => all.slice(0, -1)); setPage(null);
+        }}>较新决定</button>}
+        {page?.nextCursor != null && <button className="button small-button" disabled={busy} onClick={() => {
+          setCursors(all => [...all, before]); setBefore(page.nextCursor!); setPage(null);
+        }}>加载更早决定</button>}
+      </div>
+    </details>
+    {!!value.turns?.length && <details className="detail-section"><summary>执行回合与配置对应</summary>
+      <ul className="route-turns">{value.turns.map(turn => <li key={turn.turnId}>
+        <strong>第 {turn.turnIndex} 回合</strong><p className="small wrap">{configurationText(turn.executionConfiguration)}</p>
+        {turn.routing ? <p className="small">执行配置 V{turn.routing.executionConfigurationRevision} · {turn.routing.decisionId
+          ? <button className="routing-link" onClick={() => inspect(turn.routing!.decisionId)}>查看此回合的决定</button>
+          : "Host 指定，未调用智能路由。"}</p> : <p className="small muted">未记录此回合与路由的对应关系。</p>}
+        <details><summary>回合标识</summary><p className="mono wrap">{turn.turnId} · {turn.attemptId}</p></details>
+      </li>)}</ul>
+      {!!value.truncated?.turns && <p className="small muted">这里只展示最近回合，另有 {value.truncated.turns} 个回合；完整绑定可通过 get 的 includeAudit 选项读取。</p>}
+    </details>}
+  </>;
+}

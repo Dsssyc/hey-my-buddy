@@ -94,6 +94,7 @@ CONSOLE_OPERATIONS = (
     "evaluation_maintain",
     "selection_request",
     "selection_get",
+    "selection_list",
     "model_catalog_refresh",
     "task_cancel",
     "task_retry",

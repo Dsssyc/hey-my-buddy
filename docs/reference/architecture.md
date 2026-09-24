@@ -1,6 +1,6 @@
 # Architecture
 
-This page describes the implemented 0.6 architecture in this checkout and is verified against the source under `src/buddy/`, the DSH scripts and plugins under `harnesses/dsh/`, and the React sources in `apps/console/`. The release identity is 0.6.0; `CONTRACT_VERSION` is `0.6.0`, the transport protocol version is 2, and the database accepts schema 8 only. The repository's `docs/decisions/` directory holds the design record; design proposals do not by themselves establish runtime behavior, and installed-runtime identity is verified separately from this checkout.
+This page describes the implemented 0.6 architecture in this checkout and is verified against the source under `src/buddy/`, the DSH scripts and plugins under `harnesses/dsh/`, and the React sources in `apps/console/`. The release identity is 0.6.1; `CONTRACT_VERSION` is `0.6.1`, the transport protocol version is 2, and the database accepts schema 8 only. The repository's `docs/decisions/` directory holds the design record; design proposals do not by themselves establish runtime behavior, and installed-runtime identity is verified separately from this checkout.
 
 ## Process topology
 
@@ -92,7 +92,7 @@ The service has no automatic inquiry scheduler; clients request it as needed. Th
 
 The private writable console serves a built React/Vite bundle over authenticated loopback HTTP. Its session, exact-origin and CSRF checks are separate from the ordinary CLI token. HTTP mutations and agent-side C-Two operations reach the same Python business operations. The table-level reader/writer gate excludes selection readers from edits, not existing business execution; ordinary snapshot reads never take a lease or invoke models. The [evaluation reference](evaluation.md) owns the console HTTP surface, the gate, evidence, cards, decisions and maintenance.
 
-`selection_request`, `selection_get`, `evaluation_maintain` and `model_catalog_refresh` are named C-Two operations. Decisions use the internal `decision` adapter on the existing Worker queue, not a daemon-owned process runner. Input is frozen in the claim, and decision completion, reader/writer release and any publication share the Worker result transaction. Proposal validation uses a savepoint so an invalid patch can settle without poisoning the completion receipt. The [native helper](decision.md) is DSH-only and has no coding tools.
+`selection_request`, `selection_get`, `selection_list`, `evaluation_maintain` and `model_catalog_refresh` are named C-Two operations. Decisions use the internal `decision` adapter on the existing Worker queue, not a daemon-owned process runner. Input is frozen in the claim, and decision completion, reader/writer release and any publication share the Worker result transaction. Proposal validation uses a savepoint so an invalid patch can settle without poisoning the completion receipt. The [native helper](decision.md) is DSH-only and has no coding tools. Read-only decision history and per-run routing history use bounded keyset pages over existing durable request/route sequences; they do not enter model admission. New turn inputs retain their exact routing/configuration-revision binding, with absent historical bindings reported as unknown.
 
 ## Host-directed work
 

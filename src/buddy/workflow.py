@@ -83,6 +83,12 @@ MAX_CONTEXT_HELPERS = 8
 MAX_CONTEXT_ARTIFACTS = 8
 MAX_CONTEXT_TEXT = 4000
 
+#: ``workflow_get.routingHistory`` is one bounded newest-first page of a run's own
+#: routing decisions, keyed by the immutable ``workflow_routes.rowid``.
+ROUTING_HISTORY_FIELDS = frozenset({"limit", "before"})
+DEFAULT_ROUTING_HISTORY_LIMIT = 20
+MAX_ROUTING_HISTORY_LIMIT = 100
+
 RUN_STATES = ("executing", "awaiting-host", "waiting-helpers", "delivered", "accepted", "cancelled", "failed")
 
 #: Request-scoped authority resolved by the service for one operation call.
@@ -125,6 +131,35 @@ def workspace_module():
     return _workspace_module
 
 
+def _turn_input_context(input_json: Any) -> dict:
+    """The frozen context object of one turn input, or an empty object when unreadable."""
+    try:
+        document = json.loads(input_json) if input_json else None
+    except (TypeError, ValueError):
+        return {}
+    context = document.get("context") if isinstance(document, dict) else None
+    return context if isinstance(context, dict) else {}
+
+
+def _frozen_turn_routing(context: dict) -> dict | None:
+    """The routing identity frozen in one turn input, or ``None`` when it has none.
+
+    A turn that predates the binding has no routing identity. It is never guessed
+    from the current run, timestamps or a matching model name, and a malformed
+    binding is reported as absent rather than invented.
+    """
+    routing = context.get("routing")
+    if not isinstance(routing, dict) or "decisionId" not in routing:
+        return None
+    decision_id = routing.get("decisionId")
+    revision = routing.get("executionConfigurationRevision")
+    if decision_id is not None and (not isinstance(decision_id, str) or not decision_id.strip()):
+        return None
+    if isinstance(revision, bool) or not isinstance(revision, int) or revision < 0:
+        return None
+    return {"decisionId": decision_id, "executionConfigurationRevision": revision}
+
+
 class WorkflowCoordinator:
     """Durable governance on top of :class:`buddy.store.BoardStore`."""
 
@@ -163,6 +198,7 @@ class WorkflowCoordinator:
     @staticmethod
     def _turn_view(row, *, include_audit: bool = False, compact: bool = False) -> dict:
         outcome = json.loads(row["outcome_json"]) if row["outcome_json"] else None
+        context = _turn_input_context(row["input_json"])
         view = {
             "turnId": row["turn_id"],
             "turnIndex": row["turn_index"],
@@ -175,6 +211,12 @@ class WorkflowCoordinator:
             "disposition": row["disposition"],
             "createdAt": row["created_at"],
             "updatedAt": row["updated_at"],
+            # This turn's own frozen execution configuration, never the current run's.
+            "executionConfiguration": context.get("executionConfiguration"),
+            # This turn's own frozen routing identity. An older turn input that
+            # predates the binding stays null: it is never inferred from the current
+            # run, wall-clock timestamps or a matching model name.
+            "routing": _frozen_turn_routing(context),
         }
         if compact:
             # The default view is an index: the full input/outcome/provenance is in audit.
@@ -1192,20 +1234,104 @@ class WorkflowCoordinator:
             return self.compact(connection, run_row)
 
     def get(self, params: dict) -> dict:
-        schemas.reject_unknown(params, {"runId", "includeAudit"}, "workflow.get")
+        schemas.reject_unknown(params, {"runId", "includeAudit", "routingHistory"}, "workflow.get")
         run_id = schemas.required_string(params, "runId", max_length=128)
         include_audit = schemas.optional_bool(params, "includeAudit", False)
+        raw_history = params.get("routingHistory")
+        history_limit: int | None = None
+        history_before: int | None = None
+        if raw_history is not None:
+            history = schemas.require_object(raw_history, "routingHistory")
+            schemas.reject_unknown(history, ROUTING_HISTORY_FIELDS, "routingHistory")
+            history_limit = schemas.optional_int(
+                history, "limit", DEFAULT_ROUTING_HISTORY_LIMIT, 1, MAX_ROUTING_HISTORY_LIMIT
+            )
+            history_before = schemas.optional_positive_int(history, "before")
         with self.db.read() as connection:
             task = connection.execute("SELECT * FROM tasks WHERE task_id=?", (run_id,)).fetchone()
             if task is None:
                 raise BoardError("NOT_FOUND", "Unknown runId", runId=run_id)
             run_row = self._run_optional(connection, run_id)
             if run_row is None:
-                return {"governed": False, "runId": run_id, "task": self.board._decorate(connection, task)}
+                view = {"governed": False, "runId": run_id, "task": self.board._decorate(connection, task)}
+                if raw_history is not None:
+                    view["routingHistory"] = {"entries": [], "nextCursor": None, "total": 0}
+                return view
             view = self.compact(connection, run_row, task)
+            if raw_history is not None:
+                # Optional newest-first page of this run's own routing decisions;
+                # without it the compact shape is unchanged.
+                view["routingHistory"] = self._routing_history(
+                    connection, run_row, limit=history_limit, before=history_before
+                )
             if include_audit:
                 view["audit"] = self._audit(connection, run_row)
         return view
+
+    def _routing_history(self, connection, run_row, *, limit: int, before: int | None) -> dict:
+        """One bounded page of this run's routing decisions, newest first.
+
+        ``workflow_routes.rowid`` is the immutable insertion order, so it is the
+        stable descending keyset: the run filter is applied before the limit, an
+        explicit before-cursor never shifts when a newer decision arrives, and every
+        earlier reroute stays reachable. ``total`` is the complete routing count of
+        the run, independent of the cursor. Only compact decision fields are exposed;
+        no task prompt, model input/output or table payload is embedded.
+        """
+        run_id = run_row["run_id"]
+        total = int(
+            connection.execute(
+                "SELECT COUNT(*) AS count FROM workflow_routes WHERE run_id=?", (run_id,)
+            ).fetchone()["count"]
+        )
+        query = (
+            "SELECT r.rowid AS route_rowid, r.decision_id, r.owner_generation, r.state, r.reason,"
+            " r.created_at, d.status AS decision_status, d.table_revision, d.reason AS decision_reason,"
+            " q.task_id AS decision_task_id, q.configuration_revision, q.selected_json"
+            " FROM workflow_routes r"
+            " JOIN evaluation_decisions d ON d.decision_id=r.decision_id"
+            " JOIN decision_requests q ON q.decision_id=r.decision_id"
+            " WHERE r.run_id=?"
+        )
+        parameters: list[Any] = [run_id]
+        if before is not None:
+            query += " AND r.rowid<?"
+            parameters.append(before)
+        query += " ORDER BY r.rowid DESC LIMIT ?"
+        parameters.append(limit)
+        rows = connection.execute(query, parameters).fetchall()
+        current_id = run_row["current_routing_id"]
+        entries = [
+            {
+                "decisionId": row["decision_id"],
+                # The same effective mapping the current routing view uses: a decision
+                # still in flight reports its own status; a settled route reports what
+                # it actually became.
+                "status": (
+                    row["decision_status"]
+                    if row["state"] == "pending"
+                    else {"resolved": "completed", "needs-host": "needs-host", "fenced": "fenced"}[row["state"]]
+                ),
+                "taskId": row["decision_task_id"],
+                "selectedProfile": json.loads(row["selected_json"]) if row["selected_json"] else None,
+                "tableRevision": int(row["table_revision"]),
+                "configurationRevision": int(row["configuration_revision"]),
+                "reason": row["reason"] or row["decision_reason"],
+                "createdAt": row["created_at"],
+                "ownerGeneration": int(row["owner_generation"]),
+                "current": bool(current_id) and row["decision_id"] == current_id,
+            }
+            for row in rows
+        ]
+        next_cursor = None
+        if len(rows) == limit:
+            last_rowid = int(rows[-1]["route_rowid"])
+            more = connection.execute(
+                "SELECT 1 FROM workflow_routes WHERE run_id=? AND rowid<? LIMIT 1", (run_id, last_rowid)
+            ).fetchone()
+            if more is not None:
+                next_cursor = last_rowid
+        return {"entries": entries, "nextCursor": next_cursor, "total": total}
 
     def _audit(self, connection, run_row) -> dict:
         turns = connection.execute(
@@ -3305,6 +3431,13 @@ class WorkflowCoordinator:
             "taskId": run_row["run_id"],
             "turnIndex": turn_index,
             "executionConfiguration": self._configuration(run_row),
+            # The frozen routing identity of this turn: the decision that produced this
+            # exact execution configuration. Null means the configuration was explicit;
+            # it is never inferred later from the current run, timestamps or model names.
+            "routing": {
+                "decisionId": run_row["current_routing_id"],
+                "executionConfigurationRevision": int(run_row["execution_configuration_revision"]),
+            },
         }
         if previous is not None:
             outcome = json.loads(previous["outcome_json"]) if previous["outcome_json"] else {}

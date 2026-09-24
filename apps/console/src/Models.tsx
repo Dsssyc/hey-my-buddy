@@ -9,14 +9,16 @@ import { effortText, profileName } from "./profile-display";
 import { familyKey, modelFamilies, preferredVariant } from "./console-data";
 import { DetailTabs } from "./DetailTabs";
 import { SplitView } from "./SplitView";
+import { Maintenance } from "./Maintenance";
 
 type Observation = { summary: string; project: string; conditions: string };
 const emptyObservation = { summary: "", project: "", conditions: "" };
 const sections = [["overview", "概览"], ["assessment", "能力评价"], ["preferences", "偏好与启用"], ["evidence", "证据"]] as const;
 
-export function Models({ snapshot, editor, api, refresh }: {
-  snapshot: Snapshot; editor: Editor; api: ConsoleApi; refresh: () => Promise<Snapshot | null>;
+export function Models({ snapshot, editor, api, refresh, active = true }: {
+  snapshot: Snapshot; editor: Editor; api: ConsoleApi; refresh: () => Promise<Snapshot | null>; active?: boolean;
 }) {
+  const [maintenanceOpen, setMaintenanceOpen] = useState(false);
   const [selected, setSelected] = useState<string | null>(null);
   const [query, setQuery] = useState(""), [harness, setHarness] = useState(""), [enabledOnly, setEnabledOnly] = useState(false);
   const [section, setSection] = useState("overview");
@@ -60,7 +62,8 @@ export function Models({ snapshot, editor, api, refresh }: {
   }
   const list = <section className="panel list-panel" aria-label="模型目录">
     <div className="panel-toolbar"><h2>模型 <span className="muted">{families.length}</span></h2>
-      <button className="button small-button" disabled={!editing || busy} onClick={() => void discover()}>发现模型</button></div>
+      <div className="actions"><button className="button small-button" aria-pressed={maintenanceOpen} onClick={() => setMaintenanceOpen(true)}>评价维护</button>
+        <button className="button small-button" disabled={!editing || busy} onClick={() => void discover()}>发现模型</button></div></div>
     <div className="list-filters">
       <label className="search"><span className="sr-only">搜索模型配置</span>
         <input value={query} onChange={e => setQuery(e.target.value)} placeholder="搜索模型、Harness、提供方" /></label>
@@ -74,7 +77,7 @@ export function Models({ snapshot, editor, api, refresh }: {
       {visible.length ? <ul className="profile-list">{visible.map((group, index) => <li key={group.key}>
         {(index === 0 || visible[index - 1].adapter !== group.adapter) && <h3 className="group-heading">{group.adapter}</h3>}
         <button className={"profile-row " + (family?.key === group.key ? "selected" : "")} aria-pressed={family?.key === group.key}
-          onClick={() => { if (family?.key !== group.key) setSelected(preferredVariant(group, data.preferences).profileId); }}>
+          onClick={() => { setMaintenanceOpen(false); if (family?.key !== group.key) setSelected(preferredVariant(group, data.preferences).profileId); }}>
           <span className="row-between"><strong>{group.name}</strong><span className="small muted">{group.profiles.filter(p => p.enabled).length}/{group.profiles.length} 启用</span></span>
           <span className="small muted truncate">{group.provider}</span>
           <span className="small effort-summary">{group.profiles.map(p => effortText(p.effort)).join(" · ")}
@@ -84,6 +87,10 @@ export function Models({ snapshot, editor, api, refresh }: {
     </div>
   </section>;
   const detail = <aside className="panel detail-panel" aria-label="评价卡片详情">
+    <div className="model-detail-content" hidden={!maintenanceOpen}>
+      <Maintenance snapshot={snapshot} api={api} refresh={refresh} active={active && maintenanceOpen} onBack={() => setMaintenanceOpen(false)} />
+    </div>
+    <div className="model-detail-content" hidden={maintenanceOpen}>
     {profile && card && family ? <>
       <header className="detail-header">
         <div className="row-between"><button className="button small-button mobile-back" onClick={() => setSelected(null)}>返回模型列表</button>
@@ -147,8 +154,9 @@ export function Models({ snapshot, editor, api, refresh }: {
         </section>)}
       </div>
     </> : <div className="detail-placeholder"><h2>选择模型</h2><p>同一模型的思考档位集中展示，评价与偏好仍分别保存。</p></div>}
+    </div>
   </aside>;
-  return <SplitView selected={!!profile} list={list} detail={detail} />;
+  return <SplitView selected={maintenanceOpen || !!profile} list={list} detail={detail} />;
 }
 function Reading({ title, values }: { title: string; values: string[] }) {
   return <section className="reading-section"><h3>{title}</h3>{values.length ? <ul>{values.map((item, i) => <li key={i}>{item}</li>)}</ul> : <p className="muted">未记录</p>}</section>;

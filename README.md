@@ -46,7 +46,7 @@ Open the private local console:
 "$BUDDY" console
 ```
 
-The returned loopback URL opens three top tabs: delegation records, model cards and routing configuration. Records are grouped by source project, show the original/current Host and executor, and load older history on demand. Model cards group effort variants under each harness/provider/model; each variant retains its independent evaluation. The desktop layout gives lists and tabbed details separate scroll areas, and preserves in-memory drafts while switching views. You choose the initial fixed decision profile. Model discovery only proposes disabled profiles with their native efforts, preferences rank or constrain legal candidates, and viewing or refreshing the page invokes no model.
+The returned loopback URL opens three top tabs: delegation records, model cards and routing configuration. Records are grouped by source project, show the original/current Host and executor, and load older history on demand. Click an executor to inspect that delegation's recorded routing rationale, including prior decisions; explicit Host choices and missing records are identified. Model cards group effort variants under each harness/provider/model; each variant retains its independent evaluation. Evaluation maintenance and retained suggestions are accessible from model cards. Routing configuration contains settings only. The desktop layout gives lists and tabbed details separate scroll areas, and preserves in-memory drafts while switching views. You choose the initial fixed decision profile. Model discovery only proposes disabled profiles with their native efforts, preferences rank or constrain legal candidates, and viewing or refreshing the page invokes no model.
 
 ## Execution and recovery
 

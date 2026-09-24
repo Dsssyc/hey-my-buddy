@@ -68,6 +68,7 @@ Detailed commands belong in their owning reference, routed from this page and fr
 | [acceptance/neutral-core-0.6.0.md](acceptance/neutral-core-0.6.0.md) | Neutral core and single current contract, DSH/ZCode collaboration and recovery, installed routing, archive cutover and regression evidence for 0.6.0 |
 | [acceptance/profile-effort-labels-2026-09-24.md](acceptance/profile-effort-labels-2026-09-24.md) | DSH-assisted correction of duplicated effort labels, unchanged profile values, frontend regressions and real-browser verification |
 | [acceptance/desktop-console-2026-09-24.md](acceptance/desktop-console-2026-09-24.md) | Top navigation, grouped models/delegations, provenance and keyset history, draft retention and non-browser verification |
+| [acceptance/routing-console-2026-09-24.md](acceptance/routing-console-2026-09-24.md) | Per-delegation routing rationale, settings-only configuration, model-card maintenance and bounded history verification |
 
 Acceptance records are versioned evidence, not current contracts. They may reference paths from the release they describe. The 0.6 record identifies the tested runtime, fixed artifacts and local cutover; check the actual running identity when using another installation.
 

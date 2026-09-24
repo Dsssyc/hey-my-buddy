@@ -46,6 +46,22 @@ TERMINAL_DECISION_STATUSES = frozenset({"completed", "needs-host", "failed", "ca
 SELECT_FIELDS = frozenset({"requestId", "task", "requiredCapabilities", "timeoutSeconds"})
 MAINTAIN_FIELDS = frozenset({"requestId", "timeoutSeconds"})
 GET_FIELDS = frozenset({"decisionId", "includeAudit"})
+LIST_FIELDS = frozenset({"kind", "limit", "before"})
+DEFAULT_LIST_LIMIT = 20
+MAX_LIST_LIMIT = 100
+
+#: The shared row projection for one decision. The paginated list reader adds
+#: ``decision_requests.rowid`` as its stable keyset; nothing here persists anything.
+_ROW_COLUMNS = (
+    "d.decision_id, d.status, d.task, d.profile_id, d.table_revision, d.reason, d.evidence_ids_json,"
+    " d.created_at, d.error, r.request_id, r.kind, r.input_fingerprint, r.configuration_revision,"
+    " r.task_id AS decision_task_id, r.attempt_id AS decision_attempt_id,"
+    " r.generation AS decision_generation, r.reader_id, r.writer_id, r.writer_generation,"
+    " r.expected_revision, r.published_revision, r.selected_json, r.input_json, r.input_sha256, r.output_json, r.proposal_json,"
+    " r.considered_evidence, r.pending_after, r.auto_publish, r.requested_json,"
+    " r.created_at AS request_created_at, r.updated_at AS request_updated_at"
+)
+_ROW_FROM = " FROM decision_requests r JOIN evaluation_decisions d ON d.decision_id = r.decision_id"
 
 MAX_DECISION_TASK_BYTES = 8192
 MAX_DECISION_REASON = 2000
@@ -117,15 +133,7 @@ class DecisionCoordinator:
 
     def _row(self, connection: sqlite3.Connection, decision_id: str) -> sqlite3.Row | None:
         return connection.execute(
-            "SELECT d.decision_id, d.status, d.task, d.profile_id, d.table_revision, d.reason, d.evidence_ids_json,"
-            " d.created_at, d.error, r.request_id, r.kind, r.input_fingerprint, r.configuration_revision,"
-            " r.task_id AS decision_task_id, r.attempt_id AS decision_attempt_id,"
-            " r.generation AS decision_generation, r.reader_id, r.writer_id, r.writer_generation,"
-            " r.expected_revision, r.published_revision, r.selected_json, r.input_json, r.input_sha256, r.output_json, r.proposal_json,"
-            " r.considered_evidence, r.pending_after, r.auto_publish, r.requested_json,"
-            " r.created_at AS request_created_at, r.updated_at AS request_updated_at"
-            " FROM decision_requests r JOIN evaluation_decisions d ON d.decision_id = r.decision_id"
-            " WHERE r.decision_id=?",
+            f"SELECT {_ROW_COLUMNS}{_ROW_FROM} WHERE r.decision_id=?",
             (decision_id,),
         ).fetchone()
 
@@ -1668,6 +1676,60 @@ class DecisionCoordinator:
             if row is None:
                 raise BoardError("NOT_FOUND", "Unknown decisionId", decisionId=decision_id)
             return {"decision": self._view(connection, row, include_audit=include_audit)}
+
+    def list_decisions(self, params: dict) -> dict:
+        """One bounded newest-first page of decision history.
+
+        This is a read: it admits no evaluation reader/writer lease, calls no model
+        and persists nothing. The ``kind`` filter is applied in SQL *before* the
+        limit and the cursor is ``decision_requests.rowid``, the immutable insertion
+        order, so a newer decision never pushes an older one out of reach and a page
+        never shifts, repeats or skips. ``total`` is the complete matching count,
+        independent of the cursor; decisions that never acquired a run and older
+        pages are returned exactly like any other.
+        """
+        schemas.reject_unknown(params, LIST_FIELDS, "selection.list")
+        kind = schemas.optional_string(params, "kind")
+        if kind is not None and kind not in DECISION_KINDS:
+            raise BoardError("INVALID_ARGUMENT", "kind must be 'select' or 'maintain'", field="kind")
+        limit = schemas.optional_int(params, "limit", DEFAULT_LIST_LIMIT, 1, MAX_LIST_LIMIT)
+        before = schemas.optional_positive_int(params, "before")
+        filter_sql = "r.kind=?" if kind is not None else None
+        filter_values: tuple[Any, ...] = (kind,) if kind is not None else ()
+        with self.board.db.read() as connection:
+            total = int(
+                connection.execute(
+                    f"SELECT COUNT(*) AS count FROM decision_requests r"
+                    + (f" WHERE {filter_sql}" if filter_sql else ""),
+                    filter_values,
+                ).fetchone()["count"]
+            )
+            query = f"SELECT r.rowid AS request_rowid, {_ROW_COLUMNS}{_ROW_FROM}"
+            values: list[Any] = list(filter_values)
+            if filter_sql:
+                query += f" WHERE {filter_sql}"
+                if before is not None:
+                    query += " AND r.rowid<?"
+            elif before is not None:
+                query += " WHERE r.rowid<?"
+            if before is not None:
+                values.append(before)
+            query += " ORDER BY r.rowid DESC LIMIT ?"
+            values.append(limit)
+            rows = connection.execute(query, values).fetchall()
+            decisions = [self._view(connection, row, include_audit=False) for row in rows]
+            next_cursor = None
+            if len(rows) == limit:
+                last_rowid = int(rows[-1]["request_rowid"])
+                more = connection.execute(
+                    "SELECT 1 FROM decision_requests r"
+                    + (f" WHERE {filter_sql} AND r.rowid<?" if filter_sql else " WHERE r.rowid<?")
+                    + " LIMIT 1",
+                    (*filter_values, last_rowid),
+                ).fetchone()
+                if more is not None:
+                    next_cursor = last_rowid
+        return {"decisions": decisions, "nextCursor": next_cursor, "total": total}
 
     def _view(self, connection: sqlite3.Connection | None, row: sqlite3.Row, *, include_audit: bool) -> dict:
         output = json.loads(row["output_json"]) if row["output_json"] else None

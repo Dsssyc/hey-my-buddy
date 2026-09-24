@@ -10,10 +10,11 @@ import { Status } from "./ui";
 import { excerpt } from "./task-state";
 import { DetailTabs } from "./DetailTabs";
 import { useRecordDraft } from "./record-drafts";
+import { RoutingDetails } from "./RoutingDetails";
 
 const lines = (text: string) => text.split("\n").map(s => s.trim()).filter(Boolean);
 
-export function WorkflowPanel({ task, snapshot, api, refresh, selectTask, active = true, onLockChange, onTaskUpdate, recordInfo }: {
+export function WorkflowPanel({ task, snapshot, api, refresh, selectTask, active = true, onLockChange, onTaskUpdate, recordInfo, routingRequest = 0 }: {
   task: Task;
   snapshot: Snapshot;
   api: ConsoleApi;
@@ -23,6 +24,7 @@ export function WorkflowPanel({ task, snapshot, api, refresh, selectTask, active
   onLockChange?: (locked: boolean) => void;
   onTaskUpdate?: (task: Task) => void;
   recordInfo?: ReactNode;
+  routingRequest?: number;
 }) {
   const state = useWorkflow(api, task, snapshot, refresh, active);
   const { value, command } = state;
@@ -37,6 +39,12 @@ export function WorkflowPanel({ task, snapshot, api, refresh, selectTask, active
   const [section, setSection] = useRecordDraft(task.runId, "section", "");
   const selectedSection = section || (value?.state === "delivered" ? "artifacts" : value?.activeRequest || value?.awaitingHost ? "assistance" : "overview");
   const tabsId = "workflow-" + task.runId;
+  useEffect(() => {
+    if (routingRequest > 0) {
+      setSection("routing");
+      document.getElementById(tabsId + "-routing-tab")?.focus();
+    }
+  }, [routingRequest]);
   useEffect(() => { onLockChange?.(state.busy || state.uncertain); }, [state.busy, state.uncertain, onLockChange]);
   useEffect(() => { if (value) onTaskUpdate?.({ ...task, ...value.task }); }, [value, onTaskUpdate]);
   const requestId = value?.activeRequest?.requestId;
@@ -84,7 +92,7 @@ export function WorkflowPanel({ task, snapshot, api, refresh, selectTask, active
     {state.uncertain && <button className="button primary" disabled={state.busy} onClick={() => void command("")}>重试同一操作</button>}
     {(value?.awaitingHost || value?.activeRequest?.state === "open") && <div className="attention-bar" role="status"><span>等待决定：{excerpt(value.activeRequest?.summary || value.waitReason, 120)}</span><button className="button small-button" onClick={() => setSection("assistance")}>处理请求</button></div>}
     <DetailTabs id={tabsId} label="委派详情栏目" value={selectedSection}
-      items={[["overview", "概览"], ["assistance", "协作与待办"], ["artifacts", "产物与验收"], ["execution", "执行记录"]]} onChange={setSection} />
+      items={[["overview", "概览"], ["routing", "路由依据"], ["assistance", "协作与待办"], ["artifacts", "产物与验收"], ["execution", "执行记录"]]} onChange={setSection} />
     <div className="detail-body">
     {!value ? <p role="status">正在读取协作记录…</p> : <>
       <div id={tabsId + "-overview"} role="tabpanel" aria-labelledby={tabsId + "-overview-tab"} hidden={selectedSection !== "overview"}>
@@ -104,6 +112,9 @@ export function WorkflowPanel({ task, snapshot, api, refresh, selectTask, active
         {value.currentTurn?.summaryTruncated && <p className="small muted">当前摘要已截断。完整记录可通过 get 的 includeAudit 选项读取。</p>}
         {!!value.currentTurn?.remaining?.length && <ul>{value.currentTurn.remaining.map((item, i) => <li key={i}>{item}</li>)}</ul>}
       </section>
+      </div>
+      <div id={tabsId + "-routing"} role="tabpanel" aria-labelledby={tabsId + "-routing-tab"} hidden={selectedSection !== "routing"}>
+        {selectedSection === "routing" && <RoutingDetails key={value.runId} value={value} api={api} csrfToken={snapshot.csrfToken} active={active} />}
       </div>
       <div id={tabsId + "-assistance"} role="tabpanel" aria-labelledby={tabsId + "-assistance-tab"} hidden={selectedSection !== "assistance"}>
       <RoutingPanel key={value.activeRequest?.requestId || value.runId} value={value} profiles={profiles} locked={locked} command={command} />

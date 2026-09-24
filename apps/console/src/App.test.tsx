@@ -80,34 +80,43 @@ describe("console interactions", () => {
     expect(command.mock.calls[1]).toEqual(command.mock.calls[0]);
   });
 
-  it("reuses the original decision request after an ambiguous network response", async () => {
+  it("reuses the original maintenance request after an ambiguous network response", async () => {
     const state = initial();
-    state.capabilities.selection = true;
-    const command = vi
+    state.capabilities.maintenance = true;
+    state.pendingEvidence = 2;
+    const maintain = vi
       .fn()
       .mockRejectedValueOnce(new ApiError("NETWORK", "lost response"))
       .mockResolvedValueOnce({ decisionId: "durable", runId: "run" });
+    const command = vi.fn(async (operation: string, params: unknown, csrf: string) => {
+      if (operation === "selection_list") return { decisions: [], total: 0, nextCursor: null };
+      if (operation === "evaluation_maintain") return maintain(params, csrf);
+      throw new Error(`Unexpected command: ${operation}`);
+    });
     const api = {
       snapshot: vi.fn(async () => state),
       command,
       task: vi.fn(),
       tasks: vi.fn(async () => ({ ...state.tasks, nextCursor: null })),
     } as unknown as ConsoleApi;
-    window.location.hash = "#settings";
+    window.location.hash = "#models";
     const user = userEvent.setup();
     render(<App suppliedApi={api} />);
-    await user.type(
-      await screen.findByLabelText("任务与约束"),
-      "只读检查状态管理边界",
-    );
-    await user.click(screen.getByRole("button", { name: "请求推荐" }));
+    await user.click(await screen.findByRole("button", { name: "评价维护" }));
+    await user.click(await screen.findByRole("button", { name: "请求整理" }));
+    await screen.findByRole("button", { name: "重试同一整理请求" });
+    await user.click(screen.getByRole("link", { name: "路由配置" }));
+    await user.click(screen.getByRole("link", { name: "模型卡片" }));
     await user.click(
-      await screen.findByRole("button", { name: "重试同一推荐请求" }),
+      await screen.findByRole("button", { name: "重试同一整理请求" }),
     );
-    await screen.findByText("请求已记录，可在本页的最近决策中查看进度。");
-    expect(command).toHaveBeenCalledTimes(2);
-    expect(command.mock.calls[1]).toEqual(command.mock.calls[0]);
-    expect(command.mock.calls[0][1].task).toBe("只读检查状态管理边界");
+    await waitFor(() => expect(maintain).toHaveBeenCalledTimes(2));
+    expect(maintain.mock.calls[1]).toEqual(maintain.mock.calls[0]);
+    expect(maintain.mock.calls[0]).toEqual([
+      { requestId: expect.any(String) },
+      "fixture-csrf",
+    ]);
+    expect(command.mock.calls.some(([operation]) => operation === "selection_request")).toBe(false);
   });
 
   it("records a scoped observation using the real evidence command contract without taking a writer", async () => {
@@ -272,9 +281,10 @@ describe("console interactions", () => {
     await user.click(screen.getByRole("link", { name: "模型卡片" }));
     await screen.findByRole("heading", { name: "模型 1" });
     await user.click(screen.getByRole("link", { name: "路由配置" }));
-    expect(
-      await screen.findByRole("button", { name: "请求推荐" }),
-    ).toHaveProperty("disabled", true);
+    expect(await screen.findByLabelText("决策模型配置")).toHaveProperty("disabled", true);
+    expect(screen.queryByRole("button", { name: "请求推荐" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "请求整理" })).toBeNull();
+    expect(screen.queryByRole("heading", { name: "最近决策" })).toBeNull();
     expect(api.command).not.toHaveBeenCalled();
   });
 

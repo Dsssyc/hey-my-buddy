@@ -1,34 +1,22 @@
-import { useState } from "react";
-import type { ConsoleApi } from "./api";
 import type { Snapshot } from "./types";
 import type { Editor } from "./use-editor";
 import { Badge, Icon } from "./ui";
-import { useDecisionRequest } from "./use-decision-request";
-import { DecisionHistory } from "./DecisionHistory";
 import { effortText, profileTitle } from "./profile-display";
 
 export function Settings({
   snapshot,
   editor,
-  api,
-  refresh,
 }: {
   snapshot: Snapshot;
   editor: Editor;
-  api: ConsoleApi;
-  refresh: () => Promise<Snapshot | null>;
 }) {
   const data = editor.draft || snapshot,
     editing = editor.hasAuthority && !editor.busy && !editor.uncertain;
   const current = data.profiles.find(
     (p) => p.profileId === data.configuration.decisionProfileId,
   );
-  const [task, setTask] = useState("");
-  const decision = useDecisionRequest(api, snapshot, refresh);
-  const maintenance = useDecisionRequest(api, snapshot, refresh);
-  const canSelect = snapshot.capabilities.selection === true;
   return (
-    <div className="settings-grid">
+    <div className="settings-page">
       <section className="panel settings-panel">
         <div className="panel-heading">
           <h2>固定决策模型</h2>
@@ -117,38 +105,6 @@ export function Settings({
             }
           />
         </div>
-        <div className="detail-section">
-          <h3>整理待处理证据</h3>
-          <p className="small muted">
-            当前有 {snapshot.pendingEvidence}{" "}
-            条待处理。点击后才提交一次整理任务；未启用自动采纳时，只保留建议。
-          </p>
-          <button
-            className="button"
-            disabled={
-              maintenance.busy ||
-              snapshot.capabilities.maintenance !== true ||
-              (!maintenance.retryId &&
-                (!snapshot.configuration.decisionProfileId ||
-                  snapshot.pendingEvidence === 0))
-            }
-            onClick={() => void maintenance.submit("evaluation_maintain")}
-          >
-            {maintenance.busy
-              ? "正在提交…"
-              : maintenance.retryId
-                ? "重试同一整理请求"
-                : "请求整理"}
-          </button>
-          {maintenance.message && (
-            <p className="inline-message" role="status">
-              {maintenance.message}
-            </p>
-          )}
-          {maintenance.retryId && (
-            <p className="mono small wrap">请求 ID：{maintenance.retryId}</p>
-          )}
-        </div>
         <div className="policy-note">
           <h3>用户偏好与事实分别保存</h3>
           <p>
@@ -156,61 +112,6 @@ export function Settings({
           </p>
         </div>
       </section>
-      <section className="panel settings-panel">
-        <div className="panel-heading">
-          <h2>试算一次推荐</h2>
-          <p className="muted">
-            明确发起后才调用决策模型，推荐不会自动启动执行任务。
-          </p>
-        </div>
-        <label className="field">
-          <span>任务与约束</span>
-          <textarea
-            rows={6}
-            disabled={decision.busy || !!decision.retryId}
-            value={task}
-            onChange={(e) => setTask(e.target.value)}
-            maxLength={16000}
-            placeholder="例如：为现有状态管理模块补充并发测试，保留公共 API，不修改界面布局。"
-          />
-        </label>
-        <button
-          className="button primary"
-          disabled={
-            decision.busy ||
-            !canSelect ||
-            (!decision.retryId &&
-              (!snapshot.configuration.decisionProfileId || !task.trim()))
-          }
-          onClick={() =>
-            void decision.submit("selection_request", { task: task.trim() })
-          }
-        >
-          {decision.busy
-            ? "正在提交…"
-            : decision.retryId
-              ? "重试同一推荐请求"
-              : "请求推荐"}
-          <Icon name="arrow" size={16} />
-        </button>
-        {!canSelect && (
-          <p className="small muted">当前服务尚未提供模型决策执行能力。</p>
-        )}
-        {decision.message && (
-          <p className="inline-message" role="status">
-            {decision.message}
-          </p>
-        )}
-        {decision.retryId && (
-          <p className="mono small wrap">请求 ID：{decision.retryId}</p>
-        )}
-        {snapshot.gate.phase !== "open" && (
-          <p className="small muted">
-            评价表正在编辑，新请求会排队，随后读取完整发布版本。
-          </p>
-        )}
-      </section>
-      <DecisionHistory snapshot={snapshot} api={api} />
     </div>
   );
 }
