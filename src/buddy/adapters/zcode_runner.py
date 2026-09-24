@@ -480,8 +480,13 @@ def run(control: dict, cancelled: threading.Event) -> tuple[dict, int]:
                         "ZCODE_LOG_DIR": str(directory / "native-logs"), "ZCODE_LOG_CONSOLE": "0",
                         "ZCODE_MODEL_TELEMETRY_ENABLED": "0"})
     command = cli_command(environment)
-    version_result = subprocess.run([*command, "--version"], env=environment, cwd=control["cwd"], capture_output=True, timeout=5)
-    version = version_result.stdout.decode(errors="replace").strip()[:80] if version_result.returncode == 0 else "unknown"
+    try:
+        version_result = subprocess.run([*command, "--version"], env=environment, cwd=control["cwd"], capture_output=True, timeout=5)
+        version = version_result.stdout.decode(errors="replace").strip()[:80] if version_result.returncode == 0 else "unknown"
+    except subprocess.TimeoutExpired:
+        # Version text is optional metadata. A slow --version probe must not
+        # suppress the actual native capability/catalog handshake below.
+        version = "unknown"
     native_stderr = directory / "native.stderr.log"
     fd = os.open(native_stderr, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW, 0o600)
     try:

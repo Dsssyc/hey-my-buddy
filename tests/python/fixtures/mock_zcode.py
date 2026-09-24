@@ -15,6 +15,8 @@ import time
 from pathlib import Path
 
 if "--version" in sys.argv:
+    if os.environ.get("BUDDY_ZCODE_TEST_CASE") == "slow-version":
+        time.sleep(6)
     print("fixture-0.16.9")
     raise SystemExit(0)
 

@@ -54,6 +54,12 @@ class ZcodeFixtureCase(unittest.TestCase):
 
 
 class ZcodeAdapterTests(ZcodeFixtureCase):
+    def test_slow_version_metadata_does_not_block_native_catalog_discovery(self):
+        with mock.patch.dict(os.environ, {**self.environment, "BUDDY_ZCODE_TEST_CASE": "slow-version"}, clear=True):
+            result = self.adapter.discover_models()
+        self.assertEqual(result["harnessVersion"], "unknown")
+        self.assertEqual(result["providers"][0]["models"][0]["id"], "fixture-model")
+
     def test_success_uses_native_root_receipt_and_keeps_secrets_private(self):
         original = self.personal.read_bytes()
         context = self.context()
