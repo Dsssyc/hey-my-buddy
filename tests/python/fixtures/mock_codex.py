@@ -57,7 +57,7 @@ def main():
             send({"id": ident, "result": {"account": {"type": "apiKey" if case == "api-key" or os.environ.get("OPENAI_API_KEY") or os.environ.get("CODEX_API_KEY") else "chatgpt",
                                                             "email": None, "planType": "plus"}, "requiresOpenaiAuth": True}})
         elif method == "model/list":
-            send({"id": ident, "result": {"data": [{"id": "fixture-model", "model": "fixture-model",
+            send({"id": ident, "result": {"data": [] if case == "empty-catalog" else [{"id": "fixture-model", "model": "fixture-model",
                 "displayName": "Fixture", "description": "fixture", "hidden": False, "isDefault": True,
                 "defaultReasoningEffort": "low", "supportedReasoningEfforts": [{"reasoningEffort": "low"}, {"reasoningEffort": "high"}]}],
                 "nextCursor": None}})

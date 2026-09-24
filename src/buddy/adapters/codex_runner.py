@@ -51,8 +51,6 @@ def _catalog(connection: Connection, version: str) -> dict:
         models.append({"id": model_id, "name": item.get("displayName") or model_id,
                        "description": item.get("description") or "", "efforts": efforts,
                        "inputModalities": item.get("inputModalities") or ["text"], "available": True})
-    if not models:
-        raise CodexProtocolError("invalid-catalog", "Codex returned no usable account-plan models")
     return {"source": "codex-native-app-server", "adapter": "codex", "harnessVersion": version,
             "discoveredAt": datetime.now(timezone.utc).isoformat(),
             "providers": [{"adapter": "codex", "provider": "openai", "displayName": "OpenAI ChatGPT plan",

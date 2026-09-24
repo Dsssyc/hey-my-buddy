@@ -103,6 +103,12 @@ class CodexAdapterTests(unittest.TestCase):
              mock.patch.object(CodexAdapter, "discover_models", side_effect=AssertionError("native probe")):
             self.assertEqual(self.adapter.available(), (True, None))
 
+    def test_complete_empty_native_catalog_is_not_a_discovery_failure(self):
+        with mock.patch.dict(os.environ, {**self.environment, "BUDDY_CODEX_FIXTURE_CASE": "empty-catalog"}, clear=True):
+            catalog = self.adapter.discover_models()
+        self.assertEqual(catalog["providers"][0]["models"], [])
+        self.assertFalse((self.root / "fixture.json").exists(), "discovery must not start a thread")
+
     def test_inherited_api_key_is_removed_before_native_account_check(self):
         context = self.context()
         context.environment["OPENAI_API_KEY"] = "fixture-secret"
