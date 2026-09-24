@@ -1,4 +1,4 @@
-import type { Snapshot } from "./types";
+import type { Snapshot, TaskPage, TaskQuery } from "./types";
 
 export class ApiError extends Error {
   constructor(
@@ -29,6 +29,10 @@ export function uncertainResponse(error: unknown): boolean {
   return !(error instanceof ApiError) || ["NETWORK", "INVALID_RESPONSE", "INTERNAL_ERROR"].includes(error.code) || /^HTTP_5/.test(error.code);
 }
 
+export function isAbortError(error: unknown): boolean {
+  return typeof error === "object" && error !== null && "name" in error && error.name === "AbortError";
+}
+
 export function createApi(prefix: string, fetcher: typeof fetch = fetch) {
   const base = prefix.replace(/\/+$/, "");
   async function request(path: string, init: RequestInit = {}) {
@@ -40,7 +44,7 @@ export function createApi(prefix: string, fetcher: typeof fetch = fetch) {
         ...init,
       });
     } catch (error) {
-      if (error instanceof Error && error.name === "AbortError") throw error;
+      if (isAbortError(error)) throw error;
       throw new ApiError("NETWORK", "无法连接本地黑板。已有任务仍由后台管理。");
     }
     let data: unknown;
@@ -100,6 +104,18 @@ export function createApi(prefix: string, fetcher: typeof fetch = fetch) {
     },
     async task(runId: string) {
       return request(`/tasks/${encodeURIComponent(runId)}`);
+    },
+    async tasks(params: TaskQuery, signal?: AbortSignal): Promise<TaskPage> {
+      const query = new URLSearchParams();
+      for (const [key, value] of Object.entries(params)) {
+        if (value !== undefined && value !== "") query.set(key, String(value));
+      }
+      const data = await request(`/tasks?${query}`, { signal }) as TaskPage;
+      if (!data || !Array.isArray(data.runs) || !Number.isInteger(data.total)
+        || !(data.nextCursor === null || typeof data.nextCursor === "string")) {
+        throw new ApiError("INVALID_RESPONSE", "委派历史响应不完整，请检查服务版本。");
+      }
+      return data;
     },
   };
 }

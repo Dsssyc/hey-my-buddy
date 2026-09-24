@@ -54,6 +54,21 @@ export type Decision = {
   createdAt: string;
   error?: string | null;
 };
+export type Delegation = {
+  kind: "goal" | "helper" | "decision" | "execution";
+  sourceHostId: string | null;
+  currentHostId: string | null;
+  parentRunId: string | null;
+  rootRunId: string | null;
+  project: { id: string; path: string | null; label: string };
+  configuration: { adapter: string; provider: string; model: string; effort: string } | null;
+};
+export type TaskPage = { runs: Task[]; total: number; nextCursor: string | null };
+export type TaskQuery = {
+  limit?: number; before?: string; rootsOnly?: boolean;
+  query?: string; projectId?: string; hostId?: string;
+  filter?: "all" | "active" | "host" | "review";
+};
 export type Task = {
   runId: string;
   task: string;
@@ -65,6 +80,7 @@ export type Task = {
   acceptedAt: string | null;
   acceptanceVerdict: string | null;
   queueReason?: string | null;
+  delegation?: Delegation;
   spec?: Record<string, unknown>;
   workflow?: {
     state: string;

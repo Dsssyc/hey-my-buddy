@@ -38,7 +38,7 @@ export function RoutingPanel({ value, profiles, locked, command }: {
       <legend>补齐配置或重试路由</legend>
       <p>{value.activeRequest?.summary || value.routing?.reason || "路由需要 Host 补充信息。"}</p>
       {targetRunId && <p className="small wrap">接续目标：<code>{targetRunId}</code></p>}
-      <p className="small muted">完整配置会跳过决策模型；原请求已指定的字段仍是硬约束。也可以先修正“决策配置”，再为同一目标重试路由。</p>
+      <p className="small muted">完整配置会跳过决策模型；原请求已指定的字段仍是硬约束。也可以先修正“路由配置”，再为同一目标重试路由。</p>
       <label className="field"><span>填入已启用配置</span><select defaultValue="" onChange={event => {
         const profile = profiles.find(item => item.profileId === event.target.value);
         if (profile) setConfiguration({ adapter: profile.adapter, provider: profile.provider, model: profile.model, effort: profile.effort });

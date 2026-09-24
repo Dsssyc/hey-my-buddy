@@ -449,6 +449,7 @@ class WorkflowCoordinator:
             "acceptanceNote": decorated["acceptanceNote"],
             "artifactCount": decorated["artifactCount"],
             "inquiries": decorated["inquiries"],
+            "delegation": decorated["delegation"],
             "createdAt": decorated["createdAt"],
             "updatedAt": decorated["updatedAt"],
         }
@@ -1393,7 +1394,8 @@ class WorkflowCoordinator:
                     now=now,
                 )
             elif decision == "approve":
-                children = self._create_helpers(connection, run_row, task, request_row, prepared, command_id, now)
+                children = self._create_helpers(connection, run_row, task, request_row, prepared, command_id, now,
+                                                source_host_id=run_row["host_id"])
                 connection.execute(
                     "UPDATE workflow_requests SET state='approved', decision_json=?, decision_command_id=?,"
                     " decided_at=?, updated_at=? WHERE request_id=?",
@@ -1706,7 +1708,8 @@ class WorkflowCoordinator:
             (continuation_id, child_task_id, command_id, source_request["request_id"], child_run["revision"],
              input_text, len(input_text.encode()), reason or None, now),
         )
-        extra = self._create_helpers(connection, child_run, child_task, source_request, prepared, command_id, now) if decision == "approve" and prepared else []
+        extra = self._create_helpers(connection, child_run, child_task, source_request, prepared, command_id, now,
+                                     source_host_id=parent_run["host_id"]) if decision == "approve" and prepared else []
         pending = self._open_boundary(connection, child_run)
         if extra or pending is not None or self._unfinished_helpers(connection, child_task_id):
             self._sync_boundary(connection, child_task_id, now, default_state="waiting-helpers")
@@ -1731,7 +1734,8 @@ class WorkflowCoordinator:
         )
 
     def _create_helpers(
-        self, connection, run_row, parent_task, request_row, prepared: list[dict], command_id: str, now: str
+        self, connection, run_row, parent_task, request_row, prepared: list[dict], command_id: str, now: str,
+        *, source_host_id: str,
     ) -> list[dict]:
         task_spec = json.loads(parent_task["spec_json"])
         children: list[dict] = []
@@ -1760,6 +1764,7 @@ class WorkflowCoordinator:
                 run_row=run_row,
                 manifest=manifest,
                 now=now,
+                source_host_id=source_host_id,
             )
             self._reserve(
                 connection,
@@ -1818,7 +1823,7 @@ class WorkflowCoordinator:
         return children
 
     def _admit_helper_task(
-        self, connection, *, helper_task_id, item, parent_task, task_spec, run_row, manifest, now
+        self, connection, *, helper_task_id, item, parent_task, task_spec, run_row, manifest, now, source_host_id
     ) -> None:
         spec = item["spec"]
         fingerprint = schemas.spec_fingerprint(spec)
@@ -1886,7 +1891,8 @@ class WorkflowCoordinator:
             "workflow.helper_admitted",
             task_id=helper_task_id,
             revision=1,
-            payload={"parentRunId": run_row["run_id"], "requestId": request_id, "integrator": item["integrator"]},
+            payload={"parentRunId": run_row["run_id"], "requestId": request_id, "integrator": item["integrator"],
+                     "sourceHostId": source_host_id},
         )
 
     # -- continue ------------------------------------------------------------
@@ -2312,7 +2318,8 @@ class WorkflowCoordinator:
                 "workflow.takeover",
                 task_id=run_id,
                 revision=run_row["revision"] + 1,
-                payload={"actor": actor, "newHostId": new_host, "ownerGeneration": generation},
+                payload={"actor": actor, "newHostId": new_host, "ownerGeneration": generation,
+                         "previousHostId": run_row["host_id"], "previousOwnerGeneration": run_row["owner_generation"]},
             )
             run_row = self._run_row(connection, run_id)
             response = {

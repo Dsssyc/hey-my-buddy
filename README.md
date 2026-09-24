@@ -46,7 +46,7 @@ Open the private local console:
 "$BUDDY" console
 ```
 
-The returned loopback URL shows tasks, routing state and Host decisions, and lets you maintain the shared evaluation table. You choose the initial fixed decision profile. Model discovery only proposes disabled profiles with their native efforts, preferences rank or constrain legal candidates, and viewing or refreshing the page invokes no model.
+The returned loopback URL opens three top tabs: delegation records, model cards and routing configuration. Records are grouped by source project, show the original/current Host and executor, and load older history on demand. Model cards group effort variants under each harness/provider/model; each variant retains its independent evaluation. The desktop layout gives lists and tabbed details separate scroll areas, and preserves in-memory drafts while switching views. You choose the initial fixed decision profile. Model discovery only proposes disabled profiles with their native efforts, preferences rank or constrain legal candidates, and viewing or refreshing the page invokes no model.
 
 ## Execution and recovery
 

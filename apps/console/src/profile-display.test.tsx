@@ -182,6 +182,7 @@ describe("decision profile selector", () => {
       snapshot: vi.fn(async () => structuredClone(state)),
       command,
       task: vi.fn(),
+      tasks: vi.fn(async () => ({ runs: [], total: 0, nextCursor: null })),
     } as unknown as ConsoleApi;
     window.location.hash = "#settings";
     const user = userEvent.setup();
@@ -225,13 +226,14 @@ describe("model list display", () => {
       snapshot: vi.fn(async () => catalogSnapshot()),
       command: vi.fn(),
       task: vi.fn(),
+      tasks: vi.fn(async () => ({ runs: [], total: 0, nextCursor: null })),
     } as unknown as ConsoleApi;
     window.location.hash = "#models";
     render(<App suppliedApi={api} />);
     expect(
-      await screen.findByRole("heading", { name: "DeepSeek-V41-Flash" }),
+      await screen.findByRole("button", { name: /^DeepSeek-V41-Flash/ }),
     ).toBeTruthy();
-    expect(screen.getByRole("heading", { name: "DeepSeek-V4-Pro" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: /^DeepSeek-V4-Pro/ })).toBeTruthy();
     expect(screen.getByText("非思考")).toBeTruthy();
     expect(screen.queryByText("DeepSeek-V41-Flash · off")).toBeNull();
   });

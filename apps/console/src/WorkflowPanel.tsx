@@ -1,4 +1,5 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect } from "react";
+import type { ReactNode } from "react";
 import type { ConsoleApi } from "./api";
 import type { Snapshot, Task } from "./types";
 import type { HelperDraft } from "./workflow-types";
@@ -7,30 +8,41 @@ import { HelperForm } from "./HelperForm";
 import { RoutingPanel, needsRouting } from "./RoutingPanel";
 import { Status } from "./ui";
 import { excerpt } from "./task-state";
+import { DetailTabs } from "./DetailTabs";
+import { useRecordDraft } from "./record-drafts";
 
 const lines = (text: string) => text.split("\n").map(s => s.trim()).filter(Boolean);
 
-export function WorkflowPanel({ task, snapshot, api, refresh, selectTask }: {
+export function WorkflowPanel({ task, snapshot, api, refresh, selectTask, active = true, onLockChange, onTaskUpdate, recordInfo }: {
   task: Task;
   snapshot: Snapshot;
   api: ConsoleApi;
   refresh: () => Promise<Snapshot | null>;
   selectTask: (runId: string) => void;
+  active?: boolean;
+  onLockChange?: (locked: boolean) => void;
+  onTaskUpdate?: (task: Task) => void;
+  recordInfo?: ReactNode;
 }) {
-  const state = useWorkflow(api, task, snapshot, refresh);
+  const state = useWorkflow(api, task, snapshot, refresh, active);
   const { value, command } = state;
-  const [reason, setReason] = useState("");
-  const [input, setInput] = useState("");
-  const [note, setNote] = useState("");
-  const [host, setHost] = useState("");
-  const [helpers, setHelpers] = useState<HelperDraft[]>([]);
-  const [autoContinue, setAutoContinue] = useState(true);
-  const [helperPolicy, setHelperPolicy] = useState("");
-  const draftRequest = useRef<string | null>(null);
+  const [reason, setReason] = useRecordDraft(task.runId, "reason", "");
+  const [input, setInput] = useRecordDraft(task.runId, "input", "");
+  const [note, setNote] = useRecordDraft(task.runId, "note", "");
+  const [host, setHost] = useRecordDraft(task.runId, "host", "");
+  const [helpers, setHelpers] = useRecordDraft<HelperDraft[]>(task.runId, "helpers", []);
+  const [autoContinue, setAutoContinue] = useRecordDraft(task.runId, "autoContinue", true);
+  const [helperPolicy, setHelperPolicy] = useRecordDraft(task.runId, "helperPolicy", "");
+  const [draftRequest, setDraftRequest] = useRecordDraft<string | null>(task.runId, "requestId", null);
+  const [section, setSection] = useRecordDraft(task.runId, "section", "");
+  const selectedSection = section || (value?.state === "delivered" ? "artifacts" : value?.activeRequest || value?.awaitingHost ? "assistance" : "overview");
+  const tabsId = "workflow-" + task.runId;
+  useEffect(() => { onLockChange?.(state.busy || state.uncertain); }, [state.busy, state.uncertain, onLockChange]);
+  useEffect(() => { if (value) onTaskUpdate?.({ ...task, ...value.task }); }, [value, onTaskUpdate]);
   const requestId = value?.activeRequest?.requestId;
   useEffect(() => {
-    if (!requestId || state.uncertain || draftRequest.current === requestId) return;
-    draftRequest.current = requestId;
+    if (!requestId || state.uncertain || draftRequest === requestId) return;
+    setDraftRequest(requestId);
     setReason(""); setHelpers([]); setAutoContinue(true);
   }, [requestId, state.uncertain]);
   const profiles = snapshot.profiles.filter(p => p.enabled && p.available && ["dsh", "zcode"].includes(p.adapter));
@@ -70,11 +82,16 @@ export function WorkflowPanel({ task, snapshot, api, refresh, selectTask }: {
     {state.notice && <p className="success-message" role="status">{state.notice}</p>}
     {state.controlFile && <p className="small wrap">交给新 Host 的控制文件路径：<code>{state.controlFile}</code>。路径可用于 CLI 的 controlFile；不要复制文件中的凭据。</p>}
     {state.uncertain && <button className="button primary" disabled={state.busy} onClick={() => void command("")}>重试同一操作</button>}
+    {(value?.awaitingHost || value?.activeRequest?.state === "open") && <div className="attention-bar" role="status"><span>等待决定：{excerpt(value.activeRequest?.summary || value.waitReason, 120)}</span><button className="button small-button" onClick={() => setSection("assistance")}>处理请求</button></div>}
+    <DetailTabs id={tabsId} label="委派详情栏目" value={selectedSection}
+      items={[["overview", "概览"], ["assistance", "协作与待办"], ["artifacts", "产物与验收"], ["execution", "执行记录"]]} onChange={setSection} />
+    <div className="detail-body">
     {!value ? <p role="status">正在读取协作记录…</p> : <>
+      <div id={tabsId + "-overview"} role="tabpanel" aria-labelledby={tabsId + "-overview-tab"} hidden={selectedSection !== "overview"}>
       <section className="detail-section">
         <h3>目标与回合</h3><Status status={value.state} />
         <dl className="facts">
-          <dt>当前 Host</dt><dd>{value.hostId} · 第 {value.ownerGeneration} 代</dd>
+          <dt>当前 Host</dt><dd>{value.task.delegation?.currentHostId || value.hostId}</dd>
           <dt>协作版本</dt><dd>V{value.revision}</dd>
           <dt>接续次数</dt><dd>{value.continuationCount}</dd>
           <dt>接续方式</dt><dd>{value.currentTurn?.resumeMode === "native-session" ? "恢复原生会话" : value.currentTurn?.resumeMode === "reconstructed-new-session" ? "新会话，从持久上下文重建" : "首次执行"}</dd>
@@ -87,6 +104,8 @@ export function WorkflowPanel({ task, snapshot, api, refresh, selectTask }: {
         {value.currentTurn?.summaryTruncated && <p className="small muted">当前摘要已截断。完整记录可通过 get 的 includeAudit 选项读取。</p>}
         {!!value.currentTurn?.remaining?.length && <ul>{value.currentTurn.remaining.map((item, i) => <li key={i}>{item}</li>)}</ul>}
       </section>
+      </div>
+      <div id={tabsId + "-assistance"} role="tabpanel" aria-labelledby={tabsId + "-assistance-tab"} hidden={selectedSection !== "assistance"}>
       <RoutingPanel key={value.activeRequest?.requestId || value.runId} value={value} profiles={profiles} locked={locked} command={command} />
       {value.children.length > 0 && <section className="detail-section"><h3>关联执行</h3><ul className="workflow-children">
         {value.children.map(child => <li key={child.taskId}>
@@ -123,21 +142,30 @@ export function WorkflowPanel({ task, snapshot, api, refresh, selectTask }: {
           expectedRevision: value.revision, input: input.trim(), ...(activeHelpers ? { helperPolicy } : {}),
         })}>提交接续输入</button>
       </fieldset>}
-      {value.artifacts.length > 0 && <section className="detail-section"><h3>固定产物引用</h3><ul className="artifact-list">
-        {value.artifacts.map(a => <li key={a.artifactId}><span>{a.kind} · {!a.sourceTaskId || a.sourceTaskId === value.runId ? "本任务" : a.sourceTaskId}</span><code>{a.artifactId}</code>{(a.outputCommit || a.commit) && <code>commit {a.outputCommit || a.commit}</code>}<code>SHA-256 {a.snapshotSha256 || a.manifestSha256}</code>{a.diffPath && <code>{a.diffPath}</code>}</li>)}
-      </ul><p className="small muted">这些引用固定在具体执行。验收前仍须检查实际 diff 和测试结果。</p></section>}
-      {value.state === "delivered" && <fieldset className="workflow-controls" disabled={locked || activeHelpers || value.task.shutdownConfirmed !== true || value.shutdown?.descendantsConfirmed !== true}>
-        <legend>最终验收</legend><label className="field"><span>实际检查依据</span><textarea rows={3} value={note} maxLength={2000} onChange={e => setNote(e.target.value)} /></label>
-        <div className="actions">{(["accepted", "rejected"] as const).map(verdict => <button key={verdict} className={`button ${verdict === "accepted" ? "primary" : ""}`} disabled={!note.trim() || !artifact}
-          onClick={() => void command("workflow_acknowledge", { artifactId: artifact?.artifactId, verdict, note: note.trim() })}>{verdict === "accepted" ? "接受最终交付" : "记录验收问题"}</button>)}</div>
-      </fieldset>}
+      </div>
+      <div id={tabsId + "-artifacts"} role="tabpanel" aria-labelledby={tabsId + "-artifacts-tab"} hidden={selectedSection !== "artifacts"}>
+      {value.artifacts.length > 0 ? <section className="detail-section"><h3>固定产物引用</h3><ul className="artifact-list">
+        {value.artifacts.map(a => <li key={a.artifactId}><details><summary>{a.kind} · {!a.sourceTaskId || a.sourceTaskId === value.runId ? "本任务" : "关联任务"} · {(a.outputCommit || a.commit || a.artifactId).slice(0, 12)}</summary><code>{a.artifactId}</code>{(a.outputCommit || a.commit) && <code>commit {a.outputCommit || a.commit}</code>}<code>SHA-256 {a.snapshotSha256 || a.manifestSha256}</code>{a.diffPath && <code>{a.diffPath}</code>}</details></li>)}
+      </ul><p className="small muted">这些引用固定在具体执行。验收前仍须检查实际 diff 和测试结果。</p></section> : <p className="muted">尚无固定产物。</p>}
+      </div>
+      <div id={tabsId + "-execution"} role="tabpanel" aria-labelledby={tabsId + "-execution-tab"} hidden={selectedSection !== "execution"}>
+      {recordInfo}
+      <h3>执行记录</h3><dl className="facts"><dt>本记录权限</dt><dd>{value.hostId} · 第 {value.ownerGeneration} 代</dd><dt>执行位置</dt><dd>{value.workspace?.path || "未记录"}</dd><dt>当前回合</dt><dd>{value.currentTurn?.turnId || "尚未开始"}</dd><dt>执行尝试</dt><dd>{value.currentTurn?.attemptId || "尚未开始"}</dd><dt>原生会话</dt><dd>{value.currentTurn?.sessionId || "未记录"}</dd></dl>
+      <details className="detail-section"><summary>原始目标</summary><p className="read-text">{task.task}</p></details>
       <details className="detail-section"><summary>更换 Host 或取消目标</summary><fieldset className="workflow-controls" disabled={locked}>
         <label className="field"><span>新的 Host ID</span><input value={host} maxLength={256} onChange={e => setHost(e.target.value)} /></label>
         <button className="button" disabled={!host.trim() || host.trim() === value.hostId} onClick={() => void command("workflow_takeover", { expectedRevision: value.revision, expectedOwnerGeneration: value.ownerGeneration, newHostId: host.trim() })}>移交控制权</button>
         <p className="small muted">移交会使旧 Host 的操作资格失效，正在执行的回合不重启。新 Host 需取得自己的控制凭据。</p>
         {!["accepted", "cancelled"].includes(value.state) && <button className="button danger" onClick={() => void command("workflow_cancel", { reason: "用户在私有控制台取消目标及其协助任务" })}>取消目标及协助任务</button>}
       </fieldset></details>
+      <button className="button small-button" disabled={state.busy} onClick={state.reload}>刷新协作记录</button>
+      </div>
     </>}
-    <button className="button small-button" disabled={state.busy} onClick={state.reload}>刷新协作记录</button>
+    </div>
+    {selectedSection === "artifacts" && value?.state === "delivered" && <fieldset className="workflow-controls acceptance-controls" disabled={locked || activeHelpers || value.task.shutdownConfirmed !== true || value.shutdown?.descendantsConfirmed !== true}>
+      <legend>最终验收</legend><label className="field"><span>实际检查依据</span><textarea rows={2} value={note} maxLength={2000} onChange={e => setNote(e.target.value)} /></label>
+      <div className="actions">{(["accepted", "rejected"] as const).map(verdict => <button key={verdict} className={`button ${verdict === "accepted" ? "primary" : ""}`} disabled={!note.trim() || !artifact}
+        onClick={() => void command("workflow_acknowledge", { artifactId: artifact?.artifactId, verdict, note: note.trim() })}>{verdict === "accepted" ? "接受最终交付" : "记录验收问题"}</button>)}</div>
+    </fieldset>}
   </div>;
 }

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { ConsoleApi } from "./api";
-import { errorText } from "./api";
+import { errorText, isAbortError } from "./api";
 import type { Snapshot } from "./types";
 
 export function useConsole(api: ConsoleApi) {
@@ -24,7 +24,7 @@ export function useConsole(api: ConsoleApi) {
         if (
           mounted.current &&
           request === sequence.current &&
-          !(failure instanceof Error && failure.name === "AbortError")
+          !isAbortError(failure)
         )
           setError(errorText(failure));
         return null;

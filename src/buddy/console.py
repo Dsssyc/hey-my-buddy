@@ -26,7 +26,7 @@ import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
-from urllib.parse import unquote, urlsplit
+from urllib.parse import parse_qs, unquote, urlsplit
 
 from .errors import BoardError
 from .service import call_operation
@@ -35,6 +35,51 @@ MAX_BODY_BYTES = 1024 * 1024
 MAX_ASSET_BYTES = 8 * 1024 * 1024
 SESSION_COOKIE = "buddy_console_session"
 CSRF_HEADER = "X-Buddy-CSRF"
+
+#: Exact parameter whitelist of the read-only task history route. It is forwarded to
+#: the same named ``task_list`` operation the CLI and C-Two use; an unknown or
+#: repeated parameter is refused instead of being ignored or silently collapsed.
+TASK_HISTORY_PARAMETERS = frozenset(
+    {"limit", "offset", "state", "adapter", "before", "rootsOnly", "query", "projectId", "hostId", "filter"}
+)
+TASK_HISTORY_INTEGERS = frozenset({"limit", "offset"})
+TASK_HISTORY_BOOLEANS = frozenset({"rootsOnly"})
+_QUERY_INTEGER = re.compile(r"^[0-9]{1,7}$")
+_TRUE_VALUES = frozenset({"true", "1"})
+_FALSE_VALUES = frozenset({"false", "0"})
+
+
+def parse_task_history_query(query: str) -> dict:
+    """Parse one task-history query string into typed ``task_list`` parameters.
+
+    Only the exact whitelist above is accepted; a repeated parameter is an error so
+    a caller can never smuggle two values past a checker that validated one, and
+    booleans/integers are converted here so the store receives real JSON types.
+    """
+    entries = parse_qs(query, keep_blank_values=True)
+    params: dict[str, Any] = {}
+    for name in sorted(entries):
+        if name not in TASK_HISTORY_PARAMETERS:
+            raise BoardError("INVALID_ARGUMENT", f"Unknown task history parameter: {name}", field=name)
+        values = entries[name]
+        if len(values) != 1:
+            raise BoardError("INVALID_ARGUMENT", f"Duplicate task history parameter: {name}", field=name)
+        value = values[0]
+        if name in TASK_HISTORY_BOOLEANS:
+            lowered = value.lower()
+            if lowered not in _TRUE_VALUES | _FALSE_VALUES:
+                raise BoardError("INVALID_ARGUMENT", f"{name} must be true or false", field=name)
+            params[name] = lowered in _TRUE_VALUES
+        elif name in TASK_HISTORY_INTEGERS:
+            if not _QUERY_INTEGER.match(value):
+                raise BoardError("INVALID_ARGUMENT", f"{name} must be a nonnegative integer", field=name)
+            params[name] = int(value)
+        else:
+            if not value:
+                raise BoardError("INVALID_ARGUMENT", f"{name} must be a nonempty value", field=name)
+            params[name] = value
+    return params
+
 
 #: The only operations a browser may invoke. Everything else — including any raw SQL
 #: or an unwrapped store call — is not reachable through this surface.
@@ -508,6 +553,8 @@ class Console:
                     except Exception:  # noqa: BLE001 - no traceback crosses the boundary
                         return self._error(500, "INTERNAL_ERROR", "The console could not read the snapshot")
                     return self._send_with_session(200, snapshot, "application/json; charset=utf-8")
+                if relative == "/api/tasks":
+                    return self._task_history()
                 if relative.startswith("/api/tasks/"):
                     return self._task(relative[len("/api/tasks/"):])
                 if relative.startswith("/api/"):
@@ -567,6 +614,25 @@ class Console:
                     content_type = mimetypes.guess_type(target.name)[0] or "application/octet-stream"
                 cache = "no-cache" if target.suffix.lower() == ".html" else "public, max-age=31536000, immutable"
                 self._send(200, body, content_type, cache=cache)
+
+            def _task_history(self) -> None:
+                """Read-only task history over the same named ``task_list`` operation.
+
+                Reads stay on the ordinary GET trust boundary (exact loopback Host and
+                same-origin check); no session cookie or CSRF header is required, and
+                nothing here is added to the write allowlist.
+                """
+                try:
+                    params = parse_task_history_query(urlsplit(self.path).query)
+                except BoardError as error:
+                    return self._board_error(error)
+                try:
+                    result = call_operation(console.service, "task_list", params)
+                except BoardError as error:
+                    return self._board_error(error)
+                except Exception:  # noqa: BLE001 - no traceback crosses the boundary
+                    return self._error(500, "INTERNAL_ERROR", "The task history could not be read")
+                self._send_json_with_cookie(200, result)
 
             def _task(self, run_id: str) -> None:
                 if not re.match(r"^[A-Za-z0-9._:-]{1,128}$", run_id):

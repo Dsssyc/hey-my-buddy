@@ -31,8 +31,7 @@ export function Settings({
     <div className="settings-grid">
       <section className="panel settings-panel">
         <div className="panel-heading">
-          <span className="eyebrow">DECISION PROFILE</span>
-          <h2>让合适的 Buddy 做选择</h2>
+          <h2>固定决策模型</h2>
           <p className="muted">
             固定一个决策配置，负责比较候选与整理经验。它不会递归选择自己。
           </p>
@@ -87,7 +86,7 @@ export function Settings({
           <div className="quiet-note">
             <Icon name="models" />
             <p>
-              先在“模型与经验”发现配置，再选择决策模型。查看页面不会发起模型请求。
+              先在“模型卡片”发现配置，再选择决策模型。查看页面不会发起模型请求。
             </p>
           </div>
         )}
@@ -159,8 +158,7 @@ export function Settings({
       </section>
       <section className="panel settings-panel">
         <div className="panel-heading">
-          <span className="eyebrow">TRY A DECISION</span>
-          <h2>查看一次推荐</h2>
+          <h2>试算一次推荐</h2>
           <p className="muted">
             明确发起后才调用决策模型，推荐不会自动启动执行任务。
           </p>

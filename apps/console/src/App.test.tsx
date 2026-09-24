@@ -4,7 +4,7 @@ import userEvent from "@testing-library/user-event";
 import { App } from "./App";
 import type { ConsoleApi } from "./api";
 import { ApiError } from "./api";
-import type { Snapshot, WriterGrant } from "./types";
+import type { Snapshot, TaskQuery, WriterGrant } from "./types";
 
 const initial = (): Snapshot => ({
   csrfToken: "fixture-csrf",
@@ -67,7 +67,9 @@ describe("console interactions", () => {
       if (++calls === 1) throw new ApiError("INVALID_RESPONSE", "lost grant");
       return grant;
     });
-    const api = { snapshot: vi.fn(async () => structuredClone(state)), command, task: vi.fn() } as unknown as ConsoleApi;
+    const api = { snapshot: vi.fn(async () => structuredClone(state)), command, task: vi.fn(),
+      tasks: vi.fn(async () => ({ ...state.tasks, nextCursor: null })) } as unknown as ConsoleApi;
+    window.location.hash = "#models";
     const user = userEvent.setup();
     render(<App suppliedApi={api} />);
     await user.click(await screen.findByRole("button", { name: "编辑评价表" }));
@@ -89,6 +91,7 @@ describe("console interactions", () => {
       snapshot: vi.fn(async () => state),
       command,
       task: vi.fn(),
+      tasks: vi.fn(async () => ({ ...state.tasks, nextCursor: null })),
     } as unknown as ConsoleApi;
     window.location.hash = "#settings";
     const user = userEvent.setup();
@@ -101,7 +104,7 @@ describe("console interactions", () => {
     await user.click(
       await screen.findByRole("button", { name: "重试同一推荐请求" }),
     );
-    await screen.findByText("请求已记录，可在最近决策和工作队列中查看进度。");
+    await screen.findByText("请求已记录，可在本页的最近决策中查看进度。");
     expect(command).toHaveBeenCalledTimes(2);
     expect(command.mock.calls[1]).toEqual(command.mock.calls[0]);
     expect(command.mock.calls[0][1].task).toBe("只读检查状态管理边界");
@@ -122,11 +125,13 @@ describe("console interactions", () => {
       snapshot: vi.fn(async () => structuredClone(state)),
       command,
       task: vi.fn(),
+      tasks: vi.fn(async () => ({ ...state.tasks, nextCursor: null })),
     } as unknown as ConsoleApi;
     window.location.hash = "#models";
     const user = userEvent.setup();
     render(<App suppliedApi={api} />);
     await user.click(await screen.findByRole("button", { name: /Flash 决策/ }));
+    await user.click(screen.getByRole("tab", { name: "证据" }));
     await user.type(
       screen.getByLabelText("补充观察"),
       "一次有边界的观察，不是验收成绩",
@@ -180,9 +185,12 @@ describe("console interactions", () => {
       snapshot: vi.fn(async () => state),
       command: vi.fn(async () => ({})),
       task: vi.fn(async () => state.tasks.runs[0]),
+      tasks: vi.fn(async ({ rootsOnly }: TaskQuery) => ({ runs: rootsOnly ? [] : state.tasks.runs,
+        total: rootsOnly ? 0 : state.tasks.total, nextCursor: null })),
     } as unknown as ConsoleApi;
     const user = userEvent.setup();
     render(<App suppliedApi={api} />);
+    await user.click(await screen.findByLabelText("显示协助任务与内部执行"));
     await user.click(
       await screen.findByRole("button", { name: /未执行的测试任务/ }),
     );
@@ -197,7 +205,7 @@ describe("console interactions", () => {
     );
     await user.click(screen.getByRole("button", { name: "待验收" }));
     expect(
-      await screen.findByRole("heading", { name: "没有匹配的任务" }),
+      await screen.findByRole("heading", { name: "没有匹配的委派" }),
     ).toBeTruthy();
   });
 
@@ -236,17 +244,17 @@ describe("console interactions", () => {
           },
         },
       })),
+      tasks: vi.fn(async ({ rootsOnly }: TaskQuery) => ({ runs: rootsOnly ? [] : state.tasks.runs,
+        total: rootsOnly ? 0 : state.tasks.total, nextCursor: null })),
     } as unknown as ConsoleApi;
     const user = userEvent.setup();
     render(<App suppliedApi={api} />);
+    await user.click(await screen.findByLabelText("显示协助任务与内部执行"));
     await user.click(
       await screen.findByRole("button", { name: /停止证据测试/ }),
     );
     expect(await screen.findByText("真实回执中的产物说明")).toBeTruthy();
-    expect(screen.getByRole("button", { name: "重新尝试" })).toHaveProperty(
-      "disabled",
-      true,
-    );
+    expect(screen.queryByRole("button", { name: "重新尝试" })).toBeNull();
     expect(screen.queryByRole("heading", { name: "记录验收" })).toBeNull();
     expect(api.command).not.toHaveBeenCalled();
   });
@@ -256,13 +264,14 @@ describe("console interactions", () => {
       snapshot: vi.fn(async () => initial()),
       command: vi.fn(),
       task: vi.fn(),
+      tasks: vi.fn(async () => ({ runs: [], total: 0, nextCursor: null })),
     } as unknown as ConsoleApi;
     const user = userEvent.setup();
     render(<App suppliedApi={api} />);
-    await screen.findByRole("heading", { name: "等待第一项委派" });
-    await user.click(screen.getByRole("link", { name: "模型与经验" }));
-    await screen.findByRole("heading", { name: "已接入配置 1" });
-    await user.click(screen.getByRole("link", { name: "决策配置" }));
+    await screen.findByRole("heading", { name: "选择一项委派" });
+    await user.click(screen.getByRole("link", { name: "模型卡片" }));
+    await screen.findByRole("heading", { name: "模型 1" });
+    await user.click(screen.getByRole("link", { name: "路由配置" }));
     expect(
       await screen.findByRole("button", { name: "请求推荐" }),
     ).toHaveProperty("disabled", true);
@@ -320,18 +329,22 @@ describe("console interactions", () => {
       snapshot: vi.fn(async () => structuredClone(state)),
       command,
       task: vi.fn(),
+      tasks: vi.fn(async () => ({ ...state.tasks, nextCursor: null })),
     } as unknown as ConsoleApi;
     window.location.hash = "#models";
     const user = userEvent.setup();
     render(<App suppliedApi={api} />);
     await user.click(await screen.findByRole("button", { name: "编辑评价表" }));
     await user.click(await screen.findByRole("button", { name: /Flash 决策/ }));
+    await user.click(screen.getByRole("tab", { name: "能力评价" }));
     const input = await screen.findByLabelText("适用工作");
     await waitFor(() => expect(input).toHaveProperty("readOnly", false));
     await user.type(input, "状态管理{Enter}并发测试");
+    await user.click(screen.getByRole("tab", { name: "证据" }));
     await user.click(screen.getByLabelText("作为卡片依据"));
     await user.click(screen.getByRole("button", { name: "刷新工作台" }));
-    expect((input as HTMLTextAreaElement).value).toBe("状态管理\n并发测试");
+    await user.click(screen.getByRole("tab", { name: "能力评价" }));
+    expect(screen.getByLabelText("适用工作")).toHaveProperty("value", "状态管理\n并发测试");
     await user.click(screen.getByRole("button", { name: "发布新版本" }));
     await screen.findByText("已发布新版本。正在执行的任务继续使用原配置。");
     expect(published!.cards[0].strengths).toEqual(["状态管理", "并发测试"]);

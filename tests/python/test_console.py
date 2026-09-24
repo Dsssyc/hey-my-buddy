@@ -14,6 +14,7 @@ import unittest
 from urllib.parse import urlsplit
 
 from support import BoardTestCase
+from test_workflow import WorkflowTestCase
 
 
 PROFILE_ID = "dsh:deepseek-official:deepseek-flash:off"
@@ -418,6 +419,152 @@ def snapshot_of(board) -> dict:
         self.assertEqual(browser.get("/api/tasks/does-not-exist")[0], 404)
         self.assertEqual(browser.get("/api/tasks/..%2f..%2fcontrol.json")[0], 404)
         self.assertEqual(browser.get("/api/tasks/" + "x" * 200)[0], 404)
+
+
+class ConsoleTaskHistoryTests(ConsoleTestCase, WorkflowTestCase):
+    """The read-only ``GET /api/tasks`` history route over the named task_list."""
+
+    def execution_task(self, board, request_id: str, *, cwd=None):
+        return board.call(
+            "task_submit",
+            {
+                "requestId": request_id,
+                "task": f"ordinary {request_id}",
+                "cwd": str(cwd or self.workdir()),
+                "adapter": "command",
+                "argv": ["/bin/echo", request_id],
+            },
+        )["task"]
+
+    def test_history_route_serves_the_same_named_operation_and_session(self):
+        board = self.board()
+        created = self.execution_task(board, "history-1")
+        _stated, browser = self.open_console(board)
+        status, headers, body = browser.get("/api/tasks?limit=5")
+        self.assertEqual(status, 200, body[:300])
+        self.assertIn("application/json", headers["content-type"])
+        self.assertEqual(headers["cache-control"], "no-store")
+        self.assertNotIn("access-control-allow-origin", headers)
+        self.assertIn("set-cookie", headers)
+        payload = json.loads(body)
+        self.assertEqual(sorted(payload), sorted(["runs", "tasks", "total", "cursor", "nextCursor"]))
+        self.assertEqual(payload["runs"], payload["tasks"])
+        self.assertEqual(payload["total"], 1)
+        self.assertEqual(payload["runs"][0]["runId"], created["runId"])
+        self.assertIn("delegation", payload["runs"][0])
+        direct = board.call("task_list", {"limit": 5})
+        self.assertEqual([row["runId"] for row in payload["runs"]], [row["runId"] for row in direct["runs"]])
+        self.assertEqual(payload["total"], direct["total"])
+        # Reads stay on the ordinary GET trust boundary: no cookie or CSRF header is
+        # needed, and the write allowlist is untouched.
+        anonymous = Browser(board.console.url)
+        status, _headers, body = anonymous.get("/api/tasks")
+        self.assertEqual(status, 200, body[:300])
+        self.assertEqual(json.loads(body)["total"], 1)
+        csrf = browser.bootstrap()["csrfToken"]
+        status, _headers, body = browser.command("task_list", {}, csrf=None)
+        self.assertEqual(status, 403, body[:300])
+        status, _headers, body = browser.command("task_list", {}, csrf=csrf)
+        self.assertEqual(status, 404, body[:300])
+        self.assertEqual(json.loads(body)["error"]["code"], "METHOD_NOT_FOUND")
+
+    def test_roots_only_history_pages_over_http(self):
+        board = self.board()
+        goals = [
+            self.submit(
+                board,
+                request_id=f"goal-{index}",
+                host_id="host-a",
+                cwd=str(self.workdir(f"goal-{index}")),
+                kind="worktree",
+            )["runId"]
+            for index in range(3)
+        ]
+        self.execution_task(board, "plain")
+        _stated, browser = self.open_console(board)
+        status, _headers, body = browser.get("/api/tasks?rootsOnly=true&limit=2")
+        self.assertEqual(status, 200, body[:300])
+        first = json.loads(body)
+        self.assertEqual(first["total"], 3)
+        self.assertEqual(len(first["runs"]), 2)
+        self.assertIsNotNone(first["nextCursor"])
+        self.assertTrue(all(row["delegation"]["kind"] == "goal" for row in first["runs"]))
+        status, _headers, body = browser.get(f"/api/tasks?rootsOnly=true&limit=2&before={first['nextCursor']}")
+        self.assertEqual(status, 200, body[:300])
+        second = json.loads(body)
+        self.assertEqual(len(second["runs"]), 1)
+        self.assertIsNone(second["nextCursor"])
+        seen = {row["runId"] for row in first["runs"]} | {row["runId"] for row in second["runs"]}
+        self.assertEqual(seen, set(goals))
+        # A filtered history never counts the excluded rows.
+        status, _headers, body = browser.get("/api/tasks?rootsOnly=true&hostId=host-a&query=goal")
+        self.assertEqual(json.loads(body)["total"], 3)
+        status, _headers, body = browser.get("/api/tasks?rootsOnly=true&hostId=nobody")
+        self.assertEqual(json.loads(body)["total"], 0)
+
+    def test_snapshot_cursor_resumes_the_history_route(self):
+        board = self.board()
+        for index in range(105):
+            self.execution_task(board, f"bulk-{index:03d}")
+        _stated, browser = self.open_console(board)
+        snapshot = browser.bootstrap()
+        self.assertEqual(snapshot["tasks"]["total"], 105)
+        self.assertEqual(len(snapshot["tasks"]["runs"]), 100)
+        cursor = snapshot["tasks"]["nextCursor"]
+        self.assertIsNotNone(cursor)
+        status, _headers, body = browser.get(f"/api/tasks?limit=100&before={cursor}")
+        self.assertEqual(status, 200, body[:300])
+        page = json.loads(body)
+        self.assertEqual(page["total"], 105)
+        self.assertEqual(len(page["runs"]), 5)
+        self.assertIsNone(page["nextCursor"])
+        seen = {row["runId"] for row in snapshot["tasks"]["runs"]} | {row["runId"] for row in page["runs"]}
+        self.assertEqual(len(seen), 105)
+
+    def test_history_parameters_are_whitelisted_typed_and_single(self):
+        board = self.board()
+        self.execution_task(board, "history-1")
+        _stated, browser = self.open_console(board)
+        for query, field in (
+            ("unknown=1", "unknown"),
+            ("limit=1&limit=2", "limit"),
+            ("%6cimit=1&limit=2", "limit"),
+            ("rootsOnly=maybe", "rootsOnly"),
+            ("rootsOnly=", "rootsOnly"),
+            ("limit=abc", "limit"),
+            ("limit=-1", "limit"),
+            ("limit=101", "limit"),
+            ("offset=x", "offset"),
+            ("before=not-a-cursor", "before"),
+            ("query=", "query"),
+            ("filter=everything", "filter"),
+            ("state=not-a-state", "state"),
+            ("adapter=unknown", "adapter"),
+        ):
+            with self.subTest(query=query):
+                status, _headers, body = browser.get(f"/api/tasks?{query}")
+                self.assertEqual(status, 400, body[:300])
+                error = json.loads(body)["error"]
+                self.assertEqual(error["code"], "INVALID_ARGUMENT")
+                self.assertIn(field, error["message"])
+        # Typed parameters arrive at the store as real booleans and integers.
+        status, _headers, body = browser.get("/api/tasks?rootsOnly=false&limit=1&offset=0")
+        self.assertEqual(status, 200, body[:300])
+        self.assertEqual(json.loads(body)["total"], 1)
+
+    def test_history_route_refuses_foreign_origin_host_and_cross_site_reads(self):
+        board = self.board()
+        _stated, browser = self.open_console(board)
+        status, headers, _body = browser.get("/api/tasks", headers={"Origin": "http://evil.example"})
+        self.assertEqual(status, 403)
+        self.assertNotIn("access-control-allow-origin", headers)
+        status, _headers, _body = browser.get("/api/tasks", headers={"Host": "localhost:1"})
+        self.assertEqual(status, 403)
+        status, _headers, _body = browser.get("/api/tasks", headers={"Sec-Fetch-Site": "cross-site"})
+        self.assertEqual(status, 403)
+        # A crafted path under the prefix is still just a task identity or a 404.
+        self.assertEqual(browser.get("/api/tasks/..%2f..%2fcontrol.json")[0], 404)
+        self.assertEqual(browser.get("/api/tasks?before=../../etc/passwd")[0], 400)
 
 
 class ConsoleAssetTests(ConsoleTestCase):

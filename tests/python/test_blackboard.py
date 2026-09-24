@@ -1173,3 +1173,90 @@ class TestTransitionTables(BoardTestCase):
 
         self.assertEqual(set(TASK_TRANSITIONS), set(TASK_STATES))
         self.assertEqual(set(ATTEMPT_TRANSITIONS), set(ATTEMPT_STATES))
+
+
+class TestTaskHistory(BoardTestCase):
+    """Group 11: read-only delegation metadata and filtered task history."""
+
+    DELEGATION_FIELDS = (
+        "kind",
+        "sourceHostId",
+        "currentHostId",
+        "parentRunId",
+        "rootRunId",
+        "project",
+        "configuration",
+    )
+
+    def submit_one(self, board, request_id: str, *, name: str = "work"):
+        return board.client().submit(
+            requestId=request_id,
+            task=f"do {request_id}",
+            cwd=str(self.workdir(name)),
+            adapter="command",
+            argv=["/bin/true"],
+        )["task"]
+
+    def test_every_task_view_carries_the_delegation_contract(self):
+        board = self.board()
+        created = self.submit_one(board, "hist-1")
+        listing = board.call("task_list", {"limit": 10})
+        self.assertEqual(sorted(listing), sorted(["runs", "tasks", "total", "cursor", "nextCursor"]))
+        self.assertEqual(listing["runs"], listing["tasks"])
+        self.assertEqual(listing["total"], 1)
+        self.assertEqual(listing["cursor"], board.store.head())
+        self.assertIsNone(listing["nextCursor"])
+        metadata = listing["runs"][0]["delegation"]
+        self.assertEqual(sorted(metadata), sorted(self.DELEGATION_FIELDS))
+        self.assertEqual(metadata["kind"], "execution")
+        self.assertIsNone(metadata["sourceHostId"])
+        self.assertIsNone(metadata["currentHostId"])
+        self.assertIsNone(metadata["parentRunId"])
+        self.assertIsNone(metadata["rootRunId"])
+        self.assertIsNone(metadata["configuration"])
+        self.assertEqual(sorted(metadata["project"]), sorted(["id", "path", "label"]))
+        self.assertEqual(metadata["project"]["path"], os.path.realpath(str(self.workdir())))
+        self.assertEqual(board.call("task_get", {"runId": created["runId"]})["task"]["delegation"], metadata)
+        snapshot = board.call("console_snapshot", {})
+        self.assertEqual(snapshot["tasks"]["runs"][0]["delegation"], metadata)
+        self.assertIsNone(snapshot["tasks"]["nextCursor"])
+        self.assertEqual(snapshot["tasks"]["total"], 1)
+
+    def test_existing_filters_compose_and_the_cursor_pages_the_filtered_set(self):
+        board = self.board()
+        client = board.client()
+        for index in range(3):
+            self.submit_one(board, f"hist-{index}", name=f"hist-{index}")
+        cancelled = self.submit_one(board, "hist-cancelled", name="hist-cancelled")
+        client.cancel(runId=cancelled["runId"])
+        first = board.call("task_list", {"limit": 2, "state": "queued", "adapter": "command"})
+        self.assertEqual(first["total"], 3)
+        self.assertEqual(len(first["runs"]), 2)
+        self.assertIsNotNone(first["nextCursor"])
+        self.assertEqual(board.call("task_list", {"state": "cancelled"})["total"], 1)
+        self.assertEqual(board.call("task_list", {"adapter": "external"})["total"], 0)
+        rest = board.call(
+            "task_list", {"limit": 2, "before": first["nextCursor"], "state": "queued", "adapter": "command"}
+        )
+        self.assertEqual(len(rest["runs"]), 1)
+        self.assertIsNone(rest["nextCursor"])
+        seen = {row["runId"] for row in [*first["runs"], *rest["runs"]]}
+        self.assertEqual(seen, {row["runId"] for row in board.call("task_list", {"state": "queued"})["runs"]})
+
+    def test_a_page_is_bounded_and_never_materializes_the_whole_board(self):
+        board = self.board()
+        for index in range(12):
+            self.submit_one(board, f"hist-{index:02d}", name=f"hist-{index:02d}")
+        page = board.call("task_list", {"limit": 5})
+        self.assertEqual(len(page["runs"]), 5)
+        self.assertEqual(page["total"], 12)
+        self.assertIsNotNone(page["nextCursor"])
+        # The cursor is opaque: it carries the (createdAt, taskId) keyset position and
+        # never an offset the caller could turn into a full table walk.
+        import base64
+
+        cursor = page["nextCursor"]
+        decoded = json.loads(base64.urlsafe_b64decode(cursor + "=" * (-len(cursor) % 4)))
+        self.assertEqual(sorted(decoded), ["createdAt", "taskId", "v"])
+        self.assertEqual(decoded["taskId"], page["runs"][-1]["runId"])
+        self.assertEqual(decoded["createdAt"], page["runs"][-1]["createdAt"])

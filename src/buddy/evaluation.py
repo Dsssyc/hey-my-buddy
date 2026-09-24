@@ -1040,7 +1040,10 @@ class EvaluationStore:
             "evidence": evidence,
             "decisions": decisions,
             "pendingEvidence": pending,
-            "tasks": {"runs": tasks["runs"], "total": int(tasks["total"])},
+            # The latest 100 rows stay exactly what the snapshot has always shown
+            # (helpers and internal decisions included); ``nextCursor`` is the keyset
+            # position the separate task-history read resumes from.
+            "tasks": {"runs": tasks["runs"], "total": int(tasks["total"]), "nextCursor": tasks["nextCursor"]},
             "capabilities": self.capabilities(),
         }
 

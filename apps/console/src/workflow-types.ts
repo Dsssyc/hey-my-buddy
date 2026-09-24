@@ -80,7 +80,7 @@ export type Workflow = {
   }[];
   finalArtifactId: string | null;
   finalAttemptId: string | null;
-  task: Task;
+  task: Partial<Task> & Pick<Task, "runId" | "revision" | "status">;
 };
 
 export type HelperDraft = {

@@ -14,6 +14,7 @@ import uuid
 from pathlib import Path
 from typing import Any, Callable, Iterable
 
+from . import delegation
 from . import schemas
 from .db import (
     ACTIVE_ATTEMPT_STATES,
@@ -466,7 +467,7 @@ class BoardStore:
             return None
         return connection.execute("SELECT * FROM attempts WHERE attempt_id = ?", (attempt_id,)).fetchone()
 
-    def _decorate(self, connection: sqlite3.Connection, task: sqlite3.Row) -> dict:
+    def _decorate(self, connection: sqlite3.Connection, task: sqlite3.Row, *, delegation_result: dict | None = None) -> dict:
         view = self._task_view(task)
         attempt = self._selected_attempt(connection, task)
         if attempt is not None:
@@ -488,6 +489,10 @@ class BoardStore:
             "SELECT state, COUNT(*) AS count FROM messages WHERE task_id = ? GROUP BY state", (task["task_id"],)
         ).fetchall()
         view["inquiries"] = {row["state"]: row["count"] for row in messages}
+        # Read-only delegation provenance (source/current Host, lineage and project)
+        # derived from existing authoritative rows; a caller that already resolved the
+        # page passes it in so one page costs one relation read.
+        view["delegation"] = delegation_result if delegation_result is not None else delegation.resolve(connection, task)
         workflow = self.workflow.task_extension(connection, task)
         if workflow is not None:
             view["workflowShutdown"] = self.workflow.shutdown_summary(connection, task["task_id"])
@@ -629,6 +634,7 @@ class BoardStore:
                         "cwd": spec["cwd"],
                         "queueReason": blocker or "awaiting-worker",
                         "inputFingerprint": fingerprint,
+                        **({"governed": {"sourceHostId": governed["hostId"]}} if governed is not None else {}),
                     },
                 )
                 row = connection.execute("SELECT * FROM tasks WHERE task_id = ?", (task_id,)).fetchone()
@@ -649,7 +655,32 @@ class BoardStore:
             return {"task": self._decorate(connection, row)}
 
     def task_list(self, params: dict) -> dict:
-        schemas.reject_unknown(params, {"limit", "offset", "state", "adapter"}, "task.list")
+        """Bounded task history with explicit filters and stable keyset paging.
+
+        Every filter is one SQL predicate over the read-only delegation relation
+        (:mod:`buddy.delegation`), so it applies *before* LIMIT and ``total`` counts
+        exactly the filtered set. ``before`` is a keyset cursor over
+        ``(created_at DESC, task_id DESC)`` and is mutually exclusive with a nonzero
+        ``offset``: a page never loads the board into Python to slice it, and a row
+        inserted after the cursor was issued cannot shift, duplicate or skip the
+        remaining pages. ``nextCursor`` is non-null exactly while more rows match.
+        """
+        schemas.reject_unknown(
+            params,
+            {
+                "limit",
+                "offset",
+                "state",
+                "adapter",
+                "before",
+                "rootsOnly",
+                "query",
+                "projectId",
+                "hostId",
+                "filter",
+            },
+            "task.list",
+        )
         limit = schemas.optional_int(params, "limit", 20, 1, 100)
         offset = schemas.optional_int(params, "offset", 0, 0, 2**31)
         state = params.get("state")
@@ -658,6 +689,20 @@ class BoardStore:
         adapter = params.get("adapter")
         if adapter is not None and adapter not in schemas.ADAPTERS:
             raise BoardError("INVALID_ARGUMENT", "Unknown adapter filter")
+        before_value = schemas.optional_string(params, "before", max_length=delegation.CURSOR_MAX_LENGTH)
+        before = delegation.decode_cursor(before_value) if before_value is not None else None
+        if before is not None and offset:
+            raise BoardError(
+                "INVALID_ARGUMENT",
+                "before and a nonzero offset are mutually exclusive; use one paging mode",
+            )
+        roots_only = schemas.optional_bool(params, "rootsOnly", False)
+        query = schemas.optional_string(params, "query", max_length=delegation.QUERY_MAX_LENGTH)
+        project_id = schemas.optional_string(params, "projectId", max_length=delegation.PROJECT_ID_MAX_LENGTH)
+        host_id = schemas.optional_string(params, "hostId", max_length=delegation.HOST_ID_MAX_LENGTH)
+        filter_name = schemas.optional_string(params, "filter", max_length=16) or "all"
+        if filter_name not in delegation.HISTORY_FILTERS:
+            raise BoardError("INVALID_ARGUMENT", "filter must be one of: all, active, host, review")
         clauses, values = [], []
         if state:
             clauses.append("state = ?")
@@ -665,16 +710,44 @@ class BoardStore:
         if adapter:
             clauses.append("adapter = ?")
             values.append(adapter)
+        history_clauses, history_values = delegation.history_where(
+            roots_only=roots_only,
+            project_id=project_id,
+            host_id=host_id,
+            query=query,
+            filter_name=filter_name,
+        )
+        clauses.extend(history_clauses)
+        values.extend(history_values)
         where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
         with self.db.read() as connection:
-            total = connection.execute(f"SELECT COUNT(*) AS count FROM tasks {where}", values).fetchone()["count"]
-            rows = connection.execute(
-                f"SELECT * FROM tasks {where} ORDER BY created_at DESC, task_id DESC LIMIT ? OFFSET ?",
-                (*values, limit, offset),
-            ).fetchall()
-            tasks = [self._decorate(connection, row) for row in rows]
+            total = connection.execute(
+                f"SELECT COUNT(*) AS count FROM ({delegation.TASK_HISTORY_SQL}) AS history {where}", values
+            ).fetchone()["count"]
+            page_clauses, parameters = list(clauses), list(values)
+            if before is not None:
+                keyset, keyset_values = delegation.keyset_where(*before)
+                page_clauses.append(keyset)
+                parameters.extend(keyset_values)
+            page_where = f"WHERE {' AND '.join(page_clauses)}" if page_clauses else ""
+            statement = f"{delegation.TASK_HISTORY_SQL} {page_where} ORDER BY created_at DESC, task_id DESC LIMIT ?"
+            parameters.append(limit + 1)
+            if before is None:
+                statement += " OFFSET ?"
+                parameters.append(offset)
+            rows = connection.execute(statement, parameters).fetchall()
+            # The extra row only proves another page exists; it is never returned and
+            # never decorated.
+            has_more = len(rows) > limit
+            page = rows[:limit]
+            tasks = [
+                self._decorate(connection, row, delegation_result=delegation.metadata_from_row(row)) for row in page
+            ]
+            next_cursor = (
+                delegation.encode_cursor(page[-1]["created_at"], page[-1]["task_id"]) if page and has_more else None
+            )
             head = self._head_of(connection)
-        return {"runs": tasks, "tasks": tasks, "total": int(total), "cursor": head}
+        return {"runs": tasks, "tasks": tasks, "total": int(total), "cursor": head, "nextCursor": next_cursor}
 
     def task_result(self, params: dict) -> dict:
         schemas.reject_unknown(params, {"runId", "taskId", "requestId"}, "task.result")

@@ -4,7 +4,7 @@ import type { ConsoleApi } from "./api";
 import type { Snapshot, Task } from "./types";
 import type { Workflow } from "./workflow-types";
 
-export function useWorkflow(api: ConsoleApi, task: Task, snapshot: Snapshot, refresh: () => Promise<Snapshot | null>) {
+export function useWorkflow(api: ConsoleApi, task: Task, snapshot: Snapshot, refresh: () => Promise<Snapshot | null>, visible = true) {
   const [value, setValue] = useState<Workflow | null>(null);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
@@ -17,6 +17,7 @@ export function useWorkflow(api: ConsoleApi, task: Task, snapshot: Snapshot, ref
   const runId = task.runId;
   const csrf = snapshot.csrfToken;
   useEffect(() => {
+    if (!visible) return;
     // React 19 cleanup prevents an older request replacing a newer snapshot.
     // https://react.dev/reference/react/useEffect#fetching-data-with-effects
     let current = true;
@@ -31,7 +32,7 @@ export function useWorkflow(api: ConsoleApi, task: Task, snapshot: Snapshot, ref
     }
     void poll();
     return () => { current = false; clearTimeout(timer); };
-  }, [api, runId, csrf, task.revision, task.workflow?.revision, reload]);
+  }, [api, runId, csrf, task.revision, task.workflow?.revision, reload, visible]);
 
   async function command(operation: string, params: Record<string, unknown> = {}) {
     if (active.current || (!value && !pending.current)) return;

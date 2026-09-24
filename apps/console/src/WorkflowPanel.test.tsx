@@ -160,7 +160,7 @@ describe("governed workflow console", () => {
 
   it("binds final acceptance to the delivered attempt artifact, not an earlier helper", async () => {
     const f = fixture();
-    Object.assign(f.workflow, { state: "delivered", activeRequest: null, finalAttemptId: "attempt-final" });
+    Object.assign(f.workflow, { state: "delivered", awaitingHost: false, activeRequest: null, finalAttemptId: "attempt-final" });
     f.workflow.artifacts = [
       { artifactId: "old", attemptId: "attempt-old", sourceTaskId: "helper", kind: "output", manifestSha256: "old-hash" },
       { artifactId: "final", attemptId: "attempt-final", sourceTaskId: "parent", kind: "output", manifestSha256: "final-hash" },
@@ -174,7 +174,7 @@ describe("governed workflow console", () => {
 
   it("keeps final acceptance disabled while a descendant has no stop proof", async () => {
     const f = fixture();
-    Object.assign(f.workflow, { state: "delivered", activeRequest: null, finalAttemptId: "attempt-final" });
+    Object.assign(f.workflow, { state: "delivered", awaitingHost: false, activeRequest: null, finalAttemptId: "attempt-final" });
     f.workflow.shutdown = { selfConfirmed: true, descendantsConfirmed: false, unconfirmedRunIds: ["child"], unconfirmedCount: 1, truncated: false };
     f.workflow.artifacts = [{ artifactId: "final", attemptId: "attempt-final", sourceTaskId: "parent", kind: "output", manifestSha256: "hash" }];
     const user = userEvent.setup();
@@ -183,12 +183,13 @@ describe("governed workflow console", () => {
     expect(screen.getByRole("button", { name: "接受最终交付" }).closest("fieldset")).toHaveProperty("disabled", true);
     await user.click(screen.getByRole("button", { name: "接受最终交付" }));
     expect(f.mutation).not.toHaveBeenCalled();
+    await user.click(screen.getByRole("tab", { name: "概览" }));
     expect(screen.getByText(/目标范围内共 1 项执行尚未核实/)).toBeTruthy();
   });
 
   it("keeps final acceptance disabled for a queued helper even before a new process starts", async () => {
     const f = fixture();
-    Object.assign(f.workflow, { state: "delivered", activeRequest: null, finalAttemptId: "attempt-final" });
+    Object.assign(f.workflow, { state: "delivered", awaitingHost: false, activeRequest: null, finalAttemptId: "attempt-final" });
     f.workflow.children.push({ taskId: "resumed-child", state: "active", role: "helper", requestId: "request-a" });
     f.workflow.artifacts = [{ artifactId: "final", attemptId: "attempt-final", sourceTaskId: "parent", kind: "output", manifestSha256: "hash" }];
     render(<WorkflowPanel {...f.props} />);
