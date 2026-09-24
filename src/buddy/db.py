@@ -18,7 +18,7 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Iterator
 
-SCHEMA_VERSION = 9
+SCHEMA_VERSION = 10
 DB_FILE = "board.sqlite3"
 SECRET_KEY = "capability_secret"
 CAPABILITY_VERSION = 1
@@ -224,6 +224,31 @@ CREATE TABLE IF NOT EXISTS cursors (
 #: recorded discovery/decision history.
 EVALUATION_TABLES = (
     """
+CREATE TABLE IF NOT EXISTS catalog_observations (
+    observation_id INTEGER PRIMARY KEY AUTOINCREMENT,
+    request_id TEXT NOT NULL UNIQUE,
+    created_at TEXT NOT NULL,
+    completed_at TEXT,
+    response_json TEXT
+);
+CREATE TABLE IF NOT EXISTS catalog_current (
+    adapter TEXT PRIMARY KEY,
+    observation_id INTEGER NOT NULL,
+    discovery_id TEXT,
+    status TEXT NOT NULL,
+    reason TEXT,
+    updated_at TEXT NOT NULL
+);
+""",
+    """
+CREATE TABLE IF NOT EXISTS evaluation_annotations (
+    profile_id TEXT PRIMARY KEY REFERENCES evaluation_profiles(profile_id) ON DELETE RESTRICT,
+    text TEXT NOT NULL,
+    revision INTEGER NOT NULL,
+    updated_at TEXT NOT NULL
+);
+""",
+    """
 CREATE TABLE IF NOT EXISTS evaluation_state (
     id                      INTEGER PRIMARY KEY CHECK (id = 1),
     table_revision          INTEGER NOT NULL DEFAULT 0,
@@ -268,6 +293,7 @@ CREATE TABLE IF NOT EXISTS evaluation_cards (
     profile_id        TEXT PRIMARY KEY REFERENCES evaluation_profiles(profile_id) ON DELETE RESTRICT,
     revision          INTEGER NOT NULL,
     summary           TEXT NOT NULL DEFAULT '',
+    origin            TEXT NOT NULL DEFAULT 'unattributed' CHECK(origin IN ('maintenance','unattributed')),
     strengths_json    TEXT NOT NULL DEFAULT '[]',
     limitations_json  TEXT NOT NULL DEFAULT '[]',
     risks_json        TEXT NOT NULL DEFAULT '[]',
@@ -275,6 +301,10 @@ CREATE TABLE IF NOT EXISTS evaluation_cards (
     sample_count      INTEGER NOT NULL DEFAULT 0,
     updated_at        TEXT NOT NULL
 );
+""",
+    """
+CREATE INDEX IF NOT EXISTS evaluation_profiles_current_idx ON evaluation_profiles(available, profile_id);
+CREATE INDEX IF NOT EXISTS evaluation_profiles_adapter_idx ON evaluation_profiles(adapter, profile_id);
 """,
     """
 CREATE TABLE IF NOT EXISTS evaluation_preferences (

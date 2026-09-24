@@ -139,20 +139,20 @@ class LaneTestCase(BoardTestCase):
         self.addCleanup(restore)
 
     def seed_evaluation(self, board) -> dict:
-        """One published profile and configuration, in-process and offline."""
-        board.call("model_catalog_refresh", {"requestId": "catalog-seed"})
-        grant = board.call(
-            "evaluation_write_begin", {"requestId": "seed", "expectedRevision": 0, "kind": "human"}
+        """Enable one discovered profile through a registered console session."""
+        refreshed = board.call("model_catalog_refresh", {"requestId": "catalog-seed"})
+        grant = board.console_call(
+            "evaluation_write_begin", {"requestId": "seed", "expectedRevision": refreshed["tableRevision"], "kind": "human"}
         )
-        return board.call(
-            "evaluation_write_publish",
+        return board.console_call(
+            "user_policy_publish",
             {
                 "commandId": "seed-1",
                 "writerId": grant["writerId"],
                 "generation": grant["generation"],
                 "writerToken": grant["writerToken"],
                 "expectedRevision": grant["tableRevision"],
-                "profiles": [PROFILE],
+                "profileSettings": [{"profileId": PROFILE_ID, "enabled": True}],
                 "configuration": {"decisionProfileId": PROFILE_ID},
             },
         )
@@ -953,22 +953,24 @@ class DaemonPoolTests(LaneTestCase):
             both = wait_for(both_running, timeout=60)
             self.assertIsNotNone(both, "two business attempts never overlapped")
 
-            client.call("model_catalog_refresh", {"requestId": "pool-catalog"})
-            grant = client.call(
-                "evaluation_write_begin", {"requestId": "pool-seed", "expectedRevision": 0, "kind": "human"}
-            )
-            client.call(
-                "evaluation_write_publish",
-                {
-                    "commandId": "pool-seed-1",
-                    "writerId": grant["writerId"],
-                    "generation": grant["generation"],
-                    "writerToken": grant["writerToken"],
-                    "expectedRevision": grant["tableRevision"],
-                    "profiles": [PROFILE],
-                    "configuration": {"decisionProfileId": PROFILE_ID},
-                },
-            )
+            refreshed = client.call("model_catalog_refresh", {"requestId": "pool-catalog"})
+            from test_console import Browser
+            opened = client.call("console", {"action": "open"})
+            browser = Browser(opened["url"])
+            csrf = browser.bootstrap()["csrfToken"]
+            status, _headers, body = browser.command("evaluation_write_begin", {
+                "requestId": "pool-seed", "expectedRevision": refreshed["tableRevision"], "kind": "human",
+            }, csrf=csrf)
+            self.assertEqual(status, 200, body)
+            grant = json.loads(body)["result"]
+            status, _headers, body = browser.command("user_policy_publish", {
+                "commandId": "pool-seed-1", "writerId": grant["writerId"],
+                "generation": grant["generation"], "writerToken": grant["writerToken"],
+                "expectedRevision": grant["tableRevision"],
+                "profileSettings": [{"profileId": PROFILE_ID, "enabled": True}],
+                "configuration": {"decisionProfileId": PROFILE_ID},
+            }, csrf=csrf)
+            self.assertEqual(status, 200, body)
             selection = client.call("selection_request", {"requestId": "pool-pick", "task": "pick while busy"})
             self.assertEqual(selection["status"], "queued")
 

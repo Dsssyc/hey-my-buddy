@@ -59,7 +59,8 @@ CONTROL_OPERATIONS = (
     "events_read",
     "evaluation_write_begin",
     "evaluation_write_renew",
-    "evaluation_write_publish",
+    "user_policy_publish",
+    "assessment_publish",
     "evaluation_write_abort",
     "evaluation_reader_begin",
     "evaluation_reader_release",
@@ -70,6 +71,7 @@ CONTROL_OPERATIONS = (
     "selection_get",
     "selection_list",
     "model_catalog_refresh",
+    "model_profiles",
     "workflow_submit",
     "workflow_get",
     "workflow_decide",
@@ -289,7 +291,7 @@ class BoardService(_BaseResource):
                         "autoMaintain setting. An external Harness collects bounded facts with "
                         "evaluation_prepare (no model call, no lease), synthesizes card text under the buddy "
                         "skill, and publishes a short card-only patch with evaluation_write_begin(kind="
-                        "\"maintenance\") plus evaluation_write_publish; profiles, preferences, configuration, "
+                        "\"maintenance\") plus assessment_publish; profiles, preferences, configuration, "
                         "authority and code-owned counters are never changed by a model"
                     ),
                     "decisionModelIdentity": (
@@ -375,8 +377,11 @@ class BoardService(_BaseResource):
     def evaluation_write_renew(self, request_json: str) -> str:
         return self._guard("evaluation.write.renew", request_json, self.evaluation.write_renew)
 
-    def evaluation_write_publish(self, request_json: str) -> str:
-        return self._guard("evaluation.write.publish", request_json, self.evaluation.write_publish)
+    def user_policy_publish(self, request_json: str) -> str:
+        return self._guard("user.policy.publish", request_json, self.evaluation.user_policy_publish)
+
+    def assessment_publish(self, request_json: str) -> str:
+        return self._guard("assessment.publish", request_json, self.evaluation.assessment_publish)
 
     def evaluation_write_abort(self, request_json: str) -> str:
         return self._guard("evaluation.write.abort", request_json, self.evaluation.write_abort)
@@ -410,17 +415,22 @@ class BoardService(_BaseResource):
 
     def model_catalog_refresh(self, request_json: str) -> str:
         def handler(params: dict) -> dict:
-            from . import catalog
+            from . import catalog, catalog_store
 
             schemas.reject_unknown(params, {"requestId"}, "model.catalog.refresh")
             request_id = schemas.optional_string(params, "requestId", max_length=128)
-            # Discovery reads the installed harness outside any transaction; only the
-            # resulting proposal is persisted, and a failure writes nothing.
+            observation = catalog_store.begin(self.evaluation, request_id)
+            if observation["response"] is not None:
+                return {**observation["response"], "duplicate": True}
             discovered = catalog.discover()
-            recorded = self.evaluation.record_catalog(discovered)
+            recorded = self.evaluation.record_catalog(discovered, observation["observationId"])
             return {**recorded, "requestId": request_id}
 
         return self._guard("model.catalog.refresh", request_json, handler)
+
+    def model_profiles(self, request_json: str) -> str:
+        from . import catalog_store
+        return self._guard("model.profiles", request_json, lambda params: catalog_store.profiles(self.evaluation, params))
 
     # -- governed workflow --------------------------------------------------
     def workflow_submit(self, request_json: str) -> str:

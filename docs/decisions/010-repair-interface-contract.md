@@ -1,6 +1,6 @@
 # ADR-010 实施接口约定
 
-这是已接受修缮计划的实现协作输入。Host 在各独立工作树集成这些接口，最终统一发布 contract 0.8.0；开发中的命名和 DTO 不代表日常 0.6.1 契约已经升级。原计划见 [ADR-010](010-production-workflow-repair-plan.md)。
+这是已接受修缮计划的实现协作输入。Host 在各独立工作树集成这些接口，最终统一发布 contract 0.8.0；日常运行时已单独安装为 0.7.0，开发中的 0.8.0 接口不能用于该运行时。原计划见 [ADR-010](010-production-workflow-repair-plan.md)。
 
 ## 用户与评价
 

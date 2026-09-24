@@ -37,6 +37,8 @@ SECOND_PROFILE = {
     "model": "deepseek-v4-pro",
     "effort": "high",
 }
+CARD = {"profileId": PROFILE_ID, "summary": "fixture assessment", "strengths": [], "limitations": [], "risks": [], "evidenceIds": []}
+SECOND_CARD = {**CARD, "profileId": SECOND_PROFILE_ID}
 
 
 class EvaluationTestCase(BoardTestCase):
@@ -60,14 +62,15 @@ class EvaluationTestCase(BoardTestCase):
     def begin(self, board, request_id: str = "write-1", expected: int | None = None, kind: str = "human") -> dict:
         if expected is None:
             expected = self.snapshot(board)["tableRevision"]
-        return board.call(
+        call = board.console_call if kind == "human" else board.call
+        return call(
             "evaluation_write_begin",
             {"requestId": request_id, "expectedRevision": expected, "kind": kind},
         )
 
     def publish_with(self, board, grant: dict, command_id: str, *, expected: int | None = None, **collections) -> dict:
-        return board.call(
-            "evaluation_write_publish",
+        return board.console_call(
+            "user_policy_publish",
             {
                 "commandId": command_id,
                 "writerId": grant["writerId"],
@@ -84,10 +87,30 @@ class EvaluationTestCase(BoardTestCase):
 
     def seed_profiles(self, board, *profiles) -> dict:
         self.seed_catalog(board)
-        return self.publish(board, profiles=list(profiles or [PROFILE]))
+        selected = profiles or (PROFILE,)
+        return self.publish(board, profileSettings=[{"profileId": item["profileId"], "enabled": True} for item in selected])
+
+    def publish_cards(self, board, *, request_id: str, command_id: str, cards: list[dict]) -> dict:
+        grant = self.begin(board, request_id=request_id, kind="maintenance")
+        return board.call("assessment_publish", {
+            "commandId": command_id, "writerId": grant["writerId"],
+            "generation": grant["generation"], "writerToken": grant["writerToken"],
+            "expectedRevision": grant["tableRevision"], "cards": cards,
+        })
+
+    def refused_cards(self, board, code: str, *, request_id: str, command_id: str, cards: list[dict]) -> BoardError:
+        grant = self.begin(board, request_id=request_id, kind="maintenance")
+        payload = {"commandId": command_id, "writerId": grant["writerId"],
+                   "generation": grant["generation"], "writerToken": grant["writerToken"],
+                   "expectedRevision": grant["tableRevision"], "cards": cards}
+        error = self.assert_code(code, board.call, "assessment_publish", payload)
+        board.call("evaluation_write_abort", {"commandId": f"abort-{command_id}",
+                    "writerId": grant["writerId"], "generation": grant["generation"],
+                    "writerToken": grant["writerToken"]})
+        return error
 
     def abort(self, board, grant: dict, command_id: str = "abort-1") -> dict:
-        return board.call(
+        return board.console_call(
             "evaluation_write_abort",
             {
                 "commandId": command_id,
@@ -217,333 +240,158 @@ class EvaluationPublishTests(EvaluationTestCase):
         self.assertEqual(snapshot["sampleCounts"], {})
         self.assertEqual(snapshot["profiles"], [])
         self.assertEqual(snapshot["preferences"], [])
+        self.assertEqual(snapshot["annotations"], [])
         self.assertEqual(snapshot["cards"], [])
         self.assertEqual(snapshot["evidence"], [])
         self.assertEqual(snapshot["decisions"], [])
         self.assertEqual(snapshot["pendingEvidence"], 0)
         self.assertEqual(snapshot["gate"], {"phase": "open", "readers": 0, "writer": None, "waitingWriters": 0})
+        self.assertTrue(snapshot["capabilities"]["evaluationWriteGate"])
         self.assertTrue(snapshot["capabilities"]["selection"])
         self.assertFalse(snapshot["capabilities"]["maintenance"])
-        self.assertTrue(snapshot["capabilities"]["evaluationWriteGate"])
         self.assertIn("runs", snapshot["tasks"])
 
-    def test_publish_replaces_only_provided_collections(self):
+    def test_user_patches_preserve_omitted_fields_and_maintenance_patches_cards(self):
         board = self.board()
-        self.seed_catalog(board)
-        first = self.publish(
-            board,
-            request_id="w1",
-            command_id="c1",
-            profiles=[PROFILE, SECOND_PROFILE],
-            preferences=[{"profileId": PROFILE_ID, "mode": "prefer", "reason": "cheap and fast"}],
-        )
-        self.assertTrue(first["published"])
-        self.assertEqual(first["revision"], 1)
+        catalog = self.seed_catalog(board)
+        self.assertTrue(all(not item["enabled"] for item in catalog["profiles"]))
+        first = self.publish(board, request_id="w1", command_id="c1",
+                             profileSettings=[{"profileId": PROFILE_ID, "enabled": True}],
+                             preferenceChanges=[{"profileId": PROFILE_ID, "mode": "prefer", "reason": "cheap and fast"}],
+                             annotationChanges=[{"profileId": PROFILE_ID, "text": "human context"}])
+        self.assertEqual(first["revision"], catalog["tableRevision"] + 1)
+        card = self.publish_cards(board, request_id="m1", command_id="m1", cards=[CARD])
+        self.assertEqual(card["revision"], first["revision"] + 1)
         snapshot = self.snapshot(board)
-        self.assertEqual([item["profileId"] for item in snapshot["profiles"]], [PROFILE_ID, SECOND_PROFILE_ID])
-        self.assertEqual(snapshot["preferences"], [{"profileId": PROFILE_ID, "mode": "prefer", "reason": "cheap and fast"}])
-
-        # Cards only: the profiles and preferences published above are preserved.
-        second = self.publish(
-            board,
-            request_id="w2",
-            command_id="c2",
-            cards=[{"profileId": PROFILE_ID, "summary": "solid for routine work", "strengths": ["fast"], "limitations": [], "risks": [], "evidenceIds": []}],
-        )
-        self.assertEqual(second["revision"], 2)
-        snapshot = self.snapshot(board)
-        self.assertEqual(len(snapshot["profiles"]), 2)
-        self.assertEqual(len(snapshot["preferences"]), 1)
-        self.assertEqual(snapshot["cards"][0]["summary"], "solid for routine work")
-        self.assertEqual(snapshot["cards"][0]["revision"], 1)
-        self.assertIsNotNone(snapshot["cards"][0]["updatedAt"])
-
-        # An explicit empty collection is intentional replacement, not omission.
-        self.publish(board, request_id="w3", command_id="c3", cards=[])
-        self.assertEqual(self.snapshot(board)["cards"], [])
-        self.assertEqual(len(self.snapshot(board)["profiles"]), 2)
+        self.assertTrue(next(item for item in snapshot["profiles"] if item["profileId"] == PROFILE_ID)["enabled"])
+        self.assertEqual(snapshot["preferences"][0]["reason"], "cheap and fast")
+        self.assertEqual(snapshot["annotations"][0]["text"], "human context")
+        self.assertEqual(snapshot["cards"][0]["summary"], CARD["summary"])
+        self.publish_cards(board, request_id="m2", command_id="m2", cards=[])
+        self.assertEqual(self.snapshot(board)["cards"][0]["summary"], CARD["summary"], "an empty maintenance patch preserves prior cards")
+        self.assertEqual(self.snapshot(board)["annotations"][0]["text"], "human context")
 
     def test_unknown_collection_fields_and_fabricated_counters_are_rejected(self):
         board = self.board()
         self.seed_profiles(board)
-        error = self.assert_code(
-            "INVALID_ARGUMENT",
-            self.publish,
-            board,
-            request_id="w2",
-            command_id="c2",
-            cards=[
-                {
-                    "profileId": PROFILE_ID,
-                    "summary": "looks good",
-                    "strengths": [],
-                    "limitations": [],
-                    "risks": [],
-                    "evidenceIds": [],
-                    "sampleCount": 99,
-                }
-            ],
-        )
+        error = self.refused_cards(board, "INVALID_ARGUMENT", request_id="m1", command_id="m1",
+                                   cards=[{**CARD, "sampleCount": 99}])
         self.assertIn("sampleCount", error.message)
-        self.assertEqual(self.snapshot(board)["tableRevision"], 1)
+        self.refused_publish(board, "INVALID_ARGUMENT", request_id="w2", command_id="c2",
+                             profileSettings=[{"profileId": PROFILE_ID, "enabled": True, "available": True}])
         self.assertEqual(self.snapshot(board)["cards"], [])
 
-    def test_profile_execution_identity_is_immutable(self):
+    def test_profile_execution_identity_is_program_owned(self):
         board = self.board()
         self.seed_profiles(board)
-        error = self.assert_code(
-            "CONFLICT",
-            self.publish,
-            board,
-            request_id="w2",
-            command_id="c2",
-            profiles=[{**PROFILE, "model": "deepseek-v4-pro"}],
-        )
-        self.assertIn("immutable", error.message)
-        self.assertEqual(self.snapshot(board)["profiles"][0]["model"], "deepseek-flash")
+        original = next(item for item in self.snapshot(board)["profiles"] if item["profileId"] == PROFILE_ID)
+        self.refused_publish(board, "INVALID_ARGUMENT", request_id="w2", command_id="c2",
+                             profiles=[{**PROFILE, "model": "deepseek-v4-pro"}])
+        current = next(item for item in self.snapshot(board)["profiles"] if item["profileId"] == PROFILE_ID)
+        self.assertEqual(current["model"], original["model"])
+        self.assertEqual(current["source"], original["source"])
 
-    def test_dangling_references_are_refused(self):
+    def test_dangling_references_are_refused_and_existing_intent_is_retained(self):
         board = self.board()
-        self.seed_catalog(board)
-        self.publish(
-            board,
-            request_id="w1",
-            command_id="c1",
-            profiles=[PROFILE, SECOND_PROFILE],
-            preferences=[{"profileId": SECOND_PROFILE_ID, "mode": "pin", "reason": "user pinned"}],
-            configuration={"decisionProfileId": SECOND_PROFILE_ID},
-        )
-        # Removing the pinned/decision profile while it is still referenced is refused.
-        self.refused_publish(board, "CONFLICT", request_id="w2", command_id="c2", profiles=[PROFILE])
-        # Replacing every reference in the same publish is allowed.
-        result = self.publish(board, request_id="w3", command_id="c3", profiles=[PROFILE], preferences=[], configuration={"decisionProfileId": None})
-        self.assertEqual(result["revision"], 2)
-        self.assertEqual([item["profileId"] for item in self.snapshot(board)["profiles"]], [PROFILE_ID])
-        # A preference for an unknown profile is refused.
-        self.refused_publish(
-            board,
-            "CONFLICT",
-            request_id="w4",
-            command_id="c4",
-            preferences=[{"profileId": "dsh:nope:nope:off", "mode": "prefer", "reason": "unknown"}],
-        )
-        # A decision profile that is not published is refused.
-        self.refused_publish(
-            board,
-            "CONFLICT",
-            request_id="w5",
-            command_id="c5",
-            configuration={"decisionProfileId": "dsh:nope:nope:off"},
-        )
+        self.seed_profiles(board, PROFILE, SECOND_PROFILE)
+        self.refused_publish(board, "NOT_FOUND", request_id="w2", command_id="c2",
+                             preferenceChanges=[{"profileId": "dsh:nope:nope:off", "mode": "prefer", "reason": "unknown"}])
+        self.publish(board, request_id="w3", command_id="c3",
+                     preferenceChanges=[{"profileId": SECOND_PROFILE_ID, "mode": "pin", "reason": "user pin"}],
+                     configuration={"decisionProfileId": SECOND_PROFILE_ID})
+        self.publish(board, request_id="w4", command_id="c4",
+                     profileSettings=[{"profileId": SECOND_PROFILE_ID, "enabled": False}],
+                     annotationChanges=[{"profileId": PROFILE_ID, "text": "other edit"}])
+        snapshot = self.snapshot(board)
+        self.assertEqual(snapshot["preferences"][0]["mode"], "pin")
+        self.assertEqual(snapshot["configuration"]["decisionProfileId"], SECOND_PROFILE_ID)
+        self.assertEqual(snapshot["annotations"][0]["text"], "other edit")
 
     def test_configuration_is_the_fixed_decision_profile_only(self):
         board = self.board()
         self.seed_profiles(board)
-        published = self.publish(
-            board,
-            request_id="w2",
-            command_id="c2",
-            configuration={"decisionProfileId": PROFILE_ID},
-        )
-        self.assertEqual(published["revision"], 2)
-        self.assertEqual(
-            self.snapshot(board)["configuration"],
-            {"revision": 1, "decisionProfileId": PROFILE_ID},
-        )
-        # There is no automatic-maintenance setting any more: the external Harness
-        # prepares bounded facts and publishes cards through the ordinary writer gate.
-        error = self.refused_publish(
-            board,
-            "INVALID_ARGUMENT",
-            request_id="w3",
-            command_id="c3",
-            configuration={"decisionProfileId": PROFILE_ID, "autoMaintain": True},
-        )
-        self.assertIn("autoMaintain", error.message)
-        # The configuration is still bounded to the published table: an unknown
-        # decision profile is refused exactly as before.
-        self.refused_publish(
-            board,
-            "CONFLICT",
-            request_id="w4",
-            command_id="c4",
-            configuration={"decisionProfileId": "dsh:nope:nope:off"},
-        )
+        published = self.publish(board, request_id="w2", command_id="c2",
+                                 configuration={"decisionProfileId": PROFILE_ID})
+        self.assertEqual(self.snapshot(board)["configuration"],
+                         {"revision": 1, "decisionProfileId": PROFILE_ID})
+        self.refused_publish(board, "INVALID_ARGUMENT", request_id="w3", command_id="c3",
+                             configuration={"decisionProfileId": PROFILE_ID, "autoMaintain": True})
+        self.refused_publish(board, "CONFIGURATION_UNAVAILABLE", request_id="w4", command_id="c4",
+                             configuration={"decisionProfileId": "dsh:nope:nope:off"})
+        self.assertEqual(self.snapshot(board)["tableRevision"], published["revision"])
 
-    def test_availability_must_be_backed_by_the_discovered_catalog(self):
+    def test_availability_is_refreshed_by_catalog_and_new_enable_requires_it(self):
         board = self.board()
-        # Without any recorded discovery an availability claim is refused; the rejected
-        # draft costs nothing and the same writer intent can retry with a fixed payload.
-        grant = self.begin(board, request_id="w1")
-        error = self.assert_code("CATALOG_UNAVAILABLE", self.publish_with, board, grant, "c1", profiles=[PROFILE])
-        self.assertIn("model_catalog_refresh", error.message)
-        self.assert_code(
-            "INVALID_ARGUMENT",
-            self.publish_with,
-            board,
-            grant,
-            "c2",
-            profiles=[{**PROFILE, "available": False, "enabled": True}],
-        )
-        unavailable = self.publish_with(
-            board, grant, "c3", profiles=[{**PROFILE, "available": False, "enabled": False}]
-        )
-        self.assertTrue(unavailable["published"])
-        self.assertFalse(self.snapshot(board)["profiles"][0]["available"])
-        # Discovery actually makes the availability claim verifiable.
-        self.seed_catalog(board)
-        self.publish(board, request_id="w2", command_id="c4", profiles=[PROFILE])
-        published = self.snapshot(board)["profiles"][0]
-        self.assertTrue(published["available"])
-        self.assertNotIn("unavailableReason", published)
-        # A model the installed harness does not advertise can never be claimed live.
-        self.refused_publish(
-            board,
-            "CATALOG_UNAVAILABLE",
-            request_id="w3",
-            command_id="c5",
-            profiles=[{**PROFILE, "profileId": "dsh:deepseek-official:made-up:off", "model": "made-up"}],
-        )
-        # An effort outside the installed harness union is not a legal profile.
-        self.refused_publish(
-            board,
-            "INVALID_ARGUMENT",
-            request_id="w4",
-            command_id="c6",
-            profiles=[{**PROFILE, "profileId": "dsh:deepseek-official:deepseek-flash:turbo", "effort": "turbo"}],
-        )
+        self.refused_publish(board, "NOT_FOUND", request_id="w1", command_id="c1",
+                             profileSettings=[{"profileId": PROFILE_ID, "enabled": True}])
+        refreshed = self.seed_catalog(board)
+        self.assertEqual(self.snapshot(board)["tableRevision"], refreshed["tableRevision"])
+        self.assertTrue(next(item for item in self.snapshot(board)["profiles"] if item["profileId"] == PROFILE_ID)["available"])
+        self.refused_publish(board, "NOT_FOUND", request_id="w2", command_id="c2",
+                             profileSettings=[{"profileId": "dsh:nope:nope:off", "enabled": True}])
 
     def test_pin_requires_an_available_enabled_profile(self):
         board = self.board()
-        self.publish(
-            board,
-            request_id="w1",
-            command_id="c1",
-            profiles=[{**PROFILE, "available": False, "enabled": False}],
-        )
-        error = self.refused_publish(
-            board,
-            "CONFLICT",
-            request_id="w2",
-            command_id="c2",
-            preferences=[{"profileId": PROFILE_ID, "mode": "pin", "reason": "wants it"}],
-        )
-        self.assertIn("pin", error.message.lower())
-        # Exclude is allowed for an unavailable profile and stays distinct from prefer.
-        self.publish(
-            board,
-            request_id="w3",
-            command_id="c3",
-            preferences=[{"profileId": PROFILE_ID, "mode": "exclude", "reason": "not for this work"}],
-        )
-        self.assertEqual(self.snapshot(board)["preferences"][0]["mode"], "exclude")
-
+        self.seed_catalog(board)
+        self.refused_publish(board, "CONFIGURATION_UNAVAILABLE", request_id="w1", command_id="c1",
+                             preferenceChanges=[{"profileId": PROFILE_ID, "mode": "pin", "reason": "wanted"}])
+        self.publish(board, request_id="w2", command_id="c2",
+                     profileSettings=[{"profileId": PROFILE_ID, "enabled": True}])
+        self.publish(board, request_id="w3", command_id="c3",
+                     preferenceChanges=[{"profileId": PROFILE_ID, "mode": "pin", "reason": "wanted"}])
+        self.assertEqual(self.snapshot(board)["preferences"][0]["mode"], "pin")
 
     def test_omitted_collections_and_explicit_null_are_distinct_commands(self):
         board = self.board()
         self.seed_catalog(board)
         grant = self.begin(board, request_id="w1")
-        base = {
-            "commandId": "same-command",
-            "writerId": grant["writerId"],
-            "generation": grant["generation"],
-            "writerToken": grant["writerToken"],
-            "expectedRevision": 0,
-        }
-        first = board.call("evaluation_write_publish", {**base, "profiles": [PROFILE]})
-        self.assertFalse(first["duplicate"])
-        # An identical replay is still a duplicate.
-        self.assertTrue(board.call("evaluation_write_publish", {**base, "profiles": [PROFILE]})["duplicate"])
-        # The same commandId with a different provided-field set is never a replay:
-        # an omitted collection and an explicit null are distinct requests.
-        self.assert_code("CONFLICT", board.call, "evaluation_write_publish", {**base, "profiles": None})
-        self.assert_code("CONFLICT", board.call, "evaluation_write_publish", {**base, "cards": None})
-        self.assert_code("CONFLICT", board.call, "evaluation_write_publish", {**base, "cards": []})
-        self.assertEqual(self.snapshot(board)["tableRevision"], 1)
-        # A fresh commandId with an explicit null collection is invalid input, not an
-        # omitted collection.
-        other = self.begin(board, request_id="w2", expected=1)
-        self.assert_code(
-            "INVALID_ARGUMENT",
-            board.call,
-            "evaluation_write_publish",
-            {
-                "commandId": "fresh-command",
-                "writerId": other["writerId"],
-                "generation": other["generation"],
-                "writerToken": other["writerToken"],
-                "expectedRevision": 1,
-                "profiles": None,
-            },
-        )
-        # A missing required field is rejected before any stored receipt could satisfy it.
-        self.assert_code(
-            "INVALID_ARGUMENT",
-            board.call,
-            "evaluation_write_publish",
-            {
-                "commandId": "same-command",
-                "writerId": other["writerId"],
-                "writerToken": other["writerToken"],
-                "expectedRevision": 1,
-            },
-        )
-        self.assert_code(
-            "INVALID_ARGUMENT",
-            board.call,
-            "evaluation_write_abort",
-            {"commandId": "abort-missing", "writerId": other["writerId"], "writerToken": other["writerToken"]},
-        )
-        self.assertEqual(self.snapshot(board)["tableRevision"], 1)
+        base = {"commandId": "same-command", "writerId": grant["writerId"],
+                "generation": grant["generation"], "writerToken": grant["writerToken"],
+                "expectedRevision": grant["tableRevision"]}
+        payload = {**base, "annotationChanges": [{"profileId": PROFILE_ID, "text": "first"}]}
+        first = board.console_call("user_policy_publish", payload)
+        self.assertTrue(board.console_call("user_policy_publish", payload)["duplicate"])
+        self.assert_code("CONFLICT", board.console_call, "user_policy_publish",
+                         {**base, "annotationChanges": []})
+        self.assert_code("CONFLICT", board.console_call, "user_policy_publish",
+                         {**base, "annotationChanges": None})
+        other = self.begin(board, request_id="w2")
+        self.assert_code("INVALID_ARGUMENT", self.publish_with, board, other, "fresh-command",
+                         annotationChanges=None)
+        self.assertEqual(self.snapshot(board)["tableRevision"], first["revision"])
 
     def test_expired_or_unknown_writer_cannot_publish(self):
         board = self.board()
         grant = self.begin(board, request_id="w1")
-        self.assert_code(
-            "UNAUTHORIZED",
-            board.call,
-            "evaluation_write_publish",
-            {
-                "commandId": "c1",
-                "writerId": grant["writerId"],
-                "generation": grant["generation"],
-                "writerToken": "0" * 64,
-                "expectedRevision": 0,
-                "profiles": [PROFILE],
-            },
-        )
-        self.assert_code(
-            "STALE_GENERATION",
-            board.call,
-            "evaluation_write_publish",
-            {
-                "commandId": "c2",
-                "writerId": grant["writerId"],
-                "generation": grant["generation"] + 1,
-                "writerToken": grant["writerToken"],
-                "expectedRevision": 0,
-                "profiles": [PROFILE],
-            },
-        )
+        base = {"commandId": "c1", "writerId": grant["writerId"], "generation": grant["generation"],
+                "writerToken": grant["writerToken"], "expectedRevision": grant["tableRevision"],
+                "annotationChanges": [{"profileId": "missing", "text": "x"}]}
+        self.assert_code("UNAUTHORIZED", board.console_call, "user_policy_publish",
+                         {**base, "writerToken": "0" * 64})
+        self.assert_code("STALE_GENERATION", board.console_call, "user_policy_publish",
+                         {**base, "generation": grant["generation"] + 1})
         self.assertEqual(self.snapshot(board)["tableRevision"], 0)
 
     def test_snapshot_never_leaks_credentials(self):
         board = self.board()
         self.seed_catalog(board)
         grant = self.begin(board, request_id="w1")
-        self.publish_with(board, grant, "c1", profiles=[PROFILE])
+        self.publish_with(board, grant, "c1",
+                          annotationChanges=[{"profileId": PROFILE_ID, "text": "visible opinion"}])
         raw = json.dumps(self.snapshot(board))
         self.assertNotIn(grant["writerToken"], raw)
         self.assertNotIn(board.service.token, raw)
         self.assertNotIn("writerToken", raw)
         self.assertNotIn("token_verifier", raw)
-        self.assertNotIn("capability", raw)
 
 
 # ---------------------------------------------------------------------------
 # Gate: fairness, draining, fencing
 # ---------------------------------------------------------------------------
 class EvaluationGateTests(EvaluationTestCase):
+    def begin(self, board, request_id="write-1", expected=None, kind="maintenance"):
+        return super().begin(board, request_id=request_id, expected=expected, kind=kind)
+
     def test_two_tabs_queue_fairly_and_serialize(self):
         board = self.board()
         self.seed_catalog(board)
@@ -563,28 +411,28 @@ class EvaluationGateTests(EvaluationTestCase):
         self.assert_code(
             "WRITER_NOT_ACTIVE",
             board.call,
-            "evaluation_write_publish",
+            "assessment_publish",
             {
                 "commandId": "c-b",
                 "writerId": second["writerId"],
                 "generation": second["generation"],
                 "writerToken": second["writerToken"],
-                "expectedRevision": 0,
-                "profiles": [PROFILE],
+                "expectedRevision": 1,
+                "cards": [CARD],
             },
         )
         first_result = board.call(
-            "evaluation_write_publish",
+            "assessment_publish",
             {
                 "commandId": "c-a",
                 "writerId": first["writerId"],
                 "generation": first["generation"],
                 "writerToken": first["writerToken"],
-                "expectedRevision": 0,
-                "profiles": [PROFILE],
+                "expectedRevision": 1,
+                "cards": [CARD],
             },
         )
-        self.assertEqual(first_result["revision"], 1)
+        self.assertEqual(first_result["revision"], 2)
         # The head of the queue is promoted only after the previous grant released.
         renewed = board.call(
             "evaluation_write_renew",
@@ -596,29 +444,29 @@ class EvaluationGateTests(EvaluationTestCase):
         self.assert_code(
             "REVISION_CONFLICT",
             board.call,
-            "evaluation_write_publish",
+            "assessment_publish",
             {
                 "commandId": "c-b2",
                 "writerId": second["writerId"],
                 "generation": second["generation"],
                 "writerToken": second["writerToken"],
-                "expectedRevision": 0,
-                "profiles": [SECOND_PROFILE],
+                "expectedRevision": 1,
+                "cards": [SECOND_CARD],
             },
         )
         second_result = board.call(
-            "evaluation_write_publish",
+            "assessment_publish",
             {
                 "commandId": "c-b3",
                 "writerId": second["writerId"],
                 "generation": second["generation"],
                 "writerToken": second["writerToken"],
-                "expectedRevision": 1,
-                "profiles": [PROFILE, SECOND_PROFILE],
+                "expectedRevision": 2,
+                "cards": [CARD, SECOND_CARD],
             },
         )
-        self.assertEqual(second_result["revision"], 2)
-        self.assertEqual(len(self.snapshot(board)["profiles"]), 2)
+        self.assertEqual(second_result["revision"], 3)
+        self.assertEqual(len(self.snapshot(board)["cards"]), 2)
 
     def test_begin_is_idempotent_by_request_identity(self):
         board = self.board()
@@ -631,7 +479,7 @@ class EvaluationGateTests(EvaluationTestCase):
         # The same requestId with a changed payload is a conflict, never a second intent.
         self.assert_code(
             "CONFLICT",
-            board.call,
+            board.console_call,
             "evaluation_write_begin",
             {"requestId": "same", "expectedRevision": 5, "kind": "human"},
         )
@@ -639,7 +487,7 @@ class EvaluationGateTests(EvaluationTestCase):
             "CONFLICT",
             board.call,
             "evaluation_write_begin",
-            {"requestId": "same", "expectedRevision": 0, "kind": "maintenance"},
+            {"requestId": "same", "expectedRevision": 5, "kind": "maintenance"},
         )
 
     def test_writer_drains_readers_and_new_readers_are_refused(self):
@@ -657,14 +505,14 @@ class EvaluationGateTests(EvaluationTestCase):
         self.assert_code(
             "WRITER_NOT_ACTIVE",
             board.call,
-            "evaluation_write_publish",
+            "assessment_publish",
             {
                 "commandId": "c1",
                 "writerId": writer["writerId"],
                 "generation": writer["generation"],
                 "writerToken": writer["writerToken"],
-                "expectedRevision": 0,
-                "profiles": [PROFILE],
+                "expectedRevision": 1,
+                "cards": [CARD],
             },
         )
         released = board.call("evaluation_reader_release", {"readerId": reader["readerId"]})
@@ -673,25 +521,25 @@ class EvaluationGateTests(EvaluationTestCase):
         self.assertEqual(self.snapshot(board)["gate"]["readers"], 0)
         self.assertEqual(self.snapshot(board)["gate"]["writer"]["writerId"], writer["writerId"])
         result = board.call(
-            "evaluation_write_publish",
+            "assessment_publish",
             {
                 "commandId": "c2",
                 "writerId": writer["writerId"],
                 "generation": writer["generation"],
                 "writerToken": writer["writerToken"],
-                "expectedRevision": 0,
-                "profiles": [PROFILE],
+                "expectedRevision": 1,
+                "cards": [CARD],
             },
         )
-        self.assertEqual(result["revision"], 1)
+        self.assertEqual(result["revision"], 2)
         # Readers are admitted again once the gate is open, and idempotent release works.
-        third = board.call("evaluation_reader_begin", {"kind": "selection", "revision": 1})
+        third = board.call("evaluation_reader_begin", {"kind": "selection", "revision": 2})
         self.assertEqual(third["phase"], "open")
         self.assertTrue(board.call("evaluation_reader_release", {"readerId": third["readerId"]})["released"])
         repeat = board.call("evaluation_reader_release", {"readerId": third["readerId"]})
         self.assertFalse(repeat["released"])
         self.assertTrue(repeat["alreadyReleased"])
-        self.assert_code("REVISION_CONFLICT", board.call, "evaluation_reader_begin", {"kind": "selection", "revision": 0})
+        self.assert_code("REVISION_CONFLICT", board.call, "evaluation_reader_begin", {"kind": "selection", "revision": 1})
         self.assert_code("NOT_FOUND", board.call, "evaluation_reader_release", {"readerId": "no-such-reader"})
 
     def test_viewers_and_running_business_tasks_are_not_readers(self):
@@ -717,17 +565,17 @@ class EvaluationGateTests(EvaluationTestCase):
         grant = self.begin(board, request_id="write-1")
         self.assertEqual(grant["state"], "active")
         result = board.call(
-            "evaluation_write_publish",
+            "assessment_publish",
             {
                 "commandId": "c1",
                 "writerId": grant["writerId"],
                 "generation": grant["generation"],
                 "writerToken": grant["writerToken"],
-                "expectedRevision": 0,
-                "profiles": [PROFILE],
+                "expectedRevision": 1,
+                "cards": [CARD],
             },
         )
-        self.assertEqual(result["revision"], 1)
+        self.assertEqual(result["revision"], 2)
         # The task keeps its accepted route and stays cancellable during the publish.
         self.assertEqual(board.call("task_get", {"runId": run_id})["task"]["status"], "running")
         cancelled = board.call("task_cancel", {"runId": run_id, "reason": "operator"})
@@ -751,18 +599,18 @@ class EvaluationGateTests(EvaluationTestCase):
         error = self.assert_code(
             "WRITER_NOT_ACTIVE",
             board.call,
-            "evaluation_write_publish",
+            "assessment_publish",
             {
                 "commandId": "c1",
                 "writerId": grant["writerId"],
                 "generation": grant["generation"],
                 "writerToken": grant["writerToken"],
-                "expectedRevision": 0,
-                "profiles": [PROFILE],
+                "expectedRevision": 1,
+                "cards": [CARD],
             },
         )
         self.assertEqual(error.details.get("state"), "aborted")
-        self.assertEqual(self.snapshot(board)["tableRevision"], 0)
+        self.assertEqual(self.snapshot(board)["tableRevision"], 1)
         # Retrying the same identity revives the same intent instead of duplicating it.
         revived = self.begin(board, request_id="write-1")
         self.assertEqual(revived["writerId"], grant["writerId"])
@@ -778,23 +626,23 @@ class EvaluationGateTests(EvaluationTestCase):
             "writerId": grant["writerId"],
             "generation": grant["generation"],
             "writerToken": grant["writerToken"],
-            "expectedRevision": 0,
-            "profiles": [PROFILE],
+            "expectedRevision": 1,
+            "cards": [CARD],
         }
-        first = board.call("evaluation_write_publish", payload)
-        replay = board.call("evaluation_write_publish", payload)
+        first = board.call("assessment_publish", payload)
+        replay = board.call("assessment_publish", payload)
         self.assertTrue(replay["duplicate"])
         self.assertEqual(replay["revision"], first["revision"])
-        self.assertEqual(self.snapshot(board)["tableRevision"], 1)
+        self.assertEqual(self.snapshot(board)["tableRevision"], 2)
         # The writer already published; beginning again with the same identity is a
         # terminal conflict rather than a silent second write.
-        self.assert_code("ALREADY_PUBLISHED", board.call, "evaluation_write_begin", {"requestId": "write-1", "expectedRevision": 0})
+        self.assert_code("ALREADY_PUBLISHED", board.call, "evaluation_write_begin", {"requestId": "write-1", "expectedRevision": 1})
         # The same commandId with a different payload is rejected by the receipt.
-        other = self.begin(board, request_id="write-2", expected=1)
+        other = self.begin(board, request_id="write-2", expected=2)
         self.assert_code(
             "CONFLICT",
             board.call,
-            "evaluation_write_publish",
+            "assessment_publish",
             {**payload, "writerId": other["writerId"], "generation": other["generation"], "writerToken": other["writerToken"]},
         )
 
@@ -808,14 +656,14 @@ class EvaluationGateTests(EvaluationTestCase):
         error = self.assert_code(
             "WRITER_NOT_ACTIVE",
             board.call,
-            "evaluation_write_publish",
+            "assessment_publish",
             {
                 "commandId": "c1",
                 "writerId": first["writerId"],
                 "generation": first["generation"],
                 "writerToken": first["writerToken"],
-                "expectedRevision": 0,
-                "profiles": [PROFILE],
+                "expectedRevision": 1,
+                "cards": [CARD],
             },
         )
         self.assertEqual(error.details.get("state"), "expired")
@@ -826,17 +674,17 @@ class EvaluationGateTests(EvaluationTestCase):
         )
         self.assertEqual(renewed["state"], "active")
         result = board.call(
-            "evaluation_write_publish",
+            "assessment_publish",
             {
                 "commandId": "c2",
                 "writerId": second["writerId"],
                 "generation": second["generation"],
                 "writerToken": second["writerToken"],
-                "expectedRevision": 0,
-                "profiles": [PROFILE],
+                "expectedRevision": 1,
+                "cards": [CARD],
             },
         )
-        self.assertEqual(result["revision"], 1)
+        self.assertEqual(result["revision"], 2)
         # Renew of a terminal intent is refused rather than silently extending it.
         self.assert_code(
             "WRITER_NOT_ACTIVE",
@@ -873,19 +721,19 @@ class EvaluationGateTests(EvaluationTestCase):
         self.assertEqual(snapshot["gate"]["writer"]["writerId"], grant["writerId"])
         self.assertEqual(snapshot["gate"]["phase"], "writing")
         result = second.call(
-            "evaluation_write_publish",
+            "assessment_publish",
             {
                 "commandId": "c1",
                 "writerId": grant["writerId"],
                 "generation": grant["generation"],
                 "writerToken": grant["writerToken"],
-                "expectedRevision": 0,
-                "profiles": [PROFILE],
+                "expectedRevision": 1,
+                "cards": [CARD],
             },
         )
-        self.assertEqual(result["revision"], 1)
+        self.assertEqual(result["revision"], 2)
         # After the restart a new writer queues, is aborted, and its late token stays fenced.
-        stale = self.begin(second, request_id="w2", expected=1)
+        stale = self.begin(second, request_id="w2", expected=2)
         second.call(
             "evaluation_write_abort",
             {"commandId": "abort-1", "writerId": stale["writerId"], "generation": stale["generation"], "writerToken": stale["writerToken"]},
@@ -894,17 +742,17 @@ class EvaluationGateTests(EvaluationTestCase):
         self.assert_code(
             "WRITER_NOT_ACTIVE",
             third.call,
-            "evaluation_write_publish",
+            "assessment_publish",
             {
                 "commandId": "c2",
                 "writerId": stale["writerId"],
                 "generation": stale["generation"],
                 "writerToken": stale["writerToken"],
-                "expectedRevision": 1,
-                "profiles": [SECOND_PROFILE],
+                "expectedRevision": 2,
+                "cards": [SECOND_CARD],
             },
         )
-        self.assertEqual(self.snapshot(third)["tableRevision"], 1)
+        self.assertEqual(self.snapshot(third)["tableRevision"], 2)
 
 
     def test_snapshot_reports_an_expired_grant_without_any_write(self):
@@ -943,8 +791,10 @@ class EvaluationGateTests(EvaluationTestCase):
 # ---------------------------------------------------------------------------
 class EvaluationEvidenceTests(EvaluationTestCase):
     def seed(self, board, **collections):
-        self.seed_catalog(board)
-        return self.publish(board, request_id="seed", command_id="seed-1", profiles=[PROFILE], **collections)
+        result = self.seed_profiles(board)
+        if collections:
+            self.publish_cards(board, request_id="seed-cards", command_id="seed-cards", cards=collections["cards"])
+        return result
 
     def test_verified_task_success_counts_and_manual_reports_do_not(self):
         board = self.board()
@@ -1003,13 +853,13 @@ class EvaluationEvidenceTests(EvaluationTestCase):
         )
         self.assertTrue(refreshed["counted"])
         self.assertTrue(refreshed["duplicate"])
-        card = self.publish(
+        card = self.publish_cards(
             board,
             request_id="w-card",
             command_id="c-card",
             cards=[{"profileId": PROFILE_ID, "summary": "reviewed once", "strengths": [], "limitations": [], "risks": [], "evidenceIds": [report["evidence"]["evidenceId"]]}],
         )
-        self.assertEqual(card["revision"], 2)
+        self.assertEqual(card["revision"], 3)
         self.assertEqual(self.snapshot(board)["cards"][0]["sampleCount"], 1)
 
     def cancelled_task(self, board, request_id: str = "task-cancelled") -> str:
@@ -1095,8 +945,7 @@ class EvaluationEvidenceTests(EvaluationTestCase):
 
     def test_unknown_identity_stays_unverified(self):
         board = self.board()
-        self.seed_catalog(board)
-        self.publish(board, request_id="seed", command_id="seed-1", profiles=[PROFILE, SECOND_PROFILE])
+        self.seed_profiles(board, PROFILE, SECOND_PROFILE)
         # The same completed command task cannot be a sample of a dsh profile.
         run_id = self.completed_task(board)
         board.client().acknowledge(runId=run_id, note="reviewed", verdict="accepted")
@@ -1207,11 +1056,11 @@ class EvaluationEvidenceTests(EvaluationTestCase):
             board,
             request_id="w2",
             command_id="c2",
-            preferences=[{"profileId": PROFILE_ID, "mode": "prefer", "reason": "still preferred"}],
+            preferenceChanges=[{"profileId": PROFILE_ID, "mode": "prefer", "reason": "still preferred"}],
         )
         self.assertEqual(self.snapshot(board)["pendingEvidence"], 1)
         # Only an actual card reference incorporates it.
-        self.publish(
+        self.publish_cards(
             board,
             request_id="w3",
             command_id="c3",
@@ -1249,7 +1098,7 @@ class EvaluationEvidenceTests(EvaluationTestCase):
             "evaluation_evidence_record",
             {"profileId": PROFILE_ID, "kind": "task-success", "summary": "counted", "source": "cli", "runId": run_id},
         )
-        card = self.publish(
+        card = self.publish_cards(
             board,
             request_id="w2",
             command_id="c2",
@@ -1264,15 +1113,14 @@ class EvaluationEvidenceTests(EvaluationTestCase):
                 }
             ],
         )
-        self.assertEqual(card["revision"], 2)
+        self.assertEqual(card["revision"], 3)
         published = self.snapshot(board)["cards"][0]
         self.assertEqual(published["sampleCount"], 1)
         self.assertEqual(published["revision"], 1)
         first_updated = published["updatedAt"]
         self.assertEqual(self.snapshot(board)["pendingEvidence"], 0)
         # A card may not reference evidence owned by another profile.
-        self.publish(board, request_id="w3", command_id="c3", profiles=[PROFILE, SECOND_PROFILE])
-        self.refused_publish(
+        self.refused_cards(
             board,
             "CONFLICT",
             request_id="w4",
@@ -1289,7 +1137,7 @@ class EvaluationEvidenceTests(EvaluationTestCase):
             ],
         )
         # Re-publishing identical content keeps revision and timestamp; changed content bumps both.
-        self.publish(
+        self.publish_cards(
             board,
             request_id="w5",
             command_id="c5",
@@ -1298,7 +1146,7 @@ class EvaluationEvidenceTests(EvaluationTestCase):
         unchanged = self.snapshot(board)["cards"][0]
         self.assertEqual(unchanged["revision"], 1)
         self.assertEqual(unchanged["updatedAt"], first_updated)
-        self.publish(
+        self.publish_cards(
             board,
             request_id="w6",
             command_id="c6",
@@ -1307,8 +1155,8 @@ class EvaluationEvidenceTests(EvaluationTestCase):
         changed = self.snapshot(board)["cards"][0]
         self.assertEqual(changed["revision"], 2)
         self.assertNotEqual(changed["updatedAt"], first_updated)
-        # A profile referenced by recorded evidence cannot be removed.
-        self.refused_publish(board, "CONFLICT", request_id="w7", command_id="c7", profiles=[SECOND_PROFILE])
+        # Human publication cannot remove a discovered profile or its evidence.
+        self.refused_publish(board, "INVALID_ARGUMENT", request_id="w7", command_id="c7", profiles=[SECOND_PROFILE])
 
     def test_catalog_refresh_is_explicit_attributed_and_failure_safe(self):
         board = self.board()
@@ -1318,13 +1166,15 @@ class EvaluationEvidenceTests(EvaluationTestCase):
         self.assertEqual(refreshed["catalog"]["providers"][0]["efforts"], ["off", "low", "high", "max"])
         proposals = refreshed["profiles"]
         self.assertTrue(proposals)
-        self.assertTrue(all(item["enabled"] is False for item in proposals), "discovered profiles are proposals only")
+        self.assertTrue(all(item["enabled"] is False for item in proposals), "discovered profiles start disabled")
         self.assertTrue(all(item["available"] is True for item in proposals))
-        self.assertEqual(refreshed["note"].count("proposed"), 1)
-        self.assertEqual(self.snapshot(board)["tableRevision"], 0, "a refresh never publishes profiles")
-        # Identical discovery is recorded once.
-        self.assertTrue(board.call("model_catalog_refresh", {"requestId": "cat-2"})["duplicate"])
-        self.assertEqual(len(self.snapshot(board)["profiles"]), 0)
+        self.assertIn("refreshed", refreshed["note"])
+        self.assertEqual(self.snapshot(board)["tableRevision"], refreshed["tableRevision"])
+        self.assertEqual(len(self.snapshot(board)["profiles"]), len(proposals))
+        # Identical native metadata is recognized while a new observation still advances the table.
+        repeated = board.call("model_catalog_refresh", {"requestId": "cat-2"})
+        self.assertTrue(repeated["duplicate"])
+        self.assertEqual(self.snapshot(board)["tableRevision"], repeated["tableRevision"])
         # A failed discovery keeps the previous recorded catalog and the table.
         from buddy import catalog
         from buddy.errors import BoardError as _BoardError
@@ -1335,8 +1185,7 @@ class EvaluationEvidenceTests(EvaluationTestCase):
             self.assert_code("CATALOG_UNAVAILABLE", board.call, "model_catalog_refresh", {"requestId": "cat-3"})
         finally:
             catalog.discover = original
-        self.publish(board, request_id="w1", command_id="c1", profiles=[PROFILE])
-        self.assertEqual(self.snapshot(board)["tableRevision"], 1)
+        self.assertEqual(self.snapshot(board)["tableRevision"], repeated["tableRevision"])
 
 
 class InstalledHarnessDiscoveryTests(BoardTestCase):
@@ -1373,34 +1222,36 @@ class InstalledHarnessDiscoveryTests(BoardTestCase):
         proposals = view.proposed_profiles()
         self.assertTrue(proposals)
         for proposal in proposals:
-            self.assertFalse(proposal["enabled"], "discovered profiles stay proposals until published")
+            self.assertFalse(proposal["enabled"], "discovered profiles start disabled")
             native = view.lookup(proposal["adapter"], proposal["provider"], proposal["model"])
             self.assertIsNotNone(native)
             self.assertEqual(proposal["available"], native["available"])
             self.assertIn(proposal["effort"], native["efforts"])
 
-        # Publishing real discovered proposals obeys the same writer gate as any edit.
+        # A real discovered profile can be enabled only through the authenticated user path.
         board = self.board()
         refreshed = board.call("model_catalog_refresh", {"requestId": "installed-catalog"})
         proposals = refreshed["profiles"]
-        grant = board.call(
-            "evaluation_write_begin", {"requestId": "installed-1", "expectedRevision": 0, "kind": "human"}
+        if not any(item["available"] for item in proposals):
+            self.skipTest("the installed harness did not advertise an available model profile")
+        selected = next(item for item in proposals if item["available"])
+        grant = board.console_call(
+            "evaluation_write_begin", {"requestId": "installed-1", "expectedRevision": refreshed["tableRevision"], "kind": "human"}
         )
-        result = board.call(
-            "evaluation_write_publish",
+        result = board.console_call(
+            "user_policy_publish",
             {
                 "commandId": "installed-publish",
                 "writerId": grant["writerId"],
                 "generation": grant["generation"],
                 "writerToken": grant["writerToken"],
-                "expectedRevision": 0,
-                "profiles": proposals,
+                "expectedRevision": grant["tableRevision"],
+                "profileSettings": [{"profileId": selected["profileId"], "enabled": True}],
             },
         )
-        self.assertEqual(result["counts"]["profiles"], len(proposals))
-        snapshot = board.call("console_snapshot", {})
-        self.assertEqual(len(snapshot["profiles"]), len(proposals))
-        self.assertTrue(all(item["source"].startswith(("catalog:", "dsh:")) for item in snapshot["profiles"]))
+        self.assertEqual(result["counts"]["profileSettings"], 1)
+        page = board.call("model_profiles", {"limit": 200, "includeUnavailable": True})
+        self.assertTrue(next(item for item in page["profiles"] if item["profileId"] == selected["profileId"])["enabled"])
 
 
 if __name__ == "__main__":

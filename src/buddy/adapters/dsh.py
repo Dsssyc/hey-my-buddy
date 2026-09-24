@@ -30,6 +30,7 @@ def node_binary() -> str | None:
 
 
 class DshAdapter(Adapter):
+    decision_execution = True
     name = "dsh"
     capabilities = ("dsh", "inquiry", "workspace", "cancel", "artifacts", "deadline")
     model_discovery = True

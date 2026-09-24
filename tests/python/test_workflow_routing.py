@@ -15,7 +15,6 @@ from test_workflow import CONFIGURATION, NONCE, WorkflowTestCase
 
 class TestWorkflowRouting(WorkflowTestCase):
     seed = DecisionTestCase.seed
-    publish_more = DecisionTestCase.publish_more
 
     def setUp(self):
         super().setUp()
@@ -270,11 +269,12 @@ class TestWorkflowRouting(WorkflowTestCase):
     def test_pending_writer_gate_then_routing_uses_new_configuration_revision(self):
         board = self.board()
         self.seed(board)
-        grant = board.call("evaluation_write_begin", {"requestId": "changing", "expectedRevision": 1, "kind": "human"})
+        revision = board.call("console_snapshot", {})["tableRevision"]
+        grant = board.console_call("evaluation_write_begin", {"requestId": "changing", "expectedRevision": revision, "kind": "human"})
         submitted = self.routed(board, effort="high")
         blocked = self.router_claim(board, submitted)
         self.assertEqual(blocked["reason"], "evaluation-writer-pending")
-        board.call("evaluation_write_publish", {
+        board.console_call("user_policy_publish", {
             "commandId": "changed", "writerId": grant["writerId"], "generation": grant["generation"],
             "writerToken": grant["writerToken"], "expectedRevision": grant["tableRevision"],
             "configuration": {"decisionProfileId": SECOND_PROFILE_ID},
@@ -283,7 +283,7 @@ class TestWorkflowRouting(WorkflowTestCase):
         self.assertEqual(claimed["claim"]["decisionInput"]["profile"]["model"], SECOND_PROFILE["model"])
         self.select(board, claimed, profile_id=SECOND_PROFILE_ID)
         view = board.call("workflow_get", {"runId": submitted["runId"]})
-        self.assertEqual(view["routing"]["tableRevision"], 2)
+        self.assertEqual(view["routing"]["tableRevision"], revision + 1)
         self.assertEqual(view["routing"]["configurationRevision"], 2)
 
     def test_installed_validation_race_with_takeover_cannot_start_old_snapshot(self):

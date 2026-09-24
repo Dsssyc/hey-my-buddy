@@ -74,7 +74,8 @@ METHODS = [
     "console-snapshot",
     "evaluation-write-begin",
     "evaluation-write-renew",
-    "evaluation-write-publish",
+    "user-policy-publish",
+    "assessment-publish",
     "evaluation-write-abort",
     "evaluation-reader-begin",
     "evaluation-reader-release",
@@ -85,6 +86,7 @@ METHODS = [
     "selection-get",
     "selection-list",
     "model-catalog-refresh",
+    "model-profiles",
     "restart",
     "stop",
 ]
@@ -171,7 +173,7 @@ examples:
       harness model catalog. Neither runs a model; discovery never exposes credentials.
 
   buddy evaluation-write-begin '{"requestId":"edit-1","expectedRevision":0,"kind":"human"}'
-  buddy evaluation-write-publish '{"commandId":"cmd-1","writerId":"...","generation":1,...}'
+  buddy assessment-publish '{"commandId":"cmd-1","writerId":"...","generation":1,...}'
       The durable evaluation table gate: one writer at a time, fenced by generation,
       lease and a per-intent token. Omitted collections keep their published values.
 
@@ -186,7 +188,7 @@ examples:
   buddy evaluation-prepare '{"requestId":"maint-1","limit":32}'   buddy evaluation-history '{"limit":20}'
       Harness-owned maintenance: prepare collects a bounded, deterministic batch of real Host-reviewed
       facts (no model call, no lease); synthesize the cards and publish a short card-only patch with
-      `evaluation-write-publish`. `evaluation-history` reads bounded publication pages; there is no autoMaintain.
+      `assessment-publish`. `evaluation-history` reads bounded publication pages; there is no autoMaintain.
 
   Repeating an inquiryId never injects the question twice; the same id with
   different text is an error.

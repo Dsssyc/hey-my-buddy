@@ -38,6 +38,7 @@ RETIRED_METHODS = (
     "workflow-acknowledge",
     "workflow-suggest",
     "evaluation-maintain",
+    "evaluation-write-publish",
 )
 
 
@@ -109,7 +110,9 @@ class MethodSurfaceTests(unittest.TestCase):
             ("worker-result", "worker_result"),
             ("worker-release", "worker_release"),
             ("evaluation-write-begin", "evaluation_write_begin"),
-            ("evaluation-write-publish", "evaluation_write_publish"),
+            ("user-policy-publish", "user_policy_publish"),
+            ("assessment-publish", "assessment_publish"),
+            ("model-profiles", "model_profiles"),
             ("evaluation-reader-begin", "evaluation_reader_begin"),
             ("evaluation-evidence-record", "evaluation_evidence_record"),
             ("evaluation-prepare", "evaluation_prepare"),
@@ -199,6 +202,24 @@ class PrivateStateTestCase(BoardTestCase):
                 transport, "_request", lambda _endpoint, operation, params, resource="control": board.call(operation, params)
             )
         )
+
+
+class ModelProfilesCliTests(PrivateStateTestCase):
+    def test_model_profiles_uses_the_named_schema_and_cursor(self):
+        self.catalog_fixture()
+        board = self.board()
+        self.use_board_transport(board)
+        board.call("model_catalog_refresh", {"requestId": "cli-profiles-catalog"})
+        code, first = self.run_cli("model-profiles", json.dumps({"limit": 1, "includeUnavailable": True}))
+        self.assertEqual(code, 0, first)
+        self.assertEqual(len(first["profiles"]), 1)
+        self.assertIsNotNone(first["nextCursor"])
+        code, second = self.run_cli("model-profiles", json.dumps({"limit": 1, "after": first["nextCursor"], "includeUnavailable": True}))
+        self.assertEqual(code, 0, second)
+        self.assertNotEqual(first["profiles"][0]["profileId"], second["profiles"][0]["profileId"])
+        code, invalid = self.run_cli("model-profiles", json.dumps({"limit": 0}))
+        self.assertNotEqual(code, 0)
+        self.assertEqual(invalid["error"]["code"], "INVALID_ARGUMENT")
 
 
 class ControlFileTests(PrivateStateTestCase):

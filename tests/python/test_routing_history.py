@@ -22,7 +22,7 @@ ROUTING_TASK_TEXT = "Produce a verified implementation"
 
 class RoutingHistoryTestCase(WorkflowTestCase):
     seed = DecisionTestCase.seed
-    publish_more = DecisionTestCase.publish_more
+    publish_user_patch = DecisionTestCase.publish_user_patch
 
     def setUp(self) -> None:
         super().setUp()
@@ -251,18 +251,18 @@ class WorkflowRoutingHistoryTests(RoutingHistoryTestCase):
         self.assertEqual(entry["taskId"], selector_task_id)
         self.assertEqual(entry["selectedProfile"]["profileId"], PROFILE_ID)
         self.assertEqual(entry["selectedProfile"]["model"], PROFILE["model"])
-        self.assertEqual(entry["tableRevision"], 1)
+        initial_revision = board.call("console_snapshot", {})["tableRevision"]
+        self.assertEqual(entry["tableRevision"], initial_revision)
         self.assertEqual(entry["configurationRevision"], 1)
 
-        # The published table moves on: the originally selected profile is retired
-        # and its identity is no longer part of the current catalog.
-        self.publish_more(
+        # The user changes eligible profiles; the historical route retains its selection.
+        self.publish_user_patch(
             board, request_id="profiles-changed", command_id="profiles-changed",
-            profiles=[SECOND_PROFILE],
+            profileSettings=[{"profileId": PROFILE_ID, "enabled": False}],
             configuration={"decisionProfileId": SECOND_PROFILE_ID},
         )
         snapshot = board.call("console_snapshot", {})
-        self.assertEqual(snapshot["tableRevision"], 2)
+        self.assertEqual(snapshot["tableRevision"], initial_revision + 1)
         self.assertEqual(snapshot["configuration"]["decisionProfileId"], SECOND_PROFILE_ID)
         frozen_config = board.call("workflow_get", {"runId": submitted["runId"]})
         self.assertEqual(frozen_config["executionConfiguration"]["model"], PROFILE["model"])
@@ -274,7 +274,7 @@ class WorkflowRoutingHistoryTests(RoutingHistoryTestCase):
         self.assertEqual(history["total"], 2)
         newest, frozen = history["entries"]
         self.assertEqual(newest["status"], "queued")
-        self.assertEqual(newest["tableRevision"], 2)
+        self.assertEqual(newest["tableRevision"], initial_revision + 1)
         self.assertEqual(newest["configurationRevision"], 2)
         self.assertIsNone(newest["selectedProfile"])
         self.assertTrue(newest["current"])
@@ -284,7 +284,7 @@ class WorkflowRoutingHistoryTests(RoutingHistoryTestCase):
         self.assertEqual(frozen["decisionId"], entry["decisionId"])
         self.assertEqual(frozen["status"], "completed")
         self.assertEqual(frozen["selectedProfile"]["model"], PROFILE["model"])
-        self.assertEqual(frozen["tableRevision"], 1)
+        self.assertEqual(frozen["tableRevision"], initial_revision)
         self.assertEqual(frozen["configurationRevision"], 1)
         # A reroute in flight is honest: no execution configuration is claimed until
         # the new decision resolves, and the compact routing view says so.

@@ -32,14 +32,17 @@ class ExternalEvaluationTestCase(EvaluationTestCase):
         return board.evaluation.history(params)
 
     def seed_maintenance_board(self, board) -> None:
-        """Two published dsh profiles, one card each, one preference, one decision profile."""
+        """Two enabled dsh profiles, one card each, one preference, one decision profile."""
         self.seed_catalog(board)
         self.publish(
             board,
             request_id="seed",
             command_id="seed-1",
-            profiles=[PROFILE, SECOND_PROFILE],
-            cards=[
+            profileSettings=[{"profileId": item["profileId"], "enabled": True} for item in (PROFILE, SECOND_PROFILE)],
+            preferenceChanges=[{"profileId": SECOND_PROFILE_ID, "mode": "prefer", "reason": "cheap"}],
+            configuration={"decisionProfileId": PROFILE_ID},
+        )
+        self.publish_cards(board, request_id="seed-cards", command_id="seed-cards", cards=[
                 {
                     "profileId": PROFILE_ID,
                     "summary": "first card",
@@ -56,10 +59,7 @@ class ExternalEvaluationTestCase(EvaluationTestCase):
                     "risks": [],
                     "evidenceIds": [],
                 },
-            ],
-            preferences=[{"profileId": SECOND_PROFILE_ID, "mode": "prefer", "reason": "cheap"}],
-            configuration={"decisionProfileId": PROFILE_ID},
-        )
+            ])
 
     def _ensure_model_workspace(self):
         """The deterministic workspace double every model fixture in this class shares."""
@@ -229,7 +229,21 @@ class ExternalEvaluationTestCase(EvaluationTestCase):
                 "kind": "maintenance",
             },
         )
-        return self.publish_with(board, grant, command_id, cards=cards)
+        return self.maintenance_publish_with(board, grant, command_id, cards=cards)
+
+    def maintenance_publish_with(self, board, grant: dict, command_id: str, *, expected: int | None = None, **changes) -> dict:
+        return board.call("assessment_publish", {
+            "commandId": command_id, "writerId": grant["writerId"],
+            "generation": grant["generation"], "writerToken": grant["writerToken"],
+            "expectedRevision": grant["tableRevision"] if expected is None else expected,
+            **changes,
+        })
+
+    def abort(self, board, grant: dict, command_id: str = "abort-1") -> dict:
+        return board.call("evaluation_write_abort", {
+            "commandId": command_id, "writerId": grant["writerId"],
+            "generation": grant["generation"], "writerToken": grant["writerToken"],
+        })
 
     @staticmethod
     def counts(board) -> dict:
@@ -256,7 +270,7 @@ class PrepareCollectionTests(ExternalEvaluationTestCase):
 
         packet = self.prepare(board, "prep-1", limit=32)
         self.assertEqual(len(packet["newEvidenceIds"]), 2)
-        self.assertEqual([profile["profileId"] for profile in packet["profiles"]], [PROFILE_ID, SECOND_PROFILE_ID])
+        self.assertEqual([profile["profileId"] for profile in packet["profiles"] if profile["enabled"]], [PROFILE_ID, SECOND_PROFILE_ID])
         self.assertEqual(packet["tableRevision"], before["tableRevision"])
         self.assertEqual(packet["progress"]["scanned"], 2)
         self.assertEqual(packet["progress"]["newFacts"], 2)
@@ -313,8 +327,8 @@ class PrepareCollectionTests(ExternalEvaluationTestCase):
                 0,
             )
         # Sample counts exist independently of any prose card: the aggregates cover
-        # every published profile even though neither card has been rewritten yet.
-        self.assertEqual(snapshot["sampleCounts"], {PROFILE_ID: 1, SECOND_PROFILE_ID: 1})
+        # every discovered profile even though neither card has been rewritten yet.
+        self.assertEqual({key: snapshot["sampleCounts"][key] for key in (PROFILE_ID, SECOND_PROFILE_ID)}, {PROFILE_ID: 1, SECOND_PROFILE_ID: 1})
 
         # A stable replay returns the recorded packet unchanged; a changed payload conflicts.
         self.assertEqual(self.prepare(board, "prep-1", limit=32), packet)
@@ -327,7 +341,7 @@ class PrepareCollectionTests(ExternalEvaluationTestCase):
         self.assertEqual(repeated["progress"]["alreadyPrepared"], 0)
         self.assertEqual(sorted(repeated["pendingEvidenceIds"]), sorted(packet["newEvidenceIds"]))
         # One durable cursor per assessed profile, not one per request scope.
-        self.assertEqual(self.counts(board), {"evidence": 2, "samples": 2, "checkpoints": 2})
+        self.assertEqual(self.counts(board), {"evidence": 2, "samples": 2, "checkpoints": len(self.snapshot(board)["profiles"])})
 
     def test_attributes_the_frozen_attempt_configuration_not_a_later_choice(self):
         board = self.board()
@@ -365,7 +379,7 @@ class PrepareCollectionTests(ExternalEvaluationTestCase):
         self.assertEqual(packet["progress"]["scanned"], 0)
         self.assertEqual(packet["remaining"]["reviewedBacklog"], 0)
         self.assertEqual(packet["skipped"], [])
-        self.assertEqual(self.snapshot(board)["sampleCounts"], {PROFILE_ID: 0})
+        self.assertEqual(self.snapshot(board)["sampleCounts"][PROFILE_ID], 0)
         self.assertEqual(self.counts(board)["evidence"], 0)
 
         # The recorded-report path still refuses to count cancelled work as quality.
@@ -400,7 +414,7 @@ class PrepareCollectionTests(ExternalEvaluationTestCase):
         self.assertTrue(facts[infrastructure]["verified"])
         self.assertFalse(facts[infrastructure]["counted"])
         self.assertIn("infrastructure", facts[infrastructure]["unverifiedReason"])
-        self.assertEqual(self.snapshot(board)["sampleCounts"], {PROFILE_ID: 2})
+        self.assertEqual(self.snapshot(board)["sampleCounts"][PROFILE_ID], 2)
         self.assertEqual(self.counts(board)["samples"], 2)
 
     def test_prepare_is_bounded_and_incremental_over_existing_accepted_history(self):
@@ -424,8 +438,8 @@ class PrepareCollectionTests(ExternalEvaluationTestCase):
         self.assertEqual(len(collected), 5)
         # Existing accepted records are reachable on the first maintenance call, and
         # every one of them is counted exactly once.
-        self.assertEqual(self.snapshot(board)["sampleCounts"], {PROFILE_ID: 5})
-        self.assertEqual(self.counts(board), {"evidence": 5, "samples": 5, "checkpoints": 1})
+        self.assertEqual(self.snapshot(board)["sampleCounts"][PROFILE_ID], 5)
+        self.assertEqual(self.counts(board), {"evidence": 5, "samples": 5, "checkpoints": len(self.snapshot(board)["profiles"])})
         with board.store.db.read() as connection:
             covered = {
                 row["run_id"]
@@ -449,7 +463,7 @@ class PrepareCollectionTests(ExternalEvaluationTestCase):
         self.assertEqual(self.counts(board), {"evidence": 0, "samples": 0, "checkpoints": 0})
         recovered = self.prepare(board, "bound-2")
         self.assertEqual(len(recovered["newEvidenceIds"]), 1)
-        self.assertEqual(self.counts(board), {"evidence": 1, "samples": 1, "checkpoints": 1})
+        self.assertEqual(self.counts(board), {"evidence": 1, "samples": 1, "checkpoints": len(self.snapshot(board)["profiles"])})
 
 
 class PrepareFilterTests(ExternalEvaluationTestCase):
@@ -461,7 +475,7 @@ class PrepareFilterTests(ExternalEvaluationTestCase):
 
         unfiltered = self.prepare(board, "all-1")
         self.assertEqual(len(unfiltered["newEvidenceIds"]), 2)
-        self.assertEqual(self.counts(board)["checkpoints"], 2)
+        self.assertEqual(self.counts(board)["checkpoints"], len(self.snapshot(board)["profiles"]))
 
         # Progress is per profile, so a filtered request for an already-current
         # profile scans nothing and rewrites nothing.
@@ -474,10 +488,10 @@ class PrepareFilterTests(ExternalEvaluationTestCase):
         self.assertEqual(sorted(filtered["progress"]["cursors"]), [SECOND_PROFILE_ID])
         # The source Host and the source project are provenance, never filters.
         self.assertNotIn("host", filtered["progress"]["scope"])
-        self.assertEqual(self.counts(board)["checkpoints"], 2)
+        self.assertEqual(self.counts(board)["checkpoints"], len(self.snapshot(board)["profiles"]))
 
         by_adapter = self.prepare(board, "dsh-1", adapter="dsh")
-        self.assertEqual([profile["profileId"] for profile in by_adapter["profiles"]], [PROFILE_ID, SECOND_PROFILE_ID])
+        self.assertEqual([profile["profileId"] for profile in by_adapter["profiles"] if profile["enabled"]], [PROFILE_ID, SECOND_PROFILE_ID])
         self.assertEqual(by_adapter["newEvidenceIds"], [])
         self.assertEqual(by_adapter["skipped"], [])
         self.assertEqual(by_adapter["progress"]["scope"], "adapter:dsh")
@@ -494,50 +508,48 @@ class PrepareFilterTests(ExternalEvaluationTestCase):
         self.assert_code("INVALID_ARGUMENT", board.evaluation.prepare, {"requestId": "x", "sourceHost": "host-a"})
         self.assert_code("INVALID_ARGUMENT", board.evaluation.prepare, {"requestId": "bad id", "limit": 4})
 
-    def test_a_newly_published_profile_backfills_through_the_same_request(self):
-        """A profile added later still reaches older reviewed facts, bounded per call."""
+    def test_a_newly_included_profile_backfills_through_the_same_request(self):
+        """A profile omitted from the first assessment reaches older reviewed facts later."""
         board = self.board()
         self.seed_catalog(board)
         self.publish(
             board,
             request_id="seed-a",
             command_id="seed-a",
-            profiles=[PROFILE],
+            profileSettings=[{"profileId": PROFILE_ID, "enabled": True}],
             configuration={"decisionProfileId": PROFILE_ID},
         )
         flash_one = self.model_task(board, "goal-flash-1", profile=PROFILE)
         pro_one = self.model_task(board, "goal-pro-1", profile=SECOND_PROFILE)
         flash_two = self.model_task(board, "goal-flash-2", profile=PROFILE)
 
-        # Only the flash profile is published yet: its pass consumes the whole history
-        # and its own cursor moves to the end.
-        first = self.prepare(board, "backfill-1")
+        # A profile-scoped pass advances only Flash's assessment cursor.
+        first = self.prepare(board, "backfill-1", profileId=PROFILE_ID)
         self.assertEqual(len(first["newEvidenceIds"]), 2)
-        self.assertEqual(self.snapshot(board)["sampleCounts"], {PROFILE_ID: 2})
+        self.assertEqual(self.snapshot(board)["sampleCounts"][PROFILE_ID], 2)
         self.assertEqual([entry["reason"] for entry in first["skipped"]], ["profile-not-assessed"])
 
-        # The second profile is published afterwards. The same unfiltered request must
-        # reach the older records for it, in bounded batches, without rescanning what
-        # the first profile already evaluated.
+        # Enabling the second profile and broadening the scope must reach its older
+        # records in bounded batches without rescanning Flash's completed facts.
         self.publish(
             board,
             request_id="seed-b",
             command_id="seed-b",
-            profiles=[PROFILE, SECOND_PROFILE],
+            profileSettings=[{"profileId": SECOND_PROFILE_ID, "enabled": True}],
             configuration={"decisionProfileId": PROFILE_ID},
         )
-        step = self.prepare(board, "backfill-2", limit=1)
+        step = self.prepare(board, "backfill-2", limit=1, profileId=SECOND_PROFILE_ID)
         self.assertEqual(step["newEvidenceIds"], [])
         self.assertEqual(step["progress"]["scanned"], 1)
-        self.assertEqual(step["progress"]["backfilling"], [SECOND_PROFILE_ID])
+        self.assertEqual(step["progress"]["scope"], f"profile:{SECOND_PROFILE_ID}")
         self.assertEqual(step["remaining"]["reviewedBacklog"], 2)
         self.assertFalse(step["progress"]["complete"])
-        step = self.prepare(board, "backfill-3", limit=1)
+        step = self.prepare(board, "backfill-3", limit=1, profileId=SECOND_PROFILE_ID)
         self.assertEqual(len(step["newEvidenceIds"]), 1)
         self.assertEqual(step["evidence"][0]["profileId"], SECOND_PROFILE_ID)
         self.assertEqual(step["evidence"][0]["runId"], pro_one)
-        self.assertEqual(step["progress"]["backfilling"], [SECOND_PROFILE_ID])
-        step = self.prepare(board, "backfill-4", limit=1)
+        self.assertEqual(step["progress"]["scope"], f"profile:{SECOND_PROFILE_ID}")
+        step = self.prepare(board, "backfill-4", limit=1, profileId=SECOND_PROFILE_ID)
         self.assertEqual(step["newEvidenceIds"], [])
         self.assertEqual(step["progress"]["backfilling"], [])
         self.assertTrue(step["progress"]["complete"])
@@ -584,7 +596,7 @@ class PrepareFilterTests(ExternalEvaluationTestCase):
         self.assertEqual(len(later["newEvidenceIds"]), 1)
         self.assertEqual(later["evidence"][0]["runId"], second)
         self.assertEqual(later["progress"]["scanned"], 1)
-        self.assertEqual(self.snapshot(board)["sampleCounts"], {PROFILE_ID: 2})
+        self.assertEqual(self.snapshot(board)["sampleCounts"][PROFILE_ID], 2)
         self.assertEqual(self.counts(board)["samples"], 2)
 
     def test_a_superseded_or_unproven_review_is_reported_not_collected(self):
@@ -615,7 +627,7 @@ class PrepareFilterTests(ExternalEvaluationTestCase):
         self.assertEqual(packet["evidence"], [])
         reasons = {entry["reason"]: entry["count"] for entry in packet["skipped"]}
         self.assertEqual(reasons, {"superseded-review": 1, "missing-artifact-proof": 1})
-        self.assertEqual(self.snapshot(board)["sampleCounts"], {PROFILE_ID: 0})
+        self.assertEqual(self.snapshot(board)["sampleCounts"][PROFILE_ID], 0)
         self.assertEqual(self.counts(board)["evidence"], 0)
 
     def test_a_rejected_attempt_and_an_accepted_continuation_are_both_qualified(self):
@@ -670,14 +682,14 @@ class PrepareFilterTests(ExternalEvaluationTestCase):
         self.assertEqual(accepted["fact"]["artifacts"]["acceptedAttemptId"], attempts[1])
         self.assertTrue(accepted["fact"]["artifacts"]["acceptedArtifactId"])
         # Exactly one failure and one success, each counted once on this profile.
-        self.assertEqual(self.snapshot(board)["sampleCounts"], {PROFILE_ID: 2})
-        self.assertEqual(self.counts(board), {"evidence": 2, "samples": 2, "checkpoints": 1})
+        self.assertEqual(self.snapshot(board)["sampleCounts"][PROFILE_ID], 2)
+        self.assertEqual(self.counts(board), {"evidence": 2, "samples": 2, "checkpoints": len(self.snapshot(board)["profiles"])})
         # The deterministic per-attempt/verdict identity keeps a repeat preparation
         # idempotent: no double sample on retry.
         repeated = self.prepare(board, "prep-retry-again")
         self.assertEqual(repeated["newEvidenceIds"], [])
         self.assertEqual(repeated["progress"]["scanned"], 0)
-        self.assertEqual(self.counts(board), {"evidence": 2, "samples": 2, "checkpoints": 1})
+        self.assertEqual(self.counts(board), {"evidence": 2, "samples": 2, "checkpoints": len(self.snapshot(board)["profiles"])})
 
     def test_mismatched_or_missing_artifact_proof_is_skipped_not_collected(self):
         """An artifact id that merely exists never becomes an attempt-bound fact.
@@ -712,8 +724,8 @@ class PrepareFilterTests(ExternalEvaluationTestCase):
         self.assertEqual(packet["evidence"], [])
         reasons = {entry["reason"]: entry["count"] for entry in packet["skipped"]}
         self.assertEqual(reasons, {"missing-artifact-proof": 2})
-        self.assertEqual(self.snapshot(board)["sampleCounts"], {PROFILE_ID: 0})
-        self.assertEqual(self.counts(board), {"evidence": 0, "samples": 0, "checkpoints": 1})
+        self.assertEqual(self.snapshot(board)["sampleCounts"][PROFILE_ID], 0)
+        self.assertEqual(self.counts(board), {"evidence": 0, "samples": 0, "checkpoints": len(self.snapshot(board)["profiles"])})
 
     def test_an_unknown_identity_is_reported_as_skipped_not_invented(self):
         board = self.board()
@@ -728,7 +740,7 @@ class PrepareFilterTests(ExternalEvaluationTestCase):
         self.assertEqual(packet["skipped"][0]["reason"], "identity-unknown")
         self.assertEqual(packet["skipped"][0]["count"], 1)
         self.assertEqual(packet["skipped"][0]["examples"], [run_id])
-        self.assertEqual(self.snapshot(board)["sampleCounts"], {PROFILE_ID: 0})
+        self.assertEqual(self.snapshot(board)["sampleCounts"][PROFILE_ID], 0)
 
 
 class ReviewLedgerPlanTests(ExternalEvaluationTestCase):
@@ -842,7 +854,7 @@ class MaintenancePatchTests(ExternalEvaluationTestCase):
             ],
         )
         self.assertEqual(published["revision"], packet["tableRevision"] + 1)
-        self.assertEqual(published["counts"], {"profiles": 2, "cards": 2, "preferences": 1, "provided": ["cards"]})
+        self.assertEqual(published["counts"], {"cards": 1, "provided": ["cards"]})
         snapshot = self.snapshot(board)
         cards = {card["profileId"]: card for card in snapshot["cards"]}
         self.assertEqual(cards[PROFILE_ID]["summary"], "synthesized from the reviewed fact")
@@ -852,7 +864,7 @@ class MaintenancePatchTests(ExternalEvaluationTestCase):
         self.assertEqual(cards[SECOND_PROFILE_ID]["summary"], "second card")
         self.assertEqual(snapshot["preferences"], [{"profileId": SECOND_PROFILE_ID, "mode": "prefer", "reason": "cheap"}])
         self.assertEqual(snapshot["configuration"], {"revision": 1, "decisionProfileId": PROFILE_ID})
-        self.assertEqual([profile["profileId"] for profile in snapshot["profiles"]], [PROFILE_ID, SECOND_PROFILE_ID])
+        self.assertEqual([profile["profileId"] for profile in snapshot["profiles"] if profile["enabled"]], [PROFILE_ID, SECOND_PROFILE_ID])
         # The reference consumer leaves the pending ledger, and the next packet is empty.
         self.assertEqual(snapshot["pendingEvidence"], 0)
         self.assertEqual(self.prepare(board, "prep-after")["pendingEvidenceIds"], [])
@@ -877,7 +889,7 @@ class MaintenancePatchTests(ExternalEvaluationTestCase):
                 {"requestId": f"bad-{name}", "expectedRevision": packet["tableRevision"], "kind": "maintenance"},
             )
             error = self.assert_code(
-                "INVALID_ARGUMENT", self.publish_with, board, grant, f"bad-{name}-cmd", **{name: payload}
+                "INVALID_ARGUMENT", self.maintenance_publish_with, board, grant, f"bad-{name}-cmd", **{name: payload}
             )
             self.assertIn(name, error.message)
             self.abort(board, grant, command_id=f"bad-{name}-abort")
@@ -888,7 +900,7 @@ class MaintenancePatchTests(ExternalEvaluationTestCase):
             "evaluation_write_begin",
             {"requestId": "empty", "expectedRevision": packet["tableRevision"], "kind": "maintenance"},
         )
-        error = self.assert_code("INVALID_ARGUMENT", self.publish_with, board, grant, "empty-cmd")
+        error = self.assert_code("INVALID_ARGUMENT", self.maintenance_publish_with, board, grant, "empty-cmd")
         self.assertIn("cards", error.message)
         self.abort(board, grant, command_id="empty-abort")
 
@@ -899,7 +911,7 @@ class MaintenancePatchTests(ExternalEvaluationTestCase):
         )
         error = self.assert_code(
             "INVALID_ARGUMENT",
-            self.publish_with,
+            self.maintenance_publish_with,
             board,
             grant,
             "counter-cmd",
@@ -925,7 +937,7 @@ class MaintenancePatchTests(ExternalEvaluationTestCase):
         )
         error = self.assert_code(
             "CONFLICT",
-            self.publish_with,
+            self.maintenance_publish_with,
             board,
             grant,
             "foreign-cmd",
@@ -954,16 +966,7 @@ class MaintenancePatchTests(ExternalEvaluationTestCase):
             board,
             request_id="human-later",
             command_id="human-later",
-            cards=[
-                {
-                    "profileId": PROFILE_ID,
-                    "summary": "human edit while maintenance prepared",
-                    "strengths": [],
-                    "limitations": [],
-                    "risks": [],
-                    "evidenceIds": [],
-                }
-            ],
+            annotationChanges=[{"profileId": PROFILE_ID, "text": "human edit while maintenance prepared"}],
         )
         grant = board.call(
             "evaluation_write_begin",
@@ -971,7 +974,7 @@ class MaintenancePatchTests(ExternalEvaluationTestCase):
         )
         error = self.assert_code(
             "REVISION_CONFLICT",
-            self.publish_with,
+            self.maintenance_publish_with,
             board,
             grant,
             "stale-cmd",
@@ -982,7 +985,7 @@ class MaintenancePatchTests(ExternalEvaluationTestCase):
         # Recovery: re-prepare at the new revision and publish with the same intent.
         fresh = self.prepare(board, "prep-stale-2")
         self.assertEqual(fresh["tableRevision"], packet["tableRevision"] + 1)
-        recovered = self.publish_with(
+        recovered = self.maintenance_publish_with(
             board,
             grant,
             "stale-cmd-2",
@@ -1051,34 +1054,25 @@ class EvaluationHistoryTests(ExternalEvaluationTestCase):
             board,
             request_id="human-2",
             command_id="human-2",
-            cards=[
-                {
-                    "profileId": PROFILE_ID,
-                    "summary": "second human revision",
-                    "strengths": [],
-                    "limitations": [],
-                    "risks": [],
-                    "evidenceIds": [],
-                }
-            ],
+            annotationChanges=[{"profileId": PROFILE_ID, "text": "second human revision"}],
         )
         before = self.snapshot(board)
         page = self.history(board, limit=1)
         self.assertEqual(set(page), {"revisions", "nextCursor", "total"})
-        self.assertEqual(page["total"], 2)
-        self.assertEqual(page["nextCursor"], 2)
+        self.assertEqual(page["total"], 4)
+        self.assertEqual(page["nextCursor"], 4)
         self.assertEqual(set(page["revisions"][0]), {"revision", "kind", "actor", "counts", "createdAt"})
-        self.assertEqual(page["revisions"][0]["revision"], 2)
+        self.assertEqual(page["revisions"][0]["revision"], 4)
         self.assertEqual(page["revisions"][0]["kind"], "human")
         self.assertIsInstance(page["revisions"][0]["actor"], str)
-        self.assertEqual(
-            page["revisions"][0]["counts"], {"profiles": 0, "cards": 1, "preferences": 0, "provided": ["cards"]}
-        )
+        self.assertEqual(page["revisions"][0]["counts"]["annotationChanges"], 1)
+        self.assertEqual(page["revisions"][0]["counts"]["provided"], ["annotationChanges"])
         older = self.history(board, limit=1, before=page["nextCursor"])
-        self.assertEqual(older["revisions"][0]["revision"], 1)
-        self.assertEqual(older["revisions"][0]["counts"]["profiles"], 2)
-        self.assertIsNone(older["nextCursor"])
-        self.assertEqual(older["total"], 2)
+        self.assertEqual(older["revisions"][0]["revision"], 3)
+        self.assertEqual(older["revisions"][0]["counts"]["cards"], 2)
+        self.assertEqual(older["revisions"][0]["kind"], "maintenance")
+        self.assertIsNotNone(older["nextCursor"])
+        self.assertEqual(older["total"], 4)
         # A read: no writer, no reader, no new revision.
         after = self.snapshot(board)
         self.assertEqual(after["tableRevision"], before["tableRevision"])
@@ -1096,43 +1090,25 @@ class EvaluationHistoryTests(ExternalEvaluationTestCase):
                 board,
                 request_id=f"human-{index}",
                 command_id=f"human-{index}",
-                cards=[
-                    {
-                        "profileId": PROFILE_ID,
-                        "summary": f"revision {index}",
-                        "strengths": [],
-                        "limitations": [],
-                        "risks": [],
-                        "evidenceIds": [],
-                    }
-                ],
+                annotationChanges=[{"profileId": PROFILE_ID, "text": f"revision {index}"}],
             )
         first = self.history(board, limit=2)
-        self.assertEqual([entry["revision"] for entry in first["revisions"]], [5, 4])
+        self.assertEqual([entry["revision"] for entry in first["revisions"]], [7, 6])
         cursor = first["nextCursor"]
-        self.assertEqual(cursor, 4)
+        self.assertEqual(cursor, 6)
         # A newer publication appears on page one only; the cursor page is unchanged.
         self.publish(
             board,
             request_id="human-9",
             command_id="human-9",
-            cards=[
-                {
-                    "profileId": PROFILE_ID,
-                    "summary": "newest",
-                    "strengths": [],
-                    "limitations": [],
-                    "risks": [],
-                    "evidenceIds": [],
-                }
-            ],
+            annotationChanges=[{"profileId": PROFILE_ID, "text": "newest"}],
         )
         older = self.history(board, limit=2, before=cursor)
-        self.assertEqual([entry["revision"] for entry in older["revisions"]], [3, 2])
-        self.assertEqual(older["nextCursor"], 2)
+        self.assertEqual([entry["revision"] for entry in older["revisions"]], [5, 4])
+        self.assertEqual(older["nextCursor"], 4)
         newest = self.history(board, limit=2)
-        self.assertEqual([entry["revision"] for entry in newest["revisions"]], [6, 5])
-        self.assertEqual(newest["total"], 6)
+        self.assertEqual([entry["revision"] for entry in newest["revisions"]], [8, 7])
+        self.assertEqual(newest["total"], 8)
 
 
 if __name__ == "__main__":

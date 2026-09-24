@@ -26,27 +26,23 @@ import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
-from . import schemas
+from . import schemas, user_policy
 from .catalog import CatalogView
 from .db import canonical_json, sha256_text
 from .errors import BoardError
 
-#: Bounded collections. A publish replaces a collection wholesale, so these limits
-#: bound one published revision, not the archive.
+#: Bound current selection and maintenance packets independently of retained history.
 MAX_PROFILES = 200
 MAX_CARDS = 500
-MAX_PREFERENCES = 500
 MAX_EVIDENCE_IDS = 64
 MAX_EVIDENCE_PAGE = 200
 MAX_DECISION_PAGE = 50
 MAX_CARD_POINTS = 16
 MAX_CONDITIONS = 8
-MAX_CAPABILITIES = 32
 MAX_TEXT = 2000
 MAX_SUMMARY = 4000
 MAX_POINT = 500
 MAX_REASON = 500
-MAX_DESCRIPTION = 4000
 #: One bounded Harness-owned maintenance packet. ``limit`` bounds how many actual
 #: Host-reviewed facts are prepared per call and ``MAX_PACKET_EVIDENCE`` bounds the
 #: evidence summaries returned with them. A required card reference is never dropped
@@ -102,27 +98,9 @@ REVIEW_EVENT_KINDS = ("task.accepted", "task.rejected", "workflow.acknowledged")
 _REVIEW_KIND_LITERALS = "(" + ",".join(f"'{kind}'" for kind in REVIEW_EVENT_KINDS) + ")"
 assert all(kind.replace(".", "").isalpha() for kind in REVIEW_EVENT_KINDS), REVIEW_EVENT_KINDS
 
-PROFILE_FIELDS = frozenset(
-    {
-        "profileId",
-        "label",
-        "adapter",
-        "provider",
-        "model",
-        "effort",
-        "available",
-        "enabled",
-        "capabilities",
-        "contextWindow",
-        "description",
-        "source",
-        "unavailableReason",
-    }
-)
 #: Card input is text, risk and evidence references only: the counters, revision and
 #: timestamp are derived by the backend and a supplied one is an unknown field.
 CARD_FIELDS = frozenset({"profileId", "summary", "strengths", "limitations", "risks", "evidenceIds"})
-PREFERENCE_FIELDS = frozenset({"profileId", "mode", "reason"})
 #: The published configuration carries only the fixed decision profile. There is no
 #: automatic-maintenance or scheduler setting: maintenance synthesis is performed by
 #: an external Harness through ``evaluation_prepare`` and the ordinary writer gate.
@@ -132,31 +110,6 @@ CONFIGURATION_FIELDS = frozenset({"decisionProfileId"})
 #: ``evaluation.history`` is a bounded read of the existing publication log.
 PREPARE_FIELDS = frozenset({"requestId", "limit", "profileId", "adapter"})
 HISTORY_FIELDS = frozenset({"limit", "before"})
-PUBLISH_FIELDS = frozenset(
-    {
-        "commandId",
-        "writerId",
-        "generation",
-        "writerToken",
-        "expectedRevision",
-        "profiles",
-        "cards",
-        "preferences",
-        "configuration",
-    }
-)
-#: The publish request fingerprint. The first four are required; the rest keep the
-#: caller's provided-field set so omission and an explicit null never collapse.
-PUBLISH_REQUEST_FIELDS = (
-    "writerId",
-    "generation",
-    "writerToken",
-    "expectedRevision",
-    "profiles",
-    "cards",
-    "preferences",
-    "configuration",
-)
 
 
 def _timestamp(value: datetime) -> str:
@@ -316,158 +269,9 @@ class EvaluationStore:
         return schemas.string_list(entry, name, limit=MAX_CARD_POINTS)
 
     def _catalog(self, connection: sqlite3.Connection) -> CatalogView | None:
-        row = connection.execute(
-            "SELECT * FROM evaluation_catalog ORDER BY discovered_at DESC, discovery_id DESC LIMIT 1"
-        ).fetchone()
-        if row is None:
-            return None
-        return CatalogView.from_payload(json.loads(row["payload_json"]), row)
+        from . import catalog_store
+        return catalog_store.current(connection)
 
-    def _resolve_availability(
-        self,
-        *,
-        adapter: str,
-        provider: str,
-        model: str,
-        effort: str,
-        available: bool,
-        enabled: bool,
-        reason: str | None,
-        catalog: CatalogView | None,
-    ) -> tuple[bool, str | None]:
-        """Decide the honest availability flag for one published profile.
-
-        A publisher may never *claim* availability the installed harness catalog does
-        not advertise. With no recorded discovery an execution identity is unknown,
-        so it is published as unavailable rather than as an unverified "working".
-        """
-        from .adapters import adapters
-        native = adapters().get(adapter)
-        if native is not None and native.model_discovery:
-            if catalog is None:
-                if available:
-                    raise BoardError(
-                        "CATALOG_UNAVAILABLE",
-                        "Cannot publish this profile as available: no model catalog discovery is recorded. "
-                        "Run model_catalog_refresh against the installed harness first.",
-                        profileId=f"{adapter}:{provider}:{model}:{effort}",
-                    )
-                resolved, resolved_reason = False, reason or "no model catalog discovery is recorded for this build"
-            else:
-                entry = catalog.lookup(adapter, provider, model)
-                if entry is None or not entry["available"]:
-                    if available:
-                        raise BoardError(
-                            "CATALOG_UNAVAILABLE",
-                            f"Cannot publish this profile as available: the discovered harness catalog does not "
-                            f"advertise {provider}/{model}.",
-                            provider=provider,
-                            model=model,
-                            catalogSource=catalog.source,
-                        )
-                    resolved = False
-                    resolved_reason = reason or (
-                        f"{provider}/{model} is not advertised by the discovered harness catalog"
-                    )
-                else:
-                    legal = catalog.efforts_for(adapter, provider, model)
-                    if legal and effort not in legal:
-                        raise BoardError(
-                            "INVALID_ARGUMENT",
-                            f"effort {effort!r} is not a legal option for {provider}; "
-                            f"the installed harness advertises {', '.join(legal)}",
-                            provider=provider,
-                            effort=effort,
-                        )
-                    resolved = bool(available)
-                    resolved_reason = None if resolved else (reason or "disabled by the publisher")
-        else:
-            # The build knows these adapters, but no catalog verifies their execution
-            # identity; the publisher states availability and the flag stays attributed.
-            resolved = bool(available)
-            resolved_reason = None if resolved else (reason or "disabled by the publisher")
-        if enabled and not resolved:
-            raise BoardError(
-                "INVALID_ARGUMENT",
-                "A profile cannot be enabled while it is unavailable; publish it disabled or with a verified "
-                "available identity",
-                profileId=f"{adapter}:{provider}:{model}:{effort}",
-                unavailableReason=resolved_reason,
-            )
-        return resolved, resolved_reason
-
-    def _validate_profiles(self, connection: sqlite3.Connection, entries: list, catalog: CatalogView | None) -> dict:
-        existing = {row["profile_id"]: row for row in connection.execute("SELECT * FROM evaluation_profiles")}
-        resolved: dict[str, dict] = {}
-        for index, entry in enumerate(entries):
-            if not isinstance(entry, dict):
-                raise BoardError("INVALID_ARGUMENT", f"profiles[{index}] must be an object")
-            schemas.reject_unknown(entry, PROFILE_FIELDS, f"profiles[{index}]")
-            profile_id = schemas.required_string(
-                entry, "profileId", max_length=128, pattern=schemas.IDENTIFIER_PATTERN
-            )
-            if profile_id in resolved:
-                raise BoardError("INVALID_ARGUMENT", f"profiles[{index}] repeats profileId {profile_id!r}")
-            label = schemas.required_string(entry, "label", max_length=200)
-            adapter = schemas.required_string(entry, "adapter", max_length=32)
-            if adapter not in schemas.ADAPTERS:
-                raise BoardError(
-                    "UNSUPPORTED_ADAPTER", f"Unknown adapter {adapter!r}; this build supports {', '.join(schemas.ADAPTERS)}"
-                )
-            provider = schemas.required_string(entry, "provider", max_length=200)
-            model = schemas.required_string(entry, "model", max_length=200)
-            effort = schemas.required_string(entry, "effort", max_length=64)
-            available, enabled = schemas.optional_bool(entry, "available", False), schemas.optional_bool(entry, "enabled", True)
-            capabilities = schemas.string_list(entry, "capabilities", limit=MAX_CAPABILITIES)
-            context_window = entry.get("contextWindow")
-            if context_window is not None and (
-                isinstance(context_window, bool) or not isinstance(context_window, int) or not (1 <= context_window <= 100_000_000)
-            ):
-                raise BoardError("INVALID_ARGUMENT", f"profiles[{index}].contextWindow must be a positive integer or null")
-            description = schemas.optional_string(entry, "description", max_length=MAX_DESCRIPTION) or ""
-            source = schemas.required_string(entry, "source", max_length=256)
-            unavailable_reason = schemas.optional_string(entry, "unavailableReason", max_length=MAX_POINT)
-            prior = existing.get(profile_id)
-            if prior is not None and (
-                prior["adapter"],
-                prior["provider"],
-                prior["model"],
-                prior["effort"],
-            ) != (adapter, provider, model, effort):
-                raise BoardError(
-                    "CONFLICT",
-                    f"profile {profile_id} already identifies "
-                    f"{prior['adapter']}/{prior['provider']}/{prior['model']}/{prior['effort']}; an execution "
-                    "identity is immutable under an existing profileId. Publish a new profileId instead.",
-                    profileId=profile_id,
-                    existing={"adapter": prior["adapter"], "provider": prior["provider"], "model": prior["model"], "effort": prior["effort"]},
-                )
-            resolved_available, resolved_reason = self._resolve_availability(
-                adapter=adapter,
-                provider=provider,
-                model=model,
-                effort=effort,
-                available=available,
-                enabled=enabled,
-                reason=unavailable_reason,
-                catalog=catalog,
-            )
-            resolved[profile_id] = {
-                "profileId": profile_id,
-                "label": label,
-                "adapter": adapter,
-                "provider": provider,
-                "model": model,
-                "effort": effort,
-                "available": resolved_available,
-                "enabled": enabled,
-                "capabilities": capabilities,
-                "contextWindow": context_window,
-                "description": description,
-                "source": source,
-                "unavailableReason": resolved_reason,
-            }
-        return resolved
 
     def _validate_cards(self, connection: sqlite3.Connection, entries: list) -> dict:
         resolved: dict[str, dict] = {}
@@ -528,23 +332,6 @@ class EvaluationStore:
             "evidenceIds": json.loads(row["evidence_ids_json"]),
         }
 
-    def _validate_preferences(self, connection: sqlite3.Connection, entries: list) -> dict:
-        resolved: dict[str, dict] = {}
-        for index, entry in enumerate(entries):
-            if not isinstance(entry, dict):
-                raise BoardError("INVALID_ARGUMENT", f"preferences[{index}] must be an object")
-            schemas.reject_unknown(entry, PREFERENCE_FIELDS, f"preferences[{index}]")
-            profile_id = schemas.required_string(
-                entry, "profileId", max_length=128, pattern=schemas.IDENTIFIER_PATTERN
-            )
-            if profile_id in resolved:
-                raise BoardError("INVALID_ARGUMENT", f"preferences[{index}] repeats profileId {profile_id!r}")
-            mode = schemas.required_string(entry, "mode", max_length=16)
-            if mode not in ("prefer", "pin", "exclude"):
-                raise BoardError("INVALID_ARGUMENT", "mode must be 'prefer', 'pin' or 'exclude'")
-            reason = schemas.required_string(entry, "reason", max_length=MAX_REASON)
-            resolved[profile_id] = {"profileId": profile_id, "mode": mode, "reason": reason}
-        return resolved
 
     @staticmethod
     def _validate_configuration(entry: Any) -> dict:
@@ -565,273 +352,62 @@ class EvaluationStore:
         # facts and publishes cards through the ordinary writer gate.
         return {"decisionProfileId": decision_profile}
 
-    def _check_resulting_state(
-        self,
-        connection: sqlite3.Connection,
-        *,
-        profiles: dict | None,
-        cards: dict | None,
-        preferences: dict | None,
-        configuration: dict | None,
-    ) -> tuple[dict, dict, dict, dict | None]:
-        """Resolve the complete post-publish state and refuse every dangling reference."""
-        current_profiles = {row["profile_id"]: row for row in connection.execute("SELECT * FROM evaluation_profiles")}
-        current_cards = {row["profile_id"]: row for row in connection.execute("SELECT * FROM evaluation_cards")}
-        current_preferences = {
-            row["profile_id"]: row for row in connection.execute("SELECT * FROM evaluation_preferences")
-        }
-        state = self._state(connection)
-        if configuration is None:
-            current_configuration = {"decisionProfileId": state["decision_profile_id"]}
-        else:
-            current_configuration = configuration
-
-        resulting_profiles = set(current_profiles) if profiles is None else set(profiles)
-        resulting_cards = current_cards if cards is None else cards
-        resulting_preferences = current_preferences if preferences is None else preferences
-
-        for profile_id in resulting_preferences:
-            if profile_id not in resulting_profiles:
-                raise BoardError(
-                    "CONFLICT",
-                    f"preference for profile {profile_id!r} would dangle: the profile is not in the resulting table",
-                    profileId=profile_id,
-                )
-            mode = resulting_preferences[profile_id]["mode"]
-            if mode == "pin":
-                published = (profiles or {}).get(profile_id)
-                if published is None:
-                    published = current_profiles.get(profile_id)
-                if published is None or not published["available"] or not published["enabled"]:
-                    raise BoardError(
-                        "CONFLICT",
-                        f"Cannot pin {profile_id!r}: only an available, enabled profile can constrain the legal "
-                        "candidate set. A preference never makes an unverified model/effort legal.",
-                        profileId=profile_id,
-                    )
-        for profile_id in resulting_cards:
-            if profile_id not in resulting_profiles:
-                raise BoardError(
-                    "CONFLICT",
-                    f"card for profile {profile_id!r} would dangle: the profile is not in the resulting table",
-                    profileId=profile_id,
-                )
-        decision_profile = current_configuration["decisionProfileId"]
-        if decision_profile is not None and decision_profile not in resulting_profiles:
-            raise BoardError(
-                "CONFLICT",
-                f"decision profile {decision_profile!r} would dangle: it is still configured but not in the "
-                "resulting table",
-                profileId=decision_profile,
-            )
-        if decision_profile is not None:
-            published = (profiles or {}).get(decision_profile) or current_profiles.get(decision_profile)
-            if published is None or not published["available"] or not published["enabled"]:
-                raise BoardError(
-                    "CONFLICT",
-                    f"Cannot configure {decision_profile!r} as the decision profile: it must be available and enabled",
-                    profileId=decision_profile,
-                )
-        if profiles is not None:
-            for profile_id in set(current_profiles) - resulting_profiles:
-                row = connection.execute(
-                    "SELECT COUNT(*) AS count FROM evaluation_evidence WHERE profile_id=?", (profile_id,)
-                ).fetchone()
-                if int(row["count"]):
-                    raise BoardError(
-                        "CONFLICT",
-                        f"profile {profile_id!r} is referenced by recorded evidence and cannot be removed; "
-                        "keep the profile or keep its evidence",
-                        profileId=profile_id,
-                    )
-        return profiles or {}, cards or {}, preferences or {}, configuration
 
     # -- publish -------------------------------------------------------------
-    def _publish_revision(
-        self,
-        connection: sqlite3.Connection,
-        *,
-        revision: int,
-        writer,
-        now: str,
-        params: dict,
-        keep_consumed: frozenset[str] = frozenset(),
-    ) -> dict:
-        catalog = self._catalog(connection)
-        # A ``maintenance`` writer is the external Harness that prepared a bounded
-        # packet and synthesized card text from real facts. Its publication is a
-        # card-only PATCH: it merges the cards it provides into the current set and
-        # preserves every unrelated card. Profiles, preferences, the configuration
-        # and every code-owned counter stay outside that authority. A ``human``
-        # publication keeps the full replacement semantics the console editor uses.
-        maintenance = writer["kind"] == "maintenance"
-        provided = {key for key in ("profiles", "cards", "preferences", "configuration") if key in params}
-        if maintenance:
-            forbidden = sorted(provided - {"cards"})
-            if forbidden or "cards" not in provided:
-                raise BoardError(
-                    "INVALID_ARGUMENT",
-                    (
-                        f"a maintenance publication is card-only and must provide cards; {forbidden[0]} is not part "
-                        "of it"
-                        if forbidden
-                        else "a maintenance publication must provide the cards it is patching"
-                    ),
-                    field=forbidden[0] if forbidden else "cards",
-                )
-        for key in provided:
-            value = params[key]
-            limit = {"profiles": MAX_PROFILES, "cards": MAX_CARDS, "preferences": MAX_PREFERENCES}.get(key)
-            if limit is not None and (not isinstance(value, list) or len(value) > limit):
-                raise BoardError("INVALID_ARGUMENT", f"{key} must be a list of at most {limit} entries")
-        profiles = self._validate_profiles(connection, params["profiles"], catalog) if "profiles" in provided else None
-        provided_cards = self._validate_cards(connection, params["cards"]) if "cards" in provided else None
-        preferences = (
-            self._validate_preferences(connection, params["preferences"]) if "preferences" in provided else None
-        )
-        configuration = self._validate_configuration(params["configuration"]) if "configuration" in provided else None
-        if maintenance and provided_cards is not None:
-            # The complete post-publish card set: every card this request did not
-            # mention stays byte-identical, and one card cannot be dropped by omission.
-            resulting_cards: dict[str, dict] | None = {
-                row["profile_id"]: self._card_entry(row)
-                for row in connection.execute("SELECT * FROM evaluation_cards")
-            }
-            resulting_cards.update(provided_cards)
-        else:
-            resulting_cards = provided_cards
-        profiles, _, preferences, configuration = self._check_resulting_state(
-            connection, profiles=profiles, cards=resulting_cards, preferences=preferences, configuration=configuration
-        )
-        previous_references = self._card_references(connection) if provided_cards is not None else {}
-        # Retired references are compacted, never requeued: the card that cited them
-        # moved on with their text intact and the archived publication keeps the full
-        # list. Explicit human removal keeps the ordinary reconsider/requeue meaning.
-        retired = frozenset(
-            evidence_id
-            for profile_id, entry in (provided_cards or {}).items()
-            for evidence_id in previous_references.get(profile_id, [])
-            if evidence_id not in set(entry["evidenceIds"])
-        )
-        if maintenance:
-            keep_consumed = keep_consumed | retired
-
-        connection.execute(
-            "INSERT INTO evaluation_revisions(revision, kind, writer_id, actor, counts_json, created_at)"
-            " VALUES(?,?,?,?,?,?)",
-            (
-                revision,
-                writer["kind"],
-                writer["writer_id"],
-                params.get("writerId"),
-                canonical_json(
-                    {
-                        # The size of each collection this revision actually provided;
-                        # a merged maintenance PATCH never claims the preserved cards.
-                        "profiles": len(profiles),
-                        "cards": len(provided_cards or {}),
-                        "preferences": len(preferences),
-                        "provided": sorted(provided),
-                    }
-                ),
-                now,
-            ),
-        )
-        if "profiles" in provided:
-            for profile_id, entry in profiles.items():
+    def _publish_revision(self, connection, *, revision, writer, now, params) -> dict:
+        """Publish a maintenance-only card patch without touching user policy."""
+        entries = params.get("cards")
+        if not isinstance(entries, list) or len(entries) > MAX_CARDS:
+            raise BoardError("INVALID_ARGUMENT", f"cards must be a list of at most {MAX_CARDS} entries")
+        provided_cards = self._validate_cards(connection, entries)
+        for profile_id in provided_cards:
+            if connection.execute("SELECT 1 FROM evaluation_profiles WHERE profile_id=?", (profile_id,)).fetchone() is None:
+                raise BoardError("NOT_FOUND", "A card requires an existing profile", profileId=profile_id)
+        previous_references = self._card_references(connection)
+        resulting_cards = dict(previous_references)
+        resulting_cards.update({profile_id: entry["evidenceIds"] for profile_id, entry in provided_cards.items()})
+        retired = frozenset(evidence_id for profile_id, entry in provided_cards.items()
+                            for evidence_id in previous_references.get(profile_id, [])
+                            if evidence_id not in entry["evidenceIds"])
+        for profile_id, entry in provided_cards.items():
+            prior = connection.execute(
+                "SELECT * FROM evaluation_cards WHERE profile_id=?", (profile_id,)
+            ).fetchone()
+            # Counters are code-owned: the number of distinct accepted attempts for
+            # this profile, never a model-supplied value and never a count of prose.
+            sample_count = self._sample_count(connection, profile_id)
+            content = (
+                entry["summary"],
+                entry["strengths"],
+                entry["limitations"],
+                entry["risks"],
+                entry["evidenceIds"],
+            )
+            if prior is not None and (
+                prior["summary"],
+                json.loads(prior["strengths_json"]),
+                json.loads(prior["limitations_json"]),
+                json.loads(prior["risks_json"]),
+                json.loads(prior["evidence_ids_json"]),
+            ) == content and int(prior["sample_count"]) == sample_count:
+                card_revision, updated_at = int(prior["revision"]), prior["updated_at"]
+            else:
+                card_revision = 1 if prior is None else int(prior["revision"]) + 1
+                updated_at = now
+                # Archive the changed card under this revision before the bounded
+                # current row moves on, so retiring a reference never loses the
+                # publication's provenance.
                 connection.execute(
-                    "INSERT INTO evaluation_profiles(profile_id, label, adapter, provider, model, effort, available,"
-                    " enabled, capabilities_json, context_window, description, source, unavailable_reason,"
-                    " created_revision, updated_revision) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)"
-                    " ON CONFLICT(profile_id) DO UPDATE SET label=excluded.label, available=excluded.available,"
-                    " enabled=excluded.enabled, capabilities_json=excluded.capabilities_json,"
-                    " context_window=excluded.context_window, description=excluded.description,"
-                    " source=excluded.source, unavailable_reason=excluded.unavailable_reason,"
-                    " updated_revision=excluded.updated_revision",
+                    "INSERT INTO evaluation_card_history(table_revision, profile_id, card_revision, summary,"
+                    " strengths_json, limitations_json, risks_json, evidence_ids_json, sample_count, published_at)"
+                    " VALUES(?,?,?,?,?,?,?,?,?,?)"
+                    " ON CONFLICT(table_revision, profile_id) DO UPDATE SET card_revision=excluded.card_revision,"
+                    " summary=excluded.summary, strengths_json=excluded.strengths_json,"
+                    " limitations_json=excluded.limitations_json, risks_json=excluded.risks_json,"
+                    " evidence_ids_json=excluded.evidence_ids_json, sample_count=excluded.sample_count,"
+                    " published_at=excluded.published_at",
                     (
-                        profile_id,
-                        entry["label"],
-                        entry["adapter"],
-                        entry["provider"],
-                        entry["model"],
-                        entry["effort"],
-                        1 if entry["available"] else 0,
-                        1 if entry["enabled"] else 0,
-                        canonical_json(entry["capabilities"]),
-                        entry["contextWindow"],
-                        entry["description"],
-                        entry["source"],
-                        entry["unavailableReason"],
                         revision,
-                        revision,
-                    ),
-                )
-            removed = set(
-                row["profile_id"] for row in connection.execute("SELECT profile_id FROM evaluation_profiles")
-            ) - set(profiles)
-            for profile_id in removed:
-                connection.execute("DELETE FROM evaluation_cards WHERE profile_id=?", (profile_id,))
-                connection.execute("DELETE FROM evaluation_preferences WHERE profile_id=?", (profile_id,))
-                connection.execute("DELETE FROM evaluation_profiles WHERE profile_id=?", (profile_id,))
-        if provided_cards is not None:
-            for profile_id, entry in provided_cards.items():
-                prior = connection.execute(
-                    "SELECT * FROM evaluation_cards WHERE profile_id=?", (profile_id,)
-                ).fetchone()
-                # Counters are code-owned: the number of distinct accepted attempts for
-                # this profile, never a model-supplied value and never a count of prose.
-                sample_count = self._sample_count(connection, profile_id)
-                content = (
-                    entry["summary"],
-                    entry["strengths"],
-                    entry["limitations"],
-                    entry["risks"],
-                    entry["evidenceIds"],
-                )
-                if prior is not None and (
-                    prior["summary"],
-                    json.loads(prior["strengths_json"]),
-                    json.loads(prior["limitations_json"]),
-                    json.loads(prior["risks_json"]),
-                    json.loads(prior["evidence_ids_json"]),
-                ) == content and int(prior["sample_count"]) == sample_count:
-                    card_revision, updated_at = int(prior["revision"]), prior["updated_at"]
-                else:
-                    card_revision = 1 if prior is None else int(prior["revision"]) + 1
-                    updated_at = now
-                    # Archive the changed card under this revision before the bounded
-                    # current row moves on, so retiring a reference never loses the
-                    # publication's provenance.
-                    connection.execute(
-                        "INSERT INTO evaluation_card_history(table_revision, profile_id, card_revision, summary,"
-                        " strengths_json, limitations_json, risks_json, evidence_ids_json, sample_count, published_at)"
-                        " VALUES(?,?,?,?,?,?,?,?,?,?)"
-                        " ON CONFLICT(table_revision, profile_id) DO UPDATE SET card_revision=excluded.card_revision,"
-                        " summary=excluded.summary, strengths_json=excluded.strengths_json,"
-                        " limitations_json=excluded.limitations_json, risks_json=excluded.risks_json,"
-                        " evidence_ids_json=excluded.evidence_ids_json, sample_count=excluded.sample_count,"
-                        " published_at=excluded.published_at",
-                        (
-                            revision,
-                            profile_id,
-                            card_revision,
-                            entry["summary"],
-                            canonical_json(entry["strengths"]),
-                            canonical_json(entry["limitations"]),
-                            canonical_json(entry["risks"]),
-                            canonical_json(entry["evidenceIds"]),
-                            sample_count,
-                            now,
-                        ),
-                    )
-                connection.execute(
-                    "INSERT INTO evaluation_cards(profile_id, revision, summary, strengths_json, limitations_json,"
-                    " risks_json, evidence_ids_json, sample_count, updated_at) VALUES(?,?,?,?,?,?,?,?,?)"
-                    " ON CONFLICT(profile_id) DO UPDATE SET revision=excluded.revision, summary=excluded.summary,"
-                    " strengths_json=excluded.strengths_json, limitations_json=excluded.limitations_json,"
-                    " risks_json=excluded.risks_json, evidence_ids_json=excluded.evidence_ids_json,"
-                    " sample_count=excluded.sample_count, updated_at=excluded.updated_at",
-                    (
                         profile_id,
                         card_revision,
                         entry["summary"],
@@ -840,59 +416,38 @@ class EvaluationStore:
                         canonical_json(entry["risks"]),
                         canonical_json(entry["evidenceIds"]),
                         sample_count,
-                        updated_at,
+                        now,
                     ),
                 )
-            if not maintenance:
-                # A full human publication replaces the card collection; a maintenance
-                # PATCH never removes a card it did not mention.
-                for row in connection.execute("SELECT profile_id FROM evaluation_cards").fetchall():
-                    if row["profile_id"] not in provided_cards:
-                        connection.execute("DELETE FROM evaluation_cards WHERE profile_id=?", (row["profile_id"],))
-            self._sync_pending(
-                connection,
-                previous=previous_references,
-                resulting={
-                    profile_id: entry["evidenceIds"] for profile_id, entry in (resulting_cards or {}).items()
-                },
-                keep_consumed=keep_consumed,
-            )
-        if "preferences" in provided:
-            for profile_id, entry in preferences.items():
-                connection.execute(
-                    "INSERT INTO evaluation_preferences(profile_id, mode, reason, updated_revision) VALUES(?,?,?,?)"
-                    " ON CONFLICT(profile_id) DO UPDATE SET mode=excluded.mode, reason=excluded.reason,"
-                    " updated_revision=excluded.updated_revision",
-                    (profile_id, entry["mode"], entry["reason"], revision),
-                )
-            for row in connection.execute("SELECT profile_id FROM evaluation_preferences").fetchall():
-                if row["profile_id"] not in preferences:
-                    connection.execute("DELETE FROM evaluation_preferences WHERE profile_id=?", (row["profile_id"],))
-        configuration_revision = int(self._state(connection)["configuration_revision"])
-        if "configuration" in provided:
-            configuration_revision += 1
             connection.execute(
-                "UPDATE evaluation_state SET decision_profile_id=?, configuration_revision=?,"
-                " updated_at=? WHERE id=1",
-                (configuration["decisionProfileId"], configuration_revision, now),
+                "INSERT INTO evaluation_cards(profile_id, revision, summary, strengths_json, limitations_json,"
+                " risks_json, evidence_ids_json, sample_count, updated_at) VALUES(?,?,?,?,?,?,?,?,?)"
+                " ON CONFLICT(profile_id) DO UPDATE SET revision=excluded.revision, summary=excluded.summary,"
+                " strengths_json=excluded.strengths_json, limitations_json=excluded.limitations_json,"
+                " risks_json=excluded.risks_json, evidence_ids_json=excluded.evidence_ids_json,"
+                " sample_count=excluded.sample_count, updated_at=excluded.updated_at",
+                (
+                    profile_id,
+                    card_revision,
+                    entry["summary"],
+                    canonical_json(entry["strengths"]),
+                    canonical_json(entry["limitations"]),
+                    canonical_json(entry["risks"]),
+                    canonical_json(entry["evidenceIds"]),
+                    sample_count,
+                    updated_at,
+                ),
             )
+
+        self._sync_pending(connection, previous=previous_references, resulting=resulting_cards, keep_consumed=retired)
+        for profile_id in provided_cards:
+            connection.execute("UPDATE evaluation_cards SET origin='maintenance' WHERE profile_id=?", (profile_id,))
+        counts = {"cards": len(provided_cards), "provided": ["cards"]}
         connection.execute(
-            "UPDATE evaluation_state SET table_revision=?, updated_at=? WHERE id=1", (revision, now)
-        )
-        return {
-            "revision": revision,
-            "configurationRevision": configuration_revision,
-            "counts": {
-                "profiles": int(
-                    connection.execute("SELECT COUNT(*) AS count FROM evaluation_profiles").fetchone()["count"]
-                ),
-                "cards": int(connection.execute("SELECT COUNT(*) AS count FROM evaluation_cards").fetchone()["count"]),
-                "preferences": int(
-                    connection.execute("SELECT COUNT(*) AS count FROM evaluation_preferences").fetchone()["count"]
-                ),
-                "provided": sorted(provided),
-            },
-        }
+            "INSERT INTO evaluation_revisions(revision,kind,writer_id,actor,counts_json,created_at) VALUES(?,?,?,?,?,?)",
+            (revision, "maintenance", writer["writer_id"], writer["writer_id"], canonical_json(counts), now))
+        connection.execute("UPDATE evaluation_state SET table_revision=?,updated_at=? WHERE id=1", (revision, now))
+        return {"revision": revision, "configurationRevision": int(self._state(connection)["configuration_revision"]), "counts": counts}
 
     # -- operations ----------------------------------------------------------
     #: Fixed-size counter names in ``evaluation_aggregates``. Every mutation below
@@ -956,7 +511,7 @@ class EvaluationStore:
         before this revision, ``resulting`` the map after it. Only the difference is
         touched: evidence that stays referenced stays consumed, evidence that gains a
         reference stops being pending, and evidence whose reference disappears is
-        pending again — unless it was retired by a *safe automatic compaction*
+        pending again — unless it was retired by a maintenance publication
         (``keep_consumed``), which keeps it incorporated and archived without
         pretending it was never processed. Evidence no card ever referenced is never
         touched, so it stays pending across unrelated revisions.
@@ -1092,12 +647,22 @@ class EvaluationStore:
             table_revision = int(state["table_revision"])
             profiles = [
                 self._profile_view(row)
-                for row in connection.execute("SELECT * FROM evaluation_profiles ORDER BY rowid")
+                for row in connection.execute(
+                    "SELECT p.*, c.status AS catalog_state, c.reason AS catalog_reason FROM evaluation_profiles p "
+                    "LEFT JOIN catalog_current c ON c.adapter=p.adapter "
+                    "WHERE p.available=1 OR p.profile_id=? ORDER BY p.rowid LIMIT 201", (state["decision_profile_id"],)
+                )
             ]
-            cards = [self._card_view(row) for row in connection.execute("SELECT * FROM evaluation_cards ORDER BY rowid")]
+            profile_ids = [profile["profileId"] for profile in profiles]
+            marks = ",".join("?" for _ in profile_ids) or "NULL"
+            cards = [self._card_view(row) for row in connection.execute(f"SELECT * FROM evaluation_cards WHERE profile_id IN ({marks}) ORDER BY rowid", profile_ids)]
             preferences = [
                 {"profileId": row["profile_id"], "mode": row["mode"], "reason": row["reason"]}
-                for row in connection.execute("SELECT * FROM evaluation_preferences ORDER BY rowid")
+                for row in connection.execute(f"SELECT * FROM evaluation_preferences WHERE profile_id IN ({marks}) ORDER BY rowid", profile_ids)
+            ]
+            annotations = [
+                {"profileId": row["profile_id"], "text": row["text"], "revision": row["revision"], "updatedAt": row["updated_at"]}
+                for row in connection.execute(f"SELECT * FROM evaluation_annotations WHERE profile_id IN ({marks}) ORDER BY rowid", profile_ids)
             ]
             evidence = [
                 self._evidence_view(row)
@@ -1120,9 +685,9 @@ class EvaluationStore:
             # they cover every published profile independently of whether a prose card
             # exists yet: a published profile with accepted attempts is a real count.
             sample_counts = {
-                row["profile_id"]: self._sample_count(connection, row["profile_id"])
-                for row in connection.execute("SELECT profile_id FROM evaluation_profiles")
+                profile_id: self._sample_count(connection, profile_id) for profile_id in profile_ids
             }
+            unavailable_count = connection.execute("SELECT COUNT(*) FROM evaluation_profiles WHERE available=0").fetchone()[0]
             gate = self._gate_view(connection, now)
         tasks = self.board.task_list({"limit": 100, "offset": 0})
         return {
@@ -1134,7 +699,9 @@ class EvaluationStore:
                 "decisionProfileId": state["decision_profile_id"],
             },
             "profiles": profiles,
+            "unavailableProfileCount": unavailable_count,
             "preferences": preferences,
+            "annotations": annotations,
             "cards": cards,
             "sampleCounts": sample_counts,
             "evidence": evidence,
@@ -1186,9 +753,10 @@ class EvaluationStore:
             params, "requestId", max_length=128, pattern=schemas.IDENTIFIER_PATTERN
         )
         expected = self._required_revision(params, "expectedRevision")
-        kind = schemas.optional_string(params, "kind", max_length=16) or "human"
+        kind = schemas.optional_string(params, "kind", max_length=16) or "maintenance"
         if kind not in WRITER_KINDS:
             raise BoardError("INVALID_ARGUMENT", "kind must be 'human' or 'maintenance'")
+        user_policy.require_writer_kind(kind)
         with self.board.db.write() as connection:
             now = self._now()
             self._sweep(connection, now)
@@ -1288,6 +856,7 @@ class EvaluationStore:
         writer = connection.execute("SELECT * FROM evaluation_writers WHERE writer_id=?", (writer_id,)).fetchone()
         if writer is None:
             raise BoardError("NOT_FOUND", "Unknown writerId", writerId=writer_id)
+        user_policy.require_writer_kind(writer["kind"])
         if int(writer["generation"]) != int(generation):
             raise BoardError(
                 "STALE_GENERATION",
@@ -1350,19 +919,29 @@ class EvaluationStore:
             "waitingWriters": gate["waitingWriters"],
         }
 
-    def write_publish(self, params: dict) -> dict:
-        schemas.reject_unknown(params, PUBLISH_FIELDS, "evaluation.write.publish")
+    def user_policy_publish(self, params: dict) -> dict:
+        return self._publish(params, kind="human")
+
+    def assessment_publish(self, params: dict) -> dict:
+        return self._publish(params, kind="maintenance")
+
+    def _publish(self, params: dict, *, kind: str) -> dict:
+        user_policy.require_writer_kind(kind)
+        allowed = user_policy.PATCH_FIELDS if kind == "human" else {"cards"}
+        schemas.reject_unknown(params, {*user_policy.GRANT_FIELDS, "commandId", *allowed}, "evaluation publication")
         command_id = schemas.required_string(params, "commandId", max_length=128)
         # Required fields are checked *before* the idempotency lookup, and the request
         # fingerprint is built from exactly the fields the caller provided: an omitted
         # collection and an explicit null are different requests, so a stored receipt
         # can never satisfy a changed or invalid command.
-        for name in PUBLISH_REQUEST_FIELDS[:4]:
+        for name in user_policy.GRANT_FIELDS:
             if name not in params:
                 raise BoardError("INVALID_ARGUMENT", f"{name} is required")
-        request = {key: params[key] for key in PUBLISH_REQUEST_FIELDS if key in params}
+        request = {key: value for key, value in params.items() if key != "commandId"}
+        operation = "user_policy.publish" if kind == "human" else "assessment.publish"
         with self.board.db.write() as connection:
-            receipt = self.board._receipt(connection, command_id, "evaluation.publish", request)
+            self._writer_from_params(connection, params)
+            receipt = self.board._receipt(connection, command_id, operation, request)
             if receipt is not None:
                 return {**receipt, "duplicate": True}
             now = self._now()
@@ -1370,6 +949,8 @@ class EvaluationStore:
             state = self._state(connection)
             table_revision = int(state["table_revision"])
             writer = self._writer_from_params(connection, params)
+            if writer["kind"] != kind:
+                raise BoardError("FORBIDDEN", "Writer kind does not authorize this publication")
             if writer["state"] != "active":
                 raise BoardError(
                     "WRITER_NOT_ACTIVE",
@@ -1386,9 +967,10 @@ class EvaluationStore:
                     expectedRevision=expected,
                     currentRevision=table_revision,
                 )
-            published = self._publish_revision(
-                connection, revision=table_revision + 1, writer=writer, now=now, params=params
-            )
+            if kind == "human":
+                published = user_policy.publish(self, connection, revision=table_revision + 1, writer=writer, now=now, params=params)
+            else:
+                published = self._publish_revision(connection, revision=table_revision + 1, writer=writer, now=now, params=params)
             connection.execute(
                 "UPDATE evaluation_writers SET state='published', released_at=? WHERE writer_id=?",
                 (now, writer["writer_id"]),
@@ -1418,7 +1000,7 @@ class EvaluationStore:
                 "duplicate": False,
             }
             self.board._store_receipt(
-                connection, command_id, "evaluation.publish", request, response
+                connection, command_id, operation, request, response
             )
             head = self.board._head_of(connection)
         self.board._notify(head)
@@ -1434,6 +1016,7 @@ class EvaluationStore:
                 raise BoardError("INVALID_ARGUMENT", f"{name} is required")
         request = {key: params[key] for key in ("writerId", "generation", "writerToken") if key in params}
         with self.board.db.write() as connection:
+            self._writer_from_params(connection, params)
             receipt = self.board._receipt(connection, command_id, "evaluation.abort", request)
             if receipt is not None:
                 return {**receipt, "duplicate": True}
@@ -2188,55 +1771,9 @@ class EvaluationStore:
         self.board._notify(head)
         return response
 
-    def record_catalog(self, discovered: dict) -> dict:
-        """Persist one successful discovery as proposed data. Never publishes it."""
-        payload = CatalogView.canonical_payload(discovered)
-        # Identity excludes the observation timestamp, so re-running discovery against
-        # an unchanged harness records one catalog instead of a new row per refresh.
-        identity = {key: value for key, value in payload.items() if key != "discoveredAt"}
-        discovery_id = "cat-" + sha256_text(canonical_json(identity))[:24]
-        with self.board.db.write() as connection:
-            existing = connection.execute(
-                "SELECT * FROM evaluation_catalog WHERE discovery_id=?", (discovery_id,)
-            ).fetchone()
-            now = self._now()
-            if existing is None:
-                connection.execute(
-                    "INSERT INTO evaluation_catalog(discovery_id, discovered_at, source, harness_version,"
-                    " provider_version, payload_json, created_at) VALUES(?,?,?,?,?,?,?)",
-                    (
-                        discovery_id,
-                        payload.get("discoveredAt") or now,
-                        payload["source"],
-                        payload.get("harnessVersion"),
-                        payload.get("providerVersion"),
-                        canonical_json(payload),
-                        now,
-                    ),
-                )
-                self.board._append_event(
-                    connection,
-                    "evaluation.catalog_discovered",
-                    payload={"discoveryId": discovery_id, "source": payload["source"]},
-                )
-                duplicate = False
-                view = CatalogView.from_payload(payload)
-            else:
-                duplicate = True
-                # Report the recorded discovery, not a later observation of it.
-                view = CatalogView.from_payload(json.loads(existing["payload_json"]), existing)
-            head = self.board._head_of(connection)
-        self.board._notify(head)
-        return {
-            "discoveryId": discovery_id,
-            "duplicate": duplicate,
-            "catalog": view.metadata(),
-            "profiles": view.proposed_profiles(),
-            "note": (
-                "Discovered profiles are proposed data. Publishing them goes through the writer gate; this refresh "
-                "made no model call and exposed no credential."
-            ),
-        }
+    def record_catalog(self, discovered: dict, observation_id=None) -> dict:
+        from . import catalog_store
+        return catalog_store.record(self, discovered, observation_id)
 
     # -- Harness-owned maintenance -------------------------------------------
     @staticmethod
@@ -2529,9 +2066,12 @@ class EvaluationStore:
                     adapter=adapter,
                 )
             return [row]
-        profiles = [row for row in connection.execute("SELECT * FROM evaluation_profiles ORDER BY rowid")]
-        if adapter is not None:
-            profiles = [row for row in profiles if row["adapter"] == adapter]
+        profiles = list(connection.execute(
+            "SELECT * FROM evaluation_profiles WHERE available=1 AND (? IS NULL OR adapter=?) ORDER BY profile_id LIMIT ?",
+            (adapter, adapter, MAX_PROFILES + 1),
+        ))
+        if len(profiles) > MAX_PROFILES:
+            raise BoardError("PACKET_TOO_LARGE", "The current profile set exceeds the maintenance bound; narrow by profileId")
         return profiles
 
     @staticmethod
@@ -2805,15 +2345,18 @@ class EvaluationStore:
                     )
                     cursors[profile_key] = frontier
             profiles = [self._profile_view(row) for row in assessed]
+            assessed_marks = ",".join("?" for _ in assessed_ids) or "NULL"
             cards = [
                 self._card_view(row)
-                for row in connection.execute("SELECT * FROM evaluation_cards ORDER BY rowid")
-                if row["profile_id"] in set(assessed_ids)
+                for row in connection.execute(f"SELECT * FROM evaluation_cards WHERE profile_id IN ({assessed_marks}) ORDER BY rowid", assessed_ids)
             ]
             preferences = [
                 {"profileId": row["profile_id"], "mode": row["mode"], "reason": row["reason"]}
-                for row in connection.execute("SELECT * FROM evaluation_preferences ORDER BY rowid")
-                if row["profile_id"] in set(assessed_ids)
+                for row in connection.execute(f"SELECT * FROM evaluation_preferences WHERE profile_id IN ({assessed_marks}) ORDER BY rowid", assessed_ids)
+            ]
+            annotations = [
+                {"profileId": row["profile_id"], "text": row["text"], "revision": row["revision"], "updatedAt": row["updated_at"]}
+                for row in connection.execute(f"SELECT * FROM evaluation_annotations WHERE profile_id IN ({assessed_marks}) ORDER BY rowid", assessed_ids)
             ]
             # Every evidence reference a current card depends on is required input and
             # is never dropped to fit the packet.
@@ -2875,6 +2418,7 @@ class EvaluationStore:
                 "profiles": profiles,
                 "cards": cards,
                 "preferences": preferences,
+                "annotations": annotations,
                 "evidence": evidence,
                 "pendingEvidenceIds": sorted(entry["evidenceId"] for entry in evidence if entry["pending"]),
                 "referencedEvidenceIds": referenced_ids,
@@ -2922,7 +2466,7 @@ class EvaluationStore:
                 "note": (
                     "Deterministic facts and a bounded packet only: no model was called, no card was published, "
                     "and no task acceptance or Host authority was changed. Synthesize card changes under the skill "
-                    "and commit them with evaluation_write_begin(kind maintenance) plus evaluation_write_publish "
+                    "and commit them with evaluation_write_begin(kind maintenance) plus assessment_publish "
                     "at this tableRevision."
                 ),
             }
@@ -3003,11 +2547,9 @@ class EvaluationStore:
             "revision": int(row["revision"]),
             "kind": row["kind"],
             "actor": row["actor"],
-            "counts": {
-                "profiles": int(counts.get("profiles") or 0),
-                "cards": int(counts.get("cards") or 0),
-                "preferences": int(counts.get("preferences") or 0),
-            },
+            "counts": {name: int(counts[name]) for name in (
+                "profiles", "cards", "preferences", "profileSettings", "preferenceChanges", "annotationChanges"
+            ) if name in counts},
             "createdAt": row["created_at"],
         }
         provided = counts.get("provided")
@@ -3034,12 +2576,16 @@ class EvaluationStore:
         }
         if row["unavailable_reason"]:
             view["unavailableReason"] = row["unavailable_reason"]
+        if "catalog_state" in row.keys():
+            view["catalogState"] = row["catalog_state"] or "unknown"
+            view["catalogReason"] = row["catalog_reason"]
         return view
 
     @staticmethod
     def _card_view(row: sqlite3.Row) -> dict:
         return {
             "profileId": row["profile_id"],
+            "origin": row["origin"],
             "revision": int(row["revision"]),
             "summary": row["summary"],
             "strengths": json.loads(row["strengths_json"]),

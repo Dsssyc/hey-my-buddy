@@ -14,7 +14,7 @@ control capacity that cancel, renew and result commits need.
 """
 import c_two as cc
 
-CONTRACT_VERSION = "0.7.0"
+CONTRACT_VERSION = "0.8.0"
 CONTROL_NAME = "buddy-control"
 WAIT_NAME = "buddy-wait"
 
@@ -122,7 +122,11 @@ class BuddyControl:
     def evaluation_write_renew(self, request_json: str) -> str:
         ...
 
-    def evaluation_write_publish(self, request_json: str) -> str:
+    def user_policy_publish(self, request_json: str) -> str:
+        """Publish authenticated user field patches."""
+        raise NotImplementedError
+
+    def assessment_publish(self, request_json: str) -> str:
         ...
 
     def evaluation_write_abort(self, request_json: str) -> str:
@@ -154,6 +158,9 @@ class BuddyControl:
         ...
 
     def model_catalog_refresh(self, request_json: str) -> str:
+        ...
+
+    def model_profiles(self, request_json: str) -> str:
         ...
 
     # -- governed workflow --------------------------------------------------

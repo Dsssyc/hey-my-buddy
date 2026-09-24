@@ -95,28 +95,31 @@ class DecisionTestCase(BoardTestCase):
         cards=None,
     ) -> dict:
         board.call("model_catalog_refresh", {"requestId": "catalog-seed"})
-        grant = board.call(
-            "evaluation_write_begin", {"requestId": "seed", "expectedRevision": 0, "kind": "human"}
+        revision = board.call("console_snapshot", {})["tableRevision"]
+        grant = board.console_call(
+            "evaluation_write_begin", {"requestId": "seed", "expectedRevision": revision, "kind": "human"}
         )
-        return board.call(
-            "evaluation_write_publish",
+        result = board.console_call(
+            "user_policy_publish",
             {
                 "commandId": "seed-1",
                 "writerId": grant["writerId"],
                 "generation": grant["generation"],
                 "writerToken": grant["writerToken"],
                 "expectedRevision": grant["tableRevision"],
-                "profiles": list(profiles),
-                "cards": cards or [],
-                "preferences": preferences or [],
+                "profileSettings": [{"profileId": item["profileId"], "enabled": True} for item in profiles],
+                "preferenceChanges": preferences or [],
                 "configuration": {"decisionProfileId": decision_profile},
             },
         )
+        if cards:
+            self.publish_cards(board, request_id="seed-cards", command_id="seed-cards", cards=cards)
+        return result
 
     def card_with_pending_evidence(self, board) -> tuple[str, str]:
         """One published card plus one newer pending evidence row for maintenance."""
         first = self.evidence(board, "task-1", summary="card sample")
-        self.publish_more(
+        self.publish_cards(
             board,
             request_id="card-1",
             command_id="card-1",
@@ -134,23 +137,32 @@ class DecisionTestCase(BoardTestCase):
         second = self.evidence(board, "task-2", summary="new pending sample")
         return first, second
 
-    def publish_more(self, board, *, request_id: str, command_id: str, **collections) -> dict:
+    def publish_cards(self, board, *, request_id: str, command_id: str, cards: list[dict]) -> dict:
         revision = board.call("console_snapshot", {})["tableRevision"]
         grant = board.call(
             "evaluation_write_begin",
-            {"requestId": request_id, "expectedRevision": revision, "kind": "human"},
+            {"requestId": request_id, "expectedRevision": revision, "kind": "maintenance"},
         )
         return board.call(
-            "evaluation_write_publish",
+            "assessment_publish",
             {
                 "commandId": command_id,
                 "writerId": grant["writerId"],
                 "generation": grant["generation"],
                 "writerToken": grant["writerToken"],
                 "expectedRevision": revision,
-                **collections,
+                "cards": cards,
             },
         )
+
+    def publish_user_patch(self, board, *, request_id: str, command_id: str, **changes) -> dict:
+        revision = board.call("console_snapshot", {})["tableRevision"]
+        grant = board.console_call("evaluation_write_begin", {"requestId": request_id, "expectedRevision": revision, "kind": "human"})
+        return board.console_call("user_policy_publish", {
+            "commandId": command_id, "writerId": grant["writerId"],
+            "generation": grant["generation"], "writerToken": grant["writerToken"],
+            "expectedRevision": revision, **changes,
+        })
 
     def record(
         self,
@@ -268,7 +280,7 @@ class SelectionRequestTests(DecisionTestCase):
                 "runId": run_id,
             },
         )["evidence"]["evidenceId"]
-        self.publish_more(
+        self.publish_cards(
             board,
             request_id="card-1",
             command_id="card-1",
@@ -324,11 +336,11 @@ class SelectionRequestTests(DecisionTestCase):
 
         # A pin limits the candidate set; a recommendation outside it is refused.
         self.use_helper(profile_id=PROFILE_ID)
-        self.publish_more(
+        self.publish_user_patch(
             board,
             request_id="pin-1",
             command_id="pin-1",
-            preferences=[{"profileId": SECOND_PROFILE_ID, "mode": "pin", "reason": "only this one"}],
+            preferenceChanges=[{"profileId": SECOND_PROFILE_ID, "mode": "pin", "reason": "only this one"}],
         )
         pinned = self.request(board, request_id="pick-2")
         self.run_worker(board, worker_id="w-pinned")
@@ -344,7 +356,7 @@ class SelectionRequestTests(DecisionTestCase):
         self.seed(board)
         request = board.call(
             "selection_request",
-            {"requestId": "pick-caps", "task": "needs a large context", "requiredCapabilities": ["context:large"]},
+            {"requestId": "pick-caps", "task": "needs image input", "requiredCapabilities": ["input:image"]},
         )
         self.run_worker(board)
         decision = self.decision(board, request["decisionId"])
@@ -413,7 +425,7 @@ class DecisionGateTests(DecisionTestCase):
         self.seed(board)
         revision = board.call("console_snapshot", {})["tableRevision"]
         grant = board.call(
-            "evaluation_write_begin", {"requestId": "w-active", "expectedRevision": revision, "kind": "human"}
+            "evaluation_write_begin", {"requestId": "w-active", "expectedRevision": revision, "kind": "maintenance"}
         )
         request = self.request(board)
         self.run_worker(board)
@@ -424,7 +436,7 @@ class DecisionGateTests(DecisionTestCase):
         self.assertEqual(board.call("console_snapshot", {})["gate"]["phase"], "writing")
 
         board.call(
-            "evaluation_write_publish",
+            "assessment_publish",
             {
                 "commandId": "w-active",
                 "writerId": grant["writerId"],
@@ -466,7 +478,7 @@ class DecisionGateTests(DecisionTestCase):
         # The queued selector cannot claim while the maintenance writer holds the gate.
         self.assertEqual(self.decision(board, selection["decisionId"])["status"], "queued")
         published = board.call(
-            "evaluation_write_publish",
+            "assessment_publish",
             {
                 "commandId": "tidy-1",
                 "writerId": grant["writerId"],
@@ -531,7 +543,7 @@ class DecisionGateTests(DecisionTestCase):
         self.assertEqual(board.call("console_snapshot", {})["gate"]["phase"], "writing")
         # The writer is granted once the reader settled, and its card-only patch commits.
         published = board.call(
-            "evaluation_write_publish",
+            "assessment_publish",
             {
                 "commandId": "tidy-1",
                 "writerId": grant["writerId"],
@@ -557,7 +569,7 @@ class DecisionGateTests(DecisionTestCase):
         board = self.board()
         self.seed(board)
         revision = board.call("console_snapshot", {})["tableRevision"]
-        board.call("evaluation_write_begin", {"requestId": "w-hold", "expectedRevision": revision, "kind": "human"})
+        board.call("evaluation_write_begin", {"requestId": "w-hold", "expectedRevision": revision, "kind": "maintenance"})
         request = self.request(board)
         board.call("task_cancel", {"runId": request["runId"], "reason": "user cancelled the pending selection"})
         self.assertEqual(self.decision(board, request["decisionId"])["status"], "cancelled")
@@ -581,7 +593,7 @@ class DecisionFailureTests(DecisionTestCase):
         self.seed(board)
         decision = self.outcome(board, "malformed")
         self.assertEqual(decision["status"], "failed")
-        self.assertEqual(board.call("console_snapshot", {})["tableRevision"], 1)
+        self.assertEqual(board.call("console_snapshot", {})["tableRevision"], 2)
         self.assertIn("no parseable result", decision["error"])
 
     def test_helper_error_envelope_fails_honestly(self):
@@ -590,7 +602,7 @@ class DecisionFailureTests(DecisionTestCase):
         decision = self.outcome(board, "error")
         self.assertEqual(decision["status"], "failed")
         self.assertIn("call-timeout", decision["error"])
-        self.assertEqual(board.call("console_snapshot", {})["tableRevision"], 1)
+        self.assertEqual(board.call("console_snapshot", {})["tableRevision"], 2)
 
     def test_out_of_candidate_and_wrong_revision_outputs_are_never_published(self):
         board = self.board()
@@ -722,7 +734,7 @@ class DecisionFailureTests(DecisionTestCase):
         self.assertEqual(late["status"], "stale")
         self.assertIsNone(late["profileId"])
         self.assertEqual(late["output"]["decision"]["reason"], "too late")
-        self.assertEqual(restarted.call("console_snapshot", {})["tableRevision"], 1)
+        self.assertEqual(restarted.call("console_snapshot", {})["tableRevision"], 2)
 
     def test_a_lost_reply_replays_without_re_executing_or_republishing(self):
         board = self.board()
@@ -932,7 +944,7 @@ class DecisionGrowthTests(DecisionTestCase):
         board = self.board()
         self.seed_history(board, 20)
         evidence_id = self.evidence(board, "task-1")
-        self.publish_more(
+        self.publish_cards(
             board,
             request_id="card-1",
             command_id="card-1",
@@ -948,8 +960,8 @@ class DecisionGrowthTests(DecisionTestCase):
             ],
         )
         self.assertEqual(board.call("console_snapshot", {})["pendingEvidence"], 20)
-        # Replacing the card without the reference makes that evidence pending again.
-        self.publish_more(
+        # Maintenance retirement keeps the earlier evidence incorporated in card history.
+        self.publish_cards(
             board,
             request_id="card-2",
             command_id="card-2",
@@ -964,13 +976,12 @@ class DecisionGrowthTests(DecisionTestCase):
                 }
             ],
         )
-        self.assertEqual(board.call("console_snapshot", {})["pendingEvidence"], 21)
+        self.assertEqual(board.call("console_snapshot", {})["pendingEvidence"], 20)
         with board.store.db.read() as connection:
-            ledger = connection.execute(
-                "SELECT COUNT(*) AS count FROM evaluation_evidence e WHERE NOT EXISTS ("
-                " SELECT 1 FROM evaluation_cards c WHERE c.profile_id = e.profile_id AND EXISTS ("
-                "  SELECT 1 FROM json_each(c.evidence_ids_json) WHERE json_each.value = e.evidence_id))"
-            ).fetchone()["count"]
+            self.assertIsNotNone(connection.execute("SELECT 1 FROM evaluation_evidence WHERE evidence_id=?", (evidence_id,)).fetchone())
+            history = connection.execute("SELECT evidence_ids_json FROM evaluation_card_history WHERE profile_id=? ORDER BY table_revision", (PROFILE_ID,)).fetchall()
+            self.assertTrue(any(evidence_id in json.loads(row["evidence_ids_json"]) for row in history))
+            ledger = connection.execute("SELECT COUNT(*) AS count FROM evaluation_evidence_pending").fetchone()["count"]
             self.assertEqual(board.evaluation._pending_evidence(connection), int(ledger))
             samples = connection.execute("SELECT COUNT(*) AS count FROM evaluation_samples").fetchone()["count"]
             self.assertEqual(board.evaluation._sample_count(connection, PROFILE_ID), int(samples))
@@ -978,30 +989,30 @@ class DecisionGrowthTests(DecisionTestCase):
 class DecisionDaemonTests(DecisionTestCase):
     def test_real_daemon_runs_selection_through_the_independent_worker(self):
         """The whole path: daemon + detached supervisor + real helper process."""
+        from test_console import Browser
+
         helper_env = {"BUDDY_DECISION_HELPER": str(MOCK_HELPER)}
         with self.daemon(env=helper_env):
             code, refreshed = self.cli("model-catalog-refresh", json.dumps({"requestId": "daemon-cat"}))
             self.assertEqual(code, 0, refreshed)
-            code, begin = self.cli(
-                "evaluation-write-begin",
-                json.dumps({"requestId": "daemon-seed", "expectedRevision": 0, "kind": "human"}),
+            code, opened = self.cli("console", json.dumps({"action": "open"}))
+            self.assertEqual(code, 0, opened)
+            browser = Browser(opened["url"])
+            csrf = browser.bootstrap()["csrfToken"]
+            status, _headers, body = browser.command(
+                "evaluation_write_begin", {"requestId": "daemon-seed", "expectedRevision": refreshed["tableRevision"], "kind": "human"}, csrf=csrf
             )
-            self.assertEqual(code, 0, begin)
-            code, published = self.cli(
-                "evaluation-write-publish",
-                json.dumps(
-                    {
-                        "commandId": "daemon-seed",
-                        "writerId": begin["writerId"],
-                        "generation": begin["generation"],
-                        "writerToken": begin["writerToken"],
-                        "expectedRevision": 0,
-                        "profiles": [PROFILE, SECOND_PROFILE],
-                        "configuration": {"decisionProfileId": PROFILE_ID},
-                    }
-                ),
-            )
-            self.assertEqual(code, 0, published)
+            self.assertEqual(status, 200, body)
+            begin = json.loads(body)["result"]
+            status, _headers, body = browser.command("user_policy_publish", {
+                "commandId": "daemon-seed", "writerId": begin["writerId"],
+                "generation": begin["generation"], "writerToken": begin["writerToken"],
+                "expectedRevision": begin["tableRevision"],
+                "profileSettings": [{"profileId": item["profileId"], "enabled": True} for item in (PROFILE, SECOND_PROFILE)],
+                "configuration": {"decisionProfileId": PROFILE_ID},
+            }, csrf=csrf)
+            self.assertEqual(status, 200, body)
+            published = json.loads(body)["result"]
 
             code, created = self.cli(
                 "selection-request", json.dumps({"requestId": "daemon-pick", "task": "over the real daemon"})
@@ -1039,18 +1050,18 @@ class DecisionDaemonTests(DecisionTestCase):
             # no second model call and no internal maintenance task.
             code, second_begin = self.cli(
                 "evaluation-write-begin",
-                json.dumps({"requestId": "daemon-card", "expectedRevision": 1, "kind": "maintenance"}),
+                json.dumps({"requestId": "daemon-card", "expectedRevision": published["revision"], "kind": "maintenance"}),
             )
             self.assertEqual(code, 0, second_begin)
             code, card = self.cli(
-                "evaluation-write-publish",
+                "assessment-publish",
                 json.dumps(
                     {
                         "commandId": "daemon-card",
                         "writerId": second_begin["writerId"],
                         "generation": second_begin["generation"],
                         "writerToken": second_begin["writerToken"],
-                        "expectedRevision": 1,
+                        "expectedRevision": published["revision"],
                         "cards": [
                             {
                                 "profileId": PROFILE_ID,
@@ -1067,7 +1078,7 @@ class DecisionDaemonTests(DecisionTestCase):
             self.assertEqual(code, 0, card)
             code, snapshot = self.cli("console-snapshot", "{}")
             self.assertEqual(code, 0, snapshot)
-            self.assertEqual(snapshot["tableRevision"], 2)
+            self.assertEqual(snapshot["tableRevision"], published["revision"] + 1)
             self.assertEqual(snapshot["cards"][0]["summary"], "patched by the external Harness")
             self.assertEqual(snapshot["cards"][0]["risks"], ["daemon open risk"])
             self.assertFalse(snapshot["capabilities"]["maintenance"])

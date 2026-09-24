@@ -200,6 +200,12 @@ class InProcessBoard:
         service = self.wait_service if operation.startswith("events_wait") or operation == "message_wait" or operation == "wait_capacity" else self.service
         return dispatch_local(service, operation, params)
 
+    def console_call(self, operation: str, params: dict) -> dict:
+        """Exercise an authenticated private console session in process."""
+        session = "test-console-session"
+        self.service.register_console_authority(session)
+        return self.call(operation, {**params, "consoleAuthority": session})
+
     def client(self, **kwargs) -> BoardClient:
         return BoardClient(self.directory, call=self.call, **kwargs)
 

@@ -44,8 +44,8 @@ def canonical_payload(value: Any) -> dict:
         raise BoardError("CATALOG_INVALID", "The discovered catalog must be a JSON object")
     source = _identity(value.get("source"), "source", 1024)
     raw_providers = value.get("providers")
-    if not isinstance(raw_providers, list) or not 1 <= len(raw_providers) <= MAX_PROVIDERS:
-        raise BoardError("CATALOG_INVALID", f"A catalog must contain 1 to {MAX_PROVIDERS} providers")
+    if not isinstance(raw_providers, list) or len(raw_providers) > MAX_PROVIDERS:
+        raise BoardError("CATALOG_INVALID", f"A catalog may contain at most {MAX_PROVIDERS} providers")
     providers, seen_providers = [], set()
     model_count = 0
     for entry in raw_providers:
@@ -58,8 +58,8 @@ def canonical_payload(value: Any) -> dict:
         seen_providers.add((adapter, provider))
         provider_efforts = _strings(entry.get("efforts"))
         raw_models = entry.get("models")
-        if not isinstance(raw_models, list) or not raw_models:
-            raise BoardError("CATALOG_INVALID", f"{adapter}/{provider} advertises no model")
+        if not isinstance(raw_models, list):
+            raise BoardError("CATALOG_INVALID", f"{adapter}/{provider} models must be a list")
         model_count += len(raw_models)
         if model_count > MAX_MODELS:
             raise BoardError("CATALOG_INVALID", f"A catalog may contain at most {MAX_MODELS} models")
@@ -96,12 +96,27 @@ def canonical_payload(value: Any) -> dict:
             "efforts": list(dict.fromkeys(effort for model in models for effort in model["efforts"])),
             "models": models,
         })
+    raw_discoveries = value.get("discoveries", [{"adapter": name, "status": "complete"} for name in sorted({p["adapter"] for p in providers})])
+    if not isinstance(raw_discoveries, list) or len(raw_discoveries) > MAX_PROVIDERS:
+        raise BoardError("CATALOG_INVALID", "discoveries must be bounded per-harness observations")
+    discoveries, seen = [], set()
+    for result in raw_discoveries:
+        if not isinstance(result, dict) or result.get("status") not in ("complete", "unknown"):
+            raise BoardError("CATALOG_INVALID", "discovery status must be complete or unknown")
+        name = _identity(result.get("adapter"), "discovery.adapter", 32)
+        if name in seen:
+            raise BoardError("CATALOG_INVALID", "Repeated harness observation")
+        seen.add(name)
+        discoveries.append({"adapter": name, "status": result["status"], "reason": _text(result.get("reason")) or None})
+    if any(p["adapter"] not in seen for p in providers):
+        raise BoardError("CATALOG_INVALID", "Every provider must have a harness observation")
     return {
         "source": source,
         "harnessVersion": _text(value.get("harnessVersion"), 256) or None,
         "providerVersion": _text(value.get("providerVersion"), 512) or None,
         "discoveredAt": _text(value.get("discoveredAt"), 64) or None,
         "providers": providers,
+        "discoveries": discoveries,
         "warnings": [_text(item) for item in (value.get("warnings") or []) if isinstance(item, str)][:16],
     }
 
@@ -137,13 +152,14 @@ def discover() -> dict:
     if override is not None:
         return override
     from .adapters import adapters
-    providers, warnings, sources, versions = [], [], [], []
+    providers, warnings, sources, versions, discoveries = [], [], [], [], []
     for name, instance in adapters().items():
         if not instance.model_discovery:
             continue
         usable, reason = instance.available()
         if not usable:
             warnings.append(f"{name}: {reason or 'harness unavailable'}")
+            discoveries.append({"adapter": name, "status": "unknown", "reason": reason or "harness unavailable"})
             continue
         try:
             payload = canonical_payload(instance.discover_models())
@@ -151,17 +167,17 @@ def discover() -> dict:
                 raise BoardError("CATALOG_INVALID", "A harness advertised another adapter identity")
         except BoardError as error:
             warnings.append(f"{name}: {error.code}")
+            discoveries.append({"adapter": name, "status": "unknown", "reason": error.code})
             continue
         providers.extend(payload["providers"])
+        discoveries.append({"adapter": name, "status": "complete"})
         warnings.extend(payload["warnings"])
         sources.append(payload["source"])
         if payload.get("harnessVersion"):
             versions.append(f"{name}:{payload['harnessVersion']}")
-    if not providers:
-        raise BoardError("CATALOG_UNAVAILABLE", "No installed harness supplied a usable model catalog", warnings=warnings)
     return canonical_payload({
-        "source": "; ".join(sources), "harnessVersion": "; ".join(versions),
-        "providers": providers, "warnings": warnings,
+        "source": "; ".join(sources) or "native-discovery", "harnessVersion": "; ".join(versions),
+        "providers": providers, "warnings": warnings, "discoveries": discoveries,
     })
 
 
@@ -220,6 +236,8 @@ class CatalogView:
                 "discoveredAt": self.recorded_at or self.payload.get("discoveredAt")}
 
     def proposed_profiles(self) -> list[dict]:
+        from .adapters import adapters
+        registry = adapters()
         proposals = []
         for entry in self.payload["providers"]:
             for model in entry["models"]:
@@ -230,7 +248,7 @@ class CatalogView:
                         "profileId": profile_id, "label": f"{model['name']} · {effort}"[:200],
                         "adapter": entry["adapter"], "provider": entry["provider"], "model": model["id"], "effort": effort,
                         "available": model["available"], "unavailableReason": model["unavailableReason"], "enabled": False,
-                        "capabilities": [f"execution:{entry['adapter']}", f"effort:{effort}"] + [f"input:{item}" for item in model["inputModalities"]][:30],
+                        "capabilities": [f"execution:{entry['adapter']}", f"effort:{effort}"] + [f"input:{item}" for item in model["inputModalities"]][:30] + (["decision"] if getattr(registry.get(entry['adapter']), 'decision_execution', False) else []),
                         "contextWindow": model["contextWindow"],
                         "description": (model["description"] or f"{model['name']} via {entry['displayName']}")[:4000],
                         "source": f"catalog:{self.discovery_id or self.source}"[:256],
