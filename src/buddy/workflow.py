@@ -2808,31 +2808,7 @@ class WorkflowCoordinator:
                     return {**receipt, "duplicate": True}
             if run_row["state"] == "accepted":
                 raise BoardError("CONFLICT", "This run is already acknowledged; cancellation cannot undo acceptance")
-            # Fence the root before descendants settle: a transferred checkout
-            # must not be handed back to a goal cancelled in this transaction.
-            self._cancel_owned_run(connection, task, now, explicit=True)
-            self._cancel_children(connection, run_id, reason, now)
-            self.board._append_event(
-                connection, "workflow.cancelled", task_id=run_id, revision=run_row["revision"] + 1,
-                payload={"reason": reason, "actor": actor, "honestShutdown": True},
-            )
-            task = connection.execute("SELECT * FROM tasks WHERE task_id=?", (run_id,)).fetchone()
-            child = connection.execute("SELECT * FROM workflow_children WHERE child_task_id=?", (run_id,)).fetchone()
-            if child is not None and self._stop_proven(connection, task):
-                self.child_settled(connection, task=task, attempt=self.board._selected_attempt(connection, task),
-                                   payload=None, task_state=task["state"], now=now)
-            elif self._stop_proven(connection, task):
-                self._release_reservations(connection, run_id, now)
-            run_row = self._run_row(connection, run_id)
-            response = {
-                **self.compact(connection, run_row, task),
-                "cancelled": True,
-                "duplicate": False,
-                "note": (
-                    "Cancellation is durable. An active execution becomes cancelling and its worker stops the owned "
-                    "process group; this response never claims that a surviving process is already stopped."
-                ),
-            }
+            response = self._cancel_in_transaction(connection, run_row, task, reason, actor, now)
             if command_id:
                 self.board._store_receipt(
                     connection, command_id, "workflow.cancel", request_key, response, task_id=run_id
@@ -2841,7 +2817,88 @@ class WorkflowCoordinator:
         self.board._notify(head)
         return response
 
-    def _cancel_children(self, connection, run_id: str, reason: str, now: str) -> list[str]:
+    def cancel_for_service_stop(self, reason: str) -> tuple[dict[str, int], set[str]]:
+        """Internal daemon shutdown path; no request fields or caller authority enter here."""
+        with self.db.write() as connection:
+            unresolved = self.board.UNRESOLVED_SQL.replace("execution_state", "a.execution_state").replace(
+                "result_json", "a.result_json").replace("shutdown_confirmed", "a.shutdown_confirmed")
+            candidates: dict[str, tuple[str, bool]] = {}
+            for row in connection.execute(
+                "SELECT t.task_id,t.state,r.state AS workflow_state,"
+                f" EXISTS(SELECT 1 FROM attempts a WHERE a.task_id=t.task_id AND ({unresolved})) AS unresolved"
+                " FROM tasks t JOIN workflow_runs r ON r.run_id=t.task_id"
+                " WHERE t.state='queued' OR EXISTS(SELECT 1 FROM attempts a"
+                f" WHERE a.task_id=t.task_id AND ({unresolved}))"
+            ).fetchall():
+                if row["unresolved"] or (row["state"] == "queued" and row["workflow_state"] == "executing"):
+                    candidates[row["task_id"]] = (row["task_id"], bool(row["unresolved"]))
+            for row in connection.execute(
+                "SELECT t.task_id,t.state,r.run_id,"
+                f" EXISTS(SELECT 1 FROM attempts a WHERE a.task_id=t.task_id AND ({unresolved})) AS unresolved"
+                " FROM tasks t JOIN decision_requests d ON d.task_id=t.task_id"
+                " JOIN workflow_routes r ON r.decision_id=d.decision_id"
+                " WHERE (r.state='pending' AND t.state='queued') OR EXISTS(SELECT 1 FROM attempts a"
+                f" WHERE a.task_id=t.task_id AND ({unresolved}))"
+            ).fetchall():
+                candidates[row["task_id"]] = (row["run_id"], bool(row["unresolved"]))
+            candidate_roots: dict[str, str] = {}
+            for task_id, (owning_run_id, _unresolved) in candidates.items():
+                root_id = owning_run_id
+                while True:
+                    parent = connection.execute(
+                        "SELECT parent_run_id FROM workflow_children WHERE child_task_id=?", (root_id,)
+                    ).fetchone()
+                    if parent is None:
+                        break
+                    root_id = parent["parent_run_id"]
+                candidate_roots[task_id] = root_id
+            cancelled_roots: set[str] = set()
+            now = self.now()
+            for root_id in sorted(set(candidate_roots.values())):
+                run_row = self._run_row(connection, root_id)
+                if run_row["state"] == "cancelled":
+                    continue
+                if run_row["state"] == "accepted":
+                    raise BoardError("CONFLICT", "Accepted Goal still owns active work during service stop", runId=root_id)
+                task = connection.execute("SELECT * FROM tasks WHERE task_id=?", (root_id,)).fetchone()
+                self._cancel_in_transaction(connection, run_row, task, reason, "service-stop", now)
+                cancelled_roots.add(root_id)
+            head = self.board._head_of(connection)
+            counts = {"queued": 0, "active": 0}
+            for task_id, (_owning_run_id, unresolved_attempt) in candidates.items():
+                if candidate_roots[task_id] in cancelled_roots:
+                    counts["active" if unresolved_attempt else "queued"] += 1
+        if cancelled_roots:
+            self.board._notify(head)
+        return counts, set(candidates)
+
+    def _cancel_in_transaction(self, connection, run_row, task, reason: str, actor: str, now: str) -> dict:
+        run_id = run_row["run_id"]
+        # Fence the root before descendants settle: a transferred checkout must
+        # not be handed back to a goal cancelled in this transaction.
+        self._cancel_owned_run(connection, task, now, explicit=True)
+        self._cancel_children(connection, run_id, reason, now, actor=actor)
+        self.board._append_event(
+            connection, "workflow.cancelled", task_id=run_id, revision=run_row["revision"] + 1,
+            payload={"reason": reason, "actor": actor, "honestShutdown": True},
+        )
+        task = connection.execute("SELECT * FROM tasks WHERE task_id=?", (run_id,)).fetchone()
+        child = connection.execute("SELECT * FROM workflow_children WHERE child_task_id=?", (run_id,)).fetchone()
+        if child is not None and self._stop_proven(connection, task):
+            self.child_settled(connection, task=task, attempt=self.board._selected_attempt(connection, task),
+                               payload=None, task_state=task["state"], now=now)
+        elif self._stop_proven(connection, task):
+            self._release_reservations(connection, run_id, now)
+        run_row = self._run_row(connection, run_id)
+        return {
+            **self.compact(connection, run_row, task), "cancelled": True, "duplicate": False,
+            "note": (
+                "Cancellation is durable. An active execution becomes cancelling and its worker stops the owned "
+                "process group; this response never claims that a surviving process is already stopped."
+            ),
+        }
+
+    def _cancel_children(self, connection, run_id: str, reason: str, now: str, *, actor: str | None = None) -> list[str]:
         """Fence the whole owned graph, including work behind settled helpers."""
         cancelled: list[str] = []
         rows = self._owned_children(connection, run_id)
@@ -2852,7 +2909,8 @@ class WorkflowCoordinator:
             if self._cancel_owned_run(connection, task, now):
                 self.board._append_event(
                     connection, "workflow.helper_cancelled", task_id=task["task_id"], revision=task["revision"] + 1,
-                    payload={"parentRunId": child["parent_run_id"], "cancelledByRunId": run_id, "reason": reason},
+                    payload={"parentRunId": child["parent_run_id"], "cancelledByRunId": run_id, "reason": reason,
+                             **({"actor": actor} if actor is not None else {})},
                 )
                 cancelled.append(task["task_id"])
         # Every descendant is fenced before ownership can move upward. Settlement

@@ -609,8 +609,9 @@ class Daemon:
         reason = params.get("reason", "service stop requested")
         self.control["stopping"] = True
         atomic_json(self.stop_path, {"requestedAt": utc_now(), "reason": reason, "drainSeconds": drain})
-        queued = self.cancel_queued(reason)
-        active = self.cancel_active(reason)
+        governed, governed_task_ids = self.store.workflow.cancel_for_service_stop(f"service stop: {reason}")
+        queued = governed["queued"] + self.cancel_queued(reason, exclude=governed_task_ids)
+        active = governed["active"] + self.cancel_active(reason, exclude=governed_task_ids)
         unresolved = self.drain(drain)
         # Every managed pool worker — including a surplus supervisor retained from a
         # higher limit — receives a cooperative stop request; none is signalled.
@@ -663,9 +664,11 @@ class Daemon:
         return self.console.start()
 
     # -- drain ---------------------------------------------------------------
-    def cancel_queued(self, reason: str) -> int:
+    def cancel_queued(self, reason: str, *, exclude: set[str] | None = None) -> int:
         count = 0
         for task in self.store.active_work()["queuedTasks"]:
+            if exclude and task["taskId"] in exclude:
+                continue
             try:
                 self.store.task_cancel({"runId": task["taskId"], "reason": f"service stop: {reason}"})
                 count += 1
@@ -673,9 +676,11 @@ class Daemon:
                 continue
         return count
 
-    def cancel_active(self, reason: str) -> int:
+    def cancel_active(self, reason: str, *, exclude: set[str] | None = None) -> int:
         count = 0
         for attempt in self.store.active_work()["attempts"]:
+            if exclude and attempt["taskId"] in exclude:
+                continue
             try:
                 self.store.task_cancel({"runId": attempt["taskId"], "reason": f"service stop: {reason}"})
                 count += 1
