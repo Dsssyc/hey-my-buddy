@@ -4,6 +4,8 @@
 
 ADR-007 defines the accepted 0.6 clean-cut target. The source baseline is released 0.5.0 commit `0b674e9`. Only the plugin's `buddy` skill is distributed. Do not restore standalone skill paths, old CLI aliases, legacy Node records/fingerprints/socket guards, or historical schema conversion branches. Historical design documents are evidence, not current compatibility requirements.
 
+[ADR-008](docs/decisions/008-harness-owned-evaluation-maintenance.md) records the accepted, not-yet-implemented direction for Harness-owned evaluation maintenance and read-only console evidence. Consult it before changing evaluation-update entrypoints or responsibilities; do not describe that target as current runtime behavior.
+
 Read [architecture](docs/reference/architecture.md) and [ADR-007](docs/decisions/007-neutral-core-and-single-current-contract.md) before changing ownership, persistence, worker, routing or recovery contracts. Current source and ADR-007 take precedence over older implementation documents.
 
 The Python service owns authoritative SQLite state. Workers own child handles and durable receipts over named C-Two operations. Preserve task/attempt identity, idempotency, transaction/event atomicity, owner fencing, fixed artifact bindings and actual shutdown evidence. Unknown never means stopped. Host and Worker edits require explicit workspace ownership; independent writers use isolated worktrees.

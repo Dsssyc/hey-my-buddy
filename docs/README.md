@@ -44,6 +44,8 @@ Detailed commands belong in their owning reference, routed from this page and fr
 
 ## Accepted design direction
 
+[ADR-008: Harness-owned evaluation maintenance](decisions/008-harness-owned-evaluation-maintenance.md) records the direction accepted on 2026-09-24 and awaiting implementation: a skill-equipped Harness performs shared evaluation updates on user request or through its own scheduling capability; evidence is shared across Hosts/projects and read-only in the console, which no longer initiates evaluation-model calls. Current 0.6.1 behavior remains documented in the references above.
+
 [ADR-007: neutral Buddy core and a single current contract](decisions/007-neutral-core-and-single-current-contract.md) is the accepted 0.6 architecture decision. It defines the source layout, the single current contract, durable default routing, the ZCode rebase and the clean-cut release boundary. Current behavior is maintained in the references above; ADR-007 is not rewritten as behavior changes.
 
 [ADR-002: Host-directed assistance and workspace ownership](decisions/002-host-directed-assistance-and-workspaces.md) records the accepted principles for Hosts that both implement and delegate, worker-managed subagents, turn-end yield and continuation, explicit execution workspaces and integration. Its design-time status is retained; supported behavior is maintained in [workflow.md](reference/workflow.md) and [architecture.md](reference/architecture.md).
