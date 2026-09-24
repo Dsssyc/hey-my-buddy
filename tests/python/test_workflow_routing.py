@@ -117,10 +117,10 @@ class TestWorkflowRouting(WorkflowTestCase):
         with self.assertRaises(BoardError) as raised:
             self.continue_run(board, submitted)
         self.assertEqual(raised.exception.code, "CONFIGURATION_REQUIRED")
-        recovered = self.continue_run(board, submitted, configuration=CONFIGURATION)
+        recovered = self.continue_run(board, submitted, configuration=CONFIGURATION, reason="Host selected an installed configuration after routing had no selector")
         self.assertEqual(recovered["executionConfiguration"], CONFIGURATION)
         self.assertFalse(recovered["awaitingHost"])
-        self.assertTrue(self.continue_run(board, submitted, configuration=CONFIGURATION)["duplicate"])
+        self.assertTrue(self.continue_run(board, submitted, configuration=CONFIGURATION, reason="Host selected an installed configuration after routing had no selector")["duplicate"])
 
     def test_reroute_after_configuration_fix_is_durable_and_idempotent(self):
         board = self.board()
@@ -176,23 +176,23 @@ class TestWorkflowRouting(WorkflowTestCase):
         self.controls[taken["runId"]] = taken["control"]
         self.assertTrue(taken["awaitingHost"])
         with self.assertRaises(BoardError) as raised:
-            self.continue_run(board, taken, configuration=CONFIGURATION)
+            self.continue_run(board, taken, configuration=CONFIGURATION, reason="New Host selected an installed configuration after takeover")
         self.assertEqual(raised.exception.code, "SHUTDOWN_UNCONFIRMED")
         self.select(board, claim)
         view = board.call("workflow_get", {"runId": submitted["runId"]})
         self.assertIsNone(view["executionConfiguration"])
-        recovered = self.continue_run(board, view, configuration=CONFIGURATION)
+        recovered = self.continue_run(board, view, configuration=CONFIGURATION, reason="New Host selected an installed configuration after shutdown confirmation")
         self.assertEqual(recovered["executionConfiguration"], CONFIGURATION)
 
     def test_host_configuration_cannot_break_original_partial_constraints(self):
         board = self.board()
         submitted = self.routed(board, effort="high")
         with self.assertRaises(BoardError) as raised:
-            self.continue_run(board, submitted, configuration=CONFIGURATION)
+            self.continue_run(board, submitted, configuration=CONFIGURATION, reason="Host attempted to override the original high effort constraint")
         self.assertEqual(raised.exception.code, "CONFIGURATION_CONFLICT")
         self.assertEqual(self.catalog_validation.call_count, 0)
         supplied = {**CONFIGURATION, "effort": "high"}
-        recovered = self.continue_run(board, submitted, configuration=supplied)
+        recovered = self.continue_run(board, submitted, configuration=supplied, reason="Host selected a configuration satisfying the original high effort constraint")
         self.assertEqual(recovered["executionConfiguration"], supplied)
 
     def test_routing_attention_refuses_assistance_before_workspace_or_catalog_work(self):
@@ -252,7 +252,7 @@ class TestWorkflowRouting(WorkflowTestCase):
         with self.assertRaises(BoardError) as raised:
             self.decide(board, view, request["requestId"], command_id="wrong-command")
         self.assertEqual(raised.exception.code, "CONFIGURATION_REQUIRED")
-        continued = self.continue_run(board, view, targetRunId=helper_id, configuration={**CONFIGURATION, "effort": "high"})
+        continued = self.continue_run(board, view, targetRunId=helper_id, configuration={**CONFIGURATION, "effort": "high"}, reason="Root Host resolved the helper's high effort routing request")
         self.assertEqual(continued["runId"], parent["runId"])
         self.assertEqual(continued["targetRunId"], helper_id)
         self.assertEqual(continued["counts"]["openRequests"], 0)
@@ -263,7 +263,7 @@ class TestWorkflowRouting(WorkflowTestCase):
         unrelated = self.routed(board, request_id="unrelated")
         fresh = board.call("workflow_get", {"runId": parent["runId"]})
         with self.assertRaises(BoardError) as raised:
-            self.continue_run(board, fresh, command_id="foreign", targetRunId=unrelated["runId"], configuration=CONFIGURATION)
+            self.continue_run(board, fresh, command_id="foreign", targetRunId=unrelated["runId"], configuration=CONFIGURATION, reason="Host attempted to configure an unrelated goal")
         self.assertEqual(raised.exception.code, "UNAUTHORIZED")
 
     def test_pending_writer_gate_then_routing_uses_new_configuration_revision(self):
@@ -307,7 +307,7 @@ class TestWorkflowRouting(WorkflowTestCase):
     def test_native_resume_requires_same_configuration_and_exact_previous_session(self):
         board = self.board()
         submitted = self.routed(board)
-        configured = self.continue_run(board, submitted, configuration={**CONFIGURATION, "adapter": "zcode"})
+        configured = self.continue_run(board, submitted, configuration={**CONFIGURATION, "adapter": "zcode"}, reason="Host selected ZCode for native session continuity")
         board.call("worker_register", {"workerId": "w1", "adapter": "zcode", "capabilities": ["zcode", "dsh"]})
         first = self.claim(board)
         self.finish_turn(board, first, disposition="attention", session_id="native-123")
@@ -318,7 +318,7 @@ class TestWorkflowRouting(WorkflowTestCase):
         self.assertEqual(resumed["claim"]["turn"]["input"]["previousSessionId"], "native-123")
         self.finish_turn(board, resumed, disposition="attention", session_id="native-123")
         view = board.call("workflow_get", {"runId": submitted["runId"]})
-        self.continue_run(board, view, command_id="change-config", configuration=CONFIGURATION)
+        self.continue_run(board, view, command_id="change-config", configuration=CONFIGURATION, reason="Host changed adapter after the prior turn")
         changed = self.claim(board, claim_request_id="new-harness")
         self.assertEqual(changed["claim"]["turn"]["resumeMode"], "reconstructed-new-session")
 
@@ -378,7 +378,7 @@ class TestWorkflowRouting(WorkflowTestCase):
         self.assertEqual(self.catalog_validation.call_count, 1)
         self.finish_turn(board, second, disposition="attention")
         current = board.call("workflow_get", {"runId": submitted["runId"]})
-        changed = self.continue_run(board, current, command_id="new-configuration", configuration={**CONFIGURATION, "effort": "high"})
+        changed = self.continue_run(board, current, command_id="new-configuration", configuration={**CONFIGURATION, "effort": "high"}, reason="Host chose higher effort after capacity released")
         self.assertEqual(changed["executionConfigurationRevision"], 2)
         third = self.claim(board, claim_request_id="third-coding-turn")
         self.assertEqual(third["claim"]["turn"]["input"]["context"]["executionConfiguration"]["effort"], "high")
@@ -447,7 +447,7 @@ class TestWorkflowRouting(WorkflowTestCase):
             self.assertEqual(connection.execute("SELECT COUNT(*) FROM tasks").fetchone()[0], 1)
             self.assertEqual(connection.execute("SELECT COUNT(*) FROM attempts").fetchone()[0], 0)
             self.assertEqual(connection.execute("SELECT COUNT(*) FROM workflow_routes").fetchone()[0], 1)
-        continued = self.continue_run(board, submitted, configuration=CONFIGURATION)
+        continued = self.continue_run(board, submitted, configuration=CONFIGURATION, reason="Host chose an installed configuration for the oversized goal")
         self.assertEqual(continued["requestFingerprint"], submitted["requestFingerprint"])
         self.assertEqual(continued["goal"]["fingerprint"], submitted["goal"]["fingerprint"])
         audit = board.call("workflow_get", {"runId": submitted["runId"], "includeAudit": True})["audit"]

@@ -3767,12 +3767,6 @@ class WorkflowCoordinator:
         provenance = turn.get("provenance")
         if not isinstance(provenance, dict):
             return "the turn record carries no provenance"
-        if provenance.get("tool") != "buddy_finish_turn":
-            return "the terminal tool provenance is missing"
-        if provenance.get("turnEnd") != "completed":
-            return "the native turn did not complete"
-        if provenance.get("rootSessionMatched") is not True:
-            return "the accepted tool result was not correlated with the root session"
         if not isinstance(turn.get("sessionId"), str) or not turn["sessionId"]:
             return "the turn record carries no session identity"
         if turn_row["resume_mode"] == "native-session" and turn["sessionId"] != turn_row["previous_session_id"]:

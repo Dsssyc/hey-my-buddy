@@ -116,7 +116,6 @@ class Adapter:
     """Base class for the built-in adapters."""
 
     name = "base"
-    decision_execution = False
     capabilities: tuple[str, ...] = ()
     native_resume = False
     model_discovery = False

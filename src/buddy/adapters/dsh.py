@@ -30,7 +30,6 @@ def node_binary() -> str | None:
 
 
 class DshAdapter(Adapter):
-    decision_execution = True
     name = "dsh"
     capabilities = ("dsh", "inquiry", "workspace", "cancel", "artifacts", "deadline")
     model_discovery = True
@@ -251,6 +250,11 @@ class DshAdapter(Adapter):
 
     @staticmethod
     def validate_turn_provenance(record: dict) -> str | None:
+        provenance = record.get("provenance")
+        if not isinstance(provenance, dict) or provenance.get("tool") != "buddy_finish_turn" or provenance.get("turnEnd") != "completed":
+            return "the native terminal tool did not complete the turn"
+        if provenance.get("rootSessionMatched") is not True:
+            return "the accepted tool result was not correlated with the root session"
         if (record.get("provenance") or {}).get("flush") not in ("awaited", "flushed"):
             return "the session flush was not awaited before the turn record was written"
         return None

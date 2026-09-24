@@ -26,6 +26,7 @@ class SharedTurnIOTests(ZcodeFixtureCase):
 
     def test_adapter_specific_flush_does_not_bypass_common_identity_or_stop(self):
         context = self.context()
+        context.spec["adapter"] = "dsh"
         turn_io.prepare_turn(context)
         record = self.record(context)
         context.turn_output_file().write_text(json.dumps(record))
@@ -37,8 +38,17 @@ class SharedTurnIOTests(ZcodeFixtureCase):
             self.assertIsNotNone(turn_io.read_turn(context, True, 0, DshAdapter.validate_turn_provenance)[1])
         record["provenance"].pop("flush")
         context.turn_output_file().write_text(json.dumps(record))
-        self.assertIsNone(turn_io.read_turn(context, True, 0)[1], "common IO must not impose a DSH flush")
+        self.assertIn("flush", turn_io.read_turn(context, True, 0)[1], "the default path uses the real DSH validator")
         self.assertIn("flush", turn_io.read_turn(context, True, 0, DshAdapter.validate_turn_provenance)[1])
+        record["provenance"] = {"tool": "other", "turnEnd": "completed", "rootSessionMatched": True, "flush": "awaited"}
+        context.turn_output_file().write_text(json.dumps(record))
+        self.assertIn("terminal tool", turn_io.read_turn(context, True, 0)[1])
+
+        zcode_context = self.context(index=2)
+        zcode_context.spec["adapter"] = "zcode"
+        turn_io.prepare_turn(zcode_context)
+        zcode_context.turn_output_file().write_text(json.dumps(self.record(zcode_context)))
+        self.assertIn("ZCode", turn_io.read_turn(zcode_context, True, 0)[1])
 
     def test_immutable_receipts_cannot_overwrite_previous_evidence(self):
         path = self.root / "immutable.json"

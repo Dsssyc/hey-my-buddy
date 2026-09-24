@@ -88,11 +88,16 @@ class RoutingPreferenceWorkflowTests(WorkflowTestCase):
 
     @staticmethod
     def annotations(board):
-        # The branch baseline is schema 9; Host's integration supplies this table in schema 10.
-        with board.store.db.write() as connection:
-            connection.execute("CREATE TABLE evaluation_annotations(profile_id TEXT PRIMARY KEY, text TEXT NOT NULL, revision INTEGER NOT NULL, updated_at TEXT NOT NULL)")
-            connection.execute("INSERT INTO evaluation_annotations VALUES(?,?,?,?)",
-                               (PROFILE_ID, "Human preference for this workflow", 2, "2026-09-25T00:00:00Z"))
+        catalog = board.call("model_catalog_refresh", {"requestId": "annotations-catalog"})
+        grant = board.console_call("evaluation_write_begin", {
+            "requestId": "annotations-writer", "expectedRevision": catalog["tableRevision"], "kind": "human",
+        })
+        board.console_call("user_policy_publish", {
+            "commandId": "annotations-publish", "writerId": grant["writerId"],
+            "generation": grant["generation"], "writerToken": grant["writerToken"],
+            "expectedRevision": grant["tableRevision"],
+            "annotationChanges": [{"profileId": PROFILE_ID, "text": "Human preference for this workflow"}],
+        })
 
     def routed(self, board, *, request_id, preferences, **constraints):
         result = board.call("workflow_submit", {

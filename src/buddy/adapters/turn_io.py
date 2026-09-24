@@ -153,14 +153,12 @@ def read_turn(context: ExecutionContext, shutdown_confirmed: bool, exit_code: in
     error = validate_outcome(record.get("outcome"))
     if error:
         return None, error
-    p = record.get("provenance")
-    if not isinstance(p, dict) or p.get("tool") != "buddy_finish_turn" or p.get("turnEnd") != "completed":
-        return None, "the native terminal tool did not complete the turn"
-    if p.get("rootSessionMatched") is not True:
-        return None, "the accepted tool result was not correlated with the root session"
     if not isinstance(record.get("sessionId"), str) or not record["sessionId"]:
         return None, "the turn record carries no session identity"
-    error = validate_provenance(record) if validate_provenance else None
+    if validate_provenance is None:
+        from . import adapter
+        validate_provenance = adapter(context.spec["adapter"]).validate_turn_provenance
+    error = validate_provenance(record)
     return (None, error) if error else (record, None)
 
 
