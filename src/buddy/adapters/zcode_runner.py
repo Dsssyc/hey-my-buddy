@@ -623,6 +623,8 @@ def run(control: dict, cancelled: threading.Event) -> tuple[dict, int]:
             record["provenance"] = evidence.provenance()
     except NativeError as error:
         result.update(status="cancelled" if error.code == "cancelled" else "error", code=error.code, error=str(error))
+        if error.code == "native-disconnected":
+            result["failureKind"] = "transport"
         record = None
     except (OSError, ValueError, TypeError, KeyError, AttributeError, RecursionError):
         result.update(status="error", code="invalid-native-result", error="the native execution returned invalid or incomplete data")

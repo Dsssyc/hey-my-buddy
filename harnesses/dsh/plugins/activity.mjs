@@ -32,7 +32,6 @@ const ACTIVITY_VERSION = 1;
 /** Bounds copied from the frozen contract; a longer value is truncated, never dropped silently. */
 const MAX_SESSION_ID = 256;
 const MAX_TOOL_NAME = 64;
-const MAX_WAITING_REASON = 256;
 
 /** A same-phase update is coalesced into this window; a phase change always writes. */
 const DEFAULT_MIN_INTERVAL_MS = 2000;
@@ -79,6 +78,8 @@ function writeSidecar(path, document) {
   }
   try {
     renameSync(temporary, path);
+    const parent = openSync(dirname(path), 'r');
+    try { fsyncSync(parent); } finally { closeSync(parent); }
   } catch (error) {
     try { unlinkSync(temporary); } catch { /* best effort */ }
     throw error;
