@@ -42,6 +42,7 @@ import c_two as cc
 #: Identifier of the applied profile, echoed in every report so a running process
 #: can be compared against the source it claims to run.
 PROFILE_ID = "buddy-lightweight-1"
+MAX_WAIT_CAPACITY = 48
 
 _MIB = 1024 * 1024
 

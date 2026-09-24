@@ -469,7 +469,10 @@ class Daemon:
         self.started_at = utc_now()
         self.service_id = str(uuid.uuid4())
         self.token = secrets.token_urlsafe(32)
-        self.wait_admission = WaitAdmission(_env_int("BUDDY_WAIT_CAPACITY", 32))
+        wait_capacity = _env_int("BUDDY_WAIT_CAPACITY", 32)
+        if wait_capacity > rpc_config.MAX_WAIT_CAPACITY:
+            raise BoardError("INVALID_ARGUMENT", "BUDDY_WAIT_CAPACITY cannot exceed 48; control operations reserve the remaining RPC callbacks")
+        self.wait_admission = WaitAdmission(wait_capacity)
         self.store = BoardStore(
             self.directory,
             max_concurrent=_env_int("BUDDY_MAX_CONCURRENT", 2),

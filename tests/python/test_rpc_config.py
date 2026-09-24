@@ -31,6 +31,7 @@ import sys
 import tempfile
 import time
 import unittest
+from unittest import mock
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
@@ -318,6 +319,18 @@ class ProfileTests(unittest.TestCase):
         self.assertEqual(set(rpc_config.configured_roles()), {"client", "server"})
         created = {key for key in os.environ if key not in before}
         self.assertEqual(created, set(), "the private C-Two profile must not be exported to child processes")
+
+    def test_wait_admission_cannot_consume_every_native_callback(self):
+        from buddy.daemon import Daemon
+        from buddy.errors import BoardError
+        with tempfile.TemporaryDirectory(prefix="buddy-wait-bound-") as root:
+            with mock.patch.dict(os.environ, {"BUDDY_WAIT_CAPACITY": "64"}):
+                with self.assertRaises(BoardError) as raised:
+                    Daemon(Path(root))
+                self.assertEqual(raised.exception.code, "INVALID_ARGUMENT")
+            with mock.patch.dict(os.environ, {"BUDDY_WAIT_CAPACITY": "48"}):
+                daemon = Daemon(Path(root))
+                self.assertEqual(daemon.wait_admission.capacity, 48)
 
 
 class IsolatedTransportTests(unittest.TestCase):

@@ -206,7 +206,7 @@ Decision statuses are `queued`, `running`, `completed`, `needs-host`, `failed`, 
 | Attempt lease `BUDDY_LEASE_SECONDS` | 120 s | 15–3600 s |
 | Business attempts `BUDDY_MAX_CONCURRENT` | 2 | 1–8 |
 | Decision attempts `BUDDY_MAX_DECISIONS` | 1 | 1–4, independent of business capacity |
-| Wait capacity `BUDDY_WAIT_CAPACITY` | 32 | server-side admission |
+| Wait capacity `BUDDY_WAIT_CAPACITY` | 32 | 1–48; leaves native RPC callbacks available for control operations |
 
 ## Error codes
 

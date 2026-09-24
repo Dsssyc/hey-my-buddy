@@ -257,6 +257,7 @@ class BoardService(_BaseResource):
                 "surplusDraining": list(pool.get("surplusDraining") or []),
                 "surplusRetained": [dict(row) for row in pool.get("surplusRetained") or []],
                 "waitCapacity": self.control.get("wait_capacity"),
+                "rpcProfile": self.control.get("rpc_profile"),
                 "persistenceError": self.store.persistence_error,
                 "integrity": self.store.integrity(),
                 "activeWork": len(self.store.active_work()["attempts"]),
