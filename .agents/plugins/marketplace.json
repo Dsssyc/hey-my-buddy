@@ -1,0 +1,20 @@
+{
+  "name": "hey-my-buddy",
+  "interface": {
+    "displayName": "Hey My Buddy"
+  },
+  "plugins": [
+    {
+      "name": "hey-my-buddy",
+      "source": {
+        "source": "local",
+        "path": "./"
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_INSTALL"
+      },
+      "category": "Productivity"
+    }
+  ]
+}

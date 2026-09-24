@@ -4,10 +4,10 @@
 The plugin ships exactly what a user runs — the uv project (root ``pyproject.toml``
 and ``uv.lock``), the single ``bin/buddy`` launcher, ``src/buddy``, the DSH runtime
 assets declared in ``packaging/runtime-assets.json`` (that manifest included), the
-one ``skills/buddy`` entrypoint and the current documentation. Test suites, virtual
-environments, the React source frontend and local scratch are excluded by
-construction, and the staged inventory is verified before it replaces the
-destination.
+one ``skills/buddy`` entrypoint, the ``.agents`` marketplace catalog and the current
+documentation. Test suites, virtual environments, the React source frontend and local
+scratch are excluded by construction, and the staged inventory is verified before it
+replaces the destination.
 """
 import argparse
 import json
@@ -22,8 +22,12 @@ sys.path.insert(0, str(SOURCE_ROOT / "src"))
 
 from buddy.runtime import iter_assets  # noqa: E402
 
-#: Plugin metadata plus the current documentation and the one agent entrypoint.
+#: Plugin metadata plus the current documentation and the one agent entrypoint. The
+#: committed ``.agents`` catalog makes this repository a local/Git marketplace, and the
+#: staged copy carries it too: a staged plugin directory is itself a marketplace root
+#: that needs no personal or public catalog.
 PLUGIN_PATHS = (
+    ".agents",
     ".codex-plugin",
     "plugin.json",
     "LICENSE",

@@ -19,6 +19,7 @@ from typing import Any
 
 import c_two as cc
 
+from . import rpc_config
 from .contracts import CONTROL_NAME, CONTRACT_VERSION, WAIT_NAME, BuddyControl, BuddyWait
 from .errors import BoardError
 
@@ -192,6 +193,9 @@ def _request(endpoint: dict, operation: str, params: dict, resource: str = "cont
     request = encode_message({"token": endpoint["token"], **params})
     contract = BuddyControl if resource == "control" else BuddyWait
     name = CONTROL_NAME if resource == "control" else WAIT_NAME
+    # One process may not connect before the private profile is in place; this is the
+    # single client chokepoint, and the call is a no-op after the first time.
+    rpc_config.configure_client()
     try:
         with cc.connect(contract, name=name, address=endpoint["address"]) as service:
             raw = getattr(service, operation)(request)

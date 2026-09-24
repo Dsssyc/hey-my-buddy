@@ -1,35 +1,47 @@
 # Operations
 
-How to install, run, recover and retire a Buddy installation. Command syntax and fields are in [cli.md](cli.md); internals are in [architecture.md](architecture.md); the practical path is in [usage.md](usage.md). The supported distribution is the Codex plugin: one `bin/buddy` launcher, `src/buddy` source, the DSH harness assets, the built console and the `skills/buddy` entrypoint. There is no standalone skill directory and no old-layout launcher.
+How to install, run, recover and retire a Buddy installation. Command syntax and fields are in [cli.md](cli.md); internals are in [architecture.md](architecture.md); the practical path is in [usage.md](usage.md). The supported distribution is the Codex plugin: the `.agents` marketplace catalog, one `bin/buddy` launcher, `src/buddy` source, the DSH harness assets, the built console and the `skills/buddy` entrypoint. There is no standalone skill directory and no old-layout launcher.
 
 ## Installation
 
-Install the `hey-my-buddy` plugin from an existing marketplace that carries it. To make a new local marketplace, create `/path/to/buddy-local/.agents/plugins/marketplace.json` with:
+The supported distribution is the Codex plugin `hey-my-buddy`, and this repository is its own marketplace: the committed `.agents/plugins/marketplace.json` points at the plugin root, so a first installation depends on no personal marketplace entry and no public registry listing. A public listing is optional follow-up work and is not claimed here.
 
-```json
-{
-  "name": "buddy-local",
-  "interface": {"displayName": "Buddy Local"},
-  "plugins": [{
-    "name": "hey-my-buddy",
-    "source": {"source": "local", "path": "./plugins/hey-my-buddy"},
-    "policy": {"installation": "AVAILABLE", "authentication": "ON_INSTALL"},
-    "category": "Productivity"
-  }]
-}
-```
-
-From a full checkout, stage the plugin into that marketplace, register the marketplace root and install:
+From Git, register the repository as a marketplace and install the entry it publishes:
 
 ```sh
-uv run --frozen python packaging/stage-plugin.py --destination /path/to/buddy-local/plugins/hey-my-buddy
-codex plugin marketplace add /path/to/buddy-local
-codex plugin add hey-my-buddy@buddy-local
+codex plugin marketplace add Dsssyc/hey-my-buddy --ref main
+codex plugin add hey-my-buddy@hey-my-buddy
 ```
 
-`packaging/stage-plugin.py` copies the metadata files, both READMEs, `AGENTS.md`, `docs`, `skills/buddy` and the declared runtime assets, refuses tests, virtual environments, the React source and scratch content, and replaces the destination atomically after verifying the inventory. After installation or upgrade, start a new Codex task to load that plugin version's `$buddy` skill and resolve its bundled launcher. On setup or recovery, check the installed identity:
+From a local checkout, register that checkout's absolute path instead; the catalog resolves `"path": "./"` against the marketplace root:
 
 ```sh
+codex plugin marketplace add /abs/path/to/hey-my-buddy
+codex plugin add hey-my-buddy@hey-my-buddy
+```
+
+A local (non-Git) marketplace resolves in place, so installing copies the working tree — including untracked and ignored content such as `.venv`. Prefer a fresh clone or the staged path below when the source is a development checkout.
+
+`packaging/stage-plugin.py` assembles the supported tree and carries the same catalog, which makes a staged plugin directory a marketplace root of its own:
+
+```sh
+uv run --frozen python packaging/stage-plugin.py --destination /path/to/plugins/hey-my-buddy
+codex plugin marketplace add /path/to/plugins/hey-my-buddy
+codex plugin add hey-my-buddy@hey-my-buddy
+```
+
+An already configured marketplace whose entry points at a staged directory works too: stage into that marketplace (for example `/path/to/marketplace/plugins/hey-my-buddy`) and run `codex plugin add hey-my-buddy@your-marketplace` with its catalog name. `packaging/stage-plugin.py` copies the metadata files including `.agents/plugins/marketplace.json`, both READMEs, `AGENTS.md`, `docs`, `skills/buddy` and the declared runtime assets, refuses tests, virtual environments, the React source and scratch content, and replaces the destination atomically after verifying the inventory.
+
+Keep the following facts in mind for every install path:
+
+- The manifest `version` is the install cachebuster; `codex plugin add` is both the install and the update path, so publish a new version to publish new code. The repository root `plugin.json` and `.codex-plugin/plugin.json` must keep the same `name` and `version`; staging refreshes the portable copy from the Codex manifest.
+- Do not pass `--sparse` with this repository's catalog: the plugin lives at the marketplace root (`"path": "./"`), and a sparse checkout that omits the cited path leaves an entry Codex silently skips. A Git marketplace snapshot is refreshed with `codex plugin marketplace upgrade <name>`; pin it with `--ref`.
+- The implicit personal marketplace (`~/.agents/plugins/marketplace.json`, listed by Codex with root `$HOME`) is optional and unrelated. Nothing in this installation depends on it, and no public listing is required.
+
+After installation or upgrade, start a new Codex task to load that plugin version's `$buddy` skill and resolve its bundled launcher, then check the installed identity and the resolved marketplace:
+
+```sh
+codex plugin list --json
 "$BUDDY" health
 "$BUDDY" runtime
 "$BUDDY" capabilities
@@ -54,6 +66,7 @@ Buddy installs Python dependencies with uv from a frozen lock (PyPI `c-two==0.5.
 - **`BUDDY_DEV_SOURCE=1` suppresses automatic materialization for source tests.** It uses the checkout when no READY runtime has been selected; an explicit `BUDDY_RUNTIME` pin still takes precedence, so use a private `BUDDY_RUNTIME_ROOT` and check the reported identity when testing source.
 - **Explicit `worker-start` uses the same runtime selection.** Starting an additional supervisor from a staged plugin launcher selects or materializes a READY runtime, uses its Python and package imports, and aligns its Python bridge and environment paths with that runtime. Existing supervisors keep the runtime they already loaded. An attempt's `runtimeIdentity` records the runtime actually executing its Worker.
 - **Changing any hashed asset changes the runtime.** `packaging/runtime-assets.json`, `pyproject.toml`, `uv.lock`, `bin/buddy`, `src/buddy` (including the console build) and `harnesses/dsh/scripts` and `harnesses/dsh/plugins` are hashed, so a code or dependency change produces a new content-addressed directory on the next cold start. A daemon already running keeps its own runtime and code until it is restarted or stopped.
+- **The daemon and every client process apply Buddy's private C-Two profile before their first `register`/`connect`** (`buddy.rpc_config.configure_server()`/`configure_client()`). The shared-memory pool is bounded to two 16 MiB segments instead of the default four 256 MiB segments, reassembly to two 16 MiB segments with a 16 MiB reassembled-payload ceiling, and the server callback capacity to 64 — the released C-Two maximum — because the C-Two default of 10 is below Buddy's 32 admitted waits and delayed an ordinary control call by 7.4 s in a measured run. The profile goes in through C-Two's public Python overrides inside the Buddy process: it is never written to the environment, never inherited by a coding child (including work on C-Two itself) and never applied to another C-Two project. `pool_enabled=False` is not an off switch in `c-two==0.5.1` (a 256 MiB shared-memory segment is still mapped), so Buddy offers no disable mode. `buddy.rpc_config.report()` publishes only the whitelisted overrides and the bounds they imply; a configured capacity is a ceiling, not RSS, and mapped shared memory and resident memory are separate measurements.
 - **A named C-Two surface change advances `CONTRACT_VERSION`.** Version 0.7.0 adds `evaluation_prepare` and `evaluation_history`, removes `evaluation_maintain`, and uses schema 9. Finish and verify owned work before switching contracts, then use the old service's matching launcher/runtime to request `restart` and the new launcher to cold-start its replacement on a verified current-schema board. Refresh idle supervisors too. Retain the old stable runtime and a complete recoverable state backup through the switch; a new client cannot control an old named interface. No compatibility facade or startup conversion exists.
 - **`restart` is the detach without cancellation.** It writes a resume file, returns, and preserves every independent worker; the next autostart-capable CLI call starts a fresh daemon (which reconciles existing attempts). Use it when the host should move to new code but owned work must survive. It is not a schema upgrade.
 - **`stop` is the explicit "cancel owned work and stop" operation**, not a required cache-refresh step: it cancels queued tasks, writes durable cancel intent for active attempts, drains for a bounded interval and reports `unresolvedAttempts`. It cooperatively stops every supervisor recorded in the daemon-managed pool; an independently named supervisor started with `worker-start` needs its own exact-ID `worker-stop`.

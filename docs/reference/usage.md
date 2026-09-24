@@ -10,12 +10,14 @@ For coding work, use the governed lifecycle. Its normal path is one logical `run
 
 You need macOS or Linux, [uv](https://docs.astral.sh/uv/) with Python 3.12–3.14, Node.js 20+ for the DSH runner, a working local `dsh` and/or ZCode installation with its provider credentials, and Codex plugin support. Buddy uses the harness credentials already configured and leaves global model settings alone.
 
-Install the `hey-my-buddy` plugin from a marketplace that carries it. The following assumes a configured marketplace entry; for first-time setup use [installation](operations.md#installation).
+Install the `hey-my-buddy` plugin from this repository's own marketplace; the committed `.agents/plugins/marketplace.json` serves both a local checkout and a Git clone, so no personal marketplace and no public listing is needed.
 
 ```sh
-uv run --frozen python packaging/stage-plugin.py --destination /path/to/marketplace/plugins/hey-my-buddy
-codex plugin add hey-my-buddy@your-marketplace
+codex plugin marketplace add /abs/path/to/hey-my-buddy   # or Dsssyc/hey-my-buddy --ref main
+codex plugin add hey-my-buddy@hey-my-buddy
 ```
+
+[Installation](operations.md#installation) owns the staged local package, the existing-marketplace path and the post-install verification steps.
 
 Start a new task so the `$buddy` skill loads. The skill resolves the plugin's own `bin/buddy` launcher; there is no separate skill directory to install, no old-layout fallback and no standalone distribution.
 

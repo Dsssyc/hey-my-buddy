@@ -18,14 +18,14 @@ Buddy 让 Host agent 把边界明确的工作交给本地编码 harness，同时
 
 需要 macOS 或 Linux、[uv](https://docs.astral.sh/uv/) 与 Python 3.12–3.14、DSH 所需的 Node.js 20+ 及所安装 ZCode CLI 要求的运行环境，以及已配置服务商凭据的本地 `dsh` 和/或 ZCode。Buddy 使用 harness 已配置的凭据，不修改全局模型设置。
 
-从带有 `hey-my-buddy` 的插件市场安装。下面的命令适用于已经配置好市场、且市场条目指向该打包目录的情况：
+从本仓库自带的插件市场安装 `hey-my-buddy`，不需要个人市场，也不依赖任何公共目录上架。从本地 checkout 安装：
 
 ```sh
-uv run --frozen python packaging/stage-plugin.py --destination /path/to/marketplace/plugins/hey-my-buddy
-codex plugin add hey-my-buddy@your-marketplace
+codex plugin marketplace add /abs/path/to/hey-my-buddy
+codex plugin add hey-my-buddy@hey-my-buddy
 ```
 
-首次本地安装请先按[市场配置说明](docs/reference/operations.md#installation)设置。新建任务以加载 `$buddy` skill。skill 会从插件自身位置解析 `bin/buddy` 启动器；没有需要单独安装的 skill，也没有旧目录回退。首次需要服务的命令会在 `~/.local/share/hey-my-buddy/runtime` 安装稳定运行时，之后替换插件不会中断正在运行的工作。
+Git 克隆使用同一个市场：`codex plugin marketplace add Dsssyc/hey-my-buddy --ref main` 会注册仓库内的清单；`packaging/stage-plugin.py` 打包出的目录本身也可作为市场根。分阶段本地安装、已有市场条目和安装后的核验步骤见[安装说明](docs/reference/operations.md#installation)。新建任务以加载 `$buddy` skill。skill 会从插件自身位置解析 `bin/buddy` 启动器；没有需要单独安装的 skill，也没有旧目录回退。首次需要服务的命令会在 `~/.local/share/hey-my-buddy/runtime` 安装稳定运行时，之后替换插件不会中断正在运行的工作。
 
 先提交一个有界目标：
 

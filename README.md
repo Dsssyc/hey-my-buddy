@@ -18,14 +18,14 @@ Use it for scoped implementation, testing, reproducible investigations, document
 
 You need macOS or Linux, [uv](https://docs.astral.sh/uv/) with Python 3.12–3.14, Node.js 20+ for DSH and the runtime required by your installed ZCode CLI, and a working local `dsh` and/or ZCode installation with its own provider credentials. Buddy uses the credentials already configured for the harness and leaves global model settings alone.
 
-Install the `hey-my-buddy` plugin from a marketplace that carries it. For a configured marketplace whose entry points at your staged directory:
+Install the `hey-my-buddy` plugin from this repository's own marketplace; no personal marketplace and no public registry listing is required. From a local checkout:
 
 ```sh
-uv run --frozen python packaging/stage-plugin.py --destination /path/to/marketplace/plugins/hey-my-buddy
-codex plugin add hey-my-buddy@your-marketplace
+codex plugin marketplace add /abs/path/to/hey-my-buddy
+codex plugin add hey-my-buddy@hey-my-buddy
 ```
 
-For a first local installation, follow the [marketplace setup](docs/reference/operations.md#installation). Start a new task so the `$buddy` skill loads. The skill resolves the plugin's own `bin/buddy` launcher; there is no separate skill to install and no old-layout fallback. The first command that needs the service installs a stable runtime under `~/.local/share/hey-my-buddy/runtime`, so replacing the plugin later does not disturb running work.
+A Git clone is the same marketplace: `codex plugin marketplace add Dsssyc/hey-my-buddy --ref main` registers the committed catalog, and `packaging/stage-plugin.py` produces a staged tree that is itself a marketplace root. The [installation reference](docs/reference/operations.md#installation) has the staged local path, the existing-marketplace path and the verification steps. Start a new task so the `$buddy` skill loads. The skill resolves the plugin's own `bin/buddy` launcher; there is no separate skill to install and no old-layout fallback. The first command that needs the service installs a stable runtime under `~/.local/share/hey-my-buddy/runtime`, so replacing the plugin later does not disturb running work.
 
 Start with a bounded goal:
 

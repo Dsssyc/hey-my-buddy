@@ -22,6 +22,7 @@ import uuid
 
 import c_two as cc
 
+from . import rpc_config
 from . import runtime
 from . import scheduling
 from .console import Console
@@ -537,6 +538,10 @@ class Daemon:
             service = self.service()
             self.console = Console(self.store, service)
             wait_service = WaitService(self.store, self.wait_admission, token=self.token)
+            # Buddy's private C-Two profile goes in before the first register: the
+            # pool, reassembly and execution capacity are set through C-Two's public
+            # overrides, never through inherited environment variables.
+            self.control["rpc_profile"] = rpc_config.configure_server()
             cc.register(
                 BuddyControl,
                 service,
