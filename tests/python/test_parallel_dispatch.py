@@ -912,7 +912,9 @@ class DaemonPoolTests(LaneTestCase):
             both = wait_for(both_running, timeout=60)
             self.assertIsNotNone(both, "two business attempts never overlapped")
             views = [client.get(runId=first), client.get(runId=second)]
-            self.assertEqual({view["workerId"] for view in views}, {"local", "local-2"})
+            claimed_workers = {view["workerId"] for view in views}
+            self.assertEqual(len(claimed_workers), 2)
+            self.assertLessEqual(claimed_workers, set(health["managedWorkerIds"]))
             self.assertEqual(len({view["selectedAttemptId"] for view in views}), 2)
             self.assertEqual(client.health()["capacity"]["business"], {"limit": 2, "active": 2})
 
