@@ -90,6 +90,18 @@ class CodexAdapter(Adapter):
         elif exit_code == 0 and payload.get("status") == "ok" and shutdown:
             status = "ok"
         record, error = _read_native_turn(context, shutdown, exit_code)
+        session_id = payload.get("sessionId")
+        payload["nativeSession"] = {
+            "adapter": "codex",
+            "sessionId": session_id if isinstance(session_id, str) else None,
+            "captured": isinstance(session_id, str) and bool(session_id),
+            "storageScope": "harness-user-store",
+            "storageOwner": "harness-user-store",
+            "nativeAppVisibility": "unknown",
+            "resumeMode": (context.turn_input or {}).get("resumeMode"),
+            "resumable": bool(record is not None and shutdown),
+            "note": "Codex owns the native thread in its configured home; App indexing visibility is unverified. Native continuation rechecks the goal, checkout, configuration and last completed turn binding.",
+        }
         payload["turnResultPath"] = str(context.turn_output_file())
         if isinstance(getattr(context, "effective_workspace", None), dict):
             payload["workspaceManifest"] = context.effective_workspace

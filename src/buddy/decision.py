@@ -229,6 +229,7 @@ class DecisionCoordinator:
             "profileId": row["profile_id"],
             "revision": int(row["revision"]),
             "summary": row["summary"],
+            "origin": row["origin"],
             "strengths": json.loads(row["strengths_json"]),
             "limitations": json.loads(row["limitations_json"]),
             "risks": json.loads(row["risks_json"]),

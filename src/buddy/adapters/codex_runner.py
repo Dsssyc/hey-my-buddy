@@ -16,7 +16,7 @@ from pathlib import Path
 from .base import ProcessHandle
 from .codex_config import cli_command, native_environment
 from .codex_protocol import CodexProtocolError, Connection, OUTCOME_SCHEMA, TurnEvidence, decode_json, parse_outcome
-from .turn_io import canonical_json, input_hash, private_json
+from .turn_io import ASSISTANCE_HINTS, canonical_json, input_hash, private_json
 
 
 def _catalog(connection: Connection, version: str) -> dict:
@@ -140,8 +140,7 @@ def _run(control: dict, cancelled: threading.Event) -> tuple[dict, int]:
         os.close(fd)
     handle = ProcessHandle(process, own_group=True, log_paths={})
     result = {"status": "error", "mode": "codex", "harnessVersion": version,
-              "requested": control.get("spec"), "resolved": None, "observed": None,
-              "nativeSessionStorage": "codex-home", "nativeAppVisible": None}
+              "requested": control.get("spec"), "resolved": None, "observed": None}
     record = None
     connection = None
     thread_id = turn_id = None
@@ -213,6 +212,7 @@ def _run(control: dict, cancelled: threading.Event) -> tuple[dict, int]:
             result["sessionId"] = thread_id
             prompt = "\n\n".join([
                 "This is a governed Buddy root turn executed through Codex. Work only inside the allocated checkout and honor the frozen Host scope. Internal Codex subagents may assist. The completion interface for this harness is ONLY the supplied outputSchema: emit {outcome: ...} as the final answer. No buddy_finish_turn tool exists or is required here. A completed outcome must have request:null. Use assistance or attention, with a request object, only when actual work or a Host decision remains. Do not create another Buddy goal.",
+                *ASSISTANCE_HINTS,
                 Path(control["taskFile"]).read_text(), canonical_json(turn_input),
             ])
             response = connection.call("turn/start", {"threadId": thread_id, "input": [{"type": "text", "text": prompt}],

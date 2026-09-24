@@ -53,8 +53,9 @@ class CodexAdapterTests(unittest.TestCase):
         outcome = self.execute(context)
         self.assertEqual(outcome.status, "ok", outcome.to_report())
         self.assertTrue(outcome.shutdown_confirmed)
-        self.assertIsNone(outcome.result["nativeAppVisible"])
-        self.assertEqual(outcome.result["nativeSessionStorage"], "codex-home")
+        self.assertEqual(outcome.result["nativeSession"]["nativeAppVisibility"], "unknown")
+        self.assertEqual(outcome.result["nativeSession"]["storageScope"], "harness-user-store")
+        self.assertTrue(outcome.result["nativeSession"]["resumable"])
         turn = outcome.result["turn"]
         self.assertEqual(turn["outcome"]["disposition"], "completed")
         self.assertEqual(turn["provenance"]["nativeThreadId"], turn["sessionId"])
@@ -75,6 +76,7 @@ class CodexAdapterTests(unittest.TestCase):
         self.assertEqual(outcome.result["code"], "invalid-result")
         self.assertIn("sessionId", outcome.result)
         self.assertNotIn("turn", outcome.result)
+        self.assertFalse(outcome.result["nativeSession"]["resumable"])
 
     def test_native_resume_requires_matching_private_binding_and_history(self):
         first = self.execute(self.context())

@@ -310,6 +310,7 @@ class SelectionRequestTests(DecisionTestCase):
             [profile["profileId"] for profile in document["profiles"]], [PROFILE_ID, SECOND_PROFILE_ID]
         )
         self.assertEqual(document["cards"][0]["risks"], ["fixture risk"])
+        self.assertEqual(document["cards"][0]["origin"], "maintenance")
         self.assertEqual(document["evidence"][0]["evidenceId"], first_evidence)
         self.assertEqual(document["evidence"][0]["project"], None)
         # The persisted audit input carries the bounded table and evidence summaries
