@@ -1941,7 +1941,7 @@ class BoardStore:
             attempt, _worker = self._verify_attempt_actor(connection, params)
             if attempt["execution_state"] == "finished":
                 raise BoardError("ATTEMPT_FINISHED", "This attempt is already finished; progress is not accepted")
-            if phase in ("starting", "executing", "finalizing"):
+            if phase in ("starting", "executing", "finalizing") and attempt["execution_state"] != "uncertain":
                 self._transition_attempt(connection, attempt, phase)
             now = self.now()
             connection.execute(

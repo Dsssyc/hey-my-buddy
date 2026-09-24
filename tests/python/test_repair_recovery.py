@@ -207,6 +207,12 @@ class RenewalAndRefusal(RecoveryBase):
         self.assertEqual(renewed["task"]["queueReason"], UNCERTAIN_QUEUE_REASON)
         self.assertEqual([entry["state"] for entry in board.store.resource_claims()], ["retained"])
 
+        client.progress("w-recover", attempt["attemptId"], attempt["generation"], nonce,
+                        "native work is still active", phase="executing")
+        observed = client.get(runId=task["runId"])
+        self.assertEqual(observed["attemptState"], "uncertain", "progress cannot bypass instance-bound reconciliation")
+        self.assertEqual([entry["state"] for entry in board.store.resource_claims()], ["retained"])
+
         with self.assertRaises(BoardError) as caught:
             client.reconcile(
                 "w-recover", attempt["attemptId"], attempt["generation"], nonce, worker_instance="another-instance"
