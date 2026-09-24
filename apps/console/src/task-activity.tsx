@@ -144,7 +144,10 @@ function record(value: unknown): Record<string, unknown> | null {
  * is only an accepted hoisted copy; nothing is inferred from status alone.
  */
 export function recordedTermination(task: Task): string | null {
-  const receipt = record(record(task.selectedAttempt)?.result);
+  const attempt = record(task.selectedAttempt);
+  const selectedId = task.activeAttemptId || task.selectedAttemptId;
+  if (selectedId && attempt?.attemptId !== selectedId) return null;
+  const receipt = record(attempt?.result);
   const stored =
     typeof receipt?.terminationReason === "string" ? receipt.terminationReason.trim() : "";
   const direct =

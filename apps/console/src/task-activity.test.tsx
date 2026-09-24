@@ -29,6 +29,12 @@ function task(overrides: Partial<Task> = {}): Task {
 afterEach(cleanup);
 
 describe("bounded activity projection", () => {
+  it("does not show an earlier termination as the new attempt's outcome", () => {
+    const current = task({ activeAttemptId: "new", selectedAttemptId: "old",
+      selectedAttempt: { attemptId: "old", result: { terminationReason: "completed" } } });
+    expect(recordedTermination(current)).toBeNull();
+    expect(terminationText(current)).toBeNull();
+  });
   it("reads only the frozen whitelist and keeps unknown counts unknown", () => {
     const parsed = parseActivity({
       phase: "tool-running",

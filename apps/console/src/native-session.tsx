@@ -37,7 +37,10 @@ function bool(value: unknown): boolean | null {
 }
 
 export function nativeSessionEvidence(task: Task): NativeSessionEvidence | null {
-  const receipt = record(record(task.selectedAttempt)?.result);
+  const attempt = record(task.selectedAttempt);
+  const selectedId = task.activeAttemptId || task.selectedAttemptId;
+  if (selectedId && attempt?.attemptId !== selectedId) return null;
+  const receipt = record(attempt?.result);
   const result = record(receipt?.result);
   if (!result) return null;
   const native = record(result.nativeSession);

@@ -15,6 +15,11 @@ function taskWith(result: Record<string, unknown>, adapter = "dsh"): Task {
 }
 
 describe("native session evidence from the attempt receipt", () => {
+  it("does not attach an earlier receipt to a new active attempt", () => {
+    const older = taskWith({ nativeSession: { sessionId: "old-session", resumable: true } });
+    expect(nativeSessionEvidence({ ...older, selectedAttemptId: "attempt-a", activeAttemptId: "attempt-b" })).toBeNull();
+    expect(nativeSessionEvidence({ ...older, selectedAttemptId: "attempt-a" })?.sessionId).toBe("old-session");
+  });
   it("reads the ZCode private-session facts from the recorded envelope", () => {
     const evidence = nativeSessionEvidence(taskWith({
       nativeSession: {
@@ -80,7 +85,7 @@ describe("native session evidence from the attempt receipt", () => {
     expect(view.textContent).toContain("私有原生根");
     // No fabricated launcher: a private store cannot be opened from this page.
     expect(screen.queryByRole("link")).toBeNull();
-    expect(view.textContent).toContain("私有原生库不能从本页面打开");
+    expect(view.textContent).toContain("可通过本任务的活动、工具摘要与固定产物查看执行情况");
   });
 
   it("renders the Codex native session as harness-owned with unverified visibility", () => {
