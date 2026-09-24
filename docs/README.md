@@ -26,7 +26,7 @@ Both READMEs stay concise and avoid internal terminology; details belong in the 
 
 ## Current references
 
-These pages describe the implemented 0.8 source in this checkout (contract 0.8.0, schema 10). The installed daily runtime remains 0.7.0 on schema 9 with its own deployment capacity (one local installation runs 6 business attempts plus 1 decision; the source default is 2 plus 1), and installing this source awaits an explicit user notice. Installed runtime and source acceptance are separate facts; check `buddy health`, `buddy runtime` and `docs/acceptance/` before assuming a checkout matches the running installation.
+These pages describe the 0.8 source in this checkout (contract 0.8.0, schema 10). Installed runtime and source acceptance are separate facts; check `buddy health`, `buddy runtime` and the [0.8 acceptance record](acceptance/production-repairs-0.8.0.md). Source capacity defaults to two business attempts plus one decision; a deployed board may use different limits.
 
 | Document | Role |
 | --- | --- |
@@ -49,7 +49,7 @@ Detailed commands belong in their owning reference, routed from this page and fr
 
 [ADR-009: Parallel lanes and local console drafts](decisions/009-parallel-lanes-and-local-console-drafts.md) records independent business/routing capacity, cooperative worker-pool retirement, and local drafting with short publication grants.
 
-[ADR-010: Production workflow repair plan](decisions/010-production-workflow-repair-plan.md) is implemented in the 0.8 source: separated user and maintenance publication, user annotations distinct from automatic cards, task-local routing preferences, monotone catalog observation with paged unavailable history, explicit reconnection and bounded activity, scope/integration/cleanup lifecycle operations, a Codex native adapter and adapter-registry decision dispatch. The ZCode inquiry bridge is present only as a first artifact with known fixes underway and no live native acceptance, so it is not claimed as complete. ADR-010 remains the design record for the unit structure and end-to-end acceptance; the owning references above describe what the source actually implements, and installation of 0.8 awaits the user's notice.
+[ADR-010: Production workflow repair plan](decisions/010-production-workflow-repair-plan.md) defines the 0.8 repairs: separated user and maintenance publication, task-local routing preferences, catalog history, recovery and activity, Host-owned workspace lifecycle, native Codex execution and lightweight RPC. The owning references describe the implementation and the [acceptance record](acceptance/production-repairs-0.8.0.md) distinguishes verified behavior from installation. ZCode's checked protocol supports observation but not safe correlated live inquiry.
 
 [ADR-008: Harness-owned evaluation maintenance](decisions/008-harness-owned-evaluation-maintenance.md) was implemented in the 0.7 source and remains current: a skill-equipped Harness performs shared evaluation updates on user request or through its own scheduling facility, only when the user asks for recurring updates. Evidence is shared across source Hosts/projects and read-only in the console. The blackboard retains ordinary business/routing scheduling but does not schedule evaluation maintenance.
 
@@ -67,7 +67,7 @@ Detailed commands belong in their owning reference, routed from this page and fr
 
 ## History and evidence
 
-Current delivery evidence: [parallel dispatch 0.6.2](acceptance/parallel-dispatch-0.6.2.md) and [console/evaluation 0.7.0](acceptance/console-evaluation-0.7.0.md). The 0.7.0 record documents complete validation, the retained-data verification and the installation the user then requested; that 0.7.0/schema-9 runtime is what the daily installation still runs. The 0.8 source has no acceptance record yet, and its installation awaits the user's notice.
+Current delivery evidence: [0.8 production repairs](acceptance/production-repairs-0.8.0.md), [console/evaluation 0.7.0](acceptance/console-evaluation-0.7.0.md) and [parallel dispatch 0.6.2](acceptance/parallel-dispatch-0.6.2.md). The 0.8 record owns the current verification and deferred-installation status; the 0.7 record retains the earlier installation evidence.
 
 | Document | Role |
 | --- | --- |

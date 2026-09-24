@@ -58,7 +58,7 @@ BUDDY="<absolute-plugin-root>/bin/buddy"
 
 服务和 Worker 从上述稳定私有运行时执行。全新黑板位于 `~/.local/share/hey-my-buddy/state`；位于旧默认位置的旧黑板目录保留为归档，不会被读取、转换或导入。工作目录和 Git worktree 都不是操作系统沙箱。
 
-当前限制：仅支持 POSIX；本地单用户 SQLite 状态；ZCode 仅支持 API-key 提供方，其 inquiry 桥仍是首批实现、已知修复仍在进行且未经过真机原生验收；Codex 使用实验性的 App Server，仍需真实模型与安装态验收；没有货币预算、自动社区评价、内置定期维护或原生 App 回合结束后唤醒。只有你明确要求时才会登记后台回访，也不会为了节省 token 或额度而静默回访。日常安装仍运行 0.7.0 / schema 9；当前 0.8 源码（schema 10）已实现但尚未安装，安装等待你的通知。[console/evaluation 0.7.0 验收记录](docs/acceptance/console-evaluation-0.7.0.md) 记录了最近一次已验证的安装态运行时。每次升级后，用 `health` 和 `runtime` 核对实际运行的安装。
+当前限制：仅支持 POSIX；本地单用户 SQLite 状态；ZCode 支持 API-key 提供方和只读原生活动观察，但已核查的 ZCode 3.14.3 协议不能安全投递关联的实时询问。Codex 使用实验性的 App Server，未声明 inquiry 或无工具路由能力。目前不提供货币预算、自动社区评价、内置定期维护或原生 App 回合结束后唤醒。后台回访需要用户明确要求。已验证行为和安装状态见 [0.8 源码验收记录](docs/acceptance/production-repairs-0.8.0.md)；用 `health` 和 `runtime` 核对实际运行的安装。
 
 ## 文档与开发
 

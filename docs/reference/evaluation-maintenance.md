@@ -44,7 +44,7 @@ A stale `expectedRevision` or expired generation is fenced with `REVISION_CONFLI
 
 ## Schema and migration
 
-Schema 10 is the only current runtime schema, for contract 0.8.0. It keeps the schema-9 maintenance structures (`evaluation_maintenance_checkpoints` and the partial index `events_review_seq_idx`) and adds the ADR-010 tables: `attempt_activity`, `catalog_observations`, `catalog_current`, `evaluation_annotations`, `workflow_scope_versions`, `workflow_workspace_conflicts`, `workflow_integrations` and `workspace_cleanup_plans`. There is no runtime migration and no old-version fallback branch: a board that is not schema 10 is refused and retained as an archive. Converting an earlier board is a one-time offline copy transformation performed by the operator with a verified backup; the installed daily runtime remains 0.7.0 on schema 9 until the user authorizes installation.
+Schema 10 is the only current runtime schema, for contract 0.8.0. It keeps the schema-9 maintenance structures (`evaluation_maintenance_checkpoints` and the partial index `events_review_seq_idx`) and adds the ADR-010 tables: `attempt_activity`, `catalog_observations`, `catalog_current`, `evaluation_annotations`, `workflow_scope_versions`, `workflow_workspace_conflicts`, `workflow_integrations` and `workspace_cleanup_plans`. There is no runtime migration and no old-version fallback branch: a board that is not schema 10 is refused and retained as an archive. Converting an earlier board is a one-time offline copy transformation performed by the operator with a verified backup; consult the [source acceptance record](../acceptance/production-repairs-0.8.0.md) for the current installation status.
 
 ## Service and console surface
 

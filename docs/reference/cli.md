@@ -135,7 +135,7 @@ Inquiry rules:
 - A bounded question can return in state `delivered` before any answer exists; check `inquiry.answer.available` (and `message.state`) before reporting an answer. An `answered` journal record without usable text is downgraded to `delivered` with a reason rather than reported as answered.
 - The no-question form reports durable state plus a bounded `live` observation (`agentStatus`, inbox depth, `lastEvent` and up to 20 activity entries); fields it cannot observe are named in `live.unavailable` instead of being reported as zero. `deadline` is explicitly an estimate: `estimated: true`, `kind: "estimated-runner-deadline-from-record-createdAt"`, `deadlineBasis: "createdAt + timeoutSeconds"`, plus clock origin, start/deadline timestamps, remaining seconds and `exactTimingAvailable: false`.
 - `live.agentStatus: "running"` means an agent driver is active, not that it is making progress; raw model reasoning is never exposed. Bridge transport failures report `bridge-unreachable`, `bridge-timeout`, `bridge-refused`, `bridge-invalid-response` or `bridge-mismatched-response`, and a recorded answer carries its provenance (`live-bridge` or `bridge-journal`).
-- The `dsh` adapter declares the `inquiry` capability, and the 0.8 source also declares it for `zcode`; the ZCode inquiry bridge is a first artifact with known fixes still underway and no live native acceptance, so never present it as verified. `command`, `external` and `codex` report honestly that this adapter has no inquiry capability instead of inventing progress. A question to an adapter without a bridge returns an explicit unavailable/no-capability result rather than an answer.
+- DSH declares `inquiry`. ZCode declares only `observe`: the no-question form reads bounded live activity, while a question is recorded as unavailable without sending native input. The checked native protocol lacks a safe turn-bound input command. `command`, `external` and `codex` mount no inquiry bridge; task status and any recorded activity remain readable. `bridge.canObserve` and `bridge.canAsk` distinguish observation from correlated questions.
 
 ## Workers
 
@@ -243,6 +243,7 @@ Decision statuses are `queued`, `running`, `completed`, `needs-host`, `failed`, 
 | `INTEGRATION_REQUIRED` | An accepted verdict has no verified or `notRequired` integration record for the final artifact |
 | `INTEGRATION_UNVERIFIED` | The artifact was not present in the claimed target; no integration record was created |
 | `PLAN_EXPIRED` | The cleanup plan expired; request a fresh plan before deleting anything |
+| `STATE_INTEGRITY` | A governed run lacks its required recorded scope; preserve the state and repair a verified offline copy instead of inventing authority |
 | `PACKET_TOO_LARGE` | A bounded preparation packet exceeded its input bound; nothing was recorded |
 | `ARTIFACT_MISSING` / `ARTIFACT_MISMATCH` | A claimed artifact failed validation and no completed result was published |
 | `TOO_MANY_INQUIRIES` | The 32-inquiry retention limit for the task was reached |
