@@ -40,6 +40,7 @@ cat "$DELEGATE_DEMO_DIR/result.json"
 | `--log-dir <dir>` | OS temp dir | parent directory for this run's private log directory |
 | `--dsh-bin <path>` | see precedence | dsh launcher to execute |
 | `--settings-file <path>` | see precedence | settings document to copy and override |
+| `--session-root <dir>` | owning harness session root | absolute private JSONL session directory for an ungrouped child; requires `--no-workspace` and the shipped `session-persistence-jsonl` profile entry |
 | `--no-workspace` | disabled | explicitly skip workspace grouping |
 | `--attach-session <id>` | | group an existing completed session; no task file, no model run |
 | `--workspace-socket <path>` | see precedence | private socket served by the owning host plugin |
@@ -49,6 +50,8 @@ cat "$DELEGATE_DEMO_DIR/result.json"
 | `-h`, `--help` | | print help and exit (needs no dsh) |
 
 `--no-workspace` conflicts with `--workspace-socket` and `--attach-session`. The `--inquiry-*` triple is never passed by hand: it mounts the per-run bridge that lets `buddy inquire` observe the run or ask its live agent a correlated question.
+
+For governed ungrouped runs, the adapter passes an attempt-private `--session-root`. The native overlay changes only `session-persistence-jsonl.config.root`; it never changes `DSH_HOME`, copies the credential vault or moves settings. Grouped runs retain the owning harness session root because its workspace bridge verifies session membership there. The result records storage separately from Git isolation. A validated structured turn supplies the session ID even when grouping and its capture file are absent.
 
 The two `--turn-*-file` flags must appear together and cannot be used with `--attach-session`. They work with `--no-workspace`; DSH session grouping and ownership of the execution workspace are separate contracts. Invalid turn flags, input schema or paths fail before the runner starts DSH.
 

@@ -318,7 +318,7 @@ def _native_session(payload: dict, turn_record: dict | None = None) -> dict:
     session_id = turn_session or observed
     session_id_source = "validated-turn" if turn_session else ("native-session-observer" if observed else "none")
     native_storage = payload.get("nativeStorage") if isinstance(payload.get("nativeStorage"), dict) else {}
-    session_root_private = native_storage.get("sessionRootPrivate") is True or native_storage.get("relocated") is True
+    session_root_private = native_storage.get("sessionRootPrivate") is True
     return {
         "adapter": "dsh",
         "sessionId": session_id,
