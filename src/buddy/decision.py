@@ -183,27 +183,26 @@ class DecisionCoordinator:
         Pin/exclude is enforced here in Python and never delegated to the model;
         ``prefer`` stays a soft ordering hint that only enters the bounded input.
         """
-        required = set(required_capabilities)
-        preferences = {
-            row["profile_id"]: row["mode"]
-            for row in connection.execute("SELECT profile_id, mode FROM evaluation_preferences")
-        }
-        pinned = {profile_id for profile_id, mode in preferences.items() if mode == "pin"}
-        excluded = {profile_id for profile_id, mode in preferences.items() if mode == "exclude"}
-        legal = [
-            row
-            for row in connection.execute("SELECT * FROM evaluation_profiles ORDER BY rowid")
-            if row["enabled"]
-            and row["available"]
-            and row["profile_id"] not in excluded
-            and required.issubset(set(json.loads(row["capabilities_json"])))
-            and (not coding_only or (row["adapter"] in schemas.CODING_ADAPTERS
-                                    and all(row[key] for key in schemas.CONFIGURATION_FIELDS)))
-            and all(row[key] == value for key, value in (constraints or {}).items())
+        clauses = [
+            "p.enabled=1", "p.available=1", "COALESCE(f.mode,'')!='exclude'",
+            "(NOT EXISTS(SELECT 1 FROM evaluation_preferences WHERE mode='pin') OR f.mode='pin')",
         ]
-        if pinned:
-            legal = [row for row in legal if row["profile_id"] in pinned]
-        return legal[:MAX_DECISION_PROFILES]
+        values = []
+        for capability in sorted(set(required_capabilities)):
+            clauses.append("EXISTS(SELECT 1 FROM json_each(p.capabilities_json) WHERE value=?)")
+            values.append(capability)
+        if coding_only:
+            clauses.append("p.adapter IN (" + ",".join("?" for _ in schemas.CODING_ADAPTERS) + ")")
+            values.extend(schemas.CODING_ADAPTERS)
+        for key, value in (constraints or {}).items():
+            if key not in schemas.CONFIGURATION_FIELDS:
+                raise BoardError("INVALID_ARGUMENT", "Unknown configuration constraint")
+            clauses.append(f"p.{key}=?")
+            values.append(value)
+        values.append(MAX_DECISION_PROFILES + 1)
+        return list(connection.execute(
+            "SELECT p.* FROM evaluation_profiles p LEFT JOIN evaluation_preferences f ON f.profile_id=p.profile_id "
+            "WHERE " + " AND ".join(clauses) + " ORDER BY p.rowid LIMIT ?", values))
 
     # -- bounded model input -------------------------------------------------
     def _profile_input(self, row: sqlite3.Row) -> dict:
@@ -284,8 +283,7 @@ class DecisionCoordinator:
         if include_preferences:
             preferences = [
                 {"profileId": row["profile_id"], "mode": row["mode"], "reason": row["reason"]}
-                for row in connection.execute("SELECT * FROM evaluation_preferences ORDER BY rowid")
-                if row["profile_id"] in set(profile_ids)
+                for row in connection.execute(f"SELECT * FROM evaluation_preferences WHERE profile_id IN ({markers}) ORDER BY rowid", profile_ids)
             ]
         seen: set[str] = set()
         evidence: list[dict] = []
@@ -369,11 +367,13 @@ class DecisionCoordinator:
         return document, None
 
     def _select_input(self, connection: sqlite3.Connection, *, request_id: str, revision: int, profile_row: sqlite3.Row, task_text: str, candidates: list[sqlite3.Row], routing_preferences: list[dict] | None = None) -> tuple[dict | None, str | None]:
+        if len(candidates) > MAX_DECISION_PROFILES:
+            return None, "The legal candidate set exceeds the bounded decision profile limit; narrow the task constraints"
         candidate_ids = {candidate["profile_id"] for candidate in candidates}
+        markers = ",".join("?" for _ in candidate_ids) or "NULL"
         cards = [
             self._card_input(row)
-            for row in connection.execute("SELECT * FROM evaluation_cards ORDER BY rowid")
-            if row["profile_id"] in candidate_ids
+            for row in connection.execute(f"SELECT * FROM evaluation_cards WHERE profile_id IN ({markers}) ORDER BY rowid", tuple(candidate_ids))
         ]
         evidence = self._referenced_evidence(connection, cards)
         table = self._table_input(

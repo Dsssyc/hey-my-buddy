@@ -336,6 +336,7 @@ CREATE TABLE IF NOT EXISTS evaluation_preferences (
     reason            TEXT NOT NULL DEFAULT '',
     updated_revision  INTEGER NOT NULL
 );
+CREATE INDEX IF NOT EXISTS evaluation_preferences_mode_idx ON evaluation_preferences(mode, profile_id);
 """,
     """
 CREATE TABLE IF NOT EXISTS evaluation_evidence (
