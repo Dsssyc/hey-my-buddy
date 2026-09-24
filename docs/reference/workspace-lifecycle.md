@@ -22,17 +22,17 @@ Cleanup is a two-step Host decision. The plan names one registered managed check
 
 ```sh
 # Read the run immediately before every mutation and use that current revision.
-"$BUDDY" integration-record '{"runId":"<runId>","commandId":"integrate-1","expectedRevision":<get.revision>,"controlFile":"<controlFile>","artifactId":"<finalArtifactId>","strategy":"cherry-pick","target":{"path":"/abs/target/checkout","ref":"main"},"beforeCommit":"<target commit at integration time>","verification":"Applied the sealed artifact commit to the target and ran the combined package checks."}'
+"$BUDDY" integration-record '{"runId":"<runId>","commandId":"integrate-1","expectedRevision":7,"controlFile":"<controlFile>","artifactId":"<finalArtifactId>","strategy":"cherry-pick","target":{"path":"/abs/target/checkout","ref":"main"},"beforeCommit":"<target commit at integration time>","verification":"Applied the sealed artifact commit to the target and ran the combined package checks."}'
 # -> { "integrationId": "int-<uuid>", "integration": { "state": "verified", "strategy": "cherry-pick", ... }, "duplicate": false, ... }
 
 "$BUDDY" acknowledge '{"runId":"<runId>","commandId":"review-1","controlFile":"<controlFile>","artifactId":"<finalArtifactId>","integrationId":"<returned integrationId>","note":"Inspected the integrated target diff and ran the relevant checks myself.","verdict":"accepted"}'
 # acknowledge takes no expectedRevision; it binds the artifact and the selected integration record.
 
-"$BUDDY" workspace-cleanup-plan '{"runId":"<runId>","commandId":"cleanup-plan-1","expectedRevision":<get.revision>,"controlFile":"<controlFile>"}'
+"$BUDDY" workspace-cleanup-plan '{"runId":"<runId>","commandId":"cleanup-plan-1","expectedRevision":7,"controlFile":"<controlFile>"}'
 # -> { "plan": { "planId": "cln-<uuid>", "path": "/abs/managed/worktree", "state": "planned", "eligible": true, "reasons": [], "retention": { "artifactIds": [...], "fixedRefs": [...], ... }, "expiresAt": "<ISO-8601>" }, ... }
 
-"$BUDDY" workspace-cleanup-apply '{"runId":"<runId>","planId":"<returned plan.planId>","commandId":"cleanup-apply-1","expectedRevision":<get.revision>,"confirmPath":"<returned plan.path>","controlFile":"<controlFile>"}'
+"$BUDDY" workspace-cleanup-apply '{"runId":"<runId>","planId":"<returned plan.planId>","commandId":"cleanup-apply-1","expectedRevision":7,"confirmPath":"<returned plan.path>","controlFile":"<controlFile>"}'
 # -> { "removed": true, "retention": {...}, "plan": { "state": "applied", ... }, ... }
 ```
 
-A task that needed no repository integration records `{"notRequired": true, "reason": "documentation-only artifact with no target change"}` against its final artifact instead of a verified target. The Host still owns the actual integration; a returned patch, a Worker's completion message or a one-line success note is not integration evidence.
+A task that needed no repository integration records `{"notRequired": true, "reason": "read-only analysis with no repository changes to integrate"}` against its final artifact instead of a verified target. The Host still owns the actual integration; a returned patch, a Worker's completion message or a one-line success note is not integration evidence.

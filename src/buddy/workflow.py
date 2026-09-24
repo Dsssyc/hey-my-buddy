@@ -648,6 +648,7 @@ class WorkflowCoordinator:
             "acceptanceNote": decorated["acceptanceNote"],
             "artifactCount": decorated["artifactCount"],
             "inquiries": decorated["inquiries"],
+            "activity": decorated["activity"],
             "delegation": decorated["delegation"],
             "createdAt": decorated["createdAt"],
             "updatedAt": decorated["updatedAt"],
