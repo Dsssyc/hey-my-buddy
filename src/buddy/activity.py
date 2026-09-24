@@ -17,8 +17,11 @@ from __future__ import annotations
 import json
 import os
 import re
+import stat
 import time
 import uuid
+from datetime import datetime
+from decimal import Decimal
 from pathlib import Path
 from typing import Any, Callable
 
@@ -64,12 +67,13 @@ MAX_TOOL_NAME = 64
 MAX_WAITING_REASON = 256
 MAX_EVENT_SEQ = 2**53 - 1
 MAX_COUNT = 2**31 - 1
+MAX_SIDECAR_BYTES = 16 * 1024
 
 #: The complete sidecar document: the version, the attempt binding and the payload.
 SIDECAR_FIELDS = frozenset({"version", "taskId", "attemptId", "generation", "updatedAt", "activity"})
 
 #: An ISO-8601 date-time prefix. The exact precision stays the controller's choice.
-_TIMESTAMP = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$")
+_TIMESTAMP = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.(?P<fraction>\d+))?(?:Z|[+-]\d{2}:\d{2})$")
 
 #: How often a controller may rewrite the sidecar without a phase change. Repeated
 #: token-level progress is coalesced into one durable observation.
@@ -91,8 +95,14 @@ def _bounded_string(value: Any, field: str, *, maximum: int) -> str:
 
 def _timestamp(value: Any, field: str) -> str:
     value = _bounded_string(value, field, maximum=MAX_TIMESTAMP)
-    if not _TIMESTAMP.match(value):
+    if not _TIMESTAMP.fullmatch(value):
         raise _invalid(f"activity.{field} must be an ISO-8601 timestamp", field=f"activity.{field}")
+    if value[-1] != "Z" and (int(value[-5:-3]) > 23 or int(value[-2:]) > 59):
+        raise _invalid(f"activity.{field} must be an ISO-8601 timestamp", field=f"activity.{field}")
+    try:
+        datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        raise _invalid(f"activity.{field} must be a real ISO-8601 timestamp", field=f"activity.{field}") from None
     return value
 
 
@@ -166,9 +176,19 @@ def normalize_activity(value: Any) -> dict:
     return normalized
 
 
-def recency(activity: dict) -> tuple[int, str]:
-    """The monotone ordering key of one normalized activity receipt."""
-    return (int(activity.get("eventSeq") or 0), str(activity.get("observedAt") or ""))
+def _instant(value: str) -> tuple[int, Decimal]:
+    """Exact UTC second and fractional second for an already validated timestamp."""
+    parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    seconds = parsed.toordinal() * 86400 + parsed.hour * 3600 + parsed.minute * 60 + parsed.second
+    seconds -= int(parsed.utcoffset().total_seconds())
+    fraction = _TIMESTAMP.fullmatch(value).group("fraction")
+    return seconds, Decimal(f"0.{fraction}") if fraction else Decimal(0)
+
+
+def recency(activity: dict) -> tuple[int, tuple[int, Decimal]]:
+    """Compare native sequence first, then the actual UTC instant."""
+    stamp = activity.get("observedAt")
+    return (int(activity.get("eventSeq") or 0), _instant(stamp) if stamp else (0, Decimal(0)))
 
 
 def equality_key(activity: dict | None) -> str:
@@ -207,11 +227,11 @@ def validate_sidecar(value: Any, *, task_id: str, attempt_id: str, generation: i
     unknown = sorted(set(value) - SIDECAR_FIELDS)
     if unknown:
         raise _invalid(f"Unknown activity sidecar field: {unknown[0]}", field=unknown[0])
-    if value.get("version") != ACTIVITY_VERSION:
+    if type(value.get("version")) is not int or value["version"] != ACTIVITY_VERSION:
         raise _invalid("the activity sidecar version is not current", version=value.get("version"))
     if value.get("taskId") != task_id or value.get("attemptId") != attempt_id:
         raise _invalid("the activity sidecar belongs to a different task or attempt")
-    if value.get("generation") != generation:
+    if type(generation) is not int or type(value.get("generation")) is not int or value["generation"] != generation:
         raise _invalid("the activity sidecar belongs to a different attempt generation")
     return normalize_activity(value.get("activity"))
 
@@ -228,13 +248,25 @@ def read_sidecar(
     A caller forwarding activity treats every failure the same way: nothing is
     published, and an absent, malformed or foreign sidecar never becomes an event.
     """
+    if not hasattr(os, "O_NOFOLLOW"):
+        return None
     try:
-        value = json.loads(Path(path).read_text())
-    except (OSError, ValueError, UnicodeDecodeError):
+        descriptor = os.open(path, os.O_RDONLY | os.O_NONBLOCK | os.O_NOFOLLOW | getattr(os, "O_CLOEXEC", 0))
+        try:
+            metadata = os.fstat(descriptor)
+            if not stat.S_ISREG(metadata.st_mode) or metadata.st_size > MAX_SIDECAR_BYTES:
+                return None
+            raw = os.read(descriptor, MAX_SIDECAR_BYTES + 1)
+            if len(raw) > MAX_SIDECAR_BYTES:
+                return None
+        finally:
+            os.close(descriptor)
+        value = json.loads(raw)
+    except (OSError, ValueError, UnicodeDecodeError, RecursionError):
         return None
     try:
         return validate_sidecar(value, task_id=task_id, attempt_id=attempt_id, generation=generation)
-    except BoardError:
+    except (BoardError, RecursionError):
         return None
 
 
@@ -317,11 +349,6 @@ class ActivitySidecar:
     def clear(self) -> None:
         """Remove the sidecar; nothing is invented afterwards."""
         self.path.unlink(missing_ok=True)
-
-
-def equality_key(activity: dict | None) -> str:
-    """A stable comparison key, so an idempotent repeat is recognizable."""
-    return json.dumps(activity or {}, sort_keys=True, separators=(",", ":"))
 
 
 __all__ = [

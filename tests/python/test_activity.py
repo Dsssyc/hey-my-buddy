@@ -8,12 +8,14 @@ from __future__ import annotations
 
 import json
 import os
+import threading
 from pathlib import Path
+from unittest import mock
 
 from support import BoardTestCase
 
 from buddy import activity as activity_module
-from buddy.activity import ActivitySidecar, normalize_activity, read_sidecar, validate_sidecar
+from buddy.activity import ActivitySidecar, is_newer, normalize_activity, read_sidecar, validate_sidecar
 from buddy.adapters import ExecutionContext, adapter as get_adapter
 from buddy.errors import BoardError
 from buddy.worker.worker import Worker, _Renewal
@@ -106,6 +108,9 @@ class ActivityValidation(BoardTestCase):
             "oversized reason": {**base, "waitingReason": "x" * 257},
             "oversized session": {**base, "nativeSessionId": "x" * 257},
             "non-iso timestamp": {**base, "observedAt": "yesterday"},
+            "invalid calendar date": {**base, "observedAt": "2026-02-30T00:00:00Z"},
+            "invalid clock hour": {**base, "observedAt": "2026-01-01T24:00:00Z"},
+            "invalid timezone minute": {**base, "observedAt": "2026-01-01T00:00:00+00:99"},
             "not an object": ["starting"],
         }
         for name, value in cases.items():
@@ -151,6 +156,62 @@ class ActivityValidation(BoardTestCase):
         broken = directory / "broken.json"
         broken.write_text("{not json")
         self.assertIsNone(read_sidecar(broken, task_id="task-1", attempt_id="attempt-1", generation=1))
+        for field in ("version", "generation"):
+            forged = {**document, field: True}
+            with self.subTest(bool_field=field), self.assertRaises(BoardError):
+                validate_sidecar(forged, task_id="task-1", attempt_id="attempt-1", generation=1)
+            self.assertIsNone(read_sidecar(_write(directory / f"bool-{field}.json", forged),
+                                           task_id="task-1", attempt_id="attempt-1", generation=1))
+
+    def test_sidecar_reader_rejects_oversized_symlink_fifo_and_deep_json(self):
+        directory = self.workdir("sidecar-read-bound")
+        kwargs = {"task_id": "task-1", "attempt_id": "attempt-1", "generation": 1}
+        huge = directory / "huge.json"
+        huge.write_bytes(b" " * (activity_module.MAX_SIDECAR_BYTES + 1))
+        self.assertIsNone(read_sidecar(huge, **kwargs))
+        valid = _write(directory / "valid.json", {"version": 1, "taskId": "task-1", "attemptId": "attempt-1",
+                                                 "generation": 1, "activity": {"phase": "starting", "eventSeq": 1}})
+        with mock.patch.object(activity_module.os, "read", wraps=os.read) as bounded_read:
+            self.assertEqual(read_sidecar(valid, **kwargs), {"phase": "starting", "eventSeq": 1})
+            self.assertEqual(bounded_read.call_args.args[1], activity_module.MAX_SIDECAR_BYTES + 1)
+        link = directory / "linked.json"
+        link.symlink_to(valid)
+        self.assertIsNone(read_sidecar(link, **kwargs))
+        deep = directory / "deep.json"
+        deep.write_bytes(b"[" * 1200 + b"]" * 1200)
+        self.assertIsNone(read_sidecar(deep, **kwargs))
+        fifo = directory / "activity.fifo"
+        os.mkfifo(fifo)
+        result = []
+        reader = threading.Thread(target=lambda: result.append(read_sidecar(fifo, **kwargs)), daemon=True)
+        reader.start()
+        reader.join(timeout=0.5)
+        blocked = reader.is_alive()
+        if blocked:
+            # Release an older blocking implementation so the test process can exit.
+            with fifo.open("wb", buffering=0) as writer:
+                writer.write(b"{}")
+            reader.join(timeout=1)
+        self.assertFalse(reader.is_alive(), "a FIFO must not block the renewal reader")
+        self.assertFalse(blocked, "the renewal reader blocked until another process opened the FIFO")
+        self.assertEqual(result, [None])
+
+    def test_timestamp_recency_uses_utc_instant_without_rewriting_display_value(self):
+        previous = normalize_activity({"phase": "starting", "eventSeq": 4,
+                                       "observedAt": "2026-01-01T01:00:00+01:00"})
+        same = normalize_activity({"phase": "starting", "eventSeq": 4,
+                                   "observedAt": "2026-01-01T00:00:00Z"})
+        newer = normalize_activity({"phase": "waiting-model", "eventSeq": 4,
+                                    "observedAt": "2026-01-01T00:30:00Z"})
+        older = normalize_activity({"phase": "waiting-model", "eventSeq": 4,
+                                    "observedAt": "2026-01-01T01:00:00+01:30"})
+        self.assertEqual(previous["observedAt"], "2026-01-01T01:00:00+01:00")
+        self.assertFalse(is_newer(same, previous))
+        self.assertTrue(is_newer(newer, previous))
+        self.assertFalse(is_newer(older, previous))
+        fine = normalize_activity({"phase": "waiting-model", "eventSeq": 4,
+                                   "observedAt": "2026-01-01T00:00:00.0000001Z"})
+        self.assertTrue(is_newer(fine, same), "fractional precision beyond microseconds still orders correctly")
 
     def test_sidecar_updates_are_atomic_throttled_and_monotone(self):
         directory = self.workdir("sidecar")
