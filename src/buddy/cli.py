@@ -127,7 +127,7 @@ examples:
   buddy integration-record '{"runId":"<runId>","commandId":"cmd-7","expectedRevision":5,"artifactId":"...","notRequired":true,"reason":"...","controlFile":"..."}'
   buddy workspace-cleanup-plan '{"runId":"<runId>","commandId":"cmd-8","expectedRevision":6,"controlFile":"..."}'
   buddy workspace-cleanup-apply '{"runId":"<runId>","planId":"...","commandId":"cmd-9","expectedRevision":7,"confirmPath":"...","controlFile":"..."}'
-      Host decisions, continuations, owner rotation and governed cancellation.
+      Continuation and lifecycle controls accept targetRunId for an owned helper.
       controlFile injects the hostId/ownerGeneration/controlToken triple locally, so the
       token never appears on the command line or in the output. There is no implicit
       latest-generation lookup: pass the exact controlFile you were given, or the
@@ -140,12 +140,10 @@ examples:
       record for that artifact.
 
   buddy await '{"runId":"<runId>"}'      buddy await '{"requestId":"fix-123","waitSeconds":3600}'
-      Wait on an existing run and never start, resume, retry or cancel anything -
-      including when the wait window ends. waitSeconds defaults to 86400 and is bounded
-      by 86400; reaching it returns outcome=wait-timeout with the run still active, and
-      re-awaiting the same runId keeps waiting. Recover with `buddy status`, `buddy get`
-      or `buddy result`; a governed goal ends through `buddy cancel`, an execution
-      record through `execution-cancel`.
+      Wait without starting, resuming or cancelling work. waitSeconds is at most
+      86400 (the default); wait-timeout leaves the run active. Re-await the same
+      runId, use status/get for live state, and result only after a receipt exists.
+      Cancel a goal with cancel, or an execution record with execution-cancel.
 
   Advanced execution records (command/external adapters and internal decision
   infrastructure only; the service refuses ungoverned dsh/zcode here):

@@ -48,7 +48,7 @@ class ZcodeFixtureCase(unittest.TestCase):
     def execute(self, context):
         handle = self.adapter.start(context)
         self.addCleanup(lambda: handle.terminate(grace_seconds=0.2) if handle.group_alive() else None)
-        self.assertIsNotNone(handle.wait(20), "controller did not exit")
+        self.assertIsNotNone(handle.wait(context.timeout_seconds + 10), "controller did not exit within its deadline and shutdown grace")
         outcome = self.adapter.collect(handle, context)
         return handle, outcome
 
@@ -89,6 +89,7 @@ class ZcodeAdapterTests(ZcodeFixtureCase):
         native = outcome.result["nativeSession"]
         self.assertEqual(native["sessionId"], turn["sessionId"])
         self.assertEqual(native["storageScope"], "task-private")
+        self.assertEqual(native["storageOwner"], "buddy-goal")
         self.assertEqual(native["nativeAppVisibility"], "not-listed-in-native-app")
         self.assertTrue(native["bindingPresent"])
         self.assertTrue(native["resumable"])

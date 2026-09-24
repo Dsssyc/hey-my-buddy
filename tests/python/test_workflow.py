@@ -179,6 +179,8 @@ class WorkflowTestCase(BoardTestCase):
         return board.call("workflow_decide", params)
 
     def continue_run(self, board, view, *, command_id="continue-1", input="keep going", helper_policy="keep", **extra):
+        if extra.get("configuration") is not None:
+            extra.setdefault("reason", "Use the explicit fixture configuration for this continuation")
         params = {
             "runId": view["runId"],
             "commandId": command_id,

@@ -60,11 +60,13 @@ export function nativeSessionEvidence(task: Task): NativeSessionEvidence | null 
 
 const storageLabels: Record<string, string> = {
   "task-private": "Buddy 私有存储",
+  "task-private-sessions": "Buddy 私有会话目录",
   "harness-user-store": "Harness 用户存储",
 };
 
 const storageOwnerLabels: Record<string, string> = {
   "buddy-attempt": "由 Buddy 尝试持有",
+  "buddy-goal": "由 Buddy 目标持有",
   "harness-user-store": "由 Harness 用户目录持有",
 };
 

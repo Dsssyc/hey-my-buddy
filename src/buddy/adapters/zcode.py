@@ -212,7 +212,7 @@ def _native_session(payload: dict, context: ExecutionContext, shutdown_confirmed
     """Truthful native-session facts for one ZCode attempt.
 
     Git isolation and native session storage are separate dimensions. The root
-    session lives in this attempt's private ZCode store, so the installed ZCode app
+    session lives in this goal's private ZCode store, so the installed ZCode app
     does not list it; a continuation can resume it only when the private binding
     for the exact session still exists and the attempt settled with real shutdown
     evidence.
@@ -237,13 +237,13 @@ def _native_session(payload: dict, context: ExecutionContext, shutdown_confirmed
         "sessionId": session_id,
         "captured": session_id is not None,
         "storageScope": "task-private",
-        "storageOwner": "buddy-attempt",
+        "storageOwner": "buddy-goal",
         "nativeAppVisibility": "not-listed-in-native-app",
         "resumeMode": mode,
         "bindingPresent": bound,
         "resumable": bool(bound and shutdown_confirmed and provenance.get("settlement") == "session-closed"),
         "note": (
-            "the root session is stored in this attempt's private ZCode native root (ZCODE_SESSION_DB_PATH/"
+            "the root session is stored in this goal's private ZCode native root (ZCODE_SESSION_DB_PATH/"
             "ZCODE_STORAGE_DIR); the installed ZCode app lists only sessions in its own user home, so the "
             "checkable entrypoint is this attempt's activity, tool summary and fixed artifacts"
         ),
